@@ -7,9 +7,16 @@ pnpm-lock.yaml
 # CONTEXT.md) without improving anything.
 *.md
 
-# Orchestrator run artifacts written into the worktree root. These are hidden
-# from git via .git/info/exclude, which is repo-local and invisible to both
-# prettier and CI, so they must be listed explicitly or the format gate fails
-# on files that are not this repository's content.
-implement-step-history-*.json
+# The orchestrator writes ~35 differently-named run artifacts into the repo
+# root (validation.result, review-loop-history.json, task-manifest.json, ...)
+# and hides them in .git/info/exclude, which prettier does not read and which
+# is not even a resolvable path inside a git worktree. Enumerating those names
+# here would drift the moment a new artifact is added, so ignore root-level
+# JSON by default and re-include this repository's own configuration.
+/*.json
+!/package.json
+!/tsconfig.json
+!/tsconfig.base.json
+!/.prettierrc.json
+!/.ai-orchestrator.json
 ai/
