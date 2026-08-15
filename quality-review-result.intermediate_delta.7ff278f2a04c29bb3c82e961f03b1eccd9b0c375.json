@@ -1,0 +1,17 @@
+{
+  "result": "fail",
+  "findings": [
+    {
+      "severity": "P2",
+      "summary": "Cross-platform determinism is broken because getModelKey does not normalize backslashes to forward slashes, causing the generated key and sorting order to differ across operating systems if relativePath contains backslashes.",
+      "file": "packages/infrastructure/src/comfyui/provenance/hasher.ts",
+      "suggested_fix": "  const getModelKey = (spec: ModelFileSpec): string => {\n    const normalizedPath = spec.relativePath.replace(/\\\\/g, \"/\");\n    return `models/${spec.category}/${normalizedPath}`;\n  };"
+    },
+    {
+      "severity": "P3",
+      "summary": "The hashFileStream function uses the default 64KB stream chunk size, which degrades hashing throughput for large models; providing a larger highWaterMark (e.g., 1MB) would improve performance.",
+      "file": "packages/infrastructure/src/comfyui/provenance/hasher.ts",
+      "suggested_fix": "  const stream = createReadStream(filePath, { highWaterMark: 1024 * 1024 });"
+    }
+  ]
+}
