@@ -5,6 +5,9 @@
     { "path": "./packages/domain" },
     { "path": "./packages/contracts" },
     { "path": "./packages/application" },
-    { "path": "./packages/infrastructure" }
+    { "path": "./packages/infrastructure" },
+    { "path": "./apps/control-api" },
+    { "path": "./apps/render-worker" },
+    { "path": "./apps/web" }
   ]
 }
