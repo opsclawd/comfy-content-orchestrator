@@ -7,3 +7,7 @@ coverage/
 .ai-runs/
 .ai-worktrees/
 .ai-tmp/
+
+# Orchestrator run artifacts
+implement-step-history-*.json
+ai/

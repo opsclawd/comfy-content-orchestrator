@@ -6,3 +6,10 @@ pnpm-lock.yaml
 # documents the orchestrator and humans both write (README, PRD, ADRs,
 # CONTEXT.md) without improving anything.
 *.md
+
+# Orchestrator run artifacts written into the worktree root. These are hidden
+# from git via .git/info/exclude, which is repo-local and invisible to both
+# prettier and CI, so they must be listed explicitly or the format gate fails
+# on files that are not this repository's content.
+implement-step-history-*.json
+ai/
