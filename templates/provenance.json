@@ -59,7 +59,7 @@
           "relativePath": "ltx-video-2b-v0.9.1.safetensors"
         },
         {
-          "category": "text_encoders",
+          "category": "clip",
           "relativePath": "t5xxl_fp16.safetensors"
         },
         {

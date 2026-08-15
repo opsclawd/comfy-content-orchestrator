@@ -4,12 +4,12 @@ import { stat } from "node:fs/promises";
 import { isAbsolute, normalize, resolve, sep } from "node:path";
 
 export type ModelCategory =
-  "checkpoints" | "diffusion_models" | "text_encoders" | "vae" | "loras" | "model_patches";
+  "checkpoints" | "diffusion_models" | "clip" | "vae" | "loras" | "model_patches";
 
 export const VALID_MODEL_CATEGORIES: readonly ModelCategory[] = Object.freeze([
   "checkpoints",
   "diffusion_models",
-  "text_encoders",
+  "clip",
   "vae",
   "loras",
   "model_patches"

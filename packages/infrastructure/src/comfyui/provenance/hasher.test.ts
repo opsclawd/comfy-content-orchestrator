@@ -301,7 +301,7 @@ describe("Workflow and Model Provenance Hasher", () => {
       { category: "diffusion_models", relativePath: "../outside.safetensors" },
       { category: "vae", relativePath: "nested/../../outside.safetensors" },
       { category: "loras", relativePath: "" },
-      { category: "text_encoders", relativePath: "   " },
+      { category: "clip", relativePath: "   " },
       { category: "model_patches", relativePath: "..\\win-style-traversal" }
     ];
 

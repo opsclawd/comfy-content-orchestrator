@@ -25,7 +25,7 @@ This directory contains the version-controlled, source-gated Gold Master ComfyUI
 - **Disk Space Requirement:** Minimum 100 GB free disk space reservation (`minFreeDiskGb: 100`).
 - **Referenced Models:**
   - `models/diffusion_models/ltx-video-2b-v0.9.1.safetensors`
-  - `models/text_encoders/t5xxl_fp16.safetensors`
+  - `models/clip/t5xxl_fp16.safetensors`
   - `models/vae/ltx-video-vae.safetensors`
 
 ---
@@ -48,7 +48,7 @@ The models listed in `templates/provenance.json` correspond to the following rel
 |---|---|---|---|
 | `flux-schnell-draft` | `checkpoints` | `flux1-schnell.safetensors` | `models/checkpoints/flux1-schnell.safetensors` |
 | `ltx-25-720p-97f` | `diffusion_models` | `ltx-video-2b-v0.9.1.safetensors` | `models/diffusion_models/ltx-video-2b-v0.9.1.safetensors` |
-| `ltx-25-720p-97f` | `text_encoders` | `t5xxl_fp16.safetensors` | `models/text_encoders/t5xxl_fp16.safetensors` |
+| `ltx-25-720p-97f` | `clip` | `t5xxl_fp16.safetensors` | `models/clip/t5xxl_fp16.safetensors` |
 | `ltx-25-720p-97f` | `vae` | `ltx-video-vae.safetensors` | `models/vae/ltx-video-vae.safetensors` |
 
 ---

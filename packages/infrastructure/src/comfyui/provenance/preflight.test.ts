@@ -28,13 +28,13 @@ describe("LTX Model Footprint and Disk Reservation Preflight", () => {
   it("preflight sums the live sizes of all manifest-listed model categories", async () => {
     const comfyUiDir = tempDir;
     await fsPromises.mkdir(join(comfyUiDir, "models", "diffusion_models"), { recursive: true });
-    await fsPromises.mkdir(join(comfyUiDir, "models", "text_encoders"), { recursive: true });
+    await fsPromises.mkdir(join(comfyUiDir, "models", "clip"), { recursive: true });
     await fsPromises.mkdir(join(comfyUiDir, "models", "vae"), { recursive: true });
     await fsPromises.mkdir(join(comfyUiDir, "models", "loras"), { recursive: true });
     await fsPromises.mkdir(join(comfyUiDir, "models", "model_patches"), { recursive: true });
 
     const diffPath = join(comfyUiDir, "models", "diffusion_models", "model.safetensors");
-    const encPath = join(comfyUiDir, "models", "text_encoders", "encoder.safetensors");
+    const encPath = join(comfyUiDir, "models", "clip", "encoder.safetensors");
     const vaePath = join(comfyUiDir, "models", "vae", "vae.safetensors");
     const loraPath = join(comfyUiDir, "models", "loras", "lora.safetensors");
     const patchPath = join(comfyUiDir, "models", "model_patches", "patch.safetensors");
@@ -53,7 +53,7 @@ describe("LTX Model Footprint and Disk Reservation Preflight", () => {
 
     const specs: ModelFileSpec[] = [
       { category: "diffusion_models", relativePath: "model.safetensors" },
-      { category: "text_encoders", relativePath: "encoder.safetensors" },
+      { category: "clip", relativePath: "encoder.safetensors" },
       { category: "vae", relativePath: "vae.safetensors" },
       { category: "loras", relativePath: "lora.safetensors" },
       { category: "model_patches", relativePath: "patch.safetensors" }

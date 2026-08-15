@@ -479,7 +479,7 @@ describe("Certification Provenance Collector", () => {
     const profile = createMockLtxProfile({
       models: [
         { category: "diffusion_models", relativePath: "m1.safetensors" },
-        { category: "text_encoders", relativePath: "m2.safetensors" }
+        { category: "clip", relativePath: "m2.safetensors" }
       ]
     });
 
@@ -492,9 +492,9 @@ describe("Certification Provenance Collector", () => {
         sha256: "1".repeat(64)
       },
       {
-        category: "text_encoders",
+        category: "clip",
         relativePath: "m2.safetensors",
-        key: "models/text_encoders/m2.safetensors",
+        key: "models/clip/m2.safetensors",
         bytes: 2000,
         sha256: "2".repeat(64)
       }
@@ -508,8 +508,8 @@ describe("Certification Provenance Collector", () => {
       hashModelFiles: vi.fn(async (_dir, _specs, onProgress) => {
         onProgress?.({ status: "started", key: "models/diffusion_models/m1.safetensors" });
         onProgress?.({ status: "completed", key: "models/diffusion_models/m1.safetensors" });
-        onProgress?.({ status: "started", key: "models/text_encoders/m2.safetensors" });
-        onProgress?.({ status: "completed", key: "models/text_encoders/m2.safetensors" });
+        onProgress?.({ status: "started", key: "models/clip/m2.safetensors" });
+        onProgress?.({ status: "completed", key: "models/clip/m2.safetensors" });
         return modelHashes;
       })
     };
@@ -544,12 +544,12 @@ describe("Certification Provenance Collector", () => {
       {
         phase: "model_hash",
         status: "started",
-        detail: "models/text_encoders/m2.safetensors"
+        detail: "models/clip/m2.safetensors"
       },
       {
         phase: "model_hash",
         status: "completed",
-        detail: "models/text_encoders/m2.safetensors"
+        detail: "models/clip/m2.safetensors"
       },
       { phase: "model_hash", status: "completed" }
     ]);
