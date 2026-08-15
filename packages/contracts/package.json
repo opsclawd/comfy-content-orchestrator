@@ -15,6 +15,7 @@
     "typecheck": "tsc --build"
   },
   "dependencies": {
-    "@cco/shared": "workspace:*"
+    "@cco/shared": "workspace:*",
+    "zod": "^3.24.1"
   }
 }
