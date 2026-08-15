@@ -1,3 +1,8 @@
 {
-  "result": "done_with_fixes"
+  "result": "done_with_fixes",
+  "out_of_scope_reasons": {
+    "task-context-step-6.md": "Removed out-of-scope orchestrator task context artifact from git tracking",
+    "task-context-step-7.md": "Removed out-of-scope orchestrator task context artifact from git tracking",
+    "validation.headsha": "Removed out-of-scope validation metadata artifact from git tracking"
+  }
 }
