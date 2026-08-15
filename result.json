@@ -1,3 +1,10 @@
 {
-  "result": "done_with_fixes"
+  "result": "done_with_fixes",
+  "out_of_scope_reasons": {
+    "packages/infrastructure/src/index.test.ts": "Added verification tests for provenance APIs exported from the @cco/infrastructure composition root",
+    "packages/infrastructure/src/comfyui/provenance/collector.test.ts": "Updated test mock model specs to use model category clip instead of text_encoders",
+    "packages/infrastructure/src/comfyui/provenance/hasher.test.ts": "Updated test case to use model category clip instead of text_encoders",
+    "packages/infrastructure/src/comfyui/provenance/preflight.test.ts": "Updated test fixture directories and specs to use model category clip instead of text_encoders",
+    "templates/README.md": "Updated model category documentation and table from text_encoders to clip"
+  }
 }
