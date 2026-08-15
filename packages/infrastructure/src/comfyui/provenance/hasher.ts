@@ -104,7 +104,7 @@ export function resolveModelFilePath(comfyUiDir: string, spec: ModelFileSpec): s
 
 export async function hashFileStream(filePath: string): Promise<string> {
   const hash = createHash("sha256");
-  const stream = createReadStream(filePath);
+  const stream = createReadStream(filePath, { highWaterMark: 1024 * 1024 });
 
   for await (const chunk of stream) {
     hash.update(chunk);
@@ -118,8 +118,10 @@ export async function hashModelFiles(
   specs: readonly ModelFileSpec[],
   onProgress?: (event: ModelHashProgress) => void
 ): Promise<readonly ModelFileHash[]> {
-  const getModelKey = (spec: ModelFileSpec): string =>
-    `models/${spec.category}/${spec.relativePath}`;
+  const getModelKey = (spec: ModelFileSpec): string => {
+    const normalizedPath = spec.relativePath.replace(/\\/g, "/");
+    return `models/${spec.category}/${normalizedPath}`;
+  };
 
   const sortedSpecs = [...specs].sort((a, b) => {
     const keyA = getModelKey(a);
