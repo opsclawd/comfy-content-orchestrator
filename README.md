@@ -77,6 +77,7 @@ Dependency direction is enforced in CI:
 ## Documentation
 
 - [Product Requirements Document](docs/prd.md)
+- [Database Migrations & Operations Runbook](docs/database-migrations.md)
 - ADRs will live under `docs/adr/` as implementation decisions are made.
 - `docs/CONTEXT.md` will define the project's ubiquitous language and invariants during Sprint 1 bootstrap.
 

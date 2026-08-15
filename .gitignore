@@ -11,3 +11,4 @@ coverage/
 # Orchestrator run artifacts
 implement-step-history-*.json
 ai/
+/validate/
