@@ -1,5 +1,9 @@
 import type { Scene, SceneId } from "@cco/domain";
-import type { RenderEnginePort, RenderQueueReceipt } from "../ports/render-engine-port.js";
+import type {
+  RenderEnginePort,
+  RenderQueueReceipt,
+  RenderWorkflow
+} from "../ports/render-engine-port.js";
 import type { UnitOfWork } from "../ports/unit-of-work.js";
 import { SceneNotFoundError } from "./scene-not-found-error.js";
 
@@ -9,7 +13,9 @@ export interface ProgressSceneProductionInput {
   readonly renderProfileKey?: string;
 }
 
-export type QueueSceneProductionInput = ProgressSceneProductionInput;
+export interface QueueSceneProductionInput extends ProgressSceneProductionInput {
+  readonly workflow: RenderWorkflow;
+}
 
 export class ProgressSceneProductionUseCases {
   constructor(
@@ -29,7 +35,7 @@ export class ProgressSceneProductionUseCases {
     );
   }
 
-  async queue(input: ProgressSceneProductionInput): Promise<RenderQueueReceipt | undefined> {
+  async queue(input: QueueSceneProductionInput): Promise<RenderQueueReceipt | undefined> {
     let engineProfileId: string | undefined;
 
     await this.uow.execute(async (context) => {
@@ -48,7 +54,8 @@ export class ProgressSceneProductionUseCases {
       return await this.renderEngine.queueRender({
         sceneId: input.sceneId,
         renderJobId,
-        renderProfileKey
+        renderProfileKey,
+        workflow: input.workflow
       });
     }
 

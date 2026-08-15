@@ -111,6 +111,27 @@ For every implementation issue:
 
 ComfyUI, PostgreSQL, MinIO administration, control APIs, and worker control endpoints are not intended for public WAN exposure. Private service communication is scoped to the Tailscale mesh.
 
+## Optional ComfyUI smoke test
+
+An opt-in smoke test is available for validating live connectivity and execution against a running ComfyUI instance. This test triggers a real GPU render and unloads models upon completion.
+
+Operational constraints:
+- Must run only on the authorized Trinidad host with an operator-reviewed API-format workflow.
+- It is intentionally absent from CI and generic test runs.
+- Does not claim certification or measured performance from this smoke.
+
+Run command:
+
+```bash
+COMFYUI_URL=http://127.0.0.1:8188 COMFYUI_WORKFLOW_PATH=./path/to/reviewed-workflow.json pnpm --filter @cco/infrastructure test:comfyui
+```
+
+An optional timeout override in milliseconds may be supplied via `COMFYUI_TIMEOUT_MS` (default: `600000` ms):
+
+```bash
+COMFYUI_URL=http://127.0.0.1:8188 COMFYUI_WORKFLOW_PATH=./path/to/reviewed-workflow.json COMFYUI_TIMEOUT_MS=600000 pnpm --filter @cco/infrastructure test:comfyui
+```
+
 ## License note
 
 Foundation-model and infrastructure licenses are operational dependencies. The PRD defines a versioned license registry and fail-closed production routing. License terms must be re-reviewed when model versions, deployment territories, revenue thresholds, or infrastructure distribution models change.

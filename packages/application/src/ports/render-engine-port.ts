@@ -1,7 +1,10 @@
+export type RenderWorkflow = Readonly<Record<string, unknown>>;
+
 export interface QueueRenderInput {
   readonly renderJobId: string;
   readonly sceneId: string;
   readonly renderProfileKey: string;
+  readonly workflow: RenderWorkflow;
 }
 
 export interface RenderQueueReceipt {

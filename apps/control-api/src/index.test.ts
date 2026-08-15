@@ -114,10 +114,18 @@ describe("control-api composition root", () => {
       async unloadModels() {}
     };
 
+    const workflow = {
+      "3": {
+        class_type: "KSampler",
+        inputs: { seed: 42 }
+      }
+    } satisfies Readonly<Record<string, unknown>>;
+
     const services = createControlApiServices({ uow, renderEngine });
     const receipt = await services.progressSceneProduction.queue({
       sceneId: "scene-root-1",
-      renderJobId: "job-root-1"
+      renderJobId: "job-root-1",
+      workflow
     });
 
     expect(receipt).toEqual({
@@ -128,7 +136,8 @@ describe("control-api composition root", () => {
     expect(queuedRequests[0]).toEqual({
       sceneId: "scene-root-1",
       renderJobId: "job-root-1",
-      renderProfileKey: "ltx_25"
+      renderProfileKey: "ltx_25",
+      workflow
     });
 
     const saved = uow.savedScenes[0]!;
