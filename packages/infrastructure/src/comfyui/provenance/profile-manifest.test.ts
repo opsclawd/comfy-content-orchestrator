@@ -350,4 +350,282 @@ describe("Certification Profile Manifest", () => {
       loadCertificationProfile(manifestPath, "non_existent_profile")
     ).rejects.toThrowError(/non_existent_profile.*ltx_25_720p_97f.*flux_schnell_draft/s);
   });
+
+  it("manifest loading rejects directory traversal and absolute paths in model relativePath", async () => {
+    // Absolute path
+    const absPathManifest = createValidManifest();
+    absPathManifest.profiles[0]!.models[0]!.relativePath = "/opt/models/model.safetensors";
+    await writeFile(manifestPath, JSON.stringify(absPathManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /absolute.*model|permitted/i
+    );
+
+    // Parent traversal
+    const traversalManifest = createValidManifest();
+    traversalManifest.profiles[0]!.models[0]!.relativePath = "../model.safetensors";
+    await writeFile(manifestPath, JSON.stringify(traversalManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /parent traversal|permitted/i
+    );
+
+    // Subdirectory escape traversal
+    const nestedTraversalManifest = createValidManifest();
+    nestedTraversalManifest.profiles[0]!.models[0]!.relativePath = "sub/../../model.safetensors";
+    await writeFile(manifestPath, JSON.stringify(nestedTraversalManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /parent traversal|permitted/i
+    );
+
+    // Empty model relativePath
+    const emptyPathManifest = createValidManifest();
+    emptyPathManifest.profiles[0]!.models[0]!.relativePath = "";
+    await writeFile(manifestPath, JSON.stringify(emptyPathManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /relativePath must be a non-empty string/i
+    );
+
+    // Empty models array
+    const emptyModelsManifest = createValidManifest();
+    (emptyModelsManifest.profiles[0] as unknown as Record<string, unknown>).models = [];
+    await writeFile(manifestPath, JSON.stringify(emptyModelsManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /models must be a non-empty array/i
+    );
+
+    // Non-object model entry
+    const nonObjectModelManifest = createValidManifest();
+    (nonObjectModelManifest.profiles[0] as unknown as Record<string, unknown>).models = ["invalid"];
+    await writeFile(manifestPath, JSON.stringify(nonObjectModelManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /models\[0\] must be an object/i
+    );
+  });
+
+  it("manifest loading rejects malformed baseline properties", async () => {
+    // Non-object baseline
+    const nonObjectBaselineManifest = createValidManifest();
+    (nonObjectBaselineManifest.profiles[0] as unknown as Record<string, unknown>).baseline =
+      "invalid";
+    await writeFile(manifestPath, JSON.stringify(nonObjectBaselineManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /baseline must be an object/i
+    );
+
+    // Non-integer steps
+    const floatStepsManifest = createValidManifest();
+    floatStepsManifest.profiles[0]!.baseline.steps = 8.5;
+    await writeFile(manifestPath, JSON.stringify(floatStepsManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /baseline\.steps must be a positive integer/i
+    );
+
+    // Negative steps
+    const negativeStepsManifest = createValidManifest();
+    negativeStepsManifest.profiles[0]!.baseline.steps = -1;
+    await writeFile(manifestPath, JSON.stringify(negativeStepsManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /baseline\.steps must be a positive integer/i
+    );
+
+    // Zero steps
+    const zeroStepsManifest = createValidManifest();
+    zeroStepsManifest.profiles[0]!.baseline.steps = 0;
+    await writeFile(manifestPath, JSON.stringify(zeroStepsManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /baseline\.steps must be a positive integer/i
+    );
+
+    // Non-integer width
+    const floatWidthManifest = createValidManifest();
+    floatWidthManifest.profiles[0]!.baseline.width = 1280.5;
+    await writeFile(manifestPath, JSON.stringify(floatWidthManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /baseline\.width must be a positive integer/i
+    );
+
+    // Negative width
+    const negWidthManifest = createValidManifest();
+    negWidthManifest.profiles[0]!.baseline.width = -100;
+    await writeFile(manifestPath, JSON.stringify(negWidthManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /baseline\.width must be a positive integer/i
+    );
+
+    // Non-integer height
+    const floatHeightManifest = createValidManifest();
+    floatHeightManifest.profiles[0]!.baseline.height = 720.5;
+    await writeFile(manifestPath, JSON.stringify(floatHeightManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /baseline\.height must be a positive integer/i
+    );
+
+    // Negative height
+    const negHeightManifest = createValidManifest();
+    negHeightManifest.profiles[0]!.baseline.height = -720;
+    await writeFile(manifestPath, JSON.stringify(negHeightManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /baseline\.height must be a positive integer/i
+    );
+
+    // Non-integer frames
+    const floatFramesManifest = createValidManifest();
+    floatFramesManifest.profiles[0]!.baseline.frames = 97.5;
+    await writeFile(manifestPath, JSON.stringify(floatFramesManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /baseline\.frames must be a positive integer/i
+    );
+
+    // Negative frames
+    const negFramesManifest = createValidManifest();
+    negFramesManifest.profiles[0]!.baseline.frames = -10;
+    await writeFile(manifestPath, JSON.stringify(negFramesManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /baseline\.frames must be a positive integer/i
+    );
+
+    // Negative approximateDurationSeconds
+    const negDurationManifest = createValidManifest();
+    negDurationManifest.profiles[0]!.baseline.approximateDurationSeconds = -5;
+    await writeFile(manifestPath, JSON.stringify(negDurationManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /baseline\.approximateDurationSeconds must be a positive finite number/i
+    );
+
+    // Zero approximateDurationSeconds
+    const zeroDurationManifest = createValidManifest();
+    zeroDurationManifest.profiles[0]!.baseline.approximateDurationSeconds = 0;
+    await writeFile(manifestPath, JSON.stringify(zeroDurationManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /baseline\.approximateDurationSeconds must be a positive finite number/i
+    );
+
+    // NaN / Infinity approximateDurationSeconds
+    const nonFiniteDurationManifest = createValidManifest();
+    (
+      nonFiniteDurationManifest.profiles[0]!.baseline as unknown as Record<string, unknown>
+    ).approximateDurationSeconds = "infinite";
+    await writeFile(manifestPath, JSON.stringify(nonFiniteDurationManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /baseline\.approximateDurationSeconds must be a positive finite number/i
+    );
+  });
+
+  it("manifest loading rejects malformed assertions", async () => {
+    // Non-array assertions
+    const nonArrayAssertionsManifest = createValidManifest();
+    (nonArrayAssertionsManifest.profiles[0] as unknown as Record<string, unknown>).assertions =
+      "invalid";
+    await writeFile(manifestPath, JSON.stringify(nonArrayAssertionsManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /assertions must be a non-empty array/i
+    );
+
+    // Empty assertions array
+    const emptyAssertionsManifest = createValidManifest();
+    (emptyAssertionsManifest.profiles[0] as unknown as Record<string, unknown>).assertions = [];
+    await writeFile(manifestPath, JSON.stringify(emptyAssertionsManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /assertions must be a non-empty array/i
+    );
+
+    // Non-object assertion entry
+    const nonObjectEntryManifest = createValidManifest();
+    (nonObjectEntryManifest.profiles[0] as unknown as Record<string, unknown>).assertions = [
+      "invalid"
+    ];
+    await writeFile(manifestPath, JSON.stringify(nonObjectEntryManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /assertions\[0\] must be an object/i
+    );
+
+    // Empty nodeId
+    const emptyNodeIdManifest = createValidManifest();
+    emptyNodeIdManifest.profiles[0]!.assertions[0]!.nodeId = "   ";
+    await writeFile(manifestPath, JSON.stringify(emptyNodeIdManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /assertions\[0\]\.nodeId must be a non-empty string/i
+    );
+
+    // Empty classType
+    const emptyClassTypeManifest = createValidManifest();
+    emptyClassTypeManifest.profiles[0]!.assertions[0]!.classType = "";
+    await writeFile(manifestPath, JSON.stringify(emptyClassTypeManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /assertions\[0\]\.classType must be a non-empty string/i
+    );
+
+    // Empty input
+    const emptyInputManifest = createValidManifest();
+    emptyInputManifest.profiles[0]!.assertions[0]!.input = "";
+    await writeFile(manifestPath, JSON.stringify(emptyInputManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /assertions\[0\]\.input must be a non-empty string/i
+    );
+
+    // Invalid equals type (e.g. object, null, undefined)
+    const invalidEqualsManifest = createValidManifest();
+    (
+      invalidEqualsManifest.profiles[0]!.assertions[0] as unknown as Record<string, unknown>
+    ).equals = { foo: "bar" };
+    await writeFile(manifestPath, JSON.stringify(invalidEqualsManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /assertions\[0\]\.equals must be a string, finite number, or boolean/i
+    );
+
+    const nullEqualsManifest = createValidManifest();
+    (nullEqualsManifest.profiles[0]!.assertions[0] as unknown as Record<string, unknown>).equals =
+      null;
+    await writeFile(manifestPath, JSON.stringify(nullEqualsManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /assertions\[0\]\.equals must be a string, finite number, or boolean/i
+    );
+  });
+
+  it("manifest loading validates only the requested profile and ignores invalid fields in other profiles", async () => {
+    const manifest = createValidManifest();
+    // Corrupt the second profile with invalid fields (bad baseline, bad models, bad assertions)
+    (manifest.profiles[1] as unknown as Record<string, unknown>).baseline = { steps: -999 };
+    (manifest.profiles[1] as unknown as Record<string, unknown>).models = "invalid";
+    (manifest.profiles[1] as unknown as Record<string, unknown>).assertions = [];
+    (manifest.profiles[1] as unknown as Record<string, unknown>).expectedWorkflowHash =
+      "invalid_hash";
+
+    await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+
+    // Loading the valid profile (ltx_25_720p_97f) succeeds without errors
+    const ltxProfile = await loadCertificationProfile(manifestPath, "ltx_25_720p_97f");
+    expect(ltxProfile.id).toBe("ltx_25_720p_97f");
+    expect(ltxProfile.baseline.steps).toBe(8);
+
+    // Loading the corrupt profile fails on its validation
+    await expect(loadCertificationProfile(manifestPath, "flux_schnell_draft")).rejects.toThrow(
+      /expectedWorkflowHash/i
+    );
+  });
+
+  it("manifest loading rejects invalid minFreeDiskGb, engine, or runnerProfile", async () => {
+    // Negative minFreeDiskGb
+    const negDiskManifest = createValidManifest();
+    negDiskManifest.profiles[0]!.minFreeDiskGb = -10;
+    await writeFile(manifestPath, JSON.stringify(negDiskManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /minFreeDiskGb/i
+    );
+
+    // Empty engine
+    const emptyEngineManifest = createValidManifest();
+    emptyEngineManifest.profiles[0]!.engine = "   ";
+    await writeFile(manifestPath, JSON.stringify(emptyEngineManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /engine/i
+    );
+
+    // Empty runnerProfile
+    const emptyRunnerManifest = createValidManifest();
+    emptyRunnerManifest.profiles[0]!.runnerProfile = "";
+    await writeFile(manifestPath, JSON.stringify(emptyRunnerManifest, null, 2));
+    await expect(loadCertificationProfile(manifestPath, "ltx_25_720p_97f")).rejects.toThrow(
+      /runnerProfile/i
+    );
+  });
 });

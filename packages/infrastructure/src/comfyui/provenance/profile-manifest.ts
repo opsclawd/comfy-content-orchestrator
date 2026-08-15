@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { dirname, isAbsolute, normalize, resolve, sep } from "node:path";
+import { dirname, isAbsolute, normalize, relative, resolve, sep } from "node:path";
 import { VALID_MODEL_CATEGORIES, type ModelCategory, type ModelFileSpec } from "./hasher.js";
 
 const VALID_MODEL_CATEGORY_SET: ReadonlySet<string> = new Set(VALID_MODEL_CATEGORIES);
@@ -92,7 +92,15 @@ function resolveWorkflowPath(manifestDir: string, relativePath: string, profileI
   }
 
   const targetPath = resolve(manifestDir, relativePath);
-  if (!targetPath.startsWith(manifestDir + sep)) {
+  const allowedPrefix = manifestDir.endsWith(sep) ? manifestDir : manifestDir + sep;
+  const rel = relative(manifestDir, targetPath);
+  const isContained =
+    targetPath.startsWith(allowedPrefix) &&
+    Boolean(rel) &&
+    !rel.startsWith("..") &&
+    !isAbsolute(rel);
+
+  if (!isContained) {
     throw new Error(
       `Profile "${profileId}": Workflow path escapes manifest directory: ${relativePath}`
     );
@@ -212,8 +220,34 @@ function validateModels(models: unknown, profileId: string): readonly ModelFileS
       );
     }
 
-    const normalizedPath = relativePath.replace(/\\/g, "/");
-    const modelKey = `${category}/${normalizedPath}`;
+    if (isAbsolute(relativePath)) {
+      throw new Error(
+        `Profile "${profileId}": Absolute model paths are not permitted in models[${i}].relativePath: ${relativePath}`
+      );
+    }
+
+    const normalizedSlashes = relativePath.replace(/\\/g, "/");
+    if (normalizedSlashes.startsWith("/")) {
+      throw new Error(
+        `Profile "${profileId}": Absolute model paths are not permitted in models[${i}].relativePath: ${relativePath}`
+      );
+    }
+
+    const segments = normalizedSlashes.split("/");
+    if (segments.some((segment) => segment === "..")) {
+      throw new Error(
+        `Profile "${profileId}": Parent traversal segments ('..') are not permitted in models[${i}].relativePath: ${relativePath}`
+      );
+    }
+
+    const normalized = normalize(relativePath);
+    if (normalized.startsWith("..") || isAbsolute(normalized)) {
+      throw new Error(
+        `Profile "${profileId}": Parent traversal or absolute paths are not permitted in models[${i}].relativePath: ${relativePath}`
+      );
+    }
+
+    const modelKey = `${category}/${normalizedSlashes}`;
     if (modelKeys.has(modelKey)) {
       throw new Error(`Profile "${profileId}": duplicate model identity found: ${modelKey}`);
     }
@@ -356,7 +390,8 @@ export async function loadCertificationProfile(
 
   const manifestDir = dirname(resolve(manifestPath));
   const seenProfileIds = new Set<string>();
-  const validatedProfiles: CertificationProfile[] = [];
+  const availableIds: string[] = [];
+  let targetRawProfile: Record<string, unknown> | undefined;
 
   for (let i = 0; i < parsed.profiles.length; i++) {
     const rawProfile = parsed.profiles[i];
@@ -373,71 +408,73 @@ export async function loadCertificationProfile(
       throw new Error(`Duplicate profile id in manifest: "${currentId}"`);
     }
     seenProfileIds.add(currentId);
+    availableIds.push(`"${currentId}"`);
 
-    const { engine, workflowRelativePath, expectedWorkflowHash, minFreeDiskGb, runnerProfile } =
-      rawProfile;
-
-    if (typeof engine !== "string" || engine.trim() === "") {
-      throw new Error(`Profile "${currentId}": engine must be a non-empty string`);
+    if (currentId === profileId) {
+      targetRawProfile = rawProfile;
     }
-
-    if (typeof workflowRelativePath !== "string" || workflowRelativePath.trim() === "") {
-      throw new Error(`Profile "${currentId}": workflowRelativePath must be a non-empty string`);
-    }
-
-    const workflowPath = resolveWorkflowPath(manifestDir, workflowRelativePath, currentId);
-
-    if (typeof expectedWorkflowHash !== "string" || !SHA256_REGEX.test(expectedWorkflowHash)) {
-      throw new Error(
-        `Profile "${currentId}": expectedWorkflowHash must be a lowercase 64-character hex SHA-256 hash, received: ${String(expectedWorkflowHash)}`
-      );
-    }
-
-    const source = validateSource(rawProfile.source, currentId);
-    const baseline = validateBaseline(rawProfile.baseline, currentId);
-
-    if (typeof minFreeDiskGb !== "number" || !Number.isFinite(minFreeDiskGb) || minFreeDiskGb < 0) {
-      throw new Error(
-        `Profile "${currentId}": minFreeDiskGb must be a non-negative finite number, received: ${String(minFreeDiskGb)}`
-      );
-    }
-
-    if (typeof runnerProfile !== "string" || runnerProfile.trim() === "") {
-      throw new Error(`Profile "${currentId}": runnerProfile must be a non-empty string`);
-    }
-
-    const models = validateModels(rawProfile.models, currentId);
-    const assertions = validateAssertions(rawProfile.assertions, currentId);
-    const renderProfileIdentity = validateRenderProfileIdentity(
-      rawProfile.renderProfileIdentity,
-      currentId
-    );
-
-    const profile: CertificationProfile = {
-      id: currentId,
-      engine,
-      workflowPath,
-      workflowRelativePath,
-      expectedWorkflowHash,
-      source,
-      baseline,
-      minFreeDiskGb,
-      runnerProfile,
-      models,
-      assertions,
-      renderProfileIdentity
-    };
-
-    validatedProfiles.push(profile);
   }
 
-  const selected = validatedProfiles.find((p) => p.id === profileId);
-  if (!selected) {
-    const availableIds = validatedProfiles.map((p) => `"${p.id}"`).join(", ");
+  if (!targetRawProfile) {
     throw new Error(
-      `Profile "${profileId}" not found in manifest "${manifestPath}". Available profiles: ${availableIds}`
+      `Profile "${profileId}" not found in manifest "${manifestPath}". Available profiles: ${availableIds.join(", ")}`
     );
   }
 
-  return deepFreeze(selected);
+  const currentId = profileId;
+  const { engine, workflowRelativePath, expectedWorkflowHash, minFreeDiskGb, runnerProfile } =
+    targetRawProfile;
+
+  if (typeof engine !== "string" || engine.trim() === "") {
+    throw new Error(`Profile "${currentId}": engine must be a non-empty string`);
+  }
+
+  if (typeof workflowRelativePath !== "string" || workflowRelativePath.trim() === "") {
+    throw new Error(`Profile "${currentId}": workflowRelativePath must be a non-empty string`);
+  }
+
+  const workflowPath = resolveWorkflowPath(manifestDir, workflowRelativePath, currentId);
+
+  if (typeof expectedWorkflowHash !== "string" || !SHA256_REGEX.test(expectedWorkflowHash)) {
+    throw new Error(
+      `Profile "${currentId}": expectedWorkflowHash must be a lowercase 64-character hex SHA-256 hash, received: ${String(expectedWorkflowHash)}`
+    );
+  }
+
+  const source = validateSource(targetRawProfile.source, currentId);
+  const baseline = validateBaseline(targetRawProfile.baseline, currentId);
+
+  if (typeof minFreeDiskGb !== "number" || !Number.isFinite(minFreeDiskGb) || minFreeDiskGb < 0) {
+    throw new Error(
+      `Profile "${currentId}": minFreeDiskGb must be a non-negative finite number, received: ${String(minFreeDiskGb)}`
+    );
+  }
+
+  if (typeof runnerProfile !== "string" || runnerProfile.trim() === "") {
+    throw new Error(`Profile "${currentId}": runnerProfile must be a non-empty string`);
+  }
+
+  const models = validateModels(targetRawProfile.models, currentId);
+  const assertions = validateAssertions(targetRawProfile.assertions, currentId);
+  const renderProfileIdentity = validateRenderProfileIdentity(
+    targetRawProfile.renderProfileIdentity,
+    currentId
+  );
+
+  const profile: CertificationProfile = {
+    id: currentId,
+    engine,
+    workflowPath,
+    workflowRelativePath,
+    expectedWorkflowHash,
+    source,
+    baseline,
+    minFreeDiskGb,
+    runnerProfile,
+    models,
+    assertions,
+    renderProfileIdentity
+  };
+
+  return deepFreeze(profile);
 }
