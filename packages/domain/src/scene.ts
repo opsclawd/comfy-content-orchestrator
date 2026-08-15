@@ -152,11 +152,11 @@ function freezeConfiguration(config: SceneConfiguration): Readonly<SceneConfigur
 export class Scene {
   readonly #id: SceneId;
   readonly #campaignId: CampaignId;
-  readonly #status: SceneStatus;
-  readonly #specRevision: number;
+  #status: SceneStatus;
+  #specRevision: number;
   readonly #configuration: Readonly<SceneConfiguration>;
-  readonly #approval?: Readonly<SceneApproval>;
-  readonly #failedFrom?: SceneStatus;
+  #approval?: Readonly<SceneApproval> | undefined;
+  #failedFrom?: SceneStatus | undefined;
 
   private constructor(input: SceneCreateInput) {
     this.#id = input.id;
@@ -180,6 +180,222 @@ export class Scene {
 
   get status(): SceneStatus {
     return this.#status;
+  }
+
+  #isTerminal(): boolean {
+    return this.#status === "completed" || this.#status === "cancelled";
+  }
+
+  #transition(
+    actionName: string,
+    allowedSources: readonly SceneStatus[],
+    targetStatus: SceneStatus,
+    reason: SceneTransitionReason,
+    onSuccess?: () => void
+  ): SceneTransition {
+    if (this.#isTerminal()) {
+      throw new TerminalStateError(this.#id, this.#status, actionName);
+    }
+
+    if (!allowedSources.includes(this.#status)) {
+      throw new InvalidTransitionError(this.#id, this.#status, actionName);
+    }
+
+    const from = this.#status;
+    this.#status = targetStatus;
+
+    if (from === "failed") {
+      this.#failedFrom = undefined;
+    }
+
+    if (onSuccess) {
+      onSuccess();
+    }
+
+    return Object.freeze({
+      sceneId: this.#id,
+      from,
+      to: targetStatus,
+      revision: this.#specRevision,
+      reason
+    });
+  }
+
+  beginCandidateGeneration(): SceneTransition {
+    return this.#transition(
+      "beginCandidateGeneration",
+      ["draft_pending", "director_review"],
+      "generating_candidates",
+      "candidate_generation_started"
+    );
+  }
+
+  submitCandidatesForReview(): SceneTransition {
+    return this.#transition(
+      "submitCandidatesForReview",
+      ["generating_candidates"],
+      "director_review",
+      "candidates_submitted"
+    );
+  }
+
+  approve(input: SceneApprovalInput): SceneTransition {
+    if (this.#isTerminal()) {
+      throw new TerminalStateError(this.#id, this.#status, "approve");
+    }
+
+    if (this.#status !== "director_review") {
+      throw new InvalidTransitionError(this.#id, this.#status, "approve");
+    }
+
+    const approval: Readonly<SceneApproval> = Object.freeze({
+      revision: this.#specRevision,
+      approvedBy: input.approvedBy,
+      approvedAt: input.approvedAt
+    });
+
+    return this.#transition(
+      "approve",
+      ["director_review"],
+      "approved",
+      "approved",
+      () => {
+        this.#approval = approval;
+      }
+    );
+  }
+
+  requestReroll(): SceneTransition {
+    return this.#transition(
+      "requestReroll",
+      ["director_review"],
+      "generating_candidates",
+      "reroll_requested"
+    );
+  }
+
+  queueForProduction(): SceneTransition {
+    if (this.#isTerminal()) {
+      throw new TerminalStateError(this.#id, this.#status, "queueForProduction");
+    }
+
+    if (this.#status === "failed") {
+      const allowedFailedFrom: readonly SceneStatus[] = ["queued", "rendering", "qa"];
+      const isRecoverableProductionFailure =
+        this.#failedFrom !== undefined &&
+        allowedFailedFrom.includes(this.#failedFrom) &&
+        this.#approval !== undefined &&
+        this.#approval.revision === this.#specRevision;
+
+      if (!isRecoverableProductionFailure) {
+        throw new InvalidTransitionError(this.#id, this.#status, "queueForProduction");
+      }
+    } else if (this.#status !== "approved") {
+      throw new InvalidTransitionError(this.#id, this.#status, "queueForProduction");
+    }
+
+    return this.#transition(
+      "queueForProduction",
+      ["approved", "failed"],
+      "queued",
+      "production_queued"
+    );
+  }
+
+  startRendering(): SceneTransition {
+    return this.#transition(
+      "startRendering",
+      ["queued"],
+      "rendering",
+      "rendering_started"
+    );
+  }
+
+  submitForQA(): SceneTransition {
+    return this.#transition(
+      "submitForQA",
+      ["rendering"],
+      "qa",
+      "submitted_for_qa"
+    );
+  }
+
+  acceptQA(): SceneTransition {
+    return this.#transition(
+      "acceptQA",
+      ["qa"],
+      "completed",
+      "qa_accepted"
+    );
+  }
+
+  rejectQA(): SceneTransition {
+    return this.#transition(
+      "rejectQA",
+      ["qa"],
+      "director_review",
+      "qa_rejected",
+      () => {
+        this.#approval = undefined;
+      }
+    );
+  }
+
+  fail(): SceneTransition {
+    if (this.#isTerminal()) {
+      throw new TerminalStateError(this.#id, this.#status, "fail");
+    }
+
+    const allowedSources: readonly SceneStatus[] = [
+      "generating_candidates",
+      "queued",
+      "rendering",
+      "qa"
+    ];
+
+    if (!allowedSources.includes(this.#status)) {
+      throw new InvalidTransitionError(this.#id, this.#status, "fail");
+    }
+
+    const failedSource = this.#status;
+    return this.#transition(
+      "fail",
+      allowedSources,
+      "failed",
+      "failed",
+      () => {
+        this.#failedFrom = failedSource;
+      }
+    );
+  }
+
+  recoverToReview(): SceneTransition {
+    return this.#transition(
+      "recoverToReview",
+      ["failed"],
+      "director_review",
+      "recovered_to_review",
+      () => {
+        this.#approval = undefined;
+      }
+    );
+  }
+
+  cancel(): SceneTransition {
+    return this.#transition(
+      "cancel",
+      [
+        "draft_pending",
+        "generating_candidates",
+        "director_review",
+        "approved",
+        "queued",
+        "rendering",
+        "failed"
+      ],
+      "cancelled",
+      "cancelled"
+    );
   }
 
   snapshot(): Readonly<SceneSnapshot> {
