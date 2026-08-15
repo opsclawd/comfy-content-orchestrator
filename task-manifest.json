@@ -1,0 +1,316 @@
+{
+  "version": 2,
+  "task_count": 3,
+  "tasks": [
+    {
+      "n": 1,
+      "title": "Define Scene domain contracts and typed errors",
+      "expected_files": [
+        "packages/domain/src/scene.ts",
+        "packages/domain/src/scene.test.ts",
+        "packages/domain/src/index.ts"
+      ],
+      "reference_files": ["docs/CONTEXT.md", "docs/prd.md"],
+      "validation_commands": [
+        [
+          "pnpm",
+          "exec",
+          "vitest",
+          "run",
+          "packages/domain/src/scene.test.ts",
+          "-t",
+          "creates a draft scene at revision one with an immutable configuration snapshot"
+        ],
+        [
+          "pnpm",
+          "exec",
+          "eslint",
+          "packages/domain/src/scene.ts",
+          "packages/domain/src/scene.test.ts",
+          "packages/domain/src/index.ts"
+        ],
+        [
+          "pnpm",
+          "exec",
+          "tsc",
+          "--build",
+          "packages/domain/tsconfig.json",
+          "--force"
+        ],
+        [
+          "pnpm",
+          "exec",
+          "dependency-cruiser",
+          "packages/domain/src/scene.ts",
+          "packages/domain/src/scene.test.ts",
+          "packages/domain/src/index.ts",
+          "--config",
+          ".dependency-cruiser.cjs"
+        ]
+      ],
+      "signature_changes": [
+        {
+          "declaration_file": "packages/domain/src/scene.ts",
+          "symbol": "SCENE_STATUSES",
+          "change": "modified",
+          "breaking": false,
+          "note": "Adds the canonical readonly Scene status tuple to the domain package."
+        },
+        {
+          "declaration_file": "packages/domain/src/scene.ts",
+          "symbol": "SceneStatus",
+          "change": "modified",
+          "breaking": false,
+          "note": "Adds the canonical Scene lifecycle union."
+        },
+        {
+          "declaration_file": "packages/domain/src/scene.ts",
+          "symbol": "SceneId",
+          "change": "modified",
+          "breaking": false,
+          "note": "Adds an opaque Scene identifier type."
+        },
+        {
+          "declaration_file": "packages/domain/src/scene.ts",
+          "symbol": "CampaignId",
+          "change": "modified",
+          "breaking": false,
+          "note": "Adds an opaque Campaign identifier type used by Scene."
+        },
+        {
+          "declaration_file": "packages/domain/src/scene.ts",
+          "symbol": "SceneConfiguration",
+          "change": "modified",
+          "breaking": false,
+          "note": "Adds the minimum readonly creative configuration needed for revision invariants."
+        },
+        {
+          "declaration_file": "packages/domain/src/scene.ts",
+          "symbol": "SceneCreateInput",
+          "change": "modified",
+          "breaking": false,
+          "note": "Defines the required inputs for new draft Scenes."
+        },
+        {
+          "declaration_file": "packages/domain/src/scene.ts",
+          "symbol": "SceneApproval",
+          "change": "modified",
+          "breaking": false,
+          "note": "Defines immutable revision-bound approval metadata."
+        },
+        {
+          "declaration_file": "packages/domain/src/scene.ts",
+          "symbol": "SceneApprovalInput",
+          "change": "modified",
+          "breaking": false,
+          "note": "Defines caller-supplied actor and timestamp metadata for approval."
+        },
+        {
+          "declaration_file": "packages/domain/src/scene.ts",
+          "symbol": "SceneSnapshot",
+          "change": "modified",
+          "breaking": false,
+          "note": "Adds the readonly aggregate inspection surface."
+        },
+        {
+          "declaration_file": "packages/domain/src/scene.ts",
+          "symbol": "SceneTransition",
+          "change": "modified",
+          "breaking": false,
+          "note": "Adds immutable transition facts for later audit recording."
+        },
+        {
+          "declaration_file": "packages/domain/src/scene.ts",
+          "symbol": "SceneTransitionReason",
+          "change": "modified",
+          "breaking": false,
+          "note": "Defines the domain intent associated with each transition fact."
+        },
+        {
+          "declaration_file": "packages/domain/src/scene.ts",
+          "symbol": "InvalidTransitionError",
+          "change": "modified",
+          "breaking": false,
+          "note": "Adds a typed failure for forbidden non-terminal lifecycle transitions."
+        },
+        {
+          "declaration_file": "packages/domain/src/scene.ts",
+          "symbol": "InvalidMutationError",
+          "change": "modified",
+          "breaking": false,
+          "note": "Adds a typed failure for creative updates attempted in busy states."
+        },
+        {
+          "declaration_file": "packages/domain/src/scene.ts",
+          "symbol": "TerminalStateError",
+          "change": "modified",
+          "breaking": false,
+          "note": "Adds a typed failure for any behavior attempted after completion or cancellation."
+        },
+        {
+          "declaration_file": "packages/domain/src/scene.ts",
+          "symbol": "Scene",
+          "change": "modified",
+          "breaking": false,
+          "note": "Adds draft creation, readonly identity/status access, and immutable snapshots."
+        }
+      ],
+      "invariants": [
+        {
+          "name": "immutable draft creation",
+          "description": "Creating a Scene yields draft_pending at revision one with no approval or failure origin, and neither retained input aliases nor exposed snapshots can mutate aggregate state.",
+          "test_case_name": "creates a draft scene at revision one with an immutable configuration snapshot"
+        }
+      ]
+    },
+    {
+      "n": 2,
+      "title": "Implement the canonical lifecycle and failure recovery",
+      "expected_files": [
+        "packages/domain/src/scene.ts",
+        "packages/domain/src/scene.test.ts"
+      ],
+      "reference_files": ["docs/prd.md"],
+      "validation_commands": [
+        "pnpm exec vitest run packages/domain/src/scene.test.ts -t \"allows every canonical scene transition|rejects representative transitions|treats completed and cancelled|records failure origin|returns an immutable QA rejection\"",
+        [
+          "pnpm",
+          "exec",
+          "eslint",
+          "packages/domain/src/scene.ts",
+          "packages/domain/src/scene.test.ts"
+        ],
+        [
+          "pnpm",
+          "exec",
+          "tsc",
+          "--build",
+          "packages/domain/tsconfig.json",
+          "--force"
+        ]
+      ],
+      "signature_changes": [
+        {
+          "declaration_file": "packages/domain/src/scene.ts",
+          "symbol": "Scene",
+          "change": "modified",
+          "breaking": false,
+          "note": "Adds named lifecycle methods returning immutable SceneTransition facts."
+        }
+      ],
+      "invariants": [
+        {
+          "name": "canonical transition matrix",
+          "description": "Every PRD 4.2 edge is reachable through its named behavior and produces the expected destination and reason.",
+          "test_case_name": "allows every canonical scene transition through its behavior method"
+        },
+        {
+          "name": "forbidden transition atomicity",
+          "description": "A non-terminal transition absent from the canonical matrix throws InvalidTransitionError and leaves the full snapshot unchanged.",
+          "test_case_name": "rejects representative transitions absent from the canonical matrix"
+        },
+        {
+          "name": "terminal lifecycle enforcement",
+          "description": "Every lifecycle behavior invoked in completed or cancelled throws TerminalStateError and leaves state unchanged.",
+          "test_case_name": "treats completed and cancelled scenes as terminal"
+        },
+        {
+          "name": "failure provenance and retry authorization",
+          "description": "Failure records its source; only queued, rendering, or QA failures retaining current approval may retry directly to queued, while generation failure must recover to review or cancel.",
+          "test_case_name": "records failure origin and permits only approved production failures to retry"
+        },
+        {
+          "name": "QA rejection transition evidence",
+          "description": "Rejecting QA clears current approval, enters director_review, and returns a frozen qa-to-director_review fact that later activity cannot alter.",
+          "test_case_name": "returns an immutable QA rejection transition without erasing prior state facts"
+        }
+      ]
+    },
+    {
+      "n": 3,
+      "title": "Enforce revision-bound approval and creative mutation rules",
+      "expected_files": [
+        "packages/domain/src/scene.ts",
+        "packages/domain/src/scene.test.ts"
+      ],
+      "reference_files": ["docs/prd.md"],
+      "validation_commands": [
+        [
+          "pnpm",
+          "exec",
+          "vitest",
+          "run",
+          "packages/domain/src/scene.test.ts"
+        ],
+        [
+          "pnpm",
+          "exec",
+          "eslint",
+          "packages/domain/src/scene.ts",
+          "packages/domain/src/scene.test.ts"
+        ],
+        [
+          "pnpm",
+          "exec",
+          "tsc",
+          "--build",
+          "packages/domain/tsconfig.json",
+          "--force"
+        ],
+        [
+          "pnpm",
+          "exec",
+          "prettier",
+          "--check",
+          "packages/domain/src/scene.ts",
+          "packages/domain/src/scene.test.ts"
+        ],
+        [
+          "pnpm",
+          "exec",
+          "dependency-cruiser",
+          "packages/domain/src/scene.ts",
+          "packages/domain/src/scene.test.ts",
+          "--config",
+          ".dependency-cruiser.cjs"
+        ]
+      ],
+      "signature_changes": [
+        {
+          "declaration_file": "packages/domain/src/scene.ts",
+          "symbol": "Scene",
+          "change": "modified",
+          "breaking": false,
+          "note": "Adds explicit prompt, references, engine, duration, and LoRA mutation methods returning SceneTransition facts."
+        }
+      ],
+      "invariants": [
+        {
+          "name": "revision-bound approval",
+          "description": "Approval is accepted only in director_review and freezes the exact current revision with the caller-supplied actor and timestamp.",
+          "test_case_name": "binds approval metadata to the current scene revision"
+        },
+        {
+          "name": "approved creative mutation invalidation",
+          "description": "Each prompt, references, engine, duration, or LoRA update advances revision once, clears approval, applies only its named replacement, and moves approved to director_review.",
+          "test_case_name": "invalidates approval for every creative mutation"
+        },
+        {
+          "name": "editable-state revision progression",
+          "description": "Creative updates in draft_pending or director_review advance revision while leaving lifecycle state unchanged.",
+          "test_case_name": "keeps editable non-approved scenes in place while advancing revision"
+        },
+        {
+          "name": "busy-state mutation rejection",
+          "description": "Creative updates during generation, queueing, rendering, QA, or failure throw InvalidMutationError before changing any state.",
+          "test_case_name": "rejects creative mutation during generation and production"
+        },
+        {
+          "name": "terminal mutation rejection",
+          "description": "Every creative update in completed or cancelled throws TerminalStateError and leaves configuration, revision, approval, failure origin, and status unchanged.",
+          "test_case_name": "rejects every creative mutation in terminal states"
+        }
+      ]
+    }
+  ]
+}
