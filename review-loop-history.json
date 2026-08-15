@@ -1,0 +1,286 @@
+[
+  {
+    "iteration": 1,
+    "review": {
+      "verdict": "fail",
+      "invocationId": "bd1f5702-5d8d-40c9-b874-d99fd5fc2a58",
+      "offendingFindings": [
+        {
+          "severity": "high",
+          "summary": "Incompatible Model Category Abstraction (text_encoders vs clip)",
+          "files": [
+            "packages/infrastructure/src/comfyui/provenance/hasher.ts",
+            "templates/provenance.json"
+          ]
+        },
+        {
+          "severity": "high",
+          "summary": "Composition-root Omission for Provenance APIs",
+          "files": [
+            "packages/infrastructure/src/index.ts"
+          ]
+        }
+      ],
+      "reviewedCommitSha": "68b8f65c6f17745fd6b71933fd54bd3d4cf8afc7"
+    },
+    "fix": {
+      "verdict": "done_with_fixes",
+      "invocationId": "1df27cd5-b0c8-4942-989c-c720866ba1fb",
+      "headBeforeFix": "68b8f65c6f17745fd6b71933fd54bd3d4cf8afc7"
+    },
+    "revalidation": {
+      "passed": true,
+      "validationRunId": "6d2696f7-221d-4c69-ab30-4703a491b319"
+    },
+    "outcome": "fixed"
+  },
+  {
+    "iteration": 2,
+    "review": {
+      "verdict": "fail",
+      "invocationId": "7c784b0a-3ef4-4ac8-9fef-6417068b5ac4",
+      "offendingFindings": [
+        {
+          "severity": "high",
+          "summary": "Out-of-scope modification of review and task context files",
+          "files": [
+            "code-review.md",
+            "implementation-log.md",
+            "result.json",
+            "task-context-step-6.md",
+            "task-context-step-7.md",
+            "validation.headsha"
+          ]
+        }
+      ],
+      "reviewedCommitSha": "b61db9b3a970ba5b2350c672ee961efd2815364f"
+    },
+    "fix": {
+      "verdict": "done_with_fixes",
+      "invocationId": "db7e6b9b-605e-4a14-9ba4-5fe3451b0371",
+      "headBeforeFix": "b61db9b3a970ba5b2350c672ee961efd2815364f"
+    },
+    "revalidation": {
+      "passed": true,
+      "validationRunId": "357f686b-33ac-4025-91b7-8489ac99b6e0"
+    },
+    "outcome": "fixed"
+  },
+  {
+    "iteration": 3,
+    "review": {
+      "verdict": "fail",
+      "invocationId": "a656e3b6-61ef-4afb-aeb5-aafce13c9e1d",
+      "offendingFindings": [
+        {
+          "severity": "high",
+          "summary": "Out-of-scope modification of review and task context files",
+          "files": [
+            "review-loop-history.json",
+            "code-review.md",
+            "implementation-log.md",
+            "result.json"
+          ]
+        }
+      ],
+      "reviewedCommitSha": "ab7d844577db0e2da8a28dfe57a5aa111b89fb1d"
+    },
+    "fix": {
+      "verdict": "done_with_fixes",
+      "invocationId": "821df603-c58c-44e1-90c0-a5a8edcaccd4",
+      "headBeforeFix": "ab7d844577db0e2da8a28dfe57a5aa111b89fb1d"
+    },
+    "revalidation": {
+      "passed": true,
+      "validationRunId": "7cd3564b-61a5-46bf-8a29-2bdd897ac1a1"
+    },
+    "outcome": "fixed"
+  },
+  {
+    "iteration": 4,
+    "review": {
+      "verdict": "fail",
+      "invocationId": "abef9ed7-67d7-4846-a54b-d9c5c02ea607",
+      "offendingFindings": [
+        {
+          "severity": "high",
+          "summary": "Out-of-scope modification of review and task context files",
+          "files": [
+            "code-review.md",
+            "implementation-log.md",
+            "result.json",
+            "review-loop-history.json",
+            "task-context-step-6.md",
+            "task-context-step-7.md",
+            "validation.headsha"
+          ]
+        }
+      ],
+      "reviewedCommitSha": "d0edc558b8b8764b1fe112d8fe00cc2792d7eafe"
+    },
+    "fix": {
+      "verdict": "done_with_fixes",
+      "invocationId": "3fc41678-45d3-42cb-8375-97ae48393e5b",
+      "headBeforeFix": "d0edc558b8b8764b1fe112d8fe00cc2792d7eafe"
+    },
+    "revalidation": {
+      "passed": true,
+      "validationRunId": "256beb61-7412-4d1c-9695-d663f0c52a69"
+    },
+    "outcome": "fixed"
+  },
+  {
+    "iteration": 5,
+    "review": {
+      "verdict": "fail",
+      "invocationId": "f7fd98e5-dcf1-44cc-88ae-fbc30e9c1d5e",
+      "offendingFindings": [
+        {
+          "severity": "high",
+          "summary": "Out-of-scope modification of review and task context files",
+          "files": [
+            "code-review.md",
+            "result.json",
+            "review-loop-history.json"
+          ]
+        }
+      ],
+      "reviewedCommitSha": "811bed0ccc97a9968468c754b98b35de6ab8cf22"
+    },
+    "fix": {
+      "verdict": "done_with_fixes",
+      "invocationId": "5d6b7105-d133-4c1d-837d-5d2658550dd5",
+      "headBeforeFix": "811bed0ccc97a9968468c754b98b35de6ab8cf22"
+    },
+    "revalidation": {
+      "passed": true,
+      "validationRunId": "a33f46ac-95b4-460a-8a49-f341e6dffb6c"
+    },
+    "outcome": "fixed"
+  },
+  {
+    "iteration": 7,
+    "review": {
+      "verdict": "fail",
+      "invocationId": "9f6333ce-d1a6-41bb-9864-e0f554bb1e15",
+      "offendingFindings": [
+        {
+          "severity": "high",
+          "summary": "Out-of-scope modification of review and task context files",
+          "files": [
+            "code-review.md",
+            "result.json",
+            "review-loop-history.json"
+          ]
+        }
+      ],
+      "reviewedCommitSha": "dcaf953003f6402ae9220dc6cdf889299ac7300c"
+    },
+    "fix": {
+      "verdict": "done_with_fixes",
+      "invocationId": "9a65ba35-04f1-434c-b3b5-75d181f0eb0e",
+      "headBeforeFix": "dcaf953003f6402ae9220dc6cdf889299ac7300c"
+    },
+    "revalidation": {
+      "passed": true,
+      "validationRunId": "5856e72b-2784-4a6a-a753-f4d7a20dd58a"
+    },
+    "outcome": "fixed"
+  },
+  {
+    "iteration": 8,
+    "review": {
+      "verdict": "fail",
+      "invocationId": "cb205651-ecbe-4819-83c7-9a058c7a27b0",
+      "offendingFindings": [
+        {
+          "severity": "high",
+          "summary": "Out-of-scope modification of review and task context files",
+          "files": [
+            "code-review.md",
+            "design.md",
+            "fix-result.json",
+            "implementation-log.md",
+            "issue-comments.md",
+            "issue.md",
+            "plan-fix-result.json",
+            "plan-review-findings.md",
+            "plan.md",
+            "prompt.md",
+            "quality-review-result.final_full.0ece109a3990538b6b241dee191e886e1318fbdf.json",
+            "quality-review-result.final_full.604e2484e51a50d9d6bd353690b060b73dd6674b.json",
+            "quality-review-result.final_full.6bab63e0967fb48d900dbf1fc191acb5bca5e477.json",
+            "quality-review-result.final_full.facbb77b1729539c5e430be9d5326df07fe8f5dc.json",
+            "quality-review-result.initial_full.0ece109a3990538b6b241dee191e886e1318fbdf.json",
+            "quality-review-result.initial_full.604e2484e51a50d9d6bd353690b060b73dd6674b.json",
+            "quality-review-result.initial_full.6bab63e0967fb48d900dbf1fc191acb5bca5e477.json",
+            "quality-review-result.initial_full.facbb77b1729539c5e430be9d5326df07fe8f5dc.json",
+            "quality-review-result.intermediate_delta.7ff278f2a04c29bb3c82e961f03b1eccd9b0c375.json",
+            "quality-review-result.json",
+            "result.json",
+            "review-loop-history.json",
+            "spec-review-result.final_full.0ece109a3990538b6b241dee191e886e1318fbdf.json",
+            "spec-review-result.final_full.604e2484e51a50d9d6bd353690b060b73dd6674b.json",
+            "spec-review-result.final_full.6bab63e0967fb48d900dbf1fc191acb5bca5e477.json",
+            "spec-review-result.final_full.facbb77b1729539c5e430be9d5326df07fe8f5dc.json",
+            "spec-review-result.initial_full.0ece109a3990538b6b241dee191e886e1318fbdf.json",
+            "spec-review-result.initial_full.604e2484e51a50d9d6bd353690b060b73dd6674b.json",
+            "spec-review-result.initial_full.6bab63e0967fb48d900dbf1fc191acb5bca5e477.json",
+            "spec-review-result.initial_full.facbb77b1729539c5e430be9d5326df07fe8f5dc.json",
+            "spec-review-result.json",
+            "task-context-step-1.md",
+            "task-context-step-2.md",
+            "task-context-step-3.md",
+            "task-context-step-4.md",
+            "task-context-step-5.md",
+            "task-context-step-6.md",
+            "task-context-step-7.md",
+            "task-manifest.json",
+            "validation.headsha",
+            "validation.result"
+          ]
+        }
+      ],
+      "reviewedCommitSha": "c58e36ac0db0eb7101cdecc243754df1e73ad1bf"
+    },
+    "fix": {
+      "verdict": "done_with_fixes",
+      "invocationId": "dd4a0dd8-b891-4ae1-9ef8-50ccaae16c1d",
+      "headBeforeFix": "c58e36ac0db0eb7101cdecc243754df1e73ad1bf"
+    },
+    "revalidation": {
+      "passed": true,
+      "validationRunId": "9ca56e57-569e-461c-9338-cb1a9c8e0034"
+    },
+    "outcome": "fixed"
+  },
+  {
+    "iteration": 9,
+    "review": {
+      "verdict": "fail",
+      "invocationId": "6e1dcbff-0567-40ae-b81a-5f25f8b56a08",
+      "offendingFindings": [
+        {
+          "severity": "high",
+          "summary": "Out-of-scope modification of review and task context files",
+          "files": [
+            "code-review.md",
+            "result.json",
+            "review-loop-history.json"
+          ]
+        }
+      ],
+      "reviewedCommitSha": "0e80638105157e711b0133e2008d136048e39331"
+    },
+    "fix": {
+      "verdict": "done_with_fixes",
+      "invocationId": "d445cf88-899a-4e3b-867c-f85ad930c065",
+      "headBeforeFix": "0e80638105157e711b0133e2008d136048e39331"
+    },
+    "revalidation": {
+      "passed": true,
+      "validationRunId": "cd813d3b-a3f5-4f19-a708-61c6432f6c90"
+    },
+    "outcome": "fixed"
+  }
+]
