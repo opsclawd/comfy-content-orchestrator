@@ -13,5 +13,10 @@
   },
   "scripts": {
     "typecheck": "tsc --build"
+  },
+  "dependencies": {
+    "@cco/contracts": "workspace:*",
+    "@cco/domain": "workspace:*",
+    "@cco/shared": "workspace:*"
   }
 }

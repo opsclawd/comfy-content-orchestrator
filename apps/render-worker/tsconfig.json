@@ -4,5 +4,12 @@
     "outDir": "./dist",
     "rootDir": "./src"
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*"],
+  "references": [
+    { "path": "../../packages/application" },
+    { "path": "../../packages/contracts" },
+    { "path": "../../packages/domain" },
+    { "path": "../../packages/infrastructure" },
+    { "path": "../../packages/shared" }
+  ]
 }
