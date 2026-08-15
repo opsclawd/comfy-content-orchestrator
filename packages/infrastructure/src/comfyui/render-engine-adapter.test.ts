@@ -674,6 +674,12 @@ describe("ComfyUiRenderEngineAdapter", () => {
   });
 
   it("settles only once and cleans listeners timer and socket on every terminal path", async () => {
+    // Fake timers make the wall-clock timeout observable: the adapter registers
+    // one pending timer per execution, and settling must clear it. Asserting the
+    // pending count rather than spying on clearTimeout checks the invariant the
+    // acceptance criterion states — no timer survives a terminal path — instead
+    // of checking that a particular call was made.
+    vi.useFakeTimers();
     const transport = new FakeComfyUiTransport();
     const adapter = new ComfyUiRenderEngineAdapter({
       baseUrl: "http://127.0.0.1:8188",
@@ -726,6 +732,11 @@ describe("ComfyUiRenderEngineAdapter", () => {
     // Exactly one close call initiated by client settlement
     expect(ws.closeCalls).toHaveLength(1);
 
+    // The wall-clock timeout timer must not outlive the execution. A leaked
+    // timer keeps a handle alive for the full render budget and can fire
+    // against an execution that has already settled.
+    expect(vi.getTimerCount()).toBe(0);
+
     // Only 1 prompt call + 1 history call
     const historyCalls = transport.fakeFetch.calls.filter((c) =>
       String(c.url).includes("/history/")
@@ -751,5 +762,7 @@ describe("ComfyUiRenderEngineAdapter", () => {
       String(c.url).includes("/history/")
     );
     expect(historyCallsAfter).toHaveLength(2);
+
+    vi.useRealTimers();
   });
 });
