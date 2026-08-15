@@ -7,6 +7,7 @@ import {
   TerminalStateError,
   type CampaignId,
   type SceneApprovalInput,
+  type SceneConfiguration,
   type SceneId,
   type SceneStatus,
   type SceneTransition,
@@ -118,19 +119,13 @@ describe("Scene domain contracts", () => {
     });
 
     it("instantiates InvalidMutationError with default and custom messages", () => {
-      const err = new InvalidMutationError(
-        "scene-1" as SceneId,
-        "rendering",
-        "prompt"
-      );
+      const err = new InvalidMutationError("scene-1" as SceneId, "rendering", "prompt");
       expect(err).toBeInstanceOf(Error);
       expect(err.name).toBe("InvalidMutationError");
       expect(err.sceneId).toBe("scene-1");
       expect(err.currentStatus).toBe("rendering");
       expect(err.field).toBe("prompt");
-      expect(err.message).toBe(
-        "Cannot mutate 'prompt' on scene 'scene-1' in status 'rendering'."
-      );
+      expect(err.message).toBe("Cannot mutate 'prompt' on scene 'scene-1' in status 'rendering'.");
 
       const customErr = new InvalidMutationError(
         "scene-1" as SceneId,
@@ -142,11 +137,7 @@ describe("Scene domain contracts", () => {
     });
 
     it("instantiates TerminalStateError with default and custom messages", () => {
-      const err = new TerminalStateError(
-        "scene-1" as SceneId,
-        "completed",
-        "cancel"
-      );
+      const err = new TerminalStateError("scene-1" as SceneId, "completed", "cancel");
       expect(err).toBeInstanceOf(Error);
       expect(err.name).toBe("TerminalStateError");
       expect(err.sceneId).toBe("scene-1");
@@ -664,7 +655,10 @@ describe("Scene domain contracts", () => {
 
       const terminalScenes = [reachCompleted(), reachCancelled()];
 
-      const lifecycleActions: readonly { readonly name: string; readonly action: (s: Scene) => void }[] = [
+      const lifecycleActions: readonly {
+        readonly name: string;
+        readonly action: (s: Scene) => void;
+      }[] = [
         { name: "beginCandidateGeneration", action: (s) => s.beginCandidateGeneration() },
         { name: "submitCandidatesForReview", action: (s) => s.submitCandidatesForReview() },
         { name: "approve", action: (s) => s.approve(fixedApprovalInput) },
@@ -846,5 +840,396 @@ describe("Scene domain contracts", () => {
       expect(transition.sceneId).toBe(scene.id);
     });
   });
-});
 
+  describe("creative mutations and revision-bound approval", () => {
+    const fixedApprovalInput: SceneApprovalInput = {
+      approvedBy: "director-1",
+      approvedAt: "2026-08-14T10:00:00Z"
+    };
+
+    function createTestScene(overrides?: Partial<SceneConfiguration>): Scene {
+      return Scene.create({
+        id: "scene-1" as SceneId,
+        campaignId: "campaign-1" as CampaignId,
+        configuration: {
+          prompt: "A product reveal",
+          referenceIds: ["asset-a"],
+          engineProfileId: "ltx-2.5@certified-v1",
+          durationMs: 4_000,
+          ...overrides
+        }
+      });
+    }
+
+    it("binds approval metadata to the current scene revision", () => {
+      const scene = createTestScene();
+      const draftSnapshot = scene.snapshot();
+
+      expect(() => scene.approve(fixedApprovalInput)).toThrow(InvalidTransitionError);
+      expect(scene.snapshot()).toEqual(draftSnapshot);
+
+      scene.beginCandidateGeneration();
+      scene.submitCandidatesForReview();
+      const transition = scene.approve(fixedApprovalInput);
+
+      expect(scene.status).toBe("approved");
+      expect(transition).toEqual({
+        sceneId: scene.id,
+        from: "director_review",
+        to: "approved",
+        revision: 1,
+        reason: "approved"
+      });
+      expect(Object.isFrozen(transition)).toBe(true);
+
+      const snapshot = scene.snapshot();
+      expect(snapshot.status).toBe("approved");
+      expect(snapshot.specRevision).toBe(1);
+      expect(snapshot.approval).toEqual({
+        revision: 1,
+        approvedBy: "director-1",
+        approvedAt: "2026-08-14T10:00:00Z"
+      });
+      expect(Object.isFrozen(snapshot)).toBe(true);
+      expect(Object.isFrozen(snapshot.approval)).toBe(true);
+    });
+
+    it("invalidates approval for every creative mutation", () => {
+      const mutations = [
+        ["prompt", (scene: Scene) => scene.updatePrompt("A revised reveal")],
+        ["references", (scene: Scene) => scene.updateReferences(["asset-b"])],
+        ["engine", (scene: Scene) => scene.updateEngine("wan@certified-v2")],
+        ["duration", (scene: Scene) => scene.updateDuration(6_000)],
+        ["LoRA", (scene: Scene) => scene.updateLora("brand-style-v2")]
+      ] as const;
+
+      for (const [field, mutate] of mutations) {
+        const scene = createTestScene();
+        scene.beginCandidateGeneration();
+        scene.submitCandidatesForReview();
+        scene.approve(fixedApprovalInput);
+
+        expect(scene.status).toBe("approved");
+        expect(scene.snapshot().specRevision).toBe(1);
+        expect(scene.snapshot().approval).toBeDefined();
+
+        const transition = mutate(scene);
+
+        expect(Object.isFrozen(transition)).toBe(true);
+        expect(transition).toEqual({
+          sceneId: scene.id,
+          from: "approved",
+          to: "director_review",
+          revision: 2,
+          reason: "configuration_changed"
+        });
+
+        const snapshot = scene.snapshot();
+        expect(scene.status).toBe("director_review");
+        expect(snapshot.status).toBe("director_review");
+        expect(snapshot.specRevision).toBe(2);
+        expect(snapshot.approval).toBeUndefined();
+        expect("approval" in snapshot).toBe(false);
+        expect(Object.isFrozen(snapshot)).toBe(true);
+        expect(Object.isFrozen(snapshot.configuration)).toBe(true);
+        expect(Object.isFrozen(snapshot.configuration.referenceIds)).toBe(true);
+
+        if (field === "prompt") {
+          expect(snapshot.configuration.prompt).toBe("A revised reveal");
+          expect(snapshot.configuration.referenceIds).toEqual(["asset-a"]);
+          expect(snapshot.configuration.engineProfileId).toBe("ltx-2.5@certified-v1");
+          expect(snapshot.configuration.durationMs).toBe(4_000);
+        } else if (field === "references") {
+          expect(snapshot.configuration.prompt).toBe("A product reveal");
+          expect(snapshot.configuration.referenceIds).toEqual(["asset-b"]);
+          expect(snapshot.configuration.engineProfileId).toBe("ltx-2.5@certified-v1");
+          expect(snapshot.configuration.durationMs).toBe(4_000);
+        } else if (field === "engine") {
+          expect(snapshot.configuration.prompt).toBe("A product reveal");
+          expect(snapshot.configuration.referenceIds).toEqual(["asset-a"]);
+          expect(snapshot.configuration.engineProfileId).toBe("wan@certified-v2");
+          expect(snapshot.configuration.durationMs).toBe(4_000);
+        } else if (field === "duration") {
+          expect(snapshot.configuration.prompt).toBe("A product reveal");
+          expect(snapshot.configuration.referenceIds).toEqual(["asset-a"]);
+          expect(snapshot.configuration.engineProfileId).toBe("ltx-2.5@certified-v1");
+          expect(snapshot.configuration.durationMs).toBe(6_000);
+        } else if (field === "LoRA") {
+          expect(snapshot.configuration.prompt).toBe("A product reveal");
+          expect(snapshot.configuration.referenceIds).toEqual(["asset-a"]);
+          expect(snapshot.configuration.engineProfileId).toBe("ltx-2.5@certified-v1");
+          expect(snapshot.configuration.durationMs).toBe(4_000);
+          expect(snapshot.configuration.loraConfigurationId).toBe("brand-style-v2");
+        }
+      }
+
+      // Second LoRA assertion: updateLora() with no argument removes existing optional identity while advancing revision
+      const sceneWithLora = createTestScene({ loraConfigurationId: "brand-style-v1" });
+      sceneWithLora.beginCandidateGeneration();
+      sceneWithLora.submitCandidatesForReview();
+      sceneWithLora.approve(fixedApprovalInput);
+
+      expect(sceneWithLora.snapshot().configuration.loraConfigurationId).toBe("brand-style-v1");
+
+      const transitionWithoutLora = sceneWithLora.updateLora();
+
+      expect(Object.isFrozen(transitionWithoutLora)).toBe(true);
+      expect(transitionWithoutLora).toEqual({
+        sceneId: sceneWithLora.id,
+        from: "approved",
+        to: "director_review",
+        revision: 2,
+        reason: "configuration_changed"
+      });
+
+      const snapshotWithoutLora = sceneWithLora.snapshot();
+      expect(snapshotWithoutLora.status).toBe("director_review");
+      expect(snapshotWithoutLora.specRevision).toBe(2);
+      expect(snapshotWithoutLora.approval).toBeUndefined();
+      expect("approval" in snapshotWithoutLora).toBe(false);
+      expect(snapshotWithoutLora.configuration.loraConfigurationId).toBeUndefined();
+      expect("loraConfigurationId" in snapshotWithoutLora.configuration).toBe(false);
+    });
+
+    it("keeps editable non-approved scenes in place while advancing revision", () => {
+      type EditableSetup = {
+        readonly state: SceneStatus;
+        readonly setup: () => Scene;
+      };
+
+      const editableSetups: readonly EditableSetup[] = [
+        {
+          state: "draft_pending",
+          setup: () => createTestScene()
+        },
+        {
+          state: "director_review",
+          setup: () => {
+            const s = createTestScene();
+            s.beginCandidateGeneration();
+            s.submitCandidatesForReview();
+            return s;
+          }
+        }
+      ];
+
+      const mutations = [
+        ["prompt", (scene: Scene) => scene.updatePrompt("Draft revised prompt")],
+        ["references", (scene: Scene) => scene.updateReferences(["asset-c"])],
+        ["engine", (scene: Scene) => scene.updateEngine("flux-schnell@v1")],
+        ["duration", (scene: Scene) => scene.updateDuration(3_000)],
+        ["LoRA", (scene: Scene) => scene.updateLora("brand-style-v3")]
+      ] as const;
+
+      for (const { state, setup } of editableSetups) {
+        for (const [field, mutate] of mutations) {
+          const scene = setup();
+          expect(scene.status).toBe(state);
+          expect(scene.snapshot().specRevision).toBe(1);
+
+          const transition = mutate(scene);
+
+          expect(Object.isFrozen(transition)).toBe(true);
+          expect(transition).toEqual({
+            sceneId: scene.id,
+            from: state,
+            to: state,
+            revision: 2,
+            reason: "configuration_changed"
+          });
+
+          const snapshot = scene.snapshot();
+          expect(scene.status).toBe(state);
+          expect(snapshot.status).toBe(state);
+          expect(snapshot.specRevision).toBe(2);
+          expect(snapshot.approval).toBeUndefined();
+          expect("approval" in snapshot).toBe(false);
+          expect(Object.isFrozen(snapshot)).toBe(true);
+          expect(Object.isFrozen(snapshot.configuration)).toBe(true);
+          expect(Object.isFrozen(snapshot.configuration.referenceIds)).toBe(true);
+
+          if (field === "prompt") {
+            expect(snapshot.configuration.prompt).toBe("Draft revised prompt");
+          } else if (field === "references") {
+            expect(snapshot.configuration.referenceIds).toEqual(["asset-c"]);
+          } else if (field === "engine") {
+            expect(snapshot.configuration.engineProfileId).toBe("flux-schnell@v1");
+          } else if (field === "duration") {
+            expect(snapshot.configuration.durationMs).toBe(3_000);
+          } else if (field === "LoRA") {
+            expect(snapshot.configuration.loraConfigurationId).toBe("brand-style-v3");
+          }
+        }
+      }
+    });
+
+    it("rejects creative mutation during generation and production", () => {
+      const busyStates: readonly { readonly state: SceneStatus; readonly setup: () => Scene }[] = [
+        {
+          state: "generating_candidates",
+          setup: () => {
+            const s = createTestScene();
+            s.beginCandidateGeneration();
+            return s;
+          }
+        },
+        {
+          state: "queued",
+          setup: () => {
+            const s = createTestScene();
+            s.beginCandidateGeneration();
+            s.submitCandidatesForReview();
+            s.approve(fixedApprovalInput);
+            s.queueForProduction();
+            return s;
+          }
+        },
+        {
+          state: "rendering",
+          setup: () => {
+            const s = createTestScene();
+            s.beginCandidateGeneration();
+            s.submitCandidatesForReview();
+            s.approve(fixedApprovalInput);
+            s.queueForProduction();
+            s.startRendering();
+            return s;
+          }
+        },
+        {
+          state: "qa",
+          setup: () => {
+            const s = createTestScene();
+            s.beginCandidateGeneration();
+            s.submitCandidatesForReview();
+            s.approve(fixedApprovalInput);
+            s.queueForProduction();
+            s.startRendering();
+            s.submitForQA();
+            return s;
+          }
+        },
+        {
+          state: "failed",
+          setup: () => {
+            const s = createTestScene();
+            s.beginCandidateGeneration();
+            s.fail();
+            return s;
+          }
+        }
+      ];
+
+      const mutations = [
+        { field: "prompt", action: (scene: Scene) => scene.updatePrompt("Illegal edit") },
+        { field: "references", action: (scene: Scene) => scene.updateReferences(["asset-x"]) },
+        { field: "engine", action: (scene: Scene) => scene.updateEngine("illegal-engine") },
+        { field: "duration", action: (scene: Scene) => scene.updateDuration(5_000) },
+        { field: "lora", action: (scene: Scene) => scene.updateLora("illegal-lora") }
+      ] as const;
+
+      for (const { state, setup } of busyStates) {
+        for (const { field, action } of mutations) {
+          const scene = setup();
+          expect(scene.status).toBe(state);
+          const snapshotBefore = scene.snapshot();
+
+          let caughtError: unknown;
+          try {
+            action(scene);
+          } catch (err) {
+            caughtError = err;
+          }
+
+          expect(caughtError).toBeInstanceOf(InvalidMutationError);
+          const mutErr = caughtError as InvalidMutationError;
+          expect(mutErr.name).toBe("InvalidMutationError");
+          expect(mutErr.sceneId).toBe(scene.id);
+          expect(mutErr.currentStatus).toBe(state);
+          expect(mutErr.field).toBe(field);
+          expect(mutErr.message).toBe(
+            `Cannot mutate '${field}' on scene '${scene.id}' in status '${state}'.`
+          );
+
+          // Atomic snapshot preservation
+          expect(scene.snapshot()).toEqual(snapshotBefore);
+        }
+      }
+    });
+
+    it("rejects every creative mutation in terminal states", () => {
+      const terminalStates: readonly {
+        readonly state: SceneStatus;
+        readonly setup: () => Scene;
+      }[] = [
+        {
+          state: "completed",
+          setup: () => {
+            const s = createTestScene();
+            s.beginCandidateGeneration();
+            s.submitCandidatesForReview();
+            s.approve(fixedApprovalInput);
+            s.queueForProduction();
+            s.startRendering();
+            s.submitForQA();
+            s.acceptQA();
+            return s;
+          }
+        },
+        {
+          state: "cancelled",
+          setup: () => {
+            const s = createTestScene();
+            s.cancel();
+            return s;
+          }
+        }
+      ];
+
+      const mutations = [
+        {
+          actionName: "updatePrompt",
+          action: (scene: Scene) => scene.updatePrompt("Terminal edit")
+        },
+        {
+          actionName: "updateReferences",
+          action: (scene: Scene) => scene.updateReferences(["asset-x"])
+        },
+        {
+          actionName: "updateEngine",
+          action: (scene: Scene) => scene.updateEngine("terminal-engine")
+        },
+        { actionName: "updateDuration", action: (scene: Scene) => scene.updateDuration(5_000) },
+        { actionName: "updateLora", action: (scene: Scene) => scene.updateLora("terminal-lora") }
+      ] as const;
+
+      for (const { state, setup } of terminalStates) {
+        for (const { actionName, action } of mutations) {
+          const scene = setup();
+          expect(scene.status).toBe(state);
+          const snapshotBefore = scene.snapshot();
+
+          let caughtError: unknown;
+          try {
+            action(scene);
+          } catch (err) {
+            caughtError = err;
+          }
+
+          expect(caughtError).toBeInstanceOf(TerminalStateError);
+          const termErr = caughtError as TerminalStateError;
+          expect(termErr.name).toBe("TerminalStateError");
+          expect(termErr.sceneId).toBe(scene.id);
+          expect(termErr.terminalStatus).toBe(state);
+          expect(termErr.attemptedAction).toBe(actionName);
+          expect(termErr.message).toBe(
+            `Cannot perform '${actionName}' on scene '${scene.id}' in terminal state '${state}'.`
+          );
+
+          // Atomic snapshot preservation
+          expect(scene.snapshot()).toEqual(snapshotBefore);
+        }
+      }
+    });
+  });
+});

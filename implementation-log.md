@@ -22,3 +22,26 @@
 - Added 5 exhaustive behavioral invariant unit tests in `packages/domain/src/scene.test.ts` covering the canonical matrix table (23 transitions), forbidden transitions, terminal enforcement, failure provenance / retry authorization, and immutable QA rejection facts.
 - Verified quality gates: vitest (PASS), eslint (PASS), tsc build (PASS), dependency-cruiser (PASS).
 
+## Task 3: Enforce revision-bound approval and creative mutation rules
+
+- Implemented private guarded mutation helper `#updateConfiguration`:
+  - Enforces terminal state validation (`TerminalStateError`) for terminal scenes (`completed`, `cancelled`).
+  - Enforces editable status validation (`InvalidMutationError`) for non-editable busy scenes (`generating_candidates`, `queued`, `rendering`, `qa`, `failed`).
+  - Increments `specRevision` exactly once per mutation.
+  - Automatically resets `approved` scenes to `director_review` and clears `#approval` metadata.
+  - Leaves `draft_pending` and `director_review` scenes in their current status.
+  - Freezes updated configuration and returns a frozen `SceneTransition` fact with reason `"configuration_changed"`.
+- Implemented 5 creative mutation methods on `Scene`:
+  - `updatePrompt(prompt: string): SceneTransition`
+  - `updateReferences(referenceIds: readonly string[]): SceneTransition`
+  - `updateEngine(engineProfileId: string): SceneTransition`
+  - `updateDuration(durationMs: number): SceneTransition`
+  - `updateLora(loraConfigurationId?: string): SceneTransition` (clears optional LoRA identity when omitted).
+- Bound approval metadata to exact revision in `approve(input)` and froze approval object.
+- Added 5 exhaustive unit test suites in `packages/domain/src/scene.test.ts` verifying:
+  - `binds approval metadata to the current scene revision`
+  - `invalidates approval for every creative mutation`
+  - `keeps editable non-approved scenes in place while advancing revision`
+  - `rejects creative mutation during generation and production`
+  - `rejects every creative mutation in terminal states`
+- Verified quality gates: vitest (PASS), eslint (PASS), tsc build (PASS), prettier (PASS), dependency-cruiser (PASS).

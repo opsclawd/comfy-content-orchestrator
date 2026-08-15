@@ -154,7 +154,7 @@ export class Scene {
   readonly #campaignId: CampaignId;
   #status: SceneStatus;
   #specRevision: number;
-  readonly #configuration: Readonly<SceneConfiguration>;
+  #configuration: Readonly<SceneConfiguration>;
   #approval?: Readonly<SceneApproval> | undefined;
   #failedFrom?: SceneStatus | undefined;
 
@@ -221,6 +221,104 @@ export class Scene {
     });
   }
 
+  #updateConfiguration(
+    actionName: string,
+    field: string,
+    newConfig: SceneConfiguration
+  ): SceneTransition {
+    if (this.#isTerminal()) {
+      throw new TerminalStateError(this.#id, this.#status, actionName);
+    }
+
+    const editableStatuses: readonly SceneStatus[] = [
+      "draft_pending",
+      "director_review",
+      "approved"
+    ];
+
+    if (!editableStatuses.includes(this.#status)) {
+      throw new InvalidMutationError(this.#id, this.#status, field);
+    }
+
+    const frozenConfig = freezeConfiguration(newConfig);
+    const from = this.#status;
+    const to: SceneStatus = from === "approved" ? "director_review" : from;
+    const newRevision = this.#specRevision + 1;
+
+    this.#configuration = frozenConfig;
+    this.#specRevision = newRevision;
+    this.#status = to;
+    if (from === "approved") {
+      this.#approval = undefined;
+    }
+
+    return Object.freeze({
+      sceneId: this.#id,
+      from,
+      to,
+      revision: newRevision,
+      reason: "configuration_changed"
+    });
+  }
+
+  updatePrompt(prompt: string): SceneTransition {
+    return this.#updateConfiguration("updatePrompt", "prompt", {
+      prompt,
+      referenceIds: this.#configuration.referenceIds,
+      engineProfileId: this.#configuration.engineProfileId,
+      durationMs: this.#configuration.durationMs,
+      ...(this.#configuration.loraConfigurationId !== undefined
+        ? { loraConfigurationId: this.#configuration.loraConfigurationId }
+        : {})
+    });
+  }
+
+  updateReferences(referenceIds: readonly string[]): SceneTransition {
+    return this.#updateConfiguration("updateReferences", "references", {
+      prompt: this.#configuration.prompt,
+      referenceIds: [...referenceIds],
+      engineProfileId: this.#configuration.engineProfileId,
+      durationMs: this.#configuration.durationMs,
+      ...(this.#configuration.loraConfigurationId !== undefined
+        ? { loraConfigurationId: this.#configuration.loraConfigurationId }
+        : {})
+    });
+  }
+
+  updateEngine(engineProfileId: string): SceneTransition {
+    return this.#updateConfiguration("updateEngine", "engine", {
+      prompt: this.#configuration.prompt,
+      referenceIds: this.#configuration.referenceIds,
+      engineProfileId,
+      durationMs: this.#configuration.durationMs,
+      ...(this.#configuration.loraConfigurationId !== undefined
+        ? { loraConfigurationId: this.#configuration.loraConfigurationId }
+        : {})
+    });
+  }
+
+  updateDuration(durationMs: number): SceneTransition {
+    return this.#updateConfiguration("updateDuration", "duration", {
+      prompt: this.#configuration.prompt,
+      referenceIds: this.#configuration.referenceIds,
+      engineProfileId: this.#configuration.engineProfileId,
+      durationMs,
+      ...(this.#configuration.loraConfigurationId !== undefined
+        ? { loraConfigurationId: this.#configuration.loraConfigurationId }
+        : {})
+    });
+  }
+
+  updateLora(loraConfigurationId?: string): SceneTransition {
+    return this.#updateConfiguration("updateLora", "lora", {
+      prompt: this.#configuration.prompt,
+      referenceIds: this.#configuration.referenceIds,
+      engineProfileId: this.#configuration.engineProfileId,
+      durationMs: this.#configuration.durationMs,
+      ...(loraConfigurationId !== undefined ? { loraConfigurationId } : {})
+    });
+  }
+
   beginCandidateGeneration(): SceneTransition {
     return this.#transition(
       "beginCandidateGeneration",
@@ -254,15 +352,9 @@ export class Scene {
       approvedAt: input.approvedAt
     });
 
-    return this.#transition(
-      "approve",
-      ["director_review"],
-      "approved",
-      "approved",
-      () => {
-        this.#approval = approval;
-      }
-    );
+    return this.#transition("approve", ["director_review"], "approved", "approved", () => {
+      this.#approval = approval;
+    });
   }
 
   requestReroll(): SceneTransition {
@@ -303,42 +395,21 @@ export class Scene {
   }
 
   startRendering(): SceneTransition {
-    return this.#transition(
-      "startRendering",
-      ["queued"],
-      "rendering",
-      "rendering_started"
-    );
+    return this.#transition("startRendering", ["queued"], "rendering", "rendering_started");
   }
 
   submitForQA(): SceneTransition {
-    return this.#transition(
-      "submitForQA",
-      ["rendering"],
-      "qa",
-      "submitted_for_qa"
-    );
+    return this.#transition("submitForQA", ["rendering"], "qa", "submitted_for_qa");
   }
 
   acceptQA(): SceneTransition {
-    return this.#transition(
-      "acceptQA",
-      ["qa"],
-      "completed",
-      "qa_accepted"
-    );
+    return this.#transition("acceptQA", ["qa"], "completed", "qa_accepted");
   }
 
   rejectQA(): SceneTransition {
-    return this.#transition(
-      "rejectQA",
-      ["qa"],
-      "director_review",
-      "qa_rejected",
-      () => {
-        this.#approval = undefined;
-      }
-    );
+    return this.#transition("rejectQA", ["qa"], "director_review", "qa_rejected", () => {
+      this.#approval = undefined;
+    });
   }
 
   fail(): SceneTransition {
@@ -358,15 +429,9 @@ export class Scene {
     }
 
     const failedSource = this.#status;
-    return this.#transition(
-      "fail",
-      allowedSources,
-      "failed",
-      "failed",
-      () => {
-        this.#failedFrom = failedSource;
-      }
-    );
+    return this.#transition("fail", allowedSources, "failed", "failed", () => {
+      this.#failedFrom = failedSource;
+    });
   }
 
   recoverToReview(): SceneTransition {
