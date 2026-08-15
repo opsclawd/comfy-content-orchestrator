@@ -1,0 +1,29 @@
+{
+  "result": "pass",
+  "findings": [
+    {
+      "severity": "P3",
+      "summary": "In `measureModelFootprint`, `stat()` is called sequentially in a for-loop, which may cause unnecessary I/O latency if there are multiple models; consider using `Promise.all`.",
+      "file": "packages/infrastructure/src/comfyui/provenance/preflight.ts",
+      "suggested_fix": "Use `await Promise.all(specs.map(async (spec) => { ... }))` and sum the results instead of a sequential for-loop."
+    },
+    {
+      "severity": "P3",
+      "summary": "In `runDiskPreflight`, `measureModelFootprint` and `statfsFn` are independent I/O operations but are executed sequentially; they could be parallelized.",
+      "file": "packages/infrastructure/src/comfyui/provenance/preflight.ts",
+      "suggested_fix": "Use `const [modelFootprintBytes, stats] = await Promise.all([measureModelFootprint(comfyUiDir, specs), statfsFn(comfyUiDir)]);` to reduce latency."
+    },
+    {
+      "severity": "P3",
+      "summary": "`DiskPreflightError` message may output long floating-point numbers for `availableGb` and `modelFootprintGb`; consider rounding or formatting to 2 decimal places for better UX.",
+      "file": "packages/infrastructure/src/comfyui/provenance/preflight.ts",
+      "suggested_fix": "Format the values in the template literal, e.g., `${result.availableGb.toFixed(2)} GB`."
+    },
+    {
+      "severity": "P3",
+      "summary": "The `runDiskPreflight` signature forces callers to pass `undefined` for `minFreeDiskGb` if they only want to provide `dependencies`, making the API slightly awkward.",
+      "file": "packages/infrastructure/src/comfyui/provenance/preflight.ts",
+      "suggested_fix": "Change the signature to accept an options object `runDiskPreflight(comfyUiDir, specs, options?: { minFreeDiskGb?: number, dependencies?: ... })`."
+    }
+  ]
+}
