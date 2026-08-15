@@ -297,7 +297,10 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
 
     const clientRecord = await insertClientRecord(client);
     const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
-    const scene = await insertStoryboardSceneRecord(client, { campaignId: campaign.campaign_id, sceneOrder: 1 });
+    const scene = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1
+    });
     const asset = await insertReferenceAssetRecord(client, {
       clientId: clientRecord.client_id,
       storageBucket: "godzspeed-reference",

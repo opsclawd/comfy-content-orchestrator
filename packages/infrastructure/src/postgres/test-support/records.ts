@@ -422,9 +422,12 @@ export async function insertStoryboardSceneRecord(
   const visualDescription =
     input.visualDescription ??
     "Vibrant Port of Spain street scene at dawn with steelpan players preparing instruments.";
-  const voiceoverCopy = input.voiceoverCopy !== undefined ? input.voiceoverCopy : "The rhythm begins.";
+  const voiceoverCopy =
+    input.voiceoverCopy !== undefined ? input.voiceoverCopy : "The rhythm begins.";
   const audioFxPrompt =
-    input.audioFxPrompt !== undefined ? input.audioFxPrompt : "Distant steelpan resonance, gentle breeze";
+    input.audioFxPrompt !== undefined
+      ? input.audioFxPrompt
+      : "Distant steelpan resonance, gentle breeze";
   const engineAssigned = input.engineAssigned ?? "ltx_25";
   const status = input.status ?? "draft_pending";
   const draftStorageBucket =
@@ -612,7 +615,8 @@ export async function insertReviewEventRecord(
       ? input.directorNotes
       : "Approved storyboard composition for LTX rendering.";
   const mutationPayload = input.mutationPayload ?? { approvedRevision: 1 };
-  const priorSceneStatus = input.priorSceneStatus !== undefined ? input.priorSceneStatus : "director_review";
+  const priorSceneStatus =
+    input.priorSceneStatus !== undefined ? input.priorSceneStatus : "director_review";
   const resultingSceneStatus =
     input.resultingSceneStatus !== undefined ? input.resultingSceneStatus : "approved";
 
@@ -647,9 +651,7 @@ export async function insertReviewEventRecord(
   return row;
 }
 
-export async function insertRepresentativeGraph(
-  client: PoolClient
-): Promise<RepresentativeGraph> {
+export async function insertRepresentativeGraph(client: PoolClient): Promise<RepresentativeGraph> {
   const license = await insertLicenseRecord(client);
   const clientRecord = await insertClientRecord(client);
   const referenceAsset = await insertReferenceAssetRecord(client, {

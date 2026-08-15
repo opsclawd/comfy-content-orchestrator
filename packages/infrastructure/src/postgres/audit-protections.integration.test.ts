@@ -108,10 +108,10 @@ describe("PostgreSQL audit immutability and application-role privileges integrat
     await client.query("BEGIN");
     let caughtError: Error | undefined;
     try {
-      await client.query(
-        "UPDATE review_events SET director_notes = $1 WHERE event_id = $2",
-        ["tampered notes", graph.reviewEvent.event_id]
-      );
+      await client.query("UPDATE review_events SET director_notes = $1 WHERE event_id = $2", [
+        "tampered notes",
+        graph.reviewEvent.event_id
+      ]);
     } catch (err) {
       caughtError = err as Error;
     } finally {
@@ -274,7 +274,9 @@ describe("PostgreSQL audit immutability and application-role privileges integrat
     await client.query("BEGIN");
     let caughtSceneError: DatabaseError | undefined;
     try {
-      await client.query("DELETE FROM storyboard_scenes WHERE scene_id = $1", [graph.scene.scene_id]);
+      await client.query("DELETE FROM storyboard_scenes WHERE scene_id = $1", [
+        graph.scene.scene_id
+      ]);
     } catch (err) {
       caughtSceneError = err as DatabaseError;
     } finally {
@@ -287,7 +289,9 @@ describe("PostgreSQL audit immutability and application-role privileges integrat
     await client.query("BEGIN");
     let caughtCampaignError: DatabaseError | undefined;
     try {
-      await client.query("DELETE FROM campaigns WHERE campaign_id = $1", [graph.campaign.campaign_id]);
+      await client.query("DELETE FROM campaigns WHERE campaign_id = $1", [
+        graph.campaign.campaign_id
+      ]);
     } catch (err) {
       caughtCampaignError = err as DatabaseError;
     } finally {
