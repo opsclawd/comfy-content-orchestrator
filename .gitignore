@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.env
+.env.local
+.ai-runs/
+.ai-worktrees/
+.ai-tmp/

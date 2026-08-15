@@ -1,0 +1,8 @@
+dist/
+coverage/
+pnpm-lock.yaml
+
+# Prose is authored, not generated. Formatting markdown creates churn on
+# documents the orchestrator and humans both write (README, PRD, ADRs,
+# CONTEXT.md) without improving anything.
+*.md
