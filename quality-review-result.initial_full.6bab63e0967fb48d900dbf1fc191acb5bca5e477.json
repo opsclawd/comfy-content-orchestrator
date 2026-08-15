@@ -1,0 +1,23 @@
+{
+  "result": "fail",
+  "findings": [
+    {
+      "severity": "P2",
+      "summary": "JSON canonicalization relies on `JSON.stringify` which serializes numeric-looking keys (common in ComfyUI node IDs) in numeric order rather than lexicographical order, violating strict canonical JSON behavior.",
+      "file": "packages/infrastructure/src/comfyui/provenance/hasher.ts",
+      "suggested_fix": "Implement a custom recursive stringifier or use a canonical JSON library instead of relying on the native `JSON.stringify` object key order."
+    },
+    {
+      "severity": "P2",
+      "summary": "The model file sorting uses `localeCompare` without specifying a fixed locale, which can lead to non-deterministic hashing order depending on the host OS language settings.",
+      "file": "packages/infrastructure/src/comfyui/provenance/hasher.ts",
+      "suggested_fix": "Replace `localeCompare` with strict lexicographical comparison (e.g., `keyA < keyB ? -1 : (keyA > keyB ? 1 : 0)`) or specify a stable locale like 'en-US'."
+    },
+    {
+      "severity": "P3",
+      "summary": "The test verifying modification rejection during read contains a race condition between asynchronous `appendFile` and `stat` calls, which could lead to test flakiness.",
+      "file": "packages/infrastructure/src/comfyui/provenance/hasher.test.ts",
+      "suggested_fix": "Mock the `fs/promises` stat function or `createReadStream` to deterministically simulate a file mutation during the hashing process."
+    }
+  ]
+}
