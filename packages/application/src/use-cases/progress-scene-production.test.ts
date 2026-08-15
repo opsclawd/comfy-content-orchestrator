@@ -140,8 +140,14 @@ describe("ProgressSceneProductionUseCases", () => {
     const scene = createApprovedScene("scene-queue-1");
     const uow = new InMemorySceneUnitOfWork([scene]);
     const useCases = new ProgressSceneProductionUseCases(uow);
+    const workflow = {
+      "3": {
+        class_type: "KSampler",
+        inputs: { seed: 42 }
+      }
+    } satisfies Readonly<Record<string, unknown>>;
 
-    const receipt = await useCases.queue({ sceneId: "scene-queue-1" });
+    const receipt = await useCases.queue({ sceneId: "scene-queue-1", workflow });
 
     expect(receipt).toBeUndefined();
     expect(uow.savedScenes).toHaveLength(1);
@@ -151,7 +157,7 @@ describe("ProgressSceneProductionUseCases", () => {
     expect(uow.reviewEvents).toHaveLength(0);
   });
 
-  it("queue: invokes RenderEnginePort.queueRender with scene configuration and returns receipt", async () => {
+  it("queue: forwards the API-format workflow unchanged to RenderEnginePort", async () => {
     const scene = createApprovedScene("scene-queue-engine-1");
     const uow = new InMemorySceneUnitOfWork([scene]);
     const queuedRequests: QueueRenderInput[] = [];
@@ -169,9 +175,17 @@ describe("ProgressSceneProductionUseCases", () => {
       async unloadModels() {}
     };
 
+    const workflow = {
+      "3": {
+        class_type: "KSampler",
+        inputs: { seed: 42 }
+      }
+    } satisfies Readonly<Record<string, unknown>>;
+
     const useCases = new ProgressSceneProductionUseCases(uow, renderEngine);
     const receipt = await useCases.queue({
-      sceneId: "scene-queue-engine-1"
+      sceneId: "scene-queue-engine-1",
+      workflow
     });
 
     expect(receipt).toEqual({
@@ -182,8 +196,10 @@ describe("ProgressSceneProductionUseCases", () => {
     expect(queuedRequests[0]).toEqual({
       sceneId: "scene-queue-engine-1",
       renderJobId: "scene-queue-engine-1",
-      renderProfileKey: "ltx_25"
+      renderProfileKey: "ltx_25",
+      workflow
     });
+    expect(queuedRequests[0]?.workflow).toBe(workflow);
     expect(uow.savedScenes).toHaveLength(1);
     expect(uow.savedScenes[0]!.status).toBe("queued");
   });
@@ -206,11 +222,19 @@ describe("ProgressSceneProductionUseCases", () => {
       async unloadModels() {}
     };
 
+    const workflow = {
+      "3": {
+        class_type: "KSampler",
+        inputs: { seed: 42 }
+      }
+    } satisfies Readonly<Record<string, unknown>>;
+
     const useCases = new ProgressSceneProductionUseCases(uow, renderEngine);
     const receipt = await useCases.queue({
       sceneId: "scene-queue-custom-1",
       renderJobId: "job-custom-123",
-      renderProfileKey: "LTX_25_720P_5S_V1"
+      renderProfileKey: "LTX_25_720P_5S_V1",
+      workflow
     });
 
     expect(receipt).toEqual({
@@ -221,11 +245,12 @@ describe("ProgressSceneProductionUseCases", () => {
     expect(queuedRequests[0]).toEqual({
       sceneId: "scene-queue-custom-1",
       renderJobId: "job-custom-123",
-      renderProfileKey: "LTX_25_720P_5S_V1"
+      renderProfileKey: "LTX_25_720P_5S_V1",
+      workflow
     });
   });
 
-  it("queue: does not invoke RenderEnginePort when transition is invalid", async () => {
+  it("queue: does not invoke RenderEnginePort or inspect workflow when transition is invalid", async () => {
     const draftScene = createDraftScene("scene-invalid-draft");
     const uow = new InMemorySceneUnitOfWork([draftScene]);
     let queueRenderCalled = false;
@@ -240,8 +265,15 @@ describe("ProgressSceneProductionUseCases", () => {
       async unloadModels() {}
     };
 
+    const workflow = {
+      "3": {
+        class_type: "KSampler",
+        inputs: { seed: 42 }
+      }
+    } satisfies Readonly<Record<string, unknown>>;
+
     const useCases = new ProgressSceneProductionUseCases(uow, renderEngine);
-    await expect(useCases.queue({ sceneId: "scene-invalid-draft" })).rejects.toThrow(
+    await expect(useCases.queue({ sceneId: "scene-invalid-draft", workflow })).rejects.toThrow(
       InvalidTransitionError
     );
 
@@ -339,9 +371,15 @@ describe("ProgressSceneProductionUseCases", () => {
     const draftScene = createDraftScene("scene-invalid-trans");
     const uow = new InMemorySceneUnitOfWork([draftScene]);
     const useCases = new ProgressSceneProductionUseCases(uow);
+    const workflow = {
+      "3": {
+        class_type: "KSampler",
+        inputs: { seed: 42 }
+      }
+    } satisfies Readonly<Record<string, unknown>>;
 
     // Attempting queue from draft_pending should throw InvalidTransitionError
-    await expect(useCases.queue({ sceneId: "scene-invalid-trans" })).rejects.toThrow(
+    await expect(useCases.queue({ sceneId: "scene-invalid-trans", workflow })).rejects.toThrow(
       InvalidTransitionError
     );
 

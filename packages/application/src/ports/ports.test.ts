@@ -22,7 +22,14 @@ import type {
 
 describe("Application capability ports contract tests", () => {
   describe("Render and Telemetry capability family", () => {
-    it("satisfies RenderEnginePort contract with semantic IDs and render profile key", async () => {
+    it("satisfies RenderEnginePort contract with an API-format workflow", async () => {
+      const workflow = {
+        "3": {
+          class_type: "KSampler",
+          inputs: { seed: 42 }
+        }
+      } satisfies Readonly<Record<string, unknown>>;
+
       const renderEnginePort = {
         async queueRender(input: QueueRenderInput): Promise<RenderQueueReceipt> {
           return {
@@ -47,7 +54,8 @@ describe("Application capability ports contract tests", () => {
       const queueInput: QueueRenderInput = {
         renderJobId: "job-1",
         sceneId: "scene-1",
-        renderProfileKey: "LTX_25_720P_5S_V1"
+        renderProfileKey: "LTX_25_720P_5S_V1",
+        workflow
       };
 
       const receipt = await renderEnginePort.queueRender(queueInput);
