@@ -11,3 +11,17 @@ coverage/
 # Orchestrator run artifacts
 implement-step-history-*.json
 ai/
+
+!code-review.md
+!design.md
+!issue-comments.md
+!issue.md
+!plan-fix-result.json
+!plan-review-findings.md
+!plan.md
+!prompt.md
+!review-loop-history.json
+!task-manifest.json
+!validation.headsha
+!validation.result
+

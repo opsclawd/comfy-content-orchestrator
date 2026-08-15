@@ -6,6 +6,11 @@ import {
   type SceneId,
   type SceneStatus
 } from "@cco/domain";
+import type {
+  QueueRenderInput,
+  RenderEnginePort,
+  RenderQueueReceipt
+} from "../ports/render-engine-port.js";
 import { InMemorySceneUnitOfWork } from "../test-support/in-memory-scene-unit-of-work.js";
 import { ProgressSceneProductionUseCases } from "./progress-scene-production.js";
 import { SceneNotFoundError } from "./scene-not-found-error.js";
@@ -136,13 +141,112 @@ describe("ProgressSceneProductionUseCases", () => {
     const uow = new InMemorySceneUnitOfWork([scene]);
     const useCases = new ProgressSceneProductionUseCases(uow);
 
-    await useCases.queue({ sceneId: "scene-queue-1" });
+    const receipt = await useCases.queue({ sceneId: "scene-queue-1" });
 
+    expect(receipt).toBeUndefined();
     expect(uow.savedScenes).toHaveLength(1);
     const savedScene = uow.savedScenes[0]!;
     expect(savedScene.id).toBe("scene-queue-1");
     expect(savedScene.status).toBe("queued");
     expect(uow.reviewEvents).toHaveLength(0);
+  });
+
+  it("queue: invokes RenderEnginePort.queueRender with scene configuration and returns receipt", async () => {
+    const scene = createApprovedScene("scene-queue-engine-1");
+    const uow = new InMemorySceneUnitOfWork([scene]);
+    const queuedRequests: QueueRenderInput[] = [];
+    const renderEngine: RenderEnginePort = {
+      async queueRender(input: QueueRenderInput): Promise<RenderQueueReceipt> {
+        queuedRequests.push(input);
+        return {
+          executionId: `exec-${input.renderJobId}`,
+          acceptedAt: "2026-08-15T02:00:00.000Z"
+        };
+      },
+      async getRenderResult() {
+        return undefined;
+      },
+      async unloadModels() {}
+    };
+
+    const useCases = new ProgressSceneProductionUseCases(uow, renderEngine);
+    const receipt = await useCases.queue({
+      sceneId: "scene-queue-engine-1"
+    });
+
+    expect(receipt).toEqual({
+      executionId: "exec-scene-queue-engine-1",
+      acceptedAt: "2026-08-15T02:00:00.000Z"
+    });
+    expect(queuedRequests).toHaveLength(1);
+    expect(queuedRequests[0]).toEqual({
+      sceneId: "scene-queue-engine-1",
+      renderJobId: "scene-queue-engine-1",
+      renderProfileKey: "ltx_25"
+    });
+    expect(uow.savedScenes).toHaveLength(1);
+    expect(uow.savedScenes[0]!.status).toBe("queued");
+  });
+
+  it("queue: invokes RenderEnginePort.queueRender with custom renderJobId and renderProfileKey", async () => {
+    const scene = createApprovedScene("scene-queue-custom-1");
+    const uow = new InMemorySceneUnitOfWork([scene]);
+    const queuedRequests: QueueRenderInput[] = [];
+    const renderEngine: RenderEnginePort = {
+      async queueRender(input: QueueRenderInput): Promise<RenderQueueReceipt> {
+        queuedRequests.push(input);
+        return {
+          executionId: `exec-${input.renderJobId}`,
+          acceptedAt: "2026-08-15T03:00:00.000Z"
+        };
+      },
+      async getRenderResult() {
+        return undefined;
+      },
+      async unloadModels() {}
+    };
+
+    const useCases = new ProgressSceneProductionUseCases(uow, renderEngine);
+    const receipt = await useCases.queue({
+      sceneId: "scene-queue-custom-1",
+      renderJobId: "job-custom-123",
+      renderProfileKey: "LTX_25_720P_5S_V1"
+    });
+
+    expect(receipt).toEqual({
+      executionId: "exec-job-custom-123",
+      acceptedAt: "2026-08-15T03:00:00.000Z"
+    });
+    expect(queuedRequests).toHaveLength(1);
+    expect(queuedRequests[0]).toEqual({
+      sceneId: "scene-queue-custom-1",
+      renderJobId: "job-custom-123",
+      renderProfileKey: "LTX_25_720P_5S_V1"
+    });
+  });
+
+  it("queue: does not invoke RenderEnginePort when transition is invalid", async () => {
+    const draftScene = createDraftScene("scene-invalid-draft");
+    const uow = new InMemorySceneUnitOfWork([draftScene]);
+    let queueRenderCalled = false;
+    const renderEngine: RenderEnginePort = {
+      async queueRender() {
+        queueRenderCalled = true;
+        return { executionId: "exec-1", acceptedAt: "2026-08-15T00:00:00.000Z" };
+      },
+      async getRenderResult() {
+        return undefined;
+      },
+      async unloadModels() {}
+    };
+
+    const useCases = new ProgressSceneProductionUseCases(uow, renderEngine);
+    await expect(useCases.queue({ sceneId: "scene-invalid-draft" })).rejects.toThrow(
+      InvalidTransitionError
+    );
+
+    expect(queueRenderCalled).toBe(false);
+    expect(uow.savedScenes).toHaveLength(0);
   });
 
   it("render start: queued transitions to rendering and saves without a review event", async () => {
