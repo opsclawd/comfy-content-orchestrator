@@ -1,4 +1,13 @@
 {
   "files": [],
-  "references": [{ "path": "./packages/shared" }]
+  "references": [
+    { "path": "./packages/shared" },
+    { "path": "./packages/domain" },
+    { "path": "./packages/contracts" },
+    { "path": "./packages/application" },
+    { "path": "./packages/infrastructure" },
+    { "path": "./apps/control-api" },
+    { "path": "./apps/render-worker" },
+    { "path": "./apps/web" }
+  ]
 }

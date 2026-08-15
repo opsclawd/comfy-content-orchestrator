@@ -6,3 +6,17 @@ pnpm-lock.yaml
 # documents the orchestrator and humans both write (README, PRD, ADRs,
 # CONTEXT.md) without improving anything.
 *.md
+
+# The orchestrator writes ~35 differently-named run artifacts into the repo
+# root (validation.result, review-loop-history.json, task-manifest.json, ...)
+# and hides them in .git/info/exclude, which prettier does not read and which
+# is not even a resolvable path inside a git worktree. Enumerating those names
+# here would drift the moment a new artifact is added, so ignore root-level
+# JSON by default and re-include this repository's own configuration.
+/*.json
+!/package.json
+!/tsconfig.json
+!/tsconfig.base.json
+!/.prettierrc.json
+!/.ai-orchestrator.json
+ai/

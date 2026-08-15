@@ -1,0 +1,24 @@
+{
+  "name": "render-worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --build"
+  },
+  "dependencies": {
+    "@cco/application": "workspace:*",
+    "@cco/contracts": "workspace:*",
+    "@cco/domain": "workspace:*",
+    "@cco/infrastructure": "workspace:*",
+    "@cco/shared": "workspace:*"
+  }
+}

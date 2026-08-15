@@ -1,0 +1,27 @@
+{
+  "name": "@cco/infrastructure",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --build"
+  },
+  "dependencies": {
+    "@cco/application": "workspace:*",
+    "@cco/contracts": "workspace:*",
+    "@cco/domain": "workspace:*",
+    "@cco/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "dependency-cruiser": "^16.9.0",
+    "vitest": "^2.1.8"
+  }
+}
