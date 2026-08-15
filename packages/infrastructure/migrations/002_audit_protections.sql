@@ -46,6 +46,9 @@ BEGIN
     -- Grant USAGE on schema public
     EXECUTE format('GRANT USAGE ON SCHEMA public TO %I', v_app_role);
 
+    -- Grant full application-level operational privileges on all tables in public schema
+    EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO %I', v_app_role);
+
     -- Revoke UPDATE and DELETE on audit tables
     EXECUTE format('REVOKE UPDATE, DELETE ON generation_manifests FROM %I', v_app_role);
     EXECUTE format('REVOKE UPDATE, DELETE ON review_events FROM %I', v_app_role);

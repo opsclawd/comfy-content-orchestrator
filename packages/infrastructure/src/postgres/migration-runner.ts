@@ -93,6 +93,16 @@ export async function runMigrations(
       recordedMap.set(row.version, row.checksum);
     }
 
+    // Verify all previously applied migrations are present on the filesystem
+    const discoveredVersions = new Set(migrations.map((m) => m.version));
+    for (const appliedVersion of recordedMap.keys()) {
+      if (!discoveredVersions.has(appliedVersion)) {
+        throw new Error(
+          `Applied migration ${appliedVersion} is missing from filesystem migrations`
+        );
+      }
+    }
+
     // Verify checksum drift on previously applied migrations
     for (const migration of migrations) {
       const recordedChecksum = recordedMap.get(migration.version);

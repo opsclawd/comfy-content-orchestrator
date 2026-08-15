@@ -144,4 +144,22 @@ describe("PostgreSQL migration runner integration", () => {
     const schemaRes = await client.query("SELECT version FROM schema_migrations");
     expect(schemaRes.rows).toEqual([{ version: "001" }]);
   });
+
+  it("rejects migration run when an already applied migration is missing from filesystem", async () => {
+    const initialDir = await createTempMigrationDir({
+      "001_create_probe.sql": "CREATE TABLE probe (id INT PRIMARY KEY, name TEXT);",
+      "002_insert_probe.sql": "INSERT INTO probe (id, name) VALUES (1, 'initial');"
+    });
+
+    const applied = await runMigrations(client, { migrationsDirectory: initialDir });
+    expect(applied).toHaveLength(2);
+
+    const missingDir = await createTempMigrationDir({
+      "002_insert_probe.sql": "INSERT INTO probe (id, name) VALUES (1, 'initial');"
+    });
+
+    await expect(runMigrations(client, { migrationsDirectory: missingDir })).rejects.toThrow(
+      /missing from filesystem/i
+    );
+  });
 });

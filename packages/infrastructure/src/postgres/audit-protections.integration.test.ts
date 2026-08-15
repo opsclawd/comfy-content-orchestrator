@@ -161,6 +161,36 @@ describe("PostgreSQL audit immutability and application-role privileges integrat
     );
     expect(schemaUsageRes.rows[0]?.has_usage).toBe(true);
 
+    // Check CRUD privileges on domain tables
+    for (const domainTable of [
+      "campaigns",
+      "clients",
+      "storyboard_scenes",
+      "render_jobs",
+      "reference_assets",
+      "license_registry"
+    ]) {
+      const privsRes = await client.query<{
+        has_select: boolean;
+        has_insert: boolean;
+        has_update: boolean;
+        has_delete: boolean;
+      }>(
+        `SELECT
+          has_table_privilege('orchestrator_app', $1, 'SELECT') AS has_select,
+          has_table_privilege('orchestrator_app', $1, 'INSERT') AS has_insert,
+          has_table_privilege('orchestrator_app', $1, 'UPDATE') AS has_update,
+          has_table_privilege('orchestrator_app', $1, 'DELETE') AS has_delete`,
+        [domainTable]
+      );
+      expect(privsRes.rows[0]).toEqual({
+        has_select: true,
+        has_insert: true,
+        has_update: true,
+        has_delete: true
+      });
+    }
+
     // Check privileges on generation_manifests
     const gmPrivsRes = await client.query<{
       has_select: boolean;
