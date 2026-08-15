@@ -13,6 +13,7 @@
   },
   "scripts": {
     "db:migrate": "tsx src/postgres/migrate.ts",
+    "test:comfyui": "vitest run --config ../../vitest.comfyui.config.ts",
     "test:db": "vitest run --config ../../vitest.integration.config.ts",
     "typecheck": "tsc --build"
   },
