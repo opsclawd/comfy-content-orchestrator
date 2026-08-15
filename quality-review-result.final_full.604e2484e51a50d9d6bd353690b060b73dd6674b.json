@@ -1,0 +1,22 @@
+{
+  "result": "pass",
+  "findings": [
+    {
+      "severity": "P3",
+      "summary": "In measureModelFootprint, model file sizes are queried sequentially. Consider using Promise.all for concurrent fs.stat calls to improve I/O performance.",
+      "file": "packages/infrastructure/src/comfyui/provenance/preflight.ts",
+      "suggested_fix": "const tasks = specs.map(async (spec) => { /* logic */ return fileStat.size; });\nconst sizes = await Promise.all(tasks);\nreturn sizes.reduce((a, b) => a + b, 0);"
+    },
+    {
+      "severity": "P3",
+      "summary": "The DiskPreflightError message interpolates float values like result.availableGb directly, which can print long unreadable decimals. Consider formatting with .toFixed(2).",
+      "file": "packages/infrastructure/src/comfyui/provenance/preflight.ts",
+      "suggested_fix": "const formattedMessage = message ?? `Insufficient disk space: ${result.availableGb.toFixed(2)} GB available, but ${result.minFreeDiskGb} GB required for reservation (model footprint: ${result.modelFootprintGb.toFixed(2)} GB)`;"
+    },
+    {
+      "severity": "P3",
+      "summary": "If the specs array contains duplicate file specifications, measureModelFootprint will double-count their sizes. Consider tracking resolved paths in a Set to ensure unique files are counted once.",
+      "file": "packages/infrastructure/src/comfyui/provenance/preflight.ts"
+    }
+  ]
+}
