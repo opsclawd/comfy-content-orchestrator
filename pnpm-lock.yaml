@@ -33,9 +33,13 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.1)
 
+  packages/application: {}
+
   packages/contracts: {}
 
   packages/domain: {}
+
+  packages/infrastructure: {}
 
   packages/shared: {}
 

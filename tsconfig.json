@@ -3,6 +3,8 @@
   "references": [
     { "path": "./packages/shared" },
     { "path": "./packages/domain" },
-    { "path": "./packages/contracts" }
+    { "path": "./packages/contracts" },
+    { "path": "./packages/application" },
+    { "path": "./packages/infrastructure" }
   ]
 }
