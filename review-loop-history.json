@@ -1,0 +1,37 @@
+[
+  {
+    "iteration": 1,
+    "review": {
+      "verdict": "fail",
+      "invocationId": "bd1f5702-5d8d-40c9-b874-d99fd5fc2a58",
+      "offendingFindings": [
+        {
+          "severity": "high",
+          "summary": "Incompatible Model Category Abstraction (text_encoders vs clip)",
+          "files": [
+            "packages/infrastructure/src/comfyui/provenance/hasher.ts",
+            "templates/provenance.json"
+          ]
+        },
+        {
+          "severity": "high",
+          "summary": "Composition-root Omission for Provenance APIs",
+          "files": [
+            "packages/infrastructure/src/index.ts"
+          ]
+        }
+      ],
+      "reviewedCommitSha": "68b8f65c6f17745fd6b71933fd54bd3d4cf8afc7"
+    },
+    "fix": {
+      "verdict": "done_with_fixes",
+      "invocationId": "1df27cd5-b0c8-4942-989c-c720866ba1fb",
+      "headBeforeFix": "68b8f65c6f17745fd6b71933fd54bd3d4cf8afc7"
+    },
+    "revalidation": {
+      "passed": true,
+      "validationRunId": "6d2696f7-221d-4c69-ab30-4703a491b319"
+    },
+    "outcome": "fixed"
+  }
+]
