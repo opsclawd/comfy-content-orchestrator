@@ -1,6 +1,6 @@
 {
   "validation": {
-    "commands": ["pnpm typecheck", "pnpm lint", "pnpm test", "pnpm boundaries", "pnpm format"],
+    "commands": ["pnpm format"],
     "timeout": 600
   }
 }

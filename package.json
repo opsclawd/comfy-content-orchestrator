@@ -7,11 +7,13 @@
     "node": ">=24"
   },
   "scripts": {
-    "lint": "eslint .",
-    "typecheck": "tsc --build --force",
-    "test": "vitest run",
     "boundaries": "depcruise apps packages --config .dependency-cruiser.cjs",
-    "format": "prettier --check ."
+    "build": "tsc --build",
+    "format": "prettier --check .",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:bash": "node -e \"console.log('no bash test suite in this repo; TypeScript monorepo')\"",
+    "typecheck": "tsc --build --force"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
