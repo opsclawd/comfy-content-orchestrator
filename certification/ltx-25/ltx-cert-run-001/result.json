@@ -54,9 +54,7 @@
   "render": {
     "executionId": "3de25546-7996-4056-9bad-bac52a818181",
     "status": "succeeded",
-    "outputObjectKeys": [
-      "ltx_25_720p_97f_00001_.webp"
-    ],
+    "outputObjectKeys": ["ltx_25_720p_97f_00001_.webp"],
     "startedAt": "2026-08-16T13:28:24.590Z",
     "completedAt": "2026-08-16T13:29:12.612Z",
     "totalDurationMs": 48022
