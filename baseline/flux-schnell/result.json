@@ -1,13 +1,11 @@
 {
   "version": 1,
-  "runId": "flux-schnell-cert-run-001",
-  "generatedAt": "2026-08-16T18:46:12.794Z",
-  "status": "passed",
+  "profileId": "flux-schnell-draft",
+  "kind": "measured_host_baseline",
+  "measuredAt": "2026-08-16T18:46:12.794Z",
   "runnerMode": "dynamicvram",
   "identity": {
     "profileId": "flux-schnell-draft",
-    "renderProfileKey": "FLUX_SCHNELL_DRAFT_V1",
-    "renderProfileVersion": 1,
     "engine": "flux_schnell",
     "width": 1024,
     "height": 1024,
@@ -2022,17 +2020,5 @@
     "processMinorPageFaultDelta": 7381513,
     "postUnloadUsedVramMb": 564,
     "postUnloadFreeVramMb": 23487
-  },
-  "gate": {
-    "passed": true,
-    "maxDurationMs": 30000,
-    "checks": {
-      "renderSuccess": true,
-      "noOom": true,
-      "durationWithinLimit": true,
-      "telemetryComplete": true,
-      "postUnloadHeadroomObserved": true
-    }
-  },
-  "failure": null
+  }
 }

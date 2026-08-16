@@ -1,13 +1,14 @@
-# FLUX.1 [schnell] Hardware Certification Summary
+# FLUX.1 [schnell] Measured Host Baseline
 
-**Run ID:** `flux-schnell-cert-run-001`  
-**Generated At:** `2026-08-16T18:46:12.794Z`  
-**Status:** **PASSED**  
+**Profile ID:** `flux-schnell-draft`  
+**Measured At:** `2026-08-16T18:46:12.794Z`  
+**Type:** Measured Host Baseline (Reference for FLUX ↔ LTX Soak Testing #8)  
 **Runner Mode:** `dynamicvram`  
+
+*Note: This document records the empirical physical resource envelope measured on the RTX 4090 host. It is an empirical baseline for drift and soak comparison (#8), not a certified gate evaluation.*
 
 ## Workload & Hardware Identity
 
-- **Profile Key:** `FLUX_SCHNELL_DRAFT_V1` (v1)
 - **Profile ID:** `flux-schnell-draft`
 - **Engine:** `flux_schnell`
 - **Resolution & Steps:** 1024x1024, 1 frame, 4 steps
@@ -18,26 +19,14 @@
 - **Node Version:** `v24.19.0`
 - **ComfyUI PID:** `69326`
 
-## Resource Gate Evaluation
+## Measured Resource Telemetry (75 Samples @ 200 ms)
 
-**Gate Status:** **PASSED** (Max Duration: 30,000 ms)
-
-| Check | Status | Description |
-| :--- | :--- | :--- |
-| Render Success | PASS | Render execution completed successfully |
-| No OOM Detected | PASS | Workload ran without Out-Of-Memory error |
-| Duration Within Limit | PASS | Render duration (11,020 ms) <= limit (30,000 ms) |
-| Telemetry Complete | PASS | All required GPU and host telemetry metrics captured without errors |
-| Post-Unload Headroom Observed | PASS | Post-unload headroom sample measured after model unload |
-
-## Measured Resource Telemetry
-
-| Metric | Measured Value |
+| Metric | Measured Baseline Value |
 | :--- | :--- |
-| **Total Render Duration** | 11,020 ms |
+| **Total Render Duration** | 11,020 ms (11.02 s) |
 | **Peak VRAM** | 23,938 MB |
 | **Driver-Reserved VRAM** | 513 MB |
-| **Allocatable VRAM Denominator** | 24,051 MB (Nameplate: 24,564 MB) |
+| **Allocatable VRAM Pool** | 24,051 MB (Nameplate: 24,564 MB) |
 | **Peak VRAM Utilisation (Allocatable)** | 99.5% |
 | **Peak Host RAM Used** | 29,087 MB |
 | **Peak Process RSS** | 26,874 MB |
