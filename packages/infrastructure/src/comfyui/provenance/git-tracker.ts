@@ -84,20 +84,58 @@ export async function collectGitProvenance(comfyUiDir: string): Promise<GitProve
     });
   }
 
-  const dirNames = entries
+  const candidateEntries = entries
     .filter(
       (entry) =>
-        (entry.isDirectory() || entry.isSymbolicLink()) &&
         !entry.name.startsWith(".") &&
-        !entry.name.startsWith("__")
+        !entry.name.startsWith("__") &&
+        (entry.isDirectory() ||
+          entry.isSymbolicLink() ||
+          (entry.isFile() && entry.name.endsWith(".py")))
     )
-    .map((entry) => entry.name)
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
   const customNodes: CustomNodeGitRevision[] = [];
 
-  for (const name of dirNames) {
+  for (const entry of candidateEntries) {
+    const name = entry.name;
     const nodePath = join(customNodesDir, name);
+
+    if (entry.isFile() && entry.name.endsWith(".py")) {
+      customNodes.push(
+        Object.freeze({
+          name,
+          commit: null,
+          status: "not_git"
+        })
+      );
+      continue;
+    }
+
+    if (entry.isSymbolicLink()) {
+      try {
+        const stats = await stat(nodePath);
+        if (stats.isFile()) {
+          if (name.endsWith(".py")) {
+            customNodes.push(
+              Object.freeze({
+                name,
+                commit: null,
+                status: "not_git"
+              })
+            );
+          }
+          continue;
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    if (!(await hasPythonPackageEntryPoint(nodePath))) {
+      continue;
+    }
+
     try {
       const commit = await readGitCommit(nodePath);
       customNodes.push(
@@ -111,10 +149,6 @@ export async function collectGitProvenance(comfyUiDir: string): Promise<GitProve
       const error = err as { stderr?: string; message?: string };
       const errText = `${error.stderr ?? ""} ${error.message ?? ""}`.toLowerCase();
       if (errText.includes("not a git repository")) {
-        if (!(await hasPythonPackageEntryPoint(nodePath))) {
-          continue;
-        }
-
         customNodes.push(
           Object.freeze({
             name,
