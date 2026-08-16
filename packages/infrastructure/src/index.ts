@@ -102,3 +102,12 @@ export {
   type LinuxHostTelemetryAdapterOptions,
   type LinuxHostTelemetryErrorContext
 } from "./telemetry/linux-host-telemetry-adapter.js";
+
+export {
+  collectRunnerEnvironment,
+  type RunnerEnvironmentDependencies,
+  type RunnerEnvironmentExecFileFn,
+  type RunnerEnvironmentOptions,
+  type RunnerEnvironmentOs,
+  type RunnerEnvironmentReadFileFn
+} from "./telemetry/runner-environment.js";
