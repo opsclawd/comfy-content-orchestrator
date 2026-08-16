@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "profiles": [
+    {
+      "id": "flux-schnell-draft",
+      "engine": "flux_schnell",
+      "workflowRelativePath": "flux_schnell_draft_api.json",
+      "expectedWorkflowHash": "00abd5b566eaa1e2cdf5e9be4e57b707d24ed10c6d668e438e075891f478f6dc",
+      "source": {
+        "kind": "authored_from_spec",
+        "uri": "https://github.com/black-forest-labs/flux",
+        "revision": "unpinned",
+        "license": "Apache-2.0"
+      },
+      "baseline": {
+        "steps": 4
+      },
+      "minFreeDiskGb": 0,
+      "runnerProfile": "cuda_default",
+      "models": [
+        {
+          "category": "checkpoints",
+          "relativePath": "flux1-schnell.safetensors"
+        }
+      ],
+      "assertions": [
+        {
+          "nodeId": "1",
+          "classType": "KSampler",
+          "input": "steps",
+          "equals": 4
+        }
+      ],
+      "renderProfileIdentity": null
+    },
+    {
+      "id": "ltx-25-720p-97f",
+      "engine": "ltx_25",
+      "workflowRelativePath": "ltx_25_720p_97f_api.json",
+      "expectedWorkflowHash": "e6ee75a1df0ac80e4c420eadd820028a9a389f5e680c3de6d89c37159d9f582a",
+      "source": {
+        "kind": "authored_from_spec",
+        "uri": "https://github.com/Lightricks/LTX-2",
+        "revision": "unpinned",
+        "license": "LTX-2 Community License"
+      },
+      "baseline": {
+        "width": 1280,
+        "height": 720,
+        "frames": 97,
+        "steps": 8,
+        "approximateDurationSeconds": 5
+      },
+      "minFreeDiskGb": 100,
+      "runnerProfile": "dynamicvram-offload-v1",
+      "models": [
+        {
+          "category": "diffusion_models",
+          "relativePath": "ltx-video-2b-v0.9.1.safetensors"
+        },
+        {
+          "category": "clip",
+          "relativePath": "t5xxl_fp16.safetensors"
+        },
+        {
+          "category": "vae",
+          "relativePath": "ltx-video-vae.safetensors"
+        }
+      ],
+      "assertions": [
+        {
+          "nodeId": "1",
+          "classType": "KSampler",
+          "input": "steps",
+          "equals": 8
+        },
+        {
+          "nodeId": "5",
+          "classType": "EmptyLTXLatentVideo",
+          "input": "width",
+          "equals": 1280
+        },
+        {
+          "nodeId": "5",
+          "classType": "EmptyLTXLatentVideo",
+          "input": "height",
+          "equals": 720
+        },
+        {
+          "nodeId": "5",
+          "classType": "EmptyLTXLatentVideo",
+          "input": "length",
+          "equals": 97
+        }
+      ],
+      "renderProfileIdentity": {
+        "key": "LTX_25_720P_5S_V1",
+        "version": 1
+      }
+    }
+  ]
+}

@@ -2,7 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   ComfyUiRenderEngineAdapter,
   ComfyUiRenderEngineError,
-  infrastructureName
+  collectCertificationProvenance,
+  infrastructureName,
+  loadCertificationProfile,
+  VALID_MODEL_CATEGORIES,
+  canonicalizeWorkflow,
+  hashWorkflow,
+  resolveModelFilePath,
+  hashModelFiles,
+  runDiskPreflight,
+  collectGitProvenance
 } from "./index.js";
 import { FakeComfyUiTransport } from "./comfyui/test-support/fake-comfyui.js";
 
@@ -27,5 +36,18 @@ describe("infrastructure package exports", () => {
     expect(error.code).toBe("WEBSOCKET_CONNECTION_FAILED");
     expect(error.context.promptId).toBe("prompt-test-123");
     expect(error.name).toBe("ComfyUiRenderEngineError");
+  });
+
+  it("exports provenance collection and manifest functions from composition root", () => {
+    expect(typeof collectCertificationProvenance).toBe("function");
+    expect(typeof loadCertificationProfile).toBe("function");
+    expect(typeof canonicalizeWorkflow).toBe("function");
+    expect(typeof hashWorkflow).toBe("function");
+    expect(typeof resolveModelFilePath).toBe("function");
+    expect(typeof hashModelFiles).toBe("function");
+    expect(typeof runDiskPreflight).toBe("function");
+    expect(typeof collectGitProvenance).toBe("function");
+    expect(VALID_MODEL_CATEGORIES).toContain("clip");
+    expect(VALID_MODEL_CATEGORIES).not.toContain("text_encoders");
   });
 });
