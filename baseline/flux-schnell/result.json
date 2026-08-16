@@ -1,0 +1,2024 @@
+{
+  "version": 1,
+  "profileId": "flux-schnell-draft",
+  "kind": "measured_host_baseline",
+  "measuredAt": "2026-08-16T18:46:12.794Z",
+  "runnerMode": "dynamicvram",
+  "identity": {
+    "profileId": "flux-schnell-draft",
+    "engine": "flux_schnell",
+    "width": 1024,
+    "height": 1024,
+    "frames": 1,
+    "steps": 4,
+    "workflowSha256": "af8528239790f6536ce7f0733f92095501fecfd8e919084a9decdded59e6ecf5",
+    "modelSha256": {
+      "models/clip/clip_l.safetensors": "660c6f5b1abae9dc498ac2d21e1347d2abdb0cf6c0c0c8576cd796491d9a6cdd",
+      "models/clip/t5xxl_fp8_e4m3fn.safetensors": "7d330da4816157540d6bb7838bf63a0f02f573fc48ca4d8de34bb0cbfd514f09",
+      "models/diffusion_models/flux1-schnell.safetensors": "9403429e0052277ac2a87ad800adece5481eecefd9ed334e1f348723621d2a0a",
+      "models/vae/ae.safetensors": "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38"
+    },
+    "comfyUiCommit": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+    "customNodes": []
+  },
+  "environment": {
+    "nodeVersion": "v24.19.0",
+    "platform": "linux",
+    "arch": "x64",
+    "osRelease": "6.8.0-117-generic",
+    "osVersion": "#117-Ubuntu SMP PREEMPT_DYNAMIC Tue May  5 19:26:24 UTC 2026",
+    "cpuModel": "AMD Ryzen 7 7700X 8-Core Processor",
+    "cpuCount": 16,
+    "gpuName": "NVIDIA GeForce RTX 4090",
+    "gpuUuid": "GPU-89a53488-359c-4942-75ae-47ee8aa89f53",
+    "gpuDriverVersion": "595.58.03",
+    "gpuTotalMemoryMb": 24564,
+    "cudaVersion": "13.2",
+    "comfyUiPid": 69326,
+    "comfyUiArgs": [
+      "/home/gpoontip/ComfyUI/venv/bin/python",
+      "main.py",
+      "--listen",
+      "0.0.0.0",
+      "--port",
+      "8188"
+    ]
+  },
+  "render": {
+    "executionId": "f4bd49e1-8cb4-4331-af66-ee827f6470c1",
+    "status": "succeeded",
+    "outputObjectKeys": ["flux_schnell_draft_00003_.png"],
+    "startedAt": "2026-08-16T18:45:56.753Z",
+    "completedAt": "2026-08-16T18:46:07.773Z",
+    "totalDurationMs": 11020
+  },
+  "telemetry": {
+    "sampleIntervalMs": 200,
+    "samples": [
+      {
+        "measuredAt": "2026-08-16T18:45:56.752Z",
+        "phase": "pre_dispatch",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 564,
+          "freeVramMb": 23487,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 27515,
+          "hostRamUsedMb": 3718,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 92836789,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 1967,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 7996636
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:45:56.969Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 596,
+          "freeVramMb": 23455,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 27535,
+          "hostRamUsedMb": 3698,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 92944741,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 1969,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 8098469
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:45:57.192Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 1908,
+          "freeVramMb": 22143,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 26864,
+          "hostRamUsedMb": 4369,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 93129027,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 2675,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 8278120
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:45:57.415Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 2932,
+          "freeVramMb": 21119,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 25865,
+          "hostRamUsedMb": 5368,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 93379307,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 3635,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 8523880
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:45:57.634Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 3638,
+          "freeVramMb": 20413,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 25161,
+          "hostRamUsedMb": 6072,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 93572317,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 4371,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 8712296
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:45:57.856Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 4248,
+          "freeVramMb": 19803,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 24487,
+          "hostRamUsedMb": 6746,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 93734538,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 4987,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 8869992
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:45:58.076Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 4920,
+          "freeVramMb": 19131,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 23871,
+          "hostRamUsedMb": 7362,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 93901419,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 5620,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 9032300
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:45:58.296Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 5498,
+          "freeVramMb": 18553,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 23216,
+          "hostRamUsedMb": 8017,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 94070022,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 6259,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 9195627
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:45:58.513Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 5914,
+          "freeVramMb": 18137,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 22710,
+          "hostRamUsedMb": 8523,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 94198069,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 6741,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 9319146
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:45:58.730Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 5402,
+          "freeVramMb": 18649,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 22645,
+          "hostRamUsedMb": 8588,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 94221211,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 6813,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 9337602
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:45:58.949Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 2140,
+          "freeVramMb": 21911,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 22309,
+          "hostRamUsedMb": 8924,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 94314596,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 7165,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 9426386
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:45:59.168Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 3068,
+          "freeVramMb": 20983,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 21620,
+          "hostRamUsedMb": 9613,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 94492916,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 7843,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 9600253
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:45:59.392Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 4190,
+          "freeVramMb": 19861,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 20758,
+          "hostRamUsedMb": 10475,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 94705011,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 8655,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 9807837
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:45:59.616Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 5312,
+          "freeVramMb": 18739,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 19620,
+          "hostRamUsedMb": 11613,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 94991852,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 9757,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 10090126
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:45:59.837Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 6338,
+          "freeVramMb": 17713,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 18548,
+          "hostRamUsedMb": 12685,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 95254813,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 10766,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 10348250
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:00.057Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 7460,
+          "freeVramMb": 16591,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 17342,
+          "hostRamUsedMb": 13891,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 95531271,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 11828,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 10620202
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:00.279Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 8486,
+          "freeVramMb": 15565,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 16326,
+          "hostRamUsedMb": 14907,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 95807736,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 12890,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 10892148
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:00.500Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 9256,
+          "freeVramMb": 14795,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 15547,
+          "hostRamUsedMb": 15686,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 96038079,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 13773,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 11118012
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:00.720Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 9866,
+          "freeVramMb": 14185,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 14841,
+          "hostRamUsedMb": 16392,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 96226918,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 14493,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 11302389
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:00.940Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 10636,
+          "freeVramMb": 13415,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 14182,
+          "hostRamUsedMb": 17051,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 96397582,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 15141,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 11468327
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:01.161Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 11308,
+          "freeVramMb": 12743,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 13507,
+          "hostRamUsedMb": 17726,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 96568028,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 15789,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 11634268
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:01.379Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 11918,
+          "freeVramMb": 12133,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 12792,
+          "hostRamUsedMb": 18441,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 96756872,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 16509,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 11818642
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:01.599Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 12558,
+          "freeVramMb": 11493,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 12141,
+          "hostRamUsedMb": 19092,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 96927290,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 17158,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 11984582
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:01.820Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 13328,
+          "freeVramMb": 10723,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 11469,
+          "hostRamUsedMb": 19764,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 97097799,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 17806,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 12150524
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:02.039Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 13970,
+          "freeVramMb": 10081,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 10803,
+          "hostRamUsedMb": 20430,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 97273495,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 18475,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 12321752
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:02.258Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 14514,
+          "freeVramMb": 9537,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 10080,
+          "hostRamUsedMb": 21153,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 97461798,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 19192,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 12505456
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:02.480Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 15348,
+          "freeVramMb": 8703,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 9370,
+          "hostRamUsedMb": 21863,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 97636919,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 19858,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 12675995
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:02.702Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 16662,
+          "freeVramMb": 7389,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 8242,
+          "hostRamUsedMb": 22991,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 97904370,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 20885,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 12938720
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:02.924Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 17496,
+          "freeVramMb": 6555,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 7134,
+          "hostRamUsedMb": 24099,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 98162435,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 21875,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 13192237
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:03.144Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 18234,
+          "freeVramMb": 5817,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 6565,
+          "hostRamUsedMb": 24668,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 98342103,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 22559,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 13367387
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:03.366Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 18844,
+          "freeVramMb": 5207,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 5858,
+          "hostRamUsedMb": 25375,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 98532468,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 23285,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 13553263
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:03.585Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 19580,
+          "freeVramMb": 4471,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 5138,
+          "hostRamUsedMb": 26095,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 98729159,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 24036,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 13745351
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:03.806Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 20126,
+          "freeVramMb": 3925,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 4502,
+          "hostRamUsedMb": 26731,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 98894641,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 24664,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 13906314
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:04.025Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 20894,
+          "freeVramMb": 3157,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 3872,
+          "hostRamUsedMb": 27361,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 99051740,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 25260,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 14058780
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:04.248Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 21472,
+          "freeVramMb": 2579,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 3188,
+          "hostRamUsedMb": 28045,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 99226804,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 25926,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 14229329
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:04.470Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 22306,
+          "freeVramMb": 1745,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 2366,
+          "hostRamUsedMb": 28867,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 99438759,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 26736,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 14436748
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:04.687Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 22914,
+          "freeVramMb": 1137,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 2316,
+          "hostRamUsedMb": 28917,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 99651183,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 26754,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 14644664
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:04.906Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 23458,
+          "freeVramMb": 593,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 2426,
+          "hostRamUsedMb": 28807,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 99810357,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 26613,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 14799323
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:05.126Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 23906,
+          "freeVramMb": 145,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 2181,
+          "hostRamUsedMb": 29052,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 100015408,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 26870,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 14999919
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:05.343Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 23938,
+          "freeVramMb": 113,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 2173,
+          "hostRamUsedMb": 29060,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 100145876,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 26859,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 15125029
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:05.563Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 23762,
+          "freeVramMb": 289,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 2264,
+          "hostRamUsedMb": 28969,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 100307640,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 26772,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 15282245
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:05.780Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 23842,
+          "freeVramMb": 209,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 2159,
+          "hostRamUsedMb": 29074,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 100338013,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 26874,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 15308140
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:05.997Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 23842,
+          "freeVramMb": 209,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 2157,
+          "hostRamUsedMb": 29076,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 100342719,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 26874,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 15308140
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:06.214Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 23842,
+          "freeVramMb": 209,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 2153,
+          "hostRamUsedMb": 29080,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 100347475,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 26874,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 15308147
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:06.431Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 23842,
+          "freeVramMb": 209,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 2153,
+          "hostRamUsedMb": 29080,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 100351939,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 26874,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 15308147
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:06.648Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 23842,
+          "freeVramMb": 209,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 2146,
+          "hostRamUsedMb": 29087,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 100356410,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 26874,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 15308149
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:06.865Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 23842,
+          "freeVramMb": 209,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 2150,
+          "hostRamUsedMb": 29083,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 100360926,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 26874,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 15308149
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:07.082Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 23842,
+          "freeVramMb": 209,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 2149,
+          "hostRamUsedMb": 29084,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 100365747,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 26874,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 15308149
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:07.300Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 23362,
+          "freeVramMb": 689,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 3519,
+          "hostRamUsedMb": 27714,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 100429530,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 25494,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 15367310
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:07.517Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 21538,
+          "freeVramMb": 2513,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 3459,
+          "hostRamUsedMb": 27774,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 100444961,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 25546,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 15378146
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:07.734Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 21538,
+          "freeVramMb": 2513,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 3450,
+          "hostRamUsedMb": 27783,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 100449448,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 25546,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 15378146
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:07.953Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 21536,
+          "freeVramMb": 2515,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 7049,
+          "hostRamUsedMb": 24184,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 100460149,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 21952,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 15378146
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:08.175Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 21534,
+          "freeVramMb": 2517,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 11974,
+          "hostRamUsedMb": 19259,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 100464659,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 17137,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 15378146
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:08.394Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 21530,
+          "freeVramMb": 2521,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 17117,
+          "hostRamUsedMb": 14116,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 100469420,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 12080,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 15378146
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:08.612Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 21528,
+          "freeVramMb": 2523,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 22455,
+          "hostRamUsedMb": 8778,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 100473955,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 6823,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 15378146
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:08.832Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 18614,
+          "freeVramMb": 5437,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 27124,
+          "hostRamUsedMb": 4109,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 100478464,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 2265,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 15378146
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:09.049Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 6890,
+          "freeVramMb": 17161,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 27131,
+          "hostRamUsedMb": 4102,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144602,
+          "systemMinorPageFaults": 100483063,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 2265,
+          "processMajorPageFaults": 850,
+          "processMinorPageFaults": 15378146
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:09.268Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 596,
+          "freeVramMb": 23455,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 27374,
+          "hostRamUsedMb": 3859,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144604,
+          "systemMinorPageFaults": 100487701,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 2018,
+          "processMajorPageFaults": 852,
+          "processMinorPageFaults": 15378148
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:09.486Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 564,
+          "freeVramMb": 23487,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 27402,
+          "hostRamUsedMb": 3831,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144604,
+          "systemMinorPageFaults": 100492211,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 1971,
+          "processMajorPageFaults": 852,
+          "processMinorPageFaults": 15378148
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:09.704Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 564,
+          "freeVramMb": 23487,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 27386,
+          "hostRamUsedMb": 3847,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144604,
+          "systemMinorPageFaults": 100496637,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 1971,
+          "processMajorPageFaults": 852,
+          "processMinorPageFaults": 15378148
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:09.921Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 564,
+          "freeVramMb": 23487,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 27384,
+          "hostRamUsedMb": 3849,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144604,
+          "systemMinorPageFaults": 100501522,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 1971,
+          "processMajorPageFaults": 852,
+          "processMinorPageFaults": 15378148
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:10.139Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 564,
+          "freeVramMb": 23487,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 27383,
+          "hostRamUsedMb": 3850,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144604,
+          "systemMinorPageFaults": 100506108,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 1971,
+          "processMajorPageFaults": 852,
+          "processMinorPageFaults": 15378148
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:10.357Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 564,
+          "freeVramMb": 23487,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 27387,
+          "hostRamUsedMb": 3846,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144604,
+          "systemMinorPageFaults": 100510691,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 1971,
+          "processMajorPageFaults": 852,
+          "processMinorPageFaults": 15378148
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:10.574Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 564,
+          "freeVramMb": 23487,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 27386,
+          "hostRamUsedMb": 3847,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144604,
+          "systemMinorPageFaults": 100515203,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 1971,
+          "processMajorPageFaults": 852,
+          "processMinorPageFaults": 15378148
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:10.792Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 564,
+          "freeVramMb": 23487,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 27388,
+          "hostRamUsedMb": 3845,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144604,
+          "systemMinorPageFaults": 100519983,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 1971,
+          "processMajorPageFaults": 852,
+          "processMinorPageFaults": 15378148
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:11.009Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 564,
+          "freeVramMb": 23487,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 27398,
+          "hostRamUsedMb": 3835,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144604,
+          "systemMinorPageFaults": 100524530,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 1971,
+          "processMajorPageFaults": 852,
+          "processMinorPageFaults": 15378148
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:11.226Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 564,
+          "freeVramMb": 23487,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 27394,
+          "hostRamUsedMb": 3839,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144604,
+          "systemMinorPageFaults": 100529144,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 1971,
+          "processMajorPageFaults": 852,
+          "processMinorPageFaults": 15378148
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:11.444Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 564,
+          "freeVramMb": 23487,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 27394,
+          "hostRamUsedMb": 3839,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144604,
+          "systemMinorPageFaults": 100533680,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 1971,
+          "processMajorPageFaults": 852,
+          "processMinorPageFaults": 15378148
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:11.662Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 564,
+          "freeVramMb": 23487,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 27378,
+          "hostRamUsedMb": 3855,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144604,
+          "systemMinorPageFaults": 100538429,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 1971,
+          "processMajorPageFaults": 852,
+          "processMinorPageFaults": 15378148
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:11.880Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 564,
+          "freeVramMb": 23487,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 27387,
+          "hostRamUsedMb": 3846,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144604,
+          "systemMinorPageFaults": 100543035,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 1971,
+          "processMajorPageFaults": 852,
+          "processMinorPageFaults": 15378149
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:12.097Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 564,
+          "freeVramMb": 23487,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 27371,
+          "hostRamUsedMb": 3862,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144604,
+          "systemMinorPageFaults": 100547573,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 1971,
+          "processMajorPageFaults": 852,
+          "processMinorPageFaults": 15378149
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:12.316Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 564,
+          "freeVramMb": 23487,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 27365,
+          "hostRamUsedMb": 3868,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144604,
+          "systemMinorPageFaults": 100552052,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 1971,
+          "processMajorPageFaults": 852,
+          "processMinorPageFaults": 15378149
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:12.534Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 564,
+          "freeVramMb": 23487,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 27367,
+          "hostRamUsedMb": 3866,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144604,
+          "systemMinorPageFaults": 100556810,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 1971,
+          "processMajorPageFaults": 852,
+          "processMinorPageFaults": 15378149
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:12.752Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 564,
+          "freeVramMb": 23487,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 27379,
+          "hostRamUsedMb": 3854,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144604,
+          "systemMinorPageFaults": 100561360,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 1971,
+          "processMajorPageFaults": 852,
+          "processMinorPageFaults": 15378149
+        }
+      },
+      {
+        "measuredAt": "2026-08-16T18:46:12.794Z",
+        "phase": "post_unload",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 564,
+          "freeVramMb": 23487,
+          "reservedVramMb": 513
+        },
+        "host": {
+          "hostRamTotalMb": 31233,
+          "hostRamAvailableMb": 27377,
+          "hostRamUsedMb": 3856,
+          "swapTotalMb": 40960,
+          "swapUsedMb": 223,
+          "systemSwapInPages": 507834,
+          "systemSwapOutPages": 3998768,
+          "systemMajorPageFaults": 144604,
+          "systemMinorPageFaults": 100565865,
+          "processPid": 69326,
+          "processStartTimeTicks": 17028742,
+          "processRssMb": 1971,
+          "processMajorPageFaults": 852,
+          "processMinorPageFaults": 15378149
+        }
+      }
+    ],
+    "samplingErrors": [],
+    "peakVramMb": 23938,
+    "reservedVramMb": 513,
+    "peakHostRamUsedMb": 29087,
+    "peakProcessRssMb": 26874,
+    "swapUsedDeltaMb": 0,
+    "systemSwapInPageDelta": 0,
+    "systemSwapOutPageDelta": 0,
+    "systemMajorPageFaultDelta": 2,
+    "systemMinorPageFaultDelta": 7729076,
+    "processMajorPageFaultDelta": 2,
+    "processMinorPageFaultDelta": 7381513,
+    "postUnloadUsedVramMb": 564,
+    "postUnloadFreeVramMb": 23487
+  }
+}
