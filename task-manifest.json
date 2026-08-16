@@ -1,0 +1,121 @@
+{
+  "version": 2,
+  "task_count": 2,
+  "tasks": [
+    {
+      "n": 1,
+      "title": "Land the custom-node filtering regression proof",
+      "expected_files": [
+        "packages/infrastructure/src/comfyui/provenance/git-tracker.test.ts"
+      ],
+      "reference_files": [
+        "packages/infrastructure/src/comfyui/provenance/git-tracker.ts"
+      ],
+      "validation_commands": [
+        [
+          "pnpm",
+          "exec",
+          "vitest",
+          "run",
+          "packages/infrastructure/src/comfyui/provenance/git-tracker.test.ts"
+        ],
+        [
+          "pnpm",
+          "exec",
+          "eslint",
+          "packages/infrastructure/src/comfyui/provenance/git-tracker.test.ts"
+        ],
+        [
+          "pnpm",
+          "exec",
+          "prettier",
+          "--check",
+          "packages/infrastructure/src/comfyui/provenance/git-tracker.test.ts"
+        ]
+      ],
+      "invariants": [
+        {
+          "name": "actual host non-node entries are ignored",
+          "description": "Given the reported host listing of __pycache__, example_node.py.example, and websocket_image_save.py, collection returns the ComfyUI commit with an empty customNodes array.",
+          "test_case_name": "ignores the render host's non-node custom_nodes entries"
+        },
+        {
+          "name": "excluded names override positive signals",
+          "description": "Directory or symlink candidates whose names begin with . or __ are excluded even if they otherwise look like a Git repository or copied Python package.",
+          "test_case_name": "ignores hidden, dunder-prefixed, and package-less directories"
+        },
+        {
+          "name": "package-less directories are ignored",
+          "description": "A visible non-Git directory without a regular __init__.py file is omitted instead of being reported as not_git.",
+          "test_case_name": "ignores hidden, dunder-prefixed, and package-less directories"
+        },
+        {
+          "name": "valid Git and copied nodes remain sorted",
+          "description": "Git repositories remain tracked with exact commits, copied directories with a regular __init__.py remain not_git, and included entries retain lexical ordering.",
+          "test_case_name": "git provenance sorts Git and copy-installed custom nodes"
+        }
+      ]
+    },
+    {
+      "n": 2,
+      "title": "Implement hybrid custom-node candidate filtering",
+      "expected_files": [
+        "packages/infrastructure/src/comfyui/provenance/git-tracker.ts"
+      ],
+      "reference_files": [
+        "packages/infrastructure/src/comfyui/provenance/git-tracker.test.ts",
+        "packages/infrastructure/src/comfyui/provenance/collector.ts",
+        "packages/infrastructure/src/index.ts"
+      ],
+      "validation_commands": [
+        [
+          "pnpm",
+          "exec",
+          "vitest",
+          "run",
+          "packages/infrastructure/src/comfyui/provenance/git-tracker.test.ts"
+        ],
+        [
+          "pnpm",
+          "exec",
+          "eslint",
+          "packages/infrastructure/src/comfyui/provenance/git-tracker.ts"
+        ],
+        [
+          "pnpm",
+          "exec",
+          "prettier",
+          "--check",
+          "packages/infrastructure/src/comfyui/provenance/git-tracker.ts"
+        ]
+      ],
+      "invariants": [
+        {
+          "name": "actual host non-node entries are ignored",
+          "description": "The collector skips the __pycache__ directory and ignores loose files, yielding no custom nodes for the exact reported host listing.",
+          "test_case_name": "ignores the render host's non-node custom_nodes entries"
+        },
+        {
+          "name": "excluded names never enter classification",
+          "description": "Candidate names beginning with . or __ are removed before Git or copied-package inspection regardless of their contents.",
+          "test_case_name": "ignores hidden, dunder-prefixed, and package-less directories"
+        },
+        {
+          "name": "not-git candidates require a Python package entry point",
+          "description": "After readGitCommit identifies a visible candidate as not a Git repository, the collector emits not_git only when __init__.py resolves to a regular file and skips it otherwise.",
+          "test_case_name": "ignores hidden, dunder-prefixed, and package-less directories"
+        },
+        {
+          "name": "valid Git and copied nodes remain sorted",
+          "description": "A Git repository is tracked without requiring __init__.py, a copied package is not_git, and all included entries remain lexically sorted.",
+          "test_case_name": "git provenance sorts Git and copy-installed custom nodes"
+        },
+        {
+          "name": "unresolvable Git repositories remain unavailable",
+          "description": "When Git metadata exists but its commit cannot be resolved, the candidate stays in the inventory as unavailable and does not enter the copied-node fallback.",
+          "test_case_name": "classifies corrupted or unresolvable custom-node repository as unavailable"
+        }
+      ]
+    }
+  ]
+}
