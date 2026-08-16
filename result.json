@@ -1,6 +1,0 @@
-{
-  "result": "done_with_fixes",
-  "out_of_scope_reasons": {
-    ".gitignore": "Added negation rules for orchestrator artifacts so git add exclude pathspecs do not trigger ignore collisions"
-  }
-}

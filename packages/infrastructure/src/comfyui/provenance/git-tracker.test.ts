@@ -13,15 +13,12 @@ import {
 
 const execFile = promisify(execFileCallback);
 
-async function initGitRepo(dir: string, includeInitPy: boolean = true): Promise<string> {
+async function initGitRepo(dir: string): Promise<string> {
   await fsPromises.mkdir(dir, { recursive: true });
   await execFile("git", ["init"], { cwd: dir });
   await execFile("git", ["config", "user.name", "Test Author"], { cwd: dir });
   await execFile("git", ["config", "user.email", "test@example.com"], { cwd: dir });
   await fsPromises.writeFile(join(dir, "README.md"), "test\n");
-  if (includeInitPy) {
-    await fsPromises.writeFile(join(dir, "__init__.py"), "");
-  }
   await execFile("git", ["add", "."], { cwd: dir });
   await execFile("git", ["commit", "-m", "initial commit"], { cwd: dir });
   const { stdout } = await execFile("git", ["rev-parse", "HEAD"], { cwd: dir });
@@ -41,7 +38,7 @@ describe("ComfyUI and Custom-Node Git Tracker", () => {
 
   it("git provenance captures the exact ComfyUI HEAD", async () => {
     const comfyUiDir = join(tempDir, "comfyui");
-    const commit = await initGitRepo(comfyUiDir, false);
+    const commit = await initGitRepo(comfyUiDir);
 
     const provenance: GitProvenance = await collectGitProvenance(comfyUiDir);
 
@@ -51,7 +48,7 @@ describe("ComfyUI and Custom-Node Git Tracker", () => {
 
   it("git provenance sorts Git and copy-installed custom nodes", async () => {
     const comfyUiDir = join(tempDir, "comfyui");
-    const comfyCommit = await initGitRepo(comfyUiDir, false);
+    const comfyCommit = await initGitRepo(comfyUiDir);
 
     const customNodesDir = join(comfyUiDir, "custom_nodes");
     await fsPromises.mkdir(customNodesDir, { recursive: true });
@@ -65,13 +62,10 @@ describe("ComfyUI and Custom-Node Git Tracker", () => {
     await fsPromises.mkdir(copiedNodeDir);
     await fsPromises.writeFile(join(copiedNodeDir, "__init__.py"), "");
 
-    // Create a single-file python custom node
-    await fsPromises.writeFile(join(customNodesDir, "websocket_image_save.py"), "");
-
     const provenance: GitProvenance = await collectGitProvenance(comfyUiDir);
 
     expect(provenance.comfyUiCommit).toBe(comfyCommit);
-    expect(provenance.customNodes).toHaveLength(4);
+    expect(provenance.customNodes).toHaveLength(3);
 
     const expectedNodes: readonly CustomNodeGitRevision[] = [
       {
@@ -88,11 +82,6 @@ describe("ComfyUI and Custom-Node Git Tracker", () => {
         name: "plain-dir",
         commit: null,
         status: "not_git"
-      },
-      {
-        name: "websocket_image_save.py",
-        commit: null,
-        status: "not_git"
       }
     ];
 
@@ -101,7 +90,7 @@ describe("ComfyUI and Custom-Node Git Tracker", () => {
 
   it("git provenance tolerates a missing custom_nodes directory", async () => {
     const comfyUiDir = join(tempDir, "comfyui");
-    const commit = await initGitRepo(comfyUiDir, false);
+    const commit = await initGitRepo(comfyUiDir);
 
     const provenance = await collectGitProvenance(comfyUiDir);
 
@@ -118,7 +107,7 @@ describe("ComfyUI and Custom-Node Git Tracker", () => {
 
   it("git commit lookup treats metacharacters in paths as data", async () => {
     const specialDir = join(tempDir, "repo with spaces and $pecial & chars; (test) 'quote'");
-    const commit = await initGitRepo(specialDir, false);
+    const commit = await initGitRepo(specialDir);
 
     const result = await readGitCommit(specialDir);
 
@@ -127,12 +116,11 @@ describe("ComfyUI and Custom-Node Git Tracker", () => {
 
   it("classifies corrupted or unresolvable custom-node repository as unavailable", async () => {
     const comfyUiDir = join(tempDir, "comfyui");
-    await initGitRepo(comfyUiDir, false);
+    await initGitRepo(comfyUiDir);
 
     const customNodesDir = join(comfyUiDir, "custom_nodes");
     const emptyRepoDir = join(customNodesDir, "empty-repo");
     await fsPromises.mkdir(emptyRepoDir, { recursive: true });
-    await fsPromises.writeFile(join(emptyRepoDir, "__init__.py"), "");
     // git init without any commits has an unborn HEAD
     await execFile("git", ["init"], { cwd: emptyRepoDir });
 
@@ -147,9 +135,9 @@ describe("ComfyUI and Custom-Node Git Tracker", () => {
     ]);
   });
 
-  it("tracks single-file python custom nodes and ignores non-node entries", async () => {
+  it("ignores the render host's non-node custom_nodes entries", async () => {
     const comfyUiDir = join(tempDir, "comfyui");
-    const comfyCommit = await initGitRepo(comfyUiDir, false);
+    const comfyCommit = await initGitRepo(comfyUiDir);
     const customNodesDir = join(comfyUiDir, "custom_nodes");
 
     await fsPromises.mkdir(join(customNodesDir, "__pycache__"), { recursive: true });
@@ -160,19 +148,13 @@ describe("ComfyUI and Custom-Node Git Tracker", () => {
 
     expect(provenance).toEqual({
       comfyUiCommit: comfyCommit,
-      customNodes: [
-        {
-          name: "websocket_image_save.py",
-          commit: null,
-          status: "not_git"
-        }
-      ]
+      customNodes: []
     });
   });
 
   it("ignores hidden, dunder-prefixed, and package-less directories", async () => {
     const comfyUiDir = join(tempDir, "comfyui");
-    await initGitRepo(comfyUiDir, false);
+    await initGitRepo(comfyUiDir);
     const customNodesDir = join(comfyUiDir, "custom_nodes");
 
     await initGitRepo(join(customNodesDir, ".hidden-node"));
@@ -180,10 +162,6 @@ describe("ComfyUI and Custom-Node Git Tracker", () => {
     await fsPromises.mkdir(dunderNodeDir, { recursive: true });
     await fsPromises.writeFile(join(dunderNodeDir, "__init__.py"), "");
     await fsPromises.mkdir(join(customNodesDir, "backup"));
-    await initGitRepo(join(customNodesDir, "git-backup-without-init"), false);
-    const corruptedWithoutInit = join(customNodesDir, "corrupted-without-init");
-    await fsPromises.mkdir(corruptedWithoutInit, { recursive: true });
-    await execFile("git", ["init"], { cwd: corruptedWithoutInit });
 
     const provenance = await collectGitProvenance(comfyUiDir);
 
