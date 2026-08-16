@@ -1,0 +1,6 @@
+{
+  "result": "done_with_fixes",
+  "out_of_scope_reasons": {
+    ".gitignore": "Updated ignore rules to unignore orchestrator artifacts so git add exclude pathspecs succeed without erroring on ignored files"
+  }
+}

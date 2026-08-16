@@ -1,0 +1,17 @@
+{
+  "result": "fail",
+  "findings": [
+    {
+      "severity": "P1",
+      "summary": "Concurrent execution of sampleNow() and the scheduled timer loop can overlap telemetry reads because the timer callback does not await or check currentAttemptPromise before calling executeSample().",
+      "file": "packages/application/src/certification/telemetry-sampler.ts",
+      "suggested_fix": "Add `while (this.currentAttemptPromise !== null) { await this.currentAttemptPromise; }` at the beginning of the scheduledTimer callback to wait for in-flight attempts."
+    },
+    {
+      "severity": "P2",
+      "summary": "Delta calculations incorrectly clamp negative values to 0 using Math.max(0, ...) and ignore PID/start-time changes, violating the rule to not clamp into a passing zero delta.",
+      "file": "packages/application/src/certification/telemetry-sampler.ts",
+      "suggested_fix": "Remove Math.max(0, ...) clamping. Return null for deltas if the value is negative (counter reset) or if first/last processPid or processStartTimeTicks do not match."
+    }
+  ]
+}

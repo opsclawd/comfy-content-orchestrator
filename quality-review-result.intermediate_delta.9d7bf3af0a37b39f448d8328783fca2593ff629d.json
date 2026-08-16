@@ -1,0 +1,17 @@
+{
+  "result": "pass",
+  "findings": [
+    {
+      "severity": "P3",
+      "summary": "The typecast `this.intervalMs as 200` in computeTelemetryData bypasses strict typing, which could lead to runtime schema validation failures if a custom interval is provided.",
+      "file": "packages/application/src/certification/telemetry-sampler.ts",
+      "suggested_fix": "If the contract requires exactly 200, enforce it in the constructor or update the contract to accept a generic number."
+    },
+    {
+      "severity": "P3",
+      "summary": "When consecutiveErrorBudget is exceeded, the sampler repeatedly pushes the 'Sampling aborted' message on every subsequent failed explicit sampleNow call.",
+      "file": "packages/application/src/certification/telemetry-sampler.ts",
+      "suggested_fix": "Only push the abort message once when isAborted transitions from false to true, for example by checking `if (!this.isAborted && this.consecutiveErrors >= this.consecutiveErrorBudget)`."
+    }
+  ]
+}

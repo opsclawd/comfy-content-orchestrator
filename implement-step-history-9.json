@@ -1,0 +1,26 @@
+[
+  {
+    "iteration": 1,
+    "specReview": {
+      "verdict": "pass",
+      "invocationId": "3d003aac-8f5c-4e23-9084-4e18de34a8c5"
+    },
+    "qualityReview": {
+      "verdict": "pass",
+      "invocationId": "28ce4b89-9131-4099-bc2b-41dee5302063"
+    },
+    "outcome": "unresolved"
+  },
+  {
+    "iteration": 2,
+    "specReview": {
+      "verdict": "pass",
+      "invocationId": "3fb332c5-661c-423b-8821-8d41f85b4be2"
+    },
+    "qualityReview": {
+      "verdict": "pass",
+      "invocationId": "0c8b85f4-157f-4114-957f-79e3faa42d5e"
+    },
+    "outcome": "resolved"
+  }
+]

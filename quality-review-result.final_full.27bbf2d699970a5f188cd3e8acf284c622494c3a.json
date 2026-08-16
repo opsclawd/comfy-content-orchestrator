@@ -1,0 +1,11 @@
+{
+  "result": "fail",
+  "findings": [
+    {
+      "severity": "P2",
+      "summary": "`swapUsedDeltaMb` is incorrectly constrained to be `.nonnegative()`, which will cause validation failures if system swap usage decreases during the certification run.",
+      "file": "packages/contracts/src/ltx-certification.ts",
+      "suggested_fix": "Remove `.nonnegative()` from `swapUsedDeltaMb` in `CertificationTelemetryDataSchema` and remove the corresponding negative-value test in `ltx-certification.test.ts`."
+    }
+  ]
+}
