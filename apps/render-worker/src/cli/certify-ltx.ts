@@ -483,8 +483,8 @@ export async function runCertificationCli(
         now
       })
     : new TelemetrySampler({
-        gpuTelemetryPort: new NvidiaSmiTelemetryAdapter({ gpuIndex }),
-        hostTelemetryPort: new LinuxHostTelemetryAdapter({ pid: comfyUiPid }),
+        gpuTelemetryPort: new NvidiaSmiTelemetryAdapter({ gpuIndex, now }),
+        hostTelemetryPort: new LinuxHostTelemetryAdapter({ pid: comfyUiPid, now }),
         intervalMs: 200,
         now
       });
