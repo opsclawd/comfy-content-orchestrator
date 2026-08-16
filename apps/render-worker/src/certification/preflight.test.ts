@@ -97,18 +97,21 @@ function createValidApprovedReport(): CertificationProvenanceReport {
         category: "diffusion_models",
         relativePath: "ltx-video-2b-v0.9.1.safetensors",
         key: "diffusion_models/ltx-video-2b-v0.9.1.safetensors",
+        bytes: 2500000000,
         sha256: "111111111111111111111111111111111111111111111111111111111111aaaa"
       },
       {
         category: "clip",
         relativePath: "t5xxl_fp16.safetensors",
         key: "clip/t5xxl_fp16.safetensors",
+        bytes: 9500000000,
         sha256: "222222222222222222222222222222222222222222222222222222222222bbbb"
       },
       {
         category: "vae",
         relativePath: "ltx-video-vae.safetensors",
         key: "vae/ltx-video-vae.safetensors",
+        bytes: 160000000,
         sha256: "333333333333333333333333333333333333333333333333333333333333cccc"
       }
     ],

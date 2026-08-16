@@ -278,7 +278,7 @@ export function verifyGoldMasterProvenance(
     "live" in approvedOrOptions &&
     "profile" in approvedOrOptions
   ) {
-    const opts = approvedOrOptions as VerifyGoldMasterProvenanceOptions;
+    const opts = approvedOrOptions as unknown as VerifyGoldMasterProvenanceOptions;
     approved = opts.approved;
     live = opts.live;
     profile = opts.profile;
