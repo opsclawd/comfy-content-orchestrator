@@ -15,7 +15,8 @@
       "baseline": {
         "width": 1024,
         "height": 1024,
-        "steps": 4
+        "steps": 4,
+        "frames": 1
       },
       "minFreeDiskGb": 0,
       "runnerProfile": "dynamicvram-offload-v1",
@@ -57,7 +58,10 @@
           "equals": 1024
         }
       ],
-      "renderProfileIdentity": null
+      "renderProfileIdentity": {
+        "key": "FLUX_SCHNELL_DRAFT_V1",
+        "version": 1
+      }
     },
     {
       "id": "ltx-25-720p-97f",

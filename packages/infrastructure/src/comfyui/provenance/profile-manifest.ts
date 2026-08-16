@@ -40,7 +40,7 @@ export interface CertificationProfile {
   readonly models: readonly ModelFileSpec[];
   readonly assertions: readonly WorkflowNodeAssertion[];
   readonly renderProfileIdentity: Readonly<{
-    key: "LTX_25_720P_5S_V1";
+    key: "LTX_25_720P_5S_V1" | "FLUX_SCHNELL_DRAFT_V1";
     version: 1;
   }> | null;
 }
@@ -340,16 +340,19 @@ function validateRenderProfileIdentity(
 
   const { key, version } = identity;
 
-  if (key !== "LTX_25_720P_5S_V1" || version !== 1) {
-    throw new Error(
-      `Profile "${profileId}": invalid renderProfileIdentity. Only key "LTX_25_720P_5S_V1" with version 1 or null is supported, received: ${JSON.stringify(identity)}`
-    );
+  if (
+    (key === "LTX_25_720P_5S_V1" && version === 1) ||
+    (key === "FLUX_SCHNELL_DRAFT_V1" && version === 1)
+  ) {
+    return {
+      key,
+      version: 1
+    };
   }
 
-  return {
-    key: "LTX_25_720P_5S_V1",
-    version: 1
-  };
+  throw new Error(
+    `Profile "${profileId}": invalid renderProfileIdentity. Expected "LTX_25_720P_5S_V1" (v1), "FLUX_SCHNELL_DRAFT_V1" (v1), or null, received: ${JSON.stringify(identity)}`
+  );
 }
 
 export async function loadCertificationProfile(

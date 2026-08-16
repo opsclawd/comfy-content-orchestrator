@@ -197,7 +197,10 @@ describe("Workflow Assets and Provenance Records", () => {
     });
 
     const fluxProfile = await loadCertificationProfile(manifestPath, "flux-schnell-draft");
-    expect(fluxProfile.renderProfileIdentity).toBeNull();
+    expect(fluxProfile.renderProfileIdentity).toEqual({
+      key: "FLUX_SCHNELL_DRAFT_V1",
+      version: 1
+    });
     expect(fluxProfile.minFreeDiskGb).toBe(0);
   });
 });

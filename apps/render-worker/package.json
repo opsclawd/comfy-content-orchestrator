@@ -12,9 +12,11 @@
     }
   },
   "scripts": {
-    "certify:ltx": "tsx src/cli/certify-ltx.ts",
+    "certify:ltx": "tsx src/cli/certify.ts --profile ltx-25-720p-97f",
     "certify:transition-soak": "tsx src/cli/certify-transition-soak.ts",
-    "typecheck": "tsc --build"
+    "typecheck": "tsc --build",
+    "certify": "tsx src/cli/certify.ts",
+    "certify:flux": "tsx src/cli/certify.ts --profile flux-schnell-draft"
   },
   "dependencies": {
     "@cco/application": "workspace:*",
