@@ -1,5 +1,5 @@
-import { LtxCertificationArtifactSchema, type LtxCertificationArtifact } from "@cco/contracts";
-import { renderCertificationSummary } from "@cco/application";
+import { TransitionSoakArtifactSchema, type TransitionSoakArtifact } from "@cco/contracts";
+import { renderTransitionSoakSummary } from "@cco/application";
 import {
   publishArtifactPair,
   ArtifactWriterError,
@@ -8,52 +8,51 @@ import {
 } from "./atomic-artifact-publisher.js";
 
 export { ArtifactWriterError };
+export type TransitionArtifactWriterDependencies = ArtifactPublisherDependencies;
 
-export type ArtifactWriterDependencies = ArtifactPublisherDependencies;
-
-export interface WriteCertificationArtifactsOptions {
+export interface WriteTransitionSoakArtifactsOptions {
   readonly outputRoot: string;
   readonly artifact: unknown;
   readonly repoRoot?: string | undefined;
-  readonly dependencies?: ArtifactWriterDependencies | undefined;
+  readonly dependencies?: ArtifactPublisherDependencies | undefined;
 }
 
-export interface WriteCertificationArtifactsResult extends PublishedArtifactPairResult {
-  readonly artifact: LtxCertificationArtifact;
+export interface WriteTransitionSoakArtifactsResult extends PublishedArtifactPairResult {
+  readonly artifact: TransitionSoakArtifact;
 }
 
 function isOptionsObject(
-  outputRootOrOptions: string | WriteCertificationArtifactsOptions
-): outputRootOrOptions is WriteCertificationArtifactsOptions {
+  outputRootOrOptions: string | WriteTransitionSoakArtifactsOptions
+): outputRootOrOptions is WriteTransitionSoakArtifactsOptions {
   return typeof outputRootOrOptions === "object" && outputRootOrOptions !== null;
 }
 
 /**
- * Atomically writes JSON and Markdown certification evidence to a run-scoped directory.
+ * Atomically writes JSON and Markdown transition soak evidence to a run-scoped directory.
  *
  * Requirements:
- * 1. Validates artifact using LtxCertificationArtifactSchema before any write.
+ * 1. Validates artifact using TransitionSoakArtifactSchema before any write.
  * 2. Writes result.json with two-space formatting and a trailing newline.
- * 3. Writes summary.md rendered from the exact validated artifact with a trailing newline.
+ * 3. Writes summary.md rendered with renderTransitionSoakSummary from the exact validated artifact.
  * 4. Checks collision before writing; never overwrites or mutates an existing run directory.
- * 5. Writes to a sibling temporary directory first and atomically renames it on the same filesystem.
+ * 5. Writes to a sibling temporary directory first and atomically renames it.
  * 6. Cleans up only the owned temporary directory on any write or rename failure.
  */
-export async function writeCertificationArtifacts(
-  options: WriteCertificationArtifactsOptions
-): Promise<WriteCertificationArtifactsResult>;
-export async function writeCertificationArtifacts(
+export async function writeTransitionSoakArtifacts(
+  options: WriteTransitionSoakArtifactsOptions
+): Promise<WriteTransitionSoakArtifactsResult>;
+export async function writeTransitionSoakArtifacts(
   outputRoot: string,
   artifact: unknown
-): Promise<WriteCertificationArtifactsResult>;
-export async function writeCertificationArtifacts(
-  outputRootOrOptions: string | WriteCertificationArtifactsOptions,
+): Promise<WriteTransitionSoakArtifactsResult>;
+export async function writeTransitionSoakArtifacts(
+  outputRootOrOptions: string | WriteTransitionSoakArtifactsOptions,
   artifactArg?: unknown
-): Promise<WriteCertificationArtifactsResult> {
+): Promise<WriteTransitionSoakArtifactsResult> {
   let outputRoot: string;
   let rawArtifact: unknown;
   let repoRoot: string | undefined;
-  let dependencies: ArtifactWriterDependencies | undefined;
+  let dependencies: ArtifactPublisherDependencies | undefined;
 
   if (isOptionsObject(outputRootOrOptions)) {
     outputRoot = outputRootOrOptions.outputRoot;
@@ -70,7 +69,7 @@ export async function writeCertificationArtifacts(
   }
 
   // 1. Validate artifact structure before any filesystem calls
-  const parseResult = LtxCertificationArtifactSchema.safeParse(rawArtifact);
+  const parseResult = TransitionSoakArtifactSchema.safeParse(rawArtifact);
   if (!parseResult.success) {
     const formattedErrors = parseResult.error.issues
       .map((issue) => `${issue.path.join(".") || "root"}: ${issue.message}`)
@@ -82,10 +81,10 @@ export async function writeCertificationArtifacts(
 
   // 2. Prepare formatted JSON and Markdown contents
   const jsonContent = `${JSON.stringify(validatedArtifact, null, 2)}\n`;
-  const summaryRaw = renderCertificationSummary(validatedArtifact);
+  const summaryRaw = renderTransitionSoakSummary(validatedArtifact);
   const markdownContent = summaryRaw.endsWith("\n") ? summaryRaw : `${summaryRaw}\n`;
 
-  // 3. Publish atomically through shared publisher
+  // 3. Delegate atomic publication to the shared publisher
   const published = await publishArtifactPair({
     outputRoot,
     runId: validatedArtifact.runId,

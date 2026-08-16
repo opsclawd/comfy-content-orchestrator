@@ -155,29 +155,31 @@ pnpm certify:ltx \
 > [!IMPORTANT]
 > **A single comparator run cannot change production policy.**
 >
-> HighVRAM increases peak VRAM footprint and risks Out-Of-Memory during cross-model pipeline transitions (e.g. FLUX $\leftrightarrow$ LTX). DynamicVRAM remains the mandatory production baseline unless exhaustive multi-model soak testing proves HighVRAM provides equal or superior stability and headroom.
+> HighVRAM increases peak VRAM footprint and risks Out-Of-Memory during cross-model pipeline transitions (e.g. FLUX $\leftrightarrow$ LTX). DynamicVRAM remains the mandatory production baseline unless exhaustive multi-model soak testing proves HighVRAM provides equal or superior stability and headroom (see [FLUX ↔ LTX Transition Soak Certification Runbook](transition-soak-certification.md)).
 
 ---
 
-## 7. Hardware Acceptance Checklist & Blocker Status
+## 7. Hardware Acceptance Checklist & Remaining Transition Soak Gate
 
 ### Hardware Acceptance Checklist
-- [ ] **Hardware Target:** Physical Trinidad workstation with NVIDIA GeForce RTX 4090 (24 GB VRAM).
-- [ ] **Host Platform:** Linux x86_64 with `/proc` access and NVIDIA proprietary drivers.
-- [ ] **Disk Reservation:** Verified $\ge 100$ GB free space on ComfyUI volume.
-- [ ] **ComfyUI Configuration:** Clean startup in DynamicVRAM mode (no conflicting VRAM flags).
-- [ ] **Approved Provenance:** Host-validated Gold Master report with pinned commit and verified SHA-256 hashes.
-- [ ] **Execution:** `pnpm certify:ltx` executed and exits with return code `0`.
-- [ ] **Resource Gate Evaluation:** All 5 gate checks pass:
+- [x] **Hardware Target:** Physical Trinidad workstation with NVIDIA GeForce RTX 4090 (24 GB VRAM).
+- [x] **Host Platform:** Linux x86_64 with `/proc` access and NVIDIA proprietary drivers.
+- [x] **Disk Reservation:** Verified $\ge 100$ GB free space on ComfyUI volume.
+- [x] **ComfyUI Configuration:** Clean startup in DynamicVRAM mode (no conflicting VRAM flags).
+- [x] **Approved Provenance:** Host-validated Gold Master report with pinned commit (`55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc`) and verified SHA-256 hashes.
+- [x] **Execution:** `pnpm certify:ltx` executed and exits with return code `0` (`ltx-cert-run-002`).
+- [x] **Resource Gate Evaluation:** All 5 gate checks pass:
   - `renderSuccess = true`
   - `noOom = true`
   - `durationWithinLimit = true` ($\le 55.0$ s)
   - `telemetryComplete = true` (0 sampling errors, 0 null aggregates)
   - `postUnloadHeadroomObserved = true` (5-second settle sample recorded)
-- [ ] **Artifacts Persisted:** Valid `result.json` and `summary.md` generated under `certification/ltx-25/<run-id>/`.
+- [x] **Artifacts Persisted:** Valid `result.json` and `summary.md` generated under `certification/ltx-25/ltx-cert-run-002/`.
 
-### Current Blocker
-> [!WARNING]
-> **Checked-in authored/unpinned provenance is NOT approved Gold Master evidence.**
+### Remaining Gate: Multi-Model Transition Soak Certification
+> [!IMPORTANT]
+> **Single-family LTX certification is complete; multi-model transition soak is the active gate.**
 >
-> The templates in `templates/provenance.json` are authored from specification (`authored_from_spec`) with unpinned revisions. No hardware-dependent issue checkbox is complete until live target-host artifacts exist on the Trinidad RTX 4090 host and pass validation.
+> Pinned Gold Master provenance for both FLUX and LTX is host-validated at commit `55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc`, and single-family LTX certification passed in run `ltx-cert-run-002` (46,874 ms, 23,618 MB peak VRAM, zero swap).
+>
+> The remaining gate before freezing the production `RenderProfile` (`LTX_25_720P_5S_V1`) is executing the multi-model transition soak certification on the Trinidad host (`pnpm certify:transition-soak`, documented in the [FLUX ↔ LTX Transition Soak Certification Runbook](transition-soak-certification.md)). The transition soak evaluates whether 32 GB host RAM remains stable without swap activity or memory leaks under alternating FLUX $\leftrightarrow$ LTX load or if a 64 GB host RAM upgrade is required for Phase 1.

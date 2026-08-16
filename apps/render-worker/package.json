@@ -13,6 +13,7 @@
   },
   "scripts": {
     "certify:ltx": "tsx src/cli/certify-ltx.ts",
+    "certify:transition-soak": "tsx src/cli/certify-transition-soak.ts",
     "typecheck": "tsc --build"
   },
   "dependencies": {
