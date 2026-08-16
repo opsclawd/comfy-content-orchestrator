@@ -12,6 +12,7 @@
     }
   },
   "scripts": {
+    "certify:ltx": "tsx src/cli/certify-ltx.ts",
     "typecheck": "tsc --build"
   },
   "dependencies": {
@@ -20,5 +21,8 @@
     "@cco/domain": "workspace:*",
     "@cco/infrastructure": "workspace:*",
     "@cco/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2"
   }
 }
