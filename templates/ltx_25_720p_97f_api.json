@@ -3,9 +3,9 @@
     "inputs": {
       "seed": 42,
       "steps": 8,
-      "cfg": 3,
+      "cfg": 1,
       "sampler_name": "euler",
-      "scheduler": "normal",
+      "scheduler": "simple",
       "denoise": 1,
       "model": ["2", 0],
       "positive": ["3", 0],
@@ -19,7 +19,7 @@
   },
   "2": {
     "inputs": {
-      "unet_name": "ltx-video-2b-v0.9.1.safetensors",
+      "unet_name": "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
       "weight_dtype": "default"
     },
     "class_type": "UNETLoader",
@@ -29,7 +29,7 @@
   },
   "3": {
     "inputs": {
-      "text": "cinematic video scene, 720p photorealistic motion",
+      "text": "A cinematic aerial drone shot of a luxury modern villa in Tobago at golden sunset, crystal clear turquoise ocean, palm trees swaying gently, 8k resolution hyperrealistic",
       "clip": ["7", 0]
     },
     "class_type": "CLIPTextEncode",
@@ -39,7 +39,7 @@
   },
   "4": {
     "inputs": {
-      "text": "low quality, worst quality, deformed, distorted, blurry",
+      "text": "worst quality, inconsistent motion, blurry, jittery, distorted",
       "clip": ["7", 0]
     },
     "class_type": "CLIPTextEncode",
@@ -54,9 +54,9 @@
       "length": 97,
       "batch_size": 1
     },
-    "class_type": "EmptyLTXLatentVideo",
+    "class_type": "EmptyLTXVLatentVideo",
     "_meta": {
-      "title": "Empty LTX Latent Video"
+      "title": "Empty LTXV Latent Video"
     }
   },
   "6": {
@@ -71,8 +71,9 @@
   },
   "7": {
     "inputs": {
-      "clip_name": "t5xxl_fp16.safetensors",
-      "type": "ltxv"
+      "clip_name": "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors",
+      "type": "ltxv",
+      "device": "default"
     },
     "class_type": "CLIPLoader",
     "_meta": {
@@ -81,7 +82,7 @@
   },
   "8": {
     "inputs": {
-      "vae_name": "ltx-video-vae.safetensors"
+      "vae_name": "ltx-2.5-video-vae-conv-bf16.safetensors"
     },
     "class_type": "VAELoader",
     "_meta": {

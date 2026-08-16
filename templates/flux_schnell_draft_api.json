@@ -19,17 +19,18 @@
   },
   "2": {
     "inputs": {
-      "ckpt_name": "flux1-schnell.safetensors"
+      "unet_name": "flux1-schnell.safetensors",
+      "weight_dtype": "default"
     },
-    "class_type": "CheckpointLoaderSimple",
+    "class_type": "UNETLoader",
     "_meta": {
-      "title": "Load Checkpoint"
+      "title": "Load Diffusion Model"
     }
   },
   "3": {
     "inputs": {
       "text": "cinematic product shot, studio lighting",
-      "clip": ["2", 1]
+      "clip": ["7", 0]
     },
     "class_type": "CLIPTextEncode",
     "_meta": {
@@ -39,7 +40,7 @@
   "4": {
     "inputs": {
       "text": "",
-      "clip": ["2", 1]
+      "clip": ["7", 0]
     },
     "class_type": "CLIPTextEncode",
     "_meta": {
@@ -60,7 +61,7 @@
   "6": {
     "inputs": {
       "samples": ["1", 0],
-      "vae": ["2", 2]
+      "vae": ["8", 0]
     },
     "class_type": "VAEDecode",
     "_meta": {
@@ -68,6 +69,26 @@
     }
   },
   "7": {
+    "inputs": {
+      "clip_name1": "t5xxl_fp8_e4m3fn.safetensors",
+      "clip_name2": "clip_l.safetensors",
+      "type": "flux"
+    },
+    "class_type": "DualCLIPLoader",
+    "_meta": {
+      "title": "DualCLIPLoader"
+    }
+  },
+  "8": {
+    "inputs": {
+      "vae_name": "ae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "9": {
     "inputs": {
       "filename_prefix": "flux_schnell_draft",
       "images": ["6", 0]

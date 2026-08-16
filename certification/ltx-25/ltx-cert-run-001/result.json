@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "runId": "ltx-cert-run-001",
+  "generatedAt": "2026-08-16T13:29:17.646Z",
+  "status": "failed",
+  "runnerMode": "dynamicvram",
+  "identity": {
+    "profileId": "ltx-25-720p-97f",
+    "renderProfileKey": "LTX_25_720P_5S_V1",
+    "renderProfileVersion": 1,
+    "engine": "ltx_25",
+    "width": 1280,
+    "height": 720,
+    "frames": 97,
+    "steps": 8,
+    "workflowSha256": "94f397eee3ad8b0cee000036119e524e8c7a012b88d79d00b74172df9d9bf539",
+    "modelSha256": {
+      "models/clip/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors": "09a89e084de1a149c3de60cfe9dfd3e5161967eb09eea39e806fcdeffdd568de",
+      "models/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors": "c4279eeff115cbeaca494bd2183e7d768c38fe85a184dc6afbb7159157c44334",
+      "models/vae/ltx-2.5-video-vae-conv-bf16.safetensors": "685b06ee3d9b2039647698fc4ea33175112462fc374e2777312c907897dfce8d"
+    },
+    "comfyUiCommit": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+    "customNodes": [
+      {
+        "name": "__pycache__",
+        "commit": null,
+        "status": "not_git"
+      }
+    ]
+  },
+  "environment": {
+    "nodeVersion": "v24.19.0",
+    "platform": "linux",
+    "arch": "x64",
+    "osRelease": "6.8.0-117-generic",
+    "osVersion": "#117-Ubuntu SMP PREEMPT_DYNAMIC Tue May  5 19:26:24 UTC 2026",
+    "cpuModel": "AMD Ryzen 7 7700X 8-Core Processor",
+    "cpuCount": 16,
+    "gpuName": "NVIDIA GeForce RTX 4090",
+    "gpuUuid": "GPU-89a53488-359c-4942-75ae-47ee8aa89f53",
+    "gpuDriverVersion": "595.58.03",
+    "gpuTotalMemoryMb": 24564,
+    "cudaVersion": "13.2",
+    "comfyUiPid": 64474,
+    "comfyUiArgs": [
+      "/home/gpoontip/ComfyUI/venv/bin/python",
+      "main.py",
+      "--listen",
+      "0.0.0.0",
+      "--port",
+      "8188"
+    ]
+  },
+  "render": {
+    "executionId": "3de25546-7996-4056-9bad-bac52a818181",
+    "status": "succeeded",
+    "outputObjectKeys": [
+      "ltx_25_720p_97f_00001_.webp"
+    ],
+    "startedAt": "2026-08-16T13:28:24.590Z",
+    "completedAt": "2026-08-16T13:29:12.612Z",
+    "totalDurationMs": 48022
+  },
+  "telemetry": {
+    "sampleIntervalMs": 200,
+    "samples": [],
+    "samplingErrors": [
+      {
+        "measuredAt": "2026-08-16T13:28:24.590Z",
+        "message": "GPU read failed: nvidia-smi reported internally inconsistent memory values for GPU 0: total (24564 MB) !== used (428 MB) + free (23623 MB), delta=513 MB exceeds 1 MB tolerance"
+      },
+      {
+        "measuredAt": "2026-08-16T13:28:24.810Z",
+        "message": "GPU read failed: nvidia-smi reported internally inconsistent memory values for GPU 0: total (24564 MB) !== used (428 MB) + free (23623 MB), delta=513 MB exceeds 1 MB tolerance"
+      },
+      {
+        "measuredAt": "2026-08-16T13:28:25.029Z",
+        "message": "GPU read failed: nvidia-smi reported internally inconsistent memory values for GPU 0: total (24564 MB) !== used (428 MB) + free (23623 MB), delta=513 MB exceeds 1 MB tolerance"
+      },
+      {
+        "measuredAt": "2026-08-16T13:28:25.248Z",
+        "message": "GPU read failed: nvidia-smi reported internally inconsistent memory values for GPU 0: total (24564 MB) !== used (428 MB) + free (23623 MB), delta=513 MB exceeds 1 MB tolerance"
+      },
+      {
+        "measuredAt": "2026-08-16T13:28:25.469Z",
+        "message": "GPU read failed: nvidia-smi reported internally inconsistent memory values for GPU 0: total (24564 MB) !== used (428 MB) + free (23623 MB), delta=513 MB exceeds 1 MB tolerance"
+      },
+      {
+        "measuredAt": "2026-08-16T13:28:25.688Z",
+        "message": "GPU read failed: nvidia-smi reported internally inconsistent memory values for GPU 0: total (24564 MB) !== used (428 MB) + free (23623 MB), delta=513 MB exceeds 1 MB tolerance"
+      },
+      {
+        "measuredAt": "2026-08-16T13:28:25.906Z",
+        "message": "GPU read failed: nvidia-smi reported internally inconsistent memory values for GPU 0: total (24564 MB) !== used (480 MB) + free (23571 MB), delta=513 MB exceeds 1 MB tolerance"
+      },
+      {
+        "measuredAt": "2026-08-16T13:28:26.139Z",
+        "message": "GPU read failed: nvidia-smi reported internally inconsistent memory values for GPU 0: total (24564 MB) !== used (2404 MB) + free (21647 MB), delta=513 MB exceeds 1 MB tolerance"
+      },
+      {
+        "measuredAt": "2026-08-16T13:28:26.359Z",
+        "message": "GPU read failed: nvidia-smi reported internally inconsistent memory values for GPU 0: total (24564 MB) !== used (2404 MB) + free (21647 MB), delta=513 MB exceeds 1 MB tolerance"
+      },
+      {
+        "measuredAt": "2026-08-16T13:28:26.577Z",
+        "message": "GPU read failed: nvidia-smi reported internally inconsistent memory values for GPU 0: total (24564 MB) !== used (2498 MB) + free (21553 MB), delta=513 MB exceeds 1 MB tolerance"
+      },
+      {
+        "measuredAt": "2026-08-16T13:28:26.577Z",
+        "message": "Sampling aborted: consecutive error budget of 10 exceeded"
+      },
+      {
+        "measuredAt": "2026-08-16T13:29:17.645Z",
+        "message": "GPU read failed: nvidia-smi reported internally inconsistent memory values for GPU 0: total (24564 MB) !== used (600 MB) + free (23451 MB), delta=513 MB exceeds 1 MB tolerance"
+      },
+      {
+        "measuredAt": "2026-08-16T13:29:17.645Z",
+        "message": "Sampling aborted: consecutive error budget of 10 exceeded"
+      }
+    ],
+    "peakVramMb": null,
+    "peakHostRamUsedMb": null,
+    "peakProcessRssMb": null,
+    "swapUsedDeltaMb": null,
+    "systemSwapInPageDelta": null,
+    "systemSwapOutPageDelta": null,
+    "systemMajorPageFaultDelta": null,
+    "systemMinorPageFaultDelta": null,
+    "processMajorPageFaultDelta": null,
+    "processMinorPageFaultDelta": null,
+    "postUnloadUsedVramMb": null,
+    "postUnloadFreeVramMb": null
+  },
+  "gate": {
+    "passed": false,
+    "maxDurationMs": 55000,
+    "checks": {
+      "renderSuccess": true,
+      "noOom": true,
+      "durationWithinLimit": true,
+      "telemetryComplete": false,
+      "postUnloadHeadroomObserved": false
+    }
+  },
+  "failure": {
+    "phase": "final_sampling",
+    "code": "final_sampling_failed",
+    "message": "Final telemetry sample failed: Explicit sample (post_unload) failed: Sampling aborted: consecutive error budget of 10 exceeded"
+  }
+}
