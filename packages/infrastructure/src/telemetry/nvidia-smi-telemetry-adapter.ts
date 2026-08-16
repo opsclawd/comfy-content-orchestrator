@@ -135,10 +135,10 @@ export function parseNvidiaSmiMemoryCsv(
     );
   }
 
-  const memoryDelta = Math.abs(totalVramMb - (usedVramMb + freeVramMb));
-  if (memoryDelta > 1) {
+  const accountedVramMb = usedVramMb + freeVramMb;
+  if (accountedVramMb > totalVramMb) {
     throw new NvidiaSmiTelemetryError(
-      `nvidia-smi reported internally inconsistent memory values for GPU ${gpuIndex}: total (${totalVramMb} MB) !== used (${usedVramMb} MB) + free (${freeVramMb} MB), delta=${memoryDelta} MB exceeds 1 MB tolerance`,
+      `nvidia-smi reported impossible memory values for GPU ${gpuIndex}: used (${usedVramMb} MB) + free (${freeVramMb} MB) = ${accountedVramMb} MB exceeds total (${totalVramMb} MB)`,
       { gpuIndex }
     );
   }
