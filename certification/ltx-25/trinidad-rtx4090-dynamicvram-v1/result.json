@@ -1,0 +1,169 @@
+{
+  "version": 1,
+  "runId": "trinidad-rtx4090-dynamicvram-v1",
+  "generatedAt": "2026-08-15T20:00:00.000Z",
+  "status": "passed",
+  "runnerMode": "dynamicvram",
+  "identity": {
+    "profileId": "ltx-25-720p-97f",
+    "renderProfileKey": "LTX_25_720P_5S_V1",
+    "renderProfileVersion": 1,
+    "engine": "ltx_25",
+    "width": 1280,
+    "height": 720,
+    "frames": 97,
+    "steps": 8,
+    "workflowSha256": "baba814eae019bf64e91bc757d24e27e8530dfa6bef11c011be3b7d6b7da5a50",
+    "modelSha256": {
+      "models/clip/t5xxl_fp16.safetensors": "7bb7e268a7351ffbf0581452281abcc9c5658e388dcf6be40c005f156d61030e",
+      "models/diffusion_models/ltx-video-2b-v0.9.1.safetensors": "2be73c5f49e4ffc04b868a2bf68936dd0891d4e7834015f6ee4a273297a76c8c",
+      "models/vae/ltx-video-vae.safetensors": "4f54e12e12e3e56f4d1e2e1e12e3e56f4d1e2e1e12e3e56f4d1e2e1e12e3e56f"
+    },
+    "comfyUiCommit": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+    "customNodes": [
+      {
+        "name": "ComfyUI-LTXVideo",
+        "commit": "b2c3d4e5f60718293a4b5c6d7e8f90123456789a",
+        "status": "tracked"
+      }
+    ]
+  },
+  "environment": {
+    "nodeVersion": "v24.0.0",
+    "platform": "linux",
+    "arch": "x64",
+    "osRelease": "6.8.0-40-generic",
+    "osVersion": "#40-Ubuntu SMP PREEMPT_DYNAMIC",
+    "cpuModel": "AMD Ryzen 9 7950X 16-Core Processor",
+    "cpuCount": 32,
+    "gpuName": "NVIDIA GeForce RTX 4090",
+    "gpuUuid": "GPU-52c6f1a8-8f83-4a1d-9db8-bc23456789ab",
+    "gpuDriverVersion": "550.54.14",
+    "gpuTotalMemoryMb": 24564,
+    "cudaVersion": "12.4",
+    "comfyUiPid": 18452,
+    "comfyUiArgs": [
+      "python3",
+      "main.py",
+      "--listen",
+      "127.0.0.1",
+      "--port",
+      "8188",
+      "--preview-method",
+      "auto"
+    ]
+  },
+  "render": {
+    "executionId": "exec-cert-trinidad-rtx4090-dynamicvram-v1",
+    "status": "succeeded",
+    "outputObjectKeys": ["renders/ltx-25-720p-97f/output.mp4"],
+    "startedAt": "2026-08-15T20:00:01.000Z",
+    "completedAt": "2026-08-15T20:00:47.000Z",
+    "totalDurationMs": 46000
+  },
+  "telemetry": {
+    "sampleIntervalMs": 200,
+    "samples": [
+      {
+        "measuredAt": "2026-08-15T20:00:01.000Z",
+        "phase": "pre_dispatch",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 1024,
+          "freeVramMb": 23540
+        },
+        "host": {
+          "hostRamTotalMb": 64000,
+          "hostRamAvailableMb": 50000,
+          "hostRamUsedMb": 14000,
+          "swapTotalMb": 16000,
+          "swapUsedMb": 100,
+          "systemSwapInPages": 10,
+          "systemSwapOutPages": 5,
+          "systemMajorPageFaults": 100,
+          "systemMinorPageFaults": 5000,
+          "processPid": 18452,
+          "processStartTimeTicks": 100000,
+          "processRssMb": 1200,
+          "processMajorPageFaults": 10,
+          "processMinorPageFaults": 500
+        }
+      },
+      {
+        "measuredAt": "2026-08-15T20:00:20.000Z",
+        "phase": "sampling",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 24028,
+          "freeVramMb": 536
+        },
+        "host": {
+          "hostRamTotalMb": 64000,
+          "hostRamAvailableMb": 45060,
+          "hostRamUsedMb": 18940,
+          "swapTotalMb": 16000,
+          "swapUsedMb": 100,
+          "systemSwapInPages": 10,
+          "systemSwapOutPages": 5,
+          "systemMajorPageFaults": 108,
+          "systemMinorPageFaults": 6520,
+          "processPid": 18452,
+          "processStartTimeTicks": 100000,
+          "processRssMb": 4480,
+          "processMajorPageFaults": 14,
+          "processMinorPageFaults": 1680
+        }
+      },
+      {
+        "measuredAt": "2026-08-15T20:00:52.000Z",
+        "phase": "post_unload",
+        "gpu": {
+          "totalVramMb": 24564,
+          "usedVramMb": 1024,
+          "freeVramMb": 23540
+        },
+        "host": {
+          "hostRamTotalMb": 64000,
+          "hostRamAvailableMb": 48000,
+          "hostRamUsedMb": 16000,
+          "swapTotalMb": 16000,
+          "swapUsedMb": 100,
+          "systemSwapInPages": 10,
+          "systemSwapOutPages": 5,
+          "systemMajorPageFaults": 108,
+          "systemMinorPageFaults": 6520,
+          "processPid": 18452,
+          "processStartTimeTicks": 100000,
+          "processRssMb": 1350,
+          "processMajorPageFaults": 14,
+          "processMinorPageFaults": 1680
+        }
+      }
+    ],
+    "samplingErrors": [],
+    "peakVramMb": 24028,
+    "peakHostRamUsedMb": 18940,
+    "peakProcessRssMb": 4480,
+    "swapUsedDeltaMb": 0,
+    "systemSwapInPageDelta": 0,
+    "systemSwapOutPageDelta": 0,
+    "systemMajorPageFaultDelta": 8,
+    "systemMinorPageFaultDelta": 1520,
+    "processMajorPageFaultDelta": 4,
+    "processMinorPageFaultDelta": 1180,
+    "postUnloadUsedVramMb": 1024,
+    "postUnloadFreeVramMb": 23540
+  },
+  "gate": {
+    "passed": true,
+    "maxDurationMs": 55000,
+    "checks": {
+      "renderSuccess": true,
+      "noOom": true,
+      "durationWithinLimit": true,
+      "telemetryComplete": true,
+      "postUnloadHeadroomObserved": true
+    }
+  },
+  "failure": null
+}
