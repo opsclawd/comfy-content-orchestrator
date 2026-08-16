@@ -86,3 +86,19 @@ export {
   type NvidiaSmiExecFileFn,
   type NvidiaSmiMemoryResult
 } from "./telemetry/nvidia-smi-telemetry-adapter.js";
+
+export {
+  LinuxHostTelemetryAdapter,
+  parseProcMeminfo,
+  parseProcVmstat,
+  parseProcPidStatus,
+  parseProcPidStat,
+  LinuxHostTelemetryError,
+  type LinuxHostReadFileFn,
+  type ProcMeminfoResult,
+  type ProcVmstatResult,
+  type ProcPidStatusResult,
+  type ProcPidStatResult,
+  type LinuxHostTelemetryAdapterOptions,
+  type LinuxHostTelemetryErrorContext
+} from "./telemetry/linux-host-telemetry-adapter.js";

@@ -12,3 +12,4 @@ export * from "./candidate-ranker-port.js";
 export * from "./voice-synthesis-port.js";
 export * from "./media-assembler-port.js";
 export * from "./object-storage-port.js";
+export * from "./host-telemetry-port.js";
