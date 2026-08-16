@@ -33,6 +33,25 @@ The table below reflects historical / pre-certification baseline measurements ob
 
 The workflow succeeds through ComfyUI DynamicVRAM / workflow-managed offloading. It does **not** keep the entire LTX working set resident in VRAM. Formal hardware certification via `pnpm certify:ltx` measures synchronized 200 ms GPU and Linux host telemetry, verifies post-unload VRAM reclamation after `/free`, evaluates the $\le 55$ s duration gate across 5 rigorous checks, and generates versioned `result.json` and `summary.md` evidence on the Trinidad host.
 
+## FLUX ↔ LTX transition soak certification (multi-model memory stability)
+
+Interleaving generative workloads between FLUX.1 [schnell] image drafting and LTX-2.5 video rendering on the 32 GB Trinidad render host requires empirical proof of memory stability, absence of progressive host/VRAM leaks, and zero swap usage under continuous alternating load.
+
+The automated multi-model transition soak harness (`pnpm certify:transition-soak`) executes 10 strict family transitions (11 total renders) in DynamicVRAM mode, enforces continuous 200 ms telemetry sampling, verifies active post-unload headroom reclamation, and evaluates 12 rigorous stability gates as documented in the [Transition Soak Certification Runbook](docs/transition-soak-certification.md):
+
+```bash
+pnpm certify:transition-soak -- \
+  --comfyui-dir "$COMFYUI_DIR" \
+  --comfyui-url "$COMFYUI_URL" \
+  --comfyui-pid "$COMFYUI_PID" \
+  --flux-gold-master-provenance "$FLUX_GOLD_MASTER" \
+  --ltx-gold-master-provenance "$LTX_GOLD_MASTER" \
+  --run-id trinidad-rtx4090-dynamicvram-v1
+```
+
+> [!NOTE]
+> **Host RAM Phase 1 Decision Pending:** The definitive hardware decision (whether 32 GB host RAM is supported or a 64 GB upgrade is mandated for Phase 1 production) and the freezing of the production `RenderProfile` (`LTX_25_720P_5S_V1`) remain pending until live execution of the transition soak certification.
+
 ## Architecture
 
 Clean Architecture and DDD are hard constraints, carried forward from `opsclawd/automation`:
@@ -79,6 +98,7 @@ Dependency direction is enforced in CI:
 - [Product Requirements Document](docs/prd.md)
 - [Database Migrations & Operations Runbook](docs/database-migrations.md)
 - [LTX Hardware Certification Runbook](docs/ltx-hardware-certification.md)
+- [FLUX ↔ LTX Transition Soak Certification Runbook](docs/transition-soak-certification.md)
 - ADRs will live under `docs/adr/` as implementation decisions are made.
 - `docs/CONTEXT.md` will define the project's ubiquitous language and invariants during Sprint 1 bootstrap.
 

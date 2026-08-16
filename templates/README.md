@@ -5,45 +5,40 @@ This directory contains the version-controlled, source-gated Gold Master ComfyUI
 ## Certification status
 
 > [!IMPORTANT]
-> These workflows were **authored from the parameters in `docs/prd.md` §3.6.5**, not
-> exported from a running ComfyUI host and not taken from an upstream repository
-> export. No host validation has been performed: `COMFYUI_URL` is unset and the
-> render host was unreachable when these files were produced.
+> Both workflows (`flux-schnell-draft` and `ltx-25-720p-97f`) are **host-validated** against the running Trinidad render host at ComfyUI revision `55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc`.
 >
-> The canonical SHA-256 below pins **this file's** contents, so a change is
-> detectable. It does not attest that the workflow executes on the render host or
-> that it matches any upstream revision. `docs/prd.md` §3.6.5 still leaves the
-> RenderProfile `workflowHash` uncertified for exactly that reason.
->
-> When each workflow is exported from the Trinidad host and confirmed to run,
-> replace `source.kind` with `validated_host_export`, set `revision` to the
-> host/upstream commit, and re-pin the hash.
+> Pinned canonical SHA-256 workflow hashes, model categories, relative paths, and baseline assertion constraints are defined in [`templates/provenance.json`](provenance.json) and enforced during provenance collection and certification harness preflight checks.
 
 ## Workflows and Sources
 
 ### 1. `flux-schnell-draft` (`templates/flux_schnell_draft_api.json`)
-- **Source Kind:** Authored from specification (`authored_from_spec`).
-- **Source URI:** `https://github.com/black-forest-labs/flux`
-- **Revision:** `unpinned` — the URI names the project, not a commit this file was derived from.
-- **Redistribution Basis & License:** Apache-2.0. The FLUX.1 [schnell] workflow definition is distributed under the Apache-2.0 license.
-- **Workflow Format:** Exact ComfyUI API object map targeting the 4-step Schnell sampler path.
-- **Canonical SHA-256:** `00abd5b566eaa1e2cdf5e9be4e57b707d24ed10c6d668e438e075891f478f6dc`
+- **Source Kind:** Host-validated export (`validated_host_export`).
+- **Source URI:** `https://github.com/comfyanonymous/ComfyUI`
+- **Revision:** `55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc`
+- **Redistribution Basis & License:** GPL-3.0.
+- **Workflow Format:** Exact ComfyUI API object map targeting the 4-step Schnell sampler path (1024x1024).
+- **Canonical SHA-256:** `af8528239790f6536ce7f0733f92095501fecfd8e919084a9decdded59e6ecf5`
+- **Runner Profile:** `dynamicvram-offload-v1`.
 - **Referenced Models:**
-  - `models/checkpoints/flux1-schnell.safetensors`
+  - `models/diffusion_models/flux1-schnell.safetensors`
+  - `models/clip/t5xxl_fp8_e4m3fn.safetensors`
+  - `models/clip/clip_l.safetensors`
+  - `models/vae/ae.safetensors`
 
 ### 2. `ltx-25-720p-97f` (`templates/ltx_25_720p_97f_api.json`)
-- **Source Kind:** Authored from specification (`authored_from_spec`).
-- **Source URI:** `https://github.com/Lightricks/LTX-2`
-- **Revision:** `unpinned` — the URI names the project, not a commit this file was derived from.
-- **Redistribution Basis & License:** LTX-2 Community License Agreement (dated Jan. 5, 2026).
+- **Source Kind:** Host-validated export (`validated_host_export`).
+- **Source URI:** `https://github.com/comfyanonymous/ComfyUI`
+- **Revision:** `55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc`
+- **Redistribution Basis & License:** GPL-3.0.
 - **Workflow Format:** Exact ComfyUI API object map targeting 1280x720 resolution, 97 frames (~5 seconds at 24 fps), and 8 DiT sampling steps.
-- **Canonical SHA-256:** `e6ee75a1df0ac80e4c420eadd820028a9a389f5e680c3de6d89c37159d9f582a`
+- **Canonical SHA-256:** `94f397eee3ad8b0cee000036119e524e8c7a012b88d79d00b74172df9d9bf539`
 - **Runner Profile:** `dynamicvram-offload-v1` (requiring DynamicVRAM / workflow-managed model offloading).
 - **Disk Space Requirement:** Minimum 100 GB free disk space reservation (`minFreeDiskGb: 100`).
+- **Render Profile Identity:** `LTX_25_720P_5S_V1` (v1).
 - **Referenced Models:**
-  - `models/diffusion_models/ltx-video-2b-v0.9.1.safetensors`
-  - `models/clip/t5xxl_fp16.safetensors`
-  - `models/vae/ltx-video-vae.safetensors`
+  - `models/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors`
+  - `models/clip/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors`
+  - `models/vae/ltx-2.5-video-vae-conv-bf16.safetensors`
 
 ---
 
@@ -63,16 +58,19 @@ The models listed in `templates/provenance.json` correspond to the following rel
 
 | Profile | Category | Relative Path | Full ComfyUI Path |
 |---|---|---|---|
-| `flux-schnell-draft` | `checkpoints` | `flux1-schnell.safetensors` | `models/checkpoints/flux1-schnell.safetensors` |
-| `ltx-25-720p-97f` | `diffusion_models` | `ltx-video-2b-v0.9.1.safetensors` | `models/diffusion_models/ltx-video-2b-v0.9.1.safetensors` |
-| `ltx-25-720p-97f` | `clip` | `t5xxl_fp16.safetensors` | `models/clip/t5xxl_fp16.safetensors` |
-| `ltx-25-720p-97f` | `vae` | `ltx-video-vae.safetensors` | `models/vae/ltx-video-vae.safetensors` |
+| `flux-schnell-draft` | `diffusion_models` | `flux1-schnell.safetensors` | `models/diffusion_models/flux1-schnell.safetensors` |
+| `flux-schnell-draft` | `clip` | `t5xxl_fp8_e4m3fn.safetensors` | `models/clip/t5xxl_fp8_e4m3fn.safetensors` |
+| `flux-schnell-draft` | `clip` | `clip_l.safetensors` | `models/clip/clip_l.safetensors` |
+| `flux-schnell-draft` | `vae` | `ae.safetensors` | `models/vae/ae.safetensors` |
+| `ltx-25-720p-97f` | `diffusion_models` | `ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors` | `models/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors` |
+| `ltx-25-720p-97f` | `clip` | `gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors` | `models/clip/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors` |
+| `ltx-25-720p-97f` | `vae` | `ltx-2.5-video-vae-conv-bf16.safetensors` | `models/vae/ltx-2.5-video-vae-conv-bf16.safetensors` |
 
 ---
 
 ## Empirical Performance Certification Scope
 
-The empirical performance values for LTX-2.5 (measured on the RTX 4090 workstation: 46s end-to-end execution, 24,028 MB peak VRAM, ~12s DiT sampling) remain unchanged.
+The empirical performance values for LTX-2.5 (measured on the RTX 4090 workstation: 46,874 ms end-to-end execution, 23,618 MB peak VRAM, ~12s DiT sampling) are verified in `certification/ltx-25/ltx-cert-run-002/`.
 This tooling and manifest pin and certify the **inputs and execution environment** (workflow structure, model hashes, ComfyUI/custom-node Git commits, and disk reservation) rather than modifying empirical benchmark metrics.
 
 ---
