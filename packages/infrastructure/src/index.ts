@@ -74,3 +74,15 @@ export {
   type ProvenanceCliOptions,
   type ProvenanceCliDependencies
 } from "./comfyui/provenance/cli.js";
+
+export {
+  NvidiaSmiTelemetryAdapter,
+  parseNvidiaSmiMemoryCsv,
+  NvidiaSmiTelemetryError,
+  NVIDIA_SMI_COMMAND,
+  NVIDIA_SMI_MEMORY_ARGS,
+  type NvidiaSmiTelemetryAdapterOptions,
+  type NvidiaSmiTelemetryErrorContext,
+  type NvidiaSmiExecFileFn,
+  type NvidiaSmiMemoryResult
+} from "./telemetry/nvidia-smi-telemetry-adapter.js";
