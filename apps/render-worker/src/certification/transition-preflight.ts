@@ -703,4 +703,45 @@ export function verifyTransitionGoldMasters(options: VerifyTransitionGoldMasters
       `Live ComfyUI commit mismatch across families: FLUX has "${fluxLiveReport.git.comfyUiCommit}", LTX has "${ltxLiveReport.git.comfyUiCommit}"`
     );
   }
+
+  const fluxLiveNodes = fluxLiveReport.git.customNodes ?? [];
+  const ltxLiveNodes = ltxLiveReport.git.customNodes ?? [];
+
+  if (fluxLiveNodes.length !== ltxLiveNodes.length) {
+    throw new PreflightError(
+      `Live custom node count mismatch across families: FLUX has ${fluxLiveNodes.length}, LTX has ${ltxLiveNodes.length}`
+    );
+  }
+
+  const fluxLiveNodeMap = new Map<string, { commit: string | null; status: string }>();
+  for (const node of fluxLiveNodes) {
+    fluxLiveNodeMap.set(node.name, { commit: node.commit, status: node.status });
+  }
+
+  const ltxLiveNodeMap = new Map<string, { commit: string | null; status: string }>();
+  for (const node of ltxLiveNodes) {
+    ltxLiveNodeMap.set(node.name, { commit: node.commit, status: node.status });
+  }
+
+  for (const node of fluxLiveNodes) {
+    const ltxNode = ltxLiveNodeMap.get(node.name);
+    if (ltxNode === undefined) {
+      throw new PreflightError(
+        `Live custom node mismatch across families: LTX missing custom node "${node.name}"`
+      );
+    }
+    if (ltxNode.commit !== node.commit || ltxNode.status !== node.status) {
+      throw new PreflightError(
+        `Live custom node "${node.name}" revision drift across families: FLUX has commit "${String(node.commit)}" (status "${node.status}"), LTX has commit "${String(ltxNode.commit)}" (status "${ltxNode.status}")`
+      );
+    }
+  }
+
+  for (const node of ltxLiveNodes) {
+    if (!fluxLiveNodeMap.has(node.name)) {
+      throw new PreflightError(
+        `Live custom node mismatch across families: FLUX missing custom node "${node.name}"`
+      );
+    }
+  }
 }

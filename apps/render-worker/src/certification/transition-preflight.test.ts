@@ -788,6 +788,237 @@ describe("apps/render-worker/src/certification/transition-preflight", () => {
       }).toThrow(/Live ComfyUI commit mismatch across families/i);
       expect(sideEffect).not.toHaveBeenCalled();
     });
+
+    it("rejects when FLUX and LTX have divergent custom node counts across families", () => {
+      const sideEffect = vi.fn();
+      const fluxProfile = createValidFluxProfile();
+      const ltxProfile = createValidLtxProfile();
+
+      const customNode = {
+        name: "ComfyUI-Manager",
+        commit: "1111111111111111111111111111111111111111",
+        status: "tracked" as const
+      };
+
+      const fluxApproved: CertificationProvenanceReport = {
+        ...createValidFluxApprovedReport(),
+        git: {
+          ...createValidFluxApprovedReport().git,
+          customNodes: [customNode]
+        }
+      };
+      const fluxLive: CertificationProvenanceReport = {
+        ...createValidFluxLiveReport(),
+        git: {
+          ...createValidFluxLiveReport().git,
+          customNodes: [customNode]
+        }
+      };
+
+      const ltxApproved: CertificationProvenanceReport = {
+        ...createValidLtxApprovedReport(),
+        git: {
+          ...createValidLtxApprovedReport().git,
+          customNodes: []
+        }
+      };
+      const ltxLive: CertificationProvenanceReport = {
+        ...createValidLtxLiveReport(),
+        git: {
+          ...createValidLtxLiveReport().git,
+          customNodes: []
+        }
+      };
+
+      expect(() => {
+        verifyTransitionGoldMasters({
+          profiles: { flux: fluxProfile, ltx: ltxProfile },
+          approved: { flux: fluxApproved, ltx: ltxApproved },
+          live: { flux: fluxLive, ltx: ltxLive }
+        });
+        sideEffect();
+      }).toThrow(/Live custom node count mismatch across families/i);
+      expect(sideEffect).not.toHaveBeenCalled();
+    });
+
+    it("rejects when FLUX and LTX have divergent custom node names across families", () => {
+      const sideEffect = vi.fn();
+      const fluxProfile = createValidFluxProfile();
+      const ltxProfile = createValidLtxProfile();
+
+      const fluxNode = {
+        name: "ComfyUI-Manager",
+        commit: "1111111111111111111111111111111111111111",
+        status: "tracked" as const
+      };
+      const ltxNode = {
+        name: "ComfyUI-VideoHelperSuite",
+        commit: "1111111111111111111111111111111111111111",
+        status: "tracked" as const
+      };
+
+      const fluxApproved: CertificationProvenanceReport = {
+        ...createValidFluxApprovedReport(),
+        git: { ...createValidFluxApprovedReport().git, customNodes: [fluxNode] }
+      };
+      const fluxLive: CertificationProvenanceReport = {
+        ...createValidFluxLiveReport(),
+        git: { ...createValidFluxLiveReport().git, customNodes: [fluxNode] }
+      };
+
+      const ltxApproved: CertificationProvenanceReport = {
+        ...createValidLtxApprovedReport(),
+        git: { ...createValidLtxApprovedReport().git, customNodes: [ltxNode] }
+      };
+      const ltxLive: CertificationProvenanceReport = {
+        ...createValidLtxLiveReport(),
+        git: { ...createValidLtxLiveReport().git, customNodes: [ltxNode] }
+      };
+
+      expect(() => {
+        verifyTransitionGoldMasters({
+          profiles: { flux: fluxProfile, ltx: ltxProfile },
+          approved: { flux: fluxApproved, ltx: ltxApproved },
+          live: { flux: fluxLive, ltx: ltxLive }
+        });
+        sideEffect();
+      }).toThrow(/Live custom node mismatch across families/i);
+      expect(sideEffect).not.toHaveBeenCalled();
+    });
+
+    it("rejects when FLUX and LTX have divergent custom node commits across families", () => {
+      const sideEffect = vi.fn();
+      const fluxProfile = createValidFluxProfile();
+      const ltxProfile = createValidLtxProfile();
+
+      const fluxNode = {
+        name: "ComfyUI-Manager",
+        commit: "1111111111111111111111111111111111111111",
+        status: "tracked" as const
+      };
+      const ltxNode = {
+        name: "ComfyUI-Manager",
+        commit: "2222222222222222222222222222222222222222",
+        status: "tracked" as const
+      };
+
+      const fluxApproved: CertificationProvenanceReport = {
+        ...createValidFluxApprovedReport(),
+        git: { ...createValidFluxApprovedReport().git, customNodes: [fluxNode] }
+      };
+      const fluxLive: CertificationProvenanceReport = {
+        ...createValidFluxLiveReport(),
+        git: { ...createValidFluxLiveReport().git, customNodes: [fluxNode] }
+      };
+
+      const ltxApproved: CertificationProvenanceReport = {
+        ...createValidLtxApprovedReport(),
+        git: { ...createValidLtxApprovedReport().git, customNodes: [ltxNode] }
+      };
+      const ltxLive: CertificationProvenanceReport = {
+        ...createValidLtxLiveReport(),
+        git: { ...createValidLtxLiveReport().git, customNodes: [ltxNode] }
+      };
+
+      expect(() => {
+        verifyTransitionGoldMasters({
+          profiles: { flux: fluxProfile, ltx: ltxProfile },
+          approved: { flux: fluxApproved, ltx: ltxApproved },
+          live: { flux: fluxLive, ltx: ltxLive }
+        });
+        sideEffect();
+      }).toThrow(/Live custom node "ComfyUI-Manager" revision drift across families/i);
+      expect(sideEffect).not.toHaveBeenCalled();
+    });
+
+    it("rejects when FLUX and LTX have divergent custom node statuses across families", () => {
+      const sideEffect = vi.fn();
+      const fluxProfile = createValidFluxProfile();
+      const ltxProfile = createValidLtxProfile();
+
+      const fluxNode = {
+        name: "ComfyUI-Manager",
+        commit: "1111111111111111111111111111111111111111",
+        status: "tracked" as const
+      };
+      const ltxNode = {
+        name: "ComfyUI-Manager",
+        commit: "1111111111111111111111111111111111111111",
+        status: "not_git" as const
+      };
+
+      const fluxApproved: CertificationProvenanceReport = {
+        ...createValidFluxApprovedReport(),
+        git: { ...createValidFluxApprovedReport().git, customNodes: [fluxNode] }
+      };
+      const fluxLive: CertificationProvenanceReport = {
+        ...createValidFluxLiveReport(),
+        git: { ...createValidFluxLiveReport().git, customNodes: [fluxNode] }
+      };
+
+      const ltxApproved: CertificationProvenanceReport = {
+        ...createValidLtxApprovedReport(),
+        git: { ...createValidLtxApprovedReport().git, customNodes: [ltxNode] }
+      };
+      const ltxLive: CertificationProvenanceReport = {
+        ...createValidLtxLiveReport(),
+        git: { ...createValidLtxLiveReport().git, customNodes: [ltxNode] }
+      };
+
+      expect(() => {
+        verifyTransitionGoldMasters({
+          profiles: { flux: fluxProfile, ltx: ltxProfile },
+          approved: { flux: fluxApproved, ltx: ltxApproved },
+          live: { flux: fluxLive, ltx: ltxLive }
+        });
+        sideEffect();
+      }).toThrow(/Live custom node "ComfyUI-Manager" revision drift across families/i);
+      expect(sideEffect).not.toHaveBeenCalled();
+    });
+
+    it("accepts identical custom nodes across both families", () => {
+      const fluxProfile = createValidFluxProfile();
+      const ltxProfile = createValidLtxProfile();
+
+      const customNodes = [
+        {
+          name: "ComfyUI-Manager",
+          commit: "1111111111111111111111111111111111111111",
+          status: "tracked" as const
+        },
+        {
+          name: "ComfyUI-VideoHelperSuite",
+          commit: "2222222222222222222222222222222222222222",
+          status: "tracked" as const
+        }
+      ];
+
+      const fluxApproved: CertificationProvenanceReport = {
+        ...createValidFluxApprovedReport(),
+        git: { ...createValidFluxApprovedReport().git, customNodes }
+      };
+      const fluxLive: CertificationProvenanceReport = {
+        ...createValidFluxLiveReport(),
+        git: { ...createValidFluxLiveReport().git, customNodes }
+      };
+
+      const ltxApproved: CertificationProvenanceReport = {
+        ...createValidLtxApprovedReport(),
+        git: { ...createValidLtxApprovedReport().git, customNodes }
+      };
+      const ltxLive: CertificationProvenanceReport = {
+        ...createValidLtxLiveReport(),
+        git: { ...createValidLtxLiveReport().git, customNodes }
+      };
+
+      expect(() =>
+        verifyTransitionGoldMasters({
+          profiles: { flux: fluxProfile, ltx: ltxProfile },
+          approved: { flux: fluxApproved, ltx: ltxApproved },
+          live: { flux: fluxLive, ltx: ltxLive }
+        })
+      ).not.toThrow();
+    });
   });
 
   describe("profile-baseline-and-structural-validation", () => {
