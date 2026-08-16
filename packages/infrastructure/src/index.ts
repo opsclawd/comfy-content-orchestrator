@@ -74,3 +74,40 @@ export {
   type ProvenanceCliOptions,
   type ProvenanceCliDependencies
 } from "./comfyui/provenance/cli.js";
+
+export {
+  NvidiaSmiTelemetryAdapter,
+  parseNvidiaSmiMemoryCsv,
+  NvidiaSmiTelemetryError,
+  NVIDIA_SMI_COMMAND,
+  NVIDIA_SMI_MEMORY_ARGS,
+  type NvidiaSmiTelemetryAdapterOptions,
+  type NvidiaSmiTelemetryErrorContext,
+  type NvidiaSmiExecFileFn,
+  type NvidiaSmiMemoryResult
+} from "./telemetry/nvidia-smi-telemetry-adapter.js";
+
+export {
+  LinuxHostTelemetryAdapter,
+  parseProcMeminfo,
+  parseProcVmstat,
+  parseProcPidStatus,
+  parseProcPidStat,
+  LinuxHostTelemetryError,
+  type LinuxHostReadFileFn,
+  type ProcMeminfoResult,
+  type ProcVmstatResult,
+  type ProcPidStatusResult,
+  type ProcPidStatResult,
+  type LinuxHostTelemetryAdapterOptions,
+  type LinuxHostTelemetryErrorContext
+} from "./telemetry/linux-host-telemetry-adapter.js";
+
+export {
+  collectRunnerEnvironment,
+  type RunnerEnvironmentDependencies,
+  type RunnerEnvironmentExecFileFn,
+  type RunnerEnvironmentOptions,
+  type RunnerEnvironmentOs,
+  type RunnerEnvironmentReadFileFn
+} from "./telemetry/runner-environment.js";
