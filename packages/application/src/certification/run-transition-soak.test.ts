@@ -16,11 +16,7 @@ import type {
   RenderResult
 } from "../ports/render-engine-port.js";
 import type { TelemetrySamplerControl } from "./run-certification.js";
-import {
-  type TransitionSoakPhase,
-  runTransitionSoak
-} from "./run-transition-soak.js";
-
+import { type TransitionSoakPhase, runTransitionSoak } from "./run-transition-soak.js";
 
 function createValidIdentities(): {
   flux: TransitionWorkloadIdentity;

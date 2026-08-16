@@ -31,7 +31,6 @@ export type TransitionSoakPhase =
   | "completed";
 
 export interface RunTransitionSoakOptions {
-
   readonly runId: string;
   readonly runnerProfile?: string;
   readonly requestedTransitionCount?: number;
@@ -141,8 +140,7 @@ function isOomError(errOrCode: unknown): boolean {
     const details = (errOrCode as { details?: unknown }).details;
     if (typeof details === "object" && details !== null) {
       const isOom =
-        (details as { isOom?: unknown; oom?: unknown }).isOom ??
-        (details as { oom?: unknown }).oom;
+        (details as { isOom?: unknown; oom?: unknown }).isOom ?? (details as { oom?: unknown }).oom;
       if (isOom === true) return true;
     }
   }
