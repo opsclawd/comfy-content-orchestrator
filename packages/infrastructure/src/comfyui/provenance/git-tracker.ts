@@ -48,6 +48,15 @@ export async function readGitCommit(repositoryDir: string): Promise<string> {
   return commit;
 }
 
+async function hasPythonPackageEntryPoint(nodePath: string): Promise<boolean> {
+  try {
+    const entryPoint = await stat(join(nodePath, "__init__.py"));
+    return entryPoint.isFile();
+  } catch {
+    return false;
+  }
+}
+
 export async function collectGitProvenance(comfyUiDir: string): Promise<GitProvenance> {
   let comfyUiCommit: string;
   try {
@@ -76,7 +85,12 @@ export async function collectGitProvenance(comfyUiDir: string): Promise<GitProve
   }
 
   const dirNames = entries
-    .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
+    .filter(
+      (entry) =>
+        (entry.isDirectory() || entry.isSymbolicLink()) &&
+        !entry.name.startsWith(".") &&
+        !entry.name.startsWith("__")
+    )
     .map((entry) => entry.name)
     .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
@@ -97,6 +111,10 @@ export async function collectGitProvenance(comfyUiDir: string): Promise<GitProve
       const error = err as { stderr?: string; message?: string };
       const errText = `${error.stderr ?? ""} ${error.message ?? ""}`.toLowerCase();
       if (errText.includes("not a git repository")) {
+        if (!(await hasPythonPackageEntryPoint(nodePath))) {
+          continue;
+        }
+
         customNodes.push(
           Object.freeze({
             name,

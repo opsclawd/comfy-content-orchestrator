@@ -46,7 +46,7 @@ describe("ComfyUI and Custom-Node Git Tracker", () => {
     expect(provenance.customNodes).toEqual([]);
   });
 
-  it("git provenance sorts custom nodes and marks non-Git directories", async () => {
+  it("git provenance sorts Git and copy-installed custom nodes", async () => {
     const comfyUiDir = join(tempDir, "comfyui");
     const comfyCommit = await initGitRepo(comfyUiDir);
 
@@ -58,7 +58,9 @@ describe("ComfyUI and Custom-Node Git Tracker", () => {
     const commitA = await initGitRepo(join(customNodesDir, "custom-node-a"));
 
     // Create a plain directory (not a git repo)
-    await fsPromises.mkdir(join(customNodesDir, "plain-dir"));
+    const copiedNodeDir = join(customNodesDir, "plain-dir");
+    await fsPromises.mkdir(copiedNodeDir);
+    await fsPromises.writeFile(join(copiedNodeDir, "__init__.py"), "");
 
     const provenance: GitProvenance = await collectGitProvenance(comfyUiDir);
 
@@ -131,5 +133,38 @@ describe("ComfyUI and Custom-Node Git Tracker", () => {
         status: "unavailable"
       }
     ]);
+  });
+
+  it("ignores the render host's non-node custom_nodes entries", async () => {
+    const comfyUiDir = join(tempDir, "comfyui");
+    const comfyCommit = await initGitRepo(comfyUiDir);
+    const customNodesDir = join(comfyUiDir, "custom_nodes");
+
+    await fsPromises.mkdir(join(customNodesDir, "__pycache__"), { recursive: true });
+    await fsPromises.writeFile(join(customNodesDir, "example_node.py.example"), "");
+    await fsPromises.writeFile(join(customNodesDir, "websocket_image_save.py"), "");
+
+    const provenance = await collectGitProvenance(comfyUiDir);
+
+    expect(provenance).toEqual({
+      comfyUiCommit: comfyCommit,
+      customNodes: []
+    });
+  });
+
+  it("ignores hidden, dunder-prefixed, and package-less directories", async () => {
+    const comfyUiDir = join(tempDir, "comfyui");
+    await initGitRepo(comfyUiDir);
+    const customNodesDir = join(comfyUiDir, "custom_nodes");
+
+    await initGitRepo(join(customNodesDir, ".hidden-node"));
+    const dunderNodeDir = join(customNodesDir, "__dunder_node");
+    await fsPromises.mkdir(dunderNodeDir, { recursive: true });
+    await fsPromises.writeFile(join(dunderNodeDir, "__init__.py"), "");
+    await fsPromises.mkdir(join(customNodesDir, "backup"));
+
+    const provenance = await collectGitProvenance(comfyUiDir);
+
+    expect(provenance.customNodes).toEqual([]);
   });
 });
