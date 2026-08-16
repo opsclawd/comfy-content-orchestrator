@@ -7,9 +7,9 @@
       "workflowRelativePath": "flux_schnell_draft_api.json",
       "expectedWorkflowHash": "00abd5b566eaa1e2cdf5e9be4e57b707d24ed10c6d668e438e075891f478f6dc",
       "source": {
-        "kind": "validated_host_export",
+        "kind": "authored_from_spec",
         "uri": "https://github.com/black-forest-labs/flux",
-        "revision": "main",
+        "revision": "unpinned",
         "license": "Apache-2.0"
       },
       "baseline": {
@@ -39,9 +39,9 @@
       "workflowRelativePath": "ltx_25_720p_97f_api.json",
       "expectedWorkflowHash": "e6ee75a1df0ac80e4c420eadd820028a9a389f5e680c3de6d89c37159d9f582a",
       "source": {
-        "kind": "official_upstream",
+        "kind": "authored_from_spec",
         "uri": "https://github.com/Lightricks/LTX-2",
-        "revision": "main",
+        "revision": "unpinned",
         "license": "LTX-2 Community License"
       },
       "baseline": {

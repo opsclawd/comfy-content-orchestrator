@@ -2,12 +2,29 @@
 
 This directory contains the version-controlled, source-gated Gold Master ComfyUI API workflow templates and certification provenance manifest used by the Content Orchestrator.
 
+## Certification status
+
+> [!IMPORTANT]
+> These workflows were **authored from the parameters in `docs/prd.md` §3.6.5**, not
+> exported from a running ComfyUI host and not taken from an upstream repository
+> export. No host validation has been performed: `COMFYUI_URL` is unset and the
+> render host was unreachable when these files were produced.
+>
+> The canonical SHA-256 below pins **this file's** contents, so a change is
+> detectable. It does not attest that the workflow executes on the render host or
+> that it matches any upstream revision. `docs/prd.md` §3.6.5 still leaves the
+> RenderProfile `workflowHash` uncertified for exactly that reason.
+>
+> When each workflow is exported from the Trinidad host and confirmed to run,
+> replace `source.kind` with `validated_host_export`, set `revision` to the
+> host/upstream commit, and re-pin the hash.
+
 ## Workflows and Sources
 
 ### 1. `flux-schnell-draft` (`templates/flux_schnell_draft_api.json`)
-- **Source Kind:** Validated host API export (`validated_host_export`).
+- **Source Kind:** Authored from specification (`authored_from_spec`).
 - **Source URI:** `https://github.com/black-forest-labs/flux`
-- **Revision:** `main` (host-validated 4-step draft baseline).
+- **Revision:** `unpinned` — the URI names the project, not a commit this file was derived from.
 - **Redistribution Basis & License:** Apache-2.0. The FLUX.1 [schnell] workflow definition is distributed under the Apache-2.0 license.
 - **Workflow Format:** Exact ComfyUI API object map targeting the 4-step Schnell sampler path.
 - **Canonical SHA-256:** `00abd5b566eaa1e2cdf5e9be4e57b707d24ed10c6d668e438e075891f478f6dc`
@@ -15,9 +32,9 @@ This directory contains the version-controlled, source-gated Gold Master ComfyUI
   - `models/checkpoints/flux1-schnell.safetensors`
 
 ### 2. `ltx-25-720p-97f` (`templates/ltx_25_720p_97f_api.json`)
-- **Source Kind:** Official upstream template export (`official_upstream`).
+- **Source Kind:** Authored from specification (`authored_from_spec`).
 - **Source URI:** `https://github.com/Lightricks/LTX-2`
-- **Revision:** `main`
+- **Revision:** `unpinned` — the URI names the project, not a commit this file was derived from.
 - **Redistribution Basis & License:** LTX-2 Community License Agreement (dated Jan. 5, 2026).
 - **Workflow Format:** Exact ComfyUI API object map targeting 1280x720 resolution, 97 frames (~5 seconds at 24 fps), and 8 DiT sampling steps.
 - **Canonical SHA-256:** `e6ee75a1df0ac80e4c420eadd820028a9a389f5e680c3de6d89c37159d9f582a`

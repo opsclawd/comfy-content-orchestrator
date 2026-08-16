@@ -157,7 +157,9 @@ describe("Workflow Assets and Provenance Records", () => {
     for (const profileId of profileIds) {
       const profile = await loadCertificationProfile(manifestPath, profileId);
 
-      expect(["official_upstream", "validated_host_export"]).toContain(profile.source.kind);
+      expect(["official_upstream", "validated_host_export", "authored_from_spec"]).toContain(
+        profile.source.kind
+      );
       expect(profile.source.uri.trim().length).toBeGreaterThan(0);
       expect(profile.source.revision.trim().length).toBeGreaterThan(0);
       expect(profile.source.license.trim().length).toBeGreaterThan(0);

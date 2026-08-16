@@ -19,7 +19,11 @@ export interface CertificationProfile {
   readonly workflowRelativePath: string;
   readonly expectedWorkflowHash: string;
   readonly source: Readonly<{
-    kind: "official_upstream" | "validated_host_export";
+    // "authored_from_spec": transcribed from a written specification, not
+    // obtained from an upstream export or validated against a running host.
+    // Certification replaces this once the workflow is exported from the
+    // render host and its hash pinned.
+    kind: "official_upstream" | "validated_host_export" | "authored_from_spec";
     uri: string;
     revision: string;
     license: string;
@@ -116,9 +120,13 @@ function validateSource(source: unknown, profileId: string): CertificationProfil
 
   const { kind, uri, revision, license } = source;
 
-  if (kind !== "official_upstream" && kind !== "validated_host_export") {
+  if (
+    kind !== "official_upstream" &&
+    kind !== "validated_host_export" &&
+    kind !== "authored_from_spec"
+  ) {
     throw new Error(
-      `Profile "${profileId}": source.kind must be "official_upstream" or "validated_host_export", received: ${String(kind)}`
+      `Profile "${profileId}": source.kind must be "official_upstream", "validated_host_export", or "authored_from_spec", received: ${String(kind)}`
     );
   }
 
