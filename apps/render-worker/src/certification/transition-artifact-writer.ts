@@ -1,7 +1,4 @@
-import {
-  TransitionSoakArtifactSchema,
-  type TransitionSoakArtifact
-} from "@cco/contracts";
+import { TransitionSoakArtifactSchema, type TransitionSoakArtifact } from "@cco/contracts";
 import { renderTransitionSoakSummary } from "@cco/application";
 import {
   publishArtifactPair,
