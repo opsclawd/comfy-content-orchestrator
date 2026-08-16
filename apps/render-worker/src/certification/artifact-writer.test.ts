@@ -76,7 +76,8 @@ function createValidPassedFixture(
           gpu: {
             totalVramMb: 24564,
             usedVramMb: 1024,
-            freeVramMb: 23540
+            freeVramMb: 23540,
+            reservedVramMb: 0
           },
           host: {
             hostRamTotalMb: 64000,
@@ -101,7 +102,8 @@ function createValidPassedFixture(
           gpu: {
             totalVramMb: 24564,
             usedVramMb: 24028,
-            freeVramMb: 536
+            freeVramMb: 536,
+            reservedVramMb: 0
           },
           host: {
             hostRamTotalMb: 64000,
@@ -126,7 +128,8 @@ function createValidPassedFixture(
           gpu: {
             totalVramMb: 24564,
             usedVramMb: 1024,
-            freeVramMb: 23540
+            freeVramMb: 23540,
+            reservedVramMb: 0
           },
           host: {
             hostRamTotalMb: 64000,
@@ -148,6 +151,7 @@ function createValidPassedFixture(
       ],
       samplingErrors: [],
       peakVramMb: 24028,
+      reservedVramMb: 0,
       peakHostRamUsedMb: 19000,
       peakProcessRssMb: 4500,
       swapUsedDeltaMb: 0,

@@ -14,6 +14,7 @@ export interface NvidiaSmiMemoryResult {
   readonly totalVramMb: number;
   readonly usedVramMb: number;
   readonly freeVramMb: number;
+  readonly reservedVramMb: number;
 }
 
 export type NvidiaSmiExecFileFn = (
@@ -143,10 +144,13 @@ export function parseNvidiaSmiMemoryCsv(
     );
   }
 
+  const reservedVramMb = totalVramMb - accountedVramMb;
+
   return {
     totalVramMb,
     usedVramMb,
-    freeVramMb
+    freeVramMb,
+    reservedVramMb
   };
 }
 
@@ -205,6 +209,7 @@ export class NvidiaSmiTelemetryAdapter implements GpuTelemetryPort {
         totalVramMb: parsed.totalVramMb,
         usedVramMb: parsed.usedVramMb,
         freeVramMb: parsed.freeVramMb,
+        reservedVramMb: parsed.reservedVramMb,
         measuredAt: this.nowFn()
       };
     } catch (err: unknown) {

@@ -130,6 +130,7 @@ function createEmptyTelemetryData(): CertificationTelemetryData {
     samples: [],
     samplingErrors: [],
     peakVramMb: null,
+    reservedVramMb: null,
     peakHostRamUsedMb: null,
     peakProcessRssMb: null,
     swapUsedDeltaMb: null,

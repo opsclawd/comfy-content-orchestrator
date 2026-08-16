@@ -63,6 +63,7 @@ export function aggregateCertificationTelemetry(
       })),
       samplingErrors: samplingErrors.map((e) => ({ ...e })),
       peakVramMb: null,
+      reservedVramMb: null,
       peakHostRamUsedMb: null,
       peakProcessRssMb: null,
       swapUsedDeltaMb: null,
@@ -78,12 +79,16 @@ export function aggregateCertificationTelemetry(
   }
 
   let peakVramMb = 0;
+  let reservedVramMb = 0;
   let peakHostRamUsedMb = 0;
   let peakProcessRssMb = 0;
 
   for (const sample of samples) {
     if (sample.gpu.usedVramMb > peakVramMb) {
       peakVramMb = sample.gpu.usedVramMb;
+    }
+    if (sample.gpu.reservedVramMb > reservedVramMb) {
+      reservedVramMb = sample.gpu.reservedVramMb;
     }
     if (sample.host.hostRamUsedMb > peakHostRamUsedMb) {
       peakHostRamUsedMb = sample.host.hostRamUsedMb;
@@ -146,6 +151,7 @@ export function aggregateCertificationTelemetry(
     })),
     samplingErrors: samplingErrors.map((e) => ({ ...e })),
     peakVramMb,
+    reservedVramMb,
     peakHostRamUsedMb,
     peakProcessRssMb,
     swapUsedDeltaMb,
@@ -240,6 +246,7 @@ export function evaluateLtxResourceGate(
     telemetry.samples.length > 0 &&
     telemetry.samplingErrors.length === 0 &&
     telemetry.peakVramMb !== null &&
+    telemetry.reservedVramMb !== null &&
     telemetry.peakHostRamUsedMb !== null &&
     telemetry.peakProcessRssMb !== null &&
     telemetry.swapUsedDeltaMb !== null &&
@@ -333,6 +340,19 @@ export function renderCertificationSummary(artifact: LtxCertificationArtifact): 
     `| :--- | :--- |`,
     `| **Total Render Duration** | ${formatVal(artifact.render.totalDurationMs, "ms")} |`,
     `| **Peak VRAM** | ${formatVal(artifact.telemetry.peakVramMb, "MB")} |`,
+    `| **Driver-Reserved VRAM** | ${formatVal(artifact.telemetry.reservedVramMb, "MB")} |`,
+    `| **Allocatable VRAM Denominator** | ${
+      artifact.telemetry.reservedVramMb !== null
+        ? `${formatVal(artifact.environment.gpuTotalMemoryMb - artifact.telemetry.reservedVramMb, "MB")} (Nameplate: ${formatVal(artifact.environment.gpuTotalMemoryMb, "MB")})`
+        : "N/A"
+    } |`,
+    `| **Peak VRAM Utilisation (Allocatable)** | ${
+      artifact.telemetry.peakVramMb !== null &&
+      artifact.telemetry.reservedVramMb !== null &&
+      artifact.environment.gpuTotalMemoryMb - artifact.telemetry.reservedVramMb > 0
+        ? `${((artifact.telemetry.peakVramMb / (artifact.environment.gpuTotalMemoryMb - artifact.telemetry.reservedVramMb)) * 100).toFixed(1)}%`
+        : "N/A"
+    } |`,
     `| **Peak Host RAM Used** | ${formatVal(artifact.telemetry.peakHostRamUsedMb, "MB")} |`,
     `| **Peak Process RSS** | ${formatVal(artifact.telemetry.peakProcessRssMb, "MB")} |`,
     `| **Swap Used Delta** | ${formatVal(artifact.telemetry.swapUsedDeltaMb, "MB")} |`,

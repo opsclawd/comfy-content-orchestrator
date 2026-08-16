@@ -80,6 +80,7 @@ describe("Application capability ports contract tests", () => {
             totalVramMb: 24576,
             usedVramMb: 8192,
             freeVramMb: 16384,
+            reservedVramMb: 0,
             measuredAt: "2026-08-15T06:00:00.000Z"
           };
         }
@@ -89,6 +90,7 @@ describe("Application capability ports contract tests", () => {
       expect(memory.totalVramMb).toBe(24576);
       expect(memory.usedVramMb).toBe(8192);
       expect(memory.freeVramMb).toBe(16384);
+      expect(memory.reservedVramMb).toBe(0);
       expect(memory.measuredAt).toBe("2026-08-15T06:00:00.000Z");
     });
   });

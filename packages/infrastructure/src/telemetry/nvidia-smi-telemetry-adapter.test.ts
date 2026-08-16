@@ -31,6 +31,7 @@ describe("NvidiaSmiTelemetryAdapter", () => {
       totalVramMb: 24576,
       usedVramMb: 8192,
       freeVramMb: 16384,
+      reservedVramMb: 0,
       measuredAt: fakeNow
     });
 
@@ -45,6 +46,7 @@ describe("NvidiaSmiTelemetryAdapter", () => {
       totalVramMb: 24576,
       usedVramMb: 2048,
       freeVramMb: 22528,
+      reservedVramMb: 0,
       measuredAt: fakeNow
     });
   });
@@ -87,14 +89,16 @@ describe("NvidiaSmiTelemetryAdapter", () => {
     expect(reservedVramReading).toEqual({
       totalVramMb: 24564,
       usedVramMb: 600,
-      freeVramMb: 23451
+      freeVramMb: 23451,
+      reservedVramMb: 513
     });
 
     const exactReading = parseNvidiaSmiMemoryCsv("24576, 8192, 16384\n", 0);
     expect(exactReading).toEqual({
       totalVramMb: 24576,
       usedVramMb: 8192,
-      freeVramMb: 16384
+      freeVramMb: 16384,
+      reservedVramMb: 0
     });
   });
 
@@ -194,8 +198,18 @@ describe("NvidiaSmiTelemetryAdapter", () => {
 
     expect(parsedLf0).toEqual(parsedCrlf0);
     expect(parsedLf1).toEqual(parsedCrlf1);
-    expect(parsedLf0).toEqual({ totalVramMb: 24576, usedVramMb: 8192, freeVramMb: 16384 });
-    expect(parsedLf1).toEqual({ totalVramMb: 24576, usedVramMb: 4096, freeVramMb: 20480 });
+    expect(parsedLf0).toEqual({
+      totalVramMb: 24576,
+      usedVramMb: 8192,
+      freeVramMb: 16384,
+      reservedVramMb: 0
+    });
+    expect(parsedLf1).toEqual({
+      totalVramMb: 24576,
+      usedVramMb: 4096,
+      freeVramMb: 20480,
+      reservedVramMb: 0
+    });
   });
 
   it("validates adapter constructor options", () => {

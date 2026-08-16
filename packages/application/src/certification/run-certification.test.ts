@@ -74,7 +74,8 @@ function createSample(
     gpu: {
       totalVramMb: 24564,
       usedVramMb: phase === "post_unload" ? 1024 : 18000,
-      freeVramMb: phase === "post_unload" ? 23540 : 6564
+      freeVramMb: phase === "post_unload" ? 23540 : 6564,
+      reservedVramMb: 0
     },
     host: {
       hostRamTotalMb: 64000,
@@ -107,6 +108,7 @@ function createValidTelemetryData(): CertificationTelemetryData {
     samples,
     samplingErrors: [],
     peakVramMb: 18000,
+    reservedVramMb: 0,
     peakHostRamUsedMb: 14000,
     peakProcessRssMb: 1200,
     swapUsedDeltaMb: 0,

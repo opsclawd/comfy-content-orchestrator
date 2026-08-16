@@ -95,6 +95,8 @@ flowchart LR
 |---|---|---|---|
 | **Sampling Interval** | `TelemetrySampler` | `200 ms` | Fixed sampling loop interval polling GPU and host adapters concurrently. |
 | **GPU VRAM (Total/Used/Free)** | `nvidia-smi --query-gpu=memory.total,memory.used,memory.free --format=csv,noheader,nounits` | `MB` | Exact integer values reported by NVIDIA driver without units. |
+| **Driver-Reserved VRAM (`reservedVramMb`)** | GPU Telemetry Series | `MB` | `totalVramMb - (usedVramMb + freeVramMb)`. Constant driver/VBIOS reservation. |
+| **Allocatable VRAM Denominator** | GPU Telemetry Series | `MB` | `totalVramMb - reservedVramMb` (or `usedVramMb + freeVramMb`). The true denominator for headroom and utilisation. |
 | **Peak VRAM** | GPU Telemetry Series | `MB` | Maximum `usedVramMb` observed across all samples in the run. |
 | **Host RAM (Total/Avail/Used)** | `/proc/meminfo` | `MB` | `hostRamTotalMb = round(MemTotal_kB / 1024)`<br>`hostRamAvailableMb = round(MemAvailable_kB / 1024)`<br>`hostRamUsedMb = hostRamTotalMb - hostRamAvailableMb` |
 | **Peak Host Used RAM** | Host Telemetry Series | `MB` | Maximum `hostRamUsedMb` (`MemTotal - MemAvailable`) observed across all samples. |
