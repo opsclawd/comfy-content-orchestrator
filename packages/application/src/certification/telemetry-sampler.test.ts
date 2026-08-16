@@ -382,6 +382,207 @@ describe("TelemetrySampler", () => {
     expect(stoppedData.samplingErrors).toHaveLength(4);
   });
 
+  it("does not overlap scheduled timer sample when sampleNow is in flight", async () => {
+    let inFlight = 0;
+    let maxConcurrent = 0;
+    const sampleNowDeferred = createDeferred<GpuMemorySnapshot>();
+
+    const gpuPort: GpuTelemetryPort = {
+      readMemory: vi.fn(async () => {
+        inFlight++;
+        maxConcurrent = Math.max(maxConcurrent, inFlight);
+        try {
+          if ((gpuPort.readMemory as ReturnType<typeof vi.fn>).mock.calls.length === 2) {
+            return await sampleNowDeferred.promise;
+          }
+          return {
+            totalVramMb: 24564,
+            usedVramMb: 1024,
+            freeVramMb: 23540,
+            measuredAt: new Date().toISOString()
+          };
+        } finally {
+          inFlight--;
+        }
+      })
+    };
+    const hostPort = createMockHostPort();
+
+    const sampler = new TelemetrySampler({
+      gpuTelemetryPort: gpuPort,
+      hostTelemetryPort: hostPort,
+      intervalMs: 200
+    });
+
+    await sampler.start();
+    expect(gpuPort.readMemory).toHaveBeenCalledTimes(1);
+
+    // At t=100ms, initiate an explicit sampleNow which is slow
+    await vi.advanceTimersByTimeAsync(100);
+    const sampleNowPromise = sampler.sampleNow("sampling");
+    expect(gpuPort.readMemory).toHaveBeenCalledTimes(2);
+    expect(inFlight).toBe(1);
+
+    // At t=200ms, the scheduled timer expires while sampleNow is in flight
+    await vi.advanceTimersByTimeAsync(100);
+    // Scheduled timer must wait for sampleNow and NOT start another concurrent read
+    expect(gpuPort.readMemory).toHaveBeenCalledTimes(2);
+    expect(maxConcurrent).toBe(1);
+
+    // Resolve sampleNow
+    sampleNowDeferred.resolve({
+      totalVramMb: 24564,
+      usedVramMb: 2048,
+      freeVramMb: 22516,
+      measuredAt: new Date().toISOString()
+    });
+    await sampleNowPromise;
+
+    // After sampleNow resolves, the scheduled timer proceeds
+    await vi.advanceTimersByTimeAsync(0);
+    expect(gpuPort.readMemory).toHaveBeenCalledTimes(3);
+    expect(maxConcurrent).toBe(1);
+
+    await sampler.stop();
+  });
+
+  it("returns null for negative deltas instead of clamping to zero", async () => {
+    let callCount = 0;
+    const gpuPort = createMockGpuPort();
+    const hostPort: HostTelemetryPort = {
+      readHostMemory: vi.fn(async () => {
+        callCount++;
+        return {
+          hostRamTotalMb: 64000,
+          hostRamAvailableMb: 50000,
+          hostRamUsedMb: 14000,
+          swapTotalMb: 16000,
+          swapUsedMb: callCount === 1 ? 500 : 100, // swap decreased => negative delta
+          systemSwapInPages: callCount === 1 ? 200 : 50, // counter reset
+          systemSwapOutPages: 0,
+          systemMajorPageFaults: 100,
+          systemMinorPageFaults: 5000,
+          processPid: 12345,
+          processStartTimeTicks: 100000,
+          processRssMb: 1200,
+          processMajorPageFaults: 10,
+          processMinorPageFaults: 500,
+          measuredAt: "2026-08-15T20:00:00.000Z"
+        };
+      })
+    };
+
+    const sampler = new TelemetrySampler({
+      gpuTelemetryPort: gpuPort,
+      hostTelemetryPort: hostPort,
+      intervalMs: 200
+    });
+
+    await sampler.start();
+    await vi.advanceTimersByTimeAsync(200);
+    const data = await sampler.stop();
+
+    expect(data.swapUsedDeltaMb).toBeNull();
+    expect(data.systemSwapInPageDelta).toBeNull();
+    expect(data.systemSwapOutPageDelta).toBe(0);
+    expect(data.systemMajorPageFaultDelta).toBe(0);
+  });
+
+  it("returns null for process fault deltas when process PID or start time changes", async () => {
+    let callCount = 0;
+    const gpuPort = createMockGpuPort();
+    const hostPort: HostTelemetryPort = {
+      readHostMemory: vi.fn(async () => {
+        callCount++;
+        return {
+          hostRamTotalMb: 64000,
+          hostRamAvailableMb: 50000,
+          hostRamUsedMb: 14000,
+          swapTotalMb: 16000,
+          swapUsedMb: 0,
+          systemSwapInPages: 0,
+          systemSwapOutPages: 0,
+          systemMajorPageFaults: 100 + callCount,
+          systemMinorPageFaults: 5000,
+          processPid: callCount === 1 ? 12345 : 99999, // PID changed
+          processStartTimeTicks: 100000,
+          processRssMb: 1200,
+          processMajorPageFaults: 10 + callCount,
+          processMinorPageFaults: 500,
+          measuredAt: "2026-08-15T20:00:00.000Z"
+        };
+      })
+    };
+
+    const sampler = new TelemetrySampler({
+      gpuTelemetryPort: gpuPort,
+      hostTelemetryPort: hostPort,
+      intervalMs: 200
+    });
+
+    await sampler.start();
+    await vi.advanceTimersByTimeAsync(200);
+    const data = await sampler.stop();
+
+    expect(data.processMajorPageFaultDelta).toBeNull();
+    expect(data.processMinorPageFaultDelta).toBeNull();
+    expect(data.systemMajorPageFaultDelta).toBe(1); // system delta is still valid
+  });
+
+  it("returns null for process fault deltas when process start time ticks change", async () => {
+    let callCount = 0;
+    const gpuPort = createMockGpuPort();
+    const hostPort: HostTelemetryPort = {
+      readHostMemory: vi.fn(async () => {
+        callCount++;
+        return {
+          hostRamTotalMb: 64000,
+          hostRamAvailableMb: 50000,
+          hostRamUsedMb: 14000,
+          swapTotalMb: 16000,
+          swapUsedMb: 0,
+          systemSwapInPages: 0,
+          systemSwapOutPages: 0,
+          systemMajorPageFaults: 100,
+          systemMinorPageFaults: 5000,
+          processPid: 12345,
+          processStartTimeTicks: callCount === 1 ? 100000 : 200000, // start time changed
+          processRssMb: 1200,
+          processMajorPageFaults: 10 + callCount,
+          processMinorPageFaults: 500,
+          measuredAt: "2026-08-15T20:00:00.000Z"
+        };
+      })
+    };
+
+    const sampler = new TelemetrySampler({
+      gpuTelemetryPort: gpuPort,
+      hostTelemetryPort: hostPort,
+      intervalMs: 200
+    });
+
+    await sampler.start();
+    await vi.advanceTimersByTimeAsync(200);
+    const data = await sampler.stop();
+
+    expect(data.processMajorPageFaultDelta).toBeNull();
+    expect(data.processMinorPageFaultDelta).toBeNull();
+  });
+
+  it("propagates custom intervalMs to sampleIntervalMs", async () => {
+    const gpuPort = createMockGpuPort();
+    const hostPort = createMockHostPort();
+    const sampler = new TelemetrySampler({
+      gpuTelemetryPort: gpuPort,
+      hostTelemetryPort: hostPort,
+      intervalMs: 100
+    });
+
+    await sampler.start();
+    const data = await sampler.stop();
+    expect(data.sampleIntervalMs).toBe(100);
+  });
+
   it("calculates summary metrics and schema conformance correctly", async () => {
     const gpuPort = createMockGpuPort();
     const hostPort = createMockHostPort();

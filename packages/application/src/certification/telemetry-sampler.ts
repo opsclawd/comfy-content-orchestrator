@@ -44,6 +44,11 @@ function formatErrorMessage(error: unknown, maxLength = 500): string {
   return message;
 }
 
+function calculateNonNegativeDelta(first: number, last: number): number | null {
+  const delta = last - first;
+  return delta >= 0 ? delta : null;
+}
+
 export class TelemetrySampler {
   private readonly gpuTelemetryPort: GpuTelemetryPort;
   private readonly hostTelemetryPort: HostTelemetryPort;
@@ -171,6 +176,14 @@ export class TelemetrySampler {
         return;
       }
 
+      while (this.currentAttemptPromise !== null) {
+        await this.currentAttemptPromise;
+      }
+
+      if (this.currentState !== "running" || this.isAborted) {
+        return;
+      }
+
       await this.executeSample("sampling");
 
       if (this.currentState === "running" && !this.isAborted) {
@@ -275,7 +288,7 @@ export class TelemetrySampler {
   private computeTelemetryData(): CertificationTelemetryData {
     if (this.samples.length === 0) {
       return {
-        sampleIntervalMs: 200,
+        sampleIntervalMs: this.intervalMs as 200,
         samples: this.samples.map((s) => ({
           ...s,
           gpu: { ...s.gpu },
@@ -297,45 +310,74 @@ export class TelemetrySampler {
       };
     }
 
-    const peakVramMb = Math.max(...this.samples.map((s) => s.gpu.usedVramMb));
-    const peakHostRamUsedMb = Math.max(...this.samples.map((s) => s.host.hostRamUsedMb));
-    const peakProcessRssMb = Math.max(...this.samples.map((s) => s.host.processRssMb));
+    let peakVramMb = 0;
+    let peakHostRamUsedMb = 0;
+    let peakProcessRssMb = 0;
+
+    for (const sample of this.samples) {
+      if (sample.gpu.usedVramMb > peakVramMb) {
+        peakVramMb = sample.gpu.usedVramMb;
+      }
+      if (sample.host.hostRamUsedMb > peakHostRamUsedMb) {
+        peakHostRamUsedMb = sample.host.hostRamUsedMb;
+      }
+      if (sample.host.processRssMb > peakProcessRssMb) {
+        peakProcessRssMb = sample.host.processRssMb;
+      }
+    }
 
     const first = this.samples[0]!;
     const last = this.samples[this.samples.length - 1]!;
 
-    const swapUsedDeltaMb = Math.max(0, last.host.swapUsedMb - first.host.swapUsedMb);
-    const systemSwapInPageDelta = Math.max(
-      0,
-      last.host.systemSwapInPages - first.host.systemSwapInPages
+    const swapUsedDeltaMb = calculateNonNegativeDelta(first.host.swapUsedMb, last.host.swapUsedMb);
+    const systemSwapInPageDelta = calculateNonNegativeDelta(
+      first.host.systemSwapInPages,
+      last.host.systemSwapInPages
     );
-    const systemSwapOutPageDelta = Math.max(
-      0,
-      last.host.systemSwapOutPages - first.host.systemSwapOutPages
+    const systemSwapOutPageDelta = calculateNonNegativeDelta(
+      first.host.systemSwapOutPages,
+      last.host.systemSwapOutPages
     );
-    const systemMajorPageFaultDelta = Math.max(
-      0,
-      last.host.systemMajorPageFaults - first.host.systemMajorPageFaults
+    const systemMajorPageFaultDelta = calculateNonNegativeDelta(
+      first.host.systemMajorPageFaults,
+      last.host.systemMajorPageFaults
     );
-    const systemMinorPageFaultDelta = Math.max(
-      0,
-      last.host.systemMinorPageFaults - first.host.systemMinorPageFaults
-    );
-    const processMajorPageFaultDelta = Math.max(
-      0,
-      last.host.processMajorPageFaults - first.host.processMajorPageFaults
-    );
-    const processMinorPageFaultDelta = Math.max(
-      0,
-      last.host.processMinorPageFaults - first.host.processMinorPageFaults
+    const systemMinorPageFaultDelta = calculateNonNegativeDelta(
+      first.host.systemMinorPageFaults,
+      last.host.systemMinorPageFaults
     );
 
-    const postUnloadSample = [...this.samples].reverse().find((s) => s.phase === "post_unload");
+    const isSameProcess =
+      first.host.processPid === last.host.processPid &&
+      first.host.processStartTimeTicks === last.host.processStartTimeTicks;
+
+    const processMajorPageFaultDelta = isSameProcess
+      ? calculateNonNegativeDelta(
+          first.host.processMajorPageFaults,
+          last.host.processMajorPageFaults
+        )
+      : null;
+
+    const processMinorPageFaultDelta = isSameProcess
+      ? calculateNonNegativeDelta(
+          first.host.processMinorPageFaults,
+          last.host.processMinorPageFaults
+        )
+      : null;
+
+    let postUnloadSample: CertificationTelemetrySample | undefined;
+    for (let i = this.samples.length - 1; i >= 0; i--) {
+      if (this.samples[i]!.phase === "post_unload") {
+        postUnloadSample = this.samples[i];
+        break;
+      }
+    }
+
     const postUnloadUsedVramMb = postUnloadSample ? postUnloadSample.gpu.usedVramMb : null;
     const postUnloadFreeVramMb = postUnloadSample ? postUnloadSample.gpu.freeVramMb : null;
 
     return {
-      sampleIntervalMs: 200,
+      sampleIntervalMs: this.intervalMs as 200,
       samples: this.samples.map((s) => ({
         ...s,
         gpu: { ...s.gpu },
