@@ -18,11 +18,11 @@ The platform uses a split-plane architecture:
 
 The product is built around a human-on-the-loop compute gate: cheap storyboard candidates first, expensive production rendering only after scene approval.
 
-## Empirical LTX-2.5 baseline
+## Empirical LTX-2.5 baseline (historical / pre-certification reference)
 
-The Phase 1 LTX baseline has been measured on the target RTX 4090 workstation:
+The table below reflects historical / pre-certification baseline measurements observed on the target RTX 4090 workstation prior to formal harness automation. These values serve as an informational reference and are distinct from the formal certification evidence produced by the automated harness (`pnpm certify:ltx`), which produces structured telemetry and evaluation artifacts under `certification/ltx-25/<run-id>/` as documented in the [LTX Hardware Certification Runbook](docs/ltx-hardware-certification.md):
 
-| Property | Measured value |
+| Property | Historical baseline value (pre-certification) |
 |---|---:|
 | Local LTX-2.5 model-family footprint | ~68.8 GB |
 | Certified workload | 720p / 97 frames / ~5 s / 8 DiT steps |
@@ -31,7 +31,7 @@ The Phase 1 LTX baseline has been measured on the target RTX 4090 workstation:
 | End-to-end execution | 46 s |
 | OOM | None |
 
-The workflow succeeds through ComfyUI DynamicVRAM / workflow-managed offloading. It does **not** keep the entire LTX working set resident in VRAM. Sprint 1 will certify host-RAM usage, repeated FLUX↔LTX transitions, post-unload VRAM reclamation, and the final runner profile.
+The workflow succeeds through ComfyUI DynamicVRAM / workflow-managed offloading. It does **not** keep the entire LTX working set resident in VRAM. Formal hardware certification via `pnpm certify:ltx` measures synchronized 200 ms GPU and Linux host telemetry, verifies post-unload VRAM reclamation after `/free`, evaluates the $\le 55$ s duration gate across 5 rigorous checks, and generates versioned `result.json` and `summary.md` evidence on the Trinidad host.
 
 ## Architecture
 
@@ -78,6 +78,7 @@ Dependency direction is enforced in CI:
 
 - [Product Requirements Document](docs/prd.md)
 - [Database Migrations & Operations Runbook](docs/database-migrations.md)
+- [LTX Hardware Certification Runbook](docs/ltx-hardware-certification.md)
 - ADRs will live under `docs/adr/` as implementation decisions are made.
 - `docs/CONTEXT.md` will define the project's ubiquitous language and invariants during Sprint 1 bootstrap.
 
