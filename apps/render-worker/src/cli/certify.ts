@@ -40,16 +40,17 @@ export interface CertifyCliOptions {
   readonly comfyUiUrl: string;
   readonly comfyUiPid: number;
   readonly goldMasterProvenancePath: string;
+  readonly runId: string;
   readonly profileId: string;
-  readonly runId?: string | undefined;
   readonly manifestPath: string;
   readonly gpuIndex: number;
-  readonly outputRoot?: string | undefined;
+  readonly outputRoot: string;
   readonly runnerMode: "dynamicvram" | "highvram";
+  readonly highvram: boolean;
 }
 
 export type CertifyCliParsedArgs =
-  { readonly kind: "run"; readonly options: CertifyCliOptions } | { readonly kind: "help" };
+  Readonly<{ kind: "help" }> | Readonly<{ kind: "run"; options: CertifyCliOptions }>;
 
 export interface CertifyCliDependencies {
   readonly loadCertificationProfile?: typeof loadCertificationProfile;
@@ -71,192 +72,245 @@ export interface CertifyCliDependencies {
   readonly writeCertificationArtifacts?: typeof writeCertificationArtifacts;
   readonly now?: () => Date;
   readonly sleep?: (ms: number) => Promise<void>;
-  readonly stdout?: (msg: string) => void;
-  readonly stderr?: (msg: string) => void;
 }
 
 const DEFAULT_PROFILE_ID = "ltx-25-720p-97f";
-const DEFAULT_REPO_ROOT = resolve(fileURLToPath(import.meta.url), "../../../../../");
+const DEFAULT_REPO_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)), "../../../../");
 const DEFAULT_MANIFEST_PATH = resolve(DEFAULT_REPO_ROOT, "templates/provenance.json");
+const RUN_ID_REGEX = /^[a-z0-9][a-z0-9._-]*$/;
+
+const KNOWN_FLAGS: ReadonlySet<string> = new Set([
+  "--comfyui-dir",
+  "--comfyui-url",
+  "--comfyui-pid",
+  "--gold-master-provenance",
+  "--run-id",
+  "--profile",
+  "--manifest",
+  "--gpu-index",
+  "--output-root",
+  "--highvram",
+  "--runner-mode",
+  "--help",
+  "-h"
+]);
+
+const VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "--comfyui-dir",
+  "--comfyui-url",
+  "--comfyui-pid",
+  "--gold-master-provenance",
+  "--run-id",
+  "--profile",
+  "--manifest",
+  "--gpu-index",
+  "--output-root",
+  "--runner-mode"
+]);
 
 export function getUsageHelp(): string {
-  return `Usage: certify [options]
+  return `Usage: certify --comfyui-dir <path> --comfyui-url <url> --comfyui-pid <pid> --gold-master-provenance <path> --run-id <id> [options]
 
-Executes a deterministic hardware certification run against a running ComfyUI instance.
+Run hardware certification against ComfyUI on NVIDIA RTX 4090.
 
-Options:
-  --comfyui-dir <path>             Path to ComfyUI installation directory (required)
-  --comfyui-url <url>              Base HTTP URL of running ComfyUI instance (required)
-  --comfyui-pid <pid>              Process ID of running ComfyUI process (required)
-  --gold-master-provenance <path>  Path to approved Gold Master provenance JSON report (required)
+Required flags:
+  --comfyui-dir <path>             Path to ComfyUI installation directory
+  --comfyui-url <url>              ComfyUI HTTP/WebSocket base URL (e.g. http://127.0.0.1:8188)
+  --comfyui-pid <pid>              PID of the running ComfyUI process (positive integer)
+  --gold-master-provenance <path>  Path to approved Gold Master provenance JSON
+  --run-id <id>                    Unique certification run identifier (lowercase path-safe string)
+
+Optional flags:
   --profile <profile-id>           Profile ID to certify (default: ltx-25-720p-97f)
-  --run-id <id>                    Run identifier for evidence directory (default: auto-generated)
-  --manifest <path>                Path to templates/provenance.json (default: templates/provenance.json)
-  --gpu-index <index>              Target GPU index for nvidia-smi telemetry (default: 0)
-  --output-root <dir>              Directory to place run evidence directory in (default: certification/<engine-folder>)
+  --manifest <path>                Path to certification profile manifest JSON (default: templates/provenance.json)
+  --gpu-index <index>              Zero-based NVIDIA GPU device index (default: 0)
+  --output-root <path>             Root directory for certification evidence (default: certification/<engine-folder>)
+  --highvram                       Enable HighVRAM comparator mode (default: DynamicVRAM)
   --runner-mode <mode>             Memory runner mode: dynamicvram | highvram (default: dynamicvram)
-  --help, -h                       Display this help message
-`;
+  --help, -h                       Show this help message`;
 }
 
-function parseNumberArg(val: string, argName: string): number {
-  const num = parseInt(val, 10);
-  if (isNaN(num) || !Number.isInteger(num) || num < 0) {
-    throw new Error(`Invalid value for ${argName}: "${val}". Must be a non-negative integer.`);
+function isFlag(arg: string | undefined): boolean {
+  if (arg === undefined) return false;
+  if (arg.startsWith("--")) return true;
+  if (arg === "-h") return true;
+  return false;
+}
+
+export function parseCertifyCliArgs(
+  argv: readonly string[]
+): Readonly<{ kind: "help" }> | Readonly<{ kind: "run"; options: CertifyCliOptions }> {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    return Object.freeze({ kind: "help" });
   }
-  return num;
-}
 
-function parseRunnerModeArg(val: string): "dynamicvram" | "highvram" {
-  if (val === "dynamicvram" || val === "highvram") {
-    return val;
-  }
-  throw new Error(`Invalid --runner-mode: "${val}". Must be "dynamicvram" or "highvram".`);
-}
-
-export function parseCertifyCliArgs(argv: readonly string[]): CertifyCliParsedArgs {
   let comfyUiDir: string | undefined;
   let comfyUiUrl: string | undefined;
   let comfyUiPid: number | undefined;
   let goldMasterProvenancePath: string | undefined;
-  let profileId: string = DEFAULT_PROFILE_ID;
   let runId: string | undefined;
-  let manifestPath: string = DEFAULT_MANIFEST_PATH;
-  let gpuIndex = 0;
+  let profileId: string = DEFAULT_PROFILE_ID;
+  let manifestPath: string | undefined;
+  let gpuIndex: number | undefined;
   let outputRoot: string | undefined;
-  let runnerMode: "dynamicvram" | "highvram" = "dynamicvram";
+  let highvram = false;
+  let runnerMode: "dynamicvram" | "highvram" | undefined;
 
-  let i = 0;
-  while (i < argv.length) {
+  const seenFlags = new Set<string>();
+
+  for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === undefined) {
-      break;
-    }
-    if (arg === "--help" || arg === "-h") {
-      return { kind: "help" };
+    if (arg === undefined || arg === "--") {
+      continue;
     }
 
-    if (arg === "--comfyui-dir") {
-      i++;
-      const nextArg = argv[i];
-      if (nextArg === undefined || nextArg.startsWith("--")) {
-        throw new Error("Missing value for --comfyui-dir");
+    if (arg.startsWith("--") || arg.startsWith("-")) {
+      const equalsIndex = arg.indexOf("=");
+      let flag: string;
+      let value: string | undefined;
+
+      if (equalsIndex !== -1) {
+        flag = arg.slice(0, equalsIndex);
+        value = arg.slice(equalsIndex + 1);
+      } else {
+        flag = arg;
+        if (VALUE_FLAGS.has(flag)) {
+          const nextArg = argv[i + 1];
+          if (nextArg !== undefined && !isFlag(nextArg)) {
+            value = nextArg;
+            i++;
+          }
+        }
       }
-      comfyUiDir = nextArg;
-    } else if (arg.startsWith("--comfyui-dir=")) {
-      comfyUiDir = arg.slice("--comfyui-dir=".length);
-    } else if (arg === "--comfyui-url") {
-      i++;
-      const nextArg = argv[i];
-      if (nextArg === undefined || nextArg.startsWith("--")) {
-        throw new Error("Missing value for --comfyui-url");
+
+      if (!KNOWN_FLAGS.has(flag)) {
+        throw new Error(`Unknown flag: ${flag}`);
       }
-      comfyUiUrl = nextArg;
-    } else if (arg.startsWith("--comfyui-url=")) {
-      comfyUiUrl = arg.slice("--comfyui-url=".length);
-    } else if (arg === "--comfyui-pid") {
-      i++;
-      const nextArg = argv[i];
-      if (nextArg === undefined || nextArg.startsWith("--")) {
-        throw new Error("Missing value for --comfyui-pid");
+
+      if (seenFlags.has(flag)) {
+        throw new Error(`Duplicate flag: ${flag}`);
       }
-      comfyUiPid = parseNumberArg(nextArg, "--comfyui-pid");
-    } else if (arg.startsWith("--comfyui-pid=")) {
-      comfyUiPid = parseNumberArg(arg.slice("--comfyui-pid=".length), "--comfyui-pid");
-    } else if (arg === "--gold-master-provenance") {
-      i++;
-      const nextArg = argv[i];
-      if (nextArg === undefined || nextArg.startsWith("--")) {
-        throw new Error("Missing value for --gold-master-provenance");
+      seenFlags.add(flag);
+
+      if (VALUE_FLAGS.has(flag)) {
+        if (value === undefined || value.trim() === "") {
+          throw new Error(`Flag "${flag}" requires a value`);
+        }
       }
-      goldMasterProvenancePath = nextArg;
-    } else if (arg.startsWith("--gold-master-provenance=")) {
-      goldMasterProvenancePath = arg.slice("--gold-master-provenance=".length);
-    } else if (arg === "--profile") {
-      i++;
-      const nextArg = argv[i];
-      if (nextArg === undefined || nextArg.startsWith("--")) {
-        throw new Error("Missing value for --profile");
+
+      switch (flag) {
+        case "--comfyui-dir":
+          comfyUiDir = value;
+          break;
+        case "--comfyui-url":
+          comfyUiUrl = value;
+          break;
+        case "--comfyui-pid": {
+          const parsedPid = Number(value);
+          if (!Number.isInteger(parsedPid) || parsedPid <= 0) {
+            throw new Error(`--comfyui-pid must be a positive integer, received: "${value}"`);
+          }
+          comfyUiPid = parsedPid;
+          break;
+        }
+        case "--gold-master-provenance":
+          goldMasterProvenancePath = value;
+          break;
+        case "--run-id": {
+          const trimmedRunId = value!.trim();
+          if (
+            !RUN_ID_REGEX.test(trimmedRunId) ||
+            trimmedRunId.includes("..") ||
+            trimmedRunId.includes("/") ||
+            trimmedRunId.includes("\\")
+          ) {
+            throw new Error(
+              `Invalid --run-id "${value}": must be a lowercase path-safe string matching ^[a-z0-9][a-z0-9._-]*$`
+            );
+          }
+          runId = trimmedRunId;
+          break;
+        }
+        case "--profile":
+          profileId = value!;
+          break;
+        case "--manifest":
+          manifestPath = value;
+          break;
+        case "--gpu-index": {
+          const parsedIndex = Number(value);
+          if (!Number.isInteger(parsedIndex) || parsedIndex < 0) {
+            throw new Error(`--gpu-index must be a non-negative integer, received: "${value}"`);
+          }
+          gpuIndex = parsedIndex;
+          break;
+        }
+        case "--output-root":
+          outputRoot = value;
+          break;
+        case "--highvram":
+          highvram = true;
+          break;
+        case "--runner-mode":
+          if (value === "dynamicvram" || value === "highvram") {
+            runnerMode = value;
+          } else {
+            throw new Error(
+              `Invalid --runner-mode: "${value}". Must be "dynamicvram" or "highvram".`
+            );
+          }
+          break;
       }
-      profileId = nextArg;
-    } else if (arg.startsWith("--profile=")) {
-      profileId = arg.slice("--profile=".length);
-    } else if (arg === "--run-id") {
-      i++;
-      const nextArg = argv[i];
-      if (nextArg === undefined || nextArg.startsWith("--")) {
-        throw new Error("Missing value for --run-id");
-      }
-      runId = nextArg;
-    } else if (arg.startsWith("--run-id=")) {
-      runId = arg.slice("--run-id=".length);
-    } else if (arg === "--manifest") {
-      i++;
-      const nextArg = argv[i];
-      if (nextArg === undefined || nextArg.startsWith("--")) {
-        throw new Error("Missing value for --manifest");
-      }
-      manifestPath = nextArg;
-    } else if (arg.startsWith("--manifest=")) {
-      manifestPath = arg.slice("--manifest=".length);
-    } else if (arg === "--gpu-index") {
-      i++;
-      const nextArg = argv[i];
-      if (nextArg === undefined || nextArg.startsWith("--")) {
-        throw new Error("Missing value for --gpu-index");
-      }
-      gpuIndex = parseNumberArg(nextArg, "--gpu-index");
-    } else if (arg.startsWith("--gpu-index=")) {
-      gpuIndex = parseNumberArg(arg.slice("--gpu-index=".length), "--gpu-index");
-    } else if (arg === "--output-root") {
-      i++;
-      const nextArg = argv[i];
-      if (nextArg === undefined || nextArg.startsWith("--")) {
-        throw new Error("Missing value for --output-root");
-      }
-      outputRoot = nextArg;
-    } else if (arg.startsWith("--output-root=")) {
-      outputRoot = arg.slice("--output-root=".length);
-    } else if (arg === "--runner-mode") {
-      i++;
-      const nextArg = argv[i];
-      if (nextArg === undefined || nextArg.startsWith("--")) {
-        throw new Error("Missing value for --runner-mode");
-      }
-      runnerMode = parseRunnerModeArg(nextArg);
-    } else if (arg.startsWith("--runner-mode=")) {
-      runnerMode = parseRunnerModeArg(arg.slice("--runner-mode=".length));
     } else {
-      throw new Error(`Unknown option: "${arg}". Run with --help to see valid options.`);
+      throw new Error(`Unexpected argument: ${arg}`);
     }
-    i++;
   }
 
-  const missing: string[] = [];
-  if (!comfyUiDir) missing.push("--comfyui-dir");
-  if (!comfyUiUrl) missing.push("--comfyui-url");
-  if (comfyUiPid === undefined) missing.push("--comfyui-pid");
-  if (!goldMasterProvenancePath) missing.push("--gold-master-provenance");
-
-  if (missing.length > 0) {
-    throw new Error(`Missing required option(s): ${missing.join(", ")}`);
+  if (!comfyUiDir || comfyUiDir.trim() === "") {
+    throw new Error("Missing required flag: --comfyui-dir");
   }
 
-  return {
-    kind: "run",
-    options: {
-      comfyUiDir: comfyUiDir!,
-      comfyUiUrl: comfyUiUrl!,
-      comfyUiPid: comfyUiPid!,
-      goldMasterProvenancePath: goldMasterProvenancePath!,
-      profileId,
+  if (!comfyUiUrl || comfyUiUrl.trim() === "") {
+    throw new Error("Missing required flag: --comfyui-url");
+  }
+
+  if (comfyUiPid === undefined) {
+    throw new Error("Missing required flag: --comfyui-pid");
+  }
+
+  if (!goldMasterProvenancePath || goldMasterProvenancePath.trim() === "") {
+    throw new Error("Missing required flag: --gold-master-provenance");
+  }
+
+  if (!runId || runId.trim() === "") {
+    throw new Error("Missing required flag: --run-id");
+  }
+
+  const effectiveRunnerMode: "dynamicvram" | "highvram" =
+    runnerMode ?? (highvram ? "highvram" : "dynamicvram");
+
+  const effectiveOutputRoot =
+    outputRoot ??
+    (profileId === "flux-schnell-draft"
+      ? resolve(DEFAULT_REPO_ROOT, "certification/flux-schnell")
+      : resolve(DEFAULT_REPO_ROOT, "certification/ltx-25"));
+
+  return Object.freeze({
+    kind: "run" as const,
+    options: Object.freeze({
+      comfyUiDir,
+      comfyUiUrl,
+      comfyUiPid,
+      goldMasterProvenancePath,
       runId,
-      manifestPath,
-      gpuIndex,
-      outputRoot,
-      runnerMode
-    }
-  };
+      profileId,
+      manifestPath: manifestPath ?? DEFAULT_MANIFEST_PATH,
+      gpuIndex: gpuIndex ?? 0,
+      outputRoot: effectiveOutputRoot,
+      runnerMode: effectiveRunnerMode,
+      highvram: effectiveRunnerMode === "highvram"
+    })
+  });
 }
 
 export const parseCertifyLtxCliArgs = parseCertifyCliArgs;
@@ -264,22 +318,41 @@ export type CertifyLtxCliOptions = CertifyCliOptions;
 export type CertifyLtxCliParsedArgs = CertifyCliParsedArgs;
 export type CertifyLtxCliDependencies = CertifyCliDependencies;
 
-function generateDefaultRunId(profile: CertificationProfile, now: () => Date): string {
-  const ts = now().toISOString().replace(/[:.]/g, "-").toLowerCase();
-  return `${profile.id}-cert-${ts}`;
-}
-
 export async function runCertificationCli(
   argv: readonly string[],
-  dependencies?: CertifyCliDependencies
+  ioOrDeps?:
+    | Readonly<{ stdout?: (line: string) => void; stderr?: (line: string) => void }>
+    | CertifyCliDependencies,
+  dependenciesArg?: CertifyCliDependencies
 ): Promise<number> {
-  const stdout = dependencies?.stdout ?? ((msg: string) => console.log(msg));
-  const stderr = dependencies?.stderr ?? ((msg: string) => console.error(msg));
+  let io:
+    Readonly<{ stdout?: (line: string) => void; stderr?: (line: string) => void }> | undefined;
+  let dependencies: CertifyCliDependencies | undefined;
+
+  if (
+    ioOrDeps &&
+    ("loadCertificationProfile" in ioOrDeps ||
+      "runCertification" in ioOrDeps ||
+      "collectRunnerEnvironment" in ioOrDeps)
+  ) {
+    dependencies = ioOrDeps as CertifyCliDependencies;
+  } else {
+    io = ioOrDeps as
+      Readonly<{ stdout?: (line: string) => void; stderr?: (line: string) => void }> | undefined;
+    dependencies = dependenciesArg;
+  }
+
+  const stdout = io?.stdout ?? ((line: string) => console.log(line));
+  const stderr = io?.stderr ?? ((line: string) => console.error(line));
+
   const loadCertificationProfileFn =
     dependencies?.loadCertificationProfile ?? loadCertificationProfile;
   const readApprovedProvenanceFn =
     dependencies?.readApprovedProvenance ??
-    (async (filePath: string) => JSON.parse(await readFile(filePath, "utf8")));
+    (async (filePath: string) => {
+      const content = await readFile(filePath, "utf8");
+      return JSON.parse(content);
+    });
   const collectCertificationProvenanceFn =
     dependencies?.collectCertificationProvenance ?? collectCertificationProvenance;
   const collectRunnerEnvironmentFn =
@@ -299,7 +372,7 @@ export async function runCertificationCli(
   const sleep = dependencies?.sleep ?? ((ms: number) => new Promise((res) => setTimeout(res, ms)));
 
   // Phase 1: Parse arguments
-  let parsed: ReturnType<typeof parseCertifyCliArgs>;
+  let parsed: CertifyCliParsedArgs;
   try {
     parsed = parseCertifyCliArgs(argv);
   } catch (err) {
@@ -317,9 +390,11 @@ export async function runCertificationCli(
     comfyUiUrl,
     comfyUiPid,
     goldMasterProvenancePath,
+    runId,
     profileId,
     manifestPath,
     gpuIndex,
+    outputRoot,
     runnerMode
   } = parsed.options;
 
@@ -331,13 +406,6 @@ export async function runCertificationCli(
     stderr(`[certify] Failed to load profile: ${(err as Error).message}`);
     return 1;
   }
-
-  const runId = parsed.options.runId ?? generateDefaultRunId(profile, now);
-  const defaultOutputRoot =
-    profile.engine === "flux_schnell"
-      ? resolve(DEFAULT_REPO_ROOT, "certification/flux-schnell")
-      : resolve(DEFAULT_REPO_ROOT, "certification/ltx-25");
-  const outputRoot = parsed.options.outputRoot ?? defaultOutputRoot;
 
   let approvedProvenance: unknown;
   try {
