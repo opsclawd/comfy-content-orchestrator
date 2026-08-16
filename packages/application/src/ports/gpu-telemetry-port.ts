@@ -2,6 +2,7 @@ export interface GpuMemorySnapshot {
   readonly totalVramMb: number;
   readonly usedVramMb: number;
   readonly freeVramMb: number;
+  readonly reservedVramMb: number;
   readonly measuredAt: string;
 }
 

@@ -68,7 +68,8 @@ describe("LtxCertificationArtifactSchema", () => {
           gpu: {
             totalVramMb: 24564,
             usedVramMb: 1024,
-            freeVramMb: 23540
+            freeVramMb: 23540,
+            reservedVramMb: 0
           },
           host: {
             hostRamTotalMb: 64000,
@@ -93,7 +94,8 @@ describe("LtxCertificationArtifactSchema", () => {
           gpu: {
             totalVramMb: 24564,
             usedVramMb: 24028,
-            freeVramMb: 536
+            freeVramMb: 536,
+            reservedVramMb: 0
           },
           host: {
             hostRamTotalMb: 64000,
@@ -118,7 +120,8 @@ describe("LtxCertificationArtifactSchema", () => {
           gpu: {
             totalVramMb: 24564,
             usedVramMb: 1024,
-            freeVramMb: 23540
+            freeVramMb: 23540,
+            reservedVramMb: 0
           },
           host: {
             hostRamTotalMb: 64000,
@@ -140,6 +143,7 @@ describe("LtxCertificationArtifactSchema", () => {
       ],
       samplingErrors: [],
       peakVramMb: 24028,
+      reservedVramMb: 0,
       peakHostRamUsedMb: 19000,
       peakProcessRssMb: 4500,
       swapUsedDeltaMb: 0,
@@ -285,6 +289,18 @@ describe("LtxCertificationArtifactSchema", () => {
     if (!failRes5.success) {
       const paths = failRes5.error.issues.map((i) => i.path.join("."));
       expect(paths).toContain("telemetry.peakVramMb");
+    }
+
+    // Missing reservedVramMb on a passed artifact
+    const withNullReservedVram = {
+      ...validPassedFixture,
+      telemetry: { ...validPassedFixture.telemetry, reservedVramMb: null }
+    };
+    const failResReserved = LtxCertificationArtifactSchema.safeParse(withNullReservedVram);
+    expect(failResReserved.success).toBe(false);
+    if (!failResReserved.success) {
+      const paths = failResReserved.error.issues.map((i) => i.path.join("."));
+      expect(paths).toContain("telemetry.reservedVramMb");
     }
 
     // 6. Missing postUnloadUsedVramMb on a passed artifact

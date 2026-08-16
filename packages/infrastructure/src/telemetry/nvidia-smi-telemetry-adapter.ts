@@ -14,6 +14,7 @@ export interface NvidiaSmiMemoryResult {
   readonly totalVramMb: number;
   readonly usedVramMb: number;
   readonly freeVramMb: number;
+  readonly reservedVramMb: number;
 }
 
 export type NvidiaSmiExecFileFn = (
@@ -135,18 +136,21 @@ export function parseNvidiaSmiMemoryCsv(
     );
   }
 
-  const memoryDelta = Math.abs(totalVramMb - (usedVramMb + freeVramMb));
-  if (memoryDelta > 1) {
+  const accountedVramMb = usedVramMb + freeVramMb;
+  if (accountedVramMb > totalVramMb) {
     throw new NvidiaSmiTelemetryError(
-      `nvidia-smi reported internally inconsistent memory values for GPU ${gpuIndex}: total (${totalVramMb} MB) !== used (${usedVramMb} MB) + free (${freeVramMb} MB), delta=${memoryDelta} MB exceeds 1 MB tolerance`,
+      `nvidia-smi reported impossible memory values for GPU ${gpuIndex}: used (${usedVramMb} MB) + free (${freeVramMb} MB) = ${accountedVramMb} MB exceeds total (${totalVramMb} MB)`,
       { gpuIndex }
     );
   }
 
+  const reservedVramMb = totalVramMb - accountedVramMb;
+
   return {
     totalVramMb,
     usedVramMb,
-    freeVramMb
+    freeVramMb,
+    reservedVramMb
   };
 }
 
@@ -205,6 +209,7 @@ export class NvidiaSmiTelemetryAdapter implements GpuTelemetryPort {
         totalVramMb: parsed.totalVramMb,
         usedVramMb: parsed.usedVramMb,
         freeVramMb: parsed.freeVramMb,
+        reservedVramMb: parsed.reservedVramMb,
         measuredAt: this.nowFn()
       };
     } catch (err: unknown) {

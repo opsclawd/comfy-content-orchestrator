@@ -31,6 +31,7 @@ describe("NvidiaSmiTelemetryAdapter", () => {
       totalVramMb: 24576,
       usedVramMb: 8192,
       freeVramMb: 16384,
+      reservedVramMb: 0,
       measuredAt: fakeNow
     });
 
@@ -45,28 +46,22 @@ describe("NvidiaSmiTelemetryAdapter", () => {
       totalVramMb: 24576,
       usedVramMb: 2048,
       freeVramMb: 22528,
+      reservedVramMb: 0,
       measuredAt: fakeNow
     });
   });
 
   // Behavioral invariant: strict-csv
-  it("rejects malformed or inconsistent nvidia-smi memory output", async () => {
-    // Blank output
+  it("rejects malformed nvidia-smi memory output", () => {
     expect(() => parseNvidiaSmiMemoryCsv("", 0)).toThrow(NvidiaSmiTelemetryError);
     expect(() => parseNvidiaSmiMemoryCsv("   \n  \n", 0)).toThrow(NvidiaSmiTelemetryError);
 
-    // Too few columns (< 3)
     expect(() => parseNvidiaSmiMemoryCsv("24576, 8192\n", 0)).toThrow(NvidiaSmiTelemetryError);
-
-    // Too many columns (> 3)
     expect(() => parseNvidiaSmiMemoryCsv("24576, 8192, 16384, 999\n", 0)).toThrow(
       NvidiaSmiTelemetryError
     );
-
-    // Empty column
     expect(() => parseNvidiaSmiMemoryCsv("24576, , 16384\n", 0)).toThrow(NvidiaSmiTelemetryError);
 
-    // Non-finite values
     expect(() => parseNvidiaSmiMemoryCsv("24576, NaN, 16384\n", 0)).toThrow(
       NvidiaSmiTelemetryError
     );
@@ -80,36 +75,38 @@ describe("NvidiaSmiTelemetryAdapter", () => {
       NvidiaSmiTelemetryError
     );
 
-    // Negative values
     expect(() => parseNvidiaSmiMemoryCsv("24576, -100, 24676\n", 0)).toThrow(
       NvidiaSmiTelemetryError
     );
     expect(() => parseNvidiaSmiMemoryCsv("-24576, 8192, 16384\n", 0)).toThrow(
       NvidiaSmiTelemetryError
     );
+  });
 
-    // Internally inconsistent (exceeds 1 MB tolerance)
-    expect(() => parseNvidiaSmiMemoryCsv("24576, 8192, 10000\n", 0)).toThrow(
-      NvidiaSmiTelemetryError
-    );
-    expect(() => parseNvidiaSmiMemoryCsv("24576, 8192, 16381\n", 0)).toThrow(
-      NvidiaSmiTelemetryError
-    );
-
-    // Within 1 MB rounding tolerance is accepted
-    const withinTolerance = parseNvidiaSmiMemoryCsv("24576, 8192, 16383\n", 0);
-    expect(withinTolerance).toEqual({
-      totalVramMb: 24576,
-      usedVramMb: 8192,
-      freeVramMb: 16383
+  // Behavioral invariant: reserved-vram-reading-is-valid
+  it("accepts real NVIDIA memory values when driver-reserved VRAM leaves used plus free below total", () => {
+    const reservedVramReading = parseNvidiaSmiMemoryCsv("24564, 600, 23451\n", 0);
+    expect(reservedVramReading).toEqual({
+      totalVramMb: 24564,
+      usedVramMb: 600,
+      freeVramMb: 23451,
+      reservedVramMb: 513
     });
 
-    const exactMatch = parseNvidiaSmiMemoryCsv("24576, 8192, 16384\n", 0);
-    expect(exactMatch).toEqual({
+    const exactReading = parseNvidiaSmiMemoryCsv("24576, 8192, 16384\n", 0);
+    expect(exactReading).toEqual({
       totalVramMb: 24576,
       usedVramMb: 8192,
-      freeVramMb: 16384
+      freeVramMb: 16384,
+      reservedVramMb: 0
     });
+  });
+
+  // Behavioral invariant: over-accounted-reading-is-invalid
+  it("rejects memory values when used plus free exceeds total by one MB", () => {
+    expect(() => parseNvidiaSmiMemoryCsv("24564, 600, 23965\n", 0)).toThrowError(
+      "nvidia-smi reported impossible memory values for GPU 0: used (600 MB) + free (23965 MB) = 24565 MB exceeds total (24564 MB)"
+    );
   });
 
   // Behavioral invariant: telemetry-never-fabricates
@@ -201,8 +198,18 @@ describe("NvidiaSmiTelemetryAdapter", () => {
 
     expect(parsedLf0).toEqual(parsedCrlf0);
     expect(parsedLf1).toEqual(parsedCrlf1);
-    expect(parsedLf0).toEqual({ totalVramMb: 24576, usedVramMb: 8192, freeVramMb: 16384 });
-    expect(parsedLf1).toEqual({ totalVramMb: 24576, usedVramMb: 4096, freeVramMb: 20480 });
+    expect(parsedLf0).toEqual({
+      totalVramMb: 24576,
+      usedVramMb: 8192,
+      freeVramMb: 16384,
+      reservedVramMb: 0
+    });
+    expect(parsedLf1).toEqual({
+      totalVramMb: 24576,
+      usedVramMb: 4096,
+      freeVramMb: 20480,
+      reservedVramMb: 0
+    });
   });
 
   it("validates adapter constructor options", () => {

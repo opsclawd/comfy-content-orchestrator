@@ -24,6 +24,7 @@ function createMockGpuPort(overrides: Partial<GpuMemorySnapshot> = {}): GpuTelem
       totalVramMb: 24564,
       usedVramMb: 1024,
       freeVramMb: 23540,
+      reservedVramMb: 0,
       measuredAt: "2026-08-15T20:00:00.000Z",
       ...overrides
     }))
@@ -119,6 +120,7 @@ describe("TelemetrySampler", () => {
             totalVramMb: 24564,
             usedVramMb: 2048,
             freeVramMb: 22516,
+            reservedVramMb: 0,
             measuredAt: new Date().toISOString()
           };
         } finally {
@@ -153,6 +155,7 @@ describe("TelemetrySampler", () => {
       totalVramMb: 24564,
       usedVramMb: 4096,
       freeVramMb: 20468,
+      reservedVramMb: 0,
       measuredAt: new Date().toISOString()
     });
     await vi.advanceTimersByTimeAsync(0);
@@ -182,6 +185,7 @@ describe("TelemetrySampler", () => {
           totalVramMb: 24564,
           usedVramMb: 1024 * callCount,
           freeVramMb: 24564 - 1024 * callCount,
+          reservedVramMb: 0,
           measuredAt: new Date().toISOString()
         };
       })
@@ -228,6 +232,7 @@ describe("TelemetrySampler", () => {
           totalVramMb: 24564,
           usedVramMb: 1024,
           freeVramMb: 23540,
+          reservedVramMb: 0,
           measuredAt: new Date().toISOString()
         };
       })
@@ -262,6 +267,7 @@ describe("TelemetrySampler", () => {
       totalVramMb: 24564,
       usedVramMb: 5000,
       freeVramMb: 19564,
+      reservedVramMb: 0,
       measuredAt: new Date().toISOString()
     });
 
@@ -399,6 +405,7 @@ describe("TelemetrySampler", () => {
             totalVramMb: 24564,
             usedVramMb: 1024,
             freeVramMb: 23540,
+            reservedVramMb: 0,
             measuredAt: new Date().toISOString()
           };
         } finally {
@@ -434,6 +441,7 @@ describe("TelemetrySampler", () => {
       totalVramMb: 24564,
       usedVramMb: 2048,
       freeVramMb: 22516,
+      reservedVramMb: 0,
       measuredAt: new Date().toISOString()
     });
     await sampleNowPromise;
@@ -600,6 +608,7 @@ describe("TelemetrySampler", () => {
     const parseResult = CertificationTelemetryDataSchema.safeParse(data);
     expect(parseResult.success).toBe(true);
     expect(data.peakVramMb).toBe(1024);
+    expect(data.reservedVramMb).toBe(0);
     expect(data.peakHostRamUsedMb).toBe(14000);
     expect(data.peakProcessRssMb).toBe(1200);
     expect(data.swapUsedDeltaMb).toBe(0);

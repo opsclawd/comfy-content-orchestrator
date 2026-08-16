@@ -209,7 +209,12 @@ export class TelemetrySampler {
             gpu: {
               totalVramMb: Math.round(gpuResult.value.totalVramMb),
               usedVramMb: Math.round(gpuResult.value.usedVramMb),
-              freeVramMb: Math.round(gpuResult.value.freeVramMb)
+              freeVramMb: Math.round(gpuResult.value.freeVramMb),
+              reservedVramMb: Math.round(
+                gpuResult.value.reservedVramMb ??
+                  gpuResult.value.totalVramMb -
+                    (gpuResult.value.usedVramMb + gpuResult.value.freeVramMb)
+              )
             },
             host: {
               hostRamTotalMb: Math.round(hostResult.value.hostRamTotalMb),
@@ -296,6 +301,7 @@ export class TelemetrySampler {
         })),
         samplingErrors: this.samplingErrors.map((e) => ({ ...e })),
         peakVramMb: null,
+        reservedVramMb: null,
         peakHostRamUsedMb: null,
         peakProcessRssMb: null,
         swapUsedDeltaMb: null,
@@ -311,12 +317,16 @@ export class TelemetrySampler {
     }
 
     let peakVramMb = 0;
+    let reservedVramMb = 0;
     let peakHostRamUsedMb = 0;
     let peakProcessRssMb = 0;
 
     for (const sample of this.samples) {
       if (sample.gpu.usedVramMb > peakVramMb) {
         peakVramMb = sample.gpu.usedVramMb;
+      }
+      if (sample.gpu.reservedVramMb > reservedVramMb) {
+        reservedVramMb = sample.gpu.reservedVramMb;
       }
       if (sample.host.hostRamUsedMb > peakHostRamUsedMb) {
         peakHostRamUsedMb = sample.host.hostRamUsedMb;
@@ -385,6 +395,7 @@ export class TelemetrySampler {
       })),
       samplingErrors: this.samplingErrors.map((e) => ({ ...e })),
       peakVramMb,
+      reservedVramMb,
       peakHostRamUsedMb,
       peakProcessRssMb,
       swapUsedDeltaMb,

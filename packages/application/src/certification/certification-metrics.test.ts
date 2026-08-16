@@ -19,6 +19,7 @@ function createSample(
     usedVramMb?: number;
     freeVramMb?: number;
     totalVramMb?: number;
+    reservedVramMb?: number;
     hostRamUsedMb?: number;
     hostRamTotalMb?: number;
     hostRamAvailableMb?: number;
@@ -35,13 +36,20 @@ function createSample(
     processMinorPageFaults?: number;
   } = {}
 ): CertificationTelemetrySample {
+  const totalVramMb = overrides.totalVramMb ?? 24564;
+  const usedVramMb = overrides.usedVramMb ?? 1024;
+  const freeVramMb = overrides.freeVramMb ?? 23540;
+  const reservedVramMb =
+    overrides.reservedVramMb ?? Math.max(0, totalVramMb - (usedVramMb + freeVramMb));
+
   return {
     measuredAt: overrides.measuredAt ?? "2026-08-15T20:00:00.000Z",
     phase: overrides.phase ?? "sampling",
     gpu: {
-      totalVramMb: overrides.totalVramMb ?? 24564,
-      usedVramMb: overrides.usedVramMb ?? 1024,
-      freeVramMb: overrides.freeVramMb ?? 23540
+      totalVramMb,
+      usedVramMb,
+      freeVramMb,
+      reservedVramMb
     },
     host: {
       hostRamTotalMb: overrides.hostRamTotalMb ?? 64000,
@@ -168,6 +176,7 @@ function createCompleteArtifact(
       ],
       samplingErrors: [],
       peakVramMb: 24028,
+      reservedVramMb: 0,
       peakHostRamUsedMb: 19000,
       peakProcessRssMb: 4500,
       swapUsedDeltaMb: 50,
@@ -237,6 +246,7 @@ describe("certification-metrics", () => {
       const aggregated = aggregateCertificationTelemetry([sample1, sample2, sample3, sample4]);
 
       expect(aggregated.peakVramMb).toBe(22500);
+      expect(aggregated.reservedVramMb).toBe(0);
       expect(aggregated.peakHostRamUsedMb).toBe(21000);
       expect(aggregated.peakProcessRssMb).toBe(6000);
       expect(aggregated.postUnloadUsedVramMb).toBe(1200);
@@ -244,6 +254,23 @@ describe("certification-metrics", () => {
       expect(aggregated.samples).toHaveLength(4);
       expect(aggregated.samplingErrors).toEqual([]);
       expect(aggregated.sampleIntervalMs).toBe(200);
+    });
+
+    it("captures driver-reserved VRAM from raw samples", () => {
+      const sample1 = createSample({
+        totalVramMb: 24564,
+        usedVramMb: 600,
+        freeVramMb: 23451,
+        reservedVramMb: 513
+      });
+      const sample2 = createSample({
+        totalVramMb: 24564,
+        usedVramMb: 24000,
+        freeVramMb: 51,
+        reservedVramMb: 513
+      });
+      const aggregated = aggregateCertificationTelemetry([sample1, sample2]);
+      expect(aggregated.reservedVramMb).toBe(513);
     });
 
     // Behavioral invariant: deltas-use-window-edges
@@ -362,6 +389,7 @@ describe("certification-metrics", () => {
       expect(aggregated.samples).toEqual([]);
       expect(aggregated.samplingErrors).toEqual(errors);
       expect(aggregated.peakVramMb).toBeNull();
+      expect(aggregated.reservedVramMb).toBeNull();
       expect(aggregated.peakHostRamUsedMb).toBeNull();
       expect(aggregated.peakProcessRssMb).toBeNull();
       expect(aggregated.swapUsedDeltaMb).toBeNull();
@@ -533,6 +561,9 @@ describe("certification-metrics", () => {
       // Verify measured metrics are present and JSON-equivalent
       expect(markdown).toContain("46,000 ms");
       expect(markdown).toContain("24,028 MB");
+      expect(markdown).toContain("Driver-Reserved VRAM");
+      expect(markdown).toContain("Allocatable VRAM Denominator");
+      expect(markdown).toContain("Peak VRAM Utilisation (Allocatable)");
       expect(markdown).toContain("19,000 MB");
       expect(markdown).toContain("4,500 MB");
       expect(markdown).toContain("50 MB");

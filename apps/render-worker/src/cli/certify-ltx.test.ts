@@ -230,7 +230,7 @@ describe("certify:ltx CLI", () => {
         {
           measuredAt: "2026-08-15T12:01:00.000Z",
           phase: "pre_dispatch" as const,
-          gpu: { totalVramMb: 24576, usedVramMb: 1024, freeVramMb: 23552 },
+          gpu: { totalVramMb: 24576, usedVramMb: 1024, freeVramMb: 23552, reservedVramMb: 0 },
           host: {
             hostRamTotalMb: 65536,
             hostRamAvailableMb: 45000,
@@ -251,7 +251,7 @@ describe("certify:ltx CLI", () => {
         {
           measuredAt: "2026-08-15T12:04:00.000Z",
           phase: "post_unload" as const,
-          gpu: { totalVramMb: 24576, usedVramMb: 1200, freeVramMb: 23376 },
+          gpu: { totalVramMb: 24576, usedVramMb: 1200, freeVramMb: 23376, reservedVramMb: 0 },
           host: {
             hostRamTotalMb: 65536,
             hostRamAvailableMb: 44000,
@@ -272,6 +272,7 @@ describe("certify:ltx CLI", () => {
       ],
       samplingErrors: [],
       peakVramMb: 18000,
+      reservedVramMb: 0,
       peakHostRamUsedMb: 25000,
       peakProcessRssMb: 4000,
       swapUsedDeltaMb: 0,
@@ -336,7 +337,7 @@ describe("certify:ltx CLI", () => {
     sampleNow: vi.fn().mockResolvedValue({
       measuredAt: "2026-08-15T12:00:00.000Z",
       phase: "pre_dispatch",
-      gpu: { totalVramMb: 24576, usedVramMb: 1024, freeVramMb: 23552 },
+      gpu: { totalVramMb: 24576, usedVramMb: 1024, freeVramMb: 23552, reservedVramMb: 0 },
       host: {
         hostRamTotalMb: 65536,
         hostRamAvailableMb: 45000,

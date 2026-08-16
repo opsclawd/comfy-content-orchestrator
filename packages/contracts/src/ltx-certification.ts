@@ -11,10 +11,23 @@ const gitCommitHashSchema = z
     "Must be a valid Git commit hash (40 or 64 lowercase hex characters)"
   );
 
+/**
+ * Raw GPU memory snapshot sample.
+ *
+ * Denominator and Headroom Semantics:
+ * - `totalVramMb`: Nameplate total physical VRAM reported by driver (e.g. 24,564 MB).
+ * - `usedVramMb`: VRAM currently occupied by active processes / allocations.
+ * - `freeVramMb`: VRAM currently free and available for allocation.
+ * - `reservedVramMb`: Driver/VBIOS-reserved VRAM (`totalVramMb - (usedVramMb + freeVramMb)`).
+ * - Allocatable pool (`usedVramMb + freeVramMb` = `totalVramMb - reservedVramMb`):
+ *   This allocatable pool is the true denominator for headroom and utilisation calculations,
+ *   representing the maximum memory actually available to workloads.
+ */
 export const CertificationGpuSampleSchema = z.object({
   totalVramMb: z.number().int().nonnegative(),
   usedVramMb: z.number().int().nonnegative(),
-  freeVramMb: z.number().int().nonnegative()
+  freeVramMb: z.number().int().nonnegative(),
+  reservedVramMb: z.number().int().nonnegative()
 });
 export type CertificationGpuSample = z.infer<typeof CertificationGpuSampleSchema>;
 
@@ -125,11 +138,24 @@ export const CertificationSamplingErrorSchema = z.object({
 });
 export type CertificationSamplingError = z.infer<typeof CertificationSamplingErrorSchema>;
 
+/**
+ * Aggregated telemetry data across the certification run.
+ *
+ * Denominator and Headroom Semantics:
+ * - `peakVramMb`: Maximum `usedVramMb` observed across all samples.
+ * - `reservedVramMb`: Driver/VBIOS-reserved VRAM (`totalVramMb - (usedVramMb + freeVramMb)`).
+ * - Allocatable denominator (`totalVramMb - reservedVramMb`): Peak utilisation is evaluated
+ *   against the allocatable pool (`peakVramMb / (totalVramMb - reservedVramMb)`), explicitly
+ *   distinguishing it from the nameplate total VRAM.
+ * - `postUnloadUsedVramMb` / `postUnloadFreeVramMb`: Post-unload settle memory values relative
+ *   to the allocatable pool.
+ */
 export const CertificationTelemetryDataSchema = z.object({
   sampleIntervalMs: z.literal(200),
   samples: z.array(CertificationTelemetrySampleSchema),
   samplingErrors: z.array(CertificationSamplingErrorSchema),
   peakVramMb: z.number().int().nonnegative().nullable(),
+  reservedVramMb: z.number().int().nonnegative().nullable(),
   peakHostRamUsedMb: z.number().int().nonnegative().nullable(),
   peakProcessRssMb: z.number().int().nonnegative().nullable(),
   swapUsedDeltaMb: z.number().int().nonnegative().nullable(),
@@ -284,6 +310,7 @@ export const LtxCertificationArtifactSchema = LtxCertificationArtifactBaseSchema
 
       const requiredTelemetryFields = [
         "peakVramMb",
+        "reservedVramMb",
         "peakHostRamUsedMb",
         "peakProcessRssMb",
         "swapUsedDeltaMb",
