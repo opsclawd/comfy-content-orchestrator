@@ -19,11 +19,22 @@ import type {
   RenderLease,
   RenderQueueReceipt,
   RenderResult,
+  ReviewEventStore,
+  SceneReviewCandidateGroup,
+  SceneReviewDetail,
+  SceneReviewQueries,
   StoryboardCandidateRepository,
   StoredObject,
   VoiceSynthesisPort
 } from "./index.js";
-import type { CandidateId, SceneId, StoryboardCandidate } from "@cco/domain";
+import type { ReviewAction, ReviewEvent, SceneStatus } from "@cco/contracts";
+import type {
+  CampaignId,
+  CandidateId,
+  SceneConfiguration,
+  SceneId,
+  StoryboardCandidate
+} from "@cco/domain";
 import { GpuLeaseOwnershipLostError, GpuLeaseUnavailableError } from "./index.js";
 
 describe("Application capability ports contract tests", () => {
@@ -201,25 +212,113 @@ describe("Application capability ports contract tests", () => {
         manifestRepo.append({ jobId: "job-1", files: ["scene-1.mp4"] })
       ).resolves.toBeUndefined();
 
+      const candidateList: StoryboardCandidate[] = [
+        {
+          id: "cand-1" as CandidateId,
+          sceneId: "scene-1" as SceneId,
+          specRevision: 1,
+          variantOrdinal: 1,
+          locator: "godzspeed-temp/candidates/cand-1.webp",
+          contentHash: "hash123",
+          generationMetadata: {},
+          createdAt: "2026-08-15T00:00:00.000Z"
+        }
+      ];
+
       const candidateRepo = {
         async findById(candidateId: CandidateId): Promise<StoryboardCandidate | undefined> {
-          return candidateId === ("cand-1" as CandidateId)
-            ? {
-                id: "cand-1" as CandidateId,
-                sceneId: "scene-1" as SceneId,
-                specRevision: 1,
-                variantOrdinal: 1,
-                locator: "godzspeed-temp/candidates/cand-1.webp",
-                contentHash: "hash123",
-                generationMetadata: {},
-                createdAt: "2026-08-15T00:00:00.000Z"
-              }
-            : undefined;
+          return candidateList.find((c) => c.id === candidateId);
+        },
+        async insert(candidate: StoryboardCandidate): Promise<void> {
+          candidateList.push(candidate);
+        },
+        async listBySceneAndRevision(
+          sceneId: SceneId,
+          specRevision: number
+        ): Promise<readonly StoryboardCandidate[]> {
+          return candidateList
+            .filter((c) => c.sceneId === sceneId && c.specRevision === specRevision)
+            .sort((a, b) => a.variantOrdinal - b.variantOrdinal);
         }
       } satisfies StoryboardCandidateRepository;
 
       const candidate = await candidateRepo.findById("cand-1" as CandidateId);
       expect(candidate?.id).toBe("cand-1");
+
+      const newCand: StoryboardCandidate = {
+        id: "cand-2" as CandidateId,
+        sceneId: "scene-1" as SceneId,
+        specRevision: 1,
+        variantOrdinal: 2,
+        locator: "godzspeed-temp/candidates/cand-2.webp",
+        contentHash: "hash456",
+        generationMetadata: {},
+        createdAt: "2026-08-15T00:01:00.000Z"
+      };
+      await candidateRepo.insert(newCand);
+      const listed = await candidateRepo.listBySceneAndRevision("scene-1" as SceneId, 1);
+      expect(listed).toHaveLength(2);
+      expect(listed[0]?.id).toBe("cand-1");
+      expect(listed[1]?.id).toBe("cand-2");
+
+      const events: ReviewEvent[] = [];
+      const eventStore = {
+        async append(event: ReviewEvent): Promise<void> {
+          events.push(event);
+        },
+        async findById(eventId: string): Promise<ReviewEvent | undefined> {
+          return events.find((e) => e.eventId === eventId);
+        }
+      } satisfies ReviewEventStore;
+
+      const reviewEvent: ReviewEvent = {
+        eventId: "event-1",
+        sceneId: "scene-1",
+        reviewerName: "Director Alice",
+        action: "approve",
+        directorNotes: "LGTM",
+        mutationPayload: {},
+        priorSceneStatus: "director_review",
+        resultingSceneStatus: "approved",
+        occurredAt: "2026-08-15T00:00:00.000Z"
+      };
+      await eventStore.append(reviewEvent);
+      const foundEvent = await eventStore.findById("event-1");
+      expect(foundEvent).toEqual(reviewEvent);
+      expect(await eventStore.findById("missing-event")).toBeUndefined();
+
+      const config: SceneConfiguration = {
+        prompt: "sunrise",
+        referenceIds: [],
+        engineProfileId: "ltx_25",
+        durationMs: 5000
+      };
+
+      const sceneReviewQueries = {
+        async getSceneReviewDetail(sceneId: SceneId): Promise<SceneReviewDetail | undefined> {
+          if (sceneId === ("scene-1" as SceneId)) {
+            const candidateGroup: SceneReviewCandidateGroup = {
+              specRevision: 1,
+              candidates: candidateList
+            };
+            return {
+              sceneId: "scene-1" as SceneId,
+              campaignId: "camp-1" as CampaignId,
+              status: "director_review" as SceneStatus,
+              specRevision: 1,
+              configuration: config,
+              candidatesByRevision: [candidateGroup],
+              allowedActions: ["approve", "reroll"] as readonly ReviewAction[]
+            };
+          }
+          return undefined;
+        }
+      } satisfies SceneReviewQueries;
+
+      const detail = await sceneReviewQueries.getSceneReviewDetail("scene-1" as SceneId);
+      expect(detail?.sceneId).toBe("scene-1");
+      expect(detail?.candidatesByRevision[0]?.candidates).toHaveLength(2);
+      expect(await sceneReviewQueries.getSceneReviewDetail("missing" as SceneId)).toBeUndefined();
 
       const license = await licenseRegistryRepo.findByComponentKey("ltx-video");
       expect(license?.license).toBe("Apache-2.0");
