@@ -451,17 +451,24 @@ Infrastructure adapters include ComfyUI, PostgreSQL, MinIO, Anthropic, OpenAI, G
 The empirically certified engine envelope is represented as versioned configuration rather than hard-coded domain behavior. Initial LTX profile concept:
 
 ```text
-LTX_25_720P_5S_V1
+LTX_25_720P_5S_V1 (config/render-profiles/LTX_25_720P_5S_V1.json)
   engine: ltx_25
-  workflowHash: <certified SHA-256>
-  modelHashes: <pinned checkpoint/encoder/VAE/LoRA hashes>
+  workflowHash: 94f397eee3ad8b0cee000036119e524e8c7a012b88d79d00b74172df9d9bf539
+  modelHashes:
+    clip: 09a89e084de1a149c3de60cfe9dfd3e5161967eb09eea39e806fcdeffdd568de (15.37 GB)
+    unet: c4279eeff115cbeaca494bd2183e7d768c38fe85a184dc6afbb7159157c44334 (21.50 GB)
+    vae:  685b06ee3d9b2039647698fc4ea33175112462fc374e2777312c907897dfce8d (1.45 GB)
   frames: 97
   steps: 8
   runnerProfile: dynamicvram-offload-v1
-  measuredPeakVramMb: 24028
-  measuredTotalDurationMs: 46000
-  measuredSamplingDurationMs: ~12000
-  measuredDiskFootprintGb: ~68.8
+  measuredPeakVramMb: 24038 (transition soak peak)
+  measuredTotalDurationMs: 45632 (soak median duration)
+  measuredSamplingDurationMs: null
+  measuredDiskFootprintGb: 38.329275932 (exact byte sum: 38,329,275,932 bytes)
+  measuredPeakHostRamMb: 29384 (soak peak host RAM)
+  measuredPeakProcessRssMb: 27043 (soak peak process RSS)
+  measuredSwapUsedMb: 89 (soak max LTX swap delta)
+  measuredMajorPageFaults: 1009 (soak max LTX major page faults)
   minFreeDiskGb: 100
   maxConcurrentGpuJobs: 1
   requiresModelOffloading: true

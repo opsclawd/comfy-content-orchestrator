@@ -1,5 +1,12 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { RenderProfileSchema } from "./render-profile.js";
+import {
+  RenderProfileSchema,
+  LtxRenderProfileSchema,
+  LTX_25_720P_5S_V1_PROFILE
+} from "./render-profile.js";
 
 describe("RenderProfileSchema", () => {
   const measuredLtxFixture = {
@@ -49,6 +56,36 @@ describe("RenderProfileSchema", () => {
   it("accepts the measured LTX 2.5 baseline with uncertified host memory fields set to null", () => {
     const parsed = RenderProfileSchema.parse(measuredLtxFixture);
     expect(parsed).toEqual(measuredLtxFixture);
+  });
+
+  it("accepts the frozen production LTX_25_720P_5S_V1_PROFILE constant", () => {
+    const parsed = RenderProfileSchema.parse(LTX_25_720P_5S_V1_PROFILE);
+    expect(parsed).toEqual(LTX_25_720P_5S_V1_PROFILE);
+  });
+
+  it("validates that config/render-profiles/LTX_25_720P_5S_V1.json matches schema and constant", async () => {
+    const jsonPath = resolve(
+      fileURLToPath(
+        new URL("../../../config/render-profiles/LTX_25_720P_5S_V1.json", import.meta.url)
+      )
+    );
+    const content = await readFile(jsonPath, "utf8");
+    const parsedJson = JSON.parse(content);
+
+    const validated = LtxRenderProfileSchema.parse(parsedJson);
+    expect(validated).toEqual(LTX_25_720P_5S_V1_PROFILE);
+  });
+
+  it("verifies frozen modelHashes strictly match host-validated ltx-cert-run-002 artifact", async () => {
+    const certPath = resolve(
+      fileURLToPath(
+        new URL("../../../certification/ltx-25/ltx-cert-run-002/result.json", import.meta.url)
+      )
+    );
+    const certContent = await readFile(certPath, "utf8");
+    const certJson = JSON.parse(certContent);
+
+    expect(LTX_25_720P_5S_V1_PROFILE.modelHashes).toEqual(certJson.identity.modelSha256);
   });
 
   it("accepts a compliant FLUX profile", () => {
