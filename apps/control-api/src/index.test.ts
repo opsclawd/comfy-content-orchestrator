@@ -8,7 +8,7 @@ import {
   type UnitOfWork,
   type UnitOfWorkContext
 } from "@cco/application";
-import { Scene, type CampaignId, type SceneId } from "@cco/domain";
+import { Scene, type CampaignId, type CandidateId, type SceneId } from "@cco/domain";
 import {
   controlApiName,
   createControlApi,
@@ -58,6 +58,7 @@ describe("control-api composition root", () => {
     });
     scene.beginCandidateGeneration();
     scene.submitCandidatesForReview();
+    scene.selectCandidate("candidate-1" as CandidateId, scene.snapshot().specRevision, scene.id);
     scene.approve({
       approvedBy: "Director Alice",
       approvedAt: "2026-08-15T00:00:00.000Z"

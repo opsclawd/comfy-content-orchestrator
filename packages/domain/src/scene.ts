@@ -408,6 +408,18 @@ export class Scene {
       throw new InvalidTransitionError(this.#id, this.#status, "approve");
     }
 
+    if (
+      this.#selectedCandidateId === undefined ||
+      this.#selectedCandidateRevision !== this.#specRevision
+    ) {
+      throw new InvalidTransitionError(
+        this.#id,
+        this.#status,
+        "approve",
+        `Approval requires a valid candidate selection from revision ${this.#specRevision}.`
+      );
+    }
+
     const approval: Readonly<SceneApproval> = Object.freeze({
       revision: this.#specRevision,
       approvedBy: input.approvedBy,

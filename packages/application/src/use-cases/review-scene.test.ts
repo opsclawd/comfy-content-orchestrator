@@ -4,6 +4,7 @@ import {
   InvalidTransitionError,
   Scene,
   type CampaignId,
+  type CandidateId,
   type SceneId
 } from "@cco/domain";
 import type {
@@ -40,6 +41,7 @@ describe("ReviewSceneUseCases", () => {
 
   const createSceneInApproved = (id: string = "scene-1"): Scene => {
     const scene = createSceneInDirectorReview(id);
+    scene.selectCandidate("candidate-1" as CandidateId, scene.snapshot().specRevision, scene.id);
     scene.approve({
       approvedBy: "Director Initial",
       approvedAt: "2026-08-15T00:00:00.000Z"
@@ -57,6 +59,7 @@ describe("ReviewSceneUseCases", () => {
 
   it("approve: director_review transitions to approved, appends approve event, and saves atomically", async () => {
     const scene = createSceneInDirectorReview("scene-approve-1");
+    scene.selectCandidate("candidate-1" as CandidateId, scene.snapshot().specRevision, scene.id);
     const uow = new InMemorySceneUnitOfWork([scene]);
     const useCases = new ReviewSceneUseCases(uow);
 
@@ -423,6 +426,7 @@ describe("ReviewSceneUseCases", () => {
 
   it("review event append failure commits neither the event nor the scene save", async () => {
     const scene = createSceneInDirectorReview("scene-append-fail");
+    scene.selectCandidate("candidate-1" as CandidateId, scene.snapshot().specRevision, scene.id);
     const saveSpy = vi.fn();
 
     const failingUow: UnitOfWork = {
