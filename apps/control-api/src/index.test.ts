@@ -5,6 +5,7 @@ import {
   type QueueRenderInput,
   type RenderEnginePort,
   type RenderQueueReceipt,
+  type SceneReviewQueries,
   type UnitOfWork,
   type UnitOfWorkContext
 } from "@cco/application";
@@ -36,10 +37,13 @@ class FakeUnitOfWork implements UnitOfWork {
         }
       },
       reviewEvents: {
+        findById: async () => undefined,
         append: async () => {}
       },
       candidates: {
-        findById: async () => undefined
+        findById: async () => undefined,
+        insert: async () => {},
+        listBySceneAndRevision: async () => []
       }
     };
     return work(context);
@@ -90,10 +94,18 @@ describe("control-api composition root", () => {
       async unloadModels() {}
     };
 
-    const container = createControlApiContainer({ uow, renderEngine });
+    const sceneReviewQueries: SceneReviewQueries = {
+      async getSceneReviewDetail() {
+        return undefined;
+      }
+    };
+
+    const container = createControlApiContainer({ uow, renderEngine, sceneReviewQueries });
 
     expect(container.dependencies.uow).toBe(uow);
     expect(container.dependencies.renderEngine).toBe(renderEngine);
+    expect(container.dependencies.sceneReviewQueries).toBe(sceneReviewQueries);
+    expect(container.queries.sceneReview).toBe(sceneReviewQueries);
     expect(container.useCases.reviewScene).toBeInstanceOf(ReviewSceneUseCases);
     expect(container.useCases.progressSceneProduction).toBeInstanceOf(
       ProgressSceneProductionUseCases
@@ -156,5 +168,6 @@ describe("control-api composition root", () => {
     expect(container.useCases.progressSceneProduction).toBeInstanceOf(
       ProgressSceneProductionUseCases
     );
+    expect(container.queries.sceneReview).toBeUndefined();
   });
 });

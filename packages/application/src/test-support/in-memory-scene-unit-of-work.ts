@@ -77,6 +77,7 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
   async execute<TResult>(work: (context: UnitOfWorkContext) => Promise<TResult>): Promise<TResult> {
     const stagedScenes: Scene[] = [];
     const stagedReviewEvents: ReviewEvent[] = [];
+    const stagedCandidates: StoryboardCandidate[] = [];
 
     const scopedScenes: SceneRepository = {
       findById: async (sceneId: SceneId): Promise<Scene | undefined> => {
@@ -89,13 +90,39 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
 
     const scopedCandidates: StoryboardCandidateRepository = {
       findById: async (candidateId: CandidateId): Promise<StoryboardCandidate | undefined> => {
-        return this._seededCandidates.get(candidateId);
+        return (
+          stagedCandidates.find((c) => c.id === candidateId) ??
+          this._seededCandidates.get(candidateId)
+        );
+      },
+      insert: async (candidate: StoryboardCandidate): Promise<void> => {
+        stagedCandidates.push(candidate);
+      },
+      listBySceneAndRevision: async (
+        sceneId: SceneId,
+        specRevision: number
+      ): Promise<readonly StoryboardCandidate[]> => {
+        const candidatesMap = new Map<CandidateId, StoryboardCandidate>(this._seededCandidates);
+        for (const candidate of stagedCandidates) {
+          candidatesMap.set(candidate.id, candidate);
+        }
+        return Array.from(candidatesMap.values())
+          .filter(
+            (candidate) => candidate.sceneId === sceneId && candidate.specRevision === specRevision
+          )
+          .sort((a, b) => a.variantOrdinal - b.variantOrdinal);
       }
     };
 
     const scopedReviewEvents: ReviewEventStore = {
       append: async (event: ReviewEvent): Promise<void> => {
         stagedReviewEvents.push(event);
+      },
+      findById: async (eventId: string): Promise<ReviewEvent | undefined> => {
+        return (
+          stagedReviewEvents.find((e) => e.eventId === eventId) ??
+          this._reviewEvents.find((e) => e.eventId === eventId)
+        );
       }
     };
 
@@ -111,6 +138,9 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     this._reviewEvents.push(...stagedReviewEvents);
     for (const scene of stagedScenes) {
       this._seededScenes.set(scene.id, scene);
+    }
+    for (const candidate of stagedCandidates) {
+      this._seededCandidates.set(candidate.id, candidate);
     }
 
     return result;
