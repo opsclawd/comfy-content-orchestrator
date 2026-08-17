@@ -472,8 +472,7 @@ export async function insertStoryboardSceneRecord(
     input.loraConfigurationId !== undefined ? input.loraConfigurationId : null;
   const approvedBy = input.approvedBy !== undefined ? input.approvedBy : null;
   const approvedAt = input.approvedAt !== undefined ? input.approvedAt : null;
-  const approvedRevision =
-    input.approvedRevision !== undefined ? input.approvedRevision : null;
+  const approvedRevision = input.approvedRevision !== undefined ? input.approvedRevision : null;
   const failedFrom = input.failedFrom !== undefined ? input.failedFrom : null;
 
   const res = await client.query<InsertedStoryboardSceneRecord>(

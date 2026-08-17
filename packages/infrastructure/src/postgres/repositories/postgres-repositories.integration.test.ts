@@ -174,17 +174,15 @@ describe("PostgreSQL StoryboardCandidateRepository and ReviewEventStore Adapters
     expect(scene2Rev1Candidates[0]).toEqual(candidate5Scene2);
 
     // Verify empty list for scene with no matching revision
-    const scene1Rev99 = await candidateRepo.listBySceneAndRevision(
-      scene1.scene_id as SceneId,
-      99
-    );
+    const scene1Rev99 = await candidateRepo.listBySceneAndRevision(scene1.scene_id as SceneId, 99);
     expect(scene1Rev99).toEqual([]);
 
     // Verify database-level immutability trigger prevents UPDATE or DELETE
     await expect(
-      client.query("UPDATE storyboard_candidates SET content_hash_sha256 = 'mutated' WHERE candidate_id = $1", [
-        candidate1.id
-      ])
+      client.query(
+        "UPDATE storyboard_candidates SET content_hash_sha256 = 'mutated' WHERE candidate_id = $1",
+        [candidate1.id]
+      )
     ).rejects.toThrow(/append-only\/immutable/);
 
     await expect(

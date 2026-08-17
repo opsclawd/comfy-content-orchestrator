@@ -121,10 +121,7 @@ describe("InMemorySceneUnitOfWork", () => {
     const c3Rev2Var1 = createTestCandidate("c-3", "scene-1", 2, 1);
     const c4Scene2Var1 = createTestCandidate("c-4", "scene-2", 1, 1);
 
-    const uow = new InMemorySceneUnitOfWork(
-      [],
-      [c1Rev1Var2, c2Rev1Var1, c3Rev2Var1, c4Scene2Var1]
-    );
+    const uow = new InMemorySceneUnitOfWork([], [c1Rev1Var2, c2Rev1Var1, c3Rev2Var1, c4Scene2Var1]);
 
     // Initial listing sorted by variantOrdinal
     await uow.execute(async (context) => {

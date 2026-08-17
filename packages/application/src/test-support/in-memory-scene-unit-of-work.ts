@@ -108,8 +108,7 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
         }
         return Array.from(candidatesMap.values())
           .filter(
-            (candidate) =>
-              candidate.sceneId === sceneId && candidate.specRevision === specRevision
+            (candidate) => candidate.sceneId === sceneId && candidate.specRevision === specRevision
           )
           .sort((a, b) => a.variantOrdinal - b.variantOrdinal);
       }

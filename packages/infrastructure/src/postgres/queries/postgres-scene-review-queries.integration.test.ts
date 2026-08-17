@@ -274,7 +274,9 @@ describe("PostgreSQL SceneReviewQueries Read Adapter Integration", () => {
       approvedRevision: 1
     });
 
-    const approvedDetail = await queryAdapter.getSceneReviewDetail(approvedScene.scene_id as SceneId);
+    const approvedDetail = await queryAdapter.getSceneReviewDetail(
+      approvedScene.scene_id as SceneId
+    );
     expect(approvedDetail).toBeDefined();
     expect(approvedDetail?.status).toBe("approved");
     expect(approvedDetail?.approval).toEqual({

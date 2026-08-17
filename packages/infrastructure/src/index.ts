@@ -11,21 +11,13 @@ export {
   type PostgresSceneRepositoryOptions
 } from "./postgres/repositories/postgres-scene-repository.js";
 
-export {
-  PostgresStoryboardCandidateRepository
-} from "./postgres/repositories/postgres-storyboard-candidate-repository.js";
+export { PostgresStoryboardCandidateRepository } from "./postgres/repositories/postgres-storyboard-candidate-repository.js";
 
-export {
-  PostgresReviewEventStore
-} from "./postgres/repositories/postgres-review-event-store.js";
+export { PostgresReviewEventStore } from "./postgres/repositories/postgres-review-event-store.js";
 
-export {
-  PostgresUnitOfWork
-} from "./postgres/uow/postgres-unit-of-work.js";
+export { PostgresUnitOfWork } from "./postgres/uow/postgres-unit-of-work.js";
 
-export {
-  PostgresSceneReviewQueries
-} from "./postgres/queries/postgres-scene-review-queries.js";
+export { PostgresSceneReviewQueries } from "./postgres/queries/postgres-scene-review-queries.js";
 
 export {
   ComfyUiRenderEngineAdapter,
