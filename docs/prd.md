@@ -2,14 +2,34 @@
 
 **Project Name:** Godzspeed Sovereign Content Orchestration Platform & Creative Review Hub  
 **Repository:** `opsclawd/comfy-content-orchestrator`  
-**Document Version:** 3.4.0 (Production Engineering & Empirically Certified Architectural Baseline)  
-**Status:** Implementation Ready - Engineering Baseline (Post-Audit + LTX-2.5 Hardware Certification)  
+**Document Version:** 3.5.0 (Review Plane Contract Closure Baseline)  
+**Status:** Implementation Ready — Sprint 1 Certified / Sprint 1.5 Ready  
 **Runtime & Stack:** TypeScript / Node.js 24 LTS ("Krypton") | Next.js Review Hub | ComfyUI Headless | Tailscale (WireGuard Mesh) | PostgreSQL 18.6 | MinIO (S3-Compatible Review Media Store)  
-**Hardware Profile:** AMD Ryzen 7 7700 (8C/16T) | 32GB DDR5-5600 RAM (64GB upgrade contingent on Sprint 1 host-memory certification) | NVIDIA RTX 4090 (24GB GDDR6X) | 2TB PCIe 4.0 NVMe SSD  
+**Hardware Profile:** AMD Ryzen 7 7700 (8C/16T) | 32GB DDR5-5600 RAM certified for the dedicated Phase 1 single-render workload | NVIDIA RTX 4090 (24GB GDDR6X) | 2TB PCIe 4.0 NVMe SSD  
 **Key Stakeholders:**
 - **Creative Director:** Thomas Cumberbatch (Godzspeed Communications, Canada)
 - **Technical Lead & Content Creator:** Agency Lead (Godzspeed Trinidad & Tobago Division)
 - **Cloud Control Plane:** Hetzner Cloud CPX31 VPS (Falkenstein, Germany / Tailscale-only application access)
+
+## 0. Version 3.5.0 Change Summary
+
+PRD v3.5.0 preserves the v3.4.0 architecture and closes implementation gaps exposed by Sprint 1 before Review Hub work begins.
+
+Material changes:
+
+1. Reconciles Sprint 1 certification results with the committed `LTX_25_720P_5S_V1` RenderProfile.
+2. Distinguishes the full downloaded LTX-2.5 repository footprint (~68.8GB) from the exact certified Phase 1 execution model set (38.329275932GB).
+3. Records 32GB host RAM as supported for the dedicated Phase 1 single-render profile, with observed transient cold-page swap rather than sustained memory pressure.
+4. Introduces a transitional **Sprint 1.5 — Review Plane Contract Closure** before Sprint 2.
+5. Adds a first-class immutable `StoryboardCandidate` model tied to `sceneId + SceneSpec revision`.
+6. Makes candidate selection explicit and auditable; approval of generated visual scenes requires a candidate from the current SceneSpec revision.
+7. Defines browser/API optimistic concurrency, idempotency, reviewer authority, and stale-command behavior.
+8. Moves runtime Scene/review-event transactional persistence into Sprint 1.5 so Sprint 2 does not build a UI over in-memory application services.
+9. Clarifies Review Hub action semantics: `reject` is QA rejection; storyboard rejection/regeneration is `reroll`; `reorder` and `duplicate` are reserved but out of Phase 1 Review Hub scope.
+10. Defines the canonical MinIO S3 endpoint and separates browser media delivery from MinIO administration.
+11. Explicitly prohibits a temporary synchronous Review API -> ComfyUI render path. Durable candidate-generation dispatch is implemented with the PostgreSQL worker queue in Sprint 3.
+
+These changes are contract and sequencing corrections. They do not replace the Clean Architecture boundaries, PostgreSQL state store, MinIO review-store role, Tailscale perimeter, ComfyUI render plane, or certified RenderProfile architecture.
 
 ---
 
@@ -19,20 +39,21 @@
 
 Boutique branding and digital marketing agencies targeting Caribbean and international markets face four core operational bottlenecks:
 
-1. **High Turnaround & Team Overhead:** Traditional commercial agency production requires 4-6 specialized roles (cinematographers, copywriters, sound designers, colorists, and video editors) with turnaround times of 2 to 4 weeks per campaign.
-2. **The "Spaghetti Node" Barrier:** In-house generative AI workflows in ComfyUI cannot scale when operated manually through a visual canvas. Manual node wiring takes 15-30 minutes per shot, introduces prompt drift, invites custom-node dependency rot, and lacks transactional reliability.
-3. **The Cultural Representation Gap:** Generic foundation models exhibit Western bias. Prompting for Caribbean subjects can default to stereotypes; steelpan may render as oil drums, traditional Carnival Mas (Blue Devils, Moko Jumbies) can collapse into generic masquerade, and Caribbean skin tones can render with flat or waxy textures.
-4. **Cross-Border Direction Friction:** Remote creative direction across Canada and Trinidad relying on fragmented messaging (WhatsApp/Drive) creates visual misalignment before heavy, time-consuming GPU rendering begins.
+1. **High Turnaround & Team Overhead:** Traditional commercial agency production requires 4-6 specialized roles with turnaround times of 2 to 4 weeks per campaign.
+2. **The "Spaghetti Node" Barrier:** In-house generative AI workflows in ComfyUI cannot scale when operated manually through a visual canvas. Manual node wiring introduces prompt drift, dependency rot, and no transactional execution boundary.
+3. **The Cultural Representation Gap:** Generic foundation models can produce culturally inaccurate Caribbean imagery and require controlled references, prompts, LoRAs, review, and provenance.
+4. **Cross-Border Direction Friction:** Remote creative direction across Canada and Trinidad using fragmented messaging creates visual misalignment before expensive GPU rendering begins.
 
 ### 1.2 The Solution
 
 The **Godzspeed Content Orchestration Platform** is an AI-native creative production engine built around a strict **Human-on-the-Loop Compute Gate**:
 
-- **Decoupled Architecture:** ComfyUI operates as an isolated headless rendering service controlled by an asynchronous TypeScript/Node.js 24 orchestration daemon over REST and WebSockets.
-- **Two-Tier Compute Sequencing:** High-level campaign briefs are expanded into rapid 4-step storyboard keyframes using FLUX.1 [schnell], producing 3 candidate variants across 6 scenes before expensive video generation begins.
-- **Remote Director Gate:** Storyboard drafts, scripts, audio prompts, reference assets, and LoRA configuration are exposed through a private Next.js Review Hub over Tailscale. The Creative Director can review, edit, re-roll, tune, reject, and approve scenes from an iPad or Mac.
+- **Decoupled Architecture:** ComfyUI operates as an isolated headless rendering service controlled through application ports by TypeScript/Node.js orchestration.
+- **Two-Tier Compute Sequencing:** Campaign briefs expand into fast FLUX.1 [schnell] storyboard candidates before expensive video generation.
+- **Remote Director Gate:** Candidates, scripts, prompts, references, timing, engine selection, and LoRA configuration are reviewed through a private Next.js Review Hub over Tailscale.
+- **Revision-Safe Approval:** A director approves a specific SceneSpec revision and, for generated visual scenes, a candidate belonging to that revision. Stale browser actions cannot approve a newer revision accidentally.
 - **Deterministic Production Execution:** The Trinidad RTX 4090 executes pinned production workflows for FLUX.1 [schnell] stills, LTX 2.5 Distilled video, and headless FFmpeg assembly.
-- **Controlled Cloud Cognition:** Planning, visual ranking, and voice synthesis use configured frontier APIs only when permitted by the client's external-processing policy.
+- **Controlled Cloud Cognition:** Planning, visual ranking, and voice synthesis use configured external APIs only when the client's external-processing policy permits them.
 - **Sovereign Render Plane:** Diffusion checkpoints, LoRAs, long-term masters, and generation execution remain on agency-controlled infrastructure.
 
 ### 1.3 Target Performance & Capacity Model
@@ -42,13 +63,13 @@ The **Godzspeed Content Orchestration Platform** is an AI-native creative produc
 | **Monthly Video Production Capacity** | 4-6 client video reels | **40-60 commercial reels / month** |
 | **Monthly Stills & Photography** | 20-30 edited stills | **150-200 4K brand assets / month** |
 | **Draft Storyboard Latency (18 frames)** | 24-48 hours | **< 45 seconds** (3 candidates x 6 scenes) |
-| **Draft Keyframe Render Speed** | N/A | **~1.9s / frame** (FLUX [schnell], measured target profile) |
-| **Video Shot Render Speed (LTX 2.5)** | 1-2 hours manual animation | **46s measured end-to-end / 5s 720p, 97 frames, 8 steps** |
+| **Draft Keyframe Render Speed** | N/A | **~1.9s / frame** (FLUX [schnell] target profile) |
+| **Video Shot Render Speed (LTX 2.5)** | 1-2 hours manual animation | **~45.6s certified median / 5s 720p, 97 frames, 8 steps** |
 | **Full 30s Reel Turnaround** | 3-5 business days | **< 15-20 minutes** production batch target |
 | **External Diffusion Compute Cost** | $15-$50 / asset via SaaS | **$0.00 marginal external diffusion cost** |
 | **Security & Privacy Boundary** | Public third-party SaaS | **Private Render Plane + controlled external-processing policy** |
 
-Performance values are operational targets unless explicitly marked as measured. The LTX-2.5 720p baseline below is an empirical measurement from the target RTX 4090 workstation and supersedes prior 20-30 second / ~14.2GB VRAM estimates.
+Performance values are operational targets unless explicitly marked as measured. Certified measurements are tied to exact workflow/model hashes and runner identity.
 
 ---
 
@@ -58,26 +79,26 @@ The system uses a **hybrid split-plane topology** separating persistent control/
 
 ### 2.1 Deployment Plane Segmentation
 
-#### A. Cloud Control Plane - Hetzner CPX31, Falkenstein
+#### A. Cloud Control Plane — Hetzner CPX31, Falkenstein
 
 Responsibilities:
 
-- PostgreSQL 18.6 relational state, workflow metadata, review history, and durable worker leases.
+- PostgreSQL 18.6 relational state, review history, and durable worker leases.
+- Control API composition root.
 - Next.js Director Review Hub.
-- MinIO S3-compatible object storage for **review proxies, temporary candidates, reference previews, and time-bounded delivery media**.
-- Presigned URL issuance for browser media access.
-- Durable job leasing with `SELECT ... FOR UPDATE SKIP LOCKED`.
+- MinIO S3-compatible object storage for review proxies, storyboard candidates, reference previews, and time-bounded delivery media.
+- Short-lived presigned browser media access.
 - Prometheus-compatible application metrics.
 - No ComfyUI inference workloads.
 
-PostgreSQL 18 asynchronous I/O uses the platform default `io_method = 'worker'`. `io_workers` remains at the PostgreSQL default initially and is treated as a **deployment-tuning parameter**, not an architectural constant. Changes require representative load testing.
+PostgreSQL 18 asynchronous I/O uses the platform default `io_method = 'worker'`. `io_workers` remains deployment-tuned rather than an architectural constant.
 
-#### B. Local Compute Runner - Trinidad Inference Workstation
+#### B. Local Compute Runner — Trinidad Inference Workstation
 
 Responsibilities:
 
 - ComfyUI headless daemon.
-- TypeScript orchestration worker under Node.js 24 LTS.
+- TypeScript render worker under Node.js 24 LTS.
 - Local NVMe model checkpoint and cultural LoRA vault.
 - Long-term generation master storage.
 - FFmpeg media assembly.
@@ -86,11 +107,11 @@ Responsibilities:
 
 Network bindings:
 
-- ComfyUI: `127.0.0.1:8188` and Tailscale interface only.
-- Orchestrator control endpoint: Tailscale interface only.
+- ComfyUI: loopback and explicitly authorized Tailscale interface only.
+- Render-worker control surface: Tailscale interface only when remotely required.
 - No public WAN listener.
 
-#### C. Remote Review & Direction Plane - Ottawa, Canada
+#### C. Remote Review & Direction Plane — Ottawa, Canada
 
 The Creative Director accesses:
 
@@ -98,30 +119,39 @@ The Creative Director accesses:
 
 through Tailscale/MagicDNS.
 
-Supported director operations are defined by the canonical state machine in Section 4.
+The browser talks only to the Review Hub / Control API contracts. It never imports or invokes application/infrastructure implementations directly.
 
 ### 2.2 Network Overlay & Asset Distribution Security
 
-- **Mesh Network:** Tailscale utilizing WireGuard-encrypted peer-to-peer tunnels.
-- **Canonical Tailnet Namespace:** `godzspeed-internal.ts.net`.
-- **Review Hub:** `review.godzspeed-internal.ts.net`.
-- **Compute Runner:** `render-01.godzspeed-internal.ts.net`.
-- **Control Plane:** `control-01.godzspeed-internal.ts.net`.
-- **Access Control:** Zero public inbound application/database/ComfyUI ports. Administrative and application access is Tailscale-only.
-- **Media Delivery:** Generated review media is uploaded from Trinidad to MinIO over Tailscale.
-- **Browser Delivery:** The Review Hub generates short-lived presigned S3 URLs. Presigned URLs are **never persisted as canonical asset identifiers**.
-- **Persistent Media Identity:** Database records store bucket/object keys plus content hashes. URLs are generated on demand.
+Canonical tailnet namespace: `godzspeed-internal.ts.net`.
+
+Canonical application names:
+
+- **Review Hub:** `review.godzspeed-internal.ts.net`
+- **Control API:** `control-01.godzspeed-internal.ts.net`
+- **Compute Runner:** `render-01.godzspeed-internal.ts.net`
+- **S3 Review Media Endpoint:** `storage-01.godzspeed-internal.ts.net`
+
+Rules:
+
+- Application, PostgreSQL, ComfyUI, and MinIO endpoints have zero public inbound exposure.
+- Browser media is delivered using short-lived presigned URLs targeting the tailnet-only S3 endpoint.
+- Presigned URLs are never persisted as canonical asset identifiers.
+- Database records store bucket/object keys and content hashes.
+- The MinIO administrative console is not a Review Hub dependency and is restricted to operator access through tailnet ACLs and/or local administrative binding.
+- Review browser access to S3 does not imply MinIO administrative access.
+- Final deployment acceptance requires a real public-WAN exposure audit; configuration files alone do not satisfy the gate.
 
 ### 2.3 MinIO Object Lifecycle & Capacity Controls
 
-The CPX31 system disk is not treated as an unlimited media archive. MinIO is a **review/distribution layer**, while long-term generation masters remain in the Trinidad asset vault and backup system.
+The CPX31 system disk is not an unlimited archive. MinIO is a **review/distribution layer**; long-term generation masters remain in the Trinidad asset vault and backup system.
 
 #### Bucket Classes
 
 | Bucket / Class | Purpose | Default Retention |
 |---|---|---|
 | `godzspeed-temp` | rejected candidates, transient intermediates, temporary render stems | **14 days** |
-| `godzspeed-review` | WebP keyframes, proxy MP4s, review audio | **60 days** |
+| `godzspeed-review` | storyboard candidates, WebP keyframes, proxy MP4s, review audio | **60 days** |
 | `godzspeed-reference` | active client logos, reference previews, compact brand assets | **while client is active** |
 | `godzspeed-delivery` | approved delivery copies awaiting client handoff | **90 days after campaign completion** |
 
@@ -129,29 +159,32 @@ Retention is enforced by S3 lifecycle rules. Client contracts may override defau
 
 #### Capacity Watermarks
 
-- **70% disk usage:** warning; emit alert and accelerate eligible lifecycle cleanup.
-- **85% disk usage:** degraded mode; stop nonessential candidate/proxy uploads and run cleanup.
-- **92% disk usage:** critical mode; stop new MinIO media sync and prevent new campaigns from entering production until capacity is restored.
+- **<70%:** normal operation.
+- **70% warning:** emit alert and accelerate cleanup of lifecycle-eligible temporary/review objects. Do not block normal work solely at this threshold.
+- **85% degraded:** stop admission of new nonessential candidate/proxy uploads and new candidate-generation work requiring additional review storage; continue cleanup and explicitly approved delivery operations where capacity permits.
+- **92% critical:** block new media writes except cleanup/repair operations, prevent campaigns from entering candidate-generation or production states requiring new media, and require operator capacity recovery.
+
+Watermark policy is application-visible. The generic object-storage adapter does not decide business admission policy itself.
 
 If media usage remains above 60% of CPX31 disk capacity for 14 consecutive days, migrate MinIO data to a dedicated storage volume/service rather than increasing local retention pressure.
 
 Required metrics:
 
-- `godzspeed_object_storage_bytes`
+- `godzspeed_object_storage_bytes{bucket}`
 - `godzspeed_storage_free_bytes`
 - `godzspeed_storage_watermark_state`
 
 ### 2.4 MinIO Component Governance
 
-MinIO Object Store is tracked as an infrastructure software dependency under **GNU AGPLv3**.
+MinIO Object Store is tracked as an infrastructure dependency under GNU AGPLv3.
 
 Agency policy:
 
 - Deploy MinIO as a separate, unmodified S3-compatible service.
 - Do not embed MinIO server code into proprietary application binaries.
-- Record the deployed MinIO version, license source, and review date in the component license registry.
+- Record deployed version, license source, and review date in the component license registry.
 - Require OSS/legal review before modifying MinIO, redistributing it, or creating a derivative integration that could alter source-availability obligations.
-- A future commercial or alternative S3-compatible backend may replace MinIO without changing application-domain contracts.
+- A future S3-compatible backend may replace MinIO without changing application-domain contracts.
 
 ---
 
@@ -163,219 +196,147 @@ The RTX 4090 is reserved for diffusion execution. Cognitive cloud workloads cons
 
 #### ComfyUI Startup Profile
 
-The empirical LTX-2.5 benchmark demonstrated that the official 720p workflow succeeds on the RTX 4090 by cycling the large text encoder and diffusion transformer through GPU memory rather than keeping the entire working set resident simultaneously. Therefore, the **initial production baseline is ComfyUI default DynamicVRAM / workflow-managed offloading**.
+The Phase 1 production baseline is ComfyUI default DynamicVRAM / workflow-managed offloading.
 
-Baseline startup:
+`--gpu-only` is prohibited for the certified LTX Phase 1 profile. `--highvram` remains experimental unless separately certified. Mutually exclusive VRAM flags are never combined.
 
-```bash
-python main.py --listen 100.x.y.z --port 8188
-```
-
-`--gpu-only` is prohibited for the Phase 1 production profile. `--highvram` remains an experimental comparator only and is adopted only if the Sprint 1 certification suite proves equal-or-better stability, memory headroom, and repeated transition behavior. Mutually exclusive VRAM flags are never combined.
-
-The exact ComfyUI commit, startup arguments, workflow loader behavior, and selected memory mode are persisted as the certified `runnerProfile`.
+The exact ComfyUI commit, startup arguments, workflow identity, model hashes, and selected memory mode are persisted with the certified runner profile.
 
 #### VRAM Unload & Transition Protocol
 
 When changing model families, for example FLUX -> LTX:
 
-1. The orchestrator requests model unloading:
+1. The orchestrator requests ComfyUI model unload using `/free` with `free_memory` and `unload_models`.
+2. ComfyUI performs its own Python/model reclamation behavior.
+3. The Node.js orchestrator does not claim to call Python `gc.collect()` or `torch.cuda.empty_cache()` directly.
+4. The orchestrator polls NVML telemetry until configured headroom is reached.
+5. The next heavyweight model family is not dispatched until headroom is satisfied or cleanup times out.
+6. Failure to reclaim sufficient VRAM marks the worker degraded and prevents the next heavyweight render from starting.
 
-```http
-POST http://127.0.0.1:8188/free
-Content-Type: application/json
+### 3.1.1 Certified LTX-2.5 Phase 1 Baseline
 
-{
-  "free_memory": true,
-  "unload_models": true
-}
-```
+Two disk figures must not be conflated:
 
-2. The ComfyUI Python process performs its own model unload / garbage-collection / cache-reclamation behavior.
-3. The Node.js orchestrator **does not claim to directly execute Python `gc.collect()` or `torch.cuda.empty_cache()`**.
-4. The orchestrator polls NVML VRAM telemetry until configured headroom is reached.
-5. The next model family is not dispatched until headroom is satisfied or the cleanup timeout expires.
-6. Failure to reclaim sufficient VRAM marks the worker `degraded`, records an error, and prevents the next heavyweight render from starting.
+- **Full downloaded LTX-2.5 repository/model-family material observed on the host:** approximately **68.8GB** across diffusion models, text encoders, VAE, LoRAs, and related files.
+- **Exact certified execution model set used by `LTX_25_720P_5S_V1`:** **38.329275932GB** (38,329,275,932 bytes) for the pinned text encoder, diffusion transformer, and VAE.
 
-Initial transition thresholds are configuration values, not PRD constants.
+The >=100GB free-disk reservation remains mandatory to provide model/cache/update headroom and is not reduced to the exact certified-file byte sum.
 
-#### 3.1.1 Empirical LTX-2.5 Hardware Certification Baseline
+Certified profile: `config/render-profiles/LTX_25_720P_5S_V1.json`.
 
-The following measurements were collected on the target Trinidad inference workstation using the accepted Hugging Face `Lightricks/LTX-2.5` repository and the official ComfyUI LTX-2.5 template for a single 5-second 720p render. These measurements are the current Phase 1 source of truth and replace earlier speculative resource estimates.
-
-**Measured local model footprint:**
-
-| Model directory | Measured size |
+| Property | Certified value |
 |---|---:|
-| `diffusion_models` | **41 GB** |
-| `text_encoders` | **15 GB** |
-| `vae` | **4.5 GB** |
-| `loras` | **8.3 GB** |
-| `model_patches` | **3.7 MB** |
-| **Total downloaded LTX-2.5 family** | **~68.8 GB** |
-
-**Certified test workload:**
-
-| Property | Measured value |
-|---|---:|
-| Resolution | **720p** |
+| Resolution | **1280x720** |
 | Frames | **97** |
-| Approximate clip duration | **5 seconds** |
-| DiT sampling steps | **8** |
-| Peak GPU memory reported by `nvidia-smi` | **24,028 MB** |
-| Approximate RTX 4090 memory utilization | **97.8%** |
-| Core DiT sampling duration | **~12 seconds** |
-| Total execution time | **46 seconds** |
-| OOM result | **None - render completed successfully** |
+| Approximate duration | **5 seconds** |
+| DiT steps | **8** |
+| Runner profile | **dynamicvram-offload-v1** |
+| Peak VRAM under FLUX/LTX transition load | **24,038MB** |
+| Median total duration across LTX soak iterations | **45,632ms** |
+| Peak host RAM used | **29,384MB** |
+| Peak process RSS | **27,043MB** |
+| Maximum LTX swap delta | **89MB** |
+| Major page faults observed | **1,009** |
+| Certified execution model set | **38.329275932GB** |
+| Minimum free disk reservation | **100GB** |
+| Concurrent GPU jobs | **1** |
+| Requires model offloading | **true** |
 
-Observed execution behavior showed ComfyUI cycling the large text-encoding and diffusion components through the RTX 4090 rather than keeping the full working set resident concurrently. Operationally, LTX-2.5 **fits on the RTX 4090 through controlled offloading**; it must not be described as fitting entirely in 24GB VRAM.
+The original transition-soak binary `noSwapActivity` predicate failed because Linux performed limited cold-page swap during early iterations. The committed certification assessment records that swap ceased, headroom remained stable, there was no progressive VRAM/RAM leak, no OOM, and no ComfyUI restart. The dedicated 32GB Phase 1 single-generation profile is therefore certified with that limitation documented rather than hidden.
 
-The benchmark establishes single-render compatibility, not production soak stability. Sprint 1 must additionally measure host RAM, peak RSS, swap activity, page faults, repeated FLUX <-> LTX transitions, and post-unload VRAM reclamation.
+### 3.1.2 Phase 1 GPU Concurrency Invariant
 
-#### 3.1.2 Phase 1 GPU Concurrency Invariant
+A Trinidad RTX 4090 Render Worker executes **at most one active diffusion generation at a time**.
 
-A Trinidad RTX 4090 Render Worker executes **at most one active diffusion generation at a time**. LTX-2.5 reached approximately 97.8% measured VRAM utilization in the certified workload; concurrent FLUX/LTX or LTX/LTX generation on one GPU is therefore prohibited.
+CPU-side uploads, database operations, cloud API calls, and metadata processing may overlap with GPU inference. A second diffusion job cannot enter GPU execution until the active job releases the local GPU execution lease and the required VRAM headroom is verified.
 
-CPU-side uploads, database operations, cloud API calls, and media metadata processing may overlap with GPU inference, but a second diffusion job cannot enter GPU execution until the active job releases the worker's GPU lease and the required VRAM headroom is verified.
+### 3.1.3 Phase 1 Host RAM Decision
 
-#### 3.1.3 Phase 1 Host RAM Decision Gate
+**32GB remains supported for Phase 1** only for the certified dedicated-host operating profile: one active diffusion generation, pinned DynamicVRAM/offloading behavior, and the certified workflow/model set.
 
-The current workstation remains at 32GB DDR5 until Sprint 1 measures the host-memory envelope under the same certified LTX workload. The 64GB upgrade remains a Phase 2 assumption **unless** Phase 1 testing demonstrates any of the following:
+64GB remains required for Phase 2 heavy-engine certification and becomes a Phase 1 upgrade requirement if future regression testing shows:
 
-- sustained swap activity during normal LTX generation;
-- insufficient operating-system / worker headroom;
+- sustained or growing swap pressure rather than bounded cold-page behavior;
+- inadequate OS/worker headroom;
 - repeated-render RSS growth or memory leakage;
 - materially degraded render latency caused by host-memory pressure;
-- OOM or worker instability during the FLUX <-> LTX soak test.
-
-If any condition is observed, 64GB system RAM becomes a **Phase 1 production prerequisite** rather than a Phase 2 enhancement.
+- OOM or instability under the certified workload.
 
 ### 3.2 Cloud API Failover, Rate Limiting & Error Classification
 
 Provider/model names are configuration values and are not compiled into workflow business logic.
 
-| Planning Task | Primary | Secondary Fallback | Retry Strategy | Cache |
-|---|---|---|---|---|
-| **Scene Script & SceneSpec Generation** | Anthropic Claude 5 Sonnet | OpenAI GPT-5.6 Sol | 3 retryable attempts, exponential 1s/2s/4s, then fallback | system prompt + approved brand context |
-| **Candidate Keyframe Ranking (QA)** | Google Gemini 3.7 Flash | OpenAI GPT-5.6 Luna | 3 retryable attempts, exponential 1s/2s/4s, then fallback | visual assessment rubric |
-| **Voiceover Synthesis** | ElevenLabs Multilingual v2 | Azure Neural Speech / configured OpenAI TTS model | 2 retryable attempts, linear 2s, then fallback | text-hash keyed |
+| Planning Task | Primary | Secondary Fallback | Retry Strategy |
+|---|---|---|---|
+| **Scene Script & SceneSpec Generation** | Anthropic Claude 5 Sonnet | OpenAI GPT-5.6 Sol | retry transient failures, then permitted fallback |
+| **Candidate Keyframe Ranking (QA)** | Google Gemini 3.7 Flash | OpenAI GPT-5.6 Luna | retry transient failures, then permitted fallback |
+| **Voiceover Synthesis** | ElevenLabs Multilingual v2 | Azure Neural Speech / configured OpenAI TTS model | bounded retry, then permitted fallback |
 
-#### Error Classification
+Retryable classes: HTTP 429, HTTP 5xx, network timeout/reset/transient DNS.
 
-**Retryable:**
+Non-retryable classes: HTTP 400, HTTP 401, HTTP 403, deterministic local validation failure.
 
-- HTTP 429 rate limit.
-- HTTP 5xx provider failure.
-- Network timeout / connection reset / transient DNS failure.
+Safety/policy rejection:
 
-**Non-retryable:**
+- do not blindly retry;
+- do not use cross-provider fallback to circumvent a safety refusal;
+- route to human/policy-specific handling.
 
-- HTTP 400 request/schema error.
-- HTTP 401 authentication failure.
-- HTTP 403 authorization failure.
-- Deterministic local validation failure.
-
-**Safety/policy rejection:**
-
-- Do not blindly retry.
-- Do not use cross-provider fallback to circumvent a provider safety refusal.
-- Route to human review or a policy-specific handling path.
-
-Fallback providers are usable only when:
-
-1. the provider exists in the client's `allowedProviders`;
-2. the task-specific external-processing boolean is true;
-3. the payload passes sensitive-data masking/redaction policy.
+Fallback is permitted only when the client policy authorizes the provider, task-specific external processing is enabled, and masking/redaction requirements are satisfied.
 
 ### 3.3 External Processing Degraded Modes
 
-External-processing controls are functional behavior, not documentation-only flags.
-
 | Policy | `true` behavior | `false` behavior |
 |---|---|---|
-| `allowCloudPlanning` | configured cloud planner generates SceneSpec | creator manually authors/edits SceneSpec; automated cloud decomposition disabled |
+| `allowCloudPlanning` | configured cloud planner generates SceneSpec | creator manually authors/edits SceneSpec |
 | `allowCloudVisualQA` | configured VLM ranks candidate frames | Review Hub presents candidates unranked for human selection |
-| `allowCloudVoice` | configured cloud TTS generates VO | human/local audio upload required; cloud VO disabled |
-| `sensitiveDataMasking` | policy engine masks configured textual identifiers before cloud calls | raw payload may only be sent when explicitly permitted by client policy |
+| `allowCloudVoice` | configured cloud TTS generates VO | human/local audio upload required |
+| `sensitiveDataMasking` | configured identifiers are masked before permitted cloud calls | raw payload is sent only when explicitly permitted by policy |
 
 ### 3.4 Phased Generative Engine Architecture
 
-Given the workstation's current 32GB DDR5 system RAM, engine deployment remains phased.
+#### Phase 1 — Core Production Engines
 
-#### Phase 1 - Core Production Engines
-
-**FLUX.1 [schnell] (FP8 / Apache 2.0)**
+**FLUX.1 [schnell]**
 
 - Role: storyboard drafts and commercial brand stills.
-- Observed target: ~1.9s per draft frame on RTX 4090.
-- Approximate peak VRAM profile: ~9.2GB.
-- Default Phase 1 still-image engine.
+- Default Phase 1 still-image / storyboard engine.
+- Fast draft-generation target around the measured ~1.9s/frame profile.
 
-**LTX 2.5 Distilled / Official ComfyUI LTX-2.5 Workflow / LTX-2 Community License**
+**LTX 2.5 Distilled / Official ComfyUI LTX-2.5 Workflow**
 
 - Role: social video production and rapid camera motion.
-- **Measured local model-family footprint:** ~68.8GB.
-- **Operational free-space reservation:** >=100GB for model family, cache, and safe update headroom.
-- **Measured certified workload:** 720p, 97 frames, ~5 seconds, 8 DiT steps.
-- **Measured peak VRAM:** 24,028MB (~97.8% utilization on the target RTX 4090).
-- **Measured total execution:** 46 seconds cold-load-through-decode.
-- **Measured core DiT sampling:** ~12 seconds.
-- Execution relies on ComfyUI DynamicVRAM / workflow-managed offloading; the full working set does not reside in VRAM simultaneously.
-- Initial production performance acceptance target: **<=55 seconds** for the certified 720p/97-frame workflow, subject to the runner profile and model hashes being unchanged.
+- Certified workload: 720p / 97 frames / ~5 seconds / 8 DiT steps.
+- Certified runner: `dynamicvram-offload-v1`.
 - One active diffusion render per RTX 4090 worker.
 
-#### Phase 2 - Heavy Diffusion Engines
+#### Phase 2 — Heavy Diffusion Engines
 
 Requires 64GB+ host RAM and separate acceptance testing.
 
-**Wan 2.1 14B (GGUF Q4_K_M / Apache 2.0)**
-
-- Role: cinematic hero motion and human shots.
-- Approximate peak VRAM target: ~21.5GB.
-- Requires verified host-memory headroom.
-
-**MiniMax H3**
-
-- Role: architectural walkthroughs and native audiovisual generation.
-- Heavy working set; Phase 2 only.
-- Territory and commercial-use controls are mandatory before routing any production job.
+- **Wan 2.1 14B:** cinematic hero motion and human shots after host-memory validation.
+- **MiniMax H3:** architectural/native audiovisual workflows only after territory and commercial-use controls pass.
 
 ### 3.5 Model & Component Licensing Governance
 
-Licensing is enforced through a versioned **license registry**, not a static prose table alone.
+Licensing is enforced through a versioned license registry, not static prose alone.
 
-| Component | License / Source Position | Key Conditions | Internal Policy |
-|---|---|---|---|
-| **FLUX.1 [schnell]** | Apache 2.0 | commercial use permitted under license | **Approved** for commercial stills/storyboards |
-| **FLUX.1 [dev]** | FLUX.1-dev Non-Commercial License | commercial deployment requires appropriate BFL commercial licensing | **Restricted** unless a valid commercial agreement is recorded |
-| **LTX 2.5** | LTX-2 Community License Agreement, license date Jan. 5, 2026 | current agency use subject to license terms including the applicable revenue threshold | **Approved conditionally** while license registry status remains current |
-| **Wan 2.1 14B** | Apache 2.0 | use subject to Apache 2.0 | **Approved - Phase 2** after hardware validation |
-| **MiniMax H3** | MiniMax H3 Community License, Aug. 2, 2026 | applicable territory excludes EU, UK, Republic of Korea, and USA; prior written authorization above US$20M yearly commercial-product/service revenue; UI display obligation for commercial products/services using H3; outputs/results may not be used/distributed outside applicable territory | **Approved - Phase 2 only** for Canada/T&T workflows that satisfy license controls |
-| **MinIO Object Store** | GNU AGPLv3 | OSS obligations must be reviewed for deployment/modification/distribution model | **Conditionally approved** as isolated unmodified S3 service |
+| Component | Internal Policy |
+|---|---|
+| FLUX.1 [schnell] | approved for commercial Phase 1 use subject to current license registry |
+| FLUX.1 [dev] | restricted without applicable commercial licensing |
+| LTX 2.5 | conditionally approved while registry terms remain current |
+| Wan 2.1 14B | Phase 2 after hardware validation |
+| MiniMax H3 | Phase 2 only where territory/output restrictions are satisfied |
+| MinIO Object Store | conditionally approved as isolated unmodified S3 service |
 
-#### License Registry Required Fields
+Required registry fields include component key/type, license identity/date/source, territory policy, revenue threshold, attribution/output restrictions, review metadata, approver, and status.
 
-Every routed model or governed infrastructure component stores:
-
-- `component_key`
-- `component_type` (`model`, `software`, `service`)
-- `license_name`
-- `license_version`
-- `license_date`
-- `source_url`
-- `territory_policy`
-- `revenue_threshold_usd`
-- `attribution_requirements`
-- `output_distribution_restrictions`
-- `reviewed_at`
-- `approved_by`
-- `status` (`approved`, `restricted`, `blocked`, `review_required`)
-
-Production routing **fails closed** when a required component's license status is not `approved`.
+Production routing fails closed when a required component is not `approved`.
 
 ### 3.6 Clean Architecture & Domain-Driven Design Constraints
 
-The implementation carries forward the proven Clean Architecture / DDD discipline from the agency's existing automation orchestrator. This is an **architectural constraint**, not a style preference. Dependency direction is enforced mechanically in CI.
+The Clean Architecture / DDD discipline is an architectural constraint enforced mechanically in CI.
 
 #### 3.6.1 Repository Structure
 
@@ -391,6 +352,8 @@ opsclawd/comfy-content-orchestrator/
 |   |-- infrastructure/       # PostgreSQL, ComfyUI, MinIO, AI APIs, FFmpeg, NVML
 |   |-- contracts/            # Stable API/event schemas shared across processes
 |   `-- shared/               # Pure cross-cutting primitives only
+|-- config/render-profiles/
+|-- certification/
 |-- docs/
 |   |-- adr/
 |   |-- CONTEXT.md
@@ -400,87 +363,127 @@ opsclawd/comfy-content-orchestrator/
 
 #### 3.6.2 Dependency Rules
 
-- `domain` may depend only on `shared`; it contains no PostgreSQL, HTTP, ComfyUI, MinIO, provider SDK, FFmpeg, filesystem, or Tailscale code.
-- `application` depends on `domain`, `contracts`, and `shared`; it must not import infrastructure adapters.
-- `infrastructure` implements application ports and may import domain types plus application port contracts, not application use cases.
-- `web` consumes `contracts` and presentation-safe shared/domain types only; it does not import server application or infrastructure packages.
-- Cross-layer wiring occurs only in `apps/control-api` and `apps/render-worker` composition roots.
+- `domain` may depend only on `shared`.
+- `application` depends on `domain`, `contracts`, and `shared`; it never imports infrastructure.
+- `infrastructure` implements application ports and may import domain types/application port contracts, not application use cases.
+- `web` consumes contracts and presentation-safe shared/domain types only; it never imports server application/infrastructure packages.
+- Cross-layer wiring occurs only in composition roots.
 - Circular dependencies are forbidden.
 - Dependency Cruiser or equivalent CI tooling fails the build on boundary violations.
 
 #### 3.6.3 Domain Model Boundaries
 
-`Scene` is the principal aggregate root for creative-review and production lifecycle invariants. A `Campaign` coordinates scenes but does not become a single large transactional aggregate, allowing independent scene review/render progress.
+`Scene` remains the principal aggregate root for creative-review and production lifecycle invariants. A `Campaign` coordinates scenes but does not become one large transaction boundary.
 
-Primary aggregates / domain concepts:
+Primary concepts:
 
-- `Campaign` - campaign identity, high-level completion/progress rules.
-- `Scene` - SceneSpec, references, LoRA configuration, assigned engine, approval validity, and canonical lifecycle transitions.
-- `RenderJob` - durable production work, retry limits, worker ownership, and completion semantics.
-- `RenderLease` - exclusive GPU-worker execution right for one diffusion job.
-- `ReferenceAsset` - continuity/provenance identity.
-- `GenerationManifest` - immutable evidence from a successful render; not a mutable aggregate.
-- `ReviewEvent` - append-only audit event.
-- `RenderProfile` - versioned certified execution configuration for an engine/workflow/hardware envelope.
+- `Campaign` — campaign identity and high-level progress.
+- `Scene` — SceneSpec revision, references, LoRA configuration identity, assigned engine/profile, candidate selection identity, approval validity, and canonical lifecycle.
+- `StoryboardCandidate` — immutable generated review artifact tied to one `Scene` and one SceneSpec revision. It is not the Scene aggregate and does not mutate when later revisions are created.
+- `RenderJob` — durable production/candidate work, retries, ownership, and completion semantics.
+- `RenderLease` — exclusive GPU-worker execution right for one diffusion job.
+- `ReferenceAsset` — continuity/provenance identity.
+- `GenerationManifest` — immutable evidence from a successful production render.
+- `ReviewEvent` — append-only audit event.
+- `RenderProfile` — versioned certified execution configuration.
 
-Domain state changes are expressed through behavior (`approve`, `requestReroll`, `queueForProduction`, `startRendering`, `submitForQa`, `fail`, `cancel`) rather than direct status assignment in HTTP routes or persistence code.
+A candidate is identified independently from its presigned URL. Old candidates remain addressable for audit/history even after a reroll or SceneSpec mutation makes them ineligible for current approval.
 
 #### 3.6.4 Application Ports
 
-Application orchestration depends on ports such as:
+Application orchestration depends on focused ports such as:
 
 - `RenderEnginePort`
-- `PlannerPort`
-- `CandidateRankerPort`
-- `VoiceSynthesisPort`
-- `MediaAssemblerPort`
-- `ObjectStoragePort`
+- `GpuExecutionLeasePort`
 - `GpuTelemetryPort`
+- `HostTelemetryPort`
 - `SceneRepository`
+- `StoryboardCandidateRepository`
 - `CampaignRepository`
 - `RenderJobRepository`
 - `ManifestRepository`
 - `ReviewEventStore`
 - `LicenseRegistryRepository`
 - `UnitOfWork`
+- `PlannerPort`
+- `CandidateRankerPort`
+- `VoiceSynthesisPort`
+- `MediaAssemblerPort`
+- `ObjectStoragePort`
+- `ReviewMediaDeliveryPort`
 
-Infrastructure adapters include ComfyUI, PostgreSQL, MinIO, Anthropic, OpenAI, Google, ElevenLabs/Azure, FFmpeg, and NVML. Provider adapters execute requests only; **application routing owns retry, fallback, policy, and provider selection**. A Gemini adapter never decides to call OpenAI itself, and a ComfyUI adapter never decides scene progression or retry policy.
+`ObjectStoragePort` owns persistent object operations using bucket/key identity. `ReviewMediaDeliveryPort` owns creation of short-lived browser read URLs. Lifecycle administration and disk-watermark enforcement are infrastructure/deployment capabilities and business admission policy, not methods on one giant object-storage interface.
 
 #### 3.6.5 RenderProfile Contract
 
-The empirically certified engine envelope is represented as versioned configuration rather than hard-coded domain behavior. Initial LTX profile concept:
+`LTX_25_720P_5S_V1` is the initial certified Phase 1 production profile. The committed JSON configuration is authoritative for its exact hashes and measured values.
 
-```text
-LTX_25_720P_5S_V1 (config/render-profiles/LTX_25_720P_5S_V1.json)
-  engine: ltx_25
-  workflowHash: 94f397eee3ad8b0cee000036119e524e8c7a012b88d79d00b74172df9d9bf539
-  modelHashes:
-    clip: 09a89e084de1a149c3de60cfe9dfd3e5161967eb09eea39e806fcdeffdd568de (15.37 GB)
-    unet: c4279eeff115cbeaca494bd2183e7d768c38fe85a184dc6afbb7159157c44334 (21.50 GB)
-    vae:  685b06ee3d9b2039647698fc4ea33175112462fc374e2777312c907897dfce8d (1.45 GB)
-  frames: 97
-  steps: 8
-  runnerProfile: dynamicvram-offload-v1
-  measuredPeakVramMb: 24038 (transition soak peak)
-  measuredTotalDurationMs: 45632 (soak median duration)
-  measuredSamplingDurationMs: null
-  measuredDiskFootprintGb: 38.329275932 (exact byte sum: 38,329,275,932 bytes)
-  measuredPeakHostRamMb: 29384 (soak peak host RAM)
-  measuredPeakProcessRssMb: 27043 (soak peak process RSS)
-  measuredSwapUsedMb: 89 (soak max LTX swap delta)
-  measuredMajorPageFaults: 1009 (soak max LTX major page faults)
-  minFreeDiskGb: 100
-  maxConcurrentGpuJobs: 1
-  requiresModelOffloading: true
+Render Profiles may evolve without changing Scene/Campaign domain invariants. Material workflow/model/runner changes require re-certification and a new/updated versioned profile rather than silent mutation.
+
+#### 3.6.6 Review API & Optimistic-Concurrency Contract
+
+The browser communicates with `apps/control-api` through schemas in `packages/contracts`.
+
+Minimum read models:
+
+- campaign review summary;
+- Scene review detail;
+- current SceneSpec revision and configuration;
+- candidate list grouped by SceneSpec revision;
+- selected candidate identity;
+- approval metadata;
+- state/action availability;
+- short-lived media URLs generated on demand.
+
+Minimum review command envelope:
+
+```typescript
+{
+  actionId: string;              // UUID; idempotency/audit identity
+  sceneId: string;
+  expectedSpecRevision: number;  // optimistic concurrency guard
+  action: ReviewAction;
+  payload: unknown;
+  directorNotes?: string;
+}
 ```
 
-Host RAM measurements are populated after Sprint 1 certification. Render Profiles may evolve without changing Scene/Campaign domain invariants.
+Authority rules:
+
+- the request body does **not** supply authoritative reviewer identity;
+- the server resolves reviewer identity from trusted server-side access context/configuration;
+- the server generates the authoritative occurrence timestamp;
+- UI clients never set raw `status` values;
+- stale `expectedSpecRevision` commands fail with a conflict and perform no mutation;
+- an invalid domain transition performs no write;
+- the same `actionId` with the same normalized request is idempotent and does not create duplicate review events;
+- reusing one `actionId` for a materially different request is a conflict;
+- Scene mutation and the corresponding ReviewEvent commit in one `UnitOfWork` transaction.
+
+Recommended transport mapping:
+
+- `404` — Scene/campaign not found;
+- `409` — stale revision or idempotency conflict;
+- `422` — domain transition/mutation rejected;
+- `2xx` — successful or safely replayed idempotent command.
+
+#### 3.6.7 Runtime Persistence Boundary
+
+Sprint 1 migrations created the relational baseline. Sprint 1.5 must provide the runtime adapters required by the Review Hub vertical slice:
+
+- PostgreSQL `SceneRepository`;
+- PostgreSQL `StoryboardCandidateRepository`;
+- PostgreSQL `ReviewEventStore`;
+- PostgreSQL-backed transactional `UnitOfWork`;
+- read/query adapter(s) for Review Hub read models.
+
+The Review Hub is not allowed to ship against in-memory repositories masquerading as production persistence.
 
 ---
 
 ## 4. Canonical Product State Machine & Review Hub Contract
 
-The scene state machine is the authoritative contract for the Review Hub, queue, orchestrator, database enums, and automated tests.
+The scene state machine is authoritative for the Review Hub, queue, database status, and tests.
 
 ### 4.1 Scene Lifecycle
 
@@ -489,14 +492,15 @@ DRAFT_PENDING
     |
     v
 GENERATING_CANDIDATES
-    | success
+    | candidate batch persisted
     v
 DIRECTOR_REVIEW
-    |---- reroll / edit / reference change / LoRA tune ----|
-    |                                                       |
-    |<------------------------------------------------------|
+    |---- reroll ------------------------------------------> GENERATING_CANDIDATES
+    |---- SceneSpec mutation --> current candidate selection becomes stale/cleared
     |
-    | approve
+    | candidate_select (same state; current revision only)
+    |
+    | approve (requires current-revision selection for generated visual scenes)
     v
 APPROVED
     |
@@ -511,58 +515,100 @@ RENDERING
     | render + upload success
     v
 QA
-    |---------------- reject ----------------> DIRECTOR_REVIEW
+    |---- reject ------------------------------------------> DIRECTOR_REVIEW
     |
     | approve
     v
 COMPLETED
-
-Any non-terminal production state may transition to FAILED or CANCELLED
-according to the transition matrix below.
 ```
+
+Any permitted non-terminal production state may transition to `FAILED` or `CANCELLED` according to the transition matrix.
 
 ### 4.2 Allowed State Transitions
 
 | Current State | Allowed Next State(s) | Primary Trigger |
 |---|---|---|
-| `draft_pending` | `generating_candidates`, `cancelled` | scene creation / campaign cancellation |
-| `generating_candidates` | `director_review`, `failed`, `cancelled` | draft batch success/failure |
-| `director_review` | `generating_candidates`, `approved`, `cancelled` | reroll/edit requiring regeneration, approve, cancel |
-| `approved` | `queued`, `director_review`, `cancelled` | production authorization, approval revoked, cancel |
+| `draft_pending` | `generating_candidates`, `cancelled` | generation admission / cancellation |
+| `generating_candidates` | `director_review`, `failed`, `cancelled` | candidate batch success/failure |
+| `director_review` | `generating_candidates`, `approved`, `cancelled` | reroll, approval, cancellation |
+| `approved` | `queued`, `director_review`, `cancelled` | production authorization, approval invalidation/revocation, cancel |
 | `queued` | `rendering`, `failed`, `cancelled` | worker lease, dispatch failure, cancel |
-| `rendering` | `qa`, `failed`, `cancelled` | production render completion/error |
+| `rendering` | `qa`, `failed`, `cancelled` | render completion/error |
 | `qa` | `completed`, `director_review`, `failed` | QA approval/rejection/post-process failure |
 | `completed` | terminal | final output accepted |
 | `failed` | `queued`, `director_review`, `cancelled` | explicit retry or corrective review |
 | `cancelled` | terminal | explicit cancellation |
 
-State mutation occurs transactionally through the orchestration service. UI clients do not write raw scene status values.
+Candidate selection is an audited mutation that normally leaves the Scene in `director_review`; it is not represented as a separate Scene status.
 
-### 4.3 Review Hub Director Actions
+### 4.3 Storyboard Candidate Semantics
 
-Supported actions:
+Each generation batch produces up to three immutable candidate records per scene/revision in the Phase 1 default flow.
 
-- `approve`
-- `reject`
-- `reroll`
-- `prompt_edit`
-- `reference_change`
-- `engine_change`
-- `duration_change`
-- `lora_tune`
+A `StoryboardCandidate` contains at minimum:
+
+- `candidateId`;
+- `sceneId`;
+- `sceneSpecRevision`;
+- `variantOrdinal`;
+- persistent `storageBucket` / `storageObjectKey`;
+- `contentHashSha256`;
+- generation/provenance metadata sufficient to identify the draft render input;
+- creation timestamp.
+
+Rules:
+
+- candidates from older revisions remain immutable history;
+- a candidate is eligible for selection only when `candidate.sceneId` matches the Scene and `candidate.sceneSpecRevision` equals the current SceneSpec revision;
+- SceneSpec mutation clears/invalidate the current selected candidate;
+- reroll clears/invalidate the current selection and transitions to `generating_candidates`;
+- approval of a generated visual scene requires a selected candidate belonging to the current revision;
+- candidate media URLs are generated on demand and are not candidate identity.
+
+### 4.4 Review Hub Action Semantics
+
+Phase 1 actions:
+
+- `candidate_select` — select a candidate from the current SceneSpec revision; leaves Scene in `director_review`.
+- `approve` — `director_review -> approved`; requires current revision and eligible candidate selection for generated visual scenes.
+- `reroll` — `director_review -> generating_candidates`; clears selection; means storyboard rejection/regeneration.
+- `prompt_edit` — mutate prompt/SceneSpec, increment revision, invalidate approval and current candidate selection.
+- `reference_change` — mutate references, increment revision, invalidate approval and current candidate selection.
+- `engine_change` — mutate assigned engine/profile, increment revision, invalidate approval and current candidate selection.
+- `duration_change` — mutate duration, increment revision, invalidate approval and current candidate selection.
+- `lora_tune` — select/change the versioned `loraConfigurationId`; this does not mean editing model files from the browser. It increments revision and invalidates approval/selection.
+- `cancel` — explicit cancellation where allowed.
+- `reject` — **QA rejection only** (`qa -> director_review`). It is not the storyboard-review rejection command.
+
+Reserved but out of Phase 1 Review Hub scope:
+
 - `reorder`
 - `duplicate`
-- `cancel`
 
-Every action creates an append-only `review_events` record before or in the same transaction as the resulting mutable scene-state update.
+These values may remain reserved in persistence for forward compatibility, but Sprint 1.5/Sprint 2 must not invent semantics or expose working UI commands for them.
 
-### 4.4 Approval Semantics
+Every successful review action creates one append-only ReviewEvent in the same transaction as the mutable Scene/candidate-selection update.
 
-- Approval applies to a specific current SceneSpec revision.
-- Any prompt/reference/engine/duration/LoRA mutation after approval invalidates that approval and returns the scene to `director_review` or `generating_candidates`.
-- A production job may be created only from `approved`.
-- A production render manifest records the exact SceneSpec/workflow inputs used by the job.
-- QA rejection never overwrites the completed render history; it creates new review events and subsequent render jobs.
+### 4.5 Approval Semantics
+
+- Approval applies to one exact SceneSpec revision.
+- Approval of generated visual scenes also applies to one selected `StoryboardCandidate` from that revision.
+- Prompt/reference/engine/duration/LoRA mutation after approval invalidates approval and current selection.
+- A production job may be created only from a valid `approved` Scene.
+- Production manifests record the exact SceneSpec/workflow/reference/sampling inputs and approved candidate identity where applicable.
+- QA rejection does not overwrite render history; it creates new review history and subsequent render attempts/jobs.
+
+### 4.6 Reroll Execution Boundary
+
+The Review API does **not** synchronously call ComfyUI when a director presses reroll.
+
+Sprint 2 behavior:
+
+1. validate the command/revision;
+2. commit `director_review -> generating_candidates`, selection invalidation, and ReviewEvent transactionally;
+3. return the updated pending state to the browser.
+
+Durable candidate-generation admission/claim/dispatch is implemented with the PostgreSQL worker queue in Sprint 3. No temporary HTTP-request-held-open render architecture is permitted.
 
 ---
 
@@ -570,482 +616,224 @@ Every action creates an append-only `review_events` record before or in the same
 
 ### 5.1 PostgreSQL 18.6 Baseline
 
-PostgreSQL 18.6 uses core UUID generation. No `uuid-ossp` extension is required.
+PostgreSQL 18.6 uses native UUID support including `uuidv7()` for new primary keys.
 
-New primary keys use native `uuidv7()` for approximately time-ordered UUIDs and improved index locality while preserving UUID semantics.
+The Sprint 1 schema remains the baseline; Sprint 1.5 adds candidate/revision/idempotency support through forward migrations rather than rewriting applied migration history.
+
+Required resulting shape:
 
 ```sql
--- Database: godzspeed_orchestrator
--- PostgreSQL 18.6
--- Initial AIO policy: PostgreSQL defaults.
--- io_method defaults to 'worker'; io_workers is deployment-tuned only after load testing.
+-- Scene additions / normalized revision state
+ALTER TABLE storyboard_scenes
+  ADD COLUMN IF NOT EXISTS spec_revision INT NOT NULL DEFAULT 1
+    CHECK (spec_revision > 0),
+  ADD COLUMN IF NOT EXISTS selected_candidate_id UUID,
+  ADD COLUMN IF NOT EXISTS selected_candidate_revision INT;
 
--- ---------------------------------------------------------------------------
--- ENUMS
--- ---------------------------------------------------------------------------
+ALTER TABLE storyboard_scenes
+  ADD CONSTRAINT storyboard_scene_candidate_selection_pair
+  CHECK (
+    (selected_candidate_id IS NULL AND selected_candidate_revision IS NULL)
+    OR
+    (selected_candidate_id IS NOT NULL AND selected_candidate_revision IS NOT NULL)
+  );
 
-CREATE TYPE license_status_enum AS ENUM (
-  'approved',
-  'restricted',
-  'blocked',
-  'review_required'
-);
+ALTER TABLE storyboard_scenes
+  ADD CONSTRAINT storyboard_scene_selected_revision_current
+  CHECK (
+    selected_candidate_revision IS NULL
+    OR selected_candidate_revision = spec_revision
+  );
 
-CREATE TYPE campaign_status_enum AS ENUM (
-  'drafting',
-  'pending_director_review',
-  'partially_approved',
-  'queued',
-  'rendering',
-  'qa',
-  'completed',
-  'failed',
-  'cancelled'
-);
-
-CREATE TYPE scene_status_enum AS ENUM (
-  'draft_pending',
-  'generating_candidates',
-  'director_review',
-  'approved',
-  'queued',
-  'rendering',
-  'qa',
-  'completed',
-  'failed',
-  'cancelled'
-);
-
-CREATE TYPE job_status_enum AS ENUM (
-  'queued',
-  'leased',
-  'rendering',
-  'completed',
-  'failed',
-  'cancelled'
-);
-
-CREATE TYPE review_action_enum AS ENUM (
-  'approve',
-  'reject',
-  'reroll',
-  'prompt_edit',
-  'reference_change',
-  'engine_change',
-  'duration_change',
-  'lora_tune',
-  'reorder',
-  'duplicate',
-  'cancel'
-);
-
--- ---------------------------------------------------------------------------
--- LICENSE REGISTRY
--- ---------------------------------------------------------------------------
-
-CREATE TABLE license_registry (
-  component_key VARCHAR(128) PRIMARY KEY,
-  component_type VARCHAR(32) NOT NULL,
-  license_name VARCHAR(255) NOT NULL,
-  license_version VARCHAR(128),
-  license_date DATE,
-  source_url TEXT NOT NULL,
-  territory_policy JSONB NOT NULL DEFAULT '{}',
-  revenue_threshold_usd NUMERIC(16, 2),
-  attribution_requirements TEXT,
-  output_distribution_restrictions TEXT,
-  reviewed_at TIMESTAMP WITH TIME ZONE NOT NULL,
-  approved_by VARCHAR(128) NOT NULL,
-  status license_status_enum NOT NULL DEFAULT 'review_required',
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
--- ---------------------------------------------------------------------------
--- CLIENTS & GOVERNANCE
--- ---------------------------------------------------------------------------
-
-CREATE TABLE clients (
-  client_id UUID PRIMARY KEY DEFAULT uuidv7(),
-  company_name VARCHAR(255) NOT NULL,
-  brand_bible_json JSONB NOT NULL DEFAULT '{}',
-  default_aspect_ratio VARCHAR(16) NOT NULL DEFAULT '9:16',
-  external_processing_policy JSONB NOT NULL DEFAULT '{
-    "allowCloudPlanning": true,
-    "allowCloudVisualQA": true,
-    "allowCloudVoice": true,
-    "allowedProviders": ["Anthropic", "OpenAI", "Google", "ElevenLabs"],
-    "sensitiveDataMasking": true
-  }',
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  archived_at TIMESTAMP WITH TIME ZONE
-);
-
--- ---------------------------------------------------------------------------
--- REFERENCE ASSETS
--- ---------------------------------------------------------------------------
-
-CREATE TABLE reference_assets (
-  asset_id UUID PRIMARY KEY DEFAULT uuidv7(),
-  client_id UUID NOT NULL REFERENCES clients(client_id) ON DELETE RESTRICT,
-  asset_type VARCHAR(64) NOT NULL,
+CREATE TABLE storyboard_candidates (
+  candidate_id UUID PRIMARY KEY DEFAULT uuidv7(),
+  scene_id UUID NOT NULL REFERENCES storyboard_scenes(scene_id) ON DELETE RESTRICT,
+  scene_spec_revision INT NOT NULL CHECK (scene_spec_revision > 0),
+  variant_ordinal INT NOT NULL CHECK (variant_ordinal > 0),
   storage_bucket VARCHAR(128) NOT NULL,
   storage_object_key TEXT NOT NULL,
   content_hash_sha256 VARCHAR(64) NOT NULL,
-  controlnet_type VARCHAR(64) NOT NULL DEFAULT 'none',
-  default_strength NUMERIC(3, 2) NOT NULL DEFAULT 0.85
-    CHECK (default_strength >= 0 AND default_strength <= 1),
+  generation_payload JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  archived_at TIMESTAMP WITH TIME ZONE,
-  UNIQUE (storage_bucket, storage_object_key)
+  UNIQUE (scene_id, scene_spec_revision, variant_ordinal),
+  UNIQUE (storage_bucket, storage_object_key),
+  UNIQUE (candidate_id, scene_id, scene_spec_revision)
 );
 
-CREATE INDEX idx_reference_assets_client
-  ON reference_assets(client_id, asset_type)
-  WHERE archived_at IS NULL;
+CREATE INDEX idx_storyboard_candidates_scene_revision
+  ON storyboard_candidates(scene_id, scene_spec_revision, variant_ordinal);
 
--- ---------------------------------------------------------------------------
--- CAMPAIGNS
--- ---------------------------------------------------------------------------
-
-CREATE TABLE campaigns (
-  campaign_id UUID PRIMARY KEY DEFAULT uuidv7(),
-  client_id UUID NOT NULL REFERENCES clients(client_id) ON DELETE RESTRICT,
-  title VARCHAR(255) NOT NULL,
-  target_platform VARCHAR(64) NOT NULL DEFAULT 'instagram_reels',
-  status campaign_status_enum NOT NULL DEFAULT 'drafting',
-  total_scenes INT NOT NULL DEFAULT 1 CHECK (total_scenes > 0),
-  approved_scenes INT NOT NULL DEFAULT 0 CHECK (approved_scenes >= 0),
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  archived_at TIMESTAMP WITH TIME ZONE
-);
-
-CREATE INDEX idx_campaigns_client_status
-  ON campaigns(client_id, status)
-  WHERE archived_at IS NULL;
-
--- ---------------------------------------------------------------------------
--- STORYBOARD SCENES
--- ---------------------------------------------------------------------------
-
-CREATE TABLE storyboard_scenes (
-  scene_id UUID PRIMARY KEY DEFAULT uuidv7(),
-  campaign_id UUID NOT NULL REFERENCES campaigns(campaign_id) ON DELETE RESTRICT,
-  scene_order INT NOT NULL CHECK (scene_order > 0),
-  duration_seconds NUMERIC(6, 2) NOT NULL DEFAULT 5.00 CHECK (duration_seconds > 0),
-  shot_type VARCHAR(64) NOT NULL,
-  visual_description TEXT NOT NULL,
-  voiceover_copy TEXT,
-  audio_fx_prompt TEXT,
-  engine_assigned VARCHAR(64) NOT NULL DEFAULT 'ltx_25',
-  status scene_status_enum NOT NULL DEFAULT 'draft_pending',
-  draft_storage_bucket VARCHAR(128),
-  draft_storage_object_key TEXT,
-  director_notes TEXT,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  archived_at TIMESTAMP WITH TIME ZONE,
-  CONSTRAINT unique_campaign_scene_order UNIQUE (campaign_id, scene_order)
-);
-
-CREATE INDEX idx_storyboard_scenes_campaign
-  ON storyboard_scenes(campaign_id, status)
-  WHERE archived_at IS NULL;
-
--- ---------------------------------------------------------------------------
--- SCENE REFERENCE ASSOCIATIONS
--- ---------------------------------------------------------------------------
-
-CREATE TABLE scene_reference_assets (
-  scene_id UUID NOT NULL REFERENCES storyboard_scenes(scene_id) ON DELETE CASCADE,
-  asset_id UUID NOT NULL REFERENCES reference_assets(asset_id) ON DELETE RESTRICT,
-  override_strength NUMERIC(3, 2)
-    CHECK (override_strength IS NULL OR (override_strength >= 0 AND override_strength <= 1)),
-  PRIMARY KEY (scene_id, asset_id)
-);
-
--- ---------------------------------------------------------------------------
--- DURABLE RENDER QUEUE
--- ---------------------------------------------------------------------------
-
-CREATE TABLE render_jobs (
-  job_id UUID PRIMARY KEY DEFAULT uuidv7(),
-  scene_id UUID NOT NULL REFERENCES storyboard_scenes(scene_id) ON DELETE RESTRICT,
-  workflow_template VARCHAR(128) NOT NULL,
-  injected_payload JSONB NOT NULL,
-  status job_status_enum NOT NULL DEFAULT 'queued',
-  worker_id VARCHAR(128),
-  lease_expires_at TIMESTAMP WITH TIME ZONE,
-  retry_count INT NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
-  max_retries INT NOT NULL DEFAULT 3 CHECK (max_retries >= 0),
-  error_trace TEXT,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CHECK (retry_count <= max_retries)
-);
-
-CREATE INDEX idx_render_jobs_queue
-  ON render_jobs(status, lease_expires_at)
-  WHERE status IN ('queued', 'leased');
-
-CREATE INDEX idx_render_jobs_scene
-  ON render_jobs(scene_id, created_at DESC);
-
--- ---------------------------------------------------------------------------
--- IMMUTABLE GENERATION MANIFESTS
--- Exactly one final manifest per successful render job.
--- ---------------------------------------------------------------------------
-
-CREATE TABLE generation_manifests (
-  manifest_id UUID PRIMARY KEY DEFAULT uuidv7(),
-  job_id UUID NOT NULL UNIQUE REFERENCES render_jobs(job_id) ON DELETE RESTRICT,
-  prompt_id_comfy VARCHAR(128) NOT NULL,
-  campaign_id UUID NOT NULL REFERENCES campaigns(campaign_id) ON DELETE RESTRICT,
-  scene_id UUID NOT NULL REFERENCES storyboard_scenes(scene_id) ON DELETE RESTRICT,
-  render_attempt INT NOT NULL DEFAULT 1 CHECK (render_attempt > 0),
-  manifest_payload JSONB NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX idx_manifests_scene_attempt
-  ON generation_manifests(scene_id, render_attempt);
-
--- ---------------------------------------------------------------------------
--- APPEND-ONLY DIRECTOR REVIEW EVENTS
--- ---------------------------------------------------------------------------
-
-CREATE TABLE review_events (
-  event_id UUID PRIMARY KEY DEFAULT uuidv7(),
-  scene_id UUID NOT NULL REFERENCES storyboard_scenes(scene_id) ON DELETE RESTRICT,
-  reviewer_name VARCHAR(128) NOT NULL DEFAULT 'Thomas Cumberbatch',
-  action review_action_enum NOT NULL,
-  director_notes TEXT,
-  mutation_payload JSONB NOT NULL DEFAULT '{}',
-  prior_scene_status scene_status_enum,
-  resulting_scene_status scene_status_enum,
-  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX idx_review_events_scene
-  ON review_events(scene_id, created_at DESC);
-
--- ---------------------------------------------------------------------------
--- ENFORCE IMMUTABILITY / APPEND-ONLY AUDIT SEMANTICS
--- ---------------------------------------------------------------------------
-
-CREATE OR REPLACE FUNCTION reject_audit_mutation()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
-BEGIN
-  RAISE EXCEPTION '% is append-only/immutable; % is not permitted',
-    TG_TABLE_NAME, TG_OP;
-END;
-$$;
-
-CREATE TRIGGER trg_generation_manifests_immutable
-BEFORE UPDATE OR DELETE ON generation_manifests
-FOR EACH ROW EXECUTE FUNCTION reject_audit_mutation();
-
-CREATE TRIGGER trg_review_events_append_only
-BEFORE UPDATE OR DELETE ON review_events
-FOR EACH ROW EXECUTE FUNCTION reject_audit_mutation();
+ALTER TABLE storyboard_scenes
+  ADD CONSTRAINT fk_scene_selected_candidate_revision
+  FOREIGN KEY (selected_candidate_id, scene_id, selected_candidate_revision)
+  REFERENCES storyboard_candidates(candidate_id, scene_id, scene_spec_revision)
+  DEFERRABLE INITIALLY IMMEDIATE;
 ```
 
-Production application roles receive `SELECT`/`INSERT` permissions on audit tables but no `UPDATE`/`DELETE`. Production campaigns/scenes use `archived_at` rather than destructive deletion after audit history exists.
+`storyboard_scenes.draft_storage_bucket` / `draft_storage_object_key` are legacy single-draft fields and must not remain the canonical representation of a multi-candidate storyboard. New Review Hub behavior reads from `storyboard_candidates`. Legacy columns may be retained temporarily for migration compatibility and deprecated explicitly.
 
-### 5.2 TypeScript Reference Asset Contract
+Review events require enough information for safe idempotent replay/conflict detection:
+
+```sql
+-- Existing review_action_enum gains candidate_select.
+-- reorder/duplicate remain reserved values, not Phase 1 commands.
+
+ALTER TABLE review_events
+  ADD COLUMN IF NOT EXISTS expected_spec_revision INT,
+  ADD COLUMN IF NOT EXISTS resulting_spec_revision INT,
+  ADD COLUMN IF NOT EXISTS request_hash_sha256 VARCHAR(64);
+```
+
+For new review events:
+
+- `event_id` is the canonical `actionId` and remains unique;
+- `reviewer_name` is supplied by trusted server-side identity resolution, not directly trusted from browser input;
+- `created_at` is server/database authoritative;
+- `request_hash_sha256` distinguishes an idempotent replay from reuse of the same action ID with different content.
+
+Append-only/immutable audit triggers remain in force. Production application roles do not receive UPDATE/DELETE permission on `review_events` or `generation_manifests`.
+
+### 5.2 Storyboard Candidate Contract
+
+```typescript
+import { z } from "zod";
+
+export const StoryboardCandidateSchema = z.object({
+  candidateId: z.string().uuid(),
+  sceneId: z.string().uuid(),
+  sceneSpecRevision: z.number().int().positive(),
+  variantOrdinal: z.number().int().positive(),
+  storageBucket: z.string().min(1),
+  storageObjectKey: z.string().min(1),
+  contentHashSha256: z.string().length(64),
+  generationMetadata: z.record(z.string(), z.unknown()).default({}),
+  createdAt: z.string().datetime(),
+});
+```
+
+Browser read models may include a short-lived `mediaUrl`, but that field is presentation data and is not persisted candidate identity.
+
+### 5.3 Reference Asset Contract
 
 Persistent references use object locators, not expiring URLs.
 
 ```typescript
-// src/schemas/reference.ts
-import { z } from "zod";
-
-export const AssetRefSchema = z.object({
-  assetId: z.string().uuid(),
-  assetType: z.enum([
-    "product_packshot",
-    "character_face",
-    "environment_anchor",
-    "brand_logo",
-    "audio_voice_sample",
-  ]),
-  storageBucket: z.string().min(1),
-  storageObjectKey: z.string().min(1),
-  contentHashSha256: z.string().length(64),
-  controlnetType: z
-    .enum(["canny", "depth", "openpose", "ipadapter_face", "none"])
-    .default("none"),
-  strength: z.number().min(0).max(1).default(0.85),
-});
-
-export type AssetRef = z.infer<typeof AssetRefSchema>;
+export interface AssetRef {
+  assetId: string;
+  assetType:
+    | "product_packshot"
+    | "character_face"
+    | "environment_anchor"
+    | "brand_logo"
+    | "audio_voice_sample";
+  storageBucket: string;
+  storageObjectKey: string;
+  contentHashSha256: string;
+  controlnetType: "canny" | "depth" | "openpose" | "ipadapter_face" | "none";
+  strength: number;
+}
 ```
 
-### 5.3 Scene State & Review Action Contracts
+### 5.4 Scene State & Review Contracts
+
+Canonical Scene states remain:
+
+```text
+draft_pending
+generating_candidates
+director_review
+approved
+queued
+rendering
+qa
+completed
+failed
+cancelled
+```
+
+Phase 1 Review actions:
+
+```text
+candidate_select
+approve
+reroll
+prompt_edit
+reference_change
+engine_change
+duration_change
+lora_tune
+cancel
+reject   # QA only
+```
+
+Reserved values:
+
+```text
+reorder
+duplicate
+```
+
+Representative command schema:
 
 ```typescript
-// src/schemas/sceneState.ts
-import { z } from "zod";
-
-export const SceneStatusSchema = z.enum([
-  "draft_pending",
-  "generating_candidates",
-  "director_review",
-  "approved",
-  "queued",
-  "rendering",
-  "qa",
-  "completed",
-  "failed",
-  "cancelled",
-]);
-
-export const ReviewActionSchema = z.enum([
-  "approve",
-  "reject",
-  "reroll",
-  "prompt_edit",
-  "reference_change",
-  "engine_change",
-  "duration_change",
-  "lora_tune",
-  "reorder",
-  "duplicate",
-  "cancel",
-]);
-
-export type SceneStatus = z.infer<typeof SceneStatusSchema>;
-export type ReviewAction = z.infer<typeof ReviewActionSchema>;
+export interface ReviewCommand<TPayload = unknown> {
+  actionId: string;
+  sceneId: string;
+  expectedSpecRevision: number;
+  action: ReviewAction;
+  payload: TPayload;
+  directorNotes?: string;
+}
 ```
 
-The orchestration service maintains an explicit transition map and rejects invalid transitions before opening a database transaction.
+Representative response contains:
 
-### 5.4 Generation Manifest Contract
+- `sceneId`;
+- resulting `status`;
+- resulting `specRevision`;
+- `selectedCandidateId` if present;
+- approval metadata if present;
+- whether the response was an idempotent replay.
 
-```typescript
-// src/schemas/manifest.ts
-import { z } from "zod";
-import { AssetRefSchema } from "./reference";
+### 5.5 Generation Manifest Contract
 
-export const GenerationManifestSchema = z.object({
-  manifestId: z.string().uuid(),
-  jobId: z.string().uuid(),
-  promptIdComfy: z.string(),
-  campaignId: z.string().uuid(),
-  sceneId: z.string().uuid(),
-  renderAttempt: z.number().int().positive(),
-  timestamp: z.string().datetime(),
+A successful production job creates exactly one immutable GenerationManifest containing at minimum:
 
-  engine: z.enum([
-    "flux_schnell",
-    "flux_dev",
-    "ltx_25",
-    "wan_21",
-    "minimax_h3",
-  ]),
+- manifest/job/campaign/scene identity;
+- render attempt and timestamp;
+- engine and RenderProfile identity;
+- exact model/checkpoint/VAE/text-encoder names and SHA-256 hashes;
+- exact workflow template identity/hash;
+- LoRA identities/strengths;
+- sampling seed/steps/CFG/sampler/scheduler/denoise;
+- dimensions/frame count/FPS;
+- prompts/audio prompt;
+- persistent ReferenceAsset identities;
+- approved StoryboardCandidate identity/hash where applicable;
+- ComfyUI commit/custom-node environment;
+- runner profile and relevant runtime metadata;
+- governance/license/policy identity;
+- output filenames/hashes/review object keys/execution duration.
 
-  models: z.object({
-    checkpointName: z.string(),
-    checkpointSha256: z.string().length(64),
-    vaeName: z.string(),
-    vaeSha256: z.string().length(64),
-    textEncoderName: z.string(),
-    textEncoderSha256: z.string().length(64),
-  }),
+Manifest persistence remains Sprint 3 work.
 
-  workflow: z.object({
-    templateName: z.string(),
-    templateSha256: z.string().length(64),
-  }),
+### 5.6 External Processing Governance Contract
 
-  loras: z.array(
-    z.object({
-      loraName: z.string(),
-      loraSha256: z.string().length(64),
-      modelStrength: z.number(),
-      clipStrength: z.number(),
-    }),
-  ),
+Client policy includes:
 
-  sampling: z.object({
-    seed: z.number().int(),
-    steps: z.number().int().positive(),
-    cfg: z.number(),
-    samplerName: z.string(),
-    scheduler: z.string(),
-    denoise: z.number().min(0).max(1).default(1.0),
-  }),
+- `allowCloudPlanning`;
+- `allowCloudVisualQA`;
+- `allowCloudVoice`;
+- `allowedProviders`;
+- `sensitiveDataMasking`.
 
-  dimensions: z.object({
-    width: z.number().int().positive(),
-    height: z.number().int().positive(),
-    frameCount: z.number().int().positive(),
-    fps: z.number().int().positive(),
-  }),
-
-  prompts: z.object({
-    positive: z.string(),
-    negative: z.string(),
-    audioPrompt: z.string().optional(),
-  }),
-
-  references: z.array(AssetRefSchema),
-
-  environment: z.object({
-    comfyGitCommit: z.string(),
-    customNodes: z.record(z.string(), z.string()),
-    cudaDriverVersion: z.string(),
-    nodeVersion: z.string(),
-    runnerProfile: z.string(), // e.g. "dynamicvram-offload-v1"
-  }),
-
-  governance: z.object({
-    modelLicenseKey: z.string(),
-    modelLicenseReviewedAt: z.string().datetime(),
-    externalProcessingPolicyHash: z.string().length(64),
-  }),
-
-  output: z.object({
-    localAssetFilenames: z.array(z.string()),
-    assetHashesSha256: z.array(z.string().length(64)),
-    reviewObjectKeys: z.array(z.string()).default([]),
-    executionDurationMs: z.number().int().nonnegative(),
-  }),
-});
-
-export type GenerationManifest = z.infer<typeof GenerationManifestSchema>;
-```
-
-### 5.5 External Processing Governance Contract
-
-```typescript
-// src/schemas/policy.ts
-import { z } from "zod";
-
-export const ExternalProcessingPolicySchema = z.object({
-  clientId: z.string().uuid(),
-  allowCloudPlanning: z.boolean().default(true),
-  allowCloudVisualQA: z.boolean().default(true),
-  allowCloudVoice: z.boolean().default(true),
-  allowedProviders: z
-    .array(z.enum(["Anthropic", "OpenAI", "Google", "ElevenLabs", "Azure"]))
-    .default(["Anthropic", "OpenAI", "Google", "ElevenLabs"]),
-  sensitiveDataMasking: z.boolean().default(true),
-});
-
-export type ExternalProcessingPolicy = z.infer<
-  typeof ExternalProcessingPolicySchema
->;
-```
+Provider routing checks policy before external calls and fails closed when a provider/task is not authorized.
 
 ---
 
 ## 6. Production ComfyUI Execution Client
 
-The execution client must provide:
+The existing production execution adapter remains behind `RenderEnginePort` and must provide:
 
 - queue submission;
 - WebSocket completion monitoring;
@@ -1057,361 +845,160 @@ The execution client must provide:
 - explicit model-unload requests;
 - no reliance on browser/GUI state.
 
-Representative implementation:
-
-```typescript
-// src/client/comfyClient.ts
-import WebSocket from "ws";
-import crypto from "crypto";
-
-export interface ExecutionResult {
-  promptId: string;
-  outputFiles: string[];
-  durationMs: number;
-}
-
-export class ComfyClient {
-  private serverAddress: string;
-  private clientId: string;
-
-  constructor(serverAddress = "127.0.0.1:8188") {
-    this.serverAddress = serverAddress;
-    this.clientId = crypto.randomUUID();
-  }
-
-  async queuePrompt(
-    workflow: Record<string, unknown>,
-  ): Promise<{ prompt_id: string }> {
-    const res = await fetch(`http://${this.serverAddress}/prompt`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        prompt: workflow,
-        client_id: this.clientId,
-      }),
-    });
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`ComfyUI Queue Error [${res.status}]: ${err}`);
-    }
-
-    return res.json() as Promise<{ prompt_id: string }>;
-  }
-
-  async freeVram(): Promise<void> {
-    const res = await fetch(`http://${this.serverAddress}/free`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        free_memory: true,
-        unload_models: true,
-      }),
-    });
-
-    if (!res.ok) {
-      throw new Error(`ComfyUI VRAM unload request failed [${res.status}]`);
-    }
-  }
-
-  async getHistory(promptId: string): Promise<any> {
-    const res = await fetch(
-      `http://${this.serverAddress}/history/${promptId}`,
-    );
-
-    if (!res.ok) {
-      throw new Error(`ComfyUI History Error [${res.status}]`);
-    }
-
-    const data = await res.json();
-    return data[promptId] || null;
-  }
-
-  async generateAndWait(
-    workflow: Record<string, unknown>,
-    timeoutMs = 300_000,
-  ): Promise<ExecutionResult> {
-    const startTime = Date.now();
-
-    return new Promise((resolve, reject) => {
-      const wsUrl =
-        `ws://${this.serverAddress}/ws?clientId=${this.clientId}`;
-      const ws = new WebSocket(wsUrl);
-
-      let targetPromptId = "";
-      let isSettled = false;
-
-      const timer = setTimeout(() => {
-        if (!isSettled) {
-          isSettled = true;
-          ws.close();
-          reject(
-            new Error(
-              `ComfyUI render timed out after ${timeoutMs / 1000}s ` +
-              `(Prompt: ${targetPromptId})`,
-            ),
-          );
-        }
-      }, timeoutMs);
-
-      const cleanup = () => {
-        clearTimeout(timer);
-
-        if (
-          ws.readyState === WebSocket.OPEN ||
-          ws.readyState === WebSocket.CONNECTING
-        ) {
-          ws.close();
-        }
-      };
-
-      ws.on("open", async () => {
-        try {
-          const queueRes = await this.queuePrompt(workflow);
-          targetPromptId = queueRes.prompt_id;
-        } catch (err) {
-          if (!isSettled) {
-            isSettled = true;
-            cleanup();
-            reject(err);
-          }
-        }
-      });
-
-      ws.on("message", (data: WebSocket.RawData) => {
-        if (isSettled) return;
-
-        try {
-          const msg = JSON.parse(data.toString());
-
-          if (msg.type === "progress") {
-            const { value, max } = msg.data;
-            process.stdout.write(
-              `    [Inference] Step ${value}/${max}\r`,
-            );
-          }
-
-          if (
-            msg.type === "execution_error" &&
-            msg.data.prompt_id === targetPromptId
-          ) {
-            isSettled = true;
-            cleanup();
-            reject(
-              new Error(
-                `ComfyUI Node Execution Error: ` +
-                `${JSON.stringify(msg.data)}`,
-              ),
-            );
-          }
-
-          if (
-            msg.type === "execution_interrupted" &&
-            msg.data.prompt_id === targetPromptId
-          ) {
-            isSettled = true;
-            cleanup();
-            reject(
-              new Error("ComfyUI Execution Interrupted by Server"),
-            );
-          }
-
-          if (
-            msg.type === "executing" &&
-            msg.data.node === null &&
-            msg.data.prompt_id === targetPromptId
-          ) {
-            cleanup();
-          }
-        } catch {
-          // Ignore non-JSON/binary frames.
-        }
-      });
-
-      ws.on("close", async () => {
-        if (isSettled || !targetPromptId) return;
-
-        try {
-          const history = await this.getHistory(targetPromptId);
-
-          if (!history) {
-            throw new Error(
-              `Job history not found for prompt: ${targetPromptId}`,
-            );
-          }
-
-          const statusStr = history.status?.status_str;
-
-          if (statusStr !== "success") {
-            throw new Error(
-              `ComfyUI render ended with status '${statusStr}': ` +
-              `${JSON.stringify(history.status)}`,
-            );
-          }
-
-          const outputFiles: string[] = [];
-
-          if (history.outputs) {
-            for (const nodeId of Object.keys(history.outputs)) {
-              const nodeOut = history.outputs[nodeId];
-
-              for (const img of nodeOut.images ?? []) {
-                outputFiles.push(
-                  img.subfolder
-                    ? `${img.subfolder}/${img.filename}`
-                    : img.filename,
-                );
-              }
-
-              for (const vid of nodeOut.videos ?? []) {
-                outputFiles.push(
-                  vid.subfolder
-                    ? `${vid.subfolder}/${vid.filename}`
-                    : vid.filename,
-                );
-              }
-            }
-          }
-
-          isSettled = true;
-          resolve({
-            promptId: targetPromptId,
-            outputFiles,
-            durationMs: Date.now() - startTime,
-          });
-        } catch (err) {
-          if (!isSettled) {
-            isSettled = true;
-            reject(err);
-          }
-        }
-      });
-
-      ws.on("error", (err) => {
-        if (!isSettled) {
-          isSettled = true;
-          cleanup();
-          reject(
-            new Error(
-              `ComfyUI WebSocket Connection Failed: ${err.message}`,
-            ),
-          );
-        }
-      });
-    });
-  }
-}
-```
-
-VRAM transition orchestration wraps `freeVram()` with NVML polling; it is not embedded in `ComfyClient` itself.
+VRAM transition orchestration wraps model unloading with telemetry/headroom polling. It is not embedded as Scene business logic and it is not invoked synchronously by the Review Hub HTTP request path.
 
 ---
 
 ## 7. Telemetry, Observability & Health Monitoring
 
-### 7.1 Daemon Health Endpoint - `/healthz`
+### 7.1 Health Endpoint — `/healthz`
 
-HTTP 200 is returned only for `ok` or intentionally `degraded` states.
+Health state should expose at least:
 
-Response schema:
+- service status;
+- GPU VRAM free where applicable;
+- ComfyUI connectivity on render workers;
+- Tailscale connectivity;
+- queue backlog/oldest job;
+- storage free bytes/watermark state;
+- active engine where applicable.
 
-```json
-{
-  "status": "ok",
-  "gpu_vram_free_mb": 18742,
-  "comfy_online": true,
-  "tailscale_connected": true,
-  "queue_backlog_count": 0,
-  "queue_oldest_job_seconds": 0,
-  "storage_free_bytes": 128849018880,
-  "storage_watermark_state": "normal",
-  "active_engine": null
-}
-```
+### 7.2 Prometheus Metrics — `/metrics`
 
-`status` values:
+Required metrics include:
 
-- `ok`
-- `degraded`
-- `error`
-
-### 7.2 Prometheus Metrics - `/metrics`
-
-Required metrics:
-
-- `godzspeed_render_duration_seconds{engine,scene_type}` - histogram
-- `godzspeed_vram_allocated_bytes` - gauge
-- `godzspeed_job_retries_total{engine,error_class}` - counter
-- `godzspeed_api_failovers_total{task,from_provider,to_provider}` - counter
-- `godzspeed_queue_oldest_job_seconds` - gauge
-- `godzspeed_render_failures_total{engine,error_class}` - counter
-- `godzspeed_object_storage_bytes{bucket}` - gauge
-- `godzspeed_storage_free_bytes` - gauge
-- `godzspeed_storage_watermark_state` - numeric/enum-compatible gauge
-- `godzspeed_invalid_state_transitions_total` - counter
+- `godzspeed_render_duration_seconds{engine,scene_type}`;
+- `godzspeed_vram_allocated_bytes`;
+- `godzspeed_job_retries_total{engine,error_class}`;
+- `godzspeed_api_failovers_total{task,from_provider,to_provider}`;
+- `godzspeed_queue_oldest_job_seconds`;
+- `godzspeed_render_failures_total{engine,error_class}`;
+- `godzspeed_object_storage_bytes{bucket}`;
+- `godzspeed_storage_free_bytes`;
+- `godzspeed_storage_watermark_state`;
+- `godzspeed_invalid_state_transitions_total`;
+- `godzspeed_review_conflicts_total{reason}`;
+- `godzspeed_review_idempotent_replays_total`.
 
 ### 7.3 Operational Alerts
 
 Minimum alerts:
 
-- queue oldest job exceeds configured SLA;
+- queue oldest job exceeds SLA;
 - render failure rate exceeds threshold;
 - storage reaches 70/85/92% watermark;
-- ComfyUI unreachable for > 2 minutes;
+- ComfyUI unreachable for >2 minutes;
 - Tailscale disconnected;
 - VRAM cleanup threshold not reached within timeout;
-- license registry contains a `review_required`/`blocked` component referenced by an enabled routing profile.
+- enabled routing references a license-registry component in `review_required`/`blocked` state.
 
 ---
 
 ## 8. Implementation Roadmap
 
-### Sprint 1 - Core Runtime, Domain Boundaries & Hardware Certification (Week 1)
+### Sprint 1 — Core Runtime, Domain Boundaries & Hardware Certification — COMPLETE
 
-- Scaffold the monorepo with `domain`, `application`, `infrastructure`, `contracts`, `shared`, `control-api`, `render-worker`, and `web` boundaries.
-- Port the automation-repo Clean Architecture dependency rules into Dependency Cruiser and CI before feature implementation.
-- Implement authoritative Scene state behavior and application transition services with unit tests.
-- Create PostgreSQL 18.6 migrations using UUIDv7 and audit immutability triggers.
-- Export and hash Gold Master API templates for FLUX.1 [schnell] and the official LTX-2.5 720p workflow.
-- Deploy `ComfyClient` with timeout/error traps and `/free` support behind `RenderEnginePort`.
-- Freeze the empirical LTX baseline input: 720p, 97 frames, ~5 seconds, 8 DiT steps.
-- Record LTX model-family disk footprint (~68.8GB) and require >=100GB free-space reservation.
-- Benchmark **default DynamicVRAM/workflow offloading first**; test `--highvram` only as an experimental comparator.
-- Measure total latency, core sampling latency, peak VRAM, peak process RSS/system RAM, swap usage, major page faults, and post-unload VRAM.
-- Certify one versioned `RenderProfile` / `runnerProfile` with workflow/model hashes.
-- Execute a 10-20 transition soak sequence alternating FLUX and LTX; verify no progressive VRAM/RAM growth, no OOM, and no ComfyUI restart.
-- Decide from measured evidence whether 32GB host RAM remains supported or 64GB becomes a Phase 1 prerequisite.
-- Execute end-to-end CLI render through the application port and infrastructure adapter stack.
+Delivered baseline includes:
 
-### Sprint 2 - Next.js Review Hub, Tailscale & MinIO Review Plane (Week 2)
+- monorepo boundaries and mechanical dependency enforcement;
+- authoritative Scene state behavior and application use cases;
+- PostgreSQL baseline migrations and audit immutability protections;
+- pinned Gold Master FLUX/LTX workflow provenance;
+- ComfyUI adapter behind `RenderEnginePort`;
+- GPU/host telemetry and hardware certification tooling;
+- real target-host LTX certification and FLUX/LTX transition soak evidence;
+- certified `LTX_25_720P_5S_V1` RenderProfile;
+- 32GB Phase 1 host-RAM decision with documented transient swap behavior;
+- exclusive local GPU execution lease;
+- end-to-end render-worker architectural slice.
 
-- Deploy Next.js Review Hub.
-- Normalize all private hostnames under `godzspeed-internal.ts.net`.
-- Deploy MinIO as separate S3-compatible service.
-- Implement bucket lifecycle/retention rules and storage watermarks.
+### Sprint 1.5 — Review Plane Contract Closure — TRANSITION BEFORE SPRINT 2
+
+Purpose: eliminate contract/persistence/API ambiguity before the autonomous orchestrator plans UI/deployment work.
+
+Required outcomes:
+
+1. **StoryboardCandidate domain/data contract**
+   - add immutable candidate persistence tied to SceneSpec revision;
+   - implement current-revision candidate selection and invalidation rules;
+   - deprecate single-draft fields as canonical storyboard representation.
+
+2. **Review action semantics**
+   - add `candidate_select`;
+   - define `reject` as QA-only;
+   - define `reroll` as storyboard rejection/regeneration;
+   - define `lora_tune` as versioned LoRA configuration selection/change;
+   - keep `reorder`/`duplicate` reserved and unsupported in Phase 1.
+
+3. **Review API contracts**
+   - stable read models in `packages/contracts`;
+   - command envelope with `actionId` and `expectedSpecRevision`;
+   - deterministic error/conflict response contracts.
+
+4. **Runtime PostgreSQL adapters**
+   - `SceneRepository`;
+   - `StoryboardCandidateRepository`;
+   - `ReviewEventStore`;
+   - transactional `UnitOfWork`;
+   - Review Hub read/query adapter(s).
+
+5. **Control API HTTP boundary**
+   - real HTTP server/routes in `apps/control-api`;
+   - server-derived reviewer identity and timestamp;
+   - stale-revision protection;
+   - idempotent action handling;
+   - no raw Scene-status endpoint.
+
+6. **Storage delivery contract**
+   - persistent object locators remain separate from presigned browser URLs;
+   - add `ReviewMediaDeliveryPort`/equivalent;
+   - define `storage-01.godzspeed-internal.ts.net` and admin separation;
+   - define exact 70/85/92% behavior.
+
+7. **Deployment acceptance contract**
+   - distinguish code/config completion from real Hetzner/Tailscale/MinIO environment acceptance;
+   - require operator evidence for public exposure, MagicDNS, lifecycle, and watermark gates.
+
+Sprint 1.5 is a contract-closure sprint. It must not introduce a new queue, synchronous render-over-HTTP path, new object-store architecture, or unrelated UI scope.
+
+### Sprint 2 — Director Review Hub & Private Review Plane
+
+- Convert `apps/web` from the scaffold package into the actual Next.js Review Hub.
+- Consume only `packages/contracts` / presentation-safe types from the web app.
+- Implement campaign/scene review pages and candidate gallery.
+- Implement current-revision candidate selection.
+- Implement approve, reroll, prompt edit, reference change, engine change, duration change, LoRA configuration change, cancel, and QA rejection where applicable.
+- Surface stale revision conflicts explicitly; never auto-retry a stale human approval against a newer revision.
+- Deploy Control API + Review Hub to the Hetzner control plane.
+- Normalize private hostnames under `godzspeed-internal.ts.net` including `storage-01`.
+- Deploy MinIO as a separate S3-compatible service.
+- Implement bucket lifecycle/retention rules and storage watermark telemetry/admission behavior.
 - Implement object-key persistence and on-demand presigned URL generation.
-- Implement director actions and state transition UI.
-- Test scene approval, rejection, prompt edits, reference changes, LoRA tuning, and re-roll over Tailscale.
+- Verify real Tailscale access from the Creative Director device.
+- Reroll commits the pending `generating_candidates` state only; it does not synchronously execute ComfyUI from the HTTP request.
 
-### Sprint 3 - Continuity, Manifests, Audit & Assembly (Week 3)
+### Sprint 3 — Continuity, Durable Generation, Manifests & Assembly
 
-- Implement `ReferenceAsset` continuity layer.
-- Implement immutable `GenerationManifest` creation with one manifest per successful job.
-- Implement append-only review-event persistence.
+- Implement/complete `ReferenceAsset` continuity behavior.
+- Implement PostgreSQL durable worker leasing with `SELECT ... FOR UPDATE SKIP LOCKED`.
+- Implement durable candidate-generation admission/claim/dispatch for scenes in `generating_candidates`.
+- Persist generated StoryboardCandidates before `generating_candidates -> director_review`.
+- Implement immutable GenerationManifest creation with exactly one final manifest per successful production job.
 - Implement model/component license registry and fail-closed routing guard.
-- Implement PostgreSQL durable leases with `SELECT ... FOR UPDATE SKIP LOCKED`.
 - Build FFmpeg concatenation, VO muxing, soundbed, and subtitle pipeline.
 - Add health and Prometheus telemetry.
 
-### Sprint 4 - API Resilience & Commercial PoC (Week 4)
+Runtime ReviewEvent persistence is no longer deferred to Sprint 3; it is required by Sprint 1.5.
 
-- Integrate Claude 5 Sonnet -> GPT-5.6 Sol planning failover.
-- Integrate Gemini 3.7 Flash -> GPT-5.6 Luna candidate-ranking failover.
+### Sprint 4 — API Resilience & Commercial PoC
+
+- Integrate configured planning-provider failover.
+- Integrate configured candidate-ranking failover.
 - Implement retry/error classification and policy-aware fallback.
-- Integrate cloud voice provider fallback.
+- Integrate cloud voice-provider fallback.
 - Execute Tobago Vacation Villa commercial proof of concept.
-- Pass all pre-flight engineering acceptance gates.
-- Freeze certified workflow templates, model hashes, environment metadata, and runner profile.
+- Pass all remaining pre-flight engineering acceptance gates.
+- Re-freeze certified workflow templates, model hashes, environment metadata, and runner profile before commercial production.
 
 ---
 
@@ -1421,125 +1008,117 @@ No paying production campaign may be onboarded until all required gates pass.
 
 ### 9.1 Core Rendering & Hardware Certification
 
-- [x] **FLUX Smoke Test Gate:** Headless ComfyUI accepts programmatic WebSocket payloads and executes 4-step FLUX [schnell] sampling in < 2.0 seconds on the validated draft workflow.
-- [x] **LTX Compatibility Benchmark:** Official LTX-2.5 720p / 97-frame / 8-step workflow completes on the target RTX 4090 without OOM; measured baseline is 46s total execution and 24,028MB peak VRAM.
-- [ ] **LTX Resource Envelope Gate:** Repeat the certified workflow with pinned hashes and verify <=55s total execution while recording peak VRAM, peak host RAM/RSS, swap, page faults, and post-unload VRAM.
-- [ ] **ComfyUI Memory Profile Gate:** Certify default DynamicVRAM/workflow offloading as baseline; `--highvram` may replace it only if repeated tests show equal-or-better stability and resource headroom. Verify no mutually exclusive VRAM flags are combined.
-- [ ] **Host RAM Gate:** 32GB passes only if the certified workflow and transition soak show no sustained swap, no OOM, adequate OS/worker headroom, and no progressive RAM growth. Otherwise 64GB becomes a Phase 1 prerequisite.
-- [ ] **Model Transition Soak Gate:** Execute at least 10 sequential FLUX <-> LTX family transitions using `/free` plus NVML headroom validation; require zero OOMs, zero ComfyUI restarts, and no progressive VRAM/RAM leak.
-- [ ] **Single-GPU Concurrency Gate:** Attempt to dispatch a second diffusion job while one owns the RenderLease; verify it remains queued and cannot enter GPU execution.
+- [x] **FLUX Smoke Test Gate:** headless FLUX workflow executes programmatically on the target architecture.
+- [x] **LTX Compatibility Benchmark:** official LTX-2.5 720p / 97-frame / 8-step workload completes on RTX 4090 without OOM.
+- [x] **LTX Resource Envelope Gate:** pinned certified workload records GPU/host/swap/page-fault/post-unload evidence and remains under the <=55s Phase 1 threshold.
+- [x] **ComfyUI Memory Profile Gate:** `dynamicvram-offload-v1` is the Phase 1 certified profile; mutually exclusive VRAM flags are not combined.
+- [x] **Host RAM Gate:** 32GB is supported for the dedicated Phase 1 profile with documented transient cold-page swap and no progressive leak/OOM.
+- [x] **Model Transition Soak Gate:** repeated FLUX/LTX transitions complete without progressive VRAM/RAM growth, OOM, or ComfyUI restart; original binary no-swap predicate is documented and operationally re-evaluated rather than hidden.
+- [x] **Single-GPU Concurrency Gate:** exclusive local GPU execution lease prevents concurrent diffusion entry on one RTX 4090 worker.
 
 ### 9.2 Failure & Queue Semantics
 
-- [ ] **Error Path Recovery Gate:** Intentionally malformed workflow causes `execution_error`, rejects within 2 seconds, and records `error_trace` without process hang.
-- [ ] **Lease Recovery Gate:** Kill a worker after leasing a job; verify lease expiry permits deterministic reassignment without duplicate completed manifests.
-- [ ] **API Failure Classification Gate:** Confirm 429/5xx/timeouts retry; 400/401/403 fail immediately; safety rejection does not trigger policy-bypass fallback.
+- [x] **ComfyUI Error Path Gate:** adapter handles execution error/interruption/timeout without hanging the worker process.
+- [ ] **Durable Lease Recovery Gate:** kill a PostgreSQL-leased worker and verify deterministic reassignment without duplicate completed manifests.
+- [ ] **API Failure Classification Gate:** confirm transient retry classes, immediate non-retryable classes, and no safety-refusal bypass.
 
-### 9.3 Product State & Audit Integrity
+### 9.3 Product State, Review & Audit Integrity
 
-- [ ] **State Machine Gate:** Unit/integration test every permitted transition and reject every unpermitted transition.
-- [ ] **Approval Invalidation Gate:** Mutating prompt/reference/engine/duration/LoRA after approval invalidates approval and returns the scene to review/regeneration.
-- [ ] **Audit Immutability Gate:** Application role cannot `UPDATE` or `DELETE` `generation_manifests` or `review_events`; database triggers reject direct mutation attempts.
-- [ ] **One-Job-One-Manifest Gate:** A completed production job produces exactly one immutable manifest referencing its `job_id`.
+- [x] **State Machine Gate:** domain tests cover permitted transitions and representative forbidden paths.
+- [x] **Approval Invalidation Gate:** prompt/reference/engine/duration/LoRA changes invalidate approval.
+- [x] **Audit Immutability Schema Gate:** database protections reject UPDATE/DELETE on immutable audit tables.
+- [ ] **Candidate Revision Integrity Gate:** candidate selection/approval cannot reference another Scene or stale SceneSpec revision.
+- [ ] **Candidate Invalidation Gate:** SceneSpec mutation or reroll clears current candidate selection while retaining historical candidates.
+- [ ] **Stale Review Command Gate:** outdated `expectedSpecRevision` returns conflict and performs zero writes.
+- [ ] **Review Idempotency Gate:** repeated identical `actionId` produces one event/mutation; same ID with different request content conflicts.
+- [ ] **Reviewer Authority Gate:** browser-supplied identity/timestamp cannot become authoritative audit metadata.
+- [ ] **Transactional Review Gate:** ReviewEvent and mutable Scene/candidate-selection update commit or rollback together.
+- [ ] **One-Job-One-Manifest Gate:** a completed production job produces exactly one immutable manifest referencing its job ID.
 
 ### 9.4 Network & Storage
 
-- [ ] **Zero Public Exposure Audit:** Port scan confirms application/database/ComfyUI/MinIO administrative ports are unreachable from public WAN.
-- [ ] **MagicDNS Consistency Gate:** `review`, `control-01`, and `render-01` resolve under `godzspeed-internal.ts.net` from authorized nodes.
-- [ ] **Storage Lifecycle Gate:** Create test objects in temporary/review classes and verify lifecycle configuration plus deletion eligibility.
-- [ ] **Storage Watermark Gate:** Simulate 70%, 85%, and 92% states; verify warning, degraded upload behavior, and production hold.
+- [ ] **Zero Public Exposure Audit:** application, database, ComfyUI, S3 and MinIO administrative surfaces are unreachable from public WAN as intended.
+- [ ] **MagicDNS Consistency Gate:** `review`, `control-01`, `render-01`, and `storage-01` resolve under `godzspeed-internal.ts.net` from authorized nodes.
+- [ ] **Presigned Media Gate:** authorized browser can read short-lived media through the tailnet S3 endpoint; expired URL fails; no presigned URL is persisted as canonical identity.
+- [ ] **Storage Lifecycle Gate:** test objects demonstrate configured lifecycle/deletion eligibility.
+- [ ] **Storage Watermark Gate:** simulate 70%, 85%, and 92% and verify exact warning/degraded/critical admission behavior.
 
 ### 9.5 Performance & Reconstruction
 
-- [ ] **Candidate Draft Batch Latency:** Generate and sync 18 draft keyframes (3 candidates x 6 scenes) in < 45 seconds total.
-- [ ] **Manifest Reconstruction Gate:** Reconstruct an approved scene's exact model/workflow/reference/sampling inputs from the immutable manifest and verify parameter parity.
-- [ ] **FFmpeg Assembly Gate:** Compile six 5-second video stems, stereo soundbed, VO, and vertical subtitles into a 1080x1920 MP4 in < 30 seconds.
+- [ ] **Candidate Draft Batch Latency:** generate, persist, and sync 18 draft keyframes (3 candidates x 6 scenes) in <45 seconds total.
+- [ ] **Manifest Reconstruction Gate:** reconstruct exact approved render inputs, including approved candidate identity where applicable.
+- [ ] **FFmpeg Assembly Gate:** assemble six 5-second stems, stereo soundbed, VO, and vertical subtitles into 1080x1920 MP4 in <30 seconds.
 
 ### 9.6 Governance
 
-- [ ] **License Routing Gate:** A model/component with `restricted`, `blocked`, or `review_required` status cannot be dispatched.
-- [ ] **External Processing Policy Gate:** Disabling each cloud-processing flag produces the documented degraded/manual behavior and prevents prohibited provider calls.
-- [ ] **H3 Territory Gate (Phase 2):** MiniMax H3 cannot be routed for excluded-territory use or output distribution.
+- [ ] **License Routing Gate:** restricted/blocked/review-required components cannot be dispatched.
+- [ ] **External Processing Policy Gate:** disabling each cloud-processing flag prevents prohibited provider calls and produces documented degraded/manual behavior.
+- [ ] **H3 Territory Gate (Phase 2):** H3 cannot be routed or distributed outside allowed territory/policy.
 
 ---
 
 ## 10. Engineering Baseline Rules
 
-After PRD v3.4.0 is approved:
+After PRD v3.5.0 is approved:
 
 1. **Stop architecture churn.** Material architectural changes require an ADR rather than silent PRD edits.
-2. **Pin execution dependencies.** Gold Master workflow JSONs, ComfyUI commit, custom-node commits, checkpoint hashes, VAE hashes, encoder hashes, and runner profile are versioned.
-3. **Treat provider models as configuration.** Cloud model identifiers can be updated without modifying domain state-machine logic.
-4. **Treat licenses as runtime governance.** Routing depends on current license-registry state.
-5. **Treat audit data as immutable.** Corrections are new records/events, never history rewrites.
-6. **Treat MinIO as review/distribution storage.** It is not the long-term master archive.
-7. **One GPU, one active diffusion job.** A Render Worker must hold an exclusive RenderLease before entering GPU inference; CPU/network work may overlap but diffusion generations may not.
-8. **Treat empirical Render Profiles as versioned configuration.** Performance/resource claims are tied to workflow/model hashes and runner profile; re-benchmark after material changes.
-9. **Enforce Clean Architecture mechanically.** Domain/application/infrastructure/web boundary violations fail CI.
-10. **Use ADRs for major decisions.** Example: changing object store, replacing PostgreSQL queueing, adding a second GPU worker, changing the certified memory mode, or moving diffusion compute into cloud infrastructure.
+2. **Close ambiguity before automation.** Autonomous issue execution must not invent domain semantics omitted by the PRD/contracts.
+3. **Pin execution dependencies.** Gold Master workflows, ComfyUI/custom-node commits, model hashes, and runner profile are versioned.
+4. **Treat provider models as configuration.** Provider/model identifiers do not alter domain-state invariants.
+5. **Treat licenses as runtime governance.** Routing depends on current license-registry state.
+6. **Treat audit data as immutable.** Corrections are new records/events, never history rewrites.
+7. **Treat candidate history as immutable.** A new SceneSpec revision or reroll does not rewrite/delete prior candidate evidence.
+8. **Treat presigned URLs as ephemeral delivery data.** Persistent identity is bucket/key + content hash.
+9. **Treat MinIO as review/distribution storage.** It is not the long-term master archive.
+10. **One GPU, one active diffusion job.** A Render Worker must hold an exclusive GPU execution lease before inference.
+11. **No synchronous Review API -> ComfyUI rendering.** Human HTTP requests commit intent/state; durable generation workers execute GPU jobs.
+12. **Treat empirical RenderProfiles as versioned configuration.** Re-benchmark after material workflow/model/runner changes.
+13. **Enforce Clean Architecture mechanically.** Boundary violations fail CI.
+14. **Use ADRs for major decisions.** Examples: replacing object store/PostgreSQL queueing, adding a second GPU worker, changing certified memory mode, moving diffusion compute to cloud, or introducing a materially different identity/security model.
 
 ---
 
 ## 11. Primary Technical & Licensing References
 
-Primary sources should be revalidated before major version upgrades or model/license changes.
+Primary sources should be revalidated before major version upgrades or license/model changes.
 
 ### Runtime & Database
 
-- Node.js Releases / Node 24 LTS "Krypton":  
-  https://nodejs.org/en/about/previous-releases
-- PostgreSQL 18 Resource Consumption / asynchronous I/O settings:  
-  https://www.postgresql.org/docs/current/runtime-config-resource.html
-- PostgreSQL 18 UUID functions (`uuidv7()`):  
-  https://www.postgresql.org/docs/current/functions-uuid.html
-- PostgreSQL 18 UUID type:  
-  https://www.postgresql.org/docs/current/datatype-uuid.html
+- Node.js release documentation
+- PostgreSQL resource configuration documentation
+- PostgreSQL UUID / `uuidv7()` documentation
 
 ### ComfyUI
 
-- ComfyUI CLI arguments / VRAM modes:  
-  https://github.com/comfyanonymous/ComfyUI/blob/master/comfy/cli_args.py
-- ComfyUI repository:  
-  https://github.com/comfyanonymous/ComfyUI
+- ComfyUI repository and CLI/VRAM-mode source
+- Pinned ComfyUI commit recorded by certification artifacts
 
 ### Networking
 
-- Tailscale MagicDNS:  
-  https://tailscale.com/docs/features/magicdns
-- Tailscale / WireGuard architecture:  
-  https://tailscale.com/docs/concepts/wireguard
+- Tailscale MagicDNS documentation
+- Tailscale/WireGuard architecture documentation
 
 ### Empirical Hardware Baseline
 
-- **Agency RTX 4090 LTX-2.5 benchmark (August 14, 2026):** Hugging Face `Lightricks/LTX-2.5` local model-family footprint ~68.8GB; official ComfyUI template at 720p / 97 frames / 8 steps; 24,028MB peak VRAM; ~12s DiT sampling; 46s total execution; completed without OOM. Host RAM/swap certification remains a Sprint 1 gate.
+Repository evidence includes:
 
-### Foundation Models
+- `config/render-profiles/LTX_25_720P_5S_V1.json`
+- `config/render-profiles/README.md`
+- `certification/ltx-25/`
+- `certification/transition-soak/`
+- pinned workflow/model provenance under repository templates/certification artifacts
 
-- Black Forest Labs FLUX official repository and model license mapping:  
-  https://github.com/black-forest-labs/flux
-- FLUX.1 [schnell] Apache 2.0 license:  
-  https://github.com/black-forest-labs/flux/blob/main/model_licenses/LICENSE-FLUX1-schnell
-- Wan 2.1 official repository/license:  
-  https://github.com/Wan-Video/Wan2.1
-- LTX-2 official repository/license:  
-  https://github.com/Lightricks/LTX-2
-- MiniMax H3 official model and Community License:  
-  https://huggingface.co/MiniMaxAI/MiniMax-H3  
-  https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE
-- Google Gemini API model documentation:  
-  https://ai.google.dev/gemini-api/docs/models
-- Anthropic API/model documentation:  
-  https://docs.anthropic.com/
-- OpenAI model documentation:  
-  https://developers.openai.com/api/docs/models
+The certified profile is the source of truth for production execution values. Historical one-off benchmark figures remain useful context but do not override the frozen profile.
 
-### Object Storage
+### Foundation Models / Components
 
-- MinIO official repository:  
-  https://github.com/minio/minio
-- MinIO AGPLv3 license:  
-  https://github.com/minio/minio/blob/master/LICENSE
+- Black Forest Labs FLUX official repository/license mapping
+- Lightricks LTX official repository/license material
+- Wan official repository/license
+- MiniMax H3 official model/community license
+- provider model/API documentation for configured cloud providers
+- MinIO official repository and AGPLv3 license
 
 ---
 
-*End of PRD v3.4.0 - Implementation Ready Engineering Baseline with Empirical LTX-2.5 Hardware Certification.*
+*End of PRD v3.5.0 — Sprint 1 Certified / Sprint 1.5 Review Plane Contract Closure Baseline.*
