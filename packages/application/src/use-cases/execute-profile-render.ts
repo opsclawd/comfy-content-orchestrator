@@ -196,6 +196,11 @@ export class ExecuteProfileRenderUseCase {
       hasPrimaryError = true;
     } finally {
       try {
+        await this.renderEngine.unloadModels();
+      } catch {
+        // Errors during unload are swallowed to ensure lease release proceeds.
+      }
+      try {
         await lease.release();
       } catch (caughtReleaseError) {
         hasReleaseError = true;

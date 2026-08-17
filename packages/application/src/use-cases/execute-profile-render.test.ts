@@ -74,7 +74,8 @@ class FakeRenderEngine implements RenderEnginePort {
     private readonly callLog: string[],
     private readonly result: RenderResult | undefined,
     private readonly queueError?: Error,
-    private readonly resultError?: Error
+    private readonly resultError?: Error,
+    private readonly unloadError?: Error
   ) {}
 
   async queueRender(input: {
@@ -103,7 +104,12 @@ class FakeRenderEngine implements RenderEnginePort {
     return this.result;
   }
 
-  async unloadModels(): Promise<void> {}
+  async unloadModels(): Promise<void> {
+    this.callLog.push("render.unload");
+    if (this.unloadError) {
+      throw this.unloadError;
+    }
+  }
 }
 
 class FakeLease implements RenderLease {
@@ -171,6 +177,7 @@ function createUseCase(
     readonly queueError?: Error;
     readonly releaseError?: Error;
     readonly readError?: Error;
+    readonly unloadError?: Error;
     readonly callLog?: string[];
     readonly now?: () => Date;
   } = {}
@@ -183,7 +190,8 @@ function createUseCase(
     callLog,
     Object.hasOwn(options, "result") ? options.result : createSuccessResult(),
     options.queueError,
-    options.resultError
+    options.resultError,
+    options.unloadError
   );
   const useCase = new ExecuteProfileRenderUseCase(renderEngine, gpuLease, telemetry, options.now);
   return { callLog, lease, gpuLease, telemetry, renderEngine, useCase };
@@ -200,6 +208,7 @@ describe("ExecuteProfileRenderUseCase", () => {
       "gpu.readMemory",
       "render.queue",
       "render.result",
+      "render.unload",
       "lease.release"
     ]);
   });
@@ -230,7 +239,13 @@ describe("ExecuteProfileRenderUseCase", () => {
 
     await expect(useCase.execute(createInput())).rejects.toBe(queueError);
 
-    expect(callLog).toEqual(["lease.acquire", "gpu.readMemory", "render.queue", "lease.release"]);
+    expect(callLog).toEqual([
+      "lease.acquire",
+      "gpu.readMemory",
+      "render.queue",
+      "render.unload",
+      "lease.release"
+    ]);
     expect(renderEngine.resultExecutionIds).toHaveLength(0);
     expect(lease.releaseCount).toBe(1);
   });
@@ -246,6 +261,7 @@ describe("ExecuteProfileRenderUseCase", () => {
       "gpu.readMemory",
       "render.queue",
       "render.result",
+      "render.unload",
       "lease.release"
     ]);
     expect(lease.releaseCount).toBe(1);
@@ -264,6 +280,7 @@ describe("ExecuteProfileRenderUseCase", () => {
       "gpu.readMemory",
       "render.queue",
       "render.result",
+      "render.unload",
       "lease.release"
     ]);
     expect(lease.releaseCount).toBe(1);
@@ -291,6 +308,7 @@ describe("ExecuteProfileRenderUseCase", () => {
       "gpu.readMemory",
       "render.queue",
       "render.result",
+      "render.unload",
       "lease.release"
     ]);
     expect(lease.releaseCount).toBe(1);
@@ -302,7 +320,7 @@ describe("ExecuteProfileRenderUseCase", () => {
 
     await expect(useCase.execute(createInput())).rejects.toBe(readError);
 
-    expect(callLog).toEqual(["lease.acquire", "gpu.readMemory", "lease.release"]);
+    expect(callLog).toEqual(["lease.acquire", "gpu.readMemory", "render.unload", "lease.release"]);
     expect(renderEngine.queueInputs).toHaveLength(0);
     expect(lease.releaseCount).toBe(1);
   });
@@ -373,6 +391,7 @@ describe("ExecuteProfileRenderUseCase", () => {
       "gpu.readMemory",
       "render.queue",
       "render.result",
+      "render.unload",
       "lease.release"
     ]);
     expect(lease.releaseCount).toBe(1);
@@ -393,7 +412,31 @@ describe("ExecuteProfileRenderUseCase", () => {
       message: "Render execution and GPU lease release both failed"
     });
     expect((error as AggregateError).errors).toEqual([primaryError, releaseError]);
-    expect(callLog).toEqual(["lease.acquire", "gpu.readMemory", "render.queue", "lease.release"]);
+    expect(callLog).toEqual([
+      "lease.acquire",
+      "gpu.readMemory",
+      "render.queue",
+      "render.unload",
+      "lease.release"
+    ]);
+    expect(lease.releaseCount).toBe(1);
+  });
+
+  it("releases the lease even when unloadModels throws", async () => {
+    const unloadError = new Error("unload failed");
+    const { callLog, lease, useCase } = createUseCase({ unloadError });
+
+    const result = await useCase.execute(createInput());
+
+    expect(result.status).toBe("succeeded");
+    expect(callLog).toEqual([
+      "lease.acquire",
+      "gpu.readMemory",
+      "render.queue",
+      "render.result",
+      "render.unload",
+      "lease.release"
+    ]);
     expect(lease.releaseCount).toBe(1);
   });
 });

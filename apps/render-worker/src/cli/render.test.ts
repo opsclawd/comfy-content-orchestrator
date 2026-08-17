@@ -364,6 +364,7 @@ describe("render CLI", () => {
       "gpu.readMemory",
       "render.queue",
       "render.result",
+      "render.unload",
       "lease.release"
     ]);
   });
