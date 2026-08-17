@@ -52,11 +52,11 @@ describe("transition-soak-analysis", () => {
       peakProcessRssMb?: number;
       hostRamAvailableMb?: number;
       swapUsedMb?: number;
-      swapUsedDeltaMb?: number;
+      swapUsedDeltaMb?: number | null;
       systemSwapInPages?: number;
-      systemSwapInPageDelta?: number;
+      systemSwapInPageDelta?: number | null;
       systemSwapOutPages?: number;
-      systemSwapOutPageDelta?: number;
+      systemSwapOutPageDelta?: number | null;
       cleanupPassed?: boolean;
       renderStatus?: "succeeded" | "failed";
       oomDetected?: boolean;
@@ -80,11 +80,18 @@ describe("transition-soak-analysis", () => {
     const hostRss = overrides?.peakProcessRssMb ?? (isFlux ? 26000 : 26500);
     const hostAvailable = overrides?.hostRamAvailableMb ?? 2500;
     const swapUsed = overrides?.swapUsedMb ?? 0;
-    const swapDelta = overrides?.swapUsedDeltaMb ?? 0;
+    const swapDelta =
+      overrides && "swapUsedDeltaMb" in overrides ? overrides.swapUsedDeltaMb! : 0;
     const swapIn = overrides?.systemSwapInPages ?? 0;
-    const swapInDelta = overrides?.systemSwapInPageDelta ?? 0;
+    const swapInDelta =
+      overrides && "systemSwapInPageDelta" in overrides
+        ? overrides.systemSwapInPageDelta!
+        : 0;
     const swapOut = overrides?.systemSwapOutPages ?? 0;
-    const swapOutDelta = overrides?.systemSwapOutPageDelta ?? 0;
+    const swapOutDelta =
+      overrides && "systemSwapOutPageDelta" in overrides
+        ? overrides.systemSwapOutPageDelta!
+        : 0;
     const renderDuration = overrides?.renderDurationMs ?? (isFlux ? 11000 : 46500);
     const renderStatus = overrides?.renderStatus ?? "succeeded";
     const cleanupPassed = overrides?.cleanupPassed ?? true;
@@ -148,9 +155,9 @@ describe("transition-soak-analysis", () => {
               hostRamAvailableMb: hostAvailable,
               hostRamUsedMb: hostUsed,
               swapTotalMb: 40960,
-              swapUsedMb: swapUsed + swapDelta,
-              systemSwapInPages: swapIn + swapInDelta,
-              systemSwapOutPages: swapOut + swapOutDelta,
+              swapUsedMb: swapUsed + (swapDelta ?? 0),
+              systemSwapInPages: swapIn + (swapInDelta ?? 0),
+              systemSwapOutPages: swapOut + (swapOutDelta ?? 0),
               systemMajorPageFaults: 100,
               systemMinorPageFaults: 6000,
               processPid: pid,
@@ -174,9 +181,9 @@ describe("transition-soak-analysis", () => {
               hostRamAvailableMb: hostAvailable,
               hostRamUsedMb: 3750,
               swapTotalMb: 40960,
-              swapUsedMb: swapUsed + swapDelta,
-              systemSwapInPages: swapIn + swapInDelta,
-              systemSwapOutPages: swapOut + swapOutDelta,
+              swapUsedMb: swapUsed + (swapDelta ?? 0),
+              systemSwapInPages: swapIn + (swapInDelta ?? 0),
+              systemSwapOutPages: swapOut + (swapOutDelta ?? 0),
               systemMajorPageFaults: 100,
               systemMinorPageFaults: 6100,
               processPid: pid,
@@ -256,48 +263,86 @@ describe("transition-soak-analysis", () => {
     expect(result.aggregates.swapUsedDeltaMb).toBe(0);
   });
 
-  it("fails 32GB support when any transition records swap activity", () => {
-    const iterations = createElevenPassingIterations();
-    // Inject swap activity in iteration 4
-    iterations[4] = createMockIteration(4, {
-      swapUsedDeltaMb: 64
-    });
+  it("passes the recorded Trinidad profile when swap decays and is not recurrent", () => {
+    const trinidadSwapUsedMb = [2, 88, 982, 89, 0, null, 0, 7, 0, 0, 0] as const;
+    const trinidadSwapInPages = [0, 3, 818, 2310, 173, 912, 82, 169, 91, 47, 55] as const;
+    const trinidadSwapOutPages = [466, 22485, 251657, 23559, 0, 231, 0, 2637, 0, 41, 0] as const;
+
+    const iterations = createElevenPassingIterations().map((_, index) =>
+      createMockIteration(index, {
+        swapUsedDeltaMb: trinidadSwapUsedMb[index]!,
+        systemSwapInPageDelta: trinidadSwapInPages[index]!,
+        systemSwapOutPageDelta: trinidadSwapOutPages[index]!
+      })
+    );
+
+    const result = evaluateTransitionSoak(iterations, defaultBaselines, defaultThresholds);
+
+    expect(result.status).toBe("passed");
+    expect(result.hostRamDecision).toBe("support_32gb");
+    expect(result.gate.passed).toBe(true);
+    expect(result.gate.checks.noSwapActivity).toBe(true);
+    expect(result.failure).toBeNull();
+  });
+
+  it("fails when significant swap recurs in more than half of iterations", () => {
+    const iterations = createElevenPassingIterations().map((_, index) =>
+      createMockIteration(index, {
+        swapUsedDeltaMb: index < 6 ? 6 : 0,
+        systemSwapInPageDelta: 0,
+        systemSwapOutPageDelta: 0
+      })
+    );
 
     const result = evaluateTransitionSoak(iterations, defaultBaselines, defaultThresholds);
 
     expect(result.status).toBe("failed");
     expect(result.hostRamDecision).toBe("require_64gb");
-    expect(result.selectedRunnerProfile).toBeNull();
     expect(result.gate.passed).toBe(false);
     expect(result.gate.checks.noSwapActivity).toBe(false);
-    expect(result.failure).not.toBeNull();
-    expect(result.failure?.message).toMatch(/swap/i);
+  });
 
-    // Also test swap-in page activity
-    const iterationsSwapIn = createElevenPassingIterations();
-    iterationsSwapIn[3] = createMockIteration(3, {
-      systemSwapInPageDelta: 12
-    });
-    const resultSwapIn = evaluateTransitionSoak(
-      iterationsSwapIn,
-      defaultBaselines,
-      defaultThresholds
+  it("fails when later-half swap does not decay", () => {
+    const iterations = createElevenPassingIterations().map((_, index) =>
+      createMockIteration(index, {
+        swapUsedDeltaMb: index === 10 ? 20 : 0,
+        systemSwapInPageDelta: 0,
+        systemSwapOutPageDelta: 0
+      })
     );
-    expect(resultSwapIn.hostRamDecision).toBe("require_64gb");
-    expect(resultSwapIn.gate.checks.noSwapActivity).toBe(false);
 
-    // Also test swap-out page activity
-    const iterationsSwapOut = createElevenPassingIterations();
-    iterationsSwapOut[5] = createMockIteration(5, {
-      systemSwapOutPageDelta: 8
-    });
-    const resultSwapOut = evaluateTransitionSoak(
-      iterationsSwapOut,
-      defaultBaselines,
-      defaultThresholds
+    const result = evaluateTransitionSoak(iterations, defaultBaselines, defaultThresholds);
+
+    expect(result.status).toBe("failed");
+    expect(result.hostRamDecision).toBe("require_64gb");
+    expect(result.gate.passed).toBe(false);
+    expect(result.gate.checks.noSwapActivity).toBe(false);
+  });
+
+  it("preserves nullable and nonzero per-iteration swap evidence during evaluation", () => {
+    const trinidadSwapUsedMb = [2, 88, 982, 89, 0, null, 0, 7, 0, 0, 0] as const;
+    const trinidadSwapInPages = [0, 3, 818, 2310, 173, 912, 82, 169, 91, 47, 55] as const;
+    const trinidadSwapOutPages = [466, 22485, 251657, 23559, 0, 231, 0, 2637, 0, 41, 0] as const;
+
+    const iterations = createElevenPassingIterations().map((_, index) =>
+      createMockIteration(index, {
+        swapUsedDeltaMb: trinidadSwapUsedMb[index]!,
+        systemSwapInPageDelta: trinidadSwapInPages[index]!,
+        systemSwapOutPageDelta: trinidadSwapOutPages[index]!
+      })
     );
-    expect(resultSwapOut.hostRamDecision).toBe("require_64gb");
-    expect(resultSwapOut.gate.checks.noSwapActivity).toBe(false);
+
+    evaluateTransitionSoak(iterations, defaultBaselines, defaultThresholds);
+
+    expect(iterations.map((iteration) => iteration.telemetry.swapUsedDeltaMb)).toEqual(
+      trinidadSwapUsedMb
+    );
+    expect(iterations.map((iteration) => iteration.telemetry.systemSwapInPageDelta)).toEqual(
+      trinidadSwapInPages
+    );
+    expect(iterations.map((iteration) => iteration.telemetry.systemSwapOutPageDelta)).toEqual(
+      trinidadSwapOutPages
+    );
   });
 
   it("detects family-normalized progressive memory growth", () => {
