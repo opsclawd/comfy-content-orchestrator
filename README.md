@@ -107,6 +107,7 @@ Dependency direction is enforced in CI:
 - [Database Migrations & Operations Runbook](docs/database-migrations.md)
 - [LTX Hardware Certification Runbook](docs/ltx-hardware-certification.md)
 - [FLUX ↔ LTX Transition Soak Certification Runbook](docs/transition-soak-certification.md)
+- [Render Worker CLI Runbook](docs/render-worker-cli.md)
 - ADRs will live under `docs/adr/` as implementation decisions are made.
 - `docs/CONTEXT.md` will define the project's ubiquitous language and invariants during Sprint 1 bootstrap.
 

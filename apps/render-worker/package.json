@@ -16,7 +16,8 @@
     "certify:transition-soak": "tsx src/cli/certify-transition-soak.ts",
     "typecheck": "tsc --build",
     "certify": "tsx src/cli/certify.ts",
-    "certify:flux": "tsx src/cli/certify.ts --profile flux-schnell-draft"
+    "certify:flux": "tsx src/cli/certify.ts --profile flux-schnell-draft",
+    "render": "tsx src/cli/render.ts"
   },
   "dependencies": {
     "@cco/application": "workspace:*",

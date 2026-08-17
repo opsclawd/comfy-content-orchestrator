@@ -11,7 +11,8 @@ import {
   resolveModelFilePath,
   hashModelFiles,
   runDiskPreflight,
-  collectGitProvenance
+  collectGitProvenance,
+  LocalFsGpuLeaseAdapter
 } from "./index.js";
 import { FakeComfyUiTransport } from "./comfyui/test-support/fake-comfyui.js";
 
@@ -49,5 +50,9 @@ describe("infrastructure package exports", () => {
     expect(typeof collectGitProvenance).toBe("function");
     expect(VALID_MODEL_CATEGORIES).toContain("clip");
     expect(VALID_MODEL_CATEGORIES).not.toContain("text_encoders");
+  });
+
+  it("exports LocalFsGpuLeaseAdapter from composition root", () => {
+    expect(typeof LocalFsGpuLeaseAdapter).toBe("function");
   });
 });
