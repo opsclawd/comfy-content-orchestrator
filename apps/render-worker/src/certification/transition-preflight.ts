@@ -167,9 +167,13 @@ function verifyFluxProfile(profile: CertificationProfile): void {
     );
   }
 
-  if (profile.renderProfileIdentity !== null) {
+  if (
+    profile.renderProfileIdentity !== null &&
+    (profile.renderProfileIdentity.key !== "FLUX_SCHNELL_DRAFT_V1" ||
+      profile.renderProfileIdentity.version !== 1)
+  ) {
     throw new PreflightError(
-      `Profile "${profile.id}" must have renderProfileIdentity: null, got ${JSON.stringify(profile.renderProfileIdentity)}`
+      `Invalid FLUX renderProfileIdentity: expected null or "FLUX_SCHNELL_DRAFT_V1" version 1, got ${JSON.stringify(profile.renderProfileIdentity)}`
     );
   }
 
@@ -396,9 +400,14 @@ function validateProvenanceReport(
   }
 
   if (profile.id === FLUX_PROFILE_ID) {
-    if (report.renderProfileProvenance !== null) {
+    if (
+      report.renderProfileProvenance !== null &&
+      (!isRecord(report.renderProfileProvenance) ||
+        report.renderProfileProvenance.key !== "FLUX_SCHNELL_DRAFT_V1" ||
+        report.renderProfileProvenance.version !== 1)
+    ) {
       throw new PreflightError(
-        `${kind} provenance for FLUX profile "${profile.id}" must have renderProfileProvenance: null`
+        `${kind} provenance for FLUX profile "${profile.id}" has invalid renderProfileProvenance: ${JSON.stringify(report.renderProfileProvenance)}`
       );
     }
   } else if (profile.id === LTX_PROFILE_ID) {
@@ -453,10 +462,23 @@ function verifyFamilyPair(
 
   // 2. RenderProfileProvenance verification
   if (profile.id === FLUX_PROFILE_ID) {
-    if (liveReport.renderProfileProvenance !== null) {
-      throw new PreflightError(
-        `Live provenance for FLUX profile "${profile.id}" must have renderProfileProvenance: null`
-      );
+    if (
+      approvedReport.renderProfileProvenance !== null ||
+      liveReport.renderProfileProvenance !== null
+    ) {
+      if (
+        !isRecord(liveReport.renderProfileProvenance) ||
+        !isRecord(approvedReport.renderProfileProvenance)
+      ) {
+        throw new PreflightError(
+          `Live and approved provenance renderProfileProvenance mismatch for "${profile.id}"`
+        );
+      }
+      if (liveReport.renderProfileProvenance.key !== approvedReport.renderProfileProvenance.key) {
+        throw new PreflightError(
+          `Render profile key mismatch for "${profile.id}": approved "${approvedReport.renderProfileProvenance.key}", live "${liveReport.renderProfileProvenance.key}"`
+        );
+      }
     }
   } else if (profile.id === LTX_PROFILE_ID) {
     if (!isRecord(liveReport.renderProfileProvenance)) {

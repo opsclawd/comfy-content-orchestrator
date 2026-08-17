@@ -17,7 +17,7 @@ Transition soak certification verifies the empirical stability and memory envelo
 - **Memory Mode:** ComfyUI must run in **DynamicVRAM / workflow-managed offloading** mode (default startup args without explicit `--highvram`, `--gpu-only`, `--lowvram`, `--novram`, `--normalvram`, or `--cpu` flags).
 - **Disk Storage:** At least **100 GB** of verified free disk space reservation on the filesystem hosting ComfyUI models and outputs (`minFreeDiskGb: 100`).
 - **Approved Gold Master Reports:** Approved, host-validated Gold Master provenance JSON reports for both FLUX and LTX generated from the running Trinidad host (`source.kind = "validated_host_export"` with an immutable Git commit revision and exact workflow/model SHA-256 hashes).
-- **Single-Family Baseline Artifacts:** Baseline single-family result artifacts for both FLUX (`baseline/flux-schnell/result.json`) and LTX (`certification/ltx-25/ltx-cert-run-002/result.json`).
+- **Single-Family Baseline Artifacts:** Baseline single-family result artifacts for both FLUX (`certification/flux-schnell/flux-schnell-cert-run-001/result.json`) and LTX (`certification/ltx-25/ltx-cert-run-002/result.json`).
 
 ### Idle-Host Operating Requirement
 System-wide metrics (`hostRamUsedMb`, `swapUsedDeltaMb`, `systemMajorPageFaultDelta`, `systemSwapInPageDelta`, `systemSwapOutPageDelta`) measure global Linux kernel counters. The render workstation must be **otherwise idle** during the entire soak run. External background processes, browsers, or concurrent jobs will inject noise into system deltas and trigger false gate failures.

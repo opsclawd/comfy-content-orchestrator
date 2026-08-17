@@ -49,8 +49,9 @@ pnpm certify:transition-soak -- \
   --run-id trinidad-rtx4090-dynamicvram-v1
 ```
 
-> [!NOTE]
-> **Host RAM Phase 1 Decision Pending:** The definitive hardware decision (whether 32 GB host RAM is supported or a 64 GB upgrade is mandated for Phase 1 production) and the freezing of the production `RenderProfile` (`LTX_25_720P_5S_V1`) remain pending until live execution of the transition soak certification.
+> [!IMPORTANT]
+> **Host RAM Phase 1 Decision: 64 GB Mandated (`require_64gb`)**  
+> Empirical transition soak certification (`trinidad-rtx4090-dynamicvram-v1`, recorded in `certification/transition-soak/trinidad-rtx4090-dynamicvram-v1/summary.md`) established that alternating FLUX.1 [schnell] $\leftrightarrow$ LTX-2.5 workloads in DynamicVRAM mode require 64 GB of host system RAM. While all 11 generative renders and post-unload cleanup stages succeeded with zero progressive memory leaks, host RAM utilization reached 29,384 MB on the 32 GB workstation, resulting in kernel swap thrashing (up to 982 MB swap delta / 251,657 pages). Consequently, Phase 1 production mandates a 64 GB host RAM upgrade. The certified production `RenderProfile` (`LTX_25_720P_5S_V1_PROFILE`) is frozen with `dynamicvram-offload-v1` and the empirically measured resource envelope.
 
 ## Architecture
 

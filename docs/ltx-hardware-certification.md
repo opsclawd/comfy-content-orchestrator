@@ -177,10 +177,8 @@ pnpm certify:ltx \
   - `postUnloadHeadroomObserved = true` (5-second settle sample recorded)
 - [x] **Artifacts Persisted:** Valid `result.json` and `summary.md` generated under `certification/ltx-25/ltx-cert-run-002/`.
 
-### Remaining Gate: Multi-Model Transition Soak Certification
+### Completed Gate: Multi-Model Transition Soak Certification
 > [!IMPORTANT]
-> **Single-family LTX certification is complete; multi-model transition soak is the active gate.**
+> **Multi-model transition soak certification is complete (`trinidad-rtx4090-dynamicvram-v1`).**
 >
-> Pinned Gold Master provenance for both FLUX and LTX is host-validated at commit `55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc`, and single-family LTX certification passed in run `ltx-cert-run-002` (46,874 ms, 23,618 MB peak VRAM, zero swap).
->
-> The remaining gate before freezing the production `RenderProfile` (`LTX_25_720P_5S_V1`) is executing the multi-model transition soak certification on the Trinidad host (`pnpm certify:transition-soak`, documented in the [FLUX ↔ LTX Transition Soak Certification Runbook](transition-soak-certification.md)). The transition soak evaluates whether 32 GB host RAM remains stable without swap activity or memory leaks under alternating FLUX $\leftrightarrow$ LTX load or if a 64 GB host RAM upgrade is required for Phase 1.
+> 10 alternating transitions (11 renders: 6 FLUX + 5 LTX) were executed on the Trinidad host under DynamicVRAM mode. Every render succeeded without OOM or process restart. Peak host RAM reached 29,384 MB, triggering kernel swap thrashing (up to 982 MB swap delta). The soak decision strictly mandates **64 GB Host RAM** (`require_64gb`) as a Phase 1 prerequisite. The production `RenderProfile` (`LTX_25_720P_5S_V1_PROFILE`) is frozen with `dynamicvram-offload-v1` and the certified resource envelope.

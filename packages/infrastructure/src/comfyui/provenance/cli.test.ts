@@ -10,7 +10,7 @@ import type { CertificationProvenanceReport } from "./collector.js";
 describe("Provenance CLI", () => {
   const mockProfile: CertificationProfile = Object.freeze({
     id: "ltx-25-720p-97f",
-    engine: "comfyui",
+    engine: "ltx_25",
     workflowPath: "/manifests/ltx_25_720p_97f_api.json",
     workflowRelativePath: "ltx_25_720p_97f_api.json",
     expectedWorkflowHash: "a".repeat(64),
