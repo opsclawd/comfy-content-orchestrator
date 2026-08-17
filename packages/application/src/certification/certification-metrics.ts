@@ -301,8 +301,18 @@ export function renderCertificationSummary(artifact: LtxCertificationArtifact): 
 
   const formatCheck = (passed: boolean): string => (passed ? "PASS" : "FAIL");
 
+  const title =
+    artifact.identity.engine === "flux_schnell"
+      ? "# FLUX.1 [schnell] Hardware Certification Summary"
+      : "# LTX-2.5 Hardware Certification Summary";
+
+  const dimensionLine =
+    artifact.identity.engine === "flux_schnell"
+      ? `- **Resolution & Steps:** ${artifact.identity.width}x${artifact.identity.height}, ${artifact.identity.frames} frame, ${artifact.identity.steps} steps`
+      : `- **Resolution & Frames:** ${artifact.identity.width}x${artifact.identity.height}, ${artifact.identity.frames} frames, ${artifact.identity.steps} steps`;
+
   const lines: string[] = [
-    `# LTX-2.5 Hardware Certification Summary`,
+    title,
     ``,
     `**Run ID:** \`${artifact.runId}\`  `,
     `**Generated At:** \`${artifact.generatedAt}\`  `,
@@ -314,7 +324,7 @@ export function renderCertificationSummary(artifact: LtxCertificationArtifact): 
     `- **Profile Key:** \`${artifact.identity.renderProfileKey}\` (v${artifact.identity.renderProfileVersion})`,
     `- **Profile ID:** \`${artifact.identity.profileId}\``,
     `- **Engine:** \`${artifact.identity.engine}\``,
-    `- **Resolution & Frames:** ${artifact.identity.width}x${artifact.identity.height}, ${artifact.identity.frames} frames, ${artifact.identity.steps} steps`,
+    dimensionLine,
     `- **ComfyUI Commit:** \`${artifact.identity.comfyUiCommit}\``,
     `- **Workflow SHA-256:** \`${artifact.identity.workflowSha256}\``,
     `- **GPU:** ${artifact.environment.gpuName} (${formatVal(artifact.environment.gpuTotalMemoryMb, "MB")}, Driver ${artifact.environment.gpuDriverVersion}, CUDA ${artifact.environment.cudaVersion ?? "N/A"})`,
@@ -381,18 +391,20 @@ export function renderCertificationSummary(artifact: LtxCertificationArtifact): 
     );
   }
 
-  lines.push(
-    `## Historical Baseline Comparison (Reference Only)`,
-    ``,
-    `*Note: Historical baseline values are informational reference points from previous benchmarks and are NOT used as measured data or pass conditions.*`,
-    ``,
-    `| Metric | Measured Run | Historical Baseline (Reference) |`,
-    `| :--- | :--- | :--- |`,
-    `| **Total Render Duration** | ${formatVal(artifact.render.totalDurationMs, "ms")} | ~46,000 ms (46 s) |`,
-    `| **Peak VRAM** | ${formatVal(artifact.telemetry.peakVramMb, "MB")} | ~24,028 MB |`,
-    `| **Core DiT Sampling** | N/A (Measured End-to-End) | ~12 s |`,
-    ``
-  );
+  if (artifact.identity.engine === "ltx_25") {
+    lines.push(
+      `## Historical Baseline Comparison (Reference Only)`,
+      ``,
+      `*Note: Historical baseline values are informational reference points from previous benchmarks and are NOT used as measured data or pass conditions.*`,
+      ``,
+      `| Metric | Measured Run | Historical Baseline (Reference) |`,
+      `| :--- | :--- | :--- |`,
+      `| **Total Render Duration** | ${formatVal(artifact.render.totalDurationMs, "ms")} | ~46,000 ms (46 s) |`,
+      `| **Peak VRAM** | ${formatVal(artifact.telemetry.peakVramMb, "MB")} | ~24,028 MB |`,
+      `| **Core DiT Sampling** | N/A (Measured End-to-End) | ~12 s |`,
+      ``
+    );
+  }
 
   return lines.join("\n");
 }

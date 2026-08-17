@@ -106,7 +106,7 @@ export const CustomNodeIdentitySchema = z.object({
 });
 export type CustomNodeIdentity = z.infer<typeof CustomNodeIdentitySchema>;
 
-export const CertificationWorkloadIdentitySchema = z.object({
+export const LtxWorkloadIdentitySchema = z.object({
   profileId: z.literal("ltx-25-720p-97f"),
   renderProfileKey: z.literal("LTX_25_720P_5S_V1"),
   renderProfileVersion: z.literal(1),
@@ -120,6 +120,28 @@ export const CertificationWorkloadIdentitySchema = z.object({
   comfyUiCommit: gitCommitHashSchema,
   customNodes: z.array(CustomNodeIdentitySchema)
 });
+export type LtxWorkloadIdentity = z.infer<typeof LtxWorkloadIdentitySchema>;
+
+export const FluxSchnellWorkloadIdentitySchema = z.object({
+  profileId: z.literal("flux-schnell-draft"),
+  renderProfileKey: z.literal("FLUX_SCHNELL_DRAFT_V1"),
+  renderProfileVersion: z.literal(1),
+  engine: z.literal("flux_schnell"),
+  width: z.literal(1024),
+  height: z.literal(1024),
+  frames: z.literal(1),
+  steps: z.literal(4),
+  workflowSha256: sha256HashSchema,
+  modelSha256: z.record(z.string().min(1), sha256HashSchema),
+  comfyUiCommit: gitCommitHashSchema,
+  customNodes: z.array(CustomNodeIdentitySchema)
+});
+export type FluxSchnellWorkloadIdentity = z.infer<typeof FluxSchnellWorkloadIdentitySchema>;
+
+export const CertificationWorkloadIdentitySchema = z.discriminatedUnion("engine", [
+  LtxWorkloadIdentitySchema,
+  FluxSchnellWorkloadIdentitySchema
+]);
 export type CertificationWorkloadIdentity = z.infer<typeof CertificationWorkloadIdentitySchema>;
 
 export const CertificationRenderExecutionSchema = z.object({
@@ -170,7 +192,7 @@ export const CertificationTelemetryDataSchema = z.object({
 });
 export type CertificationTelemetryData = z.infer<typeof CertificationTelemetryDataSchema>;
 
-export const LtxCertificationArtifactBaseSchema = z.object({
+export const CertificationArtifactBaseSchema = z.object({
   version: z.literal(1),
   runId: z.string().regex(/^[a-z0-9][a-z0-9._-]*$/, "Must be a valid lowercase path-safe run ID"),
   generatedAt: z.string().datetime(),
@@ -184,7 +206,7 @@ export const LtxCertificationArtifactBaseSchema = z.object({
   failure: CertificationFailureSchema.nullable()
 });
 
-export const LtxCertificationArtifactSchema = LtxCertificationArtifactBaseSchema.superRefine(
+export const CertificationArtifactSchema = CertificationArtifactBaseSchema.superRefine(
   (val, ctx) => {
     if (val.status === "passed") {
       if (val.failure !== null) {
@@ -198,7 +220,7 @@ export const LtxCertificationArtifactSchema = LtxCertificationArtifactBaseSchema
       if (val.render.status !== "succeeded") {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "Passed artifact must have render.status: 'succeeded'",
+          message: "Passed artifact must have render.status: succeeded",
           path: ["render", "status"]
         });
       }
@@ -353,4 +375,9 @@ export const LtxCertificationArtifactSchema = LtxCertificationArtifactBaseSchema
   }
 );
 
-export type LtxCertificationArtifact = z.infer<typeof LtxCertificationArtifactBaseSchema>;
+export type CertificationArtifact = z.infer<typeof CertificationArtifactBaseSchema>;
+
+// Backwards-compatible aliases:
+export const LtxCertificationArtifactBaseSchema = CertificationArtifactBaseSchema;
+export const LtxCertificationArtifactSchema = CertificationArtifactSchema;
+export type LtxCertificationArtifact = CertificationArtifact;

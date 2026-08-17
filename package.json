@@ -17,7 +17,9 @@
     "test": "vitest run",
     "test:bash": "node -e \"console.log('no bash test suite in this repo; TypeScript monorepo')\"",
     "test:db": "vitest run --config vitest.integration.config.ts",
-    "typecheck": "tsc --build --force"
+    "typecheck": "tsc --build --force",
+    "certify": "pnpm --filter render-worker certify",
+    "certify:flux": "pnpm --filter render-worker certify:flux"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

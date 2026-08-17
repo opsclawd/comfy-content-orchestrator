@@ -21,7 +21,7 @@ Hardware certification verifies the empirical resource envelope of the LTX-2.5 v
 
 ## 2. Certification CLI Invocation
 
-The certification harness is executed via the `certify:ltx` script in `@cco/render-worker`:
+The certification harness is executed via the `certify` script (or alias `certify:ltx` / `certify:flux`) in `@cco/render-worker`:
 
 ```bash
 pnpm certify:ltx \
@@ -40,6 +40,7 @@ pnpm certify:ltx \
 | `--comfyui-url <url>` | **Yes** | — | ComfyUI HTTP/WebSocket base URL (e.g. `http://127.0.0.1:8188`). |
 | `--comfyui-pid <pid>` | **Yes** | — | Process ID (PID) of the running ComfyUI process (positive integer). |
 | `--gold-master-provenance <path>` | **Yes** | — | Path to approved Gold Master provenance JSON report. |
+| `--profile <profile-id>` | No | `ltx-25-720p-97f` | Profile identifier to certify (`ltx-25-720p-97f` or `flux-schnell-draft`). |
 | `--run-id <id>` | **Yes** | — | Unique run identifier matching `^[a-z0-9][a-z0-9._-]*$`. |
 | `--manifest <path>` | No | `templates/provenance.json` | Path to certification profile manifest JSON. |
 | `--gpu-index <index>` | No | `0` | Zero-based NVIDIA GPU device index. |

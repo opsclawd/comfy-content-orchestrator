@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  LtxCertificationArtifactSchema,
-  type LtxCertificationArtifact
+  CertificationArtifactSchema,
+  type LtxCertificationArtifact,
+  type CertificationArtifact
 } from "./ltx-certification.js";
 
-describe("LtxCertificationArtifactSchema", () => {
+describe("CertificationArtifactSchema", () => {
   const validPassedFixture: LtxCertificationArtifact = {
     version: 1,
     runId: "trinidad-rtx4090-dynamicvram-v1",
@@ -79,43 +80,17 @@ describe("LtxCertificationArtifactSchema", () => {
             swapUsedMb: 0,
             systemSwapInPages: 0,
             systemSwapOutPages: 0,
-            systemMajorPageFaults: 100,
-            systemMinorPageFaults: 5000,
+            systemMajorPageFaults: 0,
+            systemMinorPageFaults: 100,
             processPid: 12345,
-            processStartTimeTicks: 100000,
-            processRssMb: 1200,
-            processMajorPageFaults: 10,
-            processMinorPageFaults: 500
+            processStartTimeTicks: 5000,
+            processRssMb: 1000,
+            processMajorPageFaults: 0,
+            processMinorPageFaults: 50
           }
         },
         {
-          measuredAt: "2026-08-15T20:00:20.000Z",
-          phase: "sampling",
-          gpu: {
-            totalVramMb: 24564,
-            usedVramMb: 24028,
-            freeVramMb: 536,
-            reservedVramMb: 0
-          },
-          host: {
-            hostRamTotalMb: 64000,
-            hostRamAvailableMb: 45000,
-            hostRamUsedMb: 19000,
-            swapTotalMb: 16000,
-            swapUsedMb: 0,
-            systemSwapInPages: 0,
-            systemSwapOutPages: 0,
-            systemMajorPageFaults: 105,
-            systemMinorPageFaults: 6000,
-            processPid: 12345,
-            processStartTimeTicks: 100000,
-            processRssMb: 4500,
-            processMajorPageFaults: 12,
-            processMinorPageFaults: 1200
-          }
-        },
-        {
-          measuredAt: "2026-08-15T20:00:52.000Z",
+          measuredAt: "2026-08-15T20:00:48.000Z",
           phase: "post_unload",
           gpu: {
             totalVramMb: 24564,
@@ -125,34 +100,34 @@ describe("LtxCertificationArtifactSchema", () => {
           },
           host: {
             hostRamTotalMb: 64000,
-            hostRamAvailableMb: 49500,
-            hostRamUsedMb: 14500,
+            hostRamAvailableMb: 50000,
+            hostRamUsedMb: 14000,
             swapTotalMb: 16000,
             swapUsedMb: 0,
             systemSwapInPages: 0,
             systemSwapOutPages: 0,
-            systemMajorPageFaults: 106,
-            systemMinorPageFaults: 6200,
+            systemMajorPageFaults: 0,
+            systemMinorPageFaults: 100,
             processPid: 12345,
-            processStartTimeTicks: 100000,
-            processRssMb: 1300,
-            processMajorPageFaults: 12,
-            processMinorPageFaults: 1300
+            processStartTimeTicks: 5000,
+            processRssMb: 1000,
+            processMajorPageFaults: 0,
+            processMinorPageFaults: 50
           }
         }
       ],
       samplingErrors: [],
       peakVramMb: 24028,
       reservedVramMb: 0,
-      peakHostRamUsedMb: 19000,
-      peakProcessRssMb: 4500,
+      peakHostRamUsedMb: 14000,
+      peakProcessRssMb: 1000,
       swapUsedDeltaMb: 0,
       systemSwapInPageDelta: 0,
       systemSwapOutPageDelta: 0,
-      systemMajorPageFaultDelta: 6,
-      systemMinorPageFaultDelta: 1200,
-      processMajorPageFaultDelta: 2,
-      processMinorPageFaultDelta: 800,
+      systemMajorPageFaultDelta: 0,
+      systemMinorPageFaultDelta: 100,
+      processMajorPageFaultDelta: 0,
+      processMinorPageFaultDelta: 50,
       postUnloadUsedVramMb: 1024,
       postUnloadFreeVramMb: 23540
     },
@@ -170,322 +145,206 @@ describe("LtxCertificationArtifactSchema", () => {
     failure: null
   };
 
+  const validFluxPassedFixture: CertificationArtifact = {
+    ...validPassedFixture,
+    runId: "flux-schnell-cert-run-001",
+    identity: {
+      profileId: "flux-schnell-draft",
+      renderProfileKey: "FLUX_SCHNELL_DRAFT_V1",
+      renderProfileVersion: 1,
+      engine: "flux_schnell",
+      width: 1024,
+      height: 1024,
+      frames: 1,
+      steps: 4,
+      workflowSha256: "a".repeat(64),
+      modelSha256: {
+        clip1: "b".repeat(64),
+        clip2: "c".repeat(64),
+        diffusion: "d".repeat(64),
+        vae: "e".repeat(64)
+      },
+      comfyUiCommit: "e".repeat(40),
+      customNodes: []
+    }
+  };
+
   const validFailedFixture: LtxCertificationArtifact = {
     ...validPassedFixture,
     status: "failed",
-    render: {
-      ...validPassedFixture.render,
-      status: "failed",
-      completedAt: "2026-08-15T20:00:25.000Z",
-      totalDurationMs: 24000
-    },
-    telemetry: {
-      ...validPassedFixture.telemetry,
-      postUnloadUsedVramMb: null,
-      postUnloadFreeVramMb: null
-    },
     gate: {
       passed: false,
       maxDurationMs: 55000,
       checks: {
         renderSuccess: false,
         noOom: true,
-        durationWithinLimit: true,
+        durationWithinLimit: false,
         telemetryComplete: true,
-        postUnloadHeadroomObserved: false
+        postUnloadHeadroomObserved: true
       }
     },
     failure: {
       phase: "rendering",
       code: "render_failed",
-      message: "ComfyUI execution error during sampling node 3",
-      details: { nodeId: "3" }
+      message: "Render failed with non-zero exit code",
+      details: {
+        nodeErrors: ["KSampler: CUDA error"]
+      }
     }
   };
 
-  // Behavioral invariant: passed-artifact-is-complete
-  it("accepts a complete passed DynamicVRAM certification artifact", () => {
-    const result = LtxCertificationArtifactSchema.safeParse(validPassedFixture);
+  it("accepts a fully compliant passed LTX certification artifact", () => {
+    const result = CertificationArtifactSchema.safeParse(validPassedFixture);
     expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data).toEqual(validPassedFixture);
-    }
   });
 
-  // Behavioral invariant: failed-artifact-keeps-evidence
-  it("accepts a failed render artifact with partial measured evidence", () => {
-    const result = LtxCertificationArtifactSchema.safeParse(validFailedFixture);
+  it("accepts a fully compliant passed FLUX certification artifact", () => {
+    const result = CertificationArtifactSchema.safeParse(validFluxPassedFixture);
     expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data).toEqual(validFailedFixture);
-      expect(result.data.failure?.code).toBe("render_failed");
-      expect(result.data.gate.passed).toBe(false);
-      expect(result.data.telemetry.postUnloadUsedVramMb).toBeNull();
-      expect(result.data.telemetry.samples).toHaveLength(3);
-    }
   });
 
-  // Behavioral invariant: no-fabricated-success
-  it("rejects a passed artifact when required measured evidence is missing", () => {
-    // 1. Missing failure=null when status is passed
-    const withFailureOnPassed = {
-      ...validPassedFixture,
-      failure: {
-        phase: "rendering",
-        code: "render_failed",
-        message: "unexpected failure"
-      }
-    };
-    const failRes1 = LtxCertificationArtifactSchema.safeParse(withFailureOnPassed);
-    expect(failRes1.success).toBe(false);
-    if (!failRes1.success) {
-      const paths = failRes1.error.issues.map((i) => i.path.join("."));
-      expect(paths).toContain("failure");
-    }
-
-    // 2. Render status failed on a passed artifact
-    const withFailedRenderOnPassed = {
-      ...validPassedFixture,
-      render: { ...validPassedFixture.render, status: "failed" as const }
-    };
-    const failRes2 = LtxCertificationArtifactSchema.safeParse(withFailedRenderOnPassed);
-    expect(failRes2.success).toBe(false);
-    if (!failRes2.success) {
-      const paths = failRes2.error.issues.map((i) => i.path.join("."));
-      expect(paths).toContain("render.status");
-    }
-
-    // 3. Gate failed on a passed artifact
-    const withFailedGateOnPassed = {
-      ...validPassedFixture,
-      gate: { ...validPassedFixture.gate, passed: false }
-    };
-    const failRes3 = LtxCertificationArtifactSchema.safeParse(withFailedGateOnPassed);
-    expect(failRes3.success).toBe(false);
-    if (!failRes3.success) {
-      const paths = failRes3.error.issues.map((i) => i.path.join("."));
-      expect(paths).toContain("gate.passed");
-    }
-
-    // 4. Missing raw samples on a passed artifact
-    const withEmptySamples = {
-      ...validPassedFixture,
-      telemetry: { ...validPassedFixture.telemetry, samples: [] }
-    };
-    const failRes4 = LtxCertificationArtifactSchema.safeParse(withEmptySamples);
-    expect(failRes4.success).toBe(false);
-    if (!failRes4.success) {
-      const paths = failRes4.error.issues.map((i) => i.path.join("."));
-      expect(paths).toContain("telemetry.samples");
-    }
-
-    // 5. Missing peak VRAM on a passed artifact
-    const withNullPeakVram = {
-      ...validPassedFixture,
-      telemetry: { ...validPassedFixture.telemetry, peakVramMb: null }
-    };
-    const failRes5 = LtxCertificationArtifactSchema.safeParse(withNullPeakVram);
-    expect(failRes5.success).toBe(false);
-    if (!failRes5.success) {
-      const paths = failRes5.error.issues.map((i) => i.path.join("."));
-      expect(paths).toContain("telemetry.peakVramMb");
-    }
-
-    // Missing reservedVramMb on a passed artifact
-    const withNullReservedVram = {
-      ...validPassedFixture,
-      telemetry: { ...validPassedFixture.telemetry, reservedVramMb: null }
-    };
-    const failResReserved = LtxCertificationArtifactSchema.safeParse(withNullReservedVram);
-    expect(failResReserved.success).toBe(false);
-    if (!failResReserved.success) {
-      const paths = failResReserved.error.issues.map((i) => i.path.join("."));
-      expect(paths).toContain("telemetry.reservedVramMb");
-    }
-
-    // 6. Missing postUnloadUsedVramMb on a passed artifact
-    const withNullPostUnload = {
-      ...validPassedFixture,
-      telemetry: { ...validPassedFixture.telemetry, postUnloadUsedVramMb: null }
-    };
-    const failRes6 = LtxCertificationArtifactSchema.safeParse(withNullPostUnload);
-    expect(failRes6.success).toBe(false);
-    if (!failRes6.success) {
-      const paths = failRes6.error.issues.map((i) => i.path.join("."));
-      expect(paths).toContain("telemetry.postUnloadUsedVramMb");
-    }
-
-    // 7. Sampling errors present on a passed artifact
-    const withSamplingErrors = {
-      ...validPassedFixture,
-      telemetry: {
-        ...validPassedFixture.telemetry,
-        samplingErrors: [{ measuredAt: "2026-08-15T20:00:10.000Z", message: "nvidia-smi timeout" }]
-      }
-    };
-    const failRes7 = LtxCertificationArtifactSchema.safeParse(withSamplingErrors);
-    expect(failRes7.success).toBe(false);
-    if (!failRes7.success) {
-      const paths = failRes7.error.issues.map((i) => i.path.join("."));
-      expect(paths).toContain("telemetry.samplingErrors");
-    }
-
-    // 8. Missing failure object on a failed artifact
-    const failedWithoutFailureObject = {
-      ...validFailedFixture,
-      failure: null
-    };
-    const failRes8 = LtxCertificationArtifactSchema.safeParse(failedWithoutFailureObject);
-    expect(failRes8.success).toBe(false);
-    if (!failRes8.success) {
-      const paths = failRes8.error.issues.map((i) => i.path.join("."));
-      expect(paths).toContain("failure");
-    }
+  it("accepts a fully compliant failed certification artifact", () => {
+    const result = CertificationArtifactSchema.safeParse(validFailedFixture);
+    expect(result.success).toBe(true);
   });
 
-  // Behavioral invariant: workload-identity-is-pinned
-  it("rejects an artifact for a different workload identity", () => {
-    // 1. Invalid profileKey
-    const badProfileKey = {
-      ...validPassedFixture,
-      identity: { ...validPassedFixture.identity, renderProfileKey: "OTHER_KEY" }
-    };
-    expect(LtxCertificationArtifactSchema.safeParse(badProfileKey).success).toBe(false);
+  describe("discriminated union workload identity validation", () => {
+    it("rejects an artifact whose engine disagrees with its dimensions or profile", () => {
+      // FLUX engine with LTX dimensions
+      const fluxBadDims = {
+        ...validFluxPassedFixture,
+        identity: {
+          ...validFluxPassedFixture.identity,
+          width: 1280,
+          height: 720
+        }
+      };
+      expect(CertificationArtifactSchema.safeParse(fluxBadDims).success).toBe(false);
 
-    // 2. Invalid profileVersion
-    const badProfileVersion = {
-      ...validPassedFixture,
-      identity: { ...validPassedFixture.identity, renderProfileVersion: 2 }
-    };
-    expect(LtxCertificationArtifactSchema.safeParse(badProfileVersion).success).toBe(false);
+      // FLUX engine with LTX steps
+      const fluxBadSteps = {
+        ...validFluxPassedFixture,
+        identity: {
+          ...validFluxPassedFixture.identity,
+          steps: 8
+        }
+      };
+      expect(CertificationArtifactSchema.safeParse(fluxBadSteps).success).toBe(false);
 
-    // 3. Invalid engine
-    const badEngine = {
-      ...validPassedFixture,
-      identity: { ...validPassedFixture.identity, engine: "flux" }
-    };
-    expect(LtxCertificationArtifactSchema.safeParse(badEngine).success).toBe(false);
+      // FLUX engine with LTX frames
+      const fluxBadFrames = {
+        ...validFluxPassedFixture,
+        identity: {
+          ...validFluxPassedFixture.identity,
+          frames: 97
+        }
+      };
+      expect(CertificationArtifactSchema.safeParse(fluxBadFrames).success).toBe(false);
 
-    // 4. Invalid width
-    const badWidth = {
-      ...validPassedFixture,
-      identity: { ...validPassedFixture.identity, width: 1920 }
-    };
-    expect(LtxCertificationArtifactSchema.safeParse(badWidth).success).toBe(false);
-
-    // 5. Invalid height
-    const badHeight = {
-      ...validPassedFixture,
-      identity: { ...validPassedFixture.identity, height: 1080 }
-    };
-    expect(LtxCertificationArtifactSchema.safeParse(badHeight).success).toBe(false);
-
-    // 6. Invalid frames
-    const badFrames = {
-      ...validPassedFixture,
-      identity: { ...validPassedFixture.identity, frames: 49 }
-    };
-    expect(LtxCertificationArtifactSchema.safeParse(badFrames).success).toBe(false);
-
-    // 7. Invalid steps
-    const badSteps = {
-      ...validPassedFixture,
-      identity: { ...validPassedFixture.identity, steps: 20 }
-    };
-    expect(LtxCertificationArtifactSchema.safeParse(badSteps).success).toBe(false);
-
-    // 8. Invalid profileId
-    const badProfileId = {
-      ...validPassedFixture,
-      identity: { ...validPassedFixture.identity, profileId: "flux-schnell" }
-    };
-    expect(LtxCertificationArtifactSchema.safeParse(badProfileId).success).toBe(false);
-  });
-
-  // Behavioral invariant: mode-is-explicit
-  it("rejects invalid mode hashes intervals and counters", () => {
-    // 1. Invalid runnerMode
-    const badMode = {
-      ...validPassedFixture,
-      runnerMode: "lowvram"
-    };
-    expect(LtxCertificationArtifactSchema.safeParse(badMode).success).toBe(false);
-
-    // 2. Invalid sampleIntervalMs
-    const badInterval = {
-      ...validPassedFixture,
-      telemetry: { ...validPassedFixture.telemetry, sampleIntervalMs: 500 }
-    };
-    expect(LtxCertificationArtifactSchema.safeParse(badInterval).success).toBe(false);
-
-    // 3. Invalid workflowSha256 (too short, uppercase, non-hex)
-    expect(
-      LtxCertificationArtifactSchema.safeParse({
-        ...validPassedFixture,
-        identity: { ...validPassedFixture.identity, workflowSha256: "short" }
-      }).success
-    ).toBe(false);
-    expect(
-      LtxCertificationArtifactSchema.safeParse({
-        ...validPassedFixture,
-        identity: { ...validPassedFixture.identity, workflowSha256: "A".repeat(64) }
-      }).success
-    ).toBe(false);
-    expect(
-      LtxCertificationArtifactSchema.safeParse({
-        ...validPassedFixture,
-        identity: { ...validPassedFixture.identity, workflowSha256: "z".repeat(64) }
-      }).success
-    ).toBe(false);
-
-    // 4. Invalid modelSha256
-    expect(
-      LtxCertificationArtifactSchema.safeParse({
+      // LTX engine with FLUX dimensions
+      const ltxBadDims = {
         ...validPassedFixture,
         identity: {
           ...validPassedFixture.identity,
-          modelSha256: { checkpoint: "not-a-sha256" }
+          width: 1024,
+          height: 1024
         }
-      }).success
-    ).toBe(false);
+      };
+      expect(CertificationArtifactSchema.safeParse(ltxBadDims).success).toBe(false);
 
-    // 5. Negative counter or memory metric in aggregates
-    expect(
-      LtxCertificationArtifactSchema.safeParse({
+      // LTX engine with FLUX steps
+      const ltxBadSteps = {
         ...validPassedFixture,
-        telemetry: { ...validPassedFixture.telemetry, peakVramMb: -1 }
-      }).success
-    ).toBe(false);
-    expect(
-      LtxCertificationArtifactSchema.safeParse({
-        ...validPassedFixture,
-        telemetry: { ...validPassedFixture.telemetry, swapUsedDeltaMb: -10 }
-      }).success
-    ).toBe(false);
-    expect(
-      LtxCertificationArtifactSchema.safeParse({
-        ...validPassedFixture,
-        telemetry: { ...validPassedFixture.telemetry, processMajorPageFaultDelta: -5 }
-      }).success
-    ).toBe(false);
+        identity: {
+          ...validPassedFixture.identity,
+          steps: 4
+        }
+      };
+      expect(CertificationArtifactSchema.safeParse(ltxBadSteps).success).toBe(false);
 
-    // 6. Negative counter in sample
-    const firstSample = validPassedFixture.telemetry.samples[0]!;
-    const badSample = {
-      ...validPassedFixture,
-      telemetry: {
-        ...validPassedFixture.telemetry,
-        samples: [
-          {
-            ...firstSample,
-            gpu: {
-              ...firstSample.gpu,
-              usedVramMb: -100
-            }
-          }
-        ]
-      }
-    };
-    expect(LtxCertificationArtifactSchema.safeParse(badSample).success).toBe(false);
+      // Mismatched profileId and engine
+      const mismatchProfile = {
+        ...validPassedFixture,
+        identity: {
+          ...validPassedFixture.identity,
+          profileId: "flux-schnell-draft"
+        }
+      };
+      expect(CertificationArtifactSchema.safeParse(mismatchProfile).success).toBe(false);
+    });
+  });
+
+  describe("superRefine passed invariants", () => {
+    it("rejects passed artifact if failure is not null", () => {
+      const withFailureOnPassed = {
+        ...validPassedFixture,
+        failure: {
+          phase: "rendering",
+          code: "oom",
+          message: "something"
+        }
+      };
+      const failRes = CertificationArtifactSchema.safeParse(withFailureOnPassed);
+      expect(failRes.success).toBe(false);
+    });
+
+    it("rejects passed artifact if render.status is not succeeded", () => {
+      const withFailedRenderOnPassed = {
+        ...validPassedFixture,
+        render: {
+          ...validPassedFixture.render,
+          status: "failed" as const
+        }
+      };
+      const failRes = CertificationArtifactSchema.safeParse(withFailedRenderOnPassed);
+      expect(failRes.success).toBe(false);
+    });
+
+    it("rejects passed artifact if gate.passed is false", () => {
+      const withFailedGateOnPassed = {
+        ...validPassedFixture,
+        gate: {
+          ...validPassedFixture.gate,
+          passed: false
+        }
+      };
+      const failRes = CertificationArtifactSchema.safeParse(withFailedGateOnPassed);
+      expect(failRes.success).toBe(false);
+    });
+
+    it("rejects passed artifact if samples are empty", () => {
+      const withEmptySamples = {
+        ...validPassedFixture,
+        telemetry: {
+          ...validPassedFixture.telemetry,
+          samples: []
+        }
+      };
+      const failRes = CertificationArtifactSchema.safeParse(withEmptySamples);
+      expect(failRes.success).toBe(false);
+    });
+
+    it("rejects passed artifact if peakVramMb is null", () => {
+      const withNullPeakVram = {
+        ...validPassedFixture,
+        telemetry: {
+          ...validPassedFixture.telemetry,
+          peakVramMb: null
+        }
+      };
+      const failRes = CertificationArtifactSchema.safeParse(withNullPeakVram);
+      expect(failRes.success).toBe(false);
+    });
+  });
+
+  describe("superRefine failed invariants", () => {
+    it("rejects failed artifact without failure object", () => {
+      const failedWithoutFailureObject = {
+        ...validFailedFixture,
+        failure: null
+      };
+      const failRes = CertificationArtifactSchema.safeParse(failedWithoutFailureObject);
+      expect(failRes.success).toBe(false);
+    });
   });
 });

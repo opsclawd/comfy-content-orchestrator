@@ -35,14 +35,6 @@ export interface VerifyComfyUiMemoryModeOptions {
   readonly comfyUiArgs: readonly string[];
 }
 
-const REQUIRED_PROFILE_ID = "ltx-25-720p-97f";
-const REQUIRED_ENGINE = "ltx_25";
-const REQUIRED_WIDTH = 1280;
-const REQUIRED_HEIGHT = 720;
-const REQUIRED_FRAMES = 97;
-const REQUIRED_STEPS = 8;
-const REQUIRED_RENDER_PROFILE_KEY = "LTX_25_720P_5S_V1";
-const REQUIRED_RENDER_PROFILE_VERSION = 1;
 const REQUIRED_GPU_NAME = "NVIDIA GeForce RTX 4090";
 
 const EXPLICIT_VRAM_FLAGS = [
@@ -90,100 +82,134 @@ function verifyProfileWorkload(profile: CertificationProfile): void {
     throw new PreflightError("Certification profile must be a valid object");
   }
 
-  if (profile.id !== REQUIRED_PROFILE_ID) {
-    throw new PreflightError(
-      `Invalid profile ID "${profile.id}": expected "${REQUIRED_PROFILE_ID}"`
-    );
+  if (profile.id === "ltx-25-720p-97f" && profile.engine !== "ltx_25") {
+    throw new PreflightError(`Invalid profile engine "${profile.engine}": expected "ltx_25"`);
+  }
+  if (profile.id === "flux-schnell-draft" && profile.engine !== "flux_schnell") {
+    throw new PreflightError(`Invalid profile engine "${profile.engine}": expected "flux_schnell"`);
   }
 
-  if (profile.engine !== REQUIRED_ENGINE) {
-    throw new PreflightError(
-      `Invalid profile engine "${profile.engine}": expected "${REQUIRED_ENGINE}"`
-    );
-  }
-
-  if (profile.baseline.width !== REQUIRED_WIDTH) {
-    throw new PreflightError(
-      `Invalid baseline width ${String(profile.baseline.width)}: expected ${REQUIRED_WIDTH}`
-    );
-  }
-
-  if (profile.baseline.height !== REQUIRED_HEIGHT) {
-    throw new PreflightError(
-      `Invalid baseline height ${String(profile.baseline.height)}: expected ${REQUIRED_HEIGHT}`
-    );
-  }
-
-  if (profile.baseline.frames !== REQUIRED_FRAMES) {
-    throw new PreflightError(
-      `Invalid baseline frames ${String(profile.baseline.frames)}: expected ${REQUIRED_FRAMES}`
-    );
-  }
-
-  if (profile.baseline.steps !== REQUIRED_STEPS) {
-    throw new PreflightError(
-      `Invalid baseline steps ${String(profile.baseline.steps)}: expected ${REQUIRED_STEPS}`
-    );
-  }
-
-  if (profile.renderProfileIdentity === null) {
-    throw new PreflightError(
-      `Profile "${profile.id}" has null renderProfileIdentity; expected key "${REQUIRED_RENDER_PROFILE_KEY}" version ${REQUIRED_RENDER_PROFILE_VERSION}`
-    );
-  }
-
-  if (
-    profile.renderProfileIdentity.key !== REQUIRED_RENDER_PROFILE_KEY ||
-    profile.renderProfileIdentity.version !== REQUIRED_RENDER_PROFILE_VERSION
-  ) {
-    throw new PreflightError(
-      `Invalid renderProfileIdentity: expected key "${REQUIRED_RENDER_PROFILE_KEY}" version ${REQUIRED_RENDER_PROFILE_VERSION}, got key "${profile.renderProfileIdentity.key}" version ${String(profile.renderProfileIdentity.version)}`
-    );
-  }
-
-  // Workflow assertions verification
-  const assertions = profile.assertions;
-  if (!Array.isArray(assertions) || assertions.length === 0) {
-    throw new PreflightError(`Profile "${profile.id}" must define workflow assertions`);
-  }
-
-  const stepsAssertion = assertions.find((a) => a.input === "steps" && a.equals === REQUIRED_STEPS);
-  if (!stepsAssertion) {
-    throw new PreflightError(
-      `Profile "${profile.id}" is missing required workflow assertion for steps = ${REQUIRED_STEPS}`
-    );
-  }
-
-  const widthAssertion = assertions.find((a) => a.input === "width" && a.equals === REQUIRED_WIDTH);
-  if (!widthAssertion) {
-    throw new PreflightError(
-      `Profile "${profile.id}" is missing required workflow assertion for width = ${REQUIRED_WIDTH}`
-    );
-  }
-
-  const heightAssertion = assertions.find(
-    (a) => a.input === "height" && a.equals === REQUIRED_HEIGHT
-  );
-  if (!heightAssertion) {
-    throw new PreflightError(
-      `Profile "${profile.id}" is missing required workflow assertion for height = ${REQUIRED_HEIGHT}`
-    );
-  }
-
-  const framesAssertion = assertions.find(
-    (a) => (a.input === "length" || a.input === "frames") && a.equals === REQUIRED_FRAMES
-  );
-  if (!framesAssertion) {
-    throw new PreflightError(
-      `Profile "${profile.id}" is missing required workflow assertion for frames/length = ${REQUIRED_FRAMES}`
-    );
+  if (profile.engine === "ltx_25") {
+    if (profile.id !== "ltx-25-720p-97f") {
+      throw new PreflightError(`Invalid profile ID "${profile.id}": expected "ltx-25-720p-97f"`);
+    }
+    if (profile.baseline.width !== 1280) {
+      throw new PreflightError(
+        `Invalid baseline width ${String(profile.baseline.width)}: expected 1280`
+      );
+    }
+    if (profile.baseline.height !== 720) {
+      throw new PreflightError(
+        `Invalid baseline height ${String(profile.baseline.height)}: expected 720`
+      );
+    }
+    if (profile.baseline.frames !== 97) {
+      throw new PreflightError(
+        `Invalid baseline frames ${String(profile.baseline.frames)}: expected 97`
+      );
+    }
+    if (profile.baseline.steps !== 8) {
+      throw new PreflightError(
+        `Invalid baseline steps ${String(profile.baseline.steps)}: expected 8`
+      );
+    }
+    if (
+      profile.renderProfileIdentity === null ||
+      profile.renderProfileIdentity.key !== "LTX_25_720P_5S_V1" ||
+      profile.renderProfileIdentity.version !== 1
+    ) {
+      throw new PreflightError(
+        `Invalid renderProfileIdentity: expected key "LTX_25_720P_5S_V1" version 1`
+      );
+    }
+    const assertions = profile.assertions;
+    if (!Array.isArray(assertions) || assertions.length === 0) {
+      throw new PreflightError(`Profile "${profile.id}" must define workflow assertions`);
+    }
+    if (!assertions.find((a) => a.input === "steps" && a.equals === 8)) {
+      throw new PreflightError(
+        `Profile "${profile.id}" is missing required workflow assertion for steps = 8`
+      );
+    }
+    if (!assertions.find((a) => a.input === "width" && a.equals === 1280)) {
+      throw new PreflightError(
+        `Profile "${profile.id}" is missing required workflow assertion for width = 1280`
+      );
+    }
+    if (!assertions.find((a) => a.input === "height" && a.equals === 720)) {
+      throw new PreflightError(
+        `Profile "${profile.id}" is missing required workflow assertion for height = 720`
+      );
+    }
+    if (
+      !assertions.find((a) => (a.input === "length" || a.input === "frames") && a.equals === 97)
+    ) {
+      throw new PreflightError(
+        `Profile "${profile.id}" is missing required workflow assertion for frames/length = 97`
+      );
+    }
+  } else if (profile.engine === "flux_schnell") {
+    if (profile.id !== "flux-schnell-draft") {
+      throw new PreflightError(`Invalid profile ID "${profile.id}": expected "flux-schnell-draft"`);
+    }
+    if (profile.baseline.width !== 1024) {
+      throw new PreflightError(
+        `Invalid baseline width ${String(profile.baseline.width)}: expected 1024`
+      );
+    }
+    if (profile.baseline.height !== 1024) {
+      throw new PreflightError(
+        `Invalid baseline height ${String(profile.baseline.height)}: expected 1024`
+      );
+    }
+    if (profile.baseline.frames !== 1) {
+      throw new PreflightError(
+        `Invalid baseline frames ${String(profile.baseline.frames)}: expected 1`
+      );
+    }
+    if (profile.baseline.steps !== 4) {
+      throw new PreflightError(
+        `Invalid baseline steps ${String(profile.baseline.steps)}: expected 4`
+      );
+    }
+    if (
+      profile.renderProfileIdentity === null ||
+      profile.renderProfileIdentity.key !== "FLUX_SCHNELL_DRAFT_V1" ||
+      profile.renderProfileIdentity.version !== 1
+    ) {
+      throw new PreflightError(
+        `Invalid renderProfileIdentity: expected key "FLUX_SCHNELL_DRAFT_V1" version 1`
+      );
+    }
+    const assertions = profile.assertions;
+    if (!Array.isArray(assertions) || assertions.length === 0) {
+      throw new PreflightError(`Profile "${profile.id}" must define workflow assertions`);
+    }
+    if (!assertions.find((a) => a.input === "steps" && a.equals === 4)) {
+      throw new PreflightError(
+        `Profile "${profile.id}" is missing required workflow assertion for steps = 4`
+      );
+    }
+    if (!assertions.find((a) => a.input === "width" && a.equals === 1024)) {
+      throw new PreflightError(
+        `Profile "${profile.id}" is missing required workflow assertion for width = 1024`
+      );
+    }
+    if (!assertions.find((a) => a.input === "height" && a.equals === 1024)) {
+      throw new PreflightError(
+        `Profile "${profile.id}" is missing required workflow assertion for height = 1024`
+      );
+    }
   }
 }
 
 /**
  * Validates the approved Gold Master provenance report.
  */
-function validateApprovedReport(approved: unknown): CertificationProvenanceReport {
+function validateApprovedReport(
+  approved: unknown,
+  profile: CertificationProfile
+): CertificationProvenanceReport {
   if (!isRecord(approved)) {
     throw new PreflightError("Approved Gold Master provenance must be a valid JSON object");
   }
@@ -194,9 +220,9 @@ function validateApprovedReport(approved: unknown): CertificationProvenanceRepor
     );
   }
 
-  if (approved.profileId !== REQUIRED_PROFILE_ID) {
+  if (approved.profileId !== profile.id) {
     throw new PreflightError(
-      `Approved provenance profileId "${String(approved.profileId)}" does not match required "${REQUIRED_PROFILE_ID}"`
+      `Approved provenance profileId "${String(approved.profileId)}" does not match required "${profile.id}"`
     );
   }
 
@@ -241,9 +267,8 @@ function validateApprovedReport(approved: unknown): CertificationProvenanceRepor
 
   const rpp = approved.renderProfileProvenance;
   if (
-    rpp.key !== REQUIRED_RENDER_PROFILE_KEY ||
-    rpp.version !== REQUIRED_RENDER_PROFILE_VERSION ||
-    rpp.engine !== REQUIRED_ENGINE
+    (rpp.key !== "LTX_25_720P_5S_V1" && rpp.key !== "FLUX_SCHNELL_DRAFT_V1") ||
+    rpp.version !== 1
   ) {
     throw new PreflightError(
       `Approved provenance renderProfileProvenance identity mismatch: ${JSON.stringify(rpp)}`
@@ -292,7 +317,7 @@ export function verifyGoldMasterProvenance(
   verifyProfileWorkload(profile);
 
   // 2. Validate approved report structure and host-validated source
-  const approvedReport = validateApprovedReport(approved);
+  const approvedReport = validateApprovedReport(approved, profile);
 
   // 3. Verify live report structure
   if (!isRecord(live)) {

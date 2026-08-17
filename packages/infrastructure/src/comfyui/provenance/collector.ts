@@ -103,7 +103,8 @@ export async function collectCertificationProvenance(
   let renderProfileProvenance: RenderProfileProvenance | null = null;
 
   if (profile.renderProfileIdentity !== null) {
-    if (profile.baseline.frames === undefined) {
+    const frames = profile.baseline.frames ?? (profile.engine === "flux_schnell" ? 1 : undefined);
+    if (frames === undefined) {
       throw new Error(
         `Profile "${profile.id}" specifies renderProfileIdentity "${profile.renderProfileIdentity.key}" but baseline.frames is missing`
       );
@@ -120,7 +121,7 @@ export async function collectCertificationProvenance(
       engine: profile.engine,
       workflowHash: workflowSha256,
       modelHashes: Object.freeze(modelHashes),
-      frames: profile.baseline.frames,
+      frames,
       steps: profile.baseline.steps,
       runnerProfile: profile.runnerProfile,
       measuredDiskFootprintGb: disk.modelFootprintGb,
