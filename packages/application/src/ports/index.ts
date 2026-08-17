@@ -1,4 +1,5 @@
 export * from "./scene-repository.js";
+export * from "./storyboard-candidate-repository.js";
 export * from "./review-event-store.js";
 export * from "./unit-of-work.js";
 export * from "./render-engine-port.js";

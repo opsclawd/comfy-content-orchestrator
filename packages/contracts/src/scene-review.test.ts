@@ -45,4 +45,20 @@ describe("scene-review contracts", () => {
     };
     expect(ReviewEventSchema.safeParse(withInvalidResulting).success).toBe(false);
   });
+
+  it("accepts candidate_select as a canonical review action", () => {
+    expect(ReviewActionSchema.parse("candidate_select")).toBe("candidate_select");
+
+    const event = {
+      eventId: "evt-002",
+      sceneId: "scene-123",
+      reviewerName: "Director Alice",
+      action: "candidate_select",
+      mutationPayload: { candidateId: "cand-1", candidateRevision: 1 },
+      priorSceneStatus: "director_review",
+      resultingSceneStatus: "director_review",
+      occurredAt: "2026-08-15T00:00:00.000Z"
+    };
+    expect(ReviewEventSchema.parse(event)).toEqual(event);
+  });
 });

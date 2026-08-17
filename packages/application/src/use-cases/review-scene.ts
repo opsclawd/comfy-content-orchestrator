@@ -1,6 +1,7 @@
 import { ReviewEventSchema, type ReviewAction } from "@cco/contracts";
-import type { Scene, SceneId, SceneTransition } from "@cco/domain";
+import type { CandidateId, Scene, SceneId, SceneTransition } from "@cco/domain";
 import type { UnitOfWork } from "../ports/unit-of-work.js";
+import { CandidateNotFoundError } from "./candidate-not-found-error.js";
 import { SceneNotFoundError } from "./scene-not-found-error.js";
 
 export interface ReviewAuditInput {
@@ -16,6 +17,11 @@ export type RequestRerollInput = ReviewAuditInput;
 export type AcceptQASceneInput = ReviewAuditInput;
 export type RejectQASceneInput = ReviewAuditInput;
 export type CancelSceneInput = ReviewAuditInput;
+
+export interface SelectCandidateInput extends ReviewAuditInput {
+  readonly candidateId: CandidateId;
+  readonly candidateRevision?: number;
+}
 
 export interface UpdatePromptInput extends ReviewAuditInput {
   readonly prompt: string;
@@ -39,6 +45,45 @@ export interface UpdateLoraInput extends ReviewAuditInput {
 
 export class ReviewSceneUseCases {
   constructor(private readonly uow: UnitOfWork) {}
+
+  async selectCandidate(input: SelectCandidateInput): Promise<void> {
+    await this.uow.execute(async (context) => {
+      const candidate = await context.candidates.findById(input.candidateId);
+      if (candidate === undefined) {
+        throw new CandidateNotFoundError(input.candidateId);
+      }
+
+      const scene = await context.scenes.findById(input.sceneId as SceneId);
+      if (scene === undefined) {
+        throw new SceneNotFoundError(input.sceneId);
+      }
+
+      const priorSceneStatus = scene.status;
+      const transition = scene.selectCandidate(
+        candidate.id,
+        candidate.specRevision,
+        candidate.sceneId
+      );
+
+      const event = ReviewEventSchema.parse({
+        eventId: input.eventId,
+        sceneId: input.sceneId,
+        reviewerName: input.reviewerName,
+        action: "candidate_select",
+        ...(input.directorNotes !== undefined ? { directorNotes: input.directorNotes } : {}),
+        mutationPayload: {
+          candidateId: candidate.id,
+          candidateRevision: candidate.specRevision
+        },
+        priorSceneStatus,
+        resultingSceneStatus: transition.to,
+        occurredAt: input.occurredAt
+      });
+
+      await context.reviewEvents.append(event);
+      await context.scenes.save(scene);
+    });
+  }
 
   async approve(input: ApproveSceneInput): Promise<void> {
     await this.executeReviewAction(input, "approve", {}, (scene) =>

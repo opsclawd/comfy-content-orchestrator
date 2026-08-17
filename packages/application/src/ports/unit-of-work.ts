@@ -1,9 +1,11 @@
 import type { ReviewEventStore } from "./review-event-store.js";
 import type { SceneRepository } from "./scene-repository.js";
+import type { StoryboardCandidateRepository } from "./storyboard-candidate-repository.js";
 
 export interface UnitOfWorkContext {
   readonly scenes: SceneRepository;
   readonly reviewEvents: ReviewEventStore;
+  readonly candidates: StoryboardCandidateRepository;
 }
 
 export interface UnitOfWork {

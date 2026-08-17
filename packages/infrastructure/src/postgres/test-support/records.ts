@@ -55,6 +55,8 @@ export interface StoryboardSceneRecordInput {
   draftStorageBucket?: string | null;
   draftStorageObjectKey?: string | null;
   directorNotes?: string | null;
+  selectedCandidateId?: string | null;
+  selectedCandidateRevision?: number | null;
 }
 
 export interface SceneReferenceAssetRecordInput {
@@ -159,9 +161,12 @@ export interface InsertedStoryboardSceneRecord {
   audio_fx_prompt: string | null;
   engine_assigned: string;
   status: string;
+  spec_revision: number;
   draft_storage_bucket: string | null;
   draft_storage_object_key: string | null;
   director_notes: string | null;
+  selected_candidate_id: string | null;
+  selected_candidate_revision: number | null;
   created_at: Date;
   updated_at: Date;
   archived_at: Date | null;
@@ -440,6 +445,10 @@ export async function insertStoryboardSceneRecord(
     input.directorNotes !== undefined
       ? input.directorNotes
       : "Ensure sunrise warm highlights on the steelpan rim.";
+  const selectedCandidateId =
+    input.selectedCandidateId !== undefined ? input.selectedCandidateId : null;
+  const selectedCandidateRevision =
+    input.selectedCandidateRevision !== undefined ? input.selectedCandidateRevision : null;
 
   const res = await client.query<InsertedStoryboardSceneRecord>(
     `
@@ -455,8 +464,10 @@ export async function insertStoryboardSceneRecord(
       status,
       draft_storage_bucket,
       draft_storage_object_key,
-      director_notes
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      director_notes,
+      selected_candidate_id,
+      selected_candidate_revision
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
     RETURNING *
     `,
     [
@@ -471,7 +482,9 @@ export async function insertStoryboardSceneRecord(
       status,
       draftStorageBucket,
       draftStorageObjectKey,
-      directorNotes
+      directorNotes,
+      selectedCandidateId,
+      selectedCandidateRevision
     ]
   );
 
@@ -691,4 +704,100 @@ export async function insertRepresentativeGraph(client: PoolClient): Promise<Rep
     manifest,
     reviewEvent
   };
+}
+
+export interface StoryboardCandidateRecordInput {
+  candidateId?: string;
+  sceneId: string;
+  sceneSpecRevision?: number;
+  variantOrdinal?: number;
+  storageBucket?: string;
+  storageObjectKey?: string;
+  contentHashSha256?: string;
+  generationPayload?: Record<string, unknown>;
+}
+
+export interface InsertedStoryboardCandidateRecord {
+  candidate_id: string;
+  scene_id: string;
+  scene_spec_revision: number;
+  variant_ordinal: number;
+  storage_bucket: string;
+  storage_object_key: string;
+  content_hash_sha256: string;
+  generation_payload: Record<string, unknown>;
+  created_at: Date;
+}
+
+export async function insertStoryboardCandidateRecord(
+  client: PoolClient,
+  input: StoryboardCandidateRecordInput
+): Promise<InsertedStoryboardCandidateRecord> {
+  const sceneId = input.sceneId;
+  const sceneSpecRevision = input.sceneSpecRevision ?? 1;
+  const variantOrdinal = input.variantOrdinal ?? 1;
+  const storageBucket = input.storageBucket ?? "godzspeed-temp";
+  const storageObjectKey =
+    input.storageObjectKey ??
+    `candidates/${sceneId}/rev_${sceneSpecRevision}_var_${variantOrdinal}.webp`;
+  const contentHashSha256 =
+    input.contentHashSha256 ?? "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+  const generationPayload = input.generationPayload ?? {};
+
+  const query =
+    input.candidateId !== undefined
+      ? `
+        INSERT INTO storyboard_candidates (
+          candidate_id,
+          scene_id,
+          scene_spec_revision,
+          variant_ordinal,
+          storage_bucket,
+          storage_object_key,
+          content_hash_sha256,
+          generation_payload
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING *
+        `
+      : `
+        INSERT INTO storyboard_candidates (
+          scene_id,
+          scene_spec_revision,
+          variant_ordinal,
+          storage_bucket,
+          storage_object_key,
+          content_hash_sha256,
+          generation_payload
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING *
+        `;
+
+  const params =
+    input.candidateId !== undefined
+      ? [
+          input.candidateId,
+          sceneId,
+          sceneSpecRevision,
+          variantOrdinal,
+          storageBucket,
+          storageObjectKey,
+          contentHashSha256,
+          JSON.stringify(generationPayload)
+        ]
+      : [
+          sceneId,
+          sceneSpecRevision,
+          variantOrdinal,
+          storageBucket,
+          storageObjectKey,
+          contentHashSha256,
+          JSON.stringify(generationPayload)
+        ];
+
+  const res = await client.query<InsertedStoryboardCandidateRecord>(query, params);
+  const row = res.rows[0];
+  if (!row) {
+    throw new Error("Failed to insert storyboard candidate record");
+  }
+  return row;
 }

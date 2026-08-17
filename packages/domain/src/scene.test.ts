@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  InvalidCandidateError,
   InvalidMutationError,
   InvalidTransitionError,
   SCENE_STATUSES,
   Scene,
   TerminalStateError,
   type CampaignId,
+  type CandidateId,
   type SceneApprovalInput,
   type SceneConfiguration,
   type SceneId,
@@ -155,6 +157,22 @@ describe("Scene domain contracts", () => {
       );
       expect(customErr.message).toBe("Custom terminal failure");
     });
+
+    it("instantiates InvalidCandidateError with sceneId, candidateId, and reason", () => {
+      const err = new InvalidCandidateError(
+        "scene-1" as SceneId,
+        "candidate-1" as CandidateId,
+        "Candidate belongs to a different scene"
+      );
+      expect(err).toBeInstanceOf(Error);
+      expect(err.name).toBe("InvalidCandidateError");
+      expect(err.sceneId).toBe("scene-1");
+      expect(err.candidateId).toBe("candidate-1");
+      expect(err.reason).toBe("Candidate belongs to a different scene");
+      expect(err.message).toBe(
+        "Candidate 'candidate-1' is invalid for scene 'scene-1': Candidate belongs to a different scene"
+      );
+    });
   });
 
   describe("canonical lifecycle and failure recovery", () => {
@@ -195,6 +213,11 @@ describe("Scene domain contracts", () => {
 
       const reachApproved = (): Scene => {
         const scene = reachReview();
+        scene.selectCandidate(
+          "candidate-1" as CandidateId,
+          scene.snapshot().specRevision,
+          scene.id
+        );
         scene.approve(fixedApprovalInput);
         return scene;
       };
@@ -289,7 +312,11 @@ describe("Scene domain contracts", () => {
         {
           from: "director_review",
           description: "director_review -> approved via approve",
-          setup: () => reachReview(),
+          setup: () => {
+            const s = reachReview();
+            s.selectCandidate("candidate-1" as CandidateId, s.snapshot().specRevision, s.id);
+            return s;
+          },
           action: (s) => s.approve(fixedApprovalInput),
           to: "approved",
           reason: "approved"
@@ -462,6 +489,11 @@ describe("Scene domain contracts", () => {
 
       const reachApproved = (): Scene => {
         const scene = reachReview();
+        scene.selectCandidate(
+          "candidate-1" as CandidateId,
+          scene.snapshot().specRevision,
+          scene.id
+        );
         scene.approve(fixedApprovalInput);
         return scene;
       };
@@ -639,6 +671,11 @@ describe("Scene domain contracts", () => {
         const scene = createTestScene();
         scene.beginCandidateGeneration();
         scene.submitCandidatesForReview();
+        scene.selectCandidate(
+          "candidate-1" as CandidateId,
+          scene.snapshot().specRevision,
+          scene.id
+        );
         scene.approve(fixedApprovalInput);
         scene.queueForProduction();
         scene.startRendering();
@@ -724,6 +761,7 @@ describe("Scene domain contracts", () => {
       const s2 = createTestScene();
       s2.beginCandidateGeneration();
       s2.submitCandidatesForReview();
+      s2.selectCandidate("candidate-1" as CandidateId, s2.snapshot().specRevision, s2.id);
       s2.approve(fixedApprovalInput);
       s2.queueForProduction();
       s2.fail();
@@ -743,6 +781,7 @@ describe("Scene domain contracts", () => {
       const s3 = createTestScene();
       s3.beginCandidateGeneration();
       s3.submitCandidatesForReview();
+      s3.selectCandidate("candidate-1" as CandidateId, s3.snapshot().specRevision, s3.id);
       s3.approve(fixedApprovalInput);
       s3.queueForProduction();
       s3.startRendering();
@@ -760,6 +799,7 @@ describe("Scene domain contracts", () => {
       const s4 = createTestScene();
       s4.beginCandidateGeneration();
       s4.submitCandidatesForReview();
+      s4.selectCandidate("candidate-1" as CandidateId, s4.snapshot().specRevision, s4.id);
       s4.approve(fixedApprovalInput);
       s4.queueForProduction();
       s4.startRendering();
@@ -778,6 +818,7 @@ describe("Scene domain contracts", () => {
       const s5 = createTestScene();
       s5.beginCandidateGeneration();
       s5.submitCandidatesForReview();
+      s5.selectCandidate("candidate-1" as CandidateId, s5.snapshot().specRevision, s5.id);
       s5.approve(fixedApprovalInput);
       s5.queueForProduction();
       s5.startRendering();
@@ -797,6 +838,7 @@ describe("Scene domain contracts", () => {
       const scene = createTestScene();
       scene.beginCandidateGeneration();
       scene.submitCandidatesForReview();
+      scene.selectCandidate("candidate-1" as CandidateId, scene.snapshot().specRevision, scene.id);
       scene.approve(fixedApprovalInput);
       scene.queueForProduction();
       scene.startRendering();
@@ -829,6 +871,7 @@ describe("Scene domain contracts", () => {
         approvedBy: "director-2",
         approvedAt: "2026-08-14T12:00:00Z"
       };
+      scene.selectCandidate("candidate-1" as CandidateId, scene.snapshot().specRevision, scene.id);
       scene.approve(secondApprovalInput);
       scene.queueForProduction();
 
@@ -870,6 +913,7 @@ describe("Scene domain contracts", () => {
 
       scene.beginCandidateGeneration();
       scene.submitCandidatesForReview();
+      scene.selectCandidate("candidate-1" as CandidateId, scene.snapshot().specRevision, scene.id);
       const transition = scene.approve(fixedApprovalInput);
 
       expect(scene.status).toBe("approved");
@@ -907,6 +951,11 @@ describe("Scene domain contracts", () => {
         const scene = createTestScene();
         scene.beginCandidateGeneration();
         scene.submitCandidatesForReview();
+        scene.selectCandidate(
+          "candidate-1" as CandidateId,
+          scene.snapshot().specRevision,
+          scene.id
+        );
         scene.approve(fixedApprovalInput);
 
         expect(scene.status).toBe("approved");
@@ -967,6 +1016,11 @@ describe("Scene domain contracts", () => {
       const sceneWithLora = createTestScene({ loraConfigurationId: "brand-style-v1" });
       sceneWithLora.beginCandidateGeneration();
       sceneWithLora.submitCandidatesForReview();
+      sceneWithLora.selectCandidate(
+        "candidate-1" as CandidateId,
+        sceneWithLora.snapshot().specRevision,
+        sceneWithLora.id
+      );
       sceneWithLora.approve(fixedApprovalInput);
 
       expect(sceneWithLora.snapshot().configuration.loraConfigurationId).toBe("brand-style-v1");
@@ -1079,6 +1133,7 @@ describe("Scene domain contracts", () => {
             const s = createTestScene();
             s.beginCandidateGeneration();
             s.submitCandidatesForReview();
+            s.selectCandidate("candidate-1" as CandidateId, s.snapshot().specRevision, s.id);
             s.approve(fixedApprovalInput);
             s.queueForProduction();
             return s;
@@ -1090,6 +1145,7 @@ describe("Scene domain contracts", () => {
             const s = createTestScene();
             s.beginCandidateGeneration();
             s.submitCandidatesForReview();
+            s.selectCandidate("candidate-1" as CandidateId, s.snapshot().specRevision, s.id);
             s.approve(fixedApprovalInput);
             s.queueForProduction();
             s.startRendering();
@@ -1102,6 +1158,7 @@ describe("Scene domain contracts", () => {
             const s = createTestScene();
             s.beginCandidateGeneration();
             s.submitCandidatesForReview();
+            s.selectCandidate("candidate-1" as CandidateId, s.snapshot().specRevision, s.id);
             s.approve(fixedApprovalInput);
             s.queueForProduction();
             s.startRendering();
@@ -1168,6 +1225,7 @@ describe("Scene domain contracts", () => {
             const s = createTestScene();
             s.beginCandidateGeneration();
             s.submitCandidatesForReview();
+            s.selectCandidate("candidate-1" as CandidateId, s.snapshot().specRevision, s.id);
             s.approve(fixedApprovalInput);
             s.queueForProduction();
             s.startRendering();
@@ -1230,6 +1288,209 @@ describe("Scene domain contracts", () => {
           expect(scene.snapshot()).toEqual(snapshotBefore);
         }
       }
+    });
+  });
+
+  describe("Candidate Selection", () => {
+    function createReviewScene(): Scene {
+      const scene = Scene.create({
+        id: "scene-1" as SceneId,
+        campaignId: "campaign-1" as CampaignId,
+        configuration: {
+          prompt: "A product reveal",
+          referenceIds: ["asset-a"],
+          engineProfileId: "ltx-2.5@certified-v1",
+          durationMs: 4_000
+        }
+      });
+      scene.beginCandidateGeneration();
+      scene.submitCandidatesForReview();
+      return scene;
+    }
+
+    it("selectCandidate in director_review sets selection state and returns transition", () => {
+      const scene = createReviewScene();
+      const transition = scene.selectCandidate(
+        "candidate-1" as CandidateId,
+        scene.snapshot().specRevision,
+        scene.id
+      );
+
+      expect(transition).toEqual({
+        sceneId: scene.id,
+        from: "director_review",
+        to: "director_review",
+        revision: 1,
+        reason: "candidate_selected"
+      });
+      expect(Object.isFrozen(transition)).toBe(true);
+
+      const snap = scene.snapshot();
+      expect(snap.selectedCandidateId).toBe("candidate-1");
+      expect(snap.selectedCandidateRevision).toBe(1);
+      expect(Object.isFrozen(snap)).toBe(true);
+    });
+
+    it("selectCandidate with mismatched sceneId throws InvalidCandidateError", () => {
+      const scene = createReviewScene();
+      expect(() =>
+        scene.selectCandidate(
+          "candidate-1" as CandidateId,
+          scene.snapshot().specRevision,
+          "wrong-scene" as SceneId
+        )
+      ).toThrowError(InvalidCandidateError);
+      expect(scene.snapshot().selectedCandidateId).toBeUndefined();
+    });
+
+    it("selectCandidate with stale revision throws InvalidCandidateError", () => {
+      const scene = createReviewScene();
+      expect(() =>
+        scene.selectCandidate(
+          "candidate-1" as CandidateId,
+          scene.snapshot().specRevision - 1,
+          scene.id
+        )
+      ).toThrowError(InvalidCandidateError);
+      expect(scene.snapshot().selectedCandidateId).toBeUndefined();
+    });
+
+    it("selectCandidate with future revision throws InvalidCandidateError", () => {
+      const scene = createReviewScene();
+      expect(() =>
+        scene.selectCandidate(
+          "candidate-1" as CandidateId,
+          scene.snapshot().specRevision + 1,
+          scene.id
+        )
+      ).toThrowError(InvalidCandidateError);
+      expect(scene.snapshot().selectedCandidateId).toBeUndefined();
+    });
+
+    it("selectCandidate in non-director_review status throws InvalidTransitionError", () => {
+      const draftScene = Scene.create({
+        id: "scene-1" as SceneId,
+        campaignId: "campaign-1" as CampaignId,
+        configuration: {
+          prompt: "A product reveal",
+          referenceIds: ["asset-a"],
+          engineProfileId: "ltx-2.5@certified-v1",
+          durationMs: 4_000
+        }
+      });
+      expect(() =>
+        draftScene.selectCandidate(
+          "candidate-1" as CandidateId,
+          draftScene.snapshot().specRevision,
+          draftScene.id
+        )
+      ).toThrow(InvalidTransitionError);
+    });
+
+    it("selectCandidate in terminal status throws TerminalStateError", () => {
+      const cancelledScene = createReviewScene();
+      cancelledScene.cancel();
+      expect(() =>
+        cancelledScene.selectCandidate("candidate-1" as CandidateId, 1, cancelledScene.id)
+      ).toThrow(TerminalStateError);
+    });
+
+    it("approve throws InvalidTransitionError if no candidate is selected", () => {
+      const scene = createReviewScene();
+      expect(scene.snapshot().selectedCandidateId).toBeUndefined();
+      expect(() =>
+        scene.approve({ approvedBy: "test", approvedAt: "2024-01-01T00:00:00Z" })
+      ).toThrow(InvalidTransitionError);
+      expect(() =>
+        scene.approve({ approvedBy: "test", approvedAt: "2024-01-01T00:00:00Z" })
+      ).toThrow("Approval requires a valid candidate selection from revision 1.");
+    });
+
+    it("approve succeeds when candidate is selected and revision matches", () => {
+      const scene = createReviewScene();
+      scene.selectCandidate("candidate-1" as CandidateId, scene.snapshot().specRevision, scene.id);
+      const transition = scene.approve({
+        approvedBy: "director-1",
+        approvedAt: "2024-01-01T00:00:00Z"
+      });
+
+      expect(scene.status).toBe("approved");
+      expect(transition.to).toBe("approved");
+      expect(scene.snapshot().approval).toEqual({
+        revision: 1,
+        approvedBy: "director-1",
+        approvedAt: "2024-01-01T00:00:00Z"
+      });
+      expect(scene.snapshot().selectedCandidateId).toBe("candidate-1");
+    });
+
+    it("configuration updates clear selected candidate and prevent subsequent approval without re-selection", () => {
+      const scene = createReviewScene();
+      scene.selectCandidate("candidate-1" as CandidateId, scene.snapshot().specRevision, scene.id);
+      expect(scene.snapshot().selectedCandidateId).toBe("candidate-1");
+
+      scene.updatePrompt("new prompt");
+      const snapshot = scene.snapshot();
+      expect(snapshot.selectedCandidateId).toBeUndefined();
+      expect(snapshot.selectedCandidateRevision).toBeUndefined();
+      expect("selectedCandidateId" in snapshot).toBe(false);
+      expect("selectedCandidateRevision" in snapshot).toBe(false);
+
+      // Attempting to approve now must fail because selection was cleared
+      expect(() =>
+        scene.approve({ approvedBy: "test", approvedAt: "2024-01-01T00:00:00Z" })
+      ).toThrow(InvalidTransitionError);
+    });
+
+    it("requestReroll clears selected candidate and prevents approval until re-selected", () => {
+      const scene = createReviewScene();
+      scene.selectCandidate("candidate-1" as CandidateId, scene.snapshot().specRevision, scene.id);
+      scene.requestReroll();
+
+      const snapshot = scene.snapshot();
+      expect(snapshot.status).toBe("generating_candidates");
+      expect(snapshot.selectedCandidateId).toBeUndefined();
+      expect(snapshot.selectedCandidateRevision).toBeUndefined();
+    });
+
+    it("rejectQA preserves selected candidate", () => {
+      const scene = createReviewScene();
+      scene.selectCandidate("candidate-1" as CandidateId, scene.snapshot().specRevision, scene.id);
+      scene.approve({ approvedBy: "test", approvedAt: "2024-01-01T00:00:00Z" });
+      scene.queueForProduction();
+      scene.startRendering();
+      scene.submitForQA();
+      scene.rejectQA();
+
+      const snapshot = scene.snapshot();
+      expect(snapshot.status).toBe("director_review");
+      expect(snapshot.approval).toBeUndefined();
+      expect(snapshot.selectedCandidateId).toBe("candidate-1");
+      expect(snapshot.selectedCandidateRevision).toBe(1);
+    });
+
+    it("reconstitute restores full aggregate state from snapshot including candidate selection", () => {
+      const original = createReviewScene();
+      original.selectCandidate(
+        "candidate-1" as CandidateId,
+        original.snapshot().specRevision,
+        original.id
+      );
+      const snapshot = original.snapshot();
+
+      const restored = Scene.reconstitute(snapshot);
+      expect(restored.snapshot()).toEqual(snapshot);
+      expect(restored.status).toBe("director_review");
+      expect(restored.snapshot().selectedCandidateId).toBe("candidate-1");
+      expect(restored.snapshot().selectedCandidateRevision).toBe(1);
+
+      // Verify restored scene can proceed with domain actions like approve
+      const approveTransition = restored.approve({
+        approvedBy: "director-1",
+        approvedAt: "2026-08-15T00:00:00.000Z"
+      });
+      expect(approveTransition.to).toBe("approved");
+      expect(restored.status).toBe("approved");
     });
   });
 });

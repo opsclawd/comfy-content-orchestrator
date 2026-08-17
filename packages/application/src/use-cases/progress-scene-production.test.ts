@@ -3,6 +3,7 @@ import {
   InvalidTransitionError,
   Scene,
   type CampaignId,
+  type CandidateId,
   type SceneId,
   type SceneStatus
 } from "@cco/domain";
@@ -44,6 +45,7 @@ describe("ProgressSceneProductionUseCases", () => {
 
   const createApprovedScene = (id: string = "scene-1"): Scene => {
     const scene = createDirectorReviewScene(id);
+    scene.selectCandidate("candidate-1" as CandidateId, scene.snapshot().specRevision, scene.id);
     scene.approve({
       approvedBy: "Director Alice",
       approvedAt: "2026-08-15T00:00:00.000Z"
