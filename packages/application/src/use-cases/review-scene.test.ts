@@ -468,4 +468,128 @@ describe("ReviewSceneUseCases", () => {
 
     expect(saveSpy).not.toHaveBeenCalled();
   });
+
+  describe("ReviewSceneUseCases - Candidate Selection and Review Semantics", () => {
+    it("selectCandidate: director_review delegates to scene.selectCandidate, appends candidate_select event, and saves atomically", async () => {
+      const scene = createSceneInDirectorReview("scene-select-1");
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const useCases = new ReviewSceneUseCases(uow);
+
+      const input = {
+        sceneId: "scene-select-1",
+        eventId: "event-select-1",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T01:00:00.000Z",
+        directorNotes: "Selecting candidate 2 for revision 1",
+        candidateId: "candidate-2" as CandidateId,
+        candidateRevision: 1
+      };
+
+      await useCases.selectCandidate(input);
+
+      expect(uow.savedScenes).toHaveLength(1);
+      const savedScene = uow.savedScenes[0]!;
+      expect(savedScene.id).toBe("scene-select-1");
+      expect(savedScene.status).toBe("director_review");
+      expect(savedScene.snapshot().selectedCandidateId).toBe("candidate-2");
+      expect(savedScene.snapshot().selectedCandidateRevision).toBe(1);
+
+      expect(uow.reviewEvents).toHaveLength(1);
+      expect(uow.reviewEvents[0]).toEqual({
+        eventId: "event-select-1",
+        sceneId: "scene-select-1",
+        reviewerName: "Director Alice",
+        action: "candidate_select",
+        directorNotes: "Selecting candidate 2 for revision 1",
+        mutationPayload: { candidateId: "candidate-2", candidateRevision: 1 },
+        priorSceneStatus: "director_review",
+        resultingSceneStatus: "director_review",
+        occurredAt: "2026-08-15T01:00:00.000Z"
+      });
+    });
+
+    it("selectCandidate with mismatched revision rejects and commits no writes", async () => {
+      const scene = createSceneInDirectorReview("scene-select-stale");
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const useCases = new ReviewSceneUseCases(uow);
+
+      await expect(
+        useCases.selectCandidate({
+          sceneId: "scene-select-stale",
+          eventId: "event-select-stale",
+          reviewerName: "Director Alice",
+          occurredAt: "2026-08-15T01:00:00.000Z",
+          candidateId: "candidate-1" as CandidateId,
+          candidateRevision: 99
+        })
+      ).rejects.toThrow();
+
+      expect(uow.savedScenes).toHaveLength(0);
+      expect(uow.reviewEvents).toHaveLength(0);
+    });
+
+    it("approve use case rejects if no candidate was selected", async () => {
+      const scene = createSceneInDirectorReview("scene-approve-unselected");
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const useCases = new ReviewSceneUseCases(uow);
+
+      await expect(
+        useCases.approve({
+          sceneId: "scene-approve-unselected",
+          eventId: "event-approve-fail",
+          reviewerName: "Director Alice",
+          occurredAt: "2026-08-15T01:00:00.000Z"
+        })
+      ).rejects.toThrow(InvalidTransitionError);
+
+      expect(uow.savedScenes).toHaveLength(0);
+      expect(uow.reviewEvents).toHaveLength(0);
+    });
+
+    it("storyboard rejection maps to requestReroll: clears candidate selection and emits reroll event", async () => {
+      const scene = createSceneInDirectorReview("scene-reroll-clear");
+      scene.selectCandidate("candidate-1" as CandidateId, scene.snapshot().specRevision, scene.id);
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const useCases = new ReviewSceneUseCases(uow);
+
+      await useCases.requestReroll({
+        sceneId: "scene-reroll-clear",
+        eventId: "event-reroll-2",
+        reviewerName: "Director Bob",
+        occurredAt: "2026-08-15T02:00:00.000Z",
+        directorNotes: "None of the candidates meet style guidelines"
+      });
+
+      expect(uow.savedScenes).toHaveLength(1);
+      const saved = uow.savedScenes[0]!;
+      expect(saved.status).toBe("generating_candidates");
+      expect(saved.snapshot().selectedCandidateId).toBeUndefined();
+
+      expect(uow.reviewEvents).toHaveLength(1);
+      expect(uow.reviewEvents[0]!.action).toBe("reroll");
+    });
+
+    it("QA rejection exclusively uses rejectQA: preserves candidate selection and emits reject event", async () => {
+      const scene = createSceneInQA("scene-qa-reject-semantics");
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const useCases = new ReviewSceneUseCases(uow);
+
+      await useCases.rejectQA({
+        sceneId: "scene-qa-reject-semantics",
+        eventId: "event-qa-reject-2",
+        reviewerName: "QA Lead Dave",
+        occurredAt: "2026-08-15T04:05:00.000Z",
+        directorNotes: "Frame drop at 2.4s"
+      });
+
+      expect(uow.savedScenes).toHaveLength(1);
+      const saved = uow.savedScenes[0]!;
+      expect(saved.status).toBe("director_review");
+      expect(saved.snapshot().selectedCandidateId).toBe("candidate-1");
+      expect(saved.snapshot().approval).toBeUndefined();
+
+      expect(uow.reviewEvents).toHaveLength(1);
+      expect(uow.reviewEvents[0]!.action).toBe("reject");
+    });
+  });
 });

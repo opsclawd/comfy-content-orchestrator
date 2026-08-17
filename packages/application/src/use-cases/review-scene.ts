@@ -1,5 +1,5 @@
 import { ReviewEventSchema, type ReviewAction } from "@cco/contracts";
-import type { Scene, SceneId, SceneTransition } from "@cco/domain";
+import type { CandidateId, Scene, SceneId, SceneTransition } from "@cco/domain";
 import type { UnitOfWork } from "../ports/unit-of-work.js";
 import { SceneNotFoundError } from "./scene-not-found-error.js";
 
@@ -16,6 +16,11 @@ export type RequestRerollInput = ReviewAuditInput;
 export type AcceptQASceneInput = ReviewAuditInput;
 export type RejectQASceneInput = ReviewAuditInput;
 export type CancelSceneInput = ReviewAuditInput;
+
+export interface SelectCandidateInput extends ReviewAuditInput {
+  readonly candidateId: CandidateId;
+  readonly candidateRevision: number;
+}
 
 export interface UpdatePromptInput extends ReviewAuditInput {
   readonly prompt: string;
@@ -39,6 +44,20 @@ export interface UpdateLoraInput extends ReviewAuditInput {
 
 export class ReviewSceneUseCases {
   constructor(private readonly uow: UnitOfWork) {}
+
+  async selectCandidate(input: SelectCandidateInput): Promise<void> {
+    await this.executeReviewAction(
+      input,
+      "candidate_select",
+      { candidateId: input.candidateId, candidateRevision: input.candidateRevision },
+      (scene) =>
+        scene.selectCandidate(
+          input.candidateId,
+          input.candidateRevision,
+          input.sceneId as SceneId
+        )
+    );
+  }
 
   async approve(input: ApproveSceneInput): Promise<void> {
     await this.executeReviewAction(input, "approve", {}, (scene) =>
