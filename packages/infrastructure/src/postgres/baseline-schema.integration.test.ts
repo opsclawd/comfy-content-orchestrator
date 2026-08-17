@@ -15,6 +15,7 @@ import {
   insertSceneReferenceAssetRecord,
   insertRenderJobRecord,
   insertGenerationManifestRecord,
+  insertStoryboardCandidateRecord,
   insertReviewEventRecord
 } from "./test-support/records.js";
 
@@ -198,6 +199,12 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
     );
     expect(manifestUuidVersion.rows[0]?.v).toBe(7);
 
+    const candidateUuidVersion = await client.query<{ v: number }>(
+      "SELECT uuid_extract_version(candidate_id) as v FROM storyboard_candidates WHERE candidate_id = $1",
+      [graph.storyboardCandidate.candidate_id]
+    );
+    expect(candidateUuidVersion.rows[0]?.v).toBe(7);
+
     const eventUuidVersion = await client.query<{ v: number }>(
       "SELECT uuid_extract_version(event_id) as v FROM review_events WHERE event_id = $1",
       [graph.reviewEvent.event_id]
@@ -285,6 +292,24 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
     expect(manifestRes.rows[0]?.scene_id).toBe(graph.scene.scene_id);
     expect(manifestRes.rows[0]?.campaign_id).toBe(graph.campaign.campaign_id);
     expect(manifestRes.rows[0]?.render_attempt).toBe(1);
+
+    // Verify storyboard_candidates
+    const candidateRes = await client.query(
+      "SELECT * FROM storyboard_candidates WHERE candidate_id = $1",
+      [graph.storyboardCandidate.candidate_id]
+    );
+    expect(candidateRes.rows).toHaveLength(1);
+    expect(candidateRes.rows[0]?.scene_id).toBe(graph.scene.scene_id);
+    expect(candidateRes.rows[0]?.scene_spec_revision).toBe(1);
+    expect(candidateRes.rows[0]?.variant_ordinal).toBe(1);
+    expect(candidateRes.rows[0]?.storage_bucket).toBe("godzspeed-temp");
+    expect(candidateRes.rows[0]?.storage_object_key).toBe(
+      `candidates/${graph.scene.scene_id}/rev_1_var_1.webp`
+    );
+    expect(candidateRes.rows[0]?.content_hash_sha256).toBe(
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+    expect(candidateRes.rows[0]?.generation_payload).toEqual({});
 
     // Verify review_events
     const eventRes = await client.query("SELECT * FROM review_events WHERE event_id = $1", [
@@ -477,6 +502,97 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
         sceneId: scene.scene_id,
         resultingSpecRevision: -1
       })
+    ).rejects.toThrow();
+
+    // 13. Invalid storyboard_candidates variant_ordinal (<= 0) and scene_spec_revision (<= 0)
+    await expect(
+      insertStoryboardCandidateRecord(client, {
+        sceneId: scene.scene_id,
+        variantOrdinal: 0
+      })
+    ).rejects.toThrow();
+
+    await expect(
+      insertStoryboardCandidateRecord(client, {
+        sceneId: scene.scene_id,
+        variantOrdinal: -1
+      })
+    ).rejects.toThrow();
+
+    await expect(
+      insertStoryboardCandidateRecord(client, {
+        sceneId: scene.scene_id,
+        sceneSpecRevision: 0
+      })
+    ).rejects.toThrow();
+
+    // 14. Duplicate (scene_id, scene_spec_revision, variant_ordinal) on storyboard_candidates
+    await insertStoryboardCandidateRecord(client, {
+      sceneId: scene.scene_id,
+      sceneSpecRevision: 1,
+      variantOrdinal: 1,
+      storageObjectKey: "candidates/scene_test/rev1_var1.webp"
+    });
+    await expect(
+      insertStoryboardCandidateRecord(client, {
+        sceneId: scene.scene_id,
+        sceneSpecRevision: 1,
+        variantOrdinal: 1,
+        storageObjectKey: "candidates/scene_test/rev1_var1_dup.webp"
+      })
+    ).rejects.toThrow();
+
+    // 15. Duplicate (storage_bucket, storage_object_key) on storyboard_candidates
+    await expect(
+      insertStoryboardCandidateRecord(client, {
+        sceneId: scene.scene_id,
+        sceneSpecRevision: 1,
+        variantOrdinal: 2,
+        storageBucket: "godzspeed-temp",
+        storageObjectKey: "candidates/scene_test/rev1_var1.webp"
+      })
+    ).rejects.toThrow();
+
+    // 16. Invalid candidate selection pairs on storyboard_scenes (one null, one non-null)
+    const validCandidate = await insertStoryboardCandidateRecord(client, {
+      sceneId: scene.scene_id,
+      sceneSpecRevision: 1,
+      variantOrdinal: 3,
+      storageObjectKey: "candidates/scene_test/rev1_var3.webp"
+    });
+
+    await expect(
+      client.query(
+        "UPDATE storyboard_scenes SET selected_candidate_id = $1, selected_candidate_revision = NULL WHERE scene_id = $2",
+        [validCandidate.candidate_id, scene.scene_id]
+      )
+    ).rejects.toThrow();
+
+    await expect(
+      client.query(
+        "UPDATE storyboard_scenes SET selected_candidate_id = NULL, selected_candidate_revision = 1 WHERE scene_id = $2",
+        [scene.scene_id]
+      )
+    ).rejects.toThrow();
+
+    // 17. Selected candidate revision must match scene spec_revision (storyboard_scene_selected_revision_current)
+    await expect(
+      client.query(
+        "UPDATE storyboard_scenes SET selected_candidate_id = $1, selected_candidate_revision = 2 WHERE scene_id = $2",
+        [validCandidate.candidate_id, scene.scene_id]
+      )
+    ).rejects.toThrow();
+
+    // 18. Foreign key constraint fk_scene_selected_candidate_revision rejects mismatched scene_id
+    const otherScene = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 99
+    });
+    await expect(
+      client.query(
+        "UPDATE storyboard_scenes SET selected_candidate_id = $1, selected_candidate_revision = 1 WHERE scene_id = $2",
+        [validCandidate.candidate_id, otherScene.scene_id]
+      )
     ).rejects.toThrow();
   });
 

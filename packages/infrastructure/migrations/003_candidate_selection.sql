@@ -63,9 +63,6 @@ CREATE TABLE IF NOT EXISTS storyboard_candidates (
   UNIQUE (candidate_id, scene_id, scene_spec_revision)
 );
 
-CREATE INDEX IF NOT EXISTS idx_storyboard_candidates_scene_revision
-  ON storyboard_candidates(scene_id, scene_spec_revision, variant_ordinal);
-
 ALTER TABLE storyboard_scenes
   ADD CONSTRAINT fk_scene_selected_candidate_revision
   FOREIGN KEY (selected_candidate_id, scene_id, selected_candidate_revision)

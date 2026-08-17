@@ -231,6 +231,7 @@ export interface RepresentativeGraph {
   sceneReferenceAsset: InsertedSceneReferenceAssetRecord;
   renderJob: InsertedRenderJobRecord;
   manifest: InsertedGenerationManifestRecord;
+  storyboardCandidate: InsertedStoryboardCandidateRecord;
   reviewEvent: InsertedReviewEventRecord;
 }
 
@@ -642,8 +643,7 @@ export async function insertReviewEventRecord(
     input.expectedSpecRevision !== undefined ? input.expectedSpecRevision : null;
   const resultingSpecRevision =
     input.resultingSpecRevision !== undefined ? input.resultingSpecRevision : null;
-  const requestHashSha256 =
-    input.requestHashSha256 !== undefined ? input.requestHashSha256 : null;
+  const requestHashSha256 = input.requestHashSha256 !== undefined ? input.requestHashSha256 : null;
 
   const res = await client.query<InsertedReviewEventRecord>(
     `
@@ -707,6 +707,9 @@ export async function insertRepresentativeGraph(client: PoolClient): Promise<Rep
     campaignId: campaign.campaign_id,
     sceneId: scene.scene_id
   });
+  const storyboardCandidate = await insertStoryboardCandidateRecord(client, {
+    sceneId: scene.scene_id
+  });
   const reviewEvent = await insertReviewEventRecord(client, {
     sceneId: scene.scene_id
   });
@@ -720,6 +723,7 @@ export async function insertRepresentativeGraph(client: PoolClient): Promise<Rep
     sceneReferenceAsset,
     renderJob,
     manifest,
+    storyboardCandidate,
     reviewEvent
   };
 }
