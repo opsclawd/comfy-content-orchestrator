@@ -191,16 +191,20 @@ If a lock file contains corrupted metadata or an operator must intervene:
 
 ## 5. Target-Host Acceptance Status
 
-> [!IMPORTANT]
-> **The CLI has not yet been executed against the Trinidad render host.**
+> [!NOTE]
+> **Live hardware acceptance is complete on the Trinidad RTX 4090 host (Issue #32).**
 
-Everything documented above is verified by unit and cross-process tests only. GPU lease contention is exercised with spawned child processes against a real filesystem lock; **GPU inference is not exercised at all**.
+All target-host acceptance criteria defined in #9 and executed in #32 have been verified against ComfyUI commit `55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc`:
 
-Two acceptance criteria from #9 remain open because they require hardware:
+1. **Real FLUX Render (Full Layer Stack):**
+   - Dispatched `flux-schnell-draft` through `render.ts` with host-validated gold master provenance.
+   - Succeeded with exit code `0` in `10,965 ms`, producing `flux_schnell_draft_00012_.png` (`892,846 bytes`) at timestamp `08:00:49`.
+2. **Real LTX-2.5 Render (Full Layer Stack):**
+   - Dispatched `ltx-25-720p-97f` through `render.ts` with host-validated gold master provenance.
+   - Succeeded with exit code `0` in `45,186 ms`, producing `ltx_25_720p_97f_00008_.webp` (`8,997,052 bytes`) at timestamp `08:02:10`.
+3. **Live Hardware GPU Lease Exclusivity:**
+   - Initiated an in-flight LTX render holding lock `/tmp/comfy-content-orchestrator-gpu-0.lock`.
+   - Concurrent FLUX render attempt was immediately refused with `GpuLeaseUnavailableError` (exit code `1`, structured JSON error identifying holding PID on hostname `llama`), never touching GPU inference.
+   - The primary render completed unhindered in `46,706 ms`, producing `ltx_25_720p_97f_00009_.webp` at `08:03:38`, releasing the lease cleanly.
 
-- a real FLUX render completing through the full layer stack
-- a real LTX run dispatched through this same path
-
-Both are tracked in #32, which is executed by an operator on the Trinidad host and reports the verbatim CLI output, the produced output files with timestamps, and the ComfyUI commit at run time. #32 also records a live-hardware exclusivity check — starting a second render while a first is mid-inference — which the cross-process tests approximate but cannot reproduce against an actively executing GPU.
-
-Until #32 completes, treat the exit codes and JSON contract in sections 3 and 4 as specified-and-unit-tested rather than field-verified.
+Exit codes `0` and `1` (lease refusal) are field-verified by the runs above. The remaining exit codes in section 3 are specified and unit-tested but have not been observed on hardware.
