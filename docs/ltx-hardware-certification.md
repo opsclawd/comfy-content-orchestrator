@@ -186,4 +186,4 @@ pnpm certify:ltx \
 >
 > Peak host RAM reached 29,384 MB of 31,233 MB usable. Swap activity was confined to the first four transitions, peaking at 982 MB, and stopped thereafter. Because the gate is fail-closed on any swap activity, the recorded decision is `require_64gb`; 11 of its 12 checks passed and `noSwapActivity` was the sole failure.
 >
-> Operational conclusion: 32 GB is supported for Phase 1 on a dedicated host running one GPU job at a time with model offloading enabled. A 64 GB upgrade is recommended before Phase 2 rather than required now. See the [Transition Soak Certification Runbook](transition-soak-certification.md).
+> Operational conclusion: 32 GB is supported for Phase 1 on a dedicated host running one GPU job at a time with model offloading enabled. A 64 GB upgrade is recommended before Phase 2 rather than required now. The certified production profile is frozen at `config/render-profiles/LTX_25_720P_5S_V1.json` with every measured metric traced directly to the soak run. See the [Transition Soak Certification Runbook](transition-soak-certification.md).
