@@ -206,3 +206,5 @@ All target-host acceptance criteria defined in #9 and executed in #32 have been 
    - Initiated an in-flight LTX render holding lock `/tmp/comfy-content-orchestrator-gpu-0.lock`.
    - Concurrent FLUX render attempt was immediately refused with `GpuLeaseUnavailableError` (exit code `1`, structured JSON error identifying holding PID on hostname `llama`), never touching GPU inference.
    - The primary render completed unhindered in `46,706 ms`, producing `ltx_25_720p_97f_00009_.webp` at `08:03:38`, releasing the lease cleanly.
+
+Exit codes `0` and `1` (lease refusal) are field-verified by the runs above. The remaining exit codes in section 3 are specified and unit-tested but have not been observed on hardware.
