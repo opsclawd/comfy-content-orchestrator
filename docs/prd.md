@@ -2,7 +2,7 @@
 
 **Project Name:** Godzspeed Sovereign Content Orchestration Platform & Creative Review Hub  
 **Repository:** `opsclawd/comfy-content-orchestrator`  
-**Document Version:** 3.5.0 (Review Plane Contract Closure Baseline)  
+**Document Version:** 3.5.1 (Review Plane Contract Closure Baseline)  
 **Status:** Implementation Ready — Sprint 1 Certified / Sprint 1.5 Ready  
 **Runtime & Stack:** TypeScript / Node.js 24 LTS ("Krypton") | Next.js Review Hub | ComfyUI Headless | Tailscale (WireGuard Mesh) | PostgreSQL 18.6 | MinIO (S3-Compatible Review Media Store)  
 **Hardware Profile:** AMD Ryzen 7 7700 (8C/16T) | 32GB DDR5-5600 RAM certified for the dedicated Phase 1 single-render workload | NVIDIA RTX 4090 (24GB GDDR6X) | 2TB PCIe 4.0 NVMe SSD  
@@ -11,25 +11,27 @@
 - **Technical Lead & Content Creator:** Agency Lead (Godzspeed Trinidad & Tobago Division)
 - **Cloud Control Plane:** Hetzner Cloud CPX31 VPS (Falkenstein, Germany / Tailscale-only application access)
 
-## 0. Version 3.5.0 Change Summary
+## 0. Version 3.5.1 Change Summary
 
-PRD v3.5.0 preserves the v3.4.0 architecture and closes implementation gaps exposed by Sprint 1 before Review Hub work begins.
+PRD v3.5.1 preserves the v3.5.0 architecture and closes two review findings before Sprint 1.5 planning.
 
-Material changes:
+Material changes carried forward from v3.5.0 plus v3.5.1 corrections:
 
 1. Reconciles Sprint 1 certification results with the committed `LTX_25_720P_5S_V1` RenderProfile.
-2. Distinguishes the full downloaded LTX-2.5 repository footprint (~68.8GB) from the exact certified Phase 1 execution model set (38.329275932GB).
+2. Separates the exact certified Phase 1 execution model set from the broader point-in-time LTX-2.5 host inventory. The current inode-deduplicated host inventory is **72,026,403,347 bytes (72.03 GB decimal / 67.08 GiB)**; it is an inventory measurement, not part of the RenderProfile contract.
 3. Records 32GB host RAM as supported for the dedicated Phase 1 single-render profile, with observed transient cold-page swap rather than sustained memory pressure.
 4. Introduces a transitional **Sprint 1.5 — Review Plane Contract Closure** before Sprint 2.
-5. Adds a first-class immutable `StoryboardCandidate` model tied to `sceneId + SceneSpec revision`.
+5. Adds a first-class `StoryboardCandidate` model tied to `sceneId + SceneSpec revision` and requires database-enforced immutability, not application discipline alone.
 6. Makes candidate selection explicit and auditable; approval of generated visual scenes requires a candidate from the current SceneSpec revision.
 7. Defines browser/API optimistic concurrency, idempotency, reviewer authority, and stale-command behavior.
 8. Moves runtime Scene/review-event transactional persistence into Sprint 1.5 so Sprint 2 does not build a UI over in-memory application services.
 9. Clarifies Review Hub action semantics: `reject` is QA rejection; storyboard rejection/regeneration is `reroll`; `reorder` and `duplicate` are reserved but out of Phase 1 Review Hub scope.
 10. Defines the canonical MinIO S3 endpoint and separates browser media delivery from MinIO administration.
 11. Explicitly prohibits a temporary synchronous Review API -> ComfyUI render path. Durable candidate-generation dispatch is implemented with the PostgreSQL worker queue in Sprint 3.
+12. Requires `storyboard_candidates` to reuse the repository's audit-protection pattern: database trigger enforcement plus fail-closed production-role privilege verification.
+13. Adds a dedicated Candidate Immutability acceptance gate to Sprint 1.5.
 
-These changes are contract and sequencing corrections. They do not replace the Clean Architecture boundaries, PostgreSQL state store, MinIO review-store role, Tailscale perimeter, ComfyUI render plane, or certified RenderProfile architecture.
+These changes are contract, evidence, and sequencing corrections. They do not replace the Clean Architecture boundaries, PostgreSQL state store, MinIO review-store role, Tailscale perimeter, ComfyUI render plane, or certified RenderProfile architecture.
 
 ---
 
@@ -215,12 +217,12 @@ When changing model families, for example FLUX -> LTX:
 
 ### 3.1.1 Certified LTX-2.5 Phase 1 Baseline
 
-Two disk figures must not be conflated:
+Two different disk measurements exist and **must not be conflated or assigned equal provenance**:
 
-- **Full downloaded LTX-2.5 repository/model-family material observed on the host:** approximately **68.8GB** across diffusion models, text encoders, VAE, LoRAs, and related files.
-- **Exact certified execution model set used by `LTX_25_720P_5S_V1`:** **38.329275932GB** (38,329,275,932 bytes) for the pinned text encoder, diffusion transformer, and VAE.
+- **Current locally downloaded LTX-2.5 family inventory on the Trinidad host:** **72,026,403,347 bytes = 72.03 GB decimal = 67.08 GiB**, measured with inode deduplication across the downloaded model-family material. This is a **point-in-time host inventory measurement**, not a RenderProfile field or production execution requirement; it may change as optional LTX-family files are added or removed.
+- **Exact certified execution model set used by `LTX_25_720P_5S_V1`:** **38,329,275,932 bytes = 38.329275932 GB decimal** for the pinned text encoder, diffusion transformer, and VAE. This value is tied to exact file hashes and is part of the certified production execution profile.
 
-The >=100GB free-disk reservation remains mandatory to provide model/cache/update headroom and is not reduced to the exact certified-file byte sum.
+The >=100GB free-disk reservation remains mandatory to provide model/cache/update headroom and is not reduced to either measured byte sum.
 
 Certified profile: `config/render-profiles/LTX_25_720P_5S_V1.json`.
 
@@ -387,7 +389,7 @@ Primary concepts:
 - `ReviewEvent` — append-only audit event.
 - `RenderProfile` — versioned certified execution configuration.
 
-A candidate is identified independently from its presigned URL. Old candidates remain addressable for audit/history even after a reroll or SceneSpec mutation makes them ineligible for current approval.
+A candidate is identified independently from its presigned URL. Old candidate records remain immutable and addressable for audit/history even after a reroll or SceneSpec mutation makes them ineligible for current approval. Object-storage lifecycle may later remove candidate media bytes; that retention event does not authorize mutation or deletion of the relational candidate provenance row.
 
 #### 3.6.4 Application Ports
 
@@ -563,7 +565,8 @@ Rules:
 - SceneSpec mutation clears/invalidate the current selected candidate;
 - reroll clears/invalidate the current selection and transitions to `generating_candidates`;
 - approval of a generated visual scene requires a selected candidate belonging to the current revision;
-- candidate media URLs are generated on demand and are not candidate identity.
+- candidate media URLs are generated on demand and are not candidate identity;
+- S3 lifecycle deletion of candidate media does not delete or mutate the `StoryboardCandidate` database record; provenance survives media retention expiry.
 
 ### 4.4 Review Hub Action Semantics
 
@@ -668,9 +671,26 @@ ALTER TABLE storyboard_scenes
   FOREIGN KEY (selected_candidate_id, scene_id, selected_candidate_revision)
   REFERENCES storyboard_candidates(candidate_id, scene_id, scene_spec_revision)
   DEFERRABLE INITIALLY IMMEDIATE;
+
+-- Reuse the Sprint 1 reject_audit_mutation() function from
+-- 002_audit_protections.sql so candidate immutability is structural.
+CREATE TRIGGER trg_storyboard_candidates_immutable
+BEFORE UPDATE OR DELETE ON storyboard_candidates
+FOR EACH ROW EXECUTE FUNCTION reject_audit_mutation();
 ```
 
+`StoryboardCandidate` immutability is a database invariant. Sprint 1.5 must also apply the same fail-closed privilege pattern already used by `002_audit_protections.sql`:
+
+- the production application role may receive the minimum `SELECT` / `INSERT` privileges required for candidate persistence and review reads;
+- the production application role must not retain `UPDATE` or `DELETE` privileges on `storyboard_candidates`;
+- the forward migration/integration test must assert those privileges and fail closed if mutation privilege is present;
+- direct SQL `UPDATE` or `DELETE` attempts must still fail because of `trg_storyboard_candidates_immutable`, even if a future role is accidentally over-granted.
+
+This defense-in-depth rule matches the existing `generation_manifests` and `review_events` audit-protection pattern rather than relying on repository methods or application conventions.
+
 `storyboard_scenes.draft_storage_bucket` / `draft_storage_object_key` are legacy single-draft fields and must not remain the canonical representation of a multi-candidate storyboard. New Review Hub behavior reads from `storyboard_candidates`. Legacy columns may be retained temporarily for migration compatibility and deprecated explicitly.
+
+Candidate-row retention is independent from MinIO object retention. When lifecycle policy eventually removes media bytes, the immutable row, content hash, Scene/revision identity, and generation provenance remain historical evidence. A missing/expired media object must be represented as availability state at read time, not by rewriting candidate history.
 
 Review events require enough information for safe idempotent replay/conflict detection:
 
@@ -919,8 +939,11 @@ Purpose: eliminate contract/persistence/API ambiguity before the autonomous orch
 Required outcomes:
 
 1. **StoryboardCandidate domain/data contract**
-   - add immutable candidate persistence tied to SceneSpec revision;
+   - add candidate persistence tied to SceneSpec revision;
+   - enforce candidate immutability structurally with `trg_storyboard_candidates_immutable` reusing `reject_audit_mutation()`;
+   - deny production application-role UPDATE/DELETE and add a fail-closed privilege assertion consistent with `002_audit_protections.sql`;
    - implement current-revision candidate selection and invalidation rules;
+   - preserve relational candidate provenance independently from MinIO lifecycle deletion;
    - deprecate single-draft fields as canonical storyboard representation.
 
 2. **Review action semantics**
@@ -1027,8 +1050,9 @@ No paying production campaign may be onboarded until all required gates pass.
 - [x] **State Machine Gate:** domain tests cover permitted transitions and representative forbidden paths.
 - [x] **Approval Invalidation Gate:** prompt/reference/engine/duration/LoRA changes invalidate approval.
 - [x] **Audit Immutability Schema Gate:** database protections reject UPDATE/DELETE on immutable audit tables.
+- [ ] **Candidate Immutability Gate:** `storyboard_candidates` rejects direct UPDATE/DELETE through the database trigger; the production application role lacks UPDATE/DELETE; the migration/integration privilege assertion fails closed if mutation privileges are present.
 - [ ] **Candidate Revision Integrity Gate:** candidate selection/approval cannot reference another Scene or stale SceneSpec revision.
-- [ ] **Candidate Invalidation Gate:** SceneSpec mutation or reroll clears current candidate selection while retaining historical candidates.
+- [ ] **Candidate Invalidation Gate:** SceneSpec mutation or reroll clears current candidate selection while retaining historical candidate rows.
 - [ ] **Stale Review Command Gate:** outdated `expectedSpecRevision` returns conflict and performs zero writes.
 - [ ] **Review Idempotency Gate:** repeated identical `actionId` produces one event/mutation; same ID with different request content conflicts.
 - [ ] **Reviewer Authority Gate:** browser-supplied identity/timestamp cannot become authoritative audit metadata.
@@ -1059,7 +1083,7 @@ No paying production campaign may be onboarded until all required gates pass.
 
 ## 10. Engineering Baseline Rules
 
-After PRD v3.5.0 is approved:
+After PRD v3.5.1 is approved:
 
 1. **Stop architecture churn.** Material architectural changes require an ADR rather than silent PRD edits.
 2. **Close ambiguity before automation.** Autonomous issue execution must not invent domain semantics omitted by the PRD/contracts.
@@ -1067,14 +1091,15 @@ After PRD v3.5.0 is approved:
 4. **Treat provider models as configuration.** Provider/model identifiers do not alter domain-state invariants.
 5. **Treat licenses as runtime governance.** Routing depends on current license-registry state.
 6. **Treat audit data as immutable.** Corrections are new records/events, never history rewrites.
-7. **Treat candidate history as immutable.** A new SceneSpec revision or reroll does not rewrite/delete prior candidate evidence.
+7. **Treat candidate history as immutable at the database layer.** A new SceneSpec revision, reroll, or media-retention event does not rewrite/delete prior candidate evidence; enforcement uses trigger plus production-role privilege restrictions.
 8. **Treat presigned URLs as ephemeral delivery data.** Persistent identity is bucket/key + content hash.
 9. **Treat MinIO as review/distribution storage.** It is not the long-term master archive.
 10. **One GPU, one active diffusion job.** A Render Worker must hold an exclusive GPU execution lease before inference.
 11. **No synchronous Review API -> ComfyUI rendering.** Human HTTP requests commit intent/state; durable generation workers execute GPU jobs.
 12. **Treat empirical RenderProfiles as versioned configuration.** Re-benchmark after material workflow/model/runner changes.
-13. **Enforce Clean Architecture mechanically.** Boundary violations fail CI.
-14. **Use ADRs for major decisions.** Examples: replacing object store/PostgreSQL queueing, adding a second GPU worker, changing certified memory mode, moving diffusion compute to cloud, or introducing a materially different identity/security model.
+13. **Separate host inventory from certified execution identity.** Point-in-time disk inventory measurements may change and must not be promoted into RenderProfile requirements unless the exact files/hashes are part of the certified execution set.
+14. **Enforce Clean Architecture mechanically.** Boundary violations fail CI.
+15. **Use ADRs for major decisions.** Examples: replacing object store/PostgreSQL queueing, adding a second GPU worker, changing certified memory mode, moving diffusion compute to cloud, or introducing a materially different identity/security model.
 
 ---
 
@@ -1110,6 +1135,8 @@ Repository evidence includes:
 
 The certified profile is the source of truth for production execution values. Historical one-off benchmark figures remain useful context but do not override the frozen profile.
 
+The broader downloaded LTX-2.5 family inventory is tracked separately from the RenderProfile. The current Trinidad-host inventory measurement is **72,026,403,347 bytes (72.03 GB decimal / 67.08 GiB), inode-deduplicated**. It is point-in-time operational inventory evidence and may change independently of the pinned execution profile.
+
 ### Foundation Models / Components
 
 - Black Forest Labs FLUX official repository/license mapping
@@ -1121,4 +1148,4 @@ The certified profile is the source of truth for production execution values. Hi
 
 ---
 
-*End of PRD v3.5.0 — Sprint 1 Certified / Sprint 1.5 Review Plane Contract Closure Baseline.*
+*End of PRD v3.5.1 — Sprint 1 Certified / Sprint 1.5 Review Plane Contract Closure Baseline.*
