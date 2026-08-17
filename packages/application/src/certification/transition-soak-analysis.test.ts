@@ -711,4 +711,48 @@ describe("transition-soak-analysis", () => {
     expect(summary).toContain("None (FAIL - Legacy Strict Policy)");
     expect(summary).not.toContain("None (PASS)");
   });
+
+  it("does not treat missing noSwapActivity in gate checks as legacy failure", () => {
+    const iterations = createElevenPassingIterations();
+    const artifact = createArtifact(iterations);
+    const checksWithoutNoSwap = { ...artifact.gate.checks };
+    delete (checksWithoutNoSwap as { noSwapActivity?: boolean }).noSwapActivity;
+
+    const artifactWithoutCheck: TransitionSoakArtifact = {
+      ...artifact,
+      gate: {
+        ...artifact.gate,
+        checks: checksWithoutNoSwap
+      }
+    };
+
+    const summary = renderTransitionSoakSummary(artifactWithoutCheck);
+    expect(summary).toContain("None (PASS)");
+    expect(summary).not.toContain("Legacy Strict Policy");
+  });
+
+  it("renders Sustained (FAIL) when swap is sustained even if gate checks object does not have noSwapActivity = false", () => {
+    const iterations = createElevenPassingIterations().map((_, index) =>
+      createMockIteration(index, {
+        swapUsedDeltaMb: index < 6 ? 6 : 0,
+        systemSwapInPageDelta: 0,
+        systemSwapOutPageDelta: 0
+      })
+    );
+
+    const artifact = createArtifact(iterations);
+    // Artifact with gate.passed or gate.checks where noSwapActivity is undefined or true
+    const checksWithTrueSwap = { ...artifact.gate.checks, noSwapActivity: true };
+    const artifactWithTrueCheck: TransitionSoakArtifact = {
+      ...artifact,
+      gate: {
+        ...artifact.gate,
+        checks: checksWithTrueSwap
+      }
+    };
+
+    const summary = renderTransitionSoakSummary(artifactWithTrueCheck);
+    expect(summary).toContain("Sustained (FAIL)");
+    expect(summary).not.toContain("Sustained (PASS)");
+  });
 });

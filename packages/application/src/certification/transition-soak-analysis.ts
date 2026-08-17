@@ -605,7 +605,7 @@ export function renderTransitionSoakSummary(artifact: TransitionSoakArtifact): s
 
   const swapActivity = classifySwapActivity(artifact.iterations);
   let swapActivityLabel: string;
-  if (!artifact.gate.checks.noSwapActivity) {
+  if (artifact.gate.checks.noSwapActivity === false) {
     if (swapActivity === "sustained") {
       swapActivityLabel = "Sustained (FAIL)";
     } else if (swapActivity === "transient") {
@@ -619,7 +619,7 @@ export function renderTransitionSoakSummary(artifact: TransitionSoakArtifact): s
         ? "None (PASS)"
         : swapActivity === "transient"
           ? "Transient (PASS)"
-          : "Sustained (PASS)";
+          : "Sustained (FAIL)";
   }
 
   const lines: string[] = [
