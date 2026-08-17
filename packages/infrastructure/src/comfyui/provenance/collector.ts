@@ -1,23 +1,22 @@
 import { readFile } from "node:fs/promises";
-import type { RenderProfile } from "@cco/contracts";
+import type { RenderProfileKey } from "@cco/contracts";
 import { hashModelFiles, hashWorkflow, type ModelFileHash } from "./hasher.js";
 import { runDiskPreflight, type DiskPreflightResult } from "./preflight.js";
 import { collectGitProvenance, type GitProvenance } from "./git-tracker.js";
 import type { CertificationProfile } from "./profile-manifest.js";
 
-export type RenderProfileProvenance = Pick<
-  RenderProfile,
-  | "key"
-  | "version"
-  | "engine"
-  | "workflowHash"
-  | "modelHashes"
-  | "frames"
-  | "steps"
-  | "runnerProfile"
-  | "measuredDiskFootprintGb"
-  | "minFreeDiskGb"
->;
+export interface RenderProfileProvenance {
+  readonly key: RenderProfileKey;
+  readonly version: 1;
+  readonly engine: string;
+  readonly workflowHash: string;
+  readonly modelHashes: Readonly<Record<string, string>>;
+  readonly frames: number;
+  readonly steps: number;
+  readonly runnerProfile: string;
+  readonly measuredDiskFootprintGb: number;
+  readonly minFreeDiskGb: number;
+}
 
 export type ProvenanceProgress = Readonly<{
   phase: "preflight" | "git" | "workflow_hash" | "model_hash";

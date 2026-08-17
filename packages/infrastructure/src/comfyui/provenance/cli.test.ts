@@ -83,7 +83,7 @@ describe("Provenance CLI", () => {
     renderProfileProvenance: Object.freeze({
       key: "LTX_25_720P_5S_V1",
       version: 1,
-      engine: "comfyui",
+      engine: "ltx_25" as const,
       workflowHash: "a".repeat(64),
       modelHashes: Object.freeze({
         "models/diffusion_models/ltx-video-2b-v0.9.1.safetensors": "c".repeat(64)
