@@ -1468,5 +1468,29 @@ describe("Scene domain contracts", () => {
       expect(snapshot.selectedCandidateId).toBe("candidate-1");
       expect(snapshot.selectedCandidateRevision).toBe(1);
     });
+
+    it("reconstitute restores full aggregate state from snapshot including candidate selection", () => {
+      const original = createReviewScene();
+      original.selectCandidate(
+        "candidate-1" as CandidateId,
+        original.snapshot().specRevision,
+        original.id
+      );
+      const snapshot = original.snapshot();
+
+      const restored = Scene.reconstitute(snapshot);
+      expect(restored.snapshot()).toEqual(snapshot);
+      expect(restored.status).toBe("director_review");
+      expect(restored.snapshot().selectedCandidateId).toBe("candidate-1");
+      expect(restored.snapshot().selectedCandidateRevision).toBe(1);
+
+      // Verify restored scene can proceed with domain actions like approve
+      const approveTransition = restored.approve({
+        approvedBy: "director-1",
+        approvedAt: "2026-08-15T00:00:00.000Z"
+      });
+      expect(approveTransition.to).toBe("approved");
+      expect(restored.status).toBe("approved");
+    });
   });
 });

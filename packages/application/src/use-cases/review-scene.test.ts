@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  InvalidCandidateError,
   InvalidMutationError,
   InvalidTransitionError,
   Scene,
   type CampaignId,
   type CandidateId,
-  type SceneId
+  type SceneId,
+  type StoryboardCandidate
 } from "@cco/domain";
 import type {
   ReviewEventStore,
@@ -14,6 +16,7 @@ import type {
   UnitOfWorkContext
 } from "../ports/index.js";
 import { InMemorySceneUnitOfWork } from "../test-support/in-memory-scene-unit-of-work.js";
+import { CandidateNotFoundError } from "./candidate-not-found-error.js";
 import { ReviewSceneUseCases } from "./review-scene.js";
 import { SceneNotFoundError } from "./scene-not-found-error.js";
 
@@ -470,9 +473,25 @@ describe("ReviewSceneUseCases", () => {
   });
 
   describe("ReviewSceneUseCases - Candidate Selection and Review Semantics", () => {
-    it("selectCandidate: director_review delegates to scene.selectCandidate, appends candidate_select event, and saves atomically", async () => {
+    const createCandidate = (
+      id: string,
+      sceneId: string,
+      revision: number = 1
+    ): StoryboardCandidate => ({
+      id: id as CandidateId,
+      sceneId: sceneId as SceneId,
+      specRevision: revision,
+      variantOrdinal: 1,
+      locator: `godzspeed-temp/candidates/${sceneId}/${id}.webp`,
+      contentHash: "sha256-dummy-hash",
+      generationMetadata: {},
+      createdAt: "2026-08-15T00:00:00.000Z"
+    });
+
+    it("selectCandidate: fetches candidate from repository, delegates to scene.selectCandidate with ground truth, appends candidate_select event, and saves atomically", async () => {
       const scene = createSceneInDirectorReview("scene-select-1");
-      const uow = new InMemorySceneUnitOfWork([scene]);
+      const candidate = createCandidate("candidate-2", "scene-select-1", 1);
+      const uow = new InMemorySceneUnitOfWork([scene], [candidate]);
       const useCases = new ReviewSceneUseCases(uow);
 
       const input = {
@@ -481,8 +500,7 @@ describe("ReviewSceneUseCases", () => {
         reviewerName: "Director Alice",
         occurredAt: "2026-08-15T01:00:00.000Z",
         directorNotes: "Selecting candidate 2 for revision 1",
-        candidateId: "candidate-2" as CandidateId,
-        candidateRevision: 1
+        candidateId: "candidate-2" as CandidateId
       };
 
       await useCases.selectCandidate(input);
@@ -508,21 +526,70 @@ describe("ReviewSceneUseCases", () => {
       });
     });
 
-    it("selectCandidate with mismatched revision rejects and commits no writes", async () => {
-      const scene = createSceneInDirectorReview("scene-select-stale");
-      const uow = new InMemorySceneUnitOfWork([scene]);
+    it("selectCandidate: rejects when candidate belongs to a different scene (preventing forged scene ID bypass)", async () => {
+      const scene = createSceneInDirectorReview("scene-select-target");
+      const foreignCandidate = createCandidate("candidate-foreign", "scene-other", 1);
+      const uow = new InMemorySceneUnitOfWork([scene], [foreignCandidate]);
       const useCases = new ReviewSceneUseCases(uow);
 
-      await expect(
-        useCases.selectCandidate({
-          sceneId: "scene-select-stale",
-          eventId: "event-select-stale",
-          reviewerName: "Director Alice",
-          occurredAt: "2026-08-15T01:00:00.000Z",
-          candidateId: "candidate-1" as CandidateId,
-          candidateRevision: 99
-        })
-      ).rejects.toThrow();
+      const promise = useCases.selectCandidate({
+        sceneId: "scene-select-target",
+        eventId: "event-select-foreign",
+        reviewerName: "Attacker",
+        occurredAt: "2026-08-15T01:00:00.000Z",
+        candidateId: "candidate-foreign" as CandidateId
+      });
+
+      await expect(promise).rejects.toThrow(InvalidCandidateError);
+      await expect(promise).rejects.toThrow("Candidate belongs to a different scene");
+
+      expect(uow.savedScenes).toHaveLength(0);
+      expect(uow.reviewEvents).toHaveLength(0);
+    });
+
+    it("selectCandidate: rejects when candidate belongs to an outdated revision (preventing forged revision bypass)", async () => {
+      const scene = createSceneInDirectorReview("scene-select-stale");
+      scene.updatePrompt("Updated prompt that advances revision to 2");
+      expect(scene.snapshot().specRevision).toBe(2);
+
+      const staleCandidate = createCandidate("candidate-rev1", "scene-select-stale", 1);
+      const uow = new InMemorySceneUnitOfWork([scene], [staleCandidate]);
+      const useCases = new ReviewSceneUseCases(uow);
+
+      // Client passes candidateRevision: 2 to try forging the revision
+      const promise = useCases.selectCandidate({
+        sceneId: "scene-select-stale",
+        eventId: "event-select-stale",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T01:00:00.000Z",
+        candidateId: "candidate-rev1" as CandidateId,
+        candidateRevision: 2
+      });
+
+      await expect(promise).rejects.toThrow(InvalidCandidateError);
+      await expect(promise).rejects.toThrow(
+        "Candidate revision does not match current scene revision"
+      );
+
+      expect(uow.savedScenes).toHaveLength(0);
+      expect(uow.reviewEvents).toHaveLength(0);
+    });
+
+    it("selectCandidate: throws CandidateNotFoundError when candidate does not exist in repository", async () => {
+      const scene = createSceneInDirectorReview("scene-select-missing");
+      const uow = new InMemorySceneUnitOfWork([scene], []);
+      const useCases = new ReviewSceneUseCases(uow);
+
+      const promise = useCases.selectCandidate({
+        sceneId: "scene-select-missing",
+        eventId: "event-select-missing",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T01:00:00.000Z",
+        candidateId: "candidate-nonexistent" as CandidateId
+      });
+
+      await expect(promise).rejects.toThrow(CandidateNotFoundError);
+      await expect(promise).rejects.toThrow("Candidate 'candidate-nonexistent' was not found.");
 
       expect(uow.savedScenes).toHaveLength(0);
       expect(uow.reviewEvents).toHaveLength(0);

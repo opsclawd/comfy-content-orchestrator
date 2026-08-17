@@ -231,6 +231,26 @@ describe("PostgreSQL audit immutability and application-role privileges integrat
       has_delete: false
     });
 
+    // Check privileges on storyboard_candidates
+    const scPrivsRes = await client.query<{
+      has_select: boolean;
+      has_insert: boolean;
+      has_update: boolean;
+      has_delete: boolean;
+    }>(
+      `SELECT
+        has_table_privilege('orchestrator_app', 'storyboard_candidates', 'SELECT') AS has_select,
+        has_table_privilege('orchestrator_app', 'storyboard_candidates', 'INSERT') AS has_insert,
+        has_table_privilege('orchestrator_app', 'storyboard_candidates', 'UPDATE') AS has_update,
+        has_table_privilege('orchestrator_app', 'storyboard_candidates', 'DELETE') AS has_delete`
+    );
+    expect(scPrivsRes.rows[0]).toEqual({
+      has_select: true,
+      has_insert: true,
+      has_update: false,
+      has_delete: false
+    });
+
     // Verify migration fails if configured application role does not exist
     await client.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public;");
     await expect(
@@ -257,7 +277,7 @@ describe("PostgreSQL audit immutability and application-role privileges integrat
     // Verify migration succeeds when no application role is configured
     await client.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public;");
     const noRoleApplied = await runMigrations(client, { migrationsDirectory });
-    expect(noRoleApplied).toHaveLength(2);
+    expect(noRoleApplied).toHaveLength(3);
   });
 
   it("rejects a second generation manifest for the same render job", async () => {

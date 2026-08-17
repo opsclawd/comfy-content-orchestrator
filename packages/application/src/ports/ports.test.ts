@@ -19,9 +19,11 @@ import type {
   RenderLease,
   RenderQueueReceipt,
   RenderResult,
+  StoryboardCandidateRepository,
   StoredObject,
   VoiceSynthesisPort
 } from "./index.js";
+import type { CandidateId, SceneId, StoryboardCandidate } from "@cco/domain";
 import { GpuLeaseOwnershipLostError, GpuLeaseUnavailableError } from "./index.js";
 
 describe("Application capability ports contract tests", () => {
@@ -198,6 +200,26 @@ describe("Application capability ports contract tests", () => {
       await expect(
         manifestRepo.append({ jobId: "job-1", files: ["scene-1.mp4"] })
       ).resolves.toBeUndefined();
+
+      const candidateRepo = {
+        async findById(candidateId: CandidateId): Promise<StoryboardCandidate | undefined> {
+          return candidateId === ("cand-1" as CandidateId)
+            ? {
+                id: "cand-1" as CandidateId,
+                sceneId: "scene-1" as SceneId,
+                specRevision: 1,
+                variantOrdinal: 1,
+                locator: "godzspeed-temp/candidates/cand-1.webp",
+                contentHash: "hash123",
+                generationMetadata: {},
+                createdAt: "2026-08-15T00:00:00.000Z"
+              }
+            : undefined;
+        }
+      } satisfies StoryboardCandidateRepository;
+
+      const candidate = await candidateRepo.findById("cand-1" as CandidateId);
+      expect(candidate?.id).toBe("cand-1");
 
       const license = await licenseRegistryRepo.findByComponentKey("ltx-video");
       expect(license?.license).toBe("Apache-2.0");

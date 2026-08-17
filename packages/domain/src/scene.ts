@@ -192,6 +192,21 @@ export class Scene {
     return new Scene(input);
   }
 
+  static reconstitute(snapshot: SceneSnapshot): Scene {
+    const scene = new Scene({
+      id: snapshot.id,
+      campaignId: snapshot.campaignId,
+      configuration: snapshot.configuration
+    });
+    scene.#status = snapshot.status;
+    scene.#specRevision = snapshot.specRevision;
+    scene.#approval = snapshot.approval ? Object.freeze({ ...snapshot.approval }) : undefined;
+    scene.#failedFrom = snapshot.failedFrom;
+    scene.#selectedCandidateId = snapshot.selectedCandidateId;
+    scene.#selectedCandidateRevision = snapshot.selectedCandidateRevision;
+    return scene;
+  }
+
   get id(): SceneId {
     return this.#id;
   }
