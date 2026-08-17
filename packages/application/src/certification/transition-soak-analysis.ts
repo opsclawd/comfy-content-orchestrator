@@ -46,13 +46,72 @@ function calculateMedian(values: readonly number[]): number | null {
   return (sorted[mid - 1]! + sorted[mid]!) / 2;
 }
 
+type SwapActivityClassification = "none" | "transient" | "sustained";
+
+const SWAP_DECAY_RATIO = 0.1;
+const SWAP_USED_NOISE_FLOOR_MB = 10;
+const SWAP_PAGE_NOISE_FLOOR = 2500;
+const SIGNIFICANT_SWAP_USED_MB = 5;
+const SIGNIFICANT_SWAP_PAGES = 1250;
+
+function classifySwapActivity(
+  iterations: readonly TransitionSoakIteration[]
+): SwapActivityClassification {
+  const value = (metric: number | null): number => metric ?? 0;
+  const hasActivity = iterations.some(
+    ({ telemetry }) =>
+      value(telemetry.swapUsedDeltaMb) > 0 ||
+      value(telemetry.systemSwapInPageDelta) > 0 ||
+      value(telemetry.systemSwapOutPageDelta) > 0
+  );
+
+  if (!hasActivity) return "none";
+
+  const splitIndex = Math.ceil(iterations.length / 2);
+  const firstHalf = iterations.slice(0, splitIndex);
+  const secondHalf = iterations.slice(splitIndex);
+  const sum = (
+    records: readonly TransitionSoakIteration[],
+    select: (iteration: TransitionSoakIteration) => number | null
+  ): number => records.reduce((total, iteration) => total + value(select(iteration)), 0);
+  const decayed = (first: number, second: number, noiseFloor: number): boolean =>
+    second < first * SWAP_DECAY_RATIO || second < noiseFloor;
+
+  const swapUsedDecayed = decayed(
+    sum(firstHalf, ({ telemetry }) => telemetry.swapUsedDeltaMb),
+    sum(secondHalf, ({ telemetry }) => telemetry.swapUsedDeltaMb),
+    SWAP_USED_NOISE_FLOOR_MB
+  );
+  const swapInDecayed = decayed(
+    sum(firstHalf, ({ telemetry }) => telemetry.systemSwapInPageDelta),
+    sum(secondHalf, ({ telemetry }) => telemetry.systemSwapInPageDelta),
+    SWAP_PAGE_NOISE_FLOOR
+  );
+  const swapOutDecayed = decayed(
+    sum(firstHalf, ({ telemetry }) => telemetry.systemSwapOutPageDelta),
+    sum(secondHalf, ({ telemetry }) => telemetry.systemSwapOutPageDelta),
+    SWAP_PAGE_NOISE_FLOOR
+  );
+  const significantIterations = iterations.filter(
+    ({ telemetry }) =>
+      value(telemetry.swapUsedDeltaMb) > SIGNIFICANT_SWAP_USED_MB ||
+      value(telemetry.systemSwapInPageDelta) > SIGNIFICANT_SWAP_PAGES ||
+      value(telemetry.systemSwapOutPageDelta) > SIGNIFICANT_SWAP_PAGES
+  ).length;
+  const recurrent = significantIterations > iterations.length / 2;
+
+  return swapUsedDecayed && swapInDecayed && swapOutDecayed && !recurrent
+    ? "transient"
+    : "sustained";
+}
+
 /**
  * Pure evaluator for FLUX <-> LTX transition soak stability and gate checks.
  *
  * Calculates global peaks, run-window deltas, family-normalized progressive memory growth,
  * post-unload settling growth, and median latency degradation against single-family baselines.
  *
- * Failing any check, swap activity, OOM, restart, or incomplete evidence forces require_64gb
+ * Failing any check, sustained swap activity, OOM, restart, or incomplete evidence forces require_64gb
  * and fails closed.
  */
 export function evaluateTransitionSoak(
@@ -402,16 +461,8 @@ export function evaluateTransitionSoak(
       (it) => it.telemetry.samplingErrors.length === 0 && it.telemetry.samples.length > 0
     );
 
-  const noSwapActivity =
-    swapUsedDeltaMb === 0 &&
-    systemSwapInPageDelta === 0 &&
-    systemSwapOutPageDelta === 0 &&
-    iterations.every(
-      (it) =>
-        it.telemetry.swapUsedDeltaMb === 0 &&
-        it.telemetry.systemSwapInPageDelta === 0 &&
-        it.telemetry.systemSwapOutPageDelta === 0
-    );
+  const swapActivity = classifySwapActivity(iterations);
+  const noSwapActivity = swapActivity !== "sustained";
 
   const postUnloadVramHeadroomMet =
     iterations.length > 0 &&
@@ -552,6 +603,25 @@ export function renderTransitionSoakSummary(artifact: TransitionSoakArtifact): s
 
   const formatCheck = (passed: boolean): string => (passed ? "PASS" : "FAIL");
 
+  const swapActivity = classifySwapActivity(artifact.iterations);
+  let swapActivityLabel: string;
+  if (artifact.gate.checks.noSwapActivity === false) {
+    if (swapActivity === "sustained") {
+      swapActivityLabel = "Sustained (FAIL)";
+    } else if (swapActivity === "transient") {
+      swapActivityLabel = "Transient (FAIL - Legacy Strict Policy)";
+    } else {
+      swapActivityLabel = "None (FAIL - Legacy Strict Policy)";
+    }
+  } else {
+    swapActivityLabel =
+      swapActivity === "none"
+        ? "None (PASS)"
+        : swapActivity === "transient"
+          ? "Transient (PASS)"
+          : "Sustained (FAIL)";
+  }
+
   const lines: string[] = [
     `# FLUX ↔ LTX Transition Soak Certification Summary`,
     ``,
@@ -609,7 +679,7 @@ export function renderTransitionSoakSummary(artifact: TransitionSoakArtifact): s
     `| **No OOM Detected** | ${formatCheck(artifact.gate.checks.noOom)} | Zero CUDA or host Out-Of-Memory errors detected (OOM count: ${artifact.aggregates.oomCount}) |`,
     `| **No Unexpected Restarts** | ${formatCheck(artifact.gate.checks.noUnexpectedRestarts)} | Zero process restarts or PID identity changes (Restart count: ${artifact.aggregates.unexpectedRestartCount}) |`,
     `| **No Sampling Errors** | ${formatCheck(artifact.gate.checks.noSamplingErrors)} | All telemetry intervals collected without sampling errors (Error count: ${artifact.aggregates.samplingErrorCount}) |`,
-    `| **No Swap Activity** | ${formatCheck(artifact.gate.checks.noSwapActivity)} | Zero swap-used, swap-in, or swap-out page activity during the soak run |`,
+    `| **Swap Activity** | ${swapActivityLabel} | None or transient activity passes; recurrent or non-decaying activity is sustained and fails |`,
     `| **Post-Unload VRAM Headroom Met** | ${formatCheck(artifact.gate.checks.postUnloadVramHeadroomMet)} | Free VRAM after unload >= ${formatVal(artifact.thresholds.minPostUnloadFreeVramMb, "MB")} across every iteration |`,
     `| **Host Memory Headroom Met** | ${formatCheck(artifact.gate.checks.hostMemoryHeadroomMet)} | Host available RAM >= ${formatVal(artifact.thresholds.minHostAvailableMb, "MB")} across every sample |`,
     `| **VRAM Growth Within Tolerance** | ${formatCheck(artifact.gate.checks.vramGrowthWithinTolerance)} | Same-family and post-unload VRAM growth <= ${formatVal(artifact.thresholds.maxVramGrowthMb, "MB")} |`,
@@ -699,7 +769,7 @@ export function renderTransitionSoakSummary(artifact: TransitionSoakArtifact): s
     `- **Selected Runner Profile:** \`${artifact.selectedRunnerProfile ?? "None"}\``,
     `- **Decision Rationale:** ${
       artifact.gate.passed
-        ? `All ${artifact.requestedTransitionCount} required transitions succeeded with zero swap activity, zero OOM errors, stable ComfyUI process identity, observed post-unload headroom, memory growth within ${artifact.thresholds.maxVramGrowthMb} MB, and latency within ${artifact.thresholds.maxLatencyDegradationPercent}% of single-family baselines.`
+        ? `All ${artifact.requestedTransitionCount} required transitions succeeded with no sustained swap activity, zero OOM errors, stable ComfyUI process identity, observed post-unload headroom, memory growth within ${artifact.thresholds.maxVramGrowthMb} MB, and latency within ${artifact.thresholds.maxLatencyDegradationPercent}% of single-family baselines.`
         : `Soak gate checks failed (${Object.entries(artifact.gate.checks)
             .filter(([_, p]) => !p)
             .map(([k]) => k)

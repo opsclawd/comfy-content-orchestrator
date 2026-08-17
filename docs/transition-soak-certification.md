@@ -169,8 +169,22 @@ The harness collects synchronized telemetry every **200 ms** during render execu
 6. **Host Available RAM Headroom:**
    $$\text{hostRamAvailableMb} \ge 1,024\text{ MB} \quad \text{across every sample in every iteration}$$
 
-7. **Zero Swap Activity:**
-   $$\Delta \text{SwapUsedMb} = 0, \quad \Delta \text{SystemSwapInPages} = 0, \quad \Delta \text{SystemSwapOutPages} = 0$$
+7. **Sustained Swap Activity Policy (Decay and Recurrence):**
+   Swap activity across $N$ soak iterations is evaluated by partitioning iterations into a first half ($0 \le i < \lceil N/2 \rceil$) and a second half ($\lceil N/2 \rceil \le i < N$). For an odd number of iterations, the middle iteration is grouped into the first half.
+
+   - **Independent Metric Series:** Decay is evaluated independently for each of the three swap telemetry metrics: `swapUsedDeltaMb`, `systemSwapInPageDelta`, and `systemSwapOutPageDelta`.
+   - **Second-Half Decay Rule:** A metric series has decayed if its second-half sum is strictly less than 10% of its first-half sum or strictly below its noise floor:
+     $$\sum_{\text{second}} \text{Metric} < 0.10 \times \sum_{\text{first}} \text{Metric} \quad \lor \quad \sum_{\text{second}} \text{Metric} < \text{NoiseFloor}$$
+     - `swapUsedDeltaMb` noise floor: $10\text{ MB}$
+     - `systemSwapInPageDelta` noise floor: $2,500\text{ pages}$
+     - `systemSwapOutPageDelta` noise floor: $2,500\text{ pages}$
+   - **Recurrence Rule:** An iteration has significant swap if `swapUsedDeltaMb > 5 MB`, `systemSwapInPageDelta > 1,250 pages`, or `systemSwapOutPageDelta > 1,250 pages`. Significant swap is recurrent when observed in strictly more than half of all iterations:
+     $$N_{\text{significant}} > \frac{N}{2}$$
+   - **Classification Outcomes:**
+     - `None` (`None (PASS)`): No positive delta observed across any swap metric in any iteration.
+     - `Transient` (`Transient (PASS)`): Swap activity is observed, all three metric series decay in the second half, and significant swap is not recurrent.
+     - `Sustained` (`Sustained (FAIL)`): Swap activity is observed and at least one metric series fails to decay or significant swap is recurrent.
+   - **Evidence Preservation & Null Handling:** Null metric values (`null`) remain raw evidence in artifacts and summaries, and contribute zero only to classification arithmetic.
 
 ---
 
@@ -186,7 +200,7 @@ The harness collects synchronized telemetry every **200 ms** during render execu
 | 4 | `noOom` | `oomCount === 0` | Zero CUDA or host Out-Of-Memory errors detected. |
 | 5 | `noUnexpectedRestarts` | `unexpectedRestartCount === 0` | Zero ComfyUI process restarts or PID/starttime changes. |
 | 6 | `noSamplingErrors` | `samplingErrorCount === 0` | All 200 ms telemetry intervals collected without sampling errors. |
-| 7 | `noSwapActivity` | `swapUsedDelta == 0 && swapIn == 0 && swapOut == 0` | Zero swap space usage or swap paging activity during the soak run. |
+| 7 | `noSwapActivity` | `classification !== "sustained"` | Tolerates none (`None (PASS)`) and transient (`Transient (PASS)`) swap; fails only on sustained (`Sustained (FAIL)`) swap. |
 | 8 | `postUnloadVramHeadroomMet` | `postUnloadFreeVramMb >= 23000` | Free VRAM after unload $\ge 23,000\text{ MB}$ across every iteration. |
 | 9 | `hostMemoryHeadroomMet` | `hostRamAvailableMb >= 1024` | Host available RAM $\ge 1,024\text{ MB}$ across all samples. |
 | 10 | `vramGrowthWithinTolerance` | Growth $\le 256\text{ MB}$ | Same-family and post-unload VRAM growth $\le 256\text{ MB}$. |
@@ -210,15 +224,15 @@ flowchart TD
 ```
 
 #### Passing Outcome: `support_32gb`
-- **Criteria:** All 12 gate checks evaluate to `true`.
+- **Criteria:** All 12 gate checks evaluate to `true` (including `noSwapActivity`, which passes when classified as `None` or `Transient`).
 - **Artifact Values:** `status = "passed"`, `hostRamDecision = "support_32gb"`, `selectedRunnerProfile = "dynamicvram-offload-v1"`, `failure = null`.
 - **Production Result:** The 32 GB workstation is stable under multi-model interleaved load. Authorizes freezing the production `RenderProfile` for the certified engine.
 
 #### Failing Outcome: `require_64gb`
-- **Criteria:** Any of the 12 gate checks evaluates to `false` (e.g. swap activity detected, memory leak $> 256\text{ MB}$, OOM, latency degradation $> 20\%$).
+- **Criteria:** Any of the 12 gate checks evaluates to `false` (e.g. sustained swap activity detected, memory leak $> 256\text{ MB}$, OOM, latency degradation $> 20\%$).
 - **Artifact Values:** `status = "failed"`, `hostRamDecision = "require_64gb"`, `selectedRunnerProfile = null`, with a structured `failure` object.
-- **Production Result:** The gate is fail-closed on any swap activity, so `require_64gb` records that at least one check failed — **not** that 32 GB is proven insufficient. Interpret it against the per-iteration evidence in `result.json`: swap confined to early transitions that then ceases is transient and does not by itself establish a hardware requirement, whereas swap recurring across most iterations, or accompanied by latency degradation or progressive memory growth, does. The profile freeze is blocked either way, because #8 conditions it on a passing soak.
-- **Precedent:** Run `trinidad-rtx4090-dynamicvram-v1` returned `require_64gb` on transient swap confined to the first four transitions, with the other 11 checks passing. The recorded conclusion is that 32 GB is supported for Phase 1 on a dedicated host. See `README.md` and [#29](https://github.com/opsclawd/comfy-content-orchestrator/issues/29), which tracks tightening `noSwapActivity` to measure *sustained* rather than *any* swap.
+- **Production Result:** `require_64gb` records that at least one gate check failed (such as sustained swap thrashing or memory exhaustion). The Markdown summary explicitly displays the classification as `None (PASS)`, `Transient (PASS)`, or `Sustained (FAIL)`. The profile freeze is blocked because #8 conditions it on a passing soak.
+- **Historical Interpretation:** Under the prior zero-tolerance check, run `trinidad-rtx4090-dynamicvram-v1` returned `require_64gb` due to transient swap confined to the first four transitions while all other 11 checks passed. Under the sustained-swap classification policy, the recorded Trinidad values re-evaluate as transient swap and `support_32gb` without altering the historical certification artifact.
 
 ---
 
