@@ -163,11 +163,15 @@ describe("PostgreSQL migration runner integration", () => {
     );
   });
 
-  it("upgrades a database with existing Sprint 1 data (001 and 002) to latest (003) without data loss or corruption", async () => {
+  it("upgrades a database with existing Sprint 1 data (001 and 002) through candidate selection (003) and review idempotency (004) without data loss or corruption", async () => {
     const migrationsRepoDir = new URL("../../migrations/", import.meta.url);
     const m001 = await readFile(new URL("001_baseline.sql", migrationsRepoDir), "utf-8");
     const m002 = await readFile(new URL("002_audit_protections.sql", migrationsRepoDir), "utf-8");
     const m003 = await readFile(new URL("003_candidate_selection.sql", migrationsRepoDir), "utf-8");
+    const m004 = await readFile(
+      new URL("004_review_events_idempotency.sql", migrationsRepoDir),
+      "utf-8"
+    );
 
     const stageDir = await createTempMigrationDir({
       "001_baseline.sql": m001,
@@ -196,10 +200,10 @@ describe("PostgreSQL migration runner integration", () => {
     );
     const sceneId = sceneRes.rows[0]!.scene_id;
 
-    // Now introduce 003 into the directory
+    // Now introduce 003 into the directory (Sprint 1.5-01 baseline)
     await writeFile(join(fileURLToPath(stageDir), "003_candidate_selection.sql"), m003, "utf-8");
 
-    // Run forward migration
+    // Run forward migration for 003
     const stage2Applied = await runMigrations(client, { migrationsDirectory: stageDir });
     expect(stage2Applied).toHaveLength(1);
     expect(stage2Applied[0]?.version).toBe("003");
@@ -232,6 +236,18 @@ describe("PostgreSQL migration runner integration", () => {
       "UPDATE storyboard_scenes SET selected_candidate_id = $1, selected_candidate_revision = 1 WHERE scene_id = $2",
       [candidateId, sceneId]
     );
+
+    // Now introduce 004 into the directory (Sprint 1.5-02 review idempotency)
+    await writeFile(
+      join(fileURLToPath(stageDir), "004_review_events_idempotency.sql"),
+      m004,
+      "utf-8"
+    );
+
+    // Run forward migration for 004
+    const stage3Applied = await runMigrations(client, { migrationsDirectory: stageDir });
+    expect(stage3Applied).toHaveLength(1);
+    expect(stage3Applied[0]?.version).toBe("004");
 
     // Insert candidate_select review event with idempotency columns
     const eventRes = await client.query<{ event_id: string; action: string }>(

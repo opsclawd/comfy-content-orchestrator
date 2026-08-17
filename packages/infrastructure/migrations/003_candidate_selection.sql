@@ -2,22 +2,7 @@
 -- REVIEW ACTION ENUM ADDITION
 -- ---------------------------------------------------------------------------
 
-ALTER TYPE review_action_enum ADD VALUE IF NOT EXISTS 'candidate_select';
-
--- ---------------------------------------------------------------------------
--- REVIEW EVENTS IDEMPOTENCY & CONCURRENCY AUDIT COLUMNS
--- ---------------------------------------------------------------------------
-
-ALTER TABLE review_events
-  ADD COLUMN IF NOT EXISTS expected_spec_revision INT
-    CHECK (expected_spec_revision > 0),
-  ADD COLUMN IF NOT EXISTS resulting_spec_revision INT
-    CHECK (resulting_spec_revision > 0),
-  ADD COLUMN IF NOT EXISTS request_hash_sha256 VARCHAR(64);
-
-ALTER TABLE review_events
-  ADD CONSTRAINT uq_review_events_request_hash
-  UNIQUE (request_hash_sha256);
+ALTER TYPE review_action_enum ADD VALUE 'candidate_select';
 
 -- ---------------------------------------------------------------------------
 -- STORYBOARD SCENES CANDIDATE SELECTION
@@ -62,6 +47,9 @@ CREATE TABLE IF NOT EXISTS storyboard_candidates (
   UNIQUE (storage_bucket, storage_object_key),
   UNIQUE (candidate_id, scene_id, scene_spec_revision)
 );
+
+CREATE INDEX IF NOT EXISTS idx_storyboard_candidates_scene_revision
+  ON storyboard_candidates(scene_id, scene_spec_revision, variant_ordinal);
 
 ALTER TABLE storyboard_scenes
   ADD CONSTRAINT fk_scene_selected_candidate_revision
