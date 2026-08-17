@@ -19,9 +19,14 @@ export interface ControlApiUseCases {
   readonly progressSceneProduction: ProgressSceneProductionUseCases;
 }
 
+export interface ControlApiQueries {
+  readonly sceneReview?: SceneReviewQueries;
+}
+
 export interface ControlApiContainer {
   readonly dependencies: ControlApiDependencies;
   readonly useCases: ControlApiUseCases;
+  readonly queries: ControlApiQueries;
 }
 
 export function createControlApiContainer(
@@ -38,6 +43,11 @@ export function createControlApiContainer(
     useCases: {
       reviewScene,
       progressSceneProduction
+    },
+    queries: {
+      ...(dependencies.sceneReviewQueries !== undefined
+        ? { sceneReview: dependencies.sceneReviewQueries }
+        : {})
     }
   };
 }

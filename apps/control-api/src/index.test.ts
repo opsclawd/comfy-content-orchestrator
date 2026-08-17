@@ -105,6 +105,7 @@ describe("control-api composition root", () => {
     expect(container.dependencies.uow).toBe(uow);
     expect(container.dependencies.renderEngine).toBe(renderEngine);
     expect(container.dependencies.sceneReviewQueries).toBe(sceneReviewQueries);
+    expect(container.queries.sceneReview).toBe(sceneReviewQueries);
     expect(container.useCases.reviewScene).toBeInstanceOf(ReviewSceneUseCases);
     expect(container.useCases.progressSceneProduction).toBeInstanceOf(
       ProgressSceneProductionUseCases
@@ -167,5 +168,6 @@ describe("control-api composition root", () => {
     expect(container.useCases.progressSceneProduction).toBeInstanceOf(
       ProgressSceneProductionUseCases
     );
+    expect(container.queries.sceneReview).toBeUndefined();
   });
 });
