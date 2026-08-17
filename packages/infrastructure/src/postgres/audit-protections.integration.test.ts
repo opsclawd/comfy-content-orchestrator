@@ -1,3 +1,7 @@
+import { mkdtemp, cp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL, fileURLToPath } from "node:url";
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { Pool, type PoolClient, type DatabaseError } from "pg";
 import { runMigrations } from "./migration-runner.js";
@@ -8,6 +12,7 @@ import {
 import {
   insertRepresentativeGraph,
   insertGenerationManifestRecord,
+  insertStoryboardCandidateRecord,
   type RepresentativeGraph
 } from "./test-support/records.js";
 
@@ -154,6 +159,72 @@ describe("PostgreSQL audit immutability and application-role privileges integrat
     expect(checkRes.rows[0]?.event_id).toBe(graph.reviewEvent.event_id);
   });
 
+  it("rejects UPDATE on storyboard_candidates through the immutability trigger", async () => {
+    const candidate = await insertStoryboardCandidateRecord(client, {
+      sceneId: graph.scene.scene_id,
+      sceneSpecRevision: 1,
+      variantOrdinal: 2,
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: "candidates/scene-1/candidate-2.webp"
+    });
+
+    await client.query("BEGIN");
+    let caughtError: Error | undefined;
+    try {
+      await client.query(
+        "UPDATE storyboard_candidates SET variant_ordinal = 3 WHERE candidate_id = $1",
+        [candidate.candidate_id]
+      );
+    } catch (err) {
+      caughtError = err as Error;
+    } finally {
+      await client.query("ROLLBACK");
+    }
+
+    expect(caughtError).toBeDefined();
+    expect(caughtError?.message).toMatch(/storyboard_candidates/i);
+    expect(caughtError?.message).toMatch(/UPDATE/i);
+
+    const checkRes = await client.query<{ variant_ordinal: number }>(
+      "SELECT variant_ordinal FROM storyboard_candidates WHERE candidate_id = $1",
+      [candidate.candidate_id]
+    );
+    expect(checkRes.rows[0]?.variant_ordinal).toBe(2);
+  });
+
+  it("rejects DELETE on storyboard_candidates through the immutability trigger", async () => {
+    const candidate = await insertStoryboardCandidateRecord(client, {
+      sceneId: graph.scene.scene_id,
+      sceneSpecRevision: 1,
+      variantOrdinal: 3,
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: "candidates/scene-1/candidate-3.webp"
+    });
+
+    await client.query("BEGIN");
+    let caughtError: Error | undefined;
+    try {
+      await client.query("DELETE FROM storyboard_candidates WHERE candidate_id = $1", [
+        candidate.candidate_id
+      ]);
+    } catch (err) {
+      caughtError = err as Error;
+    } finally {
+      await client.query("ROLLBACK");
+    }
+
+    expect(caughtError).toBeDefined();
+    expect(caughtError?.message).toMatch(/storyboard_candidates/i);
+    expect(caughtError?.message).toMatch(/DELETE/i);
+
+    const checkRes = await client.query<{ candidate_id: string }>(
+      "SELECT candidate_id FROM storyboard_candidates WHERE candidate_id = $1",
+      [candidate.candidate_id]
+    );
+    expect(checkRes.rows).toHaveLength(1);
+    expect(checkRes.rows[0]?.candidate_id).toBe(candidate.candidate_id);
+  });
+
   it("grants the application role SELECT and INSERT but not UPDATE or DELETE on audit tables", async () => {
     // Check schema usage
     const schemaUsageRes = await client.query<{ has_usage: boolean }>(
@@ -278,6 +349,59 @@ describe("PostgreSQL audit immutability and application-role privileges integrat
     await client.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public;");
     const noRoleApplied = await runMigrations(client, { migrationsDirectory });
     expect(noRoleApplied).toHaveLength(3);
+  });
+
+  it("fails closed when application role has effective UPDATE or DELETE privilege on storyboard_candidates", async () => {
+    // Reset schema to run partial migrations up through 002
+    await client.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public;");
+
+    const tempDir = await mkdtemp(join(tmpdir(), "migration-candidate-priv-"));
+    const srcDir = fileURLToPath(migrationsDirectory);
+    await cp(join(srcDir, "001_baseline.sql"), join(tempDir, "001_baseline.sql"));
+    await cp(join(srcDir, "002_audit_protections.sql"), join(tempDir, "002_audit_protections.sql"));
+    const partialMigrationsDir = pathToFileURL(tempDir + "/");
+
+    try {
+      // Apply baseline migrations 001 and 002
+      await runMigrations(client, {
+        migrationsDirectory: partialMigrationsDir,
+        applicationRole: "orchestrator_app"
+      });
+
+      // Create an application role that inherits mutation privileges on new tables via a group
+      await client.query("DROP ROLE IF EXISTS overprivileged_group;");
+      await client.query("DROP ROLE IF EXISTS overprivileged_app;");
+      await client.query("CREATE ROLE overprivileged_group NOLOGIN;");
+      await client.query("CREATE ROLE overprivileged_app NOLOGIN;");
+      await client.query("GRANT overprivileged_group TO overprivileged_app;");
+      await client.query(
+        "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT UPDATE ON TABLES TO overprivileged_group;"
+      );
+
+      // Now apply migration 003 with the overprivileged application role
+      await expect(
+        runMigrations(client, {
+          migrationsDirectory,
+          applicationRole: "overprivileged_app"
+        })
+      ).rejects.toThrow(
+        /Application role overprivileged_app still has effective UPDATE or DELETE privilege on storyboard_candidates/i
+      );
+    } finally {
+      await client
+        .query(
+          "ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE UPDATE ON TABLES FROM overprivileged_group;"
+        )
+        .catch(() => {});
+      await client
+        .query(
+          "REVOKE ALL ON ALL TABLES IN SCHEMA public FROM overprivileged_app, overprivileged_group;"
+        )
+        .catch(() => {});
+      await client.query("DROP ROLE IF EXISTS overprivileged_app;").catch(() => {});
+      await client.query("DROP ROLE IF EXISTS overprivileged_group;").catch(() => {});
+      await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    }
   });
 
   it("rejects a second generation manifest for the same render job", async () => {
