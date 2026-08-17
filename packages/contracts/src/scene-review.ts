@@ -24,7 +24,8 @@ export const REVIEW_ACTIONS = [
   "lora_tune",
   "reorder",
   "duplicate",
-  "cancel"
+  "cancel",
+  "candidate_select"
 ] as const;
 
 export const SceneStatusSchema = z.enum(SCENE_STATUSES);
