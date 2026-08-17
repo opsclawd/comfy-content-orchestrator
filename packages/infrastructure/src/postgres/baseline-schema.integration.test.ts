@@ -55,11 +55,12 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
   it("migrates an empty PostgreSQL 18.6 database through the baseline", async () => {
     const applied = await runMigrations(client, { migrationsDirectory });
 
-    expect(applied).toHaveLength(4);
+    expect(applied).toHaveLength(5);
     expect(applied[0]?.version).toBe("001");
     expect(applied[1]?.version).toBe("002");
     expect(applied[2]?.version).toBe("003");
     expect(applied[3]?.version).toBe("004");
+    expect(applied[4]?.version).toBe("005");
 
     const schemaRes = await client.query(
       "SELECT version FROM schema_migrations ORDER BY version ASC"
@@ -68,7 +69,8 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       { version: "001" },
       { version: "002" },
       { version: "003" },
-      { version: "004" }
+      { version: "004" },
+      { version: "005" }
     ]);
 
     const tablesRes = await client.query<{ table_name: string }>(
@@ -799,5 +801,45 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
         [candidateRev2.candidate_id, graph.scene.scene_id]
       )
     ).rejects.toThrow();
+  });
+
+  it("persists scene runtime fields including lora configuration, approval metadata, and failure source", async () => {
+    await runMigrations(client, { migrationsDirectory });
+    const graph = await insertRepresentativeGraph(client);
+
+    const approvedAt = new Date("2026-08-17T12:00:00.000Z");
+    const scene = await insertStoryboardSceneRecord(client, {
+      campaignId: graph.campaign.campaign_id,
+      sceneOrder: 3,
+      loraConfigurationId: "lora-carnival-v1",
+      approvedBy: "Thomas Cumberbatch",
+      approvedAt,
+      approvedRevision: 2,
+      failedFrom: "queued"
+    });
+
+    expect(scene.lora_configuration_id).toBe("lora-carnival-v1");
+    expect(scene.approved_by).toBe("Thomas Cumberbatch");
+    expect(scene.approved_at).toEqual(approvedAt);
+    expect(scene.approved_revision).toBe(2);
+    expect(scene.failed_from).toBe("queued");
+
+    const res = await client.query<{
+      lora_configuration_id: string | null;
+      approved_by: string | null;
+      approved_at: Date | null;
+      approved_revision: number | null;
+      failed_from: string | null;
+    }>(
+      `SELECT lora_configuration_id, approved_by, approved_at, approved_revision, failed_from
+       FROM storyboard_scenes WHERE scene_id = $1`,
+      [scene.scene_id]
+    );
+
+    expect(res.rows[0]?.lora_configuration_id).toBe("lora-carnival-v1");
+    expect(res.rows[0]?.approved_by).toBe("Thomas Cumberbatch");
+    expect(res.rows[0]?.approved_at).toEqual(approvedAt);
+    expect(res.rows[0]?.approved_revision).toBe(2);
+    expect(res.rows[0]?.failed_from).toBe("queued");
   });
 });

@@ -58,6 +58,11 @@ export interface StoryboardSceneRecordInput {
   directorNotes?: string | null;
   selectedCandidateId?: string | null;
   selectedCandidateRevision?: number | null;
+  loraConfigurationId?: string | null;
+  approvedBy?: string | null;
+  approvedAt?: Date | string | null;
+  approvedRevision?: number | null;
+  failedFrom?: string | null;
 }
 
 export interface SceneReferenceAssetRecordInput {
@@ -171,6 +176,11 @@ export interface InsertedStoryboardSceneRecord {
   director_notes: string | null;
   selected_candidate_id: string | null;
   selected_candidate_revision: number | null;
+  lora_configuration_id: string | null;
+  approved_by: string | null;
+  approved_at: Date | null;
+  approved_revision: number | null;
+  failed_from: string | null;
   created_at: Date;
   updated_at: Date;
   archived_at: Date | null;
@@ -458,6 +468,13 @@ export async function insertStoryboardSceneRecord(
     input.selectedCandidateId !== undefined ? input.selectedCandidateId : null;
   const selectedCandidateRevision =
     input.selectedCandidateRevision !== undefined ? input.selectedCandidateRevision : null;
+  const loraConfigurationId =
+    input.loraConfigurationId !== undefined ? input.loraConfigurationId : null;
+  const approvedBy = input.approvedBy !== undefined ? input.approvedBy : null;
+  const approvedAt = input.approvedAt !== undefined ? input.approvedAt : null;
+  const approvedRevision =
+    input.approvedRevision !== undefined ? input.approvedRevision : null;
+  const failedFrom = input.failedFrom !== undefined ? input.failedFrom : null;
 
   const res = await client.query<InsertedStoryboardSceneRecord>(
     `
@@ -476,8 +493,13 @@ export async function insertStoryboardSceneRecord(
       draft_storage_object_key,
       director_notes,
       selected_candidate_id,
-      selected_candidate_revision
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      selected_candidate_revision,
+      lora_configuration_id,
+      approved_by,
+      approved_at,
+      approved_revision,
+      failed_from
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
     RETURNING *
     `,
     [
@@ -495,7 +517,12 @@ export async function insertStoryboardSceneRecord(
       draftStorageObjectKey,
       directorNotes,
       selectedCandidateId,
-      selectedCandidateRevision
+      selectedCandidateRevision,
+      loraConfigurationId,
+      approvedBy,
+      approvedAt,
+      approvedRevision,
+      failedFrom
     ]
   );
 
