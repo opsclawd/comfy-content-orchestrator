@@ -455,9 +455,9 @@ LTX_25_720P_5S_V1 (config/render-profiles/LTX_25_720P_5S_V1.json)
   engine: ltx_25
   workflowHash: 94f397eee3ad8b0cee000036119e524e8c7a012b88d79d00b74172df9d9bf539
   modelHashes:
-    clip: 71faee7778e36467362a2bb0364d9f61b0c0f9bc681bca6fdf6446e534f36506 (15.37 GB)
-    unet: 689363bc1ba6110f01fc63eb5ca4e5cf4876b610c14b2d1264c8d488e0b2e8d4 (21.50 GB)
-    vae:  bc9219e27c1543666270eeaa05634563ffea237a3c3bca1be1f2e1df7161bcf7 (1.45 GB)
+    clip: 09a89e084de1a149c3de60cfe9dfd3e5161967eb09eea39e806fcdeffdd568de (15.37 GB)
+    unet: c4279eeff115cbeaca494bd2183e7d768c38fe85a184dc6afbb7159157c44334 (21.50 GB)
+    vae:  685b06ee3d9b2039647698fc4ea33175112462fc374e2777312c907897dfce8d (1.45 GB)
   frames: 97
   steps: 8
   runnerProfile: dynamicvram-offload-v1

@@ -76,6 +76,18 @@ describe("RenderProfileSchema", () => {
     expect(validated).toEqual(LTX_25_720P_5S_V1_PROFILE);
   });
 
+  it("verifies frozen modelHashes strictly match host-validated ltx-cert-run-002 artifact", async () => {
+    const certPath = resolve(
+      fileURLToPath(
+        new URL("../../../certification/ltx-25/ltx-cert-run-002/result.json", import.meta.url)
+      )
+    );
+    const certContent = await readFile(certPath, "utf8");
+    const certJson = JSON.parse(certContent);
+
+    expect(LTX_25_720P_5S_V1_PROFILE.modelHashes).toEqual(certJson.identity.modelSha256);
+  });
+
   it("accepts a compliant FLUX profile", () => {
     const parsed = RenderProfileSchema.parse(measuredFluxFixture);
     expect(parsed).toEqual(measuredFluxFixture);
