@@ -417,4 +417,113 @@ describe("LocalFsGpuLeaseAdapter", () => {
     expect(probeCalls).toEqual([99991]);
     expect(await readFile(`${lockFilePath}.reclaim`, "utf8")).toBeDefined();
   });
+
+  it("retries and acquires the lease when lock file is removed between writeAtomicLock and readHolder", async () => {
+    const lockFilePath = join(tempDir, "gpu.lock");
+    const existingHolder: GpuLeaseHolder = {
+      version: 1,
+      pid: 12345,
+      startedAt: new Date().toISOString(),
+      hostname: "test-host",
+      leaseId: "existing-lease"
+    };
+    await writeFile(lockFilePath, `${JSON.stringify(existingHolder)}\n`, "utf8");
+
+    const adapter = new LocalFsGpuLeaseAdapter({
+      lockFilePath,
+      pid: 4242,
+      hostname: "test-host",
+      createLeaseId: () => "winner-lease"
+    });
+
+    // Simulate lock release immediately after writeAtomicLock fails
+    setTimeout(async () => {
+      try {
+        await rm(lockFilePath, { force: true });
+      } catch {
+        // ignore
+      }
+    }, 15);
+
+    const lease = await adapter.acquireLease();
+    expect(lease.holder.leaseId).toBe("winner-lease");
+    await lease.release();
+  });
+
+  it("retries reclaim guard acquisition when a competing guard is unlinked between writeAtomicLock and readHolder", async () => {
+    const lockFilePath = join(tempDir, "gpu.lock");
+    const staleHolder: GpuLeaseHolder = {
+      version: 1,
+      pid: 99991,
+      startedAt: "2026-08-15T00:00:00.000Z",
+      hostname: "test-host",
+      leaseId: "stale-lease"
+    };
+    await writeFile(lockFilePath, `${JSON.stringify(staleHolder)}\n`, "utf8");
+
+    const reclaimPath = `${lockFilePath}.reclaim`;
+    const transientGuard: GpuLeaseHolder = {
+      version: 1,
+      pid: 88888,
+      startedAt: "2026-08-15T00:00:00.000Z",
+      hostname: "test-host",
+      leaseId: "transient-guard"
+    };
+    await writeFile(reclaimPath, `${JSON.stringify(transientGuard)}\n`, "utf8");
+
+    const adapter = new LocalFsGpuLeaseAdapter({
+      lockFilePath,
+      pid: 4242,
+      hostname: "test-host",
+      createLeaseId: () => "reclaimed-after-race",
+      probeProcess: (pid: number) => (pid === 99991 ? false : true)
+    });
+
+    // Unlink reclaim guard shortly after starting
+    setTimeout(async () => {
+      try {
+        await rm(reclaimPath, { force: true });
+      } catch {
+        // ignore
+      }
+    }, 15);
+
+    const lease = await adapter.acquireLease();
+    expect(lease.holder.leaseId).toBe("reclaimed-after-race");
+    await lease.release();
+  });
+
+  it("handles primary lock vanishing before recheck in reclaimDeadHolder without error", async () => {
+    const lockFilePath = join(tempDir, "gpu.lock");
+    const staleHolder: GpuLeaseHolder = {
+      version: 1,
+      pid: 99991,
+      startedAt: "2026-08-15T00:00:00.000Z",
+      hostname: "test-host",
+      leaseId: "stale-lease"
+    };
+    await writeFile(lockFilePath, `${JSON.stringify(staleHolder)}\n`, "utf8");
+
+    let probeCount = 0;
+    const adapter = new LocalFsGpuLeaseAdapter({
+      lockFilePath,
+      pid: 4242,
+      hostname: "test-host",
+      createLeaseId: () => "acquired-after-vanish",
+      probeProcess: (pid: number) => {
+        if (pid === 99991) {
+          probeCount++;
+          // When first probing stale holder, unlink lock file right before reclaim acquires guard and rechecks
+          rm(lockFilePath, { force: true }).catch(() => {});
+          return false;
+        }
+        return true;
+      }
+    });
+
+    const lease = await adapter.acquireLease();
+    expect(lease.holder.leaseId).toBe("acquired-after-vanish");
+    expect(probeCount).toBe(1);
+    await lease.release();
+  });
 });

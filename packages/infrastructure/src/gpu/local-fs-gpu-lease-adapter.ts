@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { link, open, readFile, stat, unlink } from "node:fs/promises";
+import { link, open, readFile, unlink } from "node:fs/promises";
 import os from "node:os";
 import type { GpuExecutionLeasePort, GpuLeaseHolder, RenderLease } from "@cco/application";
 import { GpuLeaseOwnershipLostError, GpuLeaseUnavailableError } from "@cco/application";
@@ -111,9 +111,18 @@ export class LocalFsGpuLeaseAdapter implements GpuExecutionLeasePort {
     }
   }
 
-  private async readHolder(filePath: string): Promise<GpuLeaseHolder | null> {
+  private async readHolder(filePath: string): Promise<GpuLeaseHolder | null | undefined> {
+    let content: string;
     try {
-      const content = await readFile(filePath, "utf8");
+      content = await readFile(filePath, "utf8");
+    } catch (err: unknown) {
+      if (isErrno(err, "ENOENT")) {
+        return undefined;
+      }
+      return null;
+    }
+
+    try {
       const trimmed = content.trim();
       if (!trimmed) {
         return null;
@@ -171,7 +180,11 @@ export class LocalFsGpuLeaseAdapter implements GpuExecutionLeasePort {
 
       // EEXIST: lock file already exists
       const currentHolder = await this.readHolder(this.lockFilePath);
-      if (!currentHolder) {
+      if (currentHolder === undefined) {
+        // Lock file was released between writeAtomicLock and readHolder: retry acquisition loop
+        continue;
+      }
+      if (currentHolder === null) {
         throw new GpuLeaseUnavailableError(
           `GPU lease at ${this.lockFilePath} is unavailable due to malformed or unreadable metadata`
         );
@@ -220,7 +233,11 @@ export class LocalFsGpuLeaseAdapter implements GpuExecutionLeasePort {
 
         // Reclaim guard already exists: check its liveness
         const currentGuard = await this.readHolder(reclaimPath);
-        if (!currentGuard) {
+        if (currentGuard === undefined) {
+          // Reclaim guard was released/unlinked between writeAtomicLock and readHolder: retry acquiring guard
+          continue;
+        }
+        if (currentGuard === null) {
           throw new GpuLeaseUnavailableError(
             `GPU reclaim guard at ${reclaimPath} is held with malformed metadata`
           );
@@ -254,45 +271,38 @@ export class LocalFsGpuLeaseAdapter implements GpuExecutionLeasePort {
 
     try {
       // Owned reclaim guard: reread and reprobe the primary lock before unlinking
-      let primaryExists = true;
-      try {
-        await stat(this.lockFilePath);
-      } catch (statErr: unknown) {
-        if (isErrno(statErr, "ENOENT")) {
-          primaryExists = false;
-        }
+      const recheckHolder = await this.readHolder(this.lockFilePath);
+      if (recheckHolder === undefined) {
+        // Lock file is already gone (released or unlinked)
+        return;
+      }
+      if (recheckHolder === null) {
+        // File exists on disk but is malformed -> do not unlink!
+        throw new GpuLeaseUnavailableError(
+          `GPU lease at ${this.lockFilePath} contains malformed metadata`
+        );
       }
 
-      if (primaryExists) {
-        const recheckHolder = await this.readHolder(this.lockFilePath);
-        if (!recheckHolder) {
-          // File exists on disk but is malformed -> do not unlink!
-          throw new GpuLeaseUnavailableError(
-            `GPU lease at ${this.lockFilePath} contains malformed metadata`
-          );
-        }
+      if (recheckHolder.hostname !== this.hostname) {
+        throw new GpuLeaseUnavailableError(
+          `GPU lease at ${this.lockFilePath} is currently held by process on host ${recheckHolder.hostname} (PID ${recheckHolder.pid})`,
+          recheckHolder
+        );
+      }
 
-        if (recheckHolder.hostname !== this.hostname) {
-          throw new GpuLeaseUnavailableError(
-            `GPU lease at ${this.lockFilePath} is currently held by process on host ${recheckHolder.hostname} (PID ${recheckHolder.pid})`,
-            recheckHolder
-          );
-        }
+      const stillLive = this.isProcessLive(recheckHolder.pid);
+      if (stillLive) {
+        throw new GpuLeaseUnavailableError(
+          `GPU lease at ${this.lockFilePath} is currently held by live PID ${recheckHolder.pid}`,
+          recheckHolder
+        );
+      }
 
-        const stillLive = this.isProcessLive(recheckHolder.pid);
-        if (stillLive) {
-          throw new GpuLeaseUnavailableError(
-            `GPU lease at ${this.lockFilePath} is currently held by live PID ${recheckHolder.pid}`,
-            recheckHolder
-          );
-        }
-
-        try {
-          await unlink(this.lockFilePath);
-        } catch (unlinkErr: unknown) {
-          if (!isErrno(unlinkErr, "ENOENT")) {
-            throw unlinkErr;
-          }
+      try {
+        await unlink(this.lockFilePath);
+      } catch (unlinkErr: unknown) {
+        if (!isErrno(unlinkErr, "ENOENT")) {
+          throw unlinkErr;
         }
       }
     } finally {
