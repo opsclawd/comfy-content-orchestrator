@@ -13,4 +13,41 @@ implement-step-history-*.json
 ai/
 /validate/
 
-
+# Orchestrator run artifacts. The orchestrator writes these into the worktree
+# root on every phase and rewrites them on every review/fix iteration, so once
+# tracked they reappear in each commit and no review loop can converge.
+# Hiding them in .git/info/exclude is not enough: that file is repo-local and
+# invisible to CI, to prettier, and to `git add -A`.
+/code-review.md
+/review.md
+/review-triage.md
+/review-fix-plan.json
+/review-task-manifest.json
+/review-loop-history.json
+/implement-step-history-*.json
+/task-manifest.json
+/task-context-step-*.md
+/implementation-log*.md
+/arbiter-result.json
+/compound.md
+/compound-draft.md
+/design.md
+/plan.md
+/plan-fix-result.json
+/plan-review-findings.md
+/prompt.md
+/issue.md
+/issue-comments.md
+/result.json
+/fix-result*.json
+/quality-review-result*.json
+/spec-review-result*.json
+/validation.headsha
+/validation.result
+/fix-validate-done.marker
+/plan-review-passed.marker
+/pr-summary.md
+/pr-url.txt
+/*.patch
+/*-diff.txt
+/diff.txt
