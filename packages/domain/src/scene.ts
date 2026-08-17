@@ -269,6 +269,8 @@ export class Scene {
     this.#configuration = frozenConfig;
     this.#specRevision = newRevision;
     this.#status = to;
+    this.#selectedCandidateId = undefined;
+    this.#selectedCandidateRevision = undefined;
     if (from === "approved") {
       this.#approval = undefined;
     }
@@ -436,7 +438,11 @@ export class Scene {
       "requestReroll",
       ["director_review"],
       "generating_candidates",
-      "reroll_requested"
+      "reroll_requested",
+      () => {
+        this.#selectedCandidateId = undefined;
+        this.#selectedCandidateRevision = undefined;
+      }
     );
   }
 

@@ -1423,5 +1423,50 @@ describe("Scene domain contracts", () => {
       });
       expect(scene.snapshot().selectedCandidateId).toBe("candidate-1");
     });
+
+    it("configuration updates clear selected candidate and prevent subsequent approval without re-selection", () => {
+      const scene = createReviewScene();
+      scene.selectCandidate("candidate-1" as CandidateId, scene.snapshot().specRevision, scene.id);
+      expect(scene.snapshot().selectedCandidateId).toBe("candidate-1");
+
+      scene.updatePrompt("new prompt");
+      const snapshot = scene.snapshot();
+      expect(snapshot.selectedCandidateId).toBeUndefined();
+      expect(snapshot.selectedCandidateRevision).toBeUndefined();
+      expect("selectedCandidateId" in snapshot).toBe(false);
+      expect("selectedCandidateRevision" in snapshot).toBe(false);
+
+      // Attempting to approve now must fail because selection was cleared
+      expect(() =>
+        scene.approve({ approvedBy: "test", approvedAt: "2024-01-01T00:00:00Z" })
+      ).toThrow(InvalidTransitionError);
+    });
+
+    it("requestReroll clears selected candidate and prevents approval until re-selected", () => {
+      const scene = createReviewScene();
+      scene.selectCandidate("candidate-1" as CandidateId, scene.snapshot().specRevision, scene.id);
+      scene.requestReroll();
+
+      const snapshot = scene.snapshot();
+      expect(snapshot.status).toBe("generating_candidates");
+      expect(snapshot.selectedCandidateId).toBeUndefined();
+      expect(snapshot.selectedCandidateRevision).toBeUndefined();
+    });
+
+    it("rejectQA preserves selected candidate", () => {
+      const scene = createReviewScene();
+      scene.selectCandidate("candidate-1" as CandidateId, scene.snapshot().specRevision, scene.id);
+      scene.approve({ approvedBy: "test", approvedAt: "2024-01-01T00:00:00Z" });
+      scene.queueForProduction();
+      scene.startRendering();
+      scene.submitForQA();
+      scene.rejectQA();
+
+      const snapshot = scene.snapshot();
+      expect(snapshot.status).toBe("director_review");
+      expect(snapshot.approval).toBeUndefined();
+      expect(snapshot.selectedCandidateId).toBe("candidate-1");
+      expect(snapshot.selectedCandidateRevision).toBe(1);
+    });
   });
 });
