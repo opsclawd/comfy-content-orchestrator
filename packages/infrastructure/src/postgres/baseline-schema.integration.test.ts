@@ -451,6 +451,33 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
         [campaign.campaign_id, 99, "wide", "test", "invalid_status_enum_val"]
       )
     ).rejects.toThrow();
+
+    // 11. Duplicate request_hash_sha256 on review_events (uq_review_events_request_hash)
+    const eventHash = "c".repeat(64);
+    await insertReviewEventRecord(client, {
+      sceneId: scene.scene_id,
+      requestHashSha256: eventHash
+    });
+    await expect(
+      insertReviewEventRecord(client, {
+        sceneId: scene.scene_id,
+        requestHashSha256: eventHash
+      })
+    ).rejects.toThrow();
+
+    // 12. Invalid expected_spec_revision / resulting_spec_revision (<= 0)
+    await expect(
+      insertReviewEventRecord(client, {
+        sceneId: scene.scene_id,
+        expectedSpecRevision: 0
+      })
+    ).rejects.toThrow();
+    await expect(
+      insertReviewEventRecord(client, {
+        sceneId: scene.scene_id,
+        resultingSpecRevision: -1
+      })
+    ).rejects.toThrow();
   });
 
   it("creates the required partial unique and lookup indexes", async () => {
@@ -552,5 +579,17 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
     expect(res.rows[0]?.expected_spec_revision).toBe(1);
     expect(res.rows[0]?.resulting_spec_revision).toBe(1);
     expect(res.rows[0]?.request_hash_sha256).toBe(requestHash);
+
+    // Enforce idempotency: attempting to insert duplicate request_hash_sha256 throws
+    await expect(
+      insertReviewEventRecord(client, {
+        sceneId: graph.scene.scene_id,
+        action: "candidate_select",
+        expectedSpecRevision: 1,
+        resultingSpecRevision: 1,
+        requestHashSha256: requestHash,
+        mutationPayload: { selectedCandidateId: "01950c46-9e90-7d3d-82d2-8f1d3c000001" }
+      })
+    ).rejects.toThrow();
   });
 });

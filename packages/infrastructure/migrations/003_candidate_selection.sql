@@ -9,9 +9,15 @@ ALTER TYPE review_action_enum ADD VALUE IF NOT EXISTS 'candidate_select';
 -- ---------------------------------------------------------------------------
 
 ALTER TABLE review_events
-  ADD COLUMN IF NOT EXISTS expected_spec_revision INT,
-  ADD COLUMN IF NOT EXISTS resulting_spec_revision INT,
+  ADD COLUMN IF NOT EXISTS expected_spec_revision INT
+    CHECK (expected_spec_revision > 0),
+  ADD COLUMN IF NOT EXISTS resulting_spec_revision INT
+    CHECK (resulting_spec_revision > 0),
   ADD COLUMN IF NOT EXISTS request_hash_sha256 VARCHAR(64);
+
+ALTER TABLE review_events
+  ADD CONSTRAINT uq_review_events_request_hash
+  UNIQUE (request_hash_sha256);
 
 -- ---------------------------------------------------------------------------
 -- STORYBOARD SCENES CANDIDATE SELECTION
