@@ -1,4 +1,5 @@
-import type { CandidateId } from "./storyboard-candidate.js";
+declare const CandidateIdBrand: unique symbol;
+export type CandidateId = string & { readonly [CandidateIdBrand]: true };
 
 export const SCENE_STATUSES = [
   "draft_pending",

@@ -51,11 +51,7 @@ export class ReviewSceneUseCases {
       "candidate_select",
       { candidateId: input.candidateId, candidateRevision: input.candidateRevision },
       (scene) =>
-        scene.selectCandidate(
-          input.candidateId,
-          input.candidateRevision,
-          input.sceneId as SceneId
-        )
+        scene.selectCandidate(input.candidateId, input.candidateRevision, input.sceneId as SceneId)
     );
   }
 

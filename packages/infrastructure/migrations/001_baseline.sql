@@ -54,7 +54,8 @@ CREATE TYPE review_action_enum AS ENUM (
   'lora_tune',
   'reorder',
   'duplicate',
-  'cancel'
+  'cancel',
+  'candidate_select'
 );
 
 -- ---------------------------------------------------------------------------

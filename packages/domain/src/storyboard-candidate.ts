@@ -1,7 +1,6 @@
-import type { SceneId } from "./scene.js";
+import type { CandidateId, SceneId } from "./scene.js";
 
-declare const CandidateIdBrand: unique symbol;
-export type CandidateId = string & { readonly [CandidateIdBrand]: true };
+export type { CandidateId };
 
 export interface StoryboardCandidate {
   readonly id: CandidateId;
