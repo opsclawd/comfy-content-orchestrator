@@ -411,6 +411,14 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       })
     ).rejects.toThrow();
 
+    await expect(
+      insertStoryboardSceneRecord(client, {
+        campaignId: campaign.campaign_id,
+        sceneOrder: 2,
+        specRevision: 0
+      })
+    ).rejects.toThrow();
+
     // 5. Invalid render_jobs retry_count (< 0) or retry_count > max_retries
     await expect(
       insertRenderJobRecord(client, {
@@ -717,7 +725,10 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       [candidate.candidate_id, graph.scene.scene_id]
     );
 
-    const res = await client.query<{ selected_candidate_id: string; selected_candidate_revision: number }>(
+    const res = await client.query<{
+      selected_candidate_id: string;
+      selected_candidate_revision: number;
+    }>(
       "SELECT selected_candidate_id, selected_candidate_revision FROM storyboard_scenes WHERE scene_id = $1",
       [graph.scene.scene_id]
     );

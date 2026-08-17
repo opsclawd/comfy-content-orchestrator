@@ -52,6 +52,7 @@ export interface StoryboardSceneRecordInput {
   audioFxPrompt?: string | null;
   engineAssigned?: string;
   status?: string;
+  specRevision?: number;
   draftStorageBucket?: string | null;
   draftStorageObjectKey?: string | null;
   directorNotes?: string | null;
@@ -442,6 +443,7 @@ export async function insertStoryboardSceneRecord(
       : "Distant steelpan resonance, gentle breeze";
   const engineAssigned = input.engineAssigned ?? "ltx_25";
   const status = input.status ?? "draft_pending";
+  const specRevision = input.specRevision !== undefined ? input.specRevision : 1;
   const draftStorageBucket =
     input.draftStorageBucket !== undefined ? input.draftStorageBucket : "godzspeed-temp";
   const draftStorageObjectKey =
@@ -469,12 +471,13 @@ export async function insertStoryboardSceneRecord(
       audio_fx_prompt,
       engine_assigned,
       status,
+      spec_revision,
       draft_storage_bucket,
       draft_storage_object_key,
       director_notes,
       selected_candidate_id,
       selected_candidate_revision
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
     RETURNING *
     `,
     [
@@ -487,6 +490,7 @@ export async function insertStoryboardSceneRecord(
       audioFxPrompt,
       engineAssigned,
       status,
+      specRevision,
       draftStorageBucket,
       draftStorageObjectKey,
       directorNotes,
