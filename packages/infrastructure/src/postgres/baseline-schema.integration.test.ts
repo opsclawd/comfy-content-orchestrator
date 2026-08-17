@@ -503,97 +503,6 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
         resultingSpecRevision: -1
       })
     ).rejects.toThrow();
-
-    // 13. Invalid storyboard_candidates variant_ordinal (<= 0) and scene_spec_revision (<= 0)
-    await expect(
-      insertStoryboardCandidateRecord(client, {
-        sceneId: scene.scene_id,
-        variantOrdinal: 0
-      })
-    ).rejects.toThrow();
-
-    await expect(
-      insertStoryboardCandidateRecord(client, {
-        sceneId: scene.scene_id,
-        variantOrdinal: -1
-      })
-    ).rejects.toThrow();
-
-    await expect(
-      insertStoryboardCandidateRecord(client, {
-        sceneId: scene.scene_id,
-        sceneSpecRevision: 0
-      })
-    ).rejects.toThrow();
-
-    // 14. Duplicate (scene_id, scene_spec_revision, variant_ordinal) on storyboard_candidates
-    await insertStoryboardCandidateRecord(client, {
-      sceneId: scene.scene_id,
-      sceneSpecRevision: 1,
-      variantOrdinal: 1,
-      storageObjectKey: "candidates/scene_test/rev1_var1.webp"
-    });
-    await expect(
-      insertStoryboardCandidateRecord(client, {
-        sceneId: scene.scene_id,
-        sceneSpecRevision: 1,
-        variantOrdinal: 1,
-        storageObjectKey: "candidates/scene_test/rev1_var1_dup.webp"
-      })
-    ).rejects.toThrow();
-
-    // 15. Duplicate (storage_bucket, storage_object_key) on storyboard_candidates
-    await expect(
-      insertStoryboardCandidateRecord(client, {
-        sceneId: scene.scene_id,
-        sceneSpecRevision: 1,
-        variantOrdinal: 2,
-        storageBucket: "godzspeed-temp",
-        storageObjectKey: "candidates/scene_test/rev1_var1.webp"
-      })
-    ).rejects.toThrow();
-
-    // 16. Invalid candidate selection pairs on storyboard_scenes (one null, one non-null)
-    const validCandidate = await insertStoryboardCandidateRecord(client, {
-      sceneId: scene.scene_id,
-      sceneSpecRevision: 1,
-      variantOrdinal: 3,
-      storageObjectKey: "candidates/scene_test/rev1_var3.webp"
-    });
-
-    await expect(
-      client.query(
-        "UPDATE storyboard_scenes SET selected_candidate_id = $1, selected_candidate_revision = NULL WHERE scene_id = $2",
-        [validCandidate.candidate_id, scene.scene_id]
-      )
-    ).rejects.toThrow();
-
-    await expect(
-      client.query(
-        "UPDATE storyboard_scenes SET selected_candidate_id = NULL, selected_candidate_revision = 1 WHERE scene_id = $2",
-        [scene.scene_id]
-      )
-    ).rejects.toThrow();
-
-    // 17. Selected candidate revision must match scene spec_revision (storyboard_scene_selected_revision_current)
-    await expect(
-      client.query(
-        "UPDATE storyboard_scenes SET selected_candidate_id = $1, selected_candidate_revision = 2 WHERE scene_id = $2",
-        [validCandidate.candidate_id, scene.scene_id]
-      )
-    ).rejects.toThrow();
-
-    // 18. Foreign key constraint fk_scene_selected_candidate_revision rejects mismatched scene_id
-    const otherScene = await insertStoryboardSceneRecord(client, {
-      campaignId: campaign.campaign_id,
-      sceneOrder: 99
-    });
-    await expect(
-      client.query(
-        "UPDATE storyboard_scenes SET selected_candidate_id = $1, selected_candidate_revision = 1 WHERE scene_id = $2",
-        [validCandidate.candidate_id, otherScene.scene_id]
-      )
-    ).rejects.toThrow();
   });
 
   it("creates the required partial unique and lookup indexes", async () => {
@@ -706,6 +615,152 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
         requestHashSha256: requestHash,
         mutationPayload: { selectedCandidateId: "01950c46-9e90-7d3d-82d2-8f1d3c000001" }
       })
+    ).rejects.toThrow();
+  });
+
+  it("enforces storyboard_candidates uniqueness, positive revision and variant ordinal checks", async () => {
+    await runMigrations(client, { migrationsDirectory });
+    const graph = await insertRepresentativeGraph(client);
+
+    const scene = await insertStoryboardSceneRecord(client, {
+      campaignId: graph.campaign.campaign_id,
+      sceneOrder: 2
+    });
+
+    const candidate = await insertStoryboardCandidateRecord(client, {
+      sceneId: scene.scene_id,
+      sceneSpecRevision: 1,
+      variantOrdinal: 1,
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: "candidates/s2/rev1_var1.webp"
+    });
+    expect(candidate.candidate_id).toBeDefined();
+
+    // 1. Non-positive scene_spec_revision (<= 0)
+    await expect(
+      insertStoryboardCandidateRecord(client, {
+        sceneId: scene.scene_id,
+        sceneSpecRevision: 0,
+        variantOrdinal: 2,
+        storageBucket: "godzspeed-temp",
+        storageObjectKey: "candidates/s2/rev0_var2.webp"
+      })
+    ).rejects.toThrow();
+
+    // 2. Non-positive variant_ordinal (<= 0)
+    await expect(
+      insertStoryboardCandidateRecord(client, {
+        sceneId: scene.scene_id,
+        sceneSpecRevision: 1,
+        variantOrdinal: 0,
+        storageBucket: "godzspeed-temp",
+        storageObjectKey: "candidates/s2/rev1_var0.webp"
+      })
+    ).rejects.toThrow();
+
+    // 3. Duplicate (scene_id, scene_spec_revision, variant_ordinal)
+    await expect(
+      insertStoryboardCandidateRecord(client, {
+        sceneId: scene.scene_id,
+        sceneSpecRevision: 1,
+        variantOrdinal: 1,
+        storageBucket: "godzspeed-temp",
+        storageObjectKey: "candidates/s2/rev1_var1_dup.webp"
+      })
+    ).rejects.toThrow();
+
+    // 4. Duplicate (storage_bucket, storage_object_key)
+    await expect(
+      insertStoryboardCandidateRecord(client, {
+        sceneId: scene.scene_id,
+        sceneSpecRevision: 1,
+        variantOrdinal: 2,
+        storageBucket: "godzspeed-temp",
+        storageObjectKey: "candidates/s2/rev1_var1.webp"
+      })
+    ).rejects.toThrow();
+  });
+
+  it("enforces candidate selection pairing and revision matching on storyboard_scenes", async () => {
+    await runMigrations(client, { migrationsDirectory });
+    const graph = await insertRepresentativeGraph(client);
+
+    const candidate = graph.storyboardCandidate;
+
+    // 1. Selected candidate ID without selected candidate revision -> CHECK violation
+    await expect(
+      client.query(
+        "UPDATE storyboard_scenes SET selected_candidate_id = $1, selected_candidate_revision = NULL WHERE scene_id = $2",
+        [candidate.candidate_id, graph.scene.scene_id]
+      )
+    ).rejects.toThrow();
+
+    // 2. Selected candidate revision without selected candidate ID -> CHECK violation
+    await expect(
+      client.query(
+        "UPDATE storyboard_scenes SET selected_candidate_id = NULL, selected_candidate_revision = 1 WHERE scene_id = $2",
+        [graph.scene.scene_id]
+      )
+    ).rejects.toThrow();
+
+    // 3. Selected candidate revision does not equal spec_revision -> CHECK violation
+    await expect(
+      client.query(
+        "UPDATE storyboard_scenes SET selected_candidate_id = $1, selected_candidate_revision = 2 WHERE scene_id = $2",
+        [candidate.candidate_id, graph.scene.scene_id]
+      )
+    ).rejects.toThrow();
+
+    // 4. Valid selection -> succeeds
+    await client.query(
+      "UPDATE storyboard_scenes SET selected_candidate_id = $1, selected_candidate_revision = 1 WHERE scene_id = $2",
+      [candidate.candidate_id, graph.scene.scene_id]
+    );
+
+    const res = await client.query<{ selected_candidate_id: string; selected_candidate_revision: number }>(
+      "SELECT selected_candidate_id, selected_candidate_revision FROM storyboard_scenes WHERE scene_id = $1",
+      [graph.scene.scene_id]
+    );
+    expect(res.rows[0]?.selected_candidate_id).toBe(candidate.candidate_id);
+    expect(res.rows[0]?.selected_candidate_revision).toBe(1);
+  });
+
+  it("rejects selecting a candidate belonging to a different scene or different revision via foreign key", async () => {
+    await runMigrations(client, { migrationsDirectory });
+    const graph = await insertRepresentativeGraph(client);
+
+    const scene2 = await insertStoryboardSceneRecord(client, {
+      campaignId: graph.campaign.campaign_id,
+      sceneOrder: 2
+    });
+
+    const candidateScene2 = await insertStoryboardCandidateRecord(client, {
+      sceneId: scene2.scene_id,
+      sceneSpecRevision: 1,
+      variantOrdinal: 1
+    });
+
+    // Attempt to select candidateScene2 on scene1 -> FK violation
+    await expect(
+      client.query(
+        "UPDATE storyboard_scenes SET selected_candidate_id = $1, selected_candidate_revision = 1 WHERE scene_id = $2",
+        [candidateScene2.candidate_id, graph.scene.scene_id]
+      )
+    ).rejects.toThrow();
+
+    // Insert candidate for scene1 at revision 2
+    const candidateRev2 = await insertStoryboardCandidateRecord(client, {
+      sceneId: graph.scene.scene_id,
+      sceneSpecRevision: 2,
+      variantOrdinal: 1
+    });
+
+    // Attempt to select candidateRev2 while scene1 is at spec_revision 1 -> FK / CHECK violation
+    await expect(
+      client.query(
+        "UPDATE storyboard_scenes SET selected_candidate_id = $1, selected_candidate_revision = 1 WHERE scene_id = $2",
+        [candidateRev2.candidate_id, graph.scene.scene_id]
+      )
     ).rejects.toThrow();
   });
 });
