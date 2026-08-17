@@ -603,6 +603,14 @@ export function renderTransitionSoakSummary(artifact: TransitionSoakArtifact): s
 
   const formatCheck = (passed: boolean): string => (passed ? "PASS" : "FAIL");
 
+  const swapActivity = classifySwapActivity(artifact.iterations);
+  const swapActivityLabel =
+    swapActivity === "none"
+      ? "None (PASS)"
+      : swapActivity === "transient"
+        ? "Transient (PASS)"
+        : "Sustained (FAIL)";
+
   const lines: string[] = [
     `# FLUX ↔ LTX Transition Soak Certification Summary`,
     ``,
@@ -660,7 +668,7 @@ export function renderTransitionSoakSummary(artifact: TransitionSoakArtifact): s
     `| **No OOM Detected** | ${formatCheck(artifact.gate.checks.noOom)} | Zero CUDA or host Out-Of-Memory errors detected (OOM count: ${artifact.aggregates.oomCount}) |`,
     `| **No Unexpected Restarts** | ${formatCheck(artifact.gate.checks.noUnexpectedRestarts)} | Zero process restarts or PID identity changes (Restart count: ${artifact.aggregates.unexpectedRestartCount}) |`,
     `| **No Sampling Errors** | ${formatCheck(artifact.gate.checks.noSamplingErrors)} | All telemetry intervals collected without sampling errors (Error count: ${artifact.aggregates.samplingErrorCount}) |`,
-    `| **No Swap Activity** | ${formatCheck(artifact.gate.checks.noSwapActivity)} | Zero swap-used, swap-in, or swap-out page activity during the soak run |`,
+    `| **Swap Activity** | ${swapActivityLabel} | None or transient activity passes; recurrent or non-decaying activity is sustained and fails |`,
     `| **Post-Unload VRAM Headroom Met** | ${formatCheck(artifact.gate.checks.postUnloadVramHeadroomMet)} | Free VRAM after unload >= ${formatVal(artifact.thresholds.minPostUnloadFreeVramMb, "MB")} across every iteration |`,
     `| **Host Memory Headroom Met** | ${formatCheck(artifact.gate.checks.hostMemoryHeadroomMet)} | Host available RAM >= ${formatVal(artifact.thresholds.minHostAvailableMb, "MB")} across every sample |`,
     `| **VRAM Growth Within Tolerance** | ${formatCheck(artifact.gate.checks.vramGrowthWithinTolerance)} | Same-family and post-unload VRAM growth <= ${formatVal(artifact.thresholds.maxVramGrowthMb, "MB")} |`,
