@@ -12,6 +12,7 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _seededScenes: Map<SceneId, Scene>;
   private readonly _seededCandidates: Map<CandidateId, StoryboardCandidate>;
   private readonly _savedScenes: Scene[] = [];
+  private readonly _savedCandidates: StoryboardCandidate[] = [];
   private readonly _reviewEvents: ReviewEvent[] = [];
 
   constructor(
@@ -70,6 +71,10 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     return this._savedScenes;
   }
 
+  get savedCandidates(): readonly StoryboardCandidate[] {
+    return this._savedCandidates;
+  }
+
   get reviewEvents(): readonly ReviewEvent[] {
     return this._reviewEvents;
   }
@@ -77,6 +82,7 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
   async execute<TResult>(work: (context: UnitOfWorkContext) => Promise<TResult>): Promise<TResult> {
     const stagedScenes: Scene[] = [];
     const stagedReviewEvents: ReviewEvent[] = [];
+    const stagedCandidates: StoryboardCandidate[] = [];
 
     const scopedScenes: SceneRepository = {
       findById: async (sceneId: SceneId): Promise<Scene | undefined> => {
@@ -90,6 +96,17 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     const scopedCandidates: StoryboardCandidateRepository = {
       findById: async (candidateId: CandidateId): Promise<StoryboardCandidate | undefined> => {
         return this._seededCandidates.get(candidateId);
+      },
+      save: async (candidate: StoryboardCandidate): Promise<void> => {
+        stagedCandidates.push(candidate);
+      },
+      findBySceneRevision: async (
+        sceneId: string,
+        revision: number
+      ): Promise<readonly StoryboardCandidate[]> => {
+        return Array.from(this._seededCandidates.values()).filter(
+          (c) => c.sceneId === sceneId && c.specRevision === revision
+        );
       }
     };
 
@@ -109,8 +126,12 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
 
     this._savedScenes.push(...stagedScenes);
     this._reviewEvents.push(...stagedReviewEvents);
+    this._savedCandidates.push(...stagedCandidates);
     for (const scene of stagedScenes) {
       this._seededScenes.set(scene.id, scene);
+    }
+    for (const candidate of stagedCandidates) {
+      this._seededCandidates.set(candidate.id, candidate);
     }
 
     return result;

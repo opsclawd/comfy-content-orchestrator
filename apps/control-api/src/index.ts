@@ -2,7 +2,6 @@ import {
   ProgressSceneProductionUseCases,
   ReviewSceneUseCases,
   type RenderEnginePort,
-  type StoryboardCandidateRepository,
   type UnitOfWork
 } from "@cco/application";
 
@@ -10,7 +9,6 @@ export const controlApiName = "control-api";
 
 export interface ControlApiDependencies {
   readonly uow: UnitOfWork;
-  readonly candidateRepository: StoryboardCandidateRepository;
   readonly renderEngine?: RenderEnginePort;
 }
 
@@ -27,7 +25,7 @@ export interface ControlApiContainer {
 export function createControlApiContainer(
   dependencies: ControlApiDependencies
 ): ControlApiContainer {
-  const reviewScene = new ReviewSceneUseCases(dependencies.uow, dependencies.candidateRepository);
+  const reviewScene = new ReviewSceneUseCases(dependencies.uow);
   const progressSceneProduction = new ProgressSceneProductionUseCases(
     dependencies.uow,
     dependencies.renderEngine

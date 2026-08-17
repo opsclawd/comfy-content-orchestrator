@@ -1,6 +1,5 @@
 import { ReviewEventSchema, type ReviewAction } from "@cco/contracts";
 import type { CandidateId, Scene, SceneId, SceneTransition } from "@cco/domain";
-import type { StoryboardCandidateRepository } from "../ports/storyboard-candidate-repository.js";
 import type { UnitOfWork } from "../ports/unit-of-work.js";
 import { CandidateNotFoundError } from "./candidate-not-found-error.js";
 import { SceneNotFoundError } from "./scene-not-found-error.js";
@@ -45,15 +44,11 @@ export interface UpdateLoraInput extends ReviewAuditInput {
 }
 
 export class ReviewSceneUseCases {
-  constructor(
-    private readonly uow: UnitOfWork,
-    private readonly candidateRepository?: StoryboardCandidateRepository
-  ) {}
+  constructor(private readonly uow: UnitOfWork) {}
 
   async selectCandidate(input: SelectCandidateInput): Promise<void> {
     await this.uow.execute(async (context) => {
-      const candidateRepo = this.candidateRepository ?? context.candidates;
-      const candidate = await candidateRepo.findById(input.candidateId);
+      const candidate = await context.candidates.findById(input.candidateId);
       if (candidate === undefined) {
         throw new CandidateNotFoundError(input.candidateId);
       }
