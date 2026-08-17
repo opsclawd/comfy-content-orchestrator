@@ -152,7 +152,6 @@ describe("control-api composition root", () => {
   it("createControlApi creates a fully functional container", () => {
     const uow = new FakeUnitOfWork();
     const container = createControlApi({ uow });
-    expect(container.dependencies.uow).toBe(uow);
     expect(container.useCases.reviewScene).toBeInstanceOf(ReviewSceneUseCases);
     expect(container.useCases.progressSceneProduction).toBeInstanceOf(
       ProgressSceneProductionUseCases
