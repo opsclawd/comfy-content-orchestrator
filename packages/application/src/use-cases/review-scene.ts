@@ -10,6 +10,9 @@ export interface ReviewAuditInput {
   readonly reviewerName: string;
   readonly occurredAt: string;
   readonly directorNotes?: string;
+  readonly expectedSpecRevision?: number;
+  readonly resultingSpecRevision?: number;
+  readonly requestHashSha256?: string;
 }
 
 export type ApproveSceneInput = ReviewAuditInput;
@@ -77,6 +80,15 @@ export class ReviewSceneUseCases {
         },
         priorSceneStatus,
         resultingSceneStatus: transition.to,
+        ...(input.expectedSpecRevision !== undefined
+          ? { expectedSpecRevision: input.expectedSpecRevision }
+          : {}),
+        ...(input.resultingSpecRevision !== undefined
+          ? { resultingSpecRevision: input.resultingSpecRevision }
+          : {}),
+        ...(input.requestHashSha256 !== undefined
+          ? { requestHashSha256: input.requestHashSha256 }
+          : {}),
         occurredAt: input.occurredAt
       });
 
@@ -175,6 +187,15 @@ export class ReviewSceneUseCases {
         mutationPayload: payload,
         priorSceneStatus,
         resultingSceneStatus: transition.to,
+        ...(input.expectedSpecRevision !== undefined
+          ? { expectedSpecRevision: input.expectedSpecRevision }
+          : {}),
+        ...(input.resultingSpecRevision !== undefined
+          ? { resultingSpecRevision: input.resultingSpecRevision }
+          : {}),
+        ...(input.requestHashSha256 !== undefined
+          ? { requestHashSha256: input.requestHashSha256 }
+          : {}),
         occurredAt: input.occurredAt
       });
       await context.reviewEvents.append(event);

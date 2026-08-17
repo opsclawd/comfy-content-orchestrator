@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
 import { Pool, type PoolClient } from "pg";
 import { runMigrations } from "./migration-runner.js";
 import {
@@ -161,5 +161,101 @@ describe("PostgreSQL migration runner integration", () => {
     await expect(runMigrations(client, { migrationsDirectory: missingDir })).rejects.toThrow(
       /missing from filesystem/i
     );
+  });
+
+  it("upgrades a database with existing Sprint 1 data (001 and 002) through candidate selection (003) and review idempotency (004) without data loss or corruption", async () => {
+    const migrationsRepoDir = new URL("../../migrations/", import.meta.url);
+    const m001 = await readFile(new URL("001_baseline.sql", migrationsRepoDir), "utf-8");
+    const m002 = await readFile(new URL("002_audit_protections.sql", migrationsRepoDir), "utf-8");
+    const m003 = await readFile(new URL("003_candidate_selection.sql", migrationsRepoDir), "utf-8");
+    const m004 = await readFile(
+      new URL("004_review_events_idempotency.sql", migrationsRepoDir),
+      "utf-8"
+    );
+
+    const stageDir = await createTempMigrationDir({
+      "001_baseline.sql": m001,
+      "002_audit_protections.sql": m002
+    });
+
+    // Migrate to Sprint 1 baseline
+    const stage1Applied = await runMigrations(client, { migrationsDirectory: stageDir });
+    expect(stage1Applied).toHaveLength(2);
+
+    // Insert Sprint 1 baseline data
+    const clientRes = await client.query<{ client_id: string }>(
+      "INSERT INTO clients (company_name) VALUES ('Upgrade Test Client') RETURNING client_id"
+    );
+    const clientId = clientRes.rows[0]!.client_id;
+
+    const campRes = await client.query<{ campaign_id: string }>(
+      "INSERT INTO campaigns (client_id, title) VALUES ($1, 'Upgrade Campaign') RETURNING campaign_id",
+      [clientId]
+    );
+    const campaignId = campRes.rows[0]!.campaign_id;
+
+    const sceneRes = await client.query<{ scene_id: string }>(
+      "INSERT INTO storyboard_scenes (campaign_id, scene_order, shot_type, visual_description) VALUES ($1, 1, 'wide', 'Sunrise over the hills') RETURNING scene_id",
+      [campaignId]
+    );
+    const sceneId = sceneRes.rows[0]!.scene_id;
+
+    // Now introduce 003 into the directory (Sprint 1.5-01 baseline)
+    await writeFile(join(fileURLToPath(stageDir), "003_candidate_selection.sql"), m003, "utf-8");
+
+    // Run forward migration for 003
+    const stage2Applied = await runMigrations(client, { migrationsDirectory: stageDir });
+    expect(stage2Applied).toHaveLength(1);
+    expect(stage2Applied[0]?.version).toBe("003");
+
+    // Verify pre-existing scene upgraded with defaults
+    const sceneCheck = await client.query<{
+      spec_revision: number;
+      selected_candidate_id: string | null;
+      selected_candidate_revision: number | null;
+    }>(
+      "SELECT spec_revision, selected_candidate_id, selected_candidate_revision FROM storyboard_scenes WHERE scene_id = $1",
+      [sceneId]
+    );
+
+    expect(sceneCheck.rows[0]?.spec_revision).toBe(1);
+    expect(sceneCheck.rows[0]?.selected_candidate_id).toBeNull();
+    expect(sceneCheck.rows[0]?.selected_candidate_revision).toBeNull();
+
+    // Insert candidate for upgraded scene
+    const candRes = await client.query<{ candidate_id: string }>(
+      `INSERT INTO storyboard_candidates (
+        scene_id, scene_spec_revision, variant_ordinal, storage_bucket, storage_object_key, content_hash_sha256
+      ) VALUES ($1, 1, 1, 'upgrade-bucket', 'upgrade-key.webp', $2) RETURNING candidate_id`,
+      [sceneId, "b".repeat(64)]
+    );
+    const candidateId = candRes.rows[0]!.candidate_id;
+
+    // Select the candidate on the upgraded scene
+    await client.query(
+      "UPDATE storyboard_scenes SET selected_candidate_id = $1, selected_candidate_revision = 1 WHERE scene_id = $2",
+      [candidateId, sceneId]
+    );
+
+    // Now introduce 004 into the directory (Sprint 1.5-02 review idempotency)
+    await writeFile(
+      join(fileURLToPath(stageDir), "004_review_events_idempotency.sql"),
+      m004,
+      "utf-8"
+    );
+
+    // Run forward migration for 004
+    const stage3Applied = await runMigrations(client, { migrationsDirectory: stageDir });
+    expect(stage3Applied).toHaveLength(1);
+    expect(stage3Applied[0]?.version).toBe("004");
+
+    // Insert candidate_select review event with idempotency columns
+    const eventRes = await client.query<{ event_id: string; action: string }>(
+      `INSERT INTO review_events (
+        scene_id, action, expected_spec_revision, resulting_spec_revision, request_hash_sha256
+      ) VALUES ($1, 'candidate_select', 1, 1, $2) RETURNING event_id, action`,
+      [sceneId, "c".repeat(64)]
+    );
+    expect(eventRes.rows[0]?.action).toBe("candidate_select");
   });
 });

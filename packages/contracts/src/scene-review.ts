@@ -43,6 +43,12 @@ export const ReviewEventSchema = z.object({
   mutationPayload: z.record(z.string(), z.unknown()),
   priorSceneStatus: SceneStatusSchema,
   resultingSceneStatus: SceneStatusSchema,
+  expectedSpecRevision: z.number().int().positive().optional(),
+  resultingSpecRevision: z.number().int().positive().optional(),
+  requestHashSha256: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/i)
+    .optional(),
   occurredAt: z.string().datetime()
 });
 

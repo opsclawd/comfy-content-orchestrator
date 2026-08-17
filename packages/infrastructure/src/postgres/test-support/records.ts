@@ -52,6 +52,7 @@ export interface StoryboardSceneRecordInput {
   audioFxPrompt?: string | null;
   engineAssigned?: string;
   status?: string;
+  specRevision?: number;
   draftStorageBucket?: string | null;
   draftStorageObjectKey?: string | null;
   directorNotes?: string | null;
@@ -94,6 +95,9 @@ export interface ReviewEventRecordInput {
   mutationPayload?: Record<string, unknown>;
   priorSceneStatus?: string | null;
   resultingSceneStatus?: string | null;
+  expectedSpecRevision?: number | null;
+  resultingSpecRevision?: number | null;
+  requestHashSha256?: string | null;
 }
 
 export interface InsertedLicenseRecord {
@@ -213,6 +217,9 @@ export interface InsertedReviewEventRecord {
   mutation_payload: Record<string, unknown>;
   prior_scene_status: string | null;
   resulting_scene_status: string | null;
+  expected_spec_revision: number | null;
+  resulting_spec_revision: number | null;
+  request_hash_sha256: string | null;
   created_at: Date;
 }
 
@@ -225,6 +232,7 @@ export interface RepresentativeGraph {
   sceneReferenceAsset: InsertedSceneReferenceAssetRecord;
   renderJob: InsertedRenderJobRecord;
   manifest: InsertedGenerationManifestRecord;
+  storyboardCandidate: InsertedStoryboardCandidateRecord;
   reviewEvent: InsertedReviewEventRecord;
 }
 
@@ -435,6 +443,7 @@ export async function insertStoryboardSceneRecord(
       : "Distant steelpan resonance, gentle breeze";
   const engineAssigned = input.engineAssigned ?? "ltx_25";
   const status = input.status ?? "draft_pending";
+  const specRevision = input.specRevision !== undefined ? input.specRevision : 1;
   const draftStorageBucket =
     input.draftStorageBucket !== undefined ? input.draftStorageBucket : "godzspeed-temp";
   const draftStorageObjectKey =
@@ -462,12 +471,13 @@ export async function insertStoryboardSceneRecord(
       audio_fx_prompt,
       engine_assigned,
       status,
+      spec_revision,
       draft_storage_bucket,
       draft_storage_object_key,
       director_notes,
       selected_candidate_id,
       selected_candidate_revision
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
     RETURNING *
     `,
     [
@@ -480,6 +490,7 @@ export async function insertStoryboardSceneRecord(
       audioFxPrompt,
       engineAssigned,
       status,
+      specRevision,
       draftStorageBucket,
       draftStorageObjectKey,
       directorNotes,
@@ -632,6 +643,11 @@ export async function insertReviewEventRecord(
     input.priorSceneStatus !== undefined ? input.priorSceneStatus : "director_review";
   const resultingSceneStatus =
     input.resultingSceneStatus !== undefined ? input.resultingSceneStatus : "approved";
+  const expectedSpecRevision =
+    input.expectedSpecRevision !== undefined ? input.expectedSpecRevision : null;
+  const resultingSpecRevision =
+    input.resultingSpecRevision !== undefined ? input.resultingSpecRevision : null;
+  const requestHashSha256 = input.requestHashSha256 !== undefined ? input.requestHashSha256 : null;
 
   const res = await client.query<InsertedReviewEventRecord>(
     `
@@ -642,8 +658,11 @@ export async function insertReviewEventRecord(
       director_notes,
       mutation_payload,
       prior_scene_status,
-      resulting_scene_status
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+      resulting_scene_status,
+      expected_spec_revision,
+      resulting_spec_revision,
+      request_hash_sha256
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
     RETURNING *
     `,
     [
@@ -653,7 +672,10 @@ export async function insertReviewEventRecord(
       directorNotes,
       JSON.stringify(mutationPayload),
       priorSceneStatus,
-      resultingSceneStatus
+      resultingSceneStatus,
+      expectedSpecRevision,
+      resultingSpecRevision,
+      requestHashSha256
     ]
   );
 
@@ -689,6 +711,9 @@ export async function insertRepresentativeGraph(client: PoolClient): Promise<Rep
     campaignId: campaign.campaign_id,
     sceneId: scene.scene_id
   });
+  const storyboardCandidate = await insertStoryboardCandidateRecord(client, {
+    sceneId: scene.scene_id
+  });
   const reviewEvent = await insertReviewEventRecord(client, {
     sceneId: scene.scene_id
   });
@@ -702,6 +727,7 @@ export async function insertRepresentativeGraph(client: PoolClient): Promise<Rep
     sceneReferenceAsset,
     renderJob,
     manifest,
+    storyboardCandidate,
     reviewEvent
   };
 }
