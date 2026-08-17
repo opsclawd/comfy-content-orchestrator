@@ -636,4 +636,79 @@ describe("transition-soak-analysis", () => {
     expect(summary).toContain("Host Growth Within Tolerance");
     expect(summary).toContain("Latency Within Tolerance");
   });
+
+  it("renders 'no sustained swap activity' in decision rationale when gate passes", () => {
+    const iterations = createElevenPassingIterations();
+    const artifact = createArtifact(iterations);
+    const summary = renderTransitionSoakSummary(artifact);
+
+    expect(summary).toContain("succeeded with no sustained swap activity");
+    expect(summary).not.toContain("zero swap activity");
+  });
+
+  it("renders Transient (FAIL - Legacy Strict Policy) when historical artifact has noSwapActivity = false despite transient swap", () => {
+    const trinidadSwapUsedMb = [2, 88, 982, 89, 0, null, 0, 7, 0, 0, 0] as const;
+    const trinidadSwapInPages = [0, 3, 818, 2310, 173, 912, 82, 169, 91, 47, 55] as const;
+    const trinidadSwapOutPages = [466, 22485, 251657, 23559, 0, 231, 0, 2637, 0, 41, 0] as const;
+
+    const iterations = createElevenPassingIterations().map((_, index) =>
+      createMockIteration(index, {
+        swapUsedDeltaMb: trinidadSwapUsedMb[index]!,
+        systemSwapInPageDelta: trinidadSwapInPages[index]!,
+        systemSwapOutPageDelta: trinidadSwapOutPages[index]!
+      })
+    );
+
+    const artifact = createArtifact(iterations);
+    // Simulate historical artifact state where noSwapActivity was false
+    const historicalArtifact: TransitionSoakArtifact = {
+      ...artifact,
+      status: "failed",
+      hostRamDecision: "require_64gb",
+      selectedRunnerProfile: null,
+      gate: {
+        ...artifact.gate,
+        passed: false,
+        checks: {
+          ...artifact.gate.checks,
+          noSwapActivity: false
+        }
+      },
+      failure: {
+        phase: "transition_soak_gate",
+        code: "TRANSITION_SOAK_FAILED",
+        message: "Transition soak failed gate checks: noSwapActivity",
+        details: {
+          failedChecks: ["noSwapActivity"]
+        }
+      }
+    };
+
+    const summary = renderTransitionSoakSummary(historicalArtifact);
+
+    expect(summary).toContain("Transient (FAIL - Legacy Strict Policy)");
+    expect(summary).not.toContain("Transient (PASS)");
+  });
+
+  it("renders None (FAIL - Legacy Strict Policy) when historical artifact has noSwapActivity = false despite no swap", () => {
+    const iterations = createElevenPassingIterations();
+    const artifact = createArtifact(iterations);
+    const historicalArtifact: TransitionSoakArtifact = {
+      ...artifact,
+      status: "failed",
+      gate: {
+        ...artifact.gate,
+        passed: false,
+        checks: {
+          ...artifact.gate.checks,
+          noSwapActivity: false
+        }
+      }
+    };
+
+    const summary = renderTransitionSoakSummary(historicalArtifact);
+
+    expect(summary).toContain("None (FAIL - Legacy Strict Policy)");
+    expect(summary).not.toContain("None (PASS)");
+  });
 });

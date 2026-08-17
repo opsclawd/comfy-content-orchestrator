@@ -604,12 +604,23 @@ export function renderTransitionSoakSummary(artifact: TransitionSoakArtifact): s
   const formatCheck = (passed: boolean): string => (passed ? "PASS" : "FAIL");
 
   const swapActivity = classifySwapActivity(artifact.iterations);
-  const swapActivityLabel =
-    swapActivity === "none"
-      ? "None (PASS)"
-      : swapActivity === "transient"
-        ? "Transient (PASS)"
-        : "Sustained (FAIL)";
+  let swapActivityLabel: string;
+  if (!artifact.gate.checks.noSwapActivity) {
+    if (swapActivity === "sustained") {
+      swapActivityLabel = "Sustained (FAIL)";
+    } else if (swapActivity === "transient") {
+      swapActivityLabel = "Transient (FAIL - Legacy Strict Policy)";
+    } else {
+      swapActivityLabel = "None (FAIL - Legacy Strict Policy)";
+    }
+  } else {
+    swapActivityLabel =
+      swapActivity === "none"
+        ? "None (PASS)"
+        : swapActivity === "transient"
+          ? "Transient (PASS)"
+          : "Sustained (PASS)";
+  }
 
   const lines: string[] = [
     `# FLUX ↔ LTX Transition Soak Certification Summary`,
@@ -758,7 +769,7 @@ export function renderTransitionSoakSummary(artifact: TransitionSoakArtifact): s
     `- **Selected Runner Profile:** \`${artifact.selectedRunnerProfile ?? "None"}\``,
     `- **Decision Rationale:** ${
       artifact.gate.passed
-        ? `All ${artifact.requestedTransitionCount} required transitions succeeded with zero swap activity, zero OOM errors, stable ComfyUI process identity, observed post-unload headroom, memory growth within ${artifact.thresholds.maxVramGrowthMb} MB, and latency within ${artifact.thresholds.maxLatencyDegradationPercent}% of single-family baselines.`
+        ? `All ${artifact.requestedTransitionCount} required transitions succeeded with no sustained swap activity, zero OOM errors, stable ComfyUI process identity, observed post-unload headroom, memory growth within ${artifact.thresholds.maxVramGrowthMb} MB, and latency within ${artifact.thresholds.maxLatencyDegradationPercent}% of single-family baselines.`
         : `Soak gate checks failed (${Object.entries(artifact.gate.checks)
             .filter(([_, p]) => !p)
             .map(([k]) => k)
