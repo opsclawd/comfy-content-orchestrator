@@ -94,6 +94,9 @@ export interface ReviewEventRecordInput {
   mutationPayload?: Record<string, unknown>;
   priorSceneStatus?: string | null;
   resultingSceneStatus?: string | null;
+  expectedSpecRevision?: number | null;
+  resultingSpecRevision?: number | null;
+  requestHashSha256?: string | null;
 }
 
 export interface InsertedLicenseRecord {
@@ -213,6 +216,9 @@ export interface InsertedReviewEventRecord {
   mutation_payload: Record<string, unknown>;
   prior_scene_status: string | null;
   resulting_scene_status: string | null;
+  expected_spec_revision: number | null;
+  resulting_spec_revision: number | null;
+  request_hash_sha256: string | null;
   created_at: Date;
 }
 
@@ -632,6 +638,12 @@ export async function insertReviewEventRecord(
     input.priorSceneStatus !== undefined ? input.priorSceneStatus : "director_review";
   const resultingSceneStatus =
     input.resultingSceneStatus !== undefined ? input.resultingSceneStatus : "approved";
+  const expectedSpecRevision =
+    input.expectedSpecRevision !== undefined ? input.expectedSpecRevision : null;
+  const resultingSpecRevision =
+    input.resultingSpecRevision !== undefined ? input.resultingSpecRevision : null;
+  const requestHashSha256 =
+    input.requestHashSha256 !== undefined ? input.requestHashSha256 : null;
 
   const res = await client.query<InsertedReviewEventRecord>(
     `
@@ -642,8 +654,11 @@ export async function insertReviewEventRecord(
       director_notes,
       mutation_payload,
       prior_scene_status,
-      resulting_scene_status
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+      resulting_scene_status,
+      expected_spec_revision,
+      resulting_spec_revision,
+      request_hash_sha256
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
     RETURNING *
     `,
     [
@@ -653,7 +668,10 @@ export async function insertReviewEventRecord(
       directorNotes,
       JSON.stringify(mutationPayload),
       priorSceneStatus,
-      resultingSceneStatus
+      resultingSceneStatus,
+      expectedSpecRevision,
+      resultingSpecRevision,
+      requestHashSha256
     ]
   );
 

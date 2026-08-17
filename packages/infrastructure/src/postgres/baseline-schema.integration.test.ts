@@ -14,7 +14,8 @@ import {
   insertReferenceAssetRecord,
   insertSceneReferenceAssetRecord,
   insertRenderJobRecord,
-  insertGenerationManifestRecord
+  insertGenerationManifestRecord,
+  insertReviewEventRecord
 } from "./test-support/records.js";
 
 describe("PostgreSQL 18.6 baseline schema integration", () => {
@@ -518,5 +519,38 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
     expect(idxReview).toBeDefined();
     expect(idxReview?.tablename).toBe("review_events");
     expect(idxReview?.indexdef).toContain("(scene_id, created_at DESC)");
+  });
+
+  it("persists review events with concurrency revisions and request hash", async () => {
+    await runMigrations(client, { migrationsDirectory });
+    const graph = await insertRepresentativeGraph(client);
+
+    const requestHash = "a".repeat(64);
+    const event = await insertReviewEventRecord(client, {
+      sceneId: graph.scene.scene_id,
+      action: "candidate_select",
+      expectedSpecRevision: 1,
+      resultingSpecRevision: 1,
+      requestHashSha256: requestHash,
+      mutationPayload: { selectedCandidateId: "01950c46-9e90-7d3d-82d2-8f1d3c000001" }
+    });
+
+    expect(event.action).toBe("candidate_select");
+    expect(event.expected_spec_revision).toBe(1);
+    expect(event.resulting_spec_revision).toBe(1);
+    expect(event.request_hash_sha256).toBe(requestHash);
+
+    const res = await client.query<{
+      expected_spec_revision: number | null;
+      resulting_spec_revision: number | null;
+      request_hash_sha256: string | null;
+    }>(
+      "SELECT expected_spec_revision, resulting_spec_revision, request_hash_sha256 FROM review_events WHERE event_id = $1",
+      [event.event_id]
+    );
+
+    expect(res.rows[0]?.expected_spec_revision).toBe(1);
+    expect(res.rows[0]?.resulting_spec_revision).toBe(1);
+    expect(res.rows[0]?.request_hash_sha256).toBe(requestHash);
   });
 });

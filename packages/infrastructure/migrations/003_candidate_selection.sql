@@ -2,7 +2,16 @@
 -- REVIEW ACTION ENUM ADDITION
 -- ---------------------------------------------------------------------------
 
-ALTER TYPE review_action_enum ADD VALUE 'candidate_select';
+ALTER TYPE review_action_enum ADD VALUE IF NOT EXISTS 'candidate_select';
+
+-- ---------------------------------------------------------------------------
+-- REVIEW EVENTS IDEMPOTENCY & CONCURRENCY AUDIT COLUMNS
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE review_events
+  ADD COLUMN IF NOT EXISTS expected_spec_revision INT,
+  ADD COLUMN IF NOT EXISTS resulting_spec_revision INT,
+  ADD COLUMN IF NOT EXISTS request_hash_sha256 VARCHAR(64);
 
 -- ---------------------------------------------------------------------------
 -- STORYBOARD SCENES CANDIDATE SELECTION
