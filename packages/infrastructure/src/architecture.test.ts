@@ -6,6 +6,13 @@ import { fileURLToPath } from "url";
 import { cruise } from "dependency-cruiser";
 import type { ICruiseResult, IViolation } from "dependency-cruiser";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  PostgresReviewEventStore,
+  PostgresSceneRepository,
+  PostgresSceneReviewQueries,
+  PostgresStoryboardCandidateRepository,
+  PostgresUnitOfWork
+} from "./index.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -48,6 +55,14 @@ describe("Architecture Boundaries", () => {
     return cruiseResult.summary.violations;
   }
 
+  it("should export postgres review adapters and queries from index", () => {
+    expect(PostgresSceneRepository).toBeDefined();
+    expect(PostgresStoryboardCandidateRepository).toBeDefined();
+    expect(PostgresReviewEventStore).toBeDefined();
+    expect(PostgresUnitOfWork).toBeDefined();
+    expect(PostgresSceneReviewQueries).toBeDefined();
+  });
+
   it("should reject application -> infrastructure imports", async () => {
     writeFixture("packages/infrastructure/src/index.ts", "export const infra = 1;\n");
     writeFixture(
@@ -72,6 +87,22 @@ describe("Architecture Boundaries", () => {
     const violationNames = violations.map((v) => v.rule.name);
 
     expect(violationNames).toContain("domain-only-shared");
+  });
+
+  it("should reject infrastructure -> application use cases imports", async () => {
+    writeFixture(
+      "packages/application/src/use-cases/dummy-use-case.ts",
+      "export class DummyUseCase {}\n"
+    );
+    writeFixture(
+      "packages/infrastructure/src/infra-violating.ts",
+      "import '../../application/src/use-cases/dummy-use-case.js';\n"
+    );
+
+    const violations = await getViolations(["packages/infrastructure/src/infra-violating.ts"]);
+    const violationNames = violations.map((v) => v.rule.name);
+
+    expect(violationNames).toContain("infrastructure-no-application-use-cases");
   });
 
   it("should detect circular dependencies", async () => {
