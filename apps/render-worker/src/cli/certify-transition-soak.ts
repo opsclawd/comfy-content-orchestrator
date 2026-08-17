@@ -86,7 +86,7 @@ export const DEFAULT_MANIFEST_PATH = resolve(DEFAULT_REPO_ROOT, "templates/prove
 export const DEFAULT_OUTPUT_ROOT = resolve(DEFAULT_REPO_ROOT, "certification/transition-soak");
 export const DEFAULT_FLUX_BASELINE_PATH = resolve(
   DEFAULT_REPO_ROOT,
-  "baseline/flux-schnell/result.json"
+  "certification/flux-schnell/flux-schnell-cert-run-001/result.json"
 );
 export const DEFAULT_LTX_BASELINE_PATH = resolve(
   DEFAULT_REPO_ROOT,

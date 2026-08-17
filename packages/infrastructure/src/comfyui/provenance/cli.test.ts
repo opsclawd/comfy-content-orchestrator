@@ -10,7 +10,7 @@ import type { CertificationProvenanceReport } from "./collector.js";
 describe("Provenance CLI", () => {
   const mockProfile: CertificationProfile = Object.freeze({
     id: "ltx-25-720p-97f",
-    engine: "comfyui",
+    engine: "ltx_25",
     workflowPath: "/manifests/ltx_25_720p_97f_api.json",
     workflowRelativePath: "ltx_25_720p_97f_api.json",
     expectedWorkflowHash: "a".repeat(64),
@@ -83,7 +83,7 @@ describe("Provenance CLI", () => {
     renderProfileProvenance: Object.freeze({
       key: "LTX_25_720P_5S_V1",
       version: 1,
-      engine: "comfyui",
+      engine: "ltx_25" as const,
       workflowHash: "a".repeat(64),
       modelHashes: Object.freeze({
         "models/diffusion_models/ltx-video-2b-v0.9.1.safetensors": "c".repeat(64)

@@ -17,7 +17,7 @@ Transition soak certification verifies the empirical stability and memory envelo
 - **Memory Mode:** ComfyUI must run in **DynamicVRAM / workflow-managed offloading** mode (default startup args without explicit `--highvram`, `--gpu-only`, `--lowvram`, `--novram`, `--normalvram`, or `--cpu` flags).
 - **Disk Storage:** At least **100 GB** of verified free disk space reservation on the filesystem hosting ComfyUI models and outputs (`minFreeDiskGb: 100`).
 - **Approved Gold Master Reports:** Approved, host-validated Gold Master provenance JSON reports for both FLUX and LTX generated from the running Trinidad host (`source.kind = "validated_host_export"` with an immutable Git commit revision and exact workflow/model SHA-256 hashes).
-- **Single-Family Baseline Artifacts:** Baseline single-family result artifacts for both FLUX (`baseline/flux-schnell/result.json`) and LTX (`certification/ltx-25/ltx-cert-run-002/result.json`).
+- **Single-Family Baseline Artifacts:** Baseline single-family result artifacts for both FLUX (`certification/flux-schnell/flux-schnell-cert-run-001/result.json`) and LTX (`certification/ltx-25/ltx-cert-run-002/result.json`).
 
 ### Idle-Host Operating Requirement
 System-wide metrics (`hostRamUsedMb`, `swapUsedDeltaMb`, `systemMajorPageFaultDelta`, `systemSwapInPageDelta`, `systemSwapOutPageDelta`) measure global Linux kernel counters. The render workstation must be **otherwise idle** during the entire soak run. External background processes, browsers, or concurrent jobs will inject noise into system deltas and trigger false gate failures.
@@ -206,18 +206,19 @@ flowchart TD
     PassBranch --> FreezeProfile["Task 8: Freeze LTX_25_720P_5S_V1.json\nwith 32GB Minimum Host RAM"]
 
     GateEval -- NO --> FailBranch["Status: FAILED\nhostRamDecision: 'require_64gb'\nselectedRunnerProfile: null\nExit Code: 1"]
-    FailBranch --> Upgrade64["Task 8: Update PRD & Reports\nMandate 64GB RAM as Phase 1 Prerequisite\nProfile Freeze Blocked"]
+    FailBranch --> Interpret["Interpret against per-iteration evidence\nTransient vs sustained swap\nProfile Freeze Blocked"]
 ```
 
 #### Passing Outcome: `support_32gb`
 - **Criteria:** All 12 gate checks evaluate to `true`.
 - **Artifact Values:** `status = "passed"`, `hostRamDecision = "support_32gb"`, `selectedRunnerProfile = "dynamicvram-offload-v1"`, `failure = null`.
-- **Production Result:** Proves the 32 GB workstation is stable under multi-model interleaved load. Authorizes creating `config/render-profiles/LTX_25_720P_5S_V1.json` with `minimumHostRamMb: 32768`.
+- **Production Result:** The 32 GB workstation is stable under multi-model interleaved load. Authorizes freezing the production `RenderProfile` for the certified engine.
 
 #### Failing Outcome: `require_64gb`
 - **Criteria:** Any of the 12 gate checks evaluates to `false` (e.g. swap activity detected, memory leak $> 256\text{ MB}$, OOM, latency degradation $> 20\%$).
 - **Artifact Values:** `status = "failed"`, `hostRamDecision = "require_64gb"`, `selectedRunnerProfile = null`, with a structured `failure` object.
-- **Production Result:** Proves the 32 GB host RAM envelope is insufficient for interleaved workloads. Updates PRD §3.1 and Sprint 1 requirements to mandate a 64 GB host RAM upgrade before Phase 1 production profile freeze.
+- **Production Result:** The gate is fail-closed on any swap activity, so `require_64gb` records that at least one check failed — **not** that 32 GB is proven insufficient. Interpret it against the per-iteration evidence in `result.json`: swap confined to early transitions that then ceases is transient and does not by itself establish a hardware requirement, whereas swap recurring across most iterations, or accompanied by latency degradation or progressive memory growth, does. The profile freeze is blocked either way, because #8 conditions it on a passing soak.
+- **Precedent:** Run `trinidad-rtx4090-dynamicvram-v1` returned `require_64gb` on transient swap confined to the first four transitions, with the other 11 checks passing. The recorded conclusion is that 32 GB is supported for Phase 1 on a dedicated host. See `README.md` and [#29](https://github.com/opsclawd/comfy-content-orchestrator/issues/29), which tracks tightening `noSwapActivity` to measure *sustained* rather than *any* swap.
 
 ---
 

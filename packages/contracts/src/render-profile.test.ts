@@ -3,13 +3,13 @@ import { RenderProfileSchema } from "./render-profile.js";
 
 describe("RenderProfileSchema", () => {
   const measuredLtxFixture = {
-    key: "LTX_25_720P_5S_V1",
-    version: 1,
-    engine: "ltx_25",
+    key: "LTX_25_720P_5S_V1" as const,
+    version: 1 as const,
+    engine: "ltx_25" as const,
     workflowHash: "a".repeat(64),
     modelHashes: { checkpoint: "b".repeat(64), textEncoder: "c".repeat(64), vae: "d".repeat(64) },
-    frames: 97,
-    steps: 8,
+    frames: 97 as const,
+    steps: 8 as const,
     runnerProfile: "dynamicvram-offload-v1",
     measuredPeakVramMb: 24028,
     measuredTotalDurationMs: 46000,
@@ -24,9 +24,61 @@ describe("RenderProfileSchema", () => {
     requiresModelOffloading: true
   };
 
+  const measuredFluxFixture = {
+    key: "FLUX_SCHNELL_DRAFT_V1" as const,
+    version: 1 as const,
+    engine: "flux_schnell" as const,
+    workflowHash: "e".repeat(64),
+    modelHashes: { clip: "f".repeat(64), unet: "a".repeat(64), vae: "b".repeat(64) },
+    frames: 1 as const,
+    steps: 4 as const,
+    runnerProfile: "dynamicvram-offload-v1",
+    measuredPeakVramMb: 23810,
+    measuredTotalDurationMs: 10270,
+    measuredSamplingDurationMs: 8000,
+    measuredDiskFootprintGb: 29.25,
+    measuredPeakHostRamMb: 29124,
+    measuredPeakProcessRssMb: 26924,
+    measuredSwapUsedMb: 0,
+    measuredMajorPageFaults: 0,
+    minFreeDiskGb: 0,
+    maxConcurrentGpuJobs: 1,
+    requiresModelOffloading: true
+  };
+
   it("accepts the measured LTX 2.5 baseline with uncertified host memory fields set to null", () => {
     const parsed = RenderProfileSchema.parse(measuredLtxFixture);
     expect(parsed).toEqual(measuredLtxFixture);
+  });
+
+  it("accepts a compliant FLUX profile", () => {
+    const parsed = RenderProfileSchema.parse(measuredFluxFixture);
+    expect(parsed).toEqual(measuredFluxFixture);
+  });
+
+  it("rejects unknown render profile keys", () => {
+    expect(
+      RenderProfileSchema.safeParse({
+        ...measuredLtxFixture,
+        key: "UNKNOWN_PROFILE_KEY"
+      }).success
+    ).toBe(false);
+  });
+
+  it("rejects engine mismatch for key", () => {
+    expect(
+      RenderProfileSchema.safeParse({
+        ...measuredLtxFixture,
+        engine: "flux_schnell"
+      }).success
+    ).toBe(false);
+
+    expect(
+      RenderProfileSchema.safeParse({
+        ...measuredFluxFixture,
+        engine: "ltx_25"
+      }).success
+    ).toBe(false);
   });
 
   it("rejects a render profile when maxConcurrentGpuJobs is not positive", () => {

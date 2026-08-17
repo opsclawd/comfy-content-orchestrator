@@ -177,10 +177,13 @@ pnpm certify:ltx \
   - `postUnloadHeadroomObserved = true` (5-second settle sample recorded)
 - [x] **Artifacts Persisted:** Valid `result.json` and `summary.md` generated under `certification/ltx-25/ltx-cert-run-002/`.
 
-### Remaining Gate: Multi-Model Transition Soak Certification
+### Completed Gate: Multi-Model Transition Soak Certification
+
 > [!IMPORTANT]
-> **Single-family LTX certification is complete; multi-model transition soak is the active gate.**
+> **Multi-model transition soak certification is complete (`trinidad-rtx4090-dynamicvram-v1`).**
 >
-> Pinned Gold Master provenance for both FLUX and LTX is host-validated at commit `55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc`, and single-family LTX certification passed in run `ltx-cert-run-002` (46,874 ms, 23,618 MB peak VRAM, zero swap).
+> 10 alternating transitions (11 renders: 6 FLUX + 5 LTX) executed on the Trinidad host in DynamicVRAM mode. Every render succeeded without OOM or process restart, with no progressive VRAM or host-memory growth and latency within tolerance.
 >
-> The remaining gate before freezing the production `RenderProfile` (`LTX_25_720P_5S_V1`) is executing the multi-model transition soak certification on the Trinidad host (`pnpm certify:transition-soak`, documented in the [FLUX ↔ LTX Transition Soak Certification Runbook](transition-soak-certification.md)). The transition soak evaluates whether 32 GB host RAM remains stable without swap activity or memory leaks under alternating FLUX $\leftrightarrow$ LTX load or if a 64 GB host RAM upgrade is required for Phase 1.
+> Peak host RAM reached 29,384 MB of 31,233 MB usable. Swap activity was confined to the first four transitions, peaking at 982 MB, and stopped thereafter. Because the gate is fail-closed on any swap activity, the recorded decision is `require_64gb`; 11 of its 12 checks passed and `noSwapActivity` was the sole failure.
+>
+> Operational conclusion: 32 GB is supported for Phase 1 on a dedicated host running one GPU job at a time with model offloading enabled. A 64 GB upgrade is recommended before Phase 2 rather than required now. See the [Transition Soak Certification Runbook](transition-soak-certification.md).

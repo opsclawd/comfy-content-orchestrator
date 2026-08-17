@@ -650,7 +650,9 @@ describe("certify:transition-soak CLI", () => {
 
     expect(parsed.options.manifestPath).toMatch(/templates\/provenance\.json$/);
     expect(parsed.options.outputRoot).toMatch(/certification\/transition-soak$/);
-    expect(parsed.options.fluxBaselinePath).toMatch(/baseline\/flux-schnell\/result\.json$/);
+    expect(parsed.options.fluxBaselinePath).toMatch(
+      /certification\/flux-schnell\/flux-schnell-cert-run-001\/result\.json$/
+    );
     expect(parsed.options.ltxBaselinePath).toMatch(
       /certification\/ltx-25\/ltx-cert-run-002\/result\.json$/
     );

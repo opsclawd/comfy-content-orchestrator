@@ -50,7 +50,15 @@ pnpm certify:transition-soak -- \
 ```
 
 > [!NOTE]
-> **Host RAM Phase 1 Decision Pending:** The definitive hardware decision (whether 32 GB host RAM is supported or a 64 GB upgrade is mandated for Phase 1 production) and the freezing of the production `RenderProfile` (`LTX_25_720P_5S_V1`) remain pending until live execution of the transition soak certification.
+> **Host RAM Phase 1 Decision: 32 GB supported, 64 GB recommended for Phase 2**
+>
+> Transition soak certification (`trinidad-rtx4090-dynamicvram-v1`) completed 10 alternating FLUX.1 [schnell] ↔ LTX-2.5 transitions (11 renders) in DynamicVRAM mode on the 32 GB Trinidad workstation. Every render and post-unload cleanup succeeded: no OOM, no process restart, no progressive VRAM or host-memory growth, and render latency within tolerance (FLUX +6.4%, LTX −2.6% against single-family baselines).
+>
+> Peak host RAM reached 29,384 MB of 31,233 MB usable, leaving 1.85–2.09 GB of headroom that stayed flat across all iterations. Transient swap occurred during the first four transitions, peaking at 982 MB, and ceased thereafter; iterations 4–10 were effectively swap-free.
+>
+> The soak gate is fail-closed on *any* swap activity and therefore returned `require_64gb`. The measured behaviour is transient rather than sustained, so **32 GB is supported for Phase 1 on a dedicated host**, subject to the constraints already encoded in the render profile: one concurrent GPU job and mandatory model offloading. 64 GB is recommended headroom for Phase 2, where a third model family or co-resident services would consume the remaining margin.
+>
+> Raw evidence: `certification/transition-soak/trinidad-rtx4090-dynamicvram-v1/`.
 
 ## Architecture
 
