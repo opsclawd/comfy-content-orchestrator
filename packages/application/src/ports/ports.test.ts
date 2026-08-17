@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type {
   CampaignRepository,
   CandidateRankerPort,
+  GpuExecutionLeasePort,
+  GpuLeaseHolder,
   GpuMemorySnapshot,
   GpuTelemetryPort,
   LicenseRegistryRepository,
@@ -14,11 +16,13 @@ import type {
   QueueRenderInput,
   RenderEnginePort,
   RenderJobRepository,
+  RenderLease,
   RenderQueueReceipt,
   RenderResult,
   StoredObject,
   VoiceSynthesisPort
 } from "./index.js";
+import { GpuLeaseOwnershipLostError, GpuLeaseUnavailableError } from "./index.js";
 
 describe("Application capability ports contract tests", () => {
   describe("Render and Telemetry capability family", () => {
@@ -92,6 +96,40 @@ describe("Application capability ports contract tests", () => {
       expect(memory.freeVramMb).toBe(16384);
       expect(memory.reservedVramMb).toBe(0);
       expect(memory.measuredAt).toBe("2026-08-15T06:00:00.000Z");
+    });
+
+    it("satisfies GpuExecutionLeasePort contract with an immutable holder and callable release", async () => {
+      let released = false;
+      const fakeHolder: GpuLeaseHolder = Object.freeze({
+        version: 1,
+        pid: 1234,
+        startedAt: "2026-08-15T06:00:00.000Z",
+        hostname: "test-host",
+        leaseId: "lease-test-1"
+      });
+
+      const leasePort = {
+        async acquireLease(): Promise<RenderLease> {
+          return {
+            holder: fakeHolder,
+            async release(): Promise<void> {
+              released = true;
+            }
+          };
+        }
+      } satisfies GpuExecutionLeasePort;
+
+      const lease = await leasePort.acquireLease();
+      expect(lease.holder).toEqual(fakeHolder);
+      await lease.release();
+      expect(released).toBe(true);
+
+      const unavailError = new GpuLeaseUnavailableError("contention", fakeHolder);
+      expect(unavailError.name).toBe("GpuLeaseUnavailableError");
+      expect(unavailError.holder).toEqual(fakeHolder);
+
+      const lostError = new GpuLeaseOwnershipLostError("ownership lost");
+      expect(lostError.name).toBe("GpuLeaseOwnershipLostError");
     });
   });
 

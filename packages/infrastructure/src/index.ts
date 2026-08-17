@@ -111,3 +111,8 @@ export {
   type RunnerEnvironmentOs,
   type RunnerEnvironmentReadFileFn
 } from "./telemetry/runner-environment.js";
+
+export {
+  LocalFsGpuLeaseAdapter,
+  type LocalFsGpuLeaseAdapterOptions
+} from "./gpu/local-fs-gpu-lease-adapter.js";
