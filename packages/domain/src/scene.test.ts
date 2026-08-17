@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  InvalidCandidateError,
   InvalidMutationError,
   InvalidTransitionError,
   SCENE_STATUSES,
   Scene,
   TerminalStateError,
   type CampaignId,
+  type CandidateId,
   type SceneApprovalInput,
   type SceneConfiguration,
   type SceneId,
@@ -154,6 +156,22 @@ describe("Scene domain contracts", () => {
         "Custom terminal failure"
       );
       expect(customErr.message).toBe("Custom terminal failure");
+    });
+
+    it("instantiates InvalidCandidateError with sceneId, candidateId, and reason", () => {
+      const err = new InvalidCandidateError(
+        "scene-1" as SceneId,
+        "candidate-1" as CandidateId,
+        "Candidate belongs to a different scene"
+      );
+      expect(err).toBeInstanceOf(Error);
+      expect(err.name).toBe("InvalidCandidateError");
+      expect(err.sceneId).toBe("scene-1");
+      expect(err.candidateId).toBe("candidate-1");
+      expect(err.reason).toBe("Candidate belongs to a different scene");
+      expect(err.message).toBe(
+        "Candidate 'candidate-1' is invalid for scene 'scene-1': Candidate belongs to a different scene"
+      );
     });
   });
 
@@ -1230,6 +1248,111 @@ describe("Scene domain contracts", () => {
           expect(scene.snapshot()).toEqual(snapshotBefore);
         }
       }
+    });
+  });
+
+  describe("Candidate Selection", () => {
+    function createReviewScene(): Scene {
+      const scene = Scene.create({
+        id: "scene-1" as SceneId,
+        campaignId: "campaign-1" as CampaignId,
+        configuration: {
+          prompt: "A product reveal",
+          referenceIds: ["asset-a"],
+          engineProfileId: "ltx-2.5@certified-v1",
+          durationMs: 4_000
+        }
+      });
+      scene.beginCandidateGeneration();
+      scene.submitCandidatesForReview();
+      return scene;
+    }
+
+    it("selectCandidate in director_review sets selection state and returns transition", () => {
+      const scene = createReviewScene();
+      const transition = scene.selectCandidate(
+        "candidate-1" as CandidateId,
+        scene.snapshot().specRevision,
+        scene.id
+      );
+
+      expect(transition).toEqual({
+        sceneId: scene.id,
+        from: "director_review",
+        to: "director_review",
+        revision: 1,
+        reason: "candidate_selected"
+      });
+      expect(Object.isFrozen(transition)).toBe(true);
+
+      const snap = scene.snapshot();
+      expect(snap.selectedCandidateId).toBe("candidate-1");
+      expect(snap.selectedCandidateRevision).toBe(1);
+      expect(Object.isFrozen(snap)).toBe(true);
+    });
+
+    it("selectCandidate with mismatched sceneId throws InvalidCandidateError", () => {
+      const scene = createReviewScene();
+      expect(() =>
+        scene.selectCandidate(
+          "candidate-1" as CandidateId,
+          scene.snapshot().specRevision,
+          "wrong-scene" as SceneId
+        )
+      ).toThrowError(InvalidCandidateError);
+      expect(scene.snapshot().selectedCandidateId).toBeUndefined();
+    });
+
+    it("selectCandidate with stale revision throws InvalidCandidateError", () => {
+      const scene = createReviewScene();
+      expect(() =>
+        scene.selectCandidate(
+          "candidate-1" as CandidateId,
+          scene.snapshot().specRevision - 1,
+          scene.id
+        )
+      ).toThrowError(InvalidCandidateError);
+      expect(scene.snapshot().selectedCandidateId).toBeUndefined();
+    });
+
+    it("selectCandidate with future revision throws InvalidCandidateError", () => {
+      const scene = createReviewScene();
+      expect(() =>
+        scene.selectCandidate(
+          "candidate-1" as CandidateId,
+          scene.snapshot().specRevision + 1,
+          scene.id
+        )
+      ).toThrowError(InvalidCandidateError);
+      expect(scene.snapshot().selectedCandidateId).toBeUndefined();
+    });
+
+    it("selectCandidate in non-director_review status throws InvalidTransitionError", () => {
+      const draftScene = Scene.create({
+        id: "scene-1" as SceneId,
+        campaignId: "campaign-1" as CampaignId,
+        configuration: {
+          prompt: "A product reveal",
+          referenceIds: ["asset-a"],
+          engineProfileId: "ltx-2.5@certified-v1",
+          durationMs: 4_000
+        }
+      });
+      expect(() =>
+        draftScene.selectCandidate(
+          "candidate-1" as CandidateId,
+          draftScene.snapshot().specRevision,
+          draftScene.id
+        )
+      ).toThrow(InvalidTransitionError);
+    });
+
+    it("selectCandidate in terminal status throws TerminalStateError", () => {
+      const cancelledScene = createReviewScene();
+      cancelledScene.cancel();
+      expect(() =>
+        cancelledScene.selectCandidate("candidate-1" as CandidateId, 1, cancelledScene.id)
+      ).toThrow(TerminalStateError);
     });
   });
 });

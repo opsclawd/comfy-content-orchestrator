@@ -1,3 +1,5 @@
+import type { CandidateId } from "./storyboard-candidate.js";
+
 export const SCENE_STATUSES = [
   "draft_pending",
   "generating_candidates",
@@ -52,6 +54,8 @@ export interface SceneSnapshot {
   readonly configuration: SceneConfiguration;
   readonly approval?: SceneApproval;
   readonly failedFrom?: SceneStatus;
+  readonly selectedCandidateId?: CandidateId;
+  readonly selectedCandidateRevision?: number;
 }
 
 export type SceneTransitionReason =
@@ -67,7 +71,8 @@ export type SceneTransitionReason =
   | "failed"
   | "recovered_to_review"
   | "cancelled"
-  | "configuration_changed";
+  | "configuration_changed"
+  | "candidate_selected";
 
 export interface SceneTransition {
   readonly sceneId: SceneId;
@@ -75,6 +80,20 @@ export interface SceneTransition {
   readonly to: SceneStatus;
   readonly revision: number;
   readonly reason: SceneTransitionReason;
+}
+
+export class InvalidCandidateError extends Error {
+  override readonly name = "InvalidCandidateError";
+  readonly sceneId: SceneId;
+  readonly candidateId: CandidateId;
+  readonly reason: string;
+
+  constructor(sceneId: SceneId, candidateId: CandidateId, reason: string) {
+    super(`Candidate '${candidateId}' is invalid for scene '${sceneId}': ${reason}`);
+    this.sceneId = sceneId;
+    this.candidateId = candidateId;
+    this.reason = reason;
+  }
 }
 
 export class InvalidTransitionError extends Error {
@@ -157,6 +176,8 @@ export class Scene {
   #configuration: Readonly<SceneConfiguration>;
   #approval?: Readonly<SceneApproval> | undefined;
   #failedFrom?: SceneStatus | undefined;
+  #selectedCandidateId?: CandidateId | undefined;
+  #selectedCandidateRevision?: number | undefined;
 
   private constructor(input: SceneCreateInput) {
     this.#id = input.id;
@@ -337,6 +358,47 @@ export class Scene {
     );
   }
 
+  selectCandidate(
+    candidateId: CandidateId,
+    candidateRevision: number,
+    candidateSceneId: SceneId
+  ): SceneTransition {
+    if (this.#isTerminal()) {
+      throw new TerminalStateError(this.#id, this.#status, "selectCandidate");
+    }
+
+    if (this.#status !== "director_review") {
+      throw new InvalidTransitionError(this.#id, this.#status, "selectCandidate");
+    }
+
+    if (candidateSceneId !== this.#id) {
+      throw new InvalidCandidateError(
+        this.#id,
+        candidateId,
+        "Candidate belongs to a different scene"
+      );
+    }
+
+    if (candidateRevision !== this.#specRevision) {
+      throw new InvalidCandidateError(
+        this.#id,
+        candidateId,
+        "Candidate revision does not match current scene revision"
+      );
+    }
+
+    return this.#transition(
+      "selectCandidate",
+      ["director_review"],
+      "director_review",
+      "candidate_selected",
+      () => {
+        this.#selectedCandidateId = candidateId;
+        this.#selectedCandidateRevision = candidateRevision;
+      }
+    );
+  }
+
   approve(input: SceneApprovalInput): SceneTransition {
     if (this.#isTerminal()) {
       throw new TerminalStateError(this.#id, this.#status, "approve");
@@ -471,7 +533,13 @@ export class Scene {
       specRevision: this.#specRevision,
       configuration: this.#configuration,
       ...(this.#approval !== undefined ? { approval: this.#approval } : {}),
-      ...(this.#failedFrom !== undefined ? { failedFrom: this.#failedFrom } : {})
+      ...(this.#failedFrom !== undefined ? { failedFrom: this.#failedFrom } : {}),
+      ...(this.#selectedCandidateId !== undefined
+        ? { selectedCandidateId: this.#selectedCandidateId }
+        : {}),
+      ...(this.#selectedCandidateRevision !== undefined
+        ? { selectedCandidateRevision: this.#selectedCandidateRevision }
+        : {})
     });
   }
 }
