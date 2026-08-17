@@ -1,13 +1,7 @@
 {
   "validation": {
-    "commands": [
-      "pnpm format"
-    ],
+    "commands": ["pnpm format"],
     "timeout": 600,
-    "forbiddenArtifactPaths": [
-      "certification/",
-      "baseline/",
-      "config/render-profiles/"
-    ]
+    "forbiddenArtifactPaths": ["certification/", "baseline/", "config/render-profiles/"]
   }
 }
