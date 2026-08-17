@@ -664,5 +664,70 @@ describe("ReviewSceneUseCases", () => {
       expect(uow.reviewEvents).toHaveLength(1);
       expect(uow.reviewEvents[0]!.action).toBe("reject");
     });
+
+    it("selectCandidate propagates expectedSpecRevision, resultingSpecRevision, and requestHashSha256", async () => {
+      const scene = createSceneInDirectorReview("scene-select-idempotent");
+      const candidate: StoryboardCandidate = {
+        id: "cand-uuid-1" as CandidateId,
+        sceneId: "scene-select-idempotent" as SceneId,
+        specRevision: 2,
+        variantOrdinal: 1,
+        locator: "storyboard-candidates/campaigns/c1/scenes/s1/v2/c1.png",
+        contentHash: "b".repeat(64),
+        generationMetadata: {},
+        createdAt: "2026-08-15T00:00:00.000Z"
+      };
+      // Advance scene spec revision to match candidate
+      scene.updatePrompt("Revised prompt for rev 2");
+      scene.beginCandidateGeneration();
+      scene.submitCandidatesForReview();
+
+      const uow = new InMemorySceneUnitOfWork([scene], [candidate]);
+      const useCases = new ReviewSceneUseCases(uow);
+
+      const requestHash = "e".repeat(64);
+      await useCases.selectCandidate({
+        sceneId: "scene-select-idempotent",
+        eventId: "event-select-1",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T02:00:00.000Z",
+        candidateId: "cand-uuid-1" as CandidateId,
+        expectedSpecRevision: 2,
+        resultingSpecRevision: 2,
+        requestHashSha256: requestHash
+      });
+
+      expect(uow.reviewEvents).toHaveLength(1);
+      const event = uow.reviewEvents[0]!;
+      expect(event.action).toBe("candidate_select");
+      expect(event.expectedSpecRevision).toBe(2);
+      expect(event.resultingSpecRevision).toBe(2);
+      expect(event.requestHashSha256).toBe(requestHash);
+    });
+
+    it("review actions propagate expectedSpecRevision, resultingSpecRevision, and requestHashSha256", async () => {
+      const scene = createSceneInDirectorReview("scene-action-idempotent");
+      scene.selectCandidate("candidate-1" as CandidateId, scene.snapshot().specRevision, scene.id);
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const useCases = new ReviewSceneUseCases(uow);
+
+      const requestHash = "f".repeat(64);
+      await useCases.approve({
+        sceneId: "scene-action-idempotent",
+        eventId: "event-approve-idemp",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T02:00:00.000Z",
+        expectedSpecRevision: 1,
+        resultingSpecRevision: 1,
+        requestHashSha256: requestHash
+      });
+
+      expect(uow.reviewEvents).toHaveLength(1);
+      const event = uow.reviewEvents[0]!;
+      expect(event.action).toBe("approve");
+      expect(event.expectedSpecRevision).toBe(1);
+      expect(event.resultingSpecRevision).toBe(1);
+      expect(event.requestHashSha256).toBe(requestHash);
+    });
   });
 });

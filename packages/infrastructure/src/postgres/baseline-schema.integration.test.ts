@@ -491,18 +491,38 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       )
     ).rejects.toThrow();
 
-    // 11. Duplicate request_hash_sha256 on review_events (uq_review_events_request_hash)
+    // 11. Duplicate (scene_id, action, request_hash_sha256) on review_events (uq_review_events_request_hash)
     const eventHash = "c".repeat(64);
     await insertReviewEventRecord(client, {
       sceneId: scene.scene_id,
+      action: "approve",
       requestHashSha256: eventHash
     });
     await expect(
       insertReviewEventRecord(client, {
         sceneId: scene.scene_id,
+        action: "approve",
         requestHashSha256: eventHash
       })
     ).rejects.toThrow();
+
+    // Verify same hash is allowed for a different scene or different action
+    const otherScene = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 98,
+      visualDescription: "Different scene for hash test",
+      status: "director_review"
+    });
+    await insertReviewEventRecord(client, {
+      sceneId: otherScene.scene_id,
+      action: "approve",
+      requestHashSha256: eventHash
+    });
+    await insertReviewEventRecord(client, {
+      sceneId: scene.scene_id,
+      action: "reject",
+      requestHashSha256: eventHash
+    });
 
     // 12. Invalid expected_spec_revision / resulting_spec_revision (<= 0)
     await expect(

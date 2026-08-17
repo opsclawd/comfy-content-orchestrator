@@ -11,4 +11,4 @@ ALTER TABLE review_events
 
 ALTER TABLE review_events
   ADD CONSTRAINT uq_review_events_request_hash
-  UNIQUE (request_hash_sha256);
+  UNIQUE (scene_id, action, request_hash_sha256);

@@ -61,4 +61,34 @@ describe("scene-review contracts", () => {
     };
     expect(ReviewEventSchema.parse(event)).toEqual(event);
   });
+
+  it("accepts and validates expectedSpecRevision, resultingSpecRevision, and requestHashSha256", () => {
+    const validWithIdempotency = {
+      eventId: "evt-003",
+      sceneId: "scene-123",
+      reviewerName: "Director Alice",
+      action: "candidate_select" as const,
+      mutationPayload: { candidateId: "cand-1", candidateRevision: 1 },
+      priorSceneStatus: "director_review" as const,
+      resultingSceneStatus: "director_review" as const,
+      expectedSpecRevision: 1,
+      resultingSpecRevision: 1,
+      requestHashSha256: "a".repeat(64),
+      occurredAt: "2026-08-15T00:00:00.000Z"
+    };
+    expect(ReviewEventSchema.parse(validWithIdempotency)).toEqual(validWithIdempotency);
+
+    // Rejects non-positive revisions
+    expect(
+      ReviewEventSchema.safeParse({ ...validWithIdempotency, expectedSpecRevision: 0 }).success
+    ).toBe(false);
+    expect(
+      ReviewEventSchema.safeParse({ ...validWithIdempotency, resultingSpecRevision: -1 }).success
+    ).toBe(false);
+
+    // Rejects invalid sha256
+    expect(
+      ReviewEventSchema.safeParse({ ...validWithIdempotency, requestHashSha256: "short" }).success
+    ).toBe(false);
+  });
 });
