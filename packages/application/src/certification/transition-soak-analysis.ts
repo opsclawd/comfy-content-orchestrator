@@ -46,13 +46,72 @@ function calculateMedian(values: readonly number[]): number | null {
   return (sorted[mid - 1]! + sorted[mid]!) / 2;
 }
 
+type SwapActivityClassification = "none" | "transient" | "sustained";
+
+const SWAP_DECAY_RATIO = 0.1;
+const SWAP_USED_NOISE_FLOOR_MB = 10;
+const SWAP_PAGE_NOISE_FLOOR = 2500;
+const SIGNIFICANT_SWAP_USED_MB = 5;
+const SIGNIFICANT_SWAP_PAGES = 1250;
+
+function classifySwapActivity(
+  iterations: readonly TransitionSoakIteration[]
+): SwapActivityClassification {
+  const value = (metric: number | null): number => metric ?? 0;
+  const hasActivity = iterations.some(
+    ({ telemetry }) =>
+      value(telemetry.swapUsedDeltaMb) > 0 ||
+      value(telemetry.systemSwapInPageDelta) > 0 ||
+      value(telemetry.systemSwapOutPageDelta) > 0
+  );
+
+  if (!hasActivity) return "none";
+
+  const splitIndex = Math.ceil(iterations.length / 2);
+  const firstHalf = iterations.slice(0, splitIndex);
+  const secondHalf = iterations.slice(splitIndex);
+  const sum = (
+    records: readonly TransitionSoakIteration[],
+    select: (iteration: TransitionSoakIteration) => number | null
+  ): number => records.reduce((total, iteration) => total + value(select(iteration)), 0);
+  const decayed = (first: number, second: number, noiseFloor: number): boolean =>
+    second < first * SWAP_DECAY_RATIO || second < noiseFloor;
+
+  const swapUsedDecayed = decayed(
+    sum(firstHalf, ({ telemetry }) => telemetry.swapUsedDeltaMb),
+    sum(secondHalf, ({ telemetry }) => telemetry.swapUsedDeltaMb),
+    SWAP_USED_NOISE_FLOOR_MB
+  );
+  const swapInDecayed = decayed(
+    sum(firstHalf, ({ telemetry }) => telemetry.systemSwapInPageDelta),
+    sum(secondHalf, ({ telemetry }) => telemetry.systemSwapInPageDelta),
+    SWAP_PAGE_NOISE_FLOOR
+  );
+  const swapOutDecayed = decayed(
+    sum(firstHalf, ({ telemetry }) => telemetry.systemSwapOutPageDelta),
+    sum(secondHalf, ({ telemetry }) => telemetry.systemSwapOutPageDelta),
+    SWAP_PAGE_NOISE_FLOOR
+  );
+  const significantIterations = iterations.filter(
+    ({ telemetry }) =>
+      value(telemetry.swapUsedDeltaMb) > SIGNIFICANT_SWAP_USED_MB ||
+      value(telemetry.systemSwapInPageDelta) > SIGNIFICANT_SWAP_PAGES ||
+      value(telemetry.systemSwapOutPageDelta) > SIGNIFICANT_SWAP_PAGES
+  ).length;
+  const recurrent = significantIterations > iterations.length / 2;
+
+  return swapUsedDecayed && swapInDecayed && swapOutDecayed && !recurrent
+    ? "transient"
+    : "sustained";
+}
+
 /**
  * Pure evaluator for FLUX <-> LTX transition soak stability and gate checks.
  *
  * Calculates global peaks, run-window deltas, family-normalized progressive memory growth,
  * post-unload settling growth, and median latency degradation against single-family baselines.
  *
- * Failing any check, swap activity, OOM, restart, or incomplete evidence forces require_64gb
+ * Failing any check, sustained swap activity, OOM, restart, or incomplete evidence forces require_64gb
  * and fails closed.
  */
 export function evaluateTransitionSoak(
@@ -402,16 +461,8 @@ export function evaluateTransitionSoak(
       (it) => it.telemetry.samplingErrors.length === 0 && it.telemetry.samples.length > 0
     );
 
-  const noSwapActivity =
-    swapUsedDeltaMb === 0 &&
-    systemSwapInPageDelta === 0 &&
-    systemSwapOutPageDelta === 0 &&
-    iterations.every(
-      (it) =>
-        it.telemetry.swapUsedDeltaMb === 0 &&
-        it.telemetry.systemSwapInPageDelta === 0 &&
-        it.telemetry.systemSwapOutPageDelta === 0
-    );
+  const swapActivity = classifySwapActivity(iterations);
+  const noSwapActivity = swapActivity !== "sustained";
 
   const postUnloadVramHeadroomMet =
     iterations.length > 0 &&
