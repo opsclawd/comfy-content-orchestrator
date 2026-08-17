@@ -12,6 +12,7 @@ import {
 import type {
   ReviewEventStore,
   SceneRepository,
+  StoryboardCandidateRepository,
   UnitOfWork,
   UnitOfWorkContext
 } from "../ports/index.js";
@@ -451,9 +452,14 @@ describe("ReviewSceneUseCases", () => {
           }
         };
 
+        const scopedCandidates: StoryboardCandidateRepository = {
+          findById: async () => undefined
+        };
+
         return work({
           scenes: scopedScenes,
-          reviewEvents: scopedReviewEvents
+          reviewEvents: scopedReviewEvents,
+          candidates: scopedCandidates
         });
       }
     };

@@ -5,7 +5,7 @@ import type { StoryboardCandidateRepository } from "./storyboard-candidate-repos
 export interface UnitOfWorkContext {
   readonly scenes: SceneRepository;
   readonly reviewEvents: ReviewEventStore;
-  readonly candidates?: StoryboardCandidateRepository;
+  readonly candidates: StoryboardCandidateRepository;
 }
 
 export interface UnitOfWork {

@@ -1,11 +1,5 @@
 import { ReviewEventSchema, type ReviewAction } from "@cco/contracts";
-import type {
-  CandidateId,
-  Scene,
-  SceneId,
-  SceneTransition,
-  StoryboardCandidate
-} from "@cco/domain";
+import type { CandidateId, Scene, SceneId, SceneTransition } from "@cco/domain";
 import type { StoryboardCandidateRepository } from "../ports/storyboard-candidate-repository.js";
 import type { UnitOfWork } from "../ports/unit-of-work.js";
 import { CandidateNotFoundError } from "./candidate-not-found-error.js";
@@ -59,12 +53,9 @@ export class ReviewSceneUseCases {
   async selectCandidate(input: SelectCandidateInput): Promise<void> {
     await this.uow.execute(async (context) => {
       const candidateRepo = this.candidateRepository ?? context.candidates;
-      let candidate: StoryboardCandidate | undefined;
-      if (candidateRepo !== undefined) {
-        candidate = await candidateRepo.findById(input.candidateId);
-        if (candidate === undefined) {
-          throw new CandidateNotFoundError(input.candidateId);
-        }
+      const candidate = await candidateRepo.findById(input.candidateId);
+      if (candidate === undefined) {
+        throw new CandidateNotFoundError(input.candidateId);
       }
 
       const scene = await context.scenes.findById(input.sceneId as SceneId);
@@ -72,19 +63,11 @@ export class ReviewSceneUseCases {
         throw new SceneNotFoundError(input.sceneId);
       }
 
-      const candidateIdToSelect = candidate !== undefined ? candidate.id : input.candidateId;
-      const candidateRevisionToSelect =
-        candidate !== undefined
-          ? candidate.specRevision
-          : (input.candidateRevision ?? scene.snapshot().specRevision);
-      const candidateSceneIdToSelect =
-        candidate !== undefined ? candidate.sceneId : (input.sceneId as SceneId);
-
       const priorSceneStatus = scene.status;
       const transition = scene.selectCandidate(
-        candidateIdToSelect,
-        candidateRevisionToSelect,
-        candidateSceneIdToSelect
+        candidate.id,
+        candidate.specRevision,
+        candidate.sceneId
       );
 
       const event = ReviewEventSchema.parse({
@@ -94,8 +77,8 @@ export class ReviewSceneUseCases {
         action: "candidate_select",
         ...(input.directorNotes !== undefined ? { directorNotes: input.directorNotes } : {}),
         mutationPayload: {
-          candidateId: candidateIdToSelect,
-          candidateRevision: candidateRevisionToSelect
+          candidateId: candidate.id,
+          candidateRevision: candidate.specRevision
         },
         priorSceneStatus,
         resultingSceneStatus: transition.to,

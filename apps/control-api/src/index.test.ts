@@ -5,6 +5,7 @@ import {
   type QueueRenderInput,
   type RenderEnginePort,
   type RenderQueueReceipt,
+  type StoryboardCandidateRepository,
   type UnitOfWork,
   type UnitOfWorkContext
 } from "@cco/application";
@@ -37,6 +38,9 @@ class FakeUnitOfWork implements UnitOfWork {
       },
       reviewEvents: {
         append: async () => {}
+      },
+      candidates: {
+        findById: async () => undefined
       }
     };
     return work(context);
@@ -66,12 +70,17 @@ describe("control-api composition root", () => {
     return scene;
   };
 
+  const createDummyCandidateRepository = (): StoryboardCandidateRepository => ({
+    findById: async () => undefined
+  });
+
   it("exports the control-api module name", () => {
     expect(controlApiName).toBe("control-api");
   });
 
   it("creates a DI container wiring dependencies to ReviewSceneUseCases and ProgressSceneProductionUseCases", () => {
     const uow = new FakeUnitOfWork();
+    const candidateRepository = createDummyCandidateRepository();
     const queuedRequests: QueueRenderInput[] = [];
     const renderEngine: RenderEnginePort = {
       async queueRender(input: QueueRenderInput): Promise<RenderQueueReceipt> {
@@ -87,9 +96,10 @@ describe("control-api composition root", () => {
       async unloadModels() {}
     };
 
-    const container = createControlApiContainer({ uow, renderEngine });
+    const container = createControlApiContainer({ uow, renderEngine, candidateRepository });
 
     expect(container.dependencies.uow).toBe(uow);
+    expect(container.dependencies.candidateRepository).toBe(candidateRepository);
     expect(container.dependencies.renderEngine).toBe(renderEngine);
     expect(container.useCases.reviewScene).toBeInstanceOf(ReviewSceneUseCases);
     expect(container.useCases.progressSceneProduction).toBeInstanceOf(
@@ -100,6 +110,7 @@ describe("control-api composition root", () => {
   it("creates services shortcut and executes use cases through the composition root", async () => {
     const scene = createApprovedScene("scene-root-1");
     const uow = new FakeUnitOfWork([scene]);
+    const candidateRepository = createDummyCandidateRepository();
     const queuedRequests: QueueRenderInput[] = [];
     const renderEngine: RenderEnginePort = {
       async queueRender(input: QueueRenderInput): Promise<RenderQueueReceipt> {
@@ -122,7 +133,7 @@ describe("control-api composition root", () => {
       }
     } satisfies Readonly<Record<string, unknown>>;
 
-    const services = createControlApiServices({ uow, renderEngine });
+    const services = createControlApiServices({ uow, renderEngine, candidateRepository });
     const receipt = await services.progressSceneProduction.queue({
       sceneId: "scene-root-1",
       renderJobId: "job-root-1",
@@ -148,7 +159,9 @@ describe("control-api composition root", () => {
 
   it("createControlApi creates a fully functional container", () => {
     const uow = new FakeUnitOfWork();
-    const container = createControlApi({ uow });
+    const candidateRepository = createDummyCandidateRepository();
+    const container = createControlApi({ uow, candidateRepository });
+    expect(container.dependencies.candidateRepository).toBe(candidateRepository);
     expect(container.useCases.reviewScene).toBeInstanceOf(ReviewSceneUseCases);
     expect(container.useCases.progressSceneProduction).toBeInstanceOf(
       ProgressSceneProductionUseCases

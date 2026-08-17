@@ -10,8 +10,8 @@ export const controlApiName = "control-api";
 
 export interface ControlApiDependencies {
   readonly uow: UnitOfWork;
+  readonly candidateRepository: StoryboardCandidateRepository;
   readonly renderEngine?: RenderEnginePort;
-  readonly candidateRepository?: StoryboardCandidateRepository;
 }
 
 export interface ControlApiUseCases {
