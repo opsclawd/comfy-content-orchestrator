@@ -80,18 +80,13 @@ describe("transition-soak-analysis", () => {
     const hostRss = overrides?.peakProcessRssMb ?? (isFlux ? 26000 : 26500);
     const hostAvailable = overrides?.hostRamAvailableMb ?? 2500;
     const swapUsed = overrides?.swapUsedMb ?? 0;
-    const swapDelta =
-      overrides && "swapUsedDeltaMb" in overrides ? overrides.swapUsedDeltaMb! : 0;
+    const swapDelta = overrides && "swapUsedDeltaMb" in overrides ? overrides.swapUsedDeltaMb! : 0;
     const swapIn = overrides?.systemSwapInPages ?? 0;
     const swapInDelta =
-      overrides && "systemSwapInPageDelta" in overrides
-        ? overrides.systemSwapInPageDelta!
-        : 0;
+      overrides && "systemSwapInPageDelta" in overrides ? overrides.systemSwapInPageDelta! : 0;
     const swapOut = overrides?.systemSwapOutPages ?? 0;
     const swapOutDelta =
-      overrides && "systemSwapOutPageDelta" in overrides
-        ? overrides.systemSwapOutPageDelta!
-        : 0;
+      overrides && "systemSwapOutPageDelta" in overrides ? overrides.systemSwapOutPageDelta! : 0;
     const renderDuration = overrides?.renderDurationMs ?? (isFlux ? 11000 : 46500);
     const renderStatus = overrides?.renderStatus ?? "succeeded";
     const cleanupPassed = overrides?.cleanupPassed ?? true;
@@ -489,20 +484,9 @@ describe("transition-soak-analysis", () => {
     expect(resultHostLow.gate.checks.hostMemoryHeadroomMet).toBe(false);
   });
 
-  it("preserves every outlier in raw iteration evidence and Markdown", () => {
-    const iterations = createElevenPassingIterations();
-    // Inject a spike outlier in iteration 6 (render 6 has peak VRAM spike of 24,100 MB and duration 12,500 ms)
-    iterations[6] = createMockIteration(6, {
-      peakVramMb: 24100,
-      renderDurationMs: 12500,
-      peakHostRamUsedMb: 29150
-    });
-
-    const evalResult = evaluateTransitionSoak(iterations, defaultBaselines, defaultThresholds);
-    expect(evalResult.status).toBe("passed");
-
-    // Construct full artifact to pass to renderTransitionSoakSummary
-    const artifact: TransitionSoakArtifact = {
+  function createArtifact(iterations: TransitionSoakIteration[]): TransitionSoakArtifact {
+    const evaluation = evaluateTransitionSoak(iterations, defaultBaselines, defaultThresholds);
+    return {
       version: 1,
       runId: "trinidad-rtx4090-dynamicvram-v1",
       generatedAt: "2026-08-16T19:05:00.000Z",
@@ -521,7 +505,9 @@ describe("transition-soak-analysis", () => {
           frames: 1,
           steps: 4,
           workflowSha256: "a".repeat(64),
-          modelSha256: { "models/diffusion_models/flux1-schnell.safetensors": "b".repeat(64) },
+          modelSha256: {
+            "models/diffusion_models/flux1-schnell.safetensors": "b".repeat(64)
+          },
           comfyUiCommit: "c".repeat(40),
           customNodes: [],
           measuredDiskFootprintGb: 35.2,
@@ -537,7 +523,9 @@ describe("transition-soak-analysis", () => {
           frames: 97,
           steps: 8,
           workflowSha256: "d".repeat(64),
-          modelSha256: { "models/diffusion_models/ltx-2.5-22b.safetensors": "e".repeat(64) },
+          modelSha256: {
+            "models/diffusion_models/ltx-2.5-22b.safetensors": "e".repeat(64)
+          },
           comfyUiCommit: "c".repeat(40),
           customNodes: [],
           measuredDiskFootprintGb: 68.8,
@@ -561,8 +549,68 @@ describe("transition-soak-analysis", () => {
         comfyUiArgs: ["/path/to/python", "main.py", "--listen", "0.0.0.0", "--port", "8188"]
       },
       iterations,
-      ...evalResult
+      ...evaluation
     };
+  }
+
+  it("renders None (PASS) when no swap is observed", () => {
+    const iterations = createElevenPassingIterations();
+    const artifact = createArtifact(iterations);
+
+    const summary = renderTransitionSoakSummary(artifact);
+
+    expect(summary).toContain("None (PASS)");
+  });
+
+  it("renders Transient (PASS) for the recorded Trinidad swap profile", () => {
+    const trinidadSwapUsedMb = [2, 88, 982, 89, 0, null, 0, 7, 0, 0, 0] as const;
+    const trinidadSwapInPages = [0, 3, 818, 2310, 173, 912, 82, 169, 91, 47, 55] as const;
+    const trinidadSwapOutPages = [466, 22485, 251657, 23559, 0, 231, 0, 2637, 0, 41, 0] as const;
+
+    const iterations = createElevenPassingIterations().map((_, index) =>
+      createMockIteration(index, {
+        swapUsedDeltaMb: trinidadSwapUsedMb[index]!,
+        systemSwapInPageDelta: trinidadSwapInPages[index]!,
+        systemSwapOutPageDelta: trinidadSwapOutPages[index]!
+      })
+    );
+
+    const artifact = createArtifact(iterations);
+    const summary = renderTransitionSoakSummary(artifact);
+
+    expect(summary).toContain("Transient (PASS)");
+    expect(summary).toContain("982 MB");
+    expect(summary).toContain("N/A");
+    expect(summary).toContain("in:818/out:251657");
+    expect(summary).toContain("in:912/out:231");
+  });
+
+  it("renders Sustained (FAIL) when swap recurs or does not decay", () => {
+    const iterations = createElevenPassingIterations().map((_, index) =>
+      createMockIteration(index, {
+        swapUsedDeltaMb: index < 6 ? 6 : 0,
+        systemSwapInPageDelta: 0,
+        systemSwapOutPageDelta: 0
+      })
+    );
+
+    const artifact = createArtifact(iterations);
+    const summary = renderTransitionSoakSummary(artifact);
+
+    expect(summary).toContain("Sustained (FAIL)");
+  });
+
+  it("preserves every outlier in raw iteration evidence and Markdown", () => {
+    const iterations = createElevenPassingIterations();
+    // Inject a spike outlier in iteration 6 (render 6 has peak VRAM spike of 24,100 MB and duration 12,500 ms)
+    iterations[6] = createMockIteration(6, {
+      peakVramMb: 24100,
+      renderDurationMs: 12500,
+      peakHostRamUsedMb: 29150
+    });
+
+    const artifact = createArtifact(iterations);
+    expect(artifact.status).toBe("passed");
 
     const summary = renderTransitionSoakSummary(artifact);
 
@@ -583,7 +631,7 @@ describe("transition-soak-analysis", () => {
 
     // Markdown must show all gate checks
     expect(summary).toContain("Completed Required Transitions");
-    expect(summary).toContain("No Swap Activity");
+    expect(summary).toContain("Swap Activity");
     expect(summary).toContain("VRAM Growth Within Tolerance");
     expect(summary).toContain("Host Growth Within Tolerance");
     expect(summary).toContain("Latency Within Tolerance");
