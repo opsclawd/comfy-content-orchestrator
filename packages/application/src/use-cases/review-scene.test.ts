@@ -447,13 +447,16 @@ describe("ReviewSceneUseCases", () => {
         };
 
         const scopedReviewEvents: ReviewEventStore = {
+          findById: async () => undefined,
           append: async (): Promise<void> => {
             throw new Error("Event store append failed: connection dropped");
           }
         };
 
         const scopedCandidates: StoryboardCandidateRepository = {
-          findById: async () => undefined
+          findById: async () => undefined,
+          insert: async () => {},
+          listBySceneAndRevision: async () => []
         };
 
         return work({

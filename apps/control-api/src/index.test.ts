@@ -36,10 +36,13 @@ class FakeUnitOfWork implements UnitOfWork {
         }
       },
       reviewEvents: {
+        findById: async () => undefined,
         append: async () => {}
       },
       candidates: {
-        findById: async () => undefined
+        findById: async () => undefined,
+        insert: async () => {},
+        listBySceneAndRevision: async () => []
       }
     };
     return work(context);
