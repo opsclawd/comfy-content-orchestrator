@@ -429,21 +429,22 @@ describe("LocalFsGpuLeaseAdapter", () => {
     };
     await writeFile(lockFilePath, `${JSON.stringify(existingHolder)}\n`, "utf8");
 
+    let idCalls = 0;
     const adapter = new LocalFsGpuLeaseAdapter({
       lockFilePath,
       pid: 4242,
       hostname: "test-host",
-      createLeaseId: () => "winner-lease"
-    });
-
-    // Simulate lock release immediately after writeAtomicLock fails
-    setTimeout(async () => {
-      try {
-        await rm(lockFilePath, { force: true });
-      } catch {
-        // ignore
+      createLeaseId: () => {
+        idCalls++;
+        if (idCalls === 1) {
+          // Unlink lock file asynchronously while writeAtomicLock is writing temp file
+          setImmediate(() => {
+            rm(lockFilePath, { force: true }).catch(() => {});
+          });
+        }
+        return "winner-lease";
       }
-    }, 15);
+    });
 
     const lease = await adapter.acquireLease();
     expect(lease.holder.leaseId).toBe("winner-lease");
@@ -471,22 +472,23 @@ describe("LocalFsGpuLeaseAdapter", () => {
     };
     await writeFile(reclaimPath, `${JSON.stringify(transientGuard)}\n`, "utf8");
 
+    let idCalls = 0;
     const adapter = new LocalFsGpuLeaseAdapter({
       lockFilePath,
       pid: 4242,
       hostname: "test-host",
-      createLeaseId: () => "reclaimed-after-race",
+      createLeaseId: () => {
+        idCalls++;
+        if (idCalls === 2) {
+          // Candidate guard creation inside reclaimDeadHolder: unlink reclaimPath while writeAtomicLock writes temp file
+          setImmediate(() => {
+            rm(reclaimPath, { force: true }).catch(() => {});
+          });
+        }
+        return "reclaimed-after-race";
+      },
       probeProcess: (pid: number) => (pid === 99991 ? false : true)
     });
-
-    // Unlink reclaim guard shortly after starting
-    setTimeout(async () => {
-      try {
-        await rm(reclaimPath, { force: true });
-      } catch {
-        // ignore
-      }
-    }, 15);
 
     const lease = await adapter.acquireLease();
     expect(lease.holder.leaseId).toBe("reclaimed-after-race");
@@ -525,5 +527,44 @@ describe("LocalFsGpuLeaseAdapter", () => {
     expect(lease.holder.leaseId).toBe("acquired-after-vanish");
     expect(probeCount).toBe(1);
     await lease.release();
+  });
+
+  it("differentiates ENOENT (undefined) from parse errors (null) in readHolder", async () => {
+    const adapter = new LocalFsGpuLeaseAdapter({
+      lockFilePath: join(tempDir, "placeholder.lock")
+    }) as unknown as {
+      readHolder: (filePath: string) => Promise<GpuLeaseHolder | null | undefined>;
+    };
+
+    // Non-existent file -> undefined
+    const missing = await adapter.readHolder(join(tempDir, "does-not-exist.lock"));
+    expect(missing).toBeUndefined();
+
+    // Empty file -> null
+    const emptyPath = join(tempDir, "empty.lock");
+    await writeFile(emptyPath, "   \n", "utf8");
+    expect(await adapter.readHolder(emptyPath)).toBeNull();
+
+    // Malformed JSON -> null
+    const malformedPath = join(tempDir, "malformed.lock");
+    await writeFile(malformedPath, "{ bad json", "utf8");
+    expect(await adapter.readHolder(malformedPath)).toBeNull();
+
+    // Invalid schema (missing required fields) -> null
+    const invalidPath = join(tempDir, "invalid.lock");
+    await writeFile(invalidPath, JSON.stringify({ version: 1, pid: -5 }), "utf8");
+    expect(await adapter.readHolder(invalidPath)).toBeNull();
+
+    // Valid holder -> GpuLeaseHolder
+    const validPath = join(tempDir, "valid.lock");
+    const validHolder: GpuLeaseHolder = {
+      version: 1,
+      pid: 1234,
+      startedAt: "2026-08-16T12:00:00.000Z",
+      hostname: "host-1",
+      leaseId: "lease-123"
+    };
+    await writeFile(validPath, JSON.stringify(validHolder), "utf8");
+    expect(await adapter.readHolder(validPath)).toEqual(validHolder);
   });
 });
