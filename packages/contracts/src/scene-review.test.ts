@@ -539,7 +539,7 @@ describe("Review Command Envelopes, Discriminated Action Payloads, and Canonical
     expect(ReviewCommandSchema.safeParse(invalidArbitraryString).success).toBe(false);
   });
 
-  it("hashes commands deterministically ignoring actionId and key order while detecting material changes", async () => {
+  it("hashes commands deterministically ignoring actionId and key order while detecting material changes", () => {
     const cmdA1 = {
       actionId: "11111111-1111-4111-8111-111111111111",
       sceneId: "22222222-2222-4222-8222-222222222222",
@@ -558,8 +558,8 @@ describe("Review Command Envelopes, Discriminated Action Payloads, and Canonical
       directorNotes: "test notes"
     };
 
-    const hashA1 = await hashReviewCommand(cmdA1);
-    const hashA2 = await hashReviewCommand(cmdA2DifferentActionId);
+    const hashA1 = hashReviewCommand(cmdA1);
+    const hashA2 = hashReviewCommand(cmdA2DifferentActionId);
     expect(hashA1).toHaveLength(64);
     expect(hashA1).toBe(hashA2);
 
@@ -585,14 +585,14 @@ describe("Review Command Envelopes, Discriminated Action Payloads, and Canonical
       ...cmdA1,
       payload: { prompt: "different prompt" }
     };
-    expect(await hashReviewCommand(cmdPayloadChange)).not.toBe(hashA1);
+    expect(hashReviewCommand(cmdPayloadChange)).not.toBe(hashA1);
 
     // Changing revision changes hash
     const cmdRevisionChange = {
       ...cmdA1,
       expectedSpecRevision: 2
     };
-    expect(await hashReviewCommand(cmdRevisionChange)).not.toBe(hashA1);
+    expect(hashReviewCommand(cmdRevisionChange)).not.toBe(hashA1);
 
     // Changing action changes hash
     const cmdActionChange = {
@@ -600,14 +600,14 @@ describe("Review Command Envelopes, Discriminated Action Payloads, and Canonical
       action: "approve" as const,
       payload: {}
     };
-    expect(await hashReviewCommand(cmdActionChange)).not.toBe(hashA1);
+    expect(hashReviewCommand(cmdActionChange)).not.toBe(hashA1);
 
     // Changing director notes changes hash
     const cmdNotesChange = {
       ...cmdA1,
       directorNotes: "different notes"
     };
-    expect(await hashReviewCommand(cmdNotesChange)).not.toBe(hashA1);
+    expect(hashReviewCommand(cmdNotesChange)).not.toBe(hashA1);
 
     // Omitting director notes changes hash
     const cmdNoNotes = {
@@ -617,7 +617,7 @@ describe("Review Command Envelopes, Discriminated Action Payloads, and Canonical
       action: "prompt_edit" as const,
       payload: { prompt: "hello world" }
     };
-    expect(await hashReviewCommand(cmdNoNotes)).not.toBe(hashA1);
+    expect(hashReviewCommand(cmdNoNotes)).not.toBe(hashA1);
   });
 
   it("accepts valid discriminated commands for all Phase 1 actions", () => {
