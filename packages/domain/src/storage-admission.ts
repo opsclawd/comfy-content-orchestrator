@@ -1,9 +1,4 @@
-export const STORAGE_WATERMARK_STATES = [
-  "normal",
-  "warning",
-  "degraded",
-  "critical"
-] as const;
+export const STORAGE_WATERMARK_STATES = ["normal", "warning", "degraded", "critical"] as const;
 
 export type StorageWatermarkState = (typeof STORAGE_WATERMARK_STATES)[number];
 

@@ -183,7 +183,10 @@ export const LoraTunePayloadSchema = z.object({
 });
 export type LoraTunePayload = z.infer<typeof LoraTunePayloadSchema>;
 
-export const EmptyActionPayloadSchema = z.record(z.string(), z.never()).or(z.object({})).default({});
+export const EmptyActionPayloadSchema = z
+  .record(z.string(), z.never())
+  .or(z.object({}))
+  .default({});
 
 const BaseCommandEnvelope = z.object({
   actionId: z.string().uuid(),

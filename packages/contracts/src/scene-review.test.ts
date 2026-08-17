@@ -686,9 +686,9 @@ describe("Review Command Envelopes, Discriminated Action Payloads, and Canonical
     });
     expect(PromptEditPayloadSchema.safeParse({ prompt: "" }).success).toBe(false);
 
-    expect(
-      ReferenceChangePayloadSchema.parse({ referenceIds: ["id-1", "id-2"] })
-    ).toEqual({ referenceIds: ["id-1", "id-2"] });
+    expect(ReferenceChangePayloadSchema.parse({ referenceIds: ["id-1", "id-2"] })).toEqual({
+      referenceIds: ["id-1", "id-2"]
+    });
 
     expect(EngineChangePayloadSchema.parse({ engineProfileId: "ltx_25" })).toEqual({
       engineProfileId: "ltx_25"
@@ -701,9 +701,9 @@ describe("Review Command Envelopes, Discriminated Action Payloads, and Canonical
     expect(DurationChangePayloadSchema.safeParse({ durationMs: 0 }).success).toBe(false);
     expect(DurationChangePayloadSchema.safeParse({ durationMs: -500 }).success).toBe(false);
 
-    expect(
-      LoraTunePayloadSchema.parse({ loraConfigurationId: "lora-1" })
-    ).toEqual({ loraConfigurationId: "lora-1" });
+    expect(LoraTunePayloadSchema.parse({ loraConfigurationId: "lora-1" })).toEqual({
+      loraConfigurationId: "lora-1"
+    });
     expect(LoraTunePayloadSchema.parse({ loraConfigurationId: null })).toEqual({
       loraConfigurationId: null
     });
@@ -752,4 +752,3 @@ describe("Review Command Envelopes, Discriminated Action Payloads, and Canonical
     ).toBe(false);
   });
 });
-
