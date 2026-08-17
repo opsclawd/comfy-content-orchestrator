@@ -732,5 +732,60 @@ describe("ReviewSceneUseCases", () => {
       expect(event.resultingSpecRevision).toBe(1);
       expect(event.requestHashSha256).toBe(requestHash);
     });
+
+    it("selectCandidate: duplicate eventId returns early without modifying scene or appending duplicate event", async () => {
+      const scene = createSceneInDirectorReview("scene-idemp-select");
+      const candidate = createCandidate("candidate-1", "scene-idemp-select", 1);
+      const uow = new InMemorySceneUnitOfWork([scene], [candidate]);
+      const useCases = new ReviewSceneUseCases(uow);
+
+      const input = {
+        sceneId: "scene-idemp-select",
+        eventId: "event-duplicate-1",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T01:00:00.000Z",
+        candidateId: "candidate-1" as CandidateId
+      };
+
+      // First call succeeds
+      await useCases.selectCandidate(input);
+      expect(uow.savedScenes).toHaveLength(1);
+      expect(uow.reviewEvents).toHaveLength(1);
+
+      // Second call with identical eventId is a no-op
+      await useCases.selectCandidate({
+        ...input,
+        candidateId: "candidate-nonexistent" as CandidateId // should not even lookup candidate if idempotent
+      });
+
+      expect(uow.savedScenes).toHaveLength(1);
+      expect(uow.reviewEvents).toHaveLength(1);
+    });
+
+    it("review actions: duplicate eventId returns early without modifying scene or appending duplicate event", async () => {
+      const scene = createSceneInDirectorReview("scene-idemp-action");
+      scene.selectCandidate("candidate-1" as CandidateId, scene.snapshot().specRevision, scene.id);
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const useCases = new ReviewSceneUseCases(uow);
+
+      const input = {
+        sceneId: "scene-idemp-action",
+        eventId: "event-duplicate-action-1",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T01:00:00.000Z"
+      };
+
+      // First call approves scene
+      await useCases.approve(input);
+      expect(uow.savedScenes).toHaveLength(1);
+      expect(uow.reviewEvents).toHaveLength(1);
+      expect(uow.savedScenes[0]!.status).toBe("approved");
+
+      // Second call with duplicate eventId does nothing (even if scene is now in approved state where approve is not a valid transition)
+      await useCases.approve(input);
+
+      expect(uow.savedScenes).toHaveLength(1);
+      expect(uow.reviewEvents).toHaveLength(1);
+    });
   });
 });

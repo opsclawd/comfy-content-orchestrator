@@ -51,6 +51,11 @@ export class ReviewSceneUseCases {
 
   async selectCandidate(input: SelectCandidateInput): Promise<void> {
     await this.uow.execute(async (context) => {
+      const existingEvent = await context.reviewEvents.findById(input.eventId);
+      if (existingEvent !== undefined) {
+        return;
+      }
+
       const candidate = await context.candidates.findById(input.candidateId);
       if (candidate === undefined) {
         throw new CandidateNotFoundError(input.candidateId);
@@ -172,6 +177,11 @@ export class ReviewSceneUseCases {
     apply: (scene: Scene) => SceneTransition
   ): Promise<void> {
     await this.uow.execute(async (context) => {
+      const existingEvent = await context.reviewEvents.findById(input.eventId);
+      if (existingEvent !== undefined) {
+        return;
+      }
+
       const scene = await context.scenes.findById(input.sceneId as SceneId);
       if (scene === undefined) {
         throw new SceneNotFoundError(input.sceneId);
