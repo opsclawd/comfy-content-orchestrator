@@ -39,9 +39,7 @@ class FakeUnitOfWork implements UnitOfWork {
         append: async () => {}
       },
       candidates: {
-        findById: async () => undefined,
-        save: async () => {},
-        findBySceneRevision: async () => []
+        findById: async () => undefined
       }
     };
     return work(context);

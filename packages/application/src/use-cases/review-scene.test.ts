@@ -453,9 +453,7 @@ describe("ReviewSceneUseCases", () => {
         };
 
         const scopedCandidates: StoryboardCandidateRepository = {
-          findById: async () => undefined,
-          save: async () => {},
-          findBySceneRevision: async () => []
+          findById: async () => undefined
         };
 
         return work({

@@ -215,45 +215,11 @@ describe("Application capability ports contract tests", () => {
                 createdAt: "2026-08-15T00:00:00.000Z"
               }
             : undefined;
-        },
-        async save(_candidate: StoryboardCandidate): Promise<void> {},
-        async findBySceneRevision(
-          sceneId: string,
-          revision: number
-        ): Promise<readonly StoryboardCandidate[]> {
-          return sceneId === "scene-1" && revision === 1
-            ? [
-                {
-                  id: "cand-1" as CandidateId,
-                  sceneId: "scene-1" as SceneId,
-                  specRevision: 1,
-                  variantOrdinal: 1,
-                  locator: "godzspeed-temp/candidates/cand-1.webp",
-                  contentHash: "hash123",
-                  generationMetadata: {},
-                  createdAt: "2026-08-15T00:00:00.000Z"
-                }
-              ]
-            : [];
         }
       } satisfies StoryboardCandidateRepository;
 
       const candidate = await candidateRepo.findById("cand-1" as CandidateId);
       expect(candidate?.id).toBe("cand-1");
-      await expect(
-        candidateRepo.save({
-          id: "cand-2" as CandidateId,
-          sceneId: "scene-1" as SceneId,
-          specRevision: 1,
-          variantOrdinal: 2,
-          locator: "godzspeed-temp/candidates/cand-2.webp",
-          contentHash: "hash456",
-          generationMetadata: {},
-          createdAt: "2026-08-15T00:00:00.000Z"
-        })
-      ).resolves.toBeUndefined();
-      const revisionCandidates = await candidateRepo.findBySceneRevision("scene-1", 1);
-      expect(revisionCandidates).toHaveLength(1);
 
       const license = await licenseRegistryRepo.findByComponentKey("ltx-video");
       expect(license?.license).toBe("Apache-2.0");
