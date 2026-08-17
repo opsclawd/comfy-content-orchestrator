@@ -186,3 +186,21 @@ If a lock file contains corrupted metadata or an operator must intervene:
    ```bash
    rm -f /tmp/comfy-content-orchestrator-gpu-0.lock /tmp/comfy-content-orchestrator-gpu-0.lock.reclaim
    ```
+
+---
+
+## 5. Target-Host Acceptance Status
+
+> [!IMPORTANT]
+> **The CLI has not yet been executed against the Trinidad render host.**
+
+Everything documented above is verified by unit and cross-process tests only. GPU lease contention is exercised with spawned child processes against a real filesystem lock; **GPU inference is not exercised at all**.
+
+Two acceptance criteria from #9 remain open because they require hardware:
+
+- a real FLUX render completing through the full layer stack
+- a real LTX run dispatched through this same path
+
+Both are tracked in #32, which is executed by an operator on the Trinidad host and reports the verbatim CLI output, the produced output files with timestamps, and the ComfyUI commit at run time. #32 also records a live-hardware exclusivity check — starting a second render while a first is mid-inference — which the cross-process tests approximate but cannot reproduce against an actively executing GPU.
+
+Until #32 completes, treat the exit codes and JSON contract in sections 3 and 4 as specified-and-unit-tested rather than field-verified.
