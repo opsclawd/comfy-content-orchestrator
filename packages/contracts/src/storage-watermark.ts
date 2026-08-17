@@ -1,6 +1,6 @@
+import { STORAGE_WATERMARK_STATES } from "@cco/shared";
 import { z } from "zod";
 
-export const STORAGE_WATERMARK_STATES = ["normal", "warning", "degraded", "critical"] as const;
-
+export { STORAGE_WATERMARK_STATES };
 export const StorageWatermarkStateSchema = z.enum(STORAGE_WATERMARK_STATES);
 export type StorageWatermarkState = z.infer<typeof StorageWatermarkStateSchema>;

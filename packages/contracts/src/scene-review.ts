@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { z } from "zod";
 
 export const SCENE_STATUSES = [
@@ -305,13 +304,17 @@ export function canonicalizeReviewCommand(command: {
   return JSON.stringify(sortKeysDeep(normalized));
 }
 
-export function hashReviewCommand(command: {
+export async function hashReviewCommand(command: {
   sceneId: string;
   expectedSpecRevision: number;
   action: string;
   payload: unknown;
   directorNotes?: string;
-}): string {
+}): Promise<string> {
   const canonical = canonicalizeReviewCommand(command);
-  return createHash("sha256").update(canonical, "utf8").digest("hex");
+  const data = new TextEncoder().encode(canonical);
+  const buffer = await globalThis.crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(buffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
