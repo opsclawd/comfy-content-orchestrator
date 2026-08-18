@@ -11,6 +11,7 @@ import type {
   MediaAssemblerPort,
   ObjectLocator,
   ObjectStoragePort,
+  PersistentObjectLocator,
   PlannerPort,
   PutObjectInput,
   QueueRenderInput,
@@ -20,6 +21,7 @@ import type {
   RenderQueueReceipt,
   RenderResult,
   ReviewEventStore,
+  ReviewMediaDeliveryPort,
   SceneReviewCandidateGroup,
   SceneReviewDetail,
   SceneReviewQueries,
@@ -458,6 +460,33 @@ describe("Application capability ports contract tests", () => {
         key: "nonexistent.mp4"
       });
       expect(absent).toBeUndefined();
+    });
+  });
+
+  describe("Review Media Delivery capability family", () => {
+    it("satisfies ReviewMediaDeliveryPort contract generating ephemeral read URLs from persistent locators", async () => {
+      const mediaDeliveryPort = {
+        async generatePresignedReadUrl(
+          locator: PersistentObjectLocator,
+          expiresInSeconds?: number
+        ): Promise<string> {
+          const expiry = expiresInSeconds ?? 3600;
+          return `https://storage-01.godzspeed-internal.ts.net/${locator.bucket}/${locator.key}?hash=${locator.contentHash}&exp=${expiry}`;
+        }
+      } satisfies ReviewMediaDeliveryPort;
+
+      const locator: PersistentObjectLocator = {
+        bucket: "godzspeed-review",
+        key: "candidates/scene-1/rev-1-var-1.webp",
+        contentHash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      };
+
+      const url = await mediaDeliveryPort.generatePresignedReadUrl(locator, 1800);
+      expect(url).toContain("storage-01.godzspeed-internal.ts.net/godzspeed-review");
+      expect(url).toContain(
+        "hash=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      );
+      expect(url).toContain("exp=1800");
     });
   });
 });
