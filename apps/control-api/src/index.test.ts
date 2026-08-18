@@ -97,6 +97,9 @@ describe("control-api composition root", () => {
     const sceneReviewQueries: SceneReviewQueries = {
       async getSceneReviewDetail() {
         return undefined;
+      },
+      async getCampaignReviewSummary() {
+        return undefined;
       }
     };
 
