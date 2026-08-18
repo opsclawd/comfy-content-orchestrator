@@ -6,6 +6,7 @@ import {
 } from "./types.js";
 import { handleReviewError } from "./errors.js";
 import { reviewReadRoutes } from "./routes/review-read-routes.js";
+import { reviewCommandRoutes } from "./routes/review-command-routes.js";
 import type { ControlApiAppOptions } from "./types.js";
 
 function isControlApiContainer(
@@ -42,6 +43,11 @@ export function createControlApiApp(
   });
 
   app.register(reviewReadRoutes, {
+    container,
+    ...(options !== undefined ? { appOptions: options } : {})
+  });
+
+  app.register(reviewCommandRoutes, {
     container,
     ...(options !== undefined ? { appOptions: options } : {})
   });

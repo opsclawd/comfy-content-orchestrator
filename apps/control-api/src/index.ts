@@ -25,3 +25,4 @@ export * from "./http/types.js";
 export * from "./http/errors.js";
 export * from "./http/app.js";
 export * from "./http/routes/review-read-routes.js";
+export * from "./http/routes/review-command-routes.js";
