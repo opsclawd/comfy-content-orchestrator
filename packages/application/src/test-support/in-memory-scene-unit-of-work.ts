@@ -11,6 +11,7 @@ import type {
 export class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _seededScenes: Map<SceneId, Scene>;
   private readonly _seededCandidates: Map<CandidateId, StoryboardCandidate>;
+  private readonly _seededReviewEvents: Map<string, ReviewEvent>;
   private readonly _savedScenes: Scene[] = [];
   private readonly _reviewEvents: ReviewEvent[] = [];
 
@@ -19,7 +20,11 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     seededCandidates?:
       | Iterable<StoryboardCandidate>
       | ReadonlyMap<CandidateId, StoryboardCandidate>
-      | Record<string, StoryboardCandidate>
+      | Record<string, StoryboardCandidate>,
+    seededReviewEvents?:
+      | Iterable<ReviewEvent>
+      | ReadonlyMap<string, ReviewEvent>
+      | Record<string, ReviewEvent>
   ) {
     this._seededScenes = new Map<SceneId, Scene>();
     if (seededScenes !== undefined && seededScenes !== null) {
@@ -61,6 +66,28 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       } else if (typeof seededCandidates === "object") {
         for (const [id, candidate] of Object.entries(seededCandidates)) {
           this._seededCandidates.set(id as CandidateId, candidate as StoryboardCandidate);
+        }
+      }
+    }
+
+    this._seededReviewEvents = new Map<string, ReviewEvent>();
+    if (seededReviewEvents !== undefined && seededReviewEvents !== null) {
+      if (seededReviewEvents instanceof Map) {
+        for (const [id, event] of seededReviewEvents.entries()) {
+          this._seededReviewEvents.set(id, event);
+        }
+      } else if (Symbol.iterator in seededReviewEvents) {
+        for (const item of seededReviewEvents) {
+          if (Array.isArray(item) && item.length === 2 && typeof item[0] === "string") {
+            this._seededReviewEvents.set(item[0], item[1] as ReviewEvent);
+          } else {
+            const event = item as ReviewEvent;
+            this._seededReviewEvents.set(event.eventId, event);
+          }
+        }
+      } else if (typeof seededReviewEvents === "object") {
+        for (const [id, event] of Object.entries(seededReviewEvents)) {
+          this._seededReviewEvents.set(id, event as ReviewEvent);
         }
       }
     }
@@ -121,7 +148,8 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       findById: async (eventId: string): Promise<ReviewEvent | undefined> => {
         return (
           stagedReviewEvents.find((e) => e.eventId === eventId) ??
-          this._reviewEvents.find((e) => e.eventId === eventId)
+          this._reviewEvents.find((e) => e.eventId === eventId) ??
+          this._seededReviewEvents.get(eventId)
         );
       }
     };
@@ -141,6 +169,9 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     }
     for (const candidate of stagedCandidates) {
       this._seededCandidates.set(candidate.id, candidate);
+    }
+    for (const event of stagedReviewEvents) {
+      this._seededReviewEvents.set(event.eventId, event);
     }
 
     return result;
