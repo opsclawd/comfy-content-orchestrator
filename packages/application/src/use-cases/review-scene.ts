@@ -1,6 +1,6 @@
 import { ReviewEventSchema, type ReviewAction } from "@cco/contracts";
 import type { CandidateId, Scene, SceneId, SceneSnapshot, SceneTransition } from "@cco/domain";
-import type { UnitOfWork } from "../ports/unit-of-work.js";
+import type { UnitOfWork, UnitOfWorkContext } from "../ports/unit-of-work.js";
 import { CandidateNotFoundError } from "./candidate-not-found-error.js";
 import { IdempotencyConflictError } from "./idempotency-conflict-error.js";
 import { SceneNotFoundError } from "./scene-not-found-error.js";
@@ -58,43 +58,15 @@ export class ReviewSceneUseCases {
 
   async selectCandidate(input: SelectCandidateInput): Promise<ReviewExecutionResult> {
     return await this.uow.execute(async (context) => {
-      const existingEvent = await context.reviewEvents.findById(input.eventId);
-      if (existingEvent !== undefined) {
-        const scene = await context.scenes.findById(input.sceneId as SceneId);
-        if (scene === undefined) {
-          throw new SceneNotFoundError(input.sceneId);
-        }
-
-        if (
-          input.requestHashSha256 !== undefined &&
-          existingEvent.requestHashSha256 !== undefined &&
-          input.requestHashSha256 !== existingEvent.requestHashSha256
-        ) {
-          throw new IdempotencyConflictError(input.eventId);
-        }
-
+      const prepared = await this.prepareReviewExecution(context, input);
+      if (prepared.isIdempotentReplay) {
         return {
           isIdempotentReplay: true,
-          scene: scene.snapshot()
+          scene: prepared.scene.snapshot()
         };
       }
 
-      const scene = await context.scenes.findById(input.sceneId as SceneId);
-      if (scene === undefined) {
-        throw new SceneNotFoundError(input.sceneId);
-      }
-
-      if (
-        input.expectedSpecRevision !== undefined &&
-        scene.snapshot().specRevision !== input.expectedSpecRevision
-      ) {
-        throw new StaleRevisionConflictError(
-          input.sceneId,
-          input.expectedSpecRevision,
-          scene.snapshot().specRevision
-        );
-      }
-
+      const scene = prepared.scene;
       const candidate = await context.candidates.findById(input.candidateId);
       if (candidate === undefined) {
         throw new CandidateNotFoundError(input.candidateId);
@@ -209,32 +181,24 @@ export class ReviewSceneUseCases {
     return await this.executeReviewAction(input, "cancel", {}, (scene) => scene.cancel());
   }
 
-  private async executeReviewAction(
-    input: ReviewAuditInput,
-    action: ReviewAction,
-    payload: Record<string, unknown>,
-    apply: (scene: Scene) => SceneTransition
-  ): Promise<ReviewExecutionResult> {
-    return await this.uow.execute(async (context) => {
-      const existingEvent = await context.reviewEvents.findById(input.eventId);
-      if (existingEvent !== undefined) {
-        const scene = await context.scenes.findById(input.sceneId as SceneId);
-        if (scene === undefined) {
-          throw new SceneNotFoundError(input.sceneId);
-        }
+  private async prepareReviewExecution(
+    context: UnitOfWorkContext,
+    input: ReviewAuditInput
+  ): Promise<
+    | { readonly isIdempotentReplay: true; readonly scene: Scene }
+    | { readonly isIdempotentReplay: false; readonly scene: Scene }
+  > {
+    const existingEvent = await context.reviewEvents.findById(input.eventId);
+    if (existingEvent !== undefined) {
+      if (existingEvent.sceneId !== input.sceneId) {
+        throw new IdempotencyConflictError(input.eventId);
+      }
 
-        if (
-          input.requestHashSha256 !== undefined &&
-          existingEvent.requestHashSha256 !== undefined &&
-          input.requestHashSha256 !== existingEvent.requestHashSha256
-        ) {
-          throw new IdempotencyConflictError(input.eventId);
-        }
-
-        return {
-          isIdempotentReplay: true,
-          scene: scene.snapshot()
-        };
+      if (
+        (input.requestHashSha256 !== undefined || existingEvent.requestHashSha256 !== undefined) &&
+        input.requestHashSha256 !== existingEvent.requestHashSha256
+      ) {
+        throw new IdempotencyConflictError(input.eventId);
       }
 
       const scene = await context.scenes.findById(input.sceneId as SceneId);
@@ -242,17 +206,50 @@ export class ReviewSceneUseCases {
         throw new SceneNotFoundError(input.sceneId);
       }
 
-      if (
-        input.expectedSpecRevision !== undefined &&
-        scene.snapshot().specRevision !== input.expectedSpecRevision
-      ) {
-        throw new StaleRevisionConflictError(
-          input.sceneId,
-          input.expectedSpecRevision,
-          scene.snapshot().specRevision
-        );
+      return {
+        isIdempotentReplay: true,
+        scene
+      };
+    }
+
+    const scene = await context.scenes.findById(input.sceneId as SceneId);
+    if (scene === undefined) {
+      throw new SceneNotFoundError(input.sceneId);
+    }
+
+    if (
+      input.expectedSpecRevision !== undefined &&
+      scene.snapshot().specRevision !== input.expectedSpecRevision
+    ) {
+      throw new StaleRevisionConflictError(
+        input.sceneId,
+        input.expectedSpecRevision,
+        scene.snapshot().specRevision
+      );
+    }
+
+    return {
+      isIdempotentReplay: false,
+      scene
+    };
+  }
+
+  private async executeReviewAction(
+    input: ReviewAuditInput,
+    action: ReviewAction,
+    payload: Record<string, unknown>,
+    apply: (scene: Scene) => SceneTransition
+  ): Promise<ReviewExecutionResult> {
+    return await this.uow.execute(async (context) => {
+      const prepared = await this.prepareReviewExecution(context, input);
+      if (prepared.isIdempotentReplay) {
+        return {
+          isIdempotentReplay: true,
+          scene: prepared.scene.snapshot()
+        };
       }
 
+      const scene = prepared.scene;
       const priorSceneStatus = scene.status;
       const transition = apply(scene);
       const event = ReviewEventSchema.parse({

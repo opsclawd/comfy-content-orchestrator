@@ -200,6 +200,176 @@ describe("ReviewSceneUseCases - Concurrency & Idempotency", () => {
     ).rejects.toThrow(IdempotencyConflictError);
   });
 
+  it("throws IdempotencyConflictError when action ID exists with mismatched sceneId", async () => {
+    const scene1 = createReviewScene("scene-cross-1");
+    const scene2 = createReviewScene("scene-cross-2");
+    const uow = new InMemorySceneUnitOfWork([scene1, scene2]);
+    const useCases = new ReviewSceneUseCases(uow);
+
+    await useCases.approve({
+      sceneId: "scene-cross-1",
+      eventId: "event-cross-1",
+      reviewerName: "Director Alice",
+      occurredAt: "2026-08-15T01:00:00.000Z",
+      expectedSpecRevision: 1,
+      requestHashSha256: "a".repeat(64)
+    });
+
+    await expect(
+      useCases.approve({
+        sceneId: "scene-cross-2",
+        eventId: "event-cross-1",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T01:00:00.000Z",
+        expectedSpecRevision: 1,
+        requestHashSha256: "a".repeat(64)
+      })
+    ).rejects.toThrow(IdempotencyConflictError);
+
+    expect(uow.savedScenes).toHaveLength(1);
+    expect(uow.savedScenes[0]!.id).toBe("scene-cross-1");
+  });
+
+  it("throws IdempotencyConflictError when replay omits requestHashSha256 but original event had a hash", async () => {
+    const scene = createReviewScene("scene-hash-omit");
+    const uow = new InMemorySceneUnitOfWork([scene]);
+    const useCases = new ReviewSceneUseCases(uow);
+
+    await useCases.approve({
+      sceneId: "scene-hash-omit",
+      eventId: "event-hash-omit-1",
+      reviewerName: "Director Alice",
+      occurredAt: "2026-08-15T01:00:00.000Z",
+      expectedSpecRevision: 1,
+      requestHashSha256: "a".repeat(64)
+    });
+
+    await expect(
+      useCases.approve({
+        sceneId: "scene-hash-omit",
+        eventId: "event-hash-omit-1",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T01:00:00.000Z",
+        expectedSpecRevision: 1
+      })
+    ).rejects.toThrow(IdempotencyConflictError);
+
+    expect(uow.savedScenes).toHaveLength(1);
+  });
+
+  it("throws IdempotencyConflictError when replay provides requestHashSha256 but original event had no hash", async () => {
+    const scene = createReviewScene("scene-hash-add");
+    const uow = new InMemorySceneUnitOfWork([scene]);
+    const useCases = new ReviewSceneUseCases(uow);
+
+    await useCases.approve({
+      sceneId: "scene-hash-add",
+      eventId: "event-hash-add-1",
+      reviewerName: "Director Alice",
+      occurredAt: "2026-08-15T01:00:00.000Z",
+      expectedSpecRevision: 1
+    });
+
+    await expect(
+      useCases.approve({
+        sceneId: "scene-hash-add",
+        eventId: "event-hash-add-1",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T01:00:00.000Z",
+        expectedSpecRevision: 1,
+        requestHashSha256: "a".repeat(64)
+      })
+    ).rejects.toThrow(IdempotencyConflictError);
+
+    expect(uow.savedScenes).toHaveLength(1);
+  });
+
+  it("selectCandidate: throws IdempotencyConflictError on mismatched sceneId", async () => {
+    const scene1 = createReviewScene("scene-cand-cross-1");
+    const scene2 = createReviewScene("scene-cand-cross-2");
+    const candidate1 = {
+      id: "cand-1" as CandidateId,
+      sceneId: "scene-cand-cross-1" as SceneId,
+      specRevision: 1,
+      variantOrdinal: 1,
+      locator: "loc/cand-1.webp",
+      contentHash: "hash-1",
+      generationMetadata: {},
+      createdAt: "2026-08-15T00:00:00.000Z"
+    };
+    const candidate2 = {
+      id: "cand-2" as CandidateId,
+      sceneId: "scene-cand-cross-2" as SceneId,
+      specRevision: 1,
+      variantOrdinal: 1,
+      locator: "loc/cand-2.webp",
+      contentHash: "hash-2",
+      generationMetadata: {},
+      createdAt: "2026-08-15T00:00:00.000Z"
+    };
+    const uow = new InMemorySceneUnitOfWork([scene1, scene2], [candidate1, candidate2]);
+    const useCases = new ReviewSceneUseCases(uow);
+
+    await useCases.selectCandidate({
+      sceneId: "scene-cand-cross-1",
+      eventId: "event-cand-cross-1",
+      reviewerName: "Director Alice",
+      occurredAt: "2026-08-15T01:00:00.000Z",
+      candidateId: "cand-1" as CandidateId,
+      expectedSpecRevision: 1,
+      requestHashSha256: "c".repeat(64)
+    });
+
+    await expect(
+      useCases.selectCandidate({
+        sceneId: "scene-cand-cross-2",
+        eventId: "event-cand-cross-1",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T01:00:00.000Z",
+        candidateId: "cand-2" as CandidateId,
+        expectedSpecRevision: 1,
+        requestHashSha256: "c".repeat(64)
+      })
+    ).rejects.toThrow(IdempotencyConflictError);
+  });
+
+  it("selectCandidate: throws IdempotencyConflictError when replay omits requestHashSha256", async () => {
+    const scene = createReviewScene("scene-cand-hash-omit");
+    const candidate = {
+      id: "cand-1" as CandidateId,
+      sceneId: "scene-cand-hash-omit" as SceneId,
+      specRevision: 1,
+      variantOrdinal: 1,
+      locator: "loc/cand-1.webp",
+      contentHash: "hash-1",
+      generationMetadata: {},
+      createdAt: "2026-08-15T00:00:00.000Z"
+    };
+    const uow = new InMemorySceneUnitOfWork([scene], [candidate]);
+    const useCases = new ReviewSceneUseCases(uow);
+
+    await useCases.selectCandidate({
+      sceneId: "scene-cand-hash-omit",
+      eventId: "event-cand-hash-omit-1",
+      reviewerName: "Director Alice",
+      occurredAt: "2026-08-15T01:00:00.000Z",
+      candidateId: "cand-1" as CandidateId,
+      expectedSpecRevision: 1,
+      requestHashSha256: "d".repeat(64)
+    });
+
+    await expect(
+      useCases.selectCandidate({
+        sceneId: "scene-cand-hash-omit",
+        eventId: "event-cand-hash-omit-1",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T01:00:00.000Z",
+        candidateId: "cand-1" as CandidateId,
+        expectedSpecRevision: 1
+      })
+    ).rejects.toThrow(IdempotencyConflictError);
+  });
+
   it("recognizes pre-seeded review events in InMemorySceneUnitOfWork", async () => {
     const scene = createReviewScene("scene-seeded-1");
     const seededEvent = {
