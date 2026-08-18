@@ -1,6 +1,6 @@
-import { STORAGE_WATERMARK_STATES, type StorageWatermarkState } from "@cco/shared";
+export const STORAGE_WATERMARK_STATES = ["normal", "warning", "degraded", "critical"] as const;
 
-export { STORAGE_WATERMARK_STATES, type StorageWatermarkState };
+export type StorageWatermarkState = (typeof STORAGE_WATERMARK_STATES)[number];
 
 export const STORAGE_WATERMARK_THRESHOLDS = Object.freeze({
   WARNING_RATIO: 0.7,

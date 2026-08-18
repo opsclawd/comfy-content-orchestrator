@@ -26,6 +26,24 @@ describe("Storage Watermark Evaluation and Admission Policy", () => {
     expect(evaluateStorageWatermark(1_000_000_000, TOTAL)).toBe("critical");
   });
 
+  it("evaluates usage into correct watermark states based on thresholds", () => {
+    // Normal: < 70%
+    expect(evaluateStorageWatermark(0, TOTAL)).toBe("normal");
+    expect(evaluateStorageWatermark(699_999_999, TOTAL)).toBe("normal");
+
+    // Warning: 70% to 84.9%
+    expect(evaluateStorageWatermark(700_000_000, TOTAL)).toBe("warning");
+    expect(evaluateStorageWatermark(849_999_999, TOTAL)).toBe("warning");
+
+    // Degraded: 85% to 91.9%
+    expect(evaluateStorageWatermark(850_000_000, TOTAL)).toBe("degraded");
+    expect(evaluateStorageWatermark(919_999_999, TOTAL)).toBe("degraded");
+
+    // Critical: >= 92%
+    expect(evaluateStorageWatermark(920_000_000, TOTAL)).toBe("critical");
+    expect(evaluateStorageWatermark(1_000_000_000, TOTAL)).toBe("critical");
+  });
+
   it("rejects invalid byte input values", () => {
     expect(() => evaluateStorageWatermark(-1, TOTAL)).toThrow();
     expect(() => evaluateStorageWatermark(500, 0)).toThrow();
