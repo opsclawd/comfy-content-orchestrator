@@ -1,10 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { createControlApiApp } from "./app.js";
-import type {
-  ControlApiAppOptions,
-  ControlApiContainer,
-  ControlApiDependencies
-} from "./types.js";
+import type { ControlApiAppOptions, ControlApiContainer, ControlApiDependencies } from "./types.js";
 
 export interface ServerListenOptions extends ControlApiAppOptions {
   readonly host?: string;

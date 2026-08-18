@@ -1,9 +1,5 @@
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
-import {
-  ReviewCommandSchema,
-  hashReviewCommand,
-  type ReviewCommandResponse
-} from "@cco/contracts";
+import { ReviewCommandSchema, hashReviewCommand, type ReviewCommandResponse } from "@cco/contracts";
 import type { CandidateId } from "@cco/domain";
 import type { ReviewExecutionResult } from "@cco/application";
 import {

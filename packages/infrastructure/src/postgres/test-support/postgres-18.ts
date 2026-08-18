@@ -1,5 +1,7 @@
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { Client } from "pg";
+import { Client, Pool, type PoolClient } from "pg";
+
+export { Client, Pool, type PoolClient };
 
 export interface StartedPostgres18Container {
   readonly container: StartedPostgreSqlContainer;

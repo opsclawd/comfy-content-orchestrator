@@ -37,9 +37,7 @@ class InMemorySceneUnitOfWork implements UnitOfWork {
       | ReadonlyMap<CandidateId, StoryboardCandidate>
       | Record<string, StoryboardCandidate>,
     seededReviewEvents?:
-      | Iterable<ReviewEvent>
-      | ReadonlyMap<string, ReviewEvent>
-      | Record<string, ReviewEvent>
+      Iterable<ReviewEvent> | ReadonlyMap<string, ReviewEvent> | Record<string, ReviewEvent>
   ) {
     this._seededScenes = new Map<SceneId, Scene>();
     if (seededScenes !== undefined && seededScenes !== null) {
@@ -199,7 +197,9 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
   const candidateUuid = "3e590059-cb14-41d6-b5fa-28498897ee22" as CandidateId;
   const actionUuid = "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d";
 
-  const createReviewReadyScene = (overrides?: Partial<Parameters<typeof Scene.reconstitute>[0]>): Scene => {
+  const createReviewReadyScene = (
+    overrides?: Partial<Parameters<typeof Scene.reconstitute>[0]>
+  ): Scene => {
     return Scene.reconstitute({
       id: sceneUuid,
       campaignId: campaignUuid,

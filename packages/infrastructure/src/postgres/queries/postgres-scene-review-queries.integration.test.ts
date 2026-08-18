@@ -444,9 +444,7 @@ describe("PostgreSQL SceneReviewQueries Read Adapter Integration", () => {
     );
 
     const queryAdapter = new PostgresSceneReviewQueries(client);
-    const summary = await queryAdapter.getCampaignReviewSummary(
-      campaign.campaign_id as CampaignId
-    );
+    const summary = await queryAdapter.getCampaignReviewSummary(campaign.campaign_id as CampaignId);
 
     expect(summary).toBeDefined();
     expect(summary?.campaignId).toBe(campaign.campaign_id);
@@ -474,9 +472,7 @@ describe("PostgreSQL SceneReviewQueries Read Adapter Integration", () => {
     });
 
     const queryAdapter = new PostgresSceneReviewQueries(client);
-    const summary = await queryAdapter.getCampaignReviewSummary(
-      campaign.campaign_id as CampaignId
-    );
+    const summary = await queryAdapter.getCampaignReviewSummary(campaign.campaign_id as CampaignId);
 
     expect(summary).toBeDefined();
     expect(summary?.campaignId).toBe(campaign.campaign_id);
@@ -501,9 +497,7 @@ describe("PostgreSQL SceneReviewQueries Read Adapter Integration", () => {
     );
 
     const queryAdapter = new PostgresSceneReviewQueries(client);
-    const result = await queryAdapter.getCampaignReviewSummary(
-      campaign.campaign_id as CampaignId
-    );
+    const result = await queryAdapter.getCampaignReviewSummary(campaign.campaign_id as CampaignId);
     expect(result).toBeUndefined();
   });
 });

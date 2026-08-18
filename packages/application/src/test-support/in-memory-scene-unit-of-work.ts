@@ -22,9 +22,7 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       | ReadonlyMap<CandidateId, StoryboardCandidate>
       | Record<string, StoryboardCandidate>,
     seededReviewEvents?:
-      | Iterable<ReviewEvent>
-      | ReadonlyMap<string, ReviewEvent>
-      | Record<string, ReviewEvent>
+      Iterable<ReviewEvent> | ReadonlyMap<string, ReviewEvent> | Record<string, ReviewEvent>
   ) {
     this._seededScenes = new Map<SceneId, Scene>();
     if (seededScenes !== undefined && seededScenes !== null) {
