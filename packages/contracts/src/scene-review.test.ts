@@ -433,6 +433,19 @@ describe("Review Command Envelopes, Discriminated Action Payloads, and Canonical
     expect(ReviewCommandSchema.parse(candidateSelect)).toEqual(candidateSelect);
     expect(CandidateSelectCommandSchema.parse(candidateSelect)).toEqual(candidateSelect);
 
+    // expectedSpecRevision is the stale-write guard the Control API compares
+    // against (#42). A command omitting it must be rejected at the contract
+    // boundary rather than reaching a handler with nothing to compare.
+    const withoutRevision: Record<string, unknown> = { ...candidateSelect };
+    delete withoutRevision.expectedSpecRevision;
+    expect(ReviewCommandSchema.safeParse(withoutRevision).success).toBe(false);
+    expect(CandidateSelectCommandSchema.safeParse(withoutRevision).success).toBe(false);
+
+    // actionId is the idempotency key and is equally required.
+    const withoutActionId: Record<string, unknown> = { ...candidateSelect };
+    delete withoutActionId.actionId;
+    expect(ReviewCommandSchema.safeParse(withoutActionId).success).toBe(false);
+
     const approve = {
       ...baseEnvelope,
       action: "approve" as const,
@@ -579,6 +592,40 @@ describe("Review Command Envelopes, Discriminated Action Payloads, and Canonical
       sceneId: "22222222-2222-4222-8222-222222222222"
     });
     expect(canonicalKeyOrder1).toBe(canonicalKeyOrder2);
+
+    // Nested payload keys must also canonicalize. The top-level assertion above
+    // passes regardless of sortKeysDeep, because canonicalizeReviewCommand builds
+    // its normalized object from a fixed literal — only nested keys exercise the
+    // recursion, and only nested order can differ between two logically identical
+    // client payloads.
+    const nestedOrderA = canonicalizeReviewCommand({
+      sceneId: "11111111-1111-4111-8111-111111111111",
+      expectedSpecRevision: 1,
+      action: "prompt_edit",
+      payload: { alpha: 1, beta: 2, gamma: { x: 1, y: 2 } }
+    });
+    const nestedOrderB = canonicalizeReviewCommand({
+      sceneId: "11111111-1111-4111-8111-111111111111",
+      expectedSpecRevision: 1,
+      action: "prompt_edit",
+      payload: { gamma: { y: 2, x: 1 }, beta: 2, alpha: 1 }
+    });
+    expect(nestedOrderA).toBe(nestedOrderB);
+    expect(
+      await hashReviewCommand({
+        sceneId: "11111111-1111-4111-8111-111111111111",
+        expectedSpecRevision: 1,
+        action: "prompt_edit",
+        payload: { alpha: 1, beta: 2, gamma: { x: 1, y: 2 } }
+      })
+    ).toBe(
+      await hashReviewCommand({
+        sceneId: "11111111-1111-4111-8111-111111111111",
+        expectedSpecRevision: 1,
+        action: "prompt_edit",
+        payload: { gamma: { y: 2, x: 1 }, beta: 2, alpha: 1 }
+      })
+    );
 
     // Changing payload changes hash
     const cmdPayloadChange = {
