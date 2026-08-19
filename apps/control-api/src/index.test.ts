@@ -13,8 +13,10 @@ import { Scene, type CampaignId, type CandidateId, type SceneId } from "@cco/dom
 import {
   controlApiName,
   createControlApi,
+  createControlApiApp,
   createControlApiContainer,
-  createControlApiServices
+  createControlApiServices,
+  startControlApiServer
 } from "./index.js";
 
 class FakeUnitOfWork implements UnitOfWork {
@@ -97,6 +99,9 @@ describe("control-api composition root", () => {
     const sceneReviewQueries: SceneReviewQueries = {
       async getSceneReviewDetail() {
         return undefined;
+      },
+      async getCampaignReviewSummary() {
+        return undefined;
       }
     };
 
@@ -169,5 +174,41 @@ describe("control-api composition root", () => {
       ProgressSceneProductionUseCases
     );
     expect(container.queries.sceneReview).toBeUndefined();
+  });
+
+  it("createControlApiApp creates a Fastify instance from dependencies or container", async () => {
+    const uow = new FakeUnitOfWork();
+    const app = createControlApiApp({ uow });
+    expect(app).toBeDefined();
+    await app.ready();
+    await app.close();
+  });
+
+  it("server-listen-close: starts on configured or ephemeral port and closes cleanly", async () => {
+    const uow = new FakeUnitOfWork();
+    const server = await startControlApiServer({ uow }, { host: "127.0.0.1", port: 0 });
+
+    expect(server.app).toBeDefined();
+    expect(server.host).toBe("127.0.0.1");
+    expect(typeof server.port).toBe("number");
+    expect(server.port).toBeGreaterThan(0);
+    expect(server.app.server.listening).toBe(true);
+
+    await server.close();
+    expect(server.app.server.listening).toBe(false);
+  });
+
+  it("startControlApiServer uses default host and port when options omitted", async () => {
+    const uow = new FakeUnitOfWork();
+    const server = await startControlApiServer({ uow });
+
+    expect(server.app).toBeDefined();
+    expect(server.host).toBe("0.0.0.0");
+    expect(typeof server.port).toBe("number");
+    expect(server.port).toBeGreaterThan(0);
+    expect(server.app.server.listening).toBe(true);
+
+    await server.close();
+    expect(server.app.server.listening).toBe(false);
   });
 });

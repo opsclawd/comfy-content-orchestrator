@@ -1,4 +1,4 @@
-import type { ReviewAction, SceneStatus } from "@cco/contracts";
+import type { CampaignReviewSummary, ReviewAction, SceneStatus } from "@cco/contracts";
 import type {
   CampaignId,
   CandidateId,
@@ -31,4 +31,5 @@ export interface SceneReviewDetail {
 
 export interface SceneReviewQueries {
   getSceneReviewDetail(sceneId: SceneId): Promise<SceneReviewDetail | undefined>;
+  getCampaignReviewSummary(campaignId: CampaignId): Promise<CampaignReviewSummary | undefined>;
 }

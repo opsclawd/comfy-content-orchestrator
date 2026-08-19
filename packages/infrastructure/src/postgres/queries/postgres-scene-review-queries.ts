@@ -3,7 +3,7 @@ import type {
   SceneReviewDetail,
   SceneReviewQueries
 } from "@cco/application";
-import type { ReviewAction, SceneStatus } from "@cco/contracts";
+import type { CampaignReviewSummary, ReviewAction, SceneStatus } from "@cco/contracts";
 import type {
   CampaignId,
   CandidateId,
@@ -235,6 +235,71 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
       ...(approval !== undefined ? { approval } : {}),
       candidatesByRevision: Object.freeze(candidatesByRevision),
       allowedActions
+    };
+  }
+
+  async getCampaignReviewSummary(
+    campaignId: CampaignId
+  ): Promise<CampaignReviewSummary | undefined> {
+    const campaignResult = await this.client.query<{
+      campaign_id: string;
+      title: string;
+      updated_at: Date | string;
+    }>(
+      `SELECT campaign_id, title, updated_at FROM campaigns WHERE campaign_id = $1 AND archived_at IS NULL`,
+      [campaignId]
+    );
+    const campaignRow = campaignResult.rows[0];
+    if (!campaignRow) {
+      return undefined;
+    }
+
+    const scenesResult = await this.client.query<{
+      status: string;
+      scene_count: string | number;
+    }>(
+      `
+      SELECT status, COUNT(*)::int AS scene_count
+      FROM storyboard_scenes
+      WHERE campaign_id = $1 AND archived_at IS NULL
+      GROUP BY status
+      `,
+      [campaignId]
+    );
+
+    const scenesByStatus: Record<string, number> = {};
+    let totalScenes = 0;
+    let pendingReviewCount = 0;
+    let approvedCount = 0;
+    let completedCount = 0;
+
+    for (const row of scenesResult.rows) {
+      const count = Number(row.scene_count);
+      scenesByStatus[row.status] = count;
+      totalScenes += count;
+      if (row.status === "director_review") {
+        pendingReviewCount += count;
+      } else if (row.status === "approved") {
+        approvedCount += count;
+      } else if (row.status === "completed") {
+        completedCount += count;
+      }
+    }
+
+    const updatedAt =
+      campaignRow.updated_at instanceof Date
+        ? campaignRow.updated_at.toISOString()
+        : new Date(campaignRow.updated_at).toISOString();
+
+    return {
+      campaignId: campaignRow.campaign_id,
+      campaignName: campaignRow.title,
+      totalScenes,
+      scenesByStatus,
+      pendingReviewCount,
+      approvedCount,
+      completedCount,
+      updatedAt
     };
   }
 }

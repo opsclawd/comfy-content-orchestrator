@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { Pool, type PoolClient } from "pg";
-import type { SceneId } from "@cco/domain";
+import type { CampaignId, SceneId } from "@cco/domain";
 import { runMigrations } from "../migration-runner.js";
 import {
   startPostgres18Container,
@@ -369,5 +369,135 @@ describe("PostgreSQL SceneReviewQueries Read Adapter Integration", () => {
     expect(detail?.sceneId).toBe(sceneRecord.scene_id);
     expect(detail?.configuration.prompt).toBe("Pool test scene");
     expect(detail?.configuration.durationMs).toBe(4500);
+  });
+
+  it("returns undefined when campaignId does not exist", async () => {
+    const queryAdapter = new PostgresSceneReviewQueries(client);
+    const result = await queryAdapter.getCampaignReviewSummary(
+      "01950c46-9e90-7d3d-82d2-8f1d3c999999" as CampaignId
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it("returns accurate CampaignReviewSummary with status counts for a campaign with multiple scenes in various states", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, {
+      clientId: clientRecord.client_id,
+      title: "Summer Carnival Spectacular"
+    });
+
+    // Insert scenes across various statuses
+    // 2 director_review scenes
+    await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      status: "director_review"
+    });
+    await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 2,
+      status: "director_review"
+    });
+
+    // 1 approved scene
+    await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 3,
+      status: "approved"
+    });
+
+    // 2 completed scenes
+    await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 4,
+      status: "completed"
+    });
+    await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 5,
+      status: "completed"
+    });
+
+    // 1 draft_pending scene
+    await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 6,
+      status: "draft_pending"
+    });
+
+    // 1 rendering scene
+    await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 7,
+      status: "rendering"
+    });
+
+    // 1 archived scene (should be excluded)
+    const archivedScene = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 8,
+      status: "director_review"
+    });
+    await client.query(
+      `UPDATE storyboard_scenes SET archived_at = CURRENT_TIMESTAMP WHERE scene_id = $1`,
+      [archivedScene.scene_id]
+    );
+
+    const queryAdapter = new PostgresSceneReviewQueries(client);
+    const summary = await queryAdapter.getCampaignReviewSummary(campaign.campaign_id as CampaignId);
+
+    expect(summary).toBeDefined();
+    expect(summary?.campaignId).toBe(campaign.campaign_id);
+    expect(summary?.campaignName).toBe("Summer Carnival Spectacular");
+    expect(summary?.totalScenes).toBe(7);
+    expect(summary?.pendingReviewCount).toBe(2);
+    expect(summary?.approvedCount).toBe(1);
+    expect(summary?.completedCount).toBe(2);
+    expect(summary?.scenesByStatus).toEqual({
+      director_review: 2,
+      approved: 1,
+      completed: 2,
+      draft_pending: 1,
+      rendering: 1
+    });
+    expect(summary?.updatedAt).toBeDefined();
+    expect(new Date(summary!.updatedAt).toISOString()).toBe(summary!.updatedAt);
+  });
+
+  it("returns zero counts for a newly created campaign with no scenes", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, {
+      clientId: clientRecord.client_id,
+      title: "Empty Campaign"
+    });
+
+    const queryAdapter = new PostgresSceneReviewQueries(client);
+    const summary = await queryAdapter.getCampaignReviewSummary(campaign.campaign_id as CampaignId);
+
+    expect(summary).toBeDefined();
+    expect(summary?.campaignId).toBe(campaign.campaign_id);
+    expect(summary?.campaignName).toBe("Empty Campaign");
+    expect(summary?.totalScenes).toBe(0);
+    expect(summary?.scenesByStatus).toEqual({});
+    expect(summary?.pendingReviewCount).toBe(0);
+    expect(summary?.approvedCount).toBe(0);
+    expect(summary?.completedCount).toBe(0);
+    expect(summary?.updatedAt).toBeDefined();
+  });
+
+  it("returns undefined when campaign is archived", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, {
+      clientId: clientRecord.client_id,
+      title: "Archived Campaign"
+    });
+    await client.query(
+      `UPDATE campaigns SET archived_at = CURRENT_TIMESTAMP WHERE campaign_id = $1`,
+      [campaign.campaign_id]
+    );
+
+    const queryAdapter = new PostgresSceneReviewQueries(client);
+    const result = await queryAdapter.getCampaignReviewSummary(campaign.campaign_id as CampaignId);
+    expect(result).toBeUndefined();
   });
 });

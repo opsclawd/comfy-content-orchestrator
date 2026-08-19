@@ -29,7 +29,7 @@ import type {
   StoredObject,
   VoiceSynthesisPort
 } from "./index.js";
-import type { ReviewAction, ReviewEvent, SceneStatus } from "@cco/contracts";
+import type { CampaignReviewSummary, ReviewAction, ReviewEvent, SceneStatus } from "@cco/contracts";
 import type {
   CampaignId,
   CandidateId,
@@ -314,6 +314,23 @@ describe("Application capability ports contract tests", () => {
             };
           }
           return undefined;
+        },
+        async getCampaignReviewSummary(
+          campaignId: CampaignId
+        ): Promise<CampaignReviewSummary | undefined> {
+          if (campaignId === ("camp-1" as CampaignId)) {
+            return {
+              campaignId: "camp-1",
+              campaignName: "Summer Campaign",
+              totalScenes: 1,
+              scenesByStatus: { director_review: 1 },
+              pendingReviewCount: 1,
+              approvedCount: 0,
+              completedCount: 0,
+              updatedAt: "2026-08-15T00:00:00.000Z"
+            };
+          }
+          return undefined;
         }
       } satisfies SceneReviewQueries;
 
@@ -321,6 +338,14 @@ describe("Application capability ports contract tests", () => {
       expect(detail?.sceneId).toBe("scene-1");
       expect(detail?.candidatesByRevision[0]?.candidates).toHaveLength(2);
       expect(await sceneReviewQueries.getSceneReviewDetail("missing" as SceneId)).toBeUndefined();
+
+      const summary = await sceneReviewQueries.getCampaignReviewSummary("camp-1" as CampaignId);
+      expect(summary?.campaignId).toBe("camp-1");
+      expect(summary?.totalScenes).toBe(1);
+      expect(summary?.pendingReviewCount).toBe(1);
+      expect(
+        await sceneReviewQueries.getCampaignReviewSummary("missing" as CampaignId)
+      ).toBeUndefined();
 
       const license = await licenseRegistryRepo.findByComponentKey("ltx-video");
       expect(license?.license).toBe("Apache-2.0");
