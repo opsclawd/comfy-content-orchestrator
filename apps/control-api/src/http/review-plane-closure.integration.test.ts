@@ -61,6 +61,144 @@ describe("Sprint 1.5 Review Plane End-to-End Contract Closure", () => {
     await runMigrations(client, { migrationsDirectory });
   });
 
+  it("selecting A then B then A at the same revision returns 200 for all three and writes three events", async () => {
+    const clientRecord = await insertClientRecord(client, {
+      companyName: "Godzspeed Trinidad & Tobago"
+    });
+    const campaign = await insertCampaignRecord(client, {
+      clientId: clientRecord.client_id,
+      title: "Carnival 2026 Commercial"
+    });
+
+    const sceneRecord = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      durationSeconds: 5.0,
+      visualDescription: "Midnight Robber delivering a monologue under moonlight.",
+      engineAssigned: "ltx_25",
+      status: "director_review",
+      specRevision: 2
+    });
+
+    const candidateRev2Var1 = await insertStoryboardCandidateRecord(client, {
+      sceneId: sceneRecord.scene_id,
+      sceneSpecRevision: 2,
+      variantOrdinal: 1,
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: `candidates/${sceneRecord.scene_id}/rev2_var1.webp`,
+      contentHashSha256: "2222222222222222222222222222222222222222222222222222222222222221",
+      generationPayload: { seed: 201 }
+    });
+
+    const candidateRev2Var2 = await insertStoryboardCandidateRecord(client, {
+      sceneId: sceneRecord.scene_id,
+      sceneSpecRevision: 2,
+      variantOrdinal: 2,
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: `candidates/${sceneRecord.scene_id}/rev2_var2.webp`,
+      contentHashSha256: "2222222222222222222222222222222222222222222222222222222222222222",
+      generationPayload: { seed: 202 }
+    });
+
+    const fakeRenderEngine: RenderEnginePort = {
+      queueRender: vi.fn().mockResolvedValue({
+        executionId: "mock-receipt-id",
+        acceptedAt: new Date().toISOString()
+      } as RenderQueueReceipt),
+      getRenderResult: vi.fn().mockResolvedValue(undefined),
+      unloadModels: vi.fn().mockResolvedValue(undefined)
+    };
+    const uow = new PostgresUnitOfWork(pool);
+    const sceneReviewQueries = new PostgresSceneReviewQueries(pool);
+    const app = createControlApiApp(
+      {
+        uow,
+        sceneReviewQueries,
+        renderEngine: fakeRenderEngine
+      },
+      {
+        reviewerIdentityResolver: {
+          resolve: () => "Thomas Cumberbatch"
+        },
+        clock: {
+          now: () => new Date().toISOString()
+        }
+      }
+    );
+
+    // Action 1: Select candidateRev2Var1 at rev 2
+    const actionId1 = "01950c46-9e90-7d3d-82d2-8f1d3e110001";
+    const selectA: ReviewCommand = {
+      actionId: actionId1,
+      sceneId: sceneRecord.scene_id,
+      expectedSpecRevision: 2,
+      action: "candidate_select",
+      payload: { candidateId: candidateRev2Var1.candidate_id as CandidateId },
+      directorNotes: "First selection"
+    };
+    const resA = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${sceneRecord.scene_id}/review-command`,
+      headers: authHeaders,
+      payload: selectA
+    });
+    expect(resA.statusCode).toBe(200);
+    const bodyA = resA.json() as ReviewCommandResponse;
+    expect(bodyA.selectedCandidateId).toBe(candidateRev2Var1.candidate_id);
+    expect(bodyA.isIdempotentReplay).toBe(false);
+
+    // Action 2: Select candidateRev2Var2 at rev 2
+    const actionId2 = "01950c46-9e90-7d3d-82d2-8f1d3e110002";
+    const selectB: ReviewCommand = {
+      actionId: actionId2,
+      sceneId: sceneRecord.scene_id,
+      expectedSpecRevision: 2,
+      action: "candidate_select",
+      payload: { candidateId: candidateRev2Var2.candidate_id as CandidateId },
+      directorNotes: "Second selection"
+    };
+    const resB = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${sceneRecord.scene_id}/review-command`,
+      headers: authHeaders,
+      payload: selectB
+    });
+    expect(resB.statusCode).toBe(200);
+    const bodyB = resB.json() as ReviewCommandResponse;
+    expect(bodyB.selectedCandidateId).toBe(candidateRev2Var2.candidate_id);
+    expect(bodyB.isIdempotentReplay).toBe(false);
+
+    // Action 3: Re-select candidateRev2Var1 at rev 2 — this is the bug (returns 500 before migration)
+    const actionId3 = "01950c46-9e90-7d3d-82d2-8f1d3e110003";
+    const selectAAgain: ReviewCommand = {
+      actionId: actionId3,
+      sceneId: sceneRecord.scene_id,
+      expectedSpecRevision: 2,
+      action: "candidate_select",
+      payload: { candidateId: candidateRev2Var1.candidate_id as CandidateId },
+      directorNotes: "Re-selecting first candidate"
+    };
+    const resAAgain = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${sceneRecord.scene_id}/review-command`,
+      headers: authHeaders,
+      payload: selectAAgain
+    });
+    expect(resAAgain.statusCode).toBe(200);
+    const bodyAAgain = resAAgain.json() as ReviewCommandResponse;
+    expect(bodyAAgain.selectedCandidateId).toBe(candidateRev2Var1.candidate_id);
+    expect(bodyAAgain.isIdempotentReplay).toBe(false);
+
+    // Verify exactly 3 distinct events were written
+    const eventCount = await client.query<{ count: string }>(
+      "SELECT count(*) FROM review_events WHERE scene_id = $1",
+      [sceneRecord.scene_id]
+    );
+    expect(parseInt(eventCount.rows[0]!.count, 10)).toBe(3);
+
+    await app.close();
+  });
+
   it("proves the complete 11-step Review Plane vertical slice end-to-end against PostgreSQL 18", async () => {
     // -------------------------------------------------------------------------
     // Setup & Seed Data
