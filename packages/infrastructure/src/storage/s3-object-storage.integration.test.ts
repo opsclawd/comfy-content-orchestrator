@@ -31,7 +31,13 @@ describe("S3ObjectStorage integration with real MinIO", () => {
       try {
         await rawS3Client.send(new CreateBucketCommand({ Bucket: bucket }));
       } catch (err: unknown) {
-        // Ignore if bucket already exists
+        const errorName =
+          typeof err === "object" && err !== null && "name" in err
+            ? String((err as { name: unknown }).name)
+            : "";
+        if (errorName !== "BucketAlreadyExists" && errorName !== "BucketAlreadyOwnedByYou") {
+          throw err;
+        }
       }
     }
 
@@ -47,6 +53,7 @@ describe("S3ObjectStorage integration with real MinIO", () => {
   }, 120_000);
 
   afterAll(async () => {
+    rawS3Client?.destroy();
     if (minioContainer) {
       await minioContainer.stop();
     }
