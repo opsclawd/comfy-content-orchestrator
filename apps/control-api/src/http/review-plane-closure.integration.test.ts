@@ -101,12 +101,10 @@ describe("Sprint 1.5 Review Plane End-to-End Contract Closure", () => {
     });
 
     const fakeRenderEngine: RenderEnginePort = {
-      queueRender: vi
-        .fn()
-        .mockResolvedValue({
-          executionId: "mock-receipt-id",
-          acceptedAt: new Date().toISOString()
-        } as RenderQueueReceipt),
+      queueRender: vi.fn().mockResolvedValue({
+        executionId: "mock-receipt-id",
+        acceptedAt: new Date().toISOString()
+      } as RenderQueueReceipt),
       getRenderResult: vi.fn().mockResolvedValue(undefined),
       unloadModels: vi.fn().mockResolvedValue(undefined)
     };

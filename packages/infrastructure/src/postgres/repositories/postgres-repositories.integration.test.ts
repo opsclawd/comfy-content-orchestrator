@@ -259,13 +259,22 @@ describe("PostgreSQL StoryboardCandidateRepository and ReviewEventStore Adapters
     expect(foundMinimal?.resultingSpecRevision).toBeUndefined();
     expect(foundMinimal?.requestHashSha256).toBeUndefined();
 
-    // Verify idempotency constraint: appending duplicate (sceneId, action, requestHashSha256) throws
-    const duplicateEvent: ReviewEvent = {
+    // Verify primary key uniqueness: appending duplicate eventId throws
+    const duplicateIdEvent: ReviewEvent = {
       ...eventWithMetadata,
-      eventId: "01950c46-9e90-7d3d-82d2-8f1d3e000003" // different event ID, identical request hash & action
+      reviewerName: "Director Bob"
     };
+    await expect(eventStore.append(duplicateIdEvent)).rejects.toThrow();
 
-    await expect(eventStore.append(duplicateEvent)).rejects.toThrow();
+    // Verify re-selection: appending duplicate (sceneId, action, requestHashSha256) with distinct eventId succeeds
+    const duplicateContentEvent: ReviewEvent = {
+      ...eventWithMetadata,
+      eventId: "01950c46-9e90-7d3d-82d2-8f1d3e000003"
+    };
+    await eventStore.append(duplicateContentEvent);
+    const foundDup = await eventStore.findById(duplicateContentEvent.eventId);
+    expect(foundDup).toBeDefined();
+    expect(foundDup?.eventId).toBe(duplicateContentEvent.eventId);
 
     // Verify database-level append-only trigger prevents UPDATE or DELETE
     await expect(
