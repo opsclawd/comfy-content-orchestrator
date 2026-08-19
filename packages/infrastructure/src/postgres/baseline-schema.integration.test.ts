@@ -55,12 +55,13 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
   it("migrates an empty PostgreSQL 18.6 database through the baseline", async () => {
     const applied = await runMigrations(client, { migrationsDirectory });
 
-    expect(applied).toHaveLength(5);
+    expect(applied).toHaveLength(6);
     expect(applied[0]?.version).toBe("001");
     expect(applied[1]?.version).toBe("002");
     expect(applied[2]?.version).toBe("003");
     expect(applied[3]?.version).toBe("004");
     expect(applied[4]?.version).toBe("005");
+    expect(applied[5]?.version).toBe("006");
 
     const schemaRes = await client.query(
       "SELECT version FROM schema_migrations ORDER BY version ASC"
@@ -70,7 +71,8 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       { version: "002" },
       { version: "003" },
       { version: "004" },
-      { version: "005" }
+      { version: "005" },
+      { version: "006" }
     ]);
 
     const tablesRes = await client.query<{ table_name: string }>(
@@ -493,20 +495,19 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       )
     ).rejects.toThrow();
 
-    // 11. Duplicate (scene_id, action, request_hash_sha256) on review_events (uq_review_events_request_hash)
+    // 11. Duplicate (scene_id, action, request_hash_sha256) on review_events is now allowed (uq_review_events_request_hash dropped in migration 006)
     const eventHash = "c".repeat(64);
     await insertReviewEventRecord(client, {
       sceneId: scene.scene_id,
       action: "approve",
       requestHashSha256: eventHash
     });
-    await expect(
-      insertReviewEventRecord(client, {
-        sceneId: scene.scene_id,
-        action: "approve",
-        requestHashSha256: eventHash
-      })
-    ).rejects.toThrow();
+    const dupEvent = await insertReviewEventRecord(client, {
+      sceneId: scene.scene_id,
+      action: "approve",
+      requestHashSha256: eventHash
+    });
+    expect(dupEvent.event_id).toBeDefined();
 
     // Verify same hash is allowed for a different scene or different action
     const otherScene = await insertStoryboardSceneRecord(client, {
@@ -641,17 +642,16 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
     expect(res.rows[0]?.resulting_spec_revision).toBe(1);
     expect(res.rows[0]?.request_hash_sha256).toBe(requestHash);
 
-    // Enforce idempotency: attempting to insert duplicate request_hash_sha256 throws
-    await expect(
-      insertReviewEventRecord(client, {
-        sceneId: graph.scene.scene_id,
-        action: "candidate_select",
-        expectedSpecRevision: 1,
-        resultingSpecRevision: 1,
-        requestHashSha256: requestHash,
-        mutationPayload: { selectedCandidateId: "01950c46-9e90-7d3d-82d2-8f1d3c000001" }
-      })
-    ).rejects.toThrow();
+    // Re-selection / duplicate request_hash_sha256 on same scene/action is permitted after dropping uq_review_events_request_hash
+    const duplicateEvent = await insertReviewEventRecord(client, {
+      sceneId: graph.scene.scene_id,
+      action: "candidate_select",
+      expectedSpecRevision: 1,
+      resultingSpecRevision: 1,
+      requestHashSha256: requestHash,
+      mutationPayload: { selectedCandidateId: "01950c46-9e90-7d3d-82d2-8f1d3c000001" }
+    });
+    expect(duplicateEvent.event_id).toBeDefined();
   });
 
   it("enforces storyboard_candidates uniqueness, positive revision and variant ordinal checks", async () => {
