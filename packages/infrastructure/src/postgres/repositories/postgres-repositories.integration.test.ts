@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { Pool, type PoolClient } from "pg";
+import { IdempotencyConflictError } from "@cco/application";
 import type { CandidateId, SceneId, StoryboardCandidate } from "@cco/domain";
 import type { ReviewEvent } from "@cco/contracts";
 import { runMigrations } from "../migration-runner.js";
@@ -259,12 +260,12 @@ describe("PostgreSQL StoryboardCandidateRepository and ReviewEventStore Adapters
     expect(foundMinimal?.resultingSpecRevision).toBeUndefined();
     expect(foundMinimal?.requestHashSha256).toBeUndefined();
 
-    // Verify primary key uniqueness: appending duplicate eventId throws
+    // Verify primary key uniqueness: appending duplicate eventId throws IdempotencyConflictError
     const duplicateIdEvent: ReviewEvent = {
       ...eventWithMetadata,
       reviewerName: "Director Bob"
     };
-    await expect(eventStore.append(duplicateIdEvent)).rejects.toThrow();
+    await expect(eventStore.append(duplicateIdEvent)).rejects.toThrow(IdempotencyConflictError);
 
     // Verify re-selection: appending duplicate (sceneId, action, requestHashSha256) with distinct eventId succeeds
     const duplicateContentEvent: ReviewEvent = {

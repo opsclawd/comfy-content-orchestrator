@@ -1,4 +1,4 @@
-import type { ReviewEventStore } from "@cco/application";
+import { IdempotencyConflictError, type ReviewEventStore } from "@cco/application";
 import { type ReviewEvent, ReviewEventSchema } from "@cco/contracts";
 import type { Pool, PoolClient } from "pg";
 
@@ -58,38 +58,50 @@ export class PostgresReviewEventStore implements ReviewEventStore {
     const validated = ReviewEventSchema.parse(event);
     const createdAt = validated.occurredAt ? new Date(validated.occurredAt) : new Date();
 
-    await this.client.query(
-      `
-      INSERT INTO review_events (
-        event_id,
-        scene_id,
-        reviewer_name,
-        action,
-        director_notes,
-        mutation_payload,
-        prior_scene_status,
-        resulting_scene_status,
-        expected_spec_revision,
-        resulting_spec_revision,
-        request_hash_sha256,
-        created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-      `,
-      [
-        validated.eventId,
-        validated.sceneId,
-        validated.reviewerName,
-        validated.action,
-        validated.directorNotes ?? null,
-        JSON.stringify(validated.mutationPayload ?? {}),
-        validated.priorSceneStatus,
-        validated.resultingSceneStatus,
-        validated.expectedSpecRevision ?? null,
-        validated.resultingSpecRevision ?? null,
-        validated.requestHashSha256 ?? null,
-        createdAt
-      ]
-    );
+    try {
+      await this.client.query(
+        `
+        INSERT INTO review_events (
+          event_id,
+          scene_id,
+          reviewer_name,
+          action,
+          director_notes,
+          mutation_payload,
+          prior_scene_status,
+          resulting_scene_status,
+          expected_spec_revision,
+          resulting_spec_revision,
+          request_hash_sha256,
+          created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        `,
+        [
+          validated.eventId,
+          validated.sceneId,
+          validated.reviewerName,
+          validated.action,
+          validated.directorNotes ?? null,
+          JSON.stringify(validated.mutationPayload ?? {}),
+          validated.priorSceneStatus,
+          validated.resultingSceneStatus,
+          validated.expectedSpecRevision ?? null,
+          validated.resultingSpecRevision ?? null,
+          validated.requestHashSha256 ?? null,
+          createdAt
+        ]
+      );
+    } catch (err: unknown) {
+      if (
+        typeof err === "object" &&
+        err !== null &&
+        "code" in err &&
+        (err as { code: unknown }).code === "23505"
+      ) {
+        throw new IdempotencyConflictError(validated.eventId);
+      }
+      throw err;
+    }
   }
 
   async findById(eventId: string): Promise<ReviewEvent | undefined> {

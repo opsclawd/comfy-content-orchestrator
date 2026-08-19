@@ -1,27 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { IdempotencyConflictError } from "@cco/application";
 import { formatReviewError } from "./errors.js";
 
 describe("formatReviewError", () => {
-  it("formatReviewError maps Postgres 23505 to 409 IDEMPOTENCY_CONFLICT", () => {
-    const pgUniqueError = Object.assign(
-      new Error("duplicate key value violates unique constraint"),
-      {
-        code: "23505"
-      }
-    );
-    const result = formatReviewError(pgUniqueError);
+  it("maps IdempotencyConflictError to 409 IDEMPOTENCY_CONFLICT", () => {
+    const error = new IdempotencyConflictError("01950c46-9e90-7d3d-82d2-8f1d3e000001");
+    const result = formatReviewError(error);
     expect(result.statusCode).toBe(409);
     expect(result.body).toEqual({
       code: "IDEMPOTENCY_CONFLICT",
-      message: "Unique constraint violation"
-    });
-
-    const plainPgError = { code: "23505" };
-    const plainResult = formatReviewError(plainPgError);
-    expect(plainResult.statusCode).toBe(409);
-    expect(plainResult.body).toEqual({
-      code: "IDEMPOTENCY_CONFLICT",
-      message: "Unique constraint violation"
+      message: error.message
     });
   });
 

@@ -76,21 +76,6 @@ export function formatReviewError(error: unknown): {
     };
   }
 
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code: unknown }).code === "23505"
-  ) {
-    return {
-      statusCode: 409,
-      body: {
-        code: "IDEMPOTENCY_CONFLICT",
-        message: "Unique constraint violation"
-      }
-    };
-  }
-
   const fastifyErr = error as Partial<FastifyError>;
   if (fastifyErr.validation !== undefined || fastifyErr.statusCode === 400) {
     return {
