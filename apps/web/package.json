@@ -3,20 +3,28 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    }
-  },
   "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
     "typecheck": "tsc --build"
   },
   "dependencies": {
     "@cco/contracts": "workspace:*",
     "@cco/domain": "workspace:*",
-    "@cco/shared": "workspace:*"
+    "@cco/shared": "workspace:*",
+    "next": "^15.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "dependency-cruiser": "^16.9.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
   }
 }
