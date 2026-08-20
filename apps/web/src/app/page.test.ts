@@ -47,21 +47,21 @@ describe("HomePage Component", () => {
     });
 
     const jsx = (await HomePage()) as TestElement;
-    expect(jsx).toBeDefined();
-    expect(findByTestId(jsx, "review-hub-home")).toBeDefined();
+    expect(jsx).not.toBeNull();
+    expect(findByTestId(jsx, "review-hub-home")).not.toBeNull();
     expect(getHealth).toHaveBeenCalled();
 
     const statusSection = findByTestId(jsx, "control-api-status");
-    expect(statusSection).toBeDefined();
+    expect(statusSection).not.toBeNull();
 
     expect(findByTestId(jsx, "health-error")).toBeNull();
 
     const statusSpan = findByTestId(jsx, "health-status");
-    expect(statusSpan).toBeDefined();
+    expect(statusSpan).not.toBeNull();
     expect(statusSpan?.props.children).toEqual(["Status: ", "ok"]);
 
     const timestampSpan = findByTestId(jsx, "health-timestamp");
-    expect(timestampSpan).toBeDefined();
+    expect(timestampSpan).not.toBeNull();
     expect(timestampSpan?.props.children).toEqual(["Timestamp: ", "2026-08-20T01:00:00.000Z"]);
   });
 
@@ -69,17 +69,17 @@ describe("HomePage Component", () => {
     vi.mocked(getHealth).mockRejectedValueOnce(new Error("Connection refused"));
 
     const jsx = (await HomePage()) as TestElement;
-    expect(jsx).toBeDefined();
-    expect(findByTestId(jsx, "review-hub-home")).toBeDefined();
+    expect(jsx).not.toBeNull();
+    expect(findByTestId(jsx, "review-hub-home")).not.toBeNull();
     expect(getHealth).toHaveBeenCalled();
 
     const statusSection = findByTestId(jsx, "control-api-status");
-    expect(statusSection).toBeDefined();
+    expect(statusSection).not.toBeNull();
 
     expect(findByTestId(jsx, "health-status")).toBeNull();
 
     const errorContainer = findByTestId(jsx, "health-error");
-    expect(errorContainer).toBeDefined();
+    expect(errorContainer).not.toBeNull();
 
     const errorSpan = errorContainer?.props.children as TestElement;
     expect(errorSpan?.props.children).toEqual(["Unavailable: ", "Connection refused"]);

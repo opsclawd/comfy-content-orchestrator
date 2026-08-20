@@ -1,4 +1,3 @@
-// @ts-expect-error TS2835: Next.js App Router webpack resolves extensionless relative paths
 import { getHealth, type HealthResponse } from "../api/client";
 
 export const dynamic = "force-dynamic";
