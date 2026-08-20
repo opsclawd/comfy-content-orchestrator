@@ -3,6 +3,7 @@ import {
   ProgressSceneProductionUseCases,
   ReviewSceneUseCases,
   type RenderEnginePort,
+  type ReviewMediaDeliveryPort,
   type SceneReviewQueries,
   type UnitOfWork
 } from "@cco/application";
@@ -11,6 +12,7 @@ export interface ControlApiDependencies {
   readonly uow: UnitOfWork;
   readonly renderEngine?: RenderEnginePort;
   readonly sceneReviewQueries?: SceneReviewQueries;
+  readonly reviewMediaDelivery?: ReviewMediaDeliveryPort;
 }
 
 export interface ControlApiUseCases {

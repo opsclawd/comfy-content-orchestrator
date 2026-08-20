@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
+  PersistentObjectLocator,
+  ReviewMediaDeliveryPort,
   SceneReviewDetail,
   SceneReviewQueries,
   UnitOfWork,
@@ -226,6 +228,230 @@ describe("Review Read Endpoints", () => {
         }
       ]
     });
+  });
+
+  it("GET /api/scenes/:sceneId/review returns 200 with media available: true and signed URL when delivery port succeeds", async () => {
+    const sceneReviewQueries: SceneReviewQueries = {
+      async getCampaignReviewSummary() {
+        return undefined;
+      },
+      async getSceneReviewDetail(sceneId: SceneId) {
+        if (sceneId === sceneUuid) {
+          return sampleDetail;
+        }
+        return undefined;
+      }
+    };
+
+    const reviewMediaDelivery: ReviewMediaDeliveryPort = {
+      async generatePresignedReadUrl(locator: PersistentObjectLocator) {
+        return `https://storage.local/${locator.bucket}/${locator.key}?sig=${locator.contentHash}`;
+      }
+    };
+
+    const app = createControlApiApp({
+      uow: new FakeUnitOfWork(),
+      sceneReviewQueries,
+      reviewMediaDelivery
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/scenes/${sceneUuid}/review`
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    const parsed = SceneReviewDetailReadModelSchema.safeParse(body);
+    expect(parsed.success).toBe(true);
+
+    expect(body.candidatesByRevision[0].candidates[0].media).toEqual({
+      available: true,
+      url: "https://storage.local/bucket/c1.mp4?sig=hash-c1"
+    });
+    expect(body.candidatesByRevision[1].candidates[0].media).toEqual({
+      available: true,
+      url: "https://storage.local/bucket/c2.mp4?sig=hash-c2"
+    });
+  });
+
+  it("GET /api/scenes/:sceneId/review falls back to media available: false when delivery port throws (missing object)", async () => {
+    const sceneReviewQueries: SceneReviewQueries = {
+      async getCampaignReviewSummary() {
+        return undefined;
+      },
+      async getSceneReviewDetail(sceneId: SceneId) {
+        if (sceneId === sceneUuid) {
+          return sampleDetail;
+        }
+        return undefined;
+      }
+    };
+
+    const reviewMediaDelivery: ReviewMediaDeliveryPort = {
+      async generatePresignedReadUrl(locator: PersistentObjectLocator) {
+        if (locator.key === "c1.mp4") {
+          throw new Error("Object not found in storage bucket");
+        }
+        return `https://storage.local/${locator.bucket}/${locator.key}?sig=${locator.contentHash}`;
+      }
+    };
+
+    const app = createControlApiApp({
+      uow: new FakeUnitOfWork(),
+      sceneReviewQueries,
+      reviewMediaDelivery
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/scenes/${sceneUuid}/review`
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    const parsed = SceneReviewDetailReadModelSchema.safeParse(body);
+    expect(parsed.success).toBe(true);
+
+    const c1Media = body.candidatesByRevision[0].candidates[0].media;
+    expect(c1Media.available).toBe(false);
+    expect(c1Media.url).toBeUndefined();
+    expect(c1Media).toEqual({ available: false });
+
+    const c2Media = body.candidatesByRevision[1].candidates[0].media;
+    expect(c2Media).toEqual({
+      available: true,
+      url: "https://storage.local/bucket/c2.mp4?sig=hash-c2"
+    });
+  });
+
+  it("GET /api/scenes/:sceneId/review defaults to available: false when reviewMediaDelivery dependency is not provided", async () => {
+    const sceneReviewQueries: SceneReviewQueries = {
+      async getCampaignReviewSummary() {
+        return undefined;
+      },
+      async getSceneReviewDetail(sceneId: SceneId) {
+        if (sceneId === sceneUuid) {
+          return sampleDetail;
+        }
+        return undefined;
+      }
+    };
+
+    const app = createControlApiApp({
+      uow: new FakeUnitOfWork(),
+      sceneReviewQueries
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/scenes/${sceneUuid}/review`
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    const parsed = SceneReviewDetailReadModelSchema.safeParse(body);
+    expect(parsed.success).toBe(true);
+
+    for (const group of body.candidatesByRevision) {
+      for (const candidate of group.candidates) {
+        expect(candidate.media).toEqual({ available: false });
+        expect(candidate.media.url).toBeUndefined();
+      }
+    }
+  });
+
+  it("ensures available flag and url presence are structurally consistent", async () => {
+    const sceneReviewQueries: SceneReviewQueries = {
+      async getCampaignReviewSummary() {
+        return undefined;
+      },
+      async getSceneReviewDetail(sceneId: SceneId) {
+        if (sceneId === sceneUuid) {
+          return sampleDetail;
+        }
+        return undefined;
+      }
+    };
+
+    const reviewMediaDelivery: ReviewMediaDeliveryPort = {
+      async generatePresignedReadUrl(locator: PersistentObjectLocator) {
+        if (locator.key === "c1.mp4") {
+          throw new Error("Missing");
+        }
+        return `https://storage.local/${locator.bucket}/${locator.key}`;
+      }
+    };
+
+    const app = createControlApiApp({
+      uow: new FakeUnitOfWork(),
+      sceneReviewQueries,
+      reviewMediaDelivery
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/scenes/${sceneUuid}/review`
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(SceneReviewDetailReadModelSchema.safeParse(body).success).toBe(true);
+
+    const cand1 = body.candidatesByRevision[0].candidates[0];
+    const cand2 = body.candidatesByRevision[1].candidates[0];
+
+    // available: false never contains a url property
+    expect(cand1.media.available).toBe(false);
+    expect("url" in cand1.media).toBe(false);
+
+    // available: true always contains a non-empty string url property
+    expect(cand2.media.available).toBe(true);
+    expect(typeof cand2.media.url).toBe("string");
+    expect(cand2.media.url.length).toBeGreaterThan(0);
+  });
+
+  it("presigns all candidates across revisions concurrently", async () => {
+    const sceneReviewQueries: SceneReviewQueries = {
+      async getCampaignReviewSummary() {
+        return undefined;
+      },
+      async getSceneReviewDetail(sceneId: SceneId) {
+        if (sceneId === sceneUuid) {
+          return sampleDetail;
+        }
+        return undefined;
+      }
+    };
+
+    let activeSigningCalls = 0;
+    let maxConcurrentSigningCalls = 0;
+
+    const reviewMediaDelivery: ReviewMediaDeliveryPort = {
+      async generatePresignedReadUrl(locator: PersistentObjectLocator) {
+        activeSigningCalls++;
+        if (activeSigningCalls > maxConcurrentSigningCalls) {
+          maxConcurrentSigningCalls = activeSigningCalls;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        activeSigningCalls--;
+        return `https://storage.local/${locator.bucket}/${locator.key}`;
+      }
+    };
+
+    const app = createControlApiApp({
+      uow: new FakeUnitOfWork(),
+      sceneReviewQueries,
+      reviewMediaDelivery
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/scenes/${sceneUuid}/review`
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(maxConcurrentSigningCalls).toBe(2);
   });
 
   it("GET /api/scenes/:sceneId/review returns 404 when not found", async () => {
