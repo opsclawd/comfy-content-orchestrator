@@ -13,6 +13,9 @@ import {
   runDiskPreflight,
   collectGitProvenance,
   LocalFsGpuLeaseAdapter,
+  InMemoryStorageMetricsRegistry,
+  HostFsStorageTelemetryAdapter,
+  HostFsStorageTelemetryError,
   S3ObjectStorage,
   type S3ObjectStorageOptions,
   S3ReviewMediaDelivery
@@ -84,5 +87,14 @@ describe("infrastructure package exports", () => {
       }
     });
     expect(delivery).toBeInstanceOf(S3ReviewMediaDelivery);
+  });
+
+  it("exports InMemoryStorageMetricsRegistry from composition root", () => {
+    expect(typeof InMemoryStorageMetricsRegistry).toBe("function");
+  });
+
+  it("exports HostFsStorageTelemetryAdapter and HostFsStorageTelemetryError from composition root", () => {
+    expect(typeof HostFsStorageTelemetryAdapter).toBe("function");
+    expect(typeof HostFsStorageTelemetryError).toBe("function");
   });
 });

@@ -117,4 +117,13 @@ describe("Architecture Boundaries", () => {
 
     expect(violationNames).toContain("no-circular");
   });
+
+  it("verifies s3-object-storage contains no admission policy branching", () => {
+    const s3Path = path.resolve(__dirname, "storage/s3-object-storage.ts");
+    const content = fs.readFileSync(s3Path, "utf-8");
+    expect(content).not.toContain("evaluateStorageWatermark");
+    expect(content).not.toContain("StorageAdmission");
+    expect(content).not.toContain("canAdmit");
+    expect(content).not.toContain("watermark");
+  });
 });

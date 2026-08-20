@@ -5,3 +5,5 @@ export * from "./idempotency-conflict-error.js";
 export * from "./review-scene.js";
 export * from "./progress-scene-production.js";
 export * from "./execute-profile-render.js";
+export * from "./storage-admission-error.js";
+export * from "./enforce-storage-admission.js";

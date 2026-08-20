@@ -136,3 +136,16 @@ export {
   S3ReviewMediaDelivery,
   type S3ReviewMediaDeliveryOptions
 } from "./storage/s3-review-media-delivery.js";
+
+export {
+  InMemoryStorageMetricsRegistry,
+  WATERMARK_STATE_NUMERIC_VALUES
+} from "./telemetry/in-memory-storage-metrics-registry.js";
+
+export {
+  HostFsStorageTelemetryAdapter,
+  HostFsStorageTelemetryError,
+  type HostFsStorageTelemetryAdapterOptions,
+  type StatFsFn,
+  type BucketUsageProvider
+} from "./telemetry/storage-telemetry-adapter.js";

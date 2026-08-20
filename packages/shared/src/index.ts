@@ -14,3 +14,9 @@ export function errorMessage(err: unknown): string {
 }
 
 export { BUCKET_NAMES, BUCKETS, type BucketName } from "./buckets.js";
+export {
+  STORAGE_WATERMARK_STATES,
+  type StorageWatermarkState,
+  STORAGE_OPERATION_CLASSES,
+  type StorageOperationClass
+} from "./storage-watermark.js";
