@@ -129,10 +129,32 @@ describe("S3ReviewMediaDelivery integration with real MinIO", () => {
     expect(expiredResponse.status).toBe(403);
   });
 
+  it("throws error when target object is absent in storage backend", async () => {
+    await expect(
+      delivery.generatePresignedReadUrl({
+        bucket: BUCKETS.REVIEW,
+        key: "candidates/scene-001/does-not-exist.mp4",
+        contentHash: "dummy-hash"
+      })
+    ).rejects.toThrow();
+  });
+
   it("signs presigned URLs with injected tailnet hostname independently from storage endpoint", async () => {
+    const payload = new TextEncoder().encode("tailnet delivery test payload");
+    const key = "candidates/scene-002/variant-01.mp4";
+    await rawS3Client.send(
+      new PutObjectCommand({
+        Bucket: BUCKETS.REVIEW,
+        Key: key,
+        Body: payload,
+        ContentType: "video/mp4"
+      })
+    );
+
     const tailnetEndpoint = "https://storage-01.godzspeed-internal.ts.net";
     const tailnetDelivery = new S3ReviewMediaDelivery({
       signingEndpoint: tailnetEndpoint,
+      storageEndpoint: minioContainer.getEndpoint(),
       credentials: {
         accessKeyId: minioContainer.getAccessKey(),
         secretAccessKey: minioContainer.getSecretKey()
@@ -142,7 +164,7 @@ describe("S3ReviewMediaDelivery integration with real MinIO", () => {
 
     const presignedUrl = await tailnetDelivery.generatePresignedReadUrl({
       bucket: BUCKETS.REVIEW,
-      key: "candidates/scene-002/variant-01.mp4",
+      key,
       contentHash: "dummy-hash"
     });
 
