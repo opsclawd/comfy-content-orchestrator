@@ -1003,7 +1003,7 @@ describe("Sprint 1.5 Review Plane End-to-End Contract Closure", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json() as SceneReviewDetailReadModel;
     expect(body.candidatesByRevision[0]?.candidates[0]?.media.available).toBe(true);
-    const presignedUrl = body.candidatesByRevision[0]?.candidates[0]?.media.url!;
+    const presignedUrl = body.candidatesByRevision[0]?.candidates[0]?.media.url;
     expect(presignedUrl).toBeDefined();
 
     // Verify storyboard_scenes, storyboard_candidates, and review_events contain no presigned URL
