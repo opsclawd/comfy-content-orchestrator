@@ -69,6 +69,7 @@ export const reviewReadRoutes: FastifyPluginAsync<ReviewReadRoutesOptions> = asy
     async (request, reply) => {
       const { sceneId } = request.params;
       const queries = container.queries.sceneReview;
+      const mediaDelivery = container.dependencies.reviewMediaDelivery;
 
       const detail = queries ? await queries.getSceneReviewDetail(sceneId as SceneId) : undefined;
       if (!detail) {
@@ -77,6 +78,47 @@ export const reviewReadRoutes: FastifyPluginAsync<ReviewReadRoutesOptions> = asy
           message: `Scene '${sceneId}' review detail was not found.`
         });
       }
+
+      const candidatesByRevision = await Promise.all(
+        detail.candidatesByRevision.map(async (group) => {
+          const candidates = await Promise.all(
+            group.candidates.map(async (c) => {
+              let media: { available: boolean; url?: string } = { available: false };
+
+              if (mediaDelivery) {
+                try {
+                  const url = await mediaDelivery.generatePresignedReadUrl({
+                    bucket: c.storageBucket,
+                    key: c.storageObjectKey,
+                    contentHash: c.contentHash
+                  });
+                  if (url) {
+                    media = { available: true, url };
+                  }
+                } catch {
+                  media = { available: false };
+                }
+              }
+
+              return {
+                candidateId: c.id,
+                sceneId: c.sceneId,
+                specRevision: c.specRevision,
+                variantOrdinal: c.variantOrdinal,
+                contentHash: c.contentHash,
+                media,
+                ...(c.generationMetadata ? { generationMetadata: c.generationMetadata } : {}),
+                createdAt: c.createdAt
+              };
+            })
+          );
+
+          return {
+            specRevision: group.specRevision,
+            candidates
+          };
+        })
+      );
 
       const readModel: SceneReviewDetailReadModel = {
         sceneId: detail.sceneId,
@@ -97,20 +139,7 @@ export const reviewReadRoutes: FastifyPluginAsync<ReviewReadRoutesOptions> = asy
           ? { selectedCandidateRevision: detail.selectedCandidateRevision }
           : {}),
         ...(detail.approval ? { approval: detail.approval } : {}),
-        candidatesByRevision: detail.candidatesByRevision.map((group) => ({
-          specRevision: group.specRevision,
-          candidates: group.candidates.map((c) => ({
-            candidateId: c.id,
-            sceneId: c.sceneId,
-            specRevision: c.specRevision,
-            variantOrdinal: c.variantOrdinal,
-            contentHash: c.contentHash,
-            // TODO: Translate candidate locator to presigned/accessible media URL when storage/media service is wired
-            media: { available: false },
-            ...(c.generationMetadata ? { generationMetadata: c.generationMetadata } : {}),
-            createdAt: c.createdAt
-          }))
-        })),
+        candidatesByRevision,
         allowedActions: [...detail.allowedActions]
       };
 

@@ -7,7 +7,8 @@ export interface StoryboardCandidate {
   readonly sceneId: SceneId;
   readonly specRevision: number;
   readonly variantOrdinal: number;
-  readonly locator: string;
+  readonly storageBucket: string;
+  readonly storageObjectKey: string;
   readonly contentHash: string;
   readonly generationMetadata: Record<string, unknown>;
   readonly createdAt: string;

@@ -5,6 +5,7 @@ import {
   type QueueRenderInput,
   type RenderEnginePort,
   type RenderQueueReceipt,
+  type ReviewMediaDeliveryPort,
   type SceneReviewQueries,
   type UnitOfWork,
   type UnitOfWorkContext
@@ -105,11 +106,23 @@ describe("control-api composition root", () => {
       }
     };
 
-    const container = createControlApiContainer({ uow, renderEngine, sceneReviewQueries });
+    const reviewMediaDelivery: ReviewMediaDeliveryPort = {
+      async generatePresignedReadUrl() {
+        return "https://storage.local/presigned-url";
+      }
+    };
+
+    const container = createControlApiContainer({
+      uow,
+      renderEngine,
+      sceneReviewQueries,
+      reviewMediaDelivery
+    });
 
     expect(container.dependencies.uow).toBe(uow);
     expect(container.dependencies.renderEngine).toBe(renderEngine);
     expect(container.dependencies.sceneReviewQueries).toBe(sceneReviewQueries);
+    expect(container.dependencies.reviewMediaDelivery).toBe(reviewMediaDelivery);
     expect(container.queries.sceneReview).toBe(sceneReviewQueries);
     expect(container.useCases.reviewScene).toBeInstanceOf(ReviewSceneUseCases);
     expect(container.useCases.progressSceneProduction).toBeInstanceOf(

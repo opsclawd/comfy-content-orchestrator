@@ -6,6 +6,15 @@ export {
   type StartedPostgres18Container
 } from "./postgres/test-support/postgres-18.js";
 
+export { startMinioContainer, type StartedMinioContainer } from "./storage/test-support/minio.js";
+
+export {
+  S3Client,
+  CreateBucketCommand,
+  PutObjectCommand,
+  type S3ClientConfig
+} from "@aws-sdk/client-s3";
+
 export {
   insertLicenseRecord,
   insertClientRecord,

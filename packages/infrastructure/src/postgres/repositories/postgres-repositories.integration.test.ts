@@ -76,7 +76,8 @@ describe("PostgreSQL StoryboardCandidateRepository and ReviewEventStore Adapters
       sceneId: scene1.scene_id as SceneId,
       specRevision: 1,
       variantOrdinal: 2,
-      locator: "godzspeed-temp/candidates/scene-1/rev1_var2.webp",
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: "candidates/scene-1/rev1_var2.webp",
       contentHash: "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
       generationMetadata: { seed: 1002, steps: 8, sampler: "dpmpp_2m" },
       createdAt: "2026-08-16T10:00:00.000Z"
@@ -87,7 +88,8 @@ describe("PostgreSQL StoryboardCandidateRepository and ReviewEventStore Adapters
       sceneId: scene1.scene_id as SceneId,
       specRevision: 1,
       variantOrdinal: 1,
-      locator: "godzspeed-temp/candidates/scene-1/rev1_var1.webp",
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: "candidates/scene-1/rev1_var1.webp",
       contentHash: "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
       generationMetadata: { seed: 1001, steps: 8, sampler: "dpmpp_2m" },
       createdAt: "2026-08-16T10:01:00.000Z"
@@ -98,7 +100,8 @@ describe("PostgreSQL StoryboardCandidateRepository and ReviewEventStore Adapters
       sceneId: scene1.scene_id as SceneId,
       specRevision: 1,
       variantOrdinal: 3,
-      locator: "godzspeed-temp/candidates/scene-1/rev1_var3.webp",
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: "candidates/scene-1/rev1_var3.webp",
       contentHash: "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
       generationMetadata: { seed: 1003, steps: 8, sampler: "dpmpp_2m" },
       createdAt: "2026-08-16T10:02:00.000Z"
@@ -109,7 +112,8 @@ describe("PostgreSQL StoryboardCandidateRepository and ReviewEventStore Adapters
       sceneId: scene1.scene_id as SceneId,
       specRevision: 2,
       variantOrdinal: 1,
-      locator: "godzspeed-temp/candidates/scene-1/rev2_var1.webp",
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: "candidates/scene-1/rev2_var1.webp",
       contentHash: "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
       generationMetadata: { seed: 2001, steps: 8 },
       createdAt: "2026-08-16T11:00:00.000Z"
@@ -120,7 +124,8 @@ describe("PostgreSQL StoryboardCandidateRepository and ReviewEventStore Adapters
       sceneId: scene2.scene_id as SceneId,
       specRevision: 1,
       variantOrdinal: 1,
-      locator: "godzspeed-temp/candidates/scene-2/rev1_var1.webp",
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: "candidates/scene-2/rev1_var1.webp",
       contentHash: "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
       generationMetadata: { seed: 3001 },
       createdAt: "2026-08-16T12:00:00.000Z"
@@ -287,5 +292,82 @@ describe("PostgreSQL StoryboardCandidateRepository and ReviewEventStore Adapters
     await expect(
       client.query("DELETE FROM review_events WHERE event_id = $1", [eventWithMetadata.eventId])
     ).rejects.toThrow(/append-only\/immutable/);
+  });
+
+  it("inserts candidate with distinct storage_bucket and storage_object_key columns", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+    const scene = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      specRevision: 1
+    });
+
+    const candidateRepo = new PostgresStoryboardCandidateRepository(client);
+
+    const candidate: StoryboardCandidate = {
+      id: "01950c46-9e90-7d3d-82d2-8f1d3c000099" as CandidateId,
+      sceneId: scene.scene_id as SceneId,
+      specRevision: 1,
+      variantOrdinal: 1,
+      storageBucket: "isolated-bucket-alpha",
+      storageObjectKey: "nested/path/to/candidate.webp",
+      contentHash: "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1",
+      generationMetadata: { seed: 4242 },
+      createdAt: "2026-08-16T15:00:00.000Z"
+    };
+
+    await candidateRepo.insert(candidate);
+
+    // Verify written columns in PostgreSQL directly without string-splitting hacks
+    const result = await client.query<{
+      storage_bucket: string;
+      storage_object_key: string;
+    }>(
+      "SELECT storage_bucket, storage_object_key FROM storyboard_candidates WHERE candidate_id = $1",
+      [candidate.id]
+    );
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]?.storage_bucket).toBe("isolated-bucket-alpha");
+    expect(result.rows[0]?.storage_object_key).toBe("nested/path/to/candidate.webp");
+  });
+
+  it("maps database storage_bucket and storage_object_key columns directly to StoryboardCandidate domain fields", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+    const scene = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      specRevision: 1
+    });
+
+    const candidateRepo = new PostgresStoryboardCandidateRepository(client);
+
+    const candidate: StoryboardCandidate = {
+      id: "01950c46-9e90-7d3d-82d2-8f1d3c000088" as CandidateId,
+      sceneId: scene.scene_id as SceneId,
+      specRevision: 1,
+      variantOrdinal: 1,
+      storageBucket: "mapped-bucket-omega",
+      storageObjectKey: "deep/store/render_cand.webp",
+      contentHash: "e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2",
+      generationMetadata: { seed: 9999 },
+      createdAt: "2026-08-16T16:00:00.000Z"
+    };
+
+    await candidateRepo.insert(candidate);
+
+    const retrieved = await candidateRepo.findById(candidate.id);
+    expect(retrieved).toBeDefined();
+    expect(retrieved?.storageBucket).toBe("mapped-bucket-omega");
+    expect(retrieved?.storageObjectKey).toBe("deep/store/render_cand.webp");
+    expect((retrieved as unknown as Record<string, unknown>).locator).toBeUndefined();
+
+    const listed = await candidateRepo.listBySceneAndRevision(scene.scene_id as SceneId, 1);
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.storageBucket).toBe("mapped-bucket-omega");
+    expect(listed[0]?.storageObjectKey).toBe("deep/store/render_cand.webp");
+    expect((listed[0] as unknown as Record<string, unknown>).locator).toBeUndefined();
   });
 });

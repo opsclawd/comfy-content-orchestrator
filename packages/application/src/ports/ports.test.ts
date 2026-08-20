@@ -220,7 +220,8 @@ describe("Application capability ports contract tests", () => {
           sceneId: "scene-1" as SceneId,
           specRevision: 1,
           variantOrdinal: 1,
-          locator: "godzspeed-temp/candidates/cand-1.webp",
+          storageBucket: "godzspeed-temp",
+          storageObjectKey: "candidates/cand-1.webp",
           contentHash: "hash123",
           generationMetadata: {},
           createdAt: "2026-08-15T00:00:00.000Z"
@@ -252,7 +253,8 @@ describe("Application capability ports contract tests", () => {
         sceneId: "scene-1" as SceneId,
         specRevision: 1,
         variantOrdinal: 2,
-        locator: "godzspeed-temp/candidates/cand-2.webp",
+        storageBucket: "godzspeed-temp",
+        storageObjectKey: "candidates/cand-2.webp",
         contentHash: "hash456",
         generationMetadata: {},
         createdAt: "2026-08-15T00:01:00.000Z"

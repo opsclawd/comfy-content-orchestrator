@@ -48,7 +48,8 @@ function mapRowToCandidate(row: StoryboardCandidateRow): StoryboardCandidate {
     sceneId: row.scene_id as SceneId,
     specRevision: Number(row.scene_spec_revision),
     variantOrdinal: Number(row.variant_ordinal),
-    locator: `${row.storage_bucket}/${row.storage_object_key}`,
+    storageBucket: row.storage_bucket,
+    storageObjectKey: row.storage_object_key,
     contentHash: row.content_hash_sha256,
     generationMetadata:
       typeof row.generation_payload === "string"

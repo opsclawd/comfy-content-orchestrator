@@ -110,7 +110,8 @@ describe("InMemorySceneUnitOfWork", () => {
       sceneId: sceneId as SceneId,
       specRevision: revision,
       variantOrdinal,
-      locator: `candidates/${sceneId}/${id}.webp`,
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: `candidates/${sceneId}/${id}.webp`,
       contentHash: `hash-${id}`,
       generationMetadata: {},
       createdAt: "2026-08-15T00:00:00.000Z"

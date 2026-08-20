@@ -14,27 +14,14 @@ interface StoryboardCandidateRow {
   created_at: Date | string;
 }
 
-function splitLocator(locator: string): { bucket: string; key: string } {
-  const clean = locator.replace(/^[a-z]+:\/\//i, "");
-  const slashIndex = clean.indexOf("/");
-  if (slashIndex === -1) {
-    throw new Error(`Invalid locator format: '${locator}'. Expected 'bucket/key'`);
-  }
-  const bucket = clean.slice(0, slashIndex);
-  const key = clean.slice(slashIndex + 1);
-  if (!bucket || !key) {
-    throw new Error(`Invalid locator format: '${locator}'. Bucket and key must be non-empty`);
-  }
-  return { bucket, key };
-}
-
 function mapRowToCandidate(row: StoryboardCandidateRow): StoryboardCandidate {
   return {
     id: row.candidate_id as CandidateId,
     sceneId: row.scene_id as SceneId,
     specRevision: Number(row.scene_spec_revision),
     variantOrdinal: Number(row.variant_ordinal),
-    locator: `${row.storage_bucket}/${row.storage_object_key}`,
+    storageBucket: row.storage_bucket,
+    storageObjectKey: row.storage_object_key,
     contentHash: row.content_hash_sha256,
     generationMetadata:
       typeof row.generation_payload === "string"
@@ -78,7 +65,6 @@ export class PostgresStoryboardCandidateRepository implements StoryboardCandidat
   }
 
   async insert(candidate: StoryboardCandidate): Promise<void> {
-    const { bucket, key } = splitLocator(candidate.locator);
     const createdAt = candidate.createdAt ? new Date(candidate.createdAt) : new Date();
     const generationPayload = candidate.generationMetadata ?? {};
 
@@ -101,8 +87,8 @@ export class PostgresStoryboardCandidateRepository implements StoryboardCandidat
         candidate.sceneId,
         candidate.specRevision,
         candidate.variantOrdinal,
-        bucket,
-        key,
+        candidate.storageBucket,
+        candidate.storageObjectKey,
         candidate.contentHash,
         JSON.stringify(generationPayload),
         createdAt

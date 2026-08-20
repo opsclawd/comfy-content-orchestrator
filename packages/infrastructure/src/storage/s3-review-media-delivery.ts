@@ -1,9 +1,15 @@
-import { GetObjectCommand, S3Client, type S3ClientConfig } from "@aws-sdk/client-s3";
+import {
+  GetObjectCommand,
+  HeadObjectCommand,
+  S3Client,
+  type S3ClientConfig
+} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { PersistentObjectLocator, ReviewMediaDeliveryPort } from "@cco/application";
 
 export interface S3ReviewMediaDeliveryOptions {
   readonly signingEndpoint: string;
+  readonly storageEndpoint?: string;
   readonly region?: string;
   readonly credentials?: {
     readonly accessKeyId: string;
@@ -12,23 +18,22 @@ export interface S3ReviewMediaDeliveryOptions {
   readonly forcePathStyle?: boolean;
   readonly defaultExpirySeconds?: number;
   readonly client?: S3Client;
+  readonly storageClient?: S3Client;
 }
 
 export class S3ReviewMediaDelivery implements ReviewMediaDeliveryPort {
-  private readonly client: S3Client;
+  private readonly signingClient: S3Client;
+  private readonly storageClient: S3Client;
   private readonly defaultExpirySeconds: number;
 
   constructor(options: S3ReviewMediaDeliveryOptions) {
     this.defaultExpirySeconds = options.defaultExpirySeconds ?? 300;
 
-    if (options.client) {
-      this.client = options.client;
-    } else {
+    const buildClient = (rawEndpoint: string): S3Client => {
       const endpoint =
-        options.signingEndpoint.startsWith("http://") ||
-        options.signingEndpoint.startsWith("https://")
-          ? options.signingEndpoint
-          : `https://${options.signingEndpoint}`;
+        rawEndpoint.startsWith("http://") || rawEndpoint.startsWith("https://")
+          ? rawEndpoint
+          : `https://${rawEndpoint}`;
 
       const clientConfig: S3ClientConfig = {
         endpoint,
@@ -43,7 +48,21 @@ export class S3ReviewMediaDelivery implements ReviewMediaDeliveryPort {
         };
       }
 
-      this.client = new S3Client(clientConfig);
+      return new S3Client(clientConfig);
+    };
+
+    if (options.client) {
+      this.signingClient = options.client;
+      this.storageClient = options.storageClient ?? options.client;
+    } else {
+      this.signingClient = buildClient(options.signingEndpoint);
+      if (options.storageClient) {
+        this.storageClient = options.storageClient;
+      } else if (options.storageEndpoint && options.storageEndpoint !== options.signingEndpoint) {
+        this.storageClient = buildClient(options.storageEndpoint);
+      } else {
+        this.storageClient = this.signingClient;
+      }
     }
   }
 
@@ -63,12 +82,21 @@ export class S3ReviewMediaDelivery implements ReviewMediaDeliveryPort {
       );
     }
 
+    // 1. Verify object existence in S3/MinIO before generating presigned URL
+    await this.storageClient.send(
+      new HeadObjectCommand({
+        Bucket: locator.bucket,
+        Key: locator.key
+      })
+    );
+
+    // 2. Generate presigned URL
     const command = new GetObjectCommand({
       Bucket: locator.bucket,
       Key: locator.key
     });
 
-    return getSignedUrl(this.client, command, {
+    return getSignedUrl(this.signingClient, command, {
       expiresIn: expiry
     });
   }

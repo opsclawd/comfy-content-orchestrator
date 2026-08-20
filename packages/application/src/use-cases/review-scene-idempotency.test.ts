@@ -125,7 +125,8 @@ describe("ReviewSceneUseCases - Concurrency & Idempotency", () => {
       sceneId: "scene-cand-stale" as SceneId,
       specRevision: 1,
       variantOrdinal: 1,
-      locator: "loc/cand-1.webp",
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: "loc/cand-1.webp",
       contentHash: "hash-1",
       generationMetadata: {},
       createdAt: "2026-08-15T00:00:00.000Z"
@@ -155,7 +156,8 @@ describe("ReviewSceneUseCases - Concurrency & Idempotency", () => {
       sceneId: "scene-cand-idemp" as SceneId,
       specRevision: 1,
       variantOrdinal: 1,
-      locator: "loc/cand-1.webp",
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: "loc/cand-1.webp",
       contentHash: "hash-1",
       generationMetadata: {},
       createdAt: "2026-08-15T00:00:00.000Z"
@@ -292,7 +294,8 @@ describe("ReviewSceneUseCases - Concurrency & Idempotency", () => {
       sceneId: "scene-cand-cross-1" as SceneId,
       specRevision: 1,
       variantOrdinal: 1,
-      locator: "loc/cand-1.webp",
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: "loc/cand-1.webp",
       contentHash: "hash-1",
       generationMetadata: {},
       createdAt: "2026-08-15T00:00:00.000Z"
@@ -302,7 +305,8 @@ describe("ReviewSceneUseCases - Concurrency & Idempotency", () => {
       sceneId: "scene-cand-cross-2" as SceneId,
       specRevision: 1,
       variantOrdinal: 1,
-      locator: "loc/cand-2.webp",
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: "loc/cand-2.webp",
       contentHash: "hash-2",
       generationMetadata: {},
       createdAt: "2026-08-15T00:00:00.000Z"
@@ -340,7 +344,8 @@ describe("ReviewSceneUseCases - Concurrency & Idempotency", () => {
       sceneId: "scene-cand-hash-omit" as SceneId,
       specRevision: 1,
       variantOrdinal: 1,
-      locator: "loc/cand-1.webp",
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: "loc/cand-1.webp",
       contentHash: "hash-1",
       generationMetadata: {},
       createdAt: "2026-08-15T00:00:00.000Z"
