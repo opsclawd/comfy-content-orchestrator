@@ -96,6 +96,7 @@ export async function provisionBucket(
     await client.send(
       new PutBucketLifecycleConfigurationCommand({
         Bucket: bucket,
+        ChecksumAlgorithm: "MD5",
         LifecycleConfiguration: {
           Rules: [
             {
