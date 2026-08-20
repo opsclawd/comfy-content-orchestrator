@@ -18,6 +18,7 @@
   "scripts": {
     "db:migrate": "tsx src/postgres/migrate.ts",
     "provenance": "tsx src/comfyui/provenance/cli.ts",
+    "storage:provision": "tsx src/storage/provision.ts",
     "test:comfyui": "vitest run --config ../../vitest.comfyui.config.ts",
     "test:db": "vitest run --config ../../vitest.integration.config.ts",
     "typecheck": "tsc --build"

@@ -149,3 +149,21 @@ export {
   type StatFsFn,
   type BucketUsageProvider
 } from "./telemetry/storage-telemetry-adapter.js";
+
+export {
+  provisionBucket,
+  provisionStorageBuckets,
+  evaluateLifecycleEligibility,
+  readBucketLifecycleConfiguration,
+  type StorageProvisioningOptions,
+  type BucketProvisionResult,
+  type StorageProvisioningSummary,
+  type LifecycleEligibilityResult
+} from "./storage/provisioner.js";
+
+export {
+  parseProvisionCliArgs,
+  runProvisionCli,
+  type StorageProvisionCliOptions,
+  type ProvisionCliDependencies
+} from "./storage/provision.js";
