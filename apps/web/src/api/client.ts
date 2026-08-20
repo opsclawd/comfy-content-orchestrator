@@ -1,4 +1,5 @@
 import { HealthResponseSchema, type HealthResponse } from "@cco/contracts";
+export type { HealthResponse } from "@cco/contracts";
 
 export interface ApiClientConfig {
   baseUrl?: string | undefined;
