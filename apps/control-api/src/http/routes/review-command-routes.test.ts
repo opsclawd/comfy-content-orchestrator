@@ -224,7 +224,8 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
     sceneId: sceneUuid,
     specRevision,
     variantOrdinal: 1,
-    locator: "minio://bucket/c1.mp4",
+    storageBucket: "bucket",
+    storageObjectKey: "c1.mp4",
     contentHash: "hash-c1",
     generationMetadata: { seed: 123 },
     createdAt: "2026-08-18T10:00:00.000Z"

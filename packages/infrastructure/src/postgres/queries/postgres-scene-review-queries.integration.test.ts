@@ -178,13 +178,15 @@ describe("PostgreSQL SceneReviewQueries Read Adapter Integration", () => {
     expect(groupRev1?.candidates).toHaveLength(2);
     expect(groupRev1?.candidates[0]?.id).toBe(candRev1Var1.candidate_id);
     expect(groupRev1?.candidates[0]?.variantOrdinal).toBe(1);
-    expect(groupRev1?.candidates[0]?.locator).toBe(
-      `godzspeed-temp/candidates/${sceneRecord.scene_id}/rev1_var1.webp`
+    expect(groupRev1?.candidates[0]?.storageBucket).toBe("godzspeed-temp");
+    expect(groupRev1?.candidates[0]?.storageObjectKey).toBe(
+      `candidates/${sceneRecord.scene_id}/rev1_var1.webp`
     );
     expect(groupRev1?.candidates[1]?.id).toBe(candRev1Var2.candidate_id);
     expect(groupRev1?.candidates[1]?.variantOrdinal).toBe(2);
-    expect(groupRev1?.candidates[1]?.locator).toBe(
-      `godzspeed-temp/candidates/${sceneRecord.scene_id}/rev1_var2.webp`
+    expect(groupRev1?.candidates[1]?.storageBucket).toBe("godzspeed-temp");
+    expect(groupRev1?.candidates[1]?.storageObjectKey).toBe(
+      `candidates/${sceneRecord.scene_id}/rev1_var2.webp`
     );
 
     const groupRev2 = detail?.candidatesByRevision.find((g) => g.specRevision === 2);
@@ -192,10 +194,22 @@ describe("PostgreSQL SceneReviewQueries Read Adapter Integration", () => {
     expect(groupRev2?.candidates).toHaveLength(3);
     expect(groupRev2?.candidates[0]?.id).toBe(candRev2Var1.candidate_id);
     expect(groupRev2?.candidates[0]?.variantOrdinal).toBe(1);
+    expect(groupRev2?.candidates[0]?.storageBucket).toBe("godzspeed-temp");
+    expect(groupRev2?.candidates[0]?.storageObjectKey).toBe(
+      `candidates/${sceneRecord.scene_id}/rev2_var1.webp`
+    );
     expect(groupRev2?.candidates[1]?.id).toBe(candRev2Var2.candidate_id);
     expect(groupRev2?.candidates[1]?.variantOrdinal).toBe(2);
+    expect(groupRev2?.candidates[1]?.storageBucket).toBe("godzspeed-temp");
+    expect(groupRev2?.candidates[1]?.storageObjectKey).toBe(
+      `candidates/${sceneRecord.scene_id}/rev2_var2.webp`
+    );
     expect(groupRev2?.candidates[2]?.id).toBe(candRev2Var3.candidate_id);
     expect(groupRev2?.candidates[2]?.variantOrdinal).toBe(3);
+    expect(groupRev2?.candidates[2]?.storageBucket).toBe("godzspeed-temp");
+    expect(groupRev2?.candidates[2]?.storageObjectKey).toBe(
+      `candidates/${sceneRecord.scene_id}/rev2_var3.webp`
+    );
 
     // Allowed actions for director_review
     expect(detail?.allowedActions).toEqual(
@@ -499,5 +513,41 @@ describe("PostgreSQL SceneReviewQueries Read Adapter Integration", () => {
     const queryAdapter = new PostgresSceneReviewQueries(client);
     const result = await queryAdapter.getCampaignReviewSummary(campaign.campaign_id as CampaignId);
     expect(result).toBeUndefined();
+  });
+
+  it("maps database storage_bucket and storage_object_key columns directly to StoryboardCandidate domain fields", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+    const scene = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      status: "director_review",
+      specRevision: 1
+    });
+
+    const candidateRecord = await insertStoryboardCandidateRecord(client, {
+      sceneId: scene.scene_id,
+      sceneSpecRevision: 1,
+      variantOrdinal: 1,
+      storageBucket: "custom-candidate-bucket",
+      storageObjectKey: "custom/path/candidate-shot-01.webp",
+      contentHashSha256: "6666666666666666666666666666666666666666666666666666666666666666",
+      generationPayload: { prompt: "test prompt" }
+    });
+
+    const queryAdapter = new PostgresSceneReviewQueries(client);
+    const detail = await queryAdapter.getSceneReviewDetail(scene.scene_id as SceneId);
+
+    expect(detail).toBeDefined();
+    const candidateGroup = detail?.candidatesByRevision.find((g) => g.specRevision === 1);
+    expect(candidateGroup).toBeDefined();
+    expect(candidateGroup?.candidates).toHaveLength(1);
+
+    const candidate = candidateGroup?.candidates[0];
+    expect(candidate).toBeDefined();
+    expect(candidate?.id).toBe(candidateRecord.candidate_id);
+    expect(candidate?.storageBucket).toBe("custom-candidate-bucket");
+    expect(candidate?.storageObjectKey).toBe("custom/path/candidate-shot-01.webp");
+    expect((candidate as unknown as Record<string, unknown>).locator).toBeUndefined();
   });
 });

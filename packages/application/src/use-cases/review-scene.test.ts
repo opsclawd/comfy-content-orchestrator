@@ -491,7 +491,8 @@ describe("ReviewSceneUseCases", () => {
       sceneId: sceneId as SceneId,
       specRevision: revision,
       variantOrdinal: 1,
-      locator: `godzspeed-temp/candidates/${sceneId}/${id}.webp`,
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: `candidates/${sceneId}/${id}.webp`,
       contentHash: "sha256-dummy-hash",
       generationMetadata: {},
       createdAt: "2026-08-15T00:00:00.000Z"
@@ -675,7 +676,8 @@ describe("ReviewSceneUseCases", () => {
         sceneId: "scene-select-idempotent" as SceneId,
         specRevision: 2,
         variantOrdinal: 1,
-        locator: "storyboard-candidates/campaigns/c1/scenes/s1/v2/c1.png",
+        storageBucket: "godzspeed-temp",
+        storageObjectKey: "storyboard-candidates/campaigns/c1/scenes/s1/v2/c1.png",
         contentHash: "b".repeat(64),
         generationMetadata: {},
         createdAt: "2026-08-15T00:00:00.000Z"

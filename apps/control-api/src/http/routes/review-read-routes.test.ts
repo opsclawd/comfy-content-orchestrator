@@ -74,7 +74,8 @@ describe("Review Read Endpoints", () => {
             sceneId: sceneUuid as SceneId,
             specRevision: 1,
             variantOrdinal: 1,
-            locator: "minio://bucket/c1.mp4",
+            storageBucket: "bucket",
+            storageObjectKey: "c1.mp4",
             contentHash: "hash-c1",
             generationMetadata: { seed: 123 },
             createdAt: "2026-08-18T10:00:00.000Z"
@@ -89,7 +90,8 @@ describe("Review Read Endpoints", () => {
             sceneId: sceneUuid as SceneId,
             specRevision: 2,
             variantOrdinal: 1,
-            locator: "minio://bucket/c2.mp4",
+            storageBucket: "bucket",
+            storageObjectKey: "c2.mp4",
             contentHash: "hash-c2",
             generationMetadata: { seed: 456 },
             createdAt: "2026-08-18T11:00:00.000Z"
