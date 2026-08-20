@@ -42,6 +42,13 @@ export function createControlApiApp(
     });
   });
 
+  app.get("/api/health", async (_request, reply) => {
+    return reply.status(200).send({
+      status: "ok",
+      timestamp: new Date().toISOString()
+    });
+  });
+
   app.register(reviewReadRoutes, {
     container,
     ...(options !== undefined ? { appOptions: options } : {})
