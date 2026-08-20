@@ -23,6 +23,7 @@
     "typecheck": "tsc --build"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.714.0",
     "@cco/application": "workspace:*",
     "@cco/contracts": "workspace:*",
     "@cco/domain": "workspace:*",

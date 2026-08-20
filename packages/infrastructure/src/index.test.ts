@@ -12,7 +12,9 @@ import {
   hashModelFiles,
   runDiskPreflight,
   collectGitProvenance,
-  LocalFsGpuLeaseAdapter
+  LocalFsGpuLeaseAdapter,
+  S3ObjectStorage,
+  type S3ObjectStorageOptions
 } from "./index.js";
 import { FakeComfyUiTransport } from "./comfyui/test-support/fake-comfyui.js";
 
@@ -54,5 +56,20 @@ describe("infrastructure package exports", () => {
 
   it("exports LocalFsGpuLeaseAdapter from composition root", () => {
     expect(typeof LocalFsGpuLeaseAdapter).toBe("function");
+  });
+
+  it("exports S3ObjectStorage from composition root and instantiates with options", () => {
+    expect(typeof S3ObjectStorage).toBe("function");
+    const options: S3ObjectStorageOptions = {
+      endpoint: "http://127.0.0.1:9000",
+      region: "us-east-1",
+      credentials: {
+        accessKeyId: "test-key",
+        secretAccessKey: "test-secret"
+      },
+      forcePathStyle: true
+    };
+    const storage = new S3ObjectStorage(options);
+    expect(storage).toBeInstanceOf(S3ObjectStorage);
   });
 });

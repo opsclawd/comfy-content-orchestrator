@@ -129,3 +129,5 @@ export {
   LocalFsGpuLeaseAdapter,
   type LocalFsGpuLeaseAdapterOptions
 } from "./gpu/local-fs-gpu-lease-adapter.js";
+
+export { S3ObjectStorage, type S3ObjectStorageOptions } from "./storage/s3-object-storage.js";
