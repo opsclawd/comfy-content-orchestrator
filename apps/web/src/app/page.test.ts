@@ -48,6 +48,7 @@ describe("HomePage Component", () => {
 
     const jsx = (await HomePage()) as TestElement;
     expect(jsx).not.toBeNull();
+    expect(jsx.type).toBe("section");
     expect(findByTestId(jsx, "review-hub-home")).not.toBeNull();
     expect(getHealth).toHaveBeenCalled();
 
@@ -70,6 +71,7 @@ describe("HomePage Component", () => {
 
     const jsx = (await HomePage()) as TestElement;
     expect(jsx).not.toBeNull();
+    expect(jsx.type).toBe("section");
     expect(findByTestId(jsx, "review-hub-home")).not.toBeNull();
     expect(getHealth).toHaveBeenCalled();
 
