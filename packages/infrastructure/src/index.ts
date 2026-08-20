@@ -136,3 +136,8 @@ export {
   S3ReviewMediaDelivery,
   type S3ReviewMediaDeliveryOptions
 } from "./storage/s3-review-media-delivery.js";
+
+export {
+  InMemoryStorageMetricsRegistry,
+  WATERMARK_STATE_NUMERIC_VALUES
+} from "./telemetry/in-memory-storage-metrics-registry.js";

@@ -27,9 +27,19 @@ import type {
   SceneReviewQueries,
   StoryboardCandidateRepository,
   StoredObject,
+  StorageMetricsRegistryPort,
+  StorageTelemetryPort,
   VoiceSynthesisPort
 } from "./index.js";
-import type { CampaignReviewSummary, ReviewAction, ReviewEvent, SceneStatus } from "@cco/contracts";
+import type {
+  CampaignReviewSummary,
+  ReviewAction,
+  ReviewEvent,
+  SceneStatus,
+  StorageMetricsSnapshot,
+  StorageTelemetrySnapshot,
+  StorageWatermarkState
+} from "@cco/contracts";
 import type {
   CampaignId,
   CandidateId,
@@ -514,6 +524,60 @@ describe("Application capability ports contract tests", () => {
         "hash=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       );
       expect(url).toContain("exp=1800");
+    });
+  });
+
+  describe("Storage Telemetry and Metrics capability family", () => {
+    it("satisfies StorageTelemetryPort contract returning storage snapshot", async () => {
+      const telemetryPort: StorageTelemetryPort = {
+        async getStorageTelemetry(): Promise<StorageTelemetrySnapshot> {
+          return {
+            totalBytes: 1_000_000_000,
+            usedBytes: 500_000_000,
+            freeBytes: 500_000_000,
+            buckets: [{ bucket: "godzspeed-temp", usedBytes: 100_000_000 }],
+            measuredAt: "2026-08-19T00:00:00.000Z"
+          };
+        }
+      };
+      const snapshot = await telemetryPort.getStorageTelemetry();
+      expect(snapshot.totalBytes).toBe(1_000_000_000);
+      expect(snapshot.usedBytes).toBe(500_000_000);
+    });
+
+    it("satisfies StorageMetricsRegistryPort contract recording and retrieving metrics", () => {
+      let currentSnapshot: StorageMetricsSnapshot | undefined;
+      const metricsRegistry: StorageMetricsRegistryPort = {
+        recordTelemetry(snapshot: StorageTelemetrySnapshot, state: StorageWatermarkState): void {
+          currentSnapshot = {
+            objectStorageBytes: { [snapshot.buckets[0]!.bucket]: snapshot.buckets[0]!.usedBytes },
+            storageFreeBytes: snapshot.freeBytes,
+            storageWatermarkState: state,
+            measuredAt: snapshot.measuredAt
+          };
+        },
+        getMetricsSnapshot(): StorageMetricsSnapshot {
+          return currentSnapshot!;
+        },
+        formatPrometheusMetrics(): string {
+          return "";
+        }
+      };
+
+      metricsRegistry.recordTelemetry(
+        {
+          totalBytes: 1_000_000_000,
+          usedBytes: 700_000_000,
+          freeBytes: 300_000_000,
+          buckets: [{ bucket: "godzspeed-temp", usedBytes: 100_000_000 }],
+          measuredAt: "2026-08-19T00:00:00.000Z"
+        },
+        "warning"
+      );
+
+      const metrics = metricsRegistry.getMetricsSnapshot();
+      expect(metrics.storageWatermarkState).toBe("warning");
+      expect(metrics.storageFreeBytes).toBe(300_000_000);
     });
   });
 });
