@@ -95,7 +95,7 @@ curl -I "$PRESIGNED_URL"
 
 ### 5. MinIO Object Lifecycle & Deletion Eligibility
 
-**Objective:** Verify that MinIO bucket lifecycle policies are configured and operational according to PRD Section 2.3.
+**Objective:** Verify that MinIO bucket lifecycle policies are configured and operational according to PRD Section 2.3 and `docs/component-governance.md`.
 
 **Execution:**
 From the Hetzner control plane node:
@@ -103,14 +103,15 @@ From the Hetzner control plane node:
 mc alias set local-minio http://127.0.0.1:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD
 mc ilm rule list local-minio/godzspeed-temp
 mc ilm rule list local-minio/godzspeed-review
+mc ilm rule list local-minio/godzspeed-reference
 mc ilm rule list local-minio/godzspeed-delivery
 ```
 
 **Pass Criteria:**
-- `godzspeed-temp`: Expiration rule set to **14 days**.
-- `godzspeed-review`: Expiration rule set to **60 days**.
-- `godzspeed-delivery`: Expiration rule set to **90 days**.
-- `godzspeed-reference`: No automated expiration rule (retained while client is active).
+- `godzspeed-temp`: Expiration rule set to **14 days** (`godzspeed-temp-retention-14d`).
+- `godzspeed-review`: Expiration rule set to **60 days** (`godzspeed-review-retention-60d`).
+- `godzspeed-reference`: **No automated expiration rule** (retained while client is active).
+- `godzspeed-delivery`: **No automated upload-age expiration rule** (retained 90 days after campaign completion; lifecycle gap documented in `docs/component-governance.md`).
 
 ---
 
