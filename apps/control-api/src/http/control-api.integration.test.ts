@@ -3,16 +3,15 @@ import {
   startPostgres18Container,
   Pool,
   type PoolClient,
-  type StartedPostgres18Container
-} from "../../../../packages/infrastructure/src/postgres/test-support/postgres-18.js";
-import {
+  type StartedPostgres18Container,
   insertClientRecord,
   insertCampaignRecord,
   insertReferenceAssetRecord,
   insertStoryboardSceneRecord,
   insertSceneReferenceAssetRecord,
-  insertStoryboardCandidateRecord
-} from "../../../../packages/infrastructure/src/postgres/test-support/records.js";
+  insertStoryboardCandidateRecord,
+  MIGRATIONS_DIRECTORY_URL
+} from "@cco/infrastructure/testing";
 import {
   CampaignReviewSummarySchema,
   SceneReviewDetailReadModelSchema,
@@ -32,10 +31,7 @@ describe("End-to-End PostgreSQL Integration Tests for Control API HTTP Boundary"
   let postgresContainer: StartedPostgres18Container;
   let pool: Pool;
   let client: PoolClient;
-  const migrationsDirectory = new URL(
-    "../../../../packages/infrastructure/migrations/",
-    import.meta.url
-  );
+  const migrationsDirectory = MIGRATIONS_DIRECTORY_URL;
 
   beforeAll(async () => {
     postgresContainer = await startPostgres18Container();
@@ -283,14 +279,17 @@ describe("End-to-End PostgreSQL Integration Tests for Control API HTTP Boundary"
     expect(rev1Group?.candidates[0]?.media).toEqual({ available: false });
     expect(rev1Group?.candidates[1]?.candidateId).toBe(candRev1Var2.candidate_id);
     expect(rev1Group?.candidates[1]?.variantOrdinal).toBe(2);
+    expect(rev1Group?.candidates[1]?.media).toEqual({ available: false });
 
     const rev2Group = detail.candidatesByRevision.find((g) => g.specRevision === 2);
     expect(rev2Group).toBeDefined();
     expect(rev2Group?.candidates).toHaveLength(2);
     expect(rev2Group?.candidates[0]?.candidateId).toBe(candRev2Var1.candidate_id);
     expect(rev2Group?.candidates[0]?.variantOrdinal).toBe(1);
+    expect(rev2Group?.candidates[0]?.media).toEqual({ available: false });
     expect(rev2Group?.candidates[1]?.candidateId).toBe(candRev2Var2.candidate_id);
     expect(rev2Group?.candidates[1]?.variantOrdinal).toBe(2);
+    expect(rev2Group?.candidates[1]?.media).toEqual({ available: false });
   });
 
   it("candidate_select and approve flow persists updates in PostgreSQL", async () => {

@@ -1,9 +1,14 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import {
   startPostgres18Container,
+  startMinioContainer,
+  S3Client,
+  CreateBucketCommand,
+  PutObjectCommand,
   Pool,
   type PoolClient,
   type StartedPostgres18Container,
+  type StartedMinioContainer,
   insertClientRecord,
   insertCampaignRecord,
   insertStoryboardSceneRecord,
@@ -18,13 +23,22 @@ import {
   type ReviewCommandResponse,
   type ReviewErrorResponse
 } from "@cco/contracts";
-import type { CandidateId } from "@cco/domain";
-import { runMigrations, PostgresUnitOfWork, PostgresSceneReviewQueries } from "@cco/infrastructure";
+import { BUCKET_NAMES } from "@cco/shared";
+import type { CandidateId, SceneId } from "@cco/domain";
+import {
+  runMigrations,
+  PostgresUnitOfWork,
+  PostgresSceneReviewQueries,
+  S3ReviewMediaDelivery
+} from "@cco/infrastructure";
 import type { RenderEnginePort, RenderQueueReceipt } from "@cco/application";
 import { createControlApiApp } from "./app.js";
 
 describe("Sprint 1.5 Review Plane End-to-End Contract Closure", () => {
   let postgresContainer: StartedPostgres18Container;
+  let minioContainer: StartedMinioContainer;
+  let rawS3Client: S3Client;
+  let reviewMediaDelivery: S3ReviewMediaDelivery;
   let pool: Pool;
   let client: PoolClient;
   const migrationsDirectory = MIGRATIONS_DIRECTORY_URL;
@@ -35,9 +49,45 @@ describe("Sprint 1.5 Review Plane End-to-End Contract Closure", () => {
 
   beforeAll(async () => {
     postgresContainer = await startPostgres18Container();
+    minioContainer = await startMinioContainer();
+
     pool = new Pool({
       connectionString: postgresContainer.getConnectionUri(),
       max: 10
+    });
+
+    rawS3Client = new S3Client({
+      endpoint: minioContainer.getEndpoint(),
+      region: "us-east-1",
+      credentials: {
+        accessKeyId: minioContainer.getAccessKey(),
+        secretAccessKey: minioContainer.getSecretKey()
+      },
+      forcePathStyle: true
+    });
+
+    for (const bucket of BUCKET_NAMES) {
+      try {
+        await rawS3Client.send(new CreateBucketCommand({ Bucket: bucket }));
+      } catch (err: unknown) {
+        const errorName =
+          typeof err === "object" && err !== null && "name" in err
+            ? String((err as { name: unknown }).name)
+            : "";
+        if (errorName !== "BucketAlreadyExists" && errorName !== "BucketAlreadyOwnedByYou") {
+          throw err;
+        }
+      }
+    }
+
+    reviewMediaDelivery = new S3ReviewMediaDelivery({
+      signingEndpoint: minioContainer.getEndpoint(),
+      region: "us-east-1",
+      credentials: {
+        accessKeyId: minioContainer.getAccessKey(),
+        secretAccessKey: minioContainer.getSecretKey()
+      },
+      forcePathStyle: true
     });
   }, 120_000);
 
@@ -50,6 +100,10 @@ describe("Sprint 1.5 Review Plane End-to-End Contract Closure", () => {
     }
     if (postgresContainer) {
       await postgresContainer.stop();
+    }
+    rawS3Client?.destroy();
+    if (minioContainer) {
+      await minioContainer.stop();
     }
   });
 
@@ -262,6 +316,36 @@ describe("Sprint 1.5 Review Plane End-to-End Contract Closure", () => {
       generationPayload: { seed: 203 }
     });
 
+    // Seed MinIO with candidate bytes for revision 2 candidates (rev 1 remains unseeded/missing)
+    const rev2Var1Payload = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+    const rev2Var2Payload = new Uint8Array([9, 10, 11, 12, 13, 14]);
+    const rev2Var3Payload = new Uint8Array([15, 16, 17, 18, 19, 20]);
+
+    await rawS3Client.send(
+      new PutObjectCommand({
+        Bucket: "godzspeed-review",
+        Key: candidateRev2Var1.storage_object_key,
+        Body: rev2Var1Payload,
+        ContentType: "image/webp"
+      })
+    );
+    await rawS3Client.send(
+      new PutObjectCommand({
+        Bucket: "godzspeed-review",
+        Key: candidateRev2Var2.storage_object_key,
+        Body: rev2Var2Payload,
+        ContentType: "image/webp"
+      })
+    );
+    await rawS3Client.send(
+      new PutObjectCommand({
+        Bucket: "godzspeed-review",
+        Key: candidateRev2Var3.storage_object_key,
+        Body: rev2Var3Payload,
+        ContentType: "image/webp"
+      })
+    );
+
     // Setup composition root with spy/fake RenderEnginePort and authenticated ReviewerIdentityResolver
     const queueRenderSpy = vi.fn().mockResolvedValue({
       executionId: "exec-mock-001",
@@ -282,7 +366,8 @@ describe("Sprint 1.5 Review Plane End-to-End Contract Closure", () => {
       {
         uow,
         sceneReviewQueries,
-        renderEngine: fakeRenderEngine
+        renderEngine: fakeRenderEngine,
+        reviewMediaDelivery
       },
       {
         reviewerIdentityResolver: {
@@ -325,10 +410,62 @@ describe("Sprint 1.5 Review Plane End-to-End Contract Closure", () => {
       ])
     );
 
+    // Candidate Rev 2 Var 1 has available: true and working presigned URL
+    const cand1Read = rev2Group?.candidates.find(
+      (c) => c.candidateId === candidateRev2Var1.candidate_id
+    );
+    expect(cand1Read).toBeDefined();
+    expect(cand1Read?.media.available).toBe(true);
+    expect(typeof cand1Read?.media.url).toBe("string");
+    expect(cand1Read?.media.url).toContain(minioContainer.getEndpoint());
+
+    // Fetch presigned URL over HTTP without auth headers and verify exact bytes
+    const fetchRes = await fetch(cand1Read!.media.url!);
+    expect(fetchRes.status).toBe(200);
+    const fetchedBytes = new Uint8Array(await fetchRes.arrayBuffer());
+    expect(fetchedBytes).toEqual(rev2Var1Payload);
+
+    // Revision 1 candidate (not seeded in MinIO) returns available: false and undefined url
     const rev1Group = detailBody.candidatesByRevision.find((g) => g.specRevision === 1);
     expect(rev1Group).toBeDefined();
     expect(rev1Group?.candidates).toHaveLength(1);
     expect(rev1Group?.candidates[0]?.candidateId).toBe(candidateRev1Var1.candidate_id);
+    expect(rev1Group?.candidates[0]?.media.available).toBe(false);
+    expect(rev1Group?.candidates[0]?.media.url).toBeUndefined();
+
+    // Wait for signature timestamp to advance to verify dynamic generation without caching
+    await new Promise((resolve) => setTimeout(resolve, 1050));
+
+    // Perform second GET /api/scenes/:sceneId/review and verify candidate 1 returns a distinct fresh signed URL (no caching)
+    const detailResponse2 = await app.inject({
+      method: "GET",
+      url: `/api/scenes/${sceneRecord.scene_id}/review`,
+      headers: authHeaders
+    });
+    expect(detailResponse2.statusCode).toBe(200);
+    const detailBody2 = detailResponse2.json() as SceneReviewDetailReadModel;
+    const cand1SecondRead = detailBody2.candidatesByRevision
+      .find((g) => g.specRevision === 2)
+      ?.candidates.find((c) => c.candidateId === candidateRev2Var1.candidate_id);
+    expect(cand1SecondRead?.media.available).toBe(true);
+    expect(cand1SecondRead?.media.url).toBeDefined();
+    expect(cand1SecondRead?.media.url).not.toEqual(cand1Read?.media.url);
+
+    // Query PostgreSQL storyboard_candidates and verify zero presigned URL strings stored
+    const dbCandidatesCheck = await client.query<{
+      storage_bucket: string;
+      storage_object_key: string;
+      generation_payload: unknown;
+    }>(
+      "SELECT storage_bucket, storage_object_key, generation_payload FROM storyboard_candidates WHERE scene_id = $1",
+      [sceneRecord.scene_id]
+    );
+    for (const row of dbCandidatesCheck.rows) {
+      const rowString = JSON.stringify(row);
+      expect(rowString).not.toContain("X-Amz-Signature");
+      expect(rowString).not.toContain("http://");
+      expect(rowString).not.toContain("https://");
+    }
 
     // -------------------------------------------------------------------------
     // Step 2: Select a current-revision candidate
@@ -715,5 +852,285 @@ describe("Sprint 1.5 Review Plane End-to-End Contract Closure", () => {
       expect(row.expected_spec_revision).toBe(expected.expectedRevision);
       expect(row.created_at).toBeInstanceOf(Date);
     }
+  });
+
+  it("fetches candidate media bytes over HTTP using presigned URL returned by scene review endpoint", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+    const sceneRecord = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      status: "director_review",
+      specRevision: 1
+    });
+
+    const binaryPayload = new TextEncoder().encode("candidate-media-bytes-direct-http-fetch");
+    const candidate = await insertStoryboardCandidateRecord(client, {
+      sceneId: sceneRecord.scene_id,
+      sceneSpecRevision: 1,
+      variantOrdinal: 1,
+      storageBucket: "godzspeed-review",
+      storageObjectKey: `candidates/${sceneRecord.scene_id}/direct_http_var1.webp`
+    });
+
+    await rawS3Client.send(
+      new PutObjectCommand({
+        Bucket: "godzspeed-review",
+        Key: candidate.storage_object_key,
+        Body: binaryPayload,
+        ContentType: "image/webp"
+      })
+    );
+
+    const uow = new PostgresUnitOfWork(pool);
+    const sceneReviewQueries = new PostgresSceneReviewQueries(pool);
+    const app = createControlApiApp({
+      uow,
+      sceneReviewQueries,
+      reviewMediaDelivery
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/scenes/${sceneRecord.scene_id}/review`,
+      headers: authHeaders
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as SceneReviewDetailReadModel;
+    const candidateRead = body.candidatesByRevision[0]?.candidates[0];
+    expect(candidateRead).toBeDefined();
+    expect(candidateRead?.media.available).toBe(true);
+    expect(typeof candidateRead?.media.url).toBe("string");
+
+    // Native fetch over HTTP without authentication headers
+    const fetchRes = await fetch(candidateRead!.media.url!);
+    expect(fetchRes.status).toBe(200);
+    const fetchedBytes = new Uint8Array(await fetchRes.arrayBuffer());
+    expect(fetchedBytes).toEqual(binaryPayload);
+
+    await app.close();
+  });
+
+  it("proves missing storage objects degrade to media available false without url", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+    const sceneRecord = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      status: "director_review",
+      specRevision: 1
+    });
+
+    const candidate = await insertStoryboardCandidateRecord(client, {
+      sceneId: sceneRecord.scene_id,
+      sceneSpecRevision: 1,
+      variantOrdinal: 1,
+      storageBucket: "godzspeed-review",
+      storageObjectKey: `candidates/${sceneRecord.scene_id}/missing_object_var1.webp`
+    });
+
+    // Do NOT upload object to MinIO
+
+    const uow = new PostgresUnitOfWork(pool);
+    const sceneReviewQueries = new PostgresSceneReviewQueries(pool);
+    const app = createControlApiApp({
+      uow,
+      sceneReviewQueries,
+      reviewMediaDelivery
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/scenes/${sceneRecord.scene_id}/review`,
+      headers: authHeaders
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as SceneReviewDetailReadModel;
+    expect(body.sceneId).toBe(sceneRecord.scene_id);
+    expect(body.status).toBe("director_review");
+    expect(body.specRevision).toBe(1);
+
+    const candidateRead = body.candidatesByRevision[0]?.candidates[0];
+    expect(candidateRead?.candidateId).toBe(candidate.candidate_id);
+    expect(candidateRead?.media).toEqual({ available: false });
+    expect(candidateRead?.media.url).toBeUndefined();
+
+    await app.close();
+  });
+
+  it("verifies no presigned URL is written to database during scene review read", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+    const sceneRecord = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      status: "director_review",
+      specRevision: 1
+    });
+
+    const candidate = await insertStoryboardCandidateRecord(client, {
+      sceneId: sceneRecord.scene_id,
+      sceneSpecRevision: 1,
+      variantOrdinal: 1,
+      storageBucket: "godzspeed-review",
+      storageObjectKey: `candidates/${sceneRecord.scene_id}/db_no_write_var1.webp`
+    });
+
+    await rawS3Client.send(
+      new PutObjectCommand({
+        Bucket: "godzspeed-review",
+        Key: candidate.storage_object_key,
+        Body: new TextEncoder().encode("db-no-write-bytes"),
+        ContentType: "image/webp"
+      })
+    );
+
+    const uow = new PostgresUnitOfWork(pool);
+    const sceneReviewQueries = new PostgresSceneReviewQueries(pool);
+    const app = createControlApiApp({
+      uow,
+      sceneReviewQueries,
+      reviewMediaDelivery
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/scenes/${sceneRecord.scene_id}/review`,
+      headers: authHeaders
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as SceneReviewDetailReadModel;
+    expect(body.candidatesByRevision[0]?.candidates[0]?.media.available).toBe(true);
+    const presignedUrl = body.candidatesByRevision[0]?.candidates[0]?.media.url!;
+    expect(presignedUrl).toBeDefined();
+
+    // Verify storyboard_scenes, storyboard_candidates, and review_events contain no presigned URL
+    const sceneRows = await client.query("SELECT * FROM storyboard_scenes WHERE scene_id = $1", [
+      sceneRecord.scene_id
+    ]);
+    const candidateRows = await client.query(
+      "SELECT * FROM storyboard_candidates WHERE scene_id = $1",
+      [sceneRecord.scene_id]
+    );
+    const eventRows = await client.query("SELECT * FROM review_events WHERE scene_id = $1", [
+      sceneRecord.scene_id
+    ]);
+
+    const combinedDbDump = JSON.stringify({
+      scenes: sceneRows.rows,
+      candidates: candidateRows.rows,
+      events: eventRows.rows
+    });
+
+    expect(combinedDbDump).not.toContain(presignedUrl);
+    expect(combinedDbDump).not.toContain("X-Amz-Signature");
+    expect(combinedDbDump).not.toContain("X-Amz-Algorithm");
+    expect(combinedDbDump).not.toContain("X-Amz-Credential");
+
+    await app.close();
+  });
+
+  it("verifies successive reads generate newly signed non-cached URLs", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+    const sceneRecord = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      status: "director_review",
+      specRevision: 1
+    });
+
+    const candidate = await insertStoryboardCandidateRecord(client, {
+      sceneId: sceneRecord.scene_id,
+      sceneSpecRevision: 1,
+      variantOrdinal: 1,
+      storageBucket: "godzspeed-review",
+      storageObjectKey: `candidates/${sceneRecord.scene_id}/no_cache_test_var1.webp`
+    });
+
+    await rawS3Client.send(
+      new PutObjectCommand({
+        Bucket: "godzspeed-review",
+        Key: candidate.storage_object_key,
+        Body: new TextEncoder().encode("no-cache-test-bytes"),
+        ContentType: "image/webp"
+      })
+    );
+
+    const uow = new PostgresUnitOfWork(pool);
+    const sceneReviewQueries = new PostgresSceneReviewQueries(pool);
+    const app = createControlApiApp({
+      uow,
+      sceneReviewQueries,
+      reviewMediaDelivery
+    });
+
+    const res1 = await app.inject({
+      method: "GET",
+      url: `/api/scenes/${sceneRecord.scene_id}/review`,
+      headers: authHeaders
+    });
+    expect(res1.statusCode).toBe(200);
+    const body1 = res1.json() as SceneReviewDetailReadModel;
+    const url1 = body1.candidatesByRevision[0]?.candidates[0]?.media.url;
+    expect(url1).toBeDefined();
+
+    // Wait for signature timestamp to advance to verify dynamic generation without caching
+    await new Promise((resolve) => setTimeout(resolve, 1050));
+
+    const res2 = await app.inject({
+      method: "GET",
+      url: `/api/scenes/${sceneRecord.scene_id}/review`,
+      headers: authHeaders
+    });
+    expect(res2.statusCode).toBe(200);
+    const body2 = res2.json() as SceneReviewDetailReadModel;
+    const url2 = body2.candidatesByRevision[0]?.candidates[0]?.media.url;
+    expect(url2).toBeDefined();
+
+    // Verify distinct signed URLs generated on each request
+    expect(url1).not.toEqual(url2);
+
+    await app.close();
+  });
+
+  it("verifies postgres scene review queries remain completely decoupled from storage delivery port", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+    const sceneRecord = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      status: "director_review",
+      specRevision: 1
+    });
+
+    const candidate = await insertStoryboardCandidateRecord(client, {
+      sceneId: sceneRecord.scene_id,
+      sceneSpecRevision: 1,
+      variantOrdinal: 1,
+      storageBucket: "godzspeed-review",
+      storageObjectKey: `candidates/${sceneRecord.scene_id}/decoupled_query_var1.webp`,
+      contentHashSha256: "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
+    });
+
+    // Verify PostgresSceneReviewQueries constructor takes ONLY client and length is 1
+    expect(PostgresSceneReviewQueries.length).toBe(1);
+
+    const sceneReviewQueries = new PostgresSceneReviewQueries(pool);
+    const detail = await sceneReviewQueries.getSceneReviewDetail(sceneRecord.scene_id as SceneId);
+
+    expect(detail).toBeDefined();
+    expect(detail?.candidatesByRevision).toHaveLength(1);
+    const returnedCandidate = detail?.candidatesByRevision[0]?.candidates[0];
+    expect(returnedCandidate).toBeDefined();
+
+    // Returned candidate contains raw storage locator data, without presigned URL or media fields
+    expect(returnedCandidate?.storageBucket).toBe("godzspeed-review");
+    expect(returnedCandidate?.storageObjectKey).toBe(candidate.storage_object_key);
+    expect(returnedCandidate?.contentHash).toBe(candidate.content_hash_sha256);
+    expect((returnedCandidate as unknown as Record<string, unknown>).media).toBeUndefined();
+    expect((returnedCandidate as unknown as Record<string, unknown>).presignedUrl).toBeUndefined();
   });
 });
