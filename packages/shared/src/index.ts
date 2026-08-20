@@ -13,7 +13,15 @@ export function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-export { BUCKET_NAMES, BUCKETS, type BucketName } from "./buckets.js";
+export {
+  BUCKETS,
+  BUCKET_NAMES,
+  BUCKET_RETENTION_POLICIES,
+  BUCKET_LIFECYCLE_DEFINITIONS,
+  type BucketName,
+  type BucketRetentionPolicy,
+  type BucketLifecycleRuleDefinition
+} from "./buckets.js";
 export {
   STORAGE_WATERMARK_STATES,
   type StorageWatermarkState,
