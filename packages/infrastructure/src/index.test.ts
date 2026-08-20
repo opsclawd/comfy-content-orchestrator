@@ -14,7 +14,8 @@ import {
   collectGitProvenance,
   LocalFsGpuLeaseAdapter,
   S3ObjectStorage,
-  type S3ObjectStorageOptions
+  type S3ObjectStorageOptions,
+  S3ReviewMediaDelivery
 } from "./index.js";
 import { FakeComfyUiTransport } from "./comfyui/test-support/fake-comfyui.js";
 
@@ -71,5 +72,17 @@ describe("infrastructure package exports", () => {
     };
     const storage = new S3ObjectStorage(options);
     expect(storage).toBeInstanceOf(S3ObjectStorage);
+  });
+
+  it("exports S3ReviewMediaDelivery from composition root and instantiates with options", () => {
+    expect(typeof S3ReviewMediaDelivery).toBe("function");
+    const delivery = new S3ReviewMediaDelivery({
+      signingEndpoint: "https://storage-01.godzspeed-internal.ts.net",
+      credentials: {
+        accessKeyId: "test-key",
+        secretAccessKey: "test-secret"
+      }
+    });
+    expect(delivery).toBeInstanceOf(S3ReviewMediaDelivery);
   });
 });
