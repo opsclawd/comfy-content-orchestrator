@@ -108,6 +108,13 @@ export const SceneReviewDetailReadModelSchema = z.object({
 });
 export type SceneReviewDetailReadModel = z.infer<typeof SceneReviewDetailReadModelSchema>;
 
+export const CampaignReviewSceneSummarySchema = z.object({
+  sceneId: z.string().uuid(),
+  status: SceneStatusSchema,
+  specRevision: z.number().int().positive()
+});
+export type CampaignReviewSceneSummary = z.infer<typeof CampaignReviewSceneSummarySchema>;
+
 export const CampaignReviewSummarySchema = z.object({
   campaignId: z.string().uuid(),
   campaignName: z.string().min(1),
@@ -116,6 +123,7 @@ export const CampaignReviewSummarySchema = z.object({
   pendingReviewCount: z.number().int().nonnegative(),
   approvedCount: z.number().int().nonnegative(),
   completedCount: z.number().int().nonnegative(),
+  scenes: z.array(CampaignReviewSceneSummarySchema),
   updatedAt: z.string().datetime()
 });
 export type CampaignReviewSummary = z.infer<typeof CampaignReviewSummarySchema>;

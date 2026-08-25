@@ -393,6 +393,111 @@ describe("PostgreSQL SceneReviewQueries Read Adapter Integration", () => {
     expect(result).toBeUndefined();
   });
 
+  it("campaign summary scenes preserve storyboard order and expose status and current revision", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, {
+      clientId: clientRecord.client_id,
+      title: "Ordered Scenes Campaign"
+    });
+
+    // Insert out of order: order 2 first, then order 1
+    const scene2 = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 2,
+      status: "approved",
+      specRevision: 3
+    });
+
+    const scene1 = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      status: "director_review",
+      specRevision: 2
+    });
+
+    const queryAdapter = new PostgresSceneReviewQueries(client);
+    const summary = await queryAdapter.getCampaignReviewSummary(campaign.campaign_id as CampaignId);
+
+    expect(summary).toBeDefined();
+    expect(summary?.scenes).toEqual([
+      {
+        sceneId: scene1.scene_id,
+        status: "director_review",
+        specRevision: 2
+      },
+      {
+        sceneId: scene2.scene_id,
+        status: "approved",
+        specRevision: 3
+      }
+    ]);
+  });
+
+  it("campaign summary excludes archived scenes from rows and aggregate counts", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, {
+      clientId: clientRecord.client_id,
+      title: "Archived Scenes Campaign"
+    });
+
+    const activeScene = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      status: "director_review",
+      specRevision: 1
+    });
+
+    const archivedScene = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 2,
+      status: "director_review",
+      specRevision: 1
+    });
+    await client.query(
+      `UPDATE storyboard_scenes SET archived_at = CURRENT_TIMESTAMP WHERE scene_id = $1`,
+      [archivedScene.scene_id]
+    );
+
+    const queryAdapter = new PostgresSceneReviewQueries(client);
+    const summary = await queryAdapter.getCampaignReviewSummary(campaign.campaign_id as CampaignId);
+
+    expect(summary).toBeDefined();
+    expect(summary?.totalScenes).toBe(1);
+    expect(summary?.pendingReviewCount).toBe(1);
+    expect(summary?.scenesByStatus).toEqual({
+      director_review: 1
+    });
+    expect(summary?.scenes).toEqual([
+      {
+        sceneId: activeScene.scene_id,
+        status: "director_review",
+        specRevision: 1
+      }
+    ]);
+  });
+
+  it("campaign summary returns an empty scenes array for an empty campaign", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, {
+      clientId: clientRecord.client_id,
+      title: "Empty Campaign"
+    });
+
+    const queryAdapter = new PostgresSceneReviewQueries(client);
+    const summary = await queryAdapter.getCampaignReviewSummary(campaign.campaign_id as CampaignId);
+
+    expect(summary).toBeDefined();
+    expect(summary?.campaignId).toBe(campaign.campaign_id);
+    expect(summary?.campaignName).toBe("Empty Campaign");
+    expect(summary?.totalScenes).toBe(0);
+    expect(summary?.scenesByStatus).toEqual({});
+    expect(summary?.pendingReviewCount).toBe(0);
+    expect(summary?.approvedCount).toBe(0);
+    expect(summary?.completedCount).toBe(0);
+    expect(summary?.scenes).toEqual([]);
+    expect(summary?.updatedAt).toBeDefined();
+  });
+
   it("returns accurate CampaignReviewSummary with status counts for a campaign with multiple scenes in various states", async () => {
     const clientRecord = await insertClientRecord(client);
     const campaign = await insertCampaignRecord(client, {
@@ -474,6 +579,7 @@ describe("PostgreSQL SceneReviewQueries Read Adapter Integration", () => {
       draft_pending: 1,
       rendering: 1
     });
+    expect(summary?.scenes).toHaveLength(7);
     expect(summary?.updatedAt).toBeDefined();
     expect(new Date(summary!.updatedAt).toISOString()).toBe(summary!.updatedAt);
   });
@@ -496,6 +602,7 @@ describe("PostgreSQL SceneReviewQueries Read Adapter Integration", () => {
     expect(summary?.pendingReviewCount).toBe(0);
     expect(summary?.approvedCount).toBe(0);
     expect(summary?.completedCount).toBe(0);
+    expect(summary?.scenes).toEqual([]);
     expect(summary?.updatedAt).toBeDefined();
   });
 

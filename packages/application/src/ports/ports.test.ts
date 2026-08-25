@@ -339,6 +339,13 @@ describe("Application capability ports contract tests", () => {
               pendingReviewCount: 1,
               approvedCount: 0,
               completedCount: 0,
+              scenes: [
+                {
+                  sceneId: "scene-1",
+                  status: "director_review" as SceneStatus,
+                  specRevision: 1
+                }
+              ],
               updatedAt: "2026-08-15T00:00:00.000Z"
             };
           }
@@ -355,6 +362,13 @@ describe("Application capability ports contract tests", () => {
       expect(summary?.campaignId).toBe("camp-1");
       expect(summary?.totalScenes).toBe(1);
       expect(summary?.pendingReviewCount).toBe(1);
+      expect(summary?.scenes).toEqual([
+        {
+          sceneId: "scene-1",
+          status: "director_review",
+          specRevision: 1
+        }
+      ]);
       expect(
         await sceneReviewQueries.getCampaignReviewSummary("missing" as CampaignId)
       ).toBeUndefined();
