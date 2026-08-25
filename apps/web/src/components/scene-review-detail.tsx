@@ -59,7 +59,7 @@ export function SceneReviewDetailView({ detail }: SceneReviewDetailProps) {
         <section className="scene-section configuration-section" aria-label="Scene Configuration">
           <h2>Scene Configuration</h2>
           <dl className="definition-list" data-testid="scene-configuration">
-            <div className="definition-item full-width">
+            <div className="definition-item">
               <dt>Prompt</dt>
               <dd className="prompt-content" data-testid="scene-prompt">
                 {configuration.prompt}
