@@ -33,7 +33,11 @@ export function formatReviewError(error: unknown): {
       statusCode: 409,
       body: {
         code: "STALE_REVISION_CONFLICT",
-        message: error.message
+        message: error.message,
+        details: {
+          expectedRevision: error.expectedRevision,
+          currentRevision: error.actualRevision
+        }
       }
     };
   }
@@ -43,7 +47,10 @@ export function formatReviewError(error: unknown): {
       statusCode: 409,
       body: {
         code: "IDEMPOTENCY_CONFLICT",
-        message: error.message
+        message: error.message,
+        details: {
+          actionId: error.eventId
+        }
       }
     };
   }

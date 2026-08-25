@@ -1,3 +1,5 @@
+"use client";
+
 import React from "react";
 import type { SceneReviewCandidateGroup } from "@cco/contracts";
 import { CandidateMedia } from "./candidate-media";
@@ -8,13 +10,17 @@ export interface CandidateGalleryProps {
   currentSpecRevision: number;
   selectedCandidateId?: string | undefined;
   selectedCandidateRevision?: number | undefined;
+  onSelectCandidate?: (candidateId: string, specRevision: number) => void;
+  disabled?: boolean;
 }
 
 export function CandidateGallery({
   candidatesByRevision,
   currentSpecRevision,
   selectedCandidateId,
-  selectedCandidateRevision
+  selectedCandidateRevision: _selectedCandidateRevision,
+  onSelectCandidate,
+  disabled = false
 }: CandidateGalleryProps) {
   const totalCandidates = candidatesByRevision.reduce(
     (acc, group) => acc + group.candidates.length,
@@ -61,9 +67,7 @@ export function CandidateGallery({
 
               <div className="candidate-grid">
                 {group.candidates.map((candidate) => {
-                  const isSelected =
-                    selectedCandidateId === candidate.candidateId &&
-                    selectedCandidateRevision === candidate.specRevision;
+                  const isSelected = selectedCandidateId === candidate.candidateId;
 
                   return (
                     <article
@@ -113,6 +117,22 @@ export function CandidateGallery({
                             </dd>
                           </div>
                         </dl>
+
+                        {isCurrent && onSelectCandidate && !isSelected && (
+                          <div className="candidate-card-actions">
+                            <button
+                              type="button"
+                              className="candidate-select-button"
+                              data-testid="select-candidate-button"
+                              disabled={disabled}
+                              onClick={() =>
+                                onSelectCandidate(candidate.candidateId, candidate.specRevision)
+                              }
+                            >
+                              Select Candidate
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </article>
                   );

@@ -856,3 +856,337 @@ a:hover {
   background-color: var(--bg-surface-hover);
   border-color: var(--color-primary);
 }
+
+/* Review Command Surface */
+.review-command-surface {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.review-actions-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.review-action-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.625rem;
+}
+
+.review-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background-color: var(--bg-surface-elevated);
+  border: 1px solid var(--border-prominent);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.875rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.review-action-btn:hover:not(:disabled) {
+  background-color: var(--bg-surface-hover);
+  border-color: var(--color-primary);
+}
+
+.review-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.review-action-approve {
+  border-color: var(--status-approved-border);
+  color: var(--status-approved-text);
+}
+
+.review-action-approve:hover:not(:disabled) {
+  background-color: var(--status-approved-bg);
+  border-color: var(--status-approved-border);
+}
+
+.review-action-reject,
+.review-action-cancel {
+  border-color: var(--status-failed-border);
+  color: var(--status-failed-text);
+}
+
+.review-action-reject:hover:not(:disabled),
+.review-action-cancel:hover:not(:disabled) {
+  background-color: var(--status-failed-bg);
+  border-color: var(--status-failed-border);
+}
+
+/* Drafting Form */
+.review-draft-panel {
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-prominent);
+  border-radius: var(--radius-md);
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.review-draft-panel h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+.review-draft-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.form-group label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+
+.form-group input,
+.form-group textarea {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  padding: 0.5rem 0.75rem;
+  font-family: inherit;
+  font-size: 0.875rem;
+}
+
+.form-group input:focus,
+.form-group textarea:focus {
+  border-color: var(--color-primary);
+  outline: none;
+}
+
+.draft-form-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.stage-draft-button {
+  background-color: var(--color-primary);
+  color: #0f172a;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.stage-draft-button:hover:not(:disabled) {
+  background-color: var(--color-primary-hover);
+}
+
+.stage-draft-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.cancel-button {
+  background-color: transparent;
+  border: 1px solid var(--border-prominent);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.cancel-button:hover:not(:disabled) {
+  background-color: var(--bg-surface-elevated);
+  color: var(--text-primary);
+}
+
+/* Confirmation Dialog Modal */
+.review-command-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1.5rem;
+}
+
+.review-command-dialog {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-prominent);
+  border-radius: var(--radius-lg);
+  padding: 1.75rem;
+  max-width: 520px;
+  width: 100%;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.review-command-dialog h3 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.dialog-summary {
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 1rem;
+}
+
+.dialog-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.dialog-detail-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.875rem;
+}
+
+.dialog-detail-item dt {
+  color: var(--text-secondary);
+}
+
+.dialog-detail-item dd {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.confirm-button {
+  background-color: var(--color-primary);
+  color: #0f172a;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 0.625rem 1.25rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.confirm-button:hover:not(:disabled) {
+  background-color: var(--color-primary-hover);
+}
+
+.confirm-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Indicators and Banners */
+.syncing-indicator {
+  background-color: var(--status-active-bg);
+  border: 1px solid var(--status-active-border);
+  color: var(--status-active-text);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.syncing-text {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.review-conflict-banner,
+.review-error-banner {
+  border-radius: var(--radius-md);
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.review-conflict-banner {
+  background-color: var(--status-review-bg);
+  border: 1px solid var(--status-review-border);
+  color: var(--status-review-text);
+}
+
+.review-error-banner {
+  background-color: var(--status-failed-bg);
+  border: 1px solid var(--status-failed-border);
+  color: var(--status-failed-text);
+}
+
+.error-button-group {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.dismiss-button {
+  background-color: var(--bg-surface-elevated);
+  border: 1px solid var(--border-prominent);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 1rem;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+/* Candidate Card Select Button */
+.candidate-card-actions {
+  margin-top: 0.5rem;
+}
+
+.candidate-select-button {
+  width: 100%;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--color-primary);
+  color: var(--color-primary);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.candidate-select-button:hover:not(:disabled) {
+  background-color: var(--color-primary);
+  color: #0f172a;
+}
+
+.candidate-select-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

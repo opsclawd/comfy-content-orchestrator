@@ -629,7 +629,11 @@ describe("Review Read Endpoints", () => {
       expect(staleRev.body).toEqual({
         code: "STALE_REVISION_CONFLICT",
         message:
-          "Stale revision conflict for scene 's-1': expected spec revision 1, but current revision is 2."
+          "Stale revision conflict for scene 's-1': expected spec revision 1, but current revision is 2.",
+        details: {
+          expectedRevision: 1,
+          currentRevision: 2
+        }
       });
 
       const idempConflict = formatReviewError(new IdempotencyConflictError("e-1"));
@@ -637,7 +641,10 @@ describe("Review Read Endpoints", () => {
       expect(idempConflict.body).toEqual({
         code: "IDEMPOTENCY_CONFLICT",
         message:
-          "Idempotency conflict for action ID 'e-1': action ID was already processed with a different request payload hash."
+          "Idempotency conflict for action ID 'e-1': action ID was already processed with a different request payload hash.",
+        details: {
+          actionId: "e-1"
+        }
       });
 
       const invTrans = formatReviewError(

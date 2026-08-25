@@ -22,7 +22,11 @@ vi.mock("../../../api/client.js", async (importOriginal) => {
 vi.mock("next/navigation", () => ({
   notFound: vi.fn(() => {
     throw new Error("NEXT_NOT_FOUND");
-  })
+  }),
+  useRouter: vi.fn(() => ({
+    refresh: vi.fn(),
+    push: vi.fn()
+  }))
 }));
 
 type TestElement = ReactElement<{
@@ -35,6 +39,10 @@ type TestElement = ReactElement<{
   [key: string]: unknown;
 }>;
 
+// `findByTestId` below operates directly on React elements. It is only safe for element trees
+// that never reach a component using hooks (e.g. `SceneNotFound`, `SceneError`) because it
+// calls function components as plain functions to descend into their output, which is an
+// invalid hook call for anything stateful.
 function findByTestId(node: ReactNode, testId: string): TestElement | null {
   if (node == null || typeof node !== "object") {
     return null;
@@ -52,13 +60,9 @@ function findByTestId(node: ReactNode, testId: string): TestElement | null {
       return element;
     }
     if ("type" in node && typeof node.type === "function" && node.type !== CandidateMedia) {
-      try {
-        const rendered = (node.type as (props: unknown) => ReactNode)(element.props);
-        const match = findByTestId(rendered, testId);
-        if (match) return match;
-      } catch {
-        // ignore hooks / client components
-      }
+      const rendered = (node.type as (props: unknown) => ReactNode)(element.props);
+      const match = findByTestId(rendered, testId);
+      if (match) return match;
     }
     if (element.props?.children) {
       const match = findByTestId(element.props.children, testId);
@@ -68,99 +72,142 @@ function findByTestId(node: ReactNode, testId: string): TestElement | null {
   return null;
 }
 
-function findAllByTestId(node: ReactNode, testId: string): TestElement[] {
-  const results: TestElement[] = [];
-  function traverse(n: ReactNode) {
-    if (n == null || typeof n !== "object") {
-      return;
-    }
-    if (Array.isArray(n)) {
-      for (const child of n) {
-        traverse(child);
-      }
-      return;
-    }
-    if ("props" in n) {
-      const element = n as TestElement;
-      if (element.props?.["data-testid"] === testId) {
-        results.push(element);
-      }
-      if ("type" in n && typeof n.type === "function" && n.type !== CandidateMedia) {
-        try {
-          const rendered = (n.type as (props: unknown) => ReactNode)(element.props);
-          traverse(rendered);
-        } catch {
-          // ignore hooks / client components
+// For any subtree that may contain client components with hooks (i.e. anything rendered by
+// `ScenePage`), assertions must go through real rendering instead of manually invoking
+// component functions. `renderToStaticMarkup` executes hooks correctly; the helpers below parse
+// that resulting HTML string into a minimal element tree for `data-testid` based lookups.
+interface HtmlElementNode {
+  readonly tag: string;
+  readonly attrs: Readonly<Record<string, string>>;
+  readonly children: ReadonlyArray<HtmlElementNode | string>;
+}
+
+const HTML_VOID_TAGS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr"
+]);
+
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec: string) => String.fromCodePoint(parseInt(dec, 10)))
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+function parseHtmlAttrs(attrString: string): Record<string, string> {
+  const attrs: Record<string, string> = {};
+  const ATTR_RE = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+  let match: RegExpExecArray | null;
+  while ((match = ATTR_RE.exec(attrString)) !== null) {
+    const name = match[1]!.toLowerCase();
+    const value = match[2] ?? match[3] ?? match[4] ?? "";
+    attrs[name] = decodeHtmlEntities(value);
+  }
+  return attrs;
+}
+
+function parseHtml(html: string): HtmlElementNode {
+  const root: HtmlElementNode = { tag: "#root", attrs: {}, children: [] };
+  const stack: HtmlElementNode[] = [root];
+  const TOKEN_RE = /<!--[\s\S]*?-->|<\/([a-zA-Z][\w:-]*)\s*>|<([a-zA-Z][\w:-]*)([^>]*)>|([^<]+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = TOKEN_RE.exec(html)) !== null) {
+    const [full, closingTag, openingTag, rest, text] = match;
+    if (full.startsWith("<!--")) continue;
+    if (closingTag) {
+      for (let i = stack.length - 1; i > 0; i--) {
+        if (stack[i]!.tag === closingTag.toLowerCase()) {
+          stack.length = i;
+          break;
         }
       }
-      if (element.props?.children) {
-        traverse(element.props.children);
+      continue;
+    }
+    if (openingTag) {
+      const tag = openingTag.toLowerCase();
+      const restStr = rest ?? "";
+      const selfClosing = /\/\s*$/.test(restStr);
+      const attrString = selfClosing ? restStr.replace(/\/\s*$/, "") : restStr;
+      const node: HtmlElementNode = { tag, attrs: parseHtmlAttrs(attrString), children: [] };
+      const parent = stack[stack.length - 1]!;
+      (parent.children as (HtmlElementNode | string)[]).push(node);
+      if (!selfClosing && !HTML_VOID_TAGS.has(tag)) {
+        stack.push(node);
       }
+      continue;
+    }
+    if (text !== undefined) {
+      const decoded = decodeHtmlEntities(text);
+      if (decoded.length > 0) {
+        (stack[stack.length - 1]!.children as (HtmlElementNode | string)[]).push(decoded);
+      }
+    }
+  }
+  return root;
+}
+
+function isHtmlElementNode(node: HtmlElementNode | string): node is HtmlElementNode {
+  return typeof node !== "string";
+}
+
+function findAllHtmlNodes(
+  node: HtmlElementNode | string,
+  predicate: (element: HtmlElementNode) => boolean
+): HtmlElementNode[] {
+  const results: HtmlElementNode[] = [];
+  function traverse(n: HtmlElementNode | string) {
+    if (!isHtmlElementNode(n)) return;
+    if (predicate(n)) {
+      results.push(n);
+    }
+    for (const child of n.children) {
+      traverse(child);
     }
   }
   traverse(node);
   return results;
 }
 
-function findAllNodes(
-  node: ReactNode,
-  predicate: (element: TestElement) => boolean
-): TestElement[] {
-  const results: TestElement[] = [];
-  function traverse(n: ReactNode) {
-    if (n == null || typeof n !== "object") {
-      return;
-    }
-    if (Array.isArray(n)) {
-      for (const child of n) {
-        traverse(child);
-      }
-      return;
-    }
-    if ("props" in n) {
-      const element = n as TestElement;
-      if (predicate(element)) {
-        results.push(element);
-      }
-      if ("type" in n && typeof n.type === "function" && n.type !== CandidateMedia) {
-        try {
-          const rendered = (n.type as (props: unknown) => ReactNode)(element.props);
-          traverse(rendered);
-        } catch {
-          // ignore hooks / client components
-        }
-      }
-      if (element.props?.children) {
-        traverse(element.props.children);
-      }
-    }
-  }
-  traverse(node);
-  return results;
+function findHtmlByTestId(node: HtmlElementNode | string, testId: string): HtmlElementNode | null {
+  return findAllHtmlNodes(node, (el) => el.attrs["data-testid"] === testId)[0] ?? null;
 }
 
-function collectText(node: ReactNode): string {
-  function extract(n: ReactNode): string {
-    if (n == null || typeof n === "boolean") return "";
-    if (typeof n === "string" || typeof n === "number") return String(n);
-    if (Array.isArray(n)) return n.map(extract).join(" ");
-    if (typeof n === "object") {
-      if ("type" in n && typeof n.type === "function" && n.type !== CandidateMedia) {
-        try {
-          const rendered = (n.type as (props: unknown) => ReactNode)((n as TestElement).props);
-          return extract(rendered);
-        } catch {
-          // ignore hooks / client components
-        }
-      }
-      if ("props" in n) {
-        const element = n as TestElement;
-        return extract(element.props?.children);
-      }
-    }
-    return "";
+function findAllHtmlByTestId(node: HtmlElementNode | string, testId: string): HtmlElementNode[] {
+  return findAllHtmlNodes(node, (el) => el.attrs["data-testid"] === testId);
+}
+
+function collectHtmlText(node: HtmlElementNode | string | null): string {
+  if (node === null) return "";
+  function extract(n: HtmlElementNode | string): string {
+    if (!isHtmlElementNode(n)) return n;
+    return n.children.map(extract).join(" ");
   }
   return extract(node).replace(/\s+/g, " ").trim();
+}
+
+function collectText(node: ReactNode | HtmlElementNode | null): string {
+  if (node === null) return "";
+  if (typeof node === "object" && "tag" in node && "attrs" in node && "children" in node) {
+    return collectHtmlText(node as HtmlElementNode);
+  }
+  return collectHtmlText(parseHtml(renderToStaticMarkup(node as ReactElement)));
 }
 
 describe("Scene Review Detail Page", () => {
@@ -253,6 +300,7 @@ describe("Scene Review Detail Page", () => {
     expect(jsx).not.toBeNull();
 
     const html = renderToStaticMarkup(jsx);
+    const htmlTree = parseHtml(html);
     const fullText = collectText(jsx);
 
     // Identity and scene status/revision
@@ -261,9 +309,9 @@ describe("Scene Review Detail Page", () => {
     expect(fullText).toContain("3");
 
     // Campaign backlink
-    const campaignLink = findByTestId(jsx, "back-to-campaign-link");
+    const campaignLink = findHtmlByTestId(htmlTree, "back-to-campaign-link");
     expect(campaignLink).not.toBeNull();
-    expect(campaignLink?.props.href).toBe("/campaigns/c1111111-1111-4111-8111-111111111111");
+    expect(campaignLink?.attrs.href).toBe("/campaigns/c1111111-1111-4111-8111-111111111111");
 
     // Configuration fields
     expect(fullText).toContain("Cinematic shot of neon city in the rain");
@@ -289,16 +337,17 @@ describe("Scene Review Detail Page", () => {
     expect(fullText).toContain(formatDateTime("2026-08-25T14:00:00.000Z"));
     expect(fullText).toContain(formatDateTime("2026-08-25T12:00:00.000Z"));
 
-    // Allowed actions rendered informationally
-    expect(fullText).toContain("approve");
-    expect(fullText).toContain("reject");
-    expect(fullText).toContain("reroll");
-    expect(fullText).toContain("prompt_edit");
-    expect(fullText).toContain("candidate_select");
+    // Allowed action buttons rendered in command surface
+    expect(html).toContain('data-testid="action-button-approve"');
+    expect(html).toContain('data-testid="action-button-reject"');
+    expect(html).toContain('data-testid="action-button-reroll"');
+    expect(html).toContain('data-testid="action-button-prompt_edit"');
+    expect(html).toContain('data-testid="action-button-candidate_select"');
 
     // Static markup checks
     expect(html).toContain('data-testid="scene-review-detail"');
     expect(html).toContain('data-testid="candidate-card"');
+    expect(html).toContain('data-testid="review-command-controls"');
   });
 
   it("renders explicit absent selection approval references and LoRA states", async () => {
@@ -328,19 +377,21 @@ describe("Scene Review Detail Page", () => {
     })) as TestElement;
 
     // Check explicit absent states
-    const selectionEl = findByTestId(jsx, "selection-status");
+    const htmlTree = parseHtml(renderToStaticMarkup(jsx));
+
+    const selectionEl = findHtmlByTestId(htmlTree, "selection-status");
     expect(selectionEl).not.toBeNull();
     expect(collectText(selectionEl)).toMatch(/no candidate selected|none/i);
 
-    const approvalEl = findByTestId(jsx, "approval-status");
+    const approvalEl = findHtmlByTestId(htmlTree, "approval-status");
     expect(approvalEl).not.toBeNull();
     expect(collectText(approvalEl)).toMatch(/not approved|none/i);
 
-    const referencesEl = findByTestId(jsx, "scene-references");
+    const referencesEl = findHtmlByTestId(htmlTree, "scene-references");
     expect(referencesEl).not.toBeNull();
     expect(collectText(referencesEl)).toMatch(/none/i);
 
-    const loraEl = findByTestId(jsx, "scene-lora");
+    const loraEl = findHtmlByTestId(htmlTree, "scene-lora");
     expect(loraEl).not.toBeNull();
     expect(collectText(loraEl)).toMatch(/none/i);
   });
@@ -410,25 +461,26 @@ describe("Scene Review Detail Page", () => {
       params: Promise.resolve({ sceneId: "s3333333-3333-4333-8333-333333333333" })
     })) as TestElement;
 
-    const revisionGroups = findAllByTestId(jsx, "candidate-revision-group");
+    const htmlTree = parseHtml(renderToStaticMarkup(jsx));
+    const revisionGroups = findAllHtmlByTestId(htmlTree, "candidate-revision-group");
     expect(revisionGroups).toHaveLength(3);
 
     // Group 1: Revision 3 -> Current
-    const group1Header = findByTestId(revisionGroups[0], "revision-group-heading");
+    const group1Header = findHtmlByTestId(revisionGroups[0]!, "revision-group-heading");
     expect(group1Header).not.toBeNull();
     const g1Text = collectText(group1Header);
     expect(g1Text).toContain("Revision 3");
     expect(g1Text).toMatch(/current/i);
 
     // Group 2: Revision 2 -> Historical
-    const group2Header = findByTestId(revisionGroups[1], "revision-group-heading");
+    const group2Header = findHtmlByTestId(revisionGroups[1]!, "revision-group-heading");
     expect(group2Header).not.toBeNull();
     const g2Text = collectText(group2Header);
     expect(g2Text).toContain("Revision 2");
     expect(g2Text).toMatch(/historical/i);
 
     // Group 3: Revision 1 -> Historical
-    const group3Header = findByTestId(revisionGroups[2], "revision-group-heading");
+    const group3Header = findHtmlByTestId(revisionGroups[2]!, "revision-group-heading");
     expect(group3Header).not.toBeNull();
     const g3Text = collectText(group3Header);
     expect(g3Text).toContain("Revision 1");
@@ -487,31 +539,32 @@ describe("Scene Review Detail Page", () => {
     })) as TestElement;
 
     // Historical candidate card is fully visible with identity
-    const candidateCards = findAllByTestId(jsx, "candidate-card");
+    const htmlTree = parseHtml(renderToStaticMarkup(jsx));
+    const candidateCards = findAllHtmlByTestId(htmlTree, "candidate-card");
     expect(candidateCards).toHaveLength(2);
 
-    const histCard = candidateCards[1];
+    const histCard = candidateCards[1]!;
     const histText = collectText(histCard);
     expect(histText).toContain("c4444444-4444-4444-8444-444444444440");
     expect(histText).toContain("hash-hist");
 
     // Assert no interactive mutation affordance inside candidate cards
-    const interactiveElements = findAllNodes(
-      candidateCards[1],
+    const interactiveElements = findAllHtmlNodes(
+      histCard,
       (el) =>
-        el.type === "button" ||
-        el.type === "form" ||
-        el.type === "input" ||
-        el.type === "select" ||
-        el.type === "textarea" ||
-        el.props?.role === "button" ||
-        el.props?.role === "radio" ||
-        el.props?.role === "checkbox"
+        el.tag === "button" ||
+        el.tag === "form" ||
+        el.tag === "input" ||
+        el.tag === "select" ||
+        el.tag === "textarea" ||
+        el.attrs.role === "button" ||
+        el.attrs.role === "radio" ||
+        el.attrs.role === "checkbox"
     );
     expect(interactiveElements).toHaveLength(0);
   });
 
-  it("renders server allowed actions without deriving controls from status", async () => {
+  it("renders server allowed actions as interactive review command controls", async () => {
     // Case 1: Populated allowed actions
     const actionsFixture: SceneReviewDetailReadModel = {
       sceneId: "s5555555-5555-4555-8555-555555555555",
@@ -534,19 +587,11 @@ describe("Scene Review Detail Page", () => {
       params: Promise.resolve({ sceneId: "s5555555-5555-4555-8555-555555555555" })
     })) as TestElement;
 
-    const actionSection = findByTestId(jsx, "allowed-actions-section");
-    expect(actionSection).not.toBeNull();
-    const actionsText = collectText(actionSection);
-    expect(actionsText).toContain("approve");
-    expect(actionsText).toContain("reroll");
-    expect(actionsText).toContain("prompt_edit");
-
-    // Make sure no buttons or forms are generated for these actions
-    const actionButtons = findAllNodes(
-      actionSection,
-      (el) => el.type === "button" || el.type === "form" || el.type === "input"
-    );
-    expect(actionButtons).toHaveLength(0);
+    const html = renderToStaticMarkup(jsx);
+    expect(html).toContain('data-testid="review-command-controls"');
+    expect(html).toContain('data-testid="action-button-approve"');
+    expect(html).toContain('data-testid="action-button-reroll"');
+    expect(html).toContain('data-testid="action-button-prompt_edit"');
 
     // Case 2: Empty allowed actions
     const emptyActionsFixture: SceneReviewDetailReadModel = {
@@ -560,9 +605,9 @@ describe("Scene Review Detail Page", () => {
       params: Promise.resolve({ sceneId: "s5555555-5555-4555-8555-555555555555" })
     })) as TestElement;
 
-    const emptyActionSection = findByTestId(jsxEmpty, "allowed-actions-section");
-    expect(emptyActionSection).not.toBeNull();
-    expect(collectText(emptyActionSection)).toMatch(/no actions available/i);
+    const htmlEmpty = renderToStaticMarkup(jsxEmpty);
+    expect(htmlEmpty).toContain('data-testid="empty-actions"');
+    expect(htmlEmpty).toMatch(/no review actions available/i);
   });
 
   it("renders an explicit no-candidates state", async () => {
@@ -587,11 +632,12 @@ describe("Scene Review Detail Page", () => {
       params: Promise.resolve({ sceneId: "s6666666-6666-4666-8666-666666666666" })
     })) as TestElement;
 
-    const noCandidatesEl = findByTestId(jsx, "no-candidates-state");
+    const htmlTree = parseHtml(renderToStaticMarkup(jsx));
+    const noCandidatesEl = findHtmlByTestId(htmlTree, "no-candidates-state");
     expect(noCandidatesEl).not.toBeNull();
     expect(collectText(noCandidatesEl)).toMatch(/no candidates/i);
 
-    const candidateCards = findAllByTestId(jsx, "candidate-card");
+    const candidateCards = findAllHtmlByTestId(htmlTree, "candidate-card");
     expect(candidateCards).toHaveLength(0);
   });
 
