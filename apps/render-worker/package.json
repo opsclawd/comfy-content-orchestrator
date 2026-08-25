@@ -12,6 +12,7 @@
     }
   },
   "scripts": {
+    "build": "tsc --build",
     "certify:ltx": "tsx src/cli/certify.ts --profile ltx-25-720p-97f",
     "certify:transition-soak": "tsx src/cli/certify-transition-soak.ts",
     "typecheck": "tsc --build",

@@ -12,6 +12,7 @@
     }
   },
   "scripts": {
+    "build": "tsc --build",
     "typecheck": "tsc --build"
   },
   "dependencies": {
