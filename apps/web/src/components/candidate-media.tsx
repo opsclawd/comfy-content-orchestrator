@@ -16,7 +16,7 @@ export function CandidateMedia({
   specRevision,
   variantOrdinal
 }: CandidateMediaProps) {
-  const [failed, setFailed] = useState(false);
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const rev = revision ?? specRevision ?? 1;
 
   if (!media.available || !media.url) {
@@ -28,6 +28,8 @@ export function CandidateMedia({
       </div>
     );
   }
+
+  const failed = failedUrl === media.url;
 
   if (failed) {
     return (
@@ -56,7 +58,7 @@ export function CandidateMedia({
         alt={`Candidate revision ${rev} variant ${variantOrdinal}`}
         className="candidate-media-img"
         data-testid="candidate-media-img"
-        onError={() => setFailed(true)}
+        onError={() => setFailedUrl(media.url ?? null)}
       />
     </div>
   );
