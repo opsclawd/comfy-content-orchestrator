@@ -1,26 +1,63 @@
-import React from "react";
+"use client";
+
+import React, { useEffect, useReducer, useRef } from "react";
 import Link from "next/link";
 import type { SceneReviewDetailReadModel } from "@cco/contracts";
 import { CandidateGallery } from "./candidate-gallery";
+import { ReviewCommandControls } from "./review-command-controls";
 import {
-  formatSceneStatus,
+  areCommandsDisabled,
+  createInitialState,
+  transitionReviewCommandState,
+  type ReviewCommandEvent,
+  type ReviewCommandState
+} from "./review-command-state";
+import {
   formatReviewAction,
+  formatSceneStatus,
   formatDurationMs,
   formatDateTime
 } from "./format-review-value";
 
 export interface SceneReviewDetailProps {
   detail: SceneReviewDetailReadModel;
+  onDetailChange?: ((detail: SceneReviewDetailReadModel) => void) | undefined;
 }
 
-export function SceneReviewDetailView({ detail }: SceneReviewDetailProps) {
+export function SceneReviewDetailView({ detail, onDetailChange }: SceneReviewDetailProps) {
   const { configuration, approval } = detail;
   const hasReferences = configuration.referenceIds && configuration.referenceIds.length > 0;
   const hasLora =
     configuration.loraConfigurationId !== null && configuration.loraConfigurationId !== undefined;
   const hasSelection = Boolean(detail.selectedCandidateId);
   const hasApproval = Boolean(approval);
-  const hasAllowedActions = detail.allowedActions && detail.allowedActions.length > 0;
+
+  const [state, dispatch] = useReducer(
+    (prevState: ReviewCommandState, event: ReviewCommandEvent) =>
+      transitionReviewCommandState(prevState, event).state,
+    detail,
+    createInitialState
+  );
+  const disabled = areCommandsDisabled(state);
+
+  const prevDetailRef = useRef(detail);
+  useEffect(() => {
+    if (prevDetailRef.current !== detail) {
+      prevDetailRef.current = detail;
+      dispatch({ type: "REFRESH_SUCCESS", detail });
+    }
+  }, [detail]);
+
+  function handleSelectCandidate(candidateId: string) {
+    dispatch({
+      type: "REQUEST_CONFIRMATION",
+      stagedAction: {
+        action: "candidate_select",
+        payload: { candidateId },
+        displayLabel: formatReviewAction("candidate_select")
+      }
+    });
+  }
 
   return (
     <div className="scene-detail-shell" data-testid="scene-review-detail">
@@ -146,32 +183,14 @@ export function SceneReviewDetailView({ detail }: SceneReviewDetailProps) {
           </dl>
         </section>
 
-        {/* Server Allowed Actions (Informational Only) */}
-        <section
-          className="scene-section allowed-actions-section"
-          aria-label="Server-Available Actions"
-          data-testid="allowed-actions-section"
-        >
-          <h2>Server-Available Actions</h2>
-          <p className="actions-disclaimer">
-            The following review actions are currently permitted by the server for this scene state
-            (read-only view):
-          </p>
-          {hasAllowedActions ? (
-            <ul className="action-chips-list" data-testid="action-chips-list">
-              {detail.allowedActions.map((action) => (
-                <li key={action} className="action-chip" data-action={action}>
-                  <span className="action-chip-label">{formatReviewAction(action)}</span>
-                  <code className="action-chip-code">({action})</code>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="empty-actions" data-testid="empty-actions">
-              <span className="empty-value">No actions available</span>
-            </div>
-          )}
-        </section>
+        {/* Interactive Review Command Controls */}
+        <ReviewCommandControls
+          detail={detail}
+          state={state}
+          dispatch={dispatch}
+          disabled={disabled}
+          onDetailChange={onDetailChange}
+        />
       </div>
 
       {/* Candidate History Gallery */}
@@ -180,6 +199,8 @@ export function SceneReviewDetailView({ detail }: SceneReviewDetailProps) {
         currentSpecRevision={detail.specRevision}
         selectedCandidateId={detail.selectedCandidateId}
         selectedCandidateRevision={detail.selectedCandidateRevision}
+        onSelectCandidate={handleSelectCandidate}
+        disabled={disabled}
       />
     </div>
   );

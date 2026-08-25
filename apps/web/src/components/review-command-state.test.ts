@@ -142,6 +142,29 @@ describe("review command state machine behavioral invariants", () => {
     expect(result.effect).toEqual<ReviewCommandEffect>({ type: "none" });
   });
 
+  it("cancelling confirmation without draft returns to idle", () => {
+    const detail = createTestDetail();
+    const stagedAction: ReviewCommandDraft = {
+      action: "approve",
+      payload: {},
+      displayLabel: "Approve"
+    };
+
+    const confirmingState: ConfirmingState = {
+      phase: "confirming",
+      detail,
+      stagedAction
+    };
+
+    const result = transitionReviewCommandState(confirmingState, {
+      type: "CANCEL_CONFIRMATION"
+    });
+
+    expect(result.state.phase).toBe("idle");
+    expect(result.state.detail).toEqual(detail);
+    expect(result.effect).toEqual<ReviewCommandEffect>({ type: "none" });
+  });
+
   it("confirm freezes the displayed revision and one action ID", () => {
     const detail = createTestDetail({ specRevision: 4 });
     const draft: ReviewCommandDraft = {
@@ -860,5 +883,53 @@ describe("state machine helper functions", () => {
 
     expect(merged.selectedCandidateId).toBe(newCandidateId);
     expect(merged.selectedCandidateRevision).toBe(2);
+  });
+
+  it("mergeCompactResponse preserves historical candidate revision when selected", () => {
+    const historicalCandidateId = "55555555-5555-4555-8555-555555555555";
+    const detail = createTestDetail({
+      specRevision: 3,
+      candidatesByRevision: [
+        {
+          specRevision: 3,
+          candidates: [
+            {
+              candidateId: "33333333-3333-4333-8333-333333333333",
+              sceneId: "11111111-1111-4111-8111-111111111111",
+              specRevision: 3,
+              variantOrdinal: 1,
+              contentHash: "hash-curr",
+              media: { available: true },
+              createdAt: "2026-08-25T10:00:00.000Z"
+            }
+          ]
+        },
+        {
+          specRevision: 1,
+          candidates: [
+            {
+              candidateId: historicalCandidateId,
+              sceneId: "11111111-1111-4111-8111-111111111111",
+              specRevision: 1,
+              variantOrdinal: 1,
+              contentHash: "hash-hist",
+              media: { available: true },
+              createdAt: "2026-08-25T09:00:00.000Z"
+            }
+          ]
+        }
+      ]
+    });
+
+    const merged = mergeCompactResponse(detail, {
+      sceneId: detail.sceneId,
+      status: "director_review",
+      specRevision: 3,
+      selectedCandidateId: historicalCandidateId,
+      isIdempotentReplay: false
+    });
+
+    expect(merged.selectedCandidateId).toBe(historicalCandidateId);
+    expect(merged.selectedCandidateRevision).toBe(1);
   });
 });

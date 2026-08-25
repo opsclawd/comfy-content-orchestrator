@@ -168,13 +168,24 @@ export function mergeCompactResponse(
   currentDetail: SceneReviewDetailReadModel,
   response: ReviewCommandResponse
 ): SceneReviewDetailReadModel {
+  let selectedCandidateRevision: number | undefined = undefined;
+  if (response.selectedCandidateId !== undefined) {
+    if (response.selectedCandidateId === currentDetail.selectedCandidateId) {
+      selectedCandidateRevision = currentDetail.selectedCandidateRevision;
+    } else {
+      const matchingGroup = currentDetail.candidatesByRevision?.find((group) =>
+        group.candidates.some((c) => c.candidateId === response.selectedCandidateId)
+      );
+      selectedCandidateRevision =
+        matchingGroup?.specRevision ?? currentDetail.selectedCandidateRevision;
+    }
+  }
   return {
     ...currentDetail,
     status: response.status,
     specRevision: response.specRevision,
     selectedCandidateId: response.selectedCandidateId,
-    selectedCandidateRevision:
-      response.selectedCandidateId !== undefined ? response.specRevision : undefined,
+    selectedCandidateRevision,
     approval: response.approval
   };
 }
@@ -307,9 +318,8 @@ export function transitionReviewCommandState(
           }
           return {
             state: {
-              phase: "drafting",
-              detail: state.detail,
-              draft: state.stagedAction
+              phase: "idle",
+              detail: state.detail
             },
             effect: { type: "none" }
           };
