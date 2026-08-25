@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CampaignReviewSceneSummarySchema,
   CampaignReviewSummarySchema,
   CandidateReadModelSchema,
   MediaAvailabilitySchema,
@@ -318,6 +319,13 @@ describe("Review Read Model and Error Contracts", () => {
       pendingReviewCount: 4,
       approvedCount: 2,
       completedCount: 0,
+      scenes: [
+        {
+          sceneId: "22222222-2222-4222-8222-222222222222",
+          status: "director_review" as const,
+          specRevision: 1
+        }
+      ],
       updatedAt: "2026-08-15T12:00:00.000Z"
     };
 
@@ -328,6 +336,43 @@ describe("Review Read Model and Error Contracts", () => {
       CampaignReviewSummarySchema.safeParse({
         ...summary,
         totalScenes: -1
+      }).success
+    ).toBe(false);
+  });
+
+  it("campaign scene summary rejects invalid status or revision", () => {
+    const validSceneSummary = {
+      sceneId: "22222222-2222-4222-8222-222222222222",
+      status: "director_review" as const,
+      specRevision: 1
+    };
+    expect(CampaignReviewSceneSummarySchema.parse(validSceneSummary)).toEqual(validSceneSummary);
+
+    expect(
+      CampaignReviewSceneSummarySchema.safeParse({
+        ...validSceneSummary,
+        status: "invalid_status"
+      }).success
+    ).toBe(false);
+
+    expect(
+      CampaignReviewSceneSummarySchema.safeParse({
+        ...validSceneSummary,
+        specRevision: 0
+      }).success
+    ).toBe(false);
+
+    expect(
+      CampaignReviewSceneSummarySchema.safeParse({
+        ...validSceneSummary,
+        specRevision: -1
+      }).success
+    ).toBe(false);
+
+    expect(
+      CampaignReviewSceneSummarySchema.safeParse({
+        ...validSceneSummary,
+        sceneId: "not-a-uuid"
       }).success
     ).toBe(false);
   });

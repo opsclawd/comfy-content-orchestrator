@@ -69,36 +69,41 @@ describe("End-to-End PostgreSQL Integration Tests for Control API HTTP Boundary"
     });
 
     // 2 scenes in director_review
-    await insertStoryboardSceneRecord(client, {
+    const s1 = await insertStoryboardSceneRecord(client, {
       campaignId: campaign.campaign_id,
       sceneOrder: 1,
-      status: "director_review"
+      status: "director_review",
+      specRevision: 1
     });
-    await insertStoryboardSceneRecord(client, {
+    const s2 = await insertStoryboardSceneRecord(client, {
       campaignId: campaign.campaign_id,
       sceneOrder: 2,
-      status: "director_review"
+      status: "director_review",
+      specRevision: 1
     });
 
     // 1 scene in approved
-    await insertStoryboardSceneRecord(client, {
+    const s3 = await insertStoryboardSceneRecord(client, {
       campaignId: campaign.campaign_id,
       sceneOrder: 3,
-      status: "approved"
+      status: "approved",
+      specRevision: 1
     });
 
     // 1 scene in completed
-    await insertStoryboardSceneRecord(client, {
+    const s4 = await insertStoryboardSceneRecord(client, {
       campaignId: campaign.campaign_id,
       sceneOrder: 4,
-      status: "completed"
+      status: "completed",
+      specRevision: 1
     });
 
     // 1 scene in draft_pending
-    await insertStoryboardSceneRecord(client, {
+    const s5 = await insertStoryboardSceneRecord(client, {
       campaignId: campaign.campaign_id,
       sceneOrder: 5,
-      status: "draft_pending"
+      status: "draft_pending",
+      specRevision: 1
     });
 
     // 1 archived scene (must be excluded from aggregation)
@@ -139,6 +144,33 @@ describe("End-to-End PostgreSQL Integration Tests for Control API HTTP Boundary"
       completed: 1,
       draft_pending: 1
     });
+    expect(summary.scenes).toEqual([
+      {
+        sceneId: s1.scene_id,
+        status: "director_review",
+        specRevision: 1
+      },
+      {
+        sceneId: s2.scene_id,
+        status: "director_review",
+        specRevision: 1
+      },
+      {
+        sceneId: s3.scene_id,
+        status: "approved",
+        specRevision: 1
+      },
+      {
+        sceneId: s4.scene_id,
+        status: "completed",
+        specRevision: 1
+      },
+      {
+        sceneId: s5.scene_id,
+        status: "draft_pending",
+        specRevision: 1
+      }
+    ]);
   });
 
   it("GET /api/scenes/:sceneId/review returns complete detail from PostgreSQL", async () => {

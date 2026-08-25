@@ -50,6 +50,13 @@ describe("Review Read Endpoints", () => {
     pendingReviewCount: 2,
     approvedCount: 2,
     completedCount: 1,
+    scenes: [
+      {
+        sceneId: sceneUuid,
+        status: "director_review",
+        specRevision: 2
+      }
+    ],
     updatedAt: "2026-08-18T12:00:00.000Z"
   };
 

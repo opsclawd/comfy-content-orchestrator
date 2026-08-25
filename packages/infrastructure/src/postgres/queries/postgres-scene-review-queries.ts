@@ -256,14 +256,16 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
     }
 
     const scenesResult = await this.client.query<{
+      scene_id: string;
       status: string;
-      scene_count: string | number;
+      spec_revision: number | string;
+      scene_order: number;
     }>(
       `
-      SELECT status, COUNT(*)::int AS scene_count
+      SELECT scene_id, status, spec_revision, scene_order
       FROM storyboard_scenes
       WHERE campaign_id = $1 AND archived_at IS NULL
-      GROUP BY status
+      ORDER BY scene_order ASC
       `,
       [campaignId]
     );
@@ -275,17 +277,22 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
     let completedCount = 0;
 
     for (const row of scenesResult.rows) {
-      const count = Number(row.scene_count);
-      scenesByStatus[row.status] = count;
-      totalScenes += count;
+      scenesByStatus[row.status] = (scenesByStatus[row.status] ?? 0) + 1;
+      totalScenes += 1;
       if (row.status === "director_review") {
-        pendingReviewCount += count;
+        pendingReviewCount += 1;
       } else if (row.status === "approved") {
-        approvedCount += count;
+        approvedCount += 1;
       } else if (row.status === "completed") {
-        completedCount += count;
+        completedCount += 1;
       }
     }
+
+    const scenes = scenesResult.rows.map((row) => ({
+      sceneId: row.scene_id,
+      status: row.status as SceneStatus,
+      specRevision: Number(row.spec_revision)
+    }));
 
     const updatedAt =
       campaignRow.updated_at instanceof Date
@@ -300,6 +307,7 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
       pendingReviewCount,
       approvedCount,
       completedCount,
+      scenes,
       updatedAt
     };
   }
