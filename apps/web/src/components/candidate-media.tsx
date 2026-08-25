@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import React from "react";
 import type { MediaAvailability } from "@cco/contracts";
 
 export interface CandidateMediaProps {
@@ -8,15 +8,17 @@ export interface CandidateMediaProps {
   revision?: number;
   specRevision?: number;
   variantOrdinal: number;
+  onRefresh?: () => void;
 }
 
 export function CandidateMedia({
   media,
   revision,
   specRevision,
-  variantOrdinal
+  variantOrdinal,
+  onRefresh
 }: CandidateMediaProps) {
-  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const [failedUrl, setFailedUrl] = React.useState<string | null>(null);
   const rev = revision ?? specRevision ?? 1;
 
   if (!media.available || !media.url) {
@@ -40,7 +42,9 @@ export function CandidateMedia({
           className="candidate-media-refresh-btn"
           data-testid="candidate-media-refresh-btn"
           onClick={() => {
-            if (typeof window !== "undefined" && window.location) {
+            if (onRefresh) {
+              onRefresh();
+            } else {
               window.location.reload();
             }
           }}
