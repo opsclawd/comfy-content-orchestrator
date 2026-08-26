@@ -33,7 +33,7 @@ export function parseReviewerIdentityConfig(
   const rawProxyAddresses = env.CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES;
   const rawFallback = env.CONTROL_API_REVIEWER_IDENTITY_FALLBACK;
 
-  let trustedProxyAddresses: string[] = [];
+  const trustedProxyAddresses: string[] = [];
   if (rawProxyAddresses !== undefined && rawProxyAddresses.trim() !== "") {
     const elements = rawProxyAddresses.split(",");
     const seenNormalized = new Set<string>();
