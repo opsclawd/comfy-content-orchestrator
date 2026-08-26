@@ -14,7 +14,6 @@ import {
   type ReviewErrorResponse
 } from "@cco/contracts";
 import type { CampaignId, CandidateId, SceneId } from "@cco/domain";
-import type { FastifyRequest } from "fastify";
 import { createControlApiApp } from "../app.js";
 import type { ControlApiUseCases } from "../../index.js";
 
@@ -603,11 +602,8 @@ describe("Review Read Endpoints", () => {
       } = await import("@cco/domain");
       const { z } = await import("zod");
       const { formatReviewError } = await import("../errors.js");
-      const { defaultReviewerIdentityResolver, defaultClock } = await import("../types.js");
+      const { defaultClock } = await import("../types.js");
 
-      expect(defaultReviewerIdentityResolver.resolve({} as unknown as FastifyRequest)).toBe(
-        "Thomas Cumberbatch"
-      );
       expect(typeof defaultClock.now()).toBe("string");
 
       const sceneNotFound = formatReviewError(new SceneNotFoundError("s-1"));

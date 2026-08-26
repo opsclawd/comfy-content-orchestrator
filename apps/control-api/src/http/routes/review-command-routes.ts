@@ -2,12 +2,7 @@ import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { ReviewCommandSchema, hashReviewCommand, type ReviewCommandResponse } from "@cco/contracts";
 import type { CandidateId } from "@cco/domain";
 import type { ReviewExecutionResult } from "@cco/application";
-import {
-  defaultClock,
-  defaultReviewerIdentityResolver,
-  type ControlApiAppOptions,
-  type ControlApiContainer
-} from "../types.js";
+import { defaultClock, type ControlApiAppOptions, type ControlApiContainer } from "../types.js";
 
 export interface ReviewCommandRoutesOptions {
   readonly container: ControlApiContainer;
@@ -33,8 +28,10 @@ export const reviewCommandRoutes: FastifyPluginAsync<ReviewCommandRoutesOptions>
   opts: ReviewCommandRoutesOptions
 ): Promise<void> => {
   const { container, appOptions } = opts;
-  const reviewerIdentityResolver =
-    appOptions?.reviewerIdentityResolver ?? defaultReviewerIdentityResolver;
+  const reviewerIdentityResolver = appOptions?.reviewerIdentityResolver;
+  if (!reviewerIdentityResolver) {
+    throw new Error("ReviewerIdentityResolver is required for review command routes");
+  }
   const clock = appOptions?.clock ?? defaultClock;
 
   fastify.post<{ Params: { sceneId: string } }>(

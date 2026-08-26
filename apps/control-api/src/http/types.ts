@@ -67,10 +67,6 @@ export interface ControlApiAppOptions {
   readonly logger?: boolean;
 }
 
-export const defaultReviewerIdentityResolver: ReviewerIdentityResolver = {
-  resolve: () => "Thomas Cumberbatch"
-};
-
 export const defaultClock: Clock = {
   now: () => new Date().toISOString()
 };
