@@ -489,6 +489,12 @@ API_SECRET=synthetic_api_secret_key_12345
     const exampleViolations = scanTextForSecrets(".env.example", syntheticExample);
     assert.deepEqual(exampleViolations, []);
 
+    const testFilePkViolations = scanTextForSecrets(
+      "scripts/check-control-plane.test.js",
+      privateKeySample
+    );
+    assert.deepEqual(testFilePkViolations, []);
+
     // 4. Live non-example S3, database, and API secrets are detected and rejected
     const liveSecretsSamples = [
       "POSTGRES_PASSWORD=super_secret_production_password_123",

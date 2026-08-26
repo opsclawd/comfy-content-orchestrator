@@ -342,12 +342,14 @@ export function scanTextForSecrets(filePath, content) {
 
     // 1. Private Key Header check
     if (/-----BEGIN (?:[A-Z0-9_-]+ )?PRIVATE KEY-----/i.test(line)) {
-      violations.push({
-        file: filePath,
-        line: i + 1,
-        rule: "no-private-keys",
-        message: `Tracked file contains private key header at ${filePath}:${i + 1}`
-      });
+      if (!isSyntheticAllowedFile) {
+        violations.push({
+          file: filePath,
+          line: i + 1,
+          rule: "no-private-keys",
+          message: `Tracked file contains private key header at ${filePath}:${i + 1}`
+        });
+      }
     }
 
     // 2. Tailscale auth key check
