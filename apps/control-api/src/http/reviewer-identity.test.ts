@@ -26,8 +26,7 @@ function createMockRequest(options: {
 describe("TailscaleReviewerIdentityResolver behavioral invariants", () => {
   it("prefers a trimmed Tailscale login from a trusted direct proxy", () => {
     const resolver = new TailscaleReviewerIdentityResolver({
-      trustedProxyAddresses: ["127.0.0.1"],
-      fallbackIdentity: "Fallback Director"
+      trustedProxyAddresses: ["127.0.0.1"]
     });
 
     const request = createMockRequest({
@@ -43,8 +42,7 @@ describe("TailscaleReviewerIdentityResolver behavioral invariants", () => {
 
   it("uses a trimmed Tailscale display name when a trusted proxy supplies no login", () => {
     const resolver = new TailscaleReviewerIdentityResolver({
-      trustedProxyAddresses: ["127.0.0.1"],
-      fallbackIdentity: "Fallback Director"
+      trustedProxyAddresses: ["127.0.0.1"]
     });
 
     // 1. Missing login header
@@ -82,19 +80,28 @@ describe("TailscaleReviewerIdentityResolver behavioral invariants", () => {
     expect(() => resolverWithoutFallback.resolve(untrustedReq)).toThrow(
       ReviewerIdentityUnavailableError
     );
-
-    // Untrusted peer with fallback returns ONLY the explicit fallback
-    const resolverWithFallback = new TailscaleReviewerIdentityResolver({
-      trustedProxyAddresses: ["127.0.0.1"],
-      fallbackIdentity: "Explicit Fallback Director"
-    });
-    expect(resolverWithFallback.resolve(untrustedReq)).toBe("Explicit Fallback Director");
   });
 
-  it("uses the explicit fallback when trusted headers are unavailable", () => {
+  it("rejects configuring a fallback identity together with trusted proxy addresses", () => {
+    // A fallback is only meaningful when Tailscale enforcement is fully disabled for the
+    // deployment (no trusted proxy addresses at all). Combining both would let any untrusted
+    // request be attributed to the fallback identity instead of being rejected, so this must
+    // fail loudly at construction rather than silently ignoring the fallback per-request.
+    expect(
+      () =>
+        new TailscaleReviewerIdentityResolver({
+          trustedProxyAddresses: ["127.0.0.1"],
+          fallbackIdentity: "Explicit Fallback Director"
+        })
+    ).toThrow(/fallback identity cannot be combined with trusted proxy addresses/);
+  });
+
+  it("rejects a trusted-but-headerless request when Tailscale enforcement is active, even with a fallback configured", () => {
+    // Trusted proxy addresses and a fallback identity cannot both be configured (see the
+    // rejection test above), so a resolver enforcing Tailscale identity never has a fallback
+    // to fall through to: a trusted peer that fails to supply usable headers must fail closed.
     const resolver = new TailscaleReviewerIdentityResolver({
-      trustedProxyAddresses: ["127.0.0.1"],
-      fallbackIdentity: "Explicit Fallback Director"
+      trustedProxyAddresses: ["127.0.0.1"]
     });
 
     // Trusted peer with missing headers
@@ -102,7 +109,7 @@ describe("TailscaleReviewerIdentityResolver behavioral invariants", () => {
       remoteAddress: "127.0.0.1",
       headers: {}
     });
-    expect(resolver.resolve(req1)).toBe("Explicit Fallback Director");
+    expect(() => resolver.resolve(req1)).toThrow(ReviewerIdentityUnavailableError);
 
     // Trusted peer with empty/blank headers
     const req2 = createMockRequest({
@@ -112,19 +119,27 @@ describe("TailscaleReviewerIdentityResolver behavioral invariants", () => {
         "tailscale-user-name": ""
       }
     });
-    expect(resolver.resolve(req2)).toBe("Explicit Fallback Director");
+    expect(() => resolver.resolve(req2)).toThrow(ReviewerIdentityUnavailableError);
+  });
 
-    // Trusted peer without fallback throws when headers are unavailable
-    const noFallbackResolver = new TailscaleReviewerIdentityResolver({
-      trustedProxyAddresses: ["127.0.0.1"]
+  it("uses the explicit fallback only when Tailscale enforcement is fully disabled (no trusted proxy addresses)", () => {
+    const resolver = new TailscaleReviewerIdentityResolver({
+      fallbackIdentity: "Explicit Fallback Director"
     });
-    expect(() => noFallbackResolver.resolve(req1)).toThrow(ReviewerIdentityUnavailableError);
+
+    const req = createMockRequest({
+      remoteAddress: "192.168.1.50",
+      headers: {}
+    });
+    expect(resolver.resolve(req)).toBe("Explicit Fallback Director");
+
+    const noFallbackResolver = new TailscaleReviewerIdentityResolver({});
+    expect(() => noFallbackResolver.resolve(req)).toThrow(ReviewerIdentityUnavailableError);
   });
 
   it("rejects ambiguous or oversized identity headers without revealing the cause", () => {
     const resolver = new TailscaleReviewerIdentityResolver({
-      trustedProxyAddresses: ["127.0.0.1"],
-      fallbackIdentity: "Fallback Director"
+      trustedProxyAddresses: ["127.0.0.1"]
     });
 
     // 1. Repeated/array login header throws non-sensitive error

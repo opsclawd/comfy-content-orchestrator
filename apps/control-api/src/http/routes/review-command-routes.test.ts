@@ -198,7 +198,7 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
   const actionUuid = "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d";
   const defaultTestOptions = {
     reviewerIdentityResolver: {
-      resolve: () => "Thomas Cumberbatch"
+      resolve: () => "Test Reviewer"
     }
   };
 
@@ -443,7 +443,7 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
     expect(body.selectedCandidateId).toBe(candidateUuid);
     expect(body.approval).toBeDefined();
     expect(body.approval?.revision).toBe(1);
-    expect(body.approval?.approvedBy).toBe("Thomas Cumberbatch");
+    expect(body.approval?.approvedBy).toBe("Test Reviewer");
     expect(body.isIdempotentReplay).toBe(false);
   });
 
@@ -603,7 +603,7 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
       selectedCandidateRevision: 1,
       approval: {
         revision: 1,
-        approvedBy: "Thomas Cumberbatch",
+        approvedBy: "Test Reviewer",
         approvedAt: "2026-08-18T11:00:00.000Z"
       }
     });

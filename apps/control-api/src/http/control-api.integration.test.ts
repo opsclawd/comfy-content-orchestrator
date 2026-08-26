@@ -30,7 +30,7 @@ import { TailscaleReviewerIdentityResolver } from "./reviewer-identity.js";
 
 const defaultTestOptions = {
   reviewerIdentityResolver: {
-    resolve: () => "Thomas Cumberbatch"
+    resolve: () => "Test Reviewer"
   }
 };
 

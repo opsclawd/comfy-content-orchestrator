@@ -107,6 +107,16 @@ export class TailscaleReviewerIdentityResolver implements ReviewerIdentityResolv
         this.fallbackIdentity = trimmed;
       }
     }
+
+    if (this.trustedProxies.size > 0 && this.fallbackIdentity !== undefined) {
+      throw new Error(
+        "Invalid reviewer identity configuration: a fallback identity cannot be combined with " +
+          "trusted proxy addresses. The fallback is only meaningful when Tailscale identity " +
+          "enforcement is fully disabled for this deployment (no trusted proxy addresses " +
+          "configured); combining both would let any untrusted request be attributed to the " +
+          "fallback identity instead of being rejected."
+      );
+    }
   }
 
   resolve(request: FastifyRequest): string {
