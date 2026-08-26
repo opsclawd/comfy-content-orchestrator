@@ -1,0 +1,152 @@
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:18.6}
+    command:
+      - postgres
+      - -c
+      - io_method=worker
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - control-plane
+    restart: unless-stopped
+
+  migrate:
+    image: ${CONTROL_API_IMAGE:-cco-control-api:latest}
+    command:
+      - node
+      - node_modules/@cco/infrastructure/dist/postgres/migrate.js
+    environment:
+      DATABASE_URL: ${DATABASE_MIGRATION_URL:?DATABASE_MIGRATION_URL is required}
+      DATABASE_APP_ROLE: ${DATABASE_APP_ROLE:?DATABASE_APP_ROLE is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - control-plane
+    restart: "no"
+
+  minio:
+    image: ${MINIO_IMAGE:-minio/minio:RELEASE.2024-01-18T22-51-28Z}
+    hostname: ${STORAGE_HOSTNAME:?STORAGE_HOSTNAME is required}
+    command:
+      - server
+      - /data
+      - --console-address
+      - :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+      STORAGE_HOSTNAME: ${STORAGE_HOSTNAME:?STORAGE_HOSTNAME is required}
+    ports:
+      - mode: host
+        protocol: tcp
+        published: "${S3_PORT:?S3_PORT is required}"
+        target: 9000
+        host_ip: "${TAILNET_IP:?TAILNET_IP is required}"
+      - mode: host
+        protocol: tcp
+        published: "${MINIO_CONSOLE_PORT:?MINIO_CONSOLE_PORT is required}"
+        target: 9001
+        host_ip: "${OPERATOR_BIND_IP:?OPERATOR_BIND_IP is required}"
+    healthcheck:
+      test:
+        - CMD
+        - mc
+        - ready
+        - local
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    volumes:
+      - minio_data:/data
+    networks:
+      - control-plane
+    restart: unless-stopped
+
+  control-api:
+    image: ${CONTROL_API_IMAGE:-cco-control-api:latest}
+    hostname: ${CONTROL_API_HOSTNAME:?CONTROL_API_HOSTNAME is required}
+    command:
+      - node
+      - dist/bootstrap.js
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: "3000"
+      HOST: "0.0.0.0"
+      CONTROL_API_HOST: ${CONTROL_API_HOST:?CONTROL_API_HOST is required}
+      CONTROL_API_PORT: "3000"
+      CONTROL_API_HOSTNAME: ${CONTROL_API_HOSTNAME:?CONTROL_API_HOSTNAME is required}
+      STORAGE_HOSTNAME: ${STORAGE_HOSTNAME:?STORAGE_HOSTNAME is required}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      S3_STORAGE_ENDPOINT: ${S3_STORAGE_ENDPOINT:?S3_STORAGE_ENDPOINT is required}
+      S3_SIGNING_ENDPOINT: ${S3_SIGNING_ENDPOINT:?S3_SIGNING_ENDPOINT is required}
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?S3_ACCESS_KEY_ID is required}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?S3_SECRET_ACCESS_KEY is required}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+      S3_READINESS_BUCKET: ${S3_READINESS_BUCKET:-godzspeed-review}
+      S3_PRESIGNED_EXPIRY_SECONDS: ${S3_PRESIGNED_EXPIRY_SECONDS:-300}
+      CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES: ${CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES:?CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES is required}
+    ports:
+      - mode: host
+        protocol: tcp
+        published: "${CONTROL_API_PORT:?CONTROL_API_PORT is required}"
+        target: 3000
+        host_ip: "${TAILNET_IP:?TAILNET_IP is required}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - control-plane
+    restart: unless-stopped
+
+  review-hub:
+    image: ${REVIEW_HUB_IMAGE:-cco-web:latest}
+    hostname: ${REVIEW_HUB_HOSTNAME:?REVIEW_HUB_HOSTNAME is required}
+    command:
+      - node
+      - apps/web/server.js
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+      REVIEW_HUB_HOSTNAME: ${REVIEW_HUB_HOSTNAME:?REVIEW_HUB_HOSTNAME is required}
+      CONTROL_API_URL: ${CONTROL_API_URL:?CONTROL_API_URL is required}
+    ports:
+      - mode: host
+        protocol: tcp
+        published: "${REVIEW_HUB_PORT:?REVIEW_HUB_PORT is required}"
+        target: 3000
+        host_ip: "${TAILNET_IP:?TAILNET_IP is required}"
+    depends_on:
+      control-api:
+        condition: service_started
+    networks:
+      - control-plane
+    restart: unless-stopped
+
+networks:
+  control-plane:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  minio_data:

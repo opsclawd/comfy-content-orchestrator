@@ -4,7 +4,9 @@ coverage/
 .next/
 *.tsbuildinfo
 .env
-.env.local
+.env.*
+.env*.local
+!.env.example
 .ai-runs/
 .ai-worktrees/
 .ai-tmp/
