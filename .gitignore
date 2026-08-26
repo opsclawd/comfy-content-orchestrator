@@ -7,6 +7,9 @@ coverage/
 .env.*
 .env*.local
 !.env.example
+.ai-runs/
+.ai-worktrees/
+.ai-tmp/
 !design.md
 !implementation-log.md
 !issue-comments.md
@@ -17,5 +20,6 @@ coverage/
 !prompt.md
 !task-manifest.json
 !validation.result
+
 
 
