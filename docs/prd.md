@@ -179,9 +179,9 @@ If media usage remains above 60% of CPX31 disk capacity for 14 consecutive days,
 
 Required metrics:
 
-- `godzspeed_object_storage_bytes{bucket}`
-- `godzspeed_storage_free_bytes`
-- `godzspeed_storage_watermark_state`
+- `object_storage_bytes{bucket}`
+- `storage_free_bytes`
+- `storage_watermark_state`
 
 ### 2.4 MinIO Component Governance
 
@@ -905,20 +905,22 @@ Health state should expose at least:
 
 ### 7.2 Prometheus Metrics — `/metrics`
 
+**Naming convention.** Metric names carry no product or partner prefix. This is deliberate and applies to the whole metric namespace: metric names are expensive to change once dashboards, recording rules, and alert rules depend on them, so they are kept independent of branding that may change. Other identifiers (bucket names, database and role names) are unaffected by this convention.
+
 Required metrics include:
 
-- `godzspeed_render_duration_seconds{engine,scene_type}`;
-- `godzspeed_vram_allocated_bytes`;
-- `godzspeed_job_retries_total{engine,error_class}`;
-- `godzspeed_api_failovers_total{task,from_provider,to_provider}`;
-- `godzspeed_queue_oldest_job_seconds`;
-- `godzspeed_render_failures_total{engine,error_class}`;
-- `godzspeed_object_storage_bytes{bucket}`;
-- `godzspeed_storage_free_bytes`;
-- `godzspeed_storage_watermark_state`;
-- `godzspeed_invalid_state_transitions_total`;
-- `godzspeed_review_conflicts_total{reason}`;
-- `godzspeed_review_idempotent_replays_total`.
+- `render_duration_seconds{engine,scene_type}`;
+- `vram_allocated_bytes`;
+- `job_retries_total{engine,error_class}`;
+- `api_failovers_total{task,from_provider,to_provider}`;
+- `queue_oldest_job_seconds`;
+- `render_failures_total{engine,error_class}`;
+- `object_storage_bytes{bucket}`;
+- `storage_free_bytes`;
+- `storage_watermark_state`;
+- `invalid_state_transitions_total`;
+- `review_conflicts_total{reason}`;
+- `review_idempotent_replays_total`.
 
 ### 7.3 Operational Alerts
 
