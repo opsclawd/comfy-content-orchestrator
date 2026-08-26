@@ -9,19 +9,20 @@ Per PRD §2.4 and §9.6, external infrastructure components and dependencies are
 | Attribute | Specification |
 |---|---|
 | **Component** | MinIO Object Storage |
-| **Container Image / Version** | `minio/minio:RELEASE.2024-01-18T22-51-28Z` |
-| **License** | GNU AGPLv3 |
-| **Review Date** | 2026-08-19 |
-| **Deployment Model** | Standalone, unmodified network service deployed on Hetzner CPX31 Control Plane |
+| **Container Image / Version** | `minio/minio:RELEASE.2024-01-18T22-51-28Z` ([Docker Hub](https://hub.docker.com/r/minio/minio/tags?name=RELEASE.2024-01-18T22-51-28Z)) |
+| **Source Repository** | [minio/minio (GitHub)](https://github.com/minio/minio/tree/RELEASE.2024-01-18T22-51-28Z) |
+| **License** | [GNU AGPLv3](https://github.com/minio/minio/blob/RELEASE.2024-01-18T22-51-28Z/LICENSE) |
+| **Review Date** | 2026-08-26 |
+| **Deployment Model** | Standalone, unmodified separate network service deployed via Docker Compose (`compose.yaml`) on Hetzner CPX31 Control Plane |
 | **Network Boundary** | Tailscale WireGuard mesh only (`storage-01.godzspeed-internal.ts.net:9000`); no public WAN listener |
-| **Admin Separation** | MinIO Console (port 9001) bound to loopback/operator ACLs; not accessible to general review clients |
-| **Integration Architecture** | Clean Architecture `@cco/infrastructure` adapters communicating strictly via standard S3 API (`@aws-sdk/client-s3`) over Tailscale HTTPS |
+| **Admin Separation** | MinIO Console (port 9001) bound to loopback/operator ACLs (`OPERATOR_BIND_IP`); not accessible to general review clients |
+| **Integration Architecture** | Clean Architecture `@cco/infrastructure` adapters communicating strictly via standard S3 API (`@aws-sdk/client-s3`) over Tailscale network |
 
 ### Compliance & Governance Policy
 
-1. **Unmodified Standalone Service:** MinIO is deployed as a separate, unmodified AGPLv3 daemon. It is never embedded into proprietary Node.js/TypeScript application binaries.
-2. **Backend Portability:** Application domain and use cases depend exclusively on `ObjectStoragePort` and `ReviewMediaDeliveryPort` abstractions. Any S3-compliant store (e.g. AWS S3, Cloudflare R2, Ceph) can replace MinIO without touching business logic.
-3. **Legal Review Requirement:** Any modification to MinIO source code or redistribution requires formal OSS legal review before deployment.
+1. **Unmodified Standalone Service:** MinIO is deployed strictly as an unmodified upstream container service. It is never embedded into proprietary Node.js/TypeScript application binaries or linked into application artifacts.
+2. **Backend Portability:** Application domain and use cases depend exclusively on `ObjectStoragePort` and `ReviewMediaDeliveryPort` abstractions in `@cco/application`. Any S3-compliant store (e.g. AWS S3, Cloudflare R2, Ceph) can replace MinIO without touching domain or application business logic.
+3. **Conditional Policy & Legal Scope:** MinIO is permitted solely under this repository's conditional policy as an unmodified separate network service. No legal approval beyond this conditional policy is claimed. Any modification to MinIO source code or redistribution requires formal OSS legal review before deployment.
 
 ---
 

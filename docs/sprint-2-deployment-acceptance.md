@@ -8,6 +8,85 @@ This runbook specifies the operator verification procedure required to accept Sp
 
 ---
 
+## 1. Pre-Deployment Artifact Verification
+
+Before deploying to live infrastructure, verify all deployment artifacts locally using the repository verification commands:
+
+```bash
+# 1. Topology model and configuration contract validation
+pnpm check:control-plane
+
+# 2. Container image builds, non-root user, and clean dependency closure validation
+pnpm check:control-plane-images
+
+# 3. Teardown-safe local stack connectivity smoke test (PostgreSQL, MinIO, Control API, Review Hub)
+pnpm smoke:control-plane
+```
+
+---
+
+## 2. Environment Preparation (`.env.example` -> `.env`)
+
+On the Hetzner CPX31 Control Plane host:
+
+1. Copy `.env.example` to create the real deployment configuration file `.env`:
+   ```bash
+   cp .env.example .env
+   chmod 600 .env
+   ```
+2. Populate `.env` with production secrets, explicit Tailscale IP addresses, and operator binding IP addresses. Never use wildcard bindings (`0.0.0.0` or `::`).
+
+### Distinct Database Roles & Least-Privilege Separation
+
+The control plane configuration enforces distinct database roles:
+
+- **Migration Owner Role** (`POSTGRES_USER`, `DATABASE_MIGRATION_URL`): Superuser / schema owner used exclusively by the one-shot `migrate` service to execute DDL schema migrations.
+- **Application Least-Privilege Role** (`DATABASE_APP_ROLE`, `DATABASE_APP_USER`, `DATABASE_APP_PASSWORD`, `DATABASE_URL`): Restricted non-superuser role used exclusively by the long-running `control-api` service with DML-only permissions (`SELECT`, `INSERT`, `UPDATE`, `DELETE`) and no schema alteration privileges.
+
+### Three Configuration-Driven Hostnames and URLs
+
+The deployment relies on three configuration-driven URLs corresponding to canonical Tailscale MagicDNS endpoints:
+
+- **Review Hub URL**: Configured via `REVIEW_HUB_HOSTNAME` (e.g. `review.godzspeed-internal.ts.net`), published on `TAILNET_IP:REVIEW_HUB_PORT` (e.g. `https://review.godzspeed-internal.ts.net`).
+- **Control API URL**: Configured via `CONTROL_API_HOSTNAME` (e.g. `control-01.godzspeed-internal.ts.net`), `CONTROL_API_PORT`, and `CONTROL_API_URL` (e.g. `http://control-01.godzspeed-internal.ts.net:3000` or `https://control-01.godzspeed-internal.ts.net`).
+- **Storage / S3 Signing URL**: Configured via `STORAGE_HOSTNAME` (e.g. `storage-01.godzspeed-internal.ts.net`), `S3_PORT`, and `S3_SIGNING_ENDPOINT` (e.g. `http://storage-01.godzspeed-internal.ts.net:9000` or `https://storage-01.godzspeed-internal.ts.net`). Internal container access uses `S3_STORAGE_ENDPOINT` (`http://minio:9000`).
+
+---
+
+## 3. Deployment & Migration Procedure (`compose.yaml`)
+
+Deploy the control plane stack using `compose.yaml`:
+
+```bash
+docker compose --env-file .env -f compose.yaml up -d
+```
+
+### Migration & Service Startup Ordering
+
+`compose.yaml` enforces strict dependency and health gating:
+
+1. **`postgres`**: Starts and initializes PostgreSQL 18.6 with `io_method=worker`. Waits until healthy (`pg_isready`).
+2. **`migrate`**: One-shot container starts after `postgres` is healthy, connects via `DATABASE_MIGRATION_URL` (migration owner role), executes `node_modules/@cco/infrastructure/dist/postgres/migrate.js`, and exits with code 0.
+3. **`minio`**: Starts upstream MinIO server. Waits until healthy (`mc ready local`).
+4. **`control-api`**: Starts only after `postgres` is healthy, `minio` is healthy, and `migrate` completes successfully (`condition: service_completed_successfully`). Connects via `DATABASE_URL` (application role).
+5. **`review-hub`**: Starts after `control-api` starts. Communicates with Control API via `CONTROL_API_URL` with no dependency on or access to the MinIO console port (9001).
+
+---
+
+## 4. Teardown Procedure
+
+To stop and remove running control plane containers, networks, and services cleanly:
+
+```bash
+# Graceful shutdown of all services
+docker compose --env-file .env -f compose.yaml down
+
+# Teardown with volume destruction (WARNING: permanently deletes postgres_data and minio_data)
+docker compose --env-file .env -f compose.yaml down -v
+```
+
+---
+
 ## Acceptance Verification Procedures
 
 ### 1. Zero Public Exposure Audit
