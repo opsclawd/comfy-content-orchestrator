@@ -92,8 +92,17 @@ function createValidSyntheticModel() {
           AWS_SECRET_ACCESS_KEY: "synthetic_s3_secret",
           CONTROL_API_HOST: "0.0.0.0",
           CONTROL_API_PORT: "3000",
-          CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES: "100.64.0.1"
+          CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES: "100.64.0.1",
+          STORAGE_TELEMETRY_PATH: "/var/lib/cco/storage-observation"
         },
+        volumes: [
+          {
+            source: "minio_data",
+            target: "/var/lib/cco/storage-observation",
+            type: "volume",
+            read_only: true
+          }
+        ],
         ports: [
           {
             mode: "host",
@@ -420,7 +429,8 @@ describe("Control-plane topology and security validator", () => {
       "S3_SIGNING_ENDPOINT",
       "CONTROL_API_HOST",
       "CONTROL_API_URL",
-      "CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES"
+      "CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES",
+      "STORAGE_TELEMETRY_PATH"
     ];
 
     for (const key of mandatoryKeys) {
@@ -554,5 +564,118 @@ API_SECRET=synthetic_api_secret_key_12345
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("accepts a matching read-only MinIO observation mount", () => {
+    const validModel = createValidSyntheticModel();
+    assert.doesNotThrow(() => {
+      validateControlPlaneModel(validModel, {
+        tailnetIp: "100.64.0.1",
+        operatorIp: "127.0.0.1"
+      });
+    });
+  });
+
+  it("rejects a missing control-api storage observation mount", () => {
+    // Missing volumes property
+    const modelWithoutVolumes = createValidSyntheticModel();
+    delete modelWithoutVolumes.services["control-api"].volumes;
+    assert.throws(() => {
+      validateControlPlaneModel(modelWithoutVolumes, {
+        tailnetIp: "100.64.0.1",
+        operatorIp: "127.0.0.1"
+      });
+    }, /minio_data.*volume|storage.*observation.*mount/i);
+
+    // Empty volumes array
+    const modelWithEmptyVolumes = createValidSyntheticModel();
+    modelWithEmptyVolumes.services["control-api"].volumes = [];
+    assert.throws(() => {
+      validateControlPlaneModel(modelWithEmptyVolumes, {
+        tailnetIp: "100.64.0.1",
+        operatorIp: "127.0.0.1"
+      });
+    }, /minio_data.*volume|storage.*observation.*mount/i);
+
+    // Volumes array with different volume source
+    const modelWithDifferentVolume = createValidSyntheticModel();
+    modelWithDifferentVolume.services["control-api"].volumes = [
+      {
+        source: "other_volume",
+        target: "/var/lib/cco/storage-observation",
+        type: "volume",
+        read_only: true
+      }
+    ];
+    assert.throws(() => {
+      validateControlPlaneModel(modelWithDifferentVolume, {
+        tailnetIp: "100.64.0.1",
+        operatorIp: "127.0.0.1"
+      });
+    }, /minio_data.*volume|storage.*observation.*mount/i);
+  });
+
+  it("rejects a writable storage observation mount", () => {
+    const writableMountModel = createValidSyntheticModel();
+    writableMountModel.services["control-api"].volumes = [
+      {
+        source: "minio_data",
+        target: "/var/lib/cco/storage-observation",
+        type: "volume",
+        read_only: false
+      }
+    ];
+    assert.throws(() => {
+      validateControlPlaneModel(writableMountModel, {
+        tailnetIp: "100.64.0.1",
+        operatorIp: "127.0.0.1"
+      });
+    }, /read-only|read_only/i);
+  });
+
+  it("rejects a mismatched telemetry path and mount target", () => {
+    // Mount target does not match STORAGE_TELEMETRY_PATH
+    const mismatchedTargetModel = createValidSyntheticModel();
+    mismatchedTargetModel.services["control-api"].volumes = [
+      {
+        source: "minio_data",
+        target: "/var/lib/cco/other-target",
+        type: "volume",
+        read_only: true
+      }
+    ];
+    assert.throws(() => {
+      validateControlPlaneModel(mismatchedTargetModel, {
+        tailnetIp: "100.64.0.1",
+        operatorIp: "127.0.0.1"
+      });
+    }, /mismatch|target/i);
+
+    // Missing STORAGE_TELEMETRY_PATH in control-api environment
+    const missingEnvModel = createValidSyntheticModel();
+    delete missingEnvModel.services["control-api"].environment.STORAGE_TELEMETRY_PATH;
+    assert.throws(() => {
+      validateControlPlaneModel(missingEnvModel, {
+        tailnetIp: "100.64.0.1",
+        operatorIp: "127.0.0.1"
+      });
+    }, /STORAGE_TELEMETRY_PATH|storage.*telemetry/i);
+  });
+
+  it("requires STORAGE_TELEMETRY_PATH during Compose rendering", () => {
+    assert.ok(
+      REQUIRED_COMPOSE_VARIABLES.includes("STORAGE_TELEMETRY_PATH"),
+      "REQUIRED_COMPOSE_VARIABLES must include STORAGE_TELEMETRY_PATH"
+    );
+
+    const env = {};
+    for (const key of REQUIRED_COMPOSE_VARIABLES) {
+      env[key] = "test-value";
+    }
+    delete env.STORAGE_TELEMETRY_PATH;
+
+    assert.throws(() => {
+      validateRequiredVariablesOmissionInMemory(env);
+    }, /missing.*STORAGE_TELEMETRY_PATH/i);
   });
 });
