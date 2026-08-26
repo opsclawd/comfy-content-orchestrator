@@ -21,7 +21,7 @@ cd "$ROOT_DIR"
 if [ "${CCO_SMOKE_SELFTEST_CLEANUP:-}" = "1" ]; then
   SELFTEST_PROJECT="cco-smoke-selftest-$$-${RANDOM}"
   SELFTEST_DIR=$(mktemp -d "${TMPDIR:-/tmp}/cco-smoke-selftest-XXXXXX")
-  
+
   cleanup_selftest() {
     local code=$?
     docker compose -p "$SELFTEST_PROJECT" -f - down -v --remove-orphans >/dev/null 2>&1 <<'EOF' || true
