@@ -115,24 +115,31 @@ Network bindings:
 
 #### C. Remote Review & Direction Plane — Ottawa, Canada
 
-The Creative Director accesses:
-
-`https://review.godzspeed-internal.ts.net`
-
-through Tailscale/MagicDNS.
+The Creative Director accesses the Review Hub on the control-plane host's MagicDNS name and Review Hub port (see §2.2), through Tailscale/MagicDNS.
 
 The browser talks only to the Review Hub / Control API contracts. It never imports or invokes application/infrastructure implementations directly.
 
 ### 2.2 Network Overlay & Asset Distribution Security
 
-Canonical tailnet namespace: `godzspeed-internal.ts.net`.
+Canonical tailnet namespace: the tailnet's Tailscale-assigned MagicDNS suffix. Services are addressed by **host MagicDNS name plus port**, not by per-service DNS names.
 
-Canonical application names:
+**Why not per-service names.** An earlier revision of this document specified four distinct names (`review`, `control-01`, `render-01`, `storage-01`) under a custom `godzspeed-internal.ts.net` suffix. That scheme is not implementable as written: the Review Hub, Control API, and S3 endpoint all run on a **single** control-plane host, and Tailscale MagicDNS assigns exactly one DNS name per device — it does not support aliases or arbitrary records ("It's not possible to add arbitrary records to MagicDNS," Tailscale DNS documentation). Producing three distinct names for one machine would require operating a separate split-DNS nameserver, which is disproportionate infrastructure for a naming convenience. Port-based addressing is therefore the canonical scheme.
 
-- **Review Hub:** `review.godzspeed-internal.ts.net`
-- **Control API:** `control-01.godzspeed-internal.ts.net`
-- **Compute Runner:** `render-01.godzspeed-internal.ts.net`
-- **S3 Review Media Endpoint:** `storage-01.godzspeed-internal.ts.net`
+Canonical application endpoints:
+
+| Service | Address | Exposure |
+|---|---|---|
+| **Review Hub** | `<control-plane-host>.<tailnet-suffix>:<REVIEW_HUB_PORT>` | Tailscale interface only |
+| **Control API** | `<control-plane-host>.<tailnet-suffix>:<CONTROL_API_PORT>` | Tailscale interface only |
+| **S3 Review Media Endpoint** | `<control-plane-host>.<tailnet-suffix>:<S3_PORT>` | Tailscale interface only |
+| **MinIO Administrative Console** | `127.0.0.1:<MINIO_CONSOLE_PORT>` | Loopback only — never published to the tailnet |
+| **Compute Runner** | render-worker host's own MagicDNS name | Tailscale interface only |
+
+The Compute Runner is a genuinely separate device and therefore keeps its own MagicDNS name with no aliasing required.
+
+All host, port, and endpoint values are supplied as configuration (see `.env.example`); no hostname or port literal is hardcoded in application code.
+
+If the tailnet is later renamed, or if storage or render surfaces move to genuinely separate hosts, per-service MagicDNS names become available for those hosts at no extra cost — this scheme does not preclude that.
 
 Rules:
 
@@ -187,6 +194,19 @@ Agency policy:
 - Record deployed version, license source, and review date in the component license registry.
 - Require OSS/legal review before modifying MinIO, redistributing it, or creating a derivative integration that could alter source-availability obligations.
 - A future S3-compatible backend may replace MinIO without changing application-domain contracts.
+
+### 2.5 Review Plane Transport Security & Reviewer Authentication
+
+**Status: required, not yet scheduled. Deliberately deprioritized as of 2026-08-26.**
+
+The tailnet is the current access-control boundary: reaching the Review Hub at all requires being an authorized device on the tailnet, and reviewer identity is derived from the Tailscale-layer connection rather than a browser-supplied value (§6, `TailscaleReviewerIdentityResolver`). That is sufficient for internal operation, and the Review Hub runs over plain HTTP on the tailnet today.
+
+Two capabilities remain unimplemented and are required before a Creative Director outside the operating team completes review actions of record:
+
+1. **Transport security (TLS).** The Review Hub is served over HTTP. A real, browser-trusted certificate is required — self-signed certificates do not satisfy this, as they fail validation on the reviewer's own device. Tailscale-issued certificates for the tailnet MagicDNS name are the expected mechanism; a public CA challenge over the open internet is incompatible with §2.2's zero-public-exposure posture.
+2. **Reviewer authentication.** Whether tailnet device identity *is* the authentication boundary, or whether a distinct session/login layer is additionally required, is an **open product decision**. It must be answered before implementation: building a username/password/session system in parallel with the existing Tailscale-identity resolver would produce two conflicting sources of reviewer identity feeding the same audit trail.
+
+Until both land, the Review Hub Browser Access Gate (§9.4) cannot pass. Tracked in issue #90.
 
 ---
 
@@ -975,7 +995,7 @@ Required outcomes:
 6. **Storage delivery contract**
    - persistent object locators remain separate from presigned browser URLs;
    - add `ReviewMediaDeliveryPort`/equivalent;
-   - define `storage-01.godzspeed-internal.ts.net` and admin separation;
+   - define the S3 review-media endpoint and its administrative separation (addressing scheme subsequently revised — see §2.2);
    - define exact 70/85/92% behavior.
 
 7. **Deployment acceptance contract**
@@ -984,34 +1004,74 @@ Required outcomes:
 
 Sprint 1.5 is a contract-closure sprint. It must not introduce a new queue, synchronous render-over-HTTP path, new object-store architecture, or unrelated UI scope.
 
-### Sprint 2 — Director Review Hub & Private Review Plane
+### Sprint 2 — Director Review Hub & Private Review Plane — SUBSTANTIALLY COMPLETE
 
-- Convert `apps/web` from the scaffold package into the actual Next.js Review Hub.
-- Consume only `packages/contracts` / presentation-safe types from the web app.
-- Implement campaign/scene review pages and candidate gallery.
-- Implement current-revision candidate selection.
-- Implement approve, reroll, prompt edit, reference change, engine change, duration change, LoRA configuration change, cancel, and QA rejection where applicable.
-- Surface stale revision conflicts explicitly; never auto-retry a stale human approval against a newer revision.
-- Deploy Control API + Review Hub to the Hetzner control plane.
-- Normalize private hostnames under `godzspeed-internal.ts.net` including `storage-01`.
-- Deploy MinIO as a separate S3-compatible service.
-- Implement bucket lifecycle/retention rules and storage watermark telemetry/admission behavior.
-- Implement object-key persistence and on-demand presigned URL generation.
-- Verify real Tailscale access from the Creative Director device.
-- Reroll commits the pending `generating_candidates` state only; it does not synchronously execute ComfyUI from the HTTP request.
+- [x] Convert `apps/web` from the scaffold package into the actual Next.js Review Hub.
+- [x] Consume only `packages/contracts` / presentation-safe types from the web app.
+- [x] Implement campaign/scene review pages and candidate gallery.
+- [x] Implement current-revision candidate selection.
+- [x] Implement approve, reroll, prompt edit, reference change, engine change, duration change, LoRA configuration change, cancel, and QA rejection where applicable.
+- [x] Surface stale revision conflicts explicitly; never auto-retry a stale human approval against a newer revision.
+- [x] Deploy Control API + Review Hub to the Hetzner control plane.
+- [x] Normalize private service addressing (§2.2). *Delivered as host-plus-port addressing rather than per-service DNS names; the original four-name scheme is not implementable on a single host — see §2.2.*
+- [x] Deploy MinIO as a separate S3-compatible service.
+- [x] Implement bucket lifecycle/retention rules and storage watermark telemetry. *Admission behavior deferred to Sprint 3 — it has no write path to gate until durable dispatch exists (issue #89).*
+- [x] Implement object-key persistence and on-demand presigned URL generation.
+- [ ] Verify real Tailscale access from the Creative Director device. *Blocked on §2.5 (transport security and reviewer authentication), deliberately deprioritized — issue #90.*
+- [x] Reroll commits the pending `generating_candidates` state only; it does not synchronously execute ComfyUI from the HTTP request.
 
-### Sprint 3 — Continuity, Durable Generation, Manifests & Assembly
+Two items carry forward by explicit decision rather than oversight: reviewer-facing TLS/authentication (§2.5, issue #90) and storage-watermark admission enforcement (Sprint 3, issue #89).
+
+### Sprint 2.5 — Generation Dispatch Contract Closure — TRANSITION BEFORE SPRINT 3
+
+Purpose: eliminate job/lease/dispatch contract ambiguity before implementation begins, following the same pattern as Sprint 1.5.
+
+This sprint exists because the durable generation queue is, at time of writing, specified by a single roadmap bullet ("PostgreSQL durable worker leasing with `SELECT ... FOR UPDATE SKIP LOCKED`") with no defined job lifecycle, lease semantics, or dispatch protocol — while §9.2's Durable Lease Recovery Gate demands deterministic reassignment with no duplicate completed manifests. That is a hard concurrency-correctness property, and it is not safe to let the contract be invented during implementation. By contrast, `GenerationManifest` already has a table, audit-immutability protections, and a specified minimum content set (§6.4); it does not need re-litigating here.
+
+Required outcomes:
+
+1. **Job and lease persistence contract**
+   - job table shape, identity, and its relationship to Scene and SceneSpec revision;
+   - job lifecycle states and the legal transitions between them;
+   - lease acquisition, ownership, renewal, expiry, and reclaim semantics;
+   - the exact `SELECT ... FOR UPDATE SKIP LOCKED` claim query and the invariant it guarantees.
+
+2. **Exactly-once manifest invariant**
+   - how a reclaimed or retried job is prevented from producing a second manifest;
+   - what constitutes job completion, and where that boundary is enforced.
+
+3. **Dispatch protocol to the render worker**
+   - how a claimed job reaches the Compute Runner, and what the runner returns;
+   - failure, timeout, and cancellation semantics;
+   - behavior when no render worker is currently reachable.
+
+4. **Storage-admission integration point**
+   - where watermark admission (§2.3, issue #89) is evaluated in the claim/dispatch path, and what a blocked admission does to the job's state.
+
+5. **Ports and boundaries**
+   - which contracts live in `packages/application` versus `packages/infrastructure`, consistent with §4's layering rules.
+
+Sprint 2.5 is a contract-closure sprint. It must not implement the queue, build the FFmpeg pipeline, introduce a new object-store architecture, or add unrelated UI scope.
+
+### Sprint 3 — Continuity, Durable Generation & Manifests
 
 - Implement/complete `ReferenceAsset` continuity behavior.
-- Implement PostgreSQL durable worker leasing with `SELECT ... FOR UPDATE SKIP LOCKED`.
-- Implement durable candidate-generation admission/claim/dispatch for scenes in `generating_candidates`.
+- Implement PostgreSQL durable worker leasing per the Sprint 2.5 contract.
+- Implement durable candidate-generation admission/claim/dispatch for scenes in `generating_candidates`, including storage-watermark admission enforcement (issue #89).
 - Persist generated StoryboardCandidates before `generating_candidates -> director_review`.
 - Implement immutable GenerationManifest creation with exactly one final manifest per successful production job.
-- Implement model/component license registry and fail-closed routing guard.
-- Build FFmpeg concatenation, VO muxing, soundbed, and subtitle pipeline.
-- Add health and Prometheus telemetry.
+- Extend health and Prometheus telemetry (§7.2) with render, queue-depth, and failure-classification metrics. *The `/metrics` endpoint, registry, and Prometheus exposition format already exist from Sprint 2's storage-watermark work — extend them rather than rebuilding.*
 
 Runtime ReviewEvent persistence is no longer deferred to Sprint 3; it is required by Sprint 1.5.
+
+**Prerequisite:** Sprint 3's dispatch work cannot be verified end to end without a reachable render worker on the tailnet. Confirm Compute Runner availability before planning execution; the queue and lease logic can be built and unit-tested against fakes, but the Durable Lease Recovery Gate (§9.2) requires real hardware.
+
+### Sprint 3.5 — Assembly & Governance
+
+Separated from Sprint 3 because it is a distinct subsystem with different dependencies: it consumes generation *output* rather than participating in the generation path, and its verification needs FFmpeg and audio fixtures rather than GPU time. It must land before Sprint 4's commercial proof of concept, which cannot deliver a finished video without it.
+
+- Build FFmpeg concatenation, VO muxing, soundbed, and subtitle pipeline.
+- Implement model/component license registry and fail-closed routing guard.
 
 ### Sprint 4 — API Resilience & Commercial PoC
 
@@ -1061,11 +1121,14 @@ No paying production campaign may be onboarded until all required gates pass.
 
 ### 9.4 Network & Storage
 
-- [ ] **Zero Public Exposure Audit:** application, database, ComfyUI, S3 and MinIO administrative surfaces are unreachable from public WAN as intended.
-- [ ] **MagicDNS Consistency Gate:** `review`, `control-01`, `render-01`, and `storage-01` resolve under `godzspeed-internal.ts.net` from authorized nodes.
-- [ ] **Presigned Media Gate:** authorized browser can read short-lived media through the tailnet S3 endpoint; expired URL fails; no presigned URL is persisted as canonical identity.
-- [ ] **Storage Lifecycle Gate:** test objects demonstrate configured lifecycle/deletion eligibility.
-- [ ] **Storage Watermark Gate:** simulate 70%, 85%, and 92% and verify exact warning/degraded/critical admission behavior.
+First real-environment execution of these gates was performed against the live Hetzner control plane on 2026-08-26 (see issue #68 for full recorded evidence).
+
+- [x] **Zero Public Exposure Audit:** application, database, ComfyUI, S3 and MinIO administrative surfaces are unreachable from public WAN as intended. *Verified 2026-08-26: all of 80/443/3000/5432/8188/9000/9001 unreachable from an external (non-tailnet) vantage point; port 22 confirmed reachable as a control, proving the probe methodology. Enforcement is Tailscale's `ts-input` chain.*
+- [x] **Endpoint Reachability Gate:** each canonical service endpoint in §2.2 resolves and is reachable from an authorized tailnet node, and the MinIO administrative console is **not** reachable over the tailnet. *(Supersedes the former "MagicDNS Consistency Gate," which specified four per-service DNS names that are not implementable on a single host — see §2.2. Verified 2026-08-26: control-plane host MagicDNS name resolves to its tailnet IP and serves Control API, Review Hub, and S3 on their configured ports; console port refused over tailnet, reachable on loopback only.)*
+- [x] **Presigned Media Gate:** authorized browser can read short-lived media through the tailnet S3 endpoint; expired URL fails; no presigned URL is persisted as canonical identity. *Verified 2026-08-26 against real MinIO and real database rows: immediate GET returned 200 with the real object; the same URL returned 403 `AccessDenied` / "Request has expired" after its 300s expiry; database stores only `storage_bucket`/`storage_object_key`.*
+- [x] **Storage Lifecycle Gate:** test objects demonstrate configured lifecycle/deletion eligibility. *Verified 2026-08-26 via direct `GetBucketLifecycleConfiguration` calls against live MinIO: temp 14d, review 60d, reference and delivery no automated expiration — matching §2.3.*
+- [ ] **Storage Watermark Gate:** simulate 70%, 85%, and 92% and verify exact warning/degraded/critical admission behavior. *Telemetry half delivered (`/metrics` exposes live watermark state; threshold transitions covered by tests). Admission-blocking half is blocked on the durable dispatch path — see Sprint 3 and issue #89.*
+- [ ] **Review Hub Browser Access Gate:** the Creative Director completes a real review action end to end from the remote review plane. *Blocked on transport security and reviewer authentication — see §2.5 and issue #90.*
 
 ### 9.5 Performance & Reconstruction
 
