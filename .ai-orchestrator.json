@@ -1,10 +1,11 @@
 {
   "validation": {
-    "commands": [
+    "additionalCommands": [
       "pnpm check:hooks",
       "pnpm format",
       "pnpm test:db",
-      "pnpm install --frozen-lockfile"
+      "pnpm install --frozen-lockfile",
+      "pnpm check:control-plane"
     ],
     "timeout": 900,
     "forbiddenArtifactPaths": ["certification/", "baseline/", "config/render-profiles/"]
