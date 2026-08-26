@@ -196,6 +196,11 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
   const sceneUuid = "d0728c3a-b892-4919-bb0d-587274092b3b" as SceneId;
   const candidateUuid = "3e590059-cb14-41d6-b5fa-28498897ee22" as CandidateId;
   const actionUuid = "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d";
+  const defaultTestOptions = {
+    reviewerIdentityResolver: {
+      resolve: () => "Test Reviewer"
+    }
+  };
 
   const createReviewReadyScene = (
     overrides?: Partial<Parameters<typeof Scene.reconstitute>[0]>
@@ -276,53 +281,71 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
     expect(body.message).toContain("sceneId");
   });
 
-  it("audit authority uses server-derived reviewer identity and timestamp", async () => {
-    const scene = createReviewReadyScene();
-    const candidate = createCandidate();
-    const uow = new InMemorySceneUnitOfWork([scene], [candidate]);
+  it("uses an injected reviewer identity resolver instead of deployment configuration", async () => {
+    const origFallback = process.env.CONTROL_API_REVIEWER_IDENTITY_FALLBACK;
+    const origProxies = process.env.CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES;
+    try {
+      process.env.CONTROL_API_REVIEWER_IDENTITY_FALLBACK = "Contradictory Env Fallback";
+      process.env.CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES = "192.168.100.1";
 
-    const trustedReviewer = "Authorized Lead Director";
-    const trustedTimestamp = "2026-08-18T15:30:00.000Z";
+      const scene = createReviewReadyScene();
+      const candidate = createCandidate();
+      const uow = new InMemorySceneUnitOfWork([scene], [candidate]);
 
-    const app = createControlApiApp(
-      { uow },
-      {
-        reviewerIdentityResolver: {
-          resolve: () => trustedReviewer
-        },
-        clock: {
-          now: () => trustedTimestamp
+      const trustedReviewer = "Authorized Lead Director";
+      const trustedTimestamp = "2026-08-18T15:30:00.000Z";
+
+      const app = createControlApiApp(
+        { uow },
+        {
+          reviewerIdentityResolver: {
+            resolve: () => trustedReviewer
+          },
+          clock: {
+            now: () => trustedTimestamp
+          }
         }
-      }
-    );
+      );
 
-    const response = await app.inject({
-      method: "POST",
-      url: `/api/scenes/${sceneUuid}/review-command`,
-      payload: {
-        actionId: actionUuid,
-        sceneId: sceneUuid,
-        expectedSpecRevision: 1,
-        action: "candidate_select",
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/scenes/${sceneUuid}/review-command`,
         payload: {
-          candidateId: candidateUuid
-        },
-        directorNotes: "LGTM"
-      }
-    });
+          actionId: actionUuid,
+          sceneId: sceneUuid,
+          expectedSpecRevision: 1,
+          action: "candidate_select",
+          payload: {
+            candidateId: candidateUuid
+          },
+          directorNotes: "LGTM"
+        }
+      });
 
-    expect(response.statusCode).toBe(200);
-    expect(uow.reviewEvents).toHaveLength(1);
-    const recordedEvent = uow.reviewEvents[0]!;
-    expect(recordedEvent.reviewerName).toBe(trustedReviewer);
-    expect(recordedEvent.occurredAt).toBe(trustedTimestamp);
-    expect(recordedEvent.directorNotes).toBe("LGTM");
+      expect(response.statusCode).toBe(200);
+      expect(uow.reviewEvents).toHaveLength(1);
+      const recordedEvent = uow.reviewEvents[0]!;
+      expect(recordedEvent.reviewerName).toBe(trustedReviewer);
+      expect(recordedEvent.occurredAt).toBe(trustedTimestamp);
+      expect(recordedEvent.directorNotes).toBe("LGTM");
+    } finally {
+      if (origFallback !== undefined) {
+        process.env.CONTROL_API_REVIEWER_IDENTITY_FALLBACK = origFallback;
+      } else {
+        delete process.env.CONTROL_API_REVIEWER_IDENTITY_FALLBACK;
+      }
+      if (origProxies !== undefined) {
+        process.env.CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES = origProxies;
+      } else {
+        delete process.env.CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES;
+      }
+    }
   });
 
   it("computes canonical SHA-256 hash for review commands", async () => {
     const scene = createReviewReadyScene();
     const uow = new InMemorySceneUnitOfWork([scene]);
-    const app = createControlApiApp({ uow });
+    const app = createControlApiApp({ uow }, defaultTestOptions);
 
     const payload = {
       actionId: actionUuid,
@@ -358,7 +381,7 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
     const scene = createReviewReadyScene();
     const candidate = createCandidate();
     const uow = new InMemorySceneUnitOfWork([scene], [candidate]);
-    const app = createControlApiApp({ uow });
+    const app = createControlApiApp({ uow }, defaultTestOptions);
 
     const command: ReviewCommand = {
       actionId: actionUuid,
@@ -396,7 +419,7 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
     });
     const candidate = createCandidate();
     const uow = new InMemorySceneUnitOfWork([scene], [candidate]);
-    const app = createControlApiApp({ uow });
+    const app = createControlApiApp({ uow }, defaultTestOptions);
 
     const command: ReviewCommand = {
       actionId: actionUuid,
@@ -420,7 +443,7 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
     expect(body.selectedCandidateId).toBe(candidateUuid);
     expect(body.approval).toBeDefined();
     expect(body.approval?.revision).toBe(1);
-    expect(body.approval?.approvedBy).toBe("Thomas Cumberbatch");
+    expect(body.approval?.approvedBy).toBe("Test Reviewer");
     expect(body.isIdempotentReplay).toBe(false);
   });
 
@@ -431,7 +454,7 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
     });
     const candidate = createCandidate();
     const uow = new InMemorySceneUnitOfWork([scene], [candidate]);
-    const app = createControlApiApp({ uow });
+    const app = createControlApiApp({ uow }, defaultTestOptions);
 
     const command: ReviewCommand = {
       actionId: actionUuid,
@@ -459,7 +482,7 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
   it("prompt_edit, reference_change, engine_change, duration_change, lora_tune update configuration and revision", async () => {
     const scene = createReviewReadyScene();
     const uow = new InMemorySceneUnitOfWork([scene]);
-    const app = createControlApiApp({ uow });
+    const app = createControlApiApp({ uow }, defaultTestOptions);
 
     // 1. prompt_edit: rev 1 -> 2
     const promptRes = await app.inject({
@@ -540,7 +563,7 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
   it("cancel transitions scene to cancelled", async () => {
     const scene = createReviewReadyScene();
     const uow = new InMemorySceneUnitOfWork([scene]);
-    const app = createControlApiApp({ uow });
+    const app = createControlApiApp({ uow }, defaultTestOptions);
 
     const command: ReviewCommand = {
       actionId: actionUuid,
@@ -580,12 +603,12 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
       selectedCandidateRevision: 1,
       approval: {
         revision: 1,
-        approvedBy: "Thomas Cumberbatch",
+        approvedBy: "Test Reviewer",
         approvedAt: "2026-08-18T11:00:00.000Z"
       }
     });
     const uow = new InMemorySceneUnitOfWork([scene]);
-    const app = createControlApiApp({ uow });
+    const app = createControlApiApp({ uow }, defaultTestOptions);
 
     const command: ReviewCommand = {
       actionId: actionUuid,
@@ -613,7 +636,7 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
   it("stale expectedSpecRevision returns 409 STALE_REVISION_CONFLICT", async () => {
     const scene = createReviewReadyScene({ specRevision: 2 });
     const uow = new InMemorySceneUnitOfWork([scene]);
-    const app = createControlApiApp({ uow });
+    const app = createControlApiApp({ uow }, defaultTestOptions);
 
     const command: ReviewCommand = {
       actionId: actionUuid,
@@ -639,7 +662,7 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
     const scene = createReviewReadyScene();
     const candidate = createCandidate();
     const uow = new InMemorySceneUnitOfWork([scene], [candidate]);
-    const app = createControlApiApp({ uow });
+    const app = createControlApiApp({ uow }, defaultTestOptions);
 
     const command: ReviewCommand = {
       actionId: actionUuid,
@@ -674,7 +697,7 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
     const otherCandidateUuid = "7709eeae-377c-4743-bcf2-b2586a11e130" as CandidateId;
     const candidate2 = createCandidate(otherCandidateUuid, 1);
     const uow = new InMemorySceneUnitOfWork([scene], [candidate1, candidate2]);
-    const app = createControlApiApp({ uow });
+    const app = createControlApiApp({ uow }, defaultTestOptions);
 
     const command1: ReviewCommand = {
       actionId: actionUuid,
@@ -727,7 +750,7 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
       }
     });
     const uow = new InMemorySceneUnitOfWork([scene]);
-    const app = createControlApiApp({ uow });
+    const app = createControlApiApp({ uow }, defaultTestOptions);
 
     const command: ReviewCommand = {
       actionId: actionUuid,
@@ -751,7 +774,7 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
 
   it("target scene not found returns 404 NOT_FOUND", async () => {
     const uow = new InMemorySceneUnitOfWork([]);
-    const app = createControlApiApp({ uow });
+    const app = createControlApiApp({ uow }, defaultTestOptions);
 
     const command: ReviewCommand = {
       actionId: actionUuid,

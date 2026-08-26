@@ -14,10 +14,27 @@ import {
   TerminalStateError
 } from "@cco/domain";
 
+export class ReviewerIdentityUnavailableError extends Error {
+  constructor(message = "Reviewer identity could not be established.") {
+    super(message);
+    this.name = "ReviewerIdentityUnavailableError";
+  }
+}
+
 export function formatReviewError(error: unknown): {
   statusCode: number;
   body: ReviewErrorResponse | { message: string };
 } {
+  if (error instanceof ReviewerIdentityUnavailableError) {
+    return {
+      statusCode: 401,
+      body: {
+        code: "AUTHENTICATION_REQUIRED",
+        message: "Reviewer identity could not be established."
+      }
+    };
+  }
+
   if (error instanceof SceneNotFoundError || error instanceof CandidateNotFoundError) {
     return {
       statusCode: 404,

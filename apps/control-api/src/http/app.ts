@@ -8,6 +8,10 @@ import { handleReviewError } from "./errors.js";
 import { reviewReadRoutes } from "./routes/review-read-routes.js";
 import { reviewCommandRoutes } from "./routes/review-command-routes.js";
 import type { ControlApiAppOptions } from "./types.js";
+import {
+  TailscaleReviewerIdentityResolver,
+  parseReviewerIdentityConfig
+} from "./reviewer-identity.js";
 
 function isControlApiContainer(
   deps: ControlApiDependencies | ControlApiContainer
@@ -28,6 +32,15 @@ export function createControlApiApp(
   const container = isControlApiContainer(dependencies)
     ? dependencies
     : createControlApiContainer(dependencies);
+
+  const reviewerIdentityResolver =
+    options?.reviewerIdentityResolver ??
+    new TailscaleReviewerIdentityResolver(parseReviewerIdentityConfig(process.env));
+
+  const effectiveOptions: ControlApiAppOptions = {
+    ...options,
+    reviewerIdentityResolver
+  };
 
   const app = Fastify({
     logger: options?.logger ?? false
@@ -56,7 +69,7 @@ export function createControlApiApp(
 
   app.register(reviewCommandRoutes, {
     container,
-    ...(options !== undefined ? { appOptions: options } : {})
+    appOptions: effectiveOptions
   });
 
   return app;

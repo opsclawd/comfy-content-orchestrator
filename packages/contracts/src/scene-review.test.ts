@@ -428,7 +428,8 @@ describe("Review Read Model and Error Contracts", () => {
       "IDEMPOTENCY_CONFLICT",
       "INVALID_DOMAIN_TRANSITION",
       "VALIDATION_FAILURE",
-      "MEDIA_UNAVAILABLE"
+      "MEDIA_UNAVAILABLE",
+      "AUTHENTICATION_REQUIRED"
     ];
     expect(REVIEW_ERROR_CODES).toEqual(expectedCodes);
 

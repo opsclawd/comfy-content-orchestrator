@@ -26,6 +26,13 @@ import type { CandidateId } from "@cco/domain";
 import { runMigrations, PostgresUnitOfWork, PostgresSceneReviewQueries } from "@cco/infrastructure";
 import type { UnitOfWork, UnitOfWorkContext } from "@cco/application";
 import { createControlApiApp } from "./app.js";
+import { TailscaleReviewerIdentityResolver } from "./reviewer-identity.js";
+
+const defaultTestOptions = {
+  reviewerIdentityResolver: {
+    resolve: () => "Test Reviewer"
+  }
+};
 
 describe("End-to-End PostgreSQL Integration Tests for Control API HTTP Boundary", () => {
   let postgresContainer: StartedPostgres18Container;
@@ -324,7 +331,7 @@ describe("End-to-End PostgreSQL Integration Tests for Control API HTTP Boundary"
     expect(rev2Group?.candidates[1]?.media).toEqual({ available: false });
   });
 
-  it("candidate_select and approve flow persists updates in PostgreSQL", async () => {
+  it("persists the trusted Tailscale login for review events and approval metadata", async () => {
     const clientRecord = await insertClientRecord(client);
     const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
     const sceneRecord = await insertStoryboardSceneRecord(client, {
@@ -341,8 +348,12 @@ describe("End-to-End PostgreSQL Integration Tests for Control API HTTP Boundary"
     });
 
     const uow = new PostgresUnitOfWork(pool);
-    const app = createControlApiApp({ uow });
+    const identityResolver = new TailscaleReviewerIdentityResolver({
+      trustedProxyAddresses: ["127.0.0.1"]
+    });
+    const app = createControlApiApp({ uow }, { reviewerIdentityResolver: identityResolver });
 
+    const trustedLogin = "director@trusted-tailnet.example";
     const selectActionId = "01950c46-9e90-7d3d-82d2-8f1d3e111111";
     const selectCommand: ReviewCommand = {
       actionId: selectActionId,
@@ -355,10 +366,13 @@ describe("End-to-End PostgreSQL Integration Tests for Control API HTTP Boundary"
       directorNotes: "Selected best candidate for scene hero"
     };
 
-    // 1. Send candidate_select
+    // 1. Send candidate_select with trusted tailscale header
     const selectRes = await app.inject({
       method: "POST",
       url: `/api/scenes/${sceneRecord.scene_id}/review-command`,
+      headers: {
+        "tailscale-user-login": trustedLogin
+      },
       payload: selectCommand
     });
 
@@ -394,12 +408,12 @@ describe("End-to-End PostgreSQL Integration Tests for Control API HTTP Boundary"
     expect(eventsAfterSelect.rows).toHaveLength(1);
     expect(eventsAfterSelect.rows[0]?.event_id).toBe(selectActionId);
     expect(eventsAfterSelect.rows[0]?.action).toBe("candidate_select");
-    expect(eventsAfterSelect.rows[0]?.reviewer_name).toBe("Thomas Cumberbatch");
+    expect(eventsAfterSelect.rows[0]?.reviewer_name).toBe(trustedLogin);
     expect(eventsAfterSelect.rows[0]?.director_notes).toBe(
       "Selected best candidate for scene hero"
     );
 
-    // 2. Send approve
+    // 2. Send approve with trusted tailscale header
     const approveActionId = "01950c46-9e90-7d3d-82d2-8f1d3e222222";
     const approveCommand: ReviewCommand = {
       actionId: approveActionId,
@@ -413,6 +427,9 @@ describe("End-to-End PostgreSQL Integration Tests for Control API HTTP Boundary"
     const approveRes = await app.inject({
       method: "POST",
       url: `/api/scenes/${sceneRecord.scene_id}/review-command`,
+      headers: {
+        "tailscale-user-login": trustedLogin
+      },
       payload: approveCommand
     });
 
@@ -422,7 +439,7 @@ describe("End-to-End PostgreSQL Integration Tests for Control API HTTP Boundary"
     expect(approveBody.status).toBe("approved");
     expect(approveBody.selectedCandidateId).toBe(candidate.candidate_id);
     expect(approveBody.approval).toBeDefined();
-    expect(approveBody.approval?.approvedBy).toBe("Thomas Cumberbatch");
+    expect(approveBody.approval?.approvedBy).toBe(trustedLogin);
     expect(approveBody.approval?.revision).toBe(1);
     expect(approveBody.isIdempotentReplay).toBe(false);
 
@@ -437,21 +454,24 @@ describe("End-to-End PostgreSQL Integration Tests for Control API HTTP Boundary"
       [sceneRecord.scene_id]
     );
     expect(sceneAfterApprove.rows[0]?.status).toBe("approved");
-    expect(sceneAfterApprove.rows[0]?.approved_by).toBe("Thomas Cumberbatch");
+    expect(sceneAfterApprove.rows[0]?.approved_by).toBe(trustedLogin);
     expect(sceneAfterApprove.rows[0]?.approved_revision).toBe(1);
     expect(sceneAfterApprove.rows[0]?.selected_candidate_id).toBe(candidate.candidate_id);
 
     const allEvents = await client.query<{
       event_id: string;
       action: string;
+      reviewer_name: string;
       resulting_scene_status: string;
     }>(
-      "SELECT event_id, action, resulting_scene_status FROM review_events WHERE scene_id = $1 ORDER BY created_at ASC",
+      "SELECT event_id, action, reviewer_name, resulting_scene_status FROM review_events WHERE scene_id = $1 ORDER BY created_at ASC",
       [sceneRecord.scene_id]
     );
     expect(allEvents.rows).toHaveLength(2);
     expect(allEvents.rows[0]?.action).toBe("candidate_select");
+    expect(allEvents.rows[0]?.reviewer_name).toBe(trustedLogin);
     expect(allEvents.rows[1]?.action).toBe("approve");
+    expect(allEvents.rows[1]?.reviewer_name).toBe(trustedLogin);
     expect(allEvents.rows[1]?.resulting_scene_status).toBe("approved");
   });
 
@@ -467,7 +487,7 @@ describe("End-to-End PostgreSQL Integration Tests for Control API HTTP Boundary"
     });
 
     const uow = new PostgresUnitOfWork(pool);
-    const app = createControlApiApp({ uow });
+    const app = createControlApiApp({ uow }, defaultTestOptions);
 
     const staleCommand: ReviewCommand = {
       actionId: "01950c46-9e90-7d3d-82d2-8f1d3e333333",
@@ -528,7 +548,7 @@ describe("End-to-End PostgreSQL Integration Tests for Control API HTTP Boundary"
     });
 
     const uow = new PostgresUnitOfWork(pool);
-    const app = createControlApiApp({ uow });
+    const app = createControlApiApp({ uow }, defaultTestOptions);
 
     const actionId = "01950c46-9e90-7d3d-82d2-8f1d3e444444";
     const command: ReviewCommand = {
@@ -602,7 +622,7 @@ describe("End-to-End PostgreSQL Integration Tests for Control API HTTP Boundary"
     });
 
     const uow = new PostgresUnitOfWork(pool);
-    const app = createControlApiApp({ uow });
+    const app = createControlApiApp({ uow }, defaultTestOptions);
 
     const sharedActionId = "01950c46-9e90-7d3d-82d2-8f1d3e555555";
 
@@ -690,7 +710,7 @@ describe("End-to-End PostgreSQL Integration Tests for Control API HTTP Boundary"
     );
 
     const uow = new PostgresUnitOfWork(pool);
-    const app = createControlApiApp({ uow });
+    const app = createControlApiApp({ uow }, defaultTestOptions);
 
     const rerollActionId = "01950c46-9e90-7d3d-82d2-8f1d3e777777";
     const rerollCommand: ReviewCommand = {
@@ -774,7 +794,7 @@ describe("End-to-End PostgreSQL Integration Tests for Control API HTTP Boundary"
       }
     };
 
-    const app = createControlApiApp({ uow: failingUow });
+    const app = createControlApiApp({ uow: failingUow }, defaultTestOptions);
 
     const failedActionId = "01950c46-9e90-7d3d-82d2-8f1d3e888888";
     const command: ReviewCommand = {
