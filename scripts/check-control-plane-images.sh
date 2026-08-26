@@ -53,6 +53,27 @@ cleanup() {
 
 trap cleanup EXIT INT TERM HUP
 
+# ------------------------------------------------------------------------------
+# Self-test hook: when invoked with CCO_SELFTEST_TRAP_CLEANUP=1, register
+# synthetic resources and exit immediately so the *real* top-level trap
+# registered above performs the actual cleanup this script relies on.
+# ------------------------------------------------------------------------------
+if [ "${CCO_SELFTEST_TRAP_CLEANUP:-}" = "1" ]; then
+  SELFTEST_CONT="cco-selftest-c-${TAG_SUFFIX}"
+  SELFTEST_IMG="cco-selftest-i-${TAG_SUFFIX}"
+  SELFTEST_DIR=$(mktemp -d "${TMPDIR:-/tmp}/cco-selftest-XXXXXX")
+
+  docker create --name "$SELFTEST_CONT" node:24-alpine sleep 10 >/dev/null 2>&1
+  docker tag node:24-alpine "$SELFTEST_IMG" >/dev/null 2>&1
+
+  TEMP_CONTAINERS+=("$SELFTEST_CONT")
+  TEMP_IMAGES+=("$SELFTEST_IMG")
+  TEMP_DIRS+=("$SELFTEST_DIR")
+
+  echo "$SELFTEST_CONT $SELFTEST_IMG $SELFTEST_DIR"
+  exit 42
+fi
+
 echo "======================================================================"
 echo "Starting Control-Plane Container Image Verification"
 echo "======================================================================"
@@ -62,26 +83,19 @@ echo "======================================================================"
 # ------------------------------------------------------------------------------
 echo "==> TEST: guarantees trap-based cleanup of temporary inspection containers and images"
 
-# Verify that the script's actual cleanup handler cleans up containers, images, and temp directories
-TRAP_TEST_CONT="cco-trap-test-c-${TAG_SUFFIX}"
-TRAP_TEST_IMG="cco-trap-test-i-${TAG_SUFFIX}"
-TRAP_TEST_DIR=$(mktemp -d "${TMPDIR:-/tmp}/cco-trap-test-XXXXXX")
+# Re-invoke this script as a real child process with the self-test hook so
+# the script's own top-level trap (line above) performs the actual cleanup,
+# rather than exercising a reimplementation of it.
+SELFTEST_LINE=$(CCO_SELFTEST_TRAP_CLEANUP=1 bash "${BASH_SOURCE[0]}" 2>/dev/null || true)
+read -r TRAP_TEST_CONT TRAP_TEST_IMG TRAP_TEST_DIR <<<"$SELFTEST_LINE"
 
-(
-  # Register the script's actual cleanup handler on subshell exit
-  trap cleanup EXIT
-  TEMP_CONTAINERS+=("$TRAP_TEST_CONT")
-  TEMP_IMAGES+=("$TRAP_TEST_IMG")
-  TEMP_DIRS+=("$TRAP_TEST_DIR")
+if [ -z "$TRAP_TEST_CONT" ] || [ -z "$TRAP_TEST_IMG" ] || [ -z "$TRAP_TEST_DIR" ]; then
+  echo "FAIL: Self-test invocation did not report registered resources"
+  exit 1
+fi
 
-  docker create --name "$TRAP_TEST_CONT" node:24-alpine sleep 10 >/dev/null 2>&1
-  docker tag node:24-alpine "$TRAP_TEST_IMG" >/dev/null 2>&1
-
-  # Subshell exits, triggering the script's actual cleanup() handler
-  exit 0
-) >/dev/null 2>&1
-
-# Assert that TRAP_TEST_CONT, TRAP_TEST_IMG, and TRAP_TEST_DIR were cleaned up by cleanup()
+# Assert that TRAP_TEST_CONT, TRAP_TEST_IMG, and TRAP_TEST_DIR were cleaned up
+# by the script's real cleanup() handler when the child process exited.
 if docker inspect "$TRAP_TEST_CONT" >/dev/null 2>&1; then
   echo "FAIL: Trap did not clean up temporary container $TRAP_TEST_CONT"
   docker rm -f "$TRAP_TEST_CONT" >/dev/null 2>&1 || true
