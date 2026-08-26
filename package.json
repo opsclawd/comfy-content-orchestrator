@@ -25,6 +25,7 @@
     "check:control-plane": "vitest run scripts/check-control-plane.test.js && node scripts/check-control-plane.js",
     "check:control-plane-images": "bash scripts/check-control-plane-images.sh",
     "check:hooks": "node scripts/check-hooks.js",
+    "smoke:control-plane": "bash scripts/smoke-control-plane.sh",
     "postinstall": "node scripts/check-hooks.js || true"
   },
   "lint-staged": {
