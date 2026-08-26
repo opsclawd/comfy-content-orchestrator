@@ -31,16 +31,38 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      # Whether the scripts' own later plain `docker build` calls actually
+      # share this builder's cache depends on buildx being the *default*
+      # docker build builder on this runner, which is a property of the
+      # runner's Docker version/config that setup-buildx-action does not
+      # unconditionally guarantee. Printed here as real evidence rather than
+      # assumed — check `docker info`'s Driver: line in this step's logs.
+      # If it's not "docker-container"/buildx-backed, plain `docker build`
+      # in the scripts below is NOT sharing this cache, and only
+      # smoke-control-plane.sh's `docker image inspect cco-*:latest`
+      # pre-check (which finds the --load'd image directly, independent of
+      # any builder-sharing question) benefits from these warm-build steps.
+      - name: Show Docker builder topology
+        run: |
+          {
+            echo '### Docker builder topology'
+            echo '```'
+            docker version
+            echo '---'
+            docker buildx ls
+            echo '---'
+            docker info --format '{{.DriverStatus}}'
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
       # Warm-build both images through the GitHub Actions cache backend
       # (type=gha persists across runs, unlike a plain local directory).
       # check-control-plane-images.sh and smoke-control-plane.sh still do
-      # their own `docker build` afterward, unmodified — setup-buildx-action
-      # makes buildx the default builder for the whole job, so those plain
-      # `docker build` calls route through the same builder instance and
-      # hit its local content-addressable cache from these steps, even
-      # though they build under different tags. This keeps the scripts
-      # themselves untouched (#82's "purely CI wiring" scope) rather than
-      # threading cache flags through their own docker build invocations.
+      # their own `docker build` afterward, unmodified — this keeps the
+      # scripts themselves untouched (#82's "purely CI wiring" scope)
+      # rather than threading cache flags through their own docker build
+      # invocations. Whether the scripts' rebuild is warm or cold depends
+      # on the builder topology printed above.
       - name: Warm Docker build cache (Control API)
         uses: docker/build-push-action@v6
         with:
