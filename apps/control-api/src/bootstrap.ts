@@ -1,9 +1,13 @@
 import process from "node:process";
 import { HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
+import type { StorageTelemetryPort } from "@cco/application";
 import {
+  HostFsStorageTelemetryAdapter,
+  InMemoryStorageMetricsRegistry,
   PostgresSceneReviewQueries,
   PostgresUnitOfWork,
-  S3ReviewMediaDelivery
+  S3ReviewMediaDelivery,
+  type HostFsStorageTelemetryAdapterOptions
 } from "@cco/infrastructure";
 import type { FastifyInstance } from "fastify";
 import { Pool } from "pg";
@@ -36,6 +40,9 @@ export interface ControlApiBootstrapOptions {
   readonly poolFactory?: (config: ControlApiDatabaseConfig) => Pool;
   readonly s3Client?: S3Client;
   readonly s3ClientFactory?: (config: ControlApiS3Config) => S3Client;
+  readonly storageTelemetryFactory?: (
+    options: HostFsStorageTelemetryAdapterOptions
+  ) => StorageTelemetryPort;
   readonly serverStarter?: (
     dependencies: ControlApiDependencies,
     options: ServerListenOptions
@@ -186,6 +193,16 @@ export async function runControlApi(
       defaultExpirySeconds: config.s3.defaultExpirySeconds
     });
 
+    const storageTelemetryOptions: HostFsStorageTelemetryAdapterOptions = {
+      storagePath: config.storageTelemetry.path,
+      bucketUsageProvider: async () => []
+    };
+    const storageTelemetry = options.storageTelemetryFactory
+      ? options.storageTelemetryFactory(storageTelemetryOptions)
+      : new HostFsStorageTelemetryAdapter(storageTelemetryOptions);
+
+    const storageMetricsRegistry = new InMemoryStorageMetricsRegistry();
+
     const reviewerIdentityResolver =
       options.reviewerIdentityResolver ??
       new TailscaleReviewerIdentityResolver(config.reviewerIdentity);
@@ -211,7 +228,9 @@ export async function runControlApi(
       {
         uow,
         sceneReviewQueries,
-        reviewMediaDelivery
+        reviewMediaDelivery,
+        storageTelemetry,
+        storageMetricsRegistry
       },
       {
         host: config.http.host,

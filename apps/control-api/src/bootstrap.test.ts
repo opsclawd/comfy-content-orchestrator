@@ -4,6 +4,14 @@ import type { ControlApiRuntimeConfig } from "./runtime-config.js";
 import { HeadBucketCommand, type S3Client } from "@aws-sdk/client-s3";
 import type { Pool } from "pg";
 import type { FastifyInstance } from "fastify";
+import {
+  HostFsStorageTelemetryAdapter,
+  InMemoryStorageMetricsRegistry,
+  type HostFsStorageTelemetryAdapterOptions,
+  type StatFsFn
+} from "@cco/infrastructure";
+import type { StorageTelemetryPort } from "@cco/application";
+import type { ControlApiDependencies } from "./http/types.js";
 
 describe("bootstrap", () => {
   const validConfig: ControlApiRuntimeConfig = {
@@ -28,6 +36,9 @@ describe("bootstrap", () => {
     },
     reviewerIdentity: {
       trustedProxyAddresses: []
+    },
+    storageTelemetry: {
+      path: "/var/lib/cco/storage-observation"
     }
   };
 
@@ -137,7 +148,9 @@ describe("bootstrap", () => {
       expect.objectContaining({
         uow: expect.any(Object),
         sceneReviewQueries: expect.any(Object),
-        reviewMediaDelivery: expect.any(Object)
+        reviewMediaDelivery: expect.any(Object),
+        storageTelemetry: expect.any(Object),
+        storageMetricsRegistry: expect.any(Object)
       }),
       expect.objectContaining({
         host: "100.64.0.1",
@@ -145,6 +158,100 @@ describe("bootstrap", () => {
         reviewerIdentityResolver: expect.any(Object)
       })
     );
+  });
+
+  it("wires one telemetry adapter and one registry into the HTTP server", async () => {
+    const harness = createTestHarness();
+    let capturedOptions: HostFsStorageTelemetryAdapterOptions | undefined;
+    const fakeTelemetryPort: StorageTelemetryPort = {
+      getStorageTelemetry: vi.fn().mockResolvedValue({
+        totalBytes: 1000,
+        usedBytes: 400,
+        freeBytes: 600,
+        buckets: [],
+        measuredAt: "2026-01-01T00:00:00.000Z"
+      })
+    };
+
+    const storageTelemetryFactory = vi.fn((opts: HostFsStorageTelemetryAdapterOptions) => {
+      capturedOptions = opts;
+      return fakeTelemetryPort;
+    });
+
+    let capturedDependencies: ControlApiDependencies | undefined;
+    harness.mockServerStarter.mockImplementation(async (deps: ControlApiDependencies) => {
+      capturedDependencies = deps;
+      return harness.mockServerHandle;
+    });
+
+    const runtime = await runControlApi({
+      config: validConfig,
+      poolFactory: () => harness.mockPool as unknown as Pool,
+      s3ClientFactory: () => harness.mockS3Client as unknown as S3Client,
+      storageTelemetryFactory,
+      serverStarter: harness.mockServerStarter,
+      processSignals: harness.mockSignals,
+      logger: harness.mockLogger
+    });
+
+    expect(storageTelemetryFactory).toHaveBeenCalledTimes(1);
+    expect(capturedOptions).toBeDefined();
+    expect(capturedOptions?.storagePath).toBe("/var/lib/cco/storage-observation");
+    expect(capturedOptions?.bucketUsageProvider).toBeDefined();
+    const buckets = await capturedOptions!.bucketUsageProvider!();
+    expect(buckets).toEqual([]);
+
+    expect(capturedDependencies).toBeDefined();
+    expect(capturedDependencies?.storageTelemetry).toBe(fakeTelemetryPort);
+    expect(capturedDependencies?.storageMetricsRegistry).toBeInstanceOf(
+      InMemoryStorageMetricsRegistry
+    );
+
+    await runtime.stop();
+  });
+
+  it("omits unmeasured production bucket samples", async () => {
+    const harness = createTestHarness();
+    let capturedDependencies: ControlApiDependencies | undefined;
+    harness.mockServerStarter.mockImplementation(async (deps: ControlApiDependencies) => {
+      capturedDependencies = deps;
+      return harness.mockServerHandle;
+    });
+
+    const runtime = await runControlApi({
+      config: validConfig,
+      poolFactory: () => harness.mockPool as unknown as Pool,
+      s3ClientFactory: () => harness.mockS3Client as unknown as S3Client,
+      serverStarter: harness.mockServerStarter,
+      processSignals: harness.mockSignals,
+      logger: harness.mockLogger
+    });
+
+    expect(capturedDependencies).toBeDefined();
+    expect(capturedDependencies?.storageTelemetry).toBeInstanceOf(HostFsStorageTelemetryAdapter);
+
+    // Using a storageTelemetry adapter created with production defaults:
+    // With fake statfsFn injected through prototype or checking getStorageTelemetry:
+    // If we call getStorageTelemetry on the default adapter or examine it
+    const defaultAdapter = capturedDependencies!.storageTelemetry as HostFsStorageTelemetryAdapter;
+    expect(defaultAdapter).toBeDefined();
+
+    // Inject mock statfsFn into the captured default adapter to avoid host filesystem calls
+    // and verify that the bootstrap-created default adapter omits unmeasured production bucket samples
+    (defaultAdapter as unknown as { statfsFn: StatFsFn }).statfsFn = async () => ({
+      bsize: 4096,
+      blocks: 1000,
+      bfree: 500,
+      bavail: 500
+    });
+
+    const snapshot = await defaultAdapter.getStorageTelemetry();
+    expect(snapshot.buckets).toEqual([]);
+    expect(snapshot.totalBytes).toBe(4096000);
+    expect(snapshot.freeBytes).toBe(2048000);
+    expect(snapshot.usedBytes).toBe(2048000);
+
+    await runtime.stop();
   });
 
   it("probes PostgreSQL and fails startup if SELECT 1 fails", async () => {
