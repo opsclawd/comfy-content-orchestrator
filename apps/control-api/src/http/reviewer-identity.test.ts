@@ -214,6 +214,17 @@ describe("TailscaleReviewerIdentityResolver behavioral invariants", () => {
     expect(resolverMapped.resolve(reqMappedV6_10)).toBe("user@example.com");
   });
 
+  it("accepts pure IPv6 trusted proxy", () => {
+    const resolver = new TailscaleReviewerIdentityResolver({
+      trustedProxyAddresses: ["::1"]
+    });
+    const req = createMockRequest({
+      remoteAddress: "::1",
+      headers: { "tailscale-user-login": "user@example.com" }
+    });
+    expect(resolver.resolve(req)).toBe("user@example.com");
+  });
+
   it("rejects invalid identity deployment configuration during app creation", () => {
     const fakeUow = {} as UnitOfWork;
 
