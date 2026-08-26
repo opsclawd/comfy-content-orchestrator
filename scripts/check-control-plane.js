@@ -29,7 +29,8 @@ export const REQUIRED_COMPOSE_VARIABLES = Object.freeze([
   "S3_SIGNING_ENDPOINT",
   "CONTROL_API_HOST",
   "CONTROL_API_URL",
-  "CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES"
+  "CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES",
+  "STORAGE_TELEMETRY_PATH"
 ]);
 
 export function isWildcardBinding(hostIp) {
@@ -88,6 +89,34 @@ function normalizePortEntry(portEntry) {
   }
 
   return { target: 0, published: undefined, host_ip: undefined, protocol: "tcp" };
+}
+
+function normalizeVolumeEntry(volumeEntry) {
+  if (typeof volumeEntry === "object" && volumeEntry !== null) {
+    return {
+      type: volumeEntry.type || "volume",
+      source: volumeEntry.source,
+      target: volumeEntry.target,
+      read_only: volumeEntry.read_only === true || volumeEntry.mode === "ro"
+    };
+  }
+
+  if (typeof volumeEntry === "string") {
+    const parts = volumeEntry.split(":");
+    if (parts.length >= 2) {
+      const source = parts[0];
+      const target = parts[1];
+      const mode = parts[2];
+      return {
+        type: "volume",
+        source,
+        target,
+        read_only: mode === "ro"
+      };
+    }
+  }
+
+  return { type: "volume", source: undefined, target: undefined, read_only: false };
 }
 
 export function validateControlPlaneModel(model, options = {}) {
@@ -281,6 +310,44 @@ export function validateControlPlaneModel(model, options = {}) {
         );
       }
     }
+  }
+
+  // 7. Control API storage telemetry observation volume mount
+  let telemetryPath;
+  if (controlApi.environment) {
+    if (Array.isArray(controlApi.environment)) {
+      for (const entry of controlApi.environment) {
+        if (typeof entry === "string" && entry.startsWith("STORAGE_TELEMETRY_PATH=")) {
+          telemetryPath = entry.slice("STORAGE_TELEMETRY_PATH=".length);
+          break;
+        }
+      }
+    } else if (typeof controlApi.environment === "object") {
+      telemetryPath = controlApi.environment.STORAGE_TELEMETRY_PATH;
+    }
+  }
+
+  if (!telemetryPath || String(telemetryPath).trim() === "") {
+    throw new Error("control-api service must configure STORAGE_TELEMETRY_PATH in its environment");
+  }
+
+  const controlApiVolumes = (controlApi.volumes || []).map(normalizeVolumeEntry);
+  const minioDataMount = controlApiVolumes.find((v) => v.source === "minio_data");
+
+  if (!minioDataMount) {
+    throw new Error(
+      "control-api service missing required 'minio_data' volume mount for storage telemetry"
+    );
+  }
+
+  if (minioDataMount.target !== telemetryPath) {
+    throw new Error(
+      `control-api storage telemetry path '${telemetryPath}' does not match minio_data volume mount target '${minioDataMount.target}'`
+    );
+  }
+
+  if (!minioDataMount.read_only) {
+    throw new Error("control-api minio_data volume mount must be read-only");
   }
 
   return true;

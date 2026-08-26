@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   parseReviewerIdentityConfig,
   TailscaleReviewerIdentityResolver,
@@ -26,11 +27,16 @@ export interface ControlApiHttpConfig {
   readonly port: number;
 }
 
+export interface ControlApiStorageTelemetryConfig {
+  readonly path: string;
+}
+
 export interface ControlApiRuntimeConfig {
   readonly database: ControlApiDatabaseConfig;
   readonly s3: ControlApiS3Config;
   readonly http: ControlApiHttpConfig;
   readonly reviewerIdentity: TailscaleReviewerIdentityResolverConfig;
+  readonly storageTelemetry: ControlApiStorageTelemetryConfig;
 }
 
 export class ControlApiConfigError extends Error {
@@ -83,6 +89,16 @@ function parseRequiredString(val: unknown, varName: string): string {
     throw new ControlApiConfigError(`Missing or empty required environment variable: ${varName}`);
   }
   return val.trim();
+}
+
+function parseStorageTelemetryPath(val: unknown, varName: string): string {
+  const raw = parseRequiredString(val, varName);
+  if (!path.isAbsolute(raw)) {
+    throw new ControlApiConfigError(
+      `Invalid storage telemetry path in variable: ${varName} (must be an absolute path)`
+    );
+  }
+  return raw;
 }
 
 function parsePort(val: unknown, varName: string): number {
@@ -241,6 +257,12 @@ export function parseControlApiRuntimeConfig(
     );
   }
 
+  // 7. Validate Storage Telemetry Path
+  const storageTelemetryPath = parseStorageTelemetryPath(
+    env.STORAGE_TELEMETRY_PATH,
+    "STORAGE_TELEMETRY_PATH"
+  );
+
   return {
     database: {
       url: databaseUrl
@@ -261,6 +283,9 @@ export function parseControlApiRuntimeConfig(
       host,
       port
     },
-    reviewerIdentity
+    reviewerIdentity,
+    storageTelemetry: {
+      path: storageTelemetryPath
+    }
   };
 }

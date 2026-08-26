@@ -39,7 +39,7 @@ describe("InMemoryStorageMetricsRegistry", () => {
     expect(metrics.measuredAt).toBe("2026-08-19T12:00:00.000Z");
   });
 
-  it("formats Prometheus metrics according to PRD §2.3 exact names", () => {
+  it("formats neutral Prometheus metric names without a branded prefix", () => {
     const registry = new InMemoryStorageMetricsRegistry();
     const snapshot: StorageTelemetrySnapshot = {
       totalBytes: 1_000_000_000,
@@ -55,11 +55,14 @@ describe("InMemoryStorageMetricsRegistry", () => {
     registry.recordTelemetry(snapshot, "warning");
     const output = registry.formatPrometheusMetrics();
 
-    expect(output).toContain('godzspeed_object_storage_bytes{bucket="godzspeed-review"} 600000000');
-    expect(output).toContain('godzspeed_object_storage_bytes{bucket="godzspeed-temp"} 100000000');
-    expect(output).toContain("godzspeed_storage_free_bytes 300000000");
-    expect(output).toContain(
-      `godzspeed_storage_watermark_state ${WATERMARK_STATE_NUMERIC_VALUES.warning}`
+    expect(output).toContain('object_storage_bytes{bucket="godzspeed-review"} 600000000');
+    expect(output).toContain('object_storage_bytes{bucket="godzspeed-temp"} 100000000');
+    expect(output).toContain("storage_free_bytes 300000000");
+    expect(output).toContain(`storage_watermark_state ${WATERMARK_STATE_NUMERIC_VALUES.warning}`);
+    expect(output.indexOf('bucket="godzspeed-review"')).toBeLessThan(
+      output.indexOf('bucket="godzspeed-temp"')
     );
+    expect(output.endsWith("\n")).toBe(true);
+    expect(output).not.toContain("godzspeed_");
   });
 });

@@ -9,7 +9,8 @@ describe("runtime-config", () => {
     AWS_ACCESS_KEY_ID: "app-s3-key",
     AWS_SECRET_ACCESS_KEY: "s3cr3t_s3_key",
     CONTROL_API_HOST: "100.64.0.1",
-    CONTROL_API_PORT: "3000"
+    CONTROL_API_PORT: "3000",
+    STORAGE_TELEMETRY_PATH: "/var/lib/cco/storage-observation"
   };
 
   it("rejects every missing or blank required variable without exposing secret values", () => {
@@ -20,7 +21,8 @@ describe("runtime-config", () => {
       "AWS_ACCESS_KEY_ID",
       "AWS_SECRET_ACCESS_KEY",
       "CONTROL_API_HOST",
-      "CONTROL_API_PORT"
+      "CONTROL_API_PORT",
+      "STORAGE_TELEMETRY_PATH"
     ] as const;
 
     const secretValues = ["s3cr3t_db_pass", "s3cr3t_s3_key"];
@@ -172,6 +174,62 @@ describe("runtime-config", () => {
     expect(config.reviewerIdentity).toEqual({
       trustedProxyAddresses: []
     });
+    expect(config.storageTelemetry.path).toBe("/var/lib/cco/storage-observation");
+  });
+
+  it("requires STORAGE_TELEMETRY_PATH without exposing other configuration values", () => {
+    const secretValues = ["s3cr3t_db_pass", "s3cr3t_s3_key"];
+
+    // Missing (omitted)
+    const envMissing = { ...validEnv };
+    delete envMissing.STORAGE_TELEMETRY_PATH;
+
+    expect(() => parseControlApiRuntimeConfig(envMissing)).toThrowError(/STORAGE_TELEMETRY_PATH/);
+
+    try {
+      parseControlApiRuntimeConfig(envMissing);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      for (const secret of secretValues) {
+        expect(msg).not.toContain(secret);
+      }
+    }
+
+    // Blank (empty string, whitespace)
+    for (const blankValue of ["", "   ", "\t\n"]) {
+      const envBlank = { ...validEnv, STORAGE_TELEMETRY_PATH: blankValue };
+
+      expect(() => parseControlApiRuntimeConfig(envBlank)).toThrowError(/STORAGE_TELEMETRY_PATH/);
+
+      try {
+        parseControlApiRuntimeConfig(envBlank);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        for (const secret of secretValues) {
+          expect(msg).not.toContain(secret);
+        }
+      }
+    }
+  });
+
+  it("rejects a relative storage telemetry path", () => {
+    const relativePaths = ["data", "./data", "../data", "relative/path"];
+    for (const relPath of relativePaths) {
+      expect(() =>
+        parseControlApiRuntimeConfig({
+          ...validEnv,
+          STORAGE_TELEMETRY_PATH: relPath
+        })
+      ).toThrowError(/STORAGE_TELEMETRY_PATH/);
+    }
+  });
+
+  it("parses an absolute storage telemetry path", () => {
+    const config = parseControlApiRuntimeConfig({
+      ...validEnv,
+      STORAGE_TELEMETRY_PATH: "/var/lib/cco/storage-observation"
+    });
+    expect(config.storageTelemetry.path).toBe("/var/lib/cco/storage-observation");
   });
 
   it("supports overrides for optional S3 and HTTP fields and aliases", () => {
