@@ -1,0 +1,40 @@
+# Git metadata
+.git
+.githooks
+.gitignore
+.dockerignore
+
+# Dependencies and build outputs
+node_modules
+**/node_modules
+dist
+**/dist
+.next
+**/.next
+coverage
+**/coverage
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+# Local environment and scratch paths
+.env
+.env.*
+.ai-runs
+.ai-worktrees
+.ai-tmp
+ai
+validate
+*.patch
+*-diff.txt
+diff.txt
+
+# Forbidden physical hardware evidence paths
+certification
+baseline
+config/render-profiles
+
+# Documentation and markdown artifacts
+docs
+*.md
+**/*.md
+*.log
