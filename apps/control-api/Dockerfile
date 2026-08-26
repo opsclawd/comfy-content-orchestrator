@@ -30,12 +30,12 @@ RUN pnpm --filter control-api... build
 # Deploy isolated production runtime closure
 RUN pnpm --filter control-api --prod deploy /app/pruned
 
-# Purge any remaining development source trees, test files, and build info from runtime closure
-RUN find /app/pruned -type d -name "src" -exec rm -rf {} + 2>/dev/null || true
-RUN find /app/pruned -type f -name "*.ts" ! -name "*.d.ts" -delete 2>/dev/null || true
+# Purge any remaining development source trees, test files, and build info from runtime closure (excluding third-party node_modules)
+RUN find /app/pruned -not -path "*/node_modules/*" -type d -name "src" -exec rm -rf {} + 2>/dev/null || true
+RUN find /app/pruned -not -path "*/node_modules/*" -type f -name "*.ts" ! -name "*.d.ts" -delete 2>/dev/null || true
 RUN find /app/pruned -type f -name "*.tsbuildinfo" -delete 2>/dev/null || true
-RUN find /app/pruned -type f -name "*.test.js*" -delete 2>/dev/null || true
-RUN find /app/pruned -type f -name "*.test.d.ts*" -delete 2>/dev/null || true
+RUN find /app/pruned -not -path "*/node_modules/*" -type f -name "*.test.js*" -delete 2>/dev/null || true
+RUN find /app/pruned -not -path "*/node_modules/*" -type f -name "*.test.d.ts*" -delete 2>/dev/null || true
 
 # Stage 2: Runtime stage
 FROM node:24-alpine AS runner

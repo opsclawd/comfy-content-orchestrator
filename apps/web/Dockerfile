@@ -27,19 +27,18 @@ COPY apps/web/ ./apps/web/
 # Ensure public directory exists for deterministic copying
 RUN mkdir -p /app/apps/web/public
 
-# Build Next.js application in standalone mode
+# Build Next.js application and its workspace dependency closure in standalone mode
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN pnpm --filter @cco/shared --filter @cco/domain --filter @cco/contracts build
-RUN pnpm --filter web build
+RUN pnpm --filter web... build
 
-# Purge dev dependencies, compiler tools, test files, and source trees from standalone output
+# Purge dev dependencies, compiler tools, test files, and source trees from standalone output (excluding third-party node_modules)
 RUN rm -rf /app/apps/web/.next/standalone/node_modules/.pnpm/typescript* /app/apps/web/.next/standalone/node_modules/typescript 2>/dev/null || true
 RUN rm -rf /app/apps/web/.next/standalone/node_modules/.pnpm/vitest* /app/apps/web/.next/standalone/node_modules/vitest 2>/dev/null || true
-RUN find /app/apps/web/.next/standalone -type d -name "src" -exec rm -rf {} + 2>/dev/null || true
-RUN find /app/apps/web/.next/standalone -type f -name "*.ts" ! -name "*.d.ts" -delete 2>/dev/null || true
+RUN find /app/apps/web/.next/standalone -not -path "*/node_modules/*" -type d -name "src" -exec rm -rf {} + 2>/dev/null || true
+RUN find /app/apps/web/.next/standalone -not -path "*/node_modules/*" -type f -name "*.ts" ! -name "*.d.ts" -delete 2>/dev/null || true
 RUN find /app/apps/web/.next/standalone -type f -name "*.tsbuildinfo" -delete 2>/dev/null || true
-RUN find /app/apps/web/.next/standalone -type f -name "*.test.js*" -delete 2>/dev/null || true
-RUN find /app/apps/web/.next/standalone -type f -name "*.test.d.ts*" -delete 2>/dev/null || true
+RUN find /app/apps/web/.next/standalone -not -path "*/node_modules/*" -type f -name "*.test.js*" -delete 2>/dev/null || true
+RUN find /app/apps/web/.next/standalone -not -path "*/node_modules/*" -type f -name "*.test.d.ts*" -delete 2>/dev/null || true
 
 # Stage 2: Runtime stage
 FROM node:24-alpine AS runner

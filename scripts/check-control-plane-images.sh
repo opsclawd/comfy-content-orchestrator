@@ -62,30 +62,41 @@ echo "======================================================================"
 # ------------------------------------------------------------------------------
 echo "==> TEST: guarantees trap-based cleanup of temporary inspection containers and images"
 
-# Verify trap handler by testing cleanup logic in an isolated subshell
-(
-  TEST_TAG="cco-trap-test-${TAG_SUFFIX}"
-  TEST_CONT="cco-trap-test-c-${TAG_SUFFIX}"
-  
-  # Register temporary subshell trap
-  subshell_cleanup() {
-    docker rm -f "$TEST_CONT" >/dev/null 2>&1 || true
-  }
-  trap subshell_cleanup EXIT
-  
-  # Create a dummy container
-  docker create --name "$TEST_CONT" alpine:latest sleep 10 >/dev/null 2>&1 || \
-    docker create --name "$TEST_CONT" node:24-alpine sleep 10 >/dev/null 2>&1
-  
-  # Trigger subshell exit which should invoke subshell_cleanup
-  exit 0
-)
-
-# Assert that TEST_CONT was cleaned up by the trap
+# Verify that the script's actual cleanup handler cleans up containers, images, and temp directories
 TRAP_TEST_CONT="cco-trap-test-c-${TAG_SUFFIX}"
+TRAP_TEST_IMG="cco-trap-test-i-${TAG_SUFFIX}"
+TRAP_TEST_DIR=$(mktemp -d "${TMPDIR:-/tmp}/cco-trap-test-XXXXXX")
+
+(
+  # Register the script's actual cleanup handler on subshell exit
+  trap cleanup EXIT
+  TEMP_CONTAINERS+=("$TRAP_TEST_CONT")
+  TEMP_IMAGES+=("$TRAP_TEST_IMG")
+  TEMP_DIRS+=("$TRAP_TEST_DIR")
+
+  docker create --name "$TRAP_TEST_CONT" node:24-alpine sleep 10 >/dev/null 2>&1
+  docker tag node:24-alpine "$TRAP_TEST_IMG" >/dev/null 2>&1
+
+  # Subshell exits, triggering the script's actual cleanup() handler
+  exit 0
+) >/dev/null 2>&1
+
+# Assert that TRAP_TEST_CONT, TRAP_TEST_IMG, and TRAP_TEST_DIR were cleaned up by cleanup()
 if docker inspect "$TRAP_TEST_CONT" >/dev/null 2>&1; then
   echo "FAIL: Trap did not clean up temporary container $TRAP_TEST_CONT"
   docker rm -f "$TRAP_TEST_CONT" >/dev/null 2>&1 || true
+  exit 1
+fi
+
+if docker inspect "$TRAP_TEST_IMG" >/dev/null 2>&1; then
+  echo "FAIL: Trap did not clean up temporary image $TRAP_TEST_IMG"
+  docker rmi -f "$TRAP_TEST_IMG" >/dev/null 2>&1 || true
+  exit 1
+fi
+
+if [ -d "$TRAP_TEST_DIR" ]; then
+  echo "FAIL: Trap did not clean up temporary directory $TRAP_TEST_DIR"
+  rm -rf "$TRAP_TEST_DIR" >/dev/null 2>&1 || true
   exit 1
 fi
 
@@ -189,17 +200,17 @@ for IMG in "$CONTROL_API_IMG" "$WEB_IMG"; do
     exit 1
   fi
 
-  # Check absence of source trees (src directories)
-  SRC_DIRS=$(docker run --rm "$IMG" sh -c "find /app -type d -name 'src' 2>/dev/null" || true)
+  # Check absence of source trees (src directories) outside node_modules
+  SRC_DIRS=$(docker run --rm "$IMG" sh -c "find /app -not -path '*/node_modules/*' -type d -name 'src' 2>/dev/null" || true)
   if [ -n "$SRC_DIRS" ]; then
-    echo "FAIL: Found src directory in $IMG runtime: $SRC_DIRS"
+    echo "FAIL: Found src directory in $IMG runtime outside node_modules: $SRC_DIRS"
     exit 1
   fi
 
-  # Check absence of uncompiled .ts source files (excluding .d.ts if any)
-  TS_FILES=$(docker run --rm "$IMG" sh -c "find /app -type f -name '*.ts' ! -name '*.d.ts' 2>/dev/null" || true)
+  # Check absence of uncompiled .ts source files (excluding .d.ts if any) outside node_modules
+  TS_FILES=$(docker run --rm "$IMG" sh -c "find /app -not -path '*/node_modules/*' -type f -name '*.ts' ! -name '*.d.ts' 2>/dev/null" || true)
   if [ -n "$TS_FILES" ]; then
-    echo "FAIL: Found uncompiled .ts files in $IMG runtime: $TS_FILES"
+    echo "FAIL: Found uncompiled .ts files in $IMG runtime outside node_modules: $TS_FILES"
     exit 1
   fi
 
@@ -286,16 +297,33 @@ docker run --rm "$WEB_IMG" sh -c "[ -d /app/apps/web/public ] || [ -d /app/publi
   exit 1
 }
 
-# Test that Review Hub standalone entrypoint loads without module errors
-WEB_LOAD_OUTPUT=$(docker run --rm "$WEB_IMG" node -e "
-  const fs = require('fs');
-  const serverPath = fs.existsSync('/app/apps/web/server.js') ? '/app/apps/web/server.js' : '/app/server.js';
-  console.log('Standalone server entrypoint exists at:', serverPath);
-" 2>&1 || true)
-if echo "$WEB_LOAD_OUTPUT" | grep -q -E "MODULE_NOT_FOUND|Cannot find module|SyntaxError"; then
-  echo "FAIL: Review Hub standalone check failed: $WEB_LOAD_OUTPUT"
+# Test that Review Hub container executes CMD and serves HTTP traffic without immediate startup crashes
+WEB_TEST_CONT="cco-web-test-${TAG_SUFFIX}"
+TEMP_CONTAINERS+=("$WEB_TEST_CONT")
+docker run -d --name "$WEB_TEST_CONT" "$WEB_IMG" >/dev/null
+
+READY=false
+for _ in {1..20}; do
+  if ! docker ps -q --no-trunc | grep -q "$(docker inspect --format '{{.Id}}' "$WEB_TEST_CONT" 2>/dev/null)"; then
+    WEB_LOGS=$(docker logs "$WEB_TEST_CONT" 2>&1 || true)
+    echo "FAIL: Review Hub container crashed immediately on startup: $WEB_LOGS"
+    exit 1
+  fi
+
+  if docker exec "$WEB_TEST_CONT" wget -q -O /dev/null http://127.0.0.1:3000/ 2>/dev/null; then
+    READY=true
+    break
+  fi
+  sleep 0.5
+done
+
+if [ "$READY" != "true" ]; then
+  WEB_LOGS=$(docker logs "$WEB_TEST_CONT" 2>&1 || true)
+  echo "FAIL: Review Hub container failed to start and respond within timeout: $WEB_LOGS"
   exit 1
 fi
+
+docker rm -f "$WEB_TEST_CONT" >/dev/null 2>&1 || true
 
 echo "  PASS: packages complete standalone and workspace runtime closures"
 
