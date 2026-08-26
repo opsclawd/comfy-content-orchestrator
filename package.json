@@ -22,6 +22,7 @@
     "typecheck": "tsc --build --force",
     "certify": "pnpm --filter render-worker certify",
     "certify:flux": "pnpm --filter render-worker certify:flux",
+    "check:control-plane-images": "bash scripts/check-control-plane-images.sh",
     "check:hooks": "node scripts/check-hooks.js",
     "postinstall": "node scripts/check-hooks.js || true"
   },
