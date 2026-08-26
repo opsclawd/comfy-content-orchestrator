@@ -7,6 +7,7 @@ import {
 import { handleReviewError } from "./errors.js";
 import { reviewReadRoutes } from "./routes/review-read-routes.js";
 import { reviewCommandRoutes } from "./routes/review-command-routes.js";
+import { metricsRoutes } from "./routes/metrics-routes.js";
 import type { ControlApiAppOptions } from "./types.js";
 import {
   TailscaleReviewerIdentityResolver,
@@ -71,6 +72,15 @@ export function createControlApiApp(
     container,
     appOptions: effectiveOptions
   });
+
+  if (
+    container.dependencies.storageTelemetry !== undefined &&
+    container.dependencies.storageMetricsRegistry !== undefined
+  ) {
+    app.register(metricsRoutes, {
+      container
+    });
+  }
 
   return app;
 }

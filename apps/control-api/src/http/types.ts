@@ -5,6 +5,8 @@ import {
   type RenderEnginePort,
   type ReviewMediaDeliveryPort,
   type SceneReviewQueries,
+  type StorageMetricsRegistryPort,
+  type StorageTelemetryPort,
   type UnitOfWork
 } from "@cco/application";
 
@@ -13,6 +15,8 @@ export interface ControlApiDependencies {
   readonly renderEngine?: RenderEnginePort;
   readonly sceneReviewQueries?: SceneReviewQueries;
   readonly reviewMediaDelivery?: ReviewMediaDeliveryPort;
+  readonly storageTelemetry?: StorageTelemetryPort;
+  readonly storageMetricsRegistry?: StorageMetricsRegistryPort;
 }
 
 export interface ControlApiUseCases {
