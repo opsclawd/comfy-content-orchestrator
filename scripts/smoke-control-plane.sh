@@ -243,34 +243,15 @@ echo "  PASS: waits for health rather than fixed sleeps"
 
 # ------------------------------------------------------------------------------
 # Build / Ensure Required Application Images
-#
-# DOCKER_BUILD_CACHE_FROM / DOCKER_BUILD_CACHE_TO are unset for local runs, so
-# this is exactly `docker build ...` unchanged. CI sets both to BuildKit's
-# local-cache export/import syntax, routing through `docker buildx build
-# --load` instead so successive CI runs reuse layers via actions/cache rather
-# than rebuilding cold every time.
 # ------------------------------------------------------------------------------
-docker_build() {
-  local dockerfile="$1"
-  local tag="$2"
-  if [ -n "${DOCKER_BUILD_CACHE_FROM:-}" ] && [ -n "${DOCKER_BUILD_CACHE_TO:-}" ]; then
-    docker buildx build --load \
-      --cache-from "$DOCKER_BUILD_CACHE_FROM" \
-      --cache-to "$DOCKER_BUILD_CACHE_TO" \
-      -f "$dockerfile" -t "$tag" .
-  else
-    docker build -f "$dockerfile" -t "$tag" .
-  fi
-}
-
 if ! docker image inspect cco-control-api:latest >/dev/null 2>&1; then
   echo "==> Building Control API image: cco-control-api:latest..."
-  docker_build apps/control-api/Dockerfile cco-control-api:latest
+  docker build -f apps/control-api/Dockerfile -t cco-control-api:latest .
 fi
 
 if ! docker image inspect cco-web:latest >/dev/null 2>&1; then
   echo "==> Building Review Hub image: cco-web:latest..."
-  docker_build apps/web/Dockerfile cco-web:latest
+  docker build -f apps/web/Dockerfile -t cco-web:latest .
 fi
 
 # ------------------------------------------------------------------------------
