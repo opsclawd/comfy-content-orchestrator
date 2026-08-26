@@ -31,15 +31,43 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      # /tmp/.buildx-cache is what actions/cache persists across runs;
+      # /tmp/.buildx-cache-new is what this run's builds actually write to.
+      # BuildKit's local cache exporter never evicts entries on its own, so
+      # building straight into the persisted directory would grow it
+      # unbounded across runs — writing to a fresh "-new" dir and moving it
+      # into place only after both builds succeed keeps it bounded to
+      # whatever this run's own build graph actually needs.
       - name: Cache Docker layers
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.cache/buildkit
-            /tmp/.buildx-cache
+          path: /tmp/.buildx-cache
           key: ${{ runner.os }}-docker-${{ hashFiles('apps/control-api/Dockerfile', 'apps/web/Dockerfile', 'pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-docker-
 
-      - run: pnpm check:control-plane-images
-      - run: pnpm smoke:control-plane
+      - name: check:control-plane-images
+        env:
+          DOCKER_BUILD_CACHE_FROM: type=local,src=/tmp/.buildx-cache
+          DOCKER_BUILD_CACHE_TO: type=local,dest=/tmp/.buildx-cache-new,mode=max
+        run: |
+          START=$(date +%s)
+          pnpm check:control-plane-images
+          echo "check:control-plane-images duration: $(( $(date +%s) - START ))s" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: smoke:control-plane
+        env:
+          DOCKER_BUILD_CACHE_FROM: type=local,src=/tmp/.buildx-cache
+          DOCKER_BUILD_CACHE_TO: type=local,dest=/tmp/.buildx-cache-new,mode=max
+        run: |
+          START=$(date +%s)
+          pnpm smoke:control-plane
+          echo "smoke:control-plane duration: $(( $(date +%s) - START ))s" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Move new Docker cache into place
+        if: always()
+        run: |
+          rm -rf /tmp/.buildx-cache
+          if [ -d /tmp/.buildx-cache-new ]; then
+            mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+          fi

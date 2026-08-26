@@ -118,20 +118,39 @@ echo "  PASS: guarantees trap-based cleanup of temporary inspection containers a
 
 # ------------------------------------------------------------------------------
 # Build images from repository root context
+#
+# DOCKER_BUILD_CACHE_FROM / DOCKER_BUILD_CACHE_TO are unset for local runs, so
+# this is exactly `docker build ...` unchanged. CI sets both to BuildKit's
+# local-cache export/import syntax (e.g. type=local,src=/tmp/.buildx-cache),
+# routing through `docker buildx build --load` instead so successive CI runs
+# reuse layers via actions/cache rather than rebuilding cold every time.
 # ------------------------------------------------------------------------------
+docker_build() {
+  local dockerfile="$1"
+  local tag="$2"
+  if [ -n "${DOCKER_BUILD_CACHE_FROM:-}" ] && [ -n "${DOCKER_BUILD_CACHE_TO:-}" ]; then
+    docker buildx build --load \
+      --cache-from "$DOCKER_BUILD_CACHE_FROM" \
+      --cache-to "$DOCKER_BUILD_CACHE_TO" \
+      -f "$dockerfile" -t "$tag" .
+  else
+    docker build -f "$dockerfile" -t "$tag" .
+  fi
+}
+
 echo "==> Building Control API image: $CONTROL_API_IMG from apps/control-api/Dockerfile"
 if [ ! -f "apps/control-api/Dockerfile" ]; then
   echo "FAIL: apps/control-api/Dockerfile does not exist"
   exit 1
 fi
-docker build -f apps/control-api/Dockerfile -t "$CONTROL_API_IMG" .
+docker_build apps/control-api/Dockerfile "$CONTROL_API_IMG"
 
 echo "==> Building Review Hub image: $WEB_IMG from apps/web/Dockerfile"
 if [ ! -f "apps/web/Dockerfile" ]; then
   echo "FAIL: apps/web/Dockerfile does not exist"
   exit 1
 fi
-docker build -f apps/web/Dockerfile -t "$WEB_IMG" .
+docker_build apps/web/Dockerfile "$WEB_IMG"
 
 # ------------------------------------------------------------------------------
 # Invariant 1: builds reproducible Node 24 images with unprivileged non-root runtime users
