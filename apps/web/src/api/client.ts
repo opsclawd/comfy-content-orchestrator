@@ -13,6 +13,7 @@ import {
   type SceneReviewDetailReadModel
 } from "@cco/contracts";
 import type { z } from "zod";
+import { resolveControlApiBaseUrl } from "./runtime-config";
 
 export type {
   CampaignReviewSummary,
@@ -133,7 +134,7 @@ async function requestJson<T>(
 }
 
 function resolveBaseUrl(baseUrl?: string): string {
-  return (baseUrl ?? process.env.CONTROL_API_URL ?? "http://localhost:3000").replace(/\/+$/, "");
+  return resolveControlApiBaseUrl(baseUrl);
 }
 
 export function createApiClient(config?: ApiClientConfig): ApiClient {
