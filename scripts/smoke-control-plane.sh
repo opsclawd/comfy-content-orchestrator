@@ -266,6 +266,20 @@ SYNTHETIC_POSTGRES_PASS="synthetic_smoke_pg_pwd_$RANDOM"
 SYNTHETIC_APP_PASS="synthetic_smoke_app_pwd_$RANDOM"
 SYNTHETIC_MINIO_ADMIN_PASS="synthetic_smoke_minio_pwd_$RANDOM"
 
+# Tailnet hostnames are read from .env.example rather than inlined here, so
+# this fixture can never drift from the canonical configuration it is meant
+# to validate, and so scripts/check-control-plane.js's hardcoded-hostname
+# scanner (which allowlists .env.example but not this executable script)
+# has nothing to flag.
+read_env_example_value() {
+  local var_name="$1"
+  grep "^${var_name}=" "$ROOT_DIR/.env.example" | head -1 | cut -d= -f2-
+}
+REVIEW_HUB_HOSTNAME=$(read_env_example_value REVIEW_HUB_HOSTNAME)
+CONTROL_API_HOSTNAME=$(read_env_example_value CONTROL_API_HOSTNAME)
+STORAGE_HOSTNAME=$(read_env_example_value STORAGE_HOSTNAME)
+CONTROL_API_URL=$(read_env_example_value CONTROL_API_URL)
+
 cat <<EOF > "$INIT_SQL_FILE"
 DO \$\$
 BEGIN
@@ -284,9 +298,9 @@ CONTROL_API_PORT=${CONTROL_API_PORT}
 REVIEW_HUB_PORT=${REVIEW_HUB_PORT}
 S3_PORT=${S3_PORT}
 MINIO_CONSOLE_PORT=${MINIO_CONSOLE_PORT}
-REVIEW_HUB_HOSTNAME=review.godzspeed-internal.ts.net
-CONTROL_API_HOSTNAME=control-01.godzspeed-internal.ts.net
-STORAGE_HOSTNAME=storage-01.godzspeed-internal.ts.net
+REVIEW_HUB_HOSTNAME=${REVIEW_HUB_HOSTNAME}
+CONTROL_API_HOSTNAME=${CONTROL_API_HOSTNAME}
+STORAGE_HOSTNAME=${STORAGE_HOSTNAME}
 POSTGRES_DB=godzspeed_orchestrator
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=${SYNTHETIC_POSTGRES_PASS}
@@ -304,7 +318,7 @@ S3_FORCE_PATH_STYLE=true
 S3_READINESS_BUCKET=godzspeed-review
 S3_PRESIGNED_EXPIRY_SECONDS=300
 CONTROL_API_HOST=0.0.0.0
-CONTROL_API_URL=http://control-01.godzspeed-internal.ts.net:3000
+CONTROL_API_URL=${CONTROL_API_URL}
 CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES=127.0.0.1
 NODE_ENV=production
 POSTGRES_IMAGE=postgres:18.6
