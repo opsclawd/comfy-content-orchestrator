@@ -38,6 +38,9 @@ importers:
 
   apps/control-api:
     dependencies:
+      '@aws-sdk/client-s3':
+        specifier: ^3.714.0
+        version: 3.1114.0
       '@cco/application':
         specifier: workspace:*
         version: link:../../packages/application
@@ -56,9 +59,16 @@ importers:
       fastify:
         specifier: ^5.2.0
         version: 5.12.1
+      pg:
+        specifier: ^8.13.1
+        version: 8.23.0
       zod:
         specifier: ^3.24.1
         version: 3.25.76
+    devDependencies:
+      '@types/pg':
+        specifier: ^8.11.10
+        version: 8.21.0
 
   apps/render-worker:
     dependencies:
