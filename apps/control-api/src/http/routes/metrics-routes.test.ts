@@ -188,6 +188,11 @@ describe("Metrics Routes", () => {
       storageMetricsRegistry: registry
     });
 
+    let logErrorSpy: ReturnType<typeof vi.spyOn> | undefined;
+    app.addHook("onRequest", async (req) => {
+      logErrorSpy = vi.spyOn(req.log, "error");
+    });
+
     // Prime registry with an initial successful scrape
     const successResponse = await app.inject({
       method: "GET",
@@ -207,6 +212,10 @@ describe("Metrics Routes", () => {
 
     expect(failureResponse.statusCode).toBe(503);
     expect(formatSpy).not.toHaveBeenCalled();
+    expect(logErrorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("EIO") }),
+      "Failed to collect storage telemetry"
+    );
 
     const body = failureResponse.json();
     expect(body).toEqual({

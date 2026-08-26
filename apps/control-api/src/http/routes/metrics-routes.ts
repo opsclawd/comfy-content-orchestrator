@@ -12,7 +12,7 @@ export const metricsRoutes: FastifyPluginAsync<MetricsRoutesOptions> = async (
 ): Promise<void> => {
   const { container } = opts;
 
-  fastify.get("/metrics", async (_request, reply) => {
+  fastify.get("/metrics", async (request, reply) => {
     const telemetry = container.dependencies.storageTelemetry;
     const registry = container.dependencies.storageMetricsRegistry;
 
@@ -30,7 +30,8 @@ export const metricsRoutes: FastifyPluginAsync<MetricsRoutesOptions> = async (
       const formatted = registry.formatPrometheusMetrics();
 
       return reply.status(200).type("text/plain; version=0.0.4; charset=utf-8").send(formatted);
-    } catch {
+    } catch (error) {
+      request.log.error(error, "Failed to collect storage telemetry");
       return reply.status(503).send({
         code: "STORAGE_TELEMETRY_UNAVAILABLE",
         message: "Storage telemetry is unavailable."
