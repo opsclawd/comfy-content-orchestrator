@@ -163,8 +163,13 @@ export async function runWorkerCli(
     process.once("SIGINT", onSignal);
     process.once("SIGTERM", onSignal);
 
-    await worker.start(abortController.signal);
-    return 0;
+    try {
+      await worker.start(abortController.signal);
+      return 0;
+    } finally {
+      process.removeListener("SIGINT", onSignal);
+      process.removeListener("SIGTERM", onSignal);
+    }
   } catch (err) {
     console.error("Worker execution failed:", err instanceof Error ? err.message : String(err));
     return 1;
