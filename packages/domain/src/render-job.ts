@@ -23,20 +23,20 @@ export const TERMINAL_JOB_STATUSES = ["completed", "failed", "cancelled"] as con
 export type TerminalJobStatus = (typeof TERMINAL_JOB_STATUSES)[number];
 
 export interface RenderJob {
-  readonly id: JobId;
+  readonly jobId: JobId;
   readonly sceneId: SceneId;
-  readonly kind: JobKind;
+  readonly jobKind: JobKind;
   readonly status: JobStatus;
   readonly workflowTemplate: string;
-  readonly injectedPayload: Record<string, unknown>;
-  readonly workerId?: string;
-  readonly leaseToken?: LeaseToken;
-  readonly leaseExpiresAt?: string;
+  readonly injectedPayload: Readonly<Record<string, unknown>>;
+  readonly workerId: string | null;
+  readonly leaseToken: LeaseToken | null;
+  readonly leaseExpiresAt: Date | null;
   readonly retryCount: number;
   readonly maxRetries: number;
-  readonly errorTrace?: string;
-  readonly createdAt: string;
-  readonly updatedAt: string;
+  readonly errorTrace: string | null;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
 }
 
 const PERMITTED_TRANSITIONS: Readonly<Record<JobStatus, ReadonlySet<JobStatus>>> = {
