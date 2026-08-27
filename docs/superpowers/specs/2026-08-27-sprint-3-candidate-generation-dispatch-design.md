@@ -144,7 +144,7 @@ If Sprint 3 issue 1's worker implementation reveals a need for a new field (e.g.
 | `packages/application/src/ports` | (none — all needed ports exist) |
 | `packages/infrastructure/src/postgres` | `PostgresJobQueue.complete()` extended to accept a `candidatePayload` for `candidate` jobs and write the `storyboard_candidates` row in the same transaction. New `/defer` mutation in `PostgresJobQueue` with a `deferred` `JobMutationResult` outcome. |
 | `apps/render-worker/src` | `worker.ts` (new — the polling daemon), `control-api-client.ts` (new — HTTP client for the six routes), `cli/run-worker.ts` (new — entry point), tests under `worker.test.ts` |
-| `apps/control-api/src/http/routes` | `job-routes.ts` modified, **no new routes added**: `complete` accepts the optional `candidatePayload` for `candidate` jobs (validation extended in `completeJobSchema`), `enforceStorageAdmission` called before the write (issue #113), `/defer` route registered. |
+| `apps/control-api/src/http/routes` | Existing `job-routes.ts` modified; no new route file or plugin is added. The file registers the new `/api/jobs/:id/defer` endpoint, extends `complete` to accept `candidatePayload` for `candidate` jobs, and invokes `enforceStorageAdmission` before writes (issue #113). |
 
 This mirrors Sprint 2.5's pattern: the worker daemon is composition-root work that wires existing application-layer seams. The new use case is a single-file addition. The queue-adapter extensions (`/defer`, candidate-row write) are the smallest surface change that closes the gaps surfaced during spec review.
 
