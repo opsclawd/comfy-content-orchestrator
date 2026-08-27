@@ -138,6 +138,36 @@ export const failJobSchema = {
   }
 } as const;
 
+export const deferJobSchema = {
+  params: {
+    type: "object",
+    required: ["jobId"],
+    properties: {
+      jobId: {
+        type: "string",
+        format: "uuid"
+      }
+    },
+    additionalProperties: false
+  },
+  body: {
+    type: "object",
+    required: ["leaseToken", "reason"],
+    properties: {
+      leaseToken: {
+        type: "string",
+        format: "uuid"
+      },
+      reason: {
+        type: "string",
+        minLength: 1,
+        pattern: "\\S"
+      }
+    },
+    additionalProperties: false
+  }
+} as const;
+
 function translateMutationResult(result: JobMutationResult, reply: FastifyReply): FastifyReply {
   switch (result.outcome) {
     case "deferred":
@@ -251,6 +281,18 @@ export const jobRoutes: FastifyPluginAsync<JobRoutesOptions> = async (
       request.params.jobId as JobId,
       request.body.leaseToken as LeaseToken,
       request.body.errorTrace
+    );
+    return translateMutationResult(result, reply);
+  });
+
+  fastify.post<{
+    Params: { jobId: string };
+    Body: { leaseToken: string; reason: string };
+  }>("/api/jobs/:jobId/defer", { schema: deferJobSchema }, async (request, reply) => {
+    const result = await queue.defer(
+      request.params.jobId as JobId,
+      request.body.leaseToken as LeaseToken,
+      request.body.reason
     );
     return translateMutationResult(result, reply);
   });

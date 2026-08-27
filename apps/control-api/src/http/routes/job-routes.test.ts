@@ -65,6 +65,15 @@ const sampleFailedJob: RenderJob = {
   updatedAt: new Date("2026-08-27T08:08:00.000Z")
 };
 
+const sampleDeferredJob: RenderJob = {
+  ...sampleLeasedJob,
+  status: "queued",
+  workerId: null,
+  leaseExpiresAt: null,
+  errorTrace: "Worker requested defer",
+  updatedAt: new Date("2026-08-27T08:09:00.000Z")
+};
+
 const defaultDispatchConfig = {
   leaseDurationMs: 300_000,
   heartbeatIntervalMs: 30_000
@@ -388,6 +397,47 @@ describe("Job Dispatch Routes", () => {
     await app.close();
   });
 
+  it("defer delegates the reason and returns the deferred outcome", async () => {
+    const queue = createFakeJobQueue({
+      defer: vi.fn().mockResolvedValue({ outcome: "deferred", job: sampleDeferredJob })
+    });
+
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    const reason = "Worker needs warm model checkpoint";
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${sampleJobId}/defer`,
+      payload: {
+        leaseToken: sampleLeaseToken,
+        reason
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(queue.defer).toHaveBeenCalledTimes(1);
+    expect(queue.defer).toHaveBeenCalledWith(sampleJobId, sampleLeaseToken, reason);
+    expect(response.json()).toEqual({
+      outcome: "deferred",
+      job: expect.objectContaining({
+        jobId: sampleJobId,
+        status: "queued",
+        workerId: null,
+        errorTrace: "Worker requested defer"
+      })
+    });
+
+    await app.close();
+  });
+
   describe("Shared mutation outcomes", () => {
     const mutationEndpoints = [
       {
@@ -417,6 +467,13 @@ describe("Job Dispatch Routes", () => {
         payload: { leaseToken: sampleLeaseToken, errorTrace: "something failed" },
         mockKey: "fail" as const,
         sampleJob: sampleFailedJob
+      },
+      {
+        name: "defer",
+        path: `/api/jobs/${sampleJobId}/defer`,
+        payload: { leaseToken: sampleLeaseToken, reason: "defer reason" },
+        mockKey: "defer" as const,
+        sampleJob: sampleDeferredJob
       }
     ];
 
@@ -696,6 +753,55 @@ describe("Job Dispatch Routes", () => {
         method: "POST" as const,
         url: `/api/jobs/${sampleJobId}/fail`,
         payload: { leaseToken: sampleLeaseToken, errorTrace: 999 }
+      },
+
+      // Defer: invalid UUID in path
+      {
+        method: "POST" as const,
+        url: "/api/jobs/not-a-uuid/defer",
+        payload: { leaseToken: sampleLeaseToken, reason: "reason" }
+      },
+      // Defer: missing reason
+      {
+        method: "POST" as const,
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: { leaseToken: sampleLeaseToken }
+      },
+      // Defer: empty reason
+      {
+        method: "POST" as const,
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: { leaseToken: sampleLeaseToken, reason: "" }
+      },
+      // Defer: whitespace reason
+      {
+        method: "POST" as const,
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: { leaseToken: sampleLeaseToken, reason: "   \t\n" }
+      },
+      // Defer: non-string reason
+      {
+        method: "POST" as const,
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: { leaseToken: sampleLeaseToken, reason: 999 }
+      },
+      // Defer: missing leaseToken
+      {
+        method: "POST" as const,
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: { reason: "reason" }
+      },
+      // Defer: invalid UUID in leaseToken
+      {
+        method: "POST" as const,
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: { leaseToken: "not-a-uuid", reason: "reason" }
+      },
+      // Defer: extra property
+      {
+        method: "POST" as const,
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: { leaseToken: sampleLeaseToken, reason: "reason", extraProp: 123 }
       }
     ];
 
@@ -732,6 +838,7 @@ describe("Job Dispatch Routes", () => {
     expect(queue.heartbeat).not.toHaveBeenCalled();
     expect(queue.complete).not.toHaveBeenCalled();
     expect(queue.fail).not.toHaveBeenCalled();
+    expect(queue.defer).not.toHaveBeenCalled();
 
     await app.close();
   });
@@ -762,6 +869,11 @@ describe("Job Dispatch Routes", () => {
         method: "POST" as const,
         url: `/api/jobs/${sampleJobId}/fail`,
         payload: { leaseToken: sampleLeaseToken, errorTrace: "err" }
+      },
+      {
+        method: "POST" as const,
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: { leaseToken: sampleLeaseToken, reason: "err" }
       }
     ];
 
