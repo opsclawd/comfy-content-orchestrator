@@ -19,3 +19,4 @@ export * from "./scene-review-queries.js";
 export * from "./review-media-delivery-port.js";
 export * from "./storage-telemetry-port.js";
 export * from "./storage-metrics-registry-port.js";
+export * from "./job-queue-port.js";

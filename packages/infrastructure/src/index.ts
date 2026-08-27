@@ -19,6 +19,8 @@ export { PostgresUnitOfWork } from "./postgres/uow/postgres-unit-of-work.js";
 
 export { PostgresSceneReviewQueries } from "./postgres/queries/postgres-scene-review-queries.js";
 
+export { PostgresJobQueue } from "./postgres/repositories/postgres-job-queue.js";
+
 export {
   ComfyUiRenderEngineAdapter,
   type ComfyUiRenderEngineAdapterOptions

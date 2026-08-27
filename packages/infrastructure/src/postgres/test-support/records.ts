@@ -73,6 +73,8 @@ export interface SceneReferenceAssetRecordInput {
 
 export interface RenderJobRecordInput {
   sceneId: string;
+  jobKind?: string;
+  leaseToken?: string | null;
   workflowTemplate?: string;
   injectedPayload?: Record<string, unknown>;
   status?: string;
@@ -81,6 +83,8 @@ export interface RenderJobRecordInput {
   retryCount?: number;
   maxRetries?: number;
   errorTrace?: string | null;
+  createdAt?: Date | string;
+  updatedAt?: Date | string;
 }
 
 export interface GenerationManifestRecordInput {
@@ -195,10 +199,12 @@ export interface InsertedSceneReferenceAssetRecord {
 export interface InsertedRenderJobRecord {
   job_id: string;
   scene_id: string;
+  job_kind: string;
   workflow_template: string;
   injected_payload: Record<string, unknown>;
   status: string;
   worker_id: string | null;
+  lease_token: string | null;
   lease_expires_at: Date | null;
   retry_count: number;
   max_retries: number;
@@ -564,6 +570,7 @@ export async function insertRenderJobRecord(
   input: RenderJobRecordInput
 ): Promise<InsertedRenderJobRecord> {
   const sceneId = input.sceneId;
+  const jobKind = input.jobKind ?? "production";
   const workflowTemplate = input.workflowTemplate ?? "ltx_25_720p_distilled_v1.json";
   const injectedPayload = input.injectedPayload ?? {
     seed: 42,
@@ -573,36 +580,47 @@ export async function insertRenderJobRecord(
   };
   const status = input.status ?? "queued";
   const workerId = input.workerId !== undefined ? input.workerId : "render-worker-trinidad-01";
+  const leaseToken = input.leaseToken !== undefined ? input.leaseToken : null;
   const leaseExpiresAt = input.leaseExpiresAt !== undefined ? input.leaseExpiresAt : null;
   const retryCount = input.retryCount ?? 0;
   const maxRetries = input.maxRetries ?? 3;
   const errorTrace = input.errorTrace !== undefined ? input.errorTrace : null;
+  const createdAt = input.createdAt !== undefined ? input.createdAt : null;
+  const updatedAt = input.updatedAt !== undefined ? input.updatedAt : null;
 
   const res = await client.query<InsertedRenderJobRecord>(
     `
     INSERT INTO render_jobs (
       scene_id,
+      job_kind,
       workflow_template,
       injected_payload,
       status,
       worker_id,
+      lease_token,
       lease_expires_at,
       retry_count,
       max_retries,
-      error_trace
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      error_trace,
+      created_at,
+      updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12, CURRENT_TIMESTAMP), COALESCE($13, CURRENT_TIMESTAMP))
     RETURNING *
     `,
     [
       sceneId,
+      jobKind,
       workflowTemplate,
       JSON.stringify(injectedPayload),
       status,
       workerId,
+      leaseToken,
       leaseExpiresAt,
       retryCount,
       maxRetries,
-      errorTrace
+      errorTrace,
+      createdAt,
+      updatedAt
     ]
   );
 
