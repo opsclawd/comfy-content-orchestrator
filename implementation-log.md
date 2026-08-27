@@ -64,3 +64,29 @@
 - Formatting: `pnpm format` passed.
 - Control Plane Check: `pnpm check:control-plane` passed (14/14 tests and topology validation passed).
 - Hooks Check: `pnpm check:hooks` passed.
+
+
+# Implementation Log - Task 4: Add worker client admission and defer support
+
+## Summary of Changes
+- Extended `ControlApiClient` interface in [`control-api-client.ts`](file:///home/gary/.openclaw/workspace/comfy-content-orchestrator/.ai-worktrees/issue-113/apps/render-worker/src/control-api-client.ts) with `defer(jobId, leaseToken, reason)` method.
+- Implemented `defer` on `HttpControlApiClient`:
+  - Posts to `POST /api/jobs/${jobId}/defer` with `{ leaseToken, reason }` body.
+  - Preserves mutation outcome conventions: 200 returns result, 409 returns `{ outcome: "superseded" }`, 404 returns `{ outcome: "not_found" }`.
+- Added 507 storage admission decoding in `complete` method:
+  - Validates `code === "STORAGE_ADMISSION_DENIED"` and complete context fields.
+  - Reconstructs `StorageAdmissionError` with all five context fields.
+  - Preserves server diagnostic message after construction.
+  - Rejects malformed 507 payloads with `ControlApiClientError`.
+- Updated `FakeControlApiClient` in [`worker.test.ts`](file:///home/gary/.openclaw/workspace/comfy-content-orchestrator/.ai-worktrees/issue-113/apps/render-worker/src/worker.test.ts) to implement full `ControlApiClient` contract including `defer`.
+- Added behavioral invariant tests in [`control-api-client.test.ts`](file:///home/gary/.openclaw/workspace/comfy-content-orchestrator/.ai-worktrees/issue-113/apps/render-worker/src/control-api-client.test.ts):
+  - `defer posts the current token and reason to the job defer route`
+  - `defer preserves already-applied and fencing outcomes`
+  - `completion 507 reconstructs StorageAdmissionError context`
+  - `malformed 507 is not treated as typed admission refusal`
+  - `non-507 completion failures retain existing behavior`
+
+## Verification
+- Focused Client Tests: `pnpm vitest run apps/render-worker/src/control-api-client.test.ts -t "defer|507|admission"` passed (5/5 tests).
+- Worker Structural Fake Tests: `pnpm vitest run apps/render-worker/src/worker.test.ts` passed (1/1 test).
+- Typecheck: `pnpm --filter render-worker typecheck` passed (0 errors).
