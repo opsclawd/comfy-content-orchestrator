@@ -266,20 +266,6 @@ SYNTHETIC_POSTGRES_PASS="synthetic_smoke_pg_pwd_$RANDOM"
 SYNTHETIC_APP_PASS="synthetic_smoke_app_pwd_$RANDOM"
 SYNTHETIC_MINIO_ADMIN_PASS="synthetic_smoke_minio_pwd_$RANDOM"
 
-# Tailnet hostnames are read from .env.example rather than inlined here, so
-# this fixture can never drift from the canonical configuration it is meant
-# to validate, and so scripts/check-control-plane.js's hardcoded-hostname
-# scanner (which allowlists .env.example but not this executable script)
-# has nothing to flag.
-read_env_example_value() {
-  local var_name="$1"
-  grep "^${var_name}=" "$ROOT_DIR/.env.example" | head -1 | cut -d= -f2-
-}
-REVIEW_HUB_HOSTNAME=$(read_env_example_value REVIEW_HUB_HOSTNAME)
-CONTROL_API_HOSTNAME=$(read_env_example_value CONTROL_API_HOSTNAME)
-STORAGE_HOSTNAME=$(read_env_example_value STORAGE_HOSTNAME)
-CONTROL_API_URL=$(read_env_example_value CONTROL_API_URL)
-
 cat <<EOF > "$INIT_SQL_FILE"
 DO \$\$
 BEGIN
@@ -291,43 +277,62 @@ END
 \$\$;
 EOF
 
-cat <<EOF > "$ENV_FILE"
-TAILNET_IP=127.0.0.1
-OPERATOR_BIND_IP=127.0.0.1
-CONTROL_API_PORT=${CONTROL_API_PORT}
-REVIEW_HUB_PORT=${REVIEW_HUB_PORT}
-S3_PORT=${S3_PORT}
-MINIO_CONSOLE_PORT=${MINIO_CONSOLE_PORT}
-REVIEW_HUB_HOSTNAME=${REVIEW_HUB_HOSTNAME}
-CONTROL_API_HOSTNAME=${CONTROL_API_HOSTNAME}
-STORAGE_HOSTNAME=${STORAGE_HOSTNAME}
-POSTGRES_DB=godzspeed_orchestrator
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=${SYNTHETIC_POSTGRES_PASS}
-DATABASE_MIGRATION_URL=postgresql://postgres:${SYNTHETIC_POSTGRES_PASS}@postgres:5432/godzspeed_orchestrator
-DATABASE_APP_ROLE=godzspeed_app
-DATABASE_APP_PASSWORD=${SYNTHETIC_APP_PASS}
-DATABASE_URL=postgresql://godzspeed_app:${SYNTHETIC_APP_PASS}@postgres:5432/godzspeed_orchestrator
-MINIO_ROOT_USER=synthetic_minio_admin
-MINIO_ROOT_PASSWORD=${SYNTHETIC_MINIO_ADMIN_PASS}
-S3_ACCESS_KEY_ID=synthetic_minio_admin
-S3_SECRET_ACCESS_KEY=${SYNTHETIC_MINIO_ADMIN_PASS}
-S3_STORAGE_ENDPOINT=http://minio:9000
-S3_SIGNING_ENDPOINT=http://127.0.0.1:${S3_PORT}
-S3_REGION=us-east-1
-S3_FORCE_PATH_STYLE=true
-S3_READINESS_BUCKET=godzspeed-review
-S3_PRESIGNED_EXPIRY_SECONDS=300
-CONTROL_API_HOST=0.0.0.0
-CONTROL_API_URL=${CONTROL_API_URL}
-CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES=127.0.0.1
-STORAGE_TELEMETRY_PATH=/var/lib/cco/storage-observation
-NODE_ENV=production
-POSTGRES_IMAGE=postgres:18.6
-MINIO_IMAGE=minio/minio:RELEASE.2024-01-18T22-51-28Z
-CONTROL_API_IMAGE=cco-control-api:latest
-REVIEW_HUB_IMAGE=cco-web:latest
-EOF
+# Environment derivation: .env.example is the single source of truth for all
+# required control plane variables. The smoke harness reads .env.example as base
+# and overrides only the isolated local runtime values it genuinely needs.
+node -e '
+  const fs = require("fs");
+  const envExamplePath = process.argv[1];
+  const overrides = {
+    TAILNET_IP: "127.0.0.1",
+    OPERATOR_BIND_IP: "127.0.0.1",
+    CONTROL_API_PORT: process.argv[2],
+    REVIEW_HUB_PORT: process.argv[3],
+    S3_PORT: process.argv[4],
+    MINIO_CONSOLE_PORT: process.argv[5],
+    POSTGRES_PASSWORD: process.argv[6],
+    DATABASE_MIGRATION_URL: `postgresql://postgres:${process.argv[6]}@postgres:5432/godzspeed_orchestrator`,
+    DATABASE_APP_PASSWORD: process.argv[7],
+    DATABASE_URL: `postgresql://godzspeed_app:${process.argv[7]}@postgres:5432/godzspeed_orchestrator`,
+    MINIO_ROOT_PASSWORD: process.argv[8],
+    S3_ACCESS_KEY_ID: "synthetic_minio_admin",
+    S3_SECRET_ACCESS_KEY: process.argv[8],
+    S3_SIGNING_ENDPOINT: `http://127.0.0.1:${process.argv[4]}`,
+    CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES: "127.0.0.1"
+  };
+
+  const content = fs.readFileSync(envExamplePath, "utf8");
+  const lines = content.split("\n");
+  const seenKeys = new Set();
+
+  const newLines = lines.map((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) return line;
+    const idx = trimmed.indexOf("=");
+    if (idx === -1) return line;
+    const key = trimmed.slice(0, idx).trim();
+    seenKeys.add(key);
+    if (Object.prototype.hasOwnProperty.call(overrides, key)) {
+      return `${key}=${overrides[key]}`;
+    }
+    return line;
+  });
+
+  for (const [key, val] of Object.entries(overrides)) {
+    if (!seenKeys.has(key)) {
+      newLines.push(`${key}=${val}`);
+    }
+  }
+
+  console.log(newLines.join("\n"));
+' "$ROOT_DIR/.env.example" \
+  "$CONTROL_API_PORT" \
+  "$REVIEW_HUB_PORT" \
+  "$S3_PORT" \
+  "$MINIO_CONSOLE_PORT" \
+  "$SYNTHETIC_POSTGRES_PASS" \
+  "$SYNTHETIC_APP_PASS" \
+  "$SYNTHETIC_MINIO_ADMIN_PASS" > "$ENV_FILE"
 
 cat <<EOF > "$OVERRIDE_FILE"
 services:
