@@ -6,6 +6,7 @@ import type { ReviewerIdentityResolver } from "./types.js";
 export interface TailscaleReviewerIdentityResolverConfig {
   readonly trustedProxyAddresses?: readonly string[];
   readonly fallbackIdentity?: string;
+  readonly nodeEnv?: string;
 }
 
 export function normalizeIpAddress(ip: string): string {
@@ -115,6 +116,16 @@ export class TailscaleReviewerIdentityResolver implements ReviewerIdentityResolv
           "enforcement is fully disabled for this deployment (no trusted proxy addresses " +
           "configured); combining both would let any untrusted request be attributed to the " +
           "fallback identity instead of being rejected."
+      );
+    }
+
+    const effectiveNodeEnv = config.nodeEnv ?? process.env.NODE_ENV;
+    if (effectiveNodeEnv === "production" && this.fallbackIdentity !== undefined) {
+      throw new Error(
+        "Invalid reviewer identity configuration: CONTROL_API_REVIEWER_IDENTITY_FALLBACK is " +
+          "forbidden when NODE_ENV=production. A fallback-only configuration silently attributes " +
+          "every request to the fallback identity, so every ReviewEvent would carry a phantom " +
+          "reviewer. Configure CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES instead. See ADR-0002."
       );
     }
   }
