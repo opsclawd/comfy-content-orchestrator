@@ -31,12 +31,18 @@ export interface ControlApiStorageTelemetryConfig {
   readonly path: string;
 }
 
+export interface ControlApiJobDispatchConfig {
+  readonly leaseDurationMs: number;
+  readonly heartbeatIntervalMs: number;
+}
+
 export interface ControlApiRuntimeConfig {
   readonly database: ControlApiDatabaseConfig;
   readonly s3: ControlApiS3Config;
   readonly http: ControlApiHttpConfig;
   readonly reviewerIdentity: TailscaleReviewerIdentityResolverConfig;
   readonly storageTelemetry: ControlApiStorageTelemetryConfig;
+  readonly jobDispatch: ControlApiJobDispatchConfig;
 }
 
 export class ControlApiConfigError extends Error {
@@ -171,6 +177,33 @@ function parseBoolean(val: unknown, varName: string, defaultValue: boolean): boo
   );
 }
 
+function parsePositiveInteger(val: unknown, varName: string, defaultValue: number): number {
+  if (val === undefined || val === null) {
+    return defaultValue;
+  }
+  if (typeof val === "string" && val.trim() === "") {
+    return defaultValue;
+  }
+  if (typeof val !== "string") {
+    throw new ControlApiConfigError(
+      `Invalid integer in variable: ${varName} (must be a positive integer)`
+    );
+  }
+  const trimmed = val.trim();
+  if (!/^[1-9]\d*$/.test(trimmed)) {
+    throw new ControlApiConfigError(
+      `Invalid integer in variable: ${varName} (must be a positive integer)`
+    );
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new ControlApiConfigError(
+      `Invalid integer in variable: ${varName} (must be a positive integer)`
+    );
+  }
+  return parsed;
+}
+
 export function parseControlApiRuntimeConfig(
   env: NodeJS.ProcessEnv = process.env
 ): ControlApiRuntimeConfig {
@@ -263,6 +296,24 @@ export function parseControlApiRuntimeConfig(
     "STORAGE_TELEMETRY_PATH"
   );
 
+  // 8. Validate Job Dispatch Timing
+  const leaseDurationMs = parsePositiveInteger(
+    env.JOB_LEASE_DURATION_MS,
+    "JOB_LEASE_DURATION_MS",
+    300_000
+  );
+  const heartbeatIntervalMs = parsePositiveInteger(
+    env.JOB_HEARTBEAT_INTERVAL_MS,
+    "JOB_HEARTBEAT_INTERVAL_MS",
+    30_000
+  );
+
+  if (heartbeatIntervalMs >= leaseDurationMs) {
+    throw new ControlApiConfigError(
+      "Invalid job dispatch configuration: JOB_HEARTBEAT_INTERVAL_MS must be shorter than JOB_LEASE_DURATION_MS"
+    );
+  }
+
   return {
     database: {
       url: databaseUrl
@@ -286,6 +337,10 @@ export function parseControlApiRuntimeConfig(
     reviewerIdentity,
     storageTelemetry: {
       path: storageTelemetryPath
+    },
+    jobDispatch: {
+      leaseDurationMs,
+      heartbeatIntervalMs
     }
   };
 }

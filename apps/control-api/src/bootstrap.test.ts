@@ -39,6 +39,10 @@ describe("bootstrap", () => {
     },
     storageTelemetry: {
       path: "/var/lib/cco/storage-observation"
+    },
+    jobDispatch: {
+      leaseDurationMs: 300_000,
+      heartbeatIntervalMs: 30_000
     }
   };
 

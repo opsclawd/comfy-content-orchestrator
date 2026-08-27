@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseControlApiRuntimeConfig } from "./runtime-config.js";
+import { ControlApiConfigError, parseControlApiRuntimeConfig } from "./runtime-config.js";
 
 describe("runtime-config", () => {
   const validEnv: Record<string, string> = {
@@ -175,6 +175,10 @@ describe("runtime-config", () => {
       trustedProxyAddresses: []
     });
     expect(config.storageTelemetry.path).toBe("/var/lib/cco/storage-observation");
+    expect(config.jobDispatch).toEqual({
+      leaseDurationMs: 300_000,
+      heartbeatIntervalMs: 30_000
+    });
   });
 
   it("requires STORAGE_TELEMETRY_PATH without exposing other configuration values", () => {
@@ -290,5 +294,120 @@ describe("runtime-config", () => {
         CONTROL_API_REVIEWER_IDENTITY_FALLBACK: "Director"
       })
     ).toThrowError(/reviewer identity/i);
+  });
+
+  it("uses five-minute lease and thirty-second heartbeat defaults", () => {
+    // 1. Absent optional timing variables
+    const config = parseControlApiRuntimeConfig(validEnv);
+    expect(config.jobDispatch).toEqual({
+      leaseDurationMs: 300_000,
+      heartbeatIntervalMs: 30_000
+    });
+
+    // 2. Blank optional timing variables
+    for (const blank of ["", "   ", "\t\n"]) {
+      const configWithBlank = parseControlApiRuntimeConfig({
+        ...validEnv,
+        JOB_LEASE_DURATION_MS: blank,
+        JOB_HEARTBEAT_INTERVAL_MS: blank
+      });
+      expect(configWithBlank.jobDispatch).toEqual({
+        leaseDurationMs: 300_000,
+        heartbeatIntervalMs: 30_000
+      });
+    }
+  });
+
+  it("parses positive integer job dispatch timing overrides", () => {
+    const config = parseControlApiRuntimeConfig({
+      ...validEnv,
+      JOB_LEASE_DURATION_MS: "600000",
+      JOB_HEARTBEAT_INTERVAL_MS: "45000"
+    });
+    expect(config.jobDispatch).toEqual({
+      leaseDurationMs: 600_000,
+      heartbeatIntervalMs: 45_000
+    });
+  });
+
+  it("rejects invalid job dispatch integers without echoing their values", () => {
+    const targetVars = ["JOB_LEASE_DURATION_MS", "JOB_HEARTBEAT_INTERVAL_MS"] as const;
+    const badValues = [
+      "not_a_number",
+      "0",
+      "-1",
+      "-30000",
+      "300.5",
+      "1.2",
+      "NaN",
+      "Infinity",
+      "-Infinity",
+      "100ms",
+      "1e5",
+      "0x10"
+    ];
+
+    for (const varName of targetVars) {
+      for (const badValue of badValues) {
+        expect(
+          () =>
+            parseControlApiRuntimeConfig({
+              ...validEnv,
+              [varName]: badValue
+            }),
+          `Expected ${varName} with value '${badValue}' to throw ControlApiConfigError`
+        ).toThrowError(new RegExp(`\\b${varName}\\b`));
+
+        try {
+          parseControlApiRuntimeConfig({
+            ...validEnv,
+            [varName]: badValue
+          });
+        } catch (err: unknown) {
+          expect(err).toBeInstanceOf(ControlApiConfigError);
+          const message = err instanceof Error ? err.message : String(err);
+          expect(
+            message,
+            `Error message for ${varName} must not contain raw input value '${badValue}'`
+          ).not.toContain(badValue);
+        }
+      }
+    }
+  });
+
+  it("rejects a heartbeat interval that is not shorter than the lease", () => {
+    const invalidRelationships = [
+      { lease: "300000", heartbeat: "300000" }, // equal
+      { lease: "30000", heartbeat: "300000" }, // heartbeat > lease
+      { lease: "1000", heartbeat: "1000" },
+      { lease: "1000", heartbeat: "1001" }
+    ];
+
+    for (const { lease, heartbeat } of invalidRelationships) {
+      expect(
+        () =>
+          parseControlApiRuntimeConfig({
+            ...validEnv,
+            JOB_LEASE_DURATION_MS: lease,
+            JOB_HEARTBEAT_INTERVAL_MS: heartbeat
+          }),
+        `Expected lease=${lease} and heartbeat=${heartbeat} to fail`
+      ).toThrowError(/JOB_LEASE_DURATION_MS/);
+
+      try {
+        parseControlApiRuntimeConfig({
+          ...validEnv,
+          JOB_LEASE_DURATION_MS: lease,
+          JOB_HEARTBEAT_INTERVAL_MS: heartbeat
+        });
+      } catch (err: unknown) {
+        expect(err).toBeInstanceOf(ControlApiConfigError);
+        const msg = err instanceof Error ? err.message : String(err);
+        expect(msg).toContain("JOB_LEASE_DURATION_MS");
+        expect(msg).toContain("JOB_HEARTBEAT_INTERVAL_MS");
+        expect(msg).not.toContain(lease);
+        expect(msg).not.toContain(heartbeat);
+      }
+    }
   });
 });
