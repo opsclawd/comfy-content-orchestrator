@@ -8,6 +8,8 @@ import { handleReviewError } from "./errors.js";
 import { reviewReadRoutes } from "./routes/review-read-routes.js";
 import { reviewCommandRoutes } from "./routes/review-command-routes.js";
 import { metricsRoutes } from "./routes/metrics-routes.js";
+import { jobRoutes } from "./routes/job-routes.js";
+import { ControlApiConfigError } from "../runtime-config.js";
 import type { ControlApiAppOptions } from "./types.js";
 import {
   TailscaleReviewerIdentityResolver,
@@ -44,7 +46,13 @@ export function createControlApiApp(
   };
 
   const app = Fastify({
-    logger: options?.logger ?? false
+    logger: options?.logger ?? false,
+    ajv: {
+      customOptions: {
+        coerceTypes: false,
+        removeAdditional: false
+      }
+    }
   });
 
   app.setErrorHandler(handleReviewError);
@@ -79,6 +87,18 @@ export function createControlApiApp(
   ) {
     app.register(metricsRoutes, {
       container
+    });
+  }
+
+  if (container.dependencies.jobQueue !== undefined) {
+    if (options?.jobDispatch === undefined) {
+      throw new ControlApiConfigError(
+        "Job dispatch timing configuration (options.jobDispatch) is required when jobQueue is supplied"
+      );
+    }
+    app.register(jobRoutes, {
+      container,
+      dispatchConfig: options.jobDispatch
     });
   }
 
