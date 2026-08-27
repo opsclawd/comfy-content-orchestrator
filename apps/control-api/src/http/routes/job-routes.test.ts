@@ -360,12 +360,7 @@ describe("Job Dispatch Routes", () => {
 
     expect(responseWithout.statusCode).toBe(200);
     expect(queue.complete).toHaveBeenCalledTimes(1);
-    expect(queue.complete).toHaveBeenLastCalledWith(
-      sampleJobId,
-      sampleLeaseToken,
-      undefined,
-      undefined
-    );
+    expect(queue.complete).toHaveBeenLastCalledWith(sampleJobId, sampleLeaseToken, undefined);
 
     // Case 2: with manifestPayload object
     const manifest = { promptIdComfy: "comfy-task-42", outputCount: 1 };
@@ -380,12 +375,7 @@ describe("Job Dispatch Routes", () => {
 
     expect(responseWith.statusCode).toBe(200);
     expect(queue.complete).toHaveBeenCalledTimes(2);
-    expect(queue.complete).toHaveBeenLastCalledWith(
-      sampleJobId,
-      sampleLeaseToken,
-      manifest,
-      undefined
-    );
+    expect(queue.complete).toHaveBeenLastCalledWith(sampleJobId, sampleLeaseToken, manifest);
 
     await app.close();
   });
@@ -1366,12 +1356,7 @@ describe("Job Dispatch Routes", () => {
 
     expect(candResponse.statusCode).toBe(200);
     expect(queue.complete).toHaveBeenCalledTimes(1);
-    expect(queue.complete).toHaveBeenLastCalledWith(
-      sampleJobId,
-      sampleLeaseToken,
-      undefined,
-      candidatePayload
-    );
+    expect(queue.complete).toHaveBeenLastCalledWith(sampleJobId, sampleLeaseToken, undefined);
 
     // Production branch
     const manifestPayload = { promptIdComfy: "prompt-1", outputCount: 1 };
@@ -1386,17 +1371,12 @@ describe("Job Dispatch Routes", () => {
 
     expect(prodResponse.statusCode).toBe(200);
     expect(queue.complete).toHaveBeenCalledTimes(2);
-    expect(queue.complete).toHaveBeenLastCalledWith(
-      sampleJobId,
-      sampleLeaseToken,
-      manifestPayload,
-      undefined
-    );
+    expect(queue.complete).toHaveBeenLastCalledWith(sampleJobId, sampleLeaseToken, manifestPayload);
 
     await app.close();
   });
 
-  it("telemetry failure is not mislabeled as admission denial", async () => {
+  it("complete returns 503 when storage telemetry is unavailable", async () => {
     const queue = createFakeJobQueue();
     const failingTelemetry: StorageTelemetryPort = {
       getStorageTelemetry: vi.fn().mockRejectedValue(new Error("disk telemetry read error"))
@@ -1421,9 +1401,49 @@ describe("Job Dispatch Routes", () => {
       }
     });
 
-    expect(response.statusCode).toBe(500);
+    expect(response.statusCode).toBe(503);
     expect(response.json()).toEqual({
-      message: "Internal Server Error"
+      code: "STORAGE_TELEMETRY_UNAVAILABLE",
+      message: "Storage telemetry is unavailable."
+    });
+    expect(queue.complete).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it("complete returns 503 when storage telemetry throws StorageAdmissionUnavailableError", async () => {
+    const queue = createFakeJobQueue();
+    const failingTelemetry: StorageTelemetryPort = {
+      getStorageTelemetry: vi
+        .fn()
+        .mockRejectedValue(
+          new StorageAdmissionUnavailableError({ cause: new Error("Telemetry offline") })
+        )
+    };
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: failingTelemetry,
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${sampleJobId}/complete`,
+      payload: {
+        leaseToken: sampleLeaseToken,
+        candidatePayload: { outputCount: 1 }
+      }
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      code: "STORAGE_TELEMETRY_UNAVAILABLE",
+      message: "Storage telemetry is unavailable."
     });
     expect(queue.complete).not.toHaveBeenCalled();
 

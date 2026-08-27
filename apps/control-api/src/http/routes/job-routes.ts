@@ -271,23 +271,31 @@ export const jobRoutes: FastifyPluginAsync<JobRoutesOptions> = async (
       const operation =
         request.body.candidatePayload !== undefined ? "candidate_upload" : "delivery_write";
 
-      await enforceStorageAdmission.execute(operation);
+      try {
+        await enforceStorageAdmission.execute(operation);
+      } catch (error) {
+        if (error instanceof StorageAdmissionError) {
+          throw error;
+        }
+        if (error instanceof StorageAdmissionUnavailableError) {
+          throw error;
+        }
+        throw new StorageAdmissionUnavailableError({ cause: error });
+      }
 
-      const result = await (
-        queue.complete as (
-          jobId: JobId,
-          leaseToken: LeaseToken,
-          manifestPayload?: Readonly<Record<string, unknown>>,
-          candidatePayload?: unknown
-        ) => Promise<JobMutationResult>
-      )(
+      const result = await queue.complete(
         request.params.jobId as JobId,
         request.body.leaseToken as LeaseToken,
-        request.body.manifestPayload,
-        request.body.candidatePayload
+        request.body.manifestPayload
       );
       return translateMutationResult(result, reply);
     } catch (error) {
+      if (error instanceof StorageAdmissionUnavailableError) {
+        return reply.status(503).send({
+          code: "STORAGE_TELEMETRY_UNAVAILABLE",
+          message: "Storage telemetry is unavailable."
+        });
+      }
       if (error instanceof StorageAdmissionError) {
         return reply.status(507).send({
           code: "STORAGE_ADMISSION_DENIED",
