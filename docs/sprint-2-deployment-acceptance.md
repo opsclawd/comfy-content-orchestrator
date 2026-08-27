@@ -43,13 +43,17 @@ The control plane configuration enforces distinct database roles:
 - **Migration Owner Role** (`POSTGRES_USER`, `DATABASE_MIGRATION_URL`): Superuser / schema owner used exclusively by the one-shot `migrate` service to execute DDL schema migrations.
 - **Application Least-Privilege Role** (`DATABASE_APP_ROLE`, `DATABASE_APP_USER`, `DATABASE_APP_PASSWORD`, `DATABASE_URL`): Restricted non-superuser role used exclusively by the long-running `control-api` service with DML-only permissions (`SELECT`, `INSERT`, `UPDATE`, `DELETE`) and no schema alteration privileges.
 
-### Three Configuration-Driven Hostnames and URLs
+### Single Hostname, Port-Differentiated Service URLs
 
-The deployment relies on three configuration-driven URLs corresponding to canonical Tailscale MagicDNS endpoints:
+The deployment runs on a single control-plane host and exposes all three services on distinct ports over the Tailscale tailnet. Per the decisions recorded in issue #87, the earlier scheme of per-service DNS names (`review`, `control-01`, `storage-01`, `render-01`) under a custom `godzspeed-internal.ts.net` suffix is **not implementable** as written: Tailscale MagicDNS assigns exactly one DNS name per device and does not support aliases or arbitrary records. Tailnet rename to `godzspeed-internal.ts.net` was also declined; the real, currently-assigned tailnet suffix is `taild802ae.ts.net`.
 
-- **Review Hub URL**: Configured via `REVIEW_HUB_HOSTNAME` (e.g. `review.godzspeed-internal.ts.net`), published on `TAILNET_IP:REVIEW_HUB_PORT` (e.g. `https://review.godzspeed-internal.ts.net`).
-- **Control API URL**: Configured via `CONTROL_API_HOSTNAME` (e.g. `control-01.godzspeed-internal.ts.net`), `CONTROL_API_PORT`, and `CONTROL_API_URL` (e.g. `http://control-01.godzspeed-internal.ts.net:3000` or `https://control-01.godzspeed-internal.ts.net`).
-- **Storage / S3 Signing URL**: Configured via `STORAGE_HOSTNAME` (e.g. `storage-01.godzspeed-internal.ts.net`), `S3_PORT`, and `S3_SIGNING_ENDPOINT` (e.g. `http://storage-01.godzspeed-internal.ts.net:9000` or `https://storage-01.godzspeed-internal.ts.net`). Internal container access uses `S3_STORAGE_ENDPOINT` (`http://minio:9000`).
+Services are therefore addressed by **control-plane host MagicDNS name plus port**:
+
+- **Review Hub**: `<control-plane-host>.taild802ae.ts.net:<REVIEW_HUB_PORT>` (port from `.env`).
+- **Control API**: `<control-plane-host>.taild802ae.ts.net:<CONTROL_API_PORT>`.
+- **S3 / storage**: `<control-plane-host>.taild802ae.ts.net:<S3_PORT>`.
+
+The `REVIEW_HUB_HOSTNAME`, `CONTROL_API_HOSTNAME`, and `STORAGE_HOSTNAME` env vars remain in `.env.example` as **container-identity labels only** — they identify each service to the others inside the Docker network and to logs/observability tooling; they are not used for DNS resolution or routing. Internal container access to MinIO uses `S3_STORAGE_ENDPOINT=http://minio:9000` (Docker service DNS). Tailnet access uses `S3_SIGNING_ENDPOINT=http://<control-plane-host>.taild802ae.ts.net:<S3_PORT>`.
 
 ---
 
@@ -107,24 +111,31 @@ nmap -Pn -p 80,443,3000,5432,8188,9000,9001 <HETZNER_PUBLIC_IP>
 
 ---
 
-### 2. MagicDNS Resolution under `godzspeed-internal.ts.net`
+### 2. Endpoint Reachability over the Tailnet
 
-**Objective:** Verify MagicDNS hostnames resolve correctly to tailnet 100.x.y.z CGNAT addresses from authorized tailnet nodes.
+**Objective:** Verify that the control-plane host's MagicDNS name resolves to its tailnet IP from authorized tailnet nodes, and that each canonical service (Control API, Review Hub, S3) is reachable on its configured port. Supersedes the earlier "MagicDNS Resolution under `godzspeed-internal.ts.net`" gate, which specified four per-service DNS names that are not implementable on a single host (see PRD §2.2 and the decisions recorded in issue #87).
 
 **Execution:**
 From an authorized tailnet node (e.g. Trinidad host or Creative Director device):
 ```bash
-tailscale ping review.godzspeed-internal.ts.net
-tailscale ping control-01.godzspeed-internal.ts.net
-tailscale ping render-01.godzspeed-internal.ts.net
-tailscale ping storage-01.godzspeed-internal.ts.net
+# 1. Resolve the single control-plane MagicDNS name
+tailscale ping <control-plane-host>.taild802ae.ts.net
+
+# 2. Probe each canonical service on its configured port
+curl -fsS https://<control-plane-host>.taild802ae.ts.net:<CONTROL_API_PORT>/api/health
+curl -fsSI https://<control-plane-host>.taild802ae.ts.net:<REVIEW_HUB_PORT>/
+curl -fsSI https://<control-plane-host>.taild802ae.ts.net:<S3_PORT>/
+
+# 3. Confirm the MinIO console port is refused over the tailnet
+curl -I http://<control-plane-host>.taild802ae.ts.net:9001
 ```
 
 **Pass Criteria:**
-- `review.godzspeed-internal.ts.net` resolves to the Hetzner node's Tailscale IP.
-- `control-01.godzspeed-internal.ts.net` resolves to the Hetzner node's Tailscale IP.
-- `render-01.godzspeed-internal.ts.net` resolves to the Trinidad workstation's Tailscale IP.
-- `storage-01.godzspeed-internal.ts.net` resolves to the Hetzner node's Tailscale IP.
+- `<control-plane-host>.taild802ae.ts.net` resolves to a 100.x.y.z CGNAT address belonging to the Hetzner control-plane node.
+- The Control API `/api/health` endpoint returns HTTP 200 with a schema-conforming health response.
+- The Review Hub root URL returns HTTP 200 (after TLS is in place — see Gate 3) without mixed-content or connection errors.
+- The S3 endpoint responds with an S3-shaped response (`Server: MinIO` or AWS S3 error XML, not a connection refusal).
+- The MinIO console port 9001 is **refused or filtered** for tailnet clients; it is reachable only on loopback (`127.0.0.1:9001`) on the Hetzner host itself.
 
 ---
 
@@ -133,15 +144,16 @@ tailscale ping storage-01.godzspeed-internal.ts.net
 **Objective:** Verify human browser access from the designated Creative Director device in Ottawa, Canada.
 
 **Execution:**
-1. Connect Creative Director device to Tailscale tailnet `godzspeed-internal.ts.net`.
-2. Open browser and navigate to `https://review.godzspeed-internal.ts.net`.
-3. Log in / verify session authentication.
+1. Connect Creative Director device to Tailscale tailnet `taild802ae.ts.net` (the real, currently-assigned tailnet suffix; per the decisions recorded in issue #87, the earlier `godzspeed-internal.ts.net` rename was declined and per-service names are not implementable on a single host).
+2. Open browser and navigate to `https://<control-plane-host>.taild802ae.ts.net:<REVIEW_HUB_PORT>` (port from `.env`).
+3. Verify reviewer identity: load a review action that produces a `ReviewEvent` (e.g. approve a candidate or `candidate_select` a storyboard candidate) and confirm the recorded `approvedBy` / reviewer identity matches the Tailscale user logged into the device. Per ADR-0002, Tailscale device identity *is* the Review Hub authentication boundary; there is no separate login step.
 4. Load campaign review page and inspect candidate gallery.
 
 **Pass Criteria:**
-- TLS certificate is valid for `review.godzspeed-internal.ts.net`.
+- TLS certificate is valid for the resolved hostname (a Tailscale-issued certificate for the tailnet MagicDNS name; not self-signed).
 - Application loads without mixed-content or connection errors.
 - Candidate WebP/MP4 proxies render in the browser.
+- The `ReviewEvent` row written during step 3 carries a `reviewer_name` that matches the Tailscale user logged into the device, and the row was inserted with zero client-supplied identity overrides (i.e. the server-derived value was authoritative, per the `Server-Authoritative Reviewer Identity & Timestamp` invariant in `docs/CONTEXT.md`).
 
 ---
 
@@ -153,7 +165,7 @@ tailscale ping storage-01.godzspeed-internal.ts.net
 ```bash
 # 1. Request presigned URL from Control API
 PRESIGNED_URL=$(curl -s -H "Authorization: Bearer $TOKEN" \
-  https://control-01.godzspeed-internal.ts.net/api/scenes/<SCENE_ID>/review | jq -r '.candidatesByRevision[0].candidates[0].media.previewUrl')
+  https://<control-plane-host>.taild802ae.ts.net:<CONTROL_API_PORT>/api/scenes/<SCENE_ID>/review | jq -r '.candidatesByRevision[0].candidates[0].media.previewUrl')
 
 # 2. Fetch immediately over tailnet
 curl -I "$PRESIGNED_URL"
@@ -201,7 +213,7 @@ mc ilm rule list local-minio/godzspeed-delivery
 **Execution:**
 1. Query storage metrics endpoint:
 ```bash
-curl -s https://control-01.godzspeed-internal.ts.net/metrics | grep godzspeed_storage
+curl -s https://<control-plane-host>.taild802ae.ts.net:<CONTROL_API_PORT>/metrics | grep godzspeed_storage
 ```
 2. Verify watermark state transitions:
 - **< 70%:** `godzspeed_storage_watermark_state{state="normal"} 1`
@@ -222,9 +234,9 @@ curl -s https://control-01.godzspeed-internal.ts.net/metrics | grep godzspeed_st
 **Execution:**
 ```bash
 # Attempt to access MinIO Console port from general client
-curl -I http://storage-01.godzspeed-internal.ts.net:9001
+curl -I http://<control-plane-host>.taild802ae.ts.net:9001
 ```
 
 **Pass Criteria:**
-- MinIO API on `storage-01.godzspeed-internal.ts.net:9000` (or standard HTTPS 443) responds to S3 requests.
+- MinIO API on `<control-plane-host>.taild802ae.ts.net:<S3_PORT>` responds to S3 requests.
 - MinIO Console port 9001 is refused or filtered for general tailnet clients.
