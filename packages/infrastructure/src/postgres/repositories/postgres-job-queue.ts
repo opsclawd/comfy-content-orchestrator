@@ -1,8 +1,9 @@
-import type {
-  ClaimJobInput,
-  JobAdmissionGate,
-  JobMutationResult,
-  JobQueuePort
+import {
+  type ClaimJobInput,
+  InvalidJobCompletionPayloadError,
+  type JobAdmissionGate,
+  type JobMutationResult,
+  type JobQueuePort
 } from "@cco/application";
 import {
   JOB_KINDS,
@@ -329,6 +330,11 @@ export class PostgresJobQueue implements JobQueuePort {
       const updatedRow = updateRes.rows[0];
       if (updatedRow) {
         if (updatedRow.job_kind === "candidate") {
+          if (manifestPayload !== undefined) {
+            throw new InvalidJobCompletionPayloadError(
+              "manifestPayload is not allowed for candidate job completion"
+            );
+          }
           await client.query("COMMIT");
           return {
             outcome: "applied",
@@ -336,13 +342,20 @@ export class PostgresJobQueue implements JobQueuePort {
           };
         }
 
-        const promptIdComfy =
-          manifestPayload && typeof manifestPayload === "object"
-            ? manifestPayload.promptIdComfy
-            : undefined;
+        if (
+          !manifestPayload ||
+          typeof manifestPayload !== "object" ||
+          Array.isArray(manifestPayload)
+        ) {
+          throw new InvalidJobCompletionPayloadError(
+            "manifestPayload must be an object for production job completion"
+          );
+        }
+
+        const promptIdComfy = manifestPayload.promptIdComfy;
 
         if (typeof promptIdComfy !== "string" || promptIdComfy.trim().length === 0) {
-          throw new Error(
+          throw new InvalidJobCompletionPayloadError(
             "manifestPayload.promptIdComfy must be a non-empty string for production job completion"
           );
         }

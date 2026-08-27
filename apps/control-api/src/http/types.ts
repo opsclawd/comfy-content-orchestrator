@@ -2,6 +2,7 @@ import type { FastifyRequest } from "fastify";
 import {
   ProgressSceneProductionUseCases,
   ReviewSceneUseCases,
+  type JobQueuePort,
   type RenderEnginePort,
   type ReviewMediaDeliveryPort,
   type SceneReviewQueries,
@@ -17,6 +18,7 @@ export interface ControlApiDependencies {
   readonly reviewMediaDelivery?: ReviewMediaDeliveryPort;
   readonly storageTelemetry?: StorageTelemetryPort;
   readonly storageMetricsRegistry?: StorageMetricsRegistryPort;
+  readonly jobQueue?: JobQueuePort;
 }
 
 export interface ControlApiUseCases {
@@ -69,6 +71,10 @@ export interface ControlApiAppOptions {
   readonly reviewerIdentityResolver?: ReviewerIdentityResolver;
   readonly clock?: Clock;
   readonly logger?: boolean;
+  readonly jobDispatch?: {
+    readonly leaseDurationMs: number;
+    readonly heartbeatIntervalMs: number;
+  };
 }
 
 export const defaultClock: Clock = {

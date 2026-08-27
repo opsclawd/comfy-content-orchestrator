@@ -4,9 +4,11 @@ import type { StorageTelemetryPort } from "@cco/application";
 import {
   HostFsStorageTelemetryAdapter,
   InMemoryStorageMetricsRegistry,
+  PostgresJobQueue,
   PostgresSceneReviewQueries,
   PostgresUnitOfWork,
   S3ReviewMediaDelivery,
+  StorageAwareJobAdmissionGate,
   type HostFsStorageTelemetryAdapterOptions
 } from "@cco/infrastructure";
 import type { FastifyInstance } from "fastify";
@@ -203,6 +205,12 @@ export async function runControlApi(
 
     const storageMetricsRegistry = new InMemoryStorageMetricsRegistry();
 
+    const jobAdmissionGate = new StorageAwareJobAdmissionGate({
+      telemetryPort: storageTelemetry,
+      metricsRegistry: storageMetricsRegistry
+    });
+    const jobQueue = new PostgresJobQueue(pool, jobAdmissionGate);
+
     const reviewerIdentityResolver =
       options.reviewerIdentityResolver ??
       new TailscaleReviewerIdentityResolver(config.reviewerIdentity);
@@ -230,12 +238,14 @@ export async function runControlApi(
         sceneReviewQueries,
         reviewMediaDelivery,
         storageTelemetry,
-        storageMetricsRegistry
+        storageMetricsRegistry,
+        jobQueue
       },
       {
         host: config.http.host,
         port: config.http.port,
-        reviewerIdentityResolver
+        reviewerIdentityResolver,
+        jobDispatch: config.jobDispatch
       }
     );
 
