@@ -55,13 +55,14 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
   it("migrates an empty PostgreSQL 18.6 database through the baseline", async () => {
     const applied = await runMigrations(client, { migrationsDirectory });
 
-    expect(applied).toHaveLength(6);
+    expect(applied).toHaveLength(7);
     expect(applied[0]?.version).toBe("001");
     expect(applied[1]?.version).toBe("002");
     expect(applied[2]?.version).toBe("003");
     expect(applied[3]?.version).toBe("004");
     expect(applied[4]?.version).toBe("005");
     expect(applied[5]?.version).toBe("006");
+    expect(applied[6]?.version).toBe("007");
 
     const schemaRes = await client.query(
       "SELECT version FROM schema_migrations ORDER BY version ASC"
@@ -72,7 +73,8 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       { version: "003" },
       { version: "004" },
       { version: "005" },
-      { version: "006" }
+      { version: "006" },
+      { version: "007" }
     ]);
 
     const tablesRes = await client.query<{ table_name: string }>(
@@ -158,6 +160,9 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       "failed",
       "cancelled"
     ]);
+
+    // job_kind_enum
+    expect(enumsByType.get("job_kind_enum")).toEqual(["candidate", "production"]);
 
     // review_action_enum matching @cco/contracts REVIEW_ACTIONS
     expect(enumsByType.get("review_action_enum")).toEqual([...REVIEW_ACTIONS]);
@@ -288,6 +293,8 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
     ]);
     expect(jobRes.rows).toHaveLength(1);
     expect(jobRes.rows[0]?.scene_id).toBe(graph.scene.scene_id);
+    expect(jobRes.rows[0]?.job_kind).toBe("production");
+    expect(jobRes.rows[0]?.lease_token).toBeNull();
     expect(jobRes.rows[0]?.status).toBe("queued");
     expect(jobRes.rows[0]?.retry_count).toBe(0);
     expect(jobRes.rows[0]?.max_retries).toBe(3);
@@ -588,8 +595,8 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
     const idxQueue = indexMap.get("idx_render_jobs_queue");
     expect(idxQueue).toBeDefined();
     expect(idxQueue?.tablename).toBe("render_jobs");
-    expect(idxQueue?.indexdef).toContain("(status, lease_expires_at)");
-    expect(idxQueue?.indexdef).toMatch(/WHERE.*queued.*leased/);
+    expect(idxQueue?.indexdef).toContain("(status, lease_expires_at, created_at)");
+    expect(idxQueue?.indexdef).toMatch(/WHERE.*queued.*leased.*rendering/);
 
     // 5. idx_render_jobs_scene
     const idxJobScene = indexMap.get("idx_render_jobs_scene");
