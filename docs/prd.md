@@ -197,16 +197,15 @@ Agency policy:
 
 ### 2.5 Review Plane Transport Security & Reviewer Authentication
 
-**Status: required, not yet scheduled. Deliberately deprioritized as of 2026-08-26.**
+**Status: reviewer authentication resolved (ADR-0002). TLS still required; tracked in issue #90 (rescoped to TLS-only).**
 
 The tailnet is the current access-control boundary: reaching the Review Hub at all requires being an authorized device on the tailnet, and reviewer identity is derived from the Tailscale-layer connection rather than a browser-supplied value (§6, `TailscaleReviewerIdentityResolver`). That is sufficient for internal operation, and the Review Hub runs over plain HTTP on the tailnet today.
 
-Two capabilities remain unimplemented and are required before a Creative Director outside the operating team completes review actions of record:
+**Reviewer authentication is resolved.** Per ADR-0002, Tailscale device identity *is* the authentication boundary. `TailscaleReviewerIdentityResolver` is the single source of reviewer identity for all audit-bearing actions. No separate username/password or session/login layer will be built for the Review Hub. The previously-flagged "open product decision" is closed; the decision is documented, the trade-offs are recorded, and the trigger condition for revisiting (shared devices equating to shared audit identity) is explicit in the ADR.
 
-1. **Transport security (TLS).** The Review Hub is served over HTTP. A real, browser-trusted certificate is required — self-signed certificates do not satisfy this, as they fail validation on the reviewer's own device. Tailscale-issued certificates for the tailnet MagicDNS name are the expected mechanism; a public CA challenge over the open internet is incompatible with §2.2's zero-public-exposure posture.
-2. **Reviewer authentication.** Whether tailnet device identity *is* the authentication boundary, or whether a distinct session/login layer is additionally required, is an **open product decision**. It must be answered before implementation: building a username/password/session system in parallel with the existing Tailscale-identity resolver would produce two conflicting sources of reviewer identity feeding the same audit trail.
+**Transport security (TLS) is still required.** The Review Hub is served over HTTP. A real, browser-trusted certificate is required — self-signed certificates do not satisfy this, as they fail validation on the reviewer's own device. Tailscale-issued certificates for the real tailnet MagicDNS name (`*.taild802ae.ts.net`, per the decisions in issue #87) are the expected mechanism; a public CA challenge over the open internet is incompatible with §2.2's zero-public-exposure posture.
 
-Until both land, the Review Hub Browser Access Gate (§9.4) cannot pass. Tracked in issue #90.
+Until TLS lands, the Review Hub Browser Access Gate (§9.4) cannot pass. Tracked in issue #90.
 
 ---
 
