@@ -60,34 +60,40 @@ function makeSnapshot(usedBytes: number, totalBytes: number): StorageTelemetrySn
   };
 }
 
+// Every cell of PRD §2.3's watermark x job-kind admission table. Thresholds are
+// WARNING_RATIO 0.7, DEGRADED_RATIO 0.85 and CRITICAL_RATIO 0.92, so each fixture
+// sits inside the tier it names rather than on its boundary.
+const admissionTable: ReadonlyArray<{
+  readonly state: StorageWatermarkState;
+  readonly usedBytes: number;
+  readonly candidate: boolean;
+  readonly production: boolean;
+}> = [
+  { state: "normal", usedBytes: 500, candidate: true, production: true },
+  { state: "warning", usedBytes: 750, candidate: true, production: true },
+  { state: "degraded", usedBytes: 860, candidate: false, production: true },
+  { state: "critical", usedBytes: 950, candidate: false, production: false }
+];
+
 describe("StorageAwareJobAdmissionGate", () => {
-  it("maps candidate jobs to candidate upload admission", async () => {
-    const telemetryPort = new FakeStorageTelemetryPort(makeSnapshot(500, 1000));
-    const gate = new StorageAwareJobAdmissionGate({ telemetryPort });
+  for (const row of admissionTable) {
+    it(`admits candidate=${row.candidate} production=${row.production} at ${row.state}`, async () => {
+      const telemetryPort = new FakeStorageTelemetryPort(makeSnapshot(row.usedBytes, 1000));
+      const gate = new StorageAwareJobAdmissionGate({ telemetryPort });
 
-    const result = await gate.canAdmit("candidate");
-    expect(result).toBe(true);
-  });
+      expect(await gate.canAdmit("candidate")).toBe(row.candidate);
+      expect(await gate.canAdmit("production")).toBe(row.production);
+    });
+  }
 
-  it("maps production jobs to delivery write admission", async () => {
+  it("maps each job kind to its own operation class rather than a shared one", async () => {
+    // Degraded is the only tier where the two kinds diverge, so it is the tier that
+    // proves candidate uses candidate_upload while production uses delivery_write.
     const telemetryPort = new FakeStorageTelemetryPort(makeSnapshot(860, 1000));
     const gate = new StorageAwareJobAdmissionGate({ telemetryPort });
 
-    const result = await gate.canAdmit("production");
-    expect(result).toBe(true);
-  });
-
-  it("turns storage policy denial into normal non-admission", async () => {
-    const telemetryPort = new FakeStorageTelemetryPort(makeSnapshot(860, 1000));
-    const gate = new StorageAwareJobAdmissionGate({ telemetryPort });
-
-    // In degraded state (86%), candidate_upload is denied but delivery_write is permitted
     expect(await gate.canAdmit("candidate")).toBe(false);
-
-    // In critical state (95%), both candidate_upload and delivery_write are denied
-    telemetryPort.setSnapshot(makeSnapshot(950, 1000));
-    expect(await gate.canAdmit("candidate")).toBe(false);
-    expect(await gate.canAdmit("production")).toBe(false);
+    expect(await gate.canAdmit("production")).toBe(true);
   });
 
   it("turns telemetry evaluation failure into typed unavailability", async () => {
