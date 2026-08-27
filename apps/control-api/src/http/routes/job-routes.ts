@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyReply } from "fastify"
 import type { JobId, LeaseToken } from "@cco/domain";
 import {
   InvalidJobCompletionPayloadError,
+  StorageAdmissionError,
   StorageAdmissionUnavailableError,
   type JobMutationResult
 } from "@cco/application";
@@ -102,6 +103,9 @@ export const completeJobSchema = {
       },
       manifestPayload: {
         type: "object"
+      },
+      candidatePayload: {
+        type: "object"
       }
     },
     additionalProperties: false
@@ -200,6 +204,10 @@ export const jobRoutes: FastifyPluginAsync<JobRoutesOptions> = async (
   if (!queue) {
     throw new Error("JobQueuePort is required for job routes");
   }
+  const enforceStorageAdmission = container.useCases.enforceStorageAdmission;
+  if (!enforceStorageAdmission) {
+    throw new Error("EnforceStorageAdmission use case is required for job routes");
+  }
 
   fastify.post<{ Body: { workerId: string } }>(
     "/api/jobs/claim",
@@ -253,16 +261,44 @@ export const jobRoutes: FastifyPluginAsync<JobRoutesOptions> = async (
 
   fastify.post<{
     Params: { jobId: string };
-    Body: { leaseToken: string; manifestPayload?: Record<string, unknown> };
+    Body: {
+      leaseToken: string;
+      manifestPayload?: Record<string, unknown>;
+      candidatePayload?: Record<string, unknown>;
+    };
   }>("/api/jobs/:jobId/complete", { schema: completeJobSchema }, async (request, reply) => {
     try {
-      const result = await queue.complete(
+      const operation =
+        request.body.candidatePayload !== undefined ? "candidate_upload" : "delivery_write";
+
+      await enforceStorageAdmission.execute(operation);
+
+      const result = await (
+        queue.complete as (
+          jobId: JobId,
+          leaseToken: LeaseToken,
+          manifestPayload?: Readonly<Record<string, unknown>>,
+          candidatePayload?: unknown
+        ) => Promise<JobMutationResult>
+      )(
         request.params.jobId as JobId,
         request.body.leaseToken as LeaseToken,
-        request.body.manifestPayload
+        request.body.manifestPayload,
+        request.body.candidatePayload
       );
       return translateMutationResult(result, reply);
     } catch (error) {
+      if (error instanceof StorageAdmissionError) {
+        return reply.status(507).send({
+          code: "STORAGE_ADMISSION_DENIED",
+          message: error.message,
+          operationClass: error.operationClass,
+          watermarkState: error.watermarkState,
+          usedRatio: error.usedRatio,
+          totalBytes: error.totalBytes,
+          freeBytes: error.freeBytes
+        });
+      }
       if (error instanceof InvalidJobCompletionPayloadError) {
         return reply.status(400).send({
           code: "VALIDATION_FAILURE",

@@ -1,5 +1,6 @@
 import type { FastifyRequest } from "fastify";
 import {
+  EnforceStorageAdmission,
   ProgressSceneProductionUseCases,
   ReviewSceneUseCases,
   type JobQueuePort,
@@ -24,6 +25,7 @@ export interface ControlApiDependencies {
 export interface ControlApiUseCases {
   readonly reviewScene: ReviewSceneUseCases;
   readonly progressSceneProduction: ProgressSceneProductionUseCases;
+  readonly enforceStorageAdmission?: EnforceStorageAdmission;
 }
 
 export interface ControlApiQueries {
@@ -44,12 +46,21 @@ export function createControlApiContainer(
     dependencies.uow,
     dependencies.renderEngine
   );
+  const enforceStorageAdmission = dependencies.storageTelemetry
+    ? new EnforceStorageAdmission({
+        telemetryPort: dependencies.storageTelemetry,
+        ...(dependencies.storageMetricsRegistry
+          ? { metricsRegistry: dependencies.storageMetricsRegistry }
+          : {})
+      })
+    : undefined;
 
   return {
     dependencies,
     useCases: {
       reviewScene,
-      progressSceneProduction
+      progressSceneProduction,
+      ...(enforceStorageAdmission !== undefined ? { enforceStorageAdmission } : {})
     },
     queries: {
       ...(dependencies.sceneReviewQueries !== undefined

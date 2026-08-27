@@ -5,6 +5,7 @@ import {
   StorageAdmissionUnavailableError,
   type JobMutationResult,
   type JobQueuePort,
+  type StorageTelemetryPort,
   type UnitOfWork,
   type UnitOfWorkContext
 } from "@cco/application";
@@ -91,6 +92,21 @@ function createFakeJobQueue(overrides?: Partial<JobQueuePort>): JobQueuePort {
   };
 }
 
+function createFakeStorageTelemetry(
+  usedBytes: number = 50,
+  totalBytes: number = 100
+): StorageTelemetryPort {
+  return {
+    getStorageTelemetry: vi.fn().mockResolvedValue({
+      totalBytes,
+      usedBytes,
+      freeBytes: totalBytes - usedBytes,
+      buckets: [],
+      measuredAt: "2026-08-27T00:00:00.000Z"
+    })
+  };
+}
+
 describe("Job Dispatch Routes", () => {
   it("claim delegates the configured lease and returns the leased job", async () => {
     const queue = createFakeJobQueue({
@@ -100,6 +116,7 @@ describe("Job Dispatch Routes", () => {
     const app = createControlApiApp(
       {
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queue
       },
       {
@@ -152,6 +169,7 @@ describe("Job Dispatch Routes", () => {
     const app = createControlApiApp(
       {
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queue
       },
       {
@@ -186,6 +204,7 @@ describe("Job Dispatch Routes", () => {
     const appUnavailable = createControlApiApp(
       {
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queueUnavailable
       },
       {
@@ -215,6 +234,7 @@ describe("Job Dispatch Routes", () => {
     const appArbitrary = createControlApiApp(
       {
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queueArbitrary
       },
       {
@@ -245,6 +265,7 @@ describe("Job Dispatch Routes", () => {
     const app = createControlApiApp(
       {
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queue
       },
       {
@@ -282,6 +303,7 @@ describe("Job Dispatch Routes", () => {
     const app = createControlApiApp(
       {
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queue
       },
       {
@@ -319,6 +341,7 @@ describe("Job Dispatch Routes", () => {
     const app = createControlApiApp(
       {
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queue
       },
       {
@@ -337,7 +360,12 @@ describe("Job Dispatch Routes", () => {
 
     expect(responseWithout.statusCode).toBe(200);
     expect(queue.complete).toHaveBeenCalledTimes(1);
-    expect(queue.complete).toHaveBeenLastCalledWith(sampleJobId, sampleLeaseToken, undefined);
+    expect(queue.complete).toHaveBeenLastCalledWith(
+      sampleJobId,
+      sampleLeaseToken,
+      undefined,
+      undefined
+    );
 
     // Case 2: with manifestPayload object
     const manifest = { promptIdComfy: "comfy-task-42", outputCount: 1 };
@@ -352,7 +380,12 @@ describe("Job Dispatch Routes", () => {
 
     expect(responseWith.statusCode).toBe(200);
     expect(queue.complete).toHaveBeenCalledTimes(2);
-    expect(queue.complete).toHaveBeenLastCalledWith(sampleJobId, sampleLeaseToken, manifest);
+    expect(queue.complete).toHaveBeenLastCalledWith(
+      sampleJobId,
+      sampleLeaseToken,
+      manifest,
+      undefined
+    );
 
     await app.close();
   });
@@ -365,6 +398,7 @@ describe("Job Dispatch Routes", () => {
     const app = createControlApiApp(
       {
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queue
       },
       {
@@ -406,6 +440,7 @@ describe("Job Dispatch Routes", () => {
       const app = createControlApiApp(
         {
           uow: new FakeUnitOfWork(),
+          storageTelemetry: createFakeStorageTelemetry(),
           jobQueue: queue
         },
         {
@@ -447,6 +482,7 @@ describe("Job Dispatch Routes", () => {
       const app = createControlApiApp(
         {
           uow: new FakeUnitOfWork(),
+          storageTelemetry: createFakeStorageTelemetry(),
           jobQueue: queue
         },
         {
@@ -482,6 +518,7 @@ describe("Job Dispatch Routes", () => {
       const app = createControlApiApp(
         {
           uow: new FakeUnitOfWork(),
+          storageTelemetry: createFakeStorageTelemetry(),
           jobQueue: queue
         },
         {
@@ -515,6 +552,7 @@ describe("Job Dispatch Routes", () => {
       const app = createControlApiApp(
         {
           uow: new FakeUnitOfWork(),
+          storageTelemetry: createFakeStorageTelemetry(),
           jobQueue: queue
         },
         {
@@ -545,6 +583,7 @@ describe("Job Dispatch Routes", () => {
       const app = createControlApiApp(
         {
           uow: new FakeUnitOfWork(),
+          storageTelemetry: createFakeStorageTelemetry(),
           jobQueue: queue
         },
         {
@@ -628,6 +667,7 @@ describe("Job Dispatch Routes", () => {
       const app = createControlApiApp(
         {
           uow: new FakeUnitOfWork(),
+          storageTelemetry: createFakeStorageTelemetry(),
           jobQueue: queue
         },
         {
@@ -702,7 +742,11 @@ describe("Job Dispatch Routes", () => {
           [ep.mockKey]: vi.fn().mockResolvedValue({ outcome: "applied", job: ep.sampleJob })
         });
         const app = createControlApiApp(
-          { uow: new FakeUnitOfWork(), jobQueue: queue },
+          {
+            uow: new FakeUnitOfWork(),
+            storageTelemetry: createFakeStorageTelemetry(),
+            jobQueue: queue
+          },
           { jobDispatch: defaultDispatchConfig }
         );
 
@@ -727,7 +771,11 @@ describe("Job Dispatch Routes", () => {
           [ep.mockKey]: vi.fn().mockResolvedValue({ outcome: "already_applied", job: ep.sampleJob })
         });
         const app = createControlApiApp(
-          { uow: new FakeUnitOfWork(), jobQueue: queue },
+          {
+            uow: new FakeUnitOfWork(),
+            storageTelemetry: createFakeStorageTelemetry(),
+            jobQueue: queue
+          },
           { jobDispatch: defaultDispatchConfig }
         );
 
@@ -752,7 +800,11 @@ describe("Job Dispatch Routes", () => {
           [ep.mockKey]: vi.fn().mockResolvedValue({ outcome: "superseded" })
         });
         const app = createControlApiApp(
-          { uow: new FakeUnitOfWork(), jobQueue: queue },
+          {
+            uow: new FakeUnitOfWork(),
+            storageTelemetry: createFakeStorageTelemetry(),
+            jobQueue: queue
+          },
           { jobDispatch: defaultDispatchConfig }
         );
 
@@ -775,7 +827,11 @@ describe("Job Dispatch Routes", () => {
           [ep.mockKey]: vi.fn().mockResolvedValue({ outcome: "not_found" })
         });
         const app = createControlApiApp(
-          { uow: new FakeUnitOfWork(), jobQueue: queue },
+          {
+            uow: new FakeUnitOfWork(),
+            storageTelemetry: createFakeStorageTelemetry(),
+            jobQueue: queue
+          },
           { jobDispatch: defaultDispatchConfig }
         );
 
@@ -798,7 +854,11 @@ describe("Job Dispatch Routes", () => {
           [ep.mockKey]: vi.fn().mockRejectedValue(new Error("unexpected DB crash"))
         });
         const app = createControlApiApp(
-          { uow: new FakeUnitOfWork(), jobQueue: queue },
+          {
+            uow: new FakeUnitOfWork(),
+            storageTelemetry: createFakeStorageTelemetry(),
+            jobQueue: queue
+          },
           { jobDispatch: defaultDispatchConfig }
         );
 
@@ -829,6 +889,7 @@ describe("Job Dispatch Routes", () => {
     const app = createControlApiApp(
       {
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queue
       },
       {
@@ -859,6 +920,7 @@ describe("Job Dispatch Routes", () => {
     const app = createControlApiApp(
       {
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queue
       },
       {
@@ -1114,6 +1176,7 @@ describe("Job Dispatch Routes", () => {
     expect(() => {
       createControlApiApp({
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queue
       });
     }).toThrow(ControlApiConfigError);
@@ -1121,6 +1184,7 @@ describe("Job Dispatch Routes", () => {
     expect(() => {
       createControlApiApp({
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queue
       });
     }).toThrow(
@@ -1131,10 +1195,278 @@ describe("Job Dispatch Routes", () => {
       createControlApiApp(
         {
           uow: new FakeUnitOfWork(),
+          storageTelemetry: createFakeStorageTelemetry(),
           jobQueue: queue
         },
         {}
       );
     }).toThrow(ControlApiConfigError);
+  });
+
+  it("job routes require storage admission wiring", () => {
+    const queue = createFakeJobQueue();
+
+    expect(() => {
+      createControlApiApp(
+        {
+          uow: new FakeUnitOfWork(),
+          jobQueue: queue
+        },
+        {
+          jobDispatch: defaultDispatchConfig
+        }
+      );
+    }).toThrow(ControlApiConfigError);
+
+    // review-only apps remain constructible
+    const reviewApp = createControlApiApp({
+      uow: new FakeUnitOfWork()
+    });
+    expect(reviewApp).toBeDefined();
+  });
+
+  it("candidate completion at degraded returns typed 507 without queue write", async () => {
+    const queue = createFakeJobQueue();
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(85, 100),
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${sampleJobId}/complete`,
+      payload: {
+        leaseToken: sampleLeaseToken,
+        candidatePayload: { outputCount: 1 }
+      }
+    });
+
+    expect(response.statusCode).toBe(507);
+    expect(response.json()).toEqual({
+      code: "STORAGE_ADMISSION_DENIED",
+      message:
+        'Storage admission denied for operation "candidate_upload": watermark state is "degraded" (85.0% disk usage)',
+      operationClass: "candidate_upload",
+      watermarkState: "degraded",
+      usedRatio: 0.85,
+      totalBytes: 100,
+      freeBytes: 15
+    });
+    expect(queue.complete).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it("production completion at degraded remains permitted", async () => {
+    const queue = createFakeJobQueue({
+      complete: vi.fn().mockResolvedValue({ outcome: "applied", job: sampleCompletedJob })
+    });
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(85, 100),
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${sampleJobId}/complete`,
+      payload: {
+        leaseToken: sampleLeaseToken,
+        manifestPayload: { promptIdComfy: "123" }
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      outcome: "applied",
+      job: expect.objectContaining({
+        jobId: sampleJobId,
+        status: "completed"
+      })
+    });
+    expect(queue.complete).toHaveBeenCalledTimes(1);
+
+    await app.close();
+  });
+
+  it("production completion at critical returns typed 507 without queue write", async () => {
+    const queue = createFakeJobQueue();
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(93, 100),
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${sampleJobId}/complete`,
+      payload: {
+        leaseToken: sampleLeaseToken,
+        manifestPayload: { promptIdComfy: "123" }
+      }
+    });
+
+    expect(response.statusCode).toBe(507);
+    expect(response.json()).toEqual({
+      code: "STORAGE_ADMISSION_DENIED",
+      message:
+        'Storage admission denied for operation "delivery_write": watermark state is "critical" (93.0% disk usage)',
+      operationClass: "delivery_write",
+      watermarkState: "critical",
+      usedRatio: 0.93,
+      totalBytes: 100,
+      freeBytes: 7
+    });
+    expect(queue.complete).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it("normal completion preserves both payload branches", async () => {
+    const queue = createFakeJobQueue({
+      complete: vi.fn().mockResolvedValue({ outcome: "applied", job: sampleCompletedJob })
+    });
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(50, 100),
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    // Candidate branch
+    const candidatePayload = { candidateId: "cand-1", outputCount: 1 };
+    const candResponse = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${sampleJobId}/complete`,
+      payload: {
+        leaseToken: sampleLeaseToken,
+        candidatePayload
+      }
+    });
+
+    expect(candResponse.statusCode).toBe(200);
+    expect(queue.complete).toHaveBeenCalledTimes(1);
+    expect(queue.complete).toHaveBeenLastCalledWith(
+      sampleJobId,
+      sampleLeaseToken,
+      undefined,
+      candidatePayload
+    );
+
+    // Production branch
+    const manifestPayload = { promptIdComfy: "prompt-1", outputCount: 1 };
+    const prodResponse = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${sampleJobId}/complete`,
+      payload: {
+        leaseToken: sampleLeaseToken,
+        manifestPayload
+      }
+    });
+
+    expect(prodResponse.statusCode).toBe(200);
+    expect(queue.complete).toHaveBeenCalledTimes(2);
+    expect(queue.complete).toHaveBeenLastCalledWith(
+      sampleJobId,
+      sampleLeaseToken,
+      manifestPayload,
+      undefined
+    );
+
+    await app.close();
+  });
+
+  it("telemetry failure is not mislabeled as admission denial", async () => {
+    const queue = createFakeJobQueue();
+    const failingTelemetry: StorageTelemetryPort = {
+      getStorageTelemetry: vi.fn().mockRejectedValue(new Error("disk telemetry read error"))
+    };
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: failingTelemetry,
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${sampleJobId}/complete`,
+      payload: {
+        leaseToken: sampleLeaseToken,
+        manifestPayload: { promptIdComfy: "123" }
+      }
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({
+      message: "Internal Server Error"
+    });
+    expect(queue.complete).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it("completion replay is conservatively checked before mutation classification", async () => {
+    const queue = createFakeJobQueue({
+      complete: vi.fn().mockResolvedValue({ outcome: "already_applied", job: sampleCompletedJob })
+    });
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(93, 100),
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${sampleJobId}/complete`,
+      payload: {
+        leaseToken: sampleLeaseToken,
+        manifestPayload: { promptIdComfy: "123" }
+      }
+    });
+
+    expect(response.statusCode).toBe(507);
+    expect(response.json()).toEqual({
+      code: "STORAGE_ADMISSION_DENIED",
+      message:
+        'Storage admission denied for operation "delivery_write": watermark state is "critical" (93.0% disk usage)',
+      operationClass: "delivery_write",
+      watermarkState: "critical",
+      usedRatio: 0.93,
+      totalBytes: 100,
+      freeBytes: 7
+    });
+    expect(queue.complete).not.toHaveBeenCalled();
+
+    await app.close();
   });
 });
