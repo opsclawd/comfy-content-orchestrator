@@ -64,15 +64,19 @@ Specifically:
   (one human per device); if that assumption breaks, this ADR is the one to
   revisit.
 - `CONTROL_API_REVIEWER_IDENTITY_FALLBACK` is **forbidden in production
-  deployments**. The resolver already refuses to start when both
-  `trustedProxies` and `fallbackIdentity` are configured
+  deployments**. Production must configure
+  `CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES` only; `fallbackIdentity`
+  is permitted only in dev/test/CI environments where Tailscale is not
+  fronting the Control API. The resolver already refuses to start when both
+  are configured together
   (`apps/control-api/src/http/reviewer-identity.ts:111-119`), but a
   `fallbackIdentity`-only configuration is still accepted and silently
   attributes every request to the fallback identity — every `ReviewEvent`
-  would carry a phantom reviewer. Production must configure neither env var,
-  or both — never `fallbackIdentity` alone. (A runtime rejection keyed on
-  `NODE_ENV=production` would convert this ADR constraint into a hard server
-  refusal; tracked as a follow-up.)
+  would carry a phantom reviewer. The "proxies-only" rule above is currently
+  enforceable only by operator discipline; a runtime rejection keyed on
+  `NODE_ENV=production` is filed as a follow-up, treated as a
+  production-readiness prerequisite for Review Hub Browser Access Gate
+  (#68 Gate 3).
 
 What this decision explicitly does *not* change:
 
