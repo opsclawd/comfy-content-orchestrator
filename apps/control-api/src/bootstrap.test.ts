@@ -7,10 +7,14 @@ import type { FastifyInstance } from "fastify";
 import {
   HostFsStorageTelemetryAdapter,
   InMemoryStorageMetricsRegistry,
+  PostgresJobQueue,
+  StorageAwareJobAdmissionGate,
   type HostFsStorageTelemetryAdapterOptions,
-  type StatFsFn
+  type StatFsFn,
+  type StorageAwareJobAdmissionGateOptions
 } from "@cco/infrastructure";
 import type { StorageTelemetryPort } from "@cco/application";
+import type { ServerListenOptions } from "./http/server.js";
 import type { ControlApiDependencies } from "./http/types.js";
 
 describe("bootstrap", () => {
@@ -129,7 +133,7 @@ describe("bootstrap", () => {
     };
   }
 
-  it("probes PostgreSQL and MinIO before listening", async () => {
+  it("does not start the server before dependency readiness probes", async () => {
     const harness = createTestHarness();
 
     const runtime = await runControlApi({
@@ -154,14 +158,118 @@ describe("bootstrap", () => {
         sceneReviewQueries: expect.any(Object),
         reviewMediaDelivery: expect.any(Object),
         storageTelemetry: expect.any(Object),
-        storageMetricsRegistry: expect.any(Object)
+        storageMetricsRegistry: expect.any(Object),
+        jobQueue: expect.any(PostgresJobQueue)
       }),
       expect.objectContaining({
         host: "100.64.0.1",
         port: 3000,
-        reviewerIdentityResolver: expect.any(Object)
+        reviewerIdentityResolver: expect.any(Object),
+        jobDispatch: {
+          leaseDurationMs: 300_000,
+          heartbeatIntervalMs: 30_000
+        }
       })
     );
+
+    await runtime.stop();
+  });
+
+  it("wires a Postgres job queue backed by storage admission", async () => {
+    const harness = createTestHarness();
+    let capturedDependencies: ControlApiDependencies | undefined;
+    harness.mockServerStarter.mockImplementation(async (deps: ControlApiDependencies) => {
+      capturedDependencies = deps;
+      return harness.mockServerHandle;
+    });
+
+    const runtime = await runControlApi({
+      config: validConfig,
+      poolFactory: () => harness.mockPool as unknown as Pool,
+      s3ClientFactory: () => harness.mockS3Client as unknown as S3Client,
+      serverStarter: harness.mockServerStarter,
+      processSignals: harness.mockSignals,
+      logger: harness.mockLogger
+    });
+
+    expect(capturedDependencies?.jobQueue).toBeDefined();
+    expect(capturedDependencies?.jobQueue).toBeInstanceOf(PostgresJobQueue);
+
+    const jobQueue = capturedDependencies?.jobQueue as PostgresJobQueue;
+    const queuePool = (jobQueue as unknown as { pool: Pool }).pool;
+    expect(queuePool).toBe(harness.mockPool);
+
+    const queueGate = (jobQueue as unknown as { gate: StorageAwareJobAdmissionGate }).gate;
+    expect(queueGate).toBeInstanceOf(StorageAwareJobAdmissionGate);
+
+    await runtime.stop();
+  });
+
+  it("passes dispatch timing to the HTTP server", async () => {
+    const harness = createTestHarness();
+    let capturedOptions: ServerListenOptions | undefined;
+    harness.mockServerStarter.mockImplementation(
+      async (_deps: ControlApiDependencies, opts: ServerListenOptions) => {
+        capturedOptions = opts;
+        return harness.mockServerHandle;
+      }
+    );
+
+    const runtime = await runControlApi({
+      config: validConfig,
+      poolFactory: () => harness.mockPool as unknown as Pool,
+      s3ClientFactory: () => harness.mockS3Client as unknown as S3Client,
+      serverStarter: harness.mockServerStarter,
+      processSignals: harness.mockSignals,
+      logger: harness.mockLogger
+    });
+
+    expect(capturedOptions).toBeDefined();
+    expect(capturedOptions?.host).toBe("100.64.0.1");
+    expect(capturedOptions?.port).toBe(3000);
+    expect(capturedOptions?.reviewerIdentityResolver).toBeDefined();
+    expect(capturedOptions?.jobDispatch).toEqual({
+      leaseDurationMs: 300_000,
+      heartbeatIntervalMs: 30_000
+    });
+
+    await runtime.stop();
+  });
+
+  it("shares telemetry and metrics between admission and metrics routes", async () => {
+    const harness = createTestHarness();
+    let capturedDependencies: ControlApiDependencies | undefined;
+    harness.mockServerStarter.mockImplementation(async (deps: ControlApiDependencies) => {
+      capturedDependencies = deps;
+      return harness.mockServerHandle;
+    });
+
+    const runtime = await runControlApi({
+      config: validConfig,
+      poolFactory: () => harness.mockPool as unknown as Pool,
+      s3ClientFactory: () => harness.mockS3Client as unknown as S3Client,
+      serverStarter: harness.mockServerStarter,
+      processSignals: harness.mockSignals,
+      logger: harness.mockLogger
+    });
+
+    expect(capturedDependencies).toBeDefined();
+    const storageTelemetry = capturedDependencies?.storageTelemetry;
+    const storageMetricsRegistry = capturedDependencies?.storageMetricsRegistry;
+    expect(storageTelemetry).toBeInstanceOf(HostFsStorageTelemetryAdapter);
+    expect(storageMetricsRegistry).toBeInstanceOf(InMemoryStorageMetricsRegistry);
+
+    const jobQueue = capturedDependencies?.jobQueue as PostgresJobQueue;
+    expect(jobQueue).toBeInstanceOf(PostgresJobQueue);
+    const queueGate = (jobQueue as unknown as { gate: StorageAwareJobAdmissionGate }).gate;
+    expect(queueGate).toBeInstanceOf(StorageAwareJobAdmissionGate);
+
+    const gateOptions = (queueGate as unknown as { options: StorageAwareJobAdmissionGateOptions })
+      .options;
+    expect(gateOptions.telemetryPort).toBe(storageTelemetry);
+    expect(gateOptions.metricsRegistry).toBe(storageMetricsRegistry);
+
+    await runtime.stop();
   });
 
   it("wires one telemetry adapter and one registry into the HTTP server", async () => {
