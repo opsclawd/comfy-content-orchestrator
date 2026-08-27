@@ -1379,12 +1379,11 @@ describe("PostgresJobQueue integration", () => {
     expect(dbRowRendering.rows[0]?.lease_expires_at).toBeDefined();
   });
 
-  it("fail never treats a repeat as already_applied", async () => {
+  it("fail idempotency on requeued row returns superseded", async () => {
     const { sceneId } = await createTestScene();
     const queue = new PostgresJobQueue(pool);
     const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
 
-    // Case 1: Requeued row (retry_count < maxRetries)
     const activeJob = await insertRenderJobRecord(client, {
       sceneId,
       status: "leased",
@@ -1402,7 +1401,6 @@ describe("PostgresJobQueue integration", () => {
     expect(secondFail.outcome).toBe("superseded");
     expect((secondFail as { job?: unknown }).job).toBeUndefined();
 
-    // Verify row in DB was not updated by second failure
     const dbRowRequeued = await client.query<{
       status: string;
       retry_count: number;
@@ -1413,8 +1411,13 @@ describe("PostgresJobQueue integration", () => {
     expect(dbRowRequeued.rows[0]?.status).toBe("queued");
     expect(dbRowRequeued.rows[0]?.retry_count).toBe(1);
     expect(dbRowRequeued.rows[0]?.error_trace).toBe("first failure");
+  });
 
-    // Case 2: Failed row (retry_count >= maxRetries)
+  it("fail idempotency on terminal failed row returns already_applied", async () => {
+    const { sceneId } = await createTestScene();
+    const queue = new PostgresJobQueue(pool);
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+
     const exhaustedJob = await insertRenderJobRecord(client, {
       sceneId,
       status: "rendering",
@@ -1437,8 +1440,12 @@ describe("PostgresJobQueue integration", () => {
       token,
       "second exhaustion failure"
     );
-    expect(secondExhaustedFail.outcome).toBe("superseded");
-    expect((secondExhaustedFail as { job?: unknown }).job).toBeUndefined();
+    expect(secondExhaustedFail.outcome).toBe("already_applied");
+    if (secondExhaustedFail.outcome === "already_applied") {
+      expect(secondExhaustedFail.job.jobId).toBe(exhaustedJob.job_id);
+      expect(secondExhaustedFail.job.status).toBe("failed");
+      expect(secondExhaustedFail.job.errorTrace).toBe("first exhaustion failure");
+    }
 
     const dbRowExhausted = await client.query<{
       status: string;
@@ -1465,7 +1472,6 @@ describe("PostgresJobQueue integration", () => {
         tokenToUse: token,
         desc: "completed status with matching token"
       },
-      { status: "failed" as const, tokenToUse: token, desc: "failed status with matching token" },
       {
         status: "cancelled" as const,
         tokenToUse: token,
@@ -1487,7 +1493,7 @@ describe("PostgresJobQueue integration", () => {
         leaseToken: tc.status === "queued" ? null : token,
         leaseExpiresAt: tc.status === "queued" ? null : new Date(Date.now() + 60_000),
         retryCount: 0,
-        errorTrace: tc.status === "failed" ? "initial error" : null
+        errorTrace: null
       });
 
       const preSnapshot = await client.query("SELECT * FROM render_jobs WHERE job_id = $1", [

@@ -257,6 +257,25 @@ the `generation_manifests.job_id` unique violation, which the adapter catches an
 reports as already-done → `200`. Exactly-once is enforced by the database, not by
 application bookkeeping.
 
+`fail` splits the idempotency case by post-state, because its target state is not
+fixed:
+
+- A repeated `fail` against a row that the previous call already moved to
+  `failed` (the retry-exhausted branch) returns `already_applied` / `200`. The
+  job is genuinely terminal; the worker just lost the response.
+- A repeated `fail` against a row that the previous call requeued
+  (`status = 'queued'`, retries remain) returns `superseded` / `409`. The row is
+  no longer in a state where `fail` applies, and the next attempt will see a
+  different `lease_token` once the row is reclaimed, so re-using the original
+  token is a stale-lease signal.
+
+This rule was settled after the Sprint 2.5 merge when PR #104's review surfaced
+a contract conflict between the #98 acceptance trap ("repeated `fail` returns
+`200`") and the #103 `postgres-job-queue` behavior codified by the
+`fail never treats a repeat as already_applied` integration test. The terminal
+case is unambiguous; the requeue case is defensible either way. Tracking the
+contract in this spec rather than only in code closes the cross-issue gap.
+
 ## Scope boundaries
 
 In scope: migration, domain types and transition rules, `JobQueuePort`, the

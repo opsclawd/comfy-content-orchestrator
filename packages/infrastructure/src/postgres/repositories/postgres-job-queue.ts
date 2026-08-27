@@ -538,6 +538,13 @@ export class PostgresJobQueue implements JobQueuePort {
       return { outcome: "not_found" };
     }
 
+    if (currentRow.lease_token === leaseToken && currentRow.status === "failed") {
+      return {
+        outcome: "already_applied",
+        job: this.mapRowToRenderJob(currentRow)
+      };
+    }
+
     return { outcome: "superseded" };
   }
 
