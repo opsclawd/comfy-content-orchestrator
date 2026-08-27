@@ -1125,4 +1125,447 @@ describe("PostgresJobQueue integration", () => {
     );
     expect(jobRow.rows[0]?.status).toBe("rendering");
   });
+
+  it("fail requeues current active work while retries remain", async () => {
+    const { sceneId } = await createTestScene();
+    const queue = new PostgresJobQueue(pool);
+
+    // 1. leased source state
+    const leasedToken = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const leasedJob = await insertRenderJobRecord(client, {
+      sceneId,
+      status: "leased",
+      workerId: "worker-leased-fail",
+      leaseToken: leasedToken,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 0,
+      maxRetries: 3
+    });
+
+    const leasedResult = await queue.fail(
+      leasedJob.job_id as JobId,
+      leasedToken,
+      "failed during leased"
+    );
+
+    expect(leasedResult.outcome).toBe("applied");
+    if (leasedResult.outcome === "applied") {
+      expect(leasedResult.job.jobId).toBe(leasedJob.job_id);
+      expect(leasedResult.job.status).toBe("queued");
+      expect(leasedResult.job.retryCount).toBe(1);
+      expect(leasedResult.job.maxRetries).toBe(3);
+      expect(leasedResult.job.workerId).toBeNull();
+      expect(leasedResult.job.leaseExpiresAt).toBeNull();
+      expect(leasedResult.job.leaseToken).toBe(leasedToken);
+      expect(leasedResult.job.errorTrace).toBe("failed during leased");
+    }
+
+    const dbRowLeased = await client.query<{
+      status: string;
+      worker_id: string | null;
+      lease_token: string | null;
+      lease_expires_at: Date | null;
+      retry_count: number;
+      error_trace: string | null;
+    }>(
+      "SELECT status, worker_id, lease_token, lease_expires_at, retry_count, error_trace FROM render_jobs WHERE job_id = $1",
+      [leasedJob.job_id]
+    );
+    expect(dbRowLeased.rows[0]?.status).toBe("queued");
+    expect(dbRowLeased.rows[0]?.worker_id).toBeNull();
+    expect(dbRowLeased.rows[0]?.lease_expires_at).toBeNull();
+    expect(dbRowLeased.rows[0]?.lease_token).toBe(leasedToken);
+    expect(dbRowLeased.rows[0]?.retry_count).toBe(1);
+    expect(dbRowLeased.rows[0]?.error_trace).toBe("failed during leased");
+
+    // Old token cannot mutate the requeued job
+    const startAttempt = await queue.start(leasedJob.job_id as JobId, leasedToken);
+    expect(startAttempt.outcome).toBe("superseded");
+    const hbAttempt = await queue.heartbeat(leasedJob.job_id as JobId, leasedToken, 30_000);
+    expect(hbAttempt.outcome).toBe("superseded");
+    const completeAttempt = await queue.complete(leasedJob.job_id as JobId, leasedToken);
+    expect(completeAttempt.outcome).toBe("superseded");
+    const failAgainAttempt = await queue.fail(leasedJob.job_id as JobId, leasedToken, "fail again");
+    expect(failAgainAttempt.outcome).toBe("superseded");
+
+    // 2. rendering source state
+    const renderingToken = "01950c46-9e90-7d3d-82d2-8f1d3c000002" as LeaseToken;
+    const renderingJob = await insertRenderJobRecord(client, {
+      sceneId,
+      status: "rendering",
+      workerId: "worker-rendering-fail",
+      leaseToken: renderingToken,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 1,
+      maxRetries: 3
+    });
+
+    const renderingResult = await queue.fail(
+      renderingJob.job_id as JobId,
+      renderingToken,
+      "failed during rendering"
+    );
+
+    expect(renderingResult.outcome).toBe("applied");
+    if (renderingResult.outcome === "applied") {
+      expect(renderingResult.job.jobId).toBe(renderingJob.job_id);
+      expect(renderingResult.job.status).toBe("queued");
+      expect(renderingResult.job.retryCount).toBe(2);
+      expect(renderingResult.job.maxRetries).toBe(3);
+      expect(renderingResult.job.workerId).toBeNull();
+      expect(renderingResult.job.leaseExpiresAt).toBeNull();
+      expect(renderingResult.job.leaseToken).toBe(renderingToken);
+      expect(renderingResult.job.errorTrace).toBe("failed during rendering");
+    }
+
+    const dbRowRendering = await client.query<{
+      status: string;
+      worker_id: string | null;
+      lease_token: string | null;
+      lease_expires_at: Date | null;
+      retry_count: number;
+      error_trace: string | null;
+    }>(
+      "SELECT status, worker_id, lease_token, lease_expires_at, retry_count, error_trace FROM render_jobs WHERE job_id = $1",
+      [renderingJob.job_id]
+    );
+    expect(dbRowRendering.rows[0]?.status).toBe("queued");
+    expect(dbRowRendering.rows[0]?.worker_id).toBeNull();
+    expect(dbRowRendering.rows[0]?.lease_expires_at).toBeNull();
+    expect(dbRowRendering.rows[0]?.lease_token).toBe(renderingToken);
+    expect(dbRowRendering.rows[0]?.retry_count).toBe(2);
+    expect(dbRowRendering.rows[0]?.error_trace).toBe("failed during rendering");
+  });
+
+  it("fail terminalizes current active work at retry exhaustion", async () => {
+    const { sceneId } = await createTestScene();
+    const queue = new PostgresJobQueue(pool);
+
+    // 1. leased source state with retry_count >= max_retries
+    const leasedToken = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const leasedExpiry = new Date(Date.now() + 60_000);
+    const leasedJob = await insertRenderJobRecord(client, {
+      sceneId,
+      status: "leased",
+      workerId: "worker-leased-exhausted",
+      leaseToken: leasedToken,
+      leaseExpiresAt: leasedExpiry,
+      retryCount: 3,
+      maxRetries: 3
+    });
+
+    const leasedResult = await queue.fail(
+      leasedJob.job_id as JobId,
+      leasedToken,
+      "exhaustion in leased"
+    );
+
+    expect(leasedResult.outcome).toBe("applied");
+    if (leasedResult.outcome === "applied") {
+      expect(leasedResult.job.jobId).toBe(leasedJob.job_id);
+      expect(leasedResult.job.status).toBe("failed");
+      expect(leasedResult.job.retryCount).toBe(3);
+      expect(leasedResult.job.maxRetries).toBe(3);
+      expect(leasedResult.job.workerId).toBe("worker-leased-exhausted");
+      expect(leasedResult.job.leaseToken).toBe(leasedToken);
+      expect(leasedResult.job.leaseExpiresAt).toBeInstanceOf(Date);
+      expect(leasedResult.job.errorTrace).toBe("exhaustion in leased");
+    }
+
+    const dbRowLeased = await client.query<{
+      status: string;
+      worker_id: string | null;
+      lease_token: string | null;
+      lease_expires_at: Date | null;
+      retry_count: number;
+      error_trace: string | null;
+    }>(
+      "SELECT status, worker_id, lease_token, lease_expires_at, retry_count, error_trace FROM render_jobs WHERE job_id = $1",
+      [leasedJob.job_id]
+    );
+    expect(dbRowLeased.rows[0]?.status).toBe("failed");
+    expect(dbRowLeased.rows[0]?.worker_id).toBe("worker-leased-exhausted");
+    expect(dbRowLeased.rows[0]?.lease_token).toBe(leasedToken);
+    expect(dbRowLeased.rows[0]?.retry_count).toBe(3);
+    expect(dbRowLeased.rows[0]?.error_trace).toBe("exhaustion in leased");
+    expect(dbRowLeased.rows[0]?.lease_expires_at).toBeDefined();
+
+    // 2. rendering source state with retry_count >= max_retries
+    const renderingToken = "01950c46-9e90-7d3d-82d2-8f1d3c000002" as LeaseToken;
+    const renderingExpiry = new Date(Date.now() + 60_000);
+    const renderingJob = await insertRenderJobRecord(client, {
+      sceneId,
+      status: "rendering",
+      workerId: "worker-rendering-exhausted",
+      leaseToken: renderingToken,
+      leaseExpiresAt: renderingExpiry,
+      retryCount: 3,
+      maxRetries: 3
+    });
+
+    const renderingResult = await queue.fail(
+      renderingJob.job_id as JobId,
+      renderingToken,
+      "exhaustion in rendering"
+    );
+
+    expect(renderingResult.outcome).toBe("applied");
+    if (renderingResult.outcome === "applied") {
+      expect(renderingResult.job.jobId).toBe(renderingJob.job_id);
+      expect(renderingResult.job.status).toBe("failed");
+      expect(renderingResult.job.retryCount).toBe(3);
+      expect(renderingResult.job.maxRetries).toBe(3);
+      expect(renderingResult.job.workerId).toBe("worker-rendering-exhausted");
+      expect(renderingResult.job.leaseToken).toBe(renderingToken);
+      expect(renderingResult.job.leaseExpiresAt).toBeInstanceOf(Date);
+      expect(renderingResult.job.errorTrace).toBe("exhaustion in rendering");
+    }
+
+    const dbRowRendering = await client.query<{
+      status: string;
+      worker_id: string | null;
+      lease_token: string | null;
+      lease_expires_at: Date | null;
+      retry_count: number;
+      error_trace: string | null;
+    }>(
+      "SELECT status, worker_id, lease_token, lease_expires_at, retry_count, error_trace FROM render_jobs WHERE job_id = $1",
+      [renderingJob.job_id]
+    );
+    expect(dbRowRendering.rows[0]?.status).toBe("failed");
+    expect(dbRowRendering.rows[0]?.worker_id).toBe("worker-rendering-exhausted");
+    expect(dbRowRendering.rows[0]?.lease_token).toBe(renderingToken);
+    expect(dbRowRendering.rows[0]?.retry_count).toBe(3);
+    expect(dbRowRendering.rows[0]?.error_trace).toBe("exhaustion in rendering");
+    expect(dbRowRendering.rows[0]?.lease_expires_at).toBeDefined();
+  });
+
+  it("fail never treats a repeat as already_applied", async () => {
+    const { sceneId } = await createTestScene();
+    const queue = new PostgresJobQueue(pool);
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+
+    // Case 1: Requeued row (retry_count < maxRetries)
+    const activeJob = await insertRenderJobRecord(client, {
+      sceneId,
+      status: "leased",
+      workerId: "worker-1",
+      leaseToken: token,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 0,
+      maxRetries: 3
+    });
+
+    const firstFail = await queue.fail(activeJob.job_id as JobId, token, "first failure");
+    expect(firstFail.outcome).toBe("applied");
+
+    const secondFail = await queue.fail(activeJob.job_id as JobId, token, "second failure");
+    expect(secondFail.outcome).toBe("superseded");
+    expect((secondFail as { job?: unknown }).job).toBeUndefined();
+
+    // Verify row in DB was not updated by second failure
+    const dbRowRequeued = await client.query<{
+      status: string;
+      retry_count: number;
+      error_trace: string;
+    }>("SELECT status, retry_count, error_trace FROM render_jobs WHERE job_id = $1", [
+      activeJob.job_id
+    ]);
+    expect(dbRowRequeued.rows[0]?.status).toBe("queued");
+    expect(dbRowRequeued.rows[0]?.retry_count).toBe(1);
+    expect(dbRowRequeued.rows[0]?.error_trace).toBe("first failure");
+
+    // Case 2: Failed row (retry_count >= maxRetries)
+    const exhaustedJob = await insertRenderJobRecord(client, {
+      sceneId,
+      status: "rendering",
+      workerId: "worker-1",
+      leaseToken: token,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 3,
+      maxRetries: 3
+    });
+
+    const firstExhaustedFail = await queue.fail(
+      exhaustedJob.job_id as JobId,
+      token,
+      "first exhaustion failure"
+    );
+    expect(firstExhaustedFail.outcome).toBe("applied");
+
+    const secondExhaustedFail = await queue.fail(
+      exhaustedJob.job_id as JobId,
+      token,
+      "second exhaustion failure"
+    );
+    expect(secondExhaustedFail.outcome).toBe("superseded");
+    expect((secondExhaustedFail as { job?: unknown }).job).toBeUndefined();
+
+    const dbRowExhausted = await client.query<{
+      status: string;
+      retry_count: number;
+      error_trace: string;
+    }>("SELECT status, retry_count, error_trace FROM render_jobs WHERE job_id = $1", [
+      exhaustedJob.job_id
+    ]);
+    expect(dbRowExhausted.rows[0]?.status).toBe("failed");
+    expect(dbRowExhausted.rows[0]?.retry_count).toBe(3);
+    expect(dbRowExhausted.rows[0]?.error_trace).toBe("first exhaustion failure");
+  });
+
+  it("fail fences stale and illegal states", async () => {
+    const { sceneId } = await createTestScene();
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const staleToken = "01950c46-9e90-7d3d-82d2-8f1d3c000099" as LeaseToken;
+    const queue = new PostgresJobQueue(pool);
+
+    const testCases = [
+      { status: "queued" as const, tokenToUse: token, desc: "queued status with matching token" },
+      {
+        status: "completed" as const,
+        tokenToUse: token,
+        desc: "completed status with matching token"
+      },
+      { status: "failed" as const, tokenToUse: token, desc: "failed status with matching token" },
+      {
+        status: "cancelled" as const,
+        tokenToUse: token,
+        desc: "cancelled status with matching token"
+      },
+      { status: "leased" as const, tokenToUse: staleToken, desc: "leased status with stale token" },
+      {
+        status: "rendering" as const,
+        tokenToUse: staleToken,
+        desc: "rendering status with stale token"
+      }
+    ];
+
+    for (const tc of testCases) {
+      const job = await insertRenderJobRecord(client, {
+        sceneId,
+        status: tc.status,
+        workerId: tc.status === "queued" ? null : "worker-1",
+        leaseToken: tc.status === "queued" ? null : token,
+        leaseExpiresAt: tc.status === "queued" ? null : new Date(Date.now() + 60_000),
+        retryCount: 0,
+        errorTrace: tc.status === "failed" ? "initial error" : null
+      });
+
+      const preSnapshot = await client.query("SELECT * FROM render_jobs WHERE job_id = $1", [
+        job.job_id
+      ]);
+
+      const res = await queue.fail(job.job_id as JobId, tc.tokenToUse, "attempted illegal failure");
+      expect(res.outcome, `Expected superseded for ${tc.desc}`).toBe("superseded");
+      expect((res as { job?: unknown }).job).toBeUndefined();
+
+      const postSnapshot = await client.query("SELECT * FROM render_jobs WHERE job_id = $1", [
+        job.job_id
+      ]);
+      expect(postSnapshot.rows[0], `Row mutated for ${tc.desc}`).toEqual(preSnapshot.rows[0]);
+    }
+  });
+
+  it("fail reports missing jobs", async () => {
+    const missingJobId = "01950c46-9e90-7d3d-82d2-8f1d3c000000" as JobId;
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const queue = new PostgresJobQueue(pool);
+
+    const result = await queue.fail(missingJobId, token, "missing job failure");
+    expect(result.outcome).toBe("not_found");
+    expect((result as { job?: unknown }).job).toBeUndefined();
+  });
+
+  it("retry boundary preserves the final attempt", async () => {
+    const { sceneId } = await createTestScene();
+    const queue = new PostgresJobQueue(pool);
+
+    // Initial queued job with retry_count = 2, max_retries = 3
+    const insertedJob = await insertRenderJobRecord(client, {
+      sceneId,
+      status: "queued",
+      workerId: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      retryCount: 2,
+      maxRetries: 3
+    });
+
+    // 1. Worker 1 claims job (from queued -> does not increment retry_count)
+    const claimed1 = await queue.claim({ workerId: "worker-attempt-3", leaseDurationMs: 30_000 });
+    expect(claimed1).toBeDefined();
+    expect(claimed1?.jobId).toBe(insertedJob.job_id);
+    expect(claimed1?.status).toBe("leased");
+    expect(claimed1?.retryCount).toBe(2);
+    expect(claimed1?.workerId).toBe("worker-attempt-3");
+    const token1 = claimed1!.leaseToken!;
+    expect(token1).toBeDefined();
+
+    // 2. Worker 1 starts rendering
+    const startRes1 = await queue.start(claimed1!.jobId, token1);
+    expect(startRes1.outcome).toBe("applied");
+
+    // 3. Worker 1 fails below max (retry 2 -> 3, with max_retries = 3)
+    const failRes1 = await queue.fail(claimed1!.jobId, token1, "attempt 3 failed");
+    expect(failRes1.outcome).toBe("applied");
+    if (failRes1.outcome === "applied") {
+      expect(failRes1.job.status).toBe("queued");
+      expect(failRes1.job.retryCount).toBe(3);
+      expect(failRes1.job.workerId).toBeNull();
+      expect(failRes1.job.leaseExpiresAt).toBeNull();
+      expect(failRes1.job.leaseToken).toBe(token1);
+      expect(failRes1.job.errorTrace).toBe("attempt 3 failed");
+    }
+
+    // 4. Worker 2 claims the requeued job (final attempt 4, retry_count is 3, max_retries is 3)
+    const claimed2 = await queue.claim({ workerId: "worker-attempt-4", leaseDurationMs: 30_000 });
+    expect(claimed2).toBeDefined();
+    expect(claimed2?.jobId).toBe(insertedJob.job_id);
+    expect(claimed2?.status).toBe("leased");
+    expect(claimed2?.retryCount).toBe(3); // Queued claim does NOT increment
+    expect(claimed2?.workerId).toBe("worker-attempt-4");
+    const token2 = claimed2!.leaseToken!;
+    expect(token2).toBeDefined();
+    expect(token2).not.toBe(token1); // Fresh token generated
+
+    // 5. Worker 2 starts rendering
+    const startRes2 = await queue.start(claimed2!.jobId, token2);
+    expect(startRes2.outcome).toBe("applied");
+
+    // 6. Worker 2 fails at max (retry 3 >= 3) -> terminalizes
+    const failRes2 = await queue.fail(claimed2!.jobId, token2, "final attempt failed");
+    expect(failRes2.outcome).toBe("applied");
+    if (failRes2.outcome === "applied") {
+      expect(failRes2.job.status).toBe("failed");
+      expect(failRes2.job.retryCount).toBe(3);
+      expect(failRes2.job.workerId).toBe("worker-attempt-4");
+      expect(failRes2.job.leaseToken).toBe(token2);
+      expect(failRes2.job.leaseExpiresAt).toBeInstanceOf(Date);
+      expect(failRes2.job.errorTrace).toBe("final attempt failed");
+    }
+
+    // DB state verification
+    const finalDbRow = await client.query<{
+      status: string;
+      worker_id: string;
+      lease_token: string;
+      lease_expires_at: Date;
+      retry_count: number;
+      max_retries: number;
+      error_trace: string;
+    }>(
+      "SELECT status, worker_id, lease_token, lease_expires_at, retry_count, max_retries, error_trace FROM render_jobs WHERE job_id = $1",
+      [insertedJob.job_id]
+    );
+    expect(finalDbRow.rows[0]?.status).toBe("failed");
+    expect(finalDbRow.rows[0]?.worker_id).toBe("worker-attempt-4");
+    expect(finalDbRow.rows[0]?.lease_token).toBe(token2);
+    expect(finalDbRow.rows[0]?.retry_count).toBe(3);
+    expect(finalDbRow.rows[0]?.max_retries).toBe(3);
+    expect(finalDbRow.rows[0]?.error_trace).toBe("final attempt failed");
+
+    // 7. Subsequent claims return undefined
+    const claimed3 = await queue.claim({ workerId: "worker-attempt-5", leaseDurationMs: 30_000 });
+    expect(claimed3).toBeUndefined();
+  });
 });

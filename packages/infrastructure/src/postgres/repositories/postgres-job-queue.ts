@@ -467,6 +467,67 @@ export class PostgresJobQueue implements JobQueuePort {
     }
   }
 
+  async fail(jobId: JobId, leaseToken: LeaseToken, errorTrace: string): Promise<JobMutationResult> {
+    const updateRes = await this.pool.query<RenderJobRow>(
+      `
+      UPDATE render_jobs
+      SET
+        status = CASE
+          WHEN retry_count < max_retries THEN 'queued'::job_status_enum
+          ELSE 'failed'::job_status_enum
+        END,
+        worker_id = CASE
+          WHEN retry_count < max_retries THEN NULL
+          ELSE worker_id
+        END,
+        lease_expires_at = CASE
+          WHEN retry_count < max_retries THEN NULL
+          ELSE lease_expires_at
+        END,
+        retry_count = CASE
+          WHEN retry_count < max_retries THEN retry_count + 1
+          ELSE retry_count
+        END,
+        error_trace = $3,
+        updated_at = NOW()
+      WHERE job_id = $1
+        AND lease_token = $2
+        AND status IN ('leased', 'rendering')
+      RETURNING
+        job_id,
+        scene_id,
+        job_kind,
+        status,
+        workflow_template,
+        injected_payload,
+        worker_id,
+        lease_token,
+        lease_expires_at,
+        retry_count,
+        max_retries,
+        error_trace,
+        created_at,
+        updated_at
+      `,
+      [jobId, leaseToken, errorTrace]
+    );
+
+    const updatedRow = updateRes.rows[0];
+    if (updatedRow) {
+      return {
+        outcome: "applied",
+        job: this.mapRowToRenderJob(updatedRow)
+      };
+    }
+
+    const currentRow = await this.readJobRow(jobId);
+    if (!currentRow) {
+      return { outcome: "not_found" };
+    }
+
+    return { outcome: "superseded" };
+  }
+
   private async readJobRow(
     jobId: string,
     runner: Pool | PoolClient = this.pool

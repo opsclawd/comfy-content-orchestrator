@@ -29,4 +29,5 @@ export interface JobQueuePort {
     leaseToken: LeaseToken,
     manifestPayload?: Readonly<Record<string, unknown>>
   ): Promise<JobMutationResult>;
+  fail(jobId: JobId, leaseToken: LeaseToken, errorTrace: string): Promise<JobMutationResult>;
 }
