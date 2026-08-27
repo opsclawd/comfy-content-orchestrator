@@ -342,6 +342,54 @@ describe("parseReviewerIdentityConfig", () => {
   });
 });
 
+describe("TailscaleReviewerIdentityResolver NODE_ENV=production construction guards", () => {
+  it("rejects fallbackIdentity when NODE_ENV=production", () => {
+    expect(
+      () =>
+        new TailscaleReviewerIdentityResolver({
+          nodeEnv: "production",
+          fallbackIdentity: "Dev Fallback Director"
+        })
+    ).toThrow(/NODE_ENV=production/);
+  });
+
+  it("accepts trustedProxyAddresses only when NODE_ENV=production", () => {
+    expect(
+      () =>
+        new TailscaleReviewerIdentityResolver({
+          nodeEnv: "production",
+          trustedProxyAddresses: ["127.0.0.1"]
+        })
+    ).not.toThrow();
+  });
+
+  it("accepts fallbackIdentity when NODE_ENV is not production", () => {
+    expect(
+      () =>
+        new TailscaleReviewerIdentityResolver({
+          nodeEnv: "test",
+          fallbackIdentity: "Dev Fallback Director"
+        })
+    ).not.toThrow();
+  });
+
+  it("lets the existing mutual-exclusion error win when both proxies and fallback are configured in production", () => {
+    // The new NODE_ENV=production check is a defense-in-depth layer for the
+    // fallback-only misconfiguration. When both proxies and fallback are
+    // configured together, the existing mutual-exclusion check is the more
+    // specific failure and must take precedence so the operator is pointed at
+    // the actual configuration error, not at the production guard.
+    expect(
+      () =>
+        new TailscaleReviewerIdentityResolver({
+          nodeEnv: "production",
+          trustedProxyAddresses: ["127.0.0.1"],
+          fallbackIdentity: "Dev Fallback Director"
+        })
+    ).toThrow(/fallback identity cannot be combined with trusted proxy addresses/);
+  });
+});
+
 describe("normalizeIpAddress", () => {
   it("normalizes IPv4, IPv4-mapped IPv6, and pure IPv6 addresses", () => {
     expect(normalizeIpAddress("127.0.0.1")).toBe("127.0.0.1");
