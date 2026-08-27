@@ -96,9 +96,33 @@ The Sprint 2.5 route layer treats `manifestPayload` as opaque JSONB — Sprint 3
 - **Not found (404)**: same — abort. The job no longer exists.
 - **Already applied (200)**: this is the idempotent-retry success path; treat as success.
 - **503 (telemetry unavailable) on `/claim`**: back off and retry, telemetry may be transiently broken.
-- **507/429 on a write endpoint**: storage admission refused. Don't retry immediately; the same admission refusal will recur until capacity frees. Fail the job with `error_trace` carrying the admission error so the operator sees why. **Do not consume `retry_count`.**
+- **507/429 on a write endpoint**: storage admission refused. The worker does **not** call `/api/jobs/:id/fail` (which would consume `retry_count`). Instead it calls the new `POST /api/jobs/:id/defer` endpoint, see "Admission deferral" below.
 - **Network errors / unexpected 5xx**: treat as transient, retry with backoff.
 - **`complete` returning `applied` (200)** for `production` jobs writes the manifest; the unique constraint on `generation_manifests.job_id` is the database-level guard against duplicates. A retry that races with a successful write surfaces as `already_applied` (200) — exactly once, by construction.
+- **`complete` returning `applied` (200)** for `candidate` jobs writes the `storyboard_candidates` row in the same transaction; the unique constraint on `(scene_id, scene_spec_revision, variant_ordinal)` is the database-level guard against duplicates. Same `already_applied` semantics.
+
+### Admission deferral
+
+The "no `retry_count` consumed on admission refusal" rule (per the §"Storage admission surface" decision) cannot be honored through `/api/jobs/:id/fail`, because `fail()` always increments `retry_count` when requeuing (`packages/infrastructure/src/postgres/repositories/postgres-job-queue.ts:500-503`). A new endpoint is the cleanest separation.
+
+`POST /api/jobs/:id/defer` takes `{ leaseToken, reason }` and atomically:
+
+- sets `status = 'queued'`
+- clears `worker_id` and `lease_expires_at`
+- **keeps `lease_token` attached** to the row — this is the idempotency anchor for replay detection
+- **does NOT increment `retry_count`**
+- returns `200` with the same `deferred` outcome
+
+Idempotent retry walkthrough (the bug GPT caught in earlier wording):
+
+1. Worker A calls `/defer` → row: `status='queued', lease_token=old, worker_id=null, lease_expires_at=null`.
+2. Worker A retries `/defer` (lost response): WHERE `status='queued' AND lease_token=old` matches → returns `200 already_applied`. ✓
+3. Worker B claims: WHERE `status='queued'` matches (claim's predicate filters on status, not on `lease_token`). UPDATE rotates `lease_token` to a new uuid.
+4. Worker A's stale retry after worker B's claim: WHERE `status='queued' AND lease_token=old` — no match (status is now `leased`, token is now new). Falls through, returns `superseded` / `409`. ✓ Worker A correctly aborts.
+
+This works because nothing else (start/heartbeat/complete/fail) matches `status='queued'`. The kept `lease_token` is inert to other mutations and only the deferral machinery reads it.
+
+The endpoint and the `deferred` outcome mirror the existing pattern: same idempotency contract as `complete`/`fail`, same `translateMutationResult` mapping (the route layer needs no new mapping — `already_applied` and `superseded` are already mapped).
 
 ## Schema
 
@@ -118,11 +142,11 @@ If Sprint 3 issue 1's worker implementation reveals a need for a new field (e.g.
 | `packages/domain` | (none — the storage admission policy is already in `storage-admission.ts`) |
 | `packages/application/src/use-cases` | `assemble-generation-manifest.ts` (new) |
 | `packages/application/src/ports` | (none — all needed ports exist) |
-| `packages/infrastructure/src/postgres` | (none — `PostgresJobQueue` is the contract surface) |
-| `apps/render-worker/src` | `worker.ts` (new — the polling daemon), `cli/run-worker.ts` (new — entry point), tests under `worker.test.ts` |
-| `apps/control-api/src/http/routes` | (none — `translateMutationResult` already handles `already_applied`/`superseded`/`not_found`) |
+| `packages/infrastructure/src/postgres` | `PostgresJobQueue.complete()` extended to accept a `candidatePayload` for `candidate` jobs and write the `storyboard_candidates` row in the same transaction. New `/defer` mutation in `PostgresJobQueue` with a `deferred` `JobMutationResult` outcome. |
+| `apps/render-worker/src` | `worker.ts` (new — the polling daemon), `control-api-client.ts` (new — HTTP client for the six routes), `cli/run-worker.ts` (new — entry point), tests under `worker.test.ts` |
+| `apps/control-api/src/http/routes` | `job-routes.ts` modified, **no new routes added**: `complete` accepts the optional `candidatePayload` for `candidate` jobs (validation extended in `completeJobSchema`), `enforceStorageAdmission` called before the write (issue #113), `/defer` route registered. |
 
-This mirrors Sprint 2.5's pattern: the worker daemon is composition-root work that wires existing application-layer seams. The new use case is a single-file addition. No new architectural pattern.
+This mirrors Sprint 2.5's pattern: the worker daemon is composition-root work that wires existing application-layer seams. The new use case is a single-file addition. The queue-adapter extensions (`/defer`, candidate-row write) are the smallest surface change that closes the gaps surfaced during spec review.
 
 ## Worker protocol
 
@@ -131,14 +155,25 @@ The worker is a polling consumer of the Control API. Its lifecycle for one job:
 1. **Poll `/api/jobs/claim`** with `{ workerId, allowedJobKinds? }`. On `204` (no work), sleep for the configured `heartbeatIntervalMs` and re-poll. On `503` (telemetry down), back off more aggressively. On `200` with a job, proceed.
 2. **Read the job's `workflowTemplate`**, load the matching certified `RenderProfile` via `loadCertificationProfile`. If no certified profile matches, call `/api/jobs/:id/fail` with `error_trace = "no certified profile for workflow_template"` and re-poll.
 3. **Call `/api/jobs/:id/start`** with the `leaseToken` to transition `leased` → `rendering`. On `409` (superseded) or `404` (gone), abort and re-poll. On `200` (`applied` or `already_applied`), proceed.
-4. **Invoke `ExecuteProfileRenderUseCase`** with the loaded profile, the job's `injectedPayload`, and the ComfyUI invocation inputs. While running, **send `/api/jobs/:id/heartbeat`** every `heartbeatIntervalMs`. On heartbeat `409` (superseded), kill the running render and abort. The GPU lease must be released (`LocalFsGpuLeaseAdapter.release()`).
+4. **Invoke `ExecuteProfileRenderUseCase`** with the loaded profile, the job's `injectedPayload`, and the ComfyUI invocation inputs. While running, **send `/api/jobs/:id/heartbeat`** every `heartbeatIntervalMs`. On heartbeat `409` (superseded), **the worker does NOT release the GPU lease** — `ExecuteProfileRenderUseCase` owns the lease and will release it in `finally` when the render returns (`packages/application/src/use-cases/execute-profile-render.ts:197-203`). The worker daemon does not have access to the lease object. Instead, the worker logs the supersession, lets the render finish naturally (or fail locally), and abandons the result: it does not call `/api/jobs/:id/complete` or `/api/jobs/:id/fail` (both would 409 with the dead token). The orphan render output is the cost of a rare supersession edge case; the manifest is the only durable record, and the original worker can't write one.
 5. **On render success for `production` jobs**: invoke `assemble-generation-manifest.ts` to build the §5.5 `manifestPayload`. Call `/api/jobs/:id/complete` with `{ leaseToken, manifestPayload }`. On `400`, the manifest is malformed — fail the job with the validation error.
-6. **On render success for `candidate` jobs**: call `/api/jobs/:id/complete` with `{ leaseToken }` (no manifest). On success, the worker's `storyboard_candidate` write (out of scope for Sprint 3 issue 1; see "Scope boundaries") has already happened, or happens in step 7 as a side-effect.
+6. **On render success for `candidate` jobs**: assemble the candidate row from the render result (see "Candidate persistence" below). Call `/api/jobs/:id/complete` with `{ leaseToken, candidatePayload: { storageBucket, storageObjectKey, contentHashSha256, variantOrdinal, generationPayload? } }`. The queue adapter writes the `storyboard_candidates` row in the same transaction as the status update.
 7. **On render failure**: call `/api/jobs/:id/fail` with `leaseToken` and `errorTrace`. The adapter's idempotency rules apply (requeued → `superseded`, terminal → `already_applied`).
+8. **On storage admission refusal at write time** (per the §"Storage admission surface" decision): call the new `/api/jobs/:id/defer` (see "Admission deferral" above) with `{ leaseToken, reason: <typed StorageAdmissionError.message> }`. The job returns to `queued` without consuming `retry_count`; the worker re-polls.
 
-Worker-side storage admission (per the §"Storage admission surface" decision): before each of the worker's storage-consuming operations (writing candidate media bytes, writing generation manifest bytes, writing any review proxy the worker produces), call `EnforceStorageAdmission.execute(operation)`. On `StorageAdmissionError`, the worker treats the operation as transiently blocked: write to a typed `error_trace`, surface 507/429 to the Control API, and abort the job without consuming a retry budget.
+Worker-side storage admission: before each of the worker's storage-consuming operations (writing candidate media bytes, writing generation manifest bytes, writing any review proxy the worker produces), call `EnforceStorageAdmission.execute(operation)`. On `StorageAdmissionError`, the worker calls `/api/jobs/:id/defer` (step 8 above).
 
 The worker does not need to know about token rotation beyond recognising `409` as the abort signal. The Postgres adapter rotates tokens on `claim`; the worker treats any `409` as fencing.
+
+## Candidate persistence
+
+A successful `candidate` job's `storyboard_candidates` row is written inside `PostgresJobQueue.complete()`'s transaction, in the same statement batch as the status update. This mirrors the production-manifest path and gives exactly-once via the unique constraint.
+
+- **Payload shape** (validated by the route layer's `completeJobSchema` extension for `candidate` jobs): `{ storageBucket, storageObjectKey, contentHashSha256, variantOrdinal, generationPayload? }`. Not `manifestPayload`. The queue adapter dispatches on `job_kind`.
+- **Uniqueness key**: `(scene_id, scene_spec_revision, variant_ordinal)` per migration `003_candidate_selection.sql:46`. Plus `(storage_bucket, storage_object_key)` uniqueness on line 47. The worker computes `variantOrdinal` deterministically from `SceneSpec.injectedPayload` — e.g. the per-candidate ordinal inside an N-candidate batch — or the queue adapter assigns one if `injectedPayload` doesn't carry it. The exact rule is part of issue #111's implementation; the contract is that exactly-one candidate row exists per `(scene_id, scene_spec_revision, variant_ordinal)`.
+- **Write location**: inside `PostgresJobQueue.complete()` for `candidate` jobs. Same transaction as the status update; the route layer's catch-and-translate-to-`already_applied` pattern is reused.
+- **Duplicate-completion behavior**: a replay with the same `(scene_id, scene_spec_revision, variant_ordinal)` raises the unique violation; adapter catches it and returns `already_applied` / `200`. Mirrors the production-manifest pattern exactly.
+- **Where the assembly lives**: in the worker daemon's `/complete` invocation flow for `candidate` jobs. Folds into #111; #112 stays focused on the §5.5 production-manifest contract.
 
 ## Scope boundaries
 
@@ -146,6 +181,8 @@ In scope:
 
 - Worker polling daemon (`apps/render-worker/src/worker.ts`).
 - GenerationManifest content assembly (`assemble-generation-manifest.ts`).
+- Candidate row persistence inside `/api/jobs/:id/complete` for `candidate` jobs (issue #111).
+- `/api/jobs/:id/defer` endpoint with idempotent semantics (issue #113).
 - Write-side storage admission enforcement (#89).
 - RenderProfile runtime loading by the worker.
 - End-to-end integration test proving §9.2 Durable Lease Recovery Gate from the worker's side.
@@ -154,7 +191,7 @@ Out of scope, deferred:
 
 - **Worker → Control API authentication**: per ADR-0002, tailnet reachability is the boundary. Worker auth is a separate ADR.
 - **Mechanism that enqueues `candidate` / `production` jobs into `render_jobs`**: Sprint 3 issue 1's worker consumes jobs from `claim` but does not add the upstream producer. The `reroll` review action transitioning a scene to `generating_candidates` and the mechanism that turns that into `render_jobs` rows is a separate issue.
-- **StoryboardCandidate write path**: the worker produces the bytes (via the ComfyUI invocation) and the manifest assembly references the candidate identity, but the actual `storyboard_candidates` table write is delegated to a later sprint or to the Control API's existing scene review surface.
+- **Render-engine cancellation seam**: `RenderEnginePort` exposes only `queueRender` / `getRenderResult` / `unloadModels` (`packages/application/src/ports/render-engine-port.ts:23-27`). On heartbeat 409 the worker abandons the render and lets it finish naturally; adding `cancelRender()` is a separate concern (ComfyUI does not natively support cancellation).
 - **ReferenceAsset continuity tracking**: §5.5 lists it as a manifest field; Sprint 3 stores the field, but the asset-graph traversal that produces the manifest's "persistent ReferenceAsset identities" array is a separate concern.
 - **Worker-side backoff on sustained 204**: not in scope per the §"Storage admission surface" decision.
 - **Render and queue telemetry metrics**: out of scope; the metrics route already exists for storage.
@@ -164,22 +201,24 @@ Out of scope, deferred:
 Integration tests against real PostgreSQL using the existing `test:db` / Testcontainers setup, plus a smoke test against a stubbed ComfyUI HTTP server:
 
 1. **Worker poll loop, idle queue** — worker polls continuously, receives 204s, no spurious writes. Verify with `apps/render-worker/src/worker.test.ts` against a fake `ControlApiClient`.
-2. **Worker poll loop, single job** — enqueue one `candidate` job, worker claims it, runs (stubbed ComfyUI returns one image), persists nothing to `render_jobs` other than what `/complete` causes, ends in `completed`. Verify manifest row written iff `job_kind = "production"`.
+2. **Worker poll loop, single job** — enqueue one `candidate` job, worker claims it, runs (stubbed ComfyUI returns one image), persists nothing to `render_jobs` other than what `/complete` causes, ends in `completed`. Verify exactly one `storyboard_candidates` row written, with the right `(scene_id, scene_spec_revision, variant_ordinal)` and the right `storage_bucket` / `storage_object_key`. Verify `generation_manifests` row written iff `job_kind = "production"`.
 3. **§9.2 Durable Lease Recovery** — enqueue one `production` job; worker A claims it and starts; mid-render, force-kill worker A's lease by setting `lease_expires_at` into the past and clearing the process; worker B claims, runs, completes; assert exactly one `generation_manifests` row, no duplicate, and worker A's `complete` returned `409` (fenced).
-4. **§9.4 Storage Watermark Gate write-half** — pre-fill MinIO so watermark is at 85%; worker attempts to write candidate media; assert `StorageAdmissionError` thrown at the `EnforceStorageAdmission.execute(candidate_upload)` call; assert no media bytes landed in MinIO; assert no retry consumed.
+4. **§9.4 Storage Watermark Gate write-half** — pre-fill MinIO so watermark is at 85%; worker attempts to write candidate media; assert `StorageAdmissionError` thrown at the `EnforceStorageAdmission.execute(candidate_upload)` call; assert no media bytes landed in MinIO; assert worker called `/defer` (not `/fail`); assert `retry_count` unchanged.
 5. **Generation manifest content (§5.5)** — for a known RenderProfile + known ComfyUI invocation, run the assembler; assert every §5.5 field is present, types match, SHA-256 hashes are deterministic for the same inputs.
-6. **Idempotent `complete`** — repeat the same `/api/jobs/:id/complete` call twice; assert the second is `200 already_applied`, no duplicate manifest.
+6. **Idempotent `complete`** — repeat the same `/api/jobs/:id/complete` call twice for both `production` (manifest) and `candidate` (row); assert the second is `200 already_applied`, no duplicate.
 7. **Supersession** — worker A claims and starts; worker B reclaims after expiry; worker A's `/complete` returns `409`; the job is owned by worker B's completion.
+8. **`/defer` idempotency** — worker A calls `/defer`; worker A retries with the same token; assert second is `200 already_applied`. Then worker B claims (token rotates); worker A retries the original token; assert `superseded` / `409`. Assert `retry_count` is unchanged across all three calls.
+9. **Abandonment on heartbeat 409** — worker A holds a render mid-execution; worker B reclaims after lease expiry; worker A's `/complete` returns `409`; assert the GPU lease is still held by worker A's process until the use case's `finally` releases it; no concurrent GPU render by worker B until lease expiry.
 
-Tests 3 and 5 together prove the §9.2 Durable Lease Recovery Gate and the §9.4 Storage Watermark Gate's missing write-half, completing the acceptance criteria that Sprint 2.5 deferred to Sprint 3.
+Tests 3, 4, 8 and 9 together prove the §9.2 Durable Lease Recovery Gate, the §9.4 Storage Watermark Gate's missing write-half, the new `/defer` idempotency contract, and the abandonment semantics, completing the acceptance criteria that Sprint 2.5 deferred to Sprint 3.
 
 ## Issue decomposition
 
 Four issues, sized to match the tasks that have completed successfully through the orchestrator. The risk concentrates in issue 1 (the worker daemon), so it gets a dedicated review.
 
-1. **#111 — Worker polling daemon** — `apps/render-worker/src/worker.ts`, integration with the five HTTP endpoints, end-to-end §9.2 test from the worker's side. The risk-concentrated issue.
-2. **#112 — GenerationManifest content assembly (§5.5)** — `packages/application/src/use-cases/assemble-generation-manifest.ts`, contract tests for all 16 fields, wired into the worker's `complete` invocation.
-3. **#113 — Write-side storage admission (#89)** — worker calls `EnforceStorageAdmission` before each storage-consuming operation; write endpoints surface 507/429; no retry budget consumed. This completes the write-half of #89.
+1. **#111 — Worker polling daemon + candidate row write** — `apps/render-worker/src/worker.ts`, integration with the six HTTP endpoints (claim/start/heartbeat/complete/fail/defer), `control-api-client.ts`, candidate-row assembly for the `/complete` invocation of `candidate` jobs (per the §"Candidate persistence" section), end-to-end §9.2 test from the worker's side. The risk-concentrated issue.
+2. **#112 — GenerationManifest content assembly (§5.5)** — `packages/application/src/use-cases/assemble-generation-manifest.ts`, contract tests for all 16 fields, wired into the worker's `complete` invocation for `production` jobs.
+3. **#113 — Write-side storage admission + `/defer` endpoint (#89)** — worker calls `EnforceStorageAdmission` before each storage-consuming operation; write endpoints surface 507/429; the new `/api/jobs/:id/defer` endpoint with idempotent semantics (per the §"Admission deferral" section); no retry budget consumed on admission refusal. This completes the write-half of #89.
 4. **#114 — RenderProfile runtime loader** — wire `loadCertificationProfile` into the worker's claim path; refuse jobs whose `workflowTemplate` doesn't match a certified profile; verify with a contract test using the existing certify fixtures.
 
 Operator-only:
