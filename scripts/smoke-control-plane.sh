@@ -298,6 +298,7 @@ node -e '
     S3_ACCESS_KEY_ID: "synthetic_minio_admin",
     S3_SECRET_ACCESS_KEY: process.argv[8],
     S3_SIGNING_ENDPOINT: `http://127.0.0.1:${process.argv[4]}`,
+    CONTROL_API_URL: `http://127.0.0.1:${process.argv[2]}`,
     CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES: "127.0.0.1"
   };
 
@@ -334,6 +335,15 @@ node -e '
   "$SYNTHETIC_APP_PASS" \
   "$SYNTHETIC_MINIO_ADMIN_PASS" > "$ENV_FILE"
 
+# Assert generated smoke .env CONTROL_API_URL port matches CONTROL_API_PORT
+EXPECTED_CONTROL_API_URL="http://127.0.0.1:${CONTROL_API_PORT}"
+ACTUAL_CONTROL_API_URL=$(grep "^CONTROL_API_URL=" "$ENV_FILE" | cut -d'=' -f2-)
+
+if [ "$ACTUAL_CONTROL_API_URL" != "$EXPECTED_CONTROL_API_URL" ]; then
+  echo "FAIL: Generated CONTROL_API_URL ($ACTUAL_CONTROL_API_URL) does not match expected ($EXPECTED_CONTROL_API_URL)"
+  exit 1
+fi
+
 cat <<EOF > "$OVERRIDE_FILE"
 services:
   postgres:
@@ -348,6 +358,12 @@ services:
         published: "${S3_PORT}"
         target: 9000
         host_ip: "127.0.0.1"
+  review-hub:
+    environment:
+      PORT: "${REVIEW_HUB_PORT}"
+    ports: !reset []
+    networks: !reset []
+    network_mode: "host"
 EOF
 
 # ------------------------------------------------------------------------------
