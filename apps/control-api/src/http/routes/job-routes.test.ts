@@ -397,45 +397,264 @@ describe("Job Dispatch Routes", () => {
     await app.close();
   });
 
-  it("defer delegates the reason and returns the deferred outcome", async () => {
-    const queue = createFakeJobQueue({
-      defer: vi.fn().mockResolvedValue({ outcome: "deferred", job: sampleDeferredJob })
+  describe("POST /api/jobs/:jobId/defer", () => {
+    it("defer delegates the branded id token and reason", async () => {
+      const queue = createFakeJobQueue({
+        defer: vi.fn().mockResolvedValue({ outcome: "deferred", job: sampleDeferredJob })
+      });
+
+      const app = createControlApiApp(
+        {
+          uow: new FakeUnitOfWork(),
+          jobQueue: queue
+        },
+        {
+          jobDispatch: defaultDispatchConfig
+        }
+      );
+
+      const reason = "Worker needs warm model checkpoint";
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: {
+          leaseToken: sampleLeaseToken,
+          reason
+        }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(queue.defer).toHaveBeenCalledTimes(1);
+      expect(queue.defer).toHaveBeenCalledWith(sampleJobId, sampleLeaseToken, reason);
+      expect(response.json()).toEqual({
+        outcome: "deferred",
+        job: expect.objectContaining({
+          jobId: sampleJobId,
+          status: "queued",
+          workerId: null,
+          errorTrace: "Worker requested defer"
+        })
+      });
+
+      await app.close();
     });
 
-    const app = createControlApiApp(
-      {
-        uow: new FakeUnitOfWork(),
-        jobQueue: queue
-      },
-      {
-        jobDispatch: defaultDispatchConfig
+    it("defer replay returns already applied", async () => {
+      const queue = createFakeJobQueue({
+        defer: vi.fn().mockResolvedValue({ outcome: "already_applied", job: sampleDeferredJob })
+      });
+
+      const app = createControlApiApp(
+        {
+          uow: new FakeUnitOfWork(),
+          jobQueue: queue
+        },
+        {
+          jobDispatch: defaultDispatchConfig
+        }
+      );
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: {
+          leaseToken: sampleLeaseToken,
+          reason: "Worker requested defer"
+        }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        outcome: "already_applied",
+        job: expect.objectContaining({
+          jobId: sampleJobId
+        })
+      });
+
+      await app.close();
+    });
+
+    it("defer after reclaim returns lease superseded", async () => {
+      const queue = createFakeJobQueue({
+        defer: vi.fn().mockResolvedValue({ outcome: "superseded" })
+      });
+
+      const app = createControlApiApp(
+        {
+          uow: new FakeUnitOfWork(),
+          jobQueue: queue
+        },
+        {
+          jobDispatch: defaultDispatchConfig
+        }
+      );
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: {
+          leaseToken: sampleLeaseToken,
+          reason: "Worker requested defer"
+        }
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toEqual({
+        code: "LEASE_SUPERSEDED",
+        message: "The job lease has been superseded."
+      });
+
+      await app.close();
+    });
+
+    it("defer reports missing jobs", async () => {
+      const queue = createFakeJobQueue({
+        defer: vi.fn().mockResolvedValue({ outcome: "not_found" })
+      });
+
+      const app = createControlApiApp(
+        {
+          uow: new FakeUnitOfWork(),
+          jobQueue: queue
+        },
+        {
+          jobDispatch: defaultDispatchConfig
+        }
+      );
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: {
+          leaseToken: sampleLeaseToken,
+          reason: "Worker requested defer"
+        }
+      });
+
+      expect(response.statusCode).toBe(404);
+      expect(response.json()).toEqual({
+        code: "NOT_FOUND",
+        message: "Job not found."
+      });
+
+      await app.close();
+    });
+
+    it("defer rejects malformed transport input without calling the queue", async () => {
+      const queue = createFakeJobQueue();
+      const app = createControlApiApp(
+        {
+          uow: new FakeUnitOfWork(),
+          jobQueue: queue
+        },
+        {
+          jobDispatch: defaultDispatchConfig
+        }
+      );
+
+      const invalidRequests = [
+        // invalid UUID in path
+        {
+          method: "POST" as const,
+          url: "/api/jobs/not-a-uuid/defer",
+          payload: { leaseToken: sampleLeaseToken, reason: "reason" }
+        },
+        // missing reason
+        {
+          method: "POST" as const,
+          url: `/api/jobs/${sampleJobId}/defer`,
+          payload: { leaseToken: sampleLeaseToken }
+        },
+        // empty reason
+        {
+          method: "POST" as const,
+          url: `/api/jobs/${sampleJobId}/defer`,
+          payload: { leaseToken: sampleLeaseToken, reason: "" }
+        },
+        // whitespace reason
+        {
+          method: "POST" as const,
+          url: `/api/jobs/${sampleJobId}/defer`,
+          payload: { leaseToken: sampleLeaseToken, reason: "   \t\n" }
+        },
+        // non-string reason
+        {
+          method: "POST" as const,
+          url: `/api/jobs/${sampleJobId}/defer`,
+          payload: { leaseToken: sampleLeaseToken, reason: 999 }
+        },
+        // missing leaseToken
+        {
+          method: "POST" as const,
+          url: `/api/jobs/${sampleJobId}/defer`,
+          payload: { reason: "reason" }
+        },
+        // invalid UUID in leaseToken
+        {
+          method: "POST" as const,
+          url: `/api/jobs/${sampleJobId}/defer`,
+          payload: { leaseToken: "not-a-uuid", reason: "reason" }
+        },
+        // extra property
+        {
+          method: "POST" as const,
+          url: `/api/jobs/${sampleJobId}/defer`,
+          payload: { leaseToken: sampleLeaseToken, reason: "reason", extraProp: 123 }
+        }
+      ];
+
+      for (const req of invalidRequests) {
+        const response = await app.inject(req);
+        expect(
+          response.statusCode,
+          `Expected 400 for ${req.method} ${req.url} with ${JSON.stringify(req.payload)}`
+        ).toBe(400);
+        expect(response.json()).toEqual(
+          expect.objectContaining({
+            code: "VALIDATION_FAILURE"
+          })
+        );
       }
-    );
 
-    const reason = "Worker needs warm model checkpoint";
-    const response = await app.inject({
-      method: "POST",
-      url: `/api/jobs/${sampleJobId}/defer`,
-      payload: {
-        leaseToken: sampleLeaseToken,
-        reason
-      }
+      expect(queue.defer).not.toHaveBeenCalled();
+      await app.close();
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(queue.defer).toHaveBeenCalledTimes(1);
-    expect(queue.defer).toHaveBeenCalledWith(sampleJobId, sampleLeaseToken, reason);
-    expect(response.json()).toEqual({
-      outcome: "deferred",
-      job: expect.objectContaining({
-        jobId: sampleJobId,
-        status: "queued",
-        workerId: null,
-        errorTrace: "Worker requested defer"
-      })
-    });
+    it("deferred is translated as a successful mutation outcome", async () => {
+      const queue = createFakeJobQueue({
+        defer: vi.fn().mockResolvedValue({ outcome: "deferred", job: sampleDeferredJob })
+      });
 
-    await app.close();
+      const app = createControlApiApp(
+        {
+          uow: new FakeUnitOfWork(),
+          jobQueue: queue
+        },
+        {
+          jobDispatch: defaultDispatchConfig
+        }
+      );
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: {
+          leaseToken: sampleLeaseToken,
+          reason: "defer reason"
+        }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        outcome: "deferred",
+        job: expect.objectContaining({
+          jobId: sampleJobId,
+          status: "queued"
+        })
+      });
+
+      await app.close();
+    });
   });
 
   describe("Shared mutation outcomes", () => {
