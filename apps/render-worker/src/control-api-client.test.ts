@@ -152,44 +152,56 @@ describe("ControlApiClient", () => {
 
   describe("complete with storage admission decoding", () => {
     it("completion 507 reconstructs StorageAdmissionError context", async () => {
-      const serverMessage =
-        'Storage admission denied for operation "candidate_upload": watermark state is "degraded" (85.0% disk usage)';
-      const mockFetch = vi.fn().mockResolvedValue({
-        ok: false,
-        status: 507,
-        json: async () => ({
-          code: "STORAGE_ADMISSION_DENIED",
-          message: serverMessage,
-          operationClass: "candidate_upload",
-          watermarkState: "degraded",
-          usedRatio: 0.85,
-          totalBytes: 1_000_000_000,
-          freeBytes: 150_000_000
-        })
-      });
+      const operations = [
+        "candidate_upload",
+        "proxy_upload",
+        "delivery_write",
+        "cleanup",
+        "repair"
+      ] as const;
+      const states = ["normal", "warning", "degraded", "critical"] as const;
 
-      const client = createControlApiClient({
-        baseUrl: "http://localhost:3000",
-        fetch: mockFetch
-      });
+      for (const operationClass of operations) {
+        for (const watermarkState of states) {
+          const serverMessage = `Storage admission denied for operation "${operationClass}": watermark state is "${watermarkState}" (85.0% disk usage)`;
+          const mockFetch = vi.fn().mockResolvedValue({
+            ok: false,
+            status: 507,
+            json: async () => ({
+              code: "STORAGE_ADMISSION_DENIED",
+              message: serverMessage,
+              operationClass,
+              watermarkState,
+              usedRatio: 0.85,
+              totalBytes: 1_000_000_000,
+              freeBytes: 150_000_000
+            })
+          });
 
-      let caughtError: unknown;
-      try {
-        await client.complete(sampleJobId, sampleLeaseToken, {
-          candidatePayload: { variantOrdinal: 1 }
-        });
-      } catch (err) {
-        caughtError = err;
+          const client = createControlApiClient({
+            baseUrl: "http://localhost:3000",
+            fetch: mockFetch
+          });
+
+          let caughtError: unknown;
+          try {
+            await client.complete(sampleJobId, sampleLeaseToken, {
+              candidatePayload: { variantOrdinal: 1 }
+            });
+          } catch (err) {
+            caughtError = err;
+          }
+
+          expect(caughtError).toBeInstanceOf(StorageAdmissionError);
+          const admissionErr = caughtError as StorageAdmissionError;
+          expect(admissionErr.operationClass).toBe(operationClass);
+          expect(admissionErr.watermarkState).toBe(watermarkState);
+          expect(admissionErr.usedRatio).toBe(0.85);
+          expect(admissionErr.totalBytes).toBe(1_000_000_000);
+          expect(admissionErr.freeBytes).toBe(150_000_000);
+          expect(admissionErr.message).toBe(serverMessage);
+        }
       }
-
-      expect(caughtError).toBeInstanceOf(StorageAdmissionError);
-      const admissionErr = caughtError as StorageAdmissionError;
-      expect(admissionErr.operationClass).toBe("candidate_upload");
-      expect(admissionErr.watermarkState).toBe("degraded");
-      expect(admissionErr.usedRatio).toBe(0.85);
-      expect(admissionErr.totalBytes).toBe(1_000_000_000);
-      expect(admissionErr.freeBytes).toBe(150_000_000);
-      expect(admissionErr.message).toBe(serverMessage);
     });
 
     it("malformed 507 is not treated as typed admission refusal", async () => {
@@ -204,11 +216,31 @@ describe("ControlApiClient", () => {
           totalBytes: 100,
           freeBytes: 15
         },
+        // Invalid operationClass
+        {
+          code: "STORAGE_ADMISSION_DENIED",
+          message: "Admission denied",
+          operationClass: "invalid_operation",
+          watermarkState: "degraded",
+          usedRatio: 0.85,
+          totalBytes: 100,
+          freeBytes: 15
+        },
         // Missing operationClass
         {
           code: "STORAGE_ADMISSION_DENIED",
           message: "Admission denied",
           watermarkState: "degraded",
+          usedRatio: 0.85,
+          totalBytes: 100,
+          freeBytes: 15
+        },
+        // Invalid watermarkState ("nominal" instead of "normal")
+        {
+          code: "STORAGE_ADMISSION_DENIED",
+          message: "Admission denied",
+          operationClass: "candidate_upload",
+          watermarkState: "nominal",
           usedRatio: 0.85,
           totalBytes: 100,
           freeBytes: 15

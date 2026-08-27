@@ -1,5 +1,10 @@
 import { StorageAdmissionError, type JobMutationResult } from "@cco/application";
-import type { StorageOperationClass, StorageWatermarkState } from "@cco/contracts";
+import {
+  STORAGE_OPERATION_CLASSES,
+  STORAGE_WATERMARK_STATES,
+  type StorageOperationClass,
+  type StorageWatermarkState
+} from "@cco/contracts";
 import type { JobId, LeaseToken, RenderJob } from "@cco/domain";
 
 export interface CompleteJobOptions {
@@ -61,13 +66,15 @@ function isStorageAdmissionErrorPayload(data: unknown): data is StorageAdmission
   if (obj.code !== "STORAGE_ADMISSION_DENIED") {
     return false;
   }
-  if (obj.operationClass !== "candidate_upload" && obj.operationClass !== "delivery_write") {
+  if (
+    typeof obj.operationClass !== "string" ||
+    !(STORAGE_OPERATION_CLASSES as readonly string[]).includes(obj.operationClass)
+  ) {
     return false;
   }
   if (
-    obj.watermarkState !== "nominal" &&
-    obj.watermarkState !== "degraded" &&
-    obj.watermarkState !== "critical"
+    typeof obj.watermarkState !== "string" ||
+    !(STORAGE_WATERMARK_STATES as readonly string[]).includes(obj.watermarkState)
   ) {
     return false;
   }
