@@ -12,6 +12,7 @@ export interface JobAdmissionGate {
 
 export type JobMutationResult =
   | { readonly outcome: "applied"; readonly job: RenderJob }
+  | { readonly outcome: "deferred"; readonly job: RenderJob }
   | { readonly outcome: "already_applied"; readonly job: RenderJob }
   | { readonly outcome: "superseded" }
   | { readonly outcome: "not_found" };
@@ -30,4 +31,5 @@ export interface JobQueuePort {
     manifestPayload?: Readonly<Record<string, unknown>>
   ): Promise<JobMutationResult>;
   fail(jobId: JobId, leaseToken: LeaseToken, errorTrace: string): Promise<JobMutationResult>;
+  defer(jobId: JobId, leaseToken: LeaseToken, reason: string): Promise<JobMutationResult>;
 }

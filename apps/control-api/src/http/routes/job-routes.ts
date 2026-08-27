@@ -140,6 +140,7 @@ export const failJobSchema = {
 
 function translateMutationResult(result: JobMutationResult, reply: FastifyReply): FastifyReply {
   switch (result.outcome) {
+    case "deferred":
     case "applied":
     case "already_applied":
       return reply.status(200).send(result);

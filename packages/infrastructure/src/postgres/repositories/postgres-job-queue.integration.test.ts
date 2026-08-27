@@ -1613,4 +1613,289 @@ describe("PostgresJobQueue integration", () => {
     const claimed3 = await queue.claim({ workerId: "worker-attempt-5", leaseDurationMs: 30_000 });
     expect(claimed3).toBeUndefined();
   });
+
+  describe("defer", () => {
+    it("defer requeues leased and rendering jobs without consuming retry budget", async () => {
+      const { sceneId } = await createTestScene();
+      const queue = new PostgresJobQueue(pool);
+
+      // 1. leased source state
+      const leasedToken = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+      const leasedJob = await insertRenderJobRecord(client, {
+        sceneId,
+        status: "leased",
+        workerId: "worker-leased-defer",
+        leaseToken: leasedToken,
+        leaseExpiresAt: new Date(Date.now() + 60_000),
+        retryCount: 1,
+        maxRetries: 3
+      });
+
+      const leasedResult = await queue.defer(
+        leasedJob.job_id as JobId,
+        leasedToken,
+        "preempted during leased"
+      );
+
+      expect(leasedResult.outcome).toBe("deferred");
+      if (leasedResult.outcome === "deferred") {
+        expect(leasedResult.job.jobId).toBe(leasedJob.job_id);
+        expect(leasedResult.job.status).toBe("queued");
+        expect(leasedResult.job.retryCount).toBe(1);
+        expect(leasedResult.job.maxRetries).toBe(3);
+        expect(leasedResult.job.workerId).toBeNull();
+        expect(leasedResult.job.leaseExpiresAt).toBeNull();
+        expect(leasedResult.job.leaseToken).toBe(leasedToken);
+        expect(leasedResult.job.errorTrace).toBe("preempted during leased");
+      }
+
+      const dbRowLeased = await client.query<{
+        status: string;
+        worker_id: string | null;
+        lease_token: string | null;
+        lease_expires_at: Date | null;
+        retry_count: number;
+        error_trace: string | null;
+      }>(
+        "SELECT status, worker_id, lease_token, lease_expires_at, retry_count, error_trace FROM render_jobs WHERE job_id = $1",
+        [leasedJob.job_id]
+      );
+      expect(dbRowLeased.rows[0]?.status).toBe("queued");
+      expect(dbRowLeased.rows[0]?.worker_id).toBeNull();
+      expect(dbRowLeased.rows[0]?.lease_expires_at).toBeNull();
+      expect(dbRowLeased.rows[0]?.lease_token).toBe(leasedToken);
+      expect(dbRowLeased.rows[0]?.retry_count).toBe(1);
+      expect(dbRowLeased.rows[0]?.error_trace).toBe("preempted during leased");
+
+      // 2. rendering source state
+      const renderingToken = "01950c46-9e90-7d3d-82d2-8f1d3c000002" as LeaseToken;
+      const renderingJob = await insertRenderJobRecord(client, {
+        sceneId,
+        status: "rendering",
+        workerId: "worker-rendering-defer",
+        leaseToken: renderingToken,
+        leaseExpiresAt: new Date(Date.now() + 60_000),
+        retryCount: 2,
+        maxRetries: 3
+      });
+
+      const renderingResult = await queue.defer(
+        renderingJob.job_id as JobId,
+        renderingToken,
+        "preempted during rendering"
+      );
+
+      expect(renderingResult.outcome).toBe("deferred");
+      if (renderingResult.outcome === "deferred") {
+        expect(renderingResult.job.jobId).toBe(renderingJob.job_id);
+        expect(renderingResult.job.status).toBe("queued");
+        expect(renderingResult.job.retryCount).toBe(2);
+        expect(renderingResult.job.maxRetries).toBe(3);
+        expect(renderingResult.job.workerId).toBeNull();
+        expect(renderingResult.job.leaseExpiresAt).toBeNull();
+        expect(renderingResult.job.leaseToken).toBe(renderingToken);
+        expect(renderingResult.job.errorTrace).toBe("preempted during rendering");
+      }
+
+      const dbRowRendering = await client.query<{
+        status: string;
+        worker_id: string | null;
+        lease_token: string | null;
+        lease_expires_at: Date | null;
+        retry_count: number;
+        error_trace: string | null;
+      }>(
+        "SELECT status, worker_id, lease_token, lease_expires_at, retry_count, error_trace FROM render_jobs WHERE job_id = $1",
+        [renderingJob.job_id]
+      );
+      expect(dbRowRendering.rows[0]?.status).toBe("queued");
+      expect(dbRowRendering.rows[0]?.worker_id).toBeNull();
+      expect(dbRowRendering.rows[0]?.lease_expires_at).toBeNull();
+      expect(dbRowRendering.rows[0]?.lease_token).toBe(renderingToken);
+      expect(dbRowRendering.rows[0]?.retry_count).toBe(2);
+      expect(dbRowRendering.rows[0]?.error_trace).toBe("preempted during rendering");
+    });
+
+    it("defer replay with the retained token is already applied", async () => {
+      const { sceneId } = await createTestScene();
+      const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+      const queue = new PostgresJobQueue(pool);
+
+      const job = await insertRenderJobRecord(client, {
+        sceneId,
+        status: "leased",
+        workerId: "worker-replay-defer",
+        leaseToken: token,
+        leaseExpiresAt: new Date(Date.now() + 60_000),
+        retryCount: 0,
+        maxRetries: 3
+      });
+
+      // First defer call
+      const firstRes = await queue.defer(job.job_id as JobId, token, "initial defer");
+      expect(firstRes.outcome).toBe("deferred");
+
+      const preReplaySnapshot = await client.query("SELECT * FROM render_jobs WHERE job_id = $1", [
+        job.job_id
+      ]);
+
+      // Replay defer call with same token
+      const replayRes = await queue.defer(job.job_id as JobId, token, "replay defer");
+      expect(replayRes.outcome).toBe("already_applied");
+      if (replayRes.outcome === "already_applied") {
+        expect(replayRes.job.jobId).toBe(job.job_id);
+        expect(replayRes.job.status).toBe("queued");
+        expect(replayRes.job.leaseToken).toBe(token);
+        expect(replayRes.job.workerId).toBeNull();
+        expect(replayRes.job.leaseExpiresAt).toBeNull();
+      }
+
+      const postReplaySnapshot = await client.query("SELECT * FROM render_jobs WHERE job_id = $1", [
+        job.job_id
+      ]);
+      expect(postReplaySnapshot.rows[0]).toEqual(preReplaySnapshot.rows[0]);
+    });
+
+    it("defer replay after reclaim is superseded", async () => {
+      const { sceneId } = await createTestScene();
+      const token1 = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+      const queue = new PostgresJobQueue(pool);
+
+      const job = await insertRenderJobRecord(client, {
+        sceneId,
+        status: "leased",
+        workerId: "worker-1",
+        leaseToken: token1,
+        leaseExpiresAt: new Date(Date.now() + 60_000),
+        retryCount: 0,
+        maxRetries: 3
+      });
+
+      // Defer moves it to queued retaining token1
+      const deferRes = await queue.defer(job.job_id as JobId, token1, "first worker defer");
+      expect(deferRes.outcome).toBe("deferred");
+
+      // Another worker claims the requeued job -> gets fresh lease token2
+      const claimRes = await queue.claim({ workerId: "worker-2", leaseDurationMs: 30_000 });
+      expect(claimRes).toBeDefined();
+      expect(claimRes?.jobId).toBe(job.job_id);
+      expect(claimRes?.status).toBe("leased");
+      expect(claimRes?.workerId).toBe("worker-2");
+      const token2 = claimRes!.leaseToken!;
+      expect(token2).not.toBe(token1);
+
+      const preSnapshot = await client.query("SELECT * FROM render_jobs WHERE job_id = $1", [
+        job.job_id
+      ]);
+
+      // Worker 1 tries stale defer with token1
+      const staleDeferRes = await queue.defer(
+        job.job_id as JobId,
+        token1,
+        "stale defer after reclaim"
+      );
+      expect(staleDeferRes.outcome).toBe("superseded");
+      expect((staleDeferRes as { job?: unknown }).job).toBeUndefined();
+
+      const postSnapshot = await client.query("SELECT * FROM render_jobs WHERE job_id = $1", [
+        job.job_id
+      ]);
+      expect(postSnapshot.rows[0]).toEqual(preSnapshot.rows[0]);
+      expect(postSnapshot.rows[0]?.status).toBe("leased");
+      expect(postSnapshot.rows[0]?.worker_id).toBe("worker-2");
+      expect(postSnapshot.rows[0]?.lease_token).toBe(token2);
+    });
+
+    it("defer fences stale tokens and illegal states", async () => {
+      const { sceneId } = await createTestScene();
+      const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+      const staleToken = "01950c46-9e90-7d3d-82d2-8f1d3c000099" as LeaseToken;
+      const queue = new PostgresJobQueue(pool);
+
+      const testCases = [
+        {
+          status: "queued" as const,
+          tokenToUse: staleToken,
+          desc: "queued status with mismatched token"
+        },
+        {
+          status: "completed" as const,
+          tokenToUse: token,
+          desc: "completed status with matching token"
+        },
+        {
+          status: "cancelled" as const,
+          tokenToUse: token,
+          desc: "cancelled status with matching token"
+        },
+        {
+          status: "failed" as const,
+          tokenToUse: token,
+          desc: "failed status with matching token"
+        },
+        {
+          status: "leased" as const,
+          tokenToUse: staleToken,
+          desc: "leased status with stale token"
+        },
+        {
+          status: "rendering" as const,
+          tokenToUse: staleToken,
+          desc: "rendering status with stale token"
+        }
+      ];
+
+      for (const tc of testCases) {
+        const job = await insertRenderJobRecord(client, {
+          sceneId,
+          status: tc.status,
+          workerId: tc.status === "queued" ? null : "worker-1",
+          leaseToken: tc.status === "queued" ? null : token,
+          leaseExpiresAt: tc.status === "queued" ? null : new Date(Date.now() + 60_000),
+          retryCount: 0,
+          errorTrace: null
+        });
+
+        const preSnapshot = await client.query("SELECT * FROM render_jobs WHERE job_id = $1", [
+          job.job_id
+        ]);
+
+        const res = await queue.defer(
+          job.job_id as JobId,
+          tc.tokenToUse,
+          "attempted illegal defer"
+        );
+        expect(res.outcome, `Expected superseded for ${tc.desc}`).toBe("superseded");
+        expect((res as { job?: unknown }).job).toBeUndefined();
+
+        const postSnapshot = await client.query("SELECT * FROM render_jobs WHERE job_id = $1", [
+          job.job_id
+        ]);
+        expect(postSnapshot.rows[0], `Row mutated for ${tc.desc}`).toEqual(preSnapshot.rows[0]);
+      }
+    });
+
+    it("defer reports missing jobs", async () => {
+      const missingJobId = "01950c46-9e90-7d3d-82d2-8f1d3c000000" as JobId;
+      const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+      const queue = new PostgresJobQueue(pool);
+
+      const result = await queue.defer(missingJobId, token, "missing job defer");
+      expect(result.outcome).toBe("not_found");
+      expect((result as { job?: unknown }).job).toBeUndefined();
+    });
+
+    it("defer rejects invalid reason before querying", async () => {
+      const missingJobId = "01950c46-9e90-7d3d-82d2-8f1d3c000000" as JobId;
+      const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+      const queue = new PostgresJobQueue(pool);
+
+      await expect(queue.defer(missingJobId, token, "")).rejects.toThrow(
+        "reason must be a non-empty string"
+      );
+      await expect(queue.defer(missingJobId, token, "   ")).rejects.toThrow(
+        "reason must be a non-empty string"
+      );
+    });
+  });
 });

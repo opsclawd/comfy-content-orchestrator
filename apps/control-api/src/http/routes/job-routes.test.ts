@@ -77,6 +77,7 @@ function createFakeJobQueue(overrides?: Partial<JobQueuePort>): JobQueuePort {
     heartbeat: vi.fn().mockResolvedValue({ outcome: "not_found" } as JobMutationResult),
     complete: vi.fn().mockResolvedValue({ outcome: "not_found" } as JobMutationResult),
     fail: vi.fn().mockResolvedValue({ outcome: "not_found" } as JobMutationResult),
+    defer: vi.fn().mockResolvedValue({ outcome: "not_found" } as JobMutationResult),
     ...overrides
   };
 }

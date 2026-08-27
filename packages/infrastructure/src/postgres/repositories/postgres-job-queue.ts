@@ -548,6 +548,46 @@ export class PostgresJobQueue implements JobQueuePort {
     return { outcome: "superseded" };
   }
 
+  async defer(jobId: JobId, leaseToken: LeaseToken, reason: string): Promise<JobMutationResult> {
+    if (typeof reason !== "string" || reason.trim().length === 0) {
+      throw new Error("reason must be a non-empty string");
+    }
+
+    const updateRes = await this.pool.query<RenderJobRow>(
+      `
+      UPDATE render_jobs
+      SET status = 'queued',
+          worker_id = NULL,
+          lease_expires_at = NULL,
+          error_trace = $3,
+          updated_at = NOW()
+      WHERE job_id = $1
+        AND lease_token = $2
+        AND status IN ('leased', 'rendering')
+      RETURNING
+        job_id, scene_id, job_kind, status, workflow_template, injected_payload,
+        worker_id, lease_token, lease_expires_at, retry_count, max_retries,
+        error_trace, created_at, updated_at
+      `,
+      [jobId, leaseToken, reason]
+    );
+
+    const updatedRow = updateRes.rows[0];
+    if (updatedRow) {
+      return { outcome: "deferred", job: this.mapRowToRenderJob(updatedRow) };
+    }
+
+    const currentRow = await this.readJobRow(jobId);
+    if (!currentRow) return { outcome: "not_found" };
+    if (currentRow.lease_token === leaseToken && currentRow.status === "queued") {
+      return {
+        outcome: "already_applied",
+        job: this.mapRowToRenderJob(currentRow)
+      };
+    }
+    return { outcome: "superseded" };
+  }
+
   private async readJobRow(
     jobId: string,
     runner: Pool | PoolClient = this.pool
