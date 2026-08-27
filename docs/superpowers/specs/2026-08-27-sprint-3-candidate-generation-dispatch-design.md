@@ -1,0 +1,187 @@
+# Sprint 3 — Durable Candidate-Generation Dispatch
+
+**Date:** 2026-08-27
+**Status:** Approved design
+**PRD reference:** Sprint 3, §3.1, §3.1.2, §3.6.5, §5.5, §6.4, §9.2
+**Supersedes:** None — this is the first design document for Sprint 3.
+**Companion:** ADR-0002 (`docs/adr/0002-tailscale-identity-is-review-hub-auth.md`); Sprint 2.5 spec (`docs/superpowers/specs/2026-08-26-sprint-2-5-dispatch-contract-design.md`).
+
+## Purpose
+
+Close the durable candidate-generation dispatch contract: the render worker that consumes Sprint 2.5's five HTTP endpoints (`/api/jobs/{claim,:id/start,:id/heartbeat,:id/complete,:id/fail}`) and produces exactly-one `GenerationManifest` per successful `production` job, with storage-watermark enforcement at write time and the §9.2 Durable Lease Recovery Gate provable end-to-end against real hardware.
+
+Following the Sprint 1.5 and 2.5 precedents, this sprint ships working code — worker daemon, manifest assembler, write-side admission, profile loader — not a document the Sprint 3 implementation has to interpret. Where Sprint 2.5 defined the *protocol*, Sprint 3 defines the *consumer*.
+
+## What already exists
+
+The dispatch protocol Sprint 2.5 shipped is the contract this sprint consumes. Concretely, the following are already merged on `main` and Sprint 3 does not re-litigate them:
+
+- **Database schema** (`packages/infrastructure/migrations/007_job_dispatch_contract.sql` and earlier): `render_jobs` with `job_kind`, `lease_token`, `retry_count`, `max_retries`, `error_trace`; `job_status_enum` (`queued`, `leased`, `rendering`, `completed`, `failed`, `cancelled`); `generation_manifests.job_id UNIQUE` enforcing exactly-once manifest at the database level; `storyboard_candidates` immutability triggers.
+- **`JobQueuePort` and Postgres adapter** (`packages/application/src/ports/job-queue-port.ts`, `packages/infrastructure/src/postgres/repositories/postgres-job-queue.ts`): `claim` with `FOR UPDATE SKIP LOCKED` and `lease_token = gen_random_uuid()` rotation; `start` / `heartbeat` / `complete` / `fail` with token fencing and idempotent post-state branches (per the `fail` contract reconciliation in PR #107).
+- **Five HTTP routes** (`apps/control-api/src/http/routes/job-routes.ts`): `200` for `applied`/`already_applied`, `409` for `superseded`, `404` for `not_found`, `204` for "nothing claimable, including admission-blocked", `503` for telemetry unavailable, `400` for `manifestPayload` validation failures. Worker authentication is deliberately out of scope per ADR-0002's "Worker authentication" non-change.
+- **Claim-side storage admission** (`packages/infrastructure/src/storage/storage-aware-job-admission-gate.ts`, PR #106): `candidate` jobs refused at degraded and critical; `production` jobs admitted at degraded, refused at critical. Wired into `PostgresJobQueue` at `apps/control-api/src/bootstrap.ts:208-212`. The table-driven tests cover all six watermark × job-kind cells.
+- **RenderProfile certification** (`apps/render-worker/src/cli/certify.ts`, `certify-ltx.ts`, `certify-transition-soak.ts`; `apps/render-worker/src/certification/{preflight,artifact-writer,transition-*,atomic-artifact-publisher}.ts`): `LTX_25_720P_5S_V1` profile certified, gold-master provenance verified before each render, transition artifacts atomically published.
+- **ComfyUI integration** (`packages/infrastructure/src/comfyui/{comfyui-client,render-engine-adapter}.ts`): `ComfyUiRenderEngineAdapter implements RenderEnginePort`; HTTP-based invocation against ComfyUI's loopback or authorized Tailscale interface.
+- **GPU lease and telemetry** (`packages/application/src/ports/{gpu-execution-lease-port,gpu-telemetry-port}.ts`; `packages/infrastructure/src/.../LocalFsGpuLeaseAdapter`, `NvidiaSmiTelemetryAdapter`): exclusive per-host GPU execution enforced by local filesystem lease; telemetry via `nvidia-smi`.
+- **`ExecuteProfileRenderUseCase`** (`packages/application/src/use-cases/execute-profile-render.ts`): the single-shot render pipeline that ties `RenderEnginePort`, `GpuExecutionLeasePort`, `GpuTelemetryPort`, and certification provenance together.
+- **Storage admission policy and enforcement** (`packages/domain/src/storage-admission.ts`, `packages/application/src/use-cases/enforce-storage-admission.ts`): `createStorageAdmissionPolicy(usedBytes, totalBytes)` and `EnforceStorageAdmission.execute(operation)` already implement the §2.3 grading exactly. Used today by the claim-side gate; Sprint 3 re-uses for write-side gating.
+- **All application ports** the worker will need: `RenderJobRepository`, `ManifestRepository`, `StoryboardCandidateRepository`, `MediaAssemblerPort`, `StorageTelemetryPort`, `StorageMetricsRegistryPort`.
+
+What is **genuinely missing** for Sprint 3:
+
+1. The **worker polling daemon** that turns the one-shot `ExecuteProfileRenderUseCase` into a polling consumer of the Control API's `/api/jobs/{claim,…}` surface. `apps/render-worker/src/index.ts` exports only `renderWorkerName` — there is no entry point today.
+2. **GenerationManifest content assembly** per §5.5 / §6.4: the worker must produce the 16 minimum fields (manifest/job/campaign/scene identity, render attempt/timestamp, engine and RenderProfile identity, model/checkpoint/VAE/text-encoder SHA-256 hashes, workflow template identity/hash, LoRA identities/strengths, sampling seed/steps/CFG/sampler/scheduler/denoise, dimensions/frame count/FPS, prompts/audio prompt, persistent ReferenceAsset identities, approved StoryboardCandidate identity/hash, ComfyUI commit/custom-node environment, runner profile/runtime metadata, governance/license/policy identity, output filenames/hashes/review object keys/execution duration). Today the route accepts `manifestPayload` as opaque JSONB and stores it.
+3. **Write-side storage admission** (#89): the *actual* generation/media-write path the worker executes between `start` and `complete` must call `EnforceStorageAdmission` and surface failures as 507/429 at the relevant write endpoint. The claim-side gate is correct as-is; this is the worker's responsibility and the missing second half of #89.
+4. **RenderProfile runtime loader** in the worker: `loadCertificationProfile` is exercised by the certify CLI but the polling daemon needs the same loading path at runtime, keyed by the job's `workflow_template`.
+5. **End-to-end §9.2 Durable Lease Recovery proof from the worker's side**: the queue-side test exists (`postgres-job-queue.integration.test.ts`), but there is no integration test that exercises claim → start → render (against a stubbed ComfyUI) → kill mid-render → reclaim → complete → assert no duplicate manifest.
+
+## Decisions
+
+### One job per candidate, not one job per batch
+
+A `candidate` job produces **exactly one** `storyboard_candidates` row and one ComfyUI invocation. The PRD §9.5 "candidate-batch target (<45 s for 18 keyframes)" is realised as 18 independent jobs in the queue, each with its own lease and retry, sharing a `SceneSpec`.
+
+Rationale:
+
+- Aligns with the existing data model: `storyboard_candidates` is immutable-per-candidate, not immutable-per-batch.
+- Atomic retry: a worker dying mid-batch loses 1 candidate; the other 17 are unaffected. A one-job-per-batch worker that dies at candidate 9 of 18 retries all 18.
+- Concurrency control is simpler: one lease = one render = one storyboard row, with no partial-batch state to model.
+- The queue depth scales linearly with batch size but `FOR UPDATE SKIP LOCKED` and the existing partial index already handle that.
+- The "batch" remains a SceneSpec concept (`SceneSpec.injectedPayload` carries the per-candidate seed/parameters), not a queue concept.
+
+If a future requirement needs a synchronous N-candidates-per-invocation render for hardware-reuse reasons, that can be added inside one job's `execute()` without changing the queue protocol. The protocol stays decoupled from the render batch.
+
+### Storage admission surface, split per #89's clarified scope
+
+The user's 2026-08-27 decision:
+
+- **`/api/jobs/claim` polling endpoint**: unchanged. Returns 204 for "nothing claimable, including admission-blocked" — the Sprint 2.5 contract is preserved (`docs/superpowers/specs/2026-08-26-sprint-2-5-dispatch-contract-design.md:239-241`). Changing to 507/429 would break the worker's polling contract and force a worker-side distinction between "no work" and "back off" that the Sprint 2.5 design deliberately collapsed.
+- **Write-side surfaces** (media upload, manifest submission, or wherever the worker hands work to the Control API in Sprint 3): when the worker attempts a storage-consuming operation at degraded/critical, the Control API returns **507 Insufficient Storage** or **429 Too Many Requests** — never 5xx that masks the admission reason, and never a silent success.
+- **No retry budget consumed on admission refusal** at write time: the work is still valid; storage is the bottleneck. `retry_count` is not incremented, the job remains in its current active status. A future design can revisit if admission-blocked becomes sustained rather than transient.
+- **Worker-side backoff on sustained 204** is out of scope for this sprint; the Storage Watermark Gate (#68) can be verified without it.
+
+The exact HTTP endpoint(s) where write-time admission surfaces as 507/429 are an implementation detail of Sprint 3 issue 1 (worker daemon). The contract is: **no storage-consuming operation lands at a forbidden watermark**, regardless of which surface catches it.
+
+### Worker authentication: tailnet reachability only
+
+Per ADR-0002's "What this decision explicitly does *not* change" section, worker authentication is deliberately not designed here. The five job-dispatch endpoints were designed shape-stably for auth-later addition; Sprint 3 inherits that boundary. Tailnet reachability remains the access boundary.
+
+This will be revisited per ADR-0002's "future change to add session/login must amend or supersede this ADR" consequence — but not in Sprint 3.
+
+### RenderProfile selection
+
+The worker selects the RenderProfile by reading `job.workflowTemplate` (which already exists on `RenderJob` as `workflowTemplate: string`) and loading the matching certified profile via `loadCertificationProfile`. The certify CLI already exercises this path. The worker reuses it unchanged.
+
+A job's `workflowTemplate` is set at queue time (by whatever Sprint 3 mechanism enqueues a `candidate` or `production` job — out of scope for Sprint 3 issue 1's worker-side work, see "Scope boundaries"). The worker treats it as authoritative and refuses jobs whose `workflowTemplate` does not match a certified profile.
+
+### Generation manifest content assembly
+
+`assemble-generation-manifest.ts` (a new use case in `packages/application/src/use-cases/`) is the single source of truth for §5.5 content. It is invoked by the worker immediately before `/api/jobs/:id/complete` for `production` jobs and produces the `manifestPayload` argument.
+
+Inputs to the assembler:
+
+- The `RenderJob` row (for `jobId`, `sceneId`, `retryCount` → render attempt).
+- The certified `RenderProfile` loaded by the worker.
+- The `RenderEnginePort.execute()` result, which already returns `outputPaths`, `durations`, and the run-time provenance collected by the engine adapter.
+- The ComfyUI invocation's provenance (commit hash, custom-node environment) — already collected by `RenderEnginePort` and `ExecuteProfileRenderUseCase`.
+- The `storyboard_candidates` row written for the same scene/revision if `job_kind = "production"` and a candidate was selected (per §5.5's "approved StoryboardCandidate identity/hash where applicable").
+
+Outputs: a `Readonly<Record<string, unknown>>` whose JSON shape matches §5.5's 16 fields, with type guards enforced by the assembler's contract test.
+
+The Sprint 2.5 route layer treats `manifestPayload` as opaque JSONB — Sprint 3 doesn't change that. The contract lives in the assembler.
+
+### Failure modes and retry semantics
+
+- **Supersession (409)**: the worker must abort and never retry. The lease token has rotated; the new holder owns the job.
+- **Not found (404)**: same — abort. The job no longer exists.
+- **Already applied (200)**: this is the idempotent-retry success path; treat as success.
+- **503 (telemetry unavailable) on `/claim`**: back off and retry, telemetry may be transiently broken.
+- **507/429 on a write endpoint**: storage admission refused. Don't retry immediately; the same admission refusal will recur until capacity frees. Fail the job with `error_trace` carrying the admission error so the operator sees why. **Do not consume `retry_count`.**
+- **Network errors / unexpected 5xx**: treat as transient, retry with backoff.
+- **`complete` returning `applied` (200)** for `production` jobs writes the manifest; the unique constraint on `generation_manifests.job_id` is the database-level guard against duplicates. A retry that races with a successful write surfaces as `already_applied` (200) — exactly once, by construction.
+
+## Schema
+
+No new migration in Sprint 3. The `render_jobs`, `generation_manifests`, `storyboard_candidates`, and supporting tables already exist with the fields the worker needs.
+
+Two fields Sprint 3 *uses* but does not change:
+
+- `render_jobs.workflow_template` — already on the row (`VARCHAR NOT NULL`). The worker reads it for RenderProfile selection.
+- `render_jobs.injected_payload` — already on the row (`JSONB NOT NULL`). The worker reads it for per-candidate seed/parameters.
+
+If Sprint 3 issue 1's worker implementation reveals a need for a new field (e.g. ComfyUI invocation nonce), that is filed as a separate migration under a separate issue. No schema change is part of this sprint's contract.
+
+## Layer placement
+
+| Layer | Addition |
+|---|---|
+| `packages/domain` | (none — the storage admission policy is already in `storage-admission.ts`) |
+| `packages/application/src/use-cases` | `assemble-generation-manifest.ts` (new) |
+| `packages/application/src/ports` | (none — all needed ports exist) |
+| `packages/infrastructure/src/postgres` | (none — `PostgresJobQueue` is the contract surface) |
+| `apps/render-worker/src` | `worker.ts` (new — the polling daemon), `cli/run-worker.ts` (new — entry point), tests under `worker.test.ts` |
+| `apps/control-api/src/http/routes` | (none — `translateMutationResult` already handles `already_applied`/`superseded`/`not_found`) |
+
+This mirrors Sprint 2.5's pattern: the worker daemon is composition-root work that wires existing application-layer seams. The new use case is a single-file addition. No new architectural pattern.
+
+## Worker protocol
+
+The worker is a polling consumer of the Control API. Its lifecycle for one job:
+
+1. **Poll `/api/jobs/claim`** with `{ workerId, allowedJobKinds? }`. On `204` (no work), sleep for the configured `heartbeatIntervalMs` and re-poll. On `503` (telemetry down), back off more aggressively. On `200` with a job, proceed.
+2. **Read the job's `workflowTemplate`**, load the matching certified `RenderProfile` via `loadCertificationProfile`. If no certified profile matches, call `/api/jobs/:id/fail` with `error_trace = "no certified profile for workflow_template"` and re-poll.
+3. **Call `/api/jobs/:id/start`** with the `leaseToken` to transition `leased` → `rendering`. On `409` (superseded) or `404` (gone), abort and re-poll. On `200` (`applied` or `already_applied`), proceed.
+4. **Invoke `ExecuteProfileRenderUseCase`** with the loaded profile, the job's `injectedPayload`, and the ComfyUI invocation inputs. While running, **send `/api/jobs/:id/heartbeat`** every `heartbeatIntervalMs`. On heartbeat `409` (superseded), kill the running render and abort. The GPU lease must be released (`LocalFsGpuLeaseAdapter.release()`).
+5. **On render success for `production` jobs**: invoke `assemble-generation-manifest.ts` to build the §5.5 `manifestPayload`. Call `/api/jobs/:id/complete` with `{ leaseToken, manifestPayload }`. On `400`, the manifest is malformed — fail the job with the validation error.
+6. **On render success for `candidate` jobs**: call `/api/jobs/:id/complete` with `{ leaseToken }` (no manifest). On success, the worker's `storyboard_candidate` write (out of scope for Sprint 3 issue 1; see "Scope boundaries") has already happened, or happens in step 7 as a side-effect.
+7. **On render failure**: call `/api/jobs/:id/fail` with `leaseToken` and `errorTrace`. The adapter's idempotency rules apply (requeued → `superseded`, terminal → `already_applied`).
+
+Worker-side storage admission (per the §"Storage admission surface" decision): before each of the worker's storage-consuming operations (writing candidate media bytes, writing generation manifest bytes, writing any review proxy the worker produces), call `EnforceStorageAdmission.execute(operation)`. On `StorageAdmissionError`, the worker treats the operation as transiently blocked: write to a typed `error_trace`, surface 507/429 to the Control API, and abort the job without consuming a retry budget.
+
+The worker does not need to know about token rotation beyond recognising `409` as the abort signal. The Postgres adapter rotates tokens on `claim`; the worker treats any `409` as fencing.
+
+## Scope boundaries
+
+In scope:
+
+- Worker polling daemon (`apps/render-worker/src/worker.ts`).
+- GenerationManifest content assembly (`assemble-generation-manifest.ts`).
+- Write-side storage admission enforcement (#89).
+- RenderProfile runtime loading by the worker.
+- End-to-end integration test proving §9.2 Durable Lease Recovery Gate from the worker's side.
+
+Out of scope, deferred:
+
+- **Worker → Control API authentication**: per ADR-0002, tailnet reachability is the boundary. Worker auth is a separate ADR.
+- **Mechanism that enqueues `candidate` / `production` jobs into `render_jobs`**: Sprint 3 issue 1's worker consumes jobs from `claim` but does not add the upstream producer. The `reroll` review action transitioning a scene to `generating_candidates` and the mechanism that turns that into `render_jobs` rows is a separate issue.
+- **StoryboardCandidate write path**: the worker produces the bytes (via the ComfyUI invocation) and the manifest assembly references the candidate identity, but the actual `storyboard_candidates` table write is delegated to a later sprint or to the Control API's existing scene review surface.
+- **ReferenceAsset continuity tracking**: §5.5 lists it as a manifest field; Sprint 3 stores the field, but the asset-graph traversal that produces the manifest's "persistent ReferenceAsset identities" array is a separate concern.
+- **Worker-side backoff on sustained 204**: not in scope per the §"Storage admission surface" decision.
+- **Render and queue telemetry metrics**: out of scope; the metrics route already exists for storage.
+
+## Testing
+
+Integration tests against real PostgreSQL using the existing `test:db` / Testcontainers setup, plus a smoke test against a stubbed ComfyUI HTTP server:
+
+1. **Worker poll loop, idle queue** — worker polls continuously, receives 204s, no spurious writes. Verify with `apps/render-worker/src/worker.test.ts` against a fake `ControlApiClient`.
+2. **Worker poll loop, single job** — enqueue one `candidate` job, worker claims it, runs (stubbed ComfyUI returns one image), persists nothing to `render_jobs` other than what `/complete` causes, ends in `completed`. Verify manifest row written iff `job_kind = "production"`.
+3. **§9.2 Durable Lease Recovery** — enqueue one `production` job; worker A claims it and starts; mid-render, force-kill worker A's lease by setting `lease_expires_at` into the past and clearing the process; worker B claims, runs, completes; assert exactly one `generation_manifests` row, no duplicate, and worker A's `complete` returned `409` (fenced).
+4. **§9.4 Storage Watermark Gate write-half** — pre-fill MinIO so watermark is at 85%; worker attempts to write candidate media; assert `StorageAdmissionError` thrown at the `EnforceStorageAdmission.execute(candidate_upload)` call; assert no media bytes landed in MinIO; assert no retry consumed.
+5. **Generation manifest content (§5.5)** — for a known RenderProfile + known ComfyUI invocation, run the assembler; assert every §5.5 field is present, types match, SHA-256 hashes are deterministic for the same inputs.
+6. **Idempotent `complete`** — repeat the same `/api/jobs/:id/complete` call twice; assert the second is `200 already_applied`, no duplicate manifest.
+7. **Supersession** — worker A claims and starts; worker B reclaims after expiry; worker A's `/complete` returns `409`; the job is owned by worker B's completion.
+
+Tests 3 and 5 together prove the §9.2 Durable Lease Recovery Gate and the §9.4 Storage Watermark Gate's missing write-half, completing the acceptance criteria that Sprint 2.5 deferred to Sprint 3.
+
+## Issue decomposition
+
+Four issues, sized to match the tasks that have completed successfully through the orchestrator. The risk concentrates in issue 1 (the worker daemon), so it gets a dedicated review.
+
+1. **#111 — Worker polling daemon** — `apps/render-worker/src/worker.ts`, integration with the five HTTP endpoints, end-to-end §9.2 test from the worker's side. The risk-concentrated issue.
+2. **#112 — GenerationManifest content assembly (§5.5)** — `packages/application/src/use-cases/assemble-generation-manifest.ts`, contract tests for all 16 fields, wired into the worker's `complete` invocation.
+3. **#113 — Write-side storage admission (#89)** — worker calls `EnforceStorageAdmission` before each storage-consuming operation; write endpoints surface 507/429; no retry budget consumed. This completes the write-half of #89.
+4. **#114 — RenderProfile runtime loader** — wire `loadCertificationProfile` into the worker's claim path; refuse jobs whose `workflowTemplate` doesn't match a certified profile; verify with a contract test using the existing certify fixtures.
+
+Operator-only:
+
+- **Real-environment deployment acceptance** — once issues 1-4 land, an operator runs the §9.2 and §9.4 gates against real Trinidad ComfyUI and real MinIO. Tracked separately under `#68`.
