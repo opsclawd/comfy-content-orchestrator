@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { Pool, type PoolClient } from "pg";
 import type { JobAdmissionGate } from "@cco/application";
 import type { JobId, LeaseToken } from "@cco/domain";
-import { PostgresJobQueue } from "@cco/infrastructure";
+import { PostgresJobQueue } from "./postgres-job-queue.js";
 import { runMigrations } from "../migration-runner.js";
 import {
   startPostgres18Container,
@@ -704,5 +704,425 @@ describe("PostgresJobQueue integration", () => {
       job.job_id
     ]);
     expect(postSnapshot.rows[0]).toEqual(preSnapshot.rows[0]);
+  });
+
+  it("candidate completion reaches completed without a manifest", async () => {
+    const { sceneId } = await createTestScene();
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const insertedJob = await insertRenderJobRecord(client, {
+      sceneId,
+      jobKind: "candidate",
+      status: "rendering",
+      workerId: "worker-cand",
+      leaseToken: token,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 0,
+      maxRetries: 3
+    });
+
+    const queue = new PostgresJobQueue(pool);
+    const result = await queue.complete(insertedJob.job_id as JobId, token);
+
+    expect(result.outcome).toBe("applied");
+    if (result.outcome === "applied") {
+      expect(result.job.jobId).toBe(insertedJob.job_id);
+      expect(result.job.jobKind).toBe("candidate");
+      expect(result.job.status).toBe("completed");
+      expect(result.job.workerId).toBe("worker-cand");
+      expect(result.job.leaseToken).toBe(token);
+      expect(result.job.retryCount).toBe(0);
+    }
+
+    const jobRow = await client.query<{
+      status: string;
+      worker_id: string;
+      lease_token: string;
+      retry_count: number;
+    }>("SELECT status, worker_id, lease_token, retry_count FROM render_jobs WHERE job_id = $1", [
+      insertedJob.job_id
+    ]);
+    expect(jobRow.rows[0]?.status).toBe("completed");
+    expect(jobRow.rows[0]?.worker_id).toBe("worker-cand");
+    expect(jobRow.rows[0]?.lease_token).toBe(token);
+    expect(jobRow.rows[0]?.retry_count).toBe(0);
+
+    const manifestCount = await client.query<{ count: string }>(
+      "SELECT count(*) FROM generation_manifests WHERE job_id = $1",
+      [insertedJob.job_id]
+    );
+    expect(Number(manifestCount.rows[0]?.count)).toBe(0);
+  });
+
+  it("production completion commits job and manifest atomically", async () => {
+    const clientRec = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRec.client_id });
+    const scene = await insertStoryboardSceneRecord(client, { campaignId: campaign.campaign_id });
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const insertedJob = await insertRenderJobRecord(client, {
+      sceneId: scene.scene_id,
+      jobKind: "production",
+      status: "rendering",
+      workerId: "worker-prod",
+      leaseToken: token,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 1,
+      maxRetries: 3
+    });
+
+    const manifestPayload = {
+      promptIdComfy: "prompt-prod-12345",
+      frameCount: 97,
+      outputBucket: "godzspeed-delivery",
+      outputObjectKey: `campaigns/${campaign.campaign_id}/scenes/${scene.scene_id}/output.mp4`
+    };
+
+    const queue = new PostgresJobQueue(pool);
+    const result = await queue.complete(insertedJob.job_id as JobId, token, manifestPayload);
+
+    expect(result.outcome).toBe("applied");
+    if (result.outcome === "applied") {
+      expect(result.job.jobId).toBe(insertedJob.job_id);
+      expect(result.job.jobKind).toBe("production");
+      expect(result.job.status).toBe("completed");
+      expect(result.job.workerId).toBe("worker-prod");
+      expect(result.job.leaseToken).toBe(token);
+      expect(result.job.retryCount).toBe(1);
+    }
+
+    const jobRow = await client.query<{
+      status: string;
+      worker_id: string;
+      lease_token: string;
+      retry_count: number;
+    }>("SELECT status, worker_id, lease_token, retry_count FROM render_jobs WHERE job_id = $1", [
+      insertedJob.job_id
+    ]);
+    expect(jobRow.rows[0]?.status).toBe("completed");
+    expect(jobRow.rows[0]?.worker_id).toBe("worker-prod");
+    expect(jobRow.rows[0]?.lease_token).toBe(token);
+    expect(jobRow.rows[0]?.retry_count).toBe(1);
+
+    const manifestRes = await client.query<{
+      manifest_id: string;
+      job_id: string;
+      prompt_id_comfy: string;
+      campaign_id: string;
+      scene_id: string;
+      render_attempt: number;
+      manifest_payload: unknown;
+    }>("SELECT * FROM generation_manifests WHERE job_id = $1", [insertedJob.job_id]);
+
+    expect(manifestRes.rows).toHaveLength(1);
+    const manifest = manifestRes.rows[0]!;
+    expect(manifest.job_id).toBe(insertedJob.job_id);
+    expect(manifest.prompt_id_comfy).toBe("prompt-prod-12345");
+    expect(manifest.campaign_id).toBe(campaign.campaign_id);
+    expect(manifest.scene_id).toBe(scene.scene_id);
+    expect(manifest.render_attempt).toBe(2);
+    expect(manifest.manifest_payload).toEqual(manifestPayload);
+  });
+
+  it("same-token production completion is idempotent", async () => {
+    const clientRec = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRec.client_id });
+    const scene = await insertStoryboardSceneRecord(client, { campaignId: campaign.campaign_id });
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const insertedJob = await insertRenderJobRecord(client, {
+      sceneId: scene.scene_id,
+      jobKind: "production",
+      status: "rendering",
+      workerId: "worker-prod",
+      leaseToken: token,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 0
+    });
+
+    const manifestPayload = { promptIdComfy: "prompt-idempotent-1" };
+    const queue = new PostgresJobQueue(pool);
+
+    const firstResult = await queue.complete(insertedJob.job_id as JobId, token, manifestPayload);
+    expect(firstResult.outcome).toBe("applied");
+
+    const secondResult = await queue.complete(insertedJob.job_id as JobId, token, manifestPayload);
+    expect(secondResult.outcome).toBe("already_applied");
+    if (secondResult.outcome === "already_applied") {
+      expect(secondResult.job.jobId).toBe(insertedJob.job_id);
+      expect(secondResult.job.status).toBe("completed");
+      expect(secondResult.job.leaseToken).toBe(token);
+    }
+
+    const manifestCount = await client.query<{ count: string }>(
+      "SELECT count(*) FROM generation_manifests WHERE job_id = $1",
+      [insertedJob.job_id]
+    );
+    expect(Number(manifestCount.rows[0]?.count)).toBe(1);
+  });
+
+  it("concurrent production completion has one durable winner", async () => {
+    const clientRec = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRec.client_id });
+    const scene = await insertStoryboardSceneRecord(client, { campaignId: campaign.campaign_id });
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const insertedJob = await insertRenderJobRecord(client, {
+      sceneId: scene.scene_id,
+      jobKind: "production",
+      status: "rendering",
+      workerId: "worker-prod",
+      leaseToken: token,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 0
+    });
+
+    const manifestPayload = { promptIdComfy: "prompt-concurrent-winner" };
+    const queue1 = new PostgresJobQueue(pool);
+    const queue2 = new PostgresJobQueue(pool);
+
+    const p1 = queue1.complete(insertedJob.job_id as JobId, token, manifestPayload);
+    const p2 = queue2.complete(insertedJob.job_id as JobId, token, manifestPayload);
+
+    const [res1, res2] = await Promise.all([p1, p2]);
+    const outcomes = [res1.outcome, res2.outcome].sort();
+    expect(outcomes).toEqual(["already_applied", "applied"]);
+
+    const dbRow = await client.query<{
+      status: string;
+      lease_token: string;
+    }>("SELECT status, lease_token FROM render_jobs WHERE job_id = $1", [insertedJob.job_id]);
+    expect(dbRow.rows[0]?.status).toBe("completed");
+    expect(dbRow.rows[0]?.lease_token).toBe(token);
+
+    const manifestCount = await client.query<{ count: string }>(
+      "SELECT count(*) FROM generation_manifests WHERE job_id = $1",
+      [insertedJob.job_id]
+    );
+    expect(Number(manifestCount.rows[0]?.count)).toBe(1);
+  });
+
+  it("stale completion is fenced after lease reclaim", async () => {
+    const clientRec = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRec.client_id });
+    const scene = await insertStoryboardSceneRecord(client, { campaignId: campaign.campaign_id });
+    const oldToken = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const newToken = "01950c46-9e90-7d3d-82d2-8f1d3c000002" as LeaseToken;
+
+    const insertedJob = await insertRenderJobRecord(client, {
+      sceneId: scene.scene_id,
+      jobKind: "production",
+      status: "leased",
+      workerId: "new-worker",
+      leaseToken: newToken,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 1
+    });
+
+    const preSnapshot = await client.query("SELECT * FROM render_jobs WHERE job_id = $1", [
+      insertedJob.job_id
+    ]);
+
+    const queue = new PostgresJobQueue(pool);
+    const result = await queue.complete(insertedJob.job_id as JobId, oldToken, {
+      promptIdComfy: "prompt-stale"
+    });
+
+    expect(result.outcome).toBe("superseded");
+    expect((result as { job?: unknown }).job).toBeUndefined();
+
+    const postSnapshot = await client.query("SELECT * FROM render_jobs WHERE job_id = $1", [
+      insertedJob.job_id
+    ]);
+    expect(postSnapshot.rows[0]).toEqual(preSnapshot.rows[0]);
+
+    const manifestCount = await client.query<{ count: string }>(
+      "SELECT count(*) FROM generation_manifests WHERE job_id = $1",
+      [insertedJob.job_id]
+    );
+    expect(Number(manifestCount.rows[0]?.count)).toBe(0);
+  });
+
+  it("completion requires rendering and current ownership", async () => {
+    const { sceneId } = await createTestScene();
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const staleToken = "01950c46-9e90-7d3d-82d2-8f1d3c000099" as LeaseToken;
+    const queue = new PostgresJobQueue(pool);
+
+    const testCases = [
+      { status: "queued" as const, tokenToUse: token, desc: "queued status" },
+      { status: "leased" as const, tokenToUse: token, desc: "leased status" },
+      { status: "failed" as const, tokenToUse: token, desc: "failed status" },
+      { status: "cancelled" as const, tokenToUse: token, desc: "cancelled status" },
+      {
+        status: "completed" as const,
+        tokenToUse: staleToken,
+        desc: "completed status with other token"
+      },
+      {
+        status: "rendering" as const,
+        tokenToUse: staleToken,
+        desc: "rendering status with other token"
+      }
+    ];
+
+    for (const tc of testCases) {
+      for (const jobKind of ["candidate" as const, "production" as const]) {
+        const job = await insertRenderJobRecord(client, {
+          sceneId,
+          jobKind,
+          status: tc.status,
+          workerId: tc.status === "queued" ? null : "worker-1",
+          leaseToken: tc.status === "queued" ? null : token,
+          leaseExpiresAt: tc.status === "queued" ? null : new Date(Date.now() + 60_000),
+          retryCount: 0
+        });
+
+        const preSnapshot = await client.query("SELECT * FROM render_jobs WHERE job_id = $1", [
+          job.job_id
+        ]);
+
+        const res = await queue.complete(job.job_id as JobId, tc.tokenToUse, {
+          promptIdComfy: "prompt-test"
+        });
+        expect(res.outcome, `Expected superseded for ${jobKind} ${tc.desc}`).toBe("superseded");
+        expect((res as { job?: unknown }).job).toBeUndefined();
+
+        const postSnapshot = await client.query("SELECT * FROM render_jobs WHERE job_id = $1", [
+          job.job_id
+        ]);
+        expect(postSnapshot.rows[0], `Row mutated for ${jobKind} ${tc.desc}`).toEqual(
+          preSnapshot.rows[0]
+        );
+
+        const manifestCount = await client.query<{ count: string }>(
+          "SELECT count(*) FROM generation_manifests WHERE job_id = $1",
+          [job.job_id]
+        );
+        expect(Number(manifestCount.rows[0]?.count)).toBe(0);
+      }
+    }
+
+    // Missing job ID
+    const missingJobId = "01950c46-9e90-7d3d-82d2-8f1d3c000000" as JobId;
+    const missingRes = await queue.complete(missingJobId, token, {
+      promptIdComfy: "prompt-missing"
+    });
+    expect(missingRes.outcome).toBe("not_found");
+    expect((missingRes as { job?: unknown }).job).toBeUndefined();
+  });
+
+  it("invalid production payload rolls back completion", async () => {
+    const { sceneId } = await createTestScene();
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const insertedJob = await insertRenderJobRecord(client, {
+      sceneId,
+      jobKind: "production",
+      status: "rendering",
+      workerId: "worker-prod",
+      leaseToken: token,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 0
+    });
+
+    const queue = new PostgresJobQueue(pool);
+
+    const invalidPayloads = [
+      undefined,
+      {},
+      { promptIdComfy: "" },
+      { promptIdComfy: "   " },
+      { promptIdComfy: 123 as unknown as string },
+      { promptIdComfy: null as unknown as string }
+    ];
+
+    for (const invalidPayload of invalidPayloads) {
+      await expect(
+        queue.complete(
+          insertedJob.job_id as JobId,
+          token,
+          invalidPayload as Readonly<Record<string, unknown>>
+        )
+      ).rejects.toThrow();
+
+      const jobRow = await client.query<{ status: string }>(
+        "SELECT status FROM render_jobs WHERE job_id = $1",
+        [insertedJob.job_id]
+      );
+      expect(jobRow.rows[0]?.status).toBe("rendering");
+
+      const manifestCount = await client.query<{ count: string }>(
+        "SELECT count(*) FROM generation_manifests WHERE job_id = $1",
+        [insertedJob.job_id]
+      );
+      expect(Number(manifestCount.rows[0]?.count)).toBe(0);
+    }
+  });
+
+  it("unexpected unique violations and inconsistent duplicate state are not masked", async () => {
+    const clientRec = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRec.client_id });
+    const scene = await insertStoryboardSceneRecord(client, { campaignId: campaign.campaign_id });
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+
+    // Sub-case 1: Completed production job but 0 manifests (inconsistent duplicate state)
+    const incompleteCompletedJob = await insertRenderJobRecord(client, {
+      sceneId: scene.scene_id,
+      jobKind: "production",
+      status: "completed",
+      workerId: "worker-prod",
+      leaseToken: token,
+      retryCount: 0
+    });
+
+    const queue = new PostgresJobQueue(pool);
+
+    await expect(
+      queue.complete(incompleteCompletedJob.job_id as JobId, token, {
+        promptIdComfy: "prompt-1"
+      })
+    ).rejects.toThrow(/inconsistent/i);
+
+    // Sub-case 2: Unrelated unique violation error rethrows and does not classify as already_applied
+    const faultyJob = await insertRenderJobRecord(client, {
+      sceneId: scene.scene_id,
+      jobKind: "production",
+      status: "rendering",
+      workerId: "worker-prod",
+      leaseToken: token,
+      retryCount: 0
+    });
+
+    const fakeUniqueError = Object.assign(new Error("unrelated unique violation"), {
+      code: "23505",
+      constraint: "unrelated_constraint_key"
+    });
+
+    const faultyPool = {
+      connect: async () => {
+        const actualClient = await pool.connect();
+        return {
+          query: (sql: string | { text: string }, values?: unknown[]) => {
+            const sqlText = typeof sql === "string" ? sql : sql.text;
+            if (sqlText.includes("INSERT INTO generation_manifests")) {
+              throw fakeUniqueError;
+            }
+            return actualClient.query(sql as string, values);
+          },
+          release: () => actualClient.release()
+        } as unknown as PoolClient;
+      },
+      query: pool.query.bind(pool)
+    } as unknown as Pool;
+
+    const queueWithFaultyPool = new PostgresJobQueue(faultyPool);
+    await expect(
+      queueWithFaultyPool.complete(faultyJob.job_id as JobId, token, {
+        promptIdComfy: "prompt-fail"
+      })
+    ).rejects.toThrow("unrelated unique violation");
+
+    // Verify row was rolled back and still rendering
+    const jobRow = await client.query<{ status: string }>(
+      "SELECT status FROM render_jobs WHERE job_id = $1",
+      [faultyJob.job_id]
+    );
+    expect(jobRow.rows[0]?.status).toBe("rendering");
   });
 });

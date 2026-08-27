@@ -13,7 +13,7 @@ import {
   type RenderJob,
   type SceneId
 } from "@cco/domain";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 
 interface RenderJobRow {
   job_id: string;
@@ -288,8 +288,190 @@ export class PostgresJobQueue implements JobQueuePort {
     return { outcome: "superseded" };
   }
 
-  private async readJobRow(jobId: string): Promise<RenderJobRow | undefined> {
-    const res = await this.pool.query<RenderJobRow>(
+  async complete(
+    jobId: JobId,
+    leaseToken: LeaseToken,
+    manifestPayload?: Readonly<Record<string, unknown>>
+  ): Promise<JobMutationResult> {
+    let clientReleased = false;
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const updateRes = await client.query<RenderJobRow>(
+        `
+        UPDATE render_jobs
+        SET
+          status = 'completed',
+          updated_at = NOW()
+        WHERE job_id = $1
+          AND lease_token = $2
+          AND status = 'rendering'
+        RETURNING
+          job_id,
+          scene_id,
+          job_kind,
+          status,
+          workflow_template,
+          injected_payload,
+          worker_id,
+          lease_token,
+          lease_expires_at,
+          retry_count,
+          max_retries,
+          error_trace,
+          created_at,
+          updated_at
+        `,
+        [jobId, leaseToken]
+      );
+
+      const updatedRow = updateRes.rows[0];
+      if (updatedRow) {
+        if (updatedRow.job_kind === "candidate") {
+          await client.query("COMMIT");
+          return {
+            outcome: "applied",
+            job: this.mapRowToRenderJob(updatedRow)
+          };
+        }
+
+        const promptIdComfy =
+          manifestPayload && typeof manifestPayload === "object"
+            ? manifestPayload.promptIdComfy
+            : undefined;
+
+        if (typeof promptIdComfy !== "string" || promptIdComfy.trim().length === 0) {
+          throw new Error(
+            "manifestPayload.promptIdComfy must be a non-empty string for production job completion"
+          );
+        }
+
+        const sceneRes = await client.query<{ campaign_id: string }>(
+          "SELECT campaign_id FROM storyboard_scenes WHERE scene_id = $1",
+          [updatedRow.scene_id]
+        );
+        const campaignId = sceneRes.rows[0]?.campaign_id;
+        if (!campaignId) {
+          throw new Error(`Storyboard scene not found: ${updatedRow.scene_id}`);
+        }
+
+        const renderAttempt = Number(updatedRow.retry_count) + 1;
+
+        await client.query(
+          `
+          INSERT INTO generation_manifests (
+            job_id,
+            prompt_id_comfy,
+            campaign_id,
+            scene_id,
+            render_attempt,
+            manifest_payload
+          ) VALUES ($1, $2, $3, $4, $5, $6)
+          `,
+          [
+            updatedRow.job_id,
+            promptIdComfy,
+            campaignId,
+            updatedRow.scene_id,
+            renderAttempt,
+            JSON.stringify(manifestPayload)
+          ]
+        );
+
+        await client.query("COMMIT");
+        return {
+          outcome: "applied",
+          job: this.mapRowToRenderJob(updatedRow)
+        };
+      }
+
+      const currentRow = await this.readJobRow(jobId, client);
+      if (!currentRow) {
+        await client.query("COMMIT");
+        return { outcome: "not_found" };
+      }
+
+      if (currentRow.lease_token === leaseToken && currentRow.status === "completed") {
+        if (currentRow.job_kind === "production") {
+          const manifestCountRes = await client.query<{ count: string }>(
+            "SELECT count(*) FROM generation_manifests WHERE job_id = $1",
+            [jobId]
+          );
+          const count = Number(manifestCountRes.rows[0]?.count);
+          if (count === 1) {
+            await client.query("COMMIT");
+            return {
+              outcome: "already_applied",
+              job: this.mapRowToRenderJob(currentRow)
+            };
+          }
+          throw new Error(
+            `Inconsistent duplicate state: completed production job ${jobId} has ${count} manifests`
+          );
+        } else {
+          const manifestCountRes = await client.query<{ count: string }>(
+            "SELECT count(*) FROM generation_manifests WHERE job_id = $1",
+            [jobId]
+          );
+          const count = Number(manifestCountRes.rows[0]?.count);
+          if (count === 0) {
+            await client.query("COMMIT");
+            return {
+              outcome: "already_applied",
+              job: this.mapRowToRenderJob(currentRow)
+            };
+          }
+          throw new Error(
+            `Inconsistent duplicate state: completed candidate job ${jobId} has ${count} manifests`
+          );
+        }
+      }
+
+      await client.query("COMMIT");
+      return { outcome: "superseded" };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      client.release();
+      clientReleased = true;
+
+      const pgError = error as { code?: string; constraint?: string };
+      if (
+        pgError?.code === "23505" &&
+        (!pgError.constraint || pgError.constraint === "generation_manifests_job_id_key")
+      ) {
+        const currentRow = await this.readJobRow(jobId);
+        if (
+          currentRow &&
+          currentRow.lease_token === leaseToken &&
+          currentRow.status === "completed"
+        ) {
+          const manifestCountRes = await this.pool.query<{ count: string }>(
+            "SELECT count(*) FROM generation_manifests WHERE job_id = $1",
+            [jobId]
+          );
+          if (Number(manifestCountRes.rows[0]?.count) === 1) {
+            return {
+              outcome: "already_applied",
+              job: this.mapRowToRenderJob(currentRow)
+            };
+          }
+        }
+      }
+
+      throw error;
+    } finally {
+      if (!clientReleased) {
+        client.release();
+      }
+    }
+  }
+
+  private async readJobRow(
+    jobId: string,
+    runner: Pool | PoolClient = this.pool
+  ): Promise<RenderJobRow | undefined> {
+    const res = await runner.query<RenderJobRow>(
       `
       SELECT
         job_id,

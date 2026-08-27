@@ -24,4 +24,9 @@ export interface JobQueuePort {
     leaseToken: LeaseToken,
     leaseDurationMs: number
   ): Promise<JobMutationResult>;
+  complete(
+    jobId: JobId,
+    leaseToken: LeaseToken,
+    manifestPayload?: Readonly<Record<string, unknown>>
+  ): Promise<JobMutationResult>;
 }
