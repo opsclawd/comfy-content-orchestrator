@@ -169,3 +169,8 @@ export {
   type StorageProvisionCliOptions,
   type ProvisionCliDependencies
 } from "./storage/provision.js";
+
+export {
+  StorageAwareJobAdmissionGate,
+  type StorageAwareJobAdmissionGateOptions
+} from "./storage/storage-aware-job-admission-gate.js";

@@ -28,3 +28,10 @@ export class StorageAdmissionError extends Error {
     this.freeBytes = context.freeBytes;
   }
 }
+
+export class StorageAdmissionUnavailableError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("Storage telemetry is unavailable.", options);
+    this.name = "StorageAdmissionUnavailableError";
+  }
+}
