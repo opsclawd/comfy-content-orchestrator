@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyReply } from "fastify"
 import type { JobId, LeaseToken } from "@cco/domain";
 import {
   InvalidJobCompletionPayloadError,
+  StorageAdmissionError,
   StorageAdmissionUnavailableError,
   type JobMutationResult
 } from "@cco/application";
@@ -102,9 +103,44 @@ export const completeJobSchema = {
       },
       manifestPayload: {
         type: "object"
+      },
+      candidatePayload: {
+        type: "object",
+        required: ["variantOrdinal", "storageBucket", "storageObjectKey", "contentHashSha256"],
+        properties: {
+          variantOrdinal: {
+            type: "integer",
+            minimum: 1
+          },
+          storageBucket: {
+            type: "string",
+            minLength: 1,
+            pattern: "\\S"
+          },
+          storageObjectKey: {
+            type: "string",
+            minLength: 1,
+            pattern: "\\S"
+          },
+          contentHashSha256: {
+            type: "string",
+            minLength: 64,
+            maxLength: 64,
+            pattern: "^[0-9a-fA-F]+$"
+          },
+          generationPayload: {
+            type: "object"
+          }
+        },
+        additionalProperties: false
       }
     },
-    additionalProperties: false
+    additionalProperties: false,
+    anyOf: [
+      { required: ["manifestPayload"], not: { required: ["candidatePayload"] } },
+      { required: ["candidatePayload"], not: { required: ["manifestPayload"] } },
+      { not: { anyOf: [{ required: ["manifestPayload"] }, { required: ["candidatePayload"] }] } }
+    ]
   }
 } as const;
 
@@ -138,8 +174,39 @@ export const failJobSchema = {
   }
 } as const;
 
+export const deferJobSchema = {
+  params: {
+    type: "object",
+    required: ["jobId"],
+    properties: {
+      jobId: {
+        type: "string",
+        format: "uuid"
+      }
+    },
+    additionalProperties: false
+  },
+  body: {
+    type: "object",
+    required: ["leaseToken", "reason"],
+    properties: {
+      leaseToken: {
+        type: "string",
+        format: "uuid"
+      },
+      reason: {
+        type: "string",
+        minLength: 1,
+        pattern: "\\S"
+      }
+    },
+    additionalProperties: false
+  }
+} as const;
+
 function translateMutationResult(result: JobMutationResult, reply: FastifyReply): FastifyReply {
   switch (result.outcome) {
+    case "deferred":
     case "applied":
     case "already_applied":
       return reply.status(200).send(result);
@@ -168,6 +235,10 @@ export const jobRoutes: FastifyPluginAsync<JobRoutesOptions> = async (
   const queue = container.dependencies.jobQueue;
   if (!queue) {
     throw new Error("JobQueuePort is required for job routes");
+  }
+  const enforceStorageAdmission = container.useCases.enforceStorageAdmission;
+  if (!enforceStorageAdmission) {
+    throw new Error("EnforceStorageAdmission use case is required for job routes");
   }
 
   fastify.post<{ Body: { workerId: string } }>(
@@ -222,16 +293,61 @@ export const jobRoutes: FastifyPluginAsync<JobRoutesOptions> = async (
 
   fastify.post<{
     Params: { jobId: string };
-    Body: { leaseToken: string; manifestPayload?: Record<string, unknown> };
+    Body: {
+      leaseToken: string;
+      manifestPayload?: Record<string, unknown>;
+      candidatePayload?: Record<string, unknown>;
+    };
   }>("/api/jobs/:jobId/complete", { schema: completeJobSchema }, async (request, reply) => {
     try {
+      const operation =
+        request.body.candidatePayload !== undefined ? "candidate_upload" : "delivery_write";
+
+      try {
+        await enforceStorageAdmission.execute(operation);
+      } catch (error) {
+        if (error instanceof StorageAdmissionError) {
+          throw error;
+        }
+        if (error instanceof StorageAdmissionUnavailableError) {
+          throw error;
+        }
+        throw new StorageAdmissionUnavailableError({ cause: error });
+      }
+
       const result = await queue.complete(
         request.params.jobId as JobId,
         request.body.leaseToken as LeaseToken,
-        request.body.manifestPayload
+        request.body.manifestPayload,
+        request.body.candidatePayload as
+          | {
+              readonly variantOrdinal: number;
+              readonly storageBucket: string;
+              readonly storageObjectKey: string;
+              readonly contentHashSha256: string;
+              readonly generationPayload?: Readonly<Record<string, unknown>>;
+            }
+          | undefined
       );
       return translateMutationResult(result, reply);
     } catch (error) {
+      if (error instanceof StorageAdmissionUnavailableError) {
+        return reply.status(503).send({
+          code: "STORAGE_TELEMETRY_UNAVAILABLE",
+          message: "Storage telemetry is unavailable."
+        });
+      }
+      if (error instanceof StorageAdmissionError) {
+        return reply.status(507).send({
+          code: "STORAGE_ADMISSION_DENIED",
+          message: error.message,
+          operationClass: error.operationClass,
+          watermarkState: error.watermarkState,
+          usedRatio: error.usedRatio,
+          totalBytes: error.totalBytes,
+          freeBytes: error.freeBytes
+        });
+      }
       if (error instanceof InvalidJobCompletionPayloadError) {
         return reply.status(400).send({
           code: "VALIDATION_FAILURE",
@@ -250,6 +366,18 @@ export const jobRoutes: FastifyPluginAsync<JobRoutesOptions> = async (
       request.params.jobId as JobId,
       request.body.leaseToken as LeaseToken,
       request.body.errorTrace
+    );
+    return translateMutationResult(result, reply);
+  });
+
+  fastify.post<{
+    Params: { jobId: string };
+    Body: { leaseToken: string; reason: string };
+  }>("/api/jobs/:jobId/defer", { schema: deferJobSchema }, async (request, reply) => {
+    const result = await queue.defer(
+      request.params.jobId as JobId,
+      request.body.leaseToken as LeaseToken,
+      request.body.reason
     );
     return translateMutationResult(result, reply);
   });

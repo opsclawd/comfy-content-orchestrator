@@ -1,4 +1,5 @@
 import {
+  type CandidateCompletionPayload,
   type ClaimJobInput,
   InvalidJobCompletionPayloadError,
   type JobAdmissionGate,
@@ -292,7 +293,8 @@ export class PostgresJobQueue implements JobQueuePort {
   async complete(
     jobId: JobId,
     leaseToken: LeaseToken,
-    manifestPayload?: Readonly<Record<string, unknown>>
+    manifestPayload?: Readonly<Record<string, unknown>>,
+    candidatePayload?: CandidateCompletionPayload
   ): Promise<JobMutationResult> {
     let clientReleased = false;
     const client = await this.pool.connect();
@@ -335,11 +337,24 @@ export class PostgresJobQueue implements JobQueuePort {
               "manifestPayload is not allowed for candidate job completion"
             );
           }
+          if (candidatePayload === undefined) {
+            throw new InvalidJobCompletionPayloadError(
+              "candidatePayload is required for candidate job completion"
+            );
+          }
+          await this.insertCandidateRow(client, updatedRow.scene_id, candidatePayload);
+
           await client.query("COMMIT");
           return {
             outcome: "applied",
             job: this.mapRowToRenderJob(updatedRow)
           };
+        }
+
+        if (candidatePayload !== undefined) {
+          throw new InvalidJobCompletionPayloadError(
+            "candidatePayload is not allowed for production job completion"
+          );
         }
 
         if (
@@ -422,23 +437,22 @@ export class PostgresJobQueue implements JobQueuePort {
           throw new Error(
             `Inconsistent duplicate state: completed production job ${jobId} has ${count} manifests`
           );
-        } else {
-          const manifestCountRes = await client.query<{ count: string }>(
-            "SELECT count(*) FROM generation_manifests WHERE job_id = $1",
-            [jobId]
-          );
-          const count = Number(manifestCountRes.rows[0]?.count);
-          if (count === 0) {
-            await client.query("COMMIT");
-            return {
-              outcome: "already_applied",
-              job: this.mapRowToRenderJob(currentRow)
-            };
-          }
-          throw new Error(
-            `Inconsistent duplicate state: completed candidate job ${jobId} has ${count} manifests`
-          );
         }
+        const candidateCountRes = await client.query<{ count: string }>(
+          "SELECT count(*) FROM storyboard_candidates WHERE scene_id = $1",
+          [currentRow.scene_id]
+        );
+        const candidateCount = Number(candidateCountRes.rows[0]?.count);
+        if (candidateCount > 0) {
+          await client.query("COMMIT");
+          return {
+            outcome: "already_applied",
+            job: this.mapRowToRenderJob(currentRow)
+          };
+        }
+        throw new Error(
+          `Inconsistent duplicate state: completed candidate job ${jobId} has ${candidateCount} candidates`
+        );
       }
 
       await client.query("COMMIT");
@@ -546,6 +560,119 @@ export class PostgresJobQueue implements JobQueuePort {
     }
 
     return { outcome: "superseded" };
+  }
+
+  async defer(jobId: JobId, leaseToken: LeaseToken, reason: string): Promise<JobMutationResult> {
+    if (typeof reason !== "string" || reason.trim().length === 0) {
+      throw new Error("reason must be a non-empty string");
+    }
+
+    const updateRes = await this.pool.query<RenderJobRow>(
+      `
+      UPDATE render_jobs
+      SET status = 'queued',
+          worker_id = NULL,
+          lease_expires_at = NULL,
+          error_trace = $3,
+          updated_at = NOW()
+      WHERE job_id = $1
+        AND lease_token = $2
+        AND status IN ('leased', 'rendering')
+      RETURNING
+        job_id, scene_id, job_kind, status, workflow_template, injected_payload,
+        worker_id, lease_token, lease_expires_at, retry_count, max_retries,
+        error_trace, created_at, updated_at
+      `,
+      [jobId, leaseToken, reason]
+    );
+
+    const updatedRow = updateRes.rows[0];
+    if (updatedRow) {
+      return { outcome: "deferred", job: this.mapRowToRenderJob(updatedRow) };
+    }
+
+    const currentRow = await this.readJobRow(jobId);
+    if (!currentRow) return { outcome: "not_found" };
+    if (currentRow.lease_token === leaseToken && currentRow.status === "queued") {
+      return {
+        outcome: "already_applied",
+        job: this.mapRowToRenderJob(currentRow)
+      };
+    }
+    return { outcome: "superseded" };
+  }
+
+  private async insertCandidateRow(
+    client: PoolClient,
+    sceneId: string,
+    candidatePayload: CandidateCompletionPayload
+  ): Promise<void> {
+    if (
+      !Number.isInteger(candidatePayload.variantOrdinal) ||
+      candidatePayload.variantOrdinal <= 0
+    ) {
+      throw new InvalidJobCompletionPayloadError(
+        "candidatePayload.variantOrdinal must be a positive integer"
+      );
+    }
+    if (
+      typeof candidatePayload.storageBucket !== "string" ||
+      candidatePayload.storageBucket.trim().length === 0
+    ) {
+      throw new InvalidJobCompletionPayloadError(
+        "candidatePayload.storageBucket must be a non-empty string"
+      );
+    }
+    if (
+      typeof candidatePayload.storageObjectKey !== "string" ||
+      candidatePayload.storageObjectKey.trim().length === 0
+    ) {
+      throw new InvalidJobCompletionPayloadError(
+        "candidatePayload.storageObjectKey must be a non-empty string"
+      );
+    }
+    if (
+      typeof candidatePayload.contentHashSha256 !== "string" ||
+      candidatePayload.contentHashSha256.length !== 64
+    ) {
+      throw new InvalidJobCompletionPayloadError(
+        "candidatePayload.contentHashSha256 must be a 64-character sha256 hex digest"
+      );
+    }
+
+    const sceneRes = await client.query<{ spec_revision: number }>(
+      "SELECT spec_revision FROM storyboard_scenes WHERE scene_id = $1",
+      [sceneId]
+    );
+    const specRevision = Number(sceneRes.rows[0]?.spec_revision);
+    if (!Number.isInteger(specRevision) || specRevision <= 0) {
+      throw new Error(`Storyboard scene not found or has invalid spec_revision: ${sceneId}`);
+    }
+
+    const generationPayload = candidatePayload.generationPayload ?? {};
+
+    await client.query(
+      `
+      INSERT INTO storyboard_candidates (
+        scene_id,
+        scene_spec_revision,
+        variant_ordinal,
+        storage_bucket,
+        storage_object_key,
+        content_hash_sha256,
+        generation_payload
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `,
+      [
+        sceneId,
+        specRevision,
+        candidatePayload.variantOrdinal,
+        candidatePayload.storageBucket,
+        candidatePayload.storageObjectKey,
+        candidatePayload.contentHashSha256,
+        JSON.stringify(generationPayload)
+      ]
+    );
   }
 
   private async readJobRow(

@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  EnforceStorageAdmission,
   ProgressSceneProductionUseCases,
   ReviewSceneUseCases,
   type QueueRenderInput,
@@ -7,6 +8,8 @@ import {
   type RenderQueueReceipt,
   type ReviewMediaDeliveryPort,
   type SceneReviewQueries,
+  type StorageMetricsRegistryPort,
+  type StorageTelemetryPort,
   type UnitOfWork,
   type UnitOfWorkContext
 } from "@cco/application";
@@ -209,6 +212,42 @@ describe("control-api composition root", () => {
 
     await server.close();
     expect(server.app.server.listening).toBe(false);
+  });
+
+  describe("storage admission", () => {
+    it("container shares telemetry and metrics with write admission", async () => {
+      const uow = new FakeUnitOfWork();
+      const telemetryPort: StorageTelemetryPort = {
+        getStorageTelemetry: vi.fn().mockResolvedValue({
+          totalBytes: 100,
+          usedBytes: 50,
+          freeBytes: 50,
+          buckets: [],
+          measuredAt: "2026-08-27T00:00:00.000Z"
+        })
+      };
+      const metricsRegistry: StorageMetricsRegistryPort = {
+        recordTelemetry: vi.fn(),
+        getMetricsSnapshot: vi.fn(),
+        formatPrometheusMetrics: vi.fn()
+      };
+
+      const container = createControlApiContainer({
+        uow,
+        storageTelemetry: telemetryPort,
+        storageMetricsRegistry: metricsRegistry
+      });
+
+      expect(container.useCases.enforceStorageAdmission).toBeInstanceOf(EnforceStorageAdmission);
+
+      await container.useCases.enforceStorageAdmission!.execute("delivery_write");
+
+      expect(telemetryPort.getStorageTelemetry).toHaveBeenCalledTimes(1);
+      expect(metricsRegistry.recordTelemetry).toHaveBeenCalledTimes(1);
+
+      const containerWithout = createControlApiContainer({ uow });
+      expect(containerWithout.useCases.enforceStorageAdmission).toBeUndefined();
+    });
   });
 
   it("startControlApiServer uses default host and port when options omitted", async () => {

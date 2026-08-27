@@ -5,6 +5,7 @@ import {
   StorageAdmissionUnavailableError,
   type JobMutationResult,
   type JobQueuePort,
+  type StorageTelemetryPort,
   type UnitOfWork,
   type UnitOfWorkContext
 } from "@cco/application";
@@ -65,6 +66,15 @@ const sampleFailedJob: RenderJob = {
   updatedAt: new Date("2026-08-27T08:08:00.000Z")
 };
 
+const sampleDeferredJob: RenderJob = {
+  ...sampleLeasedJob,
+  status: "queued",
+  workerId: null,
+  leaseExpiresAt: null,
+  errorTrace: "Worker requested defer",
+  updatedAt: new Date("2026-08-27T08:09:00.000Z")
+};
+
 const defaultDispatchConfig = {
   leaseDurationMs: 300_000,
   heartbeatIntervalMs: 30_000
@@ -77,7 +87,23 @@ function createFakeJobQueue(overrides?: Partial<JobQueuePort>): JobQueuePort {
     heartbeat: vi.fn().mockResolvedValue({ outcome: "not_found" } as JobMutationResult),
     complete: vi.fn().mockResolvedValue({ outcome: "not_found" } as JobMutationResult),
     fail: vi.fn().mockResolvedValue({ outcome: "not_found" } as JobMutationResult),
+    defer: vi.fn().mockResolvedValue({ outcome: "not_found" } as JobMutationResult),
     ...overrides
+  };
+}
+
+function createFakeStorageTelemetry(
+  usedBytes: number = 50,
+  totalBytes: number = 100
+): StorageTelemetryPort {
+  return {
+    getStorageTelemetry: vi.fn().mockResolvedValue({
+      totalBytes,
+      usedBytes,
+      freeBytes: totalBytes - usedBytes,
+      buckets: [],
+      measuredAt: "2026-08-27T00:00:00.000Z"
+    })
   };
 }
 
@@ -90,6 +116,7 @@ describe("Job Dispatch Routes", () => {
     const app = createControlApiApp(
       {
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queue
       },
       {
@@ -142,6 +169,7 @@ describe("Job Dispatch Routes", () => {
     const app = createControlApiApp(
       {
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queue
       },
       {
@@ -176,6 +204,7 @@ describe("Job Dispatch Routes", () => {
     const appUnavailable = createControlApiApp(
       {
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queueUnavailable
       },
       {
@@ -205,6 +234,7 @@ describe("Job Dispatch Routes", () => {
     const appArbitrary = createControlApiApp(
       {
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queueArbitrary
       },
       {
@@ -235,6 +265,7 @@ describe("Job Dispatch Routes", () => {
     const app = createControlApiApp(
       {
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queue
       },
       {
@@ -272,6 +303,7 @@ describe("Job Dispatch Routes", () => {
     const app = createControlApiApp(
       {
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queue
       },
       {
@@ -309,6 +341,7 @@ describe("Job Dispatch Routes", () => {
     const app = createControlApiApp(
       {
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queue
       },
       {
@@ -327,7 +360,12 @@ describe("Job Dispatch Routes", () => {
 
     expect(responseWithout.statusCode).toBe(200);
     expect(queue.complete).toHaveBeenCalledTimes(1);
-    expect(queue.complete).toHaveBeenLastCalledWith(sampleJobId, sampleLeaseToken, undefined);
+    expect(queue.complete).toHaveBeenLastCalledWith(
+      sampleJobId,
+      sampleLeaseToken,
+      undefined,
+      undefined
+    );
 
     // Case 2: with manifestPayload object
     const manifest = { promptIdComfy: "comfy-task-42", outputCount: 1 };
@@ -342,7 +380,12 @@ describe("Job Dispatch Routes", () => {
 
     expect(responseWith.statusCode).toBe(200);
     expect(queue.complete).toHaveBeenCalledTimes(2);
-    expect(queue.complete).toHaveBeenLastCalledWith(sampleJobId, sampleLeaseToken, manifest);
+    expect(queue.complete).toHaveBeenLastCalledWith(
+      sampleJobId,
+      sampleLeaseToken,
+      manifest,
+      undefined
+    );
 
     await app.close();
   });
@@ -355,6 +398,7 @@ describe("Job Dispatch Routes", () => {
     const app = createControlApiApp(
       {
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queue
       },
       {
@@ -387,6 +431,272 @@ describe("Job Dispatch Routes", () => {
     await app.close();
   });
 
+  describe("POST /api/jobs/:jobId/defer", () => {
+    it("defer delegates the branded id token and reason", async () => {
+      const queue = createFakeJobQueue({
+        defer: vi.fn().mockResolvedValue({ outcome: "deferred", job: sampleDeferredJob })
+      });
+
+      const app = createControlApiApp(
+        {
+          uow: new FakeUnitOfWork(),
+          storageTelemetry: createFakeStorageTelemetry(),
+          jobQueue: queue
+        },
+        {
+          jobDispatch: defaultDispatchConfig
+        }
+      );
+
+      const reason = "Worker needs warm model checkpoint";
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: {
+          leaseToken: sampleLeaseToken,
+          reason
+        }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(queue.defer).toHaveBeenCalledTimes(1);
+      expect(queue.defer).toHaveBeenCalledWith(sampleJobId, sampleLeaseToken, reason);
+      expect(response.json()).toEqual({
+        outcome: "deferred",
+        job: expect.objectContaining({
+          jobId: sampleJobId,
+          status: "queued",
+          workerId: null,
+          errorTrace: "Worker requested defer"
+        })
+      });
+
+      await app.close();
+    });
+
+    it("defer replay returns already applied", async () => {
+      const queue = createFakeJobQueue({
+        defer: vi.fn().mockResolvedValue({ outcome: "already_applied", job: sampleDeferredJob })
+      });
+
+      const app = createControlApiApp(
+        {
+          uow: new FakeUnitOfWork(),
+          storageTelemetry: createFakeStorageTelemetry(),
+          jobQueue: queue
+        },
+        {
+          jobDispatch: defaultDispatchConfig
+        }
+      );
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: {
+          leaseToken: sampleLeaseToken,
+          reason: "Worker requested defer"
+        }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        outcome: "already_applied",
+        job: expect.objectContaining({
+          jobId: sampleJobId
+        })
+      });
+
+      await app.close();
+    });
+
+    it("defer after reclaim returns lease superseded", async () => {
+      const queue = createFakeJobQueue({
+        defer: vi.fn().mockResolvedValue({ outcome: "superseded" })
+      });
+
+      const app = createControlApiApp(
+        {
+          uow: new FakeUnitOfWork(),
+          storageTelemetry: createFakeStorageTelemetry(),
+          jobQueue: queue
+        },
+        {
+          jobDispatch: defaultDispatchConfig
+        }
+      );
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: {
+          leaseToken: sampleLeaseToken,
+          reason: "Worker requested defer"
+        }
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toEqual({
+        code: "LEASE_SUPERSEDED",
+        message: "The job lease has been superseded."
+      });
+
+      await app.close();
+    });
+
+    it("defer reports missing jobs", async () => {
+      const queue = createFakeJobQueue({
+        defer: vi.fn().mockResolvedValue({ outcome: "not_found" })
+      });
+
+      const app = createControlApiApp(
+        {
+          uow: new FakeUnitOfWork(),
+          storageTelemetry: createFakeStorageTelemetry(),
+          jobQueue: queue
+        },
+        {
+          jobDispatch: defaultDispatchConfig
+        }
+      );
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: {
+          leaseToken: sampleLeaseToken,
+          reason: "Worker requested defer"
+        }
+      });
+
+      expect(response.statusCode).toBe(404);
+      expect(response.json()).toEqual({
+        code: "NOT_FOUND",
+        message: "Job not found."
+      });
+
+      await app.close();
+    });
+
+    it("defer rejects malformed transport input without calling the queue", async () => {
+      const queue = createFakeJobQueue();
+      const app = createControlApiApp(
+        {
+          uow: new FakeUnitOfWork(),
+          storageTelemetry: createFakeStorageTelemetry(),
+          jobQueue: queue
+        },
+        {
+          jobDispatch: defaultDispatchConfig
+        }
+      );
+
+      const invalidRequests = [
+        // invalid UUID in path
+        {
+          method: "POST" as const,
+          url: "/api/jobs/not-a-uuid/defer",
+          payload: { leaseToken: sampleLeaseToken, reason: "reason" }
+        },
+        // missing reason
+        {
+          method: "POST" as const,
+          url: `/api/jobs/${sampleJobId}/defer`,
+          payload: { leaseToken: sampleLeaseToken }
+        },
+        // empty reason
+        {
+          method: "POST" as const,
+          url: `/api/jobs/${sampleJobId}/defer`,
+          payload: { leaseToken: sampleLeaseToken, reason: "" }
+        },
+        // whitespace reason
+        {
+          method: "POST" as const,
+          url: `/api/jobs/${sampleJobId}/defer`,
+          payload: { leaseToken: sampleLeaseToken, reason: "   \t\n" }
+        },
+        // non-string reason
+        {
+          method: "POST" as const,
+          url: `/api/jobs/${sampleJobId}/defer`,
+          payload: { leaseToken: sampleLeaseToken, reason: 999 }
+        },
+        // missing leaseToken
+        {
+          method: "POST" as const,
+          url: `/api/jobs/${sampleJobId}/defer`,
+          payload: { reason: "reason" }
+        },
+        // invalid UUID in leaseToken
+        {
+          method: "POST" as const,
+          url: `/api/jobs/${sampleJobId}/defer`,
+          payload: { leaseToken: "not-a-uuid", reason: "reason" }
+        },
+        // extra property
+        {
+          method: "POST" as const,
+          url: `/api/jobs/${sampleJobId}/defer`,
+          payload: { leaseToken: sampleLeaseToken, reason: "reason", extraProp: 123 }
+        }
+      ];
+
+      for (const req of invalidRequests) {
+        const response = await app.inject(req);
+        expect(
+          response.statusCode,
+          `Expected 400 for ${req.method} ${req.url} with ${JSON.stringify(req.payload)}`
+        ).toBe(400);
+        expect(response.json()).toEqual(
+          expect.objectContaining({
+            code: "VALIDATION_FAILURE"
+          })
+        );
+      }
+
+      expect(queue.defer).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("deferred is translated as a successful mutation outcome", async () => {
+      const queue = createFakeJobQueue({
+        defer: vi.fn().mockResolvedValue({ outcome: "deferred", job: sampleDeferredJob })
+      });
+
+      const app = createControlApiApp(
+        {
+          uow: new FakeUnitOfWork(),
+          storageTelemetry: createFakeStorageTelemetry(),
+          jobQueue: queue
+        },
+        {
+          jobDispatch: defaultDispatchConfig
+        }
+      );
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: {
+          leaseToken: sampleLeaseToken,
+          reason: "defer reason"
+        }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        outcome: "deferred",
+        job: expect.objectContaining({
+          jobId: sampleJobId,
+          status: "queued"
+        })
+      });
+
+      await app.close();
+    });
+  });
+
   describe("Shared mutation outcomes", () => {
     const mutationEndpoints = [
       {
@@ -416,6 +726,13 @@ describe("Job Dispatch Routes", () => {
         payload: { leaseToken: sampleLeaseToken, errorTrace: "something failed" },
         mockKey: "fail" as const,
         sampleJob: sampleFailedJob
+      },
+      {
+        name: "defer",
+        path: `/api/jobs/${sampleJobId}/defer`,
+        payload: { leaseToken: sampleLeaseToken, reason: "defer reason" },
+        mockKey: "defer" as const,
+        sampleJob: sampleDeferredJob
       }
     ];
 
@@ -425,7 +742,11 @@ describe("Job Dispatch Routes", () => {
           [ep.mockKey]: vi.fn().mockResolvedValue({ outcome: "applied", job: ep.sampleJob })
         });
         const app = createControlApiApp(
-          { uow: new FakeUnitOfWork(), jobQueue: queue },
+          {
+            uow: new FakeUnitOfWork(),
+            storageTelemetry: createFakeStorageTelemetry(),
+            jobQueue: queue
+          },
           { jobDispatch: defaultDispatchConfig }
         );
 
@@ -450,7 +771,11 @@ describe("Job Dispatch Routes", () => {
           [ep.mockKey]: vi.fn().mockResolvedValue({ outcome: "already_applied", job: ep.sampleJob })
         });
         const app = createControlApiApp(
-          { uow: new FakeUnitOfWork(), jobQueue: queue },
+          {
+            uow: new FakeUnitOfWork(),
+            storageTelemetry: createFakeStorageTelemetry(),
+            jobQueue: queue
+          },
           { jobDispatch: defaultDispatchConfig }
         );
 
@@ -475,7 +800,11 @@ describe("Job Dispatch Routes", () => {
           [ep.mockKey]: vi.fn().mockResolvedValue({ outcome: "superseded" })
         });
         const app = createControlApiApp(
-          { uow: new FakeUnitOfWork(), jobQueue: queue },
+          {
+            uow: new FakeUnitOfWork(),
+            storageTelemetry: createFakeStorageTelemetry(),
+            jobQueue: queue
+          },
           { jobDispatch: defaultDispatchConfig }
         );
 
@@ -498,7 +827,11 @@ describe("Job Dispatch Routes", () => {
           [ep.mockKey]: vi.fn().mockResolvedValue({ outcome: "not_found" })
         });
         const app = createControlApiApp(
-          { uow: new FakeUnitOfWork(), jobQueue: queue },
+          {
+            uow: new FakeUnitOfWork(),
+            storageTelemetry: createFakeStorageTelemetry(),
+            jobQueue: queue
+          },
           { jobDispatch: defaultDispatchConfig }
         );
 
@@ -521,7 +854,11 @@ describe("Job Dispatch Routes", () => {
           [ep.mockKey]: vi.fn().mockRejectedValue(new Error("unexpected DB crash"))
         });
         const app = createControlApiApp(
-          { uow: new FakeUnitOfWork(), jobQueue: queue },
+          {
+            uow: new FakeUnitOfWork(),
+            storageTelemetry: createFakeStorageTelemetry(),
+            jobQueue: queue
+          },
           { jobDispatch: defaultDispatchConfig }
         );
 
@@ -552,6 +889,7 @@ describe("Job Dispatch Routes", () => {
     const app = createControlApiApp(
       {
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queue
       },
       {
@@ -582,6 +920,7 @@ describe("Job Dispatch Routes", () => {
     const app = createControlApiApp(
       {
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queue
       },
       {
@@ -695,6 +1034,55 @@ describe("Job Dispatch Routes", () => {
         method: "POST" as const,
         url: `/api/jobs/${sampleJobId}/fail`,
         payload: { leaseToken: sampleLeaseToken, errorTrace: 999 }
+      },
+
+      // Defer: invalid UUID in path
+      {
+        method: "POST" as const,
+        url: "/api/jobs/not-a-uuid/defer",
+        payload: { leaseToken: sampleLeaseToken, reason: "reason" }
+      },
+      // Defer: missing reason
+      {
+        method: "POST" as const,
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: { leaseToken: sampleLeaseToken }
+      },
+      // Defer: empty reason
+      {
+        method: "POST" as const,
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: { leaseToken: sampleLeaseToken, reason: "" }
+      },
+      // Defer: whitespace reason
+      {
+        method: "POST" as const,
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: { leaseToken: sampleLeaseToken, reason: "   \t\n" }
+      },
+      // Defer: non-string reason
+      {
+        method: "POST" as const,
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: { leaseToken: sampleLeaseToken, reason: 999 }
+      },
+      // Defer: missing leaseToken
+      {
+        method: "POST" as const,
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: { reason: "reason" }
+      },
+      // Defer: invalid UUID in leaseToken
+      {
+        method: "POST" as const,
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: { leaseToken: "not-a-uuid", reason: "reason" }
+      },
+      // Defer: extra property
+      {
+        method: "POST" as const,
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: { leaseToken: sampleLeaseToken, reason: "reason", extraProp: 123 }
       }
     ];
 
@@ -731,6 +1119,7 @@ describe("Job Dispatch Routes", () => {
     expect(queue.heartbeat).not.toHaveBeenCalled();
     expect(queue.complete).not.toHaveBeenCalled();
     expect(queue.fail).not.toHaveBeenCalled();
+    expect(queue.defer).not.toHaveBeenCalled();
 
     await app.close();
   });
@@ -761,6 +1150,11 @@ describe("Job Dispatch Routes", () => {
         method: "POST" as const,
         url: `/api/jobs/${sampleJobId}/fail`,
         payload: { leaseToken: sampleLeaseToken, errorTrace: "err" }
+      },
+      {
+        method: "POST" as const,
+        url: `/api/jobs/${sampleJobId}/defer`,
+        payload: { leaseToken: sampleLeaseToken, reason: "err" }
       }
     ];
 
@@ -782,6 +1176,7 @@ describe("Job Dispatch Routes", () => {
     expect(() => {
       createControlApiApp({
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queue
       });
     }).toThrow(ControlApiConfigError);
@@ -789,6 +1184,7 @@ describe("Job Dispatch Routes", () => {
     expect(() => {
       createControlApiApp({
         uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
         jobQueue: queue
       });
     }).toThrow(
@@ -799,10 +1195,396 @@ describe("Job Dispatch Routes", () => {
       createControlApiApp(
         {
           uow: new FakeUnitOfWork(),
+          storageTelemetry: createFakeStorageTelemetry(),
           jobQueue: queue
         },
         {}
       );
     }).toThrow(ControlApiConfigError);
+  });
+
+  it("job routes require storage admission wiring", () => {
+    const queue = createFakeJobQueue();
+
+    expect(() => {
+      createControlApiApp(
+        {
+          uow: new FakeUnitOfWork(),
+          jobQueue: queue
+        },
+        {
+          jobDispatch: defaultDispatchConfig
+        }
+      );
+    }).toThrow(ControlApiConfigError);
+
+    // review-only apps remain constructible
+    const reviewApp = createControlApiApp({
+      uow: new FakeUnitOfWork()
+    });
+    expect(reviewApp).toBeDefined();
+  });
+
+  it("candidate completion at degraded returns typed 507 without queue write", async () => {
+    const queue = createFakeJobQueue();
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(85, 100),
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${sampleJobId}/complete`,
+      payload: {
+        leaseToken: sampleLeaseToken,
+        candidatePayload: {
+          variantOrdinal: 1,
+          storageBucket: "godzspeed-temp",
+          storageObjectKey: `candidates/${sampleJobId}/rev_1_var_1.webp`,
+          contentHashSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(507);
+    expect(response.json()).toEqual({
+      code: "STORAGE_ADMISSION_DENIED",
+      message:
+        'Storage admission denied for operation "candidate_upload": watermark state is "degraded" (85.0% disk usage)',
+      operationClass: "candidate_upload",
+      watermarkState: "degraded",
+      usedRatio: 0.85,
+      totalBytes: 100,
+      freeBytes: 15
+    });
+    expect(queue.complete).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it("production completion at degraded remains permitted", async () => {
+    const queue = createFakeJobQueue({
+      complete: vi.fn().mockResolvedValue({ outcome: "applied", job: sampleCompletedJob })
+    });
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(85, 100),
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${sampleJobId}/complete`,
+      payload: {
+        leaseToken: sampleLeaseToken,
+        manifestPayload: { promptIdComfy: "123" }
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      outcome: "applied",
+      job: expect.objectContaining({
+        jobId: sampleJobId,
+        status: "completed"
+      })
+    });
+    expect(queue.complete).toHaveBeenCalledTimes(1);
+
+    await app.close();
+  });
+
+  it("production completion at critical returns typed 507 without queue write", async () => {
+    const queue = createFakeJobQueue();
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(93, 100),
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${sampleJobId}/complete`,
+      payload: {
+        leaseToken: sampleLeaseToken,
+        manifestPayload: { promptIdComfy: "123" }
+      }
+    });
+
+    expect(response.statusCode).toBe(507);
+    expect(response.json()).toEqual({
+      code: "STORAGE_ADMISSION_DENIED",
+      message:
+        'Storage admission denied for operation "delivery_write": watermark state is "critical" (93.0% disk usage)',
+      operationClass: "delivery_write",
+      watermarkState: "critical",
+      usedRatio: 0.93,
+      totalBytes: 100,
+      freeBytes: 7
+    });
+    expect(queue.complete).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it("normal completion preserves both payload branches", async () => {
+    const queue = createFakeJobQueue({
+      complete: vi.fn().mockResolvedValue({ outcome: "applied", job: sampleCompletedJob })
+    });
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(50, 100),
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    // Candidate branch
+    const candidatePayload = {
+      variantOrdinal: 1,
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: `candidates/${sampleJobId}/rev_1_var_1.webp`,
+      contentHashSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      generationPayload: { promptIdComfy: "prompt-cand-1" }
+    };
+    const candResponse = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${sampleJobId}/complete`,
+      payload: {
+        leaseToken: sampleLeaseToken,
+        candidatePayload
+      }
+    });
+
+    expect(candResponse.statusCode).toBe(200);
+    expect(queue.complete).toHaveBeenCalledTimes(1);
+    expect(queue.complete).toHaveBeenLastCalledWith(
+      sampleJobId,
+      sampleLeaseToken,
+      undefined,
+      candidatePayload
+    );
+
+    // Production branch
+    const manifestPayload = { promptIdComfy: "prompt-1", outputCount: 1 };
+    const prodResponse = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${sampleJobId}/complete`,
+      payload: {
+        leaseToken: sampleLeaseToken,
+        manifestPayload
+      }
+    });
+
+    expect(prodResponse.statusCode).toBe(200);
+    expect(queue.complete).toHaveBeenCalledTimes(2);
+    expect(queue.complete).toHaveBeenLastCalledWith(
+      sampleJobId,
+      sampleLeaseToken,
+      manifestPayload,
+      undefined
+    );
+
+    await app.close();
+  });
+
+  it("rejects completion that supplies both manifest and candidate payloads", async () => {
+    const queue = createFakeJobQueue();
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(50, 100),
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${sampleJobId}/complete`,
+      payload: {
+        leaseToken: sampleLeaseToken,
+        manifestPayload: { promptIdComfy: "p" },
+        candidatePayload: {
+          variantOrdinal: 1,
+          storageBucket: "b",
+          storageObjectKey: "k",
+          contentHashSha256: "h"
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(queue.complete).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it("rejects candidate completion missing required candidate payload fields", async () => {
+    const queue = createFakeJobQueue();
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(50, 100),
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${sampleJobId}/complete`,
+      payload: {
+        leaseToken: sampleLeaseToken,
+        candidatePayload: { variantOrdinal: 1 }
+      }
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(queue.complete).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it("complete returns 503 when storage telemetry is unavailable", async () => {
+    const queue = createFakeJobQueue();
+    const failingTelemetry: StorageTelemetryPort = {
+      getStorageTelemetry: vi.fn().mockRejectedValue(new Error("disk telemetry read error"))
+    };
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: failingTelemetry,
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${sampleJobId}/complete`,
+      payload: {
+        leaseToken: sampleLeaseToken,
+        manifestPayload: { promptIdComfy: "123" }
+      }
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      code: "STORAGE_TELEMETRY_UNAVAILABLE",
+      message: "Storage telemetry is unavailable."
+    });
+    expect(queue.complete).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it("complete returns 503 when storage telemetry throws StorageAdmissionUnavailableError", async () => {
+    const queue = createFakeJobQueue();
+    const failingTelemetry: StorageTelemetryPort = {
+      getStorageTelemetry: vi
+        .fn()
+        .mockRejectedValue(
+          new StorageAdmissionUnavailableError({ cause: new Error("Telemetry offline") })
+        )
+    };
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: failingTelemetry,
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${sampleJobId}/complete`,
+      payload: {
+        leaseToken: sampleLeaseToken,
+        candidatePayload: {
+          variantOrdinal: 1,
+          storageBucket: "godzspeed-temp",
+          storageObjectKey: `candidates/${sampleJobId}/rev_1_var_1.webp`,
+          contentHashSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      code: "STORAGE_TELEMETRY_UNAVAILABLE",
+      message: "Storage telemetry is unavailable."
+    });
+    expect(queue.complete).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it("completion replay is conservatively checked before mutation classification", async () => {
+    const queue = createFakeJobQueue({
+      complete: vi.fn().mockResolvedValue({ outcome: "already_applied", job: sampleCompletedJob })
+    });
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(93, 100),
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${sampleJobId}/complete`,
+      payload: {
+        leaseToken: sampleLeaseToken,
+        manifestPayload: { promptIdComfy: "123" }
+      }
+    });
+
+    expect(response.statusCode).toBe(507);
+    expect(response.json()).toEqual({
+      code: "STORAGE_ADMISSION_DENIED",
+      message:
+        'Storage admission denied for operation "delivery_write": watermark state is "critical" (93.0% disk usage)',
+      operationClass: "delivery_write",
+      watermarkState: "critical",
+      usedRatio: 0.93,
+      totalBytes: 100,
+      freeBytes: 7
+    });
+    expect(queue.complete).not.toHaveBeenCalled();
+
+    await app.close();
   });
 });

@@ -96,6 +96,11 @@ export function createControlApiApp(
         "Job dispatch timing configuration (options.jobDispatch) is required when jobQueue is supplied"
       );
     }
+    if (container.useCases.enforceStorageAdmission === undefined) {
+      throw new ControlApiConfigError(
+        "Storage admission use case (container.useCases.enforceStorageAdmission) is required when jobQueue is supplied"
+      );
+    }
     app.register(jobRoutes, {
       container,
       dispatchConfig: options.jobDispatch
