@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { Pool, type PoolClient } from "pg";
 import type { JobAdmissionGate } from "@cco/application";
+import type { JobId, LeaseToken } from "@cco/domain";
 import { PostgresJobQueue } from "@cco/infrastructure";
 import { runMigrations } from "../migration-runner.js";
 import {
@@ -451,5 +452,257 @@ describe("PostgresJobQueue integration", () => {
       [olderProductionJob.job_id]
     );
     expect(productionDbRow.rows[0]?.status).toBe("queued");
+  });
+
+  it("start transitions the current lease from leased to rendering", async () => {
+    const { sceneId } = await createTestScene();
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const expiry = new Date(Date.now() + 60_000);
+    const insertedJob = await insertRenderJobRecord(client, {
+      sceneId,
+      status: "leased",
+      workerId: "worker-start",
+      leaseToken: token,
+      leaseExpiresAt: expiry,
+      retryCount: 0,
+      maxRetries: 3
+    });
+
+    const queue = new PostgresJobQueue(pool);
+    const result = await queue.start(insertedJob.job_id as JobId, token);
+
+    expect(result.outcome).toBe("applied");
+    if (result.outcome === "applied") {
+      expect(result.job.jobId).toBe(insertedJob.job_id);
+      expect(result.job.status).toBe("rendering");
+      expect(result.job.workerId).toBe("worker-start");
+      expect(result.job.leaseToken).toBe(token);
+      expect(result.job.retryCount).toBe(0);
+      expect(result.job.maxRetries).toBe(3);
+    }
+
+    const dbRow = await client.query<{
+      status: string;
+      worker_id: string;
+      lease_token: string;
+      retry_count: number;
+      max_retries: number;
+    }>(
+      "SELECT status, worker_id, lease_token, retry_count, max_retries FROM render_jobs WHERE job_id = $1",
+      [insertedJob.job_id]
+    );
+    expect(dbRow.rows[0]?.status).toBe("rendering");
+    expect(dbRow.rows[0]?.worker_id).toBe("worker-start");
+    expect(dbRow.rows[0]?.lease_token).toBe(token);
+    expect(dbRow.rows[0]?.retry_count).toBe(0);
+    expect(dbRow.rows[0]?.max_retries).toBe(3);
+  });
+
+  it("start is idempotent only for the same token already rendering", async () => {
+    const { sceneId } = await createTestScene();
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const staleToken = "01950c46-9e90-7d3d-82d2-8f1d3c000099" as LeaseToken;
+
+    // 1. Same-token rendering returns already_applied with the job
+    const renderingJob = await insertRenderJobRecord(client, {
+      sceneId,
+      status: "rendering",
+      workerId: "worker-1",
+      leaseToken: token,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 0
+    });
+
+    const queue = new PostgresJobQueue(pool);
+    const repeatedStartResult = await queue.start(renderingJob.job_id as JobId, token);
+
+    expect(repeatedStartResult.outcome).toBe("already_applied");
+    if (repeatedStartResult.outcome === "already_applied") {
+      expect(repeatedStartResult.job.jobId).toBe(renderingJob.job_id);
+      expect(repeatedStartResult.job.status).toBe("rendering");
+      expect(repeatedStartResult.job.leaseToken).toBe(token);
+    }
+
+    // 2. Table of non-applicable / superseded states:
+    const testCases = [
+      { status: "queued" as const, tokenToUse: token, desc: "queued status with token" },
+      { status: "completed" as const, tokenToUse: token, desc: "completed status with token" },
+      { status: "failed" as const, tokenToUse: token, desc: "failed status with token" },
+      { status: "cancelled" as const, tokenToUse: token, desc: "cancelled status with token" },
+      { status: "leased" as const, tokenToUse: staleToken, desc: "leased status with stale token" },
+      {
+        status: "rendering" as const,
+        tokenToUse: staleToken,
+        desc: "rendering status with stale token"
+      }
+    ];
+
+    for (const tc of testCases) {
+      const job = await insertRenderJobRecord(client, {
+        sceneId,
+        status: tc.status,
+        workerId: tc.status === "queued" ? null : "worker-1",
+        leaseToken: tc.status === "queued" ? null : token,
+        leaseExpiresAt: tc.status === "queued" ? null : new Date(Date.now() + 60_000),
+        retryCount: 0
+      });
+
+      const preSnapshot = await client.query("SELECT * FROM render_jobs WHERE job_id = $1", [
+        job.job_id
+      ]);
+
+      const res = await queue.start(job.job_id as JobId, tc.tokenToUse);
+      expect(res.outcome, `Expected superseded for ${tc.desc}`).toBe("superseded");
+      expect((res as { job?: unknown }).job).toBeUndefined();
+
+      const postSnapshot = await client.query("SELECT * FROM render_jobs WHERE job_id = $1", [
+        job.job_id
+      ]);
+      expect(postSnapshot.rows[0], `Row mutated for ${tc.desc}`).toEqual(preSnapshot.rows[0]);
+    }
+  });
+
+  it("heartbeat extends only a current active lease from database time", async () => {
+    const { sceneId } = await createTestScene();
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const queue = new PostgresJobQueue(pool);
+
+    for (const status of ["leased" as const, "rendering" as const]) {
+      const initialExpiry = new Date(Date.now() + 5_000);
+      const job = await insertRenderJobRecord(client, {
+        sceneId,
+        status,
+        workerId: "worker-hb",
+        leaseToken: token,
+        leaseExpiresAt: initialExpiry,
+        retryCount: 1,
+        maxRetries: 3
+      });
+
+      const result = await queue.heartbeat(job.job_id as JobId, token, 60_000);
+
+      expect(result.outcome).toBe("applied");
+      if (result.outcome === "applied") {
+        expect(result.job.jobId).toBe(job.job_id);
+        expect(result.job.status).toBe(status);
+        expect(result.job.workerId).toBe("worker-hb");
+        expect(result.job.leaseToken).toBe(token);
+        expect(result.job.retryCount).toBe(1);
+        expect(result.job.maxRetries).toBe(3);
+        expect(result.job.leaseExpiresAt).toBeInstanceOf(Date);
+        expect(result.job.leaseExpiresAt!.getTime()).toBeGreaterThan(initialExpiry.getTime());
+      }
+
+      const dbRow = await client.query<{
+        status: string;
+        worker_id: string;
+        lease_token: string;
+        lease_expires_at: Date;
+        retry_count: number;
+        max_retries: number;
+      }>(
+        "SELECT status, worker_id, lease_token, lease_expires_at, retry_count, max_retries FROM render_jobs WHERE job_id = $1",
+        [job.job_id]
+      );
+      expect(dbRow.rows[0]?.status).toBe(status);
+      expect(dbRow.rows[0]?.worker_id).toBe("worker-hb");
+      expect(dbRow.rows[0]?.lease_token).toBe(token);
+      expect(dbRow.rows[0]?.retry_count).toBe(1);
+      expect(dbRow.rows[0]?.max_retries).toBe(3);
+      expect(new Date(dbRow.rows[0]!.lease_expires_at).getTime()).toBeGreaterThan(
+        initialExpiry.getTime()
+      );
+    }
+  });
+
+  it("heartbeat never revives queued or terminal work", async () => {
+    const { sceneId } = await createTestScene();
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const staleToken = "01950c46-9e90-7d3d-82d2-8f1d3c000099" as LeaseToken;
+    const queue = new PostgresJobQueue(pool);
+
+    const testCases = [
+      { status: "queued" as const, tokenToUse: token, desc: "queued status" },
+      { status: "completed" as const, tokenToUse: token, desc: "completed status" },
+      { status: "failed" as const, tokenToUse: token, desc: "failed status" },
+      { status: "cancelled" as const, tokenToUse: token, desc: "cancelled status" },
+      { status: "leased" as const, tokenToUse: staleToken, desc: "leased status with stale token" },
+      {
+        status: "rendering" as const,
+        tokenToUse: staleToken,
+        desc: "rendering status with stale token"
+      }
+    ];
+
+    for (const tc of testCases) {
+      const job = await insertRenderJobRecord(client, {
+        sceneId,
+        status: tc.status,
+        workerId: tc.status === "queued" ? null : "worker-hb",
+        leaseToken: tc.status === "queued" ? null : token,
+        leaseExpiresAt: tc.status === "queued" ? null : new Date(Date.now() + 60_000),
+        retryCount: 1,
+        maxRetries: 3
+      });
+
+      const preSnapshot = await client.query("SELECT * FROM render_jobs WHERE job_id = $1", [
+        job.job_id
+      ]);
+
+      const res = await queue.heartbeat(job.job_id as JobId, tc.tokenToUse, 30_000);
+      expect(res.outcome, `Expected superseded for ${tc.desc}`).toBe("superseded");
+      expect((res as { job?: unknown }).job).toBeUndefined();
+
+      const postSnapshot = await client.query("SELECT * FROM render_jobs WHERE job_id = $1", [
+        job.job_id
+      ]);
+      expect(postSnapshot.rows[0], `Row mutated for ${tc.desc}`).toEqual(preSnapshot.rows[0]);
+    }
+  });
+
+  it("missing mutations return not_found", async () => {
+    const missingJobId = "01950c46-9e90-7d3d-82d2-8f1d3c000000" as JobId;
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const queue = new PostgresJobQueue(pool);
+
+    const startResult = await queue.start(missingJobId, token);
+    expect(startResult.outcome).toBe("not_found");
+    expect((startResult as { job?: unknown }).job).toBeUndefined();
+
+    const heartbeatResult = await queue.heartbeat(missingJobId, token, 30_000);
+    expect(heartbeatResult.outcome).toBe("not_found");
+    expect((heartbeatResult as { job?: unknown }).job).toBeUndefined();
+  });
+
+  it("heartbeat rejects invalid durations before querying", async () => {
+    const { sceneId } = await createTestScene();
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const job = await insertRenderJobRecord(client, {
+      sceneId,
+      status: "leased",
+      workerId: "worker-hb",
+      leaseToken: token,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 0
+    });
+
+    const preSnapshot = await client.query("SELECT * FROM render_jobs WHERE job_id = $1", [
+      job.job_id
+    ]);
+
+    const queue = new PostgresJobQueue(pool);
+
+    const invalidDurations = [0, -100, 15.5, Infinity, -Infinity, NaN];
+    for (const dur of invalidDurations) {
+      await expect(
+        queue.heartbeat(job.job_id as JobId, token, dur),
+        `Duration ${dur} should reject`
+      ).rejects.toThrow();
+    }
+
+    const postSnapshot = await client.query("SELECT * FROM render_jobs WHERE job_id = $1", [
+      job.job_id
+    ]);
+    expect(postSnapshot.rows[0]).toEqual(preSnapshot.rows[0]);
   });
 });

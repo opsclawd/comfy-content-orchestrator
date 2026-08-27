@@ -1,4 +1,9 @@
-import type { ClaimJobInput, JobAdmissionGate, JobQueuePort } from "@cco/application";
+import type {
+  ClaimJobInput,
+  JobAdmissionGate,
+  JobMutationResult,
+  JobQueuePort
+} from "@cco/application";
 import {
   JOB_KINDS,
   type JobId,
@@ -171,6 +176,142 @@ export class PostgresJobQueue implements JobQueuePort {
     } finally {
       client.release();
     }
+  }
+
+  async start(jobId: JobId, leaseToken: LeaseToken): Promise<JobMutationResult> {
+    const updateRes = await this.pool.query<RenderJobRow>(
+      `
+      UPDATE render_jobs
+      SET
+        status = 'rendering',
+        updated_at = NOW()
+      WHERE job_id = $1
+        AND lease_token = $2
+        AND status = 'leased'
+      RETURNING
+        job_id,
+        scene_id,
+        job_kind,
+        status,
+        workflow_template,
+        injected_payload,
+        worker_id,
+        lease_token,
+        lease_expires_at,
+        retry_count,
+        max_retries,
+        error_trace,
+        created_at,
+        updated_at
+      `,
+      [jobId, leaseToken]
+    );
+
+    const updatedRow = updateRes.rows[0];
+    if (updatedRow) {
+      return {
+        outcome: "applied",
+        job: this.mapRowToRenderJob(updatedRow)
+      };
+    }
+
+    const currentRow = await this.readJobRow(jobId);
+    if (!currentRow) {
+      return { outcome: "not_found" };
+    }
+
+    if (currentRow.lease_token === leaseToken && currentRow.status === "rendering") {
+      return {
+        outcome: "already_applied",
+        job: this.mapRowToRenderJob(currentRow)
+      };
+    }
+
+    return { outcome: "superseded" };
+  }
+
+  async heartbeat(
+    jobId: JobId,
+    leaseToken: LeaseToken,
+    leaseDurationMs: number
+  ): Promise<JobMutationResult> {
+    if (
+      typeof leaseDurationMs !== "number" ||
+      !Number.isFinite(leaseDurationMs) ||
+      !Number.isInteger(leaseDurationMs) ||
+      leaseDurationMs <= 0
+    ) {
+      throw new Error("leaseDurationMs must be a positive finite integer");
+    }
+
+    const updateRes = await this.pool.query<RenderJobRow>(
+      `
+      UPDATE render_jobs
+      SET
+        lease_expires_at = NOW() + ($3 * INTERVAL '1 millisecond'),
+        updated_at = NOW()
+      WHERE job_id = $1
+        AND lease_token = $2
+        AND status IN ('leased', 'rendering')
+      RETURNING
+        job_id,
+        scene_id,
+        job_kind,
+        status,
+        workflow_template,
+        injected_payload,
+        worker_id,
+        lease_token,
+        lease_expires_at,
+        retry_count,
+        max_retries,
+        error_trace,
+        created_at,
+        updated_at
+      `,
+      [jobId, leaseToken, leaseDurationMs]
+    );
+
+    const updatedRow = updateRes.rows[0];
+    if (updatedRow) {
+      return {
+        outcome: "applied",
+        job: this.mapRowToRenderJob(updatedRow)
+      };
+    }
+
+    const currentRow = await this.readJobRow(jobId);
+    if (!currentRow) {
+      return { outcome: "not_found" };
+    }
+
+    return { outcome: "superseded" };
+  }
+
+  private async readJobRow(jobId: string): Promise<RenderJobRow | undefined> {
+    const res = await this.pool.query<RenderJobRow>(
+      `
+      SELECT
+        job_id,
+        scene_id,
+        job_kind,
+        status,
+        workflow_template,
+        injected_payload,
+        worker_id,
+        lease_token,
+        lease_expires_at,
+        retry_count,
+        max_retries,
+        error_trace,
+        created_at,
+        updated_at
+      FROM render_jobs
+      WHERE job_id = $1
+      `,
+      [jobId]
+    );
+    return res.rows[0];
   }
 
   private mapRowToRenderJob(row: RenderJobRow): RenderJob {
