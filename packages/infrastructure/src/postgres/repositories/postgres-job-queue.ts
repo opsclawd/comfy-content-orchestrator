@@ -1,5 +1,13 @@
 import type { ClaimJobInput, JobAdmissionGate, JobQueuePort } from "@cco/application";
-import type { JobId, JobKind, JobStatus, LeaseToken, RenderJob, SceneId } from "@cco/domain";
+import {
+  JOB_KINDS,
+  type JobId,
+  type JobKind,
+  type JobStatus,
+  type LeaseToken,
+  type RenderJob,
+  type SceneId
+} from "@cco/domain";
 import type { Pool } from "pg";
 
 interface RenderJobRow {
@@ -48,26 +56,48 @@ export class PostgresJobQueue implements JobQueuePort {
     ) {
       throw new Error("leaseDurationMs must be a positive finite integer");
     }
+    if (input.allowedJobKinds !== undefined) {
+      if (
+        !Array.isArray(input.allowedJobKinds) ||
+        input.allowedJobKinds.some((k) => !(JOB_KINDS as readonly string[]).includes(k))
+      ) {
+        throw new Error("allowedJobKinds must be an array of valid JobKind");
+      }
+    }
+
+    // 1. Terminalize expired exhausted active rows in a dedicated standalone query so that
+    // subsequent claim rollbacks do not inadvertently revert this terminal cleanup.
+    await this.pool.query(
+      `
+      UPDATE render_jobs
+      SET
+        status = 'failed',
+        error_trace = 'lease expired; retries exhausted',
+        updated_at = NOW()
+      WHERE status IN ('leased', 'rendering')
+        AND lease_expires_at <= NOW()
+        AND retry_count >= max_retries
+      `
+    );
+
+    // 2. Pre-filter candidate job kinds against the admission gate to prevent head-of-line blocking.
+    const candidateKinds = input.allowedJobKinds ?? JOB_KINDS;
+    const admissibleKinds: JobKind[] = [];
+    for (const kind of candidateKinds) {
+      if (await this.gate.canAdmit(kind)) {
+        admissibleKinds.push(kind);
+      }
+    }
+
+    if (admissibleKinds.length === 0) {
+      return undefined;
+    }
 
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
 
-      // 1. Terminalize expired exhausted active rows
-      await client.query(
-        `
-        UPDATE render_jobs
-        SET
-          status = 'failed',
-          error_trace = 'lease expired; retries exhausted',
-          updated_at = NOW()
-        WHERE status IN ('leased', 'rendering')
-          AND lease_expires_at <= NOW()
-          AND retry_count >= max_retries
-        `
-      );
-
-      // 2. Conditionally claim the oldest eligible queued or expired recoverable job
+      // 3. Conditionally claim the oldest eligible queued or expired recoverable job matching admissible kinds
       const claimRes = await client.query<RenderJobRow>(
         `
         WITH claimable AS (
@@ -81,6 +111,7 @@ export class PostgresJobQueue implements JobQueuePort {
               AND retry_count < max_retries
             )
           )
+          AND job_kind::text = ANY($3::text[])
           ORDER BY created_at ASC, job_id ASC
           FOR UPDATE SKIP LOCKED
           LIMIT 1
@@ -114,7 +145,7 @@ export class PostgresJobQueue implements JobQueuePort {
           r.created_at,
           r.updated_at
         `,
-        [input.workerId, input.leaseDurationMs]
+        [input.workerId, input.leaseDurationMs, admissibleKinds]
       );
 
       const row = claimRes.rows[0];
@@ -125,6 +156,7 @@ export class PostgresJobQueue implements JobQueuePort {
 
       const job = this.mapRowToRenderJob(row);
 
+      // Defense-in-depth re-check with admission gate
       const admitted = await this.gate.canAdmit(job.jobKind);
       if (!admitted) {
         await client.query("ROLLBACK");

@@ -306,10 +306,150 @@ describe("PostgresJobQueue integration", () => {
     ).rejects.toThrow();
     await expect(queue.claim({ workerId: "worker-1", leaseDurationMs: NaN })).rejects.toThrow();
 
+    // Invalid allowedJobKinds
+    await expect(
+      queue.claim({
+        workerId: "worker-1",
+        leaseDurationMs: 10_000,
+        allowedJobKinds: ["invalid-kind" as unknown as "candidate"]
+      })
+    ).rejects.toThrow();
+
     // Verify queue row untouched
     const countRes = await client.query<{ count: string }>(
       "SELECT count(*) FROM render_jobs WHERE status = 'queued'"
     );
     expect(Number(countRes.rows[0]?.count)).toBe(1);
+  });
+
+  it("admission refusal does not revert preceding expired job cleanup", async () => {
+    const { sceneId } = await createTestScene();
+
+    // 1. Insert an expired exhausted job
+    const exhaustedJob = await insertRenderJobRecord(client, {
+      sceneId,
+      status: "rendering",
+      workerId: "stalled-worker",
+      leaseExpiresAt: new Date(Date.now() - 5_000),
+      retryCount: 3,
+      maxRetries: 3
+    });
+
+    // 2. Insert a queued job
+    const queuedJob = await insertRenderJobRecord(client, {
+      sceneId,
+      status: "queued",
+      workerId: null,
+      leaseToken: null,
+      leaseExpiresAt: null
+    });
+
+    // 3. Admission gate that refuses admission
+    const refusingGate: JobAdmissionGate = {
+      async canAdmit(): Promise<boolean> {
+        return false;
+      }
+    };
+
+    const queue = new PostgresJobQueue(pool, refusingGate);
+    const claimed = await queue.claim({ workerId: "worker-1", leaseDurationMs: 30_000 });
+
+    expect(claimed).toBeUndefined();
+
+    // The queued job was rolled back / left queued
+    const queuedDbRow = await client.query<{ status: string }>(
+      "SELECT status FROM render_jobs WHERE job_id = $1",
+      [queuedJob.job_id]
+    );
+    expect(queuedDbRow.rows[0]?.status).toBe("queued");
+
+    // The exhausted job was terminalized and NOT rolled back
+    const exhaustedDbRow = await client.query<{ status: string; error_trace: string }>(
+      "SELECT status, error_trace FROM render_jobs WHERE job_id = $1",
+      [exhaustedJob.job_id]
+    );
+    expect(exhaustedDbRow.rows[0]?.status).toBe("failed");
+    expect(exhaustedDbRow.rows[0]?.error_trace).toBe("lease expired; retries exhausted");
+  });
+
+  it("skips blocked job kinds and claims oldest admissible job without head-of-line blocking", async () => {
+    const { sceneId } = await createTestScene();
+
+    // Older candidate job
+    const olderCandidateJob = await insertRenderJobRecord(client, {
+      sceneId,
+      jobKind: "candidate",
+      status: "queued",
+      createdAt: new Date(Date.now() - 60_000)
+    });
+
+    // Newer production job
+    const newerProductionJob = await insertRenderJobRecord(client, {
+      sceneId,
+      jobKind: "production",
+      status: "queued",
+      createdAt: new Date(Date.now())
+    });
+
+    // Gate that blocks candidate jobs (e.g. storage degraded) but admits production jobs
+    const gate: JobAdmissionGate = {
+      async canAdmit(jobKind: string): Promise<boolean> {
+        return jobKind === "production";
+      }
+    };
+
+    const queue = new PostgresJobQueue(pool, gate);
+    const claimed = await queue.claim({ workerId: "worker-prod", leaseDurationMs: 20_000 });
+
+    expect(claimed).toBeDefined();
+    expect(claimed?.jobId).toBe(newerProductionJob.job_id);
+    expect(claimed?.jobKind).toBe("production");
+    expect(claimed?.status).toBe("leased");
+
+    // Older candidate job was not blocked or locked permanently, still queued
+    const candidateDbRow = await client.query<{ status: string }>(
+      "SELECT status FROM render_jobs WHERE job_id = $1",
+      [olderCandidateJob.job_id]
+    );
+    expect(candidateDbRow.rows[0]?.status).toBe("queued");
+  });
+
+  it("supports worker allowedJobKinds filter", async () => {
+    const { sceneId } = await createTestScene();
+
+    // Older production job
+    const olderProductionJob = await insertRenderJobRecord(client, {
+      sceneId,
+      jobKind: "production",
+      status: "queued",
+      createdAt: new Date(Date.now() - 60_000)
+    });
+
+    // Newer candidate job
+    const newerCandidateJob = await insertRenderJobRecord(client, {
+      sceneId,
+      jobKind: "candidate",
+      status: "queued",
+      createdAt: new Date(Date.now())
+    });
+
+    const queue = new PostgresJobQueue(pool);
+    // Worker specifically asks only for candidate jobs
+    const claimed = await queue.claim({
+      workerId: "candidate-worker",
+      leaseDurationMs: 15_000,
+      allowedJobKinds: ["candidate"]
+    });
+
+    expect(claimed).toBeDefined();
+    expect(claimed?.jobId).toBe(newerCandidateJob.job_id);
+    expect(claimed?.jobKind).toBe("candidate");
+
+    // Production job still queued
+    const productionDbRow = await client.query<{ status: string }>(
+      "SELECT status FROM render_jobs WHERE job_id = $1",
+      [olderProductionJob.job_id]
+    );
+    expect(productionDbRow.rows[0]?.status).toBe("queued");
   });
 });

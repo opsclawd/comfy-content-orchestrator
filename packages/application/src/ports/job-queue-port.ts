@@ -3,6 +3,7 @@ import type { JobKind, RenderJob } from "@cco/domain";
 export interface ClaimJobInput {
   readonly workerId: string;
   readonly leaseDurationMs: number;
+  readonly allowedJobKinds?: readonly JobKind[];
 }
 
 export interface JobAdmissionGate {
