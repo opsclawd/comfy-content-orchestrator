@@ -17,6 +17,14 @@ export type JobMutationResult =
   | { readonly outcome: "superseded" }
   | { readonly outcome: "not_found" };
 
+export interface CandidateCompletionPayload {
+  readonly variantOrdinal: number;
+  readonly storageBucket: string;
+  readonly storageObjectKey: string;
+  readonly contentHashSha256: string;
+  readonly generationPayload?: Readonly<Record<string, unknown>>;
+}
+
 export interface JobQueuePort {
   claim(input: ClaimJobInput): Promise<RenderJob | undefined>;
   start(jobId: JobId, leaseToken: LeaseToken): Promise<JobMutationResult>;
@@ -28,7 +36,8 @@ export interface JobQueuePort {
   complete(
     jobId: JobId,
     leaseToken: LeaseToken,
-    manifestPayload?: Readonly<Record<string, unknown>>
+    manifestPayload?: Readonly<Record<string, unknown>>,
+    candidatePayload?: CandidateCompletionPayload
   ): Promise<JobMutationResult>;
   fail(jobId: JobId, leaseToken: LeaseToken, errorTrace: string): Promise<JobMutationResult>;
   defer(jobId: JobId, leaseToken: LeaseToken, reason: string): Promise<JobMutationResult>;

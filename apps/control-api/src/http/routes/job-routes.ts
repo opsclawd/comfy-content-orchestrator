@@ -105,10 +105,42 @@ export const completeJobSchema = {
         type: "object"
       },
       candidatePayload: {
-        type: "object"
+        type: "object",
+        required: ["variantOrdinal", "storageBucket", "storageObjectKey", "contentHashSha256"],
+        properties: {
+          variantOrdinal: {
+            type: "integer",
+            minimum: 1
+          },
+          storageBucket: {
+            type: "string",
+            minLength: 1,
+            pattern: "\\S"
+          },
+          storageObjectKey: {
+            type: "string",
+            minLength: 1,
+            pattern: "\\S"
+          },
+          contentHashSha256: {
+            type: "string",
+            minLength: 64,
+            maxLength: 64,
+            pattern: "^[0-9a-fA-F]+$"
+          },
+          generationPayload: {
+            type: "object"
+          }
+        },
+        additionalProperties: false
       }
     },
-    additionalProperties: false
+    additionalProperties: false,
+    anyOf: [
+      { required: ["manifestPayload"], not: { required: ["candidatePayload"] } },
+      { required: ["candidatePayload"], not: { required: ["manifestPayload"] } },
+      { not: { anyOf: [{ required: ["manifestPayload"] }, { required: ["candidatePayload"] }] } }
+    ]
   }
 } as const;
 
@@ -286,7 +318,16 @@ export const jobRoutes: FastifyPluginAsync<JobRoutesOptions> = async (
       const result = await queue.complete(
         request.params.jobId as JobId,
         request.body.leaseToken as LeaseToken,
-        request.body.manifestPayload
+        request.body.manifestPayload,
+        request.body.candidatePayload as
+          | {
+              readonly variantOrdinal: number;
+              readonly storageBucket: string;
+              readonly storageObjectKey: string;
+              readonly contentHashSha256: string;
+              readonly generationPayload?: Readonly<Record<string, unknown>>;
+            }
+          | undefined
       );
       return translateMutationResult(result, reply);
     } catch (error) {

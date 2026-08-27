@@ -360,7 +360,12 @@ describe("Job Dispatch Routes", () => {
 
     expect(responseWithout.statusCode).toBe(200);
     expect(queue.complete).toHaveBeenCalledTimes(1);
-    expect(queue.complete).toHaveBeenLastCalledWith(sampleJobId, sampleLeaseToken, undefined);
+    expect(queue.complete).toHaveBeenLastCalledWith(
+      sampleJobId,
+      sampleLeaseToken,
+      undefined,
+      undefined
+    );
 
     // Case 2: with manifestPayload object
     const manifest = { promptIdComfy: "comfy-task-42", outputCount: 1 };
@@ -375,7 +380,12 @@ describe("Job Dispatch Routes", () => {
 
     expect(responseWith.statusCode).toBe(200);
     expect(queue.complete).toHaveBeenCalledTimes(2);
-    expect(queue.complete).toHaveBeenLastCalledWith(sampleJobId, sampleLeaseToken, manifest);
+    expect(queue.complete).toHaveBeenLastCalledWith(
+      sampleJobId,
+      sampleLeaseToken,
+      manifest,
+      undefined
+    );
 
     await app.close();
   });
@@ -1233,7 +1243,12 @@ describe("Job Dispatch Routes", () => {
       url: `/api/jobs/${sampleJobId}/complete`,
       payload: {
         leaseToken: sampleLeaseToken,
-        candidatePayload: { outputCount: 1 }
+        candidatePayload: {
+          variantOrdinal: 1,
+          storageBucket: "godzspeed-temp",
+          storageObjectKey: `candidates/${sampleJobId}/rev_1_var_1.webp`,
+          contentHashSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
       }
     });
 
@@ -1344,7 +1359,13 @@ describe("Job Dispatch Routes", () => {
     );
 
     // Candidate branch
-    const candidatePayload = { candidateId: "cand-1", outputCount: 1 };
+    const candidatePayload = {
+      variantOrdinal: 1,
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: `candidates/${sampleJobId}/rev_1_var_1.webp`,
+      contentHashSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      generationPayload: { promptIdComfy: "prompt-cand-1" }
+    };
     const candResponse = await app.inject({
       method: "POST",
       url: `/api/jobs/${sampleJobId}/complete`,
@@ -1356,7 +1377,12 @@ describe("Job Dispatch Routes", () => {
 
     expect(candResponse.statusCode).toBe(200);
     expect(queue.complete).toHaveBeenCalledTimes(1);
-    expect(queue.complete).toHaveBeenLastCalledWith(sampleJobId, sampleLeaseToken, undefined);
+    expect(queue.complete).toHaveBeenLastCalledWith(
+      sampleJobId,
+      sampleLeaseToken,
+      undefined,
+      candidatePayload
+    );
 
     // Production branch
     const manifestPayload = { promptIdComfy: "prompt-1", outputCount: 1 };
@@ -1371,7 +1397,74 @@ describe("Job Dispatch Routes", () => {
 
     expect(prodResponse.statusCode).toBe(200);
     expect(queue.complete).toHaveBeenCalledTimes(2);
-    expect(queue.complete).toHaveBeenLastCalledWith(sampleJobId, sampleLeaseToken, manifestPayload);
+    expect(queue.complete).toHaveBeenLastCalledWith(
+      sampleJobId,
+      sampleLeaseToken,
+      manifestPayload,
+      undefined
+    );
+
+    await app.close();
+  });
+
+  it("rejects completion that supplies both manifest and candidate payloads", async () => {
+    const queue = createFakeJobQueue();
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(50, 100),
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${sampleJobId}/complete`,
+      payload: {
+        leaseToken: sampleLeaseToken,
+        manifestPayload: { promptIdComfy: "p" },
+        candidatePayload: {
+          variantOrdinal: 1,
+          storageBucket: "b",
+          storageObjectKey: "k",
+          contentHashSha256: "h"
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(queue.complete).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it("rejects candidate completion missing required candidate payload fields", async () => {
+    const queue = createFakeJobQueue();
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(50, 100),
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${sampleJobId}/complete`,
+      payload: {
+        leaseToken: sampleLeaseToken,
+        candidatePayload: { variantOrdinal: 1 }
+      }
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(queue.complete).not.toHaveBeenCalled();
 
     await app.close();
   });
@@ -1436,7 +1529,12 @@ describe("Job Dispatch Routes", () => {
       url: `/api/jobs/${sampleJobId}/complete`,
       payload: {
         leaseToken: sampleLeaseToken,
-        candidatePayload: { outputCount: 1 }
+        candidatePayload: {
+          variantOrdinal: 1,
+          storageBucket: "godzspeed-temp",
+          storageObjectKey: `candidates/${sampleJobId}/rev_1_var_1.webp`,
+          contentHashSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
       }
     });
 

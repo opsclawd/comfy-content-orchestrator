@@ -720,8 +720,20 @@ describe("PostgresJobQueue integration", () => {
       maxRetries: 3
     });
 
+    const candidatePayload = {
+      variantOrdinal: 1,
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: `candidates/${sceneId}/rev_1_var_1.webp`,
+      contentHashSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    };
+
     const queue = new PostgresJobQueue(pool);
-    const result = await queue.complete(insertedJob.job_id as JobId, token);
+    const result = await queue.complete(
+      insertedJob.job_id as JobId,
+      token,
+      undefined,
+      candidatePayload
+    );
 
     expect(result.outcome).toBe("applied");
     if (result.outcome === "applied") {
@@ -751,6 +763,122 @@ describe("PostgresJobQueue integration", () => {
       [insertedJob.job_id]
     );
     expect(Number(manifestCount.rows[0]?.count)).toBe(0);
+  });
+
+  it("completes a candidate and writes exactly one storyboard_candidates row from the payload", async () => {
+    const { sceneId } = await createTestScene();
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const insertedJob = await insertRenderJobRecord(client, {
+      sceneId,
+      jobKind: "candidate",
+      status: "rendering",
+      workerId: "worker-cand-row",
+      leaseToken: token,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 0,
+      maxRetries: 3
+    });
+
+    const candidatePayload = {
+      variantOrdinal: 2,
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: `candidates/${sceneId}/rev_1_var_2.webp`,
+      contentHashSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      generationPayload: { promptIdComfy: "prompt-cand-2" }
+    };
+
+    const queue = new PostgresJobQueue(pool);
+    const result = await queue.complete(
+      insertedJob.job_id as JobId,
+      token,
+      undefined,
+      candidatePayload
+    );
+
+    expect(result.outcome).toBe("applied");
+    if (result.outcome === "applied") {
+      expect(result.job.status).toBe("completed");
+    }
+
+    const candidateRows = await client.query<{
+      candidate_id: string;
+      scene_id: string;
+      scene_spec_revision: number;
+      variant_ordinal: number;
+      storage_bucket: string;
+      storage_object_key: string;
+      content_hash_sha256: string;
+      generation_payload: Record<string, unknown>;
+    }>(
+      `SELECT candidate_id, scene_id, scene_spec_revision, variant_ordinal,
+              storage_bucket, storage_object_key, content_hash_sha256, generation_payload
+       FROM storyboard_candidates
+       WHERE scene_id = $1`,
+      [sceneId]
+    );
+    expect(candidateRows.rows).toHaveLength(1);
+    const row = candidateRows.rows[0];
+    expect(row?.scene_id).toBe(sceneId);
+    expect(row?.scene_spec_revision).toBe(1);
+    expect(row?.variant_ordinal).toBe(2);
+    expect(row?.storage_bucket).toBe("godzspeed-temp");
+    expect(row?.storage_object_key).toBe(`candidates/${sceneId}/rev_1_var_2.webp`);
+    expect(row?.content_hash_sha256).toBe(
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+    expect(row?.generation_payload).toEqual({ promptIdComfy: "prompt-cand-2" });
+
+    const manifestCount = await client.query<{ count: string }>(
+      "SELECT count(*) FROM generation_manifests WHERE job_id = $1",
+      [insertedJob.job_id]
+    );
+    expect(Number(manifestCount.rows[0]?.count)).toBe(0);
+  });
+
+  it("rejects candidate completion without a candidate payload", async () => {
+    const { sceneId } = await createTestScene();
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const insertedJob = await insertRenderJobRecord(client, {
+      sceneId,
+      jobKind: "candidate",
+      status: "rendering",
+      workerId: "worker-cand-missing",
+      leaseToken: token,
+      leaseExpiresAt: new Date(Date.now() + 60_000)
+    });
+
+    const queue = new PostgresJobQueue(pool);
+    await expect(
+      queue.complete(insertedJob.job_id as JobId, token, undefined, undefined)
+    ).rejects.toBeInstanceOf(InvalidJobCompletionPayloadError);
+  });
+
+  it("rejects candidate completion when both manifest and candidate payloads are supplied", async () => {
+    const { sceneId } = await createTestScene();
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const insertedJob = await insertRenderJobRecord(client, {
+      sceneId,
+      jobKind: "candidate",
+      status: "rendering",
+      workerId: "worker-cand-both",
+      leaseToken: token,
+      leaseExpiresAt: new Date(Date.now() + 60_000)
+    });
+
+    const queue = new PostgresJobQueue(pool);
+    await expect(
+      queue.complete(
+        insertedJob.job_id as JobId,
+        token,
+        { promptIdComfy: "p" },
+        {
+          variantOrdinal: 1,
+          storageBucket: "b",
+          storageObjectKey: "k",
+          contentHashSha256: "h".repeat(64)
+        }
+      )
+    ).rejects.toBeInstanceOf(InvalidJobCompletionPayloadError);
   });
 
   it("completes production and its manifest in one transaction", async () => {
