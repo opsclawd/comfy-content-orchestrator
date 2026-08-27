@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { Pool, type PoolClient } from "pg";
-import type { JobAdmissionGate } from "@cco/application";
+import { InvalidJobCompletionPayloadError, type JobAdmissionGate } from "@cco/application";
 import type { JobId, LeaseToken } from "@cco/domain";
 import { PostgresJobQueue } from "./postgres-job-queue.js";
 import { runMigrations } from "../migration-runner.js";
@@ -706,7 +706,7 @@ describe("PostgresJobQueue integration", () => {
     expect(postSnapshot.rows[0]).toEqual(preSnapshot.rows[0]);
   });
 
-  it("candidate completion reaches completed without a manifest", async () => {
+  it("completes a candidate without a manifest", async () => {
     const { sceneId } = await createTestScene();
     const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
     const insertedJob = await insertRenderJobRecord(client, {
@@ -753,7 +753,7 @@ describe("PostgresJobQueue integration", () => {
     expect(Number(manifestCount.rows[0]?.count)).toBe(0);
   });
 
-  it("production completion commits job and manifest atomically", async () => {
+  it("completes production and its manifest in one transaction", async () => {
     const clientRec = await insertClientRecord(client);
     const campaign = await insertCampaignRecord(client, { clientId: clientRec.client_id });
     const scene = await insertStoryboardSceneRecord(client, { campaignId: campaign.campaign_id });
@@ -822,7 +822,7 @@ describe("PostgresJobQueue integration", () => {
     expect(manifest.manifest_payload).toEqual(manifestPayload);
   });
 
-  it("same-token production completion is idempotent", async () => {
+  it("preserves idempotent production completion", async () => {
     const clientRec = await insertClientRecord(client);
     const campaign = await insertCampaignRecord(client, { clientId: clientRec.client_id });
     const scene = await insertStoryboardSceneRecord(client, { campaignId: campaign.campaign_id });
@@ -978,9 +978,11 @@ describe("PostgresJobQueue integration", () => {
           job.job_id
         ]);
 
-        const res = await queue.complete(job.job_id as JobId, tc.tokenToUse, {
-          promptIdComfy: "prompt-test"
-        });
+        const res = await queue.complete(
+          job.job_id as JobId,
+          tc.tokenToUse,
+          jobKind === "production" ? { promptIdComfy: "prompt-test" } : undefined
+        );
         expect(res.outcome, `Expected superseded for ${jobKind} ${tc.desc}`).toBe("superseded");
         expect((res as { job?: unknown }).job).toBeUndefined();
 
@@ -1008,7 +1010,7 @@ describe("PostgresJobQueue integration", () => {
     expect((missingRes as { job?: unknown }).job).toBeUndefined();
   });
 
-  it("invalid production payload rolls back completion", async () => {
+  it("rejects production completion without a prompt manifest and rolls back the job transition", async () => {
     const { sceneId } = await createTestScene();
     const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
     const insertedJob = await insertRenderJobRecord(client, {
@@ -1029,7 +1031,8 @@ describe("PostgresJobQueue integration", () => {
       { promptIdComfy: "" },
       { promptIdComfy: "   " },
       { promptIdComfy: 123 as unknown as string },
-      { promptIdComfy: null as unknown as string }
+      { promptIdComfy: null as unknown as string },
+      null as unknown as Readonly<Record<string, unknown>>
     ];
 
     for (const invalidPayload of invalidPayloads) {
@@ -1039,7 +1042,43 @@ describe("PostgresJobQueue integration", () => {
           token,
           invalidPayload as Readonly<Record<string, unknown>>
         )
-      ).rejects.toThrow();
+      ).rejects.toThrow(InvalidJobCompletionPayloadError);
+
+      const jobRow = await client.query<{ status: string }>(
+        "SELECT status FROM render_jobs WHERE job_id = $1",
+        [insertedJob.job_id]
+      );
+      expect(jobRow.rows[0]?.status).toBe("rendering");
+
+      const manifestCount = await client.query<{ count: string }>(
+        "SELECT count(*) FROM generation_manifests WHERE job_id = $1",
+        [insertedJob.job_id]
+      );
+      expect(Number(manifestCount.rows[0]?.count)).toBe(0);
+    }
+  });
+
+  it("rejects candidate completion with a manifest and rolls back the job transition", async () => {
+    const { sceneId } = await createTestScene();
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const insertedJob = await insertRenderJobRecord(client, {
+      sceneId,
+      jobKind: "candidate",
+      status: "rendering",
+      workerId: "worker-cand",
+      leaseToken: token,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 0
+    });
+
+    const queue = new PostgresJobQueue(pool);
+
+    const suppliedPayloads = [{ promptIdComfy: "prompt-cand-123" }, {}, { otherKey: "value" }];
+
+    for (const payload of suppliedPayloads) {
+      await expect(queue.complete(insertedJob.job_id as JobId, token, payload)).rejects.toThrow(
+        InvalidJobCompletionPayloadError
+      );
 
       const jobRow = await client.query<{ status: string }>(
         "SELECT status FROM render_jobs WHERE job_id = $1",
