@@ -13,7 +13,7 @@ import type {
   ObjectStoragePort
 } from "@cco/application";
 import type { ControlApiClient } from "../control-api-client.js";
-import { RenderWorker, type StorageAdmissionEnforcer } from "../worker.js";
+import { RenderWorker, type StorageAdmissionEnforcer, type WorkerLogger } from "../worker.js";
 import {
   WorkerConfigError,
   createProductionWorker,
@@ -62,6 +62,14 @@ class TestAdmissionEnforcer implements StorageAdmissionEnforcer {
   }
 }
 
+const testLogger: WorkerLogger = {
+  info: () => {},
+  warn: () => {},
+  error: () => {}
+};
+
+const testSleep = async (_ms: number) => {};
+
 describe("run-worker CLI", () => {
   describe("parseStorageTelemetryPath", () => {
     it("returns trimmed absolute path when valid", () => {
@@ -106,6 +114,8 @@ describe("run-worker CLI", () => {
         CONTROL_API_BASE_URL: "http://control-api.internal:8000",
         WORKER_ID: "worker-node-1",
         JOB_POLL_INTERVAL_MS: "5000",
+        JOB_HEARTBEAT_INTERVAL_MS: "15000",
+        JOB_LEASE_DURATION_MS: "60000",
         S3_STORAGE_ENDPOINT: "http://minio.internal:9000",
         AWS_ACCESS_KEY_ID: "aws-key",
         AWS_SECRET_ACCESS_KEY: "aws-secret",
@@ -119,6 +129,8 @@ describe("run-worker CLI", () => {
         controlApiBaseUrl: "http://control-api.internal:8000",
         workerId: "worker-node-1",
         pollIntervalMs: 5000,
+        heartbeatIntervalMs: 15000,
+        leaseDurationMs: 60000,
         s3Config: {
           endpoint: "http://minio.internal:9000",
           region: "us-west-2",
@@ -142,6 +154,8 @@ describe("run-worker CLI", () => {
         controlApiBaseUrl: "http://localhost:3000",
         workerId: "render-worker-default",
         pollIntervalMs: 1000,
+        heartbeatIntervalMs: 30000,
+        leaseDurationMs: 300000,
         s3Config: undefined
       });
     });
@@ -167,6 +181,24 @@ describe("run-worker CLI", () => {
           JOB_POLL_INTERVAL_MS: "-10"
         }).pollIntervalMs
       ).toBe(1000);
+    });
+
+    it("rejects when heartbeatIntervalMs >= leaseDurationMs", () => {
+      expect(() =>
+        parseWorkerRuntimeConfig({
+          STORAGE_TELEMETRY_PATH: "/var/run/storage",
+          JOB_HEARTBEAT_INTERVAL_MS: "300000",
+          JOB_LEASE_DURATION_MS: "300000"
+        })
+      ).toThrow(WorkerConfigError);
+
+      expect(() =>
+        parseWorkerRuntimeConfig({
+          STORAGE_TELEMETRY_PATH: "/var/run/storage",
+          JOB_HEARTBEAT_INTERVAL_MS: "400000",
+          JOB_LEASE_DURATION_MS: "300000"
+        })
+      ).toThrow(WorkerConfigError);
     });
 
     it("supports S3 fallback environment variable aliases", () => {
@@ -216,10 +248,16 @@ describe("run-worker CLI", () => {
         storageTelemetryPath: "/var/run/storage",
         controlApiBaseUrl: "http://localhost:3000",
         workerId: "test-worker",
-        pollIntervalMs: 2000
+        pollIntervalMs: 2000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
       };
 
-      const worker = createProductionWorker(config);
+      const worker = createProductionWorker(config, {
+        renderJobExecutor: async () => ({ candidatePayload: { variantOrdinal: 1 } }),
+        logger: testLogger,
+        sleep: testSleep
+      });
       expect(worker).toBeInstanceOf(RenderWorker);
     });
 
@@ -228,19 +266,23 @@ describe("run-worker CLI", () => {
         storageTelemetryPath: "/var/run/storage",
         controlApiBaseUrl: "http://localhost:3000",
         workerId: "test-worker",
-        pollIntervalMs: 2000
+        pollIntervalMs: 2000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
       };
 
       const fakeClient = new TestControlApiClient();
       const fakeStorage = new TestObjectStorage();
       const fakeEnforcer = new TestAdmissionEnforcer();
-      const fakeExecutor = vi.fn().mockResolvedValue({});
+      const fakeExecutor = vi.fn().mockResolvedValue({ candidatePayload: { variantOrdinal: 1 } });
 
       const worker = createProductionWorker(config, {
         controlApiClient: fakeClient,
         objectStorage: fakeStorage,
         enforceStorageAdmission: fakeEnforcer,
-        renderJobExecutor: fakeExecutor
+        renderJobExecutor: fakeExecutor,
+        logger: testLogger,
+        sleep: testSleep
       });
 
       expect(worker).toBeInstanceOf(RenderWorker);
@@ -253,7 +295,11 @@ describe("run-worker CLI", () => {
           ...originalEnv,
           STORAGE_TELEMETRY_PATH: "/var/run/storage"
         };
-        const worker = createProductionWorker();
+        const worker = createProductionWorker(undefined, {
+          renderJobExecutor: async () => ({ candidatePayload: { variantOrdinal: 1 } }),
+          logger: testLogger,
+          sleep: testSleep
+        });
         expect(worker).toBeInstanceOf(RenderWorker);
       } finally {
         process.env = originalEnv;
@@ -280,7 +326,10 @@ describe("run-worker CLI", () => {
       const exitCode = await runWorkerCli([], env, {
         controlApiClient: fakeClient,
         objectStorage: new TestObjectStorage(),
-        enforceStorageAdmission: new TestAdmissionEnforcer()
+        enforceStorageAdmission: new TestAdmissionEnforcer(),
+        renderJobExecutor: async () => ({ candidatePayload: { variantOrdinal: 1 } }),
+        logger: testLogger,
+        sleep: testSleep
       });
 
       expect(exitCode).toBe(0);
@@ -306,7 +355,10 @@ describe("run-worker CLI", () => {
       const exitCode = await runWorkerCli([], env, {
         controlApiClient: fakeClient,
         objectStorage: new TestObjectStorage(),
-        enforceStorageAdmission: new TestAdmissionEnforcer()
+        enforceStorageAdmission: new TestAdmissionEnforcer(),
+        renderJobExecutor: async () => ({ candidatePayload: { variantOrdinal: 1 } }),
+        logger: testLogger,
+        sleep: testSleep
       });
 
       expect(exitCode).toBe(0);
@@ -330,7 +382,10 @@ describe("run-worker CLI", () => {
       const exitCode = await runWorkerCli([], env, {
         controlApiClient: new TestControlApiClient(),
         objectStorage: new TestObjectStorage(),
-        enforceStorageAdmission: new TestAdmissionEnforcer()
+        enforceStorageAdmission: new TestAdmissionEnforcer(),
+        renderJobExecutor: async () => ({ candidatePayload: { variantOrdinal: 1 } }),
+        logger: testLogger,
+        sleep: testSleep
       });
 
       expect(exitCode).toBe(1);

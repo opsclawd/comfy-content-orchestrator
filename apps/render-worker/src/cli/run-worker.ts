@@ -8,13 +8,16 @@ import {
   type S3ObjectStorageOptions
 } from "@cco/infrastructure";
 import { createControlApiClient } from "../control-api-client.js";
-import { RenderWorker, type WorkerDependencies, type RenderWorkerOptions } from "../worker.js";
+import { createRenderJobExecutor } from "../render-job-executor.js";
+import { RenderWorker, type RenderWorkerOptions, type WorkerDependencies } from "../worker.js";
 
 export interface WorkerRuntimeConfig {
   readonly storageTelemetryPath: string;
   readonly controlApiBaseUrl: string;
   readonly workerId: string;
   readonly pollIntervalMs: number;
+  readonly heartbeatIntervalMs: number;
+  readonly leaseDurationMs: number;
   readonly s3Config?: S3ObjectStorageOptions | undefined;
 }
 
@@ -63,6 +66,30 @@ export function parseWorkerRuntimeConfig(
     }
   }
 
+  let heartbeatIntervalMs = 30_000;
+  const rawHeartbeat = env.JOB_HEARTBEAT_INTERVAL_MS ?? env.HEARTBEAT_INTERVAL_MS;
+  if (rawHeartbeat !== undefined && rawHeartbeat.trim() !== "") {
+    const parsed = Number.parseInt(rawHeartbeat.trim(), 10);
+    if (Number.isSafeInteger(parsed) && parsed > 0) {
+      heartbeatIntervalMs = parsed;
+    }
+  }
+
+  let leaseDurationMs = 300_000;
+  const rawLease = env.JOB_LEASE_DURATION_MS ?? env.LEASE_DURATION_MS;
+  if (rawLease !== undefined && rawLease.trim() !== "") {
+    const parsed = Number.parseInt(rawLease.trim(), 10);
+    if (Number.isSafeInteger(parsed) && parsed > 0) {
+      leaseDurationMs = parsed;
+    }
+  }
+
+  if (heartbeatIntervalMs >= leaseDurationMs) {
+    throw new WorkerConfigError(
+      "Invalid job dispatch configuration: heartbeat interval must be less than lease duration"
+    );
+  }
+
   const s3Endpoint = env.S3_STORAGE_ENDPOINT?.trim() || env.S3_ENDPOINT?.trim();
   let s3Config: S3ObjectStorageOptions | undefined;
   if (s3Endpoint) {
@@ -89,6 +116,8 @@ export function parseWorkerRuntimeConfig(
     controlApiBaseUrl,
     workerId,
     pollIntervalMs,
+    heartbeatIntervalMs,
+    leaseDurationMs,
     s3Config
   };
 }
@@ -130,16 +159,26 @@ export function createProductionWorker(
       }
     );
 
+  const renderJobExecutor = overrides?.renderJobExecutor ?? createRenderJobExecutor();
+
+  const logger = overrides?.logger ?? console;
+  const sleep =
+    overrides?.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+
   const dependencies: WorkerDependencies = {
     controlApiClient,
     objectStorage,
     enforceStorageAdmission,
-    ...(overrides?.renderJobExecutor ? { renderJobExecutor: overrides.renderJobExecutor } : {})
+    renderJobExecutor,
+    logger,
+    sleep
   };
 
   const options: RenderWorkerOptions = {
     workerId: effectiveConfig.workerId,
-    pollIntervalMs: effectiveConfig.pollIntervalMs
+    pollIntervalMs: effectiveConfig.pollIntervalMs,
+    heartbeatIntervalMs: effectiveConfig.heartbeatIntervalMs,
+    leaseDurationMs: effectiveConfig.leaseDurationMs
   };
 
   return new RenderWorker(dependencies, options);
