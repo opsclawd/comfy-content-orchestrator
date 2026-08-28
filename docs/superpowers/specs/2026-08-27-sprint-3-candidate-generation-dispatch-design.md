@@ -143,23 +143,23 @@ If Sprint 3 issue 1's worker implementation reveals a need for a new field (e.g.
 | `packages/application/src/use-cases` | `assemble-generation-manifest.ts` (new) |
 | `packages/application/src/ports` | (none — all needed ports exist) |
 | `packages/infrastructure/src/postgres` | `PostgresJobQueue.complete()` extended to accept a `candidatePayload` for `candidate` jobs and write the `storyboard_candidates` row in the same transaction. New `/defer` mutation in `PostgresJobQueue` with a `deferred` `JobMutationResult` outcome. |
-| `apps/render-worker/src` | `worker.ts` (new — the polling daemon), `control-api-client.ts` (new — HTTP client for the six routes), `cli/run-worker.ts` (new — entry point), tests under `worker.test.ts` |
+| `apps/render-worker/src` | `worker.ts` (new — HTTP polling/heartbeat/settlement state machine), `render-job-executor.ts` (new — render orchestrator: profile loading, payload assembly, SHA-256 hashing), `control-api-client.ts` (new — HTTP client for the six routes), `cli/run-worker.ts` (new — composition root), tests under `worker.test.ts` and `render-job-executor.test.ts` |
 | `apps/control-api/src/http/routes` | Existing `job-routes.ts` modified; no new route file or plugin is added. The file registers the new `/api/jobs/:id/defer` endpoint, extends `complete` to accept `candidatePayload` for `candidate` jobs, and invokes `enforceStorageAdmission` before writes (issue #113). |
 
 This mirrors Sprint 2.5's pattern: the worker daemon is composition-root work that wires existing application-layer seams. The new use case is a single-file addition. The queue-adapter extensions (`/defer`, candidate-row write) are the smallest surface change that closes the gaps surfaced during spec review.
 
 ## Worker protocol
 
-The worker is a polling consumer of the Control API. Its lifecycle for one job:
+The worker is a polling consumer of the Control API. Its lifecycle for one job spans two files: `worker.ts` (the HTTP polling/heartbeat/settlement state machine) and `render-job-executor.ts` (the render orchestrator: profile loading, payload assembly, SHA-256 hashing). The protocol steps below are annotated with which file owns each responsibility.
 
-1. **Poll `/api/jobs/claim`** with `{ workerId, allowedJobKinds? }`. On `204` (no work), sleep for the configured `heartbeatIntervalMs` and re-poll. On `503` (telemetry down), back off more aggressively. On `200` with a job, proceed.
-2. **Read the job's `workflowTemplate`**, load the matching certified `RenderProfile` via `loadCertificationProfile`. If no certified profile matches, call `/api/jobs/:id/fail` with `error_trace = "no certified profile for workflow_template"` and re-poll.
-3. **Call `/api/jobs/:id/start`** with the `leaseToken` to transition `leased` → `rendering`. On `409` (superseded) or `404` (gone), abort and re-poll. On `200` (`applied` or `already_applied`), proceed.
-4. **Invoke `ExecuteProfileRenderUseCase`** with the loaded profile, the job's `injectedPayload`, and the ComfyUI invocation inputs. While running, **send `/api/jobs/:id/heartbeat`** every `heartbeatIntervalMs`. On heartbeat `409` (superseded), **the worker does NOT release the GPU lease** — `ExecuteProfileRenderUseCase` owns the lease and will release it in `finally` when the render returns (`packages/application/src/use-cases/execute-profile-render.ts:197-203`). The worker daemon does not have access to the lease object. Instead, the worker logs the supersession, lets the render finish naturally (or fail locally), and abandons the result: it does not call `/api/jobs/:id/complete` or `/api/jobs/:id/fail` (both would 409 with the dead token). The orphan render output is the cost of a rare supersession edge case; the manifest is the only durable record, and the original worker can't write one.
-5. **On render success for `production` jobs**: invoke `assemble-generation-manifest.ts` to build the §5.5 `manifestPayload`. Call `/api/jobs/:id/complete` with `{ leaseToken, manifestPayload }`. On `400`, the manifest is malformed — fail the job with the validation error.
-6. **On render success for `candidate` jobs**: assemble the candidate row from the render result (see "Candidate persistence" below). Call `/api/jobs/:id/complete` with `{ leaseToken, candidatePayload: { storageBucket, storageObjectKey, contentHashSha256, variantOrdinal, generationPayload? } }`. The queue adapter writes the `storyboard_candidates` row in the same transaction as the status update.
-7. **On render failure**: call `/api/jobs/:id/fail` with `leaseToken` and `errorTrace`. The adapter's idempotency rules apply (requeued → `superseded`, terminal → `already_applied`).
-8. **On storage admission refusal at write time** (per the §"Storage admission surface" decision): call the new `/api/jobs/:id/defer` (see "Admission deferral" above) with `{ leaseToken, reason: <typed StorageAdmissionError.message> }`. The job returns to `queued` without consuming `retry_count`; the worker re-polls.
+1. **Poll `/api/jobs/claim`** with `{ workerId, allowedJobKinds? }`. On `204` (no work), sleep for the configured `heartbeatIntervalMs` and re-poll. On `503` (telemetry down), back off more aggressively. On `200` with a job, proceed. — `worker.ts`
+2. **Read the job's `workflowTemplate`**, load the matching certified `RenderProfile` via `loadCertificationProfile`. If no certified profile matches, call `/api/jobs/:id/fail` with `error_trace = "no certified profile for workflow_template"` and re-poll. — profile loading in `render-job-executor.ts`; `/fail` invocation and re-poll in `worker.ts`
+3. **Call `/api/jobs/:id/start`** with the `leaseToken` to transition `leased` → `rendering`. On `409` (superseded) or `404` (gone), abort and re-poll. On `200` (`applied` or `already_applied`), proceed. — `worker.ts`
+4. **Invoke `ExecuteProfileRenderUseCase`** with the loaded profile, the job's `injectedPayload`, and the ComfyUI invocation inputs. While running, **send `/api/jobs/:id/heartbeat`** every `heartbeatIntervalMs`. On heartbeat `409` (superseded), **the worker does NOT release the GPU lease** — `ExecuteProfileRenderUseCase` owns the lease and will release it in `finally` when the render returns (`packages/application/src/use-cases/execute-profile-render.ts:197-203`). The worker daemon does not have access to the lease object. Instead, the worker logs the supersession, lets the render finish naturally (or fail locally), and abandons the result: it does not call `/api/jobs/:id/complete` or `/api/jobs/:id/fail` (both would 409 with the dead token). The orphan render output is the cost of a rare supersession edge case; the manifest is the only durable record, and the original worker can't write one. — render dispatch via `render-job-executor.ts`; heartbeat loop in `worker.ts`
+5. **On render success for `production` jobs**: invoke `assemble-generation-manifest.ts` to build the §5.5 `manifestPayload`. Call `/api/jobs/:id/complete` with `{ leaseToken, manifestPayload }`. On `400`, the manifest is malformed — fail the job with the validation error. — manifest assembly in `render-job-executor.ts` (which calls `assemble-generation-manifest.ts` per issue #112); `/complete` invocation in `worker.ts`
+6. **On render success for `candidate` jobs**: assemble the candidate row from the render result (see "Candidate persistence" below). Call `/api/jobs/:id/complete` with `{ leaseToken, candidatePayload: { storageBucket, storageObjectKey, contentHashSha256, variantOrdinal, generationPayload? } }`. The queue adapter writes the `storyboard_candidates` row in the same transaction as the status update. — candidate payload assembly (variantOrdinal validation, SHA-256 hashing, outputObjectKeys → storageBucket/storageObjectKey) in `render-job-executor.ts`; `/complete` invocation in `worker.ts`
+7. **On render failure**: call `/api/jobs/:id/fail` with `leaseToken` and `errorTrace`. The adapter's idempotency rules apply (requeued → `superseded`, terminal → `already_applied`). — `worker.ts`
+8. **On storage admission refusal at write time** (per the §"Storage admission surface" decision): call the new `/api/jobs/:id/defer` (see "Admission deferral" above) with `{ leaseToken, reason: <typed StorageAdmissionError.message> }`. The job returns to `queued` without consuming `retry_count`; the worker re-polls. — `worker.ts`
 
 Worker-side storage admission: before each of the worker's storage-consuming operations (writing candidate media bytes, writing generation manifest bytes, writing any review proxy the worker produces), call `EnforceStorageAdmission.execute(operation)`. On `StorageAdmissionError`, the worker calls `/api/jobs/:id/defer` (step 8 above).
 
@@ -195,6 +195,55 @@ Out of scope, deferred:
 - **ReferenceAsset continuity tracking**: §5.5 lists it as a manifest field; Sprint 3 stores the field, but the asset-graph traversal that produces the manifest's "persistent ReferenceAsset identities" array is a separate concern.
 - **Worker-side backoff on sustained 204**: not in scope per the §"Storage admission surface" decision.
 - **Render and queue telemetry metrics**: out of scope; the metrics route already exists for storage.
+
+## Acceptance criteria additions
+
+Two spec requirements from the original design (and from issue #111) were not explicitly enumerated in the acceptance criteria. They are tracked here so PR #117's outcome is reconciled with the spec text and so the gaps have owners and target issues.
+
+- [ ] **"No certified profile" worker-level test case.** Design doc step 2 (Worker protocol) and issue #111 step 2 both prescribe that a missing certified profile must surface as `/api/jobs/:id/fail` with the typed error and a re-poll. PR #117's `worker.test.ts` has no case at the worker boundary that stubs `loadCertificationProfile` returning undefined and asserts the worker routes to `/fail` then re-polls. Either (a) surface a typed `MissingCertifiedProfileError` from `render-job-executor.ts` and assert `/fail` is called with it, or (b) expose the failure mode as a discriminated outcome the worker can route. **Tracked as:** follow-up PR against `apps/render-worker/src/worker.test.ts` or `render-job-executor.test.ts`.
+
+- [ ] **§9.2 integration test must explicitly assert worker A's `/complete` returns 409.** Design doc Testing step 3 and issue #111 acceptance criterion §9.2 both require *"assert exactly one `generation_manifests` row, no duplicate, and worker A's `complete` returned `409` (fenced)."* PR #117's `tests/integration/render-worker.integration.test.ts` asserts only the no-duplicate-manifest condition via final database state; worker A's `/complete` response is not captured. **Tracked as:** follow-up PR against `tests/integration/render-worker.integration.test.ts` to capture worker A's `/complete` invocation and assert the response outcome is `superseded`.
+
+## Deviation log
+
+Each deviation below names the original spec text, the actual implementation in PR #117 (which closes issue #111), and the rationale for keeping the implementation. Future deviations from this design doc must be appended to this log in the same format.
+
+### Deviation 1: class name `RenderWorkerDaemon` → `RenderWorker`
+
+- **Spec anchor:** issue #111 anchored design §"New file — `apps/render-worker/src/worker.ts`" declares `export class RenderWorkerDaemon` with `run(signal: AbortSignal): Promise<void>`.
+- **Actual:** `export class RenderWorker` (`apps/render-worker/src/worker.ts:81`) with `start(signal?: AbortSignal): Promise<void>` and `runOnce(): Promise<void>`.
+- **Rationale:** the term "Daemon" implied superprocess semantics the implementation does not have (no child-process spawn, no signal forwarding beyond SIGINT/SIGTERM). `RenderWorker` is more accurate. The `start()` vs `run()` split is honest about the loop's active-attempt draining requirement on shutdown — issue #111's `run(signal: AbortSignal)` would have forced an early-return that abandoned active leases, contradicting the graceful-shutdown requirement.
+- **Spec amendment:** the class is `RenderWorker`; the long-running method is `start(signal?)`.
+
+### Deviation 2: dependency list 9 ports → 5 ports with `renderJobExecutor` bundling
+
+- **Spec anchor:** issue #111 anchored design declares `RenderWorkerDeps` with 9 ports: `loadCertificationProfile`, `renderEngine`, `gpuLease`, `gpuTelemetry`, `executeProfileRender`, `enforceStorageAdmission`, `assembleManifest`, `controlApiClient`, `logger`.
+- **Actual:** 5 ports + injected `sleep`: `controlApiClient`, `objectStorage`, `enforceStorageAdmission`, `renderJobExecutor`, `logger`, `sleep` (`apps/render-worker/src/worker.ts:43`). `renderJobExecutor` (a new file `apps/render-worker/src/render-job-executor.ts`) bundles `loadCertificationProfile`, `executeProfileRender`, payload assembly, SHA-256 hashing, `variantOrdinal` validation, and `productionManifestAssembler` invocation.
+- **Rationale:** composition-root practice groups by what changes together. The 6 ports compressed into `renderJobExecutor` all change with certification content. Splitting them as 6 individual ports would create churn for no isolation benefit — anyone swapping one has to swap the others. The protocol steps 2 (load profile), 5 (assemble production manifest), and 6 (assemble candidate row) still happen, just behind one seam.
+- **Spec amendment:** the worker composes 5 ports + `sleep`; `renderJobExecutor` is the bundling seam; `assembleManifest` (issue #112's responsibility) flows through `renderJobExecutor` rather than being a direct worker port.
+
+### Deviation 3: file split — `worker.ts` + `render-job-executor.ts`
+
+- **Spec anchor:** issue #111 anchored design treats `worker.ts` as the single new file holding both the polling loop and the render orchestration.
+- **Actual:** `worker.ts` (650 lines) is the HTTP polling/heartbeat/settlement state machine with `AttemptPhase = "starting" | "active" | "fenced" | "settling" | "settled"`. `render-job-executor.ts` (485 lines) is the render orchestrator (profile loading, payload assembly, SHA-256 hashing, `variantOrdinal` validation). The two files have distinct change drivers and distinct test surfaces (`worker.test.ts` 2646 lines vs `render-job-executor.test.ts` 995 lines).
+- **Rationale:** separation of concerns between HTTP protocol consumer and render orchestration. A monolithic `worker.ts` would have been ~1000 lines mixing both concerns, harder to test, and conflating two different failure modes. The state machine handles edge cases the spec under-specified: heartbeat racing with shutdown, settlement barrier awaiting in-flight heartbeat, retry classification by HTTP status code, graceful active-attempt drain.
+- **Spec amendment:** see the per-step file attribution in the Worker protocol section above.
+
+### Deviation 4: daemon-level retry classification by HTTP status
+
+- **Spec anchor:** issue #111 Explicit Traps §"DO NOT re-implement claim, lease, retry, or admission logic in the worker" — verbatim.
+- **Actual:** `worker.ts` implements `isNonTransientStatusCode`, `startWithRetry`, `completeWithRetry`, `failWithRetry`, `deferWithRetry`. Each retries HTTP mutations by HTTP status code classification (transient 5xx and JSON-parse failures retry; 4xx 400/401/403/409/404 do not retry).
+- **Rationale:** the trap was likely intended to forbid duplicating *queue retry budget* (`retry_count`), not to forbid daemon-level retry classification by HTTP status. The queue owns durable retry budget — it decides whether a job can be re-claimed (durable state in `render_jobs`). The daemon owns daemon-level retry classification — it decides whether to retry a single HTTP call (transient vs non-transient). These are different concerns. Conflating them would either force the queue to model transient HTTP semantics (inappropriate) or leave the daemon without any retry classification (a "thin HTTP consumer" wouldn't survive a 503 from the Control API).
+- **Spec amendment (proposed):** the trap should be read as "DO NOT re-implement queue retry-count semantics, lease ownership, or admission policy in the worker. Daemon-level retry classification by HTTP status code is permitted and required." This clarification is pending operator confirmation — see "Open questions" below.
+- **Alternative interpretation:** if the trap was meant strictly (no retry logic at all in the worker), then PR #117 needs to refactor retry classification into the queue adapter or into a separate application-layer service. Deviation 4 in that case becomes an implementation gap rather than a spec ambiguity.
+
+## Open questions
+
+1. **Deviation 4 strictness.** Should the trap forbid all daemon-level retry classification (strict reading), or only durable-state retry logic (generous reading)? The generous reading is what PR #117 implemented; the strict reading would require a refactor. This is the substantive question for the spec amendment review.
+
+2. **Acceptance gap sequencing.** Should the two missing acceptance items (no-cert test, 409 assertion) block merge of this spec amendment, or land as follow-up PRs against `worker.test.ts` and the integration test? Recommendation: follow-up. The spec amendment is documentation and should not require code changes, but the gaps are real and should be tracked with explicit owners.
+
+3. **`assembleManifest` timing.** Issue #112 owns `assemble-generation-manifest.ts` (the §5.5 source of truth). PR #117's `renderJobExecutor` references it via an injected `ProductionManifestAssembler` boundary with a throwing stub for candidate-only mode. When issue #112 lands, does the assembler become a real dep on `renderJobExecutor`, or does `renderJobExecutor` remain opaque? The current code is agnostic to the answer, but the spec should commit to one.
 
 ## Testing
 
