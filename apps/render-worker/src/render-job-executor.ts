@@ -46,7 +46,16 @@ export class ProductionManifestAssemblyError extends RenderJobExecutionError {
 }
 
 export class WorkflowHashMismatchError extends RenderJobExecutionError {
-  override readonly name: string = "WorkflowHashMismatchError";
+  override readonly name = "WorkflowHashMismatchError";
+}
+
+export class MissingCertifiedProfileError extends RenderJobExecutionError {
+  override readonly name = "MissingCertifiedProfileError";
+  readonly workflowTemplate: string;
+  constructor(workflowTemplate: string, options?: ErrorOptions) {
+    super(`no certified profile for workflow_template "${workflowTemplate}"`, options);
+    this.workflowTemplate = workflowTemplate;
+  }
 }
 
 export interface AssembleProductionManifestInput {
@@ -306,7 +315,12 @@ export function createCertifiedRenderJobExecutor(
     const validatedInjected = validateInjectedPayload(job.injectedPayload, job.jobKind);
 
     // 2. Resolve certified profile
-    const profile = await loadCertificationProfileFn(manifestPath, job.workflowTemplate);
+    let profile: Awaited<ReturnType<typeof loadCertificationProfileFn>>;
+    try {
+      profile = await loadCertificationProfileFn(manifestPath, job.workflowTemplate);
+    } catch (cause) {
+      throw new MissingCertifiedProfileError(job.workflowTemplate, { cause });
+    }
     if (!profile.renderProfileIdentity) {
       throw new PreflightError(
         `Profile "${profile.id}" does not define renderProfileIdentity in manifest`

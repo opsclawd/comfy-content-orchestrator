@@ -16,6 +16,7 @@ import { PreflightError } from "./certification/preflight.js";
 import {
   CandidateOutputCardinalityError,
   createCertifiedRenderJobExecutor,
+  MissingCertifiedProfileError,
   ProductionManifestAssemblyError,
   RenderJobPayloadValidationError,
   WorkflowHashMismatchError,
@@ -952,6 +953,43 @@ describe("Certified Render Job Executor", () => {
     await expect(executorBadWorkflowHash(createSampleCandidateJob())).rejects.toThrow(
       WorkflowHashMismatchError
     );
+    expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+  });
+
+  it("throws MissingCertifiedProfileError when loadCertificationProfile signals no match", async () => {
+    const outputReader = new FakeOutputReader();
+    const mockExecuteProfileRender = vi.fn();
+    const upstreamError = new Error(
+      'Profile "missing-workflow" not found in manifest "/tmp/provenance.json". Available profiles: "flux-schnell-draft", "ltx-2.5-delivery".'
+    );
+
+    const executor = createCertifiedRenderJobExecutor({
+      loadCertificationProfile: async () => {
+        throw upstreamError;
+      },
+      readApprovedProvenance: async () => fakeFluxLiveProvenance,
+      collectCertificationProvenance: async () => fakeFluxLiveProvenance,
+      verifyGoldMasterProvenance: () => {},
+      readWorkflowFile: async () => fakeRawFluxWorkflow,
+      hashWorkflow: () => sampleWorkflowHash,
+      executeProfileRender: mockExecuteProfileRender,
+      outputReader
+    });
+
+    const job = createSampleCandidateJob({ workflowTemplate: "missing-workflow" });
+    await expect(executor(job)).rejects.toThrow(MissingCertifiedProfileError);
+    await expect(executor(job)).rejects.toThrow(
+      'no certified profile for workflow_template "missing-workflow"'
+    );
+
+    // Verify upstream error is preserved as cause for debugging
+    try {
+      await executor(job);
+    } catch (err) {
+      expect(err).toBeInstanceOf(MissingCertifiedProfileError);
+      expect((err as MissingCertifiedProfileError).workflowTemplate).toBe("missing-workflow");
+      expect((err as Error & { cause?: unknown }).cause).toBe(upstreamError);
+    }
     expect(mockExecuteProfileRender).not.toHaveBeenCalled();
   });
 

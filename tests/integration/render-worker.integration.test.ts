@@ -27,12 +27,17 @@ import { FakeComfyUiTransport } from "../../packages/infrastructure/src/comfyui/
 import {
   StorageAdmissionError,
   type ExecuteProfileRenderInput,
-  type ExecuteProfileRenderResult
+  type ExecuteProfileRenderResult,
+  type JobMutationResult
 } from "@cco/application";
-import type { StorageAdmissionPolicy } from "@cco/domain";
+import type { JobKind, RenderJob, StorageAdmissionPolicy } from "@cco/domain";
 import { BUCKETS, BUCKET_NAMES } from "@cco/shared";
 import { createControlApiApp } from "../../apps/control-api/src/http/app.js";
-import { createControlApiClient } from "../../apps/render-worker/src/control-api-client.js";
+import {
+  createControlApiClient,
+  type CompleteJobOptions,
+  type ControlApiClient
+} from "../../apps/render-worker/src/control-api-client.js";
 import {
   RenderWorker,
   type StorageAdmissionEnforcer,
@@ -84,6 +89,71 @@ const noopLogger: WorkerLogger = {
   warn: () => {},
   error: () => {}
 };
+
+interface RecordedCall {
+  readonly method: "claim" | "start" | "heartbeat" | "complete" | "fail" | "defer";
+  readonly jobId?: string;
+  readonly leaseToken?: string;
+  readonly outcome?: "applied" | "already_applied" | "superseded" | "not_found" | "deferred";
+  readonly error?: string;
+}
+
+class SpyControlApiClient implements ControlApiClient {
+  readonly calls: RecordedCall[] = [];
+  constructor(private readonly inner: ControlApiClient) {}
+
+  async claim(
+    workerId: string,
+    allowedJobKinds?: readonly JobKind[]
+  ): Promise<RenderJob | undefined> {
+    try {
+      const result = await this.inner.claim(workerId, allowedJobKinds);
+      this.calls.push({ method: "claim" });
+      return result;
+    } catch (err) {
+      this.calls.push({ method: "claim", error: err instanceof Error ? err.message : String(err) });
+      throw err;
+    }
+  }
+
+  async start(jobId: string, leaseToken: string): Promise<JobMutationResult> {
+    const result = await this.inner.start(jobId, leaseToken);
+    this.calls.push({ method: "start", jobId, leaseToken, outcome: result.outcome });
+    return result;
+  }
+
+  async heartbeat(jobId: string, leaseToken: string): Promise<JobMutationResult> {
+    const result = await this.inner.heartbeat(jobId, leaseToken);
+    this.calls.push({ method: "heartbeat", jobId, leaseToken, outcome: result.outcome });
+    return result;
+  }
+
+  async complete(
+    jobId: string,
+    leaseToken: string,
+    payload?: CompleteJobOptions
+  ): Promise<JobMutationResult> {
+    const result = await this.inner.complete(jobId, leaseToken, payload);
+    this.calls.push({ method: "complete", jobId, leaseToken, outcome: result.outcome });
+    return result;
+  }
+
+  async fail(jobId: string, leaseToken: string, errorTrace: string): Promise<JobMutationResult> {
+    const result = await this.inner.fail(jobId, leaseToken, errorTrace);
+    this.calls.push({ method: "fail", jobId, leaseToken, outcome: result.outcome });
+    return result;
+  }
+
+  async defer(jobId: string, leaseToken: string, reason: string): Promise<JobMutationResult> {
+    const result = await this.inner.defer(jobId, leaseToken, reason);
+    this.calls.push({ method: "defer", jobId, leaseToken, outcome: result.outcome });
+    return result;
+  }
+
+  completeCallsFor(jobId: string): RecordedCall[] {
+    return this.calls.filter((c) => c.method === "complete" && c.jobId === jobId);
+  }
+}
 
 const fakeProfile: CertificationProfile = {
   id: "flux-schnell-draft",
@@ -334,7 +404,13 @@ describe("Render Worker Cross-App Durable Integration Tests", () => {
       client.release();
     }
 
-    const controlApiClient = createControlApiClient({ baseUrl: controlApiUrl });
+    const realControlApiClient = createControlApiClient({ baseUrl: controlApiUrl });
+    // Worker A's client is wrapped in a spy so we can capture worker A's
+    // post-fence /complete and assert its outcome is `superseded` (HTTP 409).
+    // Worker B uses an unwrapped real client — its /complete is already proven
+    // by the "exactly one manifest" assertion and doesn't need to be spied on.
+    const workerAClient = new SpyControlApiClient(realControlApiClient);
+    const workerBClient = realControlApiClient;
 
     // Synchronization deferred promises between Worker A and Worker B
     const workerAStarted = createDeferred<void>();
@@ -408,7 +484,7 @@ describe("Render Worker Cross-App Durable Integration Tests", () => {
 
     const workerA = new RenderWorker(
       {
-        controlApiClient,
+        controlApiClient: workerAClient,
         objectStorage,
         enforceStorageAdmission: admissionEnforcer,
         renderJobExecutor: executorA,
@@ -498,7 +574,7 @@ describe("Render Worker Cross-App Durable Integration Tests", () => {
 
     const workerB = new RenderWorker(
       {
-        controlApiClient,
+        controlApiClient: workerBClient,
         objectStorage,
         enforceStorageAdmission: admissionEnforcer,
         renderJobExecutor: executorB,
@@ -546,6 +622,16 @@ describe("Render Worker Cross-App Durable Integration Tests", () => {
     // 5. Release Worker A
     workerAHold.resolve();
     await workerAPromise;
+
+    // 5b. §9.2 acceptance — worker A's /complete MUST return `superseded`
+    // (HTTP 409 fenced) because worker B already completed the job. The spy
+    // captured the post-state result so we can assert it explicitly, not just
+    // infer it from the absence of a duplicate manifest. Worker A and worker B
+    // use distinct clients; the spy only sees worker A's interleaved calls, so
+    // we expect exactly one /complete with outcome `superseded`.
+    const workerACompleteCalls = workerAClient.completeCallsFor(jobId);
+    expect(workerACompleteCalls).toHaveLength(1);
+    expect(workerACompleteCalls[0]?.outcome).toBe("superseded");
 
     // 6. Assert exactly one production manifest and one completion remain durable
     const finalClient = await pool.connect();

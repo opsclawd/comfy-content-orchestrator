@@ -19,6 +19,7 @@ import {
 } from "@cco/domain";
 import type { CompleteJobOptions, ControlApiClient } from "./control-api-client.js";
 import { ControlApiClientError } from "./control-api-client.js";
+import { MissingCertifiedProfileError } from "./render-job-executor.js";
 import {
   RenderWorker,
   type RenderJobExecutor,
@@ -1683,6 +1684,83 @@ describe("RenderWorker write-side admission gating and deferral", () => {
     expect(fakeClient.deferCalls).toHaveLength(0);
     expect(fakeStorage.puts).toHaveLength(0);
     expect(fakeClient.completeCalls).toHaveLength(0);
+  });
+
+  it("fails the job with a typed missing-profile error when no certified profile exists", async () => {
+    const scheduler = new FakeScheduler();
+    const fakeClient = new FakeControlApiClient();
+    const fakeStorage = new FakeObjectStorage();
+    const fakeEnforcer = new FakeStorageAdmissionEnforcer();
+
+    const candidateJob = createSampleJob({
+      jobKind: "candidate",
+      workflowTemplate: "flux-schnell-draft"
+    });
+    const upstreamProfileError = new Error(
+      'Profile "flux-schnell-draft" not found in manifest "/tmp/provenance.json". Available profiles: "ltx-2.5-delivery".'
+    );
+    const missingProfileError = new MissingCertifiedProfileError(candidateJob.workflowTemplate, {
+      cause: upstreamProfileError
+    });
+
+    const { worker } = createTestWorker(
+      {
+        controlApiClient: fakeClient,
+        objectStorage: fakeStorage,
+        enforceStorageAdmission: fakeEnforcer,
+        renderJobExecutor: async () => {
+          throw missingProfileError;
+        },
+        sleep: scheduler.sleep
+      },
+      {
+        workerId: "test-worker",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
+
+    // 1. Drive the start() loop: claim returns the job, then no more work
+    let claimCalls = 0;
+    (fakeClient as unknown as { claim: () => Promise<RenderJob | undefined> }).claim = async () => {
+      claimCalls += 1;
+      if (claimCalls === 1) {
+        return candidateJob;
+      }
+      return undefined;
+    };
+
+    const abortController = new AbortController();
+    const startPromise = worker.start(abortController.signal);
+    await flushPromises();
+
+    // Step 1: claim returned the job → processJob invoked → renderJobExecutor threw
+    // MissingCertifiedProfileError → worker routes to /fail
+    expect(fakeClient.failCalls).toHaveLength(1);
+    expect(fakeClient.failCalls[0]?.jobId).toBe(sampleJobId);
+    expect(fakeClient.failCalls[0]?.leaseToken).toBe(sampleLeaseToken);
+    expect(fakeClient.failCalls[0]?.errorTrace).toContain(
+      `no certified profile for workflow_template "${candidateJob.workflowTemplate}"`
+    );
+
+    // /fail should NOT be classified as an admission refusal — it must use /fail, not /defer
+    expect(fakeClient.deferCalls).toHaveLength(0);
+    // No candidate bytes or manifest written when the profile never loaded
+    expect(fakeStorage.puts).toHaveLength(0);
+    // No completion attempted
+    expect(fakeClient.completeCalls).toHaveLength(0);
+
+    // Step 2: After /fail resolves, the loop should re-poll. We assert re-poll by
+    // advancing the scheduler through pollIntervalMs and seeing another claim attempt.
+    await scheduler.advanceNext();
+    await flushPromises();
+    expect(claimCalls).toBeGreaterThanOrEqual(2);
+
+    // Clean shutdown
+    abortController.abort();
+    await scheduler.advanceNext();
+    await startPromise;
   });
 });
 
