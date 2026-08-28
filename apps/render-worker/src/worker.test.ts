@@ -2354,4 +2354,261 @@ describe("Behavioral Invariants: Mutation Retry, Polling Backoff, and Graceful S
     // The promise should reject/settle promptly due to shutdown abortion
     await expect(processPromise).rejects.toThrow("worker shutdown");
   });
+
+  it("heartbeat loop continues during graceful shutdown while render remains active", async () => {
+    const renderDeferred = createDeferred<WorkerRenderOutput>();
+    const scheduler = new FakeScheduler();
+    const fakeClient = new FakeControlApiClient();
+    const sampleJob = createSampleJob();
+
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      sleep: scheduler.sleep,
+      renderJobExecutor: async () => renderDeferred.promise
+    });
+
+    const abortController = new AbortController();
+    const processPromise = worker.processJob(sampleJob, abortController.signal);
+    await flushPromises();
+
+    expect(fakeClient.startCalls).toHaveLength(1);
+    expect(scheduler.pendingCount).toBe(1);
+
+    // Heartbeat 1 before shutdown
+    await scheduler.advanceNext();
+    expect(fakeClient.heartbeatCalls).toHaveLength(1);
+
+    // Request shutdown while render is still in progress
+    abortController.abort();
+    await flushPromises();
+
+    // Heartbeat loop must still be sleeping for next interval (10000ms), not terminated
+    expect(scheduler.pendingCount).toBe(1);
+
+    // Heartbeat 2 occurs during shutdown
+    await scheduler.advanceNext();
+    expect(fakeClient.heartbeatCalls).toHaveLength(2);
+
+    // Heartbeat 3 occurs during shutdown
+    expect(scheduler.pendingCount).toBe(1);
+    await scheduler.advanceNext();
+    expect(fakeClient.heartbeatCalls).toHaveLength(3);
+
+    // Render settles
+    renderDeferred.resolve({
+      candidatePayload: {
+        variantOrdinal: 1,
+        storageBucket: "candidates",
+        storageObjectKey: "final.png",
+        contentHashSha256: "e".repeat(64)
+      }
+    });
+
+    await processPromise;
+
+    expect(fakeClient.completeCalls).toHaveLength(1);
+  });
+
+  it("settlement complete retries persist through shutdown on transient errors", async () => {
+    const scheduler = new FakeScheduler();
+    const sampleJob = createSampleJob();
+    let completeAttempts = 0;
+
+    const fakeClient = new FakeControlApiClient({
+      onComplete: () => {
+        completeAttempts++;
+        if (completeAttempts < 3) {
+          throw new ControlApiClientError("503 Service Unavailable during complete", 503);
+        }
+        return { outcome: "applied", job: sampleJob };
+      }
+    });
+
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      sleep: scheduler.sleep,
+      renderJobExecutor: async () => ({
+        candidatePayload: {
+          variantOrdinal: 1,
+          storageBucket: "candidates",
+          storageObjectKey: "output.png",
+          contentHashSha256: "f".repeat(64)
+        }
+      })
+    });
+
+    const abortController = new AbortController();
+    fakeClient.claim = vi.fn().mockResolvedValue(sampleJob);
+    const startPromise = worker.start(abortController.signal);
+
+    await flushPromises();
+    expect(fakeClient.completeCalls).toHaveLength(1);
+
+    // Shutdown requested while complete is retrying
+    abortController.abort();
+    await flushPromises();
+
+    // Complete retry 1 should be scheduled with normal pollIntervalMs
+    expect(scheduler.pendingCount).toBeGreaterThanOrEqual(1);
+    while (fakeClient.completeCalls.length === 1 && scheduler.pendingCount > 0) {
+      await scheduler.advanceNext();
+      await flushPromises();
+    }
+    expect(fakeClient.completeCalls).toHaveLength(2);
+
+    // Complete retry 2
+    while (fakeClient.completeCalls.length === 2 && scheduler.pendingCount > 0) {
+      await scheduler.advanceNext();
+      await flushPromises();
+    }
+    expect(fakeClient.completeCalls).toHaveLength(3);
+
+    // Worker start resolves cleanly
+    await startPromise;
+    expect(fakeClient.completeCalls).toHaveLength(3);
+    expect(fakeClient.failCalls).toHaveLength(0);
+  });
+
+  it("settlement fail retries persist through shutdown on transient errors", async () => {
+    const scheduler = new FakeScheduler();
+    const sampleJob = createSampleJob();
+    let failAttempts = 0;
+
+    const fakeClient = new FakeControlApiClient({
+      onFail: () => {
+        failAttempts++;
+        if (failAttempts < 3) {
+          throw new ControlApiClientError("500 Internal Server Error during fail", 500);
+        }
+        return { outcome: "applied", job: sampleJob };
+      }
+    });
+
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      sleep: scheduler.sleep,
+      renderJobExecutor: async () => {
+        throw new Error("Render pipeline fatal crash");
+      }
+    });
+
+    const abortController = new AbortController();
+    fakeClient.claim = vi.fn().mockResolvedValue(sampleJob);
+    const startPromise = worker.start(abortController.signal);
+
+    await flushPromises();
+    expect(fakeClient.failCalls).toHaveLength(1);
+
+    // Shutdown requested during fail retry
+    abortController.abort();
+    await flushPromises();
+
+    while (fakeClient.failCalls.length === 1 && scheduler.pendingCount > 0) {
+      await scheduler.advanceNext();
+      await flushPromises();
+    }
+    expect(fakeClient.failCalls).toHaveLength(2);
+
+    while (fakeClient.failCalls.length === 2 && scheduler.pendingCount > 0) {
+      await scheduler.advanceNext();
+      await flushPromises();
+    }
+    expect(fakeClient.failCalls).toHaveLength(3);
+
+    await startPromise;
+    expect(fakeClient.failCalls).toHaveLength(3);
+  });
+
+  it("settlement defer retries persist through shutdown on transient errors", async () => {
+    const scheduler = new FakeScheduler();
+    const sampleJob = createSampleJob();
+    let deferAttempts = 0;
+
+    const admissionError = new StorageAdmissionError({
+      operationClass: "candidate_upload",
+      watermarkState: "degraded",
+      usedRatio: 0.86,
+      totalBytes: 1_000_000_000,
+      freeBytes: 140_000_000
+    });
+
+    const fakeClient = new FakeControlApiClient({
+      onDefer: () => {
+        deferAttempts++;
+        if (deferAttempts < 3) {
+          throw new ControlApiClientError("502 Bad Gateway during defer", 502);
+        }
+        return { outcome: "deferred", job: sampleJob };
+      }
+    });
+
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      enforceStorageAdmission: new FakeStorageAdmissionEnforcer(() => {
+        throw admissionError;
+      }),
+      sleep: scheduler.sleep
+    });
+
+    const abortController = new AbortController();
+    fakeClient.claim = vi.fn().mockResolvedValue(sampleJob);
+    const startPromise = worker.start(abortController.signal);
+
+    await flushPromises();
+    expect(fakeClient.deferCalls).toHaveLength(1);
+
+    // Shutdown requested during defer retry
+    abortController.abort();
+    await flushPromises();
+
+    while (fakeClient.deferCalls.length === 1 && scheduler.pendingCount > 0) {
+      await scheduler.advanceNext();
+      await flushPromises();
+    }
+    expect(fakeClient.deferCalls).toHaveLength(2);
+
+    while (fakeClient.deferCalls.length === 2 && scheduler.pendingCount > 0) {
+      await scheduler.advanceNext();
+      await flushPromises();
+    }
+    expect(fakeClient.deferCalls).toHaveLength(3);
+
+    await startPromise;
+    expect(fakeClient.deferCalls).toHaveLength(3);
+  });
+
+  it("worker.start cleanly exits without unhandled rejection if processJob start aborts on shutdown", async () => {
+    const fakeClient = new FakeControlApiClient({
+      onStart: () => {
+        throw new ControlApiClientError("Connection refused", 500);
+      }
+    });
+    const scheduler = new FakeScheduler();
+    const logger = new FakeLogger();
+    const sampleJob = createSampleJob();
+
+    fakeClient.claim = vi.fn().mockResolvedValue(sampleJob);
+
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      sleep: scheduler.sleep,
+      logger
+    });
+
+    const abortController = new AbortController();
+    const startPromise = worker.start(abortController.signal);
+    await flushPromises();
+
+    expect(fakeClient.startCalls).toHaveLength(1);
+    expect(scheduler.pendingCount).toBe(1);
+
+    // Request shutdown while waiting to retry start
+    abortController.abort();
+    await flushPromises();
+
+    // start() should resolve cleanly without throwing
+    await expect(startPromise).resolves.toBeUndefined();
+    expect(logger.errorLogs.length).toBeGreaterThan(0);
+    expect(logger.errorLogs[0]).toContain("Job processing error");
+  });
 });

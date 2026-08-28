@@ -254,8 +254,7 @@ export class RenderWorker {
   private async completeWithRetry(
     jobId: JobId | string,
     leaseToken: LeaseToken | string,
-    payload: CompleteJobOptions,
-    signal?: AbortSignal
+    payload: CompleteJobOptions
   ): Promise<JobMutationResult> {
     while (true) {
       try {
@@ -276,18 +275,12 @@ export class RenderWorker {
             throw err;
           }
         }
-        if (this.isShutdownRequested || signal?.aborted) {
-          throw new Error(`Job ${jobId} complete aborted due to worker shutdown`);
-        }
         this.deps.logger.warn(
           `Job ${jobId} complete failed with uncertainty: ${
             err instanceof Error ? err.message : String(err)
           }`
         );
-        await this.sleepWithAbort(this.pollIntervalMs, signal);
-        if (this.isShutdownRequested || signal?.aborted) {
-          throw new Error(`Job ${jobId} complete aborted due to worker shutdown`);
-        }
+        await this.deps.sleep(this.pollIntervalMs);
       }
     }
   }
@@ -295,8 +288,7 @@ export class RenderWorker {
   private async failWithRetry(
     jobId: JobId | string,
     leaseToken: LeaseToken | string,
-    errorTrace: string,
-    signal?: AbortSignal
+    errorTrace: string
   ): Promise<void> {
     while (true) {
       try {
@@ -311,18 +303,12 @@ export class RenderWorker {
             throw err;
           }
         }
-        if (this.isShutdownRequested || signal?.aborted) {
-          throw new Error(`Job ${jobId} fail aborted due to worker shutdown`);
-        }
         this.deps.logger.warn(
           `Job ${jobId} fail failed with uncertainty: ${
             err instanceof Error ? err.message : String(err)
           }`
         );
-        await this.sleepWithAbort(this.pollIntervalMs, signal);
-        if (this.isShutdownRequested || signal?.aborted) {
-          throw new Error(`Job ${jobId} fail aborted due to worker shutdown`);
-        }
+        await this.deps.sleep(this.pollIntervalMs);
       }
     }
   }
@@ -330,8 +316,7 @@ export class RenderWorker {
   private async deferWithRetry(
     jobId: JobId | string,
     leaseToken: LeaseToken | string,
-    reason: string,
-    signal?: AbortSignal
+    reason: string
   ): Promise<void> {
     while (true) {
       try {
@@ -346,18 +331,12 @@ export class RenderWorker {
             throw err;
           }
         }
-        if (this.isShutdownRequested || signal?.aborted) {
-          throw new Error(`Job ${jobId} defer aborted due to worker shutdown`);
-        }
         this.deps.logger.warn(
           `Job ${jobId} defer failed with uncertainty: ${
             err instanceof Error ? err.message : String(err)
           }`
         );
-        await this.sleepWithAbort(this.pollIntervalMs, signal);
-        if (this.isShutdownRequested || signal?.aborted) {
-          throw new Error(`Job ${jobId} defer aborted due to worker shutdown`);
-        }
+        await this.deps.sleep(this.pollIntervalMs);
       }
     }
   }
@@ -388,16 +367,14 @@ export class RenderWorker {
       while (
         !stopHeartbeats &&
         attempt.phase === "active" &&
-        !this.isShutdownRequested &&
-        !signal?.aborted
+        !heartbeatAbortController.signal.aborted
       ) {
-        await this.sleepWithAbort(this.heartbeatIntervalMs, heartbeatAbortController.signal);
+        await this.deps.sleep(this.heartbeatIntervalMs, heartbeatAbortController.signal);
 
         if (
           stopHeartbeats ||
           attempt.phase !== "active" ||
-          this.isShutdownRequested ||
-          signal?.aborted
+          heartbeatAbortController.signal.aborted
         ) {
           break;
         }
@@ -477,35 +454,35 @@ export class RenderWorker {
     if (hasRenderError) {
       attempt.phase = "settled";
       if (renderError instanceof StorageAdmissionError) {
-        await this.deferWithRetry(job.jobId, leaseToken, renderError.message, signal);
+        await this.deferWithRetry(job.jobId, leaseToken, renderError.message);
         return "deferred";
       }
       const errorTrace =
         renderError instanceof Error
           ? (renderError.stack ?? renderError.message)
           : String(renderError);
-      await this.failWithRetry(job.jobId, leaseToken, errorTrace, signal);
+      await this.failWithRetry(job.jobId, leaseToken, errorTrace);
       return "failed";
     }
 
     try {
-      await this.persistAndComplete(job, leaseToken, renderOutput!, signal);
+      await this.persistAndComplete(job, leaseToken, renderOutput!);
       attempt.phase = "settled";
       return "completed";
     } catch (error) {
       attempt.phase = "settled";
       if (error instanceof StorageAdmissionError) {
-        await this.deferWithRetry(job.jobId, leaseToken, error.message, signal);
+        await this.deferWithRetry(job.jobId, leaseToken, error.message);
         return "deferred";
       }
       if (error instanceof ControlApiClientError && error.statusCode === 400) {
         const detail = error.responseDetail ?? error.message;
         const boundedDetail = detail.slice(0, 500);
-        await this.failWithRetry(job.jobId, leaseToken, boundedDetail, signal);
+        await this.failWithRetry(job.jobId, leaseToken, boundedDetail);
         return "failed";
       }
       const errorTrace = error instanceof Error ? (error.stack ?? error.message) : String(error);
-      await this.failWithRetry(job.jobId, leaseToken, errorTrace, signal);
+      await this.failWithRetry(job.jobId, leaseToken, errorTrace);
       return "failed";
     }
   }
@@ -513,8 +490,7 @@ export class RenderWorker {
   private async persistAndComplete(
     job: RenderJob,
     leaseToken: string,
-    renderOutput: WorkerRenderOutput,
-    signal?: AbortSignal
+    renderOutput: WorkerRenderOutput
   ): Promise<void> {
     if (!renderOutput || typeof renderOutput !== "object") {
       throw new Error("Render output must be an object");
@@ -555,12 +531,7 @@ export class RenderWorker {
         ? { candidatePayload: renderOutput.candidatePayload }
         : { manifestPayload: renderOutput.manifestPayload };
 
-    const completeResult = await this.completeWithRetry(
-      job.jobId,
-      leaseToken,
-      completePayload,
-      signal
-    );
+    const completeResult = await this.completeWithRetry(job.jobId, leaseToken, completePayload);
 
     if (completeResult.outcome === "superseded" || completeResult.outcome === "not_found") {
       return;
@@ -626,9 +597,17 @@ export class RenderWorker {
 
         let wasDeferred = false;
         const jobPromise = (async () => {
-          const outcome = await this.processJob(claimedJob!, signal);
-          if (outcome === "deferred") {
-            wasDeferred = true;
+          try {
+            const outcome = await this.processJob(claimedJob!, signal);
+            if (outcome === "deferred") {
+              wasDeferred = true;
+            }
+          } catch (err) {
+            this.deps.logger.error(
+              `Job processing error for ${claimedJob!.jobId}: ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            );
           }
         })();
 
@@ -648,7 +627,11 @@ export class RenderWorker {
         signal.removeEventListener("abort", onSignalAbort);
       }
       if (this.activeJobPromise) {
-        await this.activeJobPromise;
+        try {
+          await this.activeJobPromise;
+        } catch {
+          // Handled inside jobPromise
+        }
       }
       this.isRunning = false;
     }
