@@ -18,6 +18,8 @@ export interface WorkerRuntimeConfig {
   readonly pollIntervalMs: number;
   readonly heartbeatIntervalMs: number;
   readonly leaseDurationMs: number;
+  readonly telemetryBackoffMs?: number | undefined;
+  readonly admissionBackoffMs?: number | undefined;
   readonly s3Config?: S3ObjectStorageOptions | undefined;
 }
 
@@ -90,6 +92,24 @@ export function parseWorkerRuntimeConfig(
     );
   }
 
+  let telemetryBackoffMs: number | undefined;
+  const rawTelemetryBackoff = env.JOB_TELEMETRY_BACKOFF_MS ?? env.TELEMETRY_BACKOFF_MS;
+  if (rawTelemetryBackoff !== undefined && rawTelemetryBackoff.trim() !== "") {
+    const parsed = Number.parseInt(rawTelemetryBackoff.trim(), 10);
+    if (Number.isSafeInteger(parsed) && parsed > 0) {
+      telemetryBackoffMs = parsed;
+    }
+  }
+
+  let admissionBackoffMs: number | undefined;
+  const rawAdmissionBackoff = env.JOB_ADMISSION_BACKOFF_MS ?? env.ADMISSION_BACKOFF_MS;
+  if (rawAdmissionBackoff !== undefined && rawAdmissionBackoff.trim() !== "") {
+    const parsed = Number.parseInt(rawAdmissionBackoff.trim(), 10);
+    if (Number.isSafeInteger(parsed) && parsed > 0) {
+      admissionBackoffMs = parsed;
+    }
+  }
+
   const s3Endpoint = env.S3_STORAGE_ENDPOINT?.trim() || env.S3_ENDPOINT?.trim();
   let s3Config: S3ObjectStorageOptions | undefined;
   if (s3Endpoint) {
@@ -118,6 +138,8 @@ export function parseWorkerRuntimeConfig(
     pollIntervalMs,
     heartbeatIntervalMs,
     leaseDurationMs,
+    ...(telemetryBackoffMs !== undefined ? { telemetryBackoffMs } : {}),
+    ...(admissionBackoffMs !== undefined ? { admissionBackoffMs } : {}),
     s3Config
   };
 }
@@ -178,7 +200,13 @@ export function createProductionWorker(
     workerId: effectiveConfig.workerId,
     pollIntervalMs: effectiveConfig.pollIntervalMs,
     heartbeatIntervalMs: effectiveConfig.heartbeatIntervalMs,
-    leaseDurationMs: effectiveConfig.leaseDurationMs
+    leaseDurationMs: effectiveConfig.leaseDurationMs,
+    ...(effectiveConfig.telemetryBackoffMs !== undefined
+      ? { telemetryBackoffMs: effectiveConfig.telemetryBackoffMs }
+      : {}),
+    ...(effectiveConfig.admissionBackoffMs !== undefined
+      ? { admissionBackoffMs: effectiveConfig.admissionBackoffMs }
+      : {})
   };
 
   return new RenderWorker(dependencies, options);
@@ -194,8 +222,13 @@ export async function runWorkerCli(
     const worker = createProductionWorker(config, depsOverrides);
 
     const abortController = new AbortController();
+    let shutdownRequested = false;
     const onSignal = () => {
-      worker.stop();
+      if (shutdownRequested) {
+        return;
+      }
+      shutdownRequested = true;
+      worker.requestShutdown();
       abortController.abort();
     };
 

@@ -1,11 +1,16 @@
 import {
   StorageAdmissionError,
+  type JobMutationResult,
   type ObjectStoragePort,
   type PutObjectInput
 } from "@cco/application";
 import type { StorageOperationClass } from "@cco/contracts";
-import type { JobKind, RenderJob, StorageAdmissionPolicy } from "@cco/domain";
-import type { CompleteJobOptions, ControlApiClient } from "./control-api-client.js";
+import type { JobId, JobKind, LeaseToken, RenderJob, StorageAdmissionPolicy } from "@cco/domain";
+import {
+  ControlApiClientError,
+  type CompleteJobOptions,
+  type ControlApiClient
+} from "./control-api-client.js";
 
 export interface StorageAdmissionEnforcer {
   execute(operation: StorageOperationClass): Promise<StorageAdmissionPolicy>;
@@ -41,6 +46,8 @@ export interface RenderWorkerOptions {
   readonly heartbeatIntervalMs: number;
   readonly leaseDurationMs: number;
   readonly allowedJobKinds?: readonly JobKind[] | undefined;
+  readonly telemetryBackoffMs?: number | undefined;
+  readonly admissionBackoffMs?: number | undefined;
 }
 
 export type AttemptPhase = "starting" | "active" | "fenced" | "settling" | "settled";
@@ -80,7 +87,13 @@ export class RenderWorker {
   private readonly heartbeatIntervalMs: number;
   private readonly leaseDurationMs: number;
   private readonly allowedJobKinds?: readonly JobKind[] | undefined;
+  private readonly telemetryBackoffMs: number;
+  private readonly admissionBackoffMs: number;
+
   private isRunning = false;
+  private isShutdownRequested = false;
+  private activeJobPromise: Promise<void> | undefined;
+  private wakeIdleWait: (() => void) | undefined;
 
   constructor(deps: WorkerDependencies, options: RenderWorkerOptions) {
     if (!deps) {
@@ -130,20 +143,187 @@ export class RenderWorker {
     }
 
     this.allowedJobKinds = options.allowedJobKinds;
+
+    this.telemetryBackoffMs =
+      options.telemetryBackoffMs !== undefined
+        ? validatePositiveInteger(options.telemetryBackoffMs, "telemetryBackoffMs")
+        : 5000;
+
+    this.admissionBackoffMs =
+      options.admissionBackoffMs !== undefined
+        ? validatePositiveInteger(options.admissionBackoffMs, "admissionBackoffMs")
+        : 5000;
+
     this.deps = deps;
   }
 
-  async processJob(job: RenderJob): Promise<void> {
-    if (!job.leaseToken) {
+  requestShutdown(): void {
+    this.isShutdownRequested = true;
+    this.isRunning = false;
+    if (this.wakeIdleWait) {
+      this.wakeIdleWait();
+    }
+  }
+
+  stop(): void {
+    this.requestShutdown();
+  }
+
+  private async sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+    if (this.isShutdownRequested || signal?.aborted) {
       return;
+    }
+
+    let cleanup: (() => void) | undefined;
+
+    const sleepPromise = this.deps.sleep(ms);
+    const wakePromise = new Promise<void>((resolve) => {
+      const onWake = () => resolve();
+      this.wakeIdleWait = onWake;
+      if (signal) {
+        signal.addEventListener("abort", onWake, { once: true });
+      }
+      cleanup = () => {
+        if (this.wakeIdleWait === onWake) {
+          this.wakeIdleWait = undefined;
+        }
+        if (signal) {
+          signal.removeEventListener("abort", onWake);
+        }
+      };
+    });
+
+    try {
+      await Promise.race([sleepPromise, wakePromise]);
+    } finally {
+      cleanup?.();
+    }
+  }
+
+  private async startWithRetry(
+    jobId: JobId | string,
+    leaseToken: LeaseToken | string
+  ): Promise<JobMutationResult> {
+    while (true) {
+      try {
+        const result = await this.deps.controlApiClient.start(jobId, leaseToken);
+        return result;
+      } catch (err) {
+        if (err instanceof ControlApiClientError) {
+          if (err.statusCode === 409) {
+            return { outcome: "superseded" };
+          }
+          if (err.statusCode === 404) {
+            return { outcome: "not_found" };
+          }
+        }
+        this.deps.logger.warn(
+          `Job ${jobId} start failed with uncertainty: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+        await this.deps.sleep(this.pollIntervalMs);
+      }
+    }
+  }
+
+  private async completeWithRetry(
+    jobId: JobId | string,
+    leaseToken: LeaseToken | string,
+    payload: CompleteJobOptions
+  ): Promise<JobMutationResult> {
+    while (true) {
+      try {
+        const result = await this.deps.controlApiClient.complete(jobId, leaseToken, payload);
+        return result;
+      } catch (err) {
+        if (err instanceof StorageAdmissionError) {
+          throw err;
+        }
+        if (err instanceof ControlApiClientError) {
+          if (err.statusCode === 400) {
+            throw err;
+          }
+          if (err.statusCode === 409) {
+            return { outcome: "superseded" };
+          }
+          if (err.statusCode === 404) {
+            return { outcome: "not_found" };
+          }
+        }
+        this.deps.logger.warn(
+          `Job ${jobId} complete failed with uncertainty: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+        await this.deps.sleep(this.pollIntervalMs);
+      }
+    }
+  }
+
+  private async failWithRetry(
+    jobId: JobId | string,
+    leaseToken: LeaseToken | string,
+    errorTrace: string
+  ): Promise<void> {
+    while (true) {
+      try {
+        await this.deps.controlApiClient.fail(jobId, leaseToken, errorTrace);
+        return;
+      } catch (err) {
+        if (err instanceof ControlApiClientError) {
+          if (err.statusCode === 409 || err.statusCode === 404 || err.statusCode === 200) {
+            return;
+          }
+        }
+        this.deps.logger.warn(
+          `Job ${jobId} fail failed with uncertainty: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+        await this.deps.sleep(this.pollIntervalMs);
+      }
+    }
+  }
+
+  private async deferWithRetry(
+    jobId: JobId | string,
+    leaseToken: LeaseToken | string,
+    reason: string
+  ): Promise<void> {
+    while (true) {
+      try {
+        await this.deps.controlApiClient.defer(jobId, leaseToken, reason);
+        return;
+      } catch (err) {
+        if (err instanceof ControlApiClientError) {
+          if (err.statusCode === 409 || err.statusCode === 404 || err.statusCode === 200) {
+            return;
+          }
+        }
+        this.deps.logger.warn(
+          `Job ${jobId} defer failed with uncertainty: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+        await this.deps.sleep(this.pollIntervalMs);
+      }
+    }
+  }
+
+  async processJob(
+    job: RenderJob
+  ): Promise<"deferred" | "completed" | "failed" | "abandoned" | void> {
+    if (!job.leaseToken) {
+      return "abandoned";
     }
     const leaseToken = job.leaseToken;
 
     const attempt = new AttemptTracker();
 
-    const startResult = await this.deps.controlApiClient.start(job.jobId, leaseToken);
+    const startResult = await this.startWithRetry(job.jobId, leaseToken);
     if (startResult.outcome === "superseded" || startResult.outcome === "not_found") {
-      return;
+      return "abandoned";
     }
 
     attempt.phase = "active";
@@ -212,7 +392,7 @@ export class RenderWorker {
 
     if (attempt.isFenced()) {
       attempt.phase = "settled";
-      return;
+      return "abandoned";
     }
 
     attempt.phase = "settling";
@@ -220,29 +400,36 @@ export class RenderWorker {
     if (hasRenderError) {
       attempt.phase = "settled";
       if (renderError instanceof StorageAdmissionError) {
-        await this.deps.controlApiClient.defer(job.jobId, leaseToken, renderError.message);
-        return;
+        await this.deferWithRetry(job.jobId, leaseToken, renderError.message);
+        return "deferred";
       }
       const errorTrace =
         renderError instanceof Error
           ? (renderError.stack ?? renderError.message)
           : String(renderError);
-      await this.deps.controlApiClient.fail(job.jobId, leaseToken, errorTrace);
-      return;
+      await this.failWithRetry(job.jobId, leaseToken, errorTrace);
+      return "failed";
     }
 
     try {
       await this.persistAndComplete(job, leaseToken, renderOutput!);
       attempt.phase = "settled";
+      return "completed";
     } catch (error) {
       attempt.phase = "settled";
       if (error instanceof StorageAdmissionError) {
-        await this.deps.controlApiClient.defer(job.jobId, leaseToken, error.message);
-        return;
+        await this.deferWithRetry(job.jobId, leaseToken, error.message);
+        return "deferred";
+      }
+      if (error instanceof ControlApiClientError && error.statusCode === 400) {
+        const detail = error.responseDetail ?? error.message;
+        const boundedDetail = detail.slice(0, 500);
+        await this.failWithRetry(job.jobId, leaseToken, boundedDetail);
+        return "failed";
       }
       const errorTrace = error instanceof Error ? (error.stack ?? error.message) : String(error);
-      await this.deps.controlApiClient.fail(job.jobId, leaseToken, errorTrace);
-      return;
+      await this.failWithRetry(job.jobId, leaseToken, errorTrace);
+      return "failed";
     }
   }
 
@@ -290,11 +477,7 @@ export class RenderWorker {
         ? { candidatePayload: renderOutput.candidatePayload }
         : { manifestPayload: renderOutput.manifestPayload };
 
-    const completeResult = await this.deps.controlApiClient.complete(
-      job.jobId,
-      leaseToken,
-      completePayload
-    );
+    const completeResult = await this.completeWithRetry(job.jobId, leaseToken, completePayload);
 
     if (completeResult.outcome === "superseded" || completeResult.outcome === "not_found") {
       return;
@@ -312,23 +495,79 @@ export class RenderWorker {
 
   async start(signal?: AbortSignal): Promise<void> {
     this.isRunning = true;
-    while (this.isRunning && !signal?.aborted) {
-      try {
-        const processed = await this.runOnce();
-        if (!processed && this.isRunning && !signal?.aborted) {
-          await this.deps.sleep(this.pollIntervalMs);
-        }
-      } catch {
-        if (signal?.aborted) {
-          break;
-        }
-        await this.deps.sleep(this.pollIntervalMs);
-      }
-    }
-  }
+    this.isShutdownRequested = false;
 
-  stop(): void {
-    this.isRunning = false;
+    const onSignalAbort = () => {
+      this.requestShutdown();
+    };
+
+    if (signal) {
+      signal.addEventListener("abort", onSignalAbort, { once: true });
+    }
+
+    try {
+      while (this.isRunning && !this.isShutdownRequested && !signal?.aborted) {
+        let claimedJob: RenderJob | undefined;
+        let claimFailed503 = false;
+        let claimFailedGeneric = false;
+
+        try {
+          claimedJob = await this.deps.controlApiClient.claim(this.workerId, this.allowedJobKinds);
+        } catch (err) {
+          if (err instanceof ControlApiClientError && err.statusCode === 503) {
+            claimFailed503 = true;
+            this.deps.logger.warn(`Claim telemetry unavailable (503): ${err.message}`);
+          } else {
+            claimFailedGeneric = true;
+            this.deps.logger.warn(
+              `Claim failed with error: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+        }
+
+        if (claimFailed503) {
+          await this.sleepWithAbort(this.telemetryBackoffMs, signal);
+          continue;
+        }
+
+        if (claimFailedGeneric) {
+          await this.sleepWithAbort(this.pollIntervalMs, signal);
+          continue;
+        }
+
+        if (!claimedJob) {
+          await this.sleepWithAbort(this.pollIntervalMs, signal);
+          continue;
+        }
+
+        let wasDeferred = false;
+        const jobPromise = (async () => {
+          const outcome = await this.processJob(claimedJob!);
+          if (outcome === "deferred") {
+            wasDeferred = true;
+          }
+        })();
+
+        this.activeJobPromise = jobPromise;
+        try {
+          await jobPromise;
+        } finally {
+          this.activeJobPromise = undefined;
+        }
+
+        if (wasDeferred && !this.isShutdownRequested && !signal?.aborted) {
+          await this.sleepWithAbort(this.admissionBackoffMs, signal);
+        }
+      }
+    } finally {
+      if (signal) {
+        signal.removeEventListener("abort", onSignalAbort);
+      }
+      if (this.activeJobPromise) {
+        await this.activeJobPromise;
+      }
+      this.isRunning = false;
+    }
   }
 }
 

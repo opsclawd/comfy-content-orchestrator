@@ -237,6 +237,18 @@ describe("run-worker CLI", () => {
       });
     });
 
+    it("parses telemetry and admission backoff configuration", () => {
+      const env: NodeJS.ProcessEnv = {
+        STORAGE_TELEMETRY_PATH: "/var/run/storage",
+        JOB_TELEMETRY_BACKOFF_MS: "8000",
+        JOB_ADMISSION_BACKOFF_MS: "12000"
+      };
+
+      const config = parseWorkerRuntimeConfig(env);
+      expect(config.telemetryBackoffMs).toBe(8000);
+      expect(config.admissionBackoffMs).toBe(12000);
+    });
+
     it("throws WorkerConfigError when STORAGE_TELEMETRY_PATH is missing", () => {
       expect(() => parseWorkerRuntimeConfig({})).toThrow(WorkerConfigError);
     });
