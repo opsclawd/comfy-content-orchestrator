@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply } from "fastify";
-import type { JobId, LeaseToken } from "@cco/domain";
+import { JOB_KINDS, type JobId, type JobKind, type LeaseToken } from "@cco/domain";
 import {
   InvalidJobCompletionPayloadError,
   StorageAdmissionError,
@@ -25,6 +25,15 @@ export const claimJobSchema = {
         type: "string",
         minLength: 1,
         pattern: "\\S"
+      },
+      allowedJobKinds: {
+        type: "array",
+        minItems: 1,
+        uniqueItems: true,
+        items: {
+          type: "string",
+          enum: JOB_KINDS
+        }
       }
     },
     additionalProperties: false
@@ -241,32 +250,35 @@ export const jobRoutes: FastifyPluginAsync<JobRoutesOptions> = async (
     throw new Error("EnforceStorageAdmission use case is required for job routes");
   }
 
-  fastify.post<{ Body: { workerId: string } }>(
-    "/api/jobs/claim",
-    { schema: claimJobSchema },
-    async (request, reply) => {
-      try {
-        const job = await queue.claim({
-          workerId: request.body.workerId,
-          leaseDurationMs: dispatchConfig.leaseDurationMs
-        });
+  fastify.post<{
+    Body: {
+      workerId: string;
+      allowedJobKinds?: readonly JobKind[];
+    };
+  }>("/api/jobs/claim", { schema: claimJobSchema }, async (request, reply) => {
+    try {
+      const claimInput = {
+        workerId: request.body.workerId,
+        leaseDurationMs: dispatchConfig.leaseDurationMs,
+        ...(request.body.allowedJobKinds ? { allowedJobKinds: request.body.allowedJobKinds } : {})
+      };
+      const job = await queue.claim(claimInput);
 
-        if (!job) {
-          return reply.status(204).send();
-        }
-
-        return reply.status(200).send(job);
-      } catch (error) {
-        if (error instanceof StorageAdmissionUnavailableError) {
-          return reply.status(503).send({
-            code: "STORAGE_TELEMETRY_UNAVAILABLE",
-            message: "Storage telemetry is unavailable."
-          });
-        }
-        throw error;
+      if (!job) {
+        return reply.status(204).send();
       }
+
+      return reply.status(200).send(job);
+    } catch (error) {
+      if (error instanceof StorageAdmissionUnavailableError) {
+        return reply.status(503).send({
+          code: "STORAGE_TELEMETRY_UNAVAILABLE",
+          message: "Storage telemetry is unavailable."
+        });
+      }
+      throw error;
     }
-  );
+  });
 
   fastify.post<{
     Params: { jobId: string };

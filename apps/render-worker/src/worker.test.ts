@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   StorageAdmissionError,
   type JobMutationResult,
@@ -11,6 +11,7 @@ import type { StorageOperationClass } from "@cco/contracts";
 import {
   createStorageAdmissionPolicy,
   type JobId,
+  type JobKind,
   type LeaseToken,
   type RenderJob,
   type SceneId,
@@ -18,10 +19,22 @@ import {
 } from "@cco/domain";
 import type { CompleteJobOptions, ControlApiClient } from "./control-api-client.js";
 import { ControlApiClientError } from "./control-api-client.js";
-import { RenderWorker, type StorageAdmissionEnforcer } from "./worker.js";
+import { MissingCertifiedProfileError } from "./render-job-executor.js";
+import {
+  RenderWorker,
+  type RenderJobExecutor,
+  type RenderWorkerOptions,
+  type StorageAdmissionEnforcer,
+  type WorkerDependencies,
+  type WorkerLogger,
+  type WorkerRenderOutput
+} from "./worker.js";
 
 export class FakeControlApiClient implements ControlApiClient {
-  readonly claimCalls: string[] = [];
+  readonly claimCalls: Array<{
+    workerId: string;
+    allowedJobKinds?: readonly JobKind[] | undefined;
+  }> = [];
   readonly startCalls: Array<{ jobId: JobId | string; leaseToken: LeaseToken | string }> = [];
   readonly heartbeatCalls: Array<{ jobId: JobId | string; leaseToken: LeaseToken | string }> = [];
   readonly completeCalls: Array<{
@@ -49,10 +62,27 @@ export class FakeControlApiClient implements ControlApiClient {
           completeResult?: JobMutationResult | undefined;
           failResult?: JobMutationResult | undefined;
           deferResult?: JobMutationResult | undefined;
+          onClaim?: (
+            workerId: string,
+            allowedJobKinds?: readonly JobKind[] | undefined
+          ) => Promise<RenderJob | undefined> | RenderJob | undefined;
+          onStart?: (
+            jobId: JobId | string,
+            leaseToken: LeaseToken | string
+          ) => Promise<JobMutationResult> | JobMutationResult;
+          onHeartbeat?: (
+            jobId: JobId | string,
+            leaseToken: LeaseToken | string
+          ) => Promise<JobMutationResult> | JobMutationResult;
           onComplete?: (
             jobId: JobId | string,
             leaseToken: LeaseToken | string,
             payload?: CompleteJobOptions | undefined
+          ) => Promise<JobMutationResult> | JobMutationResult;
+          onFail?: (
+            jobId: JobId | string,
+            leaseToken: LeaseToken | string,
+            errorTrace: string
           ) => Promise<JobMutationResult> | JobMutationResult;
           onDefer?: (
             jobId: JobId | string,
@@ -63,13 +93,22 @@ export class FakeControlApiClient implements ControlApiClient {
       | undefined
   ) {}
 
-  async claim(workerId: string): Promise<RenderJob | undefined> {
-    this.claimCalls.push(workerId);
+  async claim(
+    workerId: string,
+    allowedJobKinds?: readonly JobKind[]
+  ): Promise<RenderJob | undefined> {
+    this.claimCalls.push({ workerId, allowedJobKinds });
+    if (this.config?.onClaim) {
+      return this.config.onClaim(workerId, allowedJobKinds);
+    }
     return this.config?.claimResult;
   }
 
   async start(jobId: JobId | string, leaseToken: LeaseToken | string): Promise<JobMutationResult> {
     this.startCalls.push({ jobId, leaseToken });
+    if (this.config?.onStart) {
+      return this.config.onStart(jobId, leaseToken);
+    }
     return this.config?.startResult ?? { outcome: "applied", job: {} as RenderJob };
   }
 
@@ -78,6 +117,9 @@ export class FakeControlApiClient implements ControlApiClient {
     leaseToken: LeaseToken | string
   ): Promise<JobMutationResult> {
     this.heartbeatCalls.push({ jobId, leaseToken });
+    if (this.config?.onHeartbeat) {
+      return this.config.onHeartbeat(jobId, leaseToken);
+    }
     return this.config?.heartbeatResult ?? { outcome: "applied", job: {} as RenderJob };
   }
 
@@ -99,6 +141,9 @@ export class FakeControlApiClient implements ControlApiClient {
     errorTrace: string
   ): Promise<JobMutationResult> {
     this.failCalls.push({ jobId, leaseToken, errorTrace });
+    if (this.config?.onFail) {
+      return this.config.onFail(jobId, leaseToken, errorTrace);
+    }
     return this.config?.failResult ?? { outcome: "applied", job: {} as RenderJob };
   }
 
@@ -151,6 +196,94 @@ export class FakeStorageAdmissionEnforcer implements StorageAdmissionEnforcer {
   }
 }
 
+export class FakeLogger implements WorkerLogger {
+  readonly infoLogs: string[] = [];
+  readonly warnLogs: string[] = [];
+  readonly errorLogs: string[] = [];
+
+  info(msg: string, ..._args: unknown[]): void {
+    this.infoLogs.push(msg);
+  }
+  warn(msg: string, ..._args: unknown[]): void {
+    this.warnLogs.push(msg);
+  }
+  error(msg: string, ..._args: unknown[]): void {
+    this.errorLogs.push(msg);
+  }
+}
+
+export interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+}
+
+export function createDeferred<T = void>(): Deferred<T> {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+export class FakeScheduler {
+  readonly sleepCalls: number[] = [];
+  private pendingSleeps: Array<{
+    ms: number;
+    resolve: () => void;
+    signal?: AbortSignal | undefined;
+  }> = [];
+
+  sleep = (ms: number, signal?: AbortSignal): Promise<void> => {
+    this.sleepCalls.push(ms);
+    return new Promise<void>((resolve) => {
+      if (signal?.aborted) {
+        resolve();
+        return;
+      }
+      const entry = { ms, resolve, signal };
+      this.pendingSleeps.push(entry);
+      if (signal) {
+        signal.addEventListener(
+          "abort",
+          () => {
+            const index = this.pendingSleeps.indexOf(entry);
+            if (index !== -1) {
+              this.pendingSleeps.splice(index, 1);
+            }
+            resolve();
+          },
+          { once: true }
+        );
+      }
+    });
+  };
+
+  async advanceNext(turns = 10): Promise<boolean> {
+    const next = this.pendingSleeps.shift();
+    if (next) {
+      next.resolve();
+      for (let i = 0; i < turns; i++) {
+        await Promise.resolve();
+      }
+      return true;
+    }
+    return false;
+  }
+
+  get pendingCount(): number {
+    return this.pendingSleeps.length;
+  }
+}
+
+export async function flushPromises(turns = 10): Promise<void> {
+  for (let i = 0; i < turns; i++) {
+    await Promise.resolve();
+  }
+}
+
 const sampleJobId = "11111111-1111-4111-8111-111111111111" as JobId;
 const sampleSceneId = "33333333-3333-4333-8333-333333333333" as SceneId;
 const sampleLeaseToken = "22222222-2222-4222-8222-222222222222" as LeaseToken;
@@ -175,11 +308,53 @@ function createSampleJob(overrides?: Partial<RenderJob>): RenderJob {
   };
 }
 
+function createTestWorker(
+  depsOverrides?: Partial<WorkerDependencies>,
+  optionsOverrides?: Partial<RenderWorkerOptions>
+) {
+  const fakeClient = new FakeControlApiClient();
+  const fakeStorage = new FakeObjectStorage();
+  const fakeEnforcer = new FakeStorageAdmissionEnforcer();
+  const scheduler = new FakeScheduler();
+  const logger = new FakeLogger();
+  const defaultExecutor: RenderJobExecutor = async (job) => ({
+    mediaObjects: [],
+    ...(job.jobKind === "candidate"
+      ? { candidatePayload: { variantOrdinal: 1 } }
+      : { manifestPayload: { sceneId: job.sceneId } })
+  });
+
+  const deps: WorkerDependencies = {
+    controlApiClient: fakeClient,
+    objectStorage: fakeStorage,
+    enforceStorageAdmission: fakeEnforcer,
+    renderJobExecutor: defaultExecutor,
+    logger,
+    sleep: scheduler.sleep,
+    ...depsOverrides
+  };
+
+  const options: RenderWorkerOptions = {
+    workerId: "test-worker",
+    pollIntervalMs: 1000,
+    heartbeatIntervalMs: 10000,
+    leaseDurationMs: 30000,
+    ...optionsOverrides
+  };
+
+  const worker = new RenderWorker(deps, options);
+  return { worker, deps, options, fakeClient, fakeStorage, fakeEnforcer, scheduler, logger };
+}
+
 describe("Worker test structural fakes", () => {
-  it("FakeControlApiClient satisfies ControlApiClient contract including defer", async () => {
+  it("FakeControlApiClient satisfies ControlApiClient contract including claim filtering and defer", async () => {
     const fakeClient: ControlApiClient = new FakeControlApiClient({
+      claimResult: createSampleJob(),
       deferResult: { outcome: "deferred", job: {} as RenderJob }
     });
+
+    const claimed = await fakeClient.claim("worker-test", ["candidate"]);
+    expect(claimed).toEqual(createSampleJob());
 
     const jobId = "job-123" as JobId;
     const leaseToken = "lease-456" as LeaseToken;
@@ -189,8 +364,735 @@ describe("Worker test structural fakes", () => {
     expect(result).toEqual({ outcome: "deferred", job: {} });
 
     const clientInstance = fakeClient as FakeControlApiClient;
+    expect(clientInstance.claimCalls).toEqual([
+      { workerId: "worker-test", allowedJobKinds: ["candidate"] }
+    ]);
     expect(clientInstance.deferCalls).toEqual([
       { jobId: "job-123", leaseToken: "lease-456", reason }
+    ]);
+  });
+});
+
+describe("RenderWorker construction and option validation", () => {
+  it("rejects missing or invalid dependencies", () => {
+    const validDeps: WorkerDependencies = {
+      controlApiClient: new FakeControlApiClient(),
+      objectStorage: new FakeObjectStorage(),
+      enforceStorageAdmission: new FakeStorageAdmissionEnforcer(),
+      renderJobExecutor: async () => ({ candidatePayload: { variantOrdinal: 1 } }),
+      logger: new FakeLogger(),
+      sleep: async () => {}
+    };
+    const validOptions: RenderWorkerOptions = {
+      workerId: "test-worker",
+      pollIntervalMs: 1000,
+      heartbeatIntervalMs: 10000,
+      leaseDurationMs: 30000
+    };
+
+    expect(() => new RenderWorker(null as unknown as WorkerDependencies, validOptions)).toThrow(
+      "WorkerDependencies are required"
+    );
+    expect(
+      () =>
+        new RenderWorker(
+          { ...validDeps, controlApiClient: null as unknown as ControlApiClient },
+          validOptions
+        )
+    ).toThrow("controlApiClient is required");
+    expect(
+      () =>
+        new RenderWorker(
+          { ...validDeps, objectStorage: null as unknown as ObjectStoragePort },
+          validOptions
+        )
+    ).toThrow("objectStorage is required");
+    expect(
+      () =>
+        new RenderWorker(
+          { ...validDeps, enforceStorageAdmission: null as unknown as StorageAdmissionEnforcer },
+          validOptions
+        )
+    ).toThrow("enforceStorageAdmission is required");
+    expect(
+      () =>
+        new RenderWorker(
+          { ...validDeps, renderJobExecutor: null as unknown as RenderJobExecutor },
+          validOptions
+        )
+    ).toThrow("renderJobExecutor must be a function");
+    expect(
+      () =>
+        new RenderWorker({ ...validDeps, logger: null as unknown as WorkerLogger }, validOptions)
+    ).toThrow("logger with info, warn, error methods is required");
+    expect(
+      () =>
+        new RenderWorker(
+          { ...validDeps, sleep: null as unknown as (ms: number) => Promise<void> },
+          validOptions
+        )
+    ).toThrow("sleep must be a function");
+  });
+
+  it("rejects invalid options and timing constraints", () => {
+    const validDeps: WorkerDependencies = {
+      controlApiClient: new FakeControlApiClient(),
+      objectStorage: new FakeObjectStorage(),
+      enforceStorageAdmission: new FakeStorageAdmissionEnforcer(),
+      renderJobExecutor: async () => ({ candidatePayload: { variantOrdinal: 1 } }),
+      logger: new FakeLogger(),
+      sleep: async () => {}
+    };
+
+    expect(() => new RenderWorker(validDeps, null as unknown as RenderWorkerOptions)).toThrow(
+      "RenderWorkerOptions are required"
+    );
+
+    expect(
+      () =>
+        new RenderWorker(validDeps, {
+          workerId: "",
+          pollIntervalMs: 1000,
+          heartbeatIntervalMs: 10000,
+          leaseDurationMs: 30000
+        })
+    ).toThrow("workerId must be a non-empty string");
+
+    expect(
+      () =>
+        new RenderWorker(validDeps, {
+          workerId: "w1",
+          pollIntervalMs: 0,
+          heartbeatIntervalMs: 10000,
+          leaseDurationMs: 30000
+        })
+    ).toThrow("pollIntervalMs must be a positive safe integer");
+
+    expect(
+      () =>
+        new RenderWorker(validDeps, {
+          workerId: "w1",
+          pollIntervalMs: 1000,
+          heartbeatIntervalMs: -10,
+          leaseDurationMs: 30000
+        })
+    ).toThrow("heartbeatIntervalMs must be a positive safe integer");
+
+    expect(
+      () =>
+        new RenderWorker(validDeps, {
+          workerId: "w1",
+          pollIntervalMs: 1000,
+          heartbeatIntervalMs: 10000,
+          leaseDurationMs: 0
+        })
+    ).toThrow("leaseDurationMs must be a positive safe integer");
+
+    expect(
+      () =>
+        new RenderWorker(validDeps, {
+          workerId: "w1",
+          pollIntervalMs: 1000,
+          heartbeatIntervalMs: 30000,
+          leaseDurationMs: 30000
+        })
+    ).toThrow("heartbeatIntervalMs must be less than leaseDurationMs");
+
+    expect(
+      () =>
+        new RenderWorker(validDeps, {
+          workerId: "w1",
+          pollIntervalMs: 1000,
+          heartbeatIntervalMs: 40000,
+          leaseDurationMs: 30000
+        })
+    ).toThrow("heartbeatIntervalMs must be less than leaseDurationMs");
+  });
+});
+
+describe("Behavioral Invariants: Attempt State Machine and Heartbeat Fencing", () => {
+  it("abandons before render when start is superseded or missing", async () => {
+    // 1. Missing lease token
+    const { worker: worker1, fakeClient: client1 } = createTestWorker();
+    const jobWithoutLease = createSampleJob({ leaseToken: null });
+    await worker1.processJob(jobWithoutLease);
+
+    expect(client1.startCalls).toHaveLength(0);
+    expect(client1.heartbeatCalls).toHaveLength(0);
+    expect(client1.completeCalls).toHaveLength(0);
+    expect(client1.failCalls).toHaveLength(0);
+    expect(client1.deferCalls).toHaveLength(0);
+
+    // 2. Start outcome superseded
+    const clientSuperseded = new FakeControlApiClient({
+      startResult: { outcome: "superseded" }
+    });
+    const executorSpy2 = vi.fn();
+    const { worker: worker2 } = createTestWorker({
+      controlApiClient: clientSuperseded,
+      renderJobExecutor: executorSpy2
+    });
+
+    await worker2.processJob(createSampleJob());
+
+    expect(clientSuperseded.startCalls).toHaveLength(1);
+    expect(executorSpy2).not.toHaveBeenCalled();
+    expect(clientSuperseded.heartbeatCalls).toHaveLength(0);
+    expect(clientSuperseded.completeCalls).toHaveLength(0);
+    expect(clientSuperseded.failCalls).toHaveLength(0);
+    expect(clientSuperseded.deferCalls).toHaveLength(0);
+
+    // 3. Start outcome not_found
+    const clientNotFound = new FakeControlApiClient({
+      startResult: { outcome: "not_found" }
+    });
+    const executorSpy3 = vi.fn();
+    const { worker: worker3 } = createTestWorker({
+      controlApiClient: clientNotFound,
+      renderJobExecutor: executorSpy3
+    });
+
+    await worker3.processJob(createSampleJob());
+
+    expect(clientNotFound.startCalls).toHaveLength(1);
+    expect(executorSpy3).not.toHaveBeenCalled();
+    expect(clientNotFound.heartbeatCalls).toHaveLength(0);
+    expect(clientNotFound.completeCalls).toHaveLength(0);
+    expect(clientNotFound.failCalls).toHaveLength(0);
+    expect(clientNotFound.deferCalls).toHaveLength(0);
+  });
+
+  it("heartbeats sequentially while the render remains active", async () => {
+    const renderDeferred = createDeferred<WorkerRenderOutput>();
+    const scheduler = new FakeScheduler();
+    const fakeClient = new FakeControlApiClient();
+
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      sleep: scheduler.sleep,
+      renderJobExecutor: async () => renderDeferred.promise
+    });
+
+    const sampleJob = createSampleJob();
+    const jobPromise = worker.processJob(sampleJob);
+
+    // Microtask flush to allow start and heartbeat loop initialization
+    await flushPromises();
+    expect(fakeClient.startCalls).toHaveLength(1);
+
+    // Heartbeat loop should be sleeping for first interval (10000ms)
+    expect(scheduler.pendingCount).toBe(1);
+    expect(scheduler.sleepCalls).toEqual([10000]);
+
+    // Tick 1: trigger first heartbeat
+    await scheduler.advanceNext();
+
+    expect(fakeClient.heartbeatCalls).toHaveLength(1);
+    expect(fakeClient.heartbeatCalls[0]).toEqual({
+      jobId: sampleJob.jobId,
+      leaseToken: sampleJob.leaseToken
+    });
+
+    // Heartbeat 1 settled -> Heartbeat loop begins next sleep interval
+    expect(scheduler.pendingCount).toBe(1);
+    expect(scheduler.sleepCalls).toEqual([10000, 10000]);
+
+    // Tick 2: trigger second heartbeat
+    await scheduler.advanceNext();
+
+    expect(fakeClient.heartbeatCalls).toHaveLength(2);
+    expect(fakeClient.heartbeatCalls[1]).toEqual({
+      jobId: sampleJob.jobId,
+      leaseToken: sampleJob.leaseToken
+    });
+
+    // Sleep 3 is now pending
+    expect(scheduler.pendingCount).toBe(1);
+    expect(scheduler.sleepCalls).toEqual([10000, 10000, 10000]);
+
+    // Render settles successfully
+    renderDeferred.resolve({
+      candidatePayload: {
+        variantOrdinal: 1,
+        storageBucket: "candidates",
+        storageObjectKey: "test.png",
+        contentHashSha256: "a".repeat(64)
+      }
+    });
+
+    await jobPromise;
+
+    expect(fakeClient.completeCalls).toHaveLength(1);
+    expect(fakeClient.failCalls).toHaveLength(0);
+    expect(fakeClient.heartbeatCalls).toHaveLength(2);
+  });
+
+  it("fences on heartbeat superseded and abandons successful output after lease cleanup", async () => {
+    const renderDeferred = createDeferred<WorkerRenderOutput>();
+    const scheduler = new FakeScheduler();
+    const fakeClient = new FakeControlApiClient({
+      heartbeatResult: { outcome: "superseded" }
+    });
+    const fakeStorage = new FakeObjectStorage();
+    const logger = new FakeLogger();
+
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      objectStorage: fakeStorage,
+      sleep: scheduler.sleep,
+      logger,
+      renderJobExecutor: async () => renderDeferred.promise
+    });
+
+    const sampleJob = createSampleJob();
+    const jobPromise = worker.processJob(sampleJob);
+
+    await flushPromises();
+    expect(fakeClient.startCalls).toHaveLength(1);
+
+    // Advance sleep to trigger heartbeat
+    expect(scheduler.pendingCount).toBe(1);
+    await scheduler.advanceNext();
+
+    expect(fakeClient.heartbeatCalls).toHaveLength(1);
+    expect(logger.warnLogs.length).toBeGreaterThan(0);
+    expect(logger.warnLogs[0]).toContain("superseded");
+
+    // Render completes successfully
+    renderDeferred.resolve({
+      mediaObjects: [{ bucket: "candidates", key: "output.png", body: new Uint8Array([1, 2, 3]) }],
+      candidatePayload: {
+        variantOrdinal: 1,
+        storageBucket: "candidates",
+        storageObjectKey: "output.png",
+        contentHashSha256: "a".repeat(64)
+      }
+    });
+
+    await jobPromise;
+
+    // Fenced: no uploads, no complete, no fail, no defer
+    expect(fakeStorage.puts).toHaveLength(0);
+    expect(fakeClient.completeCalls).toHaveLength(0);
+    expect(fakeClient.failCalls).toHaveLength(0);
+    expect(fakeClient.deferCalls).toHaveLength(0);
+  });
+
+  it("fences on heartbeat not found and does not report a local render failure", async () => {
+    const renderDeferred = createDeferred<WorkerRenderOutput>();
+    const scheduler = new FakeScheduler();
+    const fakeClient = new FakeControlApiClient({
+      heartbeatResult: { outcome: "not_found" }
+    });
+    const fakeStorage = new FakeObjectStorage();
+    const logger = new FakeLogger();
+
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      objectStorage: fakeStorage,
+      sleep: scheduler.sleep,
+      logger,
+      renderJobExecutor: async () => renderDeferred.promise
+    });
+
+    const sampleJob = createSampleJob();
+    const jobPromise = worker.processJob(sampleJob);
+
+    await flushPromises();
+    expect(fakeClient.startCalls).toHaveLength(1);
+
+    // Advance sleep to trigger heartbeat
+    expect(scheduler.pendingCount).toBe(1);
+    await scheduler.advanceNext();
+
+    expect(fakeClient.heartbeatCalls).toHaveLength(1);
+    expect(logger.warnLogs.length).toBeGreaterThan(0);
+    expect(logger.warnLogs[0]).toContain("not_found");
+
+    // Render fails with an error
+    renderDeferred.reject(new Error("CUDA out of memory error"));
+
+    await jobPromise;
+
+    // Fenced: does NOT report local failure
+    expect(fakeClient.failCalls).toHaveLength(0);
+    expect(fakeClient.deferCalls).toHaveLength(0);
+    expect(fakeClient.completeCalls).toHaveLength(0);
+    expect(fakeStorage.puts).toHaveLength(0);
+  });
+
+  it("waits for the in-flight heartbeat before uploading and completing", async () => {
+    const renderDeferred = createDeferred<WorkerRenderOutput>();
+    const heartbeatDeferred = createDeferred<JobMutationResult>();
+    const scheduler = new FakeScheduler();
+    const callOrder: string[] = [];
+
+    const fakeStorage = new FakeObjectStorage((input) => {
+      callOrder.push(`putObject:${input.key}`);
+    });
+
+    const fakeClient = new FakeControlApiClient({
+      onHeartbeat: () => {
+        callOrder.push("heartbeat_started");
+        return heartbeatDeferred.promise;
+      },
+      onComplete: () => {
+        callOrder.push("complete_started");
+        return { outcome: "applied", job: {} as RenderJob };
+      }
+    });
+
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      objectStorage: fakeStorage,
+      sleep: scheduler.sleep,
+      renderJobExecutor: async () => renderDeferred.promise
+    });
+
+    const sampleJob = createSampleJob();
+    const jobPromise = worker.processJob(sampleJob);
+
+    await flushPromises();
+    expect(scheduler.pendingCount).toBe(1);
+
+    // Start in-flight heartbeat
+    await scheduler.advanceNext();
+
+    expect(fakeClient.heartbeatCalls).toHaveLength(1);
+    expect(callOrder).toEqual(["heartbeat_started"]);
+
+    // Render completes while heartbeat is still in-flight
+    renderDeferred.resolve({
+      mediaObjects: [{ bucket: "candidates", key: "preview.png", body: new Uint8Array([1, 2]) }],
+      candidatePayload: {
+        variantOrdinal: 1,
+        storageBucket: "candidates",
+        storageObjectKey: "preview.png",
+        contentHashSha256: "b".repeat(64)
+      }
+    });
+
+    await flushPromises();
+
+    // Verify upload and complete have NOT happened while heartbeat is in flight
+    expect(fakeStorage.puts).toHaveLength(0);
+    expect(fakeClient.completeCalls).toHaveLength(0);
+
+    // Resolve in-flight heartbeat
+    heartbeatDeferred.resolve({ outcome: "applied", job: {} as RenderJob });
+
+    await jobPromise;
+
+    // Verify upload and complete happened after in-flight heartbeat resolved
+    expect(callOrder).toEqual(["heartbeat_started", "putObject:preview.png", "complete_started"]);
+    expect(fakeStorage.puts).toHaveLength(1);
+    expect(fakeClient.completeCalls).toHaveLength(1);
+  });
+
+  it("retries heartbeat uncertainty without failing the durable job", async () => {
+    const renderDeferred = createDeferred<WorkerRenderOutput>();
+    const scheduler = new FakeScheduler();
+    const logger = new FakeLogger();
+
+    let heartbeatAttempts = 0;
+    const fakeClient = new FakeControlApiClient({
+      onHeartbeat: () => {
+        heartbeatAttempts++;
+        if (heartbeatAttempts === 1) {
+          throw new ControlApiClientError("502 Bad Gateway from upstream proxy", 502);
+        }
+        return { outcome: "applied", job: {} as RenderJob };
+      }
+    });
+
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      sleep: scheduler.sleep,
+      logger,
+      renderJobExecutor: async () => renderDeferred.promise
+    });
+
+    const sampleJob = createSampleJob();
+    const jobPromise = worker.processJob(sampleJob);
+
+    await flushPromises();
+    expect(scheduler.pendingCount).toBe(1);
+
+    // Trigger Heartbeat 1 (throws uncertainty)
+    await scheduler.advanceNext();
+
+    expect(fakeClient.heartbeatCalls).toHaveLength(1);
+    expect(logger.warnLogs.length).toBe(1);
+    expect(logger.warnLogs[0]).toContain("heartbeat failed with uncertainty");
+    expect(fakeClient.failCalls).toHaveLength(0);
+
+    // Next heartbeat is scheduled
+    expect(scheduler.pendingCount).toBe(1);
+
+    // Trigger Heartbeat 2 (succeeds)
+    await scheduler.advanceNext();
+
+    expect(fakeClient.heartbeatCalls).toHaveLength(2);
+    expect(fakeClient.failCalls).toHaveLength(0);
+
+    // Render settles
+    renderDeferred.resolve({
+      candidatePayload: {
+        variantOrdinal: 1,
+        storageBucket: "candidates",
+        storageObjectKey: "final.png",
+        contentHashSha256: "c".repeat(64)
+      }
+    });
+
+    await jobPromise;
+
+    expect(fakeClient.failCalls).toHaveLength(0);
+    expect(fakeClient.completeCalls).toHaveLength(1);
+  });
+
+  it("handles a rejected heartbeat sleep without an unhandled rejection", async () => {
+    const renderDeferred = createDeferred<WorkerRenderOutput>();
+    const logger = new FakeLogger();
+    let sleepCalls = 0;
+
+    const { worker } = createTestWorker({
+      logger,
+      renderJobExecutor: async () => renderDeferred.promise,
+      sleep: async () => {
+        sleepCalls++;
+        throw new Error("heartbeat sleep aborted");
+      }
+    });
+
+    const processPromise = worker.processJob(createSampleJob());
+    await flushPromises();
+
+    expect(sleepCalls).toBe(1);
+    expect(logger.errorLogs).toContain("Heartbeat loop failed: heartbeat sleep aborted");
+
+    renderDeferred.resolve({
+      candidatePayload: {
+        variantOrdinal: 1,
+        storageBucket: "candidates",
+        storageObjectKey: "output.png",
+        contentHashSha256: "a".repeat(64)
+      }
+    });
+
+    await expect(processPromise).resolves.toBe("completed");
+  });
+});
+
+describe("RenderWorker strict payload branch requirements", () => {
+  it("rejects candidate job missing candidatePayload before any write", async () => {
+    const fakeClient = new FakeControlApiClient();
+    const fakeStorage = new FakeObjectStorage();
+    const fakeEnforcer = new FakeStorageAdmissionEnforcer();
+
+    const candidateJob = createSampleJob({ jobKind: "candidate" });
+
+    const worker = new RenderWorker(
+      {
+        controlApiClient: fakeClient,
+        objectStorage: fakeStorage,
+        enforceStorageAdmission: fakeEnforcer,
+        renderJobExecutor: async () => ({
+          mediaObjects: [{ bucket: "candidates", key: "img.png", body: new Uint8Array([1]) }]
+        }),
+        logger: new FakeLogger(),
+        sleep: async () => {}
+      },
+      {
+        workerId: "test-worker",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
+
+    await worker.processJob(candidateJob);
+
+    expect(fakeStorage.puts).toHaveLength(0);
+    expect(fakeEnforcer.calls).toHaveLength(0);
+    expect(fakeClient.completeCalls).toHaveLength(0);
+    expect(fakeClient.failCalls).toHaveLength(1);
+    expect(fakeClient.failCalls[0]?.errorTrace).toContain(
+      "Candidate jobs require candidatePayload"
+    );
+  });
+
+  it("rejects candidate job containing manifestPayload before any write", async () => {
+    const fakeClient = new FakeControlApiClient();
+    const fakeStorage = new FakeObjectStorage();
+    const fakeEnforcer = new FakeStorageAdmissionEnforcer();
+
+    const candidateJob = createSampleJob({ jobKind: "candidate" });
+
+    const worker = new RenderWorker(
+      {
+        controlApiClient: fakeClient,
+        objectStorage: fakeStorage,
+        enforceStorageAdmission: fakeEnforcer,
+        renderJobExecutor: async () => ({
+          candidatePayload: { variantOrdinal: 1 },
+          manifestPayload: { duration: 5 }
+        }),
+        logger: new FakeLogger(),
+        sleep: async () => {}
+      },
+      {
+        workerId: "test-worker",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
+
+    await worker.processJob(candidateJob);
+
+    expect(fakeStorage.puts).toHaveLength(0);
+    expect(fakeEnforcer.calls).toHaveLength(0);
+    expect(fakeClient.completeCalls).toHaveLength(0);
+    expect(fakeClient.failCalls).toHaveLength(1);
+    expect(fakeClient.failCalls[0]?.errorTrace).toContain(
+      "Candidate jobs must not provide manifestPayload"
+    );
+  });
+
+  it("rejects production job missing manifestPayload before any write", async () => {
+    const fakeClient = new FakeControlApiClient();
+    const fakeStorage = new FakeObjectStorage();
+    const fakeEnforcer = new FakeStorageAdmissionEnforcer();
+
+    const productionJob = createSampleJob({ jobKind: "production" });
+
+    const worker = new RenderWorker(
+      {
+        controlApiClient: fakeClient,
+        objectStorage: fakeStorage,
+        enforceStorageAdmission: fakeEnforcer,
+        renderJobExecutor: async () => ({
+          mediaObjects: [{ bucket: "delivery", key: "vid.mp4", body: new Uint8Array([1]) }]
+        }),
+        logger: new FakeLogger(),
+        sleep: async () => {}
+      },
+      {
+        workerId: "test-worker",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
+
+    await worker.processJob(productionJob);
+
+    expect(fakeStorage.puts).toHaveLength(0);
+    expect(fakeEnforcer.calls).toHaveLength(0);
+    expect(fakeClient.completeCalls).toHaveLength(0);
+    expect(fakeClient.failCalls).toHaveLength(1);
+    expect(fakeClient.failCalls[0]?.errorTrace).toContain(
+      "Production jobs require manifestPayload"
+    );
+  });
+
+  it("rejects production job containing candidatePayload before any write", async () => {
+    const fakeClient = new FakeControlApiClient();
+    const fakeStorage = new FakeObjectStorage();
+    const fakeEnforcer = new FakeStorageAdmissionEnforcer();
+
+    const productionJob = createSampleJob({ jobKind: "production" });
+
+    const worker = new RenderWorker(
+      {
+        controlApiClient: fakeClient,
+        objectStorage: fakeStorage,
+        enforceStorageAdmission: fakeEnforcer,
+        renderJobExecutor: async () => ({
+          manifestPayload: { duration: 5 },
+          candidatePayload: { variantOrdinal: 1 }
+        }),
+        logger: new FakeLogger(),
+        sleep: async () => {}
+      },
+      {
+        workerId: "test-worker",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
+
+    await worker.processJob(productionJob);
+
+    expect(fakeStorage.puts).toHaveLength(0);
+    expect(fakeEnforcer.calls).toHaveLength(0);
+    expect(fakeClient.completeCalls).toHaveLength(0);
+    expect(fakeClient.failCalls).toHaveLength(1);
+    expect(fakeClient.failCalls[0]?.errorTrace).toContain(
+      "Production jobs must not provide candidatePayload"
+    );
+  });
+});
+
+describe("RenderWorker claim delegation", () => {
+  it("passes configured allowedJobKinds to claim", async () => {
+    const fakeClient = new FakeControlApiClient();
+    const fakeStorage = new FakeObjectStorage();
+    const fakeEnforcer = new FakeStorageAdmissionEnforcer();
+
+    const worker = new RenderWorker(
+      {
+        controlApiClient: fakeClient,
+        objectStorage: fakeStorage,
+        enforceStorageAdmission: fakeEnforcer,
+        renderJobExecutor: async () => ({ candidatePayload: { variantOrdinal: 1 } }),
+        logger: new FakeLogger(),
+        sleep: async () => {}
+      },
+      {
+        workerId: "worker-kinds",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000,
+        allowedJobKinds: ["candidate"]
+      }
+    );
+
+    const processed = await worker.runOnce();
+    expect(processed).toBe(false);
+    expect(fakeClient.claimCalls).toEqual([
+      { workerId: "worker-kinds", allowedJobKinds: ["candidate"] }
+    ]);
+  });
+
+  it("passes undefined allowedJobKinds to claim when omitted", async () => {
+    const fakeClient = new FakeControlApiClient();
+    const fakeStorage = new FakeObjectStorage();
+    const fakeEnforcer = new FakeStorageAdmissionEnforcer();
+
+    const worker = new RenderWorker(
+      {
+        controlApiClient: fakeClient,
+        objectStorage: fakeStorage,
+        enforceStorageAdmission: fakeEnforcer,
+        renderJobExecutor: async () => ({ candidatePayload: { variantOrdinal: 1 } }),
+        logger: new FakeLogger(),
+        sleep: async () => {}
+      },
+      {
+        workerId: "worker-default",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
+
+    const processed = await worker.runOnce();
+    expect(processed).toBe(false);
+    expect(fakeClient.claimCalls).toEqual([
+      { workerId: "worker-default", allowedJobKinds: undefined }
     ]);
   });
 });
@@ -214,15 +1116,25 @@ describe("RenderWorker write-side admission gating and deferral", () => {
       { bucket: "candidates", key: "img2.png", body: new Uint8Array([3, 4]) }
     ];
 
-    const worker = new RenderWorker({
-      controlApiClient: fakeClient,
-      objectStorage: fakeStorage,
-      enforceStorageAdmission: fakeEnforcer,
-      renderJobExecutor: async () => ({
-        mediaObjects,
-        candidatePayload: { variantOrdinal: 1 }
-      })
-    });
+    const worker = new RenderWorker(
+      {
+        controlApiClient: fakeClient,
+        objectStorage: fakeStorage,
+        enforceStorageAdmission: fakeEnforcer,
+        renderJobExecutor: async () => ({
+          mediaObjects,
+          candidatePayload: { variantOrdinal: 1 }
+        }),
+        logger: new FakeLogger(),
+        sleep: async () => {}
+      },
+      {
+        workerId: "test-worker",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
 
     await worker.processJob(candidateJob);
 
@@ -256,15 +1168,25 @@ describe("RenderWorker write-side admission gating and deferral", () => {
       { bucket: "delivery", key: "poster.png", body: new Uint8Array([30, 40]) }
     ];
 
-    const worker = new RenderWorker({
-      controlApiClient: fakeClient,
-      objectStorage: fakeStorage,
-      enforceStorageAdmission: fakeEnforcer,
-      renderJobExecutor: async () => ({
-        mediaObjects,
-        manifestPayload: { duration: 5.0 }
-      })
-    });
+    const worker = new RenderWorker(
+      {
+        controlApiClient: fakeClient,
+        objectStorage: fakeStorage,
+        enforceStorageAdmission: fakeEnforcer,
+        renderJobExecutor: async () => ({
+          mediaObjects,
+          manifestPayload: { duration: 5.0 }
+        }),
+        logger: new FakeLogger(),
+        sleep: async () => {}
+      },
+      {
+        workerId: "test-worker",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
 
     await worker.processJob(productionJob);
 
@@ -297,14 +1219,29 @@ describe("RenderWorker write-side admission gating and deferral", () => {
 
     const candidateJob = createSampleJob({ jobKind: "candidate" });
 
-    const worker = new RenderWorker({
-      controlApiClient: fakeClient,
-      objectStorage: fakeStorage,
-      enforceStorageAdmission: fakeEnforcer,
-      renderJobExecutor: async () => ({
-        candidatePayload: { variantOrdinal: 0 }
-      })
-    });
+    const worker = new RenderWorker(
+      {
+        controlApiClient: fakeClient,
+        objectStorage: fakeStorage,
+        enforceStorageAdmission: fakeEnforcer,
+        renderJobExecutor: async () => ({
+          candidatePayload: {
+            variantOrdinal: 1,
+            storageBucket: "candidates",
+            storageObjectKey: "preview.png",
+            contentHashSha256: "a".repeat(64)
+          }
+        }),
+        logger: new FakeLogger(),
+        sleep: async () => {}
+      },
+      {
+        workerId: "test-worker",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
 
     await worker.processJob(candidateJob);
 
@@ -312,6 +1249,14 @@ describe("RenderWorker write-side admission gating and deferral", () => {
     expect(fakeClient.completeCalls).toHaveLength(1);
     expect(fakeClient.completeCalls[0]?.jobId).toBe(sampleJobId);
     expect(fakeClient.completeCalls[0]?.leaseToken).toBe(sampleLeaseToken);
+    expect(fakeClient.completeCalls[0]?.payload).toEqual({
+      candidatePayload: {
+        variantOrdinal: 1,
+        storageBucket: "candidates",
+        storageObjectKey: "preview.png",
+        contentHashSha256: "a".repeat(64)
+      }
+    });
   });
 
   it("production completion admission immediately precedes complete", async () => {
@@ -331,14 +1276,24 @@ describe("RenderWorker write-side admission gating and deferral", () => {
 
     const productionJob = createSampleJob({ jobKind: "production" });
 
-    const worker = new RenderWorker({
-      controlApiClient: fakeClient,
-      objectStorage: fakeStorage,
-      enforceStorageAdmission: fakeEnforcer,
-      renderJobExecutor: async () => ({
-        manifestPayload: { sceneId: sampleSceneId }
-      })
-    });
+    const worker = new RenderWorker(
+      {
+        controlApiClient: fakeClient,
+        objectStorage: fakeStorage,
+        enforceStorageAdmission: fakeEnforcer,
+        renderJobExecutor: async () => ({
+          manifestPayload: { sceneId: sampleSceneId }
+        }),
+        logger: new FakeLogger(),
+        sleep: async () => {}
+      },
+      {
+        workerId: "test-worker",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
 
     await worker.processJob(productionJob);
 
@@ -368,15 +1323,25 @@ describe("RenderWorker write-side admission gating and deferral", () => {
       { bucket: "candidates", key: "img.png", body: new Uint8Array([1]) }
     ];
 
-    const worker = new RenderWorker({
-      controlApiClient: fakeClient,
-      objectStorage: fakeStorage,
-      enforceStorageAdmission: fakeEnforcer,
-      renderJobExecutor: async () => ({
-        mediaObjects,
-        candidatePayload: { variantOrdinal: 1 }
-      })
-    });
+    const worker = new RenderWorker(
+      {
+        controlApiClient: fakeClient,
+        objectStorage: fakeStorage,
+        enforceStorageAdmission: fakeEnforcer,
+        renderJobExecutor: async () => ({
+          mediaObjects,
+          candidatePayload: { variantOrdinal: 1 }
+        }),
+        logger: new FakeLogger(),
+        sleep: async () => {}
+      },
+      {
+        workerId: "test-worker",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
 
     await worker.processJob(candidateJob);
 
@@ -411,14 +1376,24 @@ describe("RenderWorker write-side admission gating and deferral", () => {
 
     const candidateJob = createSampleJob({ jobKind: "candidate" });
 
-    const worker = new RenderWorker({
-      controlApiClient: fakeClient,
-      objectStorage: fakeStorage,
-      enforceStorageAdmission: fakeEnforcer,
-      renderJobExecutor: async () => ({
-        candidatePayload: { variantOrdinal: 1 }
-      })
-    });
+    const worker = new RenderWorker(
+      {
+        controlApiClient: fakeClient,
+        objectStorage: fakeStorage,
+        enforceStorageAdmission: fakeEnforcer,
+        renderJobExecutor: async () => ({
+          candidatePayload: { variantOrdinal: 1 }
+        }),
+        logger: new FakeLogger(),
+        sleep: async () => {}
+      },
+      {
+        workerId: "test-worker",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
 
     await worker.processJob(candidateJob);
 
@@ -452,14 +1427,24 @@ describe("RenderWorker write-side admission gating and deferral", () => {
 
     const candidateJob = createSampleJob({ jobKind: "candidate" });
 
-    const worker = new RenderWorker({
-      controlApiClient: fakeClient,
-      objectStorage: fakeStorage,
-      enforceStorageAdmission: fakeEnforcer,
-      renderJobExecutor: async () => ({
-        candidatePayload: { variantOrdinal: 1 }
-      })
-    });
+    const worker = new RenderWorker(
+      {
+        controlApiClient: fakeClient,
+        objectStorage: fakeStorage,
+        enforceStorageAdmission: fakeEnforcer,
+        renderJobExecutor: async () => ({
+          candidatePayload: { variantOrdinal: 1 }
+        }),
+        logger: new FakeLogger(),
+        sleep: async () => {}
+      },
+      {
+        workerId: "test-worker",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
 
     await expect(worker.processJob(candidateJob)).resolves.not.toThrow();
 
@@ -485,14 +1470,24 @@ describe("RenderWorker write-side admission gating and deferral", () => {
       throw admissionError;
     });
 
-    const worker1 = new RenderWorker({
-      controlApiClient: fakeClientSuperseded,
-      objectStorage: fakeStorage1,
-      enforceStorageAdmission: fakeEnforcer1,
-      renderJobExecutor: async () => ({
-        candidatePayload: { variantOrdinal: 1 }
-      })
-    });
+    const worker1 = new RenderWorker(
+      {
+        controlApiClient: fakeClientSuperseded,
+        objectStorage: fakeStorage1,
+        enforceStorageAdmission: fakeEnforcer1,
+        renderJobExecutor: async () => ({
+          candidatePayload: { variantOrdinal: 1 }
+        }),
+        logger: new FakeLogger(),
+        sleep: async () => {}
+      },
+      {
+        workerId: "test-worker",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
 
     await expect(worker1.processJob(createSampleJob())).resolves.not.toThrow();
     expect(fakeClientSuperseded.deferCalls).toHaveLength(1);
@@ -507,14 +1502,24 @@ describe("RenderWorker write-side admission gating and deferral", () => {
       throw admissionError;
     });
 
-    const worker2 = new RenderWorker({
-      controlApiClient: fakeClientNotFound,
-      objectStorage: fakeStorage2,
-      enforceStorageAdmission: fakeEnforcer2,
-      renderJobExecutor: async () => ({
-        candidatePayload: { variantOrdinal: 1 }
-      })
-    });
+    const worker2 = new RenderWorker(
+      {
+        controlApiClient: fakeClientNotFound,
+        objectStorage: fakeStorage2,
+        enforceStorageAdmission: fakeEnforcer2,
+        renderJobExecutor: async () => ({
+          candidatePayload: { variantOrdinal: 1 }
+        }),
+        logger: new FakeLogger(),
+        sleep: async () => {}
+      },
+      {
+        workerId: "test-worker",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
 
     await expect(worker2.processJob(createSampleJob())).resolves.not.toThrow();
     expect(fakeClientNotFound.deferCalls).toHaveLength(1);
@@ -532,9 +1537,16 @@ describe("RenderWorker write-side admission gating and deferral", () => {
 
     const networkError = new ControlApiClientError("Connection refused to Control API", 500);
 
+    const candidateJob = createSampleJob({ jobKind: "candidate" });
+    let deferAttempts = 0;
+
     const fakeClient = new FakeControlApiClient({
       onDefer: () => {
-        throw networkError;
+        deferAttempts++;
+        if (deferAttempts === 1) {
+          throw networkError;
+        }
+        return { outcome: "deferred", job: candidateJob };
       }
     });
     const fakeStorage = new FakeObjectStorage();
@@ -542,21 +1554,28 @@ describe("RenderWorker write-side admission gating and deferral", () => {
       throw admissionError;
     });
 
-    const candidateJob = createSampleJob({ jobKind: "candidate" });
+    const worker = new RenderWorker(
+      {
+        controlApiClient: fakeClient,
+        objectStorage: fakeStorage,
+        enforceStorageAdmission: fakeEnforcer,
+        renderJobExecutor: async () => ({
+          candidatePayload: { variantOrdinal: 1 }
+        }),
+        logger: new FakeLogger(),
+        sleep: async () => {}
+      },
+      {
+        workerId: "test-worker",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
 
-    const worker = new RenderWorker({
-      controlApiClient: fakeClient,
-      objectStorage: fakeStorage,
-      enforceStorageAdmission: fakeEnforcer,
-      renderJobExecutor: async () => ({
-        candidatePayload: { variantOrdinal: 1 }
-      })
-    });
+    await expect(worker.processJob(candidateJob)).resolves.not.toThrow();
 
-    await expect(worker.processJob(candidateJob)).rejects.toThrow(networkError);
-
-    expect(fakeClient.deferCalls).toHaveLength(1);
-    // Crucial: fail is NEVER called when defer fails with transport error
+    expect(fakeClient.deferCalls).toHaveLength(2);
     expect(fakeClient.failCalls).toHaveLength(0);
   });
 
@@ -586,15 +1605,25 @@ describe("RenderWorker write-side admission gating and deferral", () => {
       { bucket: "candidates", key: "object-2.png", body: new Uint8Array([3, 4]) }
     ];
 
-    const worker = new RenderWorker({
-      controlApiClient: fakeClient,
-      objectStorage: fakeStorage,
-      enforceStorageAdmission: fakeEnforcer,
-      renderJobExecutor: async () => ({
-        mediaObjects,
-        candidatePayload: { variantOrdinal: 1 }
-      })
-    });
+    const worker = new RenderWorker(
+      {
+        controlApiClient: fakeClient,
+        objectStorage: fakeStorage,
+        enforceStorageAdmission: fakeEnforcer,
+        renderJobExecutor: async () => ({
+          mediaObjects,
+          candidatePayload: { variantOrdinal: 1 }
+        }),
+        logger: new FakeLogger(),
+        sleep: async () => {}
+      },
+      {
+        workerId: "test-worker",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
 
     await worker.processJob(candidateJob);
 
@@ -626,14 +1655,24 @@ describe("RenderWorker write-side admission gating and deferral", () => {
     const candidateJob = createSampleJob({ jobKind: "candidate" });
     const renderError = new Error("CUDA device out of memory");
 
-    const worker = new RenderWorker({
-      controlApiClient: fakeClient,
-      objectStorage: fakeStorage,
-      enforceStorageAdmission: fakeEnforcer,
-      renderJobExecutor: async () => {
-        throw renderError;
+    const worker = new RenderWorker(
+      {
+        controlApiClient: fakeClient,
+        objectStorage: fakeStorage,
+        enforceStorageAdmission: fakeEnforcer,
+        renderJobExecutor: async () => {
+          throw renderError;
+        },
+        logger: new FakeLogger(),
+        sleep: async () => {}
+      },
+      {
+        workerId: "test-worker",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
       }
-    });
+    );
 
     await worker.processJob(candidateJob);
 
@@ -645,5 +1684,1041 @@ describe("RenderWorker write-side admission gating and deferral", () => {
     expect(fakeClient.deferCalls).toHaveLength(0);
     expect(fakeStorage.puts).toHaveLength(0);
     expect(fakeClient.completeCalls).toHaveLength(0);
+  });
+
+  it("fails the job with a typed missing-profile error when no certified profile exists", async () => {
+    const scheduler = new FakeScheduler();
+    const fakeClient = new FakeControlApiClient();
+    const fakeStorage = new FakeObjectStorage();
+    const fakeEnforcer = new FakeStorageAdmissionEnforcer();
+
+    const candidateJob = createSampleJob({
+      jobKind: "candidate",
+      workflowTemplate: "flux-schnell-draft"
+    });
+    const upstreamProfileError = new Error(
+      'Profile "flux-schnell-draft" not found in manifest "/tmp/provenance.json". Available profiles: "ltx-2.5-delivery".'
+    );
+    const missingProfileError = new MissingCertifiedProfileError(candidateJob.workflowTemplate, {
+      cause: upstreamProfileError
+    });
+
+    const { worker } = createTestWorker(
+      {
+        controlApiClient: fakeClient,
+        objectStorage: fakeStorage,
+        enforceStorageAdmission: fakeEnforcer,
+        renderJobExecutor: async () => {
+          throw missingProfileError;
+        },
+        sleep: scheduler.sleep
+      },
+      {
+        workerId: "test-worker",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
+
+    // 1. Drive the start() loop: claim returns the job, then no more work
+    let claimCalls = 0;
+    (fakeClient as unknown as { claim: () => Promise<RenderJob | undefined> }).claim = async () => {
+      claimCalls += 1;
+      if (claimCalls === 1) {
+        return candidateJob;
+      }
+      return undefined;
+    };
+
+    const abortController = new AbortController();
+    const startPromise = worker.start(abortController.signal);
+    await flushPromises();
+
+    // Step 1: claim returned the job → processJob invoked → renderJobExecutor threw
+    // MissingCertifiedProfileError → worker routes to /fail
+    expect(fakeClient.failCalls).toHaveLength(1);
+    expect(fakeClient.failCalls[0]?.jobId).toBe(sampleJobId);
+    expect(fakeClient.failCalls[0]?.leaseToken).toBe(sampleLeaseToken);
+    expect(fakeClient.failCalls[0]?.errorTrace).toContain(
+      `no certified profile for workflow_template "${candidateJob.workflowTemplate}"`
+    );
+
+    // /fail should NOT be classified as an admission refusal — it must use /fail, not /defer
+    expect(fakeClient.deferCalls).toHaveLength(0);
+    // No candidate bytes or manifest written when the profile never loaded
+    expect(fakeStorage.puts).toHaveLength(0);
+    // No completion attempted
+    expect(fakeClient.completeCalls).toHaveLength(0);
+
+    // Step 2: After /fail resolves, the loop should re-poll. We assert re-poll by
+    // advancing the scheduler through pollIntervalMs and seeing another claim attempt.
+    await scheduler.advanceNext();
+    await flushPromises();
+    expect(claimCalls).toBeGreaterThanOrEqual(2);
+
+    // Clean shutdown
+    abortController.abort();
+    await scheduler.advanceNext();
+    await startPromise;
+  });
+});
+
+describe("Behavioral Invariants: Mutation Retry, Polling Backoff, and Graceful Shutdown", () => {
+  it("backs off idle telemetry and generic claim outcomes without spinning", async () => {
+    const scheduler = new FakeScheduler();
+    const logger = new FakeLogger();
+    let claimStep = 0;
+
+    const fakeClient = new FakeControlApiClient({
+      onClaim: () => {
+        claimStep++;
+        if (claimStep === 1) {
+          // 1. 204 No Content
+          return undefined;
+        }
+        if (claimStep === 2) {
+          // 2. 503 Telemetry Unavailable
+          throw new ControlApiClientError("Telemetry service down", 503);
+        }
+        if (claimStep === 3) {
+          // 3. Generic 500 / network failure
+          throw new ControlApiClientError("Internal Server Error", 500);
+        }
+        return undefined;
+      }
+    });
+
+    const { worker } = createTestWorker(
+      {
+        controlApiClient: fakeClient,
+        sleep: scheduler.sleep,
+        logger
+      },
+      {
+        pollIntervalMs: 1000,
+        telemetryBackoffMs: 8000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
+
+    const abortController = new AbortController();
+    const startPromise = worker.start(abortController.signal);
+
+    await flushPromises();
+
+    // Step 1: Claim 1 returned undefined (204) -> sleep(pollIntervalMs = 1000)
+    expect(scheduler.pendingCount).toBe(1);
+    expect(scheduler.sleepCalls).toEqual([1000]);
+
+    // Advance tick 1
+    await scheduler.advanceNext();
+    await flushPromises();
+
+    // Step 2: Claim 2 threw 503 -> logged warning -> sleep(telemetryBackoffMs = 8000)
+    expect(scheduler.pendingCount).toBe(1);
+    expect(scheduler.sleepCalls).toEqual([1000, 8000]);
+    expect(
+      logger.warnLogs.some((log) => log.includes("503") || log.toLowerCase().includes("telemetry"))
+    ).toBe(true);
+
+    // Advance tick 2
+    await scheduler.advanceNext();
+    await flushPromises();
+
+    // Step 3: Claim 3 threw 500 -> logged warning -> sleep(pollIntervalMs = 1000)
+    expect(scheduler.pendingCount).toBe(1);
+    expect(scheduler.sleepCalls).toEqual([1000, 8000, 1000]);
+
+    // Stop worker
+    abortController.abort();
+    await scheduler.advanceNext();
+    await startPromise;
+  });
+
+  it("retries start uncertainty with the same lease before render", async () => {
+    const scheduler = new FakeScheduler();
+    const logger = new FakeLogger();
+    const sampleJob = createSampleJob();
+    let startAttempts = 0;
+    const renderExecutorSpy = vi.fn().mockResolvedValue({
+      candidatePayload: { variantOrdinal: 1 }
+    });
+
+    const fakeClient = new FakeControlApiClient({
+      onStart: () => {
+        startAttempts++;
+        if (startAttempts === 1) {
+          throw new ControlApiClientError("504 Gateway Timeout on start", 504);
+        }
+        return { outcome: "applied", job: sampleJob };
+      }
+    });
+
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      sleep: scheduler.sleep,
+      logger,
+      renderJobExecutor: renderExecutorSpy
+    });
+
+    const processPromise = worker.processJob(sampleJob);
+    await flushPromises();
+
+    // Start 1 threw 504 -> retries with sleep(pollIntervalMs)
+    expect(fakeClient.startCalls).toHaveLength(1);
+    expect(renderExecutorSpy).not.toHaveBeenCalled();
+    expect(scheduler.pendingCount).toBe(1);
+
+    // Advance retry sleep
+    await scheduler.advanceNext();
+    await flushPromises();
+
+    // Start 2 succeeded -> render executor called
+    expect(fakeClient.startCalls).toHaveLength(2);
+    expect(fakeClient.startCalls[0]).toEqual({
+      jobId: sampleJob.jobId,
+      leaseToken: sampleJob.leaseToken
+    });
+    expect(fakeClient.startCalls[1]).toEqual({
+      jobId: sampleJob.jobId,
+      leaseToken: sampleJob.leaseToken
+    });
+    expect(renderExecutorSpy).toHaveBeenCalledTimes(1);
+
+    // Advance heartbeat sleep if pending to let processJob settle
+    while (scheduler.pendingCount > 0) {
+      await scheduler.advanceNext();
+    }
+
+    await processPromise;
+    expect(fakeClient.completeCalls).toHaveLength(1);
+    expect(fakeClient.failCalls).toHaveLength(0);
+  });
+
+  it("retries uncertain completion with the identical payload and never fails it", async () => {
+    const scheduler = new FakeScheduler();
+    const logger = new FakeLogger();
+    const sampleJob = createSampleJob();
+    let completeAttempts = 0;
+
+    const fakeClient = new FakeControlApiClient({
+      onComplete: () => {
+        completeAttempts++;
+        if (completeAttempts < 3) {
+          throw new ControlApiClientError("502 Bad Gateway during completion", 502);
+        }
+        return { outcome: "already_applied", job: sampleJob };
+      }
+    });
+
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      sleep: scheduler.sleep,
+      logger,
+      renderJobExecutor: async () => ({
+        candidatePayload: {
+          variantOrdinal: 1,
+          storageBucket: "candidates",
+          storageObjectKey: "test.png",
+          contentHashSha256: "a".repeat(64)
+        }
+      })
+    });
+
+    const processPromise = worker.processJob(sampleJob);
+    await flushPromises();
+
+    // Complete attempt 1 threw 502 -> pending sleeps (heartbeat 10000ms + complete retry 1000ms)
+    expect(fakeClient.completeCalls).toHaveLength(1);
+    expect(fakeClient.failCalls).toHaveLength(0);
+    expect(scheduler.pendingCount).toBeGreaterThanOrEqual(1);
+
+    // Advance to trigger retry 1
+    while (fakeClient.completeCalls.length === 1 && scheduler.pendingCount > 0) {
+      await scheduler.advanceNext();
+      await flushPromises();
+    }
+
+    // Complete attempt 2 threw 502
+    expect(fakeClient.completeCalls).toHaveLength(2);
+    expect(fakeClient.failCalls).toHaveLength(0);
+
+    // Advance to trigger retry 2
+    while (fakeClient.completeCalls.length === 2 && scheduler.pendingCount > 0) {
+      await scheduler.advanceNext();
+      await flushPromises();
+    }
+
+    // Complete attempt 3 succeeded
+    expect(fakeClient.completeCalls).toHaveLength(3);
+    expect(fakeClient.failCalls).toHaveLength(0);
+
+    // All complete calls had identical token and payload
+    const expectedPayload = {
+      candidatePayload: {
+        variantOrdinal: 1,
+        storageBucket: "candidates",
+        storageObjectKey: "test.png",
+        contentHashSha256: "a".repeat(64)
+      }
+    };
+    expect(fakeClient.completeCalls[0]).toEqual({
+      jobId: sampleJob.jobId,
+      leaseToken: sampleJob.leaseToken,
+      payload: expectedPayload
+    });
+    expect(fakeClient.completeCalls[1]).toEqual({
+      jobId: sampleJob.jobId,
+      leaseToken: sampleJob.leaseToken,
+      payload: expectedPayload
+    });
+    expect(fakeClient.completeCalls[2]).toEqual({
+      jobId: sampleJob.jobId,
+      leaseToken: sampleJob.leaseToken,
+      payload: expectedPayload
+    });
+
+    await processPromise;
+  });
+
+  it("fails a deterministic completion validation error", async () => {
+    const sampleJob = createSampleJob();
+    const validationError = new ControlApiClientError(
+      "Control API returned HTTP 400: invalid candidatePayload",
+      400,
+      { responseDetail: "candidatePayload.variantOrdinal must be >= 0" }
+    );
+
+    const fakeClient = new FakeControlApiClient({
+      onComplete: () => {
+        throw validationError;
+      }
+    });
+
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      renderJobExecutor: async () => ({
+        candidatePayload: {
+          variantOrdinal: 1,
+          storageBucket: "candidates",
+          storageObjectKey: "test.png",
+          contentHashSha256: "a".repeat(64)
+        }
+      })
+    });
+
+    await worker.processJob(sampleJob);
+
+    expect(fakeClient.completeCalls).toHaveLength(1);
+    expect(fakeClient.deferCalls).toHaveLength(0);
+    expect(fakeClient.failCalls).toHaveLength(1);
+    expect(fakeClient.failCalls[0]?.jobId).toBe(sampleJob.jobId);
+    expect(fakeClient.failCalls[0]?.leaseToken).toBe(sampleJob.leaseToken);
+    expect(fakeClient.failCalls[0]?.errorTrace).toContain(
+      "candidatePayload.variantOrdinal must be >= 0"
+    );
+  });
+
+  it("defers typed admission refusal and applies admission backoff", async () => {
+    const scheduler = new FakeScheduler();
+    const sampleJob = createSampleJob();
+    let claimCount = 0;
+
+    const admissionError = new StorageAdmissionError({
+      operationClass: "candidate_upload",
+      watermarkState: "critical",
+      usedRatio: 0.95,
+      totalBytes: 1_000_000_000,
+      freeBytes: 50_000_000
+    });
+
+    const fakeClient = new FakeControlApiClient({
+      onClaim: () => {
+        claimCount++;
+        if (claimCount === 1) {
+          return sampleJob;
+        }
+        return undefined;
+      }
+    });
+
+    const fakeEnforcer = new FakeStorageAdmissionEnforcer(() => {
+      throw admissionError;
+    });
+
+    const { worker } = createTestWorker(
+      {
+        controlApiClient: fakeClient,
+        enforceStorageAdmission: fakeEnforcer,
+        sleep: scheduler.sleep
+      },
+      {
+        pollIntervalMs: 1000,
+        admissionBackoffMs: 12000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
+
+    const abortController = new AbortController();
+    const startPromise = worker.start(abortController.signal);
+
+    await flushPromises();
+
+    // Job was claimed, admission refused -> defer was called
+    expect(fakeClient.claimCalls).toHaveLength(1);
+    expect(fakeClient.deferCalls).toHaveLength(1);
+    expect(fakeClient.deferCalls[0]?.jobId).toBe(sampleJob.jobId);
+    expect(fakeClient.deferCalls[0]?.leaseToken).toBe(sampleJob.leaseToken);
+    expect(fakeClient.deferCalls[0]?.reason).toBe(admissionError.message);
+    expect(fakeClient.failCalls).toHaveLength(0);
+
+    // Defer completed -> worker should sleep admissionBackoffMs (12000ms) before next claim
+    expect(scheduler.sleepCalls).toContain(12000);
+
+    // Advance pending sleeps (heartbeat sleep and admission backoff sleep)
+    while (fakeClient.claimCalls.length === 1 && scheduler.pendingCount > 0) {
+      await scheduler.advanceNext();
+      await flushPromises();
+    }
+
+    // Next claim was performed after admissionBackoffMs
+    expect(fakeClient.claimCalls).toHaveLength(2);
+
+    // Stop worker
+    abortController.abort();
+    await scheduler.advanceNext();
+    await startPromise;
+  });
+
+  it("retries uncertain fail and defer mutations until a conclusive outcome", async () => {
+    // Part A: Fail mutation uncertainty retry
+    const schedulerA = new FakeScheduler();
+    const loggerA = new FakeLogger();
+    const sampleJobA = createSampleJob();
+    let failAttempts = 0;
+    const fakeClientA = new FakeControlApiClient({
+      onFail: () => {
+        failAttempts++;
+        if (failAttempts === 1) {
+          throw new ControlApiClientError("503 Service Unavailable on fail", 503);
+        }
+        return { outcome: "applied", job: sampleJobA };
+      }
+    });
+
+    const { worker: workerA } = createTestWorker({
+      controlApiClient: fakeClientA,
+      sleep: schedulerA.sleep,
+      logger: loggerA,
+      renderJobExecutor: async () => {
+        throw new Error("Render pipeline crashed");
+      }
+    });
+
+    const processA = workerA.processJob(sampleJobA);
+    await flushPromises();
+
+    expect(fakeClientA.failCalls).toHaveLength(1);
+
+    while (fakeClientA.failCalls.length === 1 && schedulerA.pendingCount > 0) {
+      await schedulerA.advanceNext();
+      await flushPromises();
+    }
+
+    expect(fakeClientA.failCalls).toHaveLength(2);
+    expect(fakeClientA.failCalls[0]).toEqual(fakeClientA.failCalls[1]);
+    await processA;
+
+    // Part B: Defer mutation uncertainty retry
+    const schedulerB = new FakeScheduler();
+    const loggerB = new FakeLogger();
+    const sampleJobB = createSampleJob();
+    let deferAttempts = 0;
+    const fakeClientB = new FakeControlApiClient({
+      onDefer: () => {
+        deferAttempts++;
+        if (deferAttempts === 1) {
+          throw new ControlApiClientError("500 Internal Server Error on defer", 500);
+        }
+        return { outcome: "deferred", job: sampleJobB };
+      }
+    });
+
+    const admissionError = new StorageAdmissionError({
+      operationClass: "candidate_upload",
+      watermarkState: "degraded",
+      usedRatio: 0.86,
+      totalBytes: 1_000_000_000,
+      freeBytes: 140_000_000
+    });
+
+    const { worker: workerB } = createTestWorker({
+      controlApiClient: fakeClientB,
+      enforceStorageAdmission: new FakeStorageAdmissionEnforcer(() => {
+        throw admissionError;
+      }),
+      sleep: schedulerB.sleep,
+      logger: loggerB
+    });
+
+    const processB = workerB.processJob(sampleJobB);
+    await flushPromises();
+
+    expect(fakeClientB.deferCalls).toHaveLength(1);
+
+    while (fakeClientB.deferCalls.length === 1 && schedulerB.pendingCount > 0) {
+      await schedulerB.advanceNext();
+      await flushPromises();
+    }
+
+    expect(fakeClientB.deferCalls).toHaveLength(2);
+    expect(fakeClientB.deferCalls[0]).toEqual(fakeClientB.deferCalls[1]);
+    await processB;
+  });
+
+  it("shutdown wakes idle backoff and prevents another claim", async () => {
+    const scheduler = new FakeScheduler();
+    const fakeClient = new FakeControlApiClient({
+      claimResult: undefined // 204
+    });
+
+    const { worker } = createTestWorker(
+      {
+        controlApiClient: fakeClient,
+        sleep: scheduler.sleep
+      },
+      {
+        pollIntervalMs: 5000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
+
+    const abortController = new AbortController();
+    const startPromise = worker.start(abortController.signal);
+
+    await flushPromises();
+
+    // Claim was issued once and returned undefined -> worker is sleeping 5000ms
+    expect(fakeClient.claimCalls).toHaveLength(1);
+    expect(scheduler.pendingCount).toBe(1);
+    expect(scheduler.sleepCalls).toEqual([5000]);
+
+    // Signal abort while sleeping in idle backoff
+    abortController.abort();
+    await flushPromises();
+
+    // The start promise should resolve immediately without advancing fake scheduler or calling claim again
+    await startPromise;
+
+    expect(fakeClient.claimCalls).toHaveLength(1);
+  });
+
+  it("shutdown drains the active attempt and its final mutation", async () => {
+    const renderDeferred = createDeferred<WorkerRenderOutput>();
+    const scheduler = new FakeScheduler();
+    const fakeStorage = new FakeObjectStorage();
+    const sampleJob = createSampleJob();
+    let claimCount = 0;
+
+    const fakeClient = new FakeControlApiClient({
+      onClaim: () => {
+        claimCount++;
+        if (claimCount === 1) {
+          return sampleJob;
+        }
+        return undefined;
+      }
+    });
+
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      objectStorage: fakeStorage,
+      sleep: scheduler.sleep,
+      renderJobExecutor: async () => renderDeferred.promise
+    });
+
+    const abortController = new AbortController();
+    const startPromise = worker.start(abortController.signal);
+
+    await flushPromises();
+
+    expect(fakeClient.claimCalls).toHaveLength(1);
+    expect(fakeClient.startCalls).toHaveLength(1);
+
+    // Trigger heartbeat while render is in flight
+    expect(scheduler.pendingCount).toBe(1);
+    await scheduler.advanceNext();
+    expect(fakeClient.heartbeatCalls).toHaveLength(1);
+
+    // Request shutdown (SIGINT/SIGTERM) while render attempt is active
+    abortController.abort();
+
+    // Active attempt must NOT be abandoned: resolve render output with media object
+    renderDeferred.resolve({
+      mediaObjects: [{ bucket: "candidates", key: "final.png", body: new Uint8Array([1, 2, 3]) }],
+      candidatePayload: {
+        variantOrdinal: 1,
+        storageBucket: "candidates",
+        storageObjectKey: "final.png",
+        contentHashSha256: "d".repeat(64)
+      }
+    });
+
+    await startPromise;
+
+    // Verify storage write and completion happened cleanly
+    expect(fakeStorage.puts).toHaveLength(1);
+    expect(fakeClient.completeCalls).toHaveLength(1);
+    expect(fakeClient.completeCalls[0]?.jobId).toBe(sampleJob.jobId);
+    expect(fakeClient.failCalls).toHaveLength(0);
+
+    // Verify no subsequent claim was made
+    expect(fakeClient.claimCalls).toHaveLength(1);
+  });
+
+  it("aborts start mutation immediately on non-transient HTTP errors (400, 401, 403)", async () => {
+    const fakeClient = new FakeControlApiClient({
+      onStart: () => {
+        throw new ControlApiClientError("Unauthorized", 401);
+      }
+    });
+    const scheduler = new FakeScheduler();
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      sleep: scheduler.sleep
+    });
+
+    const sampleJob = createSampleJob();
+    await expect(worker.processJob(sampleJob)).rejects.toThrow("Unauthorized");
+    expect(fakeClient.startCalls).toHaveLength(1);
+    expect(scheduler.sleepCalls).toHaveLength(0);
+  });
+
+  it("aborts complete mutation immediately on non-transient HTTP errors (401, 403)", async () => {
+    const fakeClient = new FakeControlApiClient({
+      onComplete: () => {
+        throw new ControlApiClientError("Forbidden", 403);
+      }
+    });
+    const scheduler = new FakeScheduler();
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      sleep: scheduler.sleep
+    });
+
+    const sampleJob = createSampleJob();
+    await worker.processJob(sampleJob);
+    expect(fakeClient.completeCalls).toHaveLength(1);
+    expect(fakeClient.failCalls).toHaveLength(1);
+  });
+
+  it("aborts fail and defer mutations immediately on non-transient HTTP errors (400, 401, 403)", async () => {
+    // 1. Fail non-transient error
+    const fakeClientFail = new FakeControlApiClient({
+      onFail: () => {
+        throw new ControlApiClientError("Bad Request", 400);
+      }
+    });
+    const scheduler1 = new FakeScheduler();
+    const { worker: worker1 } = createTestWorker({
+      controlApiClient: fakeClientFail,
+      sleep: scheduler1.sleep,
+      renderJobExecutor: async () => {
+        throw new Error("Render error");
+      }
+    });
+
+    await expect(worker1.processJob(createSampleJob())).rejects.toThrow("Bad Request");
+    expect(fakeClientFail.failCalls).toHaveLength(1);
+    expect(scheduler1.sleepCalls.filter((ms) => ms === 1000)).toHaveLength(0);
+
+    // 2. Defer non-transient error
+    const admissionError = new StorageAdmissionError({
+      operationClass: "candidate_upload",
+      watermarkState: "degraded",
+      usedRatio: 0.86,
+      totalBytes: 1_000_000_000,
+      freeBytes: 140_000_000
+    });
+    const fakeClientDefer = new FakeControlApiClient({
+      onDefer: () => {
+        throw new ControlApiClientError("Unauthorized", 401);
+      }
+    });
+    const scheduler2 = new FakeScheduler();
+    const { worker: worker2 } = createTestWorker({
+      controlApiClient: fakeClientDefer,
+      enforceStorageAdmission: new FakeStorageAdmissionEnforcer(() => {
+        throw admissionError;
+      }),
+      sleep: scheduler2.sleep
+    });
+
+    await expect(worker2.processJob(createSampleJob())).rejects.toThrow("Unauthorized");
+    expect(fakeClientDefer.deferCalls).toHaveLength(1);
+    expect(scheduler2.sleepCalls.filter((ms) => ms === 1000)).toHaveLength(0);
+  });
+
+  it("retries fail and defer on 200 JSON parse errors without swallowing the failure", async () => {
+    // 1. Fail retry on 200 JSON parse error
+    let failAttempts = 0;
+    const fakeClientFail = new FakeControlApiClient({
+      onFail: () => {
+        failAttempts++;
+        if (failAttempts === 1) {
+          throw new ControlApiClientError("Failed to parse response JSON from Control API", 200);
+        }
+        return { outcome: "applied", job: {} as RenderJob };
+      }
+    });
+    const scheduler1 = new FakeScheduler();
+    const { worker: worker1 } = createTestWorker({
+      controlApiClient: fakeClientFail,
+      sleep: scheduler1.sleep,
+      renderJobExecutor: async () => {
+        throw new Error("Render error");
+      }
+    });
+
+    const jobPromise1 = worker1.processJob(createSampleJob());
+    await flushPromises();
+
+    expect(fakeClientFail.failCalls).toHaveLength(1);
+    expect(scheduler1.pendingCount).toBe(1);
+
+    await scheduler1.advanceNext();
+    await flushPromises();
+
+    expect(fakeClientFail.failCalls).toHaveLength(2);
+    await jobPromise1;
+
+    // 2. Defer retry on 200 JSON parse error
+    let deferAttempts = 0;
+    const fakeClientDefer = new FakeControlApiClient({
+      onDefer: () => {
+        deferAttempts++;
+        if (deferAttempts === 1) {
+          throw new ControlApiClientError("Failed to parse response JSON from Control API", 200);
+        }
+        return { outcome: "deferred", job: {} as RenderJob };
+      }
+    });
+    const scheduler2 = new FakeScheduler();
+    const admissionError = new StorageAdmissionError({
+      operationClass: "candidate_upload",
+      watermarkState: "degraded",
+      usedRatio: 0.86,
+      totalBytes: 1_000_000_000,
+      freeBytes: 140_000_000
+    });
+    const { worker: worker2 } = createTestWorker({
+      controlApiClient: fakeClientDefer,
+      enforceStorageAdmission: new FakeStorageAdmissionEnforcer(() => {
+        throw admissionError;
+      }),
+      sleep: scheduler2.sleep
+    });
+
+    const jobPromise2 = worker2.processJob(createSampleJob());
+    await flushPromises();
+
+    expect(fakeClientDefer.deferCalls).toHaveLength(1);
+    expect(scheduler2.pendingCount).toBe(1);
+
+    await scheduler2.advanceNext();
+    await flushPromises();
+
+    expect(fakeClientDefer.deferCalls).toHaveLength(2);
+    await jobPromise2;
+  });
+
+  it("aborts mutation retries promptly during graceful shutdown if API is unreachable", async () => {
+    const fakeClient = new FakeControlApiClient({
+      onStart: () => {
+        throw new ControlApiClientError("Connection refused", 500);
+      }
+    });
+    const scheduler = new FakeScheduler();
+    const sampleJob = createSampleJob();
+
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      sleep: scheduler.sleep
+    });
+
+    const abortController = new AbortController();
+    const processPromise = worker.processJob(sampleJob, abortController.signal);
+    await flushPromises();
+
+    expect(fakeClient.startCalls).toHaveLength(1);
+    expect(scheduler.pendingCount).toBe(1);
+
+    // Request shutdown while waiting to retry start
+    abortController.abort();
+    await flushPromises();
+
+    // The promise should reject/settle promptly due to shutdown abortion
+    await expect(processPromise).rejects.toThrow("worker shutdown");
+  });
+
+  it("heartbeat loop continues during graceful shutdown while render remains active", async () => {
+    const renderDeferred = createDeferred<WorkerRenderOutput>();
+    const scheduler = new FakeScheduler();
+    const fakeClient = new FakeControlApiClient();
+    const sampleJob = createSampleJob();
+
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      sleep: scheduler.sleep,
+      renderJobExecutor: async () => renderDeferred.promise
+    });
+
+    const abortController = new AbortController();
+    const processPromise = worker.processJob(sampleJob, abortController.signal);
+    await flushPromises();
+
+    expect(fakeClient.startCalls).toHaveLength(1);
+    expect(scheduler.pendingCount).toBe(1);
+
+    // Heartbeat 1 before shutdown
+    await scheduler.advanceNext();
+    expect(fakeClient.heartbeatCalls).toHaveLength(1);
+
+    // Request shutdown while render is still in progress
+    abortController.abort();
+    await flushPromises();
+
+    // Heartbeat loop must still be sleeping for next interval (10000ms), not terminated
+    expect(scheduler.pendingCount).toBe(1);
+
+    // Heartbeat 2 occurs during shutdown
+    await scheduler.advanceNext();
+    expect(fakeClient.heartbeatCalls).toHaveLength(2);
+
+    // Heartbeat 3 occurs during shutdown
+    expect(scheduler.pendingCount).toBe(1);
+    await scheduler.advanceNext();
+    expect(fakeClient.heartbeatCalls).toHaveLength(3);
+
+    // Render settles
+    renderDeferred.resolve({
+      candidatePayload: {
+        variantOrdinal: 1,
+        storageBucket: "candidates",
+        storageObjectKey: "final.png",
+        contentHashSha256: "e".repeat(64)
+      }
+    });
+
+    await processPromise;
+
+    expect(fakeClient.completeCalls).toHaveLength(1);
+  });
+
+  it("settlement complete retries persist through shutdown on transient errors", async () => {
+    const scheduler = new FakeScheduler();
+    const sampleJob = createSampleJob();
+    let completeAttempts = 0;
+
+    const fakeClient = new FakeControlApiClient({
+      onComplete: () => {
+        completeAttempts++;
+        if (completeAttempts < 3) {
+          throw new ControlApiClientError("503 Service Unavailable during complete", 503);
+        }
+        return { outcome: "applied", job: sampleJob };
+      }
+    });
+
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      sleep: scheduler.sleep,
+      renderJobExecutor: async () => ({
+        candidatePayload: {
+          variantOrdinal: 1,
+          storageBucket: "candidates",
+          storageObjectKey: "output.png",
+          contentHashSha256: "f".repeat(64)
+        }
+      })
+    });
+
+    const abortController = new AbortController();
+    fakeClient.claim = vi.fn().mockResolvedValue(sampleJob);
+    const startPromise = worker.start(abortController.signal);
+
+    await flushPromises();
+    expect(fakeClient.completeCalls).toHaveLength(1);
+
+    // Shutdown requested while complete is retrying
+    abortController.abort();
+    await flushPromises();
+
+    // Complete retry 1 should be scheduled with normal pollIntervalMs
+    expect(scheduler.pendingCount).toBeGreaterThanOrEqual(1);
+    while (fakeClient.completeCalls.length === 1 && scheduler.pendingCount > 0) {
+      await scheduler.advanceNext();
+      await flushPromises();
+    }
+    expect(fakeClient.completeCalls).toHaveLength(2);
+
+    // Complete retry 2
+    while (fakeClient.completeCalls.length === 2 && scheduler.pendingCount > 0) {
+      await scheduler.advanceNext();
+      await flushPromises();
+    }
+    expect(fakeClient.completeCalls).toHaveLength(3);
+
+    // Worker start resolves cleanly
+    await startPromise;
+    expect(fakeClient.completeCalls).toHaveLength(3);
+    expect(fakeClient.failCalls).toHaveLength(0);
+  });
+
+  it("settlement fail retries persist through shutdown on transient errors", async () => {
+    const scheduler = new FakeScheduler();
+    const sampleJob = createSampleJob();
+    let failAttempts = 0;
+
+    const fakeClient = new FakeControlApiClient({
+      onFail: () => {
+        failAttempts++;
+        if (failAttempts < 3) {
+          throw new ControlApiClientError("500 Internal Server Error during fail", 500);
+        }
+        return { outcome: "applied", job: sampleJob };
+      }
+    });
+
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      sleep: scheduler.sleep,
+      renderJobExecutor: async () => {
+        throw new Error("Render pipeline fatal crash");
+      }
+    });
+
+    const abortController = new AbortController();
+    fakeClient.claim = vi.fn().mockResolvedValue(sampleJob);
+    const startPromise = worker.start(abortController.signal);
+
+    await flushPromises();
+    expect(fakeClient.failCalls).toHaveLength(1);
+
+    // Shutdown requested during fail retry
+    abortController.abort();
+    await flushPromises();
+
+    while (fakeClient.failCalls.length === 1 && scheduler.pendingCount > 0) {
+      await scheduler.advanceNext();
+      await flushPromises();
+    }
+    expect(fakeClient.failCalls).toHaveLength(2);
+
+    while (fakeClient.failCalls.length === 2 && scheduler.pendingCount > 0) {
+      await scheduler.advanceNext();
+      await flushPromises();
+    }
+    expect(fakeClient.failCalls).toHaveLength(3);
+
+    await startPromise;
+    expect(fakeClient.failCalls).toHaveLength(3);
+  });
+
+  it("settlement defer retries persist through shutdown on transient errors", async () => {
+    const scheduler = new FakeScheduler();
+    const sampleJob = createSampleJob();
+    let deferAttempts = 0;
+
+    const admissionError = new StorageAdmissionError({
+      operationClass: "candidate_upload",
+      watermarkState: "degraded",
+      usedRatio: 0.86,
+      totalBytes: 1_000_000_000,
+      freeBytes: 140_000_000
+    });
+
+    const fakeClient = new FakeControlApiClient({
+      onDefer: () => {
+        deferAttempts++;
+        if (deferAttempts < 3) {
+          throw new ControlApiClientError("502 Bad Gateway during defer", 502);
+        }
+        return { outcome: "deferred", job: sampleJob };
+      }
+    });
+
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      enforceStorageAdmission: new FakeStorageAdmissionEnforcer(() => {
+        throw admissionError;
+      }),
+      sleep: scheduler.sleep
+    });
+
+    const abortController = new AbortController();
+    fakeClient.claim = vi.fn().mockResolvedValue(sampleJob);
+    const startPromise = worker.start(abortController.signal);
+
+    await flushPromises();
+    expect(fakeClient.deferCalls).toHaveLength(1);
+
+    // Shutdown requested during defer retry
+    abortController.abort();
+    await flushPromises();
+
+    while (fakeClient.deferCalls.length === 1 && scheduler.pendingCount > 0) {
+      await scheduler.advanceNext();
+      await flushPromises();
+    }
+    expect(fakeClient.deferCalls).toHaveLength(2);
+
+    while (fakeClient.deferCalls.length === 2 && scheduler.pendingCount > 0) {
+      await scheduler.advanceNext();
+      await flushPromises();
+    }
+    expect(fakeClient.deferCalls).toHaveLength(3);
+
+    await startPromise;
+    expect(fakeClient.deferCalls).toHaveLength(3);
+  });
+
+  it("worker.start cleanly exits without unhandled rejection if processJob start aborts on shutdown", async () => {
+    const fakeClient = new FakeControlApiClient({
+      onStart: () => {
+        throw new ControlApiClientError("Connection refused", 500);
+      }
+    });
+    const scheduler = new FakeScheduler();
+    const logger = new FakeLogger();
+    const sampleJob = createSampleJob();
+
+    fakeClient.claim = vi.fn().mockResolvedValue(sampleJob);
+
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      sleep: scheduler.sleep,
+      logger
+    });
+
+    const abortController = new AbortController();
+    const startPromise = worker.start(abortController.signal);
+    await flushPromises();
+
+    expect(fakeClient.startCalls).toHaveLength(1);
+    expect(scheduler.pendingCount).toBe(1);
+
+    // Request shutdown while waiting to retry start
+    abortController.abort();
+    await flushPromises();
+
+    // start() should resolve cleanly without throwing
+    await expect(startPromise).resolves.toBeUndefined();
+    expect(logger.errorLogs.length).toBeGreaterThan(0);
+    expect(logger.errorLogs[0]).toContain("Job processing error");
   });
 });

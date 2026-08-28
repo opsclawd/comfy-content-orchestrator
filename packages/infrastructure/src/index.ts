@@ -40,6 +40,15 @@ export {
 } from "./comfyui/comfyui-client.js";
 
 export {
+  type ComfyUiOutput,
+  type ComfyUiOutputReader,
+  ComfyUiOutputReaderError,
+  type ComfyUiOutputReaderErrorContext,
+  HttpComfyUiOutputReader,
+  type HttpComfyUiOutputReaderOptions
+} from "./comfyui/output-reader.js";
+
+export {
   collectCertificationProvenance,
   type CertificationProvenanceReport,
   type RenderProfileProvenance,

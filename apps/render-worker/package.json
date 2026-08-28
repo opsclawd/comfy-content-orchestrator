@@ -13,12 +13,14 @@
   },
   "scripts": {
     "build": "tsc --build",
+    "start": "node dist/cli/run-worker.js",
     "certify:ltx": "tsx src/cli/certify.ts --profile ltx-25-720p-97f",
     "certify:transition-soak": "tsx src/cli/certify-transition-soak.ts",
     "typecheck": "tsc --build",
     "certify": "tsx src/cli/certify.ts",
     "certify:flux": "tsx src/cli/certify.ts --profile flux-schnell-draft",
-    "render": "tsx src/cli/render.ts"
+    "render": "tsx src/cli/render.ts",
+    "worker": "tsx src/cli/run-worker.ts"
   },
   "dependencies": {
     "@cco/application": "workspace:*",
