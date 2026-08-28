@@ -5,7 +5,7 @@ import {
   type StorageOperationClass,
   type StorageWatermarkState
 } from "@cco/contracts";
-import type { JobId, LeaseToken, RenderJob } from "@cco/domain";
+import type { JobId, JobKind, LeaseToken, RenderJob } from "@cco/domain";
 
 export interface CompleteJobOptions {
   readonly manifestPayload?: Readonly<Record<string, unknown>> | undefined;
@@ -13,7 +13,7 @@ export interface CompleteJobOptions {
 }
 
 export interface ControlApiClient {
-  claim(workerId: string): Promise<RenderJob | undefined>;
+  claim(workerId: string, allowedJobKinds?: readonly JobKind[]): Promise<RenderJob | undefined>;
   start(jobId: JobId | string, leaseToken: LeaseToken | string): Promise<JobMutationResult>;
   heartbeat(jobId: JobId | string, leaseToken: LeaseToken | string): Promise<JobMutationResult>;
   complete(
@@ -41,11 +41,41 @@ export interface ControlApiClientConfig {
 export class ControlApiClientError extends Error {
   override readonly name = "ControlApiClientError";
   readonly statusCode: number | undefined;
+  readonly responseDetail?: string | undefined;
 
-  constructor(message: string, statusCode?: number | undefined, options?: ErrorOptions) {
+  constructor(
+    message: string,
+    statusCode?: number | undefined,
+    options?: ErrorOptions & { responseDetail?: string | undefined }
+  ) {
     super(message, options);
     this.statusCode = statusCode;
+    this.responseDetail = options?.responseDetail;
   }
+}
+
+const MAX_ERROR_DETAIL_LENGTH = 500;
+
+async function extractSafeErrorDetail(res: Response): Promise<string | undefined> {
+  try {
+    const contentType = res.headers?.get?.("content-type");
+    if (!contentType || !contentType.includes("application/json")) {
+      return undefined;
+    }
+    const data: unknown = await res.json();
+    if (data && typeof data === "object") {
+      const record = data as Record<string, unknown>;
+      if (typeof record.message === "string" && record.message.trim().length > 0) {
+        return record.message.trim().slice(0, MAX_ERROR_DETAIL_LENGTH);
+      }
+      if (typeof record.code === "string" && record.code.trim().length > 0) {
+        return record.code.trim().slice(0, MAX_ERROR_DETAIL_LENGTH);
+      }
+    }
+  } catch {
+    // If JSON parsing fails, do not read arbitrary/unbounded text bodies
+  }
+  return undefined;
 }
 
 interface StorageAdmissionErrorPayload {
@@ -100,8 +130,15 @@ export class HttpControlApiClient implements ControlApiClient {
     this.fetchFn = fetchFn ?? globalThis.fetch.bind(globalThis);
   }
 
-  async claim(workerId: string): Promise<RenderJob | undefined> {
+  async claim(
+    workerId: string,
+    allowedJobKinds?: readonly JobKind[]
+  ): Promise<RenderJob | undefined> {
     const url = `${this.baseUrl}/api/jobs/claim`;
+    const body: { workerId: string; allowedJobKinds?: readonly JobKind[] } = {
+      workerId,
+      ...(allowedJobKinds !== undefined ? { allowedJobKinds } : {})
+    };
     let res: Response;
     try {
       res = await this.fetchFn(url, {
@@ -110,7 +147,7 @@ export class HttpControlApiClient implements ControlApiClient {
           "Content-Type": "application/json",
           Accept: "application/json"
         },
-        body: JSON.stringify({ workerId })
+        body: JSON.stringify(body)
       });
     } catch (err) {
       throw new ControlApiClientError(
@@ -125,9 +162,13 @@ export class HttpControlApiClient implements ControlApiClient {
     }
 
     if (!res.ok) {
+      const detail = await extractSafeErrorDetail(res);
       throw new ControlApiClientError(
-        `Control API returned HTTP ${res.status}: ${res.statusText || "Error"}`,
-        res.status
+        detail
+          ? `Control API returned HTTP ${res.status}: ${detail}`
+          : `Control API returned HTTP ${res.status}: ${res.statusText || "Error"}`,
+        res.status,
+        detail !== undefined ? { responseDetail: detail } : undefined
       );
     }
 
@@ -239,7 +280,10 @@ export class HttpControlApiClient implements ControlApiClient {
     if (handleAdmission507 && res.status === 507) {
       let errorData: unknown;
       try {
-        errorData = await res.json();
+        const contentType = res.headers?.get?.("content-type");
+        if (contentType && contentType.includes("application/json")) {
+          errorData = await res.json();
+        }
       } catch (err) {
         throw new ControlApiClientError(
           `Control API returned HTTP 507: ${res.statusText || "Insufficient Storage"}`,
@@ -268,9 +312,13 @@ export class HttpControlApiClient implements ControlApiClient {
       );
     }
 
+    const detail = await extractSafeErrorDetail(res);
     throw new ControlApiClientError(
-      `Control API returned HTTP ${res.status}: ${res.statusText || "Error"}`,
-      res.status
+      detail
+        ? `Control API returned HTTP ${res.status}: ${detail}`
+        : `Control API returned HTTP ${res.status}: ${res.statusText || "Error"}`,
+      res.status,
+      detail !== undefined ? { responseDetail: detail } : undefined
     );
   }
 }

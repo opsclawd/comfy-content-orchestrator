@@ -167,6 +167,7 @@ describe("ControlApiClient", () => {
           const mockFetch = vi.fn().mockResolvedValue({
             ok: false,
             status: 507,
+            headers: new Headers({ "content-type": "application/json" }),
             json: async () => ({
               code: "STORAGE_ADMISSION_DENIED",
               message: serverMessage,
@@ -290,6 +291,7 @@ describe("ControlApiClient", () => {
         const mockFetch = vi.fn().mockResolvedValue({
           ok: false,
           status: 507,
+          headers: new Headers({ "content-type": "application/json" }),
           json: async () => payload
         });
 
@@ -315,6 +317,7 @@ describe("ControlApiClient", () => {
         ok: false,
         status: 507,
         statusText: "Insufficient Storage",
+        headers: new Headers({ "content-type": "text/html" }),
         json: async () => {
           throw new SyntaxError("Unexpected token < in JSON");
         }
@@ -342,6 +345,7 @@ describe("ControlApiClient", () => {
       const mockFetch400 = vi.fn().mockResolvedValue({
         ok: false,
         status: 400,
+        headers: new Headers({ "content-type": "application/json" }),
         json: async () => ({
           code: "VALIDATION_FAILURE",
           message: "Candidate jobs do not accept manifest payload"
@@ -362,11 +366,18 @@ describe("ControlApiClient", () => {
       expect(err400).toBeInstanceOf(ControlApiClientError);
       expect(err400).not.toBeInstanceOf(StorageAdmissionError);
       expect((err400 as ControlApiClientError).statusCode).toBe(400);
+      expect((err400 as ControlApiClientError).message).toContain(
+        "Candidate jobs do not accept manifest payload"
+      );
+      expect((err400 as ControlApiClientError).responseDetail).toBe(
+        "Candidate jobs do not accept manifest payload"
+      );
 
       // 503 Telemetry unavailable
       const mockFetch503 = vi.fn().mockResolvedValue({
         ok: false,
         status: 503,
+        headers: new Headers({ "content-type": "application/json" }),
         json: async () => ({
           code: "STORAGE_TELEMETRY_UNAVAILABLE",
           message: "Storage telemetry is unavailable."
@@ -393,6 +404,7 @@ describe("ControlApiClient", () => {
         ok: false,
         status: 500,
         statusText: "Internal Server Error",
+        headers: new Headers({ "content-type": "application/json" }),
         json: async () => ({
           message: "Internal Server Error"
         })
@@ -469,8 +481,115 @@ describe("ControlApiClient", () => {
       expect(noJob).toBeUndefined();
     });
 
-    it("start posts token and returns mutation result", async () => {
+    it("claim passes allowedJobKinds in body when supplied and omits it when absent", async () => {
       const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => sampleJob
+      });
+
+      const client = createControlApiClient({
+        baseUrl: "http://control",
+        fetch: mockFetch
+      });
+
+      await client.claim("worker-a", ["candidate"]);
+
+      expect(mockFetch).toHaveBeenLastCalledWith(
+        "http://control/api/jobs/claim",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ workerId: "worker-a", allowedJobKinds: ["candidate"] })
+        })
+      );
+
+      await client.claim("worker-a");
+
+      expect(mockFetch).toHaveBeenLastCalledWith(
+        "http://control/api/jobs/claim",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ workerId: "worker-a" })
+        })
+      );
+    });
+
+    it("claim throws ControlApiClientError on 503 telemetry unavailable", async () => {
+      const mockFetch503 = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 503,
+        headers: new Headers({ "content-type": "application/json" }),
+        json: async () => ({
+          code: "STORAGE_TELEMETRY_UNAVAILABLE",
+          message: "Storage telemetry is unavailable."
+        })
+      });
+
+      const client = createControlApiClient({
+        baseUrl: "http://localhost:3000",
+        fetch: mockFetch503
+      });
+
+      await expect(client.claim("worker-1")).rejects.toThrow(ControlApiClientError);
+      try {
+        await client.claim("worker-1");
+      } catch (err) {
+        expect(err).toBeInstanceOf(ControlApiClientError);
+        const clientErr = err as ControlApiClientError;
+        expect(clientErr.statusCode).toBe(503);
+        expect(clientErr.message).toContain("Storage telemetry is unavailable.");
+        expect(clientErr.responseDetail).toBe("Storage telemetry is unavailable.");
+      }
+    });
+
+    it("claim throws ControlApiClientError on malformed JSON", async () => {
+      const mockFetchMalformed = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError("Unexpected token < in JSON");
+        }
+      });
+
+      const client = createControlApiClient({
+        baseUrl: "http://localhost:3000",
+        fetch: mockFetchMalformed
+      });
+
+      await expect(client.claim("worker-1")).rejects.toThrow(ControlApiClientError);
+      try {
+        await client.claim("worker-1");
+      } catch (err) {
+        expect(err).toBeInstanceOf(ControlApiClientError);
+        expect((err as ControlApiClientError).statusCode).toBe(200);
+        expect((err as ControlApiClientError).message).toContain(
+          "Failed to parse response JSON from Control API"
+        );
+      }
+    });
+
+    it("claim throws ControlApiClientError on connection failure", async () => {
+      const mockFetchReject = vi.fn().mockRejectedValue(new Error("ECONNREFUSED"));
+
+      const client = createControlApiClient({
+        baseUrl: "http://localhost:3000",
+        fetch: mockFetchReject
+      });
+
+      await expect(client.claim("worker-1")).rejects.toThrow(ControlApiClientError);
+      try {
+        await client.claim("worker-1");
+      } catch (err) {
+        expect(err).toBeInstanceOf(ControlApiClientError);
+        expect((err as ControlApiClientError).statusCode).toBeUndefined();
+        expect((err as ControlApiClientError).message).toContain(
+          "Failed to connect to Control API"
+        );
+      }
+    });
+
+    it("start posts token and returns mutation result, handling 200, 404, and 409", async () => {
+      const mockFetch200 = vi.fn().mockResolvedValue({
         ok: true,
         status: 200,
         json: async () => ({
@@ -479,27 +598,53 @@ describe("ControlApiClient", () => {
         })
       });
 
-      const client = createControlApiClient({
+      const client200 = createControlApiClient({
         baseUrl: "http://localhost:3000",
-        fetch: mockFetch
+        fetch: mockFetch200
       });
 
-      const result = await client.start(sampleJobId, sampleLeaseToken);
+      const result = await client200.start(sampleJobId, sampleLeaseToken);
       expect(result).toEqual({
         outcome: "applied",
         job: expect.objectContaining({ status: "rendering" })
       });
-      expect(mockFetch).toHaveBeenCalledWith(
+      expect(mockFetch200).toHaveBeenCalledWith(
         `http://localhost:3000/api/jobs/${sampleJobId}/start`,
         expect.objectContaining({
           method: "POST",
           body: JSON.stringify({ leaseToken: sampleLeaseToken })
         })
       );
+
+      const mockFetch404 = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        json: async () => ({ code: "NOT_FOUND", message: "Job not found." })
+      });
+      const client404 = createControlApiClient({
+        baseUrl: "http://localhost:3000",
+        fetch: mockFetch404
+      });
+      expect(await client404.start(sampleJobId, sampleLeaseToken)).toEqual({
+        outcome: "not_found"
+      });
+
+      const mockFetch409 = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 409,
+        json: async () => ({ code: "LEASE_SUPERSEDED", message: "Superseded" })
+      });
+      const client409 = createControlApiClient({
+        baseUrl: "http://localhost:3000",
+        fetch: mockFetch409
+      });
+      expect(await client409.start(sampleJobId, sampleLeaseToken)).toEqual({
+        outcome: "superseded"
+      });
     });
 
-    it("heartbeat posts token and returns mutation result", async () => {
-      const mockFetch = vi.fn().mockResolvedValue({
+    it("heartbeat posts token and returns mutation result, handling 200, 404, and 409", async () => {
+      const mockFetch200 = vi.fn().mockResolvedValue({
         ok: true,
         status: 200,
         json: async () => ({
@@ -508,20 +653,46 @@ describe("ControlApiClient", () => {
         })
       });
 
-      const client = createControlApiClient({
+      const client200 = createControlApiClient({
         baseUrl: "http://localhost:3000",
-        fetch: mockFetch
+        fetch: mockFetch200
       });
 
-      const result = await client.heartbeat(sampleJobId, sampleLeaseToken);
+      const result = await client200.heartbeat(sampleJobId, sampleLeaseToken);
       expect(result).toEqual({
         outcome: "applied",
         job: expect.objectContaining({ jobId: sampleJobId })
       });
+
+      const mockFetch404 = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        json: async () => ({ code: "NOT_FOUND" })
+      });
+      const client404 = createControlApiClient({
+        baseUrl: "http://localhost:3000",
+        fetch: mockFetch404
+      });
+      expect(await client404.heartbeat(sampleJobId, sampleLeaseToken)).toEqual({
+        outcome: "not_found"
+      });
+
+      const mockFetch409 = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 409,
+        json: async () => ({ code: "LEASE_SUPERSEDED" })
+      });
+      const client409 = createControlApiClient({
+        baseUrl: "http://localhost:3000",
+        fetch: mockFetch409
+      });
+      expect(await client409.heartbeat(sampleJobId, sampleLeaseToken)).toEqual({
+        outcome: "superseded"
+      });
     });
 
-    it("fail posts token and errorTrace and returns mutation result", async () => {
-      const mockFetch = vi.fn().mockResolvedValue({
+    it("fail posts token and errorTrace and returns mutation result, handling 200, 404, and 409", async () => {
+      const mockFetch200 = vi.fn().mockResolvedValue({
         ok: true,
         status: 200,
         json: async () => ({
@@ -530,27 +701,53 @@ describe("ControlApiClient", () => {
         })
       });
 
-      const client = createControlApiClient({
+      const client200 = createControlApiClient({
         baseUrl: "http://localhost:3000",
-        fetch: mockFetch
+        fetch: mockFetch200
       });
 
-      const result = await client.fail(sampleJobId, sampleLeaseToken, "CUDA error");
+      const result = await client200.fail(sampleJobId, sampleLeaseToken, "CUDA error");
       expect(result).toEqual({
         outcome: "applied",
         job: expect.objectContaining({ status: "failed", errorTrace: "CUDA error" })
       });
-      expect(mockFetch).toHaveBeenCalledWith(
+      expect(mockFetch200).toHaveBeenCalledWith(
         `http://localhost:3000/api/jobs/${sampleJobId}/fail`,
         expect.objectContaining({
           method: "POST",
           body: JSON.stringify({ leaseToken: sampleLeaseToken, errorTrace: "CUDA error" })
         })
       );
+
+      const mockFetch404 = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        json: async () => ({ code: "NOT_FOUND" })
+      });
+      const client404 = createControlApiClient({
+        baseUrl: "http://localhost:3000",
+        fetch: mockFetch404
+      });
+      expect(await client404.fail(sampleJobId, sampleLeaseToken, "err")).toEqual({
+        outcome: "not_found"
+      });
+
+      const mockFetch409 = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 409,
+        json: async () => ({ code: "LEASE_SUPERSEDED" })
+      });
+      const client409 = createControlApiClient({
+        baseUrl: "http://localhost:3000",
+        fetch: mockFetch409
+      });
+      expect(await client409.fail(sampleJobId, sampleLeaseToken, "err")).toEqual({
+        outcome: "superseded"
+      });
     });
 
-    it("complete posts payload and returns mutation result", async () => {
-      const mockFetch = vi.fn().mockResolvedValue({
+    it("complete posts payload and returns mutation result, handling 200, 404, and 409", async () => {
+      const mockFetch200 = vi.fn().mockResolvedValue({
         ok: true,
         status: 200,
         json: async () => ({
@@ -559,24 +756,140 @@ describe("ControlApiClient", () => {
         })
       });
 
-      const client = createControlApiClient({
+      const client200 = createControlApiClient({
         baseUrl: "http://localhost:3000",
-        fetch: mockFetch
+        fetch: mockFetch200
       });
 
       const manifestPayload = { promptId: "prompt-123" };
-      const result = await client.complete(sampleJobId, sampleLeaseToken, { manifestPayload });
+      const result = await client200.complete(sampleJobId, sampleLeaseToken, { manifestPayload });
       expect(result).toEqual({
         outcome: "applied",
         job: expect.objectContaining({ status: "completed" })
       });
-      expect(mockFetch).toHaveBeenCalledWith(
+      expect(mockFetch200).toHaveBeenCalledWith(
         `http://localhost:3000/api/jobs/${sampleJobId}/complete`,
         expect.objectContaining({
           method: "POST",
           body: JSON.stringify({ leaseToken: sampleLeaseToken, manifestPayload })
         })
       );
+
+      const mockFetch404 = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        json: async () => ({ code: "NOT_FOUND" })
+      });
+      const client404 = createControlApiClient({
+        baseUrl: "http://localhost:3000",
+        fetch: mockFetch404
+      });
+      expect(await client404.complete(sampleJobId, sampleLeaseToken)).toEqual({
+        outcome: "not_found"
+      });
+
+      const mockFetch409 = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 409,
+        json: async () => ({ code: "LEASE_SUPERSEDED" })
+      });
+      const client409 = createControlApiClient({
+        baseUrl: "http://localhost:3000",
+        fetch: mockFetch409
+      });
+      expect(await client409.complete(sampleJobId, sampleLeaseToken)).toEqual({
+        outcome: "superseded"
+      });
+    });
+
+    it("mutation endpoints handle malformed JSON on 200 and connection failures", async () => {
+      const mockFetchMalformed = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError("Unexpected token in JSON");
+        }
+      });
+
+      const clientMalformed = createControlApiClient({
+        baseUrl: "http://localhost:3000",
+        fetch: mockFetchMalformed
+      });
+
+      await expect(clientMalformed.start(sampleJobId, sampleLeaseToken)).rejects.toThrow(
+        ControlApiClientError
+      );
+
+      const mockFetchReject = vi.fn().mockRejectedValue(new Error("ECONNRESET"));
+      const clientReject = createControlApiClient({
+        baseUrl: "http://localhost:3000",
+        fetch: mockFetchReject
+      });
+
+      await expect(clientReject.heartbeat(sampleJobId, sampleLeaseToken)).rejects.toThrow(
+        ControlApiClientError
+      );
+    });
+
+    it("non-JSON error response (e.g. HTML 502/500) does not invoke res.json()", async () => {
+      const jsonSpy = vi.fn();
+      const mockFetchHtml = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 502,
+        statusText: "Bad Gateway",
+        headers: new Headers({ "content-type": "text/html" }),
+        json: jsonSpy
+      });
+
+      const client = createControlApiClient({
+        baseUrl: "http://localhost:3000",
+        fetch: mockFetchHtml
+      });
+
+      let caught: unknown;
+      try {
+        await client.claim("worker-1");
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ControlApiClientError);
+      expect((caught as ControlApiClientError).statusCode).toBe(502);
+      expect((caught as ControlApiClientError).message).toBe(
+        "Control API returned HTTP 502: Bad Gateway"
+      );
+      expect((caught as ControlApiClientError).responseDetail).toBeUndefined();
+      expect(jsonSpy).not.toHaveBeenCalled();
+    });
+
+    it("non-JSON 507 response does not invoke res.json() and throws malformed error", async () => {
+      const jsonSpy = vi.fn();
+      const mockFetch507Html = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 507,
+        statusText: "Insufficient Storage",
+        headers: new Headers({ "content-type": "text/html" }),
+        json: jsonSpy
+      });
+
+      const client = createControlApiClient({
+        baseUrl: "http://localhost:3000",
+        fetch: mockFetch507Html
+      });
+
+      let caught: unknown;
+      try {
+        await client.complete(sampleJobId, sampleLeaseToken);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ControlApiClientError);
+      expect((caught as ControlApiClientError).statusCode).toBe(507);
+      expect((caught as ControlApiClientError).message).toBe(
+        "Control API returned HTTP 507: Insufficient Storage (malformed admission error payload)"
+      );
+      expect(jsonSpy).not.toHaveBeenCalled();
     });
   });
 });

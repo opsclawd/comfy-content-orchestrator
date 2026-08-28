@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   type StorageAdmissionPolicy,
   createStorageAdmissionPolicy,
+  type JobKind,
   type RenderJob
 } from "@cco/domain";
 import type {
@@ -23,7 +24,10 @@ import {
 } from "./run-worker.js";
 
 class TestControlApiClient implements ControlApiClient {
-  async claim(): Promise<RenderJob | undefined> {
+  async claim(
+    _workerId?: string,
+    _allowedJobKinds?: readonly JobKind[]
+  ): Promise<RenderJob | undefined> {
     return undefined;
   }
   async start(): Promise<JobMutationResult> {

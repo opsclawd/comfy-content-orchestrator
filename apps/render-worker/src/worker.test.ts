@@ -11,6 +11,7 @@ import type { StorageOperationClass } from "@cco/contracts";
 import {
   createStorageAdmissionPolicy,
   type JobId,
+  type JobKind,
   type LeaseToken,
   type RenderJob,
   type SceneId,
@@ -21,7 +22,10 @@ import { ControlApiClientError } from "./control-api-client.js";
 import { RenderWorker, type StorageAdmissionEnforcer } from "./worker.js";
 
 export class FakeControlApiClient implements ControlApiClient {
-  readonly claimCalls: string[] = [];
+  readonly claimCalls: Array<{
+    workerId: string;
+    allowedJobKinds?: readonly JobKind[] | undefined;
+  }> = [];
   readonly startCalls: Array<{ jobId: JobId | string; leaseToken: LeaseToken | string }> = [];
   readonly heartbeatCalls: Array<{ jobId: JobId | string; leaseToken: LeaseToken | string }> = [];
   readonly completeCalls: Array<{
@@ -63,8 +67,11 @@ export class FakeControlApiClient implements ControlApiClient {
       | undefined
   ) {}
 
-  async claim(workerId: string): Promise<RenderJob | undefined> {
-    this.claimCalls.push(workerId);
+  async claim(
+    workerId: string,
+    allowedJobKinds?: readonly JobKind[]
+  ): Promise<RenderJob | undefined> {
+    this.claimCalls.push({ workerId, allowedJobKinds });
     return this.config?.claimResult;
   }
 
@@ -176,10 +183,14 @@ function createSampleJob(overrides?: Partial<RenderJob>): RenderJob {
 }
 
 describe("Worker test structural fakes", () => {
-  it("FakeControlApiClient satisfies ControlApiClient contract including defer", async () => {
+  it("FakeControlApiClient satisfies ControlApiClient contract including claim filtering and defer", async () => {
     const fakeClient: ControlApiClient = new FakeControlApiClient({
+      claimResult: createSampleJob(),
       deferResult: { outcome: "deferred", job: {} as RenderJob }
     });
+
+    const claimed = await fakeClient.claim("worker-test", ["candidate"]);
+    expect(claimed).toEqual(createSampleJob());
 
     const jobId = "job-123" as JobId;
     const leaseToken = "lease-456" as LeaseToken;
@@ -189,8 +200,60 @@ describe("Worker test structural fakes", () => {
     expect(result).toEqual({ outcome: "deferred", job: {} });
 
     const clientInstance = fakeClient as FakeControlApiClient;
+    expect(clientInstance.claimCalls).toEqual([
+      { workerId: "worker-test", allowedJobKinds: ["candidate"] }
+    ]);
     expect(clientInstance.deferCalls).toEqual([
       { jobId: "job-123", leaseToken: "lease-456", reason }
+    ]);
+  });
+});
+
+describe("RenderWorker claim delegation", () => {
+  it("passes configured allowedJobKinds to claim", async () => {
+    const fakeClient = new FakeControlApiClient();
+    const fakeStorage = new FakeObjectStorage();
+    const fakeEnforcer = new FakeStorageAdmissionEnforcer();
+
+    const worker = new RenderWorker(
+      {
+        controlApiClient: fakeClient,
+        objectStorage: fakeStorage,
+        enforceStorageAdmission: fakeEnforcer
+      },
+      {
+        workerId: "worker-kinds",
+        allowedJobKinds: ["candidate"]
+      }
+    );
+
+    const processed = await worker.runOnce();
+    expect(processed).toBe(false);
+    expect(fakeClient.claimCalls).toEqual([
+      { workerId: "worker-kinds", allowedJobKinds: ["candidate"] }
+    ]);
+  });
+
+  it("passes undefined allowedJobKinds to claim when omitted", async () => {
+    const fakeClient = new FakeControlApiClient();
+    const fakeStorage = new FakeObjectStorage();
+    const fakeEnforcer = new FakeStorageAdmissionEnforcer();
+
+    const worker = new RenderWorker(
+      {
+        controlApiClient: fakeClient,
+        objectStorage: fakeStorage,
+        enforceStorageAdmission: fakeEnforcer
+      },
+      {
+        workerId: "worker-default"
+      }
+    );
+
+    const processed = await worker.runOnce();
+    expect(processed).toBe(false);
+    expect(fakeClient.claimCalls).toEqual([
+      { workerId: "worker-default", allowedJobKinds: undefined }
     ]);
   });
 });
@@ -302,7 +365,12 @@ describe("RenderWorker write-side admission gating and deferral", () => {
       objectStorage: fakeStorage,
       enforceStorageAdmission: fakeEnforcer,
       renderJobExecutor: async () => ({
-        candidatePayload: { variantOrdinal: 0 }
+        candidatePayload: {
+          variantOrdinal: 1,
+          storageBucket: "candidates",
+          storageObjectKey: "preview.png",
+          contentHashSha256: "a".repeat(64)
+        }
       })
     });
 
@@ -312,6 +380,36 @@ describe("RenderWorker write-side admission gating and deferral", () => {
     expect(fakeClient.completeCalls).toHaveLength(1);
     expect(fakeClient.completeCalls[0]?.jobId).toBe(sampleJobId);
     expect(fakeClient.completeCalls[0]?.leaseToken).toBe(sampleLeaseToken);
+    expect(fakeClient.completeCalls[0]?.payload).toEqual({
+      candidatePayload: {
+        variantOrdinal: 1,
+        storageBucket: "candidates",
+        storageObjectKey: "preview.png",
+        contentHashSha256: "a".repeat(64)
+      }
+    });
+  });
+
+  it("candidate job without candidatePayload omits candidatePayload in complete payload", async () => {
+    const fakeClient = new FakeControlApiClient();
+    const fakeStorage = new FakeObjectStorage();
+    const fakeEnforcer = new FakeStorageAdmissionEnforcer();
+
+    const candidateJob = createSampleJob({ jobKind: "candidate" });
+
+    const worker = new RenderWorker({
+      controlApiClient: fakeClient,
+      objectStorage: fakeStorage,
+      enforceStorageAdmission: fakeEnforcer,
+      renderJobExecutor: async () => ({})
+    });
+
+    await worker.processJob(candidateJob);
+
+    expect(fakeClient.completeCalls).toHaveLength(1);
+    expect(fakeClient.completeCalls[0]?.jobId).toBe(sampleJobId);
+    expect(fakeClient.completeCalls[0]?.leaseToken).toBe(sampleLeaseToken);
+    expect(fakeClient.completeCalls[0]?.payload).toEqual({});
   });
 
   it("production completion admission immediately precedes complete", async () => {

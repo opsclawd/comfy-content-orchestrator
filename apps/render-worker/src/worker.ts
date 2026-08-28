@@ -4,7 +4,7 @@ import {
   type PutObjectInput
 } from "@cco/application";
 import type { StorageOperationClass } from "@cco/contracts";
-import type { RenderJob, StorageAdmissionPolicy } from "@cco/domain";
+import type { JobKind, RenderJob, StorageAdmissionPolicy } from "@cco/domain";
 import type { CompleteJobOptions, ControlApiClient } from "./control-api-client.js";
 
 export interface StorageAdmissionEnforcer {
@@ -29,18 +29,21 @@ export interface WorkerDependencies {
 export interface RenderWorkerOptions {
   readonly workerId?: string | undefined;
   readonly pollIntervalMs?: number | undefined;
+  readonly allowedJobKinds?: readonly JobKind[] | undefined;
 }
 
 export class RenderWorker {
   private readonly deps: WorkerDependencies;
   private readonly workerId: string;
   private readonly pollIntervalMs: number;
+  private readonly allowedJobKinds?: readonly JobKind[] | undefined;
   private isRunning = false;
 
   constructor(deps: WorkerDependencies, options?: RenderWorkerOptions | undefined) {
     this.deps = deps;
     this.workerId = options?.workerId ?? "render-worker-default";
     this.pollIntervalMs = options?.pollIntervalMs ?? 1000;
+    this.allowedJobKinds = options?.allowedJobKinds;
   }
 
   async processJob(job: RenderJob): Promise<void> {
@@ -105,7 +108,9 @@ export class RenderWorker {
 
     const completePayload: CompleteJobOptions =
       job.jobKind === "candidate"
-        ? { candidatePayload: renderOutput.candidatePayload ?? { variantOrdinal: 0 } }
+        ? renderOutput.candidatePayload
+          ? { candidatePayload: renderOutput.candidatePayload }
+          : {}
         : { manifestPayload: renderOutput.manifestPayload ?? {} };
 
     const completeResult = await this.deps.controlApiClient.complete(
@@ -120,7 +125,7 @@ export class RenderWorker {
   }
 
   async runOnce(): Promise<boolean> {
-    const job = await this.deps.controlApiClient.claim(this.workerId);
+    const job = await this.deps.controlApiClient.claim(this.workerId, this.allowedJobKinds);
     if (!job) {
       return false;
     }

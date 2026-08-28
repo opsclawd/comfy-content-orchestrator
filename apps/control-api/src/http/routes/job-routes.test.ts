@@ -138,6 +138,12 @@ describe("Job Dispatch Routes", () => {
       workerId: "worker-alpha",
       leaseDurationMs: 300_000
     });
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        (queue.claim as ReturnType<typeof vi.fn>).mock.calls[0]?.[0],
+        "allowedJobKinds"
+      )
+    ).toBe(false);
 
     const body = response.json();
     expect(body).toEqual({
@@ -157,6 +163,57 @@ describe("Job Dispatch Routes", () => {
       updatedAt: "2026-08-27T08:05:00.000Z"
     });
     expect(body.leaseToken).toBe(sampleLeaseToken);
+
+    await app.close();
+  });
+
+  it("claim delegates allowedJobKinds unchanged when provided", async () => {
+    const queue = createFakeJobQueue({
+      claim: vi.fn().mockResolvedValue(sampleLeasedJob)
+    });
+
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    const responseSingle = await app.inject({
+      method: "POST",
+      url: "/api/jobs/claim",
+      payload: {
+        workerId: "worker-alpha",
+        allowedJobKinds: ["candidate"]
+      }
+    });
+
+    expect(responseSingle.statusCode).toBe(200);
+    expect(queue.claim).toHaveBeenLastCalledWith({
+      workerId: "worker-alpha",
+      leaseDurationMs: 300_000,
+      allowedJobKinds: ["candidate"]
+    });
+
+    const responseMultiple = await app.inject({
+      method: "POST",
+      url: "/api/jobs/claim",
+      payload: {
+        workerId: "worker-alpha",
+        allowedJobKinds: ["candidate", "production"]
+      }
+    });
+
+    expect(responseMultiple.statusCode).toBe(200);
+    expect(queue.claim).toHaveBeenLastCalledWith({
+      workerId: "worker-alpha",
+      leaseDurationMs: 300_000,
+      allowedJobKinds: ["candidate", "production"]
+    });
 
     await app.close();
   });
@@ -942,6 +999,36 @@ describe("Job Dispatch Routes", () => {
         method: "POST" as const,
         url: "/api/jobs/claim",
         payload: { workerId: "worker-1", extraProp: "forbidden" }
+      },
+      // Claim: empty allowedJobKinds
+      {
+        method: "POST" as const,
+        url: "/api/jobs/claim",
+        payload: { workerId: "worker-1", allowedJobKinds: [] }
+      },
+      // Claim: non-enum allowedJobKinds item
+      {
+        method: "POST" as const,
+        url: "/api/jobs/claim",
+        payload: { workerId: "worker-1", allowedJobKinds: ["invalid-kind"] }
+      },
+      // Claim: duplicate allowedJobKinds items
+      {
+        method: "POST" as const,
+        url: "/api/jobs/claim",
+        payload: { workerId: "worker-1", allowedJobKinds: ["candidate", "candidate"] }
+      },
+      // Claim: non-array allowedJobKinds
+      {
+        method: "POST" as const,
+        url: "/api/jobs/claim",
+        payload: { workerId: "worker-1", allowedJobKinds: "candidate" }
+      },
+      // Claim: non-string allowedJobKinds items
+      {
+        method: "POST" as const,
+        url: "/api/jobs/claim",
+        payload: { workerId: "worker-1", allowedJobKinds: [123] }
       },
 
       // Start: invalid UUID in path
