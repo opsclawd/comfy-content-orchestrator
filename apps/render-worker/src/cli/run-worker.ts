@@ -185,7 +185,31 @@ export function createProductionWorker(
 
   const logger = overrides?.logger ?? console;
   const sleep =
-    overrides?.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+    overrides?.sleep ??
+    ((ms: number, signal?: AbortSignal) =>
+      new Promise<void>((resolve) => {
+        if (signal?.aborted) {
+          resolve();
+          return;
+        }
+        let timer: NodeJS.Timeout | undefined;
+        const onAbort = () => {
+          if (timer !== undefined) {
+            clearTimeout(timer);
+            timer = undefined;
+          }
+          resolve();
+        };
+        timer = setTimeout(() => {
+          if (signal) {
+            signal.removeEventListener("abort", onAbort);
+          }
+          resolve();
+        }, ms);
+        if (signal) {
+          signal.addEventListener("abort", onAbort, { once: true });
+        }
+      }));
 
   const dependencies: WorkerDependencies = {
     controlApiClient,

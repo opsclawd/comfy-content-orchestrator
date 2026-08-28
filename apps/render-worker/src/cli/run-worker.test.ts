@@ -317,6 +317,28 @@ describe("run-worker CLI", () => {
         process.env = originalEnv;
       }
     });
+
+    it("uses default sleep that clears timeout when aborted by signal", async () => {
+      const config = {
+        storageTelemetryPath: "/var/run/storage",
+        controlApiBaseUrl: "http://localhost:3000",
+        workerId: "test-worker",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      };
+
+      const worker = createProductionWorker(config, {
+        renderJobExecutor: async () => ({ candidatePayload: { variantOrdinal: 1 } }),
+        logger: testLogger
+      });
+      expect(worker).toBeInstanceOf(RenderWorker);
+
+      const abortController = new AbortController();
+      const startPromise = worker.start(abortController.signal);
+      abortController.abort();
+      await expect(startPromise).resolves.toBeUndefined();
+    });
   });
 
   describe("runWorkerCli", () => {

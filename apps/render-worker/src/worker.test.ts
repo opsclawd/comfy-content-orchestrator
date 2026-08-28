@@ -229,12 +229,34 @@ export function createDeferred<T = void>(): Deferred<T> {
 
 export class FakeScheduler {
   readonly sleepCalls: number[] = [];
-  private pendingSleeps: Array<{ ms: number; resolve: () => void }> = [];
+  private pendingSleeps: Array<{
+    ms: number;
+    resolve: () => void;
+    signal?: AbortSignal | undefined;
+  }> = [];
 
-  sleep = (ms: number): Promise<void> => {
+  sleep = (ms: number, signal?: AbortSignal): Promise<void> => {
     this.sleepCalls.push(ms);
     return new Promise<void>((resolve) => {
-      this.pendingSleeps.push({ ms, resolve });
+      if (signal?.aborted) {
+        resolve();
+        return;
+      }
+      const entry = { ms, resolve, signal };
+      this.pendingSleeps.push(entry);
+      if (signal) {
+        signal.addEventListener(
+          "abort",
+          () => {
+            const index = this.pendingSleeps.indexOf(entry);
+            if (index !== -1) {
+              this.pendingSleeps.splice(index, 1);
+            }
+            resolve();
+          },
+          { once: true }
+        );
+      }
     });
   };
 
@@ -2146,5 +2168,190 @@ describe("Behavioral Invariants: Mutation Retry, Polling Backoff, and Graceful S
 
     // Verify no subsequent claim was made
     expect(fakeClient.claimCalls).toHaveLength(1);
+  });
+
+  it("aborts start mutation immediately on non-transient HTTP errors (400, 401, 403)", async () => {
+    const fakeClient = new FakeControlApiClient({
+      onStart: () => {
+        throw new ControlApiClientError("Unauthorized", 401);
+      }
+    });
+    const scheduler = new FakeScheduler();
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      sleep: scheduler.sleep
+    });
+
+    const sampleJob = createSampleJob();
+    await expect(worker.processJob(sampleJob)).rejects.toThrow("Unauthorized");
+    expect(fakeClient.startCalls).toHaveLength(1);
+    expect(scheduler.sleepCalls).toHaveLength(0);
+  });
+
+  it("aborts complete mutation immediately on non-transient HTTP errors (401, 403)", async () => {
+    const fakeClient = new FakeControlApiClient({
+      onComplete: () => {
+        throw new ControlApiClientError("Forbidden", 403);
+      }
+    });
+    const scheduler = new FakeScheduler();
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      sleep: scheduler.sleep
+    });
+
+    const sampleJob = createSampleJob();
+    await worker.processJob(sampleJob);
+    expect(fakeClient.completeCalls).toHaveLength(1);
+    expect(fakeClient.failCalls).toHaveLength(1);
+  });
+
+  it("aborts fail and defer mutations immediately on non-transient HTTP errors (400, 401, 403)", async () => {
+    // 1. Fail non-transient error
+    const fakeClientFail = new FakeControlApiClient({
+      onFail: () => {
+        throw new ControlApiClientError("Bad Request", 400);
+      }
+    });
+    const scheduler1 = new FakeScheduler();
+    const { worker: worker1 } = createTestWorker({
+      controlApiClient: fakeClientFail,
+      sleep: scheduler1.sleep,
+      renderJobExecutor: async () => {
+        throw new Error("Render error");
+      }
+    });
+
+    await expect(worker1.processJob(createSampleJob())).rejects.toThrow("Bad Request");
+    expect(fakeClientFail.failCalls).toHaveLength(1);
+    expect(scheduler1.sleepCalls.filter((ms) => ms === 1000)).toHaveLength(0);
+
+    // 2. Defer non-transient error
+    const admissionError = new StorageAdmissionError({
+      operationClass: "candidate_upload",
+      watermarkState: "degraded",
+      usedRatio: 0.86,
+      totalBytes: 1_000_000_000,
+      freeBytes: 140_000_000
+    });
+    const fakeClientDefer = new FakeControlApiClient({
+      onDefer: () => {
+        throw new ControlApiClientError("Unauthorized", 401);
+      }
+    });
+    const scheduler2 = new FakeScheduler();
+    const { worker: worker2 } = createTestWorker({
+      controlApiClient: fakeClientDefer,
+      enforceStorageAdmission: new FakeStorageAdmissionEnforcer(() => {
+        throw admissionError;
+      }),
+      sleep: scheduler2.sleep
+    });
+
+    await expect(worker2.processJob(createSampleJob())).rejects.toThrow("Unauthorized");
+    expect(fakeClientDefer.deferCalls).toHaveLength(1);
+    expect(scheduler2.sleepCalls.filter((ms) => ms === 1000)).toHaveLength(0);
+  });
+
+  it("retries fail and defer on 200 JSON parse errors without swallowing the failure", async () => {
+    // 1. Fail retry on 200 JSON parse error
+    let failAttempts = 0;
+    const fakeClientFail = new FakeControlApiClient({
+      onFail: () => {
+        failAttempts++;
+        if (failAttempts === 1) {
+          throw new ControlApiClientError("Failed to parse response JSON from Control API", 200);
+        }
+        return { outcome: "applied", job: {} as RenderJob };
+      }
+    });
+    const scheduler1 = new FakeScheduler();
+    const { worker: worker1 } = createTestWorker({
+      controlApiClient: fakeClientFail,
+      sleep: scheduler1.sleep,
+      renderJobExecutor: async () => {
+        throw new Error("Render error");
+      }
+    });
+
+    const jobPromise1 = worker1.processJob(createSampleJob());
+    await flushPromises();
+
+    expect(fakeClientFail.failCalls).toHaveLength(1);
+    expect(scheduler1.pendingCount).toBe(1);
+
+    await scheduler1.advanceNext();
+    await flushPromises();
+
+    expect(fakeClientFail.failCalls).toHaveLength(2);
+    await jobPromise1;
+
+    // 2. Defer retry on 200 JSON parse error
+    let deferAttempts = 0;
+    const fakeClientDefer = new FakeControlApiClient({
+      onDefer: () => {
+        deferAttempts++;
+        if (deferAttempts === 1) {
+          throw new ControlApiClientError("Failed to parse response JSON from Control API", 200);
+        }
+        return { outcome: "deferred", job: {} as RenderJob };
+      }
+    });
+    const scheduler2 = new FakeScheduler();
+    const admissionError = new StorageAdmissionError({
+      operationClass: "candidate_upload",
+      watermarkState: "degraded",
+      usedRatio: 0.86,
+      totalBytes: 1_000_000_000,
+      freeBytes: 140_000_000
+    });
+    const { worker: worker2 } = createTestWorker({
+      controlApiClient: fakeClientDefer,
+      enforceStorageAdmission: new FakeStorageAdmissionEnforcer(() => {
+        throw admissionError;
+      }),
+      sleep: scheduler2.sleep
+    });
+
+    const jobPromise2 = worker2.processJob(createSampleJob());
+    await flushPromises();
+
+    expect(fakeClientDefer.deferCalls).toHaveLength(1);
+    expect(scheduler2.pendingCount).toBe(1);
+
+    await scheduler2.advanceNext();
+    await flushPromises();
+
+    expect(fakeClientDefer.deferCalls).toHaveLength(2);
+    await jobPromise2;
+  });
+
+  it("aborts mutation retries promptly during graceful shutdown if API is unreachable", async () => {
+    const fakeClient = new FakeControlApiClient({
+      onStart: () => {
+        throw new ControlApiClientError("Connection refused", 500);
+      }
+    });
+    const scheduler = new FakeScheduler();
+    const sampleJob = createSampleJob();
+
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      sleep: scheduler.sleep
+    });
+
+    const abortController = new AbortController();
+    const processPromise = worker.processJob(sampleJob, abortController.signal);
+    await flushPromises();
+
+    expect(fakeClient.startCalls).toHaveLength(1);
+    expect(scheduler.pendingCount).toBe(1);
+
+    // Request shutdown while waiting to retry start
+    abortController.abort();
+    await flushPromises();
+
+    // The promise should reject/settle promptly due to shutdown abortion
+    await expect(processPromise).rejects.toThrow("worker shutdown");
   });
 });

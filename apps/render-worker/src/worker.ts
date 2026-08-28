@@ -31,13 +31,20 @@ export interface WorkerLogger {
   debug?(message: string, ...args: unknown[]): void;
 }
 
+export function isNonTransientStatusCode(statusCode: number | undefined): boolean {
+  if (statusCode === undefined) {
+    return false;
+  }
+  return statusCode >= 400 && statusCode < 500 && statusCode !== 408 && statusCode !== 429;
+}
+
 export interface WorkerDependencies {
   readonly controlApiClient: ControlApiClient;
   readonly objectStorage: ObjectStoragePort;
   readonly enforceStorageAdmission: StorageAdmissionEnforcer;
   readonly renderJobExecutor: RenderJobExecutor;
   readonly logger: WorkerLogger;
-  readonly sleep: (ms: number) => Promise<void>;
+  readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
 export interface RenderWorkerOptions {
@@ -92,6 +99,7 @@ export class RenderWorker {
 
   private isRunning = false;
   private isShutdownRequested = false;
+  private shutdownAbortController = new AbortController();
   private activeJobPromise: Promise<void> | undefined;
   private wakeIdleWait: (() => void) | undefined;
 
@@ -160,6 +168,9 @@ export class RenderWorker {
   requestShutdown(): void {
     this.isShutdownRequested = true;
     this.isRunning = false;
+    if (!this.shutdownAbortController.signal.aborted) {
+      this.shutdownAbortController.abort();
+    }
     if (this.wakeIdleWait) {
       this.wakeIdleWait();
     }
@@ -170,39 +181,43 @@ export class RenderWorker {
   }
 
   private async sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
-    if (this.isShutdownRequested || signal?.aborted) {
+    if (
+      this.isShutdownRequested ||
+      this.shutdownAbortController.signal.aborted ||
+      signal?.aborted
+    ) {
       return;
     }
 
-    let cleanup: (() => void) | undefined;
+    const abortController = new AbortController();
+    const onShutdown = () => abortController.abort();
+    const onSignal = () => abortController.abort();
 
-    const sleepPromise = this.deps.sleep(ms);
-    const wakePromise = new Promise<void>((resolve) => {
-      const onWake = () => resolve();
-      this.wakeIdleWait = onWake;
-      if (signal) {
-        signal.addEventListener("abort", onWake, { once: true });
-      }
-      cleanup = () => {
-        if (this.wakeIdleWait === onWake) {
-          this.wakeIdleWait = undefined;
-        }
-        if (signal) {
-          signal.removeEventListener("abort", onWake);
-        }
-      };
-    });
+    this.shutdownAbortController.signal.addEventListener("abort", onShutdown, { once: true });
+    if (signal) {
+      signal.addEventListener("abort", onSignal, { once: true });
+    }
+
+    const onWake = () => abortController.abort();
+    this.wakeIdleWait = onWake;
 
     try {
-      await Promise.race([sleepPromise, wakePromise]);
+      await this.deps.sleep(ms, abortController.signal);
     } finally {
-      cleanup?.();
+      if (this.wakeIdleWait === onWake) {
+        this.wakeIdleWait = undefined;
+      }
+      this.shutdownAbortController.signal.removeEventListener("abort", onShutdown);
+      if (signal) {
+        signal.removeEventListener("abort", onSignal);
+      }
     }
   }
 
   private async startWithRetry(
     jobId: JobId | string,
-    leaseToken: LeaseToken | string
+    leaseToken: LeaseToken | string,
+    signal?: AbortSignal
   ): Promise<JobMutationResult> {
     while (true) {
       try {
@@ -216,13 +231,22 @@ export class RenderWorker {
           if (err.statusCode === 404) {
             return { outcome: "not_found" };
           }
+          if (isNonTransientStatusCode(err.statusCode)) {
+            throw err;
+          }
+        }
+        if (this.isShutdownRequested || signal?.aborted) {
+          throw new Error(`Job ${jobId} start aborted due to worker shutdown`);
         }
         this.deps.logger.warn(
           `Job ${jobId} start failed with uncertainty: ${
             err instanceof Error ? err.message : String(err)
           }`
         );
-        await this.deps.sleep(this.pollIntervalMs);
+        await this.sleepWithAbort(this.pollIntervalMs, signal);
+        if (this.isShutdownRequested || signal?.aborted) {
+          throw new Error(`Job ${jobId} start aborted due to worker shutdown`);
+        }
       }
     }
   }
@@ -230,7 +254,8 @@ export class RenderWorker {
   private async completeWithRetry(
     jobId: JobId | string,
     leaseToken: LeaseToken | string,
-    payload: CompleteJobOptions
+    payload: CompleteJobOptions,
+    signal?: AbortSignal
   ): Promise<JobMutationResult> {
     while (true) {
       try {
@@ -241,22 +266,28 @@ export class RenderWorker {
           throw err;
         }
         if (err instanceof ControlApiClientError) {
-          if (err.statusCode === 400) {
-            throw err;
-          }
           if (err.statusCode === 409) {
             return { outcome: "superseded" };
           }
           if (err.statusCode === 404) {
             return { outcome: "not_found" };
           }
+          if (isNonTransientStatusCode(err.statusCode)) {
+            throw err;
+          }
+        }
+        if (this.isShutdownRequested || signal?.aborted) {
+          throw new Error(`Job ${jobId} complete aborted due to worker shutdown`);
         }
         this.deps.logger.warn(
           `Job ${jobId} complete failed with uncertainty: ${
             err instanceof Error ? err.message : String(err)
           }`
         );
-        await this.deps.sleep(this.pollIntervalMs);
+        await this.sleepWithAbort(this.pollIntervalMs, signal);
+        if (this.isShutdownRequested || signal?.aborted) {
+          throw new Error(`Job ${jobId} complete aborted due to worker shutdown`);
+        }
       }
     }
   }
@@ -264,7 +295,8 @@ export class RenderWorker {
   private async failWithRetry(
     jobId: JobId | string,
     leaseToken: LeaseToken | string,
-    errorTrace: string
+    errorTrace: string,
+    signal?: AbortSignal
   ): Promise<void> {
     while (true) {
       try {
@@ -272,16 +304,25 @@ export class RenderWorker {
         return;
       } catch (err) {
         if (err instanceof ControlApiClientError) {
-          if (err.statusCode === 409 || err.statusCode === 404 || err.statusCode === 200) {
+          if (err.statusCode === 409 || err.statusCode === 404) {
             return;
           }
+          if (isNonTransientStatusCode(err.statusCode)) {
+            throw err;
+          }
+        }
+        if (this.isShutdownRequested || signal?.aborted) {
+          throw new Error(`Job ${jobId} fail aborted due to worker shutdown`);
         }
         this.deps.logger.warn(
           `Job ${jobId} fail failed with uncertainty: ${
             err instanceof Error ? err.message : String(err)
           }`
         );
-        await this.deps.sleep(this.pollIntervalMs);
+        await this.sleepWithAbort(this.pollIntervalMs, signal);
+        if (this.isShutdownRequested || signal?.aborted) {
+          throw new Error(`Job ${jobId} fail aborted due to worker shutdown`);
+        }
       }
     }
   }
@@ -289,7 +330,8 @@ export class RenderWorker {
   private async deferWithRetry(
     jobId: JobId | string,
     leaseToken: LeaseToken | string,
-    reason: string
+    reason: string,
+    signal?: AbortSignal
   ): Promise<void> {
     while (true) {
       try {
@@ -297,22 +339,32 @@ export class RenderWorker {
         return;
       } catch (err) {
         if (err instanceof ControlApiClientError) {
-          if (err.statusCode === 409 || err.statusCode === 404 || err.statusCode === 200) {
+          if (err.statusCode === 409 || err.statusCode === 404) {
             return;
           }
+          if (isNonTransientStatusCode(err.statusCode)) {
+            throw err;
+          }
+        }
+        if (this.isShutdownRequested || signal?.aborted) {
+          throw new Error(`Job ${jobId} defer aborted due to worker shutdown`);
         }
         this.deps.logger.warn(
           `Job ${jobId} defer failed with uncertainty: ${
             err instanceof Error ? err.message : String(err)
           }`
         );
-        await this.deps.sleep(this.pollIntervalMs);
+        await this.sleepWithAbort(this.pollIntervalMs, signal);
+        if (this.isShutdownRequested || signal?.aborted) {
+          throw new Error(`Job ${jobId} defer aborted due to worker shutdown`);
+        }
       }
     }
   }
 
   async processJob(
-    job: RenderJob
+    job: RenderJob,
+    signal?: AbortSignal
   ): Promise<"deferred" | "completed" | "failed" | "abandoned" | void> {
     if (!job.leaseToken) {
       return "abandoned";
@@ -321,21 +373,32 @@ export class RenderWorker {
 
     const attempt = new AttemptTracker();
 
-    const startResult = await this.startWithRetry(job.jobId, leaseToken);
+    const startResult = await this.startWithRetry(job.jobId, leaseToken, signal);
     if (startResult.outcome === "superseded" || startResult.outcome === "not_found") {
       return "abandoned";
     }
 
     attempt.phase = "active";
 
+    const heartbeatAbortController = new AbortController();
     let stopHeartbeats = false;
     let inFlightHeartbeat: Promise<void> | undefined;
 
     const runHeartbeatLoop = async (): Promise<void> => {
-      while (!stopHeartbeats && attempt.phase === "active") {
-        await this.deps.sleep(this.heartbeatIntervalMs);
+      while (
+        !stopHeartbeats &&
+        attempt.phase === "active" &&
+        !this.isShutdownRequested &&
+        !signal?.aborted
+      ) {
+        await this.sleepWithAbort(this.heartbeatIntervalMs, heartbeatAbortController.signal);
 
-        if (stopHeartbeats || attempt.phase !== "active") {
+        if (
+          stopHeartbeats ||
+          attempt.phase !== "active" ||
+          this.isShutdownRequested ||
+          signal?.aborted
+        ) {
           break;
         }
 
@@ -345,16 +408,29 @@ export class RenderWorker {
             if (hbResult.outcome === "superseded" || hbResult.outcome === "not_found") {
               attempt.phase = "fenced";
               stopHeartbeats = true;
+              heartbeatAbortController.abort();
               this.deps.logger.warn(
                 `Job ${job.jobId} heartbeat returned '${hbResult.outcome}'; attempt is now fenced`
               );
             }
           } catch (err) {
-            this.deps.logger.warn(
-              `Job ${job.jobId} heartbeat failed with uncertainty: ${
-                err instanceof Error ? err.message : String(err)
-              }`
-            );
+            if (
+              err instanceof ControlApiClientError &&
+              (err.statusCode === 409 || err.statusCode === 404)
+            ) {
+              attempt.phase = "fenced";
+              stopHeartbeats = true;
+              heartbeatAbortController.abort();
+              this.deps.logger.warn(
+                `Job ${job.jobId} heartbeat returned '${err.statusCode}'; attempt is now fenced`
+              );
+            } else {
+              this.deps.logger.warn(
+                `Job ${job.jobId} heartbeat failed with uncertainty: ${
+                  err instanceof Error ? err.message : String(err)
+                }`
+              );
+            }
           }
         })();
 
@@ -384,6 +460,7 @@ export class RenderWorker {
 
     // Render settlement: active|fenced -> settling
     stopHeartbeats = true;
+    heartbeatAbortController.abort();
 
     // Await in-flight heartbeat before publishing / classifying
     if (inFlightHeartbeat) {
@@ -400,35 +477,35 @@ export class RenderWorker {
     if (hasRenderError) {
       attempt.phase = "settled";
       if (renderError instanceof StorageAdmissionError) {
-        await this.deferWithRetry(job.jobId, leaseToken, renderError.message);
+        await this.deferWithRetry(job.jobId, leaseToken, renderError.message, signal);
         return "deferred";
       }
       const errorTrace =
         renderError instanceof Error
           ? (renderError.stack ?? renderError.message)
           : String(renderError);
-      await this.failWithRetry(job.jobId, leaseToken, errorTrace);
+      await this.failWithRetry(job.jobId, leaseToken, errorTrace, signal);
       return "failed";
     }
 
     try {
-      await this.persistAndComplete(job, leaseToken, renderOutput!);
+      await this.persistAndComplete(job, leaseToken, renderOutput!, signal);
       attempt.phase = "settled";
       return "completed";
     } catch (error) {
       attempt.phase = "settled";
       if (error instanceof StorageAdmissionError) {
-        await this.deferWithRetry(job.jobId, leaseToken, error.message);
+        await this.deferWithRetry(job.jobId, leaseToken, error.message, signal);
         return "deferred";
       }
       if (error instanceof ControlApiClientError && error.statusCode === 400) {
         const detail = error.responseDetail ?? error.message;
         const boundedDetail = detail.slice(0, 500);
-        await this.failWithRetry(job.jobId, leaseToken, boundedDetail);
+        await this.failWithRetry(job.jobId, leaseToken, boundedDetail, signal);
         return "failed";
       }
       const errorTrace = error instanceof Error ? (error.stack ?? error.message) : String(error);
-      await this.failWithRetry(job.jobId, leaseToken, errorTrace);
+      await this.failWithRetry(job.jobId, leaseToken, errorTrace, signal);
       return "failed";
     }
   }
@@ -436,7 +513,8 @@ export class RenderWorker {
   private async persistAndComplete(
     job: RenderJob,
     leaseToken: string,
-    renderOutput: WorkerRenderOutput
+    renderOutput: WorkerRenderOutput,
+    signal?: AbortSignal
   ): Promise<void> {
     if (!renderOutput || typeof renderOutput !== "object") {
       throw new Error("Render output must be an object");
@@ -477,25 +555,31 @@ export class RenderWorker {
         ? { candidatePayload: renderOutput.candidatePayload }
         : { manifestPayload: renderOutput.manifestPayload };
 
-    const completeResult = await this.completeWithRetry(job.jobId, leaseToken, completePayload);
+    const completeResult = await this.completeWithRetry(
+      job.jobId,
+      leaseToken,
+      completePayload,
+      signal
+    );
 
     if (completeResult.outcome === "superseded" || completeResult.outcome === "not_found") {
       return;
     }
   }
 
-  async runOnce(): Promise<boolean> {
+  async runOnce(signal?: AbortSignal): Promise<boolean> {
     const job = await this.deps.controlApiClient.claim(this.workerId, this.allowedJobKinds);
     if (!job) {
       return false;
     }
-    await this.processJob(job);
+    await this.processJob(job, signal);
     return true;
   }
 
   async start(signal?: AbortSignal): Promise<void> {
     this.isRunning = true;
     this.isShutdownRequested = false;
+    this.shutdownAbortController = new AbortController();
 
     const onSignalAbort = () => {
       this.requestShutdown();
@@ -542,7 +626,7 @@ export class RenderWorker {
 
         let wasDeferred = false;
         const jobPromise = (async () => {
-          const outcome = await this.processJob(claimedJob!);
+          const outcome = await this.processJob(claimedJob!, signal);
           if (outcome === "deferred") {
             wasDeferred = true;
           }
