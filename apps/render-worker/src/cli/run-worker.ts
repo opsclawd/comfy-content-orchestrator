@@ -30,6 +30,28 @@ export class WorkerConfigError extends Error {
   }
 }
 
+function sleepUntilTimeoutOrAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+
+    let timer: NodeJS.Timeout | undefined;
+    const finish = () => {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+
+    timer = setTimeout(finish, ms);
+    signal?.addEventListener("abort", finish, { once: true });
+  });
+}
+
 function parseRequiredString(val: unknown, varName: string): string {
   if (typeof val !== "string" || val.trim() === "") {
     throw new WorkerConfigError(`Missing or empty required environment variable: ${varName}`);
@@ -184,32 +206,7 @@ export function createProductionWorker(
   const renderJobExecutor = overrides?.renderJobExecutor ?? createRenderJobExecutor();
 
   const logger = overrides?.logger ?? console;
-  const sleep =
-    overrides?.sleep ??
-    ((ms: number, signal?: AbortSignal) =>
-      new Promise<void>((resolve) => {
-        if (signal?.aborted) {
-          resolve();
-          return;
-        }
-        let timer: NodeJS.Timeout | undefined;
-        const onAbort = () => {
-          if (timer !== undefined) {
-            clearTimeout(timer);
-            timer = undefined;
-          }
-          resolve();
-        };
-        timer = setTimeout(() => {
-          if (signal) {
-            signal.removeEventListener("abort", onAbort);
-          }
-          resolve();
-        }, ms);
-        if (signal) {
-          signal.addEventListener("abort", onAbort, { once: true });
-        }
-      }));
+  const sleep = overrides?.sleep ?? sleepUntilTimeoutOrAbort;
 
   const dependencies: WorkerDependencies = {
     controlApiClient,

@@ -422,7 +422,11 @@ export class RenderWorker {
       }
     };
 
-    void runHeartbeatLoop();
+    void runHeartbeatLoop().catch((err: unknown) => {
+      this.deps.logger.error(
+        `Heartbeat loop failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+    });
 
     let renderOutput: WorkerRenderOutput | undefined;
     let renderError: unknown;

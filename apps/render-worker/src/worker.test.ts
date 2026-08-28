@@ -849,6 +849,38 @@ describe("Behavioral Invariants: Attempt State Machine and Heartbeat Fencing", (
     expect(fakeClient.failCalls).toHaveLength(0);
     expect(fakeClient.completeCalls).toHaveLength(1);
   });
+
+  it("handles a rejected heartbeat sleep without an unhandled rejection", async () => {
+    const renderDeferred = createDeferred<WorkerRenderOutput>();
+    const logger = new FakeLogger();
+    let sleepCalls = 0;
+
+    const { worker } = createTestWorker({
+      logger,
+      renderJobExecutor: async () => renderDeferred.promise,
+      sleep: async () => {
+        sleepCalls++;
+        throw new Error("heartbeat sleep aborted");
+      }
+    });
+
+    const processPromise = worker.processJob(createSampleJob());
+    await flushPromises();
+
+    expect(sleepCalls).toBe(1);
+    expect(logger.errorLogs).toContain("Heartbeat loop failed: heartbeat sleep aborted");
+
+    renderDeferred.resolve({
+      candidatePayload: {
+        variantOrdinal: 1,
+        storageBucket: "candidates",
+        storageObjectKey: "output.png",
+        contentHashSha256: "a".repeat(64)
+      }
+    });
+
+    await expect(processPromise).resolves.toBe("completed");
+  });
 });
 
 describe("RenderWorker strict payload branch requirements", () => {

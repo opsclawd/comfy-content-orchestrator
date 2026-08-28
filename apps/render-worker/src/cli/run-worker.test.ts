@@ -318,7 +318,8 @@ describe("run-worker CLI", () => {
       }
     });
 
-    it("uses default sleep that clears timeout when aborted by signal", async () => {
+    it("uses default sleep that clears the active polling timer when aborted", async () => {
+      vi.useFakeTimers();
       const config = {
         storageTelemetryPath: "/var/run/storage",
         controlApiBaseUrl: "http://localhost:3000",
@@ -328,16 +329,27 @@ describe("run-worker CLI", () => {
         leaseDurationMs: 30000
       };
 
-      const worker = createProductionWorker(config, {
-        renderJobExecutor: async () => ({ candidatePayload: { variantOrdinal: 1 } }),
-        logger: testLogger
-      });
-      expect(worker).toBeInstanceOf(RenderWorker);
+      try {
+        const worker = createProductionWorker(config, {
+          controlApiClient: new TestControlApiClient(),
+          objectStorage: new TestObjectStorage(),
+          enforceStorageAdmission: new TestAdmissionEnforcer(),
+          renderJobExecutor: async () => ({ candidatePayload: { variantOrdinal: 1 } }),
+          logger: testLogger
+        });
+        expect(worker).toBeInstanceOf(RenderWorker);
 
-      const abortController = new AbortController();
-      const startPromise = worker.start(abortController.signal);
-      abortController.abort();
-      await expect(startPromise).resolves.toBeUndefined();
+        const abortController = new AbortController();
+        const startPromise = worker.start(abortController.signal);
+        await Promise.resolve();
+        expect(vi.getTimerCount()).toBe(1);
+
+        abortController.abort();
+        await expect(startPromise).resolves.toBeUndefined();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
