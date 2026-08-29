@@ -11,9 +11,12 @@ import {
 import {
   insertClientRecord,
   insertCampaignRecord,
-  insertStoryboardSceneRecord
+  insertStoryboardSceneRecord,
+  insertReferenceAssetRecord,
+  insertSceneReferenceAssetRecord
 } from "../test-support/records.js";
 import { PostgresStoryboardCandidateRepository } from "./postgres-storyboard-candidate-repository.js";
+import { PostgresReferenceAssetRepository } from "./postgres-reference-asset-repository.js";
 import { PostgresReviewEventStore } from "./postgres-review-event-store.js";
 
 describe("PostgreSQL StoryboardCandidateRepository and ReviewEventStore Adapters Integration", () => {
@@ -369,5 +372,70 @@ describe("PostgreSQL StoryboardCandidateRepository and ReviewEventStore Adapters
     expect(listed[0]?.storageBucket).toBe("mapped-bucket-omega");
     expect(listed[0]?.storageObjectKey).toBe("deep/store/render_cand.webp");
     expect((listed[0] as unknown as Record<string, unknown>).locator).toBeUndefined();
+  });
+
+  it("lists reference assets for a scene excluding archived assets", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+    const scene = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      specRevision: 1
+    });
+
+    const ref1 = await insertReferenceAssetRecord(client, {
+      clientId: clientRecord.client_id,
+      assetType: "brand_logo",
+      storageBucket: "godzspeed-reference",
+      storageObjectKey: "assets/logo.png",
+      contentHashSha256: "1111111111111111111111111111111111111111111111111111111111111111"
+    });
+
+    const ref2 = await insertReferenceAssetRecord(client, {
+      clientId: clientRecord.client_id,
+      assetType: "style_lora",
+      storageBucket: "godzspeed-reference",
+      storageObjectKey: "assets/style.safetensors",
+      contentHashSha256: "2222222222222222222222222222222222222222222222222222222222222222"
+    });
+
+    await insertSceneReferenceAssetRecord(client, {
+      sceneId: scene.scene_id,
+      assetId: ref1.asset_id
+    });
+    await insertSceneReferenceAssetRecord(client, {
+      sceneId: scene.scene_id,
+      assetId: ref2.asset_id
+    });
+
+    const repo = new PostgresReferenceAssetRepository(client);
+    const assets = await repo.listBySceneId(scene.scene_id as SceneId);
+
+    expect(assets).toHaveLength(2);
+    expect(assets[0]).toEqual({
+      id: ref1.asset_id,
+      sceneId: scene.scene_id,
+      assetType: "brand_logo",
+      storageBucket: "godzspeed-reference",
+      storageObjectKey: "assets/logo.png",
+      contentHashSha256: "1111111111111111111111111111111111111111111111111111111111111111"
+    });
+    expect(assets[1]).toEqual({
+      id: ref2.asset_id,
+      sceneId: scene.scene_id,
+      assetType: "style_lora",
+      storageBucket: "godzspeed-reference",
+      storageObjectKey: "assets/style.safetensors",
+      contentHashSha256: "2222222222222222222222222222222222222222222222222222222222222222"
+    });
+
+    // Archive ref1 and verify it is no longer returned
+    await client.query(
+      "UPDATE reference_assets SET archived_at = CURRENT_TIMESTAMP WHERE asset_id = $1",
+      [ref1.asset_id]
+    );
+    const afterArchive = await repo.listBySceneId(scene.scene_id as SceneId);
+    expect(afterArchive).toHaveLength(1);
+    expect(afterArchive[0]?.id).toBe(ref2.asset_id);
   });
 });

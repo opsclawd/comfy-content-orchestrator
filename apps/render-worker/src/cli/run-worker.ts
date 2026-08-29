@@ -1,14 +1,22 @@
+import { createHash } from "node:crypto";
 import path, { resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import pg from "pg";
+const { Pool } = pg;
 import {
+  AssembleGenerationManifest,
   EnforceStorageAdmission,
   ExecuteProfileRenderUseCase,
   type ExecuteProfileRenderInput,
   type ExecuteProfileRenderResult,
   type GpuExecutionLeasePort,
   type GpuTelemetryPort,
-  type RenderEnginePort
+  type HashBytesPort,
+  type ReferenceAssetRepository,
+  type RenderEnginePort,
+  type SceneRepository,
+  type StoryboardCandidateRepository
 } from "@cco/application";
 import { JOB_KINDS, type JobKind } from "@cco/domain";
 import {
@@ -17,6 +25,9 @@ import {
   HttpComfyUiOutputReader,
   LocalFsGpuLeaseAdapter,
   NvidiaSmiTelemetryAdapter,
+  PostgresReferenceAssetRepository,
+  PostgresSceneRepository,
+  PostgresStoryboardCandidateRepository,
   S3ObjectStorage,
   type collectCertificationProvenance,
   type ComfyUiOutputReader,
@@ -30,6 +41,7 @@ import { createControlApiClient } from "../control-api-client.js";
 import {
   createCertifiedRenderJobExecutor,
   ProductionManifestAssemblyError,
+  type AssembleProductionManifestInput,
   type ProductionManifestAssembler
 } from "../render-job-executor.js";
 import { RenderWorker, type RenderWorkerOptions, type WorkerDependencies } from "../worker.js";
@@ -47,6 +59,7 @@ export interface WorkerRuntimeConfig {
   readonly telemetryBackoffMs?: number | undefined;
   readonly admissionBackoffMs?: number | undefined;
   readonly allowedJobKinds?: readonly JobKind[] | undefined;
+  readonly databaseUrl?: string | undefined;
   readonly comfyUiUrl: string;
   readonly comfyUiRenderTimeoutMs: number;
   readonly comfyUiDir: string;
@@ -65,14 +78,19 @@ export interface WorkerRuntimeConfig {
 }
 
 export class WorkerConfigError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "WorkerConfigError";
+  override readonly name = "WorkerConfigError";
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
   }
 }
 
 export interface ProductionWorkerOverrides extends Partial<WorkerDependencies> {
   readonly productionManifestAssembler?: ProductionManifestAssembler | undefined;
+  readonly sceneRepository?: SceneRepository | undefined;
+  readonly storyboardCandidateRepository?: StoryboardCandidateRepository | undefined;
+  readonly referenceAssetRepository?: ReferenceAssetRepository | undefined;
+  readonly hashBytes?: HashBytesPort | undefined;
+  readonly pool?: pg.Pool | undefined;
   readonly renderEngine?: RenderEnginePort | undefined;
   readonly gpuLease?: GpuExecutionLeasePort | undefined;
   readonly gpuTelemetry?: GpuTelemetryPort | undefined;
@@ -92,26 +110,25 @@ export interface ProductionWorkerOverrides extends Partial<WorkerDependencies> {
   readonly now?: (() => Date) | undefined;
 }
 
-function sleepUntilTimeoutOrAbort(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve) => {
-    if (signal?.aborted) {
-      resolve();
-      return;
-    }
-
-    let timer: NodeJS.Timeout | undefined;
-    const finish = () => {
-      if (timer !== undefined) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
-      signal?.removeEventListener("abort", finish);
-      resolve();
-    };
-
-    timer = setTimeout(finish, ms);
-    signal?.addEventListener("abort", finish, { once: true });
-  });
+export function parseStorageTelemetryPath(
+  val: unknown,
+  varName = "STORAGE_TELEMETRY_PATH"
+): string {
+  if (typeof val !== "string" || val.trim() === "") {
+    throw new WorkerConfigError(`Missing or empty required environment variable: ${varName}`);
+  }
+  const trimmed = val.trim();
+  if (!path.isAbsolute(trimmed)) {
+    throw new WorkerConfigError(
+      `Invalid storage telemetry path in variable: ${varName} (must be an absolute path)`
+    );
+  }
+  if (trimmed === "/" || trimmed === "") {
+    throw new WorkerConfigError(
+      `Invalid storage telemetry path in variable: ${varName} (must be a dedicated storage directory, not root)`
+    );
+  }
+  return trimmed;
 }
 
 function parseHttpUrl(val: unknown, varName: string): string {
@@ -120,19 +137,29 @@ function parseHttpUrl(val: unknown, varName: string): string {
   }
   const trimmed = val.trim();
   try {
-    const url = new URL(trimmed);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      throw new WorkerConfigError(
-        `Invalid URL in variable: ${varName} (must be an http:// or https:// URL)`
-      );
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("Protocol must be http or https");
     }
     return trimmed;
-  } catch (err) {
-    if (err instanceof WorkerConfigError) {
-      throw err;
-    }
+  } catch {
     throw new WorkerConfigError(
-      `Invalid URL in variable: ${varName} (must be a valid HTTP or HTTPS URL)`
+      `Invalid HTTP URL in variable: ${varName} (must be a valid http or https URL)`
+    );
+  }
+}
+
+function parseDatabaseUrl(val: unknown, varName: string): string {
+  if (typeof val !== "string" || val.trim() === "") {
+    throw new WorkerConfigError(`Missing or empty required environment variable: ${varName}`);
+  }
+  const trimmed = val.trim();
+  try {
+    new URL(trimmed);
+    return trimmed;
+  } catch {
+    throw new WorkerConfigError(
+      `Invalid URL in variable: ${varName} (must be a valid connection URL)`
     );
   }
 }
@@ -144,25 +171,17 @@ function parseRequiredString(val: unknown, varName: string): string {
   return val.trim();
 }
 
-export function parseStorageTelemetryPath(
-  val: unknown,
-  varName = "STORAGE_TELEMETRY_PATH"
-): string {
-  const raw = parseRequiredString(val, varName);
-  if (!path.isAbsolute(raw)) {
-    throw new WorkerConfigError(
-      `Invalid storage telemetry path in variable: ${varName} (must be an absolute path)`
-    );
-  }
-  return raw;
-}
-
 function parsePositiveInteger(val: unknown, varName: string, defaultValue: number): number {
   if (val === undefined || val === null) {
     return defaultValue;
   }
-  if (typeof val === "string" && val.trim() === "") {
-    return defaultValue;
+  if (typeof val === "number") {
+    if (!Number.isSafeInteger(val) || val <= 0) {
+      throw new WorkerConfigError(
+        `Invalid positive integer in variable: ${varName} (must be a positive integer)`
+      );
+    }
+    return val;
   }
   if (typeof val !== "string") {
     throw new WorkerConfigError(
@@ -170,6 +189,9 @@ function parsePositiveInteger(val: unknown, varName: string, defaultValue: numbe
     );
   }
   const trimmed = val.trim();
+  if (trimmed === "") {
+    return defaultValue;
+  }
   if (!/^[1-9]\d*$/.test(trimmed)) {
     throw new WorkerConfigError(
       `Invalid positive integer in variable: ${varName} (must be a positive integer)`
@@ -188,8 +210,13 @@ function parseNonNegativeInteger(val: unknown, varName: string, defaultValue: nu
   if (val === undefined || val === null) {
     return defaultValue;
   }
-  if (typeof val === "string" && val.trim() === "") {
-    return defaultValue;
+  if (typeof val === "number") {
+    if (!Number.isSafeInteger(val) || val < 0) {
+      throw new WorkerConfigError(
+        `Invalid non-negative integer in variable: ${varName} (must be a non-negative integer)`
+      );
+    }
+    return val;
   }
   if (typeof val !== "string") {
     throw new WorkerConfigError(
@@ -197,6 +224,9 @@ function parseNonNegativeInteger(val: unknown, varName: string, defaultValue: nu
     );
   }
   const trimmed = val.trim();
+  if (trimmed === "") {
+    return defaultValue;
+  }
   if (!/^(0|[1-9]\d*)$/.test(trimmed)) {
     throw new WorkerConfigError(
       `Invalid non-negative integer in variable: ${varName} (must be a non-negative integer)`
@@ -462,6 +492,16 @@ export function parseWorkerRuntimeConfig(
     }
   };
 
+  const rawDbUrl = env.DATABASE_URL ?? env.CONTROL_API_DATABASE_URL;
+  const dbVarName =
+    env.DATABASE_URL !== undefined || env.CONTROL_API_DATABASE_URL === undefined
+      ? "DATABASE_URL"
+      : "CONTROL_API_DATABASE_URL";
+  let databaseUrl: string | undefined;
+  if (rawDbUrl !== undefined && rawDbUrl.trim() !== "") {
+    databaseUrl = parseDatabaseUrl(rawDbUrl, dbVarName);
+  }
+
   return {
     storageTelemetryPath,
     controlApiBaseUrl,
@@ -472,6 +512,7 @@ export function parseWorkerRuntimeConfig(
     ...(telemetryBackoffMs !== undefined ? { telemetryBackoffMs } : {}),
     ...(admissionBackoffMs !== undefined ? { admissionBackoffMs } : {}),
     ...(allowedJobKinds !== undefined ? { allowedJobKinds } : {}),
+    ...(databaseUrl !== undefined ? { databaseUrl } : {}),
     comfyUiUrl,
     comfyUiRenderTimeoutMs,
     comfyUiDir,
@@ -490,27 +531,80 @@ export function parseWorkerRuntimeConfig(
   };
 }
 
+function sleepUntilTimeoutOrAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(() => {
+      resolve();
+    }, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true }
+    );
+  });
+}
+
 export function createProductionWorker(
   config?: WorkerRuntimeConfig | undefined,
   overrides?: ProductionWorkerOverrides | undefined
 ): RenderWorker {
   const effectiveConfig = config ?? parseWorkerRuntimeConfig();
 
+  const hashBytesPort: HashBytesPort = overrides?.hashBytes ?? {
+    hashBytes: async (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
+  };
+
   const includesProduction =
     !effectiveConfig.allowedJobKinds || effectiveConfig.allowedJobKinds.includes("production");
 
   let productionManifestAssembler = overrides?.productionManifestAssembler;
-  if (includesProduction && !productionManifestAssembler) {
-    throw new WorkerConfigError(
-      "Production manifest assembler is required when production jobs are enabled"
-    );
-  }
-  if (!includesProduction && !productionManifestAssembler) {
-    productionManifestAssembler = async () => {
-      throw new ProductionManifestAssemblyError(
-        "Production jobs are not enabled on this candidate-only worker"
-      );
-    };
+  if (!productionManifestAssembler) {
+    if (includesProduction) {
+      const pool =
+        overrides?.pool ??
+        (effectiveConfig.databaseUrl
+          ? new Pool({ connectionString: effectiveConfig.databaseUrl })
+          : undefined);
+      const sceneRepository =
+        overrides?.sceneRepository ?? (pool ? new PostgresSceneRepository(pool) : undefined);
+      const storyboardCandidateRepository =
+        overrides?.storyboardCandidateRepository ??
+        (pool ? new PostgresStoryboardCandidateRepository(pool) : undefined);
+      const referenceAssetRepository =
+        overrides?.referenceAssetRepository ??
+        (pool ? new PostgresReferenceAssetRepository(pool) : undefined);
+
+      if (!sceneRepository || !storyboardCandidateRepository || !referenceAssetRepository) {
+        throw new WorkerConfigError(
+          "DATABASE_URL or repository dependencies (sceneRepository, storyboardCandidateRepository, referenceAssetRepository) are required when production jobs are enabled"
+        );
+      }
+
+      const manifestAssembler = new AssembleGenerationManifest({
+        hashBytes: hashBytesPort,
+        sceneRepository,
+        storyboardCandidateRepository,
+        referenceAssetRepository
+      });
+
+      productionManifestAssembler = async (input: AssembleProductionManifestInput) => {
+        const res = await manifestAssembler.assemble(input);
+        return res.manifestPayload;
+      };
+    } else {
+      productionManifestAssembler = async () => {
+        throw new ProductionManifestAssemblyError(
+          "Production jobs are not enabled on this candidate-only worker"
+        );
+      };
+    }
   }
 
   const renderEngine =
@@ -548,6 +642,7 @@ export function createProductionWorker(
         useCase: executeProfileRenderUseCase,
         outputReader,
         productionManifestAssembler,
+        hashBytes: hashBytesPort,
         ...(overrides?.loadCertificationProfile !== undefined
           ? { loadCertificationProfile: overrides.loadCertificationProfile }
           : {}),

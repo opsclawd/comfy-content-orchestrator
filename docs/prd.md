@@ -2,7 +2,7 @@
 
 **Project Name:** Godzspeed Sovereign Content Orchestration Platform & Creative Review Hub  
 **Repository:** `opsclawd/comfy-content-orchestrator`  
-**Document Version:** 3.5.1 (Review Plane Contract Closure Baseline)  
+**Document Version:** 3.5.2 (GenerationManifest Provenance & Capability-Dependent Audio Reconciliation)  
 **Status:** Implementation Ready — Sprint 1 Certified / Sprint 1.5 Ready  
 **Runtime & Stack:** TypeScript / Node.js 24 LTS ("Krypton") | Next.js Review Hub | ComfyUI Headless | Tailscale (WireGuard Mesh) | PostgreSQL 18.6 | MinIO (S3-Compatible Review Media Store)  
 **Hardware Profile:** AMD Ryzen 7 7700 (8C/16T) | 32GB DDR5-5600 RAM certified for the dedicated Phase 1 single-render workload | NVIDIA RTX 4090 (24GB GDDR6X) | 2TB PCIe 4.0 NVMe SSD  
@@ -11,11 +11,15 @@
 - **Technical Lead & Content Creator:** Agency Lead (Godzspeed Trinidad & Tobago Division)
 - **Cloud Control Plane:** Hetzner Cloud CPX31 VPS (Falkenstein, Germany / Tailscale-only application access)
 
-## 0. Version 3.5.1 Change Summary
+## 0. Version 3.5.2 Change Summary
 
-PRD v3.5.1 preserves the v3.5.0 architecture and closes two review findings before Sprint 1.5 planning.
+PRD v3.5.2 reconciles §5.5 Generation Manifest Contract with the certified physical capabilities of Phase 1 RenderProfiles (such as `LTX_25_720P_5S_V1` and `FLUX_SCHNELL_DRAFT_V1`) and enforces deterministic provenance derivation:
 
-Material changes carried forward from v3.5.0 plus v3.5.1 corrections:
+1. **Capability-Dependent Audio Prompt:** Explicitly defines `prompts/audio prompt` as capability-dependent rather than universally mandatory. Profiles lacking native audio generation capability (e.g. video-only `LTX_25_720P_5S_V1` or image-only `FLUX_SCHNELL_DRAFT_V1`) record `audioPrompt: null` in manifest provenance. Supplying an `audioPrompt` on a job targeted at a profile lacking audio capability is rejected before dispatch.
+2. **Strict Post-Dispatch Workflow Provenance:** All sampling parameters and prompt fields in the manifest are authoritatively extracted directly from the post-injection finalized workflow dispatched to ComfyUI, eliminating any fallbacks to job queue injected payload values.
+3. **Declarative Profile Injection Topology:** Render profiles declare their precise workflow injection node targets (`prompt`, `negativePrompt`, `seed`, `audioPrompt`) declaratively rather than relying on heuristic discovery.
+
+Material changes carried forward from v3.5.1:
 
 1. Reconciles Sprint 1 certification results with the committed `LTX_25_720P_5S_V1` RenderProfile.
 2. Separates the exact certified Phase 1 execution model set from the broader point-in-time LTX-2.5 host inventory. The current inode-deduplicated host inventory is **72,026,403,347 bytes (72.03 GB decimal / 67.08 GiB)**; it is an inventory measurement, not part of the RenderProfile contract.
@@ -846,7 +850,7 @@ A successful production job creates exactly one immutable GenerationManifest con
 - LoRA identities/strengths;
 - sampling seed/steps/CFG/sampler/scheduler/denoise;
 - dimensions/frame count/FPS;
-- prompts/audio prompt;
+- prompts/audio prompt (capability-dependent: explicitly null when the RenderProfile lacks audio generation capability);
 - persistent ReferenceAsset identities;
 - approved StoryboardCandidate identity/hash where applicable;
 - ComfyUI commit/custom-node environment;

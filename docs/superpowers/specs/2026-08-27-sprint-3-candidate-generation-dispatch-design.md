@@ -30,7 +30,7 @@ The dispatch protocol Sprint 2.5 shipped is the contract this sprint consumes. C
 What is **genuinely missing** for Sprint 3:
 
 1. The **worker polling daemon** that turns the one-shot `ExecuteProfileRenderUseCase` into a polling consumer of the Control API's `/api/jobs/{claim,…}` surface. `apps/render-worker/src/index.ts` exports only `renderWorkerName` — there is no entry point today.
-2. **GenerationManifest content assembly** per §5.5 / §6.4: the worker must produce the 16 minimum fields (manifest/job/campaign/scene identity, render attempt/timestamp, engine and RenderProfile identity, model/checkpoint/VAE/text-encoder SHA-256 hashes, workflow template identity/hash, LoRA identities/strengths, sampling seed/steps/CFG/sampler/scheduler/denoise, dimensions/frame count/FPS, prompts/audio prompt, persistent ReferenceAsset identities, approved StoryboardCandidate identity/hash, ComfyUI commit/custom-node environment, runner profile/runtime metadata, governance/license/policy identity, output filenames/hashes/review object keys/execution duration). Today the route accepts `manifestPayload` as opaque JSONB and stores it.
+2. **GenerationManifest content assembly** per §5.5 / §6.4: the worker must produce the 16 minimum fields (manifest/job/campaign/scene identity, render attempt/timestamp, engine and RenderProfile identity, model/checkpoint/VAE/text-encoder SHA-256 hashes, workflow template identity/hash, LoRA identities/strengths, sampling seed/steps/CFG/sampler/scheduler/denoise, dimensions/frame count/FPS, prompts/audio prompt [capability-dependent: explicitly `null` when unsupported by profile], persistent ReferenceAsset identities, approved StoryboardCandidate identity/hash, ComfyUI commit/custom-node environment, runner profile/runtime metadata, governance/license/policy identity, output filenames/hashes/review object keys/execution duration). Today the route accepts `manifestPayload` as opaque JSONB and stores it.
 3. **Write-side storage admission** (#89): the *actual* generation/media-write path the worker executes between `start` and `complete` must call `EnforceStorageAdmission` and surface failures as 507/429 at the relevant write endpoint. The claim-side gate is correct as-is; this is the worker's responsibility and the missing second half of #89.
 4. **RenderProfile runtime loader** in the worker: `loadCertificationProfile` is exercised by the certify CLI but the polling daemon needs the same loading path at runtime, keyed by the job's `workflow_template`.
 5. **End-to-end §9.2 Durable Lease Recovery proof from the worker's side**: the queue-side test exists (`postgres-job-queue.integration.test.ts`), but there is no integration test that exercises claim → start → render (against a stubbed ComfyUI) → kill mid-render → reclaim → complete → assert no duplicate manifest.
@@ -78,10 +78,15 @@ A job's `workflowTemplate` is set at queue time (by whatever Sprint 3 mechanism 
 
 `assemble-generation-manifest.ts` (a new use case in `packages/application/src/use-cases/`) is the single source of truth for §5.5 content. It is invoked by the worker immediately before `/api/jobs/:id/complete` for `production` jobs and produces the `manifestPayload` argument.
 
+- **Authoritative Post-Dispatch Workflow Provenance**: The assembler extracts prompts, negative prompts, sampling parameters (seed, steps, CFG, sampler, scheduler, denoise), and audio prompt directly from the post-injection workflow dispatched to ComfyUI, with zero fallback to `job.injectedPayload`.
+- **Capability-Dependent Audio Prompt**: If the RenderProfile lacks audio generation capability (e.g. `LTX_25_720P_5S_V1`), the manifest explicitly records `prompts.audioPrompt: null`. Supplying `audioPrompt` in `injectedPayload` for a profile lacking audio capability is rejected prior to render dispatch.
+- **Declarative Injection Topology**: RenderProfiles explicitly declare injection target nodes (`prompt`, `negativePrompt`, `seed`, `audioPrompt`). Workflow mutation and manifest extraction validate target nodes against this declarative topology rather than using loose string heuristics.
+
 Inputs to the assembler:
 
 - The `RenderJob` row (for `jobId`, `sceneId`, `retryCount` → render attempt).
 - The certified `RenderProfile` loaded by the worker.
+- The finalized dispatched `RenderWorkflow` post-injection.
 - The `RenderEnginePort.execute()` result, which already returns `outputPaths`, `durations`, and the run-time provenance collected by the engine adapter.
 - The ComfyUI invocation's provenance (commit hash, custom-node environment) — already collected by `RenderEnginePort` and `ExecuteProfileRenderUseCase`.
 - The `storyboard_candidates` row written for the same scene/revision if `job_kind = "production"` and a candidate was selected (per §5.5's "approved StoryboardCandidate identity/hash where applicable").

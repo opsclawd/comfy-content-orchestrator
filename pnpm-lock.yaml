@@ -87,7 +87,13 @@ importers:
       '@cco/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      pg:
+        specifier: ^8.13.1
+        version: 8.23.0
     devDependencies:
+      '@types/pg':
+        specifier: ^8.11.10
+        version: 8.21.0
       tsx:
         specifier: ^4.19.2
         version: 4.23.12

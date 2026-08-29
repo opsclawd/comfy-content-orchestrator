@@ -29,7 +29,9 @@ import type {
   StoredObject,
   StorageMetricsRegistryPort,
   StorageTelemetryPort,
-  VoiceSynthesisPort
+  VoiceSynthesisPort,
+  HashBytesPort,
+  ReferenceAssetRepository
 } from "./index.js";
 import type {
   CampaignReviewSummary,
@@ -43,6 +45,8 @@ import type {
 import type {
   CampaignId,
   CandidateId,
+  ReferenceAsset,
+  ReferenceAssetId,
   SceneConfiguration,
   SceneId,
   StoryboardCandidate
@@ -375,6 +379,40 @@ describe("Application capability ports contract tests", () => {
 
       const license = await licenseRegistryRepo.findByComponentKey("ltx-video");
       expect(license?.license).toBe("Apache-2.0");
+
+      const refAssets: ReferenceAsset[] = [
+        {
+          id: "ref-1" as ReferenceAssetId,
+          sceneId: "scene-1" as SceneId,
+          assetType: "brand_logo",
+          storageBucket: "godzspeed-reference",
+          storageObjectKey: "refs/logo.png",
+          contentHashSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ];
+      const referenceAssetRepo = {
+        async listBySceneId(sceneId: SceneId): Promise<readonly ReferenceAsset[]> {
+          return refAssets.filter((a) => a.sceneId === sceneId);
+        }
+      } satisfies ReferenceAssetRepository;
+
+      const assets = await referenceAssetRepo.listBySceneId("scene-1" as SceneId);
+      expect(assets).toHaveLength(1);
+      expect(assets[0]?.id).toBe("ref-1");
+      expect(await referenceAssetRepo.listBySceneId("missing-scene" as SceneId)).toEqual([]);
+    });
+  });
+
+  describe("Hashing capability family", () => {
+    it("satisfies HashBytesPort contract computing sha256 hex string", async () => {
+      const hashBytesPort = {
+        async hashBytes(bytes: Uint8Array): Promise<string> {
+          return `sha256-${bytes.length}`;
+        }
+      } satisfies HashBytesPort;
+
+      const hash = await hashBytesPort.hashBytes(new Uint8Array([1, 2, 3]));
+      expect(hash).toBe("sha256-3");
     });
   });
 

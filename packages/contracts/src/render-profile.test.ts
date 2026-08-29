@@ -5,7 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   RenderProfileSchema,
   LtxRenderProfileSchema,
-  LTX_25_720P_5S_V1_PROFILE
+  LTX_25_720P_5S_V1_PROFILE,
+  getProfileInjectionTopology
 } from "./render-profile.js";
 
 describe("RenderProfileSchema", () => {
@@ -171,5 +172,49 @@ describe("RenderProfileSchema", () => {
     expect(RenderProfileSchema.safeParse(withoutProcessRss).success).toBe(false);
     expect(RenderProfileSchema.safeParse(withoutSwap).success).toBe(false);
     expect(RenderProfileSchema.safeParse(withoutPageFaults).success).toBe(false);
+  });
+
+  describe("declarative injection topology", () => {
+    it("returns explicit topology for LTX profile with audioPrompt set to null", () => {
+      const topology = getProfileInjectionTopology("LTX_25_720P_5S_V1");
+      expect(topology).toBeDefined();
+      expect(topology?.prompt).toEqual({
+        nodeId: "3",
+        classType: "CLIPTextEncode",
+        inputField: "text"
+      });
+      expect(topology?.negativePrompt).toEqual({
+        nodeId: "4",
+        classType: "CLIPTextEncode",
+        inputField: "text"
+      });
+      expect(topology?.seed).toEqual({
+        nodeId: "1",
+        classType: "KSampler",
+        inputField: "seed"
+      });
+      expect(topology?.audioPrompt).toBeNull();
+    });
+
+    it("returns explicit topology for Flux profile with audioPrompt set to null", () => {
+      const topology = getProfileInjectionTopology("flux-schnell-draft");
+      expect(topology).toBeDefined();
+      expect(topology?.prompt).toEqual({
+        nodeId: "3",
+        classType: "CLIPTextEncode",
+        inputField: "text"
+      });
+      expect(topology?.seed).toEqual({
+        nodeId: "1",
+        classType: "KSampler",
+        inputField: "seed"
+      });
+      expect(topology?.audioPrompt).toBeNull();
+    });
+
+    it("returns undefined for unknown profile keys", () => {
+      expect(getProfileInjectionTopology("unknown_profile")).toBeUndefined();
+      expect(getProfileInjectionTopology(undefined)).toBeUndefined();
+    });
   });
 });

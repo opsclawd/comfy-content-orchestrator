@@ -20,3 +20,5 @@ export * from "./review-media-delivery-port.js";
 export * from "./storage-telemetry-port.js";
 export * from "./storage-metrics-registry-port.js";
 export * from "./job-queue-port.js";
+export * from "./hash-bytes.js";
+export * from "./reference-asset-repository.js";

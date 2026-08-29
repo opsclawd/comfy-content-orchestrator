@@ -1,8 +1,18 @@
+import { createHash } from "node:crypto";
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { Pool, type PoolClient } from "pg";
-import { InvalidJobCompletionPayloadError, type JobAdmissionGate } from "@cco/application";
-import type { JobId, LeaseToken } from "@cco/domain";
+import {
+  AssembleGenerationManifest,
+  InvalidJobCompletionPayloadError,
+  type ExecuteProfileRenderResult,
+  type HashBytesPort,
+  type JobAdmissionGate
+} from "@cco/application";
+import type { CandidateId, JobId, LeaseToken, RenderJob, SceneId } from "@cco/domain";
 import { PostgresJobQueue } from "./postgres-job-queue.js";
+import { PostgresSceneRepository } from "./postgres-scene-repository.js";
+import { PostgresStoryboardCandidateRepository } from "./postgres-storyboard-candidate-repository.js";
+import { PostgresReferenceAssetRepository } from "./postgres-reference-asset-repository.js";
 import { runMigrations } from "../migration-runner.js";
 import {
   startPostgres18Container,
@@ -12,7 +22,10 @@ import {
   insertClientRecord,
   insertCampaignRecord,
   insertStoryboardSceneRecord,
-  insertRenderJobRecord
+  insertRenderJobRecord,
+  insertReferenceAssetRecord,
+  insertSceneReferenceAssetRecord,
+  insertStoryboardCandidateRecord
 } from "../test-support/records.js";
 
 describe("PostgresJobQueue integration", () => {
@@ -948,6 +961,248 @@ describe("PostgresJobQueue integration", () => {
     expect(manifest.scene_id).toBe(scene.scene_id);
     expect(manifest.render_attempt).toBe(2);
     expect(manifest.manifest_payload).toEqual(manifestPayload);
+  });
+
+  it("completes production job using a manifest assembled by AssembleGenerationManifest with real Postgres repositories", async () => {
+    const clientRec = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRec.client_id });
+    const scene = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id
+    });
+    const refAsset = await insertReferenceAssetRecord(client, { clientId: clientRec.client_id });
+    await insertSceneReferenceAssetRecord(client, {
+      sceneId: scene.scene_id,
+      assetId: refAsset.asset_id
+    });
+    const candidate = await insertStoryboardCandidateRecord(client, {
+      sceneId: scene.scene_id,
+      sceneSpecRevision: 1,
+      variantOrdinal: 1,
+      contentHashSha256: "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
+    });
+    await client.query(
+      `UPDATE storyboard_scenes
+       SET selected_candidate_id = $1,
+           selected_candidate_revision = 1,
+           approved_by = 'director-1',
+           approved_at = NOW(),
+           approved_revision = 1
+       WHERE scene_id = $2`,
+      [candidate.candidate_id, scene.scene_id]
+    );
+
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const insertedJob = await insertRenderJobRecord(client, {
+      sceneId: scene.scene_id,
+      jobKind: "production",
+      status: "rendering",
+      workerId: "worker-prod",
+      leaseToken: token,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 0,
+      maxRetries: 3
+    });
+
+    const sceneRepository = new PostgresSceneRepository(pool);
+    const storyboardCandidateRepository = new PostgresStoryboardCandidateRepository(pool);
+    const referenceAssetRepository = new PostgresReferenceAssetRepository(pool);
+    const hashBytes: HashBytesPort = {
+      hashBytes: async (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
+    };
+
+    const assembler = new AssembleGenerationManifest({
+      hashBytes,
+      sceneRepository,
+      storyboardCandidateRepository,
+      referenceAssetRepository
+    });
+
+    const renderJob: RenderJob = {
+      jobId: insertedJob.job_id as JobId,
+      sceneId: scene.scene_id as SceneId,
+      jobKind: "production",
+      status: "rendering",
+      workflowTemplate: "ltx-25",
+      injectedPayload: {
+        prompt: "A majestic mountain",
+        negativePrompt: "blurry",
+        audioPrompt: "mountain wind and eagles",
+        seed: 42
+      },
+      workerId: "worker-prod",
+      leaseToken: token,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 0,
+      maxRetries: 3,
+      errorTrace: null,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const profile = {
+      id: "ltx-25-test",
+      engine: "ltx_25",
+      runnerProfile: "dynamicvram-offload-v1",
+      source: {
+        kind: "host_export",
+        license: "GPL-3.0"
+      },
+      baseline: {
+        width: 1280,
+        height: 720,
+        frames: 97,
+        steps: 8,
+        approximateDurationSeconds: 5
+      },
+      models: [{ category: "diffusion_models", relativePath: "ltx.safetensors" }]
+    };
+
+    const provenance = {
+      generatedAt: "2026-08-29T12:00:00.000Z",
+      workflow: { sha256: "workflow-sha256-test" },
+      models: [
+        {
+          key: "models/ltx.safetensors",
+          category: "diffusion_models",
+          sha256: "model-sha256-test",
+          bytes: 1024
+        }
+      ],
+      git: {
+        comfyUiCommit: "git-commit-test",
+        customNodes: []
+      }
+    };
+
+    const renderResult: ExecuteProfileRenderResult = {
+      status: "succeeded",
+      promptId: "prompt-real-postgres-999",
+      outputObjectKeys: ["renders/output.mp4"],
+      durationMs: 3500,
+      profile: {
+        profileId: "ltx-25-test",
+        renderProfileKey: "LTX_25_720P_5S_V1",
+        renderProfileVersion: 1,
+        engine: "ltx_25",
+        workflowSha256: "workflow-sha256-test",
+        modelSha256: {},
+        runnerProfile: "dynamicvram-offload-v1",
+        comfyUiCommit: "git-commit-test"
+      },
+      preDispatchGpu: {
+        totalVramMb: 24576,
+        usedVramMb: 4096,
+        freeVramMb: 20480,
+        reservedVramMb: 4096,
+        measuredAt: "2026-08-29T12:00:00.000Z"
+      }
+    };
+
+    const workflow = {
+      "1": {
+        class_type: "KSampler",
+        inputs: {
+          seed: 42,
+          steps: 8,
+          cfg: 1,
+          sampler_name: "euler",
+          scheduler: "simple",
+          denoise: 1
+        }
+      },
+      "3": {
+        class_type: "CLIPTextEncode",
+        inputs: { text: "A majestic mountain" }
+      },
+      "4": {
+        class_type: "CLIPTextEncode",
+        inputs: { text: "blurry" }
+      }
+    };
+
+    const mediaObjects = [
+      {
+        bucket: "godzspeed-delivery",
+        key: `scenes/${scene.scene_id}/output.mp4`,
+        body: new Uint8Array([1, 2, 3]),
+        checksumSha256: "aabbcc00112233445566778899aabbcc00112233445566778899aabbcc001122"
+      }
+    ];
+
+    const { manifestPayload } = await assembler.assemble({
+      job: renderJob,
+      profile,
+      provenance,
+      renderResult,
+      workflow,
+      mediaObjects,
+      approvedCandidateId: candidate.candidate_id as CandidateId
+    });
+
+    expect(manifestPayload.promptIdComfy).toBe("prompt-real-postgres-999");
+
+    const queue = new PostgresJobQueue(pool);
+    const result = await queue.complete(insertedJob.job_id as JobId, token, manifestPayload);
+
+    expect(result.outcome).toBe("applied");
+    if (result.outcome === "applied") {
+      expect(result.job.status).toBe("completed");
+    }
+
+    const manifestRes = await client.query<{
+      manifest_id: string;
+      job_id: string;
+      prompt_id_comfy: string;
+      campaign_id: string;
+      scene_id: string;
+      render_attempt: number;
+      manifest_payload: Record<string, unknown>;
+    }>("SELECT * FROM generation_manifests WHERE job_id = $1", [insertedJob.job_id]);
+
+    expect(manifestRes.rows).toHaveLength(1);
+    const row = manifestRes.rows[0]!;
+    expect(row.job_id).toBe(insertedJob.job_id);
+    expect(row.prompt_id_comfy).toBe("prompt-real-postgres-999");
+    expect(row.campaign_id).toBe(campaign.campaign_id);
+    expect(row.scene_id).toBe(scene.scene_id);
+    expect(row.render_attempt).toBe(1);
+    expect(row.manifest_payload).toEqual(manifestPayload);
+  });
+
+  it("completes production job when promptId is provided via runtimeMetadata.promptId", async () => {
+    const clientRec = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRec.client_id });
+    const scene = await insertStoryboardSceneRecord(client, { campaignId: campaign.campaign_id });
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;
+    const insertedJob = await insertRenderJobRecord(client, {
+      sceneId: scene.scene_id,
+      jobKind: "production",
+      status: "rendering",
+      workerId: "worker-prod",
+      leaseToken: token,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 0,
+      maxRetries: 3
+    });
+
+    const manifestPayload = {
+      runtimeMetadata: {
+        promptId: "prompt-nested-runtime-123"
+      },
+      frameCount: 97
+    };
+
+    const queue = new PostgresJobQueue(pool);
+    const result = await queue.complete(insertedJob.job_id as JobId, token, manifestPayload);
+
+    expect(result.outcome).toBe("applied");
+
+    const manifestRes = await client.query<{
+      prompt_id_comfy: string;
+    }>("SELECT prompt_id_comfy FROM generation_manifests WHERE job_id = $1", [insertedJob.job_id]);
+
+    expect(manifestRes.rows).toHaveLength(1);
+    expect(manifestRes.rows[0]?.prompt_id_comfy).toBe("prompt-nested-runtime-123");
   });
 
   it("preserves idempotent production completion", async () => {

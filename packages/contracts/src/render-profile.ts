@@ -87,3 +87,71 @@ export const LTX_25_720P_5S_V1_PROFILE: LtxRenderProfile = Object.freeze({
   maxConcurrentGpuJobs: 1,
   requiresModelOffloading: true
 });
+
+export interface NodeInjectionTarget {
+  readonly nodeId: string;
+  readonly classType: string;
+  readonly inputField: string;
+}
+
+export interface ProfileInjectionTopology {
+  readonly prompt: NodeInjectionTarget;
+  readonly negativePrompt?: NodeInjectionTarget | undefined;
+  readonly seed: NodeInjectionTarget;
+  readonly audioPrompt?: NodeInjectionTarget | null | undefined;
+}
+
+export const LTX_25_720P_5S_V1_INJECTION_TOPOLOGY: ProfileInjectionTopology = Object.freeze({
+  prompt: Object.freeze({ nodeId: "3", classType: "CLIPTextEncode", inputField: "text" }),
+  negativePrompt: Object.freeze({ nodeId: "4", classType: "CLIPTextEncode", inputField: "text" }),
+  seed: Object.freeze({ nodeId: "1", classType: "KSampler", inputField: "seed" }),
+  audioPrompt: null
+});
+
+export const FLUX_SCHNELL_DRAFT_V1_INJECTION_TOPOLOGY: ProfileInjectionTopology = Object.freeze({
+  prompt: Object.freeze({ nodeId: "3", classType: "CLIPTextEncode", inputField: "text" }),
+  negativePrompt: Object.freeze({ nodeId: "4", classType: "CLIPTextEncode", inputField: "text" }),
+  seed: Object.freeze({ nodeId: "1", classType: "KSampler", inputField: "seed" }),
+  audioPrompt: null
+});
+
+export const CUSTOM_AUDIO_INJECTION_TOPOLOGY: ProfileInjectionTopology = Object.freeze({
+  prompt: Object.freeze({ nodeId: "3", classType: "CLIPTextEncode", inputField: "text" }),
+  negativePrompt: Object.freeze({ nodeId: "4", classType: "CLIPTextEncode", inputField: "text" }),
+  seed: Object.freeze({ nodeId: "1", classType: "KSampler", inputField: "seed" }),
+  audioPrompt: Object.freeze({
+    nodeId: "50",
+    classType: "AudioCLIPTextEncode",
+    inputField: "text"
+  })
+});
+
+export function getProfileInjectionTopology(
+  profileKeyOrId: string | undefined
+): ProfileInjectionTopology | undefined {
+  if (!profileKeyOrId) return undefined;
+  const normalized = profileKeyOrId.toLowerCase();
+  if (
+    normalized === "ltx_25_720p_5s_v1" ||
+    normalized === "ltx_25_720p_97f_v1" ||
+    normalized === "ltx-25-720p-97f" ||
+    normalized === "ltx_25"
+  ) {
+    return LTX_25_720P_5S_V1_INJECTION_TOPOLOGY;
+  }
+  if (
+    normalized === "flux_schnell_draft_v1" ||
+    normalized === "flux-schnell-draft" ||
+    normalized === "flux_schnell"
+  ) {
+    return FLUX_SCHNELL_DRAFT_V1_INJECTION_TOPOLOGY;
+  }
+  if (
+    normalized === "custom_audio_profile_v1" ||
+    normalized === "custom-audio-profile" ||
+    normalized === "custom_audio"
+  ) {
+    return CUSTOM_AUDIO_INJECTION_TOPOLOGY;
+  }
+  return undefined;
+}
