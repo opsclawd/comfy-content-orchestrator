@@ -214,7 +214,7 @@ describe("RenderProfileSchema", () => {
 
     it("returns undefined for unknown profile keys", () => {
       expect(getProfileInjectionTopology("unknown_profile")).toBeUndefined();
-      expect(getProfileInjectionTopology(undefined as any)).toBeUndefined();
+      expect(getProfileInjectionTopology(undefined)).toBeUndefined();
     });
   });
 });
