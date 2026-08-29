@@ -846,7 +846,7 @@ A successful production job creates exactly one immutable GenerationManifest con
 - LoRA identities/strengths;
 - sampling seed/steps/CFG/sampler/scheduler/denoise;
 - dimensions/frame count/FPS;
-- prompts/audio prompt;
+- prompts/audio prompt (capability-dependent: explicitly null when the RenderProfile lacks audio generation capability);
 - persistent ReferenceAsset identities;
 - approved StoryboardCandidate identity/hash where applicable;
 - ComfyUI commit/custom-node environment;

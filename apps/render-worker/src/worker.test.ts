@@ -1922,7 +1922,6 @@ describe("RenderWorker write-side admission gating and deferral", () => {
       workflowTemplate: "ltx-25-720p-97f",
       injectedPayload: {
         prompt: "A beautiful cinematic sunrise",
-        audioPrompt: "ambient birds chirping at dawn",
         approvedCandidateId: fakeCandidateId
       }
     });
@@ -2014,10 +2013,6 @@ describe("RenderWorker write-side admission gating and deferral", () => {
       "4": {
         class_type: "CLIPTextEncode",
         inputs: { text: "placeholder negative" }
-      },
-      "50": {
-        class_type: "AudioCLIPTextEncode",
-        inputs: { text: "placeholder audio prompt" }
       }
     });
 

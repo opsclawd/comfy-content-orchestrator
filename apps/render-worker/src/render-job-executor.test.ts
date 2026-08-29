@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   type ExecuteProfileRenderInput,
@@ -24,6 +27,7 @@ import {
   type ProductionManifestAssembler
 } from "./render-job-executor.js";
 
+const DEFAULT_REPO_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)), "../../../");
 const sampleJobId = "11111111-1111-4111-8111-111111111111" as JobId;
 const sampleSceneId = "22222222-2222-4222-8222-222222222222" as SceneId;
 const sampleLeaseToken = "33333333-3333-4333-8333-333333333333" as LeaseToken;
@@ -1082,7 +1086,7 @@ describe("Certified Render Job Executor", () => {
   });
 
   describe("audioPrompt injection and canonical targeting causal chain", () => {
-    it("injects audioPrompt into canonical audio node and dispatches mutated workflow to render execution and manifest", async () => {
+    it("injects audioPrompt into canonical audio node for audio-capable custom profile", async () => {
       const executeCalls: ExecuteProfileRenderInput[] = [];
       const mockExecuteProfileRender = vi
         .fn()
@@ -1090,9 +1094,9 @@ describe("Certified Render Job Executor", () => {
           executeCalls.push(input);
           return {
             status: "succeeded",
-            promptId: "ltx-audio-prompt-1",
+            promptId: "prompt-12345",
             outputObjectKeys: ["output.mp4"],
-            durationMs: 4000,
+            durationMs: 4250,
             profile: input.identity,
             preDispatchGpu: {
               totalVramMb: 24576,
@@ -1114,7 +1118,7 @@ describe("Certified Render Job Executor", () => {
           })
       };
 
-      const rawLtxWorkflowWithAudio = JSON.stringify({
+      const rawWorkflowWithAudio = JSON.stringify({
         "1": { class_type: "KSampler", inputs: { seed: 42, steps: 8 } },
         "3": { class_type: "CLIPTextEncode", inputs: { text: "default prompt" } },
         "4": { class_type: "CLIPTextEncode", inputs: { text: "default negative" } },
@@ -1125,12 +1129,22 @@ describe("Certified Render Job Executor", () => {
         new Map([["output.mp4", { bytes: new Uint8Array([1, 2, 3]), contentType: "video/mp4" }]])
       );
 
+      const fakeCustomAudioProfile: CertificationProfile = {
+        ...fakeLtxProfile,
+        id: "custom-audio-profile",
+        engine: "custom_audio",
+        renderProfileIdentity: {
+          key: "custom_audio_profile_v1" as unknown as "LTX_25_720P_5S_V1",
+          version: 1
+        }
+      };
+
       const executor = createCertifiedRenderJobExecutor({
-        loadCertificationProfile: async () => fakeLtxProfile,
+        loadCertificationProfile: async () => fakeCustomAudioProfile,
         readApprovedProvenance: async () => fakeLtxLiveProvenance,
         collectCertificationProvenance: async () => fakeLtxLiveProvenance,
         verifyGoldMasterProvenance: () => {},
-        readWorkflowFile: async () => rawLtxWorkflowWithAudio,
+        readWorkflowFile: async () => rawWorkflowWithAudio,
         hashWorkflow: () => sampleLtxWorkflowHash,
         executeProfileRender: mockExecuteProfileRender,
         outputReader,
@@ -1138,6 +1152,7 @@ describe("Certified Render Job Executor", () => {
       });
 
       const job = createSampleProductionJob({
+        workflowTemplate: "custom-audio-profile",
         injectedPayload: {
           prompt: "cinematic drone flight",
           negativePrompt: "low res",
@@ -1175,19 +1190,59 @@ describe("Certified Render Job Executor", () => {
       });
     });
 
-    it("fails when audioPrompt is supplied but no compatible audio node exists in workflow", async () => {
+    it("fails loudly when audioPrompt is supplied for video-only LTX profile", async () => {
       const mockExecuteProfileRender = vi.fn();
       const mockAssembler = { assembleManifest: vi.fn() };
 
-      // Workflow with no audio node (only KSampler and CLIPTextEncode)
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxProfile,
+        readApprovedProvenance: async () => fakeLtxLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => JSON.stringify({}),
+        hashWorkflow: () => sampleLtxWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        outputReader: new FakeOutputReader(),
+        productionManifestAssembler: mockAssembler
+      });
+
+      const job = createSampleProductionJob({
+        workflowTemplate: "ltx-25-720p-97f",
+        injectedPayload: {
+          prompt: "cinematic flight",
+          audioPrompt: "ocean waves audio"
+        }
+      });
+
+      await expect(executor(job)).rejects.toThrow(
+        'Profile "ltx-25-720p-97f" does not support audio generation: audioPrompt is not supported'
+      );
+      expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+      expect(mockAssembler.assembleManifest).not.toHaveBeenCalled();
+    });
+
+    it("fails when audioPrompt is supplied on a custom profile with no compatible audio node in workflow", async () => {
+      const mockExecuteProfileRender = vi.fn();
+      const mockAssembler = { assembleManifest: vi.fn() };
+
       const rawWorkflowWithoutAudio = JSON.stringify({
         "1": { class_type: "KSampler", inputs: { seed: 42, steps: 8 } },
         "3": { class_type: "CLIPTextEncode", inputs: { text: "default prompt" } },
         "4": { class_type: "CLIPTextEncode", inputs: { text: "default negative" } }
       });
 
+      const fakeCustomProfile: CertificationProfile = {
+        ...fakeLtxProfile,
+        id: "custom-generic-profile",
+        engine: "custom_generic",
+        renderProfileIdentity: {
+          key: "custom_generic_v1" as unknown as "LTX_25_720P_5S_V1",
+          version: 1
+        }
+      };
+
       const executor = createCertifiedRenderJobExecutor({
-        loadCertificationProfile: async () => fakeLtxProfile,
+        loadCertificationProfile: async () => fakeCustomProfile,
         readApprovedProvenance: async () => fakeLtxLiveProvenance,
         collectCertificationProvenance: async () => fakeLtxLiveProvenance,
         verifyGoldMasterProvenance: () => {},
@@ -1199,6 +1254,7 @@ describe("Certified Render Job Executor", () => {
       });
 
       const job = createSampleProductionJob({
+        workflowTemplate: "custom-generic-profile",
         injectedPayload: {
           prompt: "cinematic flight",
           audioPrompt: "ocean waves audio"
@@ -1212,11 +1268,10 @@ describe("Certified Render Job Executor", () => {
       expect(mockAssembler.assembleManifest).not.toHaveBeenCalled();
     });
 
-    it("fails when audioPrompt is supplied but multiple ambiguous audio nodes exist in workflow", async () => {
+    it("fails when audioPrompt is supplied on a custom profile with multiple ambiguous audio nodes in workflow", async () => {
       const mockExecuteProfileRender = vi.fn();
       const mockAssembler = { assembleManifest: vi.fn() };
 
-      // Workflow with multiple audio nodes
       const rawWorkflowWithAmbiguousAudio = JSON.stringify({
         "1": { class_type: "KSampler", inputs: { seed: 42, steps: 8 } },
         "3": { class_type: "CLIPTextEncode", inputs: { text: "default prompt" } },
@@ -1225,8 +1280,18 @@ describe("Certified Render Job Executor", () => {
         "51": { class_type: "PromptAudio", inputs: { prompt: "audio prompt 2" } }
       });
 
+      const fakeCustomProfile: CertificationProfile = {
+        ...fakeLtxProfile,
+        id: "custom-ambiguous-profile",
+        engine: "custom_ambiguous",
+        renderProfileIdentity: {
+          key: "custom_ambiguous_v1" as unknown as "LTX_25_720P_5S_V1",
+          version: 1
+        }
+      };
+
       const executor = createCertifiedRenderJobExecutor({
-        loadCertificationProfile: async () => fakeLtxProfile,
+        loadCertificationProfile: async () => fakeCustomProfile,
         readApprovedProvenance: async () => fakeLtxLiveProvenance,
         collectCertificationProvenance: async () => fakeLtxLiveProvenance,
         verifyGoldMasterProvenance: () => {},
@@ -1238,6 +1303,7 @@ describe("Certified Render Job Executor", () => {
       });
 
       const job = createSampleProductionJob({
+        workflowTemplate: "custom-ambiguous-profile",
         injectedPayload: {
           prompt: "cinematic flight",
           audioPrompt: "thunderstorm audio"
@@ -1251,7 +1317,7 @@ describe("Certified Render Job Executor", () => {
       expect(mockAssembler.assembleManifest).not.toHaveBeenCalled();
     });
 
-    it("leaves existing workflow behavior unchanged when audioPrompt is absent", async () => {
+    it("proves full causal chain request -> finalized execution workflow -> ComfyUI dispatch -> manifest provenance against actual certified LTX template", async () => {
       const executeCalls: ExecuteProfileRenderInput[] = [];
       const mockExecuteProfileRender = vi
         .fn()
@@ -1259,9 +1325,9 @@ describe("Certified Render Job Executor", () => {
           executeCalls.push(input);
           return {
             status: "succeeded",
-            promptId: "ltx-no-audio-1",
-            outputObjectKeys: ["output.mp4"],
-            durationMs: 3000,
+            promptId: "prompt-ltx-real-123",
+            outputObjectKeys: ["renders/job-production-real/output.webp"],
+            durationMs: 5120,
             profile: input.identity,
             preDispatchGpu: {
               totalVramMb: 24576,
@@ -1273,43 +1339,98 @@ describe("Certified Render Job Executor", () => {
           };
         });
 
-      const rawLtxWorkflowWithAudio = JSON.stringify({
-        "1": { class_type: "KSampler", inputs: { seed: 42, steps: 8 } },
-        "3": { class_type: "CLIPTextEncode", inputs: { text: "default prompt" } },
-        "4": { class_type: "CLIPTextEncode", inputs: { text: "default negative" } },
-        "50": { class_type: "AudioCLIPTextEncode", inputs: { text: "original untouched audio" } }
-      });
+      // Load actual real certified LTX template from templates/ltx_25_720p_97f_api.json
+      const realLtxTemplatePath = resolve(DEFAULT_REPO_ROOT, "templates/ltx_25_720p_97f_api.json");
+      const realLtxTemplateJson = await readFile(realLtxTemplatePath, "utf8");
+
+      let manifestAssembleInput: AssembleProductionManifestInput | undefined;
+      const mockAssembler: ProductionManifestAssembler = {
+        assembleManifest: vi
+          .fn()
+          .mockImplementation(async (input: AssembleProductionManifestInput) => {
+            manifestAssembleInput = input;
+            return {
+              manifestId: "manifest-production-ltx-real",
+              prompts: {
+                prompt: (input.workflow as Record<string, { inputs: Record<string, unknown> }>)["3"]
+                  ?.inputs.text,
+                negativePrompt: (
+                  input.workflow as Record<string, { inputs: Record<string, unknown> }>
+                )["4"]?.inputs.text,
+                audioPrompt: null
+              },
+              sampling: {
+                seed: (input.workflow as Record<string, { inputs: Record<string, unknown> }>)["1"]
+                  ?.inputs.seed
+              }
+            };
+          })
+      };
 
       const executor = createCertifiedRenderJobExecutor({
         loadCertificationProfile: async () => fakeLtxProfile,
         readApprovedProvenance: async () => fakeLtxLiveProvenance,
         collectCertificationProvenance: async () => fakeLtxLiveProvenance,
         verifyGoldMasterProvenance: () => {},
-        readWorkflowFile: async () => rawLtxWorkflowWithAudio,
+        readWorkflowFile: async () => realLtxTemplateJson,
         hashWorkflow: () => sampleLtxWorkflowHash,
         executeProfileRender: mockExecuteProfileRender,
         outputReader: new FakeOutputReader(
-          new Map([["output.mp4", { bytes: new Uint8Array([1]), contentType: "video/mp4" }]])
+          new Map([
+            [
+              "renders/job-production-real/output.webp",
+              { bytes: new Uint8Array([1, 2, 3]), contentType: "image/webp" }
+            ]
+          ])
         ),
-        productionManifestAssembler: async () => ({ ok: true })
+        productionManifestAssembler: mockAssembler
       });
 
-      const job = createSampleProductionJob({
+      const productionJob = createSampleProductionJob({
+        workflowTemplate: "ltx-25-720p-97f",
         injectedPayload: {
-          prompt: "cinematic flight without custom audio"
+          prompt: "A cinematic aerial drone shot of golden hour landscape",
+          negativePrompt: "blurry, low quality, artifacts",
+          seed: 987654,
+          approvedCandidateId: "cand-certified-999" as CandidateId
         }
       });
 
-      await executor(job);
+      const result = await executor(productionJob);
 
+      // 1. Assert dispatched workflow mutated the real certified LTX template nodes exactly
       expect(executeCalls).toHaveLength(1);
       const dispatchedWorkflow = executeCalls[0]!.workflow as Record<
         string,
-        { inputs: Record<string, unknown> }
+        { class_type: string; inputs: Record<string, unknown> }
       >;
-      // Node 50 remains unchanged
-      expect(dispatchedWorkflow["50"]?.inputs.text).toBe("original untouched audio");
-      expect(dispatchedWorkflow["3"]?.inputs.text).toBe("cinematic flight without custom audio");
+      expect(dispatchedWorkflow["3"]?.class_type).toBe("CLIPTextEncode");
+      expect(dispatchedWorkflow["3"]?.inputs.text).toBe(
+        "A cinematic aerial drone shot of golden hour landscape"
+      );
+      expect(dispatchedWorkflow["4"]?.class_type).toBe("CLIPTextEncode");
+      expect(dispatchedWorkflow["4"]?.inputs.text).toBe("blurry, low quality, artifacts");
+      expect(dispatchedWorkflow["1"]?.class_type).toBe("KSampler");
+      expect(dispatchedWorkflow["1"]?.inputs.seed).toBe(987654);
+
+      // 2. Assert manifest assembler receives the finalized mutated workflow and approvedCandidateId
+      expect(mockAssembler.assembleManifest).toHaveBeenCalledTimes(1);
+      expect(manifestAssembleInput).toBeDefined();
+      expect(manifestAssembleInput!.approvedCandidateId).toBe("cand-certified-999");
+      expect(manifestAssembleInput!.workflow).toBe(executeCalls[0]!.workflow);
+
+      // 3. Assert manifest payload has capability-dependent audioPrompt: null
+      expect(result.manifestPayload).toEqual({
+        manifestId: "manifest-production-ltx-real",
+        prompts: {
+          prompt: "A cinematic aerial drone shot of golden hour landscape",
+          negativePrompt: "blurry, low quality, artifacts",
+          audioPrompt: null
+        },
+        sampling: {
+          seed: 987654
+        }
+      });
     });
   });
 });

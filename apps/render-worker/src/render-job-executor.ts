@@ -11,6 +11,7 @@ import {
   type PutObjectInput,
   type RenderWorkflow
 } from "@cco/application";
+import { getProfileInjectionTopology } from "@cco/contracts";
 import type { CandidateId, JobKind, RenderJob } from "@cco/domain";
 import {
   collectCertificationProvenance,
@@ -144,7 +145,11 @@ const ALLOWED_PRODUCTION_KEYS = new Set([
   "approvedCandidateId"
 ]);
 
-function validateInjectedPayload(payload: unknown, jobKind: JobKind): ValidatedInjectedPayload {
+function validateInjectedPayload(
+  payload: unknown,
+  jobKind: JobKind,
+  profile?: CertificationProfile | undefined
+): ValidatedInjectedPayload {
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
     throw new RenderJobPayloadValidationError("injectedPayload must be an object");
   }
@@ -206,6 +211,15 @@ function validateInjectedPayload(payload: unknown, jobKind: JobKind): ValidatedI
         "injectedPayload.audioPrompt must be a non-empty string"
       );
     }
+    if (profile) {
+      const profileKey = profile.renderProfileIdentity?.key ?? profile.id ?? profile.engine;
+      const topology = getProfileInjectionTopology(profileKey);
+      if (topology && (topology.audioPrompt === null || !topology.audioPrompt)) {
+        throw new RenderJobPayloadValidationError(
+          `Profile "${profile.id}" does not support audio generation: audioPrompt is not supported`
+        );
+      }
+    }
     audioPrompt = raw.audioPrompt.trim();
   }
 
@@ -263,7 +277,8 @@ function validateInjectedPayload(payload: unknown, jobKind: JobKind): ValidatedI
 
 function mutateWorkflow(
   rawWorkflowJson: string,
-  injected: ValidatedInjectedPayload
+  injected: ValidatedInjectedPayload,
+  profile?: CertificationProfile | undefined
 ): RenderWorkflow {
   let parsed: unknown;
   try {
@@ -282,70 +297,152 @@ function mutateWorkflow(
   }
 
   const workflow = parsed as Record<string, unknown>;
+  const profileKey = profile?.renderProfileIdentity?.key ?? profile?.id ?? profile?.engine;
+  const topology = getProfileInjectionTopology(profileKey);
 
-  if (injected.prompt !== undefined) {
-    const node3 = workflow["3"];
-    if (
-      typeof node3 !== "object" ||
-      node3 === null ||
-      (node3 as { class_type?: string }).class_type !== "CLIPTextEncode" ||
-      typeof (node3 as { inputs?: unknown }).inputs !== "object" ||
-      (node3 as { inputs?: unknown }).inputs === null
-    ) {
-      throw new RenderJobExecutionError(
-        'Expected node "3" to exist with class_type "CLIPTextEncode" and inputs object for prompt injection'
-      );
+  if (topology) {
+    if (injected.prompt !== undefined) {
+      const node = workflow[topology.prompt.nodeId];
+      if (
+        typeof node !== "object" ||
+        node === null ||
+        (node as { class_type?: string }).class_type !== topology.prompt.classType ||
+        typeof (node as { inputs?: unknown }).inputs !== "object" ||
+        (node as { inputs?: unknown }).inputs === null
+      ) {
+        throw new RenderJobExecutionError(
+          `Expected node "${topology.prompt.nodeId}" to exist with class_type "${topology.prompt.classType}" and inputs object for prompt injection`
+        );
+      }
+      (node as { inputs: Record<string, unknown> }).inputs[topology.prompt.inputField] =
+        injected.prompt;
     }
-    (node3 as { inputs: Record<string, unknown> }).inputs.text = injected.prompt;
-  }
 
-  if (injected.negativePrompt !== undefined) {
-    const node4 = workflow["4"];
-    if (
-      typeof node4 !== "object" ||
-      node4 === null ||
-      (node4 as { class_type?: string }).class_type !== "CLIPTextEncode" ||
-      typeof (node4 as { inputs?: unknown }).inputs !== "object" ||
-      (node4 as { inputs?: unknown }).inputs === null
-    ) {
-      throw new RenderJobExecutionError(
-        'Expected node "4" to exist with class_type "CLIPTextEncode" and inputs object for negativePrompt injection'
-      );
+    if (injected.negativePrompt !== undefined) {
+      if (!topology.negativePrompt) {
+        throw new RenderJobExecutionError(
+          `Profile "${profile?.id ?? "unknown"}" does not declare a negativePrompt injection target`
+        );
+      }
+      const node = workflow[topology.negativePrompt.nodeId];
+      if (
+        typeof node !== "object" ||
+        node === null ||
+        (node as { class_type?: string }).class_type !== topology.negativePrompt.classType ||
+        typeof (node as { inputs?: unknown }).inputs !== "object" ||
+        (node as { inputs?: unknown }).inputs === null
+      ) {
+        throw new RenderJobExecutionError(
+          `Expected node "${topology.negativePrompt.nodeId}" to exist with class_type "${topology.negativePrompt.classType}" and inputs object for negativePrompt injection`
+        );
+      }
+      (node as { inputs: Record<string, unknown> }).inputs[topology.negativePrompt.inputField] =
+        injected.negativePrompt;
     }
-    (node4 as { inputs: Record<string, unknown> }).inputs.text = injected.negativePrompt;
-  }
 
-  if (injected.seed !== undefined) {
-    const node1 = workflow["1"];
-    if (
-      typeof node1 !== "object" ||
-      node1 === null ||
-      (node1 as { class_type?: string }).class_type !== "KSampler" ||
-      typeof (node1 as { inputs?: unknown }).inputs !== "object" ||
-      (node1 as { inputs?: unknown }).inputs === null
-    ) {
-      throw new RenderJobExecutionError(
-        'Expected node "1" to exist with class_type "KSampler" and inputs object for seed injection'
-      );
+    if (injected.seed !== undefined) {
+      const node = workflow[topology.seed.nodeId];
+      if (
+        typeof node !== "object" ||
+        node === null ||
+        (node as { class_type?: string }).class_type !== topology.seed.classType ||
+        typeof (node as { inputs?: unknown }).inputs !== "object" ||
+        (node as { inputs?: unknown }).inputs === null
+      ) {
+        throw new RenderJobExecutionError(
+          `Expected node "${topology.seed.nodeId}" to exist with class_type "${topology.seed.classType}" and inputs object for seed injection`
+        );
+      }
+      (node as { inputs: Record<string, unknown> }).inputs[topology.seed.inputField] =
+        injected.seed;
     }
-    (node1 as { inputs: Record<string, unknown> }).inputs.seed = injected.seed;
-  }
 
-  if (injected.audioPrompt !== undefined) {
-    const audioTargets = findAudioPromptTargets(workflow);
-    if (audioTargets.length === 0) {
-      throw new RenderJobExecutionError(
-        "No compatible audio prompt node found in workflow for audioPrompt injection"
-      );
+    if (injected.audioPrompt !== undefined) {
+      if (topology.audioPrompt === null || !topology.audioPrompt) {
+        throw new RenderJobExecutionError(
+          `Profile "${profile?.id ?? "unknown"}" does not support audio generation: audioPrompt is not supported for workflow template`
+        );
+      }
+      const node = workflow[topology.audioPrompt.nodeId];
+      if (
+        typeof node !== "object" ||
+        node === null ||
+        (node as { class_type?: string }).class_type !== topology.audioPrompt.classType ||
+        typeof (node as { inputs?: unknown }).inputs !== "object" ||
+        (node as { inputs?: unknown }).inputs === null
+      ) {
+        throw new RenderJobExecutionError(
+          `Expected node "${topology.audioPrompt.nodeId}" to exist with class_type "${topology.audioPrompt.classType}" and inputs object for audioPrompt injection`
+        );
+      }
+      (node as { inputs: Record<string, unknown> }).inputs[topology.audioPrompt.inputField] =
+        injected.audioPrompt;
     }
-    if (audioTargets.length > 1) {
-      throw new RenderJobExecutionError(
-        `Multiple ambiguous audio prompt target nodes found in workflow for audioPrompt injection: [${audioTargets.map((t) => t.nodeId).join(", ")}]`
-      );
+  } else {
+    if (injected.prompt !== undefined) {
+      const node3 = workflow["3"];
+      if (
+        typeof node3 !== "object" ||
+        node3 === null ||
+        (node3 as { class_type?: string }).class_type !== "CLIPTextEncode" ||
+        typeof (node3 as { inputs?: unknown }).inputs !== "object" ||
+        (node3 as { inputs?: unknown }).inputs === null
+      ) {
+        throw new RenderJobExecutionError(
+          'Expected node "3" to exist with class_type "CLIPTextEncode" and inputs object for prompt injection'
+        );
+      }
+      (node3 as { inputs: Record<string, unknown> }).inputs.text = injected.prompt;
     }
-    const target = audioTargets[0]!;
-    const targetNode = workflow[target.nodeId] as { inputs: Record<string, unknown> };
-    targetNode.inputs[target.inputField] = injected.audioPrompt;
+
+    if (injected.negativePrompt !== undefined) {
+      const node4 = workflow["4"];
+      if (
+        typeof node4 !== "object" ||
+        node4 === null ||
+        (node4 as { class_type?: string }).class_type !== "CLIPTextEncode" ||
+        typeof (node4 as { inputs?: unknown }).inputs !== "object" ||
+        (node4 as { inputs?: unknown }).inputs === null
+      ) {
+        throw new RenderJobExecutionError(
+          'Expected node "4" to exist with class_type "CLIPTextEncode" and inputs object for negativePrompt injection'
+        );
+      }
+      (node4 as { inputs: Record<string, unknown> }).inputs.text = injected.negativePrompt;
+    }
+
+    if (injected.seed !== undefined) {
+      const node1 = workflow["1"];
+      if (
+        typeof node1 !== "object" ||
+        node1 === null ||
+        (node1 as { class_type?: string }).class_type !== "KSampler" ||
+        typeof (node1 as { inputs?: unknown }).inputs !== "object" ||
+        (node1 as { inputs?: unknown }).inputs === null
+      ) {
+        throw new RenderJobExecutionError(
+          'Expected node "1" to exist with class_type "KSampler" and inputs object for seed injection'
+        );
+      }
+      (node1 as { inputs: Record<string, unknown> }).inputs.seed = injected.seed;
+    }
+
+    if (injected.audioPrompt !== undefined) {
+      const audioTargets = findAudioPromptTargets(workflow);
+      if (audioTargets.length === 0) {
+        throw new RenderJobExecutionError(
+          "No compatible audio prompt node found in workflow for audioPrompt injection"
+        );
+      }
+      if (audioTargets.length > 1) {
+        throw new RenderJobExecutionError(
+          `Multiple ambiguous audio prompt target nodes found in workflow for audioPrompt injection: [${audioTargets.map((t) => t.nodeId).join(", ")}]`
+        );
+      }
+      const target = audioTargets[0]!;
+      const targetNode = workflow[target.nodeId] as { inputs: Record<string, unknown> };
+      targetNode.inputs[target.inputField] = injected.audioPrompt;
+    }
   }
 
   return workflow as RenderWorkflow;
@@ -383,10 +480,7 @@ export function createCertifiedRenderJobExecutor(
   const comfyUiDir = options?.comfyUiDir ?? process.env.COMFYUI_DIR ?? "";
 
   return async (job: RenderJob): Promise<WorkerRenderOutput> => {
-    // 1. Validate injectedPayload FIRST (before loading or rendering)
-    const validatedInjected = validateInjectedPayload(job.injectedPayload, job.jobKind);
-
-    // 2. Resolve certified profile
+    // 1. Resolve certified profile
     let profile: Awaited<ReturnType<typeof loadCertificationProfileFn>>;
     try {
       profile = await loadCertificationProfileFn(manifestPath, job.workflowTemplate);
@@ -398,6 +492,9 @@ export function createCertifiedRenderJobExecutor(
         `Profile "${profile.id}" does not define renderProfileIdentity in manifest`
       );
     }
+
+    // 2. Validate injectedPayload with profile awareness
+    const validatedInjected = validateInjectedPayload(job.injectedPayload, job.jobKind, profile);
 
     // 3. Approved provenance & live provenance collection & verification
     const approvedProvenance = await readApprovedProvenanceFn(goldMasterProvenancePath);
@@ -432,7 +529,7 @@ export function createCertifiedRenderJobExecutor(
       );
     }
 
-    const mutatedWorkflow = mutateWorkflow(rawWorkflow, validatedInjected);
+    const mutatedWorkflow = mutateWorkflow(rawWorkflow, validatedInjected, profile);
 
     // 5. Construct ProfileRenderIdentity
     const identity: ProfileRenderIdentity = Object.freeze({

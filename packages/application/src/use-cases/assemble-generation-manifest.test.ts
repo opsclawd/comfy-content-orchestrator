@@ -358,11 +358,11 @@ describe("AssembleGenerationManifest use case", () => {
     expect(manifestPayload.frameCount).toBe(97);
     expect(manifestPayload.fps).toBe(97 / 5);
 
-    // 9. Prompts & audio prompt
+    // 9. Prompts & audio prompt (audioPrompt is explicitly null for video-only LTX profile)
     expect(manifestPayload.prompts).toEqual({
       prompt: "A beautiful cinematic sunrise",
       negativePrompt: "low quality, blurry",
-      audioPrompt: "ambient birds chirping at dawn"
+      audioPrompt: null
     });
 
     // 10. Persistent ReferenceAsset identities
@@ -473,7 +473,7 @@ describe("AssembleGenerationManifest use case", () => {
     expect("approvedCandidate" in result.manifestPayload).toBe(false);
   });
 
-  it("falls back to profile models with category 'loras' when workflow is omitted", async () => {
+  it("falls back to profile models with category 'loras' when workflow has no LoRA nodes", async () => {
     const profileWithLora: ManifestSourceProfile = {
       ...fakeProfile,
       models: [
@@ -481,24 +481,32 @@ describe("AssembleGenerationManifest use case", () => {
         { category: "loras", relativePath: "film-grain-v2.safetensors" }
       ]
     };
-    const deps = createTestDeps();
-    const assembler = new AssembleGenerationManifest(deps);
-    const jobWithSampling: RenderJob = {
-      ...fakeJob,
-      injectedPayload: {
-        prompt: "A beautiful cinematic sunrise",
-        audioPrompt: "ambient birds chirping at dawn",
-        seed: 42,
-        cfg: 1,
-        sampler: "euler",
-        scheduler: "simple",
-        denoise: 1
+    const workflowWithoutLoras: RenderWorkflow = {
+      "1": {
+        class_type: "KSampler",
+        inputs: {
+          seed: 42,
+          steps: 8,
+          cfg: 1,
+          sampler_name: "euler",
+          scheduler: "simple",
+          denoise: 1
+        }
+      },
+      "3": {
+        class_type: "CLIPTextEncode",
+        inputs: { text: "Positive prompt" }
+      },
+      "4": {
+        class_type: "CLIPTextEncode",
+        inputs: { text: "Negative prompt" }
       }
     };
+    const deps = createTestDeps();
+    const assembler = new AssembleGenerationManifest(deps);
     const input = createDefaultInput({
-      job: jobWithSampling,
       profile: profileWithLora,
-      workflow: undefined
+      workflow: workflowWithoutLoras
     });
 
     const result = await assembler.assemble(input);
@@ -517,6 +525,14 @@ describe("AssembleGenerationManifest use case", () => {
           scheduler: "simple",
           denoise: 1
         }
+      },
+      "3": {
+        class_type: "CLIPTextEncode",
+        inputs: { text: "Positive prompt" }
+      },
+      "4": {
+        class_type: "CLIPTextEncode",
+        inputs: { text: "Negative prompt" }
       },
       "10": {
         class_type: "CR Load LoRA",
@@ -570,15 +586,13 @@ describe("AssembleGenerationManifest use case", () => {
 
     const deps = createTestDeps();
     const assembler = new AssembleGenerationManifest(deps);
-    const jobWithoutInjectedPrompts: RenderJob = {
-      ...fakeJob,
-      injectedPayload: {
-        seed: 42,
-        audioPrompt: "ambient audio track"
-      }
-    };
     const input = createDefaultInput({
-      job: jobWithoutInjectedPrompts,
+      profile: {
+        ...fakeProfile,
+        id: "custom-video-profile",
+        engine: "custom_video",
+        renderProfileIdentity: null
+      },
       workflow: customWorkflow
     });
 
@@ -586,11 +600,11 @@ describe("AssembleGenerationManifest use case", () => {
     expect(result.manifestPayload.prompts).toEqual({
       prompt: "Positive prompt from first node",
       negativePrompt: "Negative prompt from second node",
-      audioPrompt: "ambient audio track"
+      audioPrompt: null
     });
   });
 
-  it("extracts audioPrompt from workflow audio node when present", async () => {
+  it("extracts audioPrompt from workflow audio node when present for custom/audio-capable profile", async () => {
     const workflowWithAudio: RenderWorkflow = {
       "1": {
         class_type: "KSampler",
@@ -618,12 +632,13 @@ describe("AssembleGenerationManifest use case", () => {
     };
     const deps = createTestDeps();
     const assembler = new AssembleGenerationManifest(deps);
-    const jobWithoutAudioInjected: RenderJob = {
-      ...fakeJob,
-      injectedPayload: { seed: 42 }
-    };
     const input = createDefaultInput({
-      job: jobWithoutAudioInjected,
+      profile: {
+        ...fakeProfile,
+        id: "custom-audio-profile",
+        engine: "custom_audio",
+        renderProfileIdentity: null
+      },
       workflow: workflowWithAudio
     });
 
@@ -655,6 +670,12 @@ describe("AssembleGenerationManifest use case", () => {
     const deps = createTestDeps();
     const assembler = new AssembleGenerationManifest(deps);
     const input = createDefaultInput({
+      profile: {
+        ...fakeProfile,
+        id: "custom-profile",
+        engine: "custom_engine",
+        renderProfileIdentity: null
+      },
       workflow: ambiguousAudioWorkflow
     });
 
@@ -866,22 +887,30 @@ describe("AssembleGenerationManifest use case", () => {
       );
     });
 
-    it("throws when audioPrompt cannot be sourced", async () => {
+    it("throws when ambiguous audioPrompt nodes exist in workflow", async () => {
       const assembler = new AssembleGenerationManifest(createTestDeps());
-      const jobWithoutAudioPrompt: RenderJob = {
-        ...fakeJob,
-        injectedPayload: {
-          prompt: "A beautiful cinematic sunrise",
-          negativePrompt: "low quality, blurry",
-          seed: 42
+      const ambiguousWorkflow: RenderWorkflow = {
+        ...fakeWorkflow,
+        "50": {
+          class_type: "AudioCLIPTextEncode",
+          inputs: { text: "Audio 1" }
+        },
+        "51": {
+          class_type: "AudioCLIPTextEncode",
+          inputs: { text: "Audio 2" }
         }
       };
       const input = createDefaultInput({
-        job: jobWithoutAudioPrompt,
-        workflow: fakeWorkflow
+        profile: {
+          ...fakeProfile,
+          id: "custom-profile",
+          engine: "custom_engine",
+          renderProfileIdentity: null
+        },
+        workflow: ambiguousWorkflow
       });
       await expect(assembler.assemble(input)).rejects.toThrow(
-        new IncompleteManifestError("audioPrompt")
+        /ambiguous audio prompt target nodes in workflow/
       );
     });
 

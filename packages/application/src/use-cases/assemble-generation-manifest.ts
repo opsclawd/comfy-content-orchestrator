@@ -1,3 +1,4 @@
+import { getProfileInjectionTopology } from "@cco/contracts";
 import type { CandidateId, RenderJob } from "@cco/domain";
 import type {
   HashBytesPort,
@@ -42,6 +43,13 @@ export interface ManifestSourceProfile {
         readonly category: string;
         readonly relativePath: string;
       }[]
+    | undefined;
+  readonly renderProfileIdentity?:
+    | {
+        readonly key: string;
+        readonly version: number;
+      }
+    | null
     | undefined;
 }
 
@@ -246,6 +254,12 @@ export class AssembleGenerationManifest {
           });
         }
       }
+      if (loras.length === 0) {
+        const loraModels = input.profile.models?.filter((m) => m.category === "loras") ?? [];
+        for (const m of loraModels) {
+          loras.push({ name: m.relativePath });
+        }
+      }
     } else {
       // Fallback: filter input.profile.models by category === "loras"
       const loraModels = input.profile.models?.filter((m) => m.category === "loras") ?? [];
@@ -254,7 +268,11 @@ export class AssembleGenerationManifest {
       }
     }
 
-    // 7. Sampling parameters
+    // 7. Sampling parameters (authoritatively derived from post-dispatch workflow)
+    if (!input.workflow) {
+      throw new IncompleteManifestError("sampling");
+    }
+
     let seed: number | undefined;
     let steps: number | undefined = input.profile.baseline.steps;
     let cfg: number | undefined;
@@ -262,58 +280,32 @@ export class AssembleGenerationManifest {
     let scheduler: string | undefined;
     let denoise: number | undefined;
 
-    if (input.workflow) {
-      const ksamplers = [
-        ...findNodesByClassType(input.workflow, "KSampler"),
-        ...findNodesByClassType(input.workflow, "KSamplerAdvanced")
-      ];
-      if (ksamplers.length > 0) {
-        const ksampler = ksamplers[0]!;
-        if (typeof ksampler.inputs.seed === "number") {
-          seed = ksampler.inputs.seed;
-        }
-        if (typeof ksampler.inputs.steps === "number") {
-          steps = ksampler.inputs.steps;
-        }
-        if (typeof ksampler.inputs.cfg === "number") {
-          cfg = ksampler.inputs.cfg;
-        }
-        if (typeof ksampler.inputs.sampler_name === "string") {
-          sampler = ksampler.inputs.sampler_name;
-        } else if (typeof ksampler.inputs.sampler === "string") {
-          sampler = ksampler.inputs.sampler;
-        }
-        if (typeof ksampler.inputs.scheduler === "string") {
-          scheduler = ksampler.inputs.scheduler;
-        }
-        if (typeof ksampler.inputs.denoise === "number") {
-          denoise = ksampler.inputs.denoise;
-        }
+    const ksamplers = [
+      ...findNodesByClassType(input.workflow, "KSampler"),
+      ...findNodesByClassType(input.workflow, "KSamplerAdvanced")
+    ];
+    if (ksamplers.length > 0) {
+      const ksampler = ksamplers[0]!;
+      if (typeof ksampler.inputs.seed === "number") {
+        seed = ksampler.inputs.seed;
       }
-    }
-
-    if (seed === undefined && typeof input.job.injectedPayload?.seed === "number") {
-      seed = input.job.injectedPayload.seed;
-    }
-    if (steps === undefined && typeof input.job.injectedPayload?.steps === "number") {
-      steps = input.job.injectedPayload.steps;
-    }
-    if (cfg === undefined && typeof input.job.injectedPayload?.cfg === "number") {
-      cfg = input.job.injectedPayload.cfg;
-    }
-    if (sampler === undefined && typeof input.job.injectedPayload?.sampler === "string") {
-      sampler = input.job.injectedPayload.sampler;
-    } else if (
-      sampler === undefined &&
-      typeof input.job.injectedPayload?.sampler_name === "string"
-    ) {
-      sampler = input.job.injectedPayload.sampler_name;
-    }
-    if (scheduler === undefined && typeof input.job.injectedPayload?.scheduler === "string") {
-      scheduler = input.job.injectedPayload.scheduler;
-    }
-    if (denoise === undefined && typeof input.job.injectedPayload?.denoise === "number") {
-      denoise = input.job.injectedPayload.denoise;
+      if (typeof ksampler.inputs.steps === "number") {
+        steps = ksampler.inputs.steps;
+      }
+      if (typeof ksampler.inputs.cfg === "number") {
+        cfg = ksampler.inputs.cfg;
+      }
+      if (typeof ksampler.inputs.sampler_name === "string") {
+        sampler = ksampler.inputs.sampler_name;
+      } else if (typeof ksampler.inputs.sampler === "string") {
+        sampler = ksampler.inputs.sampler;
+      }
+      if (typeof ksampler.inputs.scheduler === "string") {
+        scheduler = ksampler.inputs.scheduler;
+      }
+      if (typeof ksampler.inputs.denoise === "number") {
+        denoise = ksampler.inputs.denoise;
+      }
     }
 
     if (
@@ -359,12 +351,50 @@ export class AssembleGenerationManifest {
     const frameCount = frames;
     const fps = frames / approximateDurationSeconds;
 
-    // 9. Prompts & audio prompt
+    // 9. Prompts & audio prompt (authoritatively derived from post-dispatch workflow)
+    const profileKey =
+      input.profile.renderProfileIdentity?.key ?? input.profile.id ?? input.profile.engine;
+    const topology = getProfileInjectionTopology(profileKey);
+
     let promptText: string | undefined;
     let negativePromptText: string | undefined;
-    let audioPromptText: string | undefined;
+    let audioPromptText: string | null = null;
 
-    if (input.workflow) {
+    if (topology) {
+      const promptNode = input.workflow[topology.prompt.nodeId] as
+        { class_type?: string; inputs?: Record<string, unknown> } | undefined;
+      if (
+        promptNode?.class_type === topology.prompt.classType &&
+        typeof promptNode.inputs?.[topology.prompt.inputField] === "string"
+      ) {
+        promptText = promptNode.inputs[topology.prompt.inputField] as string;
+      }
+
+      if (topology.negativePrompt) {
+        const negNode = input.workflow[topology.negativePrompt.nodeId] as
+          { class_type?: string; inputs?: Record<string, unknown> } | undefined;
+        if (
+          negNode?.class_type === topology.negativePrompt.classType &&
+          typeof negNode.inputs?.[topology.negativePrompt.inputField] === "string"
+        ) {
+          negativePromptText = negNode.inputs[topology.negativePrompt.inputField] as string;
+        }
+      }
+
+      if (topology.audioPrompt) {
+        const audioNode = input.workflow[topology.audioPrompt.nodeId] as
+          { class_type?: string; inputs?: Record<string, unknown> } | undefined;
+        if (
+          audioNode?.class_type === topology.audioPrompt.classType &&
+          typeof audioNode.inputs?.[topology.audioPrompt.inputField] === "string"
+        ) {
+          audioPromptText =
+            (audioNode.inputs[topology.audioPrompt.inputField] as string).trim() || null;
+        }
+      } else {
+        audioPromptText = null;
+      }
+    } else {
       const node3 = input.workflow["3"] as
         { class_type?: string; inputs?: { text?: string } } | undefined;
       const node4 = input.workflow["4"] as
@@ -399,31 +429,13 @@ export class AssembleGenerationManifest {
         audioTargets[0].currentValue.trim().length > 0
       ) {
         audioPromptText = audioTargets[0].currentValue.trim();
+      } else {
+        audioPromptText = null;
       }
     }
 
-    if (promptText === undefined && typeof input.job.injectedPayload?.prompt === "string") {
-      promptText = input.job.injectedPayload.prompt;
-    }
-    if (
-      negativePromptText === undefined &&
-      typeof input.job.injectedPayload?.negativePrompt === "string"
-    ) {
-      negativePromptText = input.job.injectedPayload.negativePrompt;
-    }
-    if (
-      audioPromptText === undefined &&
-      typeof input.job.injectedPayload?.audioPrompt === "string" &&
-      input.job.injectedPayload.audioPrompt.trim().length > 0
-    ) {
-      audioPromptText = input.job.injectedPayload.audioPrompt.trim();
-    }
-
-    if (!promptText) {
+    if (!promptText || promptText.trim().length === 0) {
       throw new IncompleteManifestError("prompts");
-    }
-    if (!audioPromptText) {
-      throw new IncompleteManifestError("audioPrompt");
     }
 
     const prompts = {
