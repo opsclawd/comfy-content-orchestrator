@@ -351,10 +351,15 @@ export class AssembleGenerationManifest {
     const frameCount = frames;
     const fps = frames / approximateDurationSeconds;
 
-    // 9. Prompts & audio prompt (authoritatively derived from post-dispatch workflow)
     const profileKey =
       input.profile.renderProfileIdentity?.key ?? input.profile.id ?? input.profile.engine;
     const topology = getProfileInjectionTopology(profileKey);
+
+    if (input.profile.renderProfileIdentity && !topology) {
+      throw new IncompleteManifestError(
+        `topology (missing ProfileInjectionTopology for certified profile "${input.profile.id}" / "${input.profile.renderProfileIdentity.key}")`
+      );
+    }
 
     let promptText: string | undefined;
     let negativePromptText: string | undefined;

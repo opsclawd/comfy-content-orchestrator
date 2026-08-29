@@ -133,6 +133,7 @@ export function getProfileInjectionTopology(
   const normalized = profileKeyOrId.toLowerCase();
   if (
     normalized === "ltx_25_720p_5s_v1" ||
+    normalized === "ltx_25_720p_97f_v1" ||
     normalized === "ltx-25-720p-97f" ||
     normalized === "ltx_25"
   ) {

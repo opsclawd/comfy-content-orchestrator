@@ -49,11 +49,26 @@ export class ProductionManifestAssemblyError extends RenderJobExecutionError {
 }
 
 export class WorkflowHashMismatchError extends RenderJobExecutionError {
-  override readonly name = "WorkflowHashMismatchError";
+  override readonly name: string = "WorkflowHashMismatchError";
+}
+
+export class MissingProfileTopologyError extends RenderJobExecutionError {
+  override readonly name: string = "MissingProfileTopologyError";
+  readonly profileId: string;
+  readonly renderProfileKey?: string | undefined;
+
+  constructor(profileId: string, renderProfileKey?: string, options?: ErrorOptions) {
+    super(
+      `Profile "${profileId}" (key: "${renderProfileKey ?? "unknown"}") does not define a declarative ProfileInjectionTopology`,
+      options
+    );
+    this.profileId = profileId;
+    this.renderProfileKey = renderProfileKey;
+  }
 }
 
 export class MissingCertifiedProfileError extends RenderJobExecutionError {
-  override readonly name = "MissingCertifiedProfileError";
+  override readonly name: string = "MissingCertifiedProfileError";
   readonly workflowTemplate: string;
   constructor(workflowTemplate: string, options?: ErrorOptions) {
     super(`no certified profile for workflow_template "${workflowTemplate}"`, options);
@@ -75,14 +90,31 @@ export type ProductionManifestAssembler =
   | {
       assembleManifest?: (
         input: AssembleProductionManifestInput
-      ) => Promise<Readonly<Record<string, unknown>>> | Readonly<Record<string, unknown>>;
+      ) =>
+        | Promise<
+            | { manifestPayload: Readonly<Record<string, unknown>> }
+            | Readonly<Record<string, unknown>>
+          >
+        | { manifestPayload: Readonly<Record<string, unknown>> }
+        | Readonly<Record<string, unknown>>;
       assemble?: (
         input: AssembleProductionManifestInput
-      ) => Promise<Readonly<Record<string, unknown>>> | Readonly<Record<string, unknown>>;
+      ) =>
+        | Promise<
+            | { manifestPayload: Readonly<Record<string, unknown>> }
+            | Readonly<Record<string, unknown>>
+          >
+        | { manifestPayload: Readonly<Record<string, unknown>> }
+        | Readonly<Record<string, unknown>>;
     }
   | ((
       input: AssembleProductionManifestInput
-    ) => Promise<Readonly<Record<string, unknown>>> | Readonly<Record<string, unknown>>);
+    ) =>
+      | Promise<
+          { manifestPayload: Readonly<Record<string, unknown>> } | Readonly<Record<string, unknown>>
+        >
+      | { manifestPayload: Readonly<Record<string, unknown>> }
+      | Readonly<Record<string, unknown>>);
 
 export interface RenderJobExecutorDependencies {
   readonly loadCertificationProfile?: typeof loadCertificationProfile | undefined;
@@ -214,6 +246,9 @@ function validateInjectedPayload(
     if (profile) {
       const profileKey = profile.renderProfileIdentity?.key ?? profile.id ?? profile.engine;
       const topology = getProfileInjectionTopology(profileKey);
+      if (profile.renderProfileIdentity && !topology) {
+        throw new MissingProfileTopologyError(profile.id, profile.renderProfileIdentity.key);
+      }
       if (topology && (topology.audioPrompt === null || !topology.audioPrompt)) {
         throw new RenderJobPayloadValidationError(
           `Profile "${profile.id}" does not support audio generation: audioPrompt is not supported`
@@ -275,7 +310,7 @@ function validateInjectedPayload(
   return { prompt, negativePrompt, audioPrompt, seed, variantOrdinal, approvedCandidateId };
 }
 
-function mutateWorkflow(
+export function mutateWorkflow(
   rawWorkflowJson: string,
   injected: ValidatedInjectedPayload,
   profile?: CertificationProfile | undefined
@@ -299,6 +334,10 @@ function mutateWorkflow(
   const workflow = parsed as Record<string, unknown>;
   const profileKey = profile?.renderProfileIdentity?.key ?? profile?.id ?? profile?.engine;
   const topology = getProfileInjectionTopology(profileKey);
+
+  if (profile?.renderProfileIdentity && !topology) {
+    throw new MissingProfileTopologyError(profile.id, profile.renderProfileIdentity.key);
+  }
 
   if (topology) {
     if (injected.prompt !== undefined) {
