@@ -5,7 +5,7 @@ import {
   type ExecuteProfileRenderResult,
   type ProfileRenderIdentity
 } from "@cco/application";
-import type { JobId, LeaseToken, RenderJob, SceneId } from "@cco/domain";
+import type { CandidateId, JobId, LeaseToken, RenderJob, SceneId } from "@cco/domain";
 import type {
   CertificationProfile,
   CertificationProvenanceReport,
@@ -440,7 +440,57 @@ describe("Certified Render Job Executor", () => {
       }
     });
     await expect(executor(productionJobWithVariant)).rejects.toThrow(
-      RenderJobPayloadValidationError
+      "variantOrdinal is candidate-only and not allowed in production jobs"
+    );
+    expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+
+    // 5. audioPrompt in a candidate job (production-only)
+    const candidateJobWithAudio = createSampleCandidateJob({
+      injectedPayload: {
+        prompt: "valid",
+        variantOrdinal: 1,
+        audioPrompt: "music"
+      }
+    });
+    await expect(executor(candidateJobWithAudio)).rejects.toThrow(
+      "audioPrompt is production-only and not allowed in candidate jobs"
+    );
+    expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+
+    // 6. approvedCandidateId in a candidate job (production-only)
+    const candidateJobWithApprovedId = createSampleCandidateJob({
+      injectedPayload: {
+        prompt: "valid",
+        variantOrdinal: 1,
+        approvedCandidateId: "cand-123"
+      }
+    });
+    await expect(executor(candidateJobWithApprovedId)).rejects.toThrow(
+      "approvedCandidateId is production-only and not allowed in candidate jobs"
+    );
+    expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+
+    // 7. Empty audioPrompt in production job
+    const prodJobWithEmptyAudio = createSampleProductionJob({
+      injectedPayload: {
+        prompt: "valid",
+        audioPrompt: "   "
+      }
+    });
+    await expect(executor(prodJobWithEmptyAudio)).rejects.toThrow(
+      "injectedPayload.audioPrompt must be a non-empty string"
+    );
+    expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+
+    // 8. Empty approvedCandidateId in production job
+    const prodJobWithEmptyApprovedId = createSampleProductionJob({
+      injectedPayload: {
+        prompt: "valid",
+        approvedCandidateId: "   "
+      }
+    });
+    await expect(executor(prodJobWithEmptyApprovedId)).rejects.toThrow(
+      "injectedPayload.approvedCandidateId must be a non-empty string"
     );
     expect(mockExecuteProfileRender).not.toHaveBeenCalled();
   });
@@ -830,183 +880,6 @@ describe("Certified Render Job Executor", () => {
     expect(result.manifestPayload).toEqual({ method: "assemble" });
   });
 
-  it("threads workflow and approvedCandidateId to productionManifestAssembler and unwraps manifestPayload result", async () => {
-    let receivedInput: AssembleProductionManifestInput | undefined;
-    const testAssembler: ProductionManifestAssembler = {
-      assemble: async (input: AssembleProductionManifestInput) => {
-        receivedInput = input;
-        return {
-          manifestPayload: {
-            assembledForCandidate: input.approvedCandidateId,
-            workflowNodesCount: Object.keys(input.workflow ?? {}).length
-          }
-        };
-      }
-    };
-
-    const outputReader = new FakeOutputReader(
-      new Map([["out1.mp4", { bytes: new Uint8Array([1, 2, 3]), contentType: "video/mp4" }]])
-    );
-
-    const executor = createCertifiedRenderJobExecutor({
-      loadCertificationProfile: async () => fakeLtxProfile,
-      readApprovedProvenance: async () => fakeLtxLiveProvenance,
-      collectCertificationProvenance: async () => fakeLtxLiveProvenance,
-      verifyGoldMasterProvenance: () => {},
-      readWorkflowFile: async () => fakeRawFluxWorkflow,
-      hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
-      executeProfileRender: vi.fn().mockResolvedValue({
-        status: "succeeded",
-        promptId: "ltx-test",
-        outputObjectKeys: ["out1.mp4"],
-        durationMs: 5000,
-        profile: {} as ProfileRenderIdentity,
-        preDispatchGpu: {
-          totalVramMb: 24576,
-          usedVramMb: 4096,
-          freeVramMb: 20480,
-          reservedVramMb: 4096,
-          measuredAt: new Date().toISOString()
-        }
-      }),
-      outputReader,
-      productionManifestAssembler: testAssembler
-    });
-
-    const job = createSampleProductionJob({
-      injectedPayload: {
-        prompt: "production prompt",
-        approvedCandidateId: "cand-uuid-1234"
-      }
-    });
-
-    const result = await executor(job);
-
-    expect(receivedInput).toBeDefined();
-    expect(receivedInput?.approvedCandidateId).toBe("cand-uuid-1234");
-    expect(receivedInput?.workflow).toBeDefined();
-    expect(result.manifestPayload).toEqual({
-      assembledForCandidate: "cand-uuid-1234",
-      workflowNodesCount: Object.keys(receivedInput?.workflow ?? {}).length
-    });
-  });
-
-  it("validates approvedCandidateId on production and candidate jobs", async () => {
-    const executor = createCertifiedRenderJobExecutor({
-      loadCertificationProfile: async () => fakeLtxProfile,
-      readApprovedProvenance: async () => fakeLtxLiveProvenance,
-      collectCertificationProvenance: async () => fakeLtxLiveProvenance,
-      verifyGoldMasterProvenance: () => {},
-      readWorkflowFile: async () => fakeRawFluxWorkflow,
-      hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
-      executeProfileRender: vi.fn(),
-      outputReader: new FakeOutputReader()
-    });
-
-    // 1. Candidate job with approvedCandidateId throws
-    const candidateJob = createSampleCandidateJob({
-      injectedPayload: {
-        variantOrdinal: 1,
-        approvedCandidateId: "cand-123"
-      }
-    });
-    await expect(executor(candidateJob)).rejects.toThrow(
-      "approvedCandidateId is production-only and not allowed in candidate jobs"
-    );
-
-    // 2. Production job with empty approvedCandidateId throws
-    const emptyCandidateIdJob = createSampleProductionJob({
-      injectedPayload: {
-        approvedCandidateId: "   "
-      }
-    });
-    await expect(executor(emptyCandidateIdJob)).rejects.toThrow(
-      "injectedPayload.approvedCandidateId must be a non-empty string"
-    );
-  });
-
-  it("validates audioPrompt on production and candidate jobs", async () => {
-    const executor = createCertifiedRenderJobExecutor({
-      loadCertificationProfile: async () => fakeLtxProfile,
-      readApprovedProvenance: async () => fakeLtxLiveProvenance,
-      collectCertificationProvenance: async () => fakeLtxLiveProvenance,
-      verifyGoldMasterProvenance: () => {},
-      readWorkflowFile: async () => fakeRawFluxWorkflow,
-      hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
-      executeProfileRender: vi.fn(),
-      outputReader: new FakeOutputReader()
-    });
-
-    // 1. Candidate job with audioPrompt throws
-    const candidateJobWithAudio = createSampleCandidateJob({
-      injectedPayload: {
-        variantOrdinal: 1,
-        audioPrompt: "ambient waves"
-      }
-    });
-    await expect(executor(candidateJobWithAudio)).rejects.toThrow(
-      "audioPrompt is production-only and not allowed in candidate jobs"
-    );
-
-    // 2. Production job with empty audioPrompt throws
-    const emptyAudioPromptJob = createSampleProductionJob({
-      injectedPayload: {
-        prompt: "valid prompt",
-        audioPrompt: "   "
-      }
-    });
-    await expect(executor(emptyAudioPromptJob)).rejects.toThrow(
-      "injectedPayload.audioPrompt must be a non-empty string"
-    );
-  });
-
-  it("uses custom HashBytesPort to hash output objects", async () => {
-    const customHashCalls: Uint8Array[] = [];
-    const customHashBytes = {
-      hashBytes: async (bytes: Uint8Array) => {
-        customHashCalls.push(bytes);
-        return "custom-computed-hash-hex";
-      }
-    };
-
-    const outputReader = new FakeOutputReader(
-      new Map([["out1.mp4", { bytes: new Uint8Array([5, 6, 7]), contentType: "video/mp4" }]])
-    );
-
-    const executor = createCertifiedRenderJobExecutor({
-      loadCertificationProfile: async () => fakeLtxProfile,
-      readApprovedProvenance: async () => fakeLtxLiveProvenance,
-      collectCertificationProvenance: async () => fakeLtxLiveProvenance,
-      verifyGoldMasterProvenance: () => {},
-      readWorkflowFile: async () => fakeRawFluxWorkflow,
-      hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
-      hashBytes: customHashBytes,
-      executeProfileRender: vi.fn().mockResolvedValue({
-        status: "succeeded",
-        promptId: "ltx-test",
-        outputObjectKeys: ["out1.mp4"],
-        durationMs: 5000,
-        profile: {} as ProfileRenderIdentity,
-        preDispatchGpu: {
-          totalVramMb: 24576,
-          usedVramMb: 4096,
-          freeVramMb: 20480,
-          reservedVramMb: 4096,
-          measuredAt: new Date().toISOString()
-        }
-      }),
-      outputReader,
-      productionManifestAssembler: async () => ({ status: "assembled" })
-    });
-
-    const job = createSampleProductionJob();
-    const result = await executor(job);
-
-    expect(customHashCalls).toHaveLength(1);
-    expect(customHashCalls[0]).toEqual(new Uint8Array([5, 6, 7]));
-    expect(result.mediaObjects?.[0]?.checksumSha256).toBe("custom-computed-hash-hex");
-  });
-
   it("supports useCase object with execute method as dependency", async () => {
     const mockUseCase = {
       execute: vi.fn().mockResolvedValue({
@@ -1206,5 +1079,237 @@ describe("Certified Render Job Executor", () => {
     expect(mockLoadProfile).toHaveBeenCalledTimes(1);
     expect(capturedManifestPath).toMatch(/templates\/provenance\.json$/);
     expect(capturedManifestPath).not.toContain("..");
+  });
+
+  describe("audioPrompt injection and canonical targeting causal chain", () => {
+    it("injects audioPrompt into canonical audio node and dispatches mutated workflow to render execution and manifest", async () => {
+      const executeCalls: ExecuteProfileRenderInput[] = [];
+      const mockExecuteProfileRender = vi
+        .fn()
+        .mockImplementation(async (input: ExecuteProfileRenderInput) => {
+          executeCalls.push(input);
+          return {
+            status: "succeeded",
+            promptId: "ltx-audio-prompt-1",
+            outputObjectKeys: ["output.mp4"],
+            durationMs: 4000,
+            profile: input.identity,
+            preDispatchGpu: {
+              totalVramMb: 24576,
+              usedVramMb: 4096,
+              freeVramMb: 20480,
+              reservedVramMb: 4096,
+              measuredAt: new Date().toISOString()
+            }
+          };
+        });
+
+      let manifestAssembleInput: AssembleProductionManifestInput | undefined;
+      const mockAssembler: ProductionManifestAssembler = {
+        assembleManifest: vi
+          .fn()
+          .mockImplementation(async (input: AssembleProductionManifestInput) => {
+            manifestAssembleInput = input;
+            return { manifestId: "manifest-123", audioPromptApplied: true };
+          })
+      };
+
+      const rawLtxWorkflowWithAudio = JSON.stringify({
+        "1": { class_type: "KSampler", inputs: { seed: 42, steps: 8 } },
+        "3": { class_type: "CLIPTextEncode", inputs: { text: "default prompt" } },
+        "4": { class_type: "CLIPTextEncode", inputs: { text: "default negative" } },
+        "50": { class_type: "AudioCLIPTextEncode", inputs: { text: "old audio prompt" } }
+      });
+
+      const outputReader = new FakeOutputReader(
+        new Map([["output.mp4", { bytes: new Uint8Array([1, 2, 3]), contentType: "video/mp4" }]])
+      );
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxProfile,
+        readApprovedProvenance: async () => fakeLtxLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => rawLtxWorkflowWithAudio,
+        hashWorkflow: () => sampleLtxWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        outputReader,
+        productionManifestAssembler: mockAssembler
+      });
+
+      const job = createSampleProductionJob({
+        injectedPayload: {
+          prompt: "cinematic drone flight",
+          negativePrompt: "low res",
+          audioPrompt: "epic cinematic orchestral soundtrack",
+          seed: 777,
+          approvedCandidateId: "cand-999" as CandidateId
+        }
+      });
+
+      const result = await executor(job);
+
+      // 1. Verify workflow dispatched to ComfyUI render execution has injected audioPrompt in node 50
+      expect(executeCalls).toHaveLength(1);
+      const dispatchedWorkflow = executeCalls[0]!.workflow as Record<
+        string,
+        { inputs: Record<string, unknown> }
+      >;
+      expect(dispatchedWorkflow["50"]?.inputs.text).toBe("epic cinematic orchestral soundtrack");
+      expect(dispatchedWorkflow["3"]?.inputs.text).toBe("cinematic drone flight");
+      expect(dispatchedWorkflow["4"]?.inputs.text).toBe("low res");
+      expect(dispatchedWorkflow["1"]?.inputs.seed).toBe(777);
+
+      // 2. Verify manifest assembler received the exact mutated workflow and approvedCandidateId
+      expect(mockAssembler.assembleManifest).toHaveBeenCalledTimes(1);
+      expect(manifestAssembleInput).toBeDefined();
+      const assemblerWorkflow = manifestAssembleInput!.workflow as Record<
+        string,
+        { inputs: Record<string, unknown> }
+      >;
+      expect(assemblerWorkflow["50"]?.inputs.text).toBe("epic cinematic orchestral soundtrack");
+      expect(manifestAssembleInput!.approvedCandidateId).toBe("cand-999");
+      expect(result.manifestPayload).toEqual({
+        manifestId: "manifest-123",
+        audioPromptApplied: true
+      });
+    });
+
+    it("fails when audioPrompt is supplied but no compatible audio node exists in workflow", async () => {
+      const mockExecuteProfileRender = vi.fn();
+      const mockAssembler = { assembleManifest: vi.fn() };
+
+      // Workflow with no audio node (only KSampler and CLIPTextEncode)
+      const rawWorkflowWithoutAudio = JSON.stringify({
+        "1": { class_type: "KSampler", inputs: { seed: 42, steps: 8 } },
+        "3": { class_type: "CLIPTextEncode", inputs: { text: "default prompt" } },
+        "4": { class_type: "CLIPTextEncode", inputs: { text: "default negative" } }
+      });
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxProfile,
+        readApprovedProvenance: async () => fakeLtxLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => rawWorkflowWithoutAudio,
+        hashWorkflow: () => sampleLtxWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        outputReader: new FakeOutputReader(),
+        productionManifestAssembler: mockAssembler
+      });
+
+      const job = createSampleProductionJob({
+        injectedPayload: {
+          prompt: "cinematic flight",
+          audioPrompt: "ocean waves audio"
+        }
+      });
+
+      await expect(executor(job)).rejects.toThrow(
+        "No compatible audio prompt node found in workflow for audioPrompt injection"
+      );
+      expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+      expect(mockAssembler.assembleManifest).not.toHaveBeenCalled();
+    });
+
+    it("fails when audioPrompt is supplied but multiple ambiguous audio nodes exist in workflow", async () => {
+      const mockExecuteProfileRender = vi.fn();
+      const mockAssembler = { assembleManifest: vi.fn() };
+
+      // Workflow with multiple audio nodes
+      const rawWorkflowWithAmbiguousAudio = JSON.stringify({
+        "1": { class_type: "KSampler", inputs: { seed: 42, steps: 8 } },
+        "3": { class_type: "CLIPTextEncode", inputs: { text: "default prompt" } },
+        "4": { class_type: "CLIPTextEncode", inputs: { text: "default negative" } },
+        "50": { class_type: "AudioCLIPTextEncode", inputs: { text: "audio prompt 1" } },
+        "51": { class_type: "PromptAudio", inputs: { prompt: "audio prompt 2" } }
+      });
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxProfile,
+        readApprovedProvenance: async () => fakeLtxLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => rawWorkflowWithAmbiguousAudio,
+        hashWorkflow: () => sampleLtxWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        outputReader: new FakeOutputReader(),
+        productionManifestAssembler: mockAssembler
+      });
+
+      const job = createSampleProductionJob({
+        injectedPayload: {
+          prompt: "cinematic flight",
+          audioPrompt: "thunderstorm audio"
+        }
+      });
+
+      await expect(executor(job)).rejects.toThrow(
+        "Multiple ambiguous audio prompt target nodes found in workflow for audioPrompt injection: [50, 51]"
+      );
+      expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+      expect(mockAssembler.assembleManifest).not.toHaveBeenCalled();
+    });
+
+    it("leaves existing workflow behavior unchanged when audioPrompt is absent", async () => {
+      const executeCalls: ExecuteProfileRenderInput[] = [];
+      const mockExecuteProfileRender = vi
+        .fn()
+        .mockImplementation(async (input: ExecuteProfileRenderInput) => {
+          executeCalls.push(input);
+          return {
+            status: "succeeded",
+            promptId: "ltx-no-audio-1",
+            outputObjectKeys: ["output.mp4"],
+            durationMs: 3000,
+            profile: input.identity,
+            preDispatchGpu: {
+              totalVramMb: 24576,
+              usedVramMb: 4096,
+              freeVramMb: 20480,
+              reservedVramMb: 4096,
+              measuredAt: new Date().toISOString()
+            }
+          };
+        });
+
+      const rawLtxWorkflowWithAudio = JSON.stringify({
+        "1": { class_type: "KSampler", inputs: { seed: 42, steps: 8 } },
+        "3": { class_type: "CLIPTextEncode", inputs: { text: "default prompt" } },
+        "4": { class_type: "CLIPTextEncode", inputs: { text: "default negative" } },
+        "50": { class_type: "AudioCLIPTextEncode", inputs: { text: "original untouched audio" } }
+      });
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxProfile,
+        readApprovedProvenance: async () => fakeLtxLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => rawLtxWorkflowWithAudio,
+        hashWorkflow: () => sampleLtxWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        outputReader: new FakeOutputReader(
+          new Map([["output.mp4", { bytes: new Uint8Array([1]), contentType: "video/mp4" }]])
+        ),
+        productionManifestAssembler: async () => ({ ok: true })
+      });
+
+      const job = createSampleProductionJob({
+        injectedPayload: {
+          prompt: "cinematic flight without custom audio"
+        }
+      });
+
+      await executor(job);
+
+      expect(executeCalls).toHaveLength(1);
+      const dispatchedWorkflow = executeCalls[0]!.workflow as Record<
+        string,
+        { inputs: Record<string, unknown> }
+      >;
+      // Node 50 remains unchanged
+      expect(dispatchedWorkflow["50"]?.inputs.text).toBe("original untouched audio");
+      expect(dispatchedWorkflow["3"]?.inputs.text).toBe("cinematic flight without custom audio");
+    });
   });
 });

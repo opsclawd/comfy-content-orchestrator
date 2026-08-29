@@ -473,6 +473,42 @@ describe("run-worker CLI", () => {
         })
       ).toThrow(WorkerConfigError);
     });
+
+    it("parses and validates DATABASE_URL and CONTROL_API_DATABASE_URL with proper attribution", () => {
+      // 1. DATABASE_URL parsed
+      expect(
+        parseWorkerRuntimeConfig({
+          ...minimalValidEnv(),
+          DATABASE_URL: "postgresql://user:pass@localhost:5432/db"
+        }).databaseUrl
+      ).toBe("postgresql://user:pass@localhost:5432/db");
+
+      // 2. CONTROL_API_DATABASE_URL fallback parsed
+      expect(
+        parseWorkerRuntimeConfig({
+          ...minimalValidEnv(),
+          CONTROL_API_DATABASE_URL: "postgresql://user:pass@fallback:5432/db"
+        }).databaseUrl
+      ).toBe("postgresql://user:pass@fallback:5432/db");
+
+      // 3. Invalid DATABASE_URL error message references DATABASE_URL
+      expect(() =>
+        parseWorkerRuntimeConfig({
+          ...minimalValidEnv(),
+          DATABASE_URL: "not-a-url"
+        })
+      ).toThrow("Invalid URL in variable: DATABASE_URL (must be a valid connection URL)");
+
+      // 4. Invalid CONTROL_API_DATABASE_URL error message references CONTROL_API_DATABASE_URL
+      expect(() =>
+        parseWorkerRuntimeConfig({
+          ...minimalValidEnv(),
+          CONTROL_API_DATABASE_URL: "not-a-url"
+        })
+      ).toThrow(
+        "Invalid URL in variable: CONTROL_API_DATABASE_URL (must be a valid connection URL)"
+      );
+    });
   });
 
   describe("createProductionWorker", () => {

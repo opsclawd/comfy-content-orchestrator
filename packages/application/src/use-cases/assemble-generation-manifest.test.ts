@@ -635,6 +635,33 @@ describe("AssembleGenerationManifest use case", () => {
     });
   });
 
+  it("throws when workflow has ambiguous multiple audio prompt nodes", async () => {
+    const ambiguousAudioWorkflow: RenderWorkflow = {
+      "1": {
+        class_type: "KSampler",
+        inputs: {
+          seed: 42,
+          steps: 8,
+          cfg: 1,
+          sampler_name: "euler",
+          scheduler: "simple",
+          denoise: 1
+        }
+      },
+      "3": { class_type: "CLIPTextEncode", inputs: { text: "Positive prompt text" } },
+      "50": { class_type: "AudioCLIPTextEncode", inputs: { text: "Ocean waves" } },
+      "51": { class_type: "PromptAudio", inputs: { prompt: "Thunderstorm" } }
+    };
+    const deps = createTestDeps();
+    const assembler = new AssembleGenerationManifest(deps);
+    const input = createDefaultInput({
+      workflow: ambiguousAudioWorkflow
+    });
+
+    await expect(assembler.assemble(input)).rejects.toThrow(IncompleteManifestError);
+    await expect(assembler.assemble(input)).rejects.toThrow(/ambiguous audio prompt target nodes/);
+  });
+
   it("uses hashBytesPort to hash media object body when checksumSha256 is not pre-computed", async () => {
     let hashCalls = 0;
     const deps = createTestDeps({

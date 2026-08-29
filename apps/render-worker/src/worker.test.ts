@@ -2014,6 +2014,10 @@ describe("RenderWorker write-side admission gating and deferral", () => {
       "4": {
         class_type: "CLIPTextEncode",
         inputs: { text: "placeholder negative" }
+      },
+      "50": {
+        class_type: "AudioCLIPTextEncode",
+        inputs: { text: "placeholder audio prompt" }
       }
     });
 

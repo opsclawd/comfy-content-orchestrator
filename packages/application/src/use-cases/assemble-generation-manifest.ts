@@ -9,68 +9,6 @@ import type {
 } from "../ports/index.js";
 import type { ExecuteProfileRenderResult } from "./execute-profile-render.js";
 
-export interface ManifestSourceProfile {
-  readonly id: string;
-  readonly engine: string;
-  readonly runnerProfile: string;
-  readonly source: Readonly<{
-    kind: string;
-    license: string;
-    uri?: string;
-    revision?: string;
-  }>;
-  readonly baseline: Readonly<{
-    width?: number;
-    height?: number;
-    frames?: number;
-    steps: number;
-    approximateDurationSeconds?: number;
-  }>;
-  readonly models?: readonly {
-    category: string;
-    relativePath: string;
-  }[];
-}
-
-export interface ManifestSourceProvenance {
-  readonly generatedAt: string;
-  readonly workflow: Readonly<{
-    sha256: string;
-  }>;
-  readonly models: readonly {
-    key: string;
-    category: string;
-    sha256: string;
-    bytes: number;
-  }[];
-  readonly git: Readonly<{
-    comfyUiCommit: string;
-    customNodes: readonly unknown[];
-  }>;
-}
-
-export interface AssembleGenerationManifestDeps {
-  readonly hashBytes: HashBytesPort;
-  readonly storyboardCandidateRepository: StoryboardCandidateRepository;
-  readonly referenceAssetRepository: ReferenceAssetRepository;
-  readonly sceneRepository: SceneRepository;
-}
-
-export interface AssembleManifestInput {
-  readonly job: RenderJob;
-  readonly profile: ManifestSourceProfile;
-  readonly renderResult: ExecuteProfileRenderResult;
-  readonly provenance?: ManifestSourceProvenance | undefined;
-  readonly liveProvenance?: ManifestSourceProvenance | undefined;
-  readonly mediaObjects?: readonly PutObjectInput[] | undefined;
-  readonly workflow?: RenderWorkflow | undefined;
-  readonly approvedCandidateId?: CandidateId | undefined;
-}
-
-export interface AssembleManifestResult {
-  readonly manifestPayload: Readonly<Record<string, unknown>>;
-}
-
 export class IncompleteManifestError extends Error {
   override readonly name = "IncompleteManifestError";
   readonly missingField: string;
@@ -79,6 +17,130 @@ export class IncompleteManifestError extends Error {
     super(`Cannot assemble manifest: required field "${missingField}" is unavailable`, options);
     this.missingField = missingField;
   }
+}
+
+export interface ManifestSourceProfile {
+  readonly id: string;
+  readonly engine: string;
+  readonly runnerProfile: string;
+  readonly source: {
+    readonly kind: string;
+    readonly license: string;
+    readonly uri?: string | undefined;
+    readonly revision?: string | undefined;
+  };
+  readonly baseline: {
+    readonly width?: number | undefined;
+    readonly height?: number | undefined;
+    readonly frames?: number | undefined;
+    readonly fps?: number | undefined;
+    readonly steps?: number | undefined;
+    readonly approximateDurationSeconds?: number | undefined;
+  };
+  readonly models?:
+    | readonly {
+        readonly category: string;
+        readonly relativePath: string;
+      }[]
+    | undefined;
+}
+
+export interface ManifestSourceProvenance {
+  readonly generatedAt: string;
+  readonly workflow: {
+    readonly sha256: string;
+  };
+  readonly models?:
+    | readonly {
+        readonly key?: string | undefined;
+        readonly category: string;
+        readonly sha256: string;
+        readonly bytes?: number | undefined;
+      }[]
+    | undefined;
+  readonly git?:
+    | {
+        readonly comfyUiCommit?: string | undefined;
+        readonly customNodes?: readonly unknown[] | undefined;
+      }
+    | undefined;
+}
+
+export interface AssembleManifestInput {
+  readonly job: RenderJob;
+  readonly profile: ManifestSourceProfile;
+  readonly provenance?: ManifestSourceProvenance | undefined;
+  readonly liveProvenance?: ManifestSourceProvenance | undefined;
+  readonly renderResult: ExecuteProfileRenderResult;
+  readonly workflow?: RenderWorkflow | undefined;
+  readonly mediaObjects: readonly PutObjectInput[];
+  readonly approvedCandidateId?: CandidateId | undefined;
+}
+
+export interface AssembleManifestResult {
+  readonly manifestPayload: Readonly<Record<string, unknown>>;
+}
+
+export interface AssembleGenerationManifestDeps {
+  readonly hashBytes: HashBytesPort;
+  readonly sceneRepository: SceneRepository;
+  readonly storyboardCandidateRepository: StoryboardCandidateRepository;
+  readonly referenceAssetRepository: ReferenceAssetRepository;
+}
+
+export interface AudioPromptTargetNode {
+  readonly nodeId: string;
+  readonly classType: string;
+  readonly title?: string | undefined;
+  readonly inputField: "text" | "prompt" | "audio_prompt" | "audioPrompt";
+  readonly currentValue?: string | undefined;
+}
+
+export function findAudioPromptTargets(
+  workflow: Readonly<Record<string, unknown>>
+): AudioPromptTargetNode[] {
+  const targets: AudioPromptTargetNode[] = [];
+  for (const [nodeId, node] of Object.entries(workflow)) {
+    if (
+      typeof node === "object" &&
+      node !== null &&
+      !Array.isArray(node) &&
+      typeof (node as { inputs?: unknown }).inputs === "object" &&
+      (node as { inputs?: unknown }).inputs !== null
+    ) {
+      const inputs = (node as { inputs: Record<string, unknown> }).inputs;
+      const classType = String((node as { class_type?: unknown }).class_type ?? "");
+      const title = String((node as { _meta?: { title?: unknown } })._meta?.title ?? "");
+      const isAudio =
+        classType.toLowerCase().includes("audio") || title.toLowerCase().includes("audio");
+
+      if (isAudio) {
+        let inputField: "text" | "prompt" | "audio_prompt" | "audioPrompt" | undefined;
+        if ("audio_prompt" in inputs) {
+          inputField = "audio_prompt";
+        } else if ("audioPrompt" in inputs) {
+          inputField = "audioPrompt";
+        } else if ("text" in inputs) {
+          inputField = "text";
+        } else if ("prompt" in inputs) {
+          inputField = "prompt";
+        }
+
+        if (inputField !== undefined) {
+          const rawVal = inputs[inputField];
+          const currentValue = typeof rawVal === "string" ? rawVal : undefined;
+          targets.push({
+            nodeId,
+            classType,
+            title: title || undefined,
+            inputField,
+            currentValue
+          });
+        }
+      }
+    }
+  }
+  return targets;
 }
 
 function findNodesByClassType(
@@ -325,30 +387,18 @@ export class AssembleGenerationManifest {
         }
       }
 
-      for (const [, node] of Object.entries(input.workflow)) {
-        if (
-          typeof node === "object" &&
-          node !== null &&
-          !Array.isArray(node) &&
-          typeof (node as { inputs?: unknown }).inputs === "object" &&
-          (node as { inputs?: unknown }).inputs !== null
-        ) {
-          const inputs = (node as { inputs: Record<string, unknown> }).inputs;
-          const classType = String((node as { class_type?: unknown }).class_type ?? "");
-          const title = String((node as { _meta?: { title?: unknown } })._meta?.title ?? "");
-          if (classType.toLowerCase().includes("audio") || title.toLowerCase().includes("audio")) {
-            if (typeof inputs.text === "string" && inputs.text.trim().length > 0) {
-              audioPromptText = inputs.text.trim();
-            } else if (typeof inputs.prompt === "string" && inputs.prompt.trim().length > 0) {
-              audioPromptText = inputs.prompt.trim();
-            } else if (
-              typeof inputs.audio_prompt === "string" &&
-              inputs.audio_prompt.trim().length > 0
-            ) {
-              audioPromptText = inputs.audio_prompt.trim();
-            }
-          }
-        }
+      const audioTargets = findAudioPromptTargets(input.workflow);
+      if (audioTargets.length > 1) {
+        throw new IncompleteManifestError(
+          `audioPrompt (ambiguous audio prompt target nodes in workflow: [${audioTargets.map((t) => t.nodeId).join(", ")}])`
+        );
+      }
+      if (
+        audioTargets.length === 1 &&
+        audioTargets[0]?.currentValue &&
+        audioTargets[0].currentValue.trim().length > 0
+      ) {
+        audioPromptText = audioTargets[0].currentValue.trim();
       }
     }
 
@@ -470,28 +520,29 @@ export class AssembleGenerationManifest {
       ...(input.profile.source.revision ? { sourceRevision: input.profile.source.revision } : {})
     };
 
-    // 15. Outputs & execution duration
+    // 15. Outputs & execution duration (computed in parallel)
     if (!input.mediaObjects || input.mediaObjects.length === 0) {
       throw new IncompleteManifestError("outputs");
     }
 
-    const outputs = [];
-    for (const obj of input.mediaObjects) {
-      let checksumSha256 = obj.checksumSha256;
-      if (!checksumSha256 && obj.body) {
-        checksumSha256 = await this.deps.hashBytes.hashBytes(obj.body);
-      }
-      if (!checksumSha256) {
-        throw new IncompleteManifestError("outputs.checksumSha256");
-      }
-      outputs.push({
-        bucket: obj.bucket,
-        key: obj.key,
-        filename: obj.key.split("/").pop() ?? obj.key,
-        checksumSha256,
-        ...(obj.contentType ? { contentType: obj.contentType } : {})
-      });
-    }
+    const outputs = await Promise.all(
+      input.mediaObjects.map(async (obj) => {
+        let checksumSha256 = obj.checksumSha256;
+        if (!checksumSha256 && obj.body) {
+          checksumSha256 = await this.deps.hashBytes.hashBytes(obj.body);
+        }
+        if (!checksumSha256) {
+          throw new IncompleteManifestError("outputs.checksumSha256");
+        }
+        return {
+          bucket: obj.bucket,
+          key: obj.key,
+          filename: obj.key.split("/").pop() ?? obj.key,
+          checksumSha256,
+          ...(obj.contentType ? { contentType: obj.contentType } : {})
+        };
+      })
+    );
 
     const outputObjectKeys = input.renderResult.outputObjectKeys;
     const executionDurationMs = input.renderResult.durationMs;

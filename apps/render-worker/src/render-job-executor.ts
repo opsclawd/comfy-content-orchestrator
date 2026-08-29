@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  findAudioPromptTargets,
   type ExecuteProfileRenderInput,
   type ExecuteProfileRenderResult,
   type HashBytesPort,
@@ -330,6 +331,23 @@ function mutateWorkflow(
     (node1 as { inputs: Record<string, unknown> }).inputs.seed = injected.seed;
   }
 
+  if (injected.audioPrompt !== undefined) {
+    const audioTargets = findAudioPromptTargets(workflow);
+    if (audioTargets.length === 0) {
+      throw new RenderJobExecutionError(
+        "No compatible audio prompt node found in workflow for audioPrompt injection"
+      );
+    }
+    if (audioTargets.length > 1) {
+      throw new RenderJobExecutionError(
+        `Multiple ambiguous audio prompt target nodes found in workflow for audioPrompt injection: [${audioTargets.map((t) => t.nodeId).join(", ")}]`
+      );
+    }
+    const target = audioTargets[0]!;
+    const targetNode = workflow[target.nodeId] as { inputs: Record<string, unknown> };
+    targetNode.inputs[target.inputField] = injected.audioPrompt;
+  }
+
   return workflow as RenderWorkflow;
 }
 
@@ -462,25 +480,30 @@ export function createCertifiedRenderJobExecutor(
       }
     }
 
-    // 8. Read outputs, compute hashes, build PutObjectInputs
+    // 8. Read outputs, compute hashes, build PutObjectInputs in parallel
     const outputReader = deps?.outputReader ?? new HttpComfyUiOutputReader();
-    const mediaObjects: PutObjectInput[] = [];
-
     const bucket = job.jobKind === "candidate" ? candidateBucket : deliveryBucket;
 
-    for (const outputKey of renderResult.outputObjectKeys) {
-      const output = await outputReader.readOutput(outputKey);
-      const checksumSha256 = await hashBytesPort.hashBytes(output.bytes);
-      const storageObjectKey = buildObjectKeyFn(job.sceneId, job.jobId, outputKey, checksumSha256);
+    const mediaObjects: PutObjectInput[] = await Promise.all(
+      renderResult.outputObjectKeys.map(async (outputKey) => {
+        const output = await outputReader.readOutput(outputKey);
+        const checksumSha256 = await hashBytesPort.hashBytes(output.bytes);
+        const storageObjectKey = buildObjectKeyFn(
+          job.sceneId,
+          job.jobId,
+          outputKey,
+          checksumSha256
+        );
 
-      mediaObjects.push({
-        bucket,
-        key: storageObjectKey,
-        body: output.bytes,
-        checksumSha256,
-        ...(output.contentType ? { contentType: output.contentType } : {})
-      });
-    }
+        return {
+          bucket,
+          key: storageObjectKey,
+          body: output.bytes,
+          checksumSha256,
+          ...(output.contentType ? { contentType: output.contentType } : {})
+        };
+      })
+    );
 
     // 9. Completion payload assembly
     if (job.jobKind === "candidate") {

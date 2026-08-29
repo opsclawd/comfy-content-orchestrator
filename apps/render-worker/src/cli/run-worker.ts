@@ -78,9 +78,9 @@ export interface WorkerRuntimeConfig {
 }
 
 export class WorkerConfigError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "WorkerConfigError";
+  override readonly name = "WorkerConfigError";
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
   }
 }
 
@@ -110,26 +110,25 @@ export interface ProductionWorkerOverrides extends Partial<WorkerDependencies> {
   readonly now?: (() => Date) | undefined;
 }
 
-function sleepUntilTimeoutOrAbort(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve) => {
-    if (signal?.aborted) {
-      resolve();
-      return;
-    }
-
-    let timer: NodeJS.Timeout | undefined;
-    const finish = () => {
-      if (timer !== undefined) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
-      signal?.removeEventListener("abort", finish);
-      resolve();
-    };
-
-    timer = setTimeout(finish, ms);
-    signal?.addEventListener("abort", finish, { once: true });
-  });
+export function parseStorageTelemetryPath(
+  val: unknown,
+  varName = "STORAGE_TELEMETRY_PATH"
+): string {
+  if (typeof val !== "string" || val.trim() === "") {
+    throw new WorkerConfigError(`Missing or empty required environment variable: ${varName}`);
+  }
+  const trimmed = val.trim();
+  if (!path.isAbsolute(trimmed)) {
+    throw new WorkerConfigError(
+      `Invalid storage telemetry path in variable: ${varName} (must be an absolute path)`
+    );
+  }
+  if (trimmed === "/" || trimmed === "") {
+    throw new WorkerConfigError(
+      `Invalid storage telemetry path in variable: ${varName} (must be a dedicated storage directory, not root)`
+    );
+  }
+  return trimmed;
 }
 
 function parseHttpUrl(val: unknown, varName: string): string {
@@ -138,19 +137,14 @@ function parseHttpUrl(val: unknown, varName: string): string {
   }
   const trimmed = val.trim();
   try {
-    const url = new URL(trimmed);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      throw new WorkerConfigError(
-        `Invalid URL in variable: ${varName} (must be an http:// or https:// URL)`
-      );
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("Protocol must be http or https");
     }
     return trimmed;
-  } catch (err) {
-    if (err instanceof WorkerConfigError) {
-      throw err;
-    }
+  } catch {
     throw new WorkerConfigError(
-      `Invalid URL in variable: ${varName} (must be a valid HTTP or HTTPS URL)`
+      `Invalid HTTP URL in variable: ${varName} (must be a valid http or https URL)`
     );
   }
 }
@@ -177,25 +171,17 @@ function parseRequiredString(val: unknown, varName: string): string {
   return val.trim();
 }
 
-export function parseStorageTelemetryPath(
-  val: unknown,
-  varName = "STORAGE_TELEMETRY_PATH"
-): string {
-  const raw = parseRequiredString(val, varName);
-  if (!path.isAbsolute(raw)) {
-    throw new WorkerConfigError(
-      `Invalid storage telemetry path in variable: ${varName} (must be an absolute path)`
-    );
-  }
-  return raw;
-}
-
 function parsePositiveInteger(val: unknown, varName: string, defaultValue: number): number {
   if (val === undefined || val === null) {
     return defaultValue;
   }
-  if (typeof val === "string" && val.trim() === "") {
-    return defaultValue;
+  if (typeof val === "number") {
+    if (!Number.isSafeInteger(val) || val <= 0) {
+      throw new WorkerConfigError(
+        `Invalid positive integer in variable: ${varName} (must be a positive integer)`
+      );
+    }
+    return val;
   }
   if (typeof val !== "string") {
     throw new WorkerConfigError(
@@ -203,6 +189,9 @@ function parsePositiveInteger(val: unknown, varName: string, defaultValue: numbe
     );
   }
   const trimmed = val.trim();
+  if (trimmed === "") {
+    return defaultValue;
+  }
   if (!/^[1-9]\d*$/.test(trimmed)) {
     throw new WorkerConfigError(
       `Invalid positive integer in variable: ${varName} (must be a positive integer)`
@@ -221,8 +210,13 @@ function parseNonNegativeInteger(val: unknown, varName: string, defaultValue: nu
   if (val === undefined || val === null) {
     return defaultValue;
   }
-  if (typeof val === "string" && val.trim() === "") {
-    return defaultValue;
+  if (typeof val === "number") {
+    if (!Number.isSafeInteger(val) || val < 0) {
+      throw new WorkerConfigError(
+        `Invalid non-negative integer in variable: ${varName} (must be a non-negative integer)`
+      );
+    }
+    return val;
   }
   if (typeof val !== "string") {
     throw new WorkerConfigError(
@@ -230,6 +224,9 @@ function parseNonNegativeInteger(val: unknown, varName: string, defaultValue: nu
     );
   }
   const trimmed = val.trim();
+  if (trimmed === "") {
+    return defaultValue;
+  }
   if (!/^(0|[1-9]\d*)$/.test(trimmed)) {
     throw new WorkerConfigError(
       `Invalid non-negative integer in variable: ${varName} (must be a non-negative integer)`
@@ -496,9 +493,13 @@ export function parseWorkerRuntimeConfig(
   };
 
   const rawDbUrl = env.DATABASE_URL ?? env.CONTROL_API_DATABASE_URL;
+  const dbVarName =
+    env.DATABASE_URL !== undefined || env.CONTROL_API_DATABASE_URL === undefined
+      ? "DATABASE_URL"
+      : "CONTROL_API_DATABASE_URL";
   let databaseUrl: string | undefined;
   if (rawDbUrl !== undefined && rawDbUrl.trim() !== "") {
-    databaseUrl = parseDatabaseUrl(rawDbUrl, "DATABASE_URL");
+    databaseUrl = parseDatabaseUrl(rawDbUrl, dbVarName);
   }
 
   return {
@@ -528,6 +529,26 @@ export function parseWorkerRuntimeConfig(
     s3DeliveryBucket,
     s3Config
   };
+}
+
+function sleepUntilTimeoutOrAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(() => {
+      resolve();
+    }, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true }
+    );
+  });
 }
 
 export function createProductionWorker(
