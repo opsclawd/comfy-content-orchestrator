@@ -367,9 +367,17 @@ export class PostgresJobQueue implements JobQueuePort {
           );
         }
 
-        const promptIdComfy = manifestPayload.promptIdComfy;
+        const promptIdComfy =
+          typeof manifestPayload.promptIdComfy === "string" &&
+          manifestPayload.promptIdComfy.trim().length > 0
+            ? manifestPayload.promptIdComfy
+            : typeof (manifestPayload.runtimeMetadata as { promptId?: unknown } | undefined)
+                  ?.promptId === "string" &&
+                (manifestPayload.runtimeMetadata as { promptId: string }).promptId.trim().length > 0
+              ? (manifestPayload.runtimeMetadata as { promptId: string }).promptId
+              : undefined;
 
-        if (typeof promptIdComfy !== "string" || promptIdComfy.trim().length === 0) {
+        if (!promptIdComfy) {
           throw new InvalidJobCompletionPayloadError(
             "manifestPayload.promptIdComfy must be a non-empty string for production job completion"
           );

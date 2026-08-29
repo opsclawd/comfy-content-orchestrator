@@ -5,11 +5,12 @@ import { fileURLToPath } from "node:url";
 import {
   type ExecuteProfileRenderInput,
   type ExecuteProfileRenderResult,
+  type HashBytesPort,
   type ProfileRenderIdentity,
   type PutObjectInput,
   type RenderWorkflow
 } from "@cco/application";
-import type { JobKind, RenderJob } from "@cco/domain";
+import type { CandidateId, JobKind, RenderJob } from "@cco/domain";
 import {
   collectCertificationProvenance,
   hashWorkflow,
@@ -64,6 +65,8 @@ export interface AssembleProductionManifestInput {
   readonly renderResult: ExecuteProfileRenderResult;
   readonly mediaObjects: readonly PutObjectInput[];
   readonly liveProvenance?: CertificationProvenanceReport | undefined;
+  readonly workflow?: RenderWorkflow | undefined;
+  readonly approvedCandidateId?: CandidateId | undefined;
 }
 
 export type ProductionManifestAssembler =
@@ -86,6 +89,7 @@ export interface RenderJobExecutorDependencies {
   readonly verifyGoldMasterProvenance?: typeof verifyGoldMasterProvenance | undefined;
   readonly readWorkflowFile?: ((filePath: string) => Promise<string>) | undefined;
   readonly hashWorkflow?: typeof hashWorkflow | undefined;
+  readonly hashBytes?: HashBytesPort | undefined;
   readonly executeProfileRender?:
     ((input: ExecuteProfileRenderInput) => Promise<ExecuteProfileRenderResult>) | undefined;
   readonly useCase?:
@@ -124,12 +128,20 @@ export function buildDeterministicObjectKey(
 interface ValidatedInjectedPayload {
   readonly prompt?: string | undefined;
   readonly negativePrompt?: string | undefined;
+  readonly audioPrompt?: string | undefined;
   readonly seed?: number | undefined;
   readonly variantOrdinal?: number | undefined;
+  readonly approvedCandidateId?: CandidateId | undefined;
 }
 
 const ALLOWED_CANDIDATE_KEYS = new Set(["prompt", "negativePrompt", "seed", "variantOrdinal"]);
-const ALLOWED_PRODUCTION_KEYS = new Set(["prompt", "negativePrompt", "seed"]);
+const ALLOWED_PRODUCTION_KEYS = new Set([
+  "prompt",
+  "negativePrompt",
+  "audioPrompt",
+  "seed",
+  "approvedCandidateId"
+]);
 
 function validateInjectedPayload(payload: unknown, jobKind: JobKind): ValidatedInjectedPayload {
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
@@ -146,6 +158,16 @@ function validateInjectedPayload(payload: unknown, jobKind: JobKind): ValidatedI
           "variantOrdinal is candidate-only and not allowed in production jobs"
         );
       }
+      if (jobKind === "candidate" && key === "approvedCandidateId") {
+        throw new RenderJobPayloadValidationError(
+          "approvedCandidateId is production-only and not allowed in candidate jobs"
+        );
+      }
+      if (jobKind === "candidate" && key === "audioPrompt") {
+        throw new RenderJobPayloadValidationError(
+          "audioPrompt is production-only and not allowed in candidate jobs"
+        );
+      }
       throw new RenderJobPayloadValidationError(`Unknown injected payload field: "${key}"`);
     }
   }
@@ -153,8 +175,10 @@ function validateInjectedPayload(payload: unknown, jobKind: JobKind): ValidatedI
   const raw = payload as Record<string, unknown>;
   let prompt: string | undefined;
   let negativePrompt: string | undefined;
+  let audioPrompt: string | undefined;
   let seed: number | undefined;
   let variantOrdinal: number | undefined;
+  let approvedCandidateId: CandidateId | undefined;
 
   if ("prompt" in raw && raw.prompt !== undefined) {
     if (typeof raw.prompt !== "string") {
@@ -170,6 +194,20 @@ function validateInjectedPayload(payload: unknown, jobKind: JobKind): ValidatedI
     negativePrompt = raw.negativePrompt;
   }
 
+  if ("audioPrompt" in raw && raw.audioPrompt !== undefined) {
+    if (jobKind !== "production") {
+      throw new RenderJobPayloadValidationError(
+        "audioPrompt is production-only and not allowed in candidate jobs"
+      );
+    }
+    if (typeof raw.audioPrompt !== "string" || raw.audioPrompt.trim().length === 0) {
+      throw new RenderJobPayloadValidationError(
+        "injectedPayload.audioPrompt must be a non-empty string"
+      );
+    }
+    audioPrompt = raw.audioPrompt.trim();
+  }
+
   if ("seed" in raw && raw.seed !== undefined) {
     if (
       typeof raw.seed !== "number" ||
@@ -182,6 +220,23 @@ function validateInjectedPayload(payload: unknown, jobKind: JobKind): ValidatedI
       );
     }
     seed = raw.seed;
+  }
+
+  if ("approvedCandidateId" in raw && raw.approvedCandidateId !== undefined) {
+    if (jobKind !== "production") {
+      throw new RenderJobPayloadValidationError(
+        "approvedCandidateId is production-only and not allowed in candidate jobs"
+      );
+    }
+    if (
+      typeof raw.approvedCandidateId !== "string" ||
+      raw.approvedCandidateId.trim().length === 0
+    ) {
+      throw new RenderJobPayloadValidationError(
+        "injectedPayload.approvedCandidateId must be a non-empty string"
+      );
+    }
+    approvedCandidateId = raw.approvedCandidateId as CandidateId;
   }
 
   if (jobKind === "candidate") {
@@ -202,7 +257,7 @@ function validateInjectedPayload(payload: unknown, jobKind: JobKind): ValidatedI
     variantOrdinal = raw.variantOrdinal;
   }
 
-  return { prompt, negativePrompt, seed, variantOrdinal };
+  return { prompt, negativePrompt, audioPrompt, seed, variantOrdinal, approvedCandidateId };
 }
 
 function mutateWorkflow(
@@ -278,10 +333,6 @@ function mutateWorkflow(
   return workflow as RenderWorkflow;
 }
 
-function sha256Hex(bytes: Uint8Array): string {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
 export function createCertifiedRenderJobExecutor(
   deps?: RenderJobExecutorDependencies,
   options?: RenderJobExecutorOptions
@@ -300,6 +351,9 @@ export function createCertifiedRenderJobExecutor(
   const readWorkflowFileFn =
     deps?.readWorkflowFile ?? ((filePath: string) => readFile(filePath, "utf8"));
   const hashWorkflowFn = deps?.hashWorkflow ?? hashWorkflow;
+  const hashBytesPort: HashBytesPort = deps?.hashBytes ?? {
+    hashBytes: async (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
+  };
   const now = deps?.now ?? (() => new Date());
   const buildObjectKeyFn = options?.buildObjectKey ?? buildDeterministicObjectKey;
 
@@ -416,7 +470,7 @@ export function createCertifiedRenderJobExecutor(
 
     for (const outputKey of renderResult.outputObjectKeys) {
       const output = await outputReader.readOutput(outputKey);
-      const checksumSha256 = sha256Hex(output.bytes);
+      const checksumSha256 = await hashBytesPort.hashBytes(output.bytes);
       const storageObjectKey = buildObjectKeyFn(job.sceneId, job.jobId, outputKey, checksumSha256);
 
       mediaObjects.push({
@@ -462,16 +516,44 @@ export function createCertifiedRenderJobExecutor(
       profile,
       renderResult,
       mediaObjects: Object.freeze(mediaObjects),
-      liveProvenance
+      liveProvenance,
+      workflow: mutatedWorkflow,
+      ...(validatedInjected.approvedCandidateId !== undefined
+        ? { approvedCandidateId: validatedInjected.approvedCandidateId }
+        : {})
     };
 
     let manifestPayload: Readonly<Record<string, unknown>>;
     if (typeof assembler === "function") {
-      manifestPayload = await assembler(assembleInput);
+      const res = await assembler(assembleInput);
+      manifestPayload =
+        res &&
+        typeof res === "object" &&
+        "manifestPayload" in res &&
+        typeof res.manifestPayload === "object" &&
+        res.manifestPayload !== null
+          ? (res.manifestPayload as Readonly<Record<string, unknown>>)
+          : (res as Readonly<Record<string, unknown>>);
     } else if (typeof assembler.assembleManifest === "function") {
-      manifestPayload = await assembler.assembleManifest(assembleInput);
+      const res = await assembler.assembleManifest(assembleInput);
+      manifestPayload =
+        res &&
+        typeof res === "object" &&
+        "manifestPayload" in res &&
+        typeof res.manifestPayload === "object" &&
+        res.manifestPayload !== null
+          ? (res.manifestPayload as Readonly<Record<string, unknown>>)
+          : (res as Readonly<Record<string, unknown>>);
     } else if (typeof assembler.assemble === "function") {
-      manifestPayload = await assembler.assemble(assembleInput);
+      const res = await assembler.assemble(assembleInput);
+      manifestPayload =
+        res &&
+        typeof res === "object" &&
+        "manifestPayload" in res &&
+        typeof res.manifestPayload === "object" &&
+        res.manifestPayload !== null
+          ? (res.manifestPayload as Readonly<Record<string, unknown>>)
+          : (res as Readonly<Record<string, unknown>>);
     } else {
       throw new ProductionManifestAssemblyError(
         "ProductionManifestAssembler does not implement assembleManifest or assemble method"

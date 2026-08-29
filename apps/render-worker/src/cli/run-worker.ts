@@ -1,14 +1,22 @@
+import { createHash } from "node:crypto";
 import path, { resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import pg from "pg";
+const { Pool } = pg;
 import {
+  AssembleGenerationManifest,
   EnforceStorageAdmission,
   ExecuteProfileRenderUseCase,
   type ExecuteProfileRenderInput,
   type ExecuteProfileRenderResult,
   type GpuExecutionLeasePort,
   type GpuTelemetryPort,
-  type RenderEnginePort
+  type HashBytesPort,
+  type ReferenceAssetRepository,
+  type RenderEnginePort,
+  type SceneRepository,
+  type StoryboardCandidateRepository
 } from "@cco/application";
 import { JOB_KINDS, type JobKind } from "@cco/domain";
 import {
@@ -17,6 +25,9 @@ import {
   HttpComfyUiOutputReader,
   LocalFsGpuLeaseAdapter,
   NvidiaSmiTelemetryAdapter,
+  PostgresReferenceAssetRepository,
+  PostgresSceneRepository,
+  PostgresStoryboardCandidateRepository,
   S3ObjectStorage,
   type collectCertificationProvenance,
   type ComfyUiOutputReader,
@@ -30,6 +41,7 @@ import { createControlApiClient } from "../control-api-client.js";
 import {
   createCertifiedRenderJobExecutor,
   ProductionManifestAssemblyError,
+  type AssembleProductionManifestInput,
   type ProductionManifestAssembler
 } from "../render-job-executor.js";
 import { RenderWorker, type RenderWorkerOptions, type WorkerDependencies } from "../worker.js";
@@ -47,6 +59,7 @@ export interface WorkerRuntimeConfig {
   readonly telemetryBackoffMs?: number | undefined;
   readonly admissionBackoffMs?: number | undefined;
   readonly allowedJobKinds?: readonly JobKind[] | undefined;
+  readonly databaseUrl?: string | undefined;
   readonly comfyUiUrl: string;
   readonly comfyUiRenderTimeoutMs: number;
   readonly comfyUiDir: string;
@@ -73,6 +86,11 @@ export class WorkerConfigError extends Error {
 
 export interface ProductionWorkerOverrides extends Partial<WorkerDependencies> {
   readonly productionManifestAssembler?: ProductionManifestAssembler | undefined;
+  readonly sceneRepository?: SceneRepository | undefined;
+  readonly storyboardCandidateRepository?: StoryboardCandidateRepository | undefined;
+  readonly referenceAssetRepository?: ReferenceAssetRepository | undefined;
+  readonly hashBytes?: HashBytesPort | undefined;
+  readonly pool?: pg.Pool | undefined;
   readonly renderEngine?: RenderEnginePort | undefined;
   readonly gpuLease?: GpuExecutionLeasePort | undefined;
   readonly gpuTelemetry?: GpuTelemetryPort | undefined;
@@ -133,6 +151,21 @@ function parseHttpUrl(val: unknown, varName: string): string {
     }
     throw new WorkerConfigError(
       `Invalid URL in variable: ${varName} (must be a valid HTTP or HTTPS URL)`
+    );
+  }
+}
+
+function parseDatabaseUrl(val: unknown, varName: string): string {
+  if (typeof val !== "string" || val.trim() === "") {
+    throw new WorkerConfigError(`Missing or empty required environment variable: ${varName}`);
+  }
+  const trimmed = val.trim();
+  try {
+    new URL(trimmed);
+    return trimmed;
+  } catch {
+    throw new WorkerConfigError(
+      `Invalid URL in variable: ${varName} (must be a valid connection URL)`
     );
   }
 }
@@ -462,6 +495,12 @@ export function parseWorkerRuntimeConfig(
     }
   };
 
+  const rawDbUrl = env.DATABASE_URL ?? env.CONTROL_API_DATABASE_URL;
+  let databaseUrl: string | undefined;
+  if (rawDbUrl !== undefined && rawDbUrl.trim() !== "") {
+    databaseUrl = parseDatabaseUrl(rawDbUrl, "DATABASE_URL");
+  }
+
   return {
     storageTelemetryPath,
     controlApiBaseUrl,
@@ -472,6 +511,7 @@ export function parseWorkerRuntimeConfig(
     ...(telemetryBackoffMs !== undefined ? { telemetryBackoffMs } : {}),
     ...(admissionBackoffMs !== undefined ? { admissionBackoffMs } : {}),
     ...(allowedJobKinds !== undefined ? { allowedJobKinds } : {}),
+    ...(databaseUrl !== undefined ? { databaseUrl } : {}),
     comfyUiUrl,
     comfyUiRenderTimeoutMs,
     comfyUiDir,
@@ -496,21 +536,54 @@ export function createProductionWorker(
 ): RenderWorker {
   const effectiveConfig = config ?? parseWorkerRuntimeConfig();
 
+  const hashBytesPort: HashBytesPort = overrides?.hashBytes ?? {
+    hashBytes: async (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
+  };
+
   const includesProduction =
     !effectiveConfig.allowedJobKinds || effectiveConfig.allowedJobKinds.includes("production");
 
   let productionManifestAssembler = overrides?.productionManifestAssembler;
-  if (includesProduction && !productionManifestAssembler) {
-    throw new WorkerConfigError(
-      "Production manifest assembler is required when production jobs are enabled"
-    );
-  }
-  if (!includesProduction && !productionManifestAssembler) {
-    productionManifestAssembler = async () => {
-      throw new ProductionManifestAssemblyError(
-        "Production jobs are not enabled on this candidate-only worker"
-      );
-    };
+  if (!productionManifestAssembler) {
+    if (includesProduction) {
+      const pool =
+        overrides?.pool ??
+        (effectiveConfig.databaseUrl
+          ? new Pool({ connectionString: effectiveConfig.databaseUrl })
+          : undefined);
+      const sceneRepository =
+        overrides?.sceneRepository ?? (pool ? new PostgresSceneRepository(pool) : undefined);
+      const storyboardCandidateRepository =
+        overrides?.storyboardCandidateRepository ??
+        (pool ? new PostgresStoryboardCandidateRepository(pool) : undefined);
+      const referenceAssetRepository =
+        overrides?.referenceAssetRepository ??
+        (pool ? new PostgresReferenceAssetRepository(pool) : undefined);
+
+      if (!sceneRepository || !storyboardCandidateRepository || !referenceAssetRepository) {
+        throw new WorkerConfigError(
+          "DATABASE_URL or repository dependencies (sceneRepository, storyboardCandidateRepository, referenceAssetRepository) are required when production jobs are enabled"
+        );
+      }
+
+      const manifestAssembler = new AssembleGenerationManifest({
+        hashBytes: hashBytesPort,
+        sceneRepository,
+        storyboardCandidateRepository,
+        referenceAssetRepository
+      });
+
+      productionManifestAssembler = async (input: AssembleProductionManifestInput) => {
+        const res = await manifestAssembler.assemble(input);
+        return res.manifestPayload;
+      };
+    } else {
+      productionManifestAssembler = async () => {
+        throw new ProductionManifestAssemblyError(
+          "Production jobs are not enabled on this candidate-only worker"
+        );
+      };
+    }
   }
 
   const renderEngine =
@@ -548,6 +621,7 @@ export function createProductionWorker(
         useCase: executeProfileRenderUseCase,
         outputReader,
         productionManifestAssembler,
+        hashBytes: hashBytesPort,
         ...(overrides?.loadCertificationProfile !== undefined
           ? { loadCertificationProfile: overrides.loadCertificationProfile }
           : {}),

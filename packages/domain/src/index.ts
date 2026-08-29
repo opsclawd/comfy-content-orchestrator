@@ -3,3 +3,4 @@ export * from "./scene.js";
 export * from "./storyboard-candidate.js";
 export * from "./storage-admission.js";
 export * from "./render-job.js";
+export * from "./reference-asset.js";

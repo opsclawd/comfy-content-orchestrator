@@ -1,6 +1,10 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
+  AssembleGenerationManifest,
+  IncompleteManifestError,
   StorageAdmissionError,
+  type HashBytesPort,
   type JobMutationResult,
   type ObjectLocator,
   type ObjectStoragePort,
@@ -10,16 +14,28 @@ import {
 import type { StorageOperationClass } from "@cco/contracts";
 import {
   createStorageAdmissionPolicy,
+  Scene,
+  type CampaignId,
+  type CandidateId,
   type JobId,
   type JobKind,
   type LeaseToken,
   type RenderJob,
   type SceneId,
-  type StorageAdmissionPolicy
+  type StorageAdmissionPolicy,
+  type StoryboardCandidate
 } from "@cco/domain";
 import type { CompleteJobOptions, ControlApiClient } from "./control-api-client.js";
 import { ControlApiClientError } from "./control-api-client.js";
-import { MissingCertifiedProfileError } from "./render-job-executor.js";
+import type {
+  CertificationProfile,
+  CertificationProvenanceReport,
+  ComfyUiOutputReader
+} from "@cco/infrastructure";
+import {
+  createCertifiedRenderJobExecutor,
+  MissingCertifiedProfileError
+} from "./render-job-executor.js";
 import {
   RenderWorker,
   type RenderJobExecutor,
@@ -1761,6 +1777,333 @@ describe("RenderWorker write-side admission gating and deferral", () => {
     abortController.abort();
     await scheduler.advanceNext();
     await startPromise;
+  });
+
+  it("fails the job with /fail and consumes retry when IncompleteManifestError is thrown by the executor", async () => {
+    const scheduler = new FakeScheduler();
+    const fakeClient = new FakeControlApiClient();
+    const fakeStorage = new FakeObjectStorage();
+    const fakeEnforcer = new FakeStorageAdmissionEnforcer();
+
+    const productionJob = createSampleJob({
+      jobKind: "production",
+      workflowTemplate: "ltx-25-720p-97f"
+    });
+
+    const incompleteManifestError = new IncompleteManifestError("campaignId");
+
+    const { worker } = createTestWorker(
+      {
+        controlApiClient: fakeClient,
+        objectStorage: fakeStorage,
+        enforceStorageAdmission: fakeEnforcer,
+        renderJobExecutor: async () => {
+          throw incompleteManifestError;
+        },
+        sleep: scheduler.sleep
+      },
+      {
+        workerId: "test-worker",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
+
+    let claimCalls = 0;
+    (fakeClient as unknown as { claim: () => Promise<RenderJob | undefined> }).claim = async () => {
+      claimCalls += 1;
+      if (claimCalls === 1) {
+        return productionJob;
+      }
+      return undefined;
+    };
+
+    const abortController = new AbortController();
+    const startPromise = worker.start(abortController.signal);
+    await flushPromises();
+
+    // Executor threw IncompleteManifestError -> worker calls /fail
+    expect(fakeClient.failCalls).toHaveLength(1);
+    expect(fakeClient.failCalls[0]?.jobId).toBe(sampleJobId);
+    expect(fakeClient.failCalls[0]?.leaseToken).toBe(sampleLeaseToken);
+    expect(fakeClient.failCalls[0]?.errorTrace).toContain(
+      'Cannot assemble manifest: required field "campaignId" is unavailable'
+    );
+
+    // /fail used, not /defer
+    expect(fakeClient.deferCalls).toHaveLength(0);
+    // No storage puts
+    expect(fakeStorage.puts).toHaveLength(0);
+    // No complete call
+    expect(fakeClient.completeCalls).toHaveLength(0);
+
+    // Re-polls after failure
+    await scheduler.advanceNext();
+    await flushPromises();
+    expect(claimCalls).toBeGreaterThanOrEqual(2);
+
+    // Clean shutdown
+    abortController.abort();
+    await scheduler.advanceNext();
+    await startPromise;
+  });
+
+  it("flows approvedCandidateId on a production job through validateInjectedPayload, productionManifestAssembler, AssembleGenerationManifest, and StoryboardCandidateRepository into complete manifestPayload", async () => {
+    const scheduler = new FakeScheduler();
+    const fakeClient = new FakeControlApiClient();
+    const fakeStorage = new FakeObjectStorage();
+    const fakeEnforcer = new FakeStorageAdmissionEnforcer();
+
+    const fakeSceneId = "scene-uuid-approved-123" as SceneId;
+    const fakeCandidateId = "cand-uuid-approved-999" as CandidateId;
+
+    const fakeCandidate: StoryboardCandidate = {
+      id: fakeCandidateId,
+      sceneId: fakeSceneId,
+      specRevision: 1,
+      variantOrdinal: 1,
+      storageBucket: "godzspeed-review",
+      storageObjectKey: "candidates/cand-999.webp",
+      contentHash: "candidate-content-hash-hex-999",
+      generationMetadata: {},
+      createdAt: "2026-08-29T09:30:00.000Z"
+    };
+
+    const fakeScene = Scene.reconstitute({
+      id: fakeSceneId,
+      campaignId: "campaign-1" as CampaignId,
+      status: "rendering",
+      specRevision: 1,
+      configuration: {
+        prompt: "A beautiful cinematic sunrise",
+        referenceIds: [],
+        engineProfileId: "ltx_25",
+        durationMs: 5000
+      },
+      selectedCandidateId: fakeCandidateId,
+      selectedCandidateRevision: 1,
+      approval: {
+        revision: 1,
+        approvedBy: "director-1",
+        approvedAt: "2026-08-29T09:35:00.000Z"
+      }
+    });
+
+    const candidateRepository = {
+      findById: async (id: CandidateId) => (id === fakeCandidateId ? fakeCandidate : undefined),
+      insert: async () => {},
+      listBySceneAndRevision: async () => [fakeCandidate]
+    };
+
+    const sceneRepository = {
+      findById: async (id: SceneId) => (id === fakeSceneId ? fakeScene : undefined),
+      save: async () => {}
+    };
+
+    const referenceAssetRepository = {
+      listBySceneId: async () => []
+    };
+
+    const hashBytes: HashBytesPort = {
+      hashBytes: async (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
+    };
+
+    const manifestAssembler = new AssembleGenerationManifest({
+      hashBytes,
+      sceneRepository,
+      storyboardCandidateRepository: candidateRepository,
+      referenceAssetRepository
+    });
+
+    const productionJob = createSampleJob({
+      sceneId: fakeSceneId,
+      jobKind: "production",
+      workflowTemplate: "ltx-25-720p-97f",
+      injectedPayload: {
+        prompt: "A beautiful cinematic sunrise",
+        audioPrompt: "ambient birds chirping at dawn",
+        approvedCandidateId: fakeCandidateId
+      }
+    });
+
+    const sampleHash = "sample-ltx-workflow-hash";
+    const fakeProfile = {
+      id: "ltx-25-720p-97f",
+      engine: "ltx_25",
+      expectedWorkflowHash: sampleHash,
+      workflowPath: "/templates/ltx_25_720p_97f_api.json",
+      workflowRelativePath: "ltx_25_720p_97f_api.json",
+      runnerProfile: "dynamicvram-offload-v1",
+      minFreeDiskGb: 0,
+      source: {
+        kind: "validated_host_export",
+        license: "GPL-3.0",
+        uri: "https://github.com/comfyanonymous/ComfyUI",
+        revision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+      },
+      baseline: {
+        frames: 97,
+        frameCount: 97,
+        width: 1280,
+        height: 720,
+        fps: 24,
+        approximateDurationSeconds: 4,
+        steps: 8,
+        peakVramMb: 20000,
+        renderDurationMs: 5000
+      },
+      renderProfileIdentity: {
+        key: "LTX_25_720P_97F_V1",
+        version: 1
+      },
+      models: [{ category: "diffusion_models", relativePath: "ltx-video-2b-v0.9.1.safetensors" }]
+    };
+
+    const fakeProvenance = {
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      sourceKind: "live_inspected",
+      environment: {
+        platform: "linux",
+        nodeVersion: "v20.0.0",
+        gpuCount: 1,
+        gpuName: "NVIDIA RTX 4090"
+      },
+      workflow: {
+        sha256: sampleHash,
+        fileSizeBytes: 1024
+      },
+      renderProfileProvenance: {
+        profileId: "ltx-25-720p-97f",
+        renderProfileIdentity: {
+          key: "LTX_25_720P_97F_V1",
+          version: 1
+        }
+      },
+      git: {
+        comfyUiCommit: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        customNodes: []
+      },
+      models: [
+        {
+          category: "diffusion_models",
+          relativePath: "ltx-video-2b-v0.9.1.safetensors",
+          sha256: "model-sha256-hex",
+          fileSizeBytes: 1024
+        }
+      ]
+    };
+
+    const fakeRawWorkflow = JSON.stringify({
+      "1": {
+        class_type: "KSampler",
+        inputs: {
+          seed: 42,
+          steps: 8,
+          cfg: 1,
+          sampler_name: "euler",
+          scheduler: "simple",
+          denoise: 1
+        }
+      },
+      "3": {
+        class_type: "CLIPTextEncode",
+        inputs: { text: "placeholder prompt" }
+      },
+      "4": {
+        class_type: "CLIPTextEncode",
+        inputs: { text: "placeholder negative" }
+      }
+    });
+
+    const fakeOutputReader = {
+      readOutput: async () => ({
+        filename: "output.mp4",
+        subfolder: "",
+        type: "output",
+        bytes: new Uint8Array([1, 2, 3]),
+        contentType: "video/mp4"
+      })
+    };
+
+    const renderJobExecutor = createCertifiedRenderJobExecutor({
+      loadCertificationProfile: async () => fakeProfile as unknown as CertificationProfile,
+      readApprovedProvenance: async () =>
+        fakeProvenance as unknown as CertificationProvenanceReport,
+      collectCertificationProvenance: async () =>
+        fakeProvenance as unknown as CertificationProvenanceReport,
+      verifyGoldMasterProvenance: () => {},
+      readWorkflowFile: async () => fakeRawWorkflow,
+      hashWorkflow: () => sampleHash,
+      executeProfileRender: vi.fn().mockResolvedValue({
+        status: "succeeded",
+        promptId: "prompt-12345",
+        outputObjectKeys: ["renders/output.mp4"],
+        durationMs: 4250,
+        profile: fakeProfile,
+        preDispatchGpu: {
+          totalVramMb: 24576,
+          usedVramMb: 4096,
+          freeVramMb: 20480,
+          reservedVramMb: 4096,
+          measuredAt: new Date().toISOString()
+        }
+      }),
+      outputReader: fakeOutputReader as unknown as ComfyUiOutputReader,
+      hashBytes,
+      productionManifestAssembler: async (input) => {
+        const res = await manifestAssembler.assemble(input);
+        return res.manifestPayload;
+      }
+    });
+
+    const { worker } = createTestWorker(
+      {
+        controlApiClient: fakeClient,
+        objectStorage: fakeStorage,
+        enforceStorageAdmission: fakeEnforcer,
+        renderJobExecutor,
+        sleep: scheduler.sleep
+      },
+      {
+        workerId: "test-worker",
+        pollIntervalMs: 1000,
+        heartbeatIntervalMs: 10000,
+        leaseDurationMs: 30000
+      }
+    );
+
+    let claimCalls = 0;
+    (fakeClient as unknown as { claim: () => Promise<RenderJob | undefined> }).claim = async () => {
+      claimCalls += 1;
+      if (claimCalls === 1) {
+        return productionJob;
+      }
+      return undefined;
+    };
+
+    const processed = await worker.runOnce();
+    expect(processed).toBe(true);
+
+    expect(fakeClient.completeCalls).toHaveLength(1);
+    const completePayload = fakeClient.completeCalls[0]?.payload?.manifestPayload as
+      | {
+          approvedCandidate?: {
+            id?: string;
+            contentHash?: string;
+            specRevision?: number;
+            variantOrdinal?: number;
+          };
+        }
+      | undefined;
+    expect(completePayload).toBeDefined();
+    expect(completePayload?.approvedCandidate).toEqual({
+      id: fakeCandidateId,
+      contentHash: "candidate-content-hash-hex-999",
+      specRevision: 1,
+      variantOrdinal: 1
+    });
   });
 });
 

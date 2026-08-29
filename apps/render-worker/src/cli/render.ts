@@ -1,7 +1,11 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import pg from "pg";
+const { Pool } = pg;
 import {
+  AssembleGenerationManifest,
   ExecuteProfileRenderUseCase,
   GpuLeaseOwnershipLostError,
   GpuLeaseUnavailableError,
@@ -11,9 +15,13 @@ import {
   type GpuExecutionLeasePort,
   type GpuLeaseHolder,
   type GpuTelemetryPort,
+  type HashBytesPort,
   type ProfileRenderIdentity,
+  type ReferenceAssetRepository,
   type RenderEnginePort,
-  type RenderWorkflow
+  type RenderWorkflow,
+  type SceneRepository,
+  type StoryboardCandidateRepository
 } from "@cco/application";
 import {
   collectCertificationProvenance,
@@ -22,6 +30,9 @@ import {
   loadCertificationProfile,
   LocalFsGpuLeaseAdapter,
   NvidiaSmiTelemetryAdapter,
+  PostgresReferenceAssetRepository,
+  PostgresSceneRepository,
+  PostgresStoryboardCandidateRepository,
   type CertificationProfile,
   type CertificationProvenanceReport,
   type ComfyUiRenderEngineAdapterOptions,
@@ -29,6 +40,10 @@ import {
   type NvidiaSmiTelemetryAdapterOptions
 } from "@cco/infrastructure";
 import { PreflightError, verifyGoldMasterProvenance } from "../certification/preflight.js";
+import type {
+  AssembleProductionManifestInput,
+  ProductionManifestAssembler
+} from "../render-job-executor.js";
 import {
   getRenderUsageHelp,
   parseRenderCliArgs,
@@ -37,6 +52,49 @@ import {
 } from "./render-options.js";
 
 export type { RenderCliOptions, RenderCliParsedArgs };
+
+export function createProductionManifestAssembler(deps?: {
+  readonly pool?: pg.Pool | pg.PoolClient | undefined;
+  readonly sceneRepository?: SceneRepository | undefined;
+  readonly storyboardCandidateRepository?: StoryboardCandidateRepository | undefined;
+  readonly referenceAssetRepository?: ReferenceAssetRepository | undefined;
+  readonly hashBytes?: HashBytesPort | undefined;
+  readonly databaseUrl?: string | undefined;
+}): ProductionManifestAssembler {
+  const hashBytes: HashBytesPort = deps?.hashBytes ?? {
+    hashBytes: async (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
+  };
+  const pool =
+    deps?.pool ??
+    (deps?.databaseUrl ? new Pool({ connectionString: deps.databaseUrl }) : undefined);
+
+  const sceneRepository =
+    deps?.sceneRepository ?? (pool ? new PostgresSceneRepository(pool) : undefined);
+  const storyboardCandidateRepository =
+    deps?.storyboardCandidateRepository ??
+    (pool ? new PostgresStoryboardCandidateRepository(pool) : undefined);
+  const referenceAssetRepository =
+    deps?.referenceAssetRepository ??
+    (pool ? new PostgresReferenceAssetRepository(pool) : undefined);
+
+  if (!sceneRepository || !storyboardCandidateRepository || !referenceAssetRepository) {
+    throw new Error(
+      "Cannot construct AssembleGenerationManifest: database connection or repository dependencies are missing"
+    );
+  }
+
+  const manifestAssembler = new AssembleGenerationManifest({
+    hashBytes,
+    sceneRepository,
+    storyboardCandidateRepository,
+    referenceAssetRepository
+  });
+
+  return async (input: AssembleProductionManifestInput) => {
+    const res = await manifestAssembler.assemble(input);
+    return res.manifestPayload;
+  };
+}
 
 export interface RenderCliDependencies {
   readonly loadCertificationProfile?: typeof loadCertificationProfile;

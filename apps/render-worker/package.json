@@ -27,9 +27,11 @@
     "@cco/contracts": "workspace:*",
     "@cco/domain": "workspace:*",
     "@cco/infrastructure": "workspace:*",
-    "@cco/shared": "workspace:*"
+    "@cco/shared": "workspace:*",
+    "pg": "^8.13.1"
   },
   "devDependencies": {
+    "@types/pg": "^8.11.10",
     "tsx": "^4.19.2"
   }
 }

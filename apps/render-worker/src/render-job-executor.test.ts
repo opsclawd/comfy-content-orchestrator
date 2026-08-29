@@ -830,6 +830,183 @@ describe("Certified Render Job Executor", () => {
     expect(result.manifestPayload).toEqual({ method: "assemble" });
   });
 
+  it("threads workflow and approvedCandidateId to productionManifestAssembler and unwraps manifestPayload result", async () => {
+    let receivedInput: AssembleProductionManifestInput | undefined;
+    const testAssembler: ProductionManifestAssembler = {
+      assemble: async (input: AssembleProductionManifestInput) => {
+        receivedInput = input;
+        return {
+          manifestPayload: {
+            assembledForCandidate: input.approvedCandidateId,
+            workflowNodesCount: Object.keys(input.workflow ?? {}).length
+          }
+        };
+      }
+    };
+
+    const outputReader = new FakeOutputReader(
+      new Map([["out1.mp4", { bytes: new Uint8Array([1, 2, 3]), contentType: "video/mp4" }]])
+    );
+
+    const executor = createCertifiedRenderJobExecutor({
+      loadCertificationProfile: async () => fakeLtxProfile,
+      readApprovedProvenance: async () => fakeLtxLiveProvenance,
+      collectCertificationProvenance: async () => fakeLtxLiveProvenance,
+      verifyGoldMasterProvenance: () => {},
+      readWorkflowFile: async () => fakeRawFluxWorkflow,
+      hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
+      executeProfileRender: vi.fn().mockResolvedValue({
+        status: "succeeded",
+        promptId: "ltx-test",
+        outputObjectKeys: ["out1.mp4"],
+        durationMs: 5000,
+        profile: {} as ProfileRenderIdentity,
+        preDispatchGpu: {
+          totalVramMb: 24576,
+          usedVramMb: 4096,
+          freeVramMb: 20480,
+          reservedVramMb: 4096,
+          measuredAt: new Date().toISOString()
+        }
+      }),
+      outputReader,
+      productionManifestAssembler: testAssembler
+    });
+
+    const job = createSampleProductionJob({
+      injectedPayload: {
+        prompt: "production prompt",
+        approvedCandidateId: "cand-uuid-1234"
+      }
+    });
+
+    const result = await executor(job);
+
+    expect(receivedInput).toBeDefined();
+    expect(receivedInput?.approvedCandidateId).toBe("cand-uuid-1234");
+    expect(receivedInput?.workflow).toBeDefined();
+    expect(result.manifestPayload).toEqual({
+      assembledForCandidate: "cand-uuid-1234",
+      workflowNodesCount: Object.keys(receivedInput?.workflow ?? {}).length
+    });
+  });
+
+  it("validates approvedCandidateId on production and candidate jobs", async () => {
+    const executor = createCertifiedRenderJobExecutor({
+      loadCertificationProfile: async () => fakeLtxProfile,
+      readApprovedProvenance: async () => fakeLtxLiveProvenance,
+      collectCertificationProvenance: async () => fakeLtxLiveProvenance,
+      verifyGoldMasterProvenance: () => {},
+      readWorkflowFile: async () => fakeRawFluxWorkflow,
+      hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
+      executeProfileRender: vi.fn(),
+      outputReader: new FakeOutputReader()
+    });
+
+    // 1. Candidate job with approvedCandidateId throws
+    const candidateJob = createSampleCandidateJob({
+      injectedPayload: {
+        variantOrdinal: 1,
+        approvedCandidateId: "cand-123"
+      }
+    });
+    await expect(executor(candidateJob)).rejects.toThrow(
+      "approvedCandidateId is production-only and not allowed in candidate jobs"
+    );
+
+    // 2. Production job with empty approvedCandidateId throws
+    const emptyCandidateIdJob = createSampleProductionJob({
+      injectedPayload: {
+        approvedCandidateId: "   "
+      }
+    });
+    await expect(executor(emptyCandidateIdJob)).rejects.toThrow(
+      "injectedPayload.approvedCandidateId must be a non-empty string"
+    );
+  });
+
+  it("validates audioPrompt on production and candidate jobs", async () => {
+    const executor = createCertifiedRenderJobExecutor({
+      loadCertificationProfile: async () => fakeLtxProfile,
+      readApprovedProvenance: async () => fakeLtxLiveProvenance,
+      collectCertificationProvenance: async () => fakeLtxLiveProvenance,
+      verifyGoldMasterProvenance: () => {},
+      readWorkflowFile: async () => fakeRawFluxWorkflow,
+      hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
+      executeProfileRender: vi.fn(),
+      outputReader: new FakeOutputReader()
+    });
+
+    // 1. Candidate job with audioPrompt throws
+    const candidateJobWithAudio = createSampleCandidateJob({
+      injectedPayload: {
+        variantOrdinal: 1,
+        audioPrompt: "ambient waves"
+      }
+    });
+    await expect(executor(candidateJobWithAudio)).rejects.toThrow(
+      "audioPrompt is production-only and not allowed in candidate jobs"
+    );
+
+    // 2. Production job with empty audioPrompt throws
+    const emptyAudioPromptJob = createSampleProductionJob({
+      injectedPayload: {
+        prompt: "valid prompt",
+        audioPrompt: "   "
+      }
+    });
+    await expect(executor(emptyAudioPromptJob)).rejects.toThrow(
+      "injectedPayload.audioPrompt must be a non-empty string"
+    );
+  });
+
+  it("uses custom HashBytesPort to hash output objects", async () => {
+    const customHashCalls: Uint8Array[] = [];
+    const customHashBytes = {
+      hashBytes: async (bytes: Uint8Array) => {
+        customHashCalls.push(bytes);
+        return "custom-computed-hash-hex";
+      }
+    };
+
+    const outputReader = new FakeOutputReader(
+      new Map([["out1.mp4", { bytes: new Uint8Array([5, 6, 7]), contentType: "video/mp4" }]])
+    );
+
+    const executor = createCertifiedRenderJobExecutor({
+      loadCertificationProfile: async () => fakeLtxProfile,
+      readApprovedProvenance: async () => fakeLtxLiveProvenance,
+      collectCertificationProvenance: async () => fakeLtxLiveProvenance,
+      verifyGoldMasterProvenance: () => {},
+      readWorkflowFile: async () => fakeRawFluxWorkflow,
+      hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
+      hashBytes: customHashBytes,
+      executeProfileRender: vi.fn().mockResolvedValue({
+        status: "succeeded",
+        promptId: "ltx-test",
+        outputObjectKeys: ["out1.mp4"],
+        durationMs: 5000,
+        profile: {} as ProfileRenderIdentity,
+        preDispatchGpu: {
+          totalVramMb: 24576,
+          usedVramMb: 4096,
+          freeVramMb: 20480,
+          reservedVramMb: 4096,
+          measuredAt: new Date().toISOString()
+        }
+      }),
+      outputReader,
+      productionManifestAssembler: async () => ({ status: "assembled" })
+    });
+
+    const job = createSampleProductionJob();
+    const result = await executor(job);
+
+    expect(customHashCalls).toHaveLength(1);
+    expect(customHashCalls[0]).toEqual(new Uint8Array([5, 6, 7]));
+    expect(result.mediaObjects?.[0]?.checksumSha256).toBe("custom-computed-hash-hex");
+  });
+
   it("supports useCase object with execute method as dependency", async () => {
     const mockUseCase = {
       execute: vi.fn().mockResolvedValue({

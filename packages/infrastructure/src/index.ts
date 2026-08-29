@@ -13,6 +13,8 @@ export {
 
 export { PostgresStoryboardCandidateRepository } from "./postgres/repositories/postgres-storyboard-candidate-repository.js";
 
+export { PostgresReferenceAssetRepository } from "./postgres/repositories/postgres-reference-asset-repository.js";
+
 export { PostgresReviewEventStore } from "./postgres/repositories/postgres-review-event-store.js";
 
 export { PostgresUnitOfWork } from "./postgres/uow/postgres-unit-of-work.js";

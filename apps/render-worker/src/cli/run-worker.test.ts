@@ -476,10 +476,10 @@ describe("run-worker CLI", () => {
   });
 
   describe("createProductionWorker", () => {
-    it("requires an assembler whenever production jobs are enabled", () => {
+    it("requires databaseUrl, repository overrides, or assembler whenever production jobs are enabled", () => {
       const baseConfig = parseWorkerRuntimeConfig(minimalValidEnv());
 
-      // 1. Default (allowedJobKinds is undefined -> includes production): requires assembler
+      // 1. Default without DB or repository overrides: throws WorkerConfigError
       expect(() =>
         createProductionWorker(baseConfig, {
           controlApiClient: new TestControlApiClient(),
@@ -497,9 +497,11 @@ describe("run-worker CLI", () => {
           logger: testLogger,
           sleep: testSleep
         })
-      ).toThrow("Production manifest assembler is required when production jobs are enabled");
+      ).toThrow(
+        "DATABASE_URL or repository dependencies (sceneRepository, storyboardCandidateRepository, referenceAssetRepository) are required when production jobs are enabled"
+      );
 
-      // 2. Explicitly allowed production jobs: requires assembler
+      // 2. Explicitly allowed production jobs without DB: throws WorkerConfigError
       const prodConfig: WorkerRuntimeConfig = {
         ...baseConfig,
         allowedJobKinds: ["production"]
@@ -514,7 +516,7 @@ describe("run-worker CLI", () => {
         })
       ).toThrow(WorkerConfigError);
 
-      // 3. Candidate-only startup: succeeds without assembler
+      // 3. Candidate-only startup: succeeds without assembler or databaseUrl
       const candidateOnlyConfig: WorkerRuntimeConfig = {
         ...baseConfig,
         allowedJobKinds: ["candidate"]
@@ -528,7 +530,39 @@ describe("run-worker CLI", () => {
       });
       expect(candidateWorker).toBeInstanceOf(RenderWorker);
 
-      // 4. Production jobs with assembler supplied: succeeds
+      // 4. Production bootstrap with DATABASE_URL in config: automatically constructs AssembleGenerationManifest without injected assembler override
+      const prodWithDbConfig: WorkerRuntimeConfig = {
+        ...baseConfig,
+        databaseUrl: "postgresql://postgres:postgres@localhost:5432/cco",
+        allowedJobKinds: ["production"]
+      };
+      const prodWorkerWithDb = createProductionWorker(prodWithDbConfig, {
+        controlApiClient: new TestControlApiClient(),
+        objectStorage: new TestObjectStorage(),
+        enforceStorageAdmission: new TestAdmissionEnforcer(),
+        logger: testLogger,
+        sleep: testSleep
+      });
+      expect(prodWorkerWithDb).toBeInstanceOf(RenderWorker);
+
+      // 5. Production bootstrap with repository overrides: automatically constructs AssembleGenerationManifest
+      const prodWorkerWithRepoOverrides = createProductionWorker(baseConfig, {
+        controlApiClient: new TestControlApiClient(),
+        objectStorage: new TestObjectStorage(),
+        enforceStorageAdmission: new TestAdmissionEnforcer(),
+        sceneRepository: { findById: async () => undefined, save: async () => {} },
+        storyboardCandidateRepository: {
+          findById: async () => undefined,
+          insert: async () => {},
+          listBySceneAndRevision: async () => []
+        },
+        referenceAssetRepository: { listBySceneId: async () => [] },
+        logger: testLogger,
+        sleep: testSleep
+      });
+      expect(prodWorkerWithRepoOverrides).toBeInstanceOf(RenderWorker);
+
+      // 6. Production jobs with assembler supplied: succeeds
       const prodWithAssemblerWorker = createProductionWorker(baseConfig, {
         controlApiClient: new TestControlApiClient(),
         objectStorage: new TestObjectStorage(),
