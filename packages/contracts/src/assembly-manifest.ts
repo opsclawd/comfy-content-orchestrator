@@ -1,5 +1,11 @@
 import { z } from "zod";
-import type { AssemblyExecutionResult } from "./assembly-execution.js";
+import {
+  AssemblyEncodingExecutionSchema,
+  MeasuredOutputStreamsSchema,
+  type AssemblyEncodingExecution,
+  type AssemblyExecutionResult,
+  type MeasuredOutputStreams
+} from "./assembly-execution.js";
 import {
   AssemblyTimelineDecisionSchema,
   validateExecutedAssemblyInvariants,
@@ -89,6 +95,8 @@ export const AssemblyManifestSchema = z
     layout: AssemblyManifestLayoutSchema,
     ffmpeg: AssemblyManifestFfmpegSchema,
     commandFingerprint: sha256HashSchema,
+    encoding: AssemblyEncodingExecutionSchema,
+    streams: MeasuredOutputStreamsSchema,
     output: AssemblyManifestOutputSchema,
     measuredFrameRate: z.number().positive("measuredFrameRate must be positive"),
     executionDurationMs: z
@@ -146,7 +154,10 @@ export const AssemblyManifestSchema = z
         timeline: manifest.timeline,
         inputs: manifest.inputs,
         output: manifest.output,
-        subtitleCues: manifest.subtitleCues
+        streams: manifest.streams,
+        subtitleCues: manifest.subtitleCues,
+        subtitleStyleProfile: manifest.subtitleStyleProfile,
+        measuredFrameRate: manifest.measuredFrameRate
       },
       ctx,
       { inputsKey: "inputs" }
@@ -199,6 +210,86 @@ export const AssemblyManifestSchema = z
           path: ["measuredFrameRate"]
         });
       }
+      if (
+        manifest.encoding.audioSampleRateHz !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioSampleRateHz
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires encoding.audioSampleRateHz ${VERTICAL_REEL_1080X1920_V1_PROFILE.audioSampleRateHz}, got ${manifest.encoding.audioSampleRateHz}`,
+          path: ["encoding", "audioSampleRateHz"]
+        });
+      }
+      if (manifest.encoding.audioChannels !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioChannels) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires encoding.audioChannels ${VERTICAL_REEL_1080X1920_V1_PROFILE.audioChannels}, got ${manifest.encoding.audioChannels}`,
+          path: ["encoding", "audioChannels"]
+        });
+      }
+      if (
+        manifest.streams.video.codecName !== VERTICAL_REEL_1080X1920_V1_PROFILE.videoCodecFamily
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires video codec "${VERTICAL_REEL_1080X1920_V1_PROFILE.videoCodecFamily}", got "${manifest.streams.video.codecName}"`,
+          path: ["streams", "video", "codecName"]
+        });
+      }
+      if (
+        manifest.streams.video.pixelFormat !== VERTICAL_REEL_1080X1920_V1_PROFILE.pixelFormatFamily
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires video pixelFormat "${VERTICAL_REEL_1080X1920_V1_PROFILE.pixelFormatFamily}", got "${manifest.streams.video.pixelFormat}"`,
+          path: ["streams", "video", "pixelFormat"]
+        });
+      }
+      if (manifest.streams.video.width !== VERTICAL_REEL_1080X1920_V1_PROFILE.width) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires video width ${VERTICAL_REEL_1080X1920_V1_PROFILE.width}, got ${manifest.streams.video.width}`,
+          path: ["streams", "video", "width"]
+        });
+      }
+      if (manifest.streams.video.height !== VERTICAL_REEL_1080X1920_V1_PROFILE.height) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires video height ${VERTICAL_REEL_1080X1920_V1_PROFILE.height}, got ${manifest.streams.video.height}`,
+          path: ["streams", "video", "height"]
+        });
+      }
+      if (manifest.streams.video.frameRate !== VERTICAL_REEL_1080X1920_V1_PROFILE.frameRate) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires video frameRate ${VERTICAL_REEL_1080X1920_V1_PROFILE.frameRate}, got ${manifest.streams.video.frameRate}`,
+          path: ["streams", "video", "frameRate"]
+        });
+      }
+      if (
+        manifest.streams.audio.codecName !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioCodecFamily
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires audio codec "${VERTICAL_REEL_1080X1920_V1_PROFILE.audioCodecFamily}", got "${manifest.streams.audio.codecName}"`,
+          path: ["streams", "audio", "codecName"]
+        });
+      }
+      if (
+        manifest.streams.audio.sampleRateHz !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioSampleRateHz
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires audio sampleRateHz ${VERTICAL_REEL_1080X1920_V1_PROFILE.audioSampleRateHz}, got ${manifest.streams.audio.sampleRateHz}`,
+          path: ["streams", "audio", "sampleRateHz"]
+        });
+      }
+      if (manifest.streams.audio.channels !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioChannels) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires audio channels ${VERTICAL_REEL_1080X1920_V1_PROFILE.audioChannels}, got ${manifest.streams.audio.channels}`,
+          path: ["streams", "audio", "channels"]
+        });
+      }
     }
   })
   .transform((val) => deepFreeze(val));
@@ -217,6 +308,8 @@ export type AssemblyManifest = {
   readonly layout: AssemblyManifestLayout;
   readonly ffmpeg: AssemblyManifestFfmpeg;
   readonly commandFingerprint: string;
+  readonly encoding: AssemblyEncodingExecution;
+  readonly streams: MeasuredOutputStreams;
   readonly output: AssemblyManifestOutput;
   readonly measuredFrameRate: number;
   readonly executionDurationMs: number;
@@ -257,6 +350,8 @@ export function createAssemblyManifest(params: {
     layout: executionResult.layout,
     ffmpeg: executionResult.ffmpeg,
     commandFingerprint: executionResult.commandFingerprint,
+    encoding: executionResult.encoding,
+    streams: executionResult.streams,
     output: executionResult.output,
     measuredFrameRate: executionResult.measuredFrameRate,
     executionDurationMs: executionResult.executionDurationMs,

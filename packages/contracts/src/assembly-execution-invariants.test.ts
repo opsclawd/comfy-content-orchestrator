@@ -54,7 +54,7 @@ describe("assembly-execution-invariants", () => {
         effectiveStartMs: 0,
         effectiveDurationMs: 10000,
         trimStartMs: 0,
-        loopCount: 0,
+        loopCount: 1,
         padLeadingMs: 0,
         padTrailingMs: 0,
         gainDb: 0
@@ -69,7 +69,7 @@ describe("assembly-execution-invariants", () => {
         effectiveStartMs: 0,
         effectiveDurationMs: 10000,
         trimStartMs: 0,
-        loopCount: 0,
+        loopCount: 1,
         padLeadingMs: 0,
         padTrailingMs: 0,
         gainDb: -14.0,
@@ -77,12 +77,33 @@ describe("assembly-execution-invariants", () => {
       }
     },
     output: {
-      durationMs: 10000
+      durationMs: 10000,
+      width: 1080,
+      height: 1920
+    },
+    streams: {
+      video: {
+        codecName: "h264",
+        pixelFormat: "yuv420p",
+        width: 1080,
+        height: 1920,
+        frameRate: 30,
+        durationMs: 10000
+      },
+      audio: {
+        codecName: "aac",
+        sampleRateHz: 48000,
+        channels: 2,
+        durationMs: 10000,
+        bitrateKbps: 192
+      }
     },
     subtitleCues: [
       { startMs: 0, endMs: 5000, text: "Scene 1" },
       { startMs: 5000, endMs: 10000, text: "Scene 2" }
-    ]
+    ],
+    subtitleStyleProfile: "sub-profile-default-v1",
+    measuredFrameRate: 30
   });
 
   const runValidation = (
@@ -274,7 +295,7 @@ describe("assembly-execution-invariants", () => {
     });
   });
 
-  describe("subtitle cues against executed timeline", () => {
+  describe("subtitle cues against executed timeline & subtitleStyleProfile conditional requirement", () => {
     it("rejects subtitle cue extending beyond executed timeline totalDurationMs", () => {
       const payload = createBasePayload();
       const modified = {
@@ -288,6 +309,133 @@ describe("assembly-execution-invariants", () => {
       expect(
         issues.some((i) =>
           i.message.includes("overflows timeline: endMs (10001) > totalDurationMs (10000)")
+        )
+      ).toBe(true);
+    });
+
+    it("rejects payload when subtitleCues are present but subtitleStyleProfile is missing or empty", () => {
+      const payload = createBasePayload();
+      const noStyle = {
+        ...payload,
+        subtitleStyleProfile: undefined
+      };
+      const issuesNoStyle = runValidation(noStyle);
+      expect(
+        issuesNoStyle.some((i) =>
+          i.message.includes("subtitleStyleProfile is required when subtitleCues are present")
+        )
+      ).toBe(true);
+
+      const emptyStyle = {
+        ...payload,
+        subtitleStyleProfile: "   "
+      };
+      const issuesEmptyStyle = runValidation(emptyStyle);
+      expect(
+        issuesEmptyStyle.some((i) =>
+          i.message.includes("subtitleStyleProfile is required when subtitleCues are present")
+        )
+      ).toBe(true);
+    });
+
+    it("accepts payload when subtitleCues is omitted and subtitleStyleProfile is omitted", () => {
+      const payload = createBasePayload();
+      const noCues = {
+        ...payload,
+        subtitleCues: undefined,
+        subtitleStyleProfile: undefined
+      };
+      expect(runValidation(noCues)).toHaveLength(0);
+    });
+  });
+
+  describe("measured streams invariant cross-checks", () => {
+    it("rejects streams when video duration deviates beyond tolerance", () => {
+      const payload = createBasePayload();
+      const badVideoDuration = {
+        ...payload,
+        streams: {
+          ...payload.streams!,
+          video: {
+            ...payload.streams!.video,
+            durationMs: 10251 // +251ms -> exceeds 250ms tolerance
+          }
+        }
+      };
+      const issues = runValidation(badVideoDuration);
+      expect(
+        issues.some((i) =>
+          i.message.includes(
+            "streams.video.durationMs (10251) deviates from timeline.totalDurationMs (10000)"
+          )
+        )
+      ).toBe(true);
+    });
+
+    it("rejects streams when audio duration deviates beyond tolerance", () => {
+      const payload = createBasePayload();
+      const badAudioDuration = {
+        ...payload,
+        streams: {
+          ...payload.streams!,
+          audio: {
+            ...payload.streams!.audio,
+            durationMs: 10251 // +251ms -> exceeds 250ms tolerance
+          }
+        }
+      };
+      const issues = runValidation(badAudioDuration);
+      expect(
+        issues.some((i) =>
+          i.message.includes(
+            "streams.audio.durationMs (10251) deviates from timeline.totalDurationMs (10000)"
+          )
+        )
+      ).toBe(true);
+    });
+
+    it("rejects streams when video dimensions do not match output dimensions", () => {
+      const payload = createBasePayload();
+      const badDimensions = {
+        ...payload,
+        streams: {
+          ...payload.streams!,
+          video: {
+            ...payload.streams!.video,
+            width: 720,
+            height: 1280
+          }
+        }
+      };
+      const issues = runValidation(badDimensions);
+      expect(
+        issues.some((i) =>
+          i.message.includes("streams.video.width (720) does not match output.width (1080)")
+        )
+      ).toBe(true);
+      expect(
+        issues.some((i) =>
+          i.message.includes("streams.video.height (1280) does not match output.height (1920)")
+        )
+      ).toBe(true);
+    });
+
+    it("rejects streams when video frameRate does not match measuredFrameRate", () => {
+      const payload = createBasePayload();
+      const badFps = {
+        ...payload,
+        streams: {
+          ...payload.streams!,
+          video: {
+            ...payload.streams!.video,
+            frameRate: 60
+          }
+        }
+      };
+      const issues = runValidation(badFps);
+      expect(
+        issues.some((i) =>
+          i.message.includes("streams.video.frameRate (60) does not match measuredFrameRate (30)")
         )
       ).toBe(true);
     });
@@ -312,7 +460,7 @@ describe("assembly-execution-invariants", () => {
       expect(
         issues.some((i) =>
           i.message.includes(
-            "voiceover trimStartMs (5000) must be strictly less than actualDurationMs (5000)"
+            "voiceover trimStartMs (5000) must be strictly less than trimEndMs/actualDurationMs (5000)"
           )
         )
       ).toBe(true);
@@ -328,7 +476,7 @@ describe("assembly-execution-invariants", () => {
             ...payload.inputs.voiceover!,
             actualDurationMs: 10000,
             trimStartMs: 2000,
-            loopCount: 0,
+            loopCount: 1,
             padLeadingMs: 500,
             padTrailingMs: 500,
             effectiveDurationMs: 10000 // expected: 500 + (10000 - 2000) * 1 + 500 = 9000
@@ -363,7 +511,7 @@ describe("assembly-execution-invariants", () => {
       expect(
         issues.some((i) =>
           i.message.includes(
-            "soundbed trimStartMs (9000) must be strictly less than actualDurationMs (8000)"
+            "soundbed trimStartMs (9000) must be strictly less than trimEndMs/actualDurationMs (8000)"
           )
         )
       ).toBe(true);
@@ -379,10 +527,10 @@ describe("assembly-execution-invariants", () => {
             ...payload.inputs.soundbed!,
             actualDurationMs: 6000,
             trimStartMs: 1000,
-            loopCount: 1,
+            loopCount: 2,
             padLeadingMs: 0,
             padTrailingMs: 0,
-            effectiveDurationMs: 6000 // expected: 0 + (6000 - 1000) * (1 + 1) + 0 = 10000
+            effectiveDurationMs: 6000 // expected: 0 + (6000 - 1000) * 2 + 0 = 10000
           }
         }
       };
@@ -412,7 +560,7 @@ describe("assembly-execution-invariants", () => {
             effectiveStartMs: 500,
             effectiveDurationMs: 10000, // 500 + 10000 = 10500 > 10000 + 250
             trimStartMs: 0,
-            loopCount: 0,
+            loopCount: 1,
             padLeadingMs: 0,
             padTrailingMs: 0,
             gainDb: 0
@@ -445,7 +593,7 @@ describe("assembly-execution-invariants", () => {
             effectiveStartMs: 1000,
             effectiveDurationMs: 9500, // 1000 + 9500 = 10500 > 10000 + 250
             trimStartMs: 500,
-            loopCount: 0,
+            loopCount: 1,
             padLeadingMs: 0,
             padTrailingMs: 0,
             gainDb: -14.0,
@@ -477,9 +625,9 @@ describe("assembly-execution-invariants", () => {
             startMs: 0,
             actualDurationMs: 4000,
             effectiveStartMs: 100,
-            effectiveDurationMs: 10100, // padLeadingMs(100) + (4000 - 1000) * (2 + 1) + padTrailingMs(1000) = 100 + 9000 + 1000 = 10100 (100 + 10100 = 10200 <= 10250)
+            effectiveDurationMs: 10100, // padLeadingMs(100) + (4000 - 1000) * 3 + padTrailingMs(1000) = 100 + 9000 + 1000 = 10100 (100 + 10100 = 10200 <= 10250)
             trimStartMs: 1000,
-            loopCount: 2,
+            loopCount: 3,
             padLeadingMs: 100,
             padTrailingMs: 1000,
             gainDb: 0

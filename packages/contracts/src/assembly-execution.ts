@@ -1,8 +1,16 @@
 import { z } from "zod";
 import {
+  AssemblyEncodingExecutionSchema,
   AssemblyTimelineDecisionSchema,
+  MeasuredAudioStreamSchema,
+  MeasuredOutputStreamsSchema,
+  MeasuredVideoStreamSchema,
   validateExecutedAssemblyInvariants,
-  type AssemblyTimelineDecision
+  type AssemblyEncodingExecution,
+  type AssemblyTimelineDecision,
+  type MeasuredAudioStream,
+  type MeasuredOutputStreams,
+  type MeasuredVideoStream
 } from "./assembly-execution-invariants.js";
 import {
   AssemblyLayoutModeSchema,
@@ -26,7 +34,18 @@ import {
 import { SubtitleCueSchema, hashSubtitleCues, type SubtitleCue } from "./subtitle-cue.js";
 import { ExecutedVideoStemRefSchema, type ExecutedVideoStemRef } from "./video-stem.js";
 
-export { AssemblyTimelineDecisionSchema, type AssemblyTimelineDecision };
+export {
+  AssemblyEncodingExecutionSchema,
+  AssemblyTimelineDecisionSchema,
+  MeasuredAudioStreamSchema,
+  MeasuredOutputStreamsSchema,
+  MeasuredVideoStreamSchema,
+  type AssemblyEncodingExecution,
+  type AssemblyTimelineDecision,
+  type MeasuredAudioStream,
+  type MeasuredOutputStreams,
+  type MeasuredVideoStream
+};
 
 export const AssemblyFfmpegMetadataSchema = z.object({
   executable: z.string().min(1, "FFmpeg executable must not be empty"),
@@ -65,6 +84,8 @@ export const AssemblyExecutionResultSchema = z
     subtitleStyleProfile: z.string().min(1, "subtitleStyleProfile must not be empty").optional(),
     ffmpeg: AssemblyFfmpegMetadataSchema,
     commandFingerprint: sha256HashSchema,
+    encoding: AssemblyEncodingExecutionSchema,
+    streams: MeasuredOutputStreamsSchema,
     output: z.object({
       media: PersistentMediaRefSchema,
       durationMs: z.number().int().positive(),
@@ -106,7 +127,10 @@ export const AssemblyExecutionResultSchema = z
         timeline: res.timeline,
         inputs: res.executedInputs,
         output: res.output,
-        subtitleCues: res.subtitleCues
+        streams: res.streams,
+        subtitleCues: res.subtitleCues,
+        subtitleStyleProfile: res.subtitleStyleProfile,
+        measuredFrameRate: res.measuredFrameRate
       },
       ctx,
       { inputsKey: "executedInputs" }
@@ -159,6 +183,76 @@ export const AssemblyExecutionResultSchema = z
           path: ["measuredFrameRate"]
         });
       }
+      if (res.encoding.audioSampleRateHz !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioSampleRateHz) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires encoding.audioSampleRateHz ${VERTICAL_REEL_1080X1920_V1_PROFILE.audioSampleRateHz}, got ${res.encoding.audioSampleRateHz}`,
+          path: ["encoding", "audioSampleRateHz"]
+        });
+      }
+      if (res.encoding.audioChannels !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioChannels) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires encoding.audioChannels ${VERTICAL_REEL_1080X1920_V1_PROFILE.audioChannels}, got ${res.encoding.audioChannels}`,
+          path: ["encoding", "audioChannels"]
+        });
+      }
+      if (res.streams.video.codecName !== VERTICAL_REEL_1080X1920_V1_PROFILE.videoCodecFamily) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires video codec "${VERTICAL_REEL_1080X1920_V1_PROFILE.videoCodecFamily}", got "${res.streams.video.codecName}"`,
+          path: ["streams", "video", "codecName"]
+        });
+      }
+      if (res.streams.video.pixelFormat !== VERTICAL_REEL_1080X1920_V1_PROFILE.pixelFormatFamily) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires video pixelFormat "${VERTICAL_REEL_1080X1920_V1_PROFILE.pixelFormatFamily}", got "${res.streams.video.pixelFormat}"`,
+          path: ["streams", "video", "pixelFormat"]
+        });
+      }
+      if (res.streams.video.width !== VERTICAL_REEL_1080X1920_V1_PROFILE.width) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires video width ${VERTICAL_REEL_1080X1920_V1_PROFILE.width}, got ${res.streams.video.width}`,
+          path: ["streams", "video", "width"]
+        });
+      }
+      if (res.streams.video.height !== VERTICAL_REEL_1080X1920_V1_PROFILE.height) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires video height ${VERTICAL_REEL_1080X1920_V1_PROFILE.height}, got ${res.streams.video.height}`,
+          path: ["streams", "video", "height"]
+        });
+      }
+      if (res.streams.video.frameRate !== VERTICAL_REEL_1080X1920_V1_PROFILE.frameRate) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires video frameRate ${VERTICAL_REEL_1080X1920_V1_PROFILE.frameRate}, got ${res.streams.video.frameRate}`,
+          path: ["streams", "video", "frameRate"]
+        });
+      }
+      if (res.streams.audio.codecName !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioCodecFamily) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires audio codec "${VERTICAL_REEL_1080X1920_V1_PROFILE.audioCodecFamily}", got "${res.streams.audio.codecName}"`,
+          path: ["streams", "audio", "codecName"]
+        });
+      }
+      if (res.streams.audio.sampleRateHz !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioSampleRateHz) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires audio sampleRateHz ${VERTICAL_REEL_1080X1920_V1_PROFILE.audioSampleRateHz}, got ${res.streams.audio.sampleRateHz}`,
+          path: ["streams", "audio", "sampleRateHz"]
+        });
+      }
+      if (res.streams.audio.channels !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioChannels) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires audio channels ${VERTICAL_REEL_1080X1920_V1_PROFILE.audioChannels}, got ${res.streams.audio.channels}`,
+          path: ["streams", "audio", "channels"]
+        });
+      }
     }
   })
   .transform((val) => deepFreeze(val));
@@ -177,6 +271,8 @@ export type AssemblyExecutionResult = {
   readonly subtitleStyleProfile?: string | undefined;
   readonly ffmpeg: AssemblyFfmpegMetadata;
   readonly commandFingerprint: string;
+  readonly encoding: AssemblyEncodingExecution;
+  readonly streams: MeasuredOutputStreams;
   readonly output: {
     readonly media: PersistentMediaRef;
     readonly durationMs: number;

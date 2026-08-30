@@ -72,7 +72,7 @@ describe("AssemblyExecutionResult contract", () => {
         effectiveStartMs: 0,
         effectiveDurationMs: 10000,
         trimStartMs: 0,
-        loopCount: 0,
+        loopCount: 1,
         padLeadingMs: 0,
         padTrailingMs: 0,
         gainDb: 0
@@ -94,7 +94,7 @@ describe("AssemblyExecutionResult contract", () => {
         effectiveStartMs: 0,
         effectiveDurationMs: 10000,
         trimStartMs: 0,
-        loopCount: 0,
+        loopCount: 1,
         padLeadingMs: 0,
         padTrailingMs: 0,
         gainDb: -14.0,
@@ -117,6 +117,33 @@ describe("AssemblyExecutionResult contract", () => {
       buildInfo: "gcc 13.2.0 (Ubuntu 24.04)"
     },
     commandFingerprint: hashFingerprint,
+    encoding: {
+      videoCodec: "libx264",
+      pixelFormat: "yuv420p",
+      crf: 18,
+      preset: "fast",
+      audioCodec: "aac",
+      audioBitrateKbps: 192,
+      audioSampleRateHz: 48000,
+      audioChannels: 2
+    },
+    streams: {
+      video: {
+        codecName: "h264",
+        pixelFormat: "yuv420p",
+        width: 1080,
+        height: 1920,
+        frameRate: 30,
+        durationMs: 10000
+      },
+      audio: {
+        codecName: "aac",
+        sampleRateHz: 48000,
+        channels: 2,
+        durationMs: 10000,
+        bitrateKbps: 192
+      }
+    },
     output: {
       media: {
         bucket: "cco-deliveries",
@@ -357,6 +384,72 @@ describe("AssemblyExecutionResult contract", () => {
     ).toBe(false);
   });
 
+  it("rejects execution result when subtitleCues are present but subtitleStyleProfile is missing or empty", () => {
+    const valid = createValidExecutionResult();
+    const missingStyle = {
+      ...valid,
+      subtitleStyleProfile: undefined
+    };
+    const parseResult1 = AssemblyExecutionResultSchema.safeParse(missingStyle);
+    expect(parseResult1.success).toBe(false);
+    if (!parseResult1.success) {
+      expect(
+        parseResult1.error.issues.some((i) =>
+          i.message.includes("subtitleStyleProfile is required when subtitleCues are present")
+        )
+      ).toBe(true);
+    }
+
+    const emptyStyle = {
+      ...valid,
+      subtitleStyleProfile: "   "
+    };
+    const parseResult2 = AssemblyExecutionResultSchema.safeParse(emptyStyle);
+    expect(parseResult2.success).toBe(false);
+  });
+
+  it("accepts execution result without subtitleCues when subtitleStyleProfile is omitted", () => {
+    const valid = createValidExecutionResult();
+    const noCuesNoStyle = {
+      ...valid,
+      subtitleCues: undefined,
+      subtitleCuesSha256: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      subtitleStyleProfile: undefined
+    };
+    expect(AssemblyExecutionResultSchema.safeParse(noCuesNoStyle).success).toBe(true);
+  });
+
+  it("rejects contradictory encoding or stream parameters for VERTICAL_REEL_1080X1920_V1 profile", () => {
+    const valid = createValidExecutionResult();
+
+    // Contradictory audio sample rate in encoding
+    const badEncodingSampleRate = {
+      ...valid,
+      encoding: { ...valid.encoding, audioSampleRateHz: 44100 }
+    };
+    expect(AssemblyExecutionResultSchema.safeParse(badEncodingSampleRate).success).toBe(false);
+
+    // Contradictory video codec in streams
+    const badVideoStreamCodec = {
+      ...valid,
+      streams: {
+        ...valid.streams,
+        video: { ...valid.streams.video, codecName: "hevc" }
+      }
+    };
+    expect(AssemblyExecutionResultSchema.safeParse(badVideoStreamCodec).success).toBe(false);
+
+    // Contradictory audio codec in streams
+    const badAudioStreamCodec = {
+      ...valid,
+      streams: {
+        ...valid.streams,
+        audio: { ...valid.streams.audio, codecName: "opus" }
+      }
+    };
+    expect(AssemblyExecutionResultSchema.safeParse(badAudioStreamCodec).success).toBe(false);
+  });
+
   it("rejects execution result with contradictory audio timing (trimStartMs >= actualDurationMs or formula mismatch)", () => {
     const valid = createValidExecutionResult();
     const badTrimVo = {
@@ -380,7 +473,7 @@ describe("AssemblyExecutionResult contract", () => {
           ...valid.executedInputs.voiceover!,
           actualDurationMs: 10000,
           trimStartMs: 2000,
-          loopCount: 0,
+          loopCount: 1,
           padLeadingMs: 0,
           padTrailingMs: 0,
           effectiveDurationMs: 10000 // formula expected 8000

@@ -19,6 +19,68 @@ export type AssemblyTimelineDecision = {
   readonly stemDurationsMs: readonly number[];
 };
 
+export const AssemblyEncodingExecutionSchema = z.object({
+  videoCodec: z.string().min(1, "videoCodec must not be empty"),
+  pixelFormat: z.string().min(1, "pixelFormat must not be empty"),
+  crf: z.number().int().nonnegative("crf must be non-negative").optional(),
+  preset: z.string().min(1, "preset must not be empty").optional(),
+  audioCodec: z.string().min(1, "audioCodec must not be empty"),
+  audioBitrateKbps: z.number().int().positive("audioBitrateKbps must be positive"),
+  audioSampleRateHz: z.number().int().positive("audioSampleRateHz must be positive"),
+  audioChannels: z.number().int().positive("audioChannels must be positive")
+});
+export type AssemblyEncodingExecution = {
+  readonly videoCodec: string;
+  readonly pixelFormat: string;
+  readonly crf?: number | undefined;
+  readonly preset?: string | undefined;
+  readonly audioCodec: string;
+  readonly audioBitrateKbps: number;
+  readonly audioSampleRateHz: number;
+  readonly audioChannels: number;
+};
+
+export const MeasuredVideoStreamSchema = z.object({
+  codecName: z.string().min(1, "codecName must not be empty"),
+  pixelFormat: z.string().min(1, "pixelFormat must not be empty"),
+  width: z.number().int().positive("width must be positive"),
+  height: z.number().int().positive("height must be positive"),
+  frameRate: z.number().positive("frameRate must be positive"),
+  durationMs: z.number().int().positive("durationMs must be positive")
+});
+export type MeasuredVideoStream = {
+  readonly codecName: string;
+  readonly pixelFormat: string;
+  readonly width: number;
+  readonly height: number;
+  readonly frameRate: number;
+  readonly durationMs: number;
+};
+
+export const MeasuredAudioStreamSchema = z.object({
+  codecName: z.string().min(1, "codecName must not be empty"),
+  sampleRateHz: z.number().int().positive("sampleRateHz must be positive"),
+  channels: z.number().int().positive("channels must be positive"),
+  durationMs: z.number().int().positive("durationMs must be positive"),
+  bitrateKbps: z.number().int().positive("bitrateKbps must be positive").optional()
+});
+export type MeasuredAudioStream = {
+  readonly codecName: string;
+  readonly sampleRateHz: number;
+  readonly channels: number;
+  readonly durationMs: number;
+  readonly bitrateKbps?: number | undefined;
+};
+
+export const MeasuredOutputStreamsSchema = z.object({
+  video: MeasuredVideoStreamSchema,
+  audio: MeasuredAudioStreamSchema
+});
+export type MeasuredOutputStreams = {
+  readonly video: MeasuredVideoStream;
+  readonly audio: MeasuredAudioStream;
+};
+
 export interface ExecutedAssemblyInvariantInputs {
   readonly videoStems: readonly ExecutedVideoStemRef[];
   readonly voiceover?: ExecutedVoiceoverRef | undefined;
@@ -30,8 +92,13 @@ export interface ExecutedAssemblyInvariantPayload {
   readonly inputs: ExecutedAssemblyInvariantInputs;
   readonly output: {
     readonly durationMs: number;
+    readonly width?: number | undefined;
+    readonly height?: number | undefined;
   };
+  readonly streams?: MeasuredOutputStreams | undefined;
   readonly subtitleCues?: readonly SubtitleCue[] | undefined;
+  readonly subtitleStyleProfile?: string | undefined;
+  readonly measuredFrameRate?: number | undefined;
 }
 
 export interface ValidateExecutedAssemblyInvariantsOptions {
@@ -92,8 +159,15 @@ export function validateExecutedAssemblyInvariants(
     });
   }
 
-  // 5. Subtitle cues validated against executed timeline totalDurationMs
+  // 5. Subtitle cues validated against executed timeline totalDurationMs & subtitle style profile required when cues present
   if (payload.subtitleCues && payload.subtitleCues.length > 0) {
+    if (!payload.subtitleStyleProfile || payload.subtitleStyleProfile.trim().length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "subtitleStyleProfile is required when subtitleCues are present",
+        path: ["subtitleStyleProfile"]
+      });
+    }
     try {
       validateSubtitleTimeline(payload.subtitleCues, payload.timeline.totalDurationMs);
     } catch (err) {
@@ -108,21 +182,43 @@ export function validateExecutedAssemblyInvariants(
   // 6. Voiceover executed audio timing provenance and timeline bounds
   if (payload.inputs.voiceover) {
     const vo = payload.inputs.voiceover;
-    if (vo.trimStartMs >= vo.actualDurationMs) {
+    const trimEnd = vo.trimEndMs ?? vo.actualDurationMs;
+    if (vo.trimEndMs !== undefined && vo.trimEndMs > vo.actualDurationMs) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `voiceover trimStartMs (${vo.trimStartMs}) must be strictly less than actualDurationMs (${vo.actualDurationMs})`,
+        message: `voiceover trimEndMs (${vo.trimEndMs}) cannot exceed actualDurationMs (${vo.actualDurationMs})`,
+        path: [inputsKey, "voiceover", "trimEndMs"]
+      });
+    }
+    if (vo.trimStartMs >= trimEnd) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `voiceover trimStartMs (${vo.trimStartMs}) must be strictly less than trimEndMs/actualDurationMs (${trimEnd})`,
         path: [inputsKey, "voiceover", "trimStartMs"]
       });
     }
+    const sliceDurationMs = trimEnd - vo.trimStartMs;
+    const partialLoopMs = vo.partialLoopDurationMs ?? 0;
+    if (partialLoopMs >= sliceDurationMs) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `voiceover partialLoopDurationMs (${partialLoopMs}) must be strictly less than sliceDurationMs (${sliceDurationMs})`,
+        path: [inputsKey, "voiceover", "partialLoopDurationMs"]
+      });
+    }
+    if (vo.loopCount === 0 && partialLoopMs === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "voiceover loopCount and partialLoopDurationMs cannot both be 0",
+        path: [inputsKey, "voiceover", "loopCount"]
+      });
+    }
     const expectedVoDuration =
-      vo.padLeadingMs +
-      (vo.actualDurationMs - vo.trimStartMs) * (vo.loopCount + 1) +
-      vo.padTrailingMs;
+      vo.padLeadingMs + (sliceDurationMs * vo.loopCount + partialLoopMs) + vo.padTrailingMs;
     if (vo.effectiveDurationMs !== expectedVoDuration) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `voiceover effectiveDurationMs (${vo.effectiveDurationMs}) does not match computed audio duration from trim/loop/pad formula: padLeadingMs (${vo.padLeadingMs}) + (actualDurationMs (${vo.actualDurationMs}) - trimStartMs (${vo.trimStartMs})) * (loopCount (${vo.loopCount}) + 1) + padTrailingMs (${vo.padTrailingMs}) = ${expectedVoDuration}ms`,
+        message: `voiceover effectiveDurationMs (${vo.effectiveDurationMs}) does not match computed audio duration from trim/loop/pad formula: padLeadingMs (${vo.padLeadingMs}) + (${sliceDurationMs} * ${vo.loopCount} + ${partialLoopMs}) + padTrailingMs (${vo.padTrailingMs}) = ${expectedVoDuration}ms`,
         path: [inputsKey, "voiceover", "effectiveDurationMs"]
       });
     }
@@ -139,21 +235,43 @@ export function validateExecutedAssemblyInvariants(
   // 7. Soundbed executed audio timing provenance and timeline bounds
   if (payload.inputs.soundbed) {
     const sb = payload.inputs.soundbed;
-    if (sb.trimStartMs >= sb.actualDurationMs) {
+    const trimEnd = sb.trimEndMs ?? sb.actualDurationMs;
+    if (sb.trimEndMs !== undefined && sb.trimEndMs > sb.actualDurationMs) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `soundbed trimStartMs (${sb.trimStartMs}) must be strictly less than actualDurationMs (${sb.actualDurationMs})`,
+        message: `soundbed trimEndMs (${sb.trimEndMs}) cannot exceed actualDurationMs (${sb.actualDurationMs})`,
+        path: [inputsKey, "soundbed", "trimEndMs"]
+      });
+    }
+    if (sb.trimStartMs >= trimEnd) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `soundbed trimStartMs (${sb.trimStartMs}) must be strictly less than trimEndMs/actualDurationMs (${trimEnd})`,
         path: [inputsKey, "soundbed", "trimStartMs"]
       });
     }
+    const sliceDurationMs = trimEnd - sb.trimStartMs;
+    const partialLoopMs = sb.partialLoopDurationMs ?? 0;
+    if (partialLoopMs >= sliceDurationMs) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `soundbed partialLoopDurationMs (${partialLoopMs}) must be strictly less than sliceDurationMs (${sliceDurationMs})`,
+        path: [inputsKey, "soundbed", "partialLoopDurationMs"]
+      });
+    }
+    if (sb.loopCount === 0 && partialLoopMs === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "soundbed loopCount and partialLoopDurationMs cannot both be 0",
+        path: [inputsKey, "soundbed", "loopCount"]
+      });
+    }
     const expectedSbDuration =
-      sb.padLeadingMs +
-      (sb.actualDurationMs - sb.trimStartMs) * (sb.loopCount + 1) +
-      sb.padTrailingMs;
+      sb.padLeadingMs + (sliceDurationMs * sb.loopCount + partialLoopMs) + sb.padTrailingMs;
     if (sb.effectiveDurationMs !== expectedSbDuration) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `soundbed effectiveDurationMs (${sb.effectiveDurationMs}) does not match computed audio duration from trim/loop/pad formula: padLeadingMs (${sb.padLeadingMs}) + (actualDurationMs (${sb.actualDurationMs}) - trimStartMs (${sb.trimStartMs})) * (loopCount (${sb.loopCount}) + 1) + padTrailingMs (${sb.padTrailingMs}) = ${expectedSbDuration}ms`,
+        message: `soundbed effectiveDurationMs (${sb.effectiveDurationMs}) does not match computed audio duration from trim/loop/pad formula: padLeadingMs (${sb.padLeadingMs}) + (${sliceDurationMs} * ${sb.loopCount} + ${partialLoopMs}) + padTrailingMs (${sb.padTrailingMs}) = ${expectedSbDuration}ms`,
         path: [inputsKey, "soundbed", "effectiveDurationMs"]
       });
     }
@@ -163,6 +281,51 @@ export function validateExecutedAssemblyInvariants(
         code: z.ZodIssueCode.custom,
         message: `soundbed effective timing overflows executed timeline: effectiveStartMs (${sb.effectiveStartMs}) + effectiveDurationMs (${sb.effectiveDurationMs}) = ${sbEndMs}ms exceeds timeline.totalDurationMs (${payload.timeline.totalDurationMs}) + tolerance (${ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS}ms)`,
         path: [inputsKey, "soundbed"]
+      });
+    }
+  }
+
+  // 8. Measured streams cross-validation
+  if (payload.streams) {
+    const { video, audio } = payload.streams;
+    const videoDurationDiff = Math.abs(video.durationMs - payload.timeline.totalDurationMs);
+    if (videoDurationDiff > ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `streams.video.durationMs (${video.durationMs}) deviates from timeline.totalDurationMs (${payload.timeline.totalDurationMs}) by ${videoDurationDiff}ms, exceeding allowed tolerance of ${ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS}ms`,
+        path: ["streams", "video", "durationMs"]
+      });
+    }
+    const audioDurationDiff = Math.abs(audio.durationMs - payload.timeline.totalDurationMs);
+    if (audioDurationDiff > ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `streams.audio.durationMs (${audio.durationMs}) deviates from timeline.totalDurationMs (${payload.timeline.totalDurationMs}) by ${audioDurationDiff}ms, exceeding allowed tolerance of ${ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS}ms`,
+        path: ["streams", "audio", "durationMs"]
+      });
+    }
+    if (payload.output.width !== undefined && video.width !== payload.output.width) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `streams.video.width (${video.width}) does not match output.width (${payload.output.width})`,
+        path: ["streams", "video", "width"]
+      });
+    }
+    if (payload.output.height !== undefined && video.height !== payload.output.height) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `streams.video.height (${video.height}) does not match output.height (${payload.output.height})`,
+        path: ["streams", "video", "height"]
+      });
+    }
+    if (
+      payload.measuredFrameRate !== undefined &&
+      Math.abs(video.frameRate - payload.measuredFrameRate) > 0.01
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `streams.video.frameRate (${video.frameRate}) does not match measuredFrameRate (${payload.measuredFrameRate})`,
+        path: ["streams", "video", "frameRate"]
       });
     }
   }

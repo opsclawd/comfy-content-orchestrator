@@ -528,7 +528,7 @@ describe("Application capability ports contract tests", () => {
                       effectiveStartMs: spec.voiceover.startMs,
                       effectiveDurationMs: spec.voiceover.expectedDurationMs,
                       trimStartMs: 0,
-                      loopCount: 0,
+                      loopCount: 1,
                       padLeadingMs: 0,
                       padTrailingMs: 0,
                       gainDb: 0
@@ -547,7 +547,7 @@ describe("Application capability ports contract tests", () => {
                       effectiveStartMs: spec.soundbed.startMs,
                       effectiveDurationMs: spec.soundbed.expectedDurationMs,
                       trimStartMs: 0,
-                      loopCount: 0,
+                      loopCount: 1,
                       padLeadingMs: 0,
                       padTrailingMs: 0,
                       gainDb: -14.0,
@@ -572,6 +572,33 @@ describe("Application capability ports contract tests", () => {
               buildInfo: "gcc 13.2.0 (Ubuntu 24.04)"
             },
             commandFingerprint: hashFingerprint,
+            encoding: {
+              videoCodec: "libx264",
+              pixelFormat: "yuv420p",
+              crf: 18,
+              preset: "fast",
+              audioCodec: "aac",
+              audioBitrateKbps: 192,
+              audioSampleRateHz: 48000,
+              audioChannels: 2
+            },
+            streams: {
+              video: {
+                codecName: "h264",
+                pixelFormat: "yuv420p",
+                width: 1080,
+                height: 1920,
+                frameRate: 30,
+                durationMs: spec.expectedTotalDurationMs
+              },
+              audio: {
+                codecName: "aac",
+                sampleRateHz: 48000,
+                channels: 2,
+                durationMs: spec.expectedTotalDurationMs,
+                bitrateKbps: 192
+              }
+            },
             output: {
               media: {
                 bucket: "cco-deliveries",

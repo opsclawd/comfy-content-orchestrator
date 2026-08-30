@@ -112,8 +112,10 @@ Contracts are partitioned strictly according to repository layering (`packages/c
     readonly actualDurationMs: number; // Measured raw source asset duration in ms (positive integer)
     readonly effectiveStartMs: number; // Output timeline position in ms where audio playback begins (non-negative integer)
     readonly effectiveDurationMs: number; // Total duration of executed audio stream on timeline (positive integer)
-    readonly trimStartMs: number; // Source start offset in ms to begin playback (0 <= trimStartMs < actualDurationMs)
-    readonly loopCount: number; // Number of repeat loops beyond initial play (0 = play once, iterations = loopCount + 1)
+    readonly trimStartMs: number; // Source start offset in ms to begin playback (0 <= trimStartMs < trimEndMs)
+    readonly trimEndMs?: number; // Optional source end offset in ms (trimStartMs < trimEndMs <= actualDurationMs; defaults to actualDurationMs)
+    readonly loopCount: number; // Number of full repeat iterations of the consumed source slice (integer >= 0)
+    readonly partialLoopDurationMs?: number; // Optional trailing partial loop duration in ms (0 <= partialLoopDurationMs < sliceDurationMs)
     readonly padLeadingMs: number; // Silence duration in ms prepended before audio begins (non-negative integer)
     readonly padTrailingMs: number; // Silence duration in ms appended after audio/loops finish (non-negative integer)
     readonly gainDb: number; // Net normalization gain adjustment in decibels (finite number)
@@ -128,12 +130,14 @@ Contracts are partitioned strictly according to repository layering (`packages/c
     readonly actualDurationMs: number; // Measured raw source asset duration in ms (positive integer)
     readonly effectiveStartMs: number; // Output timeline position in ms where audio playback begins (non-negative integer)
     readonly effectiveDurationMs: number; // Total duration of executed audio stream on timeline (positive integer)
-    readonly trimStartMs: number; // Source start offset in ms to begin playback (0 <= trimStartMs < actualDurationMs)
-    readonly loopCount: number; // Number of repeat loops beyond initial play (0 = play once, iterations = loopCount + 1)
+    readonly trimStartMs: number; // Source start offset in ms to begin playback (0 <= trimStartMs < trimEndMs)
+    readonly trimEndMs?: number; // Optional source end offset in ms (trimStartMs < trimEndMs <= actualDurationMs; defaults to actualDurationMs)
+    readonly loopCount: number; // Number of full repeat iterations of the consumed source slice (integer >= 0)
+    readonly partialLoopDurationMs?: number; // Optional trailing partial loop duration in ms (0 <= partialLoopDurationMs < sliceDurationMs)
     readonly padLeadingMs: number; // Silence duration in ms prepended before audio begins (non-negative integer)
     readonly padTrailingMs: number; // Silence duration in ms appended after audio/loops finish (non-negative integer)
     readonly gainDb: number; // Base normalization gain adjustment in decibels (finite number)
-    readonly duckingDb: number; // Sidechain ducking attenuation in decibels applied during VO (finite number, 0 = no ducking)
+    readonly duckingDb: number; // Sidechain ducking attenuation in decibels applied during VO (non-positive finite number <= 0 dB, 0 = no ducking)
   }
 
   type ExecutedAudioAssetRef = ExecutedVoiceoverRef | ExecutedSoundbedRef;
@@ -142,12 +146,14 @@ Contracts are partitioned strictly according to repository layering (`packages/c
   **Audio Transformation & Normalization/Mix Semantics:**
   Every executed audio transformation decision is explicitly recorded without schema defaults:
   - `actualDurationMs`: Measured source audio asset duration in milliseconds before any trimming, looping, or padding.
-  - `trimStartMs`: Offset in milliseconds from the start of the source audio asset to begin playback (`0 <= trimStartMs < actualDurationMs`).
-  - `loopCount`: Number of repeat loops beyond the initial play (`0` = no loop / plays 1 time total; `1` = looped once / plays 2 times total; iterations = `loopCount + 1`).
+  - `trimStartMs`: Offset in milliseconds from the start of the source audio asset to begin playback (`0 <= trimStartMs < trimEndMs`).
+  - `trimEndMs`: Optional offset in milliseconds marking the end of the source slice (`trimStartMs < trimEndMs <= actualDurationMs`, default `actualDurationMs`).
+  - `loopCount`: Number of complete full iterations of the source slice (`sliceDurationMs = (trimEndMs ?? actualDurationMs) - trimStartMs`).
+  - `partialLoopDurationMs`: Optional duration of any final partial iteration (`0 <= partialLoopDurationMs < sliceDurationMs`, default 0).
   - `padLeadingMs` / `padTrailingMs`: Milliseconds of silence prepended / appended around the audio stream.
   - `gainDb`: Applied gain adjustment in decibels for normalization and level balancing.
-  - `duckingDb` (soundbed only): Attenuation in decibels applied to the soundbed track while voiceover audio is active (`0` if no ducking attenuation is applied).
-  - **Duration Equation:** `effectiveDurationMs === padLeadingMs + ((actualDurationMs - trimStartMs) * (loopCount + 1)) + padTrailingMs`. Contradictory values fail validation.
+  - `duckingDb` (soundbed only): Sidechain attenuation in decibels applied to the soundbed track while voiceover audio is active (non-positive number $\le 0\text{ dB}$; `0` if no ducking is applied).
+  - **Duration Equation:** `effectiveDurationMs === padLeadingMs + (sliceDurationMs * loopCount + partialLoopDurationMs) + padTrailingMs`. Contradictory values fail validation.
 
 - **`SubtitleCue`** (`packages/contracts/src/subtitle-cue.ts`):
   ```ts
@@ -157,7 +163,7 @@ Contracts are partitioned strictly according to repository layering (`packages/c
     readonly text: string;
   }
   ```
-  Includes `validateSubtitleTimeline(cues, totalDurationMs)` to reject negative offsets, `endMs <= startMs`, and cues overflowing the timeline, as well as deterministic synchronous hashing via `hashSubtitleCues(cues)` and explicit constant `EMPTY_SUBTITLE_CUES_SHA256` / `NO_SUBTITLE_CUES_SHA256` for empty or omitted cue payloads. Both `AssemblyExecutionResultSchema` and `AssemblyManifestSchema` bind `subtitleCuesSha256` to the deterministic canonical hash of `subtitleCues` (matching `NO_SUBTITLE_CUES_SHA256` when cues are empty or omitted).
+  Includes `validateSubtitleTimeline(cues, totalDurationMs)` to reject negative offsets, `endMs <= startMs`, and cues overflowing the timeline, as well as deterministic synchronous hashing via `hashSubtitleCues(cues)` and explicit constant `EMPTY_SUBTITLE_CUES_SHA256` / `NO_SUBTITLE_CUES_SHA256` for empty or omitted cue payloads. Both `AssemblyExecutionResultSchema` and `AssemblyManifestSchema` bind `subtitleCuesSha256` to the deterministic canonical hash of `subtitleCues` (matching `NO_SUBTITLE_CUES_SHA256` when cues are empty or omitted). Whenever `subtitleCues` are present (`subtitleCues.length > 0`), `subtitleStyleProfile` is mandatory.
 
 ### 2. AssemblySpec (Application Input Model)
 
@@ -198,11 +204,44 @@ The Phase 1 LTX profile generates 1280x720 landscape video, while PRD §9.5 mand
 
 The layout mode is explicitly recorded in `AssemblyProfile` and validated in `AssemblyManifest` and `AssemblyExecutionResult`. For `VERTICAL_REEL_1080X1920_V1`, `fit_blurred_fill` is mandatory; `direct_fit` is rejected. Output dimensions (1080x1920), content type (`video/mp4`), and measured frame rate (30 fps) are also strictly validated against the profile.
 
-### 5. Executed Input Contract & `AssemblyExecutionResult`
+### 5. Executed Input Contract, Encoding & Stream Provenance (`AssemblyExecutionResult`)
 
 `AssemblyExecutionResult` (`packages/contracts/src/assembly-execution.ts`) defines what FFmpeg actually executed and returned to `MediaAssemblerPort`:
 
 ```ts
+interface AssemblyEncodingExecution {
+  readonly videoCodec: string; // e.g. "libx264"
+  readonly pixelFormat: string; // e.g. "yuv420p"
+  readonly crf?: number;
+  readonly preset?: string;
+  readonly audioCodec: string; // e.g. "aac"
+  readonly audioBitrateKbps: number; // e.g. 192
+  readonly audioSampleRateHz: number; // e.g. 48000
+  readonly audioChannels: number; // e.g. 2
+}
+
+interface MeasuredVideoStream {
+  readonly codecName: string; // e.g. "h264"
+  readonly pixelFormat: string; // e.g. "yuv420p"
+  readonly width: number; // e.g. 1080
+  readonly height: number; // e.g. 1920
+  readonly frameRate: number; // e.g. 30
+  readonly durationMs: number;
+}
+
+interface MeasuredAudioStream {
+  readonly codecName: string; // e.g. "aac"
+  readonly sampleRateHz: number; // e.g. 48000
+  readonly channels: number; // e.g. 2
+  readonly durationMs: number;
+  readonly bitrateKbps?: number;
+}
+
+interface MeasuredOutputStreams {
+  readonly video: MeasuredVideoStream;
+  readonly audio: MeasuredAudioStream;
+}
+
 interface AssemblyExecutionResult {
   readonly assemblyId: string;
   readonly campaignId: string;
@@ -228,6 +267,8 @@ interface AssemblyExecutionResult {
     readonly buildInfo: string;
   };
   readonly commandFingerprint: string;
+  readonly encoding: AssemblyEncodingExecution;
+  readonly streams: MeasuredOutputStreams;
   readonly output: {
     readonly media: PersistentMediaRef;
     readonly durationMs: number;
@@ -271,6 +312,8 @@ interface AssemblyManifest {
     readonly buildInfo: string;
   };
   readonly commandFingerprint: string; // SHA-256 of normalized filter-graph/command
+  readonly encoding: AssemblyEncodingExecution;
+  readonly streams: MeasuredOutputStreams;
   readonly output: {
     readonly media: PersistentMediaRef;
     readonly durationMs: number;
@@ -289,7 +332,7 @@ interface AssemblyManifest {
 
 Assembly provenance describes **what FFmpeg actually consumed**.
 
-It is forbidden to reconstruct input hashes from a stale request object after assembly if the staged or executed asset set differed. Manifest construction is performed via `createAssemblyManifest({ executionResult, governanceDecisionId })`, which consumes `AssemblyExecutionResult` rather than `AssemblySpec`, copies timeline decisions and measured execution metadata directly without re-derivation, and verifies that `subtitleCuesSha256` strictly matches the canonical hash of `executionResult.subtitleCues` (or `NO_SUBTITLE_CUES_SHA256` when omitted/empty).
+It is forbidden to reconstruct input hashes from a stale request object after assembly if the staged or executed asset set differed. Manifest construction is performed via `createAssemblyManifest({ executionResult, governanceDecisionId })`, which consumes `AssemblyExecutionResult` rather than `AssemblySpec`, copies timeline decisions, encoding parameters, and measured stream results directly without re-derivation, and verifies that `subtitleCuesSha256` strictly matches the canonical hash of `executionResult.subtitleCues` (or `NO_SUBTITLE_CUES_SHA256` when omitted/empty).
 
 ### 7a. Executed-state Cross-Validation & Invariants
 
@@ -298,11 +341,14 @@ Both `AssemblyExecutionResultSchema` and `AssemblyManifestSchema` enforce identi
 1. **Stem Duration Equality:** For every executed stem `s` in `videoStems`, `timeline.stemDurationsMs[s.order] === s.actualDurationMs`. Contradictory stem durations fail validation.
 2. **Phase 1 Composition Rule:** For simple concatenation with no modeled overlap/transition, `timeline.totalDurationMs === sum(timeline.stemDurationsMs)`.
 3. **Output Duration Tolerance:** `Math.abs(output.durationMs - timeline.totalDurationMs) <= ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS` where `ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS = 250`. This explicit 250ms tolerance accommodates container/codec timing variations (e.g. keyframe rounding at 30fps) without masking composition errors.
-4. **Subtitle Timeline Bounds:** Subtitle cues must remain valid against the executed timeline (`validateSubtitleTimeline(cues, timeline.totalDurationMs)`). Cues overflowing `timeline.totalDurationMs` are rejected.
+4. **Subtitle Timeline Bounds & Style Profile Requirement:** Subtitle cues must remain valid against the executed timeline (`validateSubtitleTimeline(cues, timeline.totalDurationMs)`). When subtitle cues are present (`subtitleCues.length > 0`), `subtitleStyleProfile` is required.
 5. **Executed Audio Transformation Invariants:** For any executed voiceover or soundbed:
-   - `trimStartMs < actualDurationMs`: Playback start offset must be strictly within source bounds.
-   - `effectiveDurationMs === padLeadingMs + ((actualDurationMs - trimStartMs) * (loopCount + 1)) + padTrailingMs`: Executed duration must strictly equal the deterministic result of trim, loop, and pad decisions.
+   - `trimStartMs < trimEndMs <= actualDurationMs`: Playback start offset must be strictly within slice and source bounds.
+   - `partialLoopDurationMs < sliceDurationMs`: Partial loop duration must be strictly less than the consumed slice duration.
+   - `effectiveDurationMs === padLeadingMs + (sliceDurationMs * loopCount + partialLoopDurationMs) + padTrailingMs`: Executed duration must strictly equal the deterministic result of slice, loop, and pad decisions.
    - `effectiveStartMs + effectiveDurationMs <= timeline.totalDurationMs + ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS`: Audio track must not overflow the final executed timeline.
+   - `duckingDb <= 0`: Soundbed ducking attenuation must be non-positive.
+6. **Measured Streams Cross-Validation:** Measured video and audio stream durations must match the timeline within tolerance ($\le 250\text{ ms}$), video dimensions must match output width/height, and measured frame rate must match `measuredFrameRate`.
 
 
 ---
