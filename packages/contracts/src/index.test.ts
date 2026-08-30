@@ -1,16 +1,25 @@
 import { describe, expect, it } from "vitest";
 import {
+  AssemblyEncodingExecutionSchema,
   AssemblyManifestSchema,
   AssemblyProfileSchema,
   AssemblySpecSchema,
+  AssemblyTimelineDecisionSchema,
+  ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS,
   AudioAssetKindSchema,
   AudioAssetRefSchema,
   AudioAssetSourceSchema,
+  AudioEncodingExecutionSchema,
   contractsName,
   HealthResponseSchema,
+  MeasuredAudioStreamSchema,
+  MeasuredOutputStreamsSchema,
+  MeasuredVideoStreamSchema,
   PersistentMediaRefSchema,
   SubtitleCueSchema,
   VERTICAL_REEL_1080X1920_V1_PROFILE,
+  validateExecutedAssemblyInvariants,
+  VideoEncodingExecutionSchema,
   VideoStemRefSchema
 } from "./index.js";
 
@@ -28,5 +37,14 @@ describe("contracts skeleton", () => {
     expect(VERTICAL_REEL_1080X1920_V1_PROFILE).toBeDefined();
     expect(AssemblyManifestSchema).toBeDefined();
     expect(AssemblySpecSchema).toBeDefined();
+    expect(AssemblyTimelineDecisionSchema).toBeDefined();
+    expect(AssemblyEncodingExecutionSchema).toBeDefined();
+    expect(VideoEncodingExecutionSchema).toBeDefined();
+    expect(AudioEncodingExecutionSchema).toBeDefined();
+    expect(MeasuredVideoStreamSchema).toBeDefined();
+    expect(MeasuredAudioStreamSchema).toBeDefined();
+    expect(MeasuredOutputStreamsSchema).toBeDefined();
+    expect(validateExecutedAssemblyInvariants).toBeDefined();
+    expect(ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS).toBe(250);
   });
 });

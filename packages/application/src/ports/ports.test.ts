@@ -524,7 +524,14 @@ describe("Application capability ports contract tests", () => {
                       media: spec.voiceover.media,
                       source: spec.voiceover.source,
                       startMs: spec.voiceover.startMs,
-                      actualDurationMs: spec.voiceover.expectedDurationMs
+                      actualDurationMs: spec.voiceover.expectedDurationMs,
+                      effectiveStartMs: spec.voiceover.startMs,
+                      effectiveDurationMs: spec.voiceover.expectedDurationMs,
+                      trimStartMs: 0,
+                      loopCount: 1,
+                      padLeadingMs: 0,
+                      padTrailingMs: 0,
+                      gainDb: 0
                     }
                   }
                 : {}),
@@ -536,7 +543,15 @@ describe("Application capability ports contract tests", () => {
                       media: spec.soundbed.media,
                       source: spec.soundbed.source,
                       startMs: spec.soundbed.startMs,
-                      actualDurationMs: spec.soundbed.expectedDurationMs
+                      actualDurationMs: spec.soundbed.expectedDurationMs,
+                      effectiveStartMs: spec.soundbed.startMs,
+                      effectiveDurationMs: spec.soundbed.expectedDurationMs,
+                      trimStartMs: 0,
+                      loopCount: 1,
+                      padLeadingMs: 0,
+                      padTrailingMs: 0,
+                      gainDb: -14.0,
+                      duckingDb: -10.0
                     }
                   }
                 : {})
@@ -550,12 +565,44 @@ describe("Application capability ports contract tests", () => {
             },
             subtitleCuesSha256: hashSubtitles,
             subtitleCues: spec.subtitleCues,
+            subtitleStyleProfile: "default",
             ffmpeg: {
               executable: "ffmpeg",
               version: "7.0.1-static",
               buildInfo: "gcc 13.2.0 (Ubuntu 24.04)"
             },
             commandFingerprint: hashFingerprint,
+            encoding: {
+              video: {
+                codec: "libx264",
+                pixelFormat: "yuv420p",
+                crf: 18,
+                preset: "fast"
+              },
+              audio: {
+                codec: "aac",
+                bitrateKbps: 192,
+                sampleRateHz: 48000,
+                channels: 2
+              }
+            },
+            streams: {
+              video: {
+                codecName: "h264",
+                pixelFormat: "yuv420p",
+                width: 1080,
+                height: 1920,
+                frameRate: 30,
+                durationMs: spec.expectedTotalDurationMs
+              },
+              audio: {
+                codecName: "aac",
+                sampleRateHz: 48000,
+                channels: 2,
+                durationMs: spec.expectedTotalDurationMs,
+                bitrateKbps: 192
+              }
+            },
             output: {
               media: {
                 bucket: "cco-deliveries",
@@ -566,7 +613,9 @@ describe("Application capability ports contract tests", () => {
               durationMs: spec.expectedTotalDurationMs,
               width: 1080,
               height: 1920
-            }
+            },
+            measuredFrameRate: 30,
+            executionDurationMs: 1200
           };
         }
       };
@@ -617,6 +666,7 @@ describe("Application capability ports contract tests", () => {
       });
       expect(manifest.assemblyId).toBe("asm-camp-alpha");
       expect(manifest.inputs.videoStems).toEqual(executionResult.executedInputs.videoStems);
+      expect(manifest.timeline).toEqual(executionResult.timeline);
       expect(manifest.generationManifestIds).toEqual(["gen-man-1"]);
       expect(manifest.governanceDecisionId).toBe("gov-dec-001");
     });

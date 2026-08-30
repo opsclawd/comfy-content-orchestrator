@@ -68,7 +68,14 @@ describe("AssemblyExecutionResult contract", () => {
           modelId: "eleven_turbo_v2_5"
         },
         startMs: 0,
-        actualDurationMs: 10000
+        actualDurationMs: 10000,
+        effectiveStartMs: 0,
+        effectiveDurationMs: 10000,
+        trimStartMs: 0,
+        loopCount: 1,
+        padLeadingMs: 0,
+        padTrailingMs: 0,
+        gainDb: 0
       },
       soundbed: {
         assetId: "sb-1",
@@ -83,7 +90,15 @@ describe("AssemblyExecutionResult contract", () => {
           kind: "local"
         },
         startMs: 0,
-        actualDurationMs: 10000
+        actualDurationMs: 10000,
+        effectiveStartMs: 0,
+        effectiveDurationMs: 10000,
+        trimStartMs: 0,
+        loopCount: 1,
+        padLeadingMs: 0,
+        padTrailingMs: 0,
+        gainDb: -14.0,
+        duckingDb: -10.0
       }
     },
     timeline: {
@@ -95,12 +110,44 @@ describe("AssemblyExecutionResult contract", () => {
     },
     subtitleCuesSha256: hashSubtitles,
     subtitleCues: validSubtitleCues,
+    subtitleStyleProfile: "sub-profile-default-v1",
     ffmpeg: {
       executable: "ffmpeg",
       version: "7.0.1-static",
       buildInfo: "gcc 13.2.0 (Ubuntu 24.04)"
     },
     commandFingerprint: hashFingerprint,
+    encoding: {
+      video: {
+        codec: "libx264",
+        pixelFormat: "yuv420p",
+        crf: 18,
+        preset: "fast"
+      },
+      audio: {
+        codec: "aac",
+        bitrateKbps: 192,
+        sampleRateHz: 48000,
+        channels: 2
+      }
+    },
+    streams: {
+      video: {
+        codecName: "h264",
+        pixelFormat: "yuv420p",
+        width: 1080,
+        height: 1920,
+        frameRate: 30,
+        durationMs: 10000
+      },
+      audio: {
+        codecName: "aac",
+        sampleRateHz: 48000,
+        channels: 2,
+        durationMs: 10000,
+        bitrateKbps: 192
+      }
+    },
     output: {
       media: {
         bucket: "cco-deliveries",
@@ -111,7 +158,9 @@ describe("AssemblyExecutionResult contract", () => {
       durationMs: 10000,
       width: 1080,
       height: 1920
-    }
+    },
+    measuredFrameRate: 30,
+    executionDurationMs: 4200
   });
 
   it("validates and parses a valid AssemblyExecutionResult and returns a deeply frozen object", () => {
@@ -204,5 +253,345 @@ describe("AssemblyExecutionResult contract", () => {
       }
     };
     expect(AssemblyExecutionResultSchema.safeParse(resultBadType).success).toBe(false);
+  });
+
+  it("rejects contradictory measuredFrameRate for VERTICAL_REEL_1080X1920_V1 profile", () => {
+    const result = {
+      ...createValidExecutionResult(),
+      measuredFrameRate: 60
+    };
+    const parseResult = AssemblyExecutionResultSchema.safeParse(result);
+    expect(parseResult.success).toBe(false);
+    if (!parseResult.success) {
+      expect(
+        parseResult.error.issues.some((issue) =>
+          issue.message.includes(
+            "Profile VERTICAL_REEL_1080X1920_V1 requires measuredFrameRate 30, got 60"
+          )
+        )
+      ).toBe(true);
+    }
+  });
+
+  it("rejects stem duration vs timeline mismatch", () => {
+    const valid = createValidExecutionResult();
+    const mismatchedResult = {
+      ...valid,
+      timeline: {
+        totalDurationMs: 10000,
+        stemDurationsMs: [6000, 4000] // Stem 0 actual is 5000, stem 1 actual is 5000
+      }
+    };
+    const parseResult = AssemblyExecutionResultSchema.safeParse(mismatchedResult);
+    expect(parseResult.success).toBe(false);
+    if (!parseResult.success) {
+      expect(
+        parseResult.error.issues.some((i) =>
+          i.message.includes("does not match video stem (order 0) actualDurationMs (5000)")
+        )
+      ).toBe(true);
+    }
+  });
+
+  it("rejects total duration vs timeline sum mismatch", () => {
+    const valid = createValidExecutionResult();
+    const mismatchedSum = {
+      ...valid,
+      timeline: {
+        totalDurationMs: 11000,
+        stemDurationsMs: [5000, 5000]
+      },
+      output: {
+        ...valid.output,
+        durationMs: 11000
+      }
+    };
+    const parseResult = AssemblyExecutionResultSchema.safeParse(mismatchedSum);
+    expect(parseResult.success).toBe(false);
+    if (!parseResult.success) {
+      expect(
+        parseResult.error.issues.some((i) =>
+          i.message.includes(
+            "timeline.totalDurationMs (11000) must match sum of stemDurationsMs (10000)"
+          )
+        )
+      ).toBe(true);
+    }
+  });
+
+  it("rejects output duration exceeding tolerance (250ms) and accepts within tolerance", () => {
+    const valid = createValidExecutionResult();
+    const withinTolerance = {
+      ...valid,
+      output: {
+        ...valid.output,
+        durationMs: 10250 // exactly +250ms
+      }
+    };
+    expect(AssemblyExecutionResultSchema.safeParse(withinTolerance).success).toBe(true);
+
+    const outsideTolerance = {
+      ...valid,
+      output: {
+        ...valid.output,
+        durationMs: 10251 // +251ms -> exceeds tolerance
+      }
+    };
+    const parseResult = AssemblyExecutionResultSchema.safeParse(outsideTolerance);
+    expect(parseResult.success).toBe(false);
+    if (!parseResult.success) {
+      expect(
+        parseResult.error.issues.some((i) =>
+          i.message.includes("exceeding allowed tolerance of 250ms")
+        )
+      ).toBe(true);
+    }
+  });
+
+  it("rejects subtitle cue extending beyond executed timeline", () => {
+    const valid = createValidExecutionResult();
+    const badSubtitle = {
+      ...valid,
+      subtitleCues: [
+        { startMs: 0, endMs: 5000, text: "Scene 1 dialog" },
+        { startMs: 5000, endMs: 10050, text: "Scene 2 dialog overflowing" }
+      ],
+      subtitleCuesSha256: hashSubtitleCues([
+        { startMs: 0, endMs: 5000, text: "Scene 1 dialog" },
+        { startMs: 5000, endMs: 10050, text: "Scene 2 dialog overflowing" }
+      ])
+    };
+    const parseResult = AssemblyExecutionResultSchema.safeParse(badSubtitle);
+    expect(parseResult.success).toBe(false);
+    if (!parseResult.success) {
+      expect(
+        parseResult.error.issues.some((i) =>
+          i.message.includes("overflows timeline: endMs (10050) > totalDurationMs (10000)")
+        )
+      ).toBe(true);
+    }
+  });
+
+  it("rejects invalid measuredFrameRate or executionDurationMs", () => {
+    const valid = createValidExecutionResult();
+    expect(
+      AssemblyExecutionResultSchema.safeParse({ ...valid, measuredFrameRate: 0 }).success
+    ).toBe(false);
+    expect(
+      AssemblyExecutionResultSchema.safeParse({ ...valid, measuredFrameRate: -30 }).success
+    ).toBe(false);
+    expect(
+      AssemblyExecutionResultSchema.safeParse({ ...valid, executionDurationMs: 0 }).success
+    ).toBe(false);
+    expect(
+      AssemblyExecutionResultSchema.safeParse({ ...valid, executionDurationMs: 1.5 }).success
+    ).toBe(false);
+  });
+
+  it("rejects execution result when subtitleCues are present but subtitleStyleProfile is missing or empty", () => {
+    const valid = createValidExecutionResult();
+    const missingStyle = {
+      ...valid,
+      subtitleStyleProfile: undefined
+    };
+    const parseResult1 = AssemblyExecutionResultSchema.safeParse(missingStyle);
+    expect(parseResult1.success).toBe(false);
+    if (!parseResult1.success) {
+      expect(
+        parseResult1.error.issues.some((i) =>
+          i.message.includes("subtitleStyleProfile is required when subtitleCues are present")
+        )
+      ).toBe(true);
+    }
+
+    const emptyStyle = {
+      ...valid,
+      subtitleStyleProfile: "   "
+    };
+    const parseResult2 = AssemblyExecutionResultSchema.safeParse(emptyStyle);
+    expect(parseResult2.success).toBe(false);
+  });
+
+  it("accepts execution result without subtitleCues when subtitleStyleProfile is omitted", () => {
+    const valid = createValidExecutionResult();
+    const noCuesNoStyle = {
+      ...valid,
+      subtitleCues: undefined,
+      subtitleCuesSha256: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      subtitleStyleProfile: undefined
+    };
+    expect(AssemblyExecutionResultSchema.safeParse(noCuesNoStyle).success).toBe(true);
+  });
+
+  it("validates visual-only execution with video stems, no VO/soundbed, video encoding only, and measured video stream only", () => {
+    const valid = createValidExecutionResult();
+    const visualOnlyResult: AssemblyExecutionResult = {
+      ...valid,
+      executedInputs: {
+        videoStems: valid.executedInputs.videoStems
+        // no voiceover, no soundbed
+      },
+      encoding: {
+        video: {
+          codec: "libx264",
+          pixelFormat: "yuv420p",
+          crf: 18,
+          preset: "fast"
+        }
+        // no audio encoding
+      },
+      streams: {
+        video: {
+          codecName: "h264",
+          pixelFormat: "yuv420p",
+          width: 1080,
+          height: 1920,
+          frameRate: 30,
+          durationMs: 10000
+        }
+        // no measured audio stream
+      }
+    };
+    const parsed = AssemblyExecutionResultSchema.parse(visualOnlyResult);
+    expect(parsed.executedInputs.voiceover).toBeUndefined();
+    expect(parsed.executedInputs.soundbed).toBeUndefined();
+    expect(parsed.encoding.audio).toBeUndefined();
+    expect(parsed.streams.audio).toBeUndefined();
+  });
+
+  it("rejects execution with VO or soundbed but missing audio encoding or measured audio stream", () => {
+    const valid = createValidExecutionResult();
+
+    // VO present, but missing audio encoding
+    const voWithoutAudioEncoding = {
+      ...valid,
+      encoding: {
+        video: valid.encoding.video
+      }
+    };
+    const res1 = AssemblyExecutionResultSchema.safeParse(voWithoutAudioEncoding);
+    expect(res1.success).toBe(false);
+    if (!res1.success) {
+      expect(
+        res1.error.issues.some((i) =>
+          i.message.includes("encoding.audio is required when voiceover or soundbed is executed")
+        )
+      ).toBe(true);
+    }
+
+    // Soundbed present, but missing measured audio stream
+    const sbWithoutAudioStream = {
+      ...valid,
+      executedInputs: {
+        videoStems: valid.executedInputs.videoStems,
+        soundbed: valid.executedInputs.soundbed
+      },
+      streams: {
+        video: valid.streams.video
+      }
+    };
+    const res2 = AssemblyExecutionResultSchema.safeParse(sbWithoutAudioStream);
+    expect(res2.success).toBe(false);
+    if (!res2.success) {
+      expect(
+        res2.error.issues.some((i) =>
+          i.message.includes("streams.audio is required when voiceover or soundbed is executed")
+        )
+      ).toBe(true);
+    }
+  });
+
+  it("rejects contradictory encoding or stream parameters for VERTICAL_REEL_1080X1920_V1 profile", () => {
+    const valid = createValidExecutionResult();
+
+    // Contradictory audio sample rate in encoding
+    const badEncodingSampleRate = {
+      ...valid,
+      encoding: {
+        ...valid.encoding,
+        audio: { ...valid.encoding.audio!, sampleRateHz: 44100 }
+      }
+    };
+    expect(AssemblyExecutionResultSchema.safeParse(badEncodingSampleRate).success).toBe(false);
+
+    // Contradictory video codec in streams
+    const badVideoStreamCodec = {
+      ...valid,
+      streams: {
+        ...valid.streams,
+        video: { ...valid.streams.video, codecName: "hevc" }
+      }
+    };
+    expect(AssemblyExecutionResultSchema.safeParse(badVideoStreamCodec).success).toBe(false);
+
+    // Contradictory audio codec in streams
+    const badAudioStreamCodec = {
+      ...valid,
+      streams: {
+        ...valid.streams,
+        audio: { ...valid.streams.audio!, codecName: "opus" }
+      }
+    };
+    expect(AssemblyExecutionResultSchema.safeParse(badAudioStreamCodec).success).toBe(false);
+  });
+
+  it("rejects execution result with contradictory audio timing (trimStartMs >= actualDurationMs or formula mismatch)", () => {
+    const valid = createValidExecutionResult();
+    const badTrimVo = {
+      ...valid,
+      executedInputs: {
+        ...valid.executedInputs,
+        voiceover: {
+          ...valid.executedInputs.voiceover!,
+          actualDurationMs: 5000,
+          trimStartMs: 6000
+        }
+      }
+    };
+    expect(AssemblyExecutionResultSchema.safeParse(badTrimVo).success).toBe(false);
+
+    const badDurationFormulaVo = {
+      ...valid,
+      executedInputs: {
+        ...valid.executedInputs,
+        voiceover: {
+          ...valid.executedInputs.voiceover!,
+          actualDurationMs: 10000,
+          trimStartMs: 2000,
+          loopCount: 1,
+          padLeadingMs: 0,
+          padTrailingMs: 0,
+          effectiveDurationMs: 10000 // formula expected 8000
+        }
+      }
+    };
+    expect(AssemblyExecutionResultSchema.safeParse(badDurationFormulaVo).success).toBe(false);
+  });
+
+  it("rejects execution result with omitted required audio transformation fields", () => {
+    const valid = createValidExecutionResult();
+    const incompleteAudioVo = {
+      ...valid,
+      executedInputs: {
+        ...valid.executedInputs,
+        voiceover: {
+          assetId: "vo-1",
+          kind: "voiceover" as const,
+          media: {
+            bucket: "cco-audio",
+            key: "audio/vo.mp3",
+            sha256: hashVO,
+            contentType: "audio/mpeg"
+          },
+          source: { kind: "local" as const },
+          startMs: 0,
+          actualDurationMs: 10000,
+          effectiveStartMs: 0,
+          effectiveDurationMs: 10000
+          // missing trimStartMs, loopCount, padLeadingMs, padTrailingMs, gainDb
+        }
+      }
+    };
+    expect(AssemblyExecutionResultSchema.safeParse(incompleteAudioVo).success).toBe(false);
   });
 });
