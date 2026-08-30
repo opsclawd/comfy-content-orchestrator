@@ -81,6 +81,20 @@ describe("assembly-execution-invariants", () => {
       width: 1080,
       height: 1920
     },
+    encoding: {
+      video: {
+        codec: "libx264",
+        pixelFormat: "yuv420p",
+        crf: 18,
+        preset: "fast"
+      },
+      audio: {
+        codec: "aac",
+        bitrateKbps: 192,
+        sampleRateHz: 48000,
+        channels: 2
+      }
+    },
     streams: {
       video: {
         codecName: "h264",
@@ -379,7 +393,7 @@ describe("assembly-execution-invariants", () => {
         streams: {
           ...payload.streams!,
           audio: {
-            ...payload.streams!.audio,
+            ...payload.streams!.audio!,
             durationMs: 10251 // +251ms -> exceeds 250ms tolerance
           }
         }
@@ -635,6 +649,56 @@ describe("assembly-execution-invariants", () => {
         }
       };
       expect(runValidation(modified)).toHaveLength(0);
+    });
+
+    it("accepts visual-only payload without voiceover, soundbed, audio encoding, or audio stream", () => {
+      const payload = createBasePayload();
+      const visualOnlyPayload: ExecutedAssemblyInvariantPayload = {
+        timeline: payload.timeline,
+        inputs: {
+          videoStems: payload.inputs.videoStems
+        },
+        output: payload.output,
+        encoding: {
+          video: payload.encoding!.video
+        },
+        streams: {
+          video: payload.streams!.video
+        }
+      };
+      expect(runValidation(visualOnlyPayload)).toHaveLength(0);
+    });
+
+    it("rejects payload when voiceover or soundbed is executed but audio encoding is missing", () => {
+      const payload = createBasePayload();
+      const missingAudioEncoding: ExecutedAssemblyInvariantPayload = {
+        ...payload,
+        encoding: {
+          video: payload.encoding!.video
+        }
+      };
+      const issues = runValidation(missingAudioEncoding);
+      expect(
+        issues.some((i) =>
+          i.message.includes("encoding.audio is required when voiceover or soundbed is executed")
+        )
+      ).toBe(true);
+    });
+
+    it("rejects payload when voiceover or soundbed is executed but measured audio stream is missing", () => {
+      const payload = createBasePayload();
+      const missingAudioStream: ExecutedAssemblyInvariantPayload = {
+        ...payload,
+        streams: {
+          video: payload.streams!.video
+        }
+      };
+      const issues = runValidation(missingAudioStream);
+      expect(
+        issues.some((i) =>
+          i.message.includes("streams.audio is required when voiceover or soundbed is executed")
+        )
+      ).toBe(true);
     });
   });
 });

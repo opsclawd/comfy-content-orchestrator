@@ -573,14 +573,18 @@ describe("Application capability ports contract tests", () => {
             },
             commandFingerprint: hashFingerprint,
             encoding: {
-              videoCodec: "libx264",
-              pixelFormat: "yuv420p",
-              crf: 18,
-              preset: "fast",
-              audioCodec: "aac",
-              audioBitrateKbps: 192,
-              audioSampleRateHz: 48000,
-              audioChannels: 2
+              video: {
+                codec: "libx264",
+                pixelFormat: "yuv420p",
+                crf: 18,
+                preset: "fast"
+              },
+              audio: {
+                codec: "aac",
+                bitrateKbps: 192,
+                sampleRateHz: 48000,
+                channels: 2
+              }
             },
             streams: {
               video: {

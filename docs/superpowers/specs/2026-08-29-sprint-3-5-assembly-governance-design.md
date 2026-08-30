@@ -209,15 +209,23 @@ The layout mode is explicitly recorded in `AssemblyProfile` and validated in `As
 `AssemblyExecutionResult` (`packages/contracts/src/assembly-execution.ts`) defines what FFmpeg actually executed and returned to `MediaAssemblerPort`:
 
 ```ts
-interface AssemblyEncodingExecution {
-  readonly videoCodec: string; // e.g. "libx264"
+interface VideoEncodingExecution {
+  readonly codec: string; // e.g. "libx264"
   readonly pixelFormat: string; // e.g. "yuv420p"
   readonly crf?: number;
   readonly preset?: string;
-  readonly audioCodec: string; // e.g. "aac"
-  readonly audioBitrateKbps: number; // e.g. 192
-  readonly audioSampleRateHz: number; // e.g. 48000
-  readonly audioChannels: number; // e.g. 2
+}
+
+interface AudioEncodingExecution {
+  readonly codec: string; // e.g. "aac"
+  readonly bitrateKbps: number; // e.g. 192
+  readonly sampleRateHz: number; // e.g. 48000
+  readonly channels: number; // e.g. 2
+}
+
+interface AssemblyEncodingExecution {
+  readonly video: VideoEncodingExecution;
+  readonly audio?: AudioEncodingExecution;
 }
 
 interface MeasuredVideoStream {
@@ -239,7 +247,7 @@ interface MeasuredAudioStream {
 
 interface MeasuredOutputStreams {
   readonly video: MeasuredVideoStream;
-  readonly audio: MeasuredAudioStream;
+  readonly audio?: MeasuredAudioStream;
 }
 
 interface AssemblyExecutionResult {

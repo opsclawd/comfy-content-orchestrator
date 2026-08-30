@@ -118,14 +118,18 @@ describe("AssemblyExecutionResult contract", () => {
     },
     commandFingerprint: hashFingerprint,
     encoding: {
-      videoCodec: "libx264",
-      pixelFormat: "yuv420p",
-      crf: 18,
-      preset: "fast",
-      audioCodec: "aac",
-      audioBitrateKbps: 192,
-      audioSampleRateHz: 48000,
-      audioChannels: 2
+      video: {
+        codec: "libx264",
+        pixelFormat: "yuv420p",
+        crf: 18,
+        preset: "fast"
+      },
+      audio: {
+        codec: "aac",
+        bitrateKbps: 192,
+        sampleRateHz: 48000,
+        channels: 2
+      }
     },
     streams: {
       video: {
@@ -419,13 +423,94 @@ describe("AssemblyExecutionResult contract", () => {
     expect(AssemblyExecutionResultSchema.safeParse(noCuesNoStyle).success).toBe(true);
   });
 
+  it("validates visual-only execution with video stems, no VO/soundbed, video encoding only, and measured video stream only", () => {
+    const valid = createValidExecutionResult();
+    const visualOnlyResult: AssemblyExecutionResult = {
+      ...valid,
+      executedInputs: {
+        videoStems: valid.executedInputs.videoStems
+        // no voiceover, no soundbed
+      },
+      encoding: {
+        video: {
+          codec: "libx264",
+          pixelFormat: "yuv420p",
+          crf: 18,
+          preset: "fast"
+        }
+        // no audio encoding
+      },
+      streams: {
+        video: {
+          codecName: "h264",
+          pixelFormat: "yuv420p",
+          width: 1080,
+          height: 1920,
+          frameRate: 30,
+          durationMs: 10000
+        }
+        // no measured audio stream
+      }
+    };
+    const parsed = AssemblyExecutionResultSchema.parse(visualOnlyResult);
+    expect(parsed.executedInputs.voiceover).toBeUndefined();
+    expect(parsed.executedInputs.soundbed).toBeUndefined();
+    expect(parsed.encoding.audio).toBeUndefined();
+    expect(parsed.streams.audio).toBeUndefined();
+  });
+
+  it("rejects execution with VO or soundbed but missing audio encoding or measured audio stream", () => {
+    const valid = createValidExecutionResult();
+
+    // VO present, but missing audio encoding
+    const voWithoutAudioEncoding = {
+      ...valid,
+      encoding: {
+        video: valid.encoding.video
+      }
+    };
+    const res1 = AssemblyExecutionResultSchema.safeParse(voWithoutAudioEncoding);
+    expect(res1.success).toBe(false);
+    if (!res1.success) {
+      expect(
+        res1.error.issues.some((i) =>
+          i.message.includes("encoding.audio is required when voiceover or soundbed is executed")
+        )
+      ).toBe(true);
+    }
+
+    // Soundbed present, but missing measured audio stream
+    const sbWithoutAudioStream = {
+      ...valid,
+      executedInputs: {
+        videoStems: valid.executedInputs.videoStems,
+        soundbed: valid.executedInputs.soundbed
+      },
+      streams: {
+        video: valid.streams.video
+      }
+    };
+    const res2 = AssemblyExecutionResultSchema.safeParse(sbWithoutAudioStream);
+    expect(res2.success).toBe(false);
+    if (!res2.success) {
+      expect(
+        res2.error.issues.some((i) =>
+          i.message.includes("streams.audio is required when voiceover or soundbed is executed")
+        )
+      ).toBe(true);
+    }
+  });
+
   it("rejects contradictory encoding or stream parameters for VERTICAL_REEL_1080X1920_V1 profile", () => {
     const valid = createValidExecutionResult();
 
     // Contradictory audio sample rate in encoding
     const badEncodingSampleRate = {
       ...valid,
-      encoding: { ...valid.encoding, audioSampleRateHz: 44100 }
+      encoding: {
+        ...valid.encoding,
+        audio: { ...valid.encoding.audio!, sampleRateHz: 44100 }
+      }
     };
     expect(AssemblyExecutionResultSchema.safeParse(badEncodingSampleRate).success).toBe(false);
 
@@ -444,7 +529,7 @@ describe("AssemblyExecutionResult contract", () => {
       ...valid,
       streams: {
         ...valid.streams,
-        audio: { ...valid.streams.audio, codecName: "opus" }
+        audio: { ...valid.streams.audio!, codecName: "opus" }
       }
     };
     expect(AssemblyExecutionResultSchema.safeParse(badAudioStreamCodec).success).toBe(false);

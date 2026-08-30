@@ -9,6 +9,7 @@ import {
   AudioAssetKindSchema,
   AudioAssetRefSchema,
   AudioAssetSourceSchema,
+  AudioEncodingExecutionSchema,
   contractsName,
   HealthResponseSchema,
   MeasuredAudioStreamSchema,
@@ -18,6 +19,7 @@ import {
   SubtitleCueSchema,
   VERTICAL_REEL_1080X1920_V1_PROFILE,
   validateExecutedAssemblyInvariants,
+  VideoEncodingExecutionSchema,
   VideoStemRefSchema
 } from "./index.js";
 
@@ -37,6 +39,8 @@ describe("contracts skeleton", () => {
     expect(AssemblySpecSchema).toBeDefined();
     expect(AssemblyTimelineDecisionSchema).toBeDefined();
     expect(AssemblyEncodingExecutionSchema).toBeDefined();
+    expect(VideoEncodingExecutionSchema).toBeDefined();
+    expect(AudioEncodingExecutionSchema).toBeDefined();
     expect(MeasuredVideoStreamSchema).toBeDefined();
     expect(MeasuredAudioStreamSchema).toBeDefined();
     expect(MeasuredOutputStreamsSchema).toBeDefined();

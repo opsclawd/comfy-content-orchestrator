@@ -19,25 +19,39 @@ export type AssemblyTimelineDecision = {
   readonly stemDurationsMs: readonly number[];
 };
 
-export const AssemblyEncodingExecutionSchema = z.object({
-  videoCodec: z.string().min(1, "videoCodec must not be empty"),
+export const VideoEncodingExecutionSchema = z.object({
+  codec: z.string().min(1, "codec must not be empty"),
   pixelFormat: z.string().min(1, "pixelFormat must not be empty"),
   crf: z.number().int().nonnegative("crf must be non-negative").optional(),
-  preset: z.string().min(1, "preset must not be empty").optional(),
-  audioCodec: z.string().min(1, "audioCodec must not be empty"),
-  audioBitrateKbps: z.number().int().positive("audioBitrateKbps must be positive"),
-  audioSampleRateHz: z.number().int().positive("audioSampleRateHz must be positive"),
-  audioChannels: z.number().int().positive("audioChannels must be positive")
+  preset: z.string().min(1, "preset must not be empty").optional()
 });
-export type AssemblyEncodingExecution = {
-  readonly videoCodec: string;
+export type VideoEncodingExecution = {
+  readonly codec: string;
   readonly pixelFormat: string;
   readonly crf?: number | undefined;
   readonly preset?: string | undefined;
-  readonly audioCodec: string;
-  readonly audioBitrateKbps: number;
-  readonly audioSampleRateHz: number;
-  readonly audioChannels: number;
+};
+
+export const AudioEncodingExecutionSchema = z.object({
+  codec: z.string().min(1, "codec must not be empty"),
+  bitrateKbps: z.number().int().positive("bitrateKbps must be positive"),
+  sampleRateHz: z.number().int().positive("sampleRateHz must be positive"),
+  channels: z.number().int().positive("channels must be positive")
+});
+export type AudioEncodingExecution = {
+  readonly codec: string;
+  readonly bitrateKbps: number;
+  readonly sampleRateHz: number;
+  readonly channels: number;
+};
+
+export const AssemblyEncodingExecutionSchema = z.object({
+  video: VideoEncodingExecutionSchema,
+  audio: AudioEncodingExecutionSchema.optional()
+});
+export type AssemblyEncodingExecution = {
+  readonly video: VideoEncodingExecution;
+  readonly audio?: AudioEncodingExecution | undefined;
 };
 
 export const MeasuredVideoStreamSchema = z.object({
@@ -74,11 +88,11 @@ export type MeasuredAudioStream = {
 
 export const MeasuredOutputStreamsSchema = z.object({
   video: MeasuredVideoStreamSchema,
-  audio: MeasuredAudioStreamSchema
+  audio: MeasuredAudioStreamSchema.optional()
 });
 export type MeasuredOutputStreams = {
   readonly video: MeasuredVideoStream;
-  readonly audio: MeasuredAudioStream;
+  readonly audio?: MeasuredAudioStream | undefined;
 };
 
 export interface ExecutedAssemblyInvariantInputs {
@@ -95,6 +109,7 @@ export interface ExecutedAssemblyInvariantPayload {
     readonly width?: number | undefined;
     readonly height?: number | undefined;
   };
+  readonly encoding?: AssemblyEncodingExecution | undefined;
   readonly streams?: MeasuredOutputStreams | undefined;
   readonly subtitleCues?: readonly SubtitleCue[] | undefined;
   readonly subtitleStyleProfile?: string | undefined;
@@ -285,7 +300,26 @@ export function validateExecutedAssemblyInvariants(
     }
   }
 
-  // 8. Measured streams cross-validation
+  // 8. Executed audio provenance requirement
+  const hasExecutedAudio = Boolean(payload.inputs.voiceover || payload.inputs.soundbed);
+  if (hasExecutedAudio) {
+    if (payload.encoding && !payload.encoding.audio) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "encoding.audio is required when voiceover or soundbed is executed",
+        path: ["encoding", "audio"]
+      });
+    }
+    if (payload.streams && !payload.streams.audio) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "streams.audio is required when voiceover or soundbed is executed",
+        path: ["streams", "audio"]
+      });
+    }
+  }
+
+  // 9. Measured streams cross-validation
   if (payload.streams) {
     const { video, audio } = payload.streams;
     const videoDurationDiff = Math.abs(video.durationMs - payload.timeline.totalDurationMs);
@@ -296,13 +330,15 @@ export function validateExecutedAssemblyInvariants(
         path: ["streams", "video", "durationMs"]
       });
     }
-    const audioDurationDiff = Math.abs(audio.durationMs - payload.timeline.totalDurationMs);
-    if (audioDurationDiff > ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `streams.audio.durationMs (${audio.durationMs}) deviates from timeline.totalDurationMs (${payload.timeline.totalDurationMs}) by ${audioDurationDiff}ms, exceeding allowed tolerance of ${ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS}ms`,
-        path: ["streams", "audio", "durationMs"]
-      });
+    if (audio) {
+      const audioDurationDiff = Math.abs(audio.durationMs - payload.timeline.totalDurationMs);
+      if (audioDurationDiff > ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `streams.audio.durationMs (${audio.durationMs}) deviates from timeline.totalDurationMs (${payload.timeline.totalDurationMs}) by ${audioDurationDiff}ms, exceeding allowed tolerance of ${ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS}ms`,
+          path: ["streams", "audio", "durationMs"]
+        });
+      }
     }
     if (payload.output.width !== undefined && video.width !== payload.output.width) {
       ctx.addIssue({

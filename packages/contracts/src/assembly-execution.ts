@@ -2,15 +2,19 @@ import { z } from "zod";
 import {
   AssemblyEncodingExecutionSchema,
   AssemblyTimelineDecisionSchema,
+  AudioEncodingExecutionSchema,
   MeasuredAudioStreamSchema,
   MeasuredOutputStreamsSchema,
   MeasuredVideoStreamSchema,
+  VideoEncodingExecutionSchema,
   validateExecutedAssemblyInvariants,
   type AssemblyEncodingExecution,
   type AssemblyTimelineDecision,
+  type AudioEncodingExecution,
   type MeasuredAudioStream,
   type MeasuredOutputStreams,
-  type MeasuredVideoStream
+  type MeasuredVideoStream,
+  type VideoEncodingExecution
 } from "./assembly-execution-invariants.js";
 import {
   AssemblyLayoutModeSchema,
@@ -37,14 +41,18 @@ import { ExecutedVideoStemRefSchema, type ExecutedVideoStemRef } from "./video-s
 export {
   AssemblyEncodingExecutionSchema,
   AssemblyTimelineDecisionSchema,
+  AudioEncodingExecutionSchema,
   MeasuredAudioStreamSchema,
   MeasuredOutputStreamsSchema,
   MeasuredVideoStreamSchema,
+  VideoEncodingExecutionSchema,
   type AssemblyEncodingExecution,
   type AssemblyTimelineDecision,
+  type AudioEncodingExecution,
   type MeasuredAudioStream,
   type MeasuredOutputStreams,
-  type MeasuredVideoStream
+  type MeasuredVideoStream,
+  type VideoEncodingExecution
 };
 
 export const AssemblyFfmpegMetadataSchema = z.object({
@@ -127,6 +135,7 @@ export const AssemblyExecutionResultSchema = z
         timeline: res.timeline,
         inputs: res.executedInputs,
         output: res.output,
+        encoding: res.encoding,
         streams: res.streams,
         subtitleCues: res.subtitleCues,
         subtitleStyleProfile: res.subtitleStyleProfile,
@@ -183,18 +192,24 @@ export const AssemblyExecutionResultSchema = z
           path: ["measuredFrameRate"]
         });
       }
-      if (res.encoding.audioSampleRateHz !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioSampleRateHz) {
+      if (
+        res.encoding.audio &&
+        res.encoding.audio.sampleRateHz !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioSampleRateHz
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `Profile VERTICAL_REEL_1080X1920_V1 requires encoding.audioSampleRateHz ${VERTICAL_REEL_1080X1920_V1_PROFILE.audioSampleRateHz}, got ${res.encoding.audioSampleRateHz}`,
-          path: ["encoding", "audioSampleRateHz"]
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires encoding.audio.sampleRateHz ${VERTICAL_REEL_1080X1920_V1_PROFILE.audioSampleRateHz}, got ${res.encoding.audio.sampleRateHz}`,
+          path: ["encoding", "audio", "sampleRateHz"]
         });
       }
-      if (res.encoding.audioChannels !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioChannels) {
+      if (
+        res.encoding.audio &&
+        res.encoding.audio.channels !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioChannels
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `Profile VERTICAL_REEL_1080X1920_V1 requires encoding.audioChannels ${VERTICAL_REEL_1080X1920_V1_PROFILE.audioChannels}, got ${res.encoding.audioChannels}`,
-          path: ["encoding", "audioChannels"]
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires encoding.audio.channels ${VERTICAL_REEL_1080X1920_V1_PROFILE.audioChannels}, got ${res.encoding.audio.channels}`,
+          path: ["encoding", "audio", "channels"]
         });
       }
       if (res.streams.video.codecName !== VERTICAL_REEL_1080X1920_V1_PROFILE.videoCodecFamily) {
@@ -232,21 +247,30 @@ export const AssemblyExecutionResultSchema = z
           path: ["streams", "video", "frameRate"]
         });
       }
-      if (res.streams.audio.codecName !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioCodecFamily) {
+      if (
+        res.streams.audio &&
+        res.streams.audio.codecName !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioCodecFamily
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: `Profile VERTICAL_REEL_1080X1920_V1 requires audio codec "${VERTICAL_REEL_1080X1920_V1_PROFILE.audioCodecFamily}", got "${res.streams.audio.codecName}"`,
           path: ["streams", "audio", "codecName"]
         });
       }
-      if (res.streams.audio.sampleRateHz !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioSampleRateHz) {
+      if (
+        res.streams.audio &&
+        res.streams.audio.sampleRateHz !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioSampleRateHz
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: `Profile VERTICAL_REEL_1080X1920_V1 requires audio sampleRateHz ${VERTICAL_REEL_1080X1920_V1_PROFILE.audioSampleRateHz}, got ${res.streams.audio.sampleRateHz}`,
           path: ["streams", "audio", "sampleRateHz"]
         });
       }
-      if (res.streams.audio.channels !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioChannels) {
+      if (
+        res.streams.audio &&
+        res.streams.audio.channels !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioChannels
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: `Profile VERTICAL_REEL_1080X1920_V1 requires audio channels ${VERTICAL_REEL_1080X1920_V1_PROFILE.audioChannels}, got ${res.streams.audio.channels}`,

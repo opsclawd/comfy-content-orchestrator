@@ -154,6 +154,7 @@ export const AssemblyManifestSchema = z
         timeline: manifest.timeline,
         inputs: manifest.inputs,
         output: manifest.output,
+        encoding: manifest.encoding,
         streams: manifest.streams,
         subtitleCues: manifest.subtitleCues,
         subtitleStyleProfile: manifest.subtitleStyleProfile,
@@ -211,19 +212,24 @@ export const AssemblyManifestSchema = z
         });
       }
       if (
-        manifest.encoding.audioSampleRateHz !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioSampleRateHz
+        manifest.encoding.audio &&
+        manifest.encoding.audio.sampleRateHz !==
+          VERTICAL_REEL_1080X1920_V1_PROFILE.audioSampleRateHz
       ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `Profile VERTICAL_REEL_1080X1920_V1 requires encoding.audioSampleRateHz ${VERTICAL_REEL_1080X1920_V1_PROFILE.audioSampleRateHz}, got ${manifest.encoding.audioSampleRateHz}`,
-          path: ["encoding", "audioSampleRateHz"]
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires encoding.audio.sampleRateHz ${VERTICAL_REEL_1080X1920_V1_PROFILE.audioSampleRateHz}, got ${manifest.encoding.audio.sampleRateHz}`,
+          path: ["encoding", "audio", "sampleRateHz"]
         });
       }
-      if (manifest.encoding.audioChannels !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioChannels) {
+      if (
+        manifest.encoding.audio &&
+        manifest.encoding.audio.channels !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioChannels
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `Profile VERTICAL_REEL_1080X1920_V1 requires encoding.audioChannels ${VERTICAL_REEL_1080X1920_V1_PROFILE.audioChannels}, got ${manifest.encoding.audioChannels}`,
-          path: ["encoding", "audioChannels"]
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires encoding.audio.channels ${VERTICAL_REEL_1080X1920_V1_PROFILE.audioChannels}, got ${manifest.encoding.audio.channels}`,
+          path: ["encoding", "audio", "channels"]
         });
       }
       if (
@@ -266,6 +272,7 @@ export const AssemblyManifestSchema = z
         });
       }
       if (
+        manifest.streams.audio &&
         manifest.streams.audio.codecName !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioCodecFamily
       ) {
         ctx.addIssue({
@@ -275,6 +282,7 @@ export const AssemblyManifestSchema = z
         });
       }
       if (
+        manifest.streams.audio &&
         manifest.streams.audio.sampleRateHz !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioSampleRateHz
       ) {
         ctx.addIssue({
@@ -283,7 +291,10 @@ export const AssemblyManifestSchema = z
           path: ["streams", "audio", "sampleRateHz"]
         });
       }
-      if (manifest.streams.audio.channels !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioChannels) {
+      if (
+        manifest.streams.audio &&
+        manifest.streams.audio.channels !== VERTICAL_REEL_1080X1920_V1_PROFILE.audioChannels
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: `Profile VERTICAL_REEL_1080X1920_V1 requires audio channels ${VERTICAL_REEL_1080X1920_V1_PROFILE.audioChannels}, got ${manifest.streams.audio.channels}`,
