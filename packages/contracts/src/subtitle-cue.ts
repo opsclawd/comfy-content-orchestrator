@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { z } from "zod";
 
 export const EMPTY_SUBTITLE_CUES_CANONICAL = "[]";
@@ -64,7 +65,11 @@ export function canonicalizeSubtitleCues(cues?: readonly SubtitleCue[]): string 
   return JSON.stringify(normalized);
 }
 
+// Uses @noble/hashes (pure JS, isomorphic) rather than node:crypto so this
+// module stays safe to bundle into browser code — packages/contracts is
+// imported by apps/web client components, and node:crypto import cannot be
+// resolved there. See PR fixing the apps/web "Review Hub" Docker build.
 export function hashSubtitleCues(cues?: readonly SubtitleCue[]): string {
   const canonical = canonicalizeSubtitleCues(cues);
-  return createHash("sha256").update(canonical).digest("hex");
+  return bytesToHex(sha256(new TextEncoder().encode(canonical)));
 }
