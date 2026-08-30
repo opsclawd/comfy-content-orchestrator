@@ -31,7 +31,8 @@ import type {
   StorageTelemetryPort,
   VoiceSynthesisPort,
   HashBytesPort,
-  ReferenceAssetRepository
+  ReferenceAssetRepository,
+  AssemblySpec
 } from "./index.js";
 import type {
   CampaignReviewSummary,
@@ -40,8 +41,10 @@ import type {
   SceneStatus,
   StorageMetricsSnapshot,
   StorageTelemetrySnapshot,
-  StorageWatermarkState
+  StorageWatermarkState,
+  AssemblyExecutionResult
 } from "@cco/contracts";
+import { createAssemblyManifest, hashSubtitleCues } from "@cco/contracts";
 import type {
   CampaignId,
   CandidateId,
@@ -492,6 +495,130 @@ describe("Application capability ports contract tests", () => {
         audioKey: "a1.mp3"
       });
       expect(assembled.outputKey).toBe("assembled/a1.mp3");
+
+      const hashVideo = "a".repeat(64);
+      const hashVO = "b".repeat(64);
+      const hashFingerprint = "d".repeat(64);
+      const hashOutput = "e".repeat(64);
+
+      const typedAssemblerPort: MediaAssemblerPort<AssemblySpec, AssemblyExecutionResult> = {
+        async assemble(spec: AssemblySpec): Promise<AssemblyExecutionResult> {
+          const hashSubtitles = hashSubtitleCues(spec.subtitleCues);
+          return {
+            assemblyId: `asm-${spec.campaignId}`,
+            campaignId: spec.campaignId,
+            assemblyProfile: spec.assemblyProfile,
+            executedInputs: {
+              videoStems: spec.videoStems.map((s) => ({
+                sceneId: s.sceneId,
+                generationManifestId: s.generationManifestId,
+                order: s.order,
+                media: s.media,
+                actualDurationMs: s.expectedDurationMs
+              })),
+              ...(spec.voiceover
+                ? {
+                    voiceover: {
+                      assetId: spec.voiceover.assetId,
+                      kind: "voiceover",
+                      media: spec.voiceover.media,
+                      source: spec.voiceover.source,
+                      startMs: spec.voiceover.startMs,
+                      actualDurationMs: spec.voiceover.expectedDurationMs
+                    }
+                  }
+                : {}),
+              ...(spec.soundbed
+                ? {
+                    soundbed: {
+                      assetId: spec.soundbed.assetId,
+                      kind: "soundbed",
+                      media: spec.soundbed.media,
+                      source: spec.soundbed.source,
+                      startMs: spec.soundbed.startMs,
+                      actualDurationMs: spec.soundbed.expectedDurationMs
+                    }
+                  }
+                : {})
+            },
+            timeline: {
+              totalDurationMs: spec.expectedTotalDurationMs,
+              stemDurationsMs: spec.videoStems.map((s) => s.expectedDurationMs)
+            },
+            layout: {
+              mode: "fit_blurred_fill"
+            },
+            subtitleCuesSha256: hashSubtitles,
+            subtitleCues: spec.subtitleCues,
+            ffmpeg: {
+              executable: "ffmpeg",
+              version: "7.0.1-static",
+              buildInfo: "gcc 13.2.0 (Ubuntu 24.04)"
+            },
+            commandFingerprint: hashFingerprint,
+            output: {
+              media: {
+                bucket: "cco-deliveries",
+                key: `deliveries/${spec.campaignId}/final.mp4`,
+                sha256: hashOutput,
+                contentType: "video/mp4"
+              },
+              durationMs: spec.expectedTotalDurationMs,
+              width: 1080,
+              height: 1920
+            }
+          };
+        }
+      };
+
+      const specInput: AssemblySpec = {
+        campaignId: "camp-alpha",
+        videoStems: [
+          {
+            sceneId: "scene-1",
+            generationManifestId: "gen-man-1",
+            order: 0,
+            media: {
+              bucket: "cco-renders",
+              key: "scenes/scene-1.mp4",
+              sha256: hashVideo,
+              contentType: "video/mp4"
+            },
+            expectedDurationMs: 5000
+          }
+        ],
+        voiceover: {
+          assetId: "vo-1",
+          kind: "voiceover",
+          media: {
+            bucket: "cco-audio",
+            key: "audio/vo-1.mp3",
+            sha256: hashVO,
+            contentType: "audio/mpeg"
+          },
+          source: { kind: "local" },
+          startMs: 0,
+          expectedDurationMs: 5000
+        },
+        subtitleCues: [{ startMs: 0, endMs: 5000, text: "Sample subtitle" }],
+        assemblyProfile: { key: "VERTICAL_REEL_1080X1920_V1", version: 1 },
+        expectedTotalDurationMs: 5000
+      };
+
+      const executionResult = await typedAssemblerPort.assemble(specInput);
+      expect(executionResult.assemblyId).toBe("asm-camp-alpha");
+      expect(executionResult.executedInputs.videoStems[0]?.actualDurationMs).toBe(5000);
+
+      // Verify AssemblyManifest is constructed from executionResult (not directly from AssemblySpec)
+      const manifest = createAssemblyManifest({
+        executionResult,
+        governanceDecisionId: "gov-dec-001",
+        createdAt: "2026-08-29T12:00:00.000Z"
+      });
+      expect(manifest.assemblyId).toBe("asm-camp-alpha");
+      expect(manifest.inputs.videoStems).toEqual(executionResult.executedInputs.videoStems);
+      expect(manifest.generationManifestIds).toEqual(["gen-man-1"]);
+      expect(manifest.governanceDecisionId).toBe("gov-dec-001");
     });
   });
 
