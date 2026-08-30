@@ -1,7 +1,13 @@
 import { z } from "zod";
 import {
+  AssemblyTimelineDecisionSchema,
+  validateExecutedAssemblyInvariants,
+  type AssemblyTimelineDecision
+} from "./assembly-execution-invariants.js";
+import {
   AssemblyLayoutModeSchema,
   AssemblyProfileIdentitySchema,
+  VERTICAL_REEL_1080X1920_V1_PROFILE,
   type AssemblyLayoutMode,
   type AssemblyProfileIdentity
 } from "./assembly-profile.js";
@@ -19,6 +25,8 @@ import {
 } from "./persistent-media.js";
 import { SubtitleCueSchema, hashSubtitleCues, type SubtitleCue } from "./subtitle-cue.js";
 import { ExecutedVideoStemRefSchema, type ExecutedVideoStemRef } from "./video-stem.js";
+
+export { AssemblyTimelineDecisionSchema, type AssemblyTimelineDecision };
 
 export const AssemblyFfmpegMetadataSchema = z.object({
   executable: z.string().min(1, "FFmpeg executable must not be empty"),
@@ -42,15 +50,6 @@ export type ExecutedAssemblyInputs = {
   readonly soundbed?: ExecutedSoundbedRef | undefined;
 };
 
-export const AssemblyTimelineDecisionSchema = z.object({
-  totalDurationMs: z.number().int().positive("totalDurationMs must be positive"),
-  stemDurationsMs: z.array(z.number().int().positive()).min(1, "stemDurationsMs must not be empty")
-});
-export type AssemblyTimelineDecision = {
-  readonly totalDurationMs: number;
-  readonly stemDurationsMs: readonly number[];
-};
-
 export const AssemblyExecutionResultSchema = z
   .object({
     assemblyId: z.string().min(1, "assemblyId must not be empty"),
@@ -63,6 +62,7 @@ export const AssemblyExecutionResultSchema = z
     }),
     subtitleCuesSha256: sha256HashSchema,
     subtitleCues: z.array(SubtitleCueSchema).optional(),
+    subtitleStyleProfile: z.string().min(1, "subtitleStyleProfile must not be empty").optional(),
     ffmpeg: AssemblyFfmpegMetadataSchema,
     commandFingerprint: sha256HashSchema,
     output: z.object({
@@ -70,7 +70,12 @@ export const AssemblyExecutionResultSchema = z
       durationMs: z.number().int().positive(),
       width: z.number().int().positive(),
       height: z.number().int().positive()
-    })
+    }),
+    measuredFrameRate: z.number().positive("measuredFrameRate must be positive"),
+    executionDurationMs: z
+      .number()
+      .int("executionDurationMs must be an integer")
+      .positive("executionDurationMs must be positive")
   })
   .superRefine((res, ctx) => {
     // Stem ordering: contiguous 0..n-1
@@ -95,14 +100,17 @@ export const AssemblyExecutionResultSchema = z
       });
     }
 
-    // Stem durations match timeline
-    if (res.timeline.stemDurationsMs.length !== res.executedInputs.videoStems.length) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `timeline.stemDurationsMs length (${res.timeline.stemDurationsMs.length}) does not match executedInputs.videoStems length (${res.executedInputs.videoStems.length})`,
-        path: ["timeline", "stemDurationsMs"]
-      });
-    }
+    // Shared executed-state invariant validation
+    validateExecutedAssemblyInvariants(
+      {
+        timeline: res.timeline,
+        inputs: res.executedInputs,
+        output: res.output,
+        subtitleCues: res.subtitleCues
+      },
+      ctx,
+      { inputsKey: "executedInputs" }
+    );
 
     // Subtitle cues hash check: deterministic canonical hash must match (including NO_SUBTITLE_CUES_SHA256 when cues are omitted/empty)
     const expectedSubtitleHash = hashSubtitleCues(res.subtitleCues);
@@ -144,6 +152,13 @@ export const AssemblyExecutionResultSchema = z
           path: ["output", "media", "contentType"]
         });
       }
+      if (res.measuredFrameRate !== VERTICAL_REEL_1080X1920_V1_PROFILE.frameRate) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Profile VERTICAL_REEL_1080X1920_V1 requires measuredFrameRate ${VERTICAL_REEL_1080X1920_V1_PROFILE.frameRate}, got ${res.measuredFrameRate}`,
+          path: ["measuredFrameRate"]
+        });
+      }
     }
   })
   .transform((val) => deepFreeze(val));
@@ -159,6 +174,7 @@ export type AssemblyExecutionResult = {
   };
   readonly subtitleCuesSha256: string;
   readonly subtitleCues?: readonly SubtitleCue[] | undefined;
+  readonly subtitleStyleProfile?: string | undefined;
   readonly ffmpeg: AssemblyFfmpegMetadata;
   readonly commandFingerprint: string;
   readonly output: {
@@ -167,4 +183,6 @@ export type AssemblyExecutionResult = {
     readonly width: number;
     readonly height: number;
   };
+  readonly measuredFrameRate: number;
+  readonly executionDurationMs: number;
 };

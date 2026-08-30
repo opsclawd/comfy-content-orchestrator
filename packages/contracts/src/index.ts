@@ -12,5 +12,6 @@ export * from "./subtitle-cue.js";
 export * from "./assembly-profile.js";
 export * from "./assembly-manifest.js";
 export * from "./assembly-spec.js";
+export * from "./assembly-execution-invariants.js";
 export * from "./assembly-execution.js";
 export * from "./deep-freeze.js";

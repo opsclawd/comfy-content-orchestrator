@@ -3,6 +3,8 @@ import {
   AssemblyManifestSchema,
   AssemblyProfileSchema,
   AssemblySpecSchema,
+  AssemblyTimelineDecisionSchema,
+  ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS,
   AudioAssetKindSchema,
   AudioAssetRefSchema,
   AudioAssetSourceSchema,
@@ -11,6 +13,7 @@ import {
   PersistentMediaRefSchema,
   SubtitleCueSchema,
   VERTICAL_REEL_1080X1920_V1_PROFILE,
+  validateExecutedAssemblyInvariants,
   VideoStemRefSchema
 } from "./index.js";
 
@@ -28,5 +31,8 @@ describe("contracts skeleton", () => {
     expect(VERTICAL_REEL_1080X1920_V1_PROFILE).toBeDefined();
     expect(AssemblyManifestSchema).toBeDefined();
     expect(AssemblySpecSchema).toBeDefined();
+    expect(AssemblyTimelineDecisionSchema).toBeDefined();
+    expect(validateExecutedAssemblyInvariants).toBeDefined();
+    expect(ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS).toBe(250);
   });
 });

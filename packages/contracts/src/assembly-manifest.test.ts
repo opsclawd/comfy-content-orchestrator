@@ -86,7 +86,14 @@ describe("AssemblyManifest contract", () => {
           modelId: "eleven_turbo_v2_5"
         },
         startMs: 0,
-        actualDurationMs: 15000
+        actualDurationMs: 15000,
+        effectiveStartMs: 0,
+        effectiveDurationMs: 15000,
+        trimStartMs: 0,
+        loopCount: 0,
+        padLeadingMs: 0,
+        padTrailingMs: 0,
+        gainDb: 0
       },
       soundbed: {
         assetId: "soundbed-asset-01",
@@ -101,11 +108,24 @@ describe("AssemblyManifest contract", () => {
           kind: "local"
         },
         startMs: 0,
-        actualDurationMs: 15000
+        actualDurationMs: 15000,
+        effectiveStartMs: 0,
+        effectiveDurationMs: 15000,
+        trimStartMs: 0,
+        loopCount: 0,
+        padLeadingMs: 0,
+        padTrailingMs: 0,
+        gainDb: -14.0,
+        duckingDb: -10.0
       }
+    },
+    timeline: {
+      totalDurationMs: 15000,
+      stemDurationsMs: [5000, 5000, 5000]
     },
     subtitleCuesSha256: hashSubtitles,
     subtitleCues: validSubtitleCues,
+    subtitleStyleProfile: "sub-profile-default-v1",
     layout: {
       mode: "fit_blurred_fill"
     },
@@ -126,6 +146,8 @@ describe("AssemblyManifest contract", () => {
       width: 1080,
       height: 1920
     },
+    measuredFrameRate: 30,
+    executionDurationMs: 6500,
     governanceDecisionId: "gov-dec-001"
   });
 
@@ -146,6 +168,7 @@ describe("AssemblyManifest contract", () => {
     },
     subtitleCuesSha256: hashSubtitles,
     subtitleCues: validSubtitleCues,
+    subtitleStyleProfile: "sub-profile-default-v1",
     ffmpeg: {
       executable: "ffmpeg",
       version: "7.0.1-static",
@@ -162,7 +185,9 @@ describe("AssemblyManifest contract", () => {
       durationMs: 15000,
       width: 1080,
       height: 1920
-    }
+    },
+    measuredFrameRate: 30,
+    executionDurationMs: 6500
   });
 
   it("accepts a fully populated realistic AssemblyManifest and deeply freezes it", () => {
@@ -186,6 +211,10 @@ describe("AssemblyManifest contract", () => {
     expect(manifest.campaignId).toBe(executionResult.campaignId);
     expect(manifest.generationManifestIds).toEqual(["gen-man-1", "gen-man-2", "gen-man-3"]);
     expect(manifest.inputs).toEqual(executionResult.executedInputs);
+    expect(manifest.timeline).toEqual(executionResult.timeline);
+    expect(manifest.measuredFrameRate).toBe(executionResult.measuredFrameRate);
+    expect(manifest.executionDurationMs).toBe(executionResult.executionDurationMs);
+    expect(manifest.subtitleStyleProfile).toBe(executionResult.subtitleStyleProfile);
     expect(manifest.governanceDecisionId).toBe("gov-dec-001");
     expect(manifest.output).toEqual(executionResult.output);
   });
@@ -318,6 +347,24 @@ describe("AssemblyManifest contract", () => {
       }
     };
     expect(AssemblyManifestSchema.safeParse(manifestBadContentType).success).toBe(false);
+  });
+
+  it("rejects manifest with contradictory measuredFrameRate for VERTICAL_REEL_1080X1920_V1", () => {
+    const manifestBadFrameRate = {
+      ...createValidManifest(),
+      measuredFrameRate: 60
+    };
+    const result = AssemblyManifestSchema.safeParse(manifestBadFrameRate);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(
+        result.error.issues.some((issue) =>
+          issue.message.includes(
+            "Profile VERTICAL_REEL_1080X1920_V1 requires measuredFrameRate 30, got 60"
+          )
+        )
+      ).toBe(true);
+    }
   });
 
   it("rejects manifest when audio kinds are swapped in voiceover or soundbed", () => {
@@ -472,5 +519,241 @@ describe("AssemblyManifest contract", () => {
         governanceDecisionId: "gov-dec-001"
       })
     ).toThrow(/does not match computed hash of subtitle cues/);
+  });
+
+  it("rejects createAssemblyManifest when executionResult measuredFrameRate contradicts profile", () => {
+    const executionResult = {
+      ...createValidExecutionResult(),
+      measuredFrameRate: 60
+    };
+
+    expect(() =>
+      createAssemblyManifest({
+        executionResult,
+        governanceDecisionId: "gov-dec-001"
+      })
+    ).toThrow(/Profile VERTICAL_REEL_1080X1920_V1 requires measuredFrameRate 30, got 60/);
+  });
+
+  it("rejects manifest when stem duration does not match timeline", () => {
+    const valid = createValidManifest();
+    const manifestMismatchedStem = {
+      ...valid,
+      timeline: {
+        totalDurationMs: 15000,
+        stemDurationsMs: [6000, 4000, 5000] // Stem 0 actual is 5000, stem 1 actual is 5000
+      }
+    };
+
+    const result = AssemblyManifestSchema.safeParse(manifestMismatchedStem);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(
+        result.error.issues.some((i) =>
+          i.message.includes("does not match video stem (order 0) actualDurationMs (5000)")
+        )
+      ).toBe(true);
+    }
+  });
+
+  it("rejects manifest when total duration does not match timeline sum", () => {
+    const valid = createValidManifest();
+    const manifestMismatchedSum = {
+      ...valid,
+      timeline: {
+        totalDurationMs: 16000,
+        stemDurationsMs: [5000, 5000, 5000]
+      },
+      output: {
+        ...valid.output,
+        durationMs: 16000
+      }
+    };
+
+    const result = AssemblyManifestSchema.safeParse(manifestMismatchedSum);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(
+        result.error.issues.some((i) =>
+          i.message.includes(
+            "timeline.totalDurationMs (16000) must match sum of stemDurationsMs (15000)"
+          )
+        )
+      ).toBe(true);
+    }
+  });
+
+  it("rejects manifest with output duration exceeding tolerance and accepts within tolerance", () => {
+    const valid = createValidManifest();
+    const withinTolerance = {
+      ...valid,
+      output: {
+        ...valid.output,
+        durationMs: 15250 // exactly +250ms
+      }
+    };
+    expect(AssemblyManifestSchema.safeParse(withinTolerance).success).toBe(true);
+
+    const outsideTolerance = {
+      ...valid,
+      output: {
+        ...valid.output,
+        durationMs: 15251 // +251ms -> exceeds tolerance
+      }
+    };
+    const result = AssemblyManifestSchema.safeParse(outsideTolerance);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(
+        result.error.issues.some((i) => i.message.includes("exceeding allowed tolerance of 250ms"))
+      ).toBe(true);
+    }
+  });
+
+  it("rejects manifest when subtitle cue extends beyond executed timeline", () => {
+    const valid = createValidManifest();
+    const cues = [
+      { startMs: 0, endMs: 5000, text: "In the year 2088..." },
+      { startMs: 5000, endMs: 10000, text: "The city never sleeps." },
+      { startMs: 10000, endMs: 15050, text: "Overflowing cue beyond 15000ms" }
+    ];
+    const manifestBadCue = {
+      ...valid,
+      subtitleCues: cues,
+      subtitleCuesSha256: hashSubtitleCues(cues)
+    };
+
+    const result = AssemblyManifestSchema.safeParse(manifestBadCue);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(
+        result.error.issues.some((i) =>
+          i.message.includes("overflows timeline: endMs (15050) > totalDurationMs (15000)")
+        )
+      ).toBe(true);
+    }
+  });
+
+  it("rejects manifest when voiceover or soundbed overflows executed timeline + tolerance", () => {
+    const valid = createValidManifest();
+    const manifestVoOverflow = {
+      ...valid,
+      inputs: {
+        ...valid.inputs,
+        voiceover: {
+          ...valid.inputs.voiceover!,
+          effectiveStartMs: 1000,
+          effectiveDurationMs: 15000 // 1000 + 15000 = 16000 > 15000 + 250
+        }
+      }
+    };
+
+    const resultVo = AssemblyManifestSchema.safeParse(manifestVoOverflow);
+    expect(resultVo.success).toBe(false);
+    if (!resultVo.success) {
+      expect(
+        resultVo.error.issues.some((i) =>
+          i.message.includes("voiceover effective timing overflows executed timeline")
+        )
+      ).toBe(true);
+    }
+
+    const manifestSbOverflow = {
+      ...valid,
+      inputs: {
+        ...valid.inputs,
+        soundbed: {
+          ...valid.inputs.soundbed!,
+          effectiveStartMs: 1000,
+          effectiveDurationMs: 15000 // 1000 + 15000 = 16000 > 15000 + 250
+        }
+      }
+    };
+
+    const resultSb = AssemblyManifestSchema.safeParse(manifestSbOverflow);
+    expect(resultSb.success).toBe(false);
+    if (!resultSb.success) {
+      expect(
+        resultSb.error.issues.some((i) =>
+          i.message.includes("soundbed effective timing overflows executed timeline")
+        )
+      ).toBe(true);
+    }
+  });
+
+  it("rejects manifest with invalid measuredFrameRate or executionDurationMs", () => {
+    const valid = createValidManifest();
+    expect(AssemblyManifestSchema.safeParse({ ...valid, measuredFrameRate: 0 }).success).toBe(
+      false
+    );
+    expect(AssemblyManifestSchema.safeParse({ ...valid, measuredFrameRate: -30 }).success).toBe(
+      false
+    );
+    expect(AssemblyManifestSchema.safeParse({ ...valid, executionDurationMs: 0 }).success).toBe(
+      false
+    );
+    expect(AssemblyManifestSchema.safeParse({ ...valid, executionDurationMs: 1.5 }).success).toBe(
+      false
+    );
+  });
+
+  it("rejects manifest with contradictory audio timing (trimStartMs >= actualDurationMs or formula mismatch)", () => {
+    const valid = createValidManifest();
+    const badTrimVo = {
+      ...valid,
+      inputs: {
+        ...valid.inputs,
+        voiceover: {
+          ...valid.inputs.voiceover!,
+          actualDurationMs: 5000,
+          trimStartMs: 5000
+        }
+      }
+    };
+    expect(AssemblyManifestSchema.safeParse(badTrimVo).success).toBe(false);
+
+    const badDurationFormulaVo = {
+      ...valid,
+      inputs: {
+        ...valid.inputs,
+        voiceover: {
+          ...valid.inputs.voiceover!,
+          actualDurationMs: 15000,
+          trimStartMs: 3000,
+          loopCount: 0,
+          padLeadingMs: 0,
+          padTrailingMs: 0,
+          effectiveDurationMs: 15000 // expected: 12000
+        }
+      }
+    };
+    expect(AssemblyManifestSchema.safeParse(badDurationFormulaVo).success).toBe(false);
+  });
+
+  it("rejects manifest with omitted required audio transformation fields", () => {
+    const valid = createValidManifest();
+    const incompleteAudioVo = {
+      ...valid,
+      inputs: {
+        ...valid.inputs,
+        voiceover: {
+          assetId: "vo-asset-01",
+          kind: "voiceover" as const,
+          media: {
+            bucket: "cco-audio",
+            key: "audio/vo.mp3",
+            sha256: hashVO,
+            contentType: "audio/mpeg"
+          },
+          source: { kind: "local" as const },
+          startMs: 0,
+          actualDurationMs: 15000,
+          effectiveStartMs: 0,
+          effectiveDurationMs: 15000
+          // missing trimStartMs, loopCount, padLeadingMs, padTrailingMs, gainDb
+        }
+      }
+    };
+    expect(AssemblyManifestSchema.safeParse(incompleteAudioVo).success).toBe(false);
   });
 });
