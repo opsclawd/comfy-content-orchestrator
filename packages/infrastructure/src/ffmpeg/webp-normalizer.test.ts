@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   demuxAnimatedWebp,
   isAnimatedWebp,
@@ -86,29 +89,114 @@ describe("webp-normalizer", () => {
     }
   });
 
-  it("normalizes animated WebP using spawn runner with stdin stream", async () => {
-    const animBuf = createSyntheticAnimatedWebpBuffer();
-    let passedStdin: Buffer | undefined;
-    let passedArgs: readonly string[] = [];
+  describe("normalizeAnimatedWebpToMp4", () => {
+    let scratchDir: string;
 
-    const fakeRunner: SpawnLikeFn = async (_cmd, args, options) => {
-      passedArgs = args;
-      if (options?.stdin) {
-        passedStdin = Buffer.isBuffer(options.stdin) ? options.stdin : Buffer.from(options.stdin);
-      }
-      return { exitCode: 0, stdout: "", stderr: "" };
-    };
-
-    await normalizeAnimatedWebpToMp4({
-      bytes: animBuf,
-      outputPath: "/tmp/output.mp4",
-      ffmpegPath: "ffmpeg",
-      spawnFn: fakeRunner
+    beforeEach(async () => {
+      scratchDir = await mkdtemp(join(tmpdir(), "webp-normalizer-test-"));
     });
 
-    expect(passedArgs).toContain("image2pipe");
-    expect(passedArgs).toContain("webp");
-    expect(passedStdin).toBeDefined();
-    expect(passedStdin?.length).toBeGreaterThan(0);
+    afterEach(async () => {
+      await rm(scratchDir, { recursive: true, force: true });
+    });
+
+    it("drives ffmpeg via the concat demuxer with an explicit per-frame duration, not a constant framerate", async () => {
+      const animBuf = createSyntheticAnimatedWebpBuffer();
+      let passedArgs: readonly string[] = [];
+      let concatScript = "";
+
+      const fakeRunner: SpawnLikeFn = async (_cmd, args) => {
+        passedArgs = args;
+        const concatScriptPath = args[args.indexOf("-i") + 1]!;
+        // Read while the scratch dir still exists — normalizeAnimatedWebpToMp4
+        // cleans it up in a `finally` block once spawnFn resolves.
+        concatScript = await readFile(concatScriptPath, "utf-8");
+        return { exitCode: 0, stdout: "", stderr: "" };
+      };
+
+      await normalizeAnimatedWebpToMp4({
+        bytes: animBuf,
+        outputPath: join(scratchDir, "output.mp4"),
+        ffmpegPath: "ffmpeg",
+        spawnFn: fakeRunner
+      });
+
+      // No longer collapses variable per-frame durations into one constant
+      // "-framerate" value fed via image2pipe — that's the mechanism that
+      // caused drift. Must use the concat demuxer with vfr output instead.
+      expect(passedArgs).toContain("concat");
+      expect(passedArgs).toContain("-fps_mode");
+      expect(passedArgs).toContain("vfr");
+      expect(passedArgs).not.toContain("image2pipe");
+      expect(passedArgs).not.toContain("-framerate");
+
+      // Each frame's own duration (41ms, 42ms) must be preserved exactly —
+      // not replaced by a single rounded average.
+      expect(concatScript).toContain("duration 0.041000");
+      expect(concatScript).toContain("duration 0.042000");
+      // Exactly one "file" entry per source frame — no trailing duplicate.
+      // A duplicated final entry (a documented workaround for CFR-oriented
+      // concat+encode setups) produces a genuine extra output frame when
+      // combined with "-fps_mode vfr", confirmed empirically against real
+      // ffmpeg: 97 source frames in, 98 frames / +39ms out with the
+      // duplicate; exactly 97 frames / source-matching duration without it.
+      const fileLines = concatScript.split("\n").filter((l) => l.startsWith("file "));
+      expect(fileLines).toHaveLength(2);
+    });
+
+    it("writes each demuxed frame to its own file consumed by the concat script, then cleans up", async () => {
+      const animBuf = createSyntheticAnimatedWebpBuffer();
+      let capturedConcatDir: string | undefined;
+
+      const fakeRunner: SpawnLikeFn = async (_cmd, args) => {
+        const concatScriptPath = args[args.indexOf("-i") + 1]!;
+        capturedConcatDir = concatScriptPath.slice(0, concatScriptPath.lastIndexOf("/"));
+        const script = await readFile(concatScriptPath, "utf-8");
+        // Referenced frame files must actually exist on disk while ffmpeg runs.
+        for (const line of script.split("\n")) {
+          if (line.startsWith("file '")) {
+            const fileName = line.slice(6, -1);
+            await expect(readFile(join(capturedConcatDir!, fileName))).resolves.toBeInstanceOf(
+              Buffer
+            );
+          }
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      };
+
+      await normalizeAnimatedWebpToMp4({
+        bytes: animBuf,
+        outputPath: join(scratchDir, "output.mp4"),
+        ffmpegPath: "ffmpeg",
+        spawnFn: fakeRunner
+      });
+
+      // The scratch frames directory is removed once normalization finishes.
+      expect(capturedConcatDir).toBeDefined();
+      await expect(readFile(join(capturedConcatDir!, "concat.txt"))).rejects.toThrow();
+    });
+
+    it("throws FFMPEG_EXECUTION_FAILED on non-zero exit and still cleans up scratch files", async () => {
+      const animBuf = createSyntheticAnimatedWebpBuffer();
+      let capturedConcatDir: string | undefined;
+
+      const fakeRunner: SpawnLikeFn = async (_cmd, args) => {
+        const concatScriptPath = args[args.indexOf("-i") + 1]!;
+        capturedConcatDir = concatScriptPath.slice(0, concatScriptPath.lastIndexOf("/"));
+        return { exitCode: 1, stdout: "", stderr: "boom" };
+      };
+
+      await expect(
+        normalizeAnimatedWebpToMp4({
+          bytes: animBuf,
+          outputPath: join(scratchDir, "output.mp4"),
+          ffmpegPath: "ffmpeg",
+          spawnFn: fakeRunner
+        })
+      ).rejects.toThrow(/FFmpeg WebP normalization failed/);
+
+      expect(capturedConcatDir).toBeDefined();
+      await expect(readFile(join(capturedConcatDir!, "concat.txt"))).rejects.toThrow();
+    });
   });
 });

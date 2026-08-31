@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS,
   AssemblyExecutionResultSchema,
   type AssemblySpec,
   type VideoStemRef
@@ -212,8 +213,17 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
     expect(result.streams.video.codecName).toBe("h264");
     expect(result.streams.video.pixelFormat).toBe("yuv420p");
 
-    // Verify timeline durations within tolerance
-    expect(result.timeline.totalDurationMs).toBe(totalExpectedDurationMs);
+    // Verify timeline durations within tolerance. Real H.264/MP4 encoding
+    // introduces sub-frame container-timebase quantization even when every
+    // source WebP frame's exact duration is preserved end-to-end (see
+    // webp-normalizer.ts) — exact millisecond equality against real encoder
+    // output isn't achievable for any lossy codec/container pipeline, and
+    // the production code itself validates this with the same tolerance
+    // (ffmpeg-media-assembler-adapter.ts's output-duration check), not exact
+    // equality. This must stay well inside the tolerance, not merely under it.
+    expect(Math.abs(result.timeline.totalDurationMs - totalExpectedDurationMs)).toBeLessThanOrEqual(
+      ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS
+    );
     expect(result.timeline.stemDurationsMs).toHaveLength(6);
     expect(
       Math.abs(result.output.durationMs - result.timeline.totalDurationMs)

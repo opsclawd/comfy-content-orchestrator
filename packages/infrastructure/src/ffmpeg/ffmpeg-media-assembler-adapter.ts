@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ConcreteMediaAssemblerPort, ObjectStoragePort } from "@cco/application";
 import {
+  ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS,
   AssemblyExecutionResultSchema,
   MAX_ASSEMBLY_STEMS,
   MAX_ASSEMBLY_TOTAL_DURATION_MS,
@@ -34,6 +35,19 @@ export const DEFAULT_MAX_TOTAL_DURATION_MS = MAX_ASSEMBLY_TOTAL_DURATION_MS; // 
 export const DEFAULT_PROBE_TIMEOUT_MS = 10_000; // 10s
 export const DEFAULT_ENCODE_TIMEOUT_MS = 120_000; // 120s
 export const DEFAULT_VERSION_TIMEOUT_MS = 10_000; // 10s
+
+// Filters the VERTICAL_REEL_1080X1920_V1 filter graph actually requires
+// (see filter-graph.ts). The encoder check alone (libx264) does not
+// guarantee these are compiled into the ffmpeg binary.
+export const REQUIRED_FILTERS = [
+  "scale",
+  "crop",
+  "gblur",
+  "overlay",
+  "fps",
+  "format",
+  "concat"
+] as const;
 
 export interface FfmpegMediaAssemblerAdapterOptions {
   readonly ffmpegPath: string;
@@ -78,6 +92,7 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
 
   private ffmpegMetadataPromise?: Promise<AssemblyFfmpegMetadata> | undefined;
   private encoderCheckPromise?: Promise<void> | undefined;
+  private filterCheckPromise?: Promise<void> | undefined;
 
   constructor(options: FfmpegMediaAssemblerAdapterOptions) {
     if (!options.ffmpegPath || options.ffmpegPath.trim().length === 0) {
@@ -198,6 +213,51 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
     return this.encoderCheckPromise;
   }
 
+  private async assertFiltersAvailable(): Promise<void> {
+    if (!this.filterCheckPromise) {
+      this.filterCheckPromise = (async () => {
+        let runResult;
+        try {
+          runResult = await this.spawnFn(this.ffmpegPath, ["-hide_banner", "-filters"], {
+            timeoutMs: this.versionTimeoutMs
+          });
+        } catch (err) {
+          if (err instanceof FfmpegAssemblyError) throw err;
+          throw new FfmpegAssemblyError(
+            "FFMPEG_EXECUTION_FAILED",
+            `ffmpeg -filters failed: ${(err as Error).message}`,
+            { command: this.ffmpegPath, args: ["-hide_banner", "-filters"] }
+          );
+        }
+
+        if (runResult.exitCode !== 0) {
+          throw new FfmpegAssemblyError(
+            "FFMPEG_EXECUTION_FAILED",
+            `ffmpeg -filters failed with code ${runResult.exitCode}`,
+            {
+              command: this.ffmpegPath,
+              args: ["-hide_banner", "-filters"],
+              exitCode: runResult.exitCode,
+              stderr: runResult.stderr
+            }
+          );
+        }
+
+        const missing = REQUIRED_FILTERS.filter(
+          (name) => !new RegExp(`\\b${name}\\b`).test(runResult.stdout)
+        );
+        if (missing.length > 0) {
+          throw new FfmpegAssemblyError(
+            "FILTER_UNAVAILABLE",
+            `Required filter(s) not available in ffmpeg installation: ${missing.join(", ")}`,
+            { command: this.ffmpegPath, args: ["-hide_banner", "-filters"] }
+          );
+        }
+      })();
+    }
+    return this.filterCheckPromise;
+  }
+
   async assemble(spec: AssemblySpec): Promise<AssemblyExecutionResult> {
     // Fail-fast checks on unsupported features for Phase 1 visual assembly (Finding 2)
     if (spec.voiceover !== undefined) {
@@ -245,6 +305,7 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
 
     // Assert encoder capability & fetch FFmpeg metadata
     await this.assertEncoderAvailable();
+    await this.assertFiltersAvailable();
     const ffmpegMetadata = await this.getFfmpegMetadata();
 
     const assemblyId = this.createAssemblyId();
@@ -254,9 +315,19 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
     try {
       const executedStems: ExecutedVideoStemRef[] = [];
       const stagedInputPaths: string[] = [];
+
+      // Step 3a: Input Preflight — fetch, bound, and hash-verify every stem
+      // BEFORE any normalization/probing/assembly process runs. Verifying
+      // and dispatching per-stem in a single pass let a bad hash on a later
+      // stem surface only after earlier stems had already gone through
+      // ffmpeg (WebP normalization spawns ffmpeg); a corrupted or tampered
+      // late stem must never let anything reach an ffmpeg process.
+      const verifiedStems: Array<{
+        stem: (typeof orderedStems)[number];
+        bytes: Uint8Array;
+      }> = [];
       let aggregateStagedBytes = 0;
 
-      // Step 3: Input Preflight (Hard Gate before FFmpeg encode dispatch)
       for (const stem of orderedStems) {
         // 1. Fetch bytes with preflight size bounds
         let storedObject;
@@ -310,7 +381,7 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
           );
         }
 
-        // 3. Verify SHA-256 (Hard provenance gate)
+        // 3. Verify SHA-256 (Hard provenance gate) — before any dispatch
         const computedSha256 = createHash("sha256").update(bytes).digest("hex");
         if (computedSha256.toLowerCase() !== stem.media.sha256.toLowerCase()) {
           throw new FfmpegAssemblyError(
@@ -325,7 +396,12 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
           );
         }
 
-        // 4. Staging & Format Normalization (Finding 1)
+        verifiedStems.push({ stem, bytes });
+      }
+
+      // Step 3b: Staging, normalization, and per-stem probing — only once
+      // every stem in the batch has passed hash verification above.
+      for (const { stem, bytes } of verifiedStems) {
         const stagedPath = path.join(scratchDir, `stem-${stem.order}.mp4`);
         if (
           stem.media.contentType === "image/webp" ||
@@ -346,7 +422,6 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
         }
         stagedInputPaths.push(stagedPath);
 
-        // 5. ffprobe every staged stem
         const probed = await probeMedia({
           runner: this.spawnFn,
           ffprobePath: this.ffprobePath,
@@ -356,7 +431,6 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
           timeoutMs: this.probeTimeoutMs
         });
 
-        // 6. Validate measured duration against expected duration
         const durationDiff = Math.abs(probed.videoStream.durationMs - stem.expectedDurationMs);
         if (durationDiff > STEM_DURATION_TOLERANCE_MS) {
           throw new FfmpegAssemblyError(
@@ -467,11 +541,11 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
       }
       if (
         Math.abs(outputProbed.videoStream.durationMs - totalStemDurationMs) >
-        STEM_DURATION_TOLERANCE_MS
+        ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS
       ) {
         throw new FfmpegAssemblyError(
           "OUTPUT_VALIDATION_FAILED",
-          `Output duration ${outputProbed.videoStream.durationMs}ms deviates from total stem duration ${totalStemDurationMs}ms by more than ${STEM_DURATION_TOLERANCE_MS}ms`
+          `Output duration ${outputProbed.videoStream.durationMs}ms deviates from total stem duration ${totalStemDurationMs}ms by more than ${ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS}ms`
         );
       }
 

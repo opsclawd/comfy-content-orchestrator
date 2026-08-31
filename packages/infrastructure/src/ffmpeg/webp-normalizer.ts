@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { FfmpegAssemblyError } from "./ffmpeg-error.js";
 import type { SpawnLikeFn } from "./ffmpeg-process-runner.js";
 
@@ -133,52 +136,88 @@ export async function normalizeAnimatedWebpToMp4(options: NormalizeWebpOptions):
     );
   }
 
-  const args = [
-    "-y",
-    "-f",
-    "image2pipe",
-    "-vcodec",
-    "webp",
-    "-framerate",
-    String(demuxed.fps),
-    "-i",
-    "-",
-    "-c:v",
-    "libx264",
-    "-preset",
-    "veryfast",
-    "-pix_fmt",
-    "yuv420p",
-    outputPath
-  ];
+  // Preserve each frame's exact duration instead of collapsing the sequence
+  // to a single average integer framerate (the previous "-framerate N with
+  // image2pipe" approach): animated WebP frames commonly have variable,
+  // non-uniform durations, and rounding to one constant fps silently drifts
+  // the encoded total duration away from the sum of actual frame durations.
+  // Across multiple stems that drift compounds — this is what produced the
+  // observed 252ms discrepancy between measured stem durations and final
+  // output duration. Using ffmpeg's concat demuxer with an explicit
+  // `duration` directive per frame preserves exact per-frame timing.
+  const framesDir = path.join(path.dirname(outputPath), `webp-frames-${randomUUID()}`);
+  await fs.mkdir(framesDir, { recursive: true });
 
-  let runResult;
   try {
-    runResult = await spawnFn(ffmpegPath, args, {
-      stdin: demuxed.combinedFrames,
-      timeoutMs
-    });
-  } catch (err) {
-    if (err instanceof FfmpegAssemblyError) throw err;
-    throw new FfmpegAssemblyError(
-      "FFMPEG_EXECUTION_FAILED",
-      `Failed to normalize animated WebP to MP4: ${(err as Error).message}`,
-      { command: ffmpegPath, args, stemOrder, stemSceneId }
+    const frameFileNames = await Promise.all(
+      demuxed.frames.map(async (frame, index) => {
+        const fileName = `frame-${String(index).padStart(5, "0")}.webp`;
+        await fs.writeFile(path.join(framesDir, fileName), frame.buffer);
+        return fileName;
+      })
     );
-  }
 
-  if (runResult.exitCode !== 0) {
-    throw new FfmpegAssemblyError(
-      "FFMPEG_EXECUTION_FAILED",
-      `FFmpeg WebP normalization failed with exit code ${runResult.exitCode}: ${runResult.stderr}`,
-      {
-        command: ffmpegPath,
-        args,
-        exitCode: runResult.exitCode,
-        stderr: runResult.stderr,
-        stemOrder,
-        stemSceneId
-      }
-    );
+    // NOTE: do not repeat the last file entry without a `duration` line.
+    // That's a documented workaround for CFR-oriented concat+encode setups,
+    // but combined with "-fps_mode vfr" below it produces a genuine extra
+    // output frame instead of "closing out" the final frame's duration —
+    // confirmed empirically: 97 source frames in, 98 frames / +39ms out with
+    // the repeated entry; exactly 97 frames / source-matching duration
+    // without it.
+    const concatLines: string[] = ["ffconcat version 1.0"];
+    demuxed.frames.forEach((frame, index) => {
+      concatLines.push(`file '${frameFileNames[index]}'`);
+      concatLines.push(`duration ${(frame.durationMs / 1000).toFixed(6)}`);
+    });
+    const concatScriptPath = path.join(framesDir, "concat.txt");
+    await fs.writeFile(concatScriptPath, concatLines.join("\n") + "\n");
+
+    const args = [
+      "-y",
+      "-f",
+      "concat",
+      "-safe",
+      "0",
+      "-i",
+      concatScriptPath,
+      "-fps_mode",
+      "vfr",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "veryfast",
+      "-pix_fmt",
+      "yuv420p",
+      outputPath
+    ];
+
+    let runResult;
+    try {
+      runResult = await spawnFn(ffmpegPath, args, { timeoutMs });
+    } catch (err) {
+      if (err instanceof FfmpegAssemblyError) throw err;
+      throw new FfmpegAssemblyError(
+        "FFMPEG_EXECUTION_FAILED",
+        `Failed to normalize animated WebP to MP4: ${(err as Error).message}`,
+        { command: ffmpegPath, args, stemOrder, stemSceneId }
+      );
+    }
+
+    if (runResult.exitCode !== 0) {
+      throw new FfmpegAssemblyError(
+        "FFMPEG_EXECUTION_FAILED",
+        `FFmpeg WebP normalization failed with exit code ${runResult.exitCode}: ${runResult.stderr}`,
+        {
+          command: ffmpegPath,
+          args,
+          exitCode: runResult.exitCode,
+          stderr: runResult.stderr,
+          stemOrder,
+          stemSceneId
+        }
+      );
+    }
+  } finally {
+    await fs.rm(framesDir, { recursive: true, force: true }).catch(() => {});
   }
 }

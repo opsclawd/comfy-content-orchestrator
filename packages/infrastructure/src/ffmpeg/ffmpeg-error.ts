@@ -2,6 +2,7 @@ export type FfmpegAssemblyFailureCode =
   | "FFMPEG_NOT_FOUND"
   | "FFPROBE_NOT_FOUND"
   | "ENCODER_UNAVAILABLE"
+  | "FILTER_UNAVAILABLE"
   | "STEM_FETCH_FAILED"
   | "STEM_TOO_LARGE"
   | "STEM_HASH_MISMATCH"

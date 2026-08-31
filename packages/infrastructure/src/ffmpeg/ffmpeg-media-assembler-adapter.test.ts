@@ -207,6 +207,12 @@ describe("FfmpegMediaAssemblerAdapter (unit)", () => {
         maxStemInputBytes: 10,
         spawnFn: async (_cmd, args) => {
           if (args.includes("-encoders")) return { exitCode: 0, stdout: "libx264", stderr: "" };
+          if (args.includes("-filters"))
+            return {
+              exitCode: 0,
+              stdout: "scale crop gblur overlay fps format concat",
+              stderr: ""
+            };
           if (args.includes("-version"))
             return { exitCode: 0, stdout: "ffmpeg version 7.1", stderr: "" };
           return { exitCode: 0, stdout: "", stderr: "" };
@@ -261,6 +267,12 @@ describe("FfmpegMediaAssemblerAdapter (unit)", () => {
         maxAggregateInputBytes: 30, // 2 stems of 20 bytes each = 40 bytes > 30 bytes limit
         spawnFn: async (_cmd, args) => {
           if (args.includes("-encoders")) return { exitCode: 0, stdout: "libx264", stderr: "" };
+          if (args.includes("-filters"))
+            return {
+              exitCode: 0,
+              stdout: "scale crop gblur overlay fps format concat",
+              stderr: ""
+            };
           if (args.includes("-version"))
             return { exitCode: 0, stdout: "ffmpeg version 7.1", stderr: "" };
           if (args.includes("-show_streams")) {
@@ -443,6 +455,12 @@ describe("FfmpegMediaAssemblerAdapter (unit)", () => {
         maxOutputBytes: 10, // 10 byte limit
         spawnFn: async (_cmd, args) => {
           if (args.includes("-encoders")) return { exitCode: 0, stdout: "libx264", stderr: "" };
+          if (args.includes("-filters"))
+            return {
+              exitCode: 0,
+              stdout: "scale crop gblur overlay fps format concat",
+              stderr: ""
+            };
           if (args.includes("-version"))
             return { exitCode: 0, stdout: "ffmpeg version 7.1", stderr: "" };
           if (args.includes("-show_streams")) {
@@ -518,6 +536,8 @@ describe("FfmpegMediaAssemblerAdapter (unit)", () => {
     it("cleans up scratch workspace when process times out", async () => {
       const stalledRunner: SpawnLikeFn = async (_cmd, args, options) => {
         if (args.includes("-encoders")) return { exitCode: 0, stdout: "libx264", stderr: "" };
+        if (args.includes("-filters"))
+          return { exitCode: 0, stdout: "scale crop gblur overlay fps format concat", stderr: "" };
         if (args.includes("-version"))
           return { exitCode: 0, stdout: "ffmpeg version 7.1", stderr: "" };
         if (args.includes("-show_streams")) {
@@ -663,12 +683,83 @@ describe("FfmpegMediaAssemblerAdapter (unit)", () => {
       );
     });
 
+    it("throws FILTER_UNAVAILABLE when a required filter is missing from ffmpeg -filters", async () => {
+      const fakeRunner: SpawnLikeFn = async (_cmd, args) => {
+        if (args.includes("-encoders")) {
+          return { exitCode: 0, stdout: " V..... libx264 H.264\n", stderr: "" };
+        }
+        if (args.includes("-filters")) {
+          // Missing "gblur" and "concat" — the graph requires both.
+          return {
+            exitCode: 0,
+            stdout:
+              " ... scale             V->V\n ... crop              V->V\n ... overlay           VV->V\n ... fps               V->V\n ... format            V->V\n",
+            stderr: ""
+          };
+        }
+        return { exitCode: 0, stdout: "ffmpeg version 7.0", stderr: "" };
+      };
+
+      const adapter = new FfmpegMediaAssemblerAdapter({
+        ffmpegPath: "ffmpeg",
+        ffprobePath: "ffprobe",
+        workspaceRoot: tempDir,
+        objectStorage,
+        spawnFn: fakeRunner
+      });
+
+      const stem = createStemMedia("stem-content");
+      await objectStorage.putObject({
+        bucket: BUCKETS.TEMP,
+        key: "scenes/s1/stem0.mp4",
+        body: stem.bytes,
+        contentType: "video/mp4",
+        checksumSha256: stem.sha256
+      });
+
+      const spec: AssemblySpec = {
+        campaignId: "camp-001",
+        assemblyProfile: { key: "VERTICAL_REEL_1080X1920_V1", version: 1 },
+        expectedTotalDurationMs: 5000,
+        subtitleCues: [],
+        videoStems: [
+          {
+            sceneId: "scene-01",
+            generationManifestId: "gen-01",
+            order: 0,
+            media: {
+              bucket: BUCKETS.TEMP,
+              key: "scenes/s1/stem0.mp4",
+              sha256: stem.sha256,
+              contentType: "video/mp4"
+            },
+            expectedDurationMs: 5000
+          }
+        ]
+      };
+
+      await expect(adapter.assemble(spec)).rejects.toThrowError(
+        expect.objectContaining({
+          name: "FfmpegAssemblyError",
+          code: "FILTER_UNAVAILABLE",
+          message: expect.stringContaining("gblur")
+        })
+      );
+    });
+
     it("hard gate: SHA-256 mismatch prevents FFmpeg encode dispatch", async () => {
       const spawnedCommands: string[][] = [];
       const fakeRunner: SpawnLikeFn = async (_cmd, args) => {
         spawnedCommands.push([...args]);
         if (args.includes("-encoders")) {
           return { exitCode: 0, stdout: " V..... libx264 H.264\n", stderr: "" };
+        }
+        if (args.includes("-filters")) {
+          return {
+            exitCode: 0,
+            stdout: "scale crop gblur overlay fps format concat",
+            stderr: ""
+          };
         }
         if (args.includes("-version")) {
           return { exitCode: 0, stdout: "ffmpeg version 7.1 Copyright\n", stderr: "" };
@@ -729,9 +820,115 @@ describe("FfmpegMediaAssemblerAdapter (unit)", () => {
       expect(encodeCommandDispatched).toBe(false);
     });
 
+    it("hard gate: bad hash on a LATER stem prevents FFmpeg dispatch for EARLIER, already-verified-looking stems", async () => {
+      // Two-phase preflight regression: stems must be fetched/bound/verified
+      // in full before any stem is staged/normalized/probed. If verification
+      // were interleaved with dispatch (the prior bug), stem 0 (order 0,
+      // valid hash) would already have gone through ffmpeg/ffprobe by the
+      // time stem 1's (order 1) bad hash is discovered.
+      const spawnedCommands: string[][] = [];
+      const fakeRunner: SpawnLikeFn = async (_cmd, args) => {
+        spawnedCommands.push([...args]);
+        if (args.includes("-encoders")) {
+          return { exitCode: 0, stdout: " V..... libx264 H.264\n", stderr: "" };
+        }
+        if (args.includes("-filters")) {
+          return {
+            exitCode: 0,
+            stdout: "scale crop gblur overlay fps format concat",
+            stderr: ""
+          };
+        }
+        if (args.includes("-version")) {
+          return { exitCode: 0, stdout: "ffmpeg version 7.1 Copyright\n", stderr: "" };
+        }
+        return { exitCode: 0, stdout: "{}", stderr: "" };
+      };
+
+      const adapter = new FfmpegMediaAssemblerAdapter({
+        ffmpegPath: "ffmpeg",
+        ffprobePath: "ffprobe",
+        workspaceRoot: tempDir,
+        objectStorage,
+        spawnFn: fakeRunner
+      });
+
+      const stem0 = createStemMedia("first-stem-content");
+      await objectStorage.putObject({
+        bucket: BUCKETS.TEMP,
+        key: "scenes/s1/stem0.mp4",
+        body: stem0.bytes,
+        contentType: "video/mp4",
+        checksumSha256: stem0.sha256
+      });
+
+      const stem1 = createStemMedia("second-stem-content");
+      await objectStorage.putObject({
+        bucket: BUCKETS.TEMP,
+        key: "scenes/s1/stem1.mp4",
+        body: stem1.bytes,
+        contentType: "video/mp4",
+        checksumSha256: stem1.sha256
+      });
+
+      const corruptedHash = "0".repeat(64);
+      const spec: AssemblySpec = {
+        campaignId: "camp-001",
+        assemblyProfile: { key: "VERTICAL_REEL_1080X1920_V1", version: 1 },
+        expectedTotalDurationMs: 10000,
+        subtitleCues: [],
+        videoStems: [
+          {
+            sceneId: "scene-01",
+            generationManifestId: "gen-01",
+            order: 0,
+            media: {
+              bucket: BUCKETS.TEMP,
+              key: "scenes/s1/stem0.mp4",
+              sha256: stem0.sha256, // valid — order-0 stem passes its own check
+              contentType: "video/mp4"
+            },
+            expectedDurationMs: 5000
+          },
+          {
+            sceneId: "scene-02",
+            generationManifestId: "gen-02",
+            order: 1,
+            media: {
+              bucket: BUCKETS.TEMP,
+              key: "scenes/s1/stem1.mp4",
+              sha256: corruptedHash, // invalid — the later stem
+              contentType: "video/mp4"
+            },
+            expectedDurationMs: 5000
+          }
+        ]
+      };
+
+      await expect(adapter.assemble(spec)).rejects.toThrowError(
+        expect.objectContaining({
+          name: "FfmpegAssemblyError",
+          code: "STEM_HASH_MISMATCH",
+          context: expect.objectContaining({ stemOrder: 1 })
+        })
+      );
+
+      // Neither ffprobe nor any per-stem/final ffmpeg encode command ran —
+      // not even for the earlier, individually-valid stem 0.
+      const anyMediaDispatch = spawnedCommands.some(
+        (args) =>
+          args.includes("-show_streams") ||
+          args.includes("-filter_complex") ||
+          args.includes("concat")
+      );
+      expect(anyMediaDispatch).toBe(false);
+    });
+
     it("hard gate: probed duration out of tolerance throws STEM_DURATION_OUT_OF_TOLERANCE", async () => {
       const fakeRunner: SpawnLikeFn = async (_cmd, args) => {
         if (args.includes("-encoders")) return { exitCode: 0, stdout: "libx264", stderr: "" };
+        if (args.includes("-filters"))
+          return { exitCode: 0, stdout: "scale crop gblur overlay fps format concat", stderr: "" };
         if (args.includes("-version"))
           return { exitCode: 0, stdout: "ffmpeg version 7.1", stderr: "" };
         if (args.includes("-show_streams")) {
