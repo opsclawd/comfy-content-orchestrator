@@ -18,12 +18,16 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
 
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
       - run: pnpm install --frozen-lockfile
 
       # Architecture boundaries are a hard gate, not advisory (PRD §3.6.2).
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
+      - run: pnpm test:assembly
       - run: pnpm test:db
       - run: pnpm boundaries
       - run: pnpm format
