@@ -21,3 +21,8 @@ pnpm-lock.yaml
 !/.prettierrc.json
 !/.ai-orchestrator.json
 ai/
+.ai/
+.ai-runs/
+.ai-worktrees/
+.ai-tmp/
+validate/
