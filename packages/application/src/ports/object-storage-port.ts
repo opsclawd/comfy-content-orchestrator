@@ -19,7 +19,11 @@ export interface StoredObject {
   readonly checksumSha256?: string;
 }
 
+export interface GetObjectOptions {
+  readonly maxBytes?: number | undefined;
+}
+
 export interface ObjectStoragePort {
   putObject(input: PutObjectInput): Promise<ObjectLocator>;
-  getObject(locator: ObjectLocator): Promise<StoredObject | undefined>;
+  getObject(locator: ObjectLocator, options?: GetObjectOptions): Promise<StoredObject | undefined>;
 }

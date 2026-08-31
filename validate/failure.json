@@ -1,0 +1,14 @@
+{
+  "runUuid": "5ed028bb-a1be-460e-9004-1068bb20998e",
+  "phase": "validate",
+  "kind": "validation_failed",
+  "message": "1 validation command(s) failed: other ([warn] Code style issues found in the above file. Run Prettier with --write to fix.). See validate/ logs.",
+  "canRetry": true,
+  "suggestedAction": "Open the validate phase logs and rerun the failing command(s) locally.",
+  "artifacts": [
+    "validate/7-format.stdout.log",
+    "validate/7-format.stderr.log",
+    "validate/validation-result.json"
+  ],
+  "detectedAt": "2026-08-31T03:31:00.611Z"
+}

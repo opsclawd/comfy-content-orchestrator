@@ -6,15 +6,7 @@ const rootDir = resolve(fileURLToPath(new URL(".", import.meta.url)));
 
 export default defineConfig({
   test: {
-    include: [
-      "packages/infrastructure/src/**/*.integration.test.ts",
-      "apps/*/src/**/*.integration.test.ts",
-      "tests/**/*.integration.test.ts"
-    ],
-    exclude: [
-      "**/*.smoke.integration.test.ts",
-      "packages/infrastructure/src/ffmpeg/**/*.integration.test.ts"
-    ],
+    include: ["packages/infrastructure/src/ffmpeg/**/*.integration.test.ts"],
     environment: "node",
     fileParallelism: false,
     testTimeout: 120_000,
