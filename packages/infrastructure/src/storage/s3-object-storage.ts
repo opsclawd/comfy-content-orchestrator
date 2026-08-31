@@ -6,6 +6,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { createHash } from "node:crypto";
 import type {
+  GetObjectOptions,
   ObjectLocator,
   ObjectStoragePort,
   PutObjectInput,
@@ -43,6 +44,89 @@ function isMissingKeyError(error: unknown): boolean {
     err.Code === "NotFound" ||
     err.$metadata?.httpStatusCode === 404
   );
+}
+
+async function readBodyWithLimit(
+  body: unknown,
+  locator: ObjectLocator,
+  maxBytes?: number
+): Promise<Uint8Array> {
+  if (!body) {
+    return new Uint8Array();
+  }
+
+  if (
+    typeof body === "object" &&
+    body !== null &&
+    Symbol.asyncIterator in body &&
+    typeof (body as Record<string | symbol, unknown>)[Symbol.asyncIterator] === "function"
+  ) {
+    const stream = body as AsyncIterable<Uint8Array | Buffer | ArrayBuffer> & {
+      destroy?: (error?: Error) => void;
+    };
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+
+    try {
+      for await (const rawChunk of stream) {
+        const chunk =
+          rawChunk instanceof Uint8Array
+            ? rawChunk
+            : new Uint8Array(
+                ArrayBuffer.isView(rawChunk) ? rawChunk.buffer : (rawChunk as ArrayBuffer)
+              );
+        totalBytes += chunk.byteLength;
+
+        if (maxBytes !== undefined && totalBytes > maxBytes) {
+          if (typeof stream.destroy === "function") {
+            try {
+              stream.destroy();
+            } catch {
+              // ignore destroy errors
+            }
+          }
+          throw new Error(
+            `Object ${locator.bucket}/${locator.key} byteLength (${totalBytes}) exceeds maxBytes limit (${maxBytes})`
+          );
+        }
+        chunks.push(chunk);
+      }
+    } catch (err) {
+      if (typeof stream.destroy === "function") {
+        try {
+          stream.destroy();
+        } catch {
+          // ignore destroy errors
+        }
+      }
+      throw err;
+    }
+
+    const merged = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return merged;
+  }
+
+  if (
+    typeof (body as { transformToByteArray?: () => Promise<Uint8Array> }).transformToByteArray ===
+    "function"
+  ) {
+    const bytes = await (
+      body as { transformToByteArray: () => Promise<Uint8Array> }
+    ).transformToByteArray();
+    if (maxBytes !== undefined && bytes.byteLength > maxBytes) {
+      throw new Error(
+        `Object ${locator.bucket}/${locator.key} byteLength (${bytes.byteLength}) exceeds maxBytes limit (${maxBytes})`
+      );
+    }
+    return bytes;
+  }
+
+  return new Uint8Array();
 }
 
 export class S3ObjectStorage implements ObjectStoragePort {
@@ -96,7 +180,10 @@ export class S3ObjectStorage implements ObjectStoragePort {
     };
   }
 
-  async getObject(locator: ObjectLocator): Promise<StoredObject | undefined> {
+  async getObject(
+    locator: ObjectLocator,
+    options?: GetObjectOptions
+  ): Promise<StoredObject | undefined> {
     let response;
     try {
       response = await this.client.send(
@@ -112,7 +199,27 @@ export class S3ObjectStorage implements ObjectStoragePort {
       throw error;
     }
 
-    const body = response.Body ? await response.Body.transformToByteArray() : new Uint8Array();
+    if (
+      options?.maxBytes !== undefined &&
+      response.ContentLength !== undefined &&
+      response.ContentLength > options.maxBytes
+    ) {
+      if (
+        response.Body &&
+        typeof (response.Body as { destroy?: () => void }).destroy === "function"
+      ) {
+        try {
+          (response.Body as { destroy: () => void }).destroy();
+        } catch {
+          // ignore destroy errors
+        }
+      }
+      throw new Error(
+        `Object ${locator.bucket}/${locator.key} ContentLength (${response.ContentLength}) exceeds maxBytes limit (${options.maxBytes})`
+      );
+    }
+
+    const body = await readBodyWithLimit(response.Body, locator, options?.maxBytes);
 
     const storedChecksum = response.Metadata?.["checksum-sha256"];
     if (storedChecksum !== undefined) {

@@ -167,4 +167,59 @@ describe("AssemblySpecSchema contract", () => {
     };
     expect(AssemblySpecSchema.safeParse(specBadVersion).success).toBe(false);
   });
+
+  it("does not cap stem count or total duration at the domain contract level", () => {
+    // Stem count and total duration limits are infrastructure-level FFmpeg
+    // safeguards (FfmpegMediaAssemblerAdapter's maxStemCount/maxTotalDurationMs),
+    // not product/domain semantics — #122 does not specify these as contract
+    // limits, so AssemblySpec itself must accept larger specs.
+    const thirteenStems = Array.from({ length: 13 }, (_, i) => ({
+      sceneId: `scene-${i}`,
+      generationManifestId: `gen-man-${i}`,
+      order: i,
+      media: {
+        bucket: "cco-renders",
+        key: `renders/scene-${i}.mp4`,
+        sha256: hash1,
+        contentType: "video/mp4"
+      },
+      expectedDurationMs: 4000
+    }));
+
+    const specManyStems = {
+      campaignId: "camp-001",
+      videoStems: thirteenStems,
+      assemblyProfile: {
+        key: "VERTICAL_REEL_1080X1920_V1" as const,
+        version: 1 as const
+      },
+      expectedTotalDurationMs: 52000,
+      subtitleCues: []
+    };
+    expect(AssemblySpecSchema.safeParse(specManyStems).success).toBe(true);
+
+    const longStem = {
+      sceneId: "scene-long",
+      generationManifestId: "gen-man-long",
+      order: 0,
+      media: {
+        bucket: "cco-renders",
+        key: "renders/scene-long.mp4",
+        sha256: hash1,
+        contentType: "video/mp4"
+      },
+      expectedDurationMs: 65000
+    };
+    const specLongDuration = {
+      campaignId: "camp-001",
+      videoStems: [longStem],
+      assemblyProfile: {
+        key: "VERTICAL_REEL_1080X1920_V1" as const,
+        version: 1 as const
+      },
+      expectedTotalDurationMs: 65000,
+      subtitleCues: []
+    };
+    expect(AssemblySpecSchema.safeParse(specLongDuration).success).toBe(true);
+  });
 });

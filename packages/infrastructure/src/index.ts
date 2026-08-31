@@ -185,3 +185,57 @@ export {
   StorageAwareJobAdmissionGate,
   type StorageAwareJobAdmissionGateOptions
 } from "./storage/storage-aware-job-admission-gate.js";
+
+export {
+  FfmpegMediaAssemblerAdapter,
+  DEFAULT_MAX_STEM_INPUT_BYTES,
+  DEFAULT_MAX_AGGREGATE_INPUT_BYTES,
+  DEFAULT_MAX_OUTPUT_BYTES,
+  DEFAULT_MAX_STEM_COUNT,
+  DEFAULT_MAX_TOTAL_DURATION_MS,
+  DEFAULT_PROBE_TIMEOUT_MS,
+  DEFAULT_ENCODE_TIMEOUT_MS,
+  DEFAULT_VERSION_TIMEOUT_MS,
+  type FfmpegMediaAssemblerAdapterOptions
+} from "./ffmpeg/ffmpeg-media-assembler-adapter.js";
+
+export {
+  FfmpegAssemblyError,
+  type FfmpegAssemblyFailureCode,
+  type FfmpegAssemblyErrorContext
+} from "./ffmpeg/ffmpeg-error.js";
+
+export {
+  defaultSpawnRunner,
+  type SpawnLikeFn,
+  type ProcessRunResult,
+  type ProcessRunOptions
+} from "./ffmpeg/ffmpeg-process-runner.js";
+
+export {
+  probeMedia,
+  type ProbedMedia,
+  type ProbedVideoStream,
+  type ProbedAudioStream,
+  type ProbeMediaOptions
+} from "./ffmpeg/ffprobe-client.js";
+
+export {
+  buildFitBlurredFillGraph,
+  buildDirectFitGraph,
+  selectFilterGraph,
+  buildFfmpegArgs,
+  computeCommandFingerprint,
+  STEM_DURATION_TOLERANCE_MS,
+  DEFAULT_CRF,
+  DEFAULT_PRESET,
+  type BuildFfmpegArgsOptions
+} from "./ffmpeg/filter-graph.js";
+
+export {
+  isAnimatedWebp,
+  demuxAnimatedWebp,
+  normalizeAnimatedWebpToMp4,
+  type DemuxedWebp,
+  type NormalizeWebpOptions
+} from "./ffmpeg/webp-normalizer.js";
