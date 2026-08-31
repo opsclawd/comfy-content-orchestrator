@@ -168,8 +168,11 @@ describe("AssemblySpecSchema contract", () => {
     expect(AssemblySpecSchema.safeParse(specBadVersion).success).toBe(false);
   });
 
-  it("enforces MAX_ASSEMBLY_STEMS (12) and MAX_ASSEMBLY_TOTAL_DURATION_MS (60,000ms) limits", () => {
-    // 13 stems should be rejected
+  it("does not cap stem count or total duration at the domain contract level", () => {
+    // Stem count and total duration limits are infrastructure-level FFmpeg
+    // safeguards (FfmpegMediaAssemblerAdapter's maxStemCount/maxTotalDurationMs),
+    // not product/domain semantics — #122 does not specify these as contract
+    // limits, so AssemblySpec itself must accept larger specs.
     const thirteenStems = Array.from({ length: 13 }, (_, i) => ({
       sceneId: `scene-${i}`,
       generationManifestId: `gen-man-${i}`,
@@ -183,7 +186,7 @@ describe("AssemblySpecSchema contract", () => {
       expectedDurationMs: 4000
     }));
 
-    const specTooManyStems = {
+    const specManyStems = {
       campaignId: "camp-001",
       videoStems: thirteenStems,
       assemblyProfile: {
@@ -193,9 +196,8 @@ describe("AssemblySpecSchema contract", () => {
       expectedTotalDurationMs: 52000,
       subtitleCues: []
     };
-    expect(AssemblySpecSchema.safeParse(specTooManyStems).success).toBe(false);
+    expect(AssemblySpecSchema.safeParse(specManyStems).success).toBe(true);
 
-    // Duration > 60_000 should be rejected
     const longStem = {
       sceneId: "scene-long",
       generationManifestId: "gen-man-long",
@@ -208,7 +210,7 @@ describe("AssemblySpecSchema contract", () => {
       },
       expectedDurationMs: 65000
     };
-    const specTooLong = {
+    const specLongDuration = {
       campaignId: "camp-001",
       videoStems: [longStem],
       assemblyProfile: {
@@ -218,31 +220,6 @@ describe("AssemblySpecSchema contract", () => {
       expectedTotalDurationMs: 65000,
       subtitleCues: []
     };
-    expect(AssemblySpecSchema.safeParse(specTooLong).success).toBe(false);
-
-    // Exactly 12 stems at 5000ms each = 60000ms should succeed
-    const twelveStems = Array.from({ length: 12 }, (_, i) => ({
-      sceneId: `scene-${i}`,
-      generationManifestId: `gen-man-${i}`,
-      order: i,
-      media: {
-        bucket: "cco-renders",
-        key: `renders/scene-${i}.mp4`,
-        sha256: hash1,
-        contentType: "video/mp4"
-      },
-      expectedDurationMs: 5000
-    }));
-    const specBoundaryValid = {
-      campaignId: "camp-001",
-      videoStems: twelveStems,
-      assemblyProfile: {
-        key: "VERTICAL_REEL_1080X1920_V1" as const,
-        version: 1 as const
-      },
-      expectedTotalDurationMs: 60000,
-      subtitleCues: []
-    };
-    expect(AssemblySpecSchema.safeParse(specBoundaryValid).success).toBe(true);
+    expect(AssemblySpecSchema.safeParse(specLongDuration).success).toBe(true);
   });
 });

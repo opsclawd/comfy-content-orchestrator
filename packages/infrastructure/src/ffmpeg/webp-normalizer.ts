@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { FfmpegAssemblyError } from "./ffmpeg-error.js";
@@ -121,7 +121,14 @@ export interface NormalizeWebpOptions {
   readonly stemSceneId?: string | undefined;
 }
 
-export async function normalizeAnimatedWebpToMp4(options: NormalizeWebpOptions): Promise<void> {
+export interface NormalizeWebpResult {
+  readonly normalizedSha256: string;
+  readonly commandFingerprint: string;
+}
+
+export async function normalizeAnimatedWebpToMp4(
+  options: NormalizeWebpOptions
+): Promise<NormalizeWebpResult> {
   const { bytes, outputPath, ffmpegPath, spawnFn, timeoutMs, stemOrder, stemSceneId } = options;
 
   let demuxed: DemuxedWebp;
@@ -217,6 +224,23 @@ export async function normalizeAnimatedWebpToMp4(options: NormalizeWebpOptions):
         }
       );
     }
+
+    const outputBytes = await fs.readFile(outputPath);
+    const normalizedSha256 = createHash("sha256").update(outputBytes).digest("hex");
+
+    // Fingerprint the deterministic normalization recipe: the ffmpeg argv
+    // with the volatile scratch paths replaced by stable placeholders, plus
+    // the canonical per-frame timing description that drove the concat
+    // script — not the temp filesystem paths themselves.
+    const normalizedArgs = args.map((arg) =>
+      arg === concatScriptPath ? "CONCAT_SCRIPT" : arg === outputPath ? "OUTPUT" : arg
+    );
+    const frameTimingDescription = demuxed.frames.map((f) => f.durationMs);
+    const commandFingerprint = createHash("sha256")
+      .update(JSON.stringify({ args: normalizedArgs, frameDurationsMs: frameTimingDescription }))
+      .digest("hex");
+
+    return { normalizedSha256, commandFingerprint };
   } finally {
     await fs.rm(framesDir, { recursive: true, force: true }).catch(() => {});
   }

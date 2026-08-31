@@ -5,8 +5,6 @@ import type { ConcreteMediaAssemblerPort, ObjectStoragePort } from "@cco/applica
 import {
   ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS,
   AssemblyExecutionResultSchema,
-  MAX_ASSEMBLY_STEMS,
-  MAX_ASSEMBLY_TOTAL_DURATION_MS,
   VERTICAL_REEL_1080X1920_V1_PROFILE,
   hashSubtitleCues,
   type AssemblyExecutionResult,
@@ -30,8 +28,11 @@ import { isAnimatedWebp, normalizeAnimatedWebpToMp4 } from "./webp-normalizer.js
 export const DEFAULT_MAX_STEM_INPUT_BYTES = 500 * 1024 * 1024; // 500 MiB
 export const DEFAULT_MAX_AGGREGATE_INPUT_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB
 export const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024 * 1024; // 1 GiB
-export const DEFAULT_MAX_STEM_COUNT = MAX_ASSEMBLY_STEMS; // 12
-export const DEFAULT_MAX_TOTAL_DURATION_MS = MAX_ASSEMBLY_TOTAL_DURATION_MS; // 60,000 ms
+// These are adapter-level FFmpeg resource safeguards, not domain contract
+// limits — AssemblySpec itself does not cap stem count or total duration
+// (issue #122 never specified those as product semantics).
+export const DEFAULT_MAX_STEM_COUNT = 12;
+export const DEFAULT_MAX_TOTAL_DURATION_MS = 60_000; // ms
 export const DEFAULT_PROBE_TIMEOUT_MS = 10_000; // 10s
 export const DEFAULT_ENCODE_TIMEOUT_MS = 120_000; // 120s
 export const DEFAULT_VERSION_TIMEOUT_MS = 10_000; // 10s
@@ -403,12 +404,13 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
       // every stem in the batch has passed hash verification above.
       for (const { stem, bytes } of verifiedStems) {
         const stagedPath = path.join(scratchDir, `stem-${stem.order}.mp4`);
+        let normalization: ExecutedVideoStemRef["normalization"];
         if (
           stem.media.contentType === "image/webp" ||
           stem.media.key.endsWith(".webp") ||
           isAnimatedWebp(bytes)
         ) {
-          await normalizeAnimatedWebpToMp4({
+          const normalized = await normalizeAnimatedWebpToMp4({
             bytes,
             outputPath: stagedPath,
             ffmpegPath: this.ffmpegPath,
@@ -417,6 +419,12 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
             stemOrder: stem.order,
             stemSceneId: stem.sceneId
           });
+          normalization = {
+            profile: "ANIMATED_WEBP_TO_MP4_V1",
+            normalizedSha256: normalized.normalizedSha256,
+            normalizedContentType: "video/mp4",
+            commandFingerprint: normalized.commandFingerprint
+          };
         } else {
           await fs.writeFile(stagedPath, bytes);
         }
@@ -451,7 +459,8 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
           generationManifestId: stem.generationManifestId,
           order: stem.order,
           media: stem.media,
-          actualDurationMs: probed.videoStream.durationMs
+          actualDurationMs: probed.videoStream.durationMs,
+          ...(normalization ? { normalization } : {})
         });
       }
 

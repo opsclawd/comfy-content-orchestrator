@@ -10,16 +10,10 @@ import { deepFreeze } from "./deep-freeze.js";
 import { SubtitleCueSchema, validateSubtitleTimeline, type SubtitleCue } from "./subtitle-cue.js";
 import { VideoStemRefSchema, type VideoStemRef } from "./video-stem.js";
 
-export const MAX_ASSEMBLY_STEMS = 12;
-export const MAX_ASSEMBLY_TOTAL_DURATION_MS = 60_000;
-
 export const AssemblySpecSchema = z
   .object({
     campaignId: z.string().min(1, "campaignId must not be empty"),
-    videoStems: z
-      .array(VideoStemRefSchema)
-      .min(1, "videoStems must contain at least one stem")
-      .max(MAX_ASSEMBLY_STEMS, `videoStems must not exceed ${MAX_ASSEMBLY_STEMS} stems`),
+    videoStems: z.array(VideoStemRefSchema).min(1, "videoStems must contain at least one stem"),
     voiceover: VoiceoverAssetRefSchema.optional(),
     soundbed: SoundbedAssetRefSchema.optional(),
     subtitleCues: z.array(SubtitleCueSchema).default([]),
@@ -28,10 +22,6 @@ export const AssemblySpecSchema = z
       .number()
       .int("expectedTotalDurationMs must be an integer")
       .positive("expectedTotalDurationMs must be positive")
-      .max(
-        MAX_ASSEMBLY_TOTAL_DURATION_MS,
-        `expectedTotalDurationMs must not exceed ${MAX_ASSEMBLY_TOTAL_DURATION_MS}ms`
-      )
   })
   .superRefine((spec, ctx) => {
     // 1. Validate contiguous stem ordering: 0..n-1 without duplicates or gaps

@@ -166,6 +166,11 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
     });
     expect(storedOutput).toBeDefined();
     expect(storedOutput?.body.byteLength).toBeGreaterThan(0);
+
+    // Native MP4 stems must omit normalization provenance entirely.
+    for (const executedStem of result.executedInputs.videoStems) {
+      expect(executedStem.normalization).toBeUndefined();
+    }
   }, 90_000);
 
   it("assembles six authoritative animated WebP LTX stems (~4.04s 24fps) into ~24.25s 1080x1920 30fps vertical MP4 with provenance", async () => {
@@ -252,6 +257,22 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
     });
     expect(storedOutput).toBeDefined();
     expect(storedOutput?.body.byteLength).toBeGreaterThan(0);
+
+    // Verify normalization provenance: every WebP stem must record what it
+    // was normalized into, while `media` keeps pointing at the original
+    // source WebP asset (additive, not a replacement of source identity).
+    expect(result.executedInputs.videoStems).toHaveLength(6);
+    for (const [i, executedStem] of result.executedInputs.videoStems.entries()) {
+      expect(executedStem.media.contentType).toBe("image/webp");
+      expect(executedStem.media.sha256).toBe(syntheticWebpStems[i]!.sha256);
+      expect(executedStem.normalization).toBeDefined();
+      expect(executedStem.normalization?.profile).toBe("ANIMATED_WEBP_TO_MP4_V1");
+      expect(executedStem.normalization?.normalizedContentType).toBe("video/mp4");
+      expect(executedStem.normalization?.normalizedSha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(executedStem.normalization?.normalizedSha256).not.toBe(executedStem.media.sha256);
+      expect(executedStem.normalization?.commandFingerprint).toMatch(/^[0-9a-f]{64}$/);
+      expect(executedStem.normalization?.commandFingerprint).not.toContain(workspaceRoot);
+    }
   }, 90_000);
 
   it("preserves stem order regardless of array ordering in input spec", async () => {

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -111,15 +111,19 @@ describe("webp-normalizer", () => {
         // Read while the scratch dir still exists — normalizeAnimatedWebpToMp4
         // cleans it up in a `finally` block once spawnFn resolves.
         concatScript = await readFile(concatScriptPath, "utf-8");
+        await writeFile(args[args.length - 1]!, "fake-mp4-bytes");
         return { exitCode: 0, stdout: "", stderr: "" };
       };
 
-      await normalizeAnimatedWebpToMp4({
+      const result = await normalizeAnimatedWebpToMp4({
         bytes: animBuf,
         outputPath: join(scratchDir, "output.mp4"),
         ffmpegPath: "ffmpeg",
         spawnFn: fakeRunner
       });
+
+      expect(result.normalizedSha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(result.commandFingerprint).toMatch(/^[0-9a-f]{64}$/);
 
       // No longer collapses variable per-frame durations into one constant
       // "-framerate" value fed via image2pipe — that's the mechanism that
@@ -161,6 +165,7 @@ describe("webp-normalizer", () => {
             );
           }
         }
+        await writeFile(args[args.length - 1]!, "fake-mp4-bytes");
         return { exitCode: 0, stdout: "", stderr: "" };
       };
 
