@@ -9,6 +9,15 @@ export type FfmpegAssemblyFailureCode =
   | "STEM_PROBE_FAILED"
   | "STEM_NO_VIDEO_STREAM"
   | "STEM_DURATION_OUT_OF_TOLERANCE"
+  | "AUDIO_FETCH_FAILED"
+  | "AUDIO_TOO_LARGE"
+  | "AUDIO_HASH_MISMATCH"
+  | "AUDIO_PROBE_FAILED"
+  | "AUDIO_NO_AUDIO_STREAM"
+  | "AUDIO_ANALYSIS_FAILED"
+  | "AUDIO_FILTER_UNAVAILABLE"
+  | "SUBTITLE_CAPABILITY_UNAVAILABLE"
+  | "SUBTITLE_RENDER_FAILED"
   | "FFMPEG_EXECUTION_FAILED"
   | "OUTPUT_PROBE_FAILED"
   | "OUTPUT_VALIDATION_FAILED"
@@ -25,6 +34,9 @@ export interface FfmpegAssemblyErrorContext {
   readonly stderr?: string | undefined;
   readonly stemOrder?: number | undefined;
   readonly stemSceneId?: string | undefined;
+  readonly assetKind?: "voiceover" | "soundbed" | undefined;
+  readonly assetId?: string | undefined;
+  readonly subtitleStyleProfile?: string | undefined;
   readonly expectedSha256?: string | undefined;
   readonly actualSha256?: string | undefined;
   readonly expectedDurationMs?: number | undefined;
