@@ -448,8 +448,17 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
 
     const syntheticSb = await generateSyntheticAudio({
       ffmpegPath: "ffmpeg",
+      // Deliberately not an exact divisor of the 30s target (10s would be):
+      // loopCount = Math.floor(activeDurationMs / actualDurationMs) is
+      // computed from ffprobe's real measurement of the encoded fixture,
+      // which carries sub-frame container-timebase quantization that varies
+      // slightly across real ffmpeg builds/versions. An exact-multiple
+      // duration sits exactly on Math.floor's integer boundary, so any
+      // positive measurement noise (observed: ~50ms between ffmpeg 8.0.1 and
+      // 6.1.1) flips the loop count. 9.5s keeps loopCount at 3 with ~500ms
+      // of margin on both sides.
       outputPath: path.join(fixtureDir, "audio", "sb.mp3"),
-      durationSec: 10,
+      durationSec: 9.5,
       frequency: 220,
       channels: 2,
       format: "mp3"
@@ -575,7 +584,7 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
     expect(executionResult.executedInputs.soundbed?.effectiveDurationMs).toBe(30000);
     expect(executionResult.executedInputs.soundbed?.gainDb).toBe(-18.0);
     expect(executionResult.executedInputs.soundbed?.duckingDb).toBe(-12.0);
-    expect(executionResult.executedInputs.soundbed?.loopCount).toBe(3); // 30s / 10s = 3 loops
+    expect(executionResult.executedInputs.soundbed?.loopCount).toBe(3); // floor(30s / ~9.5s) = 3 loops, with real margin either side
 
     // Subtitle verification
     expect(executionResult.subtitleStyleProfile).toBe("VERTICAL_REEL_CENTER_V1");
