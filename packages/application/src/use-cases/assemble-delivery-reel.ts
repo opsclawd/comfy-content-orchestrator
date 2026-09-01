@@ -77,6 +77,22 @@ export class AssembleDeliveryReel {
         checksumSha256
       });
     } catch (err) {
+      // Best-effort rollback: the media output was already published in
+      // Step 2 before the manifest write failed here, so without this the
+      // delivery bucket ends up with an orphaned video that has no manifest
+      // beside it — directly contradicting the "every delivered video has
+      // an immutable manifest" invariant this use case exists to guarantee.
+      // This does not make the publish atomic (the delete can itself fail,
+      // and objectStorage.deleteObject is optional — adapters that don't
+      // implement it simply can't be rolled back), but it closes the gap
+      // for the common case without a larger two-phase-publish redesign.
+      try {
+        await this.deps.objectStorage.deleteObject?.(executionResult.output.media);
+      } catch {
+        // Swallow: the original manifest-publication error is what the
+        // caller needs to see and act on; a failed rollback attempt must
+        // not mask it.
+      }
       throw new AssemblyManifestPublicationError(
         `Failed to persist assembly manifest to ${executionResult.output.media.bucket}/${manifestKey}: ${(err as Error).message}`,
         {

@@ -241,4 +241,100 @@ describe("AssembleDeliveryReel use case", () => {
     expect(pubErr.manifest.assemblyId).toBe("assembly-test-123");
     expect(pubErr.manifest.governanceDecisionId).toBe("gov-1");
   });
+
+  it("rolls back the already-published media output when manifest persistence fails", async () => {
+    const deleteObjectCalls: ObjectLocator[] = [];
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(async (): Promise<ObjectLocator> => {
+        throw new Error("S3 connection timed out");
+      }),
+      getObject: vi.fn(),
+      deleteObject: vi.fn(async (locator: ObjectLocator): Promise<void> => {
+        deleteObjectCalls.push(locator);
+      })
+    };
+
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => dummyExecutionResult)
+    };
+
+    const useCase = new AssembleDeliveryReel({
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage
+    });
+
+    await expect(
+      useCase.assemble({
+        spec: validSpec,
+        governanceDecisionId: "gov-1"
+      })
+    ).rejects.toThrow(AssemblyManifestPublicationError);
+
+    expect(mockStorage.deleteObject).toHaveBeenCalledTimes(1);
+    expect(deleteObjectCalls[0]?.bucket).toBe(dummyExecutionResult.output.media.bucket);
+    expect(deleteObjectCalls[0]?.key).toBe(dummyExecutionResult.output.media.key);
+  });
+
+  it("still surfaces the original AssemblyManifestPublicationError when the rollback delete itself fails", async () => {
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(async (): Promise<ObjectLocator> => {
+        throw new Error("S3 connection timed out");
+      }),
+      getObject: vi.fn(),
+      deleteObject: vi.fn(async (): Promise<void> => {
+        throw new Error("delete also failed");
+      })
+    };
+
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => dummyExecutionResult)
+    };
+
+    const useCase = new AssembleDeliveryReel({
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage
+    });
+
+    let thrownError: unknown;
+    try {
+      await useCase.assemble({
+        spec: validSpec,
+        governanceDecisionId: "gov-1"
+      });
+    } catch (err) {
+      thrownError = err;
+    }
+
+    expect(thrownError).toBeInstanceOf(AssemblyManifestPublicationError);
+    const pubErr = thrownError as AssemblyManifestPublicationError;
+    expect(pubErr.message).toContain("S3 connection timed out");
+  });
+
+  it("does not attempt rollback when the storage adapter has no deleteObject support", async () => {
+    // deleteObject is optional on ObjectStoragePort — adapters that don't
+    // implement it must not cause the use case to crash while attempting
+    // rollback.
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(async (): Promise<ObjectLocator> => {
+        throw new Error("S3 connection timed out");
+      }),
+      getObject: vi.fn()
+    };
+
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => dummyExecutionResult)
+    };
+
+    const useCase = new AssembleDeliveryReel({
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage
+    });
+
+    await expect(
+      useCase.assemble({
+        spec: validSpec,
+        governanceDecisionId: "gov-1"
+      })
+    ).rejects.toThrow(AssemblyManifestPublicationError);
+  });
 });

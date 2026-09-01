@@ -37,6 +37,10 @@ export class InMemoryObjectStorage implements ObjectStoragePort {
     return stored;
   }
 
+  async deleteObject(locator: ObjectLocator): Promise<void> {
+    this.storage.delete(`${locator.bucket}/${locator.key}`);
+  }
+
   hasObject(locator: ObjectLocator): boolean {
     return this.storage.has(`${locator.bucket}/${locator.key}`);
   }
