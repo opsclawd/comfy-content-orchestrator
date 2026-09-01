@@ -2,15 +2,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { AssembleDeliveryReel } from "@cco/application";
 import {
   ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS,
   AssemblyExecutionResultSchema,
+  AssemblyManifestSchema,
   type AssemblySpec,
   type VideoStemRef
 } from "@cco/contracts";
 import { BUCKETS } from "@cco/shared";
+import { AUDIO_LIMITER_CEILING_DBTP } from "./audio-mix.js";
 import { FfmpegMediaAssemblerAdapter } from "./ffmpeg-media-assembler-adapter.js";
 import { InMemoryObjectStorage } from "./test-support/in-memory-object-storage.js";
+import { generateSyntheticAudio } from "./test-support/synthetic-audio-fixtures.js";
 import {
   generateSyntheticStems,
   type SyntheticStemResult
@@ -410,7 +414,7 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
       videoStems: [
         {
           sceneId: "scene-01",
-          generationManifestId: "gen-man-01",
+          generationManifestId: "gen-01",
           order: 0,
           media: {
             bucket: BUCKETS.REVIEW,
@@ -427,6 +431,487 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
       expect.objectContaining({
         name: "FfmpegAssemblyError",
         code: "STEM_DURATION_OUT_OF_TOLERANCE"
+      })
+    );
+  });
+
+  it("assembles six MP4 stems with voiceover, soundbed, and subtitles into delivery reel and persists immutable AssemblyManifest", async () => {
+    // Generate synthetic voiceover (15s @ 440 Hz) and soundbed (10s @ 220 Hz stereo)
+    const syntheticVo = await generateSyntheticAudio({
+      ffmpegPath: "ffmpeg",
+      outputPath: path.join(fixtureDir, "audio", "vo.mp3"),
+      durationSec: 15,
+      frequency: 440,
+      channels: 1,
+      format: "mp3"
+    });
+
+    const syntheticSb = await generateSyntheticAudio({
+      ffmpegPath: "ffmpeg",
+      // Deliberately not an exact divisor of the 30s target (10s would be):
+      // loopCount = Math.floor(activeDurationMs / actualDurationMs) is
+      // computed from ffprobe's real measurement of the encoded fixture,
+      // which carries sub-frame container-timebase quantization that varies
+      // slightly across real ffmpeg builds/versions. An exact-multiple
+      // duration sits exactly on Math.floor's integer boundary, so any
+      // positive measurement noise (observed: ~50ms between ffmpeg 8.0.1 and
+      // 6.1.1) flips the loop count. 9.5s keeps loopCount at 3 with ~500ms
+      // of margin on both sides.
+      outputPath: path.join(fixtureDir, "audio", "sb.mp3"),
+      durationSec: 9.5,
+      frequency: 220,
+      channels: 2,
+      format: "mp3"
+    });
+
+    await objectStorage.putObject({
+      bucket: BUCKETS.REVIEW,
+      key: "audio/vo-full.mp3",
+      body: syntheticVo.bytes,
+      contentType: "audio/mpeg",
+      checksumSha256: syntheticVo.sha256
+    });
+
+    await objectStorage.putObject({
+      bucket: BUCKETS.REVIEW,
+      key: "audio/sb-full.mp3",
+      body: syntheticSb.bytes,
+      contentType: "audio/mpeg",
+      checksumSha256: syntheticSb.sha256
+    });
+
+    const videoStems: VideoStemRef[] = syntheticMp4Stems.map((stem) => ({
+      sceneId: `scene-mp4-0${stem.index + 1}`,
+      generationManifestId: `gen-man-mp4-0${stem.index + 1}`,
+      order: stem.index,
+      media: {
+        bucket: BUCKETS.REVIEW,
+        key: `scenes/scene-mp4-0${stem.index + 1}/candidate.mp4`,
+        sha256: stem.sha256,
+        contentType: "video/mp4"
+      },
+      expectedDurationMs: stem.durationMs
+    }));
+
+    const spec: AssemblySpec = {
+      campaignId: "campaign-123-audiovisual-delivery",
+      assemblyProfile: {
+        key: "VERTICAL_REEL_1080X1920_V1",
+        version: 1
+      },
+      expectedTotalDurationMs: 30000,
+      voiceover: {
+        assetId: "vo-asset-001",
+        kind: "voiceover",
+        media: {
+          bucket: BUCKETS.REVIEW,
+          key: "audio/vo-full.mp3",
+          sha256: syntheticVo.sha256,
+          contentType: "audio/mpeg"
+        },
+        source: { kind: "provider", providerId: "azure-tts" },
+        startMs: 2000,
+        expectedDurationMs: 15000
+      },
+      soundbed: {
+        assetId: "sb-asset-001",
+        kind: "soundbed",
+        media: {
+          bucket: BUCKETS.REVIEW,
+          key: "audio/sb-full.mp3",
+          sha256: syntheticSb.sha256,
+          contentType: "audio/mpeg"
+        },
+        source: { kind: "local" },
+        startMs: 0,
+        expectedDurationMs: 30000
+      },
+      subtitleCues: [
+        { startMs: 2500, endMs: 7000, text: "First subtitle line with {safe} text" },
+        { startMs: 8000, endMs: 14000, text: "Second subtitle dialogue line" }
+      ],
+      videoStems
+    };
+
+    const deliveryReelUseCase = new AssembleDeliveryReel({
+      mediaAssembler: adapter,
+      objectStorage
+    });
+
+    const { manifest, executionResult } = await deliveryReelUseCase.assemble({
+      spec,
+      governanceDecisionId: "gov-dec-sprint35-001"
+    });
+
+    // 1. Verify executionResult conforms to schema & requirements
+    expect(executionResult.output.width).toBe(1080);
+    expect(executionResult.output.height).toBe(1920);
+    expect(executionResult.measuredFrameRate).toBe(30);
+    expect(Math.abs(executionResult.output.durationMs - 30000)).toBeLessThanOrEqual(
+      ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS
+    );
+
+    // Audio stream verification
+    expect(executionResult.streams.audio).toBeDefined();
+    expect(executionResult.streams.audio?.codecName).toBe("aac");
+    expect(executionResult.streams.audio?.sampleRateHz).toBe(48000);
+    expect(executionResult.streams.audio?.channels).toBe(2);
+    expect(Math.abs(executionResult.streams.audio!.durationMs - 30000)).toBeLessThanOrEqual(
+      ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS
+    );
+
+    // Executed audio algebra verification
+    expect(executionResult.executedInputs.voiceover).toBeDefined();
+    expect(executionResult.executedInputs.voiceover?.effectiveStartMs).toBe(2000);
+    // actualDurationMs is ffprobe's real measurement of the staged voiceover
+    // input, and padTrailingMs is algebraically derived from it
+    // (totalTimelineMs - startMs - actualDurationMs) — both inherit
+    // sub-frame container-timebase quantization that varies slightly across
+    // real ffmpeg builds/versions (observed: a consistent ~47ms difference
+    // between ffmpeg 8.0.1 and 6.1.1 for the same synthetic fixture), so
+    // neither can be asserted with exact equality against a real encoder,
+    // same reasoning as the output-duration checks above.
+    expect(
+      Math.abs(executionResult.executedInputs.voiceover!.actualDurationMs - syntheticVo.durationMs)
+    ).toBeLessThanOrEqual(ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS);
+    expect(
+      Math.abs(executionResult.executedInputs.voiceover!.padTrailingMs - 13000)
+    ).toBeLessThanOrEqual(ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS);
+    expect(executionResult.executedInputs.voiceover?.effectiveDurationMs).toBe(28000);
+    expect(executionResult.executedInputs.voiceover?.gainDb).toBeDefined();
+
+    expect(executionResult.executedInputs.soundbed).toBeDefined();
+    expect(executionResult.executedInputs.soundbed?.effectiveDurationMs).toBe(30000);
+    expect(executionResult.executedInputs.soundbed?.gainDb).toBe(-18.0);
+    expect(executionResult.executedInputs.soundbed?.duckingDb).toBe(-12.0);
+    expect(executionResult.executedInputs.soundbed?.loopCount).toBe(3); // floor(30s / ~9.5s) = 3 loops, with real margin either side
+
+    // Subtitle verification
+    expect(executionResult.subtitleStyleProfile).toBe("VERTICAL_REEL_CENTER_V1");
+    expect(executionResult.subtitleCues).toHaveLength(2);
+
+    // 2. Verify immutable AssemblyManifest
+    expect(manifest.assemblyId).toBe(executionResult.assemblyId);
+    expect(manifest.governanceDecisionId).toBe("gov-dec-sprint35-001");
+    expect(manifest.generationManifestIds).toHaveLength(6);
+    expect(manifest.inputs.voiceover?.assetId).toBe("vo-asset-001");
+    expect(manifest.inputs.soundbed?.assetId).toBe("sb-asset-001");
+    expect(manifest.subtitleStyleProfile).toBe("VERTICAL_REEL_CENTER_V1");
+
+    // 3. Verify persistent objects in storage
+    const storedMedia = await objectStorage.getObject({
+      bucket: BUCKETS.DELIVERY,
+      key: `campaigns/${spec.campaignId}/assemblies/${executionResult.assemblyId}/output.mp4`
+    });
+    expect(storedMedia).toBeDefined();
+    expect(storedMedia?.body.byteLength).toBeGreaterThan(0);
+
+    const storedManifestObj = await objectStorage.getObject({
+      bucket: BUCKETS.DELIVERY,
+      key: `campaigns/${spec.campaignId}/assemblies/${executionResult.assemblyId}/manifest.json`
+    });
+    expect(storedManifestObj).toBeDefined();
+    expect(storedManifestObj?.contentType).toBe("application/json");
+
+    const parsedManifest = AssemblyManifestSchema.parse(
+      JSON.parse(new TextDecoder().decode(storedManifestObj?.body))
+    );
+    expect(parsedManifest.assemblyId).toBe(executionResult.assemblyId);
+    expect(parsedManifest.governanceDecisionId).toBe("gov-dec-sprint35-001");
+
+    // 4. AC-4: Measure produced output audio with true-peak analysis (ebur128=peak=true) to verify true-peak ceiling (no clipping)
+    const outputTestPath = path.join(fixtureDir, "test-output-audio.mp4");
+    await fs.writeFile(outputTestPath, storedMedia!.body);
+
+    const truePeakCheck = await (
+      await import("./ffmpeg-process-runner.js")
+    ).defaultSpawnRunner(
+      "ffmpeg",
+      [
+        "-hide_banner",
+        "-nostats",
+        "-i",
+        outputTestPath,
+        "-af",
+        "ebur128=peak=true",
+        "-f",
+        "null",
+        "-"
+      ],
+      { timeoutMs: 30_000 }
+    );
+    expect(truePeakCheck.exitCode).toBe(0);
+    const truePeakMatch = truePeakCheck.stderr.match(/True peak:\s*\n\s*Peak:\s*([-\d.]+)\s*dBFS/i);
+    expect(truePeakMatch).toBeTruthy();
+    const measuredTruePeakDbfs = parseFloat(truePeakMatch![1]!);
+    expect(measuredTruePeakDbfs).toBeLessThanOrEqual(AUDIO_LIMITER_CEILING_DBTP); // Output does not clip beyond documented -1.0 dBTP ceiling
+
+    // 5. AC-3: Verify soundbed ducking behavior (audio level of 220Hz soundbed during VO window [2s..17s] is measurably ducked vs outside [20s..25s])
+    const insideVoSlice = await (
+      await import("./ffmpeg-process-runner.js")
+    ).defaultSpawnRunner(
+      "ffmpeg",
+      [
+        "-hide_banner",
+        "-nostats",
+        "-ss",
+        "5",
+        "-t",
+        "5",
+        "-i",
+        outputTestPath,
+        "-af",
+        "bandpass=f=220:width_type=q:w=10,bandpass=f=220:width_type=q:w=10,astats",
+        "-f",
+        "null",
+        "-"
+      ],
+      { timeoutMs: 30_000 }
+    );
+    const outsideVoSlice = await (
+      await import("./ffmpeg-process-runner.js")
+    ).defaultSpawnRunner(
+      "ffmpeg",
+      [
+        "-hide_banner",
+        "-nostats",
+        "-ss",
+        "20",
+        "-t",
+        "5",
+        "-i",
+        outputTestPath,
+        "-af",
+        "bandpass=f=220:width_type=q:w=10,bandpass=f=220:width_type=q:w=10,astats",
+        "-f",
+        "null",
+        "-"
+      ],
+      { timeoutMs: 30_000 }
+    );
+
+    const insideRmsMatch = insideVoSlice.stderr.match(/RMS level dB:\s+([-\d.]+)/);
+    const insidePeakMatch = insideVoSlice.stderr.match(/Peak level dB:\s+([-\d.]+)/);
+    const outsideRmsMatch = outsideVoSlice.stderr.match(/RMS level dB:\s+([-\d.]+)/);
+    const outsidePeakMatch = outsideVoSlice.stderr.match(/Peak level dB:\s+([-\d.]+)/);
+
+    expect(insideRmsMatch).toBeTruthy();
+    expect(insidePeakMatch).toBeTruthy();
+    expect(outsideRmsMatch).toBeTruthy();
+    expect(outsidePeakMatch).toBeTruthy();
+
+    const insideRmsDb = parseFloat(insideRmsMatch![1]!);
+    const insidePeakDb = parseFloat(insidePeakMatch![1]!);
+    const outsideRmsDb = parseFloat(outsideRmsMatch![1]!);
+    const outsidePeakDb = parseFloat(outsidePeakMatch![1]!);
+
+    // In-window ducked soundbed is attenuated compared to outside-window soundbed (both RMS and Peak)
+    expect(insideRmsDb).toBeLessThan(outsideRmsDb - 3.0);
+    expect(insidePeakDb).toBeLessThan(outsidePeakDb - 3.0);
+  }, 120_000);
+
+  it("assembles six MP4 stems with VO-only (padded to full 30s duration)", async () => {
+    const syntheticVo = await generateSyntheticAudio({
+      ffmpegPath: "ffmpeg",
+      outputPath: path.join(fixtureDir, "audio", "vo-only.mp3"),
+      durationSec: 15,
+      frequency: 440,
+      channels: 1,
+      format: "mp3"
+    });
+
+    await objectStorage.putObject({
+      bucket: BUCKETS.REVIEW,
+      key: "audio/vo-only.mp3",
+      body: syntheticVo.bytes,
+      contentType: "audio/mpeg",
+      checksumSha256: syntheticVo.sha256
+    });
+
+    const videoStems: VideoStemRef[] = syntheticMp4Stems.map((stem) => ({
+      sceneId: `scene-mp4-0${stem.index + 1}`,
+      generationManifestId: `gen-man-mp4-0${stem.index + 1}`,
+      order: stem.index,
+      media: {
+        bucket: BUCKETS.REVIEW,
+        key: `scenes/scene-mp4-0${stem.index + 1}/candidate.mp4`,
+        sha256: stem.sha256,
+        contentType: "video/mp4"
+      },
+      expectedDurationMs: stem.durationMs
+    }));
+
+    const spec: AssemblySpec = {
+      campaignId: "campaign-vo-only-30s",
+      assemblyProfile: {
+        key: "VERTICAL_REEL_1080X1920_V1",
+        version: 1
+      },
+      expectedTotalDurationMs: 30000,
+      voiceover: {
+        assetId: "vo-only-001",
+        kind: "voiceover",
+        media: {
+          bucket: BUCKETS.REVIEW,
+          key: "audio/vo-only.mp3",
+          sha256: syntheticVo.sha256,
+          contentType: "audio/mpeg"
+        },
+        source: { kind: "local" },
+        startMs: 2000,
+        expectedDurationMs: 15000
+      },
+      subtitleCues: [],
+      videoStems
+    };
+
+    const result = await adapter.assemble(spec);
+    expect(result.executedInputs.voiceover).toBeDefined();
+    expect(result.executedInputs.voiceover?.effectiveStartMs).toBe(2000);
+    // padTrailingMs is algebraically derived from ffprobe's real measurement
+    // of the staged voiceover input (totalTimelineMs - startMs -
+    // actualDurationMs), which carries sub-frame container-timebase
+    // quantization that varies slightly across real ffmpeg builds/versions —
+    // same reasoning as the other real-encoder duration checks in this file.
+    expect(Math.abs(result.executedInputs.voiceover!.padTrailingMs - 13000)).toBeLessThanOrEqual(
+      ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS
+    );
+    expect(result.executedInputs.voiceover?.effectiveDurationMs).toBe(28000);
+    expect(result.executedInputs.soundbed).toBeUndefined();
+
+    // Verify audio stream duration matches video duration within tolerance
+    expect(result.streams.audio).toBeDefined();
+    expect(result.streams.audio?.channels).toBe(2);
+    expect(result.streams.audio?.sampleRateHz).toBe(48000);
+    expect(Math.abs(result.streams.audio!.durationMs - 30000)).toBeLessThanOrEqual(
+      ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS
+    );
+  }, 120_000);
+
+  it("assembles reel with soundbed startMs > 0 properly offset and looped", async () => {
+    const syntheticSb = await generateSyntheticAudio({
+      ffmpegPath: "ffmpeg",
+      outputPath: path.join(fixtureDir, "audio", "sb-offset.mp3"),
+      durationSec: 10,
+      frequency: 220,
+      channels: 2,
+      format: "mp3"
+    });
+
+    await objectStorage.putObject({
+      bucket: BUCKETS.REVIEW,
+      key: "audio/sb-offset.mp3",
+      body: syntheticSb.bytes,
+      contentType: "audio/mpeg",
+      checksumSha256: syntheticSb.sha256
+    });
+
+    const videoStems: VideoStemRef[] = syntheticMp4Stems.slice(0, 2).map((stem, idx) => ({
+      sceneId: `scene-mp4-0${idx + 1}`,
+      generationManifestId: `gen-man-mp4-0${idx + 1}`,
+      order: idx,
+      media: {
+        bucket: BUCKETS.REVIEW,
+        key: `scenes/scene-mp4-0${idx + 1}/candidate.mp4`,
+        sha256: stem.sha256,
+        contentType: "video/mp4"
+      },
+      expectedDurationMs: 5000
+    }));
+
+    const spec: AssemblySpec = {
+      campaignId: "campaign-sb-offset-test",
+      assemblyProfile: {
+        key: "VERTICAL_REEL_1080X1920_V1",
+        version: 1
+      },
+      expectedTotalDurationMs: 10000,
+      soundbed: {
+        assetId: "sb-offset-001",
+        kind: "soundbed",
+        media: {
+          bucket: BUCKETS.REVIEW,
+          key: "audio/sb-offset.mp3",
+          sha256: syntheticSb.sha256,
+          contentType: "audio/mpeg"
+        },
+        source: { kind: "local" },
+        startMs: 2000,
+        expectedDurationMs: 8000
+      },
+      subtitleCues: [],
+      videoStems
+    };
+
+    const result = await adapter.assemble(spec);
+    expect(result.executedInputs.soundbed).toBeDefined();
+    expect(result.executedInputs.soundbed?.effectiveStartMs).toBe(2000);
+    expect(result.executedInputs.soundbed?.effectiveDurationMs).toBe(8000);
+    expect(result.streams.audio).toBeDefined();
+    expect(Math.abs(result.streams.audio!.durationMs - 10000)).toBeLessThanOrEqual(
+      ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS
+    );
+  }, 60_000);
+
+  it("negative test: corrupted voiceover SHA-256 throws AUDIO_HASH_MISMATCH and publishes no delivery media", async () => {
+    const syntheticVo = await generateSyntheticAudio({
+      ffmpegPath: "ffmpeg",
+      outputPath: path.join(fixtureDir, "audio", "vo-corrupt.mp3"),
+      durationSec: 5,
+      frequency: 440,
+      channels: 1,
+      format: "mp3"
+    });
+
+    await objectStorage.putObject({
+      bucket: BUCKETS.REVIEW,
+      key: "audio/vo-corrupt.mp3",
+      body: syntheticVo.bytes,
+      contentType: "audio/mpeg",
+      checksumSha256: syntheticVo.sha256
+    });
+
+    const videoStems: VideoStemRef[] = syntheticMp4Stems.slice(0, 1).map((stem) => ({
+      sceneId: `scene-mp4-01`,
+      generationManifestId: `gen-man-mp4-01`,
+      order: 0,
+      media: {
+        bucket: BUCKETS.REVIEW,
+        key: `scenes/scene-mp4-01/candidate.mp4`,
+        sha256: stem.sha256,
+        contentType: "video/mp4"
+      },
+      expectedDurationMs: 5000
+    }));
+
+    const spec: AssemblySpec = {
+      campaignId: "campaign-vo-hash-fail",
+      assemblyProfile: {
+        key: "VERTICAL_REEL_1080X1920_V1",
+        version: 1
+      },
+      expectedTotalDurationMs: 5000,
+      voiceover: {
+        assetId: "vo-corrupted-hash",
+        kind: "voiceover",
+        media: {
+          bucket: BUCKETS.REVIEW,
+          key: "audio/vo-corrupt.mp3",
+          sha256: "9".repeat(64), // tampered hash
+          contentType: "audio/mpeg"
+        },
+        source: { kind: "local" },
+        startMs: 0,
+        expectedDurationMs: 5000
+      },
+      subtitleCues: [],
+      videoStems
+    };
+
+    await expect(adapter.assemble(spec)).rejects.toThrowError(
+      expect.objectContaining({
+        name: "FfmpegAssemblyError",
+        code: "AUDIO_HASH_MISMATCH"
       })
     );
   });

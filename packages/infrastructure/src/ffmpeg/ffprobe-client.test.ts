@@ -148,4 +148,65 @@ describe("ffprobe-client", () => {
       })
     );
   });
+
+  describe("probeAudioMedia", () => {
+    it("probes audio stream correctly", async () => {
+      const jsonOutput = JSON.stringify({
+        streams: [
+          {
+            codec_type: "audio",
+            codec_name: "mp3",
+            sample_rate: "44100",
+            channels: 1,
+            bit_rate: "128000",
+            duration: "8.500000"
+          }
+        ],
+        format: {
+          duration: "8.500000"
+        }
+      });
+
+      const runner = fakeRunnerWithJson(jsonOutput);
+      const { audioStream, formatDurationMs } = await (
+        await import("./ffprobe-client.js")
+      ).probeAudioMedia({
+        runner,
+        ffprobePath: "ffprobe",
+        filePath: "/fake/audio.mp3"
+      });
+
+      expect(audioStream.codecName).toBe("mp3");
+      expect(audioStream.sampleRateHz).toBe(44100);
+      expect(audioStream.channels).toBe(1);
+      expect(audioStream.durationMs).toBe(8500);
+      expect(audioStream.bitrateKbps).toBe(128);
+      expect(formatDurationMs).toBe(8500);
+    });
+
+    it("throws AUDIO_NO_AUDIO_STREAM when no audio stream is present", async () => {
+      const jsonOutput = JSON.stringify({
+        streams: [
+          {
+            codec_type: "video",
+            codec_name: "h264"
+          }
+        ]
+      });
+
+      const runner = fakeRunnerWithJson(jsonOutput);
+      await expect(
+        (await import("./ffprobe-client.js")).probeAudioMedia({
+          runner,
+          ffprobePath: "ffprobe",
+          filePath: "/fake/video_only.mp4"
+        })
+      ).rejects.toThrowError(
+        expect.objectContaining({
+          name: "FfmpegAssemblyError",
+          code: "AUDIO_NO_AUDIO_STREAM"
+        })
+      );
+    });
+  });
 });

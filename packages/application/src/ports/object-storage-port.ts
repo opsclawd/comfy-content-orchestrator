@@ -26,4 +26,12 @@ export interface GetObjectOptions {
 export interface ObjectStoragePort {
   putObject(input: PutObjectInput): Promise<ObjectLocator>;
   getObject(locator: ObjectLocator, options?: GetObjectOptions): Promise<StoredObject | undefined>;
+  /**
+   * Optional: best-effort deletion, used by callers that need to roll back a
+   * partially-completed multi-object publish (e.g. deleting an already-
+   * uploaded media file when a subsequent manifest write fails). Adapters
+   * that don't implement this simply can't be rolled back — callers must
+   * treat it as unavailable, not assume it exists.
+   */
+  deleteObject?(locator: ObjectLocator): Promise<void>;
 }

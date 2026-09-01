@@ -4,6 +4,7 @@
       "pnpm check:hooks",
       "pnpm format",
       "pnpm test:db",
+      "pnpm test:assembly",
       "pnpm install --frozen-lockfile",
       "pnpm check:control-plane"
     ],

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AssemblyLayoutMode } from "@cco/contracts";
+import { escapeFfmpegFilterPath } from "./subtitle-renderer.js";
 
 export const STEM_DURATION_TOLERANCE_MS = 250;
 export const DEFAULT_CRF = 23;
@@ -70,6 +71,18 @@ export interface BuildFfmpegArgsOptions {
   readonly outputPath: string;
   readonly crf?: number | undefined;
   readonly preset?: string | undefined;
+  readonly stagedVoiceoverPath?: string | undefined;
+  readonly stagedSoundbedPath?: string | undefined;
+  readonly audioFilterGraph?: string | undefined;
+  readonly subtitleAssPath?: string | undefined;
+  readonly audioEncoding?:
+    | {
+        readonly codec?: string | undefined;
+        readonly bitrateKbps?: number | undefined;
+        readonly sampleRateHz?: number | undefined;
+        readonly channels?: number | undefined;
+      }
+    | undefined;
 }
 
 export function buildFfmpegArgs(options: BuildFfmpegArgsOptions): string[] {
@@ -78,20 +91,50 @@ export function buildFfmpegArgs(options: BuildFfmpegArgsOptions): string[] {
     layoutMode,
     outputPath,
     crf = DEFAULT_CRF,
-    preset = DEFAULT_PRESET
+    preset = DEFAULT_PRESET,
+    stagedVoiceoverPath,
+    stagedSoundbedPath,
+    audioFilterGraph,
+    subtitleAssPath,
+    audioEncoding
   } = options;
 
   const args: string[] = ["-y"];
+
+  // Add video inputs
   for (const inputPath of stagedInputPaths) {
     args.push("-i", inputPath);
   }
 
-  const filterGraph = selectFilterGraph(layoutMode, stagedInputPaths.length);
+  // Add optional audio inputs
+  if (stagedVoiceoverPath) {
+    args.push("-i", stagedVoiceoverPath);
+  }
+  if (stagedSoundbedPath) {
+    args.push("-i", stagedSoundbedPath);
+  }
+
+  // Build filter_complex
+  const videoGraph = selectFilterGraph(layoutMode, stagedInputPaths.length);
+  let fullVideoGraph = videoGraph;
+  let videoOutputLabel = "[outv]";
+
+  if (subtitleAssPath) {
+    const escapedAssPath = escapeFfmpegFilterPath(subtitleAssPath);
+    fullVideoGraph = `${videoGraph};[outv]ass=filename='${escapedAssPath}'[outv_sub]`;
+    videoOutputLabel = "[outv_sub]";
+  }
+
+  const filterComplexParts = [fullVideoGraph];
+  if (audioFilterGraph) {
+    filterComplexParts.push(audioFilterGraph);
+  }
+
   args.push(
     "-filter_complex",
-    filterGraph,
+    filterComplexParts.join(";"),
     "-map",
-    "[outv]",
+    videoOutputLabel,
     "-c:v",
     "libx264",
     "-preset",
@@ -104,6 +147,26 @@ export function buildFfmpegArgs(options: BuildFfmpegArgsOptions): string[] {
 
   if (crf !== undefined) {
     args.push("-crf", String(crf));
+  }
+
+  if (audioFilterGraph) {
+    const codec = audioEncoding?.codec ?? "aac";
+    const bitrateKbps = audioEncoding?.bitrateKbps ?? 192;
+    const sampleRateHz = audioEncoding?.sampleRateHz ?? 48000;
+    const channels = audioEncoding?.channels ?? 2;
+
+    args.push(
+      "-map",
+      "[outa]",
+      "-c:a",
+      codec,
+      "-b:a",
+      `${bitrateKbps}k`,
+      "-ar",
+      String(sampleRateHz),
+      "-ac",
+      String(channels)
+    );
   }
 
   args.push(
@@ -119,10 +182,17 @@ export function buildFfmpegArgs(options: BuildFfmpegArgsOptions): string[] {
   return args;
 }
 
+export interface ComputeCommandFingerprintOptions {
+  readonly stagedVoiceoverPath?: string | undefined;
+  readonly stagedSoundbedPath?: string | undefined;
+  readonly subtitleAssPath?: string | undefined;
+}
+
 export function computeCommandFingerprint(
   args: readonly string[],
   stagedInputPaths: readonly string[],
-  outputPath: string
+  outputPath: string,
+  extraOptions: ComputeCommandFingerprintOptions = {}
 ): string {
   const pathToPlaceholder = new Map<string, string>();
   for (let i = 0; i < stagedInputPaths.length; i++) {
@@ -131,8 +201,28 @@ export function computeCommandFingerprint(
       pathToPlaceholder.set(inputPath, `STEM_${i}`);
     }
   }
+  if (extraOptions.stagedVoiceoverPath) {
+    pathToPlaceholder.set(extraOptions.stagedVoiceoverPath, "VOICEOVER");
+  }
+  if (extraOptions.stagedSoundbedPath) {
+    pathToPlaceholder.set(extraOptions.stagedSoundbedPath, "SOUNDBED");
+  }
+  if (extraOptions.subtitleAssPath) {
+    pathToPlaceholder.set(extraOptions.subtitleAssPath, "SUBTITLES_ASS");
+    // Also add escaped version of subtitle path
+    pathToPlaceholder.set(escapeFfmpegFilterPath(extraOptions.subtitleAssPath), "SUBTITLES_ASS");
+  }
   pathToPlaceholder.set(outputPath, "OUTPUT");
 
-  const normalizedArgs = args.map((arg) => pathToPlaceholder.get(arg) ?? arg);
+  const normalizedArgs = args.map((arg) => {
+    let normalized = arg;
+    for (const [rawPath, placeholder] of pathToPlaceholder.entries()) {
+      if (normalized.includes(rawPath)) {
+        normalized = normalized.split(rawPath).join(placeholder);
+      }
+    }
+    return normalized;
+  });
+
   return createHash("sha256").update(JSON.stringify(normalizedArgs)).digest("hex");
 }

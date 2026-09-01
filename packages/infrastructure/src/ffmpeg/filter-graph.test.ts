@@ -105,6 +105,33 @@ describe("filter-graph & command builder", () => {
       expect(args).toContain("rotate=0");
       expect(args[args.length - 1]).toBe("/tmp/out.mp4");
     });
+    it("builds argument array with audio and subtitle options", () => {
+      const args = buildFfmpegArgs({
+        stagedInputPaths: ["/tmp/s0.mp4", "/tmp/s1.mp4"],
+        layoutMode: "fit_blurred_fill",
+        outputPath: "/tmp/out.mp4",
+        stagedVoiceoverPath: "/tmp/vo.wav",
+        stagedSoundbedPath: "/tmp/sb.wav",
+        subtitleAssPath: "/tmp/subs.ass",
+        audioFilterGraph: "[2:a]aformat=stereo[outa]",
+        audioEncoding: {
+          codec: "aac",
+          bitrateKbps: 192,
+          sampleRateHz: 48000,
+          channels: 2
+        }
+      });
+
+      expect(args).toContain("-i");
+      expect(args).toContain("/tmp/vo.wav");
+      expect(args).toContain("/tmp/sb.wav");
+      expect(args).toContain("-map");
+      expect(args).toContain("[outv_sub]");
+      expect(args).toContain("[outa]");
+      expect(args).toContain("-c:a");
+      expect(args).toContain("aac");
+      expect(args).toContain("192k");
+    });
   });
 
   describe("computeCommandFingerprint", () => {
@@ -134,6 +161,46 @@ describe("filter-graph & command builder", () => {
       expect(fp1).toMatch(/^[0-9a-f]{64}$/);
       expect(fp2).toMatch(/^[0-9a-f]{64}$/);
       // Different temporary paths must produce identical fingerprints because paths are normalized
+      expect(fp1).toBe(fp2);
+    });
+
+    it("normalizes audio and subtitle paths in fingerprint", () => {
+      const args1 = buildFfmpegArgs({
+        stagedInputPaths: ["/tmp/dirA/stem-0.mp4"],
+        layoutMode: "fit_blurred_fill",
+        outputPath: "/tmp/dirA/output.mp4",
+        stagedVoiceoverPath: "/tmp/dirA/vo.mp3",
+        subtitleAssPath: "/tmp/dirA/subs.ass",
+        audioFilterGraph: "[1:a]aformat=stereo[outa]"
+      });
+      const fp1 = computeCommandFingerprint(
+        args1,
+        ["/tmp/dirA/stem-0.mp4"],
+        "/tmp/dirA/output.mp4",
+        {
+          stagedVoiceoverPath: "/tmp/dirA/vo.mp3",
+          subtitleAssPath: "/tmp/dirA/subs.ass"
+        }
+      );
+
+      const args2 = buildFfmpegArgs({
+        stagedInputPaths: ["/other/dirB/stem-0.mp4"],
+        layoutMode: "fit_blurred_fill",
+        outputPath: "/other/dirB/output.mp4",
+        stagedVoiceoverPath: "/other/dirB/vo.mp3",
+        subtitleAssPath: "/other/dirB/subs.ass",
+        audioFilterGraph: "[1:a]aformat=stereo[outa]"
+      });
+      const fp2 = computeCommandFingerprint(
+        args2,
+        ["/other/dirB/stem-0.mp4"],
+        "/other/dirB/output.mp4",
+        {
+          stagedVoiceoverPath: "/other/dirB/vo.mp3",
+          subtitleAssPath: "/other/dirB/subs.ass"
+        }
+      );
+
       expect(fp1).toBe(fp2);
     });
 

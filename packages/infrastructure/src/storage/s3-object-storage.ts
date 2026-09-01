@@ -1,4 +1,5 @@
 import {
+  DeleteObjectCommand,
   GetObjectCommand,
   PutObjectCommand,
   S3Client,
@@ -238,5 +239,14 @@ export class S3ObjectStorage implements ObjectStoragePort {
       ...(response.ContentType !== undefined ? { contentType: response.ContentType } : {}),
       ...(storedChecksum !== undefined ? { checksumSha256: storedChecksum } : {})
     };
+  }
+
+  async deleteObject(locator: ObjectLocator): Promise<void> {
+    await this.client.send(
+      new DeleteObjectCommand({
+        Bucket: locator.bucket,
+        Key: locator.key
+      })
+    );
   }
 }
