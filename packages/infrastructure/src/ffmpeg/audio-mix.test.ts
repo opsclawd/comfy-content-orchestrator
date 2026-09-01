@@ -94,6 +94,32 @@ describe("audio-mix", () => {
       expect(math.effectiveDurationMs).toBe(28000);
       expect(math.padTrailingMs).toBe(0);
     });
+
+    it("reports zero effectiveDurationMs when startMs is at or past the target timeline (no audible window)", () => {
+      // buildVoiceoverFilterChain delays the signal by startMs then trims to
+      // targetDurationMs — when startMs >= targetDurationMs the real
+      // rendered output is 100% silence, so the manifest must not claim any
+      // voiceover duration.
+      const math = computeExecutedVoiceoverMath({
+        actualDurationMs: 15000,
+        targetDurationMs: 30000,
+        startMs: 30000,
+        gainDb: 0
+      });
+
+      expect(math.trimEndMs).toBe(0);
+      expect(math.effectiveDurationMs).toBe(0);
+      expect(math.padTrailingMs).toBe(0);
+
+      // Also holds when startMs exceeds targetDurationMs entirely.
+      const mathPastEnd = computeExecutedVoiceoverMath({
+        actualDurationMs: 15000,
+        targetDurationMs: 30000,
+        startMs: 40000,
+        gainDb: 0
+      });
+      expect(mathPastEnd.effectiveDurationMs).toBe(0);
+    });
   });
 
   describe("computeExecutedSoundbedMath", () => {

@@ -69,10 +69,16 @@ export const REQUIRED_AUDIO_FILTERS = [
   "atrim",
   "amix",
   "alimiter",
-  "loudnorm",
   "adelay",
   "apad"
 ] as const;
+
+// loudnorm is only ever invoked by analyzeLoudness() for voiceover staging
+// (see the `spec.voiceover` branch below) — a soundbed-only assembly never
+// exercises it, so it must not be part of the unconditional
+// REQUIRED_AUDIO_FILTERS check (that would fail soundbed-only assemblies on
+// an otherwise-capable ffmpeg build that simply lacks loudnorm).
+export const REQUIRED_VOICEOVER_FILTERS = ["loudnorm"] as const;
 
 export interface FfmpegMediaAssemblerAdapterOptions {
   readonly ffmpegPath: string;
@@ -119,6 +125,7 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
   private encoderCheckPromise?: Promise<void> | undefined;
   private filterCheckPromise?: Promise<void> | undefined;
   private audioCapabilityCheckPromise?: Promise<void> | undefined;
+  private loudnormCapabilityCheckPromise?: Promise<void> | undefined;
   private subtitleCapabilityCheckPromise?: Promise<void> | undefined;
 
   constructor(options: FfmpegMediaAssemblerAdapterOptions) {
@@ -363,6 +370,52 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
       })();
     }
     return this.audioCapabilityCheckPromise;
+  }
+
+  // Only called when spec.voiceover is present — see REQUIRED_VOICEOVER_FILTERS.
+  private async assertLoudnormCapabilityAvailable(): Promise<void> {
+    if (!this.loudnormCapabilityCheckPromise) {
+      this.loudnormCapabilityCheckPromise = (async () => {
+        let filtersResult;
+        try {
+          filtersResult = await this.spawnFn(this.ffmpegPath, ["-hide_banner", "-filters"], {
+            timeoutMs: this.versionTimeoutMs
+          });
+        } catch (err) {
+          if (err instanceof FfmpegAssemblyError) throw err;
+          throw new FfmpegAssemblyError(
+            "FFMPEG_EXECUTION_FAILED",
+            `ffmpeg -filters failed: ${(err as Error).message}`,
+            { command: this.ffmpegPath, args: ["-hide_banner", "-filters"] }
+          );
+        }
+
+        if (filtersResult.exitCode !== 0) {
+          throw new FfmpegAssemblyError(
+            "FFMPEG_EXECUTION_FAILED",
+            `ffmpeg -filters failed with code ${filtersResult.exitCode}`,
+            {
+              command: this.ffmpegPath,
+              args: ["-hide_banner", "-filters"],
+              exitCode: filtersResult.exitCode,
+              stderr: filtersResult.stderr
+            }
+          );
+        }
+
+        const missing = REQUIRED_VOICEOVER_FILTERS.filter(
+          (name) => !new RegExp(`\\b${name}\\b`).test(filtersResult.stdout)
+        );
+        if (missing.length > 0) {
+          throw new FfmpegAssemblyError(
+            "AUDIO_FILTER_UNAVAILABLE",
+            `Required audio filter(s) not available in ffmpeg installation: ${missing.join(", ")}`,
+            { command: this.ffmpegPath, args: ["-hide_banner", "-filters"] }
+          );
+        }
+      })();
+    }
+    return this.loudnormCapabilityCheckPromise;
   }
 
   private async assertSubtitleCapabilityAvailable(): Promise<void> {
@@ -657,6 +710,9 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
     await this.assertFiltersAvailable();
     if (spec.voiceover !== undefined || spec.soundbed !== undefined) {
       await this.assertAudioCapabilityAvailable();
+    }
+    if (spec.voiceover !== undefined) {
+      await this.assertLoudnormCapabilityAvailable();
     }
     if (spec.subtitleCues && spec.subtitleCues.length > 0) {
       await this.assertSubtitleCapabilityAvailable();

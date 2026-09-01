@@ -724,6 +724,78 @@ describe("FfmpegMediaAssemblerAdapter (unit)", () => {
         })
       );
     });
+
+    it("does not require loudnorm for a soundbed-only assembly (loudnorm is only used for voiceover)", async () => {
+      // loudnorm is deliberately omitted from the mocked ffmpeg -filters
+      // output. A soundbed-only spec must still succeed: analyzeLoudness
+      // (the only caller of loudnorm) is never invoked without a voiceover.
+      const { runner } = createMockRunner({
+        filters:
+          "scale crop gblur overlay fps format concat aformat aresample volume aloop atrim amix alimiter adelay apad"
+      });
+      const adapter = new FfmpegMediaAssemblerAdapter({
+        ffmpegPath: "ffmpeg",
+        ffprobePath: "ffprobe",
+        workspaceRoot: tempDir,
+        objectStorage,
+        spawnFn: runner
+      });
+
+      const stemMedia = createStemMedia("stem-video-payload");
+      await objectStorage.putObject({
+        bucket: BUCKETS.TEMP,
+        key: "scenes/s1/stem0.mp4",
+        body: stemMedia.bytes,
+        contentType: "video/mp4",
+        checksumSha256: stemMedia.sha256
+      });
+
+      const sbMedia = createStemMedia("soundbed-audio-payload");
+      await objectStorage.putObject({
+        bucket: BUCKETS.TEMP,
+        key: "audio/soundbed-no-loudnorm.mp3",
+        body: sbMedia.bytes,
+        contentType: "audio/mpeg",
+        checksumSha256: sbMedia.sha256
+      });
+
+      const spec: AssemblySpec = {
+        campaignId: "camp-sb-no-loudnorm",
+        assemblyProfile: { key: "VERTICAL_REEL_1080X1920_V1", version: 1 },
+        expectedTotalDurationMs: 5000,
+        soundbed: {
+          assetId: "sb-no-loudnorm-1",
+          kind: "soundbed",
+          media: {
+            bucket: BUCKETS.TEMP,
+            key: "audio/soundbed-no-loudnorm.mp3",
+            sha256: sbMedia.sha256,
+            contentType: "audio/mpeg"
+          },
+          source: { kind: "local" },
+          startMs: 0,
+          expectedDurationMs: 5000
+        },
+        subtitleCues: [],
+        videoStems: [
+          {
+            sceneId: "scene-01",
+            generationManifestId: "gen-01",
+            order: 0,
+            media: {
+              bucket: BUCKETS.TEMP,
+              key: "scenes/s1/stem0.mp4",
+              sha256: stemMedia.sha256,
+              contentType: "video/mp4"
+            },
+            expectedDurationMs: 5000
+          }
+        ]
+      };
+
+      const result = await adapter.assemble(spec);
+      expect(result.executedInputs.soundbed).toBeDefined();
+    });
   });
 
   describe("Finding 3: Resource boundaries and safeguards", () => {

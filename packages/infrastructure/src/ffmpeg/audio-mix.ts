@@ -139,12 +139,17 @@ export function computeExecutedVoiceoverMath(params: {
   readonly gainDb: number;
 } {
   const { actualDurationMs, targetDurationMs, startMs, gainDb } = params;
+  // availableTimelineMs is the window this voiceover can actually occupy —
+  // buildVoiceoverFilterChain delays the signal by startMs then trims the
+  // whole thing to targetDurationMs, so when startMs is at or past
+  // targetDurationMs (availableTimelineMs === 0) the real rendered audio is
+  // 100% silence. trimEndMs must not fall back to actualDurationMs in that
+  // case: doing so previously reported a full-length effectiveDurationMs in
+  // the manifest for a voiceover that produces zero seconds of audible
+  // output.
   const availableTimelineMs = Math.max(0, targetDurationMs - startMs);
   const trimStartMs = 0;
-  const trimEndMs = Math.min(
-    actualDurationMs,
-    availableTimelineMs > 0 ? availableTimelineMs : actualDurationMs
-  );
+  const trimEndMs = Math.min(actualDurationMs, availableTimelineMs);
   const sliceDurationMs = trimEndMs - trimStartMs;
   const padLeadingMs = 0;
   const padTrailingMs = Math.max(0, availableTimelineMs - sliceDurationMs);
