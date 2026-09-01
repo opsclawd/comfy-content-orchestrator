@@ -554,8 +554,20 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
     // Executed audio algebra verification
     expect(executionResult.executedInputs.voiceover).toBeDefined();
     expect(executionResult.executedInputs.voiceover?.effectiveStartMs).toBe(2000);
-    expect(executionResult.executedInputs.voiceover?.actualDurationMs).toBe(syntheticVo.durationMs);
-    expect(executionResult.executedInputs.voiceover?.padTrailingMs).toBe(13000);
+    // actualDurationMs is ffprobe's real measurement of the staged voiceover
+    // input, and padTrailingMs is algebraically derived from it
+    // (totalTimelineMs - startMs - actualDurationMs) — both inherit
+    // sub-frame container-timebase quantization that varies slightly across
+    // real ffmpeg builds/versions (observed: a consistent ~47ms difference
+    // between ffmpeg 8.0.1 and 6.1.1 for the same synthetic fixture), so
+    // neither can be asserted with exact equality against a real encoder,
+    // same reasoning as the output-duration checks above.
+    expect(
+      Math.abs(executionResult.executedInputs.voiceover!.actualDurationMs - syntheticVo.durationMs)
+    ).toBeLessThanOrEqual(ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS);
+    expect(
+      Math.abs(executionResult.executedInputs.voiceover!.padTrailingMs - 13000)
+    ).toBeLessThanOrEqual(ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS);
     expect(executionResult.executedInputs.voiceover?.effectiveDurationMs).toBe(28000);
     expect(executionResult.executedInputs.voiceover?.gainDb).toBeDefined();
 
@@ -747,7 +759,14 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
     const result = await adapter.assemble(spec);
     expect(result.executedInputs.voiceover).toBeDefined();
     expect(result.executedInputs.voiceover?.effectiveStartMs).toBe(2000);
-    expect(result.executedInputs.voiceover?.padTrailingMs).toBe(13000);
+    // padTrailingMs is algebraically derived from ffprobe's real measurement
+    // of the staged voiceover input (totalTimelineMs - startMs -
+    // actualDurationMs), which carries sub-frame container-timebase
+    // quantization that varies slightly across real ffmpeg builds/versions —
+    // same reasoning as the other real-encoder duration checks in this file.
+    expect(Math.abs(result.executedInputs.voiceover!.padTrailingMs - 13000)).toBeLessThanOrEqual(
+      ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS
+    );
     expect(result.executedInputs.voiceover?.effectiveDurationMs).toBe(28000);
     expect(result.executedInputs.soundbed).toBeUndefined();
 
