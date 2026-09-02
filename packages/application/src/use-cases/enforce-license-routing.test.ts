@@ -137,6 +137,8 @@ describe("EnforceLicenseRouting use case", () => {
       const routingErr = err as LicenseRoutingError;
       expect(routingErr.name).toBe("LicenseRoutingError");
       expect(routingErr.code).toBe("license_routing_denied");
+      expect(routingErr.decisionId).toBeDefined();
+      expect(routingErr.decisionId).toMatch(/^gov-dec-/);
       expect(routingErr.registryRevision).toBe("2026-08-29.1");
       expect(routingErr.evaluatedComponents[0]?.status).toBe("restricted");
       expect(routingErr.deniedReasons[0]).toContain('has policy status "restricted"');

@@ -9,6 +9,7 @@ import { reviewReadRoutes } from "./routes/review-read-routes.js";
 import { reviewCommandRoutes } from "./routes/review-command-routes.js";
 import { metricsRoutes } from "./routes/metrics-routes.js";
 import { jobRoutes } from "./routes/job-routes.js";
+import { deliveryAssemblyRoutes } from "./routes/delivery-assembly-routes.js";
 import { ControlApiConfigError } from "../runtime-config.js";
 import type { ControlApiAppOptions } from "./types.js";
 import {
@@ -104,6 +105,17 @@ export function createControlApiApp(
     app.register(jobRoutes, {
       container,
       dispatchConfig: options.jobDispatch
+    });
+  }
+
+  if (container.dependencies.deliveryAssemblyJobQueue !== undefined) {
+    const dispatchConfig = options?.jobDispatch ?? {
+      leaseDurationMs: 300_000,
+      heartbeatIntervalMs: 30_000
+    };
+    app.register(deliveryAssemblyRoutes, {
+      container,
+      dispatchConfig
     });
   }
 

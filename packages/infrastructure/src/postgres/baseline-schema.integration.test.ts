@@ -55,7 +55,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
   it("migrates an empty PostgreSQL 18.6 database through the baseline", async () => {
     const applied = await runMigrations(client, { migrationsDirectory });
 
-    expect(applied).toHaveLength(7);
+    expect(applied).toHaveLength(8);
     expect(applied[0]?.version).toBe("001");
     expect(applied[1]?.version).toBe("002");
     expect(applied[2]?.version).toBe("003");
@@ -63,6 +63,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
     expect(applied[4]?.version).toBe("005");
     expect(applied[5]?.version).toBe("006");
     expect(applied[6]?.version).toBe("007");
+    expect(applied[7]?.version).toBe("008");
 
     const schemaRes = await client.query(
       "SELECT version FROM schema_migrations ORDER BY version ASC"
@@ -74,7 +75,8 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       { version: "004" },
       { version: "005" },
       { version: "006" },
-      { version: "007" }
+      { version: "007" },
+      { version: "008" }
     ]);
 
     const tablesRes = await client.query<{ table_name: string }>(
@@ -90,6 +92,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
     expect(tableNames).toEqual([
       "campaigns",
       "clients",
+      "delivery_assembly_jobs",
       "generation_manifests",
       "license_registry",
       "reference_assets",
@@ -615,6 +618,19 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
     expect(idxReview).toBeDefined();
     expect(idxReview?.tablename).toBe("review_events");
     expect(idxReview?.indexdef).toContain("(scene_id, created_at DESC)");
+
+    // 8. idx_delivery_assembly_jobs_queue
+    const idxDeliveryQueue = indexMap.get("idx_delivery_assembly_jobs_queue");
+    expect(idxDeliveryQueue).toBeDefined();
+    expect(idxDeliveryQueue?.tablename).toBe("delivery_assembly_jobs");
+    expect(idxDeliveryQueue?.indexdef).toContain("(status, lease_expires_at, created_at)");
+    expect(idxDeliveryQueue?.indexdef).toMatch(/WHERE.*queued.*leased.*rendering/);
+
+    // 9. idx_delivery_assembly_jobs_campaign
+    const idxDeliveryCampaign = indexMap.get("idx_delivery_assembly_jobs_campaign");
+    expect(idxDeliveryCampaign).toBeDefined();
+    expect(idxDeliveryCampaign?.tablename).toBe("delivery_assembly_jobs");
+    expect(idxDeliveryCampaign?.indexdef).toContain("(campaign_id, created_at DESC)");
   });
 
   it("persists review events with concurrency revisions and request hash", async () => {

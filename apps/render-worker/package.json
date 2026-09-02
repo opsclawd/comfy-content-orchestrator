@@ -20,7 +20,9 @@
     "certify": "tsx src/cli/certify.ts",
     "certify:flux": "tsx src/cli/certify.ts --profile flux-schnell-draft",
     "render": "tsx src/cli/render.ts",
-    "worker": "tsx src/cli/run-worker.ts"
+    "worker": "tsx src/cli/run-worker.ts",
+    "assembler": "tsx src/cli/run-delivery-assembler.ts",
+    "start:assembler": "node dist/cli/run-delivery-assembler.js"
   },
   "dependencies": {
     "@cco/application": "workspace:*",

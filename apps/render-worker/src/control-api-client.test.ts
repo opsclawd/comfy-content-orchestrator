@@ -4,6 +4,7 @@ import type { JobId, LeaseToken, RenderJob, SceneId } from "@cco/domain";
 import {
   ControlApiClientError,
   createControlApiClient,
+  createDeliveryAssemblyControlApiClient,
   HttpControlApiClient
 } from "./control-api-client.js";
 
@@ -891,5 +892,115 @@ describe("ControlApiClient", () => {
       );
       expect(jsonSpy).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("HttpDeliveryAssemblyControlApiClient request timeout", () => {
+  // A hung Control API request never rejects or resolves on its own — no
+  // network error, no HTTP response. Without a bounded timeout, an awaited
+  // call would block DeliveryAssemblyWorker's retry loops (and shutdown
+  // drain) forever. This mocks that exact shape: the fetch promise only
+  // settles when the AbortSignal passed to it fires.
+  function makeHangingFetch() {
+    return vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          const err = new Error("This operation was aborted");
+          err.name = "AbortError";
+          reject(err);
+        });
+      });
+    });
+  }
+
+  it("aborts a hung claim() request after timeoutMs and surfaces a typed error", async () => {
+    const hangingFetch = makeHangingFetch();
+    const client = createDeliveryAssemblyControlApiClient({
+      baseUrl: "http://localhost:3000",
+      fetch: hangingFetch as unknown as typeof fetch,
+      timeoutMs: 20
+    });
+
+    await expect(client.claim("worker-1")).rejects.toThrow(ControlApiClientError);
+    await expect(client.claim("worker-1")).rejects.toThrow(/timed out after 20ms/);
+  });
+
+  it("aborts a hung heartbeat() request after timeoutMs", async () => {
+    const hangingFetch = makeHangingFetch();
+    const client = createDeliveryAssemblyControlApiClient({
+      baseUrl: "http://localhost:3000",
+      fetch: hangingFetch as unknown as typeof fetch,
+      timeoutMs: 20
+    });
+
+    await expect(client.heartbeat(sampleJobId, sampleLeaseToken)).rejects.toThrow(
+      /timed out after 20ms/
+    );
+  });
+
+  it("aborts a hung getJob() request after timeoutMs", async () => {
+    const hangingFetch = makeHangingFetch();
+    const client = createDeliveryAssemblyControlApiClient({
+      baseUrl: "http://localhost:3000",
+      fetch: hangingFetch as unknown as typeof fetch,
+      timeoutMs: 20
+    });
+
+    await expect(client.getJob(sampleJobId)).rejects.toThrow(/timed out after 20ms/);
+  });
+
+  it("does not time out a request that resolves before timeoutMs", async () => {
+    const fastFetch = vi.fn().mockResolvedValue({ ok: true, status: 204 });
+    const client = createDeliveryAssemblyControlApiClient({
+      baseUrl: "http://localhost:3000",
+      fetch: fastFetch as unknown as typeof fetch,
+      timeoutMs: 5000
+    });
+
+    await expect(client.claim("worker-1")).resolves.toBeUndefined();
+  });
+
+  it("defaults to DEFAULT_CONTROL_API_TIMEOUT_MS when timeoutMs is not provided", async () => {
+    const fastFetch = vi.fn().mockResolvedValue({ ok: true, status: 204 });
+    const client = createDeliveryAssemblyControlApiClient({
+      baseUrl: "http://localhost:3000",
+      fetch: fastFetch as unknown as typeof fetch
+    });
+
+    await expect(client.claim("worker-1")).resolves.toBeUndefined();
+    const passedInit = fastFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(passedInit?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("aborts a request whose response body never completes, even though fetch() itself resolved", async () => {
+    // A server can send headers and then never finish the body — fetch()
+    // resolves, but res.json() hangs forever. The deadline must stay armed
+    // through body consumption, not just connection establishment: this
+    // mock's json() only settles when the same AbortSignal fires.
+    const hangingBodyFetch = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+      const signal = init?.signal;
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          new Promise((_resolve, reject) => {
+            signal?.addEventListener("abort", () => {
+              const err = new Error("The operation was aborted");
+              err.name = "AbortError";
+              reject(err);
+            });
+          })
+      });
+    });
+
+    const client = createDeliveryAssemblyControlApiClient({
+      baseUrl: "http://localhost:3000",
+      fetch: hangingBodyFetch as unknown as typeof fetch,
+      timeoutMs: 20
+    });
+
+    await expect(client.heartbeat(sampleJobId, sampleLeaseToken)).rejects.toThrow(
+      /timed out after 20ms/
+    );
   });
 });

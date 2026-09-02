@@ -75,6 +75,7 @@ export class EnforceLicenseRouting {
     if (!evaluation.permitted) {
       const reasons = evaluation.deniedReasons ?? ["License routing policy denied execution"];
       throw new LicenseRoutingError(`License routing denied: ${reasons.join("; ")}`, {
+        decisionId,
         registryRevision: snapshot.registryRevision,
         evaluatedComponents: evaluation.evaluated,
         deniedReasons: reasons,

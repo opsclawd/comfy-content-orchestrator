@@ -239,7 +239,8 @@ describe("PostgreSQL audit immutability and application-role privileges integrat
       "storyboard_scenes",
       "render_jobs",
       "reference_assets",
-      "license_registry"
+      "license_registry",
+      "delivery_assembly_jobs"
     ]) {
       const privsRes = await client.query<{
         has_select: boolean;
@@ -348,7 +349,7 @@ describe("PostgreSQL audit immutability and application-role privileges integrat
     // Verify migration succeeds when no application role is configured
     await client.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public;");
     const noRoleApplied = await runMigrations(client, { migrationsDirectory });
-    expect(noRoleApplied).toHaveLength(7);
+    expect(noRoleApplied).toHaveLength(8);
   });
 
   it("fails closed when application role has effective UPDATE or DELETE privilege on storyboard_candidates", async () => {

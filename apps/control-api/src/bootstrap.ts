@@ -4,6 +4,7 @@ import type { StorageTelemetryPort } from "@cco/application";
 import {
   HostFsStorageTelemetryAdapter,
   InMemoryStorageMetricsRegistry,
+  PostgresDeliveryAssemblyJobQueue,
   PostgresJobQueue,
   PostgresSceneReviewQueries,
   PostgresUnitOfWork,
@@ -210,6 +211,7 @@ export async function runControlApi(
       metricsRegistry: storageMetricsRegistry
     });
     const jobQueue = new PostgresJobQueue(pool, jobAdmissionGate);
+    const deliveryAssemblyJobQueue = new PostgresDeliveryAssemblyJobQueue(pool);
 
     const reviewerIdentityResolver =
       options.reviewerIdentityResolver ??
@@ -239,7 +241,8 @@ export async function runControlApi(
         reviewMediaDelivery,
         storageTelemetry,
         storageMetricsRegistry,
-        jobQueue
+        jobQueue,
+        deliveryAssemblyJobQueue
       },
       {
         host: config.http.host,

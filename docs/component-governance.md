@@ -56,9 +56,9 @@ The PRD requires `godzspeed-delivery` objects to be retained for 90 days *after 
 | **Build Toolchain** | `gcc 15.2.1` |
 | **Enabled Configuration** | `--enable-gpl --enable-version3 --enable-libx264 --enable-libass --enable-libopus --enable-libwebp` |
 | **Review Date** | 2026-08-29 |
-| **Deployment Model** | Host executable invoked strictly via subprocess CLI boundary (`FfmpegMediaAssemblerAdapter`) by render-worker daemon |
+| **Deployment Model** | Host executable invoked strictly via subprocess CLI boundary (`FfmpegMediaAssemblerAdapter`) by delivery-assembly worker daemon (`apps/render-worker/src/cli/run-delivery-assembler.ts`) |
 | **Integration Architecture** | Clean Architecture `@cco/infrastructure` adapter implementing `MediaAssemblerPort` via child process spawn; no C/C++ native addons or static/dynamic linking into Node.js |
-| **License Governance Policy** | **`review_required`** in baseline registry snapshot. FFmpeg packaging includes GPLv3-licensed components (`libx264`, `libass`). While invoked purely as an external standalone process, commercial deployment requires formal legal audit of GPL boundary before transition to `approved`. |
+| **License Governance Policy** | **`review_required`** in baseline registry snapshot. Resolved once at startup by `createDeliveryReelAssembler()` via `mediaAssembler.getRuntimeComponents()`. FFmpeg packaging includes GPLv3-licensed components (`libx264`, `libass`). While invoked purely as an external standalone process, commercial deployment requires formal legal audit of GPL boundary before transition to `approved`. |
 
 ---
 

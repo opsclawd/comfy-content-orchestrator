@@ -41,9 +41,10 @@ describe("PostgreSQL job dispatch schema contract integration", () => {
   });
 
   it("adds the durable job dispatch contract and is a no-op on rerun", async () => {
-    // 1. Run runMigrations(client, { migrationsDirectory }) and assert the last applied version is 007
+    // 1. Run runMigrations(client, { migrationsDirectory }) and assert migrations include 007
     const applied = await runMigrations(client, { migrationsDirectory });
-    expect(applied[applied.length - 1]?.version).toBe("007");
+    expect(applied.some((m) => m.version === "007")).toBe(true);
+    expect(applied[applied.length - 1]?.version).toBe("008");
 
     // 2. Run it again and assert []
     const rerun = await runMigrations(client, { migrationsDirectory });

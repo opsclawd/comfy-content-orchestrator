@@ -3,6 +3,7 @@ import {
   EnforceStorageAdmission,
   ProgressSceneProductionUseCases,
   ReviewSceneUseCases,
+  type DeliveryAssemblyJobQueuePort,
   type JobQueuePort,
   type RenderEnginePort,
   type ReviewMediaDeliveryPort,
@@ -20,6 +21,7 @@ export interface ControlApiDependencies {
   readonly storageTelemetry?: StorageTelemetryPort;
   readonly storageMetricsRegistry?: StorageMetricsRegistryPort;
   readonly jobQueue?: JobQueuePort;
+  readonly deliveryAssemblyJobQueue?: DeliveryAssemblyJobQueuePort;
 }
 
 export interface ControlApiUseCases {
