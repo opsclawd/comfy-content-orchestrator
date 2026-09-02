@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   AssembleGenerationManifest,
   IncompleteManifestError,
+  LicenseRoutingError,
   StorageAdmissionError,
   type HashBytesPort,
   type JobMutationResult,
@@ -3062,5 +3063,39 @@ describe("Behavioral Invariants: Mutation Retry, Polling Backoff, and Graceful S
     await expect(startPromise).resolves.toBeUndefined();
     expect(logger.errorLogs.length).toBeGreaterThan(0);
     expect(logger.errorLogs[0]).toContain("Job processing error");
+  });
+
+  it("fails permanently and never defers when executor throws LicenseRoutingError", async () => {
+    const fakeClient = new FakeControlApiClient();
+    const sampleJob = createSampleJob();
+    const routingError = new LicenseRoutingError("License routing denied for component", {
+      registryRevision: "2026-08-29.1",
+      evaluatedComponents: [
+        {
+          componentId: "flux-1-dev",
+          componentType: "model",
+          versionOrRevision: "1.0.0",
+          status: "restricted",
+          licenseSource: "registry"
+        }
+      ],
+      deniedReasons: ['Component "flux-1-dev" has policy status "restricted"']
+    });
+
+    const mockExecutor: RenderJobExecutor = vi.fn().mockRejectedValue(routingError);
+
+    const { worker } = createTestWorker({
+      controlApiClient: fakeClient,
+      renderJobExecutor: mockExecutor
+    });
+
+    await worker.processJob(sampleJob);
+
+    expect(mockExecutor).toHaveBeenCalledTimes(1);
+    expect(fakeClient.failCalls).toHaveLength(1);
+    expect(fakeClient.failCalls[0]?.jobId).toBe(sampleJob.jobId);
+    expect(fakeClient.failCalls[0]?.leaseToken).toBe(sampleJob.leaseToken);
+    expect(fakeClient.failCalls[0]?.errorTrace).toContain("License routing denied for component");
+    expect(fakeClient.deferCalls).toHaveLength(0);
   });
 });

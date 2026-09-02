@@ -44,3 +44,31 @@ The PRD requires `godzspeed-delivery` objects to be retained for 90 days *after 
 - The campaign completion event tagging workflow is scheduled for a future sprint when campaign completion lifecycle transitions are implemented.
 - Applying a naive 90-day-from-upload S3 lifecycle rule would delete delivery copies for long-running campaigns while they are still awaiting client review or handoff.
 - Therefore, automated S3 expiry is omitted for `godzspeed-delivery` until campaign completion tagging is operational.
+
+---
+
+## FFmpeg Media Assembly Runtime
+
+| Attribute | Specification |
+|---|---|
+| **Component** | FFmpeg CLI / Media Assembly Runtime (`ffmpeg`) |
+| **Runtime Version / Build** | `n8.0.1` ([FFmpeg Git](https://git.ffmpeg.org/ffmpeg.git)) |
+| **Build Toolchain** | `gcc 15.2.1` |
+| **Enabled Configuration** | `--enable-gpl --enable-version3 --enable-libx264 --enable-libass --enable-libopus --enable-libwebp` |
+| **Review Date** | 2026-08-29 |
+| **Deployment Model** | Host executable invoked strictly via subprocess CLI boundary (`FfmpegMediaAssemblerAdapter`) by render-worker daemon |
+| **Integration Architecture** | Clean Architecture `@cco/infrastructure` adapter implementing `MediaAssemblerPort` via child process spawn; no C/C++ native addons or static/dynamic linking into Node.js |
+| **License Governance Policy** | **`review_required`** in baseline registry snapshot. FFmpeg packaging includes GPLv3-licensed components (`libx264`, `libass`). While invoked purely as an external standalone process, commercial deployment requires formal legal audit of GPL boundary before transition to `approved`. |
+
+---
+
+## Generative Model Governance (Phase 1 Baseline)
+
+Per PRD §3.5:
+
+| Component Key | Model Family | Version / Revision | Status | Review Basis |
+|---|---|---|---|---|
+| `FLUX_SCHNELL_DRAFT_V1` | Black Forest Labs FLUX.1 [schnell] | `1` | `approved` | Internal policy approval for Phase 1 commercial storyboard candidate generation (PRD §3.5). |
+| `flux-1-dev` | Black Forest Labs FLUX.1 [dev] | `unpinned` | `restricted` | Non-commercial license terms. Dispatch is blocked unless explicit commercial licensing evidence is attached. |
+| `LTX_25_720P_5S_V1` | Lightricks LTX-Video 2.5 | `1` | `review_required` | Conditionally approved in PRD §3.5 pending formal commercial review and pinned license evidence. |
+

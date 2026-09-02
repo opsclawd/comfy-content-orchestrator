@@ -15,6 +15,9 @@
 - **GenerationManifest:** Immutable evidence from a successful render; not a mutable aggregate.
 - **ReviewEvent:** Append-only audit event capturing all human review actions, reviewer identity, timestamp, and before/after state transitions.
 - **RenderProfile:** Versioned certified execution configuration for an engine/workflow/hardware envelope.
+- **ComponentLicenseRegistry:** Machine-readable, versioned catalog of all third-party models, nodes, and assembly tools (`approved`, `restricted`, `review_required`, `blocked`).
+- **LicenseRoutingGuard:** Fail-closed application-level enforcement guard that evaluates required components before dispatching render jobs or media assemblies, ensuring restricted, blocked, review-required, or unregistered components are non-dispatchable with zero GPU / FFmpeg execution.
+- **LicenseRoutingDecision:** Auditable provenance record (`decisionId`, `registryRevision`, `evaluations`, `violations`, `timestamp`) embedded into generated artifacts (e.g. `AssemblyManifest.governanceDecisionId`).
 
 ## Review Plane Actions & Behavioral Invariants
 
@@ -26,6 +29,7 @@
 - **Action ID & Idempotency:** Client assigns a unique UUIDv7 `actionId` to each command. An identical command replayed with the same `actionId` returns 200 with `isIdempotentReplay: true` and writes zero duplicate events. Reusing an `actionId` with altered payload returns `IDEMPOTENCY_CONFLICT` (409) with zero writes.
 - **Server-Authoritative Reviewer Identity & Timestamp:** Reviewer name and action timestamp are determined server-side from authenticated session context and the server clock. Client-provided reviewer identity or timestamps cannot override server audit metadata.
 - **Review API Never Synchronously Renders:** Review HTTP routes only commit state transitions, candidate selections, and audit records. Rendering compute is deferred to asynchronous worker queue processing (Sprint 3).
+- **Fail-Closed Governance Routing Guard:** All generation dispatch and assembly pipelines must evaluate required component licenses against the versioned registry before any compute or external service invocation. Non-approved or missing entries halt execution immediately without acquiring GPU leases or spawning media processes.
 
 ## Canonical Scene Lifecycle States
 

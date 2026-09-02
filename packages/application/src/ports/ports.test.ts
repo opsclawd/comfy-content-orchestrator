@@ -6,7 +6,7 @@ import type {
   GpuLeaseHolder,
   GpuMemorySnapshot,
   GpuTelemetryPort,
-  LicenseRegistryRepository,
+  LicenseRegistryPort,
   ManifestRepository,
   MediaAssemblerPort,
   ObjectLocator,
@@ -179,10 +179,6 @@ describe("Application capability ports contract tests", () => {
         readonly jobId: string;
         readonly files: readonly string[];
       }
-      interface TestLicenseRecord {
-        readonly componentKey: string;
-        readonly license: string;
-      }
 
       const campaignRepo = {
         async findById(campaignId: string): Promise<TestCampaign | undefined> {
@@ -206,12 +202,25 @@ describe("Application capability ports contract tests", () => {
       } satisfies ManifestRepository<TestManifest>;
 
       const licenseRegistryRepo = {
-        async findByComponentKey(componentKey: string): Promise<TestLicenseRecord | undefined> {
-          return componentKey === "ltx-video"
-            ? { componentKey: "ltx-video", license: "Apache-2.0" }
-            : undefined;
+        getSnapshot() {
+          return {
+            registryRevision: "2026-08-29.1",
+            generatedAt: "2026-08-29T12:00:00.000Z",
+            entries: [
+              {
+                componentId: "ltx-video",
+                componentType: "model",
+                versionOrRevision: "1",
+                status: "approved",
+                licenseId: "Apache-2.0",
+                licenseSource: "docs/prd.md §3.5",
+                reviewedAt: "2026-08-29T12:00:00.000Z",
+                policyRevision: "1"
+              }
+            ]
+          };
         }
-      } satisfies LicenseRegistryRepository<TestLicenseRecord>;
+      } satisfies LicenseRegistryPort;
 
       const campaign = await campaignRepo.findById("camp-1");
       expect(campaign?.name).toBe("Summer Campaign");
@@ -380,8 +389,9 @@ describe("Application capability ports contract tests", () => {
         await sceneReviewQueries.getCampaignReviewSummary("missing" as CampaignId)
       ).toBeUndefined();
 
-      const license = await licenseRegistryRepo.findByComponentKey("ltx-video");
-      expect(license?.license).toBe("Apache-2.0");
+      const snapshot = licenseRegistryRepo.getSnapshot();
+      expect(snapshot.entries[0]?.componentId).toBe("ltx-video");
+      expect(snapshot.entries[0]?.licenseId).toBe("Apache-2.0");
 
       const refAssets: ReferenceAsset[] = [
         {

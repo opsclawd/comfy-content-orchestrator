@@ -205,6 +205,13 @@ export class AssembleGenerationManifest {
     }
     const engine = input.profile.engine;
     const renderProfile = input.profile.id;
+    // License-routing components are matched on (componentId, versionOrRevision)
+    // — see execute-profile-render.ts's own requiredComponents construction.
+    // Persisting the version here (not just the profile id string) lets
+    // downstream consumers (e.g. assembly's license-routing check) resolve
+    // the exact component reference generation-time already verified,
+    // instead of guessing a version.
+    const renderProfileVersion = input.profile.renderProfileIdentity?.version ?? null;
 
     // 4. Model SHA-256 hashes
     if (!provenance.models || !Array.isArray(provenance.models)) {
@@ -574,6 +581,7 @@ export class AssembleGenerationManifest {
       renderedAt,
       engine,
       renderProfile,
+      renderProfileVersion,
       models: Object.freeze(models),
       workflow: Object.freeze(workflowIdentity),
       loras: Object.freeze(loras),

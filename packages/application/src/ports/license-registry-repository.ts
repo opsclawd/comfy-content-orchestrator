@@ -1,3 +1,5 @@
-export interface LicenseRegistryRepository<TLicenseRecord> {
-  findByComponentKey(componentKey: string): Promise<TLicenseRecord | undefined>;
+import type { ComponentLicenseRegistrySnapshot } from "@cco/contracts";
+
+export interface LicenseRegistryPort {
+  getSnapshot(): ComponentLicenseRegistrySnapshot;
 }

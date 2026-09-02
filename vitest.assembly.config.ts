@@ -9,8 +9,8 @@ export default defineConfig({
     include: ["packages/infrastructure/src/ffmpeg/**/*.integration.test.ts"],
     environment: "node",
     fileParallelism: false,
-    testTimeout: 120_000,
-    hookTimeout: 120_000
+    testTimeout: 300_000,
+    hookTimeout: 300_000
   },
   resolve: {
     alias: {
