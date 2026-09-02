@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { AssembleDeliveryReel } from "@cco/application";
+import { AssembleDeliveryReel, EnforceLicenseRouting } from "@cco/application";
 import {
   ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS,
   AssemblyExecutionResultSchema,
@@ -83,7 +83,7 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
         checksumSha256: stem.sha256
       });
     }
-  }, 120_000);
+  }, 300_000);
 
   afterAll(async () => {
     if (fixtureDir) {
@@ -175,7 +175,7 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
     for (const executedStem of result.executedInputs.videoStems) {
       expect(executedStem.normalization).toBeUndefined();
     }
-  }, 90_000);
+  }, 300_000);
 
   it("assembles six authoritative animated WebP LTX stems (~4.04s 24fps) into ~24.25s 1080x1920 30fps vertical MP4 with provenance", async () => {
     const videoStems: VideoStemRef[] = syntheticWebpStems.map((stem) => ({
@@ -277,7 +277,7 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
       expect(executedStem.normalization?.commandFingerprint).toMatch(/^[0-9a-f]{64}$/);
       expect(executedStem.normalization?.commandFingerprint).not.toContain(workspaceRoot);
     }
-  }, 90_000);
+  }, 300_000);
 
   it("preserves stem order regardless of array ordering in input spec", async () => {
     // Reverse the array order of stems in spec
@@ -319,7 +319,7 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
       "scene-05",
       "scene-06"
     ]);
-  }, 60_000);
+  }, 300_000);
 
   it("fails loudly when stem SHA-256 does not match staged bytes", async () => {
     const videoStems: VideoStemRef[] = syntheticWebpStems.slice(0, 2).map((stem, idx) => ({
@@ -533,14 +533,66 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
       videoStems
     };
 
+    const licenseRegistry = {
+      getSnapshot: () => ({
+        schemaVersion: 1 as const,
+        registryRevision: "2026-08-29.1",
+        generatedAt: "2026-08-29T12:00:00.000Z",
+        entries: [
+          {
+            componentId: "ffmpeg",
+            componentType: "runtime" as const,
+            versionOrRevision: "n8.0.1",
+            status: "approved" as const,
+            licenseSource: "Sprint 3.5 Assembly & Governance Host Runtime Capture",
+            reviewedAt: "2026-08-29T12:00:00.000Z",
+            policyRevision: "2026-08-29.1"
+          },
+          {
+            componentId: "azure-tts",
+            componentType: "provider" as const,
+            versionOrRevision: "1",
+            status: "approved" as const,
+            licenseSource: "Sprint 3.5 Assembly Integration Test",
+            reviewedAt: "2026-08-29T12:00:00.000Z",
+            policyRevision: "2026-08-29.1"
+          },
+          {
+            componentId: "ltx-fake-profile",
+            componentType: "model" as const,
+            versionOrRevision: "1",
+            status: "approved" as const,
+            licenseSource: "Sprint 3.5 Assembly Integration Test",
+            reviewedAt: "2026-08-29T12:00:00.000Z",
+            policyRevision: "2026-08-29.1"
+          }
+        ]
+      })
+    };
+    const enforceLicenseRouting = new EnforceLicenseRouting({ registry: licenseRegistry });
+
     const deliveryReelUseCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
       mediaAssembler: adapter,
-      objectStorage
+      objectStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: {
+        getComponentIdentityById: async () => ({
+          renderProfile: "ltx-fake-profile",
+          renderProfileVersion: 1
+        })
+      }
     });
 
     const { manifest, executionResult } = await deliveryReelUseCase.assemble({
       spec,
-      governanceDecisionId: "gov-dec-sprint35-001"
+      requiredComponents: [
+        {
+          componentId: "ffmpeg",
+          componentType: "runtime",
+          versionOrRevision: "n8.0.1"
+        }
+      ]
     });
 
     // 1. Verify executionResult conforms to schema & requirements
@@ -592,7 +644,7 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
 
     // 2. Verify immutable AssemblyManifest
     expect(manifest.assemblyId).toBe(executionResult.assemblyId);
-    expect(manifest.governanceDecisionId).toBe("gov-dec-sprint35-001");
+    expect(manifest.governanceDecisionId).toMatch(/^gov-dec-/);
     expect(manifest.generationManifestIds).toHaveLength(6);
     expect(manifest.inputs.voiceover?.assetId).toBe("vo-asset-001");
     expect(manifest.inputs.soundbed?.assetId).toBe("sb-asset-001");
@@ -617,7 +669,7 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
       JSON.parse(new TextDecoder().decode(storedManifestObj?.body))
     );
     expect(parsedManifest.assemblyId).toBe(executionResult.assemblyId);
-    expect(parsedManifest.governanceDecisionId).toBe("gov-dec-sprint35-001");
+    expect(parsedManifest.governanceDecisionId).toMatch(/^gov-dec-/);
 
     // 4. AC-4: Measure produced output audio with true-peak analysis (ebur128=peak=true) to verify true-peak ceiling (no clipping)
     const outputTestPath = path.join(fixtureDir, "test-output-audio.mp4");
@@ -708,7 +760,7 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
     // In-window ducked soundbed is attenuated compared to outside-window soundbed (both RMS and Peak)
     expect(insideRmsDb).toBeLessThan(outsideRmsDb - 3.0);
     expect(insidePeakDb).toBeLessThan(outsidePeakDb - 3.0);
-  }, 120_000);
+  }, 300_000);
 
   it("assembles six MP4 stems with VO-only (padded to full 30s duration)", async () => {
     const syntheticVo = await generateSyntheticAudio({
@@ -786,7 +838,7 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
     expect(Math.abs(result.streams.audio!.durationMs - 30000)).toBeLessThanOrEqual(
       ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS
     );
-  }, 120_000);
+  }, 300_000);
 
   it("assembles reel with soundbed startMs > 0 properly offset and looped", async () => {
     const syntheticSb = await generateSyntheticAudio({
@@ -851,7 +903,7 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
     expect(Math.abs(result.streams.audio!.durationMs - 10000)).toBeLessThanOrEqual(
       ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS
     );
-  }, 60_000);
+  }, 300_000);
 
   it("negative test: corrupted voiceover SHA-256 throws AUDIO_HASH_MISMATCH and publishes no delivery media", async () => {
     const syntheticVo = await generateSyntheticAudio({

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AssemblyExecutionResult, AssemblySpec } from "@cco/contracts";
 import type {
+  GenerationManifestRepository,
   MediaAssemblerPort,
   ObjectLocator,
   ObjectStoragePort,
@@ -10,6 +11,8 @@ import {
   AssembleDeliveryReel,
   AssemblyManifestPublicationError
 } from "./assemble-delivery-reel.js";
+import { EnforceLicenseRouting } from "./enforce-license-routing.js";
+import { LicenseRoutingError } from "./license-routing-error.js";
 
 describe("AssembleDeliveryReel use case", () => {
   const dummyExecutionResult: AssemblyExecutionResult = {
@@ -106,6 +109,76 @@ describe("AssembleDeliveryReel use case", () => {
     ]
   };
 
+  function createApprovedEnforceLicenseRouting(): EnforceLicenseRouting {
+    const registry = {
+      getSnapshot: () => ({
+        schemaVersion: 1 as const,
+        registryRevision: "2026-08-29.1",
+        generatedAt: "2026-08-29T12:00:00.000Z",
+        entries: [
+          {
+            componentId: "ffmpeg",
+            componentType: "runtime" as const,
+            versionOrRevision: "n8.0.1",
+            status: "approved" as const,
+            licenseSource: "Sprint 3.5 Assembly & Governance Host Runtime Capture",
+            reviewedAt: "2026-08-29T12:00:00.000Z",
+            policyRevision: "2026-08-29.1"
+          },
+          {
+            componentId: "elevenlabs-provider",
+            componentType: "provider" as const,
+            versionOrRevision: "v1",
+            status: "approved" as const,
+            licenseSource: "internal",
+            reviewedAt: "2026-08-29T12:00:00.000Z",
+            policyRevision: "2026-08-29.1"
+          },
+          {
+            componentId: "elevenlabs-provider-blocked",
+            componentType: "provider" as const,
+            versionOrRevision: "v1",
+            status: "blocked" as const,
+            licenseSource: "internal",
+            reviewedAt: "2026-08-29T12:00:00.000Z",
+            policyRevision: "2026-08-29.1"
+          },
+          {
+            componentId: "ltx-fake-profile",
+            componentType: "model" as const,
+            versionOrRevision: "1",
+            status: "approved" as const,
+            licenseSource: "internal",
+            reviewedAt: "2026-08-29T12:00:00.000Z",
+            policyRevision: "2026-08-29.1"
+          }
+        ]
+      })
+    };
+    return new EnforceLicenseRouting({ registry });
+  }
+
+  const defaultRequiredComponents = [
+    {
+      componentId: "ffmpeg",
+      componentType: "runtime" as const,
+      versionOrRevision: "n8.0.1"
+    }
+  ];
+
+  // By default every video stem's generationManifestId resolves to an
+  // approved render profile — matches "ltx-fake-profile" v1 in the fake
+  // registry above, so existing happy-path tests don't need to know about
+  // generation-manifest resolution unless they're specifically testing it.
+  function createApprovedGenerationManifestRepository(): GenerationManifestRepository {
+    return {
+      getComponentIdentityById: vi.fn(async () => ({
+        renderProfile: "ltx-fake-profile",
+        renderProfileVersion: 1
+      }))
+    };
+  }
+
   it("assembles reel, creates manifest from executed state, and persists it with checksum", async () => {
     const putObjectCalls: PutObjectInput[] = [];
     const mockStorage: ObjectStoragePort = {
@@ -120,19 +193,23 @@ describe("AssembleDeliveryReel use case", () => {
       assemble: vi.fn(async () => dummyExecutionResult)
     };
 
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
     const useCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
       mediaAssembler: mockAssembler,
-      objectStorage: mockStorage
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: createApprovedGenerationManifestRepository()
     });
 
     const result = await useCase.assemble({
       spec: validSpec,
-      governanceDecisionId: "gov-decision-xyz-789"
+      requiredComponents: defaultRequiredComponents
     });
 
     expect(mockAssembler.assemble).toHaveBeenCalledWith(validSpec);
     expect(result.manifest.assemblyId).toBe("assembly-test-123");
-    expect(result.manifest.governanceDecisionId).toBe("gov-decision-xyz-789");
+    expect(result.manifest.governanceDecisionId).toMatch(/^gov-dec-[0-9a-f-]{36}$/);
     expect(result.manifest.generationManifestIds).toEqual(["gen-1"]);
     expect(result.manifest.output.media.bucket).toBe("godzspeed-delivery");
 
@@ -146,7 +223,7 @@ describe("AssembleDeliveryReel use case", () => {
 
     const storedJson = JSON.parse(new TextDecoder().decode(putObjectCalls[0]?.body));
     expect(storedJson.assemblyId).toBe("assembly-test-123");
-    expect(storedJson.governanceDecisionId).toBe("gov-decision-xyz-789");
+    expect(storedJson.governanceDecisionId).toBe(result.manifest.governanceDecisionId);
   });
 
   it("rejects invalid spec before invoking media assembler or storage", async () => {
@@ -159,9 +236,13 @@ describe("AssembleDeliveryReel use case", () => {
       assemble: vi.fn()
     };
 
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
     const useCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
       mediaAssembler: mockAssembler,
-      objectStorage: mockStorage
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: createApprovedGenerationManifestRepository()
     });
 
     const invalidSpec = {
@@ -172,7 +253,7 @@ describe("AssembleDeliveryReel use case", () => {
     await expect(
       useCase.assemble({
         spec: invalidSpec as unknown as AssemblySpec,
-        governanceDecisionId: "gov-1"
+        requiredComponents: defaultRequiredComponents
       })
     ).rejects.toThrow("campaignId must not be empty");
 
@@ -192,15 +273,19 @@ describe("AssembleDeliveryReel use case", () => {
       })
     };
 
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
     const useCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
       mediaAssembler: mockAssembler,
-      objectStorage: mockStorage
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: createApprovedGenerationManifestRepository()
     });
 
     await expect(
       useCase.assemble({
         spec: validSpec,
-        governanceDecisionId: "gov-1"
+        requiredComponents: defaultRequiredComponents
       })
     ).rejects.toThrow("FFmpeg encode failed");
 
@@ -219,16 +304,20 @@ describe("AssembleDeliveryReel use case", () => {
       assemble: vi.fn(async () => dummyExecutionResult)
     };
 
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
     const useCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
       mediaAssembler: mockAssembler,
-      objectStorage: mockStorage
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: createApprovedGenerationManifestRepository()
     });
 
     let thrownError: unknown;
     try {
       await useCase.assemble({
         spec: validSpec,
-        governanceDecisionId: "gov-1"
+        requiredComponents: defaultRequiredComponents
       });
     } catch (err) {
       thrownError = err;
@@ -239,7 +328,7 @@ describe("AssembleDeliveryReel use case", () => {
     expect(pubErr.name).toBe("AssemblyManifestPublicationError");
     expect(pubErr.executionResult).toEqual(dummyExecutionResult);
     expect(pubErr.manifest.assemblyId).toBe("assembly-test-123");
-    expect(pubErr.manifest.governanceDecisionId).toBe("gov-1");
+    expect(pubErr.manifest.governanceDecisionId).toMatch(/^gov-dec-[0-9a-f-]{36}$/);
   });
 
   it("rolls back the already-published media output when manifest persistence fails", async () => {
@@ -258,15 +347,19 @@ describe("AssembleDeliveryReel use case", () => {
       assemble: vi.fn(async () => dummyExecutionResult)
     };
 
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
     const useCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
       mediaAssembler: mockAssembler,
-      objectStorage: mockStorage
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: createApprovedGenerationManifestRepository()
     });
 
     await expect(
       useCase.assemble({
         spec: validSpec,
-        governanceDecisionId: "gov-1"
+        requiredComponents: defaultRequiredComponents
       })
     ).rejects.toThrow(AssemblyManifestPublicationError);
 
@@ -290,16 +383,20 @@ describe("AssembleDeliveryReel use case", () => {
       assemble: vi.fn(async () => dummyExecutionResult)
     };
 
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
     const useCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
       mediaAssembler: mockAssembler,
-      objectStorage: mockStorage
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: createApprovedGenerationManifestRepository()
     });
 
     let thrownError: unknown;
     try {
       await useCase.assemble({
         spec: validSpec,
-        governanceDecisionId: "gov-1"
+        requiredComponents: defaultRequiredComponents
       });
     } catch (err) {
       thrownError = err;
@@ -311,9 +408,6 @@ describe("AssembleDeliveryReel use case", () => {
   });
 
   it("does not attempt rollback when the storage adapter has no deleteObject support", async () => {
-    // deleteObject is optional on ObjectStoragePort — adapters that don't
-    // implement it must not cause the use case to crash while attempting
-    // rollback.
     const mockStorage: ObjectStoragePort = {
       putObject: vi.fn(async (): Promise<ObjectLocator> => {
         throw new Error("S3 connection timed out");
@@ -325,16 +419,477 @@ describe("AssembleDeliveryReel use case", () => {
       assemble: vi.fn(async () => dummyExecutionResult)
     };
 
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
     const useCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
       mediaAssembler: mockAssembler,
-      objectStorage: mockStorage
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: createApprovedGenerationManifestRepository()
     });
 
     await expect(
       useCase.assemble({
         spec: validSpec,
-        governanceDecisionId: "gov-1"
+        requiredComponents: defaultRequiredComponents
       })
     ).rejects.toThrow(AssemblyManifestPublicationError);
+  });
+
+  it("denies assembly with zero ffmpeg spawn and zero storage put when required component is denied", async () => {
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(),
+      getObject: vi.fn()
+    };
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => dummyExecutionResult)
+    };
+    const registry = {
+      getSnapshot: () => ({
+        schemaVersion: 1 as const,
+        registryRevision: "2026-08-29.1",
+        generatedAt: "2026-08-29T12:00:00.000Z",
+        entries: [
+          {
+            componentId: "ffmpeg",
+            componentType: "runtime" as const,
+            versionOrRevision: "n8.0.1",
+            status: "review_required" as const,
+            licenseSource: "registry",
+            reviewedAt: "2026-08-29T12:00:00.000Z",
+            policyRevision: "1"
+          }
+        ]
+      })
+    };
+    const enforceLicenseRouting = new EnforceLicenseRouting({ registry });
+    const useCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: createApprovedGenerationManifestRepository()
+    });
+
+    await expect(
+      useCase.assemble({
+        spec: validSpec,
+        requiredComponents: [
+          {
+            componentId: "ffmpeg",
+            componentType: "runtime",
+            versionOrRevision: "n8.0.1"
+          }
+        ]
+      })
+    ).rejects.toThrow(LicenseRoutingError);
+
+    expect(mockAssembler.assemble).not.toHaveBeenCalled();
+    expect(mockStorage.putObject).not.toHaveBeenCalled();
+  });
+
+  it("denies assembly with zero ffmpeg spawn when provider audio asset in spec is blocked or unapproved", async () => {
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(),
+      getObject: vi.fn()
+    };
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => dummyExecutionResult)
+    };
+
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
+    const useCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: createApprovedGenerationManifestRepository()
+    });
+
+    const specWithBlockedVoiceover: AssemblySpec = {
+      ...validSpec,
+      voiceover: {
+        assetId: "vo-blocked",
+        kind: "voiceover",
+        media: {
+          bucket: "test-bucket",
+          key: "vo-blocked.mp3",
+          sha256: "d".repeat(64),
+          contentType: "audio/mpeg"
+        },
+        source: {
+          kind: "provider",
+          providerId: "elevenlabs-provider-blocked",
+          modelId: "v1"
+        },
+        startMs: 0,
+        expectedDurationMs: 5000
+      }
+    };
+
+    await expect(
+      useCase.assemble({
+        spec: specWithBlockedVoiceover,
+        requiredComponents: defaultRequiredComponents
+      })
+    ).rejects.toThrow(LicenseRoutingError);
+
+    expect(mockAssembler.assemble).not.toHaveBeenCalled();
+    expect(mockStorage.putObject).not.toHaveBeenCalled();
+  });
+
+  it("denies assembly with zero calls into the media assembler when the injected runtime identity is not approved, even if the caller omitted it from requiredComponents", async () => {
+    // The whole point of injecting runtimeComponents is that a caller
+    // cannot bypass the guard simply by not mentioning ffmpeg — the
+    // assembler's own (already-resolved) identity must always be checked.
+    // Critically, this must happen with ZERO calls into the media
+    // assembler on denial: runtimeComponents is a plain injected value,
+    // never fetched from mediaAssembler inside assemble() (see the
+    // "resolves runtime identity once" test below for why).
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(),
+      getObject: vi.fn()
+    };
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => dummyExecutionResult)
+    };
+
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
+    const useCase = new AssembleDeliveryReel({
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      runtimeComponents: [
+        {
+          componentId: "ffmpeg",
+          componentType: "runtime" as const,
+          // Deliberately a different version than any registry entry —
+          // simulates a real environment mismatch (e.g. a host running a
+          // different ffmpeg build than whatever was last approved).
+          versionOrRevision: "n6.1.1-unapproved"
+        }
+      ],
+      generationManifestRepository: createApprovedGenerationManifestRepository()
+    });
+
+    await expect(
+      useCase.assemble({
+        spec: validSpec,
+        // Caller supplies no ffmpeg reference at all.
+        requiredComponents: []
+      })
+    ).rejects.toThrow(LicenseRoutingError);
+
+    expect(mockAssembler.assemble).not.toHaveBeenCalled();
+    expect(mockStorage.putObject).not.toHaveBeenCalled();
+  });
+
+  it("permits assembly using the injected runtime identity when the caller omitted it and the registry approves it", async () => {
+    const putObjectCalls: PutObjectInput[] = [];
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(async (input: PutObjectInput): Promise<ObjectLocator> => {
+        putObjectCalls.push(input);
+        return { bucket: input.bucket, key: input.key };
+      }),
+      getObject: vi.fn(async () => undefined)
+    };
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => dummyExecutionResult)
+    };
+
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
+    const useCase = new AssembleDeliveryReel({
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      runtimeComponents: [
+        {
+          componentId: "ffmpeg",
+          componentType: "runtime" as const,
+          versionOrRevision: "n8.0.1"
+        }
+      ],
+      generationManifestRepository: createApprovedGenerationManifestRepository()
+    });
+
+    const result = await useCase.assemble({
+      spec: validSpec,
+      requiredComponents: []
+    });
+
+    expect(mockAssembler.assemble).toHaveBeenCalledWith(validSpec);
+    expect(result.manifest.assemblyId).toBe("assembly-test-123");
+    expect(mockStorage.putObject).toHaveBeenCalledTimes(1);
+  });
+
+  it("permits assembly when runtimeComponents is supplied via dependencies and params.requiredComponents is omitted", async () => {
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(async (input: PutObjectInput): Promise<ObjectLocator> => ({
+        bucket: input.bucket,
+        key: input.key
+      })),
+      getObject: vi.fn(async () => undefined)
+    };
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => dummyExecutionResult)
+    };
+
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
+    const useCase = new AssembleDeliveryReel({
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      runtimeComponents: [
+        {
+          componentId: "ffmpeg",
+          componentType: "runtime",
+          versionOrRevision: "n8.0.1"
+        }
+      ],
+      generationManifestRepository: createApprovedGenerationManifestRepository()
+    });
+
+    const result = await useCase.assemble({
+      spec: validSpec
+    });
+
+    expect(mockAssembler.assemble).toHaveBeenCalledWith(validSpec);
+    expect(result.manifest.assemblyId).toBe("assembly-test-123");
+  });
+
+  it("denies assembly when neither runtimeComponents dependency nor params.requiredComponents specifies a runtime component", async () => {
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(),
+      getObject: vi.fn()
+    };
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => dummyExecutionResult)
+    };
+
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
+    const useCase = new AssembleDeliveryReel({
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: createApprovedGenerationManifestRepository(),
+      runtimeComponents: []
+    });
+
+    await expect(
+      useCase.assemble({
+        spec: validSpec,
+        requiredComponents: []
+      })
+    ).rejects.toThrow(LicenseRoutingError);
+
+    expect(mockAssembler.assemble).not.toHaveBeenCalled();
+    expect(mockStorage.putObject).not.toHaveBeenCalled();
+  });
+
+  it("does not fail when runtimeComponents is provided via params.requiredComponents", async () => {
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(async (input: PutObjectInput): Promise<ObjectLocator> => ({
+        bucket: input.bucket,
+        key: input.key
+      })),
+      getObject: vi.fn(async () => undefined)
+    };
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => dummyExecutionResult)
+    };
+
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
+    const useCase = new AssembleDeliveryReel({
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: createApprovedGenerationManifestRepository(),
+      runtimeComponents: []
+    });
+
+    const result = await useCase.assemble({
+      spec: validSpec,
+      requiredComponents: defaultRequiredComponents
+    });
+
+    expect(result.manifest.assemblyId).toBe("assembly-test-123");
+  });
+
+  it("resolves runtime identity once, outside assemble() — never calls mediaAssembler.getRuntimeComponents itself, regardless of outcome", async () => {
+    // A denied assembly must produce zero calls into the media assembler
+    // (there is an existing test enforcing this for provider-audio
+    // denials). getRuntimeComponents spawns a real ffmpeg process in the
+    // production adapter, so if assemble() called it per-request, a
+    // denial would still trigger that spawn before the guard's decision —
+    // violating the zero-calls guarantee even though it's lighter than a
+    // full encode. Resolution must happen once, by whoever constructs this
+    // use case, never from inside assemble() itself.
+    const getRuntimeComponents = vi.fn(async () => [
+      { componentId: "ffmpeg", componentType: "runtime" as const, versionOrRevision: "n8.0.1" }
+    ]);
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(),
+      getObject: vi.fn()
+    };
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => dummyExecutionResult),
+      getRuntimeComponents
+    };
+
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
+    const useCase = new AssembleDeliveryReel({
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: createApprovedGenerationManifestRepository(),
+      // runtimeComponents deliberately empty: mockAssembler.assemble is
+      // approved via defaultRequiredComponents below, so this proves
+      // getRuntimeComponents is never invoked even on a path that
+      // otherwise succeeds.
+      runtimeComponents: []
+    });
+
+    await useCase.assemble({
+      spec: validSpec,
+      requiredComponents: defaultRequiredComponents
+    });
+
+    expect(getRuntimeComponents).not.toHaveBeenCalled();
+  });
+
+  it("permits assembly and embeds generated governanceDecisionId when required components are approved", async () => {
+    const putObjectCalls: PutObjectInput[] = [];
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(async (input: PutObjectInput) => {
+        putObjectCalls.push(input);
+        return { bucket: input.bucket, key: input.key };
+      }),
+      getObject: vi.fn()
+    };
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => dummyExecutionResult)
+    };
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
+    const useCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: createApprovedGenerationManifestRepository()
+    });
+
+    const result = await useCase.assemble({
+      spec: validSpec,
+      requiredComponents: defaultRequiredComponents
+    });
+
+    expect(mockAssembler.assemble).toHaveBeenCalledWith(validSpec);
+    expect(mockStorage.putObject).toHaveBeenCalledTimes(1);
+    expect(result.manifest.governanceDecisionId).toMatch(/^gov-dec-[0-9a-f-]{36}$/);
+    const storedJson = JSON.parse(new TextDecoder().decode(putObjectCalls[0]?.body));
+    expect(storedJson.governanceDecisionId).toBe(result.manifest.governanceDecisionId);
+  });
+
+  it("denies assembly with zero ffmpeg spawn when a video stem's generationManifestId does not resolve to any manifest", async () => {
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(),
+      getObject: vi.fn()
+    };
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => dummyExecutionResult)
+    };
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
+    const useCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      // Every lookup misses — simulates a generationManifestId that
+      // doesn't correspond to any row in generation_manifests (e.g. a
+      // caller-fabricated or stale ID).
+      generationManifestRepository: {
+        getComponentIdentityById: async () => undefined
+      }
+    });
+
+    await expect(
+      useCase.assemble({
+        spec: validSpec,
+        requiredComponents: defaultRequiredComponents
+      })
+    ).rejects.toThrow(LicenseRoutingError);
+
+    expect(mockAssembler.assemble).not.toHaveBeenCalled();
+    expect(mockStorage.putObject).not.toHaveBeenCalled();
+  });
+
+  it("denies assembly when a video stem's generation manifest resolves to a render profile the registry does not approve", async () => {
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(),
+      getObject: vi.fn()
+    };
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => dummyExecutionResult)
+    };
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
+    const useCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: {
+        getComponentIdentityById: async () => ({
+          // Not "ltx-fake-profile" — not in the fake registry at all.
+          renderProfile: "some-unregistered-profile",
+          renderProfileVersion: 1
+        })
+      }
+    });
+
+    await expect(
+      useCase.assemble({
+        spec: validSpec,
+        requiredComponents: defaultRequiredComponents
+      })
+    ).rejects.toThrow(LicenseRoutingError);
+
+    expect(mockAssembler.assemble).not.toHaveBeenCalled();
+    expect(mockStorage.putObject).not.toHaveBeenCalled();
+  });
+
+  it("permits assembly when every video stem's generation manifest resolves to an approved render profile", async () => {
+    const putObjectCalls: PutObjectInput[] = [];
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(async (input: PutObjectInput): Promise<ObjectLocator> => {
+        putObjectCalls.push(input);
+        return { bucket: input.bucket, key: input.key };
+      }),
+      getObject: vi.fn(async () => undefined)
+    };
+    const getComponentIdentityById = vi.fn(async (generationManifestId: string) => {
+      expect(generationManifestId).toBe("gen-1");
+      return { renderProfile: "ltx-fake-profile", renderProfileVersion: 1 };
+    });
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => dummyExecutionResult)
+    };
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
+    const useCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: { getComponentIdentityById }
+    });
+
+    const result = await useCase.assemble({
+      spec: validSpec,
+      requiredComponents: defaultRequiredComponents
+    });
+
+    expect(getComponentIdentityById).toHaveBeenCalledTimes(1);
+    expect(mockAssembler.assemble).toHaveBeenCalledWith(validSpec);
+    expect(result.manifest.assemblyId).toBe("assembly-test-123");
+    expect(mockStorage.putObject).toHaveBeenCalledTimes(1);
   });
 });

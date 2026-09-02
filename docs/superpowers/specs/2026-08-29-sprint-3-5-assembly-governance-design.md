@@ -387,9 +387,14 @@ Both `AssemblyExecutionResultSchema` and `AssemblyManifestSchema` enforce identi
 3. **Issue 3: Local/uploaded audio asset fixture loader & subtitle cue parser**
    - Staging local and uploaded audio fixtures into `PersistentMediaRef`s.
    - Subtitle cue parsing and canonical SHA-256 hashing.
-4. **Issue 4: Governance routing guard & license verification**
-   - Routing guard validating license terms across video stems, VO, and soundbed before assembly.
-   - Generation of immutable `governanceDecisionId`.
+4. **Issue 4 (#124 — Implemented): Versioned component-license registry & fail-closed routing guard**
+   - Machine-readable JSON component-license registry schema (`ComponentLicenseRegistrySchema`) versioned in `config/component-license-registry.json`.
+   - Pure routing evaluator (`evaluateLicenseRouting`) enforcing §9.6 policy statuses: `approved` is dispatchable; `restricted`, `review_required`, `blocked`, and unregistered components fail closed.
+   - Application port (`LicenseRegistryPort`) and use case (`EnforceLicenseRouting`) throwing structured `LicenseRoutingError`.
+   - Infrastructure loader (`loadComponentLicenseRegistry`) with duplicate key detection and freeze immutability.
+   - Generation dispatch integration in `ExecuteProfileRenderUseCase` and `render` CLI (zero ComfyUI queue / zero GPU lease on denial).
+   - Assembly pipeline integration in `AssembleDeliveryReel` (zero FFmpeg spawn / zero storage put on denial, embedding `governanceDecisionId` in `AssemblyManifest`).
+   - Render worker retry semantics: `LicenseRoutingError` falls through to permanent `failWithRetry` (never deferred).
 5. **Issue 5: End-to-end assembly pipeline & delivery persistence**
    - Assembly execution pipeline writing final MP4 and `AssemblyManifest` JSON to delivery storage.
    - End-to-end verification against the §9.5 FFmpeg Assembly Gate.

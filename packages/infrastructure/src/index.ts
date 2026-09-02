@@ -15,6 +15,8 @@ export { PostgresStoryboardCandidateRepository } from "./postgres/repositories/p
 
 export { PostgresReferenceAssetRepository } from "./postgres/repositories/postgres-reference-asset-repository.js";
 
+export { PostgresGenerationManifestRepository } from "./postgres/repositories/postgres-generation-manifest-repository.js";
+
 export { PostgresReviewEventStore } from "./postgres/repositories/postgres-review-event-store.js";
 
 export { PostgresUnitOfWork } from "./postgres/uow/postgres-unit-of-work.js";
@@ -239,3 +241,10 @@ export {
   type DemuxedWebp,
   type NormalizeWebpOptions
 } from "./ffmpeg/webp-normalizer.js";
+
+export {
+  loadComponentLicenseRegistry,
+  loadComponentLicenseRegistrySync,
+  JsonFileLicenseRegistryPort,
+  ComponentLicenseRegistryLoadError
+} from "./governance/license-registry-loader.js";

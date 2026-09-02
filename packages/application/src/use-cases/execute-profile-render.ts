@@ -1,4 +1,4 @@
-import type { RenderProfileKey } from "@cco/contracts";
+import type { ComponentRef, RenderProfileKey } from "@cco/contracts";
 import type {
   GpuExecutionLeasePort,
   GpuMemorySnapshot,
@@ -7,6 +7,7 @@ import type {
   RenderResult,
   RenderWorkflow
 } from "../ports/index.js";
+import type { EnforceLicenseRouting } from "./enforce-license-routing.js";
 
 export interface ProfileRenderIdentity {
   readonly profileId: string;
@@ -167,11 +168,28 @@ export class ExecuteProfileRenderUseCase {
     private readonly renderEngine: RenderEnginePort,
     private readonly gpuLease: GpuExecutionLeasePort,
     private readonly gpuTelemetry: GpuTelemetryPort,
+    private readonly enforceLicenseRouting: EnforceLicenseRouting,
     private readonly now: () => Date = () => new Date()
   ) {}
 
   async execute(input: ExecuteProfileRenderInput): Promise<ExecuteProfileRenderResult> {
     validateInput(input);
+
+    const requiredComponents: readonly ComponentRef[] = [
+      {
+        componentId: input.identity.renderProfileKey,
+        componentType: "model",
+        versionOrRevision: String(input.identity.renderProfileVersion)
+      }
+    ];
+    this.enforceLicenseRouting.enforce({
+      requiredComponents,
+      operation: {
+        kind: "generation",
+        renderJobId: input.renderJobId,
+        sceneId: input.sceneId
+      }
+    });
 
     const lease = await this.gpuLease.acquireLease();
     let primaryError: unknown;

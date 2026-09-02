@@ -6,6 +6,7 @@ import pg from "pg";
 const { Pool } = pg;
 import {
   AssembleGenerationManifest,
+  EnforceLicenseRouting,
   EnforceStorageAdmission,
   ExecuteProfileRenderUseCase,
   type ExecuteProfileRenderInput,
@@ -23,6 +24,8 @@ import {
   ComfyUiRenderEngineAdapter,
   HostFsStorageTelemetryAdapter,
   HttpComfyUiOutputReader,
+  JsonFileLicenseRegistryPort,
+  loadComponentLicenseRegistrySync,
   LocalFsGpuLeaseAdapter,
   NvidiaSmiTelemetryAdapter,
   PostgresReferenceAssetRepository,
@@ -48,6 +51,10 @@ import { RenderWorker, type RenderWorkerOptions, type WorkerDependencies } from 
 
 const DEFAULT_REPO_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)), "../../../../");
 const DEFAULT_MANIFEST_PATH = resolve(DEFAULT_REPO_ROOT, "templates/provenance.json");
+const DEFAULT_LICENSE_REGISTRY_PATH = resolve(
+  DEFAULT_REPO_ROOT,
+  "config/component-license-registry.json"
+);
 
 export interface WorkerRuntimeConfig {
   readonly storageTelemetryPath: string;
@@ -67,6 +74,7 @@ export interface WorkerRuntimeConfig {
   readonly gpuLeasePath: string;
   readonly certificationManifestPath: string;
   readonly goldMasterProvenancePath: string;
+  readonly licenseRegistryPath: string;
   readonly s3Endpoint: string;
   readonly s3Region: string;
   readonly s3ForcePathStyle: boolean;
@@ -94,6 +102,8 @@ export interface ProductionWorkerOverrides extends Partial<WorkerDependencies> {
   readonly renderEngine?: RenderEnginePort | undefined;
   readonly gpuLease?: GpuExecutionLeasePort | undefined;
   readonly gpuTelemetry?: GpuTelemetryPort | undefined;
+  readonly enforceLicenseRouting?: EnforceLicenseRouting | undefined;
+  readonly loadComponentLicenseRegistry?: typeof loadComponentLicenseRegistrySync | undefined;
   readonly executeProfileRenderUseCase?:
     | { execute: (input: ExecuteProfileRenderInput) => Promise<ExecuteProfileRenderResult> }
     | undefined;
@@ -421,13 +431,25 @@ export function parseWorkerRuntimeConfig(
     goldMasterProvenancePath = rawProvenancePath.trim();
   }
 
-  // 7. Storage Telemetry Path
+  // 7. License Registry Path
+  const rawLicenseRegistryPath = env.LICENSE_REGISTRY_PATH;
+  let licenseRegistryPath = DEFAULT_LICENSE_REGISTRY_PATH;
+  if (rawLicenseRegistryPath !== undefined) {
+    if (rawLicenseRegistryPath.trim() === "") {
+      throw new WorkerConfigError(
+        "Missing or empty required environment variable: LICENSE_REGISTRY_PATH"
+      );
+    }
+    licenseRegistryPath = rawLicenseRegistryPath.trim();
+  }
+
+  // 8. Storage Telemetry Path
   const storageTelemetryPath = parseStorageTelemetryPath(
     env.STORAGE_TELEMETRY_PATH,
     "STORAGE_TELEMETRY_PATH"
   );
 
-  // 8. S3 Configuration
+  // 9. S3 Configuration
   const rawS3Endpoint = env.S3_STORAGE_ENDPOINT ?? env.S3_ENDPOINT;
   const s3EndpointVarName =
     env.S3_STORAGE_ENDPOINT !== undefined || env.S3_ENDPOINT === undefined
@@ -520,6 +542,7 @@ export function parseWorkerRuntimeConfig(
     gpuLeasePath,
     certificationManifestPath,
     goldMasterProvenancePath,
+    licenseRegistryPath,
     s3Endpoint,
     s3Region,
     s3ForcePathStyle,
@@ -627,10 +650,36 @@ export function createProductionWorker(
       now: overrides?.now
     });
 
+  const loadComponentLicenseRegistryFn =
+    overrides?.loadComponentLicenseRegistry ?? loadComponentLicenseRegistrySync;
+
+  let enforceLicenseRouting = overrides?.enforceLicenseRouting;
+  if (!enforceLicenseRouting) {
+    try {
+      const snapshot = loadComponentLicenseRegistryFn(effectiveConfig.licenseRegistryPath);
+      const registryPort = new JsonFileLicenseRegistryPort(snapshot);
+      enforceLicenseRouting = new EnforceLicenseRouting({
+        registry: registryPort,
+        ...(overrides?.now !== undefined ? { now: overrides.now } : {})
+      });
+    } catch (err) {
+      throw new WorkerConfigError(
+        `Failed to initialize license routing guard: ${(err as Error).message}`,
+        { cause: err }
+      );
+    }
+  }
+
   const executeProfileRenderUseCase =
     overrides?.executeProfileRenderUseCase ??
     overrides?.useCase ??
-    new ExecuteProfileRenderUseCase(renderEngine, gpuLease, gpuTelemetry, overrides?.now);
+    new ExecuteProfileRenderUseCase(
+      renderEngine,
+      gpuLease,
+      gpuTelemetry,
+      enforceLicenseRouting,
+      overrides?.now
+    );
 
   const outputReader =
     overrides?.outputReader ?? new HttpComfyUiOutputReader(effectiveConfig.comfyUiUrl);

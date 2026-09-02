@@ -15,6 +15,8 @@ import {
   type ExecuteProfileRenderInput,
   type ProfileRenderIdentity
 } from "./execute-profile-render.js";
+import { EnforceLicenseRouting } from "./enforce-license-routing.js";
+import { LicenseRoutingError } from "./license-routing-error.js";
 
 const HASH = "a".repeat(64);
 const WORKFLOW: RenderWorkflow = { "1": { class_type: "KSampler" } };
@@ -178,6 +180,7 @@ function createUseCase(
     readonly releaseError?: Error;
     readonly readError?: Error;
     readonly unloadError?: Error;
+    readonly enforceLicenseRouting?: EnforceLicenseRouting;
     readonly callLog?: string[];
     readonly now?: () => Date;
   } = {}
@@ -193,7 +196,43 @@ function createUseCase(
     options.resultError,
     options.unloadError
   );
-  const useCase = new ExecuteProfileRenderUseCase(renderEngine, gpuLease, telemetry, options.now);
+  const enforceLicenseRouting =
+    options.enforceLicenseRouting ??
+    new EnforceLicenseRouting({
+      registry: {
+        getSnapshot: () => ({
+          registryRevision: "2026-08-29.1",
+          generatedAt: "2026-08-29T12:00:00.000Z",
+          entries: [
+            {
+              componentId: "FLUX_SCHNELL_DRAFT_V1",
+              componentType: "model" as const,
+              versionOrRevision: "1",
+              status: "approved" as const,
+              licenseSource: "docs/prd.md §3.5",
+              reviewedAt: "2026-08-29T12:00:00.000Z",
+              policyRevision: "2026-08-29.1"
+            },
+            {
+              componentId: "LTX_25_720P_5S_V1",
+              componentType: "model" as const,
+              versionOrRevision: "1",
+              status: "approved" as const,
+              licenseSource: "docs/prd.md §3.5",
+              reviewedAt: "2026-08-29T12:00:00.000Z",
+              policyRevision: "2026-08-29.1"
+            }
+          ]
+        })
+      }
+    });
+  const useCase = new ExecuteProfileRenderUseCase(
+    renderEngine,
+    gpuLease,
+    telemetry,
+    enforceLicenseRouting,
+    options.now
+  );
   return { callLog, lease, gpuLease, telemetry, renderEngine, useCase };
 }
 
@@ -438,5 +477,83 @@ describe("ExecuteProfileRenderUseCase", () => {
       "lease.release"
     ]);
     expect(lease.releaseCount).toBe(1);
+  });
+
+  it("denies execution and makes zero GPU lease / queue calls when license routing denies", async () => {
+    const registry = {
+      getSnapshot: () => ({
+        registryRevision: "2026-08-29.1",
+        generatedAt: "2026-08-29T12:00:00.000Z",
+        entries: [
+          {
+            componentId: "LTX_25_720P_5S_V1",
+            componentType: "model" as const,
+            versionOrRevision: "1",
+            status: "review_required" as const,
+            licenseSource: "docs/prd.md §3.5",
+            reviewedAt: "2026-08-29T12:00:00.000Z",
+            policyRevision: "1"
+          }
+        ]
+      })
+    };
+    const enforceLicenseRouting = new EnforceLicenseRouting({ registry });
+    const { callLog, gpuLease, renderEngine, useCase } = createUseCase({ enforceLicenseRouting });
+
+    const input = createInput({
+      identity: createIdentity({
+        renderProfileKey: "LTX_25_720P_5S_V1",
+        renderProfileVersion: 1
+      })
+    });
+
+    await expect(useCase.execute(input)).rejects.toThrow(LicenseRoutingError);
+
+    expect(callLog).toHaveLength(0);
+    expect(gpuLease.acquireCount).toBe(0);
+    expect(renderEngine.queueInputs).toHaveLength(0);
+  });
+
+  it("permits execution when license routing approves required component", async () => {
+    const registry = {
+      getSnapshot: () => ({
+        registryRevision: "2026-08-29.1",
+        generatedAt: "2026-08-29T12:00:00.000Z",
+        entries: [
+          {
+            componentId: "LTX_25_720P_5S_V1",
+            componentType: "model" as const,
+            versionOrRevision: "1",
+            status: "approved" as const,
+            licenseId: "Apache-2.0",
+            licenseSource: "docs/prd.md §3.5",
+            reviewedAt: "2026-08-29T12:00:00.000Z",
+            policyRevision: "1"
+          }
+        ]
+      })
+    };
+    const enforceLicenseRouting = new EnforceLicenseRouting({ registry });
+    const { callLog, gpuLease, renderEngine, useCase } = createUseCase({ enforceLicenseRouting });
+
+    const input = createInput({
+      identity: createIdentity({
+        renderProfileKey: "LTX_25_720P_5S_V1",
+        renderProfileVersion: 1
+      })
+    });
+
+    const result = await useCase.execute(input);
+    expect(result.status).toBe("succeeded");
+    expect(gpuLease.acquireCount).toBe(1);
+    expect(renderEngine.queueInputs).toHaveLength(1);
+    expect(callLog).toEqual([
+      "lease.acquire",
+      "gpu.readMemory",
+      "render.queue",
+      "render.result",
+      "render.unload",
+      "lease.release"
+    ]);
   });
 });

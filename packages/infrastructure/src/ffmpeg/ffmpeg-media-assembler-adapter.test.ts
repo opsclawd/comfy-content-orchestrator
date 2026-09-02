@@ -1230,6 +1230,39 @@ describe("FfmpegMediaAssemblerAdapter (unit)", () => {
   });
 
   describe("Provenance and preflight gates", () => {
+    it("getRuntimeComponents reports the exact live-parsed ffmpeg version, reusing the same probe assemble() uses", async () => {
+      let versionSpawnCount = 0;
+      const fakeRunner: SpawnLikeFn = async (_cmd, args) => {
+        if (args.includes("-version")) {
+          versionSpawnCount++;
+          return { exitCode: 0, stdout: "ffmpeg version n8.0.1 Copyright ...", stderr: "" };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      };
+
+      const adapter = new FfmpegMediaAssemblerAdapter({
+        ffmpegPath: "ffmpeg",
+        ffprobePath: "ffprobe",
+        workspaceRoot: tempDir,
+        objectStorage,
+        spawnFn: fakeRunner
+      });
+
+      const components = await adapter.getRuntimeComponents();
+      expect(components).toEqual([
+        {
+          componentId: "ffmpeg",
+          componentType: "runtime",
+          versionOrRevision: "n8.0.1"
+        }
+      ]);
+
+      // Calling it again must reuse the cached probe (same promise as
+      // assemble() itself uses), not spawn ffmpeg -version a second time.
+      await adapter.getRuntimeComponents();
+      expect(versionSpawnCount).toBe(1);
+    });
+
     it("throws ENCODER_UNAVAILABLE when libx264 is missing from ffmpeg -encoders", async () => {
       const fakeRunner: SpawnLikeFn = async (_cmd, args) => {
         if (args.includes("-encoders")) {

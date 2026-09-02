@@ -507,8 +507,38 @@ describe("render CLI", () => {
         createRenderEngine: () => renderEngine,
         createGpuLease: () => gpuLease,
         createGpuTelemetry: () => telemetry,
-        createUseCase: (engine, leasePort, telemetryPort) => {
-          const realUseCase = new ExecuteProfileRenderUseCase(engine, leasePort, telemetryPort);
+        loadComponentLicenseRegistry: async () => ({
+          schemaVersion: 1 as const,
+          registryRevision: "2026-08-29.1",
+          generatedAt: "2026-08-29T12:00:00.000Z",
+          entries: [
+            {
+              componentId: "FLUX_SCHNELL_DRAFT_V1",
+              componentType: "model" as const,
+              versionOrRevision: "1",
+              status: "approved" as const,
+              licenseSource: "docs/prd.md §3.5",
+              reviewedAt: "2026-08-29T12:00:00.000Z",
+              policyRevision: "2026-08-29.1"
+            },
+            {
+              componentId: "LTX_25_720P_5S_V1",
+              componentType: "model" as const,
+              versionOrRevision: "1",
+              status: "approved" as const,
+              licenseSource: "docs/prd.md §3.5",
+              reviewedAt: "2026-08-29T12:00:00.000Z",
+              policyRevision: "2026-08-29.1"
+            }
+          ]
+        }),
+        createUseCase: (engine, leasePort, telemetryPort, enforceLicenseRouting) => {
+          const realUseCase = new ExecuteProfileRenderUseCase(
+            engine,
+            leasePort,
+            telemetryPort,
+            enforceLicenseRouting
+          );
           return {
             execute: async (input) => {
               executedInput = input;
@@ -557,7 +587,11 @@ describe("render CLI", () => {
       completedAt: "2026-08-16T00:00:01.000Z"
     });
 
-    const times = [new Date("2026-08-16T00:00:00.000Z"), new Date("2026-08-16T00:00:02.500Z")];
+    const times = [
+      new Date("2026-08-16T00:00:00.000Z"),
+      new Date("2026-08-16T00:00:00.000Z"),
+      new Date("2026-08-16T00:00:02.500Z")
+    ];
     let timeIndex = 0;
 
     const deps: RenderCliDependencies = {
@@ -570,7 +604,7 @@ describe("render CLI", () => {
       createRenderEngine: () => renderEngine,
       createGpuLease: () => gpuLease,
       createGpuTelemetry: () => telemetry,
-      now: () => times[timeIndex++] ?? times[1]!
+      now: () => times[timeIndex++] ?? times[times.length - 1]!
     };
 
     const stdoutLines: string[] = [];
@@ -846,6 +880,55 @@ describe("render CLI", () => {
     expect(stdoutLines.join("\n")).toContain("Usage: render");
     expect(stderrLines).toHaveLength(0);
     expect(callLog).toHaveLength(0);
+  });
+
+  it("fails closed when license registry denies profile component with zero GPU lease or queue calls", async () => {
+    const callLog: string[] = [];
+    const profile = createLtxProfile(); // LTX is review_required in default seed registry
+    const approved = createApprovedReport(profile);
+    const live = createLiveReport(profile);
+
+    const lease = new FakeLease(callLog);
+    const gpuLease = new FakeGpuLease(callLog, lease);
+    const telemetry = new FakeGpuTelemetry(callLog);
+    const renderEngine = new FakeRenderEngine(callLog);
+
+    const deps: RenderCliDependencies = {
+      loadCertificationProfile: async () => profile,
+      readApprovedProvenance: async () => approved,
+      collectCertificationProvenance: async () => live,
+      verifyGoldMasterProvenance: () => {},
+      readWorkflowFile: async () => LTX_WORKFLOW_JSON,
+      hashWorkflow: () => HASH_LTX,
+      createRenderEngine: () => renderEngine,
+      createGpuLease: () => gpuLease,
+      createGpuTelemetry: () => telemetry
+    };
+
+    const stdoutLines: string[] = [];
+    const stderrLines: string[] = [];
+    const exitCode = await runRenderCli(
+      buildValidCliArgs("ltx-25-720p-97f"),
+      {
+        stdout: (line) => stdoutLines.push(line),
+        stderr: (line) => stderrLines.push(line)
+      },
+      deps
+    );
+
+    expect(exitCode).toBe(1);
+    expect(stdoutLines).toHaveLength(0);
+    expect(gpuLease.acquireCount).toBe(0);
+    expect(renderEngine.queueInputs).toHaveLength(0);
+
+    const errorJson = JSON.parse(stderrLines.find((l) => l.startsWith("{")) ?? "{}");
+    expect(errorJson).toMatchObject({
+      status: "failed",
+      stage: "license_routing",
+      code: "license_routing_denied"
+    });
+    expect(errorJson.message).toContain('Component "LTX_25_720P_5S_V1"');
+    expect(errorJson.message).toContain('has policy status "review_required"');
   });
 
   it("direct execution assigns the returned code to process.exitCode", () => {
