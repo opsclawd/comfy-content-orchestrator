@@ -10,6 +10,7 @@ import {
   type AssemblyExecutionResult,
   type AssemblyFfmpegMetadata,
   type AssemblySpec,
+  type ComponentRef,
   type ExecutedSoundbedRef,
   type ExecutedVideoStemRef,
   type ExecutedVoiceoverRef
@@ -161,6 +162,24 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
     this.defaultPreset = options.defaultPreset ?? DEFAULT_PRESET;
     this.outputBucket = options.outputBucket ?? BUCKETS.DELIVERY;
     this.createAssemblyId = options.createAssemblyId ?? (() => randomUUID());
+  }
+
+  /**
+   * The exact, live-detected FFmpeg runtime identity this adapter will use
+   * for its actual encode dispatch — reuses the same cached probe as
+   * assemble() itself, so a license-routing guard calling this before
+   * dispatch checks the identity that will actually execute, not an
+   * unverified/static claim.
+   */
+  async getRuntimeComponents(): Promise<readonly ComponentRef[]> {
+    const metadata = await this.getFfmpegMetadata();
+    return [
+      {
+        componentId: "ffmpeg",
+        componentType: "runtime",
+        versionOrRevision: metadata.version
+      }
+    ];
   }
 
   private async getFfmpegMetadata(): Promise<AssemblyFfmpegMetadata> {

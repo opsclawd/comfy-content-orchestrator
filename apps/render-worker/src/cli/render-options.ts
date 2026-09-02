@@ -8,6 +8,7 @@ export interface RenderCliOptions {
   readonly comfyUiUrl: string;
   readonly goldMasterProvenancePath: string;
   readonly manifestPath: string;
+  readonly licenseRegistryPath: string;
   readonly gpuIndex: number;
   readonly leasePath: string;
   readonly renderTimeoutMs: number;
@@ -20,6 +21,10 @@ export type RenderCliParsedArgs =
 
 const DEFAULT_REPO_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)), "../../../../");
 const DEFAULT_MANIFEST_PATH = resolve(DEFAULT_REPO_ROOT, "templates/provenance.json");
+const DEFAULT_LICENSE_REGISTRY_PATH = resolve(
+  DEFAULT_REPO_ROOT,
+  "config/component-license-registry.json"
+);
 const DEFAULT_GPU_INDEX = 0;
 const DEFAULT_RENDER_TIMEOUT_MS = 300_000;
 const PATH_SAFE_ID_REGEX = /^[a-z0-9][a-z0-9._-]*$/;
@@ -30,6 +35,7 @@ const KNOWN_FLAGS: ReadonlySet<string> = new Set([
   "--comfyui-url",
   "--gold-master-provenance",
   "--manifest",
+  "--license-registry-path",
   "--gpu-index",
   "--lease-path",
   "--render-timeout-ms",
@@ -45,6 +51,7 @@ const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--comfyui-url",
   "--gold-master-provenance",
   "--manifest",
+  "--license-registry-path",
   "--gpu-index",
   "--lease-path",
   "--render-timeout-ms",
@@ -65,6 +72,7 @@ Required flags:
 
 Optional flags:
   --manifest <path>                Path to the profile manifest JSON (default: templates/provenance.json)
+  --license-registry-path <path>   Path to component license registry JSON (default: config/component-license-registry.json)
   --gpu-index <index>              Zero-based NVIDIA GPU device index (default: 0)
   --lease-path <path>               Local filesystem lock path (default: host temp directory GPU lock)
   --render-timeout-ms <ms>          Positive render timeout in milliseconds (default: 300000)
@@ -120,6 +128,7 @@ export function parseRenderCliArgs(argv: readonly string[]): RenderCliParsedArgs
   let comfyUiUrl: string | undefined;
   let goldMasterProvenancePath: string | undefined;
   let manifestPath: string | undefined;
+  let licenseRegistryPath: string | undefined;
   let gpuIndex: number | undefined;
   let leasePath: string | undefined;
   let renderTimeoutMs: number | undefined;
@@ -182,6 +191,9 @@ export function parseRenderCliArgs(argv: readonly string[]): RenderCliParsedArgs
         case "--manifest":
           manifestPath = value;
           break;
+        case "--license-registry-path":
+          licenseRegistryPath = value;
+          break;
         case "--gpu-index":
           gpuIndex = parseInteger(
             flag,
@@ -239,6 +251,7 @@ export function parseRenderCliArgs(argv: readonly string[]): RenderCliParsedArgs
       comfyUiUrl,
       goldMasterProvenancePath,
       manifestPath: manifestPath ?? DEFAULT_MANIFEST_PATH,
+      licenseRegistryPath: licenseRegistryPath ?? DEFAULT_LICENSE_REGISTRY_PATH,
       gpuIndex: effectiveGpuIndex,
       leasePath:
         leasePath ?? join(tmpdir(), `comfy-content-orchestrator-gpu-${effectiveGpuIndex}.lock`),

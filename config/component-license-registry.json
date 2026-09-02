@@ -1,0 +1,57 @@
+{
+  "registryRevision": "2026-08-29.1",
+  "generatedAt": "2026-08-29T12:00:00.000Z",
+  "entries": [
+    {
+      "componentId": "LTX_25_720P_5S_V1",
+      "componentType": "model",
+      "versionOrRevision": "1",
+      "status": "review_required",
+      "licenseSource": "docs/prd.md §3.5",
+      "reviewedAt": "2026-08-29T12:00:00.000Z",
+      "policyRevision": "2026-08-29.1",
+      "notes": "Requires formal commercial review and pinned license evidence"
+    },
+    {
+      "componentId": "FLUX_SCHNELL_DRAFT_V1",
+      "componentType": "model",
+      "versionOrRevision": "1",
+      "status": "approved",
+      "licenseSource": "docs/prd.md §3.5",
+      "reviewedAt": "2026-08-29T12:00:00.000Z",
+      "policyRevision": "2026-08-29.1",
+      "notes": "Internal policy approved for Phase 1 commercial use per docs/prd.md §3.5"
+    },
+    {
+      "componentId": "flux-1-dev",
+      "componentType": "model",
+      "versionOrRevision": "unpinned",
+      "status": "restricted",
+      "licenseSource": "docs/prd.md §3.5",
+      "reviewedAt": "2026-08-29T12:00:00.000Z",
+      "policyRevision": "2026-08-29.1",
+      "notes": "Restricted non-commercial license; requires applicable commercial licensing evidence before dispatch"
+    },
+    {
+      "componentId": "minio",
+      "componentType": "service",
+      "versionOrRevision": "RELEASE.2024-01-18T22-51-28Z",
+      "status": "approved",
+      "licenseId": "AGPL-3.0",
+      "licenseSource": "docs/component-governance.md",
+      "reviewedAt": "2026-08-26T00:00:00.000Z",
+      "policyRevision": "2026-08-29.1",
+      "notes": "Standalone unmodified network service with network boundary isolation per docs/component-governance.md"
+    },
+    {
+      "componentId": "ffmpeg",
+      "componentType": "runtime",
+      "versionOrRevision": "n8.0.1",
+      "status": "review_required",
+      "licenseSource": "docs/component-governance.md",
+      "reviewedAt": "2026-08-29T12:00:00.000Z",
+      "policyRevision": "2026-08-29.1",
+      "notes": "Host runtime build n8.0.1 captured and documented in docs/component-governance.md; review_required pending formal legal audit of GPL build configuration"
+    }
+  ]
+}

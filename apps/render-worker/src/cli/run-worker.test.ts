@@ -3,15 +3,22 @@ import {
   type StorageAdmissionPolicy,
   createStorageAdmissionPolicy,
   type JobKind,
-  type RenderJob
+  type RenderJob,
+  type JobId,
+  type SceneId,
+  type LeaseToken
 } from "@cco/domain";
 import type {
   JobMutationResult,
   PutObjectInput,
   ObjectLocator,
   StoredObject,
-  ObjectStoragePort
+  ObjectStoragePort,
+  GpuExecutionLeasePort,
+  GpuLeaseHolder,
+  RenderEnginePort
 } from "@cco/application";
+import type { CertificationProvenanceReport } from "@cco/infrastructure";
 import type { ControlApiClient } from "../control-api-client.js";
 import { RenderWorker, type StorageAdmissionEnforcer, type WorkerLogger } from "../worker.js";
 import {
@@ -95,6 +102,7 @@ function validProductionEnv(): NodeJS.ProcessEnv {
     GPU_LEASE_PATH: "/var/lock/gpu-1.lock",
     CERTIFICATION_MANIFEST_PATH: "/opt/cco/manifest.json",
     GOLD_MASTER_PROVENANCE_PATH: "/opt/cco/provenance.json",
+    LICENSE_REGISTRY_PATH: "/opt/cco/license-registry.json",
     S3_STORAGE_ENDPOINT: "http://minio.internal:9000",
     AWS_ACCESS_KEY_ID: "aws-key",
     AWS_SECRET_ACCESS_KEY: "aws-secret",
@@ -176,6 +184,7 @@ describe("run-worker CLI", () => {
         gpuLeasePath: "/var/lock/gpu-1.lock",
         certificationManifestPath: "/opt/cco/manifest.json",
         goldMasterProvenancePath: "/opt/cco/provenance.json",
+        licenseRegistryPath: "/opt/cco/license-registry.json",
         s3Endpoint: "http://minio.internal:9000",
         s3Region: "us-west-2",
         s3ForcePathStyle: true,
@@ -608,6 +617,223 @@ describe("run-worker CLI", () => {
         sleep: testSleep
       });
       expect(prodWithAssemblerWorker).toBeInstanceOf(RenderWorker);
+    });
+
+    it("throws WorkerConfigError when license registry is corrupted or invalid", () => {
+      const config = parseWorkerRuntimeConfig({
+        ...minimalValidEnv(),
+        WORKER_ALLOWED_JOB_KINDS: "candidate"
+      });
+      expect(() =>
+        createProductionWorker(config, {
+          controlApiClient: new TestControlApiClient(),
+          objectStorage: new TestObjectStorage(),
+          enforceStorageAdmission: new TestAdmissionEnforcer(),
+          loadComponentLicenseRegistry: () => {
+            throw new Error("Invalid schema");
+          },
+          logger: testLogger,
+          sleep: testSleep
+        })
+      ).toThrow(WorkerConfigError);
+      expect(() =>
+        createProductionWorker(config, {
+          controlApiClient: new TestControlApiClient(),
+          objectStorage: new TestObjectStorage(),
+          enforceStorageAdmission: new TestAdmissionEnforcer(),
+          loadComponentLicenseRegistry: () => {
+            throw new Error("Invalid schema");
+          },
+          logger: testLogger,
+          sleep: testSleep
+        })
+      ).toThrow("Failed to initialize license routing guard: Invalid schema");
+    });
+
+    it("fails closed on denied license with zero GPU lease and zero queue calls during polling worker execution", async () => {
+      const config = parseWorkerRuntimeConfig({
+        ...minimalValidEnv(),
+        WORKER_ALLOWED_JOB_KINDS: "candidate"
+      });
+
+      let acquireLeaseCalled = false;
+      let queueRenderCalled = false;
+
+      const mockGpuLease: GpuExecutionLeasePort = {
+        acquireLease: vi.fn(async () => {
+          acquireLeaseCalled = true;
+          return {
+            leaseId: "gpu-lease-1",
+            holder: "worker-node-1" as unknown as GpuLeaseHolder,
+            acquiredAt: new Date(),
+            release: vi.fn(async () => {})
+          };
+        })
+      };
+
+      const mockRenderEngine = {
+        queueRender: vi.fn(async () => {
+          queueRenderCalled = true;
+          return { executionId: "exec-1" };
+        }),
+        getRenderResult: vi.fn(),
+        unloadModels: vi.fn()
+      };
+
+      const mockGpuTelemetry = {
+        readMemory: vi.fn(async () => ({
+          totalVramMb: 24576,
+          usedVramMb: 4096,
+          freeVramMb: 20480,
+          reservedVramMb: 512,
+          measuredAt: new Date().toISOString()
+        }))
+      };
+
+      const testJob: RenderJob = {
+        jobId: "job-license-test" as unknown as JobId,
+        sceneId: "scene-1" as unknown as SceneId,
+        jobKind: "candidate",
+        status: "leased",
+        workflowTemplate: "ltx-25-720p-97f",
+        injectedPayload: {
+          prompt: "a scenic sunset",
+          variantOrdinal: 1
+        },
+        workerId: "worker-1",
+        leaseToken: "lease-tok-1" as unknown as LeaseToken,
+        leaseExpiresAt: new Date(Date.now() + 60000),
+        retryCount: 0,
+        maxRetries: 3,
+        errorTrace: null,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      const abortController = new AbortController();
+      let failCalledWithTrace: string | undefined;
+      let claimCalls = 0;
+      const fakeClient = new TestControlApiClient();
+      fakeClient.claim = vi.fn().mockImplementation(async () => {
+        claimCalls++;
+        if (claimCalls === 1) {
+          return testJob;
+        }
+        abortController.abort();
+        return undefined;
+      });
+      fakeClient.fail = vi.fn().mockImplementation(async (_jobId, _leaseToken, errorTrace) => {
+        failCalledWithTrace = errorTrace;
+        abortController.abort();
+        return { outcome: "applied", job: testJob };
+      });
+      fakeClient.defer = vi.fn();
+
+      const fakeProvenanceReport = {
+        version: 1,
+        profileId: "ltx-25-720p-97f",
+        generatedAt: new Date().toISOString(),
+        environment: { os: "linux" },
+        workflow: {
+          relativePath: "ltx_25_720p_97f_api.json",
+          sha256: "b".repeat(64),
+          source: {
+            kind: "validated_host_export",
+            uri: "repo",
+            revision: "rev",
+            license: "GPL-3.0"
+          }
+        },
+        models: [
+          {
+            category: "diffusion_models",
+            relativePath: "ltx.safetensors",
+            key: "models/diffusion_models/ltx.safetensors",
+            bytes: 1000,
+            sha256: "c".repeat(64)
+          }
+        ],
+        git: {
+          comfyUiCommit: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+          customNodes: []
+        },
+        disk: {
+          freeBytes: 200 * 1024 * 1024 * 1024,
+          modelFootprintGb: 10,
+          minFreeDiskGb: 0,
+          hasSufficientSpace: true
+        },
+        renderProfileProvenance: {
+          key: "LTX_25_720P_5S_V1",
+          version: 1,
+          engine: "ltx_25",
+          workflowHash: "b".repeat(64),
+          modelHashes: { "models/diffusion_models/ltx.safetensors": "c".repeat(64) },
+          frames: 97,
+          steps: 8,
+          runnerProfile: "dynamicvram-offload-v1",
+          measuredDiskFootprintGb: 10,
+          minFreeDiskGb: 0
+        }
+      };
+
+      // In production registry, LTX_25_720P_5S_V1 is review_required
+      const worker = createProductionWorker(config, {
+        controlApiClient: fakeClient,
+        objectStorage: new TestObjectStorage(),
+        enforceStorageAdmission: new TestAdmissionEnforcer(),
+        gpuLease: mockGpuLease,
+        renderEngine: mockRenderEngine as unknown as RenderEnginePort,
+        gpuTelemetry: mockGpuTelemetry,
+        loadCertificationProfile: async () => ({
+          id: "ltx-25-720p-97f",
+          engine: "ltx_25",
+          workflowPath: "/comfy/workflows/ltx.json",
+          workflowRelativePath: "ltx_25_720p_97f_api.json",
+          expectedWorkflowHash: "b".repeat(64),
+          source: {
+            kind: "validated_host_export",
+            uri: "repo",
+            revision: "rev",
+            license: "GPL-3.0"
+          },
+          baseline: { width: 1280, height: 720, frames: 97, steps: 8 },
+          minFreeDiskGb: 0,
+          runnerProfile: "dynamicvram-offload-v1",
+          models: [{ category: "diffusion_models", relativePath: "ltx.safetensors" }],
+          assertions: [{ nodeId: "1", classType: "KSampler", input: "steps", equals: 8 }],
+          renderProfileIdentity: {
+            key: "LTX_25_720P_5S_V1",
+            version: 1
+          }
+        }),
+        readApprovedProvenance: async () =>
+          fakeProvenanceReport as unknown as CertificationProvenanceReport,
+        collectCertificationProvenance: async () =>
+          fakeProvenanceReport as unknown as CertificationProvenanceReport,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () =>
+          JSON.stringify({
+            "1": { class_type: "KSampler", inputs: { steps: 8, seed: 1 } },
+            "3": { class_type: "CLIPTextEncode", inputs: { text: "old text" } }
+          }),
+        hashWorkflow: () => "b".repeat(64),
+        logger: testLogger,
+        sleep: testSleep
+      });
+
+      await worker.start(abortController.signal);
+
+      // Assert zero GPU lease acquisition and zero ComfyUI queue dispatch calls
+      expect(acquireLeaseCalled).toBe(false);
+      expect(queueRenderCalled).toBe(false);
+      expect(mockGpuLease.acquireLease).not.toHaveBeenCalled();
+      expect(mockRenderEngine.queueRender).not.toHaveBeenCalled();
+
+      // Assert job failed permanently via fail(), NOT deferred via defer()
+      expect(fakeClient.fail).toHaveBeenCalledTimes(1);
+      expect(fakeClient.defer).not.toHaveBeenCalled();
+      expect(failCalledWithTrace).toContain("License routing denied");
     });
 
     it("accepts and wires concrete dependency overrides", () => {

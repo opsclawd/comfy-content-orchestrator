@@ -67,6 +67,11 @@ describe("render CLI options", () => {
 
     expect(options).toMatchObject({
       manifestPath: defaultManifestPath,
+      licenseRegistryPath: resolve(
+        fileURLToPath(
+          new URL("../../../../config/component-license-registry.json", import.meta.url)
+        )
+      ),
       gpuIndex: 0,
       leasePath: join(tmpdir(), "comfy-content-orchestrator-gpu-0.lock"),
       renderTimeoutMs: 300_000
@@ -129,9 +134,27 @@ describe("render CLI options", () => {
     );
 
     expect(options.manifestPath).toBe("./local/provenance.json");
+    expect(options.licenseRegistryPath).toBe(
+      resolve(
+        fileURLToPath(
+          new URL("../../../../config/component-license-registry.json", import.meta.url)
+        )
+      )
+    );
     expect(options.leasePath).toBe("./local/gpu.lock");
     expect(options.gpuIndex).toBe(2);
     expect(options.renderJobId).toBe("render-local");
     expect(options.sceneId).toBe("scene-local");
+  });
+
+  it("accepts explicit custom license-registry-path", () => {
+    const options = runOptions(
+      parseRenderCliArgs([
+        ...requiredArgs(),
+        "--license-registry-path",
+        "./custom/license-registry.json"
+      ])
+    );
+    expect(options.licenseRegistryPath).toBe("./custom/license-registry.json");
   });
 });

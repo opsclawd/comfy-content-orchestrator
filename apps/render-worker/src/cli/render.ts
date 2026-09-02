@@ -6,9 +6,11 @@ import pg from "pg";
 const { Pool } = pg;
 import {
   AssembleGenerationManifest,
+  EnforceLicenseRouting,
   ExecuteProfileRenderUseCase,
   GpuLeaseOwnershipLostError,
   GpuLeaseUnavailableError,
+  LicenseRoutingError,
   ProfileRenderExecutionError,
   type ExecuteProfileRenderInput,
   type ExecuteProfileRenderResult,
@@ -27,7 +29,9 @@ import {
   collectCertificationProvenance,
   ComfyUiRenderEngineAdapter,
   hashWorkflow,
+  JsonFileLicenseRegistryPort,
   loadCertificationProfile,
+  loadComponentLicenseRegistry,
   LocalFsGpuLeaseAdapter,
   NvidiaSmiTelemetryAdapter,
   PostgresReferenceAssetRepository,
@@ -106,10 +110,12 @@ export interface RenderCliDependencies {
   readonly createRenderEngine?: (options: ComfyUiRenderEngineAdapterOptions) => RenderEnginePort;
   readonly createGpuLease?: (options: LocalFsGpuLeaseAdapterOptions) => GpuExecutionLeasePort;
   readonly createGpuTelemetry?: (options: NvidiaSmiTelemetryAdapterOptions) => GpuTelemetryPort;
+  readonly loadComponentLicenseRegistry?: typeof loadComponentLicenseRegistry;
   readonly createUseCase?: (
     renderEngine: RenderEnginePort,
     gpuLease: GpuExecutionLeasePort,
-    gpuTelemetry: GpuTelemetryPort
+    gpuTelemetry: GpuTelemetryPort,
+    enforceLicenseRouting: EnforceLicenseRouting
   ) => {
     execute: (input: ExecuteProfileRenderInput) => Promise<ExecuteProfileRenderResult>;
   };
@@ -182,6 +188,15 @@ function formatErrorOutput(err: unknown, currentStage: string): RenderCliErrorOu
       status: "failed",
       stage: "preflight",
       code: "workflow_hash_mismatch",
+      message: err.message
+    };
+  }
+
+  if (err instanceof LicenseRoutingError) {
+    return {
+      status: "failed",
+      stage: "license_routing",
+      code: err.code,
       message: err.message
     };
   }
@@ -266,6 +281,7 @@ export async function runRenderCli(
     ("loadCertificationProfile" in ioOrDeps ||
       "readApprovedProvenance" in ioOrDeps ||
       "collectCertificationProvenance" in ioOrDeps ||
+      "loadComponentLicenseRegistry" in ioOrDeps ||
       "createRenderEngine" in ioOrDeps ||
       "createGpuLease" in ioOrDeps ||
       "createGpuTelemetry" in ioOrDeps ||
@@ -428,9 +444,26 @@ export async function runRenderCli(
           now
         });
 
+    const loadComponentLicenseRegistryFn =
+      dependencies?.loadComponentLicenseRegistry ?? loadComponentLicenseRegistry;
+    const licenseRegistrySnapshot = await loadComponentLicenseRegistryFn(
+      options.licenseRegistryPath
+    );
+    const licenseRegistryPort = new JsonFileLicenseRegistryPort(licenseRegistrySnapshot);
+    const enforceLicenseRouting = new EnforceLicenseRouting({
+      registry: licenseRegistryPort,
+      now
+    });
+
     const useCase = dependencies?.createUseCase
-      ? dependencies.createUseCase(renderEngine, gpuLease, gpuTelemetry)
-      : new ExecuteProfileRenderUseCase(renderEngine, gpuLease, gpuTelemetry, now);
+      ? dependencies.createUseCase(renderEngine, gpuLease, gpuTelemetry, enforceLicenseRouting)
+      : new ExecuteProfileRenderUseCase(
+          renderEngine,
+          gpuLease,
+          gpuTelemetry,
+          enforceLicenseRouting,
+          now
+        );
 
     const result = await useCase.execute({
       renderJobId: options.renderJobId,
