@@ -73,10 +73,57 @@ export function demuxAnimatedWebp(bytes: Uint8Array): DemuxedWebp {
       canvasWidth = 1 + buf.readUIntLE(chunkStart + 4, 3);
       canvasHeight = 1 + buf.readUIntLE(chunkStart + 7, 3);
     } else if (fourcc === "ANMF" && size >= 16 && chunkStart + 16 <= buf.length) {
+      // Per-frame x/y (in units of 2 pixels) and width-1/height-1, per the
+      // WebP ANMF chunk layout. This extractor treats every frame as an
+      // independent, full-canvas, origin-(0,0) image and skips real ANMF
+      // compositing (offset placement, alpha-blending with the prior
+      // canvas, disposal). That's only correct for a specific subset of
+      // ANMF content — validated against real LTX_25_720P_5S_V1 output for
+      // issue #131 — so any frame outside that subset must fail closed
+      // instead of silently mis-rendering (crop/misplace/wrong-alpha).
+      const frameX = 2 * buf.readUIntLE(chunkStart + 0, 3);
+      const frameY = 2 * buf.readUIntLE(chunkStart + 3, 3);
+      const frameWidth = 1 + buf.readUIntLE(chunkStart + 6, 3);
+      const frameHeight = 1 + buf.readUIntLE(chunkStart + 9, 3);
       const frameDurationMs = buf.readUIntLE(chunkStart + 12, 3);
+      const flagsByte = buf.readUInt8(chunkStart + 15);
+      const blendingMethod = (flagsByte >> 1) & 0x01; // 0 = overwrite, 1 = alpha-blend with prior canvas
       totalDurationMs += frameDurationMs;
 
+      if (
+        frameX !== 0 ||
+        frameY !== 0 ||
+        frameWidth !== canvasWidth ||
+        frameHeight !== canvasHeight
+      ) {
+        throw new FfmpegAssemblyError(
+          "UNSUPPORTED_INPUT",
+          `Animated WebP frame ${frames.length} is not full-canvas at origin (0,0) ` +
+            `(frame ${frameWidth}x${frameHeight}+${frameX}+${frameY} vs canvas ` +
+            `${canvasWidth}x${canvasHeight}); independent-frame extraction does not ` +
+            `implement ANMF sub-rectangle compositing`
+        );
+      }
+
       const payload = buf.subarray(chunkStart + 16, chunkEnd);
+      const payloadSubChunk = payload.subarray(0, 4).toString("ascii");
+      const hasAlpha = payloadSubChunk === "ALPH";
+
+      if (blendingMethod === 1 && hasAlpha) {
+        // Blend=1 is only a safe no-op when the frame is fully opaque
+        // (overwriting a full-canvas frame is identical to blending it
+        // when there's no alpha to blend with). A frame that both carries
+        // an alpha channel and requests blending needs real alpha
+        // compositing against the previous canvas, which this extractor
+        // does not implement.
+        throw new FfmpegAssemblyError(
+          "UNSUPPORTED_INPUT",
+          `Animated WebP frame ${frames.length} uses alpha-blending compositing ` +
+            `(blend=1) with an alpha channel present; independent-frame extraction ` +
+            `only supports overwrite-composited or fully-opaque frames`
+        );
+      }
+
       // Wrap frame payload into standalone RIFF WebP container
       const riffHeader = Buffer.alloc(12);
       riffHeader.write("RIFF", 0, 4, "ascii");

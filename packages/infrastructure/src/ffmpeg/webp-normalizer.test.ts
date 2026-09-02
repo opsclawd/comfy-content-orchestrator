@@ -7,9 +7,69 @@ import {
   isAnimatedWebp,
   normalizeAnimatedWebpToMp4
 } from "./webp-normalizer.js";
+import { FfmpegAssemblyError } from "./ffmpeg-error.js";
 import type { SpawnLikeFn } from "./ffmpeg-process-runner.js";
 
 describe("webp-normalizer", () => {
+  // Builds a single-frame animated WebP with an explicitly controllable
+  // ANMF frame rectangle, blend flag, and payload sub-chunk type — used to
+  // exercise the fail-closed ANMF compositing-subset validation directly
+  // against real-artifact-derived cases (issue #131).
+  function createAnimatedWebpWithFrame(opts: {
+    canvasWidth: number;
+    canvasHeight: number;
+    frameX: number;
+    frameY: number;
+    frameWidth: number;
+    frameHeight: number;
+    blend: 0 | 1;
+    hasAlpha: boolean;
+  }): Buffer {
+    const vp8xChunk = Buffer.alloc(18);
+    vp8xChunk.write("VP8X", 0);
+    vp8xChunk.writeUInt32LE(10, 4);
+    vp8xChunk.writeUInt8(0x02, 8); // Animation flag
+    vp8xChunk.writeUIntLE(opts.canvasWidth - 1, 12, 3);
+    vp8xChunk.writeUIntLE(opts.canvasHeight - 1, 15, 3);
+
+    const animChunk = Buffer.alloc(14);
+    animChunk.write("ANIM", 0);
+    animChunk.writeUInt32LE(6, 4);
+    animChunk.writeUInt32LE(0xffffffff, 8);
+    animChunk.writeUInt16LE(0, 12);
+
+    const payload = opts.hasAlpha
+      ? Buffer.concat([Buffer.from("ALPH", "ascii"), Buffer.from([0, 0, 0, 0])])
+      : Buffer.concat([Buffer.from("VP8 ", "ascii"), Buffer.from([0, 0, 0, 0])]);
+
+    const anmfHeader = Buffer.alloc(16);
+    anmfHeader.writeUIntLE(opts.frameX / 2, 0, 3);
+    anmfHeader.writeUIntLE(opts.frameY / 2, 3, 3);
+    anmfHeader.writeUIntLE(opts.frameWidth - 1, 6, 3);
+    anmfHeader.writeUIntLE(opts.frameHeight - 1, 9, 3);
+    anmfHeader.writeUIntLE(41, 12, 3); // duration: 41ms
+    anmfHeader.writeUInt8(opts.blend << 1, 15); // disposal=0, blend as given
+
+    const anmfBody = Buffer.concat([anmfHeader, payload]);
+    const anmfChunk = Buffer.concat([
+      Buffer.from("ANMF", "ascii"),
+      (() => {
+        const sizeBuf = Buffer.alloc(4);
+        sizeBuf.writeUInt32LE(anmfBody.length, 0);
+        return sizeBuf;
+      })(),
+      anmfBody
+    ]);
+
+    const body = Buffer.concat([vp8xChunk, animChunk, anmfChunk]);
+    const riffHeader = Buffer.alloc(12);
+    riffHeader.write("RIFF", 0);
+    riffHeader.writeUInt32LE(4 + body.length, 4);
+    riffHeader.write("WEBP", 8);
+
+    return Buffer.concat([riffHeader, body]);
+  }
+
   function createSyntheticAnimatedWebpBuffer(): Buffer {
     // RIFF header
     // Total size will be calculated
@@ -87,6 +147,89 @@ describe("webp-normalizer", () => {
       expect(frame.buffer.subarray(0, 4).toString("ascii")).toBe("RIFF");
       expect(frame.buffer.subarray(8, 12).toString("ascii")).toBe("WEBP");
     }
+  });
+
+  describe("ANMF compositing-subset validation (issue #131)", () => {
+    // The bounds validated below (full-canvas/origin-(0,0) frames; blend=1
+    // only ever co-occurring with fully-opaque, non-alpha frames) were
+    // empirically confirmed against a real LTX_25_720P_5S_V1 certification
+    // artifact (ltx_25_720p_97f_00002_.webp, 97 frames): 97/97 frames were
+    // full-canvas/origin-(0,0), and every blend=1 frame lacked an alpha
+    // channel (making the blend flag a no-op), while every frame that did
+    // carry alpha was blend=0 (overwrite, no compositing needed). Anything
+    // outside that subset must fail closed rather than silently mis-render.
+
+    it("accepts a full-canvas, origin-(0,0), blend=0 frame with no alpha", () => {
+      const buf = createAnimatedWebpWithFrame({
+        canvasWidth: 1280,
+        canvasHeight: 704,
+        frameX: 0,
+        frameY: 0,
+        frameWidth: 1280,
+        frameHeight: 704,
+        blend: 0,
+        hasAlpha: false
+      });
+      expect(() => demuxAnimatedWebp(buf)).not.toThrow();
+    });
+
+    it("accepts a full-canvas, origin-(0,0), blend=0 frame that carries alpha (no compositing needed)", () => {
+      const buf = createAnimatedWebpWithFrame({
+        canvasWidth: 1280,
+        canvasHeight: 704,
+        frameX: 0,
+        frameY: 0,
+        frameWidth: 1280,
+        frameHeight: 704,
+        blend: 0,
+        hasAlpha: true
+      });
+      expect(() => demuxAnimatedWebp(buf)).not.toThrow();
+    });
+
+    it("accepts a full-canvas, origin-(0,0), blend=1 frame with no alpha (overwrite-equivalent no-op)", () => {
+      const buf = createAnimatedWebpWithFrame({
+        canvasWidth: 1280,
+        canvasHeight: 704,
+        frameX: 0,
+        frameY: 0,
+        frameWidth: 1280,
+        frameHeight: 704,
+        blend: 1,
+        hasAlpha: false
+      });
+      expect(() => demuxAnimatedWebp(buf)).not.toThrow();
+    });
+
+    it("fails closed on a frame that isn't full-canvas at origin (0,0)", () => {
+      const buf = createAnimatedWebpWithFrame({
+        canvasWidth: 1280,
+        canvasHeight: 704,
+        frameX: 100,
+        frameY: 50,
+        frameWidth: 800,
+        frameHeight: 600,
+        blend: 0,
+        hasAlpha: false
+      });
+      expect(() => demuxAnimatedWebp(buf)).toThrow(FfmpegAssemblyError);
+      expect(() => demuxAnimatedWebp(buf)).toThrow(/not full-canvas at origin/);
+    });
+
+    it("fails closed on a blend=1 frame that carries an alpha channel (real compositing required)", () => {
+      const buf = createAnimatedWebpWithFrame({
+        canvasWidth: 1280,
+        canvasHeight: 704,
+        frameX: 0,
+        frameY: 0,
+        frameWidth: 1280,
+        frameHeight: 704,
+        blend: 1,
+        hasAlpha: true
+      });
+      expect(() => demuxAnimatedWebp(buf)).toThrow(FfmpegAssemblyError);
+      expect(() => demuxAnimatedWebp(buf)).toThrow(/alpha-blending compositing/);
+    });
   });
 
   describe("normalizeAnimatedWebpToMp4", () => {
