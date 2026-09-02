@@ -90,9 +90,24 @@ async function buildFullCanvasAnimatedWebpStem(params: {
     throw new Error("No static WebP frames were produced for synthetic animated WebP stem");
   }
 
-  const frameDurationMs = Math.max(1, Math.round(1000 / fps));
+  // Distribute the declared clip duration evenly across frames (a
+  // Bresenham-style running-remainder split) rather than flat-rounding
+  // every frame to Math.round(1000/fps). A flat round(1000/24)=42ms
+  // overshoots the intended ~41.67ms/frame average by ~1ms/frame,
+  // compounding to tens of ms per stem across ~97 frames — enough to push
+  // the downstream 24fps-to-30fps CFR conversion + 6-stem concat outside
+  // ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS on some FFmpeg versions. This
+  // also matches the real LTX_25_720P_5S_V1 artifact's actual per-frame
+  // cadence (41ms, occasionally 42ms), not a uniform value.
+  const targetTotalMs = Math.round(durationSec * 1000);
+  let cumulativeMs = 0;
   const anmfChunks: Buffer[] = [];
-  for (const frameFile of frameFiles) {
+  for (let frameIndex = 0; frameIndex < frameFiles.length; frameIndex++) {
+    const frameFile = frameFiles[frameIndex]!;
+    const nextCumulativeMs = Math.round((targetTotalMs * (frameIndex + 1)) / frameFiles.length);
+    const frameDurationMs = nextCumulativeMs - cumulativeMs;
+    cumulativeMs = nextCumulativeMs;
+
     const staticWebp = await fs.readFile(path.join(frameDir, frameFile));
     // A single-image WebP produced by ffmpeg's plain `libwebp` encoder is
     // just RIFF/WEBP (12 bytes) followed directly by its "VP8 "/"VP8L"
