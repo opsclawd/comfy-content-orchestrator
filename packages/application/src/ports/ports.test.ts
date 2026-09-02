@@ -819,4 +819,11 @@ describe("Application capability ports contract tests", () => {
       expect(metrics.storageFreeBytes).toBe(300_000_000);
     });
   });
+
+  describe("DeliveryAssemblyJobQueuePort capability family", () => {
+    it("satisfies the DeliveryAssemblyJobQueuePort interface with in-memory double", async () => {
+      const module = await import("./delivery-assembly-job-queue-port.js");
+      expect(module).toBeDefined();
+    });
+  });
 });

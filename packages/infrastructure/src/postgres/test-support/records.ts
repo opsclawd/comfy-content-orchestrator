@@ -87,6 +87,20 @@ export interface RenderJobRecordInput {
   updatedAt?: Date | string;
 }
 
+export interface DeliveryAssemblyJobRecordInput {
+  campaignId: string;
+  assemblySpec?: Record<string, unknown>;
+  status?: string;
+  workerId?: string | null;
+  leaseToken?: string | null;
+  leaseExpiresAt?: Date | string | null;
+  retryCount?: number;
+  maxRetries?: number;
+  errorTrace?: string | null;
+  createdAt?: Date | string;
+  updatedAt?: Date | string;
+}
+
 export interface GenerationManifestRecordInput {
   jobId: string;
   promptIdComfy?: string;
@@ -202,6 +216,21 @@ export interface InsertedRenderJobRecord {
   job_kind: string;
   workflow_template: string;
   injected_payload: Record<string, unknown>;
+  status: string;
+  worker_id: string | null;
+  lease_token: string | null;
+  lease_expires_at: Date | null;
+  retry_count: number;
+  max_retries: number;
+  error_trace: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface InsertedDeliveryAssemblyJobRecord {
+  job_id: string;
+  campaign_id: string;
+  assembly_spec: Record<string, unknown>;
   status: string;
   worker_id: string | null;
   lease_token: string | null;
@@ -627,6 +656,79 @@ export async function insertRenderJobRecord(
   const row = res.rows[0];
   if (!row) {
     throw new Error("Failed to insert render job record");
+  }
+  return row;
+}
+
+export async function insertDeliveryAssemblyJobRecord(
+  client: PoolClient,
+  input: DeliveryAssemblyJobRecordInput
+): Promise<InsertedDeliveryAssemblyJobRecord> {
+  const campaignId = input.campaignId;
+  const assemblySpec = input.assemblySpec ?? {
+    campaignId,
+    assemblyProfile: { key: "VERTICAL_REEL_1080X1920_V1", version: 1 },
+    expectedTotalDurationMs: 5000,
+    videoStems: [
+      {
+        order: 0,
+        sceneId: "01950c46-9e90-7d3d-82d2-8f1d3c000001",
+        generationManifestId: "01950c46-9e90-7d3d-82d2-8f1d3c000002",
+        expectedDurationMs: 5000,
+        media: {
+          bucket: "godzspeed-delivery",
+          key: `campaigns/${campaignId}/scenes/scene-1/output.mp4`,
+          sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          contentType: "video/mp4"
+        }
+      }
+    ]
+  };
+  const status = input.status ?? "queued";
+  const workerId = input.workerId !== undefined ? input.workerId : "delivery-assembler-01";
+  const leaseToken = input.leaseToken !== undefined ? input.leaseToken : null;
+  const leaseExpiresAt = input.leaseExpiresAt !== undefined ? input.leaseExpiresAt : null;
+  const retryCount = input.retryCount ?? 0;
+  const maxRetries = input.maxRetries ?? 3;
+  const errorTrace = input.errorTrace !== undefined ? input.errorTrace : null;
+  const createdAt = input.createdAt !== undefined ? input.createdAt : null;
+  const updatedAt = input.updatedAt !== undefined ? input.updatedAt : null;
+
+  const res = await client.query<InsertedDeliveryAssemblyJobRecord>(
+    `
+    INSERT INTO delivery_assembly_jobs (
+      campaign_id,
+      assembly_spec,
+      status,
+      worker_id,
+      lease_token,
+      lease_expires_at,
+      retry_count,
+      max_retries,
+      error_trace,
+      created_at,
+      updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, CURRENT_TIMESTAMP), COALESCE($11, CURRENT_TIMESTAMP))
+    RETURNING *
+    `,
+    [
+      campaignId,
+      JSON.stringify(assemblySpec),
+      status,
+      workerId,
+      leaseToken,
+      leaseExpiresAt,
+      retryCount,
+      maxRetries,
+      errorTrace,
+      createdAt,
+      updatedAt
+    ]
+  );
+
+  const row = res.rows[0];
+  if (!row) {
+    throw new Error("Failed to insert delivery assembly job record");
   }
   return row;
 }

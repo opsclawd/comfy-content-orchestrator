@@ -18,6 +18,7 @@ export type LicenseRoutingOperationContext =
     };
 
 export interface LicenseRoutingErrorContext {
+  readonly decisionId?: string | undefined;
   readonly registryRevision: string;
   readonly evaluatedComponents: readonly EvaluatedComponentStatus[];
   readonly deniedReasons: readonly string[];
@@ -27,6 +28,7 @@ export interface LicenseRoutingErrorContext {
 export class LicenseRoutingError extends Error {
   override readonly name = "LicenseRoutingError";
   readonly code = "license_routing_denied";
+  readonly decisionId?: string | undefined;
   readonly registryRevision: string;
   readonly evaluatedComponents: readonly EvaluatedComponentStatus[];
   readonly deniedReasons: readonly string[];
@@ -34,6 +36,7 @@ export class LicenseRoutingError extends Error {
 
   constructor(message: string, context: LicenseRoutingErrorContext) {
     super(message);
+    this.decisionId = context.decisionId;
     this.registryRevision = context.registryRevision;
     this.evaluatedComponents = context.evaluatedComponents;
     this.deniedReasons = context.deniedReasons;

@@ -24,3 +24,4 @@ export * from "./hash-bytes.js";
 export * from "./reference-asset-repository.js";
 export * from "./generation-manifest-repository.js";
 export * from "./assembly-spec.js";
+export * from "./delivery-assembly-job-queue-port.js";
