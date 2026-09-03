@@ -1,5 +1,5 @@
 {
-  "registryRevision": "2026-08-29.2",
+  "registryRevision": "2026-08-29.3",
   "generatedAt": "2026-09-02T00:00:00.000Z",
   "entries": [
     {
@@ -48,11 +48,12 @@
       "componentId": "ffmpeg",
       "componentType": "runtime",
       "versionOrRevision": "7.0.2-static",
-      "status": "review_required",
-      "licenseSource": "docs/component-governance.md",
-      "reviewedAt": "2026-08-29T12:00:00.000Z",
+      "status": "approved",
+      "licenseId": "GPL-2.0-or-later (binary); LGPL-2.1-or-later (core source)",
+      "licenseSource": "https://git.ffmpeg.org/gitweb/ffmpeg.git/blob/HEAD:/LICENSE.md (FFmpeg upstream LICENSE.md, accessed 2026-09-02); https://www.gnu.org/licenses/gpl-faq.html#MereAggregation (FSF GPL FAQ §5 Mere Aggregation); https://www.gnu.org/licenses/gpl-faq.html#PipeLinking (FSF GPL FAQ Pipe/Socket invocation)",
+      "reviewedAt": "2026-09-02T00:00:00.000Z",
       "policyRevision": "2026-08-29.1",
-      "notes": "Pinned static build 7.0.2-static (see .ffmpeg-version), evaluated at startup by production composition root apps/render-worker/src/cli/run-delivery-assembler.ts via FfmpegMediaAssemblerAdapter.getRuntimeComponents(); review_required pending formal legal audit of GPL build configuration"
+      "notes": "Approved for Phase 1 commercial use. Effective license of the pinned static build 7.0.2-static (see .ffmpeg-version, MD5 7fa72b652e19bf84c9461e332ea1cdf3), configured with --enable-gpl --enable-version3 plus a full-featured --enable-lib* set including libx264, libx265, libass, libvidstab, libaom, libdav1d, libvpx, libopus, libwebp and others (see docs/component-governance.md for the full verified configuration string from `ffmpeg -version`), is GPL-2.0-or-later (the LGPL-2.1 core source becomes GPL-2.0+ once --enable-gpl pulls in GPL-licensed components such as libx264, libx265, libvidstab, libass). Determination authority: operator self-determination per FSF GPL FAQ citations; no outside counsel engaged. GPL-boundary holding: FfmpegMediaAssemblerAdapter invokes FFmpeg strictly as an external subprocess via child_process.spawn with no static/dynamic linking into Node.js, no C/C++ native addons, and communication via stdin/stdout pipes only. Per FSF GPL FAQ 'Mere Aggregation' and 'PipeLinking' clauses (URLs in licenseSource), subprocess + pipe invocation of a separately-distributed GPL program does not create a derivative work in the calling program, so the surrounding proprietary Node.js code is not contaminated by FFmpeg's GPL license. Distribution model: host-installed static binary on a separate medium from the Node.js application (downloaded and pinned via scripts/install-ffmpeg.sh; not bundled into the application's distribution archive). x264/x265 patent exposure (MPEG-LA H.264/HEVC royalties): not a concern for the current deployment jurisdiction and use case. This determination was originally made against runtime build n8.0.1 and is explicitly extended to cover the now-pinned 7.0.2-static build, which the GPL-boundary holding above applies to identically since the subprocess invocation architecture is unchanged and the additional enabled components (libx265, libvidstab, libaom, libdav1d, etc.) are also GPL/LGPL/BSD-licensed and carry no different boundary implications. Pinned runtime build continues to be evaluated at startup by apps/render-worker/src/cli/run-delivery-assembler.ts via FfmpegMediaAssemblerAdapter.getRuntimeComponents()."
     },
     {
       "componentId": "azure-tts",

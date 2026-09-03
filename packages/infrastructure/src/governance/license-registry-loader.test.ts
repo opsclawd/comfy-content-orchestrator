@@ -25,7 +25,7 @@ describe("license-registry-loader", () => {
 
   it("loads and validates the real committed config/component-license-registry.json seed file", async () => {
     const snapshot = await loadComponentLicenseRegistry(SEED_REGISTRY_PATH);
-    expect(snapshot.registryRevision).toBe("2026-08-29.2");
+    expect(snapshot.registryRevision).toBe("2026-08-29.3");
     expect(snapshot.entries.length).toBeGreaterThanOrEqual(6);
 
     const ltxEntry = snapshot.entries.find((e) => e.componentId === "LTX_25_720P_5S_V1");
@@ -49,8 +49,11 @@ describe("license-registry-loader", () => {
 
     const ffmpegEntry = snapshot.entries.find((e) => e.componentId === "ffmpeg");
     expect(ffmpegEntry).toBeDefined();
-    // review_required pending formal legal audit of the GPL build configuration.
-    expect(ffmpegEntry?.status).toBe("review_required");
+    // Approved under FSF GPL FAQ Mere Aggregation + PipeLinking clauses;
+    // FFmpeg is invoked strictly as an external subprocess with no linking
+    // into Node.js (issue #144 operator determination, extended to the
+    // pinned 7.0.2-static build).
+    expect(ffmpegEntry?.status).toBe("approved");
     expect(ffmpegEntry?.versionOrRevision).toBe("7.0.2-static");
 
     const azureTtsEntry = snapshot.entries.find((e) => e.componentId === "azure-tts");
@@ -132,7 +135,7 @@ describe("license-registry-loader", () => {
   it("JsonFileLicenseRegistryPort loads from file and returns synchronous snapshot", async () => {
     const port = await JsonFileLicenseRegistryPort.load(SEED_REGISTRY_PATH);
     const snapshot = port.getSnapshot();
-    expect(snapshot.registryRevision).toBe("2026-08-29.2");
+    expect(snapshot.registryRevision).toBe("2026-08-29.3");
     expect(Object.isFrozen(snapshot)).toBe(true);
     expect(Object.isFrozen(snapshot.entries)).toBe(true);
   });
@@ -140,7 +143,7 @@ describe("license-registry-loader", () => {
   it("JsonFileLicenseRegistryPort.fromFile loads synchronously", () => {
     const port = JsonFileLicenseRegistryPort.fromFile(SEED_REGISTRY_PATH);
     const snapshot = port.getSnapshot();
-    expect(snapshot.registryRevision).toBe("2026-08-29.2");
+    expect(snapshot.registryRevision).toBe("2026-08-29.3");
     expect(Object.isFrozen(snapshot)).toBe(true);
   });
 });
