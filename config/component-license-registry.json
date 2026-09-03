@@ -1,6 +1,6 @@
 {
-  "registryRevision": "2026-08-29.1",
-  "generatedAt": "2026-08-29T12:00:00.000Z",
+  "registryRevision": "2026-08-29.4",
+  "generatedAt": "2026-09-02T00:00:00.000Z",
   "entries": [
     {
       "componentId": "LTX_25_720P_5S_V1",
@@ -57,11 +57,12 @@
       "componentId": "azure-tts",
       "componentType": "provider",
       "versionOrRevision": "1",
-      "status": "review_required",
-      "licenseSource": "docs/prd.md §3.5",
-      "reviewedAt": "2026-08-29T12:00:00.000Z",
+      "status": "approved",
+      "licenseId": "Microsoft Cognitive Services Speech Service Specific Terms (Online Services Terms / Product Terms)",
+      "licenseSource": "https://aka.ms/cs-productspecificterms (Azure Cognitive Services Speech Service Specific Terms, accessed 2026-09-02); https://aka.ms/OnlineServicesterms (Microsoft Online Services Terms / Product Terms, accessed 2026-09-02)",
+      "reviewedAt": "2026-09-02T00:00:00.000Z",
       "policyRevision": "2026-08-29.1",
-      "notes": "Third-party cloud TTS provider for voiceover assets; requires formal commercial review before Phase 1 dispatch"
+      "notes": "Approved for Phase 1 commercial voiceover generation. Subscription tier: Azure Pay-as-you-go / Standard (Standard tier governed by Microsoft's Online Services Terms / Product Terms; commercial use permitted). Voice family: Azure Standard Neural voices (e.g., en-US-JennyNeural, en-US-GuyNeural); these are made available for commercial use under the Cognitive Services Speech Service Specific Terms without requiring Microsoft's separate Personal Voice consent or a Custom Neural Voice Limited Use agreement. Determination authority: operator self-determination per the published Azure terms cited above; no outside counsel engaged. Volume: bounded by the deployment's Pay-as-you-go metering; no separate volume commitment required for Phase 1. Data handling: per Cognitive Services Speech Service Specific Terms, no customer data is retained beyond the synthesis call by default; the deployment uses default (non-Custom-Neural-Voice) handling. Provider invocations are gated by EnforceLicenseRouting via the AssemblySpec.voiceover.source.providerId lookup in apps/application/src/use-cases/assemble-delivery-reel.ts."
     }
   ]
 }

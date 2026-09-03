@@ -78,6 +78,6 @@ Per PRD §3.5:
 
 | Component Key | Component Type | Version / Revision | Status | Review Basis |
 |---|---|---|---|---|
-| `azure-tts` | provider | `1` | `review_required` | Third-party cloud TTS provider for voiceover assets; requires formal commercial review before Phase 1 dispatch. |
+| `azure-tts` | provider | `1` | `approved` | Microsoft Cognitive Services Speech (Pay-as-you-go / Standard tier, Standard Neural voices) — commercial voiceover generation permitted under Microsoft's Online Services Terms / Product Terms (`aka.ms/OnlineServicesterms`) and the Cognitive Services Speech Service Specific Terms (`aka.ms/cs-productspecificterms`). Operator self-determination per the published Azure terms; no outside counsel engaged. Personal Neural voices (requiring Microsoft's separate consent) and Custom Neural Voice (requiring a Microsoft application + signed Limited Use agreement) are not in scope for Phase 1 and would require a separate registry entry. |
 
 

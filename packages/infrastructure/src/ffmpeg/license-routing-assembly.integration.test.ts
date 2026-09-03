@@ -453,17 +453,20 @@ describe("PRD §9.6 License Routing Gate & Assembly Invariants (integration)", (
   it("fails closed under the real production config/component-license-registry.json: no formal legal audit has approved LTX, ffmpeg, or azure-tts, so real production assembly must deny", async () => {
     // This deliberately does NOT assert a success path. LTX_25_720P_5S_V1,
     // ffmpeg, and azure-tts are `review_required` in the actual production
-    // registry pending a real legal/commercial licensing audit that has not
-    // happened. The mechanism proof against a real "approved" state lives in
-    // the deniedStatuses matrix above and the smoke test near the top of this
-    // file, both of which use an explicitly-named separate acceptance-only
-    // registry fixture (buildApprovedAcceptanceRegistrySnapshot) rather than
-    // this repository's real governing config. A test that made real
-    // production config appear to succeed would either require silently
-    // switching the production registry to `approved` without genuine
-    // license evidence (exactly what PRD §9.6 and this issue's explicit
-    // instructions forbid), or it would misrepresent this repository's
-    // actual, correctly-blocked commercial-deployment state.
+    // registry pending real legal/commercial licensing audits via issues
+    // #143, #144, and #145. The mechanism proof against a real "approved"
+    // state lives in the deniedStatuses matrix above and the smoke test
+    // near the top of this file, both of which use an explicitly-named
+    // separate acceptance-only registry fixture
+    // (buildApprovedAcceptanceRegistrySnapshot) rather than this
+    // repository's real governing config. A test that made real production
+    // config appear to succeed would either require silently switching the
+    // production registry to `approved` without genuine license evidence
+    // (exactly what PRD §9.6 and the operator-only issues forbid), or it
+    // would misrepresent this repository's actual, correctly-blocked
+    // commercial-deployment state. As the three operator-only issues
+    // (#143, #144, #145) land, this test will need to be reworked to
+    // assert the new dispatch-eligible state.
     const campaignId = "campaign-production-registry-fails-closed";
     const spec = buildValidAcceptanceSpec(campaignId);
 
