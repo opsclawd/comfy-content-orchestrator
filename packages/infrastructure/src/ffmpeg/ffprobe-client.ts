@@ -91,9 +91,9 @@ async function runFfprobeAndParse(options: {
   readonly ffprobePath: string;
   readonly filePath: string;
   readonly failureCode: FfmpegAssemblyError["code"];
-  readonly fileLabel?: string;
-  readonly errorContext?: FfmpegAssemblyErrorContext;
-  readonly timeoutMs?: number;
+  readonly fileLabel?: string | undefined;
+  readonly errorContext?: FfmpegAssemblyErrorContext | undefined;
+  readonly timeoutMs?: number | undefined;
 }): Promise<{
   readonly streams: RawFfprobeStream[];
   readonly formatDurationMs: number;
