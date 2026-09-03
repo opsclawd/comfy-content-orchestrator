@@ -70,7 +70,7 @@ Per PRD §3.5:
 |---|---|---|---|---|
 | `FLUX_SCHNELL_DRAFT_V1` | Black Forest Labs FLUX.1 [schnell] | `1` | `approved` | Internal policy approval for Phase 1 commercial storyboard candidate generation (PRD §3.5). |
 | `flux-1-dev` | Black Forest Labs FLUX.1 [dev] | `unpinned` | `restricted` | Non-commercial license terms. Dispatch is blocked unless explicit commercial licensing evidence is attached. |
-| `LTX_25_720P_5S_V1` | Lightricks LTX-Video 2.5 | `1` | `review_required` | Conditionally approved in PRD §3.5 pending formal commercial review and pinned license evidence. |
+| `LTX_25_720P_5S_V1` | Lightricks LTX-Video 2.5 | `1` | `approved` | LTXV Open Weights License 0.X (2025-04-15) — commercial use permitted for sub-$10M-revenue entities per §2; Attachment A use-based restrictions and §3.1 redistribution pass-through are enforced by deployment and client handoff contract. |
 
 ---
 

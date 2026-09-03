@@ -450,20 +450,22 @@ describe("PRD §9.6 License Routing Gate & Assembly Invariants (integration)", (
     expect(deliveryKeys).toEqual([]);
   });
 
-  it("fails closed under the real production config/component-license-registry.json: no formal legal audit has approved LTX, ffmpeg, or azure-tts, so real production assembly must deny", async () => {
-    // This deliberately does NOT assert a success path. LTX_25_720P_5S_V1,
-    // ffmpeg, and azure-tts are `review_required` in the actual production
-    // registry pending a real legal/commercial licensing audit that has not
-    // happened. The mechanism proof against a real "approved" state lives in
-    // the deniedStatuses matrix above and the smoke test near the top of this
+  it("fails closed under the real production config/component-license-registry.json: ffmpeg and azure-tts remain unapproved, so real production assembly must deny", async () => {
+    // This deliberately does NOT assert a success path. LTX_25_720P_5S_V1 is
+    // approved (issue #143, real operator commercial-license determination —
+    // see config/component-license-registry.json and its licenseSource
+    // citation), but ffmpeg and azure-tts remain `review_required` pending
+    // their own real legal/commercial reviews (issues #144, #145). The
+    // mechanism proof against a fully "approved" state lives in the
+    // deniedStatuses matrix above and the smoke test near the top of this
     // file, both of which use an explicitly-named separate acceptance-only
     // registry fixture (buildApprovedAcceptanceRegistrySnapshot) rather than
     // this repository's real governing config. A test that made real
-    // production config appear to succeed would either require silently
-    // switching the production registry to `approved` without genuine
+    // production config appear to fully succeed would either require silently
+    // switching the remaining registry entries to `approved` without genuine
     // license evidence (exactly what PRD §9.6 and this issue's explicit
     // instructions forbid), or it would misrepresent this repository's
-    // actual, correctly-blocked commercial-deployment state.
+    // actual, still-partially-blocked commercial-deployment state.
     const campaignId = "campaign-production-registry-fails-closed";
     const spec = buildValidAcceptanceSpec(campaignId);
 
@@ -500,7 +502,7 @@ describe("PRD §9.6 License Routing Gate & Assembly Invariants (integration)", (
 
     expect(thrownError).toBeInstanceOf(LicenseRoutingError);
     const routingError = thrownError as LicenseRoutingError;
-    expect(routingError.message).toContain("LTX_25_720P_5S_V1");
+    expect(routingError.message).toContain("ffmpeg");
     expect(spawnCount).toBe(0);
 
     const deliveryKeys = objectStorage
