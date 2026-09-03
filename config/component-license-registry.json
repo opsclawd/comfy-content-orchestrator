@@ -1,5 +1,5 @@
 {
-  "registryRevision": "2026-08-29.3",
+  "registryRevision": "2026-08-29.4",
   "generatedAt": "2026-09-02T00:00:00.000Z",
   "entries": [
     {
@@ -59,11 +59,12 @@
       "componentId": "azure-tts",
       "componentType": "provider",
       "versionOrRevision": "1",
-      "status": "review_required",
-      "licenseSource": "docs/prd.md §3.5",
-      "reviewedAt": "2026-08-29T12:00:00.000Z",
+      "status": "approved",
+      "licenseId": "Microsoft Product Terms (Azure Services, Limited Access Services); Code of Conduct for Microsoft AI Services",
+      "licenseSource": "https://www.microsoft.com/licensing/terms/productoffering/MicrosoftAzure/EAEAS (Microsoft Product Terms, Azure offering, accessed 2026-09-03); https://learn.microsoft.com/en-us/legal/ai-code-of-conduct (Code of Conduct for Microsoft AI Services, v4.0 2026-05-01, accessed 2026-09-03, covers Azure Speech text-to-speech per its 'Additional conduct requirements for specific Microsoft AI Services' section)",
+      "reviewedAt": "2026-09-03T00:00:00.000Z",
       "policyRevision": "2026-08-29.1",
-      "notes": "Third-party cloud TTS provider for voiceover assets; requires formal commercial review before Phase 1 dispatch"
+      "notes": "Approved for Phase 1 commercial voiceover generation. Subscription tier: Azure Pay-as-you-go / Standard (governed by Microsoft's Product Terms; commercial use permitted). Voice family: Azure Standard (pre-built) Neural voices (e.g., en-US-JennyNeural, en-US-GuyNeural). Per the Code of Conduct's 'Azure Speech and voice services in Foundry Tools' section, the special end-user voice-consent, opt-out, and voice-model-training-data (VMTD) obligations apply specifically to applications that let External Users submit their own voice for model training/personalization ('Voice Features', i.e. Personal Voice / Custom Neural Voice scenarios) — this deployment uses only pre-built Standard Neural voices with no end-user voice training, so those obligations do not apply. Determination authority: operator self-determination per the published Microsoft terms cited above; no outside counsel engaged. Volume: bounded by the deployment's Pay-as-you-go metering; no separate volume commitment required for Phase 1. Provider invocations are gated by EnforceLicenseRouting via the AssemblySpec.voiceover.source.providerId lookup in apps/application/src/use-cases/assemble-delivery-reel.ts."
     }
   ]
 }

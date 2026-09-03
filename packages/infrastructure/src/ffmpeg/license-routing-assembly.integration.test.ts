@@ -450,27 +450,24 @@ describe("PRD §9.6 License Routing Gate & Assembly Invariants (integration)", (
     expect(deliveryKeys).toEqual([]);
   });
 
-  it("fails closed under the real production config/component-license-registry.json: LTX (issue #143) and ffmpeg (issue #144) have operator determinations on record, but azure-tts still has no formal commercial review, so real production assembly must deny", async () => {
-    // This deliberately does NOT assert a success path against the real
-    // production registry. As of registry revision 2026-08-29.3, LTX
-    // (#143) and ffmpeg (#144) carry operator determinations on record and
-    // are `approved`, but `azure-tts` remains `review_required` pending
-    // formal commercial review of the Azure TTS terms (sister issue #145).
-    // Because buildValidAcceptanceSpec includes a voiceover sourced from
-    // `providerId: "azure-tts"`, the assembly use case's requiredComponents
-    // always includes azure-tts, and EnforceLicenseRouting must deny every
-    // real production assembly until azure-tts is also approved. The
-    // mechanism proof against a real "approved" state lives in the
-    // deniedStatuses matrix above and the smoke test near the top of this
-    // file, both of which use an explicitly-named separate acceptance-only
-    // registry fixture (buildApprovedAcceptanceRegistrySnapshot) rather than
-    // this repository's real governing config. A test that made real
-    // production config appear to succeed would either require silently
-    // switching the production registry to `approved` without genuine
-    // license evidence (exactly what PRD §9.6 and the operator-only issues
-    // forbid), or it would misrepresent this repository's actual,
-    // correctly-blocked commercial-deployment state.
-    const campaignId = "campaign-production-registry-fails-closed";
+  it("real production config/component-license-registry.json now allows assembly: LTX (#143), ffmpeg (#144), and azure-tts (#145) all carry operator determinations on record", async () => {
+    // This test's premise flipped once the third and final operator-only
+    // determination (#145, azure-tts) landed: with LTX, ffmpeg, and
+    // azure-tts all `approved` in the real production registry, there is no
+    // remaining component that fails production's real license-routing
+    // check for a standard voiceover-bearing assembly. This is deliberately
+    // NOT a rubber-stamp — each entry's approval is a real, cited
+    // determination (see config/component-license-registry.json's
+    // licenseSource fields and issues #143/#144/#145), not a synthetic
+    // fixture flip. The fail-closed *mechanism* itself (deny on any
+    // non-approved status) continues to be proven independently by the
+    // deniedStatuses matrix above and this file's other tests, all of which
+    // use the explicitly-named, separate acceptance-only registry fixture
+    // (buildApprovedAcceptanceRegistrySnapshot) rather than this
+    // repository's real governing config — so a regression that silently
+    // weakens EnforceLicenseRouting itself would still be caught there,
+    // independent of this file's own production registry contents.
+    const campaignId = "campaign-production-registry-approved";
     const spec = buildValidAcceptanceSpec(campaignId);
 
     const productionRegistryPath = path.resolve(
@@ -497,28 +494,16 @@ describe("PRD §9.6 License Routing Gate & Assembly Invariants (integration)", (
       }
     });
 
-    let thrownError: unknown;
-    try {
-      await useCase.assemble({ spec });
-    } catch (err) {
-      thrownError = err;
-    }
+    const { manifest, executionResult } = await useCase.assemble({ spec });
 
-    expect(thrownError).toBeInstanceOf(LicenseRoutingError);
-    const routingError = thrownError as LicenseRoutingError;
-    // The denial must be driven by azure-tts, the remaining review_required
-    // component in the production registry. In CI environments where the
-    // probed ffmpeg build differs from the registry's pinned 7.0.2-static,
-    // EnforceLicenseRouting may instead deny ffmpeg as an unknown_component
-    // (version mismatch) — that is still a fail-closed outcome, but the
-    // production-relevant assertion is that azure-tts, not ffmpeg or LTX,
-    // is the gating component.
-    expect(routingError.message).toContain("azure-tts");
-    expect(spawnCount).toBe(0);
+    expect(manifest).toBeDefined();
+    expect(executionResult).toBeDefined();
+    expect(spawnCount).toBeGreaterThan(0);
 
-    const deliveryKeys = objectStorage
-      .getAllKeys()
-      .filter((k) => k.includes(`campaigns/${campaignId}/assemblies/`));
-    expect(deliveryKeys).toEqual([]);
+    const deliveryMedia = await objectStorage.getObject({
+      bucket: BUCKETS.DELIVERY,
+      key: `campaigns/${campaignId}/assemblies/${executionResult.assemblyId}/output.mp4`
+    });
+    expect(deliveryMedia).toBeDefined();
   });
 });

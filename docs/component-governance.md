@@ -78,6 +78,6 @@ Per PRD §3.5:
 
 | Component Key | Component Type | Version / Revision | Status | Review Basis |
 |---|---|---|---|---|
-| `azure-tts` | provider | `1` | `review_required` | Third-party cloud TTS provider for voiceover assets; requires formal commercial review before Phase 1 dispatch. |
+| `azure-tts` | provider | `1` | `approved` | Microsoft Cognitive Services Speech (Pay-as-you-go / Standard tier, Standard pre-built Neural voices) — commercial voiceover generation permitted under [Microsoft Product Terms, Azure offering](https://www.microsoft.com/licensing/terms/productoffering/MicrosoftAzure/EAEAS) and the [Code of Conduct for Microsoft AI Services](https://learn.microsoft.com/en-us/legal/ai-code-of-conduct) (v4.0, 2026-05-01) — its "Azure Speech and voice services in Foundry Tools" section imposes special end-user voice-consent/training obligations only on applications that let external users submit their own voice for model training ("Voice Features," i.e. Personal Voice / Custom Neural Voice), which does not apply to this deployment's use of pre-built Standard Neural voices with no end-user training. Operator self-determination per the published Microsoft terms; no outside counsel engaged. Personal Neural voices (requiring Microsoft's separate consent) and Custom Neural Voice (requiring a Microsoft application + signed Limited Use agreement) are not in scope for Phase 1 and would require a separate registry entry. |
 
 
