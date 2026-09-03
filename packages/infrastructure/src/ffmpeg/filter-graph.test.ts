@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  FIT_BLURRED_FILL_BLUR_SIGMA,
   buildDirectFitGraph,
   buildFfmpegArgs,
   buildFitBlurredFillGraph,
@@ -9,6 +10,12 @@ import {
 
 describe("filter-graph & command builder", () => {
   describe("buildFitBlurredFillGraph", () => {
+    it("uses declared FIT_BLURRED_FILL_BLUR_SIGMA constant of 20", () => {
+      expect(FIT_BLURRED_FILL_BLUR_SIGMA).toBe(20);
+      const graph = buildFitBlurredFillGraph(1);
+      expect(graph).toContain(`gblur=sigma=${FIT_BLURRED_FILL_BLUR_SIGMA}`);
+    });
+
     it("builds correct filter string for single stem", () => {
       const graph = buildFitBlurredFillGraph(1);
       expect(graph).toContain(

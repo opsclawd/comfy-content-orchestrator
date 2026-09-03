@@ -72,3 +72,12 @@ Per PRD §3.5:
 | `flux-1-dev` | Black Forest Labs FLUX.1 [dev] | `unpinned` | `restricted` | Non-commercial license terms. Dispatch is blocked unless explicit commercial licensing evidence is attached. |
 | `LTX_25_720P_5S_V1` | Lightricks LTX-Video 2.5 | `1` | `review_required` | Conditionally approved in PRD §3.5 pending formal commercial review and pinned license evidence. |
 
+---
+
+## Audio & TTS Provider Governance (Phase 1 Baseline)
+
+| Component Key | Component Type | Version / Revision | Status | Review Basis |
+|---|---|---|---|---|
+| `azure-tts` | provider | `1` | `review_required` | Third-party cloud TTS provider for voiceover assets; requires formal commercial review before Phase 1 dispatch. |
+
+

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AssemblySpecSchema, type AssemblySpec } from "./assembly-spec.js";
+import { AssemblySpecSchema, computeAssemblyId, type AssemblySpec } from "./assembly-spec.js";
 
 describe("AssemblySpecSchema contract", () => {
   const hash1 = "1".repeat(64);
@@ -221,5 +221,41 @@ describe("AssemblySpecSchema contract", () => {
       subtitleCues: []
     };
     expect(AssemblySpecSchema.safeParse(specLongDuration).success).toBe(true);
+  });
+
+  describe("computeAssemblyId", () => {
+    it("returns deterministic identity for identical spec", () => {
+      const spec1 = createValidSpec();
+      const spec2 = createValidSpec();
+      expect(computeAssemblyId(spec1)).toBe(computeAssemblyId(spec2));
+      expect(computeAssemblyId(spec1)).toMatch(/^asm-[0-9a-f]{32}$/);
+    });
+
+    it("returns different identity when stem hash or order changes", () => {
+      const base = createValidSpec();
+      const stemChanged: AssemblySpec = {
+        ...base,
+        videoStems: [
+          base.videoStems[0]!,
+          {
+            ...base.videoStems[1]!,
+            media: {
+              ...base.videoStems[1]!.media,
+              sha256: "f".repeat(64)
+            }
+          }
+        ]
+      };
+      expect(computeAssemblyId(stemChanged)).not.toBe(computeAssemblyId(base));
+    });
+
+    it("returns different identity when subtitle cues change", () => {
+      const base = createValidSpec();
+      const withCues: AssemblySpec = {
+        ...base,
+        subtitleCues: [{ startMs: 1000, endMs: 4000, text: "Hello" }]
+      };
+      expect(computeAssemblyId(withCues)).not.toBe(computeAssemblyId(base));
+    });
   });
 });

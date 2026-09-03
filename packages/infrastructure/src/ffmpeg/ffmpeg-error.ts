@@ -25,7 +25,8 @@ export type FfmpegAssemblyFailureCode =
   | "AGGREGATE_INPUT_TOO_LARGE"
   | "OUTPUT_TOO_LARGE"
   | "INPUT_LIMIT_EXCEEDED"
-  | "PROCESS_TIMEOUT";
+  | "PROCESS_TIMEOUT"
+  | "ASSEMBLY_PROVENANCE_CONFLICT";
 
 export interface FfmpegAssemblyErrorContext {
   readonly command?: string | undefined;
@@ -42,6 +43,7 @@ export interface FfmpegAssemblyErrorContext {
   readonly expectedDurationMs?: number | undefined;
   readonly actualDurationMs?: number | undefined;
   readonly toleranceMs?: number | undefined;
+  readonly assemblyId?: string | undefined;
   readonly details?: unknown;
 }
 

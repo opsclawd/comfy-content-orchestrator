@@ -395,6 +395,12 @@ Both `AssemblyExecutionResultSchema` and `AssemblyManifestSchema` enforce identi
    - Generation dispatch integration in `ExecuteProfileRenderUseCase` and `render` CLI (zero ComfyUI queue / zero GPU lease on denial).
    - Assembly pipeline integration in `AssembleDeliveryReel` (zero FFmpeg spawn / zero storage put on denial, embedding `governanceDecisionId` in `AssemblyManifest`).
    - Render worker retry semantics: `LicenseRoutingError` falls through to permanent `failWithRetry` (never deferred).
-5. **Issue 5: End-to-end assembly pipeline & delivery persistence**
-   - Assembly execution pipeline writing final MP4 and `AssemblyManifest` JSON to delivery storage.
-   - End-to-end verification against the §9.5 FFmpeg Assembly Gate.
+5. **Issue 5 (#125 — Implemented): Prove Assembly & Governance acceptance and document Sprint 4 handoff**
+   - End-to-end assembly pipeline writing final MP4 and immutable `AssemblyManifest` JSON to delivery storage (`AssembleDeliveryReel`, `FfmpegMediaAssemblerAdapter`).
+   - Integration verification in `packages/infrastructure/src/ffmpeg/ffmpeg-media-assembler-adapter.integration.test.ts` and `license-routing-assembly.integration.test.ts`.
+   - Behavioral subtitle burn-in verification (luminance signal stats and extracted frame differences).
+   - Real-FFmpeg PRD §9.6 License Routing Gate matrix proving zero process spawns and zero storage writes across all non-approved policy statuses (`restricted`, `review_required`, `blocked`, unregistered).
+   - Cold-read manifest reconstruction proof verifying all executed inputs, layout mode, audio timing, subtitles, command fingerprints, and governance identity from persisted GenerationManifest fixtures and media.
+   - Deterministic benchmark command (`pnpm bench:assembly`, which compiles packages via `pnpm build` first) measuring ~20s in the local development sandbox; the PRD §9.5 <30s Phase 1 workstation performance gate remains an operator verification command for physical hardware certification.
+   - Canonical request hashing (`computeAssemblyId`) with atomic storage conditionality (`ifNoneMatch: "*"`) and create-or-verify publication semantics: identical reruns preserve original manifest with zero overwrite; conflicting reruns with same assembly identity raise typed `AssemblyProvenanceConflictError` without deleting or overwriting the existing delivery.
+   - Production governance status: `LTX_25_720P_5S_V1`, host `ffmpeg`, and `azure-tts` remain `review_required` in production `config/component-license-registry.json` — no formal legal/commercial licensing audit has occurred, so the fail-closed guard correctly denies every real production dispatch for these components. The mechanism is proven end-to-end against an explicitly-named, separate approved test fixture (`buildApprovedAcceptanceRegistrySnapshot`); that fixture is not, and must not be treated as, evidence of commercial licensing clearance for the production registry.

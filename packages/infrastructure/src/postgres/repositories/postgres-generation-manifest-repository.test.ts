@@ -57,4 +57,29 @@ describe("PostgresGenerationManifestRepository", () => {
 
     expect(result).toEqual({ renderProfile: "LTX_25_720P_5S_V1", renderProfileVersion: null });
   });
+
+  it("extracts outputChecksumsSha256 when outputs array is present in manifest_payload", async () => {
+    const pool = fakePool([
+      {
+        manifest_payload: {
+          renderProfile: "LTX_25_720P_5S_V1",
+          renderProfileVersion: 1,
+          outputs: [
+            { checksumSha256: "sha-output-1" },
+            { checksumSha256: "sha-output-2" },
+            { invalid: "no-sha" }
+          ]
+        }
+      }
+    ]);
+    const repo = new PostgresGenerationManifestRepository(pool as never);
+
+    const result = await repo.getComponentIdentityById("with-outputs");
+
+    expect(result).toEqual({
+      renderProfile: "LTX_25_720P_5S_V1",
+      renderProfileVersion: 1,
+      outputChecksumsSha256: ["sha-output-1", "sha-output-2"]
+    });
+  });
 });

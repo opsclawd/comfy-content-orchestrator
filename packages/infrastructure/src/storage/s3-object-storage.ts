@@ -6,12 +6,13 @@ import {
   type S3ClientConfig
 } from "@aws-sdk/client-s3";
 import { createHash } from "node:crypto";
-import type {
-  GetObjectOptions,
-  ObjectLocator,
-  ObjectStoragePort,
-  PutObjectInput,
-  StoredObject
+import {
+  type GetObjectOptions,
+  type ObjectLocator,
+  type ObjectStoragePort,
+  ObjectAlreadyExistsError,
+  type PutObjectInput,
+  type StoredObject
 } from "@cco/application";
 
 export interface S3ObjectStorageOptions {
@@ -165,15 +166,24 @@ export class S3ObjectStorage implements ObjectStoragePort {
       metadata["checksum-sha256"] = input.checksumSha256;
     }
 
-    await this.client.send(
-      new PutObjectCommand({
-        Bucket: input.bucket,
-        Key: input.key,
-        Body: input.body,
-        ContentType: input.contentType,
-        Metadata: Object.keys(metadata).length > 0 ? metadata : undefined
-      })
-    );
+    try {
+      await this.client.send(
+        new PutObjectCommand({
+          Bucket: input.bucket,
+          Key: input.key,
+          Body: input.body,
+          ContentType: input.contentType,
+          Metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+          IfNoneMatch: input.ifNoneMatch
+        })
+      );
+    } catch (err: unknown) {
+      const errorObj = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+      if (errorObj?.name === "PreconditionFailed" || errorObj?.$metadata?.httpStatusCode === 412) {
+        throw new ObjectAlreadyExistsError(input.bucket, input.key, { cause: err as Error });
+      }
+      throw err;
+    }
 
     return {
       bucket: input.bucket,
