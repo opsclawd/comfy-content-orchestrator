@@ -777,7 +777,10 @@ describe("run-worker CLI", () => {
         }
       };
 
-      // In production registry, LTX_25_720P_5S_V1 is review_required
+      // The committed seed registry approved LTX_25_720P_5S_V1 (issue #143
+      // operator determination), so this test injects a registry that still
+      // reports LTX as review_required to verify the fail-closed path
+      // independently of the production registry contents.
       const worker = createProductionWorker(config, {
         controlApiClient: fakeClient,
         objectStorage: new TestObjectStorage(),
@@ -785,6 +788,22 @@ describe("run-worker CLI", () => {
         gpuLease: mockGpuLease,
         renderEngine: mockRenderEngine as unknown as RenderEnginePort,
         gpuTelemetry: mockGpuTelemetry,
+        loadComponentLicenseRegistry: () => ({
+          schemaVersion: 1 as const,
+          registryRevision: "test-review-required",
+          generatedAt: "2026-09-02T00:00:00.000Z",
+          entries: [
+            {
+              componentId: "LTX_25_720P_5S_V1",
+              componentType: "model" as const,
+              versionOrRevision: "1",
+              status: "review_required" as const,
+              licenseSource: "test-fixture",
+              reviewedAt: "2026-09-02T00:00:00.000Z",
+              policyRevision: "test-review-required"
+            }
+          ]
+        }),
         loadCertificationProfile: async () => ({
           id: "ltx-25-720p-97f",
           engine: "ltx_25",

@@ -884,7 +884,7 @@ describe("render CLI", () => {
 
   it("fails closed when license registry denies profile component with zero GPU lease or queue calls", async () => {
     const callLog: string[] = [];
-    const profile = createLtxProfile(); // LTX is review_required in default seed registry
+    const profile = createLtxProfile();
     const approved = createApprovedReport(profile);
     const live = createLiveReport(profile);
 
@@ -893,6 +893,10 @@ describe("render CLI", () => {
     const telemetry = new FakeGpuTelemetry(callLog);
     const renderEngine = new FakeRenderEngine(callLog);
 
+    // The committed seed registry approved LTX_25_720P_5S_V1 (issue #143
+    // operator determination), so this test injects a registry that still
+    // reports LTX as review_required to verify the fail-closed path
+    // independently of the production registry contents.
     const deps: RenderCliDependencies = {
       loadCertificationProfile: async () => profile,
       readApprovedProvenance: async () => approved,
@@ -902,7 +906,23 @@ describe("render CLI", () => {
       hashWorkflow: () => HASH_LTX,
       createRenderEngine: () => renderEngine,
       createGpuLease: () => gpuLease,
-      createGpuTelemetry: () => telemetry
+      createGpuTelemetry: () => telemetry,
+      loadComponentLicenseRegistry: async () => ({
+        schemaVersion: 1 as const,
+        registryRevision: "test-review-required",
+        generatedAt: "2026-09-02T00:00:00.000Z",
+        entries: [
+          {
+            componentId: "LTX_25_720P_5S_V1",
+            componentType: "model" as const,
+            versionOrRevision: "1",
+            status: "review_required" as const,
+            licenseSource: "test-fixture",
+            reviewedAt: "2026-09-02T00:00:00.000Z",
+            policyRevision: "test-review-required"
+          }
+        ]
+      })
     };
 
     const stdoutLines: string[] = [];

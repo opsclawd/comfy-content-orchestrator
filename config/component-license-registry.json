@@ -1,16 +1,17 @@
 {
-  "registryRevision": "2026-08-29.1",
-  "generatedAt": "2026-08-29T12:00:00.000Z",
+  "registryRevision": "2026-08-29.2",
+  "generatedAt": "2026-09-02T00:00:00.000Z",
   "entries": [
     {
       "componentId": "LTX_25_720P_5S_V1",
       "componentType": "model",
       "versionOrRevision": "1",
-      "status": "review_required",
-      "licenseSource": "docs/prd.md §3.5",
-      "reviewedAt": "2026-08-29T12:00:00.000Z",
+      "status": "approved",
+      "licenseId": "LTXV Open Weights License 0.X (2025-04-15)",
+      "licenseSource": "https://huggingface.co/Lightricks/LTX-Video/blob/main/LTX-Video-Open-Weights-License-0.X.txt (HF commit 2a8f58b)",
+      "reviewedAt": "2026-09-02T00:00:00.000Z",
       "policyRevision": "2026-08-29.1",
-      "notes": "Requires formal commercial review and pinned license evidence"
+      "notes": "Approved for Phase 1 commercial use under LTXV Open Weights License 0.X. Operating entity annual revenue is below the $10,000,000 Commercial Entity threshold in §2; the paid Commercial Use Agreement carve-out does not apply. Deployment satisfies Attachment A use-based restrictions (a)–(p), and downstream client handoff is governed by contract incorporating the §3.1 pass-through requirement. License version applies to LTX-Video 0.9.6+ (incl. 0.9.8-distilled line per PRD §3.1.1)."
     },
     {
       "componentId": "FLUX_SCHNELL_DRAFT_V1",
