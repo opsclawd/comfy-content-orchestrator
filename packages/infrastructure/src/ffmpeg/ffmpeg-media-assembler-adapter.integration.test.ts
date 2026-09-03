@@ -1930,7 +1930,7 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
     expect(manifests).toEqual([]);
   });
 
-  it("idempotent rerun with identical spec converges on same identity and preserves original manifest without conflicting provenance", async () => {
+  it("idempotent rerun with identical spec converges on same identity, preserves original manifest, and short-circuits with zero FFmpeg spawns", async () => {
     const campaignId = "campaign-idempotent-rerun";
     const videoStems: VideoStemRef[] = syntheticMp4Stems.slice(0, 2).map((stem, idx) => ({
       sceneId: `scene-mp4-0${idx + 1}`,
@@ -1956,7 +1956,20 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
       videoStems
     };
 
-    // Standard adapter without injected createAssemblyId: uses deterministic request hash
+    let spawnCount = 0;
+    const countingSpawn: SpawnLikeFn = async (cmd, args, opts) => {
+      spawnCount++;
+      return defaultSpawnRunner(cmd, args, opts);
+    };
+
+    const monitoredAdapter = new FfmpegMediaAssemblerAdapter({
+      ffmpegPath: "ffmpeg",
+      ffprobePath: "ffprobe",
+      workspaceRoot,
+      objectStorage,
+      spawnFn: countingSpawn
+    });
+
     const snapshot = buildApprovedAcceptanceRegistrySnapshot(
       realFfmpegVersion ? { ffmpegVersion: realFfmpegVersion } : undefined
     );
@@ -1964,9 +1977,12 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
       registry: { getSnapshot: () => snapshot }
     });
 
+    const runtimeComponents = await monitoredAdapter.getRuntimeComponents();
+    spawnCount = 0; // reset probe count
+
     const useCase = new AssembleDeliveryReel({
-      runtimeComponents: await adapter.getRuntimeComponents(),
-      mediaAssembler: adapter,
+      runtimeComponents,
+      mediaAssembler: monitoredAdapter,
       objectStorage,
       enforceLicenseRouting,
       generationManifestRepository: {
@@ -1978,8 +1994,13 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
     });
 
     const firstRun = await useCase.assemble({ spec });
+    const firstRunSpawns = spawnCount;
+    expect(firstRunSpawns).toBeGreaterThan(0);
+
+    spawnCount = 0;
     const secondRun = await useCase.assemble({ spec });
 
+    expect(spawnCount).toBe(0); // Early existence check short-circuits with zero FFmpeg spawns
     expect(firstRun.executionResult.assemblyId).toBe(secondRun.executionResult.assemblyId);
     expect(firstRun.manifest.assemblyId).toBe(secondRun.manifest.assemblyId);
     expect(firstRun.manifest.createdAt).toBe(secondRun.manifest.createdAt);

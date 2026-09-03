@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AssemblyExecutionResult, AssemblySpec } from "@cco/contracts";
+import {
+  computeAssemblyId,
+  createAssemblyManifest,
+  type AssemblyExecutionResult,
+  type AssemblySpec
+} from "@cco/contracts";
 import type {
   GenerationManifestRepository,
   MediaAssemblerPort,
@@ -891,5 +896,54 @@ describe("AssembleDeliveryReel use case", () => {
     expect(mockAssembler.assemble).toHaveBeenCalledWith(validSpec);
     expect(result.manifest.assemblyId).toBe("assembly-test-123");
     expect(mockStorage.putObject).toHaveBeenCalledTimes(1);
+  });
+
+  it("short-circuits and returns existing manifest without media assembly execution or storage put when matching manifest already exists", async () => {
+    const assemblyId = computeAssemblyId(validSpec);
+    const existingExecutionResult: AssemblyExecutionResult = {
+      ...dummyExecutionResult,
+      assemblyId
+    };
+    const existingManifest = createAssemblyManifest({
+      executionResult: existingExecutionResult,
+      governanceDecisionId: "gov-dec-existing-001"
+    });
+
+    const manifestKey = `campaigns/${validSpec.campaignId}/assemblies/${assemblyId}/manifest.json`;
+    const manifestBytes = Buffer.from(JSON.stringify(existingManifest), "utf-8");
+
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(),
+      getObject: vi.fn(async ({ bucket, key }) => {
+        if (bucket === "godzspeed-delivery" && key === manifestKey) {
+          return { bucket, key, body: manifestBytes };
+        }
+        return undefined;
+      })
+    };
+
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn()
+    };
+
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
+    const useCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: createApprovedGenerationManifestRepository()
+    });
+
+    const result = await useCase.assemble({
+      spec: validSpec,
+      requiredComponents: defaultRequiredComponents
+    });
+
+    expect(mockAssembler.assemble).not.toHaveBeenCalled();
+    expect(mockStorage.putObject).not.toHaveBeenCalled();
+    expect(result.manifest).toEqual(existingManifest);
+    expect(result.executionResult.assemblyId).toBe(assemblyId);
+    expect(result.executionResult.campaignId).toBe(validSpec.campaignId);
   });
 });

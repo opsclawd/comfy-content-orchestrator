@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   AssemblyManifestSchema,
+  computeAssemblyId,
   createAssemblyManifest,
   type AssemblyExecutionResult,
   type AssemblyManifest,
@@ -102,6 +103,51 @@ export class AssembleDeliveryReel {
     readonly executionResult: AssemblyExecutionResult;
   }> {
     const { spec } = params;
+
+    // Early existence check: if a matching manifest already exists for this assemblyId, short-circuit to avoid FFmpeg encode
+    const assemblyId = computeAssemblyId(spec);
+    const earlyManifestKey = `campaigns/${spec.campaignId}/assemblies/${assemblyId}/manifest.json`;
+    try {
+      const existingManifestObj = await this.deps.objectStorage.getObject({
+        bucket: BUCKETS.DELIVERY,
+        key: earlyManifestKey
+      });
+      if (existingManifestObj) {
+        const existingManifest = AssemblyManifestSchema.parse(
+          JSON.parse(new TextDecoder().decode(existingManifestObj.body))
+        );
+        if (existingManifest.assemblyId === assemblyId) {
+          const executionResult: AssemblyExecutionResult = {
+            assemblyId: existingManifest.assemblyId,
+            campaignId: existingManifest.campaignId,
+            assemblyProfile: existingManifest.assemblyProfile,
+            executedInputs: existingManifest.inputs,
+            timeline: existingManifest.timeline,
+            layout: existingManifest.layout,
+            subtitleCuesSha256: existingManifest.subtitleCuesSha256,
+            ...(existingManifest.subtitleCues !== undefined
+              ? { subtitleCues: existingManifest.subtitleCues }
+              : {}),
+            ...(existingManifest.subtitleStyleProfile !== undefined
+              ? { subtitleStyleProfile: existingManifest.subtitleStyleProfile }
+              : {}),
+            ffmpeg: existingManifest.ffmpeg,
+            commandFingerprint: existingManifest.commandFingerprint,
+            encoding: existingManifest.encoding,
+            streams: existingManifest.streams,
+            output: existingManifest.output,
+            measuredFrameRate: existingManifest.measuredFrameRate,
+            executionDurationMs: existingManifest.executionDurationMs
+          };
+          return {
+            manifest: existingManifest,
+            executionResult
+          };
+        }
+      }
+    } catch {
+      // Ignore errors in early check (e.g. object not found, unparseable manifest) and proceed with assembly
+    }
 
     // Step 0: Extract provider-originated audio components from AssemblySpec if present
     const specComponents: ComponentRef[] = [];
