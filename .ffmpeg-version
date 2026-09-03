@@ -1,0 +1,4 @@
+# Pinned FFmpeg Version and Download Artifact
+FFMPEG_VERSION=7.0.2-static
+FFMPEG_DOWNLOAD_URL=https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+FFMPEG_ARCHIVE_MD5=7fa72b652e19bf84c9461e332ea1cdf3
