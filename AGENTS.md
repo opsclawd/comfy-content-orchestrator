@@ -2,6 +2,12 @@
 
 Repository-specific rules that are not inferable from the code. Read this before planning or implementing.
 
+## FFmpeg Environment Setup
+
+To eliminate version-mismatch bugs between local development and CI, FFmpeg is pinned to a specific static build across all environments:
+- Use `./scripts/install-ffmpeg.sh` to download and install the pinned FFmpeg static build (`7.0.2-static` as defined in `.ffmpeg-version`).
+- Run `./scripts/check-ffmpeg-version.sh` to verify that your local environment matches the pinned version.
+
 ## Running tests — two suites, two configs
 
 This repository has **two** vitest configurations, and using the wrong one produces a command that can never pass.

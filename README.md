@@ -130,6 +130,7 @@ For every implementation issue:
 - Node.js 24 LTS (`Krypton`)
 - TypeScript
 - pnpm workspace
+- FFmpeg (pinned static build 7.0.2-static via `./scripts/install-ffmpeg.sh`)
 - PostgreSQL 18.6
 - ComfyUI headless
 - NVIDIA RTX 4090 24 GB

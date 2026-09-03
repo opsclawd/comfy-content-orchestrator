@@ -51,9 +51,10 @@ describe("license-registry-loader", () => {
     expect(ffmpegEntry).toBeDefined();
     // Approved under FSF GPL FAQ Mere Aggregation + PipeLinking clauses;
     // FFmpeg is invoked strictly as an external subprocess with no linking
-    // into Node.js (issue #144 operator determination).
+    // into Node.js (issue #144 operator determination, extended to the
+    // pinned 7.0.2-static build).
     expect(ffmpegEntry?.status).toBe("approved");
-    expect(ffmpegEntry?.versionOrRevision).toBe("n8.0.1");
+    expect(ffmpegEntry?.versionOrRevision).toBe("7.0.2-static");
 
     const azureTtsEntry = snapshot.entries.find((e) => e.componentId === "azure-tts");
     expect(azureTtsEntry).toBeDefined();
