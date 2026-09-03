@@ -1,6 +1,7 @@
 import type { ReviewEvent } from "@cco/contracts";
-import type { CandidateId, Scene, SceneId, StoryboardCandidate } from "@cco/domain";
+import type { CampaignRecord, CandidateId, Scene, SceneId, StoryboardCandidate } from "@cco/domain";
 import type {
+  CampaignRepository,
   ReviewEventStore,
   SceneRepository,
   StoryboardCandidateRepository,
@@ -12,8 +13,10 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _seededScenes: Map<SceneId, Scene>;
   private readonly _seededCandidates: Map<CandidateId, StoryboardCandidate>;
   private readonly _seededReviewEvents: Map<string, ReviewEvent>;
+  private readonly _seededCampaigns: Map<string, CampaignRecord>;
   private readonly _savedScenes: Scene[] = [];
   private readonly _reviewEvents: ReviewEvent[] = [];
+  private readonly _savedCampaigns: CampaignRecord[] = [];
 
   constructor(
     seededScenes?: Iterable<Scene> | ReadonlyMap<SceneId, Scene> | Record<string, Scene>,
@@ -22,7 +25,11 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       | ReadonlyMap<CandidateId, StoryboardCandidate>
       | Record<string, StoryboardCandidate>,
     seededReviewEvents?:
-      Iterable<ReviewEvent> | ReadonlyMap<string, ReviewEvent> | Record<string, ReviewEvent>
+      Iterable<ReviewEvent> | ReadonlyMap<string, ReviewEvent> | Record<string, ReviewEvent>,
+    seededCampaigns?:
+      | Iterable<CampaignRecord>
+      | ReadonlyMap<string, CampaignRecord>
+      | Record<string, CampaignRecord>
   ) {
     this._seededScenes = new Map<SceneId, Scene>();
     if (seededScenes !== undefined && seededScenes !== null) {
@@ -89,6 +96,28 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
         }
       }
     }
+
+    this._seededCampaigns = new Map<string, CampaignRecord>();
+    if (seededCampaigns !== undefined && seededCampaigns !== null) {
+      if (seededCampaigns instanceof Map) {
+        for (const [id, campaign] of seededCampaigns.entries()) {
+          this._seededCampaigns.set(id, campaign);
+        }
+      } else if (Symbol.iterator in seededCampaigns) {
+        for (const item of seededCampaigns) {
+          if (Array.isArray(item) && item.length === 2 && typeof item[0] === "string") {
+            this._seededCampaigns.set(item[0], item[1] as CampaignRecord);
+          } else {
+            const campaign = item as CampaignRecord;
+            this._seededCampaigns.set(campaign.id, campaign);
+          }
+        }
+      } else if (typeof seededCampaigns === "object") {
+        for (const [id, campaign] of Object.entries(seededCampaigns)) {
+          this._seededCampaigns.set(id, campaign as CampaignRecord);
+        }
+      }
+    }
   }
 
   get savedScenes(): readonly Scene[] {
@@ -99,10 +128,15 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     return this._reviewEvents;
   }
 
+  get savedCampaigns(): readonly CampaignRecord[] {
+    return this._savedCampaigns;
+  }
+
   async execute<TResult>(work: (context: UnitOfWorkContext) => Promise<TResult>): Promise<TResult> {
     const stagedScenes: Scene[] = [];
     const stagedReviewEvents: ReviewEvent[] = [];
     const stagedCandidates: StoryboardCandidate[] = [];
+    const stagedCampaigns: CampaignRecord[] = [];
 
     const scopedScenes: SceneRepository = {
       findById: async (sceneId: SceneId): Promise<Scene | undefined> => {
@@ -152,16 +186,34 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       }
     };
 
+    const scopedCampaigns: CampaignRepository<CampaignRecord> = {
+      findById: async (campaignId: string): Promise<CampaignRecord | undefined> => {
+        return (
+          stagedCampaigns.find((c) => c.id === campaignId) ?? this._seededCampaigns.get(campaignId)
+        );
+      },
+      save: async (campaign: CampaignRecord): Promise<void> => {
+        const existingIdx = stagedCampaigns.findIndex((c) => c.id === campaign.id);
+        if (existingIdx >= 0) {
+          stagedCampaigns[existingIdx] = campaign;
+        } else {
+          stagedCampaigns.push(campaign);
+        }
+      }
+    };
+
     const context: UnitOfWorkContext = {
       scenes: scopedScenes,
       reviewEvents: scopedReviewEvents,
-      candidates: scopedCandidates
+      candidates: scopedCandidates,
+      campaigns: scopedCampaigns
     };
 
     const result = await work(context);
 
     this._savedScenes.push(...stagedScenes);
     this._reviewEvents.push(...stagedReviewEvents);
+    this._savedCampaigns.push(...stagedCampaigns);
     for (const scene of stagedScenes) {
       this._seededScenes.set(scene.id, scene);
     }
@@ -170,6 +222,9 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     }
     for (const event of stagedReviewEvents) {
       this._seededReviewEvents.set(event.eventId, event);
+    }
+    for (const campaign of stagedCampaigns) {
+      this._seededCampaigns.set(campaign.id, campaign);
     }
 
     return result;

@@ -183,9 +183,7 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
       referenceIds,
       engineProfileId: sceneRow.engine_assigned,
       durationMs,
-      ...(sceneRow.lora_configuration_id
-        ? { loraConfigurationId: sceneRow.lora_configuration_id }
-        : {})
+      loraConfigurationId: sceneRow.lora_configuration_id
     };
 
     const approval =

@@ -213,4 +213,82 @@ describe("InMemorySceneUnitOfWork", () => {
       expect(await context.reviewEvents.findById("non-existent")).toBeUndefined();
     });
   });
+
+  it("always provides a working context.campaigns even when seededCampaigns is omitted", async () => {
+    const uow = new InMemorySceneUnitOfWork();
+
+    await uow.execute(async (context) => {
+      expect(context.campaigns).toBeDefined();
+      const campaign = await context.campaigns!.findById("campaign-1");
+      expect(campaign).toBeUndefined();
+    });
+  });
+
+  it("supports seeded campaigns, staging, committing, and rollbacks", async () => {
+    const seededCampaign = {
+      id: "campaign-1" as CampaignId,
+      clientId: "client-1",
+      title: "Seeded Campaign",
+      targetPlatform: "instagram_reels",
+      status: "drafting" as const,
+      totalScenes: 1,
+      approvedScenes: 0,
+      createdAt: "2026-09-03T12:00:00.000Z",
+      updatedAt: "2026-09-03T12:00:00.000Z"
+    };
+
+    const uow = new InMemorySceneUnitOfWork(undefined, undefined, undefined, [seededCampaign]);
+
+    // Rollback scenario
+    await expect(
+      uow.execute(async (context) => {
+        expect(context.campaigns).toBeDefined();
+        const found = await context.campaigns!.findById("campaign-1");
+        expect(found).toEqual(seededCampaign);
+
+        await context.campaigns!.save({
+          ...seededCampaign,
+          title: "Mutated Title"
+        });
+
+        throw new Error("Rollback campaign save");
+      })
+    ).rejects.toThrow("Rollback campaign save");
+
+    expect(uow.savedCampaigns).toHaveLength(0);
+
+    // Verify uncommitted state
+    await uow.execute(async (context) => {
+      const found = await context.campaigns!.findById("campaign-1");
+      expect(found?.title).toBe("Seeded Campaign");
+    });
+
+    // Commit scenario
+    const newCampaign = {
+      id: "campaign-2" as CampaignId,
+      clientId: "client-1",
+      title: "New Campaign",
+      targetPlatform: "tiktok",
+      status: "drafting" as const,
+      totalScenes: 2,
+      approvedScenes: 0,
+      createdAt: "2026-09-03T12:00:00.000Z",
+      updatedAt: "2026-09-03T12:00:00.000Z"
+    };
+
+    await uow.execute(async (context) => {
+      await context.campaigns!.save(newCampaign);
+      // In-flight read from staged
+      const inFlight = await context.campaigns!.findById("campaign-2");
+      expect(inFlight).toEqual(newCampaign);
+    });
+
+    expect(uow.savedCampaigns).toEqual([newCampaign]);
+
+    // Subsequent execution sees committed campaign
+    await uow.execute(async (context) => {
+      const found = await context.campaigns!.findById("campaign-2");
+      expect(found).toEqual(newCampaign);
+    });
+  });
 });

@@ -12,3 +12,6 @@ export * from "./assemble-generation-manifest.js";
 export * from "./assemble-delivery-reel.js";
 export * from "./license-routing-error.js";
 export * from "./enforce-license-routing.js";
+export * from "./campaign-not-found-error.js";
+export * from "./create-campaign.js";
+export * from "./create-scene.js";

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { Pool, type PoolClient } from "pg";
-import type { CandidateId, SceneId } from "@cco/domain";
+import type { CampaignId, CampaignRecord, CandidateId, SceneId } from "@cco/domain";
 import type { ReviewEvent } from "@cco/contracts";
 import { ReviewSceneUseCases } from "@cco/application";
 import { runMigrations } from "../migration-runner.js";
@@ -354,5 +354,36 @@ describe("PostgreSQL UnitOfWork Integration", () => {
     expect(events.rows).toHaveLength(2);
     expect(events.rows[0]?.action).toBe("candidate_select");
     expect(events.rows[1]?.action).toBe("approve");
+  });
+
+  it("provides functional context.campaigns within unit of work transaction", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const uow = new PostgresUnitOfWork(pool);
+
+    const campaignId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73804" as CampaignId;
+    const campaign: CampaignRecord = {
+      id: campaignId,
+      clientId: clientRecord.client_id,
+      title: "UoW Campaign Test",
+      targetPlatform: "instagram_reels",
+      status: "drafting",
+      totalScenes: 2,
+      approvedScenes: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    await uow.execute(async (context) => {
+      expect(context.campaigns).toBeDefined();
+      await context.campaigns!.save(campaign);
+      const found = await context.campaigns!.findById(campaignId);
+      expect(found).toBeDefined();
+      expect(found?.title).toBe("UoW Campaign Test");
+    });
+
+    const check = await client.query("SELECT title FROM campaigns WHERE campaign_id = $1", [
+      campaignId
+    ]);
+    expect(check.rows[0]?.title).toBe("UoW Campaign Test");
   });
 });

@@ -27,7 +27,7 @@ export interface SceneConfiguration {
   readonly referenceIds: readonly string[];
   readonly engineProfileId: string;
   readonly durationMs: number;
-  readonly loraConfigurationId?: string;
+  readonly loraConfigurationId?: string | null;
 }
 
 export interface SceneCreateInput {

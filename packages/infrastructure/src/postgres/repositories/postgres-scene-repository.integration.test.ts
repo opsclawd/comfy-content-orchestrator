@@ -175,7 +175,8 @@ describe("PostgreSQL SceneRepository Adapter Integration", () => {
         prompt: "Draft prompt",
         referenceIds: [],
         engineProfileId: "flux_schnell",
-        durationMs: 4250
+        durationMs: 4250,
+        loraConfigurationId: null
       }
     });
 
@@ -438,9 +439,34 @@ describe("PostgreSQL SceneRepository Adapter Integration", () => {
         prompt: "Newly created scene prompt from scratch",
         referenceIds: [refAsset.asset_id],
         engineProfileId: "ltx_25",
-        durationMs: 6000
+        durationMs: 6000,
+        loraConfigurationId: null
       }
     });
+  });
+
+  it("round-trips an explicitly null loraConfigurationId", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+    const sceneId = "01950c46-9e90-7d3d-82d2-8f1d3c000099" as SceneId;
+    const scene = Scene.create({
+      id: sceneId,
+      campaignId: campaign.campaign_id as CampaignId,
+      configuration: {
+        prompt: "Explicitly no LoRA",
+        referenceIds: [],
+        engineProfileId: "ltx_25",
+        durationMs: 4000,
+        loraConfigurationId: null
+      }
+    });
+
+    const repository = new PostgresSceneRepository(client);
+    await repository.save(scene);
+
+    expect((await repository.findById(sceneId))?.snapshot().configuration.loraConfigurationId).toBe(
+      null
+    );
   });
 
   it("persists scene aggregate atomically when repository is initialized with a Pool", async () => {

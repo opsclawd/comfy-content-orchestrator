@@ -5,6 +5,7 @@ export * from "./unit-of-work.js";
 export * from "./render-engine-port.js";
 export * from "./gpu-telemetry-port.js";
 export * from "./campaign-repository.js";
+export * from "./client-not-found-error.js";
 export * from "./render-job-repository.js";
 export * from "./manifest-repository.js";
 export * from "./license-registry-repository.js";
