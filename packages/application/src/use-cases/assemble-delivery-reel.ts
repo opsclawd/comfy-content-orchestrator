@@ -104,51 +104,6 @@ export class AssembleDeliveryReel {
   }> {
     const { spec } = params;
 
-    // Early existence check: if a matching manifest already exists for this assemblyId, short-circuit to avoid FFmpeg encode
-    const assemblyId = computeAssemblyId(spec);
-    const earlyManifestKey = `campaigns/${spec.campaignId}/assemblies/${assemblyId}/manifest.json`;
-    try {
-      const existingManifestObj = await this.deps.objectStorage.getObject({
-        bucket: BUCKETS.DELIVERY,
-        key: earlyManifestKey
-      });
-      if (existingManifestObj) {
-        const existingManifest = AssemblyManifestSchema.parse(
-          JSON.parse(new TextDecoder().decode(existingManifestObj.body))
-        );
-        if (existingManifest.assemblyId === assemblyId) {
-          const executionResult: AssemblyExecutionResult = {
-            assemblyId: existingManifest.assemblyId,
-            campaignId: existingManifest.campaignId,
-            assemblyProfile: existingManifest.assemblyProfile,
-            executedInputs: existingManifest.inputs,
-            timeline: existingManifest.timeline,
-            layout: existingManifest.layout,
-            subtitleCuesSha256: existingManifest.subtitleCuesSha256,
-            ...(existingManifest.subtitleCues !== undefined
-              ? { subtitleCues: existingManifest.subtitleCues }
-              : {}),
-            ...(existingManifest.subtitleStyleProfile !== undefined
-              ? { subtitleStyleProfile: existingManifest.subtitleStyleProfile }
-              : {}),
-            ffmpeg: existingManifest.ffmpeg,
-            commandFingerprint: existingManifest.commandFingerprint,
-            encoding: existingManifest.encoding,
-            streams: existingManifest.streams,
-            output: existingManifest.output,
-            measuredFrameRate: existingManifest.measuredFrameRate,
-            executionDurationMs: existingManifest.executionDurationMs
-          };
-          return {
-            manifest: existingManifest,
-            executionResult
-          };
-        }
-      }
-    } catch {
-      // Ignore errors in early check (e.g. object not found, unparseable manifest) and proceed with assembly
-    }
-
     // Step 0: Extract provider-originated audio components from AssemblySpec if present
     const specComponents: ComponentRef[] = [];
     if (spec.voiceover?.source.kind === "provider") {
@@ -252,6 +207,61 @@ export class AssembleDeliveryReel {
       }
     });
     const governanceDecisionId = decision.decisionId;
+
+    // Existence check: if a matching manifest already exists for this
+    // assemblyId, short-circuit to avoid a redundant FFmpeg encode. This
+    // runs AFTER the license guard, not before it: the guard must always be
+    // the first thing evaluated in assemble() with no exceptions, so that a
+    // component whose approval is later revoked can never keep being served
+    // indefinitely through this short-circuit for a spec that was
+    // legitimately assembled once under a now-stale approval. The check
+    // itself is still cheap (an object-storage read) and still happens
+    // before any FFmpeg spawn or storage write, so the redundant-encode
+    // avoidance this exists for is fully preserved.
+    const assemblyId = computeAssemblyId(spec);
+    const earlyManifestKey = `campaigns/${spec.campaignId}/assemblies/${assemblyId}/manifest.json`;
+    try {
+      const existingManifestObj = await this.deps.objectStorage.getObject({
+        bucket: BUCKETS.DELIVERY,
+        key: earlyManifestKey
+      });
+      if (existingManifestObj) {
+        const existingManifest = AssemblyManifestSchema.parse(
+          JSON.parse(new TextDecoder().decode(existingManifestObj.body))
+        );
+        if (existingManifest.assemblyId === assemblyId) {
+          const executionResult: AssemblyExecutionResult = {
+            assemblyId: existingManifest.assemblyId,
+            campaignId: existingManifest.campaignId,
+            assemblyProfile: existingManifest.assemblyProfile,
+            executedInputs: existingManifest.inputs,
+            timeline: existingManifest.timeline,
+            layout: existingManifest.layout,
+            subtitleCuesSha256: existingManifest.subtitleCuesSha256,
+            ...(existingManifest.subtitleCues !== undefined
+              ? { subtitleCues: existingManifest.subtitleCues }
+              : {}),
+            ...(existingManifest.subtitleStyleProfile !== undefined
+              ? { subtitleStyleProfile: existingManifest.subtitleStyleProfile }
+              : {}),
+            ffmpeg: existingManifest.ffmpeg,
+            commandFingerprint: existingManifest.commandFingerprint,
+            encoding: existingManifest.encoding,
+            streams: existingManifest.streams,
+            output: existingManifest.output,
+            measuredFrameRate: existingManifest.measuredFrameRate,
+            executionDurationMs: existingManifest.executionDurationMs
+          };
+          return {
+            manifest: existingManifest,
+            executionResult
+          };
+        }
+      }
+    } catch {
+      // Ignore errors in the existence check (e.g. object not found,
+      // unparseable manifest) and proceed with a full assembly.
+    }
 
     // Step 2: Validate AssemblySpec and verify GenerationManifest consistency before dispatch
     validateAssemblySpec(spec);
