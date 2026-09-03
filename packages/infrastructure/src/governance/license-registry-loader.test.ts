@@ -51,7 +51,7 @@ describe("license-registry-loader", () => {
     expect(ffmpegEntry).toBeDefined();
     // review_required pending formal legal audit of the GPL build configuration.
     expect(ffmpegEntry?.status).toBe("review_required");
-    expect(ffmpegEntry?.versionOrRevision).toBe("n8.0.1");
+    expect(ffmpegEntry?.versionOrRevision).toBe("7.0.2-static");
 
     const azureTtsEntry = snapshot.entries.find((e) => e.componentId === "azure-tts");
     expect(azureTtsEntry).toBeDefined();

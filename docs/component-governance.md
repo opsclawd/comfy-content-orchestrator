@@ -52,13 +52,13 @@ The PRD requires `godzspeed-delivery` objects to be retained for 90 days *after 
 | Attribute | Specification |
 |---|---|
 | **Component** | FFmpeg CLI / Media Assembly Runtime (`ffmpeg`) |
-| **Runtime Version / Build** | `n8.0.1` ([FFmpeg Git](https://git.ffmpeg.org/ffmpeg.git)) |
-| **Build Toolchain** | `gcc 15.2.1` |
-| **Enabled Configuration** | `--enable-gpl --enable-version3 --enable-libx264 --enable-libass --enable-libopus --enable-libwebp` |
-| **Review Date** | 2026-08-29 |
+| **Runtime Version / Build** | `7.0.2-static` ([johnvansickle.com static builds](https://johnvansickle.com/ffmpeg/), pinned via `.ffmpeg-version`, MD5 `7fa72b652e19bf84c9461e332ea1cdf3`) |
+| **Build Toolchain** | `gcc 8 (Debian 8.3.0-6)` |
+| **Enabled Configuration** | `--enable-gpl --enable-version3 --enable-static --disable-debug --disable-ffplay --enable-fontconfig --enable-frei0r --enable-gnutls --enable-gmp --enable-libgme --enable-gray --enable-libaom --enable-libfribidi --enable-libass --enable-libvmaf --enable-libfreetype --enable-libmp3lame --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenjpeg --enable-librubberband --enable-libsoxr --enable-libspeex --enable-libsrt --enable-libvorbis --enable-libopus --enable-libtheora --enable-libvidstab --enable-libvo-amrwbenc --enable-libvpx --enable-libwebp --enable-libx264 --enable-libx265 --enable-libxml2 --enable-libdav1d --enable-libxvid --enable-libzvbi --enable-libzimg` (verified directly from `ffmpeg -version` output of the pinned binary; a full-featured static build, notably including additional GPL-licensed components beyond the previously-documented subset — e.g. `libx265`, `libvidstab`) |
+| **Review Date** | 2026-09-03 |
 | **Deployment Model** | Host executable invoked strictly via subprocess CLI boundary (`FfmpegMediaAssemblerAdapter`) by delivery-assembly worker daemon (`apps/render-worker/src/cli/run-delivery-assembler.ts`) |
 | **Integration Architecture** | Clean Architecture `@cco/infrastructure` adapter implementing `MediaAssemblerPort` via child process spawn; no C/C++ native addons or static/dynamic linking into Node.js |
-| **License Governance Policy** | **`review_required`** in baseline registry snapshot. Resolved once at startup by `createDeliveryReelAssembler()` via `mediaAssembler.getRuntimeComponents()`. FFmpeg packaging includes GPLv3-licensed components (`libx264`, `libass`). While invoked purely as an external standalone process, commercial deployment requires formal legal audit of GPL boundary before transition to `approved`. |
+| **License Governance Policy** | **`review_required`** in baseline registry snapshot. Resolved once at startup by `createDeliveryReelAssembler()` via `mediaAssembler.getRuntimeComponents()`. This static build packages several GPL-licensed components (at minimum `libx264`, `libx265`, `libass`, `libvidstab`; see the full configuration above). While invoked purely as an external standalone process, commercial deployment requires formal legal audit of the GPL boundary before transition to `approved` — see issue #144. |
 
 ---
 
