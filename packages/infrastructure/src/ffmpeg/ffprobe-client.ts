@@ -236,7 +236,9 @@ export async function probeMedia(options: ProbeMediaOptions): Promise<ProbedMedi
   };
 
   const rawAudioStream = streams.find((s) => s.codec_type === "audio");
-  const audioStream = rawAudioStream ? parseAudioStream(rawAudioStream, formatDurationMs) : undefined;
+  const audioStream = rawAudioStream
+    ? parseAudioStream(rawAudioStream, formatDurationMs)
+    : undefined;
 
   return {
     videoStream,
