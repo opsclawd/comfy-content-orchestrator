@@ -1,6 +1,7 @@
 import {
   type CandidateCompletionPayload,
   type ClaimJobInput,
+  type EnqueueJobInput,
   InvalidJobCompletionPayloadError,
   type JobAdmissionGate,
   type JobMutationResult,
@@ -46,6 +47,100 @@ export class PostgresJobQueue implements JobQueuePort {
         return true;
       }
     };
+  }
+
+  async enqueue(input: EnqueueJobInput): Promise<RenderJob> {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new TypeError("EnqueueJobInput must be a non-null object");
+    }
+    if (typeof input.sceneId !== "string" || input.sceneId.trim().length === 0) {
+      throw new Error("sceneId must be a non-empty string");
+    }
+    if (!input.jobKind || !(JOB_KINDS as readonly string[]).includes(input.jobKind)) {
+      throw new Error("jobKind must be a valid JobKind");
+    }
+    if (typeof input.workflowTemplate !== "string" || input.workflowTemplate.trim().length === 0) {
+      throw new Error("workflowTemplate must be a non-empty string");
+    }
+    if (
+      !input.injectedPayload ||
+      typeof input.injectedPayload !== "object" ||
+      Array.isArray(input.injectedPayload)
+    ) {
+      throw new Error("injectedPayload must be a non-null object");
+    }
+    if (input.maxRetries !== undefined) {
+      if (
+        typeof input.maxRetries !== "number" ||
+        !Number.isFinite(input.maxRetries) ||
+        !Number.isInteger(input.maxRetries) ||
+        input.maxRetries < 0
+      ) {
+        throw new Error("maxRetries must be a non-negative finite integer");
+      }
+    }
+
+    const payloadJson = JSON.stringify(input.injectedPayload);
+
+    let res;
+    if (input.maxRetries === undefined) {
+      res = await this.pool.query<RenderJobRow>(
+        `
+        INSERT INTO render_jobs (
+          scene_id,
+          job_kind,
+          workflow_template,
+          injected_payload
+        ) VALUES ($1, $2, $3, $4)
+        RETURNING
+          job_id,
+          scene_id,
+          job_kind,
+          status,
+          workflow_template,
+          injected_payload,
+          worker_id,
+          lease_token,
+          lease_expires_at,
+          retry_count,
+          max_retries,
+          error_trace,
+          created_at,
+          updated_at
+        `,
+        [input.sceneId, input.jobKind, input.workflowTemplate, payloadJson]
+      );
+    } else {
+      res = await this.pool.query<RenderJobRow>(
+        `
+        INSERT INTO render_jobs (
+          scene_id,
+          job_kind,
+          workflow_template,
+          injected_payload,
+          max_retries
+        ) VALUES ($1, $2, $3, $4, $5)
+        RETURNING
+          job_id,
+          scene_id,
+          job_kind,
+          status,
+          workflow_template,
+          injected_payload,
+          worker_id,
+          lease_token,
+          lease_expires_at,
+          retry_count,
+          max_retries,
+          error_trace,
+          created_at,
+          updated_at
+        `,
+        [input.sceneId, input.jobKind, input.workflowTemplate, payloadJson, input.maxRetries]
+      );
+    }
+
+    return this.mapRowToRenderJob(res.rows[0]!);
   }
 
   async claim(input: ClaimJobInput): Promise<RenderJob | undefined> {

@@ -6,9 +6,10 @@ import {
   InvalidJobCompletionPayloadError,
   type ExecuteProfileRenderResult,
   type HashBytesPort,
-  type JobAdmissionGate
+  type JobAdmissionGate,
+  type EnqueueJobInput
 } from "@cco/application";
-import type { CandidateId, JobId, LeaseToken, RenderJob, SceneId } from "@cco/domain";
+import type { CandidateId, JobId, JobKind, LeaseToken, RenderJob, SceneId } from "@cco/domain";
 import { PostgresJobQueue } from "./postgres-job-queue.js";
 import { PostgresSceneRepository } from "./postgres-scene-repository.js";
 import { PostgresStoryboardCandidateRepository } from "./postgres-storyboard-candidate-repository.js";
@@ -2279,6 +2280,205 @@ describe("PostgresJobQueue integration", () => {
       await expect(queue.defer(missingJobId, token, "   ")).rejects.toThrow(
         "reason must be a non-empty string"
       );
+    });
+  });
+
+  describe("enqueue", () => {
+    it("enqueues a candidate job with database default max_retries = 3 and initial status queued", async () => {
+      const { sceneId } = await createTestScene();
+      const queue = new PostgresJobQueue(pool);
+
+      const job = await queue.enqueue({
+        sceneId: sceneId as SceneId,
+        jobKind: "candidate",
+        workflowTemplate: "flux-schnell-draft",
+        injectedPayload: {
+          prompt: "A cinematic shot of a mountain sunrise",
+          seed: 43,
+          variantOrdinal: 1
+        }
+      });
+
+      expect(job.jobId).toBeDefined();
+      expect(job.sceneId).toBe(sceneId);
+      expect(job.jobKind).toBe("candidate");
+      expect(job.status).toBe("queued");
+      expect(job.workflowTemplate).toBe("flux-schnell-draft");
+      expect(job.injectedPayload).toEqual({
+        prompt: "A cinematic shot of a mountain sunrise",
+        seed: 43,
+        variantOrdinal: 1
+      });
+      expect(job.workerId).toBeNull();
+      expect(job.leaseToken).toBeNull();
+      expect(job.leaseExpiresAt).toBeNull();
+      expect(job.retryCount).toBe(0);
+      expect(job.maxRetries).toBe(3);
+      expect(job.errorTrace).toBeNull();
+      expect(job.createdAt).toBeInstanceOf(Date);
+      expect(job.updatedAt).toBeInstanceOf(Date);
+
+      // Verify row in database
+      const rowRes = await client.query<{
+        job_id: string;
+        scene_id: string;
+        job_kind: string;
+        status: string;
+        workflow_template: string;
+        injected_payload: Record<string, unknown>;
+        retry_count: number;
+        max_retries: number;
+      }>("SELECT * FROM render_jobs WHERE job_id = $1", [job.jobId]);
+
+      expect(rowRes.rows).toHaveLength(1);
+      const row = rowRes.rows[0]!;
+      expect(row.scene_id).toBe(sceneId);
+      expect(row.job_kind).toBe("candidate");
+      expect(row.status).toBe("queued");
+      expect(row.workflow_template).toBe("flux-schnell-draft");
+      expect(row.injected_payload).toEqual({
+        prompt: "A cinematic shot of a mountain sunrise",
+        seed: 43,
+        variantOrdinal: 1
+      });
+      expect(row.max_retries).toBe(3);
+      expect(row.retry_count).toBe(0);
+    });
+
+    it("respects explicit maxRetries override when supplied", async () => {
+      const { sceneId } = await createTestScene();
+      const queue = new PostgresJobQueue(pool);
+
+      const job = await queue.enqueue({
+        sceneId: sceneId as SceneId,
+        jobKind: "candidate",
+        workflowTemplate: "flux-schnell-draft",
+        injectedPayload: {
+          prompt: "Explicit retries prompt",
+          seed: 44,
+          variantOrdinal: 2
+        },
+        maxRetries: 5
+      });
+
+      expect(job.maxRetries).toBe(5);
+
+      const rowRes = await client.query<{ max_retries: number }>(
+        "SELECT max_retries FROM render_jobs WHERE job_id = $1",
+        [job.jobId]
+      );
+      expect(rowRes.rows[0]?.max_retries).toBe(5);
+    });
+
+    it("enqueued candidate job is immediately claimable by claim()", async () => {
+      const { sceneId } = await createTestScene();
+      const queue = new PostgresJobQueue(pool);
+
+      const enqueued = await queue.enqueue({
+        sceneId: sceneId as SceneId,
+        jobKind: "candidate",
+        workflowTemplate: "flux-schnell-draft",
+        injectedPayload: {
+          prompt: "Claimable candidate",
+          seed: 45,
+          variantOrdinal: 3
+        }
+      });
+
+      const claimed = await queue.claim({
+        workerId: "test-worker-1",
+        leaseDurationMs: 30_000,
+        allowedJobKinds: ["candidate"]
+      });
+
+      expect(claimed).toBeDefined();
+      expect(claimed?.jobId).toBe(enqueued.jobId);
+      expect(claimed?.status).toBe("leased");
+      expect(claimed?.workerId).toBe("test-worker-1");
+      expect(claimed?.leaseToken).toBeDefined();
+    });
+
+    it("defensively validates enqueue input parameters", async () => {
+      const { sceneId } = await createTestScene();
+      const queue = new PostgresJobQueue(pool);
+
+      // Non-object input
+      await expect(queue.enqueue(null as unknown as EnqueueJobInput)).rejects.toThrow(
+        "EnqueueJobInput must be a non-null object"
+      );
+      await expect(queue.enqueue([] as unknown as EnqueueJobInput)).rejects.toThrow(
+        "EnqueueJobInput must be a non-null object"
+      );
+
+      // Blank sceneId
+      await expect(
+        queue.enqueue({
+          sceneId: "" as SceneId,
+          jobKind: "candidate",
+          workflowTemplate: "flux-schnell-draft",
+          injectedPayload: { prompt: "test" }
+        })
+      ).rejects.toThrow("sceneId must be a non-empty string");
+
+      // Invalid jobKind
+      await expect(
+        queue.enqueue({
+          sceneId: sceneId as SceneId,
+          jobKind: "invalid_kind" as unknown as JobKind,
+          workflowTemplate: "flux-schnell-draft",
+          injectedPayload: { prompt: "test" }
+        })
+      ).rejects.toThrow("jobKind must be a valid JobKind");
+
+      // Blank workflowTemplate
+      await expect(
+        queue.enqueue({
+          sceneId: sceneId as SceneId,
+          jobKind: "candidate",
+          workflowTemplate: "   ",
+          injectedPayload: { prompt: "test" }
+        })
+      ).rejects.toThrow("workflowTemplate must be a non-empty string");
+
+      // Invalid injectedPayload (array or null)
+      await expect(
+        queue.enqueue({
+          sceneId: sceneId as SceneId,
+          jobKind: "candidate",
+          workflowTemplate: "flux-schnell-draft",
+          injectedPayload: null as unknown as Record<string, unknown>
+        })
+      ).rejects.toThrow("injectedPayload must be a non-null object");
+
+      await expect(
+        queue.enqueue({
+          sceneId: sceneId as SceneId,
+          jobKind: "candidate",
+          workflowTemplate: "flux-schnell-draft",
+          injectedPayload: ["not", "an", "object"] as unknown as Record<string, unknown>
+        })
+      ).rejects.toThrow("injectedPayload must be a non-null object");
+
+      // Invalid maxRetries (negative or non-integer)
+      await expect(
+        queue.enqueue({
+          sceneId: sceneId as SceneId,
+          jobKind: "candidate",
+          workflowTemplate: "flux-schnell-draft",
+          injectedPayload: { prompt: "test" },
+          maxRetries: -1
+        })
+      ).rejects.toThrow("maxRetries must be a non-negative finite integer");
+
+      await expect(
+        queue.enqueue({
+          sceneId: sceneId as SceneId,
+          jobKind: "candidate",
+          workflowTemplate: "flux-schnell-draft",
+          injectedPayload: { prompt: "test" },
+          maxRetries: 1.5
+        })
+      ).rejects.toThrow("maxRetries must be a non-negative finite integer");
     });
   });
 });

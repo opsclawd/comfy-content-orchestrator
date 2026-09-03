@@ -12,8 +12,15 @@ import type {
   RenderEnginePort,
   RenderQueueReceipt
 } from "../ports/render-engine-port.js";
+import { InMemoryJobQueue } from "../test-support/in-memory-job-queue.js";
 import { InMemorySceneUnitOfWork } from "../test-support/in-memory-scene-unit-of-work.js";
-import { ProgressSceneProductionUseCases } from "./progress-scene-production.js";
+import { JobDispatchUnavailableError } from "./job-queue-errors.js";
+import {
+  CANDIDATE_BASE_SEED,
+  CANDIDATE_BATCH_SIZE,
+  CANDIDATE_WORKFLOW_TEMPLATE,
+  ProgressSceneProductionUseCases
+} from "./progress-scene-production.js";
 import { SceneNotFoundError } from "./scene-not-found-error.js";
 
 describe("ProgressSceneProductionUseCases", () => {
@@ -93,35 +100,117 @@ describe("ProgressSceneProductionUseCases", () => {
     return scene;
   };
 
-  it("candidate generation start: draft_pending and director_review transition to generating_candidates and save without a review event", async () => {
-    const cases: Array<{
-      readonly name: string;
-      readonly createFixture: (id: string) => Scene;
-    }> = [
-      {
-        name: "draft_pending",
-        createFixture: createDraftScene
-      },
-      {
-        name: "director_review",
-        createFixture: createDirectorReviewScene
-      }
-    ];
+  it("candidate generation start: draft_pending transitions and enqueues 3 jobs", async () => {
+    const sceneId = "scene-begin-gen-draft-pending";
+    const scene = createDraftScene(sceneId);
+    const uow = new InMemorySceneUnitOfWork([scene]);
+    const queue = new InMemoryJobQueue();
+    const useCases = new ProgressSceneProductionUseCases(uow, undefined, queue);
 
-    for (const testCase of cases) {
-      const sceneId = `scene-begin-gen-${testCase.name}`;
-      const scene = testCase.createFixture(sceneId);
-      const uow = new InMemorySceneUnitOfWork([scene]);
-      const useCases = new ProgressSceneProductionUseCases(uow);
+    const result = await useCases.beginCandidateGeneration({ sceneId });
 
-      await useCases.beginCandidateGeneration({ sceneId });
+    expect(uow.savedScenes).toHaveLength(1);
+    expect(uow.savedScenes[0]!.status).toBe("generating_candidates");
+    expect(uow.savedScenes[0]!.snapshot().specRevision).toBe(1);
+    expect(uow.reviewEvents).toHaveLength(0);
+    expect(result.scene.status).toBe("generating_candidates");
+    expect(result.scene.specRevision).toBe(1);
+    expect(result.enqueuedJobs).toHaveLength(CANDIDATE_BATCH_SIZE);
 
-      expect(uow.savedScenes).toHaveLength(1);
-      const savedScene = uow.savedScenes[0]!;
-      expect(savedScene.id).toBe(sceneId);
-      expect(savedScene.status).toBe("generating_candidates");
-      expect(uow.reviewEvents).toHaveLength(0);
+    for (let i = 0; i < CANDIDATE_BATCH_SIZE; i++) {
+      const job = result.enqueuedJobs[i]!;
+      const expectedOrdinal = i + 1;
+      expect(job.sceneId).toBe(sceneId);
+      expect(job.jobKind).toBe("candidate");
+      expect(job.workflowTemplate).toBe(CANDIDATE_WORKFLOW_TEMPLATE);
+      expect(job.injectedPayload).toEqual({
+        prompt: "A cinematic shot of a mountain sunrise",
+        seed: CANDIDATE_BASE_SEED + expectedOrdinal,
+        variantOrdinal: expectedOrdinal
+      });
     }
+
+    expect(queue.jobs).toHaveLength(3);
+    expect(queue.jobs.map((job) => job.injectedPayload.seed)).toEqual([43, 44, 45]);
+  });
+
+  it("candidate generation start rejects director_review without enqueueing a reroll", async () => {
+    const scene = createDirectorReviewScene("scene-reroll-not-admitted");
+    const uow = new InMemorySceneUnitOfWork([scene]);
+    const queue = new InMemoryJobQueue();
+    const useCases = new ProgressSceneProductionUseCases(uow, undefined, queue);
+
+    await expect(useCases.beginCandidateGeneration({ sceneId: scene.id })).rejects.toThrow(
+      InvalidTransitionError
+    );
+
+    expect(scene.status).toBe("director_review");
+    expect(uow.savedScenes).toHaveLength(0);
+    expect(queue.jobs).toHaveLength(0);
+  });
+
+  it("candidate generation start requires JobQueuePort: throws JobDispatchUnavailableError before uow.execute and leaves scene in draft_pending", async () => {
+    const scene = createDraftScene("scene-no-queue");
+    const uow = new InMemorySceneUnitOfWork([scene]);
+    const useCases = new ProgressSceneProductionUseCases(uow); // no queue supplied
+
+    await expect(useCases.beginCandidateGeneration({ sceneId: "scene-no-queue" })).rejects.toThrow(
+      JobDispatchUnavailableError
+    );
+
+    expect(uow.savedScenes).toHaveLength(0);
+    expect(scene.status).toBe("draft_pending");
+  });
+
+  it("candidate generation start: invalid second admission throws InvalidTransitionError and enqueues no jobs", async () => {
+    const scene = createGeneratingCandidatesScene("scene-already-gen");
+    const uow = new InMemorySceneUnitOfWork([scene]);
+    const queue = new InMemoryJobQueue();
+    const useCases = new ProgressSceneProductionUseCases(uow, undefined, queue);
+
+    await expect(
+      useCases.beginCandidateGeneration({ sceneId: "scene-already-gen" })
+    ).rejects.toThrow(InvalidTransitionError);
+
+    expect(uow.savedScenes).toHaveLength(0);
+    expect(queue.jobs).toHaveLength(0);
+  });
+
+  it("candidate generation start: surfaces queue enqueue failure without masking", async () => {
+    const scene = createDraftScene("scene-enqueue-fail");
+    const uow = new InMemorySceneUnitOfWork([scene]);
+    const failingQueue = {
+      async enqueue() {
+        throw new Error("DB connection failure during enqueue");
+      },
+      async claim() {
+        return undefined;
+      },
+      async start() {
+        return { outcome: "not_found" as const };
+      },
+      async heartbeat() {
+        return { outcome: "not_found" as const };
+      },
+      async complete() {
+        return { outcome: "not_found" as const };
+      },
+      async fail() {
+        return { outcome: "not_found" as const };
+      },
+      async defer() {
+        return { outcome: "not_found" as const };
+      }
+    };
+    const useCases = new ProgressSceneProductionUseCases(uow, undefined, failingQueue);
+
+    await expect(
+      useCases.beginCandidateGeneration({ sceneId: "scene-enqueue-fail" })
+    ).rejects.toThrow("DB connection failure during enqueue");
+
+    // Note: per design D2, uow committed before enqueue; this test documents the operational risk
+    expect(uow.savedScenes).toHaveLength(1);
+    expect(uow.savedScenes[0]!.status).toBe("generating_candidates");
   });
 
   it("candidate submission: generating_candidates transitions to director_review and saves without a review event", async () => {
@@ -415,7 +504,8 @@ describe("ProgressSceneProductionUseCases", () => {
 
   it("missing production scene throws SceneNotFoundError and commits no writes", async () => {
     const uow = new InMemorySceneUnitOfWork();
-    const useCases = new ProgressSceneProductionUseCases(uow);
+    const queue = new InMemoryJobQueue();
+    const useCases = new ProgressSceneProductionUseCases(uow, undefined, queue);
 
     const promise = useCases.beginCandidateGeneration({
       sceneId: "non-existent-scene"
@@ -434,5 +524,6 @@ describe("ProgressSceneProductionUseCases", () => {
 
     expect(uow.savedScenes).toHaveLength(0);
     expect(uow.reviewEvents).toHaveLength(0);
+    expect(queue.jobs).toHaveLength(0);
   });
 });
