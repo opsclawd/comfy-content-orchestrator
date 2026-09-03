@@ -128,6 +128,8 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
   private readonly createAssemblyId: (spec: AssemblySpec) => string;
 
   private ffmpegMetadataPromise?: Promise<AssemblyFfmpegMetadata> | undefined;
+  private filtersOutputPromise?: Promise<string> | undefined;
+  private encodersOutputPromise?: Promise<string> | undefined;
   private encoderCheckPromise?: Promise<void> | undefined;
   private filterCheckPromise?: Promise<void> | undefined;
   private audioCapabilityCheckPromise?: Promise<void> | undefined;
@@ -235,50 +237,9 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
     return this.ffmpegMetadataPromise;
   }
 
-  private async assertEncoderAvailable(): Promise<void> {
-    if (!this.encoderCheckPromise) {
-      this.encoderCheckPromise = (async () => {
-        let runResult;
-        try {
-          runResult = await this.spawnFn(this.ffmpegPath, ["-hide_banner", "-encoders"], {
-            timeoutMs: this.versionTimeoutMs
-          });
-        } catch (err) {
-          if (err instanceof FfmpegAssemblyError) throw err;
-          throw new FfmpegAssemblyError(
-            "FFMPEG_EXECUTION_FAILED",
-            `ffmpeg -encoders failed: ${(err as Error).message}`,
-            { command: this.ffmpegPath, args: ["-hide_banner", "-encoders"] }
-          );
-        }
-
-        if (runResult.exitCode !== 0) {
-          throw new FfmpegAssemblyError(
-            "FFMPEG_EXECUTION_FAILED",
-            `ffmpeg -encoders failed with code ${runResult.exitCode}`,
-            {
-              command: this.ffmpegPath,
-              args: ["-hide_banner", "-encoders"],
-              exitCode: runResult.exitCode,
-              stderr: runResult.stderr
-            }
-          );
-        }
-        if (!runResult.stdout.includes("libx264")) {
-          throw new FfmpegAssemblyError(
-            "ENCODER_UNAVAILABLE",
-            `Required video encoder 'libx264' is not available in ffmpeg installation: ${this.ffmpegPath}`,
-            { command: this.ffmpegPath, args: ["-hide_banner", "-encoders"] }
-          );
-        }
-      })();
-    }
-    return this.encoderCheckPromise;
-  }
-
-  private async assertFiltersAvailable(): Promise<void> {
-    if (!this.filterCheckPromise) {
-      this.filterCheckPromise = (async () => {
+  private async getFiltersOutput(): Promise<string> {
+    if (!this.filtersOutputPromise) {
+      this.filtersOutputPromise = (async () => {
         let runResult;
         try {
           runResult = await this.spawnFn(this.ffmpegPath, ["-hide_banner", "-filters"], {
@@ -305,9 +266,69 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
             }
           );
         }
+        return runResult.stdout;
+      })();
+    }
+    return this.filtersOutputPromise;
+  }
 
+  private async getEncodersOutput(): Promise<string> {
+    if (!this.encodersOutputPromise) {
+      this.encodersOutputPromise = (async () => {
+        let runResult;
+        try {
+          runResult = await this.spawnFn(this.ffmpegPath, ["-hide_banner", "-encoders"], {
+            timeoutMs: this.versionTimeoutMs
+          });
+        } catch (err) {
+          if (err instanceof FfmpegAssemblyError) throw err;
+          throw new FfmpegAssemblyError(
+            "FFMPEG_EXECUTION_FAILED",
+            `ffmpeg -encoders failed: ${(err as Error).message}`,
+            { command: this.ffmpegPath, args: ["-hide_banner", "-encoders"] }
+          );
+        }
+
+        if (runResult.exitCode !== 0) {
+          throw new FfmpegAssemblyError(
+            "FFMPEG_EXECUTION_FAILED",
+            `ffmpeg -encoders failed with code ${runResult.exitCode}`,
+            {
+              command: this.ffmpegPath,
+              args: ["-hide_banner", "-encoders"],
+              exitCode: runResult.exitCode,
+              stderr: runResult.stderr
+            }
+          );
+        }
+        return runResult.stdout;
+      })();
+    }
+    return this.encodersOutputPromise;
+  }
+
+  private async assertEncoderAvailable(): Promise<void> {
+    if (!this.encoderCheckPromise) {
+      this.encoderCheckPromise = (async () => {
+        const stdout = await this.getEncodersOutput();
+        if (!stdout.includes("libx264")) {
+          throw new FfmpegAssemblyError(
+            "ENCODER_UNAVAILABLE",
+            `Required video encoder 'libx264' is not available in ffmpeg installation: ${this.ffmpegPath}`,
+            { command: this.ffmpegPath, args: ["-hide_banner", "-encoders"] }
+          );
+        }
+      })();
+    }
+    return this.encoderCheckPromise;
+  }
+
+  private async assertFiltersAvailable(): Promise<void> {
+    if (!this.filterCheckPromise) {
+      this.filterCheckPromise = (async () => {
+        const stdout = await this.getFiltersOutput();
         const missing = REQUIRED_FILTERS.filter(
-          (name) => !new RegExp(`\\b${name}\\b`).test(runResult.stdout)
+          (name) => !new RegExp(`\\b${name}\\b`).test(stdout)
         );
         if (missing.length > 0) {
           throw new FfmpegAssemblyError(
@@ -324,35 +345,9 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
   private async assertAudioCapabilityAvailable(): Promise<void> {
     if (!this.audioCapabilityCheckPromise) {
       this.audioCapabilityCheckPromise = (async () => {
-        let filtersResult;
-        try {
-          filtersResult = await this.spawnFn(this.ffmpegPath, ["-hide_banner", "-filters"], {
-            timeoutMs: this.versionTimeoutMs
-          });
-        } catch (err) {
-          if (err instanceof FfmpegAssemblyError) throw err;
-          throw new FfmpegAssemblyError(
-            "FFMPEG_EXECUTION_FAILED",
-            `ffmpeg -filters failed: ${(err as Error).message}`,
-            { command: this.ffmpegPath, args: ["-hide_banner", "-filters"] }
-          );
-        }
-
-        if (filtersResult.exitCode !== 0) {
-          throw new FfmpegAssemblyError(
-            "FFMPEG_EXECUTION_FAILED",
-            `ffmpeg -filters failed with code ${filtersResult.exitCode}`,
-            {
-              command: this.ffmpegPath,
-              args: ["-hide_banner", "-filters"],
-              exitCode: filtersResult.exitCode,
-              stderr: filtersResult.stderr
-            }
-          );
-        }
-
+        const filtersStdout = await this.getFiltersOutput();
         const missing = REQUIRED_AUDIO_FILTERS.filter(
-          (name) => !new RegExp(`\\b${name}\\b`).test(filtersResult.stdout)
+          (name) => !new RegExp(`\\b${name}\\b`).test(filtersStdout)
         );
         if (missing.length > 0) {
           throw new FfmpegAssemblyError(
@@ -362,34 +357,8 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
           );
         }
 
-        let encodersResult;
-        try {
-          encodersResult = await this.spawnFn(this.ffmpegPath, ["-hide_banner", "-encoders"], {
-            timeoutMs: this.versionTimeoutMs
-          });
-        } catch (err) {
-          if (err instanceof FfmpegAssemblyError) throw err;
-          throw new FfmpegAssemblyError(
-            "FFMPEG_EXECUTION_FAILED",
-            `ffmpeg -encoders failed: ${(err as Error).message}`,
-            { command: this.ffmpegPath, args: ["-hide_banner", "-encoders"] }
-          );
-        }
-
-        if (encodersResult.exitCode !== 0) {
-          throw new FfmpegAssemblyError(
-            "FFMPEG_EXECUTION_FAILED",
-            `ffmpeg -encoders failed with code ${encodersResult.exitCode}`,
-            {
-              command: this.ffmpegPath,
-              args: ["-hide_banner", "-encoders"],
-              exitCode: encodersResult.exitCode,
-              stderr: encodersResult.stderr
-            }
-          );
-        }
-
-        if (!new RegExp(`\\baac\\b`).test(encodersResult.stdout)) {
+        const encodersStdout = await this.getEncodersOutput();
+        if (!new RegExp(`\\baac\\b`).test(encodersStdout)) {
           throw new FfmpegAssemblyError(
             "ENCODER_UNAVAILABLE",
             `Required audio encoder 'aac' is not available in ffmpeg installation: ${this.ffmpegPath}`,
@@ -405,35 +374,9 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
   private async assertLoudnormCapabilityAvailable(): Promise<void> {
     if (!this.loudnormCapabilityCheckPromise) {
       this.loudnormCapabilityCheckPromise = (async () => {
-        let filtersResult;
-        try {
-          filtersResult = await this.spawnFn(this.ffmpegPath, ["-hide_banner", "-filters"], {
-            timeoutMs: this.versionTimeoutMs
-          });
-        } catch (err) {
-          if (err instanceof FfmpegAssemblyError) throw err;
-          throw new FfmpegAssemblyError(
-            "FFMPEG_EXECUTION_FAILED",
-            `ffmpeg -filters failed: ${(err as Error).message}`,
-            { command: this.ffmpegPath, args: ["-hide_banner", "-filters"] }
-          );
-        }
-
-        if (filtersResult.exitCode !== 0) {
-          throw new FfmpegAssemblyError(
-            "FFMPEG_EXECUTION_FAILED",
-            `ffmpeg -filters failed with code ${filtersResult.exitCode}`,
-            {
-              command: this.ffmpegPath,
-              args: ["-hide_banner", "-filters"],
-              exitCode: filtersResult.exitCode,
-              stderr: filtersResult.stderr
-            }
-          );
-        }
-
+        const filtersStdout = await this.getFiltersOutput();
         const missing = REQUIRED_VOICEOVER_FILTERS.filter(
-          (name) => !new RegExp(`\\b${name}\\b`).test(filtersResult.stdout)
+          (name) => !new RegExp(`\\b${name}\\b`).test(filtersStdout)
         );
         if (missing.length > 0) {
           throw new FfmpegAssemblyError(
@@ -450,34 +393,8 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
   private async assertSubtitleCapabilityAvailable(): Promise<void> {
     if (!this.subtitleCapabilityCheckPromise) {
       this.subtitleCapabilityCheckPromise = (async () => {
-        let filtersResult;
-        try {
-          filtersResult = await this.spawnFn(this.ffmpegPath, ["-hide_banner", "-filters"], {
-            timeoutMs: this.versionTimeoutMs
-          });
-        } catch (err) {
-          if (err instanceof FfmpegAssemblyError) throw err;
-          throw new FfmpegAssemblyError(
-            "FFMPEG_EXECUTION_FAILED",
-            `ffmpeg -filters failed: ${(err as Error).message}`,
-            { command: this.ffmpegPath, args: ["-hide_banner", "-filters"] }
-          );
-        }
-
-        if (filtersResult.exitCode !== 0) {
-          throw new FfmpegAssemblyError(
-            "FFMPEG_EXECUTION_FAILED",
-            `ffmpeg -filters failed with code ${filtersResult.exitCode}`,
-            {
-              command: this.ffmpegPath,
-              args: ["-hide_banner", "-filters"],
-              exitCode: filtersResult.exitCode,
-              stderr: filtersResult.stderr
-            }
-          );
-        }
-
-        const hasAss = /\bass\b/.test(filtersResult.stdout);
+        const filtersStdout = await this.getFiltersOutput();
+        const hasAss = /\bass\b/.test(filtersStdout);
         if (!hasAss) {
           throw new FfmpegAssemblyError(
             "SUBTITLE_CAPABILITY_UNAVAILABLE",
@@ -488,6 +405,89 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
       })();
     }
     return this.subtitleCapabilityCheckPromise;
+  }
+
+  private async verifyAndFetchInput(options: {
+    readonly media: {
+      readonly bucket: string;
+      readonly key: string;
+      readonly sha256: string;
+    };
+    readonly kindLabel: string;
+    readonly mediaKindName: string;
+    readonly mediaKindTitleName: string;
+    readonly fetchErrorCode: FfmpegAssemblyError["code"];
+    readonly sizeErrorCode: FfmpegAssemblyError["code"];
+    readonly hashErrorCode: FfmpegAssemblyError["code"];
+    readonly errorContext: Record<string, unknown>;
+  }): Promise<Uint8Array> {
+    const {
+      media,
+      kindLabel,
+      mediaKindName,
+      mediaKindTitleName,
+      fetchErrorCode,
+      sizeErrorCode,
+      hashErrorCode,
+      errorContext
+    } = options;
+
+    let storedObject;
+    try {
+      storedObject = await this.objectStorage.getObject(
+        {
+          bucket: media.bucket,
+          key: media.key
+        },
+        { maxBytes: this.maxStemInputBytes }
+      );
+    } catch (err) {
+      const errMsg = (err as Error).message;
+      if (errMsg.includes("exceeds maxBytes limit") || errMsg.includes("exceeds limit")) {
+        throw new FfmpegAssemblyError(
+          sizeErrorCode,
+          `${kindLabel} exceeds max input size limit (${this.maxStemInputBytes} bytes)`,
+          errorContext
+        );
+      }
+      throw new FfmpegAssemblyError(
+        fetchErrorCode,
+        `Failed to fetch ${mediaKindName} at ${media.bucket}/${media.key}: ${errMsg}`,
+        errorContext
+      );
+    }
+
+    if (!storedObject || !storedObject.body) {
+      throw new FfmpegAssemblyError(
+        fetchErrorCode,
+        `${mediaKindTitleName} not found in storage: ${media.bucket}/${media.key}`,
+        errorContext
+      );
+    }
+
+    const bytes = storedObject.body;
+    if (bytes.byteLength > this.maxStemInputBytes) {
+      throw new FfmpegAssemblyError(
+        sizeErrorCode,
+        `${kindLabel} size ${bytes.byteLength} bytes exceeds limit ${this.maxStemInputBytes} bytes`,
+        errorContext
+      );
+    }
+
+    const computedSha256 = createHash("sha256").update(bytes).digest("hex");
+    if (computedSha256.toLowerCase() !== media.sha256.toLowerCase()) {
+      throw new FfmpegAssemblyError(
+        hashErrorCode,
+        `${kindLabel} SHA-256 mismatch: expected ${media.sha256}, got ${computedSha256}`,
+        {
+          ...errorContext,
+          expectedSha256: media.sha256,
+          actualSha256: computedSha256
+        }
+      );
+    }
+
+    return bytes;
   }
 
   async assemble(spec: AssemblySpec): Promise<AssemblyExecutionResult> {
@@ -512,229 +512,8 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
       );
     }
 
-    // Sort stems deterministically by explicit order
-    const orderedStems = [...spec.videoStems].sort((a, b) => a.order - b.order);
-
-    let aggregateStagedBytes = 0;
-
-    // Step 3a: Input Preflight — fetch, bound, and hash-verify EVERY input (stems, VO, soundbed)
-    // BEFORE any FFmpeg subprocess (including capability and version probes) runs.
-    const verifiedStems: Array<{
-      stem: (typeof orderedStems)[number];
-      bytes: Uint8Array;
-    }> = [];
-
-    for (const stem of orderedStems) {
-      let storedObject;
-      try {
-        storedObject = await this.objectStorage.getObject(
-          {
-            bucket: stem.media.bucket,
-            key: stem.media.key
-          },
-          { maxBytes: this.maxStemInputBytes }
-        );
-      } catch (err) {
-        const errMsg = (err as Error).message;
-        if (errMsg.includes("exceeds maxBytes limit") || errMsg.includes("exceeds limit")) {
-          throw new FfmpegAssemblyError(
-            "STEM_TOO_LARGE",
-            `Stem ${stem.order} (${stem.sceneId}) exceeds max input size limit (${this.maxStemInputBytes} bytes)`,
-            { stemOrder: stem.order, stemSceneId: stem.sceneId }
-          );
-        }
-        throw new FfmpegAssemblyError(
-          "STEM_FETCH_FAILED",
-          `Failed to fetch stem at ${stem.media.bucket}/${stem.media.key}: ${errMsg}`,
-          { stemOrder: stem.order, stemSceneId: stem.sceneId }
-        );
-      }
-
-      if (!storedObject || !storedObject.body) {
-        throw new FfmpegAssemblyError(
-          "STEM_FETCH_FAILED",
-          `Stem not found in storage: ${stem.media.bucket}/${stem.media.key}`,
-          { stemOrder: stem.order, stemSceneId: stem.sceneId }
-        );
-      }
-
-      const bytes = storedObject.body;
-      if (bytes.byteLength > this.maxStemInputBytes) {
-        throw new FfmpegAssemblyError(
-          "STEM_TOO_LARGE",
-          `Stem ${stem.order} (${stem.sceneId}) size ${bytes.byteLength} bytes exceeds limit ${this.maxStemInputBytes} bytes`,
-          { stemOrder: stem.order, stemSceneId: stem.sceneId }
-        );
-      }
-
-      aggregateStagedBytes += bytes.byteLength;
-      if (aggregateStagedBytes > this.maxAggregateInputBytes) {
-        throw new FfmpegAssemblyError(
-          "AGGREGATE_INPUT_TOO_LARGE",
-          `Aggregate stem input size (${aggregateStagedBytes} bytes) exceeds limit (${this.maxAggregateInputBytes} bytes)`
-        );
-      }
-
-      const computedSha256 = createHash("sha256").update(bytes).digest("hex");
-      if (computedSha256.toLowerCase() !== stem.media.sha256.toLowerCase()) {
-        throw new FfmpegAssemblyError(
-          "STEM_HASH_MISMATCH",
-          `Stem ${stem.order} (${stem.sceneId}) SHA-256 mismatch: expected ${stem.media.sha256}, got ${computedSha256}`,
-          {
-            stemOrder: stem.order,
-            stemSceneId: stem.sceneId,
-            expectedSha256: stem.media.sha256,
-            actualSha256: computedSha256
-          }
-        );
-      }
-
-      verifiedStems.push({ stem, bytes });
-    }
-
-    // Preflight Voiceover (if requested)
-    let verifiedVoiceoverBytes: Uint8Array | undefined;
-    if (spec.voiceover) {
-      const vo = spec.voiceover;
-      let storedVo;
-      try {
-        storedVo = await this.objectStorage.getObject(
-          {
-            bucket: vo.media.bucket,
-            key: vo.media.key
-          },
-          { maxBytes: this.maxStemInputBytes }
-        );
-      } catch (err) {
-        const errMsg = (err as Error).message;
-        if (errMsg.includes("exceeds maxBytes limit") || errMsg.includes("exceeds limit")) {
-          throw new FfmpegAssemblyError(
-            "AUDIO_TOO_LARGE",
-            `Voiceover asset (${vo.assetId}) exceeds max input size limit (${this.maxStemInputBytes} bytes)`,
-            { assetKind: "voiceover", assetId: vo.assetId }
-          );
-        }
-        throw new FfmpegAssemblyError(
-          "AUDIO_FETCH_FAILED",
-          `Failed to fetch voiceover at ${vo.media.bucket}/${vo.media.key}: ${errMsg}`,
-          { assetKind: "voiceover", assetId: vo.assetId }
-        );
-      }
-
-      if (!storedVo || !storedVo.body) {
-        throw new FfmpegAssemblyError(
-          "AUDIO_FETCH_FAILED",
-          `Voiceover not found in storage: ${vo.media.bucket}/${vo.media.key}`,
-          { assetKind: "voiceover", assetId: vo.assetId }
-        );
-      }
-
-      const bytes = storedVo.body;
-      if (bytes.byteLength > this.maxStemInputBytes) {
-        throw new FfmpegAssemblyError(
-          "AUDIO_TOO_LARGE",
-          `Voiceover asset (${vo.assetId}) size ${bytes.byteLength} bytes exceeds limit ${this.maxStemInputBytes} bytes`,
-          { assetKind: "voiceover", assetId: vo.assetId }
-        );
-      }
-
-      aggregateStagedBytes += bytes.byteLength;
-      if (aggregateStagedBytes > this.maxAggregateInputBytes) {
-        throw new FfmpegAssemblyError(
-          "AGGREGATE_INPUT_TOO_LARGE",
-          `Aggregate input size (${aggregateStagedBytes} bytes) exceeds limit (${this.maxAggregateInputBytes} bytes)`
-        );
-      }
-
-      const computedSha256 = createHash("sha256").update(bytes).digest("hex");
-      if (computedSha256.toLowerCase() !== vo.media.sha256.toLowerCase()) {
-        throw new FfmpegAssemblyError(
-          "AUDIO_HASH_MISMATCH",
-          `Voiceover (${vo.assetId}) SHA-256 mismatch: expected ${vo.media.sha256}, got ${computedSha256}`,
-          {
-            assetKind: "voiceover",
-            assetId: vo.assetId,
-            expectedSha256: vo.media.sha256,
-            actualSha256: computedSha256
-          }
-        );
-      }
-
-      verifiedVoiceoverBytes = bytes;
-    }
-
-    // Preflight Soundbed (if requested)
-    let verifiedSoundbedBytes: Uint8Array | undefined;
-    if (spec.soundbed) {
-      const sb = spec.soundbed;
-      let storedSb;
-      try {
-        storedSb = await this.objectStorage.getObject(
-          {
-            bucket: sb.media.bucket,
-            key: sb.media.key
-          },
-          { maxBytes: this.maxStemInputBytes }
-        );
-      } catch (err) {
-        const errMsg = (err as Error).message;
-        if (errMsg.includes("exceeds maxBytes limit") || errMsg.includes("exceeds limit")) {
-          throw new FfmpegAssemblyError(
-            "AUDIO_TOO_LARGE",
-            `Soundbed asset (${sb.assetId}) exceeds max input size limit (${this.maxStemInputBytes} bytes)`,
-            { assetKind: "soundbed", assetId: sb.assetId }
-          );
-        }
-        throw new FfmpegAssemblyError(
-          "AUDIO_FETCH_FAILED",
-          `Failed to fetch soundbed at ${sb.media.bucket}/${sb.media.key}: ${errMsg}`,
-          { assetKind: "soundbed", assetId: sb.assetId }
-        );
-      }
-
-      if (!storedSb || !storedSb.body) {
-        throw new FfmpegAssemblyError(
-          "AUDIO_FETCH_FAILED",
-          `Soundbed not found in storage: ${sb.media.bucket}/${sb.media.key}`,
-          { assetKind: "soundbed", assetId: sb.assetId }
-        );
-      }
-
-      const bytes = storedSb.body;
-      if (bytes.byteLength > this.maxStemInputBytes) {
-        throw new FfmpegAssemblyError(
-          "AUDIO_TOO_LARGE",
-          `Soundbed asset (${sb.assetId}) size ${bytes.byteLength} bytes exceeds limit ${this.maxStemInputBytes} bytes`,
-          { assetKind: "soundbed", assetId: sb.assetId }
-        );
-      }
-
-      aggregateStagedBytes += bytes.byteLength;
-      if (aggregateStagedBytes > this.maxAggregateInputBytes) {
-        throw new FfmpegAssemblyError(
-          "AGGREGATE_INPUT_TOO_LARGE",
-          `Aggregate input size (${aggregateStagedBytes} bytes) exceeds limit (${this.maxAggregateInputBytes} bytes)`
-        );
-      }
-
-      const computedSha256 = createHash("sha256").update(bytes).digest("hex");
-      if (computedSha256.toLowerCase() !== sb.media.sha256.toLowerCase()) {
-        throw new FfmpegAssemblyError(
-          "AUDIO_HASH_MISMATCH",
-          `Soundbed (${sb.assetId}) SHA-256 mismatch: expected ${sb.media.sha256}, got ${computedSha256}`,
-          {
-            assetKind: "soundbed",
-            assetId: sb.assetId,
-            expectedSha256: sb.media.sha256,
-            actualSha256: computedSha256
-          }
-        );
-      }
-
-      verifiedSoundbedBytes = bytes;
-    }
-
-    // Assert capabilities conditionally AFTER all inputs are verified
+    // Capability preflight checks run BEFORE downloading and hashing inputs.
+    // On a host with a broken/misconfigured FFmpeg, fail in milliseconds.
     await this.assertEncoderAvailable();
     await this.assertFiltersAvailable();
     if (spec.voiceover !== undefined || spec.soundbed !== undefined) {
@@ -747,6 +526,92 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
       await this.assertSubtitleCapabilityAvailable();
     }
     const ffmpegMetadata = await this.getFfmpegMetadata();
+
+    // Sort stems deterministically by explicit order
+    const orderedStems = [...spec.videoStems].sort((a, b) => a.order - b.order);
+
+    let aggregateStagedBytes = 0;
+
+    // Step 3a: Input Preflight — fetch, bound, and hash-verify EVERY input (stems, VO, soundbed)
+    const verifiedStems: Array<{
+      stem: (typeof orderedStems)[number];
+      bytes: Uint8Array;
+    }> = [];
+
+    for (const stem of orderedStems) {
+      const bytes = await this.verifyAndFetchInput({
+        media: stem.media,
+        kindLabel: `Stem ${stem.order} (${stem.sceneId})`,
+        mediaKindName: "stem",
+        mediaKindTitleName: "Stem",
+        fetchErrorCode: "STEM_FETCH_FAILED",
+        sizeErrorCode: "STEM_TOO_LARGE",
+        hashErrorCode: "STEM_HASH_MISMATCH",
+        errorContext: { stemOrder: stem.order, stemSceneId: stem.sceneId }
+      });
+
+      aggregateStagedBytes += bytes.byteLength;
+      if (aggregateStagedBytes > this.maxAggregateInputBytes) {
+        throw new FfmpegAssemblyError(
+          "AGGREGATE_INPUT_TOO_LARGE",
+          `Aggregate stem input size (${aggregateStagedBytes} bytes) exceeds limit (${this.maxAggregateInputBytes} bytes)`
+        );
+      }
+
+      verifiedStems.push({ stem, bytes });
+    }
+
+    // Preflight Voiceover (if requested)
+    let verifiedVoiceoverBytes: Uint8Array | undefined;
+    if (spec.voiceover) {
+      const vo = spec.voiceover;
+      const bytes = await this.verifyAndFetchInput({
+        media: vo.media,
+        kindLabel: `Voiceover (${vo.assetId})`,
+        mediaKindName: "voiceover",
+        mediaKindTitleName: "Voiceover",
+        fetchErrorCode: "AUDIO_FETCH_FAILED",
+        sizeErrorCode: "AUDIO_TOO_LARGE",
+        hashErrorCode: "AUDIO_HASH_MISMATCH",
+        errorContext: { assetKind: "voiceover", assetId: vo.assetId }
+      });
+
+      aggregateStagedBytes += bytes.byteLength;
+      if (aggregateStagedBytes > this.maxAggregateInputBytes) {
+        throw new FfmpegAssemblyError(
+          "AGGREGATE_INPUT_TOO_LARGE",
+          `Aggregate input size (${aggregateStagedBytes} bytes) exceeds limit (${this.maxAggregateInputBytes} bytes)`
+        );
+      }
+
+      verifiedVoiceoverBytes = bytes;
+    }
+
+    // Preflight Soundbed (if requested)
+    let verifiedSoundbedBytes: Uint8Array | undefined;
+    if (spec.soundbed) {
+      const sb = spec.soundbed;
+      const bytes = await this.verifyAndFetchInput({
+        media: sb.media,
+        kindLabel: `Soundbed (${sb.assetId})`,
+        mediaKindName: "soundbed",
+        mediaKindTitleName: "Soundbed",
+        fetchErrorCode: "AUDIO_FETCH_FAILED",
+        sizeErrorCode: "AUDIO_TOO_LARGE",
+        hashErrorCode: "AUDIO_HASH_MISMATCH",
+        errorContext: { assetKind: "soundbed", assetId: sb.assetId }
+      });
+
+      aggregateStagedBytes += bytes.byteLength;
+      if (aggregateStagedBytes > this.maxAggregateInputBytes) {
+        throw new FfmpegAssemblyError(
+          "AGGREGATE_INPUT_TOO_LARGE",
+          `Aggregate input size (${aggregateStagedBytes} bytes) exceeds limit (${this.maxAggregateInputBytes} bytes)`
+        );
+      }
+
+      verifiedSoundbedBytes = bytes;
+    }
 
     const assemblyId = this.createAssemblyId(spec);
     const scratchDir = path.join(this.workspaceRoot, assemblyId);
@@ -821,17 +686,16 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
 
       const totalStemDurationMs = executedStems.reduce((acc, s) => acc + s.actualDurationMs, 0);
 
-      // Staging Voiceover
-      let stagedVoiceoverPath: string | undefined;
-      let executedVoiceover: ExecutedVoiceoverRef | undefined;
-      if (spec.voiceover && verifiedVoiceoverBytes) {
-        stagedVoiceoverPath = path.join(scratchDir, "voiceover.bin");
-        await fs.writeFile(stagedVoiceoverPath, verifiedVoiceoverBytes);
+      // Staging Voiceover and Soundbed in parallel
+      const stageVoiceoverPromise = (async () => {
+        if (!spec.voiceover || !verifiedVoiceoverBytes) return undefined;
+        const stagedPath = path.join(scratchDir, "voiceover.bin");
+        await fs.writeFile(stagedPath, verifiedVoiceoverBytes);
 
         const voProbed = await probeAudioMedia({
           runner: this.spawnFn,
           ffprobePath: this.ffprobePath,
-          filePath: stagedVoiceoverPath,
+          filePath: stagedPath,
           errorContext: { assetKind: "voiceover", assetId: spec.voiceover.assetId },
           timeoutMs: this.probeTimeoutMs
         });
@@ -839,15 +703,50 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
         const loudnessResult = await analyzeLoudness({
           spawnFn: this.spawnFn,
           ffmpegPath: this.ffmpegPath,
-          filePath: stagedVoiceoverPath,
+          filePath: stagedPath,
           timeoutMs: this.probeTimeoutMs
         });
 
+        return {
+          stagedPath,
+          probedDurationMs: voProbed.audioStream.durationMs,
+          gainDb: loudnessResult.gainDb
+        };
+      })();
+
+      const stageSoundbedPromise = (async () => {
+        if (!spec.soundbed || !verifiedSoundbedBytes) return undefined;
+        const stagedPath = path.join(scratchDir, "soundbed.bin");
+        await fs.writeFile(stagedPath, verifiedSoundbedBytes);
+
+        const sbProbed = await probeAudioMedia({
+          runner: this.spawnFn,
+          ffprobePath: this.ffprobePath,
+          filePath: stagedPath,
+          errorContext: { assetKind: "soundbed", assetId: spec.soundbed.assetId },
+          timeoutMs: this.probeTimeoutMs
+        });
+
+        return {
+          stagedPath,
+          probedDurationMs: sbProbed.audioStream.durationMs
+        };
+      })();
+
+      const [voStagingResult, sbStagingResult] = await Promise.all([
+        stageVoiceoverPromise,
+        stageSoundbedPromise
+      ]);
+
+      let stagedVoiceoverPath: string | undefined;
+      let executedVoiceover: ExecutedVoiceoverRef | undefined;
+      if (voStagingResult && spec.voiceover) {
+        stagedVoiceoverPath = voStagingResult.stagedPath;
         const voMath = computeExecutedVoiceoverMath({
-          actualDurationMs: voProbed.audioStream.durationMs,
+          actualDurationMs: voStagingResult.probedDurationMs,
           targetDurationMs: totalStemDurationMs,
           startMs: spec.voiceover.startMs,
-          gainDb: loudnessResult.gainDb
+          gainDb: voStagingResult.gainDb
         });
 
         executedVoiceover = {
@@ -856,29 +755,18 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
           media: spec.voiceover.media,
           source: spec.voiceover.source,
           startMs: spec.voiceover.startMs,
-          actualDurationMs: voProbed.audioStream.durationMs,
+          actualDurationMs: voStagingResult.probedDurationMs,
           ...voMath
         };
       }
 
-      // Staging Soundbed
       let stagedSoundbedPath: string | undefined;
       let executedSoundbed: ExecutedSoundbedRef | undefined;
-      if (spec.soundbed && verifiedSoundbedBytes) {
-        stagedSoundbedPath = path.join(scratchDir, "soundbed.bin");
-        await fs.writeFile(stagedSoundbedPath, verifiedSoundbedBytes);
-
-        const sbProbed = await probeAudioMedia({
-          runner: this.spawnFn,
-          ffprobePath: this.ffprobePath,
-          filePath: stagedSoundbedPath,
-          errorContext: { assetKind: "soundbed", assetId: spec.soundbed.assetId },
-          timeoutMs: this.probeTimeoutMs
-        });
-
+      if (sbStagingResult && spec.soundbed) {
+        stagedSoundbedPath = sbStagingResult.stagedPath;
         const duckingDb = executedVoiceover ? SOUNDBED_DUCKING_DB : 0;
         const sbMath = computeExecutedSoundbedMath({
-          actualDurationMs: sbProbed.audioStream.durationMs,
+          actualDurationMs: sbStagingResult.probedDurationMs,
           targetDurationMs: totalStemDurationMs,
           startMs: spec.soundbed.startMs,
           gainDb: SOUNDBED_BASELINE_GAIN_DB,
@@ -891,7 +779,7 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
           media: spec.soundbed.media,
           source: spec.soundbed.source,
           startMs: spec.soundbed.startMs,
-          actualDurationMs: sbProbed.audioStream.durationMs,
+          actualDurationMs: sbStagingResult.probedDurationMs,
           ...sbMath
         };
       }
