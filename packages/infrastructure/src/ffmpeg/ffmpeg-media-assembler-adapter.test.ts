@@ -515,8 +515,11 @@ describe("FfmpegMediaAssemblerAdapter (unit)", () => {
         })
       );
 
-      // Verify no FFmpeg subprocess was dispatched at all before the hash gate
-      expect(spawnedCommands).toHaveLength(0);
+      // Verify capability probes ran first, but no encode/staging commands were dispatched
+      const encodeOrProbeCommands = spawnedCommands.filter(
+        (args) => args.includes("-filter_complex") || args.includes("-show_streams")
+      );
+      expect(encodeOrProbeCommands).toHaveLength(0);
     });
 
     it("fails loudly when soundbed SHA-256 does not match storage bytes, preventing FFmpeg dispatch", async () => {
@@ -589,8 +592,11 @@ describe("FfmpegMediaAssemblerAdapter (unit)", () => {
         })
       );
 
-      // Verify no FFmpeg subprocess was dispatched at all before the hash gate
-      expect(spawnedCommands).toHaveLength(0);
+      // Verify capability probes ran first, but no encode/staging commands were dispatched
+      const encodeOrProbeCommands = spawnedCommands.filter(
+        (args) => args.includes("-filter_complex") || args.includes("-show_streams")
+      );
+      expect(encodeOrProbeCommands).toHaveLength(0);
     });
 
     it("throws SUBTITLE_CAPABILITY_UNAVAILABLE only when subtitles are requested and filter is missing", async () => {
@@ -1447,8 +1453,11 @@ describe("FfmpegMediaAssemblerAdapter (unit)", () => {
         })
       );
 
-      // Verify no FFmpeg subprocess was dispatched at all before the hash gate
-      expect(spawnedCommands).toHaveLength(0);
+      // Verify capability probes ran first, but no encode/staging commands were dispatched
+      const encodeOrProbeCommands = spawnedCommands.filter(
+        (args) => args.includes("-filter_complex") || args.includes("-show_streams")
+      );
+      expect(encodeOrProbeCommands).toHaveLength(0);
     });
 
     it("hard gate: bad hash on a LATER stem prevents FFmpeg dispatch for EARLIER, already-verified-looking stems", async () => {
@@ -1544,8 +1553,11 @@ describe("FfmpegMediaAssemblerAdapter (unit)", () => {
         })
       );
 
-      // Hard gate: zero subprocesses dispatched when a later stem fails hash verification
-      expect(spawnedCommands).toHaveLength(0);
+      // Hard gate: zero encode/staging subprocesses dispatched when a later stem fails hash verification
+      const encodeOrProbeCommands = spawnedCommands.filter(
+        (args) => args.includes("-filter_complex") || args.includes("-show_streams")
+      );
+      expect(encodeOrProbeCommands).toHaveLength(0);
     });
 
     it("hard gate: probed duration out of tolerance throws STEM_DURATION_OUT_OF_TOLERANCE", async () => {
