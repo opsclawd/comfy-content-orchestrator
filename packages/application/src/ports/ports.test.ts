@@ -32,7 +32,9 @@ import type {
   VoiceSynthesisPort,
   HashBytesPort,
   ReferenceAssetRepository,
-  AssemblySpec
+  AssemblySpec,
+  JobQueuePort,
+  EnqueueJobInput
 } from "./index.js";
 import type {
   CampaignReviewSummary,
@@ -48,6 +50,7 @@ import { createAssemblyManifest, hashSubtitleCues } from "@cco/contracts";
 import type {
   CampaignId,
   CandidateId,
+  JobId,
   ReferenceAsset,
   ReferenceAssetId,
   SceneConfiguration,
@@ -824,6 +827,64 @@ describe("Application capability ports contract tests", () => {
     it("satisfies the DeliveryAssemblyJobQueuePort interface with in-memory double", async () => {
       const module = await import("./delivery-assembly-job-queue-port.js");
       expect(module).toBeDefined();
+    });
+  });
+
+  describe("JobQueuePort capability family", () => {
+    it("satisfies JobQueuePort enqueue contract", async () => {
+      const enqueued: EnqueueJobInput[] = [];
+      const fakeQueue: JobQueuePort = {
+        async enqueue(input) {
+          enqueued.push(input);
+          return {
+            jobId: "job-1" as JobId,
+            sceneId: input.sceneId,
+            jobKind: input.jobKind,
+            status: "queued",
+            workflowTemplate: input.workflowTemplate,
+            injectedPayload: input.injectedPayload,
+            workerId: null,
+            leaseToken: null,
+            leaseExpiresAt: null,
+            retryCount: 0,
+            maxRetries: input.maxRetries ?? 3,
+            errorTrace: null,
+            createdAt: new Date(),
+            updatedAt: new Date()
+          };
+        },
+        async claim() {
+          return undefined;
+        },
+        async start() {
+          return { outcome: "not_found" };
+        },
+        async heartbeat() {
+          return { outcome: "not_found" };
+        },
+        async complete() {
+          return { outcome: "not_found" };
+        },
+        async fail() {
+          return { outcome: "not_found" };
+        },
+        async defer() {
+          return { outcome: "not_found" };
+        }
+      };
+
+      const job = await fakeQueue.enqueue({
+        sceneId: "scene-1" as SceneId,
+        jobKind: "candidate",
+        workflowTemplate: "flux-schnell-draft",
+        injectedPayload: { prompt: "test prompt", seed: 43, variantOrdinal: 1 }
+      });
+
+      expect(job.jobId).toBe("job-1");
+      expect(job.status).toBe("queued");
+      expect(enqueued).toHaveLength(1);
+      expect(enqueued[0]?.jobKind).toBe("candidate");
+      expect(enqueued[0]?.workflowTemplate).toBe("flux-schnell-draft");
     });
   });
 });

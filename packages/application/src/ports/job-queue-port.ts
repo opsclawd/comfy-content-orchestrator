@@ -1,4 +1,12 @@
-import type { JobId, JobKind, LeaseToken, RenderJob } from "@cco/domain";
+import type { JobId, JobKind, LeaseToken, RenderJob, SceneId } from "@cco/domain";
+
+export interface EnqueueJobInput {
+  readonly sceneId: SceneId;
+  readonly jobKind: JobKind;
+  readonly workflowTemplate: string;
+  readonly injectedPayload: Readonly<Record<string, unknown>>;
+  readonly maxRetries?: number;
+}
 
 export interface ClaimJobInput {
   readonly workerId: string;
@@ -26,6 +34,7 @@ export interface CandidateCompletionPayload {
 }
 
 export interface JobQueuePort {
+  enqueue(input: EnqueueJobInput): Promise<RenderJob>;
   claim(input: ClaimJobInput): Promise<RenderJob | undefined>;
   start(jobId: JobId, leaseToken: LeaseToken): Promise<JobMutationResult>;
   heartbeat(

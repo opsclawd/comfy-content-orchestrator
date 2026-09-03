@@ -5,6 +5,7 @@ import {
   CandidateNotFoundError,
   ClientNotFoundError,
   IdempotencyConflictError,
+  JobDispatchUnavailableError,
   SceneNotFoundError,
   StaleRevisionConflictError
 } from "@cco/application";
@@ -25,8 +26,18 @@ export class ReviewerIdentityUnavailableError extends Error {
 
 export function formatReviewError(error: unknown): {
   statusCode: number;
-  body: ReviewErrorResponse | { message: string };
+  body: ReviewErrorResponse | { message: string } | { code: string; message: string };
 } {
+  if (error instanceof JobDispatchUnavailableError) {
+    return {
+      statusCode: 500,
+      body: {
+        code: "CONFIGURATION_ERROR",
+        message: error.message
+      }
+    };
+  }
+
   if (error instanceof ReviewerIdentityUnavailableError) {
     return {
       statusCode: 401,

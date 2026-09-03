@@ -52,7 +52,8 @@ export function createControlApiContainer(
   const reviewScene = new ReviewSceneUseCases(dependencies.uow);
   const progressSceneProduction = new ProgressSceneProductionUseCases(
     dependencies.uow,
-    dependencies.renderEngine
+    dependencies.renderEngine,
+    dependencies.jobQueue
   );
   const createCampaign = new CreateCampaignUseCase(dependencies.uow);
   const createClient = new CreateClientUseCase(dependencies.uow);

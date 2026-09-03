@@ -277,6 +277,14 @@ export const ReviewCommandResponseSchema = z.object({
 });
 export type ReviewCommandResponse = z.infer<typeof ReviewCommandResponseSchema>;
 
+export const GenerationAdmissionResponseSchema = z.object({
+  sceneId: z.string().uuid(),
+  status: SceneStatusSchema,
+  specRevision: z.number().int().positive(),
+  enqueuedJobIds: z.array(z.string().min(1))
+});
+export type GenerationAdmissionResponse = z.infer<typeof GenerationAdmissionResponseSchema>;
+
 function sortKeysDeep(value: unknown): unknown {
   if (value === null || typeof value !== "object") {
     return value;

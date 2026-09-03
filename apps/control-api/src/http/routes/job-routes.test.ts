@@ -82,6 +82,7 @@ const defaultDispatchConfig = {
 
 function createFakeJobQueue(overrides?: Partial<JobQueuePort>): JobQueuePort {
   return {
+    enqueue: vi.fn().mockResolvedValue(sampleDeferredJob),
     claim: vi.fn().mockResolvedValue(undefined),
     start: vi.fn().mockResolvedValue({ outcome: "not_found" } as JobMutationResult),
     heartbeat: vi.fn().mockResolvedValue({ outcome: "not_found" } as JobMutationResult),

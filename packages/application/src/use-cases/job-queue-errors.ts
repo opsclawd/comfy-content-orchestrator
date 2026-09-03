@@ -4,3 +4,10 @@ export class InvalidJobCompletionPayloadError extends Error {
     this.name = "InvalidJobCompletionPayloadError";
   }
 }
+
+export class JobDispatchUnavailableError extends Error {
+  constructor(message = "Job queue is not configured for candidate generation dispatch.") {
+    super(message);
+    this.name = "JobDispatchUnavailableError";
+  }
+}

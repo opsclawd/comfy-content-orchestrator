@@ -18,6 +18,7 @@ import {
   SceneStatusSchema,
   StoryboardCandidateSchema,
   ReviewCommandResponseSchema,
+  GenerationAdmissionResponseSchema,
   ReviewCommandSchema,
   CandidateSelectCommandSchema,
   ApproveCommandSchema,
@@ -841,6 +842,48 @@ describe("Review Command Envelopes, Discriminated Action Payloads, and Canonical
       ReviewCommandResponseSchema.safeParse({
         ...response,
         specRevision: 0
+      }).success
+    ).toBe(false);
+  });
+
+  it("validates generation admission response schema", () => {
+    const valid = {
+      sceneId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73899",
+      status: "generating_candidates" as const,
+      specRevision: 1,
+      enqueuedJobIds: ["job-1", "job-2", "job-3"]
+    };
+    expect(GenerationAdmissionResponseSchema.parse(valid)).toEqual(valid);
+
+    // Invalid sceneId (not uuid)
+    expect(
+      GenerationAdmissionResponseSchema.safeParse({
+        ...valid,
+        sceneId: "invalid-id"
+      }).success
+    ).toBe(false);
+
+    // Invalid status
+    expect(
+      GenerationAdmissionResponseSchema.safeParse({
+        ...valid,
+        status: "unknown_status"
+      }).success
+    ).toBe(false);
+
+    // Invalid specRevision (0 or negative)
+    expect(
+      GenerationAdmissionResponseSchema.safeParse({
+        ...valid,
+        specRevision: 0
+      }).success
+    ).toBe(false);
+
+    // Invalid job ID (empty string)
+    expect(
+      GenerationAdmissionResponseSchema.safeParse({
+        ...valid,
+        enqueuedJobIds: ["job-1", ""]
       }).success
     ).toBe(false);
   });

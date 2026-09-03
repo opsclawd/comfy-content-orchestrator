@@ -7,7 +7,13 @@ import {
   insertClientRecord,
   MIGRATIONS_DIRECTORY_URL
 } from "@cco/infrastructure/testing";
-import { runMigrations, PostgresUnitOfWork, PostgresSceneRepository } from "@cco/infrastructure";
+import {
+  runMigrations,
+  PostgresUnitOfWork,
+  PostgresSceneRepository,
+  PostgresJobQueue,
+  PostgresSceneReviewQueries
+} from "@cco/infrastructure";
 import type { SceneId } from "@cco/domain";
 import { createControlApiApp } from "./app.js";
 
@@ -15,6 +21,26 @@ const defaultTestOptions = {
   reviewerIdentityResolver: {
     resolve: () => "Test Creator"
   }
+};
+
+const fakeStorageTelemetry = {
+  getStorageTelemetry: async () => ({
+    totalBytes: 1_000_000_000,
+    usedBytes: 100_000_000,
+    freeBytes: 900_000_000,
+    buckets: [],
+    measuredAt: "2026-09-01T00:00:00.000Z"
+  })
+};
+
+const fakeReviewMediaDelivery = {
+  generatePresignedReadUrl: async (loc: { bucket: string; key: string }) =>
+    `https://media.local/${loc.bucket}/${loc.key}`
+};
+
+const defaultDispatchConfig = {
+  leaseDurationMs: 300_000,
+  heartbeatIntervalMs: 30_000
 };
 
 describe("Campaign and Scene Creation End-to-End Integration", () => {
@@ -182,5 +208,217 @@ describe("Campaign and Scene Creation End-to-End Integration", () => {
     const body = res.json();
     expect(body.code).toBe("NOT_FOUND");
     expect(body.message).toContain(`Campaign '${nonExistentCampaignId}' was not found.`);
+  });
+
+  it("transitions draft_pending scene to generating_candidates, enqueues 3 candidate jobs, allows worker claim, and candidates are visible in review", async () => {
+    const clientRecord = await insertClientRecord(client, {
+      companyName: "Acme Productions"
+    });
+
+    const uow = new PostgresUnitOfWork(pool);
+    const jobQueue = new PostgresJobQueue(pool);
+    const sceneReviewQueries = new PostgresSceneReviewQueries(pool);
+
+    const app = createControlApiApp(
+      {
+        uow,
+        jobQueue,
+        storageTelemetry: fakeStorageTelemetry,
+        sceneReviewQueries,
+        reviewMediaDelivery: fakeReviewMediaDelivery
+      },
+      {
+        ...defaultTestOptions,
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    // 1. POST /api/campaigns
+    const campaignRes = await app.inject({
+      method: "POST",
+      url: "/api/campaigns",
+      payload: {
+        clientId: clientRecord.client_id,
+        title: "Candidate Generation Test Campaign",
+        targetPlatform: "instagram_reels",
+        totalScenes: 1
+      }
+    });
+    expect(campaignRes.statusCode).toBe(201);
+    const campaignBody = campaignRes.json();
+
+    // 2. POST /api/campaigns/:campaignId/scenes
+    const configuration = {
+      prompt: "Golden sunrise over misty pine forest with morning dew",
+      referenceIds: [],
+      engineProfileId: "ltx_25",
+      durationMs: 5000,
+      loraConfigurationId: "lora-mist-v1"
+    };
+
+    const sceneRes = await app.inject({
+      method: "POST",
+      url: `/api/campaigns/${campaignBody.campaignId}/scenes`,
+      payload: { configuration }
+    });
+    expect(sceneRes.statusCode).toBe(201);
+    const sceneBody = sceneRes.json();
+    expect(sceneBody.status).toBe("draft_pending");
+    expect(sceneBody.specRevision).toBe(1);
+
+    // 3. POST /api/scenes/:sceneId/generation-admission
+    const admissionRes = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${sceneBody.sceneId}/generation-admission`
+    });
+
+    expect(admissionRes.statusCode).toBe(200);
+    const admissionBody = admissionRes.json();
+    expect(admissionBody.sceneId).toBe(sceneBody.sceneId);
+    expect(admissionBody.status).toBe("generating_candidates");
+    expect(admissionBody.specRevision).toBe(1);
+    expect(admissionBody.enqueuedJobIds).toHaveLength(3);
+
+    // Ensure job IDs are distinct
+    const distinctJobIds = new Set(admissionBody.enqueuedJobIds);
+    expect(distinctJobIds.size).toBe(3);
+
+    // 4. Assert PostgreSQL render_jobs rows
+    const jobRowsRes = await client.query<{
+      job_id: string;
+      scene_id: string;
+      job_kind: string;
+      workflow_template: string;
+      injected_payload: { prompt: string; seed: number; variantOrdinal: number };
+      status: string;
+      worker_id: string | null;
+      lease_token: string | null;
+      retry_count: number;
+      max_retries: number;
+    }>(
+      "SELECT * FROM render_jobs WHERE scene_id = $1 ORDER BY (injected_payload->>'variantOrdinal')::int ASC",
+      [sceneBody.sceneId]
+    );
+
+    expect(jobRowsRes.rows).toHaveLength(3);
+
+    for (let i = 0; i < 3; i++) {
+      const row = jobRowsRes.rows[i]!;
+      const expectedOrdinal = i + 1;
+      const expectedSeed = 42 + expectedOrdinal;
+
+      expect(row.scene_id).toBe(sceneBody.sceneId);
+      expect(row.job_kind).toBe("candidate");
+      expect(row.workflow_template).toBe("flux-schnell-draft");
+      expect(row.status).toBe("queued");
+      expect(row.max_retries).toBe(3);
+      expect(row.retry_count).toBe(0);
+      expect(row.worker_id).toBeNull();
+      expect(row.lease_token).toBeNull();
+      expect(row.injected_payload).toEqual({
+        prompt: configuration.prompt,
+        seed: expectedSeed,
+        variantOrdinal: expectedOrdinal
+      });
+      expect(admissionBody.enqueuedJobIds).toContain(row.job_id);
+    }
+
+    // 5. Claim a job with allowedJobKinds: ['candidate'] using the real PostgresJobQueue
+    const claimedJob = await jobQueue.claim({
+      workerId: "worker-daemon-alpha",
+      leaseDurationMs: 60_000,
+      allowedJobKinds: ["candidate"]
+    });
+
+    expect(claimedJob).toBeDefined();
+    expect(claimedJob?.sceneId).toBe(sceneBody.sceneId);
+    expect(claimedJob?.jobKind).toBe("candidate");
+    expect(claimedJob?.status).toBe("leased");
+    expect(claimedJob?.workerId).toBe("worker-daemon-alpha");
+    expect(claimedJob?.leaseToken).toBeDefined();
+    expect(claimedJob?.workflowTemplate).toBe("flux-schnell-draft");
+    expect(claimedJob?.injectedPayload.variantOrdinal).toBe(1);
+
+    // 6. Start rendering and complete the candidate job
+    const startRes = await jobQueue.start(claimedJob!.jobId, claimedJob!.leaseToken!);
+    expect(startRes.outcome).toBe("applied");
+
+    const candidatePayload = {
+      variantOrdinal: 1,
+      storageBucket: "cco-renders",
+      storageObjectKey: `scenes/${sceneBody.sceneId}/candidate-1.png`,
+      contentHashSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      generationPayload: {
+        seed: 43,
+        prompt: configuration.prompt
+      }
+    };
+
+    const completeRes = await jobQueue.complete(
+      claimedJob!.jobId,
+      claimedJob!.leaseToken!,
+      undefined,
+      candidatePayload
+    );
+    expect(completeRes.outcome).toBe("applied");
+
+    // 7. Review-read route verifies candidate visibility
+    const reviewRes = await app.inject({
+      method: "GET",
+      url: `/api/scenes/${sceneBody.sceneId}/review`
+    });
+
+    expect(reviewRes.statusCode).toBe(200);
+    const reviewBody = reviewRes.json();
+    expect(reviewBody.sceneId).toBe(sceneBody.sceneId);
+    expect(reviewBody.status).toBe("generating_candidates");
+    expect(reviewBody.specRevision).toBe(1);
+    expect(reviewBody.candidatesByRevision).toHaveLength(1);
+
+    const revisionGroup = reviewBody.candidatesByRevision[0];
+    expect(revisionGroup.specRevision).toBe(1);
+    expect(revisionGroup.candidates).toHaveLength(1);
+
+    const candidate = revisionGroup.candidates[0];
+    expect(candidate.variantOrdinal).toBe(1);
+    expect(candidate.specRevision).toBe(1);
+    expect(candidate.contentHash).toBe(candidatePayload.contentHashSha256);
+    expect(candidate.media.available).toBe(true);
+    expect(candidate.media.url).toContain(
+      `https://media.local/${candidatePayload.storageBucket}/${candidatePayload.storageObjectKey}`
+    );
+    expect(candidate.generationMetadata).toEqual(candidatePayload.generationPayload);
+
+    // 8. Concurrent admissions have one winner and one rejected loser.
+    const concurrentSceneRes = await app.inject({
+      method: "POST",
+      url: `/api/campaigns/${campaignBody.campaignId}/scenes`,
+      payload: {
+        configuration: {
+          ...configuration,
+          prompt: "Second scene used to prove concurrent admission locking"
+        }
+      }
+    });
+    expect(concurrentSceneRes.statusCode).toBe(201);
+    const concurrentSceneId = concurrentSceneRes.json().sceneId as string;
+
+    const concurrentAdmissions = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: `/api/scenes/${concurrentSceneId}/generation-admission`
+      }),
+      app.inject({
+        method: "POST",
+        url: `/api/scenes/${concurrentSceneId}/generation-admission`
+      })
+    ]);
+
+    expect(concurrentAdmissions.map((response) => response.statusCode).sort()).toEqual([200, 422]);
+    const concurrentJobRows = await client.query(
+      "SELECT job_id FROM render_jobs WHERE scene_id = $1",
+      [concurrentSceneId]
+    );
+    expect(concurrentJobRows.rows).toHaveLength(3);
   });
 });
