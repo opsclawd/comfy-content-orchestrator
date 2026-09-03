@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AssemblyExecutionResult, AssemblySpec } from "@cco/contracts";
+import {
+  computeAssemblyId,
+  createAssemblyManifest,
+  type AssemblyExecutionResult,
+  type AssemblySpec
+} from "@cco/contracts";
 import type {
   GenerationManifestRepository,
   MediaAssemblerPort,
@@ -891,5 +896,133 @@ describe("AssembleDeliveryReel use case", () => {
     expect(mockAssembler.assemble).toHaveBeenCalledWith(validSpec);
     expect(result.manifest.assemblyId).toBe("assembly-test-123");
     expect(mockStorage.putObject).toHaveBeenCalledTimes(1);
+  });
+
+  it("short-circuits and returns existing manifest without media assembly execution or storage put when matching manifest already exists", async () => {
+    const assemblyId = computeAssemblyId(validSpec);
+    const existingExecutionResult: AssemblyExecutionResult = {
+      ...dummyExecutionResult,
+      assemblyId
+    };
+    const existingManifest = createAssemblyManifest({
+      executionResult: existingExecutionResult,
+      governanceDecisionId: "gov-dec-existing-001"
+    });
+
+    const manifestKey = `campaigns/${validSpec.campaignId}/assemblies/${assemblyId}/manifest.json`;
+    const manifestBytes = Buffer.from(JSON.stringify(existingManifest), "utf-8");
+
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(),
+      getObject: vi.fn(async ({ bucket, key }) => {
+        if (bucket === "godzspeed-delivery" && key === manifestKey) {
+          return { bucket, key, body: manifestBytes };
+        }
+        return undefined;
+      })
+    };
+
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn()
+    };
+
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
+    const useCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: createApprovedGenerationManifestRepository()
+    });
+
+    const result = await useCase.assemble({
+      spec: validSpec,
+      requiredComponents: defaultRequiredComponents
+    });
+
+    expect(mockAssembler.assemble).not.toHaveBeenCalled();
+    expect(mockStorage.putObject).not.toHaveBeenCalled();
+    expect(result.manifest).toEqual(existingManifest);
+    expect(result.executionResult.assemblyId).toBe(assemblyId);
+    expect(result.executionResult.campaignId).toBe(validSpec.campaignId);
+  });
+
+  it("denies with zero FFmpeg spawn even when a matching manifest already exists in storage — the license guard always runs before the existence short-circuit", async () => {
+    // Regression test: a component approved when a manifest was originally
+    // published can later be revoked (status flipped to review_required,
+    // restricted, or blocked). The existence-check short-circuit must never
+    // let a caller keep retrieving that manifest without the guard
+    // re-evaluating current registry status on every call.
+    const assemblyId = computeAssemblyId(validSpec);
+    const existingExecutionResult: AssemblyExecutionResult = {
+      ...dummyExecutionResult,
+      assemblyId
+    };
+    const existingManifest = createAssemblyManifest({
+      executionResult: existingExecutionResult,
+      governanceDecisionId: "gov-dec-existing-001"
+    });
+
+    const manifestKey = `campaigns/${validSpec.campaignId}/assemblies/${assemblyId}/manifest.json`;
+    const manifestBytes = Buffer.from(JSON.stringify(existingManifest), "utf-8");
+
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(),
+      getObject: vi.fn(async ({ bucket, key }) => {
+        if (bucket === "godzspeed-delivery" && key === manifestKey) {
+          return { bucket, key, body: manifestBytes };
+        }
+        return undefined;
+      })
+    };
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => dummyExecutionResult)
+    };
+
+    // Component that was approved when the existing manifest was published
+    // is now review_required -- the registry has changed since then.
+    const registry = {
+      getSnapshot: () => ({
+        schemaVersion: 1 as const,
+        registryRevision: "2026-08-29.2",
+        generatedAt: "2026-08-29T12:00:00.000Z",
+        entries: [
+          {
+            componentId: "ffmpeg",
+            componentType: "runtime" as const,
+            versionOrRevision: "n8.0.1",
+            status: "review_required" as const,
+            licenseSource: "registry",
+            reviewedAt: "2026-08-29T12:00:00.000Z",
+            policyRevision: "1"
+          }
+        ]
+      })
+    };
+    const enforceLicenseRouting = new EnforceLicenseRouting({ registry });
+
+    const useCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: createApprovedGenerationManifestRepository()
+    });
+
+    await expect(
+      useCase.assemble({
+        spec: validSpec,
+        requiredComponents: [
+          {
+            componentId: "ffmpeg",
+            componentType: "runtime",
+            versionOrRevision: "n8.0.1"
+          }
+        ]
+      })
+    ).rejects.toThrow(LicenseRoutingError);
+
+    expect(mockAssembler.assemble).not.toHaveBeenCalled();
+    expect(mockStorage.putObject).not.toHaveBeenCalled();
   });
 });

@@ -508,7 +508,7 @@ describe("PRD §9.6 License Routing Gate & Assembly Invariants (integration)", (
     const routingError = thrownError as LicenseRoutingError;
     // The denial must be driven by azure-tts, the remaining review_required
     // component in the production registry. In CI environments where the
-    // probed ffmpeg build differs from the registry's pinned n8.0.1,
+    // probed ffmpeg build differs from the registry's pinned 7.0.2-static,
     // EnforceLicenseRouting may instead deny ffmpeg as an unknown_component
     // (version mismatch) — that is still a fail-closed outcome, but the
     // production-relevant assertion is that azure-tts, not ffmpeg or LTX,
