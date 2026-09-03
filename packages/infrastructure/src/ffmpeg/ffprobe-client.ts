@@ -65,9 +65,49 @@ function parseDurationMs(durationStr: string | undefined): number | undefined {
   return undefined;
 }
 
-export async function probeMedia(options: ProbeMediaOptions): Promise<ProbedMedia> {
-  const { runner, ffprobePath, filePath, errorContext = {}, isOutput = false, timeoutMs } = options;
-  const failureCode = isOutput ? "OUTPUT_PROBE_FAILED" : "STEM_PROBE_FAILED";
+interface RawFfprobeStream {
+  codec_type?: string;
+  codec_name?: string;
+  pix_fmt?: string;
+  width?: number;
+  height?: number;
+  r_frame_rate?: string;
+  avg_frame_rate?: string;
+  duration?: string;
+  sample_rate?: string;
+  channels?: number;
+  bit_rate?: string;
+}
+
+interface ParsedFfprobeJson {
+  streams?: RawFfprobeStream[];
+  format?: {
+    duration?: string;
+  };
+}
+
+async function runFfprobeAndParse(options: {
+  readonly runner: SpawnLikeFn;
+  readonly ffprobePath: string;
+  readonly filePath: string;
+  readonly failureCode: FfmpegAssemblyError["code"];
+  readonly fileLabel?: string;
+  readonly errorContext?: FfmpegAssemblyErrorContext;
+  readonly timeoutMs?: number;
+}): Promise<{
+  readonly streams: RawFfprobeStream[];
+  readonly formatDurationMs: number;
+  readonly args: string[];
+}> {
+  const {
+    runner,
+    ffprobePath,
+    filePath,
+    failureCode,
+    fileLabel = "",
+    errorContext = {},
+    timeoutMs
+  } = options;
 
   const args = ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", filePath];
   let runResult;
@@ -77,17 +117,19 @@ export async function probeMedia(options: ProbeMediaOptions): Promise<ProbedMedi
     if (err instanceof FfmpegAssemblyError) {
       throw err;
     }
+    const labelPrefix = fileLabel ? `${fileLabel} ` : "";
     throw new FfmpegAssemblyError(
       failureCode,
-      `Failed to run ffprobe on ${filePath}: ${(err as Error).message}`,
+      `Failed to run ffprobe on ${labelPrefix}${filePath}: ${(err as Error).message}`,
       { ...errorContext, command: ffprobePath, args }
     );
   }
 
   if (runResult.exitCode !== 0) {
+    const labelPrefix = fileLabel ? `${fileLabel}: ` : "file: ";
     throw new FfmpegAssemblyError(
       failureCode,
-      `ffprobe exited with code ${runResult.exitCode} for file: ${filePath}`,
+      `ffprobe exited with code ${runResult.exitCode} for ${labelPrefix}${filePath}`,
       {
         ...errorContext,
         command: ffprobePath,
@@ -98,37 +140,60 @@ export async function probeMedia(options: ProbeMediaOptions): Promise<ProbedMedi
     );
   }
 
-  let parsedJson: {
-    streams?: Array<{
-      codec_type?: string;
-      codec_name?: string;
-      pix_fmt?: string;
-      width?: number;
-      height?: number;
-      r_frame_rate?: string;
-      avg_frame_rate?: string;
-      duration?: string;
-      sample_rate?: string;
-      channels?: number;
-      bit_rate?: string;
-    }>;
-    format?: {
-      duration?: string;
-    };
-  };
-
+  let parsedJson: ParsedFfprobeJson;
   try {
     parsedJson = JSON.parse(runResult.stdout);
   } catch {
+    const labelPrefix = fileLabel ? `${fileLabel}: ` : "file: ";
     throw new FfmpegAssemblyError(
       failureCode,
-      `Unparseable JSON from ffprobe for file: ${filePath}`,
+      `Unparseable JSON from ffprobe for ${labelPrefix}${filePath}`,
       { ...errorContext, command: ffprobePath, args, stderr: runResult.stderr }
     );
   }
 
   const streams = Array.isArray(parsedJson.streams) ? parsedJson.streams : [];
   const formatDurationMs = parseDurationMs(parsedJson.format?.duration) ?? 0;
+
+  return { streams, formatDurationMs, args };
+}
+
+function parseAudioStream(
+  rawAudioStream: RawFfprobeStream,
+  formatDurationMs: number
+): ProbedAudioStream {
+  const audioStreamDurationMs = parseDurationMs(rawAudioStream.duration);
+  const audioDurationMs =
+    audioStreamDurationMs !== undefined && audioStreamDurationMs > 0
+      ? audioStreamDurationMs
+      : formatDurationMs;
+  const sampleRateHz = rawAudioStream.sample_rate ? parseInt(rawAudioStream.sample_rate, 10) : 0;
+  const channels = rawAudioStream.channels ?? 0;
+  const bitrateKbps = rawAudioStream.bit_rate
+    ? Math.round(parseInt(rawAudioStream.bit_rate, 10) / 1000)
+    : undefined;
+
+  return {
+    codecName: rawAudioStream.codec_name ?? "",
+    sampleRateHz,
+    channels,
+    durationMs: audioDurationMs,
+    bitrateKbps
+  };
+}
+
+export async function probeMedia(options: ProbeMediaOptions): Promise<ProbedMedia> {
+  const { runner, ffprobePath, filePath, errorContext = {}, isOutput = false, timeoutMs } = options;
+  const failureCode = isOutput ? "OUTPUT_PROBE_FAILED" : "STEM_PROBE_FAILED";
+
+  const { streams, formatDurationMs, args } = await runFfprobeAndParse({
+    runner,
+    ffprobePath,
+    filePath,
+    failureCode,
+    errorContext,
+    timeoutMs
+  });
 
   const rawVideoStream = streams.find((s) => s.codec_type === "video");
   if (!rawVideoStream) {
@@ -171,27 +236,7 @@ export async function probeMedia(options: ProbeMediaOptions): Promise<ProbedMedi
   };
 
   const rawAudioStream = streams.find((s) => s.codec_type === "audio");
-  let audioStream: ProbedAudioStream | undefined;
-  if (rawAudioStream) {
-    const audioStreamDurationMs = parseDurationMs(rawAudioStream.duration);
-    const audioDurationMs =
-      audioStreamDurationMs !== undefined && audioStreamDurationMs > 0
-        ? audioStreamDurationMs
-        : formatDurationMs;
-    const sampleRateHz = rawAudioStream.sample_rate ? parseInt(rawAudioStream.sample_rate, 10) : 0;
-    const channels = rawAudioStream.channels ?? 0;
-    const bitrateKbps = rawAudioStream.bit_rate
-      ? Math.round(parseInt(rawAudioStream.bit_rate, 10) / 1000)
-      : undefined;
-
-    audioStream = {
-      codecName: rawAudioStream.codec_name ?? "",
-      sampleRateHz,
-      channels,
-      durationMs: audioDurationMs,
-      bitrateKbps
-    };
-  }
+  const audioStream = rawAudioStream ? parseAudioStream(rawAudioStream, formatDurationMs) : undefined;
 
   return {
     videoStream,
@@ -207,61 +252,15 @@ export async function probeAudioMedia(options: ProbeAudioMediaOptions): Promise<
   const { runner, ffprobePath, filePath, errorContext = {}, timeoutMs } = options;
   const failureCode = "AUDIO_PROBE_FAILED";
 
-  const args = ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", filePath];
-  let runResult;
-  try {
-    runResult = await runner(ffprobePath, args, { timeoutMs });
-  } catch (err) {
-    if (err instanceof FfmpegAssemblyError) {
-      throw err;
-    }
-    throw new FfmpegAssemblyError(
-      failureCode,
-      `Failed to run ffprobe on audio file ${filePath}: ${(err as Error).message}`,
-      { ...errorContext, command: ffprobePath, args }
-    );
-  }
-
-  if (runResult.exitCode !== 0) {
-    throw new FfmpegAssemblyError(
-      failureCode,
-      `ffprobe exited with code ${runResult.exitCode} for audio file: ${filePath}`,
-      {
-        ...errorContext,
-        command: ffprobePath,
-        args,
-        exitCode: runResult.exitCode,
-        stderr: runResult.stderr
-      }
-    );
-  }
-
-  let parsedJson: {
-    streams?: Array<{
-      codec_type?: string;
-      codec_name?: string;
-      duration?: string;
-      sample_rate?: string;
-      channels?: number;
-      bit_rate?: string;
-    }>;
-    format?: {
-      duration?: string;
-    };
-  };
-
-  try {
-    parsedJson = JSON.parse(runResult.stdout);
-  } catch {
-    throw new FfmpegAssemblyError(
-      failureCode,
-      `Unparseable JSON from ffprobe for audio file: ${filePath}`,
-      { ...errorContext, command: ffprobePath, args, stderr: runResult.stderr }
-    );
-  }
-
-  const streams = Array.isArray(parsedJson.streams) ? parsedJson.streams : [];
-  const formatDurationMs = parseDurationMs(parsedJson.format?.duration) ?? 0;
+  const { streams, formatDurationMs, args } = await runFfprobeAndParse({
+    runner,
+    ffprobePath,
+    filePath,
+    failureCode,
+    fileLabel: "audio file",
+    errorContext,
+    timeoutMs
+  });
 
   const rawAudioStream = streams.find((s) => s.codec_type === "audio");
   if (!rawAudioStream) {
@@ -272,13 +271,9 @@ export async function probeAudioMedia(options: ProbeAudioMediaOptions): Promise<
     );
   }
 
-  const audioStreamDurationMs = parseDurationMs(rawAudioStream.duration);
-  const audioDurationMs =
-    audioStreamDurationMs !== undefined && audioStreamDurationMs > 0
-      ? audioStreamDurationMs
-      : formatDurationMs;
+  const audioStream = parseAudioStream(rawAudioStream, formatDurationMs);
 
-  if (audioDurationMs <= 0) {
+  if (audioStream.durationMs <= 0) {
     throw new FfmpegAssemblyError(
       failureCode,
       `Unable to determine positive duration for audio stream in ${filePath}`,
@@ -286,20 +281,8 @@ export async function probeAudioMedia(options: ProbeAudioMediaOptions): Promise<
     );
   }
 
-  const sampleRateHz = rawAudioStream.sample_rate ? parseInt(rawAudioStream.sample_rate, 10) : 0;
-  const channels = rawAudioStream.channels ?? 0;
-  const bitrateKbps = rawAudioStream.bit_rate
-    ? Math.round(parseInt(rawAudioStream.bit_rate, 10) / 1000)
-    : undefined;
-
   return {
-    audioStream: {
-      codecName: rawAudioStream.codec_name ?? "",
-      sampleRateHz,
-      channels,
-      durationMs: audioDurationMs,
-      bitrateKbps
-    },
+    audioStream,
     formatDurationMs
   };
 }
