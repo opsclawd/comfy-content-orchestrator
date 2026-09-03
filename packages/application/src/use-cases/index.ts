@@ -14,4 +14,5 @@ export * from "./license-routing-error.js";
 export * from "./enforce-license-routing.js";
 export * from "./campaign-not-found-error.js";
 export * from "./create-campaign.js";
+export * from "./create-client.js";
 export * from "./create-scene.js";

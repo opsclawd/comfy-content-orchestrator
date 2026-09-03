@@ -17,3 +17,4 @@ export * from "./assembly-execution.js";
 export * from "./deep-freeze.js";
 export * from "./component-license-registry.js";
 export * from "./campaign.js";
+export * from "./client.js";
