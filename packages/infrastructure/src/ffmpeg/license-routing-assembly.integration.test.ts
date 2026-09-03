@@ -450,24 +450,24 @@ describe("PRD §9.6 License Routing Gate & Assembly Invariants (integration)", (
     expect(deliveryKeys).toEqual([]);
   });
 
-  it("fails closed under the real production config/component-license-registry.json: no formal legal audit has approved LTX, ffmpeg, or azure-tts, so real production assembly must deny", async () => {
-    // This deliberately does NOT assert a success path. LTX_25_720P_5S_V1,
-    // ffmpeg, and azure-tts are `review_required` in the actual production
-    // registry pending real legal/commercial licensing audits via issues
-    // #143, #144, and #145. The mechanism proof against a real "approved"
-    // state lives in the deniedStatuses matrix above and the smoke test
-    // near the top of this file, both of which use an explicitly-named
-    // separate acceptance-only registry fixture
+  it("real production config/component-license-registry.json now allows assembly: LTX (#143), ffmpeg (#144), and azure-tts (#145) all carry operator determinations on record", async () => {
+    // This test's premise flipped once the third and final operator-only
+    // determination (#145, azure-tts) landed: with LTX, ffmpeg, and
+    // azure-tts all `approved` in the real production registry, there is no
+    // remaining component that fails production's real license-routing
+    // check for a standard voiceover-bearing assembly. This is deliberately
+    // NOT a rubber-stamp — each entry's approval is a real, cited
+    // determination (see config/component-license-registry.json's
+    // licenseSource fields and issues #143/#144/#145), not a synthetic
+    // fixture flip. The fail-closed *mechanism* itself (deny on any
+    // non-approved status) continues to be proven independently by the
+    // deniedStatuses matrix above and this file's other tests, all of which
+    // use the explicitly-named, separate acceptance-only registry fixture
     // (buildApprovedAcceptanceRegistrySnapshot) rather than this
-    // repository's real governing config. A test that made real production
-    // config appear to succeed would either require silently switching the
-    // production registry to `approved` without genuine license evidence
-    // (exactly what PRD §9.6 and the operator-only issues forbid), or it
-    // would misrepresent this repository's actual, correctly-blocked
-    // commercial-deployment state. As the three operator-only issues
-    // (#143, #144, #145) land, this test will need to be reworked to
-    // assert the new dispatch-eligible state.
-    const campaignId = "campaign-production-registry-fails-closed";
+    // repository's real governing config — so a regression that silently
+    // weakens EnforceLicenseRouting itself would still be caught there,
+    // independent of this file's own production registry contents.
+    const campaignId = "campaign-production-registry-approved";
     const spec = buildValidAcceptanceSpec(campaignId);
 
     const productionRegistryPath = path.resolve(
@@ -494,21 +494,16 @@ describe("PRD §9.6 License Routing Gate & Assembly Invariants (integration)", (
       }
     });
 
-    let thrownError: unknown;
-    try {
-      await useCase.assemble({ spec });
-    } catch (err) {
-      thrownError = err;
-    }
+    const { manifest, executionResult } = await useCase.assemble({ spec });
 
-    expect(thrownError).toBeInstanceOf(LicenseRoutingError);
-    const routingError = thrownError as LicenseRoutingError;
-    expect(routingError.message).toContain("LTX_25_720P_5S_V1");
-    expect(spawnCount).toBe(0);
+    expect(manifest).toBeDefined();
+    expect(executionResult).toBeDefined();
+    expect(spawnCount).toBeGreaterThan(0);
 
-    const deliveryKeys = objectStorage
-      .getAllKeys()
-      .filter((k) => k.includes(`campaigns/${campaignId}/assemblies/`));
-    expect(deliveryKeys).toEqual([]);
+    const deliveryMedia = await objectStorage.getObject({
+      bucket: BUCKETS.DELIVERY,
+      key: `campaigns/${campaignId}/assemblies/${executionResult.assemblyId}/output.mp4`
+    });
+    expect(deliveryMedia).toBeDefined();
   });
 });

@@ -777,7 +777,10 @@ describe("run-worker CLI", () => {
         }
       };
 
-      // In production registry, LTX_25_720P_5S_V1 is review_required
+      // The committed seed registry approved LTX_25_720P_5S_V1 (issue #143
+      // operator determination), so this test injects a registry that still
+      // reports LTX as review_required to verify the fail-closed path
+      // independently of the production registry contents.
       const worker = createProductionWorker(config, {
         loadComponentLicenseRegistry: () => ({
           registryRevision: "2026-08-29.1",

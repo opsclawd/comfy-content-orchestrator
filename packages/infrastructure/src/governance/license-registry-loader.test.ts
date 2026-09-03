@@ -30,9 +30,9 @@ describe("license-registry-loader", () => {
 
     const ltxEntry = snapshot.entries.find((e) => e.componentId === "LTX_25_720P_5S_V1");
     expect(ltxEntry).toBeDefined();
-    // No formal legal/commercial licensing audit has occurred; production
-    // must remain review_required (fail-closed) until it does.
-    expect(ltxEntry?.status).toBe("review_required");
+    // Operator commercial-license determination, issue #143: approved under
+    // the LTXV Open Weights License 0.X sub-$10M-revenue carve-out.
+    expect(ltxEntry?.status).toBe("approved");
 
     const fluxEntry = snapshot.entries.find((e) => e.componentId === "FLUX_SCHNELL_DRAFT_V1");
     expect(fluxEntry).toBeDefined();
@@ -49,9 +49,12 @@ describe("license-registry-loader", () => {
 
     const ffmpegEntry = snapshot.entries.find((e) => e.componentId === "ffmpeg");
     expect(ffmpegEntry).toBeDefined();
-    // review_required pending formal legal audit of the GPL build configuration.
-    expect(ffmpegEntry?.status).toBe("review_required");
-    expect(ffmpegEntry?.versionOrRevision).toBe("n8.0.1");
+    // Approved under FSF GPL FAQ Mere Aggregation + PipeLinking clauses;
+    // FFmpeg is invoked strictly as an external subprocess with no linking
+    // into Node.js (issue #144 operator determination, extended to the
+    // pinned 7.0.2-static build).
+    expect(ffmpegEntry?.status).toBe("approved");
+    expect(ffmpegEntry?.versionOrRevision).toBe("7.0.2-static");
 
     const azureTtsEntry = snapshot.entries.find((e) => e.componentId === "azure-tts");
     expect(azureTtsEntry).toBeDefined();
