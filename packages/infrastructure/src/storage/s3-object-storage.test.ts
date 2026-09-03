@@ -99,4 +99,62 @@ describe("S3ObjectStorage (unit)", () => {
     expect(result?.body).toEqual(new Uint8Array(payload));
     expect(result?.contentType).toBe("text/plain");
   });
+
+  it("passes IfNoneMatch to PutObjectCommand and returns locator", async () => {
+    let sentCommand: { input: { IfNoneMatch?: string } } | undefined;
+    const fakeClient = {
+      send: async (cmd: unknown) => {
+        sentCommand = cmd as { input: { IfNoneMatch?: string } };
+        return {};
+      }
+    } as unknown as S3Client;
+
+    const storage = new S3ObjectStorage({
+      endpoint: "http://localhost:9000",
+      client: fakeClient
+    });
+
+    const locator = await storage.putObject({
+      bucket: "test-bucket",
+      key: "test-key.json",
+      body: new Uint8Array([1, 2, 3]),
+      ifNoneMatch: "*"
+    });
+
+    expect(locator).toEqual({ bucket: "test-bucket", key: "test-key.json" });
+    expect(sentCommand?.input.IfNoneMatch).toBe("*");
+  });
+
+  it("translates PreconditionFailed error to ObjectAlreadyExistsError", async () => {
+    const preconditionError = Object.assign(new Error("Precondition Failed"), {
+      name: "PreconditionFailed",
+      $metadata: { httpStatusCode: 412 }
+    });
+
+    const fakeClient = {
+      send: async () => {
+        throw preconditionError;
+      }
+    } as unknown as S3Client;
+
+    const storage = new S3ObjectStorage({
+      endpoint: "http://localhost:9000",
+      client: fakeClient
+    });
+
+    await expect(
+      storage.putObject({
+        bucket: "test-bucket",
+        key: "existing.json",
+        body: new Uint8Array([1, 2, 3]),
+        ifNoneMatch: "*"
+      })
+    ).rejects.toThrowError(
+      expect.objectContaining({
+        name: "ObjectAlreadyExistsError",
+        bucket: "test-bucket",
+        key: "existing.json"
+      })
+    );
+  });
 });

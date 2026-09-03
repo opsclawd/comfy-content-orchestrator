@@ -1,3 +1,5 @@
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { z } from "zod";
 import { AssemblyProfileIdentitySchema, type AssemblyProfileIdentity } from "./assembly-profile.js";
 import {
@@ -7,7 +9,12 @@ import {
   type VoiceoverAssetRef
 } from "./audio-asset.js";
 import { deepFreeze } from "./deep-freeze.js";
-import { SubtitleCueSchema, validateSubtitleTimeline, type SubtitleCue } from "./subtitle-cue.js";
+import {
+  SubtitleCueSchema,
+  canonicalizeSubtitleCues,
+  validateSubtitleTimeline,
+  type SubtitleCue
+} from "./subtitle-cue.js";
 import { VideoStemRefSchema, type VideoStemRef } from "./video-stem.js";
 
 export const AssemblySpecSchema = z
@@ -107,3 +114,67 @@ export type AssemblySpec = {
   readonly assemblyProfile: AssemblyProfileIdentity;
   readonly expectedTotalDurationMs: number;
 };
+
+/**
+ * Computes a stable, canonical assembly identity from an immutable AssemblySpec.
+ * Any difference in campaign, layout profile, duration, stem order, stem hashes,
+ * audio assets/timing, or subtitle cues produces a distinct assembly identity.
+ */
+export function computeAssemblyId(spec: AssemblySpec): string {
+  const canonical = {
+    campaignId: spec.campaignId,
+    assemblyProfile: {
+      key: spec.assemblyProfile.key,
+      version: spec.assemblyProfile.version
+    },
+    expectedTotalDurationMs: spec.expectedTotalDurationMs,
+    videoStems: [...spec.videoStems]
+      .sort((a, b) => a.order - b.order)
+      .map((s) => ({
+        sceneId: s.sceneId,
+        generationManifestId: s.generationManifestId,
+        order: s.order,
+        expectedDurationMs: s.expectedDurationMs,
+        media: {
+          bucket: s.media.bucket,
+          key: s.media.key,
+          sha256: s.media.sha256,
+          contentType: s.media.contentType
+        }
+      })),
+    voiceover: spec.voiceover
+      ? {
+          assetId: spec.voiceover.assetId,
+          kind: spec.voiceover.kind,
+          source: spec.voiceover.source,
+          startMs: spec.voiceover.startMs,
+          expectedDurationMs: spec.voiceover.expectedDurationMs,
+          media: {
+            bucket: spec.voiceover.media.bucket,
+            key: spec.voiceover.media.key,
+            sha256: spec.voiceover.media.sha256,
+            contentType: spec.voiceover.media.contentType
+          }
+        }
+      : null,
+    soundbed: spec.soundbed
+      ? {
+          assetId: spec.soundbed.assetId,
+          kind: spec.soundbed.kind,
+          source: spec.soundbed.source,
+          startMs: spec.soundbed.startMs,
+          expectedDurationMs: spec.soundbed.expectedDurationMs,
+          media: {
+            bucket: spec.soundbed.media.bucket,
+            key: spec.soundbed.media.key,
+            sha256: spec.soundbed.media.sha256,
+            contentType: spec.soundbed.media.contentType
+          }
+        }
+      : null,
+    subtitleCues: canonicalizeSubtitleCues(spec.subtitleCues)
+  };
+  const json = JSON.stringify(canonical);
+  const hash = bytesToHex(sha256(new TextEncoder().encode(json)));
+  return `asm-${hash.slice(0, 32)}`;
+}

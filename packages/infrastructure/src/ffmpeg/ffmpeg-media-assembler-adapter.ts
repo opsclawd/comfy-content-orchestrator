@@ -1,12 +1,17 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ConcreteMediaAssemblerPort, ObjectStoragePort } from "@cco/application";
+import {
+  type ConcreteMediaAssemblerPort,
+  type ObjectStoragePort,
+  ObjectAlreadyExistsError
+} from "@cco/application";
 import {
   ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS,
   AssemblyExecutionResultSchema,
   VERTICAL_REEL_1080X1920_V1_PROFILE,
   hashSubtitleCues,
+  computeAssemblyId,
   type AssemblyExecutionResult,
   type AssemblyFfmpegMetadata,
   type AssemblySpec,
@@ -99,7 +104,7 @@ export interface FfmpegMediaAssemblerAdapterOptions {
   readonly defaultCrf?: number | undefined;
   readonly defaultPreset?: string | undefined;
   readonly outputBucket?: string | undefined;
-  readonly createAssemblyId?: (() => string) | undefined;
+  readonly createAssemblyId?: ((spec: AssemblySpec) => string) | (() => string) | undefined;
 }
 
 export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
@@ -120,7 +125,7 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
   private readonly defaultCrf: number;
   private readonly defaultPreset: string;
   private readonly outputBucket: string;
-  private readonly createAssemblyId: () => string;
+  private readonly createAssemblyId: (spec: AssemblySpec) => string;
 
   private ffmpegMetadataPromise?: Promise<AssemblyFfmpegMetadata> | undefined;
   private encoderCheckPromise?: Promise<void> | undefined;
@@ -161,7 +166,12 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
     this.defaultCrf = options.defaultCrf ?? DEFAULT_CRF;
     this.defaultPreset = options.defaultPreset ?? DEFAULT_PRESET;
     this.outputBucket = options.outputBucket ?? BUCKETS.DELIVERY;
-    this.createAssemblyId = options.createAssemblyId ?? (() => randomUUID());
+    this.createAssemblyId = options.createAssemblyId
+      ? (spec: AssemblySpec) =>
+          options.createAssemblyId!.length > 0
+            ? (options.createAssemblyId as (s: AssemblySpec) => string)(spec)
+            : (options.createAssemblyId as () => string)()
+      : (spec: AssemblySpec) => computeAssemblyId(spec);
   }
 
   /**
@@ -738,7 +748,7 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
     }
     const ffmpegMetadata = await this.getFfmpegMetadata();
 
-    const assemblyId = this.createAssemblyId();
+    const assemblyId = this.createAssemblyId(spec);
     const scratchDir = path.join(this.workspaceRoot, assemblyId);
     await fs.mkdir(scratchDir, { recursive: true });
 
@@ -1191,13 +1201,78 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
 
       const executionResult = AssemblyExecutionResultSchema.parse(rawResult);
 
-      await this.objectStorage.putObject({
+      const existingOutput = await this.objectStorage.getObject({
         bucket: this.outputBucket,
-        key: outputKey,
-        body: outputBytes,
-        contentType: "video/mp4",
-        checksumSha256: outputSha256
+        key: outputKey
       });
+      if (existingOutput) {
+        if (!existingOutput.body || existingOutput.body.length === 0) {
+          throw new FfmpegAssemblyError(
+            "ASSEMBLY_PROVENANCE_CONFLICT",
+            `Delivery media for identity "${assemblyId}" already exists but is empty or unreadable`,
+            { assemblyId }
+          );
+        }
+        const existingSha256 = createHash("sha256").update(existingOutput.body).digest("hex");
+        if (
+          existingSha256 !== outputSha256 ||
+          (existingOutput.checksumSha256 && existingOutput.checksumSha256 !== outputSha256)
+        ) {
+          throw new FfmpegAssemblyError(
+            "ASSEMBLY_PROVENANCE_CONFLICT",
+            `Delivery media for identity "${assemblyId}" already exists with conflicting checksum (expected ${existingOutput.checksumSha256 ?? existingSha256}, got ${outputSha256})`,
+            {
+              assemblyId,
+              expectedSha256: existingOutput.checksumSha256 ?? existingSha256,
+              actualSha256: outputSha256
+            }
+          );
+        }
+      } else {
+        try {
+          await this.objectStorage.putObject({
+            bucket: this.outputBucket,
+            key: outputKey,
+            body: outputBytes,
+            contentType: "video/mp4",
+            checksumSha256: outputSha256,
+            ifNoneMatch: "*"
+          });
+        } catch (err) {
+          if (err instanceof ObjectAlreadyExistsError) {
+            const concurrentOutput = await this.objectStorage.getObject({
+              bucket: this.outputBucket,
+              key: outputKey
+            });
+            if (!concurrentOutput || !concurrentOutput.body || concurrentOutput.body.length === 0) {
+              throw new FfmpegAssemblyError(
+                "ASSEMBLY_PROVENANCE_CONFLICT",
+                `Delivery media for identity "${assemblyId}" already exists but cannot be verified`,
+                { assemblyId }
+              );
+            }
+            const concurrentSha256 = createHash("sha256")
+              .update(concurrentOutput.body)
+              .digest("hex");
+            if (
+              concurrentSha256 !== outputSha256 ||
+              (concurrentOutput.checksumSha256 && concurrentOutput.checksumSha256 !== outputSha256)
+            ) {
+              throw new FfmpegAssemblyError(
+                "ASSEMBLY_PROVENANCE_CONFLICT",
+                `Delivery media for identity "${assemblyId}" already exists with conflicting checksum (expected ${concurrentOutput.checksumSha256 ?? concurrentSha256}, got ${outputSha256})`,
+                {
+                  assemblyId,
+                  expectedSha256: concurrentOutput.checksumSha256 ?? concurrentSha256,
+                  actualSha256: outputSha256
+                }
+              );
+            }
+          } else {
+            throw err;
+          }
+        }
+      }
 
       return executionResult;
     } finally {

@@ -902,7 +902,22 @@ describe("render CLI", () => {
       hashWorkflow: () => HASH_LTX,
       createRenderEngine: () => renderEngine,
       createGpuLease: () => gpuLease,
-      createGpuTelemetry: () => telemetry
+      createGpuTelemetry: () => telemetry,
+      loadComponentLicenseRegistry: async () => ({
+        registryRevision: "2026-08-29.1",
+        generatedAt: "2026-08-29T12:00:00.000Z",
+        entries: [
+          {
+            componentId: "LTX_25_720P_5S_V1",
+            componentType: "model" as const,
+            versionOrRevision: "1",
+            status: "review_required" as const,
+            licenseSource: "docs/prd.md §3.5",
+            reviewedAt: "2026-08-29T12:00:00.000Z",
+            policyRevision: "2026-08-29.1"
+          }
+        ]
+      })
     };
 
     const stdoutLines: string[] = [];

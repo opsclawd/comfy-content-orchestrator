@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { defaultSpawnRunner, type SpawnLikeFn } from "../ffmpeg-process-runner.js";
+import { BUCKETS } from "@cco/shared";
 
 export interface SyntheticStemOptions {
   readonly ffmpegPath?: string | undefined;
@@ -239,4 +240,100 @@ export async function generateSyntheticStems(
   }
 
   return results;
+}
+
+export interface SyntheticGenerationManifestOptions {
+  readonly manifestId: string;
+  readonly campaignId: string;
+  readonly sceneId: string;
+  readonly stemSha256: string;
+  readonly renderProfile?: string | undefined;
+  readonly renderProfileVersion?: number | null | undefined;
+  readonly durationMs?: number | undefined;
+}
+
+export function buildSyntheticGenerationManifestPayload(
+  options: SyntheticGenerationManifestOptions
+): Readonly<Record<string, unknown>> {
+  const {
+    manifestId,
+    campaignId,
+    sceneId,
+    stemSha256,
+    renderProfile = "LTX_25_720P_5S_V1",
+    renderProfileVersion = 1,
+    durationMs = 5000
+  } = options;
+
+  return Object.freeze({
+    manifestId,
+    jobId: manifestId,
+    promptIdComfy: `prompt-comfy-${manifestId}`,
+    campaignId,
+    sceneId,
+    renderAttempt: 1,
+    renderedAt: "2026-08-29T12:00:00.000Z",
+    engine: "comfyui",
+    renderProfile,
+    renderProfileVersion,
+    models: Object.freeze([
+      {
+        key: "checkpoint",
+        category: "checkpoints",
+        sha256: "1".repeat(64),
+        bytes: 1024000
+      }
+    ]),
+    workflow: Object.freeze({
+      templateId: renderProfile,
+      sha256: "2".repeat(64)
+    }),
+    loras: Object.freeze([]),
+    sampling: Object.freeze({
+      seed: 42,
+      steps: 20,
+      cfg: 3.5,
+      sampler: "euler",
+      scheduler: "normal",
+      denoise: 1.0
+    }),
+    dimensions: Object.freeze({
+      width: 1280,
+      height: 720,
+      frames: 150,
+      fps: 30,
+      approximateDurationSeconds: 5
+    }),
+    frameCount: 150,
+    fps: 30,
+    prompts: Object.freeze({
+      prompt: `Prompt for ${sceneId}`,
+      audioPrompt: null
+    }),
+    referenceAssets: Object.freeze([]),
+    environment: Object.freeze({
+      comfyUiCommit: "abcdef1234567890abcdef1234567890abcdef12",
+      customNodes: []
+    }),
+    runnerProfile: renderProfile,
+    runtimeMetadata: Object.freeze({
+      promptId: `prompt-comfy-${manifestId}`,
+      durationMs
+    }),
+    governance: Object.freeze({
+      license: "docs/prd.md §3.5",
+      sourceKind: "local"
+    }),
+    outputs: Object.freeze([
+      {
+        bucket: BUCKETS.REVIEW,
+        key: `scenes/${sceneId}/candidate.mp4`,
+        filename: "candidate.mp4",
+        checksumSha256: stemSha256,
+        contentType: "video/mp4"
+      }
+    ]),
+    outputObjectKeys: [`scenes/${sceneId}/candidate.mp4`],
+    executionDurationMs: durationMs
+  });
 }

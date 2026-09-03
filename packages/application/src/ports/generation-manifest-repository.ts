@@ -5,6 +5,13 @@
 export interface GenerationManifestComponentIdentity {
   readonly renderProfile: string;
   readonly renderProfileVersion: number | null;
+  /**
+   * Checksum SHA-256 hashes of the rendered outputs produced by this generation manifest.
+   * If provided, callers (e.g. AssembleDeliveryReel) verify that the referenced video stem's
+   * media checksum matches one of the manifest's output checksums to prevent stale or inconsistent
+   * manifest references from being accepted into assembly provenance.
+   */
+  readonly outputChecksumsSha256?: readonly string[] | undefined;
 }
 
 export interface GenerationManifestRepository {

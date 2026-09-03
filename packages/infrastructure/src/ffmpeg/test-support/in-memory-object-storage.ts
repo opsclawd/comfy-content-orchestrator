@@ -1,9 +1,10 @@
-import type {
-  GetObjectOptions,
-  ObjectLocator,
-  ObjectStoragePort,
-  PutObjectInput,
-  StoredObject
+import {
+  type GetObjectOptions,
+  type ObjectLocator,
+  type ObjectStoragePort,
+  ObjectAlreadyExistsError,
+  type PutObjectInput,
+  type StoredObject
 } from "@cco/application";
 
 export class InMemoryObjectStorage implements ObjectStoragePort {
@@ -11,6 +12,9 @@ export class InMemoryObjectStorage implements ObjectStoragePort {
 
   async putObject(input: PutObjectInput): Promise<ObjectLocator> {
     const locatorKey = `${input.bucket}/${input.key}`;
+    if (input.ifNoneMatch === "*" && this.storage.has(locatorKey)) {
+      throw new ObjectAlreadyExistsError(input.bucket, input.key);
+    }
     const stored: StoredObject = {
       bucket: input.bucket,
       key: input.key,
@@ -43,6 +47,10 @@ export class InMemoryObjectStorage implements ObjectStoragePort {
 
   hasObject(locator: ObjectLocator): boolean {
     return this.storage.has(`${locator.bucket}/${locator.key}`);
+  }
+
+  getAllKeys(): string[] {
+    return Array.from(this.storage.keys());
   }
 
   clear(): void {
