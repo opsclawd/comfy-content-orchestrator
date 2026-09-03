@@ -1,7 +1,15 @@
 import type { ReviewEvent } from "@cco/contracts";
-import type { CampaignRecord, CandidateId, Scene, SceneId, StoryboardCandidate } from "@cco/domain";
+import type {
+  CampaignRecord,
+  CandidateId,
+  ClientRecord,
+  Scene,
+  SceneId,
+  StoryboardCandidate
+} from "@cco/domain";
 import type {
   CampaignRepository,
+  ClientRepository,
   ReviewEventStore,
   SceneRepository,
   StoryboardCandidateRepository,
@@ -14,9 +22,11 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _seededCandidates: Map<CandidateId, StoryboardCandidate>;
   private readonly _seededReviewEvents: Map<string, ReviewEvent>;
   private readonly _seededCampaigns: Map<string, CampaignRecord>;
+  private readonly _seededClients: Map<string, ClientRecord>;
   private readonly _savedScenes: Scene[] = [];
   private readonly _reviewEvents: ReviewEvent[] = [];
   private readonly _savedCampaigns: CampaignRecord[] = [];
+  private readonly _savedClients: ClientRecord[] = [];
 
   constructor(
     seededScenes?: Iterable<Scene> | ReadonlyMap<SceneId, Scene> | Record<string, Scene>,
@@ -29,7 +39,9 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     seededCampaigns?:
       | Iterable<CampaignRecord>
       | ReadonlyMap<string, CampaignRecord>
-      | Record<string, CampaignRecord>
+      | Record<string, CampaignRecord>,
+    seededClients?:
+      Iterable<ClientRecord> | ReadonlyMap<string, ClientRecord> | Record<string, ClientRecord>
   ) {
     this._seededScenes = new Map<SceneId, Scene>();
     if (seededScenes !== undefined && seededScenes !== null) {
@@ -118,6 +130,28 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
         }
       }
     }
+
+    this._seededClients = new Map<string, ClientRecord>();
+    if (seededClients !== undefined && seededClients !== null) {
+      if (seededClients instanceof Map) {
+        for (const [id, client] of seededClients.entries()) {
+          this._seededClients.set(id, client);
+        }
+      } else if (Symbol.iterator in seededClients) {
+        for (const item of seededClients) {
+          if (Array.isArray(item) && item.length === 2 && typeof item[0] === "string") {
+            this._seededClients.set(item[0], item[1] as ClientRecord);
+          } else {
+            const client = item as ClientRecord;
+            this._seededClients.set(client.id, client);
+          }
+        }
+      } else if (typeof seededClients === "object") {
+        for (const [id, client] of Object.entries(seededClients)) {
+          this._seededClients.set(id, client as ClientRecord);
+        }
+      }
+    }
   }
 
   get savedScenes(): readonly Scene[] {
@@ -132,11 +166,16 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     return this._savedCampaigns;
   }
 
+  get savedClients(): readonly ClientRecord[] {
+    return this._savedClients;
+  }
+
   async execute<TResult>(work: (context: UnitOfWorkContext) => Promise<TResult>): Promise<TResult> {
     const stagedScenes: Scene[] = [];
     const stagedReviewEvents: ReviewEvent[] = [];
     const stagedCandidates: StoryboardCandidate[] = [];
     const stagedCampaigns: CampaignRecord[] = [];
+    const stagedClients: ClientRecord[] = [];
 
     const scopedScenes: SceneRepository = {
       findById: async (sceneId: SceneId): Promise<Scene | undefined> => {
@@ -202,11 +241,26 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       }
     };
 
+    const scopedClients: ClientRepository<ClientRecord> = {
+      findById: async (clientId: string): Promise<ClientRecord | undefined> => {
+        return stagedClients.find((c) => c.id === clientId) ?? this._seededClients.get(clientId);
+      },
+      save: async (client: ClientRecord): Promise<void> => {
+        const existingIdx = stagedClients.findIndex((c) => c.id === client.id);
+        if (existingIdx >= 0) {
+          stagedClients[existingIdx] = client;
+        } else {
+          stagedClients.push(client);
+        }
+      }
+    };
+
     const context: UnitOfWorkContext = {
       scenes: scopedScenes,
       reviewEvents: scopedReviewEvents,
       candidates: scopedCandidates,
-      campaigns: scopedCampaigns
+      campaigns: scopedCampaigns,
+      clients: scopedClients
     };
 
     const result = await work(context);
@@ -214,6 +268,7 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     this._savedScenes.push(...stagedScenes);
     this._reviewEvents.push(...stagedReviewEvents);
     this._savedCampaigns.push(...stagedCampaigns);
+    this._savedClients.push(...stagedClients);
     for (const scene of stagedScenes) {
       this._seededScenes.set(scene.id, scene);
     }
@@ -225,6 +280,9 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     }
     for (const campaign of stagedCampaigns) {
       this._seededCampaigns.set(campaign.id, campaign);
+    }
+    for (const client of stagedClients) {
+      this._seededClients.set(client.id, client);
     }
 
     return result;

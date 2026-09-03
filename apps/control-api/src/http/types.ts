@@ -1,6 +1,7 @@
 import type { FastifyRequest } from "fastify";
 import {
   CreateCampaignUseCase,
+  CreateClientUseCase,
   CreateSceneUseCase,
   EnforceStorageAdmission,
   ProgressSceneProductionUseCases,
@@ -30,6 +31,7 @@ export interface ControlApiUseCases {
   readonly reviewScene: ReviewSceneUseCases;
   readonly progressSceneProduction: ProgressSceneProductionUseCases;
   readonly createCampaign?: CreateCampaignUseCase | undefined;
+  readonly createClient?: CreateClientUseCase | undefined;
   readonly createScene?: CreateSceneUseCase | undefined;
   readonly enforceStorageAdmission?: EnforceStorageAdmission;
 }
@@ -53,6 +55,7 @@ export function createControlApiContainer(
     dependencies.renderEngine
   );
   const createCampaign = new CreateCampaignUseCase(dependencies.uow);
+  const createClient = new CreateClientUseCase(dependencies.uow);
   const createScene = new CreateSceneUseCase(dependencies.uow);
   const enforceStorageAdmission = dependencies.storageTelemetry
     ? new EnforceStorageAdmission({
@@ -69,6 +72,7 @@ export function createControlApiContainer(
       reviewScene,
       progressSceneProduction,
       createCampaign,
+      createClient,
       createScene,
       ...(enforceStorageAdmission !== undefined ? { enforceStorageAdmission } : {})
     },

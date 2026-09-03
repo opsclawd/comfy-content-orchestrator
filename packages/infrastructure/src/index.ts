@@ -12,6 +12,7 @@ export {
 } from "./postgres/repositories/postgres-scene-repository.js";
 
 export { PostgresCampaignRepository } from "./postgres/repositories/postgres-campaign-repository.js";
+export { PostgresClientRepository } from "./postgres/repositories/postgres-client-repository.js";
 
 export { PostgresStoryboardCandidateRepository } from "./postgres/repositories/postgres-storyboard-candidate-repository.js";
 

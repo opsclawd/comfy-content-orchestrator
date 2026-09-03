@@ -1,6 +1,7 @@
 import type { UnitOfWork, UnitOfWorkContext } from "@cco/application";
 import type { Pool } from "pg";
 import { PostgresCampaignRepository } from "../repositories/postgres-campaign-repository.js";
+import { PostgresClientRepository } from "../repositories/postgres-client-repository.js";
 import { PostgresReviewEventStore } from "../repositories/postgres-review-event-store.js";
 import { PostgresSceneRepository } from "../repositories/postgres-scene-repository.js";
 import { PostgresStoryboardCandidateRepository } from "../repositories/postgres-storyboard-candidate-repository.js";
@@ -16,7 +17,8 @@ export class PostgresUnitOfWork implements UnitOfWork {
         scenes: new PostgresSceneRepository(client, { forUpdate: true }),
         reviewEvents: new PostgresReviewEventStore(client),
         candidates: new PostgresStoryboardCandidateRepository(client),
-        campaigns: new PostgresCampaignRepository(client)
+        campaigns: new PostgresCampaignRepository(client),
+        clients: new PostgresClientRepository(client)
       };
 
       const result = await work(context);
