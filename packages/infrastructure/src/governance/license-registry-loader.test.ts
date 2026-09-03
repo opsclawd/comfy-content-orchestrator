@@ -26,10 +26,12 @@ describe("license-registry-loader", () => {
   it("loads and validates the real committed config/component-license-registry.json seed file", async () => {
     const snapshot = await loadComponentLicenseRegistry(SEED_REGISTRY_PATH);
     expect(snapshot.registryRevision).toBe("2026-08-29.2");
-    expect(snapshot.entries.length).toBeGreaterThanOrEqual(5);
+    expect(snapshot.entries.length).toBeGreaterThanOrEqual(6);
 
     const ltxEntry = snapshot.entries.find((e) => e.componentId === "LTX_25_720P_5S_V1");
     expect(ltxEntry).toBeDefined();
+    // Operator commercial-license determination, issue #143: approved under
+    // the LTXV Open Weights License 0.X sub-$10M-revenue carve-out.
     expect(ltxEntry?.status).toBe("approved");
 
     const fluxEntry = snapshot.entries.find((e) => e.componentId === "FLUX_SCHNELL_DRAFT_V1");
@@ -47,10 +49,15 @@ describe("license-registry-loader", () => {
 
     const ffmpegEntry = snapshot.entries.find((e) => e.componentId === "ffmpeg");
     expect(ffmpegEntry).toBeDefined();
-    // review_required, not approved: no repository evidence document
-    // establishes commercial-use license approval for this FFmpeg build.
+    // review_required pending formal legal audit of the GPL build configuration.
     expect(ffmpegEntry?.status).toBe("review_required");
-    expect(ffmpegEntry?.versionOrRevision).toBe("n8.0.1");
+    expect(ffmpegEntry?.versionOrRevision).toBe("7.0.2-static");
+
+    const azureTtsEntry = snapshot.entries.find((e) => e.componentId === "azure-tts");
+    expect(azureTtsEntry).toBeDefined();
+    // review_required pending formal commercial review of Azure TTS terms.
+    expect(azureTtsEntry?.status).toBe("review_required");
+    expect(azureTtsEntry?.versionOrRevision).toBe("1");
   });
 
   it("throws ComponentLicenseRegistryLoadError when file does not exist", async () => {

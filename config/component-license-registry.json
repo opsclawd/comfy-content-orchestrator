@@ -47,12 +47,22 @@
     {
       "componentId": "ffmpeg",
       "componentType": "runtime",
-      "versionOrRevision": "n8.0.1",
+      "versionOrRevision": "7.0.2-static",
       "status": "review_required",
       "licenseSource": "docs/component-governance.md",
       "reviewedAt": "2026-08-29T12:00:00.000Z",
       "policyRevision": "2026-08-29.1",
-      "notes": "Host runtime build n8.0.1 evaluated at startup by production composition root apps/render-worker/src/cli/run-delivery-assembler.ts via FfmpegMediaAssemblerAdapter.getRuntimeComponents(); review_required pending formal legal audit of GPL build configuration"
+      "notes": "Pinned static build 7.0.2-static (see .ffmpeg-version), evaluated at startup by production composition root apps/render-worker/src/cli/run-delivery-assembler.ts via FfmpegMediaAssemblerAdapter.getRuntimeComponents(); review_required pending formal legal audit of GPL build configuration"
+    },
+    {
+      "componentId": "azure-tts",
+      "componentType": "provider",
+      "versionOrRevision": "1",
+      "status": "review_required",
+      "licenseSource": "docs/prd.md §3.5",
+      "reviewedAt": "2026-08-29T12:00:00.000Z",
+      "policyRevision": "2026-08-29.1",
+      "notes": "Third-party cloud TTS provider for voiceover assets; requires formal commercial review before Phase 1 dispatch"
     }
   ]
 }

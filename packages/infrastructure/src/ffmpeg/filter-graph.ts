@@ -5,6 +5,7 @@ import { escapeFfmpegFilterPath } from "./subtitle-renderer.js";
 export const STEM_DURATION_TOLERANCE_MS = 250;
 export const DEFAULT_CRF = 23;
 export const DEFAULT_PRESET = "veryfast";
+export const FIT_BLURRED_FILL_BLUR_SIGMA = 20;
 
 /**
  * Builds the filter_complex string for fit_blurred_fill mode.
@@ -25,7 +26,7 @@ export function buildFitBlurredFillGraph(stemCount: number): string {
 
   for (let i = 0; i < stemCount; i++) {
     parts.push(
-      `[${i}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=20,setsar=1[bg${i}]`,
+      `[${i}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=${FIT_BLURRED_FILL_BLUR_SIGMA},setsar=1[bg${i}]`,
       `[${i}:v]scale=1080:-2:force_original_aspect_ratio=decrease,setsar=1[fg${i}]`,
       `[bg${i}][fg${i}]overlay=(W-w)/2:(H-h)/2:shortest=1,fps=30,format=yuv420p[v${i}]`
     );

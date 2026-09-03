@@ -908,9 +908,8 @@ describe("render CLI", () => {
       createGpuLease: () => gpuLease,
       createGpuTelemetry: () => telemetry,
       loadComponentLicenseRegistry: async () => ({
-        schemaVersion: 1 as const,
         registryRevision: "test-review-required",
-        generatedAt: "2026-09-02T00:00:00.000Z",
+        generatedAt: "2026-08-29T12:00:00.000Z",
         entries: [
           {
             componentId: "LTX_25_720P_5S_V1",
@@ -918,7 +917,7 @@ describe("render CLI", () => {
             versionOrRevision: "1",
             status: "review_required" as const,
             licenseSource: "test-fixture",
-            reviewedAt: "2026-09-02T00:00:00.000Z",
+            reviewedAt: "2026-08-29T12:00:00.000Z",
             policyRevision: "test-review-required"
           }
         ]

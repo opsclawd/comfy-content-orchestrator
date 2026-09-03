@@ -8,6 +8,7 @@ interface GenerationManifestPayloadRow {
   manifest_payload: {
     readonly renderProfile?: unknown;
     readonly renderProfileVersion?: unknown;
+    readonly outputs?: unknown;
   };
 }
 
@@ -34,10 +35,24 @@ export class PostgresGenerationManifestRepository implements GenerationManifestR
       return undefined;
     }
 
+    const outputChecksumsSha256: string[] = [];
+    if (Array.isArray(payload.outputs)) {
+      for (const out of payload.outputs) {
+        if (
+          out &&
+          typeof out === "object" &&
+          typeof (out as { checksumSha256?: unknown }).checksumSha256 === "string"
+        ) {
+          outputChecksumsSha256.push((out as { checksumSha256: string }).checksumSha256);
+        }
+      }
+    }
+
     return {
       renderProfile: payload.renderProfile,
       renderProfileVersion:
-        typeof payload.renderProfileVersion === "number" ? payload.renderProfileVersion : null
+        typeof payload.renderProfileVersion === "number" ? payload.renderProfileVersion : null,
+      ...(outputChecksumsSha256.length > 0 ? { outputChecksumsSha256 } : {})
     };
   }
 }

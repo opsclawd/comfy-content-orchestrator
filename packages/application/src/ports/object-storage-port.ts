@@ -3,12 +3,25 @@ export interface ObjectLocator {
   readonly key: string;
 }
 
+export class ObjectAlreadyExistsError extends Error {
+  override readonly name = "ObjectAlreadyExistsError";
+  readonly bucket: string;
+  readonly key: string;
+
+  constructor(bucket: string, key: string, options?: ErrorOptions) {
+    super(`Object already exists: ${bucket}/${key}`, options);
+    this.bucket = bucket;
+    this.key = key;
+  }
+}
+
 export interface PutObjectInput {
   readonly bucket: string;
   readonly key: string;
   readonly body: Uint8Array;
   readonly contentType?: string;
   readonly checksumSha256?: string;
+  readonly ifNoneMatch?: "*" | undefined;
 }
 
 export interface StoredObject {

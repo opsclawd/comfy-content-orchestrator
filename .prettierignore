@@ -26,3 +26,5 @@ ai/
 .ai-worktrees/
 .ai-tmp/
 validate/
+_tmp*
+validation.*

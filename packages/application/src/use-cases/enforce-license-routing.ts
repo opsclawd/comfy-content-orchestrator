@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { ComponentRef } from "@cco/contracts";
 import {
   evaluateLicenseRouting,
@@ -69,7 +69,26 @@ export class EnforceLicenseRouting {
     const snapshot = this.deps.registry.getSnapshot();
     const evaluation = evaluateLicenseRouting(requiredComponents, snapshot);
     const now = this.deps.now ? this.deps.now() : new Date();
-    const generateDecisionId = this.deps.generateDecisionId ?? (() => `gov-dec-${randomUUID()}`);
+    const defaultGenerateDecisionId = () => {
+      const canonical = {
+        registryRevision: snapshot.registryRevision,
+        components: [...requiredComponents]
+          .map((c) => ({
+            id: c.componentId,
+            type: c.componentType,
+            ver: c.versionOrRevision
+          }))
+          .sort((a, b) => a.id.localeCompare(b.id)),
+        operation: sanitizedOperation ?? null
+      };
+      const hash = createHash("sha256")
+        .update(JSON.stringify(canonical))
+        .digest("hex")
+        .slice(0, 32);
+      const uuidLike = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
+      return `gov-dec-${uuidLike}`;
+    };
+    const generateDecisionId = this.deps.generateDecisionId ?? defaultGenerateDecisionId;
     const decisionId = generateDecisionId();
 
     if (!evaluation.permitted) {

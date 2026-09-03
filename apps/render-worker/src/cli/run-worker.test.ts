@@ -782,28 +782,27 @@ describe("run-worker CLI", () => {
       // reports LTX as review_required to verify the fail-closed path
       // independently of the production registry contents.
       const worker = createProductionWorker(config, {
-        controlApiClient: fakeClient,
-        objectStorage: new TestObjectStorage(),
-        enforceStorageAdmission: new TestAdmissionEnforcer(),
-        gpuLease: mockGpuLease,
-        renderEngine: mockRenderEngine as unknown as RenderEnginePort,
-        gpuTelemetry: mockGpuTelemetry,
         loadComponentLicenseRegistry: () => ({
-          schemaVersion: 1 as const,
-          registryRevision: "test-review-required",
-          generatedAt: "2026-09-02T00:00:00.000Z",
+          registryRevision: "2026-08-29.1",
+          generatedAt: "2026-08-29T12:00:00.000Z",
           entries: [
             {
               componentId: "LTX_25_720P_5S_V1",
               componentType: "model" as const,
               versionOrRevision: "1",
               status: "review_required" as const,
-              licenseSource: "test-fixture",
-              reviewedAt: "2026-09-02T00:00:00.000Z",
-              policyRevision: "test-review-required"
+              licenseSource: "docs/prd.md §3.5",
+              reviewedAt: "2026-08-29T12:00:00.000Z",
+              policyRevision: "2026-08-29.1"
             }
           ]
         }),
+        controlApiClient: fakeClient,
+        objectStorage: new TestObjectStorage(),
+        enforceStorageAdmission: new TestAdmissionEnforcer(),
+        gpuLease: mockGpuLease,
+        renderEngine: mockRenderEngine as unknown as RenderEnginePort,
+        gpuTelemetry: mockGpuTelemetry,
         loadCertificationProfile: async () => ({
           id: "ltx-25-720p-97f",
           engine: "ltx_25",

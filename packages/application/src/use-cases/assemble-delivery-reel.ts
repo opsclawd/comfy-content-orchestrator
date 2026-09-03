@@ -1,16 +1,21 @@
 import { createHash } from "node:crypto";
 import {
+  AssemblyManifestSchema,
   createAssemblyManifest,
   type AssemblyExecutionResult,
   type AssemblyManifest,
   type AssemblySpec,
   type ComponentRef
 } from "@cco/contracts";
-import { validateAssemblySpec } from "../ports/assembly-spec.js";
+import { validateAssemblySpec, AssemblySpecValidationError } from "../ports/assembly-spec.js";
 import type { MediaAssemblerPort } from "../ports/media-assembler-port.js";
-import type { ObjectStoragePort } from "../ports/object-storage-port.js";
-import type { GenerationManifestRepository } from "../ports/generation-manifest-repository.js";
+import { type ObjectStoragePort, ObjectAlreadyExistsError } from "../ports/object-storage-port.js";
+import type {
+  GenerationManifestRepository,
+  GenerationManifestComponentIdentity
+} from "../ports/generation-manifest-repository.js";
 import type { EnforceLicenseRouting } from "./enforce-license-routing.js";
+import { BUCKETS } from "@cco/shared";
 
 export interface AssemblyManifestPublicationErrorContext {
   readonly executionResult: AssemblyExecutionResult;
@@ -31,6 +36,21 @@ export class AssemblyManifestPublicationError extends Error {
     super(message, options ?? (context.cause ? { cause: context.cause } : undefined));
     this.executionResult = context.executionResult;
     this.manifest = context.manifest;
+  }
+}
+
+export class AssemblyProvenanceConflictError extends Error {
+  override readonly name = "AssemblyProvenanceConflictError";
+  readonly assemblyId: string;
+  readonly existingManifest: AssemblyManifest;
+
+  constructor(assemblyId: string, existingManifest: AssemblyManifest, options?: ErrorOptions) {
+    super(
+      `Assembly manifest for identity "${assemblyId}" already exists with conflicting provenance`,
+      options
+    );
+    this.assemblyId = assemblyId;
+    this.existingManifest = existingManifest;
   }
 }
 
@@ -108,9 +128,10 @@ export class AssembleDeliveryReel {
     // reference that cannot match any real registry entry, so the existing
     // evaluator denies it as "unknown_component" via its normal path
     // rather than needing a separate error type here.
+    const resolvedIdentities = new Map<string, GenerationManifestComponentIdentity | undefined>();
     const generationComponents: ComponentRef[] = await Promise.all(
       spec.videoStems.map(async (stem): Promise<ComponentRef> => {
-        let identity;
+        let identity: GenerationManifestComponentIdentity | undefined;
         try {
           identity = await this.deps.generationManifestRepository.getComponentIdentityById(
             stem.generationManifestId
@@ -118,9 +139,21 @@ export class AssembleDeliveryReel {
         } catch {
           identity = undefined;
         }
+        resolvedIdentities.set(stem.generationManifestId, identity);
         if (!identity) {
           return {
             componentId: `unresolved-generation-manifest:${stem.generationManifestId}`,
+            componentType: "model",
+            versionOrRevision: "unresolved"
+          };
+        }
+        if (
+          identity.outputChecksumsSha256 &&
+          identity.outputChecksumsSha256.length > 0 &&
+          !identity.outputChecksumsSha256.includes(stem.media.sha256)
+        ) {
+          return {
+            componentId: `inconsistent-generation-manifest:${stem.generationManifestId}`,
             componentType: "model",
             versionOrRevision: "unresolved"
           };
@@ -174,11 +207,62 @@ export class AssembleDeliveryReel {
     });
     const governanceDecisionId = decision.decisionId;
 
-    // Step 2: Validate AssemblySpec before dispatch
+    // Step 2: Validate AssemblySpec and verify GenerationManifest consistency before dispatch
     validateAssemblySpec(spec);
 
+    for (const stem of spec.videoStems) {
+      const identity = resolvedIdentities.get(stem.generationManifestId);
+      if (!identity) {
+        throw new AssemblySpecValidationError(
+          `Video stem with order ${stem.order} references unresolvable generation manifest "${stem.generationManifestId}"`
+        );
+      }
+      if (
+        identity.outputChecksumsSha256 &&
+        identity.outputChecksumsSha256.length > 0 &&
+        !identity.outputChecksumsSha256.includes(stem.media.sha256)
+      ) {
+        throw new AssemblySpecValidationError(
+          `Video stem with order ${stem.order} references generation manifest "${stem.generationManifestId}" with inconsistent output checksum (expected one of [${identity.outputChecksumsSha256.join(", ")}], got "${stem.media.sha256}")`
+        );
+      }
+    }
+
     // Step 3: Invoke MediaAssemblerPort for execution & media persistence
-    const executionResult = await this.deps.mediaAssembler.assemble(spec);
+    let executionResult: AssemblyExecutionResult;
+    try {
+      executionResult = await this.deps.mediaAssembler.assemble(spec);
+    } catch (err) {
+      if (
+        err instanceof Error &&
+        "code" in err &&
+        (err as { code?: string }).code === "ASSEMBLY_PROVENANCE_CONFLICT"
+      ) {
+        const assemblyId =
+          (err as { context?: { assemblyId?: string } }).context?.assemblyId ?? "unknown";
+        const manifestKey = `campaigns/${spec.campaignId}/assemblies/${assemblyId}/manifest.json`;
+        let existingManifest: AssemblyManifest | undefined;
+        try {
+          const existingManifestObj = await this.deps.objectStorage.getObject({
+            bucket: BUCKETS.DELIVERY,
+            key: manifestKey
+          });
+          if (existingManifestObj) {
+            existingManifest = AssemblyManifestSchema.parse(
+              JSON.parse(new TextDecoder().decode(existingManifestObj.body))
+            );
+          }
+        } catch {
+          // ignore manifest retrieval error
+        }
+        throw new AssemblyProvenanceConflictError(
+          assemblyId,
+          existingManifest ?? ({} as AssemblyManifest),
+          { cause: err }
+        );
+      }
+      throw err;
+    }
 
     // Step 4: Construct immutable AssemblyManifest from exact executed state
     const manifest = createAssemblyManifest({
@@ -192,15 +276,79 @@ export class AssembleDeliveryReel {
     const checksumSha256 = createHash("sha256").update(manifestBytes).digest("hex");
     const manifestKey = `campaigns/${executionResult.campaignId}/assemblies/${executionResult.assemblyId}/manifest.json`;
 
+    // Step 4a: Check if an AssemblyManifest already exists for this identity (idempotency & conflict prevention)
+    const existingManifestObj = await this.deps.objectStorage.getObject({
+      bucket: executionResult.output.media.bucket,
+      key: manifestKey
+    });
+
+    if (existingManifestObj) {
+      let existingManifest: AssemblyManifest;
+      try {
+        existingManifest = AssemblyManifestSchema.parse(
+          JSON.parse(new TextDecoder().decode(existingManifestObj.body))
+        );
+      } catch (err) {
+        throw new AssemblyProvenanceConflictError(executionResult.assemblyId, manifest, {
+          cause: err as Error
+        });
+      }
+
+      if (this.isManifestEquivalent(existingManifest, manifest)) {
+        // Idempotent replay: return existing manifest without overwriting media or manifest
+        return {
+          manifest: existingManifest,
+          executionResult
+        };
+      }
+
+      // Reused identity with conflicting provenance: raise typed conflict WITHOUT deleting or overwriting the existing delivery
+      throw new AssemblyProvenanceConflictError(executionResult.assemblyId, existingManifest);
+    }
+
     try {
       await this.deps.objectStorage.putObject({
         bucket: executionResult.output.media.bucket,
         key: manifestKey,
         body: manifestBytes,
         contentType: "application/json",
-        checksumSha256
+        checksumSha256,
+        ifNoneMatch: "*"
       });
     } catch (err) {
+      if (err instanceof AssemblyProvenanceConflictError) {
+        throw err;
+      }
+      if (err instanceof ObjectAlreadyExistsError) {
+        // Concurrent publication: retrieve published manifest and verify equivalence
+        const concurrentManifestObj = await this.deps.objectStorage.getObject({
+          bucket: executionResult.output.media.bucket,
+          key: manifestKey
+        });
+        if (concurrentManifestObj) {
+          let concurrentManifest: AssemblyManifest;
+          try {
+            concurrentManifest = AssemblyManifestSchema.parse(
+              JSON.parse(new TextDecoder().decode(concurrentManifestObj.body))
+            );
+          } catch (parseErr) {
+            throw new AssemblyProvenanceConflictError(executionResult.assemblyId, manifest, {
+              cause: parseErr as Error
+            });
+          }
+          if (this.isManifestEquivalent(concurrentManifest, manifest)) {
+            return {
+              manifest: concurrentManifest,
+              executionResult
+            };
+          }
+          throw new AssemblyProvenanceConflictError(executionResult.assemblyId, concurrentManifest);
+        }
+        throw new AssemblyProvenanceConflictError(executionResult.assemblyId, manifest, {
+          cause: err as Error
+        });
+      }
+
       // Best-effort rollback: the media output was already published in
       // Step 2 before the manifest write failed here, so without this the
       // delivery bucket ends up with an orphaned video that has no manifest
@@ -232,4 +380,107 @@ export class AssembleDeliveryReel {
       executionResult
     };
   }
+
+  private isManifestEquivalent(
+    existingManifest: AssemblyManifest,
+    newManifest: AssemblyManifest
+  ): boolean {
+    return (
+      computeManifestProvenanceFingerprint(existingManifest) ===
+      computeManifestProvenanceFingerprint(newManifest)
+    );
+  }
+}
+
+/**
+ * Derives a canonical provenance fingerprint covering every semantic field of an AssemblyManifest.
+ * Any divergence in inputs, timeline, audio timing/looping, layout, encoding, streams, ffmpeg runtime,
+ * command fingerprint, or governance decision produces a distinct fingerprint.
+ */
+export function computeManifestProvenanceFingerprint(manifest: AssemblyManifest): string {
+  const canonical = {
+    assemblyId: manifest.assemblyId,
+    campaignId: manifest.campaignId,
+    assemblyProfile: {
+      key: manifest.assemblyProfile.key,
+      version: manifest.assemblyProfile.version
+    },
+    generationManifestIds: [...manifest.generationManifestIds],
+    inputs: {
+      videoStems: manifest.inputs.videoStems.map((s) => ({
+        sceneId: s.sceneId,
+        generationManifestId: s.generationManifestId,
+        order: s.order,
+        actualDurationMs: s.actualDurationMs,
+        media: {
+          bucket: s.media.bucket,
+          key: s.media.key,
+          sha256: s.media.sha256,
+          contentType: s.media.contentType
+        }
+      })),
+      voiceover: manifest.inputs.voiceover
+        ? {
+            assetId: manifest.inputs.voiceover.assetId,
+            effectiveStartMs: manifest.inputs.voiceover.effectiveStartMs,
+            effectiveDurationMs: manifest.inputs.voiceover.effectiveDurationMs,
+            source: manifest.inputs.voiceover.source,
+            media: {
+              bucket: manifest.inputs.voiceover.media.bucket,
+              key: manifest.inputs.voiceover.media.key,
+              sha256: manifest.inputs.voiceover.media.sha256,
+              contentType: manifest.inputs.voiceover.media.contentType
+            }
+          }
+        : null,
+      soundbed: manifest.inputs.soundbed
+        ? {
+            assetId: manifest.inputs.soundbed.assetId,
+            effectiveStartMs: manifest.inputs.soundbed.effectiveStartMs,
+            effectiveDurationMs: manifest.inputs.soundbed.effectiveDurationMs,
+            loopCount: manifest.inputs.soundbed.loopCount,
+            source: manifest.inputs.soundbed.source,
+            media: {
+              bucket: manifest.inputs.soundbed.media.bucket,
+              key: manifest.inputs.soundbed.media.key,
+              sha256: manifest.inputs.soundbed.media.sha256,
+              contentType: manifest.inputs.soundbed.media.contentType
+            }
+          }
+        : null
+    },
+    timeline: {
+      totalDurationMs: manifest.timeline.totalDurationMs,
+      stemDurationsMs: [...manifest.timeline.stemDurationsMs]
+    },
+    subtitleCuesSha256: manifest.subtitleCuesSha256,
+    subtitleStyleProfile: manifest.subtitleStyleProfile ?? null,
+    subtitleCues: manifest.subtitleCues ?? null,
+    layout: {
+      mode: manifest.layout.mode
+    },
+    ffmpeg: {
+      executable: manifest.ffmpeg.executable,
+      version: manifest.ffmpeg.version,
+      buildInfo: manifest.ffmpeg.buildInfo
+    },
+    commandFingerprint: manifest.commandFingerprint,
+    encoding: manifest.encoding,
+    streams: manifest.streams,
+    output: {
+      durationMs: manifest.output.durationMs,
+      width: manifest.output.width,
+      height: manifest.output.height,
+      media: {
+        bucket: manifest.output.media.bucket,
+        key: manifest.output.media.key,
+        sha256: manifest.output.media.sha256,
+        contentType: manifest.output.media.contentType
+      }
+    },
+    measuredFrameRate: manifest.measuredFrameRate,
+    governanceDecisionId: manifest.governanceDecisionId
+  };
+
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
