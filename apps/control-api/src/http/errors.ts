@@ -1,7 +1,9 @@
 import type { FastifyError, FastifyReply, FastifyRequest } from "fastify";
 import { ZodError } from "zod";
 import {
+  CampaignNotFoundError,
   CandidateNotFoundError,
+  ClientNotFoundError,
   IdempotencyConflictError,
   SceneNotFoundError,
   StaleRevisionConflictError
@@ -35,7 +37,12 @@ export function formatReviewError(error: unknown): {
     };
   }
 
-  if (error instanceof SceneNotFoundError || error instanceof CandidateNotFoundError) {
+  if (
+    error instanceof SceneNotFoundError ||
+    error instanceof CandidateNotFoundError ||
+    error instanceof CampaignNotFoundError ||
+    error instanceof ClientNotFoundError
+  ) {
     return {
       statusCode: 404,
       body: {

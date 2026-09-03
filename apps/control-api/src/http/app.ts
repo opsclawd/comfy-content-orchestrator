@@ -10,6 +10,7 @@ import { reviewCommandRoutes } from "./routes/review-command-routes.js";
 import { metricsRoutes } from "./routes/metrics-routes.js";
 import { jobRoutes } from "./routes/job-routes.js";
 import { deliveryAssemblyRoutes } from "./routes/delivery-assembly-routes.js";
+import { campaignRoutes } from "./routes/campaign-routes.js";
 import { ControlApiConfigError } from "../runtime-config.js";
 import type { ControlApiAppOptions } from "./types.js";
 import {
@@ -80,6 +81,10 @@ export function createControlApiApp(
   app.register(reviewCommandRoutes, {
     container,
     appOptions: effectiveOptions
+  });
+
+  app.register(campaignRoutes, {
+    container
   });
 
   if (

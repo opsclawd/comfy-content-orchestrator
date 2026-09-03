@@ -11,6 +11,8 @@ export {
   type PostgresSceneRepositoryOptions
 } from "./postgres/repositories/postgres-scene-repository.js";
 
+export { PostgresCampaignRepository } from "./postgres/repositories/postgres-campaign-repository.js";
+
 export { PostgresStoryboardCandidateRepository } from "./postgres/repositories/postgres-storyboard-candidate-repository.js";
 
 export { PostgresReferenceAssetRepository } from "./postgres/repositories/postgres-reference-asset-repository.js";

@@ -139,7 +139,7 @@ export class PostgresSceneRepository implements SceneRepository {
         referenceIds,
         engineProfileId: row.engine_assigned,
         durationMs,
-        ...(row.lora_configuration_id ? { loraConfigurationId: row.lora_configuration_id } : {})
+        loraConfigurationId: row.lora_configuration_id
       },
       ...(approval !== undefined ? { approval } : {}),
       ...(row.failed_from ? { failedFrom: row.failed_from as SceneStatus } : {}),
