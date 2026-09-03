@@ -45,6 +45,13 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
   let adapter: FfmpegMediaAssemblerAdapter;
   let syntheticWebpStems: SyntheticStemResult[];
   let syntheticMp4Stems: SyntheticStemResult[];
+  // The actual host FFmpeg version, as real-probed by getRuntimeComponents()
+  // (not a hardcoded default) -- registered into the acceptance-only license
+  // fixture so tests using `adapter.getRuntimeComponents()` pass under
+  // whichever real FFmpeg build the current environment (local dev, CI)
+  // happens to have installed, rather than only the version the fixture
+  // author's own machine reported.
+  let realFfmpegVersion: string | undefined;
 
   beforeAll(async () => {
     fixtureDir = await fs.mkdtemp(path.join(os.tmpdir(), "ffmpeg-fixtures-"));
@@ -57,6 +64,11 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
       workspaceRoot,
       objectStorage
     });
+
+    const runtimeComponents = await adapter.getRuntimeComponents();
+    realFfmpegVersion = runtimeComponents.find(
+      (c) => c.componentId === "ffmpeg"
+    )?.versionOrRevision;
 
     // 1. Generate 6 synthetic animated WebP stems (authoritative LTX artifact format: 97f @ 24fps = ~4042ms)
     syntheticWebpStems = await generateSyntheticStems({
@@ -643,7 +655,9 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
       BUCKETS.REVIEW
     );
 
-    const snapshot = buildApprovedAcceptanceRegistrySnapshot();
+    const snapshot = buildApprovedAcceptanceRegistrySnapshot(
+      realFfmpegVersion ? { ffmpegVersion: realFfmpegVersion } : undefined
+    );
     const enforceLicenseRouting = new EnforceLicenseRouting({
       registry: { getSnapshot: () => snapshot }
     });
@@ -1467,7 +1481,9 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
         videoStems
       };
 
-      const snapshot = buildApprovedAcceptanceRegistrySnapshot();
+      const snapshot = buildApprovedAcceptanceRegistrySnapshot(
+        realFfmpegVersion ? { ffmpegVersion: realFfmpegVersion } : undefined
+      );
       const enforceLicenseRouting = new EnforceLicenseRouting({
         registry: { getSnapshot: () => snapshot }
       });
@@ -1661,7 +1677,9 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
       spawnFn: countingSpawn
     });
 
-    const snapshot = buildApprovedAcceptanceRegistrySnapshot();
+    const snapshot = buildApprovedAcceptanceRegistrySnapshot(
+      realFfmpegVersion ? { ffmpegVersion: realFfmpegVersion } : undefined
+    );
     const enforceLicenseRouting = new EnforceLicenseRouting({
       registry: { getSnapshot: () => snapshot }
     });
@@ -1728,7 +1746,9 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
       ]
     };
 
-    const snapshot = buildApprovedAcceptanceRegistrySnapshot();
+    const snapshot = buildApprovedAcceptanceRegistrySnapshot(
+      realFfmpegVersion ? { ffmpegVersion: realFfmpegVersion } : undefined
+    );
     const enforceLicenseRouting = new EnforceLicenseRouting({
       registry: { getSnapshot: () => snapshot }
     });
@@ -1799,7 +1819,9 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
       spawnFn: failingSpawn
     });
 
-    const snapshot = buildApprovedAcceptanceRegistrySnapshot();
+    const snapshot = buildApprovedAcceptanceRegistrySnapshot(
+      realFfmpegVersion ? { ffmpegVersion: realFfmpegVersion } : undefined
+    );
     const enforceLicenseRouting = new EnforceLicenseRouting({
       registry: { getSnapshot: () => snapshot }
     });
@@ -1872,7 +1894,9 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
       spawnFn: mismatchedProbeSpawn
     });
 
-    const snapshot = buildApprovedAcceptanceRegistrySnapshot();
+    const snapshot = buildApprovedAcceptanceRegistrySnapshot(
+      realFfmpegVersion ? { ffmpegVersion: realFfmpegVersion } : undefined
+    );
     const enforceLicenseRouting = new EnforceLicenseRouting({
       registry: { getSnapshot: () => snapshot }
     });
@@ -1933,7 +1957,9 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
     };
 
     // Standard adapter without injected createAssemblyId: uses deterministic request hash
-    const snapshot = buildApprovedAcceptanceRegistrySnapshot();
+    const snapshot = buildApprovedAcceptanceRegistrySnapshot(
+      realFfmpegVersion ? { ffmpegVersion: realFfmpegVersion } : undefined
+    );
     const enforceLicenseRouting = new EnforceLicenseRouting({
       registry: { getSnapshot: () => snapshot }
     });
@@ -2011,7 +2037,9 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
       createAssemblyId: () => fixedConflictId
     });
 
-    const snapshot = buildApprovedAcceptanceRegistrySnapshot();
+    const snapshot = buildApprovedAcceptanceRegistrySnapshot(
+      realFfmpegVersion ? { ffmpegVersion: realFfmpegVersion } : undefined
+    );
     const enforceLicenseRouting = new EnforceLicenseRouting({
       registry: { getSnapshot: () => snapshot }
     });
@@ -2099,7 +2127,9 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
       createAssemblyId: () => fixedConflictId
     });
 
-    const snapshotA = buildApprovedAcceptanceRegistrySnapshot();
+    const snapshotA = buildApprovedAcceptanceRegistrySnapshot(
+      realFfmpegVersion ? { ffmpegVersion: realFfmpegVersion } : undefined
+    );
     const useCaseA = new AssembleDeliveryReel({
       runtimeComponents: await fixedAdapter.getRuntimeComponents(),
       mediaAssembler: fixedAdapter,
@@ -2326,7 +2356,9 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
       createAssemblyId: () => fixedConflictId
     });
 
-    const snapshot = buildApprovedAcceptanceRegistrySnapshot();
+    const snapshot = buildApprovedAcceptanceRegistrySnapshot(
+      realFfmpegVersion ? { ffmpegVersion: realFfmpegVersion } : undefined
+    );
     const useCase = new AssembleDeliveryReel({
       runtimeComponents: await fixedAdapter.getRuntimeComponents(),
       mediaAssembler: fixedAdapter,
@@ -2496,7 +2528,9 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
       spawnFn: countingSpawn
     });
 
-    const snapshot = buildApprovedAcceptanceRegistrySnapshot();
+    const snapshot = buildApprovedAcceptanceRegistrySnapshot(
+      realFfmpegVersion ? { ffmpegVersion: realFfmpegVersion } : undefined
+    );
     const enforceLicenseRouting = new EnforceLicenseRouting({
       registry: { getSnapshot: () => snapshot }
     });
