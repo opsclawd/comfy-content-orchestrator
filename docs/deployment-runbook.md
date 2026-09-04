@@ -123,7 +123,7 @@ As of 2026-09-04, **no file in this shape existed anywhere in the repo**, for an
 
 Real credentials and IPs are deliberately not recorded in this file. As of 2026-09-04:
 - Control-plane `.env` (real S3/DB credentials): `/opt/comfy-content-orchestrator/.env` on the control-plane host itself.
-- SSH access to the control-plane: public IP + a dedicated key (ask whoever manages `~/.ssh/hetzner/` on the relay/orchestration machine) — the tailnet hostname does not accept SSH.
+- SSH access to the control-plane: public IP + a dedicated key — ask the infrastructure operator. The tailnet hostname does not accept SSH.
 - SSH access to the render-worker host: reachable directly over Tailscale.
 
 ## Related issues
