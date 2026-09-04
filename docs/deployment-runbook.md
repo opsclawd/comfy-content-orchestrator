@@ -36,6 +36,42 @@ curl -sS http://<tailnet-ip>:3000/api/health
 
 **Gotcha**: `.env` on this host can lag behind `.env.example` — new required variables land in `.env.example` as the codebase evolves, but nobody automatically syncs them into the real deployed `.env`. `docker compose config --quiet` will fail loudly naming the missing variable if this happens; check `.env.example` for the documented value/meaning before adding it.
 
+### Reviewer identity trust boundary
+
+`review-hub` acts as the trusted identity proxy in front of `control-api`. It terminates incoming reviewer connections on the tailnet, captures the peer IP, queries Tailscale LocalAPI via `tailscale whois`, and forwards the resolved identity in `tailscale-user-login`/`tailscale-user-name` headers to `control-api` over the internal Docker network.
+
+1. **Fixed Bridge IP**: `review-hub` is assigned a static IP `172.28.0.10` on the `control-plane` bridge network in `compose.yaml`. `control-api` accepts identity headers exclusively from `CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES=172.28.0.10`.
+   Post-`up`, verify the bridge IP:
+   ```bash
+   docker network inspect comfy-content-orchestrator_control-plane --format '{{json .Containers}}'
+   ```
+   Confirm `172.28.0.10` is assigned to `review-hub`.
+
+2. **Tailscale Socket Access, Host Group & Lifecycle Persistence**:
+   `review-hub` requires access to the host's `tailscaled` daemon socket at `/var/run/tailscale/tailscaled.sock`. Run the host preparation script on the control-plane host:
+   ```bash
+   sudo bash scripts/prepare-tailscale-socket-access.sh
+   ```
+   This verifies bidirectional mapping between group `tailscale-ro` and GID 9999 (creating the group if absent, or failing closed on GID conflict), grants group read/write permissions to `/var/run/tailscale/tailscaled.sock`, and installs a systemd drop-in (`/etc/systemd/system/tailscaled.service.d/10-socket-permissions.conf`) that automatically reapplies socket permissions whenever `tailscaled` restarts.
+
+   `compose.yaml` bind-mounts the parent directory `/var/run/tailscale:/var/run/tailscale` and runs with `group_add: ["9999"]`. Mounting the directory rather than the socket inode ensures that when `tailscaled` restarts and recreates the socket file, the container's mount does not stay pinned to a stale unlinked inode.
+
+   **Daemon restart & coordination**: When `tailscaled` restarts, the systemd drop-in automatically re-establishes group ownership and mode on the newly created socket. To verify lifecycle stability:
+   ```bash
+   sudo systemctl restart tailscaled
+   docker compose exec -u node review-hub tailscale whois --json <a real connected tailnet peer ip>
+   ```
+   If needed, `docker compose restart review-hub` restarts Review Hub.
+
+   The `tailscale` client binary is pre-installed inside the `cco-web` image (pinned amd64 binary); no client CLI installation is needed on the host. If the socket is missing or inaccessible at boot, `review-hub` logs a warning diagnostic and continues serving non-review routes; review actions fail closed with HTTP 401 `AUTHENTICATION_REQUIRED`.
+
+3. **Acceptance Gate**:
+   Once the stack is up and the socket prepared, run the acceptance gate command inside the container:
+   ```bash
+   docker compose exec -u node review-hub tailscale whois --json <a real connected tailnet peer ip>
+   ```
+   This confirms the `tailscale` binary and socket permissions are operational from the unprivileged `node` user.
+
 ## Standing up a render-worker host
 
 ```bash
@@ -46,6 +82,8 @@ pnpm -r build
 ```
 
 Write `.env` (see `.env.example`'s "Render Worker Daemon Configuration" section for the full variable list). Two things `.env.example` doesn't make obvious:
+
+Note: `.env.example`'s committed default for `CONTROL_API_URL` was corrected to `http://control-api:3000` as part of #184 so `review-hub` works out of the box on the control-plane host. Render-worker operators must continue to override it by hand as documented below.
 
 - `CONTROL_API_URL` must be the control-plane's **tailnet** hostname/IP (`http://<tailnet-ip-or-hostname>:3000`), not the Docker-internal `control-api:3000` value that appears in the control-plane's own `.env` — the worker isn't in that Docker network.
 - `S3_STORAGE_ENDPOINT` similarly must be the tailnet-reachable endpoint. The control-plane's own `.env` has `S3_STORAGE_ENDPOINT=http://minio:9000` (Docker-internal) — use its `S3_SIGNING_ENDPOINT` value instead (`http://<tailnet-ip>:9000`), the same one browsers use for presigned URLs.

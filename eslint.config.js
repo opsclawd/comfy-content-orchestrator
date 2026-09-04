@@ -8,7 +8,8 @@ export default tseslint.config(
       "**/coverage/**",
       "**/node_modules/**",
       "**/.next/**",
-      "**/next-env.d.ts"
+      "**/next-env.d.ts",
+      "**/.ai-tmp/**"
     ]
   },
   js.configs.recommended,
