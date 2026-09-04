@@ -5,7 +5,8 @@ import {
   InvalidJobCompletionPayloadError,
   type JobAdmissionGate,
   type JobMutationResult,
-  type JobQueuePort
+  type JobQueuePort,
+  type TransactionalJobEnqueuer
 } from "@cco/application";
 import {
   JOB_KINDS,
@@ -18,7 +19,7 @@ import {
 } from "@cco/domain";
 import type { Pool, PoolClient } from "pg";
 
-interface RenderJobRow {
+export interface RenderJobRow {
   job_id: string;
   scene_id: string;
   job_kind: string;
@@ -33,6 +34,113 @@ interface RenderJobRow {
   error_trace: string | null;
   created_at: Date | string;
   updated_at: Date | string;
+}
+
+export type PostgresJobRunner = Pool | PoolClient;
+
+export async function insertRenderJob(
+  runner: PostgresJobRunner,
+  input: EnqueueJobInput
+): Promise<RenderJob> {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("EnqueueJobInput must be a non-null object");
+  }
+  if (typeof input.sceneId !== "string" || input.sceneId.trim().length === 0) {
+    throw new Error("sceneId must be a non-empty string");
+  }
+  if (!input.jobKind || !(JOB_KINDS as readonly string[]).includes(input.jobKind)) {
+    throw new Error("jobKind must be a valid JobKind");
+  }
+  if (typeof input.workflowTemplate !== "string" || input.workflowTemplate.trim().length === 0) {
+    throw new Error("workflowTemplate must be a non-empty string");
+  }
+  if (
+    !input.injectedPayload ||
+    typeof input.injectedPayload !== "object" ||
+    Array.isArray(input.injectedPayload)
+  ) {
+    throw new Error("injectedPayload must be a non-null object");
+  }
+  if (input.maxRetries !== undefined) {
+    if (
+      typeof input.maxRetries !== "number" ||
+      !Number.isFinite(input.maxRetries) ||
+      !Number.isInteger(input.maxRetries) ||
+      input.maxRetries < 0
+    ) {
+      throw new Error("maxRetries must be a non-negative finite integer");
+    }
+  }
+
+  const payloadJson = JSON.stringify(input.injectedPayload);
+
+  let res;
+  if (input.maxRetries === undefined) {
+    res = await runner.query<RenderJobRow>(
+      `
+      INSERT INTO render_jobs (
+        scene_id,
+        job_kind,
+        workflow_template,
+        injected_payload
+      ) VALUES ($1, $2, $3, $4)
+      RETURNING
+        job_id,
+        scene_id,
+        job_kind,
+        status,
+        workflow_template,
+        injected_payload,
+        worker_id,
+        lease_token,
+        lease_expires_at,
+        retry_count,
+        max_retries,
+        error_trace,
+        created_at,
+        updated_at
+      `,
+      [input.sceneId, input.jobKind, input.workflowTemplate, payloadJson]
+    );
+  } else {
+    res = await runner.query<RenderJobRow>(
+      `
+      INSERT INTO render_jobs (
+        scene_id,
+        job_kind,
+        workflow_template,
+        injected_payload,
+        max_retries
+      ) VALUES ($1, $2, $3, $4, $5)
+      RETURNING
+        job_id,
+        scene_id,
+        job_kind,
+        status,
+        workflow_template,
+        injected_payload,
+        worker_id,
+        lease_token,
+        lease_expires_at,
+        retry_count,
+        max_retries,
+        error_trace,
+        created_at,
+        updated_at
+      `,
+      [input.sceneId, input.jobKind, input.workflowTemplate, payloadJson, input.maxRetries]
+    );
+  }
+
+  return mapRenderJobRow(res.rows[0]!);
+}
+
+export class PostgresTransactionalJobEnqueuer implements TransactionalJobEnqueuer {
+  constructor(private readonly client: PoolClient) {}
+
+  async enqueue(input: EnqueueJobInput): Promise<RenderJob> {
+    return insertRenderJob(this.client, input);
+  }
 }
 
 export class PostgresJobQueue implements JobQueuePort {
@@ -50,97 +158,7 @@ export class PostgresJobQueue implements JobQueuePort {
   }
 
   async enqueue(input: EnqueueJobInput): Promise<RenderJob> {
-    if (!input || typeof input !== "object" || Array.isArray(input)) {
-      throw new TypeError("EnqueueJobInput must be a non-null object");
-    }
-    if (typeof input.sceneId !== "string" || input.sceneId.trim().length === 0) {
-      throw new Error("sceneId must be a non-empty string");
-    }
-    if (!input.jobKind || !(JOB_KINDS as readonly string[]).includes(input.jobKind)) {
-      throw new Error("jobKind must be a valid JobKind");
-    }
-    if (typeof input.workflowTemplate !== "string" || input.workflowTemplate.trim().length === 0) {
-      throw new Error("workflowTemplate must be a non-empty string");
-    }
-    if (
-      !input.injectedPayload ||
-      typeof input.injectedPayload !== "object" ||
-      Array.isArray(input.injectedPayload)
-    ) {
-      throw new Error("injectedPayload must be a non-null object");
-    }
-    if (input.maxRetries !== undefined) {
-      if (
-        typeof input.maxRetries !== "number" ||
-        !Number.isFinite(input.maxRetries) ||
-        !Number.isInteger(input.maxRetries) ||
-        input.maxRetries < 0
-      ) {
-        throw new Error("maxRetries must be a non-negative finite integer");
-      }
-    }
-
-    const payloadJson = JSON.stringify(input.injectedPayload);
-
-    let res;
-    if (input.maxRetries === undefined) {
-      res = await this.pool.query<RenderJobRow>(
-        `
-        INSERT INTO render_jobs (
-          scene_id,
-          job_kind,
-          workflow_template,
-          injected_payload
-        ) VALUES ($1, $2, $3, $4)
-        RETURNING
-          job_id,
-          scene_id,
-          job_kind,
-          status,
-          workflow_template,
-          injected_payload,
-          worker_id,
-          lease_token,
-          lease_expires_at,
-          retry_count,
-          max_retries,
-          error_trace,
-          created_at,
-          updated_at
-        `,
-        [input.sceneId, input.jobKind, input.workflowTemplate, payloadJson]
-      );
-    } else {
-      res = await this.pool.query<RenderJobRow>(
-        `
-        INSERT INTO render_jobs (
-          scene_id,
-          job_kind,
-          workflow_template,
-          injected_payload,
-          max_retries
-        ) VALUES ($1, $2, $3, $4, $5)
-        RETURNING
-          job_id,
-          scene_id,
-          job_kind,
-          status,
-          workflow_template,
-          injected_payload,
-          worker_id,
-          lease_token,
-          lease_expires_at,
-          retry_count,
-          max_retries,
-          error_trace,
-          created_at,
-          updated_at
-        `,
-        [input.sceneId, input.jobKind, input.workflowTemplate, payloadJson, input.maxRetries]
-      );
-    }
-
-    return this.mapRowToRenderJob(res.rows[0]!);
+    return insertRenderJob(this.pool, input);
   }
 
   async claim(input: ClaimJobInput): Promise<RenderJob | undefined> {
@@ -808,48 +826,50 @@ export class PostgresJobQueue implements JobQueuePort {
   }
 
   private mapRowToRenderJob(row: RenderJobRow): RenderJob {
-    let injectedPayload: Readonly<Record<string, unknown>>;
-    if (typeof row.injected_payload === "string") {
-      try {
-        injectedPayload = Object.freeze(
-          JSON.parse(row.injected_payload) as Record<string, unknown>
-        );
-      } catch {
-        injectedPayload = Object.freeze({});
-      }
-    } else if (
-      typeof row.injected_payload === "object" &&
-      row.injected_payload !== null &&
-      !Array.isArray(row.injected_payload)
-    ) {
-      injectedPayload = Object.freeze({ ...(row.injected_payload as Record<string, unknown>) });
-    } else {
+    return mapRenderJobRow(row);
+  }
+}
+
+export function mapRenderJobRow(row: RenderJobRow): RenderJob {
+  let injectedPayload: Readonly<Record<string, unknown>>;
+  if (typeof row.injected_payload === "string") {
+    try {
+      injectedPayload = Object.freeze(JSON.parse(row.injected_payload) as Record<string, unknown>);
+    } catch {
       injectedPayload = Object.freeze({});
     }
-
-    const createdAt = row.created_at instanceof Date ? row.created_at : new Date(row.created_at);
-    const updatedAt = row.updated_at instanceof Date ? row.updated_at : new Date(row.updated_at);
-    const leaseExpiresAt = row.lease_expires_at
-      ? row.lease_expires_at instanceof Date
-        ? row.lease_expires_at
-        : new Date(row.lease_expires_at)
-      : null;
-
-    return Object.freeze({
-      jobId: row.job_id as JobId,
-      sceneId: row.scene_id as SceneId,
-      jobKind: row.job_kind as JobKind,
-      status: row.status as JobStatus,
-      workflowTemplate: row.workflow_template,
-      injectedPayload,
-      workerId: row.worker_id ?? null,
-      leaseToken: (row.lease_token as LeaseToken) ?? null,
-      leaseExpiresAt,
-      retryCount: Number(row.retry_count),
-      maxRetries: Number(row.max_retries),
-      errorTrace: row.error_trace ?? null,
-      createdAt,
-      updatedAt
-    });
+  } else if (
+    typeof row.injected_payload === "object" &&
+    row.injected_payload !== null &&
+    !Array.isArray(row.injected_payload)
+  ) {
+    injectedPayload = Object.freeze({ ...(row.injected_payload as Record<string, unknown>) });
+  } else {
+    injectedPayload = Object.freeze({});
   }
+
+  const createdAt = row.created_at instanceof Date ? row.created_at : new Date(row.created_at);
+  const updatedAt = row.updated_at instanceof Date ? row.updated_at : new Date(row.updated_at);
+  const leaseExpiresAt = row.lease_expires_at
+    ? row.lease_expires_at instanceof Date
+      ? row.lease_expires_at
+      : new Date(row.lease_expires_at)
+    : null;
+
+  return Object.freeze({
+    jobId: row.job_id as JobId,
+    sceneId: row.scene_id as SceneId,
+    jobKind: row.job_kind as JobKind,
+    status: row.status as JobStatus,
+    workflowTemplate: row.workflow_template,
+    injectedPayload,
+    workerId: row.worker_id ?? null,
+    leaseToken: (row.lease_token as LeaseToken) ?? null,
+    leaseExpiresAt,
+    retryCount: Number(row.retry_count),
+    maxRetries: Number(row.max_retries),
+    errorTrace: row.error_trace ?? null,
+    createdAt,
+    updatedAt
+  });
 }

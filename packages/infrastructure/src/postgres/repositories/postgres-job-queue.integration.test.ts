@@ -10,7 +10,7 @@ import {
   type EnqueueJobInput
 } from "@cco/application";
 import type { CandidateId, JobId, JobKind, LeaseToken, RenderJob, SceneId } from "@cco/domain";
-import { PostgresJobQueue } from "./postgres-job-queue.js";
+import { PostgresJobQueue, PostgresTransactionalJobEnqueuer } from "./postgres-job-queue.js";
 import { PostgresSceneRepository } from "./postgres-scene-repository.js";
 import { PostgresStoryboardCandidateRepository } from "./postgres-storyboard-candidate-repository.js";
 import { PostgresReferenceAssetRepository } from "./postgres-reference-asset-repository.js";
@@ -2479,6 +2479,49 @@ describe("PostgresJobQueue integration", () => {
           maxRetries: 1.5
         })
       ).rejects.toThrow("maxRetries must be a non-negative finite integer");
+    });
+  });
+
+  describe("PostgresTransactionalJobEnqueuer", () => {
+    it("participates in an explicit transaction and rolls back uncommitted jobs", async () => {
+      const { sceneId } = await createTestScene();
+      const txClient = await pool.connect();
+
+      try {
+        await txClient.query("BEGIN");
+        const enqueuer = new PostgresTransactionalJobEnqueuer(txClient);
+
+        const job1 = await enqueuer.enqueue({
+          sceneId: sceneId as SceneId,
+          jobKind: "candidate",
+          workflowTemplate: "flux-schnell-draft",
+          injectedPayload: { seed: 101 }
+        });
+        const job2 = await enqueuer.enqueue({
+          sceneId: sceneId as SceneId,
+          jobKind: "candidate",
+          workflowTemplate: "flux-schnell-draft",
+          injectedPayload: { seed: 102 }
+        });
+
+        // Visible inside transaction
+        const inFlight = await txClient.query(
+          "SELECT job_id FROM render_jobs WHERE job_id = ANY($1)",
+          [[job1.jobId, job2.jobId]]
+        );
+        expect(inFlight.rows).toHaveLength(2);
+
+        await txClient.query("ROLLBACK");
+
+        // Rolled back - not visible in pool
+        const afterRollback = await client.query(
+          "SELECT job_id FROM render_jobs WHERE job_id = ANY($1)",
+          [[job1.jobId, job2.jobId]]
+        );
+        expect(afterRollback.rows).toHaveLength(0);
+      } finally {
+        txClient.release();
+      }
     });
   });
 });

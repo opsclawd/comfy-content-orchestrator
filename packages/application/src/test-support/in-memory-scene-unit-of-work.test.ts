@@ -7,6 +7,7 @@ import {
   type StoryboardCandidate
 } from "@cco/domain";
 import type { ReviewEvent } from "@cco/contracts";
+import { InMemoryJobQueue } from "./in-memory-job-queue.js";
 import { InMemorySceneUnitOfWork } from "./in-memory-scene-unit-of-work.js";
 
 describe("InMemorySceneUnitOfWork", () => {
@@ -47,7 +48,7 @@ describe("InMemorySceneUnitOfWork", () => {
 
     const result = await uow.execute(async (context) => {
       const found = await context.scenes.findById(scene.id);
-      expect(found).toBe(scene);
+      expect(found).toEqual(scene);
 
       await context.scenes.save(scene);
       await context.reviewEvents.append(event);
@@ -290,5 +291,59 @@ describe("InMemorySceneUnitOfWork", () => {
       const found = await context.campaigns!.findById("campaign-2");
       expect(found).toEqual(newCampaign);
     });
+  });
+
+  it("omits jobs from UnitOfWorkContext when withJobs is not called", async () => {
+    const uow = new InMemorySceneUnitOfWork();
+    await uow.execute(async (context) => {
+      expect(context.jobs).toBeUndefined();
+    });
+  });
+
+  it("stages and commits jobs when withJobs is configured and unit of work callback succeeds", async () => {
+    const queue = new InMemoryJobQueue();
+    const uow = new InMemorySceneUnitOfWork().withJobs(queue);
+
+    const result = await uow.execute(async (context) => {
+      expect(context.jobs).toBeDefined();
+      const job = await context.jobs!.enqueue({
+        sceneId: "scene-1" as SceneId,
+        jobKind: "candidate",
+        workflowTemplate: "flux-schnell-draft",
+        injectedPayload: { seed: 42 }
+      });
+      expect(job.status).toBe("queued");
+      // Not yet committed to queue.jobs during in-flight execution
+      expect(queue.jobs).toHaveLength(0);
+      expect(uow.enqueuedJobs).toHaveLength(0);
+      return job;
+    });
+
+    expect(result.sceneId).toBe("scene-1");
+    expect(uow.enqueuedJobs).toHaveLength(1);
+    expect(queue.jobs).toHaveLength(1);
+    expect(queue.jobs[0]!.jobId).toBe(result.jobId);
+  });
+
+  it("discards staged jobs and does not commit them when unit of work callback throws", async () => {
+    const queue = new InMemoryJobQueue();
+    const uow = new InMemorySceneUnitOfWork().withJobs(queue);
+
+    await expect(
+      uow.execute(async (context) => {
+        expect(context.jobs).toBeDefined();
+        await context.jobs!.enqueue({
+          sceneId: "scene-1" as SceneId,
+          jobKind: "candidate",
+          workflowTemplate: "flux-schnell-draft",
+          injectedPayload: { seed: 42 }
+        });
+        expect(queue.jobs).toHaveLength(0);
+        throw new Error("Job rollback error");
+      })
+    ).rejects.toThrow("Job rollback error");
+
+    expect(uow.enqueuedJobs).toHaveLength(0);
+    expect(queue.jobs).toHaveLength(0);
   });
 });

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { Pool, type PoolClient } from "pg";
 import type { CampaignId, CampaignRecord, CandidateId, SceneId } from "@cco/domain";
 import type { ReviewEvent } from "@cco/contracts";
-import { ReviewSceneUseCases } from "@cco/application";
+import { ProgressSceneProductionUseCases, ReviewSceneUseCases } from "@cco/application";
 import { runMigrations } from "../migration-runner.js";
 import {
   startPostgres18Container,
@@ -14,6 +14,7 @@ import {
   insertStoryboardSceneRecord,
   insertStoryboardCandidateRecord
 } from "../test-support/records.js";
+import { PostgresJobQueue } from "../repositories/postgres-job-queue.js";
 import { PostgresUnitOfWork } from "./postgres-unit-of-work.js";
 
 describe("PostgreSQL UnitOfWork Integration", () => {
@@ -385,5 +386,126 @@ describe("PostgreSQL UnitOfWork Integration", () => {
       campaignId
     ]);
     expect(check.rows[0]?.title).toBe("UoW Campaign Test");
+  });
+
+  it("commits scene candidate generation transition and render_jobs atomically, and rolls back both on failure", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+    const sceneRecord = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      durationSeconds: 5.0,
+      visualDescription: "Draft scene for candidate generation",
+      engineAssigned: "ltx_25",
+      status: "draft_pending",
+      specRevision: 1
+    });
+
+    const uow = new PostgresUnitOfWork(pool);
+
+    // 1. Failure case: simulate failure during second job enqueue inside uow.execute
+    const failureAttempt = uow.execute(async (context) => {
+      expect(context.jobs).toBeDefined();
+      const scene = await context.scenes.findById(sceneRecord.scene_id as SceneId);
+      expect(scene).toBeDefined();
+
+      scene!.beginCandidateGeneration();
+      await context.scenes.save(scene!);
+
+      // Job 1 succeeds
+      await context.jobs!.enqueue({
+        sceneId: sceneRecord.scene_id as SceneId,
+        jobKind: "candidate",
+        workflowTemplate: "flux-schnell-draft",
+        injectedPayload: { seed: 43 }
+      });
+
+      // Simulated failure on job 2
+      throw new Error("Simulated failure on job 2 enqueue");
+    });
+
+    await expect(failureAttempt).rejects.toThrow("Simulated failure on job 2 enqueue");
+
+    // Verify scene status is still draft_pending in DB
+    const rolledBackScene = await client.query(
+      "SELECT status FROM storyboard_scenes WHERE scene_id = $1",
+      [sceneRecord.scene_id]
+    );
+    expect(rolledBackScene.rows[0]?.status).toBe("draft_pending");
+
+    // Verify zero render_jobs rows exist in DB for this scene
+    const rolledBackJobs = await client.query(
+      "SELECT job_id FROM render_jobs WHERE scene_id = $1",
+      [sceneRecord.scene_id]
+    );
+    expect(rolledBackJobs.rows).toHaveLength(0);
+
+    // 2. Success case: execute atomically to completion
+    await uow.execute(async (context) => {
+      const scene = await context.scenes.findById(sceneRecord.scene_id as SceneId);
+      expect(scene).toBeDefined();
+
+      scene!.beginCandidateGeneration();
+      await context.scenes.save(scene!);
+
+      for (let i = 1; i <= 3; i++) {
+        await context.jobs!.enqueue({
+          sceneId: sceneRecord.scene_id as SceneId,
+          jobKind: "candidate",
+          workflowTemplate: "flux-schnell-draft",
+          injectedPayload: { seed: 42 + i, variantOrdinal: i }
+        });
+      }
+    });
+
+    // Verify scene status committed to generating_candidates
+    const committedScene = await client.query(
+      "SELECT status FROM storyboard_scenes WHERE scene_id = $1",
+      [sceneRecord.scene_id]
+    );
+    expect(committedScene.rows[0]?.status).toBe("generating_candidates");
+
+    // Verify exactly 3 render_jobs rows exist in DB
+    const committedJobs = await client.query(
+      "SELECT job_id, status, workflow_template FROM render_jobs WHERE scene_id = $1",
+      [sceneRecord.scene_id]
+    );
+    expect(committedJobs.rows).toHaveLength(3);
+    expect(committedJobs.rows.every((r) => r.status === "queued")).toBe(true);
+    expect(committedJobs.rows.every((r) => r.workflow_template === "flux-schnell-draft")).toBe(
+      true
+    );
+  });
+
+  it("ProgressSceneProductionUseCases.beginCandidateGeneration commits scene transition and 3 jobs atomically against real PostgreSQL", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+    const sceneRecord = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      durationSeconds: 5.0,
+      visualDescription: "Draft scene for candidate generation via use case",
+      engineAssigned: "ltx_25",
+      status: "draft_pending",
+      specRevision: 1
+    });
+
+    const uow = new PostgresUnitOfWork(pool);
+    const queue = new PostgresJobQueue(pool);
+    const useCases = new ProgressSceneProductionUseCases(uow, undefined, queue);
+
+    const result = await useCases.beginCandidateGeneration({ sceneId: sceneRecord.scene_id });
+    expect(result.scene.status).toBe("generating_candidates");
+    expect(result.enqueuedJobs).toHaveLength(3);
+
+    const dbScene = await client.query("SELECT status FROM storyboard_scenes WHERE scene_id = $1", [
+      sceneRecord.scene_id
+    ]);
+    expect(dbScene.rows[0]?.status).toBe("generating_candidates");
+
+    const dbJobs = await client.query("SELECT job_id FROM render_jobs WHERE scene_id = $1", [
+      sceneRecord.scene_id
+    ]);
+    expect(dbJobs.rows).toHaveLength(3);
   });
 });

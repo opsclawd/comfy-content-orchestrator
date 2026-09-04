@@ -5,6 +5,12 @@ import { CandidateNotFoundError } from "./candidate-not-found-error.js";
 import { IdempotencyConflictError } from "./idempotency-conflict-error.js";
 import { SceneNotFoundError } from "./scene-not-found-error.js";
 import { StaleRevisionConflictError } from "./stale-revision-conflict-error.js";
+import {
+  CANDIDATE_BASE_SEED,
+  CANDIDATE_BATCH_SIZE,
+  CANDIDATE_WORKFLOW_TEMPLATE
+} from "./progress-scene-production.js";
+import { TransactionalJobEnqueuerUnavailableError } from "./job-queue-errors.js";
 
 export interface ReviewAuditInput {
   readonly sceneId: string;
@@ -123,7 +129,13 @@ export class ReviewSceneUseCases {
   }
 
   async requestReroll(input: RequestRerollInput): Promise<ReviewExecutionResult> {
-    return await this.executeReviewAction(input, "reroll", {}, (scene) => scene.requestReroll());
+    return await this.executeReviewAction(
+      input,
+      "reroll",
+      {},
+      (scene) => scene.requestReroll(),
+      true
+    );
   }
 
   async updatePrompt(input: UpdatePromptInput): Promise<ReviewExecutionResult> {
@@ -238,7 +250,8 @@ export class ReviewSceneUseCases {
     input: ReviewAuditInput,
     action: ReviewAction,
     payload: Record<string, unknown>,
-    apply: (scene: Scene) => SceneTransition
+    apply: (scene: Scene) => SceneTransition,
+    enqueueCandidates = false
   ): Promise<ReviewExecutionResult> {
     return await this.uow.execute(async (context) => {
       const prepared = await this.prepareReviewExecution(context, input);
@@ -252,6 +265,24 @@ export class ReviewSceneUseCases {
       const scene = prepared.scene;
       const priorSceneStatus = scene.status;
       const transition = apply(scene);
+      if (enqueueCandidates) {
+        if (context.jobs === undefined) {
+          throw new TransactionalJobEnqueuerUnavailableError();
+        }
+        const snapshot = scene.snapshot();
+        for (let variantOrdinal = 1; variantOrdinal <= CANDIDATE_BATCH_SIZE; variantOrdinal++) {
+          await context.jobs.enqueue({
+            sceneId: snapshot.id,
+            jobKind: "candidate",
+            workflowTemplate: CANDIDATE_WORKFLOW_TEMPLATE,
+            injectedPayload: {
+              prompt: snapshot.configuration.prompt,
+              seed: CANDIDATE_BASE_SEED + variantOrdinal,
+              variantOrdinal
+            }
+          });
+        }
+      }
       const event = ReviewEventSchema.parse({
         eventId: input.eventId,
         sceneId: input.sceneId,

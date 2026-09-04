@@ -11,6 +11,8 @@ import {
   Scene,
   type CampaignId,
   type CandidateId,
+  type JobId,
+  type RenderJob,
   type SceneId,
   type StoryboardCandidate
 } from "@cco/domain";
@@ -18,10 +20,40 @@ import type {
   ReviewEventStore,
   SceneRepository,
   StoryboardCandidateRepository,
+  EnqueueJobInput,
   UnitOfWork,
   UnitOfWorkContext
 } from "@cco/application";
 import { createControlApiApp } from "../app.js";
+
+class TestJobQueue {
+  readonly jobs: RenderJob[] = [];
+  private nextId = 1;
+
+  createJob(input: EnqueueJobInput): RenderJob {
+    const now = new Date();
+    return {
+      jobId: `job-${this.nextId++}` as JobId,
+      sceneId: input.sceneId,
+      jobKind: input.jobKind,
+      status: "queued",
+      workflowTemplate: input.workflowTemplate,
+      injectedPayload: input.injectedPayload,
+      workerId: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      retryCount: 0,
+      maxRetries: input.maxRetries ?? 3,
+      errorTrace: null,
+      createdAt: now,
+      updatedAt: now
+    };
+  }
+
+  commitJob(job: RenderJob): void {
+    this.jobs.push(job);
+  }
+}
 
 class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _seededScenes: Map<SceneId, Scene>;
@@ -29,6 +61,7 @@ class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _seededReviewEvents: Map<string, ReviewEvent>;
   private readonly _savedScenes: Scene[] = [];
   private readonly _reviewEvents: ReviewEvent[] = [];
+  private readonly _jobQueue: TestJobQueue | undefined;
 
   constructor(
     seededScenes?: Iterable<Scene> | ReadonlyMap<SceneId, Scene> | Record<string, Scene>,
@@ -37,8 +70,10 @@ class InMemorySceneUnitOfWork implements UnitOfWork {
       | ReadonlyMap<CandidateId, StoryboardCandidate>
       | Record<string, StoryboardCandidate>,
     seededReviewEvents?:
-      Iterable<ReviewEvent> | ReadonlyMap<string, ReviewEvent> | Record<string, ReviewEvent>
+      Iterable<ReviewEvent> | ReadonlyMap<string, ReviewEvent> | Record<string, ReviewEvent>,
+    jobQueue?: TestJobQueue
   ) {
+    this._jobQueue = jobQueue;
     this._seededScenes = new Map<SceneId, Scene>();
     if (seededScenes !== undefined && seededScenes !== null) {
       if (seededScenes instanceof Map) {
@@ -118,6 +153,7 @@ class InMemorySceneUnitOfWork implements UnitOfWork {
     const stagedScenes: Scene[] = [];
     const stagedReviewEvents: ReviewEvent[] = [];
     const stagedCandidates: StoryboardCandidate[] = [];
+    const stagedJobs = [] as ReturnType<TestJobQueue["createJob"]>[];
 
     const scopedScenes: SceneRepository = {
       findById: async (sceneId: SceneId): Promise<Scene | undefined> => {
@@ -170,7 +206,16 @@ class InMemorySceneUnitOfWork implements UnitOfWork {
     const context: UnitOfWorkContext = {
       scenes: scopedScenes,
       reviewEvents: scopedReviewEvents,
-      candidates: scopedCandidates
+      candidates: scopedCandidates,
+      jobs: this._jobQueue
+        ? {
+            enqueue: async (input) => {
+              const job = this._jobQueue!.createJob(input);
+              stagedJobs.push(job);
+              return job;
+            }
+          }
+        : undefined
     };
 
     const result = await work(context);
@@ -185,6 +230,9 @@ class InMemorySceneUnitOfWork implements UnitOfWork {
     }
     for (const event of stagedReviewEvents) {
       this._seededReviewEvents.set(event.eventId, event);
+    }
+    for (const job of stagedJobs) {
+      this._jobQueue?.commitJob(job);
     }
 
     return result;
@@ -453,7 +501,8 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
       selectedCandidateRevision: 1
     });
     const candidate = createCandidate();
-    const uow = new InMemorySceneUnitOfWork([scene], [candidate]);
+    const jobs = new TestJobQueue();
+    const uow = new InMemorySceneUnitOfWork([scene], [candidate], undefined, jobs);
     const app = createControlApiApp({ uow }, defaultTestOptions);
 
     const command: ReviewCommand = {
@@ -477,6 +526,7 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
     expect(body.specRevision).toBe(1);
     expect(body.selectedCandidateId).toBeUndefined();
     expect(body.isIdempotentReplay).toBe(false);
+    expect(jobs.jobs).toHaveLength(3);
   });
 
   it("prompt_edit, reference_change, engine_change, duration_change, lora_tune update configuration and revision", async () => {

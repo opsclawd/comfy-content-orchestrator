@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   type JobQueuePort,
   type StorageTelemetryPort,
+  type TransactionalJobEnqueuer,
   type UnitOfWork,
   type UnitOfWorkContext,
   type SceneRepository
@@ -12,23 +13,38 @@ import { createControlApiApp } from "../app.js";
 
 class FakeUnitOfWork implements UnitOfWork {
   private readonly _scenes = new Map<SceneId, Scene>();
+  private readonly _savedScenes: Scene[] = [];
 
-  constructor(seededScenes: Scene[] = []) {
+  constructor(
+    seededScenes: Scene[] = [],
+    private readonly jobs?: TransactionalJobEnqueuer
+  ) {
     for (const s of seededScenes) {
       this._scenes.set(s.id, s);
     }
   }
 
   get savedScenes(): readonly Scene[] {
-    return Array.from(this._scenes.values());
+    return this._savedScenes;
   }
 
   async execute<TResult>(work: (context: UnitOfWorkContext) => Promise<TResult>): Promise<TResult> {
-    return work({
+    const scopedScenes = new Map<SceneId, Scene>();
+    for (const [id, scene] of this._scenes) {
+      scopedScenes.set(id, Scene.reconstitute(scene.snapshot()));
+    }
+    const stagedScenes: Scene[] = [];
+    const initialQueueJobs =
+      this.jobs && "__enqueuedJobs" in this.jobs
+        ? (this.jobs as TransactionalJobEnqueuer & { __enqueuedJobs: RenderJob[] }).__enqueuedJobs
+            .length
+        : undefined;
+    const context: UnitOfWorkContext = {
       scenes: {
-        findById: async (id: SceneId) => this._scenes.get(id),
+        findById: async (id: SceneId) =>
+          stagedScenes.find((scene) => scene.id === id) ?? scopedScenes.get(id),
         save: async (scene: Scene) => {
-          this._scenes.set(scene.id, scene);
+          stagedScenes.push(scene);
         }
       } as SceneRepository,
       reviewEvents: {
@@ -39,8 +55,32 @@ class FakeUnitOfWork implements UnitOfWork {
         findById: async () => undefined,
         insert: async () => {},
         listBySceneAndRevision: async () => []
+      },
+      jobs: this.jobs
+        ? {
+            enqueue: async (input) => this.jobs!.enqueue(input)
+          }
+        : undefined
+    };
+
+    let result: TResult;
+    try {
+      result = await work(context);
+    } catch (error) {
+      if (initialQueueJobs !== undefined) {
+        const queueJobs = (this.jobs as TransactionalJobEnqueuer & { __enqueuedJobs: RenderJob[] })
+          .__enqueuedJobs;
+        queueJobs.length = initialQueueJobs;
       }
-    });
+      throw error;
+    }
+
+    for (const scene of stagedScenes) {
+      this._scenes.set(scene.id, Scene.reconstitute(scene.snapshot()));
+      this._savedScenes.push(scene);
+    }
+
+    return result;
   }
 }
 
@@ -70,7 +110,8 @@ function createRecordingJobQueue(): {
   const enqueuedJobs: RenderJob[] = [];
   let nextId = 1;
 
-  const queue: JobQueuePort = {
+  const queue: JobQueuePort & { __enqueuedJobs: RenderJob[] } = {
+    __enqueuedJobs: enqueuedJobs,
     enqueue: vi.fn().mockImplementation(async (input) => {
       enqueuedInputs.push(input);
       const now = new Date();
@@ -123,8 +164,8 @@ describe("POST /api/scenes/:sceneId/generation-admission", () => {
 
   it("successfully admits a draft_pending scene and returns 200 with 3 enqueued job IDs", async () => {
     const scene = createDraftScene();
-    const uow = new FakeUnitOfWork([scene]);
     const { queue, enqueuedJobs } = createRecordingJobQueue();
+    const uow = new FakeUnitOfWork([scene], queue);
 
     const app = createControlApiApp(
       {
@@ -249,9 +290,17 @@ describe("POST /api/scenes/:sceneId/generation-admission", () => {
 
   it("propagates queue enqueue failure as 500 error", async () => {
     const scene = createDraftScene();
-    const uow = new FakeUnitOfWork([scene]);
-    const failingQueue: JobQueuePort = {
-      enqueue: vi.fn().mockRejectedValue(new Error("Queue persistence failure")),
+    const enqueuedJobs: RenderJob[] = [];
+    const failingQueue: JobQueuePort & { __enqueuedJobs: RenderJob[] } = {
+      __enqueuedJobs: enqueuedJobs,
+      enqueue: vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          const job = { jobId: "018e69e0-8a6a-72cb-b1b7-000000000001" as JobId } as RenderJob;
+          enqueuedJobs.push(job);
+          return job;
+        })
+        .mockRejectedValue(new Error("Queue persistence failure")),
       claim: vi.fn().mockResolvedValue(undefined),
       start: vi.fn().mockResolvedValue({ outcome: "not_found" }),
       heartbeat: vi.fn().mockResolvedValue({ outcome: "not_found" }),
@@ -259,6 +308,7 @@ describe("POST /api/scenes/:sceneId/generation-admission", () => {
       fail: vi.fn().mockResolvedValue({ outcome: "not_found" }),
       defer: vi.fn().mockResolvedValue({ outcome: "not_found" })
     };
+    const uow = new FakeUnitOfWork([scene], failingQueue);
 
     const app = createControlApiApp(
       {
@@ -277,6 +327,8 @@ describe("POST /api/scenes/:sceneId/generation-admission", () => {
     });
 
     expect(res.statusCode).toBe(500);
+    expect(uow.savedScenes).toHaveLength(0);
+    expect(enqueuedJobs).toHaveLength(0);
   });
 
   it("rejects director_review admission without enqueueing a reroll", async () => {

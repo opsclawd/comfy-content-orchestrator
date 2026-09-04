@@ -12,9 +12,13 @@ import type {
   RenderEnginePort,
   RenderQueueReceipt
 } from "../ports/render-engine-port.js";
+import type { EnqueueJobInput } from "../ports/job-queue-port.js";
 import { InMemoryJobQueue } from "../test-support/in-memory-job-queue.js";
 import { InMemorySceneUnitOfWork } from "../test-support/in-memory-scene-unit-of-work.js";
-import { JobDispatchUnavailableError } from "./job-queue-errors.js";
+import {
+  JobDispatchUnavailableError,
+  TransactionalJobEnqueuerUnavailableError
+} from "./job-queue-errors.js";
 import {
   CANDIDATE_BASE_SEED,
   CANDIDATE_BATCH_SIZE,
@@ -103,8 +107,8 @@ describe("ProgressSceneProductionUseCases", () => {
   it("candidate generation start: draft_pending transitions and enqueues 3 jobs", async () => {
     const sceneId = "scene-begin-gen-draft-pending";
     const scene = createDraftScene(sceneId);
-    const uow = new InMemorySceneUnitOfWork([scene]);
     const queue = new InMemoryJobQueue();
+    const uow = new InMemorySceneUnitOfWork([scene]).withJobs(queue);
     const useCases = new ProgressSceneProductionUseCases(uow, undefined, queue);
 
     const result = await useCases.beginCandidateGeneration({ sceneId });
@@ -136,8 +140,8 @@ describe("ProgressSceneProductionUseCases", () => {
 
   it("candidate generation start rejects director_review without enqueueing a reroll", async () => {
     const scene = createDirectorReviewScene("scene-reroll-not-admitted");
-    const uow = new InMemorySceneUnitOfWork([scene]);
     const queue = new InMemoryJobQueue();
+    const uow = new InMemorySceneUnitOfWork([scene]).withJobs(queue);
     const useCases = new ProgressSceneProductionUseCases(uow, undefined, queue);
 
     await expect(useCases.beginCandidateGeneration({ sceneId: scene.id })).rejects.toThrow(
@@ -164,8 +168,8 @@ describe("ProgressSceneProductionUseCases", () => {
 
   it("candidate generation start: invalid second admission throws InvalidTransitionError and enqueues no jobs", async () => {
     const scene = createGeneratingCandidatesScene("scene-already-gen");
-    const uow = new InMemorySceneUnitOfWork([scene]);
     const queue = new InMemoryJobQueue();
+    const uow = new InMemorySceneUnitOfWork([scene]).withJobs(queue);
     const useCases = new ProgressSceneProductionUseCases(uow, undefined, queue);
 
     await expect(
@@ -176,41 +180,49 @@ describe("ProgressSceneProductionUseCases", () => {
     expect(queue.jobs).toHaveLength(0);
   });
 
-  it("candidate generation start: surfaces queue enqueue failure without masking", async () => {
+  it("candidate generation start: surfaces queue enqueue failure without masking and leaves scene in draft_pending", async () => {
     const scene = createDraftScene("scene-enqueue-fail");
-    const uow = new InMemorySceneUnitOfWork([scene]);
-    const failingQueue = {
-      async enqueue() {
-        throw new Error("DB connection failure during enqueue");
-      },
-      async claim() {
-        return undefined;
-      },
-      async start() {
-        return { outcome: "not_found" as const };
-      },
-      async heartbeat() {
-        return { outcome: "not_found" as const };
-      },
-      async complete() {
-        return { outcome: "not_found" as const };
-      },
-      async fail() {
-        return { outcome: "not_found" as const };
-      },
-      async defer() {
-        return { outcome: "not_found" as const };
+    class FailingInMemoryJobQueue extends InMemoryJobQueue {
+      private callCount = 0;
+      override createJob(input: EnqueueJobInput) {
+        this.callCount++;
+        if (this.callCount === 2) {
+          throw new Error("DB connection failure during enqueue");
+        }
+        return super.createJob(input);
       }
-    };
+    }
+    const failingQueue = new FailingInMemoryJobQueue();
+    const uow = new InMemorySceneUnitOfWork([scene]).withJobs(failingQueue);
     const useCases = new ProgressSceneProductionUseCases(uow, undefined, failingQueue);
 
     await expect(
       useCases.beginCandidateGeneration({ sceneId: "scene-enqueue-fail" })
     ).rejects.toThrow("DB connection failure during enqueue");
 
-    // Note: per design D2, uow committed before enqueue; this test documents the operational risk
-    expect(uow.savedScenes).toHaveLength(1);
-    expect(uow.savedScenes[0]!.status).toBe("generating_candidates");
+    expect(uow.savedScenes).toHaveLength(0);
+    expect(uow.enqueuedJobs).toHaveLength(0);
+    expect(failingQueue.jobs).toHaveLength(0);
+
+    const refetchedScene = await uow.execute(async (context) => context.scenes.findById(scene.id));
+    expect(refetchedScene?.status).toBe("draft_pending");
+    expect(refetchedScene?.snapshot().status).toBe("draft_pending");
+  });
+
+  it("candidate generation start: throws TransactionalJobEnqueuerUnavailableError when uow provides no jobs enqueuer", async () => {
+    const scene = createDraftScene("scene-no-uow-jobs");
+    const uow = new InMemorySceneUnitOfWork([scene]);
+    const queue = new InMemoryJobQueue();
+    const useCases = new ProgressSceneProductionUseCases(uow, undefined, queue);
+
+    await expect(
+      useCases.beginCandidateGeneration({ sceneId: "scene-no-uow-jobs" })
+    ).rejects.toThrow(TransactionalJobEnqueuerUnavailableError);
+
+    expect(uow.savedScenes).toHaveLength(0);
+    expect(uow.enqueuedJobs).toHaveLength(0);
+    expect(queue.jobs).toHaveLength(0);
+    expect(scene.status).toBe("draft_pending");
   });
 
   it("candidate submission: generating_candidates transitions to director_review and saves without a review event", async () => {

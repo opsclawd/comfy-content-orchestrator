@@ -7,7 +7,10 @@ import type {
   RenderWorkflow
 } from "../ports/render-engine-port.js";
 import type { UnitOfWork } from "../ports/unit-of-work.js";
-import { JobDispatchUnavailableError } from "./job-queue-errors.js";
+import {
+  JobDispatchUnavailableError,
+  TransactionalJobEnqueuerUnavailableError
+} from "./job-queue-errors.js";
 import { SceneNotFoundError } from "./scene-not-found-error.js";
 
 export const CANDIDATE_BATCH_SIZE = 3;
@@ -44,6 +47,7 @@ export class ProgressSceneProductionUseCases {
     }
 
     let snapshot: Readonly<SceneSnapshot> | undefined;
+    const enqueuedJobs: RenderJob[] = [];
 
     await this.uow.execute(async (context) => {
       const scene = await context.scenes.findById(input.sceneId as SceneId);
@@ -53,29 +57,30 @@ export class ProgressSceneProductionUseCases {
       if (scene.status !== "draft_pending") {
         throw new InvalidTransitionError(scene.id, scene.status, "beginCandidateGeneration");
       }
+      if (context.jobs === undefined) {
+        throw new TransactionalJobEnqueuerUnavailableError();
+      }
       scene.beginCandidateGeneration();
       await context.scenes.save(scene);
       snapshot = scene.snapshot();
+
+      for (let variantOrdinal = 1; variantOrdinal <= CANDIDATE_BATCH_SIZE; variantOrdinal++) {
+        const job = await context.jobs.enqueue({
+          sceneId: snapshot.id,
+          jobKind: "candidate",
+          workflowTemplate: CANDIDATE_WORKFLOW_TEMPLATE,
+          injectedPayload: {
+            prompt: snapshot.configuration.prompt,
+            seed: CANDIDATE_BASE_SEED + variantOrdinal,
+            variantOrdinal
+          }
+        });
+        enqueuedJobs.push(job);
+      }
     });
 
-    const admittedSnapshot = snapshot!;
-    const enqueuedJobs: RenderJob[] = [];
-    for (let variantOrdinal = 1; variantOrdinal <= CANDIDATE_BATCH_SIZE; variantOrdinal++) {
-      const job = await this.jobQueue.enqueue({
-        sceneId: admittedSnapshot.id,
-        jobKind: "candidate",
-        workflowTemplate: CANDIDATE_WORKFLOW_TEMPLATE,
-        injectedPayload: {
-          prompt: admittedSnapshot.configuration.prompt,
-          seed: CANDIDATE_BASE_SEED + variantOrdinal,
-          variantOrdinal
-        }
-      });
-      enqueuedJobs.push(job);
-    }
-
     return {
-      scene: admittedSnapshot,
+      scene: snapshot!,
       enqueuedJobs
     };
   }

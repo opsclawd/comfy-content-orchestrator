@@ -26,7 +26,14 @@ export { PostgresUnitOfWork } from "./postgres/uow/postgres-unit-of-work.js";
 
 export { PostgresSceneReviewQueries } from "./postgres/queries/postgres-scene-review-queries.js";
 
-export { PostgresJobQueue } from "./postgres/repositories/postgres-job-queue.js";
+export {
+  PostgresJobQueue,
+  PostgresTransactionalJobEnqueuer,
+  insertRenderJob,
+  mapRenderJobRow,
+  type PostgresJobRunner,
+  type RenderJobRow
+} from "./postgres/repositories/postgres-job-queue.js";
 export { PostgresDeliveryAssemblyJobQueue } from "./postgres/repositories/postgres-delivery-assembly-job-queue.js";
 
 export {
