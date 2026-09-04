@@ -523,7 +523,7 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
     const body = response.json() as ReviewCommandResponse;
     expect(body.sceneId).toBe(sceneUuid);
     expect(body.status).toBe("generating_candidates");
-    expect(body.specRevision).toBe(1);
+    expect(body.specRevision).toBe(2);
     expect(body.selectedCandidateId).toBeUndefined();
     expect(body.isIdempotentReplay).toBe(false);
     expect(jobs.jobs).toHaveLength(3);
