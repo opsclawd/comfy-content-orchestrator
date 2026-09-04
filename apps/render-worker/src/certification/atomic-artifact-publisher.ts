@@ -22,6 +22,7 @@ export interface PublishArtifactPairOptions {
   readonly runId: string;
   readonly jsonContent: string;
   readonly markdownContent: string;
+  readonly approvedProvenanceContent?: string | undefined;
   readonly repoRoot?: string | undefined;
   readonly dependencies?: ArtifactPublisherDependencies | undefined;
 }
@@ -31,9 +32,11 @@ export interface PublishedArtifactPairResult {
   readonly outputDirectory: string;
   readonly resultJsonPath: string;
   readonly summaryMdPath: string;
+  readonly approvedProvenancePath?: string | undefined;
   readonly relativeOutputDirectory: string;
   readonly relativeResultJsonPath: string;
   readonly relativeSummaryMdPath: string;
+  readonly relativeApprovedProvenancePath?: string | undefined;
 }
 
 const RUN_ID_REGEX = /^[a-z0-9][a-z0-9._-]*$/;
@@ -78,6 +81,7 @@ export async function publishArtifactPair(
     runId: rawRunId,
     jsonContent,
     markdownContent,
+    approvedProvenanceContent,
     repoRoot,
     dependencies
   } = options;
@@ -90,6 +94,11 @@ export async function publishArtifactPair(
 
   const finalJson = jsonContent.endsWith("\n") ? jsonContent : `${jsonContent}\n`;
   const finalMd = markdownContent.endsWith("\n") ? markdownContent : `${markdownContent}\n`;
+  const finalApprovedProvenance = approvedProvenanceContent
+    ? approvedProvenanceContent.endsWith("\n")
+      ? approvedProvenanceContent
+      : `${approvedProvenanceContent}\n`
+    : undefined;
 
   const resolvedOutputRoot = path.resolve(outputRoot);
   const finalDir = path.join(resolvedOutputRoot, runId);
@@ -139,6 +148,11 @@ export async function publishArtifactPair(
     await writeFileFn(tempResultJsonPath, finalJson, "utf8");
     await writeFileFn(tempSummaryMdPath, finalMd, "utf8");
 
+    if (finalApprovedProvenance !== undefined) {
+      const tempApprovedProvenancePath = path.join(tempDir, "approved-provenance.json");
+      await writeFileFn(tempApprovedProvenancePath, finalApprovedProvenance, "utf8");
+    }
+
     // Double-check collision before rename
     let collisionDetected = false;
     try {
@@ -176,6 +190,9 @@ export async function publishArtifactPair(
   // Construct and return result with absolute and relative paths
   const finalResultJsonPath = path.join(finalDir, "result.json");
   const finalSummaryMdPath = path.join(finalDir, "summary.md");
+  const finalApprovedProvenancePath = finalApprovedProvenance !== undefined
+    ? path.join(finalDir, "approved-provenance.json")
+    : undefined;
   const resolvedRepoRoot = path.resolve(repoRoot ?? process.cwd());
 
   return {
@@ -183,6 +200,12 @@ export async function publishArtifactPair(
     outputDirectory: finalDir,
     resultJsonPath: finalResultJsonPath,
     summaryMdPath: finalSummaryMdPath,
+    ...(finalApprovedProvenancePath !== undefined
+      ? {
+          approvedProvenancePath: finalApprovedProvenancePath,
+          relativeApprovedProvenancePath: path.relative(resolvedRepoRoot, finalApprovedProvenancePath)
+        }
+      : {}),
     relativeOutputDirectory: path.relative(resolvedRepoRoot, finalDir),
     relativeResultJsonPath: path.relative(resolvedRepoRoot, finalResultJsonPath),
     relativeSummaryMdPath: path.relative(resolvedRepoRoot, finalSummaryMdPath)

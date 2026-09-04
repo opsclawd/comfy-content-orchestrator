@@ -198,6 +198,32 @@ describe("atomic-artifact-publisher", () => {
     expect(readMd).toBe(markdownContent);
   });
 
+  it("publishes approved-provenance.json alongside result.json and summary.md when approvedProvenanceContent is provided", async () => {
+    const outputRoot = path.join(tempTestDir, "artifacts");
+    const runId = "test-run-provenance";
+    const jsonContent = JSON.stringify({ hello: "world" }, null, 2) + "\n";
+    const markdownContent = "# Test Summary\n";
+    const approvedProvenanceContent = JSON.stringify({ version: 1, profileId: "ltx-25-720p-97f" }, null, 2) + "\n";
+
+    const result: PublishedArtifactPairResult = await publishArtifactPair({
+      outputRoot,
+      runId,
+      jsonContent,
+      markdownContent,
+      approvedProvenanceContent,
+      repoRoot: tempTestDir
+    });
+
+    const expectedDir = path.join(outputRoot, runId);
+    const expectedProvPath = path.join(expectedDir, "approved-provenance.json");
+
+    expect(result.approvedProvenancePath).toBe(expectedProvPath);
+    expect(result.relativeApprovedProvenancePath).toBe(path.relative(tempTestDir, expectedProvPath));
+
+    const readProv = await fs.readFile(expectedProvPath, "utf8");
+    expect(readProv).toBe(approvedProvenanceContent);
+  });
+
   it("removes only its owned temp directory after a write or rename failure", async () => {
     const outputRoot = path.join(tempTestDir, "artifacts");
     const runId = "cleanup-test-run";
