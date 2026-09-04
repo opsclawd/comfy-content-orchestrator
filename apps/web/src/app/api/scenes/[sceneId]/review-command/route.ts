@@ -1,12 +1,24 @@
-import { ReviewCommandSchema, type ReviewErrorResponse } from "@cco/contracts";
+import {
+  ReviewCommandSchema,
+  ReviewErrorResponseSchema,
+  type ReviewErrorResponse
+} from "@cco/contracts";
 import {
   ApiClientError,
   ApiValidationError,
   ReviewCommandApiError,
-  submitReviewCommand
+  submitReviewCommand,
+  type ReviewerIdentity
 } from "../../../../../api/client";
+import {
+  createWhoisClient,
+  resolveReviewerIdentity,
+  ReviewerIdentityUnavailableError
+} from "../../../../../api/reviewer-identity";
 
 export const dynamic = "force-dynamic";
+
+const whoisClient = createWhoisClient();
 
 export interface RouteContext {
   params: Promise<{
@@ -53,8 +65,22 @@ export async function POST(request: Request, context: RouteContext): Promise<Res
     return Response.json(errorResponse, { status: 400 });
   }
 
+  let reviewerIdentity: ReviewerIdentity;
   try {
-    const result = await submitReviewCommand(sceneId, command);
+    reviewerIdentity = await resolveReviewerIdentity(request, whoisClient);
+  } catch (err) {
+    if (err instanceof ReviewerIdentityUnavailableError) {
+      const errorResponse: ReviewErrorResponse = ReviewErrorResponseSchema.parse({
+        code: "AUTHENTICATION_REQUIRED",
+        message: "Reviewer identity could not be established."
+      });
+      return Response.json(errorResponse, { status: 401 });
+    }
+    throw err;
+  }
+
+  try {
+    const result = await submitReviewCommand(sceneId, command, reviewerIdentity);
     return Response.json(result, { status: 200 });
   } catch (err) {
     if (err instanceof ReviewCommandApiError) {

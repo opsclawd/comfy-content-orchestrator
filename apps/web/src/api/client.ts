@@ -76,11 +76,20 @@ export class ReviewCommandApiError extends Error {
   }
 }
 
+export interface ReviewerIdentity {
+  readonly login: string;
+  readonly displayName?: string;
+}
+
 export interface ApiClient {
   getHealth(): Promise<HealthResponse>;
   getCampaignReviewSummary(campaignId: string): Promise<CampaignReviewSummary>;
   getSceneReviewDetail(sceneId: string): Promise<SceneReviewDetailReadModel>;
-  submitReviewCommand(sceneId: string, command: ReviewCommand): Promise<ReviewCommandResponse>;
+  submitReviewCommand(
+    sceneId: string,
+    command: ReviewCommand,
+    reviewerIdentity: ReviewerIdentity
+  ): Promise<ReviewCommandResponse>;
 }
 
 async function requestJson<T>(
@@ -166,7 +175,8 @@ export function createApiClient(config?: ApiClientConfig): ApiClient {
 
     async submitReviewCommand(
       sceneId: string,
-      command: ReviewCommand
+      command: ReviewCommand,
+      reviewerIdentity: ReviewerIdentity
     ): Promise<ReviewCommandResponse> {
       const commandParseResult = ReviewCommandSchema.safeParse(command);
       if (!commandParseResult.success) {
@@ -193,14 +203,20 @@ export function createApiClient(config?: ApiClientConfig): ApiClient {
       const encodedSceneId = encodeURIComponent(sceneId);
       const url = `${baseUrl}/api/scenes/${encodedSceneId}/review-command`;
 
+      const requestHeaders: Record<string, string> = {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "tailscale-user-login": reviewerIdentity.login
+      };
+      if (reviewerIdentity.displayName !== undefined) {
+        requestHeaders["tailscale-user-name"] = reviewerIdentity.displayName;
+      }
+
       let res: Response;
       try {
         res = await fetchFn(url, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json"
-          },
+          headers: requestHeaders,
           cache: "no-store",
           body: serializedBody
         });
@@ -281,8 +297,9 @@ export async function getSceneReviewDetail(
 export async function submitReviewCommand(
   sceneId: string,
   command: ReviewCommand,
+  reviewerIdentity: ReviewerIdentity,
   fetchImpl?: typeof fetch
 ): Promise<ReviewCommandResponse> {
   const client = createApiClient({ fetchFn: fetchImpl });
-  return client.submitReviewCommand(sceneId, command);
+  return client.submitReviewCommand(sceneId, command, reviewerIdentity);
 }

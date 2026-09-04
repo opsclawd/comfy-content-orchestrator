@@ -7,6 +7,11 @@ import {
   ReviewCommandApiError
 } from "../../../../../api/client";
 import type * as ClientModule from "../../../../../api/client";
+import {
+  resolveReviewerIdentity,
+  ReviewerIdentityUnavailableError
+} from "../../../../../api/reviewer-identity";
+import type * as ReviewerIdentityModule from "../../../../../api/reviewer-identity";
 import type { ReviewCommand, ReviewCommandResponse, ReviewErrorResponse } from "@cco/contracts";
 
 vi.mock("../../../../../api/client", async (importOriginal) => {
@@ -14,6 +19,17 @@ vi.mock("../../../../../api/client", async (importOriginal) => {
   return {
     ...actual,
     submitReviewCommand: vi.fn()
+  };
+});
+
+vi.mock("../../../../../api/reviewer-identity", async (importOriginal) => {
+  const actual = await importOriginal<typeof ReviewerIdentityModule>();
+  return {
+    ...actual,
+    resolveReviewerIdentity: vi.fn().mockResolvedValue({
+      login: "director@example.com",
+      displayName: "Director Alice"
+    })
   };
 });
 
@@ -56,6 +72,31 @@ describe("Review Hub Command Route Handler: POST /api/scenes/[sceneId]/review-co
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(resolveReviewerIdentity).mockResolvedValue({
+      login: "director@example.com",
+      displayName: "Director Alice"
+    });
+  });
+
+  describe("Reviewer Identity Verification", () => {
+    it("returns 401 AUTHENTICATION_REQUIRED when reviewer identity cannot be established", async () => {
+      vi.mocked(resolveReviewerIdentity).mockRejectedValueOnce(
+        new ReviewerIdentityUnavailableError("Peer IP missing or unresolvable")
+      );
+
+      const request = createJsonRequest(routeUrl, validApproveCommand);
+      const response = await POST(request, {
+        params: Promise.resolve({ sceneId })
+      });
+
+      expect(response.status).toBe(401);
+      const body = await response.json();
+      expect(body).toEqual({
+        code: "AUTHENTICATION_REQUIRED",
+        message: "Reviewer identity could not be established."
+      });
+      expect(submitReviewCommand).not.toHaveBeenCalled();
+    });
   });
 
   describe("Happy Path & Action Forwarding", () => {
@@ -68,7 +109,10 @@ describe("Review Hub Command Route Handler: POST /api/scenes/[sceneId]/review-co
       });
 
       expect(submitReviewCommand).toHaveBeenCalledTimes(1);
-      expect(submitReviewCommand).toHaveBeenCalledWith(sceneId, validApproveCommand);
+      expect(submitReviewCommand).toHaveBeenCalledWith(sceneId, validApproveCommand, {
+        login: "director@example.com",
+        displayName: "Director Alice"
+      });
 
       expect(response.status).toBe(200);
       const body = await response.json();

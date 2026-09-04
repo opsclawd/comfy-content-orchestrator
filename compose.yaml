@@ -131,7 +131,7 @@ services:
     hostname: ${REVIEW_HUB_HOSTNAME:?REVIEW_HUB_HOSTNAME is required}
     command:
       - node
-      - apps/web/server.js
+      - apps/web/peer-proxy.mjs
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       PORT: "3000"
@@ -144,16 +144,34 @@ services:
         published: "${REVIEW_HUB_PORT:?REVIEW_HUB_PORT is required}"
         target: 3000
         host_ip: "${TAILNET_IP:?TAILNET_IP is required}"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://127.0.0.1:3000/api/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    volumes:
+      - /var/run/tailscale:/var/run/tailscale
+    group_add:
+      - "9999"
     depends_on:
       control-api:
         condition: service_started
     networks:
-      - control-plane
+      control-plane:
+        ipv4_address: 172.28.0.10
     restart: unless-stopped
 
 networks:
   control-plane:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
 
 volumes:
   postgres_data:

@@ -331,6 +331,11 @@ describe("Typed Control API Client", () => {
       isIdempotentReplay: false
     };
 
+    const defaultReviewerIdentity = {
+      login: "director@example.com",
+      displayName: "Director Alice"
+    };
+
     const actionTestCases: Array<{
       action: ReviewCommand["action"];
       payload: ReviewCommand["payload"];
@@ -414,7 +419,11 @@ describe("Typed Control API Client", () => {
           status: "director_review"
         } as unknown as ReviewCommand;
 
-        const result = await client.submitReviewCommand(sceneId, rawCommand);
+        const result = await client.submitReviewCommand(
+          sceneId,
+          rawCommand,
+          defaultReviewerIdentity
+        );
 
         expect(mockFetch).toHaveBeenCalledTimes(1);
         expect(mockFetch).toHaveBeenCalledWith(
@@ -423,7 +432,9 @@ describe("Typed Control API Client", () => {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              Accept: "application/json"
+              Accept: "application/json",
+              "tailscale-user-login": "director@example.com",
+              "tailscale-user-name": "Director Alice"
             },
             cache: "no-store",
             body: expect.any(String)
@@ -453,6 +464,10 @@ describe("Typed Control API Client", () => {
 
   describe("submitReviewCommand - invariants and failure classifications", () => {
     const sceneId = "123e4567-e89b-12d3-a456-426614174000";
+    const defaultReviewerIdentity = {
+      login: "director@example.com",
+      displayName: "Director Alice"
+    };
     const validCommand: ReviewCommand = {
       actionId: "11111111-1111-1111-1111-111111111111",
       sceneId,
@@ -469,9 +484,9 @@ describe("Typed Control API Client", () => {
         fetchFn: mockFetch
       });
 
-      await expect(client.submitReviewCommand(sceneId, validCommand)).rejects.toThrow(
-        ApiClientError
-      );
+      await expect(
+        client.submitReviewCommand(sceneId, validCommand, defaultReviewerIdentity)
+      ).rejects.toThrow(ApiClientError);
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
@@ -500,13 +515,59 @@ describe("Typed Control API Client", () => {
         fetchFn: mockFetch
       });
 
-      const result = await client.submitReviewCommand(sceneId, validCommand);
+      const result = await client.submitReviewCommand(
+        sceneId,
+        validCommand,
+        defaultReviewerIdentity
+      );
       expect(result).toEqual(successData);
       expect(mockFetch).toHaveBeenCalledTimes(1);
 
       // Also test top-level convenience function
-      const convenienceResult = await submitReviewCommand(sceneId, validCommand, mockFetch);
+      const convenienceResult = await submitReviewCommand(
+        sceneId,
+        validCommand,
+        defaultReviewerIdentity,
+        mockFetch
+      );
       expect(convenienceResult).toEqual(successData);
+    });
+
+    it("omits tailscale-user-name header when displayName is not provided", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          sceneId,
+          status: "approved",
+          specRevision: 2,
+          isIdempotentReplay: false
+        })
+      });
+
+      const client = createApiClient({
+        baseUrl: "http://localhost:3000",
+        fetchFn: mockFetch
+      });
+
+      await client.submitReviewCommand(sceneId, validCommand, { login: "director@example.com" });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "tailscale-user-login": "director@example.com"
+          }
+        })
+      );
+    });
+
+    it("requires reviewerIdentity parameter at compile-time", async () => {
+      const client = createApiClient({ baseUrl: "http://localhost:3000", fetchFn: vi.fn() });
+      // @ts-expect-error reviewerIdentity is a mandatory argument
+      await expect(client.submitReviewCommand(sceneId, validCommand)).rejects.toThrow();
     });
 
     it("preserves structured stale and idempotency failures", async () => {
@@ -533,7 +594,7 @@ describe("Typed Control API Client", () => {
 
       let capturedError: unknown;
       try {
-        await clientStale.submitReviewCommand(sceneId, validCommand);
+        await clientStale.submitReviewCommand(sceneId, validCommand, defaultReviewerIdentity);
       } catch (err) {
         capturedError = err;
       }
@@ -567,7 +628,7 @@ describe("Typed Control API Client", () => {
 
       capturedError = undefined;
       try {
-        await clientIdempotency.submitReviewCommand(sceneId, validCommand);
+        await clientIdempotency.submitReviewCommand(sceneId, validCommand, defaultReviewerIdentity);
       } catch (err) {
         capturedError = err;
       }
@@ -597,7 +658,7 @@ describe("Typed Control API Client", () => {
 
       capturedError = undefined;
       try {
-        await clientDomain.submitReviewCommand(sceneId, validCommand);
+        await clientDomain.submitReviewCommand(sceneId, validCommand, defaultReviewerIdentity);
       } catch (err) {
         capturedError = err;
       }
@@ -625,7 +686,7 @@ describe("Typed Control API Client", () => {
       });
 
       await expect(
-        clientMalformedSuccess.submitReviewCommand(sceneId, validCommand)
+        clientMalformedSuccess.submitReviewCommand(sceneId, validCommand, defaultReviewerIdentity)
       ).rejects.toThrow(ApiValidationError);
 
       // 2. 200 OK with non-JSON text
@@ -642,9 +703,9 @@ describe("Typed Control API Client", () => {
         fetchFn: nonJsonSuccessFetch
       });
 
-      await expect(clientNonJsonSuccess.submitReviewCommand(sceneId, validCommand)).rejects.toThrow(
-        ApiValidationError
-      );
+      await expect(
+        clientNonJsonSuccess.submitReviewCommand(sceneId, validCommand, defaultReviewerIdentity)
+      ).rejects.toThrow(ApiValidationError);
 
       // 3. 400 Bad Request with malformed error payload (e.g. unknown code or missing message)
       const malformedErrorFetch = vi.fn().mockResolvedValue({
@@ -661,9 +722,9 @@ describe("Typed Control API Client", () => {
         fetchFn: malformedErrorFetch
       });
 
-      await expect(clientMalformedError.submitReviewCommand(sceneId, validCommand)).rejects.toThrow(
-        ApiValidationError
-      );
+      await expect(
+        clientMalformedError.submitReviewCommand(sceneId, validCommand, defaultReviewerIdentity)
+      ).rejects.toThrow(ApiValidationError);
 
       // 4. 502 Bad Gateway with unstructured HTML/text (res.json() throws SyntaxError)
       const unstructured500Fetch = vi.fn().mockResolvedValue({
@@ -682,7 +743,7 @@ describe("Typed Control API Client", () => {
 
       let err500: unknown;
       try {
-        await client500.submitReviewCommand(sceneId, validCommand);
+        await client500.submitReviewCommand(sceneId, validCommand, defaultReviewerIdentity);
       } catch (err) {
         err500 = err;
       }
@@ -699,9 +760,9 @@ describe("Typed Control API Client", () => {
       });
 
       const mismatchedSceneId = "99999999-9999-9999-9999-999999999999";
-      await expect(client.submitReviewCommand(mismatchedSceneId, validCommand)).rejects.toThrow(
-        ApiValidationError
-      );
+      await expect(
+        client.submitReviewCommand(mismatchedSceneId, validCommand, defaultReviewerIdentity)
+      ).rejects.toThrow(ApiValidationError);
 
       expect(mockFetch).not.toHaveBeenCalled();
     });
@@ -720,9 +781,9 @@ describe("Typed Control API Client", () => {
         action: "unknown_action"
       } as unknown as ReviewCommand;
 
-      await expect(client.submitReviewCommand(sceneId, invalidCommand)).rejects.toThrow(
-        ApiValidationError
-      );
+      await expect(
+        client.submitReviewCommand(sceneId, invalidCommand, defaultReviewerIdentity)
+      ).rejects.toThrow(ApiValidationError);
 
       expect(mockFetch).not.toHaveBeenCalled();
     });
