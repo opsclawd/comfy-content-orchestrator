@@ -1,18 +1,21 @@
 import type { ReviewEvent } from "@cco/contracts";
-import type {
-  CampaignRecord,
-  CandidateId,
-  ClientRecord,
+import {
   Scene,
-  SceneId,
-  StoryboardCandidate
+  type CampaignRecord,
+  type CandidateId,
+  type ClientRecord,
+  type RenderJob,
+  type SceneId,
+  type StoryboardCandidate
 } from "@cco/domain";
 import type {
   CampaignRepository,
   ClientRepository,
+  EnqueueJobInput,
   ReviewEventStore,
   SceneRepository,
   StoryboardCandidateRepository,
+  TransactionalJobEnqueuer,
   UnitOfWork,
   UnitOfWorkContext
 } from "../ports/index.js";
@@ -27,6 +30,8 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _reviewEvents: ReviewEvent[] = [];
   private readonly _savedCampaigns: CampaignRecord[] = [];
   private readonly _savedClients: ClientRecord[] = [];
+  private readonly _enqueuedJobs: RenderJob[] = [];
+  private _jobEnqueuer?: TransactionalJobEnqueuer;
 
   constructor(
     seededScenes?: Iterable<Scene> | ReadonlyMap<SceneId, Scene> | Record<string, Scene>,
@@ -170,16 +175,65 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     return this._savedClients;
   }
 
+  get enqueuedJobs(): readonly RenderJob[] {
+    return this._enqueuedJobs;
+  }
+
+  withJobs(enqueuer: TransactionalJobEnqueuer): this {
+    this._jobEnqueuer = enqueuer;
+    return this;
+  }
+
   async execute<TResult>(work: (context: UnitOfWorkContext) => Promise<TResult>): Promise<TResult> {
+    const scopedSceneCopies = new Map<SceneId, Scene>();
+    for (const [id, scene] of this._seededScenes.entries()) {
+      scopedSceneCopies.set(id, Scene.reconstitute(scene.snapshot()));
+    }
+
     const stagedScenes: Scene[] = [];
     const stagedReviewEvents: ReviewEvent[] = [];
     const stagedCandidates: StoryboardCandidate[] = [];
     const stagedCampaigns: CampaignRecord[] = [];
     const stagedClients: ClientRecord[] = [];
+    const stagedJobs: RenderJob[] = [];
+
+    let scopedJobs: TransactionalJobEnqueuer | undefined;
+    if (this._jobEnqueuer !== undefined) {
+      const enqueuer = this._jobEnqueuer;
+      const isStagingQueue = (
+        candidate: unknown
+      ): candidate is {
+        createJob(input: EnqueueJobInput): RenderJob;
+        commitJob(job: RenderJob): void;
+      } => {
+        return (
+          typeof (candidate as Record<string, unknown>)?.createJob === "function" &&
+          typeof (candidate as Record<string, unknown>)?.commitJob === "function"
+        );
+      };
+
+      if (isStagingQueue(enqueuer)) {
+        scopedJobs = {
+          enqueue: async (input: EnqueueJobInput): Promise<RenderJob> => {
+            const job = enqueuer.createJob(input);
+            stagedJobs.push(job);
+            return job;
+          }
+        };
+      } else {
+        scopedJobs = {
+          enqueue: async (input: EnqueueJobInput): Promise<RenderJob> => {
+            const job = await enqueuer.enqueue(input);
+            stagedJobs.push(job);
+            return job;
+          }
+        };
+      }
+    }
 
     const scopedScenes: SceneRepository = {
       findById: async (sceneId: SceneId): Promise<Scene | undefined> => {
-        return this._seededScenes.get(sceneId);
+        return stagedScenes.find((scene) => scene.id === sceneId) ?? scopedSceneCopies.get(sceneId);
       },
       save: async (scene: Scene): Promise<void> => {
         stagedScenes.push(scene);
@@ -260,7 +314,8 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       reviewEvents: scopedReviewEvents,
       candidates: scopedCandidates,
       campaigns: scopedCampaigns,
-      clients: scopedClients
+      clients: scopedClients,
+      jobs: scopedJobs
     };
 
     const result = await work(context);
@@ -269,6 +324,15 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     this._reviewEvents.push(...stagedReviewEvents);
     this._savedCampaigns.push(...stagedCampaigns);
     this._savedClients.push(...stagedClients);
+    this._enqueuedJobs.push(...stagedJobs);
+    if (this._jobEnqueuer !== undefined) {
+      const enqueuer = this._jobEnqueuer as Record<string, unknown>;
+      if (typeof enqueuer.commitJob === "function") {
+        for (const job of stagedJobs) {
+          (enqueuer.commitJob as (j: RenderJob) => void)(job);
+        }
+      }
+    }
     for (const scene of stagedScenes) {
       this._seededScenes.set(scene.id, scene);
     }

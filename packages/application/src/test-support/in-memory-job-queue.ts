@@ -19,10 +19,10 @@ export class InMemoryJobQueue implements JobQueuePort {
     return this._jobs.filter((j) => j.status === "queued");
   }
 
-  async enqueue(input: EnqueueJobInput): Promise<RenderJob> {
+  createJob(input: EnqueueJobInput): RenderJob {
     const jobId = `018e69e0-8a6a-72cb-b1b7-${String(this._nextJobId++).padStart(12, "0")}` as JobId;
     const now = new Date();
-    const job: RenderJob = Object.freeze({
+    return Object.freeze({
       jobId,
       sceneId: input.sceneId,
       jobKind: input.jobKind,
@@ -38,7 +38,15 @@ export class InMemoryJobQueue implements JobQueuePort {
       createdAt: now,
       updatedAt: now
     });
+  }
+
+  commitJob(job: RenderJob): void {
     this._jobs.push(job);
+  }
+
+  async enqueue(input: EnqueueJobInput): Promise<RenderJob> {
+    const job = this.createJob(input);
+    this.commitJob(job);
     return job;
   }
 

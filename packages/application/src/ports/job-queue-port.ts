@@ -51,3 +51,5 @@ export interface JobQueuePort {
   fail(jobId: JobId, leaseToken: LeaseToken, errorTrace: string): Promise<JobMutationResult>;
   defer(jobId: JobId, leaseToken: LeaseToken, reason: string): Promise<JobMutationResult>;
 }
+
+export type TransactionalJobEnqueuer = Pick<JobQueuePort, "enqueue">;

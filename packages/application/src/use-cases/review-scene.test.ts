@@ -17,6 +17,7 @@ import type {
   UnitOfWorkContext
 } from "../ports/index.js";
 import { InMemorySceneUnitOfWork } from "../test-support/in-memory-scene-unit-of-work.js";
+import { InMemoryJobQueue } from "../test-support/in-memory-job-queue.js";
 import { CandidateNotFoundError } from "./candidate-not-found-error.js";
 import { ReviewSceneUseCases } from "./review-scene.js";
 import { SceneNotFoundError } from "./scene-not-found-error.js";
@@ -103,7 +104,7 @@ describe("ReviewSceneUseCases", () => {
 
   it("reroll: director_review transitions to generating_candidates and records reroll", async () => {
     const scene = createSceneInDirectorReview("scene-reroll-1");
-    const uow = new InMemorySceneUnitOfWork([scene]);
+    const uow = new InMemorySceneUnitOfWork([scene]).withJobs(new InMemoryJobQueue());
     const useCases = new ReviewSceneUseCases(uow);
 
     const input = {
@@ -133,6 +134,7 @@ describe("ReviewSceneUseCases", () => {
       resultingSceneStatus: "generating_candidates",
       occurredAt: "2026-08-15T02:00:00.000Z"
     });
+    expect(uow.enqueuedJobs).toHaveLength(3);
   });
 
   it("configuration edit: approved invalidates approval, advances revision, and records only the changed field", async () => {
@@ -626,7 +628,7 @@ describe("ReviewSceneUseCases", () => {
     it("storyboard rejection maps to requestReroll: clears candidate selection and emits reroll event", async () => {
       const scene = createSceneInDirectorReview("scene-reroll-clear");
       scene.selectCandidate("candidate-1" as CandidateId, scene.snapshot().specRevision, scene.id);
-      const uow = new InMemorySceneUnitOfWork([scene]);
+      const uow = new InMemorySceneUnitOfWork([scene]).withJobs(new InMemoryJobQueue());
       const useCases = new ReviewSceneUseCases(uow);
 
       await useCases.requestReroll({
