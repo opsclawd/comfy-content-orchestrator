@@ -456,6 +456,7 @@ export class Scene {
       "generating_candidates",
       "reroll_requested",
       () => {
+        this.#specRevision += 1;
         this.#selectedCandidateId = undefined;
         this.#selectedCandidateRevision = undefined;
       }
