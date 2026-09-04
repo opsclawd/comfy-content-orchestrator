@@ -1016,28 +1016,34 @@ describe("Campaign and Scene Creation End-to-End Integration", () => {
     expect(reviewRes.statusCode).toBe(200);
     const finalReviewBody = reviewRes.json() as SceneReviewDetailReadModel;
     expect(finalReviewBody.status).toBe("director_review");
-    expect(finalReviewBody.specRevision).toBe(2);
+    // specRevision is 3: the prompt_edit in step 2 bumped 1 -> 2, and the
+    // reroll in step 3 bumps 2 -> 3 (Scene.requestReroll() increments
+    // specRevision as of #179 — see packages/domain/src/scene.ts).
+    expect(finalReviewBody.specRevision).toBe(3);
 
-    // Review candidates are grouped by spec revision. Cycle-1 has 2 candidates,
-    // and cycle-2 has all 3 candidates.
+    // Review candidates are grouped by spec revision. Cycle-1 has 2 candidates
+    // at revision 1, and cycle-2 has all 3 candidates at revision 3 (the
+    // revision reroll actually left active; revision 2 was never used for any
+    // real candidate generation batch — its prompt_edit was immediately
+    // superseded by the reroll before any job could complete under it).
     expect(finalReviewBody.candidatesByRevision).toHaveLength(2);
     const rev1Group = finalReviewBody.candidatesByRevision.find((g) => g.specRevision === 1);
     expect(rev1Group).toBeDefined();
     expect(rev1Group?.candidates).toHaveLength(2);
 
-    const activeCandidates = finalReviewBody.candidatesByRevision.find((g) => g.specRevision === 2);
+    const activeCandidates = finalReviewBody.candidatesByRevision.find((g) => g.specRevision === 3);
     expect(activeCandidates).toBeDefined();
-    expect(activeCandidates?.specRevision).toBe(2);
+    expect(activeCandidates?.specRevision).toBe(3);
     expect(activeCandidates?.candidates).toHaveLength(3);
     const ordinals = activeCandidates!.candidates.map((c) => c.variantOrdinal).sort();
     expect(ordinals).toEqual([1, 2, 3]);
     for (const c of activeCandidates!.candidates) {
-      expect(c.specRevision).toBe(2);
+      expect(c.specRevision).toBe(3);
     }
 
     // Direct DB check on storyboard_candidates
     const candidatesInDb = await client.query<{ variant_ordinal: number }>(
-      "SELECT variant_ordinal FROM storyboard_candidates WHERE scene_id = $1 AND scene_spec_revision = 2 ORDER BY variant_ordinal ASC",
+      "SELECT variant_ordinal FROM storyboard_candidates WHERE scene_id = $1 AND scene_spec_revision = 3 ORDER BY variant_ordinal ASC",
       [sceneId]
     );
     expect(candidatesInDb.rows).toHaveLength(3);
