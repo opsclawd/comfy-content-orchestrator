@@ -446,9 +446,11 @@ describe("certify CLI", () => {
       outputDirectory: "/repo/certification/ltx-25/run-001",
       resultJsonPath: "/repo/certification/ltx-25/run-001/result.json",
       summaryMdPath: "/repo/certification/ltx-25/run-001/summary.md",
+      approvedProvenancePath: "/repo/certification/ltx-25/run-001/approved-provenance.json",
       relativeOutputDirectory: "certification/ltx-25/run-001",
       relativeResultJsonPath: "certification/ltx-25/run-001/result.json",
       relativeSummaryMdPath: "certification/ltx-25/run-001/summary.md",
+      relativeApprovedProvenancePath: "certification/ltx-25/run-001/approved-provenance.json",
       artifact: mockPassedArtifact
     }),
     ...overrides
@@ -723,8 +725,15 @@ describe("certify CLI", () => {
 
       expect(successExit).toBe(0);
       expect(successDeps.writeCertificationArtifacts).toHaveBeenCalledTimes(1);
+      expect(successDeps.writeCertificationArtifacts).toHaveBeenCalledWith(
+        expect.objectContaining({
+          liveProvenance: mockLiveProvenance,
+          profile: mockLtxProfile
+        })
+      );
       expect(successIo.stdoutLines.join(" ")).toContain("result.json");
       expect(successIo.stdoutLines.join(" ")).toContain("summary.md");
+      expect(successIo.stdoutLines.join(" ")).toContain("Approved Provenance:");
 
       // 2. Render failure / timeout outcome -> write failed artifact, print summary, exit 1
       const failureDeps = createStandardDependencies({

@@ -466,7 +466,7 @@ describe("Scene domain contracts", () => {
           sceneId: scene.id,
           from: tc.from,
           to: tc.to,
-          revision: 1,
+          revision: tc.reason === "reroll_requested" ? 2 : 1,
           reason: tc.reason
         });
         expect(Object.isFrozen(transition)).toBe(true);
@@ -1442,13 +1442,17 @@ describe("Scene domain contracts", () => {
       ).toThrow(InvalidTransitionError);
     });
 
-    it("requestReroll clears selected candidate and prevents approval until re-selected", () => {
+    it("requestReroll bumps specRevision, clears selected candidate and prevents approval until re-selected", () => {
       const scene = createReviewScene();
+      expect(scene.snapshot().specRevision).toBe(1);
       scene.selectCandidate("candidate-1" as CandidateId, scene.snapshot().specRevision, scene.id);
-      scene.requestReroll();
 
+      const transition = scene.requestReroll();
+
+      expect(transition.revision).toBe(2);
       const snapshot = scene.snapshot();
       expect(snapshot.status).toBe("generating_candidates");
+      expect(snapshot.specRevision).toBe(2);
       expect(snapshot.selectedCandidateId).toBeUndefined();
       expect(snapshot.selectedCandidateRevision).toBeUndefined();
     });

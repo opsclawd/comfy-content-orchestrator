@@ -6,9 +6,11 @@ import type { LtxCertificationArtifact } from "@cco/contracts";
 import { renderCertificationSummary } from "@cco/application";
 import {
   writeCertificationArtifacts,
+  buildApprovedProvenance,
   ArtifactWriterError,
   type WriteCertificationArtifactsResult
 } from "./artifact-writer.js";
+import type { CertificationProvenanceReport } from "@cco/infrastructure";
 
 function createValidPassedFixture(
   runId = "trinidad-rtx4090-dynamicvram-v1"
@@ -416,6 +418,80 @@ describe("artifact-writer", () => {
     const rawMd = await fs.readFile(result.summaryMdPath, "utf8");
     expect(rawMd).toContain("FAILED");
     expect(rawMd).toContain("ComfyUI execution failed on node 5");
+  });
+
+  it("generates approved-provenance.json on a passing run when liveProvenance or profile is provided", async () => {
+    const outputRoot = path.join(tempTestDir, "certification", "ltx-25");
+    const artifact = createValidPassedFixture("run-passed-prov");
+
+    const mockLiveProv = {
+      version: 1,
+      profileId: "ltx-25-720p-97f",
+      generatedAt: "2026-08-15T20:00:00.000Z",
+      workflow: {
+        relativePath: "ltx_25_720p_97f_api.json",
+        sha256: "a".repeat(64),
+        source: {
+          kind: "validated_host_export" as const,
+          uri: "https://example.com/comfyui/ltx",
+          revision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+          license: "GPL-3.0"
+        }
+      },
+      models: [],
+      git: { comfyUiCommit: "e".repeat(40), customNodes: [] },
+      disk: {
+        modelFootprintBytes: 3000,
+        availableBytes: 200_000_000_000,
+        requiredFreeBytes: 100_000_000_000,
+        modelFootprintGb: 3,
+        availableGb: 200,
+        minFreeDiskGb: 100,
+        passes: true
+      },
+      renderProfileProvenance: {
+        key: "LTX_25_720P_5S_V1" as const,
+        version: 1 as const,
+        engine: "ltx_25",
+        workflowHash: "a".repeat(64),
+        modelHashes: {
+          checkpoint: "b".repeat(64),
+          textEncoder: "c".repeat(64),
+          vae: "d".repeat(64)
+        },
+        frames: 97,
+        steps: 8,
+        runnerProfile: "dynamicvram-offload-v1",
+        measuredDiskFootprintGb: 3,
+        minFreeDiskGb: 100
+      }
+    } as unknown as CertificationProvenanceReport;
+
+    const result = await writeCertificationArtifacts({
+      outputRoot,
+      artifact,
+      repoRoot: tempTestDir,
+      liveProvenance: mockLiveProv
+    });
+
+    expect(result.approvedProvenancePath).toBeDefined();
+    const rawProv = await fs.readFile(result.approvedProvenancePath!, "utf8");
+    const parsedProv = JSON.parse(rawProv);
+
+    expect(parsedProv.version).toBe(1);
+    expect(parsedProv.profileId).toBe("ltx-25-720p-97f");
+    expect(parsedProv.workflow.sha256).toBe("a".repeat(64));
+    expect(parsedProv.workflow.source.revision).toBe("55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc");
+    expect(parsedProv.renderProfileProvenance.key).toBe("LTX_25_720P_5S_V1");
+  });
+
+  it("buildApprovedProvenance returns null for failed artifacts", () => {
+    const failedArtifact = {
+      ...createValidPassedFixture("failed-run"),
+      status: "failed" as const
+    } as LtxCertificationArtifact;
+
+    expect(buildApprovedProvenance(failedArtifact)).toBeNull();
   });
 
   it("rejects an invalid artifact schema before performing any filesystem operations", async () => {

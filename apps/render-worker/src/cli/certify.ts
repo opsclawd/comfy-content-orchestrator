@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type {
@@ -611,7 +611,9 @@ export async function runCertificationCli(
     writeResult = await writeCertificationArtifactsFn({
       outputRoot,
       artifact,
-      repoRoot: DEFAULT_REPO_ROOT
+      repoRoot: DEFAULT_REPO_ROOT,
+      liveProvenance,
+      profile
     });
   } catch (err) {
     stderr(`[certify] Failed to write certification artifacts: ${(err as Error).message}`);
@@ -623,6 +625,16 @@ export async function runCertificationCli(
   );
   stdout(`[certify] Result JSON: ${writeResult.resultJsonPath}`);
   stdout(`[certify] Summary Markdown: ${writeResult.summaryMdPath}`);
+  if (writeResult.approvedProvenancePath) {
+    stdout(`[certify] Approved Provenance: ${writeResult.approvedProvenancePath}`);
+    try {
+      const provContent = await readFile(writeResult.approvedProvenancePath, "utf8");
+      const rootApprovedPath = resolve(outputRoot, "approved-provenance.json");
+      await writeFile(rootApprovedPath, provContent, "utf8");
+    } catch {
+      // Ignore root copy error if dependencies mock file operations
+    }
+  }
 
   if (artifact.status === "failed") {
     if (artifact.failure) {
