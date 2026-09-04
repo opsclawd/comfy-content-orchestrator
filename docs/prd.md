@@ -1107,7 +1107,7 @@ No paying production campaign may be onboarded until all required gates pass.
 ### 9.2 Failure & Queue Semantics
 
 - [x] **ComfyUI Error Path Gate:** adapter handles execution error/interruption/timeout without hanging the worker process.
-- [ ] **Durable Lease Recovery Gate:** kill a PostgreSQL-leased worker and verify deterministic reassignment without duplicate completed manifests.
+- [ ] **Durable Lease Recovery Gate:** kill a PostgreSQL-leased worker and verify deterministic reassignment without duplicate completed manifests. *Application-level lease-recovery evidence is covered by `tests/integration/render-worker.integration.test.ts` ("recovers an expired rendering lease and persists exactly one production manifest"), using real Postgres and MinIO via Testcontainers: worker A is suspended mid-render, its lease is expired directly in Postgres, worker B reclaims and completes through the real claim path, exactly one manifest is asserted, and worker A's stale completion is fenced. The queue-layer half is additionally covered by `packages/infrastructure/src/postgres/repositories/postgres-job-queue.integration.test.ts`. The required production acceptance — killing `run-worker` mid-render against real ComfyUI/GPU hardware, allowing natural lease expiry, and verifying reassignment with exactly one durable manifest and output — remains operator-only and is tracked under issue #68.*
 - [ ] **API Failure Classification Gate:** confirm transient retry classes, immediate non-retryable classes, and no safety-refusal bypass. *Genuinely unbuilt as of 2026-09-03 — no retry/error-classification code exists anywhere, matching the current absence of any external provider clients. See issue #164.*
 
 ### 9.3 Product State, Review & Audit Integrity
