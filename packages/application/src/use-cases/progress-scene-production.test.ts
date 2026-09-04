@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   InvalidTransitionError,
   Scene,
@@ -12,7 +12,13 @@ import type {
   RenderEnginePort,
   RenderQueueReceipt
 } from "../ports/render-engine-port.js";
-import type { EnqueueJobInput } from "../ports/job-queue-port.js";
+import type {
+  EnqueueJobInput,
+  SceneRepository,
+  TransactionalJobEnqueuer,
+  UnitOfWork,
+  UnitOfWorkContext
+} from "../ports/index.js";
 import { InMemoryJobQueue } from "../test-support/in-memory-job-queue.js";
 import { InMemorySceneUnitOfWork } from "../test-support/in-memory-scene-unit-of-work.js";
 import {
@@ -537,5 +543,123 @@ describe("ProgressSceneProductionUseCases", () => {
     expect(uow.savedScenes).toHaveLength(0);
     expect(uow.reviewEvents).toHaveLength(0);
     expect(queue.jobs).toHaveLength(0);
+  });
+
+  describe("submitCandidatesForReviewIfBatchComplete", () => {
+    it("no-ops when context.jobs is undefined without throwing or saving", async () => {
+      const scene = createGeneratingCandidatesScene("scene-no-jobs");
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const useCases = new ProgressSceneProductionUseCases(uow);
+
+      await expect(
+        useCases.submitCandidatesForReviewIfBatchComplete("scene-no-jobs")
+      ).resolves.toBeUndefined();
+
+      expect(uow.savedScenes).toHaveLength(0);
+      expect(scene.status).toBe("generating_candidates");
+    });
+
+    it("no-ops when scene is not found without throwing", async () => {
+      const queue = new InMemoryJobQueue();
+      const uow = new InMemorySceneUnitOfWork().withJobs(queue);
+      const useCases = new ProgressSceneProductionUseCases(uow);
+
+      await expect(
+        useCases.submitCandidatesForReviewIfBatchComplete("non-existent-scene")
+      ).resolves.toBeUndefined();
+
+      expect(uow.savedScenes).toHaveLength(0);
+    });
+
+    it("no-ops and does not call areAllJobsTerminal if scene status is not generating_candidates", async () => {
+      const scene = createDirectorReviewScene("scene-already-review");
+      const areAllJobsTerminalSpy = vi.fn().mockResolvedValue(true);
+      const mockJobs: TransactionalJobEnqueuer = {
+        enqueue: vi.fn(),
+        areAllJobsTerminal: areAllJobsTerminalSpy
+      };
+      const uow = new InMemorySceneUnitOfWork([scene]).withJobs(mockJobs);
+      const useCases = new ProgressSceneProductionUseCases(uow);
+
+      await useCases.submitCandidatesForReviewIfBatchComplete("scene-already-review");
+
+      expect(areAllJobsTerminalSpy).not.toHaveBeenCalled();
+      expect(uow.savedScenes).toHaveLength(0);
+      expect(scene.status).toBe("director_review");
+    });
+
+    it("no-ops when areAllJobsTerminal returns false", async () => {
+      const scene = createGeneratingCandidatesScene("scene-pending-jobs");
+      const areAllJobsTerminalSpy = vi.fn().mockResolvedValue(false);
+      const mockJobs: TransactionalJobEnqueuer = {
+        enqueue: vi.fn(),
+        areAllJobsTerminal: areAllJobsTerminalSpy
+      };
+      const uow = new InMemorySceneUnitOfWork([scene]).withJobs(mockJobs);
+      const useCases = new ProgressSceneProductionUseCases(uow);
+
+      await useCases.submitCandidatesForReviewIfBatchComplete("scene-pending-jobs");
+
+      expect(areAllJobsTerminalSpy).toHaveBeenCalledWith("scene-pending-jobs", "candidate");
+      expect(uow.savedScenes).toHaveLength(0);
+      expect(scene.status).toBe("generating_candidates");
+    });
+
+    it("transitions scene to director_review and saves when areAllJobsTerminal returns true", async () => {
+      const scene = createGeneratingCandidatesScene("scene-all-terminal");
+      const areAllJobsTerminalSpy = vi.fn().mockResolvedValue(true);
+      const mockJobs: TransactionalJobEnqueuer = {
+        enqueue: vi.fn(),
+        areAllJobsTerminal: areAllJobsTerminalSpy
+      };
+      const uow = new InMemorySceneUnitOfWork([scene]).withJobs(mockJobs);
+      const useCases = new ProgressSceneProductionUseCases(uow);
+
+      await useCases.submitCandidatesForReviewIfBatchComplete("scene-all-terminal");
+
+      expect(areAllJobsTerminalSpy).toHaveBeenCalledWith("scene-all-terminal", "candidate");
+      expect(uow.savedScenes).toHaveLength(1);
+      expect(uow.savedScenes[0]?.status).toBe("director_review");
+    });
+
+    it("enforces call ordering: context.scenes.findById is called before context.jobs.areAllJobsTerminal", async () => {
+      const scene = createGeneratingCandidatesScene("scene-order-check");
+      const callLog: string[] = [];
+
+      const mockUow: UnitOfWork = {
+        execute: async (work) => {
+          const context: UnitOfWorkContext = {
+            scenes: {
+              findById: async (id) => {
+                callLog.push("scenes.findById");
+                return id === scene.id ? scene : undefined;
+              },
+              save: async () => {
+                callLog.push("scenes.save");
+              }
+            } as SceneRepository,
+            reviewEvents: { findById: async () => undefined, append: async () => {} },
+            candidates: {
+              findById: async () => undefined,
+              insert: async () => {},
+              listBySceneAndRevision: async () => []
+            },
+            jobs: {
+              enqueue: vi.fn(),
+              areAllJobsTerminal: async () => {
+                callLog.push("jobs.areAllJobsTerminal");
+                return true;
+              }
+            }
+          };
+          return work(context);
+        }
+      };
+
+      const useCases = new ProgressSceneProductionUseCases(mockUow);
+      await useCases.submitCandidatesForReviewIfBatchComplete("scene-order-check");
+
+      expect(callLog).toEqual(["scenes.findById", "jobs.areAllJobsTerminal", "scenes.save"]);
+    });
   });
 });

@@ -4,6 +4,7 @@ import {
   type CampaignRecord,
   type CandidateId,
   type ClientRecord,
+  type JobKind,
   type RenderJob,
   type SceneId,
   type StoryboardCandidate
@@ -205,6 +206,7 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       ): candidate is {
         createJob(input: EnqueueJobInput): RenderJob;
         commitJob(job: RenderJob): void;
+        areAllJobsTerminal?(sceneId: SceneId, jobKind: JobKind): Promise<boolean>;
       } => {
         return (
           typeof (candidate as Record<string, unknown>)?.createJob === "function" &&
@@ -218,6 +220,18 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
             const job = enqueuer.createJob(input);
             stagedJobs.push(job);
             return job;
+          },
+          areAllJobsTerminal: async (sceneId: SceneId, jobKind: JobKind): Promise<boolean> => {
+            if (typeof enqueuer.areAllJobsTerminal === "function") {
+              return enqueuer.areAllJobsTerminal(sceneId, jobKind);
+            }
+            const matching = stagedJobs.filter(
+              (j) => j.sceneId === sceneId && j.jobKind === jobKind
+            );
+            if (matching.length === 0) return false;
+            return matching.every(
+              (j) => j.status !== "queued" && j.status !== "leased" && j.status !== "rendering"
+            );
           }
         };
       } else {
@@ -226,6 +240,9 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
             const job = await enqueuer.enqueue(input);
             stagedJobs.push(job);
             return job;
+          },
+          areAllJobsTerminal: async (sceneId: SceneId, jobKind: JobKind): Promise<boolean> => {
+            return enqueuer.areAllJobsTerminal(sceneId, jobKind);
           }
         };
       }

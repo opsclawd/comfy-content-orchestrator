@@ -870,6 +870,9 @@ describe("Application capability ports contract tests", () => {
         },
         async defer() {
           return { outcome: "not_found" };
+        },
+        async areAllJobsTerminal() {
+          return false;
         }
       };
 
@@ -885,6 +888,40 @@ describe("Application capability ports contract tests", () => {
       expect(enqueued).toHaveLength(1);
       expect(enqueued[0]?.jobKind).toBe("candidate");
       expect(enqueued[0]?.workflowTemplate).toBe("flux-schnell-draft");
+    });
+
+    it("satisfies JobQueuePort areAllJobsTerminal contract with in-memory double", async () => {
+      const { InMemoryJobQueue } = await import("../test-support/in-memory-job-queue.js");
+      const queue = new InMemoryJobQueue();
+      const sceneId = "scene-test-1" as SceneId;
+
+      expect(await queue.areAllJobsTerminal(sceneId, "candidate")).toBe(false);
+
+      const job = await queue.enqueue({
+        sceneId,
+        jobKind: "candidate",
+        workflowTemplate: "flux-schnell-draft",
+        injectedPayload: { prompt: "test prompt", seed: 43, variantOrdinal: 1 }
+      });
+      expect(await queue.areAllJobsTerminal(sceneId, "candidate")).toBe(false);
+
+      const completedQueue = new InMemoryJobQueue();
+      completedQueue.seedJobs([
+        {
+          ...job,
+          status: "completed"
+        }
+      ]);
+      expect(await completedQueue.areAllJobsTerminal(sceneId, "candidate")).toBe(true);
+
+      completedQueue.seedJobs([
+        {
+          ...job,
+          jobId: "job-2" as JobId,
+          status: "failed"
+        }
+      ]);
+      expect(await completedQueue.areAllJobsTerminal(sceneId, "candidate")).toBe(true);
     });
   });
 });

@@ -11,6 +11,7 @@ import {
 } from "@cco/application";
 import { ControlApiConfigError } from "../../runtime-config.js";
 import { createControlApiApp } from "../app.js";
+import { createControlApiContainer } from "../types.js";
 
 class FakeUnitOfWork implements UnitOfWork {
   async execute<TResult>(work: (context: UnitOfWorkContext) => Promise<TResult>): Promise<TResult> {
@@ -89,6 +90,7 @@ function createFakeJobQueue(overrides?: Partial<JobQueuePort>): JobQueuePort {
     complete: vi.fn().mockResolvedValue({ outcome: "not_found" } as JobMutationResult),
     fail: vi.fn().mockResolvedValue({ outcome: "not_found" } as JobMutationResult),
     defer: vi.fn().mockResolvedValue({ outcome: "not_found" } as JobMutationResult),
+    areAllJobsTerminal: vi.fn().mockResolvedValue(false),
     ...overrides
   };
 }
@@ -1674,5 +1676,199 @@ describe("Job Dispatch Routes", () => {
     expect(queue.complete).not.toHaveBeenCalled();
 
     await app.close();
+  });
+
+  describe("Candidate batch review transition trigger on job complete and fail", () => {
+    function createAppWithSpiedProgress(
+      queue: JobQueuePort,
+      spy: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(undefined)
+    ) {
+      const container = createControlApiContainer({
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
+        jobQueue: queue
+      });
+      vi.spyOn(
+        container.useCases.progressSceneProduction,
+        "submitCandidatesForReviewIfBatchComplete"
+      ).mockImplementation(spy);
+      const app = createControlApiApp(container, {
+        jobDispatch: defaultDispatchConfig
+      });
+      return { app, spy };
+    }
+
+    it("triggers submitCandidatesForReviewIfBatchComplete on /complete with outcome applied and candidate job", async () => {
+      const queue = createFakeJobQueue({
+        complete: vi.fn().mockResolvedValue({ outcome: "applied", job: sampleCompletedJob })
+      });
+      const { app, spy } = createAppWithSpiedProgress(queue);
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/complete`,
+        payload: { leaseToken: sampleLeaseToken }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith(sampleCompletedJob.sceneId);
+      await app.close();
+    });
+
+    it("triggers submitCandidatesForReviewIfBatchComplete on /complete with outcome already_applied (worker retry)", async () => {
+      const queue = createFakeJobQueue({
+        complete: vi.fn().mockResolvedValue({ outcome: "already_applied", job: sampleCompletedJob })
+      });
+      const { app, spy } = createAppWithSpiedProgress(queue);
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/complete`,
+        payload: { leaseToken: sampleLeaseToken }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith(sampleCompletedJob.sceneId);
+      await app.close();
+    });
+
+    it("does not trigger on /fail when outcome is applied but job status is queued (retry remaining)", async () => {
+      const requeuedJob: RenderJob = {
+        ...sampleLeasedJob,
+        status: "queued"
+      };
+      const queue = createFakeJobQueue({
+        fail: vi.fn().mockResolvedValue({ outcome: "applied", job: requeuedJob })
+      });
+      const { app, spy } = createAppWithSpiedProgress(queue);
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/fail`,
+        payload: { leaseToken: sampleLeaseToken, errorTrace: "retrying" }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(spy).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("triggers submitCandidatesForReviewIfBatchComplete on /fail when retries exhausted (status failed)", async () => {
+      const failedJob: RenderJob = {
+        ...sampleLeasedJob,
+        status: "failed"
+      };
+      const queue = createFakeJobQueue({
+        fail: vi.fn().mockResolvedValue({ outcome: "applied", job: failedJob })
+      });
+      const { app, spy } = createAppWithSpiedProgress(queue);
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/fail`,
+        payload: { leaseToken: sampleLeaseToken, errorTrace: "retries exhausted" }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith(failedJob.sceneId);
+      await app.close();
+    });
+
+    it("triggers submitCandidatesForReviewIfBatchComplete on /fail with already_applied and status failed (worker retry)", async () => {
+      const failedJob: RenderJob = {
+        ...sampleLeasedJob,
+        status: "failed"
+      };
+      const queue = createFakeJobQueue({
+        fail: vi.fn().mockResolvedValue({ outcome: "already_applied", job: failedJob })
+      });
+      const { app, spy } = createAppWithSpiedProgress(queue);
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/fail`,
+        payload: { leaseToken: sampleLeaseToken, errorTrace: "retry after timeout" }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith(failedJob.sceneId);
+      await app.close();
+    });
+
+    it("does not trigger on /complete or /fail when jobKind is production", async () => {
+      const productionCompletedJob: RenderJob = {
+        ...sampleCompletedJob,
+        jobKind: "production"
+      };
+      const queueComplete = createFakeJobQueue({
+        complete: vi.fn().mockResolvedValue({ outcome: "applied", job: productionCompletedJob })
+      });
+      const { app: appComplete, spy: spyComplete } = createAppWithSpiedProgress(queueComplete);
+
+      await appComplete.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/complete`,
+        payload: { leaseToken: sampleLeaseToken }
+      });
+      expect(spyComplete).not.toHaveBeenCalled();
+      await appComplete.close();
+
+      const productionFailedJob: RenderJob = {
+        ...sampleCompletedJob,
+        jobKind: "production",
+        status: "failed"
+      };
+      const queueFail = createFakeJobQueue({
+        fail: vi.fn().mockResolvedValue({ outcome: "applied", job: productionFailedJob })
+      });
+      const { app: appFail, spy: spyFail } = createAppWithSpiedProgress(queueFail);
+
+      await appFail.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/fail`,
+        payload: { leaseToken: sampleLeaseToken, errorTrace: "error" }
+      });
+      expect(spyFail).not.toHaveBeenCalled();
+      await appFail.close();
+    });
+
+    it("propagates unswallowed error from submitCandidatesForReviewIfBatchComplete as 500 on /complete and /fail", async () => {
+      const queueComplete = createFakeJobQueue({
+        complete: vi.fn().mockResolvedValue({ outcome: "applied", job: sampleCompletedJob })
+      });
+      const { app: appComplete } = createAppWithSpiedProgress(
+        queueComplete,
+        vi.fn().mockRejectedValue(new Error("Simulated UoW failure in batch complete"))
+      );
+
+      const completeRes = await appComplete.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/complete`,
+        payload: { leaseToken: sampleLeaseToken }
+      });
+      expect(completeRes.statusCode).toBe(500);
+      await appComplete.close();
+
+      const failedJob: RenderJob = { ...sampleLeasedJob, status: "failed" };
+      const queueFail = createFakeJobQueue({
+        fail: vi.fn().mockResolvedValue({ outcome: "applied", job: failedJob })
+      });
+      const { app: appFail } = createAppWithSpiedProgress(
+        queueFail,
+        vi.fn().mockRejectedValue(new Error("Simulated UoW failure in batch complete"))
+      );
+
+      const failRes = await appFail.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/fail`,
+        payload: { leaseToken: sampleLeaseToken, errorTrace: "err" }
+      });
+      expect(failRes.statusCode).toBe(500);
+      await appFail.close();
+    });
   });
 });

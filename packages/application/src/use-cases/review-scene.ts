@@ -200,6 +200,13 @@ export class ReviewSceneUseCases {
     | { readonly isIdempotentReplay: true; readonly scene: Scene }
     | { readonly isIdempotentReplay: false; readonly scene: Scene }
   > {
+    // Scene mutations must serialize on the scene row before any other repository
+    // operation. PostgresSceneRepository applies FOR UPDATE for this lookup.
+    const scene = await context.scenes.findById(input.sceneId as SceneId);
+    if (scene === undefined) {
+      throw new SceneNotFoundError(input.sceneId);
+    }
+
     const existingEvent = await context.reviewEvents.findById(input.eventId);
     if (existingEvent !== undefined) {
       if (existingEvent.sceneId !== input.sceneId) {
@@ -213,20 +220,10 @@ export class ReviewSceneUseCases {
         throw new IdempotencyConflictError(input.eventId);
       }
 
-      const scene = await context.scenes.findById(input.sceneId as SceneId);
-      if (scene === undefined) {
-        throw new SceneNotFoundError(input.sceneId);
-      }
-
       return {
         isIdempotentReplay: true,
         scene
       };
-    }
-
-    const scene = await context.scenes.findById(input.sceneId as SceneId);
-    if (scene === undefined) {
-      throw new SceneNotFoundError(input.sceneId);
     }
 
     if (

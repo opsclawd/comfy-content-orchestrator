@@ -12,6 +12,7 @@ import {
   type CampaignId,
   type CandidateId,
   type JobId,
+  type JobKind,
   type RenderJob,
   type SceneId,
   type StoryboardCandidate
@@ -52,6 +53,14 @@ class TestJobQueue {
 
   commitJob(job: RenderJob): void {
     this.jobs.push(job);
+  }
+
+  async areAllJobsTerminal(sceneId: SceneId, jobKind: JobKind): Promise<boolean> {
+    const matching = this.jobs.filter((j) => j.sceneId === sceneId && j.jobKind === jobKind);
+    if (matching.length === 0) return false;
+    return matching.every(
+      (j) => j.status !== "queued" && j.status !== "leased" && j.status !== "rendering"
+    );
   }
 }
 
@@ -213,6 +222,9 @@ class InMemorySceneUnitOfWork implements UnitOfWork {
               const job = this._jobQueue!.createJob(input);
               stagedJobs.push(job);
               return job;
+            },
+            areAllJobsTerminal: async (sceneId, jobKind) => {
+              return this._jobQueue!.areAllJobsTerminal(sceneId, jobKind);
             }
           }
         : undefined

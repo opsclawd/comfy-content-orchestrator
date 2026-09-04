@@ -5,11 +5,17 @@ import type {
   JobMutationResult,
   JobQueuePort
 } from "../ports/job-queue-port.js";
-import type { JobId, LeaseToken, RenderJob } from "@cco/domain";
+import type { JobId, JobKind, LeaseToken, RenderJob, SceneId } from "@cco/domain";
 
 export class InMemoryJobQueue implements JobQueuePort {
   private readonly _jobs: RenderJob[] = [];
   private _nextJobId = 1;
+
+  seedJobs(jobs: Iterable<RenderJob>): void {
+    for (const job of jobs) {
+      this._jobs.push(job);
+    }
+  }
 
   get jobs(): readonly RenderJob[] {
     return this._jobs;
@@ -85,5 +91,16 @@ export class InMemoryJobQueue implements JobQueuePort {
 
   async defer(_jobId: JobId, _leaseToken: LeaseToken, _reason: string): Promise<JobMutationResult> {
     return { outcome: "not_found" };
+  }
+
+  async areAllJobsTerminal(sceneId: SceneId, jobKind: JobKind): Promise<boolean> {
+    const matching = this._jobs.filter((j) => j.sceneId === sceneId && j.jobKind === jobKind);
+    if (matching.length === 0) {
+      return false;
+    }
+    const pending = matching.filter(
+      (j) => j.status === "queued" || j.status === "leased" || j.status === "rendering"
+    );
+    return pending.length === 0;
   }
 }

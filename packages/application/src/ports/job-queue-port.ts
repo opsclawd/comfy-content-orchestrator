@@ -50,6 +50,7 @@ export interface JobQueuePort {
   ): Promise<JobMutationResult>;
   fail(jobId: JobId, leaseToken: LeaseToken, errorTrace: string): Promise<JobMutationResult>;
   defer(jobId: JobId, leaseToken: LeaseToken, reason: string): Promise<JobMutationResult>;
+  areAllJobsTerminal(sceneId: SceneId, jobKind: JobKind): Promise<boolean>;
 }
 
-export type TransactionalJobEnqueuer = Pick<JobQueuePort, "enqueue">;
+export type TransactionalJobEnqueuer = Pick<JobQueuePort, "enqueue" | "areAllJobsTerminal">;
