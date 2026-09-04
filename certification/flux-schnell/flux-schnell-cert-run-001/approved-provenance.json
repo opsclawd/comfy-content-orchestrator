@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "profileId": "flux-schnell-draft",
+  "workflow": {
+    "sha256": "af8528239790f6536ce7f0733f92095501fecfd8e919084a9decdded59e6ecf5",
+    "source": {
+      "kind": "validated_host_export",
+      "revision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+      "uri": "https://github.com/comfyanonymous/ComfyUI",
+      "license": "GPL-3.0"
+    }
+  },
+  "renderProfileProvenance": {
+    "key": "FLUX_SCHNELL_DRAFT_V1",
+    "version": 1,
+    "engine": "flux_schnell",
+    "frames": 1,
+    "steps": 4,
+    "workflowHash": "af8528239790f6536ce7f0733f92095501fecfd8e919084a9decdded59e6ecf5",
+    "modelHashes": {
+      "models/clip/clip_l.safetensors": "660c6f5b1abae9dc498ac2d21e1347d2abdb0cf6c0c0c8576cd796491d9a6cdd",
+      "models/clip/t5xxl_fp8_e4m3fn.safetensors": "7d330da4816157540d6bb7838bf63a0f02f573fc48ca4d8de34bb0cbfd514f09",
+      "models/diffusion_models/flux1-schnell.safetensors": "9403429e0052277ac2a87ad800adece5481eecefd9ed334e1f348723621d2a0a",
+      "models/vae/ae.safetensors": "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38"
+    }
+  },
+  "_provenanceNote": "Reshaped for GOLD_MASTER_PROVENANCE_PATH from the genuinely passed certification/flux-schnell/flux-schnell-cert-run-001/result.json (status: passed, generatedAt: 2026-08-16T23:20:11.643Z). All hash/identity values copied verbatim from that real cert run, not re-derived or fabricated."
+}

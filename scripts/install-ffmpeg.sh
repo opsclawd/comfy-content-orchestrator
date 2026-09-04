@@ -25,9 +25,9 @@ echo "Downloading FFmpeg ${FFMPEG_VERSION} static build from ${FFMPEG_DOWNLOAD_U
 TARBALL="${TMP_DIR}/ffmpeg-static.tar.xz"
 
 if command -v curl >/dev/null 2>&1; then
-  curl -sSL "${FFMPEG_DOWNLOAD_URL}" -o "${TARBALL}"
+  curl -fsSL -A "Mozilla/5.0 (X11; Linux x86_64)" "${FFMPEG_DOWNLOAD_URL}" -o "${TARBALL}"
 elif command -v wget >/dev/null 2>&1; then
-  wget -qO "${TARBALL}" "${FFMPEG_DOWNLOAD_URL}"
+  wget -qO "${TARBALL}" --user-agent="Mozilla/5.0 (X11; Linux x86_64)" "${FFMPEG_DOWNLOAD_URL}"
 else
   echo "Error: neither curl nor wget found." >&2
   exit 1

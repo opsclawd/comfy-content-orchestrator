@@ -1,5 +1,6 @@
 import { LtxCertificationArtifactSchema, type LtxCertificationArtifact } from "@cco/contracts";
 import { renderCertificationSummary } from "@cco/application";
+import type { CertificationProfile, CertificationProvenanceReport } from "@cco/infrastructure";
 import {
   publishArtifactPair,
   ArtifactWriterError,
@@ -16,6 +17,8 @@ export interface WriteCertificationArtifactsOptions {
   readonly artifact: unknown;
   readonly repoRoot?: string | undefined;
   readonly dependencies?: ArtifactWriterDependencies | undefined;
+  readonly liveProvenance?: CertificationProvenanceReport | undefined;
+  readonly profile?: CertificationProfile | undefined;
 }
 
 export interface WriteCertificationArtifactsResult extends PublishedArtifactPairResult {
@@ -28,8 +31,60 @@ function isOptionsObject(
   return typeof outputRootOrOptions === "object" && outputRootOrOptions !== null;
 }
 
+export function buildApprovedProvenance(
+  artifact: LtxCertificationArtifact,
+  liveProvenance?: CertificationProvenanceReport | undefined,
+  profile?: CertificationProfile | undefined
+): Record<string, unknown> | null {
+  if (artifact.status !== "passed") {
+    return null;
+  }
+
+  if (liveProvenance && liveProvenance.renderProfileProvenance) {
+    return {
+      version: 1,
+      profileId: liveProvenance.profileId,
+      workflow: {
+        sha256: liveProvenance.workflow.sha256,
+        source: liveProvenance.workflow.source
+      },
+      renderProfileProvenance: {
+        key: liveProvenance.renderProfileProvenance.key,
+        version: liveProvenance.renderProfileProvenance.version,
+        engine: liveProvenance.renderProfileProvenance.engine,
+        frames: liveProvenance.renderProfileProvenance.frames,
+        steps: liveProvenance.renderProfileProvenance.steps,
+        workflowHash: liveProvenance.renderProfileProvenance.workflowHash,
+        modelHashes: liveProvenance.renderProfileProvenance.modelHashes
+      }
+    };
+  }
+
+  if (profile && profile.source) {
+    return {
+      version: 1,
+      profileId: artifact.identity.profileId,
+      workflow: {
+        sha256: artifact.identity.workflowSha256,
+        source: profile.source
+      },
+      renderProfileProvenance: {
+        key: artifact.identity.renderProfileKey,
+        version: artifact.identity.renderProfileVersion,
+        engine: artifact.identity.engine,
+        frames: artifact.identity.frames,
+        steps: artifact.identity.steps,
+        workflowHash: artifact.identity.workflowSha256,
+        modelHashes: artifact.identity.modelSha256
+      }
+    };
+  }
+
+  return null;
+}
+
 /**
- * Atomically writes JSON and Markdown certification evidence to a run-scoped directory.
+ * Atomically writes JSON, Markdown, and approved provenance certification evidence to a run-scoped directory.
  *
  * Requirements:
  * 1. Validates artifact using LtxCertificationArtifactSchema before any write.
@@ -54,12 +109,16 @@ export async function writeCertificationArtifacts(
   let rawArtifact: unknown;
   let repoRoot: string | undefined;
   let dependencies: ArtifactWriterDependencies | undefined;
+  let liveProvenance: CertificationProvenanceReport | undefined;
+  let profile: CertificationProfile | undefined;
 
   if (isOptionsObject(outputRootOrOptions)) {
     outputRoot = outputRootOrOptions.outputRoot;
     rawArtifact = outputRootOrOptions.artifact;
     repoRoot = outputRootOrOptions.repoRoot;
     dependencies = outputRootOrOptions.dependencies;
+    liveProvenance = outputRootOrOptions.liveProvenance;
+    profile = outputRootOrOptions.profile;
   } else {
     outputRoot = outputRootOrOptions;
     rawArtifact = artifactArg;
@@ -80,10 +139,15 @@ export async function writeCertificationArtifacts(
 
   const validatedArtifact = parseResult.data;
 
-  // 2. Prepare formatted JSON and Markdown contents
+  // 2. Prepare formatted JSON, Markdown, and approved provenance contents
   const jsonContent = `${JSON.stringify(validatedArtifact, null, 2)}\n`;
   const summaryRaw = renderCertificationSummary(validatedArtifact);
   const markdownContent = summaryRaw.endsWith("\n") ? summaryRaw : `${summaryRaw}\n`;
+
+  const approvedObj = buildApprovedProvenance(validatedArtifact, liveProvenance, profile);
+  const approvedProvenanceContent = approvedObj
+    ? `${JSON.stringify(approvedObj, null, 2)}\n`
+    : undefined;
 
   // 3. Publish atomically through shared publisher
   const published = await publishArtifactPair({
@@ -91,6 +155,7 @@ export async function writeCertificationArtifacts(
     runId: validatedArtifact.runId,
     jsonContent,
     markdownContent,
+    approvedProvenanceContent,
     repoRoot,
     dependencies
   });

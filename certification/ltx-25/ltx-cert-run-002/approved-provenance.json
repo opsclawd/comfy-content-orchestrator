@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "profileId": "ltx-25-720p-97f",
+  "workflow": {
+    "sha256": "94f397eee3ad8b0cee000036119e524e8c7a012b88d79d00b74172df9d9bf539",
+    "source": {
+      "kind": "validated_host_export",
+      "uri": "https://github.com/comfyanonymous/ComfyUI",
+      "revision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+      "license": "GPL-3.0"
+    }
+  },
+  "renderProfileProvenance": {
+    "key": "LTX_25_720P_5S_V1",
+    "version": 1,
+    "engine": "ltx_25",
+    "frames": 97,
+    "steps": 8,
+    "workflowHash": "94f397eee3ad8b0cee000036119e524e8c7a012b88d79d00b74172df9d9bf539",
+    "modelHashes": {
+      "models/clip/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors": "09a89e084de1a149c3de60cfe9dfd3e5161967eb09eea39e806fcdeffdd568de",
+      "models/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors": "c4279eeff115cbeaca494bd2183e7d768c38fe85a184dc6afbb7159157c44334",
+      "models/vae/ltx-2.5-video-vae-conv-bf16.safetensors": "685b06ee3d9b2039647698fc4ea33175112462fc374e2777312c907897dfce8d"
+    }
+  },
+  "_provenanceNote": "Reshaped for GOLD_MASTER_PROVENANCE_PATH from the genuinely passed certification/ltx-25/ltx-cert-run-002/result.json (status: passed, generatedAt: 2026-08-16T15:45:48.417Z). All hash/identity values copied verbatim from that real cert run, not re-derived or fabricated."
+}
