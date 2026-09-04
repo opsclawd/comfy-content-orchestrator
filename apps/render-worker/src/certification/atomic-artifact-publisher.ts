@@ -190,9 +190,10 @@ export async function publishArtifactPair(
   // Construct and return result with absolute and relative paths
   const finalResultJsonPath = path.join(finalDir, "result.json");
   const finalSummaryMdPath = path.join(finalDir, "summary.md");
-  const finalApprovedProvenancePath = finalApprovedProvenance !== undefined
-    ? path.join(finalDir, "approved-provenance.json")
-    : undefined;
+  const finalApprovedProvenancePath =
+    finalApprovedProvenance !== undefined
+      ? path.join(finalDir, "approved-provenance.json")
+      : undefined;
   const resolvedRepoRoot = path.resolve(repoRoot ?? process.cwd());
 
   return {
@@ -203,7 +204,10 @@ export async function publishArtifactPair(
     ...(finalApprovedProvenancePath !== undefined
       ? {
           approvedProvenancePath: finalApprovedProvenancePath,
-          relativeApprovedProvenancePath: path.relative(resolvedRepoRoot, finalApprovedProvenancePath)
+          relativeApprovedProvenancePath: path.relative(
+            resolvedRepoRoot,
+            finalApprovedProvenancePath
+          )
         }
       : {}),
     relativeOutputDirectory: path.relative(resolvedRepoRoot, finalDir),

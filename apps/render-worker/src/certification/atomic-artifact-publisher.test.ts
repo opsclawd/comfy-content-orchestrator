@@ -203,7 +203,8 @@ describe("atomic-artifact-publisher", () => {
     const runId = "test-run-provenance";
     const jsonContent = JSON.stringify({ hello: "world" }, null, 2) + "\n";
     const markdownContent = "# Test Summary\n";
-    const approvedProvenanceContent = JSON.stringify({ version: 1, profileId: "ltx-25-720p-97f" }, null, 2) + "\n";
+    const approvedProvenanceContent =
+      JSON.stringify({ version: 1, profileId: "ltx-25-720p-97f" }, null, 2) + "\n";
 
     const result: PublishedArtifactPairResult = await publishArtifactPair({
       outputRoot,
@@ -218,7 +219,9 @@ describe("atomic-artifact-publisher", () => {
     const expectedProvPath = path.join(expectedDir, "approved-provenance.json");
 
     expect(result.approvedProvenancePath).toBe(expectedProvPath);
-    expect(result.relativeApprovedProvenancePath).toBe(path.relative(tempTestDir, expectedProvPath));
+    expect(result.relativeApprovedProvenancePath).toBe(
+      path.relative(tempTestDir, expectedProvPath)
+    );
 
     const readProv = await fs.readFile(expectedProvPath, "utf8");
     expect(readProv).toBe(approvedProvenanceContent);
