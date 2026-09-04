@@ -2480,6 +2480,95 @@ describe("PostgresJobQueue integration", () => {
         })
       ).rejects.toThrow("maxRetries must be a non-negative finite integer");
     });
+
+    describe("areAllJobsTerminal", () => {
+      it("returns false when no jobs exist for scene and kind", async () => {
+        const { sceneId } = await createTestScene();
+        const queue = new PostgresJobQueue(pool);
+        expect(await queue.areAllJobsTerminal(sceneId as SceneId, "candidate")).toBe(false);
+      });
+
+      it("returns true when all candidate jobs for a scene are completed", async () => {
+        const { sceneId } = await createTestScene();
+        const queue = new PostgresJobQueue(pool);
+        await insertRenderJobRecord(client, { sceneId, jobKind: "candidate", status: "completed" });
+        await insertRenderJobRecord(client, { sceneId, jobKind: "candidate", status: "completed" });
+        expect(await queue.areAllJobsTerminal(sceneId as SceneId, "candidate")).toBe(true);
+      });
+
+      it("returns true for a mix of completed and failed jobs", async () => {
+        const { sceneId } = await createTestScene();
+        const queue = new PostgresJobQueue(pool);
+        await insertRenderJobRecord(client, { sceneId, jobKind: "candidate", status: "completed" });
+        await insertRenderJobRecord(client, { sceneId, jobKind: "candidate", status: "failed" });
+        expect(await queue.areAllJobsTerminal(sceneId as SceneId, "candidate")).toBe(true);
+      });
+
+      it("returns false if any job is still queued, leased, or rendering", async () => {
+        const { sceneId } = await createTestScene();
+        const queue = new PostgresJobQueue(pool);
+        await insertRenderJobRecord(client, { sceneId, jobKind: "candidate", status: "completed" });
+        await insertRenderJobRecord(client, { sceneId, jobKind: "candidate", status: "queued" });
+        expect(await queue.areAllJobsTerminal(sceneId as SceneId, "candidate")).toBe(false);
+
+        const { sceneId: scene2 } = await createTestScene();
+        await insertRenderJobRecord(client, {
+          sceneId: scene2,
+          jobKind: "candidate",
+          status: "completed"
+        });
+        await insertRenderJobRecord(client, {
+          sceneId: scene2,
+          jobKind: "candidate",
+          status: "leased"
+        });
+        expect(await queue.areAllJobsTerminal(scene2 as SceneId, "candidate")).toBe(false);
+
+        const { sceneId: scene3 } = await createTestScene();
+        await insertRenderJobRecord(client, {
+          sceneId: scene3,
+          jobKind: "candidate",
+          status: "completed"
+        });
+        await insertRenderJobRecord(client, {
+          sceneId: scene3,
+          jobKind: "candidate",
+          status: "rendering"
+        });
+        expect(await queue.areAllJobsTerminal(scene3 as SceneId, "candidate")).toBe(false);
+      });
+
+      it("treats cancelled as terminal, not pending", async () => {
+        const { sceneId } = await createTestScene();
+        const queue = new PostgresJobQueue(pool);
+        await insertRenderJobRecord(client, { sceneId, jobKind: "candidate", status: "completed" });
+        await insertRenderJobRecord(client, { sceneId, jobKind: "candidate", status: "cancelled" });
+        expect(await queue.areAllJobsTerminal(sceneId as SceneId, "candidate")).toBe(true);
+      });
+
+      it("isolates candidate and production job kinds for the same scene", async () => {
+        const { sceneId } = await createTestScene();
+        const queue = new PostgresJobQueue(pool);
+        await insertRenderJobRecord(client, { sceneId, jobKind: "candidate", status: "completed" });
+        await insertRenderJobRecord(client, { sceneId, jobKind: "production", status: "queued" });
+
+        expect(await queue.areAllJobsTerminal(sceneId as SceneId, "candidate")).toBe(true);
+        expect(await queue.areAllJobsTerminal(sceneId as SceneId, "production")).toBe(false);
+      });
+
+      it("correctly coerces counts when scene has 10+ jobs across retries/cycles", async () => {
+        const { sceneId } = await createTestScene();
+        const queue = new PostgresJobQueue(pool);
+        for (let i = 0; i < 12; i++) {
+          await insertRenderJobRecord(client, {
+            sceneId,
+            jobKind: "candidate",
+            status: i % 2 === 0 ? "completed" : "failed"
+          });
+        }
+        expect(await queue.areAllJobsTerminal(sceneId as SceneId, "candidate")).toBe(true);
+      });
+    });
   });
 
   describe("PostgresTransactionalJobEnqueuer", () => {
@@ -2519,6 +2608,56 @@ describe("PostgresJobQueue integration", () => {
           [[job1.jobId, job2.jobId]]
         );
         expect(afterRollback.rows).toHaveLength(0);
+      } finally {
+        txClient.release();
+      }
+    });
+
+    it("areAllJobsTerminal inside transaction client returns identical results to pool-based query", async () => {
+      const { sceneId } = await createTestScene();
+      const poolQueue = new PostgresJobQueue(pool);
+      const txClient = await pool.connect();
+
+      try {
+        await txClient.query("BEGIN");
+        const enqueuer = new PostgresTransactionalJobEnqueuer(txClient);
+
+        // Initially no jobs
+        expect(await enqueuer.areAllJobsTerminal(sceneId as SceneId, "candidate")).toBe(false);
+
+        // Enqueue 2 candidate jobs inside transaction
+        await enqueuer.enqueue({
+          sceneId: sceneId as SceneId,
+          jobKind: "candidate",
+          workflowTemplate: "flux-schnell-draft",
+          injectedPayload: { seed: 201 }
+        });
+        await enqueuer.enqueue({
+          sceneId: sceneId as SceneId,
+          jobKind: "candidate",
+          workflowTemplate: "flux-schnell-draft",
+          injectedPayload: { seed: 202 }
+        });
+
+        // Inside tx, jobs are queued -> false
+        expect(await enqueuer.areAllJobsTerminal(sceneId as SceneId, "candidate")).toBe(false);
+
+        // Update jobs to completed inside transaction
+        await txClient.query("UPDATE render_jobs SET status = 'completed' WHERE scene_id = $1", [
+          sceneId
+        ]);
+        expect(await enqueuer.areAllJobsTerminal(sceneId as SceneId, "candidate")).toBe(true);
+
+        // Outside tx (poolQueue), uncommitted changes not visible yet
+        expect(await poolQueue.areAllJobsTerminal(sceneId as SceneId, "candidate")).toBe(false);
+
+        await txClient.query("COMMIT");
+
+        // Now visible to pool
+        expect(await poolQueue.areAllJobsTerminal(sceneId as SceneId, "candidate")).toBe(true);
+      } catch (err) {
+        await txClient.query("ROLLBACK").catch(() => {});
+        throw err;
       } finally {
         txClient.release();
       }

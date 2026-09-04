@@ -249,6 +249,7 @@ export const jobRoutes: FastifyPluginAsync<JobRoutesOptions> = async (
   if (!enforceStorageAdmission) {
     throw new Error("EnforceStorageAdmission use case is required for job routes");
   }
+  const progressSceneProduction = container.useCases.progressSceneProduction;
 
   fastify.post<{
     Body: {
@@ -341,6 +342,12 @@ export const jobRoutes: FastifyPluginAsync<JobRoutesOptions> = async (
             }
           | undefined
       );
+      if (
+        (result.outcome === "applied" || result.outcome === "already_applied") &&
+        result.job.jobKind === "candidate"
+      ) {
+        await progressSceneProduction.submitCandidatesForReviewIfBatchComplete(result.job.sceneId);
+      }
       return translateMutationResult(result, reply);
     } catch (error) {
       if (error instanceof StorageAdmissionUnavailableError) {
@@ -379,6 +386,13 @@ export const jobRoutes: FastifyPluginAsync<JobRoutesOptions> = async (
       request.body.leaseToken as LeaseToken,
       request.body.errorTrace
     );
+    if (
+      (result.outcome === "applied" || result.outcome === "already_applied") &&
+      result.job.jobKind === "candidate" &&
+      result.job.status === "failed"
+    ) {
+      await progressSceneProduction.submitCandidatesForReviewIfBatchComplete(result.job.sceneId);
+    }
     return translateMutationResult(result, reply);
   });
 

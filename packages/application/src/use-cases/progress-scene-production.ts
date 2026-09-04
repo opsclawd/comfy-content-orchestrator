@@ -91,6 +91,21 @@ export class ProgressSceneProductionUseCases {
     );
   }
 
+  async submitCandidatesForReviewIfBatchComplete(sceneId: string): Promise<void> {
+    await this.uow.execute(async (context) => {
+      const scene = await context.scenes.findById(sceneId as SceneId);
+      if (scene === undefined) return;
+      if (scene.status !== "generating_candidates") return;
+      if (context.jobs === undefined) return;
+
+      const allTerminal = await context.jobs.areAllJobsTerminal(sceneId as SceneId, "candidate");
+      if (!allTerminal) return;
+
+      scene.submitCandidatesForReview();
+      await context.scenes.save(scene);
+    });
+  }
+
   async queue(input: QueueSceneProductionInput): Promise<RenderQueueReceipt | undefined> {
     let engineProfileId: string | undefined;
 

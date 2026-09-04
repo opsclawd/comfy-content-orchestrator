@@ -58,7 +58,9 @@ class FakeUnitOfWork implements UnitOfWork {
       },
       jobs: this.jobs
         ? {
-            enqueue: async (input) => this.jobs!.enqueue(input)
+            enqueue: async (input) => this.jobs!.enqueue(input),
+            areAllJobsTerminal: async (sceneId, jobKind) =>
+              this.jobs!.areAllJobsTerminal(sceneId, jobKind)
           }
         : undefined
     };
@@ -139,7 +141,8 @@ function createRecordingJobQueue(): {
     heartbeat: vi.fn().mockResolvedValue({ outcome: "not_found" }),
     complete: vi.fn().mockResolvedValue({ outcome: "not_found" }),
     fail: vi.fn().mockResolvedValue({ outcome: "not_found" }),
-    defer: vi.fn().mockResolvedValue({ outcome: "not_found" })
+    defer: vi.fn().mockResolvedValue({ outcome: "not_found" }),
+    areAllJobsTerminal: vi.fn().mockResolvedValue(false)
   };
 
   return { queue, enqueuedInputs, enqueuedJobs };
@@ -306,7 +309,8 @@ describe("POST /api/scenes/:sceneId/generation-admission", () => {
       heartbeat: vi.fn().mockResolvedValue({ outcome: "not_found" }),
       complete: vi.fn().mockResolvedValue({ outcome: "not_found" }),
       fail: vi.fn().mockResolvedValue({ outcome: "not_found" }),
-      defer: vi.fn().mockResolvedValue({ outcome: "not_found" })
+      defer: vi.fn().mockResolvedValue({ outcome: "not_found" }),
+      areAllJobsTerminal: vi.fn().mockResolvedValue(false)
     };
     const uow = new FakeUnitOfWork([scene], failingQueue);
 

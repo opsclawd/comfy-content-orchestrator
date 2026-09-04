@@ -137,6 +137,58 @@ describe("ReviewSceneUseCases", () => {
     expect(uow.enqueuedJobs).toHaveLength(3);
   });
 
+  it("reroll locks the scene before checking idempotency", async () => {
+    const scene = createSceneInDirectorReview("scene-reroll-lock-order");
+    const callLog: string[] = [];
+    const uow: UnitOfWork = {
+      execute: async (work) =>
+        work({
+          scenes: {
+            findById: async () => {
+              callLog.push("scenes.findById");
+              return scene;
+            },
+            save: async () => {
+              callLog.push("scenes.save");
+            }
+          },
+          reviewEvents: {
+            findById: async () => {
+              callLog.push("reviewEvents.findById");
+              return undefined;
+            },
+            append: async () => {
+              callLog.push("reviewEvents.append");
+            }
+          },
+          candidates: {
+            findById: async () => undefined,
+            insert: async () => {},
+            listBySceneAndRevision: async () => []
+          },
+          jobs: {
+            enqueue: async () => {
+              callLog.push("jobs.enqueue");
+              return {} as never;
+            },
+            areAllJobsTerminal: async () => false
+          }
+        } as UnitOfWorkContext)
+    };
+
+    await new ReviewSceneUseCases(uow).requestReroll({
+      sceneId: scene.id,
+      eventId: "event-reroll-lock-order",
+      reviewerName: "Director Bob",
+      occurredAt: "2026-08-15T02:00:00.000Z"
+    });
+
+    expect(callLog[0]).toBe("scenes.findById");
+    expect(callLog.indexOf("scenes.findById")).toBeLessThan(
+      callLog.indexOf("reviewEvents.findById")
+    );
+  });
+
   it("configuration edit: approved invalidates approval, advances revision, and records only the changed field", async () => {
     const mutationCases = [
       {

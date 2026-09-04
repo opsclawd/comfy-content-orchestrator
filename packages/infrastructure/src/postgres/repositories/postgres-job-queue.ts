@@ -135,11 +135,34 @@ export async function insertRenderJob(
   return mapRenderJobRow(res.rows[0]!);
 }
 
+async function queryAllJobsTerminal(
+  queryable: Pick<Pool | PoolClient, "query">,
+  sceneId: SceneId,
+  jobKind: JobKind
+): Promise<boolean> {
+  const result = await queryable.query<{ total: string; pending: string }>(
+    `
+    SELECT
+      count(*) AS total,
+      count(*) FILTER (WHERE status IN ('queued', 'leased', 'rendering')) AS pending
+    FROM render_jobs
+    WHERE scene_id = $1 AND job_kind = $2
+    `,
+    [sceneId, jobKind]
+  );
+  const row = result.rows[0];
+  return Number(row?.total ?? 0) > 0 && Number(row?.pending ?? 0) === 0;
+}
+
 export class PostgresTransactionalJobEnqueuer implements TransactionalJobEnqueuer {
   constructor(private readonly client: PoolClient) {}
 
   async enqueue(input: EnqueueJobInput): Promise<RenderJob> {
     return insertRenderJob(this.client, input);
+  }
+
+  async areAllJobsTerminal(sceneId: SceneId, jobKind: JobKind): Promise<boolean> {
+    return queryAllJobsTerminal(this.client, sceneId, jobKind);
   }
 }
 
@@ -721,6 +744,10 @@ export class PostgresJobQueue implements JobQueuePort {
       };
     }
     return { outcome: "superseded" };
+  }
+
+  async areAllJobsTerminal(sceneId: SceneId, jobKind: JobKind): Promise<boolean> {
+    return queryAllJobsTerminal(this.pool, sceneId, jobKind);
   }
 
   private async insertCandidateRow(
