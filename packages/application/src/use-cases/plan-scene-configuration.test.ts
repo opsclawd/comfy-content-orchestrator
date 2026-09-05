@@ -15,6 +15,7 @@ import {
   PlanningSafetyRefusalError,
   PlanningProviderExhaustedError
 } from "./plan-scene-configuration-errors.js";
+import { SceneConfigurationValidationError } from "./validate-scene-configuration.js";
 import type { CreativeBrief } from "./planning-prompt.js";
 
 describe("PlanSceneConfigurationUseCase", () => {
@@ -932,6 +933,193 @@ describe("PlanSceneConfigurationUseCase", () => {
 
     expect(primary.calls).toHaveLength(2);
     expect(fallback.calls).toHaveLength(0); // OpenAI is NEVER called!
+  });
+
+  it("25. model response with durationMs unequal to targetDurationMs triggers corrective retry and succeeds when corrected", async () => {
+    const repo = createMockRepo(resolvedAssets);
+    const wrongDurationConfig = { ...validConfig, durationMs: 4000 };
+    const correctDurationConfig = { ...validConfig, durationMs: 5000 };
+
+    const primary = createMockClient("Anthropic", [
+      { kind: "success", rawText: JSON.stringify(wrongDurationConfig) },
+      { kind: "success", rawText: JSON.stringify(correctDurationConfig) }
+    ]);
+    const fallback = createMockClient("OpenAI", []);
+
+    const useCase = new PlanSceneConfigurationUseCase({
+      referenceAssetRepository: repo,
+      primaryClient: primary,
+      fallbackClient: fallback
+    });
+
+    const result = await useCase.execute({
+      brief,
+      campaignId: testCampaignId,
+      clientId: testClientId,
+      candidateReferenceAssetIds: [validAssetId1],
+      targetDurationMs: 5000,
+      externalProcessingPolicy: {
+        allowCloudPlanning: true,
+        allowedProviders: ["Anthropic", "OpenAI"]
+      }
+    });
+
+    expect(result.durationMs).toBe(5000);
+    expect(primary.calls).toHaveLength(2);
+    expect(primary.calls[1]?.userPrompt).toContain(
+      "durationMs 4000 does not match required targetDurationMs 5000"
+    );
+    expect(fallback.calls).toHaveLength(0);
+  });
+
+  it("26. targetDurationMs exceeding maxDurationMs throws SceneConfigurationValidationError synchronously without calling clients", async () => {
+    const repo = createMockRepo(resolvedAssets);
+    const primary = createMockClient("Anthropic", []);
+    const fallback = createMockClient("OpenAI", []);
+
+    const useCase = new PlanSceneConfigurationUseCase({
+      referenceAssetRepository: repo,
+      primaryClient: primary,
+      fallbackClient: fallback
+    });
+
+    await expect(
+      useCase.execute({
+        brief,
+        campaignId: testCampaignId,
+        clientId: testClientId,
+        candidateReferenceAssetIds: [validAssetId1],
+        maxDurationMs: 4000,
+        targetDurationMs: 5000,
+        externalProcessingPolicy: {
+          allowCloudPlanning: true,
+          allowedProviders: ["Anthropic", "OpenAI"]
+        }
+      })
+    ).rejects.toThrow(SceneConfigurationValidationError);
+
+    expect(primary.calls).toHaveLength(0);
+    expect(fallback.calls).toHaveLength(0);
+  });
+
+  it("31. allowCloudPlanning: false throws PlanningNotAuthorizedError without calling findByIds, even if repository throws", async () => {
+    let repoCalled = false;
+    const repo: ReferenceAssetRepository = {
+      listBySceneId: async () => [],
+      findByIds: vi.fn(async () => {
+        repoCalled = true;
+        throw new Error("Repository failure");
+      })
+    };
+    const primary = createMockClient("Anthropic", []);
+    const fallback = createMockClient("OpenAI", []);
+
+    const useCase = new PlanSceneConfigurationUseCase({
+      referenceAssetRepository: repo,
+      primaryClient: primary,
+      fallbackClient: fallback
+    });
+
+    await expect(
+      useCase.execute({
+        brief,
+        campaignId: testCampaignId,
+        clientId: testClientId,
+        candidateReferenceAssetIds: [validAssetId1],
+        externalProcessingPolicy: {
+          allowCloudPlanning: false,
+          allowedProviders: ["Anthropic", "OpenAI"]
+        }
+      })
+    ).rejects.toThrow(PlanningNotAuthorizedError);
+
+    expect(repoCalled).toBe(false);
+    expect(repo.findByIds).not.toHaveBeenCalled();
+    expect(primary.calls).toHaveLength(0);
+    expect(fallback.calls).toHaveLength(0);
+  });
+
+  it("32. repository lookup latency exceeding overallTimeoutMs exhausts deadline without calling model client", async () => {
+    const repo: ReferenceAssetRepository = {
+      listBySceneId: async () => [],
+      findByIds: vi.fn(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        return resolvedAssets;
+      })
+    };
+    const primary = createMockClient("Anthropic", [
+      { kind: "success", rawText: JSON.stringify(validConfig) }
+    ]);
+    const fallback = createMockClient("OpenAI", []);
+
+    const useCase = new PlanSceneConfigurationUseCase({
+      referenceAssetRepository: repo,
+      primaryClient: primary,
+      fallbackClient: fallback,
+      overallTimeoutMs: 20
+    });
+
+    await expect(
+      useCase.execute({
+        brief,
+        campaignId: testCampaignId,
+        clientId: testClientId,
+        candidateReferenceAssetIds: [validAssetId1],
+        externalProcessingPolicy: {
+          allowCloudPlanning: true,
+          allowedProviders: ["Anthropic", "OpenAI"]
+        },
+        overallTimeoutMs: 20
+      })
+    ).rejects.toThrow(PlanningProviderExhaustedError);
+
+    expect(primary.calls).toHaveLength(0);
+    expect(fallback.calls).toHaveLength(0);
+  });
+
+  it("33. repository lookup rejection after overallTimeoutMs propagates original repository error without converting to PlanningProviderExhaustedError", async () => {
+    class CustomDatabaseError extends Error {
+      constructor(message: string) {
+        super(message);
+        this.name = "CustomDatabaseError";
+      }
+    }
+
+    const repo: ReferenceAssetRepository = {
+      listBySceneId: async () => [],
+      findByIds: vi.fn(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        throw new CustomDatabaseError("Post-deadline database connection dropped");
+      })
+    };
+    const primary = createMockClient("Anthropic", [
+      { kind: "success", rawText: JSON.stringify(validConfig) }
+    ]);
+    const fallback = createMockClient("OpenAI", []);
+
+    const useCase = new PlanSceneConfigurationUseCase({
+      referenceAssetRepository: repo,
+      primaryClient: primary,
+      fallbackClient: fallback,
+      overallTimeoutMs: 20
+    });
+
+    await expect(
+      useCase.execute({
+        brief,
+        campaignId: testCampaignId,
+        clientId: testClientId,
+        candidateReferenceAssetIds: [validAssetId1],
+        externalProcessingPolicy: {
+          allowCloudPlanning: true,
+          allowedProviders: ["Anthropic", "OpenAI"]
+        },
+        overallTimeoutMs: 20
+      })
+    ).rejects.toThrow(CustomDatabaseError);
+
+    expect(primary.calls).toHaveLength(0);
+    expect(fallback.calls).toHaveLength(0);
   });
 });
 

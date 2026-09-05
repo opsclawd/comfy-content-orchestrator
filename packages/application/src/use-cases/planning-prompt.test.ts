@@ -82,4 +82,17 @@ describe("planning-prompt", () => {
     );
     expect(prompt.userPrompt).toContain("engineProfileId 'invalid' is not certified");
   });
+
+  it("includes exact duration requirement when targetDurationMs is specified", () => {
+    const prompt = buildPlanningPrompt({
+      brief,
+      campaignId,
+      resolvedReferenceAssets: [refAsset1],
+      targetDurationMs: 3500
+    });
+
+    expect(prompt.systemPrompt).toContain(
+      "durationMs: positive integer in milliseconds (must equal exactly 3500)."
+    );
+  });
 });

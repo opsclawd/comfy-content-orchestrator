@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  CampaignBeatSheetValidationError,
   IdempotencyConflictError,
   PlanningNotAuthorizedError,
   PlanningProviderExhaustedError,
   PlanningProviderNotConfiguredError,
   PlanningSafetyRefusalError,
+  SceneConfigurationValidationError,
   SceneCreationModeMismatchError,
   StaleRevisionConflictError
 } from "@cco/application";
@@ -94,6 +96,32 @@ describe("formatReviewError", () => {
       body: {
         code: "SCENE_CREATION_MODE_MISMATCH",
         message: "Submit creative brief instead"
+      }
+    });
+  });
+
+  it("maps SceneConfigurationValidationError to 400 VALIDATION_FAILURE", () => {
+    const err = new SceneConfigurationValidationError(
+      "targetDurationMs cannot exceed maxDurationMs"
+    );
+    expect(formatReviewError(err)).toEqual({
+      statusCode: 400,
+      body: {
+        code: "VALIDATION_FAILURE",
+        message: "targetDurationMs cannot exceed maxDurationMs"
+      }
+    });
+  });
+
+  it("maps CampaignBeatSheetValidationError to 400 VALIDATION_FAILURE", () => {
+    const err = new CampaignBeatSheetValidationError(
+      "targetTotalDurationMs cannot be less than totalScenes"
+    );
+    expect(formatReviewError(err)).toEqual({
+      statusCode: 400,
+      body: {
+        code: "VALIDATION_FAILURE",
+        message: "targetTotalDurationMs cannot be less than totalScenes"
       }
     });
   });

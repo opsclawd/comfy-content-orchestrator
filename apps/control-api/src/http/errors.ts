@@ -1,6 +1,7 @@
 import type { FastifyError, FastifyReply, FastifyRequest } from "fastify";
 import { ZodError } from "zod";
 import {
+  CampaignBeatSheetValidationError,
   CampaignNotFoundError,
   CandidateNotFoundError,
   ClientNotFoundError,
@@ -10,6 +11,7 @@ import {
   PlanningProviderExhaustedError,
   PlanningProviderNotConfiguredError,
   PlanningSafetyRefusalError,
+  SceneConfigurationValidationError,
   SceneCreationModeMismatchError,
   SceneNotFoundError,
   StaleRevisionConflictError
@@ -90,6 +92,19 @@ export function formatReviewError(error: unknown): {
       statusCode: 400,
       body: {
         code: "SCENE_CREATION_MODE_MISMATCH",
+        message: error.message
+      }
+    };
+  }
+
+  if (
+    error instanceof SceneConfigurationValidationError ||
+    error instanceof CampaignBeatSheetValidationError
+  ) {
+    return {
+      statusCode: 400,
+      body: {
+        code: "VALIDATION_FAILURE",
         message: error.message
       }
     };

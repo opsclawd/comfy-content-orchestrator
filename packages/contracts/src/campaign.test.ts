@@ -7,6 +7,9 @@ import {
   CreateSceneRequestSchema,
   CreativeBriefSchema,
   SceneCreateResponseSchema,
+  PlanCampaignBeatSheetRequestSchema,
+  CampaignBeatSchema,
+  CampaignBeatSheetResponseSchema,
   isCreateSceneBriefRequest,
   isCreateSceneManualRequest
 } from "./campaign.js";
@@ -217,13 +220,47 @@ describe("Campaign and Scene Creation Contracts", () => {
           requirements: ["Feature steel drums"]
         },
         candidateReferenceAssetIds: ["018e69e0-8a6a-72cb-b1b7-ec79a1f73802"],
-        maxDurationMs: 6000
+        maxDurationMs: 6000,
+        targetDurationMs: 4500
       };
 
       const parsed = CreateSceneRequestSchema.parse(payload);
       expect(parsed).toEqual(payload);
       expect(isCreateSceneBriefRequest(parsed)).toBe(true);
       expect(isCreateSceneManualRequest(parsed)).toBe(false);
+    });
+
+    it("rejects non-positive or non-integer targetDurationMs", () => {
+      expect(() =>
+        CreateSceneRequestSchema.parse({
+          brief: { description: "Test" },
+          targetDurationMs: 0
+        })
+      ).toThrow();
+
+      expect(() =>
+        CreateSceneRequestSchema.parse({
+          brief: { description: "Test" },
+          targetDurationMs: -100
+        })
+      ).toThrow();
+
+      expect(() =>
+        CreateSceneRequestSchema.parse({
+          brief: { description: "Test" },
+          targetDurationMs: 3500.5
+        })
+      ).toThrow();
+    });
+
+    it("rejects contradictory payload where targetDurationMs > maxDurationMs", () => {
+      expect(() =>
+        CreateSceneRequestSchema.parse({
+          brief: { description: "Test" },
+          maxDurationMs: 3000,
+          targetDurationMs: 4000
+        })
+      ).toThrow();
     });
 
     it("parses minimal brief request without optional fields", () => {
@@ -330,6 +367,126 @@ describe("Campaign and Scene Creation Contracts", () => {
             engineProfileId: "ltx_25",
             durationMs: 5000
           }
+        })
+      ).toThrow();
+    });
+  });
+
+  describe("PlanCampaignBeatSheetRequestSchema", () => {
+    it("parses valid payload with all fields", () => {
+      const payload = {
+        brief: {
+          title: "Summer Beat Plan",
+          description: "High energy summer product video"
+        },
+        targetTotalDurationMs: 10000,
+        candidateReferenceAssetIds: ["018e69e0-8a6a-72cb-b1b7-ec79a1f73802"]
+      };
+
+      const parsed = PlanCampaignBeatSheetRequestSchema.parse(payload);
+      expect(parsed).toEqual(payload);
+    });
+
+    it("parses valid payload without optional candidateReferenceAssetIds", () => {
+      const payload = {
+        brief: {
+          description: "Minimal brief description"
+        },
+        targetTotalDurationMs: 5000
+      };
+
+      const parsed = PlanCampaignBeatSheetRequestSchema.parse(payload);
+      expect(parsed).toEqual(payload);
+    });
+
+    it("rejects non-positive targetTotalDurationMs", () => {
+      expect(() =>
+        PlanCampaignBeatSheetRequestSchema.parse({
+          brief: { description: "Test" },
+          targetTotalDurationMs: 0
+        })
+      ).toThrow();
+
+      expect(() =>
+        PlanCampaignBeatSheetRequestSchema.parse({
+          brief: { description: "Test" },
+          targetTotalDurationMs: -5000
+        })
+      ).toThrow();
+    });
+
+    it("rejects extra unknown fields (.strict)", () => {
+      expect(() =>
+        PlanCampaignBeatSheetRequestSchema.parse({
+          brief: { description: "Test" },
+          targetTotalDurationMs: 5000,
+          unexpected: true
+        })
+      ).toThrow();
+    });
+  });
+
+  describe("CampaignBeatSchema", () => {
+    it("parses valid beat with required fields", () => {
+      const payload = {
+        ordinal: 1,
+        brief: {
+          description: "A fast reveal of the vehicle"
+        },
+        targetDurationMs: 2500
+      };
+      const parsed = CampaignBeatSchema.parse(payload);
+      expect(parsed).toEqual(payload);
+    });
+
+    it("rejects non-positive ordinal or targetDurationMs", () => {
+      expect(() =>
+        CampaignBeatSchema.parse({
+          ordinal: 0,
+          brief: { description: "Valid brief" },
+          targetDurationMs: 2500
+        })
+      ).toThrow();
+
+      expect(() =>
+        CampaignBeatSchema.parse({
+          ordinal: 1,
+          brief: { description: "Valid brief" },
+          targetDurationMs: -100
+        })
+      ).toThrow();
+    });
+  });
+
+  describe("CampaignBeatSheetResponseSchema", () => {
+    it("parses valid beat sheet response", () => {
+      const payload = {
+        campaignId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73800",
+        targetTotalDurationMs: 5000,
+        beats: [
+          {
+            ordinal: 1,
+            brief: { description: "Beat 1" },
+            targetDurationMs: 2500
+          },
+          {
+            ordinal: 2,
+            brief: { description: "Beat 2" },
+            targetDurationMs: 2500
+          }
+        ]
+      };
+
+      const parsed = CampaignBeatSheetResponseSchema.parse(payload);
+      expect(parsed).toEqual(payload);
+    });
+
+    it("rejects non-UUID campaignId", () => {
+      expect(() =>
+        CampaignBeatSheetResponseSchema.parse({
+          campaignId: "not-a-uuid",
+          targetTotalDurationMs: 5000,
+          beats: []
         })
       ).toThrow();
     });

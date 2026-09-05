@@ -133,6 +133,35 @@ describe("SubmitSceneCreationUseCase", () => {
     expect(uow.savedScenes).toHaveLength(1);
   });
 
+  it("forwards targetDurationMs to planSceneConfiguration.execute", async () => {
+    const uow = createSeededUow(cloudEnabledPolicy);
+    const createScene = new CreateSceneUseCase(uow);
+    const planExecuteSpy = vi.fn().mockResolvedValue(samplePlannedConfig);
+    const fakePlanSceneUseCase = {
+      execute: planExecuteSpy
+    } as unknown as PlanSceneConfigurationUseCase;
+
+    const useCase = new SubmitSceneCreationUseCase({
+      uow,
+      createScene,
+      planSceneConfiguration: fakePlanSceneUseCase
+    });
+
+    await useCase.execute({
+      campaignId: validCampaignId,
+      kind: "brief",
+      brief: sampleBrief,
+      targetDurationMs: 4000
+    });
+
+    expect(planExecuteSpy).toHaveBeenCalledTimes(1);
+    expect(planExecuteSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetDurationMs: 4000
+      })
+    );
+  });
+
   it("cloud-enabled + manual body throws SceneCreationModeMismatchError without planning or scene creation", async () => {
     const uow = createSeededUow(cloudEnabledPolicy);
     const createScene = new CreateSceneUseCase(uow);

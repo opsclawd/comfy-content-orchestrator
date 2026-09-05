@@ -487,5 +487,521 @@ describe("Campaign and Scene Creation HTTP Routes", () => {
       const body = response.json();
       expect(body.code).toBe("SCENE_CREATION_MODE_MISMATCH");
     });
+
+    it("creates a scene preserving targetDurationMs from approved beat brief", async () => {
+      const cloudClient: ClientRecord = {
+        id: validClientId,
+        companyName: "Cloud Corp",
+        brandBibleJson: {},
+        defaultAspectRatio: "9:16",
+        externalProcessingPolicy: {
+          allowCloudPlanning: true,
+          allowCloudVisualQA: true,
+          allowCloudVoice: true,
+          allowedProviders: ["Anthropic", "OpenAI"],
+          sensitiveDataMasking: true
+        },
+        createdAt: "2026-09-03T12:00:00.000Z",
+        updatedAt: "2026-09-03T12:00:00.000Z"
+      };
+
+      const plannedConfigWithTarget = {
+        prompt: "AI generated cinematic hero shot of electric scooter",
+        referenceIds: [],
+        engineProfileId: "LTX_25_720P_5S_V1",
+        durationMs: 3500,
+        loraConfigurationId: null
+      };
+
+      const uow = new FakeCampaignUnitOfWork([seededCampaign], undefined, [cloudClient]);
+      const mockPrimary: PlanningModelClientPort = {
+        providerName: "Anthropic",
+        complete: async () => ({
+          kind: "success",
+          rawText: JSON.stringify(plannedConfigWithTarget)
+        })
+      };
+      const mockFallback: PlanningModelClientPort = {
+        providerName: "OpenAI",
+        complete: async () => ({
+          kind: "success",
+          rawText: JSON.stringify(plannedConfigWithTarget)
+        })
+      };
+      const mockAssetRepo: ReferenceAssetRepository = {
+        listBySceneId: async () => [],
+        findByIds: async () => []
+      };
+
+      const app = createControlApiApp({
+        uow,
+        planningModelClients: {
+          primary: mockPrimary,
+          fallback: mockFallback
+        },
+        referenceAssetRepository: mockAssetRepo
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/campaigns/${validCampaignId}/scenes`,
+        payload: {
+          brief: {
+            title: "Beat 1 Scene",
+            description: "Opening shot of dawn breaking"
+          },
+          targetDurationMs: 3500
+        }
+      });
+
+      expect(response.statusCode).toBe(201);
+      const body = response.json();
+      expect(body.configuration.durationMs).toBe(3500);
+      expect(uow.savedScenes[0]?.snapshot().configuration.durationMs).toBe(3500);
+    });
+
+    it("returns 400 VALIDATION_FAILURE when targetDurationMs > maxDurationMs without calling provider or repository", async () => {
+      let providerCalls = 0;
+      let repositoryCalls = 0;
+      const mockPrimary: PlanningModelClientPort = {
+        providerName: "Anthropic",
+        complete: async () => {
+          providerCalls++;
+          return { kind: "success", rawText: "{}" };
+        }
+      };
+      const mockFallback: PlanningModelClientPort = {
+        providerName: "OpenAI",
+        complete: async () => {
+          providerCalls++;
+          return { kind: "success", rawText: "{}" };
+        }
+      };
+      const mockAssetRepo: ReferenceAssetRepository = {
+        listBySceneId: async () => [],
+        findByIds: async () => {
+          repositoryCalls++;
+          return [];
+        }
+      };
+
+      const clientWithCloud: ClientRecord = {
+        id: validClientId,
+        companyName: "Cloud Corp",
+        brandBibleJson: {},
+        defaultAspectRatio: "9:16",
+        externalProcessingPolicy: {
+          allowCloudPlanning: true,
+          allowCloudVisualQA: true,
+          allowCloudVoice: true,
+          allowedProviders: ["Anthropic", "OpenAI"],
+          sensitiveDataMasking: true
+        },
+        createdAt: "2026-09-03T12:00:00.000Z",
+        updatedAt: "2026-09-03T12:00:00.000Z"
+      };
+
+      const app = createControlApiApp({
+        uow: new FakeCampaignUnitOfWork([seededCampaign], undefined, [clientWithCloud]),
+        planningModelClients: {
+          primary: mockPrimary,
+          fallback: mockFallback
+        },
+        referenceAssetRepository: mockAssetRepo
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/campaigns/${validCampaignId}/scenes`,
+        payload: {
+          brief: {
+            title: "Contradictory Scene",
+            description: "Duration test"
+          },
+          maxDurationMs: 3000,
+          targetDurationMs: 4000
+        }
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = response.json();
+      expect(body.code).toBe("VALIDATION_FAILURE");
+      expect(providerCalls).toBe(0);
+      expect(repositoryCalls).toBe(0);
+    });
+  });
+
+  describe("POST /api/campaigns/:campaignId/beat-sheet", () => {
+    const cloudClient: ClientRecord = {
+      id: validClientId,
+      companyName: "Cloud Corp",
+      brandBibleJson: {},
+      defaultAspectRatio: "9:16",
+      externalProcessingPolicy: {
+        allowCloudPlanning: true,
+        allowCloudVisualQA: true,
+        allowCloudVoice: true,
+        allowedProviders: ["Anthropic", "OpenAI"],
+        sensitiveDataMasking: true
+      },
+      createdAt: "2026-09-03T12:00:00.000Z",
+      updatedAt: "2026-09-03T12:00:00.000Z"
+    };
+
+    const campaignWith3Scenes: CampaignRecord = {
+      ...seededCampaign,
+      totalScenes: 3
+    };
+
+    const validBeatSheetModelOutput = {
+      beats: [
+        {
+          ordinal: 1,
+          brief: {
+            title: "Hook",
+            description: "Close-up of wheels lighting up"
+          },
+          targetDurationMs: 2500
+        },
+        {
+          ordinal: 2,
+          brief: {
+            title: "Action",
+            description: "Rider navigating city traffic at night"
+          },
+          targetDurationMs: 5000
+        },
+        {
+          ordinal: 3,
+          brief: {
+            title: "Call to Action",
+            description: "Product lockup and preorder URL"
+          },
+          targetDurationMs: 2500
+        }
+      ]
+    };
+
+    it("proposes beat sheet with exactly campaign.totalScenes beats and 200 without creating scenes or mutating campaign", async () => {
+      const uow = new FakeCampaignUnitOfWork([campaignWith3Scenes], undefined, [cloudClient]);
+      const mockPrimary: PlanningModelClientPort = {
+        providerName: "Anthropic",
+        complete: async () => ({
+          kind: "success",
+          rawText: JSON.stringify(validBeatSheetModelOutput)
+        })
+      };
+      const mockFallback: PlanningModelClientPort = {
+        providerName: "OpenAI",
+        complete: async () => ({
+          kind: "success",
+          rawText: JSON.stringify(validBeatSheetModelOutput)
+        })
+      };
+      const mockAssetRepo: ReferenceAssetRepository = {
+        listBySceneId: async () => [],
+        findByIds: async () => []
+      };
+
+      const app = createControlApiApp({
+        uow,
+        planningModelClients: {
+          primary: mockPrimary,
+          fallback: mockFallback
+        },
+        referenceAssetRepository: mockAssetRepo
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/campaigns/${validCampaignId}/beat-sheet`,
+        payload: {
+          brief: {
+            title: "10s Product Teaser",
+            description: "High-energy commercial launching our new scooter",
+            targetPlatform: "tiktok"
+          },
+          targetTotalDurationMs: 10000
+        }
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(body.campaignId).toBe(validCampaignId);
+      expect(body.targetTotalDurationMs).toBe(10000);
+      expect(body.beats).toHaveLength(3);
+      expect(body.beats[0]?.ordinal).toBe(1);
+      expect(body.beats[0]?.targetDurationMs).toBe(2500);
+      expect(body.beats[1]?.ordinal).toBe(2);
+      expect(body.beats[1]?.targetDurationMs).toBe(5000);
+      expect(body.beats[2]?.ordinal).toBe(3);
+      expect(body.beats[2]?.targetDurationMs).toBe(2500);
+
+      // Invariant: no scenes created, no campaign mutations
+      expect(uow.savedScenes).toHaveLength(0);
+      expect(uow.savedCampaigns).toEqual([campaignWith3Scenes]);
+    });
+
+    it("returns 403 CLOUD_PLANNING_NOT_AUTHORIZED when client has allowCloudPlanning: false", async () => {
+      // Default seededClient in FakeCampaignUnitOfWork has allowCloudPlanning: false
+      const uow = new FakeCampaignUnitOfWork([campaignWith3Scenes]);
+      const mockPrimary: PlanningModelClientPort = {
+        providerName: "Anthropic",
+        complete: async () => ({
+          kind: "success",
+          rawText: JSON.stringify(validBeatSheetModelOutput)
+        })
+      };
+      const mockFallback: PlanningModelClientPort = {
+        providerName: "OpenAI",
+        complete: async () => ({
+          kind: "success",
+          rawText: JSON.stringify(validBeatSheetModelOutput)
+        })
+      };
+      const app = createControlApiApp({
+        uow,
+        planningModelClients: {
+          primary: mockPrimary,
+          fallback: mockFallback
+        },
+        referenceAssetRepository: { listBySceneId: async () => [], findByIds: async () => [] }
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/campaigns/${validCampaignId}/beat-sheet`,
+        payload: {
+          brief: {
+            description: "High-energy teaser"
+          },
+          targetTotalDurationMs: 10000
+        }
+      });
+
+      expect(response.statusCode).toBe(403);
+      const body = response.json();
+      expect(body.code).toBe("CLOUD_PLANNING_NOT_AUTHORIZED");
+    });
+
+    it("returns 404 NOT_FOUND when campaign does not exist", async () => {
+      const uow = new FakeCampaignUnitOfWork([], undefined, [cloudClient]);
+      const app = createControlApiApp({
+        uow,
+        planningModelClients: {
+          primary: {
+            providerName: "Anthropic",
+            complete: async () => ({ kind: "success", rawText: "{}" })
+          },
+          fallback: {
+            providerName: "OpenAI",
+            complete: async () => ({ kind: "success", rawText: "{}" })
+          }
+        },
+        referenceAssetRepository: { listBySceneId: async () => [], findByIds: async () => [] }
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/campaigns/${validCampaignId}/beat-sheet`,
+        payload: {
+          brief: { description: "Teaser" },
+          targetTotalDurationMs: 10000
+        }
+      });
+
+      expect(response.statusCode).toBe(404);
+      expect(response.json().code).toBe("NOT_FOUND");
+    });
+
+    it("returns 400 VALIDATION_FAILURE when targetTotalDurationMs is non-positive or brief is empty", async () => {
+      const uow = new FakeCampaignUnitOfWork([campaignWith3Scenes], undefined, [cloudClient]);
+      const app = createControlApiApp({
+        uow,
+        planningModelClients: {
+          primary: {
+            providerName: "Anthropic",
+            complete: async () => ({ kind: "success", rawText: "{}" })
+          },
+          fallback: {
+            providerName: "OpenAI",
+            complete: async () => ({ kind: "success", rawText: "{}" })
+          }
+        },
+        referenceAssetRepository: { listBySceneId: async () => [], findByIds: async () => [] }
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/campaigns/${validCampaignId}/beat-sheet`,
+        payload: {
+          brief: { description: "" },
+          targetTotalDurationMs: 0
+        }
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json().code).toBe("VALIDATION_FAILURE");
+    });
+
+    it("returns 400 VALIDATION_FAILURE when targetTotalDurationMs < campaign.totalScenes without provider or repository calls", async () => {
+      let providerCalls = 0;
+      let repositoryCalls = 0;
+      const mockPrimary: PlanningModelClientPort = {
+        providerName: "Anthropic",
+        complete: async () => {
+          providerCalls++;
+          return { kind: "success", rawText: "{}" };
+        }
+      };
+      const mockFallback: PlanningModelClientPort = {
+        providerName: "OpenAI",
+        complete: async () => {
+          providerCalls++;
+          return { kind: "success", rawText: "{}" };
+        }
+      };
+      const mockAssetRepo: ReferenceAssetRepository = {
+        listBySceneId: async () => [],
+        findByIds: async () => {
+          repositoryCalls++;
+          return [];
+        }
+      };
+
+      const uow = new FakeCampaignUnitOfWork([campaignWith3Scenes], undefined, [cloudClient]);
+      const app = createControlApiApp({
+        uow,
+        planningModelClients: {
+          primary: mockPrimary,
+          fallback: mockFallback
+        },
+        referenceAssetRepository: mockAssetRepo
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/campaigns/${validCampaignId}/beat-sheet`,
+        payload: {
+          brief: { description: "Valid brief" },
+          targetTotalDurationMs: 2
+        }
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = response.json();
+      expect(body.code).toBe("VALIDATION_FAILURE");
+      expect(providerCalls).toBe(0);
+      expect(repositoryCalls).toBe(0);
+    });
+
+    it("returns 400 when campaignId is not a valid UUID", async () => {
+      const uow = new FakeCampaignUnitOfWork([campaignWith3Scenes], undefined, [cloudClient]);
+      const app = createControlApiApp({ uow });
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/campaigns/invalid-uuid/beat-sheet`,
+        payload: {
+          brief: { description: "Valid brief" },
+          targetTotalDurationMs: 10000
+        }
+      });
+
+      expect(response.statusCode).toBe(400);
+    });
+
+    it("returns 500 CONFIGURATION_ERROR when no planning provider is configured on container", async () => {
+      const uow = new FakeCampaignUnitOfWork([campaignWith3Scenes], undefined, [cloudClient]);
+      const app = createControlApiApp({ uow }); // No planningModelClients provided
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/campaigns/${validCampaignId}/beat-sheet`,
+        payload: {
+          brief: { description: "Valid brief" },
+          targetTotalDurationMs: 10000
+        }
+      });
+
+      expect(response.statusCode).toBe(500);
+      expect(response.json().code).toBe("CONFIGURATION_ERROR");
+    });
+
+    it("executes end-to-end flow: proposes beat sheet then creates approved scenes with targetDurationMs preserved", async () => {
+      const uow = new FakeCampaignUnitOfWork([campaignWith3Scenes], undefined, [cloudClient]);
+      let callCount = 0;
+      const mockPrimary: PlanningModelClientPort = {
+        providerName: "Anthropic",
+        complete: async (req) => {
+          callCount++;
+          // First call is for beat sheet
+          if (callCount === 1) {
+            return {
+              kind: "success",
+              rawText: JSON.stringify(validBeatSheetModelOutput)
+            };
+          }
+          // Subsequent calls are for scene creation: match target duration from userPrompt
+          let durationMs = 2500;
+          if (req.userPrompt.includes("city traffic")) {
+            durationMs = 5000;
+          }
+          return {
+            kind: "success",
+            rawText: JSON.stringify({
+              prompt: "Planned scene prompt",
+              referenceIds: [],
+              engineProfileId: "LTX_25_720P_5S_V1",
+              durationMs,
+              loraConfigurationId: null
+            })
+          };
+        }
+      };
+      const mockFallback: PlanningModelClientPort = {
+        providerName: "OpenAI",
+        complete: async () => ({ kind: "retryable_failure", message: "unused" })
+      };
+      const app = createControlApiApp({
+        uow,
+        planningModelClients: { primary: mockPrimary, fallback: mockFallback },
+        referenceAssetRepository: { listBySceneId: async () => [], findByIds: async () => [] }
+      });
+
+      // 1. Propose beat sheet
+      const beatSheetRes = await app.inject({
+        method: "POST",
+        url: `/api/campaigns/${validCampaignId}/beat-sheet`,
+        payload: {
+          brief: { description: "High-energy commercial" },
+          targetTotalDurationMs: 10000
+        }
+      });
+      expect(beatSheetRes.statusCode).toBe(200);
+      const beatSheet = beatSheetRes.json();
+      expect(beatSheet.beats).toHaveLength(3);
+
+      // 2. Create scenes one by one using approved beats and their targetDurationMs
+      for (const beat of beatSheet.beats) {
+        const sceneRes = await app.inject({
+          method: "POST",
+          url: `/api/campaigns/${validCampaignId}/scenes`,
+          payload: {
+            brief: beat.brief,
+            targetDurationMs: beat.targetDurationMs
+          }
+        });
+        expect(sceneRes.statusCode).toBe(201);
+        const scene = sceneRes.json();
+        expect(scene.configuration.durationMs).toBe(beat.targetDurationMs);
+      }
+
+      // Assert exactly 3 scenes were created with exact planned durations
+      expect(uow.savedScenes).toHaveLength(3);
+      expect(uow.savedScenes[0]?.snapshot().configuration.durationMs).toBe(2500);
+      expect(uow.savedScenes[1]?.snapshot().configuration.durationMs).toBe(5000);
+      expect(uow.savedScenes[2]?.snapshot().configuration.durationMs).toBe(2500);
+    });
   });
 });
