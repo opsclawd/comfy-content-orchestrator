@@ -3,6 +3,7 @@ import type {
   PlanningModelOutcome,
   PlanningModelRequest
 } from "@cco/application";
+import { classifyError, isSafetyRefusalSignal, type RefusalEvidence } from "@cco/shared";
 
 export interface OpenAiPlanningModelClientOptions {
   readonly apiKey: string;
@@ -45,6 +46,38 @@ function executeWithSignal<T>(
       }
     );
   });
+}
+
+function mapNetworkFailureToOutcome(message: string): PlanningModelOutcome {
+  const retryClass = classifyError({ kind: "network", message });
+  switch (retryClass) {
+    case "transient":
+      return { kind: "retryable_failure", message };
+    case "non_retryable":
+    case "safety_refusal":
+      throw new Error(`Unreachable RetryClass for network failure: ${retryClass}`);
+  }
+}
+
+const KNOWN_REFUSAL_DISCRIMINATORS: ReadonlyArray<{
+  readonly field: "type" | "code";
+  readonly value: string;
+}> = [
+  { field: "type", value: "refusal" },
+  { field: "code", value: "content_policy_violation" }
+];
+
+function detectStructuredRefusalDiscriminator(
+  errorType: string,
+  errorCode: string
+): RefusalEvidence {
+  for (const candidate of KNOWN_REFUSAL_DISCRIMINATORS) {
+    const actual = candidate.field === "type" ? errorType : errorCode;
+    if (actual === candidate.value) {
+      return { source: "structured_field", field: `error.${candidate.field}`, value: actual };
+    }
+  }
+  return { source: "none" };
 }
 
 export class OpenAiPlanningModelClient implements PlanningModelClientPort {
@@ -124,23 +157,20 @@ export class OpenAiPlanningModelClient implements PlanningModelClientPort {
           timedOut ||
           attemptController.signal.aborted ||
           (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"));
-        return {
-          kind: "retryable_failure",
-          message: isTimeout
-            ? timedOut
-              ? `Provider attempt timed out after ${this.timeoutMs}ms`
-              : err instanceof Error
-                ? err.message
-                : String(err)
+        const message = isTimeout
+          ? timedOut
+            ? `Provider attempt timed out after ${this.timeoutMs}ms`
             : err instanceof Error
               ? err.message
               : String(err)
-        };
+          : err instanceof Error
+            ? err.message
+            : String(err);
+        return mapNetworkFailureToOutcome(message);
       }
 
       const status = response.status;
       let bodyText = "";
-      let parsedBody: unknown = undefined;
 
       try {
         bodyText = await executeWithSignal(
@@ -148,22 +178,27 @@ export class OpenAiPlanningModelClient implements PlanningModelClientPort {
           attemptController.signal,
           `Provider attempt timed out reading response body after ${this.timeoutMs}ms`
         );
-        parsedBody = JSON.parse(bodyText);
       } catch (err) {
         const isTimeout =
           timedOut ||
           attemptController.signal.aborted ||
           (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"));
-        if (isTimeout) {
-          return {
-            kind: "retryable_failure",
-            message: timedOut
-              ? `Provider attempt timed out reading response body after ${this.timeoutMs}ms`
-              : err instanceof Error
-                ? err.message
-                : String(err)
-          };
-        }
+        const message = isTimeout
+          ? timedOut
+            ? `Provider attempt timed out reading response body after ${this.timeoutMs}ms`
+            : err instanceof Error
+              ? err.message
+              : String(err)
+          : err instanceof Error
+            ? err.message
+            : String(err);
+        return mapNetworkFailureToOutcome(message);
+      }
+
+      let parsedBody: unknown = undefined;
+      try {
+        parsedBody = JSON.parse(bodyText);
+      } catch {
         // Body is not JSON
       }
 
@@ -197,34 +232,36 @@ export class OpenAiPlanningModelClient implements PlanningModelClientPort {
 
       const message = this.extractErrorMessage(parsedBody, bodyText, status);
 
-      if (status === 429 || status >= 500) {
-        return {
-          kind: "retryable_failure",
-          httpStatus: status,
-          message
-        };
-      }
-
-      if (status === 403) {
-        if (this.hasRefusalSignal(parsedBody, message)) {
-          return {
-            kind: "safety_refusal",
-            httpStatus: 403,
-            message
+      const { errorType, errorCode } = this.extractErrorFields(parsedBody);
+      let refusalEvidence = detectStructuredRefusalDiscriminator(errorType, errorCode);
+      if (refusalEvidence.source === "none" && status === 403) {
+        const heuristic = isSafetyRefusalSignal({ errorType, errorCode, message });
+        if (heuristic.matched) {
+          refusalEvidence = {
+            source: "message_heuristic",
+            scopedToHttpStatus: 403,
+            matchedKeyword: heuristic.keyword
           };
         }
-        return {
-          kind: "permanent_failure",
-          httpStatus: 403,
-          message
-        };
       }
-
-      return {
-        kind: "permanent_failure",
+      const retryClass = classifyError({
+        kind: "http",
         httpStatus: status,
+        refusalEvidence,
         message
-      };
+      });
+      switch (retryClass) {
+        case "safety_refusal":
+          return { kind: "safety_refusal", httpStatus: status, message };
+        case "transient":
+          return { kind: "retryable_failure", httpStatus: status, message };
+        case "non_retryable":
+          return { kind: "permanent_failure", httpStatus: status, message };
+        default: {
+          const exhaustive: never = retryClass;
+          throw new Error(`Unreachable RetryClass: ${JSON.stringify(exhaustive)}`);
+        }
+      }
     } finally {
       clearTimeout(timeoutId);
       if (request.signal) {
@@ -233,31 +270,28 @@ export class OpenAiPlanningModelClient implements PlanningModelClientPort {
     }
   }
 
-  private hasRefusalSignal(parsedBody: unknown, message: string): boolean {
+  private extractErrorFields(parsedBody: unknown): { errorType: string; errorCode: string } {
     if (parsedBody && typeof parsedBody === "object") {
       const b = parsedBody as Record<string, unknown>;
-      const errorObj = (b.error && typeof b.error === "object" ? b.error : b) as Record<
+      const errorObj = (b.error && typeof b.error === "object" ? b.error : {}) as Record<
         string,
         unknown
       >;
-      const errorCode = String(errorObj.code ?? "").toLowerCase();
-      const errorType = String(errorObj.type ?? "").toLowerCase();
-      const msg = (String(errorObj.message ?? "") + " " + message).toLowerCase();
-
-      const signals = [
-        "safety",
-        "policy",
-        "refusal",
-        "violat",
-        "content_filter",
-        "content_policy_violation"
-      ];
-      return signals.some((s) => errorCode.includes(s) || errorType.includes(s) || msg.includes(s));
+      const errorType =
+        typeof errorObj.type === "string"
+          ? errorObj.type
+          : typeof b.type === "string"
+            ? b.type
+            : "";
+      const errorCode =
+        typeof errorObj.code === "string"
+          ? errorObj.code
+          : typeof b.code === "string"
+            ? b.code
+            : "";
+      return { errorType, errorCode };
     }
-    const lower = message.toLowerCase();
-    return ["safety", "policy", "refusal", "violat", "content_filter"].some((s) =>
-      lower.includes(s)
-    );
+    return { errorType: "", errorCode: "" };
   }
 
   private extractErrorMessage(parsedBody: unknown, bodyText: string, status: number): string {

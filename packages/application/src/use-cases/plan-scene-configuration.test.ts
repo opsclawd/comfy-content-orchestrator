@@ -6,7 +6,10 @@ import type {
   PlanningModelRequest
 } from "../ports/planning-model-client-port.js";
 import type { ReferenceAssetRepository } from "../ports/reference-asset-repository.js";
-import { PlanSceneConfigurationUseCase } from "./plan-scene-configuration.js";
+import {
+  PlanSceneConfigurationUseCase,
+  decidePlanningFallback
+} from "./plan-scene-configuration.js";
 import {
   PlanningNotAuthorizedError,
   PlanningSafetyRefusalError,
@@ -825,5 +828,152 @@ describe("PlanSceneConfigurationUseCase", () => {
         }
       })
     ).rejects.toThrow(PlanningProviderExhaustedError);
+  });
+
+  it("22. Anthropic permanent_failure on attempt 1 immediately falls back to OpenAI without retrying Anthropic", async () => {
+    const repo = createMockRepo(resolvedAssets);
+    const primary = createMockClient("Anthropic", [
+      { kind: "permanent_failure", httpStatus: 400, message: "Bad Request: schema malformed" }
+    ]);
+    const fallback = createMockClient("OpenAI", [
+      { kind: "success", rawText: JSON.stringify(validConfig) }
+    ]);
+
+    const useCase = new PlanSceneConfigurationUseCase({
+      referenceAssetRepository: repo,
+      primaryClient: primary,
+      fallbackClient: fallback
+    });
+
+    const result = await useCase.execute({
+      brief,
+      campaignId: testCampaignId,
+      clientId: testClientId,
+      candidateReferenceAssetIds: [validAssetId1],
+      externalProcessingPolicy: {
+        allowCloudPlanning: true,
+        allowedProviders: ["Anthropic", "OpenAI"]
+      }
+    });
+
+    expect(result).toEqual(validConfig);
+    expect(primary.calls).toHaveLength(1); // Never retried on same provider!
+    expect(fallback.calls).toHaveLength(1); // Fell back to OpenAI
+  });
+
+  it("23. Anthropic safety_refusal on attempt 1 with non-403 status (e.g. HTTP 429 structured refusal) terminates immediately and never calls OpenAI", async () => {
+    const repo = createMockRepo(resolvedAssets);
+    const primary = createMockClient("Anthropic", [
+      {
+        kind: "safety_refusal",
+        httpStatus: 429,
+        message: "Rate limited and content policy violation: prompt blocked"
+      }
+    ]);
+    const fallback = createMockClient("OpenAI", [
+      { kind: "success", rawText: JSON.stringify(validConfig) }
+    ]);
+
+    const useCase = new PlanSceneConfigurationUseCase({
+      referenceAssetRepository: repo,
+      primaryClient: primary,
+      fallbackClient: fallback
+    });
+
+    await expect(
+      useCase.execute({
+        brief,
+        campaignId: testCampaignId,
+        clientId: testClientId,
+        candidateReferenceAssetIds: [validAssetId1],
+        externalProcessingPolicy: {
+          allowCloudPlanning: true,
+          allowedProviders: ["Anthropic", "OpenAI"]
+        }
+      })
+    ).rejects.toThrow(PlanningSafetyRefusalError);
+
+    expect(primary.calls).toHaveLength(1);
+    expect(fallback.calls).toHaveLength(0); // OpenAI is NEVER called!
+  });
+
+  it("24. Anthropic safety_refusal on attempt 2 (e.g. HTTP 500 structured refusal) terminates immediately and never calls OpenAI", async () => {
+    const repo = createMockRepo(resolvedAssets);
+    const primary = createMockClient("Anthropic", [
+      { kind: "retryable_failure", httpStatus: 500, message: "Internal server error" },
+      {
+        kind: "safety_refusal",
+        httpStatus: 500,
+        message: "Internal error: prompt refused by safety filter"
+      }
+    ]);
+    const fallback = createMockClient("OpenAI", [
+      { kind: "success", rawText: JSON.stringify(validConfig) }
+    ]);
+
+    const useCase = new PlanSceneConfigurationUseCase({
+      referenceAssetRepository: repo,
+      primaryClient: primary,
+      fallbackClient: fallback
+    });
+
+    await expect(
+      useCase.execute({
+        brief,
+        campaignId: testCampaignId,
+        clientId: testClientId,
+        candidateReferenceAssetIds: [validAssetId1],
+        externalProcessingPolicy: {
+          allowCloudPlanning: true,
+          allowedProviders: ["Anthropic", "OpenAI"]
+        }
+      })
+    ).rejects.toThrow(PlanningSafetyRefusalError);
+
+    expect(primary.calls).toHaveLength(2);
+    expect(fallback.calls).toHaveLength(0); // OpenAI is NEVER called!
+  });
+});
+
+describe("decidePlanningFallback", () => {
+  it("maps success to terminal_success regardless of attempt number", () => {
+    expect(decidePlanningFallback({ kind: "success", rawText: "{}" }, 1)).toBe("terminal_success");
+    expect(decidePlanningFallback({ kind: "success", rawText: "{}" }, 2)).toBe("terminal_success");
+  });
+
+  it("maps safety_refusal to terminal_safety_refusal for all statuses and attempts", () => {
+    expect(
+      decidePlanningFallback({ kind: "safety_refusal", httpStatus: 403, message: "blocked" }, 1)
+    ).toBe("terminal_safety_refusal");
+    expect(
+      decidePlanningFallback({ kind: "safety_refusal", httpStatus: 403, message: "blocked" }, 2)
+    ).toBe("terminal_safety_refusal");
+    expect(
+      decidePlanningFallback({ kind: "safety_refusal", httpStatus: 429, message: "policy" }, 1)
+    ).toBe("terminal_safety_refusal");
+    expect(
+      decidePlanningFallback({ kind: "safety_refusal", httpStatus: 500, message: "refusal" }, 1)
+    ).toBe("terminal_safety_refusal");
+  });
+
+  it("maps retryable_failure to retry_same on attempt 1, fallback on attempt 2", () => {
+    expect(
+      decidePlanningFallback({ kind: "retryable_failure", httpStatus: 500, message: "error" }, 1)
+    ).toBe("retry_same");
+    expect(
+      decidePlanningFallback({ kind: "retryable_failure", httpStatus: 500, message: "error" }, 2)
+    ).toBe("fallback");
+  });
+
+  it("maps permanent_failure to fallback on attempt 1 and attempt 2 (no same-provider retry)", () => {
+    expect(
+      decidePlanningFallback({ kind: "permanent_failure", httpStatus: 400, message: "invalid" }, 1)
+    ).toBe("fallback");
+    expect(
+      decidePlanningFallback(
+        { kind: "permanent_failure", httpStatus: 401, message: "unauthorized" },
+        2
+      )
+    ).toBe("fallback");
   });
 });

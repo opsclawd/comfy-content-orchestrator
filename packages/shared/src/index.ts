@@ -28,3 +28,4 @@ export {
   STORAGE_OPERATION_CLASSES,
   type StorageOperationClass
 } from "./storage-watermark.js";
+export * from "./api-failure-classification.js";
