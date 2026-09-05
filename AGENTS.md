@@ -8,6 +8,12 @@ To eliminate version-mismatch bugs between local development and CI, FFmpeg is p
 - Use `./scripts/install-ffmpeg.sh` to download and install the pinned FFmpeg static build (`7.0.2-static` as defined in `.ffmpeg-version`).
 - Run `./scripts/check-ffmpeg-version.sh` to verify that your local environment matches the pinned version.
 
+## Kokoro Model Environment Setup
+
+To ensure deterministic speech synthesis across local development and CI, the Kokoro-82M model is pinned in `.kokoro-version`:
+- Use `./scripts/install-kokoro-model.sh` to fetch and verify the pinned Kokoro-82M ONNX model weights.
+- Run `./scripts/check-kokoro-version.sh` to verify that your local environment has the pinned weights cached and verified.
+
 ## Running tests — two suites, two configs
 
 This repository has **two** vitest configurations, and using the wrong one produces a command that can never pass.

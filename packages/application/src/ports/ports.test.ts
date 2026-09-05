@@ -30,6 +30,9 @@ import type {
   StorageMetricsRegistryPort,
   StorageTelemetryPort,
   VoiceSynthesisPort,
+  ConcreteVoiceSynthesisPort,
+  VoiceSynthesisInput,
+  VoiceSynthesisOutput,
   HashBytesPort,
   ReferenceAssetRepository,
   AssemblySpec,
@@ -518,6 +521,30 @@ describe("Application capability ports contract tests", () => {
 
       const voice = await voiceSynthesisPort.synthesize({ text: "Hello", speaker: "Narrator" });
       expect(voice.audio).toEqual(new Uint8Array([5, 8]));
+
+      const concretePort: ConcreteVoiceSynthesisPort = {
+        async synthesize(_input: VoiceSynthesisInput): Promise<VoiceSynthesisOutput> {
+          const sampleRateHz = 24000;
+          const fakeSamples = new Uint8Array(44 + 35420 * 2);
+          const durationMs = Math.round((35420 / sampleRateHz) * 1000);
+          return {
+            audio: fakeSamples,
+            contentType: "audio/wav",
+            sampleRateHz,
+            durationMs
+          };
+        }
+      };
+
+      const concreteResult = await concretePort.synthesize({
+        text: "Hello world",
+        voiceId: "af_heart",
+        speed: 1.0
+      });
+      expect(concreteResult.contentType).toBe("audio/wav");
+      expect(concreteResult.sampleRateHz).toBe(24000);
+      expect(concreteResult.durationMs).toBe(1476);
+      expect(Number.isInteger(concreteResult.durationMs)).toBe(true);
 
       const assembled = await mediaAssemblerPort.assemble({
         videoKeys: ["v1.mp4"],

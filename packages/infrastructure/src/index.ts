@@ -270,3 +270,35 @@ export {
   OpenAiPlanningModelClient,
   type OpenAiPlanningModelClientOptions
 } from "./planning/openai-planning-model-client.js";
+
+export {
+  KokoroVoiceSynthesisAdapter,
+  type KokoroEngine,
+  type KokoroEngineInput,
+  type KokoroEngineOutput,
+  type KokoroJsEngine,
+  type KokoroJsEngineOptions,
+  type PinnedKokoroVersion,
+  createKokoroJsEngine,
+  loadPinnedKokoroVersion,
+  disableTransformersRemoteFallback,
+  DEFAULT_KOKORO_MODEL_ID,
+  DEFAULT_KOKORO_DTYPE,
+  DEFAULT_KOKORO_DEVICE,
+  PINNED_KOKORO_MODEL_ID,
+  PINNED_KOKORO_MODEL_REVISION,
+  PINNED_KOKORO_ONNX_SHA256,
+  PINNED_KOKORO_ONNX_MD5,
+  PINNED_KOKORO_VOICE_AF_HEART_SHA256,
+  PINNED_KOKORO_CONFIG_SHA256,
+  PINNED_KOKORO_TOKENIZER_SHA256,
+  PINNED_KOKORO_TOKENIZER_CONFIG_SHA256,
+  MAX_MODEL_TOKEN_LIMIT,
+  TARGET_CHUNK_TOKEN_LIMIT,
+  resolveKokoroModelDir,
+  verifyKokoroModelDir,
+  encodeWav,
+  KokoroSynthesisError,
+  type KokoroSynthesisFailureCode,
+  type KokoroSynthesisErrorContext
+} from "./kokoro/index.js";

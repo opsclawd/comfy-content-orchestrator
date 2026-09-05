@@ -23,3 +23,4 @@ export * from "./planning-prompt.js";
 export * from "./planning-response-parser.js";
 export * from "./validate-scene-configuration.js";
 export * from "./plan-scene-configuration.js";
+export * from "./synthesize-voiceover.js";
