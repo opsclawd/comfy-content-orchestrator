@@ -25,7 +25,7 @@ echo "Downloading FFmpeg ${FFMPEG_VERSION} static build from ${FFMPEG_DOWNLOAD_U
 TARBALL="${TMP_DIR}/ffmpeg-static.tar.xz"
 
 if command -v curl >/dev/null 2>&1; then
-  curl -fsSL -A "Mozilla/5.0 (X11; Linux x86_64)" "${FFMPEG_DOWNLOAD_URL}" -o "${TARBALL}"
+  curl -fsSL --retry 3 --retry-all-errors -A "Mozilla/5.0 (X11; Linux x86_64)" "${FFMPEG_DOWNLOAD_URL}" -o "${TARBALL}"
 elif command -v wget >/dev/null 2>&1; then
   wget -qO "${TARBALL}" --user-agent="Mozilla/5.0 (X11; Linux x86_64)" "${FFMPEG_DOWNLOAD_URL}"
 else
