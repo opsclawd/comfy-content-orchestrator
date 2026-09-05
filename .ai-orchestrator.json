@@ -5,6 +5,7 @@
       "pnpm format",
       "pnpm test:db",
       "pnpm test:assembly",
+      "pnpm test:kokoro",
       "pnpm install --frozen-lockfile",
       "pnpm check:control-plane"
     ],

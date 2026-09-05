@@ -20,6 +20,7 @@
     "test:assembly": "vitest run --config vitest.assembly.config.ts",
     "test:bash": "node -e \"console.log('no bash test suite in this repo; TypeScript monorepo')\"",
     "test:db": "vitest run --config vitest.integration.config.ts",
+    "test:kokoro": "bash scripts/check-kokoro-version.sh && vitest run --config vitest.kokoro.config.ts",
     "test:sprint-1.5": "vitest run --config vitest.integration.config.ts apps/control-api/src/http/review-plane-closure.integration.test.ts packages/infrastructure/src/postgres/audit-protections.integration.test.ts",
     "typecheck": "tsc --build --force",
     "certify": "pnpm --filter render-worker certify",
