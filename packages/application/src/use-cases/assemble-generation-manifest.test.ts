@@ -230,6 +230,7 @@ describe("AssembleGenerationManifest use case", () => {
     {
       id: "ref-101" as ReferenceAssetId,
       sceneId: fakeSceneId,
+      clientId: "client-test",
       assetType: "brand_logo",
       storageBucket: "godzspeed-reference",
       storageObjectKey: "refs/logo.png",
@@ -249,7 +250,8 @@ describe("AssembleGenerationManifest use case", () => {
     };
     const referenceAssetRepository: ReferenceAssetRepository =
       overrides?.referenceAssetRepository ?? {
-        listBySceneId: async (id) => (id === fakeSceneId ? fakeReferenceAssets : [])
+        listBySceneId: async (id) => (id === fakeSceneId ? fakeReferenceAssets : []),
+        findByIds: async () => []
       };
     const storyboardCandidateRepository: StoryboardCandidateRepository =
       overrides?.storyboardCandidateRepository ?? {

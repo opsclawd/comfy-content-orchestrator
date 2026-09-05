@@ -415,6 +415,7 @@ describe("PostgreSQL StoryboardCandidateRepository and ReviewEventStore Adapters
     expect(assets[0]).toEqual({
       id: ref1.asset_id,
       sceneId: scene.scene_id,
+      clientId: clientRecord.client_id,
       assetType: "brand_logo",
       storageBucket: "godzspeed-reference",
       storageObjectKey: "assets/logo.png",
@@ -423,6 +424,7 @@ describe("PostgreSQL StoryboardCandidateRepository and ReviewEventStore Adapters
     expect(assets[1]).toEqual({
       id: ref2.asset_id,
       sceneId: scene.scene_id,
+      clientId: clientRecord.client_id,
       assetType: "style_lora",
       storageBucket: "godzspeed-reference",
       storageObjectKey: "assets/style.safetensors",

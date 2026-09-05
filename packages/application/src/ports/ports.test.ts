@@ -400,6 +400,7 @@ describe("Application capability ports contract tests", () => {
         {
           id: "ref-1" as ReferenceAssetId,
           sceneId: "scene-1" as SceneId,
+          clientId: "client-1",
           assetType: "brand_logo",
           storageBucket: "godzspeed-reference",
           storageObjectKey: "refs/logo.png",
@@ -409,6 +410,12 @@ describe("Application capability ports contract tests", () => {
       const referenceAssetRepo = {
         async listBySceneId(sceneId: SceneId): Promise<readonly ReferenceAsset[]> {
           return refAssets.filter((a) => a.sceneId === sceneId);
+        },
+        async findByIds(
+          clientId: string,
+          ids: readonly ReferenceAssetId[]
+        ): Promise<readonly ReferenceAsset[]> {
+          return refAssets.filter((a) => a.clientId === clientId && ids.includes(a.id));
         }
       } satisfies ReferenceAssetRepository;
 
@@ -416,6 +423,15 @@ describe("Application capability ports contract tests", () => {
       expect(assets).toHaveLength(1);
       expect(assets[0]?.id).toBe("ref-1");
       expect(await referenceAssetRepo.listBySceneId("missing-scene" as SceneId)).toEqual([]);
+
+      const foundAssets = await referenceAssetRepo.findByIds("client-1", [
+        "ref-1" as ReferenceAssetId
+      ]);
+      expect(foundAssets).toHaveLength(1);
+      expect(foundAssets[0]?.id).toBe("ref-1");
+      expect(await referenceAssetRepo.findByIds("client-2", ["ref-1" as ReferenceAssetId])).toEqual(
+        []
+      );
     });
   });
 

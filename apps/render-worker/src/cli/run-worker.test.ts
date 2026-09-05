@@ -601,7 +601,7 @@ describe("run-worker CLI", () => {
           insert: async () => {},
           listBySceneAndRevision: async () => []
         },
-        referenceAssetRepository: { listBySceneId: async () => [] },
+        referenceAssetRepository: { listBySceneId: async () => [], findByIds: async () => [] },
         logger: testLogger,
         sleep: testSleep
       });

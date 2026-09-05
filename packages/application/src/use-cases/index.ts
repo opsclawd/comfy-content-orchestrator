@@ -16,3 +16,8 @@ export * from "./campaign-not-found-error.js";
 export * from "./create-campaign.js";
 export * from "./create-client.js";
 export * from "./create-scene.js";
+export * from "./plan-scene-configuration-errors.js";
+export * from "./planning-prompt.js";
+export * from "./planning-response-parser.js";
+export * from "./validate-scene-configuration.js";
+export * from "./plan-scene-configuration.js";

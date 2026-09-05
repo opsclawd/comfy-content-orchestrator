@@ -260,3 +260,13 @@ export {
   JsonFileLicenseRegistryPort,
   ComponentLicenseRegistryLoadError
 } from "./governance/license-registry-loader.js";
+
+export {
+  AnthropicPlanningModelClient,
+  type AnthropicPlanningModelClientOptions
+} from "./planning/anthropic-planning-model-client.js";
+
+export {
+  OpenAiPlanningModelClient,
+  type OpenAiPlanningModelClientOptions
+} from "./planning/openai-planning-model-client.js";
