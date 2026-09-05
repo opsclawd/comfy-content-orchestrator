@@ -6,6 +6,11 @@ import {
   ClientNotFoundError,
   IdempotencyConflictError,
   JobDispatchUnavailableError,
+  PlanningNotAuthorizedError,
+  PlanningProviderExhaustedError,
+  PlanningProviderNotConfiguredError,
+  PlanningSafetyRefusalError,
+  SceneCreationModeMismatchError,
   SceneNotFoundError,
   StaleRevisionConflictError
 } from "@cco/application";
@@ -26,13 +31,65 @@ export class ReviewerIdentityUnavailableError extends Error {
 
 export function formatReviewError(error: unknown): {
   statusCode: number;
-  body: ReviewErrorResponse | { message: string } | { code: string; message: string };
+  body:
+    | ReviewErrorResponse
+    | { message: string }
+    | { code: string; message: string; details?: Record<string, unknown> };
 } {
-  if (error instanceof JobDispatchUnavailableError) {
+  if (
+    error instanceof JobDispatchUnavailableError ||
+    error instanceof PlanningProviderNotConfiguredError
+  ) {
     return {
       statusCode: 500,
       body: {
         code: "CONFIGURATION_ERROR",
+        message: error.message
+      }
+    };
+  }
+
+  if (error instanceof PlanningNotAuthorizedError) {
+    return {
+      statusCode: 403,
+      body: {
+        code: "CLOUD_PLANNING_NOT_AUTHORIZED",
+        message: error.message
+      }
+    };
+  }
+
+  if (error instanceof PlanningSafetyRefusalError) {
+    return {
+      statusCode: 422,
+      body: {
+        code: "PLANNING_SAFETY_REFUSAL",
+        message: error.message,
+        details: {
+          provider: error.provider
+        }
+      }
+    };
+  }
+
+  if (error instanceof PlanningProviderExhaustedError) {
+    return {
+      statusCode: 502,
+      body: {
+        code: "PLANNING_PROVIDER_EXHAUSTED",
+        message: error.message,
+        details: {
+          attempts: error.attempts as unknown as Record<string, unknown>
+        }
+      }
+    };
+  }
+
+  if (error instanceof SceneCreationModeMismatchError) {
+    return {
+      statusCode: 400,
+      body: {
+        code: "SCENE_CREATION_MODE_MISMATCH",
         message: error.message
       }
     };

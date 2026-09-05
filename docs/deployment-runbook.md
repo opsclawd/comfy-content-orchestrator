@@ -36,6 +36,14 @@ curl -sS http://<tailnet-ip>:3000/api/health
 
 **Gotcha**: `.env` on this host can lag behind `.env.example` — new required variables land in `.env.example` as the codebase evolves, but nobody automatically syncs them into the real deployed `.env`. `docker compose config --quiet` will fail loudly naming the missing variable if this happens; check `.env.example` for the documented value/meaning before adding it.
 
+### Cloud Planning Provider Configuration
+
+Cloud planning allows scenes to be created from a creative brief via LLM planners when a client's `externalProcessingPolicy.allowCloudPlanning` is `true`.
+
+- **Optional all-or-none pair**: `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` can optionally be defined in `.env`. Both must be provided together or neither.
+- **Fail-fast on partial configuration**: If exactly one key is supplied, `control-api` aborts startup with a `ControlApiConfigError` naming the missing variable.
+- **Manual-only mode when omitted**: If neither key is supplied, `control-api` runs with cloud planning disabled. Manual scene configuration authoring (`allowCloudPlanning: false`) remains operational; submitting a creative brief will return HTTP 500 `CONFIGURATION_ERROR`.
+
 ### Reviewer identity trust boundary
 
 `review-hub` acts as the trusted identity proxy in front of `control-api`. It terminates incoming reviewer connections on the tailnet, captures the peer IP, queries Tailscale LocalAPI via `tailscale whois`, and forwards the resolved identity in `tailscale-user-login`/`tailscale-user-name` headers to `control-api` over the internal Docker network.

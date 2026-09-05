@@ -38,11 +38,55 @@ export const CampaignResponseSchema = z.object({
 });
 export type CampaignResponse = z.infer<typeof CampaignResponseSchema>;
 
-// Requested/declared layer — the authored SceneSpec, unmodified.
-export const CreateSceneRequestSchema = z.object({
-  configuration: SceneConfigurationSchema
-});
+// Requested/declared layer — creative brief for cloud planning.
+export const CreativeBriefSchema = z
+  .object({
+    title: z.string().min(1).optional(),
+    description: z.string().min(1),
+    targetPlatform: z.string().min(1).optional(),
+    visualStyle: z.string().min(1).optional(),
+    requirements: z.array(z.string().min(1)).optional()
+  })
+  .strict();
+export type CreativeBrief = z.infer<typeof CreativeBriefSchema>;
+
+export const CreateSceneManualRequestSchema = z
+  .object({
+    configuration: SceneConfigurationSchema
+  })
+  .strict();
+export type CreateSceneManualRequest = z.infer<typeof CreateSceneManualRequestSchema>;
+
+export const CreateSceneBriefRequestSchema = z
+  .object({
+    brief: CreativeBriefSchema,
+    candidateReferenceAssetIds: z.array(z.string()).optional(),
+    maxDurationMs: z.number().int().positive().optional()
+  })
+  .strict();
+export type CreateSceneBriefRequest = z.infer<typeof CreateSceneBriefRequestSchema>;
+
+// Requested/declared layer — union of manual configuration and cloud-planning brief.
+export const CreateSceneRequestSchema = z.union([
+  CreateSceneManualRequestSchema,
+  CreateSceneBriefRequestSchema
+]);
 export type CreateSceneRequest = z.infer<typeof CreateSceneRequestSchema>;
+
+export function isCreateSceneBriefRequest(
+  request: CreateSceneRequest
+): request is CreateSceneBriefRequest {
+  return "brief" in request;
+}
+
+export function isCreateSceneManualRequest(
+  request: CreateSceneRequest
+): request is CreateSceneManualRequest {
+  return "configuration" in request;
+}
+
+export const isBriefRequest = isCreateSceneBriefRequest;
+export const isManualRequest = isCreateSceneManualRequest;
 
 // Configured/executed layer — echoes the requested configuration verbatim
 // plus server-assigned identity/lifecycle fields. No measured/verified

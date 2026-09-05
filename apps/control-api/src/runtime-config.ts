@@ -36,6 +36,13 @@ export interface ControlApiJobDispatchConfig {
   readonly heartbeatIntervalMs: number;
 }
 
+export interface ControlApiPlanningConfig {
+  readonly anthropicApiKey: string;
+  readonly openaiApiKey: string;
+  readonly attemptTimeoutMs?: number;
+  readonly overallTimeoutMs?: number;
+}
+
 export interface ControlApiRuntimeConfig {
   readonly database: ControlApiDatabaseConfig;
   readonly s3: ControlApiS3Config;
@@ -43,6 +50,7 @@ export interface ControlApiRuntimeConfig {
   readonly reviewerIdentity: TailscaleReviewerIdentityResolverConfig;
   readonly storageTelemetry: ControlApiStorageTelemetryConfig;
   readonly jobDispatch: ControlApiJobDispatchConfig;
+  readonly planningProviders?: ControlApiPlanningConfig;
 }
 
 export class ControlApiConfigError extends Error {
@@ -95,6 +103,17 @@ function parseRequiredString(val: unknown, varName: string): string {
     throw new ControlApiConfigError(`Missing or empty required environment variable: ${varName}`);
   }
   return val.trim();
+}
+
+function parseOptionalString(val: unknown, varName: string): string | undefined {
+  if (val === undefined || val === null) {
+    return undefined;
+  }
+  if (typeof val !== "string") {
+    throw new ControlApiConfigError(`Invalid string in variable: ${varName} (expected string)`);
+  }
+  const trimmed = val.trim();
+  return trimmed === "" ? undefined : trimmed;
 }
 
 function parseStorageTelemetryPath(val: unknown, varName: string): string {
@@ -314,6 +333,41 @@ export function parseControlApiRuntimeConfig(
     );
   }
 
+  // 9. Parse optional Planning Providers (all-or-none pair)
+  const anthropicApiKey = parseOptionalString(env.ANTHROPIC_API_KEY, "ANTHROPIC_API_KEY");
+  const openaiApiKey = parseOptionalString(env.OPENAI_API_KEY, "OPENAI_API_KEY");
+
+  if (anthropicApiKey !== undefined && openaiApiKey === undefined) {
+    throw new ControlApiConfigError(
+      "Invalid planning provider configuration: ANTHROPIC_API_KEY is provided, but OPENAI_API_KEY is missing. Both ANTHROPIC_API_KEY and OPENAI_API_KEY must be provided together or neither."
+    );
+  }
+
+  if (anthropicApiKey === undefined && openaiApiKey !== undefined) {
+    throw new ControlApiConfigError(
+      "Invalid planning provider configuration: OPENAI_API_KEY is provided, but ANTHROPIC_API_KEY is missing. Both ANTHROPIC_API_KEY and OPENAI_API_KEY must be provided together or neither."
+    );
+  }
+
+  const attemptTimeoutMs =
+    env.PLANNING_ATTEMPT_TIMEOUT_MS !== undefined && env.PLANNING_ATTEMPT_TIMEOUT_MS !== ""
+      ? parsePositiveInteger(env.PLANNING_ATTEMPT_TIMEOUT_MS, "PLANNING_ATTEMPT_TIMEOUT_MS", 30_000)
+      : undefined;
+  const overallTimeoutMs =
+    env.PLANNING_OVERALL_TIMEOUT_MS !== undefined && env.PLANNING_OVERALL_TIMEOUT_MS !== ""
+      ? parsePositiveInteger(env.PLANNING_OVERALL_TIMEOUT_MS, "PLANNING_OVERALL_TIMEOUT_MS", 60_000)
+      : undefined;
+
+  const planningProviders: ControlApiPlanningConfig | undefined =
+    anthropicApiKey !== undefined && openaiApiKey !== undefined
+      ? {
+          anthropicApiKey,
+          openaiApiKey,
+          ...(attemptTimeoutMs !== undefined ? { attemptTimeoutMs } : {}),
+          ...(overallTimeoutMs !== undefined ? { overallTimeoutMs } : {})
+        }
+      : undefined;
+
   return {
     database: {
       url: databaseUrl
@@ -341,6 +395,7 @@ export function parseControlApiRuntimeConfig(
     jobDispatch: {
       leaseDurationMs,
       heartbeatIntervalMs
-    }
+    },
+    ...(planningProviders !== undefined ? { planningProviders } : {})
   };
 }

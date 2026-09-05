@@ -5,7 +5,10 @@ import {
   CampaignStatusSchema,
   CreateCampaignRequestSchema,
   CreateSceneRequestSchema,
-  SceneCreateResponseSchema
+  CreativeBriefSchema,
+  SceneCreateResponseSchema,
+  isCreateSceneBriefRequest,
+  isCreateSceneManualRequest
 } from "./campaign.js";
 
 describe("Campaign and Scene Creation Contracts", () => {
@@ -145,8 +148,49 @@ describe("Campaign and Scene Creation Contracts", () => {
     });
   });
 
+  describe("CreativeBriefSchema", () => {
+    it("parses valid creative brief with all fields", () => {
+      const payload = {
+        title: "Carnival Opening",
+        description: "Vibrant aerial view of carnival parade at dawn",
+        targetPlatform: "tiktok",
+        visualStyle: "golden hour cinematic",
+        requirements: ["Must show steelpan drums", "Close-up of costume textures"]
+      };
+
+      const parsed = CreativeBriefSchema.parse(payload);
+      expect(parsed).toEqual(payload);
+    });
+
+    it("parses valid creative brief with only description", () => {
+      const payload = {
+        description: "Minimal brief description"
+      };
+
+      const parsed = CreativeBriefSchema.parse(payload);
+      expect(parsed).toEqual(payload);
+    });
+
+    it("rejects empty description", () => {
+      expect(() =>
+        CreativeBriefSchema.parse({
+          description: ""
+        })
+      ).toThrow();
+    });
+
+    it("rejects unknown properties (.strict)", () => {
+      expect(() =>
+        CreativeBriefSchema.parse({
+          description: "Valid description",
+          campaignId: "should-not-be-in-brief"
+        })
+      ).toThrow();
+    });
+  });
+
   describe("CreateSceneRequestSchema", () => {
-    it("parses valid scene configuration", () => {
+    it("parses valid scene configuration (manual branch)", () => {
       const payload = {
         configuration: {
           prompt: "Cinematic shot of carnival dancer in golden plumage",
@@ -159,6 +203,60 @@ describe("Campaign and Scene Creation Contracts", () => {
 
       const parsed = CreateSceneRequestSchema.parse(payload);
       expect(parsed).toEqual(payload);
+      expect(isCreateSceneManualRequest(parsed)).toBe(true);
+      expect(isCreateSceneBriefRequest(parsed)).toBe(false);
+    });
+
+    it("parses valid brief request (brief branch)", () => {
+      const payload = {
+        brief: {
+          title: "Carnival Intro",
+          description: "High-energy intro with vibrant colors",
+          targetPlatform: "instagram_reels",
+          visualStyle: "saturated hyper-real",
+          requirements: ["Feature steel drums"]
+        },
+        candidateReferenceAssetIds: ["018e69e0-8a6a-72cb-b1b7-ec79a1f73802"],
+        maxDurationMs: 6000
+      };
+
+      const parsed = CreateSceneRequestSchema.parse(payload);
+      expect(parsed).toEqual(payload);
+      expect(isCreateSceneBriefRequest(parsed)).toBe(true);
+      expect(isCreateSceneManualRequest(parsed)).toBe(false);
+    });
+
+    it("parses minimal brief request without optional fields", () => {
+      const payload = {
+        brief: {
+          description: "A short clip of tropical waves crashing"
+        }
+      };
+
+      const parsed = CreateSceneRequestSchema.parse(payload);
+      expect(parsed).toEqual(payload);
+      expect(isCreateSceneBriefRequest(parsed)).toBe(true);
+      expect(isCreateSceneManualRequest(parsed)).toBe(false);
+    });
+
+    it("rejects mixed payload containing both configuration and brief", () => {
+      expect(() =>
+        CreateSceneRequestSchema.parse({
+          configuration: {
+            prompt: "Cinematic shot",
+            referenceIds: [],
+            engineProfileId: "ltx_25",
+            durationMs: 5000
+          },
+          brief: {
+            description: "A brief alongside configuration"
+          }
+        })
+      ).toThrow();
+    });
+
+    it("rejects payload with neither configuration nor brief", () => {
+      expect(() => CreateSceneRequestSchema.parse({})).toThrow();
     });
 
     it("rejects non-positive durationMs", () => {

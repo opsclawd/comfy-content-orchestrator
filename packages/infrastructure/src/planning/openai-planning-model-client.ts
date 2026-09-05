@@ -9,6 +9,42 @@ export interface OpenAiPlanningModelClientOptions {
   readonly baseUrl?: string;
   readonly model?: string;
   readonly fetch?: typeof globalThis.fetch;
+  readonly timeoutMs?: number;
+}
+
+function executeWithSignal<T>(
+  operation: () => Promise<T>,
+  signal: AbortSignal,
+  timeoutMessage: string
+): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(signal.reason ?? new Error(timeoutMessage));
+  }
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      reject(signal.reason ?? new Error(timeoutMessage));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+
+    operation().then(
+      (res) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        resolve(res);
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        reject(err);
+      }
+    );
+  });
 }
 
 export class OpenAiPlanningModelClient implements PlanningModelClientPort {
@@ -17,6 +53,7 @@ export class OpenAiPlanningModelClient implements PlanningModelClientPort {
   private readonly baseUrl: string;
   private readonly model: string;
   private readonly fetchFn: typeof globalThis.fetch;
+  private readonly timeoutMs: number;
 
   constructor(options: OpenAiPlanningModelClientOptions) {
     if (!options.apiKey) {
@@ -26,6 +63,7 @@ export class OpenAiPlanningModelClient implements PlanningModelClientPort {
     this.baseUrl = options.baseUrl ?? "https://api.openai.com";
     this.model = options.model ?? "gpt-5.6-sol";
     this.fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
+    this.timeoutMs = options.timeoutMs ?? 30_000;
   }
 
   async complete(request: PlanningModelRequest): Promise<PlanningModelOutcome> {
@@ -49,89 +87,150 @@ export class OpenAiPlanningModelClient implements PlanningModelClientPort {
       ]
     };
 
-    let response: Response;
-    try {
-      response = await this.fetchFn(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload)
-      });
-    } catch (err) {
-      return {
-        kind: "retryable_failure",
-        message: err instanceof Error ? err.message : String(err)
-      };
+    const attemptController = new AbortController();
+    let timedOut = false;
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      attemptController.abort(new Error(`Provider attempt timed out after ${this.timeoutMs}ms`));
+    }, this.timeoutMs);
+
+    const onCallerAbort = () => {
+      attemptController.abort(request.signal?.reason ?? new Error("Aborted by caller"));
+    };
+    if (request.signal) {
+      if (request.signal.aborted) {
+        attemptController.abort(request.signal.reason ?? new Error("Aborted by caller"));
+      } else {
+        request.signal.addEventListener("abort", onCallerAbort, { once: true });
+      }
     }
 
-    const status = response.status;
-    let bodyText = "";
-    let parsedBody: unknown = undefined;
-
     try {
-      bodyText = await response.text();
-      parsedBody = JSON.parse(bodyText);
-    } catch {
-      // Body is not JSON
-    }
+      let response: Response;
+      try {
+        response = await executeWithSignal(
+          () =>
+            this.fetchFn(url, {
+              method: "POST",
+              headers,
+              body: JSON.stringify(payload),
+              signal: attemptController.signal
+            }),
+          attemptController.signal,
+          `Provider attempt timed out after ${this.timeoutMs}ms`
+        );
+      } catch (err) {
+        const isTimeout =
+          timedOut ||
+          attemptController.signal.aborted ||
+          (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"));
+        return {
+          kind: "retryable_failure",
+          message: isTimeout
+            ? timedOut
+              ? `Provider attempt timed out after ${this.timeoutMs}ms`
+              : err instanceof Error
+                ? err.message
+                : String(err)
+            : err instanceof Error
+              ? err.message
+              : String(err)
+        };
+      }
 
-    if (status >= 200 && status < 300) {
-      if (parsedBody && typeof parsedBody === "object") {
-        const bodyObj = parsedBody as Record<string, unknown>;
-        if (Array.isArray(bodyObj.choices) && bodyObj.choices.length > 0) {
-          const firstChoice = bodyObj.choices[0] as Record<string, unknown>;
-          if (firstChoice.finish_reason === "content_filter") {
-            return {
-              kind: "safety_refusal",
-              httpStatus: status,
-              message: "Content filtered by safety policy"
-            };
-          }
-          const messageObj = firstChoice.message as Record<string, unknown> | undefined;
-          if (messageObj?.refusal) {
-            return {
-              kind: "safety_refusal",
-              httpStatus: status,
-              message: String(messageObj.refusal)
-            };
-          }
-          if (typeof messageObj?.content === "string") {
-            return { kind: "success", rawText: messageObj.content };
+      const status = response.status;
+      let bodyText = "";
+      let parsedBody: unknown = undefined;
+
+      try {
+        bodyText = await executeWithSignal(
+          () => response.text(),
+          attemptController.signal,
+          `Provider attempt timed out reading response body after ${this.timeoutMs}ms`
+        );
+        parsedBody = JSON.parse(bodyText);
+      } catch (err) {
+        const isTimeout =
+          timedOut ||
+          attemptController.signal.aborted ||
+          (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"));
+        if (isTimeout) {
+          return {
+            kind: "retryable_failure",
+            message: timedOut
+              ? `Provider attempt timed out reading response body after ${this.timeoutMs}ms`
+              : err instanceof Error
+                ? err.message
+                : String(err)
+          };
+        }
+        // Body is not JSON
+      }
+
+      if (status >= 200 && status < 300) {
+        if (parsedBody && typeof parsedBody === "object") {
+          const bodyObj = parsedBody as Record<string, unknown>;
+          if (Array.isArray(bodyObj.choices) && bodyObj.choices.length > 0) {
+            const firstChoice = bodyObj.choices[0] as Record<string, unknown>;
+            if (firstChoice.finish_reason === "content_filter") {
+              return {
+                kind: "safety_refusal",
+                httpStatus: status,
+                message: "Content filtered by safety policy"
+              };
+            }
+            const messageObj = firstChoice.message as Record<string, unknown> | undefined;
+            if (messageObj?.refusal) {
+              return {
+                kind: "safety_refusal",
+                httpStatus: status,
+                message: String(messageObj.refusal)
+              };
+            }
+            if (typeof messageObj?.content === "string") {
+              return { kind: "success", rawText: messageObj.content };
+            }
           }
         }
+        return { kind: "success", rawText: bodyText };
       }
-      return { kind: "success", rawText: bodyText };
-    }
 
-    const message = this.extractErrorMessage(parsedBody, bodyText, status);
+      const message = this.extractErrorMessage(parsedBody, bodyText, status);
 
-    if (status === 429 || status >= 500) {
-      return {
-        kind: "retryable_failure",
-        httpStatus: status,
-        message
-      };
-    }
-
-    if (status === 403) {
-      if (this.hasRefusalSignal(parsedBody, message)) {
+      if (status === 429 || status >= 500) {
         return {
-          kind: "safety_refusal",
+          kind: "retryable_failure",
+          httpStatus: status,
+          message
+        };
+      }
+
+      if (status === 403) {
+        if (this.hasRefusalSignal(parsedBody, message)) {
+          return {
+            kind: "safety_refusal",
+            httpStatus: 403,
+            message
+          };
+        }
+        return {
+          kind: "permanent_failure",
           httpStatus: 403,
           message
         };
       }
+
       return {
         kind: "permanent_failure",
-        httpStatus: 403,
+        httpStatus: status,
         message
       };
+    } finally {
+      clearTimeout(timeoutId);
+      if (request.signal) {
+        request.signal.removeEventListener("abort", onCallerAbort);
+      }
     }
-
-    return {
-      kind: "permanent_failure",
-      httpStatus: status,
-      message
-    };
   }
 
   private hasRefusalSignal(parsedBody: unknown, message: string): boolean {

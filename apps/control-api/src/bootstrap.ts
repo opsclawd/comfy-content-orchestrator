@@ -1,17 +1,25 @@
 import process from "node:process";
 import { HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
-import type { StorageTelemetryPort } from "@cco/application";
+import type {
+  PlanningModelClientPort,
+  ReferenceAssetRepository,
+  StorageTelemetryPort
+} from "@cco/application";
 import {
+  AnthropicPlanningModelClient,
   HostFsStorageTelemetryAdapter,
   InMemoryStorageMetricsRegistry,
+  OpenAiPlanningModelClient,
   PostgresDeliveryAssemblyJobQueue,
   PostgresJobQueue,
+  PostgresReferenceAssetRepository,
   PostgresSceneReviewQueries,
   PostgresUnitOfWork,
   S3ReviewMediaDelivery,
   StorageAwareJobAdmissionGate,
   type HostFsStorageTelemetryAdapterOptions
 } from "@cco/infrastructure";
+
 import type { FastifyInstance } from "fastify";
 import { Pool } from "pg";
 import { TailscaleReviewerIdentityResolver } from "./http/reviewer-identity.js";
@@ -46,6 +54,11 @@ export interface ControlApiBootstrapOptions {
   readonly storageTelemetryFactory?: (
     options: HostFsStorageTelemetryAdapterOptions
   ) => StorageTelemetryPort;
+  readonly planningModelClients?: {
+    readonly primary: PlanningModelClientPort;
+    readonly fallback: PlanningModelClientPort;
+  };
+  readonly referenceAssetRepository?: ReferenceAssetRepository;
   readonly serverStarter?: (
     dependencies: ControlApiDependencies,
     options: ServerListenOptions
@@ -217,6 +230,30 @@ export async function runControlApi(
       options.reviewerIdentityResolver ??
       new TailscaleReviewerIdentityResolver(config.reviewerIdentity);
 
+    const anthropicKey = config.planningProviders?.anthropicApiKey;
+    const openAiKey = config.planningProviders?.openaiApiKey;
+    const attemptTimeoutMs = config.planningProviders?.attemptTimeoutMs;
+    const overallTimeoutMs = config.planningProviders?.overallTimeoutMs;
+
+    const planningModelClients =
+      options.planningModelClients ??
+      (anthropicKey && openAiKey
+        ? {
+            primary: new AnthropicPlanningModelClient({
+              apiKey: anthropicKey,
+              ...(attemptTimeoutMs !== undefined ? { timeoutMs: attemptTimeoutMs } : {})
+            }),
+            fallback: new OpenAiPlanningModelClient({
+              apiKey: openAiKey,
+              ...(attemptTimeoutMs !== undefined ? { timeoutMs: attemptTimeoutMs } : {})
+            })
+          }
+        : undefined);
+
+    const referenceAssetRepository =
+      options.referenceAssetRepository ??
+      (anthropicKey && openAiKey ? new PostgresReferenceAssetRepository(pool) : undefined);
+
     // 5. Install signal handlers
     sigtermHandler = () => {
       logger.info("Received SIGTERM, initiating graceful shutdown...");
@@ -242,7 +279,10 @@ export async function runControlApi(
         storageTelemetry,
         storageMetricsRegistry,
         jobQueue,
-        deliveryAssemblyJobQueue
+        deliveryAssemblyJobQueue,
+        ...(planningModelClients ? { planningModelClients } : {}),
+        ...(referenceAssetRepository ? { referenceAssetRepository } : {}),
+        ...(overallTimeoutMs !== undefined ? { planningOverallTimeoutMs: overallTimeoutMs } : {})
       },
       {
         host: config.http.host,

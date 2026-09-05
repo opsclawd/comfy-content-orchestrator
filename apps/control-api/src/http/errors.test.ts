@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { IdempotencyConflictError, StaleRevisionConflictError } from "@cco/application";
+import {
+  IdempotencyConflictError,
+  PlanningNotAuthorizedError,
+  PlanningProviderExhaustedError,
+  PlanningProviderNotConfiguredError,
+  PlanningSafetyRefusalError,
+  SceneCreationModeMismatchError,
+  StaleRevisionConflictError
+} from "@cco/application";
 import { ReviewerIdentityUnavailableError, formatReviewError } from "./errors.js";
 
 describe("formatReviewError", () => {
@@ -33,6 +41,70 @@ describe("formatReviewError", () => {
         code: "IDEMPOTENCY_CONFLICT",
         message: expect.any(String),
         details: { actionId }
+      }
+    });
+  });
+
+  it("maps PlanningNotAuthorizedError to 403 CLOUD_PLANNING_NOT_AUTHORIZED", () => {
+    expect(
+      formatReviewError(new PlanningNotAuthorizedError("Cloud planning not permitted"))
+    ).toEqual({
+      statusCode: 403,
+      body: {
+        code: "CLOUD_PLANNING_NOT_AUTHORIZED",
+        message: "Cloud planning not permitted"
+      }
+    });
+  });
+
+  it("maps PlanningSafetyRefusalError to 422 PLANNING_SAFETY_REFUSAL with provider details", () => {
+    const err = new PlanningSafetyRefusalError("Safety refusal triggered", {
+      provider: "Anthropic"
+    });
+    expect(formatReviewError(err)).toEqual({
+      statusCode: 422,
+      body: {
+        code: "PLANNING_SAFETY_REFUSAL",
+        message: "Safety refusal triggered",
+        details: { provider: "Anthropic" }
+      }
+    });
+  });
+
+  it("maps PlanningProviderExhaustedError to 502 PLANNING_PROVIDER_EXHAUSTED with attempts details", () => {
+    const attempts = [
+      { provider: "Anthropic" as const, failureReason: "Timeout" },
+      { provider: "OpenAI" as const, failureReason: "Validation failed" }
+    ];
+    const err = new PlanningProviderExhaustedError("All providers exhausted", attempts);
+    expect(formatReviewError(err)).toEqual({
+      statusCode: 502,
+      body: {
+        code: "PLANNING_PROVIDER_EXHAUSTED",
+        message: "All providers exhausted",
+        details: { attempts }
+      }
+    });
+  });
+
+  it("maps SceneCreationModeMismatchError to 400 SCENE_CREATION_MODE_MISMATCH", () => {
+    const err = new SceneCreationModeMismatchError("Submit creative brief instead");
+    expect(formatReviewError(err)).toEqual({
+      statusCode: 400,
+      body: {
+        code: "SCENE_CREATION_MODE_MISMATCH",
+        message: "Submit creative brief instead"
+      }
+    });
+  });
+
+  it("maps PlanningProviderNotConfiguredError to 500 CONFIGURATION_ERROR", () => {
+    const err = new PlanningProviderNotConfiguredError("No provider configured");
+    expect(formatReviewError(err)).toEqual({
+      statusCode: 500,
+      body: {
+        code: "CONFIGURATION_ERROR",
+        message: "No provider configured"
       }
     });
   });

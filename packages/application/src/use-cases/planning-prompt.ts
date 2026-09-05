@@ -1,17 +1,9 @@
 import { createHash } from "node:crypto";
-import { RenderProfileKeySchema } from "@cco/contracts";
+import { RenderProfileKeySchema, type CreativeBrief } from "@cco/contracts";
 import type { CampaignId, ReferenceAsset } from "@cco/domain";
 import type { PlanningModelRequest } from "../ports/planning-model-client-port.js";
 
-export interface CreativeBrief {
-  readonly campaignId: CampaignId | string;
-  readonly title?: string;
-  readonly description: string;
-  readonly targetPlatform?: string;
-  readonly visualStyle?: string;
-  readonly requirements?: readonly string[];
-  readonly [key: string]: unknown;
-}
+export type { CreativeBrief };
 
 export function maskCampaignIdentifier(campaignId: string): string {
   const hash = createHash("sha256").update(campaignId).digest("hex");
@@ -20,6 +12,7 @@ export function maskCampaignIdentifier(campaignId: string): string {
 
 export interface BuildPlanningPromptInput {
   readonly brief: CreativeBrief;
+  readonly campaignId: CampaignId | string;
   readonly resolvedReferenceAssets: readonly ReferenceAsset[];
   readonly maskSensitiveData?: boolean | undefined;
   readonly maxDurationMs?: number | undefined;
@@ -28,8 +21,8 @@ export interface BuildPlanningPromptInput {
 
 export function buildPlanningPrompt(input: BuildPlanningPromptInput): PlanningModelRequest {
   const effectiveCampaignId = input.maskSensitiveData
-    ? maskCampaignIdentifier(input.brief.campaignId)
-    : input.brief.campaignId;
+    ? maskCampaignIdentifier(input.campaignId)
+    : input.campaignId;
 
   const certifiedProfiles = RenderProfileKeySchema.options;
   const assetIds = input.resolvedReferenceAssets.map((asset) => asset.id as string);

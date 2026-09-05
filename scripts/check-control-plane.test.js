@@ -1,6 +1,6 @@
 import { describe, it } from "vitest";
 import assert from "node:assert/strict";
-import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { writeFileSync, readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Buffer } from "node:buffer";
@@ -677,5 +677,31 @@ API_SECRET=synthetic_api_secret_key_12345
     assert.throws(() => {
       validateRequiredVariablesOmissionInMemory(env);
     }, /missing.*STORAGE_TELEMETRY_PATH/i);
+  });
+
+  it("declares optional ANTHROPIC_API_KEY and OPENAI_API_KEY in compose control-api environment and .env.example", () => {
+    const composeContent = readFileSync("compose.yaml", "utf8");
+    assert.match(
+      composeContent,
+      /ANTHROPIC_API_KEY:\s*\$\{ANTHROPIC_API_KEY:-\}/,
+      "compose.yaml must define ANTHROPIC_API_KEY with blank-safe optional interpolation"
+    );
+    assert.match(
+      composeContent,
+      /OPENAI_API_KEY:\s*\$\{OPENAI_API_KEY:-\}/,
+      "compose.yaml must define OPENAI_API_KEY with blank-safe optional interpolation"
+    );
+
+    const envExampleContent = readFileSync(".env.example", "utf8");
+    assert.match(
+      envExampleContent,
+      /ANTHROPIC_API_KEY=synthetic_/,
+      ".env.example must document synthetic ANTHROPIC_API_KEY"
+    );
+    assert.match(
+      envExampleContent,
+      /OPENAI_API_KEY=synthetic_/,
+      ".env.example must document synthetic OPENAI_API_KEY"
+    );
   });
 });

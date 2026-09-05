@@ -7,8 +7,8 @@ import {
 } from "./planning-prompt.js";
 
 describe("planning-prompt", () => {
+  const campaignId = "campaign-secret-12345";
   const brief: CreativeBrief = {
-    campaignId: "campaign-secret-12345",
     title: "Summer Splash Launch",
     description: "High energy commercial intro with vibrant summer vibes",
     targetPlatform: "tiktok",
@@ -37,6 +37,7 @@ describe("planning-prompt", () => {
   it("includes resolved reference asset IDs and certified profile IDs in prompt text", () => {
     const prompt = buildPlanningPrompt({
       brief,
+      campaignId,
       resolvedReferenceAssets: [refAsset1, refAsset2],
       maskSensitiveData: false
     });
@@ -57,6 +58,7 @@ describe("planning-prompt", () => {
   it("masks campaignId when maskSensitiveData is true and excludes the raw ID", () => {
     const prompt = buildPlanningPrompt({
       brief,
+      campaignId,
       resolvedReferenceAssets: [refAsset1],
       maskSensitiveData: true
     });
@@ -70,6 +72,7 @@ describe("planning-prompt", () => {
   it("includes corrective feedback when provided", () => {
     const prompt = buildPlanningPrompt({
       brief,
+      campaignId,
       resolvedReferenceAssets: [refAsset1],
       correctiveFeedback: "engineProfileId 'invalid' is not certified"
     });

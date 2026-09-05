@@ -39,8 +39,8 @@ describe("PlanSceneConfigurationUseCase", () => {
     }
   ];
 
+  const testCampaignId = "campaign-secret-999";
   const brief: CreativeBrief = {
-    campaignId: "campaign-secret-999",
     title: "Summer Splash Launch",
     description: "Cinematic commercial intro with high energy",
     targetPlatform: "tiktok"
@@ -109,6 +109,7 @@ describe("PlanSceneConfigurationUseCase", () => {
 
     const result = await useCase.execute({
       brief,
+      campaignId: testCampaignId,
       clientId: testClientId,
       candidateReferenceAssetIds: [validAssetId1, validAssetId2],
       externalProcessingPolicy: {
@@ -138,6 +139,7 @@ describe("PlanSceneConfigurationUseCase", () => {
     await expect(
       useCase.execute({
         brief,
+        campaignId: testCampaignId,
         clientId: testClientId,
         candidateReferenceAssetIds: [validAssetId1],
         externalProcessingPolicy: {
@@ -165,6 +167,7 @@ describe("PlanSceneConfigurationUseCase", () => {
     await expect(
       useCase.execute({
         brief,
+        campaignId: testCampaignId,
         clientId: testClientId,
         candidateReferenceAssetIds: [validAssetId1],
         externalProcessingPolicy: {
@@ -197,6 +200,7 @@ describe("PlanSceneConfigurationUseCase", () => {
     await expect(
       useCase.execute({
         brief,
+        campaignId: testCampaignId,
         clientId: testClientId,
         candidateReferenceAssetIds: [validAssetId1],
         externalProcessingPolicy: {
@@ -225,6 +229,7 @@ describe("PlanSceneConfigurationUseCase", () => {
 
     await useCase.execute({
       brief,
+      campaignId: testCampaignId,
       clientId: testClientId,
       candidateReferenceAssetIds: [validAssetId1],
       externalProcessingPolicy: {
@@ -257,6 +262,7 @@ describe("PlanSceneConfigurationUseCase", () => {
 
     const result = await useCase.execute({
       brief,
+      campaignId: testCampaignId,
       clientId: testClientId,
       candidateReferenceAssetIds: [validAssetId1],
       externalProcessingPolicy: {
@@ -288,6 +294,7 @@ describe("PlanSceneConfigurationUseCase", () => {
 
     const result = await useCase.execute({
       brief,
+      campaignId: testCampaignId,
       clientId: testClientId,
       candidateReferenceAssetIds: [validAssetId1],
       externalProcessingPolicy: {
@@ -324,6 +331,7 @@ describe("PlanSceneConfigurationUseCase", () => {
 
     const result = await useCase.execute({
       brief,
+      campaignId: testCampaignId,
       clientId: testClientId,
       candidateReferenceAssetIds: [validAssetId1],
       externalProcessingPolicy: {
@@ -361,6 +369,7 @@ describe("PlanSceneConfigurationUseCase", () => {
     await expect(
       useCase.execute({
         brief,
+        campaignId: testCampaignId,
         clientId: testClientId,
         candidateReferenceAssetIds: [validAssetId1],
         externalProcessingPolicy: {
@@ -397,6 +406,7 @@ describe("PlanSceneConfigurationUseCase", () => {
 
     const result = await useCase.execute({
       brief,
+      campaignId: testCampaignId,
       clientId: testClientId,
       candidateReferenceAssetIds: [validAssetId1],
       externalProcessingPolicy: {
@@ -439,6 +449,7 @@ describe("PlanSceneConfigurationUseCase", () => {
     await expect(
       useCase.execute({
         brief,
+        campaignId: testCampaignId,
         clientId: testClientId,
         candidateReferenceAssetIds: [validAssetId1, nonexistentUuid],
         externalProcessingPolicy: {
@@ -487,6 +498,7 @@ describe("PlanSceneConfigurationUseCase", () => {
     await expect(
       useCase.execute({
         brief,
+        campaignId: testCampaignId,
         clientId: testClientId, // querying as testClientId
         candidateReferenceAssetIds: [validAssetId1, crossTenantAssetId],
         externalProcessingPolicy: {
@@ -521,6 +533,7 @@ describe("PlanSceneConfigurationUseCase", () => {
     try {
       await useCase.execute({
         brief,
+        campaignId: testCampaignId,
         clientId: testClientId,
         candidateReferenceAssetIds: [validAssetId1],
         externalProcessingPolicy: {
@@ -556,6 +569,7 @@ describe("PlanSceneConfigurationUseCase", () => {
 
     const result = await useCase.execute({
       brief,
+      campaignId: testCampaignId,
       clientId: testClientId,
       candidateReferenceAssetIds: [validAssetId1],
       externalProcessingPolicy: {
@@ -589,6 +603,7 @@ describe("PlanSceneConfigurationUseCase", () => {
 
     const result = await useCase.execute({
       brief,
+      campaignId: testCampaignId,
       clientId: testClientId,
       candidateReferenceAssetIds: [validAssetId1],
       externalProcessingPolicy: {
@@ -619,6 +634,7 @@ describe("PlanSceneConfigurationUseCase", () => {
     await expect(
       useCase.execute({
         brief,
+        campaignId: testCampaignId,
         clientId: testClientId,
         candidateReferenceAssetIds: [validAssetId1],
         externalProcessingPolicy: {
@@ -648,6 +664,7 @@ describe("PlanSceneConfigurationUseCase", () => {
     await expect(
       useCase.execute({
         brief,
+        campaignId: testCampaignId,
         clientId: testClientId,
         candidateReferenceAssetIds: [validAssetId1],
         externalProcessingPolicy: {
@@ -677,6 +694,7 @@ describe("PlanSceneConfigurationUseCase", () => {
     await expect(
       useCase.execute({
         brief,
+        campaignId: testCampaignId,
         clientId: testClientId,
         candidateReferenceAssetIds: [validAssetId1],
         externalProcessingPolicy: {
@@ -688,5 +706,124 @@ describe("PlanSceneConfigurationUseCase", () => {
 
     expect(primary.calls).toHaveLength(0);
     expect(badFallback.calls).toHaveLength(0);
+  });
+
+  it("19. stalled primary connection times out and deterministically reaches fallback client", async () => {
+    const repo = createMockRepo(resolvedAssets);
+    // Primary client simulates stalled/never-resolving connection timing out
+    const primary = createMockClient("Anthropic", [
+      { kind: "retryable_failure", message: "Provider attempt timed out after 30ms" },
+      { kind: "retryable_failure", message: "Provider attempt timed out after 30ms" }
+    ]);
+    // Fallback client succeeds
+    const fallback = createMockClient("OpenAI", [
+      { kind: "success", rawText: JSON.stringify(validConfig) }
+    ]);
+
+    const useCase = new PlanSceneConfigurationUseCase({
+      referenceAssetRepository: repo,
+      primaryClient: primary,
+      fallbackClient: fallback,
+      overallTimeoutMs: 5000
+    });
+
+    const result = await useCase.execute({
+      brief,
+      campaignId: testCampaignId,
+      clientId: testClientId,
+      candidateReferenceAssetIds: [validAssetId1],
+      externalProcessingPolicy: {
+        allowCloudPlanning: true,
+        allowedProviders: ["Anthropic", "OpenAI"]
+      }
+    });
+
+    expect(result).toBeDefined();
+    expect(primary.calls).toHaveLength(2);
+    expect(fallback.calls).toHaveLength(1);
+  });
+
+  it("20. stalled primary and fallback connections time out and reach PLANNING_PROVIDER_EXHAUSTED", async () => {
+    const repo = createMockRepo(resolvedAssets);
+    const primary = createMockClient("Anthropic", [
+      { kind: "retryable_failure", message: "Primary timed out" },
+      { kind: "retryable_failure", message: "Primary retry timed out" }
+    ]);
+    const fallback = createMockClient("OpenAI", [
+      { kind: "retryable_failure", message: "Fallback timed out" },
+      { kind: "retryable_failure", message: "Fallback retry timed out" }
+    ]);
+
+    const useCase = new PlanSceneConfigurationUseCase({
+      referenceAssetRepository: repo,
+      primaryClient: primary,
+      fallbackClient: fallback,
+      overallTimeoutMs: 5000
+    });
+
+    let caughtError: unknown;
+    try {
+      await useCase.execute({
+        brief,
+        campaignId: testCampaignId,
+        clientId: testClientId,
+        candidateReferenceAssetIds: [validAssetId1],
+        externalProcessingPolicy: {
+          allowCloudPlanning: true,
+          allowedProviders: ["Anthropic", "OpenAI"]
+        }
+      });
+    } catch (err) {
+      caughtError = err;
+    }
+
+    expect(caughtError).toBeInstanceOf(PlanningProviderExhaustedError);
+    const exhaustedErr = caughtError as PlanningProviderExhaustedError;
+    expect(exhaustedErr.attempts).toHaveLength(4);
+    expect(exhaustedErr.attempts[0]?.provider).toBe("Anthropic");
+    expect(exhaustedErr.attempts[2]?.provider).toBe("OpenAI");
+  });
+
+  it("21. overall planning deadline expires and throws PlanningProviderExhaustedError", async () => {
+    const repo = createMockRepo(resolvedAssets);
+    // Client whose complete awaits until overall deadline fires
+    const slowPrimary: PlanningModelClientPort = {
+      providerName: "Anthropic",
+      complete: vi.fn(async (req: PlanningModelRequest): Promise<PlanningModelOutcome> => {
+        // Wait for request signal to abort
+        await new Promise<void>((resolve) => {
+          if (req.signal?.aborted) {
+            resolve();
+          } else {
+            req.signal?.addEventListener("abort", () => resolve(), { once: true });
+          }
+        });
+        return {
+          kind: "retryable_failure",
+          message: "Request aborted due to overall deadline"
+        };
+      })
+    };
+    const fallback = createMockClient("OpenAI", []);
+
+    const useCase = new PlanSceneConfigurationUseCase({
+      referenceAssetRepository: repo,
+      primaryClient: slowPrimary,
+      fallbackClient: fallback,
+      overallTimeoutMs: 30
+    });
+
+    await expect(
+      useCase.execute({
+        brief,
+        campaignId: testCampaignId,
+        clientId: testClientId,
+        candidateReferenceAssetIds: [validAssetId1],
+        externalProcessingPolicy: {
+          allowCloudPlanning: true,
+          allowedProviders: ["Anthropic", "OpenAI"]
+        }
+      })
+    ).rejects.toThrow(PlanningProviderExhaustedError);
   });
 });

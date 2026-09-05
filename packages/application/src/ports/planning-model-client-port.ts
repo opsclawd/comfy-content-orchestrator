@@ -1,6 +1,7 @@
 export interface PlanningModelRequest {
   readonly systemPrompt: string;
   readonly userPrompt: string;
+  readonly signal?: AbortSignal;
 }
 
 export type PlanningModelOutcome =
