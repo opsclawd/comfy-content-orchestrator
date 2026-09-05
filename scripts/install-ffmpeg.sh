@@ -63,21 +63,26 @@ if [[ -z "${FFMPEG_BIN}" || -z "${FFPROBE_BIN}" ]]; then
   exit 1
 fi
 
-INSTALL_DIR="/usr/local/bin"
 USE_SUDO=""
 
-if [[ $EUID -eq 0 ]]; then
-  USE_SUDO=""
-elif [[ -w "${INSTALL_DIR}" ]]; then
-  USE_SUDO=""
+if [[ -n "${FFMPEG_INSTALL_DIR:-}" ]]; then
+  # Explicit override (e.g. a CI cache directory) — always user-writable,
+  # never needs sudo.
+  INSTALL_DIR="${FFMPEG_INSTALL_DIR}"
+  mkdir -p "${INSTALL_DIR}"
+elif [[ $EUID -eq 0 ]]; then
+  INSTALL_DIR="/usr/local/bin"
+elif [[ -w "/usr/local/bin" ]]; then
+  INSTALL_DIR="/usr/local/bin"
 elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+  INSTALL_DIR="/usr/local/bin"
   USE_SUDO="sudo"
 elif command -v sudo >/dev/null 2>&1 && [ -t 0 ]; then
+  INSTALL_DIR="/usr/local/bin"
   USE_SUDO="sudo"
 else
   INSTALL_DIR="${HOME}/.local/bin"
   mkdir -p "${INSTALL_DIR}"
-  USE_SUDO=""
 fi
 
 echo "Installing ffmpeg and ffprobe into ${INSTALL_DIR}..."

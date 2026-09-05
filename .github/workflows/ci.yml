@@ -18,9 +18,28 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
 
+      # johnvansickle.com's static-build origin is a single, small,
+      # non-CDN server under heavy worldwide CI load and has intermittently
+      # served bad bytes to GitHub Actions runners specifically (see #192,
+      # #193). Caching the verified binaries, keyed on .ffmpeg-version, means
+      # that server is only ever hit once per version bump instead of on
+      # every single CI run.
+      - name: Cache FFmpeg binaries
+        id: ffmpeg-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ffmpeg-bin
+          key: ffmpeg-${{ runner.os }}-${{ hashFiles('.ffmpeg-version') }}
+
       - name: Install FFmpeg
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
         run: |
-          ./scripts/install-ffmpeg.sh
+          FFMPEG_INSTALL_DIR="${HOME}/.cache/ffmpeg-bin" ./scripts/install-ffmpeg.sh
+
+      - name: Verify FFmpeg
+        run: |
+          echo "${HOME}/.cache/ffmpeg-bin" >> "${GITHUB_PATH}"
+          export PATH="${HOME}/.cache/ffmpeg-bin:${PATH}"
           ./scripts/check-ffmpeg-version.sh
 
       - run: pnpm install --frozen-lockfile
