@@ -293,6 +293,30 @@ describe("OpenAiPlanningModelClient", () => {
     }
   });
 
+  it("classifies non-timeout response.text() rejection as retryable_failure", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        ({
+          status: 200,
+          text: async () => {
+            throw new TypeError("terminated");
+          }
+        }) as unknown as Response
+    );
+
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-key",
+      fetch: fetchMock
+    });
+
+    const result = await client.complete(request);
+
+    expect(result.kind).toBe("retryable_failure");
+    if (result.kind === "retryable_failure") {
+      expect(result.message).toContain("terminated");
+    }
+  });
+
   it("classifies caller-supplied abort signal as retryable_failure", async () => {
     const fetchMock = vi.fn(() => new Promise<Response>(() => {}));
 
@@ -313,6 +337,163 @@ describe("OpenAiPlanningModelClient", () => {
     expect(result.kind).toBe("retryable_failure");
     if (result.kind === "retryable_failure") {
       expect(result.message).toContain("Caller deadline exceeded");
+    }
+  });
+
+  it("maps HTTP 429 with structured_field refusal discriminator (error.code: content_policy_violation) to safety_refusal", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        ({
+          status: 429,
+          text: async () =>
+            JSON.stringify({
+              error: {
+                code: "content_policy_violation",
+                message: "Rate limited and content policy violation detected"
+              }
+            })
+        }) as unknown as Response
+    );
+
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-key",
+      fetch: fetchMock
+    });
+
+    const result = await client.complete(request);
+    expect(result.kind).toBe("safety_refusal");
+    if (result.kind === "safety_refusal") {
+      expect(result.httpStatus).toBe(429);
+      expect(result.message).toContain("content policy violation detected");
+    }
+  });
+
+  it("maps HTTP 500 with structured_field refusal discriminator (error.type: refusal) to safety_refusal", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        ({
+          status: 500,
+          text: async () =>
+            JSON.stringify({
+              error: {
+                type: "refusal",
+                message: "Internal error: prompt refused by safety filter"
+              }
+            })
+        }) as unknown as Response
+    );
+
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-key",
+      fetch: fetchMock
+    });
+
+    const result = await client.complete(request);
+    expect(result.kind).toBe("safety_refusal");
+    if (result.kind === "safety_refusal") {
+      expect(result.httpStatus).toBe(500);
+      expect(result.message).toContain("prompt refused by safety filter");
+    }
+  });
+
+  it("maps HTTP 401 with refusal-looking prose but no exact discriminator to permanent_failure", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        ({
+          status: 401,
+          text: async () =>
+            JSON.stringify({
+              error: {
+                type: "authentication_error",
+                message: "Organization policy does not allow this API key"
+              }
+            })
+        }) as unknown as Response
+    );
+
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-key",
+      fetch: fetchMock
+    });
+
+    const result = await client.complete(request);
+    expect(result.kind).toBe("permanent_failure");
+    if (result.kind === "permanent_failure") {
+      expect(result.httpStatus).toBe(401);
+      expect(result.message).toContain("Organization policy does not allow this API key");
+    }
+  });
+
+  it("maps HTTP 500 with refusal-looking prose but no exact discriminator to retryable_failure", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        ({
+          status: 500,
+          text: async () =>
+            JSON.stringify({
+              error: {
+                type: "server_error",
+                message: "Safety policy enforcement service temporarily unavailable"
+              }
+            })
+        }) as unknown as Response
+    );
+
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-key",
+      fetch: fetchMock
+    });
+
+    const result = await client.complete(request);
+    expect(result.kind).toBe("retryable_failure");
+    if (result.kind === "retryable_failure") {
+      expect(result.httpStatus).toBe(500);
+      expect(result.message).toContain("Safety policy enforcement service temporarily unavailable");
+    }
+  });
+
+  it("maps network error containing refusal keywords to retryable_failure", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error("request failed: safety policy endpoint unavailable");
+    });
+
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-key",
+      fetch: fetchMock
+    });
+
+    const result = await client.complete(request);
+    expect(result.kind).toBe("retryable_failure");
+    if (result.kind === "retryable_failure") {
+      expect(result.httpStatus).toBeUndefined();
+      expect(result.message).toContain("safety policy endpoint unavailable");
+    }
+  });
+
+  it("maps HTTP 403 with heuristic-only keyword match (e.g. harm) to safety_refusal", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        ({
+          status: 403,
+          text: async () =>
+            JSON.stringify({
+              error: {
+                message: "This request was blocked due to potential harm."
+              }
+            })
+        }) as unknown as Response
+    );
+
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-key",
+      fetch: fetchMock
+    });
+
+    const result = await client.complete(request);
+    expect(result.kind).toBe("safety_refusal");
+    if (result.kind === "safety_refusal") {
+      expect(result.httpStatus).toBe(403);
+      expect(result.message).toContain("potential harm");
     }
   });
 });
