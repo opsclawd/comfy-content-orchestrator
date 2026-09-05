@@ -11,7 +11,11 @@ import {
   type PutObjectInput,
   type RenderWorkflow
 } from "@cco/application";
-import { getProfileInjectionTopology } from "@cco/contracts";
+import {
+  getProfileInjectionTopology,
+  LTX_FRAME_STEP,
+  LTX_SUPPORTED_FRAME_RANGE
+} from "@cco/contracts";
 import type { CandidateId, JobKind, RenderJob } from "@cco/domain";
 import {
   collectCertificationProvenance,
@@ -166,6 +170,7 @@ interface ValidatedInjectedPayload {
   readonly seed?: number | undefined;
   readonly variantOrdinal?: number | undefined;
   readonly approvedCandidateId?: CandidateId | undefined;
+  readonly frameCount?: number | undefined;
 }
 
 const ALLOWED_CANDIDATE_KEYS = new Set(["prompt", "negativePrompt", "seed", "variantOrdinal"]);
@@ -174,7 +179,8 @@ const ALLOWED_PRODUCTION_KEYS = new Set([
   "negativePrompt",
   "audioPrompt",
   "seed",
-  "approvedCandidateId"
+  "approvedCandidateId",
+  "frameCount"
 ]);
 
 function validateInjectedPayload(
@@ -206,6 +212,11 @@ function validateInjectedPayload(
           "audioPrompt is production-only and not allowed in candidate jobs"
         );
       }
+      if (jobKind === "candidate" && key === "frameCount") {
+        throw new RenderJobPayloadValidationError(
+          "frameCount is production-only and not allowed in candidate jobs"
+        );
+      }
       throw new RenderJobPayloadValidationError(`Unknown injected payload field: "${key}"`);
     }
   }
@@ -217,6 +228,7 @@ function validateInjectedPayload(
   let seed: number | undefined;
   let variantOrdinal: number | undefined;
   let approvedCandidateId: CandidateId | undefined;
+  let frameCount: number | undefined;
 
   if ("prompt" in raw && raw.prompt !== undefined) {
     if (typeof raw.prompt !== "string") {
@@ -289,6 +301,49 @@ function validateInjectedPayload(
     approvedCandidateId = raw.approvedCandidateId as CandidateId;
   }
 
+  if ("frameCount" in raw && raw.frameCount !== undefined) {
+    if (jobKind !== "production") {
+      throw new RenderJobPayloadValidationError(
+        "frameCount is production-only and not allowed in candidate jobs"
+      );
+    }
+    if (
+      typeof raw.frameCount !== "number" ||
+      !Number.isInteger(raw.frameCount) ||
+      !Number.isSafeInteger(raw.frameCount)
+    ) {
+      throw new RenderJobPayloadValidationError(
+        "injectedPayload.frameCount must be a safe integer"
+      );
+    }
+    if ((raw.frameCount - 1) % LTX_FRAME_STEP !== 0) {
+      throw new RenderJobPayloadValidationError(
+        `injectedPayload.frameCount must satisfy (frameCount - 1) % ${LTX_FRAME_STEP} === 0`
+      );
+    }
+    if (
+      raw.frameCount < LTX_SUPPORTED_FRAME_RANGE[0] ||
+      raw.frameCount > LTX_SUPPORTED_FRAME_RANGE[1]
+    ) {
+      throw new RenderJobPayloadValidationError(
+        `injectedPayload.frameCount must be a safe integer between ${LTX_SUPPORTED_FRAME_RANGE[0]} and ${LTX_SUPPORTED_FRAME_RANGE[1]}`
+      );
+    }
+    if (profile) {
+      const profileKey = profile.renderProfileIdentity?.key ?? profile.id ?? profile.engine;
+      const topology = getProfileInjectionTopology(profileKey);
+      if (profile.renderProfileIdentity && !topology) {
+        throw new MissingProfileTopologyError(profile.id, profile.renderProfileIdentity.key);
+      }
+      if (topology && !topology.frameCount) {
+        throw new RenderJobPayloadValidationError(
+          `Profile "${profile.id}" does not support frame-count injection: frameCount is not supported`
+        );
+      }
+    }
+    frameCount = raw.frameCount;
+  }
+
   if (jobKind === "candidate") {
     if (raw.variantOrdinal === undefined || raw.variantOrdinal === null) {
       throw new RenderJobPayloadValidationError(
@@ -307,7 +362,15 @@ function validateInjectedPayload(
     variantOrdinal = raw.variantOrdinal;
   }
 
-  return { prompt, negativePrompt, audioPrompt, seed, variantOrdinal, approvedCandidateId };
+  return {
+    prompt,
+    negativePrompt,
+    audioPrompt,
+    seed,
+    variantOrdinal,
+    approvedCandidateId,
+    frameCount
+  };
 }
 
 export function mutateWorkflow(
@@ -416,6 +479,28 @@ export function mutateWorkflow(
       }
       (node as { inputs: Record<string, unknown> }).inputs[topology.audioPrompt.inputField] =
         injected.audioPrompt;
+    }
+
+    if (injected.frameCount !== undefined) {
+      if (!topology.frameCount) {
+        throw new RenderJobExecutionError(
+          `Profile "${profile?.id ?? "unknown"}" does not declare a frameCount injection target`
+        );
+      }
+      const node = workflow[topology.frameCount.nodeId];
+      if (
+        typeof node !== "object" ||
+        node === null ||
+        (node as { class_type?: string }).class_type !== topology.frameCount.classType ||
+        typeof (node as { inputs?: unknown }).inputs !== "object" ||
+        (node as { inputs?: unknown }).inputs === null
+      ) {
+        throw new RenderJobExecutionError(
+          `Expected node "${topology.frameCount.nodeId}" to exist with class_type "${topology.frameCount.classType}" and inputs object for frameCount injection`
+        );
+      }
+      (node as { inputs: Record<string, unknown> }).inputs[topology.frameCount.inputField] =
+        injected.frameCount;
     }
   } else {
     if (injected.prompt !== undefined) {

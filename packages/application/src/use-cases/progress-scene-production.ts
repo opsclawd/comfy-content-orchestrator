@@ -1,5 +1,5 @@
 import { InvalidTransitionError } from "@cco/domain";
-import type { RenderJob, Scene, SceneId, SceneSnapshot } from "@cco/domain";
+import type { RenderJob, Scene, SceneId, SceneSnapshot, SceneStatus } from "@cco/domain";
 import type { JobQueuePort } from "../ports/job-queue-port.js";
 import type {
   RenderEnginePort,
@@ -106,6 +106,52 @@ export class ProgressSceneProductionUseCases {
     });
   }
 
+  async markProductionRenderingStartedIfQueued(sceneId: string, jobId?: string): Promise<void> {
+    await this.uow.execute(async (context) => {
+      const scene = await context.scenes.findById(sceneId as SceneId);
+      if (scene === undefined) return;
+      if (scene.status !== "queued") return;
+      const snapshot = scene.snapshot();
+      if (jobId !== undefined && snapshot.activeProductionJobId !== jobId) {
+        return;
+      }
+
+      scene.startRendering();
+      await context.scenes.save(scene);
+    });
+  }
+
+  async submitProductionForQAIfRendering(sceneId: string, jobId?: string): Promise<void> {
+    await this.uow.execute(async (context) => {
+      const scene = await context.scenes.findById(sceneId as SceneId);
+      if (scene === undefined) return;
+      if (scene.status !== "rendering") return;
+      const snapshot = scene.snapshot();
+      if (jobId !== undefined && snapshot.activeProductionJobId !== jobId) {
+        return;
+      }
+
+      scene.submitForQA();
+      await context.scenes.save(scene);
+    });
+  }
+
+  async failProductionIfActive(sceneId: string, jobId?: string): Promise<void> {
+    await this.uow.execute(async (context) => {
+      const scene = await context.scenes.findById(sceneId as SceneId);
+      if (scene === undefined) return;
+      const activeStatuses: readonly SceneStatus[] = ["queued", "rendering", "qa"];
+      if (!activeStatuses.includes(scene.status)) return;
+      const snapshot = scene.snapshot();
+      if (jobId !== undefined && snapshot.activeProductionJobId !== jobId) {
+        return;
+      }
+
+      scene.fail();
+      await context.scenes.save(scene);
+    });
+  }
+
   async queue(input: QueueSceneProductionInput): Promise<RenderQueueReceipt | undefined> {
     let engineProfileId: string | undefined;
 
@@ -114,7 +160,7 @@ export class ProgressSceneProductionUseCases {
       if (scene === undefined) {
         throw new SceneNotFoundError(input.sceneId);
       }
-      scene.queueForProduction();
+      scene.queueForProduction(input.renderJobId);
       await context.scenes.save(scene);
       engineProfileId = scene.snapshot().configuration.engineProfileId;
     });

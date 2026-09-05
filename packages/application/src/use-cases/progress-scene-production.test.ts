@@ -662,4 +662,121 @@ describe("ProgressSceneProductionUseCases", () => {
       expect(callLog).toEqual(["scenes.findById", "jobs.areAllJobsTerminal", "scenes.save"]);
     });
   });
+
+  describe("production lifecycle idempotent progression methods", () => {
+    it("markProductionRenderingStartedIfQueued transitions queued scene to rendering", async () => {
+      const scene = createQueuedScene("scene-prod-start-1");
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const useCases = new ProgressSceneProductionUseCases(uow);
+
+      await useCases.markProductionRenderingStartedIfQueued("scene-prod-start-1");
+
+      expect(uow.savedScenes).toHaveLength(1);
+      expect(uow.savedScenes[0]!.status).toBe("rendering");
+    });
+
+    it("markProductionRenderingStartedIfQueued no-ops on missing or non-queued scene", async () => {
+      const scene = createRenderingScene("scene-already-rendering");
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const useCases = new ProgressSceneProductionUseCases(uow);
+
+      await useCases.markProductionRenderingStartedIfQueued("non-existent");
+      expect(uow.savedScenes).toHaveLength(0);
+
+      await useCases.markProductionRenderingStartedIfQueued("scene-already-rendering");
+      expect(uow.savedScenes).toHaveLength(0);
+    });
+
+    it("submitProductionForQAIfRendering transitions rendering scene to qa", async () => {
+      const scene = createRenderingScene("scene-prod-qa-1");
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const useCases = new ProgressSceneProductionUseCases(uow);
+
+      await useCases.submitProductionForQAIfRendering("scene-prod-qa-1");
+
+      expect(uow.savedScenes).toHaveLength(1);
+      expect(uow.savedScenes[0]!.status).toBe("qa");
+    });
+
+    it("submitProductionForQAIfRendering no-ops on missing or non-rendering scene", async () => {
+      const scene = createQAScene("scene-already-qa");
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const useCases = new ProgressSceneProductionUseCases(uow);
+
+      await useCases.submitProductionForQAIfRendering("non-existent");
+      expect(uow.savedScenes).toHaveLength(0);
+
+      await useCases.submitProductionForQAIfRendering("scene-already-qa");
+      expect(uow.savedScenes).toHaveLength(0);
+    });
+
+    it("failProductionIfActive transitions active scenes (queued, rendering, qa) to failed", async () => {
+      for (const source of ["queued", "rendering", "qa"] as const) {
+        let scene: Scene;
+        if (source === "queued") scene = createQueuedScene(`scene-fail-${source}`);
+        else if (source === "rendering") scene = createRenderingScene(`scene-fail-${source}`);
+        else scene = createQAScene(`scene-fail-${source}`);
+
+        const uow = new InMemorySceneUnitOfWork([scene]);
+        const useCases = new ProgressSceneProductionUseCases(uow);
+
+        await useCases.failProductionIfActive(`scene-fail-${source}`);
+
+        expect(uow.savedScenes).toHaveLength(1);
+        expect(uow.savedScenes[0]!.status).toBe("failed");
+        expect(uow.savedScenes[0]!.snapshot().failedFrom).toBe(source);
+      }
+    });
+
+    it("failProductionIfActive no-ops on missing or inactive scenes", async () => {
+      const scene = createDirectorReviewScene("scene-inactive");
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const useCases = new ProgressSceneProductionUseCases(uow);
+
+      await useCases.failProductionIfActive("non-existent");
+      expect(uow.savedScenes).toHaveLength(0);
+
+      await useCases.failProductionIfActive("scene-inactive");
+      expect(uow.savedScenes).toHaveLength(0);
+    });
+
+    it("lifecycle progression methods ignore stale job IDs when activeProductionJobId is bound", async () => {
+      const scene = createApprovedScene("scene-job-guard-1");
+      const activeJobId = "job-new-123";
+      const staleJobId = "job-old-456";
+
+      scene.queueForProduction(activeJobId);
+
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const useCases = new ProgressSceneProductionUseCases(uow);
+
+      // 1. markProductionRenderingStartedIfQueued with stale job ID should be no-op
+      await useCases.markProductionRenderingStartedIfQueued("scene-job-guard-1", staleJobId);
+      expect(uow.savedScenes).toHaveLength(0);
+      expect(scene.status).toBe("queued");
+
+      // 2. markProductionRenderingStartedIfQueued with matching job ID transitions to rendering
+      await useCases.markProductionRenderingStartedIfQueued("scene-job-guard-1", activeJobId);
+      expect(uow.savedScenes).toHaveLength(1);
+      expect(uow.savedScenes[0]!.status).toBe("rendering");
+
+      // 3. submitProductionForQAIfRendering with stale job ID should be no-op
+      await useCases.submitProductionForQAIfRendering("scene-job-guard-1", staleJobId);
+      expect(uow.savedScenes).toHaveLength(1);
+
+      // 4. submitProductionForQAIfRendering with matching job ID transitions to qa
+      await useCases.submitProductionForQAIfRendering("scene-job-guard-1", activeJobId);
+      expect(uow.savedScenes).toHaveLength(2);
+      expect(uow.savedScenes[1]!.status).toBe("qa");
+
+      // 5. failProductionIfActive with stale job ID should be no-op
+      await useCases.failProductionIfActive("scene-job-guard-1", staleJobId);
+      expect(uow.savedScenes).toHaveLength(2);
+
+      // 6. failProductionIfActive with matching job ID transitions to failed
+      await useCases.failProductionIfActive("scene-job-guard-1", activeJobId);
+      expect(uow.savedScenes).toHaveLength(3);
+      expect(uow.savedScenes[2]!.status).toBe("failed");
+    });
+  });
 });

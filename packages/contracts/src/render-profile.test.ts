@@ -6,7 +6,11 @@ import {
   RenderProfileSchema,
   LtxRenderProfileSchema,
   LTX_25_720P_5S_V1_PROFILE,
-  getProfileInjectionTopology
+  getProfileInjectionTopology,
+  LTX_FPS,
+  LTX_FRAME_STEP,
+  LTX_SUPPORTED_FRAME_RANGE,
+  LTX_FRAME_QUANTIZATION_TOLERANCE_MS
 } from "./render-profile.js";
 
 describe("RenderProfileSchema", () => {
@@ -194,9 +198,14 @@ describe("RenderProfileSchema", () => {
         inputField: "seed"
       });
       expect(topology?.audioPrompt).toBeNull();
+      expect(topology?.frameCount).toEqual({
+        nodeId: "5",
+        classType: "EmptyLTXVLatentVideo",
+        inputField: "length"
+      });
     });
 
-    it("returns explicit topology for Flux profile with audioPrompt set to null", () => {
+    it("returns explicit topology for Flux profile with audioPrompt and frameCount undefined/null", () => {
       const topology = getProfileInjectionTopology("flux-schnell-draft");
       expect(topology).toBeDefined();
       expect(topology?.prompt).toEqual({
@@ -210,6 +219,14 @@ describe("RenderProfileSchema", () => {
         inputField: "seed"
       });
       expect(topology?.audioPrompt).toBeNull();
+      expect(topology?.frameCount).toBeUndefined();
+    });
+
+    it("verifies LTX frame rate, quantization constants and tolerance", () => {
+      expect(LTX_FPS).toBe(24);
+      expect(LTX_FRAME_STEP).toBe(8);
+      expect(LTX_SUPPORTED_FRAME_RANGE).toEqual([97, 97]);
+      expect(LTX_FRAME_QUANTIZATION_TOLERANCE_MS).toBe(167);
     });
 
     it("returns undefined for unknown profile keys", () => {

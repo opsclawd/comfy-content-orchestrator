@@ -1871,4 +1871,291 @@ describe("Job Dispatch Routes", () => {
       await appFail.close();
     });
   });
+
+  describe("Production scene transition triggers on job start, complete, and fail", () => {
+    function createAppWithProductionSpies(queue: JobQueuePort) {
+      const container = createControlApiContainer({
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
+        jobQueue: queue
+      });
+      const startSpy = vi
+        .spyOn(container.useCases.progressSceneProduction, "markProductionRenderingStartedIfQueued")
+        .mockResolvedValue(undefined);
+      const completeSpy = vi
+        .spyOn(container.useCases.progressSceneProduction, "submitProductionForQAIfRendering")
+        .mockResolvedValue(undefined);
+      const failSpy = vi
+        .spyOn(container.useCases.progressSceneProduction, "failProductionIfActive")
+        .mockResolvedValue(undefined);
+      const app = createControlApiApp(container, {
+        jobDispatch: defaultDispatchConfig
+      });
+      return { app, startSpy, completeSpy, failSpy };
+    }
+
+    const productionJob: RenderJob = {
+      ...sampleLeasedJob,
+      jobKind: "production"
+    };
+
+    it("triggers markProductionRenderingStartedIfQueued on /start with applied production job", async () => {
+      const queue = createFakeJobQueue({
+        start: vi.fn().mockResolvedValue({
+          outcome: "applied",
+          job: { ...productionJob, status: "rendering" }
+        })
+      });
+      const { app, startSpy } = createAppWithProductionSpies(queue);
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/start`,
+        payload: { leaseToken: sampleLeaseToken }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(startSpy).toHaveBeenCalledTimes(1);
+      expect(startSpy).toHaveBeenCalledWith(productionJob.sceneId, productionJob.jobId);
+      await app.close();
+    });
+
+    it("triggers markProductionRenderingStartedIfQueued on /start with already_applied production job (worker retry)", async () => {
+      const queue = createFakeJobQueue({
+        start: vi.fn().mockResolvedValue({
+          outcome: "already_applied",
+          job: { ...productionJob, status: "rendering" }
+        })
+      });
+      const { app, startSpy } = createAppWithProductionSpies(queue);
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/start`,
+        payload: { leaseToken: sampleLeaseToken }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(startSpy).toHaveBeenCalledTimes(1);
+      expect(startSpy).toHaveBeenCalledWith(productionJob.sceneId, productionJob.jobId);
+      await app.close();
+    });
+
+    it("does not trigger markProductionRenderingStartedIfQueued on /start for candidate job", async () => {
+      const queue = createFakeJobQueue({
+        start: vi.fn().mockResolvedValue({
+          outcome: "applied",
+          job: { ...sampleLeasedJob, status: "rendering" }
+        })
+      });
+      const { app, startSpy } = createAppWithProductionSpies(queue);
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/start`,
+        payload: { leaseToken: sampleLeaseToken }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(startSpy).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("triggers submitProductionForQAIfRendering on /complete with applied production job", async () => {
+      const queue = createFakeJobQueue({
+        complete: vi.fn().mockResolvedValue({
+          outcome: "applied",
+          job: { ...productionJob, status: "completed" }
+        })
+      });
+      const { app, completeSpy } = createAppWithProductionSpies(queue);
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/complete`,
+        payload: { leaseToken: sampleLeaseToken }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(completeSpy).toHaveBeenCalledTimes(1);
+      expect(completeSpy).toHaveBeenCalledWith(productionJob.sceneId, productionJob.jobId);
+      await app.close();
+    });
+
+    it("triggers submitProductionForQAIfRendering on /complete with already_applied production job (worker retry)", async () => {
+      const queue = createFakeJobQueue({
+        complete: vi.fn().mockResolvedValue({
+          outcome: "already_applied",
+          job: { ...productionJob, status: "completed" }
+        })
+      });
+      const { app, completeSpy } = createAppWithProductionSpies(queue);
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/complete`,
+        payload: { leaseToken: sampleLeaseToken }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(completeSpy).toHaveBeenCalledTimes(1);
+      expect(completeSpy).toHaveBeenCalledWith(productionJob.sceneId, productionJob.jobId);
+      await app.close();
+    });
+
+    it("does not trigger submitProductionForQAIfRendering on /complete for candidate job", async () => {
+      const queue = createFakeJobQueue({
+        complete: vi.fn().mockResolvedValue({
+          outcome: "applied",
+          job: sampleCompletedJob
+        })
+      });
+      const { app, completeSpy } = createAppWithProductionSpies(queue);
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/complete`,
+        payload: { leaseToken: sampleLeaseToken }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(completeSpy).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("triggers failProductionIfActive on /fail with applied production job and status failed", async () => {
+      const queue = createFakeJobQueue({
+        fail: vi.fn().mockResolvedValue({
+          outcome: "applied",
+          job: { ...productionJob, status: "failed" }
+        })
+      });
+      const { app, failSpy } = createAppWithProductionSpies(queue);
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/fail`,
+        payload: { leaseToken: sampleLeaseToken, errorTrace: "LTX out of memory" }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(failSpy).toHaveBeenCalledTimes(1);
+      expect(failSpy).toHaveBeenCalledWith(productionJob.sceneId, productionJob.jobId);
+      await app.close();
+    });
+
+    it("triggers failProductionIfActive on /fail with already_applied production job and status failed", async () => {
+      const queue = createFakeJobQueue({
+        fail: vi.fn().mockResolvedValue({
+          outcome: "already_applied",
+          job: { ...productionJob, status: "failed" }
+        })
+      });
+      const { app, failSpy } = createAppWithProductionSpies(queue);
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/fail`,
+        payload: { leaseToken: sampleLeaseToken, errorTrace: "LTX out of memory" }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(failSpy).toHaveBeenCalledTimes(1);
+      expect(failSpy).toHaveBeenCalledWith(productionJob.sceneId, productionJob.jobId);
+      await app.close();
+    });
+
+    it("does not trigger failProductionIfActive on /fail when production job retries remaining (status queued)", async () => {
+      const queue = createFakeJobQueue({
+        fail: vi.fn().mockResolvedValue({
+          outcome: "applied",
+          job: { ...productionJob, status: "queued" }
+        })
+      });
+      const { app, failSpy } = createAppWithProductionSpies(queue);
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/fail`,
+        payload: { leaseToken: sampleLeaseToken, errorTrace: "temporary error" }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(failSpy).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("does not trigger failProductionIfActive on /fail for candidate job", async () => {
+      const queue = createFakeJobQueue({
+        fail: vi.fn().mockResolvedValue({
+          outcome: "applied",
+          job: sampleFailedJob
+        })
+      });
+      const { app, failSpy } = createAppWithProductionSpies(queue);
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/fail`,
+        payload: { leaseToken: sampleLeaseToken, errorTrace: "candidate failure" }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(failSpy).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("propagates unswallowed error from production transition handlers as 500", async () => {
+      const queueStart = createFakeJobQueue({
+        start: vi.fn().mockResolvedValue({
+          outcome: "applied",
+          job: { ...productionJob, status: "rendering" }
+        })
+      });
+      const { app: appStart, startSpy } = createAppWithProductionSpies(queueStart);
+      startSpy.mockRejectedValue(new Error("Start UoW error"));
+
+      const startRes = await appStart.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/start`,
+        payload: { leaseToken: sampleLeaseToken }
+      });
+      expect(startRes.statusCode).toBe(500);
+      await appStart.close();
+
+      const queueComplete = createFakeJobQueue({
+        complete: vi.fn().mockResolvedValue({
+          outcome: "applied",
+          job: { ...productionJob, status: "completed" }
+        })
+      });
+      const { app: appComplete, completeSpy } = createAppWithProductionSpies(queueComplete);
+      completeSpy.mockRejectedValue(new Error("Complete UoW error"));
+
+      const completeRes = await appComplete.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/complete`,
+        payload: { leaseToken: sampleLeaseToken }
+      });
+      expect(completeRes.statusCode).toBe(500);
+      await appComplete.close();
+
+      const queueFail = createFakeJobQueue({
+        fail: vi.fn().mockResolvedValue({
+          outcome: "applied",
+          job: { ...productionJob, status: "failed" }
+        })
+      });
+      const { app: appFail, failSpy } = createAppWithProductionSpies(queueFail);
+      failSpy.mockRejectedValue(new Error("Fail UoW error"));
+
+      const failRes = await appFail.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/fail`,
+        payload: { leaseToken: sampleLeaseToken, errorTrace: "Production fail" }
+      });
+      expect(failRes.statusCode).toBe(500);
+      await appFail.close();
+    });
+  });
 });

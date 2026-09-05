@@ -4,6 +4,7 @@ import {
   CreateClientUseCase,
   CreateSceneUseCase,
   EnforceStorageAdmission,
+  EnqueueSceneProductionRenderUseCase,
   PlanCampaignBeatSheetUseCase,
   PlanSceneConfigurationUseCase,
   ProgressSceneProductionUseCases,
@@ -41,6 +42,7 @@ export interface ControlApiDependencies {
 export interface ControlApiUseCases {
   readonly reviewScene: ReviewSceneUseCases;
   readonly progressSceneProduction: ProgressSceneProductionUseCases;
+  readonly enqueueSceneProductionRender?: EnqueueSceneProductionRenderUseCase | undefined;
   readonly createCampaign?: CreateCampaignUseCase | undefined;
   readonly createClient?: CreateClientUseCase | undefined;
   readonly createScene?: CreateSceneUseCase | undefined;
@@ -68,6 +70,7 @@ export function createControlApiContainer(
     dependencies.renderEngine,
     dependencies.jobQueue
   );
+  const enqueueSceneProductionRender = new EnqueueSceneProductionRenderUseCase(dependencies.uow);
   const createCampaign = new CreateCampaignUseCase(dependencies.uow);
   const createClient = new CreateClientUseCase(dependencies.uow);
   const createScene = new CreateSceneUseCase(dependencies.uow);
@@ -116,6 +119,7 @@ export function createControlApiContainer(
     useCases: {
       reviewScene,
       progressSceneProduction,
+      enqueueSceneProductionRender,
       createCampaign,
       createClient,
       createScene,

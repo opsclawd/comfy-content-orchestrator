@@ -1344,7 +1344,15 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
             }
           },
           "3": { class_type: "CLIPTextEncode", inputs: { text: `Cinematic scene ${sceneId}` } },
-          "4": { class_type: "CLIPTextEncode", inputs: { text: "low quality, blurry" } }
+          "4": { class_type: "CLIPTextEncode", inputs: { text: "low quality, blurry" } },
+          "5": {
+            class_type: "EmptyLTXVLatentVideo",
+            inputs: {
+              width: 1280,
+              height: 720,
+              length: 121
+            }
+          }
         },
         mediaObjects: [
           {

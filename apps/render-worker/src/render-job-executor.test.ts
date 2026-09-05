@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { LTX_FPS } from "@cco/contracts";
 import {
   AssembleGenerationManifest,
   type ExecuteProfileRenderInput,
@@ -487,6 +488,88 @@ describe("Certified Render Job Executor", () => {
     });
     await expect(executor(candidateJobWithApprovedId)).rejects.toThrow(
       "approvedCandidateId is production-only and not allowed in candidate jobs"
+    );
+    expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+
+    // 6b. frameCount in a candidate job (production-only)
+    const candidateJobWithFrameCount = createSampleCandidateJob({
+      injectedPayload: {
+        prompt: "valid",
+        variantOrdinal: 1,
+        frameCount: 57
+      }
+    });
+    await expect(executor(candidateJobWithFrameCount)).rejects.toThrow(
+      "frameCount is production-only and not allowed in candidate jobs"
+    );
+    expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+
+    // 6c. Invalid frameCount in production job
+    const prodJobWithFloatFrameCount = createSampleProductionJob({
+      injectedPayload: {
+        prompt: "valid",
+        frameCount: 57.5
+      }
+    });
+    await expect(executor(prodJobWithFloatFrameCount)).rejects.toThrow(
+      "injectedPayload.frameCount must be a safe integer"
+    );
+    expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+
+    const prodJobWithInvalidTemporalFrameCount18 = createSampleProductionJob({
+      injectedPayload: {
+        prompt: "valid",
+        frameCount: 18
+      }
+    });
+    await expect(executor(prodJobWithInvalidTemporalFrameCount18)).rejects.toThrow(
+      "injectedPayload.frameCount must satisfy (frameCount - 1) % 8 === 0"
+    );
+    expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+
+    const prodJobWithInvalidTemporalFrameCount100 = createSampleProductionJob({
+      injectedPayload: {
+        prompt: "valid",
+        frameCount: 100
+      }
+    });
+    await expect(executor(prodJobWithInvalidTemporalFrameCount100)).rejects.toThrow(
+      "injectedPayload.frameCount must satisfy (frameCount - 1) % 8 === 0"
+    );
+    expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+
+    const prodJobWithOutOfRangeFrameCount = createSampleProductionJob({
+      injectedPayload: {
+        prompt: "valid",
+        frameCount: 105
+      }
+    });
+    await expect(executor(prodJobWithOutOfRangeFrameCount)).rejects.toThrow(
+      "injectedPayload.frameCount must be a safe integer between 97 and 97"
+    );
+    expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+
+    // 6d. frameCount against a profile whose topology does not support frameCount (Finding 4)
+    const fluxProdJobWithFrameCount = createSampleProductionJob({
+      workflowTemplate: "flux-schnell-draft",
+      injectedPayload: {
+        prompt: "valid",
+        frameCount: 97
+      }
+    });
+    const fluxExecutor = createCertifiedRenderJobExecutor({
+      loadCertificationProfile: async () => fakeFluxProfile,
+      readApprovedProvenance: async () => fakeFluxLiveProvenance,
+      collectCertificationProvenance: async () => fakeFluxLiveProvenance,
+      verifyGoldMasterProvenance: () => {},
+      readWorkflowFile: async () => fakeRawFluxWorkflow,
+      hashWorkflow: () => sampleWorkflowHash,
+      executeProfileRender: mockExecuteProfileRender,
+      outputReader: new FakeOutputReader(),
+      productionManifestAssembler: { assembleManifest: async () => ({}) }
+    });
+    await expect(fluxExecutor(fluxProdJobWithFrameCount)).rejects.toThrow(
+      'Profile "flux-schnell-draft" does not support frame-count injection: frameCount is not supported'
     );
     expect(mockExecuteProfileRender).not.toHaveBeenCalled();
 
@@ -1303,6 +1386,43 @@ describe("Certified Render Job Executor", () => {
       );
     });
 
+    it("mutates node 5 length for frameCount injection with declarative topology", () => {
+      const rawLtx = JSON.stringify({
+        "1": { class_type: "KSampler", inputs: { seed: 42 } },
+        "3": { class_type: "CLIPTextEncode", inputs: { text: "old" } },
+        "4": { class_type: "CLIPTextEncode", inputs: { text: "old neg" } },
+        "5": {
+          class_type: "EmptyLTXVLatentVideo",
+          inputs: { width: 1280, height: 720, length: 97 }
+        }
+      });
+
+      const mutated = mutateWorkflow(
+        rawLtx,
+        {
+          prompt: "new prompt",
+          seed: 12345,
+          frameCount: 57
+        },
+        fakeLtxProfile
+      );
+
+      expect((mutated["5"] as { inputs: { length: number } }).inputs.length).toBe(57);
+      expect((mutated["3"] as { inputs: { text: string } }).inputs.text).toBe("new prompt");
+      expect((mutated["1"] as { inputs: { seed: number } }).inputs.seed).toBe(12345);
+    });
+
+    it("throws descriptive error when frameCount node is missing or malformed in workflow", () => {
+      const rawWithoutNode5 = JSON.stringify({
+        "1": { class_type: "KSampler", inputs: { seed: 42 } },
+        "3": { class_type: "CLIPTextEncode", inputs: { text: "old" } }
+      });
+
+      expect(() => mutateWorkflow(rawWithoutNode5, { frameCount: 57 }, fakeLtxProfile)).toThrow(
+        'Expected node "5" to exist with class_type "EmptyLTXVLatentVideo" and inputs object for frameCount injection'
+      );
+    });
+
     it("proves full causal chain request -> finalized execution workflow -> ComfyUI dispatch -> manifest provenance against actual certified LTX template", async () => {
       const executeCalls: ExecuteProfileRenderInput[] = [];
       const mockExecuteProfileRender = vi
@@ -1378,6 +1498,7 @@ describe("Certified Render Job Executor", () => {
           prompt: "A cinematic aerial drone shot of golden hour landscape",
           negativePrompt: "blurry, low quality, artifacts",
           seed: 987654,
+          frameCount: 97,
           approvedCandidateId: "cand-certified-999" as CandidateId
         }
       });
@@ -1398,6 +1519,8 @@ describe("Certified Render Job Executor", () => {
       expect(dispatchedWorkflow["4"]?.inputs.text).toBe("blurry, low quality, artifacts");
       expect(dispatchedWorkflow["1"]?.class_type).toBe("KSampler");
       expect(dispatchedWorkflow["1"]?.inputs.seed).toBe(987654);
+      expect(dispatchedWorkflow["5"]?.class_type).toBe("EmptyLTXVLatentVideo");
+      expect(dispatchedWorkflow["5"]?.inputs.length).toBe(97);
 
       // 2. Assert manifest assembler receives the finalized mutated workflow and approvedCandidateId
       expect(mockAssembler.assembleManifest).toHaveBeenCalledTimes(1);
@@ -1593,7 +1716,7 @@ describe("Certified Render Job Executor", () => {
       });
       expect(manifest.dimensions).toEqual({ width: 1280, height: 720 });
       expect(manifest.frameCount).toBe(97);
-      expect(manifest.fps).toBe(97 / 5);
+      expect(manifest.fps).toBe(LTX_FPS);
       expect(manifest.workflow).toEqual({
         templateId: "ltx-25-720p-97f",
         sha256: sampleLtxWorkflowHash
