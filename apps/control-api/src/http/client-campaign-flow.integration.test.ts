@@ -59,7 +59,14 @@ describe("Client to Campaign End-to-End Integration Flow", () => {
       method: "POST",
       url: "/api/clients",
       payload: {
-        companyName: "Godzspeed Communications Inc."
+        companyName: "Godzspeed Communications Inc.",
+        externalProcessingPolicy: {
+          allowCloudPlanning: false,
+          allowCloudVisualQA: true,
+          allowCloudVoice: true,
+          allowedProviders: [],
+          sensitiveDataMasking: true
+        }
       }
     });
 
@@ -70,10 +77,10 @@ describe("Client to Campaign End-to-End Integration Flow", () => {
     expect(clientBody.brandBibleJson).toEqual({});
     expect(clientBody.defaultAspectRatio).toBe("9:16");
     expect(clientBody.externalProcessingPolicy).toEqual({
-      allowCloudPlanning: true,
+      allowCloudPlanning: false,
       allowCloudVisualQA: true,
       allowCloudVoice: true,
-      allowedProviders: ["Anthropic", "OpenAI", "Google", "ElevenLabs"],
+      allowedProviders: [],
       sensitiveDataMasking: true
     });
     expect(clientBody.createdAt).toBeDefined();

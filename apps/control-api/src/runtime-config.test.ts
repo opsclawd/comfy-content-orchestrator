@@ -410,4 +410,91 @@ describe("runtime-config", () => {
       }
     }
   });
+
+  describe("planning provider configuration", () => {
+    const secretAnthropicKey = "sk-ant-secret-123456789";
+    const secretOpenAiKey = "sk-openai-secret-987654321";
+
+    it("allows zero keys and leaves planningProviders undefined", () => {
+      const config = parseControlApiRuntimeConfig(validEnv);
+      expect(config.planningProviders).toBeUndefined();
+
+      // Also when explicitly undefined or empty
+      const configWithEmpty = parseControlApiRuntimeConfig({
+        ...validEnv,
+        ANTHROPIC_API_KEY: "",
+        OPENAI_API_KEY: "   "
+      });
+      expect(configWithEmpty.planningProviders).toBeUndefined();
+    });
+
+    it("accepts both keys and configures planningProviders", () => {
+      const config = parseControlApiRuntimeConfig({
+        ...validEnv,
+        ANTHROPIC_API_KEY: secretAnthropicKey,
+        OPENAI_API_KEY: secretOpenAiKey
+      });
+
+      expect(config.planningProviders).toBeDefined();
+      expect(config.planningProviders?.anthropicApiKey).toBe(secretAnthropicKey);
+      expect(config.planningProviders?.openaiApiKey).toBe(secretOpenAiKey);
+    });
+
+    it("throws ControlApiConfigError naming OPENAI_API_KEY when only ANTHROPIC_API_KEY is provided", () => {
+      expect(() =>
+        parseControlApiRuntimeConfig({
+          ...validEnv,
+          ANTHROPIC_API_KEY: secretAnthropicKey
+        })
+      ).toThrowError(/OPENAI_API_KEY/);
+
+      try {
+        parseControlApiRuntimeConfig({
+          ...validEnv,
+          ANTHROPIC_API_KEY: secretAnthropicKey,
+          OPENAI_API_KEY: ""
+        });
+      } catch (err: unknown) {
+        expect(err).toBeInstanceOf(ControlApiConfigError);
+        const msg = err instanceof Error ? err.message : String(err);
+        expect(msg).toContain("OPENAI_API_KEY");
+        expect(msg).not.toContain(secretAnthropicKey);
+      }
+    });
+
+    it("throws ControlApiConfigError naming ANTHROPIC_API_KEY when only OPENAI_API_KEY is provided", () => {
+      expect(() =>
+        parseControlApiRuntimeConfig({
+          ...validEnv,
+          OPENAI_API_KEY: secretOpenAiKey
+        })
+      ).toThrowError(/ANTHROPIC_API_KEY/);
+
+      try {
+        parseControlApiRuntimeConfig({
+          ...validEnv,
+          ANTHROPIC_API_KEY: "   ",
+          OPENAI_API_KEY: secretOpenAiKey
+        });
+      } catch (err: unknown) {
+        expect(err).toBeInstanceOf(ControlApiConfigError);
+        const msg = err instanceof Error ? err.message : String(err);
+        expect(msg).toContain("ANTHROPIC_API_KEY");
+        expect(msg).not.toContain(secretOpenAiKey);
+      }
+    });
+
+    it("parses optional planning attempt and overall timeouts when provided", () => {
+      const config = parseControlApiRuntimeConfig({
+        ...validEnv,
+        ANTHROPIC_API_KEY: secretAnthropicKey,
+        OPENAI_API_KEY: secretOpenAiKey,
+        PLANNING_ATTEMPT_TIMEOUT_MS: "45000",
+        PLANNING_OVERALL_TIMEOUT_MS: "90000"
+      });
+
+      expect(config.planningProviders?.attemptTimeoutMs).toBe(45_000);
+      expect(config.planningProviders?.overallTimeoutMs).toBe(90_000);
+    });
+  });
 });

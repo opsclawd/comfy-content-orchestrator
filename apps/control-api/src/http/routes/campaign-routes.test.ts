@@ -2,23 +2,51 @@ import { describe, expect, it } from "vitest";
 import {
   ClientNotFoundError,
   type CampaignRepository,
+  type ClientRepository,
+  type PlanningModelClientPort,
+  type ReferenceAssetRepository,
   type SceneRepository,
   type UnitOfWork,
   type UnitOfWorkContext
 } from "@cco/application";
-import type { CampaignId, CampaignRecord, Scene, SceneId } from "@cco/domain";
+import type { CampaignId, CampaignRecord, ClientRecord, Scene, SceneId } from "@cco/domain";
 import { createControlApiApp } from "../app.js";
+
+const validClientId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73801";
+const validCampaignId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73800";
 
 class FakeCampaignUnitOfWork implements UnitOfWork {
   private readonly _campaigns = new Map<string, CampaignRecord>();
   private readonly _scenes = new Map<SceneId, Scene>();
+  private readonly _clients = new Map<string, ClientRecord>();
 
   constructor(
     seededCampaigns: CampaignRecord[] = [],
-    private readonly onSaveCampaign?: (campaign: CampaignRecord) => Promise<void> | void
+    private readonly onSaveCampaign?: (campaign: CampaignRecord) => Promise<void> | void,
+    seededClients: ClientRecord[] = []
   ) {
     for (const c of seededCampaigns) {
       this._campaigns.set(c.id, c);
+    }
+    for (const cl of seededClients) {
+      this._clients.set(cl.id, cl);
+    }
+    if (!this._clients.has(validClientId)) {
+      this._clients.set(validClientId, {
+        id: validClientId,
+        companyName: "Acme Corp",
+        brandBibleJson: {},
+        defaultAspectRatio: "9:16",
+        externalProcessingPolicy: {
+          allowCloudPlanning: false,
+          allowCloudVisualQA: true,
+          allowCloudVoice: true,
+          allowedProviders: [],
+          sensitiveDataMasking: true
+        },
+        createdAt: "2026-09-03T12:00:00.000Z",
+        updatedAt: "2026-09-03T12:00:00.000Z"
+      });
     }
   }
 
@@ -28,6 +56,10 @@ class FakeCampaignUnitOfWork implements UnitOfWork {
 
   get savedScenes(): readonly Scene[] {
     return Array.from(this._scenes.values());
+  }
+
+  get savedClients(): readonly ClientRecord[] {
+    return Array.from(this._clients.values());
   }
 
   async execute<TResult>(work: (context: UnitOfWorkContext) => Promise<TResult>): Promise<TResult> {
@@ -55,15 +87,18 @@ class FakeCampaignUnitOfWork implements UnitOfWork {
           }
           this._campaigns.set(campaign.id, campaign);
         }
-      } as CampaignRepository<CampaignRecord>
+      } as CampaignRepository<CampaignRecord>,
+      clients: {
+        findById: async (id: string) => this._clients.get(id),
+        save: async (client: ClientRecord) => {
+          this._clients.set(client.id, client);
+        }
+      } as ClientRepository<ClientRecord>
     });
   }
 }
 
 describe("Campaign and Scene Creation HTTP Routes", () => {
-  const validClientId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73801";
-  const validCampaignId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73800";
-
   const seededCampaign: CampaignRecord = {
     id: validCampaignId as CampaignId,
     clientId: validClientId,
@@ -282,6 +317,175 @@ describe("Campaign and Scene Creation HTTP Routes", () => {
       });
 
       expect(response.statusCode).toBe(400);
+    });
+
+    it("returns 400 SCENE_CREATION_MODE_MISMATCH when client has allowCloudPlanning: true but manual body is submitted", async () => {
+      const cloudClient: ClientRecord = {
+        id: validClientId,
+        companyName: "Cloud Corp",
+        brandBibleJson: {},
+        defaultAspectRatio: "9:16",
+        externalProcessingPolicy: {
+          allowCloudPlanning: true,
+          allowCloudVisualQA: true,
+          allowCloudVoice: true,
+          allowedProviders: ["Anthropic", "OpenAI"],
+          sensitiveDataMasking: true
+        },
+        createdAt: "2026-09-03T12:00:00.000Z",
+        updatedAt: "2026-09-03T12:00:00.000Z"
+      };
+
+      const uow = new FakeCampaignUnitOfWork([seededCampaign], undefined, [cloudClient]);
+      const app = createControlApiApp({ uow });
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/campaigns/${validCampaignId}/scenes`,
+        payload: {
+          configuration: {
+            prompt: "Manual prompt",
+            referenceIds: [],
+            engineProfileId: "ltx_25",
+            durationMs: 5000
+          }
+        }
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = response.json();
+      expect(body.code).toBe("SCENE_CREATION_MODE_MISMATCH");
+    });
+
+    it("creates a scene with planned configuration and returns 201 when client has allowCloudPlanning: true and brief body is submitted", async () => {
+      const cloudClient: ClientRecord = {
+        id: validClientId,
+        companyName: "Cloud Corp",
+        brandBibleJson: {},
+        defaultAspectRatio: "9:16",
+        externalProcessingPolicy: {
+          allowCloudPlanning: true,
+          allowCloudVisualQA: true,
+          allowCloudVoice: true,
+          allowedProviders: ["Anthropic", "OpenAI"],
+          sensitiveDataMasking: true
+        },
+        createdAt: "2026-09-03T12:00:00.000Z",
+        updatedAt: "2026-09-03T12:00:00.000Z"
+      };
+
+      const plannedConfig = {
+        prompt: "AI generated cinematic sunrise over carnival stage",
+        referenceIds: [],
+        engineProfileId: "LTX_25_720P_5S_V1",
+        durationMs: 5000,
+        loraConfigurationId: null
+      };
+
+      const uow = new FakeCampaignUnitOfWork([seededCampaign], undefined, [cloudClient]);
+      const mockPrimary: PlanningModelClientPort = {
+        providerName: "Anthropic",
+        complete: async () => ({
+          kind: "success",
+          rawText: JSON.stringify(plannedConfig)
+        })
+      };
+      const mockFallback: PlanningModelClientPort = {
+        providerName: "OpenAI",
+        complete: async () => ({
+          kind: "success",
+          rawText: JSON.stringify(plannedConfig)
+        })
+      };
+      const mockAssetRepo: ReferenceAssetRepository = {
+        listBySceneId: async () => [],
+        findByIds: async () => []
+      };
+
+      const app = createControlApiApp({
+        uow,
+        planningModelClients: {
+          primary: mockPrimary,
+          fallback: mockFallback
+        },
+        referenceAssetRepository: mockAssetRepo
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/campaigns/${validCampaignId}/scenes`,
+        payload: {
+          brief: {
+            title: "Sunrise Reveal",
+            description: "Opening shot of dawn breaking over carnival dancers",
+            targetPlatform: "tiktok"
+          }
+        }
+      });
+
+      expect(response.statusCode).toBe(201);
+      const body = response.json();
+      expect(body.sceneId).toBeDefined();
+      expect(body.campaignId).toBe(validCampaignId);
+      expect(body.status).toBe("draft_pending");
+      expect(body.configuration).toEqual(plannedConfig);
+      expect(uow.savedScenes).toHaveLength(1);
+    });
+
+    it("returns 500 CONFIGURATION_ERROR when client has allowCloudPlanning: true but no planning provider configured", async () => {
+      const cloudClient: ClientRecord = {
+        id: validClientId,
+        companyName: "Cloud Corp",
+        brandBibleJson: {},
+        defaultAspectRatio: "9:16",
+        externalProcessingPolicy: {
+          allowCloudPlanning: true,
+          allowCloudVisualQA: true,
+          allowCloudVoice: true,
+          allowedProviders: ["Anthropic", "OpenAI"],
+          sensitiveDataMasking: true
+        },
+        createdAt: "2026-09-03T12:00:00.000Z",
+        updatedAt: "2026-09-03T12:00:00.000Z"
+      };
+
+      const uow = new FakeCampaignUnitOfWork([seededCampaign], undefined, [cloudClient]);
+      // Container created without planningModelClients/referenceAssetRepository
+      const app = createControlApiApp({ uow });
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/campaigns/${validCampaignId}/scenes`,
+        payload: {
+          brief: {
+            description: "A brief with no planning provider wired"
+          }
+        }
+      });
+
+      expect(response.statusCode).toBe(500);
+      const body = response.json();
+      expect(body.code).toBe("CONFIGURATION_ERROR");
+    });
+
+    it("returns 400 SCENE_CREATION_MODE_MISMATCH when client has allowCloudPlanning: false but brief body is submitted", async () => {
+      // Default seededClient in FakeCampaignUnitOfWork has allowCloudPlanning: false
+      const uow = new FakeCampaignUnitOfWork([seededCampaign]);
+      const app = createControlApiApp({ uow });
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/campaigns/${validCampaignId}/scenes`,
+        payload: {
+          brief: {
+            description: "A brief submitted to a client requiring manual configuration"
+          }
+        }
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = response.json();
+      expect(body.code).toBe("SCENE_CREATION_MODE_MISMATCH");
     });
   });
 });

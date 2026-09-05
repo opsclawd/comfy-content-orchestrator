@@ -16,7 +16,16 @@ import {
 } from "@cco/infrastructure";
 import type { SceneId } from "@cco/domain";
 import type { SceneReviewDetailReadModel } from "@cco/contracts";
+import type { PlanningModelClientPort, ReferenceAssetRepository } from "@cco/application";
 import { createControlApiApp } from "./app.js";
+
+const manualProcessingPolicy = {
+  allowCloudPlanning: false,
+  allowCloudVisualQA: true,
+  allowCloudVoice: true,
+  allowedProviders: [],
+  sensitiveDataMasking: true
+};
 
 const defaultTestOptions = {
   reviewerIdentityResolver: {
@@ -80,7 +89,8 @@ describe("Campaign and Scene Creation End-to-End Integration", () => {
 
   it("creates a real campaign and scene landing in PostgreSQL in draft_pending state", async () => {
     const clientRecord = await insertClientRecord(client, {
-      companyName: "Acme Productions"
+      companyName: "Acme Productions",
+      externalProcessingPolicy: manualProcessingPolicy
     });
 
     const uow = new PostgresUnitOfWork(pool);
@@ -213,7 +223,8 @@ describe("Campaign and Scene Creation End-to-End Integration", () => {
 
   it("transitions draft_pending scene to generating_candidates, enqueues 3 candidate jobs, allows worker claim, and candidates are visible in review", async () => {
     const clientRecord = await insertClientRecord(client, {
-      companyName: "Acme Productions"
+      companyName: "Acme Productions",
+      externalProcessingPolicy: manualProcessingPolicy
     });
 
     const uow = new PostgresUnitOfWork(pool);
@@ -424,7 +435,11 @@ describe("Campaign and Scene Creation End-to-End Integration", () => {
   });
 
   it("automatically transitions scene from generating_candidates to director_review on batch completion (2 completed, 1 failed terminal)", async () => {
-    const clientRecord = await insertClientRecord(client, { companyName: "Batch Complete Test" });
+    const clientRecord = await insertClientRecord(client, {
+      companyName: "Batch Complete Test",
+      externalProcessingPolicy: manualProcessingPolicy
+    });
+
     const uow = new PostgresUnitOfWork(pool);
     const jobQueue = new PostgresJobQueue(pool);
     const sceneReviewQueries = new PostgresSceneReviewQueries(pool);
@@ -568,7 +583,11 @@ describe("Campaign and Scene Creation End-to-End Integration", () => {
   });
 
   it("transitions scene to director_review when all candidates fail (0/3 survive)", async () => {
-    const clientRecord = await insertClientRecord(client, { companyName: "All Failed Test" });
+    const clientRecord = await insertClientRecord(client, {
+      companyName: "All Failed Test",
+      externalProcessingPolicy: manualProcessingPolicy
+    });
+
     const uow = new PostgresUnitOfWork(pool);
     const jobQueue = new PostgresJobQueue(pool);
     const sceneReviewQueries = new PostgresSceneReviewQueries(pool);
@@ -647,7 +666,11 @@ describe("Campaign and Scene Creation End-to-End Integration", () => {
   });
 
   it("safely handles worker retry (already_applied) on the last candidate job without erroring or duplicating transitions", async () => {
-    const clientRecord = await insertClientRecord(client, { companyName: "Retry Simulation Test" });
+    const clientRecord = await insertClientRecord(client, {
+      companyName: "Retry Simulation Test",
+      externalProcessingPolicy: manualProcessingPolicy
+    });
+
     const uow = new PostgresUnitOfWork(pool);
     const jobQueue = new PostgresJobQueue(pool);
     const sceneReviewQueries = new PostgresSceneReviewQueries(pool);
@@ -764,7 +787,11 @@ describe("Campaign and Scene Creation End-to-End Integration", () => {
   });
 
   it("safely resolves concurrent-reroll-vs-stale-retry race condition via row locking", async () => {
-    const clientRecord = await insertClientRecord(client, { companyName: "Witness Test" });
+    const clientRecord = await insertClientRecord(client, {
+      companyName: "Witness Test",
+      externalProcessingPolicy: manualProcessingPolicy
+    });
+
     const uow = new PostgresUnitOfWork(pool);
     const jobQueue = new PostgresJobQueue(pool);
     const sceneReviewQueries = new PostgresSceneReviewQueries(pool);
@@ -1048,5 +1075,101 @@ describe("Campaign and Scene Creation End-to-End Integration", () => {
     );
     expect(candidatesInDb.rows).toHaveLength(3);
     expect(candidatesInDb.rows.map((r) => r.variant_ordinal)).toEqual([1, 2, 3]);
+  });
+
+  it("creates a scene via cloud planning with allowCloudPlanning: true, landing in PostgreSQL in draft_pending state", async () => {
+    const cloudPolicy = {
+      allowCloudPlanning: true,
+      allowCloudVisualQA: true,
+      allowCloudVoice: true,
+      allowedProviders: ["Anthropic", "OpenAI"],
+      sensitiveDataMasking: true
+    };
+    const clientRecord = await insertClientRecord(client, {
+      companyName: "Cloud Planning Client",
+      externalProcessingPolicy: cloudPolicy
+    });
+
+    const plannedConfig = {
+      prompt: "AI planned prompt: Trinidad carnival dancer in plumage at sunrise",
+      referenceIds: [],
+      engineProfileId: "LTX_25_720P_5S_V1",
+      durationMs: 5000,
+      loraConfigurationId: null
+    };
+
+    const mockPrimary: PlanningModelClientPort = {
+      providerName: "Anthropic",
+      complete: async () => ({
+        kind: "success",
+        rawText: JSON.stringify(plannedConfig)
+      })
+    };
+    const mockFallback: PlanningModelClientPort = {
+      providerName: "OpenAI",
+      complete: async () => ({
+        kind: "success",
+        rawText: JSON.stringify(plannedConfig)
+      })
+    };
+    const mockAssetRepo: ReferenceAssetRepository = {
+      listBySceneId: async () => [],
+      findByIds: async () => []
+    };
+
+    const uow = new PostgresUnitOfWork(pool);
+    const app = createControlApiApp(
+      {
+        uow,
+        planningModelClients: {
+          primary: mockPrimary,
+          fallback: mockFallback
+        },
+        referenceAssetRepository: mockAssetRepo
+      },
+      defaultTestOptions
+    );
+
+    // 1. POST /api/campaigns
+    const campaignRes = await app.inject({
+      method: "POST",
+      url: "/api/campaigns",
+      payload: {
+        clientId: clientRecord.client_id,
+        title: "AI Planned Campaign",
+        targetPlatform: "tiktok",
+        totalScenes: 1
+      }
+    });
+    expect(campaignRes.statusCode).toBe(201);
+    const campaignBody = campaignRes.json();
+
+    // 2. POST /api/campaigns/:campaignId/scenes with creative brief
+    const sceneRes = await app.inject({
+      method: "POST",
+      url: `/api/campaigns/${campaignBody.campaignId}/scenes`,
+      payload: {
+        brief: {
+          title: "Carnival Sunrise",
+          description: "High energy commercial intro with vibrant summer vibes",
+          targetPlatform: "tiktok"
+        }
+      }
+    });
+
+    expect(sceneRes.statusCode).toBe(201);
+    const sceneBody = sceneRes.json();
+    expect(sceneBody.sceneId).toBeDefined();
+    expect(sceneBody.campaignId).toBe(campaignBody.campaignId);
+    expect(sceneBody.status).toBe("draft_pending");
+    expect(sceneBody.configuration).toEqual(plannedConfig);
+
+    // Verify scene landed in PostgreSQL
+    const sceneRepo = new PostgresSceneRepository(pool);
+    const reconstitutedScene = await sceneRepo.findById(sceneBody.sceneId as SceneId);
+    expect(reconstitutedScene).toBeDefined();
+    expect(reconstitutedScene?.snapshot().campaignId).toBe(campaignBody.campaignId);
+    expect(reconstitutedScene?.snapshot().status).toBe("draft_pending");
+    expect(reconstitutedScene?.snapshot().configuration).toEqual(plannedConfig);
   });
 });

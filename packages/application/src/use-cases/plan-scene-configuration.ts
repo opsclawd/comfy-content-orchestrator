@@ -1,4 +1,4 @@
-import type { ReferenceAsset, ReferenceAssetId, SceneConfiguration } from "@cco/domain";
+import type { CampaignId, ReferenceAsset, ReferenceAssetId, SceneConfiguration } from "@cco/domain";
 import type {
   PlanningModelClientPort,
   PlanningModelOutcome,
@@ -72,101 +72,142 @@ export function decidePlanningFallback(
   return "fallback";
 }
 
+export const DEFAULT_OVERALL_PLANNING_TIMEOUT_MS = 60_000;
+
 export interface PlanSceneConfigurationDeps {
   readonly referenceAssetRepository: ReferenceAssetRepository;
   readonly primaryClient: PlanningModelClientPort;
   readonly fallbackClient: PlanningModelClientPort;
+  readonly overallTimeoutMs?: number;
 }
 
 export interface PlanSceneConfigurationInput {
   readonly brief: CreativeBrief;
+  readonly campaignId: CampaignId | string;
   readonly clientId: string;
   readonly candidateReferenceAssetIds: readonly ReferenceAssetId[];
   readonly externalProcessingPolicy: Record<string, unknown>;
   readonly maxDurationMs?: number;
+  readonly overallTimeoutMs?: number;
 }
 
 export class PlanSceneConfigurationUseCase {
   constructor(private readonly deps: PlanSceneConfigurationDeps) {}
 
   async execute(input: PlanSceneConfigurationInput): Promise<SceneConfiguration> {
-    // 1. Decode policy; fail-closed
-    const policy = decodePlanningAuthorizationPolicy(input.externalProcessingPolicy);
-    if (!policy.allowCloudPlanning) {
-      throw new PlanningNotAuthorizedError("allowCloudPlanning disabled");
-    }
+    const overallTimeoutMs =
+      input.overallTimeoutMs ?? this.deps.overallTimeoutMs ?? DEFAULT_OVERALL_PLANNING_TIMEOUT_MS;
 
-    // 2. Verify primary provider is authorized before any network call
-    if (!policy.allowedProviders.has(this.deps.primaryClient.providerName)) {
-      throw new PlanningNotAuthorizedError(
-        `${this.deps.primaryClient.providerName} not in allowedProviders`
+    const overallController = new AbortController();
+    let overallTimedOut = false;
+    const timeoutId = setTimeout(() => {
+      overallTimedOut = true;
+      overallController.abort(
+        new Error(`Overall planning deadline of ${overallTimeoutMs}ms exceeded`)
       );
-    }
+    }, overallTimeoutMs);
 
-    // Enforce required provider ordering
-    if (this.deps.primaryClient.providerName !== "Anthropic") {
-      throw new PlanningNotAuthorizedError(
-        `Primary planning provider must be Anthropic, got ${this.deps.primaryClient.providerName}`
+    try {
+      // 1. Decode policy; fail-closed
+      const policy = decodePlanningAuthorizationPolicy(input.externalProcessingPolicy);
+      if (!policy.allowCloudPlanning) {
+        throw new PlanningNotAuthorizedError("allowCloudPlanning disabled");
+      }
+
+      // 2. Verify primary provider is authorized before any network call
+      if (!policy.allowedProviders.has(this.deps.primaryClient.providerName)) {
+        throw new PlanningNotAuthorizedError(
+          `${this.deps.primaryClient.providerName} not in allowedProviders`
+        );
+      }
+
+      // Enforce required provider ordering
+      if (this.deps.primaryClient.providerName !== "Anthropic") {
+        throw new PlanningNotAuthorizedError(
+          `Primary planning provider must be Anthropic, got ${this.deps.primaryClient.providerName}`
+        );
+      }
+      if (this.deps.fallbackClient.providerName !== "OpenAI") {
+        throw new PlanningNotAuthorizedError(
+          `Fallback planning provider must be OpenAI, got ${this.deps.fallbackClient.providerName}`
+        );
+      }
+
+      // 3. Resolve reference assets (scoped to client)
+      const resolvedReferenceAssets = await this.deps.referenceAssetRepository.findByIds(
+        input.clientId,
+        input.candidateReferenceAssetIds
       );
-    }
-    if (this.deps.fallbackClient.providerName !== "OpenAI") {
-      throw new PlanningNotAuthorizedError(
-        `Fallback planning provider must be OpenAI, got ${this.deps.fallbackClient.providerName}`
-      );
-    }
 
-    // 3. Resolve reference assets (scoped to client)
-    const resolvedReferenceAssets = await this.deps.referenceAssetRepository.findByIds(
-      input.clientId,
-      input.candidateReferenceAssetIds
-    );
-
-    const promptBuilder = (correctiveFeedback?: string): PlanningModelRequest =>
-      buildPlanningPrompt({
-        brief: input.brief,
-        resolvedReferenceAssets,
-        maskSensitiveData: policy.sensitiveDataMasking,
-        maxDurationMs: input.maxDurationMs,
-        correctiveFeedback
+      const promptBuilder = (correctiveFeedback?: string): PlanningModelRequest => ({
+        ...buildPlanningPrompt({
+          brief: input.brief,
+          campaignId: input.campaignId,
+          resolvedReferenceAssets,
+          maskSensitiveData: policy.sensitiveDataMasking,
+          maxDurationMs: input.maxDurationMs,
+          correctiveFeedback
+        }),
+        signal: overallController.signal
       });
 
-    const attempts: PlanningProviderAttempt[] = [];
+      const attempts: PlanningProviderAttempt[] = [];
 
-    // 4. Primary Provider (Anthropic)
-    const primaryResult = await this.executeProviderWorkflow(
-      this.deps.primaryClient,
-      promptBuilder,
-      resolvedReferenceAssets,
-      input.maxDurationMs,
-      attempts
-    );
+      if (overallTimedOut || overallController.signal.aborted) {
+        throw new PlanningProviderExhaustedError("All planning providers exhausted", [
+          {
+            provider: this.deps.primaryClient.providerName,
+            failureReason: `Overall planning deadline of ${overallTimeoutMs}ms exceeded`
+          }
+        ]);
+      }
 
-    if (primaryResult) {
-      return primaryResult;
-    }
-
-    // 5. Fallback Provider authorization check before calling fallback client
-    if (!policy.allowedProviders.has(this.deps.fallbackClient.providerName)) {
-      throw new PlanningNotAuthorizedError(
-        `${this.deps.fallbackClient.providerName} not in allowedProviders`
+      // 4. Primary Provider (Anthropic)
+      const primaryResult = await this.executeProviderWorkflow(
+        this.deps.primaryClient,
+        promptBuilder,
+        resolvedReferenceAssets,
+        input.maxDurationMs,
+        attempts,
+        overallController.signal,
+        overallTimeoutMs
       );
+
+      if (primaryResult) {
+        return primaryResult;
+      }
+
+      if (overallTimedOut || overallController.signal.aborted) {
+        throw new PlanningProviderExhaustedError("All planning providers exhausted", attempts);
+      }
+
+      // 5. Fallback Provider authorization check before calling fallback client
+      if (!policy.allowedProviders.has(this.deps.fallbackClient.providerName)) {
+        throw new PlanningNotAuthorizedError(
+          `${this.deps.fallbackClient.providerName} not in allowedProviders`
+        );
+      }
+
+      // 6. Fallback Provider (OpenAI)
+      const fallbackResult = await this.executeProviderWorkflow(
+        this.deps.fallbackClient,
+        promptBuilder,
+        resolvedReferenceAssets,
+        input.maxDurationMs,
+        attempts,
+        overallController.signal,
+        overallTimeoutMs
+      );
+
+      if (fallbackResult) {
+        return fallbackResult;
+      }
+
+      // 7. Exhausted
+      throw new PlanningProviderExhaustedError("All planning providers exhausted", attempts);
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    // 6. Fallback Provider (OpenAI)
-    const fallbackResult = await this.executeProviderWorkflow(
-      this.deps.fallbackClient,
-      promptBuilder,
-      resolvedReferenceAssets,
-      input.maxDurationMs,
-      attempts
-    );
-
-    if (fallbackResult) {
-      return fallbackResult;
-    }
-
-    // 7. Exhausted
-    throw new PlanningProviderExhaustedError("All planning providers exhausted", attempts);
   }
 
   private async executeProviderWorkflow(
@@ -174,7 +215,9 @@ export class PlanSceneConfigurationUseCase {
     promptBuilder: (correctiveFeedback?: string) => PlanningModelRequest,
     resolvedReferenceAssets: readonly ReferenceAsset[],
     maxDurationMs: number | undefined,
-    attempts: PlanningProviderAttempt[]
+    attempts: PlanningProviderAttempt[],
+    signal: AbortSignal,
+    overallTimeoutMs: number
   ): Promise<SceneConfiguration | undefined> {
     const providerName = client.providerName;
 
@@ -232,6 +275,14 @@ export class PlanSceneConfigurationUseCase {
       }
     };
 
+    if (signal.aborted) {
+      attempts.push({
+        provider: providerName,
+        failureReason: `Overall planning deadline of ${overallTimeoutMs}ms exceeded`
+      });
+      return undefined;
+    }
+
     const initialRequest = promptBuilder();
     const firstOutcome = await client.complete(initialRequest);
     const firstDecision = decidePlanningFallback(firstOutcome, 1);
@@ -257,6 +308,14 @@ export class PlanSceneConfigurationUseCase {
         provider: providerName,
         failureReason: (firstOutcome as { readonly message: string }).message
       });
+
+      if (signal.aborted) {
+        attempts.push({
+          provider: providerName,
+          failureReason: `Overall planning deadline of ${overallTimeoutMs}ms exceeded`
+        });
+        return undefined;
+      }
 
       // Second attempt on same client
       const secondOutcome = await client.complete(initialRequest);

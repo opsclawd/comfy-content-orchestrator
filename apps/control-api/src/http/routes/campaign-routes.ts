@@ -3,8 +3,10 @@ import {
   CampaignResponseSchema,
   CreateCampaignRequestSchema,
   CreateSceneRequestSchema,
-  SceneCreateResponseSchema
+  SceneCreateResponseSchema,
+  isCreateSceneBriefRequest
 } from "@cco/contracts";
+import type { ReferenceAssetId } from "@cco/domain";
 import type { ControlApiContainer } from "../types.js";
 
 export interface CampaignRoutesOptions {
@@ -62,23 +64,39 @@ export const campaignRoutes: FastifyPluginAsync<CampaignRoutesOptions> = async (
     "/api/campaigns/:campaignId/scenes",
     { schema: campaignSceneRouteSchema },
     async (request, reply) => {
-      if (!container.useCases.createScene) {
-        throw new Error("CreateSceneUseCase is not configured on container.");
+      if (!container.useCases.submitSceneCreation) {
+        throw new Error("SubmitSceneCreationUseCase is not configured on container.");
       }
       const body = CreateSceneRequestSchema.parse(request.body);
 
-      const scene = await container.useCases.createScene.execute({
-        campaignId: request.params.campaignId,
-        configuration: {
-          prompt: body.configuration.prompt,
-          referenceIds: body.configuration.referenceIds,
-          engineProfileId: body.configuration.engineProfileId,
-          durationMs: body.configuration.durationMs,
-          ...(body.configuration.loraConfigurationId !== undefined
-            ? { loraConfigurationId: body.configuration.loraConfigurationId }
-            : {})
-        }
-      });
+      const sceneInput = isCreateSceneBriefRequest(body)
+        ? {
+            campaignId: request.params.campaignId,
+            kind: "brief" as const,
+            brief: body.brief,
+            ...(body.candidateReferenceAssetIds !== undefined
+              ? {
+                  candidateReferenceAssetIds:
+                    body.candidateReferenceAssetIds as unknown as readonly ReferenceAssetId[]
+                }
+              : {}),
+            ...(body.maxDurationMs !== undefined ? { maxDurationMs: body.maxDurationMs } : {})
+          }
+        : {
+            campaignId: request.params.campaignId,
+            kind: "manual" as const,
+            configuration: {
+              prompt: body.configuration.prompt,
+              referenceIds: body.configuration.referenceIds,
+              engineProfileId: body.configuration.engineProfileId,
+              durationMs: body.configuration.durationMs,
+              ...(body.configuration.loraConfigurationId !== undefined
+                ? { loraConfigurationId: body.configuration.loraConfigurationId }
+                : {})
+            }
+          };
+
+      const scene = await container.useCases.submitSceneCreation.execute(sceneInput);
 
       const snapshot = scene.snapshot();
       const response = SceneCreateResponseSchema.parse({

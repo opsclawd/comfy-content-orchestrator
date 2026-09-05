@@ -250,4 +250,69 @@ describe("OpenAiPlanningModelClient", () => {
       expect(result.message).toContain("Content filtered");
     }
   });
+
+  it("classifies bounded timeout abort on never-resolving fetch as retryable_failure", async () => {
+    // Never-resolving fetch simulating a hung connection
+    const fetchMock = vi.fn(() => new Promise<Response>(() => {}));
+
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-key",
+      fetch: fetchMock,
+      timeoutMs: 30
+    });
+
+    const result = await client.complete(request);
+
+    expect(result.kind).toBe("retryable_failure");
+    if (result.kind === "retryable_failure") {
+      expect(result.message).toContain("timed out after 30ms");
+    }
+  });
+
+  it("classifies bounded timeout abort on never-resolving response.text() as retryable_failure", async () => {
+    // Fetch resolves, but reading response text hangs
+    const fetchMock = vi.fn(
+      async () =>
+        ({
+          status: 200,
+          text: () => new Promise<string>(() => {})
+        }) as unknown as Response
+    );
+
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-key",
+      fetch: fetchMock,
+      timeoutMs: 30
+    });
+
+    const result = await client.complete(request);
+
+    expect(result.kind).toBe("retryable_failure");
+    if (result.kind === "retryable_failure") {
+      expect(result.message).toContain("timed out reading response body");
+    }
+  });
+
+  it("classifies caller-supplied abort signal as retryable_failure", async () => {
+    const fetchMock = vi.fn(() => new Promise<Response>(() => {}));
+
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-key",
+      fetch: fetchMock,
+      timeoutMs: 5000
+    });
+
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new Error("Caller deadline exceeded")), 20);
+
+    const result = await client.complete({
+      ...request,
+      signal: controller.signal
+    });
+
+    expect(result.kind).toBe("retryable_failure");
+    if (result.kind === "retryable_failure") {
+      expect(result.message).toContain("Caller deadline exceeded");
+    }
+  });
 });

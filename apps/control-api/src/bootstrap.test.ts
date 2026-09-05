@@ -554,6 +554,72 @@ describe("bootstrap", () => {
     }
   });
 
+  it("omits planning clients and reference asset repository when planningProviders is absent", async () => {
+    const harness = createTestHarness();
+    const runtime = await runControlApi({
+      config: validConfig,
+      poolFactory: () => harness.mockPool as unknown as Pool,
+      s3ClientFactory: () => harness.mockS3Client as unknown as S3Client,
+      serverStarter: harness.mockServerStarter,
+      processSignals: harness.mockSignals,
+      logger: harness.mockLogger
+    });
+
+    expect(harness.mockServerStarter).toHaveBeenCalledTimes(1);
+    const passedDeps = harness.mockServerStarter.mock.calls[0]?.[0] as ControlApiDependencies;
+    expect(passedDeps.planningModelClients).toBeUndefined();
+    expect(passedDeps.referenceAssetRepository).toBeUndefined();
+
+    await runtime.stop();
+  });
+
+  it("wires both planning clients and reference asset repository when planning keys are present without leaking secrets", async () => {
+    const harness = createTestHarness();
+    const anthropicKey = "sk-ant-synthetic-key-for-test-12345";
+    const openaiKey = "sk-openai-synthetic-key-for-test-67890";
+
+    const configWithPlanning: ControlApiRuntimeConfig = {
+      ...validConfig,
+      planningProviders: {
+        anthropicApiKey: anthropicKey,
+        openaiApiKey: openaiKey,
+        attemptTimeoutMs: 25_000,
+        overallTimeoutMs: 50_000
+      }
+    };
+
+    const runtime = await runControlApi({
+      config: configWithPlanning,
+      poolFactory: () => harness.mockPool as unknown as Pool,
+      s3ClientFactory: () => harness.mockS3Client as unknown as S3Client,
+      serverStarter: harness.mockServerStarter,
+      processSignals: harness.mockSignals,
+      logger: harness.mockLogger
+    });
+
+    expect(harness.mockServerStarter).toHaveBeenCalledTimes(1);
+    const passedDeps = harness.mockServerStarter.mock.calls[0]?.[0] as ControlApiDependencies;
+    expect(passedDeps.planningModelClients).toBeDefined();
+    expect(passedDeps.planningModelClients?.primary.providerName).toBe("Anthropic");
+    expect(passedDeps.planningModelClients?.fallback.providerName).toBe("OpenAI");
+    expect(passedDeps.referenceAssetRepository).toBeDefined();
+    expect(passedDeps.planningOverallTimeoutMs).toBe(50_000);
+
+    // Verify secrets are never logged
+    const allLogs = [
+      ...harness.mockLogger.info.mock.calls,
+      ...harness.mockLogger.warn.mock.calls,
+      ...harness.mockLogger.error.mock.calls
+    ].map((call) => call.map(String).join(" "));
+
+    for (const logLine of allLogs) {
+      expect(logLine).not.toContain(anthropicKey);
+      expect(logLine).not.toContain(openaiKey);
+    }
+
+    await runtime.stop();
+  });
+
   it("main() logs error and sets process.exitCode = 1 on failure without throwing unhandled rejection", async () => {
     const originalEnv = { ...process.env };
     const originalExitCode = process.exitCode;

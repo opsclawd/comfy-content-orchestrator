@@ -4,10 +4,14 @@ import {
   CreateClientUseCase,
   CreateSceneUseCase,
   EnforceStorageAdmission,
+  PlanSceneConfigurationUseCase,
   ProgressSceneProductionUseCases,
   ReviewSceneUseCases,
+  SubmitSceneCreationUseCase,
   type DeliveryAssemblyJobQueuePort,
   type JobQueuePort,
+  type PlanningModelClientPort,
+  type ReferenceAssetRepository,
   type RenderEnginePort,
   type ReviewMediaDeliveryPort,
   type SceneReviewQueries,
@@ -25,6 +29,12 @@ export interface ControlApiDependencies {
   readonly storageMetricsRegistry?: StorageMetricsRegistryPort;
   readonly jobQueue?: JobQueuePort;
   readonly deliveryAssemblyJobQueue?: DeliveryAssemblyJobQueuePort;
+  readonly planningModelClients?: {
+    readonly primary: PlanningModelClientPort;
+    readonly fallback: PlanningModelClientPort;
+  };
+  readonly referenceAssetRepository?: ReferenceAssetRepository;
+  readonly planningOverallTimeoutMs?: number;
 }
 
 export interface ControlApiUseCases {
@@ -33,6 +43,7 @@ export interface ControlApiUseCases {
   readonly createCampaign?: CreateCampaignUseCase | undefined;
   readonly createClient?: CreateClientUseCase | undefined;
   readonly createScene?: CreateSceneUseCase | undefined;
+  readonly submitSceneCreation?: SubmitSceneCreationUseCase | undefined;
   readonly enforceStorageAdmission?: EnforceStorageAdmission;
 }
 
@@ -58,6 +69,24 @@ export function createControlApiContainer(
   const createCampaign = new CreateCampaignUseCase(dependencies.uow);
   const createClient = new CreateClientUseCase(dependencies.uow);
   const createScene = new CreateSceneUseCase(dependencies.uow);
+  const planSceneConfiguration =
+    dependencies.planningModelClients && dependencies.referenceAssetRepository
+      ? new PlanSceneConfigurationUseCase({
+          primaryClient: dependencies.planningModelClients.primary,
+          fallbackClient: dependencies.planningModelClients.fallback,
+          referenceAssetRepository: dependencies.referenceAssetRepository,
+          ...(dependencies.planningOverallTimeoutMs !== undefined
+            ? { overallTimeoutMs: dependencies.planningOverallTimeoutMs }
+            : {})
+        })
+      : undefined;
+
+  const submitSceneCreation = new SubmitSceneCreationUseCase({
+    uow: dependencies.uow,
+    createScene,
+    ...(planSceneConfiguration ? { planSceneConfiguration } : {})
+  });
+
   const enforceStorageAdmission = dependencies.storageTelemetry
     ? new EnforceStorageAdmission({
         telemetryPort: dependencies.storageTelemetry,
@@ -75,6 +104,7 @@ export function createControlApiContainer(
       createCampaign,
       createClient,
       createScene,
+      submitSceneCreation,
       ...(enforceStorageAdmission !== undefined ? { enforceStorageAdmission } : {})
     },
     queries: {
