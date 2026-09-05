@@ -532,4 +532,43 @@ describe("KokoroVoiceSynthesisAdapter (real inference integration)", () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("recovers from initial model load failure on subsequent call and reports MODEL_LOAD_FAILED (F-85f4cd06)", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "kokoro-recovery-test-"));
+    const realModelDir = resolveKokoroModelDir();
+
+    try {
+      // Create an engine configured with an initially invalid model directory path
+      let currentDir = path.join(tmpDir, "non-existent-subfolder");
+      const dynamicOptions = {
+        get modelDir() {
+          return currentDir;
+        }
+      };
+
+      const engine = createKokoroJsEngine(dynamicOptions);
+
+      // Call 1: Must fail with MODEL_LOAD_FAILED
+      let call1Error: KokoroSynthesisError | undefined;
+      try {
+        await engine.synthesize({ text: "Hello", voiceId: "af_heart" });
+      } catch (err) {
+        call1Error = err as KokoroSynthesisError;
+      }
+
+      expect(call1Error).toBeInstanceOf(KokoroSynthesisError);
+      expect(call1Error?.code).toBe("MODEL_LOAD_FAILED");
+
+      // Now clear the underlying error condition by pointing to the valid pinned model directory
+      currentDir = realModelDir;
+
+      // Call 2: Must NOT be permanently poisoned; must retry loading and succeed
+      const output = await engine.synthesize({ text: "Hello world", voiceId: "af_heart" });
+      expect(output.samples).toBeInstanceOf(Float32Array);
+      expect(output.samples.length).toBeGreaterThan(0);
+      expect(output.sampleRateHz).toBe(24000);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
