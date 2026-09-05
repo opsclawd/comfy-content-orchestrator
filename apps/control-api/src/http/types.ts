@@ -4,6 +4,7 @@ import {
   CreateClientUseCase,
   CreateSceneUseCase,
   EnforceStorageAdmission,
+  PlanCampaignBeatSheetUseCase,
   PlanSceneConfigurationUseCase,
   ProgressSceneProductionUseCases,
   ReviewSceneUseCases,
@@ -44,6 +45,7 @@ export interface ControlApiUseCases {
   readonly createClient?: CreateClientUseCase | undefined;
   readonly createScene?: CreateSceneUseCase | undefined;
   readonly submitSceneCreation?: SubmitSceneCreationUseCase | undefined;
+  readonly planCampaignBeatSheet?: PlanCampaignBeatSheetUseCase | undefined;
   readonly enforceStorageAdmission?: EnforceStorageAdmission;
 }
 
@@ -81,6 +83,19 @@ export function createControlApiContainer(
         })
       : undefined;
 
+  const planCampaignBeatSheet =
+    dependencies.planningModelClients && dependencies.referenceAssetRepository
+      ? new PlanCampaignBeatSheetUseCase({
+          uow: dependencies.uow,
+          primaryClient: dependencies.planningModelClients.primary,
+          fallbackClient: dependencies.planningModelClients.fallback,
+          referenceAssetRepository: dependencies.referenceAssetRepository,
+          ...(dependencies.planningOverallTimeoutMs !== undefined
+            ? { overallTimeoutMs: dependencies.planningOverallTimeoutMs }
+            : {})
+        })
+      : undefined;
+
   const submitSceneCreation = new SubmitSceneCreationUseCase({
     uow: dependencies.uow,
     createScene,
@@ -105,6 +120,7 @@ export function createControlApiContainer(
       createClient,
       createScene,
       submitSceneCreation,
+      ...(planCampaignBeatSheet !== undefined ? { planCampaignBeatSheet } : {}),
       ...(enforceStorageAdmission !== undefined ? { enforceStorageAdmission } : {})
     },
     queries: {

@@ -61,9 +61,20 @@ export const CreateSceneBriefRequestSchema = z
   .object({
     brief: CreativeBriefSchema,
     candidateReferenceAssetIds: z.array(z.string()).optional(),
-    maxDurationMs: z.number().int().positive().optional()
+    maxDurationMs: z.number().int().positive().optional(),
+    targetDurationMs: z.number().int().positive().optional()
   })
-  .strict();
+  .strict()
+  .refine(
+    (data) =>
+      data.maxDurationMs === undefined ||
+      data.targetDurationMs === undefined ||
+      data.targetDurationMs <= data.maxDurationMs,
+    {
+      message: "targetDurationMs cannot exceed maxDurationMs",
+      path: ["targetDurationMs"]
+    }
+  );
 export type CreateSceneBriefRequest = z.infer<typeof CreateSceneBriefRequestSchema>;
 
 // Requested/declared layer — union of manual configuration and cloud-planning brief.
@@ -99,3 +110,30 @@ export const SceneCreateResponseSchema = z.object({
   configuration: SceneConfigurationSchema
 });
 export type SceneCreateResponse = z.infer<typeof SceneCreateResponseSchema>;
+
+// Requested/declared layer — request for campaign beat-sheet planning.
+export const PlanCampaignBeatSheetRequestSchema = z
+  .object({
+    brief: CreativeBriefSchema,
+    targetTotalDurationMs: z.number().int().positive(),
+    candidateReferenceAssetIds: z.array(z.string()).optional()
+  })
+  .strict();
+export type PlanCampaignBeatSheetRequest = z.infer<typeof PlanCampaignBeatSheetRequestSchema>;
+
+export const CampaignBeatSchema = z
+  .object({
+    ordinal: z.number().int().positive(),
+    brief: CreativeBriefSchema,
+    targetDurationMs: z.number().int().positive()
+  })
+  .strict();
+export type CampaignBeat = z.infer<typeof CampaignBeatSchema>;
+
+// Configured/executed layer — proposed beat sheet for director review.
+export const CampaignBeatSheetResponseSchema = z.object({
+  campaignId: z.string().uuid(),
+  targetTotalDurationMs: z.number().int().positive(),
+  beats: z.array(CampaignBeatSchema)
+});
+export type CampaignBeatSheetResponse = z.infer<typeof CampaignBeatSheetResponseSchema>;

@@ -170,6 +170,41 @@ describe("validateSceneConfiguration", () => {
     expect(exact.durationMs).toBe(10000);
   });
 
+  it("rejects durationMs not equal to targetDurationMs", () => {
+    expect(() =>
+      validateSceneConfiguration({ ...validCandidate, durationMs: 4000 }, sampleResolvedAssets, {
+        targetDurationMs: 5000
+      })
+    ).toThrow("durationMs 4000 does not match required targetDurationMs 5000");
+  });
+
+  it("allows durationMs equal to targetDurationMs", () => {
+    const matched = validateSceneConfiguration(
+      { ...validCandidate, durationMs: 5000 },
+      sampleResolvedAssets,
+      { targetDurationMs: 5000 }
+    );
+    expect(matched.durationMs).toBe(5000);
+  });
+
+  it("rejects inconsistent options where targetDurationMs exceeds maxDurationMs", () => {
+    expect(() =>
+      validateSceneConfiguration({ ...validCandidate, durationMs: 5000 }, sampleResolvedAssets, {
+        maxDurationMs: 4000,
+        targetDurationMs: 5000
+      })
+    ).toThrow("targetDurationMs 5000 cannot exceed maxDurationMs 4000");
+  });
+
+  it("allows consistent targetDurationMs and maxDurationMs when candidate matches targetDurationMs", () => {
+    const valid = validateSceneConfiguration(
+      { ...validCandidate, durationMs: 4000 },
+      sampleResolvedAssets,
+      { maxDurationMs: 5000, targetDurationMs: 4000 }
+    );
+    expect(valid.durationMs).toBe(4000);
+  });
+
   it("handles optional loraConfigurationId correctly", () => {
     // null is allowed
     const withNull = validateSceneConfiguration(

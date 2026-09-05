@@ -1172,4 +1172,154 @@ describe("Campaign and Scene Creation End-to-End Integration", () => {
     expect(reconstitutedScene?.snapshot().status).toBe("draft_pending");
     expect(reconstitutedScene?.snapshot().configuration).toEqual(plannedConfig);
   });
+
+  it("proposes beat sheet and creates approved scenes with targetDurationMs preserved in PostgreSQL", async () => {
+    const cloudPolicy = {
+      allowCloudPlanning: true,
+      allowCloudVisualQA: true,
+      allowCloudVoice: true,
+      allowedProviders: ["Anthropic", "OpenAI"],
+      sensitiveDataMasking: true
+    };
+    const clientRecord = await insertClientRecord(client, {
+      companyName: "Beat Sheet Integration Client",
+      externalProcessingPolicy: cloudPolicy
+    });
+
+    const beatSheetPayload = {
+      beats: [
+        {
+          ordinal: 1,
+          brief: {
+            title: "Beat 1 Opening",
+            description: "Opening hook of high energy commercial"
+          },
+          targetDurationMs: 2500
+        },
+        {
+          ordinal: 2,
+          brief: {
+            title: "Beat 2 Climax",
+            description: "Climax shot with vibrant colors"
+          },
+          targetDurationMs: 3500
+        }
+      ]
+    };
+
+    let callCount = 0;
+    const mockPrimary: PlanningModelClientPort = {
+      providerName: "Anthropic",
+      complete: async (req) => {
+        callCount++;
+        if (callCount === 1) {
+          return {
+            kind: "success",
+            rawText: JSON.stringify(beatSheetPayload)
+          };
+        }
+        let durationMs = 2500;
+        if (req.userPrompt.includes("Climax")) {
+          durationMs = 3500;
+        }
+        return {
+          kind: "success",
+          rawText: JSON.stringify({
+            prompt: "Scene prompt from LLM",
+            referenceIds: [],
+            engineProfileId: "LTX_25_720P_5S_V1",
+            durationMs,
+            loraConfigurationId: null
+          })
+        };
+      }
+    };
+    const mockFallback: PlanningModelClientPort = {
+      providerName: "OpenAI",
+      complete: async () => ({ kind: "retryable_failure", message: "unused" })
+    };
+    const mockAssetRepo: ReferenceAssetRepository = {
+      listBySceneId: async () => [],
+      findByIds: async () => []
+    };
+
+    const uow = new PostgresUnitOfWork(pool);
+    const app = createControlApiApp(
+      {
+        uow,
+        planningModelClients: {
+          primary: mockPrimary,
+          fallback: mockFallback
+        },
+        referenceAssetRepository: mockAssetRepo
+      },
+      defaultTestOptions
+    );
+
+    // 1. Create campaign with totalScenes = 2
+    const campaignRes = await app.inject({
+      method: "POST",
+      url: "/api/campaigns",
+      payload: {
+        clientId: clientRecord.client_id,
+        title: "Beat Sheet Flow Campaign",
+        targetPlatform: "tiktok",
+        totalScenes: 2
+      }
+    });
+    expect(campaignRes.statusCode).toBe(201);
+    const campaignBody = campaignRes.json();
+
+    // 2. Propose beat sheet
+    const beatSheetRes = await app.inject({
+      method: "POST",
+      url: `/api/campaigns/${campaignBody.campaignId}/beat-sheet`,
+      payload: {
+        brief: {
+          description: "Campaign-level creative idea"
+        },
+        targetTotalDurationMs: 6000
+      }
+    });
+    expect(beatSheetRes.statusCode).toBe(200);
+    const beatSheet = beatSheetRes.json();
+    expect(beatSheet.beats).toHaveLength(2);
+    expect(beatSheet.beats[0]?.targetDurationMs).toBe(2500);
+    expect(beatSheet.beats[1]?.targetDurationMs).toBe(3500);
+
+    // Verify zero scenes in DB before scenes are submitted
+    const scenesBefore = await client.query(
+      "SELECT * FROM storyboard_scenes WHERE campaign_id = $1",
+      [campaignBody.campaignId]
+    );
+    expect(scenesBefore.rows).toHaveLength(0);
+
+    // 3. Create scenes one by one using approved beats and their targetDurationMs
+    const createdSceneIds: SceneId[] = [];
+    for (const beat of beatSheet.beats) {
+      const sceneRes = await app.inject({
+        method: "POST",
+        url: `/api/campaigns/${campaignBody.campaignId}/scenes`,
+        payload: {
+          brief: beat.brief,
+          targetDurationMs: beat.targetDurationMs
+        }
+      });
+      expect(sceneRes.statusCode).toBe(201);
+      const sceneBody = sceneRes.json();
+      expect(sceneBody.configuration.durationMs).toBe(beat.targetDurationMs);
+      createdSceneIds.push(sceneBody.sceneId as SceneId);
+    }
+
+    // 4. Verify PostgreSQL persistence and duration preservation
+    expect(createdSceneIds).toHaveLength(2);
+    const sceneRepo = new PostgresSceneRepository(pool);
+    const scene1 = await sceneRepo.findById(createdSceneIds[0]!);
+    expect(scene1).toBeDefined();
+    expect(scene1?.snapshot().configuration.durationMs).toBe(2500);
+
+    const scene2 = await sceneRepo.findById(createdSceneIds[1]!);
+    expect(scene2).toBeDefined();
+    expect(scene2?.snapshot().configuration.durationMs).toBe(3500);
+  });
 });

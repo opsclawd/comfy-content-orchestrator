@@ -1,11 +1,14 @@
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import {
   CampaignResponseSchema,
+  CampaignBeatSheetResponseSchema,
   CreateCampaignRequestSchema,
   CreateSceneRequestSchema,
+  PlanCampaignBeatSheetRequestSchema,
   SceneCreateResponseSchema,
   isCreateSceneBriefRequest
 } from "@cco/contracts";
+import { PlanningProviderNotConfiguredError } from "@cco/application";
 import type { ReferenceAssetId } from "@cco/domain";
 import type { ControlApiContainer } from "../types.js";
 
@@ -80,7 +83,10 @@ export const campaignRoutes: FastifyPluginAsync<CampaignRoutesOptions> = async (
                     body.candidateReferenceAssetIds as unknown as readonly ReferenceAssetId[]
                 }
               : {}),
-            ...(body.maxDurationMs !== undefined ? { maxDurationMs: body.maxDurationMs } : {})
+            ...(body.maxDurationMs !== undefined ? { maxDurationMs: body.maxDurationMs } : {}),
+            ...(body.targetDurationMs !== undefined
+              ? { targetDurationMs: body.targetDurationMs }
+              : {})
           }
         : {
             campaignId: request.params.campaignId,
@@ -108,6 +114,34 @@ export const campaignRoutes: FastifyPluginAsync<CampaignRoutesOptions> = async (
       });
 
       return reply.status(201).send(response);
+    }
+  );
+
+  fastify.post<{ Params: { campaignId: string } }>(
+    "/api/campaigns/:campaignId/beat-sheet",
+    { schema: campaignSceneRouteSchema },
+    async (request, reply) => {
+      if (!container.useCases.planCampaignBeatSheet) {
+        throw new PlanningProviderNotConfiguredError(
+          "PlanCampaignBeatSheetUseCase is not configured on container."
+        );
+      }
+      const body = PlanCampaignBeatSheetRequestSchema.parse(request.body);
+
+      const beatSheet = await container.useCases.planCampaignBeatSheet.execute({
+        campaignId: request.params.campaignId,
+        brief: body.brief,
+        targetTotalDurationMs: body.targetTotalDurationMs,
+        ...(body.candidateReferenceAssetIds !== undefined
+          ? {
+              candidateReferenceAssetIds:
+                body.candidateReferenceAssetIds as unknown as readonly ReferenceAssetId[]
+            }
+          : {})
+      });
+
+      const response = CampaignBeatSheetResponseSchema.parse(beatSheet);
+      return reply.status(200).send(response);
     }
   );
 };

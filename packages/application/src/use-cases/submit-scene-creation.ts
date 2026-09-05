@@ -25,6 +25,7 @@ export type SubmitSceneCreationInput = {
       readonly brief: CreativeBrief;
       readonly candidateReferenceAssetIds?: readonly ReferenceAssetId[] | undefined;
       readonly maxDurationMs?: number | undefined;
+      readonly targetDurationMs?: number | undefined;
     }
 );
 
@@ -82,7 +83,10 @@ export class SubmitSceneCreationUseCase {
         clientId,
         candidateReferenceAssetIds: input.candidateReferenceAssetIds ?? [],
         externalProcessingPolicy,
-        ...(input.maxDurationMs !== undefined ? { maxDurationMs: input.maxDurationMs } : {})
+        ...(input.maxDurationMs !== undefined ? { maxDurationMs: input.maxDurationMs } : {}),
+        ...(input.targetDurationMs !== undefined
+          ? { targetDurationMs: input.targetDurationMs }
+          : {})
       });
 
       return this.deps.createScene.execute({

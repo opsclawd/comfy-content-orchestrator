@@ -1,60 +1,55 @@
-import { createHash } from "node:crypto";
-import { RenderProfileKeySchema, type CreativeBrief } from "@cco/contracts";
+import type { CreativeBrief } from "@cco/contracts";
 import type { CampaignId, ReferenceAsset } from "@cco/domain";
 import type { PlanningModelRequest } from "../ports/planning-model-client-port.js";
+import { maskCampaignIdentifier } from "./planning-prompt.js";
 
-export type { CreativeBrief };
-
-export function maskCampaignIdentifier(campaignId: string): string {
-  const hash = createHash("sha256").update(campaignId).digest("hex");
-  return `masked-campaign-${hash.slice(0, 12)}`;
-}
-
-export interface BuildPlanningPromptInput {
+export interface BuildBeatSheetPlanningPromptInput {
   readonly brief: CreativeBrief;
   readonly campaignId: CampaignId | string;
+  readonly totalScenes: number;
+  readonly targetTotalDurationMs: number;
   readonly resolvedReferenceAssets: readonly ReferenceAsset[];
   readonly maskSensitiveData?: boolean | undefined;
-  readonly maxDurationMs?: number | undefined;
-  readonly targetDurationMs?: number | undefined;
   readonly correctiveFeedback?: string | undefined;
 }
 
-export function buildPlanningPrompt(input: BuildPlanningPromptInput): PlanningModelRequest {
+export function buildBeatSheetPlanningPrompt(
+  input: BuildBeatSheetPlanningPromptInput
+): PlanningModelRequest {
   const effectiveCampaignId = input.maskSensitiveData
     ? maskCampaignIdentifier(input.campaignId)
     : input.campaignId;
 
-  const certifiedProfiles = RenderProfileKeySchema.options;
   const assetIds = input.resolvedReferenceAssets.map((asset) => asset.id as string);
-
-  const durationConstraintText =
-    input.targetDurationMs !== undefined
-      ? ` (must equal exactly ${input.targetDurationMs})`
-      : input.maxDurationMs !== undefined
-        ? ` (maximum: ${input.maxDurationMs})`
-        : "";
 
   const systemPrompt = [
     "You are a specialized creative planning assistant for video synthesis.",
-    "Your goal is to generate a strictly valid SceneConfiguration JSON object based on the provided creative brief.",
+    "Your goal is to decompose a campaign-level creative brief into a reviewable beat sheet of scenes.",
     "Respond with a single JSON object. Do not include extraneous conversational text.",
     "",
     "Rules for the output JSON fields:",
-    "- prompt: non-empty string describing the visual scene to be rendered in detail.",
-    `- referenceIds: array of strings selected strictly from available reference asset IDs: ${JSON.stringify(assetIds)}. Only use IDs from this list.`,
-    `- engineProfileId: string, must be one of the certified profiles: ${JSON.stringify(certifiedProfiles)}.`,
-    `- durationMs: positive integer in milliseconds${durationConstraintText}.`,
-    "- loraConfigurationId: optional string or null."
+    `- beats: array of exactly ${input.totalScenes} scene beats.`,
+    "- Each beat in the array must be an object with the following fields:",
+    `  - ordinal: positive integer from 1 to ${input.totalScenes}, unique and contiguous.`,
+    "  - brief: a creative brief object for this scene with fields:",
+    "    - description: non-empty string describing the visual scene beat in detail.",
+    "    - title: optional string title for this beat.",
+    "    - targetPlatform: optional string.",
+    "    - visualStyle: optional string.",
+    "    - requirements: optional array of non-empty strings.",
+    "  - targetDurationMs: positive integer duration in milliseconds for this beat.",
+    `- The sum of all beat targetDurationMs values MUST equal exactly ${input.targetTotalDurationMs} ms.`
   ].join("\n");
 
   const briefSections: string[] = [
     `Campaign Identifier: ${effectiveCampaignId}`,
-    `Description: ${input.brief.description}`
+    `Total Required Scenes: ${input.totalScenes}`,
+    `Target Total Duration: ${input.targetTotalDurationMs} ms`,
+    `Campaign Description: ${input.brief.description}`
   ];
 
   if (input.brief.title) {
-    briefSections.push(`Title: ${input.brief.title}`);
+    briefSections.push(`Campaign Title: ${input.brief.title}`);
   }
   if (input.brief.targetPlatform) {
     briefSections.push(`Target Platform: ${input.brief.targetPlatform}`);
@@ -69,12 +64,11 @@ export function buildPlanningPrompt(input: BuildPlanningPromptInput): PlanningMo
   }
 
   const userPromptParts: string[] = [
-    "Please generate a SceneConfiguration JSON object for the following creative brief:",
+    "Please decompose the following campaign creative brief into a proposed beat sheet:",
     "",
     ...briefSections,
     "",
-    `Available Reference Asset IDs: ${assetIds.length > 0 ? assetIds.join(", ") : "None"}`,
-    `Certified Engine Profiles: ${certifiedProfiles.join(", ")}`
+    `Available Reference Asset IDs: ${assetIds.length > 0 ? assetIds.join(", ") : "None"}`
   ];
 
   if (input.correctiveFeedback) {

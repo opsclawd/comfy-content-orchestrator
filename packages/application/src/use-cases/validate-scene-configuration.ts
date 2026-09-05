@@ -8,11 +8,30 @@ export class SceneConfigurationValidationError extends Error {
   }
 }
 
+export interface ValidateSceneConfigurationOptions {
+  readonly maxDurationMs?: number | undefined;
+  readonly targetDurationMs?: number | undefined;
+}
+
 export function validateSceneConfiguration(
   candidate: unknown,
   resolvedReferenceAssets: readonly ReferenceAsset[],
-  maxDurationMs?: number
+  options?: ValidateSceneConfigurationOptions | number
 ): SceneConfiguration {
+  const maxDurationMs = typeof options === "number" ? options : options?.maxDurationMs;
+  const targetDurationMs =
+    typeof options === "object" && options !== null ? options.targetDurationMs : undefined;
+
+  if (
+    maxDurationMs !== undefined &&
+    targetDurationMs !== undefined &&
+    targetDurationMs > maxDurationMs
+  ) {
+    throw new SceneConfigurationValidationError(
+      `targetDurationMs ${targetDurationMs} cannot exceed maxDurationMs ${maxDurationMs}`
+    );
+  }
+
   if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
     throw new SceneConfigurationValidationError("Candidate must be a plain object");
   }
@@ -65,6 +84,11 @@ export function validateSceneConfiguration(
   if (maxDurationMs !== undefined && record.durationMs > maxDurationMs) {
     throw new SceneConfigurationValidationError(
       `durationMs ${record.durationMs} exceeds maximum allowed duration of ${maxDurationMs}`
+    );
+  }
+  if (targetDurationMs !== undefined && record.durationMs !== targetDurationMs) {
+    throw new SceneConfigurationValidationError(
+      `durationMs ${record.durationMs} does not match required targetDurationMs ${targetDurationMs}`
     );
   }
   const durationMs = record.durationMs;
