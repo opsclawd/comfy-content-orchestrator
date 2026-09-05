@@ -1258,7 +1258,8 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
         save: async () => {}
       },
       referenceAssetRepository: {
-        listBySceneId: async () => []
+        listBySceneId: async () => [],
+        findByIds: async () => []
       },
       storyboardCandidateRepository: {
         findById: async () => undefined,

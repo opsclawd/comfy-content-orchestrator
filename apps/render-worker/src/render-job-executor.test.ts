@@ -1521,7 +1521,8 @@ describe("Certified Render Job Executor", () => {
       };
 
       const referenceAssetRepository: ReferenceAssetRepository = {
-        listBySceneId: async () => []
+        listBySceneId: async () => [],
+        findByIds: async () => []
       };
 
       const hashBytes: HashBytesPort = {

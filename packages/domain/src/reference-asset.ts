@@ -5,7 +5,8 @@ export type ReferenceAssetId = string & { readonly [ReferenceAssetIdBrand]: true
 
 export interface ReferenceAsset {
   readonly id: ReferenceAssetId;
-  readonly sceneId: SceneId;
+  readonly sceneId?: SceneId;
+  readonly clientId: string;
   readonly assetType: string;
   readonly storageBucket: string;
   readonly storageObjectKey: string;

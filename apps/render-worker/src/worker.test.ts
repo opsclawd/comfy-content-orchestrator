@@ -1903,7 +1903,8 @@ describe("RenderWorker write-side admission gating and deferral", () => {
     };
 
     const referenceAssetRepository = {
-      listBySceneId: async () => []
+      listBySceneId: async () => [],
+      findByIds: async () => []
     };
 
     const hashBytes: HashBytesPort = {
