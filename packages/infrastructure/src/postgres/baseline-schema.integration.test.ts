@@ -55,7 +55,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
   it("migrates an empty PostgreSQL 18.6 database through the baseline", async () => {
     const applied = await runMigrations(client, { migrationsDirectory });
 
-    expect(applied).toHaveLength(9);
+    expect(applied).toHaveLength(10);
     expect(applied[0]?.version).toBe("001");
     expect(applied[1]?.version).toBe("002");
     expect(applied[2]?.version).toBe("003");
@@ -65,6 +65,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
     expect(applied[6]?.version).toBe("007");
     expect(applied[7]?.version).toBe("008");
     expect(applied[8]?.version).toBe("009");
+    expect(applied[9]?.version).toBe("010");
 
     const schemaRes = await client.query(
       "SELECT version FROM schema_migrations ORDER BY version ASC"
@@ -78,7 +79,8 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       { version: "006" },
       { version: "007" },
       { version: "008" },
-      { version: "009" }
+      { version: "009" },
+      { version: "010" }
     ]);
 
     const tablesRes = await client.query<{ table_name: string }>(
@@ -92,6 +94,8 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
 
     const tableNames = tablesRes.rows.map((r) => r.table_name);
     expect(tableNames).toEqual([
+      "campaign_production_run_scenes",
+      "campaign_production_runs",
       "campaigns",
       "clients",
       "delivery_assembly_jobs",
@@ -171,6 +175,14 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
 
     // review_action_enum matching @cco/contracts REVIEW_ACTIONS
     expect(enumsByType.get("review_action_enum")).toEqual([...REVIEW_ACTIONS]);
+
+    // run_status_enum
+    expect(enumsByType.get("run_status_enum")).toEqual([
+      "dispatched",
+      "assembling",
+      "completed",
+      "failed"
+    ]);
   });
 
   it("generates version 7 UUID primary keys without uuid-ossp", async () => {

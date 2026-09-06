@@ -74,17 +74,23 @@ export const reviewCommandRoutes: FastifyPluginAsync<ReviewCommandRoutesOptions>
           });
           break;
 
-        case "approve":
-          result = await container.useCases.reviewScene.approve({
-            sceneId: body.sceneId,
-            eventId: body.actionId,
-            reviewerName,
-            occurredAt,
-            ...(body.directorNotes !== undefined ? { directorNotes: body.directorNotes } : {}),
-            expectedSpecRevision: body.expectedSpecRevision,
-            requestHashSha256
-          });
+        case "approve": {
+          const dispatchResult =
+            await container.useCases.approveSceneAndDispatchCampaignProduction.execute({
+              sceneId: body.sceneId,
+              eventId: body.actionId,
+              reviewerName,
+              occurredAt,
+              ...(body.directorNotes !== undefined ? { directorNotes: body.directorNotes } : {}),
+              expectedSpecRevision: body.expectedSpecRevision,
+              requestHashSha256
+            });
+          result = {
+            scene: dispatchResult.scene,
+            isIdempotentReplay: dispatchResult.isIdempotentReplay
+          };
           break;
+        }
 
         case "reroll":
           result = await container.useCases.reviewScene.requestReroll({

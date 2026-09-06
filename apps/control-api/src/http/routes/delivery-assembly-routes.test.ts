@@ -3,6 +3,7 @@ import type { AssemblySpec } from "@cco/contracts";
 import type { CampaignId, DeliveryAssemblyJob, JobId, LeaseToken } from "@cco/domain";
 import type { DeliveryAssemblyJobQueuePort, UnitOfWork, UnitOfWorkContext } from "@cco/application";
 import { createControlApiApp } from "../app.js";
+import { createControlApiContainer } from "../types.js";
 
 class FakeUnitOfWork implements UnitOfWork {
   async execute<TResult>(work: (context: UnitOfWorkContext) => Promise<TResult>): Promise<TResult> {
@@ -304,5 +305,73 @@ describe("Delivery Assembly routes", () => {
     });
     expect(getRes.statusCode).toBe(200);
     expect(getRes.json().jobId).toBe(sampleJobId);
+  });
+
+  it("triggers completeCampaignProductionRunAssembly.onAssemblyJobCompleted on /complete", async () => {
+    const completedJob = { ...sampleLeasedJob, status: "completed" as const };
+    const queue: DeliveryAssemblyJobQueuePort = {
+      enqueue: vi.fn(),
+      claim: vi.fn(),
+      start: vi.fn(),
+      heartbeat: vi.fn(),
+      complete: vi.fn().mockResolvedValue({ outcome: "applied", job: completedJob }),
+      fail: vi.fn(),
+      defer: vi.fn(),
+      getJob: vi.fn()
+    };
+
+    const container = createControlApiContainer({
+      uow: new FakeUnitOfWork(),
+      deliveryAssemblyJobQueue: queue
+    });
+    const completeSpy = vi
+      .spyOn(container.useCases.completeCampaignProductionRunAssembly, "onAssemblyJobCompleted")
+      .mockResolvedValue(undefined);
+
+    const app = createControlApiApp(container);
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/delivery-assembly-jobs/${sampleJobId}/complete`,
+      headers: { "Content-Type": "application/json" },
+      payload: { leaseToken: sampleLeaseToken }
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(completeSpy).toHaveBeenCalledWith(sampleJobId);
+  });
+
+  it("triggers completeCampaignProductionRunAssembly.onAssemblyJobFailed on /fail", async () => {
+    const failedJob = { ...sampleLeasedJob, status: "failed" as const };
+    const queue: DeliveryAssemblyJobQueuePort = {
+      enqueue: vi.fn(),
+      claim: vi.fn(),
+      start: vi.fn(),
+      heartbeat: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn().mockResolvedValue({ outcome: "applied", job: failedJob }),
+      defer: vi.fn(),
+      getJob: vi.fn()
+    };
+
+    const container = createControlApiContainer({
+      uow: new FakeUnitOfWork(),
+      deliveryAssemblyJobQueue: queue
+    });
+    const failSpy = vi
+      .spyOn(container.useCases.completeCampaignProductionRunAssembly, "onAssemblyJobFailed")
+      .mockResolvedValue(undefined);
+
+    const app = createControlApiApp(container);
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/delivery-assembly-jobs/${sampleJobId}/fail`,
+      headers: { "Content-Type": "application/json" },
+      payload: { leaseToken: sampleLeaseToken, errorTrace: "assembly failure" }
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(failSpy).toHaveBeenCalledWith(sampleJobId);
   });
 });

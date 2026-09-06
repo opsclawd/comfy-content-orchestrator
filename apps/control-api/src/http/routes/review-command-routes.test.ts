@@ -10,6 +10,9 @@ import {
 import {
   Scene,
   type CampaignId,
+  type CampaignProductionRunRecord,
+  type CampaignProductionRunSceneRecord,
+  type CampaignRecord,
   type CandidateId,
   type JobId,
   type JobKind,
@@ -71,6 +74,9 @@ class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _savedScenes: Scene[] = [];
   private readonly _reviewEvents: ReviewEvent[] = [];
   private readonly _jobQueue: TestJobQueue | undefined;
+  private _campaign: CampaignRecord;
+  private readonly _createdRuns: CampaignProductionRunRecord[] = [];
+  private readonly _runScenes: CampaignProductionRunSceneRecord[] = [];
 
   constructor(
     seededScenes?: Iterable<Scene> | ReadonlyMap<SceneId, Scene> | Record<string, Scene>,
@@ -80,9 +86,21 @@ class InMemorySceneUnitOfWork implements UnitOfWork {
       | Record<string, StoryboardCandidate>,
     seededReviewEvents?:
       Iterable<ReviewEvent> | ReadonlyMap<string, ReviewEvent> | Record<string, ReviewEvent>,
-    jobQueue?: TestJobQueue
+    jobQueue?: TestJobQueue,
+    seededCampaign?: CampaignRecord
   ) {
     this._jobQueue = jobQueue;
+    this._campaign = seededCampaign ?? {
+      id: "camp-default" as CampaignId,
+      status: "drafting",
+      totalScenes: 2,
+      approvedScenes: 0,
+      clientId: "client-1",
+      title: "Title",
+      targetPlatform: "tiktok",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
     this._seededScenes = new Map<SceneId, Scene>();
     if (seededScenes !== undefined && seededScenes !== null) {
       if (seededScenes instanceof Map) {
@@ -158,18 +176,46 @@ class InMemorySceneUnitOfWork implements UnitOfWork {
     return this._reviewEvents;
   }
 
+  get campaign(): CampaignRecord {
+    return this._campaign;
+  }
+
+  get createdRuns(): readonly CampaignProductionRunRecord[] {
+    return this._createdRuns;
+  }
+
+  get runScenes(): readonly CampaignProductionRunSceneRecord[] {
+    return this._runScenes;
+  }
+
   async execute<TResult>(work: (context: UnitOfWorkContext) => Promise<TResult>): Promise<TResult> {
     const stagedScenes: Scene[] = [];
     const stagedReviewEvents: ReviewEvent[] = [];
     const stagedCandidates: StoryboardCandidate[] = [];
+    const stagedRuns: CampaignProductionRunRecord[] = [];
+    const stagedRunScenes: CampaignProductionRunSceneRecord[] = [];
+    let stagedCampaign = { ...this._campaign };
     const stagedJobs = [] as ReturnType<TestJobQueue["createJob"]>[];
 
     const scopedScenes: SceneRepository = {
       findById: async (sceneId: SceneId): Promise<Scene | undefined> => {
-        return this._seededScenes.get(sceneId);
+        return stagedScenes.find((s) => s.id === sceneId) ?? this._seededScenes.get(sceneId);
       },
       save: async (scene: Scene): Promise<void> => {
         stagedScenes.push(scene);
+      },
+      findCampaignIdBySceneId: async (sceneId: SceneId) => {
+        const scene = stagedScenes.find((s) => s.id === sceneId) ?? this._seededScenes.get(sceneId);
+        return scene?.campaignId ?? stagedCampaign.id;
+      },
+      findByCampaignId: async (campaignId: CampaignId) => {
+        const scenes = [...this._seededScenes.values()];
+        for (const s of stagedScenes) {
+          const idx = scenes.findIndex((existing) => existing.id === s.id);
+          if (idx >= 0) scenes[idx] = s;
+          else scenes.push(s);
+        }
+        return scenes.filter((s) => s.campaignId === campaignId);
       }
     };
 
@@ -216,6 +262,48 @@ class InMemorySceneUnitOfWork implements UnitOfWork {
       scenes: scopedScenes,
       reviewEvents: scopedReviewEvents,
       candidates: scopedCandidates,
+      campaigns: {
+        findById: async () => stagedCampaign,
+        findByIdForUpdate: async (cId) => ({ ...stagedCampaign, id: cId as CampaignId }),
+        save: async (c) => {
+          stagedCampaign = c;
+        },
+        transitionStatusIf: async (_id, _from, to, patch) => {
+          stagedCampaign = {
+            ...stagedCampaign,
+            status: to,
+            ...(patch?.approvedScenes !== undefined ? { approvedScenes: patch.approvedScenes } : {})
+          };
+          return true;
+        }
+      },
+      campaignProductionRuns: {
+        createIfAbsent: async (input) => {
+          const run: CampaignProductionRunRecord = {
+            id: `run-${stagedRuns.length + this._createdRuns.length + 1}`,
+            campaignId: input.campaignId as CampaignId,
+            fingerprint: input.fingerprint,
+            status: "dispatched",
+            expectedTotalDurationMs: input.expectedTotalDurationMs,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+          stagedRuns.push(run);
+          return { run, created: true };
+        },
+        insertRunScenes: async (_runId, scenes) => {
+          stagedRunScenes.push(...scenes);
+        },
+        findById: async () => undefined,
+        findByAssemblyJobId: async () => undefined,
+        findRunScenes: async () => [],
+        findRunSceneByProductionJobId: async () => undefined,
+        countIncompleteRunScenes: async () => 0,
+        claimForAssembly: async () => undefined,
+        setAssemblyJobId: async () => {},
+        claimCompletion: async () => undefined,
+        claimFailure: async () => undefined
+      },
       jobs: this._jobQueue
         ? {
             enqueue: async (input) => {
@@ -232,6 +320,9 @@ class InMemorySceneUnitOfWork implements UnitOfWork {
 
     const result = await work(context);
 
+    this._campaign = stagedCampaign;
+    this._createdRuns.push(...stagedRuns);
+    this._runScenes.push(...stagedRunScenes);
     this._savedScenes.push(...stagedScenes);
     this._reviewEvents.push(...stagedReviewEvents);
     for (const scene of stagedScenes) {
@@ -505,6 +596,117 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
     expect(body.approval?.revision).toBe(1);
     expect(body.approval?.approvedBy).toBe("Test Reviewer");
     expect(body.isIdempotentReplay).toBe(false);
+  });
+  it("approving the final scene dispatches campaign production and transitions campaign to queued", async () => {
+    const scene = createReviewReadyScene({
+      selectedCandidateId: candidateUuid,
+      selectedCandidateRevision: 1,
+      configuration: {
+        prompt: "A cinematic shot of a mountain sunrise",
+        referenceIds: [],
+        engineProfileId: "ltx_25",
+        durationMs: 4000
+      }
+    });
+    const candidate = createCandidate();
+    const jobs = new TestJobQueue();
+    const campaign: CampaignRecord = {
+      id: campaignUuid,
+      status: "drafting",
+      totalScenes: 1,
+      approvedScenes: 0,
+      clientId: "client-1",
+      title: "Test Campaign",
+      targetPlatform: "tiktok",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    const uow = new InMemorySceneUnitOfWork([scene], [candidate], undefined, jobs, campaign);
+    const app = createControlApiApp({ uow }, defaultTestOptions);
+
+    const command: ReviewCommand = {
+      actionId: actionUuid,
+      sceneId: sceneUuid,
+      expectedSpecRevision: 1,
+      action: "approve",
+      payload: {}
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${sceneUuid}/review-command`,
+      payload: command
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(uow.campaign.status).toBe("queued");
+    expect(uow.campaign.approvedScenes).toBe(1);
+    expect(uow.createdRuns).toHaveLength(1);
+    expect(uow.createdRuns[0]!.campaignId).toBe(campaignUuid);
+    expect(jobs.jobs).toHaveLength(1);
+    expect(jobs.jobs[0]!.jobKind).toBe("production");
+    expect(jobs.jobs[0]!.status).toBe("queued");
+  });
+
+  it("approving a non-final scene updates approvedScenes counter and keeps campaign in drafting without dispatching", async () => {
+    const scene1 = createReviewReadyScene({
+      selectedCandidateId: candidateUuid,
+      selectedCandidateRevision: 1
+    });
+    const otherSceneUuid = "00000000-0000-0000-0000-000000000002" as SceneId;
+    const scene2 = Scene.reconstitute({
+      id: otherSceneUuid,
+      campaignId: campaignUuid,
+      status: "draft_pending",
+      specRevision: 1,
+      configuration: {
+        prompt: "Second scene",
+        referenceIds: [],
+        engineProfileId: "ltx_25",
+        durationMs: 4000
+      }
+    });
+    const candidate = createCandidate();
+    const jobs = new TestJobQueue();
+    const campaign: CampaignRecord = {
+      id: campaignUuid,
+      status: "drafting",
+      totalScenes: 2,
+      approvedScenes: 0,
+      clientId: "client-1",
+      title: "Test Campaign",
+      targetPlatform: "tiktok",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    const uow = new InMemorySceneUnitOfWork(
+      [scene1, scene2],
+      [candidate],
+      undefined,
+      jobs,
+      campaign
+    );
+    const app = createControlApiApp({ uow }, defaultTestOptions);
+
+    const command: ReviewCommand = {
+      actionId: actionUuid,
+      sceneId: sceneUuid,
+      expectedSpecRevision: 1,
+      action: "approve",
+      payload: {}
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${sceneUuid}/review-command`,
+      payload: command
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(uow.campaign.status).toBe("drafting");
+    expect(uow.campaign.approvedScenes).toBe(1);
+    expect(uow.createdRuns).toHaveLength(0);
+    expect(jobs.jobs).toHaveLength(0);
   });
 
   it("reroll verifies scene status generating_candidates and candidate selection cleared", async () => {

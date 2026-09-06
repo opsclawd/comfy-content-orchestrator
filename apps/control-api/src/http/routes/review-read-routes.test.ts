@@ -568,7 +568,13 @@ describe("Review Read Endpoints", () => {
       },
       useCases: {
         reviewScene: {} as unknown as ControlApiUseCases["reviewScene"],
-        progressSceneProduction: {} as unknown as ControlApiUseCases["progressSceneProduction"]
+        progressSceneProduction: {} as unknown as ControlApiUseCases["progressSceneProduction"],
+        approveSceneAndDispatchCampaignProduction:
+          {} as unknown as ControlApiUseCases["approveSceneAndDispatchCampaignProduction"],
+        completeCampaignProductionRun:
+          {} as unknown as ControlApiUseCases["completeCampaignProductionRun"],
+        completeCampaignProductionRunAssembly:
+          {} as unknown as ControlApiUseCases["completeCampaignProductionRunAssembly"]
       },
       queries: {
         sceneReview: sceneReviewQueries

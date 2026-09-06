@@ -324,6 +324,14 @@ export const deliveryAssemblyRoutes: FastifyPluginAsync<DeliveryAssemblyRoutesOp
     { schema: completeDeliveryAssemblyJobSchema },
     async (request, reply) => {
       const result = await queue.complete(request.params.jobId, request.body.leaseToken);
+      if (
+        (result.outcome === "applied" || result.outcome === "already_applied") &&
+        result.job.status === "completed"
+      ) {
+        await container.useCases.completeCampaignProductionRunAssembly.onAssemblyJobCompleted(
+          request.params.jobId
+        );
+      }
       return translateMutationResult(result, reply);
     }
   );
@@ -340,6 +348,14 @@ export const deliveryAssemblyRoutes: FastifyPluginAsync<DeliveryAssemblyRoutesOp
         request.body.leaseToken,
         request.body.errorTrace
       );
+      if (
+        (result.outcome === "applied" || result.outcome === "already_applied") &&
+        result.job.status === "failed"
+      ) {
+        await container.useCases.completeCampaignProductionRunAssembly.onAssemblyJobFailed(
+          request.params.jobId
+        );
+      }
       return translateMutationResult(result, reply);
     }
   );

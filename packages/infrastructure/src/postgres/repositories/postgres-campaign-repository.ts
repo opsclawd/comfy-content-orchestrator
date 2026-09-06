@@ -34,6 +34,13 @@ function mapRowToCampaign(row: CampaignRow): CampaignRecord {
   };
 }
 
+function isPool(client: Pool | PoolClient): client is Pool {
+  return (
+    typeof (client as Pool).connect === "function" &&
+    typeof (client as PoolClient).release !== "function"
+  );
+}
+
 export class PostgresCampaignRepository implements CampaignRepository<CampaignRecord> {
   constructor(private readonly client: Pool | PoolClient) {}
 
@@ -52,6 +59,40 @@ export class PostgresCampaignRepository implements CampaignRepository<CampaignRe
         updated_at
       FROM campaigns
       WHERE campaign_id = $1 AND archived_at IS NULL
+      `,
+      [campaignId]
+    );
+
+    const row = result.rows[0];
+    if (!row) {
+      return undefined;
+    }
+
+    return mapRowToCampaign(row);
+  }
+
+  async findByIdForUpdate(campaignId: string): Promise<CampaignRecord | undefined> {
+    if (isPool(this.client)) {
+      throw new Error(
+        "Cannot execute findByIdForUpdate using a pg Pool instance. A transaction-bound PoolClient is required for row locking."
+      );
+    }
+
+    const result = await this.client.query<CampaignRow>(
+      `
+      SELECT
+        campaign_id,
+        client_id,
+        title,
+        target_platform,
+        status,
+        total_scenes,
+        approved_scenes,
+        created_at,
+        updated_at
+      FROM campaigns
+      WHERE campaign_id = $1 AND archived_at IS NULL
+      FOR UPDATE
       `,
       [campaignId]
     );
@@ -110,5 +151,31 @@ export class PostgresCampaignRepository implements CampaignRepository<CampaignRe
       }
       throw error;
     }
+  }
+
+  async transitionStatusIf(
+    campaignId: string,
+    expectedStatus: CampaignStatus | readonly CampaignStatus[],
+    nextStatus: CampaignStatus,
+    options?: { readonly approvedScenes?: number }
+  ): Promise<boolean> {
+    const statuses = Array.isArray(expectedStatus) ? expectedStatus : [expectedStatus];
+    const updateApproved = options?.approvedScenes !== undefined;
+    const query = updateApproved
+      ? `
+      UPDATE campaigns
+      SET status = $3, approved_scenes = $4, updated_at = CURRENT_TIMESTAMP
+      WHERE campaign_id = $1 AND status = ANY($2::campaign_status_enum[]) AND archived_at IS NULL
+      `
+      : `
+      UPDATE campaigns
+      SET status = $3, updated_at = CURRENT_TIMESTAMP
+      WHERE campaign_id = $1 AND status = ANY($2::campaign_status_enum[]) AND archived_at IS NULL
+      `;
+    const params = updateApproved
+      ? [campaignId, statuses, nextStatus, options!.approvedScenes]
+      : [campaignId, statuses, nextStatus];
+    const result = await this.client.query(query, params);
+    return (result.rowCount ?? 0) === 1;
   }
 }

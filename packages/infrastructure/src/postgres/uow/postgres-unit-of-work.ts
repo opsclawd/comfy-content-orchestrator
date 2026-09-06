@@ -1,7 +1,10 @@
 import type { UnitOfWork, UnitOfWorkContext } from "@cco/application";
 import type { Pool } from "pg";
+import { PostgresCampaignProductionRunRepository } from "../repositories/postgres-campaign-production-run-repository.js";
 import { PostgresCampaignRepository } from "../repositories/postgres-campaign-repository.js";
 import { PostgresClientRepository } from "../repositories/postgres-client-repository.js";
+import { PostgresDeliveryAssemblyJobQueue } from "../repositories/postgres-delivery-assembly-job-queue.js";
+import { PostgresGenerationManifestRepository } from "../repositories/postgres-generation-manifest-repository.js";
 import { PostgresTransactionalJobEnqueuer } from "../repositories/postgres-job-queue.js";
 import { PostgresReviewEventStore } from "../repositories/postgres-review-event-store.js";
 import { PostgresSceneRepository } from "../repositories/postgres-scene-repository.js";
@@ -20,7 +23,10 @@ export class PostgresUnitOfWork implements UnitOfWork {
         candidates: new PostgresStoryboardCandidateRepository(client),
         campaigns: new PostgresCampaignRepository(client),
         clients: new PostgresClientRepository(client),
-        jobs: new PostgresTransactionalJobEnqueuer(client)
+        jobs: new PostgresTransactionalJobEnqueuer(client),
+        campaignProductionRuns: new PostgresCampaignProductionRunRepository(client),
+        assemblyJobs: new PostgresDeliveryAssemblyJobQueue(client),
+        generationManifests: new PostgresGenerationManifestRepository(client)
       };
 
       const result = await work(context);

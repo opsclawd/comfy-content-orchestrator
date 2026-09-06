@@ -7,3 +7,4 @@ export * from "./reference-asset.js";
 export * from "./delivery-assembly-job.js";
 export * from "./campaign.js";
 export * from "./client.js";
+export * from "./campaign-production-run.js";

@@ -59,6 +59,77 @@ export interface ReviewExecutionResult {
   readonly scene: SceneSnapshot;
 }
 
+export async function applySceneApprovalToScene(
+  context: UnitOfWorkContext,
+  scene: Scene,
+  input: ApproveSceneInput
+): Promise<{ readonly isIdempotentReplay: boolean; readonly scene: Scene }> {
+  const existingEvent = await context.reviewEvents.findById(input.eventId);
+  if (existingEvent !== undefined) {
+    if (existingEvent.sceneId !== input.sceneId) {
+      throw new IdempotencyConflictError(input.eventId);
+    }
+
+    if (
+      (input.requestHashSha256 !== undefined || existingEvent.requestHashSha256 !== undefined) &&
+      input.requestHashSha256 !== existingEvent.requestHashSha256
+    ) {
+      throw new IdempotencyConflictError(input.eventId);
+    }
+
+    return {
+      isIdempotentReplay: true,
+      scene
+    };
+  }
+
+  if (
+    input.expectedSpecRevision !== undefined &&
+    scene.snapshot().specRevision !== input.expectedSpecRevision
+  ) {
+    throw new StaleRevisionConflictError(
+      input.sceneId,
+      input.expectedSpecRevision,
+      scene.snapshot().specRevision
+    );
+  }
+
+  const priorSceneStatus = scene.status;
+  const transition = scene.approve({
+    approvedBy: input.reviewerName,
+    approvedAt: input.occurredAt
+  });
+
+  const event = ReviewEventSchema.parse({
+    eventId: input.eventId,
+    sceneId: input.sceneId,
+    reviewerName: input.reviewerName,
+    action: "approve",
+    ...(input.directorNotes !== undefined ? { directorNotes: input.directorNotes } : {}),
+    mutationPayload: {},
+    priorSceneStatus,
+    resultingSceneStatus: transition.to,
+    ...(input.expectedSpecRevision !== undefined
+      ? { expectedSpecRevision: input.expectedSpecRevision }
+      : {}),
+    ...(input.resultingSpecRevision !== undefined
+      ? { resultingSpecRevision: input.resultingSpecRevision }
+      : {}),
+    ...(input.requestHashSha256 !== undefined
+      ? { requestHashSha256: input.requestHashSha256 }
+      : {}),
+    occurredAt: input.occurredAt
+  });
+
+  await context.reviewEvents.append(event);
+  await context.scenes.save(scene);
+
+  return {
+    isIdempotentReplay: false,
+    scene
+  };
+}
+
 export class ReviewSceneUseCases {
   constructor(private readonly uow: UnitOfWork) {}
 
@@ -120,12 +191,17 @@ export class ReviewSceneUseCases {
   }
 
   async approve(input: ApproveSceneInput): Promise<ReviewExecutionResult> {
-    return await this.executeReviewAction(input, "approve", {}, (scene) =>
-      scene.approve({
-        approvedBy: input.reviewerName,
-        approvedAt: input.occurredAt
-      })
-    );
+    return await this.uow.execute(async (context) => {
+      const scene = await context.scenes.findById(input.sceneId as SceneId);
+      if (scene === undefined) {
+        throw new SceneNotFoundError(input.sceneId);
+      }
+      const result = await applySceneApprovalToScene(context, scene, input);
+      return {
+        isIdempotentReplay: result.isIdempotentReplay,
+        scene: result.scene.snapshot()
+      };
+    });
   }
 
   async requestReroll(input: RequestRerollInput): Promise<ReviewExecutionResult> {

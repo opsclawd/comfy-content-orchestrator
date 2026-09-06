@@ -120,6 +120,7 @@ describe("PostgreSQL SceneRepository Adapter Integration", () => {
     const snapshot = scene!.snapshot();
     expect(snapshot.id).toBe(sceneRecord.scene_id);
     expect(snapshot.campaignId).toBe(campaign.campaign_id);
+    expect(snapshot.sequenceIndex).toBe(1);
     expect(snapshot.status).toBe("approved");
     expect(snapshot.specRevision).toBe(1);
     expect(snapshot.configuration.prompt).toBe(
@@ -171,6 +172,7 @@ describe("PostgreSQL SceneRepository Adapter Integration", () => {
       campaignId: campaign.campaign_id,
       status: "draft_pending",
       specRevision: 1,
+      sequenceIndex: 1,
       configuration: {
         prompt: "Draft prompt",
         referenceIds: [],
@@ -435,6 +437,7 @@ describe("PostgreSQL SceneRepository Adapter Integration", () => {
       campaignId: campaign.campaign_id,
       status: "draft_pending",
       specRevision: 1,
+      sequenceIndex: 1,
       configuration: {
         prompt: "Newly created scene prompt from scratch",
         referenceIds: [refAsset.asset_id],
@@ -635,6 +638,151 @@ describe("PostgreSQL SceneRepository Adapter Integration", () => {
       throw err;
     } finally {
       txClient.release();
+    }
+  });
+
+  it("finds scenes by campaignId in canonical scene_order with sequenceIndex mapped", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+
+    await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 2,
+      visualDescription: "Scene two",
+      status: "draft_pending"
+    });
+    await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      visualDescription: "Scene one",
+      status: "approved"
+    });
+    await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 3,
+      visualDescription: "Scene three",
+      status: "approved"
+    });
+
+    const repo = new PostgresSceneRepository(client);
+    const scenes = await repo.findByCampaignId(campaign.campaign_id as CampaignId);
+
+    expect(scenes).toHaveLength(3);
+    expect(scenes[0]!.sequenceIndex).toBe(1);
+    expect(scenes[1]!.sequenceIndex).toBe(2);
+    expect(scenes[2]!.sequenceIndex).toBe(3);
+  });
+
+  it("lock-free findCampaignIdBySceneId resolves owning campaignId without blocking or holding locks", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+
+    const sceneRecord = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      visualDescription: "Scene for lookup",
+      status: "approved"
+    });
+
+    const repo = new PostgresSceneRepository(client);
+    const resolvedCampaignId = await repo.findCampaignIdBySceneId(sceneRecord.scene_id as SceneId);
+    expect(resolvedCampaignId).toBe(campaign.campaign_id);
+
+    const nonExistent = await repo.findCampaignIdBySceneId(
+      "01950c46-9e90-7d3d-82d2-8f1d3c999999" as SceneId
+    );
+    expect(nonExistent).toBeUndefined();
+
+    // Now prove lock freedom across two independent connections:
+    // Connection 1 holds an exclusive FOR UPDATE lock on the scene row.
+    // Connection 2 must be able to resolve campaignId immediately without blocking.
+    await client.query("COMMIT");
+    const conn1 = await pool.connect();
+    const conn2 = await pool.connect();
+
+    try {
+      await conn1.query("BEGIN");
+      await conn1.query("SELECT * FROM storyboard_scenes WHERE scene_id = $1 FOR UPDATE", [
+        sceneRecord.scene_id
+      ]);
+
+      // conn2 reads campaignId via findCampaignIdBySceneId while conn1 holds the FOR UPDATE lock
+      const repo2 = new PostgresSceneRepository(conn2);
+      const readDuringLock = await repo2.findCampaignIdBySceneId(sceneRecord.scene_id as SceneId);
+      expect(readDuringLock).toBe(campaign.campaign_id);
+
+      await conn1.query("ROLLBACK");
+
+      // Conversely, conn2 calling findCampaignIdBySceneId inside an open transaction does not
+      // acquire row locks that would block conn1 from modifying the row.
+      await conn2.query("BEGIN");
+      await repo2.findCampaignIdBySceneId(sceneRecord.scene_id as SceneId);
+
+      await conn1.query("BEGIN");
+      await conn1.query(
+        "UPDATE storyboard_scenes SET visual_description = 'concurrently updated' WHERE scene_id = $1",
+        [sceneRecord.scene_id]
+      );
+      await conn1.query("COMMIT");
+
+      await conn2.query("ROLLBACK");
+    } finally {
+      conn1.release();
+      conn2.release();
+      await client.query("BEGIN");
+    }
+  });
+
+  it("findByCampaignId with forUpdate=true acquires exclusive row locks on all campaign scenes", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+
+    const scene1 = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      status: "approved"
+    });
+    const scene2 = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 2,
+      status: "approved"
+    });
+
+    await client.query("COMMIT");
+    const conn1 = await pool.connect();
+    const conn2 = await pool.connect();
+
+    try {
+      await conn1.query("BEGIN");
+      const repo1 = new PostgresSceneRepository(conn1);
+      const lockedScenes = await repo1.findByCampaignId(campaign.campaign_id as CampaignId, {
+        forUpdate: true
+      });
+      expect(lockedScenes).toHaveLength(2);
+
+      // Verify conn2 attempting to acquire FOR UPDATE NOWAIT on either scene is rejected (55P03)
+      await conn2.query("BEGIN");
+      await expect(
+        conn2.query("SELECT * FROM storyboard_scenes WHERE scene_id = $1 FOR UPDATE NOWAIT", [
+          scene1.scene_id
+        ])
+      ).rejects.toMatchObject({ code: "55P03" });
+
+      await conn2.query("ROLLBACK");
+      await conn2.query("BEGIN");
+
+      await expect(
+        conn2.query("SELECT * FROM storyboard_scenes WHERE scene_id = $1 FOR UPDATE NOWAIT", [
+          scene2.scene_id
+        ])
+      ).rejects.toMatchObject({ code: "55P03" });
+
+      await conn2.query("ROLLBACK");
+      await conn1.query("ROLLBACK");
+    } finally {
+      conn1.release();
+      conn2.release();
+      await client.query("BEGIN");
     }
   });
 });

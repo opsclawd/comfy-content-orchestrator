@@ -162,4 +162,60 @@ describe("PostgresCampaignRepository Integration", () => {
 
     await expect(repository.save(campaign)).rejects.toThrow(ClientNotFoundError);
   });
+
+  it("findByIdForUpdate acquires exclusive row lock and blocks concurrent transactions", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const repository = new PostgresCampaignRepository(client);
+
+    const campaignId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73804" as CampaignId;
+    const campaign: CampaignRecord = {
+      id: campaignId,
+      clientId: clientRecord.client_id,
+      title: "Lock Test Campaign",
+      targetPlatform: "tiktok",
+      status: "drafting",
+      totalScenes: 2,
+      approvedScenes: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    await repository.save(campaign);
+
+    // Commit setup so independent connections can query it
+    await client.query("COMMIT");
+    const conn1 = await pool.connect();
+    const conn2 = await pool.connect();
+
+    try {
+      await conn1.query("BEGIN");
+      const repo1 = new PostgresCampaignRepository(conn1);
+      const lockedCampaign = await repo1.findByIdForUpdate(campaignId);
+      expect(lockedCampaign).toBeDefined();
+      expect(lockedCampaign!.id).toBe(campaignId);
+
+      // Verify conn2 attempting to acquire FOR UPDATE NOWAIT on this campaign row fails with 55P03
+      await conn2.query("BEGIN");
+      await expect(
+        conn2.query("SELECT * FROM campaigns WHERE campaign_id = $1 FOR UPDATE NOWAIT", [
+          campaignId
+        ])
+      ).rejects.toMatchObject({ code: "55P03" });
+
+      // Rollback conn2's aborted transaction from the failed NOWAIT lock attempt
+      await conn2.query("ROLLBACK");
+
+      // After conn1 commits, conn2 can acquire the lock
+      await conn1.query("COMMIT");
+      await conn2.query("BEGIN");
+      const repo2 = new PostgresCampaignRepository(conn2);
+      const lockedByConn2 = await repo2.findByIdForUpdate(campaignId);
+      expect(lockedByConn2).toBeDefined();
+      expect(lockedByConn2!.id).toBe(campaignId);
+      await conn2.query("COMMIT");
+    } finally {
+      conn1.release();
+      conn2.release();
+      await client.query("BEGIN");
+    }
+  });
 });
