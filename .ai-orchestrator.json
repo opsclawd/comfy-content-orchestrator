@@ -10,6 +10,12 @@
       "pnpm check:control-plane"
     ],
     "timeout": 900,
-    "forbiddenArtifactPaths": ["certification/", "baseline/", "config/render-profiles/"]
+    "forbiddenArtifactPaths": ["certification/", "baseline/", "config/render-profiles/"],
+    "knownUnwiredVitestConfigs": [
+      {
+        "file": "vitest.ltx.config.ts",
+        "reason": "Its real-inference test (\"runs real LTX-2.5 video generation on host with ComfyUI and GPU\") requires real GPU/ComfyUI hardware that the orchestrator's implement/validate sandbox does not have. Run pnpm test:ltx-production manually on the render-worker host instead. See issue #196."
+      }
+    ]
   }
 }
