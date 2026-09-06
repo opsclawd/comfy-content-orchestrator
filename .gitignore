@@ -3,6 +3,8 @@ dist/
 coverage/
 .next/
 *.tsbuildinfo
+__pycache__/
+*.pyc
 .env
 .env.*
 .env*.local

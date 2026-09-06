@@ -13,8 +13,8 @@ fi
 
 source "${VERSION_FILE}"
 
-if [[ -z "${WHISPERX_PIP_VERSION:-}" || -z "${WHISPERX_TORCHAUDIO_VERSION:-}" || -z "${WHISPERX_VENV_DIR:-}" || -z "${WHISPERX_MODEL_DIR:-}" || -z "${WHISPERX_ALIGNMENT_MODEL_ID:-}" || -z "${WHISPERX_ALIGNMENT_MODEL_REVISION:-}" || -z "${WHISPERX_ALIGNMENT_MODEL_FILE:-}" || -z "${WHISPERX_ALIGNMENT_MODEL_SHA256:-}" ]]; then
-  echo "Error: .whisperx-version must define WHISPERX_PIP_VERSION, WHISPERX_TORCHAUDIO_VERSION, WHISPERX_VENV_DIR, WHISPERX_MODEL_DIR, WHISPERX_ALIGNMENT_MODEL_ID, WHISPERX_ALIGNMENT_MODEL_REVISION, WHISPERX_ALIGNMENT_MODEL_FILE, and WHISPERX_ALIGNMENT_MODEL_SHA256" >&2
+if [[ -z "${WHISPERX_PIP_VERSION:-}" || -z "${WHISPERX_TORCHAUDIO_VERSION:-}" || -z "${WHISPERX_MATPLOTLIB_VERSION:-}" || -z "${WHISPERX_VENV_DIR:-}" || -z "${WHISPERX_MODEL_DIR:-}" || -z "${WHISPERX_ALIGNMENT_MODEL_ID:-}" || -z "${WHISPERX_ALIGNMENT_MODEL_REVISION:-}" || -z "${WHISPERX_ALIGNMENT_MODEL_FILE:-}" || -z "${WHISPERX_ALIGNMENT_MODEL_SHA256:-}" ]]; then
+  echo "Error: .whisperx-version must define WHISPERX_PIP_VERSION, WHISPERX_TORCHAUDIO_VERSION, WHISPERX_MATPLOTLIB_VERSION, WHISPERX_VENV_DIR, WHISPERX_MODEL_DIR, WHISPERX_ALIGNMENT_MODEL_ID, WHISPERX_ALIGNMENT_MODEL_REVISION, WHISPERX_ALIGNMENT_MODEL_FILE, and WHISPERX_ALIGNMENT_MODEL_SHA256" >&2
   exit 1
 fi
 
@@ -112,9 +112,17 @@ if [[ "${ACTUAL_SHA256}" != "${WHISPERX_ALIGNMENT_MODEL_SHA256}" ]]; then
   exit 1
 fi
 
-# Verify Python virtualenv package and versions
-if ! "${PYTHON_BIN}" -c "import whisperx; import torchaudio; import importlib.metadata; wx=importlib.metadata.version('whisperx'); ta=importlib.metadata.version('torchaudio'); assert wx == '${WHISPERX_PIP_VERSION}', f'whisperx {wx} != ${WHISPERX_PIP_VERSION}'; assert ta.startswith('${WHISPERX_TORCHAUDIO_VERSION}'), f'torchaudio {ta} != ${WHISPERX_TORCHAUDIO_VERSION}'" 2>/dev/null; then
-  echo "Error: Python environment at ${PYTHON_BIN} failed to verify whisperx (${WHISPERX_PIP_VERSION}) or torchaudio (${WHISPERX_TORCHAUDIO_VERSION})." >&2
+# Verify Python virtualenv package and versions. Importing whisperx and matplotlib
+# (not just checking pip metadata) catches real import-time failures such as a
+# missing transitive dependency (e.g. pyannote.audio -> matplotlib), not just a
+# version-string mismatch.
+IMPORT_CHECK_STDERR="$(mktemp)"
+trap 'rm -f "${IMPORT_CHECK_STDERR}"' EXIT
+if ! "${PYTHON_BIN}" -c "import whisperx; import torchaudio; import matplotlib; import importlib.metadata; wx=importlib.metadata.version('whisperx'); ta=importlib.metadata.version('torchaudio'); assert wx == '${WHISPERX_PIP_VERSION}', f'whisperx {wx} != ${WHISPERX_PIP_VERSION}'; assert ta.startswith('${WHISPERX_TORCHAUDIO_VERSION}'), f'torchaudio {ta} != ${WHISPERX_TORCHAUDIO_VERSION}'" 2>"${IMPORT_CHECK_STDERR}"; then
+  echo "Error: Python environment at ${PYTHON_BIN} failed to verify whisperx (${WHISPERX_PIP_VERSION}), torchaudio (${WHISPERX_TORCHAUDIO_VERSION}), or matplotlib (${WHISPERX_MATPLOTLIB_VERSION})." >&2
+  echo "--- underlying error ---" >&2
+  cat "${IMPORT_CHECK_STDERR}" >&2
+  echo "------------------------" >&2
   echo "Please run '${REPO_ROOT}/scripts/install-whisperx.sh' to re-install dependencies." >&2
   exit 1
 fi

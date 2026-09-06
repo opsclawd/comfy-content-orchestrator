@@ -1,6 +1,11 @@
 # Pinned WhisperX Version and Alignment Model
 WHISPERX_PIP_VERSION=3.3.1
 WHISPERX_TORCHAUDIO_VERSION=2.5.1
+# matplotlib is a real, required runtime dependency: whisperx -> pyannote.audio ->
+# pyannote.audio.tasks.segmentation.multilabel imports matplotlib.pyplot at import
+# time. It is not declared by whisperx's own package metadata for this version, so
+# it must be installed explicitly or `import whisperx` fails outright.
+WHISPERX_MATPLOTLIB_VERSION=3.11.1
 WHISPERX_VENV_DIR=node_modules/.cache/whisperx-venv
 WHISPERX_MODEL_DIR=node_modules/.cache/whisperx-model
 WHISPERX_ALIGNMENT_MODEL_ID=WAV2VEC2_ASR_BASE_960H

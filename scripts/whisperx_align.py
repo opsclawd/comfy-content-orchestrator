@@ -147,12 +147,17 @@ def main():
             sample_rate = 16000
             duration = float(len(audio)) / sample_rate
 
+            # NOTE: whisperx 3.3.1's load_align_model() has no model_cache_only
+            # parameter (signature: language_code, device, model_name=None,
+            # model_dir=None) — passing one raises TypeError. Offline/cache-only
+            # behavior is instead enforced via the HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE
+            # env vars set at the top of this file, plus model_dir pointing at the
+            # pinned, checksum-verified local cache.
             model_a, metadata = whisperx.load_align_model(
                 language_code=args.language,
                 device=args.device,
                 model_name=args.model_name,
-                model_dir=args.model_dir,
-                model_cache_only=True
+                model_dir=args.model_dir
             )
 
             segments = [{"text": text, "start": 0.0, "end": duration}]
