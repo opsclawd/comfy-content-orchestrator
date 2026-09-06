@@ -23,8 +23,15 @@ interface DeliveryAssemblyJobRow {
   updated_at: Date | string;
 }
 
+function isPool(client: Pool | PoolClient): client is Pool {
+  return (
+    typeof (client as Pool).connect === "function" &&
+    typeof (client as PoolClient).release !== "function"
+  );
+}
+
 export class PostgresDeliveryAssemblyJobQueue implements DeliveryAssemblyJobQueuePort {
-  constructor(private readonly pool: Pool) {}
+  constructor(private readonly client: Pool | PoolClient) {}
 
   async enqueue(
     input: EnqueueDeliveryAssemblyJobInput
@@ -52,7 +59,7 @@ export class PostgresDeliveryAssemblyJobQueue implements DeliveryAssemblyJobQueu
       throw new Error("maxRetries must be a non-negative integer");
     }
 
-    const res = await this.pool.query<DeliveryAssemblyJobRow>(
+    const res = await this.client.query<DeliveryAssemblyJobRow>(
       `
       INSERT INTO delivery_assembly_jobs (
         campaign_id,
@@ -103,8 +110,14 @@ export class PostgresDeliveryAssemblyJobQueue implements DeliveryAssemblyJobQueu
       throw new Error("leaseDurationMs must be a positive finite integer");
     }
 
+    if (!isPool(this.client)) {
+      throw new Error(
+        "Cannot execute claim using a PoolClient. A pg Pool instance is required for lease management."
+      );
+    }
+
     // 1. Terminalize expired exhausted active rows in a standalone query
-    await this.pool.query(
+    await this.client.query(
       `
       UPDATE delivery_assembly_jobs
       SET
@@ -118,7 +131,7 @@ export class PostgresDeliveryAssemblyJobQueue implements DeliveryAssemblyJobQueu
     );
 
     // 2. Conditionally claim the oldest eligible queued or expired recoverable job
-    const client = await this.pool.connect();
+    const client = await this.client.connect();
     try {
       await client.query("BEGIN");
 
@@ -189,7 +202,7 @@ export class PostgresDeliveryAssemblyJobQueue implements DeliveryAssemblyJobQueu
     jobId: JobId | string,
     leaseToken: LeaseToken | string
   ): Promise<DeliveryAssemblyJobMutationResult> {
-    const updateRes = await this.pool.query<DeliveryAssemblyJobRow>(
+    const updateRes = await this.client.query<DeliveryAssemblyJobRow>(
       `
       UPDATE delivery_assembly_jobs
       SET
@@ -252,7 +265,7 @@ export class PostgresDeliveryAssemblyJobQueue implements DeliveryAssemblyJobQueu
       throw new Error("leaseDurationMs must be a positive finite integer");
     }
 
-    const updateRes = await this.pool.query<DeliveryAssemblyJobRow>(
+    const updateRes = await this.client.query<DeliveryAssemblyJobRow>(
       `
       UPDATE delivery_assembly_jobs
       SET
@@ -298,7 +311,7 @@ export class PostgresDeliveryAssemblyJobQueue implements DeliveryAssemblyJobQueu
     jobId: JobId | string,
     leaseToken: LeaseToken | string
   ): Promise<DeliveryAssemblyJobMutationResult> {
-    const updateRes = await this.pool.query<DeliveryAssemblyJobRow>(
+    const updateRes = await this.client.query<DeliveryAssemblyJobRow>(
       `
       UPDATE delivery_assembly_jobs
       SET
@@ -352,7 +365,7 @@ export class PostgresDeliveryAssemblyJobQueue implements DeliveryAssemblyJobQueu
     leaseToken: LeaseToken | string,
     errorTrace: string
   ): Promise<DeliveryAssemblyJobMutationResult> {
-    const updateRes = await this.pool.query<DeliveryAssemblyJobRow>(
+    const updateRes = await this.client.query<DeliveryAssemblyJobRow>(
       `
       UPDATE delivery_assembly_jobs
       SET
@@ -426,7 +439,7 @@ export class PostgresDeliveryAssemblyJobQueue implements DeliveryAssemblyJobQueu
       throw new Error("reason must be a non-empty string");
     }
 
-    const updateRes = await this.pool.query<DeliveryAssemblyJobRow>(
+    const updateRes = await this.client.query<DeliveryAssemblyJobRow>(
       `
       UPDATE delivery_assembly_jobs
       SET
@@ -488,7 +501,7 @@ export class PostgresDeliveryAssemblyJobQueue implements DeliveryAssemblyJobQueu
 
   private async readJobRow(
     jobId: string,
-    runner: Pool | PoolClient = this.pool
+    runner: Pool | PoolClient = this.client
   ): Promise<DeliveryAssemblyJobRow | undefined> {
     const res = await runner.query<DeliveryAssemblyJobRow>(
       `

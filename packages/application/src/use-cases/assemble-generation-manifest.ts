@@ -9,6 +9,7 @@ import type {
   StoryboardCandidateRepository
 } from "../ports/index.js";
 import type { ExecuteProfileRenderResult } from "./execute-profile-render.js";
+import { createGenerationManifestOutput } from "./generation-manifest-output.js";
 
 export class IncompleteManifestError extends Error {
   override readonly name = "IncompleteManifestError";
@@ -573,13 +574,13 @@ export class AssembleGenerationManifest {
         if (!checksumSha256) {
           throw new IncompleteManifestError("outputs.checksumSha256");
         }
-        return {
+        return createGenerationManifestOutput({
           bucket: obj.bucket,
           key: obj.key,
           filename: obj.key.split("/").pop() ?? obj.key,
           checksumSha256,
           ...(obj.contentType ? { contentType: obj.contentType } : {})
-        };
+        });
       })
     );
 

@@ -190,7 +190,13 @@ describe("Application capability ports contract tests", () => {
         async findById(campaignId: string): Promise<TestCampaign | undefined> {
           return campaignId === "camp-1" ? { id: "camp-1", name: "Summer Campaign" } : undefined;
         },
-        async save(_campaign: TestCampaign): Promise<void> {}
+        async findByIdForUpdate(campaignId: string): Promise<TestCampaign | undefined> {
+          return campaignId === "camp-1" ? { id: "camp-1", name: "Summer Campaign" } : undefined;
+        },
+        async save(_campaign: TestCampaign): Promise<void> {},
+        async transitionStatusIf(): Promise<boolean> {
+          return false;
+        }
       } satisfies CampaignRepository<TestCampaign>;
 
       const renderJobRepo = {

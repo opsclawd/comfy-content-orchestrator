@@ -1,7 +1,10 @@
-import type {
-  GenerationManifestComponentIdentity,
-  GenerationManifestRepository
+import {
+  decodeGenerationManifestOutputs,
+  extractPrimaryVideoStemMedia,
+  type GenerationManifestComponentIdentity,
+  type GenerationManifestRepository
 } from "@cco/application";
+import type { PersistentMediaRef } from "@cco/contracts";
 import type { Pool, PoolClient } from "pg";
 
 interface GenerationManifestPayloadRow {
@@ -36,16 +39,13 @@ export class PostgresGenerationManifestRepository implements GenerationManifestR
     }
 
     const outputChecksumsSha256: string[] = [];
-    if (Array.isArray(payload.outputs)) {
-      for (const out of payload.outputs) {
-        if (
-          out &&
-          typeof out === "object" &&
-          typeof (out as { checksumSha256?: unknown }).checksumSha256 === "string"
-        ) {
-          outputChecksumsSha256.push((out as { checksumSha256: string }).checksumSha256);
-        }
+    try {
+      const outputs = decodeGenerationManifestOutputs(payload, generationManifestId);
+      for (const out of outputs) {
+        outputChecksumsSha256.push(out.checksumSha256);
       }
+    } catch {
+      // If outputs are not present or malformed, outputChecksumsSha256 remains empty
     }
 
     return {
@@ -53,6 +53,28 @@ export class PostgresGenerationManifestRepository implements GenerationManifestR
       renderProfileVersion:
         typeof payload.renderProfileVersion === "number" ? payload.renderProfileVersion : null,
       ...(outputChecksumsSha256.length > 0 ? { outputChecksumsSha256 } : {})
+    };
+  }
+
+  async findVideoStemSourceByJobId(
+    jobId: string
+  ): Promise<
+    { readonly generationManifestId: string; readonly media: PersistentMediaRef } | undefined
+  > {
+    const result = await this.client.query<{ manifest_id: string; manifest_payload: unknown }>(
+      `SELECT manifest_id, manifest_payload FROM generation_manifests WHERE job_id = $1`,
+      [jobId]
+    );
+
+    const row = result.rows[0];
+    if (!row) {
+      return undefined;
+    }
+
+    const media = extractPrimaryVideoStemMedia(row.manifest_payload, jobId);
+    return {
+      generationManifestId: row.manifest_id,
+      media
     };
   }
 }

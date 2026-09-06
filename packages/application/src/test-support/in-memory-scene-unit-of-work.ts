@@ -1,7 +1,9 @@
 import type { ReviewEvent } from "@cco/contracts";
 import {
   Scene,
+  type CampaignId,
   type CampaignRecord,
+  type CampaignStatus,
   type CandidateId,
   type ClientRecord,
   type JobKind,
@@ -10,9 +12,12 @@ import {
   type StoryboardCandidate
 } from "@cco/domain";
 import type {
+  CampaignProductionRunRepository,
   CampaignRepository,
   ClientRepository,
+  DeliveryAssemblyJobQueuePort,
   EnqueueJobInput,
+  GenerationManifestRepository,
   ReviewEventStore,
   SceneRepository,
   StoryboardCandidateRepository,
@@ -254,6 +259,22 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       },
       save: async (scene: Scene): Promise<void> => {
         stagedScenes.push(scene);
+      },
+      findByCampaignId: async (
+        campaignId: CampaignId,
+        _options?: { readonly forUpdate?: boolean }
+      ): Promise<Scene[]> => {
+        const scenesMap = new Map<SceneId, Scene>(scopedSceneCopies);
+        for (const scene of stagedScenes) {
+          scenesMap.set(scene.id, scene);
+        }
+        return Array.from(scenesMap.values())
+          .filter((s) => s.campaignId === campaignId)
+          .sort((a, b) => a.sequenceIndex - b.sequenceIndex);
+      },
+      findCampaignIdBySceneId: async (sceneId: SceneId): Promise<CampaignId | undefined> => {
+        const scene = stagedScenes.find((s) => s.id === sceneId) ?? scopedSceneCopies.get(sceneId);
+        return scene?.campaignId;
       }
     };
 
@@ -302,6 +323,11 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
           stagedCampaigns.find((c) => c.id === campaignId) ?? this._seededCampaigns.get(campaignId)
         );
       },
+      findByIdForUpdate: async (campaignId: string): Promise<CampaignRecord | undefined> => {
+        return (
+          stagedCampaigns.find((c) => c.id === campaignId) ?? this._seededCampaigns.get(campaignId)
+        );
+      },
       save: async (campaign: CampaignRecord): Promise<void> => {
         const existingIdx = stagedCampaigns.findIndex((c) => c.id === campaign.id);
         if (existingIdx >= 0) {
@@ -309,6 +335,34 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
         } else {
           stagedCampaigns.push(campaign);
         }
+      },
+      transitionStatusIf: async (
+        campaignId: string,
+        expectedStatus: CampaignStatus | readonly CampaignStatus[],
+        nextStatus: CampaignStatus,
+        options?: { readonly approvedScenes?: number }
+      ): Promise<boolean> => {
+        const campaign =
+          stagedCampaigns.find((c) => c.id === campaignId) ?? this._seededCampaigns.get(campaignId);
+        if (!campaign) return false;
+        const statuses = Array.isArray(expectedStatus) ? expectedStatus : [expectedStatus];
+        if (statuses.includes(campaign.status)) {
+          const updated: CampaignRecord = {
+            ...campaign,
+            status: nextStatus,
+            ...(options?.approvedScenes !== undefined
+              ? { approvedScenes: options.approvedScenes }
+              : {})
+          };
+          const existingIdx = stagedCampaigns.findIndex((c) => c.id === campaign.id);
+          if (existingIdx >= 0) {
+            stagedCampaigns[existingIdx] = updated;
+          } else {
+            stagedCampaigns.push(updated);
+          }
+          return true;
+        }
+        return false;
       }
     };
 
@@ -326,13 +380,43 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       }
     };
 
+    const defaultCampaignProductionRuns: CampaignProductionRunRepository = {
+      createIfAbsent: async () => {
+        throw new Error("CampaignProductionRuns not configured in InMemorySceneUnitOfWork");
+      },
+      findById: async () => undefined,
+      findByAssemblyJobId: async () => undefined,
+      findRunSceneByProductionJobId: async () => undefined,
+      findRunScenes: async () => [],
+      insertRunScenes: async () => {},
+      countIncompleteRunScenes: async () => 0,
+      claimForAssembly: async () => undefined,
+      setAssemblyJobId: async () => {},
+      claimCompletion: async () => undefined,
+      claimFailure: async () => undefined
+    };
+
+    const defaultAssemblyJobs: Pick<DeliveryAssemblyJobQueuePort, "enqueue"> = {
+      enqueue: async () => {
+        throw new Error("AssemblyJobs not configured in InMemorySceneUnitOfWork");
+      }
+    };
+
+    const defaultGenerationManifests: GenerationManifestRepository = {
+      getComponentIdentityById: async () => undefined,
+      findVideoStemSourceByJobId: async () => undefined
+    };
+
     const context: UnitOfWorkContext = {
       scenes: scopedScenes,
       reviewEvents: scopedReviewEvents,
       candidates: scopedCandidates,
       campaigns: scopedCampaigns,
       clients: scopedClients,
-      jobs: scopedJobs
+      jobs: scopedJobs,
+      campaignProductionRuns: defaultCampaignProductionRuns,
+      assemblyJobs: defaultAssemblyJobs,
+      generationManifests: defaultGenerationManifests
     };
 
     const result = await work(context);

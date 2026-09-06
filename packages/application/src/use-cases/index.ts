@@ -32,3 +32,8 @@ export * from "./map-production-duration.js";
 export * from "./production-configuration-errors.js";
 export * from "./derive-production-seed.js";
 export * from "./enqueue-scene-production-render.js";
+export * from "./dispatch-campaign-production.js";
+export * from "./campaign-production-fingerprint.js";
+export * from "./generation-manifest-output.js";
+export * from "./complete-campaign-production-run.js";
+export * from "./complete-campaign-production-run-assembly.js";

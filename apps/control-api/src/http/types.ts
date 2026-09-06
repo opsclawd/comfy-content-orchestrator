@@ -10,6 +10,9 @@ import {
   ProgressSceneProductionUseCases,
   ReviewSceneUseCases,
   SubmitSceneCreationUseCase,
+  ApproveSceneAndDispatchCampaignProductionUseCase,
+  CompleteCampaignProductionRunUseCases,
+  CompleteCampaignProductionRunAssemblyUseCases,
   type DeliveryAssemblyJobQueuePort,
   type JobQueuePort,
   type PlanningModelClientPort,
@@ -49,6 +52,9 @@ export interface ControlApiUseCases {
   readonly submitSceneCreation?: SubmitSceneCreationUseCase | undefined;
   readonly planCampaignBeatSheet?: PlanCampaignBeatSheetUseCase | undefined;
   readonly enforceStorageAdmission?: EnforceStorageAdmission;
+  readonly approveSceneAndDispatchCampaignProduction: ApproveSceneAndDispatchCampaignProductionUseCase;
+  readonly completeCampaignProductionRun: CompleteCampaignProductionRunUseCases;
+  readonly completeCampaignProductionRunAssembly: CompleteCampaignProductionRunAssemblyUseCases;
 }
 
 export interface ControlApiQueries {
@@ -74,6 +80,15 @@ export function createControlApiContainer(
   const createCampaign = new CreateCampaignUseCase(dependencies.uow);
   const createClient = new CreateClientUseCase(dependencies.uow);
   const createScene = new CreateSceneUseCase(dependencies.uow);
+  const approveSceneAndDispatchCampaignProduction =
+    new ApproveSceneAndDispatchCampaignProductionUseCase(
+      dependencies.uow,
+      enqueueSceneProductionRender
+    );
+  const completeCampaignProductionRun = new CompleteCampaignProductionRunUseCases(dependencies.uow);
+  const completeCampaignProductionRunAssembly = new CompleteCampaignProductionRunAssemblyUseCases(
+    dependencies.uow
+  );
   const planSceneConfiguration =
     dependencies.planningModelClients && dependencies.referenceAssetRepository
       ? new PlanSceneConfigurationUseCase({
@@ -124,6 +139,9 @@ export function createControlApiContainer(
       createClient,
       createScene,
       submitSceneCreation,
+      approveSceneAndDispatchCampaignProduction,
+      completeCampaignProductionRun,
+      completeCampaignProductionRunAssembly,
       ...(planCampaignBeatSheet !== undefined ? { planCampaignBeatSheet } : {}),
       ...(enforceStorageAdmission !== undefined ? { enforceStorageAdmission } : {})
     },

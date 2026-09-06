@@ -1496,5 +1496,26 @@ describe("Scene domain contracts", () => {
       expect(approveTransition.to).toBe("approved");
       expect(restored.status).toBe("approved");
     });
+
+    it("preserves sequenceIndex through create, snapshot, and reconstitute", () => {
+      const scene = Scene.create({
+        id: "scene-seq-1" as SceneId,
+        campaignId: "campaign-1" as CampaignId,
+        configuration: {
+          prompt: "Test sequence",
+          referenceIds: [],
+          engineProfileId: "ltx-2.5@certified-v1",
+          durationMs: 4000
+        },
+        sequenceIndex: 4
+      });
+
+      expect(scene.sequenceIndex).toBe(4);
+      expect(scene.snapshot().sequenceIndex).toBe(4);
+
+      const restored = Scene.reconstitute(scene.snapshot());
+      expect(restored.sequenceIndex).toBe(4);
+      expect(restored.snapshot().sequenceIndex).toBe(4);
+    });
   });
 });

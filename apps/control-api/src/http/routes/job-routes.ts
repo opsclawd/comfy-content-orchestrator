@@ -297,6 +297,9 @@ export const jobRoutes: FastifyPluginAsync<JobRoutesOptions> = async (
         result.job.sceneId,
         result.job.jobId
       );
+      await container.useCases.completeCampaignProductionRun.onProductionJobStarted(
+        result.job.jobId
+      );
     }
     return translateMutationResult(result, reply);
   });
@@ -364,6 +367,9 @@ export const jobRoutes: FastifyPluginAsync<JobRoutesOptions> = async (
           result.job.sceneId,
           result.job.jobId
         );
+        await container.useCases.completeCampaignProductionRun.onProductionJobCompleted(
+          result.job.jobId
+        );
       }
       return translateMutationResult(result, reply);
     } catch (error) {
@@ -411,6 +417,9 @@ export const jobRoutes: FastifyPluginAsync<JobRoutesOptions> = async (
         await progressSceneProduction.submitCandidatesForReviewIfBatchComplete(result.job.sceneId);
       } else if (result.job.jobKind === "production") {
         await progressSceneProduction.failProductionIfActive(result.job.sceneId, result.job.jobId);
+        await container.useCases.completeCampaignProductionRun.onProductionJobFailed(
+          result.job.jobId
+        );
       }
     }
     return translateMutationResult(result, reply);

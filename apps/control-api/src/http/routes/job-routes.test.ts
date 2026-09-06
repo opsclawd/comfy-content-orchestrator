@@ -22,6 +22,36 @@ class FakeUnitOfWork implements UnitOfWork {
         findById: async () => undefined,
         insert: async () => {},
         listBySceneAndRevision: async () => []
+      },
+      campaignProductionRuns: {
+        findRunSceneByProductionJobId: async () => undefined,
+        findById: async () => undefined,
+        findByAssemblyJobId: async () => undefined,
+        findRunScenes: async () => [],
+        insertRunScenes: async () => {},
+        countIncompleteRunScenes: async () => 0,
+        claimForAssembly: async () => undefined,
+        setAssemblyJobId: async () => {},
+        claimCompletion: async () => undefined,
+        claimFailure: async () => undefined,
+        createIfAbsent: async (input) => ({
+          run: {
+            id: "run-fake",
+            campaignId: input.campaignId,
+            fingerprint: input.fingerprint,
+            status: "dispatched",
+            expectedTotalDurationMs: input.expectedTotalDurationMs,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          },
+          created: false
+        })
+      },
+      campaigns: {
+        findById: async () => undefined,
+        findByIdForUpdate: async () => undefined,
+        save: async () => {},
+        transitionStatusIf: async () => true
       }
     });
   }
@@ -1888,10 +1918,19 @@ describe("Job Dispatch Routes", () => {
       const failSpy = vi
         .spyOn(container.useCases.progressSceneProduction, "failProductionIfActive")
         .mockResolvedValue(undefined);
+      const runStartSpy = vi
+        .spyOn(container.useCases.completeCampaignProductionRun, "onProductionJobStarted")
+        .mockResolvedValue(undefined);
+      const runCompleteSpy = vi
+        .spyOn(container.useCases.completeCampaignProductionRun, "onProductionJobCompleted")
+        .mockResolvedValue(undefined);
+      const runFailSpy = vi
+        .spyOn(container.useCases.completeCampaignProductionRun, "onProductionJobFailed")
+        .mockResolvedValue(undefined);
       const app = createControlApiApp(container, {
         jobDispatch: defaultDispatchConfig
       });
-      return { app, startSpy, completeSpy, failSpy };
+      return { app, startSpy, completeSpy, failSpy, runStartSpy, runCompleteSpy, runFailSpy };
     }
 
     const productionJob: RenderJob = {
@@ -1906,7 +1945,7 @@ describe("Job Dispatch Routes", () => {
           job: { ...productionJob, status: "rendering" }
         })
       });
-      const { app, startSpy } = createAppWithProductionSpies(queue);
+      const { app, startSpy, runStartSpy } = createAppWithProductionSpies(queue);
 
       const response = await app.inject({
         method: "POST",
@@ -1917,6 +1956,8 @@ describe("Job Dispatch Routes", () => {
       expect(response.statusCode).toBe(200);
       expect(startSpy).toHaveBeenCalledTimes(1);
       expect(startSpy).toHaveBeenCalledWith(productionJob.sceneId, productionJob.jobId);
+      expect(runStartSpy).toHaveBeenCalledTimes(1);
+      expect(runStartSpy).toHaveBeenCalledWith(productionJob.jobId);
       await app.close();
     });
 
@@ -1927,7 +1968,7 @@ describe("Job Dispatch Routes", () => {
           job: { ...productionJob, status: "rendering" }
         })
       });
-      const { app, startSpy } = createAppWithProductionSpies(queue);
+      const { app, startSpy, runStartSpy } = createAppWithProductionSpies(queue);
 
       const response = await app.inject({
         method: "POST",
@@ -1938,6 +1979,8 @@ describe("Job Dispatch Routes", () => {
       expect(response.statusCode).toBe(200);
       expect(startSpy).toHaveBeenCalledTimes(1);
       expect(startSpy).toHaveBeenCalledWith(productionJob.sceneId, productionJob.jobId);
+      expect(runStartSpy).toHaveBeenCalledTimes(1);
+      expect(runStartSpy).toHaveBeenCalledWith(productionJob.jobId);
       await app.close();
     });
 
@@ -1948,7 +1991,7 @@ describe("Job Dispatch Routes", () => {
           job: { ...sampleLeasedJob, status: "rendering" }
         })
       });
-      const { app, startSpy } = createAppWithProductionSpies(queue);
+      const { app, startSpy, runStartSpy } = createAppWithProductionSpies(queue);
 
       const response = await app.inject({
         method: "POST",
@@ -1958,6 +2001,7 @@ describe("Job Dispatch Routes", () => {
 
       expect(response.statusCode).toBe(200);
       expect(startSpy).not.toHaveBeenCalled();
+      expect(runStartSpy).not.toHaveBeenCalled();
       await app.close();
     });
 
@@ -1968,7 +2012,7 @@ describe("Job Dispatch Routes", () => {
           job: { ...productionJob, status: "completed" }
         })
       });
-      const { app, completeSpy } = createAppWithProductionSpies(queue);
+      const { app, completeSpy, runCompleteSpy } = createAppWithProductionSpies(queue);
 
       const response = await app.inject({
         method: "POST",
@@ -1979,6 +2023,8 @@ describe("Job Dispatch Routes", () => {
       expect(response.statusCode).toBe(200);
       expect(completeSpy).toHaveBeenCalledTimes(1);
       expect(completeSpy).toHaveBeenCalledWith(productionJob.sceneId, productionJob.jobId);
+      expect(runCompleteSpy).toHaveBeenCalledTimes(1);
+      expect(runCompleteSpy).toHaveBeenCalledWith(productionJob.jobId);
       await app.close();
     });
 
@@ -1989,7 +2035,7 @@ describe("Job Dispatch Routes", () => {
           job: { ...productionJob, status: "completed" }
         })
       });
-      const { app, completeSpy } = createAppWithProductionSpies(queue);
+      const { app, completeSpy, runCompleteSpy } = createAppWithProductionSpies(queue);
 
       const response = await app.inject({
         method: "POST",
@@ -2000,6 +2046,8 @@ describe("Job Dispatch Routes", () => {
       expect(response.statusCode).toBe(200);
       expect(completeSpy).toHaveBeenCalledTimes(1);
       expect(completeSpy).toHaveBeenCalledWith(productionJob.sceneId, productionJob.jobId);
+      expect(runCompleteSpy).toHaveBeenCalledTimes(1);
+      expect(runCompleteSpy).toHaveBeenCalledWith(productionJob.jobId);
       await app.close();
     });
 
@@ -2010,7 +2058,7 @@ describe("Job Dispatch Routes", () => {
           job: sampleCompletedJob
         })
       });
-      const { app, completeSpy } = createAppWithProductionSpies(queue);
+      const { app, completeSpy, runCompleteSpy } = createAppWithProductionSpies(queue);
 
       const response = await app.inject({
         method: "POST",
@@ -2020,6 +2068,7 @@ describe("Job Dispatch Routes", () => {
 
       expect(response.statusCode).toBe(200);
       expect(completeSpy).not.toHaveBeenCalled();
+      expect(runCompleteSpy).not.toHaveBeenCalled();
       await app.close();
     });
 
@@ -2030,7 +2079,7 @@ describe("Job Dispatch Routes", () => {
           job: { ...productionJob, status: "failed" }
         })
       });
-      const { app, failSpy } = createAppWithProductionSpies(queue);
+      const { app, failSpy, runFailSpy } = createAppWithProductionSpies(queue);
 
       const response = await app.inject({
         method: "POST",
@@ -2041,6 +2090,8 @@ describe("Job Dispatch Routes", () => {
       expect(response.statusCode).toBe(200);
       expect(failSpy).toHaveBeenCalledTimes(1);
       expect(failSpy).toHaveBeenCalledWith(productionJob.sceneId, productionJob.jobId);
+      expect(runFailSpy).toHaveBeenCalledTimes(1);
+      expect(runFailSpy).toHaveBeenCalledWith(productionJob.jobId);
       await app.close();
     });
 
@@ -2051,7 +2102,7 @@ describe("Job Dispatch Routes", () => {
           job: { ...productionJob, status: "failed" }
         })
       });
-      const { app, failSpy } = createAppWithProductionSpies(queue);
+      const { app, failSpy, runFailSpy } = createAppWithProductionSpies(queue);
 
       const response = await app.inject({
         method: "POST",
@@ -2062,6 +2113,8 @@ describe("Job Dispatch Routes", () => {
       expect(response.statusCode).toBe(200);
       expect(failSpy).toHaveBeenCalledTimes(1);
       expect(failSpy).toHaveBeenCalledWith(productionJob.sceneId, productionJob.jobId);
+      expect(runFailSpy).toHaveBeenCalledTimes(1);
+      expect(runFailSpy).toHaveBeenCalledWith(productionJob.jobId);
       await app.close();
     });
 
@@ -2072,7 +2125,7 @@ describe("Job Dispatch Routes", () => {
           job: { ...productionJob, status: "queued" }
         })
       });
-      const { app, failSpy } = createAppWithProductionSpies(queue);
+      const { app, failSpy, runFailSpy } = createAppWithProductionSpies(queue);
 
       const response = await app.inject({
         method: "POST",
@@ -2082,6 +2135,7 @@ describe("Job Dispatch Routes", () => {
 
       expect(response.statusCode).toBe(200);
       expect(failSpy).not.toHaveBeenCalled();
+      expect(runFailSpy).not.toHaveBeenCalled();
       await app.close();
     });
 
@@ -2092,7 +2146,7 @@ describe("Job Dispatch Routes", () => {
           job: sampleFailedJob
         })
       });
-      const { app, failSpy } = createAppWithProductionSpies(queue);
+      const { app, failSpy, runFailSpy } = createAppWithProductionSpies(queue);
 
       const response = await app.inject({
         method: "POST",
@@ -2102,6 +2156,7 @@ describe("Job Dispatch Routes", () => {
 
       expect(response.statusCode).toBe(200);
       expect(failSpy).not.toHaveBeenCalled();
+      expect(runFailSpy).not.toHaveBeenCalled();
       await app.close();
     });
 

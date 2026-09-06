@@ -34,6 +34,7 @@ export interface SceneCreateInput {
   readonly id: SceneId;
   readonly campaignId: CampaignId;
   readonly configuration: SceneConfiguration;
+  readonly sequenceIndex?: number | undefined;
 }
 
 export interface SceneApproval {
@@ -53,6 +54,13 @@ export interface SceneSnapshot {
   readonly status: SceneStatus;
   readonly specRevision: number;
   readonly configuration: SceneConfiguration;
+  /**
+   * 1-based canonical scene sequence index within the campaign.
+   * Directly mirrors storyboard_scenes.scene_order (CHECK scene_order > 0).
+   * Note: Wire contracts such as AssemblySpec.videoStems[].order require 0-based indexing,
+   * which is derived at assembly-spec construction via toVideoStemOrder, not stored here.
+   */
+  readonly sequenceIndex?: number | undefined;
   readonly approval?: SceneApproval;
   readonly failedFrom?: SceneStatus;
   readonly selectedCandidateId?: CandidateId;
@@ -175,6 +183,7 @@ export class Scene {
   readonly #campaignId: CampaignId;
   #status: SceneStatus;
   #specRevision: number;
+  #sequenceIndex: number;
   #configuration: Readonly<SceneConfiguration>;
   #approval?: Readonly<SceneApproval> | undefined;
   #failedFrom?: SceneStatus | undefined;
@@ -187,6 +196,7 @@ export class Scene {
     this.#campaignId = input.campaignId;
     this.#status = "draft_pending";
     this.#specRevision = 1;
+    this.#sequenceIndex = input.sequenceIndex ?? 1;
     this.#configuration = freezeConfiguration(input.configuration);
   }
 
@@ -198,10 +208,12 @@ export class Scene {
     const scene = new Scene({
       id: snapshot.id,
       campaignId: snapshot.campaignId,
-      configuration: snapshot.configuration
+      configuration: snapshot.configuration,
+      ...(snapshot.sequenceIndex !== undefined ? { sequenceIndex: snapshot.sequenceIndex } : {})
     });
     scene.#status = snapshot.status;
     scene.#specRevision = snapshot.specRevision;
+    scene.#sequenceIndex = snapshot.sequenceIndex ?? 1;
     scene.#approval = snapshot.approval ? Object.freeze({ ...snapshot.approval }) : undefined;
     scene.#failedFrom = snapshot.failedFrom;
     scene.#selectedCandidateId = snapshot.selectedCandidateId;
@@ -216,6 +228,10 @@ export class Scene {
 
   get campaignId(): CampaignId {
     return this.#campaignId;
+  }
+
+  get sequenceIndex(): number {
+    return this.#sequenceIndex;
   }
 
   get status(): SceneStatus {
@@ -578,6 +594,7 @@ export class Scene {
       status: this.#status,
       specRevision: this.#specRevision,
       configuration: this.#configuration,
+      sequenceIndex: this.#sequenceIndex,
       ...(this.#approval !== undefined ? { approval: this.#approval } : {}),
       ...(this.#failedFrom !== undefined ? { failedFrom: this.#failedFrom } : {}),
       ...(this.#selectedCandidateId !== undefined

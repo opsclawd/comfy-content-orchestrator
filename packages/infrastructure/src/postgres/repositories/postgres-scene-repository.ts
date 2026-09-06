@@ -43,6 +43,56 @@ function isPool(client: Pool | PoolClient): client is Pool {
   );
 }
 
+function mapRowToScene(row: StoryboardSceneRow): Scene {
+  const referenceIds = Object.freeze(
+    Array.isArray(row.reference_asset_ids) ? row.reference_asset_ids : []
+  );
+
+  const durationSeconds =
+    typeof row.duration_seconds === "number"
+      ? row.duration_seconds
+      : parseFloat(row.duration_seconds);
+  const durationMs = Math.round(durationSeconds * 1000);
+
+  const approval =
+    row.approved_by && row.approved_at && row.approved_revision != null
+      ? {
+          revision: Number(row.approved_revision),
+          approvedBy: row.approved_by,
+          approvedAt:
+            row.approved_at instanceof Date
+              ? row.approved_at.toISOString()
+              : new Date(row.approved_at).toISOString()
+        }
+      : undefined;
+
+  const snapshot: SceneSnapshot = {
+    id: row.scene_id as SceneId,
+    campaignId: row.campaign_id as CampaignId,
+    status: row.status as SceneStatus,
+    specRevision: Number(row.spec_revision),
+    sequenceIndex: Number(row.scene_order),
+    configuration: {
+      prompt: row.visual_description,
+      referenceIds,
+      engineProfileId: row.engine_assigned,
+      durationMs,
+      loraConfigurationId: row.lora_configuration_id
+    },
+    ...(approval !== undefined ? { approval } : {}),
+    ...(row.failed_from ? { failedFrom: row.failed_from as SceneStatus } : {}),
+    ...(row.selected_candidate_id
+      ? { selectedCandidateId: row.selected_candidate_id as CandidateId }
+      : {}),
+    ...(row.selected_candidate_revision != null
+      ? { selectedCandidateRevision: Number(row.selected_candidate_revision) }
+      : {}),
+    ...(row.active_production_job_id ? { activeProductionJobId: row.active_production_job_id } : {})
+  };
+
+  return Scene.reconstitute(snapshot);
+}
+
 export class PostgresSceneRepository implements SceneRepository {
   constructor(
     private readonly client: Pool | PoolClient,
@@ -109,54 +159,80 @@ export class PostgresSceneRepository implements SceneRepository {
       return undefined;
     }
 
-    const referenceIds = Object.freeze(
-      Array.isArray(row.reference_asset_ids) ? row.reference_asset_ids : []
+    return mapRowToScene(row);
+  }
+
+  async findByCampaignId(
+    campaignId: CampaignId,
+    options?: PostgresSceneRepositoryOptions
+  ): Promise<Scene[]> {
+    const forUpdate = options?.forUpdate ?? this.options.forUpdate ?? false;
+    if (forUpdate && isPool(this.client)) {
+      throw new Error(
+        "Cannot execute findByCampaignId with forUpdate: true using a pg Pool instance. A transaction-bound PoolClient is required for row locking."
+      );
+    }
+    const lockClause = forUpdate ? " FOR UPDATE" : "";
+
+    const sceneResult = await this.client.query<StoryboardSceneRow>(
+      `
+      SELECT
+        s.scene_id,
+        s.campaign_id,
+        s.scene_order,
+        s.duration_seconds,
+        s.shot_type,
+        s.visual_description,
+        s.voiceover_copy,
+        s.audio_fx_prompt,
+        s.engine_assigned,
+        s.status,
+        s.spec_revision,
+        s.draft_storage_bucket,
+        s.draft_storage_object_key,
+        s.director_notes,
+        s.selected_candidate_id,
+        s.selected_candidate_revision,
+        s.lora_configuration_id,
+        s.approved_by,
+        s.approved_at,
+        s.approved_revision,
+        s.failed_from,
+        s.active_production_job_id,
+        s.created_at,
+        s.updated_at,
+        s.archived_at,
+        COALESCE(
+          (
+            SELECT array_agg(sra.asset_id::text ORDER BY sra.asset_id ASC)
+            FROM scene_reference_assets sra
+            WHERE sra.scene_id = s.scene_id
+          ),
+          '{}'
+        ) AS reference_asset_ids
+      FROM storyboard_scenes s
+      WHERE s.campaign_id = $1 AND s.archived_at IS NULL
+      ORDER BY s.scene_order ASC
+      ${lockClause}
+      `,
+      [campaignId]
     );
 
-    const durationSeconds =
-      typeof row.duration_seconds === "number"
-        ? row.duration_seconds
-        : parseFloat(row.duration_seconds);
-    const durationMs = Math.round(durationSeconds * 1000);
+    return sceneResult.rows.map(mapRowToScene);
+  }
 
-    const approval =
-      row.approved_by && row.approved_at && row.approved_revision != null
-        ? {
-            revision: Number(row.approved_revision),
-            approvedBy: row.approved_by,
-            approvedAt:
-              row.approved_at instanceof Date
-                ? row.approved_at.toISOString()
-                : new Date(row.approved_at).toISOString()
-          }
-        : undefined;
+  async findCampaignIdBySceneId(sceneId: SceneId): Promise<CampaignId | undefined> {
+    const result = await this.client.query<{ campaign_id: string }>(
+      `
+      SELECT campaign_id
+      FROM storyboard_scenes
+      WHERE scene_id = $1 AND archived_at IS NULL
+      `,
+      [sceneId]
+    );
 
-    const snapshot: SceneSnapshot = {
-      id: row.scene_id as SceneId,
-      campaignId: row.campaign_id as CampaignId,
-      status: row.status as SceneStatus,
-      specRevision: Number(row.spec_revision),
-      configuration: {
-        prompt: row.visual_description,
-        referenceIds,
-        engineProfileId: row.engine_assigned,
-        durationMs,
-        loraConfigurationId: row.lora_configuration_id
-      },
-      ...(approval !== undefined ? { approval } : {}),
-      ...(row.failed_from ? { failedFrom: row.failed_from as SceneStatus } : {}),
-      ...(row.selected_candidate_id
-        ? { selectedCandidateId: row.selected_candidate_id as CandidateId }
-        : {}),
-      ...(row.selected_candidate_revision != null
-        ? { selectedCandidateRevision: Number(row.selected_candidate_revision) }
-        : {}),
-      ...(row.active_production_job_id
-        ? { activeProductionJobId: row.active_production_job_id }
-        : {})
-    };
-
-    return Scene.reconstitute(snapshot);
+    const row = result.rows[0];
+    return row ? (row.campaign_id as CampaignId) : undefined;
   }
 
   async save(scene: Scene): Promise<void> {
