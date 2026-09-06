@@ -88,6 +88,11 @@ export const LTX_25_720P_5S_V1_PROFILE: LtxRenderProfile = Object.freeze({
   requiresModelOffloading: true
 });
 
+export const LTX_FPS = 24;
+export const LTX_FRAME_STEP = 8;
+export const LTX_SUPPORTED_FRAME_RANGE = [97, 97] as const;
+export const LTX_FRAME_QUANTIZATION_TOLERANCE_MS = Math.ceil((LTX_FRAME_STEP / 2 / LTX_FPS) * 1000);
+
 export interface NodeInjectionTarget {
   readonly nodeId: string;
   readonly classType: string;
@@ -99,13 +104,19 @@ export interface ProfileInjectionTopology {
   readonly negativePrompt?: NodeInjectionTarget | undefined;
   readonly seed: NodeInjectionTarget;
   readonly audioPrompt?: NodeInjectionTarget | null | undefined;
+  readonly frameCount?: NodeInjectionTarget | undefined;
 }
 
 export const LTX_25_720P_5S_V1_INJECTION_TOPOLOGY: ProfileInjectionTopology = Object.freeze({
   prompt: Object.freeze({ nodeId: "3", classType: "CLIPTextEncode", inputField: "text" }),
   negativePrompt: Object.freeze({ nodeId: "4", classType: "CLIPTextEncode", inputField: "text" }),
   seed: Object.freeze({ nodeId: "1", classType: "KSampler", inputField: "seed" }),
-  audioPrompt: null
+  audioPrompt: null,
+  frameCount: Object.freeze({
+    nodeId: "5",
+    classType: "EmptyLTXVLatentVideo",
+    inputField: "length"
+  })
 });
 
 export const FLUX_SCHNELL_DRAFT_V1_INJECTION_TOPOLOGY: ProfileInjectionTopology = Object.freeze({

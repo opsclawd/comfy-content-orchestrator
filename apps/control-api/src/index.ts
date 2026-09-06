@@ -16,6 +16,7 @@ export function createControlApi(dependencies: ControlApiDependencies): ControlA
 }
 
 export {
+  EnqueueSceneProductionRenderUseCase,
   ProgressSceneProductionUseCases,
   ReviewSceneUseCases,
   type SceneReviewQueries

@@ -6,21 +6,11 @@ const rootDir = resolve(fileURLToPath(new URL(".", import.meta.url)));
 
 export default defineConfig({
   test: {
-    include: [
-      "packages/infrastructure/src/**/*.integration.test.ts",
-      "apps/*/src/**/*.integration.test.ts",
-      "tests/**/*.integration.test.ts"
-    ],
-    exclude: [
-      "**/*.smoke.integration.test.ts",
-      "**/*.ltx.integration.test.ts",
-      "packages/infrastructure/src/ffmpeg/**/*.integration.test.ts",
-      "packages/infrastructure/src/kokoro/**/*.integration.test.ts"
-    ],
+    include: ["tests/integration/**/*.ltx.integration.test.ts"],
     environment: "node",
     fileParallelism: false,
-    testTimeout: 120_000,
-    hookTimeout: 120_000
+    testTimeout: 300_000,
+    hookTimeout: 300_000
   },
   resolve: {
     alias: {

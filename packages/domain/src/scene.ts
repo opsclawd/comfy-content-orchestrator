@@ -57,6 +57,7 @@ export interface SceneSnapshot {
   readonly failedFrom?: SceneStatus;
   readonly selectedCandidateId?: CandidateId;
   readonly selectedCandidateRevision?: number;
+  readonly activeProductionJobId?: string | undefined;
 }
 
 export type SceneTransitionReason =
@@ -179,6 +180,7 @@ export class Scene {
   #failedFrom?: SceneStatus | undefined;
   #selectedCandidateId?: CandidateId | undefined;
   #selectedCandidateRevision?: number | undefined;
+  #activeProductionJobId?: string | undefined;
 
   private constructor(input: SceneCreateInput) {
     this.#id = input.id;
@@ -204,6 +206,7 @@ export class Scene {
     scene.#failedFrom = snapshot.failedFrom;
     scene.#selectedCandidateId = snapshot.selectedCandidateId;
     scene.#selectedCandidateRevision = snapshot.selectedCandidateRevision;
+    scene.#activeProductionJobId = snapshot.activeProductionJobId;
     return scene;
   }
 
@@ -463,7 +466,7 @@ export class Scene {
     );
   }
 
-  queueForProduction(): SceneTransition {
+  queueForProduction(activeProductionJobId?: string): SceneTransition {
     if (this.#isTerminal()) {
       throw new TerminalStateError(this.#id, this.#status, "queueForProduction");
     }
@@ -487,7 +490,10 @@ export class Scene {
       "queueForProduction",
       ["approved", "failed"],
       "queued",
-      "production_queued"
+      "production_queued",
+      () => {
+        this.#activeProductionJobId = activeProductionJobId;
+      }
     );
   }
 
@@ -506,6 +512,7 @@ export class Scene {
   rejectQA(): SceneTransition {
     return this.#transition("rejectQA", ["qa"], "director_review", "qa_rejected", () => {
       this.#approval = undefined;
+      this.#activeProductionJobId = undefined;
     });
   }
 
@@ -539,6 +546,7 @@ export class Scene {
       "recovered_to_review",
       () => {
         this.#approval = undefined;
+        this.#activeProductionJobId = undefined;
       }
     );
   }
@@ -556,7 +564,10 @@ export class Scene {
         "failed"
       ],
       "cancelled",
-      "cancelled"
+      "cancelled",
+      () => {
+        this.#activeProductionJobId = undefined;
+      }
     );
   }
 
@@ -574,6 +585,9 @@ export class Scene {
         : {}),
       ...(this.#selectedCandidateRevision !== undefined
         ? { selectedCandidateRevision: this.#selectedCandidateRevision }
+        : {}),
+      ...(this.#activeProductionJobId !== undefined
+        ? { activeProductionJobId: this.#activeProductionJobId }
         : {})
     });
   }

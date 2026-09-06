@@ -289,6 +289,15 @@ export const jobRoutes: FastifyPluginAsync<JobRoutesOptions> = async (
       request.params.jobId as JobId,
       request.body.leaseToken as LeaseToken
     );
+    if (
+      (result.outcome === "applied" || result.outcome === "already_applied") &&
+      result.job.jobKind === "production"
+    ) {
+      await progressSceneProduction.markProductionRenderingStartedIfQueued(
+        result.job.sceneId,
+        result.job.jobId
+      );
+    }
     return translateMutationResult(result, reply);
   });
 
@@ -347,6 +356,14 @@ export const jobRoutes: FastifyPluginAsync<JobRoutesOptions> = async (
         result.job.jobKind === "candidate"
       ) {
         await progressSceneProduction.submitCandidatesForReviewIfBatchComplete(result.job.sceneId);
+      } else if (
+        (result.outcome === "applied" || result.outcome === "already_applied") &&
+        result.job.jobKind === "production"
+      ) {
+        await progressSceneProduction.submitProductionForQAIfRendering(
+          result.job.sceneId,
+          result.job.jobId
+        );
       }
       return translateMutationResult(result, reply);
     } catch (error) {
@@ -388,10 +405,13 @@ export const jobRoutes: FastifyPluginAsync<JobRoutesOptions> = async (
     );
     if (
       (result.outcome === "applied" || result.outcome === "already_applied") &&
-      result.job.jobKind === "candidate" &&
       result.job.status === "failed"
     ) {
-      await progressSceneProduction.submitCandidatesForReviewIfBatchComplete(result.job.sceneId);
+      if (result.job.jobKind === "candidate") {
+        await progressSceneProduction.submitCandidatesForReviewIfBatchComplete(result.job.sceneId);
+      } else if (result.job.jobKind === "production") {
+        await progressSceneProduction.failProductionIfActive(result.job.sceneId, result.job.jobId);
+      }
     }
     return translateMutationResult(result, reply);
   });

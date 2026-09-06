@@ -29,6 +29,7 @@ interface StoryboardSceneRow {
   approved_at: Date | string | null;
   approved_revision: number | null;
   failed_from: string | null;
+  active_production_job_id: string | null;
   created_at: Date | string;
   updated_at: Date | string;
   archived_at: Date | string | null;
@@ -84,6 +85,7 @@ export class PostgresSceneRepository implements SceneRepository {
         s.approved_at,
         s.approved_revision,
         s.failed_from,
+        s.active_production_job_id,
         s.created_at,
         s.updated_at,
         s.archived_at,
@@ -148,6 +150,9 @@ export class PostgresSceneRepository implements SceneRepository {
         : {}),
       ...(row.selected_candidate_revision != null
         ? { selectedCandidateRevision: Number(row.selected_candidate_revision) }
+        : {}),
+      ...(row.active_production_job_id
+        ? { activeProductionJobId: row.active_production_job_id }
         : {})
     };
 
@@ -182,6 +187,7 @@ export class PostgresSceneRepository implements SceneRepository {
     const selectedCandidateId = snapshot.selectedCandidateId ?? null;
     const selectedCandidateRevision = snapshot.selectedCandidateRevision ?? null;
     const failedFrom = snapshot.failedFrom ?? null;
+    const activeProductionJobId = snapshot.activeProductionJobId ?? null;
 
     const updateResult = await client.query(
       `
@@ -199,6 +205,7 @@ export class PostgresSceneRepository implements SceneRepository {
         approved_at = $11,
         approved_revision = $12,
         failed_from = $13,
+        active_production_job_id = $14,
         updated_at = CURRENT_TIMESTAMP
       WHERE scene_id = $1
       `,
@@ -215,7 +222,8 @@ export class PostgresSceneRepository implements SceneRepository {
         approvedBy,
         approvedAt,
         approvedRevision,
-        failedFrom
+        failedFrom,
+        activeProductionJobId
       ]
     );
 
@@ -243,6 +251,7 @@ export class PostgresSceneRepository implements SceneRepository {
           approved_at,
           approved_revision,
           failed_from,
+          active_production_job_id,
           updated_at
         ) VALUES (
           $1,
@@ -261,6 +270,7 @@ export class PostgresSceneRepository implements SceneRepository {
           $12,
           $13,
           $14,
+          $15,
           CURRENT_TIMESTAMP
         )
         `,
@@ -278,7 +288,8 @@ export class PostgresSceneRepository implements SceneRepository {
           approvedBy,
           approvedAt,
           approvedRevision,
-          failedFrom
+          failedFrom,
+          activeProductionJobId
         ]
       );
     }

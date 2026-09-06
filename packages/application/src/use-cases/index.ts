@@ -28,3 +28,7 @@ export * from "./planning-orchestration-kernel.js";
 export * from "./validate-campaign-beat-sheet.js";
 export * from "./beat-sheet-prompt.js";
 export * from "./plan-campaign-beat-sheet.js";
+export * from "./map-production-duration.js";
+export * from "./production-configuration-errors.js";
+export * from "./derive-production-seed.js";
+export * from "./enqueue-scene-production-render.js";

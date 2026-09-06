@@ -182,6 +182,14 @@ describe("AssembleGenerationManifest use case", () => {
         text: "low quality, blurry"
       }
     },
+    "5": {
+      class_type: "EmptyLTXVLatentVideo",
+      inputs: {
+        width: 1280,
+        height: 720,
+        length: 97
+      }
+    },
     "10": {
       class_type: "LoraLoader",
       inputs: {
@@ -358,7 +366,7 @@ describe("AssembleGenerationManifest use case", () => {
     // 8. Dimensions, frame count, FPS
     expect(manifestPayload.dimensions).toEqual({ width: 1280, height: 720 });
     expect(manifestPayload.frameCount).toBe(97);
-    expect(manifestPayload.fps).toBe(97 / 5);
+    expect(manifestPayload.fps).toBe(24);
 
     // 9. Prompts & audio prompt (audioPrompt is explicitly null for video-only LTX profile)
     expect(manifestPayload.prompts).toEqual({
@@ -502,6 +510,10 @@ describe("AssembleGenerationManifest use case", () => {
       "4": {
         class_type: "CLIPTextEncode",
         inputs: { text: "Negative prompt" }
+      },
+      "5": {
+        class_type: "EmptyLTXVLatentVideo",
+        inputs: { width: 1280, height: 720, length: 97 }
       }
     };
     const deps = createTestDeps();
@@ -535,6 +547,10 @@ describe("AssembleGenerationManifest use case", () => {
       "4": {
         class_type: "CLIPTextEncode",
         inputs: { text: "Negative prompt" }
+      },
+      "5": {
+        class_type: "EmptyLTXVLatentVideo",
+        inputs: { width: 1280, height: 720, length: 97 }
       },
       "10": {
         class_type: "CR Load LoRA",
@@ -683,6 +699,100 @@ describe("AssembleGenerationManifest use case", () => {
 
     await expect(assembler.assemble(input)).rejects.toThrow(IncompleteManifestError);
     await expect(assembler.assemble(input)).rejects.toThrow(/ambiguous audio prompt target nodes/);
+  });
+
+  describe("executed frameCount and fps provenance via topology", () => {
+    it("derives frameCount and fps from executed workflow for LTX production", async () => {
+      const deps = createTestDeps();
+      const assembler = new AssembleGenerationManifest(deps);
+      const workflowWithMutatedFrames: RenderWorkflow = {
+        ...fakeWorkflow,
+        "5": {
+          class_type: "EmptyLTXVLatentVideo",
+          inputs: {
+            width: 1280,
+            height: 720,
+            length: 49
+          }
+        }
+      };
+
+      const input = createDefaultInput({
+        workflow: workflowWithMutatedFrames
+      });
+
+      const result = await assembler.assemble(input);
+      expect(result.manifestPayload.frameCount).toBe(49);
+      expect(result.manifestPayload.fps).toBe(24);
+      expect(result.manifestPayload.frameCount).not.toBe(97);
+      expect(result.manifestPayload.fps).not.toBeCloseTo(19.4, 1);
+    });
+
+    it("throws IncompleteManifestError when executed workflow is missing frameCount node", async () => {
+      const deps = createTestDeps();
+      const assembler = new AssembleGenerationManifest(deps);
+      const workflowWithoutNode5: RenderWorkflow = { ...fakeWorkflow };
+      delete (workflowWithoutNode5 as Record<string, unknown>)["5"];
+
+      const input = createDefaultInput({
+        workflow: workflowWithoutNode5
+      });
+
+      await expect(assembler.assemble(input)).rejects.toThrow(
+        new IncompleteManifestError("frameCount")
+      );
+    });
+
+    it("falls back to baseline frames and fps when profile topology has no frameCount target (Flux)", async () => {
+      const deps = createTestDeps();
+      const assembler = new AssembleGenerationManifest(deps);
+
+      const fluxProfile: ManifestSourceProfile = {
+        id: "flux-schnell-draft",
+        engine: "flux_schnell",
+        runnerProfile: "dynamicvram-offload-v1",
+        source: {
+          kind: "validated_host_export",
+          license: "GPL-3.0"
+        },
+        baseline: {
+          width: 1024,
+          height: 1024,
+          frames: 1,
+          steps: 4,
+          approximateDurationSeconds: 2
+        },
+        renderProfileIdentity: {
+          key: "FLUX_SCHNELL_DRAFT_V1",
+          version: 1
+        }
+      };
+
+      const fluxWorkflow: RenderWorkflow = {
+        "1": {
+          class_type: "KSampler",
+          inputs: {
+            seed: 42,
+            steps: 4,
+            cfg: 1,
+            sampler_name: "euler",
+            scheduler: "simple",
+            denoise: 1
+          }
+        },
+        "3": { class_type: "CLIPTextEncode", inputs: { text: "Flux prompt" } },
+        "4": { class_type: "CLIPTextEncode", inputs: { text: "Flux negative" } }
+      };
+
+      const input = createDefaultInput({
+        profile: fluxProfile,
+        workflow: fluxWorkflow
+      });
+
+      const result = await assembler.assemble(input);
+      expect(result.manifestPayload.frameCount).toBe(1);
+      expect(result.manifestPayload.fps).toBe(1 / 2);
+    });
   });
 
   it("uses hashBytesPort to hash media object body when checksumSha256 is not pre-computed", async () => {
@@ -874,6 +984,10 @@ describe("AssembleGenerationManifest use case", () => {
             scheduler: "simple",
             denoise: 1
           }
+        },
+        "5": {
+          class_type: "EmptyLTXVLatentVideo",
+          inputs: { width: 1280, height: 720, length: 97 }
         }
       };
       const jobWithoutPrompt: RenderJob = {

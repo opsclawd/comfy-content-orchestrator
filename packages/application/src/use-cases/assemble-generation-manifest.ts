@@ -1,4 +1,4 @@
-import { getProfileInjectionTopology } from "@cco/contracts";
+import { getProfileInjectionTopology, LTX_FPS } from "@cco/contracts";
 import type { CandidateId, RenderJob } from "@cco/domain";
 import type {
   HashBytesPort,
@@ -336,6 +336,16 @@ export class AssembleGenerationManifest {
     };
 
     // 8. Dimensions, frame count, FPS
+    const profileKey =
+      input.profile.renderProfileIdentity?.key ?? input.profile.id ?? input.profile.engine;
+    const topology = getProfileInjectionTopology(profileKey);
+
+    if (input.profile.renderProfileIdentity && !topology) {
+      throw new IncompleteManifestError(
+        `topology (missing ProfileInjectionTopology for certified profile "${input.profile.id}" / "${input.profile.renderProfileIdentity.key}")`
+      );
+    }
+
     const { width, height, frames, approximateDurationSeconds } = input.profile.baseline;
     if (width === undefined || typeof width !== "number" || width <= 0) {
       throw new IncompleteManifestError("dimensions.width");
@@ -355,17 +365,22 @@ export class AssembleGenerationManifest {
     }
 
     const dimensions = { width, height };
-    const frameCount = frames;
-    const fps = frames / approximateDurationSeconds;
+    let frameCount = frames;
+    let fps = frames / approximateDurationSeconds;
 
-    const profileKey =
-      input.profile.renderProfileIdentity?.key ?? input.profile.id ?? input.profile.engine;
-    const topology = getProfileInjectionTopology(profileKey);
-
-    if (input.profile.renderProfileIdentity && !topology) {
-      throw new IncompleteManifestError(
-        `topology (missing ProfileInjectionTopology for certified profile "${input.profile.id}" / "${input.profile.renderProfileIdentity.key}")`
-      );
+    if (topology?.frameCount) {
+      const frameNode = input.workflow[topology.frameCount.nodeId] as
+        { class_type?: string; inputs?: Record<string, unknown> } | undefined;
+      if (
+        frameNode?.class_type === topology.frameCount.classType &&
+        typeof frameNode.inputs?.[topology.frameCount.inputField] === "number" &&
+        (frameNode.inputs[topology.frameCount.inputField] as number) > 0
+      ) {
+        frameCount = frameNode.inputs[topology.frameCount.inputField] as number;
+        fps = LTX_FPS;
+      } else {
+        throw new IncompleteManifestError("frameCount");
+      }
     }
 
     let promptText: string | undefined;
