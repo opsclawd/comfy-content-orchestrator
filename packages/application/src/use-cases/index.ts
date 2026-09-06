@@ -24,6 +24,8 @@ export * from "./planning-response-parser.js";
 export * from "./validate-scene-configuration.js";
 export * from "./plan-scene-configuration.js";
 export * from "./synthesize-voiceover.js";
+export * from "./generate-subtitle-cues.js";
+export * from "./synthesize-voiceover-with-subtitles.js";
 export * from "./planning-orchestration-kernel.js";
 export * from "./validate-campaign-beat-sheet.js";
 export * from "./beat-sheet-prompt.js";

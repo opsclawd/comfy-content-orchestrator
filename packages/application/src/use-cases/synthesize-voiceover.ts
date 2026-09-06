@@ -65,6 +65,19 @@ export class SynthesizeVoiceover {
   }
 
   async synthesize(params: SynthesizeVoiceoverParams): Promise<VoiceoverAssetRef> {
+    const { ref } = await this.synthesizeInternal(params);
+    return ref;
+  }
+
+  async synthesizeWithAudio(
+    params: SynthesizeVoiceoverParams
+  ): Promise<{ ref: VoiceoverAssetRef; audio: Uint8Array }> {
+    return this.synthesizeInternal(params);
+  }
+
+  private async synthesizeInternal(
+    params: SynthesizeVoiceoverParams
+  ): Promise<{ ref: VoiceoverAssetRef; audio: Uint8Array }> {
     const errors: string[] = [];
 
     if (!params.campaignId || params.campaignId.trim().length === 0) {
@@ -132,19 +145,22 @@ export class SynthesizeVoiceover {
 
       // Idempotent replay: return reference to existing immutable media
       return {
-        assetId: params.assetId,
-        kind: "voiceover",
-        media: {
-          bucket: targetBucket,
-          key,
-          sha256,
-          contentType: output.contentType
+        ref: {
+          assetId: params.assetId,
+          kind: "voiceover",
+          media: {
+            bucket: targetBucket,
+            key,
+            sha256,
+            contentType: output.contentType
+          },
+          source: {
+            kind: "local"
+          },
+          startMs,
+          expectedDurationMs: output.durationMs
         },
-        source: {
-          kind: "local"
-        },
-        startMs,
-        expectedDurationMs: output.durationMs
+        audio: output.audio
       };
     }
 
@@ -178,19 +194,22 @@ export class SynthesizeVoiceover {
             );
           }
           return {
-            assetId: params.assetId,
-            kind: "voiceover",
-            media: {
-              bucket: targetBucket,
-              key,
-              sha256,
-              contentType: output.contentType
+            ref: {
+              assetId: params.assetId,
+              kind: "voiceover",
+              media: {
+                bucket: targetBucket,
+                key,
+                sha256,
+                contentType: output.contentType
+              },
+              source: {
+                kind: "local"
+              },
+              startMs,
+              expectedDurationMs: output.durationMs
             },
-            source: {
-              kind: "local"
-            },
-            startMs,
-            expectedDurationMs: output.durationMs
+            audio: output.audio
           };
         }
       }
@@ -198,19 +217,22 @@ export class SynthesizeVoiceover {
     }
 
     return {
-      assetId: params.assetId,
-      kind: "voiceover",
-      media: {
-        bucket: targetBucket,
-        key,
-        sha256,
-        contentType: output.contentType
+      ref: {
+        assetId: params.assetId,
+        kind: "voiceover",
+        media: {
+          bucket: targetBucket,
+          key,
+          sha256,
+          contentType: output.contentType
+        },
+        source: {
+          kind: "local"
+        },
+        startMs,
+        expectedDurationMs: output.durationMs
       },
-      source: {
-        kind: "local"
-      },
-      startMs,
-      expectedDurationMs: output.durationMs
+      audio: output.audio
     };
   }
 }

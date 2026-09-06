@@ -1,0 +1,10 @@
+# Pinned WhisperX Version and Alignment Model
+WHISPERX_PIP_VERSION=3.3.1
+WHISPERX_TORCHAUDIO_VERSION=2.5.1
+WHISPERX_VENV_DIR=node_modules/.cache/whisperx-venv
+WHISPERX_MODEL_DIR=node_modules/.cache/whisperx-model
+WHISPERX_ALIGNMENT_MODEL_ID=WAV2VEC2_ASR_BASE_960H
+WHISPERX_ALIGNMENT_MODEL_REVISION=torchaudio-bundle-v1
+WHISPERX_ALIGNMENT_MODEL_FILE=wav2vec2_fairseq_base_ls960_asr_ls960.pth
+WHISPERX_ALIGNMENT_MODEL_URL=https://download.pytorch.org/torchaudio/models/wav2vec2_fairseq_base_ls960_asr_ls960.pth
+WHISPERX_ALIGNMENT_MODEL_SHA256=488fd4f16de84438ffc945334278c1b9fb9b7159a806c1080b16111a958c945d

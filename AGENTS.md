@@ -14,6 +14,13 @@ To ensure deterministic speech synthesis across local development and CI, the Ko
 - Use `./scripts/install-kokoro-model.sh` to fetch and verify the pinned Kokoro-82M ONNX model weights.
 - Run `./scripts/check-kokoro-version.sh` to verify that your local environment has the pinned weights cached and verified.
 
+## WhisperX Model Environment Setup
+
+To ensure deterministic subtitle-cue forced alignment across local development and CI, WhisperX and wav2vec2 alignment dependencies are pinned in `.whisperx-version`:
+- Use `./scripts/install-whisperx.sh` to set up the pinned virtual environment (`node_modules/.cache/whisperx-venv`) and model manifest.
+- Run `./scripts/check-whisperx-version.sh` to verify that your local environment has the pinned virtualenv and model cache verified.
+- The Python path resolution follows: `WHISPERX_PYTHON_PATH` environment variable override -> pinned venv interpreter at `node_modules/.cache/whisperx-venv/bin/python3` -> fail fast with `MODEL_LOAD_FAILED`. A stray host `python3` is never silently used.
+
 ## Running tests — two suites, two configs
 
 This repository has **two** vitest configurations, and using the wrong one produces a command that can never pass.
