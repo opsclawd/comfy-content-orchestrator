@@ -63,6 +63,17 @@ export function resolveLiveLtxConfig(env: NodeJS.ProcessEnv = process.env): Live
   return { comfyUiUrl, comfyUiDir };
 }
 
+/**
+ * Whether this process has the real GPU/ComfyUI host prerequisites needed to
+ * run the live LTX-2.5 render below. Used to skip that test cleanly
+ * everywhere else (so `pnpm test:ltx-production` is safe to run
+ * unconditionally in every environment, including the orchestrator's own
+ * validation) rather than excluding the suite from validation entirely.
+ */
+export function hasLiveLtxPrerequisites(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.COMFYUI_URL?.trim() && env.COMFYUI_DIR?.trim());
+}
+
 const fakeLtxProfile: CertificationProfile = {
   id: "ltx-25-720p-97f",
   engine: "ltx_video",
@@ -528,34 +539,36 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
     });
   });
 
-  it("runs real LTX-2.5 video generation on host with ComfyUI and GPU", async () => {
-    const liveConfig = resolveLiveLtxConfig();
-    const { uow, url: controlApiBaseUrl } = await startControlApi();
+  it.skipIf(!hasLiveLtxPrerequisites())(
+    "runs real LTX-2.5 video generation on host with ComfyUI and GPU",
+    async () => {
+      const liveConfig = resolveLiveLtxConfig();
+      const { uow, url: controlApiBaseUrl } = await startControlApi();
 
-    // 1. Insert client, campaign, scene, candidate, and approve scene with candidate selection
-    const client = await pool.connect();
-    let sceneId: string;
-    try {
-      const clientRecord = await insertClientRecord(client);
-      const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
-      const sceneRecord = await insertStoryboardSceneRecord(client, {
-        campaignId: campaign.campaign_id,
-        durationSeconds: 4.042, // maps to 97 frames
-        status: "director_review",
-        specRevision: 1,
-        engineAssigned: "ltx_25",
-        visualDescription: "Golden hour over a calm ocean with subtle ripples."
-      });
-      sceneId = sceneRecord.scene_id;
+      // 1. Insert client, campaign, scene, candidate, and approve scene with candidate selection
+      const client = await pool.connect();
+      let sceneId: string;
+      try {
+        const clientRecord = await insertClientRecord(client);
+        const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+        const sceneRecord = await insertStoryboardSceneRecord(client, {
+          campaignId: campaign.campaign_id,
+          durationSeconds: 4.042, // maps to 97 frames
+          status: "director_review",
+          specRevision: 1,
+          engineAssigned: "ltx_25",
+          visualDescription: "Golden hour over a calm ocean with subtle ripples."
+        });
+        sceneId = sceneRecord.scene_id;
 
-      const candidate = await insertStoryboardCandidateRecord(client, {
-        sceneId: sceneId as SceneId,
-        sceneSpecRevision: 1,
-        variantOrdinal: 1
-      });
+        const candidate = await insertStoryboardCandidateRecord(client, {
+          sceneId: sceneId as SceneId,
+          sceneSpecRevision: 1,
+          variantOrdinal: 1
+        });
 
-      await client.query(
-        `UPDATE storyboard_scenes
+        await client.query(
+          `UPDATE storyboard_scenes
            SET status = 'approved',
                approved_by = 'director-live',
                approved_at = NOW(),
@@ -563,109 +576,110 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
                selected_candidate_id = $1,
                selected_candidate_revision = 1
            WHERE scene_id = $2`,
-        [candidate.candidate_id, sceneId]
-      );
-    } finally {
-      client.release();
-    }
-
-    // 2. Enqueue production render job via EnqueueSceneProductionRenderUseCase
-    const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow);
-    const enqueueResult = await enqueueUseCase.execute({ sceneId });
-
-    expect(enqueueResult.scene.status).toBe("queued");
-    expect(enqueueResult.job.jobKind).toBe("production");
-    expect(enqueueResult.job.injectedPayload.frameCount).toBe(97);
-
-    // 3. Compose real production worker using createProductionWorker against authoritative templates and ComfyUI host
-    const rootPath = resolve(fileURLToPath(new URL("../..", import.meta.url)));
-    const worker = createProductionWorker(
-      {
-        controlApiBaseUrl,
-        workerId: "worker-live-ltx",
-        pollIntervalMs: 1000,
-        heartbeatIntervalMs: 5000,
-        leaseDurationMs: 300_000,
-        databaseUrl: postgresContainer.getConnectionUri(),
-        comfyUiUrl: liveConfig.comfyUiUrl,
-        comfyUiDir: liveConfig.comfyUiDir,
-        comfyUiRenderTimeoutMs: 300_000,
-        storageTelemetryPath: "/tmp",
-        gpuIndex: 0,
-        gpuLeasePath: "/tmp/gpu-live.lock",
-        certificationManifestPath: resolve(rootPath, "templates/provenance.json"),
-        goldMasterProvenancePath: resolve(rootPath, "templates/provenance.json"),
-        licenseRegistryPath: resolve(rootPath, "config/component-license-registry.json"),
-        s3Endpoint: minioContainer.getEndpoint(),
-        s3Region: "us-east-1",
-        s3ForcePathStyle: true,
-        s3AccessKeyId: minioContainer.getAccessKey(),
-        s3SecretAccessKey: minioContainer.getSecretKey(),
-        s3CandidateBucket: BUCKETS.REVIEW,
-        s3DeliveryBucket: BUCKETS.DELIVERY,
-        s3Config: {
-          endpoint: minioContainer.getEndpoint(),
-          region: "us-east-1",
-          forcePathStyle: true,
-          credentials: {
-            accessKeyId: minioContainer.getAccessKey(),
-            secretAccessKey: minioContainer.getSecretKey()
-          }
-        }
-      },
-      {
-        pool
+          [candidate.candidate_id, sceneId]
+        );
+      } finally {
+        client.release();
       }
-    );
 
-    // 4. Claim the job
-    const controlApiClient = createControlApiClient({ baseUrl: controlApiBaseUrl });
-    const claimedJob = await controlApiClient.claim("worker-live-ltx", ["production"]);
-    expect(claimedJob).toBeDefined();
-    expect(claimedJob?.jobId).toBe(enqueueResult.job.jobId);
+      // 2. Enqueue production render job via EnqueueSceneProductionRenderUseCase
+      const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow);
+      const enqueueResult = await enqueueUseCase.execute({ sceneId });
 
-    // 5. Process job using real RenderWorker
-    const outcome = await worker.processJob(claimedJob!);
-    expect(outcome).toBe("completed");
+      expect(enqueueResult.scene.status).toBe("queued");
+      expect(enqueueResult.job.jobKind).toBe("production");
+      expect(enqueueResult.job.injectedPayload.frameCount).toBe(97);
 
-    // 6. Verify DB states
-    const verifyClient = await pool.connect();
-    try {
-      const dbScene = await verifyClient.query(
-        "SELECT status FROM storyboard_scenes WHERE scene_id = $1",
-        [sceneId]
+      // 3. Compose real production worker using createProductionWorker against authoritative templates and ComfyUI host
+      const rootPath = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+      const worker = createProductionWorker(
+        {
+          controlApiBaseUrl,
+          workerId: "worker-live-ltx",
+          pollIntervalMs: 1000,
+          heartbeatIntervalMs: 5000,
+          leaseDurationMs: 300_000,
+          databaseUrl: postgresContainer.getConnectionUri(),
+          comfyUiUrl: liveConfig.comfyUiUrl,
+          comfyUiDir: liveConfig.comfyUiDir,
+          comfyUiRenderTimeoutMs: 300_000,
+          storageTelemetryPath: "/tmp",
+          gpuIndex: 0,
+          gpuLeasePath: "/tmp/gpu-live.lock",
+          certificationManifestPath: resolve(rootPath, "templates/provenance.json"),
+          goldMasterProvenancePath: resolve(rootPath, "templates/provenance.json"),
+          licenseRegistryPath: resolve(rootPath, "config/component-license-registry.json"),
+          s3Endpoint: minioContainer.getEndpoint(),
+          s3Region: "us-east-1",
+          s3ForcePathStyle: true,
+          s3AccessKeyId: minioContainer.getAccessKey(),
+          s3SecretAccessKey: minioContainer.getSecretKey(),
+          s3CandidateBucket: BUCKETS.REVIEW,
+          s3DeliveryBucket: BUCKETS.DELIVERY,
+          s3Config: {
+            endpoint: minioContainer.getEndpoint(),
+            region: "us-east-1",
+            forcePathStyle: true,
+            credentials: {
+              accessKeyId: minioContainer.getAccessKey(),
+              secretAccessKey: minioContainer.getSecretKey()
+            }
+          }
+        },
+        {
+          pool
+        }
       );
-      expect(dbScene.rows[0]?.status).toBe("qa");
 
-      const dbJob = await verifyClient.query(
-        "SELECT status, error_trace FROM render_jobs WHERE job_id = $1",
-        [claimedJob!.jobId]
-      );
-      expect(dbJob.rows[0]?.status).toBe("completed");
-      expect(dbJob.rows[0]?.error_trace).toBeNull();
+      // 4. Claim the job
+      const controlApiClient = createControlApiClient({ baseUrl: controlApiBaseUrl });
+      const claimedJob = await controlApiClient.claim("worker-live-ltx", ["production"]);
+      expect(claimedJob).toBeDefined();
+      expect(claimedJob?.jobId).toBe(enqueueResult.job.jobId);
 
-      const dbManifest = await verifyClient.query(
-        "SELECT manifest_payload FROM generation_manifests WHERE job_id = $1",
-        [claimedJob!.jobId]
-      );
-      expect(dbManifest.rows).toHaveLength(1);
-      const manifestPayload = dbManifest.rows[0]?.manifest_payload;
-      expect(manifestPayload.fps).toBe(LTX_FPS);
-      expect(manifestPayload.frameCount).toBe(97);
-      expect(manifestPayload.engine).toBe("ltx_video");
-      expect(manifestPayload.outputs.length).toBeGreaterThan(0);
+      // 5. Process job using real RenderWorker
+      const outcome = await worker.processJob(claimedJob!);
+      expect(outcome).toBe("completed");
 
-      const videoOutput = manifestPayload.outputs[0];
-      const videoObject = await objectStorage.getObject({
-        bucket: BUCKETS.DELIVERY,
-        key: videoOutput.key
-      });
-      expect(videoObject).toBeDefined();
-      // Verify non-fabricated video bytes from real LTX render
-      expect(videoObject!.body.length).toBeGreaterThan(1000);
-      expect(sha256Hex(videoObject!.body)).toBe(videoOutput.checksumSha256);
-    } finally {
-      verifyClient.release();
+      // 6. Verify DB states
+      const verifyClient = await pool.connect();
+      try {
+        const dbScene = await verifyClient.query(
+          "SELECT status FROM storyboard_scenes WHERE scene_id = $1",
+          [sceneId]
+        );
+        expect(dbScene.rows[0]?.status).toBe("qa");
+
+        const dbJob = await verifyClient.query(
+          "SELECT status, error_trace FROM render_jobs WHERE job_id = $1",
+          [claimedJob!.jobId]
+        );
+        expect(dbJob.rows[0]?.status).toBe("completed");
+        expect(dbJob.rows[0]?.error_trace).toBeNull();
+
+        const dbManifest = await verifyClient.query(
+          "SELECT manifest_payload FROM generation_manifests WHERE job_id = $1",
+          [claimedJob!.jobId]
+        );
+        expect(dbManifest.rows).toHaveLength(1);
+        const manifestPayload = dbManifest.rows[0]?.manifest_payload;
+        expect(manifestPayload.fps).toBe(LTX_FPS);
+        expect(manifestPayload.frameCount).toBe(97);
+        expect(manifestPayload.engine).toBe("ltx_video");
+        expect(manifestPayload.outputs.length).toBeGreaterThan(0);
+
+        const videoOutput = manifestPayload.outputs[0];
+        const videoObject = await objectStorage.getObject({
+          bucket: BUCKETS.DELIVERY,
+          key: videoOutput.key
+        });
+        expect(videoObject).toBeDefined();
+        // Verify non-fabricated video bytes from real LTX render
+        expect(videoObject!.body.length).toBeGreaterThan(1000);
+        expect(sha256Hex(videoObject!.body)).toBe(videoOutput.checksumSha256);
+      } finally {
+        verifyClient.release();
+      }
     }
-  });
+  );
 });

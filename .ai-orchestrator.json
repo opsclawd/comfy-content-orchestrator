@@ -6,6 +6,7 @@
       "pnpm test:db",
       "pnpm test:assembly",
       "pnpm test:kokoro",
+      "pnpm test:ltx-production",
       "pnpm install --frozen-lockfile",
       "pnpm check:control-plane"
     ],
