@@ -303,3 +303,24 @@ export {
   type KokoroSynthesisFailureCode,
   type KokoroSynthesisErrorContext
 } from "./kokoro/index.js";
+
+export {
+  WhisperXAlignmentAdapter,
+  type WhisperXAlignmentAdapterOptions,
+  type WhisperXProcessRunResult,
+  type WhisperXProcessRunOptions,
+  type WhisperXSpawnLikeFn,
+  defaultWhisperXSpawnRunner,
+  WhisperXAlignmentError,
+  type WhisperXAlignmentFailureCode,
+  type WhisperXAlignmentErrorContext,
+  type PinnedWhisperXVersion,
+  PINNED_WHISPERX_PIP_VERSION,
+  DEFAULT_WHISPERX_VENV_DIR,
+  DEFAULT_WHISPERX_MODEL_DIR,
+  PINNED_WHISPERX_ALIGNMENT_MODEL_ID,
+  PINNED_WHISPERX_ALIGNMENT_MODEL_REVISION,
+  loadPinnedWhisperXVersion,
+  resolveWhisperXPythonPath,
+  verifyWhisperXModelDir
+} from "./whisperx/index.js";
