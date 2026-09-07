@@ -40,6 +40,13 @@ function createMockObjectStorage(): ObjectStoragePort {
     },
     async getObject(locator: ObjectLocator): Promise<StoredObject | undefined> {
       return storedObjects.get(`${locator.bucket}/${locator.key}`);
+    },
+    async copyObject(from: ObjectLocator, to: ObjectLocator): Promise<ObjectLocator> {
+      const source = storedObjects.get(`${from.bucket}/${from.key}`);
+      if (source) {
+        storedObjects.set(`${to.bucket}/${to.key}`, { ...source, bucket: to.bucket, key: to.key });
+      }
+      return { bucket: to.bucket, key: to.key };
     }
   };
 }

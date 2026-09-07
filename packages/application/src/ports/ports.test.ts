@@ -756,6 +756,13 @@ describe("Application capability ports contract tests", () => {
         },
         async getObject(locator: ObjectLocator): Promise<StoredObject | undefined> {
           return storedData.get(`${locator.bucket}/${locator.key}`);
+        },
+        async copyObject(from: ObjectLocator, to: ObjectLocator): Promise<ObjectLocator> {
+          const source = storedData.get(`${from.bucket}/${from.key}`);
+          if (source) {
+            storedData.set(`${to.bucket}/${to.key}`, { ...source, bucket: to.bucket, key: to.key });
+          }
+          return to;
         }
       } satisfies ObjectStoragePort;
 

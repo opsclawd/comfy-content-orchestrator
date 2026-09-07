@@ -36,15 +36,29 @@ export interface GetObjectOptions {
   readonly maxBytes?: number | undefined;
 }
 
+export interface CopyObjectOptions {
+  readonly ifNoneMatch?: "*" | undefined;
+}
+
+export interface HeadObjectResult {
+  readonly bucket: string;
+  readonly key: string;
+  readonly checksumSha256?: string | undefined;
+  readonly contentType?: string | undefined;
+}
+
 export interface ObjectStoragePort {
   putObject(input: PutObjectInput): Promise<ObjectLocator>;
   getObject(locator: ObjectLocator, options?: GetObjectOptions): Promise<StoredObject | undefined>;
+  copyObject(
+    from: ObjectLocator,
+    to: ObjectLocator,
+    options?: CopyObjectOptions
+  ): Promise<ObjectLocator>;
+  headObject?(locator: ObjectLocator): Promise<HeadObjectResult | undefined>;
   /**
-   * Optional: best-effort deletion, used by callers that need to roll back a
-   * partially-completed multi-object publish (e.g. deleting an already-
-   * uploaded media file when a subsequent manifest write fails). Adapters
-   * that don't implement this simply can't be rolled back — callers must
-   * treat it as unavailable, not assume it exists.
+   * Optional best-effort deletion for cleanup of staging or other transient
+   * objects. It is not part of the delivery correctness boundary.
    */
   deleteObject?(locator: ObjectLocator): Promise<void>;
 }

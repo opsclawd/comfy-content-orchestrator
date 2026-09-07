@@ -1,13 +1,17 @@
 import {
+  CopyObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   PutObjectCommand,
   S3Client,
   type S3ClientConfig
 } from "@aws-sdk/client-s3";
 import { createHash } from "node:crypto";
 import {
+  type CopyObjectOptions,
   type GetObjectOptions,
+  type HeadObjectResult,
   type ObjectLocator,
   type ObjectStoragePort,
   ObjectAlreadyExistsError,
@@ -179,7 +183,12 @@ export class S3ObjectStorage implements ObjectStoragePort {
       );
     } catch (err: unknown) {
       const errorObj = err as { name?: string; $metadata?: { httpStatusCode?: number } };
-      if (errorObj?.name === "PreconditionFailed" || errorObj?.$metadata?.httpStatusCode === 412) {
+      if (
+        errorObj?.name === "PreconditionFailed" ||
+        errorObj?.$metadata?.httpStatusCode === 412 ||
+        errorObj?.name === "ConditionalRequestConflict" ||
+        errorObj?.$metadata?.httpStatusCode === 409
+      ) {
         throw new ObjectAlreadyExistsError(input.bucket, input.key, { cause: err as Error });
       }
       throw err;
@@ -248,6 +257,93 @@ export class S3ObjectStorage implements ObjectStoragePort {
       body,
       ...(response.ContentType !== undefined ? { contentType: response.ContentType } : {}),
       ...(storedChecksum !== undefined ? { checksumSha256: storedChecksum } : {})
+    };
+  }
+
+  async headObject(locator: ObjectLocator): Promise<HeadObjectResult | undefined> {
+    let response;
+    try {
+      response = await this.client.send(
+        new HeadObjectCommand({
+          Bucket: locator.bucket,
+          Key: locator.key
+        })
+      );
+    } catch (error: unknown) {
+      if (isMissingKeyError(error)) {
+        return undefined;
+      }
+      throw error;
+    }
+
+    const storedChecksum = response.Metadata?.["checksum-sha256"];
+    return {
+      bucket: locator.bucket,
+      key: locator.key,
+      ...(storedChecksum !== undefined ? { checksumSha256: storedChecksum } : {}),
+      ...(response.ContentType !== undefined ? { contentType: response.ContentType } : {})
+    };
+  }
+
+  async copyObject(
+    from: ObjectLocator,
+    to: ObjectLocator,
+    options?: CopyObjectOptions
+  ): Promise<ObjectLocator> {
+    if (options?.ifNoneMatch === "*") {
+      const existing = await this.headObject(to);
+      if (existing) {
+        throw new ObjectAlreadyExistsError(to.bucket, to.key);
+      }
+
+      // MinIO and S3 do not provide atomic destination put-if-absent on CopyObjectCommand.
+      // To prevent TOCTOU race and ensure atomicity, read source and write via putObject with ifNoneMatch: "*".
+      const source = await this.getObject(from);
+      if (!source) {
+        throw new Error(`Source object not found: ${from.bucket}/${from.key}`);
+      }
+
+      const destinationCheck = await this.headObject(to);
+      if (destinationCheck) {
+        throw new ObjectAlreadyExistsError(to.bucket, to.key);
+      }
+
+      return this.putObject({
+        bucket: to.bucket,
+        key: to.key,
+        body: source.body,
+        ifNoneMatch: "*",
+        ...(source.contentType !== undefined ? { contentType: source.contentType } : {}),
+        ...(source.checksumSha256 !== undefined ? { checksumSha256: source.checksumSha256 } : {})
+      });
+    }
+
+    const copySource = `${from.bucket}/${encodeURI(from.key)}`;
+
+    try {
+      await this.client.send(
+        new CopyObjectCommand({
+          Bucket: to.bucket,
+          Key: to.key,
+          CopySource: copySource
+        })
+      );
+    } catch (err: unknown) {
+      const errorObj = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+      if (
+        errorObj?.name === "PreconditionFailed" ||
+        errorObj?.$metadata?.httpStatusCode === 412 ||
+        errorObj?.name === "ConditionalRequestConflict" ||
+        errorObj?.$metadata?.httpStatusCode === 409
+      ) {
+        throw new ObjectAlreadyExistsError(to.bucket, to.key, { cause: err as Error });
+      }
+      throw err;
+    }
+
+    return {
+      bucket: to.bucket,
+      key: to.key
     };
   }
 

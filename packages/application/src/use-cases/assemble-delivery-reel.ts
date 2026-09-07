@@ -40,6 +40,24 @@ export class AssemblyManifestPublicationError extends Error {
   }
 }
 
+export interface AssemblyVideoCommitErrorContext {
+  readonly executionResult: AssemblyExecutionResult;
+  readonly manifest: AssemblyManifest;
+  readonly cause?: Error | undefined;
+}
+
+export class AssemblyVideoCommitError extends Error {
+  override readonly name = "AssemblyVideoCommitError";
+  readonly executionResult: AssemblyExecutionResult;
+  readonly manifest: AssemblyManifest;
+
+  constructor(message: string, context: AssemblyVideoCommitErrorContext, options?: ErrorOptions) {
+    super(message, options ?? (context.cause ? { cause: context.cause } : undefined));
+    this.executionResult = context.executionResult;
+    this.manifest = context.manifest;
+  }
+}
+
 export class AssemblyProvenanceConflictError extends Error {
   override readonly name = "AssemblyProvenanceConflictError";
   readonly assemblyId: string;
@@ -230,32 +248,48 @@ export class AssembleDeliveryReel {
           JSON.parse(new TextDecoder().decode(existingManifestObj.body))
         );
         if (existingManifest.assemblyId === assemblyId) {
-          const executionResult: AssemblyExecutionResult = {
-            assemblyId: existingManifest.assemblyId,
-            campaignId: existingManifest.campaignId,
-            assemblyProfile: existingManifest.assemblyProfile,
-            executedInputs: existingManifest.inputs,
-            timeline: existingManifest.timeline,
-            layout: existingManifest.layout,
-            subtitleCuesSha256: existingManifest.subtitleCuesSha256,
-            ...(existingManifest.subtitleCues !== undefined
-              ? { subtitleCues: existingManifest.subtitleCues }
-              : {}),
-            ...(existingManifest.subtitleStyleProfile !== undefined
-              ? { subtitleStyleProfile: existingManifest.subtitleStyleProfile }
-              : {}),
-            ffmpeg: existingManifest.ffmpeg,
-            commandFingerprint: existingManifest.commandFingerprint,
-            encoding: existingManifest.encoding,
-            streams: existingManifest.streams,
-            output: existingManifest.output,
-            measuredFrameRate: existingManifest.measuredFrameRate,
-            executionDurationMs: existingManifest.executionDurationMs
-          };
-          return {
-            manifest: existingManifest,
-            executionResult
-          };
+          const videoExists = this.deps.objectStorage.headObject
+            ? await this.deps.objectStorage.headObject(existingManifest.output.media)
+            : await this.deps.objectStorage.getObject(existingManifest.output.media);
+          let videoChecksum = videoExists?.checksumSha256;
+          if (videoExists && !videoChecksum) {
+            const videoObject = await this.deps.objectStorage.getObject(
+              existingManifest.output.media
+            );
+            if (videoObject) {
+              videoChecksum =
+                videoObject.checksumSha256 ??
+                createHash("sha256").update(videoObject.body).digest("hex");
+            }
+          }
+          if (videoExists && videoChecksum === existingManifest.output.media.sha256) {
+            const executionResult: AssemblyExecutionResult = {
+              assemblyId: existingManifest.assemblyId,
+              campaignId: existingManifest.campaignId,
+              assemblyProfile: existingManifest.assemblyProfile,
+              executedInputs: existingManifest.inputs,
+              timeline: existingManifest.timeline,
+              layout: existingManifest.layout,
+              subtitleCuesSha256: existingManifest.subtitleCuesSha256,
+              ...(existingManifest.subtitleCues !== undefined
+                ? { subtitleCues: existingManifest.subtitleCues }
+                : {}),
+              ...(existingManifest.subtitleStyleProfile !== undefined
+                ? { subtitleStyleProfile: existingManifest.subtitleStyleProfile }
+                : {}),
+              ffmpeg: existingManifest.ffmpeg,
+              commandFingerprint: existingManifest.commandFingerprint,
+              encoding: existingManifest.encoding,
+              streams: existingManifest.streams,
+              output: existingManifest.output,
+              measuredFrameRate: existingManifest.measuredFrameRate,
+              executionDurationMs: existingManifest.executionDurationMs
+            };
+            return {
+              manifest: existingManifest,
+              executionResult
+            };
+          }
         }
       }
     } catch {
@@ -351,7 +385,7 @@ export class AssembleDeliveryReel {
       }
 
       if (this.isManifestEquivalent(existingManifest, manifest)) {
-        // Idempotent replay: return existing manifest without overwriting media or manifest
+        await this.ensureVideoCommitted(executionResult, existingManifest);
         return {
           manifest: existingManifest,
           executionResult
@@ -393,6 +427,7 @@ export class AssembleDeliveryReel {
             });
           }
           if (this.isManifestEquivalent(concurrentManifest, manifest)) {
+            await this.ensureVideoCommitted(executionResult, concurrentManifest);
             return {
               manifest: concurrentManifest,
               executionResult
@@ -405,22 +440,6 @@ export class AssembleDeliveryReel {
         });
       }
 
-      // Best-effort rollback: the media output was already published in
-      // Step 2 before the manifest write failed here, so without this the
-      // delivery bucket ends up with an orphaned video that has no manifest
-      // beside it — directly contradicting the "every delivered video has
-      // an immutable manifest" invariant this use case exists to guarantee.
-      // This does not make the publish atomic (the delete can itself fail,
-      // and objectStorage.deleteObject is optional — adapters that don't
-      // implement it simply can't be rolled back), but it closes the gap
-      // for the common case without a larger two-phase-publish redesign.
-      try {
-        await this.deps.objectStorage.deleteObject?.(executionResult.output.media);
-      } catch {
-        // Swallow: the original manifest-publication error is what the
-        // caller needs to see and act on; a failed rollback attempt must
-        // not mask it.
-      }
       throw new AssemblyManifestPublicationError(
         `Failed to persist assembly manifest to ${executionResult.output.media.bucket}/${manifestKey}: ${(err as Error).message}`,
         {
@@ -431,10 +450,102 @@ export class AssembleDeliveryReel {
       );
     }
 
+    await this.ensureVideoCommitted(executionResult, manifest);
+
     return {
       manifest,
       executionResult
     };
+  }
+
+  private async ensureVideoCommitted(
+    executionResult: AssemblyExecutionResult,
+    manifest: AssemblyManifest
+  ): Promise<void> {
+    const finalMedia = executionResult.output.media;
+    const existing = this.deps.objectStorage.headObject
+      ? await this.deps.objectStorage.headObject(finalMedia)
+      : await this.deps.objectStorage.getObject(finalMedia);
+
+    if (existing) {
+      let existingChecksum = existing.checksumSha256;
+      if (!existingChecksum) {
+        const fullObj = await this.deps.objectStorage.getObject(finalMedia);
+        if (fullObj) {
+          existingChecksum =
+            fullObj.checksumSha256 ?? createHash("sha256").update(fullObj.body).digest("hex");
+        }
+      }
+      if (existingChecksum !== finalMedia.sha256) {
+        throw new AssemblyProvenanceConflictError(executionResult.assemblyId, manifest);
+      }
+      // Already committed (by this call or a racing one) — best-effort staging cleanup and done.
+      if (executionResult.stagingMedia) {
+        await this.deps.objectStorage.deleteObject?.(executionResult.stagingMedia).catch(() => {});
+      }
+      return;
+    }
+
+    if (!executionResult.stagingMedia) {
+      throw new AssemblyVideoCommitError("No staged video available to commit", {
+        executionResult,
+        manifest
+      });
+    }
+
+    try {
+      await this.deps.objectStorage.copyObject(executionResult.stagingMedia, finalMedia, {
+        ifNoneMatch: "*"
+      });
+    } catch (err) {
+      try {
+        const raced = this.deps.objectStorage.headObject
+          ? await this.deps.objectStorage.headObject(finalMedia)
+          : await this.deps.objectStorage.getObject(finalMedia);
+
+        if (raced) {
+          let racedChecksum = raced.checksumSha256;
+          if (!racedChecksum) {
+            const fullRaced = await this.deps.objectStorage.getObject(finalMedia);
+            if (fullRaced) {
+              racedChecksum =
+                fullRaced.checksumSha256 ??
+                createHash("sha256").update(fullRaced.body).digest("hex");
+            }
+          }
+          if (racedChecksum === finalMedia.sha256) {
+            await this.deps.objectStorage
+              .deleteObject?.(executionResult.stagingMedia)
+              .catch(() => {});
+            return;
+          }
+          throw new AssemblyProvenanceConflictError(executionResult.assemblyId, manifest, {
+            cause: err as Error
+          });
+        }
+      } catch (recheckErr) {
+        if (recheckErr instanceof AssemblyProvenanceConflictError) {
+          throw recheckErr;
+        }
+      }
+
+      if (err instanceof ObjectAlreadyExistsError) {
+        throw new AssemblyProvenanceConflictError(executionResult.assemblyId, manifest, {
+          cause: err as Error
+        });
+      }
+
+      throw new AssemblyVideoCommitError(
+        `Failed to commit video from staging to ${finalMedia.bucket}/${finalMedia.key}: ${(err as Error).message}`,
+        {
+          executionResult,
+          manifest,
+          cause: err as Error
+        }
+      );
+    }
+
+    await this.deps.objectStorage.deleteObject?.(executionResult.stagingMedia).catch(() => {});
   }
 
   private isManifestEquivalent(

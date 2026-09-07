@@ -4,6 +4,7 @@ import {
   type AssemblyExecutionResult
 } from "./assembly-execution.js";
 import { hashSubtitleCues, type SubtitleCue } from "./subtitle-cue.js";
+import { createAssemblyManifest } from "./assembly-manifest.js";
 
 describe("AssemblyExecutionResult contract", () => {
   const hash1 = "1".repeat(64);
@@ -593,5 +594,67 @@ describe("AssemblyExecutionResult contract", () => {
       }
     };
     expect(AssemblyExecutionResultSchema.safeParse(incompleteAudioVo).success).toBe(false);
+  });
+
+  describe("stagingMedia optional field", () => {
+    it("parses when stagingMedia is present with valid bucket and key", () => {
+      const valid = createValidExecutionResult();
+      const withStaging = {
+        ...valid,
+        stagingMedia: {
+          bucket: "cco-deliveries",
+          key: "campaigns/camp-001/assemblies/asm-001/.staging/output.mp4"
+        }
+      };
+      const parsed = AssemblyExecutionResultSchema.safeParse(withStaging);
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.stagingMedia).toEqual({
+          bucket: "cco-deliveries",
+          key: "campaigns/camp-001/assemblies/asm-001/.staging/output.mp4"
+        });
+      }
+    });
+
+    it("parses when stagingMedia is omitted (absent, e.g. reconstructed from manifest)", () => {
+      const valid = createValidExecutionResult();
+      expect(valid.stagingMedia).toBeUndefined();
+      const parsed = AssemblyExecutionResultSchema.safeParse(valid);
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.stagingMedia).toBeUndefined();
+      }
+    });
+
+    it("rejects when stagingMedia has empty bucket or key", () => {
+      const valid = createValidExecutionResult();
+      const emptyBucket = {
+        ...valid,
+        stagingMedia: { bucket: "", key: "valid-key" }
+      };
+      expect(AssemblyExecutionResultSchema.safeParse(emptyBucket).success).toBe(false);
+
+      const emptyKey = {
+        ...valid,
+        stagingMedia: { bucket: "valid-bucket", key: "" }
+      };
+      expect(AssemblyExecutionResultSchema.safeParse(emptyKey).success).toBe(false);
+    });
+
+    it("ensures createAssemblyManifest excludes stagingMedia from manifest output", () => {
+      const valid = createValidExecutionResult();
+      const withStaging: AssemblyExecutionResult = {
+        ...valid,
+        stagingMedia: {
+          bucket: "cco-deliveries",
+          key: "campaigns/camp-001/assemblies/asm-001/.staging/output.mp4"
+        }
+      };
+      const manifest = createAssemblyManifest({
+        executionResult: withStaging,
+        governanceDecisionId: "gov-dec-001"
+      });
+      expect("stagingMedia" in manifest).toBe(false);
+    });
   });
 });

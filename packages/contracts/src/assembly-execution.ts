@@ -77,6 +77,15 @@ export type ExecutedAssemblyInputs = {
   readonly soundbed?: ExecutedSoundbedRef | undefined;
 };
 
+export const ObjectLocatorRefSchema = z.object({
+  bucket: z.string().min(1, "Bucket must not be empty"),
+  key: z.string().min(1, "Object key must not be empty")
+});
+export type ObjectLocatorRef = {
+  readonly bucket: string;
+  readonly key: string;
+};
+
 export const AssemblyExecutionResultSchema = z
   .object({
     assemblyId: z.string().min(1, "assemblyId must not be empty"),
@@ -100,6 +109,7 @@ export const AssemblyExecutionResultSchema = z
       width: z.number().int().positive(),
       height: z.number().int().positive()
     }),
+    stagingMedia: ObjectLocatorRefSchema.optional(),
     measuredFrameRate: z.number().positive("measuredFrameRate must be positive"),
     executionDurationMs: z
       .number()
@@ -303,6 +313,7 @@ export type AssemblyExecutionResult = {
     readonly width: number;
     readonly height: number;
   };
+  readonly stagingMedia?: ObjectLocatorRef | undefined;
   readonly measuredFrameRate: number;
   readonly executionDurationMs: number;
 };

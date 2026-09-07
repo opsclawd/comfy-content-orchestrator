@@ -63,6 +63,9 @@ class TestObjectStorage implements ObjectStoragePort {
   async getObject(): Promise<StoredObject | undefined> {
     return undefined;
   }
+  async copyObject(_from: ObjectLocator, to: ObjectLocator): Promise<ObjectLocator> {
+    return { bucket: to.bucket, key: to.key };
+  }
 }
 
 class TestAdmissionEnforcer implements StorageAdmissionEnforcer {
