@@ -16,6 +16,7 @@ export default defineConfig({
       "**/*.ltx.integration.test.ts",
       "packages/infrastructure/src/ffmpeg/**/*.integration.test.ts",
       "packages/infrastructure/src/kokoro/**/*.integration.test.ts",
+      "packages/infrastructure/src/piper/**/*.integration.test.ts",
       "packages/infrastructure/src/whisperx/**/*.integration.test.ts"
     ],
     environment: "node",
