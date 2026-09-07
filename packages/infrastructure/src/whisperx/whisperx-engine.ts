@@ -219,7 +219,7 @@ export function verifyWhisperXModelDir(
 
   const pyCheck = child_process.spawnSync(pythonPath, ["-c", checkCode], {
     encoding: "utf-8",
-    timeout: 10_000
+    timeout: 120_000
   });
 
   if (pyCheck.error || pyCheck.status !== 0) {

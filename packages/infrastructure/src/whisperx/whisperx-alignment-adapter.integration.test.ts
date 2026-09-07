@@ -98,5 +98,5 @@ describe("WhisperXAlignmentAdapter (integration with real model/venv)", () => {
       expect(cue.startMs).toBeGreaterThanOrEqual(0);
       expect(cue.endMs).toBeLessThanOrEqual(durationMs);
     }
-  }, 120_000);
+  });
 });
