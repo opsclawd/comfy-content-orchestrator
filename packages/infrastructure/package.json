@@ -23,6 +23,7 @@
     "test:comfyui": "vitest run --config ../../vitest.comfyui.config.ts",
     "test:db": "vitest run --config ../../vitest.integration.config.ts",
     "test:kokoro": "bash ../../scripts/check-kokoro-version.sh && vitest run --config ../../vitest.kokoro.config.ts",
+    "test:piper": "bash ../../scripts/check-piper-version.sh && vitest run --config ../../vitest.piper.config.ts",
     "typecheck": "tsc --build"
   },
   "dependencies": {

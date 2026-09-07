@@ -324,3 +324,24 @@ export {
   resolveWhisperXPythonPath,
   verifyWhisperXModelDir
 } from "./whisperx/index.js";
+
+export {
+  PiperVoiceSynthesisAdapter,
+  PiperHttpClient,
+  type PiperClientTransport,
+  type PiperSynthesisRequest,
+  decodeWav,
+  type DecodedWav,
+  PiperSynthesisError,
+  type PiperSynthesisFailureCode,
+  type PiperSynthesisErrorContext,
+  type PinnedPiperVersion,
+  PINNED_PIPER_VERSION,
+  PINNED_PIPER_VOICE_ID,
+  PINNED_PIPER_VOICE_ONNX_SHA256,
+  PINNED_PIPER_VOICE_CONFIG_SHA256,
+  PINNED_PIPER_BASE_IMAGE_DIGEST,
+  PINNED_PIPER_DOCKERFILE_SHA256,
+  DEFAULT_PIPER_VOICE_DIR,
+  loadPinnedPiperVersion
+} from "./piper/index.js";
