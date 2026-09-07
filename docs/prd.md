@@ -292,7 +292,7 @@ Provider/model names are configuration values and are not compiled into workflow
 | Planning Task | Primary | Secondary Fallback | Retry Strategy |
 |---|---|---|---|
 | **Scene Script & SceneSpec Generation** | Anthropic Claude 5 Sonnet | OpenAI GPT-5.6 Sol | retry transient failures, then permitted fallback |
-| **Candidate Keyframe Ranking (QA)** | Google Gemini 3.7 Flash | OpenAI GPT-5.6 Luna | retry transient failures, then permitted fallback |
+| **Candidate Keyframe Ranking (QA)** | Google Gemini 3.8 Flash | OpenAI GPT-5.6 Luna | retry transient failures, then permitted fallback |
 | **Voiceover Synthesis** | ElevenLabs Multilingual v2 | Azure Neural Speech / configured OpenAI TTS model | bounded retry, then permitted fallback |
 
 Retryable classes: HTTP 429, HTTP 5xx, network timeout/reset/transient DNS.
