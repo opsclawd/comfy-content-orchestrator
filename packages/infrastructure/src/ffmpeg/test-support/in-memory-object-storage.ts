@@ -1,5 +1,7 @@
 import {
+  type CopyObjectOptions,
   type GetObjectOptions,
+  type HeadObjectResult,
   type ObjectLocator,
   type ObjectStoragePort,
   ObjectAlreadyExistsError,
@@ -39,6 +41,42 @@ export class InMemoryObjectStorage implements ObjectStoragePort {
       );
     }
     return stored;
+  }
+
+  async headObject(locator: ObjectLocator): Promise<HeadObjectResult | undefined> {
+    const stored = this.storage.get(`${locator.bucket}/${locator.key}`);
+    if (!stored) return undefined;
+    return {
+      bucket: stored.bucket,
+      key: stored.key,
+      ...(stored.checksumSha256 !== undefined ? { checksumSha256: stored.checksumSha256 } : {}),
+      ...(stored.contentType !== undefined ? { contentType: stored.contentType } : {})
+    };
+  }
+
+  async copyObject(
+    from: ObjectLocator,
+    to: ObjectLocator,
+    options?: CopyObjectOptions
+  ): Promise<ObjectLocator> {
+    const toKey = `${to.bucket}/${to.key}`;
+    if (options?.ifNoneMatch === "*" && this.storage.has(toKey)) {
+      throw new ObjectAlreadyExistsError(to.bucket, to.key);
+    }
+    const fromKey = `${from.bucket}/${from.key}`;
+    const source = this.storage.get(fromKey);
+    if (!source) {
+      throw new Error(`Source object not found: ${fromKey}`);
+    }
+    const copied: StoredObject = {
+      bucket: to.bucket,
+      key: to.key,
+      body: new Uint8Array(source.body),
+      ...(source.contentType !== undefined ? { contentType: source.contentType } : {}),
+      ...(source.checksumSha256 !== undefined ? { checksumSha256: source.checksumSha256 } : {})
+    };
+    this.storage.set(toKey, copied);
+    return { bucket: to.bucket, key: to.key };
   }
 
   async deleteObject(locator: ObjectLocator): Promise<void> {

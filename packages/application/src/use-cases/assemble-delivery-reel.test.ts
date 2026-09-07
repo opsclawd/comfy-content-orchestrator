@@ -5,16 +5,19 @@ import {
   type AssemblyExecutionResult,
   type AssemblySpec
 } from "@cco/contracts";
-import type {
-  GenerationManifestRepository,
-  MediaAssemblerPort,
-  ObjectLocator,
-  ObjectStoragePort,
-  PutObjectInput
+import {
+  type GenerationManifestRepository,
+  type MediaAssemblerPort,
+  type ObjectLocator,
+  type ObjectStoragePort,
+  type PutObjectInput,
+  ObjectAlreadyExistsError
 } from "../ports/index.js";
 import {
   AssembleDeliveryReel,
-  AssemblyManifestPublicationError
+  AssemblyManifestPublicationError,
+  AssemblyProvenanceConflictError,
+  AssemblyVideoCommitError
 } from "./assemble-delivery-reel.js";
 import { EnforceLicenseRouting } from "./enforce-license-routing.js";
 import { LicenseRoutingError } from "./license-routing-error.js";
@@ -86,6 +89,10 @@ describe("AssembleDeliveryReel use case", () => {
       width: 1080,
       height: 1920
     },
+    stagingMedia: {
+      bucket: "godzspeed-delivery",
+      key: "campaigns/campaign-test-456/assemblies/assembly-test-123/.staging/output.mp4"
+    },
     measuredFrameRate: 30,
     executionDurationMs: 1500
   };
@@ -114,7 +121,9 @@ describe("AssembleDeliveryReel use case", () => {
     ]
   };
 
-  function createApprovedEnforceLicenseRouting(): EnforceLicenseRouting {
+  function createApprovedEnforceLicenseRouting(
+    generateDecisionId?: () => string
+  ): EnforceLicenseRouting {
     const registry = {
       getSnapshot: () => ({
         schemaVersion: 1 as const,
@@ -160,7 +169,7 @@ describe("AssembleDeliveryReel use case", () => {
         ]
       })
     };
-    return new EnforceLicenseRouting({ registry });
+    return new EnforceLicenseRouting({ registry, generateDecisionId });
   }
 
   const defaultRequiredComponents = [
@@ -191,6 +200,7 @@ describe("AssembleDeliveryReel use case", () => {
         putObjectCalls.push(input);
         return { bucket: input.bucket, key: input.key };
       }),
+      copyObject: vi.fn(async (_from, to) => to),
       getObject: vi.fn(async () => undefined)
     };
 
@@ -234,6 +244,7 @@ describe("AssembleDeliveryReel use case", () => {
   it("rejects invalid spec before invoking media assembler or storage", async () => {
     const mockStorage: ObjectStoragePort = {
       putObject: vi.fn(),
+      copyObject: vi.fn(),
       getObject: vi.fn()
     };
 
@@ -269,6 +280,7 @@ describe("AssembleDeliveryReel use case", () => {
   it("does not publish manifest if media assembler fails", async () => {
     const mockStorage: ObjectStoragePort = {
       putObject: vi.fn(),
+      copyObject: vi.fn(),
       getObject: vi.fn()
     };
 
@@ -302,6 +314,7 @@ describe("AssembleDeliveryReel use case", () => {
       putObject: vi.fn(async (): Promise<ObjectLocator> => {
         throw new Error("S3 connection timed out");
       }),
+      copyObject: vi.fn(),
       getObject: vi.fn()
     };
 
@@ -336,16 +349,14 @@ describe("AssembleDeliveryReel use case", () => {
     expect(pubErr.manifest.governanceDecisionId).toMatch(/^gov-dec-[0-9a-f-]{36}$/);
   });
 
-  it("rolls back the already-published media output when manifest persistence fails", async () => {
-    const deleteObjectCalls: ObjectLocator[] = [];
+  it("does not call copyObject when manifest persistence fails (video never published to final key)", async () => {
     const mockStorage: ObjectStoragePort = {
       putObject: vi.fn(async (): Promise<ObjectLocator> => {
         throw new Error("S3 connection timed out");
       }),
+      copyObject: vi.fn(),
       getObject: vi.fn(),
-      deleteObject: vi.fn(async (locator: ObjectLocator): Promise<void> => {
-        deleteObjectCalls.push(locator);
-      })
+      deleteObject: vi.fn()
     };
 
     const mockAssembler: MediaAssemblerPort = {
@@ -368,20 +379,60 @@ describe("AssembleDeliveryReel use case", () => {
       })
     ).rejects.toThrow(AssemblyManifestPublicationError);
 
-    expect(mockStorage.deleteObject).toHaveBeenCalledTimes(1);
-    expect(deleteObjectCalls[0]?.bucket).toBe(dummyExecutionResult.output.media.bucket);
-    expect(deleteObjectCalls[0]?.key).toBe(dummyExecutionResult.output.media.key);
+    expect(mockStorage.copyObject).not.toHaveBeenCalled();
   });
 
-  it("still surfaces the original AssemblyManifestPublicationError when the rollback delete itself fails", async () => {
+  it("publishes manifest first, then copies staged video to final key and cleans up staging", async () => {
+    const callOrder: string[] = [];
     const mockStorage: ObjectStoragePort = {
-      putObject: vi.fn(async (): Promise<ObjectLocator> => {
-        throw new Error("S3 connection timed out");
+      putObject: vi.fn(async (input: PutObjectInput) => {
+        callOrder.push(`putObject:${input.key}`);
+        return { bucket: input.bucket, key: input.key };
       }),
-      getObject: vi.fn(),
-      deleteObject: vi.fn(async (): Promise<void> => {
-        throw new Error("delete also failed");
+      copyObject: vi.fn(async (from: ObjectLocator, to: ObjectLocator) => {
+        callOrder.push(`copyObject:${from.key}->${to.key}`);
+        return { bucket: to.bucket, key: to.key };
+      }),
+      headObject: vi.fn(async () => undefined),
+      getObject: vi.fn(async () => undefined),
+      deleteObject: vi.fn(async (locator: ObjectLocator) => {
+        callOrder.push(`deleteObject:${locator.key}`);
       })
+    };
+
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => dummyExecutionResult)
+    };
+
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
+    const useCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: createApprovedGenerationManifestRepository()
+    });
+
+    const result = await useCase.assemble({
+      spec: validSpec,
+      requiredComponents: defaultRequiredComponents
+    });
+
+    expect(result.manifest.assemblyId).toBe("assembly-test-123");
+    expect(callOrder).toEqual([
+      "putObject:campaigns/campaign-test-456/assemblies/assembly-test-123/manifest.json",
+      "copyObject:campaigns/campaign-test-456/assemblies/assembly-test-123/.staging/output.mp4->campaigns/campaign-test-456/assemblies/assembly-test-123/output.mp4",
+      "deleteObject:campaigns/campaign-test-456/assemblies/assembly-test-123/.staging/output.mp4"
+    ]);
+  });
+
+  it("throws AssemblyVideoCommitError when copyObject fails after manifest is published", async () => {
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(async (input: PutObjectInput) => ({ bucket: input.bucket, key: input.key })),
+      copyObject: vi.fn(async () => {
+        throw new Error("Disk full on copy");
+      }),
+      getObject: vi.fn(async () => undefined)
     };
 
     const mockAssembler: MediaAssemblerPort = {
@@ -407,17 +458,79 @@ describe("AssembleDeliveryReel use case", () => {
       thrownError = err;
     }
 
-    expect(thrownError).toBeInstanceOf(AssemblyManifestPublicationError);
-    const pubErr = thrownError as AssemblyManifestPublicationError;
-    expect(pubErr.message).toContain("S3 connection timed out");
+    expect(thrownError).toBeInstanceOf(AssemblyVideoCommitError);
+    const commitErr = thrownError as AssemblyVideoCommitError;
+    expect(commitErr.name).toBe("AssemblyVideoCommitError");
+    expect(commitErr.message).toContain("Disk full on copy");
+    expect(commitErr.manifest.assemblyId).toBe("assembly-test-123");
+    expect(commitErr.executionResult).toEqual(dummyExecutionResult);
   });
 
-  it("does not attempt rollback when the storage adapter has no deleteObject support", async () => {
+  it("concurrent video-copy race resolves via checksum-equivalence and deletes staging", async () => {
+    const deleteCalls: ObjectLocator[] = [];
     const mockStorage: ObjectStoragePort = {
-      putObject: vi.fn(async (): Promise<ObjectLocator> => {
-        throw new Error("S3 connection timed out");
+      putObject: vi.fn(async (input: PutObjectInput) => ({ bucket: input.bucket, key: input.key })),
+      copyObject: vi.fn(async (_from, to) => {
+        throw new ObjectAlreadyExistsError(to.bucket, to.key);
       }),
-      getObject: vi.fn()
+      headObject: vi.fn(async (locator: ObjectLocator) => {
+        if (locator.key === dummyExecutionResult.output.media.key) {
+          return {
+            bucket: locator.bucket,
+            key: locator.key,
+            checksumSha256: dummyExecutionResult.output.media.sha256,
+            contentType: "video/mp4"
+          };
+        }
+        return undefined;
+      }),
+      getObject: vi.fn(async () => undefined),
+      deleteObject: vi.fn(async (loc: ObjectLocator) => {
+        deleteCalls.push(loc);
+      })
+    };
+
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => dummyExecutionResult)
+    };
+
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
+    const useCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: createApprovedGenerationManifestRepository()
+    });
+
+    const result = await useCase.assemble({
+      spec: validSpec,
+      requiredComponents: defaultRequiredComponents
+    });
+
+    expect(result.manifest.assemblyId).toBe("assembly-test-123");
+    expect(deleteCalls).toHaveLength(1);
+    expect(deleteCalls[0]?.key).toBe(dummyExecutionResult.stagingMedia!.key);
+  });
+
+  it("concurrent video-copy race with checksum mismatch throws AssemblyProvenanceConflictError", async () => {
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(async (input: PutObjectInput) => ({ bucket: input.bucket, key: input.key })),
+      copyObject: vi.fn(async (_from, to) => {
+        throw new ObjectAlreadyExistsError(to.bucket, to.key);
+      }),
+      headObject: vi.fn(async (locator: ObjectLocator) => {
+        if (locator.key === dummyExecutionResult.output.media.key) {
+          return {
+            bucket: locator.bucket,
+            key: locator.key,
+            checksumSha256: "conflicting-hash-000000000000000000000000000000000000000000000000000",
+            contentType: "video/mp4"
+          };
+        }
+        return undefined;
+      }),
+      getObject: vi.fn(async () => undefined)
     };
 
     const mockAssembler: MediaAssemblerPort = {
@@ -438,12 +551,398 @@ describe("AssembleDeliveryReel use case", () => {
         spec: validSpec,
         requiredComponents: defaultRequiredComponents
       })
-    ).rejects.toThrow(AssemblyManifestPublicationError);
+    ).rejects.toThrow(AssemblyProvenanceConflictError);
+  });
+
+  it("deterministic race test: pauses both callers between final-key observation and promotion/cleanup, ensuring loser converges and cleans up its own staging", async () => {
+    const stagingKeyA =
+      "campaigns/campaign-test-456/assemblies/assembly-test-123/.staging/attempt-A/output.mp4";
+    const stagingKeyB =
+      "campaigns/campaign-test-456/assemblies/assembly-test-123/.staging/attempt-B/output.mp4";
+    const finalMediaKey = dummyExecutionResult.output.media.key;
+    const finalMediaBucket = dummyExecutionResult.output.media.bucket;
+
+    const executionResultA: AssemblyExecutionResult = {
+      ...dummyExecutionResult,
+      stagingMedia: { bucket: finalMediaBucket, key: stagingKeyA }
+    };
+    const executionResultB: AssemblyExecutionResult = {
+      ...dummyExecutionResult,
+      stagingMedia: { bucket: finalMediaBucket, key: stagingKeyB }
+    };
+
+    let callerAObservedAbsent = false;
+    let callerBObservedAbsent = false;
+    let resolveBarrier: () => void;
+    const barrier = new Promise<void>((r) => {
+      resolveBarrier = r;
+    });
+
+    let finalCommitted = false;
+    const deletedKeys: string[] = [];
+
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(async (input: PutObjectInput) => ({ bucket: input.bucket, key: input.key })),
+      headObject: vi.fn(async (loc: ObjectLocator) => {
+        if (loc.key === finalMediaKey) {
+          if (!finalCommitted) {
+            return undefined;
+          }
+          return {
+            bucket: loc.bucket,
+            key: loc.key,
+            checksumSha256: dummyExecutionResult.output.media.sha256,
+            contentType: "video/mp4"
+          };
+        }
+        return undefined;
+      }),
+      getObject: vi.fn(async () => undefined),
+      copyObject: vi.fn(async (_from: ObjectLocator, to: ObjectLocator) => {
+        if (to.key === finalMediaKey) {
+          if (finalCommitted) {
+            throw new ObjectAlreadyExistsError(to.bucket, to.key);
+          }
+          finalCommitted = true;
+          return to;
+        }
+        return to;
+      }),
+      deleteObject: vi.fn(async (loc: ObjectLocator) => {
+        deletedKeys.push(loc.key);
+      })
+    };
+
+    const assemblerA: MediaAssemblerPort = {
+      assemble: vi.fn(async () => executionResultA)
+    };
+    const assemblerB: MediaAssemblerPort = {
+      assemble: vi.fn(async () => executionResultB)
+    };
+
+    // Synchronize the race:
+    // Both callers must observe final key as absent before either promotes.
+    const originalHeadObject = mockStorage.headObject!.bind(mockStorage);
+    mockStorage.headObject = async (loc: ObjectLocator) => {
+      if (loc.key === finalMediaKey && !finalCommitted) {
+        if (!callerAObservedAbsent) {
+          callerAObservedAbsent = true;
+          await barrier;
+          return undefined;
+        } else if (!callerBObservedAbsent) {
+          callerBObservedAbsent = true;
+          resolveBarrier!();
+          return undefined;
+        }
+      }
+      return originalHeadObject(loc);
+    };
+
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
+    const repo = createApprovedGenerationManifestRepository();
+
+    const useCaseA = new AssembleDeliveryReel({
+      runtimeComponents: [],
+      mediaAssembler: assemblerA,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: repo
+    });
+
+    const useCaseB = new AssembleDeliveryReel({
+      runtimeComponents: [],
+      mediaAssembler: assemblerB,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: repo
+    });
+
+    const [resultA, resultB] = await Promise.all([
+      useCaseA.assemble({ spec: validSpec, requiredComponents: defaultRequiredComponents }),
+      useCaseB.assemble({ spec: validSpec, requiredComponents: defaultRequiredComponents })
+    ]);
+
+    expect(resultA.manifest.assemblyId).toBe("assembly-test-123");
+    expect(resultB.manifest.assemblyId).toBe("assembly-test-123");
+    expect(finalCommitted).toBe(true);
+    expect(deletedKeys).toContain(stagingKeyA);
+    expect(deletedKeys).toContain(stagingKeyB);
+  });
+
+  it("idempotent replay where a prior run published the manifest but crashed before committing the video: retry re-runs the encode, finds the equivalent manifest in Step 4a, and still calls copyObject to commit the video before returning success", async () => {
+    const assemblyId = computeAssemblyId(validSpec);
+    const existingExecutionResult: AssemblyExecutionResult = {
+      ...dummyExecutionResult,
+      assemblyId
+    };
+    const existingManifest = createAssemblyManifest({
+      executionResult: existingExecutionResult,
+      governanceDecisionId: "gov-dec-existing-001"
+    });
+
+    const manifestKey = `campaigns/${validSpec.campaignId}/assemblies/${assemblyId}/manifest.json`;
+    const manifestBytes = Buffer.from(JSON.stringify(existingManifest), "utf-8");
+
+    let videoCommitted = false;
+    const copyCalls: { from: ObjectLocator; to: ObjectLocator }[] = [];
+
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(),
+      copyObject: vi.fn(async (from: ObjectLocator, to: ObjectLocator) => {
+        copyCalls.push({ from, to });
+        videoCommitted = true;
+        return { bucket: to.bucket, key: to.key };
+      }),
+      headObject: vi.fn(async (locator: ObjectLocator) => {
+        if (locator.key === existingManifest.output.media.key && videoCommitted) {
+          return {
+            bucket: locator.bucket,
+            key: locator.key,
+            checksumSha256: existingManifest.output.media.sha256,
+            contentType: "video/mp4"
+          };
+        }
+        return undefined;
+      }),
+      getObject: vi.fn(async ({ bucket, key }) => {
+        if (bucket === "godzspeed-delivery" && key === manifestKey) {
+          return { bucket, key, body: manifestBytes };
+        }
+        if (bucket === "godzspeed-delivery" && key === existingManifest.output.media.key) {
+          if (videoCommitted) {
+            return {
+              bucket,
+              key,
+              body: new Uint8Array([1, 2, 3]),
+              checksumSha256: existingManifest.output.media.sha256
+            };
+          }
+          return undefined;
+        }
+        return undefined;
+      }),
+      deleteObject: vi.fn(async () => undefined)
+    };
+
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => ({ ...dummyExecutionResult, assemblyId }))
+    };
+
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting(() => "gov-dec-existing-001");
+    const useCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: createApprovedGenerationManifestRepository()
+    });
+
+    const result = await useCase.assemble({
+      spec: validSpec,
+      requiredComponents: defaultRequiredComponents
+    });
+
+    expect(mockStorage.copyObject).toHaveBeenCalledTimes(1);
+    expect(copyCalls[0]?.to.key).toBe(existingManifest.output.media.key);
+    expect(videoCommitted).toBe(true);
+    expect(result.manifest.assemblyId).toBe(existingManifest.assemblyId);
+    expect(result.manifest.governanceDecisionId).toBe(existingManifest.governanceDecisionId);
+    expect(mockAssembler.assemble).toHaveBeenCalledTimes(1);
+  });
+
+  it("manifest already exists with equivalent match at Step 4a and video is already committed: copyObject is not called again and staging is cleaned up", async () => {
+    const assemblyId = computeAssemblyId(validSpec);
+    const existingExecutionResult: AssemblyExecutionResult = {
+      ...dummyExecutionResult,
+      assemblyId
+    };
+    const existingManifest = createAssemblyManifest({
+      executionResult: existingExecutionResult,
+      governanceDecisionId: "gov-dec-existing-001"
+    });
+
+    const manifestKey = `campaigns/${validSpec.campaignId}/assemblies/${assemblyId}/manifest.json`;
+    const manifestBytes = Buffer.from(JSON.stringify(existingManifest), "utf-8");
+    const deletedLocators: ObjectLocator[] = [];
+
+    let getObjectCallCount = 0;
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(),
+      copyObject: vi.fn(),
+      headObject: vi.fn(async (locator: ObjectLocator) => {
+        if (locator.key === existingManifest.output.media.key) {
+          return {
+            bucket: locator.bucket,
+            key: locator.key,
+            checksumSha256: existingManifest.output.media.sha256,
+            contentType: "video/mp4"
+          };
+        }
+        return undefined;
+      }),
+      getObject: vi.fn(async ({ bucket, key }) => {
+        if (bucket === "godzspeed-delivery" && key === manifestKey) {
+          getObjectCallCount++;
+          // Step 1 early check: return undefined so assembler runs
+          if (getObjectCallCount === 1) {
+            return undefined;
+          }
+          // Step 4a check: manifest now present
+          return { bucket, key, body: manifestBytes };
+        }
+        return undefined;
+      }),
+      deleteObject: vi.fn(async (locator: ObjectLocator) => {
+        deletedLocators.push(locator);
+      })
+    };
+
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => ({ ...dummyExecutionResult, assemblyId }))
+    };
+
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting(() => "gov-dec-existing-001");
+    const useCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: createApprovedGenerationManifestRepository()
+    });
+
+    const result = await useCase.assemble({
+      spec: validSpec,
+      requiredComponents: defaultRequiredComponents
+    });
+
+    expect(mockStorage.copyObject).not.toHaveBeenCalled();
+    expect(deletedLocators).toHaveLength(1);
+    expect(deletedLocators[0]?.key).toBe(dummyExecutionResult.stagingMedia!.key);
+    expect(result.manifest.assemblyId).toBe(existingManifest.assemblyId);
+  });
+
+  it("concurrent-publication (ObjectAlreadyExistsError) branch resolves with video commit check", async () => {
+    const assemblyId = computeAssemblyId(validSpec);
+    const existingExecutionResult: AssemblyExecutionResult = {
+      ...dummyExecutionResult,
+      assemblyId
+    };
+    const concurrentManifest = createAssemblyManifest({
+      executionResult: existingExecutionResult,
+      governanceDecisionId: "gov-dec-concurrent-001"
+    });
+    const manifestKey = `campaigns/${validSpec.campaignId}/assemblies/${assemblyId}/manifest.json`;
+    const manifestBytes = Buffer.from(JSON.stringify(concurrentManifest), "utf-8");
+
+    const copyCalls: ObjectLocator[] = [];
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(async () => {
+        throw new ObjectAlreadyExistsError("godzspeed-delivery", manifestKey);
+      }),
+      copyObject: vi.fn(async (_from, to) => {
+        copyCalls.push(to);
+        return { bucket: to.bucket, key: to.key };
+      }),
+      headObject: vi.fn(async () => undefined),
+      getObject: vi.fn(async ({ bucket, key }) => {
+        if (key === manifestKey) {
+          return { bucket, key, body: manifestBytes };
+        }
+        return undefined;
+      }),
+      deleteObject: vi.fn(async () => undefined)
+    };
+
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => ({ ...dummyExecutionResult, assemblyId }))
+    };
+
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting(
+      () => "gov-dec-concurrent-001"
+    );
+    const useCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: createApprovedGenerationManifestRepository()
+    });
+
+    const result = await useCase.assemble({
+      spec: validSpec,
+      requiredComponents: defaultRequiredComponents
+    });
+
+    expect(result.manifest.governanceDecisionId).toBe(concurrentManifest.governanceDecisionId);
+    expect(copyCalls).toHaveLength(1);
+    expect(copyCalls[0]?.key).toBe(concurrentManifest.output.media.key);
+  });
+
+  it("AssemblyExecutionResult reconstructed from an existing manifest (no stagingMedia) validates and short-circuits", async () => {
+    const assemblyId = computeAssemblyId(validSpec);
+    const existingExecutionResult: AssemblyExecutionResult = {
+      ...dummyExecutionResult,
+      assemblyId,
+      stagingMedia: undefined
+    };
+    const existingManifest = createAssemblyManifest({
+      executionResult: existingExecutionResult,
+      governanceDecisionId: "gov-dec-existing-001"
+    });
+
+    const manifestKey = `campaigns/${validSpec.campaignId}/assemblies/${assemblyId}/manifest.json`;
+    const manifestBytes = Buffer.from(JSON.stringify(existingManifest), "utf-8");
+
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(),
+      copyObject: vi.fn(),
+      headObject: vi.fn(async (locator) => {
+        if (locator.key === existingManifest.output.media.key) {
+          return {
+            bucket: locator.bucket,
+            key: locator.key,
+            checksumSha256: existingManifest.output.media.sha256,
+            contentType: "video/mp4"
+          };
+        }
+        return undefined;
+      }),
+      getObject: vi.fn(async ({ bucket, key }) => {
+        if (key === manifestKey) {
+          return { bucket, key, body: manifestBytes };
+        }
+        return undefined;
+      })
+    };
+
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn()
+    };
+
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
+    const useCase = new AssembleDeliveryReel({
+      runtimeComponents: [],
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: createApprovedGenerationManifestRepository()
+    });
+
+    const result = await useCase.assemble({
+      spec: validSpec,
+      requiredComponents: defaultRequiredComponents
+    });
+
+    expect(mockAssembler.assemble).not.toHaveBeenCalled();
+    expect(mockStorage.copyObject).not.toHaveBeenCalled();
+    expect(result.executionResult.stagingMedia).toBeUndefined();
+    expect(result.manifest.assemblyId).toBe(assemblyId);
   });
 
   it("denies assembly with zero ffmpeg spawn and zero storage put when required component is denied", async () => {
     const mockStorage: ObjectStoragePort = {
       putObject: vi.fn(),
+      copyObject: vi.fn(),
       getObject: vi.fn()
     };
     const mockAssembler: MediaAssemblerPort = {
@@ -496,6 +995,7 @@ describe("AssembleDeliveryReel use case", () => {
   it("denies assembly with zero ffmpeg spawn when provider audio asset in spec is blocked or unapproved", async () => {
     const mockStorage: ObjectStoragePort = {
       putObject: vi.fn(),
+      copyObject: vi.fn(),
       getObject: vi.fn()
     };
     const mockAssembler: MediaAssemblerPort = {
@@ -553,6 +1053,7 @@ describe("AssembleDeliveryReel use case", () => {
     // "resolves runtime identity once" test below for why).
     const mockStorage: ObjectStoragePort = {
       putObject: vi.fn(),
+      copyObject: vi.fn(),
       getObject: vi.fn()
     };
     const mockAssembler: MediaAssemblerPort = {
@@ -596,6 +1097,7 @@ describe("AssembleDeliveryReel use case", () => {
         putObjectCalls.push(input);
         return { bucket: input.bucket, key: input.key };
       }),
+      copyObject: vi.fn(async (_from, to) => to),
       getObject: vi.fn(async () => undefined)
     };
     const mockAssembler: MediaAssemblerPort = {
@@ -633,6 +1135,7 @@ describe("AssembleDeliveryReel use case", () => {
         bucket: input.bucket,
         key: input.key
       })),
+      copyObject: vi.fn(async (_from, to) => to),
       getObject: vi.fn(async () => undefined)
     };
     const mockAssembler: MediaAssemblerPort = {
@@ -665,6 +1168,7 @@ describe("AssembleDeliveryReel use case", () => {
   it("denies assembly when neither runtimeComponents dependency nor params.requiredComponents specifies a runtime component", async () => {
     const mockStorage: ObjectStoragePort = {
       putObject: vi.fn(),
+      copyObject: vi.fn(),
       getObject: vi.fn()
     };
     const mockAssembler: MediaAssemblerPort = {
@@ -697,6 +1201,7 @@ describe("AssembleDeliveryReel use case", () => {
         bucket: input.bucket,
         key: input.key
       })),
+      copyObject: vi.fn(async (_from, to) => to),
       getObject: vi.fn(async () => undefined)
     };
     const mockAssembler: MediaAssemblerPort = {
@@ -734,6 +1239,7 @@ describe("AssembleDeliveryReel use case", () => {
     ]);
     const mockStorage: ObjectStoragePort = {
       putObject: vi.fn(),
+      copyObject: vi.fn(),
       getObject: vi.fn()
     };
     const mockAssembler: MediaAssemblerPort = {
@@ -769,6 +1275,7 @@ describe("AssembleDeliveryReel use case", () => {
         putObjectCalls.push(input);
         return { bucket: input.bucket, key: input.key };
       }),
+      copyObject: vi.fn(async (_from, to) => to),
       getObject: vi.fn()
     };
     const mockAssembler: MediaAssemblerPort = {
@@ -798,6 +1305,7 @@ describe("AssembleDeliveryReel use case", () => {
   it("denies assembly with zero ffmpeg spawn when a video stem's generationManifestId does not resolve to any manifest", async () => {
     const mockStorage: ObjectStoragePort = {
       putObject: vi.fn(),
+      copyObject: vi.fn(),
       getObject: vi.fn()
     };
     const mockAssembler: MediaAssemblerPort = {
@@ -831,6 +1339,7 @@ describe("AssembleDeliveryReel use case", () => {
   it("denies assembly when a video stem's generation manifest resolves to a render profile the registry does not approve", async () => {
     const mockStorage: ObjectStoragePort = {
       putObject: vi.fn(),
+      copyObject: vi.fn(),
       getObject: vi.fn()
     };
     const mockAssembler: MediaAssemblerPort = {
@@ -869,6 +1378,7 @@ describe("AssembleDeliveryReel use case", () => {
         putObjectCalls.push(input);
         return { bucket: input.bucket, key: input.key };
       }),
+      copyObject: vi.fn(async (_from, to) => to),
       getObject: vi.fn(async () => undefined)
     };
     const getComponentIdentityById = vi.fn(async (generationManifestId: string) => {
@@ -914,6 +1424,18 @@ describe("AssembleDeliveryReel use case", () => {
 
     const mockStorage: ObjectStoragePort = {
       putObject: vi.fn(),
+      copyObject: vi.fn(),
+      headObject: vi.fn(async (locator) => {
+        if (locator.key === existingManifest.output.media.key) {
+          return {
+            bucket: locator.bucket,
+            key: locator.key,
+            checksumSha256: existingManifest.output.media.sha256,
+            contentType: "video/mp4"
+          };
+        }
+        return undefined;
+      }),
       getObject: vi.fn(async ({ bucket, key }) => {
         if (bucket === "godzspeed-delivery" && key === manifestKey) {
           return { bucket, key, body: manifestBytes };
@@ -968,6 +1490,7 @@ describe("AssembleDeliveryReel use case", () => {
 
     const mockStorage: ObjectStoragePort = {
       putObject: vi.fn(),
+      copyObject: vi.fn(),
       getObject: vi.fn(async ({ bucket, key }) => {
         if (bucket === "godzspeed-delivery" && key === manifestKey) {
           return { bucket, key, body: manifestBytes };

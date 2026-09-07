@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -105,6 +105,7 @@ export interface FfmpegMediaAssemblerAdapterOptions {
   readonly defaultPreset?: string | undefined;
   readonly outputBucket?: string | undefined;
   readonly createAssemblyId?: ((spec: AssemblySpec) => string) | (() => string) | undefined;
+  readonly createStagingKey?: ((campaignId: string, assemblyId: string) => string) | undefined;
 }
 
 export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
@@ -126,6 +127,8 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
   private readonly defaultPreset: string;
   private readonly outputBucket: string;
   private readonly createAssemblyId: (spec: AssemblySpec) => string;
+  private readonly createStagingKey?:
+    ((campaignId: string, assemblyId: string) => string) | undefined;
 
   private ffmpegMetadataPromise?: Promise<AssemblyFfmpegMetadata> | undefined;
   private filtersOutputPromise?: Promise<string> | undefined;
@@ -174,6 +177,7 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
             ? (options.createAssemblyId as (s: AssemblySpec) => string)(spec)
             : (options.createAssemblyId as () => string)()
       : (spec: AssemblySpec) => computeAssemblyId(spec);
+    this.createStagingKey = options.createStagingKey;
   }
 
   /**
@@ -1011,6 +1015,10 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
       const outputBytes = await fs.readFile(outputPath);
       const outputSha256 = createHash("sha256").update(outputBytes).digest("hex");
       const outputKey = `campaigns/${spec.campaignId}/assemblies/${assemblyId}/output.mp4`;
+      const attemptId = randomUUID();
+      const stagingKey = this.createStagingKey
+        ? this.createStagingKey(spec.campaignId, assemblyId)
+        : `campaigns/${spec.campaignId}/assemblies/${assemblyId}/.staging/${attemptId}/output.mp4`;
 
       const rawResult = {
         assemblyId,
@@ -1083,6 +1091,10 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
           width: outputProbed.videoStream.width,
           height: outputProbed.videoStream.height
         },
+        stagingMedia: {
+          bucket: this.outputBucket,
+          key: stagingKey
+        },
         measuredFrameRate: outputProbed.videoStream.frameRate,
         executionDurationMs
       };
@@ -1091,7 +1103,7 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
 
       const existingOutput = await this.objectStorage.getObject({
         bucket: this.outputBucket,
-        key: outputKey
+        key: stagingKey
       });
       if (existingOutput) {
         if (!existingOutput.body || existingOutput.body.length === 0) {
@@ -1120,7 +1132,7 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
         try {
           await this.objectStorage.putObject({
             bucket: this.outputBucket,
-            key: outputKey,
+            key: stagingKey,
             body: outputBytes,
             contentType: "video/mp4",
             checksumSha256: outputSha256,
@@ -1130,7 +1142,7 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
           if (err instanceof ObjectAlreadyExistsError) {
             const concurrentOutput = await this.objectStorage.getObject({
               bucket: this.outputBucket,
-              key: outputKey
+              key: stagingKey
             });
             if (!concurrentOutput || !concurrentOutput.body || concurrentOutput.body.length === 0) {
               throw new FfmpegAssemblyError(

@@ -136,6 +136,7 @@ describe("run-delivery-assembler CLI & composition root", () => {
       const mockObjectStorage: ObjectStoragePort = {
         getObject: vi.fn(),
         putObject: vi.fn(),
+        copyObject: vi.fn(),
         deleteObject: vi.fn()
       };
 
@@ -177,6 +178,7 @@ describe("run-delivery-assembler CLI & composition root", () => {
       const mockObjectStorage: ObjectStoragePort = {
         getObject: vi.fn(),
         putObject: vi.fn(),
+        copyObject: vi.fn(),
         deleteObject: vi.fn()
       };
 

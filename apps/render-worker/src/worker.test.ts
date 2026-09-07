@@ -193,6 +193,14 @@ export class FakeObjectStorage implements ObjectStoragePort {
   async getObject(locator: ObjectLocator): Promise<StoredObject | undefined> {
     return this.stored.get(`${locator.bucket}/${locator.key}`);
   }
+
+  async copyObject(from: ObjectLocator, to: ObjectLocator): Promise<ObjectLocator> {
+    const source = this.stored.get(`${from.bucket}/${from.key}`);
+    if (source) {
+      this.stored.set(`${to.bucket}/${to.key}`, { ...source, bucket: to.bucket, key: to.key });
+    }
+    return { bucket: to.bucket, key: to.key };
+  }
 }
 
 export class FakeStorageAdmissionEnforcer implements StorageAdmissionEnforcer {

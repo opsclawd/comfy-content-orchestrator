@@ -213,8 +213,8 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
     expect(result.output.media.sha256).toMatch(/^[0-9a-f]{64}$/);
 
     const storedOutput = await objectStorage.getObject({
-      bucket: result.output.media.bucket,
-      key: result.output.media.key
+      bucket: result.stagingMedia!.bucket,
+      key: result.stagingMedia!.key
     });
     expect(storedOutput).toBeDefined();
     expect(storedOutput?.body.byteLength).toBeGreaterThan(0);
@@ -304,8 +304,8 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
     expect(result.output.media.sha256).toMatch(/^[0-9a-f]{64}$/);
 
     const storedOutput = await objectStorage.getObject({
-      bucket: result.output.media.bucket,
-      key: result.output.media.key
+      bucket: result.stagingMedia!.bucket,
+      key: result.stagingMedia!.key
     });
     expect(storedOutput).toBeDefined();
     expect(storedOutput?.body.byteLength).toBeGreaterThan(0);
@@ -2435,7 +2435,7 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
   it("rejects with ASSEMBLY_PROVENANCE_CONFLICT when existing delivery output in storage lacks checksumSha256 metadata and has tampered bytes", async () => {
     const campaignId = "campaign-existing-tampered-bytes-no-metadata";
     const fixedAssemblyId = "fixed-tampered-output-id-001";
-    const deliveryKey = `campaigns/${campaignId}/assemblies/${fixedAssemblyId}/output.mp4`;
+    const deliveryKey = `campaigns/${campaignId}/assemblies/${fixedAssemblyId}/.staging/output.mp4`;
 
     // Seed existing delivery object with tampered bytes and NO checksumSha256 metadata
     await objectStorage.putObject({
@@ -2451,7 +2451,8 @@ describe("FfmpegMediaAssemblerAdapter (integration)", () => {
       ffprobePath: "ffprobe",
       workspaceRoot,
       objectStorage,
-      createAssemblyId: () => fixedAssemblyId
+      createAssemblyId: () => fixedAssemblyId,
+      createStagingKey: () => deliveryKey
     });
 
     const videoStems: VideoStemRef[] = [

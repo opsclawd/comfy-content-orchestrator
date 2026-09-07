@@ -7,6 +7,7 @@ describe("StorageBackedGenerationManifestRepository (unit)", () => {
   function createFakeStorage(objects: Record<string, StoredObject>): ObjectStoragePort {
     return {
       putObject: async () => ({ bucket: "b", key: "k" }),
+      copyObject: async (_from, to) => to,
       getObject: async (loc: ObjectLocator) => objects[`${loc.bucket}/${loc.key}`]
     };
   }

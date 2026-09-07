@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Readable } from "node:stream";
 import { S3ObjectStorage } from "./s3-object-storage.js";
-import type { S3Client } from "@aws-sdk/client-s3";
+import { HeadObjectCommand, type S3Client } from "@aws-sdk/client-s3";
 
 describe("S3ObjectStorage (unit)", () => {
   it("enforces maxBytes limit when ContentLength header is present and exceeds maxBytes", async () => {
@@ -154,6 +154,114 @@ describe("S3ObjectStorage (unit)", () => {
         name: "ObjectAlreadyExistsError",
         bucket: "test-bucket",
         key: "existing.json"
+      })
+    );
+  });
+
+  it("headObject sends HeadObjectCommand and returns metadata", async () => {
+    let sentCommand: unknown;
+    const fakeClient = {
+      send: async (cmd: unknown) => {
+        sentCommand = cmd;
+        return {
+          ContentType: "video/mp4",
+          Metadata: {
+            "checksum-sha256": "abcdef"
+          }
+        };
+      }
+    } as unknown as S3Client;
+
+    const storage = new S3ObjectStorage({
+      endpoint: "http://localhost:9000",
+      client: fakeClient
+    });
+
+    const result = await storage.headObject({ bucket: "test-bucket", key: "video.mp4" });
+    expect(result).toEqual({
+      bucket: "test-bucket",
+      key: "video.mp4",
+      checksumSha256: "abcdef",
+      contentType: "video/mp4"
+    });
+    expect(sentCommand).toBeInstanceOf(HeadObjectCommand);
+  });
+
+  it("headObject returns undefined when key is missing (404 / NotFound)", async () => {
+    const notFoundError = Object.assign(new Error("Not Found"), {
+      name: "NotFound",
+      $metadata: { httpStatusCode: 404 }
+    });
+
+    const fakeClient = {
+      send: async () => {
+        throw notFoundError;
+      }
+    } as unknown as S3Client;
+
+    const storage = new S3ObjectStorage({
+      endpoint: "http://localhost:9000",
+      client: fakeClient
+    });
+
+    const result = await storage.headObject({ bucket: "test-bucket", key: "missing.mp4" });
+    expect(result).toBeUndefined();
+  });
+
+  it("copyObject sends CopyObjectCommand with correct source and destination", async () => {
+    let sentCommand: { input: { Bucket: string; Key: string; CopySource: string } } | undefined;
+    const fakeClient = {
+      send: async (cmd: unknown) => {
+        sentCommand = cmd as typeof sentCommand;
+        return {};
+      }
+    } as unknown as S3Client;
+
+    const storage = new S3ObjectStorage({
+      endpoint: "http://localhost:9000",
+      client: fakeClient
+    });
+
+    const locator = await storage.copyObject(
+      { bucket: "src-bucket", key: "staging/video.mp4" },
+      { bucket: "dst-bucket", key: "final/video.mp4" }
+    );
+
+    expect(locator).toEqual({ bucket: "dst-bucket", key: "final/video.mp4" });
+    expect(sentCommand?.input.Bucket).toBe("dst-bucket");
+    expect(sentCommand?.input.Key).toBe("final/video.mp4");
+    expect(sentCommand?.input.CopySource).toBe("src-bucket/staging/video.mp4");
+  });
+
+  it("copyObject with ifNoneMatch: '*' throws ObjectAlreadyExistsError if destination exists", async () => {
+    const fakeClient = {
+      send: async (cmd: unknown) => {
+        if (cmd instanceof HeadObjectCommand) {
+          return {
+            ContentType: "video/mp4",
+            Metadata: { "checksum-sha256": "1234" }
+          };
+        }
+        return {};
+      }
+    } as unknown as S3Client;
+
+    const storage = new S3ObjectStorage({
+      endpoint: "http://localhost:9000",
+      client: fakeClient
+    });
+
+    await expect(
+      storage.copyObject(
+        { bucket: "src-bucket", key: "staging/video.mp4" },
+        { bucket: "dst-bucket", key: "final/video.mp4" },
+        { ifNoneMatch: "*" }
+      )
+    ).rejects.toThrowError(
+      expect.objectContaining({
+        name: "ObjectAlreadyExistsError",
+        bucket: "dst-bucket",
+        key: "final/video.mp4"
       })
     );
   });
