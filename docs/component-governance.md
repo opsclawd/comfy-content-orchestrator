@@ -62,6 +62,20 @@ The PRD requires `godzspeed-delivery` objects to be retained for 90 days *after 
 
 ---
 
+## Piper TTS Voice-Synthesis Service
+
+| Attribute | Specification |
+|---|---|
+| **Component** | Piper neural text-to-speech (`OHF-Voice/piper1-gpl`) — second self-hosted voice option alongside Kokoro |
+| **Version / Revision** | `v1.8.0` ([GitHub release](https://github.com/OHF-Voice/piper1-gpl/releases/tag/v1.8.0), published 2026-09-04; matches `main` at commit `639388b`) |
+| **License** | [GPL-3.0](https://github.com/OHF-Voice/piper1-gpl/blob/v1.8.0/COPYING) — confirmed via upstream `COPYING` file (blob sha `10926e87f113fb026c366866d6fa466061562870`, identical at the `v1.8.0` tag and `main` as of 2026-09-07) |
+| **Review Date** | 2026-09-07 |
+| **Deployment Model** | Standalone, unmodified upstream network service (`python3 -m piper.http_server -m <voice>`, per upstream `docs/API_HTTP.md`) — **not** invoked as a CLI subprocess, and **not** via Piper's Python API or C/C++ API (`libpiper`), both of which would embed/link Piper's code directly into a calling process |
+| **Integration Architecture** | A calling adapter communicates only via plain HTTP: `POST /synthesize` with a JSON `{text: ...}` body, returning WAV audio bytes. No shared memory, no exchange of internal data structures, no process-level coupling — the service is started and managed independently of the calling application |
+| **License Governance Policy** | **`approved`** in baseline registry snapshot (issue #161). Piper is GPL-3.0. **GPL-boundary holding (operator self-determination per FSF GPL FAQ, the same standard already applied to `ffmpeg` and `minio` above):** deployed strictly as a standalone HTTP network service, communicating only via a plain JSON-request/WAV-response wire protocol. Per FSF GPL FAQ "Mere Aggregation" (`gnu.org/licenses/gpl-faq.html#MereAggregation`) and "PipeLinking" (`gnu.org/licenses/gpl-faq.html#PipeLinking`) clauses, which cover pipe/socket/network communication between separate programs — subject to the caveat that sufficiently "intimate" data exchange could combine the programs, not applicable here given the plain JSON/WAV wire protocol — this boundary does not create a derivative work in the calling application; the surrounding proprietary Node.js/TypeScript code is not contaminated by Piper's GPL-3.0 license. This mirrors the MinIO/AGPL-3.0 standalone-network-service precedent above, and is a cleaner boundary than the FFmpeg/subprocess precedent since there is no process-spawn-level coupling at all. Distribution model: standalone upstream service process, never embedded or bundled into the application's own distribution artifacts. Clients receive synthesized audio output only, never Piper's source code, so GPL-3.0's copyleft does not reach delivered client assets. Chosen over the CLI-subprocess boundary (also viable) because the CLI reloads its model on every invocation — upstream docs note this is "slow since it needs to load the model each time" — whereas the HTTP server loads once at startup, which matters for a service expected to handle many repeated synthesis calls. Not yet wired into `EnforceLicenseRouting` pending the adapter build in issue #162; this entry unblocks that work. |
+
+---
+
 ## Generative Model Governance (Phase 1 Baseline)
 
 Per PRD §3.5:
