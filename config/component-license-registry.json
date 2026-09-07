@@ -1,6 +1,6 @@
 {
-  "registryRevision": "2026-08-29.4",
-  "generatedAt": "2026-09-02T00:00:00.000Z",
+  "registryRevision": "2026-08-29.5",
+  "generatedAt": "2026-09-07T00:00:00.000Z",
   "entries": [
     {
       "componentId": "LTX_25_720P_5S_V1",
@@ -65,6 +65,17 @@
       "reviewedAt": "2026-09-03T00:00:00.000Z",
       "policyRevision": "2026-08-29.1",
       "notes": "Approved for Phase 1 commercial voiceover generation. Subscription tier: Azure Pay-as-you-go / Standard (governed by Microsoft's Product Terms; commercial use permitted). Voice family: Azure Standard (pre-built) Neural voices (e.g., en-US-JennyNeural, en-US-GuyNeural). Per the Code of Conduct's 'Azure Speech and voice services in Foundry Tools' section, the special end-user voice-consent, opt-out, and voice-model-training-data (VMTD) obligations apply specifically to applications that let External Users submit their own voice for model training/personalization ('Voice Features', i.e. Personal Voice / Custom Neural Voice scenarios) — this deployment uses only pre-built Standard Neural voices with no end-user voice training, so those obligations do not apply. Determination authority: operator self-determination per the published Microsoft terms cited above; no outside counsel engaged. Volume: bounded by the deployment's Pay-as-you-go metering; no separate volume commitment required for Phase 1. Provider invocations are gated by EnforceLicenseRouting via the AssemblySpec.voiceover.source.providerId lookup in apps/application/src/use-cases/assemble-delivery-reel.ts."
+    },
+    {
+      "componentId": "piper-tts",
+      "componentType": "service",
+      "versionOrRevision": "v1.8.0",
+      "status": "approved",
+      "licenseId": "GPL-3.0",
+      "licenseSource": "https://github.com/OHF-Voice/piper1-gpl/blob/v1.8.0/COPYING (upstream COPYING file, accessed 2026-09-07); https://www.gnu.org/licenses/gpl-faq.html#MereAggregation (FSF GPL FAQ Mere Aggregation); https://www.gnu.org/licenses/gpl-faq.html#PipeLinking (FSF GPL FAQ Pipe/Socket invocation)",
+      "reviewedAt": "2026-09-07T00:00:00.000Z",
+      "policyRevision": "2026-08-29.1",
+      "notes": "Approved as a second self-hosted voice-synthesis option (issue #161), alongside the existing Kokoro option. Piper (OHF-Voice/piper1-gpl, tag v1.8.0) is licensed GPL-3.0, confirmed via the upstream COPYING file (blob sha 10926e87f113fb026c366866d6fa466061562870, identical at the v1.8.0 tag and the main branch as of 2026-09-07). Determination authority: operator self-determination per FSF GPL FAQ citations, the same standard already applied to ffmpeg and minio in this registry; no outside counsel engaged. GPL-boundary holding: deployed strictly as a standalone, unmodified upstream network service (python3 -m piper.http_server -m <voice>, per upstream docs/API_HTTP.md), not as a CLI subprocess and not via Piper's Python API or C/C++ API (libpiper) — the latter two would embed/link Piper's code directly into a calling process and are explicitly not used. A calling adapter communicates only via plain HTTP: POST /synthesize with a JSON {text: ...} body, returning WAV audio bytes; no shared memory, no exchange of internal data structures, no process-level coupling. Per FSF GPL FAQ 'Mere Aggregation' and 'PipeLinking' clauses (URLs in licenseSource), which cover pipe/socket/network communication between separate programs (subject to the caveat that sufficiently 'intimate' data exchange could combine the programs — not applicable here given the plain JSON/WAV wire protocol), this boundary does not create a derivative work in the calling application; the surrounding proprietary Node.js/TypeScript code is not contaminated by Piper's GPL-3.0 license. This mirrors the minio/AGPL-3.0 standalone-network-service precedent already in this registry, and is a cleaner boundary than the ffmpeg/subprocess precedent since there is no process-spawn-level coupling at all. Distribution model: standalone upstream service process, never embedded or bundled into the application's own distribution artifacts. Clients receive synthesized audio output only, never Piper's source code, so GPL-3.0's copyleft does not reach delivered client assets. Not yet wired into EnforceLicenseRouting pending the adapter build in issue #162; this entry unblocks that work."
     }
   ]
 }
