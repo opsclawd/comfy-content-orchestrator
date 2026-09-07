@@ -425,4 +425,64 @@ describe("SynthesizeVoiceover use-case", () => {
 
     expect(synthFn).not.toHaveBeenCalled();
   });
+
+  it("defensively rejects non-positive, non-finite, and reciprocal-overflow speed values with SynthesizeVoiceoverValidationError", async () => {
+    const { port: storagePort } = createMockObjectStorage();
+    const synthFn = vi.fn();
+    const fakeSynthesisPort: ConcreteVoiceSynthesisPort = {
+      synthesize: synthFn
+    };
+
+    const useCase = new SynthesizeVoiceover({
+      voiceSynthesis: fakeSynthesisPort,
+      objectStorage: storagePort
+    });
+
+    const invalidSpeeds = [0, -1, NaN, Infinity, -Infinity, Number.MIN_VALUE];
+    for (const speed of invalidSpeeds) {
+      await expect(
+        useCase.synthesize({
+          campaignId: "camp-1",
+          assetId: "vo-1",
+          text: "hello",
+          voiceId: "af_heart",
+          speed
+        })
+      ).rejects.toThrow(SynthesizeVoiceoverValidationError);
+    }
+
+    expect(synthFn).not.toHaveBeenCalled();
+  });
+
+  it("passes through valid speed to voiceSynthesis port", async () => {
+    const { port: storagePort } = createMockObjectStorage();
+    const fakeWav = new Uint8Array(44 + 24000 * 2);
+    const synthFn = vi.fn(async (input: VoiceSynthesisInput): Promise<VoiceSynthesisOutput> => {
+      expect(input.speed).toBe(1.2);
+      return {
+        audio: fakeWav,
+        contentType: "audio/wav",
+        sampleRateHz: 24000,
+        durationMs: 1000
+      };
+    });
+    const fakeSynthesisPort: ConcreteVoiceSynthesisPort = {
+      synthesize: synthFn
+    };
+
+    const useCase = new SynthesizeVoiceover({
+      voiceSynthesis: fakeSynthesisPort,
+      objectStorage: storagePort
+    });
+
+    await useCase.synthesize({
+      campaignId: "camp-1",
+      assetId: "vo-1",
+      text: "hello",
+      voiceId: "af_heart",
+      speed: 1.2
+    });
+
+    expect(synthFn).toHaveBeenCalledTimes(1);
+  });
 });

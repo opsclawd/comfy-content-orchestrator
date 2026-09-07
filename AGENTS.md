@@ -21,6 +21,13 @@ To ensure deterministic subtitle-cue forced alignment across local development a
 - Run `./scripts/check-whisperx-version.sh` to verify that your local environment has the pinned virtualenv and model cache verified.
 - The Python path resolution follows: `WHISPERX_PYTHON_PATH` environment variable override -> pinned venv interpreter at `node_modules/.cache/whisperx-venv/bin/python3` -> fail fast with `MODEL_LOAD_FAILED`. A stray host `python3` is never silently used.
 
+## Piper Voice Environment Setup
+
+To ensure deterministic speech synthesis and reproducible container builds across local development and CI, Piper TTS voice models and container definitions are pinned in `.piper-version`:
+- Use `./scripts/install-piper-voice.sh` to fetch and verify the pinned Piper voice model ONNX weights and configuration.
+- Run `./scripts/check-piper-version.sh` to verify that your local environment has the pinned voice artifacts cached and that `docker/piper/Dockerfile` matches its pinned SHA-256 digest.
+- `check-piper-version.sh` performs only static, on-disk artifact verification and intentionally does not start or probe a live Piper HTTP service — service lifecycle and readiness checking belongs to the Testcontainers-managed integration test (`pnpm test:piper`).
+
 ## Running tests — two suites, two configs
 
 This repository has **two** vitest configurations, and using the wrong one produces a command that can never pass.

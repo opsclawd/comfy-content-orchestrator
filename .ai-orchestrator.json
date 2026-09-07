@@ -6,6 +6,7 @@
       "pnpm test:db",
       "pnpm test:assembly",
       "pnpm test:kokoro",
+      "pnpm test:piper",
       "pnpm test:ltx-production",
       "pnpm test:whisperx",
       "pnpm install --frozen-lockfile",

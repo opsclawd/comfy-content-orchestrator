@@ -101,7 +101,13 @@ export class SynthesizeVoiceover {
     }
 
     if (params.speed !== undefined) {
-      if (typeof params.speed !== "number" || !Number.isFinite(params.speed) || params.speed <= 0) {
+      if (
+        typeof params.speed !== "number" ||
+        !Number.isFinite(params.speed) ||
+        params.speed <= 0 ||
+        !Number.isFinite(1.0 / params.speed) ||
+        1.0 / params.speed <= 0
+      ) {
         errors.push(`speed must be a positive finite number, got ${params.speed}`);
       }
     }

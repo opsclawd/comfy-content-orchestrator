@@ -21,6 +21,7 @@
     "test:bash": "node -e \"console.log('no bash test suite in this repo; TypeScript monorepo')\"",
     "test:db": "vitest run --config vitest.integration.config.ts",
     "test:kokoro": "bash scripts/check-kokoro-version.sh && vitest run --config vitest.kokoro.config.ts",
+    "test:piper": "bash scripts/check-piper-version.sh && vitest run --config vitest.piper.config.ts",
     "test:whisperx": "bash scripts/check-whisperx-version.sh && vitest run --config vitest.whisperx.config.ts",
     "test:ltx-production": "vitest run --config vitest.ltx.config.ts",
     "test:sprint-1.5": "vitest run --config vitest.integration.config.ts apps/control-api/src/http/review-plane-closure.integration.test.ts packages/infrastructure/src/postgres/audit-protections.integration.test.ts",
