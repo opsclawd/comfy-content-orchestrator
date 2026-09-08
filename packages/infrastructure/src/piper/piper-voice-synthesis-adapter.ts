@@ -1,7 +1,8 @@
 import type {
   ConcreteVoiceSynthesisPort,
   VoiceSynthesisInput,
-  VoiceSynthesisOutput
+  VoiceSynthesisOutput,
+  VoiceSynthesisProviderLocality
 } from "@cco/application";
 import type { PiperHttpClient } from "./piper-client.js";
 import { decodeWav } from "./wav-decoder.js";
@@ -16,6 +17,8 @@ import { PiperSynthesisError } from "./piper-error.js";
  * derived purely from the measured response audio bytes.
  */
 export class PiperVoiceSynthesisAdapter implements ConcreteVoiceSynthesisPort {
+  readonly providerLocality: VoiceSynthesisProviderLocality = "self-hosted";
+  readonly providerName = "piper";
   readonly configuredVoiceId: string;
   readonly client: PiperHttpClient;
 
