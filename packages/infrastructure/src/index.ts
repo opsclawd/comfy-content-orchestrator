@@ -345,3 +345,13 @@ export {
   DEFAULT_PIPER_VOICE_DIR,
   loadPinnedPiperVersion
 } from "./piper/index.js";
+
+export {
+  GeminiCandidateRankingClient,
+  type GeminiCandidateRankingClientOptions
+} from "./ranking/gemini-candidate-ranking-client.js";
+
+export {
+  OpenAiCandidateRankingClient,
+  type OpenAiCandidateRankingClientOptions
+} from "./ranking/openai-candidate-ranking-client.js";

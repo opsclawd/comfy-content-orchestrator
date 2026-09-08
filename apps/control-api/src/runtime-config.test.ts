@@ -497,4 +497,104 @@ describe("runtime-config", () => {
       expect(config.planningProviders?.overallTimeoutMs).toBe(90_000);
     });
   });
+
+  describe("ranking provider configuration", () => {
+    const secretGeminiKey = "ai-gemini-secret-123456789";
+    const secretOpenAiKey = "sk-openai-secret-987654321";
+    const secretRankingOpenAiKey = "sk-ranking-openai-secret-555555";
+
+    it("allows zero keys and leaves rankingProviders undefined", () => {
+      const config = parseControlApiRuntimeConfig(validEnv);
+      expect(config.rankingProviders).toBeUndefined();
+
+      const configWithEmpty = parseControlApiRuntimeConfig({
+        ...validEnv,
+        GEMINI_API_KEY: "",
+        RANKING_OPENAI_API_KEY: "   "
+      });
+      expect(configWithEmpty.rankingProviders).toBeUndefined();
+    });
+
+    it("accepts GEMINI_API_KEY and OPENAI_API_KEY and configures rankingProviders", () => {
+      const config = parseControlApiRuntimeConfig({
+        ...validEnv,
+        GEMINI_API_KEY: secretGeminiKey,
+        OPENAI_API_KEY: secretOpenAiKey,
+        ANTHROPIC_API_KEY: "sk-ant-test"
+      });
+
+      expect(config.rankingProviders).toBeDefined();
+      expect(config.rankingProviders?.geminiApiKey).toBe(secretGeminiKey);
+      expect(config.rankingProviders?.openaiApiKey).toBe(secretOpenAiKey);
+    });
+
+    it("accepts RANKING_OPENAI_API_KEY override for fallback client", () => {
+      const config = parseControlApiRuntimeConfig({
+        ...validEnv,
+        GEMINI_API_KEY: secretGeminiKey,
+        OPENAI_API_KEY: secretOpenAiKey,
+        RANKING_OPENAI_API_KEY: secretRankingOpenAiKey,
+        ANTHROPIC_API_KEY: "sk-ant-test"
+      });
+
+      expect(config.rankingProviders?.geminiApiKey).toBe(secretGeminiKey);
+      expect(config.rankingProviders?.openaiApiKey).toBe(secretRankingOpenAiKey);
+    });
+
+    it("throws ControlApiConfigError naming OPENAI_API_KEY when only GEMINI_API_KEY is provided", () => {
+      expect(() =>
+        parseControlApiRuntimeConfig({
+          ...validEnv,
+          GEMINI_API_KEY: secretGeminiKey
+        })
+      ).toThrowError(/OPENAI_API_KEY/);
+
+      try {
+        parseControlApiRuntimeConfig({
+          ...validEnv,
+          GEMINI_API_KEY: secretGeminiKey
+        });
+      } catch (err: unknown) {
+        expect(err).toBeInstanceOf(ControlApiConfigError);
+        const msg = err instanceof Error ? err.message : String(err);
+        expect(msg).toContain("OPENAI_API_KEY");
+        expect(msg).not.toContain(secretGeminiKey);
+      }
+    });
+
+    it("throws ControlApiConfigError naming GEMINI_API_KEY when only RANKING_OPENAI_API_KEY is provided", () => {
+      expect(() =>
+        parseControlApiRuntimeConfig({
+          ...validEnv,
+          RANKING_OPENAI_API_KEY: secretRankingOpenAiKey
+        })
+      ).toThrowError(/GEMINI_API_KEY/);
+
+      try {
+        parseControlApiRuntimeConfig({
+          ...validEnv,
+          RANKING_OPENAI_API_KEY: secretRankingOpenAiKey
+        });
+      } catch (err: unknown) {
+        expect(err).toBeInstanceOf(ControlApiConfigError);
+        const msg = err instanceof Error ? err.message : String(err);
+        expect(msg).toContain("GEMINI_API_KEY");
+        expect(msg).not.toContain(secretRankingOpenAiKey);
+      }
+    });
+
+    it("parses optional ranking attempt and overall timeouts when provided", () => {
+      const config = parseControlApiRuntimeConfig({
+        ...validEnv,
+        GEMINI_API_KEY: secretGeminiKey,
+        OPENAI_API_KEY: secretOpenAiKey,
+        ANTHROPIC_API_KEY: "sk-ant-test",
+        RANKING_ATTEMPT_TIMEOUT_MS: "20000",
+        RANKING_OVERALL_TIMEOUT_MS: "45000"
+      });
+
+      expect(config.rankingProviders?.attemptTimeoutMs).toBe(20_000);
+      expect(config.rankingProviders?.overallTimeoutMs).toBe(45_000);
+    });
+  });
 });

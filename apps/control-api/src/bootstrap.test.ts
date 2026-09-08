@@ -620,6 +620,52 @@ describe("bootstrap", () => {
     await runtime.stop();
   });
 
+  it("wires candidate ranker clients when config includes rankingProviders", async () => {
+    const harness = createTestHarness();
+    const geminiKey = "gemini-test-secret-key-123";
+    const openaiKey = "openai-test-secret-key-456";
+
+    const configWithRanking: ControlApiRuntimeConfig = {
+      ...validConfig,
+      rankingProviders: {
+        geminiApiKey: geminiKey,
+        openaiApiKey: openaiKey,
+        attemptTimeoutMs: 25_000,
+        overallTimeoutMs: 50_000
+      }
+    };
+
+    const runtime = await runControlApi({
+      config: configWithRanking,
+      poolFactory: () => harness.mockPool as unknown as Pool,
+      s3ClientFactory: () => harness.mockS3Client as unknown as S3Client,
+      serverStarter: harness.mockServerStarter,
+      processSignals: harness.mockSignals,
+      logger: harness.mockLogger
+    });
+
+    expect(harness.mockServerStarter).toHaveBeenCalledTimes(1);
+    const passedDeps = harness.mockServerStarter.mock.calls[0]?.[0] as ControlApiDependencies;
+    expect(passedDeps.candidateRankerClients).toBeDefined();
+    expect(passedDeps.candidateRankerClients?.primary.providerName).toBe("Google");
+    expect(passedDeps.candidateRankerClients?.fallback.providerName).toBe("OpenAI");
+    expect(passedDeps.rankingOverallTimeoutMs).toBe(50_000);
+
+    // Verify secrets are never logged
+    const allLogs = [
+      ...harness.mockLogger.info.mock.calls,
+      ...harness.mockLogger.warn.mock.calls,
+      ...harness.mockLogger.error.mock.calls
+    ].map((call) => call.map(String).join(" "));
+
+    for (const logLine of allLogs) {
+      expect(logLine).not.toContain(geminiKey);
+      expect(logLine).not.toContain(openaiKey);
+    }
+
+    await runtime.stop();
+  });
+
   it("main() logs error and sets process.exitCode = 1 on failure without throwing unhandled rejection", async () => {
     const originalEnv = { ...process.env };
     const originalExitCode = process.exitCode;

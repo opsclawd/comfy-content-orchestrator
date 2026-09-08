@@ -30,3 +30,5 @@ export * from "./assembly-spec.js";
 export * from "./delivery-assembly-job-queue-port.js";
 export * from "./planning-model-client-port.js";
 export * from "./campaign-production-run-repository.js";
+export * from "./ranking-model-client-port.js";
+export * from "./candidate-ranking-context.js";

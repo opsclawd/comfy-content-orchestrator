@@ -2,13 +2,16 @@ import process from "node:process";
 import { HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
 import type {
   PlanningModelClientPort,
+  RankingModelClientPort,
   ReferenceAssetRepository,
   StorageTelemetryPort
 } from "@cco/application";
 import {
   AnthropicPlanningModelClient,
+  GeminiCandidateRankingClient,
   HostFsStorageTelemetryAdapter,
   InMemoryStorageMetricsRegistry,
+  OpenAiCandidateRankingClient,
   OpenAiPlanningModelClient,
   PostgresDeliveryAssemblyJobQueue,
   PostgresJobQueue,
@@ -57,6 +60,10 @@ export interface ControlApiBootstrapOptions {
   readonly planningModelClients?: {
     readonly primary: PlanningModelClientPort;
     readonly fallback: PlanningModelClientPort;
+  };
+  readonly candidateRankerClients?: {
+    readonly primary: RankingModelClientPort;
+    readonly fallback: RankingModelClientPort;
   };
   readonly referenceAssetRepository?: ReferenceAssetRepository;
   readonly serverStarter?: (
@@ -254,6 +261,30 @@ export async function runControlApi(
       options.referenceAssetRepository ??
       (anthropicKey && openAiKey ? new PostgresReferenceAssetRepository(pool) : undefined);
 
+    const geminiKey = config.rankingProviders?.geminiApiKey;
+    const rankingOpenAiKey = config.rankingProviders?.openaiApiKey;
+    const rankingAttemptTimeoutMs = config.rankingProviders?.attemptTimeoutMs;
+    const rankingOverallTimeoutMs = config.rankingProviders?.overallTimeoutMs;
+
+    const candidateRankerClients =
+      options.candidateRankerClients ??
+      (geminiKey && rankingOpenAiKey
+        ? {
+            primary: new GeminiCandidateRankingClient({
+              apiKey: geminiKey,
+              ...(rankingAttemptTimeoutMs !== undefined
+                ? { timeoutMs: rankingAttemptTimeoutMs }
+                : {})
+            }),
+            fallback: new OpenAiCandidateRankingClient({
+              apiKey: rankingOpenAiKey,
+              ...(rankingAttemptTimeoutMs !== undefined
+                ? { timeoutMs: rankingAttemptTimeoutMs }
+                : {})
+            })
+          }
+        : undefined);
+
     // 5. Install signal handlers
     sigtermHandler = () => {
       logger.info("Received SIGTERM, initiating graceful shutdown...");
@@ -282,7 +313,9 @@ export async function runControlApi(
         deliveryAssemblyJobQueue,
         ...(planningModelClients ? { planningModelClients } : {}),
         ...(referenceAssetRepository ? { referenceAssetRepository } : {}),
-        ...(overallTimeoutMs !== undefined ? { planningOverallTimeoutMs: overallTimeoutMs } : {})
+        ...(overallTimeoutMs !== undefined ? { planningOverallTimeoutMs: overallTimeoutMs } : {}),
+        ...(candidateRankerClients ? { candidateRankerClients } : {}),
+        ...(rankingOverallTimeoutMs !== undefined ? { rankingOverallTimeoutMs } : {})
       },
       {
         host: config.http.host,

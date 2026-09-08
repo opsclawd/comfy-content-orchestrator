@@ -8,6 +8,7 @@ import {
   PlanCampaignBeatSheetUseCase,
   PlanSceneConfigurationUseCase,
   ProgressSceneProductionUseCases,
+  RankReviewCandidatesUseCase,
   ReviewSceneUseCases,
   SubmitSceneCreationUseCase,
   ApproveSceneAndDispatchCampaignProductionUseCase,
@@ -16,6 +17,7 @@ import {
   type DeliveryAssemblyJobQueuePort,
   type JobQueuePort,
   type PlanningModelClientPort,
+  type RankingModelClientPort,
   type ReferenceAssetRepository,
   type RenderEnginePort,
   type ReviewMediaDeliveryPort,
@@ -38,8 +40,13 @@ export interface ControlApiDependencies {
     readonly primary: PlanningModelClientPort;
     readonly fallback: PlanningModelClientPort;
   };
+  readonly candidateRankerClients?: {
+    readonly primary: RankingModelClientPort;
+    readonly fallback: RankingModelClientPort;
+  };
   readonly referenceAssetRepository?: ReferenceAssetRepository;
   readonly planningOverallTimeoutMs?: number;
+  readonly rankingOverallTimeoutMs?: number;
 }
 
 export interface ControlApiUseCases {
@@ -51,6 +58,7 @@ export interface ControlApiUseCases {
   readonly createScene?: CreateSceneUseCase | undefined;
   readonly submitSceneCreation?: SubmitSceneCreationUseCase | undefined;
   readonly planCampaignBeatSheet?: PlanCampaignBeatSheetUseCase | undefined;
+  readonly rankReviewCandidates?: RankReviewCandidatesUseCase | undefined;
   readonly enforceStorageAdmission?: EnforceStorageAdmission;
   readonly approveSceneAndDispatchCampaignProduction: ApproveSceneAndDispatchCampaignProductionUseCase;
   readonly completeCampaignProductionRun: CompleteCampaignProductionRunUseCases;
@@ -129,6 +137,21 @@ export function createControlApiContainer(
       })
     : undefined;
 
+  const rankReviewCandidates = dependencies.uow
+    ? new RankReviewCandidatesUseCase({
+        uow: dependencies.uow,
+        candidateRanker: dependencies.candidateRankerClients
+          ? {
+              primaryClient: dependencies.candidateRankerClients.primary,
+              fallbackClient: dependencies.candidateRankerClients.fallback,
+              ...(dependencies.rankingOverallTimeoutMs !== undefined
+                ? { overallTimeoutMs: dependencies.rankingOverallTimeoutMs }
+                : {})
+            }
+          : undefined
+      })
+    : undefined;
+
   return {
     dependencies,
     useCases: {
@@ -143,7 +166,8 @@ export function createControlApiContainer(
       completeCampaignProductionRun,
       completeCampaignProductionRunAssembly,
       ...(planCampaignBeatSheet !== undefined ? { planCampaignBeatSheet } : {}),
-      ...(enforceStorageAdmission !== undefined ? { enforceStorageAdmission } : {})
+      ...(enforceStorageAdmission !== undefined ? { enforceStorageAdmission } : {}),
+      ...(rankReviewCandidates !== undefined ? { rankReviewCandidates } : {})
     },
     queries: {
       ...(dependencies.sceneReviewQueries !== undefined
