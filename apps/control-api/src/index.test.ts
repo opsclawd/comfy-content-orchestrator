@@ -4,16 +4,25 @@ import {
   ProgressSceneProductionUseCases,
   ReviewSceneUseCases,
   type QueueRenderInput,
+  type RankingModelClientPort,
   type RenderEnginePort,
   type RenderQueueReceipt,
   type ReviewMediaDeliveryPort,
+  type SceneReviewDetail,
   type SceneReviewQueries,
   type StorageMetricsRegistryPort,
   type StorageTelemetryPort,
   type UnitOfWork,
   type UnitOfWorkContext
 } from "@cco/application";
-import { Scene, type CampaignId, type CandidateId, type SceneId } from "@cco/domain";
+import {
+  Scene,
+  type CampaignId,
+  type CampaignRecord,
+  type CandidateId,
+  type ClientRecord,
+  type SceneId
+} from "@cco/domain";
 import {
   controlApiName,
   createControlApi,
@@ -27,7 +36,10 @@ class FakeUnitOfWork implements UnitOfWork {
   readonly savedScenes: Scene[] = [];
   private readonly sceneMap = new Map<SceneId, Scene>();
 
-  constructor(scenes: Scene[] = []) {
+  constructor(
+    scenes: Scene[] = [],
+    private readonly clientPolicy?: Record<string, unknown>
+  ) {
     for (const scene of scenes) {
       this.sceneMap.set(scene.id, scene);
     }
@@ -50,7 +62,41 @@ class FakeUnitOfWork implements UnitOfWork {
         findById: async () => undefined,
         insert: async () => {},
         listBySceneAndRevision: async () => []
-      }
+      },
+      ...(this.clientPolicy !== undefined
+        ? {
+            campaigns: {
+              findById: async (id: string) =>
+                ({
+                  id: id as CampaignId,
+                  clientId: "client-1",
+                  title: "Test Campaign",
+                  targetPlatform: "web",
+                  status: "drafting",
+                  totalScenes: 1,
+                  approvedScenes: 0,
+                  createdAt: "2026-09-07T00:00:00.000Z",
+                  updatedAt: "2026-09-07T00:00:00.000Z"
+                }) as CampaignRecord,
+              findByIdForUpdate: async () => undefined,
+              save: async () => {},
+              transitionStatusIf: async () => true
+            },
+            clients: {
+              findById: async () =>
+                ({
+                  id: "client-1",
+                  companyName: "Acme",
+                  brandBibleJson: {},
+                  defaultAspectRatio: "16:9",
+                  externalProcessingPolicy: this.clientPolicy!,
+                  createdAt: "2026-09-07T00:00:00.000Z",
+                  updatedAt: "2026-09-07T00:00:00.000Z"
+                }) as ClientRecord,
+              save: async () => {}
+            }
+          }
+        : {})
     };
     return work(context);
   }
@@ -247,6 +293,102 @@ describe("control-api composition root", () => {
 
       const containerWithout = createControlApiContainer({ uow });
       expect(containerWithout.useCases.enforceStorageAdmission).toBeUndefined();
+    });
+  });
+
+  describe("candidate ranking container wiring", () => {
+    it("forwards rankingOverallTimeoutMs to candidate ranker and enforces deadline on slow resolver", async () => {
+      const uow = new FakeUnitOfWork([], {
+        allowCloudVisualQA: true,
+        allowedProviders: ["Google", "OpenAI"],
+        sensitiveDataMasking: false
+      });
+      const mockPrimary: RankingModelClientPort = {
+        providerName: "Google",
+        rankBatch: vi.fn().mockResolvedValue({ kind: "success", rankedOrdinals: [2, 1] })
+      };
+      const mockFallback: RankingModelClientPort = {
+        providerName: "OpenAI",
+        rankBatch: vi
+          .fn()
+          .mockResolvedValue({ kind: "permanent_failure", httpStatus: 400, message: "" })
+      };
+
+      const container = createControlApiContainer({
+        uow,
+        candidateRankerClients: {
+          primary: mockPrimary,
+          fallback: mockFallback
+        },
+        rankingOverallTimeoutMs: 30
+      });
+
+      expect(container.useCases.rankReviewCandidates).toBeDefined();
+
+      const detail: SceneReviewDetail = {
+        sceneId: "scene-1" as SceneId,
+        campaignId: "campaign-1" as CampaignId,
+        status: "director_review",
+        specRevision: 1,
+        configuration: {
+          prompt: "prompt",
+          referenceIds: [],
+          engineProfileId: "LTX_25_720P_5S_V1",
+          durationMs: 5000,
+          loraConfigurationId: null
+        },
+        candidatesByRevision: [
+          {
+            specRevision: 1,
+            candidates: [
+              {
+                id: "c1" as CandidateId,
+                sceneId: "scene-1" as SceneId,
+                specRevision: 1,
+                variantOrdinal: 1,
+                storageBucket: "b",
+                storageObjectKey: "k1",
+                contentHash: "h1",
+                generationMetadata: {},
+                createdAt: "2026-09-07T00:00:00.000Z"
+              },
+              {
+                id: "c2" as CandidateId,
+                sceneId: "scene-1" as SceneId,
+                specRevision: 1,
+                variantOrdinal: 2,
+                storageBucket: "b",
+                storageObjectKey: "k2",
+                contentHash: "h2",
+                generationMetadata: {},
+                createdAt: "2026-09-07T00:00:00.000Z"
+              }
+            ]
+          }
+        ],
+        allowedActions: ["approve"]
+      };
+
+      const start = Date.now();
+      const result = await container.useCases.rankReviewCandidates!.execute(
+        detail,
+        async (_c, signal) =>
+          new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+              resolve({ base64Data: "data", mimeType: "image/png" });
+            }, 300);
+            signal?.addEventListener("abort", () => {
+              clearTimeout(timer);
+              reject(new Error("aborted"));
+            });
+          })
+      );
+      const elapsed = Date.now() - start;
+
+      // The 30ms timeout aborted the slow 300ms resolver, returning unranked candidates quickly
+      expect(elapsed).toBeLessThan(200);
+      expect(result[0]!.candidates.map((c) => c.variantOrdinal)).toEqual([1, 2]);
+      expect(mockPrimary.rankBatch).not.toHaveBeenCalled();
     });
   });
 

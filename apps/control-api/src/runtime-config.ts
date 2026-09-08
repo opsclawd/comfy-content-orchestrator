@@ -43,6 +43,13 @@ export interface ControlApiPlanningConfig {
   readonly overallTimeoutMs?: number;
 }
 
+export interface ControlApiRankingConfig {
+  readonly geminiApiKey: string;
+  readonly openaiApiKey: string;
+  readonly attemptTimeoutMs?: number;
+  readonly overallTimeoutMs?: number;
+}
+
 export interface ControlApiRuntimeConfig {
   readonly database: ControlApiDatabaseConfig;
   readonly s3: ControlApiS3Config;
@@ -51,6 +58,7 @@ export interface ControlApiRuntimeConfig {
   readonly storageTelemetry: ControlApiStorageTelemetryConfig;
   readonly jobDispatch: ControlApiJobDispatchConfig;
   readonly planningProviders?: ControlApiPlanningConfig;
+  readonly rankingProviders?: ControlApiRankingConfig;
 }
 
 export class ControlApiConfigError extends Error {
@@ -368,6 +376,49 @@ export function parseControlApiRuntimeConfig(
         }
       : undefined;
 
+  // 10. Parse optional Ranking Providers (Google Gemini primary, OpenAI fallback)
+  const geminiApiKey = parseOptionalString(env.GEMINI_API_KEY, "GEMINI_API_KEY");
+  const rankingOpenAiApiKey = parseOptionalString(
+    env.RANKING_OPENAI_API_KEY,
+    "RANKING_OPENAI_API_KEY"
+  );
+  const effectiveRankingOpenAiKey = rankingOpenAiApiKey ?? openaiApiKey;
+
+  if (geminiApiKey !== undefined && effectiveRankingOpenAiKey === undefined) {
+    throw new ControlApiConfigError(
+      "Invalid ranking provider configuration: GEMINI_API_KEY is provided, but OPENAI_API_KEY is missing. Both GEMINI_API_KEY and OPENAI_API_KEY must be provided together or neither."
+    );
+  }
+
+  if (rankingOpenAiApiKey !== undefined && geminiApiKey === undefined) {
+    throw new ControlApiConfigError(
+      "Invalid ranking provider configuration: RANKING_OPENAI_API_KEY is provided, but GEMINI_API_KEY is missing. Both GEMINI_API_KEY and OPENAI_API_KEY must be provided together or neither."
+    );
+  }
+
+  const rankingAttemptTimeoutMs =
+    env.RANKING_ATTEMPT_TIMEOUT_MS !== undefined && env.RANKING_ATTEMPT_TIMEOUT_MS !== ""
+      ? parsePositiveInteger(env.RANKING_ATTEMPT_TIMEOUT_MS, "RANKING_ATTEMPT_TIMEOUT_MS", 30_000)
+      : undefined;
+  const rankingOverallTimeoutMs =
+    env.RANKING_OVERALL_TIMEOUT_MS !== undefined && env.RANKING_OVERALL_TIMEOUT_MS !== ""
+      ? parsePositiveInteger(env.RANKING_OVERALL_TIMEOUT_MS, "RANKING_OVERALL_TIMEOUT_MS", 60_000)
+      : undefined;
+
+  const rankingProviders: ControlApiRankingConfig | undefined =
+    geminiApiKey !== undefined && effectiveRankingOpenAiKey !== undefined
+      ? {
+          geminiApiKey,
+          openaiApiKey: effectiveRankingOpenAiKey,
+          ...(rankingAttemptTimeoutMs !== undefined
+            ? { attemptTimeoutMs: rankingAttemptTimeoutMs }
+            : {}),
+          ...(rankingOverallTimeoutMs !== undefined
+            ? { overallTimeoutMs: rankingOverallTimeoutMs }
+            : {})
+        }
+      : undefined;
+
   return {
     database: {
       url: databaseUrl
@@ -396,6 +447,7 @@ export function parseControlApiRuntimeConfig(
       leaseDurationMs,
       heartbeatIntervalMs
     },
-    ...(planningProviders !== undefined ? { planningProviders } : {})
+    ...(planningProviders !== undefined ? { planningProviders } : {}),
+    ...(rankingProviders !== undefined ? { rankingProviders } : {})
   };
 }

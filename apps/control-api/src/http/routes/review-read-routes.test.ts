@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   PersistentObjectLocator,
+  RankingModelClientPort,
+  RankingModelOutcome,
+  RankingModelRequest,
   ReviewMediaDeliveryPort,
   SceneReviewDetail,
   SceneReviewQueries,
@@ -13,11 +16,13 @@ import {
   type CampaignReviewSummary,
   type ReviewErrorResponse
 } from "@cco/contracts";
-import type { CampaignId, CandidateId, SceneId } from "@cco/domain";
+import type { CampaignId, CampaignRecord, CandidateId, ClientRecord, SceneId } from "@cco/domain";
 import { createControlApiApp } from "../app.js";
 import type { ControlApiUseCases } from "../../index.js";
 
 class FakeUnitOfWork implements UnitOfWork {
+  constructor(private readonly clientPolicy?: Record<string, unknown>) {}
+
   async execute<TResult>(work: (context: UnitOfWorkContext) => Promise<TResult>): Promise<TResult> {
     return work({
       scenes: { findById: async () => undefined, save: async () => {} },
@@ -26,7 +31,41 @@ class FakeUnitOfWork implements UnitOfWork {
         findById: async () => undefined,
         insert: async () => {},
         listBySceneAndRevision: async () => []
-      }
+      },
+      ...(this.clientPolicy !== undefined
+        ? {
+            campaigns: {
+              findById: async (id: string) =>
+                ({
+                  id: id as CampaignId,
+                  clientId: "client-1",
+                  title: "Test Campaign",
+                  targetPlatform: "web",
+                  status: "drafting",
+                  totalScenes: 1,
+                  approvedScenes: 0,
+                  createdAt: "2026-09-07T00:00:00.000Z",
+                  updatedAt: "2026-09-07T00:00:00.000Z"
+                }) as CampaignRecord,
+              findByIdForUpdate: async () => undefined,
+              save: async () => {},
+              transitionStatusIf: async () => true
+            },
+            clients: {
+              findById: async () =>
+                ({
+                  id: "client-1",
+                  companyName: "Acme",
+                  brandBibleJson: {},
+                  defaultAspectRatio: "16:9",
+                  externalProcessingPolicy: this.clientPolicy!,
+                  createdAt: "2026-09-07T00:00:00.000Z",
+                  updatedAt: "2026-09-07T00:00:00.000Z"
+                }) as ClientRecord,
+              save: async () => {}
+            }
+          }
+        : {})
     });
   }
 }
@@ -695,6 +734,465 @@ describe("Review Read Endpoints", () => {
       const genericErr = formatReviewError(new Error("Database connection dropped"));
       expect(genericErr.statusCode).toBe(500);
       expect(genericErr.body).toEqual({ message: "Internal Server Error" });
+    });
+  });
+
+  describe("Candidate ranking read path integration", () => {
+    class MockRankingClient implements RankingModelClientPort {
+      readonly calls: RankingModelRequest[] = [];
+      constructor(
+        readonly providerName: "Google" | "OpenAI",
+        private readonly outcome: RankingModelOutcome | (() => Promise<RankingModelOutcome>)
+      ) {}
+
+      async rankBatch(request: RankingModelRequest): Promise<RankingModelOutcome> {
+        this.calls.push(request);
+        if (typeof this.outcome === "function") {
+          return this.outcome();
+        }
+        return this.outcome;
+      }
+    }
+
+    const rankingDetail: SceneReviewDetail = {
+      sceneId: sceneUuid as SceneId,
+      campaignId: campaignUuid as CampaignId,
+      status: "director_review",
+      specRevision: 2,
+      configuration: {
+        prompt: "A cinematic shot of a mountain sunrise",
+        referenceIds: [],
+        engineProfileId: "ltx_25",
+        durationMs: 5000,
+        loraConfigurationId: null
+      },
+      candidatesByRevision: [
+        {
+          specRevision: 2,
+          candidates: [
+            {
+              id: "cand-1" as CandidateId,
+              sceneId: sceneUuid as SceneId,
+              specRevision: 2,
+              variantOrdinal: 1,
+              storageBucket: "bucket",
+              storageObjectKey: "c1.mp4",
+              contentHash: "hash-c1",
+              generationMetadata: {},
+              createdAt: "2026-08-18T10:00:00.000Z"
+            },
+            {
+              id: "cand-2" as CandidateId,
+              sceneId: sceneUuid as SceneId,
+              specRevision: 2,
+              variantOrdinal: 2,
+              storageBucket: "bucket",
+              storageObjectKey: "c2.mp4",
+              contentHash: "hash-c2",
+              generationMetadata: {},
+              createdAt: "2026-08-18T10:00:00.000Z"
+            },
+            {
+              id: "cand-3" as CandidateId,
+              sceneId: sceneUuid as SceneId,
+              specRevision: 2,
+              variantOrdinal: 3,
+              storageBucket: "bucket",
+              storageObjectKey: "c3.mp4",
+              contentHash: "hash-c3",
+              generationMetadata: {},
+              createdAt: "2026-08-18T10:00:00.000Z"
+            }
+          ]
+        }
+      ],
+      allowedActions: ["approve", "reject", "reroll", "candidate_select"]
+    };
+
+    const mockQueries: SceneReviewQueries = {
+      async getCampaignReviewSummary() {
+        return undefined;
+      },
+      async getSceneReviewDetail() {
+        return rankingDetail;
+      }
+    };
+
+    const mockMediaDelivery: ReviewMediaDeliveryPort = {
+      async generatePresignedReadUrl(locator) {
+        return `http://storage.internal:9000/${locator.bucket}/${locator.key}`;
+      }
+    };
+
+    it("presents candidates in original unranked order when allowCloudVisualQA=false", async () => {
+      const primaryClient = new MockRankingClient("Google", {
+        kind: "success",
+        rankedOrdinals: [3, 1, 2]
+      });
+      const fallbackClient = new MockRankingClient("OpenAI", {
+        kind: "permanent_failure",
+        httpStatus: 400,
+        message: ""
+      });
+
+      const app = createControlApiApp({
+        uow: new FakeUnitOfWork({
+          allowCloudVisualQA: false,
+          allowedProviders: ["Google", "OpenAI"]
+        }),
+        sceneReviewQueries: mockQueries,
+        reviewMediaDelivery: mockMediaDelivery,
+        candidateRankerClients: {
+          primary: primaryClient,
+          fallback: fallbackClient
+        }
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/scenes/${sceneUuid}/review`
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(
+        body.candidatesByRevision[0].candidates.map(
+          (c: { variantOrdinal: number }) => c.variantOrdinal
+        )
+      ).toEqual([1, 2, 3]);
+      expect(primaryClient.calls).toHaveLength(0);
+      expect(fallbackClient.calls).toHaveLength(0);
+    });
+
+    it("ranks candidates when allowCloudVisualQA=true and providers succeed", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        const urlStr = String(input);
+        if (urlStr.startsWith("http://storage.internal:9000/")) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ "content-type": "image/png" }),
+            arrayBuffer: async () => Buffer.from("fake-image-bytes")
+          } as unknown as Response;
+        }
+        throw new Error(`Unexpected fetch URL: ${urlStr}`);
+      });
+
+      try {
+        const primaryClient = new MockRankingClient("Google", {
+          kind: "success",
+          rankedOrdinals: [3, 1, 2]
+        });
+        const fallbackClient = new MockRankingClient("OpenAI", {
+          kind: "permanent_failure",
+          httpStatus: 400,
+          message: ""
+        });
+
+        const app = createControlApiApp({
+          uow: new FakeUnitOfWork({
+            allowCloudVisualQA: true,
+            allowedProviders: ["Google", "OpenAI"],
+            sensitiveDataMasking: false
+          }),
+          sceneReviewQueries: mockQueries,
+          reviewMediaDelivery: mockMediaDelivery,
+          candidateRankerClients: {
+            primary: primaryClient,
+            fallback: fallbackClient
+          }
+        });
+
+        const response = await app.inject({
+          method: "GET",
+          url: `/api/scenes/${sceneUuid}/review`
+        });
+
+        expect(response.statusCode).toBe(200);
+        const body = response.json();
+        expect(
+          body.candidatesByRevision[0].candidates.map(
+            (c: { variantOrdinal: number }) => c.variantOrdinal
+          )
+        ).toEqual([3, 1, 2]);
+        expect(primaryClient.calls).toHaveLength(1);
+        expect(fallbackClient.calls).toHaveLength(0);
+
+        // Verify media URLs are still populated
+        expect(body.candidatesByRevision[0].candidates[0].media.available).toBe(true);
+        expect(body.candidatesByRevision[0].candidates[0].media.url).toContain(
+          "http://storage.internal:9000/"
+        );
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    });
+
+    it("skips OpenAI fallback and returns unranked when allowedProviders=['Google'] only and Gemini fails permanently (Finding 2 witness)", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ "content-type": "image/png" }),
+          arrayBuffer: async () => Buffer.from("fake-image-bytes")
+        } as unknown as Response;
+      });
+
+      try {
+        const primaryClient = new MockRankingClient("Google", {
+          kind: "permanent_failure",
+          httpStatus: 400,
+          message: "Bad Request"
+        });
+        const fallbackClient = new MockRankingClient("OpenAI", {
+          kind: "success",
+          rankedOrdinals: [2, 3, 1]
+        });
+
+        const app = createControlApiApp({
+          uow: new FakeUnitOfWork({
+            allowCloudVisualQA: true,
+            allowedProviders: ["Google"], // OpenAI is excluded
+            sensitiveDataMasking: false
+          }),
+          sceneReviewQueries: mockQueries,
+          reviewMediaDelivery: mockMediaDelivery,
+          candidateRankerClients: {
+            primary: primaryClient,
+            fallback: fallbackClient
+          }
+        });
+
+        const response = await app.inject({
+          method: "GET",
+          url: `/api/scenes/${sceneUuid}/review`
+        });
+
+        expect(response.statusCode).toBe(200);
+        const body = response.json();
+        // Returned in original unranked order
+        expect(
+          body.candidatesByRevision[0].candidates.map(
+            (c: { variantOrdinal: number }) => c.variantOrdinal
+          )
+        ).toEqual([1, 2, 3]);
+        expect(primaryClient.calls).toHaveLength(1);
+        expect(fallbackClient.calls).toHaveLength(0); // Zero calls to OpenAI!
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    });
+
+    it("returns 200 with unranked order if candidate ranker throws unexpectedly", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ "content-type": "image/png" }),
+          arrayBuffer: async () => Buffer.from("fake-image-bytes")
+        } as unknown as Response;
+      });
+
+      try {
+        const throwingPrimaryClient = new MockRankingClient("Google", () => {
+          throw new Error("Unexpected crash inside client");
+        });
+        const fallbackClient = new MockRankingClient("OpenAI", {
+          kind: "permanent_failure",
+          httpStatus: 400,
+          message: ""
+        });
+
+        const app = createControlApiApp({
+          uow: new FakeUnitOfWork({
+            allowCloudVisualQA: true,
+            allowedProviders: ["Google", "OpenAI"],
+            sensitiveDataMasking: false
+          }),
+          sceneReviewQueries: mockQueries,
+          reviewMediaDelivery: mockMediaDelivery,
+          candidateRankerClients: {
+            primary: throwingPrimaryClient,
+            fallback: fallbackClient
+          }
+        });
+
+        const response = await app.inject({
+          method: "GET",
+          url: `/api/scenes/${sceneUuid}/review`
+        });
+
+        expect(response.statusCode).toBe(200);
+        const body = response.json();
+        expect(
+          body.candidatesByRevision[0].candidates.map(
+            (c: { variantOrdinal: number }) => c.variantOrdinal
+          )
+        ).toEqual([1, 2, 3]);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    });
+
+    it("returns 200 with unranked candidates and avoids resolving images or calling providers when sensitiveDataMasking=true", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+      try {
+        const primaryClient = new MockRankingClient("Google", {
+          kind: "success",
+          rankedOrdinals: [3, 1, 2]
+        });
+        const fallbackClient = new MockRankingClient("OpenAI", {
+          kind: "permanent_failure",
+          httpStatus: 400,
+          message: ""
+        });
+
+        const app = createControlApiApp({
+          uow: new FakeUnitOfWork({
+            allowCloudVisualQA: true,
+            allowedProviders: ["Google", "OpenAI"],
+            sensitiveDataMasking: true
+          }),
+          sceneReviewQueries: mockQueries,
+          reviewMediaDelivery: mockMediaDelivery,
+          candidateRankerClients: {
+            primary: primaryClient,
+            fallback: fallbackClient
+          }
+        });
+
+        const response = await app.inject({
+          method: "GET",
+          url: `/api/scenes/${sceneUuid}/review`
+        });
+
+        expect(response.statusCode).toBe(200);
+        const body = response.json();
+        expect(
+          body.candidatesByRevision[0].candidates.map(
+            (c: { variantOrdinal: number }) => c.variantOrdinal
+          )
+        ).toEqual([1, 2, 3]);
+        // fetch was never called for candidate image downloads (ranking resolution)
+        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(primaryClient.calls).toHaveLength(0);
+        expect(fallbackClient.calls).toHaveLength(0);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    });
+
+    it("returns 200 with timely unranked fallback when image fetch never settles", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(new Error("aborted"));
+          });
+        });
+      });
+
+      try {
+        const primaryClient = new MockRankingClient("Google", {
+          kind: "success",
+          rankedOrdinals: [3, 1, 2]
+        });
+        const fallbackClient = new MockRankingClient("OpenAI", {
+          kind: "permanent_failure",
+          httpStatus: 400,
+          message: ""
+        });
+
+        const app = createControlApiApp({
+          uow: new FakeUnitOfWork({
+            allowCloudVisualQA: true,
+            allowedProviders: ["Google", "OpenAI"],
+            sensitiveDataMasking: false
+          }),
+          sceneReviewQueries: mockQueries,
+          reviewMediaDelivery: mockMediaDelivery,
+          candidateRankerClients: {
+            primary: primaryClient,
+            fallback: fallbackClient
+          },
+          rankingOverallTimeoutMs: 50
+        });
+
+        const start = Date.now();
+        const response = await app.inject({
+          method: "GET",
+          url: `/api/scenes/${sceneUuid}/review`
+        });
+        const duration = Date.now() - start;
+
+        expect(response.statusCode).toBe(200);
+        expect(duration).toBeLessThan(500);
+        const body = response.json();
+        expect(
+          body.candidatesByRevision[0].candidates.map(
+            (c: { variantOrdinal: number }) => c.variantOrdinal
+          )
+        ).toEqual([1, 2, 3]);
+        expect(primaryClient.calls).toHaveLength(0);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    });
+
+    it("returns 200 with unranked fallback when candidate image is oversized", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({
+            "content-type": "image/png",
+            "content-length": "25000000" // 25 MB exceeds 10 MiB limit
+          }),
+          arrayBuffer: async () => Buffer.alloc(25 * 1024 * 1024)
+        } as unknown as Response;
+      });
+
+      try {
+        const primaryClient = new MockRankingClient("Google", {
+          kind: "success",
+          rankedOrdinals: [3, 1, 2]
+        });
+        const fallbackClient = new MockRankingClient("OpenAI", {
+          kind: "permanent_failure",
+          httpStatus: 400,
+          message: ""
+        });
+
+        const app = createControlApiApp({
+          uow: new FakeUnitOfWork({
+            allowCloudVisualQA: true,
+            allowedProviders: ["Google", "OpenAI"],
+            sensitiveDataMasking: false
+          }),
+          sceneReviewQueries: mockQueries,
+          reviewMediaDelivery: mockMediaDelivery,
+          candidateRankerClients: {
+            primary: primaryClient,
+            fallback: fallbackClient
+          }
+        });
+
+        const response = await app.inject({
+          method: "GET",
+          url: `/api/scenes/${sceneUuid}/review`
+        });
+
+        expect(response.statusCode).toBe(200);
+        const body = response.json();
+        expect(
+          body.candidatesByRevision[0].candidates.map(
+            (c: { variantOrdinal: number }) => c.variantOrdinal
+          )
+        ).toEqual([1, 2, 3]);
+        expect(primaryClient.calls).toHaveLength(0);
+      } finally {
+        fetchSpy.mockRestore();
+      }
     });
   });
 });
