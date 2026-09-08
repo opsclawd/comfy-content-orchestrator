@@ -5,8 +5,12 @@ import { BUCKETS } from "@cco/shared";
 import {
   SynthesizeVoiceover,
   SynthesizeVoiceoverValidationError,
-  VoiceoverProvenanceConflictError
+  VoiceoverProvenanceConflictError,
+  VoiceSynthesisNotAuthorizedError,
+  decodeVoiceAuthorizationPolicy
 } from "./synthesize-voiceover.js";
+import { InMemorySceneUnitOfWork } from "../test-support/in-memory-scene-unit-of-work.js";
+import type { CampaignId, CampaignRecord, ClientRecord } from "@cco/domain";
 import type {
   ConcreteVoiceSynthesisPort,
   VoiceSynthesisInput,
@@ -484,5 +488,330 @@ describe("SynthesizeVoiceover use-case", () => {
     });
 
     expect(synthFn).toHaveBeenCalledTimes(1);
+  });
+
+  describe("External Processing Policy Gate (PRD §9.6 voice enforcement)", () => {
+    it("prohibits cloud voice provider call and throws VoiceSynthesisNotAuthorizedError when allowCloudVoice=false", async () => {
+      const { port: storagePort } = createMockObjectStorage();
+      const synthSpy = vi.fn();
+      const fakeCloudPort: ConcreteVoiceSynthesisPort = {
+        providerLocality: "cloud",
+        providerName: "ElevenLabs",
+        synthesize: synthSpy
+      };
+
+      const useCase = new SynthesizeVoiceover({
+        voiceSynthesis: fakeCloudPort,
+        objectStorage: storagePort,
+        policy: decodeVoiceAuthorizationPolicy({
+          allowCloudVoice: false,
+          allowedProviders: ["ElevenLabs"]
+        })
+      });
+
+      await expect(
+        useCase.synthesize({
+          campaignId: "camp-cloud-blocked",
+          assetId: "vo-cloud-blocked",
+          text: "Cloud narration text",
+          voiceId: "cloud-voice-1"
+        })
+      ).rejects.toThrow(VoiceSynthesisNotAuthorizedError);
+
+      expect(synthSpy).not.toHaveBeenCalled();
+    });
+
+    it("prohibits cloud voice provider call when providerName is not in allowedProviders", async () => {
+      const { port: storagePort } = createMockObjectStorage();
+      const synthSpy = vi.fn();
+      const fakeCloudPort: ConcreteVoiceSynthesisPort = {
+        providerLocality: "cloud",
+        providerName: "ElevenLabs",
+        synthesize: synthSpy
+      };
+
+      const useCase = new SynthesizeVoiceover({
+        voiceSynthesis: fakeCloudPort,
+        objectStorage: storagePort,
+        policy: decodeVoiceAuthorizationPolicy({
+          allowCloudVoice: true,
+          allowedProviders: ["AzureTTS"]
+        })
+      });
+
+      await expect(
+        useCase.synthesize({
+          campaignId: "camp-cloud-provider-blocked",
+          assetId: "vo-cloud-provider-blocked",
+          text: "Cloud narration text",
+          voiceId: "cloud-voice-1"
+        })
+      ).rejects.toThrow(VoiceSynthesisNotAuthorizedError);
+
+      expect(synthSpy).not.toHaveBeenCalled();
+    });
+
+    it("allows cloud voice provider call when allowCloudVoice=true with authorized provider", async () => {
+      const { port: storagePort, putCalls } = createMockObjectStorage();
+      const fakeWav = new Uint8Array([1, 2, 3, 4, 5]);
+      const expectedSha256 = createHash("sha256").update(fakeWav).digest("hex");
+      const synthSpy = vi.fn(async () => ({
+        audio: fakeWav,
+        contentType: "audio/wav",
+        sampleRateHz: 24000,
+        durationMs: 850
+      }));
+      const fakeCloudPort: ConcreteVoiceSynthesisPort = {
+        providerLocality: "cloud",
+        providerName: "ElevenLabs",
+        synthesize: synthSpy
+      };
+
+      const useCase = new SynthesizeVoiceover({
+        voiceSynthesis: fakeCloudPort,
+        objectStorage: storagePort,
+        policy: decodeVoiceAuthorizationPolicy({
+          allowCloudVoice: true,
+          allowedProviders: ["ElevenLabs"]
+        })
+      });
+
+      const result = await useCase.synthesize({
+        campaignId: "camp-cloud-allowed",
+        assetId: "vo-cloud-allowed",
+        text: "Cloud narration text",
+        voiceId: "cloud-voice-1"
+      });
+
+      expect(synthSpy).toHaveBeenCalledTimes(1);
+      expect(result.source).toEqual({
+        kind: "provider",
+        providerId: "ElevenLabs"
+      });
+      expect(result.expectedDurationMs).toBe(850);
+      expect(putCalls).toHaveLength(1);
+      expect(putCalls[0]!.key).toBe(
+        `campaigns/camp-cloud-allowed/voiceovers/vo-cloud-allowed-${expectedSha256}.wav`
+      );
+    });
+
+    it("enforces PRD §3.3 degraded mode: accepts manual/local audio upload when allowCloudVoice=false without provider call", async () => {
+      const { port: storagePort, putCalls } = createMockObjectStorage();
+      const synthSpy = vi.fn();
+      const fakeCloudPort: ConcreteVoiceSynthesisPort = {
+        providerLocality: "cloud",
+        providerName: "ElevenLabs",
+        synthesize: synthSpy
+      };
+
+      const useCase = new SynthesizeVoiceover({
+        voiceSynthesis: fakeCloudPort,
+        objectStorage: storagePort,
+        policy: decodeVoiceAuthorizationPolicy({
+          allowCloudVoice: false,
+          allowedProviders: ["ElevenLabs"]
+        })
+      });
+
+      const manualAudio = new Uint8Array([10, 20, 30, 40]);
+      const expectedSha256 = createHash("sha256").update(manualAudio).digest("hex");
+
+      const result = await useCase.synthesize({
+        campaignId: "camp-manual-vo",
+        assetId: "vo-manual-01",
+        text: "Human uploaded voiceover script",
+        voiceId: "human-voice",
+        manualAudioUpload: {
+          audio: manualAudio,
+          durationMs: 2500,
+          contentType: "audio/wav"
+        }
+      });
+
+      // Synthesis provider call is strictly prevented
+      expect(synthSpy).not.toHaveBeenCalled();
+
+      // Audio is stored and ref is returned with kind "uploaded"
+      expect(result.source).toEqual({ kind: "uploaded" });
+      expect(result.expectedDurationMs).toBe(2500);
+      expect(result.media.sha256).toBe(expectedSha256);
+      expect(putCalls).toHaveLength(1);
+      expect(putCalls[0]!.key).toBe(
+        `campaigns/camp-manual-vo/voiceovers/vo-manual-01-${expectedSha256}.wav`
+      );
+
+      // Verify schema validity
+      const parsed = VoiceoverAssetRefSchema.parse(result);
+      expect(parsed).toEqual(result);
+    });
+
+    it("resolves client policy via UnitOfWork to gate cloud provider calls", async () => {
+      const { port: storagePort } = createMockObjectStorage();
+      const synthSpy = vi.fn();
+      const fakeCloudPort: ConcreteVoiceSynthesisPort = {
+        providerLocality: "cloud",
+        providerName: "ElevenLabs",
+        synthesize: synthSpy
+      };
+
+      const clientId = "client-vo-gated";
+      const campaignId = "camp-vo-gated";
+
+      const fakeCampaign: CampaignRecord = {
+        id: campaignId as CampaignId,
+        clientId,
+        title: "Voice Gated Campaign",
+        targetPlatform: "tiktok",
+        status: "drafting",
+        totalScenes: 1,
+        approvedScenes: 0,
+        createdAt: "2026-09-07T00:00:00.000Z",
+        updatedAt: "2026-09-07T00:00:00.000Z"
+      };
+
+      const fakeClient: ClientRecord = {
+        id: clientId,
+        companyName: "Acme Gated",
+        brandBibleJson: {},
+        defaultAspectRatio: "9:16",
+        externalProcessingPolicy: {
+          allowCloudVoice: false,
+          allowedProviders: ["ElevenLabs"]
+        },
+        createdAt: "2026-09-07T00:00:00.000Z",
+        updatedAt: "2026-09-07T00:00:00.000Z"
+      };
+
+      const uow = new InMemorySceneUnitOfWork([], [], [], [fakeCampaign], [fakeClient]);
+
+      const useCase = new SynthesizeVoiceover({
+        voiceSynthesis: fakeCloudPort,
+        objectStorage: storagePort,
+        uow
+      });
+
+      await expect(
+        useCase.synthesize({
+          campaignId,
+          assetId: "vo-uow-gated",
+          text: "Text requiring voiceover",
+          voiceId: "cloud-voice-1"
+        })
+      ).rejects.toThrow(VoiceSynthesisNotAuthorizedError);
+
+      expect(synthSpy).not.toHaveBeenCalled();
+    });
+
+    it("prohibits cloud voice provider calls when stored policy has allowCloudVoice=false even with attempted enabling override in parameters", async () => {
+      const { port: storagePort } = createMockObjectStorage();
+      const synthSpy = vi.fn();
+      const fakeCloudPort: ConcreteVoiceSynthesisPort = {
+        providerLocality: "cloud",
+        providerName: "ElevenLabs",
+        synthesize: synthSpy
+      };
+
+      const clientId = "client-vo-gated";
+      const campaignId = "camp-vo-gated";
+
+      const fakeCampaign: CampaignRecord = {
+        id: campaignId as CampaignId,
+        clientId,
+        title: "Voice Gated Campaign",
+        targetPlatform: "tiktok",
+        status: "drafting",
+        totalScenes: 1,
+        approvedScenes: 0,
+        createdAt: "2026-09-07T00:00:00.000Z",
+        updatedAt: "2026-09-07T00:00:00.000Z"
+      };
+
+      const fakeClient: ClientRecord = {
+        id: clientId,
+        companyName: "Acme Gated",
+        brandBibleJson: {},
+        defaultAspectRatio: "9:16",
+        externalProcessingPolicy: {
+          allowCloudVoice: false,
+          allowedProviders: ["ElevenLabs"]
+        },
+        createdAt: "2026-09-07T00:00:00.000Z",
+        updatedAt: "2026-09-07T00:00:00.000Z"
+      };
+
+      const uow = new InMemorySceneUnitOfWork([], [], [], [fakeCampaign], [fakeClient]);
+
+      const useCase = new SynthesizeVoiceover({
+        voiceSynthesis: fakeCloudPort,
+        objectStorage: storagePort,
+        uow
+      });
+
+      // Attempted enabling override with clientPolicy
+      await expect(
+        useCase.synthesize({
+          campaignId,
+          assetId: "vo-override-attempt-1",
+          text: "Text requiring voiceover",
+          voiceId: "cloud-voice-1",
+          clientPolicy: {
+            allowCloudVoice: true,
+            allowedProviders: new Set(["ElevenLabs"]),
+            sensitiveDataMasking: false
+          }
+        })
+      ).rejects.toThrow(VoiceSynthesisNotAuthorizedError);
+
+      // Attempted enabling override with externalProcessingPolicy
+      await expect(
+        useCase.synthesize({
+          campaignId,
+          assetId: "vo-override-attempt-2",
+          text: "Text requiring voiceover",
+          voiceId: "cloud-voice-1",
+          externalProcessingPolicy: {
+            allowCloudVoice: true,
+            allowedProviders: ["ElevenLabs"]
+          }
+        })
+      ).rejects.toThrow(VoiceSynthesisNotAuthorizedError);
+
+      expect(synthSpy).not.toHaveBeenCalled();
+    });
+
+    it("permits self-hosted synthesis even when allowCloudVoice=false", async () => {
+      const { port: storagePort } = createMockObjectStorage();
+      const fakeWav = new Uint8Array([7, 8, 9]);
+      const synthSpy = vi.fn(async () => ({
+        audio: fakeWav,
+        contentType: "audio/wav",
+        sampleRateHz: 24000,
+        durationMs: 400
+      }));
+
+      const fakeSelfHostedPort: ConcreteVoiceSynthesisPort = {
+        providerLocality: "self-hosted",
+        providerName: "kokoro",
+        synthesize: synthSpy
+      };
+
+      const useCase = new SynthesizeVoiceover({
+        voiceSynthesis: fakeSelfHostedPort,
+        objectStorage: storagePort,
+        policy: decodeVoiceAuthorizationPolicy({
+          allowCloudVoice: false
+        })
+      });
+
+      const result = await useCase.synthesize({
+        campaignId: "camp-self-hosted",
+        assetId: "vo-self-hosted-01",
+        text: "Self-hosted text",
+        voiceId: "af_heart"
+      });
+
+      expect(synthSpy).toHaveBeenCalledTimes(1);
+      expect(result.source).toEqual({ kind: "local" });
+    });
   });
 });

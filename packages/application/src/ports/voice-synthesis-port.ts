@@ -16,7 +16,11 @@ export interface VoiceSynthesisOutput {
   readonly durationMs: number;
 }
 
+export type VoiceSynthesisProviderLocality = "cloud" | "self-hosted";
+
 export interface VoiceSynthesisPort<TInput, TOutput> {
+  readonly providerLocality?: VoiceSynthesisProviderLocality | undefined;
+  readonly providerName?: string | undefined;
   synthesize(input: TInput): Promise<TOutput>;
 }
 

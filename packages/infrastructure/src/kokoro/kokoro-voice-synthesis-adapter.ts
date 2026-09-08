@@ -1,7 +1,8 @@
 import type {
   ConcreteVoiceSynthesisPort,
   VoiceSynthesisInput,
-  VoiceSynthesisOutput
+  VoiceSynthesisOutput,
+  VoiceSynthesisProviderLocality
 } from "@cco/application";
 import { type KokoroEngine, createKokoroJsEngine } from "./kokoro-engine.js";
 import { encodeWav } from "./wav-encoder.js";
@@ -15,6 +16,8 @@ import { KokoroSynthesisError } from "./kokoro-error.js";
  * to strictly satisfy VoiceoverAssetRefSchema.expectedDurationMs.
  */
 export class KokoroVoiceSynthesisAdapter implements ConcreteVoiceSynthesisPort {
+  readonly providerLocality: VoiceSynthesisProviderLocality = "self-hosted";
+  readonly providerName = "kokoro";
   private readonly engine: KokoroEngine;
 
   constructor(engine?: KokoroEngine) {
