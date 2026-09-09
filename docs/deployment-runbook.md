@@ -141,7 +141,11 @@ catch (e) { console.log("CONFIG ERROR:", e.message); }
 
 ## Certification provenance format (a real, unresolved gap)
 
-`GOLD_MASTER_PROVENANCE_PATH` (and `certify.ts`'s `--gold-master-provenance` flag) expects a specific flat JSON shape:
+`GOLD_MASTER_PROVENANCE_PATH` (and `certify.ts`'s `--gold-master-provenance` flag) accepts either a single approved profile record or a multi-profile collection.
+
+### Single-profile format
+
+A flat JSON object for a single profile:
 
 ```json
 {
@@ -163,7 +167,33 @@ catch (e) { console.log("CONFIG ERROR:", e.message); }
 }
 ```
 
-As of 2026-09-04, **no file in this shape existed anywhere in the repo**, for any profile — this is a genuine gap, not something that was ever wired up and later lost. A real certification run's own `result.json` (e.g. `certification/flux-schnell/flux-schnell-cert-run-001/result.json`) has all the same underlying data, but nested completely differently (`identity.profileId`, `identity.workflowSha256`, `identity.modelSha256`, no `workflow`/`renderProfileProvenance` keys at all) — it is NOT directly usable as `GOLD_MASTER_PROVENANCE_PATH`. See `certification/flux-schnell/approved-provenance.json` for a real example, hand-reshaped from `flux-schnell-cert-run-001`'s genuinely-passed result. Track the actual fix (`certify.ts` should write this file automatically on a passing run) via #176.
+### Multi-profile collection format
+
+To allow a single worker daemon to serve multiple profiles simultaneously (e.g. `flux-schnell-draft` for candidate generation and `ltx-25-720p-97f` for production rendering without restarts or manual config swapping), `GOLD_MASTER_PROVENANCE_PATH` can point to a collection containing an array of per-profile records:
+
+```json
+{
+  "version": 1,
+  "profiles": [
+    {
+      "version": 1,
+      "profileId": "flux-schnell-draft",
+      "workflow": { ... },
+      "renderProfileProvenance": { ... }
+    },
+    {
+      "version": 1,
+      "profileId": "ltx-25-720p-97f",
+      "workflow": { ... },
+      "renderProfileProvenance": { ... }
+    }
+  ]
+}
+```
+
+Each element inside `profiles` is identical to a single-profile record body. Combining the bodies of `certification/flux-schnell/approved-provenance.json` and `certification/ltx-25/approved-provenance.json` into one `profiles` array pointed to by `GOLD_MASTER_PROVENANCE_PATH` enables simultaneous candidate generation and production rendering on the same worker host. Note that assembling and deploying that real merged file on `llama-server` is an operator action (per `AGENTS.md`'s `certification/` restriction), not something automated by the codebase.
+
+As of 2026-09-04, single-record approved provenance files like `certification/flux-schnell/approved-provenance.json` and `certification/ltx-25/approved-provenance.json` were hand-reshaped from passed certification run results (`result.json`), since `result.json` has all the same underlying data but nested differently (`identity.profileId`, `identity.workflowSha256`, `identity.modelSha256`, no `workflow`/`renderProfileProvenance` keys at all). Track the actual fix (`certify.ts` should write this file automatically on a passing run) via #176.
 
 ## Where to find real values
 

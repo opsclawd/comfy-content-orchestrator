@@ -154,6 +154,123 @@ function createValidLiveReport(): CertificationProvenanceReport {
   return createValidApprovedReport();
 }
 
+function createValidFluxProfile(): CertificationProfile {
+  return {
+    id: "flux-schnell-draft",
+    engine: "flux_schnell",
+    workflowPath: "/home/gary/workflows/flux_schnell_draft_api.json",
+    workflowRelativePath: "flux_schnell_draft_api.json",
+    expectedWorkflowHash: "f".repeat(64),
+    source: {
+      kind: "validated_host_export",
+      uri: "https://github.com/comfyanonymous/ComfyUI",
+      revision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+      license: "GPL-3.0"
+    },
+    baseline: {
+      width: 1024,
+      height: 1024,
+      frames: 1,
+      steps: 4,
+      approximateDurationSeconds: 2
+    },
+    minFreeDiskGb: 50,
+    runnerProfile: "dynamicvram-offload-v1",
+    models: [
+      {
+        category: "diffusion_models",
+        relativePath: "flux1-schnell.safetensors"
+      },
+      {
+        category: "clip",
+        relativePath: "t5xxl_fp8_e4m3fn.safetensors"
+      }
+    ],
+    assertions: [
+      {
+        nodeId: "1",
+        classType: "KSampler",
+        input: "steps",
+        equals: 4
+      },
+      {
+        nodeId: "5",
+        classType: "EmptyLatentImage",
+        input: "width",
+        equals: 1024
+      },
+      {
+        nodeId: "5",
+        classType: "EmptyLatentImage",
+        input: "height",
+        equals: 1024
+      }
+    ],
+    renderProfileIdentity: {
+      key: "FLUX_SCHNELL_DRAFT_V1",
+      version: 1
+    }
+  };
+}
+
+function createValidFluxApprovedReport(): CertificationProvenanceReport {
+  return {
+    version: 1,
+    profileId: "flux-schnell-draft",
+    generatedAt: "2026-08-16T12:00:00.000Z",
+    workflow: {
+      relativePath: "flux_schnell_draft_api.json",
+      sha256: "f".repeat(64),
+      source: {
+        kind: "validated_host_export",
+        uri: "https://github.com/comfyanonymous/ComfyUI",
+        revision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        license: "GPL-3.0"
+      }
+    },
+    models: [
+      {
+        category: "diffusion_models",
+        relativePath: "flux1-schnell.safetensors",
+        key: "diffusion_models/flux1-schnell.safetensors",
+        bytes: 12000000000,
+        sha256: "4".repeat(64)
+      }
+    ],
+    git: {
+      comfyUiCommit: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+      customNodes: []
+    },
+    disk: {
+      modelFootprintBytes: 50000000000,
+      availableBytes: 200000000000,
+      requiredFreeBytes: 50000000000,
+      modelFootprintGb: 50,
+      availableGb: 200,
+      minFreeDiskGb: 50,
+      passes: true
+    },
+    renderProfileProvenance: {
+      key: "FLUX_SCHNELL_DRAFT_V1",
+      version: 1,
+      engine: "flux_schnell",
+      workflowHash: "f".repeat(64),
+      modelHashes: {
+        "diffusion_models/flux1-schnell.safetensors": "4".repeat(64)
+      },
+      frames: 1,
+      steps: 4,
+      runnerProfile: "dynamicvram-offload-v1",
+      measuredDiskFootprintGb: 50,
+      minFreeDiskGb: 50
+    }
+  };
+}
+
+function createValidFluxLiveReport(): CertificationProvenanceReport {
+  return createValidFluxApprovedReport();
+}
+
 function createValidEnvironment(): CertificationEnvironment {
   return {
     nodeVersion: "v24.0.0",
@@ -562,6 +679,177 @@ describe("apps/render-worker/src/certification/preflight", () => {
           `Failed approved source case: ${name}`
         ).toThrow(expectedError);
       }
+    });
+  });
+
+  describe("multi-profile-approved-provenance", () => {
+    it("accepts a collection containing multiple approved profiles for both LTX and Flux workloads", () => {
+      const ltxProfile = createValidProfile();
+      const ltxApproved = createValidApprovedReport();
+      const ltxLive = createValidLiveReport();
+
+      const fluxProfile = createValidFluxProfile();
+      const fluxApproved = createValidFluxApprovedReport();
+      const fluxLive = createValidFluxLiveReport();
+
+      const collection = {
+        version: 1,
+        profiles: [fluxApproved, ltxApproved]
+      };
+
+      // 1. Happy path: LTX job against multi-profile collection
+      expect(() =>
+        verifyGoldMasterProvenance({
+          approved: collection,
+          live: ltxLive,
+          profile: ltxProfile
+        })
+      ).not.toThrow();
+
+      // 2. Happy path: Flux job against the exact same multi-profile collection object
+      expect(() =>
+        verifyGoldMasterProvenance({
+          approved: collection,
+          live: fluxLive,
+          profile: fluxProfile
+        })
+      ).not.toThrow();
+    });
+
+    it("rejects collection when the required profileId has no matching entry", () => {
+      const ltxApproved = createValidApprovedReport();
+      const fluxProfile = createValidFluxProfile();
+      const fluxLive = createValidFluxLiveReport();
+
+      // Collection containing only LTX record, but Flux requested
+      const collectionOnlyLtx = {
+        version: 1,
+        profiles: [ltxApproved]
+      };
+
+      expect(() =>
+        verifyGoldMasterProvenance({
+          approved: collectionOnlyLtx,
+          live: fluxLive,
+          profile: fluxProfile
+        })
+      ).toThrowError(/no entry for profileId "flux-schnell-draft" \(available: ltx-25-720p-97f\)/i);
+
+      // Empty collection -> available: none
+      const emptyCollection = {
+        version: 1,
+        profiles: []
+      };
+
+      expect(() =>
+        verifyGoldMasterProvenance({
+          approved: emptyCollection,
+          live: fluxLive,
+          profile: fluxProfile
+        })
+      ).toThrowError(/no entry for profileId "flux-schnell-draft" \(available: none\)/i);
+    });
+
+    it("rejects collection when ambiguous entries match the required profileId", () => {
+      const ltxProfile = createValidProfile();
+      const ltxApproved = createValidApprovedReport();
+      const ltxLive = createValidLiveReport();
+
+      const ambiguousCollection = {
+        version: 1,
+        profiles: [ltxApproved, { ...ltxApproved }]
+      };
+
+      expect(() =>
+        verifyGoldMasterProvenance({
+          approved: ambiguousCollection,
+          live: ltxLive,
+          profile: ltxProfile
+        })
+      ).toThrowError(
+        /Approved provenance collection has 2 ambiguous entries for profileId "ltx-25-720p-97f"; expected exactly one/i
+      );
+    });
+
+    it("rejects malformed profiles property when it is present but not an array", () => {
+      const ltxProfile = createValidProfile();
+      const ltxApproved = createValidApprovedReport();
+      const ltxLive = createValidLiveReport();
+
+      const malformedCollection = {
+        version: 1,
+        profiles: { "ltx-25-720p-97f": ltxApproved }
+      };
+
+      expect(() =>
+        verifyGoldMasterProvenance({
+          approved: malformedCollection,
+          live: ltxLive,
+          profile: ltxProfile
+        })
+      ).toThrowError(/Approved provenance "profiles" must be an array of per-profile records/i);
+    });
+
+    it("rejects unsupported container version in collection format", () => {
+      const ltxProfile = createValidProfile();
+      const ltxApproved = createValidApprovedReport();
+      const ltxLive = createValidLiveReport();
+
+      const unsupportedVersionCollection = {
+        version: 2,
+        profiles: [ltxApproved]
+      };
+
+      expect(() =>
+        verifyGoldMasterProvenance({
+          approved: unsupportedVersionCollection,
+          live: ltxLive,
+          profile: ltxProfile
+        })
+      ).toThrowError(/Approved provenance has unsupported version: 2/i);
+    });
+
+    it("rejects collection with missing container version", () => {
+      const ltxProfile = createValidProfile();
+      const ltxApproved = createValidApprovedReport();
+      const ltxLive = createValidLiveReport();
+
+      const missingVersionCollection = {
+        profiles: [ltxApproved]
+      };
+
+      expect(() =>
+        verifyGoldMasterProvenance({
+          approved: missingVersionCollection,
+          live: ltxLive,
+          profile: ltxProfile
+        })
+      ).toThrowError(/Approved provenance has unsupported version: undefined/i);
+    });
+
+    it("maintains backward compatibility with legacy single-record format", () => {
+      const ltxProfile = createValidProfile();
+      const ltxApproved = createValidApprovedReport();
+      const ltxLive = createValidLiveReport();
+
+      expect(() =>
+        verifyGoldMasterProvenance({
+          approved: ltxApproved,
+          live: ltxLive,
+          profile: ltxProfile
+        })
+      ).not.toThrow();
+
+      expect(() =>
+        verifyGoldMasterProvenance({
+          approved: {
+            ...ltxApproved,
+            profileId: "flux-schnell-draft"
+          },
+          live: ltxLive,
+          profile: ltxProfile
+        })
+      ).toThrowError(/profileId/i);
     });
   });
 

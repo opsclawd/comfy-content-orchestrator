@@ -878,6 +878,119 @@ describe("Certified Render Job Executor", () => {
     await expect(executorEmptyAssembler(job)).rejects.toThrow(ProductionManifestAssemblyError);
   });
 
+  it("supports candidate (flux) followed by production (ltx) rendering on the same executor instance with multi-profile collection provenance", async () => {
+    const candidateJob = createSampleCandidateJob();
+    const productionJob = createSampleProductionJob();
+
+    const executeCalls: ExecuteProfileRenderInput[] = [];
+    const mockExecuteProfileRender = vi
+      .fn()
+      .mockImplementation(
+        async (input: ExecuteProfileRenderInput): Promise<ExecuteProfileRenderResult> => {
+          executeCalls.push(input);
+          const isFlux = input.identity.engine === "flux_schnell";
+          return {
+            status: "succeeded",
+            promptId: isFlux ? "prompt-cand-123" : "prompt-prod-456",
+            outputObjectKeys: isFlux ? ["flux_schnell_00001_.png"] : ["output_main.mp4"],
+            durationMs: isFlux ? 3200 : 8500,
+            profile: input.identity,
+            preDispatchGpu: {
+              totalVramMb: 24576,
+              usedVramMb: 4096,
+              freeVramMb: 20480,
+              reservedVramMb: 4096,
+              measuredAt: new Date().toISOString()
+            }
+          };
+        }
+      );
+
+    const outputReader = new FakeOutputReader(
+      new Map([
+        [
+          "flux_schnell_00001_.png",
+          { bytes: new Uint8Array([1, 2, 3, 4]), contentType: "image/png" }
+        ],
+        ["output_main.mp4", { bytes: new Uint8Array([5, 6, 7, 8]), contentType: "video/mp4" }]
+      ])
+    );
+
+    const expectedManifest = Object.freeze({
+      manifestVersion: 1,
+      jobId: productionJob.jobId,
+      sceneId: productionJob.sceneId,
+      engine: "ltx_25",
+      renderProfileKey: "LTX_25_720P_5S_V1",
+      durationMs: 8500
+    });
+
+    const mockAssembler: ProductionManifestAssembler = {
+      assembleManifest: vi.fn().mockResolvedValue(expectedManifest)
+    };
+
+    const sharedCollectionProvenance = Object.freeze({
+      version: 1,
+      profiles: Object.freeze([fakeFluxLiveProvenance, fakeLtxLiveProvenance])
+    });
+
+    const readApprovedSpy = vi.fn().mockResolvedValue(sharedCollectionProvenance);
+    const fakeRawLtxWorkflow = JSON.stringify({
+      ...JSON.parse(fakeRawFluxWorkflow),
+      _engine: "ltx_25"
+    });
+
+    // Note: verifyGoldMasterProvenance is intentionally NOT mocked out;
+    // this exercises the real preflight collection resolution end-to-end.
+    const executor = createCertifiedRenderJobExecutor({
+      loadCertificationProfile: async (_manifestPath, profileId) => {
+        if (profileId === "flux-schnell-draft") return fakeFluxProfile;
+        if (profileId === "ltx-25-720p-97f") return fakeLtxProfile;
+        throw new Error(`Unexpected profileId: ${profileId}`);
+      },
+      readApprovedProvenance: readApprovedSpy,
+      collectCertificationProvenance: async ({ profile }) => {
+        if (profile.id === "flux-schnell-draft") return fakeFluxLiveProvenance;
+        if (profile.id === "ltx-25-720p-97f") return fakeLtxLiveProvenance;
+        throw new Error(`Unexpected profile.id: ${profile.id}`);
+      },
+      readWorkflowFile: async (filePath) => {
+        if (filePath === fakeFluxProfile.workflowPath) return fakeRawFluxWorkflow;
+        if (filePath === fakeLtxProfile.workflowPath) return fakeRawLtxWorkflow;
+        return fakeRawFluxWorkflow;
+      },
+      hashWorkflow: (raw) => {
+        if (raw === fakeRawFluxWorkflow) return sampleWorkflowHash;
+        if (raw === fakeRawLtxWorkflow) return sampleLtxWorkflowHash;
+        return sampleWorkflowHash;
+      },
+      executeProfileRender: mockExecuteProfileRender,
+      outputReader,
+      productionManifestAssembler: mockAssembler
+    });
+
+    // 1. Candidate job (flux-schnell-draft) succeeds against collection provenance
+    const candidateResult = await executor(candidateJob);
+    expect(candidateResult.candidatePayload).toBeDefined();
+    expect(candidateResult.candidatePayload?.variantOrdinal).toBe(1);
+    expect(candidateResult.mediaObjects).toHaveLength(1);
+    expect(candidateResult.mediaObjects![0]!.bucket).toBe("godzspeed-review");
+
+    // 2. Production job (ltx-25-720p-97f) succeeds against the SAME executor instance and SAME collection provenance
+    const productionResult = await executor(productionJob);
+    expect(mockAssembler.assembleManifest).toHaveBeenCalledTimes(1);
+    expect(productionResult.manifestPayload).toEqual(expectedManifest);
+    expect(productionResult.mediaObjects).toHaveLength(1);
+    expect(productionResult.mediaObjects![0]!.bucket).toBe("godzspeed-delivery");
+
+    // Invariant checks
+    expect(readApprovedSpy).toHaveBeenCalledTimes(2);
+    expect(mockExecuteProfileRender).toHaveBeenCalledTimes(2);
+    expect(executeCalls).toHaveLength(2);
+    expect(executeCalls[0]!.identity.profileId).toBe("flux-schnell-draft");
+    expect(executeCalls[1]!.identity.profileId).toBe("ltx-25-720p-97f");
+  });
+
   it("handles production job with multiple outputs and function-based manifest assembler", async () => {
     const bytes1 = new Uint8Array([1, 2]);
     const bytes2 = new Uint8Array([3, 4]);

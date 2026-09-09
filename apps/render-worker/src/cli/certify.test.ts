@@ -11,7 +11,7 @@ import {
   type CertifyCliDependencies,
   type TelemetrySamplerControl
 } from "./certify.js";
-import { PreflightError } from "../certification/preflight.js";
+import { PreflightError, verifyGoldMasterProvenance } from "../certification/preflight.js";
 
 describe("certify CLI", () => {
   const mockLtxProfile: CertificationProfile = Object.freeze({
@@ -712,6 +712,62 @@ describe("certify CLI", () => {
       expect(memExit).toBe(1);
       expect(memIo.stderrLines.join(" ")).toContain("--lowvram");
       expect(memoryRefusalDeps.writeCertificationArtifacts).not.toHaveBeenCalled();
+    });
+
+    it("accepts a multi-profile collection provenance and verifies the targeted profile (multi-profile-provenance)", async () => {
+      const collectionApprovedProvenance = Object.freeze({
+        version: 1,
+        profiles: Object.freeze([
+          Object.freeze({
+            version: 1,
+            profileId: "flux-schnell-draft",
+            workflow: Object.freeze({
+              relativePath: "flux_schnell_draft_api.json",
+              sha256: "a".repeat(64),
+              source: Object.freeze({
+                kind: "validated_host_export" as const,
+                uri: "https://example.com/comfyui/flux",
+                revision: "a".repeat(40),
+                license: "GPL-3.0"
+              })
+            }),
+            renderProfileProvenance: Object.freeze({
+              key: "FLUX_SCHNELL_DRAFT_V1",
+              version: 1,
+              engine: "flux_schnell",
+              workflowHash: "a".repeat(64),
+              modelHashes: Object.freeze({
+                "models/flux.safetensors": "b".repeat(64)
+              }),
+              frames: 1,
+              steps: 4,
+              runnerProfile: "dynamicvram-offload-v1",
+              measuredDiskFootprintGb: 10,
+              minFreeDiskGb: 0
+            })
+          }),
+          mockApprovedProvenance
+        ])
+      });
+
+      const verifyProvenanceSpy = vi.fn(verifyGoldMasterProvenance);
+      const collectionDeps = createStandardDependencies({
+        readApprovedProvenance: vi.fn().mockResolvedValue(collectionApprovedProvenance),
+        verifyGoldMasterProvenance: verifyProvenanceSpy,
+        runCertification: vi.fn().mockResolvedValue(mockPassedArtifact)
+      });
+
+      const io = createMockIo();
+      const exitCode = await runCertificationCli(standardArgs, io, collectionDeps);
+
+      expect(exitCode).toBe(0);
+      expect(verifyProvenanceSpy).toHaveBeenCalledTimes(1);
+      expect(verifyProvenanceSpy).toHaveBeenCalledWith({
+        approved: collectionApprovedProvenance,
+        live: mockLiveProvenance,
+        profile: mockLtxProfile
+      });
+      expect(collectionDeps.writeCertificationArtifacts).toHaveBeenCalledTimes(1);
     });
 
     it("publishes measured success and failure outcomes with truthful exit codes (render-outcome-is-published)", async () => {

@@ -204,33 +204,33 @@ function verifyProfileWorkload(profile: CertificationProfile): void {
 }
 
 /**
- * Validates the approved Gold Master provenance report.
+ * Validates a single approved Gold Master provenance report entry.
  */
-function validateApprovedReport(
-  approved: unknown,
+function validateApprovedReportEntry(
+  entry: unknown,
   profile: CertificationProfile
 ): CertificationProvenanceReport {
-  if (!isRecord(approved)) {
+  if (!isRecord(entry)) {
     throw new PreflightError("Approved Gold Master provenance must be a valid JSON object");
   }
 
-  if (approved.version !== 1) {
+  if (entry.version !== 1) {
     throw new PreflightError(
-      `Approved provenance has unsupported version: ${String(approved.version)}`
+      `Approved provenance has unsupported version: ${String(entry.version)}`
     );
   }
 
-  if (approved.profileId !== profile.id) {
+  if (entry.profileId !== profile.id) {
     throw new PreflightError(
-      `Approved provenance profileId "${String(approved.profileId)}" does not match required "${profile.id}"`
+      `Approved provenance profileId "${String(entry.profileId)}" does not match required "${profile.id}"`
     );
   }
 
-  if (!isRecord(approved.workflow)) {
+  if (!isRecord(entry.workflow)) {
     throw new PreflightError("Approved provenance is missing workflow metadata object");
   }
 
-  const { workflow } = approved;
+  const { workflow } = entry;
   if (typeof workflow.sha256 !== "string" || workflow.sha256.trim().length === 0) {
     throw new PreflightError("Approved provenance workflow must contain a valid sha256 hash");
   }
@@ -261,11 +261,11 @@ function validateApprovedReport(
     throw new PreflightError("Approved provenance source.license must be non-empty");
   }
 
-  if (!isRecord(approved.renderProfileProvenance)) {
+  if (!isRecord(entry.renderProfileProvenance)) {
     throw new PreflightError("Approved provenance is missing renderProfileProvenance");
   }
 
-  const rpp = approved.renderProfileProvenance;
+  const rpp = entry.renderProfileProvenance;
   if (
     (rpp.key !== "LTX_25_720P_5S_V1" && rpp.key !== "FLUX_SCHNELL_DRAFT_V1") ||
     rpp.version !== 1
@@ -281,7 +281,68 @@ function validateApprovedReport(
     );
   }
 
-  return approved as unknown as CertificationProvenanceReport;
+  return entry as unknown as CertificationProvenanceReport;
+}
+
+/**
+ * Validates the approved Gold Master provenance report.
+ * Supports both legacy single-record format and multi-profile collection format ({ version, profiles: [...] }).
+ */
+function validateApprovedReport(
+  approved: unknown,
+  profile: CertificationProfile
+): CertificationProvenanceReport {
+  if (!isRecord(approved)) {
+    throw new PreflightError("Approved Gold Master provenance must be a valid JSON object");
+  }
+
+  if ("profiles" in approved) {
+    if (!Array.isArray(approved.profiles)) {
+      throw new PreflightError(
+        'Approved provenance "profiles" must be an array of per-profile records'
+      );
+    }
+
+    if (approved.version !== 1) {
+      throw new PreflightError(
+        `Approved provenance has unsupported version: ${String(approved.version)}`
+      );
+    }
+
+    const matches = approved.profiles.filter(
+      (entry): entry is Record<string, unknown> => isRecord(entry) && entry.profileId === profile.id
+    );
+
+    if (matches.length === 0) {
+      const availableIds: string[] = [];
+      for (const entry of approved.profiles) {
+        if (
+          isRecord(entry) &&
+          typeof entry.profileId === "string" &&
+          entry.profileId.trim().length > 0 &&
+          !availableIds.includes(entry.profileId)
+        ) {
+          availableIds.push(entry.profileId);
+        }
+      }
+
+      throw new PreflightError(
+        `Approved provenance collection has no entry for profileId "${profile.id}" (available: ${
+          availableIds.join(", ") || "none"
+        })`
+      );
+    }
+
+    if (matches.length > 1) {
+      throw new PreflightError(
+        `Approved provenance collection has ${matches.length} ambiguous entries for profileId "${profile.id}"; expected exactly one`
+      );
+    }
+
+    return validateApprovedReportEntry(matches[0], profile);
+  }
+
+  return validateApprovedReportEntry(approved, profile);
 }
 
 /**
