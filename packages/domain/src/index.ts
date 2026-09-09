@@ -8,3 +8,4 @@ export * from "./delivery-assembly-job.js";
 export * from "./campaign.js";
 export * from "./client.js";
 export * from "./campaign-production-run.js";
+export * from "./approved-visual-production-input.js";
