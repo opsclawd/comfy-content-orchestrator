@@ -36,7 +36,8 @@ describe("bootstrap", () => {
     },
     http: {
       host: "100.64.0.1",
-      port: 3000
+      port: 3000,
+      logLevel: "info"
     },
     reviewerIdentity: {
       trustedProxyAddresses: []
@@ -662,6 +663,82 @@ describe("bootstrap", () => {
       expect(logLine).not.toContain(geminiKey);
       expect(logLine).not.toContain(openaiKey);
     }
+
+    await runtime.stop();
+  });
+
+  it("wires Fastify HTTP logger from config logLevel by default", async () => {
+    const harness = createTestHarness();
+
+    const runtime = await runControlApi({
+      config: validConfig,
+      poolFactory: () => harness.mockPool as unknown as Pool,
+      s3ClientFactory: () => harness.mockS3Client as unknown as S3Client,
+      serverStarter: harness.mockServerStarter,
+      processSignals: harness.mockSignals,
+      logger: harness.mockLogger
+    });
+
+    expect(harness.mockServerStarter).toHaveBeenCalledTimes(1);
+    expect(harness.mockServerStarter).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        logger: { level: "info" }
+      })
+    );
+
+    await runtime.stop();
+  });
+
+  it("wires Fastify HTTP logger with non-default logLevel from config", async () => {
+    const harness = createTestHarness();
+
+    const runtime = await runControlApi({
+      config: {
+        ...validConfig,
+        http: {
+          ...validConfig.http,
+          logLevel: "error"
+        }
+      },
+      poolFactory: () => harness.mockPool as unknown as Pool,
+      s3ClientFactory: () => harness.mockS3Client as unknown as S3Client,
+      serverStarter: harness.mockServerStarter,
+      processSignals: harness.mockSignals,
+      logger: harness.mockLogger
+    });
+
+    expect(harness.mockServerStarter).toHaveBeenCalledTimes(1);
+    expect(harness.mockServerStarter).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        logger: { level: "error" }
+      })
+    );
+
+    await runtime.stop();
+  });
+
+  it("forwards explicit httpLogger override taking precedence over config", async () => {
+    const harness = createTestHarness();
+
+    const runtime = await runControlApi({
+      config: validConfig,
+      httpLogger: false,
+      poolFactory: () => harness.mockPool as unknown as Pool,
+      s3ClientFactory: () => harness.mockS3Client as unknown as S3Client,
+      serverStarter: harness.mockServerStarter,
+      processSignals: harness.mockSignals,
+      logger: harness.mockLogger
+    });
+
+    expect(harness.mockServerStarter).toHaveBeenCalledTimes(1);
+    expect(harness.mockServerStarter).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        logger: false
+      })
+    );
 
     await runtime.stop();
   });

@@ -300,6 +300,31 @@ describe("Typed Control API Client", () => {
     expect(networkError).toBeInstanceOf(ApiClientError);
     expect((networkError as ApiClientError).statusCode).toBeUndefined();
 
+    // 2b. Fetch rejection with nested cause preserves cause details in message and cause property
+    const fetchWithCause = vi.fn().mockRejectedValue(
+      Object.assign(new TypeError("fetch failed"), {
+        cause: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:3000"), {
+          code: "ECONNREFUSED",
+          address: "127.0.0.1",
+          port: 3000
+        })
+      })
+    );
+
+    let causeError: unknown;
+    try {
+      await getCampaignReviewSummary("9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d", fetchWithCause);
+    } catch (err) {
+      causeError = err;
+    }
+
+    expect(causeError).toBeInstanceOf(ApiClientError);
+    const clientCauseErr = causeError as ApiClientError;
+    expect(clientCauseErr.message).toContain("ECONNREFUSED");
+    expect(clientCauseErr.message).toContain("127.0.0.1");
+    expect(clientCauseErr.message).toContain("3000");
+    expect(clientCauseErr.cause).toBeDefined();
+
     // 3. HTTP 500 produces ApiClientError with status code 500
     const httpErrorFetch = vi.fn().mockResolvedValue({
       ok: false,

@@ -185,10 +185,13 @@ export interface Clock {
   now(): string;
 }
 
+export type ControlApiHttpLogLevel =
+  "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent";
+
 export interface ControlApiAppOptions {
   readonly reviewerIdentityResolver?: ReviewerIdentityResolver;
   readonly clock?: Clock;
-  readonly logger?: boolean;
+  readonly logger?: boolean | { readonly level: ControlApiHttpLogLevel };
   readonly jobDispatch?: {
     readonly leaseDurationMs: number;
     readonly heartbeatIntervalMs: number;

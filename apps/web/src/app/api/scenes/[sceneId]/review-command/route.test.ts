@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { POST } from "./route";
 import {
   submitReviewCommand,
@@ -371,6 +371,16 @@ describe("Review Hub Command Route Handler: POST /api/scenes/[sceneId]/review-co
   });
 
   describe("Indeterminate Upstream Failures (5xx & Network Isolation)", () => {
+    let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      consoleErrorSpy.mockRestore();
+    });
+
     it("returns a generic 502 response without retrying or leaking internal network error text", async () => {
       const networkErrorMessage =
         "Failed to connect to Control API: connect ECONNREFUSED 127.0.0.1:3000 (internal secret host: https://internal-api.secret.cluster.local)";
@@ -390,6 +400,14 @@ describe("Review Hub Command Route Handler: POST /api/scenes/[sceneId]/review-co
       expect(bodyText).not.toContain("127.0.0.1:3000");
       expect(bodyText).not.toContain("internal-api.secret.cluster.local");
       expect(bodyText).not.toContain("Failed to connect");
+
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+      const loggedArgs = JSON.stringify(consoleErrorSpy.mock.calls[0]);
+      expect(loggedArgs).toContain("ECONNREFUSED");
+      expect(loggedArgs).toContain("127.0.0.1:3000");
+      expect(loggedArgs).toContain("internal-api.secret.cluster.local");
+      expect(loggedArgs).toContain(sceneId);
+      expect(loggedArgs).toContain("ApiClientError");
     });
 
     it("returns a generic 502 response on upstream 500 / 502 HTTP error without retrying or leaking internal text", async () => {
@@ -412,6 +430,15 @@ describe("Review Hub Command Route Handler: POST /api/scenes/[sceneId]/review-co
       expect(bodyText).not.toContain("PostgreSQL");
       expect(bodyText).not.toContain("postgresql://");
       expect(bodyText).not.toContain("connection pool exhausted");
+
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+      const loggedArgs = JSON.stringify(consoleErrorSpy.mock.calls[0]);
+      expect(loggedArgs).toContain("PostgreSQL");
+      expect(loggedArgs).toContain("connection pool exhausted");
+      expect(loggedArgs).toContain("postgresql://");
+      expect(loggedArgs).not.toContain("user:pass");
+      expect(loggedArgs).toContain(sceneId);
+      expect(loggedArgs).toContain("ApiClientError");
     });
 
     it("returns a generic 502 response on upstream response validation failure without retrying or leaking internal text", async () => {
@@ -434,6 +461,13 @@ describe("Review Hub Command Route Handler: POST /api/scenes/[sceneId]/review-co
       const bodyText = await response.text();
       expect(bodyText).not.toContain("secret_token");
       expect(bodyText).not.toContain("xyz123");
+
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+      const loggedArgs = JSON.stringify(consoleErrorSpy.mock.calls[0]);
+      expect(loggedArgs).toContain("secret_token");
+      expect(loggedArgs).not.toContain("xyz123");
+      expect(loggedArgs).toContain(sceneId);
+      expect(loggedArgs).toContain("ApiValidationError");
     });
 
     it("returns a generic 500 response on unexpected unhandled error without leaking internal text", async () => {
@@ -452,6 +486,138 @@ describe("Review Hub Command Route Handler: POST /api/scenes/[sceneId]/review-co
       const bodyText = await response.text();
       expect(bodyText).not.toContain("supersecretpassword");
       expect(bodyText).not.toContain("Unexpected crash");
+
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+      const loggedArgs = JSON.stringify(consoleErrorSpy.mock.calls[0]);
+      expect(loggedArgs).toContain("Unexpected crash with database password");
+      expect(loggedArgs).not.toContain("supersecretpassword");
+      expect(loggedArgs).toContain(sceneId);
+      expect(loggedArgs).toContain("approve");
+      expect(loggedArgs).toContain('"errorType":"Error"');
+    });
+
+    it("returns a generic 500 response on thrown non-Error value while logging safely", async () => {
+      vi.mocked(submitReviewCommand).mockRejectedValueOnce("boom");
+
+      const request = createJsonRequest(routeUrl, validApproveCommand);
+      const response = await POST(request, {
+        params: Promise.resolve({ sceneId })
+      });
+
+      expect(response.status).toBe(500);
+      expect(submitReviewCommand).toHaveBeenCalledTimes(1);
+
+      const bodyText = await response.text();
+      expect(bodyText).not.toContain("boom");
+
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+      const loggedPayload = consoleErrorSpy.mock.calls[0]?.[1] as Record<string, unknown>;
+      expect(loggedPayload.errorType).toBe("string");
+      expect(loggedPayload.safeMessage).toContain("boom");
+      expect("safeStack" in loggedPayload).toBe(false);
+    });
+
+    it("redacts embedded-@ credentials from upstream error while retaining connection details", async () => {
+      const upstreamErrorMessage =
+        "Control API returned HTTP 500: authentication failed for postgresql://ctrlapi:P@ssw0rd1@db-internal:5432/cco";
+
+      vi.mocked(submitReviewCommand).mockRejectedValueOnce(
+        new ApiClientError(upstreamErrorMessage, 500)
+      );
+
+      const request = createJsonRequest(routeUrl, validApproveCommand);
+      const response = await POST(request, {
+        params: Promise.resolve({ sceneId })
+      });
+
+      expect(response.status).toBe(502);
+      expect(submitReviewCommand).toHaveBeenCalledTimes(1);
+
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+      const loggedArgs = JSON.stringify(consoleErrorSpy.mock.calls[0]);
+      expect(loggedArgs).toContain("postgresql://[REDACTED]@db-internal:5432/cco");
+      expect(loggedArgs).not.toContain("P@ssw0rd1");
+      expect(loggedArgs).not.toContain("ssw0rd1");
+      expect(loggedArgs).not.toContain("ctrlapi");
+    });
+
+    it("preserves nested fetch cause when Control API is unreachable (TypeError with connection code/address/port)", async () => {
+      const netErr = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:3000"), {
+        code: "ECONNREFUSED",
+        address: "127.0.0.1",
+        port: 3000
+      });
+      const fetchError = new TypeError("fetch failed", { cause: netErr });
+
+      // Exercise client-to-route error composition using real createApiClient
+      const actual = await vi.importActual<typeof ClientModule>("../../../../../api/client");
+      const client = actual.createApiClient({
+        fetchFn: vi.fn().mockRejectedValue(fetchError)
+      });
+      vi.mocked(submitReviewCommand).mockImplementationOnce((sId, cmd, identity) =>
+        client.submitReviewCommand(sId, cmd, identity)
+      );
+
+      const request = createJsonRequest(routeUrl, validApproveCommand);
+      const response = await POST(request, {
+        params: Promise.resolve({ sceneId })
+      });
+
+      expect(response.status).toBe(502);
+      const bodyText = await response.text();
+      expect(bodyText).not.toContain("ECONNREFUSED");
+      expect(bodyText).not.toContain("127.0.0.1");
+      expect(bodyText).not.toContain("3000");
+
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+      const loggedArgs = JSON.stringify(consoleErrorSpy.mock.calls[0]);
+      expect(loggedArgs).toContain("ECONNREFUSED");
+      expect(loggedArgs).toContain("127.0.0.1");
+      expect(loggedArgs).toContain("3000");
+
+      const loggedPayload = consoleErrorSpy.mock.calls[0]?.[1] as Record<string, unknown>;
+      expect(loggedPayload.cause).toBeDefined();
+    });
+
+    it("redacts escaped JSON secrets from upstream validation error while returning generic 502", async () => {
+      const validationErrorMessage =
+        'Control API response failed schema validation: malformed secret {"secret_token": "abc\\"def"}';
+
+      vi.mocked(submitReviewCommand).mockRejectedValueOnce(
+        new ApiValidationError(validationErrorMessage, [{ message: "secret_token error" }])
+      );
+
+      const request = createJsonRequest(routeUrl, validApproveCommand);
+      const response = await POST(request, {
+        params: Promise.resolve({ sceneId })
+      });
+
+      expect(response.status).toBe(502);
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+      const loggedPayload = consoleErrorSpy.mock.calls[0]?.[1] as Record<string, unknown>;
+      expect(loggedPayload.safeMessage).toContain('"secret_token": "[REDACTED]"');
+      expect(loggedPayload.safeMessage).not.toContain("abc");
+      expect(loggedPayload.safeMessage).not.toContain("def");
+    });
+
+    it("redacts lowercase auth schemes from upstream error while returning generic 502", async () => {
+      const upstreamErrorMessage =
+        "Control API returned HTTP 500: failed upstream with authorization: bearer sk-secrettoken123";
+
+      vi.mocked(submitReviewCommand).mockRejectedValueOnce(
+        new ApiClientError(upstreamErrorMessage, 500)
+      );
+
+      const request = createJsonRequest(routeUrl, validApproveCommand);
+      const response = await POST(request, {
+        params: Promise.resolve({ sceneId })
+      });
+
+      expect(response.status).toBe(502);
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+      const loggedArgs = JSON.stringify(consoleErrorSpy.mock.calls[0]);
+      expect(loggedArgs).toContain("authorization: bearer [REDACTED]");
+      expect(loggedArgs).not.toContain("sk-secrettoken123");
     });
   });
 });

@@ -171,6 +171,7 @@ describe("runtime-config", () => {
     expect(config.s3.defaultExpirySeconds).toBe(300);
     expect(config.http.host).toBe("100.64.0.1");
     expect(config.http.port).toBe(3000);
+    expect(config.http.logLevel).toBe("info");
     expect(config.reviewerIdentity).toEqual({
       trustedProxyAddresses: []
     });
@@ -266,6 +267,44 @@ describe("runtime-config", () => {
 
     expect(config.http.host).toBe("127.0.0.1");
     expect(config.http.port).toBe(8080);
+  });
+
+  it("defaults CONTROL_API_LOG_LEVEL to info when unset or empty", () => {
+    const configUnset = parseControlApiRuntimeConfig(validEnv);
+    expect(configUnset.http.logLevel).toBe("info");
+
+    const configEmpty = parseControlApiRuntimeConfig({
+      ...validEnv,
+      CONTROL_API_LOG_LEVEL: ""
+    });
+    expect(configEmpty.http.logLevel).toBe("info");
+  });
+
+  it("parses valid CONTROL_API_LOG_LEVEL values", () => {
+    const validLevels = ["fatal", "error", "warn", "info", "debug", "trace", "silent"] as const;
+    for (const level of validLevels) {
+      const config = parseControlApiRuntimeConfig({
+        ...validEnv,
+        CONTROL_API_LOG_LEVEL: level
+      });
+      expect(config.http.logLevel).toBe(level);
+    }
+  });
+
+  it("rejects invalid CONTROL_API_LOG_LEVEL values", () => {
+    expect(() =>
+      parseControlApiRuntimeConfig({
+        ...validEnv,
+        CONTROL_API_LOG_LEVEL: "verbose"
+      })
+    ).toThrowError(/CONTROL_API_LOG_LEVEL/);
+
+    expect(() =>
+      parseControlApiRuntimeConfig({
+        ...validEnv,
+        CONTROL_API_LOG_LEVEL: "invalid_level"
+      })
+    ).toThrow(ControlApiConfigError);
   });
 
   it("supports S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY aliases", () => {
