@@ -152,4 +152,80 @@ echo "Upgrading pip and installing whisperx==${WHISPERX_PIP_VERSION} torchaudio=
 "${PIP_BIN}" install --upgrade pip
 "${PIP_BIN}" install "whisperx==${WHISPERX_PIP_VERSION}" "torchaudio==${WHISPERX_TORCHAUDIO_VERSION}" "matplotlib==${WHISPERX_MATPLOTLIB_VERSION}"
 
+# Clear executable stack flag from ctranslate2 shared libraries if present to prevent
+# "cannot enable executable stack as shared object requires: Invalid argument" on strict kernels
+"${PYTHON_BIN}" -c "
+import glob, os, struct, sys
+
+venv_dir = sys.argv[1]
+pattern = os.path.join(venv_dir, 'lib', '*', 'site-packages', 'ctranslate2.libs', 'libctranslate2*.so*')
+so_files = glob.glob(pattern)
+
+if not so_files:
+    raise FileNotFoundError(f'No ctranslate2 shared libraries found matching {pattern}')
+
+for so_file in so_files:
+    found_gnu_stack = False
+    file_size = os.path.getsize(so_file)
+    if file_size < 64:
+        raise ValueError(f'File too small to be a valid ELF binary: {so_file} ({file_size} bytes)')
+    with open(so_file, 'r+b') as f:
+        magic = f.read(4)
+        if magic != b'\x7fELF':
+            raise ValueError(f'Invalid ELF magic in {so_file}: {magic!r}')
+        ei_class = f.read(1)[0]
+        ei_data = f.read(1)[0]
+        if ei_data == 1:
+            endian = '<'
+        elif ei_data == 2:
+            endian = '>'
+        else:
+            raise ValueError(f'Invalid ELF endianness in {so_file}: {ei_data}')
+
+        if ei_class == 2:
+            f.seek(32)
+            e_phoff = struct.unpack(endian + 'Q', f.read(8))[0]
+            f.seek(54)
+            e_phentsize = struct.unpack(endian + 'H', f.read(2))[0]
+            e_phnum = struct.unpack(endian + 'H', f.read(2))[0]
+            flags_offset_in_ph = 4
+        elif ei_class == 1:
+            f.seek(28)
+            e_phoff = struct.unpack(endian + 'I', f.read(4))[0]
+            f.seek(42)
+            e_phentsize = struct.unpack(endian + 'H', f.read(2))[0]
+            e_phnum = struct.unpack(endian + 'H', f.read(2))[0]
+            flags_offset_in_ph = 24
+        else:
+            raise ValueError(f'Invalid ELF class in {so_file}: {ei_class}')
+
+        if e_phoff + e_phnum * e_phentsize > file_size:
+            raise ValueError(f'Program header table exceeds file bounds in {so_file}')
+
+        for i in range(e_phnum):
+            ph_start = e_phoff + i * e_phentsize
+            f.seek(ph_start)
+            p_type = struct.unpack(endian + 'I', f.read(4))[0]
+            if p_type == 0x6474e551: # PT_GNU_STACK
+                found_gnu_stack = True
+                f.seek(ph_start + flags_offset_in_ph)
+                p_flags = struct.unpack(endian + 'I', f.read(4))[0]
+                if p_flags & 1:
+                    f.seek(ph_start + flags_offset_in_ph)
+                    f.write(struct.pack(endian + 'I', p_flags & ~1))
+                    f.flush()
+                # Postcondition check: verify executable stack flag was cleared
+                f.seek(ph_start + flags_offset_in_ph)
+                verified_flags = struct.unpack(endian + 'I', f.read(4))[0]
+                if verified_flags & 1:
+                    raise RuntimeError(f'Failed to clear executable stack flag on {so_file}')
+
+    if not found_gnu_stack:
+        raise RuntimeError(f'No PT_GNU_STACK program header found in {so_file}')
+" "${TARGET_VENV_DIR}"
+
+# Verify Python virtualenv imports WhisperX and dependencies
+"${PYTHON_BIN}" -c "import whisperx; import torchaudio; import matplotlib"
+
 echo "WhisperX installation and model verification complete."
+
