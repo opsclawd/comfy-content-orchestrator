@@ -161,7 +161,11 @@ venv_dir = sys.argv[1]
 pattern = os.path.join(venv_dir, 'lib', '*', 'site-packages', 'ctranslate2.libs', 'libctranslate2*.so*')
 so_files = glob.glob(pattern)
 
+if not so_files:
+    raise FileNotFoundError(f'No ctranslate2 shared libraries found matching {pattern}')
+
 for so_file in so_files:
+    found_gnu_stack = False
     file_size = os.path.getsize(so_file)
     if file_size < 64:
         raise ValueError(f'File too small to be a valid ELF binary: {so_file} ({file_size} bytes)')
@@ -203,6 +207,7 @@ for so_file in so_files:
             f.seek(ph_start)
             p_type = struct.unpack(endian + 'I', f.read(4))[0]
             if p_type == 0x6474e551: # PT_GNU_STACK
+                found_gnu_stack = True
                 f.seek(ph_start + flags_offset_in_ph)
                 p_flags = struct.unpack(endian + 'I', f.read(4))[0]
                 if p_flags & 1:
@@ -214,6 +219,9 @@ for so_file in so_files:
                 verified_flags = struct.unpack(endian + 'I', f.read(4))[0]
                 if verified_flags & 1:
                     raise RuntimeError(f'Failed to clear executable stack flag on {so_file}')
+
+    if not found_gnu_stack:
+        raise RuntimeError(f'No PT_GNU_STACK program header found in {so_file}')
 " "${TARGET_VENV_DIR}"
 
 # Verify Python virtualenv imports WhisperX and dependencies
