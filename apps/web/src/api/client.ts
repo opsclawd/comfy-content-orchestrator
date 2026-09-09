@@ -92,6 +92,34 @@ export interface ApiClient {
   ): Promise<ReviewCommandResponse>;
 }
 
+function formatFetchErrorMessage(err: unknown): string {
+  let message = err instanceof Error ? err.message : String(err);
+  if (err instanceof Error && err.cause) {
+    const cause = err.cause as Record<string, unknown>;
+    const parts: string[] = [];
+    if (cause instanceof Error && cause.message && cause.message !== err.message) {
+      parts.push(cause.message);
+    }
+    const meta: string[] = [];
+    if (cause.code && !parts.some((p) => p.includes(String(cause.code)))) {
+      meta.push(String(cause.code));
+    }
+    if (cause.address && !parts.some((p) => p.includes(String(cause.address)))) {
+      meta.push(String(cause.address));
+    }
+    if (cause.port && !parts.some((p) => p.includes(String(cause.port)))) {
+      meta.push(String(cause.port));
+    }
+    if (meta.length > 0) {
+      parts.push(`(${meta.join(" ")})`);
+    }
+    if (parts.length > 0) {
+      message += `: ${parts.join(" ")}`;
+    }
+  }
+  return `Failed to connect to Control API: ${message}`;
+}
+
 async function requestJson<T>(
   url: string,
   schema: z.ZodType<T>,
@@ -107,11 +135,7 @@ async function requestJson<T>(
       cache: "no-store"
     });
   } catch (err) {
-    throw new ApiClientError(
-      `Failed to connect to Control API: ${err instanceof Error ? err.message : String(err)}`,
-      undefined,
-      err
-    );
+    throw new ApiClientError(formatFetchErrorMessage(err), undefined, err);
   }
 
   if (!res.ok) {
@@ -221,11 +245,7 @@ export function createApiClient(config?: ApiClientConfig): ApiClient {
           body: serializedBody
         });
       } catch (err) {
-        throw new ApiClientError(
-          `Failed to connect to Control API: ${err instanceof Error ? err.message : String(err)}`,
-          undefined,
-          err
-        );
+        throw new ApiClientError(formatFetchErrorMessage(err), undefined, err);
       }
 
       if (!res.ok) {

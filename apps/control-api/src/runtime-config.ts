@@ -4,6 +4,7 @@ import {
   TailscaleReviewerIdentityResolver,
   type TailscaleReviewerIdentityResolverConfig
 } from "./http/reviewer-identity.js";
+import type { ControlApiHttpLogLevel } from "./http/types.js";
 
 export interface ControlApiDatabaseConfig {
   readonly url: string;
@@ -22,9 +23,12 @@ export interface ControlApiS3Config {
   readonly defaultExpirySeconds: number;
 }
 
+export type { ControlApiHttpLogLevel } from "./http/types.js";
+
 export interface ControlApiHttpConfig {
   readonly host: string;
   readonly port: number;
+  readonly logLevel: ControlApiHttpLogLevel;
 }
 
 export interface ControlApiStorageTelemetryConfig {
@@ -180,6 +184,28 @@ function parseExpiry(val: unknown, varName: string, defaultValue: number): numbe
   return expiry;
 }
 
+const HTTP_LOG_LEVELS: readonly ControlApiHttpLogLevel[] = [
+  "fatal",
+  "error",
+  "warn",
+  "info",
+  "debug",
+  "trace",
+  "silent"
+];
+
+function parseHttpLogLevel(val: unknown): ControlApiHttpLogLevel {
+  if (val === undefined || val === "") {
+    return "info";
+  }
+  if (typeof val !== "string" || !HTTP_LOG_LEVELS.includes(val as ControlApiHttpLogLevel)) {
+    throw new ControlApiConfigError(
+      `Invalid value in variable: CONTROL_API_LOG_LEVEL (expected one of ${HTTP_LOG_LEVELS.join(", ")})`
+    );
+  }
+  return val as ControlApiHttpLogLevel;
+}
+
 function parseBoolean(val: unknown, varName: string, defaultValue: boolean): boolean {
   if (val === undefined || val === null) {
     return defaultValue;
@@ -305,6 +331,9 @@ export function parseControlApiRuntimeConfig(
   const portVarName =
     env.CONTROL_API_PORT !== undefined || env.PORT === undefined ? "CONTROL_API_PORT" : "PORT";
   const port = parsePort(rawPort, portVarName);
+
+  const rawLogLevel = env.CONTROL_API_LOG_LEVEL;
+  const logLevel = parseHttpLogLevel(rawLogLevel);
 
   // 6. Parse and validate Reviewer Identity
   const reviewerIdentity = parseReviewerIdentityConfig(env);
@@ -437,7 +466,8 @@ export function parseControlApiRuntimeConfig(
     },
     http: {
       host,
-      port
+      port,
+      logLevel
     },
     reviewerIdentity,
     storageTelemetry: {

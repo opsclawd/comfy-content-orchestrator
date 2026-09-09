@@ -3,6 +3,7 @@ import {
   ReviewErrorResponseSchema,
   type ReviewErrorResponse
 } from "@cco/contracts";
+import { projectErrorForLogging } from "@cco/shared";
 import {
   ApiClientError,
   ApiValidationError,
@@ -88,9 +89,33 @@ export async function POST(request: Request, context: RouteContext): Promise<Res
     }
 
     if (err instanceof ApiClientError || err instanceof ApiValidationError) {
+      const projection = projectErrorForLogging(err);
+      console.error("review-command: upstream call failed, returning generic 502", {
+        sceneId,
+        action: command.action,
+        errorType: projection.errorType,
+        safeMessage: projection.safeMessage,
+        ...(projection.safeStack !== undefined ? { safeStack: projection.safeStack } : {}),
+        ...(projection.cause !== undefined ? { cause: projection.cause } : {}),
+        ...(err instanceof ApiClientError && err.statusCode !== undefined
+          ? { upstreamStatusCode: err.statusCode }
+          : {}),
+        ...(err instanceof ApiValidationError
+          ? { issueCount: Array.isArray(err.issues) ? err.issues.length : undefined }
+          : {})
+      });
       return Response.json({ message: "Bad Gateway" }, { status: 502 });
     }
 
+    const projection = projectErrorForLogging(err);
+    console.error("review-command: unexpected error, returning generic 500", {
+      sceneId,
+      action: command.action,
+      errorType: projection.errorType,
+      safeMessage: projection.safeMessage,
+      ...(projection.safeStack !== undefined ? { safeStack: projection.safeStack } : {}),
+      ...(projection.cause !== undefined ? { cause: projection.cause } : {})
+    });
     return Response.json({ message: "Internal Server Error" }, { status: 500 });
   }
 }

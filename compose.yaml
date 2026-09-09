@@ -88,6 +88,7 @@ services:
       - dist/bootstrap.js
     environment:
       NODE_ENV: ${NODE_ENV:-production}
+      CONTROL_API_LOG_LEVEL: ${CONTROL_API_LOG_LEVEL:-info}
       PORT: "3000"
       HOST: "0.0.0.0"
       CONTROL_API_HOST: ${CONTROL_API_HOST:?CONTROL_API_HOST is required}

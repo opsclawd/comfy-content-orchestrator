@@ -72,6 +72,7 @@ export interface ControlApiBootstrapOptions {
   ) => Promise<{ app: FastifyInstance; close: () => Promise<void>; port: number; host: string }>;
   readonly reviewerIdentityResolver?: ReviewerIdentityResolver;
   readonly logger?: ControlApiLogger;
+  readonly httpLogger?: ServerListenOptions["logger"];
   readonly processSignals?: ControlApiProcessSignals;
 }
 
@@ -321,7 +322,8 @@ export async function runControlApi(
         host: config.http.host,
         port: config.http.port,
         reviewerIdentityResolver,
-        jobDispatch: config.jobDispatch
+        jobDispatch: config.jobDispatch,
+        logger: options.httpLogger ?? { level: config.http.logLevel }
       }
     );
 

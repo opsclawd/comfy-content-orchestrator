@@ -1,4 +1,5 @@
 import type { FastifyError, FastifyReply, FastifyRequest } from "fastify";
+import { projectErrorForLogging } from "@cco/shared";
 import { ZodError } from "zod";
 import {
   CampaignBeatSheetValidationError,
@@ -234,7 +235,16 @@ export function handleReviewError(
 ): void {
   const { statusCode, body } = formatReviewError(error);
   if (statusCode >= 500) {
-    request.log.error(error);
+    const projection = projectErrorForLogging(error);
+    request.log.error(
+      {
+        errorType: projection.errorType,
+        safeMessage: projection.safeMessage,
+        ...(projection.safeStack !== undefined ? { safeStack: projection.safeStack } : {}),
+        ...(projection.cause !== undefined ? { cause: projection.cause } : {})
+      },
+      "control-api request failed with 5xx"
+    );
   }
   reply.status(statusCode).send(body);
 }
