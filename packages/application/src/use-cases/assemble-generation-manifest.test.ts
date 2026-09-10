@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   AssembleGenerationManifest,
   IncompleteManifestError,
   type AssembleGenerationManifestDeps,
+  type AssembleManifestConditioningInput,
   type AssembleManifestInput,
+  type ManifestExecutionConditioning,
   type ManifestSourceProfile,
   type ManifestSourceProvenance
 } from "./assemble-generation-manifest.js";
@@ -288,6 +290,51 @@ describe("AssembleGenerationManifest use case", () => {
     };
   }
 
+  const fakeCandidateHash = "7777777777777777777777777777777777777777777777777777777777777777";
+  const fakeConditionedCandidateId = "cand-conditioned-999" as CandidateId;
+
+  const fakeWorkflowWithConditioning: RenderWorkflow = {
+    ...fakeWorkflow,
+    "20": {
+      class_type: "LoadImage",
+      inputs: {
+        image: "input/staged-image-999.png"
+      }
+    }
+  };
+
+  function createConditioningImage(
+    overrides?: Partial<AssembleManifestConditioningInput>
+  ): AssembleManifestConditioningInput {
+    return {
+      resolved: {
+        input: {
+          candidateId: fakeConditionedCandidateId,
+          sceneId: fakeSceneId,
+          specRevision: 1,
+          contentHashSha256: fakeCandidateHash,
+          variantOrdinal: 2
+        },
+        media: {
+          bucket: "godzspeed-review",
+          key: "scenes/scene-123/candidates/cand-conditioned-999.png",
+          sha256: fakeCandidateHash,
+          contentType: "image/png"
+        }
+      },
+      stagedAs: {
+        name: "staged-image-999.png",
+        subfolder: "input"
+      },
+      injectionTarget: {
+        nodeId: "20",
+        classType: "LoadImage",
+        inputField: "image"
+      },
+      ...overrides
+    };
+  }
+
   it("assembles a complete GenerationManifest with all 16 minimum §5.5 fields", async () => {
     const deps = createTestDeps();
     const assembler = new AssembleGenerationManifest(deps);
@@ -393,6 +440,7 @@ describe("AssembleGenerationManifest use case", () => {
       specRevision: 1,
       variantOrdinal: 1
     });
+    expect("executionConditioning" in manifestPayload).toBe(false);
 
     // 12. ComfyUI commit / custom-node environment
     expect(manifestPayload.environment).toEqual({
@@ -481,6 +529,7 @@ describe("AssembleGenerationManifest use case", () => {
 
     const result = await assembler.assemble(input);
     expect("approvedCandidate" in result.manifestPayload).toBe(false);
+    expect("executionConditioning" in result.manifestPayload).toBe(false);
   });
 
   it("falls back to profile models with category 'loras' when workflow has no LoRA nodes", async () => {
@@ -1199,6 +1248,477 @@ describe("AssembleGenerationManifest use case", () => {
       });
       await expect(assembler.assemble(inputWhitespace)).rejects.toThrow(
         new IncompleteManifestError("promptIdComfy")
+      );
+    });
+  });
+
+  describe("execution conditioning provenance (#226)", () => {
+    it("assembles a conditioned GenerationManifest using execution-carried evidence without repository lookup", async () => {
+      const findByIdSpy = vi.fn().mockResolvedValue(fakeCandidate);
+      const deps = createTestDeps({
+        storyboardCandidateRepository: {
+          findById: findByIdSpy,
+          insert: async () => {},
+          listBySceneAndRevision: async () => [fakeCandidate]
+        }
+      });
+      const assembler = new AssembleGenerationManifest(deps);
+      const conditioningImage = createConditioningImage();
+
+      const input = createDefaultInput({
+        workflow: fakeWorkflowWithConditioning,
+        approvedCandidateId: fakeConditionedCandidateId,
+        job: {
+          ...fakeJob,
+          injectedPayload: {
+            ...fakeJob.injectedPayload,
+            approvedCandidateId: fakeConditionedCandidateId
+          }
+        },
+        conditioningImage
+      });
+
+      const result = await assembler.assemble(input);
+      const { manifestPayload } = result;
+
+      // AC-3: StoryboardCandidateRepository.findById must NOT be called for conditioned render
+      expect(findByIdSpy).not.toHaveBeenCalled();
+
+      // Sourced from execution evidence:
+      expect(manifestPayload.approvedCandidate).toEqual({
+        id: fakeConditionedCandidateId,
+        contentHash: fakeCandidateHash,
+        specRevision: 1,
+        variantOrdinal: 2
+      });
+      expect(Object.isFrozen(manifestPayload.approvedCandidate)).toBe(true);
+
+      // AC-2: executionConditioning records full execution conditioning identity
+      expect(manifestPayload.executionConditioning).toEqual({
+        candidateId: fakeConditionedCandidateId,
+        sceneId: fakeSceneId,
+        specRevision: 1,
+        contentHashSha256: fakeCandidateHash,
+        media: {
+          bucket: "godzspeed-review",
+          key: "scenes/scene-123/candidates/cand-conditioned-999.png",
+          sha256: fakeCandidateHash,
+          contentType: "image/png"
+        },
+        stagedAs: {
+          name: "staged-image-999.png",
+          subfolder: "input"
+        },
+        injectionTarget: {
+          nodeId: "20",
+          classType: "LoadImage",
+          inputField: "image"
+        }
+      });
+      expect(Object.isFrozen(manifestPayload.executionConditioning)).toBe(true);
+      const execCond = manifestPayload.executionConditioning as ManifestExecutionConditioning;
+      expect(Object.isFrozen(execCond.media)).toBe(true);
+      expect(Object.isFrozen(execCond.stagedAs)).toBe(true);
+      expect(Object.isFrozen(execCond.injectionTarget)).toBe(true);
+    });
+
+    it("regression: repository drift after execution cannot cause manifest to claim a different conditioning candidate/hash (AC-8)", async () => {
+      // Repository holds a different/drifted candidate (e.g. from a reroll or later approval)
+      const driftedCandidate: StoryboardCandidate = {
+        id: "cand-drifted-999" as CandidateId,
+        sceneId: fakeSceneId,
+        specRevision: 1,
+        variantOrdinal: 99,
+        storageBucket: "different-bucket",
+        storageObjectKey: "different-key.png",
+        contentHash: "8888888888888888888888888888888888888888888888888888888888888888",
+        generationMetadata: {},
+        createdAt: "2026-08-30T10:00:00.000Z"
+      };
+
+      const findByIdSpy = vi.fn().mockResolvedValue(driftedCandidate);
+      const deps = createTestDeps({
+        storyboardCandidateRepository: {
+          findById: findByIdSpy,
+          insert: async () => {},
+          listBySceneAndRevision: async () => [driftedCandidate]
+        }
+      });
+      const assembler = new AssembleGenerationManifest(deps);
+      const conditioningImage = createConditioningImage();
+
+      const input = createDefaultInput({
+        workflow: fakeWorkflowWithConditioning,
+        approvedCandidateId: fakeConditionedCandidateId,
+        job: {
+          ...fakeJob,
+          injectedPayload: {
+            ...fakeJob.injectedPayload,
+            approvedCandidateId: fakeConditionedCandidateId
+          }
+        },
+        conditioningImage
+      });
+
+      const result = await assembler.assemble(input);
+      expect(findByIdSpy).not.toHaveBeenCalled();
+
+      // Manifest MUST reflect what was actually executed, NOT the repository's drifted candidate
+      expect(result.manifestPayload.approvedCandidate).toEqual({
+        id: fakeConditionedCandidateId,
+        contentHash: fakeCandidateHash,
+        specRevision: 1,
+        variantOrdinal: 2
+      });
+      const execCond = result.manifestPayload.executionConditioning as Record<string, unknown>;
+      expect(execCond.candidateId).toBe(fakeConditionedCandidateId);
+      expect(execCond.contentHashSha256).toBe(fakeCandidateHash);
+      expect((execCond.media as Record<string, unknown>).sha256).toBe(fakeCandidateHash);
+    });
+
+    it("carries variantOrdinal through to approvedCandidate from execution evidence", async () => {
+      const assembler = new AssembleGenerationManifest(createTestDeps());
+      const conditioningImage = createConditioningImage({
+        resolved: {
+          ...createConditioningImage().resolved,
+          input: {
+            ...createConditioningImage().resolved.input,
+            variantOrdinal: 7
+          }
+        }
+      });
+
+      const input = createDefaultInput({
+        workflow: fakeWorkflowWithConditioning,
+        approvedCandidateId: fakeConditionedCandidateId,
+        job: {
+          ...fakeJob,
+          injectedPayload: {
+            ...fakeJob.injectedPayload,
+            approvedCandidateId: fakeConditionedCandidateId
+          }
+        },
+        conditioningImage
+      });
+
+      const result = await assembler.assemble(input);
+      const approved = result.manifestPayload.approvedCandidate as Record<string, unknown>;
+      expect(approved.variantOrdinal).toBe(7);
+    });
+
+    it("supports conditioningImage staging without subfolder (empty string subfolder)", async () => {
+      const assembler = new AssembleGenerationManifest(createTestDeps());
+      const workflowNoSubfolder: RenderWorkflow = {
+        ...fakeWorkflow,
+        "20": {
+          class_type: "LoadImage",
+          inputs: {
+            image: "staged-image-999.png"
+          }
+        }
+      };
+      const conditioningImage = createConditioningImage({
+        stagedAs: {
+          name: "staged-image-999.png",
+          subfolder: ""
+        }
+      });
+      const input = createDefaultInput({
+        workflow: workflowNoSubfolder,
+        approvedCandidateId: fakeConditionedCandidateId,
+        job: {
+          ...fakeJob,
+          injectedPayload: {
+            ...fakeJob.injectedPayload,
+            approvedCandidateId: fakeConditionedCandidateId
+          }
+        },
+        conditioningImage
+      });
+
+      const result = await assembler.assemble(input);
+      expect(result.manifestPayload.executionConditioning).toBeDefined();
+      const execCond = result.manifestPayload.executionConditioning as Record<string, unknown>;
+      expect(execCond.stagedAs).toEqual({ name: "staged-image-999.png", subfolder: "" });
+    });
+
+    it("throws IncompleteManifestError('executionConditioning.sceneId') when sceneId does not match job sceneId", async () => {
+      const assembler = new AssembleGenerationManifest(createTestDeps());
+      const conditioningImage = createConditioningImage({
+        resolved: {
+          ...createConditioningImage().resolved,
+          input: {
+            ...createConditioningImage().resolved.input,
+            sceneId: "different-scene-999" as SceneId
+          }
+        }
+      });
+      const input = createDefaultInput({
+        workflow: fakeWorkflowWithConditioning,
+        approvedCandidateId: fakeConditionedCandidateId,
+        job: {
+          ...fakeJob,
+          injectedPayload: {
+            ...fakeJob.injectedPayload,
+            approvedCandidateId: fakeConditionedCandidateId
+          }
+        },
+        conditioningImage
+      });
+      await expect(assembler.assemble(input)).rejects.toThrow(
+        new IncompleteManifestError("executionConditioning.sceneId")
+      );
+    });
+
+    it("throws IncompleteManifestError('executionConditioning.candidateId') when candidateId does not match input.approvedCandidateId", async () => {
+      const assembler = new AssembleGenerationManifest(createTestDeps());
+      const conditioningImage = createConditioningImage();
+      const input = createDefaultInput({
+        workflow: fakeWorkflowWithConditioning,
+        approvedCandidateId: "other-cand" as CandidateId,
+        job: {
+          ...fakeJob,
+          injectedPayload: {
+            ...fakeJob.injectedPayload,
+            approvedCandidateId: fakeConditionedCandidateId
+          }
+        },
+        conditioningImage
+      });
+      await expect(assembler.assemble(input)).rejects.toThrow(
+        new IncompleteManifestError("executionConditioning.candidateId")
+      );
+    });
+
+    it("throws IncompleteManifestError('executionConditioning.candidateId') when candidateId does not match job.injectedPayload.approvedCandidateId even if input.approvedCandidateId is omitted", async () => {
+      const assembler = new AssembleGenerationManifest(createTestDeps());
+      const conditioningImage = createConditioningImage();
+      const input = createDefaultInput({
+        workflow: fakeWorkflowWithConditioning,
+        job: {
+          ...fakeJob,
+          injectedPayload: {
+            ...fakeJob.injectedPayload,
+            approvedCandidateId: "mismatched-job-candidate"
+          }
+        },
+        conditioningImage
+      });
+      await expect(assembler.assemble(input)).rejects.toThrow(
+        new IncompleteManifestError("executionConditioning.candidateId")
+      );
+    });
+
+    it("throws IncompleteManifestError('executionConditioning.specRevision') when specRevision does not match current scene specRevision", async () => {
+      const assembler = new AssembleGenerationManifest(createTestDeps());
+      const conditioningImage = createConditioningImage({
+        resolved: {
+          ...createConditioningImage().resolved,
+          input: {
+            ...createConditioningImage().resolved.input,
+            specRevision: 2 // fakeScene has specRevision 1
+          }
+        }
+      });
+      const input = createDefaultInput({
+        workflow: fakeWorkflowWithConditioning,
+        approvedCandidateId: fakeConditionedCandidateId,
+        job: {
+          ...fakeJob,
+          injectedPayload: {
+            ...fakeJob.injectedPayload,
+            approvedCandidateId: fakeConditionedCandidateId
+          }
+        },
+        conditioningImage
+      });
+      await expect(assembler.assemble(input)).rejects.toThrow(
+        new IncompleteManifestError("executionConditioning.specRevision")
+      );
+    });
+
+    it("throws IncompleteManifestError('executionConditioning.specRevision') when specRevision is zero or negative", async () => {
+      const zeroRevScene = Scene.reconstitute({
+        id: fakeSceneId,
+        campaignId: fakeCampaignId,
+        status: "approved",
+        specRevision: 0,
+        configuration: {
+          prompt: "A beautiful cinematic sunrise",
+          referenceIds: [],
+          engineProfileId: "ltx_25",
+          durationMs: 5000
+        },
+        selectedCandidateId: fakeCandidate.id,
+        selectedCandidateRevision: 0
+      });
+      const deps = createTestDeps({
+        sceneRepository: {
+          findById: async () => zeroRevScene,
+          save: async () => {}
+        }
+      });
+      const assembler = new AssembleGenerationManifest(deps);
+      const conditioningImage = createConditioningImage({
+        resolved: {
+          ...createConditioningImage().resolved,
+          input: {
+            ...createConditioningImage().resolved.input,
+            specRevision: 0
+          }
+        }
+      });
+      const input = createDefaultInput({
+        workflow: fakeWorkflowWithConditioning,
+        approvedCandidateId: fakeConditionedCandidateId,
+        job: {
+          ...fakeJob,
+          injectedPayload: {
+            ...fakeJob.injectedPayload,
+            approvedCandidateId: fakeConditionedCandidateId
+          }
+        },
+        conditioningImage
+      });
+      await expect(assembler.assemble(input)).rejects.toThrow(
+        new IncompleteManifestError("executionConditioning.specRevision")
+      );
+    });
+
+    it("throws IncompleteManifestError('executionConditioning.specRevision') when specRevision is not an integer", async () => {
+      const assembler = new AssembleGenerationManifest(createTestDeps());
+      const conditioningImage = createConditioningImage({
+        resolved: {
+          ...createConditioningImage().resolved,
+          input: {
+            ...createConditioningImage().resolved.input,
+            specRevision: 1.5
+          }
+        }
+      });
+      const input = createDefaultInput({
+        workflow: fakeWorkflowWithConditioning,
+        approvedCandidateId: fakeConditionedCandidateId,
+        job: {
+          ...fakeJob,
+          injectedPayload: {
+            ...fakeJob.injectedPayload,
+            approvedCandidateId: fakeConditionedCandidateId
+          }
+        },
+        conditioningImage
+      });
+      await expect(assembler.assemble(input)).rejects.toThrow(
+        new IncompleteManifestError("executionConditioning.specRevision")
+      );
+    });
+
+    it("throws IncompleteManifestError('executionConditioning.contentHash') when verified media sha256 does not match resolved input contentHashSha256", async () => {
+      const assembler = new AssembleGenerationManifest(createTestDeps());
+      const conditioningImage = createConditioningImage({
+        resolved: {
+          ...createConditioningImage().resolved,
+          media: {
+            ...createConditioningImage().resolved.media,
+            sha256: "9999999999999999999999999999999999999999999999999999999999999999"
+          }
+        }
+      });
+      const input = createDefaultInput({
+        workflow: fakeWorkflowWithConditioning,
+        approvedCandidateId: fakeConditionedCandidateId,
+        job: {
+          ...fakeJob,
+          injectedPayload: {
+            ...fakeJob.injectedPayload,
+            approvedCandidateId: fakeConditionedCandidateId
+          }
+        },
+        conditioningImage
+      });
+      await expect(assembler.assemble(input)).rejects.toThrow(
+        new IncompleteManifestError("executionConditioning.contentHash")
+      );
+    });
+
+    it("throws IncompleteManifestError('executionConditioning.injectionTarget') when injectionTarget node is missing from workflow", async () => {
+      const assembler = new AssembleGenerationManifest(createTestDeps());
+      const conditioningImage = createConditioningImage({
+        injectionTarget: {
+          nodeId: "999", // not in workflow
+          classType: "LoadImage",
+          inputField: "image"
+        }
+      });
+      const input = createDefaultInput({
+        workflow: fakeWorkflowWithConditioning,
+        approvedCandidateId: fakeConditionedCandidateId,
+        job: {
+          ...fakeJob,
+          injectedPayload: {
+            ...fakeJob.injectedPayload,
+            approvedCandidateId: fakeConditionedCandidateId
+          }
+        },
+        conditioningImage
+      });
+      await expect(assembler.assemble(input)).rejects.toThrow(
+        new IncompleteManifestError("executionConditioning.injectionTarget")
+      );
+    });
+
+    it("throws IncompleteManifestError('executionConditioning.injectionTarget') when injectionTarget classType does not match workflow node", async () => {
+      const assembler = new AssembleGenerationManifest(createTestDeps());
+      const conditioningImage = createConditioningImage({
+        injectionTarget: {
+          nodeId: "20",
+          classType: "WrongClassType",
+          inputField: "image"
+        }
+      });
+      const input = createDefaultInput({
+        workflow: fakeWorkflowWithConditioning,
+        approvedCandidateId: fakeConditionedCandidateId,
+        job: {
+          ...fakeJob,
+          injectedPayload: {
+            ...fakeJob.injectedPayload,
+            approvedCandidateId: fakeConditionedCandidateId
+          }
+        },
+        conditioningImage
+      });
+      await expect(assembler.assemble(input)).rejects.toThrow(
+        new IncompleteManifestError("executionConditioning.injectionTarget")
+      );
+    });
+
+    it("throws IncompleteManifestError('executionConditioning.injectionTarget') when injectionTarget input value does not match staged reference image", async () => {
+      const assembler = new AssembleGenerationManifest(createTestDeps());
+      const workflowWithMismatch: RenderWorkflow = {
+        ...fakeWorkflow,
+        "20": {
+          class_type: "LoadImage",
+          inputs: {
+            image: "different-staged-value.png"
+          }
+        }
+      };
+      const conditioningImage = createConditioningImage();
+      const input = createDefaultInput({
+        workflow: workflowWithMismatch,
+        approvedCandidateId: fakeConditionedCandidateId,
+        job: {
+          ...fakeJob,
+          injectedPayload: {
+            ...fakeJob.injectedPayload,
+            approvedCandidateId: fakeConditionedCandidateId
+          }
+        },
+        conditioningImage
+      });
+      await expect(assembler.assemble(input)).rejects.toThrow(
+        new IncompleteManifestError("executionConditioning.injectionTarget")
       );
     });
   });

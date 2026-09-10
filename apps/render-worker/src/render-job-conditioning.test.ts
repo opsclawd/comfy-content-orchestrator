@@ -599,7 +599,8 @@ describe("End-to-End Conditioning Injection (Criterion 11 & Governance)", () => 
           candidateId: candidateIdA,
           sceneId: fixedSceneId,
           specRevision: fixedSpecRevision,
-          contentHashSha256: sha256A
+          contentHashSha256: sha256A,
+          variantOrdinal: 1
         },
         media: {
           bucket: "godzspeed-review",
@@ -625,7 +626,8 @@ describe("End-to-End Conditioning Injection (Criterion 11 & Governance)", () => 
           candidateId: candidateIdB,
           sceneId: fixedSceneId,
           specRevision: fixedSpecRevision,
-          contentHashSha256: sha256B
+          contentHashSha256: sha256B,
+          variantOrdinal: 2
         },
         media: {
           bucket: "godzspeed-review",

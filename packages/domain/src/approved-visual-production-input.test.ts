@@ -104,9 +104,16 @@ describe("ApprovedVisualProductionInput domain contracts", () => {
         candidateId: "candidate-001",
         sceneId: "scene-001",
         specRevision: 1,
-        contentHashSha256: VALID_HASH_A
+        contentHashSha256: VALID_HASH_A,
+        variantOrdinal: 0
       });
       expect(Object.isFrozen(input)).toBe(true);
+    });
+
+    it("preserves variantOrdinal from candidate when non-zero", () => {
+      const candidate = createCandidateFixture({ variantOrdinal: 3 });
+      const input = createApprovedVisualProductionInput(candidate);
+      expect(input.variantOrdinal).toBe(3);
     });
 
     it("throws InvalidApprovedVisualProductionInputError when candidate contentHash is malformed", () => {
@@ -154,7 +161,8 @@ describe("ApprovedVisualProductionInput domain contracts", () => {
           candidateId: "candidate-001",
           sceneId: "scene-001",
           specRevision: 1,
-          contentHashSha256: VALID_HASH_A
+          contentHashSha256: VALID_HASH_A,
+          variantOrdinal: 0
         });
         expect(Object.isFrozen(input)).toBe(true);
       });

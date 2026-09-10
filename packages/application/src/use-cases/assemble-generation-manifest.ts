@@ -1,10 +1,11 @@
 import { getProfileInjectionTopology, LTX_FPS } from "@cco/contracts";
-import type { CandidateId, RenderJob } from "@cco/domain";
+import type { CandidateId, RenderJob, SceneId } from "@cco/domain";
 import type {
   HashBytesPort,
   PutObjectInput,
   ReferenceAssetRepository,
   RenderWorkflow,
+  ResolvedApprovedVisualProductionMedia,
   SceneRepository,
   StoryboardCandidateRepository
 } from "../ports/index.js";
@@ -75,6 +76,35 @@ export interface ManifestSourceProvenance {
     | undefined;
 }
 
+export interface AssembleManifestConditioningInput {
+  readonly resolved: ResolvedApprovedVisualProductionMedia;
+  readonly stagedAs: { readonly name: string; readonly subfolder: string };
+  readonly injectionTarget: {
+    readonly nodeId: string;
+    readonly classType: string;
+    readonly inputField: string;
+  };
+}
+
+export interface ManifestExecutionConditioning {
+  readonly candidateId: CandidateId;
+  readonly sceneId: SceneId;
+  readonly specRevision: number;
+  readonly contentHashSha256: string;
+  readonly media: {
+    readonly bucket: string;
+    readonly key: string;
+    readonly sha256: string;
+    readonly contentType: string;
+  };
+  readonly stagedAs: { readonly name: string; readonly subfolder: string };
+  readonly injectionTarget: {
+    readonly nodeId: string;
+    readonly classType: string;
+    readonly inputField: string;
+  };
+}
+
 export interface AssembleManifestInput {
   readonly job: RenderJob;
   readonly profile: ManifestSourceProfile;
@@ -84,6 +114,7 @@ export interface AssembleManifestInput {
   readonly workflow?: RenderWorkflow | undefined;
   readonly mediaObjects: readonly PutObjectInput[];
   readonly approvedCandidateId?: CandidateId | undefined;
+  readonly conditioningImage?: AssembleManifestConditioningInput | undefined;
 }
 
 export interface AssembleManifestResult {
@@ -484,7 +515,7 @@ export class AssembleGenerationManifest {
       contentHashSha256: asset.contentHashSha256
     }));
 
-    // 11. Approved StoryboardCandidate identity/hash
+    // 11. Approved StoryboardCandidate identity/hash & execution conditioning
     let approvedCandidate:
       | {
           readonly id: CandidateId;
@@ -493,8 +524,97 @@ export class AssembleGenerationManifest {
           readonly variantOrdinal: number;
         }
       | undefined;
+    let executionConditioning: ManifestExecutionConditioning | undefined;
 
-    if (input.approvedCandidateId) {
+    if (input.conditioningImage) {
+      const { resolved, stagedAs, injectionTarget } = input.conditioningImage;
+
+      // 1. Scene identity
+      if (resolved.input.sceneId !== input.job.sceneId) {
+        throw new IncompleteManifestError("executionConditioning.sceneId");
+      }
+
+      // 2. Candidate identity vs. the explicit assembler input parameter, when supplied.
+      if (
+        input.approvedCandidateId !== undefined &&
+        resolved.input.candidateId !== input.approvedCandidateId
+      ) {
+        throw new IncompleteManifestError("executionConditioning.candidateId");
+      }
+
+      // 3. Candidate identity vs. the job's own declared payload field (job.injectedPayload is
+      // Readonly<Record<string, unknown>>; guard the type since it is not validated at this layer).
+      const jobDeclaredCandidateId = input.job.injectedPayload["approvedCandidateId"];
+      if (
+        typeof jobDeclaredCandidateId === "string" &&
+        jobDeclaredCandidateId !== resolved.input.candidateId
+      ) {
+        throw new IncompleteManifestError("executionConditioning.candidateId");
+      }
+
+      // 4. Revision cross-check against the scene already loaded in step 1 (no new repository
+      // call -- `scene` is fetched unconditionally for every job). This is a fail-closed gate,
+      // not a value source: approvedCandidate/executionConditioning below still read
+      // resolved.input.specRevision, never scene.snapshot().specRevision.
+      if (resolved.input.specRevision !== scene.snapshot().specRevision) {
+        throw new IncompleteManifestError("executionConditioning.specRevision");
+      }
+
+      // 5. Positive-integer sanity check on the carried revision itself.
+      if (!Number.isInteger(resolved.input.specRevision) || resolved.input.specRevision <= 0) {
+        throw new IncompleteManifestError("executionConditioning.specRevision");
+      }
+
+      // 6. Verified-hash vs. DB-recorded-hash self-consistency (belt-and-suspenders; #225 already
+      // enforces this before staging).
+      if (resolved.media.sha256 !== resolved.input.contentHashSha256) {
+        throw new IncompleteManifestError("executionConditioning.contentHash");
+      }
+
+      // 7. Injection-target cross-check against the executed workflow snapshot.
+      const injectedNode = input.workflow?.[injectionTarget.nodeId] as
+        { class_type?: string; inputs?: Record<string, unknown> } | undefined;
+      if (
+        !injectedNode ||
+        injectedNode.class_type !== injectionTarget.classType ||
+        typeof injectedNode.inputs?.[injectionTarget.inputField] !== "string"
+      ) {
+        throw new IncompleteManifestError("executionConditioning.injectionTarget");
+      }
+      const injectedValue = injectedNode.inputs[injectionTarget.inputField] as string;
+      const expectedStagedValue = stagedAs.subfolder
+        ? `${stagedAs.subfolder}/${stagedAs.name}`
+        : stagedAs.name;
+      if (injectedValue !== expectedStagedValue) {
+        throw new IncompleteManifestError("executionConditioning.injectionTarget");
+      }
+
+      approvedCandidate = {
+        id: resolved.input.candidateId,
+        contentHash: resolved.media.sha256,
+        specRevision: resolved.input.specRevision,
+        variantOrdinal: resolved.input.variantOrdinal
+      };
+
+      executionConditioning = {
+        candidateId: resolved.input.candidateId,
+        sceneId: resolved.input.sceneId,
+        specRevision: resolved.input.specRevision,
+        contentHashSha256: resolved.media.sha256,
+        media: {
+          bucket: resolved.media.bucket,
+          key: resolved.media.key,
+          sha256: resolved.media.sha256,
+          contentType: resolved.media.contentType
+        },
+        stagedAs: { name: stagedAs.name, subfolder: stagedAs.subfolder },
+        injectionTarget: {
+          nodeId: injectionTarget.nodeId,
+          classType: injectionTarget.classType,
+          inputField: injectionTarget.inputField
+        }
+      };
+    } else if (input.approvedCandidateId) {
       const candidate = await this.deps.storyboardCandidateRepository.findById(
         input.approvedCandidateId
       );
@@ -609,6 +729,16 @@ export class AssembleGenerationManifest {
       referenceAssets: Object.freeze(referenceAssetIdentities),
       ...(approvedCandidate !== undefined
         ? { approvedCandidate: Object.freeze(approvedCandidate) }
+        : {}),
+      ...(executionConditioning !== undefined
+        ? {
+            executionConditioning: Object.freeze({
+              ...executionConditioning,
+              media: Object.freeze(executionConditioning.media),
+              stagedAs: Object.freeze(executionConditioning.stagedAs),
+              injectionTarget: Object.freeze(executionConditioning.injectionTarget)
+            })
+          }
         : {}),
       environment: Object.freeze(environment),
       runnerProfile,

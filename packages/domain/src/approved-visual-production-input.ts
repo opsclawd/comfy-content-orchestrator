@@ -8,6 +8,7 @@ export interface ApprovedVisualProductionInput {
   readonly sceneId: SceneId;
   readonly specRevision: number;
   readonly contentHashSha256: string;
+  readonly variantOrdinal: number;
 }
 
 export abstract class ApprovedVisualProductionInputInvariantError extends Error {
@@ -208,7 +209,8 @@ export function createApprovedVisualProductionInput(
     candidateId: candidate.id,
     sceneId: candidate.sceneId,
     specRevision: candidate.specRevision,
-    contentHashSha256: candidate.contentHash
+    contentHashSha256: candidate.contentHash,
+    variantOrdinal: candidate.variantOrdinal
   });
 }
 
