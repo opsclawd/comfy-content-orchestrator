@@ -1,15 +1,19 @@
+import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type {
-  CertificationEnvironment,
-  CertificationWorkloadIdentity,
-  CertificationArtifact
+import {
+  type CertificationEnvironment,
+  type CertificationWorkloadIdentity,
+  type CertificationArtifact,
+  getProfileInjectionTopology
 } from "@cco/contracts";
 import {
   collectCertificationProvenance,
   collectRunnerEnvironment,
+  ComfyUiClient,
   ComfyUiRenderEngineAdapter,
+  HttpComfyUiInputStagingAdapter,
   LinuxHostTelemetryAdapter,
   loadCertificationProfile,
   NvidiaSmiTelemetryAdapter,
@@ -20,7 +24,9 @@ import {
 import {
   runCertification,
   TelemetrySampler,
+  type ComfyUiInputStagingPort,
   type RenderEnginePort,
+  type StagedComfyUiInput,
   type TelemetrySamplerControl
 } from "@cco/application";
 import {
@@ -47,6 +53,7 @@ export interface CertifyCliOptions {
   readonly outputRoot: string;
   readonly runnerMode: "dynamicvram" | "highvram";
   readonly highvram: boolean;
+  readonly referenceImagePath?: string | undefined;
 }
 
 export type CertifyCliParsedArgs =
@@ -68,6 +75,8 @@ export interface CertifyCliDependencies {
     readonly sampleIntervalMs: number;
     readonly now?: () => Date;
   }) => TelemetrySamplerControl;
+  readonly stageReferenceImage?: ComfyUiInputStagingPort;
+  readonly readReferenceImageFile?: (filePath: string) => Promise<Uint8Array>;
   readonly runCertification?: typeof runCertification;
   readonly writeCertificationArtifacts?: typeof writeCertificationArtifacts;
   readonly now?: () => Date;
@@ -91,6 +100,7 @@ const KNOWN_FLAGS: ReadonlySet<string> = new Set([
   "--output-root",
   "--highvram",
   "--runner-mode",
+  "--reference-image",
   "--help",
   "-h"
 ]);
@@ -105,7 +115,8 @@ const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--manifest",
   "--gpu-index",
   "--output-root",
-  "--runner-mode"
+  "--runner-mode",
+  "--reference-image"
 ]);
 
 export function getUsageHelp(): string {
@@ -127,6 +138,7 @@ Optional flags:
   --output-root <path>             Root directory for certification evidence (default: certification/<engine-folder>)
   --highvram                       Enable HighVRAM comparator mode (default: DynamicVRAM)
   --runner-mode <mode>             Memory runner mode: dynamicvram | highvram (default: dynamicvram)
+  --reference-image <path>         Path to reference image PNG for image-to-video profiles
   --help, -h                       Show this help message`;
 }
 
@@ -155,6 +167,7 @@ export function parseCertifyCliArgs(
   let outputRoot: string | undefined;
   let highvram = false;
   let runnerMode: "dynamicvram" | "highvram" | undefined;
+  let referenceImagePath: string | undefined;
 
   const seenFlags = new Set<string>();
 
@@ -260,6 +273,9 @@ export function parseCertifyCliArgs(
             );
           }
           break;
+        case "--reference-image":
+          referenceImagePath = value;
+          break;
       }
     } else {
       throw new Error(`Unexpected argument: ${arg}`);
@@ -308,7 +324,8 @@ export function parseCertifyCliArgs(
       gpuIndex: gpuIndex ?? 0,
       outputRoot: effectiveOutputRoot,
       runnerMode: effectiveRunnerMode,
-      highvram: effectiveRunnerMode === "highvram"
+      highvram: effectiveRunnerMode === "highvram",
+      referenceImagePath
     })
   });
 }
@@ -365,6 +382,8 @@ export async function runCertificationCli(
     dependencies?.verifyComfyUiMemoryMode ?? verifyComfyUiMemoryMode;
   const readWorkflowFileFn =
     dependencies?.readWorkflowFile ?? ((filePath: string) => readFile(filePath, "utf8"));
+  const readReferenceImageFileFn =
+    dependencies?.readReferenceImageFile ?? ((filePath: string) => readFile(filePath));
   const runCertificationFn = dependencies?.runCertification ?? runCertification;
   const writeCertificationArtifactsFn =
     dependencies?.writeCertificationArtifacts ?? writeCertificationArtifacts;
@@ -395,7 +414,8 @@ export async function runCertificationCli(
     manifestPath,
     gpuIndex,
     outputRoot,
-    runnerMode
+    runnerMode,
+    referenceImagePath
   } = parsed.options;
 
   // Phase 2: Preflight validation
@@ -527,6 +547,22 @@ export async function runCertificationCli(
       comfyUiCommit: liveProvenance.git.comfyUiCommit,
       customNodes
     };
+  } else if (profile.engine === "ltx_25_i2v") {
+    workloadIdentity = {
+      profileId: "ltx-25-720p-97f-i2v",
+      renderProfileKey: (profile.renderProfileIdentity?.key ??
+        "LTX_25_720P_5S_I2V_V1") as "LTX_25_720P_5S_I2V_V1",
+      renderProfileVersion: 1,
+      engine: "ltx_25_i2v",
+      width: 1280,
+      height: 720,
+      frames: 97,
+      steps: 8,
+      workflowSha256: liveProvenance.workflow.sha256,
+      modelSha256: modelSha256Map,
+      comfyUiCommit: liveProvenance.git.comfyUiCommit,
+      customNodes
+    };
   } else if (profile.engine === "flux_schnell") {
     workloadIdentity = {
       profileId: "flux-schnell-draft",
@@ -546,6 +582,78 @@ export async function runCertificationCli(
   } else {
     stderr(`[certify] Unsupported certification profile engine: "${profile.engine}"`);
     return 1;
+  }
+
+  const topology = getProfileInjectionTopology(
+    profile.renderProfileIdentity?.key ?? profile.id ?? profile.engine
+  );
+
+  const stagingAdapter: ComfyUiInputStagingPort =
+    dependencies?.stageReferenceImage ??
+    new HttpComfyUiInputStagingAdapter({
+      client: new ComfyUiClient(comfyUiUrl),
+      comfyUiDir
+    });
+
+  let stagedReferenceImage: StagedComfyUiInput | undefined;
+  let workflowToSubmit = parsedWorkflow;
+
+  if (topology?.referenceImage) {
+    const refImagePath =
+      referenceImagePath ??
+      resolve(DEFAULT_REPO_ROOT, "tests/fixtures/deterministic-reference.png");
+
+    let refImageBytes: Uint8Array;
+    try {
+      refImageBytes = await readReferenceImageFileFn(refImagePath);
+      if (refImageBytes.byteLength === 0) {
+        stderr(`[certify] Reference image at "${refImagePath}" is empty`);
+        return 1;
+      }
+    } catch (err) {
+      stderr(
+        `[certify] Profile "${profile.id}" requires a reference image for conditioning. Failed to read reference image at "${refImagePath}": ${(err as Error).message}`
+      );
+      return 1;
+    }
+
+    const refImageSha256 = createHash("sha256").update(refImageBytes).digest("hex");
+    const stagingFilename = `cco-certify-${runId}-${refImageSha256.slice(0, 16)}.png`;
+
+    try {
+      stagedReferenceImage = await stagingAdapter.stage({
+        filename: stagingFilename,
+        bytes: refImageBytes,
+        contentType: "image/png"
+      });
+    } catch (err) {
+      stderr(
+        `[certify] Failed to stage reference image "${stagingFilename}": ${(err as Error).message}`
+      );
+      return 1;
+    }
+
+    const workflowCopy = JSON.parse(JSON.stringify(parsedWorkflow)) as Record<string, unknown>;
+    const node = workflowCopy[topology.referenceImage.nodeId];
+    if (
+      typeof node !== "object" ||
+      node === null ||
+      !("inputs" in node) ||
+      typeof (node as { inputs: unknown }).inputs !== "object" ||
+      (node as { inputs: unknown }).inputs === null
+    ) {
+      stderr(
+        `[certify] Target node "${topology.referenceImage.nodeId}" not found or has invalid inputs for referenceImage injection`
+      );
+      return 1;
+    }
+
+    const stagedRefValue = stagedReferenceImage.subfolder
+      ? `${stagedReferenceImage.subfolder}/${stagedReferenceImage.name}`
+      : stagedReferenceImage.name;
+    (node as { inputs: Record<string, unknown> }).inputs[topology.referenceImage.inputField] =
+      stagedRefValue;
+    workflowToSubmit = workflowCopy;
   }
 
   const renderEngine = dependencies?.createRenderEngine
@@ -577,75 +685,81 @@ export async function runCertificationCli(
   // Phase 4: Execute certification run
   let artifact: CertificationArtifact;
   try {
-    artifact = await runCertificationFn({
-      runId,
-      runnerMode,
-      identity: workloadIdentity,
-      environment,
-      renderEngine,
-      telemetrySampler,
-      renderInput: {
-        renderJobId: `certification-${runId}`,
-        sceneId: `certification-${profile.id}`,
-        renderProfileKey: workloadIdentity.renderProfileKey,
-        workflow: parsedWorkflow
-      },
-      maxDurationMs,
-      settleDurationMs: 5000,
-      now,
-      sleep,
-      onPhaseChange: (phase) => {
-        stderr(`[certify:phase] ${phase}`);
-      }
-    });
-  } catch (err) {
-    stderr(
-      `[certify] Certification execution threw an unexpected error: ${(err as Error).message}`
-    );
-    return 1;
-  }
-
-  // Phase 5: Publish artifacts atomically
-  let writeResult: WriteCertificationArtifactsResult;
-  try {
-    writeResult = await writeCertificationArtifactsFn({
-      outputRoot,
-      artifact,
-      repoRoot: DEFAULT_REPO_ROOT,
-      liveProvenance,
-      profile
-    });
-  } catch (err) {
-    stderr(`[certify] Failed to write certification artifacts: ${(err as Error).message}`);
-    return 1;
-  }
-
-  stdout(
-    `[certify] Certification run "${runId}" completed with status: ${artifact.status.toUpperCase()}`
-  );
-  stdout(`[certify] Result JSON: ${writeResult.resultJsonPath}`);
-  stdout(`[certify] Summary Markdown: ${writeResult.summaryMdPath}`);
-  if (writeResult.approvedProvenancePath) {
-    stdout(`[certify] Approved Provenance: ${writeResult.approvedProvenancePath}`);
     try {
-      const provContent = await readFile(writeResult.approvedProvenancePath, "utf8");
-      const rootApprovedPath = resolve(outputRoot, "approved-provenance.json");
-      await writeFile(rootApprovedPath, provContent, "utf8");
-    } catch {
-      // Ignore root copy error if dependencies mock file operations
-    }
-  }
-
-  if (artifact.status === "failed") {
-    if (artifact.failure) {
+      artifact = await runCertificationFn({
+        runId,
+        runnerMode,
+        identity: workloadIdentity,
+        environment,
+        renderEngine,
+        telemetrySampler,
+        renderInput: {
+          renderJobId: `certification-${runId}`,
+          sceneId: `certification-${profile.id}`,
+          renderProfileKey: workloadIdentity.renderProfileKey,
+          workflow: workflowToSubmit
+        },
+        maxDurationMs,
+        settleDurationMs: 5000,
+        now,
+        sleep,
+        onPhaseChange: (phase) => {
+          stderr(`[certify:phase] ${phase}`);
+        }
+      });
+    } catch (err) {
       stderr(
-        `[certify] Failure: [${artifact.failure.phase}] ${artifact.failure.code} - ${artifact.failure.message}`
+        `[certify] Certification execution threw an unexpected error: ${(err as Error).message}`
       );
+      return 1;
     }
-    return 1;
-  }
 
-  return 0;
+    // Phase 5: Publish artifacts atomically
+    let writeResult: WriteCertificationArtifactsResult;
+    try {
+      writeResult = await writeCertificationArtifactsFn({
+        outputRoot,
+        artifact,
+        repoRoot: DEFAULT_REPO_ROOT,
+        liveProvenance,
+        profile
+      });
+    } catch (err) {
+      stderr(`[certify] Failed to write certification artifacts: ${(err as Error).message}`);
+      return 1;
+    }
+
+    stdout(
+      `[certify] Certification run "${runId}" completed with status: ${artifact.status.toUpperCase()}`
+    );
+    stdout(`[certify] Result JSON: ${writeResult.resultJsonPath}`);
+    stdout(`[certify] Summary Markdown: ${writeResult.summaryMdPath}`);
+    if (writeResult.approvedProvenancePath) {
+      stdout(`[certify] Approved Provenance: ${writeResult.approvedProvenancePath}`);
+      try {
+        const provContent = await readFile(writeResult.approvedProvenancePath, "utf8");
+        const rootApprovedPath = resolve(outputRoot, "approved-provenance.json");
+        await writeFile(rootApprovedPath, provContent, "utf8");
+      } catch {
+        // Ignore root copy error if dependencies mock file operations
+      }
+    }
+
+    if (artifact.status === "failed") {
+      if (artifact.failure) {
+        stderr(
+          `[certify] Failure: [${artifact.failure.phase}] ${artifact.failure.code} - ${artifact.failure.message}`
+        );
+      }
+      return 1;
+    }
+
+    return 0;
+  } finally {
+    if (stagedReferenceImage && stagingAdapter.cleanup) {
+      await stagingAdapter.cleanup(stagedReferenceImage).catch(() => {});
+    }
+  }
 }
 
 export function isDirectExecution(): boolean {

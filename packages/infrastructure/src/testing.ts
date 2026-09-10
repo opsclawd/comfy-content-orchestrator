@@ -12,6 +12,7 @@ export {
   S3Client,
   CreateBucketCommand,
   PutObjectCommand,
+  DeleteObjectCommand,
   type S3ClientConfig
 } from "@aws-sdk/client-s3";
 

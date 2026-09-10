@@ -187,3 +187,73 @@ pnpm certify:ltx \
 > Peak host RAM reached 29,384 MB of 31,233 MB usable. Swap activity was confined to the first four transitions, peaking at 982 MB, and stopped thereafter. Because the gate is fail-closed on any swap activity, the recorded decision is `require_64gb`; 11 of its 12 checks passed and `noSwapActivity` was the sole failure.
 >
 > Operational conclusion: 32 GB is supported for Phase 1 on a dedicated host running one GPU job at a time with model offloading enabled. A 64 GB upgrade is recommended before Phase 2 rather than required now. The certified production profile is frozen at `config/render-profiles/LTX_25_720P_5S_V1.json` with every measured metric traced directly to the soak run. See the [Transition Soak Certification Runbook](transition-soak-certification.md).
+
+---
+
+## 8. Image-to-Video (I2V) Candidate-Conditioned Hardware Certification Runbook & Operator Handoff
+
+This section details the operational runbook and blocking operator handoff gate for certifying candidate-conditioned Image-to-Video (I2V) production workloads (`LTX_25_720P_5S_I2V_V1`) on the Trinidad NVIDIA GeForce RTX 4090 render host.
+
+### 8.1 Image-to-Video (I2V) Pipeline Architecture
+
+Candidate-conditioned production enforces that a rendered production video is deterministically conditioned upon the exact approved storyboard candidate image for that SceneSpec revision (see [ADR 0004](adr/0004-candidate-conditioned-production-invariant.md)):
+
+```mermaid
+flowchart LR
+    ApprovedCandidate["Approved Storyboard Candidate\n(MinIO Object Storage)"] -->|Fetch & Stage| CandidateStaging["Local Runner Input Directory\n(/path/to/ComfyUI/input/candidates/<id>.png)"]
+    CandidateStaging --> Node20["Node 20: LoadImage\n(candidate.png)"]
+    Node20 --> Node21["Node 21: ImageScale\n(Lanczos, 1280x720, crop: center)"]
+    Node21 --> Node22["Node 22: LTXVImgToVideo\n(Conditioning Block)"]
+    Node22 --> Sampler["KSampler / LTXVConditioning\n(24 fps, 97 frames, 5s)"]
+    Sampler --> OutputVideo["1280x720 5s Video Stream\n(Candidate-Conditioned Production)"]
+```
+
+- **Node 20 (`LoadImage`)**: Stages and loads the verified reference image matching the exact SHA-256 hash recorded on the approved `StoryboardCandidate` entity.
+- **Node 21 (`ImageScale`)**: Preprocesses the reference image using Lanczos interpolation, scaling to exactly 1280x720 with center cropping (`crop: "center"`). This guarantees deterministic spatial and aspect-ratio alignment with the LTX-2.5 production video frame resolution.
+- **Node 22 (`LTXVImgToVideo`)**: Injects the scaled candidate image latents into the LTX conditioning flow, conditioning the diffusion model directly on the visual keyframe chosen by the Creative Director.
+
+### 8.2 Operator Certification CLI Invocation
+
+The I2V certification harness executes via the dedicated non-duplicating command `pnpm certify:ltx-i2v`:
+
+```bash
+pnpm certify:ltx-i2v \
+  --comfyui-dir /path/to/ComfyUI \
+  --comfyui-url http://127.0.0.1:8188 \
+  --comfyui-pid <PID> \
+  --gold-master-provenance /path/to/approved-ltx-i2v-provenance.json \
+  --reference-image tests/fixtures/deterministic-reference.png \
+  --run-id ltx-i2v-cert-run-001
+```
+
+The `--reference-image` flag accepts an optional path to a reference image (defaulting to the checked-in fixture `tests/fixtures/deterministic-reference.png`). The certification CLI stages this image to ComfyUI's `input/conditioning/` directory via `ComfyUiInputStagingPort` and injects its staged path into Node 20 (`LoadImage`) before submitting the graph for execution, guaranteeing that the certified run exercises the conditioned pipeline with a verified image. Upon completion, the staged image is cleaned up.
+
+#### Hardware & Execution Prerequisites
+1. **Target Hardware:** Dedicated Trinidad workstation with physical NVIDIA GeForce RTX 4090 (24 GB VRAM), Linux x86_64 (`/proc` available).
+2. **Disk Reservation:** Verified $\ge 100$ GB free space on the ComfyUI volume.
+3. **ComfyUI Process:** Running ComfyUI instance in DynamicVRAM mode (PID supplied via `--comfyui-pid`).
+4. **Approved Gold Master Provenance:** Validated host provenance JSON report containing pinned Git commit, model checkpoint SHA-256 hashes, and workflow topology hashes for `ltx-25-720p-97f-i2v`.
+5. **Reference Image Fixture:** Valid PNG reference image passed via `--reference-image` or defaulted to `tests/fixtures/deterministic-reference.png`.
+
+### 8.3 Acceptance Criteria & Evaluation Gates
+
+The I2V certification run must satisfy all five gate checks:
+- `renderSuccess = true`: Candidate staging, Lanczos preprocessing, and I2V conditioning prompt execution complete without error.
+- `noOom = true`: Zero GPU or system out-of-memory errors.
+- `durationWithinLimit = true`: Total execution time $\le 55.0$ seconds.
+- `telemetryComplete = true`: Zero sampling errors, zero counter resets across GPU (`nvidia-smi`) and host (`/proc`) telemetry series sampled every 200 ms.
+- `postUnloadHeadroomObserved = true`: Post-unload memory settle snapshot recorded after model offload / free.
+
+### 8.4 Operator Handoff Gate (AC-10 / AC-11 Ledger Disposition)
+
+> [!IMPORTANT]
+> **Zero Agent-Authored Certification Evidence Policy (`AGENTS.md`)**
+>
+> Per repository architecture rules, directories `certification/`, `baseline/`, and `config/render-profiles/` are strictly non-agent-authored (`forbiddenArtifactPaths`). These directories hold measurements of physical hardware and belong exclusively to human operators or physical host runners with access to the Trinidad workstation.
+
+#### Blocking Operator Handoff Sequence:
+1. **Physical Run:** The human operator executes `pnpm certify:ltx --profile ltx-25-720p-97f-i2v ...` directly on the physical Trinidad workstation.
+2. **Artifact Verification:** Operator verifies that all 5 resource gates pass and evidence files `result.json` and `summary.md` are written to `certification/ltx-25/<run-id>/`.
+3. **RenderProfile Freezing:** Operator exports the certified profile configuration to `config/render-profiles/LTX_25_720P_5S_I2V_V1.json` with exact measured latency, peak VRAM, and model SHA-256 hashes.
+4. **Governance Approval Promotion:** In `config/component-license-registry.json`, the operator updates the `LTX_25_720P_5S_I2V_V1` entry from `"review_required"` to `"approved"` and sets `reviewedAt` to the current timestamp.
+5. **Production Enablement:** Control-plane job dispatch automatically switches production renders for candidate-approved scenes to `LTX_25_720P_5S_I2V_V1` (or via rollout override `enableConditionedProfile: true`), ensuring zero silent fallbacks.

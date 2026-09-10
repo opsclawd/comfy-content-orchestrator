@@ -1114,5 +1114,191 @@ describe("apps/render-worker/src/certification/preflight", () => {
         expect((err as PreflightError).message).toMatch(/object/i);
       }
     });
+
+    it("accepts valid ltx-25-720p-97f-i2v profile and provenance report", () => {
+      const profile: CertificationProfile = {
+        id: "ltx-25-720p-97f-i2v",
+        engine: "ltx_25_i2v",
+        workflowPath: "/home/gary/workflows/ltx_25_720p_i2v_97f_api.json",
+        workflowRelativePath: "ltx_25_720p_i2v_97f_api.json",
+        expectedWorkflowHash: "b".repeat(64),
+        source: {
+          kind: "validated_host_export",
+          uri: "https://github.com/Lightricks/LTX-2",
+          revision: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+          license: "LTX-2 Community License"
+        },
+        baseline: {
+          width: 1280,
+          height: 720,
+          frames: 97,
+          steps: 8,
+          approximateDurationSeconds: 5
+        },
+        minFreeDiskGb: 100,
+        runnerProfile: "dynamicvram-offload-v1",
+        models: [
+          {
+            category: "diffusion_models",
+            relativePath: "ltx-video-2b-v0.9.1.safetensors"
+          }
+        ],
+        assertions: [
+          { nodeId: "1", classType: "KSampler", input: "steps", equals: 8 },
+          { nodeId: "5", classType: "EmptyLTXLatentVideo", input: "width", equals: 1280 },
+          { nodeId: "5", classType: "EmptyLTXLatentVideo", input: "height", equals: 720 },
+          { nodeId: "5", classType: "EmptyLTXLatentVideo", input: "length", equals: 97 }
+        ],
+        renderProfileIdentity: {
+          key: "LTX_25_720P_5S_I2V_V1",
+          version: 1
+        }
+      };
+
+      const approved: CertificationProvenanceReport = {
+        version: 1,
+        profileId: "ltx-25-720p-97f-i2v",
+        generatedAt: "2026-08-15T12:00:00.000Z",
+        workflow: {
+          relativePath: "ltx_25_720p_i2v_97f_api.json",
+          sha256: "b".repeat(64),
+          source: {
+            kind: "validated_host_export",
+            uri: "https://github.com/Lightricks/LTX-2",
+            revision: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+            license: "LTX-2 Community License"
+          }
+        },
+        models: [
+          {
+            category: "diffusion_models",
+            relativePath: "ltx-video-2b-v0.9.1.safetensors",
+            key: "diffusion_models/ltx-video-2b-v0.9.1.safetensors",
+            bytes: 2500000000,
+            sha256: "c".repeat(64)
+          }
+        ],
+        git: {
+          comfyUiCommit: "d".repeat(40),
+          customNodes: []
+        },
+        disk: {
+          modelFootprintBytes: 2500000000,
+          availableBytes: 200000000000,
+          requiredFreeBytes: 100000000000,
+          modelFootprintGb: 2.5,
+          availableGb: 200,
+          minFreeDiskGb: 100,
+          passes: true
+        },
+        renderProfileProvenance: {
+          key: "LTX_25_720P_5S_I2V_V1",
+          version: 1,
+          engine: "ltx_25_i2v",
+          workflowHash: "b".repeat(64),
+          modelHashes: {
+            "diffusion_models/ltx-video-2b-v0.9.1.safetensors": "c".repeat(64)
+          },
+          frames: 97,
+          steps: 8,
+          runnerProfile: "dynamicvram-offload-v1",
+          measuredDiskFootprintGb: 2.5,
+          minFreeDiskGb: 100
+        }
+      };
+
+      const live: CertificationProvenanceReport = { ...approved };
+
+      expect(() => verifyGoldMasterProvenance({ approved, live, profile })).not.toThrow();
+    });
+
+    it("rejects ltx_25_i2v profile with mismatched identity or baseline", () => {
+      const baseProfile: CertificationProfile = {
+        id: "ltx-25-720p-97f-i2v",
+        engine: "ltx_25_i2v",
+        workflowPath: "/home/gary/workflows/ltx_25_720p_i2v_97f_api.json",
+        workflowRelativePath: "ltx_25_720p_i2v_97f_api.json",
+        expectedWorkflowHash: "b".repeat(64),
+        source: {
+          kind: "validated_host_export",
+          uri: "https://github.com/Lightricks/LTX-2",
+          revision: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+          license: "LTX-2 Community License"
+        },
+        baseline: {
+          width: 1280,
+          height: 720,
+          frames: 97,
+          steps: 8,
+          approximateDurationSeconds: 5
+        },
+        minFreeDiskGb: 100,
+        runnerProfile: "dynamicvram-offload-v1",
+        models: [
+          {
+            category: "diffusion_models",
+            relativePath: "ltx-video-2b-v0.9.1.safetensors"
+          }
+        ],
+        assertions: [
+          { nodeId: "1", classType: "KSampler", input: "steps", equals: 8 },
+          { nodeId: "5", classType: "EmptyLTXLatentVideo", input: "width", equals: 1280 },
+          { nodeId: "5", classType: "EmptyLTXLatentVideo", input: "height", equals: 720 },
+          { nodeId: "5", classType: "EmptyLTXLatentVideo", input: "length", equals: 97 }
+        ],
+        renderProfileIdentity: {
+          key: "LTX_25_720P_5S_I2V_V1",
+          version: 1
+        }
+      };
+
+      // Wrong profile ID
+      expect(() =>
+        verifyGoldMasterProvenance({
+          approved: {},
+          live: {} as unknown as CertificationProvenanceReport,
+          profile: { ...baseProfile, id: "wrong-id" }
+        })
+      ).toThrow(PreflightError);
+
+      // Wrong render profile identity key
+      expect(() =>
+        verifyGoldMasterProvenance({
+          approved: {},
+          live: {} as unknown as CertificationProvenanceReport,
+          profile: {
+            ...baseProfile,
+            renderProfileIdentity: {
+              key: "LTX_25_720P_5S_V1" as unknown as "LTX_25_720P_5S_I2V_V1",
+              version: 1
+            }
+          }
+        })
+      ).toThrow(PreflightError);
+
+      // Wrong baseline steps
+      expect(() =>
+        verifyGoldMasterProvenance({
+          approved: {},
+          live: {} as unknown as CertificationProvenanceReport,
+          profile: {
+            ...baseProfile,
+            baseline: { ...baseProfile.baseline, steps: 20 }
+          }
+        })
+      ).toThrow(PreflightError);
+
+      // Missing assertions
+      expect(() =>
+        verifyGoldMasterProvenance({
+          approved: {},
+          live: {} as unknown as CertificationProvenanceReport,
+          profile: {
+            ...baseProfile,
+            assertions: []
+          }
+        })
+      ).toThrow(PreflightError);
+    });
   });
 });

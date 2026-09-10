@@ -15,6 +15,7 @@
     "build": "tsc --build",
     "start": "node dist/cli/run-worker.js",
     "certify:ltx": "tsx src/cli/certify.ts --profile ltx-25-720p-97f",
+    "certify:ltx-i2v": "tsx src/cli/certify.ts --profile ltx-25-720p-97f-i2v",
     "certify:transition-soak": "tsx src/cli/certify-transition-soak.ts",
     "typecheck": "tsc --build",
     "certify": "tsx src/cli/certify.ts",

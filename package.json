@@ -10,6 +10,7 @@
     "boundaries": "depcruise apps packages --config .dependency-cruiser.cjs",
     "build": "tsc --build",
     "certify:ltx": "pnpm --filter render-worker certify:ltx",
+    "certify:ltx-i2v": "pnpm --filter render-worker certify:ltx-i2v",
     "certify:transition-soak": "pnpm --filter render-worker certify:transition-soak",
     "db:migrate": "pnpm --filter @cco/infrastructure db:migrate",
     "format": "prettier --check .",
