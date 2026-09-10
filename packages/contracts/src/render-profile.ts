@@ -4,7 +4,11 @@ const sha256HashSchema = z
   .string()
   .regex(/^[0-9a-f]{64}$/, "Must be a lowercase 64-character hexadecimal SHA-256 hash");
 
-export const RenderProfileKeySchema = z.enum(["LTX_25_720P_5S_V1", "FLUX_SCHNELL_DRAFT_V1"]);
+export const RenderProfileKeySchema = z.enum([
+  "LTX_25_720P_5S_V1",
+  "FLUX_SCHNELL_DRAFT_V1",
+  "LTX_25_720P_5S_I2V_V1"
+]);
 export type RenderProfileKey = z.infer<typeof RenderProfileKeySchema>;
 
 export const LtxRenderProfileSchema = z.object({
@@ -29,6 +33,29 @@ export const LtxRenderProfileSchema = z.object({
   requiresModelOffloading: z.boolean()
 });
 export type LtxRenderProfile = z.infer<typeof LtxRenderProfileSchema>;
+
+export const LtxI2vRenderProfileSchema = z.object({
+  key: z.literal("LTX_25_720P_5S_I2V_V1"),
+  version: z.literal(1),
+  engine: z.literal("ltx_25_i2v"),
+  workflowHash: sha256HashSchema,
+  modelHashes: z.record(z.string(), sha256HashSchema),
+  frames: z.literal(97),
+  steps: z.literal(8),
+  runnerProfile: z.string().min(1),
+  measuredPeakVramMb: z.number().int().positive(),
+  measuredTotalDurationMs: z.number().int().positive(),
+  measuredSamplingDurationMs: z.number().int().positive().nullable(),
+  measuredDiskFootprintGb: z.number().positive().finite(),
+  measuredPeakHostRamMb: z.number().int().nonnegative().nullable(),
+  measuredPeakProcessRssMb: z.number().int().nonnegative().nullable(),
+  measuredSwapUsedMb: z.number().int().nonnegative().nullable(),
+  measuredMajorPageFaults: z.number().int().nonnegative().nullable(),
+  minFreeDiskGb: z.number().positive().finite(),
+  maxConcurrentGpuJobs: z.number().int().positive(),
+  requiresModelOffloading: z.boolean()
+});
+export type LtxI2vRenderProfile = z.infer<typeof LtxI2vRenderProfileSchema>;
 
 export const FluxSchnellRenderProfileSchema = z.object({
   key: z.literal("FLUX_SCHNELL_DRAFT_V1"),
@@ -55,7 +82,8 @@ export type FluxSchnellRenderProfile = z.infer<typeof FluxSchnellRenderProfileSc
 
 export const RenderProfileSchema = z.discriminatedUnion("key", [
   LtxRenderProfileSchema,
-  FluxSchnellRenderProfileSchema
+  FluxSchnellRenderProfileSchema,
+  LtxI2vRenderProfileSchema
 ]);
 export type RenderProfile = z.infer<typeof RenderProfileSchema>;
 
@@ -105,6 +133,7 @@ export interface ProfileInjectionTopology {
   readonly seed: NodeInjectionTarget;
   readonly audioPrompt?: NodeInjectionTarget | null | undefined;
   readonly frameCount?: NodeInjectionTarget | undefined;
+  readonly referenceImage?: NodeInjectionTarget | undefined;
 }
 
 export const LTX_25_720P_5S_V1_INJECTION_TOPOLOGY: ProfileInjectionTopology = Object.freeze({
@@ -116,6 +145,18 @@ export const LTX_25_720P_5S_V1_INJECTION_TOPOLOGY: ProfileInjectionTopology = Ob
     nodeId: "5",
     classType: "EmptyLTXVLatentVideo",
     inputField: "length"
+  })
+});
+
+export const LTX_25_720P_5S_I2V_V1_INJECTION_TOPOLOGY: ProfileInjectionTopology = Object.freeze({
+  prompt: Object.freeze({ nodeId: "3", classType: "CLIPTextEncode", inputField: "text" }),
+  negativePrompt: Object.freeze({ nodeId: "4", classType: "CLIPTextEncode", inputField: "text" }),
+  seed: Object.freeze({ nodeId: "1", classType: "KSampler", inputField: "seed" }),
+  audioPrompt: null,
+  referenceImage: Object.freeze({
+    nodeId: "20",
+    classType: "LoadImage",
+    inputField: "image"
   })
 });
 
@@ -149,6 +190,13 @@ export function getProfileInjectionTopology(
     normalized === "ltx_25"
   ) {
     return LTX_25_720P_5S_V1_INJECTION_TOPOLOGY;
+  }
+  if (
+    normalized === "ltx_25_720p_5s_i2v_v1" ||
+    normalized === "ltx-25-720p-97f-i2v" ||
+    normalized === "ltx_25_i2v"
+  ) {
+    return LTX_25_720P_5S_I2V_V1_INJECTION_TOPOLOGY;
   }
   if (
     normalized === "flux_schnell_draft_v1" ||

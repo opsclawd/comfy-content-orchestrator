@@ -127,6 +127,95 @@
         "key": "LTX_25_720P_5S_V1",
         "version": 1
       }
+    },
+    {
+      "id": "ltx-25-720p-97f-i2v",
+      "engine": "ltx_25_i2v",
+      "workflowRelativePath": "ltx_25_720p_i2v_97f_api.json",
+      "expectedWorkflowHash": "e0b417a3c3b5dc91ed417891789795c6a56e602d39c80eed7e1253a2ea41baab",
+      "source": {
+        "kind": "authored_from_spec",
+        "uri": "https://github.com/comfyanonymous/ComfyUI",
+        "revision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        "license": "GPL-3.0"
+      },
+      "baseline": {
+        "width": 1280,
+        "height": 720,
+        "frames": 97,
+        "steps": 8,
+        "approximateDurationSeconds": 5
+      },
+      "minFreeDiskGb": 100,
+      "runnerProfile": "dynamicvram-offload-v1",
+      "models": [
+        {
+          "category": "diffusion_models",
+          "relativePath": "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors"
+        },
+        {
+          "category": "clip",
+          "relativePath": "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors"
+        },
+        {
+          "category": "vae",
+          "relativePath": "ltx-2.5-video-vae-conv-bf16.safetensors"
+        }
+      ],
+      "assertions": [
+        {
+          "nodeId": "1",
+          "classType": "KSampler",
+          "input": "steps",
+          "equals": 8
+        },
+        {
+          "nodeId": "5",
+          "classType": "EmptyLTXVLatentVideo",
+          "input": "width",
+          "equals": 1280
+        },
+        {
+          "nodeId": "5",
+          "classType": "EmptyLTXVLatentVideo",
+          "input": "height",
+          "equals": 720
+        },
+        {
+          "nodeId": "5",
+          "classType": "EmptyLTXVLatentVideo",
+          "input": "length",
+          "equals": 97
+        },
+        {
+          "nodeId": "21",
+          "classType": "ImageScale",
+          "input": "width",
+          "equals": 1280
+        },
+        {
+          "nodeId": "21",
+          "classType": "ImageScale",
+          "input": "height",
+          "equals": 720
+        },
+        {
+          "nodeId": "21",
+          "classType": "ImageScale",
+          "input": "crop",
+          "equals": "center"
+        },
+        {
+          "nodeId": "21",
+          "classType": "ImageScale",
+          "input": "upscale_method",
+          "equals": "lanczos"
+        }
+      ],
+      "renderProfileIdentity": {
+        "key": "LTX_25_720P_5S_I2V_V1",
+        "version": 1
+      }
     }
   ]
 }

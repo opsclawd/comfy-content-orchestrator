@@ -10,7 +10,7 @@ describe("Workflow Assets and Provenance Records", () => {
   );
 
   it("Gold Master workflows are API-format object maps with pinned canonical hashes", async () => {
-    const profileIds = ["flux-schnell-draft", "ltx-25-720p-97f"] as const;
+    const profileIds = ["flux-schnell-draft", "ltx-25-720p-97f", "ltx-25-720p-97f-i2v"] as const;
 
     for (const profileId of profileIds) {
       const profile = await loadCertificationProfile(manifestPath, profileId);
@@ -129,7 +129,7 @@ describe("Workflow Assets and Provenance Records", () => {
   });
 
   it("Gold Master profiles identify every referenced certification model file", async () => {
-    const profileIds = ["flux-schnell-draft", "ltx-25-720p-97f"] as const;
+    const profileIds = ["flux-schnell-draft", "ltx-25-720p-97f", "ltx-25-720p-97f-i2v"] as const;
     const validCategorySet = new Set<string>(VALID_MODEL_CATEGORIES);
 
     for (const profileId of profileIds) {
@@ -151,7 +151,7 @@ describe("Workflow Assets and Provenance Records", () => {
   });
 
   it("Gold Master provenance contains immutable source and license evidence", async () => {
-    const profileIds = ["flux-schnell-draft", "ltx-25-720p-97f"] as const;
+    const profileIds = ["flux-schnell-draft", "ltx-25-720p-97f", "ltx-25-720p-97f-i2v"] as const;
     const placeholderPatterns = [/placeholder/i, /todo/i, /example\.com/i, /<.*>/, /^\.+$/];
 
     for (const profileId of profileIds) {
@@ -182,6 +182,7 @@ describe("Workflow Assets and Provenance Records", () => {
     }
     expect(readmeContent).toContain("flux-schnell-draft");
     expect(readmeContent).toContain("ltx-25-720p-97f");
+    expect(readmeContent).toContain("ltx-25-720p-97f-i2v");
     expect(readmeContent).toContain("SHA-256");
     expect(readmeContent).toContain("DynamicVRAM");
   });
@@ -202,5 +203,88 @@ describe("Workflow Assets and Provenance Records", () => {
       version: 1
     });
     expect(fluxProfile.minFreeDiskGb).toBe(0);
+
+    const ltxI2vProfile = await loadCertificationProfile(manifestPath, "ltx-25-720p-97f-i2v");
+    expect(ltxI2vProfile.renderProfileIdentity).toEqual({
+      key: "LTX_25_720P_5S_I2V_V1",
+      version: 1
+    });
+    expect(ltxI2vProfile.minFreeDiskGb).toBe(100);
+    expect(ltxI2vProfile.runnerProfile).toBe("dynamicvram-offload-v1");
+  });
+
+  it("LTX I2V Gold Master pins 720p 97-frame eight-step baseline and explicit image-conditioning nodes", async () => {
+    const profile = await loadCertificationProfile(manifestPath, "ltx-25-720p-97f-i2v");
+    const rawContent = await readFile(profile.workflowPath, "utf8");
+    const workflow = JSON.parse(rawContent) as Record<
+      string,
+      { class_type: string; inputs: Record<string, unknown> }
+    >;
+
+    expect(profile.assertions.length).toBeGreaterThan(0);
+
+    for (const assertion of profile.assertions) {
+      const node = workflow[assertion.nodeId];
+      expect(node, `Node ${assertion.nodeId} must exist in workflow`).toBeDefined();
+      expect(node?.class_type).toBe(assertion.classType);
+      expect(node?.inputs[assertion.input]).toEqual(assertion.equals);
+    }
+
+    // Assert baseline values
+    expect(profile.baseline.steps).toBe(8);
+    expect(profile.baseline.frames).toBe(97);
+    expect(profile.baseline.width).toBe(1280);
+    expect(profile.baseline.height).toBe(720);
+    expect(profile.baseline.approximateDurationSeconds).toBe(5);
+
+    // Assert sampler steps is 8
+    const stepsAssertion = profile.assertions.find((a) => a.input === "steps" && a.equals === 8);
+    expect(stepsAssertion).toBeDefined();
+    const stepsNode = workflow[stepsAssertion!.nodeId];
+    expect(stepsNode).toBeDefined();
+    expect(stepsNode?.inputs.steps).toBe(8);
+
+    // Assert latent video length is 97
+    const framesAssertion = profile.assertions.find(
+      (a) => a.classType === "EmptyLTXVLatentVideo" && a.input === "length" && a.equals === 97
+    );
+    expect(framesAssertion).toBeDefined();
+
+    // Assert explicit deterministic image resize and crop node
+    const imageWidthAssertion = profile.assertions.find(
+      (a) => a.classType === "ImageScale" && a.input === "width" && a.equals === 1280
+    );
+    expect(imageWidthAssertion).toBeDefined();
+
+    const imageHeightAssertion = profile.assertions.find(
+      (a) => a.classType === "ImageScale" && a.input === "height" && a.equals === 720
+    );
+    expect(imageHeightAssertion).toBeDefined();
+
+    const cropAssertion = profile.assertions.find(
+      (a) => a.classType === "ImageScale" && a.input === "crop" && a.equals === "center"
+    );
+    expect(cropAssertion).toBeDefined();
+
+    const methodAssertion = profile.assertions.find(
+      (a) => a.classType === "ImageScale" && a.input === "upscale_method" && a.equals === "lanczos"
+    );
+    expect(methodAssertion).toBeDefined();
+
+    // Verify declared LoadImage node exists
+    expect(workflow["20"]).toBeDefined();
+    expect(workflow["20"]?.class_type).toBe("LoadImage");
+
+    // Verify LTXVImgToVideo conditioning node exists
+    expect(workflow["22"]).toBeDefined();
+    expect(workflow["22"]?.class_type).toBe("LTXVImgToVideo");
+
+    // Verify profile identity
+    expect(profile.renderProfileIdentity).toEqual({
+      key: "LTX_25_720P_5S_I2V_V1",
+      version: 1
+    });
+    expect(profile.minFreeDiskGb).toBe(100);
+    expect(profile.runnerProfile).toBe("dynamicvram-offload-v1");
   });
 });

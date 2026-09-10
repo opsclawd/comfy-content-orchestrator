@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   RenderProfileSchema,
   LtxRenderProfileSchema,
+  LtxI2vRenderProfileSchema,
+  RenderProfileKeySchema,
   LTX_25_720P_5S_V1_PROFILE,
   getProfileInjectionTopology,
   LTX_FPS,
@@ -58,9 +60,45 @@ describe("RenderProfileSchema", () => {
     requiresModelOffloading: true
   };
 
+  const measuredLtxI2vFixture = {
+    key: "LTX_25_720P_5S_I2V_V1" as const,
+    version: 1 as const,
+    engine: "ltx_25_i2v" as const,
+    workflowHash: "c".repeat(64),
+    modelHashes: { checkpoint: "b".repeat(64), textEncoder: "c".repeat(64), vae: "d".repeat(64) },
+    frames: 97 as const,
+    steps: 8 as const,
+    runnerProfile: "dynamicvram-offload-v1",
+    measuredPeakVramMb: 24028,
+    measuredTotalDurationMs: 46000,
+    measuredSamplingDurationMs: 12000,
+    measuredDiskFootprintGb: 68.8,
+    measuredPeakHostRamMb: null,
+    measuredPeakProcessRssMb: null,
+    measuredSwapUsedMb: null,
+    measuredMajorPageFaults: null,
+    minFreeDiskGb: 100,
+    maxConcurrentGpuJobs: 1,
+    requiresModelOffloading: true
+  };
+
+  it("accepts canonical profile keys including LTX_25_720P_5S_I2V_V1 and rejects unknown keys", () => {
+    expect(RenderProfileKeySchema.parse("LTX_25_720P_5S_V1")).toBe("LTX_25_720P_5S_V1");
+    expect(RenderProfileKeySchema.parse("FLUX_SCHNELL_DRAFT_V1")).toBe("FLUX_SCHNELL_DRAFT_V1");
+    expect(RenderProfileKeySchema.parse("LTX_25_720P_5S_I2V_V1")).toBe("LTX_25_720P_5S_I2V_V1");
+    expect(() => RenderProfileKeySchema.parse("UNKNOWN_PROFILE_KEY")).toThrow();
+  });
+
   it("accepts the measured LTX 2.5 baseline with uncertified host memory fields set to null", () => {
     const parsed = RenderProfileSchema.parse(measuredLtxFixture);
     expect(parsed).toEqual(measuredLtxFixture);
+  });
+
+  it("accepts a compliant LTX I2V profile", () => {
+    const parsed = RenderProfileSchema.parse(measuredLtxI2vFixture);
+    expect(parsed).toEqual(measuredLtxI2vFixture);
+    const parsedLtxI2v = LtxI2vRenderProfileSchema.parse(measuredLtxI2vFixture);
+    expect(parsedLtxI2v).toEqual(measuredLtxI2vFixture);
   });
 
   it("accepts the frozen production LTX_25_720P_5S_V1_PROFILE constant", () => {
@@ -118,6 +156,13 @@ describe("RenderProfileSchema", () => {
     expect(
       RenderProfileSchema.safeParse({
         ...measuredFluxFixture,
+        engine: "ltx_25"
+      }).success
+    ).toBe(false);
+
+    expect(
+      RenderProfileSchema.safeParse({
+        ...measuredLtxI2vFixture,
         engine: "ltx_25"
       }).success
     ).toBe(false);
@@ -179,7 +224,7 @@ describe("RenderProfileSchema", () => {
   });
 
   describe("declarative injection topology", () => {
-    it("returns explicit topology for LTX profile with audioPrompt set to null", () => {
+    it("returns explicit topology for LTX profile with audioPrompt set to null and referenceImage undefined", () => {
       const topology = getProfileInjectionTopology("LTX_25_720P_5S_V1");
       expect(topology).toBeDefined();
       expect(topology?.prompt).toEqual({
@@ -203,9 +248,10 @@ describe("RenderProfileSchema", () => {
         classType: "EmptyLTXVLatentVideo",
         inputField: "length"
       });
+      expect(topology?.referenceImage).toBeUndefined();
     });
 
-    it("returns explicit topology for Flux profile with audioPrompt and frameCount undefined/null", () => {
+    it("returns explicit topology for Flux profile with audioPrompt, frameCount, and referenceImage undefined/null", () => {
       const topology = getProfileInjectionTopology("flux-schnell-draft");
       expect(topology).toBeDefined();
       expect(topology?.prompt).toEqual({
@@ -220,6 +266,40 @@ describe("RenderProfileSchema", () => {
       });
       expect(topology?.audioPrompt).toBeNull();
       expect(topology?.frameCount).toBeUndefined();
+      expect(topology?.referenceImage).toBeUndefined();
+    });
+
+    it("returns explicit topology for LTX I2V profile with referenceImage target", () => {
+      const topology = getProfileInjectionTopology("LTX_25_720P_5S_I2V_V1");
+      expect(topology).toBeDefined();
+      expect(topology?.prompt).toEqual({
+        nodeId: "3",
+        classType: "CLIPTextEncode",
+        inputField: "text"
+      });
+      expect(topology?.negativePrompt).toEqual({
+        nodeId: "4",
+        classType: "CLIPTextEncode",
+        inputField: "text"
+      });
+      expect(topology?.seed).toEqual({
+        nodeId: "1",
+        classType: "KSampler",
+        inputField: "seed"
+      });
+      expect(topology?.audioPrompt).toBeNull();
+      expect(topology?.frameCount).toBeUndefined();
+      expect(topology?.referenceImage).toEqual({
+        nodeId: "20",
+        classType: "LoadImage",
+        inputField: "image"
+      });
+
+      // Alias resolution
+      const aliasTopology = getProfileInjectionTopology("ltx-25-720p-97f-i2v");
+      expect(aliasTopology).toEqual(topology);
+      const shortAliasTopology = getProfileInjectionTopology("ltx_25_i2v");
+      expect(shortAliasTopology).toEqual(topology);
     });
 
     it("verifies LTX frame rate, quantization constants and tolerance", () => {
