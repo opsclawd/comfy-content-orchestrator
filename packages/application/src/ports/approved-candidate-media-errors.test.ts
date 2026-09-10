@@ -10,21 +10,23 @@ import {
 
 describe("Approved candidate media errors & types", () => {
   describe("ApprovedCandidateMediaUnavailableError", () => {
-    it.each<ApprovedCandidateMediaUnavailableReason>(["missing", "unreadable", "corrupt"])(
-      "instantiates with reason '%s' and candidateId",
-      (reason) => {
-        const candidateId = "cand-123" as CandidateId;
-        const err = new ApprovedCandidateMediaUnavailableError(candidateId, reason);
+    it.each<ApprovedCandidateMediaUnavailableReason>([
+      "missing",
+      "unreadable",
+      "corrupt",
+      "unsupported_content_type"
+    ])("instantiates with reason '%s' and candidateId", (reason) => {
+      const candidateId = "cand-123" as CandidateId;
+      const err = new ApprovedCandidateMediaUnavailableError(candidateId, reason);
 
-        expect(err).toBeInstanceOf(Error);
-        expect(err).toBeInstanceOf(ApprovedCandidateMediaUnavailableError);
-        expect(err.name).toBe("ApprovedCandidateMediaUnavailableError");
-        expect(err.candidateId).toBe(candidateId);
-        expect(err.reason).toBe(reason);
-        expect(err.message).toContain("cand-123");
-        expect(err.message).toContain(reason);
-      }
-    );
+      expect(err).toBeInstanceOf(Error);
+      expect(err).toBeInstanceOf(ApprovedCandidateMediaUnavailableError);
+      expect(err.name).toBe("ApprovedCandidateMediaUnavailableError");
+      expect(err.candidateId).toBe(candidateId);
+      expect(err.reason).toBe(reason);
+      expect(err.message).toContain("cand-123");
+      expect(err.message).toContain(reason);
+    });
 
     it("supports optional ErrorOptions (e.g. cause)", () => {
       const cause = new Error("Underlying network failure");
