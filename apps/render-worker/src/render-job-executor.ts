@@ -4,19 +4,25 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   findAudioPromptTargets,
+  MAX_CANDIDATE_IMAGE_BYTES,
+  type ComfyUiInputStagingPort,
+  type EnforceLicenseRouting,
   type ExecuteProfileRenderInput,
   type ExecuteProfileRenderResult,
   type HashBytesPort,
+  type ObjectStoragePort,
   type ProfileRenderIdentity,
   type PutObjectInput,
-  type RenderWorkflow
+  type RenderWorkflow,
+  type ResolvedApprovedVisualProductionMedia,
+  type StagedComfyUiInput
 } from "@cco/application";
 import {
   getProfileInjectionTopology,
   LTX_FRAME_STEP,
   LTX_SUPPORTED_FRAME_RANGE
 } from "@cco/contracts";
-import type { CandidateId, JobKind, RenderJob } from "@cco/domain";
+import type { CandidateId, JobKind, RenderJob, SceneId } from "@cco/domain";
 import {
   collectCertificationProvenance,
   hashWorkflow,
@@ -80,6 +86,28 @@ export class MissingCertifiedProfileError extends RenderJobExecutionError {
   }
 }
 
+export class MissingApprovedCandidateForConditioningError extends RenderJobExecutionError {
+  override readonly name: string = "MissingApprovedCandidateForConditioningError";
+}
+
+export class ReferenceImageIntegrityError extends RenderJobExecutionError {
+  override readonly name: string = "ReferenceImageIntegrityError";
+}
+
+export class ReferenceImageStagingError extends RenderJobExecutionError {
+  override readonly name: string = "ReferenceImageStagingError";
+}
+
+export class ReferenceImageInjectionInvariantError extends RenderJobExecutionError {
+  override readonly name: string = "ReferenceImageInjectionInvariantError";
+  readonly profileId: string;
+
+  constructor(profileId: string, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.profileId = profileId;
+  }
+}
+
 export interface AssembleProductionManifestInput {
   readonly job: RenderJob;
   readonly profile: CertificationProfile;
@@ -88,6 +116,17 @@ export interface AssembleProductionManifestInput {
   readonly liveProvenance?: CertificationProvenanceReport | undefined;
   readonly workflow?: RenderWorkflow | undefined;
   readonly approvedCandidateId?: CandidateId | undefined;
+  readonly conditioningImage?:
+    | {
+        readonly resolved: ResolvedApprovedVisualProductionMedia;
+        readonly stagedAs: { readonly name: string; readonly subfolder: string };
+        readonly injectionTarget: {
+          readonly nodeId: string;
+          readonly classType: string;
+          readonly inputField: string;
+        };
+      }
+    | undefined;
 }
 
 export type ProductionManifestAssembler =
@@ -131,10 +170,29 @@ export interface RenderJobExecutorDependencies {
   readonly executeProfileRender?:
     ((input: ExecuteProfileRenderInput) => Promise<ExecuteProfileRenderResult>) | undefined;
   readonly useCase?:
-    | { execute: (input: ExecuteProfileRenderInput) => Promise<ExecuteProfileRenderResult> }
+    | {
+        execute: (input: ExecuteProfileRenderInput) => Promise<ExecuteProfileRenderResult>;
+        enforceLicense?: (input: {
+          renderJobId: string;
+          sceneId: string;
+          renderProfileKey: string;
+          renderProfileVersion: number;
+        }) => void;
+      }
     | undefined;
+  readonly enforceLicenseRouting?: EnforceLicenseRouting | undefined;
   readonly outputReader?: ComfyUiOutputReader | undefined;
   readonly productionManifestAssembler?: ProductionManifestAssembler | undefined;
+  readonly resolveApprovedCandidateMedia?:
+    | {
+        execute: (input: {
+          sceneId: SceneId;
+          approvedCandidateId: CandidateId;
+        }) => Promise<ResolvedApprovedVisualProductionMedia>;
+      }
+    | undefined;
+  readonly objectStorage?: ObjectStoragePort | undefined;
+  readonly stageReferenceImage?: ComfyUiInputStagingPort | undefined;
   readonly now?: (() => Date) | undefined;
 }
 
@@ -147,6 +205,26 @@ export interface RenderJobExecutorOptions {
   readonly buildObjectKey?:
     | ((sceneId: string, jobId: string, outputKey: string, contentHashSha256: string) => string)
     | undefined;
+}
+
+const CONTENT_TYPE_TO_EXTENSION: Readonly<Record<string, string>> = {
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/webp": ".webp"
+};
+
+export function buildDeterministicStagingFilename(
+  sceneId: string,
+  jobId: string,
+  sha256: string,
+  contentType: string
+): string {
+  const sanitizedSceneId = sceneId.trim().replace(/[^a-zA-Z0-9._-]/g, "_");
+  const sanitizedJobId = jobId.trim().replace(/[^a-zA-Z0-9._-]/g, "_");
+  const mimeType = contentType.split(";")[0]?.trim().toLowerCase() ?? "";
+  const ext = CONTENT_TYPE_TO_EXTENSION[mimeType] ?? ".png";
+  const digestSegment = sha256.slice(0, 16);
+  return `cco-${sanitizedSceneId}-${sanitizedJobId}-${digestSegment}${ext}`;
 }
 
 export function buildDeterministicObjectKey(
@@ -171,6 +249,7 @@ interface ValidatedInjectedPayload {
   readonly variantOrdinal?: number | undefined;
   readonly approvedCandidateId?: CandidateId | undefined;
   readonly frameCount?: number | undefined;
+  readonly referenceImage?: string | undefined;
 }
 
 const ALLOWED_CANDIDATE_KEYS = new Set(["prompt", "negativePrompt", "seed", "variantOrdinal"]);
@@ -502,7 +581,44 @@ export function mutateWorkflow(
       (node as { inputs: Record<string, unknown> }).inputs[topology.frameCount.inputField] =
         injected.frameCount;
     }
+
+    if (topology.referenceImage) {
+      if (
+        typeof injected.referenceImage !== "string" ||
+        injected.referenceImage.trim().length === 0
+      ) {
+        throw new ReferenceImageInjectionInvariantError(
+          profile?.id ?? "unknown",
+          `Profile "${profile?.id ?? "unknown"}" declares a referenceImage injection target but no referenceImage value was provided for injection`
+        );
+      }
+      const node = workflow[topology.referenceImage.nodeId];
+      if (
+        typeof node !== "object" ||
+        node === null ||
+        (node as { class_type?: string }).class_type !== topology.referenceImage.classType ||
+        typeof (node as { inputs?: unknown }).inputs !== "object" ||
+        (node as { inputs?: unknown }).inputs === null
+      ) {
+        throw new RenderJobExecutionError(
+          `Expected node "${topology.referenceImage.nodeId}" to exist with class_type "${topology.referenceImage.classType}" and inputs object for referenceImage injection`
+        );
+      }
+      (node as { inputs: Record<string, unknown> }).inputs[topology.referenceImage.inputField] =
+        injected.referenceImage;
+    } else if (injected.referenceImage !== undefined) {
+      throw new ReferenceImageInjectionInvariantError(
+        profile?.id ?? "unknown",
+        `referenceImage was provided for injection but the profile "${profile?.id ?? "unknown"}" does not declare a referenceImage injection target`
+      );
+    }
   } else {
+    if (injected.referenceImage !== undefined) {
+      throw new ReferenceImageInjectionInvariantError(
+        profile?.id ?? "unknown",
+        `referenceImage was provided for injection but no topology is declared for profile "${profile?.id ?? "unknown"}"`
+      );
+    }
     if (injected.prompt !== undefined) {
       const node3 = workflow["3"];
       if (
@@ -617,6 +733,13 @@ export function createCertifiedRenderJobExecutor(
       );
     }
 
+    const topology = getProfileInjectionTopology(
+      profile.renderProfileIdentity?.key ?? profile.id ?? profile.engine
+    );
+    if (profile.renderProfileIdentity && !topology) {
+      throw new MissingProfileTopologyError(profile.id, profile.renderProfileIdentity.key);
+    }
+
     // 2. Validate injectedPayload with profile awareness
     const validatedInjected = validateInjectedPayload(job.injectedPayload, job.jobKind, profile);
 
@@ -653,172 +776,343 @@ export function createCertifiedRenderJobExecutor(
       );
     }
 
-    const mutatedWorkflow = mutateWorkflow(rawWorkflow, validatedInjected, profile);
-
-    // 5. Construct ProfileRenderIdentity
-    const identity: ProfileRenderIdentity = Object.freeze({
-      profileId: profile.id,
-      renderProfileKey: profile.renderProfileIdentity.key,
-      renderProfileVersion: profile.renderProfileIdentity.version,
-      engine: profile.engine as "ltx_25" | "flux_schnell",
-      workflowSha256: recheckedWorkflowHash,
-      modelSha256: liveProvenance.renderProfileProvenance.modelHashes,
-      runnerProfile: profile.runnerProfile,
-      comfyUiCommit: liveProvenance.git.comfyUiCommit
-    });
-
-    // 6. Execute render exactly once
-    const executeInput: ExecuteProfileRenderInput = {
-      renderJobId: job.jobId,
-      sceneId: job.sceneId,
-      workflow: mutatedWorkflow,
-      identity
-    };
-
-    let renderResult: ExecuteProfileRenderResult;
-    if (deps?.executeProfileRender) {
-      renderResult = await deps.executeProfileRender(executeInput);
-    } else if (deps?.useCase) {
-      renderResult = await deps.useCase.execute(executeInput);
-    } else {
-      throw new RenderJobExecutionError(
-        "No render execution useCase or executeProfileRender provided"
-      );
+    // Authoritative license routing guard evaluated BEFORE any external I/O (S3 reads, ComfyUI staging, GPU lease)
+    if (deps?.enforceLicenseRouting) {
+      deps.enforceLicenseRouting.enforce({
+        requiredComponents: [
+          {
+            componentId: profile.renderProfileIdentity.key,
+            componentType: "model",
+            versionOrRevision: String(profile.renderProfileIdentity.version)
+          }
+        ],
+        operation: {
+          kind: "generation",
+          renderJobId: job.jobId,
+          sceneId: job.sceneId
+        }
+      });
+    } else if (
+      deps?.useCase &&
+      "enforceLicense" in deps.useCase &&
+      typeof deps.useCase.enforceLicense === "function"
+    ) {
+      deps.useCase.enforceLicense({
+        renderJobId: job.jobId,
+        sceneId: job.sceneId,
+        renderProfileKey: profile.renderProfileIdentity.key,
+        renderProfileVersion: profile.renderProfileIdentity.version
+      });
     }
 
-    // 7. Output cardinality checks
-    if (job.jobKind === "candidate") {
-      if (renderResult.outputObjectKeys.length !== 1) {
-        throw new CandidateOutputCardinalityError(
-          `Candidate job requires exactly 1 output object key, received: ${renderResult.outputObjectKeys.length}`
-        );
-      }
-    } else {
-      if (renderResult.outputObjectKeys.length === 0) {
-        throw new RenderJobExecutionError(
-          "Production job requires at least 1 output object key, received 0"
-        );
-      }
-    }
+    let resolvedCandidateMedia: ResolvedApprovedVisualProductionMedia | undefined;
+    let stagedReferenceImage: StagedComfyUiInput | undefined;
+    let stagingFilename: string | undefined;
 
-    // 8. Read outputs, compute hashes, build PutObjectInputs in parallel
-    const outputReader = deps?.outputReader ?? new HttpComfyUiOutputReader();
-    const bucket = job.jobKind === "candidate" ? candidateBucket : deliveryBucket;
+    try {
+      if (topology?.referenceImage) {
+        if (!deps?.resolveApprovedCandidateMedia) {
+          throw new RenderJobExecutionError(
+            "resolveApprovedCandidateMedia dependency is required for reference image conditioning"
+          );
+        }
+        if (!deps?.objectStorage) {
+          throw new RenderJobExecutionError(
+            "objectStorage dependency is required for reference image conditioning"
+          );
+        }
+        if (!deps?.stageReferenceImage) {
+          throw new RenderJobExecutionError(
+            "stageReferenceImage dependency is required for reference image conditioning"
+          );
+        }
+        if (!validatedInjected.approvedCandidateId) {
+          throw new MissingApprovedCandidateForConditioningError(
+            `Workflow template "${job.workflowTemplate}" requires an approved candidate for conditioning, but injectedPayload.approvedCandidateId was not provided`
+          );
+        }
 
-    const mediaObjects: PutObjectInput[] = await Promise.all(
-      renderResult.outputObjectKeys.map(async (outputKey) => {
-        const output = await outputReader.readOutput(outputKey);
-        const checksumSha256 = await hashBytesPort.hashBytes(output.bytes);
-        const storageObjectKey = buildObjectKeyFn(
+        resolvedCandidateMedia = await deps.resolveApprovedCandidateMedia.execute({
+          sceneId: job.sceneId as SceneId,
+          approvedCandidateId: validatedInjected.approvedCandidateId
+        });
+
+        const stored = await deps.objectStorage.getObject(
+          {
+            bucket: resolvedCandidateMedia.media.bucket,
+            key: resolvedCandidateMedia.media.key
+          },
+          { maxBytes: MAX_CANDIDATE_IMAGE_BYTES }
+        );
+
+        if (!stored || !stored.body || stored.body.byteLength === 0) {
+          throw new ReferenceImageIntegrityError(
+            `Reference image object "${resolvedCandidateMedia.media.key}" is missing or empty in storage`
+          );
+        }
+
+        const actualSha256 = await hashBytesPort.hashBytes(stored.body);
+        if (actualSha256 !== resolvedCandidateMedia.media.sha256) {
+          throw new ReferenceImageIntegrityError(
+            `Reference image sha256 mismatch: expected "${resolvedCandidateMedia.media.sha256}", got "${actualSha256}"`
+          );
+        }
+
+        stagingFilename = buildDeterministicStagingFilename(
           job.sceneId,
           job.jobId,
-          outputKey,
-          checksumSha256
+          actualSha256,
+          resolvedCandidateMedia.media.contentType ?? "image/png"
         );
 
-        return {
-          bucket,
-          key: storageObjectKey,
-          body: output.bytes,
-          checksumSha256,
-          ...(output.contentType ? { contentType: output.contentType } : {})
-        };
-      })
-    );
+        try {
+          stagedReferenceImage = await deps.stageReferenceImage.stage({
+            filename: stagingFilename,
+            bytes: stored.body,
+            contentType: resolvedCandidateMedia.media.contentType ?? "image/png"
+          });
+        } catch (cause) {
+          throw new ReferenceImageStagingError(
+            `Failed to stage reference image "${stagingFilename}": ${(cause as Error).message}`,
+            { cause }
+          );
+        }
+      }
 
-    // 9. Completion payload assembly
-    if (job.jobKind === "candidate") {
-      const primaryMedia = mediaObjects[0]!;
-      const candidatePayload: Readonly<Record<string, unknown>> = Object.freeze({
-        variantOrdinal: validatedInjected.variantOrdinal!,
-        storageBucket: primaryMedia.bucket,
-        storageObjectKey: primaryMedia.key,
-        contentHashSha256: primaryMedia.checksumSha256!,
-        generationPayload: Object.freeze({
-          promptIdComfy: renderResult.promptId,
-          profile: renderResult.profile,
-          originalOutputKey: renderResult.outputObjectKeys[0]!
-        })
+      if (stagedReferenceImage) {
+        if (
+          stagedReferenceImage.name.includes("/") ||
+          stagedReferenceImage.name.includes("\\") ||
+          stagedReferenceImage.name.includes("..") ||
+          stagedReferenceImage.name === "."
+        ) {
+          throw new RenderJobExecutionError(
+            `Staged reference image returned unsafe filename with path traversal: "${stagedReferenceImage.name}"`
+          );
+        }
+        if (stagingFilename && stagedReferenceImage.name !== stagingFilename) {
+          throw new RenderJobExecutionError(
+            `Staged reference image name "${stagedReferenceImage.name}" did not match requested staging filename "${stagingFilename}"`
+          );
+        }
+        if (stagedReferenceImage.subfolder) {
+          if (
+            stagedReferenceImage.subfolder.includes("/") ||
+            stagedReferenceImage.subfolder.includes("\\") ||
+            stagedReferenceImage.subfolder.includes("..") ||
+            stagedReferenceImage.subfolder === "."
+          ) {
+            throw new RenderJobExecutionError(
+              `Staged reference image returned unsafe subfolder with path traversal: "${stagedReferenceImage.subfolder}"`
+            );
+          }
+        }
+      }
+
+      const referenceImageValue = stagedReferenceImage
+        ? stagedReferenceImage.subfolder
+          ? `${stagedReferenceImage.subfolder}/${stagedReferenceImage.name}`
+          : stagedReferenceImage.name
+        : undefined;
+
+      const mutatedWorkflow = mutateWorkflow(
+        rawWorkflow,
+        {
+          ...validatedInjected,
+          ...(referenceImageValue !== undefined ? { referenceImage: referenceImageValue } : {})
+        },
+        profile
+      );
+
+      // 5. Construct ProfileRenderIdentity
+      const identity: ProfileRenderIdentity = Object.freeze({
+        profileId: profile.id,
+        renderProfileKey: profile.renderProfileIdentity.key,
+        renderProfileVersion: profile.renderProfileIdentity.version,
+        engine: profile.engine as "ltx_25" | "flux_schnell" | "ltx_25_i2v",
+        workflowSha256: recheckedWorkflowHash,
+        modelSha256: liveProvenance.renderProfileProvenance.modelHashes,
+        runnerProfile: profile.runnerProfile,
+        comfyUiCommit: liveProvenance.git.comfyUiCommit
       });
+
+      // 6. Execute render exactly once
+      const executeInput: ExecuteProfileRenderInput = {
+        renderJobId: job.jobId,
+        sceneId: job.sceneId,
+        workflow: mutatedWorkflow,
+        identity
+      };
+
+      let renderResult: ExecuteProfileRenderResult;
+      if (deps?.executeProfileRender) {
+        renderResult = await deps.executeProfileRender(executeInput);
+      } else if (deps?.useCase) {
+        renderResult = await deps.useCase.execute(executeInput);
+      } else {
+        throw new RenderJobExecutionError(
+          "No render execution useCase or executeProfileRender provided"
+        );
+      }
+
+      // 7. Output cardinality checks
+      if (job.jobKind === "candidate") {
+        if (renderResult.outputObjectKeys.length !== 1) {
+          throw new CandidateOutputCardinalityError(
+            `Candidate job requires exactly 1 output object key, received: ${renderResult.outputObjectKeys.length}`
+          );
+        }
+      } else {
+        if (renderResult.outputObjectKeys.length === 0) {
+          throw new RenderJobExecutionError(
+            "Production job requires at least 1 output object key, received 0"
+          );
+        }
+      }
+
+      // 8. Read outputs, compute hashes, build PutObjectInputs in parallel
+      const outputReader = deps?.outputReader ?? new HttpComfyUiOutputReader();
+      const bucket = job.jobKind === "candidate" ? candidateBucket : deliveryBucket;
+
+      const mediaObjects: PutObjectInput[] = await Promise.all(
+        renderResult.outputObjectKeys.map(async (outputKey) => {
+          const output = await outputReader.readOutput(outputKey);
+          const checksumSha256 = await hashBytesPort.hashBytes(output.bytes);
+          const storageObjectKey = buildObjectKeyFn(
+            job.sceneId,
+            job.jobId,
+            outputKey,
+            checksumSha256
+          );
+
+          return {
+            bucket,
+            key: storageObjectKey,
+            body: output.bytes,
+            checksumSha256,
+            ...(output.contentType ? { contentType: output.contentType } : {})
+          };
+        })
+      );
+
+      // 9. Completion payload assembly
+      if (job.jobKind === "candidate") {
+        const primaryMedia = mediaObjects[0]!;
+        const candidatePayload: Readonly<Record<string, unknown>> = Object.freeze({
+          variantOrdinal: validatedInjected.variantOrdinal!,
+          storageBucket: primaryMedia.bucket,
+          storageObjectKey: primaryMedia.key,
+          contentHashSha256: primaryMedia.checksumSha256!,
+          generationPayload: Object.freeze({
+            promptIdComfy: renderResult.promptId,
+            profile: renderResult.profile,
+            originalOutputKey: renderResult.outputObjectKeys[0]!
+          })
+        });
+
+        return {
+          mediaObjects: Object.freeze(mediaObjects),
+          candidatePayload
+        };
+      }
+
+      // Production job
+      const assembler = deps?.productionManifestAssembler;
+      if (!assembler) {
+        throw new ProductionManifestAssemblyError(
+          "Production render jobs require a ProductionManifestAssembler"
+        );
+      }
+
+      const assembleInput: AssembleProductionManifestInput = {
+        job,
+        profile,
+        renderResult,
+        mediaObjects: Object.freeze(mediaObjects),
+        liveProvenance,
+        workflow: mutatedWorkflow,
+        ...(validatedInjected.approvedCandidateId !== undefined
+          ? { approvedCandidateId: validatedInjected.approvedCandidateId }
+          : {}),
+        ...(resolvedCandidateMedia && stagedReferenceImage && topology?.referenceImage
+          ? {
+              conditioningImage: {
+                resolved: resolvedCandidateMedia,
+                stagedAs: {
+                  name: stagedReferenceImage.name,
+                  subfolder: stagedReferenceImage.subfolder
+                },
+                injectionTarget: {
+                  nodeId: topology.referenceImage.nodeId,
+                  classType: topology.referenceImage.classType,
+                  inputField: topology.referenceImage.inputField
+                }
+              }
+            }
+          : {})
+      };
+
+      let manifestPayload: Readonly<Record<string, unknown>>;
+      if (typeof assembler === "function") {
+        const res = await assembler(assembleInput);
+        manifestPayload =
+          res &&
+          typeof res === "object" &&
+          "manifestPayload" in res &&
+          typeof res.manifestPayload === "object" &&
+          res.manifestPayload !== null
+            ? (res.manifestPayload as Readonly<Record<string, unknown>>)
+            : (res as Readonly<Record<string, unknown>>);
+      } else if (typeof assembler.assembleManifest === "function") {
+        const res = await assembler.assembleManifest(assembleInput);
+        manifestPayload =
+          res &&
+          typeof res === "object" &&
+          "manifestPayload" in res &&
+          typeof res.manifestPayload === "object" &&
+          res.manifestPayload !== null
+            ? (res.manifestPayload as Readonly<Record<string, unknown>>)
+            : (res as Readonly<Record<string, unknown>>);
+      } else if (typeof assembler.assemble === "function") {
+        const res = await assembler.assemble(assembleInput);
+        manifestPayload =
+          res &&
+          typeof res === "object" &&
+          "manifestPayload" in res &&
+          typeof res.manifestPayload === "object" &&
+          res.manifestPayload !== null
+            ? (res.manifestPayload as Readonly<Record<string, unknown>>)
+            : (res as Readonly<Record<string, unknown>>);
+      } else {
+        throw new ProductionManifestAssemblyError(
+          "ProductionManifestAssembler does not implement assembleManifest or assemble method"
+        );
+      }
+
+      if (
+        typeof manifestPayload !== "object" ||
+        manifestPayload === null ||
+        Array.isArray(manifestPayload) ||
+        Object.keys(manifestPayload).length === 0
+      ) {
+        throw new ProductionManifestAssemblyError(
+          "Production manifest assembler returned an empty or invalid manifest payload"
+        );
+      }
 
       return {
         mediaObjects: Object.freeze(mediaObjects),
-        candidatePayload
+        manifestPayload: Object.freeze(manifestPayload)
       };
+    } finally {
+      if (stagedReferenceImage && deps?.stageReferenceImage?.cleanup) {
+        try {
+          await deps.stageReferenceImage.cleanup(stagedReferenceImage);
+        } catch {
+          // best-effort cleanup; never fail render on cleanup error
+        }
+      }
     }
-
-    // Production job
-    const assembler = deps?.productionManifestAssembler;
-    if (!assembler) {
-      throw new ProductionManifestAssemblyError(
-        "Production render jobs require a ProductionManifestAssembler"
-      );
-    }
-
-    const assembleInput: AssembleProductionManifestInput = {
-      job,
-      profile,
-      renderResult,
-      mediaObjects: Object.freeze(mediaObjects),
-      liveProvenance,
-      workflow: mutatedWorkflow,
-      ...(validatedInjected.approvedCandidateId !== undefined
-        ? { approvedCandidateId: validatedInjected.approvedCandidateId }
-        : {})
-    };
-
-    let manifestPayload: Readonly<Record<string, unknown>>;
-    if (typeof assembler === "function") {
-      const res = await assembler(assembleInput);
-      manifestPayload =
-        res &&
-        typeof res === "object" &&
-        "manifestPayload" in res &&
-        typeof res.manifestPayload === "object" &&
-        res.manifestPayload !== null
-          ? (res.manifestPayload as Readonly<Record<string, unknown>>)
-          : (res as Readonly<Record<string, unknown>>);
-    } else if (typeof assembler.assembleManifest === "function") {
-      const res = await assembler.assembleManifest(assembleInput);
-      manifestPayload =
-        res &&
-        typeof res === "object" &&
-        "manifestPayload" in res &&
-        typeof res.manifestPayload === "object" &&
-        res.manifestPayload !== null
-          ? (res.manifestPayload as Readonly<Record<string, unknown>>)
-          : (res as Readonly<Record<string, unknown>>);
-    } else if (typeof assembler.assemble === "function") {
-      const res = await assembler.assemble(assembleInput);
-      manifestPayload =
-        res &&
-        typeof res === "object" &&
-        "manifestPayload" in res &&
-        typeof res.manifestPayload === "object" &&
-        res.manifestPayload !== null
-          ? (res.manifestPayload as Readonly<Record<string, unknown>>)
-          : (res as Readonly<Record<string, unknown>>);
-    } else {
-      throw new ProductionManifestAssemblyError(
-        "ProductionManifestAssembler does not implement assembleManifest or assemble method"
-      );
-    }
-
-    if (
-      typeof manifestPayload !== "object" ||
-      manifestPayload === null ||
-      Array.isArray(manifestPayload) ||
-      Object.keys(manifestPayload).length === 0
-    ) {
-      throw new ProductionManifestAssemblyError(
-        "Production manifest assembler returned an empty or invalid manifest payload"
-      );
-    }
-
-    return {
-      mediaObjects: Object.freeze(mediaObjects),
-      manifestPayload: Object.freeze(manifestPayload)
-    };
   };
 }
 

@@ -8,6 +8,7 @@ export type ComfyUiFailureCode =
   | "HISTORY_MISSING"
   | "HISTORY_NOT_SUCCESSFUL"
   | "VRAM_UNLOAD_FAILED"
+  | "IMAGE_UPLOAD_FAILED"
   | "PROTOCOL_ERROR";
 
 export interface ComfyUiFailureContext {
@@ -16,6 +17,7 @@ export interface ComfyUiFailureContext {
   readonly nodeType?: string | undefined;
   readonly statusCode?: number | undefined;
   readonly timeoutMs?: number | undefined;
+  readonly cause?: unknown;
 }
 
 export class ComfyUiRenderEngineError extends Error {
@@ -26,6 +28,6 @@ export class ComfyUiRenderEngineError extends Error {
     message: string,
     readonly context: ComfyUiFailureContext = {}
   ) {
-    super(message);
+    super(message, context.cause !== undefined ? { cause: context.cause } : undefined);
   }
 }

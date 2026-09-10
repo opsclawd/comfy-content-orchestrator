@@ -5,13 +5,20 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { LTX_FPS } from "@cco/contracts";
 import {
+  ApprovedCandidateMediaHashMismatchError,
   AssembleGenerationManifest,
+  type ComfyUiInputStagingPort,
   type ExecuteProfileRenderInput,
   type ExecuteProfileRenderResult,
   type HashBytesPort,
+  LicenseRoutingError,
+  type EnforceLicenseRouting,
+  type ObjectStoragePort,
   type ProfileRenderIdentity,
   type ReferenceAssetRepository,
+  type ResolvedApprovedVisualProductionMedia,
   type SceneRepository,
+  type StagedComfyUiInput,
   type StoryboardCandidateRepository
 } from "@cco/application";
 import {
@@ -32,12 +39,18 @@ import type {
 } from "@cco/infrastructure";
 import { PreflightError } from "./certification/preflight.js";
 import {
+  buildDeterministicStagingFilename,
   CandidateOutputCardinalityError,
   createCertifiedRenderJobExecutor,
+  MissingApprovedCandidateForConditioningError,
   MissingCertifiedProfileError,
   MissingProfileTopologyError,
   mutateWorkflow,
   ProductionManifestAssemblyError,
+  ReferenceImageInjectionInvariantError,
+  ReferenceImageIntegrityError,
+  ReferenceImageStagingError,
+  RenderJobExecutionError,
   RenderJobPayloadValidationError,
   WorkflowHashMismatchError,
   type AssembleProductionManifestInput,
@@ -247,6 +260,137 @@ const fakeLtxLiveProvenance: CertificationProvenanceReport = {
     version: 1,
     engine: "ltx_25",
     workflowHash: sampleLtxWorkflowHash,
+    frames: 97,
+    steps: 8,
+    runnerProfile: "dynamicvram-offload-v1",
+    measuredDiskFootprintGb: 20,
+    minFreeDiskGb: 100,
+    modelHashes: {
+      "diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors":
+        "e".repeat(64),
+      "clip/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors": "f".repeat(64),
+      "vae/ltx-2.5-video-vae-conv-bf16.safetensors": "a".repeat(64)
+    }
+  }
+};
+
+const sampleLtxI2vWorkflowHash = "84f397eee3ad8b0cee000036119e524e8c7a012b88d79d00b74172df9d9bf540";
+
+const fakeLtxI2vProfile: CertificationProfile = {
+  id: "ltx-25-720p-97f-i2v",
+  engine: "ltx_25_i2v",
+  workflowPath: "/templates/ltx_25_720p_i2v_97f_api.json",
+  workflowRelativePath: "ltx_25_720p_i2v_97f_api.json",
+  expectedWorkflowHash: sampleLtxI2vWorkflowHash,
+  source: {
+    kind: "validated_host_export",
+    uri: "https://github.com/comfyanonymous/ComfyUI",
+    revision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+    license: "GPL-3.0"
+  },
+  baseline: {
+    width: 1280,
+    height: 720,
+    frames: 97,
+    steps: 8,
+    approximateDurationSeconds: 5
+  },
+  minFreeDiskGb: 100,
+  runnerProfile: "dynamicvram-offload-v1",
+  models: [
+    {
+      category: "diffusion_models",
+      relativePath: "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors"
+    },
+    {
+      category: "clip",
+      relativePath: "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors"
+    },
+    { category: "vae", relativePath: "ltx-2.5-video-vae-conv-bf16.safetensors" }
+  ],
+  assertions: [
+    { nodeId: "1", classType: "KSampler", input: "steps", equals: 8 },
+    { nodeId: "5", classType: "EmptyLTXVLatentVideo", input: "width", equals: 1280 },
+    { nodeId: "5", classType: "EmptyLTXVLatentVideo", input: "height", equals: 720 },
+    { nodeId: "5", classType: "EmptyLTXVLatentVideo", input: "length", equals: 97 }
+  ],
+  renderProfileIdentity: {
+    key: "LTX_25_720P_5S_I2V_V1",
+    version: 1
+  }
+};
+
+const fakeRawLtxI2vWorkflow = JSON.stringify({
+  "1": {
+    inputs: {
+      seed: 42,
+      steps: 8,
+      cfg: 1,
+      sampler_name: "euler",
+      scheduler: "simple",
+      denoise: 1
+    },
+    class_type: "KSampler"
+  },
+  "3": {
+    inputs: { text: "positive prompt" },
+    class_type: "CLIPTextEncode"
+  },
+  "4": {
+    inputs: { text: "negative prompt" },
+    class_type: "CLIPTextEncode"
+  },
+  "5": {
+    inputs: {
+      width: 1280,
+      height: 720,
+      length: 97,
+      batch_size: 1
+    },
+    class_type: "EmptyLTXVLatentVideo"
+  },
+  "20": {
+    inputs: {
+      image: "reference_frame.png",
+      upload: "image"
+    },
+    class_type: "LoadImage"
+  }
+});
+
+const fakeLtxI2vLiveProvenance: CertificationProvenanceReport = {
+  version: 1,
+  profileId: "ltx-25-720p-97f-i2v",
+  generatedAt: "2026-08-27T00:00:00.000Z",
+  models: [],
+  disk: {
+    modelFootprintBytes: 0,
+    availableBytes: 100_000_000_000,
+    requiredFreeBytes: 0,
+    modelFootprintGb: 0,
+    availableGb: 100,
+    minFreeDiskGb: 100,
+    passes: true
+  },
+  git: {
+    comfyUiCommit: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+    customNodes: []
+  },
+  workflow: {
+    relativePath: "ltx_25_720p_i2v_97f_api.json",
+    sha256: sampleLtxI2vWorkflowHash,
+    source: {
+      kind: "validated_host_export",
+      uri: "https://github.com/comfyanonymous/ComfyUI",
+      revision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+      license: "GPL-3.0"
+    }
+  },
+  renderProfileProvenance: {
+    key: "LTX_25_720P_5S_I2V_V1",
+    version: 1,
+    engine: "ltx_25_i2v",
+    workflowHash: sampleLtxI2vWorkflowHash,
     frames: 97,
     steps: 8,
     runnerProfile: "dynamicvram-offload-v1",
@@ -1849,6 +1993,658 @@ describe("Certified Render Job Executor", () => {
           contentType: "image/webp"
         }
       ]);
+    });
+  });
+
+  describe("mutateWorkflow - referenceImage bidirectional invariant", () => {
+    it("throws ReferenceImageInjectionInvariantError if profile topology declares referenceImage but injected referenceImage is missing", () => {
+      expect(() =>
+        mutateWorkflow(fakeRawLtxI2vWorkflow, { prompt: "test prompt" }, fakeLtxI2vProfile)
+      ).toThrow(ReferenceImageInjectionInvariantError);
+    });
+
+    it("throws ReferenceImageInjectionInvariantError if profile topology declares referenceImage but injected referenceImage is blank/whitespace", () => {
+      expect(() =>
+        mutateWorkflow(
+          fakeRawLtxI2vWorkflow,
+          { prompt: "test prompt", referenceImage: "   " },
+          fakeLtxI2vProfile
+        )
+      ).toThrow(ReferenceImageInjectionInvariantError);
+    });
+
+    it("throws ReferenceImageInjectionInvariantError if injected referenceImage is provided but profile topology does not declare referenceImage", () => {
+      expect(() =>
+        mutateWorkflow(
+          fakeRawFluxWorkflow,
+          { prompt: "test prompt", referenceImage: "some-image.png" },
+          fakeFluxProfile
+        )
+      ).toThrow(ReferenceImageInjectionInvariantError);
+
+      expect(() =>
+        mutateWorkflow(
+          fakeRawFluxWorkflow,
+          { prompt: "test prompt", referenceImage: "some-image.png" },
+          fakeLtxProfile
+        )
+      ).toThrow(ReferenceImageInjectionInvariantError);
+    });
+
+    it("throws ReferenceImageInjectionInvariantError if injected referenceImage is provided but profile has no topology", () => {
+      expect(() =>
+        mutateWorkflow(
+          fakeRawFluxWorkflow,
+          { prompt: "test prompt", referenceImage: "some-image.png" },
+          undefined
+        )
+      ).toThrow(ReferenceImageInjectionInvariantError);
+    });
+
+    it("successfully injects referenceImage into declared node when topology matches", () => {
+      const result = mutateWorkflow(
+        fakeRawLtxI2vWorkflow,
+        { prompt: "test prompt", referenceImage: "staged-conditioning-frame.png" },
+        fakeLtxI2vProfile
+      );
+
+      const node20 = (result as Record<string, { inputs: Record<string, unknown> }>)["20"];
+      expect(node20).toBeDefined();
+      expect(node20!.inputs.image).toBe("staged-conditioning-frame.png");
+    });
+
+    it("throws RenderJobExecutionError if referenceImage target node class_type does not match topology", () => {
+      const badWorkflow = JSON.stringify({
+        ...JSON.parse(fakeRawLtxI2vWorkflow),
+        "20": { inputs: { image: "old.png" }, class_type: "WrongClass" }
+      });
+
+      expect(() =>
+        mutateWorkflow(
+          badWorkflow,
+          { prompt: "test prompt", referenceImage: "staged.png" },
+          fakeLtxI2vProfile
+        )
+      ).toThrow('Expected node "20" to exist with class_type "LoadImage"');
+    });
+  });
+
+  describe("createCertifiedRenderJobExecutor - I2V conditioned execution", () => {
+    const candidateImageBytes = new Uint8Array([10, 20, 30, 40, 50]);
+    const candidateImageSha256 = createHash("sha256").update(candidateImageBytes).digest("hex");
+    const testCandidateId = "cand-approved-456" as CandidateId;
+
+    const mockResolvedMedia: ResolvedApprovedVisualProductionMedia = {
+      input: {
+        candidateId: testCandidateId,
+        sceneId: sampleSceneId,
+        specRevision: 1,
+        contentHashSha256: candidateImageSha256
+      },
+      media: {
+        bucket: "godzspeed-review",
+        key: `candidates/${testCandidateId}.png`,
+        sha256: candidateImageSha256,
+        contentType: "image/png"
+      }
+    };
+
+    it("I2V production job: resolves candidate media, verifies integrity, stages image, injects into node 20, cleans up in finally, and passes conditioningImage to manifest assembler", async () => {
+      const mockExecuteProfileRender = vi.fn().mockResolvedValue({
+        status: "succeeded",
+        promptId: "prompt-i2v-1",
+        outputObjectKeys: ["output.webp"],
+        durationMs: 4500,
+        profile: {} as ProfileRenderIdentity,
+        preDispatchGpu: {
+          totalVramMb: 24576,
+          usedVramMb: 4096,
+          freeVramMb: 20480,
+          reservedVramMb: 4096,
+          measuredAt: new Date().toISOString()
+        }
+      });
+
+      const stagedReference: StagedComfyUiInput = {
+        name: `cco-${sampleSceneId}-${sampleJobId}-${candidateImageSha256.slice(0, 16)}.png`,
+        subfolder: "conditioning"
+      };
+
+      const mockResolveApprovedCandidateMedia = {
+        execute: vi.fn().mockResolvedValue(mockResolvedMedia)
+      };
+
+      const mockObjectStorage: ObjectStoragePort = {
+        getObject: vi.fn().mockResolvedValue({
+          body: candidateImageBytes,
+          contentType: "image/png"
+        }),
+        putObject: vi.fn(),
+        copyObject: vi.fn(),
+        deleteObject: vi.fn(),
+        headObject: vi.fn()
+      };
+
+      const mockStageReferenceImage: ComfyUiInputStagingPort = {
+        stage: vi.fn().mockResolvedValue(stagedReference),
+        cleanup: vi.fn().mockResolvedValue(undefined)
+      };
+
+      let capturedAssembleInput: AssembleProductionManifestInput | undefined;
+      const mockAssembler: ProductionManifestAssembler = {
+        assembleManifest: vi
+          .fn()
+          .mockImplementation(async (input: AssembleProductionManifestInput) => {
+            capturedAssembleInput = input;
+            return {
+              manifestId: "man-123",
+              ok: true
+            };
+          })
+      };
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxI2vProfile,
+        readApprovedProvenance: async () => fakeLtxI2vLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxI2vLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => fakeRawLtxI2vWorkflow,
+        hashWorkflow: () => sampleLtxI2vWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        outputReader: new FakeOutputReader(
+          new Map([
+            ["output.webp", { bytes: new Uint8Array([1, 2, 3]), contentType: "image/webp" }]
+          ])
+        ),
+        resolveApprovedCandidateMedia: mockResolveApprovedCandidateMedia,
+        objectStorage: mockObjectStorage,
+        stageReferenceImage: mockStageReferenceImage,
+        productionManifestAssembler: mockAssembler
+      });
+
+      const i2vJob = createSampleProductionJob({
+        workflowTemplate: "ltx-25-720p-97f-i2v",
+        injectedPayload: {
+          prompt: "A cinematic I2V prompt",
+          seed: 42,
+          approvedCandidateId: testCandidateId
+        }
+      });
+
+      const result = await executor(i2vJob);
+
+      // Verify resolution called
+      expect(mockResolveApprovedCandidateMedia.execute).toHaveBeenCalledWith({
+        sceneId: sampleSceneId,
+        approvedCandidateId: testCandidateId
+      });
+
+      // Verify objectStorage re-fetched
+      expect(mockObjectStorage.getObject).toHaveBeenCalledWith(
+        {
+          bucket: "godzspeed-review",
+          key: `candidates/${testCandidateId}.png`
+        },
+        { maxBytes: expect.any(Number) }
+      );
+
+      // Verify staging called
+      expect(mockStageReferenceImage.stage).toHaveBeenCalledWith({
+        filename: stagedReference.name,
+        bytes: candidateImageBytes,
+        contentType: "image/png"
+      });
+
+      // Verify injected workflow in executeProfileRender had node 20 populated
+      expect(mockExecuteProfileRender).toHaveBeenCalledTimes(1);
+      const executedWorkflow = mockExecuteProfileRender.mock.calls[0]![0]
+        .workflow as unknown as Record<string, { inputs: Record<string, unknown> }>;
+      expect(executedWorkflow["20"]!.inputs.image).toBe(`conditioning/${stagedReference.name}`);
+
+      // Verify cleanup called in finally
+      expect(mockStageReferenceImage.cleanup).toHaveBeenCalledWith(stagedReference);
+
+      // Verify conditioningImage carried forward to manifest assembler losslessly
+      expect(capturedAssembleInput).toBeDefined();
+      expect(capturedAssembleInput!.conditioningImage).toEqual({
+        resolved: mockResolvedMedia,
+        stagedAs: {
+          name: stagedReference.name,
+          subfolder: stagedReference.subfolder
+        },
+        injectionTarget: {
+          nodeId: "20",
+          classType: "LoadImage",
+          inputField: "image"
+        }
+      });
+
+      expect(result.manifestPayload).toEqual({
+        manifestId: "man-123",
+        ok: true
+      });
+    });
+
+    it("I2V production job: fails fast with MissingApprovedCandidateForConditioningError if approvedCandidateId is missing", async () => {
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxI2vProfile,
+        readApprovedProvenance: async () => fakeLtxI2vLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxI2vLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => fakeRawLtxI2vWorkflow,
+        hashWorkflow: () => sampleLtxI2vWorkflowHash,
+        resolveApprovedCandidateMedia: { execute: vi.fn() },
+        objectStorage: {
+          getObject: vi.fn(),
+          putObject: vi.fn(),
+          copyObject: vi.fn(),
+          deleteObject: vi.fn(),
+          headObject: vi.fn()
+        },
+        stageReferenceImage: { stage: vi.fn() }
+      });
+
+      const jobWithoutCandidate = createSampleProductionJob({
+        workflowTemplate: "ltx-25-720p-97f-i2v",
+        injectedPayload: {
+          prompt: "No candidate provided",
+          seed: 42
+        }
+      });
+
+      await expect(executor(jobWithoutCandidate)).rejects.toThrow(
+        MissingApprovedCandidateForConditioningError
+      );
+    });
+
+    it("I2V production job: fails with ReferenceImageIntegrityError if candidate object is missing from storage", async () => {
+      const mockObjectStorage: ObjectStoragePort = {
+        getObject: vi.fn().mockResolvedValue(undefined),
+        putObject: vi.fn(),
+        copyObject: vi.fn(),
+        deleteObject: vi.fn(),
+        headObject: vi.fn()
+      };
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxI2vProfile,
+        readApprovedProvenance: async () => fakeLtxI2vLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxI2vLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => fakeRawLtxI2vWorkflow,
+        hashWorkflow: () => sampleLtxI2vWorkflowHash,
+        resolveApprovedCandidateMedia: { execute: vi.fn().mockResolvedValue(mockResolvedMedia) },
+        objectStorage: mockObjectStorage,
+        stageReferenceImage: { stage: vi.fn() }
+      });
+
+      const job = createSampleProductionJob({
+        workflowTemplate: "ltx-25-720p-97f-i2v",
+        injectedPayload: {
+          prompt: "Valid prompt",
+          seed: 42,
+          approvedCandidateId: testCandidateId
+        }
+      });
+
+      await expect(executor(job)).rejects.toThrow(ReferenceImageIntegrityError);
+    });
+
+    it("I2V production job: fails with ReferenceImageIntegrityError if storage bytes sha256 mismatch", async () => {
+      const corruptBytes = new Uint8Array([99, 99, 99]);
+      const mockObjectStorage: ObjectStoragePort = {
+        getObject: vi.fn().mockResolvedValue({
+          body: corruptBytes,
+          contentType: "image/png"
+        }),
+        putObject: vi.fn(),
+        copyObject: vi.fn(),
+        deleteObject: vi.fn(),
+        headObject: vi.fn()
+      };
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxI2vProfile,
+        readApprovedProvenance: async () => fakeLtxI2vLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxI2vLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => fakeRawLtxI2vWorkflow,
+        hashWorkflow: () => sampleLtxI2vWorkflowHash,
+        resolveApprovedCandidateMedia: { execute: vi.fn().mockResolvedValue(mockResolvedMedia) },
+        objectStorage: mockObjectStorage,
+        stageReferenceImage: { stage: vi.fn() }
+      });
+
+      const job = createSampleProductionJob({
+        workflowTemplate: "ltx-25-720p-97f-i2v",
+        injectedPayload: {
+          prompt: "Valid prompt",
+          seed: 42,
+          approvedCandidateId: testCandidateId
+        }
+      });
+
+      await expect(executor(job)).rejects.toThrow(ReferenceImageIntegrityError);
+    });
+
+    it("I2V production job: propagates resolveApprovedCandidateMedia errors unchanged", async () => {
+      const hashMismatchError = new ApprovedCandidateMediaHashMismatchError(
+        testCandidateId,
+        candidateImageSha256,
+        "bad-hash"
+      );
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxI2vProfile,
+        readApprovedProvenance: async () => fakeLtxI2vLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxI2vLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => fakeRawLtxI2vWorkflow,
+        hashWorkflow: () => sampleLtxI2vWorkflowHash,
+        resolveApprovedCandidateMedia: {
+          execute: vi.fn().mockRejectedValue(hashMismatchError)
+        },
+        objectStorage: {
+          getObject: vi.fn(),
+          putObject: vi.fn(),
+          copyObject: vi.fn(),
+          deleteObject: vi.fn(),
+          headObject: vi.fn()
+        },
+        stageReferenceImage: { stage: vi.fn() }
+      });
+
+      const job = createSampleProductionJob({
+        workflowTemplate: "ltx-25-720p-97f-i2v",
+        injectedPayload: {
+          prompt: "Valid prompt",
+          seed: 42,
+          approvedCandidateId: testCandidateId
+        }
+      });
+
+      await expect(executor(job)).rejects.toThrow(hashMismatchError);
+    });
+
+    it("I2V production job: fails with ReferenceImageStagingError if staging rejects, halting before render (no text-only fallback)", async () => {
+      const mockExecuteProfileRender = vi.fn();
+      const stagingError = new Error("Connection refused to ComfyUI");
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxI2vProfile,
+        readApprovedProvenance: async () => fakeLtxI2vLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxI2vLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => fakeRawLtxI2vWorkflow,
+        hashWorkflow: () => sampleLtxI2vWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        resolveApprovedCandidateMedia: { execute: vi.fn().mockResolvedValue(mockResolvedMedia) },
+        objectStorage: {
+          getObject: vi
+            .fn()
+            .mockResolvedValue({ body: candidateImageBytes, contentType: "image/png" }),
+          putObject: vi.fn(),
+          copyObject: vi.fn(),
+          deleteObject: vi.fn(),
+          headObject: vi.fn()
+        },
+        stageReferenceImage: {
+          stage: vi.fn().mockRejectedValue(stagingError)
+        }
+      });
+
+      const job = createSampleProductionJob({
+        workflowTemplate: "ltx-25-720p-97f-i2v",
+        injectedPayload: {
+          prompt: "Valid prompt",
+          seed: 42,
+          approvedCandidateId: testCandidateId
+        }
+      });
+
+      await expect(executor(job)).rejects.toThrow(ReferenceImageStagingError);
+      expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+    });
+
+    it("I2V production job: cleanup failure in finally is swallowed and does not fail the job", async () => {
+      const mockExecuteProfileRender = vi.fn().mockResolvedValue({
+        status: "succeeded",
+        promptId: "prompt-i2v-1",
+        outputObjectKeys: ["output.webp"],
+        durationMs: 4500,
+        profile: {} as ProfileRenderIdentity,
+        preDispatchGpu: {
+          totalVramMb: 24576,
+          usedVramMb: 4096,
+          freeVramMb: 20480,
+          reservedVramMb: 4096,
+          measuredAt: new Date().toISOString()
+        }
+      });
+
+      const expectedStagedName = buildDeterministicStagingFilename(
+        sampleSceneId,
+        sampleJobId,
+        candidateImageSha256,
+        "image/png"
+      );
+      const stagedReference: StagedComfyUiInput = {
+        name: expectedStagedName,
+        subfolder: ""
+      };
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxI2vProfile,
+        readApprovedProvenance: async () => fakeLtxI2vLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxI2vLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => fakeRawLtxI2vWorkflow,
+        hashWorkflow: () => sampleLtxI2vWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        outputReader: new FakeOutputReader(
+          new Map([["output.webp", { bytes: new Uint8Array([1]), contentType: "image/webp" }]])
+        ),
+        resolveApprovedCandidateMedia: { execute: vi.fn().mockResolvedValue(mockResolvedMedia) },
+        objectStorage: {
+          getObject: vi
+            .fn()
+            .mockResolvedValue({ body: candidateImageBytes, contentType: "image/png" }),
+          putObject: vi.fn(),
+          copyObject: vi.fn(),
+          deleteObject: vi.fn(),
+          headObject: vi.fn()
+        },
+        stageReferenceImage: {
+          stage: vi.fn().mockResolvedValue(stagedReference),
+          cleanup: vi.fn().mockRejectedValue(new Error("Disk permission denied on unlink"))
+        },
+        productionManifestAssembler: { assembleManifest: async () => ({ manifestId: "ok" }) }
+      });
+
+      const job = createSampleProductionJob({
+        workflowTemplate: "ltx-25-720p-97f-i2v",
+        injectedPayload: {
+          prompt: "Valid prompt",
+          seed: 42,
+          approvedCandidateId: testCandidateId
+        }
+      });
+
+      const result = await executor(job);
+      expect(result.manifestPayload).toEqual({ manifestId: "ok" });
+    });
+
+    it("I2V production job: mutation failure after staging triggers cleanup and preserves original error", async () => {
+      const expectedStagedName = buildDeterministicStagingFilename(
+        sampleSceneId,
+        sampleJobId,
+        candidateImageSha256,
+        "image/png"
+      );
+      const stagedReference: StagedComfyUiInput = {
+        name: expectedStagedName,
+        subfolder: "conditioning"
+      };
+      const mockCleanup = vi.fn().mockResolvedValue(undefined);
+      const mockExecuteProfileRender = vi.fn();
+
+      // Workflow with wrong node class for node 20
+      const malformedWorkflow = JSON.stringify({
+        ...JSON.parse(fakeRawLtxI2vWorkflow),
+        "20": {
+          inputs: { image: "reference_frame.png", upload: "image" },
+          class_type: "WrongClass"
+        }
+      });
+      const malformedWorkflowHash = createHash("sha256").update(malformedWorkflow).digest("hex");
+
+      const malformedProvenance = {
+        ...fakeLtxI2vLiveProvenance,
+        workflow: {
+          ...fakeLtxI2vLiveProvenance.workflow,
+          sha256: malformedWorkflowHash
+        }
+      };
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => ({
+          ...fakeLtxI2vProfile,
+          expectedWorkflowHash: malformedWorkflowHash
+        }),
+        readApprovedProvenance: async () => malformedProvenance,
+        collectCertificationProvenance: async () => malformedProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => malformedWorkflow,
+        hashWorkflow: () => malformedWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        outputReader: new FakeOutputReader(new Map()),
+        resolveApprovedCandidateMedia: { execute: vi.fn().mockResolvedValue(mockResolvedMedia) },
+        objectStorage: {
+          getObject: vi
+            .fn()
+            .mockResolvedValue({ body: candidateImageBytes, contentType: "image/png" }),
+          putObject: vi.fn(),
+          copyObject: vi.fn(),
+          deleteObject: vi.fn(),
+          headObject: vi.fn()
+        },
+        stageReferenceImage: {
+          stage: vi.fn().mockResolvedValue(stagedReference),
+          cleanup: mockCleanup
+        },
+        productionManifestAssembler: { assembleManifest: async () => ({ manifestId: "ok" }) }
+      });
+
+      const job = createSampleProductionJob({
+        workflowTemplate: "ltx-25-720p-97f-i2v",
+        injectedPayload: {
+          prompt: "Valid prompt",
+          seed: 42,
+          approvedCandidateId: testCandidateId
+        }
+      });
+
+      await expect(executor(job)).rejects.toThrow(RenderJobExecutionError);
+      expect(mockCleanup).toHaveBeenCalledWith(stagedReference);
+      expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+    });
+
+    it("I2V production job: pre-flight license rejection halts before resolver, storage, staging, or render", async () => {
+      const mockResolve = vi.fn();
+      const mockGetObject = vi.fn();
+      const mockStage = vi.fn();
+      const mockExecuteProfileRender = vi.fn();
+
+      const mockEnforceLicenseRouting = {
+        enforce: vi.fn().mockImplementation(() => {
+          throw new LicenseRoutingError("Profile license not approved", {
+            registryRevision: "rev-1",
+            evaluatedComponents: [],
+            deniedReasons: ["Component LTX_25_720P_5S_I2V_V1 is not approved for production use"]
+          });
+        })
+      };
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxI2vProfile,
+        readApprovedProvenance: async () => fakeLtxI2vLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxI2vLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => fakeRawLtxI2vWorkflow,
+        hashWorkflow: () => sampleLtxI2vWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        enforceLicenseRouting: mockEnforceLicenseRouting as unknown as EnforceLicenseRouting,
+        resolveApprovedCandidateMedia: { execute: mockResolve },
+        objectStorage: {
+          getObject: mockGetObject,
+          putObject: vi.fn(),
+          copyObject: vi.fn(),
+          deleteObject: vi.fn(),
+          headObject: vi.fn()
+        },
+        stageReferenceImage: {
+          stage: mockStage,
+          cleanup: vi.fn()
+        },
+        outputReader: new FakeOutputReader(new Map()),
+        productionManifestAssembler: { assembleManifest: async () => ({ manifestId: "ok" }) }
+      });
+
+      const job = createSampleProductionJob({
+        workflowTemplate: "ltx-25-720p-97f-i2v",
+        injectedPayload: {
+          prompt: "Valid prompt",
+          seed: 42,
+          approvedCandidateId: testCandidateId
+        }
+      });
+
+      await expect(executor(job)).rejects.toThrow(LicenseRoutingError);
+      expect(mockResolve).not.toHaveBeenCalled();
+      expect(mockGetObject).not.toHaveBeenCalled();
+      expect(mockStage).not.toHaveBeenCalled();
+      expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+    });
+
+    it("existing profiles and candidate jobs execute unchanged without calling candidate resolution or staging", async () => {
+      const mockResolve = vi.fn();
+      const mockStage = vi.fn();
+      const mockExecuteProfileRender = vi.fn().mockResolvedValue({
+        status: "succeeded",
+        promptId: "prompt-flux-1",
+        outputObjectKeys: ["output.png"],
+        durationMs: 2000,
+        profile: {} as ProfileRenderIdentity,
+        preDispatchGpu: {
+          totalVramMb: 24576,
+          usedVramMb: 4096,
+          freeVramMb: 20480,
+          reservedVramMb: 4096,
+          measuredAt: new Date().toISOString()
+        }
+      });
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeFluxProfile,
+        readApprovedProvenance: async () => fakeFluxLiveProvenance,
+        collectCertificationProvenance: async () => fakeFluxLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => fakeRawFluxWorkflow,
+        hashWorkflow: () => sampleWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        outputReader: new FakeOutputReader(
+          new Map([["output.png", { bytes: new Uint8Array([1]), contentType: "image/png" }]])
+        ),
+        resolveApprovedCandidateMedia: { execute: mockResolve },
+        stageReferenceImage: { stage: mockStage }
+      });
+
+      const candidateJob = createSampleCandidateJob();
+      const result = await executor(candidateJob);
+
+      expect(result.candidatePayload).toBeDefined();
+      expect(mockResolve).not.toHaveBeenCalled();
+      expect(mockStage).not.toHaveBeenCalled();
     });
   });
 });

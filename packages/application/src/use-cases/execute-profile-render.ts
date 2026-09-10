@@ -13,7 +13,7 @@ export interface ProfileRenderIdentity {
   readonly profileId: string;
   readonly renderProfileKey: RenderProfileKey;
   readonly renderProfileVersion: 1;
-  readonly engine: "ltx_25" | "flux_schnell";
+  readonly engine: "ltx_25" | "flux_schnell" | "ltx_25_i2v";
   readonly workflowSha256: string;
   readonly modelSha256: Readonly<Record<string, string>>;
   readonly runnerProfile: string;
@@ -90,13 +90,18 @@ function validateIdentity(identity: unknown): asserts identity is ProfileRenderI
 
   const validProfileKey =
     identity.renderProfileKey === "LTX_25_720P_5S_V1" ||
-    identity.renderProfileKey === "FLUX_SCHNELL_DRAFT_V1";
+    identity.renderProfileKey === "FLUX_SCHNELL_DRAFT_V1" ||
+    identity.renderProfileKey === "LTX_25_720P_5S_I2V_V1";
   if (!validProfileKey) {
     throw new ProfileRenderExecutionError("invalid_input", "identity.renderProfileKey is invalid");
   }
 
   const expectedEngine =
-    identity.renderProfileKey === "LTX_25_720P_5S_V1" ? "ltx_25" : "flux_schnell";
+    identity.renderProfileKey === "LTX_25_720P_5S_V1"
+      ? "ltx_25"
+      : identity.renderProfileKey === "LTX_25_720P_5S_I2V_V1"
+        ? "ltx_25_i2v"
+        : "flux_schnell";
   if (identity.engine !== expectedEngine) {
     throw new ProfileRenderExecutionError(
       "invalid_input",
@@ -172,14 +177,17 @@ export class ExecuteProfileRenderUseCase {
     private readonly now: () => Date = () => new Date()
   ) {}
 
-  async execute(input: ExecuteProfileRenderInput): Promise<ExecuteProfileRenderResult> {
-    validateInput(input);
-
+  enforceLicense(input: {
+    renderJobId: string;
+    sceneId: string;
+    renderProfileKey: string;
+    renderProfileVersion: number;
+  }): void {
     const requiredComponents: readonly ComponentRef[] = [
       {
-        componentId: input.identity.renderProfileKey,
+        componentId: input.renderProfileKey,
         componentType: "model",
-        versionOrRevision: String(input.identity.renderProfileVersion)
+        versionOrRevision: String(input.renderProfileVersion)
       }
     ];
     this.enforceLicenseRouting.enforce({
@@ -189,6 +197,17 @@ export class ExecuteProfileRenderUseCase {
         renderJobId: input.renderJobId,
         sceneId: input.sceneId
       }
+    });
+  }
+
+  async execute(input: ExecuteProfileRenderInput): Promise<ExecuteProfileRenderResult> {
+    validateInput(input);
+
+    this.enforceLicense({
+      renderJobId: input.renderJobId,
+      sceneId: input.sceneId,
+      renderProfileKey: input.identity.renderProfileKey,
+      renderProfileVersion: input.identity.renderProfileVersion
     });
 
     const lease = await this.gpuLease.acquireLease();

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
@@ -27,6 +28,8 @@ import {
 import {
   EnqueueSceneProductionRenderUseCase,
   AssembleGenerationManifest,
+  ResolveApprovedCandidateMediaUseCase,
+  type ComfyUiInputStagingPort,
   type EnforceStorageAdmission,
   type ExecuteProfileRenderInput,
   type ExecuteProfileRenderResult,
@@ -74,12 +77,60 @@ export function hasLiveLtxPrerequisites(env: NodeJS.ProcessEnv = process.env): b
   return Boolean(env.COMFYUI_URL?.trim() && env.COMFYUI_DIR?.trim());
 }
 
-const fakeLtxProfile: CertificationProfile = {
-  id: "ltx-25-720p-97f",
-  engine: "ltx_video",
-  workflowPath: "/templates/ltx_25_720p_97f_api.json",
-  workflowRelativePath: "ltx_25_720p_97f_api.json",
-  expectedWorkflowHash: "bf8528239790f6536ce7f0733f92095501fecfd8e919084a9decdded59e6ecf5",
+/**
+ * Validates prerequisites specifically for live LTX-2.5 I2V production render.
+ * Checks host availability AND checks operator approval in license registry
+ * and gold master provenance before running (does not fabricate certification values).
+ */
+export function hasLiveLtxI2vPrerequisites(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (!hasLiveLtxPrerequisites(env)) {
+    return false;
+  }
+  try {
+    const rootPath = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+    const registryPath =
+      env.LICENSE_REGISTRY_PATH?.trim() ||
+      resolve(rootPath, "config/component-license-registry.json");
+    const registryContent = JSON.parse(readFileSync(registryPath, "utf8"));
+    const hasApprovedLicense =
+      Array.isArray(registryContent?.entries) &&
+      registryContent.entries.some(
+        (e: { componentId?: string; status?: string }) =>
+          e?.componentId === "LTX_25_720P_5S_I2V_V1" && e?.status === "approved"
+      );
+    if (!hasApprovedLicense) {
+      return false;
+    }
+
+    const provenancePath =
+      env.GOLD_MASTER_PROVENANCE_PATH?.trim() ||
+      env.CERTIFICATION_MANIFEST_PATH?.trim() ||
+      resolve(rootPath, "certification/ltx-25/approved-provenance.json");
+    const provenanceContent = JSON.parse(readFileSync(provenancePath, "utf8"));
+    const hasApprovedProvenance =
+      provenanceContent?.renderProfileProvenance?.key === "LTX_25_720P_5S_I2V_V1" ||
+      provenanceContent?.profileId === "ltx-25-720p-97f-i2v";
+    if (!hasApprovedProvenance) {
+      return false;
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const rootPath = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+const realLtxI2vWorkflowPath = resolve(rootPath, "templates/ltx_25_720p_i2v_97f_api.json");
+const realLtxI2vWorkflow = readFileSync(realLtxI2vWorkflowPath, "utf8");
+const ltxI2vWorkflowHash = createHash("sha256").update(realLtxI2vWorkflow).digest("hex");
+
+const fakeLtxI2vProfile: CertificationProfile = {
+  id: "ltx-25-720p-97f-i2v",
+  engine: "ltx_25_i2v",
+  workflowPath: realLtxI2vWorkflowPath,
+  workflowRelativePath: "ltx_25_720p_i2v_97f_api.json",
+  expectedWorkflowHash: ltxI2vWorkflowHash,
   source: {
     kind: "validated_host_export",
     uri: "https://github.com/comfyanonymous/ComfyUI",
@@ -89,23 +140,23 @@ const fakeLtxProfile: CertificationProfile = {
   baseline: {
     width: 1280,
     height: 720,
-    steps: 30,
+    steps: 8,
     frames: 97,
-    approximateDurationSeconds: 4.041666667
+    approximateDurationSeconds: 97 / LTX_FPS
   },
   minFreeDiskGb: 0,
   runnerProfile: "dynamicvram-offload-v1",
   models: [],
   assertions: [],
   renderProfileIdentity: {
-    key: "LTX_25_720P_5S_V1",
+    key: "LTX_25_720P_5S_I2V_V1",
     version: 1
   }
 };
 
-const fakeLtxProvenance: CertificationProvenanceReport = {
+const fakeLtxI2vProvenance: CertificationProvenanceReport = {
   version: 1,
-  profileId: "ltx-25-720p-97f",
+  profileId: "ltx-25-720p-97f-i2v",
   generatedAt: "2026-09-02T00:00:00.000Z",
   models: [],
   disk: {
@@ -122,8 +173,8 @@ const fakeLtxProvenance: CertificationProvenanceReport = {
     customNodes: []
   },
   workflow: {
-    relativePath: "ltx_25_720p_97f_api.json",
-    sha256: fakeLtxProfile.expectedWorkflowHash,
+    relativePath: "ltx_25_720p_i2v_97f_api.json",
+    sha256: ltxI2vWorkflowHash,
     source: {
       kind: "validated_host_export",
       uri: "https://github.com/comfyanonymous/ComfyUI",
@@ -132,44 +183,18 @@ const fakeLtxProvenance: CertificationProvenanceReport = {
     }
   },
   renderProfileProvenance: {
-    key: "LTX_25_720P_5S_V1",
+    key: "LTX_25_720P_5S_I2V_V1",
     version: 1,
-    engine: "ltx_video",
-    workflowHash: fakeLtxProfile.expectedWorkflowHash,
+    engine: "ltx_25_i2v",
+    workflowHash: ltxI2vWorkflowHash,
     frames: 97,
-    steps: 30,
+    steps: 8,
     runnerProfile: "dynamicvram-offload-v1",
     measuredDiskFootprintGb: 10,
     minFreeDiskGb: 0,
     modelHashes: {}
   }
 };
-
-const fakeRawWorkflow = JSON.stringify({
-  "1": {
-    inputs: {
-      seed: 42,
-      steps: 30,
-      cfg: 3.0,
-      sampler_name: "euler",
-      scheduler: "normal",
-      denoise: 1.0
-    },
-    class_type: "KSampler"
-  },
-  "3": {
-    inputs: { text: "default prompt" },
-    class_type: "CLIPTextEncode"
-  },
-  "4": {
-    inputs: { text: "default negative" },
-    class_type: "CLIPTextEncode"
-  },
-  "5": {
-    inputs: { length: 97, width: 1280, height: 720 },
-    class_type: "EmptyLTXVLatentVideo"
-  }
-});
 
 describe("LTX-2.5 Production Render End-to-End Integration", () => {
   let postgresContainer: StartedPostgres18Container;
@@ -307,6 +332,14 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
     // 1. Insert client, campaign, scene, candidate, and approve scene with candidate selection
     const client = await pool.connect();
     let sceneId: string;
+    let candidateId: string;
+    let candidateStorageKey: string;
+    const candidateImageBytes = new Uint8Array([
+      137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0,
+      0, 0, 31, 21, 196, 137
+    ]);
+    const candidateHash = sha256Hex(candidateImageBytes);
+
     try {
       const clientRecord = await insertClientRecord(client);
       const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
@@ -319,12 +352,24 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
         visualDescription: "Sunset over Caribbean waters with cinematic motion blur."
       });
       sceneId = sceneRecord.scene_id;
+      candidateStorageKey = `candidates/${sceneId}/rev_1_var_1.png`;
+
+      await objectStorage.putObject({
+        bucket: BUCKETS.REVIEW,
+        key: candidateStorageKey,
+        body: candidateImageBytes,
+        contentType: "image/png"
+      });
 
       const candidate = await insertStoryboardCandidateRecord(client, {
         sceneId: sceneId as SceneId,
         sceneSpecRevision: 1,
-        variantOrdinal: 1
+        variantOrdinal: 1,
+        storageBucket: BUCKETS.REVIEW,
+        storageObjectKey: candidateStorageKey,
+        contentHashSha256: candidateHash
       });
+      candidateId = candidate.candidate_id;
 
       await client.query(
         `UPDATE storyboard_scenes
@@ -341,14 +386,17 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
       client.release();
     }
 
-    // 2. Enqueue production render job via EnqueueSceneProductionRenderUseCase
-    const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow);
+    // 2. Enqueue production render job via EnqueueSceneProductionRenderUseCase with conditioned profile enabled
+    const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow, {
+      enableConditionedProfile: true
+    });
     const enqueueResult = await enqueueUseCase.execute({ sceneId });
 
     expect(enqueueResult.scene.status).toBe("queued");
     expect(enqueueResult.job.jobKind).toBe("production");
-    expect(enqueueResult.job.workflowTemplate).toBe("ltx-25-720p-97f");
-    expect(enqueueResult.job.injectedPayload.frameCount).toBe(97); // 4000ms maps to 97 frames at 24fps
+    expect(enqueueResult.job.workflowTemplate).toBe("ltx-25-720p-97f-i2v");
+    expect(enqueueResult.job.injectedPayload.frameCount).toBeUndefined();
+    expect(enqueueResult.job.injectedPayload.approvedCandidateId).toBe(candidateId);
     expect(typeof enqueueResult.job.injectedPayload.seed).toBe("number");
     expect(enqueueResult.job.injectedPayload.prompt).toBe(
       "Sunset over Caribbean waters with cinematic motion blur."
@@ -372,12 +420,45 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
     expect(claimedJob).toBeDefined();
     expect(claimedJob?.jobId).toBe(enqueueResult.job.jobId);
     expect(claimedJob?.status).toBe("leased");
-    expect(claimedJob?.injectedPayload.frameCount).toBe(97);
+    expect(claimedJob?.injectedPayload.frameCount).toBeUndefined();
+    expect(claimedJob?.injectedPayload.approvedCandidateId).toBe(candidateId);
 
     // 4. Compose certified render executor with simulated engine
     let executedWorkflow: RenderWorkflow | undefined;
+    let stagedReferenceImageValue: { name: string; subfolder: string } | undefined;
+    let cleanedUpReferenceImage: { name: string; subfolder?: string } | undefined;
     const fakeVideoBytes = new Uint8Array([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70]); // dummy mp4 header
     const fakeVideoHash = sha256Hex(fakeVideoBytes);
+
+    const resolveApprovedCandidateMedia = new ResolveApprovedCandidateMediaUseCase({
+      sceneRepository: {
+        findById: async (id: SceneId) => uow.execute(async (ctx) => ctx.scenes.findById(id)),
+        save: async () => {}
+      },
+      storyboardCandidateRepository: {
+        findById: async (id: CandidateId) =>
+          uow.execute(async (ctx) => ctx.candidates.findById(id)),
+        insert: async () => {},
+        listBySceneAndRevision: async () => []
+      },
+      objectStorage,
+      hashBytes: {
+        hashBytes: async (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
+      }
+    });
+
+    const stageReferenceImage: ComfyUiInputStagingPort = {
+      stage: async (file) => {
+        stagedReferenceImageValue = {
+          name: file.filename,
+          subfolder: "conditioning"
+        };
+        return stagedReferenceImageValue;
+      },
+      cleanup: async (file) => {
+        cleanedUpReferenceImage = file;
+      }
+    };
 
     const productionAssembler = new AssembleGenerationManifest({
       hashBytes: {
@@ -400,12 +481,15 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
     });
 
     const executor = createCertifiedRenderJobExecutor({
-      loadCertificationProfile: async () => fakeLtxProfile,
-      readApprovedProvenance: async () => fakeLtxProvenance,
-      collectCertificationProvenance: async () => fakeLtxProvenance,
+      loadCertificationProfile: async () => fakeLtxI2vProfile,
+      readApprovedProvenance: async () => fakeLtxI2vProvenance,
+      collectCertificationProvenance: async () => fakeLtxI2vProvenance,
       verifyGoldMasterProvenance: () => {},
-      readWorkflowFile: async () => fakeRawWorkflow,
-      hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
+      readWorkflowFile: async () => realLtxI2vWorkflow,
+      hashWorkflow: () => fakeLtxI2vProfile.expectedWorkflowHash,
+      resolveApprovedCandidateMedia,
+      objectStorage,
+      stageReferenceImage,
       executeProfileRender: async (
         input: ExecuteProfileRenderInput
       ): Promise<ExecuteProfileRenderResult> => {
@@ -464,12 +548,16 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
 
     // Verify injected workflow parameters in executor
     expect(executedWorkflow).toBeDefined();
-    const node5Inputs = executedWorkflow!["5"]?.inputs as Record<string, unknown> | undefined;
+    const node20Inputs = executedWorkflow!["20"]?.inputs as Record<string, unknown> | undefined;
     const node3Inputs = executedWorkflow!["3"]?.inputs as Record<string, unknown> | undefined;
     const node1Inputs = executedWorkflow!["1"]?.inputs as Record<string, unknown> | undefined;
-    expect(node5Inputs?.["length"]).toBe(97);
+    expect(node20Inputs?.["image"]).toBe(`conditioning/${stagedReferenceImageValue!.name}`);
     expect(node3Inputs?.["text"]).toBe("Sunset over Caribbean waters with cinematic motion blur.");
     expect(node1Inputs?.["seed"]).toBe(claimedJob!.injectedPayload.seed);
+    expect(cleanedUpReferenceImage).toEqual({
+      name: stagedReferenceImageValue!.name,
+      subfolder: "conditioning"
+    });
 
     // 6. Verify DB states
     const verifyClient3 = await pool.connect();
@@ -496,8 +584,8 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
       expect(manifestPayload.fps).toBe(LTX_FPS);
       expect(manifestPayload.frameCount).toBe(97);
       expect(manifestPayload.sampling.seed).toBe(claimedJob!.injectedPayload.seed);
-      expect(manifestPayload.renderProfile).toBe(fakeLtxProfile.id);
-      expect(manifestPayload.engine).toBe("ltx_video");
+      expect(manifestPayload.renderProfile).toBe(fakeLtxI2vProfile.id);
+      expect(manifestPayload.engine).toBe("ltx_25_i2v");
       expect(manifestPayload.prompts.prompt).toBe(
         "Sunset over Caribbean waters with cinematic motion blur."
       );
@@ -539,7 +627,17 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
     });
   });
 
-  it.skipIf(!hasLiveLtxPrerequisites())(
+  it("requires operator approval in license registry and provenance for live I2V render", () => {
+    expect(hasLiveLtxI2vPrerequisites({})).toBe(false);
+    expect(
+      hasLiveLtxI2vPrerequisites({
+        COMFYUI_URL: "http://127.0.0.1:8188",
+        COMFYUI_DIR: "/opt/ComfyUI"
+      })
+    ).toBe(false);
+  });
+
+  it.skipIf(!hasLiveLtxI2vPrerequisites())(
     "runs real LTX-2.5 video generation on host with ComfyUI and GPU",
     async () => {
       const liveConfig = resolveLiveLtxConfig();
@@ -548,6 +646,12 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
       // 1. Insert client, campaign, scene, candidate, and approve scene with candidate selection
       const client = await pool.connect();
       let sceneId: string;
+      const candidateImageBytes = new Uint8Array([
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
+        0, 0, 0, 31, 21, 196, 137
+      ]);
+      const candidateHash = sha256Hex(candidateImageBytes);
+
       try {
         const clientRecord = await insertClientRecord(client);
         const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
@@ -560,11 +664,22 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
           visualDescription: "Golden hour over a calm ocean with subtle ripples."
         });
         sceneId = sceneRecord.scene_id;
+        const candidateKey = `candidates/${sceneId}/rev_1_var_1.png`;
+
+        await objectStorage.putObject({
+          bucket: BUCKETS.REVIEW,
+          key: candidateKey,
+          body: candidateImageBytes,
+          contentType: "image/png"
+        });
 
         const candidate = await insertStoryboardCandidateRecord(client, {
           sceneId: sceneId as SceneId,
           sceneSpecRevision: 1,
-          variantOrdinal: 1
+          variantOrdinal: 1,
+          storageBucket: BUCKETS.REVIEW,
+          storageObjectKey: candidateKey,
+          contentHashSha256: candidateHash
         });
 
         await client.query(
@@ -583,12 +698,15 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
       }
 
       // 2. Enqueue production render job via EnqueueSceneProductionRenderUseCase
-      const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow);
+      const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow, {
+        enableConditionedProfile: true
+      });
       const enqueueResult = await enqueueUseCase.execute({ sceneId });
 
       expect(enqueueResult.scene.status).toBe("queued");
       expect(enqueueResult.job.jobKind).toBe("production");
-      expect(enqueueResult.job.injectedPayload.frameCount).toBe(97);
+      expect(enqueueResult.job.workflowTemplate).toBe("ltx-25-720p-97f-i2v");
+      expect(enqueueResult.job.injectedPayload.frameCount).toBeUndefined();
 
       // 3. Compose real production worker using createProductionWorker against authoritative templates and ComfyUI host
       const rootPath = resolve(fileURLToPath(new URL("../..", import.meta.url)));
@@ -603,6 +721,7 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
           comfyUiUrl: liveConfig.comfyUiUrl,
           comfyUiDir: liveConfig.comfyUiDir,
           comfyUiRenderTimeoutMs: 300_000,
+          comfyUiUploadTimeoutMs: 30_000,
           storageTelemetryPath: "/tmp",
           gpuIndex: 0,
           gpuLeasePath: "/tmp/gpu-live.lock",
@@ -665,7 +784,7 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
         const manifestPayload = dbManifest.rows[0]?.manifest_payload;
         expect(manifestPayload.fps).toBe(LTX_FPS);
         expect(manifestPayload.frameCount).toBe(97);
-        expect(manifestPayload.engine).toBe("ltx_video");
+        expect(manifestPayload.engine).toBe("ltx_25_i2v");
         expect(manifestPayload.outputs.length).toBeGreaterThan(0);
 
         const videoOutput = manifestPayload.outputs[0];

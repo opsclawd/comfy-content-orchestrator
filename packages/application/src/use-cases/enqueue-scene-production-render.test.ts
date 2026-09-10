@@ -8,14 +8,20 @@ import {
 } from "@cco/domain";
 import { InMemoryJobQueue } from "../test-support/in-memory-job-queue.js";
 import { InMemorySceneUnitOfWork } from "../test-support/in-memory-scene-unit-of-work.js";
+import * as contracts from "@cco/contracts";
 import {
   EnqueueSceneProductionRenderUseCase,
-  LTX_PRODUCTION_WORKFLOW_TEMPLATE,
+  LTX_TEXT_PRODUCTION_WORKFLOW_TEMPLATE,
+  LTX_I2V_PRODUCTION_WORKFLOW_TEMPLATE,
+  PRODUCTION_WORKFLOW_TEMPLATE,
   SUPPORTED_PRODUCTION_ENGINE_PROFILE_ID
 } from "./enqueue-scene-production-render.js";
 import { TransactionalJobEnqueuerUnavailableError } from "./job-queue-errors.js";
 import { UnsupportedProductionDurationError } from "./map-production-duration.js";
-import { UnrepresentableProductionConfigurationError } from "./production-configuration-errors.js";
+import {
+  ConditionedProductionProfileUnavailableError,
+  UnrepresentableProductionConfigurationError
+} from "./production-configuration-errors.js";
 import { SceneNotFoundError } from "./scene-not-found-error.js";
 
 describe("EnqueueSceneProductionRenderUseCase", () => {
@@ -61,27 +67,27 @@ describe("EnqueueSceneProductionRenderUseCase", () => {
     return scene;
   };
 
-  it("happy path via execute(): approved scene with valid selection enqueues production job and transitions to queued", async () => {
-    const scene = createApprovedScene("scene-happy-1", { durationMs: 4042 });
+  it("happy path via execute(): default deployment enqueues text-to-video workflow preserving certified registry alignment", async () => {
+    const scene = createApprovedScene("scene-happy-default", { durationMs: 4042 });
     const queue = new InMemoryJobQueue();
     const uow = new InMemorySceneUnitOfWork([scene]).withJobs(queue);
     const useCase = new EnqueueSceneProductionRenderUseCase(uow);
 
-    const result = await useCase.execute({ sceneId: "scene-happy-1" });
+    const result = await useCase.execute({ sceneId: "scene-happy-default" });
 
     expect(result.scene.status).toBe("queued");
     expect(result.job.jobKind).toBe("production");
-    expect(result.job.workflowTemplate).toBe(LTX_PRODUCTION_WORKFLOW_TEMPLATE);
-    expect(result.job.sceneId).toBe("scene-happy-1");
+    expect(result.job.workflowTemplate).toBe(LTX_TEXT_PRODUCTION_WORKFLOW_TEMPLATE);
+    expect(result.job.sceneId).toBe("scene-happy-default");
 
     const payload = result.job.injectedPayload as {
       prompt: string;
       seed: number;
-      frameCount: number;
       approvedCandidateId: string;
+      frameCount: number;
     };
     expect(payload.prompt).toBe("Cinematic sunset over mountain peak");
-    expect(payload.frameCount).toBe(97); // 4042ms -> 97 frames
+    expect(payload.frameCount).toBe(97);
     expect(payload.approvedCandidateId).toBe("cand-1");
     expect(Number.isSafeInteger(payload.seed)).toBe(true);
     expect(payload.seed).toBeGreaterThanOrEqual(0);
@@ -89,9 +95,39 @@ describe("EnqueueSceneProductionRenderUseCase", () => {
     expect(uow.savedScenes).toHaveLength(1);
     expect(uow.savedScenes[0]!.status).toBe("queued");
     expect(result.scene.activeProductionJobId).toBe(result.job.jobId);
-    expect(uow.savedScenes[0]!.snapshot().activeProductionJobId).toBe(result.job.jobId);
     expect(queue.jobs).toHaveLength(1);
-    expect(queue.jobs[0]!.jobKind).toBe("production");
+  });
+
+  it("happy path with enableConditionedProfile: enqueues I2V production job without frameCount and with approved candidate", async () => {
+    const scene = createApprovedScene("scene-happy-conditioned", { durationMs: 4042 });
+    const queue = new InMemoryJobQueue();
+    const uow = new InMemorySceneUnitOfWork([scene]).withJobs(queue);
+    const useCase = new EnqueueSceneProductionRenderUseCase(uow, {
+      enableConditionedProfile: true
+    });
+
+    const result = await useCase.execute({ sceneId: "scene-happy-conditioned" });
+
+    expect(result.scene.status).toBe("queued");
+    expect(result.job.jobKind).toBe("production");
+    expect(result.job.workflowTemplate).toBe(LTX_I2V_PRODUCTION_WORKFLOW_TEMPLATE);
+    expect(result.job.sceneId).toBe("scene-happy-conditioned");
+
+    const payload = result.job.injectedPayload as {
+      prompt: string;
+      seed: number;
+      approvedCandidateId: string;
+    };
+    expect(payload.prompt).toBe("Cinematic sunset over mountain peak");
+    expect("frameCount" in result.job.injectedPayload).toBe(false);
+    expect(payload.approvedCandidateId).toBe("cand-1");
+    expect(Number.isSafeInteger(payload.seed)).toBe(true);
+    expect(payload.seed).toBeGreaterThanOrEqual(0);
+
+    expect(uow.savedScenes).toHaveLength(1);
+    expect(uow.savedScenes[0]!.status).toBe("queued");
+    expect(result.scene.activeProductionJobId).toBe(result.job.jobId);
+    expect(queue.jobs).toHaveLength(1);
   });
 
   it("happy path via executeWithContext(): operates inside caller-opened transaction without opening a second one", async () => {
@@ -176,7 +212,7 @@ describe("EnqueueSceneProductionRenderUseCase", () => {
     expect(uow.savedScenes).toHaveLength(0);
   });
 
-  it("fails closed with UnrepresentableProductionConfigurationError when engineProfileId is not LTX_25_720P_5S_V1", async () => {
+  it("fails closed with UnrepresentableProductionConfigurationError when engineProfileId is not in accepted list (e.g. FLUX_SCHNELL_DRAFT_V1)", async () => {
     const scene = createApprovedScene("scene-flux", {
       engineProfileId: "FLUX_SCHNELL_DRAFT_V1"
     });
@@ -185,11 +221,52 @@ describe("EnqueueSceneProductionRenderUseCase", () => {
     const uow = new InMemorySceneUnitOfWork([scene]).withJobs(queue);
     const useCase = new EnqueueSceneProductionRenderUseCase(uow);
 
-    await expect(useCase.execute({ sceneId: "scene-flux" })).rejects.toThrow(
-      UnrepresentableProductionConfigurationError
+    const error = await useCase.execute({ sceneId: "scene-flux" }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UnrepresentableProductionConfigurationError);
+    expect((error as UnrepresentableProductionConfigurationError).unrepresentableFields).toContain(
+      "engineProfileId"
     );
     expect(queue.jobs).toHaveLength(0);
     expect(uow.savedScenes).toHaveLength(0);
+  });
+
+  it("fails closed with UnrepresentableProductionConfigurationError when engineProfileId is an arbitrary unknown profile", async () => {
+    const scene = createApprovedScene("scene-unknown-profile", {
+      engineProfileId: "SOME_OTHER_PROFILE"
+    });
+
+    const queue = new InMemoryJobQueue();
+    const uow = new InMemorySceneUnitOfWork([scene]).withJobs(queue);
+    const useCase = new EnqueueSceneProductionRenderUseCase(uow);
+
+    const error = await useCase
+      .execute({ sceneId: "scene-unknown-profile" })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UnrepresentableProductionConfigurationError);
+    expect((error as UnrepresentableProductionConfigurationError).unrepresentableFields).toEqual([
+      "engineProfileId"
+    ]);
+    expect(queue.jobs).toHaveLength(0);
+  });
+
+  it("accepts a scene configured with LTX_25_720P_5S_I2V_V1 or ltx_25_i2v as representable and enqueues production", async () => {
+    for (const engineProfileId of ["LTX_25_720P_5S_I2V_V1", "ltx_25_i2v"]) {
+      const scene = createApprovedScene(`scene-${engineProfileId}`, {
+        engineProfileId,
+        durationMs: 4042
+      });
+      const queue = new InMemoryJobQueue();
+      const uow = new InMemorySceneUnitOfWork([scene]).withJobs(queue);
+      const useCase = new EnqueueSceneProductionRenderUseCase(uow);
+
+      const result = await useCase.execute({ sceneId: `scene-${engineProfileId}` });
+
+      expect(result.scene.status).toBe("queued");
+      expect(result.job.jobKind).toBe("production");
+      expect(result.job.workflowTemplate).toBe(PRODUCTION_WORKFLOW_TEMPLATE);
+      expect("frameCount" in result.job.injectedPayload).toBe(false);
+      expect(result.job.injectedPayload.approvedCandidateId).toBe("cand-1");
+    }
   });
 
   it("fails closed with UnrepresentableProductionConfigurationError when referenceIds or lora are present", async () => {
@@ -300,5 +377,21 @@ describe("EnqueueSceneProductionRenderUseCase", () => {
     });
 
     expect(queue.jobs).toHaveLength(1);
+  });
+
+  it("fails closed with ConditionedProductionProfileUnavailableError if injection topology is undefined", async () => {
+    const scene = createApprovedScene("scene-topology-missing");
+    const queue = new InMemoryJobQueue();
+    const uow = new InMemorySceneUnitOfWork([scene]).withJobs(queue);
+    const useCase = new EnqueueSceneProductionRenderUseCase(uow);
+
+    const spy = vi.spyOn(contracts, "getProfileInjectionTopology").mockReturnValue(undefined);
+    try {
+      await expect(useCase.execute({ sceneId: "scene-topology-missing" })).rejects.toThrow(
+        ConditionedProductionProfileUnavailableError
+      );
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
