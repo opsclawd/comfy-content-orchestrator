@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadCertificationProfile } from "./profile-manifest.js";
 
@@ -122,6 +123,53 @@ describe("Certification Profile Manifest", () => {
           }
         ],
         renderProfileIdentity: null
+      },
+      {
+        id: "ltx-25-720p-97f-i2v",
+        engine: "ltx_25_i2v",
+        workflowRelativePath: "ltx_25_720p_i2v_97f_api.json",
+        expectedWorkflowHash: "c".repeat(64),
+        source: {
+          kind: "authored_from_spec",
+          uri: "https://github.com/comfyanonymous/ComfyUI",
+          revision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+          license: "GPL-3.0"
+        },
+        baseline: {
+          width: 1280,
+          height: 720,
+          frames: 97,
+          steps: 8,
+          approximateDurationSeconds: 5
+        },
+        minFreeDiskGb: 100,
+        runnerProfile: "cuda_default",
+        models: [
+          {
+            category: "diffusion_models",
+            relativePath: "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors"
+          },
+          {
+            category: "clip",
+            relativePath: "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors"
+          },
+          {
+            category: "vae",
+            relativePath: "ltx-2.5-video-vae-conv-bf16.safetensors"
+          }
+        ],
+        assertions: [
+          {
+            nodeId: "21",
+            classType: "ImageScale",
+            input: "crop",
+            equals: "center"
+          }
+        ],
+        renderProfileIdentity: {
+          key: "LTX_25_720P_5S_I2V_V1",
+          version: 1
+        }
       }
     ]
   });
@@ -198,6 +246,39 @@ describe("Certification Profile Manifest", () => {
     expect(fluxProfile.renderProfileIdentity).toBeNull();
     expect(fluxProfile.minFreeDiskGb).toBe(0);
     expect(Object.isFrozen(fluxProfile)).toBe(true);
+
+    // LTX I2V profile with authored_from_spec and LTX_25_720P_5S_I2V_V1 identity
+    const ltxI2vProfile = await loadCertificationProfile(manifestPath, "ltx-25-720p-97f-i2v");
+    expect(ltxI2vProfile.id).toBe("ltx-25-720p-97f-i2v");
+    expect(ltxI2vProfile.engine).toBe("ltx_25_i2v");
+    expect(ltxI2vProfile.workflowPath).toBe(join(tempDir, "ltx_25_720p_i2v_97f_api.json"));
+    expect(ltxI2vProfile.source.kind).toBe("authored_from_spec");
+    expect(ltxI2vProfile.renderProfileIdentity).toEqual({
+      key: "LTX_25_720P_5S_I2V_V1",
+      version: 1
+    });
+    expect(ltxI2vProfile.minFreeDiskGb).toBe(100);
+    expect(Object.isFrozen(ltxI2vProfile)).toBe(true);
+  });
+
+  it("loads the real repository templates manifest with ltx-25-720p-97f-i2v", async () => {
+    const templatesManifestPath = fileURLToPath(
+      new URL("../../../../../templates/provenance.json", import.meta.url)
+    );
+    const profile = await loadCertificationProfile(templatesManifestPath, "ltx-25-720p-97f-i2v");
+
+    expect(profile.id).toBe("ltx-25-720p-97f-i2v");
+    expect(profile.engine).toBe("ltx_25_i2v");
+    expect(profile.source.kind).toBe("authored_from_spec");
+    expect(profile.renderProfileIdentity).toEqual({
+      key: "LTX_25_720P_5S_I2V_V1",
+      version: 1
+    });
+    expect(profile.workflowRelativePath).toBe("ltx_25_720p_i2v_97f_api.json");
+    expect(profile.baseline.frames).toBe(97);
+    expect(profile.baseline.steps).toBe(8);
+    expect(profile.minFreeDiskGb).toBe(100);
+    expect(profile.runnerProfile).toBe("dynamicvram-offload-v1");
   });
 
   it("manifest loading rejects duplicate profile and model identities", async () => {

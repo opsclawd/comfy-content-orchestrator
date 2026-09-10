@@ -96,6 +96,58 @@ describe("Certification Provenance Collector", () => {
     ...overrides
   });
 
+  const createMockLtxI2vProfile = (
+    overrides?: Partial<CertificationProfile>
+  ): CertificationProfile => ({
+    id: "ltx-25-720p-97f-i2v",
+    engine: "ltx_25_i2v",
+    workflowPath: "/manifests/ltx_25_720p_i2v_97f_api.json",
+    workflowRelativePath: "ltx_25_720p_i2v_97f_api.json",
+    expectedWorkflowHash: "e0b417a3c3b5dc91ed417891789795c6a56e602d39c80eed7e1253a2ea41baab",
+    source: {
+      kind: "authored_from_spec",
+      uri: "https://github.com/comfyanonymous/ComfyUI",
+      revision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+      license: "GPL-3.0"
+    },
+    baseline: {
+      width: 1280,
+      height: 720,
+      frames: 97,
+      steps: 8,
+      approximateDurationSeconds: 5
+    },
+    minFreeDiskGb: 100,
+    runnerProfile: "dynamicvram-offload-v1",
+    models: [
+      {
+        category: "diffusion_models",
+        relativePath: "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors"
+      },
+      {
+        category: "clip",
+        relativePath: "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors"
+      },
+      {
+        category: "vae",
+        relativePath: "ltx-2.5-video-vae-conv-bf16.safetensors"
+      }
+    ],
+    assertions: [
+      {
+        nodeId: "21",
+        classType: "ImageScale",
+        input: "crop",
+        equals: "center"
+      }
+    ],
+    renderProfileIdentity: {
+      key: "LTX_25_720P_5S_I2V_V1",
+      version: 1
+    },
+    ...overrides
+  });
+
   const createMockDiskResult = (overrides?: Partial<DiskPreflightResult>): DiskPreflightResult =>
     Object.freeze({
       modelFootprintBytes: 68_800_000_000,
@@ -624,5 +676,62 @@ describe("Certification Provenance Collector", () => {
     expect(
       report.renderProfileProvenance?.modelHashes["models/diffusion_models/test.safetensors"]
     ).toBe(report.models[0]?.sha256);
+  });
+
+  it("collector collects provenance and constructs RenderProfileProvenance for LTX I2V profile", async () => {
+    const fixedDate = new Date("2026-09-01T12:00:00.000Z");
+    const profile = createMockLtxI2vProfile();
+    const diskResult = createMockDiskResult();
+    const gitResult = createMockGitResult();
+    const modelHashes: readonly ModelFileHash[] = Object.freeze([
+      Object.freeze({
+        category: "diffusion_models",
+        relativePath: "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
+        key: "models/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
+        bytes: 22_000_000_000,
+        sha256: "c".repeat(64)
+      }),
+      Object.freeze({
+        category: "clip",
+        relativePath: "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors",
+        key: "models/clip/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors",
+        bytes: 12_000_000_000,
+        sha256: "d".repeat(64)
+      }),
+      Object.freeze({
+        category: "vae",
+        relativePath: "ltx-2.5-video-vae-conv-bf16.safetensors",
+        key: "models/vae/ltx-2.5-video-vae-conv-bf16.safetensors",
+        bytes: 200_000_000,
+        sha256: "e".repeat(64)
+      })
+    ]);
+
+    const dependencies: ProvenanceCollectorDependencies = {
+      runDiskPreflight: vi.fn(async () => diskResult),
+      collectGitProvenance: vi.fn(async () => gitResult),
+      readWorkflowFile: vi.fn(async () => '{"nodes": []}'),
+      hashWorkflow: vi.fn(() => profile.expectedWorkflowHash),
+      hashModelFiles: vi.fn(async () => modelHashes)
+    };
+
+    const report = await collectCertificationProvenance(
+      {
+        comfyUiDir: "/opt/ComfyUI",
+        profile,
+        now: () => fixedDate
+      },
+      dependencies
+    );
+
+    expect(report.profileId).toBe("ltx-25-720p-97f-i2v");
+    expect(report.renderProfileProvenance).not.toBeNull();
+    expect(report.renderProfileProvenance?.key).toBe("LTX_25_720P_5S_I2V_V1");
+    expect(report.renderProfileProvenance?.engine).toBe("ltx_25_i2v");
+    expect(report.renderProfileProvenance?.version).toBe(1);
+    expect(report.renderProfileProvenance?.frames).toBe(97);
+    expect(report.renderProfileProvenance?.steps).toBe(8);
+    expect(report.renderProfileProvenance?.workflowHash).toBe(profile.expectedWorkflowHash);
+    expect(report.workflow.source.kind).toBe("authored_from_spec");
   });
 });

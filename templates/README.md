@@ -40,6 +40,21 @@ This directory contains the version-controlled, source-gated Gold Master ComfyUI
   - `models/clip/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors`
   - `models/vae/ltx-2.5-video-vae-conv-bf16.safetensors`
 
+### 3. `ltx-25-720p-97f-i2v` (`templates/ltx_25_720p_i2v_97f_api.json`)
+- **Source Kind:** Authored from specification (`authored_from_spec`).
+- **Source URI:** `https://github.com/comfyanonymous/ComfyUI`
+- **Revision:** `55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc`
+- **Redistribution Basis & License:** GPL-3.0.
+- **Workflow Format:** Exact ComfyUI API object map targeting 1280x720 resolution, 97 frames (~5 seconds at 24 fps), and 8 DiT sampling steps with reference image conditioning.
+- **Canonical SHA-256:** `e0b417a3c3b5dc91ed417891789795c6a56e602d39c80eed7e1253a2ea41baab`
+- **Runner Profile:** `dynamicvram-offload-v1` (requiring DynamicVRAM / workflow-managed model offloading).
+- **Disk Space Requirement:** Minimum 100 GB free disk space reservation (`minFreeDiskGb: 100`).
+- **Render Profile Identity:** `LTX_25_720P_5S_I2V_V1` (v1).
+- **Referenced Models:**
+  - `models/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors`
+  - `models/clip/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors`
+  - `models/vae/ltx-2.5-video-vae-conv-bf16.safetensors`
+
 ---
 
 ## Canonical JSON Hashing and Immutability
@@ -65,6 +80,9 @@ The models listed in `templates/provenance.json` correspond to the following rel
 | `ltx-25-720p-97f` | `diffusion_models` | `ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors` | `models/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors` |
 | `ltx-25-720p-97f` | `clip` | `gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors` | `models/clip/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors` |
 | `ltx-25-720p-97f` | `vae` | `ltx-2.5-video-vae-conv-bf16.safetensors` | `models/vae/ltx-2.5-video-vae-conv-bf16.safetensors` |
+| `ltx-25-720p-97f-i2v` | `diffusion_models` | `ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors` | `models/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors` |
+| `ltx-25-720p-97f-i2v` | `clip` | `gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors` | `models/clip/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors` |
+| `ltx-25-720p-97f-i2v` | `vae` | `ltx-2.5-video-vae-conv-bf16.safetensors` | `models/vae/ltx-2.5-video-vae-conv-bf16.safetensors` |
 
 ---
 
@@ -88,4 +106,7 @@ pnpm --filter @cco/infrastructure provenance -- --comfyui-dir "$COMFYUI_DIR" --p
 
 # LTX-2.5 720p 97-Frame Profile
 pnpm --filter @cco/infrastructure provenance -- --comfyui-dir "$COMFYUI_DIR" --profile ltx-25-720p-97f --manifest ../../templates/provenance.json > ltx-provenance.json
+
+# LTX-2.5 720p 97-Frame I2V Profile
+pnpm --filter @cco/infrastructure provenance -- --comfyui-dir "$COMFYUI_DIR" --profile ltx-25-720p-97f-i2v --manifest ../../templates/provenance.json > ltx-i2v-provenance.json
 ```

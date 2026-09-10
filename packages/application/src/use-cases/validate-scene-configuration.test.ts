@@ -55,6 +55,19 @@ describe("validateSceneConfiguration", () => {
     expect(Object.isFrozen(result.referenceIds)).toBe(true);
   });
 
+  it("validates candidate configuration using LTX_25_720P_5S_I2V_V1 engine profile", () => {
+    const result = validateSceneConfiguration(
+      {
+        ...validCandidate,
+        engineProfileId: "LTX_25_720P_5S_I2V_V1"
+      },
+      sampleResolvedAssets,
+      10000
+    );
+
+    expect(result.engineProfileId).toBe("LTX_25_720P_5S_I2V_V1");
+  });
+
   it("witness scenario: a referenceIds entry that is a syntactically valid UUID but absent from resolvedReferenceAssets is rejected", () => {
     const absentValidUuid = "99999999-9999-9999-9999-999999999999";
     const candidate = {
