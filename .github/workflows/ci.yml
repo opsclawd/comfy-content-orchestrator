@@ -6,7 +6,29 @@ on:
   pull_request:
 
 jobs:
-  quality-gates:
+  lint-and-typecheck:
+    name: lint-and-typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Architecture boundaries are a hard gate, not advisory (PRD §3.6.2).
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm format
+      - run: pnpm boundaries
+
+  tests:
+    name: tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,29 +66,31 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Architecture boundaries are a hard gate, not advisory (PRD §3.6.2).
-      - run: pnpm typecheck
-      - run: pnpm lint
       - run: pnpm test
       - run: pnpm test:assembly
       - run: pnpm test:db
-      - run: pnpm boundaries
-      - run: pnpm format
       - run: pnpm check:control-plane
+
+  docker-smoke:
+    name: docker-smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
 
       - uses: docker/setup-buildx-action@v3
 
-      # Whether the scripts' own later plain `docker build` calls actually
-      # share this builder's cache depends on buildx being the *default*
-      # docker build builder on this runner, which is a property of the
-      # runner's Docker version/config that setup-buildx-action does not
-      # unconditionally guarantee. Printed here as real evidence rather than
-      # assumed — check `docker info`'s Driver: line in this step's logs.
-      # If it's not "docker-container"/buildx-backed, plain `docker build`
-      # in the scripts below is NOT sharing this cache, and only
-      # smoke-control-plane.sh's `docker image inspect cco-*:latest`
-      # pre-check (which finds the --load'd image directly, independent of
-      # any builder-sharing question) benefits from these warm-build steps.
+      # Confirmed via run 34498914007 that the docker-container buildx builder
+      # is genuinely the default (* in buildx ls), so plain docker build calls
+      # in downstream scripts share this builder's GHA cache.
       - name: Show Docker builder topology
         run: |
           {
@@ -86,8 +110,7 @@ jobs:
       # their own `docker build` afterward, unmodified — this keeps the
       # scripts themselves untouched (#82's "purely CI wiring" scope)
       # rather than threading cache flags through their own docker build
-      # invocations. Whether the scripts' rebuild is warm or cold depends
-      # on the builder topology printed above.
+      # invocations.
       - name: Warm Docker build cache (Control API)
         uses: docker/build-push-action@v6
         with:
@@ -121,3 +144,26 @@ jobs:
           START=$(date +%s)
           pnpm smoke:control-plane
           echo "smoke:control-plane duration: $(( $(date +%s) - START ))s" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  quality-gates:
+    name: quality-gates
+    runs-on: ubuntu-latest
+    needs:
+      - lint-and-typecheck
+      - tests
+      - docker-smoke
+    if: always()
+    steps:
+      - name: Aggregate quality gate status
+        run: |
+          echo "Gate results:"
+          echo "  lint-and-typecheck: ${{ needs.lint-and-typecheck.result }}"
+          echo "  tests:              ${{ needs.tests.result }}"
+          echo "  docker-smoke:       ${{ needs.docker-smoke.result }}"
+          if [ "${{ needs.lint-and-typecheck.result }}" != "success" ] || \
+             [ "${{ needs.tests.result }}" != "success" ] || \
+             [ "${{ needs.docker-smoke.result }}" != "success" ]; then
+            echo "::error::One or more upstream CI quality gates failed or were cancelled."
+            exit 1
+          fi
+          echo "All CI quality gates passed successfully."
