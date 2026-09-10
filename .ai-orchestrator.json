@@ -12,6 +12,7 @@
       "pnpm install --frozen-lockfile",
       "pnpm check:control-plane"
     ],
+    "selfVerifyCommands": ["pnpm typecheck", "pnpm lint"],
     "timeout": 900,
     "forbiddenArtifactPaths": ["certification/", "baseline/", "config/render-profiles/"]
   }
