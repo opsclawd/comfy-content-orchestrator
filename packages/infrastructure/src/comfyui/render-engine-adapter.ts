@@ -142,6 +142,10 @@ export class ComfyUiRenderEngineAdapter implements RenderEnginePort {
     this.now = options.now ?? (() => new Date());
   }
 
+  get comfyUiClient(): ComfyUiClient {
+    return this.client;
+  }
+
   async queueRender(input: QueueRenderInput): Promise<RenderQueueReceipt> {
     const clientId = this.createClientId();
     const socket = this.client.connect(clientId);

@@ -145,13 +145,39 @@ export class FakeComfyUiFetch {
 
   fetch: typeof globalThis.fetch = async (input, init) => {
     this.calls.push({ url: input, init });
-    if (this.queuedResponses.length > 0) {
-      return this.queuedResponses.shift()!;
+    if (init?.signal?.aborted) {
+      const err = new Error("The operation was aborted");
+      err.name = "AbortError";
+      throw err;
     }
-    if (this.defaultResponseHandler) {
-      return this.defaultResponseHandler(input, init);
+    const signalPromise = init?.signal
+      ? new Promise<never>((_, reject) => {
+          init.signal!.addEventListener(
+            "abort",
+            () => {
+              const err = new Error("The operation was aborted");
+              err.name = "AbortError";
+              reject(err);
+            },
+            { once: true }
+          );
+        })
+      : undefined;
+
+    const execute = async (): Promise<Response> => {
+      if (this.queuedResponses.length > 0) {
+        return this.queuedResponses.shift()!;
+      }
+      if (this.defaultResponseHandler) {
+        return this.defaultResponseHandler(input, init);
+      }
+      throw new Error(`FakeComfyUiFetch: No response queued for ${String(input)}`);
+    };
+
+    if (signalPromise) {
+      return Promise.race([execute(), signalPromise]);
     }
-    throw new Error(`FakeComfyUiFetch: No response queued for ${String(input)}`);
+    return execute();
   };
 }
 

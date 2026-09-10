@@ -295,4 +295,246 @@ describe("ComfyUiClient", () => {
     ws.close(1000, "Client closed");
     expect(ws.closeCalls).toEqual([{ code: 1000, reason: "Client closed" }]);
   });
+
+  describe("uploadImage", () => {
+    it("submits multipart form data to POST /upload/image and returns response", async () => {
+      const transport = new FakeComfyUiTransport();
+      const client = new ComfyUiClient("http://127.0.0.1:8188", transport);
+      const bytes = new Uint8Array([1, 2, 3, 4]);
+
+      transport.fakeFetch.queueJsonResponse({
+        name: "test-image.png",
+        subfolder: "sub_test",
+        type: "input"
+      });
+
+      const result = await client.uploadImage("test-image.png", bytes, "image/png");
+
+      expect(result).toEqual({
+        name: "test-image.png",
+        subfolder: "sub_test",
+        type: "input"
+      });
+
+      expect(transport.fakeFetch.calls).toHaveLength(1);
+      const call = transport.fakeFetch.calls[0]!;
+      expect(call.url).toBe("http://127.0.0.1:8188/upload/image");
+      expect(call.init?.method).toBe("POST");
+      expect(call.init?.body).toBeInstanceOf(FormData);
+
+      const body = call.init?.body as FormData;
+      expect(body.get("type")).toBe("input");
+      expect(body.get("overwrite")).toBe("true");
+      expect(body.get("image")).toBeInstanceOf(Blob);
+    });
+
+    it("normalizes missing subfolder to empty string", async () => {
+      const transport = new FakeComfyUiTransport();
+      const client = new ComfyUiClient("http://127.0.0.1:8188", transport);
+      const bytes = new Uint8Array([1, 2, 3, 4]);
+
+      transport.fakeFetch.queueJsonResponse({
+        name: "staged_file.png",
+        type: "input"
+      });
+
+      const result = await client.uploadImage("staged_file.png", bytes, "image/png");
+
+      expect(result).toEqual({
+        name: "staged_file.png",
+        subfolder: "",
+        type: "input"
+      });
+    });
+
+    it("supports overwrite: false option", async () => {
+      const transport = new FakeComfyUiTransport();
+      const client = new ComfyUiClient("http://127.0.0.1:8188", transport);
+      const bytes = new Uint8Array([1, 2, 3, 4]);
+
+      transport.fakeFetch.queueJsonResponse({
+        name: "staged_file.png",
+        subfolder: "",
+        type: "input"
+      });
+
+      await client.uploadImage("staged_file.png", bytes, "image/png", { overwrite: false });
+
+      const body = transport.fakeFetch.calls[0]!.init?.body as FormData;
+      expect(body.get("overwrite")).toBe("false");
+    });
+
+    it("classifies transport errors as IMAGE_UPLOAD_FAILED", async () => {
+      const transport = new FakeComfyUiTransport();
+      transport.fakeFetch.setDefaultResponseHandler(async () => {
+        throw new Error("Network unreachable");
+      });
+      const client = new ComfyUiClient("http://127.0.0.1:8188", transport);
+
+      await expect(
+        client.uploadImage("file.png", new Uint8Array([1]), "image/png")
+      ).rejects.toMatchObject({
+        name: "ComfyUiRenderEngineError",
+        code: "IMAGE_UPLOAD_FAILED"
+      });
+    });
+
+    it("classifies non-ok status as IMAGE_UPLOAD_FAILED with statusCode", async () => {
+      const transport = new FakeComfyUiTransport();
+      transport.fakeFetch.queueTextResponse("Internal Server Error", {
+        status: 500,
+        statusText: "Internal Server Error"
+      });
+      const client = new ComfyUiClient("http://127.0.0.1:8188", transport);
+
+      await expect(
+        client.uploadImage("file.png", new Uint8Array([1]), "image/png")
+      ).rejects.toMatchObject({
+        name: "ComfyUiRenderEngineError",
+        code: "IMAGE_UPLOAD_FAILED",
+        context: { statusCode: 500 }
+      });
+    });
+
+    it("classifies invalid JSON as PROTOCOL_ERROR", async () => {
+      const transport = new FakeComfyUiTransport();
+      transport.fakeFetch.queueTextResponse("<html>not json</html>", { status: 200 });
+      const client = new ComfyUiClient("http://127.0.0.1:8188", transport);
+
+      await expect(
+        client.uploadImage("file.png", new Uint8Array([1]), "image/png")
+      ).rejects.toMatchObject({
+        name: "ComfyUiRenderEngineError",
+        code: "PROTOCOL_ERROR"
+      });
+    });
+
+    it("classifies missing or empty name as PROTOCOL_ERROR", async () => {
+      const transport = new FakeComfyUiTransport();
+      const client = new ComfyUiClient("http://127.0.0.1:8188", transport);
+
+      // missing name
+      transport.fakeFetch.queueJsonResponse({ subfolder: "sub" }, { status: 200 });
+      await expect(
+        client.uploadImage("file.png", new Uint8Array([1]), "image/png")
+      ).rejects.toMatchObject({
+        name: "ComfyUiRenderEngineError",
+        code: "PROTOCOL_ERROR"
+      });
+
+      // empty name
+      transport.fakeFetch.queueJsonResponse({ name: "   " }, { status: 200 });
+      await expect(
+        client.uploadImage("file.png", new Uint8Array([1]), "image/png")
+      ).rejects.toMatchObject({
+        name: "ComfyUiRenderEngineError",
+        code: "PROTOCOL_ERROR"
+      });
+    });
+
+    it("times out and throws IMAGE_UPLOAD_FAILED on a never-settling transport fetch", async () => {
+      const transport = new FakeComfyUiTransport();
+      // Handler that returns a promise that never resolves
+      transport.fakeFetch.setDefaultResponseHandler(() => new Promise<Response>(() => {}));
+      const client = new ComfyUiClient("http://127.0.0.1:8188", transport);
+
+      const promise = client.uploadImage("file.png", new Uint8Array([1]), "image/png", {
+        timeoutMs: 50
+      });
+
+      await expect(promise).rejects.toMatchObject({
+        name: "ComfyUiRenderEngineError",
+        code: "IMAGE_UPLOAD_FAILED",
+        message: expect.stringContaining("timed out or was aborted")
+      });
+    });
+
+    it("rejects path traversal in returned filename with PROTOCOL_ERROR", async () => {
+      const transport = new FakeComfyUiTransport();
+      const client = new ComfyUiClient("http://127.0.0.1:8188", transport);
+
+      for (const unsafeName of ["../file.png", "dir/file.png", "dir\\file.png", "."]) {
+        transport.fakeFetch.queueJsonResponse({ name: unsafeName, type: "input" }, { status: 200 });
+        await expect(
+          client.uploadImage(unsafeName, new Uint8Array([1]), "image/png")
+        ).rejects.toMatchObject({
+          name: "ComfyUiRenderEngineError",
+          code: "PROTOCOL_ERROR"
+        });
+      }
+    });
+
+    it("rejects returned name that does not match requested filename with PROTOCOL_ERROR", async () => {
+      const transport = new FakeComfyUiTransport();
+      const client = new ComfyUiClient("http://127.0.0.1:8188", transport);
+
+      transport.fakeFetch.queueJsonResponse(
+        { name: "different-name.png", type: "input" },
+        { status: 200 }
+      );
+      await expect(
+        client.uploadImage("requested-name.png", new Uint8Array([1]), "image/png")
+      ).rejects.toMatchObject({
+        name: "ComfyUiRenderEngineError",
+        code: "PROTOCOL_ERROR"
+      });
+    });
+
+    it("rejects non-input type in response with PROTOCOL_ERROR", async () => {
+      const transport = new FakeComfyUiTransport();
+      const client = new ComfyUiClient("http://127.0.0.1:8188", transport);
+
+      // type: "output"
+      transport.fakeFetch.queueJsonResponse({ name: "file.png", type: "output" }, { status: 200 });
+      await expect(
+        client.uploadImage("file.png", new Uint8Array([1]), "image/png")
+      ).rejects.toMatchObject({
+        name: "ComfyUiRenderEngineError",
+        code: "PROTOCOL_ERROR"
+      });
+
+      // missing type
+      transport.fakeFetch.queueJsonResponse({ name: "file.png" }, { status: 200 });
+      await expect(
+        client.uploadImage("file.png", new Uint8Array([1]), "image/png")
+      ).rejects.toMatchObject({
+        name: "ComfyUiRenderEngineError",
+        code: "PROTOCOL_ERROR"
+      });
+    });
+
+    it("rejects path traversal in subfolder with PROTOCOL_ERROR", async () => {
+      const transport = new FakeComfyUiTransport();
+      const client = new ComfyUiClient("http://127.0.0.1:8188", transport);
+
+      for (const unsafeSubfolder of ["../sub", "sub/..", "sub\\sub2", "/sub", "."]) {
+        transport.fakeFetch.queueJsonResponse(
+          { name: "file.png", subfolder: unsafeSubfolder, type: "input" },
+          { status: 200 }
+        );
+        await expect(
+          client.uploadImage("file.png", new Uint8Array([1]), "image/png")
+        ).rejects.toMatchObject({
+          name: "ComfyUiRenderEngineError",
+          code: "PROTOCOL_ERROR"
+        });
+      }
+    });
+
+    it("accepts valid subfolder and returns input type", async () => {
+      const transport = new FakeComfyUiTransport();
+      const client = new ComfyUiClient("http://127.0.0.1:8188", transport);
+
+      transport.fakeFetch.queueJsonResponse(
+        { name: "file.png", subfolder: "conditioning", type: "input" },
+        { status: 200 }
+      );
+      const res = await client.uploadImage("file.png", new Uint8Array([1]), "image/png");
+      expect(res).toEqual({
+        name: "file.png",
+        subfolder: "conditioning",
+        type: "input"
+      });
+    });
+  });
 });

@@ -51,3 +51,9 @@ export {
 } from "./postgres/test-support/records.js";
 
 export const MIGRATIONS_DIRECTORY_URL = new URL("../migrations/", import.meta.url);
+
+export {
+  FakeComfyUiTransport,
+  FakeComfyUiWebSocket,
+  type RecordedFetchCall
+} from "./comfyui/test-support/fake-comfyui.js";

@@ -12,3 +12,18 @@ export class UnrepresentableProductionConfigurationError extends Error {
     this.unrepresentableFields = Object.freeze([...unrepresentableFields]);
   }
 }
+
+export class ConditionedProductionProfileUnavailableError extends Error {
+  override readonly name = "ConditionedProductionProfileUnavailableError";
+  readonly sceneId: string;
+  readonly profileKey: string;
+
+  constructor(sceneId: string, profileKey: string, message?: string) {
+    super(
+      message ??
+        `Scene '${sceneId}' requires conditioned production profile '${profileKey}', but its injection topology is unavailable`
+    );
+    this.sceneId = sceneId;
+    this.profileKey = profileKey;
+  }
+}

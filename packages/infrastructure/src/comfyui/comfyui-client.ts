@@ -191,4 +191,140 @@ export class ComfyUiClient {
       });
     }
   }
+
+  async uploadImage(
+    filename: string,
+    bytes: Uint8Array,
+    contentType: string,
+    options?: { overwrite?: boolean; timeoutMs?: number; signal?: AbortSignal }
+  ): Promise<{ name: string; subfolder: string; type: "input" }> {
+    const formData = new FormData();
+    const blob = new Blob([bytes], { type: contentType });
+    formData.append("image", blob, filename);
+    formData.append("type", "input");
+    formData.append("overwrite", String(options?.overwrite ?? true));
+
+    const timeoutMs = options?.timeoutMs ?? 30_000;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort(new Error(`ComfyUI image upload timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    if (options?.signal) {
+      if (options.signal.aborted) {
+        controller.abort(options.signal.reason);
+      } else {
+        options.signal.addEventListener("abort", () => controller.abort(options.signal?.reason), {
+          once: true
+        });
+      }
+    }
+
+    let res: Response;
+    try {
+      res = await this.transport.fetch(`${this.baseUrl}/upload/image`, {
+        method: "POST",
+        body: formData,
+        signal: controller.signal
+      });
+    } catch (cause) {
+      const isAborted =
+        controller.signal.aborted || (cause instanceof Error && cause.name === "AbortError");
+      const message = isAborted
+        ? `ComfyUI image upload timed out or was aborted: ${(cause as Error)?.message ?? "aborted"}`
+        : "ComfyUI image upload failed";
+      throw new ComfyUiRenderEngineError("IMAGE_UPLOAD_FAILED", message, { cause });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    if (!res.ok) {
+      throw new ComfyUiRenderEngineError("IMAGE_UPLOAD_FAILED", "ComfyUI image upload failed", {
+        statusCode: res.status
+      });
+    }
+
+    let data: unknown;
+    try {
+      data = await res.json();
+    } catch {
+      throw new ComfyUiRenderEngineError(
+        "PROTOCOL_ERROR",
+        "ComfyUI returned invalid JSON protocol response",
+        { statusCode: res.status }
+      );
+    }
+
+    if (
+      typeof data !== "object" ||
+      data === null ||
+      !("name" in data) ||
+      typeof (data as { name: unknown }).name !== "string"
+    ) {
+      throw new ComfyUiRenderEngineError("PROTOCOL_ERROR", "ComfyUI response missing name", {
+        statusCode: res.status
+      });
+    }
+
+    const payload = data as { name: string; subfolder?: unknown; type?: unknown };
+    const returnedName = payload.name.trim();
+    if (returnedName.length === 0) {
+      throw new ComfyUiRenderEngineError(
+        "PROTOCOL_ERROR",
+        "ComfyUI response contained empty name",
+        { statusCode: res.status }
+      );
+    }
+
+    if (
+      returnedName.includes("/") ||
+      returnedName.includes("\\") ||
+      returnedName.includes("..") ||
+      returnedName === "."
+    ) {
+      throw new ComfyUiRenderEngineError(
+        "PROTOCOL_ERROR",
+        `ComfyUI response contained unsafe filename with path traversal: "${returnedName}"`,
+        { statusCode: res.status }
+      );
+    }
+
+    if (returnedName !== filename) {
+      throw new ComfyUiRenderEngineError(
+        "PROTOCOL_ERROR",
+        `ComfyUI upload response name "${returnedName}" did not match requested deterministic filename "${filename}"`,
+        { statusCode: res.status }
+      );
+    }
+
+    if (typeof payload.type !== "string" || payload.type.trim() !== "input") {
+      throw new ComfyUiRenderEngineError(
+        "PROTOCOL_ERROR",
+        `ComfyUI upload response type must be "input", got "${String(payload.type)}"`,
+        { statusCode: res.status }
+      );
+    }
+
+    let subfolder = "";
+    if (typeof payload.subfolder === "string") {
+      const trimmedSubfolder = payload.subfolder.trim();
+      if (trimmedSubfolder.length > 0) {
+        if (
+          trimmedSubfolder.includes("/") ||
+          trimmedSubfolder.includes("\\") ||
+          trimmedSubfolder.includes("..") ||
+          trimmedSubfolder === "."
+        ) {
+          throw new ComfyUiRenderEngineError(
+            "PROTOCOL_ERROR",
+            `ComfyUI response contained unsafe subfolder with path traversal: "${trimmedSubfolder}"`,
+            { statusCode: res.status }
+          );
+        }
+        subfolder = trimmedSubfolder;
+      }
+    }
+
+    return { name: returnedName, subfolder, type: "input" };
+  }
 }

@@ -556,4 +556,55 @@ describe("ExecuteProfileRenderUseCase", () => {
       "lease.release"
     ]);
   });
+
+  it("accepts valid LTX_25_720P_5S_I2V_V1 identity and executes successfully", async () => {
+    const registry = {
+      getSnapshot: () => ({
+        registryRevision: "2026-08-29.1",
+        generatedAt: "2026-08-29T12:00:00.000Z",
+        entries: [
+          {
+            componentId: "LTX_25_720P_5S_I2V_V1",
+            componentType: "model" as const,
+            versionOrRevision: "1",
+            status: "approved" as const,
+            licenseId: "Apache-2.0",
+            licenseSource: "docs/prd.md §3.5",
+            reviewedAt: "2026-08-29T12:00:00.000Z",
+            policyRevision: "1"
+          }
+        ]
+      })
+    };
+    const enforceLicenseRouting = new EnforceLicenseRouting({ registry });
+    const { useCase, renderEngine } = createUseCase({ enforceLicenseRouting });
+
+    const i2vIdentity = createIdentity({
+      profileId: "profile-ltx-i2v",
+      renderProfileKey: "LTX_25_720P_5S_I2V_V1",
+      engine: "ltx_25_i2v"
+    });
+    const input = createInput({ identity: i2vIdentity });
+
+    const result = await useCase.execute(input);
+    expect(result.status).toBe("succeeded");
+    expect(result.profile).toEqual(i2vIdentity);
+    expect(renderEngine.queueInputs[0]!.renderProfileKey).toBe("LTX_25_720P_5S_I2V_V1");
+  });
+
+  it("rejects LTX_25_720P_5S_I2V_V1 when engine is mismatched", async () => {
+    const { useCase } = createUseCase();
+
+    const mismatchedInput = createInput({
+      identity: createIdentity({
+        renderProfileKey: "LTX_25_720P_5S_I2V_V1",
+        engine: "ltx_25"
+      })
+    });
+
+    await expect(useCase.execute(mismatchedInput)).rejects.toMatchObject({
+      name: "ProfileRenderExecutionError",
+      code: "invalid_input"
+    });
+  });
 });
