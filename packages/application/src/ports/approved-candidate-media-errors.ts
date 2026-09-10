@@ -1,7 +1,8 @@
 import type { ApprovedVisualProductionInput, CandidateId } from "@cco/domain";
 import type { PersistentMediaRef } from "@cco/contracts";
 
-export type ApprovedCandidateMediaUnavailableReason = "missing" | "unreadable" | "corrupt";
+export type ApprovedCandidateMediaUnavailableReason =
+  "missing" | "unreadable" | "corrupt" | "unsupported_content_type";
 
 export class ApprovedCandidateMediaUnavailableError extends Error {
   override readonly name = "ApprovedCandidateMediaUnavailableError";
