@@ -2079,7 +2079,8 @@ describe("Certified Render Job Executor", () => {
         candidateId: testCandidateId,
         sceneId: sampleSceneId,
         specRevision: 1,
-        contentHashSha256: candidateImageSha256
+        contentHashSha256: candidateImageSha256,
+        variantOrdinal: 1
       },
       media: {
         bucket: "godzspeed-review",

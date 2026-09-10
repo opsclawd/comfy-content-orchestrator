@@ -75,7 +75,8 @@ describe("Approved candidate media errors & types", () => {
         candidateId: "cand-789" as CandidateId,
         sceneId: "scene-001" as SceneId,
         specRevision: 2,
-        contentHashSha256: "c".repeat(64)
+        contentHashSha256: "c".repeat(64),
+        variantOrdinal: 2
       };
 
       const media: PersistentMediaRef = {
@@ -93,6 +94,7 @@ describe("Approved candidate media errors & types", () => {
       expect(resolved.input).toBe(input);
       expect(resolved.media).toBe(media);
       expect(resolved.input.candidateId).toBe("cand-789");
+      expect(resolved.input.variantOrdinal).toBe(2);
       expect(resolved.media.sha256).toBe(resolved.input.contentHashSha256);
     });
   });
