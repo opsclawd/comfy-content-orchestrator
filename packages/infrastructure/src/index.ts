@@ -65,6 +65,11 @@ export {
 } from "./comfyui/output-reader.js";
 
 export {
+  HttpComfyUiInputStagingAdapter,
+  type HttpComfyUiInputStagingAdapterOptions
+} from "./comfyui/input-staging-adapter.js";
+
+export {
   collectCertificationProvenance,
   type CertificationProvenanceReport,
   type RenderProfileProvenance,

@@ -182,6 +182,7 @@ describe("run-worker CLI", () => {
         allowedJobKinds: ["candidate", "production"],
         comfyUiUrl: "http://comfyui.internal:8188",
         comfyUiRenderTimeoutMs: 180000,
+        comfyUiUploadTimeoutMs: 30000,
         comfyUiDir: "/opt/comfyui",
         gpuIndex: 1,
         gpuLeasePath: "/var/lock/gpu-1.lock",
@@ -219,6 +220,7 @@ describe("run-worker CLI", () => {
       expect(config.admissionBackoffMs).toBeUndefined();
       expect(config.allowedJobKinds).toBeUndefined();
       expect(config.comfyUiRenderTimeoutMs).toBe(300000);
+      expect(config.comfyUiUploadTimeoutMs).toBe(30000);
       expect(config.gpuIndex).toBe(0);
       expect(config.gpuLeasePath).toContain("comfy-content-orchestrator-gpu-0.lock");
       expect(config.s3Region).toBe("us-east-1");
@@ -610,8 +612,28 @@ describe("run-worker CLI", () => {
       });
       expect(prodWorkerWithRepoOverrides).toBeInstanceOf(RenderWorker);
 
-      // 6. Production jobs with assembler supplied: succeeds
+      // 6. Production jobs with assembler and resolver overrides supplied: succeeds
       const prodWithAssemblerWorker = createProductionWorker(baseConfig, {
+        controlApiClient: new TestControlApiClient(),
+        objectStorage: new TestObjectStorage(),
+        enforceStorageAdmission: new TestAdmissionEnforcer(),
+        productionManifestAssembler: testAssembler,
+        resolveApprovedCandidateMedia: { execute: vi.fn() },
+        logger: testLogger,
+        sleep: testSleep
+      });
+      expect(prodWithAssemblerWorker).toBeInstanceOf(RenderWorker);
+    });
+
+    it("constructing a production worker with overrides.productionManifestAssembler and databaseUrl/repos constructs resolveApprovedCandidateMedia and stageReferenceImage (Finding 4)", () => {
+      const baseConfig = parseWorkerRuntimeConfig(minimalValidEnv());
+      const prodWithDbConfig: WorkerRuntimeConfig = {
+        ...baseConfig,
+        databaseUrl: "postgresql://postgres:postgres@localhost:5432/cco",
+        allowedJobKinds: ["production"]
+      };
+
+      const worker = createProductionWorker(prodWithDbConfig, {
         controlApiClient: new TestControlApiClient(),
         objectStorage: new TestObjectStorage(),
         enforceStorageAdmission: new TestAdmissionEnforcer(),
@@ -619,7 +641,8 @@ describe("run-worker CLI", () => {
         logger: testLogger,
         sleep: testSleep
       });
-      expect(prodWithAssemblerWorker).toBeInstanceOf(RenderWorker);
+
+      expect(worker).toBeInstanceOf(RenderWorker);
     });
 
     it("throws WorkerConfigError when license registry is corrupted or invalid", () => {

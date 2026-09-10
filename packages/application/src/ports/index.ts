@@ -33,3 +33,4 @@ export * from "./campaign-production-run-repository.js";
 export * from "./ranking-model-client-port.js";
 export * from "./candidate-ranking-context.js";
 export * from "./approved-candidate-media-errors.js";
+export * from "./comfyui-input-staging-port.js";

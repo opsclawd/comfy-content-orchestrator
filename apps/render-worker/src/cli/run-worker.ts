@@ -9,6 +9,8 @@ import {
   EnforceLicenseRouting,
   EnforceStorageAdmission,
   ExecuteProfileRenderUseCase,
+  ResolveApprovedCandidateMediaUseCase,
+  type ComfyUiInputStagingPort,
   type ExecuteProfileRenderInput,
   type ExecuteProfileRenderResult,
   type GpuExecutionLeasePort,
@@ -16,13 +18,16 @@ import {
   type HashBytesPort,
   type ReferenceAssetRepository,
   type RenderEnginePort,
+  type ResolvedApprovedVisualProductionMedia,
   type SceneRepository,
   type StoryboardCandidateRepository
 } from "@cco/application";
-import { JOB_KINDS, type JobKind } from "@cco/domain";
+import { JOB_KINDS, type CandidateId, type JobKind, type SceneId } from "@cco/domain";
 import {
+  ComfyUiClient,
   ComfyUiRenderEngineAdapter,
   HostFsStorageTelemetryAdapter,
+  HttpComfyUiInputStagingAdapter,
   HttpComfyUiOutputReader,
   JsonFileLicenseRegistryPort,
   loadComponentLicenseRegistrySync,
@@ -69,6 +74,7 @@ export interface WorkerRuntimeConfig {
   readonly databaseUrl?: string | undefined;
   readonly comfyUiUrl: string;
   readonly comfyUiRenderTimeoutMs: number;
+  readonly comfyUiUploadTimeoutMs: number;
   readonly comfyUiDir: string;
   readonly gpuIndex: number;
   readonly gpuLeasePath: string;
@@ -117,6 +123,15 @@ export interface ProductionWorkerOverrides extends Partial<WorkerDependencies> {
   readonly verifyGoldMasterProvenance?: typeof verifyGoldMasterProvenance | undefined;
   readonly readWorkflowFile?: ((filePath: string) => Promise<string>) | undefined;
   readonly hashWorkflow?: typeof hashWorkflow | undefined;
+  readonly resolveApprovedCandidateMedia?:
+    | {
+        execute: (input: {
+          sceneId: SceneId;
+          approvedCandidateId: CandidateId;
+        }) => Promise<ResolvedApprovedVisualProductionMedia>;
+      }
+    | undefined;
+  readonly stageReferenceImage?: ComfyUiInputStagingPort | undefined;
   readonly now?: (() => Date) | undefined;
 }
 
@@ -393,6 +408,12 @@ export function parseWorkerRuntimeConfig(
     300_000
   );
 
+  const comfyUiUploadTimeoutMs = parsePositiveInteger(
+    env.COMFYUI_UPLOAD_TIMEOUT_MS,
+    "COMFYUI_UPLOAD_TIMEOUT_MS",
+    30_000
+  );
+
   const comfyUiDir = parseRequiredString(env.COMFYUI_DIR, "COMFYUI_DIR");
 
   // 5. GPU Configuration
@@ -537,6 +558,7 @@ export function parseWorkerRuntimeConfig(
     ...(databaseUrl !== undefined ? { databaseUrl } : {}),
     comfyUiUrl,
     comfyUiRenderTimeoutMs,
+    comfyUiUploadTimeoutMs,
     comfyUiDir,
     gpuIndex,
     gpuLeasePath,
@@ -587,34 +609,47 @@ export function createProductionWorker(
   const includesProduction =
     !effectiveConfig.allowedJobKinds || effectiveConfig.allowedJobKinds.includes("production");
 
+  let pool: pg.Pool | undefined;
+  let sceneRepository: SceneRepository | undefined;
+  let storyboardCandidateRepository: StoryboardCandidateRepository | undefined;
+  let referenceAssetRepository: ReferenceAssetRepository | undefined;
+
+  if (includesProduction) {
+    pool =
+      overrides?.pool ??
+      (effectiveConfig.databaseUrl
+        ? new Pool({ connectionString: effectiveConfig.databaseUrl })
+        : undefined);
+    sceneRepository =
+      overrides?.sceneRepository ?? (pool ? new PostgresSceneRepository(pool) : undefined);
+    storyboardCandidateRepository =
+      overrides?.storyboardCandidateRepository ??
+      (pool ? new PostgresStoryboardCandidateRepository(pool) : undefined);
+    referenceAssetRepository =
+      overrides?.referenceAssetRepository ??
+      (pool ? new PostgresReferenceAssetRepository(pool) : undefined);
+
+    const needsRepositories =
+      !overrides?.productionManifestAssembler || !overrides?.resolveApprovedCandidateMedia;
+
+    if (
+      needsRepositories &&
+      (!sceneRepository || !storyboardCandidateRepository || !referenceAssetRepository)
+    ) {
+      throw new WorkerConfigError(
+        "DATABASE_URL or repository dependencies (sceneRepository, storyboardCandidateRepository, referenceAssetRepository) are required when production jobs are enabled"
+      );
+    }
+  }
+
   let productionManifestAssembler = overrides?.productionManifestAssembler;
   if (!productionManifestAssembler) {
     if (includesProduction) {
-      const pool =
-        overrides?.pool ??
-        (effectiveConfig.databaseUrl
-          ? new Pool({ connectionString: effectiveConfig.databaseUrl })
-          : undefined);
-      const sceneRepository =
-        overrides?.sceneRepository ?? (pool ? new PostgresSceneRepository(pool) : undefined);
-      const storyboardCandidateRepository =
-        overrides?.storyboardCandidateRepository ??
-        (pool ? new PostgresStoryboardCandidateRepository(pool) : undefined);
-      const referenceAssetRepository =
-        overrides?.referenceAssetRepository ??
-        (pool ? new PostgresReferenceAssetRepository(pool) : undefined);
-
-      if (!sceneRepository || !storyboardCandidateRepository || !referenceAssetRepository) {
-        throw new WorkerConfigError(
-          "DATABASE_URL or repository dependencies (sceneRepository, storyboardCandidateRepository, referenceAssetRepository) are required when production jobs are enabled"
-        );
-      }
-
       const manifestAssembler = new AssembleGenerationManifest({
         hashBytes: hashBytesPort,
-        sceneRepository,
-        storyboardCandidateRepository,
-        referenceAssetRepository
+        sceneRepository: sceneRepository!,
+        storyboardCandidateRepository: storyboardCandidateRepository!,
+        referenceAssetRepository: referenceAssetRepository!
       });
 
       productionManifestAssembler = async (input: AssembleProductionManifestInput) => {
@@ -630,12 +665,38 @@ export function createProductionWorker(
     }
   }
 
+  const objectStorage = overrides?.objectStorage ?? new S3ObjectStorage(effectiveConfig.s3Config);
+
   const renderEngine =
     overrides?.renderEngine ??
     new ComfyUiRenderEngineAdapter({
       baseUrl: effectiveConfig.comfyUiUrl,
       timeoutMs: effectiveConfig.comfyUiRenderTimeoutMs
     });
+
+  const resolveApprovedCandidateMedia =
+    overrides?.resolveApprovedCandidateMedia ??
+    (includesProduction && sceneRepository && storyboardCandidateRepository
+      ? new ResolveApprovedCandidateMediaUseCase({
+          sceneRepository,
+          storyboardCandidateRepository,
+          objectStorage,
+          hashBytes: hashBytesPort
+        })
+      : undefined);
+
+  const stageReferenceImage =
+    overrides?.stageReferenceImage ??
+    (includesProduction
+      ? new HttpComfyUiInputStagingAdapter({
+          client:
+            renderEngine instanceof ComfyUiRenderEngineAdapter
+              ? renderEngine.comfyUiClient
+              : new ComfyUiClient(effectiveConfig.comfyUiUrl),
+          comfyUiDir: effectiveConfig.comfyUiDir,
+          uploadTimeoutMs: effectiveConfig.comfyUiUploadTimeoutMs
+        })
+      : undefined);
 
   const gpuLease =
     overrides?.gpuLease ??
@@ -692,6 +753,14 @@ export function createProductionWorker(
         outputReader,
         productionManifestAssembler,
         hashBytes: hashBytesPort,
+        enforceLicenseRouting,
+        ...(includesProduction
+          ? {
+              resolveApprovedCandidateMedia,
+              objectStorage,
+              stageReferenceImage
+            }
+          : {}),
         ...(overrides?.loadCertificationProfile !== undefined
           ? { loadCertificationProfile: overrides.loadCertificationProfile }
           : {}),
@@ -737,8 +806,6 @@ export function createProductionWorker(
     createControlApiClient({
       baseUrl: effectiveConfig.controlApiBaseUrl
     });
-
-  const objectStorage = overrides?.objectStorage ?? new S3ObjectStorage(effectiveConfig.s3Config);
 
   const logger = overrides?.logger ?? console;
   const sleep = overrides?.sleep ?? sleepUntilTimeoutOrAbort;
