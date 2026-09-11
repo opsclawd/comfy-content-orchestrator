@@ -38,6 +38,55 @@ export const CampaignResponseSchema = z.object({
 });
 export type CampaignResponse = z.infer<typeof CampaignResponseSchema>;
 
+// Source of truth: packages/application/src/use-cases/scene-count-policy.ts — kept in sync via campaign.test.ts + scene-count-policy.test.ts cross-check.
+export const MIN_TARGET_DURATION_MS = 5_000;
+export const MAX_TARGET_DURATION_MS = 300_000;
+export const MIN_SCENE_COUNT = 1;
+export const MAX_SCENE_COUNT = 60;
+export const MIN_SCENE_DURATION_MS = 1_000;
+export const MAX_SCENE_DURATION_MS = 15_000;
+
+// Requested/declared layer — durable campaign shell creation request.
+export const CreateCampaignShellRequestSchema = z
+  .object({
+    idempotencyKey: z.string().uuid(),
+    clientId: z.string().uuid(),
+    title: z.string().min(1),
+    targetPlatform: z.string().min(1).optional(),
+    targetTotalDurationMs: z.number().int().min(MIN_TARGET_DURATION_MS).max(MAX_TARGET_DURATION_MS),
+    sceneCountOverride: z.number().int().min(MIN_SCENE_COUNT).max(MAX_SCENE_COUNT).optional()
+  })
+  .strict()
+  .refine(
+    (data) => {
+      const n = data.sceneCountOverride;
+      if (n === undefined) return true;
+      return (
+        data.targetTotalDurationMs >= n * MIN_SCENE_DURATION_MS &&
+        data.targetTotalDurationMs <= n * MAX_SCENE_DURATION_MS
+      );
+    },
+    {
+      message:
+        "targetTotalDurationMs and sceneCountOverride imply an unsupported per-scene duration",
+      path: ["sceneCountOverride"]
+    }
+  );
+export type CreateCampaignShellRequest = z.infer<typeof CreateCampaignShellRequestSchema>;
+
+// Configured/executed layer — echoes resolved N and duration, plus identity.
+export const CreateCampaignShellResponseSchema = z.object({
+  campaignId: z.string().uuid(),
+  idempotencyKey: z.string().uuid(),
+  status: CampaignStatusSchema,
+  totalScenes: z.number().int().positive(),
+  targetTotalDurationMs: z.number().int().positive(),
+  isIdempotentReplay: z.boolean(),
+  createdAt: z.string().datetime(),
+  archivedAt: z.string().datetime().optional()
+});
+export type CreateCampaignShellResponse = z.infer<typeof CreateCampaignShellResponseSchema>;
+
 // Requested/declared layer — creative brief for cloud planning.
 export const CreativeBriefSchema = z
   .object({

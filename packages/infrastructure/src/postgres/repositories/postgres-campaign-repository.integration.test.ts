@@ -1,13 +1,18 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { Pool, type PoolClient } from "pg";
-import { ClientNotFoundError } from "@cco/application";
-import type { CampaignId, CampaignRecord } from "@cco/domain";
+import {
+  ClientNotFoundError,
+  CampaignIdempotencyConflictError,
+  CreateCampaignShellUseCase
+} from "@cco/application";
+import type { CampaignId, CampaignRecord, CampaignShellRecord } from "@cco/domain";
 import { runMigrations } from "../migration-runner.js";
 import {
   startPostgres18Container,
   type StartedPostgres18Container
 } from "../test-support/postgres-18.js";
 import { insertClientRecord } from "../test-support/records.js";
+import { PostgresUnitOfWork } from "../uow/postgres-unit-of-work.js";
 import { PostgresCampaignRepository } from "./postgres-campaign-repository.js";
 
 describe("PostgresCampaignRepository Integration", () => {
@@ -215,6 +220,344 @@ describe("PostgresCampaignRepository Integration", () => {
     } finally {
       conn1.release();
       conn2.release();
+      await client.query("BEGIN");
+    }
+  });
+
+  it("inserts via saveWithRequestHash and retrieves via findByIdempotencyKey with all metadata", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const repository = new PostgresCampaignRepository(client);
+
+    const campaignId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73805" as CampaignId;
+    const idempotencyKey = "018e69e0-8a6a-72cb-b1b7-ec79a1f73806";
+    const requestHash = "a".repeat(64);
+
+    const campaign: CampaignShellRecord = {
+      id: campaignId,
+      clientId: clientRecord.client_id,
+      title: "Idempotent Campaign",
+      targetPlatform: "tiktok",
+      status: "drafting",
+      totalScenes: 3,
+      approvedScenes: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      idempotencyKey,
+      targetTotalDurationMs: 15000
+    };
+
+    await repository.saveWithRequestHash(campaign, requestHash);
+
+    const retrieved = await repository.findByIdempotencyKey(idempotencyKey);
+    expect(retrieved).toBeDefined();
+    expect(retrieved?.id).toBe(campaignId);
+    expect(retrieved?.clientId).toBe(clientRecord.client_id);
+    expect(retrieved?.title).toBe("Idempotent Campaign");
+    expect(retrieved?.targetPlatform).toBe("tiktok");
+    expect(retrieved?.status).toBe("drafting");
+    expect(retrieved?.totalScenes).toBe(3);
+    expect(retrieved?.approvedScenes).toBe(0);
+    expect(retrieved?.idempotencyKey).toBe(idempotencyKey);
+    expect(retrieved?.targetTotalDurationMs).toBe(15000);
+    expect(retrieved?.requestHashSha256).toBe(requestHash);
+  });
+
+  it("rejects duplicate idempotency key with CampaignIdempotencyConflictError", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const repository = new PostgresCampaignRepository(client);
+
+    const idempotencyKey = "018e69e0-8a6a-72cb-b1b7-ec79a1f73807";
+    const requestHash = "b".repeat(64);
+
+    const campaign1: CampaignShellRecord = {
+      id: "018e69e0-8a6a-72cb-b1b7-ec79a1f73808" as CampaignId,
+      clientId: clientRecord.client_id,
+      title: "Winner Campaign",
+      targetPlatform: "tiktok",
+      status: "drafting",
+      totalScenes: 3,
+      approvedScenes: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      idempotencyKey,
+      targetTotalDurationMs: 15000
+    };
+    await repository.saveWithRequestHash(campaign1, requestHash);
+
+    const campaign2: CampaignShellRecord = {
+      id: "018e69e0-8a6a-72cb-b1b7-ec79a1f73809" as CampaignId,
+      clientId: clientRecord.client_id,
+      title: "Loser Campaign",
+      targetPlatform: "tiktok",
+      status: "drafting",
+      totalScenes: 3,
+      approvedScenes: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      idempotencyKey,
+      targetTotalDurationMs: 15000
+    };
+
+    await expect(repository.saveWithRequestHash(campaign2, requestHash)).rejects.toThrow(
+      CampaignIdempotencyConflictError
+    );
+  });
+
+  it("demonstrates PostgreSQL 25P02 transaction-abort behavior on unique constraint conflict (Finding 3 witness)", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const idempotencyKey = "018e69e0-8a6a-72cb-b1b7-ec79a1f73810";
+    const requestHash = "c".repeat(64);
+
+    // Commit a winner on an independent connection
+    const conn1 = await pool.connect();
+    try {
+      const repo1 = new PostgresCampaignRepository(conn1);
+      const winner: CampaignShellRecord = {
+        id: "018e69e0-8a6a-72cb-b1b7-ec79a1f73811" as CampaignId,
+        clientId: clientRecord.client_id,
+        title: "Winner",
+        targetPlatform: "tiktok",
+        status: "drafting",
+        totalScenes: 3,
+        approvedScenes: 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        idempotencyKey,
+        targetTotalDurationMs: 15000
+      };
+      await repo1.saveWithRequestHash(winner, requestHash);
+    } finally {
+      conn1.release();
+    }
+
+    // Now conn2 starts a transaction block and attempts to insert the same key
+    const conn2 = await pool.connect();
+    try {
+      await conn2.query("BEGIN");
+      const repo2 = new PostgresCampaignRepository(conn2);
+
+      const loser: CampaignShellRecord = {
+        id: "018e69e0-8a6a-72cb-b1b7-ec79a1f73812" as CampaignId,
+        clientId: clientRecord.client_id,
+        title: "Loser",
+        targetPlatform: "tiktok",
+        status: "drafting",
+        totalScenes: 3,
+        approvedScenes: 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        idempotencyKey,
+        targetTotalDurationMs: 15000
+      };
+
+      // saveWithRequestHash catches 23505 and maps to CampaignIdempotencyConflictError
+      await expect(repo2.saveWithRequestHash(loser, requestHash)).rejects.toThrow(
+        CampaignIdempotencyConflictError
+      );
+
+      // CRITICAL: Any subsequent query on conn2's aborted transaction MUST fail with 25P02.
+      // This proves that attempting findByIdempotencyKey on the same transaction context is a defect!
+      await expect(repo2.findByIdempotencyKey(idempotencyKey)).rejects.toMatchObject({
+        code: "25P02"
+      });
+
+      // Rollback conn2
+      await conn2.query("ROLLBACK");
+
+      // After rollback, a fresh read on conn2 (outside the aborted transaction) succeeds
+      const recovered = await repo2.findByIdempotencyKey(idempotencyKey);
+      expect(recovered).toBeDefined();
+      expect(recovered?.id).toBe("018e69e0-8a6a-72cb-b1b7-ec79a1f73811");
+    } finally {
+      conn2.release();
+    }
+  });
+
+  it("leaves idempotency_key, target_total_duration_ms, and request_hash_sha256 as NULL when using existing save()", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const repository = new PostgresCampaignRepository(client);
+
+    const campaignId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73813" as CampaignId;
+    const campaign: CampaignRecord = {
+      id: campaignId,
+      clientId: clientRecord.client_id,
+      title: "Legacy Save Campaign",
+      targetPlatform: "instagram_reels",
+      status: "drafting",
+      totalScenes: 1,
+      approvedScenes: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    await repository.save(campaign);
+
+    // Verify row directly in Postgres
+    const rawResult = await client.query<{
+      idempotency_key: string | null;
+      target_total_duration_ms: number | null;
+      request_hash_sha256: string | null;
+    }>(
+      `SELECT idempotency_key, target_total_duration_ms, request_hash_sha256 FROM campaigns WHERE campaign_id = $1`,
+      [campaignId]
+    );
+    expect(rawResult.rows).toHaveLength(1);
+    expect(rawResult.rows[0]?.idempotency_key).toBeNull();
+    expect(rawResult.rows[0]?.target_total_duration_ms).toBeNull();
+    expect(rawResult.rows[0]?.request_hash_sha256).toBeNull();
+
+    // Verify findById also returns undefined for these optional fields
+    const retrieved = await repository.findById(campaignId);
+    expect(retrieved?.idempotencyKey).toBeUndefined();
+    expect(retrieved?.targetTotalDurationMs).toBeUndefined();
+  });
+
+  it("resolves original campaign on identical retry of an archived operation (Finding 1)", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const repository = new PostgresCampaignRepository(client);
+
+    const campaignId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73820" as CampaignId;
+    const idempotencyKey = "018e69e0-8a6a-72cb-b1b7-ec79a1f73821";
+    const requestHash = "d".repeat(64);
+
+    const campaign: CampaignShellRecord = {
+      id: campaignId,
+      clientId: clientRecord.client_id,
+      title: "Archived Operation Campaign",
+      targetPlatform: "tiktok",
+      status: "drafting",
+      totalScenes: 3,
+      approvedScenes: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      idempotencyKey,
+      targetTotalDurationMs: 15000
+    };
+
+    await repository.saveWithRequestHash(campaign, requestHash);
+
+    // Archive the campaign in Postgres
+    await client.query(
+      "UPDATE campaigns SET archived_at = CURRENT_TIMESTAMP WHERE campaign_id = $1",
+      [campaignId]
+    );
+
+    // Regular findById should return undefined because campaign is archived
+    const activeById = await repository.findById(campaignId);
+    expect(activeById).toBeUndefined();
+
+    // Idempotency lookup MUST include archived rows so identical retry can resolve it
+    const retrieved = await repository.findByIdempotencyKey(idempotencyKey);
+    expect(retrieved).toBeDefined();
+    expect(retrieved?.id).toBe(campaignId);
+    expect(retrieved?.idempotencyKey).toBe(idempotencyKey);
+    expect(retrieved?.targetTotalDurationMs).toBe(15000);
+    expect(retrieved?.requestHashSha256).toBe(requestHash);
+    expect(retrieved?.archivedAt).toBeDefined();
+  });
+
+  it("enforces chk_campaigns_operation_identity requiring all three operation columns to be either all NULL or all non-NULL (Finding 2)", async () => {
+    const clientRecord = await insertClientRecord(client);
+
+    // 1. Partial operation columns: idempotency_key set, but target_total_duration_ms and request_hash NULL -> fails
+    await expect(
+      client.query(
+        `INSERT INTO campaigns (campaign_id, client_id, title, target_platform, status, total_scenes, approved_scenes, idempotency_key)
+         VALUES ($1, $2, 'Partial Campaign', 'tiktok', 'drafting', 1, 0, $3)`,
+        [
+          "018e69e0-8a6a-72cb-b1b7-ec79a1f73822",
+          clientRecord.client_id,
+          "018e69e0-8a6a-72cb-b1b7-ec79a1f73823"
+        ]
+      )
+    ).rejects.toMatchObject({ code: "23514" }); // check_violation
+
+    // 2. Partial operation columns: request_hash set, but idempotency_key and duration NULL -> fails
+    await expect(
+      client.query(
+        `INSERT INTO campaigns (campaign_id, client_id, title, target_platform, status, total_scenes, approved_scenes, request_hash_sha256)
+         VALUES ($1, $2, 'Partial Campaign 2', 'tiktok', 'drafting', 1, 0, $3)`,
+        ["018e69e0-8a6a-72cb-b1b7-ec79a1f73824", clientRecord.client_id, "e".repeat(64)]
+      )
+    ).rejects.toMatchObject({ code: "23514" });
+
+    // 3. All NULL (legacy campaign) -> succeeds
+    await expect(
+      client.query(
+        `INSERT INTO campaigns (campaign_id, client_id, title, target_platform, status, total_scenes, approved_scenes)
+         VALUES ($1, $2, 'Legacy All-Null', 'tiktok', 'drafting', 1, 0)`,
+        ["018e69e0-8a6a-72cb-b1b7-ec79a1f73825", clientRecord.client_id]
+      )
+    ).resolves.toBeDefined();
+
+    // 4. All non-NULL (shell campaign) -> succeeds
+    await expect(
+      client.query(
+        `INSERT INTO campaigns (campaign_id, client_id, title, target_platform, status, total_scenes, approved_scenes, idempotency_key, target_total_duration_ms, request_hash_sha256)
+         VALUES ($1, $2, 'Shell All-NonNull', 'tiktok', 'drafting', 1, 0, $3, 15000, $4)`,
+        [
+          "018e69e0-8a6a-72cb-b1b7-ec79a1f73826",
+          clientRecord.client_id,
+          "018e69e0-8a6a-72cb-b1b7-ec79a1f73827",
+          "f".repeat(64)
+        ]
+      )
+    ).resolves.toBeDefined();
+  });
+
+  it("executes CreateCampaignShellUseCase end-to-end with PostgresUnitOfWork including race recovery and archived retry (Finding 1 & 3)", async () => {
+    const clientRecord = await insertClientRecord(client);
+    await client.query("COMMIT");
+
+    try {
+      const uow = new PostgresUnitOfWork(pool);
+      const useCase = new CreateCampaignShellUseCase(uow);
+
+      const request = {
+        idempotencyKey: "018e69e0-8a6a-72cb-b1b7-ec79a1f73828",
+        clientId: clientRecord.client_id,
+        title: "E2E Postgres Shell Campaign",
+        targetPlatform: "tiktok",
+        targetTotalDurationMs: 15000,
+        sceneCountOverride: undefined
+      };
+
+      // 1. Initial execution creates drafting shell
+      const firstResult = await useCase.execute(request);
+      expect(firstResult.isIdempotentReplay).toBe(false);
+      expect(firstResult.campaign.totalScenes).toBe(3);
+      expect(firstResult.campaign.idempotencyKey).toBe(request.idempotencyKey);
+      expect(firstResult.campaign.targetTotalDurationMs).toBe(15000);
+
+      // 2. Identical retry resumes existing shell
+      const retryResult = await useCase.execute(request);
+      expect(retryResult.isIdempotentReplay).toBe(true);
+      expect(retryResult.campaign.id).toBe(firstResult.campaign.id);
+
+      // 3. Different payload throws conflict error
+      await expect(
+        useCase.execute({
+          ...request,
+          title: "Mismatched Title"
+        })
+      ).rejects.toThrow(CampaignIdempotencyConflictError);
+
+      // 4. Archive campaign and perform identical retry -> resolves original with archivedAt
+      const conn = await pool.connect();
+      try {
+        await conn.query(
+          "UPDATE campaigns SET archived_at = CURRENT_TIMESTAMP WHERE campaign_id = $1",
+          [firstResult.campaign.id]
+        );
+      } finally {
+        conn.release();
+      }
+
+      const archivedRetryResult = await useCase.execute(request);
+      expect(archivedRetryResult.isIdempotentReplay).toBe(true);
+      expect(archivedRetryResult.campaign.id).toBe(firstResult.campaign.id);
+      expect(archivedRetryResult.campaign.archivedAt).toBeDefined();
+    } finally {
       await client.query("BEGIN");
     }
   });
