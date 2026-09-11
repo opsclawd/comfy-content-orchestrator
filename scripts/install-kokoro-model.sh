@@ -18,6 +18,34 @@ if [[ -z "${KOKORO_MODEL_ID:-}" || -z "${KOKORO_MODEL_REVISION:-}" || -z "${KOKO
   exit 1
 fi
 
+MAIN_REPO=""
+if [[ -f "${REPO_ROOT}/.git" ]]; then
+  GITDIR="$(sed -n 's/^gitdir: //p' "${REPO_ROOT}/.git" | head -n 1 || true)"
+  if [[ -n "${GITDIR}" ]]; then
+    if [[ "${GITDIR}" != /* ]]; then
+      GITDIR="${REPO_ROOT}/${GITDIR}"
+    fi
+    if [[ -d "${GITDIR}" ]]; then
+      MAIN_GIT_DIR="$(cd "${GITDIR}/../.." && pwd)"
+      MAIN_REPO="$(cd "${MAIN_GIT_DIR}/.." && pwd)"
+    elif [[ -d "$(dirname "${GITDIR}")/.." ]]; then
+      MAIN_GIT_DIR="$(cd "$(dirname "${GITDIR}")/.." && pwd)"
+      MAIN_REPO="$(cd "${MAIN_GIT_DIR}/.." && pwd)"
+    fi
+  fi
+elif [[ -d "${REPO_ROOT}/.git" ]]; then
+  MAIN_REPO="${REPO_ROOT}"
+fi
+if [[ -z "${MAIN_REPO}" ]] && command -v git >/dev/null 2>&1 && git -C "${REPO_ROOT}" rev-parse --git-common-dir >/dev/null 2>&1; then
+  COMMON_DIR="$(git -C "${REPO_ROOT}" rev-parse --git-common-dir)"
+  MAIN_REPO="$(cd "${COMMON_DIR}/.." && pwd)"
+fi
+if [[ -z "${MAIN_REPO}" ]]; then
+  MAIN_REPO="${REPO_ROOT}"
+fi
+
+SHARED_CACHE_DIR="${CCO_SHARED_CACHE_DIR:-${MAIN_REPO}/.ai-cache}"
+
 REL_DIR="${KOKORO_MODEL_DIR:-node_modules/.cache/kokoro-model}"
 TARGET_DIR="${REPO_ROOT}/${REL_DIR}"
 mkdir -p "${TARGET_DIR}/onnx"
@@ -25,6 +53,7 @@ mkdir -p "${TARGET_DIR}/voices"
 
 echo "Installing Kokoro model ${KOKORO_MODEL_ID} (revision: ${KOKORO_MODEL_REVISION})..."
 echo "Target directory: ${TARGET_DIR}"
+echo "Shared cache dir: ${SHARED_CACHE_DIR}"
 
 # If an existing cache has a mismatched revision, modelId, or checksums, purge it to ensure clean provenance
 if [[ -f "${TARGET_DIR}/model_manifest.json" ]]; then
@@ -81,6 +110,19 @@ for ASSET in config.json tokenizer.json tokenizer_config.json; do
   fi
 
   if [[ ! -f "${ASSET_FILE}" ]]; then
+    for candidate in "${SHARED_CACHE_DIR}/kokoro-model/${ASSET}" "${MAIN_REPO}/node_modules/.cache/kokoro-model/${ASSET}"; do
+      if [[ -f "${candidate}" ]]; then
+        cand_hash="$(sha256sum "${candidate}" 2>/dev/null | awk '{print $1}' || shasum -a 256 "${candidate}" 2>/dev/null | awk '{print $1}' || true)"
+        if [[ "${cand_hash}" == "${EXPECTED_HASH}" ]]; then
+          echo "Seeding ${ASSET} from ${candidate}..."
+          ln -f "${candidate}" "${ASSET_FILE}" 2>/dev/null || cp "${candidate}" "${ASSET_FILE}"
+          break
+        fi
+      fi
+    done
+  fi
+
+  if [[ ! -f "${ASSET_FILE}" ]]; then
     echo "Fetching ${ASSET} (${KOKORO_MODEL_REVISION})..."
     download_file "${HF_BASE_RAW}/${ASSET}" "${ASSET_FILE}"
   fi
@@ -116,6 +158,19 @@ if [[ -f "${MODEL_FILE}" ]]; then
 fi
 
 # Check if model_quantized.onnx can be seeded from an existing verified cache
+if [[ ! -f "${MODEL_FILE}" ]]; then
+  for candidate in "${SHARED_CACHE_DIR}/kokoro-model/onnx/model_quantized.onnx" "${MAIN_REPO}/node_modules/.cache/kokoro-model/onnx/model_quantized.onnx"; do
+    if [[ -f "${candidate}" ]]; then
+      CACHED_SHA256="$(sha256sum "${candidate}" 2>/dev/null | awk '{print $1}' || shasum -a 256 "${candidate}" 2>/dev/null | awk '{print $1}' || true)"
+      if [[ "${CACHED_SHA256}" == "${KOKORO_ONNX_QUANTIZED_SHA256}" ]]; then
+        echo "Seeding verified cached model weights from ${candidate}..."
+        ln -f "${candidate}" "${MODEL_FILE}" 2>/dev/null || cp "${candidate}" "${MODEL_FILE}"
+        break
+      fi
+    fi
+  done
+fi
+
 if [[ ! -f "${MODEL_FILE}" ]]; then
   EXISTING_CACHE_FILE="$(find "${REPO_ROOT}/node_modules" -type f -name "model_quantized.onnx" 2>/dev/null | grep -v "${REL_DIR}" | head -n 1 || true)"
   if [[ -n "${EXISTING_CACHE_FILE}" && -f "${EXISTING_CACHE_FILE}" ]]; then
@@ -184,6 +239,19 @@ fi
 
 # Check if af_heart.bin can be seeded from an existing verified cache
 if [[ ! -f "${VOICE_FILE}" ]]; then
+  for candidate in "${SHARED_CACHE_DIR}/kokoro-model/voices/af_heart.bin" "${MAIN_REPO}/node_modules/.cache/kokoro-model/voices/af_heart.bin"; do
+    if [[ -f "${candidate}" ]]; then
+      CACHED_VOICE_SHA256="$(sha256sum "${candidate}" 2>/dev/null | awk '{print $1}' || shasum -a 256 "${candidate}" 2>/dev/null | awk '{print $1}' || true)"
+      if [[ "${CACHED_VOICE_SHA256}" == "${KOKORO_VOICE_AF_HEART_SHA256}" ]]; then
+        echo "Seeding verified cached af_heart.bin from ${candidate}..."
+        ln -f "${candidate}" "${VOICE_FILE}" 2>/dev/null || cp "${candidate}" "${VOICE_FILE}"
+        break
+      fi
+    fi
+  done
+fi
+
+if [[ ! -f "${VOICE_FILE}" ]]; then
   EXISTING_CACHE_VOICE="$(find "${REPO_ROOT}/node_modules" -type f -name "af_heart.bin" 2>/dev/null | grep -v "${REL_DIR}" | head -n 1 || true)"
   if [[ -n "${EXISTING_CACHE_VOICE}" && -f "${EXISTING_CACHE_VOICE}" ]]; then
     CACHED_VOICE_SHA256="$(sha256sum "${EXISTING_CACHE_VOICE}" 2>/dev/null | awk '{print $1}' || shasum -a 256 "${EXISTING_CACHE_VOICE}" 2>/dev/null | awk '{print $1}' || true)"
@@ -247,5 +315,26 @@ cat > "${TARGET_DIR}/model_manifest.json" <<EOF
   }
 }
 EOF
+
+# Sync to shared cache if running in worktree or outside shared cache
+if [[ "${TARGET_DIR}" != "${SHARED_CACHE_DIR}/kokoro-model" ]]; then
+  mkdir -p "${SHARED_CACHE_DIR}/kokoro-model/onnx" "${SHARED_CACHE_DIR}/kokoro-model/voices"
+  for f in config.json tokenizer.json tokenizer_config.json model_manifest.json; do
+    if [[ -f "${TARGET_DIR}/${f}" ]]; then
+      cp -f "${TARGET_DIR}/${f}" "${SHARED_CACHE_DIR}/kokoro-model/${f}"
+    fi
+  done
+  if [[ -f "${MODEL_FILE}" ]]; then
+    ln -f "${MODEL_FILE}" "${SHARED_CACHE_DIR}/kokoro-model/onnx/model_quantized.onnx" 2>/dev/null || cp -f "${MODEL_FILE}" "${SHARED_CACHE_DIR}/kokoro-model/onnx/model_quantized.onnx"
+  fi
+  if [[ -d "${TARGET_DIR}/voices" ]]; then
+    for vf in "${TARGET_DIR}/voices"/*; do
+      if [[ -f "${vf}" ]]; then
+        vfn="$(basename "${vf}")"
+        ln -f "${vf}" "${SHARED_CACHE_DIR}/kokoro-model/voices/${vfn}" 2>/dev/null || cp -f "${vf}" "${SHARED_CACHE_DIR}/kokoro-model/voices/${vfn}"
+      fi
+    done
+  fi
+fi
 
 echo "Kokoro model ${KOKORO_MODEL_ID} (${KOKORO_MODEL_REVISION}) successfully installed and verified in ${TARGET_DIR}."

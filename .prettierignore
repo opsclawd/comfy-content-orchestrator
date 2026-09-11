@@ -25,6 +25,7 @@ ai/
 .ai-runs/
 .ai-worktrees/
 .ai-tmp/
+.ai-cache/
 validate/
 _tmp*
 validation.*

@@ -18,6 +18,34 @@ if [[ -z "${WHISPERX_PIP_VERSION:-}" || -z "${WHISPERX_TORCHAUDIO_VERSION:-}" ||
   exit 1
 fi
 
+MAIN_REPO=""
+if [[ -f "${REPO_ROOT}/.git" ]]; then
+  GITDIR="$(sed -n 's/^gitdir: //p' "${REPO_ROOT}/.git" | head -n 1 || true)"
+  if [[ -n "${GITDIR}" ]]; then
+    if [[ "${GITDIR}" != /* ]]; then
+      GITDIR="${REPO_ROOT}/${GITDIR}"
+    fi
+    if [[ -d "${GITDIR}" ]]; then
+      MAIN_GIT_DIR="$(cd "${GITDIR}/../.." && pwd)"
+      MAIN_REPO="$(cd "${MAIN_GIT_DIR}/.." && pwd)"
+    elif [[ -d "$(dirname "${GITDIR}")/.." ]]; then
+      MAIN_GIT_DIR="$(cd "$(dirname "${GITDIR}")/.." && pwd)"
+      MAIN_REPO="$(cd "${MAIN_GIT_DIR}/.." && pwd)"
+    fi
+  fi
+elif [[ -d "${REPO_ROOT}/.git" ]]; then
+  MAIN_REPO="${REPO_ROOT}"
+fi
+if [[ -z "${MAIN_REPO}" ]] && command -v git >/dev/null 2>&1 && git -C "${REPO_ROOT}" rev-parse --git-common-dir >/dev/null 2>&1; then
+  COMMON_DIR="$(git -C "${REPO_ROOT}" rev-parse --git-common-dir)"
+  MAIN_REPO="$(cd "${COMMON_DIR}/.." && pwd)"
+fi
+if [[ -z "${MAIN_REPO}" ]]; then
+  MAIN_REPO="${REPO_ROOT}"
+fi
+
+SHARED_CACHE_DIR="${CCO_SHARED_CACHE_DIR:-${MAIN_REPO}/.ai-cache}"
+
 TARGET_VENV_DIR="${REPO_ROOT}/${WHISPERX_VENV_DIR}"
 TARGET_MODEL_DIR="${REPO_ROOT}/${WHISPERX_MODEL_DIR}"
 MODEL_FILE="${TARGET_MODEL_DIR}/${WHISPERX_ALIGNMENT_MODEL_FILE}"
@@ -25,6 +53,7 @@ MODEL_FILE="${TARGET_MODEL_DIR}/${WHISPERX_ALIGNMENT_MODEL_FILE}"
 echo "Installing WhisperX environment (${WHISPERX_PIP_VERSION}, torchaudio: ${WHISPERX_TORCHAUDIO_VERSION})..."
 echo "Target venv: ${TARGET_VENV_DIR}"
 echo "Target model dir: ${TARGET_MODEL_DIR}"
+echo "Shared cache dir: ${SHARED_CACHE_DIR}"
 
 # 1. Purge mismatched cache if existing manifest has different provenance
 if [[ -f "${TARGET_MODEL_DIR}/model_manifest.json" ]]; then
@@ -81,12 +110,23 @@ if [[ -f "${MODEL_FILE}" ]]; then
 fi
 
 if [[ ! -f "${MODEL_FILE}" ]]; then
-  # Check if model can be seeded from .ai-tmp or other cache
-  if [[ -f "${REPO_ROOT}/.ai-tmp/${WHISPERX_ALIGNMENT_MODEL_FILE}" ]]; then
-    TMP_SHA256="$(compute_sha256 "${REPO_ROOT}/.ai-tmp/${WHISPERX_ALIGNMENT_MODEL_FILE}")"
+  # Check if model can be seeded from shared cache, main repo, or .ai-tmp
+  SHARED_MODEL_FILE="${SHARED_CACHE_DIR}/whisperx-model/${WHISPERX_ALIGNMENT_MODEL_FILE}"
+  MAIN_MODEL_FILE="${MAIN_REPO}/node_modules/.cache/whisperx-model/${WHISPERX_ALIGNMENT_MODEL_FILE}"
+  SEED_CANDIDATE=""
+  if [[ -f "${SHARED_MODEL_FILE}" ]]; then
+    SEED_CANDIDATE="${SHARED_MODEL_FILE}"
+  elif [[ -f "${MAIN_MODEL_FILE}" ]]; then
+    SEED_CANDIDATE="${MAIN_MODEL_FILE}"
+  elif [[ -f "${REPO_ROOT}/.ai-tmp/${WHISPERX_ALIGNMENT_MODEL_FILE}" ]]; then
+    SEED_CANDIDATE="${REPO_ROOT}/.ai-tmp/${WHISPERX_ALIGNMENT_MODEL_FILE}"
+  fi
+
+  if [[ -n "${SEED_CANDIDATE}" ]]; then
+    TMP_SHA256="$(compute_sha256 "${SEED_CANDIDATE}")"
     if [[ "${TMP_SHA256}" == "${WHISPERX_ALIGNMENT_MODEL_SHA256}" ]]; then
-      echo "Copying verified cached model weights into target directory..."
-      cp "${REPO_ROOT}/.ai-tmp/${WHISPERX_ALIGNMENT_MODEL_FILE}" "${MODEL_FILE}"
+      echo "Seeding verified alignment model weights from ${SEED_CANDIDATE}..."
+      ln -f "${SEED_CANDIDATE}" "${MODEL_FILE}" 2>/dev/null || cp "${SEED_CANDIDATE}" "${MODEL_FILE}"
     fi
   fi
 fi
@@ -122,6 +162,13 @@ cat > "${MANIFEST_FILE}" <<EOF
 EOF
 echo "Manifest written to ${MANIFEST_FILE}."
 
+# Sync to shared cache if running in worktree or outside shared cache
+if [[ "${TARGET_MODEL_DIR}" != "${SHARED_CACHE_DIR}/whisperx-model" ]]; then
+  mkdir -p "${SHARED_CACHE_DIR}/whisperx-model"
+  ln -f "${MODEL_FILE}" "${SHARED_CACHE_DIR}/whisperx-model/${WHISPERX_ALIGNMENT_MODEL_FILE}" 2>/dev/null || cp -f "${MODEL_FILE}" "${SHARED_CACHE_DIR}/whisperx-model/${WHISPERX_ALIGNMENT_MODEL_FILE}"
+  cp -f "${MANIFEST_FILE}" "${SHARED_CACHE_DIR}/whisperx-model/model_manifest.json"
+fi
+
 # 4. Setup Python virtualenv
 HOST_PYTHON=""
 for candidate in python3.12 python3.11 python3.10 python3.9 python3; do
@@ -148,9 +195,24 @@ if [[ ! -f "${PYTHON_BIN}" ]]; then
   PYTHON_BIN="${TARGET_VENV_DIR}/bin/python"
 fi
 
+PIP_CACHE_DIR="${PIP_CACHE_DIR:-${SHARED_CACHE_DIR}/pip}"
+mkdir -p "${PIP_CACHE_DIR}"
+
+TMPDIR="${TMPDIR:-${SHARED_CACHE_DIR}/tmp}"
+mkdir -p "${TMPDIR}"
+export TMPDIR
+
+# If ~/.cache/pip exists and PIP_CACHE_DIR is empty, seed hardlinks from ~/.cache/pip
+if [[ -d "${HOME}/.cache/pip" && "${PIP_CACHE_DIR}" != "${HOME}/.cache/pip" ]]; then
+  if [[ -z "$(ls -A "${PIP_CACHE_DIR}" 2>/dev/null)" ]]; then
+    echo "Seeding pip cache from ${HOME}/.cache/pip..."
+    cp -al "${HOME}/.cache/pip/." "${PIP_CACHE_DIR}/" 2>/dev/null || true
+  fi
+fi
+
 echo "Upgrading pip and installing whisperx==${WHISPERX_PIP_VERSION} torchaudio==${WHISPERX_TORCHAUDIO_VERSION} matplotlib==${WHISPERX_MATPLOTLIB_VERSION}..."
-"${PIP_BIN}" install --upgrade pip
-"${PIP_BIN}" install "whisperx==${WHISPERX_PIP_VERSION}" "torchaudio==${WHISPERX_TORCHAUDIO_VERSION}" "matplotlib==${WHISPERX_MATPLOTLIB_VERSION}"
+"${PIP_BIN}" install --cache-dir "${PIP_CACHE_DIR}" --upgrade pip
+"${PIP_BIN}" install --cache-dir "${PIP_CACHE_DIR}" "whisperx==${WHISPERX_PIP_VERSION}" "torchaudio==${WHISPERX_TORCHAUDIO_VERSION}" "matplotlib==${WHISPERX_MATPLOTLIB_VERSION}"
 
 # Clear executable stack flag from ctranslate2 shared libraries if present to prevent
 # "cannot enable executable stack as shared object requires: Invalid argument" on strict kernels
