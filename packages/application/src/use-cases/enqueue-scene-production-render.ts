@@ -37,10 +37,16 @@ export const ACCEPTED_PRODUCTION_ENGINE_PROFILE_IDS: ReadonlySet<string> = new S
 
 export interface EnqueueSceneProductionRenderOptions {
   /**
-   * Explicit deployment configuration controlling activation of the conditioned
-   * (I2V) production profile. When not enabled (default), normal production dispatch
-   * preserves the certified text-to-video workflow so production does not fail closed
-   * against the checked-in component license registry before operator approval.
+   * Explicitly force the legacy unconditioned text-to-video workflow
+   * (`LTX_25_720P_5S_V1`), bypassing the default conditioned (I2V) profile.
+   * Retained strictly for explicitly legacy/non-conditioned callers or tests.
+   */
+  readonly forceLegacyTextProfile?: boolean | undefined;
+
+  /**
+   * Rollout override flag. When set to `false`, explicitly selects the legacy
+   * text-to-video profile (`LTX_25_720P_5S_V1`). When omitted or `true`, normal
+   * reviewed production selects the conditioned I2V profile (`LTX_25_720P_5S_I2V_V1`).
    */
   readonly enableConditionedProfile?: boolean | undefined;
 }
@@ -117,16 +123,13 @@ export class EnqueueSceneProductionRenderUseCase {
       );
     }
 
-    const isI2vEngine =
-      snapshot.configuration.engineProfileId === "LTX_25_720P_5S_I2V_V1" ||
-      snapshot.configuration.engineProfileId === "ltx_25_i2v";
+    const isExplicitlyLegacy =
+      this.options?.forceLegacyTextProfile === true ||
+      this.options?.enableConditionedProfile === false ||
+      process.env.ENABLE_I2V_PRODUCTION === "false" ||
+      process.env.CCO_ENABLE_I2V_PRODUCTION === "false";
 
-    const isDeploymentEnabled =
-      this.options?.enableConditionedProfile ??
-      (process.env.ENABLE_I2V_PRODUCTION === "true" ||
-        process.env.CCO_ENABLE_I2V_PRODUCTION === "true");
-
-    const useConditionedProfile = isI2vEngine || isDeploymentEnabled;
+    const useConditionedProfile = !isExplicitlyLegacy;
 
     const workflowTemplate = useConditionedProfile
       ? LTX_I2V_PRODUCTION_WORKFLOW_TEMPLATE

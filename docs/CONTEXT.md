@@ -89,7 +89,7 @@
     - Node 20 (`LoadImage`): Staged candidate image under the ComfyUI input subfolder `conditioning/` with deterministic filename `cco-<scene>-<job>-<hash>` loaded by worker.
     - Node 21 (`ImageScale`): Resizes with Lanczos interpolation to exactly 1280x720 (`crop: "center"`), ensuring deterministic pixel alignment and eliminating spatial distortion across varying candidate aspect ratios.
     - Node 22 (`LTXVImgToVideo`): Injects conditioned image latents into the LTX-2.5 sampling pipeline.
-  - **Distinct Profile Identity:** `LTX_25_720P_5S_I2V_V1` represents the certified Image-to-Video production profile, distinct from text-to-video (`LTX_25_720P_5S_V1`). Dispatch is data-driven by `scene.engineAssigned` or explicitly overridden during phased rollout via `enableConditionedProfile: true`.
+  - **Distinct Profile Identity:** `LTX_25_720P_5S_I2V_V1` represents the certified Image-to-Video production profile, distinct from text-to-video (`LTX_25_720P_5S_V1`). Reviewed visual production dispatches `LTX_25_720P_5S_I2V_V1` by default, retaining `LTX_25_720P_5S_V1` only for explicitly legacy/non-conditioned callers.
   - **Multi-Layer Fail-Closed Verification:**
     - Unselected, mismatched, or cross-scene candidate references reject dispatch with `CandidateIdentityMismatchError` or `CandidateSceneMismatchError`.
     - Stale candidates or spec revision mismatches reject dispatch with `StaleCandidateRevisionError` or `MissingCandidateSelectionError`.

@@ -961,7 +961,7 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
     }
   });
 
-  it("operator rollout control: enableConditionedProfile option selects I2V workflow even for scenes with legacy profile", async () => {
+  it("normal reviewed production selects I2V workflow and executes conditioning even for scenes configured with legacy profile", async () => {
     const { uow, url: controlApiBaseUrl } = await startControlApi();
     const client = await pool.connect();
     let sceneId: string;
@@ -991,10 +991,8 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
       client.release();
     }
 
-    // Enqueue using explicit enableConditionedProfile override
-    const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow, {
-      enableConditionedProfile: true
-    });
+    // Enqueue using normal reviewed production dispatch (no rollout override needed)
+    const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow);
     const enqueueResult = await enqueueUseCase.execute({ sceneId });
 
     expect(enqueueResult.job.workflowTemplate).toBe("ltx-25-720p-97f-i2v");
@@ -1823,10 +1821,8 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
         client.release();
       }
 
-      // 2. Enqueue production render job via EnqueueSceneProductionRenderUseCase
-      const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow, {
-        enableConditionedProfile: true
-      });
+      // 2. Enqueue production render job via EnqueueSceneProductionRenderUseCase (default conditioned dispatch)
+      const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow);
       const enqueueResult = await enqueueUseCase.execute({ sceneId });
 
       expect(enqueueResult.scene.status).toBe("queued");

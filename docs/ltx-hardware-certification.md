@@ -256,4 +256,4 @@ The I2V certification run must satisfy all five gate checks:
 2. **Artifact Verification:** Operator verifies that all 5 resource gates pass and evidence files `result.json` and `summary.md` are written to `certification/ltx-25/<run-id>/`.
 3. **RenderProfile Freezing:** Operator exports the certified profile configuration to `config/render-profiles/LTX_25_720P_5S_I2V_V1.json` with exact measured latency, peak VRAM, and model SHA-256 hashes.
 4. **Governance Approval Promotion:** In `config/component-license-registry.json`, the operator updates the `LTX_25_720P_5S_I2V_V1` entry from `"review_required"` to `"approved"` and sets `reviewedAt` to the current timestamp.
-5. **Production Enablement:** Control-plane job dispatch automatically switches production renders for candidate-approved scenes to `LTX_25_720P_5S_I2V_V1` (or via rollout override `enableConditionedProfile: true`), ensuring zero silent fallbacks.
+5. **Production Enablement:** Control-plane job dispatch automatically selects `LTX_25_720P_5S_I2V_V1` for candidate-approved scenes by default, ensuring zero silent fallbacks.
