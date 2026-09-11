@@ -23,4 +23,12 @@ export interface CampaignRecord {
   readonly approvedScenes: number;
   readonly createdAt: string;
   readonly updatedAt: string;
+  readonly idempotencyKey?: string | undefined;
+  readonly targetTotalDurationMs?: number | undefined;
+  readonly archivedAt?: string | undefined;
+}
+
+export interface CampaignShellRecord extends CampaignRecord {
+  readonly idempotencyKey: string;
+  readonly targetTotalDurationMs: number;
 }

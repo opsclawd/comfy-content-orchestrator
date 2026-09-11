@@ -1,0 +1,123 @@
+import { describe, expect, it } from "vitest";
+import {
+  canonicalizeCampaignRequest,
+  computeCampaignRequestHash
+} from "./campaign-request-hash.js";
+
+describe("campaign-request-hash", () => {
+  const baseInput = {
+    clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+    title: "Summer 2026 Collection",
+    targetPlatform: "tiktok",
+    targetTotalDurationMs: 15000,
+    sceneCountOverride: undefined
+  };
+
+  it("produces deterministic canonical string and hash across repeated calls", async () => {
+    const canonical1 = canonicalizeCampaignRequest(baseInput);
+    const canonical2 = canonicalizeCampaignRequest({ ...baseInput });
+    expect(canonical1).toBe(canonical2);
+
+    const hash1 = await computeCampaignRequestHash(baseInput);
+    const hash2 = await computeCampaignRequestHash({ ...baseInput });
+    expect(hash1).toBe(hash2);
+    expect(hash1).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("canonical string is independent of object key insertion order", async () => {
+    const inputReordered = {
+      targetTotalDurationMs: 15000,
+      title: "Summer 2026 Collection",
+      sceneCountOverride: undefined,
+      targetPlatform: "tiktok",
+      clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801"
+    };
+
+    expect(canonicalizeCampaignRequest(baseInput)).toBe(
+      canonicalizeCampaignRequest(inputReordered)
+    );
+
+    const hash1 = await computeCampaignRequestHash(baseInput);
+    const hash2 = await computeCampaignRequestHash(inputReordered);
+    expect(hash1).toBe(hash2);
+  });
+
+  it("produces different hash when sceneCountOverride is defined vs undefined (Finding 2 / Auto-mode)", async () => {
+    const autoMode = { ...baseInput, sceneCountOverride: undefined };
+    const manualMode = { ...baseInput, sceneCountOverride: 3 };
+
+    const hashAuto = await computeCampaignRequestHash(autoMode);
+    const hashManual = await computeCampaignRequestHash(manualMode);
+
+    expect(hashAuto).not.toBe(hashManual);
+  });
+
+  it("witness scenario: lost-response retry in Auto mode preserves identical hash without totalScenes substitution", async () => {
+    // Initial attempt in Auto mode (sceneCountOverride: undefined)
+    const initialRequest = {
+      clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+      title: "Auto Mode Campaign",
+      targetTotalDurationMs: 15000,
+      sceneCountOverride: undefined
+    };
+    const initialHash = await computeCampaignRequestHash(initialRequest);
+
+    // Client retries with identical declared fields
+    const retryRequest = {
+      clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+      title: "Auto Mode Campaign",
+      targetTotalDurationMs: 15000,
+      sceneCountOverride: undefined
+    };
+    const retryHash = await computeCampaignRequestHash(retryRequest);
+
+    expect(retryHash).toBe(initialHash);
+
+    // If configured totalScenes (3) had been substituted in place of sceneCountOverride,
+    // the hash would have differed, causing a false 409 conflict:
+    const flawedSubstitutedRequest = {
+      clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+      title: "Auto Mode Campaign",
+      targetTotalDurationMs: 15000,
+      sceneCountOverride: 3 // flawed substitution of totalScenes
+    };
+    const flawedHash = await computeCampaignRequestHash(flawedSubstitutedRequest);
+    expect(flawedHash).not.toBe(initialHash);
+  });
+
+  it("is sensitive to changes in clientId", async () => {
+    const hash1 = await computeCampaignRequestHash(baseInput);
+    const hash2 = await computeCampaignRequestHash({
+      ...baseInput,
+      clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73899"
+    });
+    expect(hash1).not.toBe(hash2);
+  });
+
+  it("is sensitive to changes in title", async () => {
+    const hash1 = await computeCampaignRequestHash(baseInput);
+    const hash2 = await computeCampaignRequestHash({
+      ...baseInput,
+      title: "Different Title"
+    });
+    expect(hash1).not.toBe(hash2);
+  });
+
+  it("is sensitive to changes in targetPlatform", async () => {
+    const hash1 = await computeCampaignRequestHash(baseInput);
+    const hash2 = await computeCampaignRequestHash({
+      ...baseInput,
+      targetPlatform: "youtube_shorts"
+    });
+    expect(hash1).not.toBe(hash2);
+  });
+
+  it("is sensitive to changes in targetTotalDurationMs", async () => {
+    const hash1 = await computeCampaignRequestHash(baseInput);
+    const hash2 = await computeCampaignRequestHash({
+      ...baseInput,
+      targetTotalDurationMs: 20000
+    });
+    expect(hash1).not.toBe(hash2);
+  });
+});

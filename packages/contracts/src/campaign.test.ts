@@ -11,7 +11,15 @@ import {
   CampaignBeatSchema,
   CampaignBeatSheetResponseSchema,
   isCreateSceneBriefRequest,
-  isCreateSceneManualRequest
+  isCreateSceneManualRequest,
+  CreateCampaignShellRequestSchema,
+  CreateCampaignShellResponseSchema,
+  MIN_TARGET_DURATION_MS,
+  MAX_TARGET_DURATION_MS,
+  MIN_SCENE_COUNT,
+  MAX_SCENE_COUNT,
+  MIN_SCENE_DURATION_MS,
+  MAX_SCENE_DURATION_MS
 } from "./campaign.js";
 
 describe("Campaign and Scene Creation Contracts", () => {
@@ -487,6 +495,234 @@ describe("Campaign and Scene Creation Contracts", () => {
           campaignId: "not-a-uuid",
           targetTotalDurationMs: 5000,
           beats: []
+        })
+      ).toThrow();
+    });
+  });
+
+  describe("CreateCampaignShellRequestSchema", () => {
+    it("exports expected bound constants", () => {
+      expect(MIN_TARGET_DURATION_MS).toBe(5_000);
+      expect(MAX_TARGET_DURATION_MS).toBe(300_000);
+      expect(MIN_SCENE_COUNT).toBe(1);
+      expect(MAX_SCENE_COUNT).toBe(60);
+      expect(MIN_SCENE_DURATION_MS).toBe(1_000);
+      expect(MAX_SCENE_DURATION_MS).toBe(15_000);
+    });
+
+    const validBase = {
+      idempotencyKey: "018e69e0-8a6a-72cb-b1b7-ec79a1f73800",
+      clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+      title: "Summer 2026 Collection",
+      targetTotalDurationMs: 15000
+    };
+
+    it("parses valid request without sceneCountOverride", () => {
+      const parsed = CreateCampaignShellRequestSchema.parse(validBase);
+      expect(parsed).toEqual(validBase);
+    });
+
+    it("parses valid request with sceneCountOverride and targetPlatform", () => {
+      const payload = {
+        ...validBase,
+        targetPlatform: "tiktok",
+        sceneCountOverride: 3
+      };
+      const parsed = CreateCampaignShellRequestSchema.parse(payload);
+      expect(parsed).toEqual(payload);
+    });
+
+    it("rejects non-UUID idempotencyKey", () => {
+      expect(() =>
+        CreateCampaignShellRequestSchema.parse({
+          ...validBase,
+          idempotencyKey: "not-a-uuid"
+        })
+      ).toThrow();
+    });
+
+    it("rejects non-UUID clientId", () => {
+      expect(() =>
+        CreateCampaignShellRequestSchema.parse({
+          ...validBase,
+          clientId: "not-a-uuid"
+        })
+      ).toThrow();
+    });
+
+    it("rejects empty title", () => {
+      expect(() =>
+        CreateCampaignShellRequestSchema.parse({
+          ...validBase,
+          title: ""
+        })
+      ).toThrow();
+    });
+
+    it("rejects duration below MIN_TARGET_DURATION_MS", () => {
+      expect(() =>
+        CreateCampaignShellRequestSchema.parse({
+          ...validBase,
+          targetTotalDurationMs: MIN_TARGET_DURATION_MS - 1
+        })
+      ).toThrow();
+    });
+
+    it("rejects duration above MAX_TARGET_DURATION_MS", () => {
+      expect(() =>
+        CreateCampaignShellRequestSchema.parse({
+          ...validBase,
+          targetTotalDurationMs: MAX_TARGET_DURATION_MS + 1
+        })
+      ).toThrow();
+    });
+
+    it("rejects non-integer duration", () => {
+      expect(() =>
+        CreateCampaignShellRequestSchema.parse({
+          ...validBase,
+          targetTotalDurationMs: 15000.5
+        })
+      ).toThrow();
+    });
+
+    it("rejects sceneCountOverride below MIN_SCENE_COUNT", () => {
+      expect(() =>
+        CreateCampaignShellRequestSchema.parse({
+          ...validBase,
+          sceneCountOverride: MIN_SCENE_COUNT - 1
+        })
+      ).toThrow();
+    });
+
+    it("rejects sceneCountOverride above MAX_SCENE_COUNT", () => {
+      expect(() =>
+        CreateCampaignShellRequestSchema.parse({
+          ...validBase,
+          sceneCountOverride: MAX_SCENE_COUNT + 1
+        })
+      ).toThrow();
+    });
+
+    it("rejects non-integer sceneCountOverride", () => {
+      expect(() =>
+        CreateCampaignShellRequestSchema.parse({
+          ...validBase,
+          sceneCountOverride: 3.5
+        })
+      ).toThrow();
+    });
+
+    it("rejects combination where implied per-scene duration is below MIN_SCENE_DURATION_MS (reviewer witness: 5000ms, 60 scenes)", () => {
+      expect(() =>
+        CreateCampaignShellRequestSchema.parse({
+          ...validBase,
+          targetTotalDurationMs: 5000,
+          sceneCountOverride: 60
+        })
+      ).toThrow(
+        /targetTotalDurationMs and sceneCountOverride imply an unsupported per-scene duration/
+      );
+    });
+
+    it("rejects combination where implied per-scene duration is above MAX_SCENE_DURATION_MS (300000ms, 1 scene)", () => {
+      expect(() =>
+        CreateCampaignShellRequestSchema.parse({
+          ...validBase,
+          targetTotalDurationMs: 300000,
+          sceneCountOverride: 1
+        })
+      ).toThrow(
+        /targetTotalDurationMs and sceneCountOverride imply an unsupported per-scene duration/
+      );
+    });
+
+    it("accepts valid combinations at per-scene duration boundaries", () => {
+      // 5000ms / 5 scenes = 1000ms (MIN_SCENE_DURATION_MS)
+      expect(
+        CreateCampaignShellRequestSchema.parse({
+          ...validBase,
+          targetTotalDurationMs: 5000,
+          sceneCountOverride: 5
+        })
+      ).toBeDefined();
+
+      // 15000ms / 1 scene = 15000ms (MAX_SCENE_DURATION_MS)
+      expect(
+        CreateCampaignShellRequestSchema.parse({
+          ...validBase,
+          targetTotalDurationMs: 15000,
+          sceneCountOverride: 1
+        })
+      ).toBeDefined();
+    });
+
+    it("rejects unknown properties (.strict)", () => {
+      expect(() =>
+        CreateCampaignShellRequestSchema.parse({
+          ...validBase,
+          unknownField: true
+        })
+      ).toThrow();
+    });
+  });
+
+  describe("CreateCampaignShellResponseSchema", () => {
+    const validResponse = {
+      campaignId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73800",
+      idempotencyKey: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+      status: "drafting",
+      totalScenes: 3,
+      targetTotalDurationMs: 15000,
+      isIdempotentReplay: false,
+      createdAt: "2026-09-10T12:00:00.000Z"
+    };
+
+    it("parses valid response payload", () => {
+      const parsed = CreateCampaignShellResponseSchema.parse(validResponse);
+      expect(parsed).toEqual(validResponse);
+    });
+
+    it("parses valid response payload with optional archivedAt", () => {
+      const archivedTime = "2026-09-10T13:00:00.000Z";
+      const parsed = CreateCampaignShellResponseSchema.parse({
+        ...validResponse,
+        archivedAt: archivedTime
+      });
+      expect(parsed).toEqual({
+        ...validResponse,
+        archivedAt: archivedTime
+      });
+    });
+
+    it("rejects non-UUID campaignId or idempotencyKey", () => {
+      expect(() =>
+        CreateCampaignShellResponseSchema.parse({
+          ...validResponse,
+          campaignId: "bad-id"
+        })
+      ).toThrow();
+
+      expect(() =>
+        CreateCampaignShellResponseSchema.parse({
+          ...validResponse,
+          idempotencyKey: "bad-id"
+        })
+      ).toThrow();
+    });
+
+    it("rejects non-positive totalScenes or targetTotalDurationMs", () => {
+      expect(() =>
+        CreateCampaignShellResponseSchema.parse({
+          ...validResponse,
+          totalScenes: 0
+        })
+      ).toThrow();
+
+      expect(() =>
+        CreateCampaignShellResponseSchema.parse({
+          ...validResponse,
+          targetTotalDurationMs: 0
         })
       ).toThrow();
     });

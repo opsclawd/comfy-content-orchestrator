@@ -3,6 +3,7 @@ import {
   Scene,
   type CampaignId,
   type CampaignRecord,
+  type CampaignShellRecord,
   type CampaignStatus,
   type CandidateId,
   type ClientRecord,
@@ -14,6 +15,8 @@ import {
 import type {
   CampaignProductionRunRepository,
   CampaignRepository,
+  CampaignShellPersistenceRecord,
+  CampaignShellRepository,
   ClientRepository,
   DeliveryAssemblyJobQueuePort,
   EnqueueJobInput,
@@ -25,6 +28,7 @@ import type {
   UnitOfWork,
   UnitOfWorkContext
 } from "../ports/index.js";
+import { CampaignIdempotencyConflictError } from "../ports/index.js";
 
 export class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _seededScenes: Map<SceneId, Scene>;
@@ -32,12 +36,15 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _seededReviewEvents: Map<string, ReviewEvent>;
   private readonly _seededCampaigns: Map<string, CampaignRecord>;
   private readonly _seededClients: Map<string, ClientRecord>;
+  private readonly _campaignHashes = new Map<string, string>();
   private readonly _savedScenes: Scene[] = [];
   private readonly _reviewEvents: ReviewEvent[] = [];
   private readonly _savedCampaigns: CampaignRecord[] = [];
   private readonly _savedClients: ClientRecord[] = [];
   private readonly _enqueuedJobs: RenderJob[] = [];
-  private _jobEnqueuer?: TransactionalJobEnqueuer;
+  private _jobEnqueuer?: TransactionalJobEnqueuer | undefined;
+  private _beforeSaveWithRequestHash?:
+    ((campaign: CampaignShellRecord, hash: string) => Promise<void> | void) | undefined;
 
   constructor(
     seededScenes?: Iterable<Scene> | ReadonlyMap<SceneId, Scene> | Record<string, Scene>,
@@ -190,6 +197,19 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     return this;
   }
 
+  withBeforeSaveWithRequestHash(
+    hook?: (campaign: CampaignShellRecord, hash: string) => Promise<void> | void
+  ): this {
+    this._beforeSaveWithRequestHash = hook;
+    return this;
+  }
+
+  seedCampaignWithHash(campaign: CampaignRecord, requestHashSha256: string): this {
+    this._seededCampaigns.set(campaign.id, campaign);
+    this._campaignHashes.set(campaign.id, requestHashSha256);
+    return this;
+  }
+
   async execute<TResult>(work: (context: UnitOfWorkContext) => Promise<TResult>): Promise<TResult> {
     const scopedSceneCopies = new Map<SceneId, Scene>();
     for (const [id, scene] of this._seededScenes.entries()) {
@@ -200,6 +220,7 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     const stagedReviewEvents: ReviewEvent[] = [];
     const stagedCandidates: StoryboardCandidate[] = [];
     const stagedCampaigns: CampaignRecord[] = [];
+    const stagedCampaignHashes = new Map<string, string>();
     const stagedClients: ClientRecord[] = [];
     const stagedJobs: RenderJob[] = [];
 
@@ -317,7 +338,7 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       }
     };
 
-    const scopedCampaigns: CampaignRepository<CampaignRecord> = {
+    const scopedCampaigns: CampaignRepository<CampaignRecord> & CampaignShellRepository = {
       findById: async (campaignId: string): Promise<CampaignRecord | undefined> => {
         return (
           stagedCampaigns.find((c) => c.id === campaignId) ?? this._seededCampaigns.get(campaignId)
@@ -328,6 +349,32 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
           stagedCampaigns.find((c) => c.id === campaignId) ?? this._seededCampaigns.get(campaignId)
         );
       },
+      findByIdempotencyKey: async (
+        idempotencyKey: string
+      ): Promise<CampaignShellPersistenceRecord | undefined> => {
+        const found =
+          stagedCampaigns.find((c) => c.idempotencyKey === idempotencyKey) ??
+          Array.from(this._seededCampaigns.values()).find(
+            (c) => c.idempotencyKey === idempotencyKey
+          );
+        if (
+          !found ||
+          found.idempotencyKey === undefined ||
+          found.targetTotalDurationMs === undefined
+        ) {
+          return undefined;
+        }
+        const hash = stagedCampaignHashes.get(found.id) ?? this._campaignHashes.get(found.id);
+        if (hash === undefined) {
+          return undefined;
+        }
+        return {
+          ...found,
+          idempotencyKey: found.idempotencyKey,
+          targetTotalDurationMs: found.targetTotalDurationMs,
+          requestHashSha256: hash
+        };
+      },
       save: async (campaign: CampaignRecord): Promise<void> => {
         const existingIdx = stagedCampaigns.findIndex((c) => c.id === campaign.id);
         if (existingIdx >= 0) {
@@ -335,6 +382,33 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
         } else {
           stagedCampaigns.push(campaign);
         }
+      },
+      saveWithRequestHash: async (
+        campaign: CampaignShellRecord,
+        requestHashSha256: string
+      ): Promise<void> => {
+        if (this._beforeSaveWithRequestHash !== undefined) {
+          await this._beforeSaveWithRequestHash(campaign, requestHashSha256);
+        }
+        if (campaign.idempotencyKey !== undefined) {
+          const conflict =
+            stagedCampaigns.find(
+              (c) => c.idempotencyKey === campaign.idempotencyKey && c.id !== campaign.id
+            ) ??
+            Array.from(this._seededCampaigns.values()).find(
+              (c) => c.idempotencyKey === campaign.idempotencyKey && c.id !== campaign.id
+            );
+          if (conflict) {
+            throw new CampaignIdempotencyConflictError(campaign.idempotencyKey);
+          }
+        }
+        const existingIdx = stagedCampaigns.findIndex((c) => c.id === campaign.id);
+        if (existingIdx >= 0) {
+          stagedCampaigns[existingIdx] = campaign;
+        } else {
+          stagedCampaigns.push(campaign);
+        }
+        stagedCampaignHashes.set(campaign.id, requestHashSha256);
       },
       transitionStatusIf: async (
         campaignId: string,
@@ -445,6 +519,9 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     }
     for (const campaign of stagedCampaigns) {
       this._seededCampaigns.set(campaign.id, campaign);
+    }
+    for (const [id, hash] of stagedCampaignHashes.entries()) {
+      this._campaignHashes.set(id, hash);
     }
     for (const client of stagedClients) {
       this._seededClients.set(client.id, client);

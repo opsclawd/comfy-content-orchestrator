@@ -7,6 +7,7 @@ export * from "./gpu-telemetry-port.js";
 export * from "./campaign-repository.js";
 export * from "./client-repository.js";
 export * from "./client-not-found-error.js";
+export * from "./campaign-idempotency-conflict-error.js";
 export * from "./render-job-repository.js";
 export * from "./manifest-repository.js";
 export * from "./license-registry-repository.js";
