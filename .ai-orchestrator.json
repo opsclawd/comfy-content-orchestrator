@@ -3,6 +3,7 @@
     "additionalCommands": [
       "pnpm preValidation",
       "pnpm check:hooks",
+      "pnpm format:fix",
       "pnpm format",
       "pnpm test:db",
       "pnpm test:assembly",
