@@ -68,6 +68,11 @@ class FakeCampaignUnitOfWork implements UnitOfWork {
         findById: async (id: SceneId) => this._scenes.get(id),
         save: async (scene: Scene) => {
           this._scenes.set(scene.id, scene);
+        },
+        findByCampaignId: async (campaignId: CampaignId) => {
+          return Array.from(this._scenes.values())
+            .filter((s) => s.campaignId === campaignId)
+            .sort((a, b) => (a.sequenceIndex ?? 0) - (b.sequenceIndex ?? 0));
         }
       } as SceneRepository,
       reviewEvents: {
@@ -81,6 +86,7 @@ class FakeCampaignUnitOfWork implements UnitOfWork {
       },
       campaigns: {
         findById: async (id: string) => this._campaigns.get(id),
+        findByIdForUpdate: async (id: string) => this._campaigns.get(id),
         save: async (campaign: CampaignRecord) => {
           if (this.onSaveCampaign) {
             await this.onSaveCampaign(campaign);
