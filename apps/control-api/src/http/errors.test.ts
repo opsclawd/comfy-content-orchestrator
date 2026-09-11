@@ -1,15 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   CampaignBeatSheetValidationError,
+  CampaignIdempotencyConflictError,
   IdempotencyConflictError,
+  InvalidSceneCountCombinationError,
+  InvalidSceneCountError,
+  InvalidSceneOrdinalSequenceError,
+  InvalidTargetDurationError,
   PlanningNotAuthorizedError,
   PlanningProviderExhaustedError,
   PlanningProviderNotConfiguredError,
   PlanningSafetyRefusalError,
+  SceneConfigurationCountMismatchError,
   SceneConfigurationValidationError,
   SceneCreationModeMismatchError,
   SceneNotFoundError,
   StaleRevisionConflictError,
+  StoryboardPartiallyMaterializedError,
+  TransactionalJobEnqueuerUnavailableError,
   UnsupportedProductionDurationError
 } from "@cco/application";
 import {
@@ -139,6 +147,105 @@ describe("formatReviewError", () => {
       body: {
         code: "CONFIGURATION_ERROR",
         message: "No provider configured"
+      }
+    });
+  });
+
+  it("maps TransactionalJobEnqueuerUnavailableError to 500 CONFIGURATION_ERROR alongside JobDispatchUnavailableError", () => {
+    const err = new TransactionalJobEnqueuerUnavailableError();
+    expect(formatReviewError(err)).toEqual({
+      statusCode: 500,
+      body: {
+        code: "CONFIGURATION_ERROR",
+        message: err.message
+      }
+    });
+  });
+
+  it("maps CampaignIdempotencyConflictError to 409 IDEMPOTENCY_CONFLICT with idempotencyKey details", () => {
+    const idempotencyKey = "018e69e0-8a6a-72cb-b1b7-ec79a1f73801";
+    const err = new CampaignIdempotencyConflictError(idempotencyKey);
+    expect(formatReviewError(err)).toEqual({
+      statusCode: 409,
+      body: {
+        code: "IDEMPOTENCY_CONFLICT",
+        message: err.message,
+        details: { idempotencyKey }
+      }
+    });
+  });
+
+  it("maps InvalidSceneCountCombinationError to 400 VALIDATION_FAILURE", () => {
+    const err = new InvalidSceneCountCombinationError({
+      targetTotalDurationMs: 5000,
+      sceneCountOverride: 10,
+      resolvedSceneCount: 10
+    });
+    expect(formatReviewError(err)).toEqual({
+      statusCode: 400,
+      body: {
+        code: "VALIDATION_FAILURE",
+        message: err.message
+      }
+    });
+  });
+
+  it("maps InvalidSceneCountError to 400 VALIDATION_FAILURE", () => {
+    const err = new InvalidSceneCountError(100);
+    expect(formatReviewError(err)).toEqual({
+      statusCode: 400,
+      body: {
+        code: "VALIDATION_FAILURE",
+        message: err.message
+      }
+    });
+  });
+
+  it("maps InvalidTargetDurationError to 400 VALIDATION_FAILURE", () => {
+    const err = new InvalidTargetDurationError(1000);
+    expect(formatReviewError(err)).toEqual({
+      statusCode: 400,
+      body: {
+        code: "VALIDATION_FAILURE",
+        message: err.message
+      }
+    });
+  });
+
+  it("maps SceneConfigurationCountMismatchError to 500 INTERNAL_INVARIANT_VIOLATION", () => {
+    const err = new SceneConfigurationCountMismatchError("camp-1", 3, 2);
+    expect(formatReviewError(err)).toEqual({
+      statusCode: 500,
+      body: {
+        code: "INTERNAL_INVARIANT_VIOLATION",
+        message: err.message
+      }
+    });
+  });
+
+  it("maps InvalidSceneOrdinalSequenceError to 500 INTERNAL_INVARIANT_VIOLATION", () => {
+    const err = new InvalidSceneOrdinalSequenceError("camp-1", [1, 3], "gap detected");
+    expect(formatReviewError(err)).toEqual({
+      statusCode: 500,
+      body: {
+        code: "INTERNAL_INVARIANT_VIOLATION",
+        message: err.message
+      }
+    });
+  });
+
+  it("maps StoryboardPartiallyMaterializedError to 409 STORYBOARD_PARTIALLY_MATERIALIZED with details", () => {
+    const err = new StoryboardPartiallyMaterializedError("camp-1", 3, 1);
+    expect(formatReviewError(err)).toEqual({
+      statusCode: 409,
+      body: {
+        code: "STORYBOARD_PARTIALLY_MATERIALIZED",
+        message: err.message,
+        details: {
+          campaignId: "camp-1",
+          expectedCount: 3,
+          actualCount: 1
+        }
       }
     });
   });

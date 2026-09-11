@@ -3,19 +3,27 @@ import { projectErrorForLogging } from "@cco/shared";
 import { ZodError } from "zod";
 import {
   CampaignBeatSheetValidationError,
+  CampaignIdempotencyConflictError,
   CampaignNotFoundError,
   CandidateNotFoundError,
   ClientNotFoundError,
   IdempotencyConflictError,
+  InvalidSceneCountCombinationError,
+  InvalidSceneCountError,
+  InvalidSceneOrdinalSequenceError,
+  InvalidTargetDurationError,
   JobDispatchUnavailableError,
   PlanningNotAuthorizedError,
   PlanningProviderExhaustedError,
   PlanningProviderNotConfiguredError,
   PlanningSafetyRefusalError,
+  SceneConfigurationCountMismatchError,
   SceneConfigurationValidationError,
   SceneCreationModeMismatchError,
   SceneNotFoundError,
-  StaleRevisionConflictError
+  StaleRevisionConflictError,
+  StoryboardPartiallyMaterializedError,
+  TransactionalJobEnqueuerUnavailableError
 } from "@cco/application";
 import type { ReviewErrorResponse } from "@cco/contracts";
 import {
@@ -41,7 +49,8 @@ export function formatReviewError(error: unknown): {
 } {
   if (
     error instanceof JobDispatchUnavailableError ||
-    error instanceof PlanningProviderNotConfiguredError
+    error instanceof PlanningProviderNotConfiguredError ||
+    error instanceof TransactionalJobEnqueuerUnavailableError
   ) {
     return {
       statusCode: 500,
@@ -100,12 +109,28 @@ export function formatReviewError(error: unknown): {
 
   if (
     error instanceof SceneConfigurationValidationError ||
-    error instanceof CampaignBeatSheetValidationError
+    error instanceof CampaignBeatSheetValidationError ||
+    error instanceof InvalidSceneCountCombinationError ||
+    error instanceof InvalidSceneCountError ||
+    error instanceof InvalidTargetDurationError
   ) {
     return {
       statusCode: 400,
       body: {
         code: "VALIDATION_FAILURE",
+        message: error.message
+      }
+    };
+  }
+
+  if (
+    error instanceof SceneConfigurationCountMismatchError ||
+    error instanceof InvalidSceneOrdinalSequenceError
+  ) {
+    return {
+      statusCode: 500,
+      body: {
+        code: "INTERNAL_INVARIANT_VIOLATION",
         message: error.message
       }
     };
@@ -158,6 +183,34 @@ export function formatReviewError(error: unknown): {
         message: error.message,
         details: {
           actionId: error.eventId
+        }
+      }
+    };
+  }
+
+  if (error instanceof CampaignIdempotencyConflictError) {
+    return {
+      statusCode: 409,
+      body: {
+        code: "IDEMPOTENCY_CONFLICT",
+        message: error.message,
+        details: {
+          idempotencyKey: error.idempotencyKey
+        }
+      }
+    };
+  }
+
+  if (error instanceof StoryboardPartiallyMaterializedError) {
+    return {
+      statusCode: 409,
+      body: {
+        code: "STORYBOARD_PARTIALLY_MATERIALIZED",
+        message: error.message,
+        details: {
+          campaignId: error.campaignId,
+          expectedCount: error.expectedCount,
+          actualCount: error.actualCount
         }
       }
     };

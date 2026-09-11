@@ -23,6 +23,7 @@ export interface CampaignBeatSheet {
   readonly campaignId: string;
   readonly targetTotalDurationMs: number;
   readonly beats: readonly CampaignBeat[];
+  readonly externalProcessingPolicy?: Record<string, unknown>;
 }
 
 export interface PlanCampaignBeatSheetDeps {
@@ -139,7 +140,8 @@ export class PlanCampaignBeatSheetUseCase {
     return Object.freeze({
       campaignId: input.campaignId,
       targetTotalDurationMs: input.targetTotalDurationMs,
-      beats: result.beats
+      beats: result.beats,
+      externalProcessingPolicy
     });
   }
 }

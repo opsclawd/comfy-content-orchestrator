@@ -46,32 +46,44 @@ export const MAX_SCENE_COUNT = 60;
 export const MIN_SCENE_DURATION_MS = 1_000;
 export const MAX_SCENE_DURATION_MS = 15_000;
 
-// Requested/declared layer — durable campaign shell creation request.
-export const CreateCampaignShellRequestSchema = z
-  .object({
-    idempotencyKey: z.string().uuid(),
-    clientId: z.string().uuid(),
-    title: z.string().min(1),
-    targetPlatform: z.string().min(1).optional(),
-    targetTotalDurationMs: z.number().int().min(MIN_TARGET_DURATION_MS).max(MAX_TARGET_DURATION_MS),
-    sceneCountOverride: z.number().int().min(MIN_SCENE_COUNT).max(MAX_SCENE_COUNT).optional()
-  })
-  .strict()
-  .refine(
-    (data) => {
-      const n = data.sceneCountOverride;
+// Base shape for campaign shell parameters shared across shell creation and composed planning.
+export const CampaignShellRequestShape = {
+  idempotencyKey: z.string().uuid(),
+  clientId: z.string().uuid(),
+  title: z.string().min(1),
+  targetPlatform: z.string().min(1).optional(),
+  targetTotalDurationMs: z.number().int().min(MIN_TARGET_DURATION_MS).max(MAX_TARGET_DURATION_MS),
+  sceneCountOverride: z.number().int().min(MIN_SCENE_COUNT).max(MAX_SCENE_COUNT).optional()
+};
+
+export const CampaignShellParamsSchema = z.object(CampaignShellRequestShape);
+
+export const CAMPAIGN_SCENE_DURATION_MISMATCH_MESSAGE =
+  "targetTotalDurationMs and sceneCountOverride imply an unsupported per-scene duration";
+
+export function withSceneCountDurationRefinement<T extends z.ZodTypeAny>(schema: T) {
+  return schema.refine(
+    (data: unknown) => {
+      const record = data as { targetTotalDurationMs?: number; sceneCountOverride?: number };
+      const n = record.sceneCountOverride;
       if (n === undefined) return true;
+      if (record.targetTotalDurationMs === undefined) return true;
       return (
-        data.targetTotalDurationMs >= n * MIN_SCENE_DURATION_MS &&
-        data.targetTotalDurationMs <= n * MAX_SCENE_DURATION_MS
+        record.targetTotalDurationMs >= n * MIN_SCENE_DURATION_MS &&
+        record.targetTotalDurationMs <= n * MAX_SCENE_DURATION_MS
       );
     },
     {
-      message:
-        "targetTotalDurationMs and sceneCountOverride imply an unsupported per-scene duration",
+      message: CAMPAIGN_SCENE_DURATION_MISMATCH_MESSAGE,
       path: ["sceneCountOverride"]
     }
   );
+}
+
+// Requested/declared layer — durable campaign shell creation request.
+export const CreateCampaignShellRequestSchema = withSceneCountDurationRefinement(
+  CampaignShellParamsSchema.strict()
+);
 export type CreateCampaignShellRequest = z.infer<typeof CreateCampaignShellRequestSchema>;
 
 // Configured/executed layer — echoes resolved N and duration, plus identity.
@@ -186,3 +198,49 @@ export const CampaignBeatSheetResponseSchema = z.object({
   beats: z.array(CampaignBeatSchema)
 });
 export type CampaignBeatSheetResponse = z.infer<typeof CampaignBeatSheetResponseSchema>;
+
+/**
+ * Requested/declared layer — complete prompt-to-storyboard planning request.
+ *
+ * Idempotency semantics:
+ * Idempotency identity is bound to the underlying campaign shell request parameters
+ * (`idempotencyKey`, `clientId`, `title`, `targetPlatform`, `targetTotalDurationMs`, `sceneCountOverride`)
+ * via `computeCampaignRequestHash`. The planning inputs (`brief` and `candidateReferenceAssetIds`)
+ * are utilized during campaign beat-sheet and scene configuration planning but do not participate
+ * in the durable shell request hash. Replaying a request with the same `idempotencyKey` and shell
+ * parameters will return the previously materialized storyboard, even if alternative `brief` or
+ * `candidateReferenceAssetIds` values are provided. To plan a storyboard with a modified brief,
+ * callers must supply a distinct `idempotencyKey`.
+ */
+export const PlanCampaignStoryboardRequestSchema = withSceneCountDurationRefinement(
+  CampaignShellParamsSchema.extend({
+    brief: CreativeBriefSchema,
+    candidateReferenceAssetIds: z.array(z.string()).optional()
+  }).strict()
+);
+export type PlanCampaignStoryboardRequest = z.infer<typeof PlanCampaignStoryboardRequestSchema>;
+
+export const PlanCampaignStoryboardSceneResponseSchema = z
+  .object({
+    sceneId: z.string().uuid(),
+    ordinal: z.number().int().positive(),
+    status: SceneStatusSchema
+  })
+  .strict();
+export type PlanCampaignStoryboardSceneResponse = z.infer<
+  typeof PlanCampaignStoryboardSceneResponseSchema
+>;
+
+// Configured/executed layer — complete prompt-to-storyboard planning response.
+export const PlanCampaignStoryboardResponseSchema = z.object({
+  campaignId: z.string().uuid(),
+  idempotencyKey: z.string().uuid(),
+  status: CampaignStatusSchema,
+  totalScenes: z.number().int().positive(),
+  targetTotalDurationMs: z.number().int().positive(),
+  isIdempotentReplay: z.boolean(),
+  sceneCount: z.number().int().nonnegative(),
+  scenes: z.array(PlanCampaignStoryboardSceneResponseSchema),
+  createdAt: z.string().datetime()
+});
+export type PlanCampaignStoryboardResponse = z.infer<typeof PlanCampaignStoryboardResponseSchema>;

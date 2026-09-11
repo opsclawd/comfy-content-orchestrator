@@ -14,6 +14,8 @@ import {
   isCreateSceneManualRequest,
   CreateCampaignShellRequestSchema,
   CreateCampaignShellResponseSchema,
+  PlanCampaignStoryboardRequestSchema,
+  PlanCampaignStoryboardResponseSchema,
   MIN_TARGET_DURATION_MS,
   MAX_TARGET_DURATION_MS,
   MIN_SCENE_COUNT,
@@ -723,6 +725,224 @@ describe("Campaign and Scene Creation Contracts", () => {
         CreateCampaignShellResponseSchema.parse({
           ...validResponse,
           targetTotalDurationMs: 0
+        })
+      ).toThrow();
+    });
+  });
+
+  describe("PlanCampaignStoryboardRequestSchema", () => {
+    const validBase = {
+      idempotencyKey: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+      clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73802",
+      title: "Spring Collection 2026",
+      targetPlatform: "tiktok",
+      targetTotalDurationMs: 15000,
+      brief: {
+        title: "Spring Teaser",
+        description: "Fresh pastel style cinematic showcase"
+      }
+    };
+
+    it("parses valid request without optional fields", () => {
+      const parsed = PlanCampaignStoryboardRequestSchema.parse(validBase);
+      expect(parsed).toEqual(validBase);
+    });
+
+    it("parses valid request with candidateReferenceAssetIds and sceneCountOverride", () => {
+      const payload = {
+        ...validBase,
+        sceneCountOverride: 3,
+        candidateReferenceAssetIds: ["ref-1", "ref-2"]
+      };
+      const parsed = PlanCampaignStoryboardRequestSchema.parse(payload);
+      expect(parsed).toEqual(payload);
+    });
+
+    it("rejects non-UUID idempotencyKey or clientId", () => {
+      expect(() =>
+        PlanCampaignStoryboardRequestSchema.parse({
+          ...validBase,
+          idempotencyKey: "invalid"
+        })
+      ).toThrow();
+
+      expect(() =>
+        PlanCampaignStoryboardRequestSchema.parse({
+          ...validBase,
+          clientId: "invalid"
+        })
+      ).toThrow();
+    });
+
+    it("rejects invalid targetTotalDurationMs below MIN_TARGET_DURATION_MS or above MAX_TARGET_DURATION_MS", () => {
+      expect(() =>
+        PlanCampaignStoryboardRequestSchema.parse({
+          ...validBase,
+          targetTotalDurationMs: MIN_TARGET_DURATION_MS - 1
+        })
+      ).toThrow();
+
+      expect(() =>
+        PlanCampaignStoryboardRequestSchema.parse({
+          ...validBase,
+          targetTotalDurationMs: MAX_TARGET_DURATION_MS + 1
+        })
+      ).toThrow();
+    });
+
+    it("rejects invalid sceneCountOverride below MIN_SCENE_COUNT or above MAX_SCENE_COUNT", () => {
+      expect(() =>
+        PlanCampaignStoryboardRequestSchema.parse({
+          ...validBase,
+          sceneCountOverride: MIN_SCENE_COUNT - 1
+        })
+      ).toThrow();
+
+      expect(() =>
+        PlanCampaignStoryboardRequestSchema.parse({
+          ...validBase,
+          sceneCountOverride: MAX_SCENE_COUNT + 1
+        })
+      ).toThrow();
+    });
+
+    it("rejects incompatible targetTotalDurationMs and sceneCountOverride combination", () => {
+      expect(() =>
+        PlanCampaignStoryboardRequestSchema.parse({
+          ...validBase,
+          targetTotalDurationMs: 5000,
+          sceneCountOverride: 10
+        })
+      ).toThrow(
+        /targetTotalDurationMs and sceneCountOverride imply an unsupported per-scene duration/
+      );
+    });
+
+    it("rejects unknown properties (.strict)", () => {
+      expect(() =>
+        PlanCampaignStoryboardRequestSchema.parse({
+          ...validBase,
+          unknownField: "disallowed"
+        })
+      ).toThrow();
+    });
+
+    it("rejects missing or invalid brief", () => {
+      expect(() =>
+        PlanCampaignStoryboardRequestSchema.parse({
+          ...validBase,
+          brief: undefined
+        })
+      ).toThrow();
+
+      expect(() =>
+        PlanCampaignStoryboardRequestSchema.parse({
+          ...validBase,
+          brief: { title: "Missing description" }
+        })
+      ).toThrow();
+    });
+  });
+
+  describe("PlanCampaignStoryboardResponseSchema", () => {
+    const validResponse = {
+      campaignId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73800",
+      idempotencyKey: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+      status: "drafting",
+      totalScenes: 3,
+      targetTotalDurationMs: 15000,
+      isIdempotentReplay: false,
+      sceneCount: 3,
+      scenes: [
+        {
+          sceneId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73811",
+          ordinal: 1,
+          status: "generating_candidates"
+        },
+        {
+          sceneId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73812",
+          ordinal: 2,
+          status: "generating_candidates"
+        },
+        {
+          sceneId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73813",
+          ordinal: 3,
+          status: "generating_candidates"
+        }
+      ],
+      createdAt: "2026-09-10T12:00:00.000Z"
+    };
+
+    it("parses valid response payload", () => {
+      const parsed = PlanCampaignStoryboardResponseSchema.parse(validResponse);
+      expect(parsed).toEqual(validResponse);
+    });
+
+    it("rejects non-UUID campaignId or idempotencyKey", () => {
+      expect(() =>
+        PlanCampaignStoryboardResponseSchema.parse({
+          ...validResponse,
+          campaignId: "invalid-uuid"
+        })
+      ).toThrow();
+
+      expect(() =>
+        PlanCampaignStoryboardResponseSchema.parse({
+          ...validResponse,
+          idempotencyKey: "invalid-uuid"
+        })
+      ).toThrow();
+    });
+
+    it("rejects invalid status", () => {
+      expect(() =>
+        PlanCampaignStoryboardResponseSchema.parse({
+          ...validResponse,
+          status: "non_existent_status"
+        })
+      ).toThrow();
+    });
+
+    it("rejects non-positive totalScenes or negative sceneCount", () => {
+      expect(() =>
+        PlanCampaignStoryboardResponseSchema.parse({
+          ...validResponse,
+          totalScenes: 0
+        })
+      ).toThrow();
+
+      expect(() =>
+        PlanCampaignStoryboardResponseSchema.parse({
+          ...validResponse,
+          sceneCount: -1
+        })
+      ).toThrow();
+    });
+
+    it("rejects invalid scene items in scenes array", () => {
+      expect(() =>
+        PlanCampaignStoryboardResponseSchema.parse({
+          ...validResponse,
+          scenes: [
+            {
+              sceneId: "bad-id",
+              ordinal: 1,
+              status: "generating_candidates"
+            }
+          ]
+        })
+      ).toThrow();
+
+      expect(() =>
+        PlanCampaignStoryboardResponseSchema.parse({
+          ...validResponse,
+          scenes: [
+            {
+              sceneId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73811",
+              ordinal: 0,
+              status: "generating_candidates"
+            }
+          ]
         })
       ).toThrow();
     });

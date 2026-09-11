@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ClientNotFoundError,
+  InvalidSceneOrdinalSequenceError,
   type CampaignRepository,
   type ClientRepository,
   type PlanningModelClientPort,
@@ -11,6 +12,7 @@ import {
 } from "@cco/application";
 import type { CampaignId, CampaignRecord, ClientRecord, Scene, SceneId } from "@cco/domain";
 import { createControlApiApp } from "../app.js";
+import { formatPlanCampaignStoryboardResponse } from "./campaign-routes.js";
 
 const validClientId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73801";
 const validCampaignId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73800";
@@ -1008,6 +1010,134 @@ describe("Campaign and Scene Creation HTTP Routes", () => {
       expect(uow.savedScenes[0]?.snapshot().configuration.durationMs).toBe(2500);
       expect(uow.savedScenes[1]?.snapshot().configuration.durationMs).toBe(5000);
       expect(uow.savedScenes[2]?.snapshot().configuration.durationMs).toBe(2500);
+    });
+  });
+
+  describe("POST /api/campaigns/plan", () => {
+    it("returns 500 CONFIGURATION_ERROR when planning provider is not configured", async () => {
+      const uow = new FakeCampaignUnitOfWork();
+      const app = createControlApiApp({ uow });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/campaigns/plan",
+        payload: {
+          idempotencyKey: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+          clientId: validClientId,
+          title: "Unconfigured Planning Campaign",
+          targetTotalDurationMs: 15000,
+          brief: { description: "Valid brief" }
+        }
+      });
+
+      expect(response.statusCode).toBe(500);
+      expect(response.json().code).toBe("CONFIGURATION_ERROR");
+    });
+
+    it("returns 400 VALIDATION_FAILURE on invalid payload", async () => {
+      const uow = new FakeCampaignUnitOfWork();
+      const mockPrimary: PlanningModelClientPort = {
+        providerName: "Anthropic",
+        complete: async () => ({ kind: "retryable_failure", message: "unused" })
+      };
+      const mockFallback: PlanningModelClientPort = {
+        providerName: "OpenAI",
+        complete: async () => ({ kind: "retryable_failure", message: "unused" })
+      };
+      const app = createControlApiApp({
+        uow,
+        planningModelClients: { primary: mockPrimary, fallback: mockFallback },
+        referenceAssetRepository: { listBySceneId: async () => [], findByIds: async () => [] }
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/campaigns/plan",
+        payload: {
+          idempotencyKey: "not-a-uuid"
+        }
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json().code).toBe("VALIDATION_FAILURE");
+    });
+  });
+
+  describe("formatPlanCampaignStoryboardResponse (Finding 2 Provenance Layering)", () => {
+    const mockCampaign = {
+      id: validCampaignId as CampaignId,
+      clientId: validClientId,
+      title: "Provenance Test Campaign",
+      targetPlatform: "instagram_reels",
+      status: "drafting" as const,
+      totalScenes: 1,
+      approvedScenes: 0,
+      createdAt: "2026-09-03T12:00:00.000Z",
+      updatedAt: "2026-09-03T12:00:00.000Z",
+      idempotencyKey: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+      targetTotalDurationMs: 5000
+    };
+
+    const mockSceneSnapshot = {
+      id: "018e69e0-8a6a-72cb-b1b7-ec79a1f73811" as SceneId,
+      campaignId: validCampaignId as CampaignId,
+      status: "generating_candidates" as const,
+      specRevision: 1,
+      sequenceIndex: 1,
+      configuration: {
+        prompt: "Scene 1",
+        referenceIds: [],
+        engineProfileId: "LTX_25_720P_5S_V1",
+        durationMs: 5000,
+        loraConfigurationId: null
+      }
+    };
+
+    it("wires response isIdempotentReplay strictly to result.isStoryboardIdempotentReplay (not shell-level isIdempotentReplay)", () => {
+      // Scenario A: Retry of an incomplete attempt (shell existed, but storyboard was just materialized on this call)
+      const incompleteRetryResult = {
+        campaign: mockCampaign,
+        isIdempotentReplay: true, // Shell existed
+        scenes: [mockSceneSnapshot],
+        isStoryboardIdempotentReplay: false // Storyboard was newly materialized
+      };
+
+      const resA = formatPlanCampaignStoryboardResponse(
+        incompleteRetryResult,
+        "018e69e0-8a6a-72cb-b1b7-ec79a1f73801"
+      );
+      expect(resA.isIdempotentReplay).toBe(false);
+
+      // Scenario B: Retry of fully completed attempt (no new writes)
+      const fullReplayResult = {
+        campaign: mockCampaign,
+        isIdempotentReplay: true,
+        scenes: [mockSceneSnapshot],
+        isStoryboardIdempotentReplay: true
+      };
+
+      const resB = formatPlanCampaignStoryboardResponse(
+        fullReplayResult,
+        "018e69e0-8a6a-72cb-b1b7-ec79a1f73801"
+      );
+      expect(resB.isIdempotentReplay).toBe(true);
+    });
+
+    it("throws InvalidSceneOrdinalSequenceError when a persisted scene has no valid sequenceIndex", () => {
+      const corruptScene = {
+        ...mockSceneSnapshot,
+        sequenceIndex: undefined as unknown as number
+      };
+      const corruptResult = {
+        campaign: mockCampaign,
+        isIdempotentReplay: false,
+        scenes: [corruptScene],
+        isStoryboardIdempotentReplay: false
+      };
+
+      expect(() =>
+        formatPlanCampaignStoryboardResponse(corruptResult, "018e69e0-8a6a-72cb-b1b7-ec79a1f73801")
+      ).toThrow(InvalidSceneOrdinalSequenceError);
     });
   });
 });
