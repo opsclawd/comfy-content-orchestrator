@@ -17,12 +17,12 @@
       "componentId": "LTX_25_720P_5S_I2V_V1",
       "componentType": "model",
       "versionOrRevision": "1",
-      "status": "review_required",
+      "status": "approved",
       "licenseId": "LTXV Open Weights License 0.X (2025-04-15)",
       "licenseSource": "https://huggingface.co/Lightricks/LTX-Video/blob/main/LTX-Video-Open-Weights-License-0.X.txt (HF commit 2a8f58b)",
-      "reviewedAt": "2026-09-10T00:00:00.000Z",
+      "reviewedAt": "2026-09-11T00:59:55.483Z",
       "policyRevision": "2026-08-29.1",
-      "notes": "Pending Trinidad hardware certification for image-to-video (I2V) conditioning workflow (issue #227). Status set to review_required to enforce fail-closed license routing until operator-validated gold-master certification is completed on Trinidad hardware."
+      "notes": "Approved following successful hardware certification on Trinidad RTX 4090 host (run ltx-i2v-cert-run-001, issue #227). Operating entity annual revenue is below the $10,000,000 Commercial Entity threshold in §2; the paid Commercial Use Agreement carve-out does not apply. Deployment satisfies Attachment A use-based restrictions (a)–(p), and downstream client handoff is governed by contract incorporating the §3.1 pass-through requirement. Validated under LTXV Open Weights License 0.X."
     },
     {
       "componentId": "FLUX_SCHNELL_DRAFT_V1",

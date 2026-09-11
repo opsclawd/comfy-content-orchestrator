@@ -128,12 +128,15 @@
   },
   "22": {
     "inputs": {
-      "image_noise_scale": 0.15,
       "positive": ["3", 0],
       "negative": ["4", 0],
       "image": ["21", 0],
       "vae": ["8", 0],
-      "latent": ["5", 0]
+      "width": 1280,
+      "height": 720,
+      "length": 97,
+      "batch_size": 1,
+      "strength": 1
     },
     "class_type": "LTXVImgToVideo",
     "_meta": {
