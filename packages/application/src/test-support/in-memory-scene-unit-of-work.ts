@@ -37,6 +37,7 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _seededCampaigns: Map<string, CampaignRecord>;
   private readonly _seededClients: Map<string, ClientRecord>;
   private readonly _campaignHashes = new Map<string, string>();
+  private readonly _storyboardCompletionHashes = new Map<string, string>();
   private readonly _savedScenes: Scene[] = [];
   private readonly _reviewEvents: ReviewEvent[] = [];
   private readonly _savedCampaigns: CampaignRecord[] = [];
@@ -204,9 +205,20 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     return this;
   }
 
-  seedCampaignWithHash(campaign: CampaignRecord, requestHashSha256: string): this {
-    this._seededCampaigns.set(campaign.id, campaign);
+  seedCampaignWithHash(
+    campaign: CampaignRecord,
+    requestHashSha256: string,
+    storyboardCompletionHashSha256?: string
+  ): this {
+    const enriched: CampaignRecord = {
+      ...campaign,
+      ...(storyboardCompletionHashSha256 !== undefined ? { storyboardCompletionHashSha256 } : {})
+    };
+    this._seededCampaigns.set(campaign.id, enriched);
     this._campaignHashes.set(campaign.id, requestHashSha256);
+    if (storyboardCompletionHashSha256 !== undefined) {
+      this._storyboardCompletionHashes.set(campaign.id, storyboardCompletionHashSha256);
+    }
     return this;
   }
 
@@ -221,6 +233,7 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     const stagedCandidates: StoryboardCandidate[] = [];
     const stagedCampaigns: CampaignRecord[] = [];
     const stagedCampaignHashes = new Map<string, string>();
+    const stagedCompletionHashes = new Map<string, string>();
     const stagedClients: ClientRecord[] = [];
     const stagedJobs: RenderJob[] = [];
 
@@ -340,14 +353,24 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
 
     const scopedCampaigns: CampaignRepository<CampaignRecord> & CampaignShellRepository = {
       findById: async (campaignId: string): Promise<CampaignRecord | undefined> => {
-        return (
-          stagedCampaigns.find((c) => c.id === campaignId) ?? this._seededCampaigns.get(campaignId)
-        );
+        const found =
+          stagedCampaigns.find((c) => c.id === campaignId) ?? this._seededCampaigns.get(campaignId);
+        if (!found) return undefined;
+        const completionHash =
+          stagedCompletionHashes.get(found.id) ?? this._storyboardCompletionHashes.get(found.id);
+        return completionHash !== undefined
+          ? { ...found, storyboardCompletionHashSha256: completionHash }
+          : found;
       },
       findByIdForUpdate: async (campaignId: string): Promise<CampaignRecord | undefined> => {
-        return (
-          stagedCampaigns.find((c) => c.id === campaignId) ?? this._seededCampaigns.get(campaignId)
-        );
+        const found =
+          stagedCampaigns.find((c) => c.id === campaignId) ?? this._seededCampaigns.get(campaignId);
+        if (!found) return undefined;
+        const completionHash =
+          stagedCompletionHashes.get(found.id) ?? this._storyboardCompletionHashes.get(found.id);
+        return completionHash !== undefined
+          ? { ...found, storyboardCompletionHashSha256: completionHash }
+          : found;
       },
       findByIdempotencyKey: async (
         idempotencyKey: string
@@ -368,12 +391,38 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
         if (hash === undefined) {
           return undefined;
         }
+        const completionHash =
+          stagedCompletionHashes.get(found.id) ?? this._storyboardCompletionHashes.get(found.id);
         return {
           ...found,
           idempotencyKey: found.idempotencyKey,
           targetTotalDurationMs: found.targetTotalDurationMs,
-          requestHashSha256: hash
+          requestHashSha256: hash,
+          ...(completionHash !== undefined
+            ? { storyboardCompletionHashSha256: completionHash }
+            : {})
         };
+      },
+      recordStoryboardCompletion: async (
+        campaignId: string,
+        completionHashSha256: string
+      ): Promise<void> => {
+        stagedCompletionHashes.set(campaignId, completionHashSha256);
+        const existingIdx = stagedCampaigns.findIndex((c) => c.id === campaignId);
+        if (existingIdx >= 0) {
+          stagedCampaigns[existingIdx] = {
+            ...stagedCampaigns[existingIdx]!,
+            storyboardCompletionHashSha256: completionHashSha256
+          };
+        } else {
+          const seeded = this._seededCampaigns.get(campaignId);
+          if (seeded) {
+            stagedCampaigns.push({
+              ...seeded,
+              storyboardCompletionHashSha256: completionHashSha256
+            });
+          }
+        }
       },
       save: async (campaign: CampaignRecord): Promise<void> => {
         const existingIdx = stagedCampaigns.findIndex((c) => c.id === campaign.id);
@@ -522,6 +571,9 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     }
     for (const [id, hash] of stagedCampaignHashes.entries()) {
       this._campaignHashes.set(id, hash);
+    }
+    for (const [id, hash] of stagedCompletionHashes.entries()) {
+      this._storyboardCompletionHashes.set(id, hash);
     }
     for (const client of stagedClients) {
       this._seededClients.set(client.id, client);

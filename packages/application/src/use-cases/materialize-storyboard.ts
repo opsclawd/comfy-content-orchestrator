@@ -13,6 +13,7 @@ import { TransactionalJobEnqueuerUnavailableError } from "./job-queue-errors.js"
 import type { ProgressSceneProductionUseCases } from "./progress-scene-production.js";
 import { SceneConfigurationCountMismatchError } from "./scene-configuration-count-mismatch-error.js";
 import { StoryboardPartiallyMaterializedError } from "./storyboard-partially-materialized-error.js";
+import { StoryboardMaterializationConflictError } from "./storyboard-materialization-conflict-error.js";
 
 export interface OrderedSceneConfiguration {
   readonly ordinal: number;
@@ -22,6 +23,7 @@ export interface OrderedSceneConfiguration {
 export interface MaterializeStoryboardInput {
   readonly campaignId: CampaignId;
   readonly scenes: readonly OrderedSceneConfiguration[];
+  readonly completionHashSha256?: string | undefined;
 }
 
 export interface MaterializeStoryboardResult {
@@ -90,7 +92,27 @@ export class MaterializeStoryboardUseCase {
       includeArchived: true
     });
 
+    const targetCompletionHash =
+      input.completionHashSha256 ??
+      ("requestHashSha256" in campaign
+        ? (campaign as { requestHashSha256?: string }).requestHashSha256
+        : undefined);
+
     if (existing.length === campaign.totalScenes) {
+      if (input.completionHashSha256 !== undefined) {
+        if (campaign.storyboardCompletionHashSha256 !== input.completionHashSha256) {
+          throw new StoryboardMaterializationConflictError(
+            input.campaignId,
+            `Campaign has ${existing.length} scenes but lacks matching storyboard completion proof.`
+          );
+        }
+      } else if (campaign.storyboardCompletionHashSha256 !== undefined) {
+        throw new StoryboardMaterializationConflictError(
+          input.campaignId,
+          `Campaign has ${existing.length} scenes materialized with completion identity, but replay provided none.`
+        );
+      }
+
       const sortedExisting = [...existing].sort(
         (a, b) => (a.sequenceIndex ?? 0) - (b.sequenceIndex ?? 0)
       );
@@ -126,6 +148,14 @@ export class MaterializeStoryboardUseCase {
         { sceneId: scene.id }
       );
       materializedScenes.push(admission.scene);
+    }
+
+    if (
+      targetCompletionHash !== undefined &&
+      context.campaigns !== undefined &&
+      typeof context.campaigns.recordStoryboardCompletion === "function"
+    ) {
+      await context.campaigns.recordStoryboardCompletion(campaign.id, targetCompletionHash);
     }
 
     return {

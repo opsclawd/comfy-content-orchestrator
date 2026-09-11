@@ -61,7 +61,9 @@ export const CampaignShellParamsSchema = z.object(CampaignShellRequestShape);
 export const CAMPAIGN_SCENE_DURATION_MISMATCH_MESSAGE =
   "targetTotalDurationMs and sceneCountOverride imply an unsupported per-scene duration";
 
-export function withSceneCountDurationRefinement<T extends z.ZodTypeAny>(schema: T) {
+export function withSceneCountDurationRefinement<T extends z.ZodTypeAny>(
+  schema: T
+): z.ZodEffects<T, z.output<T>, z.input<T>> {
   return schema.refine(
     (data: unknown) => {
       const record = data as { targetTotalDurationMs?: number; sceneCountOverride?: number };
@@ -203,14 +205,12 @@ export type CampaignBeatSheetResponse = z.infer<typeof CampaignBeatSheetResponse
  * Requested/declared layer — complete prompt-to-storyboard planning request.
  *
  * Idempotency semantics:
- * Idempotency identity is bound to the underlying campaign shell request parameters
- * (`idempotencyKey`, `clientId`, `title`, `targetPlatform`, `targetTotalDurationMs`, `sceneCountOverride`)
- * via `computeCampaignRequestHash`. The planning inputs (`brief` and `candidateReferenceAssetIds`)
- * are utilized during campaign beat-sheet and scene configuration planning but do not participate
- * in the durable shell request hash. Replaying a request with the same `idempotencyKey` and shell
- * parameters will return the previously materialized storyboard, even if alternative `brief` or
- * `candidateReferenceAssetIds` values are provided. To plan a storyboard with a modified brief,
- * callers must supply a distinct `idempotencyKey`.
+ * Idempotency identity is bound to the full orchestration request parameters:
+ * (`idempotencyKey`, `clientId`, `title`, `targetPlatform`, `targetTotalDurationMs`, `sceneCountOverride`,
+ * `brief`, and canonicalized `candidateReferenceAssetIds`) via `computeCampaignRequestHash`.
+ * Replaying a request with the same `idempotencyKey` and identical orchestration parameters will return
+ * the previously materialized storyboard. Materially altering the `brief` or `candidateReferenceAssetIds`
+ * under an existing `idempotencyKey` triggers a 409 IDEMPOTENCY_CONFLICT.
  */
 export const PlanCampaignStoryboardRequestSchema = withSceneCountDurationRefinement(
   CampaignShellParamsSchema.extend({

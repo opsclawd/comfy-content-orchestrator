@@ -20,6 +20,10 @@ import {
 } from "./progress-scene-production.js";
 import { MIN_SCENE_COUNT, MAX_SCENE_COUNT, resolveSceneCount } from "./scene-count-policy.js";
 import { PlanningProviderExhaustedError } from "./plan-scene-configuration-errors.js";
+import { CampaignIdempotencyConflictError } from "./campaign-idempotency-conflict-error.js";
+import { StoryboardMaterializationConflictError } from "./storyboard-materialization-conflict-error.js";
+import { StoryboardPartiallyMaterializedError } from "./storyboard-partially-materialized-error.js";
+import { Scene, type SceneId } from "@cco/domain";
 
 class StubPlanningModelClient implements PlanningModelClientPort {
   beatSheetInvocations = 0;
@@ -485,6 +489,162 @@ describe("PlanCampaignStoryboardUseCase", () => {
       expect(recoveredResult.isIdempotentReplay).toBe(true);
       expect(recoveredResult.isStoryboardIdempotentReplay).toBe(false);
       expect(recoveredResult.scenes).toHaveLength(3);
+    });
+
+    it("rejects replay with CampaignIdempotencyConflictError when creative brief is altered", async () => {
+      const { useCase } = createTestHarness();
+      const idempotencyKey = "018e69e0-8a6a-72cb-b1b7-ec79a1f73861";
+
+      const input = {
+        idempotencyKey,
+        clientId,
+        title: "Brief Conflict Campaign",
+        targetTotalDurationMs: 15000,
+        brief: defaultBrief
+      };
+
+      await useCase.execute(input);
+
+      // Replay with altered brief
+      await expect(
+        useCase.execute({
+          ...input,
+          brief: {
+            ...defaultBrief,
+            description: "Radically different brief description"
+          }
+        })
+      ).rejects.toBeInstanceOf(CampaignIdempotencyConflictError);
+    });
+
+    it("rejects replay with CampaignIdempotencyConflictError when candidateReferenceAssetIds are altered", async () => {
+      const { useCase } = createTestHarness();
+      const idempotencyKey = "018e69e0-8a6a-72cb-b1b7-ec79a1f73862";
+
+      const input = {
+        idempotencyKey,
+        clientId,
+        title: "Asset Conflict Campaign",
+        targetTotalDurationMs: 15000,
+        brief: defaultBrief,
+        candidateReferenceAssetIds: ["ref-1", "ref-2"]
+      };
+
+      await useCase.execute(input);
+
+      // Replay with altered candidateReferenceAssetIds
+      await expect(
+        useCase.execute({
+          ...input,
+          candidateReferenceAssetIds: ["ref-1", "ref-3"]
+        })
+      ).rejects.toBeInstanceOf(CampaignIdempotencyConflictError);
+    });
+
+    it("replays successfully when candidateReferenceAssetIds are canonically equivalent", async () => {
+      const { useCase, stubClient } = createTestHarness();
+      const idempotencyKey = "018e69e0-8a6a-72cb-b1b7-ec79a1f73863";
+
+      const firstResult = await useCase.execute({
+        idempotencyKey,
+        clientId,
+        title: "Canonical Asset Campaign",
+        targetTotalDurationMs: 15000,
+        brief: defaultBrief,
+        candidateReferenceAssetIds: ["ref-2", "ref-1"]
+      });
+
+      stubClient.resetCounts();
+
+      // Same assets reordered and deduplicated
+      const replayResult = await useCase.execute({
+        idempotencyKey,
+        clientId,
+        title: "Canonical Asset Campaign",
+        targetTotalDurationMs: 15000,
+        brief: defaultBrief,
+        candidateReferenceAssetIds: ["ref-1", "ref-2", "ref-1"]
+      });
+
+      expect(replayResult.isStoryboardIdempotentReplay).toBe(true);
+      expect(replayResult.campaign.id).toBe(firstResult.campaign.id);
+      expect(stubClient.beatSheetInvocations).toBe(0);
+    });
+
+    it("witness scenario: rejects with StoryboardMaterializationConflictError when N scenes exist externally without completion proof", async () => {
+      const { useCase, uow, createCampaignShell } = createTestHarness();
+      const idempotencyKey = "018e69e0-8a6a-72cb-b1b7-ec79a1f73864";
+
+      const input = {
+        idempotencyKey,
+        clientId,
+        title: "External Scenes Campaign",
+        targetTotalDurationMs: 15000,
+        brief: defaultBrief
+      };
+
+      // 1. Initial shell created via createCampaignShell directly
+      const shell = (await createCampaignShell.execute(input)).campaign;
+
+      // 2. Externally inject 3 scenes into the drafting shell without completion hash
+      await uow.execute(async (ctx) => {
+        for (let i = 1; i <= 3; i++) {
+          await ctx.scenes.save(
+            Scene.create({
+              id: `injected-scene-${i}` as SceneId,
+              campaignId: shell.id,
+              sequenceIndex: i,
+              configuration: {
+                prompt: `Injected scene ${i}`,
+                referenceIds: [],
+                engineProfileId: "LTX_25_720P_5S_V1",
+                durationMs: 5000
+              }
+            })
+          );
+        }
+      });
+
+      // 3. Replaying planCampaignStoryboard must NOT accept external scenes as proof of replay
+      await expect(useCase.execute(input)).rejects.toBeInstanceOf(
+        StoryboardMaterializationConflictError
+      );
+    });
+
+    it("rejects with StoryboardPartiallyMaterializedError when partial scenes exist on drafting shell", async () => {
+      const { useCase, uow, createCampaignShell } = createTestHarness();
+      const idempotencyKey = "018e69e0-8a6a-72cb-b1b7-ec79a1f73865";
+
+      const input = {
+        idempotencyKey,
+        clientId,
+        title: "Partial Scenes Campaign",
+        targetTotalDurationMs: 15000,
+        brief: defaultBrief
+      };
+
+      const shell = (await createCampaignShell.execute(input)).campaign;
+
+      // Inject only 1 scene (when totalScenes = 3)
+      await uow.execute(async (ctx) => {
+        await ctx.scenes.save(
+          Scene.create({
+            id: "partial-scene-1" as SceneId,
+            campaignId: shell.id,
+            sequenceIndex: 1,
+            configuration: {
+              prompt: "Partial scene 1",
+              referenceIds: [],
+              engineProfileId: "LTX_25_720P_5S_V1",
+              durationMs: 5000
+            }
+          })
+        );
+      });
+
+      await expect(useCase.execute(input)).rejects.toBeInstanceOf(
+        StoryboardPartiallyMaterializedError
+      );
     });
   });
 

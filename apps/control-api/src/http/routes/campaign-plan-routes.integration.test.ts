@@ -766,4 +766,321 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
     );
     expect(scenes.rows[0]?.count).toBe(1);
   });
+
+  it("7. Fingerprint hardening: changing brief under same idempotencyKey returns 409 IDEMPOTENCY_CONFLICT", async () => {
+    const clientRecord = await insertClientRecord(client, {
+      companyName: "Acme Studios",
+      externalProcessingPolicy: cloudEnabledPolicy
+    });
+
+    const stubPrimary = new IntegrationStubPlanningModelClient("Anthropic");
+    const stubFallback: PlanningModelClientPort = {
+      providerName: "OpenAI",
+      complete: (req) => stubPrimary.complete(req)
+    };
+
+    const uow = new PostgresUnitOfWork(pool);
+    const app = createControlApiApp(
+      {
+        uow,
+        planningModelClients: { primary: stubPrimary, fallback: stubFallback },
+        referenceAssetRepository: mockAssetRepo
+      },
+      defaultTestOptions
+    );
+
+    const idempotencyKey = randomUUID();
+    const basePayload = {
+      idempotencyKey,
+      clientId: clientRecord.client_id,
+      title: "Hardened Fingerprint Campaign",
+      targetPlatform: "instagram_reels",
+      targetTotalDurationMs: 15000,
+      brief: {
+        title: "Original Brief",
+        description: "Initial creative direction for product launch"
+      }
+    };
+
+    // 1. Initial POST succeeds
+    const firstRes = await app.inject({
+      method: "POST",
+      url: "/api/campaigns/plan",
+      payload: basePayload
+    });
+    expect(firstRes.statusCode).toBe(201);
+
+    // 2. Replay with altered brief under SAME idempotencyKey
+    const conflictRes = await app.inject({
+      method: "POST",
+      url: "/api/campaigns/plan",
+      payload: {
+        ...basePayload,
+        brief: {
+          title: "Modified Brief",
+          description: "Substantially altered creative direction"
+        }
+      }
+    });
+
+    expect(conflictRes.statusCode).toBe(409);
+    const conflictBody = conflictRes.json();
+    expect(conflictBody.code).toBe("IDEMPOTENCY_CONFLICT");
+    expect(conflictBody.details?.idempotencyKey).toBe(idempotencyKey);
+  });
+
+  it("8. Fingerprint hardening: changing candidateReferenceAssetIds under same idempotencyKey returns 409 IDEMPOTENCY_CONFLICT", async () => {
+    const clientRecord = await insertClientRecord(client, {
+      companyName: "Acme Studios",
+      externalProcessingPolicy: cloudEnabledPolicy
+    });
+
+    const stubPrimary = new IntegrationStubPlanningModelClient("Anthropic");
+    const stubFallback: PlanningModelClientPort = {
+      providerName: "OpenAI",
+      complete: (req) => stubPrimary.complete(req)
+    };
+
+    const uow = new PostgresUnitOfWork(pool);
+    const app = createControlApiApp(
+      {
+        uow,
+        planningModelClients: { primary: stubPrimary, fallback: stubFallback },
+        referenceAssetRepository: mockAssetRepo
+      },
+      defaultTestOptions
+    );
+
+    const idempotencyKey = randomUUID();
+    const basePayload = {
+      idempotencyKey,
+      clientId: clientRecord.client_id,
+      title: "Asset Fingerprint Campaign",
+      targetPlatform: "instagram_reels",
+      targetTotalDurationMs: 15000,
+      brief: {
+        description: "Campaign with candidate reference assets"
+      },
+      candidateReferenceAssetIds: ["asset-1", "asset-2"]
+    };
+
+    // 1. Initial POST succeeds
+    const firstRes = await app.inject({
+      method: "POST",
+      url: "/api/campaigns/plan",
+      payload: basePayload
+    });
+    expect(firstRes.statusCode).toBe(201);
+
+    // 2. Replay with altered assets under SAME idempotencyKey
+    const conflictRes = await app.inject({
+      method: "POST",
+      url: "/api/campaigns/plan",
+      payload: {
+        ...basePayload,
+        candidateReferenceAssetIds: ["asset-1", "asset-3"]
+      }
+    });
+
+    expect(conflictRes.statusCode).toBe(409);
+    const conflictBody = conflictRes.json();
+    expect(conflictBody.code).toBe("IDEMPOTENCY_CONFLICT");
+  });
+
+  it("9. Fingerprint hardening: replaying with canonically equivalent candidateReferenceAssetIds returns 201 with isIdempotentReplay: true", async () => {
+    const clientRecord = await insertClientRecord(client, {
+      companyName: "Acme Studios",
+      externalProcessingPolicy: cloudEnabledPolicy
+    });
+
+    const stubPrimary = new IntegrationStubPlanningModelClient("Anthropic");
+    const stubFallback: PlanningModelClientPort = {
+      providerName: "OpenAI",
+      complete: (req) => stubPrimary.complete(req)
+    };
+
+    const uow = new PostgresUnitOfWork(pool);
+    const app = createControlApiApp(
+      {
+        uow,
+        planningModelClients: { primary: stubPrimary, fallback: stubFallback },
+        referenceAssetRepository: mockAssetRepo
+      },
+      defaultTestOptions
+    );
+
+    const idempotencyKey = randomUUID();
+    const initialPayload = {
+      idempotencyKey,
+      clientId: clientRecord.client_id,
+      title: "Canonical Asset Campaign",
+      targetPlatform: "instagram_reels",
+      targetTotalDurationMs: 15000,
+      brief: {
+        description: "Campaign with unsorted candidate reference assets"
+      },
+      candidateReferenceAssetIds: ["asset-b", "asset-a"]
+    };
+
+    // 1. Initial POST succeeds
+    const firstRes = await app.inject({
+      method: "POST",
+      url: "/api/campaigns/plan",
+      payload: initialPayload
+    });
+    expect(firstRes.statusCode).toBe(201);
+    const firstBody = firstRes.json();
+    expect(firstBody.isIdempotentReplay).toBe(false);
+
+    // 2. Replay with sorted and duplicate assets: canonically equivalent
+    const replayRes = await app.inject({
+      method: "POST",
+      url: "/api/campaigns/plan",
+      payload: {
+        ...initialPayload,
+        candidateReferenceAssetIds: ["asset-a", "asset-b", "asset-a"]
+      }
+    });
+
+    expect(replayRes.statusCode).toBe(201);
+    const replayBody = replayRes.json();
+    expect(replayBody.isIdempotentReplay).toBe(true);
+    expect(replayBody.campaignId).toBe(firstBody.campaignId);
+  });
+
+  it("10. Committed storyboard admission identity witness: drafting shell with N scenes injected externally without completion proof returns 409 STORYBOARD_MATERIALIZATION_CONFLICT", async () => {
+    const clientRecord = await insertClientRecord(client, {
+      companyName: "Acme Studios",
+      externalProcessingPolicy: cloudEnabledPolicy
+    });
+
+    const stubPrimary = new IntegrationStubPlanningModelClient("Anthropic");
+    const stubFallback: PlanningModelClientPort = {
+      providerName: "OpenAI",
+      complete: (req) => stubPrimary.complete(req)
+    };
+
+    const uow = new PostgresUnitOfWork(pool);
+    const app = createControlApiApp(
+      {
+        uow,
+        planningModelClients: { primary: stubPrimary, fallback: stubFallback },
+        referenceAssetRepository: mockAssetRepo
+      },
+      defaultTestOptions
+    );
+
+    const idempotencyKey = randomUUID();
+    const campaignId = randomUUID();
+    const targetTotalDurationMs = 15000;
+    const requestPayload = {
+      idempotencyKey,
+      clientId: clientRecord.client_id,
+      title: "Externally Materialized Campaign",
+      targetPlatform: "instagram_reels",
+      targetTotalDurationMs,
+      brief: {
+        title: "Commercial Brief",
+        description: "Drafting shell with externally injected scenes"
+      }
+    };
+
+    const requestHash = await computeCampaignRequestHash(requestPayload);
+
+    // Insert campaign shell with valid requestHashSha256, but NO storyboard_completion_hash_sha256
+    const now = new Date().toISOString();
+    await client.query(
+      `INSERT INTO campaigns (campaign_id, client_id, title, target_platform, status, total_scenes, approved_scenes, created_at, updated_at, idempotency_key, target_total_duration_ms, request_hash_sha256)
+       VALUES ($1, $2, $3, $4, 'drafting', 3, 0, $5, $5, $6, $7, $8)`,
+      [
+        campaignId,
+        clientRecord.client_id,
+        "Externally Materialized Campaign",
+        "instagram_reels",
+        now,
+        idempotencyKey,
+        targetTotalDurationMs,
+        requestHash
+      ]
+    );
+
+    // Inject all 3 scenes externally without candidate admission / completion proof
+    for (let i = 1; i <= 3; i++) {
+      await insertStoryboardSceneRecord(client, {
+        campaignId,
+        sceneOrder: i,
+        durationSeconds: 5,
+        status: "draft_pending"
+      });
+    }
+
+    // Replay /api/campaigns/plan with this idempotencyKey
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/campaigns/plan",
+      payload: requestPayload
+    });
+
+    expect(response.statusCode).toBe(409);
+    const body = response.json();
+    expect(body.code).toBe("STORYBOARD_MATERIALIZATION_CONFLICT");
+    expect(body.details?.campaignId).toBe(campaignId);
+  });
+
+  it("11. Atomic proof commitment: verifies storyboard_completion_hash_sha256 is committed in PostgreSQL and matches full orchestration request hash", async () => {
+    const clientRecord = await insertClientRecord(client, {
+      companyName: "Acme Studios",
+      externalProcessingPolicy: cloudEnabledPolicy
+    });
+
+    const stubPrimary = new IntegrationStubPlanningModelClient("Anthropic");
+    const stubFallback: PlanningModelClientPort = {
+      providerName: "OpenAI",
+      complete: (req) => stubPrimary.complete(req)
+    };
+
+    const uow = new PostgresUnitOfWork(pool);
+    const app = createControlApiApp(
+      {
+        uow,
+        planningModelClients: { primary: stubPrimary, fallback: stubFallback },
+        referenceAssetRepository: mockAssetRepo
+      },
+      defaultTestOptions
+    );
+
+    const idempotencyKey = randomUUID();
+    const payload = {
+      idempotencyKey,
+      clientId: clientRecord.client_id,
+      title: "Proof Commitment Campaign",
+      targetPlatform: "instagram_reels",
+      targetTotalDurationMs: 15000,
+      brief: {
+        title: "Proof Commercial",
+        description: "Verifies atomic proof commit in PostgreSQL"
+      },
+      candidateReferenceAssetIds: ["asset-z", "asset-y"]
+    };
+
+    const expectedHash = await computeCampaignRequestHash(payload);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/campaigns/plan",
+      payload
+    });
+
+    expect(response.statusCode).toBe(201);
+    const body = response.json();
+
+    // Query database directly to inspect storyboard_completion_hash_sha256
+    const row = await client.query<{ storyboard_completion_hash_sha256: string | null }>(
+      `SELECT storyboard_completion_hash_sha256 FROM campaigns WHERE campaign_id = $1`,
+      [body.campaignId]
+    );
+
+    expect(row.rows).toHaveLength(1);
+    expect(row.rows[0]?.storyboard_completion_hash_sha256).toBe(expectedHash);
+  });
 });

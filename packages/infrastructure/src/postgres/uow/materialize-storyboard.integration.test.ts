@@ -5,6 +5,7 @@ import {
   CANDIDATE_BATCH_SIZE,
   MaterializeStoryboardUseCase,
   ProgressSceneProductionUseCases,
+  StoryboardMaterializationConflictError,
   type OrderedSceneConfiguration,
   type ProgressSceneProductionInput,
   type UnitOfWorkContext
@@ -279,5 +280,53 @@ describe("MaterializeStoryboardUseCase Integration", () => {
     const repoScene = await uow.execute((context) => context.scenes.findById(result.scenes[0]!.id));
     expect(repoScene).toBeDefined();
     expect(repoScene!.snapshot().configuration.durationMs).toBe(5001);
+  });
+
+  it("atomically commits completion proof with scenes and jobs, and verifies proof on replay", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, {
+      clientId: clientRecord.client_id,
+      totalScenes: 3
+    });
+
+    const uow = new PostgresUnitOfWork(pool);
+    const queue = new PostgresJobQueue(pool);
+    const progressUseCases = new ProgressSceneProductionUseCases(uow, undefined, queue);
+    const useCase = new MaterializeStoryboardUseCase(uow, progressUseCases);
+
+    const configs = createSceneConfigs(3);
+    const completionHash = "e".repeat(64);
+
+    const result = await useCase.execute({
+      campaignId: campaign.campaign_id as CampaignId,
+      scenes: configs,
+      completionHashSha256: completionHash
+    });
+
+    expect(result.isIdempotentReplay).toBe(false);
+
+    // Verify row directly in PostgreSQL has storyboard_completion_hash_sha256 committed
+    const campaignRow = await client.query<{ storyboard_completion_hash_sha256: string | null }>(
+      `SELECT storyboard_completion_hash_sha256 FROM campaigns WHERE campaign_id = $1`,
+      [campaign.campaign_id]
+    );
+    expect(campaignRow.rows[0]?.storyboard_completion_hash_sha256).toBe(completionHash);
+
+    // Replay with identical completion hash succeeds
+    const replayResult = await useCase.execute({
+      campaignId: campaign.campaign_id as CampaignId,
+      scenes: configs,
+      completionHashSha256: completionHash
+    });
+    expect(replayResult.isIdempotentReplay).toBe(true);
+
+    // Replay with different completion hash fails with StoryboardMaterializationConflictError
+    await expect(
+      useCase.execute({
+        campaignId: campaign.campaign_id as CampaignId,
+        scenes: configs,
+        completionHashSha256: "f".repeat(64)
+      })
+    ).rejects.toThrow(StoryboardMaterializationConflictError);
   });
 });

@@ -16,6 +16,7 @@ import {
   SceneCreationModeMismatchError,
   SceneNotFoundError,
   StaleRevisionConflictError,
+  StoryboardMaterializationConflictError,
   StoryboardPartiallyMaterializedError,
   TransactionalJobEnqueuerUnavailableError,
   UnsupportedProductionDurationError
@@ -245,6 +246,24 @@ describe("formatReviewError", () => {
           campaignId: "camp-1",
           expectedCount: 3,
           actualCount: 1
+        }
+      }
+    });
+  });
+
+  it("maps StoryboardMaterializationConflictError to 409 STORYBOARD_MATERIALIZATION_CONFLICT with details", () => {
+    const err = new StoryboardMaterializationConflictError(
+      "camp-1",
+      "Lacks matching completion proof"
+    );
+    expect(formatReviewError(err)).toEqual({
+      statusCode: 409,
+      body: {
+        code: "STORYBOARD_MATERIALIZATION_CONFLICT",
+        message: err.message,
+        details: {
+          campaignId: "camp-1",
+          reason: "Lacks matching completion proof"
         }
       }
     });

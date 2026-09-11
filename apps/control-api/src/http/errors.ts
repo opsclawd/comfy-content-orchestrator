@@ -22,6 +22,7 @@ import {
   SceneCreationModeMismatchError,
   SceneNotFoundError,
   StaleRevisionConflictError,
+  StoryboardMaterializationConflictError,
   StoryboardPartiallyMaterializedError,
   TransactionalJobEnqueuerUnavailableError
 } from "@cco/application";
@@ -211,6 +212,20 @@ export function formatReviewError(error: unknown): {
           campaignId: error.campaignId,
           expectedCount: error.expectedCount,
           actualCount: error.actualCount
+        }
+      }
+    };
+  }
+
+  if (error instanceof StoryboardMaterializationConflictError) {
+    return {
+      statusCode: 409,
+      body: {
+        code: "STORYBOARD_MATERIALIZATION_CONFLICT",
+        message: error.message,
+        details: {
+          campaignId: error.campaignId,
+          reason: error.reason
         }
       }
     };

@@ -25,10 +25,12 @@ export interface CampaignRecord {
   readonly updatedAt: string;
   readonly idempotencyKey?: string | undefined;
   readonly targetTotalDurationMs?: number | undefined;
+  readonly storyboardCompletionHashSha256?: string | undefined;
   readonly archivedAt?: string | undefined;
 }
 
 export interface CampaignShellRecord extends CampaignRecord {
   readonly idempotencyKey: string;
   readonly targetTotalDurationMs: number;
+  readonly storyboardCompletionHashSha256?: string | undefined;
 }
