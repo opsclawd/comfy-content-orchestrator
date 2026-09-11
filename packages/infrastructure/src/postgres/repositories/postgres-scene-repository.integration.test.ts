@@ -556,7 +556,7 @@ describe("PostgreSQL SceneRepository Adapter Integration", () => {
     ).rejects.toThrow(/Cannot execute findById with forUpdate: true using a pg Pool instance/);
   });
 
-  it("serializes concurrent scene insertions for the same campaign with unique scene_order", async () => {
+  it("persists explicit sequenceIndex as scene_order independent of insertion order", async () => {
     const clientRecord = await insertClientRecord(client);
     const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
 
@@ -568,7 +568,8 @@ describe("PostgreSQL SceneRepository Adapter Integration", () => {
         referenceIds: [],
         engineProfileId: "ltx_25",
         durationMs: 5000
-      }
+      },
+      sequenceIndex: 1
     });
 
     const scene2 = Scene.create({
@@ -579,7 +580,8 @@ describe("PostgreSQL SceneRepository Adapter Integration", () => {
         referenceIds: [],
         engineProfileId: "ltx_25",
         durationMs: 5000
-      }
+      },
+      sequenceIndex: 2
     });
 
     const scene3 = Scene.create({
@@ -590,13 +592,16 @@ describe("PostgreSQL SceneRepository Adapter Integration", () => {
         referenceIds: [],
         engineProfileId: "ltx_25",
         durationMs: 5000
-      }
+      },
+      sequenceIndex: 3
     });
 
     const poolRepo = new PostgresSceneRepository(pool);
 
-    // Save all 3 scenes concurrently via connection pool
-    await Promise.all([poolRepo.save(scene1), poolRepo.save(scene2), poolRepo.save(scene3)]);
+    // Save scenes out of completion order: 3 first, then 1, then 2
+    await poolRepo.save(scene3);
+    await poolRepo.save(scene1);
+    await poolRepo.save(scene2);
 
     const result = await client.query(
       `SELECT scene_id, scene_order FROM storyboard_scenes WHERE campaign_id = $1 ORDER BY scene_order ASC`,
@@ -604,8 +609,46 @@ describe("PostgreSQL SceneRepository Adapter Integration", () => {
     );
 
     expect(result.rows).toHaveLength(3);
-    const orders = result.rows.map((r: { scene_order: number }) => r.scene_order);
-    expect(orders).toEqual([1, 2, 3]);
+    expect(result.rows[0]).toEqual({ scene_id: scene1.id, scene_order: 1 });
+    expect(result.rows[1]).toEqual({ scene_id: scene2.id, scene_order: 2 });
+    expect(result.rows[2]).toEqual({ scene_id: scene3.id, scene_order: 3 });
+  });
+
+  it("rejects duplicate sequenceIndex for the same campaign with unique constraint violation (23505)", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+
+    const sceneA = Scene.create({
+      id: "01950c46-9e90-7d3d-82d2-8f1d3c000044" as SceneId,
+      campaignId: campaign.campaign_id as CampaignId,
+      configuration: {
+        prompt: "Scene A",
+        referenceIds: [],
+        engineProfileId: "ltx_25",
+        durationMs: 5000
+      },
+      sequenceIndex: 1
+    });
+
+    const sceneB = Scene.create({
+      id: "01950c46-9e90-7d3d-82d2-8f1d3c000055" as SceneId,
+      campaignId: campaign.campaign_id as CampaignId,
+      configuration: {
+        prompt: "Scene B with colliding sequenceIndex",
+        referenceIds: [],
+        engineProfileId: "ltx_25",
+        durationMs: 5000
+      },
+      sequenceIndex: 1
+    });
+
+    const poolRepo = new PostgresSceneRepository(pool);
+    await poolRepo.save(sceneA);
+
+    await expect(poolRepo.save(sceneB)).rejects.toMatchObject({
+      code: "23505",
+      constraint: "unique_campaign_scene_order"
+    });
   });
 
   it("executes findById with forUpdate: true followed by save without acquiring campaign lock", async () => {
@@ -784,5 +827,68 @@ describe("PostgreSQL SceneRepository Adapter Integration", () => {
       conn2.release();
       await client.query("BEGIN");
     }
+  });
+
+  it("persists and reloads non-centisecond duration (5001ms) with exact millisecond fidelity", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+
+    const scene = Scene.create({
+      id: "01950c46-9e90-7d3d-82d2-8f1d3c000099" as SceneId,
+      campaignId: campaign.campaign_id as CampaignId,
+      configuration: {
+        prompt: "Exact millisecond scene",
+        referenceIds: [],
+        engineProfileId: "ltx_25",
+        durationMs: 5001
+      },
+      sequenceIndex: 1
+    });
+
+    const repo = new PostgresSceneRepository(pool);
+    await repo.save(scene);
+
+    const raw = await client.query<{ duration_seconds: string }>(
+      `SELECT duration_seconds FROM storyboard_scenes WHERE scene_id = $1`,
+      [scene.id]
+    );
+    expect(raw.rows[0]?.duration_seconds).toBe("5.001");
+
+    const reloaded = await repo.findById(scene.id);
+    expect(reloaded).toBeDefined();
+    expect(reloaded!.snapshot().configuration.durationMs).toBe(5001);
+  });
+
+  it("findByCampaignId respects includeArchived option", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+
+    const activeScene = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      status: "approved"
+    });
+
+    const archivedScene = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 2,
+      status: "approved"
+    });
+    await client.query(
+      "UPDATE storyboard_scenes SET archived_at = CURRENT_TIMESTAMP WHERE scene_id = $1",
+      [archivedScene.scene_id]
+    );
+
+    const repo = new PostgresSceneRepository(pool);
+
+    const activeOnly = await repo.findByCampaignId(campaign.campaign_id as CampaignId);
+    expect(activeOnly).toHaveLength(1);
+    expect(activeOnly[0]?.id).toBe(activeScene.scene_id);
+
+    const allScenes = await repo.findByCampaignId(campaign.campaign_id as CampaignId, {
+      includeArchived: true
+    });
+    expect(allScenes).toHaveLength(2);
+    expect(allScenes.map((s) => s.id)).toEqual([activeScene.scene_id, archivedScene.scene_id]);
   });
 });

@@ -5,6 +5,7 @@ import type { Pool, PoolClient } from "pg";
 
 export interface PostgresSceneRepositoryOptions {
   readonly forUpdate?: boolean;
+  readonly includeArchived?: boolean;
 }
 
 interface StoryboardSceneRow {
@@ -167,12 +168,14 @@ export class PostgresSceneRepository implements SceneRepository {
     options?: PostgresSceneRepositoryOptions
   ): Promise<Scene[]> {
     const forUpdate = options?.forUpdate ?? this.options.forUpdate ?? false;
+    const includeArchived = options?.includeArchived ?? this.options.includeArchived ?? false;
     if (forUpdate && isPool(this.client)) {
       throw new Error(
         "Cannot execute findByCampaignId with forUpdate: true using a pg Pool instance. A transaction-bound PoolClient is required for row locking."
       );
     }
     const lockClause = forUpdate ? " FOR UPDATE" : "";
+    const archivedClause = includeArchived ? "" : " AND s.archived_at IS NULL";
 
     const sceneResult = await this.client.query<StoryboardSceneRow>(
       `
@@ -211,7 +214,7 @@ export class PostgresSceneRepository implements SceneRepository {
           '{}'
         ) AS reference_asset_ids
       FROM storyboard_scenes s
-      WHERE s.campaign_id = $1 AND s.archived_at IS NULL
+      WHERE s.campaign_id = $1${archivedClause}
       ORDER BY s.scene_order ASC
       ${lockClause}
       `,
@@ -255,7 +258,7 @@ export class PostgresSceneRepository implements SceneRepository {
 
   private async persistScene(client: Pool | PoolClient, scene: Scene): Promise<void> {
     const snapshot = scene.snapshot();
-    const durationSeconds = (snapshot.configuration.durationMs / 1000).toFixed(2);
+    const durationSeconds = (snapshot.configuration.durationMs / 1000).toFixed(3);
     const approvedAt = snapshot.approval ? new Date(snapshot.approval.approvedAt) : null;
     const approvedBy = snapshot.approval?.approvedBy ?? null;
     const approvedRevision = snapshot.approval?.revision ?? null;
@@ -332,10 +335,9 @@ export class PostgresSceneRepository implements SceneRepository {
         ) VALUES (
           $1,
           $2,
-          COALESCE((SELECT COALESCE(MAX(s.scene_order), 0) + 1 FROM storyboard_scenes s WHERE s.campaign_id = $2), 1),
           $3,
-          'wide',
           $4,
+          'wide',
           $5,
           $6,
           $7,
@@ -347,12 +349,14 @@ export class PostgresSceneRepository implements SceneRepository {
           $13,
           $14,
           $15,
+          $16,
           CURRENT_TIMESTAMP
         )
         `,
         [
           snapshot.id,
           snapshot.campaignId,
+          snapshot.sequenceIndex ?? 1,
           durationSeconds,
           snapshot.configuration.prompt,
           snapshot.configuration.engineProfileId,

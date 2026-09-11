@@ -6,7 +6,7 @@ import type {
   RenderQueueReceipt,
   RenderWorkflow
 } from "../ports/render-engine-port.js";
-import type { UnitOfWork } from "../ports/unit-of-work.js";
+import type { UnitOfWork, UnitOfWorkContext } from "../ports/unit-of-work.js";
 import {
   JobDispatchUnavailableError,
   TransactionalJobEnqueuerUnavailableError
@@ -46,41 +46,44 @@ export class ProgressSceneProductionUseCases {
       throw new JobDispatchUnavailableError();
     }
 
-    let snapshot: Readonly<SceneSnapshot> | undefined;
+    return this.uow.execute((context) => this.beginCandidateGenerationWithContext(context, input));
+  }
+
+  async beginCandidateGenerationWithContext(
+    context: UnitOfWorkContext,
+    input: ProgressSceneProductionInput
+  ): Promise<GenerationAdmissionResult> {
+    const scene = await context.scenes.findById(input.sceneId as SceneId);
+    if (scene === undefined) {
+      throw new SceneNotFoundError(input.sceneId);
+    }
+    if (scene.status !== "draft_pending") {
+      throw new InvalidTransitionError(scene.id, scene.status, "beginCandidateGeneration");
+    }
+    if (context.jobs === undefined) {
+      throw new TransactionalJobEnqueuerUnavailableError();
+    }
+    scene.beginCandidateGeneration();
+    await context.scenes.save(scene);
+    const snapshot = scene.snapshot();
+
     const enqueuedJobs: RenderJob[] = [];
-
-    await this.uow.execute(async (context) => {
-      const scene = await context.scenes.findById(input.sceneId as SceneId);
-      if (scene === undefined) {
-        throw new SceneNotFoundError(input.sceneId);
-      }
-      if (scene.status !== "draft_pending") {
-        throw new InvalidTransitionError(scene.id, scene.status, "beginCandidateGeneration");
-      }
-      if (context.jobs === undefined) {
-        throw new TransactionalJobEnqueuerUnavailableError();
-      }
-      scene.beginCandidateGeneration();
-      await context.scenes.save(scene);
-      snapshot = scene.snapshot();
-
-      for (let variantOrdinal = 1; variantOrdinal <= CANDIDATE_BATCH_SIZE; variantOrdinal++) {
-        const job = await context.jobs.enqueue({
-          sceneId: snapshot.id,
-          jobKind: "candidate",
-          workflowTemplate: CANDIDATE_WORKFLOW_TEMPLATE,
-          injectedPayload: {
-            prompt: snapshot.configuration.prompt,
-            seed: CANDIDATE_BASE_SEED + variantOrdinal,
-            variantOrdinal
-          }
-        });
-        enqueuedJobs.push(job);
-      }
-    });
+    for (let variantOrdinal = 1; variantOrdinal <= CANDIDATE_BATCH_SIZE; variantOrdinal++) {
+      const job = await context.jobs.enqueue({
+        sceneId: snapshot.id,
+        jobKind: "candidate",
+        workflowTemplate: CANDIDATE_WORKFLOW_TEMPLATE,
+        injectedPayload: {
+          prompt: snapshot.configuration.prompt,
+          seed: CANDIDATE_BASE_SEED + variantOrdinal,
+          variantOrdinal
+        }
+      });
+      enqueuedJobs.push(job);
+    }
 
     return {
-      scene: snapshot!,
+      scene: snapshot,
       enqueuedJobs
     };
   }
