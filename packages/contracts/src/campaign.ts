@@ -244,3 +244,12 @@ export const PlanCampaignStoryboardResponseSchema = z.object({
   createdAt: z.string().datetime()
 });
 export type PlanCampaignStoryboardResponse = z.infer<typeof PlanCampaignStoryboardResponseSchema>;
+
+export const PlanCampaignStoryboardErrorResponseSchema = z.object({
+  code: z.string().optional(),
+  message: z.string(),
+  details: z.unknown().optional()
+});
+export type PlanCampaignStoryboardErrorResponse = z.infer<
+  typeof PlanCampaignStoryboardErrorResponseSchema
+>;

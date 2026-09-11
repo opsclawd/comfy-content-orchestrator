@@ -3,6 +3,12 @@ import {
   type CampaignReviewSummary,
   HealthResponseSchema,
   type HealthResponse,
+  PlanCampaignStoryboardErrorResponseSchema,
+  type PlanCampaignStoryboardErrorResponse,
+  PlanCampaignStoryboardRequestSchema,
+  type PlanCampaignStoryboardRequest,
+  PlanCampaignStoryboardResponseSchema,
+  type PlanCampaignStoryboardResponse,
   ReviewCommandSchema,
   type ReviewCommand,
   ReviewCommandResponseSchema,
@@ -18,6 +24,9 @@ import { resolveControlApiBaseUrl } from "./runtime-config";
 export type {
   CampaignReviewSummary,
   HealthResponse,
+  PlanCampaignStoryboardErrorResponse,
+  PlanCampaignStoryboardRequest,
+  PlanCampaignStoryboardResponse,
   ReviewCommand,
   ReviewCommandResponse,
   ReviewErrorResponse,
@@ -27,6 +36,9 @@ export type {
 export {
   CampaignReviewSummarySchema,
   HealthResponseSchema,
+  PlanCampaignStoryboardErrorResponseSchema,
+  PlanCampaignStoryboardRequestSchema,
+  PlanCampaignStoryboardResponseSchema,
   ReviewCommandSchema,
   ReviewCommandResponseSchema,
   ReviewErrorResponseSchema,
@@ -76,6 +88,23 @@ export class ReviewCommandApiError extends Error {
   }
 }
 
+export class PlanCampaignStoryboardApiError extends Error {
+  override readonly name = "PlanCampaignStoryboardApiError";
+
+  constructor(
+    public readonly statusCode: number,
+    public readonly error: PlanCampaignStoryboardErrorResponse
+  ) {
+    super(
+      `Campaign plan request failed with HTTP ${statusCode}${error.code ? ` (${error.code})` : ""}: ${error.message}`
+    );
+  }
+
+  get body(): PlanCampaignStoryboardErrorResponse {
+    return this.error;
+  }
+}
+
 export interface ReviewerIdentity {
   readonly login: string;
   readonly displayName?: string;
@@ -90,6 +119,9 @@ export interface ApiClient {
     command: ReviewCommand,
     reviewerIdentity: ReviewerIdentity
   ): Promise<ReviewCommandResponse>;
+  planCampaignStoryboard(
+    request: PlanCampaignStoryboardRequest
+  ): Promise<PlanCampaignStoryboardResponse>;
 }
 
 function formatFetchErrorMessage(err: unknown): string {
@@ -289,6 +321,78 @@ export function createApiClient(config?: ApiClientConfig): ApiClient {
       }
 
       return responseParseResult.data;
+    },
+
+    async planCampaignStoryboard(
+      request: PlanCampaignStoryboardRequest
+    ): Promise<PlanCampaignStoryboardResponse> {
+      const requestParseResult = PlanCampaignStoryboardRequestSchema.safeParse(request);
+      if (!requestParseResult.success) {
+        throw new ApiValidationError(
+          `Campaign plan request failed validation: ${requestParseResult.error.message}`,
+          requestParseResult.error.issues
+        );
+      }
+
+      const serializedBody = JSON.stringify(requestParseResult.data);
+      const url = `${baseUrl}/api/campaigns/plan`;
+
+      let res: Response;
+      try {
+        res = await fetchFn(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json"
+          },
+          cache: "no-store",
+          body: serializedBody
+        });
+      } catch (err) {
+        throw new ApiClientError(formatFetchErrorMessage(err), undefined, err);
+      }
+
+      if (!res.ok) {
+        let errorData: unknown;
+        try {
+          errorData = await res.json();
+        } catch {
+          throw new ApiClientError(
+            `Control API returned HTTP ${res.status}: ${res.statusText}`,
+            res.status
+          );
+        }
+
+        const errorParseResult = PlanCampaignStoryboardErrorResponseSchema.safeParse(errorData);
+        if (errorParseResult.success) {
+          throw new PlanCampaignStoryboardApiError(res.status, errorParseResult.data);
+        }
+
+        throw new ApiValidationError(
+          `Control API returned HTTP ${res.status} with malformed error payload: ${errorParseResult.error.message}`,
+          errorParseResult.error.issues
+        );
+      }
+
+      let successData: unknown;
+      try {
+        successData = await res.json();
+      } catch (err) {
+        throw new ApiValidationError(
+          `Failed to parse response JSON from Control API: ${err instanceof Error ? err.message : String(err)}`,
+          err
+        );
+      }
+
+      const responseParseResult = PlanCampaignStoryboardResponseSchema.safeParse(successData);
+      if (!responseParseResult.success) {
+        throw new ApiValidationError(
+          `Control API response failed schema validation: ${responseParseResult.error.message}`,
+          responseParseResult.error.issues
+        );
+      }
+
+      return responseParseResult.data;
     }
   };
 }
@@ -322,4 +426,12 @@ export async function submitReviewCommand(
 ): Promise<ReviewCommandResponse> {
   const client = createApiClient({ fetchFn: fetchImpl });
   return client.submitReviewCommand(sceneId, command, reviewerIdentity);
+}
+
+export async function planCampaignStoryboard(
+  request: PlanCampaignStoryboardRequest,
+  fetchImpl?: typeof fetch
+): Promise<PlanCampaignStoryboardResponse> {
+  const client = createApiClient({ fetchFn: fetchImpl });
+  return client.planCampaignStoryboard(request);
 }

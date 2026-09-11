@@ -5,12 +5,17 @@ import {
   getCampaignReviewSummary,
   getSceneReviewDetail,
   submitReviewCommand,
+  planCampaignStoryboard,
   ApiClientError,
   ApiValidationError,
-  ReviewCommandApiError
+  ReviewCommandApiError,
+  PlanCampaignStoryboardApiError
 } from "./client.js";
 import type {
   CampaignReviewSummary,
+  PlanCampaignStoryboardErrorResponse,
+  PlanCampaignStoryboardRequest,
+  PlanCampaignStoryboardResponse,
   ReviewCommand,
   ReviewCommandResponse,
   ReviewErrorResponse,
@@ -810,6 +815,312 @@ describe("Typed Control API Client", () => {
         client.submitReviewCommand(sceneId, invalidCommand, defaultReviewerIdentity)
       ).rejects.toThrow(ApiValidationError);
 
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("planCampaignStoryboard", () => {
+    const validPlanRequest: PlanCampaignStoryboardRequest = {
+      idempotencyKey: "11111111-1111-4111-8111-111111111111",
+      clientId: "22222222-2222-4222-8222-222222222222",
+      title: "Summer Collection",
+      targetTotalDurationMs: 15000,
+      brief: {
+        description: "Energetic beach apparel commercial"
+      }
+    };
+
+    const validPlanResponse: PlanCampaignStoryboardResponse = {
+      campaignId: "33333333-3333-4333-8333-333333333333",
+      idempotencyKey: "11111111-1111-4111-8111-111111111111",
+      status: "drafting",
+      totalScenes: 3,
+      targetTotalDurationMs: 15000,
+      isIdempotentReplay: false,
+      sceneCount: 3,
+      scenes: [
+        {
+          sceneId: "44444444-4444-4444-8444-444444444441",
+          ordinal: 1,
+          status: "generating_candidates"
+        },
+        {
+          sceneId: "44444444-4444-4444-8444-444444444442",
+          ordinal: 2,
+          status: "generating_candidates"
+        },
+        {
+          sceneId: "44444444-4444-4444-8444-444444444443",
+          ordinal: 3,
+          status: "generating_candidates"
+        }
+      ],
+      createdAt: "2026-09-10T12:00:00.000Z"
+    };
+
+    it("parses and returns valid storyboard response on success", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 201,
+        json: async () => validPlanResponse
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      const result = await client.planCampaignStoryboard(validPlanRequest);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch).toHaveBeenCalledWith("http://example.com/api/campaigns/plan", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json"
+        },
+        cache: "no-store",
+        body: expect.any(String)
+      });
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string);
+      expect(callBody).toEqual({
+        idempotencyKey: validPlanRequest.idempotencyKey,
+        clientId: validPlanRequest.clientId,
+        title: validPlanRequest.title,
+        targetTotalDurationMs: validPlanRequest.targetTotalDurationMs,
+        brief: {
+          description: validPlanRequest.brief.description
+        }
+      });
+      // Assert omitted optional fields are truly absent, not null or undefined
+      expect("sceneCountOverride" in callBody).toBe(false);
+      expect("targetPlatform" in callBody).toBe(false);
+      expect("visualStyle" in callBody.brief).toBe(false);
+      expect("candidateReferenceAssetIds" in callBody).toBe(false);
+
+      expect(result).toEqual(validPlanResponse);
+
+      // Verify convenience function also works
+      const convenienceResult = await planCampaignStoryboard(validPlanRequest, mockFetch);
+      expect(convenienceResult).toEqual(validPlanResponse);
+    });
+
+    it("serializes optional override when provided", async () => {
+      const requestWithOverride: PlanCampaignStoryboardRequest = {
+        ...validPlanRequest,
+        targetPlatform: "instagram",
+        sceneCountOverride: 3,
+        brief: {
+          description: "A brief with visual style",
+          visualStyle: "cinematic sunset"
+        }
+      };
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 201,
+        json: async () => validPlanResponse
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      await client.planCampaignStoryboard(requestWithOverride);
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string);
+      expect(callBody.targetPlatform).toBe("instagram");
+      expect(callBody.sceneCountOverride).toBe(3);
+      expect(callBody.brief.visualStyle).toBe("cinematic sunset");
+    });
+
+    it("throws PlanCampaignStoryboardApiError on 400 VALIDATION_FAILURE from upstream", async () => {
+      const validationError: PlanCampaignStoryboardErrorResponse = {
+        code: "VALIDATION_FAILURE",
+        message:
+          "targetTotalDurationMs and sceneCountOverride imply an unsupported per-scene duration",
+        details: [{ path: ["sceneCountOverride"], message: "unsupported per-scene duration" }]
+      };
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: async () => validationError
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      let capturedError: unknown;
+      try {
+        await client.planCampaignStoryboard(validPlanRequest);
+      } catch (err) {
+        capturedError = err;
+      }
+
+      expect(capturedError).toBeInstanceOf(PlanCampaignStoryboardApiError);
+      const apiErr = capturedError as PlanCampaignStoryboardApiError;
+      expect(apiErr.statusCode).toBe(400);
+      expect(apiErr.error).toEqual(validationError);
+      expect(apiErr.body).toEqual(validationError);
+      expect(apiErr.message).toContain("400 (VALIDATION_FAILURE)");
+    });
+
+    it("throws PlanCampaignStoryboardApiError on 409 STORYBOARD_MATERIALIZATION_CONFLICT without rejection by closed enum", async () => {
+      const conflictError: PlanCampaignStoryboardErrorResponse = {
+        code: "STORYBOARD_MATERIALIZATION_CONFLICT",
+        message: "Storyboard materialization conflict for campaign",
+        details: {
+          campaignId: "33333333-3333-4333-8333-333333333333",
+          reason: "Concurrent modification"
+        }
+      };
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 409,
+        json: async () => conflictError
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      let capturedError: unknown;
+      try {
+        await client.planCampaignStoryboard(validPlanRequest);
+      } catch (err) {
+        capturedError = err;
+      }
+
+      expect(capturedError).toBeInstanceOf(PlanCampaignStoryboardApiError);
+      const apiErr = capturedError as PlanCampaignStoryboardApiError;
+      expect(apiErr.statusCode).toBe(409);
+      expect(apiErr.error.code).toBe("STORYBOARD_MATERIALIZATION_CONFLICT");
+      expect(apiErr.error.message).toBe("Storyboard materialization conflict for campaign");
+    });
+
+    it("throws PlanCampaignStoryboardApiError on 422 PLANNING_SAFETY_REFUSAL", async () => {
+      const safetyError: PlanCampaignStoryboardErrorResponse = {
+        code: "PLANNING_SAFETY_REFUSAL",
+        message: "Content violates safety policy",
+        details: { provider: "mock-ai" }
+      };
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 422,
+        json: async () => safetyError
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      let capturedError: unknown;
+      try {
+        await client.planCampaignStoryboard(validPlanRequest);
+      } catch (err) {
+        capturedError = err;
+      }
+
+      expect(capturedError).toBeInstanceOf(PlanCampaignStoryboardApiError);
+      const apiErr = capturedError as PlanCampaignStoryboardApiError;
+      expect(apiErr.statusCode).toBe(422);
+      expect(apiErr.error.code).toBe("PLANNING_SAFETY_REFUSAL");
+    });
+
+    it("throws PlanCampaignStoryboardApiError on open fallback error payload without code", async () => {
+      const fallbackError = {
+        message: "Internal Server Error"
+      };
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: async () => fallbackError
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      let capturedError: unknown;
+      try {
+        await client.planCampaignStoryboard(validPlanRequest);
+      } catch (err) {
+        capturedError = err;
+      }
+
+      expect(capturedError).toBeInstanceOf(PlanCampaignStoryboardApiError);
+      const apiErr = capturedError as PlanCampaignStoryboardApiError;
+      expect(apiErr.statusCode).toBe(500);
+      expect(apiErr.error.code).toBeUndefined();
+      expect(apiErr.error.message).toBe("Internal Server Error");
+    });
+
+    it("throws ApiClientError when non-2xx body is not valid JSON", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 502,
+        statusText: "Bad Gateway",
+        json: async () => {
+          throw new SyntaxError("Unexpected token < in JSON");
+        }
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      await expect(client.planCampaignStoryboard(validPlanRequest)).rejects.toThrow(ApiClientError);
+    });
+
+    it("throws ApiValidationError when non-2xx body fails even open error schema (missing message)", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          notMessage: 123
+        })
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      await expect(client.planCampaignStoryboard(validPlanRequest)).rejects.toThrow(
+        ApiValidationError
+      );
+    });
+
+    it("throws ApiValidationError when 2xx response has malformed schema", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 201,
+        json: async () => ({
+          campaignId: "invalid-uuid",
+          status: "unknown"
+        })
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      await expect(client.planCampaignStoryboard(validPlanRequest)).rejects.toThrow(
+        ApiValidationError
+      );
+    });
+
+    it("throws ApiValidationError when 2xx response JSON fails to parse", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 201,
+        json: async () => {
+          throw new SyntaxError("Unexpected token < in JSON");
+        }
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      await expect(client.planCampaignStoryboard(validPlanRequest)).rejects.toThrow(
+        ApiValidationError
+      );
+    });
+
+    it("throws ApiClientError on network failure", async () => {
+      const mockFetch = vi.fn().mockRejectedValue(new Error("Network connection lost"));
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      await expect(client.planCampaignStoryboard(validPlanRequest)).rejects.toThrow(ApiClientError);
+    });
+
+    it("validates request schema before making fetch call", async () => {
+      const mockFetch = vi.fn();
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+
+      const invalidRequest = {
+        ...validPlanRequest,
+        idempotencyKey: "not-a-uuid"
+      } as unknown as PlanCampaignStoryboardRequest;
+
+      await expect(client.planCampaignStoryboard(invalidRequest)).rejects.toThrow(
+        ApiValidationError
+      );
       expect(mockFetch).not.toHaveBeenCalled();
     });
   });
