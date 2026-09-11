@@ -22,11 +22,14 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.3.3",
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^22.10.2",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "dependency-cruiser": "^16.9.0",
     "esbuild": "^0.24.0",
+    "jsdom": "^30.0.1",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }

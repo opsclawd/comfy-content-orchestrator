@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { getHealth, type HealthResponse } from "../api/client";
 
 export const dynamic = "force-dynamic";
@@ -28,6 +29,11 @@ export default async function HomePage() {
             <span>Unavailable: {error}</span>
           </div>
         )}
+      </div>
+      <div style={{ marginTop: "1.5rem" }}>
+        <Link href="/campaigns/new" className="stage-draft-button" data-testid="new-campaign-link">
+          + New Campaign
+        </Link>
       </div>
     </section>
   );
