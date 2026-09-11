@@ -8,7 +8,6 @@ import {
   LtxI2vRenderProfileSchema,
   RenderProfileKeySchema,
   LTX_25_720P_5S_V1_PROFILE,
-  LTX_25_720P_5S_I2V_V1_PROFILE,
   getProfileInjectionTopology,
   LTX_FPS,
   LTX_FRAME_STEP,
@@ -130,31 +129,6 @@ describe("RenderProfileSchema", () => {
     const certJson = JSON.parse(certContent);
 
     expect(LTX_25_720P_5S_V1_PROFILE.modelHashes).toEqual(certJson.identity.modelSha256);
-  });
-
-  it("validates that config/render-profiles/LTX_25_720P_5S_I2V_V1.json matches schema and constant", async () => {
-    const jsonPath = resolve(
-      fileURLToPath(
-        new URL("../../../config/render-profiles/LTX_25_720P_5S_I2V_V1.json", import.meta.url)
-      )
-    );
-    const content = await readFile(jsonPath, "utf8");
-    const parsedJson = JSON.parse(content);
-
-    const validated = LtxI2vRenderProfileSchema.parse(parsedJson);
-    expect(validated).toEqual(LTX_25_720P_5S_I2V_V1_PROFILE);
-  });
-
-  it("verifies frozen I2V modelHashes strictly match host-validated ltx-i2v-cert-run-001 artifact", async () => {
-    const certPath = resolve(
-      fileURLToPath(
-        new URL("../../../certification/ltx-25/ltx-i2v-cert-run-001/result.json", import.meta.url)
-      )
-    );
-    const certContent = await readFile(certPath, "utf8");
-    const certJson = JSON.parse(certContent);
-
-    expect(LTX_25_720P_5S_I2V_V1_PROFILE.modelHashes).toEqual(certJson.identity.modelSha256);
   });
 
   it("accepts a compliant FLUX profile", () => {

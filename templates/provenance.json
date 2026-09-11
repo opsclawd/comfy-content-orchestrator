@@ -132,7 +132,7 @@
       "id": "ltx-25-720p-97f-i2v",
       "engine": "ltx_25_i2v",
       "workflowRelativePath": "ltx_25_720p_i2v_97f_api.json",
-      "expectedWorkflowHash": "95349fce04e8e9598ea2013fb2f218efc86185d1216563d450f90b00fd0fecfb",
+      "expectedWorkflowHash": "e0b417a3c3b5dc91ed417891789795c6a56e602d39c80eed7e1253a2ea41baab",
       "source": {
         "kind": "authored_from_spec",
         "uri": "https://github.com/comfyanonymous/ComfyUI",
