@@ -46,6 +46,23 @@ fi
 
 SHARED_CACHE_DIR="${CCO_SHARED_CACHE_DIR:-${MAIN_REPO}/.ai-cache}"
 
+# Copies src onto dst, but treats dst already being the same file as src
+# (e.g. because an earlier step already hardlinked it in from the shared
+# cache before this script rewrote it in place) as a no-op success rather
+# than letting `cp` fail with "are the same file".
+sync_to_shared_cache() {
+  local src="$1" dst="$2"
+  if [[ -e "${dst}" ]]; then
+    local src_id dst_id
+    src_id="$(stat -c '%d:%i' "${src}" 2>/dev/null || true)"
+    dst_id="$(stat -c '%d:%i' "${dst}" 2>/dev/null || true)"
+    if [[ -n "${src_id}" && "${src_id}" == "${dst_id}" ]]; then
+      return 0
+    fi
+  fi
+  ln -f "${src}" "${dst}" 2>/dev/null || cp -f "${src}" "${dst}"
+}
+
 REL_DIR="${KOKORO_MODEL_DIR:-node_modules/.cache/kokoro-model}"
 TARGET_DIR="${REPO_ROOT}/${REL_DIR}"
 mkdir -p "${TARGET_DIR}/onnx"
@@ -321,17 +338,17 @@ if [[ "${TARGET_DIR}" != "${SHARED_CACHE_DIR}/kokoro-model" ]]; then
   mkdir -p "${SHARED_CACHE_DIR}/kokoro-model/onnx" "${SHARED_CACHE_DIR}/kokoro-model/voices"
   for f in config.json tokenizer.json tokenizer_config.json model_manifest.json; do
     if [[ -f "${TARGET_DIR}/${f}" ]]; then
-      cp -f "${TARGET_DIR}/${f}" "${SHARED_CACHE_DIR}/kokoro-model/${f}"
+      sync_to_shared_cache "${TARGET_DIR}/${f}" "${SHARED_CACHE_DIR}/kokoro-model/${f}"
     fi
   done
   if [[ -f "${MODEL_FILE}" ]]; then
-    ln -f "${MODEL_FILE}" "${SHARED_CACHE_DIR}/kokoro-model/onnx/model_quantized.onnx" 2>/dev/null || cp -f "${MODEL_FILE}" "${SHARED_CACHE_DIR}/kokoro-model/onnx/model_quantized.onnx"
+    sync_to_shared_cache "${MODEL_FILE}" "${SHARED_CACHE_DIR}/kokoro-model/onnx/model_quantized.onnx"
   fi
   if [[ -d "${TARGET_DIR}/voices" ]]; then
     for vf in "${TARGET_DIR}/voices"/*; do
       if [[ -f "${vf}" ]]; then
         vfn="$(basename "${vf}")"
-        ln -f "${vf}" "${SHARED_CACHE_DIR}/kokoro-model/voices/${vfn}" 2>/dev/null || cp -f "${vf}" "${SHARED_CACHE_DIR}/kokoro-model/voices/${vfn}"
+        sync_to_shared_cache "${vf}" "${SHARED_CACHE_DIR}/kokoro-model/voices/${vfn}"
       fi
     done
   fi

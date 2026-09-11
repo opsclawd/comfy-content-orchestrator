@@ -9,7 +9,7 @@ Per PRD §2.4 and §9.6, external infrastructure components and dependencies are
 | Attribute | Specification |
 |---|---|
 | **Component** | MinIO Object Storage |
-| **Container Image / Version** | `minio/minio:RELEASE.2024-01-18T22-51-28Z` ([Docker Hub](https://hub.docker.com/r/minio/minio/tags?name=RELEASE.2024-01-18T22-51-28Z)) |
+| **Container Image / Version** | `quay.io/minio/minio:RELEASE.2024-01-18T22-51-28Z` ([Quay.io](https://quay.io/repository/minio/minio?tab=tags)) -- MinIO removed `minio/minio` from Docker Hub; `quay.io/minio/minio` is their current official distribution for this pinned tag |
 | **Source Repository** | [minio/minio (GitHub)](https://github.com/minio/minio/tree/RELEASE.2024-01-18T22-51-28Z) |
 | **License** | [GNU AGPLv3](https://github.com/minio/minio/blob/RELEASE.2024-01-18T22-51-28Z/LICENSE) |
 | **Review Date** | 2026-08-26 |

@@ -42,7 +42,7 @@ services:
     restart: "no"
 
   minio:
-    image: ${MINIO_IMAGE:-minio/minio:RELEASE.2024-01-18T22-51-28Z}
+    image: ${MINIO_IMAGE:-quay.io/minio/minio:RELEASE.2024-01-18T22-51-28Z}
     hostname: ${STORAGE_HOSTNAME:?STORAGE_HOSTNAME is required}
     command:
       - server
