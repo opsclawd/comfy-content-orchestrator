@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { CampaignId, CampaignRecord } from "@cco/domain";
+import { Scene, type CampaignId, type CampaignRecord, type SceneId } from "@cco/domain";
 import type {
+  CampaignRepository,
   ReviewEventStore,
   SceneRepository,
   StoryboardCandidateRepository,
@@ -99,5 +100,129 @@ describe("CreateSceneUseCase", () => {
     ).rejects.toThrow(
       "UnitOfWorkContext.campaigns is not configured for this UnitOfWork implementation."
     );
+  });
+
+  it("assigns sequential sequenceIndex values to consecutively created scenes", async () => {
+    const uow = new InMemorySceneUnitOfWork(undefined, undefined, undefined, [seededCampaign]);
+    const useCase = new CreateSceneUseCase(uow);
+
+    const config = {
+      prompt: "First scene",
+      referenceIds: [],
+      engineProfileId: "ltx_25",
+      durationMs: 5000
+    };
+
+    const scene1 = await useCase.execute({
+      campaignId: seededCampaign.id,
+      configuration: config
+    });
+    expect(scene1.sequenceIndex).toBe(1);
+    expect(scene1.snapshot().sequenceIndex).toBe(1);
+
+    const scene2 = await useCase.execute({
+      campaignId: seededCampaign.id,
+      configuration: { ...config, prompt: "Second scene" }
+    });
+    expect(scene2.sequenceIndex).toBe(2);
+    expect(scene2.snapshot().sequenceIndex).toBe(2);
+  });
+
+  it("throws clear error when context.campaigns does not support findByIdForUpdate", async () => {
+    const fakeUow: UnitOfWork = {
+      execute: async (work) => {
+        return work({
+          scenes: {
+            findById: async () => undefined,
+            save: async () => {},
+            findByCampaignId: async () => []
+          },
+          reviewEvents: {} as unknown as ReviewEventStore,
+          candidates: {} as unknown as StoryboardCandidateRepository,
+          campaigns: {
+            findById: async () => seededCampaign
+          } as unknown as CampaignRepository<CampaignRecord>
+        });
+      }
+    };
+
+    const useCase = new CreateSceneUseCase(fakeUow);
+
+    await expect(
+      useCase.execute({
+        campaignId: seededCampaign.id,
+        configuration: {
+          prompt: "Caldera",
+          referenceIds: [],
+          engineProfileId: "ltx_25",
+          durationMs: 5000
+        }
+      })
+    ).rejects.toThrow("UnitOfWorkContext.campaigns does not support findByIdForUpdate.");
+  });
+
+  it("throws clear error when context.scenes does not support findByCampaignId", async () => {
+    const fakeUow: UnitOfWork = {
+      execute: async (work) => {
+        return work({
+          scenes: {
+            findById: async () => undefined,
+            save: async () => {}
+          } as unknown as SceneRepository,
+          reviewEvents: {} as unknown as ReviewEventStore,
+          candidates: {} as unknown as StoryboardCandidateRepository,
+          campaigns: {
+            findById: async () => seededCampaign,
+            findByIdForUpdate: async () => seededCampaign
+          } as unknown as CampaignRepository<CampaignRecord>
+        });
+      }
+    };
+
+    const useCase = new CreateSceneUseCase(fakeUow);
+
+    await expect(
+      useCase.execute({
+        campaignId: seededCampaign.id,
+        configuration: {
+          prompt: "Caldera",
+          referenceIds: [],
+          engineProfileId: "ltx_25",
+          durationMs: 5000
+        }
+      })
+    ).rejects.toThrow("UnitOfWorkContext.scenes does not support findByCampaignId.");
+  });
+
+  it("allocates sequenceIndex above highest existing sequenceIndex even with gaps or archived ordinals", async () => {
+    const existingScene = Scene.create({
+      id: "018e69e0-8a6a-72cb-b1b7-ec79a1f73809" as SceneId,
+      campaignId: seededCampaign.id,
+      configuration: {
+        prompt: "Archived or prior scene",
+        referenceIds: [],
+        engineProfileId: "ltx_25",
+        durationMs: 5000
+      },
+      sequenceIndex: 5
+    });
+
+    const uow = new InMemorySceneUnitOfWork([existingScene], undefined, undefined, [
+      seededCampaign
+    ]);
+    const useCase = new CreateSceneUseCase(uow);
+
+    const scene = await useCase.execute({
+      campaignId: seededCampaign.id,
+      configuration: {
+        prompt: "New scene after gap",
+        referenceIds: [],
+        engineProfileId: "ltx_25",
+        durationMs: 5000
+      }
+    });
+
+    expect(scene.sequenceIndex).toBe(6);
+    expect(scene.snapshot().sequenceIndex).toBe(6);
   });
 });

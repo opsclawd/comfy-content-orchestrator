@@ -49,3 +49,7 @@ export * from "./complete-campaign-production-run-assembly.js";
 export * from "./candidate-ranking-orchestrator.js";
 export * from "./rank-review-candidates.js";
 export * from "./resolve-approved-candidate-media.js";
+export * from "./scene-configuration-count-mismatch-error.js";
+export * from "./invalid-scene-ordinal-sequence-error.js";
+export * from "./storyboard-partially-materialized-error.js";
+export * from "./materialize-storyboard.js";
