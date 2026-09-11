@@ -22,6 +22,7 @@ coverage
 .ai-runs
 .ai-worktrees
 .ai-tmp
+.ai-cache
 ai
 validate
 *.patch

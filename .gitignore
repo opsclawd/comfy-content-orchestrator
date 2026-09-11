@@ -13,6 +13,7 @@ __pycache__/
 .ai-runs/
 .ai-worktrees/
 .ai-tmp/
+.ai-cache/
 !design.md
 !implementation-log.md
 !issue-comments.md

@@ -18,12 +18,41 @@ if [[ -z "${PIPER_VERSION:-}" || -z "${PIPER_VOICE_ID:-}" || -z "${PIPER_VOICE_O
   exit 1
 fi
 
+MAIN_REPO=""
+if [[ -f "${REPO_ROOT}/.git" ]]; then
+  GITDIR="$(sed -n 's/^gitdir: //p' "${REPO_ROOT}/.git" | head -n 1 || true)"
+  if [[ -n "${GITDIR}" ]]; then
+    if [[ "${GITDIR}" != /* ]]; then
+      GITDIR="${REPO_ROOT}/${GITDIR}"
+    fi
+    if [[ -d "${GITDIR}" ]]; then
+      MAIN_GIT_DIR="$(cd "${GITDIR}/../.." && pwd)"
+      MAIN_REPO="$(cd "${MAIN_GIT_DIR}/.." && pwd)"
+    elif [[ -d "$(dirname "${GITDIR}")/.." ]]; then
+      MAIN_GIT_DIR="$(cd "$(dirname "${GITDIR}")/.." && pwd)"
+      MAIN_REPO="$(cd "${MAIN_GIT_DIR}/.." && pwd)"
+    fi
+  fi
+elif [[ -d "${REPO_ROOT}/.git" ]]; then
+  MAIN_REPO="${REPO_ROOT}"
+fi
+if [[ -z "${MAIN_REPO}" ]] && command -v git >/dev/null 2>&1 && git -C "${REPO_ROOT}" rev-parse --git-common-dir >/dev/null 2>&1; then
+  COMMON_DIR="$(git -C "${REPO_ROOT}" rev-parse --git-common-dir)"
+  MAIN_REPO="$(cd "${COMMON_DIR}/.." && pwd)"
+fi
+if [[ -z "${MAIN_REPO}" ]]; then
+  MAIN_REPO="${REPO_ROOT}"
+fi
+
+SHARED_CACHE_DIR="${CCO_SHARED_CACHE_DIR:-${MAIN_REPO}/.ai-cache}"
+
 REL_DIR="${PIPER_VOICE_DIR:-node_modules/.cache/piper-voice}"
 TARGET_DIR="${REPO_ROOT}/${REL_DIR}"
 mkdir -p "${TARGET_DIR}"
 
 echo "Installing Piper voice ${PIPER_VOICE_ID} (version: ${PIPER_VERSION})..."
 echo "Target directory: ${TARGET_DIR}"
+echo "Shared cache dir: ${SHARED_CACHE_DIR}"
 
 MANIFEST_FILE="${TARGET_DIR}/model_manifest.json"
 
@@ -81,6 +110,19 @@ if [[ -f "${CONFIG_FILE}" ]]; then
 fi
 
 if [[ ! -f "${CONFIG_FILE}" ]]; then
+  for candidate in "${SHARED_CACHE_DIR}/piper-voice/${PIPER_VOICE_ID}.onnx.json" "${MAIN_REPO}/node_modules/.cache/piper-voice/${PIPER_VOICE_ID}.onnx.json"; do
+    if [[ -f "${candidate}" ]]; then
+      cand_sha="$(compute_sha256 "${candidate}")"
+      if [[ "${cand_sha}" == "${PIPER_VOICE_CONFIG_SHA256}" ]]; then
+        echo "Seeding verified config from ${candidate}..."
+        ln -f "${candidate}" "${CONFIG_FILE}" 2>/dev/null || cp "${candidate}" "${CONFIG_FILE}"
+        break
+      fi
+    fi
+  done
+fi
+
+if [[ ! -f "${CONFIG_FILE}" ]]; then
   echo "Downloading ${PIPER_VOICE_ID}.onnx.json..."
   download_file "${HF_BASE}/${PIPER_VOICE_ID}.onnx.json" "${CONFIG_FILE}"
 fi
@@ -103,6 +145,19 @@ if [[ -f "${MODEL_FILE}" ]]; then
     echo "Existing ${MODEL_FILE} has mismatched checksum (${CURRENT_MODEL_SHA}). Removing..."
     rm -f "${MODEL_FILE}"
   fi
+fi
+
+if [[ ! -f "${MODEL_FILE}" ]]; then
+  for candidate in "${SHARED_CACHE_DIR}/piper-voice/${PIPER_VOICE_ID}.onnx" "${MAIN_REPO}/node_modules/.cache/piper-voice/${PIPER_VOICE_ID}.onnx"; do
+    if [[ -f "${candidate}" ]]; then
+      cand_sha="$(compute_sha256 "${candidate}")"
+      if [[ "${cand_sha}" == "${PIPER_VOICE_ONNX_SHA256}" ]]; then
+        echo "Seeding verified model from ${candidate}..."
+        ln -f "${candidate}" "${MODEL_FILE}" 2>/dev/null || cp "${candidate}" "${MODEL_FILE}"
+        break
+      fi
+    fi
+  done
 fi
 
 if [[ ! -f "${MODEL_FILE}" ]]; then
@@ -130,5 +185,13 @@ cat > "${MANIFEST_FILE}" <<INNER_EOF
   "installedAt": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 }
 INNER_EOF
+
+# Sync to shared cache if running in worktree or outside shared cache
+if [[ "${TARGET_DIR}" != "${SHARED_CACHE_DIR}/piper-voice" ]]; then
+  mkdir -p "${SHARED_CACHE_DIR}/piper-voice"
+  ln -f "${MODEL_FILE}" "${SHARED_CACHE_DIR}/piper-voice/${PIPER_VOICE_ID}.onnx" 2>/dev/null || cp -f "${MODEL_FILE}" "${SHARED_CACHE_DIR}/piper-voice/${PIPER_VOICE_ID}.onnx"
+  cp -f "${CONFIG_FILE}" "${SHARED_CACHE_DIR}/piper-voice/${PIPER_VOICE_ID}.onnx.json"
+  cp -f "${MANIFEST_FILE}" "${SHARED_CACHE_DIR}/piper-voice/model_manifest.json"
+fi
 
 echo "Piper voice ${PIPER_VOICE_ID} (${PIPER_VERSION}) successfully installed and verified in ${TARGET_DIR}."

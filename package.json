@@ -14,6 +14,7 @@
     "certify:transition-soak": "pnpm --filter render-worker certify:transition-soak",
     "db:migrate": "pnpm --filter @cco/infrastructure db:migrate",
     "format": "prettier --check .",
+    "preValidation": "bash scripts/prepare-validation-caches.sh",
     "lint": "eslint .",
     "storage:provision": "pnpm --filter @cco/infrastructure storage:provision",
     "test": "vitest run",

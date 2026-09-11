@@ -1,6 +1,7 @@
 {
   "validation": {
     "additionalCommands": [
+      "pnpm preValidation",
       "pnpm check:hooks",
       "pnpm format",
       "pnpm test:db",
