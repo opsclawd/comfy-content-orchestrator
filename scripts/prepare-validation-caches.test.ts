@@ -193,6 +193,7 @@ describe("prepare-validation-caches", () => {
         path.join(sharedCacheDir, "whisperx-model", "wav2vec2_fairseq_base_ls960_asr_ls960.pth")
       )
     ).toBe(true);
+    expect(fs.existsSync(path.join(sharedCacheDir, "whisperx-venv", "bin", "python3"))).toBe(true);
 
     // Second run: should be completely idempotent and skip installers
     const run2 = execFileSync(
@@ -243,6 +244,7 @@ describe("prepare-validation-caches", () => {
     expect(output).toContain("Seeding Kokoro cache from");
     expect(output).toContain("Seeding Piper voice cache from");
     expect(output).toContain("Seeding WhisperX model weights from");
+    expect(output).toContain("Linking WhisperX virtualenv from");
     expect(output).toContain("All validation caches prepared and verified successfully.");
 
     // Verify files in fresh worktree share inodes with shared cache (zero-copy hardlinks)

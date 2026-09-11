@@ -228,6 +228,9 @@ fi
 TARGET_WHISPERX_VENV_DIR="${REPO_ROOT}/node_modules/.cache/whisperx-venv"
 if bash "${REPO_ROOT}/scripts/check-whisperx-version.sh" >/dev/null 2>&1; then
   echo "WhisperX virtualenv already verified in current worktree."
+  if [[ "${SHARED_CACHE_DIR}/whisperx-venv" != "${TARGET_WHISPERX_VENV_DIR}" && ! -e "${SHARED_CACHE_DIR}/whisperx-venv" && -d "${TARGET_WHISPERX_VENV_DIR}" ]]; then
+    ln -sfn "${TARGET_WHISPERX_VENV_DIR}" "${SHARED_CACHE_DIR}/whisperx-venv"
+  fi
 else
   echo "WhisperX virtualenv missing or unverified in current worktree. Searching for existing environments..."
   VENV_SOURCE=""
@@ -264,6 +267,9 @@ else
   fi
   if [[ "${SHARED_CACHE_DIR}/whisperx-model" != "${TARGET_WHISPERX_MODEL_DIR}" && -d "${TARGET_WHISPERX_MODEL_DIR}" ]]; then
     link_or_copy_dir "${TARGET_WHISPERX_MODEL_DIR}" "${SHARED_CACHE_DIR}/whisperx-model"
+  fi
+  if [[ "${SHARED_CACHE_DIR}/whisperx-venv" != "${TARGET_WHISPERX_VENV_DIR}" && ! -e "${SHARED_CACHE_DIR}/whisperx-venv" && -d "${TARGET_WHISPERX_VENV_DIR}" ]]; then
+    ln -sfn "${TARGET_WHISPERX_VENV_DIR}" "${SHARED_CACHE_DIR}/whisperx-venv"
   fi
   echo "WhisperX virtualenv ready."
 fi
