@@ -46,6 +46,23 @@ fi
 
 SHARED_CACHE_DIR="${CCO_SHARED_CACHE_DIR:-${MAIN_REPO}/.ai-cache}"
 
+# Copies src onto dst, but treats dst already being the same file as src
+# (e.g. because an earlier step already hardlinked it in from the shared
+# cache before this script rewrote it in place) as a no-op success rather
+# than letting `cp` fail with "are the same file".
+sync_to_shared_cache() {
+  local src="$1" dst="$2"
+  if [[ -e "${dst}" ]]; then
+    local src_id dst_id
+    src_id="$(stat -c '%d:%i' "${src}" 2>/dev/null || true)"
+    dst_id="$(stat -c '%d:%i' "${dst}" 2>/dev/null || true)"
+    if [[ -n "${src_id}" && "${src_id}" == "${dst_id}" ]]; then
+      return 0
+    fi
+  fi
+  ln -f "${src}" "${dst}" 2>/dev/null || cp -f "${src}" "${dst}"
+}
+
 TARGET_VENV_DIR="${REPO_ROOT}/${WHISPERX_VENV_DIR}"
 TARGET_MODEL_DIR="${REPO_ROOT}/${WHISPERX_MODEL_DIR}"
 MODEL_FILE="${TARGET_MODEL_DIR}/${WHISPERX_ALIGNMENT_MODEL_FILE}"
@@ -165,8 +182,8 @@ echo "Manifest written to ${MANIFEST_FILE}."
 # Sync to shared cache if running in worktree or outside shared cache
 if [[ "${TARGET_MODEL_DIR}" != "${SHARED_CACHE_DIR}/whisperx-model" ]]; then
   mkdir -p "${SHARED_CACHE_DIR}/whisperx-model"
-  ln -f "${MODEL_FILE}" "${SHARED_CACHE_DIR}/whisperx-model/${WHISPERX_ALIGNMENT_MODEL_FILE}" 2>/dev/null || cp -f "${MODEL_FILE}" "${SHARED_CACHE_DIR}/whisperx-model/${WHISPERX_ALIGNMENT_MODEL_FILE}"
-  cp -f "${MANIFEST_FILE}" "${SHARED_CACHE_DIR}/whisperx-model/model_manifest.json"
+  sync_to_shared_cache "${MODEL_FILE}" "${SHARED_CACHE_DIR}/whisperx-model/${WHISPERX_ALIGNMENT_MODEL_FILE}"
+  sync_to_shared_cache "${MANIFEST_FILE}" "${SHARED_CACHE_DIR}/whisperx-model/model_manifest.json"
 fi
 
 # 4. Setup Python virtualenv

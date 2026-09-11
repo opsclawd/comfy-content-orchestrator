@@ -46,6 +46,23 @@ fi
 
 SHARED_CACHE_DIR="${CCO_SHARED_CACHE_DIR:-${MAIN_REPO}/.ai-cache}"
 
+# Copies src onto dst, but treats dst already being the same file as src
+# (e.g. because an earlier step already hardlinked it in from the shared
+# cache before this script rewrote it in place) as a no-op success rather
+# than letting `cp` fail with "are the same file".
+sync_to_shared_cache() {
+  local src="$1" dst="$2"
+  if [[ -e "${dst}" ]]; then
+    local src_id dst_id
+    src_id="$(stat -c '%d:%i' "${src}" 2>/dev/null || true)"
+    dst_id="$(stat -c '%d:%i' "${dst}" 2>/dev/null || true)"
+    if [[ -n "${src_id}" && "${src_id}" == "${dst_id}" ]]; then
+      return 0
+    fi
+  fi
+  ln -f "${src}" "${dst}" 2>/dev/null || cp -f "${src}" "${dst}"
+}
+
 REL_DIR="${PIPER_VOICE_DIR:-node_modules/.cache/piper-voice}"
 TARGET_DIR="${REPO_ROOT}/${REL_DIR}"
 mkdir -p "${TARGET_DIR}"
@@ -189,9 +206,9 @@ INNER_EOF
 # Sync to shared cache if running in worktree or outside shared cache
 if [[ "${TARGET_DIR}" != "${SHARED_CACHE_DIR}/piper-voice" ]]; then
   mkdir -p "${SHARED_CACHE_DIR}/piper-voice"
-  ln -f "${MODEL_FILE}" "${SHARED_CACHE_DIR}/piper-voice/${PIPER_VOICE_ID}.onnx" 2>/dev/null || cp -f "${MODEL_FILE}" "${SHARED_CACHE_DIR}/piper-voice/${PIPER_VOICE_ID}.onnx"
-  cp -f "${CONFIG_FILE}" "${SHARED_CACHE_DIR}/piper-voice/${PIPER_VOICE_ID}.onnx.json"
-  cp -f "${MANIFEST_FILE}" "${SHARED_CACHE_DIR}/piper-voice/model_manifest.json"
+  sync_to_shared_cache "${MODEL_FILE}" "${SHARED_CACHE_DIR}/piper-voice/${PIPER_VOICE_ID}.onnx"
+  sync_to_shared_cache "${CONFIG_FILE}" "${SHARED_CACHE_DIR}/piper-voice/${PIPER_VOICE_ID}.onnx.json"
+  sync_to_shared_cache "${MANIFEST_FILE}" "${SHARED_CACHE_DIR}/piper-voice/model_manifest.json"
 fi
 
 echo "Piper voice ${PIPER_VOICE_ID} (${PIPER_VERSION}) successfully installed and verified in ${TARGET_DIR}."

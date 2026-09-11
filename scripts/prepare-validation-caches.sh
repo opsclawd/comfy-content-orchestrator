@@ -66,7 +66,14 @@ link_or_copy_dir() {
       local src_file="${src_dir}/${clean_rel}"
       mkdir -p "$(dirname "${dst_file}")"
       if [[ ! -f "${dst_file}" ]]; then
-        ln -f "${src_file}" "${dst_file}" 2>/dev/null || cp -f "${src_file}" "${dst_file}"
+        ln -f "${src_file}" "${dst_file}" 2>/dev/null || {
+          local src_id dst_id
+          src_id="$(stat -c '%d:%i' "${src_file}" 2>/dev/null || true)"
+          dst_id="$(stat -c '%d:%i' "${dst_file}" 2>/dev/null || true)"
+          if [[ -z "${src_id}" || "${src_id}" != "${dst_id}" ]]; then
+            cp -f "${src_file}" "${dst_file}"
+          fi
+        }
       fi
     done
   )
