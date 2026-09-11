@@ -85,6 +85,9 @@ function verifyProfileWorkload(profile: CertificationProfile): void {
   if (profile.id === "ltx-25-720p-97f" && profile.engine !== "ltx_25") {
     throw new PreflightError(`Invalid profile engine "${profile.engine}": expected "ltx_25"`);
   }
+  if (profile.id === "ltx-25-720p-97f-i2v" && profile.engine !== "ltx_25_i2v") {
+    throw new PreflightError(`Invalid profile engine "${profile.engine}": expected "ltx_25_i2v"`);
+  }
   if (profile.id === "flux-schnell-draft" && profile.engine !== "flux_schnell") {
     throw new PreflightError(`Invalid profile engine "${profile.engine}": expected "flux_schnell"`);
   }
@@ -120,6 +123,67 @@ function verifyProfileWorkload(profile: CertificationProfile): void {
     ) {
       throw new PreflightError(
         `Invalid renderProfileIdentity: expected key "LTX_25_720P_5S_V1" version 1`
+      );
+    }
+    const assertions = profile.assertions;
+    if (!Array.isArray(assertions) || assertions.length === 0) {
+      throw new PreflightError(`Profile "${profile.id}" must define workflow assertions`);
+    }
+    if (!assertions.find((a) => a.input === "steps" && a.equals === 8)) {
+      throw new PreflightError(
+        `Profile "${profile.id}" is missing required workflow assertion for steps = 8`
+      );
+    }
+    if (!assertions.find((a) => a.input === "width" && a.equals === 1280)) {
+      throw new PreflightError(
+        `Profile "${profile.id}" is missing required workflow assertion for width = 1280`
+      );
+    }
+    if (!assertions.find((a) => a.input === "height" && a.equals === 720)) {
+      throw new PreflightError(
+        `Profile "${profile.id}" is missing required workflow assertion for height = 720`
+      );
+    }
+    if (
+      !assertions.find((a) => (a.input === "length" || a.input === "frames") && a.equals === 97)
+    ) {
+      throw new PreflightError(
+        `Profile "${profile.id}" is missing required workflow assertion for frames/length = 97`
+      );
+    }
+  } else if (profile.engine === "ltx_25_i2v") {
+    if (profile.id !== "ltx-25-720p-97f-i2v") {
+      throw new PreflightError(
+        `Invalid profile ID "${profile.id}": expected "ltx-25-720p-97f-i2v"`
+      );
+    }
+    if (profile.baseline.width !== 1280) {
+      throw new PreflightError(
+        `Invalid baseline width ${String(profile.baseline.width)}: expected 1280`
+      );
+    }
+    if (profile.baseline.height !== 720) {
+      throw new PreflightError(
+        `Invalid baseline height ${String(profile.baseline.height)}: expected 720`
+      );
+    }
+    if (profile.baseline.frames !== 97) {
+      throw new PreflightError(
+        `Invalid baseline frames ${String(profile.baseline.frames)}: expected 97`
+      );
+    }
+    if (profile.baseline.steps !== 8) {
+      throw new PreflightError(
+        `Invalid baseline steps ${String(profile.baseline.steps)}: expected 8`
+      );
+    }
+    if (
+      profile.renderProfileIdentity === null ||
+      profile.renderProfileIdentity.key !== "LTX_25_720P_5S_I2V_V1" ||
+      profile.renderProfileIdentity.version !== 1
+    ) {
+      throw new PreflightError(
+        `Invalid renderProfileIdentity: expected key "LTX_25_720P_5S_I2V_V1" version 1`
       );
     }
     const assertions = profile.assertions;
@@ -267,7 +331,9 @@ function validateApprovedReportEntry(
 
   const rpp = entry.renderProfileProvenance;
   if (
-    (rpp.key !== "LTX_25_720P_5S_V1" && rpp.key !== "FLUX_SCHNELL_DRAFT_V1") ||
+    (rpp.key !== "LTX_25_720P_5S_V1" &&
+      rpp.key !== "LTX_25_720P_5S_I2V_V1" &&
+      rpp.key !== "FLUX_SCHNELL_DRAFT_V1") ||
     rpp.version !== 1
   ) {
     throw new PreflightError(

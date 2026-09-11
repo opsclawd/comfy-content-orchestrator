@@ -1,16 +1,19 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   startPostgres18Container,
   startMinioContainer,
   Pool,
+  type PoolClient,
   type StartedPostgres18Container,
   type StartedMinioContainer,
   S3Client,
   CreateBucketCommand,
+  DeleteObjectCommand,
+  FakeComfyUiTransport,
   insertClientRecord,
   insertCampaignRecord,
   insertStoryboardSceneRecord,
@@ -22,27 +25,34 @@ import {
   PostgresUnitOfWork,
   PostgresJobQueue,
   S3ObjectStorage,
+  ComfyUiClient,
+  HttpComfyUiInputStagingAdapter,
+  ComfyUiRenderEngineAdapter,
   type CertificationProfile,
   type CertificationProvenanceReport
 } from "@cco/infrastructure";
 import {
   EnqueueSceneProductionRenderUseCase,
+  ApproveSceneAndDispatchCampaignProductionUseCase,
+  ExecuteProfileRenderUseCase,
   AssembleGenerationManifest,
   ResolveApprovedCandidateMediaUseCase,
-  type ComfyUiInputStagingPort,
+  type EnforceLicenseRouting,
   type EnforceStorageAdmission,
-  type ExecuteProfileRenderInput,
-  type ExecuteProfileRenderResult,
-  type RenderWorkflow
+  type GpuTelemetryPort
 } from "@cco/application";
 import { LTX_FPS } from "@cco/contracts";
 import type { CandidateId, SceneId } from "@cco/domain";
 import { BUCKET_NAMES, BUCKETS } from "@cco/shared";
 import { createControlApiApp } from "../../apps/control-api/src/http/app.js";
 import { createControlApiClient } from "../../apps/render-worker/src/control-api-client.js";
-import { createCertifiedRenderJobExecutor } from "../../apps/render-worker/src/render-job-executor.js";
+import {
+  createCertifiedRenderJobExecutor,
+  MissingCertifiedProfileError
+} from "../../apps/render-worker/src/render-job-executor.js";
 import { RenderWorker } from "../../apps/render-worker/src/worker.js";
 import { createProductionWorker } from "../../apps/render-worker/src/cli/run-worker.js";
+import { verifyGoldMasterProvenance } from "../../apps/render-worker/src/certification/preflight.js";
 
 function sha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -51,6 +61,8 @@ function sha256Hex(bytes: Uint8Array): string {
 export interface LiveLtxConfig {
   readonly comfyUiUrl: string;
   readonly comfyUiDir: string;
+  readonly goldMasterProvenancePath?: string;
+  readonly licenseRegistryPath?: string;
 }
 
 export function resolveLiveLtxConfig(env: NodeJS.ProcessEnv = process.env): LiveLtxConfig {
@@ -63,7 +75,23 @@ export function resolveLiveLtxConfig(env: NodeJS.ProcessEnv = process.env): Live
     );
   }
 
-  return { comfyUiUrl, comfyUiDir };
+  const rootPath = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+  const goldMasterProvenancePath =
+    env.GOLD_MASTER_PROVENANCE_PATH?.trim() ||
+    env.CERTIFICATION_MANIFEST_PATH?.trim() ||
+    resolve(rootPath, "certification/ltx-25/approved-provenance.json");
+  const licenseRegistryPath =
+    env.LICENSE_REGISTRY_PATH?.trim() ||
+    resolve(rootPath, "config/component-license-registry.json");
+
+  return {
+    comfyUiUrl,
+    comfyUiDir,
+    ...(env.GOLD_MASTER_PROVENANCE_PATH?.trim() || env.CERTIFICATION_MANIFEST_PATH?.trim()
+      ? { goldMasterProvenancePath }
+      : {}),
+    ...(env.LICENSE_REGISTRY_PATH?.trim() ? { licenseRegistryPath } : {})
+  };
 }
 
 /**
@@ -125,6 +153,8 @@ const realLtxI2vWorkflowPath = resolve(rootPath, "templates/ltx_25_720p_i2v_97f_
 const realLtxI2vWorkflow = readFileSync(realLtxI2vWorkflowPath, "utf8");
 const ltxI2vWorkflowHash = createHash("sha256").update(realLtxI2vWorkflow).digest("hex");
 
+const dummyModelSha256 = "a".repeat(64);
+
 const fakeLtxI2vProfile: CertificationProfile = {
   id: "ltx-25-720p-97f-i2v",
   engine: "ltx_25_i2v",
@@ -146,8 +176,38 @@ const fakeLtxI2vProfile: CertificationProfile = {
   },
   minFreeDiskGb: 0,
   runnerProfile: "dynamicvram-offload-v1",
-  models: [],
-  assertions: [],
+  models: [
+    {
+      category: "diffusion_models",
+      relativePath: "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors"
+    }
+  ],
+  assertions: [
+    {
+      nodeId: "1",
+      classType: "KSampler",
+      input: "steps",
+      equals: 8
+    },
+    {
+      nodeId: "5",
+      classType: "EmptyLTXLatentVideo",
+      input: "width",
+      equals: 1280
+    },
+    {
+      nodeId: "5",
+      classType: "EmptyLTXLatentVideo",
+      input: "height",
+      equals: 720
+    },
+    {
+      nodeId: "5",
+      classType: "EmptyLTXLatentVideo",
+      input: "length",
+      equals: 97
+    }
+  ],
   renderProfileIdentity: {
     key: "LTX_25_720P_5S_I2V_V1",
     version: 1
@@ -158,7 +218,14 @@ const fakeLtxI2vProvenance: CertificationProvenanceReport = {
   version: 1,
   profileId: "ltx-25-720p-97f-i2v",
   generatedAt: "2026-09-02T00:00:00.000Z",
-  models: [],
+  models: [
+    {
+      category: "diffusion_models",
+      relativePath: "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
+      sha256: dummyModelSha256,
+      bytes: 1000
+    }
+  ],
   disk: {
     modelFootprintBytes: 0,
     availableBytes: 100_000_000_000,
@@ -192,9 +259,430 @@ const fakeLtxI2vProvenance: CertificationProvenanceReport = {
     runnerProfile: "dynamicvram-offload-v1",
     measuredDiskFootprintGb: 10,
     minFreeDiskGb: 0,
-    modelHashes: {}
+    modelHashes: {
+      "diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors":
+        dummyModelSha256
+    }
   }
 };
+
+interface RecordedUpload {
+  readonly filename: string;
+  readonly bytes: Uint8Array;
+  readonly contentType: string;
+  readonly formType: string;
+  readonly overwrite: string;
+}
+
+interface RecordedPrompt {
+  readonly promptId: string;
+  readonly workflow: Record<string, { class_type?: string; inputs: Record<string, unknown> }>;
+  readonly clientId: string;
+}
+
+interface RecordingTransportOptions {
+  readonly uploadShouldFail?: boolean;
+}
+
+function setupRecordingComfyUiTransport(options?: RecordingTransportOptions): {
+  transport: FakeComfyUiTransport;
+  recordedUploads: RecordedUpload[];
+  recordedPrompts: RecordedPrompt[];
+} {
+  const transport = new FakeComfyUiTransport();
+  const recordedUploads: RecordedUpload[] = [];
+  const recordedPrompts: RecordedPrompt[] = [];
+  let promptCounter = 0;
+
+  transport.fakeFetch.setDefaultResponseHandler(async (input, init) => {
+    const urlStr = String(input);
+    if (urlStr.includes("/upload/image")) {
+      const formData = init?.body as FormData;
+      const file = formData.get("image") as File;
+      const formType = String(formData.get("type") ?? "");
+      const overwrite = String(formData.get("overwrite") ?? "");
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const filename = file.name;
+      const contentType = file.type;
+
+      recordedUploads.push({
+        filename,
+        bytes,
+        contentType,
+        formType,
+        overwrite
+      });
+
+      if (options?.uploadShouldFail) {
+        return new Response(
+          JSON.stringify({ error: "Storage or disk upload failure during staging" }),
+          {
+            status: 500,
+            headers: { "Content-Type": "application/json" }
+          }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          name: filename,
+          subfolder: "conditioning",
+          type: "input"
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        }
+      );
+    }
+
+    if (urlStr.includes("/history/")) {
+      const parts = urlStr.split("/");
+      const promptId = parts[parts.length - 1] || "prompt-1";
+      return new Response(
+        JSON.stringify({
+          [promptId]: {
+            status: { completed: true, status_str: "success" },
+            outputs: {
+              "9": {
+                images: [{ filename: "output.webp", type: "output", subfolder: "" }]
+              }
+            }
+          }
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        }
+      );
+    }
+
+    if (urlStr.endsWith("/prompt") || urlStr.includes("/prompt?")) {
+      promptCounter += 1;
+      const promptId = `prompt-${promptCounter}`;
+      const body = JSON.parse(init?.body as string);
+      recordedPrompts.push({
+        promptId,
+        workflow: body.prompt,
+        clientId: body.client_id
+      });
+
+      queueMicrotask(() => {
+        const ws = transport.createdWebSockets[transport.createdWebSockets.length - 1];
+        if (ws) {
+          ws.message({
+            type: "executing",
+            data: { prompt_id: promptId, node: null }
+          });
+        }
+      });
+
+      return new Response(JSON.stringify({ prompt_id: promptId }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    if (urlStr.includes("/free")) {
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+  });
+
+  const origCreateWebSocket = transport.createWebSocket.bind(transport);
+  transport.createWebSocket = (url: string) => {
+    const ws = origCreateWebSocket(url);
+    const origAddEventListener = ws.addEventListener.bind(ws);
+    ws.addEventListener = (type, listener) => {
+      origAddEventListener(type, listener);
+      if (type === "message") {
+        queueMicrotask(() => {
+          ws.message({
+            type: "status",
+            data: { status: { exec_info: { queue_remaining: 0 } } }
+          });
+        });
+      }
+    };
+    return ws;
+  };
+
+  return { transport, recordedUploads, recordedPrompts };
+}
+
+interface CreateTestWorkerOptions {
+  readonly controlApiClient: ReturnType<typeof createControlApiClient>;
+  readonly uow: PostgresUnitOfWork;
+  readonly objectStorage: S3ObjectStorage;
+  readonly transport: FakeComfyUiTransport;
+  readonly loadProfile?: () => Promise<CertificationProfile>;
+  readonly licenseError?: Error;
+  readonly fakeVideoBytes?: Uint8Array;
+}
+
+function createTestRenderWorker(options: CreateTestWorkerOptions) {
+  const client = new ComfyUiClient("http://127.0.0.1:8188", options.transport);
+  const stageReferenceImage = new HttpComfyUiInputStagingAdapter({
+    client,
+    comfyUiDir: "/tmp/fake-comfyui",
+    unlinkFn: async () => {}
+  });
+
+  const renderEngine = new ComfyUiRenderEngineAdapter({
+    baseUrl: "http://127.0.0.1:8188",
+    transport: options.transport
+  });
+
+  const fakeGpuLease = {
+    acquireLease: async () => ({
+      holder: {
+        version: 1 as const,
+        pid: 1234,
+        startedAt: new Date().toISOString(),
+        hostname: "test-host",
+        leaseId: "lease-1"
+      },
+      release: async () => {}
+    })
+  };
+
+  const fakeGpuTelemetry: GpuTelemetryPort = {
+    readMemory: async () => ({
+      totalVramMb: 24576,
+      usedVramMb: 4096,
+      freeVramMb: 20480,
+      reservedVramMb: 4096,
+      measuredAt: new Date().toISOString()
+    })
+  };
+
+  const mockEnforceLicenseRouting: EnforceLicenseRouting = {
+    enforce: () => {
+      if (options.licenseError) {
+        throw options.licenseError;
+      }
+    }
+  };
+
+  const executeProfileRenderUseCase = new ExecuteProfileRenderUseCase(
+    renderEngine,
+    fakeGpuLease,
+    fakeGpuTelemetry,
+    mockEnforceLicenseRouting
+  );
+
+  const resolveApprovedCandidateMedia = new ResolveApprovedCandidateMediaUseCase({
+    sceneRepository: {
+      findById: async (id: SceneId) => options.uow.execute(async (ctx) => ctx.scenes.findById(id)),
+      save: async () => {}
+    },
+    storyboardCandidateRepository: {
+      findById: async (id: CandidateId) =>
+        options.uow.execute(async (ctx) => ctx.candidates.findById(id)),
+      insert: async () => {},
+      listBySceneAndRevision: async () => []
+    },
+    objectStorage: options.objectStorage,
+    hashBytes: {
+      hashBytes: async (bytes: Uint8Array) => sha256Hex(bytes)
+    }
+  });
+
+  const productionAssembler = new AssembleGenerationManifest({
+    hashBytes: {
+      hashBytes: async (bytes: Uint8Array) => sha256Hex(bytes)
+    },
+    sceneRepository: {
+      findById: async (id: SceneId) => options.uow.execute(async (ctx) => ctx.scenes.findById(id)),
+      save: async () => {}
+    },
+    storyboardCandidateRepository: {
+      findById: async (id: CandidateId) =>
+        options.uow.execute(async (ctx) => ctx.candidates.findById(id)),
+      insert: async () => {},
+      listBySceneAndRevision: async () => []
+    },
+    referenceAssetRepository: {
+      listBySceneId: async () => [],
+      findByIds: async () => []
+    }
+  });
+
+  const fakeVideoBytes =
+    options.fakeVideoBytes ?? new Uint8Array([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70]);
+
+  const executor = createCertifiedRenderJobExecutor({
+    loadCertificationProfile: options.loadProfile ?? (async () => fakeLtxI2vProfile),
+    readApprovedProvenance: async () => fakeLtxI2vProvenance,
+    collectCertificationProvenance: async () => fakeLtxI2vProvenance,
+    verifyGoldMasterProvenance,
+    readWorkflowFile: async () => realLtxI2vWorkflow,
+    hashWorkflow: () => fakeLtxI2vProfile.expectedWorkflowHash,
+    resolveApprovedCandidateMedia,
+    objectStorage: options.objectStorage,
+    stageReferenceImage,
+    useCase: executeProfileRenderUseCase,
+    outputReader: {
+      readOutput: async () => ({
+        bytes: fakeVideoBytes,
+        contentType: "video/mp4"
+      })
+    },
+    productionManifestAssembler: productionAssembler
+  });
+
+  const worker = new RenderWorker(
+    {
+      controlApiClient: options.controlApiClient,
+      objectStorage: options.objectStorage,
+      enforceStorageAdmission: {
+        execute: async () => {}
+      } as unknown as EnforceStorageAdmission,
+      renderJobExecutor: async (job) => {
+        try {
+          return await executor(job);
+        } catch (err) {
+          console.error("[EXECUTOR-FAILED]", err);
+          throw err;
+        }
+      },
+      logger: {
+        info: () => {},
+        warn: (...args: unknown[]) => console.warn("[WORKER-WARN]", ...args),
+        error: (...args: unknown[]) => console.error("[WORKER-ERROR]", ...args)
+      },
+      sleep: async () => {}
+    },
+    {
+      workerId: "worker-ltx-test",
+      pollIntervalMs: 1000,
+      heartbeatIntervalMs: 5000,
+      leaseDurationMs: 30000,
+      allowedJobKinds: ["production"]
+    }
+  );
+
+  return { worker, stageReferenceImage };
+}
+
+async function setupTestScene(
+  client: PoolClient,
+  objectStorage: S3ObjectStorage,
+  options?: {
+    engineAssigned?: string;
+    durationSeconds?: number;
+    specRevision?: number;
+    candidateCount?: number;
+    visualDescription?: string;
+  }
+) {
+  const clientRecord = await insertClientRecord(client);
+  const campaign = await insertCampaignRecord(client, {
+    clientId: clientRecord.client_id,
+    totalScenes: 1
+  });
+  const sceneRecord = await insertStoryboardSceneRecord(client, {
+    campaignId: campaign.campaign_id,
+    durationSeconds: options?.durationSeconds ?? 4.042,
+    status: "director_review",
+    specRevision: options?.specRevision ?? 1,
+    engineAssigned: options?.engineAssigned ?? "LTX_25_720P_5S_I2V_V1",
+    visualDescription:
+      options?.visualDescription ?? "Sunset over Caribbean waters with cinematic motion blur."
+  });
+
+  const candidates: Array<{
+    candidateId: string;
+    candidateStorageKey: string;
+    bytes: Uint8Array;
+    hash: string;
+  }> = [];
+
+  const count = options?.candidateCount ?? 1;
+  for (let i = 1; i <= count; i++) {
+    const bytes = new Uint8Array([
+      137,
+      80,
+      78,
+      71,
+      13,
+      10,
+      26,
+      10,
+      0,
+      0,
+      0,
+      13,
+      73,
+      72,
+      68,
+      82,
+      0,
+      0,
+      0,
+      i,
+      0,
+      0,
+      0,
+      i,
+      8,
+      6,
+      0,
+      0,
+      0,
+      31,
+      21,
+      196,
+      137 + i
+    ]);
+    const hash = sha256Hex(bytes);
+    const candidateStorageKey = `candidates/${sceneRecord.scene_id}/rev_${sceneRecord.spec_revision}_var_${i}.png`;
+
+    await objectStorage.putObject({
+      bucket: BUCKETS.REVIEW,
+      key: candidateStorageKey,
+      body: bytes,
+      contentType: "image/png"
+    });
+
+    const candidateRecord = await insertStoryboardCandidateRecord(client, {
+      sceneId: sceneRecord.scene_id as SceneId,
+      sceneSpecRevision: sceneRecord.spec_revision,
+      variantOrdinal: i,
+      storageBucket: BUCKETS.REVIEW,
+      storageObjectKey: candidateStorageKey,
+      contentHashSha256: hash
+    });
+
+    candidates.push({
+      candidateId: candidateRecord.candidate_id,
+      candidateStorageKey,
+      bytes,
+      hash
+    });
+  }
+
+  if (candidates.length > 0) {
+    await client.query(
+      `UPDATE storyboard_scenes
+       SET selected_candidate_id = $1,
+           selected_candidate_revision = $2
+       WHERE scene_id = $3`,
+      [candidates[0]!.candidateId, sceneRecord.spec_revision, sceneRecord.scene_id]
+    );
+  }
+
+  return {
+    clientRecord,
+    campaign,
+    sceneRecord,
+    candidates
+  };
+}
 
 describe("LTX-2.5 Production Render End-to-End Integration", () => {
   let postgresContainer: StartedPostgres18Container;
@@ -203,7 +691,6 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
   let objectStorage: S3ObjectStorage;
   let pool: Pool;
   let serverApp: ReturnType<typeof createControlApiApp> | undefined;
-  let controlApiUrl: string;
 
   beforeAll(async () => {
     [postgresContainer, minioContainer] = await Promise.all([
@@ -322,54 +809,430 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
 
     const address = await app.listen({ port: 0, host: "127.0.0.1" });
     serverApp = app;
-    controlApiUrl = address;
     return { url: address, app, uow };
   }
 
-  it("simulated component test: approved scene -> production enqueue -> claim -> RenderWorker.processJob -> QA state with LTX-2.5 manifest", async () => {
-    const { uow } = await startControlApi();
+  it("AC-1, AC-2, AC-8: normal control-plane dispatch without manual override selects I2V profile, injects referenceImage over real transport, and carries execution provenance to manifest", async () => {
+    const origEnableI2v = process.env.ENABLE_I2V_PRODUCTION;
+    const origCcoEnableI2v = process.env.CCO_ENABLE_I2V_PRODUCTION;
+    delete process.env.ENABLE_I2V_PRODUCTION;
+    delete process.env.CCO_ENABLE_I2V_PRODUCTION;
 
-    // 1. Insert client, campaign, scene, candidate, and approve scene with candidate selection
+    try {
+      const { uow, url: controlApiBaseUrl } = await startControlApi();
+      const client = await pool.connect();
+      let sceneId: string;
+      let candidateId: string;
+      let candidateHash: string;
+
+      try {
+        const setup = await setupTestScene(client, objectStorage, {
+          engineAssigned: "LTX_25_720P_5S_I2V_V1"
+        });
+        sceneId = setup.sceneRecord.scene_id;
+        candidateId = setup.candidates[0]!.candidateId;
+        candidateHash = setup.candidates[0]!.hash;
+
+        // Verify scene configuration carries the I2V profile identity directly
+        expect(setup.sceneRecord.engine_assigned).toBe("LTX_25_720P_5S_I2V_V1");
+      } finally {
+        client.release();
+      }
+
+      // 1. Normal dispatch: construct EnqueueSceneProductionRenderUseCase with zero options and no env vars
+      const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow);
+      const approveAndDispatch = new ApproveSceneAndDispatchCampaignProductionUseCase(
+        uow,
+        enqueueUseCase
+      );
+      await approveAndDispatch.execute({
+        sceneId,
+        eventId: randomUUID(),
+        reviewerName: "director-e2e-normal",
+        occurredAt: new Date().toISOString()
+      });
+
+      // Verify render job created has I2V workflow template, candidate bound, frameCount undefined
+      const verifyClient1 = await pool.connect();
+      let jobId: string;
+      try {
+        const dbJob = await verifyClient1.query(
+          "SELECT job_id, job_kind, workflow_template, injected_payload, status FROM render_jobs WHERE scene_id = $1",
+          [sceneId]
+        );
+        expect(dbJob.rows).toHaveLength(1);
+        const row = dbJob.rows[0]!;
+        jobId = row.job_id;
+        expect(row.job_kind).toBe("production");
+        expect(row.workflow_template).toBe("ltx-25-720p-97f-i2v");
+        expect(row.status).toBe("queued");
+        expect(row.injected_payload.approvedCandidateId).toBe(candidateId);
+        expect(row.injected_payload.frameCount).toBeUndefined();
+        expect(typeof row.injected_payload.seed).toBe("number");
+      } finally {
+        verifyClient1.release();
+      }
+
+      // 2. Worker claims job
+      const controlApiClient = createControlApiClient({ baseUrl: controlApiBaseUrl });
+      const claimedJob = await controlApiClient.claim("worker-ltx-test", ["production"]);
+      expect(claimedJob).toBeDefined();
+      expect(claimedJob?.jobId).toBe(jobId);
+
+      // 3. Process with real transport stack
+      const { transport, recordedUploads, recordedPrompts } = setupRecordingComfyUiTransport();
+      const { worker } = createTestRenderWorker({
+        controlApiClient,
+        uow,
+        objectStorage,
+        transport
+      });
+
+      const outcome = await worker.processJob(claimedJob!);
+      expect(outcome).toBe("completed");
+
+      // 4. Assert real transport HTTP upload and prompt calls (AC-2)
+      expect(recordedUploads).toHaveLength(1);
+      const upload = recordedUploads[0]!;
+      expect(upload.formType).toBe("input");
+      expect(sha256Hex(upload.bytes)).toBe(candidateHash);
+
+      expect(recordedPrompts).toHaveLength(1);
+      const prompt = recordedPrompts[0]!;
+      const node20 = prompt.workflow["20"]?.inputs as Record<string, unknown> | undefined;
+      expect(node20?.["image"]).toBe(`conditioning/${upload.filename}`);
+      const node3 = prompt.workflow["3"]?.inputs as Record<string, unknown> | undefined;
+      expect(node3?.["text"]).toBe("Sunset over Caribbean waters with cinematic motion blur.");
+      const node1 = prompt.workflow["1"]?.inputs as Record<string, unknown> | undefined;
+      expect(node1?.["seed"]).toBe(claimedJob!.injectedPayload.seed);
+
+      // 5. Assert DB state & GenerationManifest provenance (AC-8)
+      const verifyClient2 = await pool.connect();
+      try {
+        const dbScene = await verifyClient2.query(
+          "SELECT status FROM storyboard_scenes WHERE scene_id = $1",
+          [sceneId]
+        );
+        expect(dbScene.rows[0]?.status).toBe("qa");
+
+        const dbJob = await verifyClient2.query(
+          "SELECT status, error_trace FROM render_jobs WHERE job_id = $1",
+          [jobId]
+        );
+        expect(dbJob.rows[0]?.status).toBe("completed");
+        expect(dbJob.rows[0]?.error_trace).toBeNull();
+
+        const dbManifest = await verifyClient2.query(
+          "SELECT manifest_payload FROM generation_manifests WHERE job_id = $1",
+          [jobId]
+        );
+        expect(dbManifest.rows).toHaveLength(1);
+        const payload = dbManifest.rows[0]?.manifest_payload;
+        expect(payload.renderProfile).toBe("ltx-25-720p-97f-i2v");
+        expect(payload.engine).toBe("ltx_25_i2v");
+        expect(payload.executionConditioning.candidateId).toBe(candidateId);
+        expect(payload.executionConditioning.contentHashSha256).toBe(candidateHash);
+        expect(payload.executionConditioning.stagedAs.name).toBe(upload.filename);
+        expect(payload.approvedCandidate.id).toBe(candidateId);
+        expect(payload.approvedCandidate.contentHash).toBe(candidateHash);
+
+        // Verify S3 video delivery
+        const videoObjectKey = payload.outputs[0].key;
+        const storedVideo = await objectStorage.getObject({
+          bucket: BUCKETS.DELIVERY,
+          key: videoObjectKey
+        });
+        expect(storedVideo).toBeDefined();
+        expect(sha256Hex(storedVideo!.body)).toBe(payload.outputs[0].checksumSha256);
+      } finally {
+        verifyClient2.release();
+      }
+    } finally {
+      if (origEnableI2v !== undefined) {
+        process.env.ENABLE_I2V_PRODUCTION = origEnableI2v;
+      } else {
+        delete process.env.ENABLE_I2V_PRODUCTION;
+      }
+      if (origCcoEnableI2v !== undefined) {
+        process.env.CCO_ENABLE_I2V_PRODUCTION = origCcoEnableI2v;
+      } else {
+        delete process.env.CCO_ENABLE_I2V_PRODUCTION;
+      }
+    }
+  });
+
+  it("operator rollout control: enableConditionedProfile option selects I2V workflow even for scenes with legacy profile", async () => {
+    const { uow, url: controlApiBaseUrl } = await startControlApi();
     const client = await pool.connect();
     let sceneId: string;
     let candidateId: string;
-    let candidateStorageKey: string;
-    const candidateImageBytes = new Uint8Array([
-      137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0,
-      0, 0, 31, 21, 196, 137
-    ]);
-    const candidateHash = sha256Hex(candidateImageBytes);
+    let candidateHash: string;
 
     try {
-      const clientRecord = await insertClientRecord(client);
-      const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
-      const sceneRecord = await insertStoryboardSceneRecord(client, {
-        campaignId: campaign.campaign_id,
-        durationSeconds: 4.0, // 4000ms
-        status: "director_review",
-        specRevision: 1,
-        engineAssigned: "ltx_25",
-        visualDescription: "Sunset over Caribbean waters with cinematic motion blur."
+      const setup = await setupTestScene(client, objectStorage, {
+        engineAssigned: "ltx_25" // Legacy engine profile
       });
-      sceneId = sceneRecord.scene_id;
-      candidateStorageKey = `candidates/${sceneId}/rev_1_var_1.png`;
+      sceneId = setup.sceneRecord.scene_id;
+      candidateId = setup.candidates[0]!.candidateId;
+      candidateHash = setup.candidates[0]!.hash;
 
-      await objectStorage.putObject({
-        bucket: BUCKETS.REVIEW,
-        key: candidateStorageKey,
-        body: candidateImageBytes,
-        contentType: "image/png"
-      });
+      await client.query(
+        `UPDATE storyboard_scenes
+         SET status = 'approved',
+             approved_by = 'director-override',
+             approved_at = NOW(),
+             approved_revision = 1,
+             selected_candidate_id = $1,
+             selected_candidate_revision = 1
+         WHERE scene_id = $2`,
+        [candidateId, sceneId]
+      );
+    } finally {
+      client.release();
+    }
 
-      const candidate = await insertStoryboardCandidateRecord(client, {
-        sceneId: sceneId as SceneId,
-        sceneSpecRevision: 1,
-        variantOrdinal: 1,
-        storageBucket: BUCKETS.REVIEW,
-        storageObjectKey: candidateStorageKey,
-        contentHashSha256: candidateHash
+    // Enqueue using explicit enableConditionedProfile override
+    const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow, {
+      enableConditionedProfile: true
+    });
+    const enqueueResult = await enqueueUseCase.execute({ sceneId });
+
+    expect(enqueueResult.job.workflowTemplate).toBe("ltx-25-720p-97f-i2v");
+    expect(enqueueResult.job.injectedPayload.approvedCandidateId).toBe(candidateId);
+
+    // Claim and process with real transport
+    const controlApiClient = createControlApiClient({ baseUrl: controlApiBaseUrl });
+    const claimedJob = await controlApiClient.claim("worker-ltx-test", ["production"]);
+    expect(claimedJob).toBeDefined();
+
+    const { transport, recordedUploads, recordedPrompts } = setupRecordingComfyUiTransport();
+    const { worker } = createTestRenderWorker({
+      controlApiClient,
+      uow,
+      objectStorage,
+      transport
+    });
+
+    const outcome = await worker.processJob(claimedJob!);
+    expect(outcome).toBe("completed");
+    expect(recordedUploads).toHaveLength(1);
+    expect(sha256Hex(recordedUploads[0]!.bytes)).toBe(candidateHash);
+    expect(recordedPrompts).toHaveLength(1);
+    expect(recordedPrompts[0]!.workflow["20"]?.inputs?.["image"]).toBe(
+      `conditioning/${recordedUploads[0]!.filename}`
+    );
+  });
+
+  it("AC-3: changing the selected/approved candidate changes the actual image input submitted to ComfyUI while preserving the same SceneSpec revision rules", async () => {
+    const { uow, url: controlApiBaseUrl } = await startControlApi();
+    const client = await pool.connect();
+    let sceneId: string;
+    let candidateA: { candidateId: string; hash: string; bytes: Uint8Array };
+    let candidateB: { candidateId: string; hash: string; bytes: Uint8Array };
+
+    try {
+      const setup = await setupTestScene(client, objectStorage, {
+        candidateCount: 2
       });
-      candidateId = candidate.candidate_id;
+      sceneId = setup.sceneRecord.scene_id;
+      candidateA = setup.candidates[0]!;
+      candidateB = setup.candidates[1]!;
+    } finally {
+      client.release();
+    }
+
+    const controlApiClient = createControlApiClient({ baseUrl: controlApiBaseUrl });
+
+    // RUN 1: Approve Candidate A and render
+    const client1 = await pool.connect();
+    try {
+      await client1.query(
+        `UPDATE storyboard_scenes
+         SET status = 'approved',
+             approved_by = 'director-test',
+             approved_at = NOW(),
+             approved_revision = 1,
+             selected_candidate_id = $1,
+             selected_candidate_revision = 1
+         WHERE scene_id = $2`,
+        [candidateA.candidateId, sceneId]
+      );
+    } finally {
+      client1.release();
+    }
+
+    const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow);
+    await enqueueUseCase.execute({ sceneId });
+
+    const claimedJobA = await controlApiClient.claim("worker-ltx-test", ["production"]);
+    expect(claimedJobA).toBeDefined();
+
+    const transportA = setupRecordingComfyUiTransport();
+    const workerA = createTestRenderWorker({
+      controlApiClient,
+      uow,
+      objectStorage,
+      transport: transportA.transport
+    });
+
+    const outcomeA = await workerA.worker.processJob(claimedJobA!);
+    expect(outcomeA).toBe("completed");
+    expect(transportA.recordedUploads).toHaveLength(1);
+    const uploadA = transportA.recordedUploads[0]!;
+    expect(sha256Hex(uploadA.bytes)).toBe(candidateA.hash);
+    expect(transportA.recordedPrompts[0]!.workflow["20"]?.inputs?.["image"]).toBe(
+      `conditioning/${uploadA.filename}`
+    );
+
+    // RUN 2: Swap approval to Candidate B on the same spec revision 1 and render
+    const client2 = await pool.connect();
+    try {
+      await client2.query(
+        `UPDATE storyboard_scenes
+         SET status = 'approved',
+             approved_by = 'director-test',
+             approved_at = NOW(),
+             approved_revision = 1,
+             selected_candidate_id = $1,
+             selected_candidate_revision = 1
+         WHERE scene_id = $2`,
+        [candidateB.candidateId, sceneId]
+      );
+    } finally {
+      client2.release();
+    }
+
+    await enqueueUseCase.execute({ sceneId });
+
+    const claimedJobB = await controlApiClient.claim("worker-ltx-test", ["production"]);
+    expect(claimedJobB).toBeDefined();
+
+    const transportB = setupRecordingComfyUiTransport();
+    const workerB = createTestRenderWorker({
+      controlApiClient,
+      uow,
+      objectStorage,
+      transport: transportB.transport
+    });
+
+    const outcomeB = await workerB.worker.processJob(claimedJobB!);
+    expect(outcomeB).toBe("completed");
+    expect(transportB.recordedUploads).toHaveLength(1);
+    const uploadB = transportB.recordedUploads[0]!;
+    expect(sha256Hex(uploadB.bytes)).toBe(candidateB.hash);
+    expect(transportB.recordedPrompts[0]!.workflow["20"]?.inputs?.["image"]).toBe(
+      `conditioning/${uploadB.filename}`
+    );
+
+    // Assert inputs differ and match their respective candidate
+    expect(sha256Hex(uploadA.bytes)).not.toBe(sha256Hex(uploadB.bytes));
+    expect(uploadA.filename).not.toBe(uploadB.filename);
+  });
+
+  it("AC-4: fail-closed: a different unselected candidate from the same scene/revision cannot condition production", async () => {
+    const { uow, url: controlApiBaseUrl } = await startControlApi();
+    const client = await pool.connect();
+    let sceneId: string;
+    let candidateAId: string;
+    let candidateBId: string;
+
+    try {
+      const setup = await setupTestScene(client, objectStorage, {
+        candidateCount: 2
+      });
+      sceneId = setup.sceneRecord.scene_id;
+      candidateAId = setup.candidates[0]!.candidateId;
+      candidateBId = setup.candidates[1]!.candidateId;
+
+      // Approve Candidate A
+      await client.query(
+        `UPDATE storyboard_scenes
+         SET status = 'approved',
+             approved_by = 'director-test',
+             approved_at = NOW(),
+             approved_revision = 1,
+             selected_candidate_id = $1,
+             selected_candidate_revision = 1
+         WHERE scene_id = $2`,
+        [candidateAId, sceneId]
+      );
+    } finally {
+      client.release();
+    }
+
+    const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow);
+    const enqueueResult = await enqueueUseCase.execute({ sceneId });
+
+    // Tamper injectedPayload to reference Candidate B instead of approved Candidate A
+    const clientMutate = await pool.connect();
+    try {
+      await clientMutate.query(
+        `UPDATE render_jobs
+         SET injected_payload = jsonb_set(injected_payload, '{approvedCandidateId}', to_jsonb($1::text)),
+             retry_count = max_retries
+         WHERE job_id = $2`,
+        [candidateBId, enqueueResult.job.jobId]
+      );
+    } finally {
+      clientMutate.release();
+    }
+
+    const controlApiClient = createControlApiClient({ baseUrl: controlApiBaseUrl });
+    const claimedJob = await controlApiClient.claim("worker-ltx-test", ["production"]);
+    expect(claimedJob).toBeDefined();
+
+    const { transport, recordedUploads, recordedPrompts } = setupRecordingComfyUiTransport();
+    const { worker } = createTestRenderWorker({
+      controlApiClient,
+      uow,
+      objectStorage,
+      transport
+    });
+
+    const outcome = await worker.processJob(claimedJob!);
+    expect(outcome).toBe("failed");
+
+    // Verify DB state
+    const verifyClient = await pool.connect();
+    try {
+      const dbJob = await verifyClient.query(
+        "SELECT status, error_trace FROM render_jobs WHERE job_id = $1",
+        [claimedJob!.jobId]
+      );
+      expect(dbJob.rows[0]?.status).toBe("failed");
+      expect(dbJob.rows[0]?.error_trace).toContain("CandidateIdentityMismatchError");
+
+      const dbScene = await verifyClient.query(
+        "SELECT status FROM storyboard_scenes WHERE scene_id = $1",
+        [sceneId]
+      );
+      expect(dbScene.rows[0]?.status).toBe("failed");
+    } finally {
+      verifyClient.release();
+    }
+
+    // Zero ComfyUI uploads or prompts
+    expect(recordedUploads).toHaveLength(0);
+    expect(recordedPrompts).toHaveLength(0);
+  });
+
+  it("AC-4: fail-closed: candidate belonging to a different scene cannot condition production", async () => {
+    const { uow, url: controlApiBaseUrl } = await startControlApi();
+    const client = await pool.connect();
+    let scene1Id: string;
+    let candidate2Id: string;
+
+    try {
+      // Drop composite FK to simulate desynced database state where scene selected candidate from another scene
+      await client.query(
+        "ALTER TABLE storyboard_scenes DROP CONSTRAINT IF EXISTS fk_scene_selected_candidate_revision;"
+      );
+
+      const setup1 = await setupTestScene(client, objectStorage);
+      scene1Id = setup1.sceneRecord.scene_id;
+
+      const setup2 = await setupTestScene(client, objectStorage);
+      candidate2Id = setup2.candidates[0]!.candidateId;
 
       await client.query(
         `UPDATE storyboard_scenes
@@ -380,228 +1243,488 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
              selected_candidate_id = $1,
              selected_candidate_revision = 1
          WHERE scene_id = $2`,
-        [candidate.candidate_id, sceneId]
+        [candidate2Id, scene1Id]
       );
     } finally {
       client.release();
     }
 
-    // 2. Enqueue production render job via EnqueueSceneProductionRenderUseCase with conditioned profile enabled
-    const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow, {
-      enableConditionedProfile: true
-    });
-    const enqueueResult = await enqueueUseCase.execute({ sceneId });
+    const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow);
+    const enqueueResult = await enqueueUseCase.execute({ sceneId: scene1Id });
 
-    expect(enqueueResult.scene.status).toBe("queued");
-    expect(enqueueResult.job.jobKind).toBe("production");
-    expect(enqueueResult.job.workflowTemplate).toBe("ltx-25-720p-97f-i2v");
-    expect(enqueueResult.job.injectedPayload.frameCount).toBeUndefined();
-    expect(enqueueResult.job.injectedPayload.approvedCandidateId).toBe(candidateId);
-    expect(typeof enqueueResult.job.injectedPayload.seed).toBe("number");
-    expect(enqueueResult.job.injectedPayload.prompt).toBe(
-      "Sunset over Caribbean waters with cinematic motion blur."
-    );
-
-    // Verify scene status in DB is "queued"
-    const verifyClient1 = await pool.connect();
+    // Tamper job payload to point to candidate from scene 2
+    const clientMutate = await pool.connect();
     try {
-      const dbScene = await verifyClient1.query(
-        "SELECT status FROM storyboard_scenes WHERE scene_id = $1",
-        [sceneId]
+      await clientMutate.query(
+        `UPDATE render_jobs
+         SET injected_payload = jsonb_set(injected_payload, '{approvedCandidateId}', to_jsonb($1::text)),
+             retry_count = max_retries
+         WHERE job_id = $2`,
+        [candidate2Id, enqueueResult.job.jobId]
       );
-      expect(dbScene.rows[0]?.status).toBe("queued");
     } finally {
-      verifyClient1.release();
+      clientMutate.release();
     }
 
-    // 3. Worker claims the production job
-    const controlApiClient = createControlApiClient({ baseUrl: controlApiUrl });
+    const controlApiClient = createControlApiClient({ baseUrl: controlApiBaseUrl });
     const claimedJob = await controlApiClient.claim("worker-ltx-test", ["production"]);
     expect(claimedJob).toBeDefined();
-    expect(claimedJob?.jobId).toBe(enqueueResult.job.jobId);
-    expect(claimedJob?.status).toBe("leased");
-    expect(claimedJob?.injectedPayload.frameCount).toBeUndefined();
-    expect(claimedJob?.injectedPayload.approvedCandidateId).toBe(candidateId);
 
-    // 4. Compose certified render executor with simulated engine
-    let executedWorkflow: RenderWorkflow | undefined;
-    let stagedReferenceImageValue: { name: string; subfolder: string } | undefined;
-    let cleanedUpReferenceImage: { name: string; subfolder?: string } | undefined;
-    const fakeVideoBytes = new Uint8Array([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70]); // dummy mp4 header
-    const fakeVideoHash = sha256Hex(fakeVideoBytes);
-
-    const resolveApprovedCandidateMedia = new ResolveApprovedCandidateMediaUseCase({
-      sceneRepository: {
-        findById: async (id: SceneId) => uow.execute(async (ctx) => ctx.scenes.findById(id)),
-        save: async () => {}
-      },
-      storyboardCandidateRepository: {
-        findById: async (id: CandidateId) =>
-          uow.execute(async (ctx) => ctx.candidates.findById(id)),
-        insert: async () => {},
-        listBySceneAndRevision: async () => []
-      },
+    const { transport, recordedUploads, recordedPrompts } = setupRecordingComfyUiTransport();
+    const { worker } = createTestRenderWorker({
+      controlApiClient,
+      uow,
       objectStorage,
-      hashBytes: {
-        hashBytes: async (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
-      }
+      transport
     });
-
-    const stageReferenceImage: ComfyUiInputStagingPort = {
-      stage: async (file) => {
-        stagedReferenceImageValue = {
-          name: file.filename,
-          subfolder: "conditioning"
-        };
-        return stagedReferenceImageValue;
-      },
-      cleanup: async (file) => {
-        cleanedUpReferenceImage = file;
-      }
-    };
-
-    const productionAssembler = new AssembleGenerationManifest({
-      hashBytes: {
-        hashBytes: async (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
-      },
-      sceneRepository: {
-        findById: async (id: SceneId) => uow.execute(async (ctx) => ctx.scenes.findById(id)),
-        save: async () => {}
-      },
-      storyboardCandidateRepository: {
-        findById: async (id: CandidateId) =>
-          uow.execute(async (ctx) => ctx.candidates.findById(id)),
-        insert: async () => {},
-        listBySceneAndRevision: async () => []
-      },
-      referenceAssetRepository: {
-        listBySceneId: async () => [],
-        findByIds: async () => []
-      }
-    });
-
-    const executor = createCertifiedRenderJobExecutor({
-      loadCertificationProfile: async () => fakeLtxI2vProfile,
-      readApprovedProvenance: async () => fakeLtxI2vProvenance,
-      collectCertificationProvenance: async () => fakeLtxI2vProvenance,
-      verifyGoldMasterProvenance: () => {},
-      readWorkflowFile: async () => realLtxI2vWorkflow,
-      hashWorkflow: () => fakeLtxI2vProfile.expectedWorkflowHash,
-      resolveApprovedCandidateMedia,
-      objectStorage,
-      stageReferenceImage,
-      executeProfileRender: async (
-        input: ExecuteProfileRenderInput
-      ): Promise<ExecuteProfileRenderResult> => {
-        executedWorkflow = input.workflow;
-        return {
-          status: "succeeded",
-          promptId: "prompt-ltx-uuid",
-          outputObjectKeys: ["output.mp4"],
-          durationMs: 4200,
-          profile: input.identity,
-          preDispatchGpu: {
-            totalVramMb: 24576,
-            usedVramMb: 4096,
-            freeVramMb: 20480,
-            reservedVramMb: 4096,
-            measuredAt: new Date().toISOString()
-          }
-        };
-      },
-      outputReader: {
-        readOutput: async () => ({
-          bytes: fakeVideoBytes,
-          contentType: "video/mp4"
-        })
-      },
-      productionManifestAssembler: productionAssembler
-    });
-
-    // 5. Compose RenderWorker and process the claimed job end-to-end
-    const worker = new RenderWorker(
-      {
-        controlApiClient,
-        objectStorage,
-        enforceStorageAdmission: {
-          execute: async () => {}
-        } as unknown as EnforceStorageAdmission,
-        renderJobExecutor: executor,
-        logger: {
-          info: () => {},
-          warn: () => {},
-          error: () => {}
-        },
-        sleep: async () => {}
-      },
-      {
-        workerId: "worker-ltx-test",
-        pollIntervalMs: 1000,
-        heartbeatIntervalMs: 5000,
-        leaseDurationMs: 30000,
-        allowedJobKinds: ["production"]
-      }
-    );
 
     const outcome = await worker.processJob(claimedJob!);
-    expect(outcome).toBe("completed");
+    expect(outcome).toBe("failed");
 
-    // Verify injected workflow parameters in executor
-    expect(executedWorkflow).toBeDefined();
-    const node20Inputs = executedWorkflow!["20"]?.inputs as Record<string, unknown> | undefined;
-    const node3Inputs = executedWorkflow!["3"]?.inputs as Record<string, unknown> | undefined;
-    const node1Inputs = executedWorkflow!["1"]?.inputs as Record<string, unknown> | undefined;
-    expect(node20Inputs?.["image"]).toBe(`conditioning/${stagedReferenceImageValue!.name}`);
-    expect(node3Inputs?.["text"]).toBe("Sunset over Caribbean waters with cinematic motion blur.");
-    expect(node1Inputs?.["seed"]).toBe(claimedJob!.injectedPayload.seed);
-    expect(cleanedUpReferenceImage).toEqual({
-      name: stagedReferenceImageValue!.name,
-      subfolder: "conditioning"
-    });
-
-    // 6. Verify DB states
-    const verifyClient3 = await pool.connect();
+    const verifyClient = await pool.connect();
     try {
-      const dbScene = await verifyClient3.query(
-        "SELECT status FROM storyboard_scenes WHERE scene_id = $1",
-        [sceneId]
-      );
-      expect(dbScene.rows[0]?.status).toBe("qa");
-
-      const dbJob = await verifyClient3.query(
+      const dbJob = await verifyClient.query(
         "SELECT status, error_trace FROM render_jobs WHERE job_id = $1",
         [claimedJob!.jobId]
       );
-      expect(dbJob.rows[0]?.status).toBe("completed");
-      expect(dbJob.rows[0]?.error_trace).toBeNull();
+      expect(dbJob.rows[0]?.status).toBe("failed");
+      expect(dbJob.rows[0]?.error_trace).toContain("CandidateSceneMismatchError");
 
-      const dbManifest = await verifyClient3.query(
-        "SELECT manifest_payload FROM generation_manifests WHERE job_id = $1",
+      const dbScene = await verifyClient.query(
+        "SELECT status FROM storyboard_scenes WHERE scene_id = $1",
+        [scene1Id]
+      );
+      expect(dbScene.rows[0]?.status).toBe("failed");
+    } finally {
+      verifyClient.release();
+    }
+
+    expect(recordedUploads).toHaveLength(0);
+    expect(recordedPrompts).toHaveLength(0);
+  });
+
+  it("AC-5: fail-closed: stale or misaligned candidate/selection/approval revision cannot condition production", async () => {
+    const { uow, url: controlApiBaseUrl } = await startControlApi();
+    const client = await pool.connect();
+    let sceneId: string;
+    let candidateId: string;
+
+    try {
+      const setup = await setupTestScene(client, objectStorage);
+      sceneId = setup.sceneRecord.scene_id;
+      candidateId = setup.candidates[0]!.candidateId;
+
+      await client.query(
+        `UPDATE storyboard_scenes
+         SET status = 'approved',
+             approved_by = 'director-test',
+             approved_at = NOW(),
+             approved_revision = 1,
+             selected_candidate_id = $1,
+             selected_candidate_revision = 1
+         WHERE scene_id = $2`,
+        [candidateId, sceneId]
+      );
+    } finally {
+      client.release();
+    }
+
+    const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow);
+    const enqueueResult = await enqueueUseCase.execute({ sceneId });
+
+    // Invalidate candidate on spec revision bump:
+    // Scene spec_revision increments to 2, while candidate was generated for spec_revision 1
+    const clientMutate = await pool.connect();
+    try {
+      // Drop constraints to simulate stale candidate reference in Postgres
+      await clientMutate.query(
+        "ALTER TABLE storyboard_scenes DROP CONSTRAINT IF EXISTS storyboard_scene_selected_revision_current;"
+      );
+      await clientMutate.query(
+        "ALTER TABLE storyboard_scenes DROP CONSTRAINT IF EXISTS fk_scene_selected_candidate_revision;"
+      );
+
+      await clientMutate.query(
+        `UPDATE storyboard_scenes
+         SET spec_revision = 2
+         WHERE scene_id = $1`,
+        [sceneId]
+      );
+      await clientMutate.query(
+        "UPDATE render_jobs SET retry_count = max_retries WHERE job_id = $1",
+        [enqueueResult.job.jobId]
+      );
+    } finally {
+      clientMutate.release();
+    }
+
+    const controlApiClient = createControlApiClient({ baseUrl: controlApiBaseUrl });
+    const claimedJob = await controlApiClient.claim("worker-ltx-test", ["production"]);
+    expect(claimedJob).toBeDefined();
+
+    const { transport, recordedUploads, recordedPrompts } = setupRecordingComfyUiTransport();
+    const { worker } = createTestRenderWorker({
+      controlApiClient,
+      uow,
+      objectStorage,
+      transport
+    });
+
+    const outcome = await worker.processJob(claimedJob!);
+    expect(outcome).toBe("failed");
+
+    const verifyClient = await pool.connect();
+    try {
+      const dbJob = await verifyClient.query(
+        "SELECT status, error_trace FROM render_jobs WHERE job_id = $1",
         [claimedJob!.jobId]
       );
-      expect(dbManifest.rows).toHaveLength(1);
-      const manifestPayload = dbManifest.rows[0]?.manifest_payload;
-      expect(manifestPayload.fps).toBe(LTX_FPS);
-      expect(manifestPayload.frameCount).toBe(97);
-      expect(manifestPayload.sampling.seed).toBe(claimedJob!.injectedPayload.seed);
-      expect(manifestPayload.renderProfile).toBe(fakeLtxI2vProfile.id);
-      expect(manifestPayload.engine).toBe("ltx_25_i2v");
-      expect(manifestPayload.prompts.prompt).toBe(
-        "Sunset over Caribbean waters with cinematic motion blur."
-      );
-      expect(manifestPayload.outputs[0].checksumSha256).toBe(fakeVideoHash);
+      expect(dbJob.rows[0]?.status).toBe("failed");
+      expect(dbJob.rows[0]?.error_trace).toContain("StaleCandidateRevisionError");
 
-      // 7. Verify S3 / MinIO video output
-      const videoObjectKey = manifestPayload.outputs[0].key;
-      const storedVideo = await objectStorage.getObject({
-        bucket: BUCKETS.DELIVERY,
-        key: videoObjectKey
-      });
-      expect(storedVideo).toBeDefined();
-      expect(sha256Hex(storedVideo!.body)).toBe(fakeVideoHash);
+      const dbScene = await verifyClient.query(
+        "SELECT status FROM storyboard_scenes WHERE scene_id = $1",
+        [sceneId]
+      );
+      expect(dbScene.rows[0]?.status).toBe("failed");
     } finally {
-      verifyClient3.release();
+      verifyClient.release();
     }
+
+    expect(recordedUploads).toHaveLength(0);
+    expect(recordedPrompts).toHaveLength(0);
+  });
+
+  it("AC-6: fail-closed: missing candidate media fails deterministically with actionable error", async () => {
+    const { uow, url: controlApiBaseUrl } = await startControlApi();
+    const client = await pool.connect();
+    let sceneId: string;
+    let candidateStorageKey: string;
+
+    try {
+      const setup = await setupTestScene(client, objectStorage);
+      sceneId = setup.sceneRecord.scene_id;
+      const candidate = setup.candidates[0]!;
+      candidateStorageKey = candidate.candidateStorageKey;
+
+      await client.query(
+        `UPDATE storyboard_scenes
+         SET status = 'approved',
+             approved_by = 'director-test',
+             approved_at = NOW(),
+             approved_revision = 1,
+             selected_candidate_id = $1,
+             selected_candidate_revision = 1
+         WHERE scene_id = $2`,
+        [candidate.candidateId, sceneId]
+      );
+    } finally {
+      client.release();
+    }
+
+    const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow);
+    await enqueueUseCase.execute({ sceneId });
+
+    // Delete candidate media from MinIO before worker processes it
+    await rawS3Client.send(
+      new DeleteObjectCommand({
+        Bucket: BUCKETS.REVIEW,
+        Key: candidateStorageKey
+      })
+    );
+
+    const controlApiClient = createControlApiClient({ baseUrl: controlApiBaseUrl });
+    const claimedJob = await controlApiClient.claim("worker-ltx-test", ["production"]);
+    expect(claimedJob).toBeDefined();
+
+    const clientMutate = await pool.connect();
+    try {
+      await clientMutate.query(
+        "UPDATE render_jobs SET retry_count = max_retries WHERE job_id = $1",
+        [claimedJob!.jobId]
+      );
+    } finally {
+      clientMutate.release();
+    }
+
+    const { transport, recordedUploads, recordedPrompts } = setupRecordingComfyUiTransport();
+    const { worker } = createTestRenderWorker({
+      controlApiClient,
+      uow,
+      objectStorage,
+      transport
+    });
+
+    const outcome = await worker.processJob(claimedJob!);
+    expect(outcome).toBe("failed");
+
+    const verifyClient = await pool.connect();
+    try {
+      const dbJob = await verifyClient.query(
+        "SELECT status, error_trace FROM render_jobs WHERE job_id = $1",
+        [claimedJob!.jobId]
+      );
+      expect(dbJob.rows[0]?.status).toBe("failed");
+      expect(dbJob.rows[0]?.error_trace).toContain("ApprovedCandidateMediaUnavailableError");
+
+      const dbScene = await verifyClient.query(
+        "SELECT status FROM storyboard_scenes WHERE scene_id = $1",
+        [sceneId]
+      );
+      expect(dbScene.rows[0]?.status).toBe("failed");
+    } finally {
+      verifyClient.release();
+    }
+
+    expect(recordedUploads).toHaveLength(0);
+    expect(recordedPrompts).toHaveLength(0);
+  });
+
+  it("AC-6: fail-closed: corrupt/hash-mismatched candidate media fails deterministically", async () => {
+    const { uow, url: controlApiBaseUrl } = await startControlApi();
+    const client = await pool.connect();
+    let sceneId: string;
+    let candidateStorageKey: string;
+
+    try {
+      const setup = await setupTestScene(client, objectStorage);
+      sceneId = setup.sceneRecord.scene_id;
+      const candidate = setup.candidates[0]!;
+      candidateStorageKey = candidate.candidateStorageKey;
+
+      await client.query(
+        `UPDATE storyboard_scenes
+         SET status = 'approved',
+             approved_by = 'director-test',
+             approved_at = NOW(),
+             approved_revision = 1,
+             selected_candidate_id = $1,
+             selected_candidate_revision = 1
+         WHERE scene_id = $2`,
+        [candidate.candidateId, sceneId]
+      );
+    } finally {
+      client.release();
+    }
+
+    const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow);
+    await enqueueUseCase.execute({ sceneId });
+
+    // Overwrite candidate media in MinIO with corrupt bytes
+    const corruptBytes = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
+    await objectStorage.putObject({
+      bucket: BUCKETS.REVIEW,
+      key: candidateStorageKey,
+      body: corruptBytes,
+      contentType: "image/png"
+    });
+
+    const controlApiClient = createControlApiClient({ baseUrl: controlApiBaseUrl });
+    const claimedJob = await controlApiClient.claim("worker-ltx-test", ["production"]);
+    expect(claimedJob).toBeDefined();
+
+    const clientMutate = await pool.connect();
+    try {
+      await clientMutate.query(
+        "UPDATE render_jobs SET retry_count = max_retries WHERE job_id = $1",
+        [claimedJob!.jobId]
+      );
+    } finally {
+      clientMutate.release();
+    }
+
+    const { transport, recordedUploads, recordedPrompts } = setupRecordingComfyUiTransport();
+    const { worker } = createTestRenderWorker({
+      controlApiClient,
+      uow,
+      objectStorage,
+      transport
+    });
+
+    const outcome = await worker.processJob(claimedJob!);
+    expect(outcome).toBe("failed");
+
+    const verifyClient = await pool.connect();
+    try {
+      const dbJob = await verifyClient.query(
+        "SELECT status, error_trace FROM render_jobs WHERE job_id = $1",
+        [claimedJob!.jobId]
+      );
+      expect(dbJob.rows[0]?.status).toBe("failed");
+      expect(
+        dbJob.rows[0]?.error_trace?.includes("ApprovedCandidateMediaHashMismatchError") ||
+          dbJob.rows[0]?.error_trace?.includes("ReferenceImageIntegrityError")
+      ).toBe(true);
+
+      const dbScene = await verifyClient.query(
+        "SELECT status FROM storyboard_scenes WHERE scene_id = $1",
+        [sceneId]
+      );
+      expect(dbScene.rows[0]?.status).toBe("failed");
+    } finally {
+      verifyClient.release();
+    }
+
+    expect(recordedUploads).toHaveLength(0);
+    expect(recordedPrompts).toHaveLength(0);
+  });
+
+  it("AC-7: fail-closed: missing/unrepresentable conditioned profile cannot silently fall back to text-only generation", async () => {
+    const { uow, url: controlApiBaseUrl } = await startControlApi();
+    const client = await pool.connect();
+    let sceneId: string;
+
+    try {
+      const setup = await setupTestScene(client, objectStorage);
+      sceneId = setup.sceneRecord.scene_id;
+      const candidate = setup.candidates[0]!;
+
+      await client.query(
+        `UPDATE storyboard_scenes
+         SET status = 'approved',
+             approved_by = 'director-test',
+             approved_at = NOW(),
+             approved_revision = 1,
+             selected_candidate_id = $1,
+             selected_candidate_revision = 1
+         WHERE scene_id = $2`,
+        [candidate.candidateId, sceneId]
+      );
+    } finally {
+      client.release();
+    }
+
+    const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow);
+    await enqueueUseCase.execute({ sceneId });
+
+    const controlApiClient = createControlApiClient({ baseUrl: controlApiBaseUrl });
+    const claimedJob = await controlApiClient.claim("worker-ltx-test", ["production"]);
+    expect(claimedJob).toBeDefined();
+
+    const clientMutate = await pool.connect();
+    try {
+      await clientMutate.query(
+        "UPDATE render_jobs SET retry_count = max_retries WHERE job_id = $1",
+        [claimedJob!.jobId]
+      );
+    } finally {
+      clientMutate.release();
+    }
+
+    const { transport, recordedPrompts } = setupRecordingComfyUiTransport();
+    const { worker } = createTestRenderWorker({
+      controlApiClient,
+      uow,
+      objectStorage,
+      transport,
+      loadProfile: async () => {
+        throw new MissingCertifiedProfileError("ltx-25-720p-97f-i2v");
+      }
+    });
+
+    const outcome = await worker.processJob(claimedJob!);
+    expect(outcome).toBe("failed");
+
+    const verifyClient = await pool.connect();
+    try {
+      const dbJob = await verifyClient.query(
+        "SELECT status, error_trace FROM render_jobs WHERE job_id = $1",
+        [claimedJob!.jobId]
+      );
+      expect(dbJob.rows[0]?.status).toBe("failed");
+      expect(dbJob.rows[0]?.error_trace).toContain("MissingCertifiedProfileError");
+
+      const dbScene = await verifyClient.query(
+        "SELECT status FROM storyboard_scenes WHERE scene_id = $1",
+        [sceneId]
+      );
+      expect(dbScene.rows[0]?.status).toBe("failed");
+    } finally {
+      verifyClient.release();
+    }
+
+    // Strictly assert zero prompts were submitted to ComfyUI (no fallback to legacy profile)
+    expect(recordedPrompts).toHaveLength(0);
+  });
+
+  it("AC-7: fail-closed: staging/injection failure fails deterministically and prevents prompt submission", async () => {
+    const { uow, url: controlApiBaseUrl } = await startControlApi();
+    const client = await pool.connect();
+    let sceneId: string;
+
+    try {
+      const setup = await setupTestScene(client, objectStorage);
+      sceneId = setup.sceneRecord.scene_id;
+      const candidate = setup.candidates[0]!;
+
+      await client.query(
+        `UPDATE storyboard_scenes
+         SET status = 'approved',
+             approved_by = 'director-test',
+             approved_at = NOW(),
+             approved_revision = 1,
+             selected_candidate_id = $1,
+             selected_candidate_revision = 1
+         WHERE scene_id = $2`,
+        [candidate.candidateId, sceneId]
+      );
+    } finally {
+      client.release();
+    }
+
+    const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow);
+    await enqueueUseCase.execute({ sceneId });
+
+    const controlApiClient = createControlApiClient({ baseUrl: controlApiBaseUrl });
+    const claimedJob = await controlApiClient.claim("worker-ltx-test", ["production"]);
+    expect(claimedJob).toBeDefined();
+
+    const clientMutate = await pool.connect();
+    try {
+      await clientMutate.query(
+        "UPDATE render_jobs SET retry_count = max_retries WHERE job_id = $1",
+        [claimedJob!.jobId]
+      );
+    } finally {
+      clientMutate.release();
+    }
+
+    // Transport configured to fail on upload/image
+    const { transport, recordedUploads, recordedPrompts } = setupRecordingComfyUiTransport({
+      uploadShouldFail: true
+    });
+    const { worker } = createTestRenderWorker({
+      controlApiClient,
+      uow,
+      objectStorage,
+      transport
+    });
+
+    const outcome = await worker.processJob(claimedJob!);
+    expect(outcome).toBe("failed");
+
+    const verifyClient = await pool.connect();
+    try {
+      const dbJob = await verifyClient.query(
+        "SELECT status, error_trace FROM render_jobs WHERE job_id = $1",
+        [claimedJob!.jobId]
+      );
+      expect(dbJob.rows[0]?.status).toBe("failed");
+      expect(dbJob.rows[0]?.error_trace).toContain("ReferenceImageStagingError");
+
+      const dbScene = await verifyClient.query(
+        "SELECT status FROM storyboard_scenes WHERE scene_id = $1",
+        [sceneId]
+      );
+      expect(dbScene.rows[0]?.status).toBe("failed");
+    } finally {
+      verifyClient.release();
+    }
+
+    // Upload was attempted but rejected
+    expect(recordedUploads).toHaveLength(1);
+    // Zero prompts submitted to ComfyUI
+    expect(recordedPrompts).toHaveLength(0);
   });
 
   it("requires explicit COMFYUI_URL and COMFYUI_DIR host prerequisites to run live LTX-2.5 production render", () => {
@@ -646,11 +1769,14 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
       // 1. Insert client, campaign, scene, candidate, and approve scene with candidate selection
       const client = await pool.connect();
       let sceneId: string;
-      const candidateImageBytes = new Uint8Array([
-        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
-        0, 0, 0, 31, 21, 196, 137
-      ]);
+      const candidateFixturePath = resolve(
+        fileURLToPath(new URL("../fixtures/deterministic-reference.png", import.meta.url))
+      );
+      const candidateImageBytes = readFileSync(candidateFixturePath);
       const candidateHash = sha256Hex(candidateImageBytes);
+      expect(candidateHash).toBe(
+        "37ff59a820284c1dac27db2f824add8e8504b746c39c3dba4306fc206696ce3b"
+      );
 
       try {
         const clientRecord = await insertClientRecord(client);
@@ -726,8 +1852,12 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
           gpuIndex: 0,
           gpuLeasePath: "/tmp/gpu-live.lock",
           certificationManifestPath: resolve(rootPath, "templates/provenance.json"),
-          goldMasterProvenancePath: resolve(rootPath, "templates/provenance.json"),
-          licenseRegistryPath: resolve(rootPath, "config/component-license-registry.json"),
+          goldMasterProvenancePath:
+            liveConfig.goldMasterProvenancePath ??
+            resolve(rootPath, "certification/ltx-25/approved-provenance.json"),
+          licenseRegistryPath:
+            liveConfig.licenseRegistryPath ??
+            resolve(rootPath, "config/component-license-registry.json"),
           s3Endpoint: minioContainer.getEndpoint(),
           s3Region: "us-east-1",
           s3ForcePathStyle: true,

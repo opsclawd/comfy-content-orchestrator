@@ -122,6 +122,22 @@ export const LtxWorkloadIdentitySchema = z.object({
 });
 export type LtxWorkloadIdentity = z.infer<typeof LtxWorkloadIdentitySchema>;
 
+export const LtxI2vWorkloadIdentitySchema = z.object({
+  profileId: z.literal("ltx-25-720p-97f-i2v"),
+  renderProfileKey: z.literal("LTX_25_720P_5S_I2V_V1"),
+  renderProfileVersion: z.literal(1),
+  engine: z.literal("ltx_25_i2v"),
+  width: z.literal(1280),
+  height: z.literal(720),
+  frames: z.literal(97),
+  steps: z.literal(8),
+  workflowSha256: sha256HashSchema,
+  modelSha256: z.record(z.string().min(1), sha256HashSchema),
+  comfyUiCommit: gitCommitHashSchema,
+  customNodes: z.array(CustomNodeIdentitySchema)
+});
+export type LtxI2vWorkloadIdentity = z.infer<typeof LtxI2vWorkloadIdentitySchema>;
+
 export const FluxSchnellWorkloadIdentitySchema = z.object({
   profileId: z.literal("flux-schnell-draft"),
   renderProfileKey: z.literal("FLUX_SCHNELL_DRAFT_V1"),
@@ -140,6 +156,7 @@ export type FluxSchnellWorkloadIdentity = z.infer<typeof FluxSchnellWorkloadIden
 
 export const CertificationWorkloadIdentitySchema = z.discriminatedUnion("engine", [
   LtxWorkloadIdentitySchema,
+  LtxI2vWorkloadIdentitySchema,
   FluxSchnellWorkloadIdentitySchema
 ]);
 export type CertificationWorkloadIdentity = z.infer<typeof CertificationWorkloadIdentitySchema>;

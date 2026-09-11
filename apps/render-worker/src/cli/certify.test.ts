@@ -2,9 +2,18 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import type { CertificationEnvironment, CertificationArtifact } from "@cco/contracts";
+import type {
+  CertificationEnvironment,
+  CertificationArtifact,
+  LtxI2vWorkloadIdentity
+} from "@cco/contracts";
 import type { CertificationProfile, CertificationProvenanceReport } from "@cco/infrastructure";
-import type { RenderEnginePort, RenderQueueReceipt, RenderResult } from "@cco/application";
+import type {
+  RenderEnginePort,
+  RenderQueueReceipt,
+  RenderResult,
+  ComfyUiInputStagingPort
+} from "@cco/application";
 import {
   parseCertifyCliArgs,
   runCertificationCli,
@@ -133,6 +142,73 @@ describe("certify CLI", () => {
     })
   });
 
+  const mockLtxI2vProfile: CertificationProfile = Object.freeze({
+    id: "ltx-25-720p-97f-i2v",
+    engine: "ltx_25_i2v",
+    workflowPath: "/test/manifests/ltx_25_720p_97f_i2v_api.json",
+    workflowRelativePath: "ltx_25_720p_97f_i2v_api.json",
+    expectedWorkflowHash: "b".repeat(64),
+    source: Object.freeze({
+      kind: "official_upstream" as const,
+      uri: "https://github.com/Lightricks/LTX-2",
+      revision: "main",
+      license: "LTX-2 Community License"
+    }),
+    baseline: Object.freeze({
+      width: 1280,
+      height: 720,
+      frames: 97,
+      steps: 8,
+      approximateDurationSeconds: 5
+    }),
+    minFreeDiskGb: 100,
+    runnerProfile: "dynamicvram-offload-v1",
+    models: Object.freeze([
+      {
+        category: "diffusion_models" as const,
+        relativePath: "ltx-video-2b-v0.9.1.safetensors"
+      },
+      {
+        category: "clip" as const,
+        relativePath: "t5xxl_fp16.safetensors"
+      },
+      {
+        category: "vae" as const,
+        relativePath: "ltx-video-vae.safetensors"
+      }
+    ]),
+    assertions: Object.freeze([
+      {
+        nodeId: "1",
+        classType: "KSampler",
+        input: "steps",
+        equals: 8
+      },
+      {
+        nodeId: "5",
+        classType: "EmptyLTXLatentVideo",
+        input: "width",
+        equals: 1280
+      },
+      {
+        nodeId: "5",
+        classType: "EmptyLTXLatentVideo",
+        input: "height",
+        equals: 720
+      },
+      {
+        nodeId: "5",
+        classType: "EmptyLTXLatentVideo",
+        input: "length",
+        equals: 97
+      }
+    ]),
+    renderProfileIdentity: Object.freeze({
+      key: "LTX_25_720P_5S_I2V_V1" as const,
+      version: 1 as const
+    })
+  });
+
   const mockApprovedProvenance: CertificationProvenanceReport = Object.freeze({
     version: 1,
     profileId: "ltx-25-720p-97f",
@@ -194,6 +270,80 @@ describe("certify CLI", () => {
       version: 1,
       engine: "ltx_25",
       workflowHash: "e6ee75a1df0ac80e4c420eadd820028a9a389f5e680c3de6d89c37159d9f582a",
+      modelHashes: Object.freeze({
+        "diffusion_models/ltx-video-2b-v0.9.1.safetensors": "1".repeat(64),
+        "clip/t5xxl_fp16.safetensors": "2".repeat(64),
+        "vae/ltx-video-vae.safetensors": "3".repeat(64)
+      }),
+      frames: 97,
+      steps: 8,
+      runnerProfile: "dynamicvram-offload-v1",
+      measuredDiskFootprintGb: 0.000003,
+      minFreeDiskGb: 100
+    })
+  });
+
+  const mockApprovedI2vProvenance: CertificationProvenanceReport = Object.freeze({
+    version: 1,
+    profileId: "ltx-25-720p-97f-i2v",
+    generatedAt: "2026-08-15T12:00:00.000Z",
+    workflow: Object.freeze({
+      relativePath: "ltx_25_720p_97f_i2v_api.json",
+      sha256: "b".repeat(64),
+      source: Object.freeze({
+        kind: "validated_host_export" as const,
+        uri: "https://example.com/comfyui/ltx-i2v",
+        revision: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
+        license: "LTX-2 Community License"
+      })
+    }),
+    models: Object.freeze([
+      {
+        category: "diffusion_models" as const,
+        relativePath: "ltx-video-2b-v0.9.1.safetensors",
+        key: "diffusion_models/ltx-video-2b-v0.9.1.safetensors",
+        sha256: "1".repeat(64),
+        bytes: 1000
+      },
+      {
+        category: "clip" as const,
+        relativePath: "t5xxl_fp16.safetensors",
+        key: "clip/t5xxl_fp16.safetensors",
+        sha256: "2".repeat(64),
+        bytes: 1000
+      },
+      {
+        category: "vae" as const,
+        relativePath: "ltx-video-vae.safetensors",
+        key: "vae/ltx-video-vae.safetensors",
+        sha256: "3".repeat(64),
+        bytes: 1000
+      }
+    ]),
+    git: Object.freeze({
+      comfyUiCommit: "a".repeat(40),
+      customNodes: Object.freeze([
+        {
+          name: "comfyui-ltx-nodes",
+          commit: "b".repeat(40),
+          status: "tracked" as const
+        }
+      ])
+    }),
+    disk: Object.freeze({
+      modelFootprintBytes: 3000,
+      availableBytes: 200_000_000_000,
+      requiredFreeBytes: 100_000_000_000,
+      modelFootprintGb: 0.000003,
+      availableGb: 200,
+      minFreeDiskGb: 100,
+      passes: true
+    }),
+    renderProfileProvenance: Object.freeze({
+      key: "LTX_25_720P_5S_I2V_V1",
+      version: 1,
+      engine: "ltx_25_i2v",
+      workflowHash: "b".repeat(64),
       modelHashes: Object.freeze({
         "diffusion_models/ltx-video-2b-v0.9.1.safetensors": "1".repeat(64),
         "clip/t5xxl_fp16.safetensors": "2".repeat(64),
@@ -1109,6 +1259,9 @@ describe("certify CLI", () => {
       expect(parsed.scripts["certify:ltx"]).toBe(
         "tsx src/cli/certify.ts --profile ltx-25-720p-97f"
       );
+      expect(parsed.scripts["certify:ltx-i2v"]).toBe(
+        "tsx src/cli/certify.ts --profile ltx-25-720p-97f-i2v"
+      );
       expect(parsed.scripts["certify:flux"]).toBe(
         "tsx src/cli/certify.ts --profile flux-schnell-draft"
       );
@@ -1124,6 +1277,7 @@ describe("certify CLI", () => {
       expect(parsed.scripts).toBeDefined();
       expect(parsed.scripts["certify"]).toBe("pnpm --filter render-worker certify");
       expect(parsed.scripts["certify:ltx"]).toBe("pnpm --filter render-worker certify:ltx");
+      expect(parsed.scripts["certify:ltx-i2v"]).toBe("pnpm --filter render-worker certify:ltx-i2v");
       expect(parsed.scripts["certify:flux"]).toBe("pnpm --filter render-worker certify:flux");
     });
   });
@@ -1151,6 +1305,131 @@ describe("certify CLI", () => {
       const exitCode = await runCertificationCli(standardArgs, { stdout, stderr }, deps);
 
       expect(exitCode).toBe(0);
+      expect(writeCertificationArtifacts).toHaveBeenCalled();
+    });
+
+    it("executes certification run successfully for LTX-I2V profile with reference image staging & injection", async () => {
+      const stdout = vi.fn();
+      const stderr = vi.fn();
+
+      const i2vArtifact: CertificationArtifact = {
+        ...mockPassedArtifact,
+        runId: "ltx-i2v-cert-run-001",
+        identity: {
+          profileId: "ltx-25-720p-97f-i2v",
+          renderProfileKey: "LTX_25_720P_5S_I2V_V1",
+          renderProfileVersion: 1,
+          engine: "ltx_25_i2v",
+          width: 1280,
+          height: 720,
+          frames: 97,
+          steps: 8,
+          workflowSha256: "b".repeat(64),
+          modelSha256: {
+            "diffusion_models/ltx-video-2b-v0.9.1.safetensors": "1".repeat(64),
+            "clip/t5xxl_fp16.safetensors": "2".repeat(64),
+            "vae/ltx-video-vae.safetensors": "3".repeat(64)
+          },
+          comfyUiCommit: "a".repeat(40),
+          customNodes: [
+            {
+              name: "comfyui-ltx-nodes",
+              commit: "b".repeat(40),
+              status: "tracked" as const
+            }
+          ]
+        } satisfies LtxI2vWorkloadIdentity
+      };
+
+      const writeCertificationArtifacts = vi.fn().mockResolvedValue({
+        runId: "ltx-i2v-cert-run-001",
+        outputDirectory: "/test/certification/ltx-25/ltx-i2v-cert-run-001",
+        resultJsonPath: "/test/certification/ltx-25/ltx-i2v-cert-run-001/result.json",
+        summaryMdPath: "/test/certification/ltx-25/ltx-i2v-cert-run-001/summary.md",
+        relativeOutputDirectory: "certification/ltx-25/ltx-i2v-cert-run-001",
+        relativeResultJsonPath: "certification/ltx-25/ltx-i2v-cert-run-001/result.json",
+        relativeSummaryMdPath: "certification/ltx-25/ltx-i2v-cert-run-001/summary.md",
+        artifact: i2vArtifact
+      });
+
+      const mockI2vWorkflowJson = JSON.stringify({
+        "1": {
+          class_type: "KSampler",
+          inputs: { steps: 8 }
+        },
+        "5": {
+          class_type: "EmptyLTXLatentVideo",
+          inputs: { width: 1280, height: 720, length: 97 }
+        },
+        "20": {
+          class_type: "LoadImage",
+          inputs: { image: "reference_frame.png" }
+        }
+      });
+
+      const mockCleanup = vi.fn().mockResolvedValue(undefined);
+      const mockStagingAdapter: ComfyUiInputStagingPort = {
+        stage: vi.fn().mockResolvedValue({
+          name: "staged-reference.png",
+          subfolder: "conditioning"
+        }),
+        cleanup: mockCleanup
+      };
+
+      const runCertification = vi.fn().mockResolvedValue(i2vArtifact);
+
+      // Uses real verifyGoldMasterProvenance (not a mock!)
+      const deps = createStandardDependencies({
+        loadCertificationProfile: vi.fn().mockResolvedValue(mockLtxI2vProfile),
+        readApprovedProvenance: vi.fn().mockResolvedValue(mockApprovedI2vProvenance),
+        collectCertificationProvenance: vi.fn().mockResolvedValue(mockApprovedI2vProvenance),
+        verifyGoldMasterProvenance,
+        readWorkflowFile: vi.fn().mockResolvedValue(mockI2vWorkflowJson),
+        stageReferenceImage: mockStagingAdapter,
+        runCertification,
+        writeCertificationArtifacts
+      });
+
+      const fixtureRefImagePath = resolve(
+        fileURLToPath(
+          new URL("../../../../tests/fixtures/deterministic-reference.png", import.meta.url)
+        )
+      );
+
+      const exitCode = await runCertificationCli(
+        [
+          "--comfyui-dir=/comfy",
+          "--comfyui-url=http://127.0.0.1:8188",
+          "--comfyui-pid=12345",
+          "--gold-master-provenance=/gold.json",
+          "--profile=ltx-25-720p-97f-i2v",
+          "--run-id=ltx-i2v-cert-run-001",
+          `--reference-image=${fixtureRefImagePath}`
+        ],
+        { stdout, stderr },
+        deps
+      );
+
+      expect(exitCode).toBe(0);
+      expect(mockStagingAdapter.stage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          contentType: "image/png"
+        })
+      );
+      expect(runCertification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          renderInput: expect.objectContaining({
+            workflow: expect.objectContaining({
+              "20": expect.objectContaining({
+                inputs: expect.objectContaining({
+                  image: "conditioning/staged-reference.png"
+                })
+              })
+            })
+          })
+        })
+      );
+      expect(mockCleanup).toHaveBeenCalled();
       expect(writeCertificationArtifacts).toHaveBeenCalled();
     });
 

@@ -502,6 +502,18 @@ Sprint 1 migrations created the relational baseline. Sprint 1.5 must provide the
 
 The Review Hub is not allowed to ship against in-memory repositories masquerading as production persistence.
 
+#### 3.6.8 Candidate-Conditioned Production Invariant & Profile Dispatch
+
+To preserve creative control from director review through delivery, production rendering for reviewed visual scenes is governed by the candidate-conditioning invariant:
+
+> **Invariant:** A production render for a reviewed visual scene must be traceably conditioned by the exact candidate approved for that same SceneSpec revision. (See [ADR 0004](adr/0004-candidate-conditioned-production-invariant.md)).
+
+Key architectural rules:
+- **One-Way Profile Dispatch:** Generation dispatch evaluates the scene configuration and candidate selection to determine the execution profile. If the scene specifies an Image-to-Video engine (`LTX_25_720P_5S_I2V_V1`) or the rollout override flag `enableConditionedProfile: true` is active on an approved scene with an approved candidate, the system dispatches using the certified conditioned profile.
+- **Control-Plane Selection & `workflowTemplate` Worker Resolution:** The control plane (`EnqueueSceneProductionRenderUseCase`) selects the profile identity from scene configuration (`scene.engineAssigned`) and populates `job.workflowTemplate`. Render workers resolve the certified profile, injection topology, and execution flow using `job.workflowTemplate` (`ltx-25-720p-97f-i2v` routes to the I2V conditioning graph: Node 20 `LoadImage`, Node 21 `ImageScale` with Lanczos 1280x720 center crop, Node 22 `LTXVImgToVideo`).
+- **Phased Rollout Override Control:** The boolean override `enableConditionedProfile: true` allows operators to safely route legacy `LTX_25_720P_5S_V1` scenes through the conditioned I2V pipeline without mutating the baseline scene specification or stored engine identity.
+- **Zero Silent Fallback:** The execution pipeline fails closed across all validation, staging, and generation phases. If an approved candidate image is missing, corrupt, stale, unselected, or mismatched with the SceneSpec revision, or if the conditioned profile is missing or invalid, the dispatch or render worker halts immediately with a typed error. The system never silently falls back to unconditioned text-to-video generation.
+
 ---
 
 ## 4. Canonical Product State Machine & Review Hub Contract
@@ -857,6 +869,13 @@ A successful production job creates exactly one immutable GenerationManifest con
 - output filenames/hashes/review object keys/execution duration.
 
 Manifest persistence remains Sprint 3 work.
+
+#### 5.5.1 Candidate-Conditioned Provenance Invariant
+
+For candidate-conditioned production runs (`profileKey = "LTX_25_720P_5S_I2V_V1"`), `GenerationManifest` mandates complete, auditable provenance linking the final video to the exact approved storyboard keyframe:
+- `approvedCandidate`: Exact approved `StoryboardCandidate` metadata (`candidateId`, `sceneId`, `specRevision`, `sha256`).
+- `executionConditioning`: Conditioning execution details including `profileKey: "LTX_25_720P_5S_I2V_V1"`, `media` (`storageBucket`, `storageObjectKey`, verified `sha256`), `stagedAs` (`subfolder: "conditioning"`, deterministic `filename: "cco-<scene>-<job>-<hash>"`), and `injectionTarget` (`nodeId: "20"`, `inputName: "image"`).
+- `workflow`: Persisted workflow identity and template SHA-256 rather than a complete executed graph.
 
 ### 5.6 External Processing Governance Contract
 

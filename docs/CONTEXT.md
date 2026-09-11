@@ -83,3 +83,18 @@
   - Topology & Worker Mutation: Production jobs inject `frameCount` into the certified topology's target (`LTX_25_720P_5S_V1_INJECTION_TOPOLOGY.frameCount` -> node `"5"`, `length`). Candidate jobs reject `frameCount`.
   - Manifest Provenance: Step 8 of `assembleGenerationManifest` inspects executed workflow nodes for `frameCount` and sets `fps: LTX_FPS` (24) for runtime accuracy.
   - Scene State Transitions: `approved` -> `queued` (enqueue) -> `rendering` (worker start) -> `qa` (worker complete) / `failed` (worker fail). Route handlers trigger idempotent progress handlers (`markProductionRenderingStartedIfQueued`, `submitProductionForQAIfRendering`, `failProductionIfActive`).
+- **Candidate-Conditioned Production Invariant & Architecture (Issues #214 / #227):**
+  - **Creative-Control Invariant:** "A production render for a reviewed visual scene must be traceably conditioned by the exact candidate approved for that same SceneSpec revision." (See [ADR 0004](adr/0004-candidate-conditioned-production-invariant.md)).
+  - **Deterministic Preprocessing & Conditioning Pipeline:**
+    - Node 20 (`LoadImage`): Staged candidate image under the ComfyUI input subfolder `conditioning/` with deterministic filename `cco-<scene>-<job>-<hash>` loaded by worker.
+    - Node 21 (`ImageScale`): Resizes with Lanczos interpolation to exactly 1280x720 (`crop: "center"`), ensuring deterministic pixel alignment and eliminating spatial distortion across varying candidate aspect ratios.
+    - Node 22 (`LTXVImgToVideo`): Injects conditioned image latents into the LTX-2.5 sampling pipeline.
+  - **Distinct Profile Identity:** `LTX_25_720P_5S_I2V_V1` represents the certified Image-to-Video production profile, distinct from text-to-video (`LTX_25_720P_5S_V1`). Dispatch is data-driven by `scene.engineAssigned` or explicitly overridden during phased rollout via `enableConditionedProfile: true`.
+  - **Multi-Layer Fail-Closed Verification:**
+    - Unselected, mismatched, or cross-scene candidate references reject dispatch with `CandidateIdentityMismatchError` or `CandidateSceneMismatchError`.
+    - Stale candidates or spec revision mismatches reject dispatch with `StaleCandidateRevisionError` or `MissingCandidateSelectionError`.
+    - Missing or hash-corrupted candidate media files reject execution with `ApprovedCandidateMediaUnavailableError` or `ApprovedCandidateMediaHashMismatchError`.
+    - Missing or unrepresentable conditioned profile configurations reject execution with `MissingCertifiedProfileError`.
+    - Reference image staging/injection failures fail closed with `ReferenceImageStagingError`.
+    - **Zero Silent Fallback:** A failed I2V conditioning pipeline never falls back silently to unconditioned text-to-video generation.
+  - **Single-Source Manifest Provenance:** `GenerationManifest` records `approvedCandidate` (`candidateId`, `sceneId`, `specRevision`, `sha256`) and `executionConditioning` (`profileKey: "LTX_25_720P_5S_I2V_V1"`, `media: { storageBucket, storageObjectKey, sha256 }`, `stagedAs: { subfolder: "conditioning", filename: "cco-<scene>-<job>-<hash>" }`, `injectionTarget: { nodeId: "20", inputName: "image" }`), alongside persisted workflow identity and sha256.
