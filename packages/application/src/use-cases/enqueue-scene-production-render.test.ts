@@ -11,7 +11,6 @@ import { InMemorySceneUnitOfWork } from "../test-support/in-memory-scene-unit-of
 import * as contracts from "@cco/contracts";
 import {
   EnqueueSceneProductionRenderUseCase,
-  LTX_TEXT_PRODUCTION_WORKFLOW_TEMPLATE,
   LTX_I2V_PRODUCTION_WORKFLOW_TEMPLATE,
   PRODUCTION_WORKFLOW_TEMPLATE,
   SUPPORTED_PRODUCTION_ENGINE_PROFILE_ID
@@ -67,7 +66,7 @@ describe("EnqueueSceneProductionRenderUseCase", () => {
     return scene;
   };
 
-  it("happy path via execute(): default deployment enqueues text-to-video workflow preserving certified registry alignment", async () => {
+  it("happy path via execute(): default deployment enqueues conditioned I2V workflow for reviewed production", async () => {
     const scene = createApprovedScene("scene-happy-default", { durationMs: 4042 });
     const queue = new InMemoryJobQueue();
     const uow = new InMemorySceneUnitOfWork([scene]).withJobs(queue);
@@ -77,41 +76,8 @@ describe("EnqueueSceneProductionRenderUseCase", () => {
 
     expect(result.scene.status).toBe("queued");
     expect(result.job.jobKind).toBe("production");
-    expect(result.job.workflowTemplate).toBe(LTX_TEXT_PRODUCTION_WORKFLOW_TEMPLATE);
-    expect(result.job.sceneId).toBe("scene-happy-default");
-
-    const payload = result.job.injectedPayload as {
-      prompt: string;
-      seed: number;
-      approvedCandidateId: string;
-      frameCount: number;
-    };
-    expect(payload.prompt).toBe("Cinematic sunset over mountain peak");
-    expect(payload.frameCount).toBe(97);
-    expect(payload.approvedCandidateId).toBe("cand-1");
-    expect(Number.isSafeInteger(payload.seed)).toBe(true);
-    expect(payload.seed).toBeGreaterThanOrEqual(0);
-
-    expect(uow.savedScenes).toHaveLength(1);
-    expect(uow.savedScenes[0]!.status).toBe("queued");
-    expect(result.scene.activeProductionJobId).toBe(result.job.jobId);
-    expect(queue.jobs).toHaveLength(1);
-  });
-
-  it("happy path with enableConditionedProfile: enqueues I2V production job without frameCount and with approved candidate", async () => {
-    const scene = createApprovedScene("scene-happy-conditioned", { durationMs: 4042 });
-    const queue = new InMemoryJobQueue();
-    const uow = new InMemorySceneUnitOfWork([scene]).withJobs(queue);
-    const useCase = new EnqueueSceneProductionRenderUseCase(uow, {
-      enableConditionedProfile: true
-    });
-
-    const result = await useCase.execute({ sceneId: "scene-happy-conditioned" });
-
-    expect(result.scene.status).toBe("queued");
-    expect(result.job.jobKind).toBe("production");
     expect(result.job.workflowTemplate).toBe(LTX_I2V_PRODUCTION_WORKFLOW_TEMPLATE);
-    expect(result.job.sceneId).toBe("scene-happy-conditioned");
+    expect(result.job.sceneId).toBe("scene-happy-default");
 
     const payload = result.job.injectedPayload as {
       prompt: string;
@@ -128,6 +94,41 @@ describe("EnqueueSceneProductionRenderUseCase", () => {
     expect(uow.savedScenes[0]!.status).toBe("queued");
     expect(result.scene.activeProductionJobId).toBe(result.job.jobId);
     expect(queue.jobs).toHaveLength(1);
+  });
+
+  it("happy path: reviewed scene configured with legacy engine profile still unconditionally dispatches conditioned I2V workflow", async () => {
+    for (const engineProfileId of [SUPPORTED_PRODUCTION_ENGINE_PROFILE_ID, "ltx_25"]) {
+      const scene = createApprovedScene(`scene-legacy-${engineProfileId}`, {
+        engineProfileId,
+        durationMs: 4042
+      });
+      const queue = new InMemoryJobQueue();
+      const uow = new InMemorySceneUnitOfWork([scene]).withJobs(queue);
+      const useCase = new EnqueueSceneProductionRenderUseCase(uow);
+
+      const result = await useCase.execute({ sceneId: `scene-legacy-${engineProfileId}` });
+
+      expect(result.scene.status).toBe("queued");
+      expect(result.job.jobKind).toBe("production");
+      expect(result.job.workflowTemplate).toBe(LTX_I2V_PRODUCTION_WORKFLOW_TEMPLATE);
+      expect(result.job.sceneId).toBe(`scene-legacy-${engineProfileId}`);
+
+      const payload = result.job.injectedPayload as {
+        prompt: string;
+        seed: number;
+        approvedCandidateId: string;
+      };
+      expect(payload.prompt).toBe("Cinematic sunset over mountain peak");
+      expect("frameCount" in result.job.injectedPayload).toBe(false);
+      expect(payload.approvedCandidateId).toBe("cand-1");
+      expect(Number.isSafeInteger(payload.seed)).toBe(true);
+      expect(payload.seed).toBeGreaterThanOrEqual(0);
+
+      expect(uow.savedScenes).toHaveLength(1);
+      expect(uow.savedScenes[0]!.status).toBe("queued");
+      expect(result.scene.activeProductionJobId).toBe(result.job.jobId);
+      expect(queue.jobs).toHaveLength(1);
+    }
   });
 
   it("happy path via executeWithContext(): operates inside caller-opened transaction without opening a second one", async () => {

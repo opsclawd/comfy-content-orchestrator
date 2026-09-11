@@ -28,7 +28,7 @@ Image-to-video (I2V) conditioning is not a dynamic toggle or parameter patch on 
 - Workflow Template: `ltx-25-720p-97f-i2v` (`templates/ltx_25_720p_i2v_97f_api.json`)
 - Certified Engine Identity: `ltx_25_i2v`
 - Declared Injection Topology: `referenceImage` targeting Node 20 (`LoadImage`, input field `image`), alongside text prompts (Node 3 `prompt`, Node 4 `negativePrompt`) and deterministic seed (Node 1 `KSampler`, field `seed`).
-- The legacy `LTX_25_720P_5S_V1` profile remains strictly unconditioned text-to-video. A scene configured with `LTX_25_720P_5S_I2V_V1` (or dispatched with `enableConditionedProfile: true`) explicitly requires approved candidate conditioning.
+- The legacy `LTX_25_720P_5S_V1` profile remains strictly unconditioned text-to-video, retained in the platform only for separate legacy or unreviewed execution paths. Reviewed visual production unconditionally dispatches `LTX_25_720P_5S_I2V_V1` once approval and candidate selection preconditions pass, with zero silent fallback or override toggles to text-only generation.
 
 ### 2. Deterministic In-Workflow Candidate Preprocessing
 Storyboard candidates generated in Tier 1 may originate from various source dimensions (e.g., 1024x1024 square images from FLUX [schnell] draft generation). Resizing images on host worker machines introduces non-deterministic image filtering across environments.

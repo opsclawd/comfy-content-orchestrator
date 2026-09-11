@@ -37,12 +37,11 @@ export const ACCEPTED_PRODUCTION_ENGINE_PROFILE_IDS: ReadonlySet<string> = new S
 
 export interface EnqueueSceneProductionRenderOptions {
   /**
-   * Explicit deployment configuration controlling activation of the conditioned
-   * (I2V) production profile. When not enabled (default), normal production dispatch
-   * preserves the certified text-to-video workflow so production does not fail closed
-   * against the checked-in component license registry before operator approval.
+   * Reserved for future production execution options. Reviewed production
+   * unconditionally dispatches the certified conditioned profile (LTX_25_720P_5S_I2V_V1)
+   * with zero silent fallback to text-only generation.
    */
-  readonly enableConditionedProfile?: boolean | undefined;
+  readonly [key: string]: unknown;
 }
 
 export interface EnqueueSceneProductionRenderInput {
@@ -57,7 +56,7 @@ export interface EnqueueSceneProductionRenderResult {
 export class EnqueueSceneProductionRenderUseCase {
   constructor(
     private readonly uow: UnitOfWork,
-    private readonly options?: EnqueueSceneProductionRenderOptions
+    _options?: EnqueueSceneProductionRenderOptions
   ) {}
 
   async execute(
@@ -117,23 +116,8 @@ export class EnqueueSceneProductionRenderUseCase {
       );
     }
 
-    const isI2vEngine =
-      snapshot.configuration.engineProfileId === "LTX_25_720P_5S_I2V_V1" ||
-      snapshot.configuration.engineProfileId === "ltx_25_i2v";
-
-    const isDeploymentEnabled =
-      this.options?.enableConditionedProfile ??
-      (process.env.ENABLE_I2V_PRODUCTION === "true" ||
-        process.env.CCO_ENABLE_I2V_PRODUCTION === "true");
-
-    const useConditionedProfile = isI2vEngine || isDeploymentEnabled;
-
-    const workflowTemplate = useConditionedProfile
-      ? LTX_I2V_PRODUCTION_WORKFLOW_TEMPLATE
-      : LTX_TEXT_PRODUCTION_WORKFLOW_TEMPLATE;
-    const renderProfileKey = useConditionedProfile
-      ? LTX_I2V_PRODUCTION_RENDER_PROFILE_KEY
-      : LTX_TEXT_PRODUCTION_RENDER_PROFILE_KEY;
+    const workflowTemplate = LTX_I2V_PRODUCTION_WORKFLOW_TEMPLATE;
+    const renderProfileKey = LTX_I2V_PRODUCTION_RENDER_PROFILE_KEY;
 
     const topology = getProfileInjectionTopology(renderProfileKey);
     if (!topology) {
