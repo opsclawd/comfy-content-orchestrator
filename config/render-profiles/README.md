@@ -16,6 +16,27 @@ This directory contains frozen, machine-readable JSON render profile configurati
   - **Measured Total Disk Footprint:** `38.329275932 GB` (38,329,275,932 bytes total)
 - **Runner Profile:** `dynamicvram-offload-v1`
 
+
+### `LTX_25_720P_5S_I2V_V1` (`config/render-profiles/LTX_25_720P_5S_I2V_V1.json`)
+- **Key & Version:** `LTX_25_720P_5S_I2V_V1` (v1)
+- **Engine:** `ltx_25_i2v`
+- **Output:** 1280x720 (720p), 97 frames (5s @ 24 fps), 8 steps
+- **Workflow SHA-256:** `95349fce04e8e9598ea2013fb2f218efc86185d1216563d450f90b00fd0fecfb` (from `templates/provenance.json` & `ltx-i2v-cert-run-001`, ComfyUI commit `55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc`)
+- **Model Set & Exact SHA-256 Hashes:** (from `certification/ltx-25/ltx-i2v-cert-run-001/result.json`):
+  - `models/clip/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors`: `09a89e084de1a149c3de60cfe9dfd3e5161967eb09eea39e806fcdeffdd568de`
+  - `models/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors`: `c4279eeff115cbeaca494bd2183e7d768c38fe85a184dc6afbb7159157c44334`
+  - `models/vae/ltx-2.5-video-vae-conv-bf16.safetensors`: `685b06ee3d9b2039647698fc4ea33175112462fc374e2777312c907897dfce8d`
+  - **Measured Total Disk Footprint:** `38.329275932 GB`
+- **Runner Profile:** `dynamicvram-offload-v1`
+- **Measured Peak VRAM:** `23,716 MB` (allocatable VRAM: 24,051 MB / 98.6%)
+- **Measured Duration:** `49,235 ms` (limit: 55,000 ms)
+- **Measured Peak Host RAM:** `29,304 MB`
+- **Measured Peak Process RSS:** `27,056 MB`
+- **Measured Swap Used:** `32 MB`
+- **Measured Major Page Faults:** `1315`
+- **Measured Post-Unload Free VRAM:** `23,449 MB` (used: 602 MB)
+- **Gate Evaluation:** All 5 gates passed (status: `PASSED`)
+
 ### Measured Empirical Envelope & Source Run Traceability
 
 Every field in the profile is directly attributable to physical measurements on the Trinidad host:

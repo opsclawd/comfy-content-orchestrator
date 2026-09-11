@@ -116,6 +116,35 @@ export const LTX_25_720P_5S_V1_PROFILE: LtxRenderProfile = Object.freeze({
   requiresModelOffloading: true
 });
 
+export const LTX_25_720P_5S_I2V_V1_PROFILE: LtxI2vRenderProfile = Object.freeze({
+  key: "LTX_25_720P_5S_I2V_V1",
+  version: 1,
+  engine: "ltx_25_i2v",
+  workflowHash: "95349fce04e8e9598ea2013fb2f218efc86185d1216563d450f90b00fd0fecfb",
+  modelHashes: Object.freeze({
+    "models/clip/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors":
+      "09a89e084de1a149c3de60cfe9dfd3e5161967eb09eea39e806fcdeffdd568de",
+    "models/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors":
+      "c4279eeff115cbeaca494bd2183e7d768c38fe85a184dc6afbb7159157c44334",
+    "models/vae/ltx-2.5-video-vae-conv-bf16.safetensors":
+      "685b06ee3d9b2039647698fc4ea33175112462fc374e2777312c907897dfce8d"
+  }),
+  frames: 97,
+  steps: 8,
+  runnerProfile: "dynamicvram-offload-v1",
+  measuredPeakVramMb: 23716,
+  measuredTotalDurationMs: 49235,
+  measuredSamplingDurationMs: null,
+  measuredDiskFootprintGb: 38.329275932,
+  measuredPeakHostRamMb: 29304,
+  measuredPeakProcessRssMb: 27056,
+  measuredSwapUsedMb: 32,
+  measuredMajorPageFaults: 1315,
+  minFreeDiskGb: 100,
+  maxConcurrentGpuJobs: 1,
+  requiresModelOffloading: true
+});
+
 export const LTX_FPS = 24;
 export const LTX_FRAME_STEP = 8;
 export const LTX_SUPPORTED_FRAME_RANGE = [97, 97] as const;
