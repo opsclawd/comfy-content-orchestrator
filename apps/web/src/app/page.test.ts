@@ -86,4 +86,19 @@ describe("HomePage Component", () => {
     const errorSpan = errorContainer?.props.children as TestElement;
     expect(errorSpan?.props.children).toEqual(["Unavailable: ", "Connection refused"]);
   });
+
+  it("renders a link to /campaigns/new", async () => {
+    vi.mocked(getHealth).mockResolvedValueOnce({
+      status: "ok",
+      timestamp: "2026-08-20T01:00:00.000Z"
+    });
+
+    const jsx = (await HomePage()) as TestElement;
+    const newCampaignLink = findByTestId(jsx, "new-campaign-link");
+    expect(newCampaignLink).not.toBeNull();
+    expect(newCampaignLink?.props).toMatchObject({
+      href: "/campaigns/new",
+      "data-testid": "new-campaign-link"
+    });
+  });
 });

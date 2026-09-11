@@ -16,6 +16,7 @@ import {
   CreateCampaignShellResponseSchema,
   PlanCampaignStoryboardRequestSchema,
   PlanCampaignStoryboardResponseSchema,
+  PlanCampaignStoryboardErrorResponseSchema,
   MIN_TARGET_DURATION_MS,
   MAX_TARGET_DURATION_MS,
   MIN_SCENE_COUNT,
@@ -943,6 +944,55 @@ describe("Campaign and Scene Creation Contracts", () => {
               status: "generating_candidates"
             }
           ]
+        })
+      ).toThrow();
+    });
+  });
+
+  describe("PlanCampaignStoryboardErrorResponseSchema", () => {
+    it("parses valid error response with code, message, and details", () => {
+      const payload = {
+        code: "STORYBOARD_MATERIALIZATION_CONFLICT",
+        message: "A conflict occurred during storyboard materialization",
+        details: {
+          campaignId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73800",
+          reason: "Scene count mismatch"
+        }
+      };
+
+      const parsed = PlanCampaignStoryboardErrorResponseSchema.parse(payload);
+      expect(parsed).toEqual(payload);
+    });
+
+    it("parses valid error response with only message (fallback branch)", () => {
+      const payload = {
+        message: "Internal Server Error"
+      };
+
+      const parsed = PlanCampaignStoryboardErrorResponseSchema.parse(payload);
+      expect(parsed).toEqual(payload);
+      expect(parsed.code).toBeUndefined();
+    });
+
+    it("rejects payload missing message", () => {
+      expect(() =>
+        PlanCampaignStoryboardErrorResponseSchema.parse({
+          code: "VALIDATION_FAILURE"
+        })
+      ).toThrow();
+    });
+
+    it("rejects non-string code or message", () => {
+      expect(() =>
+        PlanCampaignStoryboardErrorResponseSchema.parse({
+          code: 123,
+          message: "Valid message"
+        })
+      ).toThrow();
+
+      expect(() =>
+        PlanCampaignStoryboardErrorResponseSchema.parse({
+          message: 456
         })
       ).toThrow();
     });
