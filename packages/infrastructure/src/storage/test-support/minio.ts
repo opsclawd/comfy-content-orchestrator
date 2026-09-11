@@ -13,7 +13,7 @@ export async function startMinioContainer(): Promise<StartedMinioContainer> {
   const secretKey = "minioadmin";
   const port = 9000;
 
-  const container = await new GenericContainer("minio/minio:RELEASE.2024-01-18T22-51-28Z")
+  const container = await new GenericContainer("quay.io/minio/minio:RELEASE.2024-01-18T22-51-28Z")
     .withEnvironment({
       MINIO_ROOT_USER: accessKey,
       MINIO_ROOT_PASSWORD: secretKey
