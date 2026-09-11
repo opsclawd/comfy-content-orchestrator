@@ -29,6 +29,7 @@ import {
 } from "./progress-scene-production.js";
 import { SceneConfigurationCountMismatchError } from "./scene-configuration-count-mismatch-error.js";
 import { StoryboardPartiallyMaterializedError } from "./storyboard-partially-materialized-error.js";
+import { StoryboardMaterializationConflictError } from "./storyboard-materialization-conflict-error.js";
 
 describe("MaterializeStoryboardUseCase", () => {
   const campaignId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73800" as CampaignId;
@@ -178,6 +179,48 @@ describe("MaterializeStoryboardUseCase", () => {
     // No new writes committed
     expect(uow.savedScenes.length).toBe(savedScenesCountAfterFirst);
     expect(uow.enqueuedJobs.length).toBe(enqueuedJobsCountAfterFirst);
+  });
+
+  it("records completion proof atomically on campaign and verifies proof on replay", async () => {
+    const campaign = createSeededCampaign(3);
+    const queue = new InMemoryJobQueue();
+    const uow = new InMemorySceneUnitOfWork(undefined, undefined, undefined, [campaign]).withJobs(
+      queue
+    );
+    const progressUseCases = new ProgressSceneProductionUseCases(uow, undefined, queue);
+    const useCase = new MaterializeStoryboardUseCase(uow, progressUseCases);
+
+    const configs = createSceneConfigs(3);
+    const completionHash = "a".repeat(64);
+
+    const firstResult = await useCase.execute({
+      campaignId,
+      scenes: configs,
+      completionHashSha256: completionHash
+    });
+
+    expect(firstResult.isIdempotentReplay).toBe(false);
+
+    // Verify campaign record has completion hash recorded
+    const updatedCampaign = await uow.execute((context) => context.campaigns!.findById(campaignId));
+    expect(updatedCampaign?.storyboardCompletionHashSha256).toBe(completionHash);
+
+    // Replay with identical completion hash succeeds
+    const replayResult = await useCase.execute({
+      campaignId,
+      scenes: configs,
+      completionHashSha256: completionHash
+    });
+    expect(replayResult.isIdempotentReplay).toBe(true);
+
+    // Replay with different completion hash throws StoryboardMaterializationConflictError
+    await expect(
+      useCase.execute({
+        campaignId,
+        scenes: configs,
+        completionHashSha256: "b".repeat(64)
+      })
+    ).rejects.toThrow(StoryboardMaterializationConflictError);
   });
 
   it("throws SceneConfigurationCountMismatchError when input length does not match campaign.totalScenes", async () => {

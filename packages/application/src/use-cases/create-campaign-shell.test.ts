@@ -256,4 +256,66 @@ describe("CreateCampaignShellUseCase", () => {
       );
     });
   });
+
+  it("rejects idempotency key reuse when creative brief is altered", async () => {
+    const uow = new InMemorySceneUnitOfWork();
+    const useCase = new CreateCampaignShellUseCase(uow);
+
+    const initialRequest = {
+      ...validRequest,
+      brief: {
+        description: "Initial creative brief"
+      }
+    };
+    await useCase.execute(initialRequest);
+
+    // Altered brief with same idempotencyKey
+    await expect(
+      useCase.execute({
+        ...validRequest,
+        brief: {
+          description: "Altered creative brief"
+        }
+      })
+    ).rejects.toThrow(CampaignIdempotencyConflictError);
+  });
+
+  it("rejects idempotency key reuse when candidateReferenceAssetIds are altered", async () => {
+    const uow = new InMemorySceneUnitOfWork();
+    const useCase = new CreateCampaignShellUseCase(uow);
+
+    const initialRequest = {
+      ...validRequest,
+      candidateReferenceAssetIds: ["asset-1", "asset-2"]
+    };
+    await useCase.execute(initialRequest);
+
+    // Altered assets with same idempotencyKey
+    await expect(
+      useCase.execute({
+        ...validRequest,
+        candidateReferenceAssetIds: ["asset-1", "asset-3"]
+      })
+    ).rejects.toThrow(CampaignIdempotencyConflictError);
+  });
+
+  it("replays successfully when candidateReferenceAssetIds are canonically equivalent", async () => {
+    const uow = new InMemorySceneUnitOfWork();
+    const useCase = new CreateCampaignShellUseCase(uow);
+
+    const initialRequest = {
+      ...validRequest,
+      candidateReferenceAssetIds: ["asset-2", "asset-1"]
+    };
+    const firstResult = await useCase.execute(initialRequest);
+    expect(firstResult.isIdempotentReplay).toBe(false);
+
+    // Same assets, reordered and with duplicates
+    const replayResult = await useCase.execute({
+      ...validRequest,
+      candidateReferenceAssetIds: ["asset-1", "asset-2", "asset-1"]
+    });
+    expect(replayResult.isIdempotentReplay).toBe(true);
+    expect(replayResult.campaign.id).toBe(firstResult.campaign.id);
+  });
 });

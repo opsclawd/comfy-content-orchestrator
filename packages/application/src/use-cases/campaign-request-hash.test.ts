@@ -120,4 +120,80 @@ describe("campaign-request-hash", () => {
     });
     expect(hash1).not.toBe(hash2);
   });
+
+  it("is sensitive to changes in creative brief", async () => {
+    const briefA = {
+      description: "Fast-paced summer apparel promo",
+      visualStyle: "high contrast neon",
+      requirements: ["show logo at start", "end with CTA"]
+    };
+    const briefB = {
+      description: "Calm and minimalist autumn apparel promo",
+      visualStyle: "earth tones",
+      requirements: ["soft transitions"]
+    };
+
+    const hashA = await computeCampaignRequestHash({ ...baseInput, brief: briefA });
+    const hashB = await computeCampaignRequestHash({ ...baseInput, brief: briefB });
+    const hashNone = await computeCampaignRequestHash(baseInput);
+
+    expect(hashA).not.toBe(hashB);
+    expect(hashA).not.toBe(hashNone);
+  });
+
+  it("brief hashing is independent of key insertion order within brief object", async () => {
+    const brief1 = {
+      description: "Promo",
+      visualStyle: "cinematic",
+      title: "Title A"
+    };
+    const brief2 = {
+      title: "Title A",
+      visualStyle: "cinematic",
+      description: "Promo"
+    };
+
+    const hash1 = await computeCampaignRequestHash({ ...baseInput, brief: brief1 });
+    const hash2 = await computeCampaignRequestHash({ ...baseInput, brief: brief2 });
+
+    expect(hash1).toBe(hash2);
+  });
+
+  it("is sensitive to changes in candidateReferenceAssetIds", async () => {
+    const hash1 = await computeCampaignRequestHash({
+      ...baseInput,
+      candidateReferenceAssetIds: ["asset-1", "asset-2"]
+    });
+    const hash2 = await computeCampaignRequestHash({
+      ...baseInput,
+      candidateReferenceAssetIds: ["asset-1", "asset-3"]
+    });
+    expect(hash1).not.toBe(hash2);
+  });
+
+  it("canonicalizes candidateReferenceAssetIds via sorting and deduplication", async () => {
+    const hashUnsorted = await computeCampaignRequestHash({
+      ...baseInput,
+      candidateReferenceAssetIds: ["asset-3", "asset-1", "asset-2", "asset-1"]
+    });
+    const hashSortedDeduped = await computeCampaignRequestHash({
+      ...baseInput,
+      candidateReferenceAssetIds: ["asset-1", "asset-2", "asset-3"]
+    });
+
+    expect(hashUnsorted).toBe(hashSortedDeduped);
+  });
+
+  it("treats empty candidateReferenceAssetIds as absent/equivalent to undefined", async () => {
+    const hashUndefined = await computeCampaignRequestHash({
+      ...baseInput,
+      candidateReferenceAssetIds: undefined
+    });
+    const hashEmpty = await computeCampaignRequestHash({
+      ...baseInput,
+      candidateReferenceAssetIds: []
+    });
+
+    expect(hashEmpty).toBe(hashUndefined);
+  });
 });

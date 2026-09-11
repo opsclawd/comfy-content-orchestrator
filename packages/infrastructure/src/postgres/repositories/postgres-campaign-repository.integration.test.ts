@@ -561,4 +561,80 @@ describe("PostgresCampaignRepository Integration", () => {
       await client.query("BEGIN");
     }
   });
+
+  it("records and retrieves storyboard_completion_hash_sha256 via recordStoryboardCompletion", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const repository = new PostgresCampaignRepository(client);
+
+    const campaignId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73830" as CampaignId;
+    const idempotencyKey = "018e69e0-8a6a-72cb-b1b7-ec79a1f73831";
+    const requestHash = "1".repeat(64);
+    const completionHash = "2".repeat(64);
+
+    const campaign: CampaignShellRecord = {
+      id: campaignId,
+      clientId: clientRecord.client_id,
+      title: "Completion Hash Campaign",
+      targetPlatform: "tiktok",
+      status: "drafting",
+      totalScenes: 3,
+      approvedScenes: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      idempotencyKey,
+      targetTotalDurationMs: 15000
+    };
+
+    await repository.saveWithRequestHash(campaign, requestHash);
+
+    // Initial state: completion hash is undefined
+    const beforeCompletion = await repository.findById(campaignId);
+    expect(beforeCompletion?.storyboardCompletionHashSha256).toBeUndefined();
+
+    // Record storyboard completion
+    await repository.recordStoryboardCompletion(campaignId, completionHash);
+
+    // Find by ID reflects recorded completion hash
+    const afterCompletion = await repository.findById(campaignId);
+    expect(afterCompletion?.storyboardCompletionHashSha256).toBe(completionHash);
+
+    // Find by idempotency key also reflects recorded completion hash
+    const afterCompletionByKey = await repository.findByIdempotencyKey(idempotencyKey);
+    expect(afterCompletionByKey?.storyboardCompletionHashSha256).toBe(completionHash);
+  });
+
+  it("enforces chk_campaigns_storyboard_completion_hash_sha256 regex constraint", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const repository = new PostgresCampaignRepository(client);
+
+    const campaignId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73832" as CampaignId;
+    const idempotencyKey = "018e69e0-8a6a-72cb-b1b7-ec79a1f73833";
+    const requestHash = "3".repeat(64);
+
+    const campaign: CampaignShellRecord = {
+      id: campaignId,
+      clientId: clientRecord.client_id,
+      title: "Constraint Check Campaign",
+      targetPlatform: "tiktok",
+      status: "drafting",
+      totalScenes: 3,
+      approvedScenes: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      idempotencyKey,
+      targetTotalDurationMs: 15000
+    };
+
+    await repository.saveWithRequestHash(campaign, requestHash);
+
+    // Invalid hash (too short) -> fails check constraint 23514
+    await expect(
+      repository.recordStoryboardCompletion(campaignId, "invalid-hash")
+    ).rejects.toMatchObject({ code: "23514" });
+
+    // Invalid hash (uppercase hex characters) -> fails check constraint
+    await expect(
+      repository.recordStoryboardCompletion(campaignId, "A".repeat(64))
+    ).rejects.toMatchObject({ code: "23514" });
+  });
 });

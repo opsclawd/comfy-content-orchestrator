@@ -52,5 +52,6 @@ export * from "./resolve-approved-candidate-media.js";
 export * from "./scene-configuration-count-mismatch-error.js";
 export * from "./invalid-scene-ordinal-sequence-error.js";
 export * from "./storyboard-partially-materialized-error.js";
+export * from "./storyboard-materialization-conflict-error.js";
 export * from "./materialize-storyboard.js";
 export * from "./plan-campaign-storyboard.js";

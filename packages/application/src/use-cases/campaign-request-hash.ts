@@ -1,3 +1,6 @@
+import type { CreativeBrief } from "@cco/contracts";
+import type { ReferenceAssetId } from "@cco/domain";
+
 function sortKeysDeep(value: unknown): unknown {
   if (value === null || typeof value !== "object") {
     return value;
@@ -23,10 +26,14 @@ export interface CampaignRequestHashInput {
   readonly targetPlatform?: string | undefined;
   readonly targetTotalDurationMs: number;
   readonly sceneCountOverride?: number | undefined;
+  readonly brief?: CreativeBrief | undefined;
+  readonly candidateReferenceAssetIds?: readonly ReferenceAssetId[] | readonly string[] | undefined;
 }
 
+export type OrchestrationRequestHashInput = CampaignRequestHashInput;
+
 /**
- * Produces a canonical JSON string for campaign shell creation requests.
+ * Produces a canonical JSON string for campaign shell creation and orchestration requests.
  *
  * CRITICAL INVARIANT: This canonicalization operates strictly on the requested/declared
  * layer. It must ONLY be called with raw incoming request fields (including literal
@@ -34,8 +41,23 @@ export interface CampaignRequestHashInput {
  * configured/executed fields (such as resolved totalScenes / N) substituted in place of
  * sceneCountOverride. Doing so would cause Auto-mode retries (where sceneCountOverride is undefined)
  * to produce mismatched hashes against stored configured state, falsely triggering 409 conflicts.
+ *
+ * Candidate reference assets are canonicalized deterministically using set/order equivalence
+ * (deduplicated and sorted). Empty array and undefined both denote absence of assets to prevent
+ * hash divergence across clients.
  */
 export function canonicalizeCampaignRequest(input: CampaignRequestHashInput): string {
+  let canonicalAssetIds: string[] | undefined = undefined;
+  if (
+    input.candidateReferenceAssetIds !== undefined &&
+    input.candidateReferenceAssetIds.length > 0
+  ) {
+    const rawIds = Array.isArray(input.candidateReferenceAssetIds)
+      ? (input.candidateReferenceAssetIds as readonly string[])
+      : [];
+    canonicalAssetIds = Array.from(new Set(rawIds)).sort();
+  }
+
   const normalized = {
     clientId: input.clientId,
     title: input.title,
@@ -43,10 +65,14 @@ export function canonicalizeCampaignRequest(input: CampaignRequestHashInput): st
     targetTotalDurationMs: input.targetTotalDurationMs,
     ...(input.sceneCountOverride !== undefined
       ? { sceneCountOverride: input.sceneCountOverride }
-      : {})
+      : {}),
+    ...(input.brief !== undefined ? { brief: input.brief } : {}),
+    ...(canonicalAssetIds !== undefined ? { candidateReferenceAssetIds: canonicalAssetIds } : {})
   };
   return JSON.stringify(sortKeysDeep(normalized));
 }
+
+export const canonicalizeOrchestrationRequest = canonicalizeCampaignRequest;
 
 /**
  * Computes a deterministic SHA-256 hex string over the canonicalized request fields.
@@ -59,3 +85,5 @@ export async function computeCampaignRequestHash(input: CampaignRequestHashInput
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
 }
+
+export const computeOrchestrationRequestHash = computeCampaignRequestHash;

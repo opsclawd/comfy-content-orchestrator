@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { CreateCampaignShellRequest } from "@cco/contracts";
-import type { CampaignId, CampaignShellRecord } from "@cco/domain";
+import type { CreateCampaignShellRequest, CreativeBrief } from "@cco/contracts";
+import type { CampaignId, CampaignShellRecord, ReferenceAssetId } from "@cco/domain";
 import {
   isCampaignShellRepository,
   type CampaignShellRepository,
@@ -10,6 +10,11 @@ import {
 import { CampaignIdempotencyConflictError } from "./campaign-idempotency-conflict-error.js";
 import { computeCampaignRequestHash } from "./campaign-request-hash.js";
 import { resolveSceneCount } from "./scene-count-policy.js";
+
+export interface CreateCampaignShellInput extends CreateCampaignShellRequest {
+  readonly brief?: CreativeBrief | undefined;
+  readonly candidateReferenceAssetIds?: readonly ReferenceAssetId[] | readonly string[] | undefined;
+}
 
 export interface CreateCampaignShellResult {
   readonly campaign: CampaignShellRecord;
@@ -34,7 +39,7 @@ export class CreateCampaignShellUseCase {
    * the aborted transaction is cleanly rolled back before attempting a fresh read to recover
    * the committed winner's row.
    */
-  async execute(input: CreateCampaignShellRequest): Promise<CreateCampaignShellResult> {
+  async execute(input: CreateCampaignShellInput): Promise<CreateCampaignShellResult> {
     try {
       return await this.uow.execute((context) => this.executeWithContext(context, input));
     } catch (err) {
@@ -51,7 +56,7 @@ export class CreateCampaignShellUseCase {
    * the current transaction block is aborted (25P02) and no further commands can be executed on it.
    */
   private async recoverFromConcurrentConflict(
-    input: CreateCampaignShellRequest,
+    input: CreateCampaignShellInput,
     original: CampaignIdempotencyConflictError
   ): Promise<CreateCampaignShellResult> {
     const requestHash = await computeCampaignRequestHash(input);
@@ -78,7 +83,7 @@ export class CreateCampaignShellUseCase {
    */
   async executeWithContext(
     context: UnitOfWorkContext,
-    input: CreateCampaignShellRequest
+    input: CreateCampaignShellInput
   ): Promise<CreateCampaignShellResult> {
     const repo = this.getShellRepository(context);
 

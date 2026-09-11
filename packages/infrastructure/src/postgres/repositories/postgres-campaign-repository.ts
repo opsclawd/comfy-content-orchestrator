@@ -21,6 +21,7 @@ interface CampaignRow {
   idempotency_key?: string | null;
   target_total_duration_ms?: number | null;
   request_hash_sha256?: string | null;
+  storyboard_completion_hash_sha256?: string | null;
   archived_at?: Date | string | null;
 }
 
@@ -46,6 +47,10 @@ function mapRowToCampaign(row: CampaignRow): CampaignRecord {
       : {}),
     ...(row.target_total_duration_ms !== null && row.target_total_duration_ms !== undefined
       ? { targetTotalDurationMs: Number(row.target_total_duration_ms) }
+      : {}),
+    ...(row.storyboard_completion_hash_sha256 !== null &&
+    row.storyboard_completion_hash_sha256 !== undefined
+      ? { storyboardCompletionHashSha256: row.storyboard_completion_hash_sha256 }
       : {}),
     ...(row.archived_at !== null && row.archived_at !== undefined
       ? {
@@ -85,7 +90,8 @@ export class PostgresCampaignRepository
         updated_at,
         idempotency_key,
         target_total_duration_ms,
-        request_hash_sha256
+        request_hash_sha256,
+        storyboard_completion_hash_sha256
       FROM campaigns
       WHERE campaign_id = $1 AND archived_at IS NULL
       `,
@@ -121,7 +127,8 @@ export class PostgresCampaignRepository
         updated_at,
         idempotency_key,
         target_total_duration_ms,
-        request_hash_sha256
+        request_hash_sha256,
+        storyboard_completion_hash_sha256
       FROM campaigns
       WHERE campaign_id = $1 AND archived_at IS NULL
       FOR UPDATE
@@ -155,6 +162,7 @@ export class PostgresCampaignRepository
         idempotency_key,
         target_total_duration_ms,
         request_hash_sha256,
+        storyboard_completion_hash_sha256,
         archived_at
       FROM campaigns
       WHERE idempotency_key = $1
@@ -181,8 +189,27 @@ export class PostgresCampaignRepository
       ...campaign,
       idempotencyKey: row.idempotency_key,
       targetTotalDurationMs: Number(row.target_total_duration_ms),
-      requestHashSha256: row.request_hash_sha256
+      requestHashSha256: row.request_hash_sha256,
+      ...(row.storyboard_completion_hash_sha256 !== null &&
+      row.storyboard_completion_hash_sha256 !== undefined
+        ? { storyboardCompletionHashSha256: row.storyboard_completion_hash_sha256 }
+        : {})
     };
+  }
+
+  async recordStoryboardCompletion(
+    campaignId: string,
+    completionHashSha256: string
+  ): Promise<void> {
+    await this.client.query(
+      `
+      UPDATE campaigns
+      SET storyboard_completion_hash_sha256 = $2,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE campaign_id = $1 AND archived_at IS NULL
+      `,
+      [campaignId, completionHashSha256]
+    );
   }
 
   async save(campaign: CampaignRecord): Promise<void> {
