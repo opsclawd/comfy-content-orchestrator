@@ -229,8 +229,42 @@ TARGET_WHISPERX_VENV_DIR="${REPO_ROOT}/node_modules/.cache/whisperx-venv"
 if bash "${REPO_ROOT}/scripts/check-whisperx-version.sh" >/dev/null 2>&1; then
   echo "WhisperX virtualenv already verified in current worktree."
 else
-  echo "WhisperX virtualenv missing or unverified in current worktree. Building environment..."
-  bash "${REPO_ROOT}/scripts/install-whisperx.sh"
+  echo "WhisperX virtualenv missing or unverified in current worktree. Searching for existing environments..."
+  VENV_SOURCE=""
+  CANDIDATES=(
+    "${SHARED_CACHE_DIR}/whisperx-venv"
+    "${MAIN_REPO}/node_modules/.cache/whisperx-venv"
+  )
+  if [[ -d "${MAIN_REPO}/.ai-worktrees" ]]; then
+    while IFS= read -r found_dir; do
+      if [[ -n "${found_dir}" ]]; then
+        CANDIDATES+=("${found_dir}")
+      fi
+    done < <(find "${MAIN_REPO}/.ai-worktrees" -maxdepth 4 -type d -name "whisperx-venv" 2>/dev/null || true)
+  fi
+
+  for candidate in "${CANDIDATES[@]}"; do
+    if [[ -d "${candidate}" && -x "${candidate}/bin/python3" && "${candidate}" != "${TARGET_WHISPERX_VENV_DIR}" ]]; then
+      if WHISPERX_PYTHON_PATH="${candidate}/bin/python3" bash "${REPO_ROOT}/scripts/check-whisperx-version.sh" >/dev/null 2>&1; then
+        VENV_SOURCE="${candidate}"
+        break
+      fi
+    fi
+  done
+
+  if [[ -n "${VENV_SOURCE}" ]]; then
+    echo "Linking WhisperX virtualenv from ${VENV_SOURCE}..."
+    mkdir -p "$(dirname "${TARGET_WHISPERX_VENV_DIR}")"
+    ln -sfn "${VENV_SOURCE}" "${TARGET_WHISPERX_VENV_DIR}"
+  fi
+
+  if ! bash "${REPO_ROOT}/scripts/check-whisperx-version.sh" >/dev/null 2>&1; then
+    echo "WhisperX virtualenv missing or unverified. Building environment..."
+    bash "${REPO_ROOT}/scripts/install-whisperx.sh"
+  fi
+  if [[ "${SHARED_CACHE_DIR}/whisperx-model" != "${TARGET_WHISPERX_MODEL_DIR}" && -d "${TARGET_WHISPERX_MODEL_DIR}" ]]; then
+    link_or_copy_dir "${TARGET_WHISPERX_MODEL_DIR}" "${SHARED_CACHE_DIR}/whisperx-model"
+  fi
   echo "WhisperX virtualenv ready."
 fi
 
