@@ -60,13 +60,12 @@ describe("prepare-validation-caches", () => {
     const testBase = path.join(REPO_ROOT, ".ai-tmp", "test-worktree");
     fs.mkdirSync(testBase, { recursive: true });
     const tmpWorktree = fs.mkdtempSync(path.join(testBase, "wt-"));
+    const worktreeName = path.basename(tmpWorktree);
+    const dummyGitDir = path.join(REPO_ROOT, ".git", "worktrees", worktreeName);
+    fs.mkdirSync(dummyGitDir, { recursive: true });
     try {
       // Set up minimal worktree structure with gitdir pointing to main repo
-      fs.writeFileSync(
-        path.join(tmpWorktree, ".git"),
-        `gitdir: ${REPO_ROOT}/.git/worktrees/test-worktree\n`,
-        "utf-8"
-      );
+      fs.writeFileSync(path.join(tmpWorktree, ".git"), `gitdir: ${dummyGitDir}\n`, "utf-8");
       fs.mkdirSync(path.join(tmpWorktree, "scripts"), { recursive: true });
       fs.mkdirSync(path.join(tmpWorktree, "docker", "piper"), { recursive: true });
 
@@ -149,6 +148,7 @@ describe("prepare-validation-caches", () => {
       expect(fs.existsSync(piperVoice)).toBe(true);
       expect(fs.existsSync(whisperxModel)).toBe(true);
     } finally {
+      fs.rmSync(dummyGitDir, { recursive: true, force: true });
       fs.rmSync(tmpWorktree, { recursive: true, force: true });
     }
   });

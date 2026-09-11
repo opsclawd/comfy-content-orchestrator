@@ -21,9 +21,17 @@ fi
 MAIN_REPO=""
 if [[ -f "${REPO_ROOT}/.git" ]]; then
   GITDIR="$(sed -n 's/^gitdir: //p' "${REPO_ROOT}/.git" | head -n 1 || true)"
-  if [[ -n "${GITDIR}" && -d "${GITDIR}" ]]; then
-    MAIN_GIT_DIR="$(cd "${GITDIR}/../.." && pwd)"
-    MAIN_REPO="$(cd "${MAIN_GIT_DIR}/.." && pwd)"
+  if [[ -n "${GITDIR}" ]]; then
+    if [[ "${GITDIR}" != /* ]]; then
+      GITDIR="${REPO_ROOT}/${GITDIR}"
+    fi
+    if [[ -d "${GITDIR}" ]]; then
+      MAIN_GIT_DIR="$(cd "${GITDIR}/../.." && pwd)"
+      MAIN_REPO="$(cd "${MAIN_GIT_DIR}/.." && pwd)"
+    elif [[ -d "$(dirname "${GITDIR}")/.." ]]; then
+      MAIN_GIT_DIR="$(cd "$(dirname "${GITDIR}")/.." && pwd)"
+      MAIN_REPO="$(cd "${MAIN_GIT_DIR}/.." && pwd)"
+    fi
   fi
 elif [[ -d "${REPO_ROOT}/.git" ]]; then
   MAIN_REPO="${REPO_ROOT}"

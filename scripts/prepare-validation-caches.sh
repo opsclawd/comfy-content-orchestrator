@@ -8,9 +8,17 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 MAIN_REPO=""
 if [[ -f "${REPO_ROOT}/.git" ]]; then
   GITDIR="$(sed -n 's/^gitdir: //p' "${REPO_ROOT}/.git" | head -n 1 || true)"
-  if [[ -n "${GITDIR}" && -d "${GITDIR}" ]]; then
-    MAIN_GIT_DIR="$(cd "${GITDIR}/../.." && pwd)"
-    MAIN_REPO="$(cd "${MAIN_GIT_DIR}/.." && pwd)"
+  if [[ -n "${GITDIR}" ]]; then
+    if [[ "${GITDIR}" != /* ]]; then
+      GITDIR="${REPO_ROOT}/${GITDIR}"
+    fi
+    if [[ -d "${GITDIR}" ]]; then
+      MAIN_GIT_DIR="$(cd "${GITDIR}/../.." && pwd)"
+      MAIN_REPO="$(cd "${MAIN_GIT_DIR}/.." && pwd)"
+    elif [[ -d "$(dirname "${GITDIR}")/.." ]]; then
+      MAIN_GIT_DIR="$(cd "$(dirname "${GITDIR}")/.." && pwd)"
+      MAIN_REPO="$(cd "${MAIN_GIT_DIR}/.." && pwd)"
+    fi
   fi
 elif [[ -d "${REPO_ROOT}/.git" ]]; then
   MAIN_REPO="${REPO_ROOT}"
@@ -35,7 +43,7 @@ export PIP_CACHE_DIR="${PIP_CACHE_DIR:-${SHARED_CACHE_DIR}/pip}"
 export TMPDIR="${TMPDIR:-${SHARED_CACHE_DIR}/tmp}"
 
 # Seed PIP_CACHE_DIR from ~/.cache/pip if PIP_CACHE_DIR is currently empty
-if [[ -d "${HOME}/.cache/pip" && "${PIP_CACHE_DIR}" != "${HOME}/.cache/pip" ]]; then
+if [[ -n "${HOME:-}" && -d "${HOME}/.cache/pip" && "${PIP_CACHE_DIR}" != "${HOME}/.cache/pip" ]]; then
   if [[ -z "$(ls -A "${PIP_CACHE_DIR}" 2>/dev/null)" ]]; then
     echo "Seeding shared pip cache from ${HOME}/.cache/pip via hardlinks..."
     cp -al "${HOME}/.cache/pip/." "${PIP_CACHE_DIR}/" 2>/dev/null || true
@@ -46,14 +54,19 @@ fi
 link_or_copy_dir() {
   local src_dir="$1"
   local dst_dir="$2"
+  if [[ ! -d "${src_dir}" ]]; then
+    return 0
+  fi
   mkdir -p "${dst_dir}"
   (
     cd "${src_dir}"
     find . -type f | while IFS= read -r rel_file; do
-      dst_file="${dst_dir}/${rel_file}"
+      local clean_rel="${rel_file#./}"
+      local dst_file="${dst_dir}/${clean_rel}"
+      local src_file="${src_dir}/${clean_rel}"
       mkdir -p "$(dirname "${dst_file}")"
       if [[ ! -f "${dst_file}" ]]; then
-        ln -f "${rel_file}" "${dst_file}" 2>/dev/null || cp -f "${rel_file}" "${dst_file}"
+        ln -f "${src_file}" "${dst_file}" 2>/dev/null || cp -f "${src_file}" "${dst_file}"
       fi
     done
   )

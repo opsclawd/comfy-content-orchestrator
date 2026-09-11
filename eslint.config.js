@@ -10,7 +10,9 @@ export default tseslint.config(
       "**/.next/**",
       "**/next-env.d.ts",
       "**/.ai-tmp/**",
-      "**/.ai-cache/**"
+      "**/.ai-cache/**",
+      "**/.ai-worktrees/**",
+      "**/.ai-runs/**"
     ]
   },
   js.configs.recommended,
