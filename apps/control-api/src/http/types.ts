@@ -1,11 +1,14 @@
 import type { FastifyRequest } from "fastify";
 import {
   CreateCampaignUseCase,
+  CreateCampaignShellUseCase,
   CreateClientUseCase,
   CreateSceneUseCase,
   EnforceStorageAdmission,
   EnqueueSceneProductionRenderUseCase,
+  MaterializeStoryboardUseCase,
   PlanCampaignBeatSheetUseCase,
+  PlanCampaignStoryboardUseCase,
   PlanSceneConfigurationUseCase,
   ProgressSceneProductionUseCases,
   RankReviewCandidatesUseCase,
@@ -54,10 +57,13 @@ export interface ControlApiUseCases {
   readonly progressSceneProduction: ProgressSceneProductionUseCases;
   readonly enqueueSceneProductionRender?: EnqueueSceneProductionRenderUseCase | undefined;
   readonly createCampaign?: CreateCampaignUseCase | undefined;
+  readonly createCampaignShell?: CreateCampaignShellUseCase | undefined;
   readonly createClient?: CreateClientUseCase | undefined;
   readonly createScene?: CreateSceneUseCase | undefined;
   readonly submitSceneCreation?: SubmitSceneCreationUseCase | undefined;
+  readonly materializeStoryboard?: MaterializeStoryboardUseCase | undefined;
   readonly planCampaignBeatSheet?: PlanCampaignBeatSheetUseCase | undefined;
+  readonly planCampaignStoryboard?: PlanCampaignStoryboardUseCase | undefined;
   readonly rankReviewCandidates?: RankReviewCandidatesUseCase | undefined;
   readonly enforceStorageAdmission?: EnforceStorageAdmission;
   readonly approveSceneAndDispatchCampaignProduction: ApproveSceneAndDispatchCampaignProductionUseCase;
@@ -86,8 +92,13 @@ export function createControlApiContainer(
   );
   const enqueueSceneProductionRender = new EnqueueSceneProductionRenderUseCase(dependencies.uow);
   const createCampaign = new CreateCampaignUseCase(dependencies.uow);
+  const createCampaignShell = new CreateCampaignShellUseCase(dependencies.uow);
   const createClient = new CreateClientUseCase(dependencies.uow);
   const createScene = new CreateSceneUseCase(dependencies.uow);
+  const materializeStoryboard = new MaterializeStoryboardUseCase(
+    dependencies.uow,
+    progressSceneProduction
+  );
   const approveSceneAndDispatchCampaignProduction =
     new ApproveSceneAndDispatchCampaignProductionUseCase(
       dependencies.uow,
@@ -119,6 +130,17 @@ export function createControlApiContainer(
           ...(dependencies.planningOverallTimeoutMs !== undefined
             ? { overallTimeoutMs: dependencies.planningOverallTimeoutMs }
             : {})
+        })
+      : undefined;
+
+  const planCampaignStoryboard =
+    planCampaignBeatSheet !== undefined && planSceneConfiguration !== undefined
+      ? new PlanCampaignStoryboardUseCase({
+          createCampaignShell,
+          planCampaignBeatSheet,
+          planSceneConfiguration,
+          materializeStoryboard,
+          uow: dependencies.uow
         })
       : undefined;
 
@@ -159,13 +181,16 @@ export function createControlApiContainer(
       progressSceneProduction,
       enqueueSceneProductionRender,
       createCampaign,
+      createCampaignShell,
       createClient,
       createScene,
       submitSceneCreation,
+      materializeStoryboard,
       approveSceneAndDispatchCampaignProduction,
       completeCampaignProductionRun,
       completeCampaignProductionRunAssembly,
       ...(planCampaignBeatSheet !== undefined ? { planCampaignBeatSheet } : {}),
+      ...(planCampaignStoryboard !== undefined ? { planCampaignStoryboard } : {}),
       ...(enforceStorageAdmission !== undefined ? { enforceStorageAdmission } : {}),
       ...(rankReviewCandidates !== undefined ? { rankReviewCandidates } : {})
     },
