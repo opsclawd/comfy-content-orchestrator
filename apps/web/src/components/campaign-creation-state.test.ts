@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildRequestFromForm,
+  computeClientRequestFingerprint,
   createInitialState,
   omitIfBlank,
   transitionCampaignCreationState,
@@ -19,6 +20,7 @@ import {
 } from "./campaign-creation-state.js";
 import {
   PlanCampaignStoryboardRequestSchema,
+  type PlanCampaignStoryboardRequest,
   MIN_SCENE_COUNT as CONTRACT_MIN_SCENE_COUNT,
   MAX_SCENE_COUNT as CONTRACT_MAX_SCENE_COUNT,
   MIN_TARGET_DURATION_MS as CONTRACT_MIN_TARGET_DURATION_MS,
@@ -481,7 +483,7 @@ describe("campaign creation state machine & form mapping", () => {
       expect(submitError.fieldErrors.briefDescription).toBe("Brief is too vague");
     });
 
-    it("permits standard SUBMIT after submit-error without special retry action (Decision 7)", () => {
+    it("reuses the original idempotency key when resubmitting an unchanged intent after submit-error without special retry action (Decision 7)", () => {
       const initial = createInitialState(validFormValues);
       const { state: submittingState } = transitionCampaignCreationState(initial, {
         type: "SUBMIT",
@@ -495,7 +497,7 @@ describe("campaign creation state machine & form mapping", () => {
       });
       expect(errorState.phase).toBe("submit-error");
 
-      // Submitting again uses standard SUBMIT with a fresh key
+      // Submitting again uses standard SUBMIT with candidate fresh key; reducer reuses original key
       const freshKey = "88888888-8888-4888-8888-888888888888";
       const { state: resubmittedState, effect } = transitionCampaignCreationState(errorState, {
         type: "SUBMIT",
@@ -504,7 +506,8 @@ describe("campaign creation state machine & form mapping", () => {
 
       expect(resubmittedState.phase).toBe("submitting");
       const resubmitted = resubmittedState as SubmittingState;
-      expect(resubmitted.idempotencyKey).toBe(freshKey);
+      expect(resubmitted.idempotencyKey).toBe(dummyIdempotencyKey);
+      expect(resubmitted.request.idempotencyKey).toBe(dummyIdempotencyKey);
       expect(effect).toEqual({
         type: "submit",
         request: resubmitted.request
@@ -540,6 +543,472 @@ describe("campaign creation state machine & form mapping", () => {
         expect(updatedState.values.title).toBe("New Title");
         expect(Object.keys(updatedState.fieldErrors)).toHaveLength(0);
       }
+    });
+  });
+
+  describe("creation-intent lifecycle & idempotent retry UX (#249)", () => {
+    const freshCandidateKey = "88888888-8888-4888-8888-888888888888";
+    const secondCandidateKey = "77777777-7777-4777-8777-777777777777";
+
+    it("first submit for a new creation intent assigns and retains the initial idempotency identity", () => {
+      const initial = createInitialState(validFormValues);
+      expect(initial.committedIntent).toBeUndefined();
+
+      const { state } = transitionCampaignCreationState(initial, {
+        type: "SUBMIT",
+        idempotencyKey: dummyIdempotencyKey
+      });
+
+      expect(state.phase).toBe("submitting");
+      const submitting = state as SubmittingState;
+      expect(submitting.idempotencyKey).toBe(dummyIdempotencyKey);
+      expect(submitting.request.idempotencyKey).toBe(dummyIdempotencyKey);
+      expect(submitting.committedIntent).toBeDefined();
+      expect(submitting.committedIntent?.idempotencyKey).toBe(dummyIdempotencyKey);
+      expect(typeof submitting.committedIntent?.fingerprint).toBe("string");
+    });
+
+    it("retrying after ambiguous transport outcome (502 / network drop) reuses the identical idempotency identity", () => {
+      const initial = createInitialState(validFormValues);
+      const { state: submittingState } = transitionCampaignCreationState(initial, {
+        type: "SUBMIT",
+        idempotencyKey: dummyIdempotencyKey
+      });
+
+      // Transport drops response or fails with 502
+      const { state: errorState } = transitionCampaignCreationState(submittingState, {
+        type: "SUBMIT_ERROR",
+        statusCode: 502,
+        error: { message: "A network or server error occurred while planning the campaign." }
+      });
+
+      expect(errorState.phase).toBe("submit-error");
+      const submitError = errorState as SubmitErrorState;
+      expect(submitError.committedIntent?.idempotencyKey).toBe(dummyIdempotencyKey);
+
+      // User retries without changing form values; component dispatches SUBMIT with fresh UUID candidate
+      const { state: retryState, effect } = transitionCampaignCreationState(errorState, {
+        type: "SUBMIT",
+        idempotencyKey: freshCandidateKey
+      });
+
+      expect(retryState.phase).toBe("submitting");
+      const retrying = retryState as SubmittingState;
+      // Key must be reused from committedIntent, candidate key discarded
+      expect(retrying.idempotencyKey).toBe(dummyIdempotencyKey);
+      expect(retrying.request.idempotencyKey).toBe(dummyIdempotencyKey);
+      expect(retrying.committedIntent?.idempotencyKey).toBe(dummyIdempotencyKey);
+      expect(effect).toEqual({
+        type: "submit",
+        request: retrying.request
+      });
+    });
+
+    it("same-intent retry retains the same identity across multiple consecutive failures", () => {
+      const initial = createInitialState(validFormValues);
+      // Attempt 1: submit
+      const { state: sub1 } = transitionCampaignCreationState(initial, {
+        type: "SUBMIT",
+        idempotencyKey: dummyIdempotencyKey
+      });
+      expect((sub1 as SubmittingState).idempotencyKey).toBe(dummyIdempotencyKey);
+
+      // Attempt 1 fails (502)
+      const { state: err1 } = transitionCampaignCreationState(sub1, {
+        type: "SUBMIT_ERROR",
+        statusCode: 502,
+        error: { message: "Timeout" }
+      });
+
+      // Attempt 2: retry with freshCandidateKey
+      const { state: sub2 } = transitionCampaignCreationState(err1, {
+        type: "SUBMIT",
+        idempotencyKey: freshCandidateKey
+      });
+      expect((sub2 as SubmittingState).idempotencyKey).toBe(dummyIdempotencyKey);
+
+      // Attempt 2 fails (500)
+      const { state: err2 } = transitionCampaignCreationState(sub2, {
+        type: "SUBMIT_ERROR",
+        statusCode: 500,
+        error: { message: "Internal error" }
+      });
+
+      // Attempt 3: retry with secondCandidateKey
+      const { state: sub3 } = transitionCampaignCreationState(err2, {
+        type: "SUBMIT",
+        idempotencyKey: secondCandidateKey
+      });
+      expect((sub3 as SubmittingState).idempotencyKey).toBe(dummyIdempotencyKey);
+    });
+
+    it("materially changing the creative brief description after an error causes the next submit to use a new identity", () => {
+      const initial = createInitialState(validFormValues);
+      const { state: submittingState } = transitionCampaignCreationState(initial, {
+        type: "SUBMIT",
+        idempotencyKey: dummyIdempotencyKey
+      });
+
+      const { state: errorState } = transitionCampaignCreationState(submittingState, {
+        type: "SUBMIT_ERROR",
+        statusCode: 500,
+        error: { message: "Internal error" }
+      });
+
+      // User changes the brief description
+      const updatedDescription =
+        "Completely rewritten campaign concept focusing on winter activewear";
+      const { state: idleState } = transitionCampaignCreationState(errorState, {
+        type: "UPDATE_FIELDS",
+        values: { briefDescription: updatedDescription }
+      });
+      expect(idleState.phase).toBe("idle");
+
+      // Next submit must mint a new identity because intent changed
+      const { state: resubmittedState } = transitionCampaignCreationState(idleState, {
+        type: "SUBMIT",
+        idempotencyKey: freshCandidateKey
+      });
+
+      expect(resubmittedState.phase).toBe("submitting");
+      const resubmitted = resubmittedState as SubmittingState;
+      expect(resubmitted.idempotencyKey).toBe(freshCandidateKey);
+      expect(resubmitted.request.idempotencyKey).toBe(freshCandidateKey);
+      expect(resubmitted.request.brief.description).toBe(updatedDescription);
+      expect(resubmitted.committedIntent?.idempotencyKey).toBe(freshCandidateKey);
+    });
+
+    it("materially changing creative brief visual style after an error causes the next submit to use a new identity", () => {
+      const initial = createInitialState(validFormValues);
+      const { state: submittingState } = transitionCampaignCreationState(initial, {
+        type: "SUBMIT",
+        idempotencyKey: dummyIdempotencyKey
+      });
+
+      const { state: errorState } = transitionCampaignCreationState(submittingState, {
+        type: "SUBMIT_ERROR",
+        statusCode: 500,
+        error: { message: "Internal error" }
+      });
+
+      const { state: idleState } = transitionCampaignCreationState(errorState, {
+        type: "UPDATE_FIELDS",
+        values: { briefVisualStyle: "noir high contrast monochrome" }
+      });
+
+      const { state: resubmittedState } = transitionCampaignCreationState(idleState, {
+        type: "SUBMIT",
+        idempotencyKey: freshCandidateKey
+      });
+
+      expect(resubmittedState.phase).toBe("submitting");
+      const resubmitted = resubmittedState as SubmittingState;
+      expect(resubmitted.idempotencyKey).toBe(freshCandidateKey);
+      expect(resubmitted.request.brief.visualStyle).toBe("noir high contrast monochrome");
+    });
+
+    it("materially changing scene-count override mode from Auto to Custom causes next submit to use a new identity", () => {
+      // Auto mode by default
+      const initial = createInitialState({ ...validFormValues, sceneCountMode: "auto" });
+      const { state: submittingState } = transitionCampaignCreationState(initial, {
+        type: "SUBMIT",
+        idempotencyKey: dummyIdempotencyKey
+      });
+
+      const { state: errorState } = transitionCampaignCreationState(submittingState, {
+        type: "SUBMIT_ERROR",
+        statusCode: 500,
+        error: { message: "Internal error" }
+      });
+
+      // Switch to Custom mode with override 3
+      const { state: idleState } = transitionCampaignCreationState(errorState, {
+        type: "UPDATE_FIELDS",
+        values: { sceneCountMode: "custom", sceneCountOverride: "3" }
+      });
+
+      const { state: resubmittedState } = transitionCampaignCreationState(idleState, {
+        type: "SUBMIT",
+        idempotencyKey: freshCandidateKey
+      });
+
+      expect(resubmittedState.phase).toBe("submitting");
+      const resubmitted = resubmittedState as SubmittingState;
+      expect(resubmitted.idempotencyKey).toBe(freshCandidateKey);
+      expect(resubmitted.request.sceneCountOverride).toBe(3);
+    });
+
+    it("materially changing scene-count override value in Custom mode causes next submit to use a new identity", () => {
+      const customValues: CampaignCreationFormValues = {
+        ...validFormValues,
+        sceneCountMode: "custom",
+        sceneCountOverride: "3"
+      };
+      const initial = createInitialState(customValues);
+      const { state: submittingState } = transitionCampaignCreationState(initial, {
+        type: "SUBMIT",
+        idempotencyKey: dummyIdempotencyKey
+      });
+
+      const { state: errorState } = transitionCampaignCreationState(submittingState, {
+        type: "SUBMIT_ERROR",
+        statusCode: 500,
+        error: { message: "Internal error" }
+      });
+
+      // Change custom scene count from 3 to 4
+      const { state: idleState } = transitionCampaignCreationState(errorState, {
+        type: "UPDATE_FIELDS",
+        values: { sceneCountOverride: "4" }
+      });
+
+      const { state: resubmittedState } = transitionCampaignCreationState(idleState, {
+        type: "SUBMIT",
+        idempotencyKey: freshCandidateKey
+      });
+
+      expect(resubmittedState.phase).toBe("submitting");
+      const resubmitted = resubmittedState as SubmittingState;
+      expect(resubmitted.idempotencyKey).toBe(freshCandidateKey);
+      expect(resubmitted.request.sceneCountOverride).toBe(4);
+    });
+
+    it("unchanged / equivalent canonical request input retains the same identity for retry", () => {
+      const initial = createInitialState(validFormValues);
+      const { state: submittingState } = transitionCampaignCreationState(initial, {
+        type: "SUBMIT",
+        idempotencyKey: dummyIdempotencyKey
+      });
+
+      const { state: errorState } = transitionCampaignCreationState(submittingState, {
+        type: "SUBMIT_ERROR",
+        statusCode: 500,
+        error: { message: "Temporary failure" }
+      });
+
+      // Update fields with non-material / cosmetic whitespace and numeric string equivalent
+      const { state: idleState } = transitionCampaignCreationState(errorState, {
+        type: "UPDATE_FIELDS",
+        values: {
+          title: "  Summer 2026 Collection  ",
+          briefDescription: "High energy summer apparel advertisement\n",
+          durationSeconds: 15 // number vs string "15"
+        }
+      });
+
+      const { state: resubmittedState } = transitionCampaignCreationState(idleState, {
+        type: "SUBMIT",
+        idempotencyKey: freshCandidateKey
+      });
+
+      expect(resubmittedState.phase).toBe("submitting");
+      const resubmitted = resubmittedState as SubmittingState;
+      // Equivalent canonical inputs must not create false conflicts
+      expect(resubmitted.idempotencyKey).toBe(dummyIdempotencyKey);
+      expect(resubmitted.request.idempotencyKey).toBe(dummyIdempotencyKey);
+    });
+
+    it("409 IDEMPOTENCY_CONFLICT is surfaced explicitly and does not silently rotate the key on its own", () => {
+      const initial = createInitialState(validFormValues);
+      const { state: submittingState } = transitionCampaignCreationState(initial, {
+        type: "SUBMIT",
+        idempotencyKey: dummyIdempotencyKey
+      });
+
+      const { state: errorState, effect: errorEffect } = transitionCampaignCreationState(
+        submittingState,
+        {
+          type: "SUBMIT_ERROR",
+          statusCode: 409,
+          error: {
+            code: "IDEMPOTENCY_CONFLICT",
+            message: "Key already committed with conflicting parameters"
+          }
+        }
+      );
+
+      // Explicit error surfaced; no auto-resubmission effect
+      expect(errorState.phase).toBe("submit-error");
+      const submitError = errorState as SubmitErrorState;
+      expect(submitError.error.isConflict).toBe(true);
+      expect(submitError.error.code).toBe("IDEMPOTENCY_CONFLICT");
+      expect(submitError.error.statusCode).toBe(409);
+      expect(submitError.committedIntent).toBeUndefined(); // invalidated
+      expect(errorEffect).toEqual({ type: "none" });
+
+      // User must explicitly submit again; next explicit submit produces fresh key
+      const { state: resubmittedState } = transitionCampaignCreationState(errorState, {
+        type: "SUBMIT",
+        idempotencyKey: freshCandidateKey
+      });
+
+      expect(resubmittedState.phase).toBe("submitting");
+      const resubmitted = resubmittedState as SubmittingState;
+      expect(resubmitted.idempotencyKey).toBe(freshCandidateKey);
+      expect(resubmitted.request.idempotencyKey).toBe(freshCandidateKey);
+      expect(resubmitted.committedIntent?.idempotencyKey).toBe(freshCandidateKey);
+    });
+
+    it("successful submission consumes the identity, preventing reuse on subsequent workflows", () => {
+      const initial = createInitialState(validFormValues);
+      const { state: submittingState } = transitionCampaignCreationState(initial, {
+        type: "SUBMIT",
+        idempotencyKey: dummyIdempotencyKey
+      });
+
+      const mockResponse = {
+        campaignId: "33333333-3333-4333-8333-333333333333",
+        idempotencyKey: dummyIdempotencyKey,
+        status: "drafting" as const,
+        totalScenes: 5,
+        targetTotalDurationMs: 15000,
+        isIdempotentReplay: false,
+        sceneCount: 4,
+        scenes: [],
+        createdAt: "2026-09-11T12:00:00.000Z"
+      };
+
+      const { state: succeededState } = transitionCampaignCreationState(submittingState, {
+        type: "SUBMIT_SUCCESS",
+        response: mockResponse
+      });
+
+      expect(succeededState.phase).toBe("succeeded");
+      expect((succeededState as SucceededState).committedIntent).toBeUndefined();
+
+      // Subsequent submit from succeeded state creates a new intent and uses candidate key
+      const { state: nextState } = transitionCampaignCreationState(succeededState, {
+        type: "SUBMIT",
+        idempotencyKey: freshCandidateKey
+      });
+
+      expect(nextState.phase).toBe("submitting");
+      const nextSubmitting = nextState as SubmittingState;
+      expect(nextSubmitting.idempotencyKey).toBe(freshCandidateKey);
+      expect(nextSubmitting.request.idempotencyKey).toBe(freshCandidateKey);
+    });
+
+    it("client-side state cannot accidentally pair an old idempotency key with a materially changed request payload", () => {
+      const initial = createInitialState(validFormValues);
+      const { state: submittingState } = transitionCampaignCreationState(initial, {
+        type: "SUBMIT",
+        idempotencyKey: dummyIdempotencyKey
+      });
+
+      const { state: errorState } = transitionCampaignCreationState(submittingState, {
+        type: "SUBMIT_ERROR",
+        statusCode: 500,
+        error: { message: "Server error" }
+      });
+
+      // Change title
+      const { state: idleState } = transitionCampaignCreationState(errorState, {
+        type: "UPDATE_FIELDS",
+        values: { title: "Completely Different Campaign Title" }
+      });
+
+      const { state: resubmittedState } = transitionCampaignCreationState(idleState, {
+        type: "SUBMIT",
+        idempotencyKey: freshCandidateKey
+      });
+
+      const resubmitted = resubmittedState as SubmittingState;
+      expect(resubmitted.idempotencyKey).not.toBe(dummyIdempotencyKey);
+      expect(resubmitted.idempotencyKey).toBe(freshCandidateKey);
+      expect(resubmitted.request.idempotencyKey).toBe(freshCandidateKey);
+      expect(resubmitted.request.title).toBe("Completely Different Campaign Title");
+    });
+
+    it("preserves retryability on deterministic planning safety refusal (422) without creating duplicates", () => {
+      const initial = createInitialState(validFormValues);
+      const { state: submittingState } = transitionCampaignCreationState(initial, {
+        type: "SUBMIT",
+        idempotencyKey: dummyIdempotencyKey
+      });
+
+      const { state: errorState } = transitionCampaignCreationState(submittingState, {
+        type: "SUBMIT_ERROR",
+        statusCode: 422,
+        error: {
+          code: "PLANNING_SAFETY_REFUSAL",
+          message: "Prompt was rejected by safety policy"
+        }
+      });
+
+      expect(errorState.phase).toBe("submit-error");
+      const submitError = errorState as SubmitErrorState;
+      expect(submitError.error.isConflict).toBe(false);
+      expect(submitError.committedIntent?.idempotencyKey).toBe(dummyIdempotencyKey);
+
+      // Retrying unchanged reuses key
+      const { state: resubmittedState } = transitionCampaignCreationState(errorState, {
+        type: "SUBMIT",
+        idempotencyKey: freshCandidateKey
+      });
+
+      expect((resubmittedState as SubmittingState).idempotencyKey).toBe(dummyIdempotencyKey);
+    });
+
+    describe("computeClientRequestFingerprint fixture & canonicalization", () => {
+      it("produces identical pinned canonical JSON representation to backend canonicalizeCampaignRequest", () => {
+        const fixture: Omit<PlanCampaignStoryboardRequest, "idempotencyKey"> = {
+          clientId: "11111111-1111-4111-8111-111111111111",
+          title: "Summer 2026 Collection",
+          targetPlatform: "tiktok",
+          targetTotalDurationMs: 15000,
+          sceneCountOverride: 3,
+          brief: {
+            description: "High energy summer apparel advertisement",
+            visualStyle: "cinematic warm golden hour"
+          },
+          candidateReferenceAssetIds: ["asset-b", "asset-a", "asset-b"]
+        };
+
+        const fingerprint = computeClientRequestFingerprint(fixture);
+        expect(fingerprint).toBe(
+          '{"brief":{"description":"High energy summer apparel advertisement","visualStyle":"cinematic warm golden hour"},"candidateReferenceAssetIds":["asset-a","asset-b"],"clientId":"11111111-1111-4111-8111-111111111111","sceneCountOverride":3,"targetPlatform":"tiktok","targetTotalDurationMs":15000,"title":"Summer 2026 Collection"}'
+        );
+      });
+
+      it("normalizes candidateReferenceAssetIds via set deduplication and sorting", () => {
+        const base = {
+          clientId: "11111111-1111-4111-8111-111111111111",
+          title: "Summer 2026 Collection",
+          targetTotalDurationMs: 15000,
+          brief: { description: "Advertisement" }
+        };
+
+        const fp1 = computeClientRequestFingerprint({
+          ...base,
+          candidateReferenceAssetIds: ["asset-3", "asset-1", "asset-2", "asset-1"]
+        });
+        const fp2 = computeClientRequestFingerprint({
+          ...base,
+          candidateReferenceAssetIds: ["asset-1", "asset-2", "asset-3"]
+        });
+
+        expect(fp1).toBe(fp2);
+      });
+
+      it("treats empty candidateReferenceAssetIds as absent / equivalent to undefined", () => {
+        const base = {
+          clientId: "11111111-1111-4111-8111-111111111111",
+          title: "Summer 2026 Collection",
+          targetTotalDurationMs: 15000,
+          brief: { description: "Advertisement" }
+        };
+
+        const fpEmpty = computeClientRequestFingerprint({
+          ...base,
+          candidateReferenceAssetIds: []
+        });
+        const fpUndefined = computeClientRequestFingerprint({
+          ...base,
+          candidateReferenceAssetIds: undefined
+        });
+
+        expect(fpEmpty).toBe(fpUndefined);
+      });
     });
   });
 });

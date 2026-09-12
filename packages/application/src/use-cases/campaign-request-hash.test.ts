@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   canonicalizeCampaignRequest,
-  computeCampaignRequestHash
+  computeCampaignRequestHash,
+  type CampaignRequestHashInput
 } from "./campaign-request-hash.js";
 
 describe("campaign-request-hash", () => {
@@ -195,5 +196,25 @@ describe("campaign-request-hash", () => {
     });
 
     expect(hashEmpty).toBe(hashUndefined);
+  });
+
+  it("matches the pinned client-side canonical JSON representation (cross-package sync with campaign-creation-state)", () => {
+    const fixture: CampaignRequestHashInput = {
+      clientId: "11111111-1111-4111-8111-111111111111",
+      title: "Summer 2026 Collection",
+      targetPlatform: "tiktok",
+      targetTotalDurationMs: 15000,
+      sceneCountOverride: 3,
+      brief: {
+        description: "High energy summer apparel advertisement",
+        visualStyle: "cinematic warm golden hour"
+      },
+      candidateReferenceAssetIds: ["asset-b", "asset-a", "asset-b"]
+    };
+
+    const canonical = canonicalizeCampaignRequest(fixture);
+    expect(canonical).toBe(
+      '{"brief":{"description":"High energy summer apparel advertisement","visualStyle":"cinematic warm golden hour"},"candidateReferenceAssetIds":["asset-a","asset-b"],"clientId":"11111111-1111-4111-8111-111111111111","sceneCountOverride":3,"targetPlatform":"tiktok","targetTotalDurationMs":15000,"title":"Summer 2026 Collection"}'
+    );
   });
 });

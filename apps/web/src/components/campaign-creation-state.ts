@@ -47,10 +47,16 @@ export interface CampaignCreationError {
   readonly isConflict: boolean;
 }
 
+export interface CommittedIntent {
+  readonly idempotencyKey: string;
+  readonly fingerprint: string;
+}
+
 export interface IdleState {
   readonly phase: "idle";
   readonly values: CampaignCreationFormValues;
   readonly fieldErrors: Record<string, string>;
+  readonly committedIntent?: CommittedIntent | undefined;
 }
 
 export interface ValidationFailedState {
@@ -58,6 +64,7 @@ export interface ValidationFailedState {
   readonly values: CampaignCreationFormValues;
   readonly fieldErrors: Record<string, string>;
   readonly issues: readonly z.ZodIssue[];
+  readonly committedIntent?: CommittedIntent | undefined;
 }
 
 export interface SubmittingState {
@@ -65,12 +72,14 @@ export interface SubmittingState {
   readonly values: CampaignCreationFormValues;
   readonly idempotencyKey: string;
   readonly request: PlanCampaignStoryboardRequest;
+  readonly committedIntent?: CommittedIntent | undefined;
 }
 
 export interface SucceededState {
   readonly phase: "succeeded";
   readonly values: CampaignCreationFormValues;
   readonly response: PlanCampaignStoryboardResponse;
+  readonly committedIntent?: undefined;
 }
 
 export interface SubmitErrorState {
@@ -78,6 +87,7 @@ export interface SubmitErrorState {
   readonly values: CampaignCreationFormValues;
   readonly error: CampaignCreationError;
   readonly fieldErrors: Record<string, string>;
+  readonly committedIntent?: CommittedIntent | undefined;
 }
 
 export type CampaignCreationState =
@@ -109,7 +119,8 @@ export function createInitialState(initialValues?: Partial<CampaignCreationFormV
       ...INITIAL_CAMPAIGN_FORM_VALUES,
       ...initialValues
     },
-    fieldErrors: {}
+    fieldErrors: {},
+    committedIntent: undefined
   };
 }
 
@@ -232,6 +243,55 @@ export function buildRequestFromForm(
   };
 }
 
+// Source of truth: packages/application/src/use-cases/campaign-request-hash.ts — kept in sync via campaign-creation-state.test.ts + campaign-request-hash.test.ts cross-check.
+function sortKeysDeep(value: unknown): unknown {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(sortKeysDeep);
+  }
+  const record = value as Record<string, unknown>;
+  const sortedKeys = Object.keys(record).sort();
+  const result: Record<string, unknown> = {};
+  for (const key of sortedKeys) {
+    const val = record[key];
+    if (val !== undefined) {
+      result[key] = sortKeysDeep(val);
+    }
+  }
+  return result;
+}
+
+/**
+ * Computes a canonical fingerprint string representing the client-side creation intent.
+ * Mirrored from packages/application/src/use-cases/campaign-request-hash.ts canonicalizeCampaignRequest.
+ */
+export function computeClientRequestFingerprint(
+  request: Omit<PlanCampaignStoryboardRequest, "idempotencyKey">
+): string {
+  let canonicalAssetIds: string[] | undefined = undefined;
+  if (
+    request.candidateReferenceAssetIds !== undefined &&
+    request.candidateReferenceAssetIds.length > 0
+  ) {
+    canonicalAssetIds = Array.from(new Set(request.candidateReferenceAssetIds)).sort();
+  }
+
+  const normalized = {
+    clientId: request.clientId,
+    title: request.title,
+    ...(request.targetPlatform !== undefined ? { targetPlatform: request.targetPlatform } : {}),
+    targetTotalDurationMs: request.targetTotalDurationMs,
+    ...(request.sceneCountOverride !== undefined
+      ? { sceneCountOverride: request.sceneCountOverride }
+      : {}),
+    ...(request.brief !== undefined ? { brief: request.brief } : {}),
+    ...(canonicalAssetIds !== undefined ? { candidateReferenceAssetIds: canonicalAssetIds } : {})
+  };
+  return JSON.stringify(sortKeysDeep(normalized));
+}
+
 export function transitionCampaignCreationState(
   state: CampaignCreationState,
   event: CampaignCreationEvent
@@ -253,7 +313,8 @@ export function transitionCampaignCreationState(
           state: {
             phase: "idle",
             values: updatedValues,
-            fieldErrors: {}
+            fieldErrors: {},
+            committedIntent: state.committedIntent
           },
           effect: { type: "none" }
         };
@@ -264,7 +325,8 @@ export function transitionCampaignCreationState(
           state: {
             phase: "idle",
             values: updatedValues,
-            fieldErrors: {}
+            fieldErrors: {},
+            committedIntent: state.committedIntent
           },
           effect: { type: "none" }
         };
@@ -292,22 +354,46 @@ export function transitionCampaignCreationState(
             phase: "validation-failed",
             values: state.values,
             fieldErrors: buildResult.fieldErrors,
-            issues: buildResult.issues
+            issues: buildResult.issues,
+            committedIntent: state.committedIntent
           },
           effect: { type: "none" }
         };
       }
 
+      const fingerprint = computeClientRequestFingerprint(buildResult.request);
+
+      let resolvedKey: string;
+      if (
+        state.committedIntent !== undefined &&
+        state.committedIntent.fingerprint === fingerprint
+      ) {
+        resolvedKey = state.committedIntent.idempotencyKey;
+      } else {
+        resolvedKey = event.idempotencyKey;
+      }
+
+      const finalRequest: PlanCampaignStoryboardRequest = {
+        ...buildResult.request,
+        idempotencyKey: resolvedKey
+      };
+
+      const committedIntent: CommittedIntent = {
+        idempotencyKey: resolvedKey,
+        fingerprint
+      };
+
       return {
         state: {
           phase: "submitting",
           values: state.values,
-          idempotencyKey: event.idempotencyKey,
-          request: buildResult.request
+          idempotencyKey: resolvedKey,
+          request: finalRequest,
+          committedIntent
         },
         effect: {
           type: "submit",
-          request: buildResult.request
+          request: finalRequest
         }
       };
     }
@@ -331,6 +417,9 @@ export function transitionCampaignCreationState(
         fieldErrors = mapZodIssuesToFields(event.error.details as z.ZodIssue[]);
       }
 
+      const committedIntent =
+        event.error.code === "IDEMPOTENCY_CONFLICT" ? undefined : state.committedIntent;
+
       return {
         state: {
           phase: "submit-error",
@@ -342,7 +431,8 @@ export function transitionCampaignCreationState(
             details: event.error.details,
             isConflict
           },
-          fieldErrors
+          fieldErrors,
+          committedIntent
         },
         effect: { type: "none" }
       };

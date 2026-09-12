@@ -522,5 +522,91 @@ describe("CampaignCreationForm Component", () => {
       expect(screen.queryByText(/retry/i)).toBeNull();
       expect(screen.queryByText(/try again/i)).toBeNull();
     });
+
+    it("reuses the same idempotency key when retrying after a failed submission with unchanged form values", async () => {
+      const networkError = new Error("Network timeout");
+      const mockSubmit = vi
+        .fn()
+        .mockRejectedValueOnce(networkError)
+        .mockResolvedValueOnce(sampleSuccessResponse);
+
+      render(<CampaignCreationForm submitCampaign={mockSubmit} initialValues={validValues} />);
+
+      const submitBtn = screen.getByTestId("submit-campaign-button") as HTMLButtonElement;
+      fireEvent.click(submitBtn);
+
+      await waitFor(() => {
+        expect(mockSubmit).toHaveBeenCalledTimes(1);
+      });
+
+      const firstCall = mockSubmit.mock.calls[0];
+      expect(firstCall).toBeDefined();
+      if (!firstCall) return;
+      const firstCallKey = firstCall[0].idempotencyKey;
+      expect(firstCallKey).toBeDefined();
+
+      // Submit button re-enabled after error
+      await waitFor(() => {
+        expect(submitBtn.disabled).toBe(false);
+      });
+
+      // User clicks submit again without changing form values
+      fireEvent.click(submitBtn);
+
+      await waitFor(() => {
+        expect(mockSubmit).toHaveBeenCalledTimes(2);
+      });
+
+      const secondCall = mockSubmit.mock.calls[1];
+      expect(secondCall).toBeDefined();
+      if (!secondCall) return;
+      const secondCallKey = secondCall[0].idempotencyKey;
+      expect(secondCallKey).toBe(firstCallKey);
+    });
+
+    it("uses a new idempotency key when submitting after changing brief description following an error", async () => {
+      const serverError = new Error("500 Internal Server Error");
+      const mockSubmit = vi
+        .fn()
+        .mockRejectedValueOnce(serverError)
+        .mockResolvedValueOnce(sampleSuccessResponse);
+
+      render(<CampaignCreationForm submitCampaign={mockSubmit} initialValues={validValues} />);
+
+      const submitBtn = screen.getByTestId("submit-campaign-button") as HTMLButtonElement;
+      fireEvent.click(submitBtn);
+
+      await waitFor(() => {
+        expect(mockSubmit).toHaveBeenCalledTimes(1);
+      });
+
+      const firstCall = mockSubmit.mock.calls[0];
+      expect(firstCall).toBeDefined();
+      if (!firstCall) return;
+      const firstCallKey = firstCall[0].idempotencyKey;
+
+      await waitFor(() => {
+        expect(submitBtn.disabled).toBe(false);
+      });
+
+      // User changes brief description
+      const briefInput = screen.getByTestId("brief-description-input");
+      fireEvent.change(briefInput, {
+        target: { value: "New altered brief description for campaign" }
+      });
+
+      fireEvent.click(submitBtn);
+
+      await waitFor(() => {
+        expect(mockSubmit).toHaveBeenCalledTimes(2);
+      });
+
+      const secondCall = mockSubmit.mock.calls[1];
+      expect(secondCall).toBeDefined();
+      if (!secondCall) return;
+      const secondCallKey = secondCall[0].idempotencyKey;
+      expect(secondCallKey).not.toBe(firstCallKey);
+      expect(secondCall[0].brief.description).toBe("New altered brief description for campaign");
+    });
   });
 });
