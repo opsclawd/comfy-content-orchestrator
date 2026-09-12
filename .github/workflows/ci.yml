@@ -33,6 +33,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # test:assembly pulls minio/minio for its integration suite.
+      # Authenticate to avoid Docker Hub's anonymous per-IP pull rate limit,
+      # which GitHub-hosted runners share across many concurrent tenants and
+      # can intermittently exhaust (see issue tracking the resulting flaky
+      # "pull access denied for minio/minio" failures).
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
@@ -77,6 +87,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # smoke:control-plane pulls minio/minio and postgres for its harness.
+      # Authenticate to avoid Docker Hub's anonymous per-IP pull rate limit,
+      # which GitHub-hosted runners share across many concurrent tenants and
+      # can intermittently exhaust (see issue tracking the resulting flaky
+      # "pull access denied for minio/minio" failures).
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - uses: pnpm/action-setup@v4
 
