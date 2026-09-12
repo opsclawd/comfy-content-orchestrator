@@ -192,6 +192,7 @@ export function formatPlanCampaignStoryboardResponse(
     totalScenes: result.campaign.totalScenes,
     targetTotalDurationMs: result.campaign.targetTotalDurationMs,
     isIdempotentReplay: result.isStoryboardIdempotentReplay,
+    isStoryboardIdempotentReplay: result.isStoryboardIdempotentReplay,
     sceneCount: result.scenes.length,
     scenes: result.scenes.map((scene) => {
       if (

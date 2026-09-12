@@ -239,6 +239,7 @@ export const PlanCampaignStoryboardResponseSchema = z.object({
   totalScenes: z.number().int().positive(),
   targetTotalDurationMs: z.number().int().positive(),
   isIdempotentReplay: z.boolean(),
+  isStoryboardIdempotentReplay: z.boolean().optional(),
   sceneCount: z.number().int().nonnegative(),
   scenes: z.array(PlanCampaignStoryboardSceneResponseSchema),
   createdAt: z.string().datetime()

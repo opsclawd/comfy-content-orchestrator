@@ -97,6 +97,57 @@ describe("Review Hub Command Route Handler: POST /api/scenes/[sceneId]/review-co
       });
       expect(submitReviewCommand).not.toHaveBeenCalled();
     });
+
+    it("uses x-cco-reviewer-identity header when present without requiring Tailscale whois", async () => {
+      vi.mocked(submitReviewCommand).mockResolvedValueOnce(defaultSuccessResponse);
+
+      const request = new Request(routeUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-cco-reviewer-identity": "Test Reviewer Header"
+        },
+        body: JSON.stringify(validApproveCommand)
+      });
+
+      const response = await POST(request, {
+        params: Promise.resolve({ sceneId })
+      });
+
+      expect(response.status).toBe(200);
+      expect(submitReviewCommand).toHaveBeenCalledWith(sceneId, validApproveCommand, {
+        login: "Test Reviewer Header",
+        displayName: "Test Reviewer Header"
+      });
+      expect(resolveReviewerIdentity).not.toHaveBeenCalled();
+    });
+
+    it("uses fallback environment variable when no peer IP header is present", async () => {
+      const originalFallback = process.env.CONTROL_API_REVIEWER_IDENTITY_FALLBACK;
+      process.env.CONTROL_API_REVIEWER_IDENTITY_FALLBACK = "Test Fallback Director";
+
+      try {
+        vi.mocked(submitReviewCommand).mockResolvedValueOnce(defaultSuccessResponse);
+
+        const request = createJsonRequest(routeUrl, validApproveCommand);
+        const response = await POST(request, {
+          params: Promise.resolve({ sceneId })
+        });
+
+        expect(response.status).toBe(200);
+        expect(submitReviewCommand).toHaveBeenCalledWith(sceneId, validApproveCommand, {
+          login: "Test Fallback Director",
+          displayName: "Test Fallback Director"
+        });
+        expect(resolveReviewerIdentity).not.toHaveBeenCalled();
+      } finally {
+        if (originalFallback !== undefined) {
+          process.env.CONTROL_API_REVIEWER_IDENTITY_FALLBACK = originalFallback;
+        } else {
+          delete process.env.CONTROL_API_REVIEWER_IDENTITY_FALLBACK;
+        }
+      }
+    });
   });
 
   describe("Happy Path & Action Forwarding", () => {
