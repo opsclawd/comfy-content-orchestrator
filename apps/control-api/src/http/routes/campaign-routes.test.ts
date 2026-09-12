@@ -1093,31 +1093,29 @@ describe("Campaign and Scene Creation HTTP Routes", () => {
       }
     };
 
-    it("wires response isIdempotentReplay strictly to result.isStoryboardIdempotentReplay (not shell-level isIdempotentReplay)", () => {
-      // Scenario A: Retry of an incomplete attempt (shell existed, but storyboard was just materialized on this call)
-      const incompleteRetryResult = {
+    it("wires response isIdempotentReplay from use-case result.isIdempotentReplay", () => {
+      // Scenario A: Fresh/recovered execution (isIdempotentReplay: false)
+      const freshResult = {
         campaign: mockCampaign,
-        isIdempotentReplay: true, // Shell existed
-        scenes: [mockSceneSnapshot],
-        isStoryboardIdempotentReplay: false // Storyboard was newly materialized
+        isIdempotentReplay: false,
+        scenes: [mockSceneSnapshot]
       };
 
       const resA = formatPlanCampaignStoryboardResponse(
-        incompleteRetryResult,
+        freshResult,
         "018e69e0-8a6a-72cb-b1b7-ec79a1f73801"
       );
       expect(resA.isIdempotentReplay).toBe(false);
 
-      // Scenario B: Retry of fully completed attempt (no new writes)
-      const fullReplayResult = {
+      // Scenario B: Replay of fully completed attempt (isIdempotentReplay: true)
+      const replayResult = {
         campaign: mockCampaign,
         isIdempotentReplay: true,
-        scenes: [mockSceneSnapshot],
-        isStoryboardIdempotentReplay: true
+        scenes: [mockSceneSnapshot]
       };
 
       const resB = formatPlanCampaignStoryboardResponse(
-        fullReplayResult,
+        replayResult,
         "018e69e0-8a6a-72cb-b1b7-ec79a1f73801"
       );
       expect(resB.isIdempotentReplay).toBe(true);
@@ -1131,8 +1129,7 @@ describe("Campaign and Scene Creation HTTP Routes", () => {
       const corruptResult = {
         campaign: mockCampaign,
         isIdempotentReplay: false,
-        scenes: [corruptScene],
-        isStoryboardIdempotentReplay: false
+        scenes: [corruptScene]
       };
 
       expect(() =>

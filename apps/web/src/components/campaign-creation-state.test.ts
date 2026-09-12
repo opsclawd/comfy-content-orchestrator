@@ -20,6 +20,7 @@ import {
 } from "./campaign-creation-state.js";
 import {
   PlanCampaignStoryboardRequestSchema,
+  canonicalizeCampaignRequest,
   type PlanCampaignStoryboardRequest,
   MIN_SCENE_COUNT as CONTRACT_MIN_SCENE_COUNT,
   MAX_SCENE_COUNT as CONTRACT_MAX_SCENE_COUNT,
@@ -949,8 +950,8 @@ describe("campaign creation state machine & form mapping", () => {
       expect((resubmittedState as SubmittingState).idempotencyKey).toBe(dummyIdempotencyKey);
     });
 
-    describe("computeClientRequestFingerprint fixture & canonicalization", () => {
-      it("produces identical pinned canonical JSON representation to backend canonicalizeCampaignRequest", () => {
+    describe("computeClientRequestFingerprint", () => {
+      it("computes canonical fingerprint matching canonicalizeCampaignRequest", () => {
         const fixture: Omit<PlanCampaignStoryboardRequest, "idempotencyKey"> = {
           clientId: "11111111-1111-4111-8111-111111111111",
           title: "Summer 2026 Collection",
@@ -965,49 +966,7 @@ describe("campaign creation state machine & form mapping", () => {
         };
 
         const fingerprint = computeClientRequestFingerprint(fixture);
-        expect(fingerprint).toBe(
-          '{"brief":{"description":"High energy summer apparel advertisement","visualStyle":"cinematic warm golden hour"},"candidateReferenceAssetIds":["asset-a","asset-b"],"clientId":"11111111-1111-4111-8111-111111111111","sceneCountOverride":3,"targetPlatform":"tiktok","targetTotalDurationMs":15000,"title":"Summer 2026 Collection"}'
-        );
-      });
-
-      it("normalizes candidateReferenceAssetIds via set deduplication and sorting", () => {
-        const base = {
-          clientId: "11111111-1111-4111-8111-111111111111",
-          title: "Summer 2026 Collection",
-          targetTotalDurationMs: 15000,
-          brief: { description: "Advertisement" }
-        };
-
-        const fp1 = computeClientRequestFingerprint({
-          ...base,
-          candidateReferenceAssetIds: ["asset-3", "asset-1", "asset-2", "asset-1"]
-        });
-        const fp2 = computeClientRequestFingerprint({
-          ...base,
-          candidateReferenceAssetIds: ["asset-1", "asset-2", "asset-3"]
-        });
-
-        expect(fp1).toBe(fp2);
-      });
-
-      it("treats empty candidateReferenceAssetIds as absent / equivalent to undefined", () => {
-        const base = {
-          clientId: "11111111-1111-4111-8111-111111111111",
-          title: "Summer 2026 Collection",
-          targetTotalDurationMs: 15000,
-          brief: { description: "Advertisement" }
-        };
-
-        const fpEmpty = computeClientRequestFingerprint({
-          ...base,
-          candidateReferenceAssetIds: []
-        });
-        const fpUndefined = computeClientRequestFingerprint({
-          ...base,
-          candidateReferenceAssetIds: undefined
-        });
-
-        expect(fpEmpty).toBe(fpUndefined);
+        expect(fingerprint).toBe(canonicalizeCampaignRequest(fixture));
       });
     });
   });

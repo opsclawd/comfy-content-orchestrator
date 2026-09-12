@@ -30,3 +30,4 @@ export {
 } from "./storage-watermark.js";
 export * from "./api-failure-classification.js";
 export * from "./error-redaction.js";
+export * from "./json-canonicalization.js";
