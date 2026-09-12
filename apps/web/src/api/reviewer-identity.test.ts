@@ -170,6 +170,39 @@ describe("createWhoisClient", () => {
     await expect(client.resolve("not-an-ip")).rejects.toThrow(ReviewerIdentityUnavailableError);
     expect(mockExecFile).not.toHaveBeenCalled();
   });
+
+  it("uses TAILSCALE_BIN_PATH environment variable override when provided", async () => {
+    const originalBin = process.env.TAILSCALE_BIN_PATH;
+    process.env.TAILSCALE_BIN_PATH = "/custom/path/tailscale";
+
+    try {
+      const mockExecFile = vi.fn((_file, _args, _options, callback) => {
+        const json = JSON.stringify({
+          UserProfile: {
+            LoginName: "custom@example.com"
+          }
+        });
+        callback(null, json, "");
+      });
+
+      const client = createWhoisClient(mockExecFile);
+      const result = await client.resolve("100.64.0.5");
+
+      expect(mockExecFile).toHaveBeenCalledWith(
+        "/custom/path/tailscale",
+        ["whois", "--json", "100.64.0.5"],
+        expect.any(Object),
+        expect.any(Function)
+      );
+      expect(result.login).toBe("custom@example.com");
+    } finally {
+      if (originalBin !== undefined) {
+        process.env.TAILSCALE_BIN_PATH = originalBin;
+      } else {
+        delete process.env.TAILSCALE_BIN_PATH;
+      }
+    }
+  });
 });
 
 describe("resolveReviewerIdentity", () => {

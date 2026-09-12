@@ -1,0 +1,26 @@
+{
+  "name": "e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "typecheck": "tsc --build"
+  },
+  "dependencies": {
+    "@cco/application": "workspace:*",
+    "@cco/contracts": "workspace:*",
+    "@cco/domain": "workspace:*",
+    "@cco/infrastructure": "workspace:*",
+    "@cco/shared": "workspace:*",
+    "control-api": "workspace:*",
+    "fastify": "^5.2.0",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.51.1",
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.11.10",
+    "typescript": "^5.7.2"
+  }
+}

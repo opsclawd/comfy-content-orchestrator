@@ -1,0 +1,18 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": ".",
+    "noEmit": true
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules", "dist"],
+  "references": [
+    { "path": "../packages/application" },
+    { "path": "../packages/contracts" },
+    { "path": "../packages/domain" },
+    { "path": "../packages/infrastructure" },
+    { "path": "../packages/shared" },
+    { "path": "../apps/control-api" }
+  ]
+}

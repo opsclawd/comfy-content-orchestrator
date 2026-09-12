@@ -1,0 +1,37 @@
+#!/usr/bin/env node
+
+/**
+ * Hermetic test mock for Tailscale CLI.
+ * Emulates `tailscale whois --json <peer-ip>` for E2E integration tests.
+ */
+const args = process.argv.slice(2);
+
+if (args[0] === "whois" && args[1] === "--json") {
+  const ip = args[2];
+  if (!ip) {
+    console.error("tailscale whois: missing peer IP argument");
+    process.exit(1);
+  }
+
+  // Check if failure is explicitly simulated for testing
+  if (process.env.TEST_MOCK_TAILSCALE_FAIL === "true") {
+    console.error("tailscale whois: connection to tailscaled failed");
+    process.exit(1);
+  }
+
+  const login = process.env.TEST_REVIEWER_LOGIN || "Integration Test Director";
+  const displayName = process.env.TEST_REVIEWER_DISPLAY_NAME || "Integration Test Director";
+
+  console.log(
+    JSON.stringify({
+      UserProfile: {
+        LoginName: login,
+        DisplayName: displayName
+      }
+    })
+  );
+  process.exit(0);
+}
+
+console.error("tailscale mock: unrecognized arguments", args);
+process.exit(1);

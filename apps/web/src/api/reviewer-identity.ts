@@ -28,6 +28,7 @@ export type ExecFileFunction = (
 export function createWhoisClient(
   execFileImpl: ExecFileFunction = execFile as unknown as ExecFileFunction
 ): WhoisClient {
+  const tailscaleBin = process.env.TAILSCALE_BIN_PATH || "tailscale";
   return {
     async resolve(ip: string): Promise<WhoisResult> {
       const trimmedIp = ip.trim();
@@ -37,7 +38,7 @@ export function createWhoisClient(
 
       return new Promise<WhoisResult>((res, rej) => {
         execFileImpl(
-          "tailscale",
+          tailscaleBin,
           ["whois", "--json", trimmedIp],
           { timeout: 5000 },
           (error, stdout) => {

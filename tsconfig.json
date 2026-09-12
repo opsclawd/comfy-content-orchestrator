@@ -8,6 +8,7 @@
     { "path": "./packages/infrastructure" },
     { "path": "./apps/control-api" },
     { "path": "./apps/render-worker" },
-    { "path": "./apps/web" }
+    { "path": "./apps/web" },
+    { "path": "./e2e" }
   ]
 }

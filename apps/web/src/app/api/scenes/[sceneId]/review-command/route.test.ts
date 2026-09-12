@@ -97,6 +97,72 @@ describe("Review Hub Command Route Handler: POST /api/scenes/[sceneId]/review-co
       });
       expect(submitReviewCommand).not.toHaveBeenCalled();
     });
+
+    it("does not accept x-cco-reviewer-identity as a bypass and fails closed when peer IP is absent", async () => {
+      vi.mocked(resolveReviewerIdentity).mockRejectedValueOnce(
+        new ReviewerIdentityUnavailableError("Missing x-cco-tailscale-peer-ip header.")
+      );
+
+      const request = new Request(routeUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-cco-reviewer-identity": "Spoofed Attacker"
+        },
+        body: JSON.stringify(validApproveCommand)
+      });
+
+      const response = await POST(request, {
+        params: Promise.resolve({ sceneId })
+      });
+
+      expect(response.status).toBe(401);
+      const body = await response.json();
+      expect(body).toEqual({
+        code: "AUTHENTICATION_REQUIRED",
+        message: "Reviewer identity could not be established."
+      });
+      expect(resolveReviewerIdentity).toHaveBeenCalledTimes(1);
+      expect(submitReviewCommand).not.toHaveBeenCalled();
+    });
+
+    it("does not use fallback environment variables when peer IP is absent and fails closed", async () => {
+      const origControlFallback = process.env.CONTROL_API_REVIEWER_IDENTITY_FALLBACK;
+      const origWebFallback = process.env.WEB_REVIEWER_IDENTITY_FALLBACK;
+      process.env.CONTROL_API_REVIEWER_IDENTITY_FALLBACK = "Test Fallback Director";
+      process.env.WEB_REVIEWER_IDENTITY_FALLBACK = "Test Fallback Director";
+
+      try {
+        vi.mocked(resolveReviewerIdentity).mockRejectedValueOnce(
+          new ReviewerIdentityUnavailableError("Missing x-cco-tailscale-peer-ip header.")
+        );
+
+        const request = createJsonRequest(routeUrl, validApproveCommand);
+        const response = await POST(request, {
+          params: Promise.resolve({ sceneId })
+        });
+
+        expect(response.status).toBe(401);
+        const body = await response.json();
+        expect(body).toEqual({
+          code: "AUTHENTICATION_REQUIRED",
+          message: "Reviewer identity could not be established."
+        });
+        expect(resolveReviewerIdentity).toHaveBeenCalledTimes(1);
+        expect(submitReviewCommand).not.toHaveBeenCalled();
+      } finally {
+        if (origControlFallback !== undefined) {
+          process.env.CONTROL_API_REVIEWER_IDENTITY_FALLBACK = origControlFallback;
+        } else {
+          delete process.env.CONTROL_API_REVIEWER_IDENTITY_FALLBACK;
+        }
+        if (origWebFallback !== undefined) {
+          process.env.WEB_REVIEWER_IDENTITY_FALLBACK = origWebFallback;
+        } else {
+          delete process.env.WEB_REVIEWER_IDENTITY_FALLBACK;
+        }
+      }
+    });
   });
 
   describe("Happy Path & Action Forwarding", () => {

@@ -166,6 +166,29 @@ jobs:
           pnpm smoke:control-plane
           echo "smoke:control-plane duration: $(( $(date +%s) - START ))s" | tee -a "$GITHUB_STEP_SUMMARY"
 
+  e2e-browser:
+    name: e2e-browser
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium with dependencies
+        run: pnpm --filter e2e exec playwright install --with-deps chromium
+
+      - run: pnpm build
+
+      - name: Run E2E browser tests
+        run: pnpm test:e2e
+
   quality-gates:
     name: quality-gates
     runs-on: ubuntu-latest
@@ -173,6 +196,7 @@ jobs:
       - lint-and-typecheck
       - tests
       - docker-smoke
+      - e2e-browser
     if: always()
     steps:
       - name: Aggregate quality gate status
@@ -181,9 +205,11 @@ jobs:
           echo "  lint-and-typecheck: ${{ needs.lint-and-typecheck.result }}"
           echo "  tests:              ${{ needs.tests.result }}"
           echo "  docker-smoke:       ${{ needs.docker-smoke.result }}"
+          echo "  e2e-browser:        ${{ needs.e2e-browser.result }}"
           if [ "${{ needs.lint-and-typecheck.result }}" != "success" ] || \
              [ "${{ needs.tests.result }}" != "success" ] || \
-             [ "${{ needs.docker-smoke.result }}" != "success" ]; then
+             [ "${{ needs.docker-smoke.result }}" != "success" ] || \
+             [ "${{ needs.e2e-browser.result }}" != "success" ]; then
             echo "::error::One or more upstream CI quality gates failed or were cancelled."
             exit 1
           fi

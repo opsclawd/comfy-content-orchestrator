@@ -2,6 +2,7 @@
 
 import React, { useReducer, useRef, useEffect, useLayoutEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   MIN_SCENE_COUNT,
   MAX_SCENE_COUNT,
@@ -147,6 +148,23 @@ export function CampaignCreationForm({
       isCancelled = true;
     };
   }, [state]);
+
+  const router = useRouter();
+  const navigatedCampaignIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (state.phase !== "succeeded") {
+      navigatedCampaignIdRef.current = null;
+      return;
+    }
+
+    const campaignId = state.response.campaignId;
+    if (!campaignId || navigatedCampaignIdRef.current === campaignId) {
+      return;
+    }
+    navigatedCampaignIdRef.current = campaignId;
+    router.push(`/campaigns/${campaignId}`);
+  }, [state, router]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

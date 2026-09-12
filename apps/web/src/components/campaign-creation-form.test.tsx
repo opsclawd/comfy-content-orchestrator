@@ -18,6 +18,14 @@ import {
 } from "@cco/contracts";
 import { PlanCampaignStoryboardApiError } from "../api/client.js";
 
+const mockPush = vi.fn();
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({
+    push: mockPush,
+    refresh: vi.fn()
+  })
+}));
+
 const MIN_TARGET_DURATION_SECONDS = Math.ceil(MIN_TARGET_DURATION_MS / 1000);
 const MAX_TARGET_DURATION_SECONDS = Math.floor(MAX_TARGET_DURATION_MS / 1000);
 
@@ -430,6 +438,7 @@ describe("CampaignCreationForm Component", () => {
 
       expect(screen.getByTestId("created-total-scenes").textContent).toBe("5");
       expect(screen.getByTestId("created-scene-count").textContent).toBe("4");
+      expect(mockPush).toHaveBeenCalledWith(`/campaigns/${sampleSuccessResponse.campaignId}`);
     });
 
     it("surfaces rejection error in error banner and keeps submit available without Retry button", async () => {
@@ -607,6 +616,18 @@ describe("CampaignCreationForm Component", () => {
       const secondCallKey = secondCall[0].idempotencyKey;
       expect(secondCallKey).not.toBe(firstCallKey);
       expect(secondCall[0].brief.description).toBe("New altered brief description for campaign");
+    });
+
+    it("navigates automatically to the campaign review route on successful submission", async () => {
+      const mockSubmit = vi.fn().mockResolvedValue(sampleSuccessResponse);
+      render(<CampaignCreationForm submitCampaign={mockSubmit} initialValues={validValues} />);
+
+      const submitBtn = screen.getByTestId("submit-campaign-button");
+      fireEvent.click(submitBtn);
+
+      await waitFor(() => {
+        expect(mockPush).toHaveBeenCalledWith(`/campaigns/${sampleSuccessResponse.campaignId}`);
+      });
     });
   });
 });
