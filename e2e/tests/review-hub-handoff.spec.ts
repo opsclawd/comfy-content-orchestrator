@@ -11,7 +11,7 @@ test.describe("Post-Handoff Candidate Review Flow", () => {
     const campaignTitle = `Review Handoff Campaign ${randomUUID().slice(0, 8)}`;
 
     // 1. Create a campaign
-    await page.setExtraHTTPHeaders({ "x-cco-reviewer-identity": "Integration Test Director" });
+    await page.setExtraHTTPHeaders({ "x-cco-tailscale-peer-ip": "100.64.0.1" });
     await page.goto(`${testEnv.webServer.webUrl}/campaigns/new`);
     await page
       .getByTestId("brief-description-input")
@@ -100,5 +100,56 @@ test.describe("Post-Handoff Candidate Review Flow", () => {
 
     // Toast or success banner is displayed and spec revision increments
     await expect(page.locator(".scene-header")).toContainText("Revision 2");
+  });
+
+  test("Review command fails closed with 401 AUTHENTICATION_REQUIRED when Tailscale peer IP is missing or spoofed via x-cco-reviewer-identity", async ({
+    page,
+    testEnv
+  }) => {
+    testEnv.planningStub.reset();
+    const sceneId = randomUUID();
+
+    // Direct POST to review-command without x-cco-tailscale-peer-ip header
+    const noPeerIpRes = await page.request.post(
+      `${testEnv.webServer.webUrl}/api/scenes/${sceneId}/review-command`,
+      {
+        headers: {
+          "Content-Type": "application/json"
+        },
+        data: {
+          actionId: randomUUID(),
+          sceneId,
+          expectedSpecRevision: 1,
+          action: "approve",
+          payload: {},
+          directorNotes: "Unauthenticated attempt"
+        }
+      }
+    );
+    expect(noPeerIpRes.status()).toBe(401);
+    const noPeerIpBody = (await noPeerIpRes.json()) as { code: string; message: string };
+    expect(noPeerIpBody.code).toBe("AUTHENTICATION_REQUIRED");
+
+    // Direct POST with spoofed x-cco-reviewer-identity header (without valid peer IP)
+    const spoofedRes = await page.request.post(
+      `${testEnv.webServer.webUrl}/api/scenes/${sceneId}/review-command`,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "x-cco-reviewer-identity": "Malicious Spoofed Director"
+        },
+        data: {
+          actionId: randomUUID(),
+          sceneId,
+          expectedSpecRevision: 1,
+          action: "approve",
+          payload: {},
+          directorNotes: "Spoofed attempt"
+        }
+      }
+    );
+    expect(spoofedRes.status()).toBe(401);
+    const spoofedBody = (await spoofedRes.json()) as { code: string; message: string };
+    expect(spoofedBody.code).toBe("AUTHENTICATION_REQUIRED");
   });
 });

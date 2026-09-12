@@ -68,6 +68,9 @@ export async function startTestWebServer(options: {
   const port = await getAvailablePort();
   const webUrl = `http://127.0.0.1:${port}`;
 
+  const mockBinDir = resolve(repoRoot, "e2e/harness/mock-bin");
+  const mockTailscalePath = resolve(mockBinDir, "tailscale");
+
   const serverProcess: ChildProcess = spawn(
     "pnpm",
     ["--filter", "web", "start", "-p", String(port)],
@@ -76,10 +79,10 @@ export async function startTestWebServer(options: {
       stdio: "pipe",
       env: {
         ...process.env,
+        PATH: `${mockBinDir}:${process.env.PATH}`,
+        TAILSCALE_BIN_PATH: mockTailscalePath,
         PORT: String(port),
         CONTROL_API_URL: options.controlApiBaseUrl,
-        CONTROL_API_REVIEWER_IDENTITY_FALLBACK: "Integration Test Director",
-        WEB_REVIEWER_IDENTITY_FALLBACK: "Integration Test Director",
         NODE_ENV: "production"
       }
     }
