@@ -2,6 +2,7 @@ import type { CampaignId, SceneId } from "./scene.js";
 
 export const CAMPAIGN_PRODUCTION_RUN_STATUSES = [
   "dispatched",
+  "production_review",
   "assembling",
   "completed",
   "failed"

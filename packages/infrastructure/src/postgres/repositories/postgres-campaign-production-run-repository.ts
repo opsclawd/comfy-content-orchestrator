@@ -254,6 +254,29 @@ export class PostgresCampaignProductionRunRepository implements CampaignProducti
     return Number(result.rows[0]?.count ?? 0);
   }
 
+  async claimForProductionReview(runId: string): Promise<CampaignProductionRunRecord | undefined> {
+    const result = await this.client.query<CampaignProductionRunRow>(
+      `
+      UPDATE campaign_production_runs
+      SET status = 'production_review', updated_at = CURRENT_TIMESTAMP
+      WHERE run_id = $1 AND status = 'dispatched'
+      RETURNING
+        run_id,
+        campaign_id,
+        fingerprint,
+        status,
+        expected_total_duration_ms,
+        assembly_job_id,
+        created_at,
+        updated_at
+      `,
+      [runId]
+    );
+
+    const row = result.rows[0];
+    return row ? mapRowToRun(row) : undefined;
+  }
+
   async claimForAssembly(runId: string): Promise<CampaignProductionRunRecord | undefined> {
     const result = await this.client.query<CampaignProductionRunRow>(
       `
@@ -316,7 +339,7 @@ export class PostgresCampaignProductionRunRepository implements CampaignProducti
       `
       UPDATE campaign_production_runs
       SET status = 'failed', updated_at = CURRENT_TIMESTAMP
-      WHERE run_id = $1 AND status IN ('dispatched', 'assembling')
+      WHERE run_id = $1 AND status IN ('dispatched', 'production_review', 'assembling')
       RETURNING
         run_id,
         campaign_id,

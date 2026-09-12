@@ -30,6 +30,7 @@ class FakeUnitOfWork implements UnitOfWork {
         findRunScenes: async () => [],
         insertRunScenes: async () => {},
         countIncompleteRunScenes: async () => 0,
+        claimForProductionReview: async () => undefined,
         claimForAssembly: async () => undefined,
         setAssemblyJobId: async () => {},
         claimCompletion: async () => undefined,

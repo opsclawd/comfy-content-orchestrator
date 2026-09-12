@@ -299,6 +299,7 @@ class InMemorySceneUnitOfWork implements UnitOfWork {
         findRunScenes: async () => [],
         findRunSceneByProductionJobId: async () => undefined,
         countIncompleteRunScenes: async () => 0,
+        claimForProductionReview: async () => undefined,
         claimForAssembly: async () => undefined,
         setAssemblyJobId: async () => {},
         claimCompletion: async () => undefined,

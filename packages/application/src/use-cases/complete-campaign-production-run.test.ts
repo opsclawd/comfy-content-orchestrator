@@ -1,19 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import type { PersistentMediaRef } from "@cco/contracts";
 import type {
   CampaignId,
   CampaignProductionRunRecord,
   CampaignProductionRunSceneRecord,
   CampaignRecord,
-  DeliveryAssemblyJob,
   SceneId
 } from "@cco/domain";
 import type {
-  AssemblySpec,
   CampaignProductionRunRepository,
   CampaignRepository,
   DeliveryAssemblyJobQueuePort,
-  EnqueueDeliveryAssemblyJobInput,
   GenerationManifestRepository,
   UnitOfWork
 } from "../index.js";
@@ -77,6 +73,7 @@ describe("CompleteCampaignProductionRunUseCases", () => {
         findByAssemblyJobId: vi.fn(),
         findRunScenes: vi.fn(async () => []),
         countIncompleteRunScenes: vi.fn(async () => 0),
+        claimForProductionReview: vi.fn(),
         claimForAssembly: vi.fn(),
         setAssemblyJobId: vi.fn(),
         claimCompletion: vi.fn(),
@@ -98,7 +95,7 @@ describe("CompleteCampaignProductionRunUseCases", () => {
   });
 
   describe("onProductionJobCompleted", () => {
-    it("atomically claims assembly, synthesizes AssemblySpec, and advances campaign to qa", async () => {
+    it("atomically claims production review and advances campaign to qa without auto-assembly", async () => {
       const campaign: CampaignRecord = {
         id: "camp-1" as CampaignId,
         clientId: "client-1",
@@ -121,37 +118,28 @@ describe("CompleteCampaignProductionRunUseCases", () => {
         updatedAt: new Date().toISOString()
       };
 
-      const runScenes: CampaignProductionRunSceneRecord[] = [
-        {
-          runId: "run-1",
-          sceneId: "scene-2" as SceneId,
-          specRevision: 1,
-          sequenceIndex: 2,
-          expectedDurationMs: 4000,
-          productionJobId: "job-2"
-        },
-        {
-          runId: "run-1",
-          sceneId: "scene-1" as SceneId,
-          specRevision: 1,
-          sequenceIndex: 1,
-          expectedDurationMs: 4000,
-          productionJobId: "job-1"
-        }
-      ];
+      const runScene: CampaignProductionRunSceneRecord = {
+        runId: "run-1",
+        sceneId: "scene-2" as SceneId,
+        specRevision: 1,
+        sequenceIndex: 2,
+        expectedDurationMs: 4000,
+        productionJobId: "job-2"
+      };
 
-      const assemblingRun: CampaignProductionRunRecord = {
+      const reviewRun: CampaignProductionRunRecord = {
         ...run,
-        status: "assembling"
+        status: "production_review"
       };
 
       const mockRuns: CampaignProductionRunRepository = {
-        findRunSceneByProductionJobId: vi.fn(async () => runScenes[0]),
+        findRunSceneByProductionJobId: vi.fn(async () => runScene),
         findById: vi.fn(async () => run),
-        findRunScenes: vi.fn(async () => runScenes),
+        findRunScenes: vi.fn(async () => []),
         countIncompleteRunScenes: vi.fn(async () => 0),
-        claimForAssembly: vi.fn(async () => assemblingRun),
-        setAssemblyJobId: vi.fn(async () => {}),
+        claimForProductionReview: vi.fn(async () => reviewRun),
+        claimForAssembly: vi.fn(),
+        setAssemblyJobId: vi.fn(),
         createIfAbsent: vi.fn(),
         insertRunScenes: vi.fn(),
         findByAssemblyJobId: vi.fn(),
@@ -175,41 +163,22 @@ describe("CompleteCampaignProductionRunUseCases", () => {
         })
       };
 
-      const stemSources: Record<
-        string,
-        { readonly generationManifestId: string; readonly media: PersistentMediaRef }
-      > = {
-        "job-1": {
-          generationManifestId: "manifest-1",
-          media: {
-            bucket: "test-bucket",
-            key: "renders/scene-1.mp4",
-            sha256: "a".repeat(64),
-            contentType: "video/mp4"
-          }
-        },
-        "job-2": {
+      const mockManifestRepo: GenerationManifestRepository = {
+        getComponentIdentityById: vi.fn(),
+        findVideoStemSourceByJobId: vi.fn(async (_jobId) => ({
           generationManifestId: "manifest-2",
           media: {
             bucket: "test-bucket",
             key: "renders/scene-2.mp4",
             sha256: "b".repeat(64),
             contentType: "video/mp4"
-          }
-        }
+          },
+          renderAttempt: 1
+        }))
       };
 
-      const mockManifestRepo: GenerationManifestRepository = {
-        getComponentIdentityById: vi.fn(),
-        findVideoStemSourceByJobId: vi.fn(async (jobId) => stemSources[jobId])
-      };
-
-      const enqueuedAssemblyJobs: EnqueueDeliveryAssemblyJobInput[] = [];
       const mockAssemblyQueue: DeliveryAssemblyJobQueuePort = {
-        enqueue: vi.fn(async (input) => {
-          enqueuedAssemblyJobs.push(input);
-          return { jobId: "assembly-job-123" } as unknown as DeliveryAssemblyJob<AssemblySpec>;
-        }),
+        enqueue: vi.fn(),
         claim: vi.fn(),
         start: vi.fn(),
         heartbeat: vi.fn(),
@@ -233,26 +202,294 @@ describe("CompleteCampaignProductionRunUseCases", () => {
       const useCases = new CompleteCampaignProductionRunUseCases(mockUow);
       await useCases.onProductionJobCompleted("job-2");
 
-      expect(mockRuns.claimForAssembly).toHaveBeenCalledWith("run-1");
-      expect(enqueuedAssemblyJobs).toHaveLength(1);
-
-      const enqueuedInput = enqueuedAssemblyJobs[0]!;
-      expect(enqueuedInput.campaignId).toBe("camp-1");
-      expect(enqueuedInput.assemblySpec.expectedTotalDurationMs).toBe(8000);
-      // Video stems must be ordered by 0-based wire index: sequenceIndex 1 -> 0, sequenceIndex 2 -> 1
-      expect(enqueuedInput.assemblySpec.videoStems).toHaveLength(2);
-      expect(enqueuedInput.assemblySpec.videoStems[0]!.order).toBe(0);
-      expect(enqueuedInput.assemblySpec.videoStems[0]!.sceneId).toBe("scene-1");
-      expect(enqueuedInput.assemblySpec.videoStems[0]!.media.sha256).toBe("a".repeat(64));
-      expect(enqueuedInput.assemblySpec.videoStems[0]!.media.contentType).toBe("video/mp4");
-
-      expect(enqueuedInput.assemblySpec.videoStems[1]!.order).toBe(1);
-      expect(enqueuedInput.assemblySpec.videoStems[1]!.sceneId).toBe("scene-2");
-      expect(enqueuedInput.assemblySpec.videoStems[1]!.media.sha256).toBe("b".repeat(64));
+      expect(mockRuns.claimForProductionReview).toHaveBeenCalledWith("run-1");
+      expect(mockRuns.claimForAssembly).not.toHaveBeenCalled();
+      expect(mockAssemblyQueue.enqueue).not.toHaveBeenCalled();
 
       // Campaign advanced to qa
       expect(savedCampaigns).toHaveLength(1);
       expect(savedCampaigns[0]?.status).toBe("qa");
+    });
+
+    it("does not transition run or campaign when sibling jobs are still incomplete", async () => {
+      const runScene: CampaignProductionRunSceneRecord = {
+        runId: "run-1",
+        sceneId: "scene-1" as SceneId,
+        specRevision: 1,
+        sequenceIndex: 1,
+        expectedDurationMs: 4000,
+        productionJobId: "job-1"
+      };
+
+      const mockRuns: CampaignProductionRunRepository = {
+        findRunSceneByProductionJobId: vi.fn(async () => runScene),
+        findById: vi.fn(),
+        findRunScenes: vi.fn(async () => []),
+        countIncompleteRunScenes: vi.fn(async () => 1), // 1 sibling remaining
+        claimForProductionReview: vi.fn(),
+        claimForAssembly: vi.fn(),
+        setAssemblyJobId: vi.fn(),
+        createIfAbsent: vi.fn(),
+        insertRunScenes: vi.fn(),
+        findByAssemblyJobId: vi.fn(),
+        claimCompletion: vi.fn(),
+        claimFailure: vi.fn()
+      };
+
+      const mockCampaigns: CampaignRepository<CampaignRecord> = {
+        findById: vi.fn(),
+        findByIdForUpdate: vi.fn(),
+        save: vi.fn(),
+        transitionStatusIf: vi.fn()
+      };
+
+      const mockManifestRepo: GenerationManifestRepository = {
+        getComponentIdentityById: vi.fn(),
+        findVideoStemSourceByJobId: vi.fn(async () => ({
+          generationManifestId: "manifest-1",
+          media: {
+            bucket: "test-bucket",
+            key: "renders/scene-1.mp4",
+            sha256: "a".repeat(64),
+            contentType: "video/mp4"
+          },
+          renderAttempt: 1
+        }))
+      };
+
+      const mockAssemblyQueue: DeliveryAssemblyJobQueuePort = {
+        enqueue: vi.fn(),
+        claim: vi.fn(),
+        start: vi.fn(),
+        heartbeat: vi.fn(),
+        complete: vi.fn(),
+        fail: vi.fn(),
+        defer: vi.fn(),
+        getJob: vi.fn()
+      };
+
+      const mockUow: UnitOfWork = {
+        execute: vi.fn(async (work) =>
+          work({
+            campaigns: mockCampaigns,
+            campaignProductionRuns: mockRuns,
+            assemblyJobs: mockAssemblyQueue,
+            generationManifests: mockManifestRepo
+          })
+        )
+      };
+
+      const useCases = new CompleteCampaignProductionRunUseCases(mockUow);
+      await useCases.onProductionJobCompleted("job-1");
+
+      expect(mockRuns.claimForProductionReview).not.toHaveBeenCalled();
+      expect(mockCampaigns.transitionStatusIf).not.toHaveBeenCalled();
+      expect(mockAssemblyQueue.enqueue).not.toHaveBeenCalled();
+    });
+
+    it("handles concurrent completion race idempotently when claimForProductionReview returns undefined", async () => {
+      const runScene: CampaignProductionRunSceneRecord = {
+        runId: "run-1",
+        sceneId: "scene-2" as SceneId,
+        specRevision: 1,
+        sequenceIndex: 2,
+        expectedDurationMs: 4000,
+        productionJobId: "job-2"
+      };
+
+      const mockRuns: CampaignProductionRunRepository = {
+        findRunSceneByProductionJobId: vi.fn(async () => runScene),
+        findById: vi.fn(),
+        findRunScenes: vi.fn(async () => []),
+        countIncompleteRunScenes: vi.fn(async () => 0),
+        claimForProductionReview: vi.fn(async () => undefined), // lost race
+        claimForAssembly: vi.fn(),
+        setAssemblyJobId: vi.fn(),
+        createIfAbsent: vi.fn(),
+        insertRunScenes: vi.fn(),
+        findByAssemblyJobId: vi.fn(),
+        claimCompletion: vi.fn(),
+        claimFailure: vi.fn()
+      };
+
+      const mockCampaigns: CampaignRepository<CampaignRecord> = {
+        findById: vi.fn(),
+        findByIdForUpdate: vi.fn(),
+        save: vi.fn(),
+        transitionStatusIf: vi.fn()
+      };
+
+      const mockManifestRepo: GenerationManifestRepository = {
+        getComponentIdentityById: vi.fn(),
+        findVideoStemSourceByJobId: vi.fn(async () => ({
+          generationManifestId: "manifest-2",
+          media: {
+            bucket: "test-bucket",
+            key: "renders/scene-2.mp4",
+            sha256: "b".repeat(64),
+            contentType: "video/mp4"
+          },
+          renderAttempt: 1
+        }))
+      };
+
+      const mockUow: UnitOfWork = {
+        execute: vi.fn(async (work) =>
+          work({
+            campaigns: mockCampaigns,
+            campaignProductionRuns: mockRuns,
+            generationManifests: mockManifestRepo
+          })
+        )
+      };
+
+      const useCases = new CompleteCampaignProductionRunUseCases(mockUow);
+      await useCases.onProductionJobCompleted("job-2");
+
+      expect(mockRuns.claimForProductionReview).toHaveBeenCalledWith("run-1");
+      expect(mockCampaigns.transitionStatusIf).not.toHaveBeenCalled();
+    });
+
+    it("does not throw and does not claim production review when manifest resolution fails", async () => {
+      const runScene: CampaignProductionRunSceneRecord = {
+        runId: "run-1",
+        sceneId: "scene-1" as SceneId,
+        specRevision: 1,
+        sequenceIndex: 1,
+        expectedDurationMs: 4000,
+        productionJobId: "job-1"
+      };
+
+      const mockRuns: CampaignProductionRunRepository = {
+        findRunSceneByProductionJobId: vi.fn(async () => runScene),
+        findById: vi.fn(),
+        findRunScenes: vi.fn(async () => []),
+        countIncompleteRunScenes: vi.fn(async () => 0),
+        claimForProductionReview: vi.fn(),
+        claimForAssembly: vi.fn(),
+        setAssemblyJobId: vi.fn(),
+        createIfAbsent: vi.fn(),
+        insertRunScenes: vi.fn(),
+        findByAssemblyJobId: vi.fn(),
+        claimCompletion: vi.fn(),
+        claimFailure: vi.fn()
+      };
+
+      const mockCampaigns: CampaignRepository<CampaignRecord> = {
+        findById: vi.fn(),
+        findByIdForUpdate: vi.fn(),
+        save: vi.fn(),
+        transitionStatusIf: vi.fn()
+      };
+
+      // Throws manifest resolution error
+      const mockManifestRepo: GenerationManifestRepository = {
+        getComponentIdentityById: vi.fn(),
+        findVideoStemSourceByJobId: vi.fn(async () => {
+          throw new Error("Manifest corrupt or outputs missing");
+        })
+      };
+
+      const mockUow: UnitOfWork = {
+        execute: vi.fn(async (work) =>
+          work({
+            campaigns: mockCampaigns,
+            campaignProductionRuns: mockRuns,
+            generationManifests: mockManifestRepo
+          })
+        )
+      };
+
+      const useCases = new CompleteCampaignProductionRunUseCases(mockUow);
+      // Handler must not throw
+      await expect(useCases.onProductionJobCompleted("job-1")).resolves.toBeUndefined();
+
+      expect(mockRuns.claimForProductionReview).not.toHaveBeenCalled();
+      expect(mockCampaigns.transitionStatusIf).not.toHaveBeenCalled();
+    });
+
+    it("returns early when job has no manifest returned", async () => {
+      const runScene: CampaignProductionRunSceneRecord = {
+        runId: "run-1",
+        sceneId: "scene-1" as SceneId,
+        specRevision: 1,
+        sequenceIndex: 1,
+        expectedDurationMs: 4000,
+        productionJobId: "job-1"
+      };
+
+      const mockRuns: CampaignProductionRunRepository = {
+        findRunSceneByProductionJobId: vi.fn(async () => runScene),
+        findById: vi.fn(),
+        findRunScenes: vi.fn(async () => []),
+        countIncompleteRunScenes: vi.fn(async () => 0),
+        claimForProductionReview: vi.fn(),
+        claimForAssembly: vi.fn(),
+        setAssemblyJobId: vi.fn(),
+        createIfAbsent: vi.fn(),
+        insertRunScenes: vi.fn(),
+        findByAssemblyJobId: vi.fn(),
+        claimCompletion: vi.fn(),
+        claimFailure: vi.fn()
+      };
+
+      const mockCampaigns: CampaignRepository<CampaignRecord> = {
+        findById: vi.fn(),
+        findByIdForUpdate: vi.fn(),
+        save: vi.fn(),
+        transitionStatusIf: vi.fn()
+      };
+
+      const mockManifestRepo: GenerationManifestRepository = {
+        getComponentIdentityById: vi.fn(),
+        findVideoStemSourceByJobId: vi.fn(async () => undefined)
+      };
+
+      const mockUow: UnitOfWork = {
+        execute: vi.fn(async (work) =>
+          work({
+            campaigns: mockCampaigns,
+            campaignProductionRuns: mockRuns,
+            generationManifests: mockManifestRepo
+          })
+        )
+      };
+
+      const useCases = new CompleteCampaignProductionRunUseCases(mockUow);
+      await useCases.onProductionJobCompleted("job-1");
+
+      expect(mockRuns.claimForProductionReview).not.toHaveBeenCalled();
+      expect(mockCampaigns.transitionStatusIf).not.toHaveBeenCalled();
+    });
+
+    it("returns early when jobId does not match any run scene", async () => {
+      const mockRuns: CampaignProductionRunRepository = {
+        findRunSceneByProductionJobId: vi.fn(async () => undefined),
+        findById: vi.fn(),
+        findRunScenes: vi.fn(async () => []),
+        countIncompleteRunScenes: vi.fn(async () => 0),
+        claimForProductionReview: vi.fn(),
+        claimForAssembly: vi.fn(),
+        setAssemblyJobId: vi.fn(),
+        createIfAbsent: vi.fn(),
+        insertRunScenes: vi.fn(),
+        findByAssemblyJobId: vi.fn(),
+        claimCompletion: vi.fn(),
+        claimFailure: vi.fn()
+      };
+
+      const mockUow: UnitOfWork = {
+        execute: vi.fn(async (work) =>
+          work({
+            campaignProductionRuns: mockRuns
+          })
+        )
+      };
+
+      const useCases = new CompleteCampaignProductionRunUseCases(mockUow);
+      await useCases.onProductionJobCompleted("unknown-job");
+
+      expect(mockRuns.countIncompleteRunScenes).not.toHaveBeenCalled();
     });
   });
 
@@ -296,6 +533,7 @@ describe("CompleteCampaignProductionRunUseCases", () => {
         findByAssemblyJobId: vi.fn(),
         findRunScenes: vi.fn(async () => []),
         countIncompleteRunScenes: vi.fn(async () => 0),
+        claimForProductionReview: vi.fn(),
         claimForAssembly: vi.fn(),
         setAssemblyJobId: vi.fn(),
         claimCompletion: vi.fn()

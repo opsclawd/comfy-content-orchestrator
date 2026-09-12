@@ -396,7 +396,7 @@ describe("Campaign Production Dispatch and Gating Integration (#197)", () => {
     await app.close();
   });
 
-  it("drives full lifecycle: start -> rendering -> manifests -> completion -> assembly enqueue -> campaign completed", async () => {
+  it("drives full lifecycle: start -> rendering -> manifests -> completion -> production review without auto-assembly", async () => {
     const clientRecord = await insertClientRecord(client);
     const campaign = await insertCampaignRecord(client, {
       clientId: clientRecord.client_id,
@@ -580,72 +580,35 @@ describe("Campaign Production Dispatch and Gating Integration (#197)", () => {
     });
     expect(comp2.statusCode).toBe(200);
 
-    // Campaign status transitioned to qa (assembly in flight)!
+    // Campaign status transitioned to qa (production review ready)!
     camp = await client.query("SELECT * FROM campaigns WHERE campaign_id = $1", [
       campaign.campaign_id
     ]);
     expect(camp.rows[0].status).toBe("qa");
 
-    // Exactly one delivery assembly job was enqueued!
+    // No delivery assembly job was enqueued (proves no auto-assembly)!
     assemblyJobs = await client.query(
       "SELECT * FROM delivery_assembly_jobs WHERE campaign_id = $1",
       [campaign.campaign_id]
     );
-    expect(assemblyJobs.rows).toHaveLength(1);
-    const enqueuedAssembly = assemblyJobs.rows[0];
-    expect(enqueuedAssembly.status).toBe("queued");
+    expect(assemblyJobs.rows).toHaveLength(0);
 
-    // Verify CampaignProductionRun status is assembling with assembly_job_id set
-    let runs = await client.query("SELECT * FROM campaign_production_runs WHERE campaign_id = $1", [
-      campaign.campaign_id
-    ]);
-    expect(runs.rows[0].status).toBe("assembling");
-    expect(runs.rows[0].assembly_job_id).toBe(enqueuedAssembly.job_id);
+    // Verify CampaignProductionRun status is production_review with no assembly_job_id
+    const runs = await client.query(
+      "SELECT * FROM campaign_production_runs WHERE campaign_id = $1",
+      [campaign.campaign_id]
+    );
+    expect(runs.rows[0].status).toBe("production_review");
+    expect(runs.rows[0].assembly_job_id).toBeNull();
 
-    // Validate the AssemblySpec
-    const spec = enqueuedAssembly.assembly_spec;
-    expect(spec.campaignId).toBe(campaign.campaign_id);
-    expect(spec.videoStems).toHaveLength(2);
-    // videoStems order must be 0-based and contiguous: 0, 1
-    expect(spec.videoStems[0].order).toBe(0);
-    expect(spec.videoStems[1].order).toBe(1);
-    // Media translation verified:
-    expect(spec.videoStems[0].media.contentType).toBe("video/mp4");
-    expect(spec.videoStems[0].media.sha256).toBe(validSha1);
-
-    // Now drive the delivery assembly job to completion
-    const claimAssembly = await app.inject({
-      method: "POST",
-      url: "/api/delivery-assembly-jobs/claim",
-      payload: { workerId: "assembly-worker-1" }
-    });
-    expect(claimAssembly.statusCode).toBe(200);
-    const claimedAssemblyJob = claimAssembly.json();
-
-    const startAssembly = await app.inject({
-      method: "POST",
-      url: `/api/delivery-assembly-jobs/${claimedAssemblyJob.jobId}/start`,
-      payload: { leaseToken: claimedAssemblyJob.leaseToken }
-    });
-    expect(startAssembly.statusCode).toBe(200);
-
-    const completeAssembly = await app.inject({
-      method: "POST",
-      url: `/api/delivery-assembly-jobs/${claimedAssemblyJob.jobId}/complete`,
-      payload: { leaseToken: claimedAssemblyJob.leaseToken }
-    });
-    expect(completeAssembly.statusCode).toBe(200);
-
-    // Verify campaign and run reached terminal status: COMPLETED!
-    camp = await client.query("SELECT * FROM campaigns WHERE campaign_id = $1", [
-      campaign.campaign_id
-    ]);
-    expect(camp.rows[0].status).toBe("completed");
-
-    runs = await client.query("SELECT * FROM campaign_production_runs WHERE campaign_id = $1", [
-      campaign.campaign_id
-    ]);
-    expect(runs.rows[0].status).toBe("completed");
+    // Verify all scenes in the campaign are in qa
+    const scenes = await client.query(
+      "SELECT * FROM storyboard_scenes WHERE campaign_id = $1 ORDER BY scene_order ASC",
+      [campaign.campaign_id]
+    );
+    expect(scenes.rows).toHaveLength(2);
+    expect(scenes.rows[0].status).toBe("qa");
+    expect(scenes.rows[1].status).toBe("qa");
 
     await app.close();
   });
@@ -724,6 +687,47 @@ describe("Campaign Production Dispatch and Gating Integration (#197)", () => {
       }
     });
     expect(complete1.statusCode).toBe(200);
+
+    // Since production completion no longer auto-enqueues assembly, explicitly enqueue delivery assembly job and link to run
+    const runsBefore = await client.query(
+      "SELECT * FROM campaign_production_runs WHERE campaign_id = $1",
+      [campaign.campaign_id]
+    );
+    const runId = runsBefore.rows[0].run_id;
+
+    const enqueueAssembly = await app.inject({
+      method: "POST",
+      url: "/api/delivery-assembly-jobs",
+      payload: {
+        campaignId: campaign.campaign_id,
+        assemblySpec: {
+          campaignId: campaign.campaign_id,
+          assemblyProfile: { key: "VERTICAL_REEL_1080X1920_V1", version: 1 },
+          expectedTotalDurationMs: 4000,
+          videoStems: [
+            {
+              order: 0,
+              sceneId: scene1.scene_id,
+              generationManifestId: "01950c46-9e90-7d3d-82d2-8f1d3c000088",
+              expectedDurationMs: 4000,
+              media: {
+                bucket: "cco-render-output",
+                key: "out.mp4",
+                sha256: "1111111111111111111111111111111111111111111111111111111111111111",
+                contentType: "video/mp4"
+              }
+            }
+          ]
+        }
+      }
+    });
+    expect(enqueueAssembly.statusCode).toBe(201);
+    const enqueued = enqueueAssembly.json();
+
+    await client.query(
+      "UPDATE campaign_production_runs SET assembly_job_id = $1, status = 'assembling' WHERE run_id = $2",
+      [enqueued.jobId, runId]
+    );
 
     // Claim delivery assembly job and fail it
     const claimAssembly = await app.inject({

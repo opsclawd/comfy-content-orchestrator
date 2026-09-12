@@ -35,3 +35,4 @@ export * from "./ranking-model-client-port.js";
 export * from "./candidate-ranking-context.js";
 export * from "./approved-candidate-media-errors.js";
 export * from "./comfyui-input-staging-port.js";
+export * from "./current-production-attempt-queries.js";

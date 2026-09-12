@@ -6,6 +6,7 @@ import {
 } from "./types.js";
 import { handleReviewError } from "./errors.js";
 import { reviewReadRoutes } from "./routes/review-read-routes.js";
+import { productionReviewReadRoutes } from "./routes/production-review-read-routes.js";
 import { reviewCommandRoutes } from "./routes/review-command-routes.js";
 import { metricsRoutes } from "./routes/metrics-routes.js";
 import { jobRoutes } from "./routes/job-routes.js";
@@ -76,6 +77,11 @@ export function createControlApiApp(
   });
 
   app.register(reviewReadRoutes, {
+    container,
+    ...(options !== undefined ? { appOptions: options } : {})
+  });
+
+  app.register(productionReviewReadRoutes, {
     container,
     ...(options !== undefined ? { appOptions: options } : {})
   });
