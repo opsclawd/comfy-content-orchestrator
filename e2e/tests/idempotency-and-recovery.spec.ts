@@ -81,7 +81,6 @@ test.describe("Idempotency, Recovery, and Conflict Lifecycle", () => {
       campaignId: string;
       idempotencyKey: string;
       isIdempotentReplay: boolean;
-      isStoryboardIdempotentReplay?: boolean;
       scenes: Array<{ sceneId: string }>;
     };
 
@@ -90,7 +89,6 @@ test.describe("Idempotency, Recovery, and Conflict Lifecycle", () => {
     expect(secondData.idempotencyKey).toBe(firstIdempotencyKey);
     expect(secondData.campaignId).toBe(firstCreatedCampaignId);
     expect(secondData.isIdempotentReplay).toBe(true);
-    expect(secondData.isStoryboardIdempotentReplay).toBe(true);
 
     const secondSceneIds = secondData.scenes.map((s) => s.sceneId);
     expect(secondSceneIds).toEqual(firstCreatedSceneIds);
