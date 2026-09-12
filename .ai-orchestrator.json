@@ -14,6 +14,28 @@
       "pnpm install --frozen-lockfile",
       "pnpm check:control-plane"
     ],
+    "tiers": [
+      ["pnpm check:hooks", "pnpm install --frozen-lockfile"],
+      ["pnpm format:fix"],
+      ["pnpm format"],
+      ["pnpm preValidation", "pnpm build"],
+      [
+        "pnpm lint",
+        "pnpm typecheck",
+        "pnpm test",
+        "pnpm test:bash",
+        "pnpm boundaries",
+        "pnpm check:control-plane"
+      ],
+      [
+        "pnpm test:db",
+        "pnpm test:assembly",
+        "pnpm test:kokoro",
+        "pnpm test:piper",
+        "pnpm test:ltx-production",
+        "pnpm test:whisperx"
+      ]
+    ],
     "selfVerifyCommands": ["pnpm typecheck", "pnpm lint"],
     "timeout": 900,
     "forbiddenArtifactPaths": ["certification/", "baseline/", "config/render-profiles/"]

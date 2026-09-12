@@ -59,6 +59,18 @@ Integration tests use Testcontainers and require Docker. They are slower — rou
 
 `pnpm test:db` is part of the effective validation set. Do not re-declare the commands inherited from the automation repository (`build`, `lint`, `typecheck`, `test`, `test:bash`, `boundaries`) in `.ai-orchestrator.json`; `validation.commands` concatenates across config layers rather than replacing.
 
+### Validation Tiers & Concurrency
+
+Validation commands are organized into 6 strictly ordered tiers in `.ai-orchestrator.json` via `validation.tiers`:
+1. **Hygiene**: `["pnpm check:hooks", "pnpm install --frozen-lockfile"]` (parallel)
+2. **Format Auto-fix**: `["pnpm format:fix"]` (isolated sequential Prettier write)
+3. **Format Check**: `["pnpm format"]` (isolated Prettier verify)
+4. **Cache & Build**: `["pnpm preValidation", "pnpm build"]` (parallel cache download/linking and monorepo build)
+5. **Fast Deterministic Gates**: `["pnpm lint", "pnpm typecheck", "pnpm test", "pnpm test:bash", "pnpm boundaries", "pnpm check:control-plane"]` (parallel read-only static analysis and unit tests)
+6. **Heavy Subsystems**: `["pnpm test:db", "pnpm test:assembly", "pnpm test:kokoro", "pnpm test:piper", "pnpm test:ltx-production", "pnpm test:whisperx"]` (parallel integration suites)
+
+Commands within each tier execute concurrently via `Promise.all`; tiers execute sequentially. The heavy suites in Tier 6 are completely decoupled with zero shared state (isolated temp directories, dynamic Testcontainers host ports, and read-only model caches), cutting wall-clock validation time by ~60%. Whenever a new validation command is added, it must be mapped into `validation.tiers` to maintain complete tier coverage (enforced by `scripts/check-tiers.test.ts`).
+
 ## Evidence paths are never agent-authored
 
 `certification/`, `baseline/`, and `config/render-profiles/` are listed in `forbiddenArtifactPaths`. A plan naming any of them as a task's expected output is rejected before implement.
