@@ -58,6 +58,7 @@ describe("CompleteCampaignProductionRunAssemblyUseCases", () => {
       findRunScenes: vi.fn(async () => []),
       findRunSceneByProductionJobId: vi.fn(),
       countIncompleteRunScenes: vi.fn(async () => 0),
+      claimForProductionReview: vi.fn(),
       claimForAssembly: vi.fn(),
       setAssemblyJobId: vi.fn(),
       claimFailure: vi.fn()
@@ -131,6 +132,7 @@ describe("CompleteCampaignProductionRunAssemblyUseCases", () => {
       findRunScenes: vi.fn(async () => []),
       findRunSceneByProductionJobId: vi.fn(),
       countIncompleteRunScenes: vi.fn(async () => 0),
+      claimForProductionReview: vi.fn(),
       claimForAssembly: vi.fn(),
       setAssemblyJobId: vi.fn(),
       claimCompletion: vi.fn()

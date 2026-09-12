@@ -31,6 +31,11 @@ export interface CampaignProductionRunRepository {
    */
   countIncompleteRunScenes(runId: string): Promise<number>;
   /**
+   * Atomically claims the run for production review (transitions status from 'dispatched' to 'production_review').
+   * Returns the updated run record if claimed, or undefined if another caller won the claim.
+   */
+  claimForProductionReview(runId: string): Promise<CampaignProductionRunRecord | undefined>;
+  /**
    * Atomically claims the run for assembly (transitions status from 'dispatched' to 'assembling').
    * Returns the updated run record if claimed, or undefined if another caller won the claim.
    */
@@ -45,7 +50,7 @@ export interface CampaignProductionRunRepository {
    */
   claimCompletion(runId: string): Promise<CampaignProductionRunRecord | undefined>;
   /**
-   * Atomically claims run failure (transitions status from 'dispatched' or 'assembling' to 'failed').
+   * Atomically claims run failure (transitions status from 'dispatched', 'production_review', or 'assembling' to 'failed').
    * Returns the updated run record if claimed, or undefined if already in a terminal status.
    */
   claimFailure(runId: string): Promise<CampaignProductionRunRecord | undefined>;

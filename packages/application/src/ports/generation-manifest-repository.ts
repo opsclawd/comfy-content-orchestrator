@@ -45,9 +45,12 @@ export interface GenerationManifestRepository {
    * Throws IncompleteVideoStemSourceError if outputs are missing or incomplete.
    * Returns undefined if no manifest exists for the given jobId.
    */
-  readonly findVideoStemSourceByJobId?: (
-    jobId: string
-  ) => Promise<
-    { readonly generationManifestId: string; readonly media: PersistentMediaRef } | undefined
+  readonly findVideoStemSourceByJobId?: (jobId: string) => Promise<
+    | {
+        readonly generationManifestId: string;
+        readonly media: PersistentMediaRef;
+        readonly renderAttempt: number;
+      }
+    | undefined
   >;
 }

@@ -1,6 +1,4 @@
-import type { VideoStemRef } from "@cco/contracts";
-import { toVideoStemOrder } from "@cco/domain";
-import { validateAssemblySpec, type AssemblySpec } from "../ports/assembly-spec.js";
+import type { PersistentMediaRef } from "@cco/contracts";
 import type { UnitOfWork } from "../ports/unit-of-work.js";
 
 export class CompleteCampaignProductionRunUseCases {
@@ -44,82 +42,47 @@ export class CompleteCampaignProductionRunUseCases {
       }
 
       const campaignsRepo = context.campaigns;
-      const assemblyJobsRepo = context.assemblyJobs;
       const manifestRepo = context.generationManifests;
       if (
         !campaignsRepo ||
         typeof campaignsRepo.transitionStatusIf !== "function" ||
-        !assemblyJobsRepo ||
         !manifestRepo ||
         typeof manifestRepo.findVideoStemSourceByJobId !== "function"
       ) {
         throw new Error("UnitOfWorkContext is missing required campaign production repositories");
       }
 
-      // Observation query: if any sibling jobs in the run are still incomplete, do not claim assembly
+      // Check that this job has a resolvable manifest; if missing or invalid, do not throw, but treat as not review-ready
+      let source:
+        | {
+            readonly generationManifestId: string;
+            readonly media: PersistentMediaRef;
+            readonly renderAttempt?: number;
+          }
+        | undefined;
+      try {
+        source = await manifestRepo.findVideoStemSourceByJobId(jobId);
+      } catch {
+        return;
+      }
+
+      if (source === undefined) {
+        return;
+      }
+
+      // Observation query: if any sibling jobs in the run are still incomplete, do not claim production review
       const incompleteCount = await runsRepo.countIncompleteRunScenes(runScene.runId);
       if (incompleteCount > 0) {
         return;
       }
 
       // Atomic single-row conditional claim: exactly one concurrent caller succeeds
-      const claimedRun = await runsRepo.claimForAssembly(runScene.runId);
+      const claimedRun = await runsRepo.claimForProductionReview(runScene.runId);
       if (claimedRun === undefined) {
         return;
       }
 
-      const runScenes = await runsRepo.findRunScenes(claimedRun.id);
-      const orderMap = toVideoStemOrder(runScenes);
-
-      const videoStems: VideoStemRef[] = [];
-      const sortedRunScenes = [...runScenes].sort((a, b) => a.sequenceIndex - b.sequenceIndex);
-      for (const scene of sortedRunScenes) {
-        if (!scene.productionJobId) {
-          throw new Error(`Run scene ${scene.sceneId} has no productionJobId`);
-        }
-        const source = await manifestRepo.findVideoStemSourceByJobId(scene.productionJobId);
-        if (source === undefined) {
-          throw new Error(
-            `Generation manifest source not found for production job ${scene.productionJobId}`
-          );
-        }
-
-        const stemOrder = orderMap.get(scene.sceneId);
-        if (stemOrder === undefined) {
-          throw new Error(`Failed to resolve stem order for scene ${scene.sceneId}`);
-        }
-
-        videoStems.push({
-          sceneId: scene.sceneId,
-          generationManifestId: source.generationManifestId,
-          order: stemOrder,
-          media: source.media,
-          expectedDurationMs: scene.expectedDurationMs
-        });
-      }
-
-      const assemblySpec: AssemblySpec = {
-        campaignId: claimedRun.campaignId,
-        videoStems,
-        assemblyProfile: {
-          key: "VERTICAL_REEL_1080X1920_V1",
-          version: 1
-        },
-        expectedTotalDurationMs: claimedRun.expectedTotalDurationMs,
-        subtitleCues: []
-      };
-
-      validateAssemblySpec(assemblySpec);
-
-      const assemblyJob = await assemblyJobsRepo.enqueue({
-        campaignId: claimedRun.campaignId,
-        assemblySpec
-      });
-
-      // Associate enqueued assembly job using assemblyJob.jobId
-      await runsRepo.setAssemblyJobId(claimedRun.id, assemblyJob.jobId);
-
-      // Monotonically advance campaign status to "qa" (assembly in flight).
+      // Monotonically advance campaign status to "qa" (production review ready).
       // Catch up from legal lagging predecessors (queued or rendering).
       const transitioned = await campaignsRepo.transitionStatusIf(
         claimedRun.campaignId,

@@ -17,6 +17,7 @@ import {
   ApproveSceneAndDispatchCampaignProductionUseCase,
   CompleteCampaignProductionRunUseCases,
   CompleteCampaignProductionRunAssemblyUseCases,
+  type CurrentProductionAttemptQueries,
   type DeliveryAssemblyJobQueuePort,
   type JobQueuePort,
   type PlanningModelClientPort,
@@ -34,6 +35,7 @@ export interface ControlApiDependencies {
   readonly uow: UnitOfWork;
   readonly renderEngine?: RenderEnginePort;
   readonly sceneReviewQueries?: SceneReviewQueries;
+  readonly currentProductionAttemptQueries?: CurrentProductionAttemptQueries;
   readonly reviewMediaDelivery?: ReviewMediaDeliveryPort;
   readonly storageTelemetry?: StorageTelemetryPort;
   readonly storageMetricsRegistry?: StorageMetricsRegistryPort;
@@ -73,6 +75,7 @@ export interface ControlApiUseCases {
 
 export interface ControlApiQueries {
   readonly sceneReview?: SceneReviewQueries;
+  readonly currentProductionAttempt?: CurrentProductionAttemptQueries;
 }
 
 export interface ControlApiContainer {
@@ -197,6 +200,9 @@ export function createControlApiContainer(
     queries: {
       ...(dependencies.sceneReviewQueries !== undefined
         ? { sceneReview: dependencies.sceneReviewQueries }
+        : {}),
+      ...(dependencies.currentProductionAttemptQueries !== undefined
+        ? { currentProductionAttempt: dependencies.currentProductionAttemptQueries }
         : {})
     }
   };
