@@ -37,7 +37,6 @@ export interface PlanCampaignStoryboardResult {
   readonly campaign: CampaignShellRecord;
   readonly isIdempotentReplay: boolean;
   readonly scenes: readonly Readonly<SceneSnapshot>[];
-  readonly isStoryboardIdempotentReplay: boolean;
 }
 
 /**
@@ -107,8 +106,7 @@ export class PlanCampaignStoryboardUseCase {
         return {
           campaign,
           isIdempotentReplay: true,
-          scenes: sortedExisting.map((s) => s.snapshot()),
-          isStoryboardIdempotentReplay: true
+          scenes: sortedExisting.map((s) => s.snapshot())
         };
       } else if (existing.length > 0 && existing.length < campaign.totalScenes) {
         // Partially materialized state: fail fast rather than calling LLM planning
@@ -172,18 +170,16 @@ export class PlanCampaignStoryboardUseCase {
 
     // 5. Durably materialize storyboard scenes and admit candidate generation in its own transaction,
     // atomically binding the completion proof.
-    const { scenes, isIdempotentReplay: isStoryboardIdempotentReplay } =
-      await this.deps.materializeStoryboard.execute({
-        campaignId: campaign.id,
-        scenes: orderedConfigs,
-        completionHashSha256: orchestrationHash
-      });
+    const { scenes } = await this.deps.materializeStoryboard.execute({
+      campaignId: campaign.id,
+      scenes: orderedConfigs,
+      completionHashSha256: orchestrationHash
+    });
 
     return {
       campaign,
-      isIdempotentReplay,
-      scenes,
-      isStoryboardIdempotentReplay
+      isIdempotentReplay: false,
+      scenes
     };
   }
 }

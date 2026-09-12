@@ -239,7 +239,6 @@ describe("PlanCampaignStoryboardUseCase", () => {
       expect(result.campaign.id).toBeDefined();
       expect(result.campaign.totalScenes).toBe(expectedDerivedN);
       expect(result.isIdempotentReplay).toBe(false);
-      expect(result.isStoryboardIdempotentReplay).toBe(false);
 
       // 2. Exactly N scenes returned and persisted
       expect(result.scenes).toHaveLength(expectedDerivedN);
@@ -372,7 +371,7 @@ describe("PlanCampaignStoryboardUseCase", () => {
   });
 
   describe("Idempotent Replay Short-Circuit (Finding 1 Regression Coverage)", () => {
-    it("short-circuits on full replay: 0 new planning invocations, 0 new jobs, isStoryboardIdempotentReplay: true", async () => {
+    it("short-circuits on full replay: 0 new planning invocations, 0 new jobs, isIdempotentReplay: true", async () => {
       const { useCase, stubClient, queue, uow } = createTestHarness();
       const idempotencyKey = "018e69e0-8a6a-72cb-b1b7-ec79a1f73840";
 
@@ -387,7 +386,6 @@ describe("PlanCampaignStoryboardUseCase", () => {
       // First run: completes normally
       const firstResult = await useCase.execute(input);
       expect(firstResult.isIdempotentReplay).toBe(false);
-      expect(firstResult.isStoryboardIdempotentReplay).toBe(false);
       expect(stubClient.beatSheetInvocations).toBe(1);
       expect(stubClient.sceneConfigInvocations).toBe(3);
       const initialJobCount = queue.jobs.length;
@@ -403,9 +401,8 @@ describe("PlanCampaignStoryboardUseCase", () => {
       expect(stubClient.beatSheetInvocations).toBe(0);
       expect(stubClient.sceneConfigInvocations).toBe(0);
 
-      // Assert replay flags
+      // Assert replay flag
       expect(secondResult.isIdempotentReplay).toBe(true);
-      expect(secondResult.isStoryboardIdempotentReplay).toBe(true);
 
       // Assert same campaign and scenes
       expect(secondResult.campaign.id).toBe(firstResult.campaign.id);
@@ -434,7 +431,7 @@ describe("PlanCampaignStoryboardUseCase", () => {
 
       // 1. First run succeeds
       const firstResult = await useCase.execute(input);
-      expect(firstResult.isStoryboardIdempotentReplay).toBe(false);
+      expect(firstResult.isIdempotentReplay).toBe(false);
 
       // 2. Simulate complete provider outage (all LLM calls will fail)
       stubClient.shouldThrow = true;
@@ -442,7 +439,7 @@ describe("PlanCampaignStoryboardUseCase", () => {
 
       // 3. Replay with same idempotencyKey must succeed without throwing
       const replayResult = await useCase.execute(input);
-      expect(replayResult.isStoryboardIdempotentReplay).toBe(true);
+      expect(replayResult.isIdempotentReplay).toBe(true);
       expect(replayResult.campaign.id).toBe(firstResult.campaign.id);
       expect(replayResult.scenes).toHaveLength(3);
       expect(stubClient.beatSheetInvocations).toBe(0);
@@ -485,9 +482,8 @@ describe("PlanCampaignStoryboardUseCase", () => {
       expect(stubClient.beatSheetInvocations).toBe(1);
       expect(stubClient.sceneConfigInvocations).toBe(3);
 
-      // Shell was replayed, but storyboard was freshly materialized
-      expect(recoveredResult.isIdempotentReplay).toBe(true);
-      expect(recoveredResult.isStoryboardIdempotentReplay).toBe(false);
+      // Storyboard was freshly materialized (not replayed)
+      expect(recoveredResult.isIdempotentReplay).toBe(false);
       expect(recoveredResult.scenes).toHaveLength(3);
     });
 
@@ -566,7 +562,7 @@ describe("PlanCampaignStoryboardUseCase", () => {
         candidateReferenceAssetIds: ["ref-1", "ref-2", "ref-1"]
       });
 
-      expect(replayResult.isStoryboardIdempotentReplay).toBe(true);
+      expect(replayResult.isIdempotentReplay).toBe(true);
       expect(replayResult.campaign.id).toBe(firstResult.campaign.id);
       expect(stubClient.beatSheetInvocations).toBe(0);
     });

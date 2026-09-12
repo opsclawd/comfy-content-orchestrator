@@ -4,6 +4,7 @@ import {
   MIN_TARGET_DURATION_MS,
   MAX_TARGET_DURATION_MS,
   PlanCampaignStoryboardRequestSchema,
+  canonicalizeCampaignRequest,
   type PlanCampaignStoryboardErrorResponse,
   type PlanCampaignStoryboardRequest,
   type PlanCampaignStoryboardResponse
@@ -243,53 +244,14 @@ export function buildRequestFromForm(
   };
 }
 
-// Source of truth: packages/application/src/use-cases/campaign-request-hash.ts — kept in sync via campaign-creation-state.test.ts + campaign-request-hash.test.ts cross-check.
-function sortKeysDeep(value: unknown): unknown {
-  if (value === null || typeof value !== "object") {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.map(sortKeysDeep);
-  }
-  const record = value as Record<string, unknown>;
-  const sortedKeys = Object.keys(record).sort();
-  const result: Record<string, unknown> = {};
-  for (const key of sortedKeys) {
-    const val = record[key];
-    if (val !== undefined) {
-      result[key] = sortKeysDeep(val);
-    }
-  }
-  return result;
-}
-
 /**
  * Computes a canonical fingerprint string representing the client-side creation intent.
- * Mirrored from packages/application/src/use-cases/campaign-request-hash.ts canonicalizeCampaignRequest.
+ * Consumes the shared canonicalizer from @cco/contracts.
  */
 export function computeClientRequestFingerprint(
   request: Omit<PlanCampaignStoryboardRequest, "idempotencyKey">
 ): string {
-  let canonicalAssetIds: string[] | undefined = undefined;
-  if (
-    request.candidateReferenceAssetIds !== undefined &&
-    request.candidateReferenceAssetIds.length > 0
-  ) {
-    canonicalAssetIds = Array.from(new Set(request.candidateReferenceAssetIds)).sort();
-  }
-
-  const normalized = {
-    clientId: request.clientId,
-    title: request.title,
-    ...(request.targetPlatform !== undefined ? { targetPlatform: request.targetPlatform } : {}),
-    targetTotalDurationMs: request.targetTotalDurationMs,
-    ...(request.sceneCountOverride !== undefined
-      ? { sceneCountOverride: request.sceneCountOverride }
-      : {}),
-    ...(request.brief !== undefined ? { brief: request.brief } : {}),
-    ...(canonicalAssetIds !== undefined ? { candidateReferenceAssetIds: canonicalAssetIds } : {})
-  };
-  return JSON.stringify(sortKeysDeep(normalized));
+  return canonicalizeCampaignRequest(request);
 }
 
 export function transitionCampaignCreationState(
