@@ -20,6 +20,9 @@
 - **LicenseRoutingDecision:** Auditable provenance record (`decisionId`, `registryRevision`, `evaluations`, `violations`, `timestamp`) embedded into generated artifacts (e.g. `AssemblyManifest.governanceDecisionId`).
 - **AssemblySpec:** Structured technical and creative specification for audiovisual assembly, declaring campaign identity, assembly profile (`VERTICAL_REEL_1080X1920_V1`), ordered video stems (`VideoStemRef[]`), optional voiceover (`VoiceoverAssetRef`), optional soundbed (`SoundbedAssetRef`), and subtitle cues (`SubtitleCue[]`).
 - **AssemblyManifest:** Immutable provenance record and audit evidence produced for an assembled commercial delivery reel (`assemblyId`, `createdAt`, `campaignId`, `assemblyProfile`, `generationManifestIds`, `inputs`, `timeline`, `subtitleCuesSha256`, `layout`, `ffmpeg`, `commandFingerprint`, `encoding`, `streams`, `output`, `governanceDecisionId`). Persisted beside the delivered media object, it constitutes the final-delivery provenance boundary.
+- **ProductionAttempt:** First-class immutable ledger record (`campaign_production_attempts`) capturing an ordinal-numbered production render attempt for a specific scene and campaign production run (`attemptId`, `runId`, `sceneId`, `specRevision`, `ordinal`, `productionJobId`, `seed`, `createdReason`, `createdAt`). Creative re-renders append new attempt records with incrementing ordinals rather than mutating historical attempts.
+- **CampaignProductionRun & CampaignProductionRunScene:** Aggregate and scene-link entities coordinating multi-scene production rendering, production review gating, and delivery assembly admission across a dedicated lifecycle (`dispatched -> production_review -> assembling -> completed/failed`). Decoupled from individual scene lifecycle progression.
+- **AcceptedProductionAttempt:** The explicitly selected and accepted production attempt for a scene (`acceptedAttemptId`, `acceptedProductionJobId`, `acceptedAttemptOrdinal`). Only explicitly accepted attempts matching the scene's current SceneSpec revision are permitted to feed downstream delivery assembly.
 
 ## Review Plane Actions & Behavioral Invariants
 
@@ -33,6 +36,21 @@
 - **Review API Never Synchronously Renders:** Review HTTP routes only commit state transitions, candidate selections, and audit records. Rendering compute is deferred to asynchronous worker queue processing (Sprint 3).
 - **Fail-Closed Governance Routing Guard:** All generation dispatch and assembly pipelines must evaluate required component licenses against the versioned registry before any compute or external service invocation. Non-approved or missing entries halt execution immediately without acquiring GPU leases or spawning media processes.
 
+### Production Review Actions & Attempt Lineage
+
+- **The Final Pipeline Invariant:**
+  > **`storyboard approval -> conditioned production render -> production review -> explicit accepted attempt -> assembly -> final delivery`**
+- **Four Distinct Lifecycle Concepts:**
+  1. **Storyboard candidate reroll (`reroll`):** Creative rejection during draft review (`director_review -> generating_candidates`). Invalidates current candidate selection and clears approval.
+  2. **Infrastructure retry of one render job:** Transient worker lease timeout or infrastructure failure of a single render job, handled before manifest creation without incrementing attempt ordinal.
+  3. **Creative production re-render as a new attempt (`production_rerender`):** Creative rejection in production review (`qa -> queued`). The render was technically successful, but the director requests another creative iteration. Increments `productionAttemptOrdinal`, creates a new immutable attempt row in `campaign_production_attempts`, and preserves SceneSpec revision, selected candidate, and storyboard approval.
+  4. **Explicit accepted production attempt (`production_accept`):** Human sign-off on a specific attempt (`qa -> completed`). Sets `acceptedProductionAttemptId` on the Scene and `accepted_attempt_id`, `accepted_production_job_id`, and `accepted_attempt_ordinal` on `CampaignProductionRunScene`. Only explicitly accepted attempts feed downstream delivery assembly.
+- **Attempt-Fencing Semantics (`expectedProductionJobId`):** Both `production_accept` and `production_rerender` commands require `expectedProductionJobId`. Commands referencing a superseded attempt fail with `STALE_PRODUCTION_ATTEMPT_CONFLICT` (409) even if `expectedSpecRevision` is unchanged. Replaying an identical command with matching `actionId` returns 200 with `isIdempotentReplay: true` and writes zero duplicate records.
+- **Legacy `reject` vs. `production_rerender` on Production-Run Scenes:**
+  Calling legacy `reject` (`rejectQA`) on a `qa`-status production-run scene transitions `qa -> director_review` and clears `activeProductionJobId` and `approval`. Because it leaves `accepted_attempt_id` unset on the run-scene, the run cannot reach full acceptance and assembly is fail-closed.
+- **Downstream Delivery Consumer (Issue #213):**
+  Final delivery packaging (Issue #213) consumes the canonical completed assembly and immutable `AssemblyManifest` produced after this gate. Delivery cannot be triggered from unreviewed renders, incomplete runs, or partially accepted campaigns.
+
 ## Canonical Scene Lifecycle States
 
 - **DRAFT_PENDING**
@@ -42,6 +60,9 @@
 - **QUEUED**
 - **RENDERING**
 - **QA**
+  - `qa -> completed`: Via `production_accept` (requires `expectedProductionJobId`, records accepted attempt on scene and run-scene, triggers assembly admission when all scenes accepted) or legacy `acceptQA`.
+  - `qa -> queued`: Via `production_rerender` (requires `expectedProductionJobId`, creates new attempt with lineage, preserves SceneSpec revision, selected candidate, and approval).
+  - `qa -> director_review`: Via legacy `reject` (`rejectQA`, clears approval and active job, fails closed against assembly).
 - **COMPLETED**
 - **FAILED**
 - **CANCELLED**
@@ -98,3 +119,15 @@
     - Reference image staging/injection failures fail closed with `ReferenceImageStagingError`.
     - **Zero Silent Fallback:** A failed I2V conditioning pipeline never falls back silently to unconditioned text-to-video generation.
   - **Single-Source Manifest Provenance:** `GenerationManifest` records `approvedCandidate` (`candidateId`, `sceneId`, `specRevision`, `sha256`) and `executionConditioning` (`profileKey: "LTX_25_720P_5S_I2V_V1"`, `media: { storageBucket, storageObjectKey, sha256 }`, `stagedAs: { subfolder: "conditioning", filename: "cco-<scene>-<job>-<hash>" }`, `injectionTarget: { nodeId: "20", inputName: "image" }`), alongside persisted workflow identity and sha256.
+- **Production Review Gate & Accepted-Attempt Assembly Admission (Parent #215, Issues #262-#266):**
+  - **Production-Review Invariant:** "Technical render completion never auto-assembles; assembly admission requires explicit attempt-fenced acceptance across every required scene in the production run." (See [ADR 0005](adr/0005-production-review-acceptance-gate.md)).
+  - **Closed Pipeline Invariant:** `storyboard approval -> conditioned production render -> production review -> explicit accepted attempt -> assembly -> final delivery`.
+  - **Sprint 4.5 Delivered Issues:**
+    - **#262 (State Machine & Review Gating):** Introduced the `CampaignProductionRun` review-state machine (`dispatched -> production_review -> assembling -> completed/failed`). Decoupled technical render completion callbacks from delivery assembly; render completion transitions the run to `production_review` and scenes to `qa` with zero auto-assembly.
+    - **#263 (Production Review Commands & Attempt Ledger):** Implemented attempt-fenced `production_accept` and `production_rerender` review actions. Added the `campaign_production_attempts` ledger. Guaranteed that creative re-renders increment ordinal, create distinct attempt rows with new jobs/seeds, and preserve SceneSpec revision, selected candidate, and approval. Stale commands referencing superseded jobs fail closed with `STALE_PRODUCTION_ATTEMPT_CONFLICT` (409) even when spec revision is unchanged.
+    - **#264 (Accepted-Attempt Invariant & Atomic Assembly Enqueue):** Created `packages/domain/src/accepted-production-attempt-invariant.ts` and `attemptEnqueueAssemblyForAcceptedRun`. Enforces strict validation across accepted attempt identity, scene ID, run ID, spec revision, ordinal, and generation manifest source before enqueuing assembly. Maps video stems into canonical `sequenceIndex` order. Concurrent final scene completions enqueue exactly one durable delivery assembly job.
+    - **#265 (Review Hub UI for Production Review):** Added `ProductionReviewPanel` and `ReviewCommandControls` in `apps/web`. Surfaced playable production attempt video via presigned URLs, attempt-fenced Accept and Re-render actions, and fail-safe media-unavailable banners.
+    - **#266 (End-to-End Integration Proof & Lifecycle Docs):** Implemented comprehensive integration coverage across real PostgreSQL, MinIO, Control API HTTP routes, and FFmpeg assembly in `tests/integration/production-review-gate.e2e.integration.test.ts`. Proved the full narrative from storyboard approval through conditioned dispatch, review gating, attempt-fenced review, and canonical FFmpeg assembly.
+  - **Downstream Consumer (Issue #213):**
+    Final delivery packaging (Issue #213) consumes the canonical completed assembly and immutable `AssemblyManifest` produced after this gate.
+

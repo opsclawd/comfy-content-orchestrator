@@ -14,6 +14,7 @@ interface CurrentProductionAttemptRow {
   scene_id: string;
   spec_revision: number;
   production_job_id: string | null;
+  current_attempt_ordinal?: number | null;
   job_status: string | null;
   retry_count: number | null;
   scene_status: string;
@@ -38,6 +39,7 @@ export class PostgresCurrentProductionAttemptQueries implements CurrentProductio
         rs.scene_id,
         rs.spec_revision,
         rs.production_job_id,
+        rs.current_attempt_ordinal,
         rj.status AS job_status,
         rj.retry_count,
         s.status AS scene_status
@@ -74,6 +76,7 @@ export class PostgresCurrentProductionAttemptQueries implements CurrentProductio
         rs.scene_id,
         rs.spec_revision,
         rs.production_job_id,
+        rs.current_attempt_ordinal,
         rj.status AS job_status,
         rj.retry_count,
         s.status AS scene_status
@@ -103,13 +106,17 @@ export class PostgresCurrentProductionAttemptQueries implements CurrentProductio
     const retryCount = Number(row.retry_count ?? 0);
     const specRevision = Number(row.spec_revision);
     const isQa = row.scene_status === "qa";
+    const currentAttemptOrdinal =
+      typeof row.current_attempt_ordinal === "number" && !Number.isNaN(row.current_attempt_ordinal)
+        ? Number(row.current_attempt_ordinal)
+        : undefined;
 
     if (!productionJobId || !row.job_status) {
       return {
         runId: row.run_id,
         sceneId: row.scene_id as SceneId,
         specRevision,
-        attemptOrdinal: 1,
+        attemptOrdinal: currentAttemptOrdinal ?? 1,
         ...(productionJobId ? { productionJobId } : {}),
         technicalState: "queued",
         reviewReady: false,
@@ -123,7 +130,7 @@ export class PostgresCurrentProductionAttemptQueries implements CurrentProductio
         runId: row.run_id,
         sceneId: row.scene_id as SceneId,
         specRevision,
-        attemptOrdinal: retryCount + 1,
+        attemptOrdinal: currentAttemptOrdinal ?? retryCount + 1,
         productionJobId,
         technicalState,
         reviewReady: false,
@@ -146,7 +153,7 @@ export class PostgresCurrentProductionAttemptQueries implements CurrentProductio
         runId: row.run_id,
         sceneId: row.scene_id as SceneId,
         specRevision,
-        attemptOrdinal: retryCount + 1,
+        attemptOrdinal: currentAttemptOrdinal ?? retryCount + 1,
         productionJobId,
         technicalState: "completed",
         reviewReady: false,
@@ -159,7 +166,7 @@ export class PostgresCurrentProductionAttemptQueries implements CurrentProductio
         runId: row.run_id,
         sceneId: row.scene_id as SceneId,
         specRevision,
-        attemptOrdinal: retryCount + 1,
+        attemptOrdinal: currentAttemptOrdinal ?? retryCount + 1,
         productionJobId,
         technicalState: "completed",
         reviewReady: false,
@@ -168,7 +175,8 @@ export class PostgresCurrentProductionAttemptQueries implements CurrentProductio
     }
 
     const attemptOrdinal =
-      typeof source.renderAttempt === "number" ? source.renderAttempt : retryCount + 1;
+      currentAttemptOrdinal ??
+      (typeof source.renderAttempt === "number" ? source.renderAttempt : retryCount + 1);
 
     return {
       runId: row.run_id,

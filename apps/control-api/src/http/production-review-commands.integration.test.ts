@@ -341,6 +341,23 @@ describe("Production Review Commands Integration (#263)", () => {
     expect(resolvedRunScene).toBeDefined();
     expect(resolvedRunScene?.sceneId).toBe(sceneId);
 
+    // Explicitly verify storyboard_scenes preserves spec_revision, selected_candidate_id, and approval
+    const sceneDb = await client.query<{
+      spec_revision: number;
+      selected_candidate_id: string;
+      selected_candidate_revision: number;
+      approved_revision: number;
+      approved_by: string;
+    }>(
+      "SELECT spec_revision, selected_candidate_id, selected_candidate_revision, approved_revision, approved_by FROM storyboard_scenes WHERE scene_id = $1",
+      [sceneId]
+    );
+    expect(sceneDb.rows[0]?.spec_revision).toBe(1);
+    expect(sceneDb.rows[0]?.selected_candidate_id).toBeDefined();
+    expect(sceneDb.rows[0]?.selected_candidate_revision).toBe(1);
+    expect(sceneDb.rows[0]?.approved_revision).toBe(1);
+    expect(sceneDb.rows[0]?.approved_by).toBe("Supervisor Sam");
+
     await app.close();
   });
 
