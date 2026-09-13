@@ -2,8 +2,8 @@
 
 **Project Name:** Godzspeed Sovereign Content Orchestration Platform & Creative Review Hub  
 **Repository:** `opsclawd/comfy-content-orchestrator`  
-**Document Version:** 3.5.2 (GenerationManifest Provenance & Capability-Dependent Audio Reconciliation)  
-**Status:** Implementation Ready — Sprint 1 Certified / Sprint 1.5 Ready  
+**Document Version:** 3.6.0 (Production Review Gate & Accepted-Attempt Assembly Admission)  
+**Status:** Implementation Ready — Sprint 4.5 Certified  
 **Runtime & Stack:** TypeScript / Node.js 24 LTS ("Krypton") | Next.js Review Hub | ComfyUI Headless | Tailscale (WireGuard Mesh) | PostgreSQL 18.6 | MinIO (S3-Compatible Review Media Store)  
 **Hardware Profile:** AMD Ryzen 7 7700 (8C/16T) | 32GB DDR5-5600 RAM certified for the dedicated Phase 1 single-render workload | NVIDIA RTX 4090 (24GB GDDR6X) | 2TB PCIe 4.0 NVMe SSD  
 **Key Stakeholders:**
@@ -11,13 +11,21 @@
 - **Technical Lead & Content Creator:** Agency Lead (Godzspeed Trinidad & Tobago Division)
 - **Cloud Control Plane:** Hetzner Cloud CPX31 VPS (Falkenstein, Germany / Tailscale-only application access)
 
-## 0. Version 3.5.2 Change Summary
+## 0. Version 3.6.0 Change Summary
 
-PRD v3.5.2 reconciles §5.5 Generation Manifest Contract with the certified physical capabilities of Phase 1 RenderProfiles (such as `LTX_25_720P_5S_V1` and `FLUX_SCHNELL_DRAFT_V1`) and enforces deterministic provenance derivation:
+PRD v3.6.0 formalizes the Production Review Gate and Accepted-Attempt Assembly Admission Invariant (Parent #215, Issues #262–#266, [ADR 0005](adr/0005-production-review-acceptance-gate.md)), strictly separating technical render completion from creative human acceptance:
 
-1. **Capability-Dependent Audio Prompt:** Explicitly defines `prompts/audio prompt` as capability-dependent rather than universally mandatory. Profiles lacking native audio generation capability (e.g. video-only `LTX_25_720P_5S_V1` or image-only `FLUX_SCHNELL_DRAFT_V1`) record `audioPrompt: null` in manifest provenance. Supplying an `audioPrompt` on a job targeted at a profile lacking audio capability is rejected before dispatch.
-2. **Strict Post-Dispatch Workflow Provenance:** All sampling parameters and prompt fields in the manifest are authoritatively extracted directly from the post-injection finalized workflow dispatched to ComfyUI, eliminating any fallbacks to job queue injected payload values.
-3. **Declarative Profile Injection Topology:** Render profiles declare their precise workflow injection node targets (`prompt`, `negativePrompt`, `seed`, `audioPrompt`) declaratively rather than relying on heuristic discovery.
+1. **Decoupled Render Completion & Assembly:** Eliminates any automatic assembly following technical production render completion. When a worker completes rendering, the scene enters `qa` and the `CampaignProductionRun` enters `production_review`. Delivery assembly is admitted only after explicit human director acceptance of every required scene.
+2. **Four Distinct Lifecycle Concepts:** Clarifies the operational boundaries between (a) storyboard candidate reroll (`reroll`), (b) infrastructure render job retry, (c) creative production re-render as a new attempt (`production_rerender`), and (d) explicit accepted production attempt (`production_accept`).
+3. **Attempt-Fenced Review Commands:** `production_accept` and `production_rerender` commands require `expectedProductionJobId`. Commands referencing superseded attempts fail closed with `STALE_PRODUCTION_ATTEMPT_CONFLICT` (409) even if `expectedSpecRevision` is unchanged.
+4. **Fail-Closed Assembly Admission Invariant:** `attemptEnqueueAssemblyForAcceptedRun` validates accepted attempt identity, scene ID, run ID, spec revision, ordinal, duration sum, and generation manifest source before enqueuing assembly. Stems are assembled in canonical scene order.
+5. **Downstream Delivery Handoff:** Issue #213 consumes the canonical completed assembly and immutable `AssemblyManifest` produced after this gate.
+
+Material changes carried forward from v3.5.2:
+
+1. Capability-Dependent Audio Prompt: Explicitly defines `prompts/audio prompt` as capability-dependent rather than universally mandatory.
+2. Strict Post-Dispatch Workflow Provenance: Sampling parameters and prompt fields extracted directly from post-injection finalized workflow.
+3. Declarative Profile Injection Topology: Render profiles declare precise injection node targets.
 
 Material changes carried forward from v3.5.1:
 
@@ -551,8 +559,9 @@ RENDERING
     v
 QA
     |---- reject ------------------------------------------> DIRECTOR_REVIEW
+    |---- production_rerender (preserves candidate/approval)> QUEUED
     |
-    | approve
+    | production_accept (attempt-fenced)
     v
 COMPLETED
 ```
@@ -569,7 +578,7 @@ Any permitted non-terminal production state may transition to `FAILED` or `CANCE
 | `approved` | `queued`, `director_review`, `cancelled` | production authorization, approval invalidation/revocation, cancel |
 | `queued` | `rendering`, `failed`, `cancelled` | worker lease, dispatch failure, cancel |
 | `rendering` | `qa`, `failed`, `cancelled` | render completion/error |
-| `qa` | `completed`, `director_review`, `failed` | QA approval/rejection/post-process failure |
+| `qa` | `completed`, `queued`, `director_review`, `failed` | `production_accept` (explicit acceptance), `production_rerender` (creative re-render), `reject` (QA rejection), post-process failure |
 | `completed` | terminal | final output accepted |
 | `failed` | `queued`, `director_review`, `cancelled` | explicit retry or corrective review |
 | `cancelled` | terminal | explicit cancellation |
@@ -615,6 +624,8 @@ Phase 1 actions:
 - `lora_tune` — select/change the versioned `loraConfigurationId`; this does not mean editing model files from the browser. It increments revision and invalidates approval/selection.
 - `cancel` — explicit cancellation where allowed.
 - `reject` — **QA rejection only** (`qa -> director_review`). It is not the storyboard-review rejection command.
+- `production_accept` — explicit attempt-fenced acceptance of rendered production video (`qa -> completed`).
+- `production_rerender` — creative production re-render as a new attempt (`qa -> queued`), preserving SceneSpec revision, candidate selection, and approval.
 
 Reserved but out of Phase 1 Review Hub scope:
 
@@ -645,6 +656,21 @@ Sprint 2 behavior:
 3. return the updated pending state to the browser.
 
 Durable candidate-generation admission/claim/dispatch is implemented with the PostgreSQL worker queue in Sprint 3. No temporary HTTP-request-held-open render architecture is permitted.
+
+### 4.7 Production Review & Attempt Acceptance Semantics
+
+Following candidate-conditioned production rendering (ADR-0004), production review and delivery assembly admission are governed by the Production Review Gate (ADR-0005):
+
+> **Invariant:** `storyboard approval -> conditioned production render -> production review -> explicit accepted attempt -> assembly -> final delivery`
+
+Key architectural rules:
+- **CampaignProductionRun Review-State Machine:** In parallel to individual scene lifecycles, campaign production rendering operates under a dedicated run-level state machine: `dispatched -> production_review -> assembling -> completed/failed`.
+- **Decoupled Technical Completion:** Technical completion of production render jobs commits immutable generation manifests and moves the run into `production_review` and scenes into `qa`. Zero delivery assembly jobs are created upon render completion.
+- **Attempt Ledger (`campaign_production_attempts`):** Production attempts are tracked in an immutable, append-only relational ledger. Each attempt records `runId`, `sceneId`, `specRevision`, `ordinal`, `productionJobId`, `seed`, `createdReason`, and creation timestamp.
+- **Creative Re-render (`production_rerender`):** When a technically successful render is creatively rejected, `production_rerender` transitions `qa -> queued`, increments `productionAttemptOrdinal`, and creates a new attempt record with a newly derived deterministic seed. SceneSpec revision, selected candidate, and storyboard approval are preserved intact.
+- **Attempt-Fencing (`expectedProductionJobId`):** Review commands `production_accept` and `production_rerender` enforce attempt-fencing via `expectedProductionJobId`. Commands referencing superseded attempts fail closed with `STALE_PRODUCTION_ATTEMPT_CONFLICT` (409) even when `expectedSpecRevision` is unchanged.
+- **Fail-Closed Assembly Admission (`attemptEnqueueAssemblyForAcceptedRun`):** Assembly is enqueued only after every required scene in the run has been explicitly accepted. At admission time, the engine re-verifies accepted attempt identity, run identity, scene identity, spec revision, ordinal, and generation manifest source. Any discrepancy aborts the transaction. Video stems are assembled in canonical `sequenceIndex` order.
+- **Downstream Consumer (Issue #213):** Final delivery packaging consumes the canonical completed assembly produced after this gate.
 
 ---
 
@@ -1105,6 +1131,16 @@ Separated from Sprint 3 because it is a distinct subsystem with different depend
 - Pass all remaining pre-flight engineering acceptance gates.
 - Re-freeze certified workflow templates, model hashes, environment metadata, and runner profile before commercial production.
 
+### Sprint 4.5 — Production Review Gate & Attempt Acceptance (Issue #215 / #262–#266) — COMPLETE
+
+Separated technical render completion from delivery assembly, introduced attempt-fenced creative production review in the Review Hub, and enforced fail-closed accepted-attempt assembly admission:
+
+- [x] Implement `CampaignProductionRun` review-state machine (`dispatched -> production_review -> assembling -> completed/failed`) and decouple technical render completion from assembly (#262).
+- [x] Implement attempt-fenced `production_accept` and `production_rerender` review actions, `campaign_production_attempts` ledger, and optimistic concurrency controls (#263).
+- [x] Implement accepted-attempt invariant validation (`packages/domain/src/accepted-production-attempt-invariant.ts`) and atomic delivery-assembly enqueueing in canonical scene sequence order (#264).
+- [x] Implement Review Hub UI for production review (`apps/web`), supporting playable production attempt media via presigned URLs and attempt-fenced review controls (#265).
+- [x] Prove production-review gate end to end across domain, Control API HTTP routes, PostgreSQL, MinIO, and real FFmpeg delivery assembly, update authoritative lifecycle documentation, and publish ADR 0005 (#266).
+
 ---
 
 ## 9. Pre-Flight Engineering Acceptance Gates
@@ -1140,6 +1176,9 @@ No paying production campaign may be onboarded until all required gates pass.
 - [x] **Reviewer Authority Gate:** browser-supplied identity/timestamp cannot become authoritative audit metadata. *Verified 2026-09-03: `apps/control-api/src/http/routes/review-command-routes.ts` resolves reviewer identity/timestamp server-side via `ReviewerIdentityResolver`/`clock`, never from the request body; `TailscaleReviewerIdentityResolver` rejects forged headers from untrusted peers. `reviewer-identity.test.ts` + `reviewer-identity-defaults.test.ts` + `review-command-routes.test.ts` — 35/35 passed.*
 - [x] **Transactional Review Gate:** ReviewEvent and mutable Scene/candidate-selection update commit or rollback together. *Verified 2026-09-03 against real Postgres: `packages/infrastructure/src/postgres/uow/postgres-unit-of-work.integration.test.ts` ("commits Scene mutation and ReviewEvent append atomically", plus rollback cases) — 5/5 passed.*
 - [x] **One-Job-One-Manifest Gate:** a completed production job produces exactly one immutable manifest referencing its job ID. *Verified 2026-09-03: `audit-protections.integration.test.ts` ("rejects a second generation manifest for the same render job"), backed by the DB `UNIQUE` constraint on `generation_manifests.job_id` — passed in the same 10/10 run above.*
+- [x] **Production Review Gating Gate:** technical render completion transitions run to `production_review` and scenes to `qa` with zero auto-assembly; assembly requires explicit acceptance across all scenes. *Verified 2026-09-13: `apps/control-api/src/http/campaign-production-dispatch.integration.test.ts` ("drives full lifecycle: start -> rendering -> manifests -> completion -> production review without auto-assembly") and `tests/integration/production-review-gate.e2e.integration.test.ts`.*
+- [x] **Attempt-Fenced Production Command Gate:** `production_accept` and `production_rerender` are fenced by `expectedProductionJobId`; stale or superseded attempt actions fail with `STALE_PRODUCTION_ATTEMPT_CONFLICT` (409) even when SceneSpec revision is unchanged; idempotent replays succeed with `isIdempotentReplay: true`. *Verified 2026-09-13: `apps/control-api/src/http/production-review-commands.integration.test.ts` and `tests/integration/production-review-gate.e2e.integration.test.ts`.*
+- [x] **Accepted-Attempt Assembly Admission Invariant Gate:** assembly consumes only explicitly accepted attempts in canonical scene sequence, verifying attempt identity, run identity, scene identity, spec revision, ordinal, and generation manifest; any mismatch fails closed without enqueueing assembly. *Verified 2026-09-13: `packages/application/src/use-cases/enqueue-delivery-assembly-for-accepted-run.test.ts` and `tests/integration/production-review-gate.e2e.integration.test.ts`.*
 
 ### 9.4 Network & Storage
 
