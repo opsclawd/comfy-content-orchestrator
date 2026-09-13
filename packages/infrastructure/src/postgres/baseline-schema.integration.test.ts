@@ -55,7 +55,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
   it("migrates an empty PostgreSQL 18.6 database through the baseline", async () => {
     const applied = await runMigrations(client, { migrationsDirectory });
 
-    expect(applied).toHaveLength(14);
+    expect(applied).toHaveLength(15);
     expect(applied[0]?.version).toBe("001");
     expect(applied[1]?.version).toBe("002");
     expect(applied[2]?.version).toBe("003");
@@ -70,6 +70,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
     expect(applied[11]?.version).toBe("012");
     expect(applied[12]?.version).toBe("013");
     expect(applied[13]?.version).toBe("014");
+    expect(applied[14]?.version).toBe("015");
 
     const schemaRes = await client.query(
       "SELECT version FROM schema_migrations ORDER BY version ASC"
@@ -88,7 +89,8 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       { version: "011" },
       { version: "012" },
       { version: "013" },
-      { version: "014" }
+      { version: "014" },
+      { version: "015" }
     ]);
 
     const tablesRes = await client.query<{ table_name: string }>(
