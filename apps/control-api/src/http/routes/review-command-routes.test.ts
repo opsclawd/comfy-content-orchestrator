@@ -1135,6 +1135,7 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
       }
     });
 
+    const pendingSceneUuid = "99999999-9999-4999-8999-999999999998" as SceneId;
     const jobs = new TestJobQueue();
     const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, jobs);
     uow.seedRun(
@@ -1143,7 +1144,7 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
         campaignId: campaignUuid,
         fingerprint: "fp",
         status: "dispatched",
-        expectedTotalDurationMs: 5000,
+        expectedTotalDurationMs: 10000,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       },
@@ -1156,6 +1157,16 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
           expectedDurationMs: 5000,
           productionJobId: jobUuid,
           currentAttemptId: "attempt-uuid-1",
+          currentAttemptOrdinal: 1
+        },
+        {
+          runId: runUuid,
+          sceneId: pendingSceneUuid,
+          specRevision: 1,
+          sequenceIndex: 2,
+          expectedDurationMs: 5000,
+          productionJobId: "job-uuid-2",
+          currentAttemptId: "attempt-uuid-2",
           currentAttemptOrdinal: 1
         }
       ],

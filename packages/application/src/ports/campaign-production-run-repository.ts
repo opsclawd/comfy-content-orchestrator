@@ -70,7 +70,7 @@ export interface CampaignProductionRunRepository {
    */
   claimForProductionReview(runId: string): Promise<CampaignProductionRunRecord | undefined>;
   /**
-   * Atomically claims the run for assembly (transitions status from 'dispatched' to 'assembling').
+   * Atomically claims the run for assembly (transitions status from 'dispatched' or 'production_review' to 'assembling').
    * Returns the updated run record if claimed, or undefined if another caller won the claim.
    */
   claimForAssembly(runId: string): Promise<CampaignProductionRunRecord | undefined>;

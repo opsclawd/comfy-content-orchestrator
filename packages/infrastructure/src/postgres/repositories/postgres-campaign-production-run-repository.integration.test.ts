@@ -195,6 +195,32 @@ describe("PostgresCampaignProductionRunRepository Integration", () => {
     expect(secondCompletion).toBeUndefined();
   });
 
+  it("claims assembly from production_review status atomically and idempotently", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+    const repo = new PostgresCampaignProductionRunRepository(client);
+
+    const { run } = await repo.createIfAbsent({
+      campaignId: campaign.campaign_id as CampaignId,
+      fingerprint: "fp_claim_from_prod_review",
+      status: "dispatched",
+      expectedTotalDurationMs: 5000
+    });
+
+    const reviewed = await repo.claimForProductionReview(run.id);
+    expect(reviewed).toBeDefined();
+    expect(reviewed!.status).toBe("production_review");
+
+    // claimForAssembly succeeds from production_review
+    const claimed = await repo.claimForAssembly(run.id);
+    expect(claimed).toBeDefined();
+    expect(claimed!.status).toBe("assembling");
+
+    // Second claim fails (returns undefined)
+    const secondClaim = await repo.claimForAssembly(run.id);
+    expect(secondClaim).toBeUndefined();
+  });
+
   it("claims production review atomically and idempotently", async () => {
     const clientRecord = await insertClientRecord(client);
     const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });

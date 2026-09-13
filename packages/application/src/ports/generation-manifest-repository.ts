@@ -28,6 +28,12 @@ export interface GenerationManifestComponentIdentity {
   readonly outputChecksumsSha256?: readonly string[] | undefined;
 }
 
+export interface VideoStemSourceRecord {
+  readonly generationManifestId: string;
+  readonly media: PersistentMediaRef;
+  readonly renderAttempt: number;
+}
+
 export interface GenerationManifestRepository {
   /**
    * Looks up a generation manifest by its ID (AssemblySpec.videoStems[].generationManifestId)
@@ -45,12 +51,7 @@ export interface GenerationManifestRepository {
    * Throws IncompleteVideoStemSourceError if outputs are missing or incomplete.
    * Returns undefined if no manifest exists for the given jobId.
    */
-  readonly findVideoStemSourceByJobId?: (jobId: string) => Promise<
-    | {
-        readonly generationManifestId: string;
-        readonly media: PersistentMediaRef;
-        readonly renderAttempt: number;
-      }
-    | undefined
-  >;
+  readonly findVideoStemSourceByJobId?: (
+    jobId: string
+  ) => Promise<VideoStemSourceRecord | undefined>;
 }

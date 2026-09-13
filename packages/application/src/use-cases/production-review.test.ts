@@ -4,6 +4,7 @@ import {
   InvalidTransitionError,
   Scene,
   type CampaignId,
+  type CampaignProductionRunRecord,
   type CandidateId,
   type SceneId
 } from "@cco/domain";
@@ -50,7 +51,7 @@ describe("ProductionReviewUseCases", () => {
       campaignId: "camp-1" as CampaignId,
       fingerprint: "fp-1",
       status: "dispatched" as const,
-      expectedTotalDurationMs: 4042,
+      expectedTotalDurationMs: 8084,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -78,6 +79,16 @@ describe("ProductionReviewUseCases", () => {
         expectedDurationMs: 4042,
         productionJobId: initialJobId,
         currentAttemptId: "attempt-1",
+        currentAttemptOrdinal: 1
+      },
+      {
+        runId: "run-1",
+        sceneId: "scene-pending-2" as SceneId,
+        specRevision: 1,
+        sequenceIndex: 2,
+        expectedDurationMs: 4042,
+        productionJobId: "job-pending-2",
+        currentAttemptId: "attempt-pending-2",
         currentAttemptOrdinal: 1
       }
     ]);
@@ -498,7 +509,7 @@ describe("ProductionReviewUseCases", () => {
         campaignId: "camp-1" as CampaignId,
         fingerprint: "fp-1",
         status: "dispatched" as const,
-        expectedTotalDurationMs: 4042,
+        expectedTotalDurationMs: 8084,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -513,6 +524,16 @@ describe("ProductionReviewUseCases", () => {
           productionJobId: newJobId!,
           currentAttemptId: "attempt-2",
           currentAttemptOrdinal: 2
+        },
+        {
+          runId: "run-1",
+          sceneId: "scene-pending-2" as SceneId,
+          specRevision: 1,
+          sequenceIndex: 2,
+          expectedDurationMs: 4042,
+          productionJobId: "job-pending-2",
+          currentAttemptId: "attempt-pending-2",
+          currentAttemptOrdinal: 1
         }
       ]);
       uow.seedProductionAttempt({
@@ -694,6 +715,27 @@ describe("ProductionReviewUseCases", () => {
         }
       ]);
 
+      uow.seedVideoStemSource("job-prod-s1", {
+        generationManifestId: "manifest-s1",
+        renderAttempt: 1,
+        media: {
+          bucket: "delivery-bucket",
+          key: "stems/scene-1.mp4",
+          sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          contentType: "video/mp4"
+        }
+      });
+      uow.seedVideoStemSource("job-prod-s2", {
+        generationManifestId: "manifest-s2",
+        renderAttempt: 1,
+        media: {
+          bucket: "delivery-bucket",
+          key: "stems/scene-2.mp4",
+          sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          contentType: "video/mp4"
+        }
+      });
+
       const enqueue = new EnqueueSceneProductionRenderUseCase(uow);
       const useCases = new ProductionReviewUseCases(uow, enqueue);
 
@@ -720,6 +762,84 @@ describe("ProductionReviewUseCases", () => {
       expect(res1.scene.acceptedProductionAttemptId).toBe("att-s1");
       expect(res2.scene.status).toBe("completed");
       expect(res2.scene.acceptedProductionAttemptId).toBe("att-s2");
+
+      // Verify that assembly was enqueued exactly once across the two concurrent calls
+      expect(uow.enqueuedAssemblyJobs()).toHaveLength(1);
+      const run = await uow.campaignProductionRuns.findById("run-shared");
+      expect(run?.status).toBe("assembling");
+      expect(run?.assemblyJobId).toBeDefined();
+    });
+
+    it("triggers assembly enqueue and sets assemblyJobId on run when the final scene is accepted", async () => {
+      const scene = createQAScene("scene-final", "job-prod-final");
+      const queue = new InMemoryJobQueue();
+      const uow = new InMemorySceneUnitOfWork([scene]).withJobs(queue);
+      const runRecord: CampaignProductionRunRecord = {
+        id: "run-final",
+        campaignId: "camp-final" as CampaignId,
+        fingerprint: "fp-final",
+        status: "dispatched",
+        expectedTotalDurationMs: 4042,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      uow.seedCampaignProductionRun(runRecord);
+      uow.seedProductionAttempt({
+        attemptId: "attempt-final",
+        sceneId: scene.id,
+        runId: "run-final",
+        ordinal: 1,
+        productionJobId: "job-prod-final",
+        specRevision: 1,
+        seed: 42,
+        createdReason: "initial_dispatch",
+        createdAt: new Date().toISOString()
+      });
+      uow.seedCampaignProductionRunScenes([
+        {
+          runId: "run-final",
+          sceneId: scene.id,
+          specRevision: 1,
+          sequenceIndex: 1,
+          expectedDurationMs: 4042,
+          productionJobId: "job-prod-final",
+          currentAttemptId: "attempt-final",
+          currentAttemptOrdinal: 1
+        }
+      ]);
+      uow.seedVideoStemSource("job-prod-final", {
+        generationManifestId: "manifest-final",
+        renderAttempt: 1,
+        media: {
+          bucket: "delivery-bucket",
+          key: "stems/final.mp4",
+          sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          contentType: "video/mp4"
+        }
+      });
+
+      const enqueue = new EnqueueSceneProductionRenderUseCase(uow);
+      const useCases = new ProductionReviewUseCases(uow, enqueue);
+
+      const result = await useCases.acceptProduction({
+        sceneId: "scene-final",
+        eventId: "evt-final-accept",
+        reviewerName: "Supervisor Sam",
+        occurredAt: "2026-09-01T12:00:00.000Z",
+        expectedSpecRevision: 1,
+        expectedProductionJobId: "job-prod-final"
+      });
+
+      expect(result.scene.status).toBe("completed");
+      const enqueued = uow.enqueuedAssemblyJobs();
+      expect(enqueued).toHaveLength(1);
+      expect(enqueued[0]!.campaignId).toBe("camp-final");
+      expect(enqueued[0]!.assemblySpec.videoStems).toHaveLength(1);
+      expect(enqueued[0]!.assemblySpec.videoStems[0]!.generationManifestId).toBe("manifest-final");
+
+      const run = await uow.campaignProductionRuns.findById("run-final");
+      expect(run?.status).toBe("assembling");
+      expect(run?.assemblyJobId).toBeDefined();
     });
   });
 });

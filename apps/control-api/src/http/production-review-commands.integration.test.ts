@@ -9,6 +9,7 @@ import {
   insertStoryboardSceneRecord,
   insertStoryboardCandidateRecord,
   insertRenderJobRecord,
+  insertGenerationManifestRecord,
   MIGRATIONS_DIRECTORY_URL
 } from "@cco/infrastructure/testing";
 import {
@@ -97,7 +98,10 @@ describe("Production Review Commands Integration (#263)", () => {
 
   async function setupDispatchedCampaignInQA(
     app: ReturnType<typeof createTestApp>,
-    sceneCount = 1
+    sceneCount = 1,
+    options?: {
+      readonly seedGenerationManifests?: boolean | ((sceneIndex: number, jobId: string) => boolean);
+    }
   ) {
     const clientRecord = await insertClientRecord(client);
     const campaign = await insertCampaignRecord(client, {
@@ -148,6 +152,7 @@ describe("Production Review Commands Integration (#263)", () => {
     }
 
     // Move scene(s) into QA with active production job preserved
+    const seedManifests = options?.seedGenerationManifests ?? true;
     const readyScenes = [];
     for (let i = 0; i < sceneCount; i++) {
       const sId = scenes[i]!.scene.scene_id;
@@ -159,6 +164,30 @@ describe("Production Review Commands Integration (#263)", () => {
       expect(activeJobId).toBeDefined();
 
       await client.query("UPDATE storyboard_scenes SET status = 'qa' WHERE scene_id = $1", [sId]);
+
+      const shouldSeed =
+        typeof seedManifests === "function" ? seedManifests(i, activeJobId!) : seedManifests;
+      if (shouldSeed) {
+        await insertGenerationManifestRecord(client, {
+          jobId: activeJobId!,
+          campaignId: campaign.campaign_id,
+          sceneId: sId,
+          renderAttempt: 1,
+          manifestPayload: {
+            renderProfile: "VERTICAL_REEL_1080X1920_V1",
+            renderProfileVersion: 1,
+            outputs: [
+              {
+                bucket: "godzspeed-delivery",
+                key: `campaigns/${campaign.campaign_id}/scenes/${sId}/output.mp4`,
+                checksumSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                contentType: "video/mp4"
+              }
+            ]
+          }
+        });
+      }
+
       readyScenes.push({ sceneId: sId, activeJobId: activeJobId! });
     }
 
@@ -551,7 +580,7 @@ describe("Production Review Commands Integration (#263)", () => {
 
   it("concurrency: racing accept requests for different scenes in the same run both succeed without deadlock", async () => {
     const app = createTestApp();
-    const { scenes } = await setupDispatchedCampaignInQA(app, 2);
+    const { campaign, scenes } = await setupDispatchedCampaignInQA(app, 2);
     const scene1 = scenes[0]!;
     const scene2 = scenes[1]!;
 
@@ -597,6 +626,303 @@ describe("Production Review Commands Integration (#263)", () => {
     );
     expect(scenesDb.rows).toHaveLength(2);
     expect(scenesDb.rows.every((r) => r.status === "completed")).toBe(true);
+
+    // Exactly one delivery assembly job is created and run status is assembling
+    const assemblyJobsRes = await client.query<{ job_id: string }>(
+      "SELECT job_id FROM delivery_assembly_jobs WHERE campaign_id = $1",
+      [campaign.campaign_id]
+    );
+    expect(assemblyJobsRes.rows).toHaveLength(1);
+
+    const runRes = await client.query<{ status: string; assembly_job_id: string }>(
+      "SELECT status, assembly_job_id FROM campaign_production_runs WHERE campaign_id = $1",
+      [campaign.campaign_id]
+    );
+    expect(runRes.rows).toHaveLength(1);
+    expect(runRes.rows[0]?.status).toBe("assembling");
+    expect(runRes.rows[0]?.assembly_job_id).toBe(assemblyJobsRes.rows[0]?.job_id);
+
+    await app.close();
+  });
+
+  it("assembly gate: partially accepted run is blocked, and final acceptance enqueues delivery assembly", async () => {
+    const app = createTestApp();
+    const { campaign, scenes } = await setupDispatchedCampaignInQA(app, 2);
+    const scene1 = scenes[0]!;
+    const scene2 = scenes[1]!;
+
+    // 1. Accept only scene 1
+    const res1 = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${scene1.sceneId}/review-command`,
+      payload: {
+        actionId: "01950c46-9e90-7d3d-82d2-8f1d3c000091",
+        sceneId: scene1.sceneId,
+        expectedSpecRevision: 1,
+        action: "production_accept",
+        payload: {
+          expectedProductionJobId: scene1.activeJobId
+        }
+      }
+    });
+    expect(res1.statusCode).toBe(200);
+
+    // Assembly-blocked: run is NOT yet assembling, no delivery assembly jobs exist
+    const assemblyJobsBefore = await client.query(
+      "SELECT job_id FROM delivery_assembly_jobs WHERE campaign_id = $1",
+      [campaign.campaign_id]
+    );
+    expect(assemblyJobsBefore.rows).toHaveLength(0);
+
+    const runBefore = await client.query<{ status: string }>(
+      "SELECT status FROM campaign_production_runs WHERE campaign_id = $1",
+      [campaign.campaign_id]
+    );
+    expect(runBefore.rows[0]?.status).not.toBe("assembling");
+
+    // 2. Accept scene 2 (final required scene)
+    const res2 = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${scene2.sceneId}/review-command`,
+      payload: {
+        actionId: "01950c46-9e90-7d3d-82d2-8f1d3c000092",
+        sceneId: scene2.sceneId,
+        expectedSpecRevision: 1,
+        action: "production_accept",
+        payload: {
+          expectedProductionJobId: scene2.activeJobId
+        }
+      }
+    });
+    expect(res2.statusCode).toBe(200);
+
+    // Fully accepted: exactly one delivery assembly job enqueued
+    const assemblyJobsAfter = await client.query<{
+      job_id: string;
+      assembly_spec: { videoStems: Array<{ sceneId: string }> };
+    }>("SELECT job_id, assembly_spec FROM delivery_assembly_jobs WHERE campaign_id = $1", [
+      campaign.campaign_id
+    ]);
+    expect(assemblyJobsAfter.rows).toHaveLength(1);
+    const jobRow = assemblyJobsAfter.rows[0]!;
+    expect(jobRow.assembly_spec.videoStems).toHaveLength(2);
+    expect(jobRow.assembly_spec.videoStems[0]?.sceneId).toBe(scene1.sceneId);
+    expect(jobRow.assembly_spec.videoStems[1]?.sceneId).toBe(scene2.sceneId);
+
+    // Run transitioned to assembling with assembly_job_id stamped
+    const runAfter = await client.query<{ status: string; assembly_job_id: string }>(
+      "SELECT status, assembly_job_id FROM campaign_production_runs WHERE campaign_id = $1",
+      [campaign.campaign_id]
+    );
+    expect(runAfter.rows[0]?.status).toBe("assembling");
+    expect(runAfter.rows[0]?.assembly_job_id).toBe(jobRow.job_id);
+
+    await app.close();
+  });
+
+  it("fails closed and rolls back acceptance when accepted artifact manifest is missing", async () => {
+    const app = createTestApp();
+    // Do not seed generation manifests
+    const { campaign, scenes } = await setupDispatchedCampaignInQA(app, 1, {
+      seedGenerationManifests: false
+    });
+    const scene1 = scenes[0]!;
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${scene1.sceneId}/review-command`,
+      payload: {
+        actionId: "01950c46-9e90-7d3d-82d2-8f1d3c000093",
+        sceneId: scene1.sceneId,
+        expectedSpecRevision: 1,
+        action: "production_accept",
+        payload: {
+          expectedProductionJobId: scene1.activeJobId
+        }
+      }
+    });
+
+    // Fails with 500 error due to MissingAcceptedProductionManifestError
+    expect(res.statusCode).toBe(500);
+
+    // No delivery assembly jobs enqueued
+    const assemblyJobs = await client.query(
+      "SELECT job_id FROM delivery_assembly_jobs WHERE campaign_id = $1",
+      [campaign.campaign_id]
+    );
+    expect(assemblyJobs.rows).toHaveLength(0);
+
+    // Transaction was rolled back: accepted_attempt_id is null on run scene
+    const runSceneRes = await client.query<{ accepted_attempt_id: string | null }>(
+      "SELECT accepted_attempt_id FROM campaign_production_run_scenes WHERE scene_id = $1",
+      [scene1.sceneId]
+    );
+    expect(runSceneRes.rows[0]?.accepted_attempt_id).toBeNull();
+
+    // Scene status remains in qa (not completed)
+    const sceneRes = await client.query<{ status: string }>(
+      "SELECT status FROM storyboard_scenes WHERE scene_id = $1",
+      [scene1.sceneId]
+    );
+    expect(sceneRes.rows[0]?.status).toBe("qa");
+
+    await app.close();
+  });
+
+  it("rerender-then-accept resolves video stem from the accepted job and does not resurrect stale job", async () => {
+    const app = createTestApp();
+    const { campaign, scenes } = await setupDispatchedCampaignInQA(app, 2);
+    const scene1 = scenes[0]!;
+    const scene2 = scenes[1]!;
+
+    // 1. Accept scene 1
+    const res1 = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${scene1.sceneId}/review-command`,
+      payload: {
+        actionId: "01950c46-9e90-7d3d-82d2-8f1d3c000094",
+        sceneId: scene1.sceneId,
+        expectedSpecRevision: 1,
+        action: "production_accept",
+        payload: {
+          expectedProductionJobId: scene1.activeJobId
+        }
+      }
+    });
+    expect(res1.statusCode).toBe(200);
+
+    // 2. Request rerender for scene 2
+    const rerenderRes = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${scene2.sceneId}/review-command`,
+      payload: {
+        actionId: "01950c46-9e90-7d3d-82d2-8f1d3c000095",
+        sceneId: scene2.sceneId,
+        expectedSpecRevision: 1,
+        action: "production_rerender",
+        payload: {
+          expectedProductionJobId: scene2.activeJobId
+        },
+        directorNotes: "Need more neon glow"
+      }
+    });
+    expect(rerenderRes.statusCode).toBe(200);
+
+    // Get the new rerender job ID from DB
+    const scene2Row = await client.query<{ active_production_job_id: string }>(
+      "SELECT active_production_job_id FROM storyboard_scenes WHERE scene_id = $1",
+      [scene2.sceneId]
+    );
+    const newJobId = scene2Row.rows[0]?.active_production_job_id;
+    expect(newJobId).toBeDefined();
+    expect(newJobId).not.toBe(scene2.activeJobId);
+
+    // Simulate completion of the rerender job: move back to QA and insert new generation manifest
+    await client.query("UPDATE storyboard_scenes SET status = 'qa' WHERE scene_id = $1", [
+      scene2.sceneId
+    ]);
+    const rerenderManifest = await insertGenerationManifestRecord(client, {
+      jobId: newJobId!,
+      campaignId: campaign.campaign_id,
+      sceneId: scene2.sceneId,
+      renderAttempt: 2,
+      manifestPayload: {
+        renderProfile: "VERTICAL_REEL_1080X1920_V1",
+        renderProfileVersion: 1,
+        outputs: [
+          {
+            bucket: "godzspeed-delivery",
+            key: `campaigns/${campaign.campaign_id}/scenes/${scene2.sceneId}/output_attempt2.mp4`,
+            checksumSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            contentType: "video/mp4"
+          }
+        ]
+      }
+    });
+
+    // 3. Accept scene 2 with the new rerender job
+    const res2 = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${scene2.sceneId}/review-command`,
+      payload: {
+        actionId: "01950c46-9e90-7d3d-82d2-8f1d3c000096",
+        sceneId: scene2.sceneId,
+        expectedSpecRevision: 1,
+        action: "production_accept",
+        payload: {
+          expectedProductionJobId: newJobId!
+        }
+      }
+    });
+    expect(res2.statusCode).toBe(200);
+
+    // Assembly spec uses the accepted rerender attempt's manifest, NOT the old attempt's manifest
+    const assemblyRes = await client.query<{
+      assembly_spec: {
+        videoStems: Array<{
+          sceneId: string;
+          generationManifestId: string;
+          media: { key: string };
+        }>;
+      };
+    }>("SELECT assembly_spec FROM delivery_assembly_jobs WHERE campaign_id = $1", [
+      campaign.campaign_id
+    ]);
+    expect(assemblyRes.rows).toHaveLength(1);
+    const stems = assemblyRes.rows[0]?.assembly_spec.videoStems;
+    expect(stems).toHaveLength(2);
+
+    const stem2 = stems?.find((s) => s.sceneId === scene2.sceneId);
+    expect(stem2).toBeDefined();
+    expect(stem2?.generationManifestId).toBe(rerenderManifest.manifest_id);
+    expect(stem2?.media.key).toContain("output_attempt2.mp4");
+
+    await app.close();
+  });
+
+  it("proves ordinal ledger consistency across PostgreSQL campaign_production_attempts and run scenes", async () => {
+    const app = createTestApp();
+    const { campaign, scenes } = await setupDispatchedCampaignInQA(app, 1);
+    const scene1 = scenes[0]!;
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${scene1.sceneId}/review-command`,
+      payload: {
+        actionId: "01950c46-9e90-7d3d-82d2-8f1d3c000097",
+        sceneId: scene1.sceneId,
+        expectedSpecRevision: 1,
+        action: "production_accept",
+        payload: {
+          expectedProductionJobId: scene1.activeJobId
+        }
+      }
+    });
+    expect(res.statusCode).toBe(200);
+
+    // Check that accepted_attempt_ordinal in run_scenes matches ordinal in production_attempts
+    const runSceneRow = await client.query<{
+      accepted_attempt_id: string;
+      accepted_attempt_ordinal: number;
+    }>(
+      "SELECT accepted_attempt_id, accepted_attempt_ordinal FROM campaign_production_run_scenes WHERE scene_id = $1",
+      [scene1.sceneId]
+    );
+    const attemptRow = await client.query<{
+      attempt_id: string;
+      ordinal: number;
+    }>("SELECT attempt_id, ordinal FROM production_attempts WHERE attempt_id = $1", [
+      runSceneRow.rows[0]?.accepted_attempt_id
+    ]);
+
+    expect(runSceneRow.rows[0]?.accepted_attempt_ordinal).toBe(attemptRow.rows[0]?.ordinal);
+
+    // Assembly was enqueued cleanly
+    const assemblyRes = await client.query(
+      "SELECT job_id FROM delivery_assembly_jobs WHERE campaign_id = $1",
+      [campaign.campaign_id]
+    );
+    expect(assemblyRes.rows).toHaveLength(1);
 
     await app.close();
   });
