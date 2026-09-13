@@ -682,7 +682,8 @@ export async function insertDeliveryAssemblyJobRecord(
           contentType: "video/mp4"
         }
       }
-    ]
+    ],
+    subtitleCues: []
   };
   const status = input.status ?? "queued";
   const workerId = input.workerId !== undefined ? input.workerId : "delivery-assembler-01";
