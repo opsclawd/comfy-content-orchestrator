@@ -57,6 +57,7 @@ export interface UpdateLoraInput extends ReviewAuditInput {
 export interface ReviewExecutionResult {
   readonly isIdempotentReplay: boolean;
   readonly scene: SceneSnapshot;
+  readonly acceptedAttemptOrdinal?: number;
 }
 
 export async function applySceneApprovalToScene(
@@ -130,12 +131,62 @@ export async function applySceneApprovalToScene(
   };
 }
 
+export async function prepareReviewExecution(
+  context: UnitOfWorkContext,
+  input: ReviewAuditInput
+): Promise<
+  | { readonly isIdempotentReplay: true; readonly scene: Scene }
+  | { readonly isIdempotentReplay: false; readonly scene: Scene }
+> {
+  // Scene mutations must serialize on the scene row before any other repository
+  // operation. PostgresSceneRepository applies FOR UPDATE for this lookup.
+  const scene = await context.scenes.findById(input.sceneId as SceneId);
+  if (scene === undefined) {
+    throw new SceneNotFoundError(input.sceneId);
+  }
+
+  const existingEvent = await context.reviewEvents.findById(input.eventId);
+  if (existingEvent !== undefined) {
+    if (existingEvent.sceneId !== input.sceneId) {
+      throw new IdempotencyConflictError(input.eventId);
+    }
+
+    if (
+      (input.requestHashSha256 !== undefined || existingEvent.requestHashSha256 !== undefined) &&
+      input.requestHashSha256 !== existingEvent.requestHashSha256
+    ) {
+      throw new IdempotencyConflictError(input.eventId);
+    }
+
+    return {
+      isIdempotentReplay: true,
+      scene
+    };
+  }
+
+  if (
+    input.expectedSpecRevision !== undefined &&
+    scene.snapshot().specRevision !== input.expectedSpecRevision
+  ) {
+    throw new StaleRevisionConflictError(
+      input.sceneId,
+      input.expectedSpecRevision,
+      scene.snapshot().specRevision
+    );
+  }
+
+  return {
+    isIdempotentReplay: false,
+    scene
+  };
+}
+
 export class ReviewSceneUseCases {
   constructor(private readonly uow: UnitOfWork) {}
 
   async selectCandidate(input: SelectCandidateInput): Promise<ReviewExecutionResult> {
     return await this.uow.execute(async (context) => {
-      const prepared = await this.prepareReviewExecution(context, input);
+      const prepared = await prepareReviewExecution(context, input);
       if (prepared.isIdempotentReplay) {
         return {
           isIdempotentReplay: true,
@@ -269,56 +320,6 @@ export class ReviewSceneUseCases {
     return await this.executeReviewAction(input, "cancel", {}, (scene) => scene.cancel());
   }
 
-  private async prepareReviewExecution(
-    context: UnitOfWorkContext,
-    input: ReviewAuditInput
-  ): Promise<
-    | { readonly isIdempotentReplay: true; readonly scene: Scene }
-    | { readonly isIdempotentReplay: false; readonly scene: Scene }
-  > {
-    // Scene mutations must serialize on the scene row before any other repository
-    // operation. PostgresSceneRepository applies FOR UPDATE for this lookup.
-    const scene = await context.scenes.findById(input.sceneId as SceneId);
-    if (scene === undefined) {
-      throw new SceneNotFoundError(input.sceneId);
-    }
-
-    const existingEvent = await context.reviewEvents.findById(input.eventId);
-    if (existingEvent !== undefined) {
-      if (existingEvent.sceneId !== input.sceneId) {
-        throw new IdempotencyConflictError(input.eventId);
-      }
-
-      if (
-        (input.requestHashSha256 !== undefined || existingEvent.requestHashSha256 !== undefined) &&
-        input.requestHashSha256 !== existingEvent.requestHashSha256
-      ) {
-        throw new IdempotencyConflictError(input.eventId);
-      }
-
-      return {
-        isIdempotentReplay: true,
-        scene
-      };
-    }
-
-    if (
-      input.expectedSpecRevision !== undefined &&
-      scene.snapshot().specRevision !== input.expectedSpecRevision
-    ) {
-      throw new StaleRevisionConflictError(
-        input.sceneId,
-        input.expectedSpecRevision,
-        scene.snapshot().specRevision
-      );
-    }
-
-    return {
-      isIdempotentReplay: false,
-      scene
-    };
-  }
-
   private async executeReviewAction(
     input: ReviewAuditInput,
     action: ReviewAction,
@@ -327,7 +328,7 @@ export class ReviewSceneUseCases {
     enqueueCandidates = false
   ): Promise<ReviewExecutionResult> {
     return await this.uow.execute(async (context) => {
-      const prepared = await this.prepareReviewExecution(context, input);
+      const prepared = await prepareReviewExecution(context, input);
       if (prepared.isIdempotentReplay) {
         return {
           isIdempotentReplay: true,

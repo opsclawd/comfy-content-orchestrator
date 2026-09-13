@@ -25,7 +25,9 @@ const REVIEW_ACTION_LABELS: Record<ReviewAction, string> = {
   reorder: "Reorder",
   duplicate: "Duplicate",
   cancel: "Cancel",
-  candidate_select: "Select Candidate"
+  candidate_select: "Select Candidate",
+  production_accept: "Accept Production",
+  production_rerender: "Re-render Production"
 };
 
 export function formatSceneStatus(status: SceneStatus): string {

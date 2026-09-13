@@ -6,6 +6,7 @@ import {
   SCENE_STATUSES,
   Scene,
   TerminalStateError,
+  AlreadyAcceptedProductionAttemptError,
   type CampaignId,
   type CandidateId,
   type SceneApprovalInput,
@@ -1516,6 +1517,167 @@ describe("Scene domain contracts", () => {
       const restored = Scene.reconstitute(scene.snapshot());
       expect(restored.sequenceIndex).toBe(4);
       expect(restored.snapshot().sequenceIndex).toBe(4);
+    });
+
+    describe("production review attempt-fenced transitions", () => {
+      function createSceneInQA(): Scene {
+        const scene = Scene.create({
+          id: "scene-qa-1" as SceneId,
+          campaignId: "campaign-1" as CampaignId,
+          configuration: {
+            prompt: "Test prompt",
+            referenceIds: [],
+            engineProfileId: "ltx-2.5@certified-v1",
+            durationMs: 4000
+          }
+        });
+        scene.beginCandidateGeneration();
+        scene.submitCandidatesForReview();
+        scene.selectCandidate("cand-1" as CandidateId, 1, scene.id);
+        scene.approve({ approvedBy: "director-1", approvedAt: "2026-08-15T00:00:00.000Z" });
+        scene.queueForProduction("job-1");
+        scene.startRendering();
+        scene.submitForQA();
+        return scene;
+      }
+
+      it("requestProductionRerender transitions qa -> queued, increments ordinal, updates active job, preserves approval and candidate", () => {
+        const scene = createSceneInQA();
+        expect(scene.status).toBe("qa");
+        expect(scene.snapshot().productionAttemptOrdinal).toBe(1);
+        expect(scene.snapshot().activeProductionJobId).toBe("job-1");
+        expect(scene.snapshot().specRevision).toBe(1);
+        expect(scene.snapshot().selectedCandidateId).toBe("cand-1");
+
+        const transition = scene.requestProductionRerender("job-2");
+
+        expect(transition).toEqual({
+          sceneId: scene.id,
+          from: "qa",
+          to: "queued",
+          revision: 1,
+          reason: "production_rerender_requested"
+        });
+
+        const snap = scene.snapshot();
+        expect(snap.status).toBe("queued");
+        expect(snap.activeProductionJobId).toBe("job-2");
+        expect(snap.productionAttemptOrdinal).toBe(2);
+        expect(snap.specRevision).toBe(1);
+        expect(snap.approval).toBeDefined();
+        expect(snap.approval?.revision).toBe(1);
+        expect(snap.selectedCandidateId).toBe("cand-1");
+        expect(snap.selectedCandidateRevision).toBe(1);
+        expect(snap.acceptedProductionAttemptId).toBeUndefined();
+      });
+
+      it("requestProductionRerender fails from non-qa and terminal states", () => {
+        const draftScene = Scene.create({
+          id: "scene-draft-1" as SceneId,
+          campaignId: "campaign-1" as CampaignId,
+          configuration: {
+            prompt: "Test prompt",
+            referenceIds: [],
+            engineProfileId: "ltx-2.5@certified-v1",
+            durationMs: 4000
+          }
+        });
+        expect(() => draftScene.requestProductionRerender("job-x")).toThrow(InvalidTransitionError);
+
+        const scene = createSceneInQA();
+        scene.acceptQA();
+        expect(() => scene.requestProductionRerender("job-x")).toThrow(TerminalStateError);
+
+        const cancelledScene = createSceneInQA();
+        cancelledScene.rejectQA();
+        cancelledScene.cancel();
+        expect(() => cancelledScene.requestProductionRerender("job-x")).toThrow(TerminalStateError);
+      });
+
+      it("acceptProductionAttempt transitions qa -> completed with reason production_accepted and sets acceptedAttemptId", () => {
+        const scene = createSceneInQA();
+        expect(scene.status).toBe("qa");
+
+        const transition = scene.acceptProductionAttempt("attempt-uuid-1");
+
+        expect(transition).toEqual({
+          sceneId: scene.id,
+          from: "qa",
+          to: "completed",
+          revision: 1,
+          reason: "production_accepted"
+        });
+
+        const snap = scene.snapshot();
+        expect(snap.status).toBe("completed");
+        expect(snap.acceptedProductionAttemptId).toBe("attempt-uuid-1");
+        expect(snap.activeProductionJobId).toBe("job-1");
+        expect(snap.productionAttemptOrdinal).toBe(1);
+      });
+
+      it("acceptProductionAttempt throws AlreadyAcceptedProductionAttemptError if already accepted", () => {
+        const scene = createSceneInQA();
+        scene.acceptProductionAttempt("attempt-uuid-1");
+
+        expect(() => scene.acceptProductionAttempt("attempt-uuid-2")).toThrow(
+          AlreadyAcceptedProductionAttemptError
+        );
+      });
+
+      it("acceptProductionAttempt throws InvalidTransitionError from non-qa state", () => {
+        const scene = Scene.create({
+          id: "scene-test-1" as SceneId,
+          campaignId: "campaign-1" as CampaignId,
+          configuration: {
+            prompt: "Test prompt",
+            referenceIds: [],
+            engineProfileId: "ltx-2.5@certified-v1",
+            durationMs: 4000
+          }
+        });
+        expect(() => scene.acceptProductionAttempt("attempt-1")).toThrow(InvalidTransitionError);
+      });
+
+      it("queueForProduction tracks ordinal across initial dispatch and failure recovery", () => {
+        const scene = Scene.create({
+          id: "scene-ord-1" as SceneId,
+          campaignId: "campaign-1" as CampaignId,
+          configuration: {
+            prompt: "Test prompt",
+            referenceIds: [],
+            engineProfileId: "ltx-2.5@certified-v1",
+            durationMs: 4000
+          }
+        });
+        expect(scene.snapshot().productionAttemptOrdinal).toBeUndefined();
+
+        scene.beginCandidateGeneration();
+        scene.submitCandidatesForReview();
+        scene.selectCandidate("cand-1" as CandidateId, 1, scene.id);
+        scene.approve({ approvedBy: "director", approvedAt: "2026-08-15T00:00:00.000Z" });
+
+        scene.queueForProduction("job-1");
+        expect(scene.snapshot().productionAttemptOrdinal).toBe(1);
+
+        scene.startRendering();
+        scene.fail();
+        expect(scene.status).toBe("failed");
+
+        scene.queueForProduction("job-2");
+        expect(scene.status).toBe("queued");
+        expect(scene.snapshot().productionAttemptOrdinal).toBe(2);
+      });
+
+      it("reconstitute preserves productionAttemptOrdinal and acceptedProductionAttemptId", () => {
+        const scene = createSceneInQA();
+        scene.acceptProductionAttempt("attempt-accepted-1");
+        const snap = scene.snapshot();
+
+        const restored = Scene.reconstitute(snap);
+        expect(restored.snapshot()).toEqual(snap);
+        expect(restored.snapshot().productionAttemptOrdinal).toBe(1);
+        expect(restored.snapshot().acceptedProductionAttemptId).toBe("attempt-accepted-1");
+      });
     });
   });
 });

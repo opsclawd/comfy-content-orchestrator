@@ -1,6 +1,8 @@
 export * from "./scene-not-found-error.js";
 export * from "./candidate-not-found-error.js";
 export * from "./stale-revision-conflict-error.js";
+export * from "./stale-production-attempt-conflict-error.js";
+export * from "./scene-not-in-production-run-error.js";
 export * from "./idempotency-conflict-error.js";
 export * from "./review-scene.js";
 export * from "./progress-scene-production.js";
@@ -55,3 +57,4 @@ export * from "./storyboard-partially-materialized-error.js";
 export * from "./storyboard-materialization-conflict-error.js";
 export * from "./materialize-storyboard.js";
 export * from "./plan-campaign-storyboard.js";
+export * from "./production-review.js";

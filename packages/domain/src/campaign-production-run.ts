@@ -31,6 +31,11 @@ export interface CampaignProductionRunSceneRecord {
   readonly sequenceIndex: number;
   readonly expectedDurationMs: number;
   readonly productionJobId?: string | undefined;
+  readonly currentAttemptId?: string | undefined;
+  readonly currentAttemptOrdinal?: number | undefined;
+  readonly acceptedAttemptId?: string | undefined;
+  readonly acceptedProductionJobId?: string | undefined;
+  readonly acceptedAttemptOrdinal?: number | undefined;
 }
 
 /**

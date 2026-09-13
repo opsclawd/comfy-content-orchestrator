@@ -324,7 +324,7 @@ describe("PostgreSQL audit immutability and application-role privileges integrat
       has_delete: false
     });
 
-    // Check privileges on campaign_production_run_scenes (immutable membership table)
+    // Check privileges on campaign_production_run_scenes (mutable run membership table)
 
     const cprsPrivsRes = await client.query<{
       has_select: boolean;
@@ -339,6 +339,26 @@ describe("PostgreSQL audit immutability and application-role privileges integrat
         has_table_privilege('orchestrator_app', 'campaign_production_run_scenes', 'DELETE') AS has_delete`
     );
     expect(cprsPrivsRes.rows[0]).toEqual({
+      has_select: true,
+      has_insert: true,
+      has_update: true,
+      has_delete: false
+    });
+
+    // Check privileges on production_attempts (immutable audit lineage table)
+    const paPrivsRes = await client.query<{
+      has_select: boolean;
+      has_insert: boolean;
+      has_update: boolean;
+      has_delete: boolean;
+    }>(
+      `SELECT
+        has_table_privilege('orchestrator_app', 'production_attempts', 'SELECT') AS has_select,
+        has_table_privilege('orchestrator_app', 'production_attempts', 'INSERT') AS has_insert,
+        has_table_privilege('orchestrator_app', 'production_attempts', 'UPDATE') AS has_update,
+        has_table_privilege('orchestrator_app', 'production_attempts', 'DELETE') AS has_delete`
+    );
+    expect(paPrivsRes.rows[0]).toEqual({
       has_select: true,
       has_insert: true,
       has_update: false,
@@ -372,7 +392,7 @@ describe("PostgreSQL audit immutability and application-role privileges integrat
     // Verify migration succeeds when no application role is configured
     await client.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public;");
     const noRoleApplied = await runMigrations(client, { migrationsDirectory });
-    expect(noRoleApplied).toHaveLength(14);
+    expect(noRoleApplied).toHaveLength(15);
   });
 
   it("fails closed when application role has effective UPDATE or DELETE privilege on storyboard_candidates", async () => {

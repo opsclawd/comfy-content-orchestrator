@@ -31,6 +31,8 @@ interface StoryboardSceneRow {
   approved_revision: number | null;
   failed_from: string | null;
   active_production_job_id: string | null;
+  production_attempt_ordinal: number | null;
+  accepted_production_attempt_id: string | null;
   created_at: Date | string;
   updated_at: Date | string;
   archived_at: Date | string | null;
@@ -88,7 +90,15 @@ function mapRowToScene(row: StoryboardSceneRow): Scene {
     ...(row.selected_candidate_revision != null
       ? { selectedCandidateRevision: Number(row.selected_candidate_revision) }
       : {}),
-    ...(row.active_production_job_id ? { activeProductionJobId: row.active_production_job_id } : {})
+    ...(row.active_production_job_id
+      ? { activeProductionJobId: row.active_production_job_id }
+      : {}),
+    ...(row.production_attempt_ordinal != null && Number(row.production_attempt_ordinal) > 0
+      ? { productionAttemptOrdinal: Number(row.production_attempt_ordinal) }
+      : {}),
+    ...(row.accepted_production_attempt_id
+      ? { acceptedProductionAttemptId: row.accepted_production_attempt_id }
+      : {})
   };
 
   return Scene.reconstitute(snapshot);
@@ -137,6 +147,8 @@ export class PostgresSceneRepository implements SceneRepository {
         s.approved_revision,
         s.failed_from,
         s.active_production_job_id,
+        s.production_attempt_ordinal,
+        s.accepted_production_attempt_id,
         s.created_at,
         s.updated_at,
         s.archived_at,
@@ -202,6 +214,8 @@ export class PostgresSceneRepository implements SceneRepository {
         s.approved_revision,
         s.failed_from,
         s.active_production_job_id,
+        s.production_attempt_ordinal,
+        s.accepted_production_attempt_id,
         s.created_at,
         s.updated_at,
         s.archived_at,
@@ -267,6 +281,8 @@ export class PostgresSceneRepository implements SceneRepository {
     const selectedCandidateRevision = snapshot.selectedCandidateRevision ?? null;
     const failedFrom = snapshot.failedFrom ?? null;
     const activeProductionJobId = snapshot.activeProductionJobId ?? null;
+    const productionAttemptOrdinal = snapshot.productionAttemptOrdinal ?? 0;
+    const acceptedProductionAttemptId = snapshot.acceptedProductionAttemptId ?? null;
 
     const updateResult = await client.query(
       `
@@ -285,6 +301,8 @@ export class PostgresSceneRepository implements SceneRepository {
         approved_revision = $12,
         failed_from = $13,
         active_production_job_id = $14,
+        production_attempt_ordinal = $15,
+        accepted_production_attempt_id = $16,
         updated_at = CURRENT_TIMESTAMP
       WHERE scene_id = $1
       `,
@@ -302,7 +320,9 @@ export class PostgresSceneRepository implements SceneRepository {
         approvedAt,
         approvedRevision,
         failedFrom,
-        activeProductionJobId
+        activeProductionJobId,
+        productionAttemptOrdinal,
+        acceptedProductionAttemptId
       ]
     );
 
@@ -331,6 +351,8 @@ export class PostgresSceneRepository implements SceneRepository {
           approved_revision,
           failed_from,
           active_production_job_id,
+          production_attempt_ordinal,
+          accepted_production_attempt_id,
           updated_at
         ) VALUES (
           $1,
@@ -350,6 +372,8 @@ export class PostgresSceneRepository implements SceneRepository {
           $14,
           $15,
           $16,
+          $17,
+          $18,
           CURRENT_TIMESTAMP
         )
         `,
@@ -369,7 +393,9 @@ export class PostgresSceneRepository implements SceneRepository {
           approvedAt,
           approvedRevision,
           failedFrom,
-          activeProductionJobId
+          activeProductionJobId,
+          productionAttemptOrdinal,
+          acceptedProductionAttemptId
         ]
       );
     }

@@ -63,20 +63,29 @@ function createMockCampaign(id: string, totalScenes: number = 3): CampaignRecord
   };
 }
 
-function createMockCampaignProductionRuns(): CampaignProductionRunRepository {
+function createMockCampaignProductionRuns(
+  overrides?: Partial<CampaignProductionRunRepository>
+): CampaignProductionRunRepository {
   return {
     createIfAbsent: vi.fn(),
     insertRunScenes: vi.fn(),
     findById: vi.fn(),
+    findByIdForUpdate: vi.fn(),
     findByAssemblyJobId: vi.fn(),
     findRunScenes: vi.fn(),
+    findRunSceneBySceneId: vi.fn(),
     findRunSceneByProductionJobId: vi.fn(),
+    recordProductionAttempt: vi.fn(),
+    findAttemptByProductionJobId: vi.fn(),
+    updateCurrentAttempt: vi.fn(),
+    recordAcceptedAttempt: vi.fn(),
     countIncompleteRunScenes: vi.fn(),
     claimForProductionReview: vi.fn(),
     claimForAssembly: vi.fn(),
     setAssemblyJobId: vi.fn(),
     claimCompletion: vi.fn(),
-    claimFailure: vi.fn()
+    claimFailure: vi.fn(),
+    ...overrides
   };
 }
 
@@ -120,7 +129,7 @@ describe("ApproveSceneAndDispatchCampaignProductionUseCase", () => {
       })
     };
 
-    const mockRunsRepo: CampaignProductionRunRepository = {
+    const mockRunsRepo: CampaignProductionRunRepository = createMockCampaignProductionRuns({
       createIfAbsent: vi.fn(async (input) => {
         callOrder.push("runs.createIfAbsent");
         const run: CampaignProductionRunRecord = {
@@ -136,18 +145,8 @@ describe("ApproveSceneAndDispatchCampaignProductionUseCase", () => {
       }),
       insertRunScenes: vi.fn(async () => {
         callOrder.push("runs.insertRunScenes");
-      }),
-      findById: vi.fn(),
-      findByAssemblyJobId: vi.fn(),
-      findRunScenes: vi.fn(async () => []),
-      findRunSceneByProductionJobId: vi.fn(),
-      countIncompleteRunScenes: vi.fn(async () => 0),
-      claimForProductionReview: vi.fn(),
-      claimForAssembly: vi.fn(),
-      setAssemblyJobId: vi.fn(),
-      claimCompletion: vi.fn(),
-      claimFailure: vi.fn()
-    };
+      })
+    });
 
     const mockReviewEvents: ReviewEventStore = {
       findById: vi.fn(async () => undefined),
@@ -326,20 +325,10 @@ describe("ApproveSceneAndDispatchCampaignProductionUseCase", () => {
       transitionStatusIf: vi.fn(async () => true)
     };
 
-    const mockRunsRepo: CampaignProductionRunRepository = {
-      createIfAbsent: vi.fn(),
-      insertRunScenes: vi.fn(),
-      findById: vi.fn(),
-      findByAssemblyJobId: vi.fn(),
+    const mockRunsRepo: CampaignProductionRunRepository = createMockCampaignProductionRuns({
       findRunScenes: vi.fn(async () => []),
-      findRunSceneByProductionJobId: vi.fn(),
-      countIncompleteRunScenes: vi.fn(async () => 0),
-      claimForProductionReview: vi.fn(),
-      claimForAssembly: vi.fn(),
-      setAssemblyJobId: vi.fn(),
-      claimCompletion: vi.fn(),
-      claimFailure: vi.fn()
-    };
+      countIncompleteRunScenes: vi.fn(async () => 0)
+    });
 
     const mockUow: UnitOfWork = {
       execute: vi.fn(async (work) =>
@@ -436,7 +425,7 @@ describe("ApproveSceneAndDispatchCampaignProductionUseCase", () => {
       })
     };
 
-    const mockRunsRepo: CampaignProductionRunRepository = {
+    const mockRunsRepo: CampaignProductionRunRepository = createMockCampaignProductionRuns({
       createIfAbsent: vi.fn(async (input) => {
         const run: CampaignProductionRunRecord = {
           id: "run-immut-1",
@@ -450,17 +439,9 @@ describe("ApproveSceneAndDispatchCampaignProductionUseCase", () => {
         return { run, created: true };
       }),
       insertRunScenes: vi.fn(async () => {}),
-      findById: vi.fn(),
-      findByAssemblyJobId: vi.fn(),
       findRunScenes: vi.fn(async () => []),
-      findRunSceneByProductionJobId: vi.fn(),
-      countIncompleteRunScenes: vi.fn(async () => 0),
-      claimForProductionReview: vi.fn(),
-      claimForAssembly: vi.fn(),
-      setAssemblyJobId: vi.fn(),
-      claimCompletion: vi.fn(),
-      claimFailure: vi.fn()
-    };
+      countIncompleteRunScenes: vi.fn(async () => 0)
+    });
 
     const mockCandidates: StoryboardCandidateRepository = {
       findById: vi.fn(
@@ -657,7 +638,7 @@ describe("ApproveSceneAndDispatchCampaignProductionUseCase", () => {
     };
 
     const createdRuns: CampaignProductionRunRecord[] = [];
-    const mockRunsRepo: CampaignProductionRunRepository = {
+    const mockRunsRepo: CampaignProductionRunRepository = createMockCampaignProductionRuns({
       createIfAbsent: vi.fn(async (input) => {
         const run: CampaignProductionRunRecord = {
           id: `run-${createdRuns.length + 1}`,
@@ -672,17 +653,9 @@ describe("ApproveSceneAndDispatchCampaignProductionUseCase", () => {
         return { run, created: true };
       }),
       insertRunScenes: vi.fn(async () => {}),
-      findById: vi.fn(),
-      findByAssemblyJobId: vi.fn(),
       findRunScenes: vi.fn(async () => []),
-      findRunSceneByProductionJobId: vi.fn(),
-      countIncompleteRunScenes: vi.fn(async () => 0),
-      claimForProductionReview: vi.fn(),
-      claimForAssembly: vi.fn(),
-      setAssemblyJobId: vi.fn(),
-      claimCompletion: vi.fn(),
-      claimFailure: vi.fn()
-    };
+      countIncompleteRunScenes: vi.fn(async () => 0)
+    });
 
     const mockCandidates: StoryboardCandidateRepository = {
       findById: vi.fn(

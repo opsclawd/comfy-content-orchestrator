@@ -25,6 +25,7 @@ import type {
   SceneRepository,
   StoryboardCandidateRepository,
   EnqueueJobInput,
+  ProductionAttemptRecord,
   UnitOfWork,
   UnitOfWorkContext
 } from "@cco/application";
@@ -77,6 +78,19 @@ class InMemorySceneUnitOfWork implements UnitOfWork {
   private _campaign: CampaignRecord;
   private readonly _createdRuns: CampaignProductionRunRecord[] = [];
   private readonly _runScenes: CampaignProductionRunSceneRecord[] = [];
+  private readonly _attempts = new Map<string, ProductionAttemptRecord>();
+
+  seedRun(
+    run: CampaignProductionRunRecord,
+    scenes: CampaignProductionRunSceneRecord[],
+    attempt?: ProductionAttemptRecord
+  ): void {
+    this._createdRuns.push(run);
+    this._runScenes.push(...scenes);
+    if (attempt) {
+      this._attempts.set(attempt.productionJobId, attempt);
+    }
+  }
 
   constructor(
     seededScenes?: Iterable<Scene> | ReadonlyMap<SceneId, Scene> | Record<string, Scene>,
@@ -294,10 +308,52 @@ class InMemorySceneUnitOfWork implements UnitOfWork {
         insertRunScenes: async (_runId, scenes) => {
           stagedRunScenes.push(...scenes);
         },
-        findById: async () => undefined,
+        findById: async (runId) =>
+          this._createdRuns.find((r) => r.id === runId) ?? stagedRuns.find((r) => r.id === runId),
         findByAssemblyJobId: async () => undefined,
-        findRunScenes: async () => [],
-        findRunSceneByProductionJobId: async () => undefined,
+        findByIdForUpdate: async (runId) =>
+          this._createdRuns.find((r) => r.id === runId) ?? stagedRuns.find((r) => r.id === runId),
+        findRunSceneBySceneId: async (sceneId) =>
+          this._runScenes.find((s) => s.sceneId === sceneId) ??
+          stagedRunScenes.find((s) => s.sceneId === sceneId),
+        recordProductionAttempt: async (input) => {
+          const attempt: ProductionAttemptRecord = {
+            ...input,
+            attemptId: `attempt-${input.productionJobId}`,
+            createdAt: new Date().toISOString()
+          };
+          this._attempts.set(input.productionJobId, attempt);
+          return attempt;
+        },
+        findAttemptByProductionJobId: async (jobId) => this._attempts.get(jobId),
+        updateCurrentAttempt: async (runId, sceneId, attempt) => {
+          const rs =
+            this._runScenes.find((s) => s.runId === runId && s.sceneId === sceneId) ??
+            stagedRunScenes.find((s) => s.runId === runId && s.sceneId === sceneId);
+          if (rs) {
+            (rs as { currentAttemptId?: string }).currentAttemptId = attempt.attemptId;
+            (rs as { currentAttemptOrdinal?: number }).currentAttemptOrdinal =
+              attempt.attemptOrdinal;
+            (rs as { productionJobId?: string }).productionJobId = attempt.productionJobId;
+          }
+        },
+        recordAcceptedAttempt: async (runId, sceneId, attempt) => {
+          const rs =
+            this._runScenes.find((s) => s.runId === runId && s.sceneId === sceneId) ??
+            stagedRunScenes.find((s) => s.runId === runId && s.sceneId === sceneId);
+          if (!rs) return { accepted: false };
+          if (rs.acceptedAttemptId !== undefined) return { accepted: false };
+          (rs as { acceptedAttemptId?: string }).acceptedAttemptId = attempt.attemptId;
+          (rs as { acceptedAttemptOrdinal?: number }).acceptedAttemptOrdinal =
+            attempt.attemptOrdinal;
+          (rs as { acceptedProductionJobId?: string }).acceptedProductionJobId =
+            attempt.productionJobId;
+          return { accepted: true };
+        },
+        findRunScenes: async () => [...this._runScenes, ...stagedRunScenes],
+        findRunSceneByProductionJobId: async (jobId) =>
+          this._runScenes.find((s) => s.productionJobId === jobId) ??
+          stagedRunScenes.find((s) => s.productionJobId === jobId),
         countIncompleteRunScenes: async () => 0,
         claimForProductionReview: async () => undefined,
         claimForAssembly: async () => undefined,
@@ -1059,5 +1115,337 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
     const body = response.json() as ReviewErrorResponse;
     expect(body.code).toBe("NOT_FOUND");
     expect(body.message).toContain("Scene");
+  });
+
+  it("production_accept: succeeds with 200 and returns accepted attempt metadata", async () => {
+    const jobUuid = "11111111-1111-4111-8111-111111111111";
+    const runUuid = "22222222-2222-4222-8222-222222222222";
+    const scene = Scene.reconstitute({
+      id: sceneUuid,
+      campaignId: campaignUuid,
+      status: "qa",
+      specRevision: 1,
+      activeProductionJobId: jobUuid,
+      productionAttemptOrdinal: 1,
+      configuration: {
+        prompt: "A cinematic shot of a mountain sunrise",
+        referenceIds: [],
+        engineProfileId: "ltx_25",
+        durationMs: 5000
+      }
+    });
+
+    const jobs = new TestJobQueue();
+    const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, jobs);
+    uow.seedRun(
+      {
+        id: runUuid,
+        campaignId: campaignUuid,
+        fingerprint: "fp",
+        status: "dispatched",
+        expectedTotalDurationMs: 5000,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      [
+        {
+          runId: runUuid,
+          sceneId: sceneUuid,
+          specRevision: 1,
+          sequenceIndex: 1,
+          expectedDurationMs: 5000,
+          productionJobId: jobUuid,
+          currentAttemptId: "attempt-uuid-1",
+          currentAttemptOrdinal: 1
+        }
+      ],
+      {
+        attemptId: "attempt-uuid-1",
+        sceneId: sceneUuid,
+        runId: runUuid,
+        ordinal: 1,
+        productionJobId: jobUuid,
+        specRevision: 1,
+        seed: 42,
+        createdReason: "initial_dispatch",
+        createdAt: new Date().toISOString()
+      }
+    );
+
+    const app = createControlApiApp({ uow }, defaultTestOptions);
+
+    const command: ReviewCommand = {
+      actionId: actionUuid,
+      sceneId: sceneUuid,
+      expectedSpecRevision: 1,
+      action: "production_accept",
+      payload: {
+        expectedProductionJobId: jobUuid
+      }
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${sceneUuid}/review-command`,
+      payload: command
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as ReviewCommandResponse;
+    expect(body.sceneId).toBe(sceneUuid);
+    expect(body.status).toBe("completed");
+    expect(body.acceptedProductionAttemptId).toBe("attempt-uuid-1");
+  });
+
+  it("production_accept: returns 409 STALE_PRODUCTION_ATTEMPT_CONFLICT when expectedProductionJobId does not match active attempt", async () => {
+    const activeJobUuid = "11111111-1111-4111-8111-111111111111";
+    const staleJobUuid = "99999999-9999-4999-8999-999999999999";
+    const runUuid = "22222222-2222-4222-8222-222222222222";
+    const scene = Scene.reconstitute({
+      id: sceneUuid,
+      campaignId: campaignUuid,
+      status: "qa",
+      specRevision: 1,
+      activeProductionJobId: activeJobUuid,
+      productionAttemptOrdinal: 2,
+      configuration: {
+        prompt: "A cinematic shot of a mountain sunrise",
+        referenceIds: [],
+        engineProfileId: "ltx_25",
+        durationMs: 5000
+      }
+    });
+
+    const jobs = new TestJobQueue();
+    const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, jobs);
+    uow.seedRun(
+      {
+        id: runUuid,
+        campaignId: campaignUuid,
+        fingerprint: "fp",
+        status: "dispatched",
+        expectedTotalDurationMs: 5000,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      [
+        {
+          runId: runUuid,
+          sceneId: sceneUuid,
+          specRevision: 1,
+          sequenceIndex: 1,
+          expectedDurationMs: 5000,
+          productionJobId: activeJobUuid,
+          currentAttemptId: "attempt-uuid-2",
+          currentAttemptOrdinal: 2
+        }
+      ]
+    );
+
+    const app = createControlApiApp({ uow }, defaultTestOptions);
+
+    const command: ReviewCommand = {
+      actionId: actionUuid,
+      sceneId: sceneUuid,
+      expectedSpecRevision: 1,
+      action: "production_accept",
+      payload: {
+        expectedProductionJobId: staleJobUuid
+      }
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${sceneUuid}/review-command`,
+      payload: command
+    });
+
+    expect(response.statusCode).toBe(409);
+    const body = response.json() as ReviewErrorResponse;
+    expect(body.code).toBe("STALE_PRODUCTION_ATTEMPT_CONFLICT");
+  });
+
+  it("production_accept: returns 422 SCENE_NOT_IN_PRODUCTION_RUN when scene is not part of a run", async () => {
+    const jobUuid = "11111111-1111-4111-8111-111111111111";
+    const scene = Scene.reconstitute({
+      id: sceneUuid,
+      campaignId: campaignUuid,
+      status: "qa",
+      specRevision: 1,
+      activeProductionJobId: jobUuid,
+      productionAttemptOrdinal: 1,
+      configuration: {
+        prompt: "A cinematic shot of a mountain sunrise",
+        referenceIds: [],
+        engineProfileId: "ltx_25",
+        durationMs: 5000
+      }
+    });
+
+    // UOW without run seeded
+    const uow = new InMemorySceneUnitOfWork([scene]);
+    const app = createControlApiApp({ uow }, defaultTestOptions);
+
+    const command: ReviewCommand = {
+      actionId: actionUuid,
+      sceneId: sceneUuid,
+      expectedSpecRevision: 1,
+      action: "production_accept",
+      payload: {
+        expectedProductionJobId: jobUuid
+      }
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${sceneUuid}/review-command`,
+      payload: command
+    });
+
+    expect(response.statusCode).toBe(422);
+    const body = response.json() as ReviewErrorResponse;
+    expect(body.code).toBe("SCENE_NOT_IN_PRODUCTION_RUN");
+  });
+
+  it("production_rerender: succeeds with 200, enqueues new job, and updates activeProductionJobId", async () => {
+    const jobUuid = "11111111-1111-4111-8111-111111111111";
+    const runUuid = "22222222-2222-4222-8222-222222222222";
+    const scene = Scene.reconstitute({
+      id: sceneUuid,
+      campaignId: campaignUuid,
+      status: "qa",
+      specRevision: 1,
+      selectedCandidateId: candidateUuid,
+      selectedCandidateRevision: 1,
+      activeProductionJobId: jobUuid,
+      productionAttemptOrdinal: 1,
+      configuration: {
+        prompt: "A cinematic shot of a mountain sunrise",
+        referenceIds: [],
+        engineProfileId: "ltx_25",
+        durationMs: 4042
+      }
+    });
+
+    const jobs = new TestJobQueue();
+    const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, jobs);
+    uow.seedRun(
+      {
+        id: runUuid,
+        campaignId: campaignUuid,
+        fingerprint: "fp",
+        status: "dispatched",
+        expectedTotalDurationMs: 4042,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      [
+        {
+          runId: runUuid,
+          sceneId: sceneUuid,
+          specRevision: 1,
+          sequenceIndex: 1,
+          expectedDurationMs: 4042,
+          productionJobId: jobUuid,
+          currentAttemptId: "attempt-uuid-1",
+          currentAttemptOrdinal: 1
+        }
+      ]
+    );
+
+    const app = createControlApiApp({ uow }, defaultTestOptions);
+
+    const command: ReviewCommand = {
+      actionId: actionUuid,
+      sceneId: sceneUuid,
+      expectedSpecRevision: 1,
+      action: "production_rerender",
+      payload: {
+        expectedProductionJobId: jobUuid
+      }
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${sceneUuid}/review-command`,
+      payload: command
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as ReviewCommandResponse;
+    expect(body.sceneId).toBe(sceneUuid);
+    expect(body.status).toBe("queued");
+    expect(body.productionAttemptOrdinal).toBe(2);
+    expect(body.activeProductionJobId).toBeDefined();
+    expect(body.activeProductionJobId).not.toBe(jobUuid);
+  });
+
+  it("production_rerender: returns 409 STALE_PRODUCTION_ATTEMPT_CONFLICT when expectedProductionJobId does not match active attempt", async () => {
+    const jobUuid = "11111111-1111-4111-8111-111111111111";
+    const runUuid = "22222222-2222-4222-8222-222222222222";
+    const scene = Scene.reconstitute({
+      id: sceneUuid,
+      campaignId: campaignUuid,
+      status: "qa",
+      specRevision: 1,
+      selectedCandidateId: candidateUuid,
+      selectedCandidateRevision: 1,
+      activeProductionJobId: jobUuid,
+      productionAttemptOrdinal: 1,
+      configuration: {
+        prompt: "A cinematic shot of a mountain sunrise",
+        referenceIds: [],
+        engineProfileId: "ltx_25",
+        durationMs: 4042
+      }
+    });
+
+    const jobs = new TestJobQueue();
+    const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, jobs);
+    uow.seedRun(
+      {
+        id: runUuid,
+        campaignId: campaignUuid,
+        fingerprint: "fp",
+        status: "dispatched",
+        expectedTotalDurationMs: 4042,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      [
+        {
+          runId: runUuid,
+          sceneId: sceneUuid,
+          specRevision: 1,
+          sequenceIndex: 1,
+          expectedDurationMs: 4042,
+          productionJobId: jobUuid,
+          currentAttemptId: "attempt-uuid-1",
+          currentAttemptOrdinal: 1
+        }
+      ]
+    );
+
+    const app = createControlApiApp({ uow }, defaultTestOptions);
+
+    const command: ReviewCommand = {
+      actionId: actionUuid,
+      sceneId: sceneUuid,
+      expectedSpecRevision: 1,
+      action: "production_rerender",
+      payload: {
+        expectedProductionJobId: "99999999-9999-4999-8999-999999999999"
+      }
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${sceneUuid}/review-command`,
+      payload: command
+    });
+
+    expect(response.statusCode).toBe(409);
+    const body = response.json() as ReviewErrorResponse;
+    expect(body.code).toBe("STALE_PRODUCTION_ATTEMPT_CONFLICT");
   });
 });

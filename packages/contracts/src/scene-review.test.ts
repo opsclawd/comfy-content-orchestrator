@@ -30,6 +30,9 @@ import {
   LoraTuneCommandSchema,
   CancelCommandSchema,
   RejectCommandSchema,
+  ProductionAcceptCommandSchema,
+  ProductionRerenderCommandSchema,
+  ProductionAttemptFencePayloadSchema,
   CandidateSelectPayloadSchema,
   PromptEditPayloadSchema,
   ReferenceChangePayloadSchema,
@@ -426,6 +429,8 @@ describe("Review Read Model and Error Contracts", () => {
     const expectedCodes = [
       "NOT_FOUND",
       "STALE_REVISION_CONFLICT",
+      "STALE_PRODUCTION_ATTEMPT_CONFLICT",
+      "SCENE_NOT_IN_PRODUCTION_RUN",
       "IDEMPOTENCY_CONFLICT",
       "INVALID_DOMAIN_TRANSITION",
       "VALIDATION_FAILURE",
@@ -552,6 +557,22 @@ describe("Review Command Envelopes, Discriminated Action Payloads, and Canonical
     const reject = { ...baseEnvelope, action: "reject" as const, payload: {} };
     expect(ReviewCommandSchema.parse(reject)).toEqual(reject);
     expect(RejectCommandSchema.parse(reject)).toEqual(reject);
+
+    const productionAccept = {
+      ...baseEnvelope,
+      action: "production_accept" as const,
+      payload: { expectedProductionJobId: "44444444-4444-4444-8444-444444444444" }
+    };
+    expect(ReviewCommandSchema.parse(productionAccept)).toEqual(productionAccept);
+    expect(ProductionAcceptCommandSchema.parse(productionAccept)).toEqual(productionAccept);
+
+    const productionRerender = {
+      ...baseEnvelope,
+      action: "production_rerender" as const,
+      payload: { expectedProductionJobId: "44444444-4444-4444-8444-444444444444" }
+    };
+    expect(ReviewCommandSchema.parse(productionRerender)).toEqual(productionRerender);
+    expect(ProductionRerenderCommandSchema.parse(productionRerender)).toEqual(productionRerender);
 
     // Reject reserved actions
     const reorder = {
@@ -829,6 +850,15 @@ describe("Review Command Envelopes, Discriminated Action Payloads, and Canonical
     };
     expect(ReviewCommandResponseSchema.parse(minimalResponse)).toEqual(minimalResponse);
 
+    const productionResponse = {
+      ...response,
+      activeProductionJobId: "44444444-4444-4444-8444-444444444444",
+      productionAttemptOrdinal: 2,
+      acceptedProductionAttemptId: "55555555-5555-4555-8555-555555555555",
+      acceptedAttemptOrdinal: 1
+    };
+    expect(ReviewCommandResponseSchema.parse(productionResponse)).toEqual(productionResponse);
+
     // Invalid sceneId
     expect(
       ReviewCommandResponseSchema.safeParse({
@@ -843,6 +873,16 @@ describe("Review Command Envelopes, Discriminated Action Payloads, and Canonical
         ...response,
         specRevision: 0
       }).success
+    ).toBe(false);
+  });
+
+  it("requires expectedProductionJobId as UUID for ProductionAttemptFencePayloadSchema", () => {
+    const valid = { expectedProductionJobId: "44444444-4444-4444-8444-444444444444" };
+    expect(ProductionAttemptFencePayloadSchema.parse(valid)).toEqual(valid);
+
+    expect(
+      ProductionAttemptFencePayloadSchema.safeParse({ expectedProductionJobId: "not-a-uuid" })
+        .success
     ).toBe(false);
   });
 

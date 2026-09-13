@@ -55,7 +55,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
   it("migrates an empty PostgreSQL 18.6 database through the baseline", async () => {
     const applied = await runMigrations(client, { migrationsDirectory });
 
-    expect(applied).toHaveLength(14);
+    expect(applied).toHaveLength(15);
     expect(applied[0]?.version).toBe("001");
     expect(applied[1]?.version).toBe("002");
     expect(applied[2]?.version).toBe("003");
@@ -70,6 +70,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
     expect(applied[11]?.version).toBe("012");
     expect(applied[12]?.version).toBe("013");
     expect(applied[13]?.version).toBe("014");
+    expect(applied[14]?.version).toBe("015");
 
     const schemaRes = await client.query(
       "SELECT version FROM schema_migrations ORDER BY version ASC"
@@ -88,7 +89,8 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       { version: "011" },
       { version: "012" },
       { version: "013" },
-      { version: "014" }
+      { version: "014" },
+      { version: "015" }
     ]);
 
     const tablesRes = await client.query<{ table_name: string }>(
@@ -109,6 +111,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       "delivery_assembly_jobs",
       "generation_manifests",
       "license_registry",
+      "production_attempts",
       "reference_assets",
       "render_jobs",
       "review_events",
@@ -887,5 +890,49 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
     expect(res.rows[0]?.approved_at).toEqual(approvedAt);
     expect(res.rows[0]?.approved_revision).toBe(2);
     expect(res.rows[0]?.failed_from).toBe("queued");
+  });
+
+  it("persists production_attempts with nullable run_id and new attempt-tracking columns", async () => {
+    await runMigrations(client, { migrationsDirectory });
+
+    // Verify run_id is nullable on production_attempts
+    const runIdNullable = await client.query<{ is_nullable: string }>(
+      `SELECT is_nullable FROM information_schema.columns
+       WHERE table_name = 'production_attempts' AND column_name = 'run_id'`
+    );
+    expect(runIdNullable.rows[0]?.is_nullable).toBe("YES");
+
+    // Verify storyboard_scenes new columns exist
+    const sceneCols = await client.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_name = 'storyboard_scenes' AND column_name IN ('production_attempt_ordinal', 'accepted_production_attempt_id')`
+    );
+    expect(sceneCols.rows.map((r) => r.column_name).sort()).toEqual([
+      "accepted_production_attempt_id",
+      "production_attempt_ordinal"
+    ]);
+
+    // Verify campaign_production_run_scenes new columns exist
+    const runSceneCols = await client.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_name = 'campaign_production_run_scenes' AND column_name IN (
+         'current_attempt_id', 'current_attempt_ordinal', 'accepted_attempt_id', 'accepted_production_job_id', 'accepted_attempt_ordinal'
+       )`
+    );
+    expect(runSceneCols.rows.map((r) => r.column_name).sort()).toEqual([
+      "accepted_attempt_id",
+      "accepted_attempt_ordinal",
+      "accepted_production_job_id",
+      "current_attempt_id",
+      "current_attempt_ordinal"
+    ]);
+
+    // Verify review_action_enum includes production_accept and production_rerender
+    const enumRes = await client.query<{ enumlabel: string }>(
+      `SELECT unnest(enum_range(NULL::review_action_enum))::text as enumlabel`
+    );
+    const enumLabels = enumRes.rows.map((r) => r.enumlabel);
+    expect(enumLabels).toContain("production_accept");
+    expect(enumLabels).toContain("production_rerender");
   });
 });
