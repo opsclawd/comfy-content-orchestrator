@@ -15,12 +15,15 @@ import {
   SceneConfigurationValidationError,
   SceneCreationModeMismatchError,
   SceneNotFoundError,
+  SceneNotInProductionRunError,
+  StaleProductionAttemptConflictError,
   StaleRevisionConflictError,
   StoryboardMaterializationConflictError,
   StoryboardPartiallyMaterializedError,
   TransactionalJobEnqueuerUnavailableError,
   UnsupportedProductionDurationError
 } from "@cco/application";
+import { AlreadyAcceptedProductionAttemptError, type SceneId } from "@cco/domain";
 import {
   ReviewerIdentityUnavailableError,
   formatReviewError,
@@ -46,6 +49,53 @@ describe("formatReviewError", () => {
         code: "STALE_REVISION_CONFLICT",
         message: expect.any(String),
         details: { expectedRevision: 4, currentRevision: 5 }
+      }
+    });
+  });
+
+  it("maps StaleProductionAttemptConflictError to 409 STALE_PRODUCTION_ATTEMPT_CONFLICT with details", () => {
+    const sceneId = "01950c46-9e90-7d3d-82d2-8f1d3e000001";
+    expect(
+      formatReviewError(
+        new StaleProductionAttemptConflictError(sceneId, "job-expected", "job-actual")
+      )
+    ).toEqual({
+      statusCode: 409,
+      body: {
+        code: "STALE_PRODUCTION_ATTEMPT_CONFLICT",
+        message: expect.any(String),
+        details: {
+          sceneId,
+          expectedProductionJobId: "job-expected",
+          actualProductionJobId: "job-actual"
+        }
+      }
+    });
+  });
+
+  it("maps SceneNotInProductionRunError to 422 SCENE_NOT_IN_PRODUCTION_RUN with details", () => {
+    const sceneId = "01950c46-9e90-7d3d-82d2-8f1d3e000001";
+    expect(formatReviewError(new SceneNotInProductionRunError(sceneId))).toEqual({
+      statusCode: 422,
+      body: {
+        code: "SCENE_NOT_IN_PRODUCTION_RUN",
+        message: expect.any(String),
+        details: {
+          sceneId
+        }
+      }
+    });
+  });
+
+  it("maps AlreadyAcceptedProductionAttemptError to 422 INVALID_DOMAIN_TRANSITION", () => {
+    const sceneId = "01950c46-9e90-7d3d-82d2-8f1d3e000001";
+    expect(
+      formatReviewError(new AlreadyAcceptedProductionAttemptError(sceneId as SceneId))
+    ).toEqual({
+      statusCode: 422,
+      body: {
+        code: "INVALID_DOMAIN_TRANSITION",
+        message: expect.any(String)
       }
     });
   });

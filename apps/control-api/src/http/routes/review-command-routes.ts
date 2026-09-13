@@ -193,6 +193,32 @@ export const reviewCommandRoutes: FastifyPluginAsync<ReviewCommandRoutesOptions>
           });
           break;
 
+        case "production_accept":
+          result = await container.useCases.productionReview.acceptProduction({
+            sceneId: body.sceneId,
+            eventId: body.actionId,
+            reviewerName,
+            occurredAt,
+            ...(body.directorNotes !== undefined ? { directorNotes: body.directorNotes } : {}),
+            expectedSpecRevision: body.expectedSpecRevision,
+            requestHashSha256,
+            expectedProductionJobId: body.payload.expectedProductionJobId
+          });
+          break;
+
+        case "production_rerender":
+          result = await container.useCases.productionReview.requestProductionRerender({
+            sceneId: body.sceneId,
+            eventId: body.actionId,
+            reviewerName,
+            occurredAt,
+            ...(body.directorNotes !== undefined ? { directorNotes: body.directorNotes } : {}),
+            expectedSpecRevision: body.expectedSpecRevision,
+            requestHashSha256,
+            expectedProductionJobId: body.payload.expectedProductionJobId
+          });
+          break;
+
         default: {
           const _exhaustive: never = body;
           throw new Error(`Unhandled action: ${(_exhaustive as { action: string }).action}`);
@@ -207,7 +233,19 @@ export const reviewCommandRoutes: FastifyPluginAsync<ReviewCommandRoutesOptions>
           ? { selectedCandidateId: result.scene.selectedCandidateId }
           : {}),
         ...(result.scene.approval !== undefined ? { approval: result.scene.approval } : {}),
-        isIdempotentReplay: result.isIdempotentReplay
+        isIdempotentReplay: result.isIdempotentReplay,
+        ...(result.scene.activeProductionJobId !== undefined
+          ? { activeProductionJobId: result.scene.activeProductionJobId }
+          : {}),
+        ...(result.scene.productionAttemptOrdinal !== undefined
+          ? { productionAttemptOrdinal: result.scene.productionAttemptOrdinal }
+          : {}),
+        ...(result.scene.acceptedProductionAttemptId !== undefined
+          ? { acceptedProductionAttemptId: result.scene.acceptedProductionAttemptId }
+          : {}),
+        ...(result.acceptedAttemptOrdinal !== undefined
+          ? { acceptedAttemptOrdinal: result.acceptedAttemptOrdinal }
+          : {})
       };
 
       return reply.status(200).send(response);

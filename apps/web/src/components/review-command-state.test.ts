@@ -18,6 +18,7 @@ import {
   type ReviewCommandDraft,
   type ReviewCommandEffect,
   type StaleConflictState,
+  type StaleAttemptConflictState,
   type SubmittingState,
   type SucceededSyncingState
 } from "./review-command-state.js";
@@ -578,6 +579,59 @@ describe("review command state machine behavioral invariants", () => {
       sceneId: detail.sceneId
     });
   });
+
+  it("handles SUBMIT_STALE_ATTEMPT_CONFLICT and LOAD_LATEST_ATTEMPT transitions", () => {
+    const detail = createTestDetail({
+      specRevision: 2,
+      status: "qa"
+    });
+
+    const actionId = "12121212-1212-4212-8212-121212121212";
+    const frozenIntent = {
+      command: createReviewCommand(
+        detail,
+        {
+          action: "production_accept",
+          payload: { expectedProductionJobId: "01950c46-9e90-7d3d-82d2-8f1d3c000004" },
+          displayLabel: "Accept Production"
+        },
+        actionId
+      ),
+      displayLabel: "Accept Production"
+    };
+
+    const submittingState: SubmittingState = {
+      phase: "submitting",
+      detail,
+      frozenIntent
+    };
+
+    const conflictResult = transitionReviewCommandState(submittingState, {
+      type: "SUBMIT_STALE_ATTEMPT_CONFLICT",
+      expectedProductionJobId: "01950c46-9e90-7d3d-82d2-8f1d3c000004",
+      actualProductionJobId: "01950c46-9e90-7d3d-82d2-8f1d3c000099",
+      message: "Production attempt has changed"
+    });
+
+    expect(conflictResult.state.phase).toBe("stale-attempt-conflict");
+    const conflictState = conflictResult.state as StaleAttemptConflictState;
+    expect(conflictState.expectedProductionJobId).toBe("01950c46-9e90-7d3d-82d2-8f1d3c000004");
+    expect(conflictState.actualProductionJobId).toBe("01950c46-9e90-7d3d-82d2-8f1d3c000099");
+    expect(conflictState.rejectedAction).toBe("production_accept");
+    expect(areCommandsDisabled(conflictResult.state)).toBe(true);
+    expect(conflictResult.effect).toEqual({ type: "none" });
+
+    // Loading latest attempt triggers refresh effect and moves to idle
+    const loadResult = transitionReviewCommandState(conflictResult.state, {
+      type: "LOAD_LATEST_ATTEMPT"
+    });
+
+    expect(loadResult.state.phase).toBe("idle");
+    expect(loadResult.effect).toEqual<ReviewCommandEffect>({
+      type: "refresh",
+      sceneId: detail.sceneId
+    });
+  });
 });
 
 describe("createReviewCommand and all ten Phase 1 review actions", () => {
@@ -842,6 +896,15 @@ describe("state machine helper functions", () => {
         currentRevision: 3,
         rejectedAction: "approve",
         displayLabel: "Approve"
+      })
+    ).toBe(true);
+    expect(
+      areCommandsDisabled({
+        phase: "stale-attempt-conflict",
+        detail,
+        expectedProductionJobId: "01950c46-9e90-7d3d-82d2-8f1d3c000004",
+        rejectedAction: "production_accept",
+        displayLabel: "Accept Production"
       })
     ).toBe(true);
     expect(

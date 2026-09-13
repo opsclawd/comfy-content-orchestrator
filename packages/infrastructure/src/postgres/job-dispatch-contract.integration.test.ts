@@ -50,7 +50,9 @@ describe("PostgreSQL job dispatch schema contract integration", () => {
     expect(applied.some((m) => m.version === "011")).toBe(true);
     expect(applied.some((m) => m.version === "012")).toBe(true);
     expect(applied.some((m) => m.version === "013")).toBe(true);
-    expect(applied[applied.length - 1]?.version).toBe("013");
+    expect(applied.some((m) => m.version === "014")).toBe(true);
+    expect(applied.some((m) => m.version === "015")).toBe(true);
+    expect(applied[applied.length - 1]?.version).toBe("015");
 
     // 2. Run it again and assert []
     const rerun = await runMigrations(client, { migrationsDirectory });

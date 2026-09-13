@@ -13,10 +13,12 @@ import {
   ProgressSceneProductionUseCases,
   RankReviewCandidatesUseCase,
   ReviewSceneUseCases,
+  ProductionReviewUseCases,
   SubmitSceneCreationUseCase,
   ApproveSceneAndDispatchCampaignProductionUseCase,
   CompleteCampaignProductionRunUseCases,
   CompleteCampaignProductionRunAssemblyUseCases,
+  type CurrentProductionAttemptQueries,
   type DeliveryAssemblyJobQueuePort,
   type JobQueuePort,
   type PlanningModelClientPort,
@@ -34,6 +36,7 @@ export interface ControlApiDependencies {
   readonly uow: UnitOfWork;
   readonly renderEngine?: RenderEnginePort;
   readonly sceneReviewQueries?: SceneReviewQueries;
+  readonly currentProductionAttemptQueries?: CurrentProductionAttemptQueries;
   readonly reviewMediaDelivery?: ReviewMediaDeliveryPort;
   readonly storageTelemetry?: StorageTelemetryPort;
   readonly storageMetricsRegistry?: StorageMetricsRegistryPort;
@@ -54,6 +57,7 @@ export interface ControlApiDependencies {
 
 export interface ControlApiUseCases {
   readonly reviewScene: ReviewSceneUseCases;
+  readonly productionReview: ProductionReviewUseCases;
   readonly progressSceneProduction: ProgressSceneProductionUseCases;
   readonly enqueueSceneProductionRender?: EnqueueSceneProductionRenderUseCase | undefined;
   readonly createCampaign?: CreateCampaignUseCase | undefined;
@@ -73,6 +77,7 @@ export interface ControlApiUseCases {
 
 export interface ControlApiQueries {
   readonly sceneReview?: SceneReviewQueries;
+  readonly currentProductionAttempt?: CurrentProductionAttemptQueries;
 }
 
 export interface ControlApiContainer {
@@ -85,12 +90,16 @@ export function createControlApiContainer(
   dependencies: ControlApiDependencies
 ): ControlApiContainer {
   const reviewScene = new ReviewSceneUseCases(dependencies.uow);
+  const enqueueSceneProductionRender = new EnqueueSceneProductionRenderUseCase(dependencies.uow);
+  const productionReview = new ProductionReviewUseCases(
+    dependencies.uow,
+    enqueueSceneProductionRender
+  );
   const progressSceneProduction = new ProgressSceneProductionUseCases(
     dependencies.uow,
     dependencies.renderEngine,
     dependencies.jobQueue
   );
-  const enqueueSceneProductionRender = new EnqueueSceneProductionRenderUseCase(dependencies.uow);
   const createCampaign = new CreateCampaignUseCase(dependencies.uow);
   const createCampaignShell = new CreateCampaignShellUseCase(dependencies.uow);
   const createClient = new CreateClientUseCase(dependencies.uow);
@@ -178,6 +187,7 @@ export function createControlApiContainer(
     dependencies,
     useCases: {
       reviewScene,
+      productionReview,
       progressSceneProduction,
       enqueueSceneProductionRender,
       createCampaign,
@@ -197,6 +207,9 @@ export function createControlApiContainer(
     queries: {
       ...(dependencies.sceneReviewQueries !== undefined
         ? { sceneReview: dependencies.sceneReviewQueries }
+        : {}),
+      ...(dependencies.currentProductionAttemptQueries !== undefined
+        ? { currentProductionAttempt: dependencies.currentProductionAttemptQueries }
         : {})
     }
   };

@@ -56,13 +56,20 @@ export class PostgresGenerationManifestRepository implements GenerationManifestR
     };
   }
 
-  async findVideoStemSourceByJobId(
-    jobId: string
-  ): Promise<
-    { readonly generationManifestId: string; readonly media: PersistentMediaRef } | undefined
+  async findVideoStemSourceByJobId(jobId: string): Promise<
+    | {
+        readonly generationManifestId: string;
+        readonly media: PersistentMediaRef;
+        readonly renderAttempt: number;
+      }
+    | undefined
   > {
-    const result = await this.client.query<{ manifest_id: string; manifest_payload: unknown }>(
-      `SELECT manifest_id, manifest_payload FROM generation_manifests WHERE job_id = $1`,
+    const result = await this.client.query<{
+      manifest_id: string;
+      render_attempt: number;
+      manifest_payload: unknown;
+    }>(
+      `SELECT manifest_id, render_attempt, manifest_payload FROM generation_manifests WHERE job_id = $1`,
       [jobId]
     );
 
@@ -72,9 +79,18 @@ export class PostgresGenerationManifestRepository implements GenerationManifestR
     }
 
     const media = extractPrimaryVideoStemMedia(row.manifest_payload, jobId);
+    const renderAttempt =
+      typeof row.render_attempt === "number"
+        ? row.render_attempt
+        : typeof (row.manifest_payload as Record<string, unknown> | null)?.renderAttempt ===
+            "number"
+          ? ((row.manifest_payload as Record<string, unknown>).renderAttempt as number)
+          : 1;
+
     return {
       generationManifestId: row.manifest_id,
-      media
+      media,
+      renderAttempt
     };
   }
 }

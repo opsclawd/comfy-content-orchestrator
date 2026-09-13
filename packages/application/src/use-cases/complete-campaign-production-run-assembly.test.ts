@@ -3,6 +3,32 @@ import type { CampaignId, CampaignProductionRunRecord, CampaignRecord } from "@c
 import type { CampaignProductionRunRepository, CampaignRepository, UnitOfWork } from "../index.js";
 import { CompleteCampaignProductionRunAssemblyUseCases } from "./complete-campaign-production-run-assembly.js";
 
+function createMockRuns(
+  overrides: Partial<CampaignProductionRunRepository>
+): CampaignProductionRunRepository {
+  return {
+    createIfAbsent: vi.fn(),
+    insertRunScenes: vi.fn(),
+    findById: vi.fn(),
+    findByIdForUpdate: vi.fn(),
+    findByAssemblyJobId: vi.fn(),
+    findRunScenes: vi.fn(async () => []),
+    findRunSceneBySceneId: vi.fn(),
+    findRunSceneByProductionJobId: vi.fn(),
+    recordProductionAttempt: vi.fn(),
+    findAttemptByProductionJobId: vi.fn(),
+    updateCurrentAttempt: vi.fn(),
+    recordAcceptedAttempt: vi.fn(),
+    countIncompleteRunScenes: vi.fn(async () => 0),
+    claimForProductionReview: vi.fn(),
+    claimForAssembly: vi.fn(),
+    setAssemblyJobId: vi.fn(),
+    claimCompletion: vi.fn(),
+    claimFailure: vi.fn(),
+    ...overrides
+  };
+}
+
 describe("CompleteCampaignProductionRunAssemblyUseCases", () => {
   it("transitions campaign to completed on assembly job completion", async () => {
     const campaign: CampaignRecord = {
@@ -49,19 +75,10 @@ describe("CompleteCampaignProductionRunAssemblyUseCases", () => {
       })
     };
 
-    const mockRuns: CampaignProductionRunRepository = {
+    const mockRuns = createMockRuns({
       findByAssemblyJobId: vi.fn(async () => run),
-      claimCompletion: vi.fn(async () => completedRun),
-      createIfAbsent: vi.fn(),
-      insertRunScenes: vi.fn(),
-      findById: vi.fn(),
-      findRunScenes: vi.fn(async () => []),
-      findRunSceneByProductionJobId: vi.fn(),
-      countIncompleteRunScenes: vi.fn(async () => 0),
-      claimForAssembly: vi.fn(),
-      setAssemblyJobId: vi.fn(),
-      claimFailure: vi.fn()
-    };
+      claimCompletion: vi.fn(async () => completedRun)
+    });
 
     const mockUow: UnitOfWork = {
       execute: vi.fn(async (work) =>
@@ -122,19 +139,10 @@ describe("CompleteCampaignProductionRunAssemblyUseCases", () => {
       })
     };
 
-    const mockRuns: CampaignProductionRunRepository = {
+    const mockRuns = createMockRuns({
       findByAssemblyJobId: vi.fn(async () => run),
-      claimFailure: vi.fn(async () => failedRun),
-      createIfAbsent: vi.fn(),
-      insertRunScenes: vi.fn(),
-      findById: vi.fn(),
-      findRunScenes: vi.fn(async () => []),
-      findRunSceneByProductionJobId: vi.fn(),
-      countIncompleteRunScenes: vi.fn(async () => 0),
-      claimForAssembly: vi.fn(),
-      setAssemblyJobId: vi.fn(),
-      claimCompletion: vi.fn()
-    };
+      claimFailure: vi.fn(async () => failedRun)
+    });
 
     const mockUow: UnitOfWork = {
       execute: vi.fn(async (work) =>

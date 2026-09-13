@@ -26,6 +26,7 @@ export { PostgresReviewEventStore } from "./postgres/repositories/postgres-revie
 export { PostgresUnitOfWork } from "./postgres/uow/postgres-unit-of-work.js";
 
 export { PostgresSceneReviewQueries } from "./postgres/queries/postgres-scene-review-queries.js";
+export { PostgresCurrentProductionAttemptQueries } from "./postgres/queries/postgres-current-production-attempt-queries.js";
 
 export {
   PostgresJobQueue,

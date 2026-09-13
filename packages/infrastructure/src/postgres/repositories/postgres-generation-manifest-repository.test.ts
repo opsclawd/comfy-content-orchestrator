@@ -115,12 +115,36 @@ describe("PostgresGenerationManifestRepository", () => {
       const result = await repo.findVideoStemSourceByJobId("job-123");
       expect(result).toBeDefined();
       expect(result!.generationManifestId).toBe("manifest-123");
+      expect(result!.renderAttempt).toBe(1);
       expect(result!.media).toEqual({
         bucket: "cco-render-output",
         key: "renders/scene-1.mp4",
         sha256: validSha.toLowerCase(),
         contentType: "video/mp4"
       });
+    });
+
+    it("returns renderAttempt from column or payload", async () => {
+      const pool = fakePool([
+        {
+          manifest_id: "manifest-789",
+          render_attempt: 3,
+          manifest_payload: {
+            outputs: [
+              {
+                bucket: "cco-render-output",
+                key: "renders/scene-3.mp4",
+                checksumSha256: validSha
+              }
+            ]
+          }
+        }
+      ]);
+      const repo = new PostgresGenerationManifestRepository(pool as never);
+
+      const result = await repo.findVideoStemSourceByJobId("job-789");
+      expect(result).toBeDefined();
+      expect(result!.renderAttempt).toBe(3);
     });
 
     it("preserves explicit contentType when provided", async () => {

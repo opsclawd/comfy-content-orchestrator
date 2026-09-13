@@ -9,3 +9,4 @@ export * from "./campaign.js";
 export * from "./client.js";
 export * from "./campaign-production-run.js";
 export * from "./approved-visual-production-input.js";
+export * from "./accepted-production-attempt-invariant.js";

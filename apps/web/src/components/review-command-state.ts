@@ -14,6 +14,7 @@ export type ReviewCommandPhase =
   | "submitting"
   | "succeeded-syncing"
   | "stale-conflict"
+  | "stale-attempt-conflict"
   | "definitive-error"
   | "indeterminate-error";
 
@@ -70,6 +71,16 @@ export interface StaleConflictState {
   readonly message?: string | undefined;
 }
 
+export interface StaleAttemptConflictState {
+  readonly phase: "stale-attempt-conflict";
+  readonly detail: SceneReviewDetailReadModel;
+  readonly expectedProductionJobId: string;
+  readonly actualProductionJobId?: string | undefined;
+  readonly rejectedAction: ReviewAction;
+  readonly displayLabel: string;
+  readonly message?: string | undefined;
+}
+
 export interface DefinitiveErrorState {
   readonly phase: "definitive-error";
   readonly detail: SceneReviewDetailReadModel;
@@ -94,6 +105,7 @@ export type ReviewCommandState =
   | SubmittingState
   | SucceededSyncingState
   | StaleConflictState
+  | StaleAttemptConflictState
   | DefinitiveErrorState
   | IndeterminateErrorState;
 
@@ -120,6 +132,12 @@ export type ReviewCommandEvent =
       readonly message?: string | undefined;
     }
   | {
+      readonly type: "SUBMIT_STALE_ATTEMPT_CONFLICT";
+      readonly expectedProductionJobId: string;
+      readonly actualProductionJobId?: string | undefined;
+      readonly message?: string | undefined;
+    }
+  | {
       readonly type: "SUBMIT_DEFINITIVE_ERROR";
       readonly statusCode: number;
       readonly error: ReviewErrorResponse;
@@ -132,6 +150,7 @@ export type ReviewCommandEvent =
   | { readonly type: "RETRY" }
   | { readonly type: "DISMISS_ERROR" }
   | { readonly type: "LOAD_STALE_REVISION" }
+  | { readonly type: "LOAD_LATEST_ATTEMPT" }
   | { readonly type: "REFRESH_SUCCESS"; readonly detail: SceneReviewDetailReadModel }
   | { readonly type: "REFRESH_FAILURE"; readonly error: string }
   | { readonly type: "REQUEST_REFRESH" };
@@ -195,6 +214,7 @@ export function areCommandsDisabled(state: ReviewCommandState): boolean {
     case "submitting":
     case "succeeded-syncing":
     case "stale-conflict":
+    case "stale-attempt-conflict":
       return true;
     case "idle":
     case "drafting":
@@ -379,6 +399,19 @@ export function transitionReviewCommandState(
             },
             effect: { type: "none" }
           };
+        case "SUBMIT_STALE_ATTEMPT_CONFLICT":
+          return {
+            state: {
+              phase: "stale-attempt-conflict",
+              detail: state.detail,
+              expectedProductionJobId: event.expectedProductionJobId,
+              actualProductionJobId: event.actualProductionJobId,
+              rejectedAction: state.frozenIntent.command.action,
+              displayLabel: state.frozenIntent.displayLabel,
+              message: event.message
+            },
+            effect: { type: "none" }
+          };
         case "SUBMIT_DEFINITIVE_ERROR":
           return {
             state: {
@@ -439,6 +472,28 @@ export function transitionReviewCommandState(
 
     case "stale-conflict": {
       switch (event.type) {
+        case "LOAD_STALE_REVISION":
+        case "REQUEST_REFRESH":
+          return {
+            state: {
+              phase: "idle",
+              detail: state.detail
+            },
+            effect: {
+              type: "refresh",
+              sceneId: state.detail.sceneId
+            }
+          };
+        case "RETRY":
+          return { state, effect: { type: "none" } };
+        default:
+          return { state, effect: { type: "none" } };
+      }
+    }
+
+    case "stale-attempt-conflict": {
+      switch (event.type) {
+        case "LOAD_LATEST_ATTEMPT":
         case "LOAD_STALE_REVISION":
         case "REQUEST_REFRESH":
           return {

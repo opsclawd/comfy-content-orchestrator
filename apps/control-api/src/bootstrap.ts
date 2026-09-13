@@ -17,6 +17,7 @@ import {
   PostgresJobQueue,
   PostgresReferenceAssetRepository,
   PostgresSceneReviewQueries,
+  PostgresCurrentProductionAttemptQueries,
   PostgresUnitOfWork,
   S3ReviewMediaDelivery,
   StorageAwareJobAdmissionGate,
@@ -208,6 +209,7 @@ export async function runControlApi(
     // 4. Instantiate application adapters and use cases
     const uow = new PostgresUnitOfWork(pool);
     const sceneReviewQueries = new PostgresSceneReviewQueries(pool);
+    const currentProductionAttemptQueries = new PostgresCurrentProductionAttemptQueries(pool);
     const reviewMediaDelivery = new S3ReviewMediaDelivery({
       signingEndpoint: config.s3.signingEndpoint,
       storageEndpoint: config.s3.storageEndpoint,
@@ -307,6 +309,7 @@ export async function runControlApi(
       {
         uow,
         sceneReviewQueries,
+        currentProductionAttemptQueries,
         reviewMediaDelivery,
         storageTelemetry,
         storageMetricsRegistry,

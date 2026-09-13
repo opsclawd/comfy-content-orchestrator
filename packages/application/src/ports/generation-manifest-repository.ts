@@ -28,6 +28,12 @@ export interface GenerationManifestComponentIdentity {
   readonly outputChecksumsSha256?: readonly string[] | undefined;
 }
 
+export interface VideoStemSourceRecord {
+  readonly generationManifestId: string;
+  readonly media: PersistentMediaRef;
+  readonly renderAttempt: number;
+}
+
 export interface GenerationManifestRepository {
   /**
    * Looks up a generation manifest by its ID (AssemblySpec.videoStems[].generationManifestId)
@@ -47,7 +53,5 @@ export interface GenerationManifestRepository {
    */
   readonly findVideoStemSourceByJobId?: (
     jobId: string
-  ) => Promise<
-    { readonly generationManifestId: string; readonly media: PersistentMediaRef } | undefined
-  >;
+  ) => Promise<VideoStemSourceRecord | undefined>;
 }

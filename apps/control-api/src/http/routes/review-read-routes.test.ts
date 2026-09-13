@@ -607,6 +607,7 @@ describe("Review Read Endpoints", () => {
       },
       useCases: {
         reviewScene: {} as unknown as ControlApiUseCases["reviewScene"],
+        productionReview: {} as unknown as ControlApiUseCases["productionReview"],
         progressSceneProduction: {} as unknown as ControlApiUseCases["progressSceneProduction"],
         approveSceneAndDispatchCampaignProduction:
           {} as unknown as ControlApiUseCases["approveSceneAndDispatchCampaignProduction"],

@@ -7,6 +7,7 @@ import { cruise } from "dependency-cruiser";
 import type { ICruiseResult, IViolation } from "dependency-cruiser";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  PostgresCurrentProductionAttemptQueries,
   PostgresReviewEventStore,
   PostgresSceneRepository,
   PostgresSceneReviewQueries,
@@ -61,6 +62,7 @@ describe("Architecture Boundaries", () => {
     expect(PostgresReviewEventStore).toBeDefined();
     expect(PostgresUnitOfWork).toBeDefined();
     expect(PostgresSceneReviewQueries).toBeDefined();
+    expect(PostgresCurrentProductionAttemptQueries).toBeDefined();
   });
 
   it("should reject application -> infrastructure imports", async () => {

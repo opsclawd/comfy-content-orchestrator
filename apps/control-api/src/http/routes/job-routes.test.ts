@@ -24,12 +24,23 @@ class FakeUnitOfWork implements UnitOfWork {
         listBySceneAndRevision: async () => []
       },
       campaignProductionRuns: {
+        findByIdForUpdate: async () => undefined,
+        findRunSceneBySceneId: async () => undefined,
+        recordProductionAttempt: async (input) => ({
+          ...input,
+          attemptId: "attempt-1",
+          createdAt: new Date().toISOString()
+        }),
+        findAttemptByProductionJobId: async () => undefined,
+        updateCurrentAttempt: async () => {},
+        recordAcceptedAttempt: async () => ({ accepted: true }),
         findRunSceneByProductionJobId: async () => undefined,
         findById: async () => undefined,
         findByAssemblyJobId: async () => undefined,
         findRunScenes: async () => [],
         insertRunScenes: async () => {},
         countIncompleteRunScenes: async () => 0,
+        claimForProductionReview: async () => undefined,
         claimForAssembly: async () => undefined,
         setAssemblyJobId: async () => {},
         claimCompletion: async () => undefined,

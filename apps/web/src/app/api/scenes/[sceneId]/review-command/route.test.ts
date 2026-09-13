@@ -686,4 +686,125 @@ describe("Review Hub Command Route Handler: POST /api/scenes/[sceneId]/review-co
       expect(loggedArgs).not.toContain("sk-secrettoken123");
     });
   });
+
+  describe("Production review actions", () => {
+    const expectedProductionJobId = "55555555-5555-4555-8555-555555555555";
+
+    it("successfully proxies production_accept command", async () => {
+      const command: ReviewCommand = {
+        actionId,
+        sceneId,
+        expectedSpecRevision: 2,
+        action: "production_accept",
+        payload: { expectedProductionJobId }
+      };
+
+      const successResponse: ReviewCommandResponse = {
+        sceneId,
+        status: "completed",
+        specRevision: 2,
+        isIdempotentReplay: false
+      };
+
+      vi.mocked(submitReviewCommand).mockResolvedValueOnce(successResponse);
+
+      const request = createJsonRequest(routeUrl, command);
+      const response = await POST(request, {
+        params: Promise.resolve({ sceneId })
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body).toEqual(successResponse);
+    });
+
+    it("successfully proxies production_rerender command", async () => {
+      const command: ReviewCommand = {
+        actionId,
+        sceneId,
+        expectedSpecRevision: 2,
+        action: "production_rerender",
+        payload: { expectedProductionJobId }
+      };
+
+      const successResponse: ReviewCommandResponse = {
+        sceneId,
+        status: "queued",
+        specRevision: 2,
+        isIdempotentReplay: false
+      };
+
+      vi.mocked(submitReviewCommand).mockResolvedValueOnce(successResponse);
+
+      const request = createJsonRequest(routeUrl, command);
+      const response = await POST(request, {
+        params: Promise.resolve({ sceneId })
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body).toEqual(successResponse);
+    });
+
+    it("passes through 409 STALE_PRODUCTION_ATTEMPT_CONFLICT verbatim", async () => {
+      const command: ReviewCommand = {
+        actionId,
+        sceneId,
+        expectedSpecRevision: 2,
+        action: "production_accept",
+        payload: { expectedProductionJobId }
+      };
+
+      const errorPayload: ReviewErrorResponse = {
+        code: "STALE_PRODUCTION_ATTEMPT_CONFLICT",
+        message: "Stale attempt conflict",
+        details: {
+          expectedProductionJobId,
+          actualProductionJobId: "66666666-6666-4666-8666-666666666666"
+        }
+      };
+
+      vi.mocked(submitReviewCommand).mockRejectedValueOnce(
+        new ReviewCommandApiError(409, errorPayload)
+      );
+
+      const request = createJsonRequest(routeUrl, command);
+      const response = await POST(request, {
+        params: Promise.resolve({ sceneId })
+      });
+
+      expect(response.status).toBe(409);
+      const body = await response.json();
+      expect(body).toEqual(errorPayload);
+    });
+
+    it("passes through 422 SCENE_NOT_IN_PRODUCTION_RUN verbatim", async () => {
+      const command: ReviewCommand = {
+        actionId,
+        sceneId,
+        expectedSpecRevision: 2,
+        action: "production_accept",
+        payload: { expectedProductionJobId }
+      };
+
+      const errorPayload: ReviewErrorResponse = {
+        code: "SCENE_NOT_IN_PRODUCTION_RUN",
+        message: "Scene is not in a production run",
+        details: { sceneId }
+      };
+
+      vi.mocked(submitReviewCommand).mockRejectedValueOnce(
+        new ReviewCommandApiError(422, errorPayload)
+      );
+
+      const request = createJsonRequest(routeUrl, command);
+      const response = await POST(request, {
+        params: Promise.resolve({ sceneId })
+      });
+
+      expect(response.status).toBe(422);
+      const body = await response.json();
+      expect(body).toEqual(errorPayload);
+    });
+  });
 });
