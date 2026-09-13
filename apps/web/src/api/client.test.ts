@@ -4,6 +4,7 @@ import {
   getHealth,
   getCampaignReviewSummary,
   getSceneReviewDetail,
+  getCurrentProductionAttempt,
   submitReviewCommand,
   planCampaignStoryboard,
   ApiClientError,
@@ -1122,6 +1123,91 @@ describe("Typed Control API Client", () => {
         ApiValidationError
       );
       expect(mockFetch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("getCurrentProductionAttempt", () => {
+    const validAttempt = {
+      runId: "123e4567-e89b-12d3-a456-426614174001",
+      sceneId: "123e4567-e89b-12d3-a456-426614174000",
+      specRevision: 1,
+      attemptOrdinal: 1,
+      productionJobId: "123e4567-e89b-12d3-a456-426614174002",
+      technicalState: "completed",
+      reviewReady: true,
+      availability: "available",
+      media: {
+        url: "https://example.com/clip.mp4",
+        generationManifestId: "123e4567-e89b-12d3-a456-426614174003"
+      }
+    };
+
+    it("parses and returns valid CurrentProductionAttemptReadModel on 200", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => validAttempt
+      });
+
+      const result = await getCurrentProductionAttempt(
+        "123e4567-e89b-12d3-a456-426614174000",
+        "http://example.com",
+        mockFetch
+      );
+
+      expect(result).toEqual(validAttempt);
+      expect(mockFetch).toHaveBeenCalledWith(
+        "http://example.com/api/scenes/123e4567-e89b-12d3-a456-426614174000/production-attempt",
+        expect.objectContaining({ method: "GET" })
+      );
+    });
+
+    it("tolerates 404 and resolves to undefined", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        statusText: "Not Found"
+      });
+
+      const result = await getCurrentProductionAttempt(
+        "123e4567-e89b-12d3-a456-426614174000",
+        "http://example.com",
+        mockFetch
+      );
+
+      expect(result).toBeUndefined();
+    });
+
+    it("throws ApiClientError on 500 error", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        statusText: "Internal Server Error"
+      });
+
+      await expect(
+        getCurrentProductionAttempt(
+          "123e4567-e89b-12d3-a456-426614174000",
+          "http://example.com",
+          mockFetch
+        )
+      ).rejects.toThrow(ApiClientError);
+    });
+
+    it("throws ApiValidationError on malformed response body", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ invalid: "shape" })
+      });
+
+      await expect(
+        getCurrentProductionAttempt(
+          "123e4567-e89b-12d3-a456-426614174000",
+          "http://example.com",
+          mockFetch
+        )
+      ).rejects.toThrow(ApiValidationError);
     });
   });
 });

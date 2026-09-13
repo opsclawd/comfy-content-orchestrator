@@ -16,7 +16,9 @@ import {
   ReviewErrorResponseSchema,
   type ReviewErrorResponse,
   SceneReviewDetailReadModelSchema,
-  type SceneReviewDetailReadModel
+  type SceneReviewDetailReadModel,
+  CurrentProductionAttemptReadModelSchema,
+  type CurrentProductionAttemptReadModel
 } from "@cco/contracts";
 import type { z } from "zod";
 import { resolveControlApiBaseUrl } from "./runtime-config";
@@ -30,7 +32,8 @@ export type {
   ReviewCommand,
   ReviewCommandResponse,
   ReviewErrorResponse,
-  SceneReviewDetailReadModel
+  SceneReviewDetailReadModel,
+  CurrentProductionAttemptReadModel
 } from "@cco/contracts";
 
 export {
@@ -42,7 +45,8 @@ export {
   ReviewCommandSchema,
   ReviewCommandResponseSchema,
   ReviewErrorResponseSchema,
-  SceneReviewDetailReadModelSchema
+  SceneReviewDetailReadModelSchema,
+  CurrentProductionAttemptReadModelSchema
 } from "@cco/contracts";
 
 export interface ApiClientConfig {
@@ -114,6 +118,9 @@ export interface ApiClient {
   getHealth(): Promise<HealthResponse>;
   getCampaignReviewSummary(campaignId: string): Promise<CampaignReviewSummary>;
   getSceneReviewDetail(sceneId: string): Promise<SceneReviewDetailReadModel>;
+  getCurrentProductionAttempt(
+    sceneId: string
+  ): Promise<CurrentProductionAttemptReadModel | undefined>;
   submitReviewCommand(
     sceneId: string,
     command: ReviewCommand,
@@ -227,6 +234,24 @@ export function createApiClient(config?: ApiClientConfig): ApiClient {
         SceneReviewDetailReadModelSchema,
         fetchFn
       );
+    },
+
+    async getCurrentProductionAttempt(
+      sceneId: string
+    ): Promise<CurrentProductionAttemptReadModel | undefined> {
+      const encoded = encodeURIComponent(sceneId);
+      try {
+        return await requestJson(
+          `${baseUrl}/api/scenes/${encoded}/production-attempt`,
+          CurrentProductionAttemptReadModelSchema,
+          fetchFn
+        );
+      } catch (err) {
+        if (err instanceof ApiClientError && err.statusCode === 404) {
+          return undefined;
+        }
+        throw err;
+      }
     },
 
     async submitReviewCommand(
@@ -416,6 +441,15 @@ export async function getSceneReviewDetail(
 ): Promise<SceneReviewDetailReadModel> {
   const client = createApiClient({ fetchFn: fetchImpl });
   return client.getSceneReviewDetail(sceneId);
+}
+
+export async function getCurrentProductionAttempt(
+  sceneId: string,
+  baseUrl?: string,
+  fetchFn?: typeof fetch
+): Promise<CurrentProductionAttemptReadModel | undefined> {
+  const client = createApiClient({ baseUrl, fetchFn });
+  return client.getCurrentProductionAttempt(sceneId);
 }
 
 export async function submitReviewCommand(

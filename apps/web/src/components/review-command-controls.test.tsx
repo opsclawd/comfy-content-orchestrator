@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ReviewCommandControls } from "./review-command-controls.js";
 import { type ReviewCommandState } from "./review-command-state.js";
 import type { SceneReviewDetailReadModel } from "@cco/contracts";
+import type { CurrentProductionAttemptReadModel } from "../api/client.js";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({
@@ -409,5 +410,79 @@ describe("ReviewCommandControls Component", () => {
     expect(html).toContain('data-testid="refresh-error"');
     expect(html).toContain("Network connection dropped during sync");
     expect(html).toContain("Retry Refresh");
+  });
+
+  it("suppresses production_accept and production_rerender from chip toolbar", () => {
+    const detail = createSampleDetail({
+      status: "qa",
+      allowedActions: ["production_accept", "production_rerender", "cancel"]
+    });
+
+    const html = renderToStaticMarkup(<ReviewCommandControls detail={detail} />);
+
+    expect(html).toContain('data-testid="action-button-cancel"');
+    expect(html).not.toContain('data-testid="action-button-production_accept"');
+    expect(html).not.toContain('data-testid="action-button-production_rerender"');
+  });
+
+  it("renders stale-attempt-conflict banner with load latest attempt button", () => {
+    const detail = createSampleDetail({ status: "qa" });
+    const staleAttemptState: ReviewCommandState = {
+      phase: "stale-attempt-conflict",
+      detail,
+      expectedProductionJobId: "job-expected-1111",
+      actualProductionJobId: "job-actual-2222",
+      rejectedAction: "production_accept",
+      displayLabel: "Accept Production",
+      message: "Target production job is stale"
+    };
+
+    const html = renderToStaticMarkup(
+      <ReviewCommandControls detail={detail} state={staleAttemptState} />
+    );
+
+    expect(html).toContain('data-testid="stale-attempt-conflict-banner"');
+    expect(html).toContain("job-expected-1111");
+    expect(html).toContain("job-actual-2222");
+    expect(html).toContain("Target production job is stale");
+    expect(html).toContain('data-testid="load-latest-attempt-button"');
+  });
+
+  it("renders production attempt identity in confirmation dialog for production actions", () => {
+    const detail = createSampleDetail({ status: "qa", specRevision: 3 });
+    const attempt: CurrentProductionAttemptReadModel = {
+      runId: "run-1111-uuid",
+      sceneId: detail.sceneId,
+      specRevision: 3,
+      attemptOrdinal: 2,
+      productionJobId: "job-prod-3333",
+      technicalState: "completed",
+      reviewReady: true,
+      availability: "available",
+      media: {
+        url: "https://media.example.com/clip.mp4",
+        generationManifestId: "11111111-1111-4111-8111-111111111111"
+      }
+    };
+
+    const confirmingState: ReviewCommandState = {
+      phase: "confirming",
+      detail,
+      stagedAction: {
+        action: "production_accept",
+        payload: {
+          expectedProductionJobId: "job-prod-3333"
+        },
+        displayLabel: "Accept Production"
+      }
+    };
+
+    const html = renderToStaticMarkup(
+      <ReviewCommandControls detail={detail} productionAttempt={attempt} state={confirmingState} />
+    );
+
+    expect(html).toContain('data-testid="dialog-attempt-identity"');
+    expect(html).toContain("Attempt #2");
+    expect(html).toContain("job-prod-3333");
   });
 });

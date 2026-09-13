@@ -6,7 +6,12 @@ import SceneNotFound from "./not-found.js";
 import SceneError from "./error.js";
 import { CandidateMedia } from "../../../components/candidate-media.js";
 import { formatDateTime } from "../../../components/format-review-value.js";
-import { getSceneReviewDetail, ApiClientError } from "../../../api/client.js";
+import {
+  getSceneReviewDetail,
+  getCurrentProductionAttempt,
+  ApiClientError,
+  type CurrentProductionAttemptReadModel
+} from "../../../api/client.js";
 import type * as ClientModule from "../../../api/client.js";
 import { notFound } from "next/navigation";
 import type { SceneReviewDetailReadModel } from "@cco/contracts";
@@ -15,7 +20,8 @@ vi.mock("../../../api/client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ClientModule>();
   return {
     ...actual,
-    getSceneReviewDetail: vi.fn()
+    getSceneReviewDetail: vi.fn(),
+    getCurrentProductionAttempt: vi.fn()
   };
 });
 
@@ -213,6 +219,7 @@ function collectText(node: ReactNode | HtmlElementNode | null): string {
 describe("Scene Review Detail Page", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getCurrentProductionAttempt).mockResolvedValue(undefined);
   });
 
   it("exports dynamic = 'force-dynamic'", () => {
@@ -529,7 +536,7 @@ describe("Scene Review Detail Page", () => {
           ]
         }
       ],
-      allowedActions: ["approve", "reject"]
+      allowedActions: ["production_accept", "production_rerender"]
     };
 
     vi.mocked(getSceneReviewDetail).mockResolvedValueOnce(historicalFixture);
@@ -747,5 +754,120 @@ describe("Scene Review Detail Page", () => {
     expect(retryBtn).not.toBeNull();
     retryBtn?.props.onClick?.();
     expect(resetMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("unconditionally fetches production attempt in parallel with review detail", async () => {
+    const sceneId = "s8888888-8888-4888-8888-888888888888";
+    const fixture: SceneReviewDetailReadModel = {
+      sceneId,
+      campaignId: "c8888888-8888-4888-8888-888888888888",
+      status: "queued",
+      specRevision: 2,
+      configuration: {
+        prompt: "Queued scene",
+        referenceIds: [],
+        engineProfileId: "engine-v2",
+        durationMs: 3000
+      },
+      candidatesByRevision: [],
+      allowedActions: []
+    };
+
+    vi.mocked(getSceneReviewDetail).mockResolvedValueOnce(fixture);
+    vi.mocked(getCurrentProductionAttempt).mockResolvedValueOnce(undefined);
+
+    await ScenePage({
+      params: Promise.resolve({ sceneId })
+    });
+
+    expect(getSceneReviewDetail).toHaveBeenCalledWith(sceneId);
+    expect(getCurrentProductionAttempt).toHaveBeenCalledWith(sceneId);
+  });
+
+  it("renders production rendering banner when production attempt is queued or rendering", async () => {
+    const sceneId = "s9999999-9999-4999-8999-999999999999";
+    const fixture: SceneReviewDetailReadModel = {
+      sceneId,
+      campaignId: "c9999999-9999-4999-8999-999999999999",
+      status: "rendering",
+      specRevision: 2,
+      configuration: {
+        prompt: "Rendering scene",
+        referenceIds: [],
+        engineProfileId: "engine-v2",
+        durationMs: 3000
+      },
+      candidatesByRevision: [],
+      allowedActions: []
+    };
+    const attempt: CurrentProductionAttemptReadModel = {
+      runId: "r9999999-9999-4999-8999-999999999999",
+      sceneId,
+      specRevision: 2,
+      attemptOrdinal: 1,
+      productionJobId: "job-9999",
+      technicalState: "rendering",
+      reviewReady: false,
+      availability: "unavailable"
+    };
+
+    vi.mocked(getSceneReviewDetail).mockResolvedValueOnce(fixture);
+    vi.mocked(getCurrentProductionAttempt).mockResolvedValueOnce(attempt);
+
+    const jsx = (await ScenePage({
+      params: Promise.resolve({ sceneId })
+    })) as TestElement;
+
+    const html = renderToStaticMarkup(jsx);
+    expect(html).toContain('data-testid="production-review-panel"');
+    expect(html).toContain('data-testid="production-rendering-banner"');
+    expect(html).toContain('data-testid="production-attempt-identity"');
+    expect(html).toContain("Attempt #1");
+  });
+
+  it("renders production clip player when production attempt is available and review-ready", async () => {
+    const sceneId = "saaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const fixture: SceneReviewDetailReadModel = {
+      sceneId,
+      campaignId: "caaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      status: "qa",
+      specRevision: 2,
+      configuration: {
+        prompt: "QA scene ready for review",
+        referenceIds: [],
+        engineProfileId: "engine-v2",
+        durationMs: 3000
+      },
+      candidatesByRevision: [],
+      allowedActions: ["production_accept", "production_rerender"]
+    };
+    const attempt: CurrentProductionAttemptReadModel = {
+      runId: "raaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      sceneId,
+      specRevision: 2,
+      attemptOrdinal: 1,
+      productionJobId: "job-aaaa",
+      technicalState: "completed",
+      reviewReady: true,
+      availability: "available",
+      media: {
+        url: "https://media.example.com/clip-qa.mp4",
+        generationManifestId: "11111111-1111-4111-8111-111111111111"
+      }
+    };
+
+    vi.mocked(getSceneReviewDetail).mockResolvedValueOnce(fixture);
+    vi.mocked(getCurrentProductionAttempt).mockResolvedValueOnce(attempt);
+
+    const jsx = (await ScenePage({
+      params: Promise.resolve({ sceneId })
+    })) as TestElement;
+
+    const html = renderToStaticMarkup(jsx);
+    expect(html).toContain('data-testid="production-review-panel"');
+    expect(html).toContain('data-testid="production-clip-player"');
+    expect(html).toContain("https://media.example.com/clip-qa.mp4");
+    expect(html).toContain('data-testid="action-button-production_accept"');
+    expect(html).toContain('data-testid="action-button-production_rerender"');
   });
 });

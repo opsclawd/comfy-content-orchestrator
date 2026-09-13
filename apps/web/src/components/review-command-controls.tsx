@@ -4,6 +4,7 @@ import React, { useId, useState, useEffect, useLayoutEffect, useRef, useReducer 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type {
+  CurrentProductionAttemptReadModel,
   ReviewAction,
   ReviewCommand,
   ReviewCommandResponse,
@@ -26,6 +27,7 @@ import { generateUuidV4 as generateActionId } from "../lib/generate-uuid";
 
 export interface ReviewCommandControlsProps {
   detail: SceneReviewDetailReadModel;
+  productionAttempt?: CurrentProductionAttemptReadModel | undefined;
   state?: ReviewCommandState | undefined;
   dispatch?: ((event: ReviewCommandEvent) => void) | undefined;
   onDetailChange?: ((detail: SceneReviewDetailReadModel) => void) | undefined;
@@ -55,6 +57,7 @@ function getInitialDraftPayload(
 
 export function ReviewCommandControls({
   detail,
+  productionAttempt,
   state: controlledState,
   dispatch: controlledDispatch,
   onDetailChange,
@@ -88,6 +91,12 @@ export function ReviewCommandControls({
 
   // Staging action ID ref to ensure multiple clicks or retries use the exact same ID
   const stagedActionIdRef = useRef<string>(generateActionId());
+
+  useEffect(() => {
+    if (state.phase === "confirming") {
+      stagedActionIdRef.current = generateActionId();
+    }
+  }, [state.phase]);
 
   // Form draft state for editing action parameters
   const [draftPrompt, setDraftPrompt] = useState("");
@@ -203,6 +212,49 @@ export function ReviewCommandControls({
             }
 
             if (
+              res.status === 409 &&
+              typeof errorJson === "object" &&
+              errorJson !== null &&
+              "code" in errorJson &&
+              (errorJson as { code: string }).code === "STALE_PRODUCTION_ATTEMPT_CONFLICT"
+            ) {
+              const details = (
+                errorJson as {
+                  details?: {
+                    expectedProductionJobId?: string;
+                    actualProductionJobId?: string;
+                  };
+                }
+              ).details;
+              throw {
+                isStaleAttemptConflict: true,
+                expectedProductionJobId:
+                  details?.expectedProductionJobId ??
+                  (command.payload as { expectedProductionJobId?: string })
+                    ?.expectedProductionJobId ??
+                  "",
+                actualProductionJobId: details?.actualProductionJobId,
+                message: (errorJson as { message?: string }).message
+              };
+            }
+
+            if (
+              res.status === 422 &&
+              typeof errorJson === "object" &&
+              errorJson !== null &&
+              "code" in errorJson &&
+              (errorJson as { code: string }).code === "SCENE_NOT_IN_PRODUCTION_RUN"
+            ) {
+              throw {
+                isStaleAttemptConflict: true,
+                expectedProductionJobId:
+                  (command.payload as { expectedProductionJobId?: string })
+                    ?.expectedProductionJobId ?? "",
+                message: (errorJson as { message?: string }).message
+              };
+            }
+
+            if (
               typeof errorJson === "object" &&
               errorJson !== null &&
               "code" in errorJson &&
@@ -244,6 +296,26 @@ export function ReviewCommandControls({
           return;
         }
 
+        if (
+          typeof err === "object" &&
+          err !== null &&
+          "isStaleAttemptConflict" in err &&
+          (err as { isStaleAttemptConflict: boolean }).isStaleAttemptConflict
+        ) {
+          const stale = err as unknown as {
+            expectedProductionJobId: string;
+            actualProductionJobId?: string;
+            message?: string;
+          };
+          dispatchRef.current({
+            type: "SUBMIT_STALE_ATTEMPT_CONFLICT",
+            expectedProductionJobId: stale.expectedProductionJobId,
+            actualProductionJobId: stale.actualProductionJobId,
+            message: stale.message
+          });
+          return;
+        }
+
         if (err instanceof ReviewCommandApiError) {
           if (err.statusCode === 409 && err.error.code === "STALE_REVISION_CONFLICT") {
             const details = err.error.details as
@@ -252,6 +324,33 @@ export function ReviewCommandControls({
               type: "SUBMIT_STALE_CONFLICT",
               expectedRevision: details?.expectedRevision ?? command.expectedSpecRevision,
               currentRevision: details?.currentRevision ?? command.expectedSpecRevision + 1,
+              message: err.error.message
+            });
+            return;
+          }
+
+          if (err.statusCode === 409 && err.error.code === "STALE_PRODUCTION_ATTEMPT_CONFLICT") {
+            const details = err.error.details as
+              { expectedProductionJobId?: string; actualProductionJobId?: string } | undefined;
+            dispatchRef.current({
+              type: "SUBMIT_STALE_ATTEMPT_CONFLICT",
+              expectedProductionJobId:
+                details?.expectedProductionJobId ??
+                (command.payload as { expectedProductionJobId?: string })
+                  ?.expectedProductionJobId ??
+                "",
+              actualProductionJobId: details?.actualProductionJobId,
+              message: err.error.message
+            });
+            return;
+          }
+
+          if (err.statusCode === 422 && err.error.code === "SCENE_NOT_IN_PRODUCTION_RUN") {
+            dispatchRef.current({
+              type: "SUBMIT_STALE_ATTEMPT_CONFLICT",
+              expectedProductionJobId:
+                (command.payload as { expectedProductionJobId?: string })
+                  ?.expectedProductionJobId ?? "",
               message: err.error.message
             });
             return;
@@ -316,6 +415,21 @@ export function ReviewCommandControls({
 
   function handleActionClick(action: ReviewAction) {
     stagedActionIdRef.current = generateActionId();
+    if (action === "production_accept" || action === "production_rerender") {
+      if (!productionAttempt?.productionJobId) return;
+      dispatch({
+        type: "REQUEST_CONFIRMATION",
+        stagedAction: {
+          action,
+          payload: {
+            expectedProductionJobId: productionAttempt.productionJobId
+          },
+          displayLabel: formatReviewAction(action)
+        }
+      });
+      return;
+    }
+
     const isDirectAction =
       action === "approve" || action === "reject" || action === "reroll" || action === "cancel";
 
@@ -400,6 +514,26 @@ export function ReviewCommandControls({
 
   const activeDetail = state.detail;
   const allowedActions = activeDetail.allowedActions ?? [];
+  const chipActions = allowedActions.filter(
+    (action) => action !== "production_accept" && action !== "production_rerender"
+  );
+
+  const currentAction =
+    state.phase === "confirming"
+      ? state.stagedAction.action
+      : state.phase === "submitting"
+        ? state.frozenIntent.command.action
+        : null;
+  const isProductionAction =
+    currentAction === "production_accept" || currentAction === "production_rerender";
+  const expectedProductionJobId =
+    state.phase === "confirming"
+      ? (state.stagedAction.payload as { expectedProductionJobId?: string } | undefined)
+          ?.expectedProductionJobId
+      : state.phase === "submitting"
+        ? (state.frozenIntent.command.payload as { expectedProductionJobId?: string } | undefined)
+            ?.expectedProductionJobId
+        : undefined;
 
   return (
     <section
@@ -449,9 +583,45 @@ export function ReviewCommandControls({
             type="button"
             className="retry-button"
             data-testid="load-stale-revision-button"
-            onClick={() => dispatch({ type: "LOAD_STALE_REVISION" })}
+            onClick={() => {
+              dispatch({ type: "LOAD_STALE_REVISION" });
+              router.refresh();
+            }}
           >
             Load Latest Revision
+          </button>
+        </div>
+      )}
+
+      {/* Stale Attempt Conflict Banner */}
+      {state.phase === "stale-attempt-conflict" && (
+        <div
+          className="review-conflict-banner"
+          data-testid="stale-attempt-conflict-banner"
+          role="alert"
+        >
+          <h3>Production Attempt Conflict</h3>
+          <p>
+            Your command targeted production job <code>{state.expectedProductionJobId}</code>
+            {state.actualProductionJobId ? (
+              <>
+                , but the active production job is now <code>{state.actualProductionJobId}</code>.
+              </>
+            ) : (
+              ", but this production attempt is no longer active."
+            )}
+          </p>
+          {state.message && <p className="conflict-message">{state.message}</p>}
+          <button
+            type="button"
+            className="retry-button"
+            data-testid="load-latest-attempt-button"
+            onClick={() => {
+              dispatch({ type: "LOAD_LATEST_ATTEMPT" });
+              router.refresh();
+            }}
+          >
+            Load Latest Attempt
           </button>
         </div>
       )}
@@ -519,9 +689,9 @@ export function ReviewCommandControls({
 
       {/* Action Buttons Toolbar */}
       <div className="review-actions-toolbar" data-testid="review-actions-toolbar">
-        {allowedActions.length > 0 ? (
+        {chipActions.length > 0 ? (
           <div className="review-action-chips" data-testid="review-action-chips">
-            {allowedActions.map((action) => (
+            {chipActions.map((action) => (
               <button
                 key={action}
                 type="button"
@@ -688,6 +858,15 @@ export function ReviewCommandControls({
                   <dt>Expected Spec Revision:</dt>
                   <dd>Revision {activeDetail.specRevision}</dd>
                 </div>
+                {isProductionAction && (
+                  <div className="dialog-detail-item" data-testid="dialog-attempt-identity">
+                    <dt>Production Attempt:</dt>
+                    <dd>
+                      Attempt #{productionAttempt?.attemptOrdinal ?? 1} (job{" "}
+                      <code>{expectedProductionJobId}</code>)
+                    </dd>
+                  </div>
+                )}
                 <div className="dialog-detail-item">
                   <dt>Action:</dt>
                   <dd>

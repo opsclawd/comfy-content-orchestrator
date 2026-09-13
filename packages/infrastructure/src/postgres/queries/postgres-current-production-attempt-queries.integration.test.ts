@@ -267,4 +267,74 @@ describe("PostgresCurrentProductionAttemptQueries Integration", () => {
     });
     expect(wrongScene).toBeUndefined();
   });
+
+  it("resolves current production attempt by sceneId alone", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+    const scene = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      status: "qa"
+    });
+
+    const job = await insertRenderJobRecord(client, {
+      sceneId: scene.scene_id,
+      status: "completed",
+      retryCount: 0
+    });
+
+    await insertGenerationManifestRecord(client, {
+      jobId: job.job_id,
+      campaignId: campaign.campaign_id,
+      sceneId: scene.scene_id,
+      renderAttempt: 1,
+      manifestPayload: {
+        renderProfile: "LTX_25_720P_5S_V1",
+        renderAttempt: 1,
+        outputs: [
+          {
+            bucket: "prod-bucket",
+            key: "prod/video.mp4",
+            checksumSha256: validSha,
+            contentType: "video/mp4"
+          }
+        ]
+      }
+    });
+
+    const runsRepo = new PostgresCampaignProductionRunRepository(client);
+    const { run } = await runsRepo.createIfAbsent({
+      campaignId: campaign.campaign_id as CampaignId,
+      fingerprint: "fp_query_test_by_scene_1",
+      status: "dispatched",
+      expectedTotalDurationMs: 5000
+    });
+
+    await runsRepo.insertRunScenes(run.id, [
+      {
+        runId: run.id,
+        sceneId: scene.scene_id as SceneId,
+        specRevision: 2,
+        sequenceIndex: 1,
+        expectedDurationMs: 5000,
+        productionJobId: job.job_id
+      }
+    ]);
+
+    const queries = new PostgresCurrentProductionAttemptQueries(client);
+    const result = await queries.getCurrentProductionAttemptBySceneId(scene.scene_id as SceneId);
+
+    expect(result).toBeDefined();
+    expect(result?.sceneId).toBe(scene.scene_id);
+    expect(result?.runId).toBe(run.id);
+    expect(result?.specRevision).toBe(2);
+    expect(result?.technicalState).toBe("completed");
+    expect(result?.reviewReady).toBe(true);
+    expect(result?.availability).toBe("available");
+    expect(result?.media?.ref.key).toBe("prod/video.mp4");
+
+    const notFoundResult = await queries.getCurrentProductionAttemptBySceneId(
+      "01950c46-9e90-7d3d-82d2-8f1d3c999999" as SceneId
+    );
+    expect(notFoundResult).toBeUndefined();
+  });
 });

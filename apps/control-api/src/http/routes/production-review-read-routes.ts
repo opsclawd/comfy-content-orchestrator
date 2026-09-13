@@ -1,7 +1,11 @@
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import type { CurrentProductionAttemptReadModel } from "@cco/contracts";
 import type { CampaignId, SceneId } from "@cco/domain";
-import { StaleRevisionConflictError } from "@cco/application";
+import {
+  StaleRevisionConflictError,
+  type CurrentProductionAttempt,
+  type ReviewMediaDeliveryPort
+} from "@cco/application";
 import type { ControlApiAppOptions, ControlApiContainer } from "../types.js";
 
 export interface ProductionReviewReadRoutesOptions {
@@ -21,6 +25,18 @@ export const productionAttemptParamsSchema = {
       type: "string",
       format: "uuid"
     },
+    sceneId: {
+      type: "string",
+      format: "uuid"
+    }
+  },
+  additionalProperties: false
+} as const;
+
+export const sceneProductionAttemptParamsSchema = {
+  type: "object",
+  required: ["sceneId"],
+  properties: {
     sceneId: {
       type: "string",
       format: "uuid"
@@ -52,6 +68,88 @@ export const productionAttemptRouteSchema = {
   params: productionAttemptParamsSchema,
   querystring: productionAttemptQuerystringSchema
 } as const;
+
+export const sceneProductionAttemptRouteSchema = {
+  params: sceneProductionAttemptParamsSchema
+} as const;
+
+export async function buildCurrentProductionAttemptReadModel(
+  attempt: CurrentProductionAttempt,
+  mediaDelivery?: ReviewMediaDeliveryPort | undefined
+): Promise<CurrentProductionAttemptReadModel> {
+  if (attempt.availability !== "available" || !attempt.media) {
+    return {
+      runId: attempt.runId,
+      sceneId: attempt.sceneId,
+      specRevision: attempt.specRevision,
+      attemptOrdinal: attempt.attemptOrdinal,
+      ...(attempt.productionJobId ? { productionJobId: attempt.productionJobId } : {}),
+      technicalState: attempt.technicalState,
+      reviewReady: attempt.reviewReady,
+      availability: attempt.availability
+    };
+  }
+
+  if (!mediaDelivery) {
+    return {
+      runId: attempt.runId,
+      sceneId: attempt.sceneId,
+      specRevision: attempt.specRevision,
+      attemptOrdinal: attempt.attemptOrdinal,
+      ...(attempt.productionJobId ? { productionJobId: attempt.productionJobId } : {}),
+      technicalState: attempt.technicalState,
+      reviewReady: attempt.reviewReady,
+      availability: "unavailable"
+    };
+  }
+
+  try {
+    const url = await mediaDelivery.generatePresignedReadUrl({
+      bucket: attempt.media.ref.bucket,
+      key: attempt.media.ref.key,
+      contentHash: attempt.media.ref.sha256
+    });
+
+    if (!url) {
+      return {
+        runId: attempt.runId,
+        sceneId: attempt.sceneId,
+        specRevision: attempt.specRevision,
+        attemptOrdinal: attempt.attemptOrdinal,
+        ...(attempt.productionJobId ? { productionJobId: attempt.productionJobId } : {}),
+        technicalState: attempt.technicalState,
+        reviewReady: attempt.reviewReady,
+        availability: "inconsistent"
+      };
+    }
+
+    return {
+      runId: attempt.runId,
+      sceneId: attempt.sceneId,
+      specRevision: attempt.specRevision,
+      attemptOrdinal: attempt.attemptOrdinal,
+      ...(attempt.productionJobId ? { productionJobId: attempt.productionJobId } : {}),
+      technicalState: attempt.technicalState,
+      reviewReady: attempt.reviewReady,
+      availability: "available",
+      media: {
+        url,
+        generationManifestId: attempt.media.generationManifestId
+      }
+    };
+  } catch {
+    return {
+      runId: attempt.runId,
+      sceneId: attempt.sceneId,
+      specRevision: attempt.specRevision,
+      attemptOrdinal: attempt.attemptOrdinal,
+      ...(attempt.productionJobId ? { productionJobId: attempt.productionJobId } : {}),
+      technicalState: attempt.technicalState,
+      reviewReady: attempt.reviewReady,
+      availability: "inconsistent"
+    };
+  }
+}
 
 export const productionReviewReadRoutes: FastifyPluginAsync<
   ProductionReviewReadRoutesOptions
@@ -95,83 +193,34 @@ export const productionReviewReadRoutes: FastifyPluginAsync<
         throw new StaleRevisionConflictError(sceneId, specRevision, attempt.specRevision);
       }
 
-      if (attempt.availability !== "available" || !attempt.media) {
-        const readModel: CurrentProductionAttemptReadModel = {
-          runId: attempt.runId,
-          sceneId: attempt.sceneId,
-          specRevision: attempt.specRevision,
-          attemptOrdinal: attempt.attemptOrdinal,
-          ...(attempt.productionJobId ? { productionJobId: attempt.productionJobId } : {}),
-          technicalState: attempt.technicalState,
-          reviewReady: attempt.reviewReady,
-          availability: attempt.availability
-        };
-        return reply.status(200).send(readModel);
-      }
+      const readModel = await buildCurrentProductionAttemptReadModel(attempt, mediaDelivery);
+      return reply.status(200).send(readModel);
+    }
+  );
 
-      if (!mediaDelivery) {
-        const readModel: CurrentProductionAttemptReadModel = {
-          runId: attempt.runId,
-          sceneId: attempt.sceneId,
-          specRevision: attempt.specRevision,
-          attemptOrdinal: attempt.attemptOrdinal,
-          ...(attempt.productionJobId ? { productionJobId: attempt.productionJobId } : {}),
-          technicalState: attempt.technicalState,
-          reviewReady: attempt.reviewReady,
-          availability: "unavailable"
-        };
-        return reply.status(200).send(readModel);
-      }
+  fastify.get<{
+    Params: { sceneId: string };
+  }>(
+    "/api/scenes/:sceneId/production-attempt",
+    { schema: sceneProductionAttemptRouteSchema },
+    async (request, reply) => {
+      const { sceneId } = request.params;
+      const queries = container.queries.currentProductionAttempt;
+      const mediaDelivery = container.dependencies.reviewMediaDelivery;
 
-      try {
-        const url = await mediaDelivery.generatePresignedReadUrl({
-          bucket: attempt.media.ref.bucket,
-          key: attempt.media.ref.key,
-          contentHash: attempt.media.ref.sha256
+      const attempt = queries
+        ? await queries.getCurrentProductionAttemptBySceneId(sceneId as SceneId)
+        : undefined;
+
+      if (!attempt) {
+        return reply.status(404).send({
+          code: "NOT_FOUND",
+          message: `Production attempt for scene '${sceneId}' was not found.`
         });
-
-        if (!url) {
-          const readModel: CurrentProductionAttemptReadModel = {
-            runId: attempt.runId,
-            sceneId: attempt.sceneId,
-            specRevision: attempt.specRevision,
-            attemptOrdinal: attempt.attemptOrdinal,
-            ...(attempt.productionJobId ? { productionJobId: attempt.productionJobId } : {}),
-            technicalState: attempt.technicalState,
-            reviewReady: attempt.reviewReady,
-            availability: "inconsistent"
-          };
-          return reply.status(200).send(readModel);
-        }
-
-        const readModel: CurrentProductionAttemptReadModel = {
-          runId: attempt.runId,
-          sceneId: attempt.sceneId,
-          specRevision: attempt.specRevision,
-          attemptOrdinal: attempt.attemptOrdinal,
-          ...(attempt.productionJobId ? { productionJobId: attempt.productionJobId } : {}),
-          technicalState: attempt.technicalState,
-          reviewReady: attempt.reviewReady,
-          availability: "available",
-          media: {
-            url,
-            generationManifestId: attempt.media.generationManifestId
-          }
-        };
-        return reply.status(200).send(readModel);
-      } catch {
-        const readModel: CurrentProductionAttemptReadModel = {
-          runId: attempt.runId,
-          sceneId: attempt.sceneId,
-          specRevision: attempt.specRevision,
-          attemptOrdinal: attempt.attemptOrdinal,
-          ...(attempt.productionJobId ? { productionJobId: attempt.productionJobId } : {}),
-          technicalState: attempt.technicalState,
-          reviewReady: attempt.reviewReady,
-          availability: "inconsistent"
-        };
-        return reply.status(200).send(readModel);
       }
+
+      const readModel = await buildCurrentProductionAttemptReadModel(attempt, mediaDelivery);
+      return reply.status(200).send(readModel);
     }
   );
 };

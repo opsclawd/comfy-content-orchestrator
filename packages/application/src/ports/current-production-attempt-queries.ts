@@ -32,4 +32,7 @@ export interface CurrentProductionAttemptQueries {
   getCurrentProductionAttempt(
     input: GetCurrentProductionAttemptInput
   ): Promise<CurrentProductionAttempt | undefined>;
+  getCurrentProductionAttemptBySceneId(
+    sceneId: SceneId
+  ): Promise<CurrentProductionAttempt | undefined>;
 }

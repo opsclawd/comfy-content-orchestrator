@@ -245,4 +245,98 @@ describe("PostgresCurrentProductionAttemptQueries Unit Tests", () => {
 
     expect(result).toBeUndefined();
   });
+
+  describe("getCurrentProductionAttemptBySceneId", () => {
+    it("resolves available attempt keyed only by sceneId", async () => {
+      const pool = fakePool([
+        {
+          run_id: runId,
+          scene_id: sceneId,
+          spec_revision: 2,
+          production_job_id: jobId,
+          job_status: "completed",
+          retry_count: 0,
+          scene_status: "qa"
+        }
+      ]);
+
+      const mockManifests: GenerationManifestRepository = {
+        getComponentIdentityById: vi.fn(),
+        findVideoStemSourceByJobId: vi.fn(async () => ({
+          generationManifestId: manifestId,
+          media: {
+            bucket: "renders-bucket",
+            key: "renders/s1.mp4",
+            sha256: "a".repeat(64),
+            contentType: "video/mp4"
+          },
+          renderAttempt: 1
+        }))
+      };
+
+      const queries = new PostgresCurrentProductionAttemptQueries(pool as never, mockManifests);
+      const result = await queries.getCurrentProductionAttemptBySceneId(sceneId);
+
+      expect(result).toEqual({
+        runId,
+        sceneId,
+        specRevision: 2,
+        attemptOrdinal: 1,
+        productionJobId: jobId,
+        technicalState: "completed",
+        reviewReady: true,
+        availability: "available",
+        media: {
+          generationManifestId: manifestId,
+          ref: {
+            bucket: "renders-bucket",
+            key: "renders/s1.mp4",
+            sha256: "a".repeat(64),
+            contentType: "video/mp4"
+          }
+        }
+      });
+
+      expect(pool.query).toHaveBeenCalledWith(expect.stringContaining("WHERE rs.scene_id = $1"), [
+        sceneId
+      ]);
+    });
+
+    it("returns undefined when scene has no production run row", async () => {
+      const pool = fakePool([]);
+
+      const queries = new PostgresCurrentProductionAttemptQueries(pool as never, {} as never);
+      const result = await queries.getCurrentProductionAttemptBySceneId(sceneId);
+
+      expect(result).toBeUndefined();
+    });
+
+    it("returns unavailable when attempt is in progress", async () => {
+      const pool = fakePool([
+        {
+          run_id: runId,
+          scene_id: sceneId,
+          spec_revision: 1,
+          production_job_id: jobId,
+          job_status: "queued",
+          retry_count: 0,
+          scene_status: "queued"
+        }
+      ]);
+
+      const queries = new PostgresCurrentProductionAttemptQueries(pool as never, {} as never);
+      const result = await queries.getCurrentProductionAttemptBySceneId(sceneId);
+
+      expect(result).toEqual({
+        runId,
+        sceneId,
+        specRevision: 1,
+        attemptOrdinal: 1,
+        productionJobId: jobId,
+        technicalState: "queued",
+        reviewReady: false,
+        availability: "unavailable"
+      });
+    });
+  });
 });
