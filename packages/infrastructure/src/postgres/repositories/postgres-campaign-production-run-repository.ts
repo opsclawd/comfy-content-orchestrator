@@ -505,7 +505,7 @@ export class PostgresCampaignProductionRunRepository implements CampaignProducti
       `
       UPDATE campaign_production_runs
       SET status = 'assembling', updated_at = CURRENT_TIMESTAMP
-      WHERE run_id = $1 AND status = 'dispatched'
+      WHERE run_id = $1 AND status IN ('dispatched', 'production_review')
       RETURNING
         run_id,
         campaign_id,

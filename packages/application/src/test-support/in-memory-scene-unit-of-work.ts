@@ -9,6 +9,7 @@ import {
   type CampaignStatus,
   type CandidateId,
   type ClientRecord,
+  type JobId,
   type JobKind,
   type RenderJob,
   type SceneId,
@@ -21,6 +22,7 @@ import type {
   CampaignShellRepository,
   ClientRepository,
   DeliveryAssemblyJobQueuePort,
+  EnqueueDeliveryAssemblyJobInput,
   EnqueueJobInput,
   GenerationManifestRepository,
   ProductionAttemptRecord,
@@ -29,7 +31,8 @@ import type {
   StoryboardCandidateRepository,
   TransactionalJobEnqueuer,
   UnitOfWork,
-  UnitOfWorkContext
+  UnitOfWorkContext,
+  VideoStemSourceRecord
 } from "../ports/index.js";
 import { CampaignIdempotencyConflictError } from "../ports/index.js";
 
@@ -51,6 +54,8 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _seededRuns = new Map<string, CampaignProductionRunRecord>();
   private readonly _seededRunScenes = new Map<string, CampaignProductionRunSceneRecord>();
   private readonly _seededAttempts = new Map<string, ProductionAttemptRecord>();
+  private readonly _seededVideoStemSources = new Map<string, VideoStemSourceRecord>();
+  private readonly _enqueuedAssemblyJobs: EnqueueDeliveryAssemblyJobInput[] = [];
   private _beforeSaveWithRequestHash?:
     ((campaign: CampaignShellRecord, hash: string) => Promise<void> | void) | undefined;
   private _executeLock: Promise<unknown> = Promise.resolve();
@@ -249,6 +254,15 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
   seedProductionAttempt(attempt: ProductionAttemptRecord): this {
     this._seededAttempts.set(attempt.attemptId, attempt);
     return this;
+  }
+
+  seedVideoStemSource(productionJobId: string, source: VideoStemSourceRecord): this {
+    this._seededVideoStemSources.set(productionJobId, source);
+    return this;
+  }
+
+  enqueuedAssemblyJobs(): readonly EnqueueDeliveryAssemblyJobInput[] {
+    return this._enqueuedAssemblyJobs;
   }
 
   setCampaignProductionRuns(repo: CampaignProductionRunRepository): this {
@@ -560,14 +574,30 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       this.campaignProductionRuns;
 
     const defaultAssemblyJobs: Pick<DeliveryAssemblyJobQueuePort, "enqueue"> = {
-      enqueue: async () => {
-        throw new Error("AssemblyJobs not configured in InMemorySceneUnitOfWork");
+      enqueue: async (input) => {
+        this._enqueuedAssemblyJobs.push(input);
+        const jobId = `assembly-job-${this._enqueuedAssemblyJobs.length}` as JobId;
+        const now = new Date();
+        return {
+          jobId,
+          campaignId: input.campaignId as CampaignId,
+          assemblySpec: input.assemblySpec,
+          status: "queued",
+          workerId: null,
+          leaseToken: null,
+          leaseExpiresAt: null,
+          retryCount: 0,
+          maxRetries: input.maxRetries ?? 3,
+          errorTrace: null,
+          createdAt: now,
+          updatedAt: now
+        };
       }
     };
 
     const defaultGenerationManifests: GenerationManifestRepository = {
       getComponentIdentityById: async () => undefined,
-      findVideoStemSourceByJobId: async () => undefined
+      findVideoStemSourceByJobId: async (jobId: string) => this._seededVideoStemSources.get(jobId)
     };
 
     const context: UnitOfWorkContext = {
@@ -732,7 +762,8 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       },
       claimForAssembly: async (runId) => {
         const run = this._seededRuns.get(runId);
-        if (!run || run.status !== "dispatched") return undefined;
+        if (!run || (run.status !== "dispatched" && run.status !== "production_review"))
+          return undefined;
         const updated = {
           ...run,
           status: "assembling" as const,

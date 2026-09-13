@@ -15,6 +15,7 @@ import {
 } from "./review-scene.js";
 import { SceneNotInProductionRunError } from "./scene-not-in-production-run-error.js";
 import { StaleProductionAttemptConflictError } from "./stale-production-attempt-conflict-error.js";
+import { attemptEnqueueAssemblyForAcceptedRun } from "./enqueue-delivery-assembly-for-accepted-run.js";
 
 export interface ProductionReviewInput extends ReviewAuditInput {
   readonly expectedSpecRevision: number;
@@ -110,6 +111,8 @@ export class ProductionReviewUseCases {
 
       await context.reviewEvents.append(event);
       await context.scenes.save(scene);
+
+      await attemptEnqueueAssemblyForAcceptedRun(context, run);
 
       return {
         isIdempotentReplay: false,
