@@ -1,6 +1,8 @@
 import process from "node:process";
 import { HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
 import type {
+  CampaignDeliveryReelQueries,
+  ObjectStoragePort,
   PlanningModelClientPort,
   RankingModelClientPort,
   ReferenceAssetRepository,
@@ -13,12 +15,14 @@ import {
   InMemoryStorageMetricsRegistry,
   OpenAiCandidateRankingClient,
   OpenAiPlanningModelClient,
+  PostgresCampaignDeliveryReelQueries,
   PostgresDeliveryAssemblyJobQueue,
   PostgresJobQueue,
   PostgresReferenceAssetRepository,
   PostgresSceneReviewQueries,
   PostgresCurrentProductionAttemptQueries,
   PostgresUnitOfWork,
+  S3ObjectStorage,
   S3ReviewMediaDelivery,
   StorageAwareJobAdmissionGate,
   type HostFsStorageTelemetryAdapterOptions
@@ -67,6 +71,8 @@ export interface ControlApiBootstrapOptions {
     readonly fallback: RankingModelClientPort;
   };
   readonly referenceAssetRepository?: ReferenceAssetRepository;
+  readonly campaignDeliveryReelQueries?: CampaignDeliveryReelQueries;
+  readonly objectStorage?: ObjectStoragePort;
   readonly serverStarter?: (
     dependencies: ControlApiDependencies,
     options: ServerListenOptions
@@ -210,6 +216,16 @@ export async function runControlApi(
     const uow = new PostgresUnitOfWork(pool);
     const sceneReviewQueries = new PostgresSceneReviewQueries(pool);
     const currentProductionAttemptQueries = new PostgresCurrentProductionAttemptQueries(pool);
+    const campaignDeliveryReelQueries =
+      options.campaignDeliveryReelQueries ?? new PostgresCampaignDeliveryReelQueries(pool);
+    const objectStorage =
+      options.objectStorage ??
+      new S3ObjectStorage({
+        endpoint: config.s3.storageEndpoint,
+        region: config.s3.region,
+        credentials: config.s3.credentials,
+        forcePathStyle: config.s3.forcePathStyle
+      });
     const reviewMediaDelivery = new S3ReviewMediaDelivery({
       signingEndpoint: config.s3.signingEndpoint,
       storageEndpoint: config.s3.storageEndpoint,
@@ -310,6 +326,8 @@ export async function runControlApi(
         uow,
         sceneReviewQueries,
         currentProductionAttemptQueries,
+        campaignDeliveryReelQueries,
+        objectStorage,
         reviewMediaDelivery,
         storageTelemetry,
         storageMetricsRegistry,
