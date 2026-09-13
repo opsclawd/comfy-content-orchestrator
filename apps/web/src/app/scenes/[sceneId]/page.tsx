@@ -1,5 +1,9 @@
 import { notFound } from "next/navigation";
-import { ApiClientError, getSceneReviewDetail } from "../../../api/client";
+import {
+  ApiClientError,
+  getCurrentProductionAttempt,
+  getSceneReviewDetail
+} from "../../../api/client";
 import { SceneReviewDetailView } from "../../../components/scene-review-detail";
 
 export const dynamic = "force-dynamic";
@@ -14,8 +18,14 @@ export default async function ScenePage({ params }: ScenePageProps) {
   const { sceneId } = await params;
 
   let detail;
+  let productionAttempt;
   try {
-    detail = await getSceneReviewDetail(sceneId);
+    const [detailResult, productionAttemptResult] = await Promise.all([
+      getSceneReviewDetail(sceneId),
+      getCurrentProductionAttempt(sceneId)
+    ]);
+    detail = detailResult;
+    productionAttempt = productionAttemptResult;
   } catch (err) {
     if (err instanceof ApiClientError && err.statusCode === 404) {
       notFound();
@@ -25,7 +35,7 @@ export default async function ScenePage({ params }: ScenePageProps) {
 
   return (
     <div className="scene-page-container">
-      <SceneReviewDetailView detail={detail} />
+      <SceneReviewDetailView detail={detail} productionAttempt={productionAttempt} />
     </div>
   );
 }

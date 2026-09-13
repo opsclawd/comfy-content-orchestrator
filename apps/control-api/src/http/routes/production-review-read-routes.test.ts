@@ -54,7 +54,8 @@ describe("ProductionReviewReadRoutes", () => {
 
   it("returns 200 with presigned URL and attempt metadata on happy path", async () => {
     const mockQueries: CurrentProductionAttemptQueries = {
-      getCurrentProductionAttempt: vi.fn(async () => availableAttempt)
+      getCurrentProductionAttempt: vi.fn(async () => availableAttempt),
+      getCurrentProductionAttemptBySceneId: vi.fn()
     };
 
     const mockDelivery: ReviewMediaDeliveryPort = {
@@ -103,7 +104,8 @@ describe("ProductionReviewReadRoutes", () => {
 
   it("returns 404 when production attempt is not found", async () => {
     const mockQueries: CurrentProductionAttemptQueries = {
-      getCurrentProductionAttempt: vi.fn(async () => undefined)
+      getCurrentProductionAttempt: vi.fn(async () => undefined),
+      getCurrentProductionAttemptBySceneId: vi.fn()
     };
 
     const app = createControlApiApp({
@@ -124,7 +126,8 @@ describe("ProductionReviewReadRoutes", () => {
 
   it("returns 409 STALE_REVISION_CONFLICT when specRevision query param does not match", async () => {
     const mockQueries: CurrentProductionAttemptQueries = {
-      getCurrentProductionAttempt: vi.fn(async () => availableAttempt)
+      getCurrentProductionAttempt: vi.fn(async () => availableAttempt),
+      getCurrentProductionAttemptBySceneId: vi.fn()
     };
 
     const app = createControlApiApp({
@@ -148,7 +151,8 @@ describe("ProductionReviewReadRoutes", () => {
 
   it("returns 200 when specRevision matches expected revision", async () => {
     const mockQueries: CurrentProductionAttemptQueries = {
-      getCurrentProductionAttempt: vi.fn(async () => availableAttempt)
+      getCurrentProductionAttempt: vi.fn(async () => availableAttempt),
+      getCurrentProductionAttemptBySceneId: vi.fn()
     };
 
     const mockDelivery: ReviewMediaDeliveryPort = {
@@ -182,7 +186,8 @@ describe("ProductionReviewReadRoutes", () => {
         technicalState: "completed" as const,
         reviewReady: false,
         availability: "missing_manifest" as const
-      }))
+      })),
+      getCurrentProductionAttemptBySceneId: vi.fn()
     };
 
     const app = createControlApiApp({
@@ -222,7 +227,8 @@ describe("ProductionReviewReadRoutes", () => {
         technicalState: "rendering" as const,
         reviewReady: false,
         availability: "unavailable" as const
-      }))
+      })),
+      getCurrentProductionAttemptBySceneId: vi.fn()
     };
 
     const app = createControlApiApp({
@@ -245,7 +251,8 @@ describe("ProductionReviewReadRoutes", () => {
 
   it("degrades to inconsistent when generatePresignedReadUrl throws", async () => {
     const mockQueries: CurrentProductionAttemptQueries = {
-      getCurrentProductionAttempt: vi.fn(async () => availableAttempt)
+      getCurrentProductionAttempt: vi.fn(async () => availableAttempt),
+      getCurrentProductionAttemptBySceneId: vi.fn()
     };
 
     const mockDelivery: ReviewMediaDeliveryPort = {
@@ -275,7 +282,8 @@ describe("ProductionReviewReadRoutes", () => {
 
   it("degrades to inconsistent when generatePresignedReadUrl returns empty string", async () => {
     const mockQueries: CurrentProductionAttemptQueries = {
-      getCurrentProductionAttempt: vi.fn(async () => availableAttempt)
+      getCurrentProductionAttempt: vi.fn(async () => availableAttempt),
+      getCurrentProductionAttemptBySceneId: vi.fn()
     };
 
     const mockDelivery: ReviewMediaDeliveryPort = {
@@ -301,7 +309,8 @@ describe("ProductionReviewReadRoutes", () => {
 
   it("returns unavailable when reviewMediaDelivery is not configured", async () => {
     const mockQueries: CurrentProductionAttemptQueries = {
-      getCurrentProductionAttempt: vi.fn(async () => availableAttempt)
+      getCurrentProductionAttempt: vi.fn(async () => availableAttempt),
+      getCurrentProductionAttemptBySceneId: vi.fn()
     };
 
     const app = createControlApiApp({
@@ -325,7 +334,8 @@ describe("ProductionReviewReadRoutes", () => {
     const app = createControlApiApp({
       uow: new FakeUnitOfWork(),
       currentProductionAttemptQueries: {
-        getCurrentProductionAttempt: vi.fn()
+        getCurrentProductionAttempt: vi.fn(),
+        getCurrentProductionAttemptBySceneId: vi.fn()
       }
     });
 
@@ -335,5 +345,120 @@ describe("ProductionReviewReadRoutes", () => {
     });
 
     expect(response.statusCode).toBe(400);
+  });
+
+  describe("GET /api/scenes/:sceneId/production-attempt", () => {
+    it("returns 200 with presigned URL and attempt metadata when available", async () => {
+      const mockQueries: CurrentProductionAttemptQueries = {
+        getCurrentProductionAttempt: vi.fn(),
+        getCurrentProductionAttemptBySceneId: vi.fn(async () => availableAttempt)
+      };
+
+      const mockDelivery: ReviewMediaDeliveryPort = {
+        generatePresignedReadUrl: vi.fn(
+          async () => "https://s3.example.com/renders/scene-3.mp4?signature=xyz"
+        )
+      };
+
+      const app = createControlApiApp({
+        uow: new FakeUnitOfWork(),
+        currentProductionAttemptQueries: mockQueries,
+        reviewMediaDelivery: mockDelivery
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/scenes/${sceneId}/production-attempt`
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(body).toEqual({
+        runId,
+        sceneId,
+        specRevision: 2,
+        attemptOrdinal: 1,
+        productionJobId: jobId,
+        technicalState: "completed",
+        reviewReady: true,
+        availability: "available",
+        media: {
+          url: "https://s3.example.com/renders/scene-3.mp4?signature=xyz",
+          generationManifestId: manifestId
+        }
+      });
+      expect(() => CurrentProductionAttemptReadModelSchema.parse(body)).not.toThrow();
+    });
+
+    it("returns 200 with queued / unavailable when in progress", async () => {
+      const mockQueries: CurrentProductionAttemptQueries = {
+        getCurrentProductionAttempt: vi.fn(),
+        getCurrentProductionAttemptBySceneId: vi.fn(async () => ({
+          runId,
+          sceneId: sceneId as SceneId,
+          specRevision: 1,
+          attemptOrdinal: 1,
+          productionJobId: jobId,
+          technicalState: "queued" as const,
+          reviewReady: false,
+          availability: "unavailable" as const
+        }))
+      };
+
+      const app = createControlApiApp({
+        uow: new FakeUnitOfWork(),
+        currentProductionAttemptQueries: mockQueries
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/scenes/${sceneId}/production-attempt`
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(body.technicalState).toBe("queued");
+      expect(body.availability).toBe("unavailable");
+      expect(body.media).toBeUndefined();
+      expect(() => CurrentProductionAttemptReadModelSchema.parse(body)).not.toThrow();
+    });
+
+    it("returns 404 when scene production attempt is not found", async () => {
+      const mockQueries: CurrentProductionAttemptQueries = {
+        getCurrentProductionAttempt: vi.fn(),
+        getCurrentProductionAttemptBySceneId: vi.fn(async () => undefined)
+      };
+
+      const app = createControlApiApp({
+        uow: new FakeUnitOfWork(),
+        currentProductionAttemptQueries: mockQueries
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/scenes/${sceneId}/production-attempt`
+      });
+
+      expect(response.statusCode).toBe(404);
+      const body = response.json();
+      expect(body.code).toBe("NOT_FOUND");
+    });
+
+    it("returns 400 for invalid UUID in scene route", async () => {
+      const app = createControlApiApp({
+        uow: new FakeUnitOfWork(),
+        currentProductionAttemptQueries: {
+          getCurrentProductionAttempt: vi.fn(),
+          getCurrentProductionAttemptBySceneId: vi.fn()
+        }
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/scenes/invalid-uuid/production-attempt"
+      });
+
+      expect(response.statusCode).toBe(400);
+    });
   });
 });

@@ -3,8 +3,10 @@
 import React, { useEffect, useReducer, useRef } from "react";
 import Link from "next/link";
 import type { SceneReviewDetailReadModel } from "@cco/contracts";
+import type { CurrentProductionAttemptReadModel } from "../api/client";
 import { CandidateGallery } from "./candidate-gallery";
 import { ReviewCommandControls } from "./review-command-controls";
+import { ProductionReviewPanel } from "./production-review-panel";
 import {
   areCommandsDisabled,
   createInitialState,
@@ -21,10 +23,15 @@ import {
 
 export interface SceneReviewDetailProps {
   detail: SceneReviewDetailReadModel;
+  productionAttempt?: CurrentProductionAttemptReadModel | undefined;
   onDetailChange?: ((detail: SceneReviewDetailReadModel) => void) | undefined;
 }
 
-export function SceneReviewDetailView({ detail, onDetailChange }: SceneReviewDetailProps) {
+export function SceneReviewDetailView({
+  detail,
+  productionAttempt,
+  onDetailChange
+}: SceneReviewDetailProps) {
   const { configuration, approval } = detail;
   const hasReferences = configuration.referenceIds && configuration.referenceIds.length > 0;
   const hasLora =
@@ -186,12 +193,22 @@ export function SceneReviewDetailView({ detail, onDetailChange }: SceneReviewDet
         {/* Interactive Review Command Controls */}
         <ReviewCommandControls
           detail={detail}
+          productionAttempt={productionAttempt}
           state={state}
           dispatch={dispatch}
           disabled={disabled}
           onDetailChange={onDetailChange}
         />
       </div>
+
+      {/* Production Review Panel (when production attempt exists) */}
+      <ProductionReviewPanel
+        detail={detail}
+        productionAttempt={productionAttempt}
+        state={state}
+        dispatch={dispatch}
+        disabled={disabled}
+      />
 
       {/* Candidate History Gallery */}
       <CandidateGallery
