@@ -395,4 +395,96 @@ describe("EnqueueSceneProductionRenderUseCase", () => {
       spy.mockRestore();
     }
   });
+
+  it("records production attempt and tracks ordinal when campaign production runs are present", async () => {
+    const scene = createApprovedScene("scene-attempt-track");
+    const queue = new InMemoryJobQueue();
+    const uow = new InMemorySceneUnitOfWork([scene]).withJobs(queue);
+    uow.seedCampaignProductionRun({
+      id: "run-1",
+      campaignId: "campaign-1" as CampaignId,
+      fingerprint: "fp-1",
+      status: "dispatched",
+      expectedTotalDurationMs: 4042,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+    uow.seedCampaignProductionRunScenes("run-1", [
+      {
+        runId: "run-1",
+        sceneId: "scene-attempt-track" as SceneId,
+        specRevision: 1,
+        sequenceIndex: 1,
+        expectedDurationMs: 4042,
+        productionJobId: "job-initial"
+      }
+    ]);
+
+    const useCase = new EnqueueSceneProductionRenderUseCase(uow);
+    const result = await useCase.execute({ sceneId: "scene-attempt-track", runId: "run-1" });
+
+    expect(result.attemptOrdinal).toBe(1);
+    expect(result.attemptId).toBeDefined();
+    expect(result.scene.productionAttemptOrdinal).toBe(1);
+    expect(result.scene.activeProductionJobId).toBe(result.job.jobId);
+
+    // Verify attempt recorded in run repository
+    const runScene = await uow.campaignProductionRuns.findRunSceneBySceneId("scene-attempt-track");
+    expect(runScene?.currentAttemptId).toBe(result.attemptId);
+    expect(runScene?.currentAttemptOrdinal).toBe(1);
+  });
+
+  it("supports executeRerenderWithContext: enqueues job with production_rerender reason and updates current attempt", async () => {
+    const scene = createApprovedScene("scene-rerender-test");
+    scene.queueForProduction("job-1");
+    scene.startRendering();
+    scene.submitForQA();
+
+    const queue = new InMemoryJobQueue();
+    const uow = new InMemorySceneUnitOfWork([scene]).withJobs(queue);
+    const runRecord = {
+      id: "run-1",
+      campaignId: "campaign-1" as CampaignId,
+      fingerprint: "fp-1",
+      status: "dispatched" as const,
+      expectedTotalDurationMs: 4042,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    uow.seedCampaignProductionRun(runRecord);
+    uow.seedCampaignProductionRunScenes("run-1", [
+      {
+        runId: "run-1",
+        sceneId: "scene-rerender-test" as SceneId,
+        specRevision: 1,
+        sequenceIndex: 1,
+        expectedDurationMs: 4042,
+        productionJobId: "job-1",
+        currentAttemptId: "attempt-1",
+        currentAttemptOrdinal: 1
+      }
+    ]);
+
+    const useCase = new EnqueueSceneProductionRenderUseCase(uow);
+    const rerenderResult = await uow.execute(async (context) => {
+      return await useCase.executeRerenderWithContext(context, scene, runRecord);
+    });
+
+    expect(rerenderResult.attemptOrdinal).toBe(2);
+    expect(rerenderResult.job.jobKind).toBe("production");
+    expect(rerenderResult.job.workflowTemplate).toBe(LTX_I2V_PRODUCTION_WORKFLOW_TEMPLATE);
+
+    const attempt = await uow.campaignProductionRuns.findAttemptByProductionJobId(
+      rerenderResult.job.jobId
+    );
+    expect(attempt).toBeDefined();
+    expect(attempt?.createdReason).toBe("production_rerender");
+    expect(attempt?.ordinal).toBe(2);
+
+    const updatedRunScene =
+      await uow.campaignProductionRuns.findRunSceneBySceneId("scene-rerender-test");
+    expect(updatedRunScene?.currentAttemptId).toBe(rerenderResult.attemptId);
+    expect(updatedRunScene?.currentAttemptOrdinal).toBe(2);
+    expect(updatedRunScene?.productionJobId).toBe(rerenderResult.job.jobId);
+  });
 });

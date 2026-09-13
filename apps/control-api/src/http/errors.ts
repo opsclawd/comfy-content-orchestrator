@@ -21,6 +21,8 @@ import {
   SceneConfigurationValidationError,
   SceneCreationModeMismatchError,
   SceneNotFoundError,
+  SceneNotInProductionRunError,
+  StaleProductionAttemptConflictError,
   StaleRevisionConflictError,
   StoryboardMaterializationConflictError,
   StoryboardPartiallyMaterializedError,
@@ -28,6 +30,7 @@ import {
 } from "@cco/application";
 import type { ReviewErrorResponse } from "@cco/contracts";
 import {
+  AlreadyAcceptedProductionAttemptError,
   InvalidCandidateError,
   InvalidMutationError,
   InvalidTransitionError,
@@ -176,6 +179,36 @@ export function formatReviewError(error: unknown): {
     };
   }
 
+  if (error instanceof StaleProductionAttemptConflictError) {
+    return {
+      statusCode: 409,
+      body: {
+        code: "STALE_PRODUCTION_ATTEMPT_CONFLICT",
+        message: error.message,
+        details: {
+          sceneId: error.sceneId,
+          expectedProductionJobId: error.expectedProductionJobId,
+          ...(error.actualProductionJobId !== undefined
+            ? { actualProductionJobId: error.actualProductionJobId }
+            : {})
+        }
+      }
+    };
+  }
+
+  if (error instanceof SceneNotInProductionRunError) {
+    return {
+      statusCode: 422,
+      body: {
+        code: "SCENE_NOT_IN_PRODUCTION_RUN",
+        message: error.message,
+        details: {
+          sceneId: error.sceneId
+        }
+      }
+    };
+  }
+
   if (error instanceof IdempotencyConflictError) {
     return {
       statusCode: 409,
@@ -235,7 +268,8 @@ export function formatReviewError(error: unknown): {
     error instanceof InvalidTransitionError ||
     error instanceof InvalidMutationError ||
     error instanceof InvalidCandidateError ||
-    error instanceof TerminalStateError
+    error instanceof TerminalStateError ||
+    error instanceof AlreadyAcceptedProductionAttemptError
   ) {
     return {
       statusCode: 422,

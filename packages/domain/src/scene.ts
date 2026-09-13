@@ -66,6 +66,8 @@ export interface SceneSnapshot {
   readonly selectedCandidateId?: CandidateId;
   readonly selectedCandidateRevision?: number;
   readonly activeProductionJobId?: string | undefined;
+  readonly productionAttemptOrdinal?: number | undefined;
+  readonly acceptedProductionAttemptId?: string | undefined;
 }
 
 export type SceneTransitionReason =
@@ -82,7 +84,9 @@ export type SceneTransitionReason =
   | "recovered_to_review"
   | "cancelled"
   | "configuration_changed"
-  | "candidate_selected";
+  | "candidate_selected"
+  | "production_rerender_requested"
+  | "production_accepted";
 
 export interface SceneTransition {
   readonly sceneId: SceneId;
@@ -166,6 +170,16 @@ export class TerminalStateError extends Error {
   }
 }
 
+export class AlreadyAcceptedProductionAttemptError extends Error {
+  override readonly name = "AlreadyAcceptedProductionAttemptError";
+  readonly sceneId: SceneId;
+
+  constructor(sceneId: SceneId) {
+    super(`Scene '${sceneId}' already has an accepted production attempt.`);
+    this.sceneId = sceneId;
+  }
+}
+
 function freezeConfiguration(config: SceneConfiguration): Readonly<SceneConfiguration> {
   return Object.freeze({
     prompt: config.prompt,
@@ -190,6 +204,8 @@ export class Scene {
   #selectedCandidateId?: CandidateId | undefined;
   #selectedCandidateRevision?: number | undefined;
   #activeProductionJobId?: string | undefined;
+  #productionAttemptOrdinal: number;
+  #acceptedProductionAttemptId?: string | undefined;
 
   private constructor(input: SceneCreateInput) {
     this.#id = input.id;
@@ -198,6 +214,8 @@ export class Scene {
     this.#specRevision = 1;
     this.#sequenceIndex = input.sequenceIndex ?? 1;
     this.#configuration = freezeConfiguration(input.configuration);
+    this.#productionAttemptOrdinal = 0;
+    this.#acceptedProductionAttemptId = undefined;
   }
 
   static create(input: SceneCreateInput): Scene {
@@ -219,6 +237,8 @@ export class Scene {
     scene.#selectedCandidateId = snapshot.selectedCandidateId;
     scene.#selectedCandidateRevision = snapshot.selectedCandidateRevision;
     scene.#activeProductionJobId = snapshot.activeProductionJobId;
+    scene.#productionAttemptOrdinal = snapshot.productionAttemptOrdinal ?? 0;
+    scene.#acceptedProductionAttemptId = snapshot.acceptedProductionAttemptId;
     return scene;
   }
 
@@ -509,6 +529,7 @@ export class Scene {
       "production_queued",
       () => {
         this.#activeProductionJobId = activeProductionJobId;
+        this.#productionAttemptOrdinal += 1;
       }
     );
   }
@@ -519,6 +540,34 @@ export class Scene {
 
   submitForQA(): SceneTransition {
     return this.#transition("submitForQA", ["rendering"], "qa", "submitted_for_qa");
+  }
+
+  requestProductionRerender(newProductionJobId: string): SceneTransition {
+    return this.#transition(
+      "requestProductionRerender",
+      ["qa"],
+      "queued",
+      "production_rerender_requested",
+      () => {
+        this.#activeProductionJobId = newProductionJobId;
+        this.#productionAttemptOrdinal += 1;
+      }
+    );
+  }
+
+  acceptProductionAttempt(acceptedProductionAttemptId: string): SceneTransition {
+    if (this.#acceptedProductionAttemptId !== undefined) {
+      throw new AlreadyAcceptedProductionAttemptError(this.#id);
+    }
+    return this.#transition(
+      "acceptProductionAttempt",
+      ["qa"],
+      "completed",
+      "production_accepted",
+      () => {
+        this.#acceptedProductionAttemptId = acceptedProductionAttemptId;
+      }
+    );
   }
 
   acceptQA(): SceneTransition {
@@ -605,6 +654,12 @@ export class Scene {
         : {}),
       ...(this.#activeProductionJobId !== undefined
         ? { activeProductionJobId: this.#activeProductionJobId }
+        : {}),
+      ...(this.#productionAttemptOrdinal > 0
+        ? { productionAttemptOrdinal: this.#productionAttemptOrdinal }
+        : {}),
+      ...(this.#acceptedProductionAttemptId !== undefined
+        ? { acceptedProductionAttemptId: this.#acceptedProductionAttemptId }
         : {})
     });
   }

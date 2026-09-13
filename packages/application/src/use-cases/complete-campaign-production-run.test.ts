@@ -15,6 +15,32 @@ import type {
 } from "../index.js";
 import { CompleteCampaignProductionRunUseCases } from "./complete-campaign-production-run.js";
 
+function createMockRuns(
+  overrides: Partial<CampaignProductionRunRepository>
+): CampaignProductionRunRepository {
+  return {
+    createIfAbsent: vi.fn(),
+    insertRunScenes: vi.fn(),
+    findById: vi.fn(),
+    findByIdForUpdate: vi.fn(),
+    findByAssemblyJobId: vi.fn(),
+    findRunScenes: vi.fn(async () => []),
+    findRunSceneBySceneId: vi.fn(),
+    findRunSceneByProductionJobId: vi.fn(),
+    recordProductionAttempt: vi.fn(),
+    findAttemptByProductionJobId: vi.fn(),
+    updateCurrentAttempt: vi.fn(),
+    recordAcceptedAttempt: vi.fn(),
+    countIncompleteRunScenes: vi.fn(async () => 0),
+    claimForProductionReview: vi.fn(),
+    claimForAssembly: vi.fn(),
+    setAssemblyJobId: vi.fn(),
+    claimCompletion: vi.fn(),
+    claimFailure: vi.fn(),
+    ...overrides
+  };
+}
+
 describe("CompleteCampaignProductionRunUseCases", () => {
   describe("onProductionJobStarted", () => {
     it("transitions campaign status from queued to rendering when first production job starts", async () => {
@@ -49,7 +75,7 @@ describe("CompleteCampaignProductionRunUseCases", () => {
         productionJobId: "job-1"
       };
 
-      let currentCampaign: CampaignRecord = campaign;
+      let currentCampaign = campaign;
       const savedCampaigns: CampaignRecord[] = [];
       const mockCampaigns: CampaignRepository<CampaignRecord> = {
         findById: vi.fn(async () => currentCampaign),
@@ -65,20 +91,10 @@ describe("CompleteCampaignProductionRunUseCases", () => {
         })
       };
 
-      const mockRuns: CampaignProductionRunRepository = {
+      const mockRuns = createMockRuns({
         findRunSceneByProductionJobId: vi.fn(async () => runScene),
-        findById: vi.fn(async () => run),
-        createIfAbsent: vi.fn(),
-        insertRunScenes: vi.fn(),
-        findByAssemblyJobId: vi.fn(),
-        findRunScenes: vi.fn(async () => []),
-        countIncompleteRunScenes: vi.fn(async () => 0),
-        claimForProductionReview: vi.fn(),
-        claimForAssembly: vi.fn(),
-        setAssemblyJobId: vi.fn(),
-        claimCompletion: vi.fn(),
-        claimFailure: vi.fn()
-      };
+        findById: vi.fn(async () => run)
+      });
 
       const mockUow: UnitOfWork = {
         execute: vi.fn(async (work) =>
@@ -132,20 +148,13 @@ describe("CompleteCampaignProductionRunUseCases", () => {
         status: "production_review"
       };
 
-      const mockRuns: CampaignProductionRunRepository = {
+      const mockRuns = createMockRuns({
         findRunSceneByProductionJobId: vi.fn(async () => runScene),
         findById: vi.fn(async () => run),
         findRunScenes: vi.fn(async () => []),
         countIncompleteRunScenes: vi.fn(async () => 0),
-        claimForProductionReview: vi.fn(async () => reviewRun),
-        claimForAssembly: vi.fn(),
-        setAssemblyJobId: vi.fn(),
-        createIfAbsent: vi.fn(),
-        insertRunScenes: vi.fn(),
-        findByAssemblyJobId: vi.fn(),
-        claimCompletion: vi.fn(),
-        claimFailure: vi.fn()
-      };
+        claimForProductionReview: vi.fn(async () => reviewRun)
+      });
 
       const savedCampaigns: CampaignRecord[] = [];
       let currentCampaign: CampaignRecord = campaign;
@@ -516,7 +525,7 @@ describe("CompleteCampaignProductionRunUseCases", () => {
         productionJobId: "job-1"
       };
 
-      const mockRuns: CampaignProductionRunRepository = {
+      const mockRuns = createMockRuns({
         findRunSceneByProductionJobId: vi.fn(async () => runScene),
         claimFailure: vi.fn(async () => ({
           id: "run-1",
@@ -526,18 +535,8 @@ describe("CompleteCampaignProductionRunUseCases", () => {
           expectedTotalDurationMs: 4000,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
-        })),
-        findById: vi.fn(),
-        createIfAbsent: vi.fn(),
-        insertRunScenes: vi.fn(),
-        findByAssemblyJobId: vi.fn(),
-        findRunScenes: vi.fn(async () => []),
-        countIncompleteRunScenes: vi.fn(async () => 0),
-        claimForProductionReview: vi.fn(),
-        claimForAssembly: vi.fn(),
-        setAssemblyJobId: vi.fn(),
-        claimCompletion: vi.fn()
-      };
+        }))
+      });
 
       const savedCampaigns: CampaignRecord[] = [];
       let currentCampaign: CampaignRecord = campaign;

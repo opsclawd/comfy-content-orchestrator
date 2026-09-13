@@ -2,6 +2,8 @@ import type { ReviewEvent } from "@cco/contracts";
 import {
   Scene,
   type CampaignId,
+  type CampaignProductionRunRecord,
+  type CampaignProductionRunSceneRecord,
   type CampaignRecord,
   type CampaignShellRecord,
   type CampaignStatus,
@@ -21,6 +23,7 @@ import type {
   DeliveryAssemblyJobQueuePort,
   EnqueueJobInput,
   GenerationManifestRepository,
+  ProductionAttemptRecord,
   ReviewEventStore,
   SceneRepository,
   StoryboardCandidateRepository,
@@ -44,8 +47,13 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _savedClients: ClientRecord[] = [];
   private readonly _enqueuedJobs: RenderJob[] = [];
   private _jobEnqueuer?: TransactionalJobEnqueuer | undefined;
+  private _campaignProductionRuns?: CampaignProductionRunRepository | undefined;
+  private readonly _seededRuns = new Map<string, CampaignProductionRunRecord>();
+  private readonly _seededRunScenes = new Map<string, CampaignProductionRunSceneRecord>();
+  private readonly _seededAttempts = new Map<string, ProductionAttemptRecord>();
   private _beforeSaveWithRequestHash?:
     ((campaign: CampaignShellRecord, hash: string) => Promise<void> | void) | undefined;
+  private _executeLock: Promise<unknown> = Promise.resolve();
 
   constructor(
     seededScenes?: Iterable<Scene> | ReadonlyMap<SceneId, Scene> | Record<string, Scene>,
@@ -222,7 +230,52 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     return this;
   }
 
+  seedCampaignProductionRun(run: CampaignProductionRunRecord): this {
+    this._seededRuns.set(run.id, run);
+    return this;
+  }
+
+  seedCampaignProductionRunScenes(
+    runIdOrScenes: string | readonly CampaignProductionRunSceneRecord[],
+    scenes?: readonly CampaignProductionRunSceneRecord[]
+  ): this {
+    const list = typeof runIdOrScenes === "string" ? (scenes ?? []) : runIdOrScenes;
+    for (const scene of list) {
+      this._seededRunScenes.set(`${scene.runId}:${scene.sceneId}`, scene);
+    }
+    return this;
+  }
+
+  seedProductionAttempt(attempt: ProductionAttemptRecord): this {
+    this._seededAttempts.set(attempt.attemptId, attempt);
+    return this;
+  }
+
+  setCampaignProductionRuns(repo: CampaignProductionRunRepository): this {
+    this._campaignProductionRuns = repo;
+    return this;
+  }
+
+  get campaignProductionRuns(): CampaignProductionRunRepository {
+    if (!this._campaignProductionRuns) {
+      this._campaignProductionRuns = this.createDefaultCampaignProductionRuns();
+    }
+    return this._campaignProductionRuns;
+  }
+
   async execute<TResult>(work: (context: UnitOfWorkContext) => Promise<TResult>): Promise<TResult> {
+    const next = () => this._executeInternal(work);
+    const promise = this._executeLock.then(next, next);
+    this._executeLock = promise.then(
+      () => {},
+      () => {}
+    );
+    return promise;
+  }
+
+  private async _executeInternal<TResult>(
+    work: (context: UnitOfWorkContext) => Promise<TResult>
+  ): Promise<TResult> {
     const scopedSceneCopies = new Map<SceneId, Scene>();
     for (const [id, scene] of this._seededScenes.entries()) {
       scopedSceneCopies.set(id, Scene.reconstitute(scene.snapshot()));
@@ -503,22 +556,8 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       }
     };
 
-    const defaultCampaignProductionRuns: CampaignProductionRunRepository = {
-      createIfAbsent: async () => {
-        throw new Error("CampaignProductionRuns not configured in InMemorySceneUnitOfWork");
-      },
-      findById: async () => undefined,
-      findByAssemblyJobId: async () => undefined,
-      findRunSceneByProductionJobId: async () => undefined,
-      findRunScenes: async () => [],
-      insertRunScenes: async () => {},
-      countIncompleteRunScenes: async () => 0,
-      claimForProductionReview: async () => undefined,
-      claimForAssembly: async () => undefined,
-      setAssemblyJobId: async () => {},
-      claimCompletion: async () => undefined,
-      claimFailure: async () => undefined
-    };
+    const defaultCampaignProductionRuns: CampaignProductionRunRepository =
+      this.campaignProductionRuns;
 
     const defaultAssemblyJobs: Pick<DeliveryAssemblyJobQueuePort, "enqueue"> = {
       enqueue: async () => {
@@ -581,5 +620,155 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     }
 
     return result;
+  }
+
+  private createDefaultCampaignProductionRuns(): CampaignProductionRunRepository {
+    return {
+      createIfAbsent: async (input) => {
+        for (const run of this._seededRuns.values()) {
+          if (run.campaignId === input.campaignId && run.fingerprint === input.fingerprint) {
+            return { run, created: false };
+          }
+        }
+        const run: CampaignProductionRunRecord = {
+          id: `run-${this._seededRuns.size + 1}`,
+          campaignId: input.campaignId,
+          fingerprint: input.fingerprint,
+          status: input.status,
+          expectedTotalDurationMs: input.expectedTotalDurationMs,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        this._seededRuns.set(run.id, run);
+        return { run, created: true };
+      },
+      findById: async (runId) => this._seededRuns.get(runId),
+      findByIdForUpdate: async (runId) => this._seededRuns.get(runId),
+      findByAssemblyJobId: async (assemblyJobId) => {
+        for (const run of this._seededRuns.values()) {
+          if (run.assemblyJobId === assemblyJobId) return run;
+        }
+        return undefined;
+      },
+      findRunSceneBySceneId: async (sceneId) => {
+        for (const rs of this._seededRunScenes.values()) {
+          if (rs.sceneId === sceneId) return rs;
+        }
+        return undefined;
+      },
+      findRunSceneByProductionJobId: async (productionJobId) => {
+        for (const rs of this._seededRunScenes.values()) {
+          if (rs.productionJobId === productionJobId) return rs;
+        }
+        return undefined;
+      },
+      findRunScenes: async (runId) => {
+        return Array.from(this._seededRunScenes.values())
+          .filter((rs) => rs.runId === runId)
+          .sort((a, b) => a.sequenceIndex - b.sequenceIndex);
+      },
+      insertRunScenes: async (runId, scenes) => {
+        for (const scene of scenes) {
+          this._seededRunScenes.set(`${runId}:${scene.sceneId}`, scene);
+        }
+      },
+      recordProductionAttempt: async (input) => {
+        const attempt: ProductionAttemptRecord = {
+          ...input,
+          attemptId: `attempt-${this._seededAttempts.size + 1}`,
+          createdAt: new Date().toISOString()
+        };
+        this._seededAttempts.set(attempt.attemptId, attempt);
+        return attempt;
+      },
+      findAttemptByProductionJobId: async (productionJobId) => {
+        for (const attempt of this._seededAttempts.values()) {
+          if (attempt.productionJobId === productionJobId) return attempt;
+        }
+        return undefined;
+      },
+      updateCurrentAttempt: async (runId, sceneId, attempt) => {
+        const key = `${runId}:${sceneId}`;
+        const existing = this._seededRunScenes.get(key);
+        if (existing) {
+          this._seededRunScenes.set(key, {
+            ...existing,
+            currentAttemptId: attempt.attemptId,
+            currentAttemptOrdinal: attempt.attemptOrdinal,
+            productionJobId: attempt.productionJobId
+          });
+        }
+      },
+      recordAcceptedAttempt: async (runId, sceneId, attempt) => {
+        const key = `${runId}:${sceneId}`;
+        const existing = this._seededRunScenes.get(key);
+        if (!existing) return { accepted: false };
+        if (existing.acceptedAttemptId !== undefined) return { accepted: false };
+        this._seededRunScenes.set(key, {
+          ...existing,
+          acceptedAttemptId: attempt.attemptId,
+          acceptedAttemptOrdinal: attempt.attemptOrdinal,
+          acceptedProductionJobId: attempt.productionJobId
+        });
+        return { accepted: true };
+      },
+      countIncompleteRunScenes: async (runId) => {
+        let count = 0;
+        for (const rs of this._seededRunScenes.values()) {
+          if (rs.runId === runId && !rs.productionJobId) count++;
+        }
+        return count;
+      },
+      claimForProductionReview: async (runId) => {
+        const run = this._seededRuns.get(runId);
+        if (!run || run.status !== "dispatched") return undefined;
+        const updated = {
+          ...run,
+          status: "production_review" as const,
+          updatedAt: new Date().toISOString()
+        };
+        this._seededRuns.set(runId, updated);
+        return updated;
+      },
+      claimForAssembly: async (runId) => {
+        const run = this._seededRuns.get(runId);
+        if (!run || run.status !== "dispatched") return undefined;
+        const updated = {
+          ...run,
+          status: "assembling" as const,
+          updatedAt: new Date().toISOString()
+        };
+        this._seededRuns.set(runId, updated);
+        return updated;
+      },
+      setAssemblyJobId: async (runId, assemblyJobId) => {
+        const run = this._seededRuns.get(runId);
+        if (run) {
+          this._seededRuns.set(runId, {
+            ...run,
+            assemblyJobId,
+            updatedAt: new Date().toISOString()
+          });
+        }
+      },
+      claimCompletion: async (runId) => {
+        const run = this._seededRuns.get(runId);
+        if (!run || run.status !== "assembling") return undefined;
+        const updated = {
+          ...run,
+          status: "completed" as const,
+          updatedAt: new Date().toISOString()
+        };
+        this._seededRuns.set(runId, updated);
+        return updated;
+      },
+      claimFailure: async (runId) => {
+        const run = this._seededRuns.get(runId);
+        if (!run || (run.status !== "dispatched" && run.status !== "assembling")) return undefined;
+        const updated = { ...run, status: "failed" as const, updatedAt: new Date().toISOString() };
+        this._seededRuns.set(runId, updated);
+        return updated;
+      }
+    };
   }
 }

@@ -1,10 +1,13 @@
 import {
   InvalidTransitionError,
+  type CampaignProductionRunRecord,
   type RenderJob,
+  type Scene,
   type SceneId,
   type SceneSnapshot
 } from "@cco/domain";
 import { getProfileInjectionTopology } from "@cco/contracts";
+import type { EnqueueJobInput } from "../ports/job-queue-port.js";
 import type { UnitOfWork, UnitOfWorkContext } from "../ports/unit-of-work.js";
 import { deriveProductionSeed } from "./derive-production-seed.js";
 import { TransactionalJobEnqueuerUnavailableError } from "./job-queue-errors.js";
@@ -46,11 +49,14 @@ export interface EnqueueSceneProductionRenderOptions {
 
 export interface EnqueueSceneProductionRenderInput {
   readonly sceneId: string;
+  readonly runId?: string;
 }
 
 export interface EnqueueSceneProductionRenderResult {
   readonly scene: Readonly<SceneSnapshot>;
   readonly job: RenderJob;
+  readonly attemptId: string;
+  readonly attemptOrdinal: number;
 }
 
 export class EnqueueSceneProductionRenderUseCase {
@@ -59,25 +65,11 @@ export class EnqueueSceneProductionRenderUseCase {
     _options?: EnqueueSceneProductionRenderOptions
   ) {}
 
-  async execute(
-    input: EnqueueSceneProductionRenderInput
-  ): Promise<EnqueueSceneProductionRenderResult> {
-    return this.uow.execute((context) => this.executeWithContext(context, input));
-  }
-
-  async executeWithContext(
-    context: UnitOfWorkContext,
-    input: EnqueueSceneProductionRenderInput
-  ): Promise<EnqueueSceneProductionRenderResult> {
-    const scene = await context.scenes.findById(input.sceneId as SceneId);
-    if (scene === undefined) {
-      throw new SceneNotFoundError(input.sceneId);
-    }
-
-    if (scene.status !== "approved" && scene.status !== "failed") {
-      throw new InvalidTransitionError(scene.id, scene.status, "queueForProduction");
-    }
-
+  #buildProductionEnqueueInput(
+    scene: Scene,
+    attemptOrdinal: number,
+    actionName: string = "queueForProduction"
+  ): { readonly enqueueInput: EnqueueJobInput; readonly seed: number } {
     const snapshot = scene.snapshot();
     if (
       snapshot.selectedCandidateId === undefined ||
@@ -86,7 +78,7 @@ export class EnqueueSceneProductionRenderUseCase {
       throw new InvalidTransitionError(
         scene.id,
         scene.status,
-        "queueForProduction",
+        actionName,
         `Production requires a valid candidate selection from revision ${snapshot.specRevision}.`
       );
     }
@@ -124,11 +116,7 @@ export class EnqueueSceneProductionRenderUseCase {
       throw new ConditionedProductionProfileUnavailableError(scene.id, renderProfileKey);
     }
 
-    const seed = deriveProductionSeed(scene.id, snapshot.specRevision);
-
-    if (context.jobs === undefined) {
-      throw new TransactionalJobEnqueuerUnavailableError();
-    }
+    const seed = deriveProductionSeed(scene.id, snapshot.specRevision, attemptOrdinal);
 
     const injectedPayload: Record<string, unknown> = {
       prompt: snapshot.configuration.prompt,
@@ -139,19 +127,137 @@ export class EnqueueSceneProductionRenderUseCase {
       injectedPayload.frameCount = durationResult.frameCount;
     }
 
-    const job = await context.jobs.enqueue({
-      sceneId: scene.id,
-      jobKind: "production",
-      workflowTemplate,
-      injectedPayload
-    });
+    return {
+      enqueueInput: {
+        sceneId: scene.id,
+        jobKind: "production",
+        workflowTemplate,
+        injectedPayload
+      },
+      seed
+    };
+  }
+
+  async execute(
+    input: EnqueueSceneProductionRenderInput
+  ): Promise<EnqueueSceneProductionRenderResult> {
+    return this.uow.execute((context) => this.executeWithContext(context, input));
+  }
+
+  async executeWithContext(
+    context: UnitOfWorkContext,
+    input: EnqueueSceneProductionRenderInput
+  ): Promise<EnqueueSceneProductionRenderResult> {
+    const scene = await context.scenes.findById(input.sceneId as SceneId);
+    if (scene === undefined) {
+      throw new SceneNotFoundError(input.sceneId);
+    }
+
+    if (scene.status !== "approved" && scene.status !== "failed") {
+      throw new InvalidTransitionError(scene.id, scene.status, "queueForProduction");
+    }
+
+    const snapshot = scene.snapshot();
+    const attemptOrdinal = (snapshot.productionAttemptOrdinal ?? 0) + 1;
+    const { enqueueInput, seed } = this.#buildProductionEnqueueInput(
+      scene,
+      attemptOrdinal,
+      "queueForProduction"
+    );
+
+    if (context.jobs === undefined) {
+      throw new TransactionalJobEnqueuerUnavailableError();
+    }
+
+    const job = await context.jobs.enqueue(enqueueInput);
+
+    const createdReason = snapshot.status === "failed" ? "failure_recovery" : "initial_dispatch";
+
+    let attemptId = `attempt-${job.jobId}`;
+    if (context.campaignProductionRuns !== undefined) {
+      const attempt = await context.campaignProductionRuns.recordProductionAttempt({
+        sceneId: scene.id,
+        runId: input.runId,
+        ordinal: attemptOrdinal,
+        productionJobId: job.jobId,
+        specRevision: snapshot.specRevision,
+        selectedCandidateId: snapshot.selectedCandidateId,
+        selectedCandidateRevision: snapshot.selectedCandidateRevision,
+        seed,
+        createdReason
+      });
+      attemptId = attempt.attemptId;
+
+      if (input.runId !== undefined) {
+        const existingRunScene = await context.campaignProductionRuns.findRunSceneBySceneId(
+          scene.id
+        );
+        if (existingRunScene !== undefined) {
+          await context.campaignProductionRuns.updateCurrentAttempt(input.runId, scene.id, {
+            attemptId: attempt.attemptId,
+            attemptOrdinal,
+            productionJobId: job.jobId
+          });
+        }
+      }
+    }
 
     scene.queueForProduction(job.jobId);
     await context.scenes.save(scene);
 
     return {
       scene: scene.snapshot(),
-      job
+      job,
+      attemptId,
+      attemptOrdinal
     };
+  }
+
+  async executeRerenderWithContext(
+    context: UnitOfWorkContext,
+    scene: Scene,
+    run: CampaignProductionRunRecord
+  ): Promise<{
+    readonly job: RenderJob;
+    readonly attemptId: string;
+    readonly attemptOrdinal: number;
+  }> {
+    if (context.jobs === undefined) {
+      throw new TransactionalJobEnqueuerUnavailableError();
+    }
+
+    const snapshot = scene.snapshot();
+    const attemptOrdinal = (snapshot.productionAttemptOrdinal ?? 0) + 1;
+    const { enqueueInput, seed } = this.#buildProductionEnqueueInput(
+      scene,
+      attemptOrdinal,
+      "requestProductionRerender"
+    );
+
+    const job = await context.jobs.enqueue(enqueueInput);
+
+    let attemptId = `attempt-${job.jobId}`;
+    if (context.campaignProductionRuns !== undefined) {
+      const attempt = await context.campaignProductionRuns.recordProductionAttempt({
+        sceneId: scene.id,
+        runId: run.id,
+        ordinal: attemptOrdinal,
+        productionJobId: job.jobId,
+        specRevision: snapshot.specRevision,
+        selectedCandidateId: snapshot.selectedCandidateId,
+        selectedCandidateRevision: snapshot.selectedCandidateRevision,
+        seed,
+        createdReason: "production_rerender"
+      });
+      attemptId = attempt.attemptId;
+
+      await context.campaignProductionRuns.updateCurrentAttempt(run.id, scene.id, {
+        attemptId,
+        attemptOrdinal,
+        productionJobId: job.jobId
+      });
+    }
+
+    return { job, attemptId, attemptOrdinal };
   }
 }

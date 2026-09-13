@@ -105,7 +105,8 @@ export class ApproveSceneAndDispatchCampaignProductionUseCase {
         const runScenesToInsert: CampaignProductionRunSceneRecord[] = [];
         for (const scene of sortedScenes) {
           const renderResult = await this.enqueueSceneProductionRender.executeWithContext(context, {
-            sceneId: scene.id
+            sceneId: scene.id,
+            runId: run.id
           });
           runScenesToInsert.push({
             runId: run.id,
@@ -113,7 +114,9 @@ export class ApproveSceneAndDispatchCampaignProductionUseCase {
             specRevision: scene.snapshot().specRevision,
             sequenceIndex: scene.sequenceIndex,
             expectedDurationMs: scene.snapshot().configuration.durationMs,
-            productionJobId: renderResult.job.jobId
+            productionJobId: renderResult.job.jobId,
+            currentAttemptId: renderResult.attemptId,
+            currentAttemptOrdinal: renderResult.attemptOrdinal
           });
         }
         await runsRepo.insertRunScenes(run.id, runScenesToInsert);

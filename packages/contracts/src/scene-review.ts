@@ -26,7 +26,9 @@ export const REVIEW_ACTIONS = [
   "reorder",
   "duplicate",
   "cancel",
-  "candidate_select"
+  "candidate_select",
+  "production_accept",
+  "production_rerender"
 ] as const;
 
 export const SceneStatusSchema = z.enum(SCENE_STATUSES);
@@ -145,6 +147,8 @@ export type StoryboardCandidate = z.infer<typeof StoryboardCandidateSchema>;
 export const REVIEW_ERROR_CODES = [
   "NOT_FOUND",
   "STALE_REVISION_CONFLICT",
+  "STALE_PRODUCTION_ATTEMPT_CONFLICT",
+  "SCENE_NOT_IN_PRODUCTION_RUN",
   "IDEMPOTENCY_CONFLICT",
   "INVALID_DOMAIN_TRANSITION",
   "VALIDATION_FAILURE",
@@ -254,6 +258,23 @@ export const RejectCommandSchema = BaseCommandEnvelope.extend({
   payload: EmptyActionPayloadSchema
 });
 
+export const ProductionAttemptFencePayloadSchema = z.object({
+  expectedProductionJobId: z.string().uuid()
+});
+export type ProductionAttemptFencePayload = z.infer<typeof ProductionAttemptFencePayloadSchema>;
+
+export const ProductionAcceptCommandSchema = BaseCommandEnvelope.extend({
+  action: z.literal("production_accept"),
+  payload: ProductionAttemptFencePayloadSchema
+});
+export type ProductionAcceptCommand = z.infer<typeof ProductionAcceptCommandSchema>;
+
+export const ProductionRerenderCommandSchema = BaseCommandEnvelope.extend({
+  action: z.literal("production_rerender"),
+  payload: ProductionAttemptFencePayloadSchema
+});
+export type ProductionRerenderCommand = z.infer<typeof ProductionRerenderCommandSchema>;
+
 export const ReviewCommandSchema = z.discriminatedUnion("action", [
   CandidateSelectCommandSchema,
   ApproveCommandSchema,
@@ -264,7 +285,9 @@ export const ReviewCommandSchema = z.discriminatedUnion("action", [
   DurationChangeCommandSchema,
   LoraTuneCommandSchema,
   CancelCommandSchema,
-  RejectCommandSchema
+  RejectCommandSchema,
+  ProductionAcceptCommandSchema,
+  ProductionRerenderCommandSchema
 ]);
 export type ReviewCommand = z.infer<typeof ReviewCommandSchema>;
 
@@ -274,7 +297,11 @@ export const ReviewCommandResponseSchema = z.object({
   specRevision: z.number().int().positive(),
   selectedCandidateId: z.string().uuid().optional(),
   approval: SceneApprovalSchema.optional(),
-  isIdempotentReplay: z.boolean()
+  isIdempotentReplay: z.boolean(),
+  activeProductionJobId: z.string().uuid().optional(),
+  productionAttemptOrdinal: z.number().int().nonnegative().optional(),
+  acceptedProductionAttemptId: z.string().uuid().optional(),
+  acceptedAttemptOrdinal: z.number().int().nonnegative().optional()
 });
 export type ReviewCommandResponse = z.infer<typeof ReviewCommandResponseSchema>;
 

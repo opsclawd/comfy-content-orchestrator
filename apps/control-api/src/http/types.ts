@@ -13,6 +13,7 @@ import {
   ProgressSceneProductionUseCases,
   RankReviewCandidatesUseCase,
   ReviewSceneUseCases,
+  ProductionReviewUseCases,
   SubmitSceneCreationUseCase,
   ApproveSceneAndDispatchCampaignProductionUseCase,
   CompleteCampaignProductionRunUseCases,
@@ -56,6 +57,7 @@ export interface ControlApiDependencies {
 
 export interface ControlApiUseCases {
   readonly reviewScene: ReviewSceneUseCases;
+  readonly productionReview: ProductionReviewUseCases;
   readonly progressSceneProduction: ProgressSceneProductionUseCases;
   readonly enqueueSceneProductionRender?: EnqueueSceneProductionRenderUseCase | undefined;
   readonly createCampaign?: CreateCampaignUseCase | undefined;
@@ -88,12 +90,16 @@ export function createControlApiContainer(
   dependencies: ControlApiDependencies
 ): ControlApiContainer {
   const reviewScene = new ReviewSceneUseCases(dependencies.uow);
+  const enqueueSceneProductionRender = new EnqueueSceneProductionRenderUseCase(dependencies.uow);
+  const productionReview = new ProductionReviewUseCases(
+    dependencies.uow,
+    enqueueSceneProductionRender
+  );
   const progressSceneProduction = new ProgressSceneProductionUseCases(
     dependencies.uow,
     dependencies.renderEngine,
     dependencies.jobQueue
   );
-  const enqueueSceneProductionRender = new EnqueueSceneProductionRenderUseCase(dependencies.uow);
   const createCampaign = new CreateCampaignUseCase(dependencies.uow);
   const createCampaignShell = new CreateCampaignShellUseCase(dependencies.uow);
   const createClient = new CreateClientUseCase(dependencies.uow);
@@ -181,6 +187,7 @@ export function createControlApiContainer(
     dependencies,
     useCases: {
       reviewScene,
+      productionReview,
       progressSceneProduction,
       enqueueSceneProductionRender,
       createCampaign,
