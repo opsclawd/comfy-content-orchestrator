@@ -1,10 +1,45 @@
 import type { Pool } from "pg";
-import type { ReferenceAssetRepository } from "@cco/application";
-import { PostgresSceneReviewQueries, PostgresUnitOfWork } from "@cco/infrastructure";
+import type {
+  ObjectStoragePort,
+  ReferenceAssetRepository,
+  ReviewMediaDeliveryPort
+} from "@cco/application";
+import {
+  PostgresCampaignDeliveryReelQueries,
+  PostgresSceneReviewQueries,
+  PostgresUnitOfWork
+} from "@cco/infrastructure";
 import { createControlApiApp } from "control-api";
 import type { ScenarioPlanningModelClient } from "./scenario-planning-client.js";
 import type { FastifyInstance } from "fastify";
 import type { AddressInfo } from "node:net";
+
+// Neither port's methods are exercised by e2e coverage today: every test
+// campaign is fresh, so ResolveCampaignDeliveryReelUseCase always resolves
+// via the "not-started" branch, which never touches storage or media
+// delivery. These stubs exist only to satisfy the use case's construction
+// gate (apps/control-api/src/http/types.ts) -- without them,
+// resolveCampaignDeliveryReel is silently left undefined and every
+// /api/campaigns/:id/delivery-reel request 500s with CONFIGURATION_ERROR,
+// which the campaign review page (apps/web) now depends on for every
+// render since it fetches the delivery reel alongside the review summary.
+const notImplementedObjectStorage: ObjectStoragePort = {
+  putObject: async () => {
+    throw new Error("InMemoryObjectStorage stub: putObject is not implemented in the e2e harness");
+  },
+  getObject: async () => undefined,
+  copyObject: async () => {
+    throw new Error("InMemoryObjectStorage stub: copyObject is not implemented in the e2e harness");
+  }
+};
+
+const notImplementedMediaDelivery: ReviewMediaDeliveryPort = {
+  generatePresignedReadUrl: async () => {
+    throw new Error(
+      "ReviewMediaDeliveryPort stub: generatePresignedReadUrl is not implemented in the e2e harness"
+    );
+  }
+};
 
 export interface TestControlApi {
   app: FastifyInstance;
@@ -18,6 +53,7 @@ export async function startTestControlApi(options: {
 }): Promise<TestControlApi> {
   const uow = new PostgresUnitOfWork(options.pool);
   const sceneReviewQueries = new PostgresSceneReviewQueries(options.pool);
+  const campaignDeliveryReelQueries = new PostgresCampaignDeliveryReelQueries(options.pool);
 
   const mockAssetRepo: ReferenceAssetRepository = {
     listBySceneId: async () => [],
@@ -28,6 +64,9 @@ export async function startTestControlApi(options: {
     {
       uow,
       sceneReviewQueries,
+      campaignDeliveryReelQueries,
+      objectStorage: notImplementedObjectStorage,
+      reviewMediaDelivery: notImplementedMediaDelivery,
       planningModelClients: {
         primary: options.planningStub,
         fallback: {
