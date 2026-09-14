@@ -741,10 +741,11 @@ describe("Campaign Review Page", () => {
     expect(findHtmlByTestId(htmlTree, "delivery-reel-download-link")).toBeNull();
   });
 
-  it("maps 404 from getCampaignDeliveryReel to notFound()", async () => {
+  it("renders campaign summary when getCampaignDeliveryReel throws 404 without failing the page", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const summaryFixture: CampaignReviewSummary = {
       campaignId: "c4040404-0404-4040-8404-040404040404",
-      campaignName: "Test Campaign",
+      campaignName: "Test Campaign 404 Reel",
       totalScenes: 0,
       pendingReviewCount: 0,
       approvedCount: 0,
@@ -759,19 +760,30 @@ describe("Campaign Review Page", () => {
       new ApiClientError("Delivery reel not found", 404)
     );
 
-    await expect(
-      CampaignPage({
-        params: Promise.resolve({ campaignId: "c4040404-0404-4040-8404-040404040404" })
-      })
-    ).rejects.toThrow("NEXT_NOT_FOUND");
+    const jsx = (await CampaignPage({
+      params: Promise.resolve({ campaignId: "c4040404-0404-4040-8404-040404040404" })
+    })) as TestElement;
 
-    expect(notFound).toHaveBeenCalled();
+    expect(notFound).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      "Failed to fetch delivery reel for campaign c4040404-0404-4040-8404-040404040404:",
+      expect.any(ApiClientError)
+    );
+
+    const html = renderToStaticMarkup(jsx);
+    const htmlTree = parseHtml(html);
+    expect(findHtmlByTestId(htmlTree, "campaign-summary")).not.toBeNull();
+    expect(findHtmlByTestId(htmlTree, "campaign-name")).not.toBeNull();
+    expect(findHtmlByTestId(htmlTree, "campaign-delivery-reel-panel")).toBeNull();
+
+    consoleErrorSpy.mockRestore();
   });
 
-  it("rethrows 500 error from getCampaignDeliveryReel without invoking notFound()", async () => {
+  it("renders campaign summary when getCampaignDeliveryReel throws 500 without failing the page", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const summaryFixture: CampaignReviewSummary = {
       campaignId: "c5000500-0500-4500-8500-050005000500",
-      campaignName: "Test Campaign",
+      campaignName: "Test Campaign 500 Reel",
       totalScenes: 0,
       pendingReviewCount: 0,
       approvedCount: 0,
@@ -786,10 +798,58 @@ describe("Campaign Review Page", () => {
       new ApiClientError("Internal delivery reel error", 500)
     );
 
-    await expect(
-      CampaignPage({
-        params: Promise.resolve({ campaignId: "c5000500-0500-4500-8500-050005000500" })
-      })
-    ).rejects.toThrow("Internal delivery reel error");
+    const jsx = (await CampaignPage({
+      params: Promise.resolve({ campaignId: "c5000500-0500-4500-8500-050005000500" })
+    })) as TestElement;
+
+    expect(notFound).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      "Failed to fetch delivery reel for campaign c5000500-0500-4500-8500-050005000500:",
+      expect.any(ApiClientError)
+    );
+
+    const html = renderToStaticMarkup(jsx);
+    const htmlTree = parseHtml(html);
+    expect(findHtmlByTestId(htmlTree, "campaign-summary")).not.toBeNull();
+    expect(findHtmlByTestId(htmlTree, "campaign-name")).not.toBeNull();
+    expect(findHtmlByTestId(htmlTree, "campaign-delivery-reel-panel")).toBeNull();
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("renders campaign summary when getCampaignDeliveryReel throws generic network error", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const summaryFixture: CampaignReviewSummary = {
+      campaignId: "c7000700-0700-4700-8700-070007000700",
+      campaignName: "Test Campaign Generic Error",
+      totalScenes: 0,
+      pendingReviewCount: 0,
+      approvedCount: 0,
+      completedCount: 0,
+      scenesByStatus: {},
+      scenes: [],
+      updatedAt: "2026-08-25T12:00:00.000Z"
+    };
+
+    const networkError = new Error("Network connection dropped");
+    vi.mocked(getCampaignReviewSummary).mockResolvedValueOnce(summaryFixture);
+    vi.mocked(getCampaignDeliveryReel).mockRejectedValueOnce(networkError);
+
+    const jsx = (await CampaignPage({
+      params: Promise.resolve({ campaignId: "c7000700-0700-4700-8700-070007000700" })
+    })) as TestElement;
+
+    expect(notFound).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      "Failed to fetch delivery reel for campaign c7000700-0700-4700-8700-070007000700:",
+      networkError
+    );
+
+    const html = renderToStaticMarkup(jsx);
+    const htmlTree = parseHtml(html);
+    expect(findHtmlByTestId(htmlTree, "campaign-summary")).not.toBeNull();
+    expect(findHtmlByTestId(htmlTree, "campaign-delivery-reel-panel")).toBeNull();
+
+    consoleErrorSpy.mockRestore();
   });
 });
