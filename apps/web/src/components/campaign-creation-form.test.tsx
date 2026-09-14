@@ -434,11 +434,11 @@ describe("CampaignCreationForm Component", () => {
       // Renders success UI
       await waitFor(() => {
         expect(screen.getByTestId("campaign-creation-success")).toBeTruthy();
+        expect(mockPush).toHaveBeenCalledWith(`/campaigns/${sampleSuccessResponse.campaignId}`);
       });
 
       expect(screen.getByTestId("created-total-scenes").textContent).toBe("5");
       expect(screen.getByTestId("created-scene-count").textContent).toBe("4");
-      expect(mockPush).toHaveBeenCalledWith(`/campaigns/${sampleSuccessResponse.campaignId}`);
     });
 
     it("surfaces rejection error in error banner and keeps submit available without Retry button", async () => {

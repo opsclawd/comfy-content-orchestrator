@@ -1,11 +1,13 @@
 import Link from "next/link";
-import type { CampaignReviewSummary } from "@cco/contracts";
+import type { CampaignDeliveryReelReadModel, CampaignReviewSummary } from "@cco/contracts";
+import { CampaignDeliveryReelPanel } from "./campaign-delivery-reel-panel";
 
 export interface CampaignReviewSummaryProps {
   summary: CampaignReviewSummary;
+  deliveryReel?: CampaignDeliveryReelReadModel | undefined;
 }
 
-export function CampaignReviewSummaryView({ summary }: CampaignReviewSummaryProps) {
+export function CampaignReviewSummaryView({ summary, deliveryReel }: CampaignReviewSummaryProps) {
   const statusEntries = Object.entries(summary.scenesByStatus);
 
   return (
@@ -21,6 +23,8 @@ export function CampaignReviewSummaryView({ summary }: CampaignReviewSummaryProp
           </span>
         </div>
       </header>
+
+      <CampaignDeliveryReelPanel deliveryReel={deliveryReel} />
 
       <section className="metrics-section" aria-label="Campaign Metrics">
         <div className="metric-grid" data-testid="campaign-metrics">
