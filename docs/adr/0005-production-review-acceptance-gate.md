@@ -23,7 +23,7 @@ Prior to this architecture, technical completion of a production render job was 
 ## Decision
 
 We establish the foundational platform invariant:
-> **"storyboard approval -> conditioned production render -> production review -> explicit accepted attempt -> assembly -> final delivery"**
+> **"storyboard approved -> production rendered -> production reviewed/accepted (#215) -> final reel assembled -> director watches/downloads the result (#213)"**
 
 To enforce this invariant across the domain, application, infrastructure, API, and UI layers, we implement the following architectural rules:
 
@@ -58,8 +58,9 @@ Delivery assembly is admitted only when all required scenes in the campaign prod
 - If any check fails, a typed `AcceptedProductionAttemptInvariantError` is thrown, the transaction is rolled back, the run remains in `production_review`, and zero assembly jobs are created.
 - When all checks pass, video stems are mapped to `AssemblySpec.videoStems` in canonical `sequenceIndex` order and enqueued to `delivery_assembly_jobs`.
 
-### 5. Canonical Downstream Delivery Handoff (#213)
-Downstream commercial delivery packaging and client handoff (Issue #213) consumes the canonical completed assembly and immutable `AssemblyManifest` produced after this gate. Delivery cannot be triggered from unreviewed renders, incomplete runs, or partially accepted campaigns.
+### 5. Canonical Downstream Delivery Handoff (#213) — COMPLETE
+Downstream commercial delivery packaging and client handoff (Parent #213, Issues #276–#278) consumes the canonical completed assembly and immutable `AssemblyManifest` produced after this gate. Delivery cannot be triggered from unreviewed renders, incomplete runs, or partially accepted campaigns. With #213 closed, the director can watch and download the canonical assembled delivery reel directly inside the Review Hub (`CampaignDeliveryReelPanel`), completing the full pipeline invariant:
+> **`storyboard approved -> production rendered -> production reviewed/accepted (#215) -> final reel assembled -> director watches/downloads the result (#213)`**
 
 ## Consequences
 

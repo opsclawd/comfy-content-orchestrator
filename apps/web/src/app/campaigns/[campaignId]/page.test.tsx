@@ -571,6 +571,12 @@ describe("Campaign Review Page", () => {
     const html = renderToStaticMarkup(jsx);
     const htmlTree = parseHtml(html);
 
+    // Assert campaign-level shell and metrics
+    const summaryShell = findHtmlByTestId(htmlTree, "campaign-summary");
+    expect(summaryShell).not.toBeNull();
+    const metricsSection = findHtmlByTestId(htmlTree, "campaign-metrics");
+    expect(metricsSection).not.toBeNull();
+
     const panel = findHtmlByTestId(htmlTree, "campaign-delivery-reel-panel");
     expect(panel).not.toBeNull();
     expect(panel?.attrs["data-status"]).toBe("completed");
@@ -588,10 +594,19 @@ describe("Campaign Review Page", () => {
     expect(downloadLink?.attrs.href).toBe(
       "https://storage.example.com/delivery/completed-reel.mp4"
     );
+    expect(downloadLink?.attrs.download).toBe(
+      "campaign-c1111111-1111-4111-8111-111111111111-reel.mp4"
+    );
 
     const assemblyBadge = findHtmlByTestId(htmlTree, "delivery-reel-assembly-id");
     expect(assemblyBadge).not.toBeNull();
     expect(collectHtmlText(assemblyBadge)).toContain("asm-comp-789");
+
+    // Mutual exclusivity: non-completed state containers must NOT be rendered
+    expect(findHtmlByTestId(htmlTree, "delivery-reel-not-started")).toBeNull();
+    expect(findHtmlByTestId(htmlTree, "delivery-reel-assembling")).toBeNull();
+    expect(findHtmlByTestId(htmlTree, "delivery-reel-failed")).toBeNull();
+    expect(findHtmlByTestId(htmlTree, "delivery-reel-unavailable")).toBeNull();
   });
 
   it("renders campaign page with assembling delivery reel", async () => {
