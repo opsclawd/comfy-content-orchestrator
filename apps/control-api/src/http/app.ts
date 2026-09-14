@@ -11,6 +11,7 @@ import { reviewCommandRoutes } from "./routes/review-command-routes.js";
 import { metricsRoutes } from "./routes/metrics-routes.js";
 import { jobRoutes } from "./routes/job-routes.js";
 import { deliveryAssemblyRoutes } from "./routes/delivery-assembly-routes.js";
+import { deliveryReelRoutes } from "./routes/delivery-reel-routes.js";
 import { campaignRoutes } from "./routes/campaign-routes.js";
 import { clientRoutes } from "./routes/client-routes.js";
 import { sceneGenerationRoutes } from "./routes/scene-generation-routes.js";
@@ -92,6 +93,10 @@ export function createControlApiApp(
   });
 
   app.register(campaignRoutes, {
+    container
+  });
+
+  app.register(deliveryReelRoutes, {
     container
   });
 

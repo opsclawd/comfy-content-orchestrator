@@ -18,7 +18,9 @@ import {
   SceneReviewDetailReadModelSchema,
   type SceneReviewDetailReadModel,
   CurrentProductionAttemptReadModelSchema,
-  type CurrentProductionAttemptReadModel
+  type CurrentProductionAttemptReadModel,
+  CampaignDeliveryReelReadModelSchema,
+  type CampaignDeliveryReelReadModel
 } from "@cco/contracts";
 import type { z } from "zod";
 import { resolveControlApiBaseUrl } from "./runtime-config";
@@ -33,7 +35,10 @@ export type {
   ReviewCommandResponse,
   ReviewErrorResponse,
   SceneReviewDetailReadModel,
-  CurrentProductionAttemptReadModel
+  CurrentProductionAttemptReadModel,
+  CampaignDeliveryReelReadModel,
+  CampaignDeliveryReelState,
+  CampaignDeliveryMediaReadModel
 } from "@cco/contracts";
 
 export {
@@ -46,7 +51,10 @@ export {
   ReviewCommandResponseSchema,
   ReviewErrorResponseSchema,
   SceneReviewDetailReadModelSchema,
-  CurrentProductionAttemptReadModelSchema
+  CurrentProductionAttemptReadModelSchema,
+  CampaignDeliveryReelReadModelSchema,
+  CampaignDeliveryReelStateSchema,
+  CampaignDeliveryMediaReadModelSchema
 } from "@cco/contracts";
 
 export interface ApiClientConfig {
@@ -121,6 +129,7 @@ export interface ApiClient {
   getCurrentProductionAttempt(
     sceneId: string
   ): Promise<CurrentProductionAttemptReadModel | undefined>;
+  getCampaignDeliveryReel(campaignId: string): Promise<CampaignDeliveryReelReadModel>;
   submitReviewCommand(
     sceneId: string,
     command: ReviewCommand,
@@ -252,6 +261,15 @@ export function createApiClient(config?: ApiClientConfig): ApiClient {
         }
         throw err;
       }
+    },
+
+    async getCampaignDeliveryReel(campaignId: string): Promise<CampaignDeliveryReelReadModel> {
+      const encoded = encodeURIComponent(campaignId);
+      return requestJson(
+        `${baseUrl}/api/campaigns/${encoded}/delivery-reel`,
+        CampaignDeliveryReelReadModelSchema,
+        fetchFn
+      );
     },
 
     async submitReviewCommand(
@@ -450,6 +468,17 @@ export async function getCurrentProductionAttempt(
 ): Promise<CurrentProductionAttemptReadModel | undefined> {
   const client = createApiClient({ baseUrl, fetchFn });
   return client.getCurrentProductionAttempt(sceneId);
+}
+
+export async function getCampaignDeliveryReel(
+  campaignId: string,
+  baseUrlOrFetch?: string | typeof fetch,
+  fetchFn?: typeof fetch
+): Promise<CampaignDeliveryReelReadModel> {
+  const baseUrl = typeof baseUrlOrFetch === "string" ? baseUrlOrFetch : undefined;
+  const fetchImpl = typeof baseUrlOrFetch === "function" ? baseUrlOrFetch : fetchFn;
+  const client = createApiClient({ baseUrl, fetchFn: fetchImpl });
+  return client.getCampaignDeliveryReel(campaignId);
 }
 
 export async function submitReviewCommand(

@@ -18,9 +18,12 @@ import {
   ApproveSceneAndDispatchCampaignProductionUseCase,
   CompleteCampaignProductionRunUseCases,
   CompleteCampaignProductionRunAssemblyUseCases,
+  ResolveCampaignDeliveryReelUseCase,
+  type CampaignDeliveryReelQueries,
   type CurrentProductionAttemptQueries,
   type DeliveryAssemblyJobQueuePort,
   type JobQueuePort,
+  type ObjectStoragePort,
   type PlanningModelClientPort,
   type RankingModelClientPort,
   type ReferenceAssetRepository,
@@ -37,6 +40,8 @@ export interface ControlApiDependencies {
   readonly renderEngine?: RenderEnginePort;
   readonly sceneReviewQueries?: SceneReviewQueries;
   readonly currentProductionAttemptQueries?: CurrentProductionAttemptQueries;
+  readonly campaignDeliveryReelQueries?: CampaignDeliveryReelQueries;
+  readonly objectStorage?: ObjectStoragePort;
   readonly reviewMediaDelivery?: ReviewMediaDeliveryPort;
   readonly storageTelemetry?: StorageTelemetryPort;
   readonly storageMetricsRegistry?: StorageMetricsRegistryPort;
@@ -73,11 +78,13 @@ export interface ControlApiUseCases {
   readonly approveSceneAndDispatchCampaignProduction: ApproveSceneAndDispatchCampaignProductionUseCase;
   readonly completeCampaignProductionRun: CompleteCampaignProductionRunUseCases;
   readonly completeCampaignProductionRunAssembly: CompleteCampaignProductionRunAssemblyUseCases;
+  readonly resolveCampaignDeliveryReel?: ResolveCampaignDeliveryReelUseCase | undefined;
 }
 
 export interface ControlApiQueries {
   readonly sceneReview?: SceneReviewQueries;
   readonly currentProductionAttempt?: CurrentProductionAttemptQueries;
+  readonly campaignDeliveryReel?: CampaignDeliveryReelQueries;
 }
 
 export interface ControlApiContainer {
@@ -117,6 +124,16 @@ export function createControlApiContainer(
   const completeCampaignProductionRunAssembly = new CompleteCampaignProductionRunAssemblyUseCases(
     dependencies.uow
   );
+  const resolveCampaignDeliveryReel =
+    dependencies.campaignDeliveryReelQueries &&
+    dependencies.objectStorage &&
+    dependencies.reviewMediaDelivery
+      ? new ResolveCampaignDeliveryReelUseCase({
+          queries: dependencies.campaignDeliveryReelQueries,
+          objectStorage: dependencies.objectStorage,
+          mediaDelivery: dependencies.reviewMediaDelivery
+        })
+      : undefined;
   const planSceneConfiguration =
     dependencies.planningModelClients && dependencies.referenceAssetRepository
       ? new PlanSceneConfigurationUseCase({
@@ -199,6 +216,7 @@ export function createControlApiContainer(
       approveSceneAndDispatchCampaignProduction,
       completeCampaignProductionRun,
       completeCampaignProductionRunAssembly,
+      ...(resolveCampaignDeliveryReel !== undefined ? { resolveCampaignDeliveryReel } : {}),
       ...(planCampaignBeatSheet !== undefined ? { planCampaignBeatSheet } : {}),
       ...(planCampaignStoryboard !== undefined ? { planCampaignStoryboard } : {}),
       ...(enforceStorageAdmission !== undefined ? { enforceStorageAdmission } : {}),
@@ -210,6 +228,9 @@ export function createControlApiContainer(
         : {}),
       ...(dependencies.currentProductionAttemptQueries !== undefined
         ? { currentProductionAttempt: dependencies.currentProductionAttemptQueries }
+        : {}),
+      ...(dependencies.campaignDeliveryReelQueries !== undefined
+        ? { campaignDeliveryReel: dependencies.campaignDeliveryReelQueries }
         : {})
     }
   };
