@@ -1,25 +1,36 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ReactElement, ReactNode } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import CampaignPage, { dynamic } from "./page.js";
 import CampaignNotFound from "./not-found.js";
 import CampaignError from "./error.js";
-import { getCampaignReviewSummary, ApiClientError } from "../../../api/client.js";
+import { CampaignDeliveryReelPanel } from "../../../components/campaign-delivery-reel-panel.js";
+import {
+  getCampaignReviewSummary,
+  getCampaignDeliveryReel,
+  ApiClientError
+} from "../../../api/client.js";
 import type * as ClientModule from "../../../api/client.js";
 import { notFound } from "next/navigation";
-import type { CampaignReviewSummary } from "@cco/contracts";
+import type { CampaignReviewSummary, CampaignDeliveryReelReadModel } from "@cco/contracts";
 
 vi.mock("../../../api/client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ClientModule>();
   return {
     ...actual,
-    getCampaignReviewSummary: vi.fn()
+    getCampaignReviewSummary: vi.fn(),
+    getCampaignDeliveryReel: vi.fn()
   };
 });
 
 vi.mock("next/navigation", () => ({
   notFound: vi.fn(() => {
     throw new Error("NEXT_NOT_FOUND");
-  })
+  }),
+  useRouter: vi.fn(() => ({
+    refresh: vi.fn(),
+    push: vi.fn()
+  }))
 }));
 
 type TestElement = ReactElement<{
@@ -29,6 +40,128 @@ type TestElement = ReactElement<{
   onClick?: () => void;
   [key: string]: unknown;
 }>;
+
+interface HtmlElementNode {
+  readonly tag: string;
+  readonly attrs: Readonly<Record<string, string>>;
+  readonly children: ReadonlyArray<HtmlElementNode | string>;
+}
+
+const HTML_VOID_TAGS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr"
+]);
+
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec: string) => String.fromCodePoint(parseInt(dec, 10)))
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+function parseHtmlAttrs(attrString: string): Record<string, string> {
+  const attrs: Record<string, string> = {};
+  const ATTR_RE = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+  let match: RegExpExecArray | null;
+  while ((match = ATTR_RE.exec(attrString)) !== null) {
+    const name = match[1]!.toLowerCase();
+    const value = match[2] ?? match[3] ?? match[4] ?? "";
+    attrs[name] = decodeHtmlEntities(value);
+  }
+  return attrs;
+}
+
+function parseHtml(html: string): HtmlElementNode {
+  const root: HtmlElementNode = { tag: "#root", attrs: {}, children: [] };
+  const stack: HtmlElementNode[] = [root];
+  const TOKEN_RE = /<!--[\s\S]*?-->|<\/([a-zA-Z][\w:-]*)\s*>|<([a-zA-Z][\w:-]*)([^>]*)>|([^<]+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = TOKEN_RE.exec(html)) !== null) {
+    const [full, closingTag, openingTag, rest, text] = match;
+    if (full.startsWith("<!--")) continue;
+    if (closingTag) {
+      for (let i = stack.length - 1; i > 0; i--) {
+        if (stack[i]!.tag === closingTag.toLowerCase()) {
+          stack.length = i;
+          break;
+        }
+      }
+      continue;
+    }
+    if (openingTag) {
+      const tag = openingTag.toLowerCase();
+      const restStr = rest ?? "";
+      const selfClosing = /\/\s*$/.test(restStr);
+      const attrString = selfClosing ? restStr.replace(/\/\s*$/, "") : restStr;
+      const node: HtmlElementNode = { tag, attrs: parseHtmlAttrs(attrString), children: [] };
+      const parent = stack[stack.length - 1]!;
+      (parent.children as (HtmlElementNode | string)[]).push(node);
+      if (!selfClosing && !HTML_VOID_TAGS.has(tag)) {
+        stack.push(node);
+      }
+      continue;
+    }
+    if (text !== undefined) {
+      const decoded = decodeHtmlEntities(text);
+      if (decoded.length > 0) {
+        (stack[stack.length - 1]!.children as (HtmlElementNode | string)[]).push(decoded);
+      }
+    }
+  }
+  return root;
+}
+
+function isHtmlElementNode(node: HtmlElementNode | string): node is HtmlElementNode {
+  return typeof node !== "string";
+}
+
+function findAllHtmlNodes(
+  node: HtmlElementNode | string,
+  predicate: (element: HtmlElementNode) => boolean
+): HtmlElementNode[] {
+  const results: HtmlElementNode[] = [];
+  function traverse(n: HtmlElementNode | string) {
+    if (!isHtmlElementNode(n)) return;
+    if (predicate(n)) {
+      results.push(n);
+    }
+    for (const child of n.children) {
+      traverse(child);
+    }
+  }
+  traverse(node);
+  return results;
+}
+
+function findHtmlByTestId(node: HtmlElementNode | string, testId: string): HtmlElementNode | null {
+  return findAllHtmlNodes(node, (el) => el.attrs["data-testid"] === testId)[0] ?? null;
+}
+
+function collectHtmlText(node: HtmlElementNode | string | null): string {
+  if (node === null) return "";
+  function extract(n: HtmlElementNode | string): string {
+    if (!isHtmlElementNode(n)) return n;
+    return n.children.map(extract).join(" ");
+  }
+  return extract(node).replace(/\s+/g, " ").trim();
+}
 
 function findByTestId(node: ReactNode, testId: string): TestElement | null {
   if (node == null || typeof node !== "object") {
@@ -46,7 +179,11 @@ function findByTestId(node: ReactNode, testId: string): TestElement | null {
     if (element.props?.["data-testid"] === testId) {
       return element;
     }
-    if ("type" in node && typeof node.type === "function") {
+    if (
+      "type" in node &&
+      typeof node.type === "function" &&
+      node.type !== CampaignDeliveryReelPanel
+    ) {
       try {
         const rendered = (node.type as (props: unknown) => ReactNode)(node.props);
         const match = findByTestId(rendered, testId);
@@ -80,7 +217,7 @@ function findAllByTestId(node: ReactNode, testId: string): TestElement[] {
       if (element.props?.["data-testid"] === testId) {
         results.push(element);
       }
-      if ("type" in n && typeof n.type === "function") {
+      if ("type" in n && typeof n.type === "function" && n.type !== CampaignDeliveryReelPanel) {
         try {
           const rendered = (n.type as (props: unknown) => ReactNode)(n.props);
           traverse(rendered);
@@ -102,7 +239,11 @@ function collectText(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
   if (Array.isArray(node)) return node.map(collectText).join(" ");
   if (typeof node === "object") {
-    if ("type" in node && typeof node.type === "function") {
+    if (
+      "type" in node &&
+      typeof node.type === "function" &&
+      node.type !== CampaignDeliveryReelPanel
+    ) {
       try {
         const rendered = (node.type as (props: unknown) => ReactNode)(node.props);
         return collectText(rendered);
@@ -121,6 +262,12 @@ function collectText(node: ReactNode): string {
 describe("Campaign Review Page", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getCampaignDeliveryReel).mockResolvedValue({
+      campaignId: "c1111111-1111-4111-8111-111111111111",
+      status: "not-started",
+      state: "not-started",
+      updatedAt: "2026-08-25T12:00:00.000Z"
+    });
   });
 
   it("exports dynamic = 'force-dynamic'", () => {
@@ -373,5 +520,261 @@ describe("Campaign Review Page", () => {
     expect(retryBtn).not.toBeNull();
     retryBtn?.props.onClick?.();
     expect(resetMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders campaign page with completed delivery reel and player", async () => {
+    const summaryFixture: CampaignReviewSummary = {
+      campaignId: "c1111111-1111-4111-8111-111111111111",
+      campaignName: "Delivered Campaign",
+      totalScenes: 1,
+      pendingReviewCount: 0,
+      approvedCount: 0,
+      completedCount: 1,
+      scenesByStatus: { completed: 1 },
+      scenes: [
+        {
+          sceneId: "s1111111-1111-4111-8111-111111111111",
+          status: "completed",
+          specRevision: 1
+        }
+      ],
+      updatedAt: "2026-08-25T12:00:00.000Z"
+    };
+
+    const completedReel: CampaignDeliveryReelReadModel = {
+      campaignId: "c1111111-1111-4111-8111-111111111111",
+      status: "completed",
+      state: "completed",
+      assemblyId: "asm-comp-789",
+      assemblyJobId: "job-comp-101",
+      media: {
+        url: "https://storage.example.com/delivery/completed-reel.mp4",
+        bucket: "deliveries",
+        key: "delivery/completed-reel.mp4",
+        sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        durationMs: 15000,
+        width: 1920,
+        height: 1080
+      },
+      updatedAt: "2026-08-25T12:30:00.000Z"
+    };
+
+    vi.mocked(getCampaignReviewSummary).mockResolvedValueOnce(summaryFixture);
+    vi.mocked(getCampaignDeliveryReel).mockResolvedValueOnce(completedReel);
+
+    const jsx = (await CampaignPage({
+      params: Promise.resolve({ campaignId: "c1111111-1111-4111-8111-111111111111" })
+    })) as TestElement;
+
+    expect(getCampaignDeliveryReel).toHaveBeenCalledWith("c1111111-1111-4111-8111-111111111111");
+
+    const html = renderToStaticMarkup(jsx);
+    const htmlTree = parseHtml(html);
+
+    const panel = findHtmlByTestId(htmlTree, "campaign-delivery-reel-panel");
+    expect(panel).not.toBeNull();
+    expect(panel?.attrs["data-status"]).toBe("completed");
+
+    const completedContainer = findHtmlByTestId(htmlTree, "delivery-reel-completed");
+    expect(completedContainer).not.toBeNull();
+
+    const player = findHtmlByTestId(htmlTree, "delivery-reel-player");
+    expect(player).not.toBeNull();
+    expect(player?.attrs.src).toBe("https://storage.example.com/delivery/completed-reel.mp4");
+    expect(player?.attrs.controls).toBeDefined();
+
+    const downloadLink = findHtmlByTestId(htmlTree, "delivery-reel-download-link");
+    expect(downloadLink).not.toBeNull();
+    expect(downloadLink?.attrs.href).toBe(
+      "https://storage.example.com/delivery/completed-reel.mp4"
+    );
+
+    const assemblyBadge = findHtmlByTestId(htmlTree, "delivery-reel-assembly-id");
+    expect(assemblyBadge).not.toBeNull();
+    expect(collectHtmlText(assemblyBadge)).toContain("asm-comp-789");
+  });
+
+  it("renders campaign page with assembling delivery reel", async () => {
+    const summaryFixture: CampaignReviewSummary = {
+      campaignId: "c1111111-1111-4111-8111-111111111111",
+      campaignName: "Assembling Campaign",
+      totalScenes: 1,
+      pendingReviewCount: 0,
+      approvedCount: 0,
+      completedCount: 1,
+      scenesByStatus: { completed: 1 },
+      scenes: [],
+      updatedAt: "2026-08-25T12:00:00.000Z"
+    };
+
+    const assemblingReel: CampaignDeliveryReelReadModel = {
+      campaignId: "c1111111-1111-4111-8111-111111111111",
+      status: "assembling",
+      state: "assembling",
+      assemblyJobId: "job-active-888",
+      updatedAt: "2026-08-25T12:15:00.000Z"
+    };
+
+    vi.mocked(getCampaignReviewSummary).mockResolvedValueOnce(summaryFixture);
+    vi.mocked(getCampaignDeliveryReel).mockResolvedValueOnce(assemblingReel);
+
+    const jsx = (await CampaignPage({
+      params: Promise.resolve({ campaignId: "c1111111-1111-4111-8111-111111111111" })
+    })) as TestElement;
+
+    const html = renderToStaticMarkup(jsx);
+    const htmlTree = parseHtml(html);
+
+    const assemblingContainer = findHtmlByTestId(htmlTree, "delivery-reel-assembling");
+    expect(assemblingContainer).not.toBeNull();
+    expect(collectHtmlText(assemblingContainer)).toContain("Assembly in Progress");
+
+    const jobBadge = findHtmlByTestId(htmlTree, "delivery-reel-job-id");
+    expect(jobBadge).not.toBeNull();
+    expect(collectHtmlText(jobBadge)).toContain("job-active-888");
+
+    // Must NOT render video player or download link
+    expect(findHtmlByTestId(htmlTree, "delivery-reel-player")).toBeNull();
+    expect(findHtmlByTestId(htmlTree, "delivery-reel-download-link")).toBeNull();
+  });
+
+  it("renders campaign page with failed delivery reel", async () => {
+    const summaryFixture: CampaignReviewSummary = {
+      campaignId: "c1111111-1111-4111-8111-111111111111",
+      campaignName: "Failed Campaign",
+      totalScenes: 1,
+      pendingReviewCount: 0,
+      approvedCount: 0,
+      completedCount: 1,
+      scenesByStatus: { completed: 1 },
+      scenes: [],
+      updatedAt: "2026-08-25T12:00:00.000Z"
+    };
+
+    const failedReel: CampaignDeliveryReelReadModel = {
+      campaignId: "c1111111-1111-4111-8111-111111111111",
+      status: "failed",
+      state: "failed",
+      assemblyJobId: "job-failed-777",
+      error: "Encoder error: Unsupported pixel format",
+      updatedAt: "2026-08-25T12:20:00.000Z"
+    };
+
+    vi.mocked(getCampaignReviewSummary).mockResolvedValueOnce(summaryFixture);
+    vi.mocked(getCampaignDeliveryReel).mockResolvedValueOnce(failedReel);
+
+    const jsx = (await CampaignPage({
+      params: Promise.resolve({ campaignId: "c1111111-1111-4111-8111-111111111111" })
+    })) as TestElement;
+
+    const html = renderToStaticMarkup(jsx);
+    const htmlTree = parseHtml(html);
+
+    const failedContainer = findHtmlByTestId(htmlTree, "delivery-reel-failed");
+    expect(failedContainer).not.toBeNull();
+
+    const errorEl = findHtmlByTestId(htmlTree, "delivery-reel-error");
+    expect(errorEl).not.toBeNull();
+    expect(collectHtmlText(errorEl)).toContain("Encoder error: Unsupported pixel format");
+
+    // Must NOT render video player or download link
+    expect(findHtmlByTestId(htmlTree, "delivery-reel-player")).toBeNull();
+    expect(findHtmlByTestId(htmlTree, "delivery-reel-download-link")).toBeNull();
+  });
+
+  it("renders campaign page with unavailable delivery reel", async () => {
+    const summaryFixture: CampaignReviewSummary = {
+      campaignId: "c1111111-1111-4111-8111-111111111111",
+      campaignName: "Unavailable Campaign",
+      totalScenes: 1,
+      pendingReviewCount: 0,
+      approvedCount: 0,
+      completedCount: 1,
+      scenesByStatus: { completed: 1 },
+      scenes: [],
+      updatedAt: "2026-08-25T12:00:00.000Z"
+    };
+
+    const unavailableReel: CampaignDeliveryReelReadModel = {
+      campaignId: "c1111111-1111-4111-8111-111111111111",
+      status: "unavailable-artifact",
+      state: "unavailable-artifact",
+      assemblyId: "asm-unavail-555",
+      reason: "Delivery manifest missing in S3",
+      updatedAt: "2026-08-25T12:25:00.000Z"
+    };
+
+    vi.mocked(getCampaignReviewSummary).mockResolvedValueOnce(summaryFixture);
+    vi.mocked(getCampaignDeliveryReel).mockResolvedValueOnce(unavailableReel);
+
+    const jsx = (await CampaignPage({
+      params: Promise.resolve({ campaignId: "c1111111-1111-4111-8111-111111111111" })
+    })) as TestElement;
+
+    const html = renderToStaticMarkup(jsx);
+    const htmlTree = parseHtml(html);
+
+    const unavailContainer = findHtmlByTestId(htmlTree, "delivery-reel-unavailable");
+    expect(unavailContainer).not.toBeNull();
+
+    const reasonEl = findHtmlByTestId(htmlTree, "delivery-reel-unavailable-reason");
+    expect(reasonEl).not.toBeNull();
+    expect(collectHtmlText(reasonEl)).toContain("Delivery manifest missing in S3");
+
+    // Must NOT render video player or download link
+    expect(findHtmlByTestId(htmlTree, "delivery-reel-player")).toBeNull();
+    expect(findHtmlByTestId(htmlTree, "delivery-reel-download-link")).toBeNull();
+  });
+
+  it("maps 404 from getCampaignDeliveryReel to notFound()", async () => {
+    const summaryFixture: CampaignReviewSummary = {
+      campaignId: "c4040404-0404-4040-8404-040404040404",
+      campaignName: "Test Campaign",
+      totalScenes: 0,
+      pendingReviewCount: 0,
+      approvedCount: 0,
+      completedCount: 0,
+      scenesByStatus: {},
+      scenes: [],
+      updatedAt: "2026-08-25T12:00:00.000Z"
+    };
+
+    vi.mocked(getCampaignReviewSummary).mockResolvedValueOnce(summaryFixture);
+    vi.mocked(getCampaignDeliveryReel).mockRejectedValueOnce(
+      new ApiClientError("Delivery reel not found", 404)
+    );
+
+    await expect(
+      CampaignPage({
+        params: Promise.resolve({ campaignId: "c4040404-0404-4040-8404-040404040404" })
+      })
+    ).rejects.toThrow("NEXT_NOT_FOUND");
+
+    expect(notFound).toHaveBeenCalled();
+  });
+
+  it("rethrows 500 error from getCampaignDeliveryReel without invoking notFound()", async () => {
+    const summaryFixture: CampaignReviewSummary = {
+      campaignId: "c5000500-0500-4500-8500-050005000500",
+      campaignName: "Test Campaign",
+      totalScenes: 0,
+      pendingReviewCount: 0,
+      approvedCount: 0,
+      completedCount: 0,
+      scenesByStatus: {},
+      scenes: [],
+      updatedAt: "2026-08-25T12:00:00.000Z"
+    };
+
+    vi.mocked(getCampaignReviewSummary).mockResolvedValueOnce(summaryFixture);
+    vi.mocked(getCampaignDeliveryReel).mockRejectedValueOnce(
+      new ApiClientError("Internal delivery reel error", 500)
+    );
+
+    await expect(
+      CampaignPage({
+        params: Promise.resolve({ campaignId: "c5000500-0500-4500-8500-050005000500" })
+      })
+    ).rejects.toThrow("Internal delivery reel error");
   });
 });

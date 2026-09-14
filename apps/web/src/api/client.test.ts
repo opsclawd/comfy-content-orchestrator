@@ -5,6 +5,7 @@ import {
   getCampaignReviewSummary,
   getSceneReviewDetail,
   getCurrentProductionAttempt,
+  getCampaignDeliveryReel,
   submitReviewCommand,
   planCampaignStoryboard,
   ApiClientError,
@@ -20,7 +21,8 @@ import type {
   ReviewCommand,
   ReviewCommandResponse,
   ReviewErrorResponse,
-  SceneReviewDetailReadModel
+  SceneReviewDetailReadModel,
+  CampaignDeliveryReelReadModel
 } from "@cco/contracts";
 
 const validCampaignReviewSummary: CampaignReviewSummary = {
@@ -1208,6 +1210,231 @@ describe("Typed Control API Client", () => {
           mockFetch
         )
       ).rejects.toThrow(ApiValidationError);
+    });
+  });
+
+  describe("getCampaignDeliveryReel", () => {
+    const testCampaignId = "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
+    const validCompletedDeliveryReel: CampaignDeliveryReelReadModel = {
+      campaignId: testCampaignId,
+      status: "completed",
+      state: "completed",
+      assemblyId: "asm-12345",
+      runId: "123e4567-e89b-12d3-a456-426614174000",
+      assemblyJobId: "223e4567-e89b-12d3-a456-426614174000",
+      media: {
+        url: "https://storage.example.com/reels/final.mp4",
+        bucket: "reels",
+        key: "reels/final.mp4",
+        sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        durationMs: 15000,
+        width: 1920,
+        height: 1080
+      },
+      updatedAt: "2026-09-13T12:00:00.000Z"
+    };
+
+    it("parses and returns valid completed delivery reel read model on 200", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => validCompletedDeliveryReel
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      const result = await client.getCampaignDeliveryReel(testCampaignId);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        `http://example.com/api/campaigns/${testCampaignId}/delivery-reel`,
+        {
+          method: "GET",
+          headers: { Accept: "application/json" },
+          cache: "no-store"
+        }
+      );
+      expect(result).toEqual(validCompletedDeliveryReel);
+      expect(result.status).toBe("completed");
+      expect(result.media?.url).toBe("https://storage.example.com/reels/final.mp4");
+    });
+
+    it("parses and returns valid not-started delivery reel read model on 200", async () => {
+      const notStartedModel: CampaignDeliveryReelReadModel = {
+        campaignId: testCampaignId,
+        status: "not-started",
+        state: "not-started",
+        updatedAt: "2026-09-13T10:00:00.000Z"
+      };
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => notStartedModel
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      const result = await client.getCampaignDeliveryReel(testCampaignId);
+
+      expect(result.status).toBe("not-started");
+      expect(result.media).toBeUndefined();
+    });
+
+    it("parses and returns valid assembling delivery reel read model on 200", async () => {
+      const assemblingModel: CampaignDeliveryReelReadModel = {
+        campaignId: testCampaignId,
+        status: "assembling",
+        state: "assembling",
+        assemblyJobId: "333e4567-e89b-12d3-a456-426614174000",
+        updatedAt: "2026-09-13T11:00:00.000Z"
+      };
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => assemblingModel
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      const result = await client.getCampaignDeliveryReel(testCampaignId);
+
+      expect(result.status).toBe("assembling");
+      expect(result.assemblyJobId).toBe("333e4567-e89b-12d3-a456-426614174000");
+    });
+
+    it("parses and returns valid failed delivery reel read model on 200", async () => {
+      const failedModel: CampaignDeliveryReelReadModel = {
+        campaignId: testCampaignId,
+        status: "failed",
+        state: "failed",
+        assemblyJobId: "444e4567-e89b-12d3-a456-426614174000",
+        error: "FFmpeg exit code 1: Invalid stem sequence",
+        updatedAt: "2026-09-13T11:30:00.000Z"
+      };
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => failedModel
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      const result = await client.getCampaignDeliveryReel(testCampaignId);
+
+      expect(result.status).toBe("failed");
+      expect(result.error).toBe("FFmpeg exit code 1: Invalid stem sequence");
+    });
+
+    it("parses and returns valid unavailable-artifact delivery reel read model on 200", async () => {
+      const unavailableModel: CampaignDeliveryReelReadModel = {
+        campaignId: testCampaignId,
+        status: "unavailable-artifact",
+        state: "unavailable-artifact",
+        assemblyId: "asm-12345",
+        reason: "Artifact missing from storage bucket",
+        updatedAt: "2026-09-13T11:45:00.000Z"
+      };
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => unavailableModel
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      const result = await client.getCampaignDeliveryReel(testCampaignId);
+
+      expect(result.status).toBe("unavailable-artifact");
+      expect(result.reason).toBe("Artifact missing from storage bucket");
+    });
+
+    it("correctly URL-encodes campaignId parameter", async () => {
+      const weirdCampaignId = "weird/id?test=1#hash";
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          campaignId: testCampaignId,
+          status: "not-started",
+          state: "not-started"
+        })
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      await client.getCampaignDeliveryReel(weirdCampaignId);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        `http://example.com/api/campaigns/${encodeURIComponent(weirdCampaignId)}/delivery-reel`,
+        expect.any(Object)
+      );
+    });
+
+    it("throws ApiClientError with statusCode 404 when campaign is not found", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        statusText: "Not Found"
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      const errorPromise = client.getCampaignDeliveryReel(testCampaignId);
+
+      await expect(errorPromise).rejects.toThrow(ApiClientError);
+      await expect(errorPromise).rejects.toMatchObject({ statusCode: 404 });
+    });
+
+    it("throws ApiClientError on HTTP 500 error", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        statusText: "Internal Server Error"
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      const errorPromise = client.getCampaignDeliveryReel(testCampaignId);
+
+      await expect(errorPromise).rejects.toThrow(ApiClientError);
+      await expect(errorPromise).rejects.toMatchObject({ statusCode: 500 });
+    });
+
+    it("throws ApiValidationError on malformed response body", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ invalid: "payload", status: "unknown-status" })
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      await expect(client.getCampaignDeliveryReel(testCampaignId)).rejects.toThrow(
+        ApiValidationError
+      );
+    });
+
+    it("throws ApiValidationError on invalid JSON", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError("Unexpected token");
+        }
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      await expect(client.getCampaignDeliveryReel(testCampaignId)).rejects.toThrow(
+        ApiValidationError
+      );
+    });
+
+    it("throws ApiClientError on network failure", async () => {
+      const mockFetch = vi.fn().mockRejectedValue(new Error("Network connection refused"));
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      await expect(client.getCampaignDeliveryReel(testCampaignId)).rejects.toThrow(ApiClientError);
+    });
+
+    it("standalone getCampaignDeliveryReel helper resolves properly", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => validCompletedDeliveryReel
+      });
+
+      const result = await getCampaignDeliveryReel(testCampaignId, "http://example.com", mockFetch);
+      expect(result).toEqual(validCompletedDeliveryReel);
     });
   });
 });
