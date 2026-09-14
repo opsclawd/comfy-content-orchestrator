@@ -48,7 +48,10 @@ export {
   type InsertedGenerationManifestRecord,
   type InsertedReviewEventRecord,
   type InsertedStoryboardCandidateRecord,
-  type RepresentativeGraph
+  type RepresentativeGraph,
+  insertDeliveryAssemblyJobRecord,
+  type DeliveryAssemblyJobRecordInput,
+  type InsertedDeliveryAssemblyJobRecord
 } from "./postgres/test-support/records.js";
 
 export const MIGRATIONS_DIRECTORY_URL = new URL("../migrations/", import.meta.url);

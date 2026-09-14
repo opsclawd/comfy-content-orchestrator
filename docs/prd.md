@@ -2,8 +2,8 @@
 
 **Project Name:** Godzspeed Sovereign Content Orchestration Platform & Creative Review Hub  
 **Repository:** `opsclawd/comfy-content-orchestrator`  
-**Document Version:** 3.6.0 (Production Review Gate & Accepted-Attempt Assembly Admission)  
-**Status:** Implementation Ready — Sprint 4.5 Certified  
+**Document Version:** 3.7.0 (Final Delivery Packaging & Playback Surface)  
+**Status:** Implementation Ready — Sprint 5 / Issue #213 Certified  
 **Runtime & Stack:** TypeScript / Node.js 24 LTS ("Krypton") | Next.js Review Hub | ComfyUI Headless | Tailscale (WireGuard Mesh) | PostgreSQL 18.6 | MinIO (S3-Compatible Review Media Store)  
 **Hardware Profile:** AMD Ryzen 7 7700 (8C/16T) | 32GB DDR5-5600 RAM certified for the dedicated Phase 1 single-render workload | NVIDIA RTX 4090 (24GB GDDR6X) | 2TB PCIe 4.0 NVMe SSD  
 **Key Stakeholders:**
@@ -11,15 +11,15 @@
 - **Technical Lead & Content Creator:** Agency Lead (Godzspeed Trinidad & Tobago Division)
 - **Cloud Control Plane:** Hetzner Cloud CPX31 VPS (Falkenstein, Germany / Tailscale-only application access)
 
-## 0. Version 3.6.0 Change Summary
+## 0. Version 3.7.0 Change Summary
 
-PRD v3.6.0 formalizes the Production Review Gate and Accepted-Attempt Assembly Admission Invariant (Parent #215, Issues #262–#266, [ADR 0005](adr/0005-production-review-acceptance-gate.md)), strictly separating technical render completion from creative human acceptance:
+PRD v3.7.0 formalizes the Final Delivery Packaging and Playback Surface (Parent #213, Issues #276–#278), closing the full MVP user journey end-to-end inside the product:
 
-1. **Decoupled Render Completion & Assembly:** Eliminates any automatic assembly following technical production render completion. When a worker completes rendering, the scene enters `qa` and the `CampaignProductionRun` enters `production_review`. Delivery assembly is admitted only after explicit human director acceptance of every required scene.
-2. **Four Distinct Lifecycle Concepts:** Clarifies the operational boundaries between (a) storyboard candidate reroll (`reroll`), (b) infrastructure render job retry, (c) creative production re-render as a new attempt (`production_rerender`), and (d) explicit accepted production attempt (`production_accept`).
-3. **Attempt-Fenced Review Commands:** `production_accept` and `production_rerender` commands require `expectedProductionJobId`. Commands referencing superseded attempts fail closed with `STALE_PRODUCTION_ATTEMPT_CONFLICT` (409) even if `expectedSpecRevision` is unchanged.
-4. **Fail-Closed Assembly Admission Invariant:** `attemptEnqueueAssemblyForAcceptedRun` validates accepted attempt identity, scene ID, run ID, spec revision, ordinal, duration sum, and generation manifest source before enqueuing assembly. Stems are assembled in canonical scene order.
-5. **Downstream Delivery Handoff:** Issue #213 consumes the canonical completed assembly and immutable `AssemblyManifest` produced after this gate.
+1. **Closed MVP User Journey Invariant:** Proves the complete pipeline invariant: `storyboard approved -> production rendered -> production reviewed/accepted (#215) -> final reel assembled -> director watches/downloads the result (#213)`.
+2. **Canonical Delivery Reel Read Plane:** Introduces `CampaignDeliveryReelReadModelSchema`, `PostgresCampaignDeliveryReelQueries`, `ResolveCampaignDeliveryReelUseCase`, and mounts `/api/campaigns/:campaignId/delivery-reel` and alias `/api/campaigns/:campaignId/delivery`. Exposes five canonical mutually exclusive states (`not-started`, `assembling`, `completed`, `failed`, `unavailable-artifact`).
+3. **Fail-Closed Artifact & Namespace Verification:** Eliminates cross-tenant data leakage by enforcing multi-tenant storage namespace isolation (`campaigns/${campaignId}/...`) and fails closed to `unavailable-artifact` if manifest schema validation fails, physical media is missing, or SHA-256 checksum mismatches occur.
+4. **Director Playback & Download Surface:** Delivers `CampaignDeliveryReelPanel` in `apps/web`, providing integrated HTML5 video playback via presigned URLs, error recovery with reel reloading, metadata badges, and direct `.mp4` downloads.
+5. **Production Review Gate Maintained:** Preserves all accepted-attempt invariants and attempt-fenced review semantics from PRD v3.6.0 unchanged.
 
 Material changes carried forward from v3.5.2:
 
@@ -661,7 +661,7 @@ Durable candidate-generation admission/claim/dispatch is implemented with the Po
 
 Following candidate-conditioned production rendering (ADR-0004), production review and delivery assembly admission are governed by the Production Review Gate (ADR-0005):
 
-> **Invariant:** `storyboard approval -> conditioned production render -> production review -> explicit accepted attempt -> assembly -> final delivery`
+> **Invariant:** `storyboard approved -> production rendered -> production reviewed/accepted (#215) -> final reel assembled -> director watches/downloads the result (#213)`
 
 Key architectural rules:
 - **CampaignProductionRun Review-State Machine:** In parallel to individual scene lifecycles, campaign production rendering operates under a dedicated run-level state machine: `dispatched -> production_review -> assembling -> completed/failed`.
@@ -670,7 +670,7 @@ Key architectural rules:
 - **Creative Re-render (`production_rerender`):** When a technically successful render is creatively rejected, `production_rerender` transitions `qa -> queued`, increments `productionAttemptOrdinal`, and creates a new attempt record with a newly derived deterministic seed. SceneSpec revision, selected candidate, and storyboard approval are preserved intact.
 - **Attempt-Fencing (`expectedProductionJobId`):** Review commands `production_accept` and `production_rerender` enforce attempt-fencing via `expectedProductionJobId`. Commands referencing superseded attempts fail closed with `STALE_PRODUCTION_ATTEMPT_CONFLICT` (409) even when `expectedSpecRevision` is unchanged.
 - **Fail-Closed Assembly Admission (`attemptEnqueueAssemblyForAcceptedRun`):** Assembly is enqueued only after every required scene in the run has been explicitly accepted. At admission time, the engine re-verifies accepted attempt identity, run identity, scene identity, spec revision, ordinal, and generation manifest source. Any discrepancy aborts the transaction. Video stems are assembled in canonical `sequenceIndex` order.
-- **Downstream Consumer (Issue #213):** Final delivery packaging consumes the canonical completed assembly produced after this gate.
+- **Downstream Consumer & Delivery Reel Playback (Parent #213 / #276–#278) — COMPLETE:** Final delivery packaging consumes the canonical completed assembly and immutable `AssemblyManifest` produced after this gate. With #213 closed, the director stays inside the product to watch and download the canonical final delivery reel.
 
 ---
 
@@ -1140,6 +1140,14 @@ Separated technical render completion from delivery assembly, introduced attempt
 - [x] Implement accepted-attempt invariant validation (`packages/domain/src/accepted-production-attempt-invariant.ts`) and atomic delivery-assembly enqueueing in canonical scene sequence order (#264).
 - [x] Implement Review Hub UI for production review (`apps/web`), supporting playable production attempt media via presigned URLs and attempt-fenced review controls (#265).
 - [x] Prove production-review gate end to end across domain, Control API HTTP routes, PostgreSQL, MinIO, and real FFmpeg delivery assembly, update authoritative lifecycle documentation, and publish ADR 0005 (#266).
+
+### Sprint 5 — Final Delivery Packaging & Playback (Parent #213 / #276–#278) — COMPLETE
+
+Delivered the complete final delivery surface and proved the full MVP user journey end-to-end inside the product:
+
+- [x] Implement backend delivery-reel read contract, queries, use case, and routes with multi-tenant isolation and fail-closed artifact verification (#276).
+- [x] Implement Review Hub UI delivery-reel panel (`apps/web`), supporting 5 mutually exclusive states, video player with error recovery, and direct downloads (#277).
+- [x] Prove final-delivery surface end-to-end against real PostgreSQL and MinIO infrastructure, verify mutual exclusivity and anti-staleness transitions, confirm zero regressions across storyboard and production review suites, and update authoritative lifecycle documentation (#278).
 
 ---
 

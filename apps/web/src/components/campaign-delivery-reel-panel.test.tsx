@@ -257,4 +257,179 @@ describe("CampaignDeliveryReelPanel", () => {
     expect(screen.getByTestId("delivery-reel-unavailable")).toBeDefined();
     expect(screen.queryByTestId("delivery-reel-player")).toBeNull();
   });
+
+  describe("Mutual Exclusivity Matrix", () => {
+    const STATE_CONFIGS = [
+      {
+        status: "not-started" as const,
+        testId: "delivery-reel-not-started",
+        overrides: { media: undefined }
+      },
+      {
+        status: "assembling" as const,
+        testId: "delivery-reel-assembling",
+        overrides: { media: undefined, assemblyJobId: "job-asm-123" }
+      },
+      {
+        status: "completed" as const,
+        testId: "delivery-reel-completed",
+        overrides: {}
+      },
+      {
+        status: "failed" as const,
+        testId: "delivery-reel-failed",
+        overrides: { media: undefined, error: "Assembly failed", assemblyJobId: "job-fail-456" }
+      },
+      {
+        status: "unavailable-artifact" as const,
+        testId: "delivery-reel-unavailable",
+        overrides: { media: undefined, reason: "Manifest missing" }
+      }
+    ];
+
+    const ALL_STATE_TEST_IDS = [
+      "delivery-reel-not-started",
+      "delivery-reel-assembling",
+      "delivery-reel-completed",
+      "delivery-reel-failed",
+      "delivery-reel-unavailable"
+    ];
+
+    for (const config of STATE_CONFIGS) {
+      it(`renders only ${config.status} state container and excludes all other 4 states`, () => {
+        const reel = createSampleDeliveryReel({
+          status: config.status,
+          state: config.status,
+          ...config.overrides
+        });
+
+        render(<CampaignDeliveryReelPanel deliveryReel={reel} />);
+
+        // Active state container must be present
+        expect(screen.getByTestId(config.testId)).toBeDefined();
+
+        // All other 4 state containers must be strictly null
+        for (const otherTestId of ALL_STATE_TEST_IDS) {
+          if (otherTestId !== config.testId) {
+            expect(screen.queryByTestId(otherTestId)).toBeNull();
+          }
+        }
+
+        // Video player and download link must ONLY be present for 'completed'
+        if (config.status === "completed") {
+          expect(screen.getByTestId("delivery-reel-player")).toBeDefined();
+          expect(screen.getByTestId("delivery-reel-download-link")).toBeDefined();
+        } else {
+          expect(screen.queryByTestId("delivery-reel-player")).toBeNull();
+          expect(screen.queryByTestId("delivery-reel-download-link")).toBeNull();
+        }
+      });
+    }
+  });
+
+  describe("Anti-Staleness State Transitions", () => {
+    it("strictly unmounts and removes video player and download link across state transitions", () => {
+      const completedReel = createSampleDeliveryReel();
+      const notStartedReel = createSampleDeliveryReel({
+        status: "not-started",
+        state: "not-started",
+        media: undefined
+      });
+      const assemblingReel = createSampleDeliveryReel({
+        status: "assembling",
+        state: "assembling",
+        assemblyJobId: "job-assembling-777",
+        media: undefined
+      });
+      const failedReel = createSampleDeliveryReel({
+        status: "failed",
+        state: "failed",
+        error: "Encoder error",
+        assemblyJobId: "job-failed-888",
+        media: undefined
+      });
+      const unavailableReel = createSampleDeliveryReel({
+        status: "unavailable-artifact",
+        state: "unavailable-artifact",
+        reason: "Missing manifest in S3",
+        media: undefined
+      });
+
+      // 1. Render completed state (player and download link visible)
+      const { rerender } = render(<CampaignDeliveryReelPanel deliveryReel={completedReel} />);
+      expect(screen.getByTestId("delivery-reel-completed")).toBeDefined();
+      expect(screen.getByTestId("delivery-reel-player")).toBeDefined();
+      expect(screen.getByTestId("delivery-reel-download-link")).toBeDefined();
+
+      // 2. Transition to not-started: player and download link must be completely unmounted
+      rerender(<CampaignDeliveryReelPanel deliveryReel={notStartedReel} />);
+      expect(screen.getByTestId("delivery-reel-not-started")).toBeDefined();
+      expect(screen.queryByTestId("delivery-reel-completed")).toBeNull();
+      expect(screen.queryByTestId("delivery-reel-player")).toBeNull();
+      expect(screen.queryByTestId("delivery-reel-download-link")).toBeNull();
+
+      // 3. Transition to assembling: only assembling container visible
+      rerender(<CampaignDeliveryReelPanel deliveryReel={assemblingReel} />);
+      expect(screen.getByTestId("delivery-reel-assembling")).toBeDefined();
+      expect(screen.queryByTestId("delivery-reel-not-started")).toBeNull();
+      expect(screen.queryByTestId("delivery-reel-player")).toBeNull();
+      expect(screen.queryByTestId("delivery-reel-download-link")).toBeNull();
+
+      // 4. Transition to failed: only failed container visible
+      rerender(<CampaignDeliveryReelPanel deliveryReel={failedReel} />);
+      expect(screen.getByTestId("delivery-reel-failed")).toBeDefined();
+      expect(screen.queryByTestId("delivery-reel-assembling")).toBeNull();
+      expect(screen.queryByTestId("delivery-reel-player")).toBeNull();
+      expect(screen.queryByTestId("delivery-reel-download-link")).toBeNull();
+
+      // 5. Transition to unavailable: only unavailable container visible
+      rerender(<CampaignDeliveryReelPanel deliveryReel={unavailableReel} />);
+      expect(screen.getByTestId("delivery-reel-unavailable")).toBeDefined();
+      expect(screen.queryByTestId("delivery-reel-failed")).toBeNull();
+      expect(screen.queryByTestId("delivery-reel-player")).toBeNull();
+      expect(screen.queryByTestId("delivery-reel-download-link")).toBeNull();
+
+      // 6. Transition back to completed: player and download link restored
+      rerender(<CampaignDeliveryReelPanel deliveryReel={completedReel} />);
+      expect(screen.getByTestId("delivery-reel-completed")).toBeDefined();
+      expect(screen.queryByTestId("delivery-reel-unavailable")).toBeNull();
+      expect(screen.getByTestId("delivery-reel-player")).toBeDefined();
+      expect(screen.getByTestId("delivery-reel-download-link")).toBeDefined();
+    });
+  });
+
+  describe("Interactive Playback and Download Actions", () => {
+    it("handles video player lifecycle events and download actions on completed assembly", () => {
+      const reel = createSampleDeliveryReel();
+      render(<CampaignDeliveryReelPanel deliveryReel={reel} />);
+
+      const player = screen.getByTestId("delivery-reel-player") as HTMLVideoElement;
+      expect(player).toBeDefined();
+      expect(player.getAttribute("src")).toBe(reel.media!.url);
+      expect(player.hasAttribute("controls")).toBe(true);
+
+      // Verify playback events can be dispatched without crashing
+      fireEvent.play(player);
+      fireEvent.pause(player);
+      fireEvent.timeUpdate(player);
+
+      // Verify download link attributes and click
+      const downloadLink = screen.getByTestId("delivery-reel-download-link") as HTMLAnchorElement;
+      expect(downloadLink).toBeDefined();
+      expect(downloadLink.getAttribute("href")).toBe(reel.media!.url);
+      expect(downloadLink.getAttribute("download")).toBe(`campaign-${reel.campaignId}-reel.mp4`);
+      expect(downloadLink.getAttribute("role")).toBe("button");
+
+      fireEvent.click(downloadLink);
+
+      // Verify error transition and reload
+      fireEvent.error(player);
+      expect(screen.getByTestId("delivery-reel-unavailable")).toBeDefined();
+      expect(screen.queryByTestId("delivery-reel-player")).toBeNull();
+
+      const reloadBtn = screen.getByTestId("reload-delivery-reel-button");
+      fireEvent.click(reloadBtn);
+      expect(mockRefresh).toHaveBeenCalledTimes(1);
+    });
+  });
 });

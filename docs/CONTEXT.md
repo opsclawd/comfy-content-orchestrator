@@ -39,7 +39,7 @@
 ### Production Review Actions & Attempt Lineage
 
 - **The Final Pipeline Invariant:**
-  > **`storyboard approval -> conditioned production render -> production review -> explicit accepted attempt -> assembly -> final delivery`**
+  > **`storyboard approved -> production rendered -> production reviewed/accepted (#215) -> final reel assembled -> director watches/downloads the result (#213)`**
 - **Four Distinct Lifecycle Concepts:**
   1. **Storyboard candidate reroll (`reroll`):** Creative rejection during draft review (`director_review -> generating_candidates`). Invalidates current candidate selection and clears approval.
   2. **Infrastructure retry of one render job:** Transient worker lease timeout or infrastructure failure of a single render job, handled before manifest creation without incrementing attempt ordinal.
@@ -48,8 +48,8 @@
 - **Attempt-Fencing Semantics (`expectedProductionJobId`):** Both `production_accept` and `production_rerender` commands require `expectedProductionJobId`. Commands referencing a superseded attempt fail with `STALE_PRODUCTION_ATTEMPT_CONFLICT` (409) even if `expectedSpecRevision` is unchanged. Replaying an identical command with matching `actionId` returns 200 with `isIdempotentReplay: true` and writes zero duplicate records.
 - **Legacy `reject` vs. `production_rerender` on Production-Run Scenes:**
   Calling legacy `reject` (`rejectQA`) on a `qa`-status production-run scene transitions `qa -> director_review` and clears `activeProductionJobId` and `approval`. Because it leaves `accepted_attempt_id` unset on the run-scene, the run cannot reach full acceptance and assembly is fail-closed.
-- **Downstream Delivery Consumer (Issue #213):**
-  Final delivery packaging (Issue #213) consumes the canonical completed assembly and immutable `AssemblyManifest` produced after this gate. Delivery cannot be triggered from unreviewed renders, incomplete runs, or partially accepted campaigns.
+- **Downstream Delivery Consumer & Final Delivery Reel Surface (Parent #213 / #276–#278) — COMPLETE:**
+  Final delivery packaging (Issue #213) consumes the canonical completed assembly and immutable `AssemblyManifest` produced after this gate. Delivery cannot be triggered from unreviewed renders, incomplete runs, or partially accepted campaigns. The final-delivery read plane exposes 5 canonical states (`not-started`, `assembling`, `completed`, `failed`, `unavailable-artifact`), enforces strict multi-tenant storage namespace isolation (`campaigns/${campaignId}/...`), and performs fail-closed verification (manifest schema parsing, physical output media existence, and SHA-256 checksum checks). In the web UI (`CampaignDeliveryReelPanel`), the director can watch the canonical assembled reel via presigned playback and download it directly (`.mp4`), enabling the director to complete the full MVP user journey end-to-end inside the product.
 
 ## Canonical Scene Lifecycle States
 
@@ -121,13 +121,16 @@
   - **Single-Source Manifest Provenance:** `GenerationManifest` records `approvedCandidate` (`candidateId`, `sceneId`, `specRevision`, `sha256`) and `executionConditioning` (`profileKey: "LTX_25_720P_5S_I2V_V1"`, `media: { storageBucket, storageObjectKey, sha256 }`, `stagedAs: { subfolder: "conditioning", filename: "cco-<scene>-<job>-<hash>" }`, `injectionTarget: { nodeId: "20", inputName: "image" }`), alongside persisted workflow identity and sha256.
 - **Production Review Gate & Accepted-Attempt Assembly Admission (Parent #215, Issues #262-#266):**
   - **Production-Review Invariant:** "Technical render completion never auto-assembles; assembly admission requires explicit attempt-fenced acceptance across every required scene in the production run." (See [ADR 0005](adr/0005-production-review-acceptance-gate.md)).
-  - **Closed Pipeline Invariant:** `storyboard approval -> conditioned production render -> production review -> explicit accepted attempt -> assembly -> final delivery`.
+  - **Closed Pipeline Invariant:** `storyboard approved -> production rendered -> production reviewed/accepted (#215) -> final reel assembled -> director watches/downloads the result (#213)`.
   - **Sprint 4.5 Delivered Issues:**
     - **#262 (State Machine & Review Gating):** Introduced the `CampaignProductionRun` review-state machine (`dispatched -> production_review -> assembling -> completed/failed`). Decoupled technical render completion callbacks from delivery assembly; render completion transitions the run to `production_review` and scenes to `qa` with zero auto-assembly.
     - **#263 (Production Review Commands & Attempt Ledger):** Implemented attempt-fenced `production_accept` and `production_rerender` review actions. Added the `campaign_production_attempts` ledger. Guaranteed that creative re-renders increment ordinal, create distinct attempt rows with new jobs/seeds, and preserve SceneSpec revision, selected candidate, and approval. Stale commands referencing superseded jobs fail closed with `STALE_PRODUCTION_ATTEMPT_CONFLICT` (409) even when spec revision is unchanged.
     - **#264 (Accepted-Attempt Invariant & Atomic Assembly Enqueue):** Created `packages/domain/src/accepted-production-attempt-invariant.ts` and `attemptEnqueueAssemblyForAcceptedRun`. Enforces strict validation across accepted attempt identity, scene ID, run ID, spec revision, ordinal, and generation manifest source before enqueuing assembly. Maps video stems into canonical `sequenceIndex` order. Concurrent final scene completions enqueue exactly one durable delivery assembly job.
     - **#265 (Review Hub UI for Production Review):** Added `ProductionReviewPanel` and `ReviewCommandControls` in `apps/web`. Surfaced playable production attempt video via presigned URLs, attempt-fenced Accept and Re-render actions, and fail-safe media-unavailable banners.
     - **#266 (End-to-End Integration Proof & Lifecycle Docs):** Implemented comprehensive integration coverage across real PostgreSQL, MinIO, Control API HTTP routes, and FFmpeg assembly in `tests/integration/production-review-gate.e2e.integration.test.ts`. Proved the full narrative from storyboard approval through conditioned dispatch, review gating, attempt-fenced review, and canonical FFmpeg assembly.
-  - **Downstream Consumer (Issue #213):**
-    Final delivery packaging (Issue #213) consumes the canonical completed assembly and immutable `AssemblyManifest` produced after this gate.
+  - **Downstream Consumer & Final Delivery Reel Surface (Parent #213 / #276–#278) — COMPLETE:**
+    Final delivery packaging (Issue #213) consumes the canonical completed assembly and immutable `AssemblyManifest` produced after this gate. The final-delivery surface is fully implemented and proven end-to-end:
+    - **#276 (213.1 - Backend Read Contract, Queries & Routes):** Implemented `CampaignDeliveryReelReadModelSchema`, `PostgresCampaignDeliveryReelQueries`, `ResolveCampaignDeliveryReelUseCase`, and mounted `/api/campaigns/:campaignId/delivery-reel` and `/api/campaigns/:campaignId/delivery`.
+    - **#277 (213.2 - UI Presentation Surface & Player):** Added `CampaignDeliveryReelPanel` and integrated into the campaign review page (`apps/web`), supporting the 5 canonical read-model states, video player with error recovery, and direct download links.
+    - **#278 (213.3 - End-to-End Integration Proof & Regression Verification):** Proved the final-delivery surface end-to-end against real PostgreSQL and MinIO object storage (`tests/integration/final-delivery-reel.e2e.integration.test.ts`), verified multi-tenant isolation, fail-closed consistency handling, UI mutual exclusivity and anti-staleness transitions, and verified that existing storyboard review and production-review suites remain green and unaffected.
 
