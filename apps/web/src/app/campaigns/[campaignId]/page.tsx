@@ -17,19 +17,22 @@ export interface CampaignPageProps {
 export default async function CampaignPage({ params }: CampaignPageProps) {
   const { campaignId } = await params;
 
+  const deliveryReelPromise = getCampaignDeliveryReel(campaignId).catch((err: unknown) => {
+    console.error(`Failed to fetch delivery reel for campaign ${campaignId}:`, err);
+    return undefined;
+  });
+
   let summary;
-  let deliveryReel;
   try {
-    [summary, deliveryReel] = await Promise.all([
-      getCampaignReviewSummary(campaignId),
-      getCampaignDeliveryReel(campaignId)
-    ]);
+    summary = await getCampaignReviewSummary(campaignId);
   } catch (err) {
     if (err instanceof ApiClientError && err.statusCode === 404) {
       notFound();
     }
     throw err;
   }
+
+  const deliveryReel = await deliveryReelPromise;
 
   return (
     <div className="campaign-page-container">
