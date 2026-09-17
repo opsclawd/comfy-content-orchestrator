@@ -19,6 +19,28 @@ export interface ProductionReviewPanelProps {
   disabled?: boolean | undefined;
 }
 
+export function isImageMedia(url: string): boolean {
+  try {
+    const pathname = new URL(url).pathname.toLowerCase();
+    return (
+      pathname.endsWith(".webp") ||
+      pathname.endsWith(".png") ||
+      pathname.endsWith(".gif") ||
+      pathname.endsWith(".jpg") ||
+      pathname.endsWith(".jpeg")
+    );
+  } catch {
+    const cleanUrl = (url.split("?")[0] ?? "").toLowerCase();
+    return (
+      cleanUrl.endsWith(".webp") ||
+      cleanUrl.endsWith(".png") ||
+      cleanUrl.endsWith(".gif") ||
+      cleanUrl.endsWith(".jpg") ||
+      cleanUrl.endsWith(".jpeg")
+    );
+  }
+}
+
 export function ProductionReviewPanel({
   detail,
   productionAttempt,
@@ -164,15 +186,26 @@ export function ProductionReviewPanel({
     }
 
     if (productionAttempt.media?.url) {
+      const isImg = isImageMedia(productionAttempt.media.url);
       return (
         <div className="production-clip-container">
-          <video
-            key={productionAttempt.media.url}
-            controls
-            src={productionAttempt.media.url}
-            data-testid="production-clip-player"
-            onError={() => setPlayerError(true)}
-          />
+          {isImg ? (
+            <img
+              key={productionAttempt.media.url}
+              src={productionAttempt.media.url}
+              alt={`Production attempt #${productionAttempt.attemptOrdinal} preview`}
+              data-testid="production-clip-player"
+              onError={() => setPlayerError(true)}
+            />
+          ) : (
+            <video
+              key={productionAttempt.media.url}
+              controls
+              src={productionAttempt.media.url}
+              data-testid="production-clip-player"
+              onError={() => setPlayerError(true)}
+            />
+          )}
         </div>
       );
     }

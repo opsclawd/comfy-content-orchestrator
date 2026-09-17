@@ -1,6 +1,9 @@
+import { spawn as spawnChild } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { FfmpegAssemblyError } from "./ffmpeg-error.js";
 import type { SpawnLikeFn } from "./ffmpeg-process-runner.js";
 
@@ -177,6 +180,8 @@ export interface NormalizeWebpOptions {
   readonly outputPath: string;
   readonly ffmpegPath: string;
   readonly spawnFn: SpawnLikeFn;
+  readonly pythonPath?: string | undefined;
+  readonly disablePython?: boolean | undefined;
   readonly timeoutMs?: number | undefined;
   readonly stemOrder?: number | undefined;
   readonly stemSceneId?: string | undefined;
@@ -187,100 +192,206 @@ export interface NormalizeWebpResult {
   readonly commandFingerprint: string;
 }
 
+function findExtractScriptPath(): string | undefined {
+  try {
+    const fromModule = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../../scripts/extract_webp_frames.py"
+    );
+    if (existsSync(fromModule)) return fromModule;
+  } catch {
+    // Ignore resolution errors if import.meta.url cannot be resolved
+  }
+  const fromCwd = path.resolve(process.cwd(), "scripts/extract_webp_frames.py");
+  if (existsSync(fromCwd)) return fromCwd;
+  return undefined;
+}
+
+function resolvePythonPath(pythonPathOverride?: string): string | undefined {
+  if (pythonPathOverride && existsSync(pythonPathOverride)) {
+    return pythonPathOverride;
+  }
+  if (process.env.WEBP_PYTHON_PATH && existsSync(process.env.WEBP_PYTHON_PATH)) {
+    return process.env.WEBP_PYTHON_PATH;
+  }
+  if (process.env.WHISPERX_PYTHON_PATH && existsSync(process.env.WHISPERX_PYTHON_PATH)) {
+    return process.env.WHISPERX_PYTHON_PATH;
+  }
+  const venvPython = path.resolve(process.cwd(), "node_modules/.cache/whisperx-venv/bin/python3");
+  if (existsSync(venvPython)) {
+    return venvPython;
+  }
+  if (existsSync("/usr/bin/python3")) {
+    return "/usr/bin/python3";
+  }
+  return "python3";
+}
+
+interface PythonExtractionResult {
+  readonly frameDurationsMs: number[];
+  readonly concatScriptPath: string;
+}
+
+async function extractWithPython(
+  bytes: Uint8Array,
+  framesDir: string,
+  pythonPathOverride?: string,
+  timeoutMs: number = 60_000
+): Promise<PythonExtractionResult | null> {
+  const scriptPath = findExtractScriptPath();
+  if (!scriptPath) {
+    return null;
+  }
+  const pythonBin = resolvePythonPath(pythonPathOverride);
+  if (!pythonBin) {
+    return null;
+  }
+
+  const inputWebpPath = path.join(framesDir, "input.webp");
+  await fs.writeFile(inputWebpPath, bytes);
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const proc = spawnChild(pythonBin, [scriptPath, inputWebpPath, framesDir], {
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: timeoutMs
+      });
+
+      let stderr = "";
+      proc.stderr?.on("data", (d) => {
+        stderr += d.toString();
+      });
+
+      proc.on("error", (err) => reject(err));
+      proc.on("close", (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(`extract_webp_frames.py exited with code ${code}: ${stderr}`));
+        }
+      });
+    });
+
+    const concatScriptPath = path.join(framesDir, "concat.txt");
+    if (!existsSync(concatScriptPath)) {
+      return null;
+    }
+
+    const concatContent = await fs.readFile(concatScriptPath, "utf-8");
+    const frameDurationsMs: number[] = [];
+    for (const line of concatContent.split("\n")) {
+      if (line.startsWith("duration ")) {
+        const durSec = parseFloat(line.slice(9).trim());
+        if (!Number.isNaN(durSec)) {
+          frameDurationsMs.push(Math.round(durSec * 1000));
+        }
+      }
+    }
+
+    if (frameDurationsMs.length === 0) {
+      return null;
+    }
+
+    return { frameDurationsMs, concatScriptPath };
+  } catch {
+    return null;
+  } finally {
+    await fs.unlink(inputWebpPath).catch(() => {});
+  }
+}
+
 export async function normalizeAnimatedWebpToMp4(
   options: NormalizeWebpOptions
 ): Promise<NormalizeWebpResult> {
   const { bytes, outputPath, ffmpegPath, spawnFn, timeoutMs, stemOrder, stemSceneId } = options;
 
-  let demuxed: DemuxedWebp;
-  try {
-    demuxed = demuxAnimatedWebp(bytes, { allowSubRectangles: true });
-  } catch (err) {
-    if (err instanceof FfmpegAssemblyError) throw err;
-    throw new FfmpegAssemblyError(
-      "STEM_PROBE_FAILED",
-      `Failed to demux animated WebP: ${(err as Error).message}`,
-      { stemOrder, stemSceneId }
-    );
-  }
-
-  // Preserve each frame's exact duration instead of collapsing the sequence
-  // to a single average integer framerate (the previous "-framerate N with
-  // image2pipe" approach): animated WebP frames commonly have variable,
-  // non-uniform durations, and rounding to one constant fps silently drifts
-  // the encoded total duration away from the sum of actual frame durations.
-  // Across multiple stems that drift compounds — this is what produced the
-  // observed 252ms discrepancy between measured stem durations and final
-  // output duration. Using ffmpeg's concat demuxer with an explicit
-  // `duration` directive per frame preserves exact per-frame timing.
   const framesDir = path.join(path.dirname(outputPath), `webp-frames-${randomUUID()}`);
   await fs.mkdir(framesDir, { recursive: true });
 
   try {
-    const hasSubRectangles = demuxed.frames.some((f) => f.isFullCanvas === false);
+    let concatScriptPath: string;
+    let frameDurationsMs: number[];
 
-    let frameFileNames: string[];
-    if (!hasSubRectangles) {
-      frameFileNames = await Promise.all(
-        demuxed.frames.map(async (frame, index) => {
-          const fileName = `frame-${String(index).padStart(5, "0")}.webp`;
-          await fs.writeFile(path.join(framesDir, fileName), frame.buffer);
-          return fileName;
-        })
-      );
-    } else {
-      frameFileNames = [];
-      for (let i = 0; i < demuxed.frames.length; i++) {
-        const frame = demuxed.frames[i]!;
-        const frameFileName = `frame-${String(i).padStart(5, "0")}.bmp`;
-        const frameFilePath = path.join(framesDir, frameFileName);
-        const subFileName = `sub-${String(i).padStart(5, "0")}.webp`;
-        const subFilePath = path.join(framesDir, subFileName);
-        await fs.writeFile(subFilePath, frame.buffer);
-
-        if (frame.isFullCanvas || i === 0) {
-          await spawnFn(ffmpegPath, ["-y", "-v", "error", "-i", subFilePath, frameFilePath], {
-            timeoutMs
-          });
-        } else {
-          const prevFileName = `frame-${String(i - 1).padStart(5, "0")}.bmp`;
-          const prevFilePath = path.join(framesDir, prevFileName);
-          await spawnFn(
-            ffmpegPath,
-            [
-              "-y",
-              "-v",
-              "error",
-              "-i",
-              prevFilePath,
-              "-i",
-              subFilePath,
-              "-filter_complex",
-              `[0:v][1:v]overlay=x=${frame.frameX ?? 0}:y=${frame.frameY ?? 0}`,
-              frameFilePath
-            ],
-            { timeoutMs }
-          );
-        }
-        await fs.unlink(subFilePath).catch(() => {});
-        frameFileNames.push(frameFileName);
-      }
+    let pythonExtraction: PythonExtractionResult | null = null;
+    if (!options.disablePython) {
+      pythonExtraction = await extractWithPython(bytes, framesDir, options.pythonPath, timeoutMs);
     }
 
-    // NOTE: do not repeat the last file entry without a `duration` line.
-    // That's a documented workaround for CFR-oriented concat+encode setups,
-    // but combined with "-fps_mode vfr" below it produces a genuine extra
-    // output frame instead of "closing out" the final frame's duration —
-    // confirmed empirically: 97 source frames in, 98 frames / +39ms out with
-    // the repeated entry; exactly 97 frames / source-matching duration
-    // without it.
-    const concatLines: string[] = ["ffconcat version 1.0"];
-    demuxed.frames.forEach((frame, index) => {
-      concatLines.push(`file '${frameFileNames[index]}'`);
-      concatLines.push(`duration ${(frame.durationMs / 1000).toFixed(6)}`);
-    });
-    const concatScriptPath = path.join(framesDir, "concat.txt");
-    await fs.writeFile(concatScriptPath, concatLines.join("\n") + "\n");
+    if (pythonExtraction) {
+      concatScriptPath = pythonExtraction.concatScriptPath;
+      frameDurationsMs = pythonExtraction.frameDurationsMs;
+    } else {
+      let demuxed: DemuxedWebp;
+      try {
+        demuxed = demuxAnimatedWebp(bytes, { allowSubRectangles: true });
+      } catch (err) {
+        if (err instanceof FfmpegAssemblyError) throw err;
+        throw new FfmpegAssemblyError(
+          "STEM_PROBE_FAILED",
+          `Failed to demux animated WebP: ${(err as Error).message}`,
+          { stemOrder, stemSceneId }
+        );
+      }
+
+      const hasSubRectangles = demuxed.frames.some((f) => f.isFullCanvas === false);
+
+      let frameFileNames: string[];
+      if (!hasSubRectangles) {
+        frameFileNames = await Promise.all(
+          demuxed.frames.map(async (frame, index) => {
+            const fileName = `frame-${String(index).padStart(5, "0")}.webp`;
+            await fs.writeFile(path.join(framesDir, fileName), frame.buffer);
+            return fileName;
+          })
+        );
+      } else {
+        frameFileNames = [];
+        for (let i = 0; i < demuxed.frames.length; i++) {
+          const frame = demuxed.frames[i]!;
+          const frameFileName = `frame-${String(i).padStart(5, "0")}.bmp`;
+          const frameFilePath = path.join(framesDir, frameFileName);
+          const subFileName = `sub-${String(i).padStart(5, "0")}.webp`;
+          const subFilePath = path.join(framesDir, subFileName);
+          await fs.writeFile(subFilePath, frame.buffer);
+
+          if (i === 0) {
+            await spawnFn(ffmpegPath, ["-y", "-v", "error", "-i", subFilePath, frameFilePath], {
+              timeoutMs
+            });
+          } else {
+            const prevFileName = `frame-${String(i - 1).padStart(5, "0")}.bmp`;
+            const prevFilePath = path.join(framesDir, prevFileName);
+            await spawnFn(
+              ffmpegPath,
+              [
+                "-y",
+                "-v",
+                "error",
+                "-i",
+                prevFilePath,
+                "-i",
+                subFilePath,
+                "-filter_complex",
+                `[0:v][1:v]overlay=x=${frame.frameX ?? 0}:y=${frame.frameY ?? 0}`,
+                frameFilePath
+              ],
+              { timeoutMs }
+            );
+          }
+          await fs.unlink(subFilePath).catch(() => {});
+          frameFileNames.push(frameFileName);
+        }
+      }
+
+      const concatLines: string[] = ["ffconcat version 1.0"];
+      demuxed.frames.forEach((frame, index) => {
+        concatLines.push(`file '${frameFileNames[index]}'`);
+        concatLines.push(`duration ${(frame.durationMs / 1000).toFixed(6)}`);
+      });
+      concatScriptPath = path.join(framesDir, "concat.txt");
+      await fs.writeFile(concatScriptPath, concatLines.join("\n") + "\n");
+      frameDurationsMs = demuxed.frames.map((f) => f.durationMs);
+    }
 
     const args = [
       "-y",
@@ -338,9 +449,8 @@ export async function normalizeAnimatedWebpToMp4(
     const normalizedArgs = args.map((arg) =>
       arg === concatScriptPath ? "CONCAT_SCRIPT" : arg === outputPath ? "OUTPUT" : arg
     );
-    const frameTimingDescription = demuxed.frames.map((f) => f.durationMs);
     const commandFingerprint = createHash("sha256")
-      .update(JSON.stringify({ args: normalizedArgs, frameDurationsMs: frameTimingDescription }))
+      .update(JSON.stringify({ args: normalizedArgs, frameDurationsMs }))
       .digest("hex");
 
     return { normalizedSha256, commandFingerprint };

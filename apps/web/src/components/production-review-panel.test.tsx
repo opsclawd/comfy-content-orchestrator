@@ -113,6 +113,35 @@ describe("ProductionReviewPanel", () => {
     expect(identity.textContent).toContain("prod-job-4444");
   });
 
+  it("renders img player when media URL is animated webp format", () => {
+    const detail = createSampleDetail();
+    const attempt = createSampleAttempt({
+      media: {
+        url: "https://media.example.com/scenes/scene-1/job-1/output.webp?signature=abc",
+        generationManifestId: "manifest-1"
+      }
+    });
+    const state = createInitialState(detail);
+    const dispatch = vi.fn();
+
+    render(
+      <ProductionReviewPanel
+        detail={detail}
+        productionAttempt={attempt}
+        state={state}
+        dispatch={dispatch}
+      />
+    );
+
+    const player = screen.getByTestId("production-clip-player") as HTMLImageElement;
+    expect(player).toBeDefined();
+    expect(player.tagName).toBe("IMG");
+    expect(player.src).toBe(
+      "https://media.example.com/scenes/scene-1/job-1/output.webp?signature=abc"
+    );
+    expect(player.alt).toContain("Production attempt #1 preview");
+  });
+
   it("renders rendering banner when technicalState is queued, leased, or rendering", () => {
     const detail = createSampleDetail();
     const state = createInitialState(detail);

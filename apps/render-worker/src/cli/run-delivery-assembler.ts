@@ -48,6 +48,7 @@ export interface DeliveryAssemblerRuntimeConfig {
   readonly s3AccessKeyId: string;
   readonly s3SecretAccessKey: string;
   readonly s3Config: S3ObjectStorageOptions;
+  readonly pythonPath?: string | undefined;
 }
 
 export class DeliveryAssemblerConfigError extends Error {
@@ -207,7 +208,8 @@ export function parseDeliveryAssemblerRuntimeConfig(
     s3ForcePathStyle,
     s3AccessKeyId,
     s3SecretAccessKey,
-    s3Config
+    s3Config,
+    pythonPath: (getArg("python-path") ?? env.PYTHON_PATH ?? env.WEBP_PYTHON_PATH)?.trim()
   };
 }
 
@@ -255,6 +257,7 @@ export async function createDeliveryReelAssembler(
       ffprobePath: config.ffprobePath,
       workspaceRoot: config.assemblyWorkspaceRoot,
       outputBucket: config.s3DeliveryBucket,
+      pythonPath: config.pythonPath,
       objectStorage
     });
 
