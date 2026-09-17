@@ -535,6 +535,21 @@ describe("runtime-config", () => {
       expect(config.planningProviders?.attemptTimeoutMs).toBe(45_000);
       expect(config.planningProviders?.overallTimeoutMs).toBe(90_000);
     });
+
+    it("accepts custom OpenAI-compatible endpoint without requiring ANTHROPIC_API_KEY", () => {
+      const config = parseControlApiRuntimeConfig({
+        ...validEnv,
+        OPENAI_API_KEY: "llama",
+        OPENAI_BASE_URL: "http://100.95.22.126:8080",
+        OPENAI_MODEL: "qwen3.6-27b"
+      });
+
+      expect(config.planningProviders).toBeDefined();
+      expect(config.planningProviders?.anthropicApiKey).toBeUndefined();
+      expect(config.planningProviders?.openaiApiKey).toBe("llama");
+      expect(config.planningProviders?.openaiBaseUrl).toBe("http://100.95.22.126:8080");
+      expect(config.planningProviders?.openaiModel).toBe("qwen3.6-27b");
+    });
   });
 
   describe("ranking provider configuration", () => {

@@ -41,8 +41,10 @@ export interface ControlApiJobDispatchConfig {
 }
 
 export interface ControlApiPlanningConfig {
-  readonly anthropicApiKey: string;
+  readonly anthropicApiKey?: string;
   readonly openaiApiKey: string;
+  readonly openaiBaseUrl?: string;
+  readonly openaiModel?: string;
   readonly attemptTimeoutMs?: number;
   readonly overallTimeoutMs?: number;
 }
@@ -370,20 +372,32 @@ export function parseControlApiRuntimeConfig(
     );
   }
 
-  // 9. Parse optional Planning Providers (all-or-none pair)
+  // 9. Parse optional Planning Providers (all-or-none pair, or custom OpenAI-compatible endpoint)
   const anthropicApiKey = parseOptionalString(env.ANTHROPIC_API_KEY, "ANTHROPIC_API_KEY");
   const openaiApiKey = parseOptionalString(env.OPENAI_API_KEY, "OPENAI_API_KEY");
+  const openaiBaseUrl = parseOptionalString(
+    env.PLANNING_OPENAI_BASE_URL ?? env.OPENAI_BASE_URL,
+    "OPENAI_BASE_URL"
+  );
+  const openaiModel = parseOptionalString(
+    env.PLANNING_OPENAI_MODEL ?? env.OPENAI_MODEL,
+    "OPENAI_MODEL"
+  );
 
-  if (anthropicApiKey !== undefined && openaiApiKey === undefined) {
-    throw new ControlApiConfigError(
-      "Invalid planning provider configuration: ANTHROPIC_API_KEY is provided, but OPENAI_API_KEY is missing. Both ANTHROPIC_API_KEY and OPENAI_API_KEY must be provided together or neither."
-    );
-  }
+  const isCustomOpenAiEndpoint = openaiBaseUrl !== undefined;
 
-  if (anthropicApiKey === undefined && openaiApiKey !== undefined) {
-    throw new ControlApiConfigError(
-      "Invalid planning provider configuration: OPENAI_API_KEY is provided, but ANTHROPIC_API_KEY is missing. Both ANTHROPIC_API_KEY and OPENAI_API_KEY must be provided together or neither."
-    );
+  if (!isCustomOpenAiEndpoint) {
+    if (anthropicApiKey !== undefined && openaiApiKey === undefined) {
+      throw new ControlApiConfigError(
+        "Invalid planning provider configuration: ANTHROPIC_API_KEY is provided, but OPENAI_API_KEY is missing. Both ANTHROPIC_API_KEY and OPENAI_API_KEY must be provided together or neither."
+      );
+    }
+
+    if (anthropicApiKey === undefined && openaiApiKey !== undefined) {
+      throw new ControlApiConfigError(
+        "Invalid planning provider configuration: OPENAI_API_KEY is provided, but ANTHROPIC_API_KEY is missing. Both ANTHROPIC_API_KEY and OPENAI_API_KEY must be provided together or neither."
+      );
+    }
   }
 
   const attemptTimeoutMs =
@@ -396,10 +410,12 @@ export function parseControlApiRuntimeConfig(
       : undefined;
 
   const planningProviders: ControlApiPlanningConfig | undefined =
-    anthropicApiKey !== undefined && openaiApiKey !== undefined
+    openaiApiKey !== undefined && (anthropicApiKey !== undefined || isCustomOpenAiEndpoint)
       ? {
-          anthropicApiKey,
+          ...(anthropicApiKey !== undefined ? { anthropicApiKey } : {}),
           openaiApiKey,
+          ...(openaiBaseUrl !== undefined ? { openaiBaseUrl } : {}),
+          ...(openaiModel !== undefined ? { openaiModel } : {}),
           ...(attemptTimeoutMs !== undefined ? { attemptTimeoutMs } : {}),
           ...(overallTimeoutMs !== undefined ? { overallTimeoutMs } : {})
         }

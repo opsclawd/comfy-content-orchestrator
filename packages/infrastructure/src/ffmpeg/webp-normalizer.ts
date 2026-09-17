@@ -4,16 +4,27 @@ import path from "node:path";
 import { FfmpegAssemblyError } from "./ffmpeg-error.js";
 import type { SpawnLikeFn } from "./ffmpeg-process-runner.js";
 
+export interface DemuxedFrame {
+  readonly buffer: Buffer;
+  readonly durationMs: number;
+  readonly frameX?: number | undefined;
+  readonly frameY?: number | undefined;
+  readonly frameWidth?: number | undefined;
+  readonly frameHeight?: number | undefined;
+  readonly isFullCanvas?: boolean | undefined;
+}
+
 export interface DemuxedWebp {
-  readonly frames: ReadonlyArray<{
-    readonly buffer: Buffer;
-    readonly durationMs: number;
-  }>;
+  readonly frames: ReadonlyArray<DemuxedFrame>;
   readonly totalDurationMs: number;
   readonly fps: number;
   readonly width: number;
   readonly height: number;
   readonly combinedFrames: Buffer;
+}
+
+export interface DemuxAnimatedWebpOptions {
+  readonly allowSubRectangles?: boolean | undefined;
 }
 
 export function isAnimatedWebp(bytes: Uint8Array): boolean {
@@ -42,7 +53,10 @@ export function isAnimatedWebp(bytes: Uint8Array): boolean {
   return false;
 }
 
-export function demuxAnimatedWebp(bytes: Uint8Array): DemuxedWebp {
+export function demuxAnimatedWebp(
+  bytes: Uint8Array,
+  options?: DemuxAnimatedWebpOptions
+): DemuxedWebp {
   const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (buf.length < 12) {
     throw new FfmpegAssemblyError("STEM_PROBE_FAILED", "Invalid WebP header: buffer too small");
@@ -58,7 +72,7 @@ export function demuxAnimatedWebp(bytes: Uint8Array): DemuxedWebp {
   }
 
   let offset = 12;
-  const frames: Array<{ buffer: Buffer; durationMs: number }> = [];
+  const frames: Array<DemuxedFrame> = [];
   let totalDurationMs = 0;
   let canvasWidth = 0;
   let canvasHeight = 0;
@@ -74,13 +88,7 @@ export function demuxAnimatedWebp(bytes: Uint8Array): DemuxedWebp {
       canvasHeight = 1 + buf.readUIntLE(chunkStart + 7, 3);
     } else if (fourcc === "ANMF" && size >= 16 && chunkStart + 16 <= buf.length) {
       // Per-frame x/y (in units of 2 pixels) and width-1/height-1, per the
-      // WebP ANMF chunk layout. This extractor treats every frame as an
-      // independent, full-canvas, origin-(0,0) image and skips real ANMF
-      // compositing (offset placement, alpha-blending with the prior
-      // canvas, disposal). That's only correct for a specific subset of
-      // ANMF content — validated against real LTX_25_720P_5S_V1 output for
-      // issue #131 — so any frame outside that subset must fail closed
-      // instead of silently mis-rendering (crop/misplace/wrong-alpha).
+      // WebP ANMF chunk layout.
       const frameX = 2 * buf.readUIntLE(chunkStart + 0, 3);
       const frameY = 2 * buf.readUIntLE(chunkStart + 3, 3);
       const frameWidth = 1 + buf.readUIntLE(chunkStart + 6, 3);
@@ -90,12 +98,10 @@ export function demuxAnimatedWebp(bytes: Uint8Array): DemuxedWebp {
       const blendingMethod = (flagsByte >> 1) & 0x01; // 0 = overwrite, 1 = alpha-blend with prior canvas
       totalDurationMs += frameDurationMs;
 
-      if (
-        frameX !== 0 ||
-        frameY !== 0 ||
-        frameWidth !== canvasWidth ||
-        frameHeight !== canvasHeight
-      ) {
+      const isFullCanvas =
+        frameX === 0 && frameY === 0 && frameWidth === canvasWidth && frameHeight === canvasHeight;
+
+      if (!options?.allowSubRectangles && !isFullCanvas) {
         throw new FfmpegAssemblyError(
           "UNSUPPORTED_INPUT",
           `Animated WebP frame ${frames.length} is not full-canvas at origin (0,0) ` +
@@ -131,7 +137,15 @@ export function demuxAnimatedWebp(bytes: Uint8Array): DemuxedWebp {
       riffHeader.write("WEBP", 8, 4, "ascii");
 
       const frameBuffer = Buffer.concat([riffHeader, payload]);
-      frames.push({ buffer: frameBuffer, durationMs: frameDurationMs });
+      frames.push({
+        buffer: frameBuffer,
+        durationMs: frameDurationMs,
+        frameX,
+        frameY,
+        frameWidth,
+        frameHeight,
+        isFullCanvas
+      });
     }
 
     offset += 8 + size + (size % 2);
@@ -180,7 +194,7 @@ export async function normalizeAnimatedWebpToMp4(
 
   let demuxed: DemuxedWebp;
   try {
-    demuxed = demuxAnimatedWebp(bytes);
+    demuxed = demuxAnimatedWebp(bytes, { allowSubRectangles: true });
   } catch (err) {
     if (err instanceof FfmpegAssemblyError) throw err;
     throw new FfmpegAssemblyError(
@@ -203,13 +217,55 @@ export async function normalizeAnimatedWebpToMp4(
   await fs.mkdir(framesDir, { recursive: true });
 
   try {
-    const frameFileNames = await Promise.all(
-      demuxed.frames.map(async (frame, index) => {
-        const fileName = `frame-${String(index).padStart(5, "0")}.webp`;
-        await fs.writeFile(path.join(framesDir, fileName), frame.buffer);
-        return fileName;
-      })
-    );
+    const hasSubRectangles = demuxed.frames.some((f) => f.isFullCanvas === false);
+
+    let frameFileNames: string[];
+    if (!hasSubRectangles) {
+      frameFileNames = await Promise.all(
+        demuxed.frames.map(async (frame, index) => {
+          const fileName = `frame-${String(index).padStart(5, "0")}.webp`;
+          await fs.writeFile(path.join(framesDir, fileName), frame.buffer);
+          return fileName;
+        })
+      );
+    } else {
+      frameFileNames = [];
+      for (let i = 0; i < demuxed.frames.length; i++) {
+        const frame = demuxed.frames[i]!;
+        const frameFileName = `frame-${String(i).padStart(5, "0")}.bmp`;
+        const frameFilePath = path.join(framesDir, frameFileName);
+        const subFileName = `sub-${String(i).padStart(5, "0")}.webp`;
+        const subFilePath = path.join(framesDir, subFileName);
+        await fs.writeFile(subFilePath, frame.buffer);
+
+        if (frame.isFullCanvas || i === 0) {
+          await spawnFn(ffmpegPath, ["-y", "-v", "error", "-i", subFilePath, frameFilePath], {
+            timeoutMs
+          });
+        } else {
+          const prevFileName = `frame-${String(i - 1).padStart(5, "0")}.bmp`;
+          const prevFilePath = path.join(framesDir, prevFileName);
+          await spawnFn(
+            ffmpegPath,
+            [
+              "-y",
+              "-v",
+              "error",
+              "-i",
+              prevFilePath,
+              "-i",
+              subFilePath,
+              "-filter_complex",
+              `[0:v][1:v]overlay=x=${frame.frameX ?? 0}:y=${frame.frameY ?? 0}`,
+              frameFilePath
+            ],
+            { timeoutMs }
+          );
+        }
+        await fs.unlink(subFilePath).catch(() => {});
+        frameFileNames.push(frameFileName);
+      }
+    }
 
     // NOTE: do not repeat the last file entry without a `duration` line.
     // That's a documented workaround for CFR-oriented concat+encode setups,

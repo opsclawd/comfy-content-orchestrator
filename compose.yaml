@@ -22,6 +22,12 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql
       - ./scripts/postgres-init-app-role.sh:/docker-entrypoint-initdb.d/00-init-app-role.sh:ro
+    ports:
+      - mode: host
+        protocol: tcp
+        published: "${POSTGRES_PORT:-5432}"
+        target: 5432
+        host_ip: "${TAILNET_IP:?TAILNET_IP is required}"
     networks:
       - control-plane
     restart: unless-stopped
@@ -110,6 +116,10 @@ services:
       JOB_HEARTBEAT_INTERVAL_MS: ${JOB_HEARTBEAT_INTERVAL_MS:-30000}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      PLANNING_ATTEMPT_TIMEOUT_MS: ${PLANNING_ATTEMPT_TIMEOUT_MS:-}
+      PLANNING_OVERALL_TIMEOUT_MS: ${PLANNING_OVERALL_TIMEOUT_MS:-}
     volumes:
       - minio_data:${STORAGE_TELEMETRY_PATH:?STORAGE_TELEMETRY_PATH is required}:ro
     ports:
