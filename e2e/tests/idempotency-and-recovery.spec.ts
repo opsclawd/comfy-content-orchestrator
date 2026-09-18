@@ -124,7 +124,7 @@ test.describe("Idempotency, Recovery, and Conflict Lifecycle", () => {
     testEnv
   }) => {
     testEnv.planningStub.reset();
-    testEnv.planningStub.setFailNext(1);
+    testEnv.planningStub.setFailNext(2);
 
     const campaignTitle = `Planning Failure Recovery ${randomUUID().slice(0, 8)}`;
 
