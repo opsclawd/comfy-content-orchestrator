@@ -106,6 +106,7 @@ export interface FfmpegMediaAssemblerAdapterOptions {
   readonly outputBucket?: string | undefined;
   readonly createAssemblyId?: ((spec: AssemblySpec) => string) | (() => string) | undefined;
   readonly createStagingKey?: ((campaignId: string, assemblyId: string) => string) | undefined;
+  readonly pythonPath?: string | undefined;
 }
 
 export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
@@ -113,6 +114,7 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
   private readonly ffprobePath: string;
   private readonly workspaceRoot: string;
   private readonly objectStorage: ObjectStoragePort;
+  private readonly pythonPath?: string | undefined;
   private readonly maxStemInputBytes: number;
   private readonly maxAggregateInputBytes: number;
   private readonly maxOutputBytes: number;
@@ -157,6 +159,7 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
     this.ffprobePath = options.ffprobePath;
     this.workspaceRoot = options.workspaceRoot;
     this.objectStorage = options.objectStorage;
+    this.pythonPath = options.pythonPath;
     this.maxStemInputBytes = options.maxStemInputBytes ?? DEFAULT_MAX_STEM_INPUT_BYTES;
     this.maxAggregateInputBytes =
       options.maxAggregateInputBytes ?? DEFAULT_MAX_AGGREGATE_INPUT_BYTES;
@@ -639,6 +642,7 @@ export class FfmpegMediaAssemblerAdapter implements ConcreteMediaAssemblerPort {
             outputPath: stagedPath,
             ffmpegPath: this.ffmpegPath,
             spawnFn: this.spawnFn,
+            pythonPath: this.pythonPath,
             timeoutMs: this.encodeTimeoutMs,
             stemOrder: stem.order,
             stemSceneId: stem.sceneId

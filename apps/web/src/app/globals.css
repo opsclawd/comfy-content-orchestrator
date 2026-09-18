@@ -1302,7 +1302,8 @@ a:hover {
   max-width: 100%;
 }
 
-.production-clip-container video {
+.production-clip-container video,
+.production-clip-container img {
   width: 100%;
   max-height: 540px;
   object-fit: contain;

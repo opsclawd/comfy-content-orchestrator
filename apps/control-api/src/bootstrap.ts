@@ -4,6 +4,8 @@ import type {
   CampaignDeliveryReelQueries,
   ObjectStoragePort,
   PlanningModelClientPort,
+  PlanningModelOutcome,
+  PlanningModelRequest,
   RankingModelClientPort,
   ReferenceAssetRepository,
   StorageTelemetryPort
@@ -50,6 +52,14 @@ export interface ControlApiProcessSignals {
   on(signal: string, handler: () => void): void;
   removeListener(signal: string, handler: () => void): void;
   exit?(code: number): void;
+}
+
+class OpenAiAsAnthropicPlanningModelClient implements PlanningModelClientPort {
+  readonly providerName = "Anthropic" as const;
+  constructor(private readonly inner: OpenAiPlanningModelClient) {}
+  complete(request: PlanningModelRequest): Promise<PlanningModelOutcome> {
+    return this.inner.complete(request);
+  }
 }
 
 export interface ControlApiBootstrapOptions {
@@ -260,25 +270,42 @@ export async function runControlApi(
     const openAiKey = config.planningProviders?.openaiApiKey;
     const attemptTimeoutMs = config.planningProviders?.attemptTimeoutMs;
     const overallTimeoutMs = config.planningProviders?.overallTimeoutMs;
+    const openAiBaseUrl = config.planningProviders?.openaiBaseUrl;
+    const openAiModel = config.planningProviders?.openaiModel;
+
+    const openAiClient = openAiKey
+      ? new OpenAiPlanningModelClient({
+          apiKey: openAiKey,
+          ...(openAiBaseUrl !== undefined ? { baseUrl: openAiBaseUrl } : {}),
+          ...(openAiModel !== undefined ? { model: openAiModel } : {}),
+          ...(attemptTimeoutMs !== undefined ? { timeoutMs: attemptTimeoutMs } : {})
+        })
+      : undefined;
+
+    const anthropicClient = anthropicKey
+      ? new AnthropicPlanningModelClient({
+          apiKey: anthropicKey,
+          ...(attemptTimeoutMs !== undefined ? { timeoutMs: attemptTimeoutMs } : {})
+        })
+      : undefined;
 
     const planningModelClients =
       options.planningModelClients ??
-      (anthropicKey && openAiKey
+      (anthropicClient && openAiClient
         ? {
-            primary: new AnthropicPlanningModelClient({
-              apiKey: anthropicKey,
-              ...(attemptTimeoutMs !== undefined ? { timeoutMs: attemptTimeoutMs } : {})
-            }),
-            fallback: new OpenAiPlanningModelClient({
-              apiKey: openAiKey,
-              ...(attemptTimeoutMs !== undefined ? { timeoutMs: attemptTimeoutMs } : {})
-            })
+            primary: anthropicClient,
+            fallback: openAiClient
           }
-        : undefined);
+        : openAiClient
+          ? {
+              primary: new OpenAiAsAnthropicPlanningModelClient(openAiClient),
+              fallback: openAiClient
+            }
+          : undefined);
 
     const referenceAssetRepository =
       options.referenceAssetRepository ??
-      (anthropicKey && openAiKey ? new PostgresReferenceAssetRepository(pool) : undefined);
+      (planningModelClients ? new PostgresReferenceAssetRepository(pool) : undefined);
 
     const geminiKey = config.rankingProviders?.geminiApiKey;
     const rankingOpenAiKey = config.rankingProviders?.openaiApiKey;
