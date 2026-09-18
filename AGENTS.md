@@ -28,6 +28,13 @@ To ensure deterministic speech synthesis and reproducible container builds acros
 - Run `./scripts/check-piper-version.sh` to verify that your local environment has the pinned voice artifacts cached and that `docker/piper/Dockerfile` matches its pinned SHA-256 digest.
 - `check-piper-version.sh` performs only static, on-disk artifact verification and intentionally does not start or probe a live Piper HTTP service — service lifecycle and readiness checking belongs to the Testcontainers-managed integration test (`pnpm test:piper`).
 
+## MiniMax-H3 Environment Setup
+
+To ensure deterministic video generation and reproducible model weights across local development and the RTX 4090 render host, MiniMax-H3 model weights and revisions are pinned in `.minimax-h3-version`:
+- Use `./scripts/install-minimax-h3.sh` to download and verify the pinned MiniMax-H3 model weights (`Comfy-Org/MiniMax-H3`).
+- Run `./scripts/check-minimax-h3-version.sh` to verify that the target environment has the pinned weights and checksums verified.
+- ComfyUI natively registers the MiniMax-H3 nodes via `comfy_extras/nodes_minimax_h3.py` (`EmptyMiniMaxH3LatentAV`, `MiniMaxH3ImageToVideo`, `MiniMaxH3ReferenceToVideo`).
+
 ## Running tests — two suites, two configs
 
 This repository has **two** vitest configurations, and using the wrong one produces a command that can never pass.
