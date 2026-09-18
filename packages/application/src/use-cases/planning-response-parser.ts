@@ -8,7 +8,13 @@ export function parsePlanningResponse(rawText: string): ParsePlanningResponseRes
 
   let text = rawText.trim();
 
-  if (text.startsWith("```")) {
+  // Strip reasoning blocks like <think>...</think> (e.g. DeepSeek R1, MiniMax M3, Qwen)
+  text = text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+
+  const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (codeBlockMatch && codeBlockMatch[1]) {
+    text = codeBlockMatch[1].trim();
+  } else if (text.startsWith("```")) {
     text = text.replace(/^```(?:json)?\s*\n?/i, "");
     text = text.replace(/\n?```\s*$/i, "");
     text = text.trim();

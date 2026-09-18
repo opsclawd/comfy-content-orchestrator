@@ -100,7 +100,8 @@ export class OpenAiPlanningModelClient implements PlanningModelClientPort {
   }
 
   async complete(request: PlanningModelRequest): Promise<PlanningModelOutcome> {
-    const url = `${this.baseUrl.replace(/\/+$/, "")}/v1/chat/completions`;
+    const cleanBase = this.baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "");
+    const url = `${cleanBase}/v1/chat/completions`;
     const headers = {
       "content-type": "application/json",
       authorization: `Bearer ${this.apiKey}`

@@ -112,6 +112,22 @@ describe("formatReviewError", () => {
     });
   });
 
+  it("maps UnsupportedProductionDurationError to 400 UNSUPPORTED_PRODUCTION_DURATION with details", () => {
+    expect(formatReviewError(new UnsupportedProductionDurationError(5000, "out_of_range"))).toEqual(
+      {
+        statusCode: 400,
+        body: {
+          code: "UNSUPPORTED_PRODUCTION_DURATION",
+          message: "Production duration 5000ms is unsupported: out_of_range",
+          details: {
+            durationMs: 5000,
+            reason: "out_of_range"
+          }
+        }
+      }
+    );
+  });
+
   it("maps PlanningNotAuthorizedError to 403 CLOUD_PLANNING_NOT_AUTHORIZED", () => {
     expect(
       formatReviewError(new PlanningNotAuthorizedError("Cloud planning not permitted"))
@@ -344,9 +360,12 @@ describe("handleReviewError", () => {
     return { request, reply, errorSpy, statusSpy, sendSpy };
   }
 
-  it("logs redacted-but-real diagnostic projection for typed domain error (issue reproduction)", () => {
+  it("logs redacted-but-real diagnostic projection for unhandled typed error", () => {
+    class SimulatedUnhandledDomainError extends Error {
+      override readonly name = "SimulatedUnhandledDomainError";
+    }
     const { request, reply, errorSpy, statusSpy, sendSpy } = createMockHttp();
-    const err = new UnsupportedProductionDurationError(5000, "out_of_range");
+    const err = new SimulatedUnhandledDomainError("Domain condition unhandled: simulated_failure");
 
     handleReviewError(err, request, reply);
 
@@ -355,10 +374,8 @@ describe("handleReviewError", () => {
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(errorSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        errorType: "UnsupportedProductionDurationError",
-        safeMessage: expect.stringContaining(
-          "Production duration 5000ms is unsupported: out_of_range"
-        )
+        errorType: "SimulatedUnhandledDomainError",
+        safeMessage: expect.stringContaining("Domain condition unhandled: simulated_failure")
       }),
       "control-api request failed with 5xx"
     );

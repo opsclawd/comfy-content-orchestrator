@@ -124,6 +124,7 @@ test.describe("Idempotency, Recovery, and Conflict Lifecycle", () => {
     testEnv
   }) => {
     testEnv.planningStub.reset();
+    testEnv.planningStub.shouldThrow = true;
 
     const campaignTitle = `Planning Failure Recovery ${randomUUID().slice(0, 8)}`;
 
@@ -171,11 +172,26 @@ test.describe("Idempotency, Recovery, and Conflict Lifecycle", () => {
     expect(shellResult.rows.length).toBe(1);
     const failedCampaignId = shellResult.rows[0]!.campaign_id;
 
+    // Ensure the failed background planning attempt has transitioned the shell status to 'failed'
+    for (let i = 0; i < 30; i++) {
+      const statusRes = await testEnv.postgres.pool.query(
+        "SELECT status FROM campaigns WHERE campaign_id = $1",
+        [failedCampaignId]
+      );
+      if (statusRes.rows[0]?.status === "failed") {
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
     const scenesResult = await testEnv.postgres.pool.query(
       "SELECT scene_id FROM storyboard_scenes WHERE campaign_id = $1",
       [failedCampaignId]
     );
     expect(scenesResult.rows.length).toBe(0);
+
+    // Allow planning to succeed on retry
+    testEnv.planningStub.shouldThrow = false;
 
     // User retries submission via the same form
     const retryResponsePromise = page.waitForResponse(
@@ -215,7 +231,7 @@ test.describe("Idempotency, Recovery, and Conflict Lifecycle", () => {
     expect(dbScenes.length).toBeGreaterThan(0);
 
     const sceneRows = page.getByTestId("scene-row");
-    await expect(sceneRows).toHaveCount(dbScenes.length);
+    await expect(sceneRows).toHaveCount(dbScenes.length, { timeout: 15_000 });
 
     // Confirm candidate generation admitted for all retry scenes in DOM
     for (let i = 0; i < dbScenes.length; i++) {

@@ -436,7 +436,8 @@ describe("Review Read Model and Error Contracts", () => {
       "INVALID_DOMAIN_TRANSITION",
       "VALIDATION_FAILURE",
       "MEDIA_UNAVAILABLE",
-      "AUTHENTICATION_REQUIRED"
+      "AUTHENTICATION_REQUIRED",
+      "UNSUPPORTED_PRODUCTION_DURATION"
     ];
     expect(REVIEW_ERROR_CODES).toEqual(expectedCodes);
 

@@ -234,6 +234,30 @@ describe("ReviewCommandControls Component", () => {
     expect(html).toContain("Dismiss");
   });
 
+  it("displays duration guidance hint when action rejected with UNSUPPORTED_PRODUCTION_DURATION", () => {
+    const detail = createSampleDetail({ specRevision: 2 });
+
+    const definitiveState: ReviewCommandState = {
+      phase: "definitive-error",
+      detail,
+      statusCode: 400,
+      error: {
+        code: "UNSUPPORTED_PRODUCTION_DURATION",
+        message: "Scene duration 5000ms is not supported by production video engine"
+      },
+      displayLabel: "Approve Scene"
+    };
+
+    const html = renderToStaticMarkup(
+      <ReviewCommandControls detail={detail} state={definitiveState} />
+    );
+
+    expect(html).toContain('data-testid="definitive-error-banner"');
+    expect(html).toContain("UNSUPPORTED_PRODUCTION_DURATION");
+    expect(html).toContain('data-testid="unsupported-duration-hint"');
+    expect(html).toContain("The production video engine requires ~4.0s (97 frames)");
+  });
+
   it("indeterminate error exposes retry button that resubmits same action ID", () => {
     const detail = createSampleDetail({ specRevision: 2 });
     const actionId = "frozen-action-uuid-1234";

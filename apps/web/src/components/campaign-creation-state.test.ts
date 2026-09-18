@@ -259,10 +259,10 @@ describe("campaign creation state machine & form mapping", () => {
       expect(parseCheck.success).toBe(true);
     });
 
-    it("fails validation with field error when duration is below minimum (5s)", () => {
+    it("fails validation with field error when duration is below minimum (4s)", () => {
       const invalidValues: CampaignCreationFormValues = {
         ...validFormValues,
-        durationSeconds: "4" // 4000ms < 5000ms
+        durationSeconds: "3" // 3000ms < 4000ms
       };
 
       const result = buildRequestFromForm(invalidValues, dummyIdempotencyKey);

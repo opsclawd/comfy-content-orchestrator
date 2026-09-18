@@ -635,6 +635,12 @@ export function ReviewCommandControls({
         >
           <h3>Action Rejected ({state.error.code})</h3>
           <p>{state.error.message}</p>
+          {state.error.code === "UNSUPPORTED_PRODUCTION_DURATION" && (
+            <p className="error-hint" data-testid="unsupported-duration-hint">
+              The production video engine requires ~4.0s (97 frames). Please adjust the scene
+              duration to 4.0s before approving.
+            </p>
+          )}
           {state.statusCode === 404 && (
             <div className="not-found-action" data-testid="not-found-action">
               <Link

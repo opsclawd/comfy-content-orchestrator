@@ -496,4 +496,29 @@ describe("OpenAiPlanningModelClient", () => {
       expect(result.message).toContain("potential harm");
     }
   });
+
+  it("normalizes baseUrl with trailing /v1 to avoid doubling the path", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        ({
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              choices: [{ message: { role: "assistant", content: '{"ok":true}' } }]
+            })
+        }) as unknown as Response
+    );
+
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-key",
+      baseUrl: "https://api.minimax.io/v1/",
+      fetch: fetchMock
+    });
+
+    await client.complete(request);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.minimax.io/v1/chat/completions",
+      expect.anything()
+    );
+  });
 });

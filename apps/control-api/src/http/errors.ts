@@ -26,7 +26,8 @@ import {
   StaleRevisionConflictError,
   StoryboardMaterializationConflictError,
   StoryboardPartiallyMaterializedError,
-  TransactionalJobEnqueuerUnavailableError
+  TransactionalJobEnqueuerUnavailableError,
+  UnsupportedProductionDurationError
 } from "@cco/application";
 import type { ReviewErrorResponse } from "@cco/contracts";
 import {
@@ -123,6 +124,20 @@ export function formatReviewError(error: unknown): {
       body: {
         code: "VALIDATION_FAILURE",
         message: error.message
+      }
+    };
+  }
+
+  if (error instanceof UnsupportedProductionDurationError) {
+    return {
+      statusCode: 400,
+      body: {
+        code: "UNSUPPORTED_PRODUCTION_DURATION",
+        message: error.message,
+        details: {
+          durationMs: error.durationMs,
+          reason: error.reason
+        }
       }
     };
   }

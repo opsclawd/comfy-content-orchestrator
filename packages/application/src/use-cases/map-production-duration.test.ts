@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   mapDurationMsToLtxFrameCount,
-  UnsupportedProductionDurationError
+  UnsupportedProductionDurationError,
+  LTX_CANONICAL_DURATION_MS,
+  isLtxRenderableDuration,
+  snapToRenderableLtxDurationMs
 } from "./map-production-duration.js";
 import { LTX_FRAME_QUANTIZATION_TOLERANCE_MS } from "@cco/contracts";
 
@@ -112,5 +115,33 @@ describe("mapDurationMsToLtxFrameCount", () => {
     );
     expect(errorTolerance.durationMs).toBe(2500);
     expect(errorTolerance.reason).toBe("exceeds_quantization_tolerance");
+  });
+
+  describe("LTX duration helpers", () => {
+    it("exports LTX_CANONICAL_DURATION_MS as 4000", () => {
+      expect(LTX_CANONICAL_DURATION_MS).toBe(4000);
+    });
+
+    it("isLtxRenderableDuration correctly identifies renderable durations", () => {
+      expect(isLtxRenderableDuration(4000)).toBe(true);
+      expect(isLtxRenderableDuration(4041.67)).toBe(true);
+      expect(isLtxRenderableDuration(3900)).toBe(true);
+      expect(isLtxRenderableDuration(4200)).toBe(true);
+      expect(isLtxRenderableDuration(5000)).toBe(false);
+      expect(isLtxRenderableDuration(2500)).toBe(false);
+      expect(isLtxRenderableDuration(0)).toBe(false);
+    });
+
+    it("snapToRenderableLtxDurationMs preserves valid durations and snaps invalid durations to 4000", () => {
+      expect(snapToRenderableLtxDurationMs(4000)).toBe(4000);
+      expect(snapToRenderableLtxDurationMs(4042)).toBe(4042);
+      expect(snapToRenderableLtxDurationMs(3950)).toBe(3950);
+      // Unrenderable durations snap to canonical 4000ms
+      expect(snapToRenderableLtxDurationMs(5000)).toBe(4000);
+      expect(snapToRenderableLtxDurationMs(2500)).toBe(4000);
+      expect(snapToRenderableLtxDurationMs(3500)).toBe(4000);
+      expect(snapToRenderableLtxDurationMs(0)).toBe(4000);
+      expect(snapToRenderableLtxDurationMs(-100)).toBe(4000);
+    });
   });
 });

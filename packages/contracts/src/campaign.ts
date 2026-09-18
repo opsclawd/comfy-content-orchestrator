@@ -28,12 +28,13 @@ export const CampaignResponseSchema = z.object({
 export type CampaignResponse = z.infer<typeof CampaignResponseSchema>;
 
 // Source of truth: packages/application/src/use-cases/scene-count-policy.ts — kept in sync via campaign.test.ts + scene-count-policy.test.ts cross-check.
-export const MIN_TARGET_DURATION_MS = 5_000;
+export const MIN_TARGET_DURATION_MS = 4_000;
 export const MAX_TARGET_DURATION_MS = 300_000;
 export const MIN_SCENE_COUNT = 1;
 export const MAX_SCENE_COUNT = 60;
 export const MIN_SCENE_DURATION_MS = 1_000;
 export const MAX_SCENE_DURATION_MS = 15_000;
+export const CANONICAL_LTX_DURATION_MS = 4_000;
 
 // Base shape for campaign shell parameters shared across shell creation and composed planning.
 export const CampaignShellRequestShape = {

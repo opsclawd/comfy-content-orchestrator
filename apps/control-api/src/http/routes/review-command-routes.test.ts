@@ -705,6 +705,53 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
     expect(jobs.jobs[0]!.status).toBe("queued");
   });
 
+  it("approving the final scene with unrenderable duration returns 400 UNSUPPORTED_PRODUCTION_DURATION", async () => {
+    const scene = createReviewReadyScene({
+      selectedCandidateId: candidateUuid,
+      selectedCandidateRevision: 1,
+      configuration: {
+        prompt: "A cinematic shot of a mountain sunrise",
+        referenceIds: [],
+        engineProfileId: "ltx_25",
+        durationMs: 5000
+      }
+    });
+    const candidate = createCandidate();
+    const jobs = new TestJobQueue();
+    const campaign: CampaignRecord = {
+      id: campaignUuid,
+      status: "drafting",
+      totalScenes: 1,
+      approvedScenes: 0,
+      clientId: "client-1",
+      title: "Test Campaign",
+      targetPlatform: "tiktok",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    const uow = new InMemorySceneUnitOfWork([scene], [candidate], undefined, jobs, campaign);
+    const app = createControlApiApp({ uow }, defaultTestOptions);
+
+    const command: ReviewCommand = {
+      actionId: actionUuid,
+      sceneId: sceneUuid,
+      expectedSpecRevision: 1,
+      action: "approve",
+      payload: {}
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${sceneUuid}/review-command`,
+      payload: command
+    });
+
+    expect(response.statusCode).toBe(400);
+    const body = response.json() as ReviewErrorResponse;
+    expect(body.code).toBe("UNSUPPORTED_PRODUCTION_DURATION");
+    expect(body.message).toContain("5000ms is unsupported: out_of_range");
+  });
+
   it("approving a non-final scene updates approvedScenes counter and keeps campaign in drafting without dispatching", async () => {
     const scene1 = createReviewReadyScene({
       selectedCandidateId: candidateUuid,
