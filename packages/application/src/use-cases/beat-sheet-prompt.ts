@@ -37,7 +37,7 @@ export function buildBeatSheetPlanningPrompt(
     "    - targetPlatform: optional string.",
     "    - visualStyle: optional string.",
     "    - requirements: optional array of non-empty strings.",
-    "  - targetDurationMs: positive integer duration in milliseconds for this beat.",
+    "  - targetDurationMs: positive integer duration in milliseconds for this beat. For video synthesis, each beat should target ~4000 ms (4.0 seconds, matching the certified 97-frame video engine).",
     `- The sum of all beat targetDurationMs values MUST equal exactly ${input.targetTotalDurationMs} ms.`
   ].join("\n");
 

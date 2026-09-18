@@ -61,3 +61,33 @@ export function mapDurationMsToLtxFrameCount(
 
   return { ok: true, frameCount: quantizedFrames, achievedDurationMs };
 }
+
+/**
+ * Canonical duration in milliseconds for certified LTX engine profiles (97 frames at 24fps = ~4.04s, nominal 4000ms).
+ */
+export const LTX_CANONICAL_DURATION_MS = 4_000;
+
+/**
+ * Checks whether a given durationMs is within certified LTX production frame range and quantization tolerance.
+ */
+export function isLtxRenderableDuration(
+  durationMs: number,
+  toleranceMs: number = LTX_FRAME_QUANTIZATION_TOLERANCE_MS
+): boolean {
+  return mapDurationMsToLtxFrameCount(durationMs, toleranceMs).ok;
+}
+
+/**
+ * Snaps a durationMs to a certified renderable duration for LTX.
+ * If the duration is already renderable within quantization tolerance, it is preserved.
+ * Otherwise, it snaps to LTX_CANONICAL_DURATION_MS (4000ms).
+ */
+export function snapToRenderableLtxDurationMs(
+  durationMs: number,
+  toleranceMs: number = LTX_FRAME_QUANTIZATION_TOLERANCE_MS
+): number {
+  if (isLtxRenderableDuration(durationMs, toleranceMs)) {
+    return durationMs;
+  }
+  return LTX_CANONICAL_DURATION_MS;
+}

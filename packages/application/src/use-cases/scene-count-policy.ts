@@ -4,7 +4,7 @@ import { InvalidSceneCountCombinationError } from "./invalid-scene-count-combina
 
 // Source of truth for scene-count admission policy constants.
 // Kept in sync with packages/contracts/src/campaign.ts via cross-package unit tests.
-export const MIN_TARGET_DURATION_MS = 5_000;
+export const MIN_TARGET_DURATION_MS = 4_000;
 export const MAX_TARGET_DURATION_MS = 300_000;
 export const MIN_SCENE_COUNT = 1;
 export const MAX_SCENE_COUNT = 60;

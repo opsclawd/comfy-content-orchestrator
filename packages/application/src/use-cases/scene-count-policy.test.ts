@@ -33,14 +33,14 @@ describe("scene-count-policy", () => {
   });
 
   describe("duration validation", () => {
-    it("rejects duration below MIN_TARGET_DURATION_MS (5_000)", () => {
-      expect(() => resolveSceneCount({ targetTotalDurationMs: 4_999 })).toThrow(
+    it("rejects duration below MIN_TARGET_DURATION_MS (4_000)", () => {
+      expect(() => resolveSceneCount({ targetTotalDurationMs: 3_999 })).toThrow(
         InvalidTargetDurationError
       );
       expect(() => resolveSceneCount({ targetTotalDurationMs: 0 })).toThrow(
         InvalidTargetDurationError
       );
-      expect(() => resolveSceneCount({ targetTotalDurationMs: -5_000 })).toThrow(
+      expect(() => resolveSceneCount({ targetTotalDurationMs: -4_000 })).toThrow(
         InvalidTargetDurationError
       );
     });
@@ -59,7 +59,7 @@ describe("scene-count-policy", () => {
 
     it("validates duration even when valid sceneCountOverride is provided", () => {
       expect(() =>
-        resolveSceneCount({ targetTotalDurationMs: 4_000, sceneCountOverride: 2 })
+        resolveSceneCount({ targetTotalDurationMs: 3_000, sceneCountOverride: 2 })
       ).toThrow(InvalidTargetDurationError);
 
       expect(() =>

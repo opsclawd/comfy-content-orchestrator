@@ -27,7 +27,8 @@ import {
   MIN_SCENE_COUNT,
   MAX_SCENE_COUNT,
   MIN_SCENE_DURATION_MS,
-  MAX_SCENE_DURATION_MS
+  MAX_SCENE_DURATION_MS,
+  CANONICAL_LTX_DURATION_MS
 } from "./campaign.js";
 
 describe("Campaign and Scene Creation Contracts", () => {
@@ -510,12 +511,13 @@ describe("Campaign and Scene Creation Contracts", () => {
 
   describe("CreateCampaignShellRequestSchema", () => {
     it("exports expected bound constants", () => {
-      expect(MIN_TARGET_DURATION_MS).toBe(5_000);
+      expect(MIN_TARGET_DURATION_MS).toBe(4_000);
       expect(MAX_TARGET_DURATION_MS).toBe(300_000);
       expect(MIN_SCENE_COUNT).toBe(1);
       expect(MAX_SCENE_COUNT).toBe(60);
       expect(MIN_SCENE_DURATION_MS).toBe(1_000);
       expect(MAX_SCENE_DURATION_MS).toBe(15_000);
+      expect(CANONICAL_LTX_DURATION_MS).toBe(4_000);
     });
 
     const validBase = {
