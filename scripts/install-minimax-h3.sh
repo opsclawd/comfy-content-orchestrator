@@ -111,10 +111,24 @@ download_hf_file() {
   local rel_path="$1"
   local dest_path="$2"
   local tmp_path="${dest_path}.download"
+  local dest_dir
+  dest_dir="$(dirname "${dest_path}")"
+  local file_name
+  file_name="$(basename "${dest_path}")"
+  local download_url="https://huggingface.co/${MINIMAX_H3_REPO}/resolve/${MINIMAX_H3_REVISION}/${rel_path}"
 
-  mkdir -p "$(dirname "${dest_path}")"
+  mkdir -p "${dest_dir}"
 
   echo "Downloading ${rel_path} from ${MINIMAX_H3_REPO} (rev: ${MINIMAX_H3_REVISION})..."
+
+  if command -v aria2c >/dev/null 2>&1; then
+    local aria_args=(-c -x 8 -s 8 -k 1M --disable-ipv6=true --dir="${dest_dir}" -o "${file_name}")
+    if [[ -n "${HF_TOKEN}" ]]; then
+      aria_args+=(--header="Authorization: Bearer ${HF_TOKEN}")
+    fi
+    aria2c "${aria_args[@]}" "${download_url}"
+    return 0
+  fi
 
   if command -v hf >/dev/null 2>&1; then
     local hf_args=(download "${MINIMAX_H3_REPO}" "${rel_path}" "--revision" "${MINIMAX_H3_REVISION}" "--local-dir" "${MODELS_DIR}")
@@ -126,24 +140,23 @@ download_hf_file() {
   fi
 
   # Fallback to curl / wget direct download
-  local download_url="https://huggingface.co/${MINIMAX_H3_REPO}/resolve/${MINIMAX_H3_REVISION}/${rel_path}"
   local auth_header=()
   if [[ -n "${HF_TOKEN}" ]]; then
     auth_header=(-H "Authorization: Bearer ${HF_TOKEN}")
   fi
 
   if command -v curl >/dev/null 2>&1; then
-    curl -fSL "${auth_header[@]}" "${download_url}" -o "${tmp_path}"
+    curl -4 -fSL "${auth_header[@]}" "${download_url}" -o "${tmp_path}"
     mv -f "${tmp_path}" "${dest_path}"
   elif command -v wget >/dev/null 2>&1; then
     local wget_auth=()
     if [[ -n "${HF_TOKEN}" ]]; then
       wget_auth=(--header="Authorization: Bearer ${HF_TOKEN}")
     fi
-    wget -q --show-progress "${wget_auth[@]}" -O "${tmp_path}" "${download_url}"
+    wget -4 -q --show-progress "${wget_auth[@]}" -O "${tmp_path}" "${download_url}"
     mv -f "${tmp_path}" "${dest_path}"
   else
-    echo "Error: Neither 'hf', 'curl', nor 'wget' found." >&2
+    echo "Error: Neither 'aria2c', 'hf', 'curl', nor 'wget' found." >&2
     exit 1
   fi
 }
