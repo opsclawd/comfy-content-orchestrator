@@ -128,6 +128,76 @@ a:hover {
   font-family: var(--font-mono);
 }
 
+/* Campaign Planning & Status Banners */
+.campaign-planning-banner {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  background-color: var(--status-active-bg);
+  border: 1px solid var(--status-active-border);
+  border-radius: var(--radius-md);
+  padding: 1.25rem 1.5rem;
+  color: var(--status-active-text);
+}
+
+.campaign-planning-spinner {
+  width: 2rem;
+  height: 2rem;
+  border: 3px solid rgba(56, 189, 248, 0.2);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.campaign-planning-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.campaign-planning-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.campaign-planning-description {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.campaign-failed-banner {
+  background-color: var(--status-failed-bg);
+  border: 1px solid var(--status-failed-border);
+  border-radius: var(--radius-md);
+  padding: 1.25rem 1.5rem;
+  color: var(--status-failed-text);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.campaign-failed-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #fca5a5;
+}
+
+.campaign-failed-description {
+  font-size: 0.875rem;
+  color: var(--status-failed-text);
+}
+
 /* Metric Grid */
 .metrics-section {
   display: flex;

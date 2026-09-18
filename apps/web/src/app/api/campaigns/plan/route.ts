@@ -31,7 +31,8 @@ export async function POST(request: Request): Promise<Response> {
 
   try {
     const result = await planCampaignStoryboard(parseResult.data);
-    return Response.json(result, { status: 201 });
+    const statusCode = result.status === "planning" ? 202 : result.isIdempotentReplay ? 200 : 201;
+    return Response.json(result, { status: statusCode });
   } catch (err) {
     if (err instanceof PlanCampaignStoryboardApiError) {
       return Response.json(err.error, { status: err.statusCode });

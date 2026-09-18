@@ -79,6 +79,7 @@ describe("Review Read Endpoints", () => {
   const sampleSummary: CampaignReviewSummary = {
     campaignId: campaignUuid,
     campaignName: "Spring Campaign",
+    status: "drafting",
     totalScenes: 5,
     scenesByStatus: {
       director_review: 2,

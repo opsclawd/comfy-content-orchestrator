@@ -21,7 +21,9 @@ test.describe("Post-Handoff Candidate Review Flow", () => {
     await page.getByTestId("target-duration-input").fill("15");
 
     const planPromise = page.waitForResponse(
-      (resp) => resp.url().includes("/api/campaigns/plan") && resp.status() === 201
+      (resp) =>
+        resp.url().includes("/api/campaigns/plan") &&
+        (resp.status() === 201 || resp.status() === 202)
     );
 
     await page.getByTestId("submit-campaign-button").click();
@@ -32,7 +34,26 @@ test.describe("Post-Handoff Candidate Review Flow", () => {
 
     // Navigates to campaign summary
     await page.waitForURL(`**/campaigns/${planData.campaignId}`, { timeout: 15_000 });
-    const firstSceneId = planData.scenes[0]!.sceneId;
+
+    // In async planning mode, scenes are materialized in the background by the planning pipeline
+    let firstSceneId = planData.scenes[0]?.sceneId;
+    if (!firstSceneId) {
+      for (let i = 0; i < 30; i++) {
+        const scenesCheck = await testEnv.postgres.pool.query(
+          "SELECT scene_id FROM storyboard_scenes WHERE campaign_id = $1 ORDER BY scene_order ASC",
+          [planData.campaignId]
+        );
+        if (scenesCheck.rows.length > 0) {
+          firstSceneId = scenesCheck.rows[0]!.scene_id;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
+    expect(firstSceneId).toBeDefined();
+    if (!firstSceneId) {
+      throw new Error(`Expected scenes to be materialized for campaign ${planData.campaignId}`);
+    }
 
     // Navigate to the scene review page
     await page.goto(`${testEnv.webServer.webUrl}/scenes/${firstSceneId}`);

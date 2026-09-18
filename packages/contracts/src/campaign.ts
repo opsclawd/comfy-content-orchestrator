@@ -2,20 +2,8 @@ import { sortKeysDeep } from "@cco/shared";
 import { z } from "zod";
 import { SceneConfigurationSchema, SceneStatusSchema } from "./scene-review.js";
 
-export const CAMPAIGN_STATUSES = [
-  "drafting",
-  "pending_director_review",
-  "partially_approved",
-  "queued",
-  "rendering",
-  "qa",
-  "completed",
-  "failed",
-  "cancelled"
-] as const;
-
-export const CampaignStatusSchema = z.enum(CAMPAIGN_STATUSES);
-export type CampaignStatus = z.infer<typeof CampaignStatusSchema>;
+import { CampaignStatusSchema } from "./campaign-status.js";
+export * from "./campaign-status.js";
 
 // Requested/declared layer — exactly what the caller supplied.
 export const CreateCampaignRequestSchema = z.object({

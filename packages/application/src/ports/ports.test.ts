@@ -362,6 +362,7 @@ describe("Application capability ports contract tests", () => {
             return {
               campaignId: "camp-1",
               campaignName: "Summer Campaign",
+              status: "drafting",
               totalScenes: 1,
               scenesByStatus: { director_review: 1 },
               pendingReviewCount: 1,

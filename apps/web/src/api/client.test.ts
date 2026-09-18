@@ -28,6 +28,7 @@ import type {
 const validCampaignReviewSummary: CampaignReviewSummary = {
   campaignId: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
   campaignName: "Test Campaign",
+  status: "drafting",
   totalScenes: 1,
   scenesByStatus: {
     director_review: 1

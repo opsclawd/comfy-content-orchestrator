@@ -212,24 +212,33 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
       }
     });
 
-    expect(response.statusCode).toBe(201);
+    expect(response.statusCode).toBe(202);
     const body = response.json();
     expect(body.campaignId).toBeDefined();
     expect(body.idempotencyKey).toBe(idempotencyKey);
-    expect(body.status).toBe("drafting");
+    expect(body.status).toBe("planning");
     expect(body.totalScenes).toBe(3);
     expect(body.targetTotalDurationMs).toBe(targetTotalDurationMs);
     expect(body.isIdempotentReplay).toBe(false);
-    expect(body.sceneCount).toBe(3);
-    expect(body.scenes).toHaveLength(3);
+    expect(body.sceneCount).toBe(0);
+    expect(body.scenes).toHaveLength(0);
+
+    // Poll for background planning completion (stub planning client is near-instant)
+    let campaignRow;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const campaignRows = await client.query(
+        "SELECT campaign_id, client_id, title, status, total_scenes, idempotency_key, target_total_duration_ms FROM campaigns WHERE campaign_id = $1",
+        [body.campaignId]
+      );
+      if (campaignRows.rows[0]?.status === "drafting") {
+        campaignRow = campaignRows.rows[0];
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
 
     // Verify raw PostgreSQL campaign row
-    const campaignRows = await client.query(
-      "SELECT campaign_id, client_id, title, status, total_scenes, idempotency_key, target_total_duration_ms FROM campaigns WHERE campaign_id = $1",
-      [body.campaignId]
-    );
-    expect(campaignRows.rows).toHaveLength(1);
-    const campaignRow = campaignRows.rows[0];
+    expect(campaignRow).toBeDefined();
     expect(campaignRow?.client_id).toBe(clientRecord.client_id);
     expect(campaignRow?.status).toBe("drafting");
     expect(campaignRow?.total_scenes).toBe(3);
@@ -301,15 +310,25 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
       }
     };
 
-    // First POST: completes normally
+    // First POST: completes normally with 202 Accepted
     const firstRes = await app.inject({
       method: "POST",
       url: "/api/campaigns/plan",
       payload
     });
-    expect(firstRes.statusCode).toBe(201);
+    expect(firstRes.statusCode).toBe(202);
     const firstBody = firstRes.json();
     expect(firstBody.isIdempotentReplay).toBe(false);
+
+    // Poll until background planning finishes
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const row = await client.query("SELECT status FROM campaigns WHERE campaign_id = $1", [
+        firstBody.campaignId
+      ]);
+      if (row.rows[0]?.status === "drafting") break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
     expect(stubPrimary.beatSheetInvocations).toBe(1);
     expect(stubPrimary.sceneConfigInvocations).toBe(3);
 
@@ -325,14 +344,14 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
     });
 
     // Assert replay succeeds without throwing 502/500
-    expect(replayRes.statusCode).toBe(201);
+    expect([200, 201]).toContain(replayRes.statusCode);
     const replayBody = replayRes.json();
     expect(replayBody.isIdempotentReplay).toBe(true);
     expect(replayBody.campaignId).toBe(firstBody.campaignId);
-    expect(replayBody.scenes).toHaveLength(firstBody.scenes.length);
-    for (let i = 0; i < firstBody.scenes.length; i++) {
-      expect(replayBody.scenes[i].sceneId).toBe(firstBody.scenes[i].sceneId);
-      expect(replayBody.scenes[i].ordinal).toBe(firstBody.scenes[i].ordinal);
+    expect(replayBody.scenes).toHaveLength(3);
+    for (let i = 0; i < 3; i++) {
+      expect(replayBody.scenes[i].sceneId).toBeDefined();
+      expect(replayBody.scenes[i].ordinal).toBe(i + 1);
     }
 
     // Zero new planning invocations
@@ -349,7 +368,7 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
     // Zero new jobs in Postgres
     const jobCount = await client.query(
       "SELECT count(*)::int as count FROM render_jobs WHERE scene_id = ANY($1::uuid[])",
-      [firstBody.scenes.map((s: { sceneId: string }) => s.sceneId)]
+      [replayBody.scenes.map((s: { sceneId: string }) => s.sceneId)]
     );
     expect(jobCount.rows[0]?.count).toBe(9);
   });
@@ -389,17 +408,29 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
       }
     };
 
-    // First POST: planning fails with malformed beat sheet
+    // First POST: creates shell with 202 Accepted, background planning fails with malformed beat sheet
     stubPrimary.shouldReturnMalformedBeatSheet = true;
     const failRes = await app.inject({
       method: "POST",
       url: "/api/campaigns/plan",
       payload
     });
-    expect(failRes.statusCode).toBe(502);
-    expect(failRes.json().code).toBe("PLANNING_PROVIDER_EXHAUSTED");
+    expect(failRes.statusCode).toBe(202);
 
-    // Confirm campaign shell exists in Postgres with 0 scenes
+    // Confirm campaign shell exists in Postgres with status 'failed' after background failure
+    let shellStatus;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const shellRows = await client.query(
+        "SELECT campaign_id, status FROM campaigns WHERE idempotency_key = $1",
+        [idempotencyKey]
+      );
+      if (shellRows.rows[0]?.status === "failed") {
+        shellStatus = shellRows.rows[0]?.status;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(shellStatus).toBe("failed");
     const shellRows = await client.query(
       "SELECT campaign_id, status FROM campaigns WHERE idempotency_key = $1",
       [idempotencyKey]
@@ -412,7 +443,7 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
     );
     expect(initialScenes.rows[0]?.count).toBe(0);
 
-    // Second POST: provider is healthy now
+    // Second POST: provider is healthy now, retries failed shell
     stubPrimary.shouldReturnMalformedBeatSheet = false;
     stubPrimary.resetCounts();
 
@@ -422,11 +453,19 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
       payload
     });
 
-    expect(recoverRes.statusCode).toBe(201);
+    expect(recoverRes.statusCode).toBe(202);
     const recoverBody = recoverRes.json();
     expect(recoverBody.campaignId).toBe(campaignId);
-    expect(recoverBody.isIdempotentReplay).toBe(false); // Storyboard was newly materialized
-    expect(recoverBody.sceneCount).toBe(3);
+    expect(recoverBody.isIdempotentReplay).toBe(false);
+
+    // Wait for background planning to complete
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const row = await client.query("SELECT status FROM campaigns WHERE campaign_id = $1", [
+        campaignId
+      ]);
+      if (row.rows[0]?.status === "drafting") break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
 
     // Planning was actually invoked
     expect(stubPrimary.beatSheetInvocations).toBe(1);
@@ -440,7 +479,7 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
     expect(finalScenes.rows[0]?.count).toBe(3);
   });
 
-  it("4. Planning failure: leaves drafting shell in PostgreSQL with 0 scenes and 0 jobs", async () => {
+  it("4. Planning failure: leaves failed shell in PostgreSQL with 0 scenes and 0 jobs", async () => {
     const clientRecord = await insertClientRecord(client, {
       companyName: "Acme Studios",
       externalProcessingPolicy: cloudEnabledPolicy
@@ -481,16 +520,29 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
       }
     });
 
-    expect(response.statusCode).toBe(502);
-    expect(response.json().code).toBe("PLANNING_PROVIDER_EXHAUSTED");
+    expect(response.statusCode).toBe(202);
 
-    // Shell exists in PostgreSQL as recoverable drafting shell
+    // Shell exists in PostgreSQL as recoverable failed shell
+    let shellStatus;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const sRows = await client.query(
+        "SELECT campaign_id, status, total_scenes FROM campaigns WHERE idempotency_key = $1",
+        [idempotencyKey]
+      );
+      if (sRows.rows[0]?.status === "failed") {
+        shellStatus = sRows.rows[0]?.status;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(shellStatus).toBe("failed");
+
     const shellRows = await client.query(
       "SELECT campaign_id, status, total_scenes FROM campaigns WHERE idempotency_key = $1",
       [idempotencyKey]
     );
     expect(shellRows.rows).toHaveLength(1);
-    expect(shellRows.rows[0]?.status).toBe("drafting");
+    expect(shellRows.rows[0]?.status).toBe("failed");
     expect(shellRows.rows[0]?.total_scenes).toBe(3);
 
     // 0 scenes in PostgreSQL
@@ -585,7 +637,22 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
       }
     });
 
-    expect(response.statusCode).toBe(500);
+    expect(response.statusCode).toBe(202);
+
+    // Poll until background pipeline fails and transitions shell status to 'failed'
+    let shellStatus;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const sRows = await client.query(
+        "SELECT campaign_id, status FROM campaigns WHERE idempotency_key = $1",
+        [idempotencyKey]
+      );
+      if (sRows.rows[0]?.status === "failed") {
+        shellStatus = sRows.rows[0]?.status;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(shellStatus).toBe("failed");
     expect(sceneSaveCount).toBeGreaterThanOrEqual(2);
 
     // Shell was committed in step 1 transaction
@@ -594,7 +661,7 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
       [idempotencyKey]
     );
     expect(shellRows.rows).toHaveLength(1);
-    expect(shellRows.rows[0]?.status).toBe("drafting");
+    expect(shellRows.rows[0]?.status).toBe("failed");
 
     // 0 scenes committed (step 5 rolled back in PostgreSQL after scene 1 had been written)
     const sceneRows = await client.query(
@@ -662,8 +729,22 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
       }
     });
 
-    expect(response.statusCode).toBe(500);
-    expect(response.json().code).toBe("CONFIGURATION_ERROR");
+    expect(response.statusCode).toBe(202);
+
+    // Poll until background pipeline fails and transitions shell status to 'failed'
+    let shellStatus5b;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const sRows = await client.query(
+        "SELECT campaign_id, status FROM campaigns WHERE idempotency_key = $1",
+        [idempotencyKey]
+      );
+      if (sRows.rows[0]?.status === "failed") {
+        shellStatus5b = sRows.rows[0]?.status;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(shellStatus5b).toBe("failed");
 
     // Shell was committed in step 1 transaction
     const shellRows = await client.query(
@@ -671,7 +752,7 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
       [idempotencyKey]
     );
     expect(shellRows.rows).toHaveLength(1);
-    expect(shellRows.rows[0]?.status).toBe("drafting");
+    expect(shellRows.rows[0]?.status).toBe("failed");
 
     // 0 scenes committed
     const sceneRows = await client.query(
@@ -808,7 +889,7 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
       url: "/api/campaigns/plan",
       payload: basePayload
     });
-    expect(firstRes.statusCode).toBe(201);
+    expect(firstRes.statusCode).toBe(202);
 
     // 2. Replay with altered brief under SAME idempotencyKey
     const conflictRes = await app.inject({
@@ -870,7 +951,7 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
       url: "/api/campaigns/plan",
       payload: basePayload
     });
-    expect(firstRes.statusCode).toBe(201);
+    expect(firstRes.statusCode).toBe(202);
 
     // 2. Replay with altered assets under SAME idempotencyKey
     const conflictRes = await app.inject({
@@ -922,15 +1003,24 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
       candidateReferenceAssetIds: ["asset-b", "asset-a"]
     };
 
-    // 1. Initial POST succeeds
+    // 1. Initial POST succeeds with 202 Accepted
     const firstRes = await app.inject({
       method: "POST",
       url: "/api/campaigns/plan",
       payload: initialPayload
     });
-    expect(firstRes.statusCode).toBe(201);
+    expect(firstRes.statusCode).toBe(202);
     const firstBody = firstRes.json();
     expect(firstBody.isIdempotentReplay).toBe(false);
+
+    // Poll until background planning finishes
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const row = await client.query("SELECT status FROM campaigns WHERE campaign_id = $1", [
+        firstBody.campaignId
+      ]);
+      if (row.rows[0]?.status === "drafting") break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
 
     // 2. Replay with sorted and duplicate assets: canonically equivalent
     const replayRes = await app.inject({
@@ -942,7 +1032,7 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
       }
     });
 
-    expect(replayRes.statusCode).toBe(201);
+    expect([200, 201]).toContain(replayRes.statusCode);
     const replayBody = replayRes.json();
     expect(replayBody.isIdempotentReplay).toBe(true);
     expect(replayBody.campaignId).toBe(firstBody.campaignId);
@@ -1071,8 +1161,17 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
       payload
     });
 
-    expect(response.statusCode).toBe(201);
+    expect(response.statusCode).toBe(202);
     const body = response.json();
+
+    // Poll until background planning finishes
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const r = await client.query("SELECT status FROM campaigns WHERE campaign_id = $1", [
+        body.campaignId
+      ]);
+      if (r.rows[0]?.status === "drafting") break;
+      await new Promise((res) => setTimeout(res, 50));
+    }
 
     // Query database directly to inspect storyboard_completion_hash_sha256
     const row = await client.query<{ storyboard_completion_hash_sha256: string | null }>(

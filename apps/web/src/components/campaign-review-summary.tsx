@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { CampaignDeliveryReelReadModel, CampaignReviewSummary } from "@cco/contracts";
 import { CampaignDeliveryReelPanel } from "./campaign-delivery-reel-panel";
+import { CampaignPlanningPoller } from "./campaign-planning-poller";
 
 export interface CampaignReviewSummaryProps {
   summary: CampaignReviewSummary;
@@ -23,6 +24,32 @@ export function CampaignReviewSummaryView({ summary, deliveryReel }: CampaignRev
           </span>
         </div>
       </header>
+
+      {summary.status === "planning" && (
+        <div className="campaign-planning-banner" data-testid="campaign-planning-banner">
+          <div className="campaign-planning-spinner" aria-hidden="true" />
+          <div className="campaign-planning-content">
+            <h2 className="campaign-planning-title">
+              Director AI is generating storyboard scenes...
+            </h2>
+            <p className="campaign-planning-description">
+              Analyzing creative brief, composing beat sheet, and synthesizing scene configurations.
+              This page will automatically update once scenes are ready.
+            </p>
+          </div>
+          <CampaignPlanningPoller campaignId={summary.campaignId} isPlanning={true} />
+        </div>
+      )}
+
+      {summary.status === "failed" && (
+        <div className="campaign-failed-banner" data-testid="campaign-failed-banner">
+          <h2 className="campaign-failed-title">Campaign Planning Failed</h2>
+          <p className="campaign-failed-description">
+            The AI model was unable to generate scenes for this brief. Please try creating a new
+            campaign.
+          </p>
+        </div>
+      )}
 
       <CampaignDeliveryReelPanel deliveryReel={deliveryReel} />
 

@@ -278,6 +278,7 @@ describe("Campaign Review Page", () => {
     const summaryFixture: CampaignReviewSummary = {
       campaignId: "c1111111-1111-4111-8111-111111111111",
       campaignName: "Authoritative Campaign",
+      status: "drafting",
       totalScenes: 3,
       pendingReviewCount: 1,
       approvedCount: 1,
@@ -383,6 +384,7 @@ describe("Campaign Review Page", () => {
     const inconsistentFixture: CampaignReviewSummary = {
       campaignId: "c2222222-2222-4222-8222-222222222222",
       campaignName: "Inconsistent Metrics Campaign",
+      status: "drafting",
       totalScenes: 99,
       pendingReviewCount: 40,
       approvedCount: 30,
@@ -434,6 +436,7 @@ describe("Campaign Review Page", () => {
     const emptyFixture: CampaignReviewSummary = {
       campaignId: "c3333333-3333-4333-8333-333333333333",
       campaignName: "Empty Campaign",
+      status: "drafting",
       totalScenes: 0,
       pendingReviewCount: 0,
       approvedCount: 0,
@@ -526,6 +529,7 @@ describe("Campaign Review Page", () => {
     const summaryFixture: CampaignReviewSummary = {
       campaignId: "c1111111-1111-4111-8111-111111111111",
       campaignName: "Delivered Campaign",
+      status: "completed",
       totalScenes: 1,
       pendingReviewCount: 0,
       approvedCount: 0,
@@ -613,6 +617,7 @@ describe("Campaign Review Page", () => {
     const summaryFixture: CampaignReviewSummary = {
       campaignId: "c1111111-1111-4111-8111-111111111111",
       campaignName: "Assembling Campaign",
+      status: "drafting",
       totalScenes: 1,
       pendingReviewCount: 0,
       approvedCount: 0,
@@ -657,6 +662,7 @@ describe("Campaign Review Page", () => {
     const summaryFixture: CampaignReviewSummary = {
       campaignId: "c1111111-1111-4111-8111-111111111111",
       campaignName: "Failed Campaign",
+      status: "drafting",
       totalScenes: 1,
       pendingReviewCount: 0,
       approvedCount: 0,
@@ -701,6 +707,7 @@ describe("Campaign Review Page", () => {
     const summaryFixture: CampaignReviewSummary = {
       campaignId: "c1111111-1111-4111-8111-111111111111",
       campaignName: "Unavailable Campaign",
+      status: "drafting",
       totalScenes: 1,
       pendingReviewCount: 0,
       approvedCount: 0,
@@ -746,6 +753,7 @@ describe("Campaign Review Page", () => {
     const summaryFixture: CampaignReviewSummary = {
       campaignId: "c4040404-0404-4040-8404-040404040404",
       campaignName: "Test Campaign 404 Reel",
+      status: "drafting",
       totalScenes: 0,
       pendingReviewCount: 0,
       approvedCount: 0,
@@ -784,6 +792,7 @@ describe("Campaign Review Page", () => {
     const summaryFixture: CampaignReviewSummary = {
       campaignId: "c5000500-0500-4500-8500-050005000500",
       campaignName: "Test Campaign 500 Reel",
+      status: "drafting",
       totalScenes: 0,
       pendingReviewCount: 0,
       approvedCount: 0,
@@ -822,6 +831,7 @@ describe("Campaign Review Page", () => {
     const summaryFixture: CampaignReviewSummary = {
       campaignId: "c7000700-0700-4700-8700-070007000700",
       campaignName: "Test Campaign Generic Error",
+      status: "drafting",
       totalScenes: 0,
       pendingReviewCount: 0,
       approvedCount: 0,
@@ -851,5 +861,61 @@ describe("Campaign Review Page", () => {
     expect(findHtmlByTestId(htmlTree, "campaign-delivery-reel-panel")).toBeNull();
 
     consoleErrorSpy.mockRestore();
+  });
+
+  it("renders planning banner when campaign status is planning", async () => {
+    const planningSummary: CampaignReviewSummary = {
+      campaignId: "c1111111-1111-4111-8111-111111111111",
+      campaignName: "Planning Campaign",
+      status: "planning",
+      totalScenes: 3,
+      pendingReviewCount: 0,
+      approvedCount: 0,
+      completedCount: 0,
+      scenesByStatus: {},
+      scenes: [],
+      updatedAt: "2026-08-25T12:00:00.000Z"
+    };
+
+    vi.mocked(getCampaignReviewSummary).mockResolvedValueOnce(planningSummary);
+
+    const jsx = (await CampaignPage({
+      params: Promise.resolve({ campaignId: "c1111111-1111-4111-8111-111111111111" })
+    })) as TestElement;
+
+    const html = renderToStaticMarkup(jsx);
+    const htmlTree = parseHtml(html);
+
+    const banner = findHtmlByTestId(htmlTree, "campaign-planning-banner");
+    expect(banner).not.toBeNull();
+    expect(collectHtmlText(banner)).toContain("Director AI is generating storyboard scenes...");
+  });
+
+  it("renders failed banner when campaign status is failed", async () => {
+    const failedSummary: CampaignReviewSummary = {
+      campaignId: "c1111111-1111-4111-8111-111111111111",
+      campaignName: "Failed Campaign",
+      status: "failed",
+      totalScenes: 3,
+      pendingReviewCount: 0,
+      approvedCount: 0,
+      completedCount: 0,
+      scenesByStatus: {},
+      scenes: [],
+      updatedAt: "2026-08-25T12:00:00.000Z"
+    };
+
+    vi.mocked(getCampaignReviewSummary).mockResolvedValueOnce(failedSummary);
+
+    const jsx = (await CampaignPage({
+      params: Promise.resolve({ campaignId: "c1111111-1111-4111-8111-111111111111" })
+    })) as TestElement;
+
+    const html = renderToStaticMarkup(jsx);
+    const htmlTree = parseHtml(html);
+
+    const banner = findHtmlByTestId(htmlTree, "campaign-failed-banner");
+    expect(banner).not.toBeNull();
+    expect(collectHtmlText(banner)).toContain("Campaign Planning Failed");
   });
 });

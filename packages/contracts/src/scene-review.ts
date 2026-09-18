@@ -1,5 +1,6 @@
 import { sortKeysDeep } from "@cco/shared";
 import { z } from "zod";
+import { CampaignStatusSchema } from "./campaign-status.js";
 
 export const SCENE_STATUSES = [
   "draft_pending",
@@ -121,6 +122,7 @@ export type CampaignReviewSceneSummary = z.infer<typeof CampaignReviewSceneSumma
 export const CampaignReviewSummarySchema = z.object({
   campaignId: z.string().uuid(),
   campaignName: z.string().min(1),
+  status: CampaignStatusSchema.default("drafting"),
   totalScenes: z.number().int().nonnegative(),
   scenesByStatus: z.record(z.string(), z.number().int().nonnegative()),
   pendingReviewCount: z.number().int().nonnegative(),

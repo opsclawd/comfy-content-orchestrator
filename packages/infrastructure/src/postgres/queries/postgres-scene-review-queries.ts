@@ -3,7 +3,12 @@ import type {
   SceneReviewDetail,
   SceneReviewQueries
 } from "@cco/application";
-import type { CampaignReviewSummary, ReviewAction, SceneStatus } from "@cco/contracts";
+import type {
+  CampaignReviewSummary,
+  CampaignStatus,
+  ReviewAction,
+  SceneStatus
+} from "@cco/contracts";
 import type {
   CampaignId,
   CandidateId,
@@ -243,9 +248,10 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
     const campaignResult = await this.client.query<{
       campaign_id: string;
       title: string;
+      status: string;
       updated_at: Date | string;
     }>(
-      `SELECT campaign_id, title, updated_at FROM campaigns WHERE campaign_id = $1 AND archived_at IS NULL`,
+      `SELECT campaign_id, title, status, updated_at FROM campaigns WHERE campaign_id = $1 AND archived_at IS NULL`,
       [campaignId]
     );
     const campaignRow = campaignResult.rows[0];
@@ -300,6 +306,7 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
     return {
       campaignId: campaignRow.campaign_id,
       campaignName: campaignRow.title,
+      status: campaignRow.status as CampaignStatus,
       totalScenes,
       scenesByStatus,
       pendingReviewCount,

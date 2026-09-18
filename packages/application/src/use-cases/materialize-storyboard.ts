@@ -157,6 +157,12 @@ export class MaterializeStoryboardUseCase {
     ) {
       await context.campaigns.recordStoryboardCompletion(campaign.id, targetCompletionHash);
     }
+    if (
+      context.campaigns !== undefined &&
+      typeof context.campaigns.transitionStatusIf === "function"
+    ) {
+      await context.campaigns.transitionStatusIf(campaign.id, "planning", "drafting");
+    }
 
     return {
       scenes: materializedScenes,
