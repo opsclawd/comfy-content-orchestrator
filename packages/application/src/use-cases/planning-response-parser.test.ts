@@ -88,4 +88,41 @@ describe("parsePlanningResponse", () => {
       expect(result.reason).toBe("Response text is empty");
     }
   });
+
+  it("strips <think>...</think> reasoning blocks from MiniMax / DeepSeek responses", () => {
+    const raw = `<think>
+The user wants a 1-scene cyberpunk campaign plan.
+I will structure the beat sheet as requested.
+</think>
+
+{"prompt":"Neon cyberpunk alley","referenceIds":[],"engineProfileId":"LTX_25_720P_5S_V1","durationMs":4000}`;
+    const result = parsePlanningResponse(raw);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual({
+        prompt: "Neon cyberpunk alley",
+        referenceIds: [],
+        engineProfileId: "LTX_25_720P_5S_V1",
+        durationMs: 4000
+      });
+    }
+  });
+
+  it("strips <think> blocks when JSON is also wrapped in markdown code fences", () => {
+    const raw = `<think>
+Planning scenes now.
+</think>
+\`\`\`json
+{
+  "scenes": [{"title": "Scene 1"}]
+}
+\`\`\``;
+    const result = parsePlanningResponse(raw);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual({
+        scenes: [{ title: "Scene 1" }]
+      });
+    }
+  });
 });
