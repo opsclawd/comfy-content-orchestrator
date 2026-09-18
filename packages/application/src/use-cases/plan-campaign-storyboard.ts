@@ -126,9 +126,16 @@ export class PlanCampaignStoryboardUseCase {
           };
         }
         // Recoverable shell with zero scenes from prior attempt that failed before materialization.
+        // Transition status back to 'planning' so the retried planning pipeline can proceed and materialize.
+        await this.deps.uow.execute(async (ctx) => {
+          if (ctx.campaigns && typeof ctx.campaigns.transitionStatusIf === "function") {
+            await ctx.campaigns.transitionStatusIf(campaign.id, campaign.status, "planning");
+          }
+        });
+
         return {
           kind: "created",
-          campaign,
+          campaign: { ...campaign, status: "planning" },
           isIdempotentReplay: false,
           scenes: [],
           orchestrationHash

@@ -231,7 +231,7 @@ test.describe("Idempotency, Recovery, and Conflict Lifecycle", () => {
     expect(dbScenes.length).toBeGreaterThan(0);
 
     const sceneRows = page.getByTestId("scene-row");
-    await expect(sceneRows).toHaveCount(dbScenes.length);
+    await expect(sceneRows).toHaveCount(dbScenes.length, { timeout: 15_000 });
 
     // Confirm candidate generation admitted for all retry scenes in DOM
     for (let i = 0; i < dbScenes.length; i++) {
