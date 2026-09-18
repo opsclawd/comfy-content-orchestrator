@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { CreateCampaignShellRequest, CreativeBrief } from "@cco/contracts";
-import type { CampaignId, CampaignShellRecord, ReferenceAssetId } from "@cco/domain";
+import type {
+  CampaignId,
+  CampaignShellRecord,
+  CampaignStatus,
+  ReferenceAssetId
+} from "@cco/domain";
 import {
   isCampaignShellRepository,
   type CampaignShellRepository,
@@ -14,6 +19,7 @@ import { resolveSceneCount } from "./scene-count-policy.js";
 export interface CreateCampaignShellInput extends CreateCampaignShellRequest {
   readonly brief?: CreativeBrief | undefined;
   readonly candidateReferenceAssetIds?: readonly ReferenceAssetId[] | readonly string[] | undefined;
+  readonly initialStatus?: CampaignStatus | undefined;
 }
 
 export interface CreateCampaignShellResult {
@@ -111,7 +117,7 @@ export class CreateCampaignShellUseCase {
       clientId: input.clientId,
       title: input.title,
       targetPlatform: input.targetPlatform ?? "instagram_reels",
-      status: "drafting",
+      status: input.initialStatus ?? "drafting",
       totalScenes,
       approvedScenes: 0,
       createdAt: now,

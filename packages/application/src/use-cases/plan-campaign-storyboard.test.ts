@@ -666,7 +666,7 @@ describe("PlanCampaignStoryboardUseCase", () => {
         ctx.campaigns!.findByIdempotencyKey!(idempotencyKey)
       );
       expect(savedShell).toBeDefined();
-      expect(savedShell?.status).toBe("drafting");
+      expect(savedShell?.status).toBe("failed");
       expect(savedShell?.totalScenes).toBe(3);
 
       // Zero scenes were saved

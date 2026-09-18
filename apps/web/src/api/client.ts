@@ -20,12 +20,17 @@ import {
   CurrentProductionAttemptReadModelSchema,
   type CurrentProductionAttemptReadModel,
   CampaignDeliveryReelReadModelSchema,
-  type CampaignDeliveryReelReadModel
+  type CampaignDeliveryReelReadModel,
+  CampaignResponseSchema,
+  type CampaignResponse
 } from "@cco/contracts";
 import type { z } from "zod";
 import { resolveControlApiBaseUrl } from "./runtime-config";
 
 export type {
+  CampaignDeliveryReelReadModel,
+  CampaignDeliveryReelState,
+  CampaignResponse,
   CampaignReviewSummary,
   HealthResponse,
   PlanCampaignStoryboardErrorResponse,
@@ -36,8 +41,6 @@ export type {
   ReviewErrorResponse,
   SceneReviewDetailReadModel,
   CurrentProductionAttemptReadModel,
-  CampaignDeliveryReelReadModel,
-  CampaignDeliveryReelState,
   CampaignDeliveryMediaReadModel
 } from "@cco/contracts";
 
@@ -124,6 +127,7 @@ export interface ReviewerIdentity {
 
 export interface ApiClient {
   getHealth(): Promise<HealthResponse>;
+  getCampaign(campaignId: string): Promise<CampaignResponse>;
   getCampaignReviewSummary(campaignId: string): Promise<CampaignReviewSummary>;
   getSceneReviewDetail(sceneId: string): Promise<SceneReviewDetailReadModel>;
   getCurrentProductionAttempt(
@@ -168,11 +172,11 @@ function formatFetchErrorMessage(err: unknown): string {
   return `Failed to connect to Control API: ${message}`;
 }
 
-async function requestJson<T>(
+async function requestJson<TOutput, TInput = unknown>(
   url: string,
-  schema: z.ZodType<T>,
+  schema: z.ZodType<TOutput, z.ZodTypeDef, TInput>,
   fetchImpl: typeof fetch
-): Promise<T> {
+): Promise<TOutput> {
   let res: Response;
   try {
     res = await fetchImpl(url, {
@@ -225,6 +229,11 @@ export function createApiClient(config?: ApiClientConfig): ApiClient {
   return {
     async getHealth(): Promise<HealthResponse> {
       return requestJson(`${baseUrl}/api/health`, HealthResponseSchema, fetchFn);
+    },
+
+    async getCampaign(campaignId: string): Promise<CampaignResponse> {
+      const encoded = encodeURIComponent(campaignId);
+      return requestJson(`${baseUrl}/api/campaigns/${encoded}`, CampaignResponseSchema, fetchFn);
     },
 
     async getCampaignReviewSummary(campaignId: string): Promise<CampaignReviewSummary> {
@@ -443,6 +452,14 @@ export function createApiClient(config?: ApiClientConfig): ApiClient {
 export async function getHealth(baseUrl?: string, fetchFn?: typeof fetch): Promise<HealthResponse> {
   const client = createApiClient({ baseUrl, fetchFn });
   return client.getHealth();
+}
+
+export async function getCampaign(
+  campaignId: string,
+  fetchImpl?: typeof fetch
+): Promise<CampaignResponse> {
+  const client = createApiClient({ fetchFn: fetchImpl });
+  return client.getCampaign(campaignId);
 }
 
 export async function getCampaignReviewSummary(

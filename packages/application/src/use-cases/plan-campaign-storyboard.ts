@@ -39,6 +39,27 @@ export interface PlanCampaignStoryboardResult {
   readonly scenes: readonly Readonly<SceneSnapshot>[];
 }
 
+export type PreparePlanningShellResult =
+  | {
+      readonly kind: "completed";
+      readonly campaign: CampaignShellRecord;
+      readonly scenes: readonly Readonly<SceneSnapshot>[];
+      readonly isIdempotentReplay: true;
+    }
+  | {
+      readonly kind: "in_progress";
+      readonly campaign: CampaignShellRecord;
+      readonly isIdempotentReplay: true;
+      readonly scenes: readonly Readonly<SceneSnapshot>[];
+    }
+  | {
+      readonly kind: "created";
+      readonly campaign: CampaignShellRecord;
+      readonly isIdempotentReplay: boolean;
+      readonly scenes: readonly Readonly<SceneSnapshot>[];
+      readonly orchestrationHash: string;
+    };
+
 /**
  * Orchestrates full prompt-to-storyboard planning:
  * 1. Creates/resolves durable campaign shell with full orchestration idempotency identity (#219, #247).
@@ -49,13 +70,20 @@ export interface PlanCampaignStoryboardResult {
  *    exists. A drafting shell with N scenes but no matching completion proof fails explicitly.
  * 3. Invokes PlanCampaignBeatSheetUseCase with targetTotalDurationMs (outside any DB transaction).
  * 4. Invokes PlanSceneConfigurationUseCase per beat with beat.targetDurationMs as authoritative (outside any DB transaction).
- * 5. Materializes storyboard scenes and admits candidate generation, atomically writing the completion proof (#220, #247).
+ * 5. Materializes storyboard scenes and admits candidate generation, atomically writing the completion proof and
+ *    transitioning status to 'drafting' (#220, #247, #286).
  */
 export class PlanCampaignStoryboardUseCase {
   constructor(private readonly deps: PlanCampaignStoryboardDeps) {}
 
-  async execute(input: PlanCampaignStoryboardInput): Promise<PlanCampaignStoryboardResult> {
-    // 1. Resolve/create the campaign shell and full orchestration idempotency identity within its own transaction.
+  /**
+   * Phase 1: Resolves or creates the campaign shell in PostgreSQL (< 20ms) with status 'planning'.
+   * Verifies idempotency identity. If completed proof exists, returns 'completed'.
+   * If planning is already in progress, returns 'in_progress'. Otherwise returns 'created'.
+   */
+  async preparePlanningShell(
+    input: PlanCampaignStoryboardInput
+  ): Promise<PreparePlanningShellResult> {
     const { campaign, isIdempotentReplay } = await this.deps.createCampaignShell.execute({
       idempotencyKey: input.idempotencyKey,
       clientId: input.clientId,
@@ -64,7 +92,8 @@ export class PlanCampaignStoryboardUseCase {
       targetTotalDurationMs: input.targetTotalDurationMs,
       sceneCountOverride: input.sceneCountOverride,
       brief: input.brief,
-      candidateReferenceAssetIds: input.candidateReferenceAssetIds
+      candidateReferenceAssetIds: input.candidateReferenceAssetIds,
+      initialStatus: "planning"
     });
 
     const orchestrationHash = await computeCampaignRequestHash({
@@ -77,10 +106,6 @@ export class PlanCampaignStoryboardUseCase {
       candidateReferenceAssetIds: input.candidateReferenceAssetIds
     });
 
-    // 2. Idempotent-replay short-circuit:
-    // A composed-flow replay may short-circuit only when durable completion proof exists
-    // and matches the current orchestration operation. existing.length === campaign.totalScenes
-    // alone is never sufficient evidence of successful replay.
     if (isIdempotentReplay) {
       const existing = await this.deps.uow.execute(async (ctx) => {
         if (ctx.scenes === undefined || typeof ctx.scenes.findByCampaignId !== "function") {
@@ -92,9 +117,25 @@ export class PlanCampaignStoryboardUseCase {
       });
 
       if (existing.length === 0) {
-        // Recoverable drafting shell with zero scenes from a prior attempt that failed before materialization.
-        // Fall through to planning fresh.
-      } else if (
+        if (campaign.status === "planning") {
+          return {
+            kind: "in_progress",
+            campaign,
+            isIdempotentReplay: true,
+            scenes: []
+          };
+        }
+        // Recoverable shell with zero scenes from prior attempt that failed before materialization.
+        return {
+          kind: "created",
+          campaign,
+          isIdempotentReplay: false,
+          scenes: [],
+          orchestrationHash
+        };
+      }
+
+      if (
         existing.length === campaign.totalScenes &&
         campaign.storyboardCompletionHashSha256 !== undefined &&
         campaign.storyboardCompletionHashSha256 === orchestrationHash
@@ -104,82 +145,142 @@ export class PlanCampaignStoryboardUseCase {
           (a, b) => (a.sequenceIndex ?? 0) - (b.sequenceIndex ?? 0)
         );
         return {
-          campaign,
+          kind: "completed",
+          campaign: { ...campaign, status: "drafting" },
           isIdempotentReplay: true,
           scenes: sortedExisting.map((s) => s.snapshot())
         };
-      } else if (existing.length > 0 && existing.length < campaign.totalScenes) {
-        // Partially materialized state: fail fast rather than calling LLM planning
+      }
+
+      if (existing.length > 0 && existing.length < campaign.totalScenes) {
         throw new StoryboardPartiallyMaterializedError(
           campaign.id,
           campaign.totalScenes,
           existing.length
         );
-      } else {
-        // existing.length === campaign.totalScenes but completion proof is absent or inconsistent:
-        // Fail explicitly as a conflict condition rather than returning them as a successful replay!
-        throw new StoryboardMaterializationConflictError(
-          campaign.id,
-          `Campaign has ${existing.length} existing scenes but lacks matching storyboard completion proof for operation ${orchestrationHash}.`
-        );
       }
+
+      throw new StoryboardMaterializationConflictError(
+        campaign.id,
+        `Campaign has ${existing.length} existing scenes but lacks matching storyboard completion proof for operation ${orchestrationHash}.`
+      );
     }
-
-    // 3. Plan the campaign beat sheet (runs LLM call outside of any transaction).
-    const beatSheet = await this.deps.planCampaignBeatSheet.execute({
-      campaignId: campaign.id,
-      brief: input.brief,
-      targetTotalDurationMs: campaign.targetTotalDurationMs,
-      candidateReferenceAssetIds: input.candidateReferenceAssetIds as
-        readonly ReferenceAssetId[] | undefined,
-      overallTimeoutMs: input.overallTimeoutMs
-    });
-
-    // 4. Resolve client externalProcessingPolicy: reuse the policy already resolved by
-    // PlanCampaignBeatSheetUseCase if surfaced, or fetch in a short read-only transaction as fallback.
-    const externalProcessingPolicy =
-      beatSheet.externalProcessingPolicy ??
-      (await this.deps.uow.execute(async (ctx) => {
-        if (ctx.clients === undefined) {
-          throw new Error(
-            "UnitOfWorkContext.clients is not configured for this UnitOfWork implementation."
-          );
-        }
-        const client = await ctx.clients.findById(campaign.clientId);
-        if (client === undefined) {
-          throw new ClientNotFoundError(campaign.clientId);
-        }
-        return client.externalProcessingPolicy;
-      }));
-
-    // Plan each scene configuration sequentially, supplying beat.targetDurationMs as authoritative.
-    const orderedConfigs: OrderedSceneConfiguration[] = [];
-    for (const beat of beatSheet.beats) {
-      const configuration = await this.deps.planSceneConfiguration.execute({
-        brief: beat.brief,
-        campaignId: campaign.id,
-        clientId: campaign.clientId,
-        candidateReferenceAssetIds: (input.candidateReferenceAssetIds ??
-          []) as readonly ReferenceAssetId[],
-        externalProcessingPolicy,
-        targetDurationMs: beat.targetDurationMs,
-        overallTimeoutMs: input.overallTimeoutMs
-      });
-      orderedConfigs.push({ ordinal: beat.ordinal, configuration });
-    }
-
-    // 5. Durably materialize storyboard scenes and admit candidate generation in its own transaction,
-    // atomically binding the completion proof.
-    const { scenes } = await this.deps.materializeStoryboard.execute({
-      campaignId: campaign.id,
-      scenes: orderedConfigs,
-      completionHashSha256: orchestrationHash
-    });
 
     return {
+      kind: "created",
       campaign,
       isIdempotentReplay: false,
-      scenes
+      scenes: [],
+      orchestrationHash
     };
+  }
+
+  /**
+   * Phase 2: Runs the long-running LLM planning pipeline and materialization.
+   * On success, atomically materializes scenes, enqueues render jobs, and transitions status to 'drafting'.
+   * On failure, marks campaign status 'failed'.
+   */
+  async executePlanningPipeline(
+    campaign: CampaignShellRecord,
+    input: PlanCampaignStoryboardInput,
+    orchestrationHash: string
+  ): Promise<PlanCampaignStoryboardResult> {
+    try {
+      // 1. Plan beat sheet (outside transaction)
+      const beatSheet = await this.deps.planCampaignBeatSheet.execute({
+        campaignId: campaign.id,
+        brief: input.brief,
+        targetTotalDurationMs: campaign.targetTotalDurationMs,
+        candidateReferenceAssetIds: input.candidateReferenceAssetIds as
+          readonly ReferenceAssetId[] | undefined,
+        overallTimeoutMs: input.overallTimeoutMs
+      });
+
+      // 2. Resolve client externalProcessingPolicy
+      const externalProcessingPolicy =
+        beatSheet.externalProcessingPolicy ??
+        (await this.deps.uow.execute(async (ctx) => {
+          if (ctx.clients === undefined) {
+            throw new Error(
+              "UnitOfWorkContext.clients is not configured for this UnitOfWork implementation."
+            );
+          }
+          const client = await ctx.clients.findById(campaign.clientId);
+          if (client === undefined) {
+            throw new ClientNotFoundError(campaign.clientId);
+          }
+          return client.externalProcessingPolicy;
+        }));
+
+      // 3. Plan each scene configuration sequentially
+      const orderedConfigs: OrderedSceneConfiguration[] = [];
+      for (const beat of beatSheet.beats) {
+        const configuration = await this.deps.planSceneConfiguration.execute({
+          brief: beat.brief,
+          campaignId: campaign.id,
+          clientId: campaign.clientId,
+          candidateReferenceAssetIds: (input.candidateReferenceAssetIds ??
+            []) as readonly ReferenceAssetId[],
+          externalProcessingPolicy,
+          targetDurationMs: beat.targetDurationMs,
+          overallTimeoutMs: input.overallTimeoutMs
+        });
+        orderedConfigs.push({ ordinal: beat.ordinal, configuration });
+      }
+
+      // 4. Durably materialize storyboard scenes and admit candidate generation in its own transaction
+      const { scenes } = await this.deps.materializeStoryboard.execute({
+        campaignId: campaign.id,
+        scenes: orderedConfigs,
+        completionHashSha256: orchestrationHash
+      });
+
+      return {
+        campaign: { ...campaign, status: "drafting" },
+        isIdempotentReplay: false,
+        scenes
+      };
+    } catch (err) {
+      // Best-effort mark campaign as failed on unexpected planning pipeline failure
+      try {
+        await this.deps.uow.execute(async (ctx) => {
+          if (ctx.campaigns && typeof ctx.campaigns.transitionStatusIf === "function") {
+            await ctx.campaigns.transitionStatusIf(campaign.id, "planning", "failed");
+          }
+        });
+      } catch {
+        // Ignore secondary error updating status
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Synchronous entry point: resolves/creates shell and immediately runs pipeline.
+   */
+  async execute(input: PlanCampaignStoryboardInput): Promise<PlanCampaignStoryboardResult> {
+    const shellResult = await this.preparePlanningShell(input);
+    if (shellResult.kind === "completed") {
+      return {
+        campaign: shellResult.campaign,
+        isIdempotentReplay: true,
+        scenes: shellResult.scenes
+      };
+    }
+
+    const orchestrationHash =
+      "orchestrationHash" in shellResult
+        ? shellResult.orchestrationHash
+        : await computeCampaignRequestHash({
+            clientId: input.clientId,
+            title: input.title,
+            targetPlatform: input.targetPlatform,
+            targetTotalDurationMs: input.targetTotalDurationMs,
+            sceneCountOverride: input.sceneCountOverride,
+            brief: input.brief,
+            candidateReferenceAssetIds: input.candidateReferenceAssetIds
+          });
+
+    return this.executePlanningPipeline(shellResult.campaign, input, orchestrationHash);
   }
 }

@@ -89,6 +89,24 @@ describe("Review Hub Campaign Plan Route Handler: POST /api/campaigns/plan", () 
       expect(planCampaignStoryboard).toHaveBeenCalledTimes(1);
       expect(planCampaignStoryboard).toHaveBeenCalledWith(validRequest);
     });
+
+    it("returns 202 Accepted when campaign status is planning", async () => {
+      const planningResponse: PlanCampaignStoryboardResponse = {
+        ...defaultSuccessResponse,
+        status: "planning",
+        sceneCount: 0,
+        scenes: []
+      };
+      vi.mocked(planCampaignStoryboard).mockResolvedValueOnce(planningResponse);
+
+      const request = createJsonRequest(routeUrl, validRequest);
+      const response = await POST(request);
+
+      expect(response.status).toBe(202);
+      const body = await response.json();
+      expect(body).toEqual(planningResponse);
+      expect(body.status).toBe("planning");
+    });
   });
 
   describe("Local request validation (before upstream call)", () => {

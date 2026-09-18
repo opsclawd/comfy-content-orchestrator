@@ -70,6 +70,40 @@ export const campaignRoutes: FastifyPluginAsync<CampaignRoutesOptions> = async (
     return reply.status(201).send(response);
   });
 
+  fastify.get<{ Params: { campaignId: string } }>(
+    "/api/campaigns/:campaignId",
+    { schema: campaignSceneRouteSchema },
+    async (request, reply) => {
+      const { campaignId } = request.params;
+      const campaign = await container.dependencies.uow.execute(async (ctx) => {
+        if (!ctx.campaigns) {
+          throw new Error("UnitOfWorkContext.campaigns is not configured on container.");
+        }
+        return ctx.campaigns.findById(campaignId);
+      });
+
+      if (!campaign) {
+        return reply.status(404).send({
+          code: "NOT_FOUND",
+          message: `Campaign '${campaignId}' was not found.`
+        });
+      }
+
+      const response = CampaignResponseSchema.parse({
+        campaignId: campaign.id,
+        clientId: campaign.clientId,
+        title: campaign.title,
+        targetPlatform: campaign.targetPlatform,
+        status: campaign.status,
+        totalScenes: campaign.totalScenes,
+        approvedScenes: campaign.approvedScenes,
+        createdAt: campaign.createdAt
+      });
+
+      return reply.status(200).send(response);
+    }
+  );
+
   fastify.post<{ Params: { campaignId: string } }>(
     "/api/campaigns/:campaignId/scenes",
     { schema: campaignSceneRouteSchema },
@@ -160,7 +194,7 @@ export const campaignRoutes: FastifyPluginAsync<CampaignRoutesOptions> = async (
     }
     const body = PlanCampaignStoryboardRequestSchema.parse(request.body);
 
-    const result = await container.useCases.planCampaignStoryboard.execute({
+    const planInput = {
       idempotencyKey: body.idempotencyKey,
       clientId: body.clientId,
       title: body.title,
@@ -174,10 +208,55 @@ export const campaignRoutes: FastifyPluginAsync<CampaignRoutesOptions> = async (
               body.candidateReferenceAssetIds as unknown as readonly ReferenceAssetId[]
           }
         : {})
-    });
+    };
 
-    const response = formatPlanCampaignStoryboardResponse(result, body.idempotencyKey);
-    return reply.status(201).send(response);
+    const shellResult =
+      await container.useCases.planCampaignStoryboard.preparePlanningShell(planInput);
+
+    if (shellResult.kind === "completed") {
+      const response = formatPlanCampaignStoryboardResponse(
+        {
+          campaign: shellResult.campaign,
+          isIdempotentReplay: true,
+          scenes: shellResult.scenes
+        },
+        body.idempotencyKey
+      );
+      return reply.status(200).send(response);
+    }
+
+    if (shellResult.kind === "in_progress") {
+      const response = formatPlanCampaignStoryboardResponse(
+        {
+          campaign: shellResult.campaign,
+          isIdempotentReplay: true,
+          scenes: []
+        },
+        body.idempotencyKey
+      );
+      return reply.status(202).send(response);
+    }
+
+    // Fresh shell created: kick off long-running LLM planning asynchronously
+    const planningUseCase = container.useCases.planCampaignStoryboard;
+    void planningUseCase
+      .executePlanningPipeline(shellResult.campaign, planInput, shellResult.orchestrationHash)
+      .catch((err) => {
+        fastify.log.error(
+          err,
+          `Background storyboard planning failed for campaign ${shellResult.campaign.id}`
+        );
+      });
+
+    const response = formatPlanCampaignStoryboardResponse(
+      {
+        campaign: shellResult.campaign,
+        isIdempotentReplay: false,
+        scenes: []
+      },
+      body.idempotencyKey
+    );
+    return reply.status(202).send(response);
   });
 };
 

@@ -205,6 +205,7 @@ export class PostgresCampaignRepository
       `
       UPDATE campaigns
       SET storyboard_completion_hash_sha256 = $2,
+          status = CASE WHEN status = 'planning' THEN 'drafting'::campaign_status_enum ELSE status END,
           updated_at = CURRENT_TIMESTAMP
       WHERE campaign_id = $1 AND archived_at IS NULL
       `,

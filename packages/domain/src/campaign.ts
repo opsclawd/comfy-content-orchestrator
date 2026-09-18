@@ -1,6 +1,7 @@
 import type { CampaignId } from "./scene.js";
 
 export const CAMPAIGN_STATUSES = [
+  "planning",
   "drafting",
   "pending_director_review",
   "partially_approved",
