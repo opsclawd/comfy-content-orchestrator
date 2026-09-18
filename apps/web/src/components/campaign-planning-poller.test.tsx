@@ -13,15 +13,27 @@ vi.mock("next/navigation", () => ({
 }));
 
 describe("CampaignPlanningPoller", () => {
+  let reloadMock: ReturnType<typeof vi.fn>;
+  const originalLocation = window.location;
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
+    reloadMock = vi.fn();
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...originalLocation, reload: reloadMock }
+    });
   });
 
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
     vi.restoreAllMocks();
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: originalLocation
+    });
   });
 
   it("does not poll when isPlanning is false", async () => {
@@ -78,6 +90,7 @@ describe("CampaignPlanningPoller", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(3);
     expect(onStatusChange).toHaveBeenCalledWith("drafting");
     expect(mockRefresh).toHaveBeenCalledTimes(1);
+    expect(reloadMock).toHaveBeenCalledTimes(1);
 
     // 4th tick -> polling stopped after transition
     await act(async () => {

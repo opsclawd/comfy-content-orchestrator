@@ -41,6 +41,13 @@ export function CampaignPlanningPoller({
             onStatusChangeRef.current(data.status);
           }
           router.refresh();
+          if (typeof window !== "undefined") {
+            try {
+              window.location.reload();
+            } catch {
+              // Ignore in environments where window.location.reload is not implemented (e.g. jsdom)
+            }
+          }
         }
       } catch {
         // Ignore network glitch during polling; retry on next interval
