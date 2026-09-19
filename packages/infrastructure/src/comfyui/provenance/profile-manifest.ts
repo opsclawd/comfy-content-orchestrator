@@ -40,7 +40,11 @@ export interface CertificationProfile {
   readonly models: readonly ModelFileSpec[];
   readonly assertions: readonly WorkflowNodeAssertion[];
   readonly renderProfileIdentity: Readonly<{
-    key: "LTX_25_720P_5S_V1" | "FLUX_SCHNELL_DRAFT_V1" | "LTX_25_720P_5S_I2V_V1";
+    key:
+      | "LTX_25_720P_5S_V1"
+      | "FLUX_SCHNELL_DRAFT_V1"
+      | "LTX_25_720P_5S_I2V_V1"
+      | "MINIMAX_H3_720P_5S_I2V_V1";
     version: 1;
   }> | null;
 }
@@ -343,7 +347,8 @@ function validateRenderProfileIdentity(
   if (
     (key === "LTX_25_720P_5S_V1" && version === 1) ||
     (key === "FLUX_SCHNELL_DRAFT_V1" && version === 1) ||
-    (key === "LTX_25_720P_5S_I2V_V1" && version === 1)
+    (key === "LTX_25_720P_5S_I2V_V1" && version === 1) ||
+    (key === "MINIMAX_H3_720P_5S_I2V_V1" && version === 1)
   ) {
     return {
       key,
@@ -352,7 +357,7 @@ function validateRenderProfileIdentity(
   }
 
   throw new Error(
-    `Profile "${profileId}": invalid renderProfileIdentity. Expected "LTX_25_720P_5S_V1" (v1), "FLUX_SCHNELL_DRAFT_V1" (v1), "LTX_25_720P_5S_I2V_V1" (v1), or null, received: ${JSON.stringify(identity)}`
+    `Profile "${profileId}": invalid renderProfileIdentity. Expected "LTX_25_720P_5S_V1" (v1), "FLUX_SCHNELL_DRAFT_V1" (v1), "LTX_25_720P_5S_I2V_V1" (v1), "MINIMAX_H3_720P_5S_I2V_V1" (v1), or null, received: ${JSON.stringify(identity)}`
   );
 }
 
