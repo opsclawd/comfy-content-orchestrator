@@ -45,7 +45,8 @@ describe("campaign creation state machine & form mapping", () => {
     sceneCountMode: "auto",
     sceneCountOverride: "",
     briefDescription: "High energy summer apparel advertisement",
-    briefVisualStyle: "cinematic warm golden hour"
+    briefVisualStyle: "cinematic warm golden hour",
+    targetEngineProfileId: "MINIMAX_H3_720P_5S_I2V_V1"
   };
 
   const dummyIdempotencyKey = "99999999-9999-4999-8999-999999999999";
@@ -325,6 +326,67 @@ describe("campaign creation state machine & form mapping", () => {
       if (!resultBrief.ok) {
         expect(resultBrief.fieldErrors.briefDescription).toBeDefined();
       }
+    });
+
+    it("includes targetEngineProfileId in the request when provided", () => {
+      const values: CampaignCreationFormValues = {
+        ...validFormValues,
+        targetEngineProfileId: "MINIMAX_H3_720P_5S_I2V_V1"
+      };
+
+      const result = buildRequestFromForm(values, dummyIdempotencyKey);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      expect(result.request.targetEngineProfileId).toBe("MINIMAX_H3_720P_5S_I2V_V1");
+    });
+
+    it("supports selecting LTX-Video 2.5 engine profile", () => {
+      const values: CampaignCreationFormValues = {
+        ...validFormValues,
+        targetEngineProfileId: "LTX_25_720P_5S_V1"
+      };
+
+      const result = buildRequestFromForm(values, dummyIdempotencyKey);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      expect(result.request.targetEngineProfileId).toBe("LTX_25_720P_5S_V1");
+    });
+
+    it("omits targetEngineProfileId when undefined or blank", () => {
+      const valuesUndefined: CampaignCreationFormValues = {
+        ...validFormValues,
+        targetEngineProfileId: undefined
+      };
+
+      const resultUndefined = buildRequestFromForm(valuesUndefined, dummyIdempotencyKey);
+      expect(resultUndefined.ok).toBe(true);
+      if (!resultUndefined.ok) return;
+      expect("targetEngineProfileId" in resultUndefined.request).toBe(false);
+
+      const valuesBlank: CampaignCreationFormValues = {
+        ...validFormValues,
+        targetEngineProfileId: "   "
+      };
+
+      const resultBlank = buildRequestFromForm(valuesBlank, dummyIdempotencyKey);
+      expect(resultBlank.ok).toBe(true);
+      if (!resultBlank.ok) return;
+      expect("targetEngineProfileId" in resultBlank.request).toBe(false);
+    });
+
+    it("fails validation and records field error when targetEngineProfileId is invalid", () => {
+      const values: CampaignCreationFormValues = {
+        ...validFormValues,
+        targetEngineProfileId: "INVALID_ENGINE_PROFILE"
+      };
+
+      const result = buildRequestFromForm(values, dummyIdempotencyKey);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+
+      expect(result.fieldErrors.targetEngineProfileId).toBeDefined();
     });
   });
 

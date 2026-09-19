@@ -207,6 +207,9 @@ export const campaignRoutes: FastifyPluginAsync<CampaignRoutesOptions> = async (
             candidateReferenceAssetIds:
               body.candidateReferenceAssetIds as unknown as readonly ReferenceAssetId[]
           }
+        : {}),
+      ...(body.targetEngineProfileId !== undefined
+        ? { targetEngineProfileId: body.targetEngineProfileId }
         : {})
     };
 

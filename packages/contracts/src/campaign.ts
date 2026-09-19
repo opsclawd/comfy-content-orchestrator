@@ -1,6 +1,7 @@
 import { sortKeysDeep } from "@cco/shared";
 import { z } from "zod";
 import { SceneConfigurationSchema, SceneStatusSchema } from "./scene-review.js";
+import { RenderProfileKeySchema, type RenderProfileKey } from "./render-profile.js";
 
 import { CampaignStatusSchema } from "./campaign-status.js";
 export * from "./campaign-status.js";
@@ -43,7 +44,8 @@ export const CampaignShellRequestShape = {
   title: z.string().min(1),
   targetPlatform: z.string().min(1).optional(),
   targetTotalDurationMs: z.number().int().min(MIN_TARGET_DURATION_MS).max(MAX_TARGET_DURATION_MS),
-  sceneCountOverride: z.number().int().min(MIN_SCENE_COUNT).max(MAX_SCENE_COUNT).optional()
+  sceneCountOverride: z.number().int().min(MIN_SCENE_COUNT).max(MAX_SCENE_COUNT).optional(),
+  targetEngineProfileId: RenderProfileKeySchema.optional()
 };
 
 export const CampaignShellParamsSchema = z.object(CampaignShellRequestShape);
@@ -252,6 +254,7 @@ export interface CampaignRequestCanonicalizationInput {
   readonly sceneCountOverride?: number | undefined;
   readonly brief?: CreativeBrief | undefined;
   readonly candidateReferenceAssetIds?: readonly string[] | undefined;
+  readonly targetEngineProfileId?: RenderProfileKey | string | undefined;
 }
 
 export type CampaignRequestHashInput = CampaignRequestCanonicalizationInput;
@@ -292,7 +295,10 @@ export function canonicalizeCampaignRequest(input: CampaignRequestCanonicalizati
       ? { sceneCountOverride: input.sceneCountOverride }
       : {}),
     ...(input.brief !== undefined ? { brief: input.brief } : {}),
-    ...(canonicalAssetIds !== undefined ? { candidateReferenceAssetIds: canonicalAssetIds } : {})
+    ...(canonicalAssetIds !== undefined ? { candidateReferenceAssetIds: canonicalAssetIds } : {}),
+    ...(input.targetEngineProfileId !== undefined
+      ? { targetEngineProfileId: input.targetEngineProfileId }
+      : {})
   };
   return JSON.stringify(sortKeysDeep(normalized));
 }

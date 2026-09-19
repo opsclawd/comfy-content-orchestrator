@@ -18,6 +18,7 @@ export interface BuildPlanningPromptInput {
   readonly maxDurationMs?: number | undefined;
   readonly targetDurationMs?: number | undefined;
   readonly correctiveFeedback?: string | undefined;
+  readonly targetEngineProfileId?: string | undefined;
 }
 
 export function buildPlanningPrompt(input: BuildPlanningPromptInput): PlanningModelRequest {
@@ -35,6 +36,11 @@ export function buildPlanningPrompt(input: BuildPlanningPromptInput): PlanningMo
         ? ` (maximum: ${input.maxDurationMs})`
         : "";
 
+  const engineRule =
+    input.targetEngineProfileId !== undefined
+      ? `- engineProfileId: string, must equal "${input.targetEngineProfileId}".`
+      : `- engineProfileId: string, must be one of the certified profiles: ${JSON.stringify(certifiedProfiles)}.`;
+
   const systemPrompt = [
     "You are a specialized creative planning assistant for video synthesis.",
     "Your goal is to generate a strictly valid SceneConfiguration JSON object based on the provided creative brief.",
@@ -43,7 +49,7 @@ export function buildPlanningPrompt(input: BuildPlanningPromptInput): PlanningMo
     "Rules for the output JSON fields:",
     "- prompt: non-empty string describing the visual scene to be rendered in detail.",
     `- referenceIds: array of strings selected strictly from available reference asset IDs: ${JSON.stringify(assetIds)}. Only use IDs from this list.`,
-    `- engineProfileId: string, must be one of the certified profiles: ${JSON.stringify(certifiedProfiles)}.`,
+    engineRule,
     `- durationMs: positive integer in milliseconds${durationConstraintText}.`,
     "- loraConfigurationId: optional string or null."
   ].join("\n");

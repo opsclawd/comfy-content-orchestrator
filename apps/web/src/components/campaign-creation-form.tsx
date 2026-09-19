@@ -449,6 +449,170 @@ export function CampaignCreationForm({
           )}
         </div>
 
+        <div className="form-group" data-testid="engine-selection-group">
+          <label>Target Video Generation Engine *</label>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+              gap: "1rem",
+              marginTop: "0.5rem"
+            }}
+          >
+            {/* MiniMax-H3 Card */}
+            <label
+              data-testid="engine-card-minimax-h3"
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.5rem",
+                padding: "1rem",
+                borderRadius: "var(--radius-md)",
+                border:
+                  values.targetEngineProfileId === "MINIMAX_H3_720P_5S_I2V_V1"
+                    ? "2px solid var(--color-primary)"
+                    : "1px solid var(--border-subtle)",
+                backgroundColor:
+                  values.targetEngineProfileId === "MINIMAX_H3_720P_5S_I2V_V1"
+                    ? "var(--bg-surface-elevated)"
+                    : "var(--bg-surface)",
+                cursor: isSubmitting ? "not-allowed" : "pointer",
+                transition: "all 0.15s ease",
+                textTransform: "none"
+              }}
+            >
+              <div
+                style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                  <input
+                    type="radio"
+                    name="targetEngineProfileId"
+                    value="MINIMAX_H3_720P_5S_I2V_V1"
+                    checked={values.targetEngineProfileId === "MINIMAX_H3_720P_5S_I2V_V1"}
+                    onChange={() =>
+                      handleFieldChange("targetEngineProfileId", "MINIMAX_H3_720P_5S_I2V_V1")
+                    }
+                    disabled={isSubmitting}
+                    data-testid="engine-radio-minimax-h3"
+                  />
+                  <strong style={{ color: "var(--text-primary)", fontSize: "0.95rem" }}>
+                    MiniMax-H3
+                  </strong>
+                </div>
+                <span
+                  style={{
+                    fontSize: "0.7rem",
+                    fontWeight: 600,
+                    padding: "0.15rem 0.5rem",
+                    borderRadius: "999px",
+                    backgroundColor: "rgba(56, 189, 248, 0.15)",
+                    color: "var(--color-primary)"
+                  }}
+                >
+                  Photorealistic Hero
+                </span>
+              </div>
+              <p
+                style={{
+                  fontSize: "0.8125rem",
+                  color: "var(--text-secondary)",
+                  margin: 0,
+                  lineHeight: 1.4
+                }}
+              >
+                High-capacity multimodal video model. Realistic skin texture, facial wrinkles,
+                natural lighting, and synchronized AAC audio.
+              </p>
+              <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "auto" }}>
+                1344×768 (720p) · 124 frames (5.0s) · ~6.5m on RTX 4090
+              </div>
+            </label>
+
+            {/* LTX-Video 2.5 Card */}
+            <label
+              data-testid="engine-card-ltx-25"
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.5rem",
+                padding: "1rem",
+                borderRadius: "var(--radius-md)",
+                border:
+                  values.targetEngineProfileId === "LTX_25_720P_5S_V1"
+                    ? "2px solid var(--color-primary)"
+                    : "1px solid var(--border-subtle)",
+                backgroundColor:
+                  values.targetEngineProfileId === "LTX_25_720P_5S_V1"
+                    ? "var(--bg-surface-elevated)"
+                    : "var(--bg-surface)",
+                cursor: isSubmitting ? "not-allowed" : "pointer",
+                transition: "all 0.15s ease",
+                textTransform: "none"
+              }}
+            >
+              <div
+                style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                  <input
+                    type="radio"
+                    name="targetEngineProfileId"
+                    value="LTX_25_720P_5S_V1"
+                    checked={values.targetEngineProfileId === "LTX_25_720P_5S_V1"}
+                    onChange={() => handleFieldChange("targetEngineProfileId", "LTX_25_720P_5S_V1")}
+                    disabled={isSubmitting}
+                    data-testid="engine-radio-ltx-25"
+                  />
+                  <strong style={{ color: "var(--text-primary)", fontSize: "0.95rem" }}>
+                    LTX-Video 2.5
+                  </strong>
+                </div>
+                <span
+                  style={{
+                    fontSize: "0.7rem",
+                    fontWeight: 600,
+                    padding: "0.15rem 0.5rem",
+                    borderRadius: "999px",
+                    backgroundColor: "rgba(100, 116, 139, 0.2)",
+                    color: "var(--text-secondary)"
+                  }}
+                >
+                  Fast Animatics
+                </span>
+              </div>
+              <p
+                style={{
+                  fontSize: "0.8125rem",
+                  color: "var(--text-secondary)",
+                  margin: 0,
+                  lineHeight: 1.4
+                }}
+              >
+                Lightweight 2B model optimized for rapid storyboard pacing, draft iteration, and
+                quick previews.
+              </p>
+              <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "auto" }}>
+                1280×720 (720p) · 97 frames (~4.0s) · ~40s on RTX 4090
+              </div>
+            </label>
+          </div>
+          {fieldErrors.targetEngineProfileId && (
+            <span
+              className="field-error"
+              data-testid="field-error-target-engine-profile-id"
+              style={{
+                color: "var(--status-failed-border)",
+                fontSize: "0.8125rem",
+                marginTop: "0.25rem",
+                display: "block"
+              }}
+            >
+              {fieldErrors.targetEngineProfileId}
+            </span>
+          )}
+        </div>
+
         <div className="form-group">
           <label htmlFor="target-duration">Target Total Duration (seconds) *</label>
           <input
