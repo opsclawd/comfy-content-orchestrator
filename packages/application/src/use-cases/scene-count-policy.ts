@@ -9,12 +9,15 @@ export const MAX_TARGET_DURATION_MS = 300_000;
 export const MIN_SCENE_COUNT = 1;
 export const MAX_SCENE_COUNT = 60;
 export const TARGET_SECONDS_PER_SCENE = 5;
+export const MINIMAX_H3_TARGET_SECONDS_PER_SCENE = 5;
+export const LTX_TARGET_SECONDS_PER_SCENE = 4;
 export const MIN_SCENE_DURATION_MS = 1_000;
 export const MAX_SCENE_DURATION_MS = 15_000;
 
 export interface ResolveSceneCountInput {
   readonly targetTotalDurationMs: number;
   readonly sceneCountOverride?: number | undefined;
+  readonly targetSecondsPerScene?: number | undefined;
 }
 
 /**
@@ -23,8 +26,8 @@ export interface ResolveSceneCountInput {
  * Policy:
  * 1. targetTotalDurationMs must be an integer within [5_000, 300_000] ms.
  * 2. If sceneCountOverride is provided, it must be an integer within [1, 60].
- * 3. Without override, N is derived as round(targetTotalDurationMs / (TARGET_SECONDS_PER_SCENE * 1000)),
- *    clamped to [1, 60], using round-half-up for tie-breaks.
+ * 3. Without override, N is derived as round(targetTotalDurationMs / (targetSecondsPerScene * 1000)),
+ *    clamped to [1, 60], using round-half-up for tie-breaks. Defaults to TARGET_SECONDS_PER_SCENE (5s).
  * 4. Authoritative combination check: the implied per-scene duration (targetTotalDurationMs / N)
  *    must satisfy MIN_SCENE_DURATION_MS (1_000ms) <= duration <= MAX_SCENE_DURATION_MS (15_000ms).
  */
@@ -46,7 +49,8 @@ export function resolveSceneCount(input: ResolveSceneCountInput): number {
     }
     resolvedN = override;
   } else {
-    const derived = Math.round(duration / (TARGET_SECONDS_PER_SCENE * 1000));
+    const secondsPerScene = input.targetSecondsPerScene ?? TARGET_SECONDS_PER_SCENE;
+    const derived = Math.round(duration / (secondsPerScene * 1000));
     resolvedN = Math.min(Math.max(derived, MIN_SCENE_COUNT), MAX_SCENE_COUNT);
   }
 

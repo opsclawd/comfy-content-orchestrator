@@ -12,6 +12,7 @@ import * as contracts from "@cco/contracts";
 import {
   EnqueueSceneProductionRenderUseCase,
   LTX_I2V_PRODUCTION_WORKFLOW_TEMPLATE,
+  MINIMAX_H3_I2V_PRODUCTION_WORKFLOW_TEMPLATE,
   PRODUCTION_WORKFLOW_TEMPLATE,
   SUPPORTED_PRODUCTION_ENGINE_PROFILE_ID
 } from "./enqueue-scene-production-render.js";
@@ -486,5 +487,23 @@ describe("EnqueueSceneProductionRenderUseCase", () => {
     expect(updatedRunScene?.currentAttemptId).toBe(rerenderResult.attemptId);
     expect(updatedRunScene?.currentAttemptOrdinal).toBe(2);
     expect(updatedRunScene?.productionJobId).toBe(rerenderResult.job.jobId);
+  });
+
+  it("accepts 5000ms scene duration without UnsupportedProductionDurationError for MiniMax-H3", async () => {
+    const scene = createApprovedScene("scene-minimax-5s", {
+      engineProfileId: "MINIMAX_H3_720P_5S_I2V_V1",
+      durationMs: 5000
+    });
+    const queue = new InMemoryJobQueue();
+    const uow = new InMemorySceneUnitOfWork([scene]).withJobs(queue);
+    const useCase = new EnqueueSceneProductionRenderUseCase(uow);
+
+    const result = await useCase.execute({ sceneId: "scene-minimax-5s" });
+
+    expect(result.job.jobKind).toBe("production");
+    expect(result.job.workflowTemplate).toBe(MINIMAX_H3_I2V_PRODUCTION_WORKFLOW_TEMPLATE);
+    expect(result.job.injectedPayload.frameCount).toBe(124);
+    expect(queue.jobs).toHaveLength(1);
+    expect(queue.jobs[0]?.workflowTemplate).toBe(MINIMAX_H3_I2V_PRODUCTION_WORKFLOW_TEMPLATE);
   });
 });
