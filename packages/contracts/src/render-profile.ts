@@ -311,3 +311,16 @@ export function getProfileInjectionTopology(
   }
   return undefined;
 }
+
+export const RENDER_PROFILE_ALIASES: Readonly<Record<string, RenderProfileKey>> = Object.freeze({
+  "flux-schnell-draft": "FLUX_SCHNELL_DRAFT_V1",
+  "flux-schnell": "FLUX_SCHNELL_DRAFT_V1",
+  "ltx-25-720p-97f": "LTX_25_720P_5S_V1",
+  "ltx-25": "LTX_25_720P_5S_V1",
+  "ltx-25-720p-97f-i2v": "LTX_25_720P_5S_I2V_V1",
+  "ltx-25-i2v": "LTX_25_720P_5S_I2V_V1",
+  "minimax-h3-720p-124f-i2v": "MINIMAX_H3_720P_5S_I2V_V1",
+  "minimax-h3-720p-5s-i2v-v1": "MINIMAX_H3_720P_5S_I2V_V1",
+  "minimax-h3": "MINIMAX_H3_720P_5S_I2V_V1",
+  "minimax-h3-i2v": "MINIMAX_H3_720P_5S_I2V_V1"
+});

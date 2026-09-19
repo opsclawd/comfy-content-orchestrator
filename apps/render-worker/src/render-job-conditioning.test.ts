@@ -36,6 +36,7 @@ import {
 import { FakeComfyUiTransport } from "@cco/infrastructure/testing";
 import {
   createCertifiedRenderJobExecutor,
+  RenderJobPayloadValidationError,
   type AssembleProductionManifestInput,
   type ProductionManifestAssembler
 } from "./render-job-executor.js";
@@ -105,15 +106,25 @@ function setupRecordingComfyUiTransport(): {
     if (urlStr.includes("/history/")) {
       const parts = urlStr.split("/");
       const promptId = parts[parts.length - 1] || "prompt-1";
+      const promptRecord = recordedPrompts.find((p) => p.promptId === promptId);
+      const isMiniMax = promptRecord && promptRecord.workflow["92"] !== undefined;
+      const outputs = isMiniMax
+        ? {
+            "92": {
+              images: [{ filename: "minimax_output.mp4", type: "output", subfolder: "" }]
+            }
+          }
+        : {
+            "9": {
+              images: [{ filename: "output.webp", type: "output", subfolder: "" }]
+            }
+          };
+
       return new Response(
         JSON.stringify({
           [promptId]: {
             status: { completed: true, status_str: "success" },
-            outputs: {
-              "9": {
-                images: [{ filename: "output.webp", type: "output", subfolder: "" }]
-              }
-            }
+            outputs
           }
         }),
         {
@@ -823,5 +834,418 @@ describe("End-to-End Conditioning Injection (Criterion 11 & Governance)", () => 
     expect(mockGpuLease.acquireLease).not.toHaveBeenCalled();
     // Zero ComfyUI fetch calls (/upload/image, /prompt)
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  describe("MiniMax-H3 I2V Conditioning and Execution (Issue #292)", () => {
+    it("executes MiniMax-H3 production job: stages candidate to node 20, injects prompt, length (124), and seed into native nodes, and produces video artifact", async () => {
+      const realMinimaxTemplatePath = resolve(
+        DEFAULT_REPO_ROOT,
+        "templates/minimax_h3_720p_i2v_124f_api.json"
+      );
+      const realMinimaxTemplateJson = await readFile(realMinimaxTemplatePath, "utf8");
+      const templateSha256 = createHash("sha256").update(realMinimaxTemplateJson).digest("hex");
+
+      const certifiedMinimaxProfile: CertificationProfile = {
+        id: "minimax-h3-720p-124f-i2v",
+        engine: "minimax_h3_i2v",
+        workflowPath: realMinimaxTemplatePath,
+        workflowRelativePath: "minimax_h3_720p_i2v_124f_api.json",
+        expectedWorkflowHash: templateSha256,
+        source: {
+          kind: "authored_from_spec",
+          uri: "https://github.com/Comfy-Org/MiniMax-H3",
+          revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+          license: "MiniMax Community License"
+        },
+        baseline: {
+          width: 1344,
+          height: 768,
+          frames: 124,
+          steps: 20,
+          approximateDurationSeconds: 5
+        },
+        minFreeDiskGb: 50,
+        runnerProfile: "dynamicvram-offload-v1",
+        models: [],
+        assertions: [],
+        renderProfileIdentity: {
+          key: "MINIMAX_H3_720P_5S_I2V_V1",
+          version: 1
+        }
+      };
+
+      const mockLiveProvenance: CertificationProvenanceReport = {
+        version: 1,
+        profileId: "minimax-h3-720p-124f-i2v",
+        generatedAt: "2026-09-18T00:00:00.000Z",
+        models: [],
+        disk: {
+          modelFootprintBytes: 0,
+          availableBytes: 100_000_000_000,
+          requiredFreeBytes: 0,
+          modelFootprintGb: 0,
+          availableGb: 100,
+          minFreeDiskGb: 50,
+          passes: true
+        },
+        git: {
+          comfyUiCommit: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+          customNodes: []
+        },
+        workflow: {
+          relativePath: "minimax_h3_720p_i2v_124f_api.json",
+          sha256: templateSha256,
+          source: {
+            kind: "authored_from_spec",
+            uri: "https://github.com/Comfy-Org/MiniMax-H3",
+            revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+            license: "MiniMax Community License"
+          }
+        },
+        renderProfileProvenance: {
+          key: "MINIMAX_H3_720P_5S_I2V_V1",
+          version: 1,
+          engine: "minimax_h3_i2v",
+          workflowHash: templateSha256,
+          frames: 124,
+          steps: 20,
+          runnerProfile: "dynamicvram-offload-v1",
+          measuredDiskFootprintGb: 40,
+          minFreeDiskGb: 50,
+          modelHashes: {
+            "minimax_h3_ref2va_pruned_int8_convrot.safetensors": "b".repeat(64)
+          }
+        }
+      };
+
+      const fixedSceneId = "22222222-bbbb-4222-8222-222222222222" as SceneId;
+      const fixedCampaignId = "camp-minimax-001" as CampaignId;
+      const fixedSpecRevision = 1;
+      const fixedPrompt =
+        "A hyperrealistic portrait of a person talking expressively, natural lighting";
+      const fixedSeed = 54321;
+      const fixedJobId = "job-minimax-prod-001" as JobId;
+      const candidateId = "cand-minimax-001" as CandidateId;
+
+      const candidateBytes = new Uint8Array(150).fill(99);
+      const candidateSha256 = sha256Hex(candidateBytes);
+
+      const candidate: StoryboardCandidate = {
+        id: candidateId,
+        sceneId: fixedSceneId,
+        specRevision: fixedSpecRevision,
+        variantOrdinal: 1,
+        storageBucket: "godzspeed-review",
+        storageObjectKey: `candidates/${candidateId}.png`,
+        contentHash: candidateSha256,
+        generationMetadata: {},
+        createdAt: "2026-09-18T12:00:00.000Z"
+      };
+
+      const scene = Scene.reconstitute({
+        id: fixedSceneId,
+        campaignId: fixedCampaignId,
+        status: "rendering",
+        specRevision: fixedSpecRevision,
+        configuration: {
+          prompt: fixedPrompt,
+          referenceIds: [],
+          engineProfileId: "MINIMAX_H3_720P_5S_I2V_V1",
+          durationMs: 5167
+        },
+        selectedCandidateId: candidateId,
+        selectedCandidateRevision: fixedSpecRevision,
+        approval: {
+          revision: fixedSpecRevision,
+          approvedBy: "reviewer-1",
+          approvedAt: "2026-09-18T12:05:00.000Z"
+        }
+      });
+
+      const storageMap = new Map<string, StoredObject>([
+        [
+          `godzspeed-review:candidates/${candidateId}.png`,
+          {
+            bucket: "godzspeed-review",
+            key: `candidates/${candidateId}.png`,
+            body: candidateBytes,
+            contentType: "image/png"
+          }
+        ]
+      ]);
+
+      const objectStorage: ObjectStoragePort = {
+        getObject: async (locator) => storageMap.get(`${locator.bucket}:${locator.key}`),
+        putObject: vi.fn(),
+        copyObject: vi.fn(),
+        deleteObject: vi.fn(),
+        headObject: vi.fn()
+      };
+
+      const sceneRepository: SceneRepository = {
+        findById: async (id) => (id === fixedSceneId ? scene : undefined),
+        save: async () => {}
+      };
+
+      const storyboardCandidateRepository: StoryboardCandidateRepository = {
+        findById: async (id) => (id === candidateId ? candidate : undefined),
+        insert: async () => {},
+        listBySceneAndRevision: async (sceneId, rev) => {
+          if (sceneId === fixedSceneId && rev === fixedSpecRevision) {
+            return [candidate];
+          }
+          return [];
+        }
+      };
+
+      const hashBytesPort: HashBytesPort = {
+        hashBytes: async (b) => sha256Hex(b)
+      };
+
+      const resolveApprovedCandidateMedia = new ResolveApprovedCandidateMediaUseCase({
+        sceneRepository,
+        storyboardCandidateRepository,
+        objectStorage,
+        hashBytes: hashBytesPort
+      });
+
+      const { transport, recordedUploads, recordedPrompts } = setupRecordingComfyUiTransport();
+      const client = new ComfyUiClient("http://127.0.0.1:8188", transport);
+      const unlinkSpy = vi.fn().mockResolvedValue(undefined);
+      const stageReferenceImage = new HttpComfyUiInputStagingAdapter({
+        client,
+        comfyUiDir: "/tmp/fake-comfyui",
+        unlinkFn: unlinkSpy
+      });
+
+      const renderEngine = new ComfyUiRenderEngineAdapter({
+        baseUrl: "http://127.0.0.1:8188",
+        transport
+      });
+
+      const fakeGpuLease = {
+        acquireLease: async () => ({
+          holder: {
+            version: 1 as const,
+            pid: 1234,
+            startedAt: new Date().toISOString(),
+            hostname: "test-host",
+            leaseId: "lease-1"
+          },
+          release: async () => {}
+        })
+      };
+
+      const fakeGpuTelemetry: GpuTelemetryPort = {
+        readMemory: async () => ({
+          totalVramMb: 24576,
+          usedVramMb: 4096,
+          freeVramMb: 20480,
+          reservedVramMb: 4096,
+          measuredAt: new Date().toISOString()
+        })
+      };
+
+      const mockEnforceLicenseRouting = {
+        enforce: vi.fn().mockReturnValue(undefined)
+      };
+
+      const useCase = new ExecuteProfileRenderUseCase(
+        renderEngine,
+        fakeGpuLease,
+        fakeGpuTelemetry,
+        mockEnforceLicenseRouting as unknown as EnforceLicenseRouting
+      );
+
+      const assembledInputs: AssembleProductionManifestInput[] = [];
+      const mockAssembler: ProductionManifestAssembler = {
+        assembleManifest: async (input) => {
+          assembledInputs.push(input);
+          return {
+            manifestId: `manifest-${input.job.jobId}`,
+            ok: true
+          };
+        }
+      };
+
+      const videoBytes = new Uint8Array([0x00, 0x00, 0x00, 0x1c, 0x66, 0x74, 0x79, 0x70]); // mp4 ftyp
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => certifiedMinimaxProfile,
+        readApprovedProvenance: async () => mockLiveProvenance,
+        collectCertificationProvenance: async () => mockLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => realMinimaxTemplateJson,
+        hashWorkflow: () => templateSha256,
+        useCase,
+        outputReader: {
+          readOutput: async () => ({
+            bytes: videoBytes,
+            contentType: "video/mp4"
+          })
+        },
+        resolveApprovedCandidateMedia,
+        objectStorage,
+        stageReferenceImage,
+        productionManifestAssembler: mockAssembler,
+        hashBytes: hashBytesPort
+      });
+
+      const job: RenderJob = {
+        jobId: fixedJobId,
+        sceneId: fixedSceneId,
+        jobKind: "production",
+        workflowTemplate: "minimax-h3-720p-124f-i2v",
+        status: "rendering",
+        leaseToken: "lease-minimax-prod-001" as LeaseToken,
+        workerId: "worker-1",
+        leaseExpiresAt: new Date("2026-09-18T14:00:00.000Z"),
+        retryCount: 0,
+        maxRetries: 3,
+        errorTrace: null,
+        injectedPayload: {
+          prompt: fixedPrompt,
+          seed: fixedSeed,
+          frameCount: 124,
+          approvedCandidateId: candidateId
+        },
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      const result = await executor(job);
+      expect(result.manifestPayload).toBeDefined();
+
+      // 1. Verify candidate was uploaded to ComfyUI /upload/image
+      expect(recordedUploads).toHaveLength(1);
+      const upload = recordedUploads[0]!;
+      expect(upload.bytes).toEqual(candidateBytes);
+      expect(upload.filename).toContain(candidateSha256.slice(0, 16));
+
+      // 2. Verify /prompt received correctly injected native MiniMax-H3 nodes
+      expect(recordedPrompts).toHaveLength(1);
+      const recorded = recordedPrompts[0]!;
+      const workflow = recorded.workflow;
+
+      // Node 20 (LoadImage): reference image staging path injected
+      expect(workflow["20"]).toBeDefined();
+      expect(workflow["20"]!.class_type).toBe("LoadImage");
+      expect(workflow["20"]!.inputs.image).toBe(`conditioning/${upload.filename}`);
+
+      // Node 104 (MiniMaxH3ImageToVideo): prompt, length=124, first_frame=["20", 0]
+      expect(workflow["104"]).toBeDefined();
+      expect(workflow["104"]!.class_type).toBe("MiniMaxH3ImageToVideo");
+      expect(workflow["104"]!.inputs.prompt).toBe(fixedPrompt);
+      expect(workflow["104"]!.inputs.length).toBe(124);
+      expect(workflow["104"]!.inputs.first_frame).toEqual(["20", 0]);
+
+      // Node 15 (RandomNoise): noise_seed
+      expect(workflow["15"]).toBeDefined();
+      expect(workflow["15"]!.class_type).toBe("RandomNoise");
+      expect(workflow["15"]!.inputs.noise_seed).toBe(fixedSeed);
+
+      // 3. Verify manifest assembler received conditioning image and media
+      expect(assembledInputs).toHaveLength(1);
+      const manifestInput = assembledInputs[0]!;
+      expect(manifestInput.mediaObjects).toHaveLength(1);
+      expect(manifestInput.mediaObjects[0]!.contentType).toBe("video/mp4");
+      expect(manifestInput.conditioningImage?.injectionTarget).toEqual({
+        nodeId: "20",
+        classType: "LoadImage",
+        inputField: "image"
+      });
+
+      // 4. Verify cleanup occurred in ComfyUI input directory
+      expect(unlinkSpy).toHaveBeenCalledWith(
+        `/tmp/fake-comfyui/input/conditioning/${upload.filename}`
+      );
+    });
+
+    it("rejects invalid frameCount for MiniMax-H3 (must satisfy (frameCount - 5) % 17 === 0 and range [124, 124])", async () => {
+      const realMinimaxTemplatePath = resolve(
+        DEFAULT_REPO_ROOT,
+        "templates/minimax_h3_720p_i2v_124f_api.json"
+      );
+      const realMinimaxTemplateJson = await readFile(realMinimaxTemplatePath, "utf8");
+      const templateSha256 = createHash("sha256").update(realMinimaxTemplateJson).digest("hex");
+
+      const certifiedMinimaxProfile: CertificationProfile = {
+        id: "minimax-h3-720p-124f-i2v",
+        engine: "minimax_h3_i2v",
+        workflowPath: realMinimaxTemplatePath,
+        workflowRelativePath: "minimax_h3_720p_i2v_124f_api.json",
+        expectedWorkflowHash: templateSha256,
+        source: {
+          kind: "authored_from_spec",
+          uri: "https://github.com/Comfy-Org/MiniMax-H3",
+          revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+          license: "MiniMax Community License"
+        },
+        baseline: {
+          width: 1344,
+          height: 768,
+          frames: 124,
+          steps: 20,
+          approximateDurationSeconds: 5
+        },
+        minFreeDiskGb: 50,
+        runnerProfile: "dynamicvram-offload-v1",
+        models: [],
+        assertions: [],
+        renderProfileIdentity: {
+          key: "MINIMAX_H3_720P_5S_I2V_V1",
+          version: 1
+        }
+      };
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => certifiedMinimaxProfile,
+        readApprovedProvenance: async () => ({}),
+        collectCertificationProvenance: async () => ({}) as CertificationProvenanceReport,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => realMinimaxTemplateJson,
+        hashWorkflow: () => templateSha256
+      });
+
+      const baseJob: RenderJob = {
+        jobId: "job-bad-frame" as JobId,
+        sceneId: "scene-bad-frame" as SceneId,
+        jobKind: "production",
+        workflowTemplate: "minimax-h3-720p-124f-i2v",
+        status: "rendering",
+        leaseToken: "lease-token" as LeaseToken,
+        workerId: "worker-1",
+        leaseExpiresAt: new Date(),
+        retryCount: 0,
+        maxRetries: 3,
+        errorTrace: null,
+        injectedPayload: {
+          prompt: "test",
+          seed: 123,
+          frameCount: 97, // LTX frame count, invalid for MiniMax (97 % 17 == 12 != 5)
+          approvedCandidateId: "cand-1" as CandidateId
+        },
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      // 97 is invalid grid alignment for MiniMax
+      await expect(executor(baseJob)).rejects.toThrow(RenderJobPayloadValidationError);
+      await expect(executor(baseJob)).rejects.toThrow(
+        "injectedPayload.frameCount must satisfy (frameCount - 5) % 17 === 0"
+      );
+
+      // 107 is valid grid alignment ((107-5)%17 == 0) but outside supported range [124, 124]
+      const outOfRangeJob: RenderJob = {
+        ...baseJob,
+        injectedPayload: {
+          ...baseJob.injectedPayload,
+          frameCount: 107
+        }
+      };
+      await expect(executor(outOfRangeJob)).rejects.toThrow(RenderJobPayloadValidationError);
+      await expect(executor(outOfRangeJob)).rejects.toThrow(
+        "injectedPayload.frameCount must be a safe integer between 124 and 124"
+      );
+    });
   });
 });

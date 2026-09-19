@@ -358,7 +358,7 @@ export function parseWorkerRuntimeConfig(
     env.JOB_LEASE_DURATION_MS !== undefined || env.LEASE_DURATION_MS === undefined
       ? "JOB_LEASE_DURATION_MS"
       : "LEASE_DURATION_MS";
-  const leaseDurationMs = parsePositiveInteger(rawLease, leaseVarName, 300_000);
+  const leaseDurationMs = parsePositiveInteger(rawLease, leaseVarName, 900_000);
 
   if (heartbeatIntervalMs >= leaseDurationMs) {
     throw new WorkerConfigError(
@@ -405,7 +405,7 @@ export function parseWorkerRuntimeConfig(
   const comfyUiRenderTimeoutMs = parsePositiveInteger(
     env.COMFYUI_RENDER_TIMEOUT_MS,
     "COMFYUI_RENDER_TIMEOUT_MS",
-    300_000
+    900_000
   );
 
   const comfyUiUploadTimeoutMs = parsePositiveInteger(
