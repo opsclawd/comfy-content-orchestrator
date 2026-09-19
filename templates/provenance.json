@@ -216,6 +216,75 @@
         "key": "LTX_25_720P_5S_I2V_V1",
         "version": 1
       }
+    },
+    {
+      "id": "minimax-h3-720p-124f-i2v",
+      "engine": "minimax_h3_i2v",
+      "workflowRelativePath": "minimax_h3_720p_i2v_124f_api.json",
+      "expectedWorkflowHash": "4d1aafd575ceecb6146b1b96d5c5b13f759fea5eb47f28aabfd92965765c142e",
+      "source": {
+        "kind": "authored_from_spec",
+        "uri": "https://github.com/Comfy-Org/MiniMax-H3",
+        "revision": "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+        "license": "MiniMax Community License"
+      },
+      "baseline": {
+        "width": 1344,
+        "height": 768,
+        "frames": 124,
+        "steps": 20,
+        "approximateDurationSeconds": 5
+      },
+      "minFreeDiskGb": 50,
+      "runnerProfile": "dynamicvram-offload-v1",
+      "models": [
+        {
+          "category": "diffusion_models",
+          "relativePath": "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+        },
+        {
+          "category": "clip",
+          "relativePath": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+        },
+        {
+          "category": "vae",
+          "relativePath": "minimax_h3_video_vae_int8_convrot.safetensors"
+        },
+        {
+          "category": "vae",
+          "relativePath": "minimax_h3_audio_vae_fp32.safetensors"
+        }
+      ],
+      "assertions": [
+        {
+          "nodeId": "9",
+          "classType": "BasicScheduler",
+          "input": "steps",
+          "equals": 20
+        },
+        {
+          "nodeId": "104",
+          "classType": "MiniMaxH3ImageToVideo",
+          "input": "width",
+          "equals": 1344
+        },
+        {
+          "nodeId": "104",
+          "classType": "MiniMaxH3ImageToVideo",
+          "input": "height",
+          "equals": 768
+        },
+        {
+          "nodeId": "104",
+          "classType": "MiniMaxH3ImageToVideo",
+          "input": "length",
+          "equals": 124
+        }
+      ],
+      "renderProfileIdentity": {
+        "key": "MINIMAX_H3_720P_5S_I2V_V1",
+        "version": 1
+      }
     }
   ]
 }

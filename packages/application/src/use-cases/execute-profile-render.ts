@@ -13,7 +13,7 @@ export interface ProfileRenderIdentity {
   readonly profileId: string;
   readonly renderProfileKey: RenderProfileKey;
   readonly renderProfileVersion: 1;
-  readonly engine: "ltx_25" | "flux_schnell" | "ltx_25_i2v";
+  readonly engine: "ltx_25" | "flux_schnell" | "ltx_25_i2v" | "minimax_h3_i2v";
   readonly workflowSha256: string;
   readonly modelSha256: Readonly<Record<string, string>>;
   readonly runnerProfile: string;
@@ -91,7 +91,8 @@ function validateIdentity(identity: unknown): asserts identity is ProfileRenderI
   const validProfileKey =
     identity.renderProfileKey === "LTX_25_720P_5S_V1" ||
     identity.renderProfileKey === "FLUX_SCHNELL_DRAFT_V1" ||
-    identity.renderProfileKey === "LTX_25_720P_5S_I2V_V1";
+    identity.renderProfileKey === "LTX_25_720P_5S_I2V_V1" ||
+    identity.renderProfileKey === "MINIMAX_H3_720P_5S_I2V_V1";
   if (!validProfileKey) {
     throw new ProfileRenderExecutionError("invalid_input", "identity.renderProfileKey is invalid");
   }
@@ -101,7 +102,9 @@ function validateIdentity(identity: unknown): asserts identity is ProfileRenderI
       ? "ltx_25"
       : identity.renderProfileKey === "LTX_25_720P_5S_I2V_V1"
         ? "ltx_25_i2v"
-        : "flux_schnell";
+        : identity.renderProfileKey === "MINIMAX_H3_720P_5S_I2V_V1"
+          ? "minimax_h3_i2v"
+          : "flux_schnell";
   if (identity.engine !== expectedEngine) {
     throw new ProfileRenderExecutionError(
       "invalid_input",

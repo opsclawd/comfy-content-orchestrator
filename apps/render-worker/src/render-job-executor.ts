@@ -20,7 +20,11 @@ import {
 import {
   getProfileInjectionTopology,
   LTX_FRAME_STEP,
-  LTX_SUPPORTED_FRAME_RANGE
+  LTX_SUPPORTED_FRAME_RANGE,
+  MINIMAX_H3_FRAME_GRID_BASE,
+  MINIMAX_H3_FRAME_GRID_STEP,
+  MINIMAX_H3_SUPPORTED_FRAME_RANGE,
+  RENDER_PROFILE_ALIASES
 } from "@cco/contracts";
 import type { CandidateId, JobKind, RenderJob, SceneId } from "@cco/domain";
 import {
@@ -210,7 +214,12 @@ export interface RenderJobExecutorOptions {
 const CONTENT_TYPE_TO_EXTENSION: Readonly<Record<string, string>> = {
   "image/png": ".png",
   "image/jpeg": ".jpg",
-  "image/webp": ".webp"
+  "image/webp": ".webp",
+  "video/mp4": ".mp4",
+  "video/webm": ".webm",
+  "audio/wav": ".wav",
+  "audio/mpeg": ".mp3",
+  "audio/ogg": ".ogg"
 };
 
 export function buildDeterministicStagingFilename(
@@ -395,21 +404,41 @@ function validateInjectedPayload(
         "injectedPayload.frameCount must be a safe integer"
       );
     }
-    if ((raw.frameCount - 1) % LTX_FRAME_STEP !== 0) {
-      throw new RenderJobPayloadValidationError(
-        `injectedPayload.frameCount must satisfy (frameCount - 1) % ${LTX_FRAME_STEP} === 0`
-      );
-    }
-    if (
-      raw.frameCount < LTX_SUPPORTED_FRAME_RANGE[0] ||
-      raw.frameCount > LTX_SUPPORTED_FRAME_RANGE[1]
-    ) {
-      throw new RenderJobPayloadValidationError(
-        `injectedPayload.frameCount must be a safe integer between ${LTX_SUPPORTED_FRAME_RANGE[0]} and ${LTX_SUPPORTED_FRAME_RANGE[1]}`
-      );
+    const profileKey = profile?.renderProfileIdentity?.key ?? profile?.id ?? profile?.engine;
+    const isMinimax =
+      profileKey === "MINIMAX_H3_720P_5S_I2V_V1" ||
+      (typeof profileKey === "string" && profileKey.toLowerCase().includes("minimax"));
+
+    if (isMinimax) {
+      if ((raw.frameCount - MINIMAX_H3_FRAME_GRID_BASE) % MINIMAX_H3_FRAME_GRID_STEP !== 0) {
+        throw new RenderJobPayloadValidationError(
+          `injectedPayload.frameCount must satisfy (frameCount - ${MINIMAX_H3_FRAME_GRID_BASE}) % ${MINIMAX_H3_FRAME_GRID_STEP} === 0`
+        );
+      }
+      if (
+        raw.frameCount < MINIMAX_H3_SUPPORTED_FRAME_RANGE[0] ||
+        raw.frameCount > MINIMAX_H3_SUPPORTED_FRAME_RANGE[1]
+      ) {
+        throw new RenderJobPayloadValidationError(
+          `injectedPayload.frameCount must be a safe integer between ${MINIMAX_H3_SUPPORTED_FRAME_RANGE[0]} and ${MINIMAX_H3_SUPPORTED_FRAME_RANGE[1]}`
+        );
+      }
+    } else {
+      if ((raw.frameCount - 1) % LTX_FRAME_STEP !== 0) {
+        throw new RenderJobPayloadValidationError(
+          `injectedPayload.frameCount must satisfy (frameCount - 1) % ${LTX_FRAME_STEP} === 0`
+        );
+      }
+      if (
+        raw.frameCount < LTX_SUPPORTED_FRAME_RANGE[0] ||
+        raw.frameCount > LTX_SUPPORTED_FRAME_RANGE[1]
+      ) {
+        throw new RenderJobPayloadValidationError(
+          `injectedPayload.frameCount must be a safe integer between ${LTX_SUPPORTED_FRAME_RANGE[0]} and ${LTX_SUPPORTED_FRAME_RANGE[1]}`
+        );
+      }
     }
     if (profile) {
-      const profileKey = profile.renderProfileIdentity?.key ?? profile.id ?? profile.engine;
       const topology = getProfileInjectionTopology(profileKey);
       if (profile.renderProfileIdentity && !topology) {
         throw new MissingProfileTopologyError(profile.id, profile.renderProfileIdentity.key);
@@ -725,7 +754,19 @@ export function createCertifiedRenderJobExecutor(
     try {
       profile = await loadCertificationProfileFn(manifestPath, job.workflowTemplate);
     } catch (cause) {
-      throw new MissingCertifiedProfileError(job.workflowTemplate, { cause });
+      const resolvedKey = RENDER_PROFILE_ALIASES[job.workflowTemplate];
+      if (
+        resolvedKey === "MINIMAX_H3_720P_5S_I2V_V1" &&
+        job.workflowTemplate !== "minimax-h3-720p-124f-i2v"
+      ) {
+        try {
+          profile = await loadCertificationProfileFn(manifestPath, "minimax-h3-720p-124f-i2v");
+        } catch {
+          throw new MissingCertifiedProfileError(job.workflowTemplate, { cause });
+        }
+      } else {
+        throw new MissingCertifiedProfileError(job.workflowTemplate, { cause });
+      }
     }
     if (!profile.renderProfileIdentity) {
       throw new PreflightError(
@@ -929,7 +970,7 @@ export function createCertifiedRenderJobExecutor(
         profileId: profile.id,
         renderProfileKey: profile.renderProfileIdentity.key,
         renderProfileVersion: profile.renderProfileIdentity.version,
-        engine: profile.engine as "ltx_25" | "flux_schnell" | "ltx_25_i2v",
+        engine: profile.engine as "ltx_25" | "flux_schnell" | "ltx_25_i2v" | "minimax_h3_i2v",
         workflowSha256: recheckedWorkflowHash,
         modelSha256: liveProvenance.renderProfileProvenance.modelHashes,
         runnerProfile: profile.runnerProfile,

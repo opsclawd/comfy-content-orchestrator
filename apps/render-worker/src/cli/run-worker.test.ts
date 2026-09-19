@@ -215,11 +215,11 @@ describe("run-worker CLI", () => {
       expect(config.workerId).toBe("render-worker-default");
       expect(config.pollIntervalMs).toBe(1000);
       expect(config.heartbeatIntervalMs).toBe(30000);
-      expect(config.leaseDurationMs).toBe(300000);
+      expect(config.leaseDurationMs).toBe(900000);
       expect(config.telemetryBackoffMs).toBeUndefined();
       expect(config.admissionBackoffMs).toBeUndefined();
       expect(config.allowedJobKinds).toBeUndefined();
-      expect(config.comfyUiRenderTimeoutMs).toBe(300000);
+      expect(config.comfyUiRenderTimeoutMs).toBe(900000);
       expect(config.comfyUiUploadTimeoutMs).toBe(30000);
       expect(config.gpuIndex).toBe(0);
       expect(config.gpuLeasePath).toContain("comfy-content-orchestrator-gpu-0.lock");

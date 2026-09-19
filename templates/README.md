@@ -55,6 +55,22 @@ This directory contains the version-controlled, source-gated Gold Master ComfyUI
   - `models/clip/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors`
   - `models/vae/ltx-2.5-video-vae-conv-bf16.safetensors`
 
+### 4. `minimax-h3-720p-124f-i2v` (`templates/minimax_h3_720p_i2v_124f_api.json`)
+- **Source Kind:** Authored from specification (`authored_from_spec`).
+- **Source URI:** `https://github.com/Comfy-Org/MiniMax-H3`
+- **Revision:** `7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1`
+- **Redistribution Basis & License:** MiniMax Community License.
+- **Workflow Format:** Exact ComfyUI API object map targeting 1344x768 resolution, 124 frames (~5 seconds at 24 fps), and 20 DiT sampling steps with reference image conditioning.
+- **Canonical SHA-256:** `4d1aafd575ceecb6146b1b96d5c5b13f759fea5eb47f28aabfd92965765c142e`
+- **Runner Profile:** `dynamicvram-offload-v1` (requiring DynamicVRAM / workflow-managed model offloading).
+- **Disk Space Requirement:** Minimum 50 GB free disk space reservation (`minFreeDiskGb: 50`).
+- **Render Profile Identity:** `MINIMAX_H3_720P_5S_I2V_V1` (v1).
+- **Referenced Models:**
+  - `models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors`
+  - `models/clip/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`
+  - `models/vae/minimax_h3_video_vae_int8_convrot.safetensors`
+  - `models/vae/minimax_h3_audio_vae_fp32.safetensors`
+
 ---
 
 ## Canonical JSON Hashing and Immutability
@@ -83,6 +99,11 @@ The models listed in `templates/provenance.json` correspond to the following rel
 | `ltx-25-720p-97f-i2v` | `diffusion_models` | `ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors` | `models/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors` |
 | `ltx-25-720p-97f-i2v` | `clip` | `gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors` | `models/clip/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors` |
 | `ltx-25-720p-97f-i2v` | `vae` | `ltx-2.5-video-vae-conv-bf16.safetensors` | `models/vae/ltx-2.5-video-vae-conv-bf16.safetensors` |
+| `minimax-h3-720p-124f-i2v` | `diffusion_models` | `minimax_h3_ref2va_pruned_int8_convrot.safetensors` | `models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors` |
+| `minimax-h3-720p-124f-i2v` | `clip` | `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` | `models/clip/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` |
+| `minimax-h3-720p-124f-i2v` | `vae` | `minimax_h3_video_vae_int8_convrot.safetensors` | `models/vae/minimax_h3_video_vae_int8_convrot.safetensors` |
+| `minimax-h3-720p-124f-i2v` | `vae` | `minimax_h3_audio_vae_fp32.safetensors` | `models/vae/minimax_h3_audio_vae_fp32.safetensors` |
+
 
 ---
 
