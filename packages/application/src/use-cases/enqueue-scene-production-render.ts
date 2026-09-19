@@ -12,7 +12,9 @@ import type { UnitOfWork, UnitOfWorkContext } from "../ports/unit-of-work.js";
 import { deriveProductionSeed } from "./derive-production-seed.js";
 import { TransactionalJobEnqueuerUnavailableError } from "./job-queue-errors.js";
 import {
+  isMiniMaxEngineOrProfile,
   mapDurationMsToLtxFrameCount,
+  mapDurationMsToMiniMaxH3FrameCount,
   UnsupportedProductionDurationError
 } from "./map-production-duration.js";
 import {
@@ -26,6 +28,9 @@ export const LTX_TEXT_PRODUCTION_RENDER_PROFILE_KEY = "LTX_25_720P_5S_V1";
 export const LTX_I2V_PRODUCTION_WORKFLOW_TEMPLATE = "ltx-25-720p-97f-i2v";
 export const LTX_I2V_PRODUCTION_RENDER_PROFILE_KEY = "LTX_25_720P_5S_I2V_V1";
 
+export const MINIMAX_H3_I2V_PRODUCTION_WORKFLOW_TEMPLATE = "minimax-h3-720p-124f-i2v";
+export const MINIMAX_H3_I2V_PRODUCTION_RENDER_PROFILE_KEY = "MINIMAX_H3_720P_5S_I2V_V1";
+
 export const PRODUCTION_WORKFLOW_TEMPLATE = LTX_I2V_PRODUCTION_WORKFLOW_TEMPLATE;
 export const PRODUCTION_RENDER_PROFILE_KEY = LTX_I2V_PRODUCTION_RENDER_PROFILE_KEY;
 export const LTX_PRODUCTION_WORKFLOW_TEMPLATE = PRODUCTION_WORKFLOW_TEMPLATE;
@@ -35,7 +40,14 @@ export const ACCEPTED_PRODUCTION_ENGINE_PROFILE_IDS: ReadonlySet<string> = new S
   "LTX_25_720P_5S_V1",
   "ltx_25",
   "LTX_25_720P_5S_I2V_V1",
-  "ltx_25_i2v"
+  "ltx_25_i2v",
+  "MINIMAX_H3_720P_5S_I2V_V1",
+  "minimax_h3_720p_5s_i2v_v1",
+  "minimax-h3-720p-124f-i2v",
+  "minimax-h3-720p-5s-i2v-v1",
+  "minimax_h3_i2v",
+  "minimax_h3",
+  "minimax-h3"
 ]);
 
 export interface EnqueueSceneProductionRenderOptions {
@@ -100,7 +112,12 @@ export class EnqueueSceneProductionRenderUseCase {
       throw new UnrepresentableProductionConfigurationError(scene.id, unrepresentable);
     }
 
-    const durationResult = mapDurationMsToLtxFrameCount(snapshot.configuration.durationMs);
+    const isMiniMax = isMiniMaxEngineOrProfile(snapshot.configuration.engineProfileId);
+
+    const durationResult = isMiniMax
+      ? mapDurationMsToMiniMaxH3FrameCount(snapshot.configuration.durationMs)
+      : mapDurationMsToLtxFrameCount(snapshot.configuration.durationMs);
+
     if (!durationResult.ok) {
       throw new UnsupportedProductionDurationError(
         snapshot.configuration.durationMs,
@@ -108,8 +125,12 @@ export class EnqueueSceneProductionRenderUseCase {
       );
     }
 
-    const workflowTemplate = LTX_I2V_PRODUCTION_WORKFLOW_TEMPLATE;
-    const renderProfileKey = LTX_I2V_PRODUCTION_RENDER_PROFILE_KEY;
+    const workflowTemplate = isMiniMax
+      ? MINIMAX_H3_I2V_PRODUCTION_WORKFLOW_TEMPLATE
+      : LTX_I2V_PRODUCTION_WORKFLOW_TEMPLATE;
+    const renderProfileKey = isMiniMax
+      ? MINIMAX_H3_I2V_PRODUCTION_RENDER_PROFILE_KEY
+      : LTX_I2V_PRODUCTION_RENDER_PROFILE_KEY;
 
     const topology = getProfileInjectionTopology(renderProfileKey);
     if (!topology) {

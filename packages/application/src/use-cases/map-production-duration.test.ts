@@ -1,12 +1,23 @@
 import { describe, expect, it } from "vitest";
 import {
   mapDurationMsToLtxFrameCount,
+  mapDurationMsToMiniMaxH3FrameCount,
   UnsupportedProductionDurationError,
   LTX_CANONICAL_DURATION_MS,
+  MINIMAX_H3_CANONICAL_DURATION_MS,
   isLtxRenderableDuration,
-  snapToRenderableLtxDurationMs
+  isMiniMaxH3RenderableDuration,
+  snapToRenderableLtxDurationMs,
+  snapToRenderableMiniMaxH3DurationMs,
+  isMiniMaxEngineOrProfile,
+  mapProductionDuration,
+  isRenderableProductionDuration,
+  snapToRenderableProductionDurationMs
 } from "./map-production-duration.js";
-import { LTX_FRAME_QUANTIZATION_TOLERANCE_MS } from "@cco/contracts";
+import {
+  LTX_FRAME_QUANTIZATION_TOLERANCE_MS,
+  MINIMAX_H3_FRAME_QUANTIZATION_TOLERANCE_MS
+} from "@cco/contracts";
 
 describe("mapDurationMsToLtxFrameCount", () => {
   it("maps 4041.67ms (97 frames at 24fps) to 97 frames successfully", () => {
@@ -142,6 +153,140 @@ describe("mapDurationMsToLtxFrameCount", () => {
       expect(snapToRenderableLtxDurationMs(3500)).toBe(4000);
       expect(snapToRenderableLtxDurationMs(0)).toBe(4000);
       expect(snapToRenderableLtxDurationMs(-100)).toBe(4000);
+    });
+  });
+
+  describe("mapDurationMsToMiniMaxH3FrameCount", () => {
+    it("maps 5166.67ms (124 frames at 24fps) to 124 frames successfully", () => {
+      const durationMs = (124 / 24) * 1000;
+      const result = mapDurationMsToMiniMaxH3FrameCount(durationMs);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.frameCount).toBe(124);
+        expect(result.achievedDurationMs).toBeCloseTo(5166.67, 1);
+        expect(Math.abs(result.achievedDurationMs - durationMs)).toBeCloseTo(0, 5);
+      }
+    });
+
+    it("maps canonical 5000ms target to 124 frames within quantization tolerance", () => {
+      const result = mapDurationMsToMiniMaxH3FrameCount(5000);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.frameCount).toBe(124);
+        expect(result.achievedDurationMs).toBeCloseTo(5166.67, 1);
+        const deviation = Math.abs(result.achievedDurationMs - 5000);
+        expect(deviation).toBeCloseTo(166.67, 1);
+        expect(deviation).toBeLessThanOrEqual(MINIMAX_H3_FRAME_QUANTIZATION_TOLERANCE_MS);
+      }
+    });
+
+    it("fails with 'out_of_range' for uncertified durations outside [124, 124]", () => {
+      expect(mapDurationMsToMiniMaxH3FrameCount(2500)).toEqual({
+        ok: false,
+        reason: "out_of_range"
+      });
+      expect(mapDurationMsToMiniMaxH3FrameCount(4000)).toEqual({
+        ok: false,
+        reason: "out_of_range"
+      });
+      expect(mapDurationMsToMiniMaxH3FrameCount(6000)).toEqual({
+        ok: false,
+        reason: "out_of_range"
+      });
+    });
+
+    it("fails closed with 'out_of_range' on negative, zero, or non-finite duration", () => {
+      expect(mapDurationMsToMiniMaxH3FrameCount(0)).toEqual({ ok: false, reason: "out_of_range" });
+      expect(mapDurationMsToMiniMaxH3FrameCount(-1000)).toEqual({
+        ok: false,
+        reason: "out_of_range"
+      });
+      expect(mapDurationMsToMiniMaxH3FrameCount(Number.NaN)).toEqual({
+        ok: false,
+        reason: "out_of_range"
+      });
+      expect(mapDurationMsToMiniMaxH3FrameCount(Number.POSITIVE_INFINITY)).toEqual({
+        ok: false,
+        reason: "out_of_range"
+      });
+    });
+
+    it("fails with 'exceeds_quantization_tolerance' when deviation exceeds custom tight tolerance", () => {
+      // 5000ms has ~166.67ms deviation from 5166.67ms. With 50ms tolerance, it fails
+      const result = mapDurationMsToMiniMaxH3FrameCount(5000, 50);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toBe("exceeds_quantization_tolerance");
+      }
+    });
+  });
+
+  describe("MiniMax-H3 duration helpers", () => {
+    it("exports MINIMAX_H3_CANONICAL_DURATION_MS as 5000", () => {
+      expect(MINIMAX_H3_CANONICAL_DURATION_MS).toBe(5000);
+    });
+
+    it("isMiniMaxH3RenderableDuration correctly identifies renderable durations", () => {
+      expect(isMiniMaxH3RenderableDuration(5000)).toBe(true);
+      expect(isMiniMaxH3RenderableDuration(5166.67)).toBe(true);
+      expect(isMiniMaxH3RenderableDuration(4900)).toBe(true);
+      expect(isMiniMaxH3RenderableDuration(4000)).toBe(false);
+      expect(isMiniMaxH3RenderableDuration(2500)).toBe(false);
+      expect(isMiniMaxH3RenderableDuration(0)).toBe(false);
+    });
+
+    it("snapToRenderableMiniMaxH3DurationMs preserves valid durations and snaps invalid durations to 5000", () => {
+      expect(snapToRenderableMiniMaxH3DurationMs(5000)).toBe(5000);
+      expect(snapToRenderableMiniMaxH3DurationMs(5167)).toBe(5167);
+      expect(snapToRenderableMiniMaxH3DurationMs(4900)).toBe(4900);
+      // Unrenderable durations snap to canonical 5000ms
+      expect(snapToRenderableMiniMaxH3DurationMs(4000)).toBe(5000);
+      expect(snapToRenderableMiniMaxH3DurationMs(2500)).toBe(5000);
+      expect(snapToRenderableMiniMaxH3DurationMs(0)).toBe(5000);
+      expect(snapToRenderableMiniMaxH3DurationMs(-100)).toBe(5000);
+    });
+  });
+
+  describe("Unified duration mapper and predicates", () => {
+    it("isMiniMaxEngineOrProfile identifies MiniMax-H3 engine/profile variants", () => {
+      expect(isMiniMaxEngineOrProfile("minimax_h3")).toBe(true);
+      expect(isMiniMaxEngineOrProfile("minimax_h3_i2v")).toBe(true);
+      expect(isMiniMaxEngineOrProfile("MINIMAX_H3_720P_5S_I2V_V1")).toBe(true);
+      expect(isMiniMaxEngineOrProfile("minimax-h3-720p-124f-i2v")).toBe(true);
+      expect(isMiniMaxEngineOrProfile("minimax-h3-720p-5s-i2v-v1")).toBe(true);
+
+      expect(isMiniMaxEngineOrProfile("ltx_25")).toBe(false);
+      expect(isMiniMaxEngineOrProfile("LTX_25_720P_5S_I2V_V1")).toBe(false);
+      expect(isMiniMaxEngineOrProfile(undefined)).toBe(false);
+    });
+
+    it("mapProductionDuration routes to correct engine mapper", () => {
+      // MiniMax engine routing
+      const minimaxResult = mapProductionDuration(5000, { engine: "minimax_h3_i2v" });
+      expect(minimaxResult.ok).toBe(true);
+      if (minimaxResult.ok) {
+        expect(minimaxResult.frameCount).toBe(124);
+      }
+
+      // LTX engine routing (default)
+      const ltxResult = mapProductionDuration(4000);
+      expect(ltxResult.ok).toBe(true);
+      if (ltxResult.ok) {
+        expect(ltxResult.frameCount).toBe(97);
+      }
+    });
+
+    it("isRenderableProductionDuration correctly validates duration per engine", () => {
+      expect(isRenderableProductionDuration(5000, { engine: "minimax_h3_i2v" })).toBe(true);
+      expect(isRenderableProductionDuration(4000, { engine: "minimax_h3_i2v" })).toBe(false);
+
+      expect(isRenderableProductionDuration(4000, { engine: "ltx_25_i2v" })).toBe(true);
+      expect(isRenderableProductionDuration(5000, { engine: "ltx_25_i2v" })).toBe(false);
+    });
+
+    it("snapToRenderableProductionDurationMs snaps to respective canonical duration", () => {
+      expect(snapToRenderableProductionDurationMs(2000, { engine: "minimax_h3_i2v" })).toBe(5000);
+      expect(snapToRenderableProductionDurationMs(2000, { engine: "ltx_25_i2v" })).toBe(4000);
     });
   });
 });

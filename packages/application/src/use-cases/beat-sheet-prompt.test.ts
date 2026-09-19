@@ -82,4 +82,55 @@ describe("buildBeatSheetPlanningPrompt", () => {
       "sum of beat durations (5000ms) does not match targetTotalDurationMs (6000ms)"
     );
   });
+
+  it("guides planning model towards 5000ms duration and photorealistic visual style for MiniMax-H3", () => {
+    const prompt = buildBeatSheetPlanningPrompt({
+      brief,
+      campaignId,
+      totalScenes: 2,
+      targetTotalDurationMs: 10000,
+      resolvedReferenceAssets: [],
+      targetEngine: "minimax_h3"
+    });
+
+    expect(prompt.systemPrompt).toContain("each beat should target ~5000 ms");
+    expect(prompt.systemPrompt).toContain(
+      "matching the certified 124-frame MiniMax-H3 video engine"
+    );
+    expect(prompt.systemPrompt).toContain(
+      "Visual style guidelines for MiniMax-H3 photorealistic synthesis:"
+    );
+    expect(prompt.systemPrompt).toContain(
+      "Prioritize authentic human anatomy, natural skin micro-textures"
+    );
+    expect(prompt.systemPrompt).toContain("Avoid artificial CGI descriptors");
+  });
+
+  it("guides planning model towards 4000ms duration for LTX-Video", () => {
+    const prompt = buildBeatSheetPlanningPrompt({
+      brief,
+      campaignId,
+      totalScenes: 3,
+      targetTotalDurationMs: 12000,
+      resolvedReferenceAssets: [],
+      targetEngine: "ltx"
+    });
+
+    expect(prompt.systemPrompt).toContain("each beat should target ~4000 ms");
+    expect(prompt.systemPrompt).toContain("matching the certified 97-frame video engine");
+    expect(prompt.systemPrompt).not.toContain("Visual style guidelines for MiniMax-H3");
+  });
+
+  it("infers MiniMax-H3 guidance when average per-scene duration is >= 4500ms", () => {
+    const prompt = buildBeatSheetPlanningPrompt({
+      brief,
+      campaignId,
+      totalScenes: 1,
+      targetTotalDurationMs: 5000,
+      resolvedReferenceAssets: []
+    });
+
+    expect(prompt.systemPrompt).toContain("each beat should target ~5000 ms");
+    expect(prompt.systemPrompt).toContain("MiniMax-H3");
+  });
 });

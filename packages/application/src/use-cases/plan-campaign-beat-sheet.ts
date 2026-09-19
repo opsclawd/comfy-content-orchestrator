@@ -41,6 +41,8 @@ export interface PlanCampaignBeatSheetInput {
   readonly targetTotalDurationMs: number;
   readonly candidateReferenceAssetIds?: readonly ReferenceAssetId[] | undefined;
   readonly overallTimeoutMs?: number | undefined;
+  readonly targetEngine?: string | undefined;
+  readonly engineProfileId?: string | undefined;
 }
 
 export class PlanCampaignBeatSheetUseCase {
@@ -121,7 +123,9 @@ export class PlanCampaignBeatSheetUseCase {
               targetTotalDurationMs: input.targetTotalDurationMs,
               resolvedReferenceAssets,
               maskSensitiveData: policy.sensitiveDataMasking,
-              correctiveFeedback
+              correctiveFeedback,
+              targetEngine: input.targetEngine,
+              engineProfileId: input.engineProfileId
             }),
           parseAndValidate: (rawText: string) => {
             const parsed = parsePlanningResponse(rawText);

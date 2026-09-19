@@ -13,6 +13,8 @@ import {
   MIN_SCENE_COUNT,
   MAX_SCENE_COUNT,
   TARGET_SECONDS_PER_SCENE,
+  MINIMAX_H3_TARGET_SECONDS_PER_SCENE,
+  LTX_TARGET_SECONDS_PER_SCENE,
   MIN_SCENE_DURATION_MS,
   MAX_SCENE_DURATION_MS,
   resolveSceneCount
@@ -30,6 +32,8 @@ describe("scene-count-policy", () => {
     expect(MIN_SCENE_DURATION_MS).toBe(CONTRACT_MIN_SCENE_DURATION_MS);
     expect(MAX_SCENE_DURATION_MS).toBe(CONTRACT_MAX_SCENE_DURATION_MS);
     expect(TARGET_SECONDS_PER_SCENE).toBe(5);
+    expect(MINIMAX_H3_TARGET_SECONDS_PER_SCENE).toBe(5);
+    expect(LTX_TARGET_SECONDS_PER_SCENE).toBe(4);
   });
 
   describe("duration validation", () => {
@@ -114,6 +118,32 @@ describe("scene-count-policy", () => {
 
     it("derives N = 60 for 300_000ms", () => {
       expect(resolveSceneCount({ targetTotalDurationMs: 300_000 })).toBe(60);
+    });
+
+    it("respects targetSecondsPerScene when provided", () => {
+      // 12_000ms with targetSecondsPerScene: 4 (LTX) -> round(12 / 4) = 3
+      expect(
+        resolveSceneCount({
+          targetTotalDurationMs: 12_000,
+          targetSecondsPerScene: LTX_TARGET_SECONDS_PER_SCENE
+        })
+      ).toBe(3);
+
+      // 15_000ms with targetSecondsPerScene: 5 (MiniMax-H3) -> round(15 / 5) = 3
+      expect(
+        resolveSceneCount({
+          targetTotalDurationMs: 15_000,
+          targetSecondsPerScene: MINIMAX_H3_TARGET_SECONDS_PER_SCENE
+        })
+      ).toBe(3);
+
+      // 5_000ms with targetSecondsPerScene: 5 (MiniMax-H3) -> round(5 / 5) = 1
+      expect(
+        resolveSceneCount({
+          targetTotalDurationMs: 5_000,
+          targetSecondsPerScene: MINIMAX_H3_TARGET_SECONDS_PER_SCENE
+        })
+      ).toBe(1);
     });
   });
 

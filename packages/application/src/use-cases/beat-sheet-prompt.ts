@@ -1,6 +1,7 @@
 import type { CreativeBrief } from "@cco/contracts";
 import type { CampaignId, ReferenceAsset } from "@cco/domain";
 import type { PlanningModelRequest } from "../ports/planning-model-client-port.js";
+import { isMiniMaxEngineOrProfile } from "./map-production-duration.js";
 import { maskCampaignIdentifier } from "./planning-prompt.js";
 
 export interface BuildBeatSheetPlanningPromptInput {
@@ -11,6 +12,8 @@ export interface BuildBeatSheetPlanningPromptInput {
   readonly resolvedReferenceAssets: readonly ReferenceAsset[];
   readonly maskSensitiveData?: boolean | undefined;
   readonly correctiveFeedback?: string | undefined;
+  readonly targetEngine?: string | undefined;
+  readonly engineProfileId?: string | undefined;
 }
 
 export function buildBeatSheetPlanningPrompt(
@@ -21,6 +24,25 @@ export function buildBeatSheetPlanningPrompt(
     : input.campaignId;
 
   const assetIds = input.resolvedReferenceAssets.map((asset) => asset.id as string);
+
+  const isMiniMax =
+    isMiniMaxEngineOrProfile(input.targetEngine) ||
+    isMiniMaxEngineOrProfile(input.engineProfileId) ||
+    Math.round(input.targetTotalDurationMs / input.totalScenes) >= 4500;
+
+  const durationGuidance = isMiniMax
+    ? "  - targetDurationMs: positive integer duration in milliseconds for this beat. For video synthesis, each beat should target ~5000 ms (5.0 seconds, matching the certified 124-frame MiniMax-H3 video engine)."
+    : "  - targetDurationMs: positive integer duration in milliseconds for this beat. For video synthesis, each beat should target ~4000 ms (4.0 seconds, matching the certified 97-frame video engine).";
+
+  const visualStyleGuidance = isMiniMax
+    ? [
+        "",
+        "Visual style guidelines for MiniMax-H3 photorealistic synthesis:",
+        "- Prioritize authentic human anatomy, natural skin micro-textures, physical weight, and lifelike movement.",
+        "- Emphasize cinematic lighting, specular reflections, depth of field, and natural fabric/hair physics.",
+        "- Avoid artificial CGI descriptors (e.g. 'unreal engine', '3D render'); specify concrete photographic properties and camera staging."
+      ]
+    : [];
 
   const systemPrompt = [
     "You are a specialized creative planning assistant for video synthesis.",
@@ -37,8 +59,9 @@ export function buildBeatSheetPlanningPrompt(
     "    - targetPlatform: optional string.",
     "    - visualStyle: optional string.",
     "    - requirements: optional array of non-empty strings.",
-    "  - targetDurationMs: positive integer duration in milliseconds for this beat. For video synthesis, each beat should target ~4000 ms (4.0 seconds, matching the certified 97-frame video engine).",
-    `- The sum of all beat targetDurationMs values MUST equal exactly ${input.targetTotalDurationMs} ms.`
+    durationGuidance,
+    `- The sum of all beat targetDurationMs values MUST equal exactly ${input.targetTotalDurationMs} ms.`,
+    ...visualStyleGuidance
   ].join("\n");
 
   const briefSections: string[] = [
