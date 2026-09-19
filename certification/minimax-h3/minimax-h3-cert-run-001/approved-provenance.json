@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "profileId": "minimax-h3-720p-124f-i2v",
+  "workflow": {
+    "sha256": "4d1aafd575ceecb6146b1b96d5c5b13f759fea5eb47f28aabfd92965765c142e",
+    "source": {
+      "kind": "validated_host_export",
+      "uri": "https://github.com/Comfy-Org/MiniMax-H3",
+      "revision": "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+      "license": "MiniMax Community License"
+    }
+  },
+  "renderProfileProvenance": {
+    "key": "MINIMAX_H3_720P_5S_I2V_V1",
+    "version": 1,
+    "engine": "minimax_h3_i2v",
+    "frames": 124,
+    "steps": 20,
+    "workflowHash": "4d1aafd575ceecb6146b1b96d5c5b13f759fea5eb47f28aabfd92965765c142e",
+    "modelHashes": {
+      "models/clip/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
+      "models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+      "models/vae/minimax_h3_audio_vae_fp32.safetensors": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48",
+      "models/vae/minimax_h3_video_vae_int8_convrot.safetensors": "52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e"
+    }
+  }
+}

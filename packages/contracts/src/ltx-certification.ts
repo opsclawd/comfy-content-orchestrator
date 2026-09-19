@@ -152,12 +152,27 @@ export const FluxSchnellWorkloadIdentitySchema = z.object({
   comfyUiCommit: gitCommitHashSchema,
   customNodes: z.array(CustomNodeIdentitySchema)
 });
-export type FluxSchnellWorkloadIdentity = z.infer<typeof FluxSchnellWorkloadIdentitySchema>;
+export const MinimaxH3WorkloadIdentitySchema = z.object({
+  profileId: z.literal("minimax-h3-720p-124f-i2v"),
+  renderProfileKey: z.literal("MINIMAX_H3_720P_5S_I2V_V1"),
+  renderProfileVersion: z.literal(1),
+  engine: z.literal("minimax_h3_i2v"),
+  width: z.literal(1344),
+  height: z.literal(768),
+  frames: z.literal(124),
+  steps: z.literal(20),
+  workflowSha256: sha256HashSchema,
+  modelSha256: z.record(z.string().min(1), sha256HashSchema),
+  comfyUiCommit: gitCommitHashSchema,
+  customNodes: z.array(CustomNodeIdentitySchema)
+});
+export type MinimaxH3WorkloadIdentity = z.infer<typeof MinimaxH3WorkloadIdentitySchema>;
 
 export const CertificationWorkloadIdentitySchema = z.discriminatedUnion("engine", [
   LtxWorkloadIdentitySchema,
   LtxI2vWorkloadIdentitySchema,
-  FluxSchnellWorkloadIdentitySchema
+  FluxSchnellWorkloadIdentitySchema,
+  MinimaxH3WorkloadIdentitySchema
 ]);
 export type CertificationWorkloadIdentity = z.infer<typeof CertificationWorkloadIdentitySchema>;
 

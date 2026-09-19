@@ -37,6 +37,27 @@ This directory contains frozen, machine-readable JSON render profile configurati
 - **Measured Post-Unload Free VRAM:** `23,449 MB` (used: 602 MB)
 - **Gate Evaluation:** All 5 gates passed (status: `PASSED`)
 
+### `MINIMAX_H3_720P_5S_I2V_V1` (`config/render-profiles/MINIMAX_H3_720P_5S_I2V_V1.json`)
+- **Key & Version:** `MINIMAX_H3_720P_5S_I2V_V1` (v1)
+- **Engine:** `minimax_h3_i2v`
+- **Output:** 1344x768 (768p/720p class), 124 frames (5.17s @ 24 fps), 20 steps
+- **Workflow SHA-256:** `4d1aafd575ceecb6146b1b96d5c5b13f759fea5eb47f28aabfd92965765c142e` (from `templates/provenance.json` & `minimax-h3-cert-run-001`, ComfyUI commit `55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc`)
+- **Model Set & Exact SHA-256 Hashes:** (from `certification/minimax-h3/minimax-h3-cert-run-001/result.json`):
+  - `models/clip/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`: `35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6` (15,687,142,551 bytes)
+  - `models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors`: `9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779` (20,970,379,616 bytes)
+  - `models/vae/minimax_h3_audio_vae_fp32.safetensors`: `8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48` (605,254,808 bytes)
+  - `models/vae/minimax_h3_video_vae_int8_convrot.safetensors`: `52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e` (2,811,065,184 bytes)
+  - **Measured Total Disk Footprint:** `40.073842159 GB` (40,073,842,159 bytes total)
+- **Runner Profile:** `dynamicvram-offload-v1`
+- **Measured Peak VRAM:** `23,950 MB` (allocatable VRAM: 24,051 MB / 99.6%)
+- **Measured Duration:** `395,641 ms` (limit: 600,000 ms)
+- **Measured Peak Host RAM:** `30,351 MB`
+- **Measured Peak Process RSS:** `27,930 MB`
+- **Measured Swap Used:** `8 MB`
+- **Measured Major Page Faults:** `351`
+- **Measured Post-Unload Free VRAM:** `23,435 MB` (used: 616 MB)
+- **Gate Evaluation:** All 5 gates passed (status: `PASSED`)
+
 ### Measured Empirical Envelope & Source Run Traceability
 
 Every field in the profile is directly attributable to physical measurements on the Trinidad host:

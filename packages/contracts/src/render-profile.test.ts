@@ -10,6 +10,7 @@ import {
   RenderProfileKeySchema,
   LTX_25_720P_5S_V1_PROFILE,
   LTX_25_720P_5S_I2V_V1_PROFILE,
+  MINIMAX_H3_720P_5S_I2V_V1_PROFILE,
   MINIMAX_H3_720P_5S_I2V_V1_INJECTION_TOPOLOGY,
   getProfileInjectionTopology,
   LTX_FPS,
@@ -199,6 +200,34 @@ describe("RenderProfileSchema", () => {
     const certJson = JSON.parse(certContent);
 
     expect(LTX_25_720P_5S_I2V_V1_PROFILE.modelHashes).toEqual(certJson.identity.modelSha256);
+  });
+
+  it("validates that config/render-profiles/MINIMAX_H3_720P_5S_I2V_V1.json matches schema and constant", async () => {
+    const jsonPath = resolve(
+      fileURLToPath(
+        new URL("../../../config/render-profiles/MINIMAX_H3_720P_5S_I2V_V1.json", import.meta.url)
+      )
+    );
+    const content = await readFile(jsonPath, "utf8");
+    const parsedJson = JSON.parse(content);
+
+    const validated = MinimaxH3I2vRenderProfileSchema.parse(parsedJson);
+    expect(validated).toEqual(MINIMAX_H3_720P_5S_I2V_V1_PROFILE);
+  });
+
+  it("verifies frozen MiniMax-H3 modelHashes strictly match host-validated minimax-h3-cert-run-001 artifact", async () => {
+    const certPath = resolve(
+      fileURLToPath(
+        new URL(
+          "../../../certification/minimax-h3/minimax-h3-cert-run-001/result.json",
+          import.meta.url
+        )
+      )
+    );
+    const certContent = await readFile(certPath, "utf8");
+    const certJson = JSON.parse(certContent);
+
+    expect(MINIMAX_H3_720P_5S_I2V_V1_PROFILE.modelHashes).toEqual(certJson.identity.modelSha256);
   });
 
   it("accepts a compliant FLUX profile", () => {

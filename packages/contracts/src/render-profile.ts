@@ -170,6 +170,37 @@ export const LTX_25_720P_5S_I2V_V1_PROFILE: LtxI2vRenderProfile = Object.freeze(
   requiresModelOffloading: true
 });
 
+export const MINIMAX_H3_720P_5S_I2V_V1_PROFILE: MinimaxH3I2vRenderProfile = Object.freeze({
+  key: "MINIMAX_H3_720P_5S_I2V_V1",
+  version: 1,
+  engine: "minimax_h3_i2v",
+  workflowHash: "4d1aafd575ceecb6146b1b96d5c5b13f759fea5eb47f28aabfd92965765c142e",
+  modelHashes: Object.freeze({
+    "models/clip/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors":
+      "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
+    "models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors":
+      "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+    "models/vae/minimax_h3_audio_vae_fp32.safetensors":
+      "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48",
+    "models/vae/minimax_h3_video_vae_int8_convrot.safetensors":
+      "52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e"
+  }),
+  frames: 124,
+  steps: 20,
+  runnerProfile: "dynamicvram-offload-v1",
+  measuredPeakVramMb: 23950,
+  measuredTotalDurationMs: 395641,
+  measuredSamplingDurationMs: null,
+  measuredDiskFootprintGb: 40.073842159,
+  measuredPeakHostRamMb: 30351,
+  measuredPeakProcessRssMb: 27930,
+  measuredSwapUsedMb: 8,
+  measuredMajorPageFaults: 351,
+  minFreeDiskGb: 50,
+  maxConcurrentGpuJobs: 1,
+  requiresModelOffloading: true
+});
+
 export const LTX_FPS = 24;
 export const LTX_FRAME_STEP = 8;
 export const LTX_SUPPORTED_FRAME_RANGE = [97, 97] as const;
@@ -291,7 +322,8 @@ export function getProfileInjectionTopology(
     normalized === "minimax_h3_720p_5s_i2v_v1" ||
     normalized === "minimax-h3-720p-5s-i2v-v1" ||
     normalized === "minimax_h3_i2v" ||
-    normalized === "minimax_h3"
+    normalized === "minimax_h3" ||
+    normalized === "minimax-h3-720p-124f-i2v"
   ) {
     return MINIMAX_H3_720P_5S_I2V_V1_INJECTION_TOPOLOGY;
   }

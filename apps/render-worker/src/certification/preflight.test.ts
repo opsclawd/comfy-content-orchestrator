@@ -1300,5 +1300,135 @@ describe("apps/render-worker/src/certification/preflight", () => {
         })
       ).toThrow(PreflightError);
     });
+
+    it("verifies and accepts a valid minimax_h3_i2v profile", () => {
+      const minimaxProfile: CertificationProfile = {
+        id: "minimax-h3-720p-124f-i2v",
+        engine: "minimax_h3_i2v",
+        workflowPath: "/home/gary/workflows/minimax_h3_720p_i2v_124f_api.json",
+        workflowRelativePath: "minimax_h3_720p_i2v_124f_api.json",
+        expectedWorkflowHash: "c".repeat(64),
+        source: {
+          kind: "validated_host_export",
+          uri: "https://github.com/Comfy-Org/MiniMax-H3",
+          revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+          license: "MiniMax Community License"
+        },
+        baseline: {
+          width: 1344,
+          height: 768,
+          frames: 124,
+          steps: 20,
+          approximateDurationSeconds: 5
+        },
+        minFreeDiskGb: 50,
+        runnerProfile: "dynamicvram-offload-v1",
+        models: [
+          {
+            category: "diffusion_models",
+            relativePath: "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+          }
+        ],
+        assertions: [
+          { nodeId: "9", classType: "BasicScheduler", input: "steps", equals: 20 },
+          { nodeId: "104", classType: "MiniMaxH3ImageToVideo", input: "width", equals: 1344 },
+          { nodeId: "104", classType: "MiniMaxH3ImageToVideo", input: "height", equals: 768 },
+          { nodeId: "104", classType: "MiniMaxH3ImageToVideo", input: "length", equals: 124 }
+        ],
+        renderProfileIdentity: {
+          key: "MINIMAX_H3_720P_5S_I2V_V1",
+          version: 1
+        }
+      };
+
+      const approved = {
+        version: 1,
+        profileId: "minimax-h3-720p-124f-i2v",
+        workflow: {
+          sha256: "c".repeat(64),
+          source: {
+            kind: "validated_host_export",
+            revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+            uri: "https://github.com/Comfy-Org/MiniMax-H3",
+            license: "MiniMax Community License"
+          }
+        },
+        renderProfileProvenance: {
+          key: "MINIMAX_H3_720P_5S_I2V_V1",
+          version: 1,
+          engine: "minimax_h3_i2v",
+          frames: 124,
+          steps: 20,
+          workflowHash: "c".repeat(64),
+          modelHashes: {
+            "models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors": "d".repeat(
+              64
+            )
+          }
+        }
+      };
+
+      const live: CertificationProvenanceReport = {
+        version: 1,
+        profileId: "minimax-h3-720p-124f-i2v",
+        generatedAt: "2026-09-19T00:00:00.000Z",
+        workflow: {
+          relativePath: "minimax_h3_720p_i2v_124f_api.json",
+          sha256: "c".repeat(64),
+          source: {
+            kind: "authored_from_spec",
+            revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+            uri: "https://github.com/Comfy-Org/MiniMax-H3",
+            license: "MiniMax Community License"
+          }
+        },
+        models: [
+          {
+            category: "diffusion_models",
+            relativePath: "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+            key: "models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+            bytes: 1000,
+            sha256: "d".repeat(64)
+          }
+        ],
+        git: {
+          comfyUiCommit: "e".repeat(40),
+          customNodes: []
+        },
+        disk: {
+          modelFootprintBytes: 1000,
+          availableBytes: 100_000_000_000,
+          requiredFreeBytes: 50_000_000_000,
+          modelFootprintGb: 1,
+          availableGb: 100,
+          minFreeDiskGb: 50,
+          passes: true
+        },
+        renderProfileProvenance: {
+          key: "MINIMAX_H3_720P_5S_I2V_V1",
+          version: 1,
+          engine: "minimax_h3_i2v",
+          frames: 124,
+          steps: 20,
+          workflowHash: "c".repeat(64),
+          runnerProfile: "dynamicvram-offload-v1",
+          measuredDiskFootprintGb: 1,
+          minFreeDiskGb: 50,
+          modelHashes: {
+            "models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors": "d".repeat(
+              64
+            )
+          }
+        }
+      };
+
+      expect(() =>
+        verifyGoldMasterProvenance({
+          approved,
+          live,
+          profile: minimaxProfile
+        })
+      ).not.toThrow();
+    });
   });
 });

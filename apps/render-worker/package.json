@@ -20,6 +20,7 @@
     "typecheck": "tsc --build",
     "certify": "tsx src/cli/certify.ts",
     "certify:flux": "tsx src/cli/certify.ts --profile flux-schnell-draft",
+    "certify:minimax-h3": "tsx src/cli/certify.ts --profile minimax-h3-720p-124f-i2v",
     "render": "tsx src/cli/render.ts",
     "worker": "tsx src/cli/run-worker.ts",
     "assembler": "tsx src/cli/run-delivery-assembler.ts",
