@@ -273,6 +273,12 @@ if [[ "${DRY_RUN}" == false ]]; then
 }
 EOF
   echo "Wrote manifest to ${MANIFEST_FILE}"
+
+  # Ensure text encoder is accessible in models/clip as well as models/text_encoders
+  if [[ -d "${MODELS_DIR}/clip" && -f "${MODELS_DIR}/${MINIMAX_H3_TEXT_ENCODER_FILE}" ]]; then
+    TEXT_ENCODER_BASENAME="$(basename "${MINIMAX_H3_TEXT_ENCODER_FILE}")"
+    ln -sf "${MODELS_DIR}/${MINIMAX_H3_TEXT_ENCODER_FILE}" "${MODELS_DIR}/clip/${TEXT_ENCODER_BASENAME}" 2>/dev/null || true
+  fi
 fi
 
 echo "MiniMax-H3 model provisioning complete in ${MODELS_DIR}."

@@ -1043,6 +1043,28 @@ describe("certify CLI", () => {
       }
     });
 
+    it("defaults outputRoot to certification/minimax-h3 for minimax-h3 profiles", () => {
+      const parsed = parseCertifyCliArgs([
+        "--comfyui-dir",
+        "/custom/comfyui",
+        "--comfyui-url",
+        "http://127.0.0.1:8188",
+        "--comfyui-pid",
+        "1234",
+        "--gold-master-provenance",
+        "/custom/gold.json",
+        "--run-id",
+        "run-100",
+        "--profile",
+        "minimax-h3-720p-124f-i2v"
+      ]);
+
+      expect(parsed.kind).toBe("run");
+      if (parsed.kind === "run") {
+        expect(parsed.options.outputRoot).toMatch(/certification\/minimax-h3$/);
+      }
+    });
+
     it("handles --flag=value format and pnpm argument separator --", () => {
       const parsed = parseCertifyCliArgs([
         "--",

@@ -193,6 +193,29 @@ describe("CertificationArtifactSchema", () => {
     }
   };
 
+  const validMinimaxH3PassedFixture: CertificationArtifact = {
+    ...validPassedFixture,
+    identity: {
+      profileId: "minimax-h3-720p-124f-i2v",
+      renderProfileKey: "MINIMAX_H3_720P_5S_I2V_V1",
+      renderProfileVersion: 1,
+      engine: "minimax_h3_i2v",
+      width: 1344,
+      height: 768,
+      frames: 124,
+      steps: 20,
+      workflowSha256: "a".repeat(64),
+      modelSha256: {
+        diffusion: "b".repeat(64),
+        clip: "c".repeat(64),
+        vae: "d".repeat(64),
+        audioVae: "e".repeat(64)
+      },
+      comfyUiCommit: "e".repeat(40),
+      customNodes: []
+    }
+  };
+
   it("accepts a fully compliant passed LTX certification artifact", () => {
     const result = CertificationArtifactSchema.safeParse(validPassedFixture);
     expect(result.success).toBe(true);
@@ -200,6 +223,11 @@ describe("CertificationArtifactSchema", () => {
 
   it("accepts a fully compliant passed FLUX certification artifact", () => {
     const result = CertificationArtifactSchema.safeParse(validFluxPassedFixture);
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts a fully compliant passed MiniMax-H3 certification artifact", () => {
+    const result = CertificationArtifactSchema.safeParse(validMinimaxH3PassedFixture);
     expect(result.success).toBe(true);
   });
 

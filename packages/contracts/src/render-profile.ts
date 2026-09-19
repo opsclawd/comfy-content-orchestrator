@@ -291,7 +291,8 @@ export function getProfileInjectionTopology(
     normalized === "minimax_h3_720p_5s_i2v_v1" ||
     normalized === "minimax-h3-720p-5s-i2v-v1" ||
     normalized === "minimax_h3_i2v" ||
-    normalized === "minimax_h3"
+    normalized === "minimax_h3" ||
+    normalized === "minimax-h3-720p-124f-i2v"
   ) {
     return MINIMAX_H3_720P_5S_I2V_V1_INJECTION_TOPOLOGY;
   }

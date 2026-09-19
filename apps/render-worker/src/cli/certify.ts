@@ -309,7 +309,9 @@ export function parseCertifyCliArgs(
     outputRoot ??
     (profileId === "flux-schnell-draft"
       ? resolve(DEFAULT_REPO_ROOT, "certification/flux-schnell")
-      : resolve(DEFAULT_REPO_ROOT, "certification/ltx-25"));
+      : profileId.startsWith("minimax-h3")
+        ? resolve(DEFAULT_REPO_ROOT, "certification/minimax-h3")
+        : resolve(DEFAULT_REPO_ROOT, "certification/ltx-25"));
 
   return Object.freeze({
     kind: "run" as const,
@@ -579,6 +581,22 @@ export async function runCertificationCli(
       comfyUiCommit: liveProvenance.git.comfyUiCommit,
       customNodes
     };
+  } else if (profile.engine === "minimax_h3_i2v") {
+    workloadIdentity = {
+      profileId: "minimax-h3-720p-124f-i2v",
+      renderProfileKey: (profile.renderProfileIdentity?.key ??
+        "MINIMAX_H3_720P_5S_I2V_V1") as "MINIMAX_H3_720P_5S_I2V_V1",
+      renderProfileVersion: 1,
+      engine: "minimax_h3_i2v",
+      width: 1344,
+      height: 768,
+      frames: 124,
+      steps: 20,
+      workflowSha256: liveProvenance.workflow.sha256,
+      modelSha256: modelSha256Map,
+      comfyUiCommit: liveProvenance.git.comfyUiCommit,
+      customNodes
+    };
   } else {
     stderr(`[certify] Unsupported certification profile engine: "${profile.engine}"`);
     return 1;
@@ -656,14 +674,15 @@ export async function runCertificationCli(
     workflowToSubmit = workflowCopy;
   }
 
+  const renderTimeoutMs = profile.engine === "minimax_h3_i2v" ? 900_000 : 300_000;
   const renderEngine = dependencies?.createRenderEngine
     ? dependencies.createRenderEngine({
         baseUrl: comfyUiUrl,
-        timeoutMs: 300_000
+        timeoutMs: renderTimeoutMs
       })
     : new ComfyUiRenderEngineAdapter({
         baseUrl: comfyUiUrl,
-        timeoutMs: 300_000
+        timeoutMs: renderTimeoutMs
       });
 
   const telemetrySampler = dependencies?.createTelemetrySampler
@@ -680,7 +699,12 @@ export async function runCertificationCli(
         now
       });
 
-  const maxDurationMs = profile.engine === "flux_schnell" ? 30000 : 55000;
+  const maxDurationMs =
+    profile.engine === "flux_schnell"
+      ? 30000
+      : profile.engine === "minimax_h3_i2v"
+        ? 600000
+        : 55000;
 
   // Phase 4: Execute certification run
   let artifact: CertificationArtifact;

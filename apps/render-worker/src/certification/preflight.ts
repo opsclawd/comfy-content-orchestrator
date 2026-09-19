@@ -91,6 +91,11 @@ function verifyProfileWorkload(profile: CertificationProfile): void {
   if (profile.id === "flux-schnell-draft" && profile.engine !== "flux_schnell") {
     throw new PreflightError(`Invalid profile engine "${profile.engine}": expected "flux_schnell"`);
   }
+  if (profile.id === "minimax-h3-720p-124f-i2v" && profile.engine !== "minimax_h3_i2v") {
+    throw new PreflightError(
+      `Invalid profile engine "${profile.engine}": expected "minimax_h3_i2v"`
+    );
+  }
 
   if (profile.engine === "ltx_25") {
     if (profile.id !== "ltx-25-720p-97f") {
@@ -264,6 +269,67 @@ function verifyProfileWorkload(profile: CertificationProfile): void {
         `Profile "${profile.id}" is missing required workflow assertion for height = 1024`
       );
     }
+  } else if (profile.engine === "minimax_h3_i2v") {
+    if (profile.id !== "minimax-h3-720p-124f-i2v") {
+      throw new PreflightError(
+        `Invalid profile ID "${profile.id}": expected "minimax-h3-720p-124f-i2v"`
+      );
+    }
+    if (profile.baseline.width !== 1344) {
+      throw new PreflightError(
+        `Invalid baseline width ${String(profile.baseline.width)}: expected 1344`
+      );
+    }
+    if (profile.baseline.height !== 768) {
+      throw new PreflightError(
+        `Invalid baseline height ${String(profile.baseline.height)}: expected 768`
+      );
+    }
+    if (profile.baseline.frames !== 124) {
+      throw new PreflightError(
+        `Invalid baseline frames ${String(profile.baseline.frames)}: expected 124`
+      );
+    }
+    if (profile.baseline.steps !== 20) {
+      throw new PreflightError(
+        `Invalid baseline steps ${String(profile.baseline.steps)}: expected 20`
+      );
+    }
+    if (
+      profile.renderProfileIdentity === null ||
+      profile.renderProfileIdentity.key !== "MINIMAX_H3_720P_5S_I2V_V1" ||
+      profile.renderProfileIdentity.version !== 1
+    ) {
+      throw new PreflightError(
+        `Invalid renderProfileIdentity: expected key "MINIMAX_H3_720P_5S_I2V_V1" version 1`
+      );
+    }
+    const assertions = profile.assertions;
+    if (!Array.isArray(assertions) || assertions.length === 0) {
+      throw new PreflightError(`Profile "${profile.id}" must define workflow assertions`);
+    }
+    if (!assertions.find((a) => a.input === "steps" && a.equals === 20)) {
+      throw new PreflightError(
+        `Profile "${profile.id}" is missing required workflow assertion for steps = 20`
+      );
+    }
+    if (!assertions.find((a) => a.input === "width" && a.equals === 1344)) {
+      throw new PreflightError(
+        `Profile "${profile.id}" is missing required workflow assertion for width = 1344`
+      );
+    }
+    if (!assertions.find((a) => a.input === "height" && a.equals === 768)) {
+      throw new PreflightError(
+        `Profile "${profile.id}" is missing required workflow assertion for height = 768`
+      );
+    }
+    if (
+      !assertions.find((a) => (a.input === "length" || a.input === "frames") && a.equals === 124)
+    ) {
+      throw new PreflightError(
+        `Profile "${profile.id}" is missing required workflow assertion for frames/length = 124`
+      );
+    }
   }
 }
 
@@ -333,7 +399,8 @@ function validateApprovedReportEntry(
   if (
     (rpp.key !== "LTX_25_720P_5S_V1" &&
       rpp.key !== "LTX_25_720P_5S_I2V_V1" &&
-      rpp.key !== "FLUX_SCHNELL_DRAFT_V1") ||
+      rpp.key !== "FLUX_SCHNELL_DRAFT_V1" &&
+      rpp.key !== "MINIMAX_H3_720P_5S_I2V_V1") ||
     rpp.version !== 1
   ) {
     throw new PreflightError(
