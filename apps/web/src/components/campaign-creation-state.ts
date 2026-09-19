@@ -24,6 +24,7 @@ export interface CampaignCreationFormValues {
   readonly sceneCountOverride: string | number;
   readonly briefDescription: string;
   readonly briefVisualStyle: string;
+  readonly targetEngineProfileId?: string | undefined;
 }
 
 export const INITIAL_CAMPAIGN_FORM_VALUES: CampaignCreationFormValues = {
@@ -34,7 +35,8 @@ export const INITIAL_CAMPAIGN_FORM_VALUES: CampaignCreationFormValues = {
   sceneCountMode: "auto",
   sceneCountOverride: "",
   briefDescription: "",
-  briefVisualStyle: ""
+  briefVisualStyle: "",
+  targetEngineProfileId: "MINIMAX_H3_720P_5S_I2V_V1"
 };
 
 export type CampaignCreationPhase =
@@ -167,6 +169,8 @@ export function mapZodIssuesToFields(issues: readonly z.ZodIssue[]): Record<stri
       errors.briefDescription = errors.briefDescription ?? issue.message;
     } else if (pathStr === "brief.visualStyle") {
       errors.briefVisualStyle = errors.briefVisualStyle ?? issue.message;
+    } else if (pathStr === "targetEngineProfileId") {
+      errors.targetEngineProfileId = errors.targetEngineProfileId ?? issue.message;
     } else {
       errors[pathStr || "form"] = errors[pathStr || "form"] ?? issue.message;
     }
@@ -195,8 +199,7 @@ export function buildRequestFromForm(
   const rawSeconds =
     typeof values.durationSeconds === "number"
       ? values.durationSeconds
-      : Number(String(values.durationSeconds).trim());
-
+      : Number(values.durationSeconds);
   const targetTotalDurationMs = Number.isFinite(rawSeconds) ? Math.round(rawSeconds * 1000) : NaN;
 
   let sceneCountOverride: number | undefined = undefined;
@@ -222,6 +225,12 @@ export function buildRequestFromForm(
     ...(visualStyle !== undefined ? { visualStyle } : {})
   };
 
+  const targetEngine =
+    typeof values.targetEngineProfileId === "string" &&
+    values.targetEngineProfileId.trim().length > 0
+      ? values.targetEngineProfileId.trim()
+      : undefined;
+
   const candidate = {
     idempotencyKey,
     clientId,
@@ -229,6 +238,7 @@ export function buildRequestFromForm(
     targetTotalDurationMs,
     ...(targetPlatform !== undefined ? { targetPlatform } : {}),
     ...(values.sceneCountMode === "custom" ? { sceneCountOverride } : {}),
+    ...(targetEngine !== undefined ? { targetEngineProfileId: targetEngine } : {}),
     brief: briefCandidate
   };
 

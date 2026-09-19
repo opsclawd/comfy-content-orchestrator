@@ -38,7 +38,8 @@ describe("CampaignCreationForm Component", () => {
     sceneCountMode: "auto",
     sceneCountOverride: "",
     briefDescription: "High energy summer apparel advertisement",
-    briefVisualStyle: "golden hour cinematic"
+    briefVisualStyle: "golden hour cinematic",
+    targetEngineProfileId: "MINIMAX_H3_720P_5S_I2V_V1"
   };
 
   const sampleSuccessResponse: PlanCampaignStoryboardResponse = {
@@ -83,7 +84,7 @@ describe("CampaignCreationForm Component", () => {
     vi.clearAllMocks();
   });
 
-  it("renders the creation form in idle state with Auto scene count mode selected by default", () => {
+  it("renders the creation form in idle state with Auto scene count mode and MiniMax-H3 selected by default", () => {
     const html = renderToStaticMarkup(<CampaignCreationForm initialValues={validValues} />);
 
     expect(html).toContain('data-testid="campaign-creation-surface"');
@@ -99,6 +100,15 @@ describe("CampaignCreationForm Component", () => {
     expect(html).toContain('data-testid="scene-count-auto-hint"');
     expect(html).toContain("Scene count will be determined automatically");
     expect(html).not.toContain('data-testid="scene-count-override-input"');
+    expect(html).toContain('data-testid="engine-selection-group"');
+    expect(html).toContain('data-testid="engine-card-minimax-h3"');
+    expect(html).toContain('data-testid="engine-radio-minimax-h3"');
+    expect(html).toContain('data-testid="engine-card-ltx-25"');
+    expect(html).toContain('data-testid="engine-radio-ltx-25"');
+    expect(html).toContain("MiniMax-H3");
+    expect(html).toContain("Photorealistic Hero");
+    expect(html).toContain("LTX-Video 2.5");
+    expect(html).toContain("Fast Animatics");
     expect(html).toContain('data-testid="submit-campaign-button"');
     expect(html).toContain("Create &amp; Plan Campaign");
   });
@@ -373,6 +383,28 @@ describe("CampaignCreationForm Component", () => {
       expect(calledRequest.clientId).toBe(validValues.clientId);
       expect(calledRequest.targetTotalDurationMs).toBe(15000);
       expect(calledRequest.brief.description).toBe(validValues.briefDescription);
+      expect(calledRequest.targetEngineProfileId).toBe("MINIMAX_H3_720P_5S_I2V_V1");
+    });
+
+    it("allows selecting LTX-Video 2.5 engine profile radio card and submitting with chosen profile", async () => {
+      const mockSubmit = vi.fn().mockResolvedValue(sampleSuccessResponse);
+      render(<CampaignCreationForm submitCampaign={mockSubmit} initialValues={validValues} />);
+
+      const ltxRadio = screen.getByTestId("engine-radio-ltx-25");
+      fireEvent.click(ltxRadio);
+
+      const submitBtn = screen.getByTestId("submit-campaign-button");
+      fireEvent.click(submitBtn);
+
+      await waitFor(() => {
+        expect(mockSubmit).toHaveBeenCalledTimes(1);
+      });
+
+      const firstCall = mockSubmit.mock.calls[0];
+      expect(firstCall).toBeDefined();
+      if (!firstCall) return;
+      const calledRequest = firstCall[0];
+      expect(calledRequest.targetEngineProfileId).toBe("LTX_25_720P_5S_V1");
     });
 
     it("allows selecting Custom mode, entering integer, and submitting with sceneCountOverride", async () => {

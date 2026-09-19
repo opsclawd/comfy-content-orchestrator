@@ -766,6 +766,29 @@ describe("Campaign and Scene Creation Contracts", () => {
       expect(parsed).toEqual(payload);
     });
 
+    it("parses valid request with targetEngineProfileId", () => {
+      const payloadMinimax = {
+        ...validBase,
+        targetEngineProfileId: "MINIMAX_H3_720P_5S_I2V_V1"
+      };
+      expect(PlanCampaignStoryboardRequestSchema.parse(payloadMinimax)).toEqual(payloadMinimax);
+
+      const payloadLtx = {
+        ...validBase,
+        targetEngineProfileId: "LTX_25_720P_5S_V1"
+      };
+      expect(PlanCampaignStoryboardRequestSchema.parse(payloadLtx)).toEqual(payloadLtx);
+    });
+
+    it("rejects invalid targetEngineProfileId not in RenderProfileKeySchema", () => {
+      expect(() =>
+        PlanCampaignStoryboardRequestSchema.parse({
+          ...validBase,
+          targetEngineProfileId: "INVALID_ENGINE_PROFILE"
+        })
+      ).toThrow();
+    });
+
     it("rejects non-UUID idempotencyKey or clientId", () => {
       expect(() =>
         PlanCampaignStoryboardRequestSchema.parse({

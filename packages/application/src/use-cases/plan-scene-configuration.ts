@@ -39,6 +39,7 @@ export interface PlanSceneConfigurationInput {
   readonly maxDurationMs?: number | undefined;
   readonly targetDurationMs?: number | undefined;
   readonly overallTimeoutMs?: number | undefined;
+  readonly targetEngineProfileId?: string | undefined;
 }
 
 export class PlanSceneConfigurationUseCase {
@@ -85,17 +86,25 @@ export class PlanSceneConfigurationUseCase {
               maskSensitiveData: policy.sensitiveDataMasking,
               maxDurationMs: input.maxDurationMs,
               targetDurationMs: input.targetDurationMs,
-              correctiveFeedback
+              correctiveFeedback,
+              targetEngineProfileId: input.targetEngineProfileId
             }),
           parseAndValidate: (rawText: string): SceneConfiguration => {
             const parsed = parsePlanningResponse(rawText);
             if (!parsed.ok) {
               throw new SceneConfigurationValidationError(parsed.reason);
             }
-            return validateSceneConfiguration(parsed.value, resolvedReferenceAssets, {
+            const config = validateSceneConfiguration(parsed.value, resolvedReferenceAssets, {
               maxDurationMs: input.maxDurationMs,
               targetDurationMs: input.targetDurationMs
             });
+            if (input.targetEngineProfileId !== undefined) {
+              return {
+                ...config,
+                engineProfileId: input.targetEngineProfileId
+              };
+            }
+            return config;
           }
         };
       }

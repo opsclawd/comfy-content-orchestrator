@@ -1,4 +1,4 @@
-import type { CreativeBrief } from "@cco/contracts";
+import type { CreativeBrief, RenderProfileKey } from "@cco/contracts";
 import type { CampaignShellRecord, ReferenceAssetId, SceneSnapshot } from "@cco/domain";
 import type { UnitOfWork } from "../ports/unit-of-work.js";
 import { computeCampaignRequestHash } from "./campaign-request-hash.js";
@@ -31,6 +31,7 @@ export interface PlanCampaignStoryboardInput {
   readonly brief: CreativeBrief;
   readonly candidateReferenceAssetIds?: readonly ReferenceAssetId[] | readonly string[] | undefined;
   readonly overallTimeoutMs?: number | undefined;
+  readonly targetEngineProfileId?: RenderProfileKey | undefined;
 }
 
 export interface PlanCampaignStoryboardResult {
@@ -93,7 +94,8 @@ export class PlanCampaignStoryboardUseCase {
       sceneCountOverride: input.sceneCountOverride,
       brief: input.brief,
       candidateReferenceAssetIds: input.candidateReferenceAssetIds,
-      initialStatus: "planning"
+      initialStatus: "planning",
+      targetEngineProfileId: input.targetEngineProfileId
     });
 
     const orchestrationHash = await computeCampaignRequestHash({
@@ -103,7 +105,8 @@ export class PlanCampaignStoryboardUseCase {
       targetTotalDurationMs: input.targetTotalDurationMs,
       sceneCountOverride: input.sceneCountOverride,
       brief: input.brief,
-      candidateReferenceAssetIds: input.candidateReferenceAssetIds
+      candidateReferenceAssetIds: input.candidateReferenceAssetIds as readonly string[] | undefined,
+      targetEngineProfileId: input.targetEngineProfileId
     });
 
     if (isIdempotentReplay) {
@@ -200,7 +203,9 @@ export class PlanCampaignStoryboardUseCase {
         targetTotalDurationMs: campaign.targetTotalDurationMs,
         candidateReferenceAssetIds: input.candidateReferenceAssetIds as
           readonly ReferenceAssetId[] | undefined,
-        overallTimeoutMs: input.overallTimeoutMs
+        overallTimeoutMs: input.overallTimeoutMs,
+        targetEngine: input.targetEngineProfileId,
+        engineProfileId: input.targetEngineProfileId
       });
 
       // 2. Resolve client externalProcessingPolicy
@@ -230,7 +235,8 @@ export class PlanCampaignStoryboardUseCase {
             []) as readonly ReferenceAssetId[],
           externalProcessingPolicy,
           targetDurationMs: beat.targetDurationMs,
-          overallTimeoutMs: input.overallTimeoutMs
+          overallTimeoutMs: input.overallTimeoutMs,
+          targetEngineProfileId: input.targetEngineProfileId
         });
         orderedConfigs.push({ ordinal: beat.ordinal, configuration });
       }
