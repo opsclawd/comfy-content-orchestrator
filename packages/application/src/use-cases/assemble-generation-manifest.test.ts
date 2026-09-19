@@ -1721,5 +1721,88 @@ describe("AssembleGenerationManifest use case", () => {
         new IncompleteManifestError("executionConditioning.injectionTarget")
       );
     });
+
+    it("extracts sampling parameters from modular ComfyUI nodes (RandomNoise, BasicScheduler, KSamplerSelect, BasicGuider)", async () => {
+      const assembler = new AssembleGenerationManifest(createTestDeps());
+      const minimaxProfile: ManifestSourceProfile = {
+        ...fakeProfile,
+        id: "MINIMAX_H3_720P_5S_I2V_V1",
+        engine: "minimax_h3_i2v",
+        baseline: {
+          width: 1344,
+          height: 768,
+          frames: 124,
+          steps: 20,
+          approximateDurationSeconds: 5.166667
+        }
+      };
+
+      const modularWorkflow: RenderWorkflow = {
+        "14": {
+          class_type: "SamplerCustomAdvanced",
+          inputs: {
+            noise: ["15", 0],
+            guider: ["16", 0],
+            sampler: ["17", 0],
+            sigmas: ["9", 0],
+            latent_image: ["104", 1]
+          }
+        },
+        "15": {
+          class_type: "RandomNoise",
+          inputs: {
+            noise_seed: 888222
+          }
+        },
+        "16": {
+          class_type: "BasicGuider",
+          inputs: {}
+        },
+        "17": {
+          class_type: "KSamplerSelect",
+          inputs: {
+            sampler_name: "res_multistep"
+          }
+        },
+        "9": {
+          class_type: "BasicScheduler",
+          inputs: {
+            scheduler: "simple",
+            steps: 20,
+            denoise: 1
+          }
+        },
+        "20": {
+          class_type: "LoadImage",
+          inputs: {
+            image: "reference.png"
+          }
+        },
+        "104": {
+          class_type: "MiniMaxH3ImageToVideo",
+          inputs: {
+            prompt: "Positive prompt",
+            length: 124,
+            first_frame: ["20", 0]
+          }
+        }
+      };
+
+      const input = createDefaultInput({
+        profile: minimaxProfile,
+        workflow: modularWorkflow
+      });
+
+      const result = await assembler.assemble(input);
+      const sampling = result.manifestPayload.sampling as Record<string, unknown>;
+      expect(sampling.seed).toBe(888222);
+      expect(sampling.steps).toBe(20);
+      expect(sampling.sampler).toBe("res_multistep");
+      expect(sampling.scheduler).toBe("simple");
+      expect(sampling.denoise).toBe(1);
+      expect(sampling.cfg).toBe(1.0);
+      expect(result.manifestPayload.frameCount).toBe(124);
+      expect(result.manifestPayload.fps).toBe(24);
+    });
   });
 });

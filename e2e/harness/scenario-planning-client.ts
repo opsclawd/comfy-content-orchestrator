@@ -11,6 +11,7 @@ export class ScenarioPlanningModelClient implements PlanningModelClientPort {
   failCountRemaining = 0;
   shouldThrow = false;
   targetSceneCountOverride?: number | undefined;
+  targetEngineProfileId?: string | undefined;
   emittedBeats: Array<{ ordinal: number; brief: CreativeBrief; targetDurationMs: number }> = [];
 
   constructor(readonly providerName: "Anthropic" | "OpenAI" = "Anthropic") {}
@@ -21,6 +22,7 @@ export class ScenarioPlanningModelClient implements PlanningModelClientPort {
     this.failCountRemaining = 0;
     this.shouldThrow = false;
     this.targetSceneCountOverride = undefined;
+    this.targetEngineProfileId = undefined;
     this.emittedBeats = [];
   }
 
@@ -87,7 +89,7 @@ export class ScenarioPlanningModelClient implements PlanningModelClientPort {
       rawText: JSON.stringify({
         prompt: `Scene visual prompt ${this.sceneConfigInvocations}`,
         referenceIds: [],
-        engineProfileId: "LTX_25_720P_5S_V1",
+        engineProfileId: this.targetEngineProfileId ?? "LTX_25_720P_5S_V1",
         durationMs,
         loraConfigurationId: null
       })
