@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   ComponentLicenseEntrySchema,
@@ -143,5 +146,25 @@ describe("ComponentLicenseRegistry contracts", () => {
     expect(entryWithExt.revenueThresholdUsd).toBe(1000000);
     expect(entryWithExt.attributionRequired).toBe(true);
     expect(entryWithExt.approver).toBe("legal@godzspeed.ai");
+  });
+
+  it("validates config/component-license-registry.json contains approved MINIMAX_H3_720P_5S_I2V_V1 entry", () => {
+    const registryPath = resolve(
+      fileURLToPath(new URL("../../../config/component-license-registry.json", import.meta.url))
+    );
+    const content = readFileSync(registryPath, "utf-8");
+    const registry = ComponentLicenseRegistrySchema.parse(JSON.parse(content));
+
+    const minimaxEntry = registry.entries.find(
+      (e) => e.componentId === "MINIMAX_H3_720P_5S_I2V_V1"
+    );
+    expect(minimaxEntry).toBeDefined();
+    expect(minimaxEntry?.status).toBe("approved");
+    expect(minimaxEntry?.componentType).toBe("model");
+    expect(minimaxEntry?.licenseId).toBe("MiniMax Community License");
+
+    const aliasEntry = registry.entries.find((e) => e.componentId === "minimax-h3-720p-5s-i2v-v1");
+    expect(aliasEntry).toBeDefined();
+    expect(aliasEntry?.status).toBe("approved");
   });
 });

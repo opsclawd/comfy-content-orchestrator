@@ -7,7 +7,8 @@ const sha256HashSchema = z
 export const RenderProfileKeySchema = z.enum([
   "LTX_25_720P_5S_V1",
   "FLUX_SCHNELL_DRAFT_V1",
-  "LTX_25_720P_5S_I2V_V1"
+  "LTX_25_720P_5S_I2V_V1",
+  "MINIMAX_H3_720P_5S_I2V_V1"
 ]);
 export type RenderProfileKey = z.infer<typeof RenderProfileKeySchema>;
 
@@ -57,6 +58,29 @@ export const LtxI2vRenderProfileSchema = z.object({
 });
 export type LtxI2vRenderProfile = z.infer<typeof LtxI2vRenderProfileSchema>;
 
+export const MinimaxH3I2vRenderProfileSchema = z.object({
+  key: z.literal("MINIMAX_H3_720P_5S_I2V_V1"),
+  version: z.literal(1),
+  engine: z.literal("minimax_h3_i2v"),
+  workflowHash: sha256HashSchema,
+  modelHashes: z.record(z.string(), sha256HashSchema),
+  frames: z.literal(124),
+  steps: z.literal(20),
+  runnerProfile: z.string().min(1),
+  measuredPeakVramMb: z.number().int().positive(),
+  measuredTotalDurationMs: z.number().int().positive(),
+  measuredSamplingDurationMs: z.number().int().positive().nullable(),
+  measuredDiskFootprintGb: z.number().positive().finite(),
+  measuredPeakHostRamMb: z.number().int().nonnegative().nullable(),
+  measuredPeakProcessRssMb: z.number().int().nonnegative().nullable(),
+  measuredSwapUsedMb: z.number().int().nonnegative().nullable(),
+  measuredMajorPageFaults: z.number().int().nonnegative().nullable(),
+  minFreeDiskGb: z.number().positive().finite(),
+  maxConcurrentGpuJobs: z.number().int().positive(),
+  requiresModelOffloading: z.boolean()
+});
+export type MinimaxH3I2vRenderProfile = z.infer<typeof MinimaxH3I2vRenderProfileSchema>;
+
 export const FluxSchnellRenderProfileSchema = z.object({
   key: z.literal("FLUX_SCHNELL_DRAFT_V1"),
   version: z.literal(1),
@@ -83,7 +107,8 @@ export type FluxSchnellRenderProfile = z.infer<typeof FluxSchnellRenderProfileSc
 export const RenderProfileSchema = z.discriminatedUnion("key", [
   LtxRenderProfileSchema,
   FluxSchnellRenderProfileSchema,
-  LtxI2vRenderProfileSchema
+  LtxI2vRenderProfileSchema,
+  MinimaxH3I2vRenderProfileSchema
 ]);
 export type RenderProfile = z.infer<typeof RenderProfileSchema>;
 
@@ -150,6 +175,14 @@ export const LTX_FRAME_STEP = 8;
 export const LTX_SUPPORTED_FRAME_RANGE = [97, 97] as const;
 export const LTX_FRAME_QUANTIZATION_TOLERANCE_MS = Math.ceil((LTX_FRAME_STEP / 2 / LTX_FPS) * 1000);
 
+export const MINIMAX_H3_FPS = 24;
+export const MINIMAX_H3_FRAME_GRID_BASE = 5;
+export const MINIMAX_H3_FRAME_GRID_STEP = 17;
+export const MINIMAX_H3_SUPPORTED_FRAME_RANGE = [124, 124] as const;
+export const MINIMAX_H3_FRAME_QUANTIZATION_TOLERANCE_MS = Math.ceil(
+  (MINIMAX_H3_FRAME_GRID_STEP / 2 / MINIMAX_H3_FPS) * 1000
+);
+
 export interface NodeInjectionTarget {
   readonly nodeId: string;
   readonly classType: string;
@@ -189,6 +222,33 @@ export const LTX_25_720P_5S_I2V_V1_INJECTION_TOPOLOGY: ProfileInjectionTopology 
   })
 });
 
+export const MINIMAX_H3_720P_5S_I2V_V1_INJECTION_TOPOLOGY: ProfileInjectionTopology = Object.freeze(
+  {
+    prompt: Object.freeze({
+      nodeId: "104",
+      classType: "MiniMaxH3ImageToVideo",
+      inputField: "prompt"
+    }),
+    negativePrompt: undefined,
+    seed: Object.freeze({
+      nodeId: "15",
+      classType: "RandomNoise",
+      inputField: "noise_seed"
+    }),
+    audioPrompt: null,
+    frameCount: Object.freeze({
+      nodeId: "104",
+      classType: "MiniMaxH3ImageToVideo",
+      inputField: "length"
+    }),
+    referenceImage: Object.freeze({
+      nodeId: "20",
+      classType: "LoadImage",
+      inputField: "image"
+    })
+  }
+);
+
 export const FLUX_SCHNELL_DRAFT_V1_INJECTION_TOPOLOGY: ProfileInjectionTopology = Object.freeze({
   prompt: Object.freeze({ nodeId: "3", classType: "CLIPTextEncode", inputField: "text" }),
   negativePrompt: Object.freeze({ nodeId: "4", classType: "CLIPTextEncode", inputField: "text" }),
@@ -226,6 +286,14 @@ export function getProfileInjectionTopology(
     normalized === "ltx_25_i2v"
   ) {
     return LTX_25_720P_5S_I2V_V1_INJECTION_TOPOLOGY;
+  }
+  if (
+    normalized === "minimax_h3_720p_5s_i2v_v1" ||
+    normalized === "minimax-h3-720p-5s-i2v-v1" ||
+    normalized === "minimax_h3_i2v" ||
+    normalized === "minimax_h3"
+  ) {
+    return MINIMAX_H3_720P_5S_I2V_V1_INJECTION_TOPOLOGY;
   }
   if (
     normalized === "flux_schnell_draft_v1" ||

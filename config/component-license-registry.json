@@ -25,6 +25,28 @@
       "notes": "Approved following successful hardware certification on Trinidad RTX 4090 host (run ltx-i2v-cert-run-001, issue #227). Operating entity annual revenue is below the $10,000,000 Commercial Entity threshold in §2; the paid Commercial Use Agreement carve-out does not apply. Deployment satisfies Attachment A use-based restrictions (a)–(p), and downstream client handoff is governed by contract incorporating the §3.1 pass-through requirement. Validated under LTXV Open Weights License 0.X."
     },
     {
+      "componentId": "MINIMAX_H3_720P_5S_I2V_V1",
+      "componentType": "model",
+      "versionOrRevision": "1",
+      "status": "approved",
+      "licenseId": "MiniMax Community License",
+      "licenseSource": "https://huggingface.co/Comfy-Org/MiniMax-H3/blob/main/README.md",
+      "reviewedAt": "2026-09-18T19:00:00.000Z",
+      "policyRevision": "2026-08-29.1",
+      "notes": "Approved for Phase 1 commercial video rendering under MiniMax Community License. Operating entity satisfies open-weights community terms, acceptable use policies, and attribution requirements. Deployment runs on dedicated RTX 4090 render host."
+    },
+    {
+      "componentId": "minimax-h3-720p-5s-i2v-v1",
+      "componentType": "model",
+      "versionOrRevision": "1",
+      "status": "approved",
+      "licenseId": "MiniMax Community License",
+      "licenseSource": "https://huggingface.co/Comfy-Org/MiniMax-H3/blob/main/README.md",
+      "reviewedAt": "2026-09-18T19:00:00.000Z",
+      "policyRevision": "2026-08-29.1",
+      "notes": "Approved for Phase 1 commercial video rendering under MiniMax Community License. Operating entity satisfies open-weights community terms, acceptable use policies, and attribution requirements. Deployment runs on dedicated RTX 4090 render host."
+    },
+    {
       "componentId": "ltx-25-720p-97f-i2v",
       "componentType": "model",
       "versionOrRevision": "1",
