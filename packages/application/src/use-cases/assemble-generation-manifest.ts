@@ -345,6 +345,61 @@ export class AssembleGenerationManifest {
       if (typeof ksampler.inputs.denoise === "number") {
         denoise = ksampler.inputs.denoise;
       }
+    } else {
+      // Modular sampling nodes (SamplerCustom / SamplerCustomAdvanced, BasicScheduler, RandomNoise, KSamplerSelect, Guiders)
+      const randomNoiseNodes = findNodesByClassType(input.workflow, "RandomNoise");
+      if (
+        randomNoiseNodes.length > 0 &&
+        typeof randomNoiseNodes[0]!.inputs.noise_seed === "number"
+      ) {
+        seed = randomNoiseNodes[0]!.inputs.noise_seed;
+      }
+
+      const basicSchedulers = findNodesByClassType(input.workflow, "BasicScheduler");
+      if (basicSchedulers.length > 0) {
+        const bs = basicSchedulers[0]!;
+        if (typeof bs.inputs.steps === "number") {
+          steps = bs.inputs.steps;
+        }
+        if (typeof bs.inputs.scheduler === "string") {
+          scheduler = bs.inputs.scheduler;
+        }
+        if (typeof bs.inputs.denoise === "number") {
+          denoise = bs.inputs.denoise;
+        }
+      }
+
+      const samplerSelects = findNodesByClassType(input.workflow, "KSamplerSelect");
+      if (samplerSelects.length > 0 && typeof samplerSelects[0]!.inputs.sampler_name === "string") {
+        sampler = samplerSelects[0]!.inputs.sampler_name;
+      }
+
+      const cfgGuiders = [
+        ...findNodesByClassType(input.workflow, "CFGGuider"),
+        ...findNodesByClassType(input.workflow, "DualCFGGuider")
+      ];
+      if (cfgGuiders.length > 0 && typeof cfgGuiders[0]!.inputs.cfg === "number") {
+        cfg = cfgGuiders[0]!.inputs.cfg;
+      } else if (findNodesByClassType(input.workflow, "BasicGuider").length > 0) {
+        cfg = 1.0;
+      }
+    }
+
+    // Fallbacks from injection payload and profile baseline if any remaining undefined
+    if (
+      seed === undefined &&
+      typeof (input.job.injectedPayload as Record<string, unknown> | undefined)?.seed === "number"
+    ) {
+      seed = (input.job.injectedPayload as Record<string, unknown>).seed as number;
+    }
+    if (steps === undefined) {
+      steps = input.profile.baseline.steps;
+    }
+    if (denoise === undefined) {
+      denoise = 1.0;
+    }
+    if (cfg === undefined) {
+      cfg = 1.0;
     }
 
     if (

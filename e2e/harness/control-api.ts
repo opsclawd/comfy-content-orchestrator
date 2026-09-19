@@ -6,6 +6,7 @@ import type {
 } from "@cco/application";
 import {
   PostgresCampaignDeliveryReelQueries,
+  PostgresCurrentProductionAttemptQueries,
   PostgresSceneReviewQueries,
   PostgresUnitOfWork
 } from "@cco/infrastructure";
@@ -33,12 +34,9 @@ const notImplementedObjectStorage: ObjectStoragePort = {
   }
 };
 
-const notImplementedMediaDelivery: ReviewMediaDeliveryPort = {
-  generatePresignedReadUrl: async () => {
-    throw new Error(
-      "ReviewMediaDeliveryPort stub: generatePresignedReadUrl is not implemented in the e2e harness"
-    );
-  }
+const mockMediaDelivery: ReviewMediaDeliveryPort = {
+  generatePresignedReadUrl: async (locator) =>
+    `http://mock-storage/${locator.bucket}/${locator.key}`
 };
 
 export interface TestControlApi {
@@ -53,6 +51,7 @@ export async function startTestControlApi(options: {
 }): Promise<TestControlApi> {
   const uow = new PostgresUnitOfWork(options.pool);
   const sceneReviewQueries = new PostgresSceneReviewQueries(options.pool);
+  const currentProductionAttemptQueries = new PostgresCurrentProductionAttemptQueries(options.pool);
   const campaignDeliveryReelQueries = new PostgresCampaignDeliveryReelQueries(options.pool);
 
   const mockAssetRepo: ReferenceAssetRepository = {
@@ -64,9 +63,10 @@ export async function startTestControlApi(options: {
     {
       uow,
       sceneReviewQueries,
+      currentProductionAttemptQueries,
       campaignDeliveryReelQueries,
       objectStorage: notImplementedObjectStorage,
-      reviewMediaDelivery: notImplementedMediaDelivery,
+      reviewMediaDelivery: mockMediaDelivery,
       planningModelClients: {
         primary: options.planningStub,
         fallback: {
