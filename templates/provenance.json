@@ -223,7 +223,7 @@
       "workflowRelativePath": "minimax_h3_720p_i2v_124f_api.json",
       "expectedWorkflowHash": "4d1aafd575ceecb6146b1b96d5c5b13f759fea5eb47f28aabfd92965765c142e",
       "source": {
-        "kind": "authored_from_spec",
+        "kind": "validated_host_export",
         "uri": "https://github.com/Comfy-Org/MiniMax-H3",
         "revision": "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
         "license": "MiniMax Community License"
