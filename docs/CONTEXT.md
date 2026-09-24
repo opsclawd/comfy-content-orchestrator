@@ -5,13 +5,17 @@
 - **Campaign:** Campaign identity and high-level completion/progress rules.
 - **Scene:** SceneSpec, references, LoRA configuration, assigned engine, approval validity, current candidate selection, and canonical lifecycle transitions.
 - **SceneSpec:** Structured creative specification containing the script, generation prompts, reference bindings, timing, and engine parameters for a scene revision.
-- **StoryboardCandidate:** First-class immutable candidate generated for a specific `sceneId` and `sceneSpecRevision`. Candidate records and files are immutable at the database layer (protected via triggers and application-role privilege restrictions) and preserved independently from transient cache or delivery retention.
+- **StoryboardCandidate:** First-class immutable candidate generated for a specific `sceneId` and `sceneSpecRevision`. Generated at production-native geometry with verifiable reference conditioning, candidate records and files are immutable at the database layer (protected via triggers and application-role privilege restrictions) and directly condition MiniMax-H3 production video rendering upon director approval.
 - **Current Candidate Selection vs. Immutable History:** Candidate selection is an auditable, mutable pointer on the Scene (`selected_candidate_id`, `selected_candidate_revision`). Candidate records themselves are append-only and immutable.
-- **Current SceneSpec Revision:** Incrementing integer representing the specification version of the scene. Spec changes (prompt, duration, engine, references, LoRA) increment revision and invalidate existing candidate selection and approval.
+- **Current SceneSpec Revision:** Incrementing integer representing the specification version of the scene. Spec changes (prompt, duration, engine, references, LoRA, geometry) increment revision and invalidate existing candidate selection and approval.
 - **RenderJob:** Durable production work, retry limits, worker ownership, and completion semantics.
 - **RenderWorker:** Dedicated execution node / host process that holds GPU capacity, claims render leases, and runs diffusion/media generation workloads.
 - **RenderLease:** Exclusive GPU-worker execution right for one diffusion job.
-- **ReferenceAsset:** Continuity/provenance identity.
+- **ReferenceAsset:** Immutable binary media asset in persistent object storage with SHA-256 digest, MIME type, dimensions (width, height), and storage key. An asset is role-agnostic and carries no baked-in reference role.
+- **ReferenceRole:** Canonical semantic role assigned to a reference within a scene binding: `subject_identity` (actor/character facial and anatomical continuity), `product` (commercial hero asset, packaging, logo fidelity), `location` (environment, set, architectural continuity), `style` (aesthetic palette, lighting mood, photographic medium), or `composition` (spatial framing, camera angle, blocking).
+- **ReferenceGroup:** Optional client- or campaign-scoped organizational collection of `ReferenceAsset`s (e.g. "Brand Asset Kit", "Elena Character Sheet").
+- **SceneReferenceBinding:** Scene-revision entity linking a `ReferenceAsset` to a `SceneSpec` revision with a declared `ReferenceRole`, optional conditioning weight (0.0 to 1.0), and optional regional/bounding hints. A single `ReferenceAsset` can be bound across multiple scenes in different roles.
+- **CandidateEligibility:** Hard fail-closed machine evaluation determining whether a candidate is structurally and cryptographically sound for review (`eligible`, `ineligible_defect`, `ineligible_provenance`, `ineligible_geometry`). Ineligible candidates cannot be selected or approved by the director.
 - **GenerationManifest:** Immutable evidence from a successful render; not a mutable aggregate.
 - **ReviewEvent:** Append-only audit event capturing all human review actions, reviewer identity, timestamp, and before/after state transitions.
 - **RenderProfile:** Versioned certified execution configuration for an engine/workflow/hardware envelope.
@@ -133,4 +137,22 @@
     - **#276 (213.1 - Backend Read Contract, Queries & Routes):** Implemented `CampaignDeliveryReelReadModelSchema`, `PostgresCampaignDeliveryReelQueries`, `ResolveCampaignDeliveryReelUseCase`, and mounted `/api/campaigns/:campaignId/delivery-reel` and `/api/campaigns/:campaignId/delivery`.
     - **#277 (213.2 - UI Presentation Surface & Player):** Added `CampaignDeliveryReelPanel` and integrated into the campaign review page (`apps/web`), supporting the 5 canonical read-model states, video player with error recovery, and direct download links.
     - **#278 (213.3 - End-to-End Integration Proof & Regression Verification):** Proved the final-delivery surface end-to-end against real PostgreSQL and MinIO object storage (`tests/integration/final-delivery-reel.e2e.integration.test.ts`), verified multi-tenant isolation, fail-closed consistency handling, UI mutual exclusivity and anti-staleness transitions, and verified that existing storyboard review and production-review suites remain green and unaffected.
+- **Candidate-Quality, Reference Conditioning & Canonical Geometry Architecture (Epic #304 / ADR 0006):**
+  - **Foundational Invariant:** "Storyboard candidates must be generated with verifiable reference conditioning at production-native geometry, objectively certified for structural integrity before director review, and directly condition downstream production video without intermediate re-rendering or geometric distortion." (See [ADR 0006](adr/0006-candidate-reference-geometry-architecture.md)).
+  - **Single-Stage Authoritative Pipeline:** Replaces draft-and-refine ambiguity with one authoritative candidate phase:
+    `SceneSpec -> production-capable candidate batch -> automated eligibility gate -> director approval -> MiniMax-H3 first_frame`.
+    The candidate approved by the director is the exact image used as `first_frame` for MiniMax-H3.
+  - **Reference Roles & Three-Tier Semantic Boundary:**
+    1. *Storage Tier (`ReferenceAsset`):* Immutable, role-agnostic media in object storage identified by SHA-256 hash.
+    2. *Grouping Tier (`ReferenceGroup`):* Client/campaign logical grouping for organization in the Review Hub.
+    3. *Binding Tier (`SceneReferenceBinding`):* Scene-level attachment linking a `ReferenceAsset` to a `SceneSpec` revision with a specific `ReferenceRole` (`subject_identity`, `product`, `location`, `style`, `composition`) and optional conditioning weight.
+  - **Canonical Geometry Authority:**
+    - Creative geometry resides authoritatively in `SceneSpec.geometry` (defaulting to 16:9 landscape / 1344x768 for MiniMax-H3).
+    - Candidates must be generated at target video engine geometry natively. Blind cropping, square-draft stretching, or post-hoc resizing are prohibited.
+    - Vertical delivery reel assembly (`VERTICAL_REEL_1080X1920_V1`) is an FFmpeg downstream concern (ADR-0005).
+    - Changes to geometry, reference bindings, or prompts increment `specRevision`, invalidating candidate selection and resetting approval.
+  - **Objective Eligibility vs. Subjective Ranking:**
+    - *Candidate Eligibility:* Fail-closed automated gate evaluating structural sanity and provenance before review. Candidates with anatomical anomalies (extra limbs, fused faces), missing reference hashes, or invalid dimensions are marked `ineligible` and cannot be approved.
+    - *Subjective Ranking:* Human creative directors evaluate aesthetics, performance, and style. Machine scores provide advisory suggestions only.
+  - **Provenance Lineage:** Reconstructable chain `SceneSpec revision -> ReferenceAsset SHA-256 hashes + prompt + seed + RenderProfile -> StoryboardCandidate -> approval -> MiniMax-H3 production attempt`.
 
