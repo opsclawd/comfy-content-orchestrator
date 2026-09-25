@@ -265,6 +265,7 @@ MINIO_CONSOLE_PORT=$(find_free_port)
 SYNTHETIC_POSTGRES_PASS="synthetic_smoke_pg_pwd_$RANDOM"
 SYNTHETIC_APP_PASS="synthetic_smoke_app_pwd_$RANDOM"
 SYNTHETIC_MINIO_ADMIN_PASS="synthetic_smoke_minio_pwd_$RANDOM"
+SYNTHETIC_SESSION_SECRET="synthetic_smoke_session_secret_$RANDOM"
 
 cat <<EOF > "$INIT_SQL_FILE"
 DO \$\$
@@ -299,7 +300,8 @@ node -e '
     S3_SECRET_ACCESS_KEY: process.argv[8],
     S3_SIGNING_ENDPOINT: `http://127.0.0.1:${process.argv[4]}`,
     CONTROL_API_URL: `http://127.0.0.1:${process.argv[2]}`,
-    CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES: "127.0.0.1"
+    CONTROL_API_TRUSTED_IDENTITY_PROXY_ADDRESSES: "127.0.0.1",
+    CONTROL_API_CLIENT_SESSION_SECRET: process.argv[9]
   };
 
   const content = fs.readFileSync(envExamplePath, "utf8");
@@ -333,7 +335,8 @@ node -e '
   "$MINIO_CONSOLE_PORT" \
   "$SYNTHETIC_POSTGRES_PASS" \
   "$SYNTHETIC_APP_PASS" \
-  "$SYNTHETIC_MINIO_ADMIN_PASS" > "$ENV_FILE"
+  "$SYNTHETIC_MINIO_ADMIN_PASS" \
+  "$SYNTHETIC_SESSION_SECRET" > "$ENV_FILE"
 
 # Assert generated smoke .env CONTROL_API_URL port matches CONTROL_API_PORT
 EXPECTED_CONTROL_API_URL="http://127.0.0.1:${CONTROL_API_PORT}"
