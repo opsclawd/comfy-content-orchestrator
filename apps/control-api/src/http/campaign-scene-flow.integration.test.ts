@@ -1102,14 +1102,26 @@ describe("Campaign and Scene Creation End-to-End Integration", () => {
       providerName: "Anthropic",
       complete: async () => ({
         kind: "success",
-        rawText: JSON.stringify(plannedConfig)
+        rawText: JSON.stringify({
+          prompt: plannedConfig.prompt,
+          references: [],
+          engineProfileId: plannedConfig.engineProfileId,
+          durationMs: plannedConfig.durationMs,
+          loraConfigurationId: plannedConfig.loraConfigurationId
+        })
       })
     };
     const mockFallback: PlanningModelClientPort = {
       providerName: "OpenAI",
       complete: async () => ({
         kind: "success",
-        rawText: JSON.stringify(plannedConfig)
+        rawText: JSON.stringify({
+          prompt: plannedConfig.prompt,
+          references: [],
+          engineProfileId: plannedConfig.engineProfileId,
+          durationMs: plannedConfig.durationMs,
+          loraConfigurationId: plannedConfig.loraConfigurationId
+        })
       })
     };
     const mockAssetRepo: ReferenceAssetRepository = {
@@ -1226,7 +1238,7 @@ describe("Campaign and Scene Creation End-to-End Integration", () => {
           kind: "success",
           rawText: JSON.stringify({
             prompt: "Scene prompt from LLM",
-            referenceIds: [],
+            references: [],
             engineProfileId: "LTX_25_720P_5S_V1",
             durationMs,
             loraConfigurationId: null

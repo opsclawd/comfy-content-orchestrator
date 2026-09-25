@@ -532,4 +532,42 @@ describe("AnthropicPlanningModelClient", () => {
       expect(result.message).toContain("potential harm");
     }
   });
+
+  it("never sends raw reference images or binary content in request payload", async () => {
+    let capturedBody: { system?: unknown; messages?: Array<{ content?: unknown }> } | undefined;
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      capturedBody = JSON.parse(init?.body as string) as {
+        system?: unknown;
+        messages?: Array<{ content?: unknown }>;
+      };
+      return {
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            id: "msg_text_only",
+            type: "message",
+            role: "assistant",
+            content: [{ type: "text", text: '{"prompt":"A text only scene"}' }],
+            stop_reason: "end_turn"
+          })
+      } as unknown as Response;
+    });
+
+    const client = new AnthropicPlanningModelClient({
+      apiKey: "test-anthropic-key",
+      fetch: fetchMock
+    });
+
+    await client.complete({
+      systemPrompt: "System instruction with reference metadata",
+      userPrompt: "User prompt describing scene with metadata text"
+    });
+
+    expect(typeof capturedBody?.system).toBe("string");
+    expect(capturedBody?.messages).toHaveLength(1);
+    expect(typeof capturedBody?.messages?.[0]?.content).toBe("string");
+    // Ensure no image/base64 block or binary property
+    expect(JSON.stringify(capturedBody)).not.toContain("image");
+    expect(JSON.stringify(capturedBody)).not.toContain("base64");
+  });
 });

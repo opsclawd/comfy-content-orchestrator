@@ -384,7 +384,7 @@ describe("Campaign and Scene Creation HTTP Routes", () => {
 
       const plannedConfig = {
         prompt: "AI generated cinematic sunrise over carnival stage",
-        referenceIds: [],
+        references: [],
         engineProfileId: "LTX_25_720P_5S_V1",
         durationMs: 5000,
         loraConfigurationId: null
@@ -436,7 +436,13 @@ describe("Campaign and Scene Creation HTTP Routes", () => {
       expect(body.sceneId).toBeDefined();
       expect(body.campaignId).toBe(validCampaignId);
       expect(body.status).toBe("draft_pending");
-      expect(body.configuration).toEqual(plannedConfig);
+      expect(body.configuration).toEqual({
+        prompt: plannedConfig.prompt,
+        referenceIds: [],
+        engineProfileId: plannedConfig.engineProfileId,
+        durationMs: plannedConfig.durationMs,
+        loraConfigurationId: plannedConfig.loraConfigurationId
+      });
       expect(uow.savedScenes).toHaveLength(1);
     });
 
@@ -515,7 +521,7 @@ describe("Campaign and Scene Creation HTTP Routes", () => {
 
       const plannedConfigWithTarget = {
         prompt: "AI generated cinematic hero shot of electric scooter",
-        referenceIds: [],
+        references: [],
         engineProfileId: "LTX_25_720P_5S_V1",
         durationMs: 3500,
         loraConfigurationId: null
@@ -959,7 +965,7 @@ describe("Campaign and Scene Creation HTTP Routes", () => {
             kind: "success",
             rawText: JSON.stringify({
               prompt: "Planned scene prompt",
-              referenceIds: [],
+              references: [],
               engineProfileId: "LTX_25_720P_5S_V1",
               durationMs,
               loraConfigurationId: null

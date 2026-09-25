@@ -6,6 +6,7 @@ import {
   type CampaignId,
   type ReferenceAssetId,
   type SceneConfiguration,
+  type SceneConfigurationInput,
   type SceneId
 } from "@cco/domain";
 import type { UnitOfWork } from "../ports/index.js";
@@ -13,7 +14,7 @@ import { CampaignNotFoundError } from "./campaign-not-found-error.js";
 
 export interface CreateSceneInput {
   readonly campaignId: string;
-  readonly configuration: SceneConfiguration;
+  readonly configuration: SceneConfigurationInput | SceneConfiguration;
 }
 
 export class CreateSceneUseCase {
@@ -46,7 +47,7 @@ export class CreateSceneUseCase {
 
       const requestedRefIds = [
         ...new Set([
-          ...input.configuration.referenceIds,
+          ...(input.configuration.referenceIds ?? []),
           ...(input.configuration.referenceBindings ?? []).map((b) => b.referenceAssetId)
         ])
       ];
@@ -56,12 +57,12 @@ export class CreateSceneUseCase {
           typeof context.referenceAssets.findByIdsGlobal === "function"
             ? await context.referenceAssets.findByIdsGlobal(
                 requestedRefIds as unknown as readonly ReferenceAssetId[],
-                { includeArchived: true }
+                { includeArchived: true, forUpdate: true }
               )
             : await context.referenceAssets.findByIds(
                 campaign.clientId,
                 requestedRefIds as unknown as readonly ReferenceAssetId[],
-                { includeArchived: true }
+                { includeArchived: true, forUpdate: true }
               );
         const assetMap = new Map(assets.map((a) => [a.id as string, a]));
         for (const refId of requestedRefIds) {

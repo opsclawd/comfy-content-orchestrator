@@ -122,10 +122,6 @@ function mapRowToScene(row: StoryboardSceneRow): Scene {
         }
       : undefined;
 
-  const hasExplicitBindings = referenceBindings.some(
-    (b) => b.role !== "style" || b.weight !== null || b.hints !== null || b.archivedAt !== undefined
-  );
-
   const snapshot: SceneSnapshot = {
     id: row.scene_id as SceneId,
     campaignId: row.campaign_id as CampaignId,
@@ -135,7 +131,7 @@ function mapRowToScene(row: StoryboardSceneRow): Scene {
     configuration: {
       prompt: row.visual_description,
       referenceIds,
-      ...(hasExplicitBindings && referenceBindings.length > 0 ? { referenceBindings } : {}),
+      ...(referenceBindings.length > 0 ? { referenceBindings } : {}),
       engineProfileId: row.engine_assigned,
       durationMs,
       loraConfigurationId: row.lora_configuration_id
@@ -418,13 +414,15 @@ export class PostgresSceneRepository implements SceneRepository {
         throw new Error(`Campaign "${snapshot.campaignId}" not found for scene "${snapshot.id}".`);
       }
 
+      const sortedRequestedRefIds = [...allRequestedRefIds].sort();
       const assetsRes = await client.query<{
         asset_id: string;
         client_id: string;
         archived_at: Date | string | null;
-      }>(`SELECT asset_id, client_id, archived_at FROM reference_assets WHERE asset_id = ANY($1)`, [
-        allRequestedRefIds
-      ]);
+      }>(
+        `SELECT asset_id, client_id, archived_at FROM reference_assets WHERE asset_id = ANY($1) ORDER BY asset_id ASC FOR UPDATE`,
+        [sortedRequestedRefIds]
+      );
       const assetMap = new Map(assetsRes.rows.map((row) => [row.asset_id, row]));
 
       const existingBindingsRes = await client.query<{

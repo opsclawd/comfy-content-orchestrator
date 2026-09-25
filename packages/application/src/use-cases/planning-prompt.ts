@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { RenderProfileKeySchema, type CreativeBrief } from "@cco/contracts";
+import { REFERENCE_ROLES, RenderProfileKeySchema, type CreativeBrief } from "@cco/contracts";
 import type { CampaignId, ReferenceAsset } from "@cco/domain";
 import type { PlanningModelRequest } from "../ports/planning-model-client-port.js";
 
@@ -8,6 +8,19 @@ export type { CreativeBrief };
 export function maskCampaignIdentifier(campaignId: string): string {
   const hash = createHash("sha256").update(campaignId).digest("hex");
   return `masked-campaign-${hash.slice(0, 12)}`;
+}
+
+export function formatReferenceAssetMetadata(assets: readonly ReferenceAsset[]): string {
+  if (assets.length === 0) {
+    return "None";
+  }
+  const sorted = [...assets].sort((a, b) => (a.id as string).localeCompare(b.id as string));
+  return sorted
+    .map(
+      (a) =>
+        `- referenceId: ${a.id}\n  displayName: ${a.displayName ?? "unspecified"}\n  libraryRole: ${a.libraryRole ?? "unspecified"}\n  description: ${a.description ?? "unspecified"}`
+    )
+    .join("\n");
 }
 
 export interface BuildPlanningPromptInput {
@@ -27,7 +40,7 @@ export function buildPlanningPrompt(input: BuildPlanningPromptInput): PlanningMo
     : input.campaignId;
 
   const certifiedProfiles = RenderProfileKeySchema.options;
-  const assetIds = input.resolvedReferenceAssets.map((asset) => asset.id as string);
+  const assetIds = input.resolvedReferenceAssets.map((asset) => asset.id as string).sort();
 
   const durationConstraintText =
     input.targetDurationMs !== undefined
@@ -48,7 +61,9 @@ export function buildPlanningPrompt(input: BuildPlanningPromptInput): PlanningMo
     "",
     "Rules for the output JSON fields:",
     "- prompt: non-empty string describing the visual scene to be rendered in detail.",
-    `- referenceIds: array of strings selected strictly from available reference asset IDs: ${JSON.stringify(assetIds)}. Only use IDs from this list.`,
+    `- references: array of objects assigning reference assets to this scene. Each object must contain:`,
+    `  - referenceId: string, must be selected strictly from available candidate reference IDs: ${JSON.stringify(assetIds)}. Only use IDs from this list.`,
+    `  - role: string, must be one of the reference roles: ${JSON.stringify(REFERENCE_ROLES)}. Choose the role based on script and visual context.`,
     engineRule,
     `- durationMs: positive integer in milliseconds${durationConstraintText}.`,
     "- loraConfigurationId: optional string or null."
@@ -79,7 +94,9 @@ export function buildPlanningPrompt(input: BuildPlanningPromptInput): PlanningMo
     "",
     ...briefSections,
     "",
-    `Available Reference Asset IDs: ${assetIds.length > 0 ? assetIds.join(", ") : "None"}`,
+    "Available Reference Assets:",
+    formatReferenceAssetMetadata(input.resolvedReferenceAssets),
+    "",
     `Certified Engine Profiles: ${certifiedProfiles.join(", ")}`
   ];
 

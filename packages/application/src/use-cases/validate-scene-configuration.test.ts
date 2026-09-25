@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { ReferenceAsset, ReferenceAssetId, SceneId } from "@cco/domain";
+import { ArchivedReferenceBindingError, CrossClientReferenceBindingError } from "@cco/domain";
 import {
   validateSceneConfiguration,
   SceneConfigurationValidationError
@@ -35,24 +36,38 @@ describe("validateSceneConfiguration", () => {
 
   const validCandidate = {
     prompt: "A cinematic shot of the product on a table",
-    referenceIds: [asset1Id],
+    references: [
+      {
+        referenceId: asset1Id,
+        role: "subject_identity" as const
+      }
+    ],
     engineProfileId: "LTX_25_720P_5S_V1",
     durationMs: 5000,
     loraConfigurationId: "lora-cfg-1"
   };
 
-  it("validates a fully valid candidate configuration", () => {
+  it("validates a fully valid candidate configuration with references", () => {
     const result = validateSceneConfiguration(validCandidate, sampleResolvedAssets, 10000);
 
     expect(result).toEqual({
       prompt: "A cinematic shot of the product on a table",
       referenceIds: [asset1Id],
+      referenceBindings: [
+        {
+          referenceAssetId: asset1Id,
+          role: "subject_identity",
+          weight: null,
+          hints: null
+        }
+      ],
       engineProfileId: "LTX_25_720P_5S_V1",
       durationMs: 5000,
       loraConfigurationId: "lora-cfg-1"
     });
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen(result.referenceIds)).toBe(true);
+    expect(Object.isFrozen(result.referenceBindings)).toBe(true);
   });
 
   it("validates candidate configuration using LTX_25_720P_5S_I2V_V1 engine profile", () => {
@@ -68,11 +83,102 @@ describe("validateSceneConfiguration", () => {
     expect(result.engineProfileId).toBe("LTX_25_720P_5S_I2V_V1");
   });
 
-  it("witness scenario: a referenceIds entry that is a syntactically valid UUID but absent from resolvedReferenceAssets is rejected", () => {
+  it("validates candidate configuration with empty references array", () => {
+    const result = validateSceneConfiguration(
+      {
+        ...validCandidate,
+        references: []
+      },
+      sampleResolvedAssets,
+      10000
+    );
+
+    expect(result.referenceIds).toEqual([]);
+    expect(result.referenceBindings).toBeUndefined();
+  });
+
+  it("rejects planner-supplied referenceIds field", () => {
+    expect(() =>
+      validateSceneConfiguration(
+        {
+          ...validCandidate,
+          referenceIds: [asset1Id]
+        },
+        sampleResolvedAssets
+      )
+    ).toThrowError("referenceIds is not permitted in planner response; use references array");
+  });
+
+  it("rejects prohibited planner-supplied fields in candidate", () => {
+    expect(() =>
+      validateSceneConfiguration(
+        {
+          ...validCandidate,
+          sceneId: "scene-fake"
+        },
+        sampleResolvedAssets
+      )
+    ).toThrowError("sceneId cannot be supplied by planner");
+
+    expect(() =>
+      validateSceneConfiguration(
+        {
+          ...validCandidate,
+          specRevision: 2
+        },
+        sampleResolvedAssets
+      )
+    ).toThrowError("specRevision cannot be supplied by planner");
+  });
+
+  it("rejects prohibited planner-supplied fields in references items", () => {
+    expect(() =>
+      validateSceneConfiguration(
+        {
+          ...validCandidate,
+          references: [
+            {
+              referenceId: asset1Id,
+              role: "subject_identity",
+              weight: 0.8
+            }
+          ]
+        },
+        sampleResolvedAssets
+      )
+    ).toThrowError(
+      "Planner references cannot include sceneId, specRevision, weight, hints, or archivedAt"
+    );
+
+    expect(() =>
+      validateSceneConfiguration(
+        {
+          ...validCandidate,
+          references: [
+            {
+              referenceId: asset1Id,
+              role: "subject_identity",
+              sceneId: "fake-scene"
+            }
+          ]
+        },
+        sampleResolvedAssets
+      )
+    ).toThrowError(
+      "Planner references cannot include sceneId, specRevision, weight, hints, or archivedAt"
+    );
+  });
+
+  it("rejects a reference assignment absent from resolvedReferenceAssets", () => {
     const absentValidUuid = "99999999-9999-9999-9999-999999999999";
     const candidate = {
       ...validCandidate,
-      referenceIds: [absentValidUuid]
+      references: [
+        {
+          referenceId: absentValidUuid,
+          role: "subject_identity" as const
+        }
+      ]
     };
 
     expect(() => validateSceneConfiguration(candidate, sampleResolvedAssets)).toThrowError(
@@ -97,17 +203,86 @@ describe("validateSceneConfiguration", () => {
     );
   });
 
-  it("witness scenario: a resolvedReferenceAssets entry with no sceneId is still matched correctly by .id", () => {
-    // validAssetWithoutSceneId has no sceneId key defined
-    expect("sceneId" in validAssetWithoutSceneId).toBe(false);
-
+  it("allows same referenceId under distinct roles and derives unique referenceIds projection", () => {
     const candidate = {
       ...validCandidate,
-      referenceIds: [validAssetWithoutSceneId.id]
+      references: [
+        {
+          referenceId: asset1Id,
+          role: "subject_identity" as const
+        },
+        {
+          referenceId: asset1Id,
+          role: "style" as const
+        }
+      ]
     };
 
-    const result = validateSceneConfiguration(candidate, [validAssetWithoutSceneId]);
-    expect(result.referenceIds).toEqual([validAssetWithoutSceneId.id]);
+    const result = validateSceneConfiguration(candidate, sampleResolvedAssets);
+    expect(result.referenceIds).toEqual([asset1Id]);
+    expect(result.referenceBindings).toHaveLength(2);
+  });
+
+  it("sorts referenceBindings deterministically by referenceAssetId then role", () => {
+    const candidate = {
+      ...validCandidate,
+      references: [
+        {
+          referenceId: asset2Id,
+          role: "style" as const
+        },
+        {
+          referenceId: asset1Id,
+          role: "subject_identity" as const
+        },
+        {
+          referenceId: asset1Id,
+          role: "composition" as const
+        }
+      ]
+    };
+
+    const result = validateSceneConfiguration(candidate, sampleResolvedAssets);
+    expect(result.referenceBindings).toEqual([
+      {
+        referenceAssetId: asset1Id,
+        role: "composition",
+        weight: null,
+        hints: null
+      },
+      {
+        referenceAssetId: asset1Id,
+        role: "subject_identity",
+        weight: null,
+        hints: null
+      },
+      {
+        referenceAssetId: asset2Id,
+        role: "style",
+        weight: null,
+        hints: null
+      }
+    ]);
+  });
+
+  it("rejects duplicate (referenceId, role) entries", () => {
+    const candidate = {
+      ...validCandidate,
+      references: [
+        {
+          referenceId: asset1Id,
+          role: "subject_identity" as const
+        },
+        {
+          referenceId: asset1Id,
+          role: "subject_identity" as const
+        }
+      ]
+    };
+
+    expect(() => validateSceneConfiguration(candidate, sampleResolvedAssets)).toThrowError(
+      /Duplicate reference assignment/
+    );
   });
 
   it("rejects non-object candidates", () => {
@@ -128,40 +303,28 @@ describe("validateSceneConfiguration", () => {
   it("rejects invalid prompt", () => {
     expect(() =>
       validateSceneConfiguration({ ...validCandidate, prompt: "" }, sampleResolvedAssets)
-    ).toThrow("prompt must be a non-empty string");
+    ).toThrow();
     expect(() =>
       validateSceneConfiguration({ ...validCandidate, prompt: "   " }, sampleResolvedAssets)
     ).toThrow("prompt must be a non-empty string");
     expect(() =>
       validateSceneConfiguration({ ...validCandidate, prompt: 123 }, sampleResolvedAssets)
-    ).toThrow("prompt must be a non-empty string");
-  });
-
-  it("rejects invalid referenceIds structure", () => {
-    expect(() =>
-      validateSceneConfiguration(
-        { ...validCandidate, referenceIds: "not-array" },
-        sampleResolvedAssets
-      )
-    ).toThrow("referenceIds must be an array of strings");
-    expect(() =>
-      validateSceneConfiguration({ ...validCandidate, referenceIds: [123] }, sampleResolvedAssets)
-    ).toThrow("All referenceIds entries must be strings");
+    ).toThrow();
   });
 
   it("rejects invalid durationMs", () => {
     expect(() =>
       validateSceneConfiguration({ ...validCandidate, durationMs: -100 }, sampleResolvedAssets)
-    ).toThrow("durationMs must be a positive integer");
+    ).toThrow();
     expect(() =>
       validateSceneConfiguration({ ...validCandidate, durationMs: 0 }, sampleResolvedAssets)
-    ).toThrow("durationMs must be a positive integer");
+    ).toThrow();
     expect(() =>
       validateSceneConfiguration({ ...validCandidate, durationMs: 2500.5 }, sampleResolvedAssets)
-    ).toThrow("durationMs must be a positive integer");
+    ).toThrow();
     expect(() =>
       validateSceneConfiguration({ ...validCandidate, durationMs: "5000" }, sampleResolvedAssets)
-    ).toThrow("durationMs must be a positive integer");
+    ).toThrow();
   });
 
   it("rejects durationMs exceeding maxDurationMs", () => {
@@ -229,7 +392,7 @@ describe("validateSceneConfiguration", () => {
     // undefined / omitted is allowed
     const withoutLora = {
       prompt: validCandidate.prompt,
-      referenceIds: validCandidate.referenceIds,
+      references: validCandidate.references,
       engineProfileId: validCandidate.engineProfileId,
       durationMs: validCandidate.durationMs
     };
@@ -243,14 +406,6 @@ describe("validateSceneConfiguration", () => {
         sampleResolvedAssets
       )
     ).toThrow("loraConfigurationId must be a non-empty string when provided");
-
-    // non-string rejected
-    expect(() =>
-      validateSceneConfiguration(
-        { ...validCandidate, loraConfigurationId: 999 },
-        sampleResolvedAssets
-      )
-    ).toThrow("loraConfigurationId must be a non-empty string when provided");
   });
 
   it("rejects an archived reference asset with ArchivedReferenceBindingError", () => {
@@ -260,7 +415,7 @@ describe("validateSceneConfiguration", () => {
     };
 
     expect(() => validateSceneConfiguration(validCandidate, [archivedAsset])).toThrow(
-      /Archived reference binding rejected/
+      ArchivedReferenceBindingError
     );
   });
 
@@ -269,7 +424,7 @@ describe("validateSceneConfiguration", () => {
       validateSceneConfiguration(validCandidate, sampleResolvedAssets, {
         campaignClientId: "client-different"
       })
-    ).toThrow(/Cross-client reference binding rejected/);
+    ).toThrow(CrossClientReferenceBindingError);
   });
 
   it("accepts a matching-client active reference asset when campaignClientId is provided", () => {

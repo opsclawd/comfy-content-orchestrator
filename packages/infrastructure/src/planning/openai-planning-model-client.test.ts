@@ -521,4 +521,39 @@ describe("OpenAiPlanningModelClient", () => {
       expect.anything()
     );
   });
+
+  it("never sends raw reference images or binary content in request payload", async () => {
+    let capturedBody: { messages?: Array<{ role?: unknown; content?: unknown }> } | undefined;
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      capturedBody = JSON.parse(init?.body as string) as {
+        messages?: Array<{ role?: unknown; content?: unknown }>;
+      };
+      return {
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: '{"prompt":"Text only"}' } }]
+          })
+      } as unknown as Response;
+    });
+
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-openai-key",
+      fetch: fetchMock
+    });
+
+    await client.complete({
+      systemPrompt: "System instruction with reference metadata",
+      userPrompt: "User prompt describing scene with metadata text"
+    });
+
+    expect(capturedBody?.messages).toHaveLength(2);
+    expect(capturedBody?.messages?.[0]?.role).toBe("system");
+    expect(typeof capturedBody?.messages?.[0]?.content).toBe("string");
+    expect(capturedBody?.messages?.[1]?.role).toBe("user");
+    expect(typeof capturedBody?.messages?.[1]?.content).toBe("string");
+    // Ensure no image/base64 block or binary property
+    expect(JSON.stringify(capturedBody)).not.toContain("image_url");
+    expect(JSON.stringify(capturedBody)).not.toContain("base64");
+  });
 });

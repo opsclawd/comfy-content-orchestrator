@@ -88,7 +88,7 @@ export class ScenarioPlanningModelClient implements PlanningModelClientPort {
       kind: "success",
       rawText: JSON.stringify({
         prompt: `Scene visual prompt ${this.sceneConfigInvocations}`,
-        referenceIds: [],
+        references: [],
         engineProfileId: this.targetEngineProfileId ?? "LTX_25_720P_5S_V1",
         durationMs,
         loraConfigurationId: null

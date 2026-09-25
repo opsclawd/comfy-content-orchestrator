@@ -446,6 +446,16 @@ describe("PostgreSQL SceneRepository Adapter Integration", () => {
       configuration: {
         prompt: "Newly created scene prompt from scratch",
         referenceIds: [refAsset.asset_id],
+        referenceBindings: [
+          {
+            sceneId: newSceneId,
+            specRevision: 1,
+            referenceAssetId: refAsset.asset_id,
+            role: "style",
+            weight: null,
+            hints: null
+          }
+        ],
         engineProfileId: "ltx_25",
         durationMs: 6000,
         loraConfigurationId: null

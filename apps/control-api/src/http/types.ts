@@ -178,7 +178,10 @@ export function createControlApiContainer(
           planCampaignBeatSheet,
           planSceneConfiguration,
           materializeStoryboard,
-          uow: dependencies.uow
+          uow: dependencies.uow,
+          ...(dependencies.referenceAssetRepository
+            ? { referenceAssetRepository: dependencies.referenceAssetRepository }
+            : {})
         })
       : undefined;
 

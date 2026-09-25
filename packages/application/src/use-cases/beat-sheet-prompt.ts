@@ -2,7 +2,7 @@ import type { CreativeBrief } from "@cco/contracts";
 import type { CampaignId, ReferenceAsset } from "@cco/domain";
 import type { PlanningModelRequest } from "../ports/planning-model-client-port.js";
 import { isMiniMaxEngineOrProfile } from "./map-production-duration.js";
-import { maskCampaignIdentifier } from "./planning-prompt.js";
+import { formatReferenceAssetMetadata, maskCampaignIdentifier } from "./planning-prompt.js";
 
 export interface BuildBeatSheetPlanningPromptInput {
   readonly brief: CreativeBrief;
@@ -22,8 +22,6 @@ export function buildBeatSheetPlanningPrompt(
   const effectiveCampaignId = input.maskSensitiveData
     ? maskCampaignIdentifier(input.campaignId)
     : input.campaignId;
-
-  const assetIds = input.resolvedReferenceAssets.map((asset) => asset.id as string);
 
   const isMiniMax =
     isMiniMaxEngineOrProfile(input.targetEngine) ||
@@ -91,7 +89,15 @@ export function buildBeatSheetPlanningPrompt(
     "",
     ...briefSections,
     "",
-    `Available Reference Asset IDs: ${assetIds.length > 0 ? assetIds.join(", ") : "None"}`
+    "Available Reference Assets:",
+    formatReferenceAssetMetadata(input.resolvedReferenceAssets),
+    "",
+    "Reference Role Definitions (for semantic context):",
+    "- subject_identity: Core character, actor, or subject identity to maintain consistency across scenes.",
+    "- product: Commercial product, hero object, or key item featured in the video.",
+    "- location: Environment, setting, architectural space, or background scenery.",
+    "- style: Overall visual mood, lighting style, color palette, or artistic aesthetic.",
+    "- composition: Framing, perspective, camera angle, or spatial layout guidance."
   ];
 
   if (input.correctiveFeedback) {

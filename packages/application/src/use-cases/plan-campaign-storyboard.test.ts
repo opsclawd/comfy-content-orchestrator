@@ -23,7 +23,13 @@ import { PlanningProviderExhaustedError } from "./plan-scene-configuration-error
 import { CampaignIdempotencyConflictError } from "./campaign-idempotency-conflict-error.js";
 import { StoryboardMaterializationConflictError } from "./storyboard-materialization-conflict-error.js";
 import { StoryboardPartiallyMaterializedError } from "./storyboard-partially-materialized-error.js";
-import { Scene, type SceneId } from "@cco/domain";
+import {
+  ArchivedReferenceBindingError,
+  CrossClientReferenceBindingError,
+  Scene,
+  type SceneId,
+  type ReferenceAssetId
+} from "@cco/domain";
 
 class StubPlanningModelClient implements PlanningModelClientPort {
   beatSheetInvocations = 0;
@@ -31,6 +37,7 @@ class StubPlanningModelClient implements PlanningModelClientPort {
   shouldThrow = false;
   failOnBeatOrdinal: number | null = null;
   shouldReturnMalformedBeatSheet = false;
+  customReferences?: Array<{ referenceId: string; role: string }> | undefined;
   emittedBeats: Array<{ ordinal: number; brief: CreativeBrief; targetDurationMs: number }> = [];
   recordedSceneRequests: PlanningModelRequest[] = [];
 
@@ -124,7 +131,7 @@ class StubPlanningModelClient implements PlanningModelClientPort {
       kind: "success",
       rawText: JSON.stringify({
         prompt: `Cinematic rendering for beat scene ${this.sceneConfigInvocations}`,
-        referenceIds: [],
+        references: this.customReferences ?? [],
         engineProfileId: "LTX_25_720P_5S_V1",
         durationMs,
         loraConfigurationId: null
@@ -135,6 +142,8 @@ class StubPlanningModelClient implements PlanningModelClientPort {
 
 describe("PlanCampaignStoryboardUseCase", () => {
   const clientId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73801";
+  const allowedAsset1 = "018e69e0-8a6a-72cb-b1b7-ec79a1f73801" as ReferenceAssetId;
+  const allowedAsset2 = "018e69e0-8a6a-72cb-b1b7-ec79a1f73802" as ReferenceAssetId;
   const defaultBrief: CreativeBrief = {
     title: "Golden Storyboard Commercial",
     description: "High impact visual storytelling commercial with vibrant lighting",
@@ -157,14 +166,28 @@ describe("PlanCampaignStoryboardUseCase", () => {
 
   const mockAssetRepo: ReferenceAssetRepository = {
     listBySceneId: async () => [],
-    findByIds: async () => []
+    findByIds: async (clientIdParam: string, ids: readonly ReferenceAssetId[]) => {
+      return ids.map((id) => ({
+        id,
+        clientId: clientIdParam,
+        assetType: "brand_logo",
+        storageBucket: "b",
+        storageObjectKey: `k/${id}`,
+        contentHashSha256: "h",
+        displayName: `Asset ${id}`,
+        libraryRole: "product",
+        description: `Description for ${id}`
+      }));
+    }
   };
 
   function createTestHarness(options?: {
     stubClient?: StubPlanningModelClient;
     omitJobQueue?: boolean;
+    referenceAssetRepository?: ReferenceAssetRepository;
   }) {
     const stubClient = options?.stubClient ?? new StubPlanningModelClient("Anthropic");
+    const refRepo = options?.referenceAssetRepository ?? mockAssetRepo;
     const fallbackClient: PlanningModelClientPort = {
       providerName: "OpenAI",
       complete: (req) => stubClient.complete(req)
@@ -173,6 +196,28 @@ describe("PlanCampaignStoryboardUseCase", () => {
     let uow = new InMemorySceneUnitOfWork(undefined, undefined, undefined, undefined, [
       clientRecord
     ]);
+    uow.seedReferenceAsset({
+      id: allowedAsset1,
+      clientId,
+      assetType: "brand_logo",
+      storageBucket: "b",
+      storageObjectKey: `k/${allowedAsset1}`,
+      contentHashSha256: "h",
+      displayName: `Asset ${allowedAsset1}`,
+      libraryRole: "product",
+      description: `Description for ${allowedAsset1}`
+    });
+    uow.seedReferenceAsset({
+      id: allowedAsset2,
+      clientId,
+      assetType: "brand_logo",
+      storageBucket: "b",
+      storageObjectKey: `k/${allowedAsset2}`,
+      contentHashSha256: "h",
+      displayName: `Asset ${allowedAsset2}`,
+      libraryRole: "style",
+      description: `Description for ${allowedAsset2}`
+    });
     if (!options?.omitJobQueue) {
       uow = uow.withJobs(queue);
     }
@@ -185,12 +230,12 @@ describe("PlanCampaignStoryboardUseCase", () => {
     const createCampaignShell = new CreateCampaignShellUseCase(uow);
     const planCampaignBeatSheet = new PlanCampaignBeatSheetUseCase({
       uow,
-      referenceAssetRepository: mockAssetRepo,
+      referenceAssetRepository: refRepo,
       primaryClient: stubClient,
       fallbackClient
     });
     const planSceneConfiguration = new PlanSceneConfigurationUseCase({
-      referenceAssetRepository: mockAssetRepo,
+      referenceAssetRepository: refRepo,
       primaryClient: stubClient,
       fallbackClient
     });
@@ -201,7 +246,8 @@ describe("PlanCampaignStoryboardUseCase", () => {
       planCampaignBeatSheet,
       planSceneConfiguration,
       materializeStoryboard,
-      uow
+      uow,
+      referenceAssetRepository: refRepo
     });
 
     return {
@@ -210,7 +256,8 @@ describe("PlanCampaignStoryboardUseCase", () => {
       queue,
       uow,
       createCampaignShell,
-      materializeStoryboard
+      materializeStoryboard,
+      refRepo
     };
   }
 
@@ -731,6 +778,174 @@ describe("PlanCampaignStoryboardUseCase", () => {
       // Zero scenes persisted
       const scenes = await uow.execute((ctx) => ctx.scenes.findByCampaignId!(savedShell!.id));
       expect(scenes).toHaveLength(0);
+    });
+
+    describe("Pre-Materialization Reference Asset Validation (Fail-Closed Semantics)", () => {
+      const unselectedAsset = "018e69e0-8a6a-72cb-b1b7-ec79a1f73899" as ReferenceAssetId;
+
+      it("fails closed before materialization if planner assigns reference ID outside allowed candidate set", async () => {
+        const stubClient = new StubPlanningModelClient("Anthropic");
+        stubClient.customReferences = [{ referenceId: unselectedAsset, role: "subject_identity" }];
+        const { useCase, uow, queue } = createTestHarness({ stubClient });
+        const idempotencyKey = "018e69e0-8a6a-72cb-b1b7-ec79a1f73901";
+
+        await expect(
+          useCase.execute({
+            idempotencyKey,
+            clientId,
+            title: "Unselected Reference Test",
+            targetTotalDurationMs: 15000,
+            brief: defaultBrief,
+            candidateReferenceAssetIds: [allowedAsset1, allowedAsset2]
+          })
+        ).rejects.toThrow(PlanningProviderExhaustedError);
+
+        // Verification: 0 scenes materialized and shell marked failed
+        const shell = await uow.execute((ctx) =>
+          ctx.campaigns!.findByIdempotencyKey!(idempotencyKey)
+        );
+        expect(shell).toBeDefined();
+        expect(shell!.status).toBe("failed");
+        const scenes = await uow.execute((ctx) => ctx.scenes.findByCampaignId!(shell!.id));
+        expect(scenes).toHaveLength(0);
+        expect(uow.savedScenes).toHaveLength(0);
+        expect(queue.jobs).toHaveLength(0);
+      });
+
+      it("fails closed before materialization if reference asset is archived after initial planning lookup", async () => {
+        let lookupCount = 0;
+        const dynamicRepo: ReferenceAssetRepository = {
+          listBySceneId: async () => [],
+          findByIds: async (clientIdParam: string, ids: readonly ReferenceAssetId[]) => {
+            lookupCount++;
+            return ids.map((id) => ({
+              id,
+              clientId: clientIdParam,
+              storageBucket: "b",
+              storageObjectKey: `k/${id}`,
+              contentHashSha256: "h",
+              displayName: `Asset ${id}`,
+              libraryRole: "product" as const,
+              // On second lookup (pre-materialization validation), asset is archived!
+              archivedAt: lookupCount > 3 ? "2026-09-25T12:00:00.000Z" : null
+            }));
+          }
+        };
+
+        const stubClient = new StubPlanningModelClient("Anthropic");
+        stubClient.customReferences = [{ referenceId: allowedAsset1, role: "subject_identity" }];
+
+        const { useCase, uow } = createTestHarness({
+          stubClient,
+          referenceAssetRepository: dynamicRepo
+        });
+        const idempotencyKey = "018e69e0-8a6a-72cb-b1b7-ec79a1f73902";
+
+        await expect(
+          useCase.execute({
+            idempotencyKey,
+            clientId,
+            title: "Archived Reference During Planning Test",
+            targetTotalDurationMs: 15000,
+            brief: defaultBrief,
+            candidateReferenceAssetIds: [allowedAsset1]
+          })
+        ).rejects.toThrow(ArchivedReferenceBindingError);
+
+        // Verification: 0 scenes materialized and shell marked failed
+        const shell = await uow.execute((ctx) =>
+          ctx.campaigns!.findByIdempotencyKey!(idempotencyKey)
+        );
+        expect(shell).toBeDefined();
+        expect(shell!.status).toBe("failed");
+        const scenes = await uow.execute((ctx) => ctx.scenes.findByCampaignId!(shell!.id));
+        expect(scenes).toHaveLength(0);
+      });
+
+      it("fails closed before materialization if reference asset belongs to foreign client", async () => {
+        let lookupCount = 0;
+        const crossClientRepo: ReferenceAssetRepository = {
+          listBySceneId: async () => [],
+          findByIds: async (clientIdParam: string, ids: readonly ReferenceAssetId[]) => {
+            lookupCount++;
+            return ids.map((id) => ({
+              id,
+              // On pre-materialization re-check, returns a foreign client ID
+              clientId: lookupCount > 3 ? "foreign-client-999" : clientIdParam,
+              storageBucket: "b",
+              storageObjectKey: `k/${id}`,
+              contentHashSha256: "h",
+              displayName: `Asset ${id}`,
+              libraryRole: "product" as const,
+              archivedAt: null
+            }));
+          }
+        };
+
+        const stubClient = new StubPlanningModelClient("Anthropic");
+        stubClient.customReferences = [{ referenceId: allowedAsset1, role: "subject_identity" }];
+
+        const { useCase, uow } = createTestHarness({
+          stubClient,
+          referenceAssetRepository: crossClientRepo
+        });
+        const idempotencyKey = "018e69e0-8a6a-72cb-b1b7-ec79a1f73903";
+
+        await expect(
+          useCase.execute({
+            idempotencyKey,
+            clientId,
+            title: "Cross-Client Reference During Planning Test",
+            targetTotalDurationMs: 15000,
+            brief: defaultBrief,
+            candidateReferenceAssetIds: [allowedAsset1]
+          })
+        ).rejects.toThrow(CrossClientReferenceBindingError);
+
+        const shell = await uow.execute((ctx) =>
+          ctx.campaigns!.findByIdempotencyKey!(idempotencyKey)
+        );
+        expect(shell).toBeDefined();
+        expect(shell!.status).toBe("failed");
+        const scenes = await uow.execute((ctx) => ctx.scenes.findByCampaignId!(shell!.id));
+        expect(scenes).toHaveLength(0);
+      });
+
+      it("atomically materializes scenes and reference bindings when all assigned references are valid and active", async () => {
+        const stubClient = new StubPlanningModelClient("Anthropic");
+        stubClient.customReferences = [
+          { referenceId: allowedAsset1, role: "subject_identity" },
+          { referenceId: allowedAsset2, role: "style" }
+        ];
+
+        const { useCase, queue } = createTestHarness({ stubClient });
+        const idempotencyKey = "018e69e0-8a6a-72cb-b1b7-ec79a1f73904";
+
+        const result = await useCase.execute({
+          idempotencyKey,
+          clientId,
+          title: "Successful Materialize With References Test",
+          targetTotalDurationMs: 15000,
+          brief: defaultBrief,
+          candidateReferenceAssetIds: [allowedAsset1, allowedAsset2]
+        });
+
+        expect(result.isIdempotentReplay).toBe(false);
+        expect(result.scenes).toHaveLength(3);
+        for (const scene of result.scenes) {
+          expect(scene.configuration.referenceIds).toEqual([allowedAsset1, allowedAsset2]);
+          expect(scene.configuration.referenceBindings).toHaveLength(2);
+          expect(scene.configuration.referenceBindings![0]?.referenceAssetId).toBe(allowedAsset1);
+          expect(scene.configuration.referenceBindings![0]?.role).toBe("subject_identity");
+          expect(scene.configuration.referenceBindings![0]?.sceneId).toBe(scene.id);
+          expect(scene.configuration.referenceBindings![0]?.specRevision).toBe(1);
+          expect(scene.configuration.referenceBindings![1]?.referenceAssetId).toBe(allowedAsset2);
+          expect(scene.configuration.referenceBindings![1]?.role).toBe("style");
+          expect(scene.configuration.referenceBindings![1]?.sceneId).toBe(scene.id);
+          expect(scene.configuration.referenceBindings![1]?.specRevision).toBe(1);
+        }
+        expect(queue.jobs).toHaveLength(3 * CANDIDATE_BATCH_SIZE);
+      });
     });
   });
 });

@@ -1,8 +1,9 @@
-import type { CampaignId, ReferenceAssetId, SceneConfiguration } from "@cco/domain";
+import type { CampaignId, ReferenceAssetId, SceneConfigurationInput } from "@cco/domain";
 import type { PlanningModelClientPort } from "../ports/planning-model-client-port.js";
 import type { ReferenceAssetRepository } from "../ports/reference-asset-repository.js";
 import { buildPlanningPrompt, type CreativeBrief } from "./planning-prompt.js";
 import { parsePlanningResponse } from "./planning-response-parser.js";
+import { resolveCandidateReferenceAssets } from "./resolve-candidate-reference-assets.js";
 import {
   PlanningOrchestrationKernel,
   decodePlanningAuthorizationPolicy,
@@ -55,7 +56,7 @@ export class PlanSceneConfigurationUseCase {
       });
   }
 
-  async execute(input: PlanSceneConfigurationInput): Promise<SceneConfiguration> {
+  async execute(input: PlanSceneConfigurationInput): Promise<SceneConfigurationInput> {
     if (
       input.targetDurationMs !== undefined &&
       input.maxDurationMs !== undefined &&
@@ -72,7 +73,8 @@ export class PlanSceneConfigurationUseCase {
       policy,
       overallTimeoutMs: input.overallTimeoutMs,
       prepare: async (_signal: AbortSignal) => {
-        const resolvedReferenceAssets = await this.deps.referenceAssetRepository.findByIds(
+        const resolvedReferenceAssets = await resolveCandidateReferenceAssets(
+          this.deps.referenceAssetRepository,
           input.clientId,
           input.candidateReferenceAssetIds
         );
@@ -89,14 +91,15 @@ export class PlanSceneConfigurationUseCase {
               correctiveFeedback,
               targetEngineProfileId: input.targetEngineProfileId
             }),
-          parseAndValidate: (rawText: string): SceneConfiguration => {
+          parseAndValidate: (rawText: string): SceneConfigurationInput => {
             const parsed = parsePlanningResponse(rawText);
             if (!parsed.ok) {
               throw new SceneConfigurationValidationError(parsed.reason);
             }
             const config = validateSceneConfiguration(parsed.value, resolvedReferenceAssets, {
               maxDurationMs: input.maxDurationMs,
-              targetDurationMs: input.targetDurationMs
+              targetDurationMs: input.targetDurationMs,
+              campaignClientId: input.clientId
             });
             if (input.targetEngineProfileId !== undefined) {
               return {

@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import {
   Scene,
   type CampaignId,
+  type ReferenceAssetId,
   type SceneConfiguration,
+  type SceneConfigurationInput,
   type SceneId,
   type SceneSnapshot
 } from "@cco/domain";
@@ -11,19 +13,22 @@ import { CampaignNotFoundError } from "./campaign-not-found-error.js";
 import { InvalidSceneOrdinalSequenceError } from "./invalid-scene-ordinal-sequence-error.js";
 import { TransactionalJobEnqueuerUnavailableError } from "./job-queue-errors.js";
 import type { ProgressSceneProductionUseCases } from "./progress-scene-production.js";
+import { resolveCandidateReferenceAssets } from "./resolve-candidate-reference-assets.js";
 import { SceneConfigurationCountMismatchError } from "./scene-configuration-count-mismatch-error.js";
+import { SceneConfigurationValidationError } from "./validate-scene-configuration.js";
 import { StoryboardPartiallyMaterializedError } from "./storyboard-partially-materialized-error.js";
 import { StoryboardMaterializationConflictError } from "./storyboard-materialization-conflict-error.js";
 
 export interface OrderedSceneConfiguration {
   readonly ordinal: number;
-  readonly configuration: SceneConfiguration;
+  readonly configuration: SceneConfigurationInput | SceneConfiguration;
 }
 
 export interface MaterializeStoryboardInput {
   readonly campaignId: CampaignId;
   readonly scenes: readonly OrderedSceneConfiguration[];
   readonly completionHashSha256?: string | undefined;
+  readonly candidateReferenceAssetIds?: readonly ReferenceAssetId[] | readonly string[] | undefined;
 }
 
 export interface MaterializeStoryboardResult {
@@ -132,6 +137,42 @@ export class MaterializeStoryboardUseCase {
 
     if (context.jobs === undefined) {
       throw new TransactionalJobEnqueuerUnavailableError();
+    }
+
+    const allAssignedAssetIds = Array.from(
+      new Set(
+        sortedInputScenes.flatMap((s) => [
+          ...(s.configuration.referenceIds ?? []),
+          ...(s.configuration.referenceBindings?.map((b) => b.referenceAssetId) ?? [])
+        ])
+      )
+    ) as ReferenceAssetId[];
+
+    if (input.candidateReferenceAssetIds !== undefined) {
+      const canonicalAllowedSet = new Set(
+        input.candidateReferenceAssetIds.map((id) => String(id).trim())
+      );
+      for (const id of allAssignedAssetIds) {
+        if (!canonicalAllowedSet.has(String(id))) {
+          throw new SceneConfigurationValidationError(
+            `referenceId "${id}" was not included in allowed campaign candidate reference assets`
+          );
+        }
+      }
+    }
+
+    if (input.candidateReferenceAssetIds !== undefined && allAssignedAssetIds.length > 0) {
+      if (context.referenceAssets === undefined) {
+        throw new Error(
+          "UnitOfWorkContext.referenceAssets is required to validate scene references during materialization."
+        );
+      }
+      await resolveCandidateReferenceAssets(
+        context.referenceAssets,
+        campaign.clientId,
+        allAssignedAssetIds,
+        { forUpdate: true }
+      );
     }
 
     const materializedScenes: Readonly<SceneSnapshot>[] = [];

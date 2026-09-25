@@ -1,5 +1,10 @@
 import type { CreativeBrief } from "@cco/contracts";
-import type { ReferenceAssetId, Scene, SceneConfiguration } from "@cco/domain";
+import type {
+  ReferenceAssetId,
+  Scene,
+  SceneConfiguration,
+  SceneConfigurationInput
+} from "@cco/domain";
 import type { UnitOfWork } from "../ports/index.js";
 import { CampaignNotFoundError } from "./campaign-not-found-error.js";
 import { ClientNotFoundError } from "./client-not-found-error.js";
@@ -18,7 +23,7 @@ export type SubmitSceneCreationInput = {
 } & (
   | {
       readonly kind: "manual";
-      readonly configuration: SceneConfiguration;
+      readonly configuration: SceneConfigurationInput | SceneConfiguration;
     }
   | {
       readonly kind: "brief";
