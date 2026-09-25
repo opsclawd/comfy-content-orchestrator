@@ -1,5 +1,15 @@
 import { ReviewEventSchema, type ReviewAction } from "@cco/contracts";
-import type { CandidateId, Scene, SceneId, SceneSnapshot, SceneTransition } from "@cco/domain";
+import {
+  assertReferenceAssetSelectable,
+  ReferenceAssetNotFoundError,
+  type CandidateId,
+  type ReferenceAssetId,
+  type Scene,
+  type SceneId,
+  type SceneReferenceBinding,
+  type SceneSnapshot,
+  type SceneTransition
+} from "@cco/domain";
 import type { UnitOfWork, UnitOfWorkContext } from "../ports/unit-of-work.js";
 import { CandidateNotFoundError } from "./candidate-not-found-error.js";
 import { IdempotencyConflictError } from "./idempotency-conflict-error.js";
@@ -39,7 +49,8 @@ export interface UpdatePromptInput extends ReviewAuditInput {
 }
 
 export interface UpdateReferencesInput extends ReviewAuditInput {
-  readonly referenceIds: readonly string[];
+  readonly referenceIds?: readonly string[] | undefined;
+  readonly referenceBindings?: readonly SceneReferenceBinding[] | undefined;
 }
 
 export interface UpdateEngineInput extends ReviewAuditInput {
@@ -272,11 +283,21 @@ export class ReviewSceneUseCases {
   }
 
   async updateReferences(input: UpdateReferencesInput): Promise<ReviewExecutionResult> {
+    const effectiveReferenceIds =
+      input.referenceIds ??
+      (input.referenceBindings
+        ? Array.from(new Set(input.referenceBindings.map((b) => b.referenceAssetId)))
+        : []);
     return await this.executeReviewAction(
       input,
       "reference_change",
-      { referenceIds: input.referenceIds },
-      (scene) => scene.updateReferences(input.referenceIds)
+      {
+        referenceIds: effectiveReferenceIds,
+        ...(input.referenceBindings !== undefined
+          ? { referenceBindings: input.referenceBindings }
+          : {})
+      },
+      (scene) => scene.updateReferences(effectiveReferenceIds, input.referenceBindings)
     );
   }
 
@@ -338,7 +359,40 @@ export class ReviewSceneUseCases {
 
       const scene = prepared.scene;
       const priorSceneStatus = scene.status;
+
       const transition = apply(scene);
+
+      if (action === "reference_change" && context.referenceAssets !== undefined) {
+        const refIds = (payload as { referenceIds?: readonly string[] }).referenceIds ?? [];
+        const bindings =
+          (payload as { referenceBindings?: readonly SceneReferenceBinding[] }).referenceBindings ??
+          [];
+        const allRefIds = [...new Set([...refIds, ...bindings.map((b) => b.referenceAssetId)])];
+        if (allRefIds.length > 0 && context.campaigns !== undefined) {
+          const campaign = await context.campaigns.findById(scene.campaignId);
+          if (campaign !== undefined) {
+            const assets =
+              typeof context.referenceAssets.findByIdsGlobal === "function"
+                ? await context.referenceAssets.findByIdsGlobal(
+                    allRefIds as unknown as readonly ReferenceAssetId[],
+                    { includeArchived: true }
+                  )
+                : await context.referenceAssets.findByIds(
+                    campaign.clientId,
+                    allRefIds as unknown as readonly ReferenceAssetId[],
+                    { includeArchived: true }
+                  );
+            const assetMap = new Map(assets.map((a) => [a.id as string, a]));
+            for (const refId of allRefIds) {
+              const asset = assetMap.get(refId);
+              if (!asset) {
+                throw new ReferenceAssetNotFoundError(refId);
+              }
+              assertReferenceAssetSelectable(asset, campaign.clientId);
+            }
+          }
+        }
+      }
       if (enqueueCandidates) {
         if (context.jobs === undefined) {
           throw new TransactionalJobEnqueuerUnavailableError();

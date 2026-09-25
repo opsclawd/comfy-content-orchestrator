@@ -1,11 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  ArchivedReferenceBindingError,
+  CrossClientReferenceBindingError,
   InvalidCandidateError,
   InvalidMutationError,
   InvalidTransitionError,
+  ReferenceAssetNotFoundError,
   Scene,
   type CampaignId,
+  type CampaignRecord,
   type CandidateId,
+  type ReferenceAsset,
+  type ReferenceAssetId,
   type SceneId,
   type StoryboardCandidate
 } from "@cco/domain";
@@ -23,6 +29,30 @@ import { ReviewSceneUseCases } from "./review-scene.js";
 import { SceneNotFoundError } from "./scene-not-found-error.js";
 
 describe("ReviewSceneUseCases", () => {
+  const seededCampaign: CampaignRecord = {
+    id: "campaign-1" as CampaignId,
+    clientId: "client-1",
+    title: "Test Campaign",
+    targetPlatform: "instagram_reels",
+    status: "drafting",
+    totalScenes: 1,
+    approvedScenes: 0,
+    createdAt: "2026-08-15T00:00:00.000Z",
+    updatedAt: "2026-08-15T00:00:00.000Z"
+  };
+
+  const createReferenceAsset = (
+    id: string,
+    clientId: string = "client-1",
+    archivedAt?: string
+  ): ReferenceAsset => ({
+    id: id as ReferenceAssetId,
+    clientId,
+    storageBucket: "ref-bucket",
+    storageObjectKey: `assets/${id}.png`,
+    contentHashSha256: "1".repeat(64),
+    ...(archivedAt !== undefined ? { archivedAt } : {})
+  });
   const createTestScene = (id: string = "scene-1"): Scene => {
     return Scene.create({
       id: id as SceneId,
@@ -295,7 +325,10 @@ describe("ReviewSceneUseCases", () => {
     for (const testCase of mutationCases) {
       const sceneId = `scene-mutation-${testCase.field}`;
       const scene = createSceneInApproved(sceneId);
-      const uow = new InMemorySceneUnitOfWork([scene]);
+      const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [seededCampaign]);
+      uow.seedReferenceAsset(createReferenceAsset("ref-1"));
+      uow.seedReferenceAsset(createReferenceAsset("ref-2"));
+      uow.seedReferenceAsset(createReferenceAsset("ref-3"));
       const useCases = new ReviewSceneUseCases(uow);
 
       expect(scene.status).toBe("approved");
@@ -320,6 +353,92 @@ describe("ReviewSceneUseCases", () => {
       expect(event.mutationPayload).toEqual(testCase.expectedPayload);
       expect(Object.keys(event.mutationPayload)).toEqual(Object.keys(testCase.expectedPayload));
     }
+  });
+
+  describe("updateReferences validation guards", () => {
+    it("rejects when reference asset does not exist with ReferenceAssetNotFoundError", async () => {
+      const scene = createSceneInApproved("scene-ref-missing");
+      const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [seededCampaign]);
+      const useCases = new ReviewSceneUseCases(uow);
+
+      await expect(
+        useCases.updateReferences({
+          sceneId: "scene-ref-missing",
+          eventId: "event-ref-err-1",
+          reviewerName: "Director Alice",
+          occurredAt: "2026-08-15T03:01:00.000Z",
+          referenceIds: ["nonexistent-ref"]
+        })
+      ).rejects.toThrow(ReferenceAssetNotFoundError);
+    });
+
+    it("rejects when reference asset belongs to another client with CrossClientReferenceBindingError", async () => {
+      const scene = createSceneInApproved("scene-ref-cross");
+      const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [seededCampaign]);
+      uow.seedReferenceAsset(createReferenceAsset("foreign-ref", "different-client"));
+      const useCases = new ReviewSceneUseCases(uow);
+
+      await expect(
+        useCases.updateReferences({
+          sceneId: "scene-ref-cross",
+          eventId: "event-ref-err-2",
+          reviewerName: "Director Alice",
+          occurredAt: "2026-08-15T03:01:00.000Z",
+          referenceIds: ["foreign-ref"]
+        })
+      ).rejects.toThrow(CrossClientReferenceBindingError);
+    });
+
+    it("rejects when reference asset is archived with ArchivedReferenceBindingError", async () => {
+      const scene = createSceneInApproved("scene-ref-archived");
+      const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [seededCampaign]);
+      uow.seedReferenceAsset(
+        createReferenceAsset("archived-ref", seededCampaign.clientId, "2026-08-14T00:00:00.000Z")
+      );
+      const useCases = new ReviewSceneUseCases(uow);
+
+      await expect(
+        useCases.updateReferences({
+          sceneId: "scene-ref-archived",
+          eventId: "event-ref-err-3",
+          reviewerName: "Director Alice",
+          occurredAt: "2026-08-15T03:01:00.000Z",
+          referenceIds: ["archived-ref"]
+        })
+      ).rejects.toThrow(ArchivedReferenceBindingError);
+    });
+
+    it("successfully applies referenceBindings with roles, weights, and hints", async () => {
+      const scene = createSceneInApproved("scene-ref-bindings");
+      const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [seededCampaign]);
+      uow.seedReferenceAsset(createReferenceAsset("ref-hero"));
+      const useCases = new ReviewSceneUseCases(uow);
+
+      const bindings = [
+        {
+          sceneId: "scene-ref-bindings" as SceneId,
+          specRevision: 2,
+          referenceAssetId: "ref-hero" as ReferenceAssetId,
+          role: "subject_identity" as const,
+          weight: 0.85,
+          hints: { crop: "face" }
+        }
+      ];
+
+      await useCases.updateReferences({
+        sceneId: "scene-ref-bindings",
+        eventId: "event-ref-bindings-1",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T03:01:00.000Z",
+        referenceBindings: bindings
+      });
+
+      expect(uow.savedScenes).toHaveLength(1);
+      const saved = uow.savedScenes[0]!;
+      expect(saved.snapshot().specRevision).toBe(2);
+      expect(saved.snapshot().configuration.referenceIds).toEqual(["ref-hero"]);
+      expect(saved.snapshot().configuration.referenceBindings).toEqual(bindings);
+    });
   });
 
   it("qa decisions: qa accept completes and qa reject returns to director_review with audit events", async () => {

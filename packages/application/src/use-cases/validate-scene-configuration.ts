@@ -1,5 +1,10 @@
 import { RenderProfileKeySchema } from "@cco/contracts";
-import type { ReferenceAsset, SceneConfiguration } from "@cco/domain";
+import {
+  assertReferenceAssetSelectable,
+  ArchivedReferenceBindingError,
+  type ReferenceAsset,
+  type SceneConfiguration
+} from "@cco/domain";
 
 export class SceneConfigurationValidationError extends Error {
   constructor(message: string) {
@@ -11,6 +16,7 @@ export class SceneConfigurationValidationError extends Error {
 export interface ValidateSceneConfigurationOptions {
   readonly maxDurationMs?: number | undefined;
   readonly targetDurationMs?: number | undefined;
+  readonly campaignClientId?: string | undefined;
 }
 
 export function validateSceneConfiguration(
@@ -21,6 +27,8 @@ export function validateSceneConfiguration(
   const maxDurationMs = typeof options === "number" ? options : options?.maxDurationMs;
   const targetDurationMs =
     typeof options === "object" && options !== null ? options.targetDurationMs : undefined;
+  const campaignClientId =
+    typeof options === "object" && options !== null ? options.campaignClientId : undefined;
 
   if (
     maxDurationMs !== undefined &&
@@ -49,17 +57,25 @@ export function validateSceneConfiguration(
     throw new SceneConfigurationValidationError("referenceIds must be an array of strings");
   }
 
-  const allowedAssetIds = new Set(resolvedReferenceAssets.map((asset) => asset.id as string));
+  const allowedAssetsMap = new Map(
+    resolvedReferenceAssets.map((asset) => [asset.id as string, asset])
+  );
   const referenceIds: string[] = [];
 
   for (const refId of record.referenceIds) {
     if (typeof refId !== "string") {
       throw new SceneConfigurationValidationError("All referenceIds entries must be strings");
     }
-    if (!allowedAssetIds.has(refId)) {
+    const asset = allowedAssetsMap.get(refId);
+    if (!asset) {
       throw new SceneConfigurationValidationError(
         `referenceId "${refId}" is not present in resolved reference assets`
       );
+    }
+    if (campaignClientId !== undefined) {
+      assertReferenceAssetSelectable(asset, campaignClientId);
+    } else if (asset.archivedAt != null) {
+      throw new ArchivedReferenceBindingError(asset.id);
     }
     referenceIds.push(refId);
   }

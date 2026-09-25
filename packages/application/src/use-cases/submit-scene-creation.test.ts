@@ -90,7 +90,15 @@ describe("SubmitSceneCreationUseCase", () => {
       updatedAt: "2026-09-03T12:00:00.000Z"
     };
 
-    return new InMemorySceneUnitOfWork([], [], [], [campaign], [client]);
+    const uow = new InMemorySceneUnitOfWork([], [], [], [campaign], [client]);
+    uow.seedReferenceAsset({
+      id: "ref-1" as ReferenceAssetId,
+      clientId,
+      storageBucket: "ref-bucket",
+      storageObjectKey: "assets/ref-1.png",
+      contentHashSha256: "1".repeat(64)
+    });
+    return uow;
   }
 
   it("cloud-enabled + brief delegates to planning use case then creates scene", async () => {

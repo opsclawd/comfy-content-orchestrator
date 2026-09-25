@@ -13,7 +13,12 @@ import {
   type JobKind,
   type RenderJob,
   type SceneId,
-  type StoryboardCandidate
+  type StoryboardCandidate,
+  type ReferenceAsset,
+  type ReferenceAssetId,
+  type ReferenceGroup,
+  type ReferenceGroupId,
+  type SceneReferenceBinding
 } from "@cco/domain";
 import type {
   CampaignProductionRunRepository,
@@ -26,6 +31,8 @@ import type {
   EnqueueJobInput,
   GenerationManifestRepository,
   ProductionAttemptRecord,
+  ReferenceAssetRepository,
+  ReferenceGroupRepository,
   ReviewEventStore,
   SceneRepository,
   StoryboardCandidateRepository,
@@ -55,6 +62,9 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _seededRunScenes = new Map<string, CampaignProductionRunSceneRecord>();
   private readonly _seededAttempts = new Map<string, ProductionAttemptRecord>();
   private readonly _seededVideoStemSources = new Map<string, VideoStemSourceRecord>();
+  private readonly _seededReferenceAssets = new Map<ReferenceAssetId, ReferenceAsset>();
+  private readonly _seededReferenceGroups = new Map<ReferenceGroupId, ReferenceGroup>();
+  private readonly _sceneBindings = new Map<string, SceneReferenceBinding>();
   private readonly _enqueuedAssemblyJobs: EnqueueDeliveryAssemblyJobInput[] = [];
   private _beforeSaveWithRequestHash?:
     ((campaign: CampaignShellRecord, hash: string) => Promise<void> | void) | undefined;
@@ -218,6 +228,11 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     return this;
   }
 
+  seedCampaign(campaign: CampaignRecord): this {
+    this._seededCampaigns.set(campaign.id, campaign);
+    return this;
+  }
+
   seedCampaignWithHash(
     campaign: CampaignRecord,
     requestHashSha256: string,
@@ -258,6 +273,16 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
 
   seedVideoStemSource(productionJobId: string, source: VideoStemSourceRecord): this {
     this._seededVideoStemSources.set(productionJobId, source);
+    return this;
+  }
+
+  seedReferenceAsset(asset: ReferenceAsset): this {
+    this._seededReferenceAssets.set(asset.id, asset);
+    return this;
+  }
+
+  seedReferenceGroup(group: ReferenceGroup): this {
+    this._seededReferenceGroups.set(group.id, group);
     return this;
   }
 
@@ -600,6 +625,102 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       findVideoStemSourceByJobId: async (jobId: string) => this._seededVideoStemSources.get(jobId)
     };
 
+    const scopedReferenceAssets: ReferenceAssetRepository = {
+      listBySceneId: async (sceneId, options) => {
+        const boundAssetIds = Array.from(this._sceneBindings.values())
+          .filter(
+            (b) => b.sceneId === sceneId && (options?.includeArchived ? true : b.archivedAt == null)
+          )
+          .filter((b) =>
+            options?.specRevision !== undefined ? b.specRevision === options.specRevision : true
+          )
+          .map((b) => b.referenceAssetId);
+
+        const assets: ReferenceAsset[] = [];
+        for (const id of boundAssetIds) {
+          const asset = this._seededReferenceAssets.get(id);
+          if (asset && (options?.includeArchived ? true : asset.archivedAt == null)) {
+            assets.push({ ...asset, sceneId });
+          }
+        }
+        return assets;
+      },
+      findByIds: async (clientId, ids, options) => {
+        if (ids.length === 0) return [];
+        return Array.from(this._seededReferenceAssets.values()).filter(
+          (a) =>
+            a.clientId === clientId &&
+            ids.includes(a.id) &&
+            (options?.includeArchived ? true : a.archivedAt == null)
+        );
+      },
+      findByIdsGlobal: async (ids, options) => {
+        if (ids.length === 0) return [];
+        return Array.from(this._seededReferenceAssets.values()).filter(
+          (a) => ids.includes(a.id) && (options?.includeArchived ? true : a.archivedAt == null)
+        );
+      },
+      findByClientId: async (clientId, options) => {
+        return Array.from(this._seededReferenceAssets.values()).filter(
+          (a) =>
+            a.clientId === clientId &&
+            (options?.groupId !== undefined ? a.groupId === options.groupId : true) &&
+            (options?.includeArchived ? true : a.archivedAt == null)
+        );
+      },
+      listBindingsBySceneId: async (sceneId, options) => {
+        return Array.from(this._sceneBindings.values()).filter(
+          (b) =>
+            b.sceneId === sceneId &&
+            (options?.includeArchived ? true : b.archivedAt == null) &&
+            (options?.specRevision !== undefined ? b.specRevision === options.specRevision : true)
+        );
+      },
+      saveBindings: async (sceneId, bindings) => {
+        for (const b of bindings) {
+          this._sceneBindings.set(
+            `${sceneId}:${b.specRevision}:${b.referenceAssetId}:${b.role}`,
+            b
+          );
+        }
+      },
+      save: async (asset) => {
+        this._seededReferenceAssets.set(asset.id, asset);
+        return asset;
+      },
+      archive: async (clientId, id) => {
+        const asset = this._seededReferenceAssets.get(id);
+        if (!asset || asset.clientId !== clientId || asset.archivedAt != null) return false;
+        this._seededReferenceAssets.set(id, { ...asset, archivedAt: new Date().toISOString() });
+        return true;
+      }
+    };
+
+    const scopedReferenceGroups: ReferenceGroupRepository = {
+      findById: async (groupId) => this._seededReferenceGroups.get(groupId),
+      findByClientId: async (clientId, options) => {
+        return Array.from(this._seededReferenceGroups.values()).filter(
+          (g) =>
+            g.clientId === clientId &&
+            (options?.campaignId !== undefined ? g.campaignId === options.campaignId : true) &&
+            (options?.includeArchived ? true : g.archivedAt == null)
+        );
+      },
+      save: async (group) => {
+        this._seededReferenceGroups.set(group.id, group);
+        return group;
+      },
+      archive: async (clientId, groupId) => {
+        const group = this._seededReferenceGroups.get(groupId);
+        if (!group || group.clientId !== clientId || group.archivedAt != null) return false;
+        this._seededReferenceGroups.set(groupId, {
+          ...group,
+          archivedAt: new Date().toISOString()
+        });
+        return true;
+      }
+    };
+
     const context: UnitOfWorkContext = {
       scenes: scopedScenes,
       reviewEvents: scopedReviewEvents,
@@ -609,7 +730,9 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       jobs: scopedJobs,
       campaignProductionRuns: defaultCampaignProductionRuns,
       assemblyJobs: defaultAssemblyJobs,
-      generationManifests: defaultGenerationManifests
+      generationManifests: defaultGenerationManifests,
+      referenceAssets: scopedReferenceAssets,
+      referenceGroups: scopedReferenceGroups
     };
 
     const result = await work(context);

@@ -55,7 +55,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
   it("migrates an empty PostgreSQL 18.6 database through the baseline", async () => {
     const applied = await runMigrations(client, { migrationsDirectory });
 
-    expect(applied).toHaveLength(16);
+    expect(applied).toHaveLength(17);
     expect(applied[0]?.version).toBe("001");
     expect(applied[1]?.version).toBe("002");
     expect(applied[2]?.version).toBe("003");
@@ -72,6 +72,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
     expect(applied[13]?.version).toBe("014");
     expect(applied[14]?.version).toBe("015");
     expect(applied[15]?.version).toBe("016");
+    expect(applied[16]?.version).toBe("017");
 
     const schemaRes = await client.query(
       "SELECT version FROM schema_migrations ORDER BY version ASC"
@@ -92,7 +93,8 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       { version: "013" },
       { version: "014" },
       { version: "015" },
-      { version: "016" }
+      { version: "016" },
+      { version: "017" }
     ]);
 
     const tablesRes = await client.query<{ table_name: string }>(
@@ -115,6 +117,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       "license_registry",
       "production_attempts",
       "reference_assets",
+      "reference_groups",
       "render_jobs",
       "review_events",
       "scene_reference_assets",
@@ -937,5 +940,92 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
     const enumLabels = enumRes.rows.map((r) => r.enumlabel);
     expect(enumLabels).toContain("production_accept");
     expect(enumLabels).toContain("production_rerender");
+  });
+
+  it("persists reference_groups and hardened reference_assets / scene_reference_assets schema", async () => {
+    await runMigrations(client, { migrationsDirectory });
+
+    // Verify reference_groups table columns
+    const groupCols = await client.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_name = 'reference_groups'
+       ORDER BY column_name ASC`
+    );
+    expect(groupCols.rows.map((r) => r.column_name)).toEqual([
+      "archived_at",
+      "campaign_id",
+      "client_id",
+      "created_at",
+      "description",
+      "group_id",
+      "name"
+    ]);
+
+    // Verify reference_assets new columns
+    const refAssetCols = await client.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_name = 'reference_assets' AND column_name IN (
+         'width', 'height', 'mime_type', 'display_name', 'group_id', 'archived_at'
+       )
+       ORDER BY column_name ASC`
+    );
+    expect(refAssetCols.rows.map((r) => r.column_name)).toEqual([
+      "archived_at",
+      "display_name",
+      "group_id",
+      "height",
+      "mime_type",
+      "width"
+    ]);
+
+    // Verify scene_reference_assets new columns
+    const sceneRefCols = await client.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_name = 'scene_reference_assets' AND column_name IN (
+         'spec_revision', 'role', 'weight', 'hints', 'archived_at'
+       )
+       ORDER BY column_name ASC`
+    );
+    expect(sceneRefCols.rows.map((r) => r.column_name)).toEqual([
+      "archived_at",
+      "hints",
+      "role",
+      "spec_revision",
+      "weight"
+    ]);
+
+    // Verify indexes
+    const indexRes = await client.query<{ indexname: string }>(
+      `SELECT indexname FROM pg_indexes
+       WHERE indexname IN (
+         'idx_reference_groups_client',
+         'idx_reference_assets_group',
+         'idx_scene_reference_assets_scene_rev'
+       )
+       ORDER BY indexname ASC`
+    );
+    expect(indexRes.rows.map((r) => r.indexname)).toEqual([
+      "idx_reference_assets_group",
+      "idx_reference_groups_client",
+      "idx_scene_reference_assets_scene_rev"
+    ]);
+
+    // Verify primary key on scene_reference_assets is (scene_id, spec_revision, asset_id, role)
+    const pkCols = await client.query<{ column_name: string }>(
+      `SELECT kcu.column_name
+       FROM information_schema.table_constraints tc
+       JOIN information_schema.key_column_usage kcu
+         ON tc.constraint_name = kcu.constraint_name
+         AND tc.table_schema = kcu.table_schema
+       WHERE tc.table_name = 'scene_reference_assets'
+         AND tc.constraint_type = 'PRIMARY KEY'
+       ORDER BY kcu.ordinal_position ASC`
+    );
+    expect(pkCols.rows.map((r) => r.column_name)).toEqual([
+      "scene_id",
+      "spec_revision",
+      "asset_id",
+      "role"
+    ]);
   });
 });

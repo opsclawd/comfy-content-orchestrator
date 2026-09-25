@@ -5,6 +5,8 @@ import type { ClientRepository } from "./client-repository.js";
 import type { DeliveryAssemblyJobQueuePort } from "./delivery-assembly-job-queue-port.js";
 import type { GenerationManifestRepository } from "./generation-manifest-repository.js";
 import type { TransactionalJobEnqueuer } from "./job-queue-port.js";
+import type { ReferenceAssetRepository } from "./reference-asset-repository.js";
+import type { ReferenceGroupRepository } from "./reference-group-repository.js";
 import type { ReviewEventStore } from "./review-event-store.js";
 import type { SceneRepository } from "./scene-repository.js";
 import type { StoryboardCandidateRepository } from "./storyboard-candidate-repository.js";
@@ -19,6 +21,8 @@ export interface UnitOfWorkContext {
   readonly campaignProductionRuns?: CampaignProductionRunRepository | undefined;
   readonly assemblyJobs?: Pick<DeliveryAssemblyJobQueuePort, "enqueue"> | undefined;
   readonly generationManifests?: GenerationManifestRepository | undefined;
+  readonly referenceAssets?: ReferenceAssetRepository | undefined;
+  readonly referenceGroups?: ReferenceGroupRepository | undefined;
 }
 
 export interface UnitOfWork {

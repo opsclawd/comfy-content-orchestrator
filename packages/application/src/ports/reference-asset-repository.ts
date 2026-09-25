@@ -1,9 +1,49 @@
-import type { ReferenceAsset, ReferenceAssetId, SceneId } from "@cco/domain";
+import type {
+  ReferenceAsset,
+  ReferenceAssetId,
+  ReferenceGroupId,
+  SceneId,
+  SceneReferenceBinding
+} from "@cco/domain";
+
+export interface ReferenceAssetRepositoryOptions {
+  readonly includeArchived?: boolean | undefined;
+  readonly specRevision?: number | undefined;
+  readonly groupId?: ReferenceGroupId | undefined;
+}
 
 export interface ReferenceAssetRepository {
-  readonly listBySceneId: (sceneId: SceneId) => Promise<readonly ReferenceAsset[]>;
+  readonly listBySceneId: (
+    sceneId: SceneId,
+    options?: Pick<ReferenceAssetRepositoryOptions, "includeArchived" | "specRevision">
+  ) => Promise<readonly ReferenceAsset[]>;
+
   readonly findByIds: (
     clientId: string,
-    ids: readonly ReferenceAssetId[]
+    ids: readonly ReferenceAssetId[],
+    options?: Pick<ReferenceAssetRepositoryOptions, "includeArchived">
   ) => Promise<readonly ReferenceAsset[]>;
+
+  readonly findByIdsGlobal?: (
+    ids: readonly ReferenceAssetId[],
+    options?: Pick<ReferenceAssetRepositoryOptions, "includeArchived">
+  ) => Promise<readonly ReferenceAsset[]>;
+
+  readonly findByClientId?: (
+    clientId: string,
+    options?: Pick<ReferenceAssetRepositoryOptions, "includeArchived" | "groupId">
+  ) => Promise<readonly ReferenceAsset[]>;
+
+  readonly listBindingsBySceneId?: (
+    sceneId: SceneId,
+    options?: Pick<ReferenceAssetRepositoryOptions, "includeArchived" | "specRevision">
+  ) => Promise<readonly SceneReferenceBinding[]>;
+
+  readonly saveBindings?: (
+    sceneId: SceneId,
+    bindings: readonly SceneReferenceBinding[]
+  ) => Promise<void>;
+
+  readonly save?: (asset: ReferenceAsset) => Promise<ReferenceAsset>;
+  readonly archive?: (clientId: string, id: ReferenceAssetId) => Promise<boolean>;
 }

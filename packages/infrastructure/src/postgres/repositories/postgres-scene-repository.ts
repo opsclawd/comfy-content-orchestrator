@@ -1,6 +1,20 @@
 import type { SceneRepository } from "@cco/application";
-import type { CampaignId, CandidateId, SceneId, SceneSnapshot, SceneStatus } from "@cco/domain";
-import { Scene } from "@cco/domain";
+import type {
+  CampaignId,
+  CandidateId,
+  ReferenceAssetId,
+  ReferenceRole,
+  SceneId,
+  SceneReferenceBinding,
+  SceneSnapshot,
+  SceneStatus
+} from "@cco/domain";
+import {
+  ArchivedReferenceBindingError,
+  CrossClientReferenceBindingError,
+  ReferenceAssetNotFoundError,
+  Scene
+} from "@cco/domain";
 import type { Pool, PoolClient } from "pg";
 
 export interface PostgresSceneRepositoryOptions {
@@ -37,6 +51,15 @@ interface StoryboardSceneRow {
   updated_at: Date | string;
   archived_at: Date | string | null;
   reference_asset_ids: string[] | null;
+  reference_bindings: Array<{
+    sceneId: string;
+    specRevision: number;
+    referenceAssetId: string;
+    role: string;
+    weight: number | null;
+    hints: Record<string, unknown> | null;
+    archivedAt: Date | string | null;
+  }> | null;
 }
 
 function isPool(client: Pool | PoolClient): client is Pool {
@@ -47,6 +70,36 @@ function isPool(client: Pool | PoolClient): client is Pool {
 }
 
 function mapRowToScene(row: StoryboardSceneRow): Scene {
+  const referenceBindings: readonly SceneReferenceBinding[] = Array.isArray(row.reference_bindings)
+    ? Object.freeze(
+        row.reference_bindings.map((b) => {
+          const binding: {
+            sceneId: SceneId;
+            specRevision: number;
+            referenceAssetId: ReferenceAssetId;
+            role: ReferenceRole;
+            weight: number | null;
+            hints: Record<string, unknown> | null;
+            archivedAt?: string;
+          } = {
+            sceneId: b.sceneId as SceneId,
+            specRevision: Number(b.specRevision),
+            referenceAssetId: b.referenceAssetId as ReferenceAssetId,
+            role: b.role as ReferenceRole,
+            weight: b.weight !== null && b.weight !== undefined ? Number(b.weight) : null,
+            hints: b.hints ?? null
+          };
+          if (b.archivedAt) {
+            binding.archivedAt =
+              b.archivedAt instanceof Date
+                ? b.archivedAt.toISOString()
+                : new Date(b.archivedAt).toISOString();
+          }
+          return Object.freeze(binding as SceneReferenceBinding);
+        })
+      )
+    : [];
+
   const referenceIds = Object.freeze(
     Array.isArray(row.reference_asset_ids) ? row.reference_asset_ids : []
   );
@@ -69,6 +122,10 @@ function mapRowToScene(row: StoryboardSceneRow): Scene {
         }
       : undefined;
 
+  const hasExplicitBindings = referenceBindings.some(
+    (b) => b.role !== "style" || b.weight !== null || b.hints !== null || b.archivedAt !== undefined
+  );
+
   const snapshot: SceneSnapshot = {
     id: row.scene_id as SceneId,
     campaignId: row.campaign_id as CampaignId,
@@ -78,6 +135,7 @@ function mapRowToScene(row: StoryboardSceneRow): Scene {
     configuration: {
       prompt: row.visual_description,
       referenceIds,
+      ...(hasExplicitBindings && referenceBindings.length > 0 ? { referenceBindings } : {}),
       engineProfileId: row.engine_assigned,
       durationMs,
       loraConfigurationId: row.lora_configuration_id
@@ -102,6 +160,27 @@ function mapRowToScene(row: StoryboardSceneRow): Scene {
   };
 
   return Scene.reconstitute(snapshot);
+}
+
+function weightsEqual(
+  w1: string | number | null | undefined,
+  w2: string | number | null | undefined
+): boolean {
+  if (w1 == null && w2 == null) return true;
+  if (w1 == null || w2 == null) return false;
+  return Number(w1) === Number(w2);
+}
+
+function hintsEqual(h1: unknown, h2: unknown): boolean {
+  const norm1 =
+    h1 == null || (typeof h1 === "object" && Object.keys(h1 as object).length === 0)
+      ? null
+      : JSON.stringify(h1);
+  const norm2 =
+    h2 == null || (typeof h2 === "object" && Object.keys(h2 as object).length === 0)
+      ? null
+      : JSON.stringify(h2);
+  return norm1 === norm2;
 }
 
 export class PostgresSceneRepository implements SceneRepository {
@@ -154,12 +233,31 @@ export class PostgresSceneRepository implements SceneRepository {
         s.archived_at,
         COALESCE(
           (
-            SELECT array_agg(sra.asset_id::text ORDER BY sra.asset_id ASC)
+            SELECT array_agg(DISTINCT sra.asset_id::text ORDER BY sra.asset_id::text ASC)
             FROM scene_reference_assets sra
-            WHERE sra.scene_id = s.scene_id
+            WHERE sra.scene_id = s.scene_id AND sra.spec_revision = s.spec_revision AND sra.archived_at IS NULL
           ),
           '{}'
-        ) AS reference_asset_ids
+        ) AS reference_asset_ids,
+        COALESCE(
+          (
+            SELECT json_agg(
+              json_build_object(
+                'sceneId', sra.scene_id,
+                'specRevision', sra.spec_revision,
+                'referenceAssetId', sra.asset_id,
+                'role', sra.role,
+                'weight', sra.weight,
+                'hints', sra.hints,
+                'archivedAt', sra.archived_at
+              )
+              ORDER BY sra.asset_id ASC, sra.role ASC
+            )
+            FROM scene_reference_assets sra
+            WHERE sra.scene_id = s.scene_id AND sra.spec_revision = s.spec_revision
+          ),
+          '[]'::json
+        ) AS reference_bindings
       FROM storyboard_scenes s
       WHERE s.scene_id = $1
       ${lockClause}
@@ -221,12 +319,31 @@ export class PostgresSceneRepository implements SceneRepository {
         s.archived_at,
         COALESCE(
           (
-            SELECT array_agg(sra.asset_id::text ORDER BY sra.asset_id ASC)
+            SELECT array_agg(DISTINCT sra.asset_id::text ORDER BY sra.asset_id::text ASC)
             FROM scene_reference_assets sra
-            WHERE sra.scene_id = s.scene_id
+            WHERE sra.scene_id = s.scene_id AND sra.spec_revision = s.spec_revision AND sra.archived_at IS NULL
           ),
           '{}'
-        ) AS reference_asset_ids
+        ) AS reference_asset_ids,
+        COALESCE(
+          (
+            SELECT json_agg(
+              json_build_object(
+                'sceneId', sra.scene_id,
+                'specRevision', sra.spec_revision,
+                'referenceAssetId', sra.asset_id,
+                'role', sra.role,
+                'weight', sra.weight,
+                'hints', sra.hints,
+                'archivedAt', sra.archived_at
+              )
+              ORDER BY sra.asset_id ASC, sra.role ASC
+            )
+            FROM scene_reference_assets sra
+            WHERE sra.scene_id = s.scene_id AND sra.spec_revision = s.spec_revision
+          ),
+          '[]'::json
+        ) AS reference_bindings
       FROM storyboard_scenes s
       WHERE s.campaign_id = $1${archivedClause}
       ORDER BY s.scene_order ASC
@@ -283,6 +400,112 @@ export class PostgresSceneRepository implements SceneRepository {
     const activeProductionJobId = snapshot.activeProductionJobId ?? null;
     const productionAttemptOrdinal = snapshot.productionAttemptOrdinal ?? 0;
     const acceptedProductionAttemptId = snapshot.acceptedProductionAttemptId ?? null;
+
+    const allRequestedRefIds = [
+      ...new Set([
+        ...snapshot.configuration.referenceIds,
+        ...(snapshot.configuration.referenceBindings ?? []).map((b) => b.referenceAssetId)
+      ])
+    ];
+
+    if (allRequestedRefIds.length > 0) {
+      const campaignRes = await client.query<{ client_id: string }>(
+        `SELECT client_id FROM campaigns WHERE campaign_id = $1`,
+        [snapshot.campaignId]
+      );
+      const campaignClientId = campaignRes.rows[0]?.client_id;
+      if (!campaignClientId) {
+        throw new Error(`Campaign "${snapshot.campaignId}" not found for scene "${snapshot.id}".`);
+      }
+
+      const assetsRes = await client.query<{
+        asset_id: string;
+        client_id: string;
+        archived_at: Date | string | null;
+      }>(`SELECT asset_id, client_id, archived_at FROM reference_assets WHERE asset_id = ANY($1)`, [
+        allRequestedRefIds
+      ]);
+      const assetMap = new Map(assetsRes.rows.map((row) => [row.asset_id, row]));
+
+      const existingBindingsRes = await client.query<{
+        asset_id: string;
+        role: string;
+        weight: string | number | null;
+        hints: Record<string, unknown> | null;
+      }>(
+        `SELECT asset_id, role, weight, hints FROM scene_reference_assets WHERE scene_id = $1 AND spec_revision = $2`,
+        [snapshot.id, snapshot.specRevision]
+      );
+
+      for (const refId of allRequestedRefIds) {
+        const asset = assetMap.get(refId);
+        if (!asset) {
+          throw new ReferenceAssetNotFoundError(refId);
+        }
+        if (asset.client_id !== campaignClientId) {
+          throw new CrossClientReferenceBindingError(campaignClientId, refId, asset.client_id);
+        }
+        if (asset.archived_at != null) {
+          const existingForRef = existingBindingsRes.rows.filter((r) => r.asset_id === refId);
+          if (existingForRef.length === 0) {
+            throw new ArchivedReferenceBindingError(refId);
+          }
+
+          let requestedForRef: Array<{
+            role: string;
+            weight: number | null;
+            hints: Record<string, unknown> | null;
+          }> = [];
+
+          if (
+            snapshot.configuration.referenceBindings &&
+            snapshot.configuration.referenceBindings.length > 0
+          ) {
+            const explicit = snapshot.configuration.referenceBindings.filter(
+              (b) => b.referenceAssetId === refId
+            );
+            if (explicit.length > 0) {
+              requestedForRef = explicit.map((b) => ({
+                role: b.role,
+                weight: b.weight ?? null,
+                hints: (b.hints as Record<string, unknown> | null) ?? null
+              }));
+            }
+          }
+
+          if (requestedForRef.length === 0 && snapshot.configuration.referenceIds.includes(refId)) {
+            requestedForRef = [
+              {
+                role: "style",
+                weight: null,
+                hints: null
+              }
+            ];
+          }
+
+          if (requestedForRef.length !== existingForRef.length) {
+            throw new ArchivedReferenceBindingError(refId);
+          }
+
+          const unmatchedExisting = [...existingForRef];
+          for (const req of requestedForRef) {
+            const matchIndex = unmatchedExisting.findIndex(
+              (ex) =>
+                ex.role === req.role &&
+                weightsEqual(ex.weight, req.weight) &&
+                hintsEqual(ex.hints, req.hints)
+            );
+            if (matchIndex === -1) {
+              throw new ArchivedReferenceBindingError(refId);
+            }
+            unmatchedExisting.splice(matchIndex, 1);
+          }
+          if (unmatchedExisting.length > 0) {
+            throw new ArchivedReferenceBindingError(refId);
+          }
+        }
+      }
+    }
 
     const updateResult = await client.query(
       `
@@ -400,20 +623,71 @@ export class PostgresSceneRepository implements SceneRepository {
       );
     }
 
-    // Synchronize reference asset associations
-    await client.query(`DELETE FROM scene_reference_assets WHERE scene_id = $1`, [snapshot.id]);
+    // Synchronize reference asset associations for CURRENT revision only
+    await client.query(
+      `DELETE FROM scene_reference_assets WHERE scene_id = $1 AND spec_revision = $2`,
+      [snapshot.id, snapshot.specRevision]
+    );
 
-    const uniqueReferenceIds = [...new Set(snapshot.configuration.referenceIds)];
-    if (uniqueReferenceIds.length > 0) {
-      const placeholders = uniqueReferenceIds.map((_, idx) => `($1, $${idx + 2})`).join(", ");
-      await client.query(
-        `
-        INSERT INTO scene_reference_assets (scene_id, asset_id)
-        VALUES ${placeholders}
-        ON CONFLICT (scene_id, asset_id) DO NOTHING
-        `,
-        [snapshot.id, ...uniqueReferenceIds]
+    if (
+      snapshot.configuration.referenceBindings &&
+      snapshot.configuration.referenceBindings.length > 0
+    ) {
+      for (const binding of snapshot.configuration.referenceBindings) {
+        await client.query(
+          `
+          INSERT INTO scene_reference_assets (
+            scene_id,
+            asset_id,
+            spec_revision,
+            role,
+            weight,
+            hints,
+            archived_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+          ON CONFLICT (scene_id, spec_revision, asset_id, role) DO UPDATE SET
+            weight = EXCLUDED.weight,
+            hints = EXCLUDED.hints,
+            archived_at = EXCLUDED.archived_at
+          `,
+          [
+            snapshot.id,
+            binding.referenceAssetId,
+            snapshot.specRevision,
+            binding.role,
+            binding.weight ?? null,
+            binding.hints ? JSON.stringify(binding.hints) : null,
+            binding.archivedAt ? new Date(binding.archivedAt) : null
+          ]
+        );
+      }
+
+      const boundAssetIds = new Set(
+        snapshot.configuration.referenceBindings.map((b) => b.referenceAssetId as string)
       );
+      for (const assetId of snapshot.configuration.referenceIds) {
+        if (!boundAssetIds.has(assetId)) {
+          await client.query(
+            `
+            INSERT INTO scene_reference_assets (scene_id, asset_id, spec_revision, role)
+            VALUES ($1, $2, $3, 'style')
+            ON CONFLICT (scene_id, spec_revision, asset_id, role) DO NOTHING
+            `,
+            [snapshot.id, assetId, snapshot.specRevision]
+          );
+        }
+      }
+    } else if (allRequestedRefIds.length > 0) {
+      for (const assetId of allRequestedRefIds) {
+        await client.query(
+          `
+          INSERT INTO scene_reference_assets (scene_id, asset_id, spec_revision, role)
+          VALUES ($1, $2, $3, 'style')
+          ON CONFLICT (scene_id, spec_revision, asset_id, role) DO NOTHING
+          `,
+          [snapshot.id, assetId, snapshot.specRevision]
+        );
+      }
     }
   }
 }

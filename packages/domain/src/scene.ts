@@ -1,3 +1,5 @@
+import type { ReferenceAssetId, SceneReferenceBinding } from "./reference-asset.js";
+
 declare const CandidateIdBrand: unique symbol;
 export type CandidateId = string & { readonly [CandidateIdBrand]: true };
 
@@ -16,15 +18,13 @@ export const SCENE_STATUSES = [
 
 export type SceneStatus = (typeof SCENE_STATUSES)[number];
 
-declare const SceneIdBrand: unique symbol;
-export type SceneId = string & { readonly [SceneIdBrand]: true };
-
-declare const CampaignIdBrand: unique symbol;
-export type CampaignId = string & { readonly [CampaignIdBrand]: true };
+import type { SceneId, CampaignId } from "./identifiers.js";
+export type { SceneId, CampaignId };
 
 export interface SceneConfiguration {
   readonly prompt: string;
   readonly referenceIds: readonly string[];
+  readonly referenceBindings?: readonly SceneReferenceBinding[] | undefined;
   readonly engineProfileId: string;
   readonly durationMs: number;
   readonly loraConfigurationId?: string | null;
@@ -181,9 +181,17 @@ export class AlreadyAcceptedProductionAttemptError extends Error {
 }
 
 function freezeConfiguration(config: SceneConfiguration): Readonly<SceneConfiguration> {
+  const referenceBindings = config.referenceBindings
+    ? Object.freeze(config.referenceBindings.map((b) => Object.freeze({ ...b })))
+    : undefined;
+
+  const bindingIds = referenceBindings ? referenceBindings.map((b) => b.referenceAssetId) : [];
+  const referenceIds = Object.freeze([...new Set([...config.referenceIds, ...bindingIds])]);
+
   return Object.freeze({
     prompt: config.prompt,
-    referenceIds: Object.freeze([...config.referenceIds]),
+    referenceIds,
+    ...(referenceBindings !== undefined ? { referenceBindings } : {}),
     engineProfileId: config.engineProfileId,
     durationMs: config.durationMs,
     ...(config.loraConfigurationId !== undefined
@@ -316,10 +324,25 @@ export class Scene {
       throw new InvalidMutationError(this.#id, this.#status, field);
     }
 
-    const frozenConfig = freezeConfiguration(newConfig);
     const from = this.#status;
     const to: SceneStatus = from === "approved" ? "director_review" : from;
     const newRevision = this.#specRevision + 1;
+
+    const configWithUpdatedRevision: SceneConfiguration = {
+      ...newConfig,
+      ...(newConfig.referenceBindings !== undefined
+        ? {
+            referenceBindings: newConfig.referenceBindings.map((b) =>
+              Object.freeze({
+                ...b,
+                specRevision: newRevision
+              })
+            )
+          }
+        : {})
+    };
+
+    const frozenConfig = freezeConfiguration(configWithUpdatedRevision);
 
     this.#configuration = frozenConfig;
     this.#specRevision = newRevision;
@@ -343,6 +366,9 @@ export class Scene {
     return this.#updateConfiguration("updatePrompt", "prompt", {
       prompt,
       referenceIds: this.#configuration.referenceIds,
+      ...(this.#configuration.referenceBindings !== undefined
+        ? { referenceBindings: this.#configuration.referenceBindings }
+        : {}),
       engineProfileId: this.#configuration.engineProfileId,
       durationMs: this.#configuration.durationMs,
       ...(this.#configuration.loraConfigurationId !== undefined
@@ -351,10 +377,49 @@ export class Scene {
     });
   }
 
-  updateReferences(referenceIds: readonly string[]): SceneTransition {
+  updateReferences(
+    referenceIds?: readonly string[],
+    referenceBindings?: readonly SceneReferenceBinding[]
+  ): SceneTransition {
+    const effectiveReferenceIds =
+      referenceIds !== undefined
+        ? referenceIds
+        : referenceBindings !== undefined
+          ? Array.from(new Set(referenceBindings.map((b) => b.referenceAssetId)))
+          : [];
+    let nextBindings: readonly SceneReferenceBinding[] | undefined;
+    if (referenceBindings !== undefined) {
+      nextBindings = referenceBindings;
+    } else if (this.#configuration.referenceBindings !== undefined) {
+      const nextRevision = this.#specRevision + 1;
+      const priorBindingsByAssetId = new Map(
+        this.#configuration.referenceBindings.map((b) => [b.referenceAssetId, b])
+      );
+      nextBindings = effectiveReferenceIds.map((id) => {
+        const existing = priorBindingsByAssetId.get(id as ReferenceAssetId);
+        if (existing) {
+          return Object.freeze({
+            ...existing,
+            specRevision: nextRevision
+          });
+        }
+        return Object.freeze({
+          sceneId: this.#id,
+          specRevision: nextRevision,
+          referenceAssetId: id as ReferenceAssetId,
+          role: "style" as const,
+          weight: null,
+          hints: null
+        });
+      });
+    }
+
     return this.#updateConfiguration("updateReferences", "references", {
       prompt: this.#configuration.prompt,
-      referenceIds: [...referenceIds],
+      referenceIds: [...effectiveReferenceIds],
+      ...(nextBindings !== undefined && nextBindings.length > 0
+        ? { referenceBindings: nextBindings }
+        : {}),
       engineProfileId: this.#configuration.engineProfileId,
       durationMs: this.#configuration.durationMs,
       ...(this.#configuration.loraConfigurationId !== undefined
@@ -367,6 +432,9 @@ export class Scene {
     return this.#updateConfiguration("updateEngine", "engine", {
       prompt: this.#configuration.prompt,
       referenceIds: this.#configuration.referenceIds,
+      ...(this.#configuration.referenceBindings !== undefined
+        ? { referenceBindings: this.#configuration.referenceBindings }
+        : {}),
       engineProfileId,
       durationMs: this.#configuration.durationMs,
       ...(this.#configuration.loraConfigurationId !== undefined
@@ -379,6 +447,9 @@ export class Scene {
     return this.#updateConfiguration("updateDuration", "duration", {
       prompt: this.#configuration.prompt,
       referenceIds: this.#configuration.referenceIds,
+      ...(this.#configuration.referenceBindings !== undefined
+        ? { referenceBindings: this.#configuration.referenceBindings }
+        : {}),
       engineProfileId: this.#configuration.engineProfileId,
       durationMs,
       ...(this.#configuration.loraConfigurationId !== undefined
@@ -391,6 +462,9 @@ export class Scene {
     return this.#updateConfiguration("updateLora", "lora", {
       prompt: this.#configuration.prompt,
       referenceIds: this.#configuration.referenceIds,
+      ...(this.#configuration.referenceBindings !== undefined
+        ? { referenceBindings: this.#configuration.referenceBindings }
+        : {}),
       engineProfileId: this.#configuration.engineProfileId,
       durationMs: this.#configuration.durationMs,
       ...(loraConfigurationId !== undefined ? { loraConfigurationId } : {})
