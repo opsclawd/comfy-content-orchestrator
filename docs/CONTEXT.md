@@ -5,9 +5,13 @@
 - **Campaign:** Campaign identity and high-level completion/progress rules.
 - **Scene:** SceneSpec, references, LoRA configuration, assigned engine, approval validity, current candidate selection, and canonical lifecycle transitions.
 - **SceneSpec:** Structured creative specification containing the script, generation prompts, reference bindings, timing, and engine parameters for a scene revision.
-- **StoryboardCandidate:** First-class immutable candidate generated for a specific `sceneId` and `sceneSpecRevision`. Generated at production-native geometry with verifiable reference conditioning, candidate records and files are immutable at the database layer (protected via triggers and application-role privilege restrictions) and directly condition MiniMax-H3 production video rendering upon director approval.
+- **StoryboardCandidate:** Immutable candidate media generated for a specific `sceneId` and `sceneSpecRevision`. Under ADR 0007, newly generated stills serve as non-authoritative previsualization media (`PrevisCandidate`) by default. Historical records and audit trails remain preserved and append-only at the database layer (protected via triggers and application-role privilege restrictions). In explicit `frame_anchored` mode, an approved candidate image directly anchors starting/ending frames.
+- **ShotPlan:** First-class structured creative and production-intent contract owning composition/framing, subject/object blocking, action and temporal beats, camera movement/lens intent, lighting/environment intent, target duration, dialogue/performance intent, and explicit continuity constraints. Bridges high-level script copy with diffusion model execution.
+- **ShotPlanRoutingMode:** Explicit enum (`reference_directed` vs `frame_anchored`) governing MiniMax-H3 production execution. In `reference_directed` (platform default), verified ReferenceAssets and the approved ShotPlan are authoritative conditioning inputs; previs stills are non-authoritative. In `frame_anchored`, an approved candidate image anchors starting/ending frames.
+- **PrevisCandidate:** Non-authoritative visual candidate generated to review a ShotPlan's framing and composition without conditioning production diffusion pixels by default. Distinct from historical candidate records.
+- **ShotPlanApproval:** Revision-fenced creative sign-off on a specific ShotPlan variant for a scene revision.
 - **Current Candidate Selection vs. Immutable History:** Candidate selection is an auditable, mutable pointer on the Scene (`selected_candidate_id`, `selected_candidate_revision`). Candidate records themselves are append-only and immutable.
-- **Current SceneSpec Revision:** Incrementing integer representing the specification version of the scene. Spec changes (prompt, duration, engine, references, LoRA, geometry) increment revision and invalidate existing candidate selection and approval.
+- **Current SceneSpec Revision:** Incrementing integer representing the specification version of the scene. Spec changes (prompt, duration, engine, references, LoRA, geometry) increment revision and invalidate existing candidate selection, shot plan selection, and approval.
 - **RenderJob:** Durable production work, retry limits, worker ownership, and completion semantics.
 - **RenderWorker:** Dedicated execution node / host process that holds GPU capacity, claims render leases, and runs diffusion/media generation workloads.
 - **RenderLease:** Exclusive GPU-worker execution right for one diffusion job.
@@ -30,11 +34,14 @@
 
 ## Review Plane Actions & Behavioral Invariants
 
-- **`candidate_select`:** Action choosing an immutable candidate belonging to the current `sceneSpecRevision`. Attempting to select a historical candidate from a prior revision is rejected.
+- **`candidate_select`:** Action choosing an immutable candidate belonging to the current `sceneSpecRevision`. In `reference_directed` mode, this candidate represents non-authoritative visual review evidence (`previsCandidateId`). In `frame_anchored` mode, it conditions the production anchor frame.
+- **`select_shotplan`:** Action selecting an active `ShotPlan` variant for the current `sceneSpecRevision`. Sets `selected_shot_plan_id` and `selected_shot_plan_revision`.
+- **`approve_shotplan`:** Action approving the selected `ShotPlan` for the current `sceneSpecRevision`, locking the plan against mutation and admitting the scene to the production queue.
+- **`reroll_shotplan`:** Creative rejection or regeneration of ShotPlan variants (`reroll_shotplan`), resetting selection and approval.
 - **`reject` vs. `reroll`:**
   - `reject`: Strictly QA rejection of rendered production video (`qa -> director_review`), clearing prior approval while retaining the approved candidate selection.
   - `reroll`: Storyboard candidate regeneration in review (`director_review -> generating_candidates`), invalidating current candidate selection and clearing approval.
-- **`expectedSpecRevision` Conflict Semantics:** Optimistic concurrency control. If the client's `expectedSpecRevision` does not match the scene's current revision, a `STALE_REVISION_CONFLICT` (409) is returned with zero database writes.
+- **`expectedSpecRevision` Conflict Semantics:** Optimistic concurrency control. If the client's `expectedSpecRevision` does not match the scene's current revision, a `STALE_REVISION_CONFLICT` (409) is returned with zero database writes. Any modification to `SceneSpec` prompts, assigned references, reference bindings, duration, or geometry increments `specRevision`, invalidating both candidate selection and ShotPlan selection/approval (`selectedCandidateId = null`, `selectedShotPlanId = null`, `approval = null`).
 - **Action ID & Idempotency:** Client assigns a unique UUIDv7 `actionId` to each command. An identical command replayed with the same `actionId` returns 200 with `isIdempotentReplay: true` and writes zero duplicate events. Reusing an `actionId` with altered payload returns `IDEMPOTENCY_CONFLICT` (409) with zero writes.
 - **Server-Authoritative Reviewer Identity & Timestamp:** Reviewer name and action timestamp are determined server-side from authenticated session context and the server clock. Client-provided reviewer identity or timestamps cannot override server audit metadata.
 - **Review API Never Synchronously Renders:** Review HTTP routes only commit state transitions, candidate selections, and audit records. Rendering compute is deferred to asynchronous worker queue processing (Sprint 3).
@@ -137,22 +144,31 @@
     - **#276 (213.1 - Backend Read Contract, Queries & Routes):** Implemented `CampaignDeliveryReelReadModelSchema`, `PostgresCampaignDeliveryReelQueries`, `ResolveCampaignDeliveryReelUseCase`, and mounted `/api/campaigns/:campaignId/delivery-reel` and `/api/campaigns/:campaignId/delivery`.
     - **#277 (213.2 - UI Presentation Surface & Player):** Added `CampaignDeliveryReelPanel` and integrated into the campaign review page (`apps/web`), supporting the 5 canonical read-model states, video player with error recovery, and direct download links.
     - **#278 (213.3 - End-to-End Integration Proof & Regression Verification):** Proved the final-delivery surface end-to-end against real PostgreSQL and MinIO object storage (`tests/integration/final-delivery-reel.e2e.integration.test.ts`), verified multi-tenant isolation, fail-closed consistency handling, UI mutual exclusivity and anti-staleness transitions, and verified that existing storyboard review and production-review suites remain green and unaffected.
-- **Candidate-Quality, Reference Conditioning & Canonical Geometry Architecture (Epic #304 / ADR 0006):**
-  - **Foundational Invariant:** "Storyboard candidates must be generated with verifiable reference conditioning at production-native geometry, objectively certified for structural integrity before director review, and directly condition downstream production video without intermediate re-rendering or geometric distortion." (See [ADR 0006](adr/0006-candidate-reference-geometry-architecture.md)).
-  - **Single-Stage Authoritative Pipeline:** Replaces draft-and-refine ambiguity with one authoritative candidate phase:
-    `SceneSpec -> production-capable candidate batch -> automated eligibility gate -> director approval -> MiniMax-H3 first_frame`.
-    The candidate approved by the director is the exact image used as `first_frame` for MiniMax-H3.
-  - **Reference Roles & Three-Tier Semantic Boundary:**
-    1. *Storage Tier (`ReferenceAsset`):* Immutable, role-agnostic media in object storage identified by SHA-256 hash.
-    2. *Grouping Tier (`ReferenceGroup`):* Client/campaign logical grouping for organization in the Review Hub.
-    3. *Binding Tier (`SceneReferenceBinding`):* Scene-level attachment linking a `ReferenceAsset` to a `SceneSpec` revision with a specific `ReferenceRole` (`subject_identity`, `product`, `location`, `style`, `composition`) and optional conditioning weight.
-  - **Canonical Geometry Authority:**
-    - Creative geometry resides authoritatively in `SceneSpec.geometry` (defaulting to 16:9 landscape / 1344x768 for MiniMax-H3).
-    - Candidates must be generated at target video engine geometry natively. Blind cropping, square-draft stretching, or post-hoc resizing are prohibited.
-    - Vertical delivery reel assembly (`VERTICAL_REEL_1080X1920_V1`) is an FFmpeg downstream concern (ADR-0005).
-    - Changes to geometry, reference bindings, or prompts increment `specRevision`, invalidating candidate selection and resetting approval.
-  - **Objective Eligibility vs. Subjective Ranking:**
-    - *Candidate Eligibility:* Fail-closed automated gate evaluating structural sanity and provenance before review. Candidates with anatomical anomalies (extra limbs, fused faces), missing reference hashes, or invalid dimensions are marked `ineligible` and cannot be approved.
-    - *Subjective Ranking:* Human creative directors evaluate aesthetics, performance, and style. Machine scores provide advisory suggestions only.
-  - **Provenance Lineage:** Reconstructable chain `SceneSpec revision -> ReferenceAsset SHA-256 hashes + prompt + seed + RenderProfile -> StoryboardCandidate -> approval -> MiniMax-H3 production attempt`.
+- **Candidate-Quality, Reference Conditioning & Canonical Geometry Architecture (Epic #304 / ADR 0006 - Partially Superseded by ADR 0007):**
+  - **Superseded Scope:** Section 1 (single-stage authoritative candidate pipeline), Section 4.2 (production-native candidate geometry for previs), and Section 6 (candidate-centered provenance chain) are superseded by ADR 0007. Storyboard/previs candidate stills no longer serve as mandatory production `first_frame` conditioning.
+  - **Preserved Core Contracts:**
+    - *Reference Roles & Three-Tier Semantic Boundary:* Storage Tier (`ReferenceAsset`, SHA-256 verified, declared `libraryRole`), Grouping Tier (`ReferenceGroup`), and Binding Tier (`SceneReferenceBinding` with canonical roles `subject_identity`, `product`, `location`, `style`, `composition`).
+    - *Canonical Geometry Authority:* Creative resolution authority resides authoritatively in `SceneSpec.geometry`. Downstream vertical delivery (`VERTICAL_REEL_1080X1920_V1`) is an FFmpeg assembly concern (ADR 0005).
+    - *Objective Eligibility vs. Subjective Ranking:* Automated hard fail-closed gate filters out structural/topological defects and missing provenance before director review.
+- **Structured ShotPlan, Non-Authoritative Previs, and MiniMax-H3 Production Routing Architecture (Epic #325 / ADR 0007):**
+  - **Foundational Post-Pivot Invariant:** "A storyboard or previsualization image MUST NOT serve as production pixel authority by default. In `reference_directed` production, approved SceneReferenceBindings and the approved ShotPlan are the exclusive visual conditioning authority. Previsualization media serves strictly as non-authoritative director review evidence."
+  - **Authoritative Production Input Hierarchy:**
+    1. Approved current-revision `SceneSpec` (creative scope, script, geometry, timing)
+    2. Approved `ShotPlan` (structured camera, blocking, beats, lighting, continuity)
+    3. Immutable current-revision `SceneReferenceBindings` + verified `ReferenceAsset` SHA-256 digests
+    4. Explicit H3 `RenderProfile` & `routingMode` (`reference_directed` vs `frame_anchored`)
+  - **Canonical ShotPlan Contract:** First-class structured production contract owning framing, angle, lens intent, camera movement, speed, subjects/blocking, beats, lighting, environment, color palette, dialogue, and continuity constraints (`ShotPlanDocumentSchema`). Enforces fixed 24 FPS and H3 duration grid quantization (formula `frames = 5 + 17k`, nominal duration 124 frames = 5167ms, tolerance window $\pm 355$ms).
+  - **MiniMax-H3 Production Routing Architecture:**
+    - *`reference_directed` (platform default):* Certified ComfyUI node `MiniMaxH3ReferenceToVideo` accepting up to 9 reference images (`ref_images`) with indexed `<Picture 1>` through `<Picture 9>` tags and global `ref_image_size: "max"`. Previs stills are non-authoritative review evidence and are never injected into diffusion.
+    - *`frame_anchored` (explicit continuity route):* Certified ComfyUI node `MiniMaxH3ImageToVideo` where verified anchor frames (`first_frame` stretched to 1344x768, optional `last_frame` cropped to cover) condition start/end pixels for cut-to-cut continuity.
+    - *Deterministic Decision Table:* Job dispatch is governed by explicit contract declarations; zero heuristic inference or silent fallback between modes.
+  - **Reference Multiplicity & Weight Handling:** Maximum 9 reference assets bound across all roles ($\sum \le 9$; exceeding fails closed with `REFERENCE_LIMIT_EXCEEDED`). Reference binding `weight` acts as prompt-emphasis priority rather than a continuous diffusion engine scalar.
+  - **Decoupled Geometry:**
+    - *Loose Previs:* Non-authoritative review drafts (e.g. 1024x1024 or 16:9).
+    - *Reference Assets:* Arbitrary client library resolution; ComfyUI handles scaling natively without destructive pre-crop.
+    - *H3 Production Video:* Strictly 1344x768 16:9 at 24 FPS (124 frames for 5.17s). Anchor frames deviating >5% from 16:9 fail closed.
+    - *Final Delivery Reel:* Downstream FFmpeg assembly scales stems to 1080x608 over 1080x1920 blurred fill (`fit_blurred_fill`).
+  - **Post-Pivot Provenance Lineage:**
+    `SceneSpec revision -> ShotPlan revision/identity -> ReferenceAsset IDs/hashes + SceneReferenceBindings -> selected H3 route/profile + executed multimodal inputs -> ProductionAttempt -> output`
+  - **Strict Manifest Isolation Invariant:** `previsReviewEvidence` is captured exclusively as review metadata in `GenerationManifest` and must never appear inside `executionConditioning` for `reference_directed` renders.
 

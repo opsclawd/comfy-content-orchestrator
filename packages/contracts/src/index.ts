@@ -22,3 +22,4 @@ export * from "./client.js";
 export * from "./production-attempt.js";
 export * from "./campaign-delivery-reel.js";
 export * from "./reference-asset.js";
+export * from "./shot-plan.js";

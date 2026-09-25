@@ -4,7 +4,21 @@ Date: 2026-09-24
 
 ## Status
 
-Accepted
+Partially Superseded by ADR 0007 (2026-09-25)
+
+> **Partial Supersession Notice (2026-09-25):**
+> This ADR is partially superseded by [ADR 0007: ShotPlan, Non-Authoritative Previs, and MiniMax-H3 Production Routing Architecture](0007-shotplan-previs-h3-routing-architecture.md).
+>
+> **Superseded Sections:**
+> - **Section 1 ("Single-Stage Authoritative Candidate Pipeline"):** Superseded by ADR 0007 §1, §2, §4. Storyboard/previs candidate stills are no longer mandatory production `first_frame` conditioning. Real ReferenceAssets + approved `ShotPlan` form production visual authority in the default `reference_directed` mode. Previs candidate media serves strictly as non-authoritative director review evidence.
+> - **Section 4.2 ("Production-Native Candidate Geometry"):** Superseded by ADR 0007 §7. Previs candidates do not require native 1344x768 resolution because they are non-authoritative visualizations by default. Native 1344x768 remains required for H3 production video profiles and anchor frames in `frame_anchored` mode.
+> - **Section 6 ("End-to-End Reconstructable Provenance Chain"):** Superseded by ADR 0007 §9. Provenance reconstructs through `ShotPlan` and `ReferenceAsset` hashes rather than assuming every production attempt descends from an approved storyboard candidate still.
+>
+> **Preserved Sections (Strictly In Force):**
+> - **Section 3 ("Reference Semantics & Boundary Separation"):** Preserved in full. Canonical roles (`subject_identity`, `product`, `location`, `style`, `composition`), ownership entities (`ReferenceAsset`, `ReferenceGroup`, `SceneReferenceBinding`), and the `libraryRole` amendment remain authoritative.
+> - **Section 4.1 ("Geometry Authority Lives in SceneSpec"):** Preserved in full. Creative resolution authority resides in `SceneSpec.geometry`.
+> - **Section 4.3 ("Vertical Reel Assembly Separation"):** Preserved in full. Downstream FFmpeg assembly (`VERTICAL_REEL_1080X1920_V1`) operates on landscape stems via `fit_blurred_fill`.
+> - **Section 5 ("Objective Candidate Eligibility vs. Subjective Ranking"):** Preserved in full for candidate/previs generation.
 
 ## Context
 
@@ -26,7 +40,10 @@ We establish the foundational platform invariant:
 
 To enforce this invariant across the platform, we establish the following architectural rules:
 
-### 1. Single-Stage Authoritative Candidate Pipeline
+### 1. Single-Stage Authoritative Candidate Pipeline *(Partially Superseded by ADR 0007 §1, §2, §4)*
+
+> *Supersession Note (2026-09-25):* Under ADR 0007, storyboard/previs candidate stills are no longer mandatory production `first_frame` conditioning. Real ReferenceAssets + approved `ShotPlan` form production visual authority in the default `reference_directed` mode. Previs candidate media serves strictly as non-authoritative director review evidence. The single-frame I2V flow remains available exclusively under the opt-in `frame_anchored` routing mode.
+
 We define a single, authoritative storyboard candidate lifecycle stage:
 `SceneSpec -> production-capable candidate batch -> automated eligibility gate -> director approval -> MiniMax-H3 first_frame`
 
@@ -70,7 +87,8 @@ Conflicting geometric assumptions between draft generation, video synthesis, and
 1. **Geometry Authority Lives in `SceneSpec`:**
    - Creative aspect ratio and resolution authority resides authoritatively in `SceneSpec.geometry` (defaulting to campaign standards, e.g. 16:9 landscape, 1344x768).
    - Candidate RenderProfiles obtain their target width and height directly from the scene geometry contract, not from hard-coded workflow defaults.
-2. **Production-Native Candidate Geometry:**
+2. **Production-Native Candidate Geometry:** *(Partially Superseded for Previs by ADR 0007 §7)*
+   - *Supersession Note (2026-09-25):* Previs candidate stills are non-authoritative visualizations and do not require strict production-native 1344x768 geometry. Target native 1344x768 resolution remains strictly authoritative for H3 production video profiles and anchor frames in `frame_anchored` mode.
    - Candidates must be generated at the native resolution and aspect ratio required by the downstream production video profile (1344x768 for `MINIMAX_H3_720P_5S_I2V_V1`).
    - In-workflow or post-hoc stretching is prohibited. Any aspect-ratio mismatch between approved candidate and production render profile is rejected at dispatch time.
 3. **Vertical Reel Assembly Separation:**
@@ -93,7 +111,12 @@ We strictly decouple objective machine-verifiable eligibility from human creativ
    - Aesthetic appeal, lighting nuance, acting performance, and compositional balance remain human creative determinations.
    - Machine models may provide non-blocking advisory ranking or guidance tags, but cannot unilaterally disqualify an otherwise structurally sound candidate.
 
-### 6. End-to-End Reconstructable Provenance Chain
+### 6. End-to-End Reconstructable Provenance Chain *(Superseded by ADR 0007 §9)*
+
+> *Supersession Note (2026-09-25):* Replaced by the post-pivot reconstruction chain in ADR 0007 §9:
+> `SceneSpec revision -> ShotPlan revision/identity -> ReferenceAsset IDs/hashes + SceneReferenceBindings -> selected H3 route/profile + executed multimodal inputs -> ProductionAttempt -> output`.
+> Review-only previs evidence (`previsReviewEvidence`) is strictly isolated from executed diffusion conditioning (`executionConditioning`).
+
 Auditability requires that every generated asset be deterministically reconstructable:
 $$\text{SceneSpec revision} \longrightarrow \text{ReferenceAsset SHA-256 hashes} + \text{prompt} + \text{seed} + \text{RenderProfile} \longrightarrow \text{StoryboardCandidate} \longrightarrow \text{Director Selection} \longrightarrow \text{MiniMax-H3 Attempt}$$
 
