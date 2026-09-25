@@ -206,4 +206,34 @@ describe("PostgresReferenceAssetRepository (Unit)", () => {
     expect(querySql).toContain("UPDATE reference_assets");
     expect(querySql).toContain("SET library_role = $3");
   });
+
+  it("maps description column correctly when present or null", async () => {
+    const mockClient = {
+      query: vi.fn().mockResolvedValueOnce({
+        rows: [
+          {
+            asset_id: asset.id,
+            client_id: asset.clientId,
+            asset_type: asset.assetType,
+            storage_bucket: asset.storageBucket,
+            storage_object_key: asset.storageObjectKey,
+            content_hash_sha256: asset.contentHashSha256,
+            width: asset.width,
+            height: asset.height,
+            mime_type: asset.mimeType,
+            display_name: asset.displayName,
+            description: "A detailed product description",
+            library_role: "product",
+            archived_at: null
+          }
+        ]
+      })
+    } as unknown as PoolClient;
+
+    const repo = new PostgresReferenceAssetRepository(mockClient);
+    const results = await repo.findByIds(asset.clientId, [asset.id]);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.description).toBe("A detailed product description");
+  });
 });

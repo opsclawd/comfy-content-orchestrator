@@ -11,7 +11,7 @@ import {
 } from "@cco/infrastructure/testing";
 import { runMigrations, PostgresUnitOfWork } from "@cco/infrastructure";
 import type { CreativeBrief } from "@cco/contracts";
-import type { Scene } from "@cco/domain";
+import type { Scene, ReferenceAssetId } from "@cco/domain";
 import type {
   PlanningModelClientPort,
   PlanningModelOutcome,
@@ -123,7 +123,7 @@ class IntegrationStubPlanningModelClient implements PlanningModelClientPort {
       kind: "success",
       rawText: JSON.stringify({
         prompt: `Integration scene visual prompt ${this.sceneConfigInvocations}`,
-        referenceIds: [],
+        references: [],
         engineProfileId: "LTX_25_720P_5S_V1",
         durationMs,
         loraConfigurationId: null
@@ -168,7 +168,16 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
 
   const mockAssetRepo: ReferenceAssetRepository = {
     listBySceneId: async () => [],
-    findByIds: async () => []
+    findByIds: async (clientId, ids) =>
+      ids.map((id) => ({
+        id: id as ReferenceAssetId,
+        clientId,
+        storageBucket: "test-bucket",
+        storageObjectKey: `assets/${id}.png`,
+        contentHashSha256: "0000000000000000000000000000000000000000000000000000000000000000",
+        displayName: id,
+        archivedAt: null
+      }))
   };
 
   it("1. Success: creates campaign shell, plans beat-sheet and scenes, materializes N scenes and admits candidate jobs in PostgreSQL", async () => {

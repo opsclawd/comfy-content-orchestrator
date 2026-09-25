@@ -7,6 +7,11 @@ import type {
   ReferenceAsset,
   ReferenceAssetId
 } from "@cco/domain";
+import {
+  ArchivedReferenceBindingError,
+  CrossClientReferenceBindingError,
+  ReferenceAssetNotFoundError
+} from "@cco/domain";
 import type {
   PlanningModelClientPort,
   PlanningModelOutcome,
@@ -131,7 +136,9 @@ describe("PlanCampaignBeatSheetUseCase", () => {
     return {
       listBySceneId: async () => [],
       findByIds: async (clientId: string, ids: readonly ReferenceAssetId[]) =>
-        assets.filter((a) => a.clientId === clientId && ids.includes(a.id))
+        assets.filter((a) => a.clientId === clientId && ids.includes(a.id)),
+      findByIdsGlobal: async (ids: readonly ReferenceAssetId[]) =>
+        assets.filter((a) => ids.includes(a.id))
     };
   }
 
@@ -141,7 +148,19 @@ describe("PlanCampaignBeatSheetUseCase", () => {
       { kind: "success", rawText: JSON.stringify(valid3BeatPayload) }
     ]);
     const fallback = createMockClient("OpenAI", []);
-    const repo = createMockRepo();
+    const repo = createMockRepo([
+      {
+        id: validAssetId1,
+        clientId: testClientId,
+        assetType: "brand_logo",
+        storageBucket: "b",
+        storageObjectKey: "k",
+        contentHashSha256: "h",
+        displayName: "Scooter Logo",
+        libraryRole: "product",
+        description: "Vector emblem"
+      }
+    ]);
 
     const useCase = new PlanCampaignBeatSheetUseCase({
       uow,
@@ -448,7 +467,16 @@ describe("PlanCampaignBeatSheetUseCase", () => {
       listBySceneId: async () => [],
       findByIds: vi.fn(async () => {
         await new Promise((resolve) => setTimeout(resolve, 80));
-        return [];
+        return [
+          {
+            id: validAssetId1,
+            clientId: testClientId,
+            assetType: "brand_logo",
+            storageBucket: "b",
+            storageObjectKey: "k",
+            contentHashSha256: "h"
+          }
+        ];
       })
     };
     const primary = createMockClient("Anthropic", [
@@ -469,6 +497,7 @@ describe("PlanCampaignBeatSheetUseCase", () => {
         campaignId: testCampaignId,
         brief,
         targetTotalDurationMs: 10000,
+        candidateReferenceAssetIds: [validAssetId1],
         overallTimeoutMs: 20
       })
     ).rejects.toThrow(PlanningProviderExhaustedError);
@@ -545,9 +574,105 @@ describe("PlanCampaignBeatSheetUseCase", () => {
         campaignId: testCampaignId,
         brief,
         targetTotalDurationMs: 10000,
+        candidateReferenceAssetIds: [validAssetId1],
         overallTimeoutMs: 20
       })
     ).rejects.toThrow(CustomDatabaseError);
+
+    expect(primary.calls).toHaveLength(0);
+    expect(fallback.calls).toHaveLength(0);
+  });
+
+  it("14. candidateReferenceAssetIds with nonexistent ID fails closed with ReferenceAssetNotFoundError before LLM calls", async () => {
+    const uow = createSeededUow(cloudEnabledPolicy, 3);
+    const repo = createMockRepo([]); // empty repo
+    const primary = createMockClient("Anthropic", []);
+    const fallback = createMockClient("OpenAI", []);
+
+    const useCase = new PlanCampaignBeatSheetUseCase({
+      uow,
+      referenceAssetRepository: repo,
+      primaryClient: primary,
+      fallbackClient: fallback
+    });
+
+    await expect(
+      useCase.execute({
+        campaignId: testCampaignId,
+        brief,
+        targetTotalDurationMs: 10000,
+        candidateReferenceAssetIds: [validAssetId1]
+      })
+    ).rejects.toThrow(ReferenceAssetNotFoundError);
+
+    expect(primary.calls).toHaveLength(0);
+    expect(fallback.calls).toHaveLength(0);
+  });
+
+  it("15. candidateReferenceAssetIds with cross-client asset fails closed with CrossClientReferenceBindingError", async () => {
+    const uow = createSeededUow(cloudEnabledPolicy, 3);
+    const foreignAsset: ReferenceAsset = {
+      id: "foreign-asset-uuid-1" as ReferenceAssetId,
+      clientId: "foreign-client-id",
+      assetType: "brand_logo",
+      storageBucket: "b",
+      storageObjectKey: "k",
+      contentHashSha256: "h"
+    };
+    const repo = createMockRepo([foreignAsset]);
+    const primary = createMockClient("Anthropic", []);
+    const fallback = createMockClient("OpenAI", []);
+
+    const useCase = new PlanCampaignBeatSheetUseCase({
+      uow,
+      referenceAssetRepository: repo,
+      primaryClient: primary,
+      fallbackClient: fallback
+    });
+
+    await expect(
+      useCase.execute({
+        campaignId: testCampaignId,
+        brief,
+        targetTotalDurationMs: 10000,
+        candidateReferenceAssetIds: ["foreign-asset-uuid-1" as ReferenceAssetId]
+      })
+    ).rejects.toThrow(CrossClientReferenceBindingError);
+
+    expect(primary.calls).toHaveLength(0);
+    expect(fallback.calls).toHaveLength(0);
+  });
+
+  it("16. candidateReferenceAssetIds with archived asset fails closed with ArchivedReferenceBindingError", async () => {
+    const uow = createSeededUow(cloudEnabledPolicy, 3);
+    const archivedAsset: ReferenceAsset = {
+      id: validAssetId1,
+      clientId: testClientId,
+      assetType: "brand_logo",
+      storageBucket: "b",
+      storageObjectKey: "k",
+      contentHashSha256: "h",
+      archivedAt: "2026-09-24T12:00:00.000Z"
+    };
+    const repo = createMockRepo([archivedAsset]);
+    const primary = createMockClient("Anthropic", []);
+    const fallback = createMockClient("OpenAI", []);
+
+    const useCase = new PlanCampaignBeatSheetUseCase({
+      uow,
+      referenceAssetRepository: repo,
+      primaryClient: primary,
+      fallbackClient: fallback
+    });
+
+    await expect(
+      useCase.execute({
+        campaignId: testCampaignId,
+        brief,
+        targetTotalDurationMs: 10000,
+        candidateReferenceAssetIds: [validAssetId1]
+      })
+    ).rejects.toThrow(ArchivedReferenceBindingError);
 
     expect(primary.calls).toHaveLength(0);
     expect(fallback.calls).toHaveLength(0);

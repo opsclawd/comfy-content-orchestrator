@@ -23,6 +23,7 @@ export const ReferenceAssetSchema = z.object({
   height: z.number().int().positive().optional(),
   mimeType: z.string().min(1).default("image/png"),
   displayName: z.string().min(1).optional(),
+  description: z.string().nullable().optional(),
   libraryRole: ReferenceRoleSchema.nullable().optional(),
   archivedAt: z.string().datetime().nullable().optional(),
   groupId: z.string().uuid().nullable().optional()
@@ -85,3 +86,35 @@ export const SceneReferenceBindingSchema = z.object({
 });
 export type SceneReferenceBinding = z.infer<typeof SceneReferenceBindingSchema>;
 export type SceneReferenceBindingContract = SceneReferenceBinding;
+
+export const ScenePlannerReferenceAssignmentSchema = z.object({
+  referenceId: z.string().uuid(),
+  role: ReferenceRoleSchema
+});
+export type ScenePlannerReferenceAssignment = z.infer<typeof ScenePlannerReferenceAssignmentSchema>;
+
+export const ScenePlannerResponseSchema = z
+  .object({
+    prompt: z.string().min(1),
+    engineProfileId: z.string().min(1),
+    durationMs: z.number().int().positive(),
+    loraConfigurationId: z.string().nullable().optional(),
+    references: z.array(ScenePlannerReferenceAssignmentSchema)
+  })
+  .superRefine((val, ctx) => {
+    const seen = new Set<string>();
+    for (let i = 0; i < val.references.length; i++) {
+      const ref = val.references[i];
+      if (!ref) continue;
+      const key = `${ref.referenceId}:${ref.role}`;
+      if (seen.has(key)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Duplicate reference assignment: referenceId ${ref.referenceId} with role ${ref.role}`,
+          path: ["references", i]
+        });
+      }
+      seen.add(key);
+    }
+  });
+export type ScenePlannerResponse = z.infer<typeof ScenePlannerResponseSchema>;

@@ -25,6 +25,7 @@ export interface ReferenceAsset {
   readonly height?: number | undefined;
   readonly mimeType?: string | undefined;
   readonly displayName?: string | undefined;
+  readonly description?: string | null | undefined;
   readonly libraryRole?: ReferenceRole | null | undefined;
   readonly archivedAt?: string | null | undefined;
   readonly groupId?: ReferenceGroupId | null | undefined;
@@ -42,3 +43,15 @@ export interface SceneReferenceBinding {
   readonly hints?: Record<string, unknown> | null | undefined;
   readonly archivedAt?: string | null | undefined;
 }
+
+export interface SceneReferenceBindingInput {
+  readonly sceneId?: SceneId | undefined;
+  readonly specRevision?: number | undefined;
+  readonly referenceAssetId: ReferenceAssetId;
+  readonly role: ReferenceRole;
+  readonly weight?: number | null | undefined;
+  readonly hints?: Record<string, unknown> | null | undefined;
+  readonly archivedAt?: string | null | undefined;
+}
+
+export type UnboundSceneReferenceBinding = SceneReferenceBindingInput;

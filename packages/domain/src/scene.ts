@@ -1,4 +1,14 @@
-import type { ReferenceAssetId, SceneReferenceBinding } from "./reference-asset.js";
+import type {
+  ReferenceAssetId,
+  SceneReferenceBinding,
+  SceneReferenceBindingInput
+} from "./reference-asset.js";
+
+export type {
+  SceneReferenceBinding,
+  SceneReferenceBindingInput,
+  UnboundSceneReferenceBinding
+} from "./reference-asset.js";
 
 declare const CandidateIdBrand: unique symbol;
 export type CandidateId = string & { readonly [CandidateIdBrand]: true };
@@ -30,10 +40,20 @@ export interface SceneConfiguration {
   readonly loraConfigurationId?: string | null;
 }
 
+export interface SceneConfigurationInput {
+  readonly prompt: string;
+  readonly referenceIds?: readonly string[] | undefined;
+  readonly referenceBindings?:
+    readonly (SceneReferenceBindingInput | SceneReferenceBinding)[] | undefined;
+  readonly engineProfileId: string;
+  readonly durationMs: number;
+  readonly loraConfigurationId?: string | null;
+}
+
 export interface SceneCreateInput {
   readonly id: SceneId;
   readonly campaignId: CampaignId;
-  readonly configuration: SceneConfiguration;
+  readonly configuration: SceneConfigurationInput | SceneConfiguration;
   readonly sequenceIndex?: number | undefined;
 }
 
@@ -181,12 +201,17 @@ export class AlreadyAcceptedProductionAttemptError extends Error {
 }
 
 function freezeConfiguration(config: SceneConfiguration): Readonly<SceneConfiguration> {
-  const referenceBindings = config.referenceBindings
-    ? Object.freeze(config.referenceBindings.map((b) => Object.freeze({ ...b })))
-    : undefined;
+  const referenceBindings =
+    config.referenceBindings && config.referenceBindings.length > 0
+      ? Object.freeze(config.referenceBindings.map((b) => Object.freeze({ ...b })))
+      : undefined;
 
-  const bindingIds = referenceBindings ? referenceBindings.map((b) => b.referenceAssetId) : [];
-  const referenceIds = Object.freeze([...new Set([...config.referenceIds, ...bindingIds])]);
+  const bindingIds = referenceBindings
+    ? referenceBindings.map((b) => b.referenceAssetId)
+    : undefined;
+  const referenceIds = Object.freeze(
+    bindingIds !== undefined ? [...new Set(bindingIds)] : [...config.referenceIds]
+  );
 
   return Object.freeze({
     prompt: config.prompt,
@@ -215,7 +240,12 @@ export class Scene {
   #productionAttemptOrdinal: number;
   #acceptedProductionAttemptId?: string | undefined;
 
-  private constructor(input: SceneCreateInput) {
+  private constructor(input: {
+    readonly id: SceneId;
+    readonly campaignId: CampaignId;
+    readonly configuration: SceneConfiguration;
+    readonly sequenceIndex?: number | undefined;
+  }) {
     this.#id = input.id;
     this.#campaignId = input.campaignId;
     this.#status = "draft_pending";
@@ -227,7 +257,41 @@ export class Scene {
   }
 
   static create(input: SceneCreateInput): Scene {
-    return new Scene(input);
+    const stampedBindings: readonly SceneReferenceBinding[] | undefined =
+      input.configuration.referenceBindings && input.configuration.referenceBindings.length > 0
+        ? Object.freeze(
+            input.configuration.referenceBindings.map((b) =>
+              Object.freeze({
+                ...b,
+                sceneId: input.id,
+                specRevision: 1
+              })
+            )
+          )
+        : undefined;
+
+    const referenceIds: readonly string[] =
+      stampedBindings !== undefined
+        ? Object.freeze([...new Set(stampedBindings.map((b) => b.referenceAssetId))])
+        : Object.freeze([...(input.configuration.referenceIds ?? [])]);
+
+    const configuration: SceneConfiguration = {
+      prompt: input.configuration.prompt,
+      referenceIds,
+      ...(stampedBindings !== undefined ? { referenceBindings: stampedBindings } : {}),
+      engineProfileId: input.configuration.engineProfileId,
+      durationMs: input.configuration.durationMs,
+      ...(input.configuration.loraConfigurationId !== undefined
+        ? { loraConfigurationId: input.configuration.loraConfigurationId }
+        : {})
+    };
+
+    return new Scene({
+      id: input.id,
+      campaignId: input.campaignId,
+      configuration,
+      ...(input.sequenceIndex !== undefined ? { sequenceIndex: input.sequenceIndex } : {})
+    });
   }
 
   static reconstitute(snapshot: SceneSnapshot): Scene {
@@ -379,7 +443,7 @@ export class Scene {
 
   updateReferences(
     referenceIds?: readonly string[],
-    referenceBindings?: readonly SceneReferenceBinding[]
+    referenceBindings?: readonly (SceneReferenceBinding | SceneReferenceBindingInput)[]
   ): SceneTransition {
     const effectiveReferenceIds =
       referenceIds !== undefined
@@ -388,10 +452,16 @@ export class Scene {
           ? Array.from(new Set(referenceBindings.map((b) => b.referenceAssetId)))
           : [];
     let nextBindings: readonly SceneReferenceBinding[] | undefined;
+    const nextRevision = this.#specRevision + 1;
     if (referenceBindings !== undefined) {
-      nextBindings = referenceBindings;
+      nextBindings = referenceBindings.map((b) =>
+        Object.freeze({
+          ...b,
+          sceneId: this.#id,
+          specRevision: nextRevision
+        })
+      );
     } else if (this.#configuration.referenceBindings !== undefined) {
-      const nextRevision = this.#specRevision + 1;
       const priorBindingsByAssetId = new Map(
         this.#configuration.referenceBindings.map((b) => [b.referenceAssetId, b])
       );

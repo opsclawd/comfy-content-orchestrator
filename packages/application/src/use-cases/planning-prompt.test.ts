@@ -95,4 +95,65 @@ describe("planning-prompt", () => {
       "durationMs: positive integer in milliseconds (must equal exactly 3500)."
     );
   });
+
+  it("formats reference asset metadata with displayName, libraryRole, and description without leaking binary/storage paths/hashes", () => {
+    const assetWithMeta: ReferenceAsset = {
+      id: "ref-can-logo-001" as ReferenceAssetId,
+      clientId: "client-a",
+      assetType: "brand_logo",
+      storageBucket: "secret-bucket-name",
+      storageObjectKey: "secrets/path/to/key.png",
+      contentHashSha256: "secret-hash-1234567890abcdef",
+      displayName: "Sparkling Water Can",
+      libraryRole: "product",
+      description: "Aluminum can with red logo"
+    };
+
+    const prompt = buildPlanningPrompt({
+      brief,
+      campaignId,
+      resolvedReferenceAssets: [assetWithMeta]
+    });
+
+    // Contains typed metadata
+    expect(prompt.userPrompt).toContain("displayName: Sparkling Water Can");
+    expect(prompt.userPrompt).toContain("libraryRole: product");
+    expect(prompt.userPrompt).toContain("description: Aluminum can with red logo");
+
+    // Strictly excludes internal storage paths, buckets, hashes, and binary data
+    expect(prompt.userPrompt).not.toContain("secret-bucket-name");
+    expect(prompt.userPrompt).not.toContain("secrets/path/to/key.png");
+    expect(prompt.userPrompt).not.toContain("secret-hash-1234567890abcdef");
+    expect(prompt.systemPrompt).not.toContain("secret-bucket-name");
+    expect(prompt.systemPrompt).not.toContain("secrets/path/to/key.png");
+    expect(prompt.systemPrompt).not.toContain("secret-hash-1234567890abcdef");
+
+    // System prompt requires `references` array with role and does not instruct planner to supply `referenceIds`
+    expect(prompt.systemPrompt).toContain(
+      "references: array of objects assigning reference assets"
+    );
+    expect(prompt.systemPrompt).toContain("role: string, must be one of the reference roles");
+    expect(prompt.systemPrompt).not.toContain("- referenceIds:");
+  });
+
+  it("renders 'unspecified' for missing displayName, libraryRole, and description", () => {
+    const assetWithoutMeta: ReferenceAsset = {
+      id: "ref-bare-001" as ReferenceAssetId,
+      clientId: "client-a",
+      assetType: "style_reference",
+      storageBucket: "b",
+      storageObjectKey: "k",
+      contentHashSha256: "h"
+    };
+
+    const prompt = buildPlanningPrompt({
+      brief,
+      campaignId,
+      resolvedReferenceAssets: [assetWithoutMeta]
+    });
+
+    expect(prompt.userPrompt).toContain("displayName: unspecified");
+    expect(prompt.userPrompt).toContain("libraryRole: unspecified");
+    expect(prompt.userPrompt).toContain("description: unspecified");
+  });
 });

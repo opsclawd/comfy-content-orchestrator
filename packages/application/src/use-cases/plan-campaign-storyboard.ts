@@ -1,5 +1,6 @@
 import type { CreativeBrief, RenderProfileKey } from "@cco/contracts";
 import type { CampaignShellRecord, ReferenceAssetId, SceneSnapshot } from "@cco/domain";
+import type { ReferenceAssetRepository } from "../ports/reference-asset-repository.js";
 import type { UnitOfWork } from "../ports/unit-of-work.js";
 import { computeCampaignRequestHash } from "./campaign-request-hash.js";
 import { ClientNotFoundError } from "./client-not-found-error.js";
@@ -10,6 +11,11 @@ import type {
 } from "./materialize-storyboard.js";
 import type { PlanCampaignBeatSheetUseCase } from "./plan-campaign-beat-sheet.js";
 import type { PlanSceneConfigurationUseCase } from "./plan-scene-configuration.js";
+import {
+  canonicalizeCandidateReferenceAssetIds,
+  resolveCandidateReferenceAssets
+} from "./resolve-candidate-reference-assets.js";
+import { SceneConfigurationValidationError } from "./validate-scene-configuration.js";
 import { StoryboardMaterializationConflictError } from "./storyboard-materialization-conflict-error.js";
 import { StoryboardPartiallyMaterializedError } from "./storyboard-partially-materialized-error.js";
 
@@ -19,6 +25,7 @@ export interface PlanCampaignStoryboardDeps {
   readonly planSceneConfiguration: PlanSceneConfigurationUseCase;
   readonly materializeStoryboard: MaterializeStoryboardUseCase;
   readonly uow: UnitOfWork;
+  readonly referenceAssetRepository?: ReferenceAssetRepository | undefined;
 }
 
 export interface PlanCampaignStoryboardInput {
@@ -85,6 +92,9 @@ export class PlanCampaignStoryboardUseCase {
   async preparePlanningShell(
     input: PlanCampaignStoryboardInput
   ): Promise<PreparePlanningShellResult> {
+    const canonicalCandidateIds = canonicalizeCandidateReferenceAssetIds(
+      input.candidateReferenceAssetIds
+    );
     const { campaign, isIdempotentReplay } = await this.deps.createCampaignShell.execute({
       idempotencyKey: input.idempotencyKey,
       clientId: input.clientId,
@@ -93,7 +103,7 @@ export class PlanCampaignStoryboardUseCase {
       targetTotalDurationMs: input.targetTotalDurationMs,
       sceneCountOverride: input.sceneCountOverride,
       brief: input.brief,
-      candidateReferenceAssetIds: input.candidateReferenceAssetIds,
+      candidateReferenceAssetIds: canonicalCandidateIds,
       initialStatus: "planning",
       targetEngineProfileId: input.targetEngineProfileId
     });
@@ -105,7 +115,7 @@ export class PlanCampaignStoryboardUseCase {
       targetTotalDurationMs: input.targetTotalDurationMs,
       sceneCountOverride: input.sceneCountOverride,
       brief: input.brief,
-      candidateReferenceAssetIds: input.candidateReferenceAssetIds as readonly string[] | undefined,
+      candidateReferenceAssetIds: canonicalCandidateIds as readonly string[] | undefined,
       targetEngineProfileId: input.targetEngineProfileId
     });
 
@@ -195,14 +205,17 @@ export class PlanCampaignStoryboardUseCase {
     input: PlanCampaignStoryboardInput,
     orchestrationHash: string
   ): Promise<PlanCampaignStoryboardResult> {
+    const canonicalCandidateIds = canonicalizeCandidateReferenceAssetIds(
+      input.candidateReferenceAssetIds
+    );
+
     try {
       // 1. Plan beat sheet (outside transaction)
       const beatSheet = await this.deps.planCampaignBeatSheet.execute({
         campaignId: campaign.id,
         brief: input.brief,
         targetTotalDurationMs: campaign.targetTotalDurationMs,
-        candidateReferenceAssetIds: input.candidateReferenceAssetIds as
-          readonly ReferenceAssetId[] | undefined,
+        candidateReferenceAssetIds: canonicalCandidateIds,
         overallTimeoutMs: input.overallTimeoutMs,
         targetEngine: input.targetEngineProfileId,
         engineProfileId: input.targetEngineProfileId
@@ -231,8 +244,7 @@ export class PlanCampaignStoryboardUseCase {
           brief: beat.brief,
           campaignId: campaign.id,
           clientId: campaign.clientId,
-          candidateReferenceAssetIds: (input.candidateReferenceAssetIds ??
-            []) as readonly ReferenceAssetId[],
+          candidateReferenceAssetIds: canonicalCandidateIds,
           externalProcessingPolicy,
           targetDurationMs: beat.targetDurationMs,
           overallTimeoutMs: input.overallTimeoutMs,
@@ -241,11 +253,47 @@ export class PlanCampaignStoryboardUseCase {
         orderedConfigs.push({ ordinal: beat.ordinal, configuration });
       }
 
+      // Collect union of assigned reference IDs across all planned scenes
+      const assignedReferenceIds = Array.from(
+        new Set(
+          orderedConfigs.flatMap((c) => [
+            ...(c.configuration.referenceIds ?? []),
+            ...(c.configuration.referenceBindings?.map((b) => b.referenceAssetId) ?? [])
+          ])
+        )
+      ) as ReferenceAssetId[];
+
+      // Enforce allowlist membership: every assigned ID must be in canonical candidate allowlist
+      const canonicalCandidateSet = new Set(canonicalCandidateIds.map((id) => String(id)));
+      for (const id of assignedReferenceIds) {
+        if (!canonicalCandidateSet.has(String(id))) {
+          throw new SceneConfigurationValidationError(
+            `referenceId "${id}" was not included in allowed campaign candidate reference assets`
+          );
+        }
+      }
+
+      // Re-read current repository state for assigned references before materialization.
+      // This ensures that if any asset was archived or reassigned during LLM planning,
+      // the planning pipeline fails closed before entering the materialization transaction.
+      if (assignedReferenceIds.length > 0) {
+        const refRepo =
+          this.deps.referenceAssetRepository ??
+          (await this.deps.uow.execute(async (ctx) => ctx.referenceAssets));
+        if (!refRepo) {
+          throw new Error(
+            "Reference asset repository is required to validate planned scene references."
+          );
+        }
+        await resolveCandidateReferenceAssets(refRepo, campaign.clientId, assignedReferenceIds);
+      }
+
       // 4. Durably materialize storyboard scenes and admit candidate generation in its own transaction
       const { scenes } = await this.deps.materializeStoryboard.execute({
         campaignId: campaign.id,
         scenes: orderedConfigs,
-        completionHashSha256: orchestrationHash
+        completionHashSha256: orchestrationHash,
+        candidateReferenceAssetIds: canonicalCandidateIds
       });
 
       return {
@@ -272,7 +320,15 @@ export class PlanCampaignStoryboardUseCase {
    * Synchronous entry point: resolves/creates shell and immediately runs pipeline.
    */
   async execute(input: PlanCampaignStoryboardInput): Promise<PlanCampaignStoryboardResult> {
-    const shellResult = await this.preparePlanningShell(input);
+    const canonicalCandidateIds = canonicalizeCandidateReferenceAssetIds(
+      input.candidateReferenceAssetIds
+    );
+    const normalizedInput: PlanCampaignStoryboardInput = {
+      ...input,
+      candidateReferenceAssetIds: canonicalCandidateIds
+    };
+
+    const shellResult = await this.preparePlanningShell(normalizedInput);
     if (shellResult.kind === "completed") {
       return {
         campaign: shellResult.campaign,
@@ -285,15 +341,16 @@ export class PlanCampaignStoryboardUseCase {
       "orchestrationHash" in shellResult
         ? shellResult.orchestrationHash
         : await computeCampaignRequestHash({
-            clientId: input.clientId,
-            title: input.title,
-            targetPlatform: input.targetPlatform,
-            targetTotalDurationMs: input.targetTotalDurationMs,
-            sceneCountOverride: input.sceneCountOverride,
-            brief: input.brief,
-            candidateReferenceAssetIds: input.candidateReferenceAssetIds
+            clientId: normalizedInput.clientId,
+            title: normalizedInput.title,
+            targetPlatform: normalizedInput.targetPlatform,
+            targetTotalDurationMs: normalizedInput.targetTotalDurationMs,
+            sceneCountOverride: normalizedInput.sceneCountOverride,
+            brief: normalizedInput.brief,
+            candidateReferenceAssetIds: canonicalCandidateIds as readonly string[] | undefined,
+            targetEngineProfileId: normalizedInput.targetEngineProfileId
           });
 
-    return this.executePlanningPipeline(shellResult.campaign, input, orchestrationHash);
+    return this.executePlanningPipeline(shellResult.campaign, normalizedInput, orchestrationHash);
   }
 }

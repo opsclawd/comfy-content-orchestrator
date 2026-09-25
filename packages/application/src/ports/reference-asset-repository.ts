@@ -11,6 +11,7 @@ export interface ReferenceAssetRepositoryOptions {
   readonly includeArchived?: boolean | undefined;
   readonly specRevision?: number | undefined;
   readonly groupId?: ReferenceGroupId | undefined;
+  readonly forUpdate?: boolean | undefined;
 }
 
 export interface ReferenceAssetRepository {
@@ -22,12 +23,12 @@ export interface ReferenceAssetRepository {
   readonly findByIds: (
     clientId: string,
     ids: readonly ReferenceAssetId[],
-    options?: Pick<ReferenceAssetRepositoryOptions, "includeArchived">
+    options?: Pick<ReferenceAssetRepositoryOptions, "includeArchived" | "forUpdate">
   ) => Promise<readonly ReferenceAsset[]>;
 
   readonly findByIdsGlobal?: (
     ids: readonly ReferenceAssetId[],
-    options?: Pick<ReferenceAssetRepositoryOptions, "includeArchived">
+    options?: Pick<ReferenceAssetRepositoryOptions, "includeArchived" | "forUpdate">
   ) => Promise<readonly ReferenceAsset[]>;
 
   readonly findByClientId?: (

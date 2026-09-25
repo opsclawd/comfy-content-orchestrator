@@ -32,6 +32,7 @@ interface ReferenceAssetDbRow {
   height?: number | null;
   mime_type?: string | null;
   display_name?: string | null;
+  description?: string | null;
   library_role?: string | null;
   group_id?: string | null;
   archived_at?: Date | string | null;
@@ -74,6 +75,9 @@ function mapRowToReferenceAsset(row: ReferenceAssetDbRow, includeSceneId = false
   }
   if (row.display_name !== null && row.display_name !== undefined) {
     asset.displayName = row.display_name;
+  }
+  if (row.description !== null && row.description !== undefined) {
+    asset.description = row.description;
   }
   if (row.library_role !== null && row.library_role !== undefined) {
     asset.libraryRole = row.library_role as ReferenceRole;
@@ -121,6 +125,7 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
         ra.height,
         ra.mime_type,
         ra.display_name,
+        ra.description,
         ra.library_role,
         ra.group_id,
         ra.archived_at
@@ -138,7 +143,7 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
   async findByIds(
     clientId: string,
     ids: readonly ReferenceAssetId[],
-    options?: Pick<ReferenceAssetRepositoryOptions, "includeArchived">
+    options?: Pick<ReferenceAssetRepositoryOptions, "includeArchived" | "forUpdate">
   ): Promise<readonly ReferenceAsset[]> {
     if (ids.length === 0) {
       return Object.freeze([]);
@@ -146,6 +151,7 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
 
     const includeArchived = options?.includeArchived ?? false;
     const archivedFilter = includeArchived ? "" : "AND archived_at IS NULL";
+    const forUpdateClause = options?.forUpdate ? " FOR UPDATE" : "";
 
     const result = await this.client.query<ReferenceAssetDbRow>(
       `
@@ -160,12 +166,14 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
         height,
         mime_type,
         display_name,
+        description,
         library_role,
         group_id,
         archived_at
       FROM reference_assets
       WHERE client_id = $1 AND asset_id = ANY($2) ${archivedFilter}
       ORDER BY created_at ASC
+      ${forUpdateClause}
       `,
       [clientId, [...ids]]
     );
@@ -175,7 +183,7 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
 
   async findByIdsGlobal(
     ids: readonly ReferenceAssetId[],
-    options?: Pick<ReferenceAssetRepositoryOptions, "includeArchived">
+    options?: Pick<ReferenceAssetRepositoryOptions, "includeArchived" | "forUpdate">
   ): Promise<readonly ReferenceAsset[]> {
     if (ids.length === 0) {
       return Object.freeze([]);
@@ -183,6 +191,7 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
 
     const includeArchived = options?.includeArchived ?? false;
     const archivedFilter = includeArchived ? "" : "AND archived_at IS NULL";
+    const forUpdateClause = options?.forUpdate ? " FOR UPDATE" : "";
 
     const result = await this.client.query<ReferenceAssetDbRow>(
       `
@@ -197,12 +206,14 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
         height,
         mime_type,
         display_name,
+        description,
         library_role,
         group_id,
         archived_at
       FROM reference_assets
       WHERE asset_id = ANY($1) ${archivedFilter}
       ORDER BY created_at ASC
+      ${forUpdateClause}
       `,
       [[...ids]]
     );
@@ -236,6 +247,7 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
         height,
         mime_type,
         display_name,
+        description,
         library_role,
         group_id,
         archived_at
@@ -440,16 +452,18 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
         height,
         mime_type,
         display_name,
+        description,
         library_role,
         group_id,
         archived_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       ON CONFLICT (asset_id) DO UPDATE SET
         group_id = EXCLUDED.group_id,
         width = EXCLUDED.width,
         height = EXCLUDED.height,
         mime_type = EXCLUDED.mime_type,
         display_name = EXCLUDED.display_name,
+        description = EXCLUDED.description,
         library_role = EXCLUDED.library_role,
         archived_at = EXCLUDED.archived_at
       WHERE reference_assets.client_id = EXCLUDED.client_id
@@ -466,6 +480,7 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
         asset.height ?? null,
         asset.mimeType ?? "image/png",
         asset.displayName ?? null,
+        asset.description ?? null,
         asset.libraryRole ?? null,
         asset.groupId ?? null,
         asset.archivedAt ? new Date(asset.archivedAt) : null
@@ -544,6 +559,7 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
         height,
         mime_type,
         display_name,
+        description,
         library_role,
         group_id,
         archived_at
@@ -576,12 +592,14 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
         height,
         mime_type,
         display_name,
+        description,
         library_role,
         group_id,
         archived_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULL)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NULL)
       ON CONFLICT (storage_bucket, storage_object_key) DO UPDATE SET
         archived_at = NULL,
+        description = COALESCE(EXCLUDED.description, reference_assets.description),
         library_role = COALESCE(EXCLUDED.library_role, reference_assets.library_role)
       WHERE reference_assets.client_id = EXCLUDED.client_id
         AND reference_assets.content_hash_sha256 = EXCLUDED.content_hash_sha256
@@ -598,6 +616,7 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
         asset.height ?? null,
         asset.mimeType ?? "image/png",
         asset.displayName ?? null,
+        asset.description ?? null,
         asset.libraryRole ?? null,
         asset.groupId ?? null
       ]
