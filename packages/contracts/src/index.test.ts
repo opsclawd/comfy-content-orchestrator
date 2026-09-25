@@ -20,7 +20,9 @@ import {
   VERTICAL_REEL_1080X1920_V1_PROFILE,
   validateExecutedAssemblyInvariants,
   VideoEncodingExecutionSchema,
-  VideoStemRefSchema
+  VideoStemRefSchema,
+  ShotPlanDocumentSchema,
+  H3_DURATION_TOLERANCE_MS
 } from "./index.js";
 
 describe("contracts skeleton", () => {
@@ -46,5 +48,7 @@ describe("contracts skeleton", () => {
     expect(MeasuredOutputStreamsSchema).toBeDefined();
     expect(validateExecutedAssemblyInvariants).toBeDefined();
     expect(ASSEMBLY_OUTPUT_DURATION_TOLERANCE_MS).toBe(250);
+    expect(ShotPlanDocumentSchema).toBeDefined();
+    expect(H3_DURATION_TOLERANCE_MS).toBe(355);
   });
 });
