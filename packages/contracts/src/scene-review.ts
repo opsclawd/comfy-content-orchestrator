@@ -1,6 +1,7 @@
 import { sortKeysDeep } from "@cco/shared";
 import { z } from "zod";
 import { CampaignStatusSchema } from "./campaign-status.js";
+import { SceneReferenceBindingSchema } from "./reference-asset.js";
 
 export const SCENE_STATUSES = [
   "draft_pending",
@@ -61,6 +62,7 @@ export type ReviewEvent = z.infer<typeof ReviewEventSchema>;
 export const SceneConfigurationSchema = z.object({
   prompt: z.string(),
   referenceIds: z.array(z.string()),
+  referenceBindings: z.array(SceneReferenceBindingSchema).optional(),
   engineProfileId: z.string().min(1),
   durationMs: z.number().int().positive(),
   loraConfigurationId: z.string().nullable().optional()

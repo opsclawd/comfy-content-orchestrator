@@ -252,4 +252,30 @@ describe("validateSceneConfiguration", () => {
       )
     ).toThrow("loraConfigurationId must be a non-empty string when provided");
   });
+
+  it("rejects an archived reference asset with ArchivedReferenceBindingError", () => {
+    const archivedAsset: ReferenceAsset = {
+      ...validAssetWithoutSceneId,
+      archivedAt: "2026-09-24T12:00:00.000Z"
+    };
+
+    expect(() => validateSceneConfiguration(validCandidate, [archivedAsset])).toThrow(
+      /Archived reference binding rejected/
+    );
+  });
+
+  it("rejects a cross-client reference asset with CrossClientReferenceBindingError when campaignClientId is provided", () => {
+    expect(() =>
+      validateSceneConfiguration(validCandidate, sampleResolvedAssets, {
+        campaignClientId: "client-different"
+      })
+    ).toThrow(/Cross-client reference binding rejected/);
+  });
+
+  it("accepts a matching-client active reference asset when campaignClientId is provided", () => {
+    const result = validateSceneConfiguration(validCandidate, sampleResolvedAssets, {
+      campaignClientId: "client-1"
+    });
+    expect(result.referenceIds).toEqual([asset1Id]);
+  });
 });

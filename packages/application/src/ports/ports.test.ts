@@ -35,6 +35,7 @@ import type {
   VoiceSynthesisOutput,
   HashBytesPort,
   ReferenceAssetRepository,
+  ReferenceGroupRepository,
   AssemblySpec,
   JobQueuePort,
   EnqueueJobInput
@@ -56,8 +57,11 @@ import type {
   JobId,
   ReferenceAsset,
   ReferenceAssetId,
+  ReferenceGroup,
+  ReferenceGroupId,
   SceneConfiguration,
   SceneId,
+  SceneReferenceBinding,
   StoryboardCandidate
 } from "@cco/domain";
 import { GpuLeaseOwnershipLostError, GpuLeaseUnavailableError } from "./index.js";
@@ -417,6 +421,16 @@ describe("Application capability ports contract tests", () => {
           contentHashSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         }
       ];
+      const bindings: SceneReferenceBinding[] = [
+        {
+          sceneId: "scene-1" as SceneId,
+          specRevision: 1,
+          referenceAssetId: "ref-1" as ReferenceAssetId,
+          role: "subject_identity",
+          weight: 0.9
+        }
+      ];
+
       const referenceAssetRepo = {
         async listBySceneId(sceneId: SceneId): Promise<readonly ReferenceAsset[]> {
           return refAssets.filter((a) => a.sceneId === sceneId);
@@ -426,6 +440,31 @@ describe("Application capability ports contract tests", () => {
           ids: readonly ReferenceAssetId[]
         ): Promise<readonly ReferenceAsset[]> {
           return refAssets.filter((a) => a.clientId === clientId && ids.includes(a.id));
+        },
+        async findByClientId(clientId: string): Promise<readonly ReferenceAsset[]> {
+          return refAssets.filter((a) => a.clientId === clientId);
+        },
+        async listBindingsBySceneId(sceneId: SceneId): Promise<readonly SceneReferenceBinding[]> {
+          return bindings.filter((b) => b.sceneId === sceneId);
+        },
+        async saveBindings(
+          _sceneId: SceneId,
+          newBindings: readonly SceneReferenceBinding[]
+        ): Promise<void> {
+          bindings.length = 0;
+          bindings.push(...newBindings);
+        },
+        async save(asset: ReferenceAsset): Promise<ReferenceAsset> {
+          refAssets.push(asset);
+          return asset;
+        },
+        async archive(clientId: string, id: ReferenceAssetId): Promise<boolean> {
+          const idx = refAssets.findIndex((a) => a.clientId === clientId && a.id === id);
+          if (idx !== -1) {
+            refAssets[idx] = { ...refAssets[idx]!, archivedAt: new Date().toISOString() };
+            return true;
+          }
+          return false;
         }
       } satisfies ReferenceAssetRepository;
 
@@ -442,6 +481,46 @@ describe("Application capability ports contract tests", () => {
       expect(await referenceAssetRepo.findByIds("client-2", ["ref-1" as ReferenceAssetId])).toEqual(
         []
       );
+
+      const clientAssets = await referenceAssetRepo.findByClientId("client-1");
+      expect(clientAssets).toHaveLength(1);
+
+      const sceneBindings = await referenceAssetRepo.listBindingsBySceneId("scene-1" as SceneId);
+      expect(sceneBindings).toHaveLength(1);
+      expect(sceneBindings[0]?.role).toBe("subject_identity");
+
+      const groups: ReferenceGroup[] = [
+        {
+          id: "group-1" as ReferenceGroupId,
+          clientId: "client-1",
+          name: "Main Cast",
+          createdAt: "2026-09-24T00:00:00.000Z"
+        }
+      ];
+
+      const referenceGroupRepo = {
+        async findById(groupId: ReferenceGroupId): Promise<ReferenceGroup | undefined> {
+          return groups.find((g) => g.id === groupId);
+        },
+        async findByClientId(clientId: string): Promise<readonly ReferenceGroup[]> {
+          return groups.filter((g) => g.clientId === clientId);
+        },
+        async save(group: ReferenceGroup): Promise<ReferenceGroup> {
+          groups.push(group);
+          return group;
+        },
+        async archive(clientId: string, groupId: ReferenceGroupId): Promise<boolean> {
+          const idx = groups.findIndex((g) => g.clientId === clientId && g.id === groupId);
+          if (idx !== -1) {
+            groups[idx] = { ...groups[idx]!, archivedAt: new Date().toISOString() };
+            return true;
+          }
+          return false;
+        }
+      } satisfies ReferenceGroupRepository;
+
+      expect(await referenceGroupRepo.findById("group-1" as ReferenceGroupId)).toBeDefined();
+      expect(await referenceGroupRepo.findByClientId("client-1")).toHaveLength(1);
     });
   });
 

@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { Scene, type CampaignId, type SceneConfiguration, type SceneId } from "@cco/domain";
+import {
+  assertReferenceAssetSelectable,
+  ReferenceAssetNotFoundError,
+  Scene,
+  type CampaignId,
+  type ReferenceAssetId,
+  type SceneConfiguration,
+  type SceneId
+} from "@cco/domain";
 import type { UnitOfWork } from "../ports/index.js";
 import { CampaignNotFoundError } from "./campaign-not-found-error.js";
 
@@ -35,6 +43,35 @@ export class CreateSceneUseCase {
         includeArchived: true
       });
       const nextIndex = Math.max(0, ...existingScenes.map((s) => s.sequenceIndex ?? 0)) + 1;
+
+      const requestedRefIds = [
+        ...new Set([
+          ...input.configuration.referenceIds,
+          ...(input.configuration.referenceBindings ?? []).map((b) => b.referenceAssetId)
+        ])
+      ];
+
+      if (requestedRefIds.length > 0 && context.referenceAssets !== undefined) {
+        const assets =
+          typeof context.referenceAssets.findByIdsGlobal === "function"
+            ? await context.referenceAssets.findByIdsGlobal(
+                requestedRefIds as unknown as readonly ReferenceAssetId[],
+                { includeArchived: true }
+              )
+            : await context.referenceAssets.findByIds(
+                campaign.clientId,
+                requestedRefIds as unknown as readonly ReferenceAssetId[],
+                { includeArchived: true }
+              );
+        const assetMap = new Map(assets.map((a) => [a.id as string, a]));
+        for (const refId of requestedRefIds) {
+          const asset = assetMap.get(refId);
+          if (!asset) {
+            throw new ReferenceAssetNotFoundError(refId);
+          }
+          assertReferenceAssetSelectable(asset, campaign.clientId);
+        }
+      }
 
       const scene = Scene.create({
         id: randomUUID() as SceneId,

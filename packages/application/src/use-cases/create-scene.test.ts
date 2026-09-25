@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { Scene, type CampaignId, type CampaignRecord, type SceneId } from "@cco/domain";
+import {
+  ArchivedReferenceBindingError,
+  CrossClientReferenceBindingError,
+  ReferenceAssetNotFoundError,
+  Scene,
+  type CampaignId,
+  type CampaignRecord,
+  type ReferenceAssetId,
+  type SceneId
+} from "@cco/domain";
 import type {
   CampaignRepository,
   ReviewEventStore,
@@ -26,6 +35,13 @@ describe("CreateSceneUseCase", () => {
 
   it("creates a scene under an existing campaign and lands in draft_pending with specRevision 1", async () => {
     const uow = new InMemorySceneUnitOfWork(undefined, undefined, undefined, [seededCampaign]);
+    uow.seedReferenceAsset({
+      id: "018e69e0-8a6a-72cb-b1b7-ec79a1f73802" as ReferenceAssetId,
+      clientId: seededCampaign.clientId,
+      storageBucket: "ref-bucket",
+      storageObjectKey: "assets/caldera.png",
+      contentHashSha256: "1".repeat(64)
+    });
     const useCase = new CreateSceneUseCase(uow);
 
     const configuration = {
@@ -224,5 +240,73 @@ describe("CreateSceneUseCase", () => {
 
     expect(scene.sequenceIndex).toBe(6);
     expect(scene.snapshot().sequenceIndex).toBe(6);
+  });
+
+  it("throws ReferenceAssetNotFoundError when a reference asset does not exist", async () => {
+    const uow = new InMemorySceneUnitOfWork(undefined, undefined, undefined, [seededCampaign]);
+    const useCase = new CreateSceneUseCase(uow);
+
+    await expect(
+      useCase.execute({
+        campaignId: seededCampaign.id,
+        configuration: {
+          prompt: "Scene with missing ref",
+          referenceIds: ["018e69e0-8a6a-72cb-b1b7-ec79a1f73899"],
+          engineProfileId: "ltx_25",
+          durationMs: 5000
+        }
+      })
+    ).rejects.toThrow(ReferenceAssetNotFoundError);
+  });
+
+  it("throws CrossClientReferenceBindingError when a reference asset belongs to another client", async () => {
+    const uow = new InMemorySceneUnitOfWork(undefined, undefined, undefined, [seededCampaign]);
+    const foreignAssetId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73899" as ReferenceAssetId;
+    uow.seedReferenceAsset({
+      id: foreignAssetId,
+      clientId: "foreign-client-id",
+      storageBucket: "ref-bucket",
+      storageObjectKey: "assets/foreign.png",
+      contentHashSha256: "2".repeat(64)
+    });
+    const useCase = new CreateSceneUseCase(uow);
+
+    await expect(
+      useCase.execute({
+        campaignId: seededCampaign.id,
+        configuration: {
+          prompt: "Scene with foreign ref",
+          referenceIds: [foreignAssetId],
+          engineProfileId: "ltx_25",
+          durationMs: 5000
+        }
+      })
+    ).rejects.toThrow(CrossClientReferenceBindingError);
+  });
+
+  it("throws ArchivedReferenceBindingError when a reference asset is archived", async () => {
+    const uow = new InMemorySceneUnitOfWork(undefined, undefined, undefined, [seededCampaign]);
+    const archivedAssetId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73899" as ReferenceAssetId;
+    uow.seedReferenceAsset({
+      id: archivedAssetId,
+      clientId: seededCampaign.clientId,
+      storageBucket: "ref-bucket",
+      storageObjectKey: "assets/archived.png",
+      contentHashSha256: "3".repeat(64),
+      archivedAt: new Date().toISOString()
+    });
+    const useCase = new CreateSceneUseCase(uow);
+
+    await expect(
+      useCase.execute({
+        campaignId: seededCampaign.id,
+        configuration: {
+          prompt: "Scene with archived ref",
+          referenceIds: [archivedAssetId],
+          engineProfileId: "ltx_25",
+          durationMs: 5000
+        }
+      })
+    ).rejects.toThrow(ArchivedReferenceBindingError);
   });
 });

@@ -18,6 +18,7 @@ export { PostgresClientRepository } from "./postgres/repositories/postgres-clien
 export { PostgresStoryboardCandidateRepository } from "./postgres/repositories/postgres-storyboard-candidate-repository.js";
 
 export { PostgresReferenceAssetRepository } from "./postgres/repositories/postgres-reference-asset-repository.js";
+export { PostgresReferenceGroupRepository } from "./postgres/repositories/postgres-reference-group-repository.js";
 
 export { PostgresGenerationManifestRepository } from "./postgres/repositories/postgres-generation-manifest-repository.js";
 

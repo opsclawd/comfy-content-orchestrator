@@ -21,3 +21,4 @@ export * from "./campaign-status.js";
 export * from "./client.js";
 export * from "./production-attempt.js";
 export * from "./campaign-delivery-reel.js";
+export * from "./reference-asset.js";
