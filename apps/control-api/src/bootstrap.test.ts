@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { main, runControlApi } from "./bootstrap.js";
+import { SessionClientContextResolver } from "./http/client-context.js";
 import type { ControlApiRuntimeConfig } from "./runtime-config.js";
 import { HeadBucketCommand, type S3Client } from "@aws-sdk/client-s3";
 import type { Pool } from "pg";
@@ -555,7 +556,7 @@ describe("bootstrap", () => {
     }
   });
 
-  it("omits planning clients and reference asset repository when planningProviders is absent", async () => {
+  it("omits planning clients when planningProviders is absent while wiring reference asset repository from pool", async () => {
     const harness = createTestHarness();
     const runtime = await runControlApi({
       config: validConfig,
@@ -569,7 +570,7 @@ describe("bootstrap", () => {
     expect(harness.mockServerStarter).toHaveBeenCalledTimes(1);
     const passedDeps = harness.mockServerStarter.mock.calls[0]?.[0] as ControlApiDependencies;
     expect(passedDeps.planningModelClients).toBeUndefined();
-    expect(passedDeps.referenceAssetRepository).toBeUndefined();
+    expect(passedDeps.referenceAssetRepository).toBeDefined();
 
     await runtime.stop();
   });
@@ -737,6 +738,136 @@ describe("bootstrap", () => {
       expect.anything(),
       expect.objectContaining({
         logger: false
+      })
+    );
+
+    await runtime.stop();
+  });
+
+  it("wires SessionClientContextResolver to HTTP server by default", async () => {
+    const harness = createTestHarness();
+
+    const runtime = await runControlApi({
+      config: validConfig,
+      poolFactory: () => harness.mockPool as unknown as Pool,
+      s3ClientFactory: () => harness.mockS3Client as unknown as S3Client,
+      serverStarter: harness.mockServerStarter,
+      processSignals: harness.mockSignals,
+      logger: harness.mockLogger
+    });
+
+    expect(harness.mockServerStarter).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        clientContextResolver: expect.any(SessionClientContextResolver)
+      })
+    );
+
+    await runtime.stop();
+  });
+
+  it("forwards custom clientContextResolver override when supplied", async () => {
+    const harness = createTestHarness();
+    const customResolver = { resolve: vi.fn() };
+
+    const runtime = await runControlApi({
+      config: validConfig,
+      clientContextResolver: customResolver,
+      poolFactory: () => harness.mockPool as unknown as Pool,
+      s3ClientFactory: () => harness.mockS3Client as unknown as S3Client,
+      serverStarter: harness.mockServerStarter,
+      processSignals: harness.mockSignals,
+      logger: harness.mockLogger
+    });
+
+    expect(harness.mockServerStarter).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        clientContextResolver: customResolver
+      })
+    );
+
+    await runtime.stop();
+  });
+
+  it("fails startup in production if trusted client authentication is not configured and no resolver is supplied", async () => {
+    const harness = createTestHarness();
+
+    const productionConfig: ControlApiRuntimeConfig = {
+      ...validConfig,
+      reviewerIdentity: {
+        trustedProxyAddresses: [],
+        nodeEnv: "production"
+      }
+    };
+
+    await expect(
+      runControlApi({
+        config: productionConfig,
+        poolFactory: () => harness.mockPool as unknown as Pool,
+        s3ClientFactory: () => harness.mockS3Client as unknown as S3Client,
+        serverStarter: harness.mockServerStarter,
+        processSignals: harness.mockSignals,
+        logger: harness.mockLogger
+      })
+    ).rejects.toThrowError(/trusted client authentication provider is required in production/);
+  });
+
+  it("fails startup in production if clientSessionSecret is the default synthetic placeholder", async () => {
+    const harness = createTestHarness();
+
+    const productionConfig: ControlApiRuntimeConfig = {
+      ...validConfig,
+      clientSessionSecret: "synthetic_control_api_client_session_secret",
+      reviewerIdentity: {
+        trustedProxyAddresses: ["172.28.0.10"],
+        nodeEnv: "production"
+      }
+    };
+
+    await expect(
+      runControlApi({
+        config: productionConfig,
+        poolFactory: () => harness.mockPool as unknown as Pool,
+        s3ClientFactory: () => harness.mockS3Client as unknown as S3Client,
+        serverStarter: harness.mockServerStarter,
+        processSignals: harness.mockSignals,
+        logger: harness.mockLogger
+      })
+    ).rejects.toThrowError(
+      /default synthetic secret 'synthetic_control_api_client_session_secret' is forbidden in production/
+    );
+  });
+
+  it("succeeds in production when clientSessionSecret is configured", async () => {
+    const harness = createTestHarness();
+
+    const productionConfig: ControlApiRuntimeConfig = {
+      ...validConfig,
+      clientSessionSecret: "prod-secret-key-12345",
+      reviewerIdentity: {
+        trustedProxyAddresses: ["172.28.0.10"],
+        nodeEnv: "production"
+      }
+    };
+
+    const runtime = await runControlApi({
+      config: productionConfig,
+      poolFactory: () => harness.mockPool as unknown as Pool,
+      s3ClientFactory: () => harness.mockS3Client as unknown as S3Client,
+      serverStarter: harness.mockServerStarter,
+      processSignals: harness.mockSignals,
+      logger: harness.mockLogger
+    });
+
+    expect(harness.mockServerStarter).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        clientContextResolver: expect.any(SessionClientContextResolver),
+        clientSessionAuthenticator: expect.any(Function),
+        clientSessionConfig: expect.objectContaining({
+          nodeEnv: "production"
+        })
       })
     );
 

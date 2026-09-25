@@ -386,3 +386,11 @@ export {
   OpenAiCandidateRankingClient,
   type OpenAiCandidateRankingClientOptions
 } from "./ranking/openai-candidate-ranking-client.js";
+
+export {
+  SharpImageInspectionAdapter,
+  DEFAULT_MAX_IMAGE_BYTES,
+  DEFAULT_MAX_WIDTH,
+  DEFAULT_MAX_HEIGHT,
+  DEFAULT_MAX_PIXELS
+} from "./image/sharp-image-inspection-adapter.js";

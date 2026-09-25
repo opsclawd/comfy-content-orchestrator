@@ -252,6 +252,9 @@ importers:
       pg:
         specifier: ^8.13.1
         version: 8.23.0
+      sharp:
+        specifier: 0.34.5
+        version: 0.34.5
     devDependencies:
       '@testcontainers/postgresql':
         specifier: ^12.1.0
@@ -1976,6 +1979,7 @@ packages:
   eslint@9.39.5:
     resolution: {integrity: sha512-DgZS62aPLXKlnxILS/AYCoRvHaZeXceIzlXPkkGGzJWSow1aEk0lbTlxUSlyjC8jcaKxAdOnTDz+o1JFSBsyjw==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    deprecated: This version is no longer supported. Please see https://eslint.org/version-support for other options.
     hasBin: true
     peerDependencies:
       jiti: '*'

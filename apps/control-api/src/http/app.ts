@@ -14,6 +14,7 @@ import { deliveryAssemblyRoutes } from "./routes/delivery-assembly-routes.js";
 import { deliveryReelRoutes } from "./routes/delivery-reel-routes.js";
 import { campaignRoutes } from "./routes/campaign-routes.js";
 import { clientRoutes } from "./routes/client-routes.js";
+import { referenceRoutes } from "./routes/reference-routes.js";
 import { sceneGenerationRoutes } from "./routes/scene-generation-routes.js";
 import { ControlApiConfigError } from "../runtime-config.js";
 import type { ControlApiAppOptions } from "./types.js";
@@ -21,6 +22,7 @@ import {
   TailscaleReviewerIdentityResolver,
   parseReviewerIdentityConfig
 } from "./reviewer-identity.js";
+import { installClientSessionMiddleware, SessionClientContextResolver } from "./client-context.js";
 
 function isControlApiContainer(
   deps: ControlApiDependencies | ControlApiContainer
@@ -42,13 +44,19 @@ export function createControlApiApp(
     ? dependencies
     : createControlApiContainer(dependencies);
 
+  const reviewerIdentityConfig = parseReviewerIdentityConfig(process.env);
+
   const reviewerIdentityResolver =
     options?.reviewerIdentityResolver ??
-    new TailscaleReviewerIdentityResolver(parseReviewerIdentityConfig(process.env));
+    new TailscaleReviewerIdentityResolver(reviewerIdentityConfig);
+
+  const clientContextResolver =
+    options?.clientContextResolver ?? new SessionClientContextResolver();
 
   const effectiveOptions: ControlApiAppOptions = {
     ...options,
-    reviewerIdentityResolver
+    reviewerIdentityResolver,
+    clientContextResolver
   };
 
   const app = Fastify({
@@ -59,6 +67,15 @@ export function createControlApiApp(
         removeAdditional: false
       }
     }
+  });
+
+  installClientSessionMiddleware(app, {
+    trustedProxyAddresses:
+      options?.clientSessionConfig?.trustedProxyAddresses ??
+      reviewerIdentityConfig.trustedProxyAddresses,
+    fallbackClientId: options?.clientSessionConfig?.fallbackClientId,
+    nodeEnv: options?.clientSessionConfig?.nodeEnv ?? process.env.NODE_ENV,
+    authenticator: options?.clientSessionAuthenticator
   });
 
   app.setErrorHandler(handleReviewError);
@@ -102,6 +119,12 @@ export function createControlApiApp(
 
   app.register(clientRoutes, {
     container
+  });
+
+  app.register(referenceRoutes, {
+    container,
+    appOptions: effectiveOptions,
+    clientContextResolver: effectiveOptions.clientContextResolver
   });
 
   if (

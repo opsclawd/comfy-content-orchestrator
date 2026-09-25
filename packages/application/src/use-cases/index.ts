@@ -60,3 +60,7 @@ export * from "./plan-campaign-storyboard.js";
 export * from "./production-review.js";
 export * from "./enqueue-delivery-assembly-for-accepted-run.js";
 export * from "./resolve-campaign-delivery-reel.js";
+export * from "./image-validation-error.js";
+export * from "./upload-reference-asset.js";
+export * from "./list-client-references.js";
+export * from "./archive-reference-asset.js";

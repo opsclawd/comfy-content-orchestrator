@@ -29,6 +29,33 @@ export const ReferenceAssetSchema = z.object({
 export type ReferenceAsset = z.infer<typeof ReferenceAssetSchema>;
 export type ReferenceAssetContract = ReferenceAsset;
 
+export const PREVIEW_AVAILABILITIES = ["available", "unavailable"] as const;
+export const PreviewAvailabilitySchema = z.enum(PREVIEW_AVAILABILITIES);
+export type PreviewAvailability = z.infer<typeof PreviewAvailabilitySchema>;
+
+export const ReferenceAssetPreviewAvailableSchema = ReferenceAssetSchema.extend({
+  previewUrl: z.string().min(1),
+  previewAvailability: z.literal("available")
+});
+
+export const ReferenceAssetPreviewUnavailableSchema = ReferenceAssetSchema.extend({
+  previewUrl: z.null(),
+  previewAvailability: z.literal("unavailable")
+});
+
+export const ReferenceAssetResponseSchema = z.discriminatedUnion("previewAvailability", [
+  ReferenceAssetPreviewAvailableSchema,
+  ReferenceAssetPreviewUnavailableSchema
+]);
+export type ReferenceAssetResponse = z.infer<typeof ReferenceAssetResponseSchema>;
+export type ReferenceAssetResponseContract = ReferenceAssetResponse;
+
+export const ReferenceAssetListResponseSchema = z.object({
+  references: z.array(ReferenceAssetResponseSchema)
+});
+export type ReferenceAssetListResponse = z.infer<typeof ReferenceAssetListResponseSchema>;
+export type ReferenceAssetListResponseContract = ReferenceAssetListResponse;
+
 export const ReferenceGroupSchema = z.object({
   id: z.string().uuid(),
   clientId: z.string().uuid(),
