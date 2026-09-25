@@ -2,6 +2,7 @@ import type {
   ReferenceAsset,
   ReferenceAssetId,
   ReferenceGroupId,
+  ReferenceRole,
   SceneId,
   SceneReferenceBinding
 } from "@cco/domain";
@@ -46,6 +47,11 @@ export interface ReferenceAssetRepository {
 
   readonly save?: (asset: ReferenceAsset) => Promise<ReferenceAsset>;
   readonly archive?: (clientId: string, id: ReferenceAssetId) => Promise<boolean>;
+  readonly updateLibraryRole?: (
+    clientId: string,
+    id: ReferenceAssetId,
+    role: ReferenceRole
+  ) => Promise<ReferenceAsset | undefined>;
 
   readonly findByClientAndContentHash?: (
     clientId: string,

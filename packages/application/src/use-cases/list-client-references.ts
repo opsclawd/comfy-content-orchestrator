@@ -56,6 +56,7 @@ export class ListClientReferencesUseCase {
           height: asset.height,
           mimeType: asset.mimeType ?? "image/png",
           displayName: asset.displayName,
+          libraryRole: asset.libraryRole ?? null,
           archivedAt: asset.archivedAt ?? null,
           groupId: asset.groupId ?? null,
           previewUrl,

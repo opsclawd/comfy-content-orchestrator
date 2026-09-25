@@ -2,8 +2,11 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastif
 import {
   ReferenceAssetListResponseSchema,
   ReferenceAssetResponseSchema,
+  ReferenceRoleSchema,
+  UpdateReferenceAssetRoleSchema,
   type ReferenceAssetListResponse,
-  type ReferenceAssetResponse
+  type ReferenceAssetResponse,
+  type ReferenceRole
 } from "@cco/contracts";
 import type { ReferenceAssetId } from "@cco/domain";
 import {
@@ -108,6 +111,26 @@ function parseDisplayNameHeader(rawHeader: string | string[] | undefined): strin
   return trimmed;
 }
 
+function parseReferenceRoleHeader(rawHeader: string | string[] | undefined): ReferenceRole {
+  if (rawHeader === undefined) {
+    throw new ImageValidationError(
+      "Missing required 'x-reference-role' header: must be one of 'subject_identity', 'product', 'location', 'style', 'composition'."
+    );
+  }
+  const headerValue = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+  if (typeof headerValue !== "string" || headerValue.trim().length === 0) {
+    throw new ImageValidationError("Invalid 'x-reference-role' header: must be non-empty.");
+  }
+  const trimmed = headerValue.trim();
+  const parseResult = ReferenceRoleSchema.safeParse(trimmed);
+  if (!parseResult.success) {
+    throw new ImageValidationError(
+      `Invalid 'x-reference-role' header '${trimmed}': must be one of 'subject_identity', 'product', 'location', 'style', 'composition'.`
+    );
+  }
+  return parseResult.data;
+}
+
 export const referenceRoutes: FastifyPluginAsync<ReferenceRoutesOptions> = async (
   fastify: FastifyInstance,
   opts: ReferenceRoutesOptions
@@ -152,6 +175,8 @@ export const referenceRoutes: FastifyPluginAsync<ReferenceRoutesOptions> = async
       }
 
       const displayName = parseDisplayNameHeader(request.headers["x-display-name"]);
+      const roleHeader = request.headers["x-reference-role"] ?? request.headers["x-library-role"];
+      const libraryRole = parseReferenceRoleHeader(roleHeader);
 
       if (!container.useCases.uploadReferenceAsset) {
         throw new Error("UploadReferenceAssetUseCase is not configured on container.");
@@ -161,7 +186,8 @@ export const referenceRoutes: FastifyPluginAsync<ReferenceRoutesOptions> = async
         clientId,
         body: bodyBuffer,
         declaredMimeType: contentType as SupportedReferenceMimeType,
-        displayName
+        displayName,
+        libraryRole
       });
 
       const response: ReferenceAssetResponse = ReferenceAssetResponseSchema.parse(result);
@@ -209,6 +235,39 @@ export const referenceRoutes: FastifyPluginAsync<ReferenceRoutesOptions> = async
       });
 
       return reply.status(204).send();
+    }
+  );
+
+  fastify.patch<{
+    Params: { clientId: string; referenceId: string };
+    Body: unknown;
+  }>(
+    "/api/clients/:clientId/references/:referenceId",
+    {
+      schema: clientReferenceItemParamsSchema
+    },
+    async (request, reply) => {
+      const clientId = await authenticateClient(resolver, request, request.params.clientId);
+
+      if (!container.useCases.updateReferenceAssetRole) {
+        throw new Error("UpdateReferenceAssetRoleUseCase is not configured on container.");
+      }
+
+      const bodyParseResult = UpdateReferenceAssetRoleSchema.safeParse(request.body);
+      if (!bodyParseResult.success) {
+        throw new ImageValidationError(
+          `Invalid payload for role update: ${bodyParseResult.error.message}`
+        );
+      }
+
+      const result = await container.useCases.updateReferenceAssetRole.execute({
+        clientId,
+        referenceId: request.params.referenceId as ReferenceAssetId,
+        role: bodyParseResult.data.libraryRole
+      });
+
+      const response: ReferenceAssetResponse = ReferenceAssetResponseSchema.parse(result);
+      return reply.status(200).send(response);
     }
   );
 };

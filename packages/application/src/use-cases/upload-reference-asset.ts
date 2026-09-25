@@ -1,7 +1,12 @@
 import crypto from "node:crypto";
 import { BUCKETS } from "@cco/shared";
 import { ReferenceAssetResponseSchema, type ReferenceAssetResponse } from "@cco/contracts";
-import type { ReferenceAsset, ReferenceAssetId } from "@cco/domain";
+import {
+  assertValidReferenceRole,
+  type ReferenceAsset,
+  type ReferenceAssetId,
+  type ReferenceRole
+} from "@cco/domain";
 import {
   ObjectAlreadyExistsError,
   type ImageInspectionLimits,
@@ -17,6 +22,7 @@ export interface UploadReferenceAssetInput {
   readonly body: Buffer | Uint8Array;
   readonly declaredMimeType: string;
   readonly displayName?: string | undefined;
+  readonly libraryRole: ReferenceRole;
 }
 
 export interface UploadReferenceAssetDependencies {
@@ -75,6 +81,8 @@ export class UploadReferenceAssetUseCase {
     const { referenceAssetRepository, objectStorage, imageValidator, limits, logger } =
       this.dependencies;
 
+    assertValidReferenceRole(input.libraryRole);
+
     // 1. Validate image buffer and MIME declarations
     const validated = await imageValidator.inspectAndValidate(
       input.body,
@@ -120,6 +128,7 @@ export class UploadReferenceAssetUseCase {
             }
             activeAsset = await referenceAssetRepository.saveOrReactivateByContentHash({
               ...existing,
+              libraryRole: input.libraryRole ?? existing.libraryRole,
               archivedAt: null
             });
           }
@@ -179,6 +188,7 @@ export class UploadReferenceAssetUseCase {
         height: validated.height,
         mimeType: validated.detectedMimeType,
         displayName: finalDisplayName,
+        libraryRole: input.libraryRole,
         archivedAt: null
       };
 
@@ -266,6 +276,7 @@ export class UploadReferenceAssetUseCase {
       height: asset.height,
       mimeType: asset.mimeType ?? "image/png",
       displayName: asset.displayName,
+      libraryRole: asset.libraryRole ?? null,
       archivedAt: asset.archivedAt ?? null,
       groupId: asset.groupId ?? null,
       previewUrl,

@@ -66,6 +66,32 @@ describe("ReferenceAsset Contracts & Schemas", () => {
       expect(archivedParsed.archivedAt).toBe("2026-09-24T12:00:00.000Z");
     });
 
+    it("parses with valid libraryRole, null libraryRole, or omitted libraryRole", () => {
+      const withRole = ReferenceAssetSchema.parse({
+        ...validAsset,
+        libraryRole: "subject_identity"
+      });
+      expect(withRole.libraryRole).toBe("subject_identity");
+
+      const withNullRole = ReferenceAssetSchema.parse({
+        ...validAsset,
+        libraryRole: null
+      });
+      expect(withNullRole.libraryRole).toBeNull();
+
+      const withoutRole = ReferenceAssetSchema.parse(validAsset);
+      expect(withoutRole.libraryRole).toBeUndefined();
+    });
+
+    it("rejects invalid libraryRole value", () => {
+      expect(() =>
+        ReferenceAssetSchema.parse({
+          ...validAsset,
+          libraryRole: "invalid_role"
+        })
+      ).toThrow();
+    });
+
     it("rejects non-hexadecimal or invalid length SHA-256 hash", () => {
       expect(() =>
         ReferenceAssetSchema.parse({

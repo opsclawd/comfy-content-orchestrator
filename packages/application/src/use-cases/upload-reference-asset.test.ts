@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { BUCKETS } from "@cco/shared";
 import type { ReferenceAssetResponse } from "@cco/contracts";
-import type { ReferenceAsset, ReferenceAssetId } from "@cco/domain";
+import type { ReferenceAsset, ReferenceAssetId, ReferenceRole } from "@cco/domain";
 import {
   ObjectAlreadyExistsError,
   type ImageInspectionPort,
@@ -49,6 +49,7 @@ describe("UploadReferenceAssetUseCase", () => {
       height: 1080,
       mimeType: "image/png",
       displayName: "Hero Image",
+      libraryRole: "subject_identity",
       archivedAt: null
     };
 
@@ -76,7 +77,8 @@ describe("UploadReferenceAssetUseCase", () => {
       clientId,
       body: dummyBytes,
       declaredMimeType: "image/png",
-      displayName: "Hero Image"
+      displayName: "Hero Image",
+      libraryRole: "subject_identity"
     });
 
     expect(result.id).toBe(savedAsset.id);
@@ -110,6 +112,7 @@ describe("UploadReferenceAssetUseCase", () => {
       height: 1080,
       mimeType: "image/png",
       displayName: "Original Name",
+      libraryRole: "subject_identity",
       archivedAt: null
     };
 
@@ -138,7 +141,8 @@ describe("UploadReferenceAssetUseCase", () => {
       clientId,
       body: dummyBytes,
       declaredMimeType: "image/png",
-      displayName: "New Different Name"
+      displayName: "New Different Name",
+      libraryRole: "subject_identity"
     });
 
     expect(result.id).toBe(existingActiveAsset.id);
@@ -165,6 +169,7 @@ describe("UploadReferenceAssetUseCase", () => {
       height: 1080,
       mimeType: "image/png",
       displayName: "Established Name",
+      libraryRole: "subject_identity",
       archivedAt: "2026-09-24T12:00:00.000Z"
     };
 
@@ -190,7 +195,8 @@ describe("UploadReferenceAssetUseCase", () => {
     const result = await useCase.execute({
       clientId,
       body: dummyBytes,
-      declaredMimeType: "image/png"
+      declaredMimeType: "image/png",
+      libraryRole: "subject_identity"
     });
 
     expect(result.id).toBe(existingArchivedAsset.id);
@@ -237,7 +243,8 @@ describe("UploadReferenceAssetUseCase", () => {
       useCase.execute({
         clientId,
         body: dummyBytes,
-        declaredMimeType: "image/png"
+        declaredMimeType: "image/png",
+        libraryRole: "subject_identity"
       })
     ).rejects.toThrow("Database connection lost");
 
@@ -282,7 +289,8 @@ describe("UploadReferenceAssetUseCase", () => {
       useCase.execute({
         clientId,
         body: dummyBytes,
-        declaredMimeType: "image/png"
+        declaredMimeType: "image/png",
+        libraryRole: "subject_identity"
       })
     ).rejects.toThrow("DB unique conflict");
 
@@ -308,6 +316,7 @@ describe("UploadReferenceAssetUseCase", () => {
       width: 1920,
       height: 1080,
       mimeType: "image/png",
+      libraryRole: "subject_identity",
       archivedAt: null
     };
 
@@ -332,7 +341,8 @@ describe("UploadReferenceAssetUseCase", () => {
     const result = await useCase.execute({
       clientId,
       body: dummyBytes,
-      declaredMimeType: "image/png"
+      declaredMimeType: "image/png",
+      libraryRole: "subject_identity"
     });
 
     expect(result.previewAvailability).toBe("unavailable");
@@ -361,6 +371,7 @@ describe("UploadReferenceAssetUseCase", () => {
       height: 1080,
       mimeType: "image/png",
       displayName: "Concurrent Winner",
+      libraryRole: "subject_identity",
       archivedAt: null
     };
 
@@ -389,7 +400,8 @@ describe("UploadReferenceAssetUseCase", () => {
       useCase.execute({
         clientId,
         body: dummyBytes,
-        declaredMimeType: "image/png"
+        declaredMimeType: "image/png",
+        libraryRole: "subject_identity"
       })
     ).rejects.toThrow("Serialization failure");
 
@@ -434,7 +446,8 @@ describe("UploadReferenceAssetUseCase", () => {
       useCase.execute({
         clientId,
         body: dummyBytes,
-        declaredMimeType: "image/png"
+        declaredMimeType: "image/png",
+        libraryRole: "subject_identity"
       })
     ).rejects.toThrow("DB error");
 
@@ -473,7 +486,8 @@ describe("UploadReferenceAssetUseCase", () => {
       useCase.execute({
         clientId,
         body: dummyBytes,
-        declaredMimeType: "image/png"
+        declaredMimeType: "image/png",
+        libraryRole: "subject_identity"
       })
     ).rejects.toThrow("could not be verified on collision");
   });
@@ -513,7 +527,8 @@ describe("UploadReferenceAssetUseCase", () => {
       useCase.execute({
         clientId,
         body: dummyBytes,
-        declaredMimeType: "image/png"
+        declaredMimeType: "image/png",
+        libraryRole: "subject_identity"
       })
     ).rejects.toThrow("has mismatched checksum");
   });
@@ -551,6 +566,7 @@ describe("UploadReferenceAssetUseCase", () => {
       width: 1920,
       height: 1080,
       mimeType: "image/png",
+      libraryRole: "subject_identity",
       archivedAt: null
     };
 
@@ -570,7 +586,8 @@ describe("UploadReferenceAssetUseCase", () => {
     const result = await useCase.execute({
       clientId,
       body: dummyBytes,
-      declaredMimeType: "image/png"
+      declaredMimeType: "image/png",
+      libraryRole: "subject_identity"
     });
 
     expect(result.id).toBe(savedAsset.id);
@@ -617,6 +634,7 @@ describe("UploadReferenceAssetUseCase", () => {
       height: 1080,
       mimeType: "image/png",
       displayName: "Req 2",
+      libraryRole: "subject_identity",
       archivedAt: null
     };
 
@@ -646,14 +664,16 @@ describe("UploadReferenceAssetUseCase", () => {
       clientId,
       body: dummyBytes,
       declaredMimeType: "image/png",
-      displayName: "Req 1"
+      displayName: "Req 1",
+      libraryRole: "subject_identity"
     });
 
     const promise2 = useCase.execute({
       clientId,
       body: dummyBytes,
       declaredMimeType: "image/png",
-      displayName: "Req 2"
+      displayName: "Req 2",
+      libraryRole: "subject_identity"
     });
 
     const results = await Promise.allSettled([promise1, promise2]);
@@ -686,6 +706,7 @@ describe("UploadReferenceAssetUseCase", () => {
       width: 1920,
       height: 1080,
       mimeType: "image/png",
+      libraryRole: "subject_identity",
       archivedAt: null
     };
 
@@ -715,7 +736,8 @@ describe("UploadReferenceAssetUseCase", () => {
     const result = await useCase.execute({
       clientId,
       body: dummyBytes,
-      declaredMimeType: "image/png"
+      declaredMimeType: "image/png",
+      libraryRole: "subject_identity"
     });
 
     const computedSha = crypto.createHash("sha256").update(dummyBytes).digest("hex");
@@ -725,5 +747,22 @@ describe("UploadReferenceAssetUseCase", () => {
       `clients/${clientId}/references/${computedSha}`,
       expect.any(Function)
     );
+  });
+  it("rejects upload when libraryRole is invalid", async () => {
+    const useCase = new UploadReferenceAssetUseCase({
+      referenceAssetRepository: {} as unknown as ReferenceAssetRepository,
+      objectStorage: {} as unknown as ObjectStoragePort,
+      imageValidator: fakeValidator
+    });
+
+    await expect(
+      useCase.execute({
+        clientId,
+        body: dummyBytes,
+        declaredMimeType: "image/png",
+        displayName: "Invalid Role",
+        libraryRole: "not_a_role" as unknown as ReferenceRole
+      })
+    ).rejects.toThrow("Invalid reference role");
   });
 });

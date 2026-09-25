@@ -17,7 +17,7 @@ import {
   type UnitOfWorkContext
 } from "@cco/application";
 import type { ReferenceAssetResponse } from "@cco/contracts";
-import type { ReferenceAsset, ReferenceAssetId } from "@cco/domain";
+import type { ReferenceAsset, ReferenceAssetId, ReferenceRole } from "@cco/domain";
 import { SharpImageInspectionAdapter } from "@cco/infrastructure";
 import { createControlApiApp } from "../app.js";
 import type { ControlApiAppOptions } from "../types.js";
@@ -141,6 +141,27 @@ class FakeReferenceAssetRepository implements ReferenceAssetRepository {
       archivedAt: new Date().toISOString()
     });
     return true;
+  }
+
+  async updateLibraryRole(
+    clientId: string,
+    referenceId: ReferenceAssetId,
+    libraryRole: ReferenceRole
+  ): Promise<ReferenceAsset | undefined> {
+    const asset = this.assets.get(referenceId);
+    if (
+      !asset ||
+      asset.clientId !== clientId ||
+      (asset.archivedAt !== null && asset.archivedAt !== undefined)
+    ) {
+      return undefined;
+    }
+    const updated: ReferenceAsset = {
+      ...asset,
+      libraryRole
+    };
+    this.assets.set(referenceId, updated);
+    return updated;
   }
 }
 
@@ -274,7 +295,8 @@ describe("Reference Assets HTTP Routes", () => {
         url: `/api/clients/${testClientId}/references`,
         headers: {
           "content-type": "image/png",
-          "x-display-name": "Hero Character Portrait"
+          "x-display-name": "Hero Character Portrait",
+          "x-reference-role": "subject_identity"
         },
         payload: VALID_1X1_PNG
       });
@@ -287,6 +309,7 @@ describe("Reference Assets HTTP Routes", () => {
       expect(body.storageBucket).toBe(BUCKETS.REFERENCE);
       expect(body.mimeType).toBe("image/png");
       expect(body.displayName).toBe("Hero Character Portrait");
+      expect(body.libraryRole).toBe("subject_identity");
       expect(body.width).toBe(1);
       expect(body.height).toBe(1);
       expect(body.previewAvailability).toBe("available");
@@ -308,6 +331,7 @@ describe("Reference Assets HTTP Routes", () => {
       const inRepo = await referenceAssetRepository.findById(body.id);
       expect(inRepo).not.toBeNull();
       expect(inRepo?.displayName).toBe("Hero Character Portrait");
+      expect(inRepo?.libraryRole).toBe("subject_identity");
     });
 
     it("successfully uploads a JPEG without x-display-name and applies deterministic name", async () => {
@@ -317,7 +341,8 @@ describe("Reference Assets HTTP Routes", () => {
         method: "POST",
         url: `/api/clients/${testClientId}/references`,
         headers: {
-          "content-type": "image/jpeg"
+          "content-type": "image/jpeg",
+          "x-reference-role": "product"
         },
         payload: VALID_JPEG
       });
@@ -327,6 +352,7 @@ describe("Reference Assets HTTP Routes", () => {
       expect(body.mimeType).toBe("image/jpeg");
       const sha256 = crypto.createHash("sha256").update(VALID_JPEG).digest("hex");
       expect(body.displayName).toBe(`${sha256.slice(0, 16)}.jpg`);
+      expect(body.libraryRole).toBe("product");
       expect(body.previewAvailability).toBe("available");
     });
 
@@ -337,7 +363,8 @@ describe("Reference Assets HTTP Routes", () => {
         method: "POST",
         url: `/api/clients/${testClientId}/references`,
         headers: {
-          "content-type": "image/webp"
+          "content-type": "image/webp",
+          "x-reference-role": "style"
         },
         payload: VALID_WEBP
       });
@@ -345,6 +372,7 @@ describe("Reference Assets HTTP Routes", () => {
       expect(response.statusCode).toBe(201);
       const body = response.json();
       expect(body.mimeType).toBe("image/webp");
+      expect(body.libraryRole).toBe("style");
       expect(body.previewAvailability).toBe("available");
     });
 
@@ -356,12 +384,14 @@ describe("Reference Assets HTTP Routes", () => {
         url: `/api/clients/${testClientId}/references`,
         headers: {
           "content-type": "image/png",
-          "x-display-name": "First Upload Name"
+          "x-display-name": "First Upload Name",
+          "x-reference-role": "location"
         },
         payload: VALID_1X1_PNG
       });
       expect(firstRes.statusCode).toBe(201);
       const firstBody = firstRes.json();
+      expect(firstBody.libraryRole).toBe("location");
 
       // Second upload with identical bytes but different display name
       const secondRes = await app.inject({
@@ -369,7 +399,8 @@ describe("Reference Assets HTTP Routes", () => {
         url: `/api/clients/${testClientId}/references`,
         headers: {
           "content-type": "image/png",
-          "x-display-name": "Changed Name Attempt"
+          "x-display-name": "Changed Name Attempt",
+          "x-reference-role": "location"
         },
         payload: VALID_1X1_PNG
       });
@@ -381,6 +412,7 @@ describe("Reference Assets HTTP Routes", () => {
       expect(secondBody.storageObjectKey).toBe(firstBody.storageObjectKey);
       // Preserves established display name
       expect(secondBody.displayName).toBe("First Upload Name");
+      expect(secondBody.libraryRole).toBe("location");
     });
 
     it("reactivates an archived asset on re-uploading identical bytes", async () => {
@@ -396,6 +428,7 @@ describe("Reference Assets HTTP Routes", () => {
         height: 1,
         mimeType: "image/png",
         displayName: "Archived Asset",
+        libraryRole: "composition",
         archivedAt: "2026-01-01T00:00:00.000Z"
       };
 
@@ -407,7 +440,8 @@ describe("Reference Assets HTTP Routes", () => {
         method: "POST",
         url: `/api/clients/${testClientId}/references`,
         headers: {
-          "content-type": "image/png"
+          "content-type": "image/png",
+          "x-reference-role": "composition"
         },
         payload: VALID_1X1_PNG
       });
@@ -415,6 +449,7 @@ describe("Reference Assets HTTP Routes", () => {
       expect(response.statusCode).toBe(201);
       const body = response.json();
       expect(body.id).toBe(archivedAsset.id);
+      expect(body.libraryRole).toBe("composition");
       expect(body.archivedAt).toBeNull();
 
       // Check repository row is active
@@ -518,7 +553,8 @@ describe("Reference Assets HTTP Routes", () => {
         url: `/api/clients/${testClientId}/references`,
         headers: {
           "content-type": "image/png",
-          "x-display-name": "Hero\x00Name"
+          "x-display-name": "Hero\x00Name",
+          "x-reference-role": "subject_identity"
         },
         payload: VALID_1X1_PNG
       });
@@ -536,7 +572,8 @@ describe("Reference Assets HTTP Routes", () => {
         url: `/api/clients/${testClientId}/references`,
         headers: {
           "content-type": "image/png",
-          "x-display-name": "a".repeat(256)
+          "x-display-name": "a".repeat(256),
+          "x-reference-role": "subject_identity"
         },
         payload: VALID_1X1_PNG
       });
@@ -546,6 +583,61 @@ describe("Reference Assets HTTP Routes", () => {
       expect(body.code).toBe("VALIDATION_FAILURE");
     });
 
+    it("rejects missing x-reference-role header with 400 VALIDATION_FAILURE", async () => {
+      const { app } = createTestApp();
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/clients/${testClientId}/references`,
+        headers: {
+          "content-type": "image/png"
+        },
+        payload: VALID_1X1_PNG
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = response.json();
+      expect(body.code).toBe("VALIDATION_FAILURE");
+      expect(body.message).toContain("x-reference-role");
+    });
+
+    it("rejects invalid x-reference-role header value with 400 VALIDATION_FAILURE", async () => {
+      const { app } = createTestApp();
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/clients/${testClientId}/references`,
+        headers: {
+          "content-type": "image/png",
+          "x-reference-role": "invalid_role_enum"
+        },
+        payload: VALID_1X1_PNG
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = response.json();
+      expect(body.code).toBe("VALIDATION_FAILURE");
+      expect(body.message).toContain("invalid_role_enum");
+    });
+
+    it("accepts x-library-role header as alternative to x-reference-role", async () => {
+      const { app } = createTestApp();
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/clients/${testClientId}/references`,
+        headers: {
+          "content-type": "image/png",
+          "x-library-role": "product"
+        },
+        payload: VALID_1X1_PNG
+      });
+
+      expect(response.statusCode).toBe(201);
+      const body = response.json();
+      expect(body.libraryRole).toBe("product");
+    });
+
     it("rejects invalid client UUID with 400 VALIDATION_FAILURE", async () => {
       const { app } = createTestApp();
 
@@ -553,7 +645,8 @@ describe("Reference Assets HTTP Routes", () => {
         method: "POST",
         url: `/api/clients/not-a-valid-uuid/references`,
         headers: {
-          "content-type": "image/png"
+          "content-type": "image/png",
+          "x-reference-role": "subject_identity"
         },
         payload: VALID_1X1_PNG
       });
@@ -570,7 +663,8 @@ describe("Reference Assets HTTP Routes", () => {
         method: "POST",
         url: `/api/clients/${testClientId}/references`,
         headers: {
-          "content-type": "image/png"
+          "content-type": "image/png",
+          "x-reference-role": "subject_identity"
         },
         payload: VALID_1X1_PNG
       });
@@ -587,7 +681,8 @@ describe("Reference Assets HTTP Routes", () => {
         method: "POST",
         url: `/api/clients/${testClientId}/references`,
         headers: {
-          "content-type": "image/png"
+          "content-type": "image/png",
+          "x-reference-role": "subject_identity"
         },
         payload: VALID_1X1_PNG
       });
@@ -611,7 +706,8 @@ describe("Reference Assets HTTP Routes", () => {
         url: `/api/clients/${testClientId}/references`,
         headers: {
           authorization: `Bearer ${validToken}`,
-          "content-type": "image/png"
+          "content-type": "image/png",
+          "x-reference-role": "subject_identity"
         },
         payload: VALID_1X1_PNG
       });
@@ -619,6 +715,7 @@ describe("Reference Assets HTTP Routes", () => {
       expect(response.statusCode).toBe(201);
       const body = response.json();
       expect(body.clientId).toBe(testClientId);
+      expect(body.libraryRole).toBe("subject_identity");
     });
 
     it("rejects caller with arbitrary Bearer token when using default SessionClientContextResolver without authenticator", async () => {
@@ -629,7 +726,8 @@ describe("Reference Assets HTTP Routes", () => {
         url: `/api/clients/${testClientId}/references`,
         headers: {
           authorization: `Bearer client:${testClientId}`,
-          "content-type": "image/png"
+          "content-type": "image/png",
+          "x-reference-role": "subject_identity"
         },
         payload: VALID_1X1_PNG
       });
@@ -877,6 +975,178 @@ describe("Reference Assets HTTP Routes", () => {
       const response = await app.inject({
         method: "DELETE",
         url: `/api/clients/${testClientId}/references/88888888-8888-8888-8888-888888888888`
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(response.json().code).toBe("FORBIDDEN");
+    });
+  });
+
+  describe("PATCH /api/clients/:clientId/references/:referenceId", () => {
+    const activeAsset: ReferenceAsset = {
+      id: "99999999-aaaa-9999-aaaa-999999999999" as ReferenceAssetId,
+      clientId: testClientId,
+      assetType: "image",
+      storageBucket: BUCKETS.REFERENCE,
+      storageObjectKey: `clients/${testClientId}/references/hash9`,
+      contentHashSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      mimeType: "image/png",
+      displayName: "Editable Asset",
+      libraryRole: "subject_identity",
+      archivedAt: null
+    };
+
+    it("updates library role to another valid role and returns 200 with updated response", async () => {
+      const { app, referenceAssetRepository } = createTestApp({
+        initialAssets: [activeAsset]
+      });
+
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/api/clients/${testClientId}/references/${activeAsset.id}`,
+        headers: {
+          "content-type": "application/json"
+        },
+        payload: {
+          libraryRole: "product"
+        }
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json();
+      expect(body.id).toBe(activeAsset.id);
+      expect(body.libraryRole).toBe("product");
+
+      // Verify in repository
+      const inRepo = await referenceAssetRepository.findById(activeAsset.id);
+      expect(inRepo?.libraryRole).toBe("product");
+    });
+
+    it("rejects null libraryRole with 400 VALIDATION_FAILURE", async () => {
+      const { app } = createTestApp({
+        initialAssets: [activeAsset]
+      });
+
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/api/clients/${testClientId}/references/${activeAsset.id}`,
+        headers: {
+          "content-type": "application/json"
+        },
+        payload: {
+          libraryRole: null
+        }
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = response.json();
+      expect(body.code).toBe("VALIDATION_FAILURE");
+    });
+
+    it("rejects invalid role with 400 VALIDATION_FAILURE", async () => {
+      const { app } = createTestApp({
+        initialAssets: [activeAsset]
+      });
+
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/api/clients/${testClientId}/references/${activeAsset.id}`,
+        headers: {
+          "content-type": "application/json"
+        },
+        payload: {
+          libraryRole: "invalid_role"
+        }
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = response.json();
+      expect(body.code).toBe("VALIDATION_FAILURE");
+    });
+
+    it("returns 404 NOT_FOUND for non-existent reference asset", async () => {
+      const { app } = createTestApp();
+
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/api/clients/${testClientId}/references/88888888-8888-8888-8888-888888888888`,
+        headers: {
+          "content-type": "application/json"
+        },
+        payload: {
+          libraryRole: "product"
+        }
+      });
+
+      expect(response.statusCode).toBe(404);
+      expect(response.json().code).toBe("NOT_FOUND");
+    });
+
+    it("returns 404 NOT_FOUND for foreign-owned reference asset without disclosing existence", async () => {
+      const foreignAsset: ReferenceAsset = {
+        id: "aaaaaaaa-ffff-aaaa-ffff-aaaaaaaaaaaa" as ReferenceAssetId,
+        clientId: otherClientId,
+        assetType: "image",
+        storageBucket: BUCKETS.REFERENCE,
+        storageObjectKey: `clients/${otherClientId}/references/foreign`,
+        contentHashSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        mimeType: "image/png",
+        libraryRole: "style",
+        archivedAt: null
+      };
+
+      const { app } = createTestApp({
+        initialAssets: [foreignAsset]
+      });
+
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/api/clients/${testClientId}/references/${foreignAsset.id}`,
+        headers: {
+          "content-type": "application/json"
+        },
+        payload: {
+          libraryRole: "product"
+        }
+      });
+
+      expect(response.statusCode).toBe(404);
+      expect(response.json().code).toBe("NOT_FOUND");
+    });
+
+    it("returns 401 when unauthenticated", async () => {
+      const { app } = createTestApp({ authenticatedClientId: null, initialAssets: [activeAsset] });
+
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/api/clients/${testClientId}/references/${activeAsset.id}`,
+        headers: {
+          "content-type": "application/json"
+        },
+        payload: {
+          libraryRole: "product"
+        }
+      });
+
+      expect(response.statusCode).toBe(401);
+      expect(response.json().code).toBe("AUTHENTICATION_REQUIRED");
+    });
+
+    it("returns 403 when authenticated client differs from route :clientId", async () => {
+      const { app } = createTestApp({
+        authenticatedClientId: otherClientId,
+        initialAssets: [activeAsset]
+      });
+
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/api/clients/${testClientId}/references/${activeAsset.id}`,
+        headers: {
+          "content-type": "application/json"
+        },
+        payload: {
+          libraryRole: "product"
+        }
       });
 
       expect(response.statusCode).toBe(403);

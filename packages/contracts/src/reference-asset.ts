@@ -23,11 +23,17 @@ export const ReferenceAssetSchema = z.object({
   height: z.number().int().positive().optional(),
   mimeType: z.string().min(1).default("image/png"),
   displayName: z.string().min(1).optional(),
+  libraryRole: ReferenceRoleSchema.nullable().optional(),
   archivedAt: z.string().datetime().nullable().optional(),
   groupId: z.string().uuid().nullable().optional()
 });
 export type ReferenceAsset = z.infer<typeof ReferenceAssetSchema>;
 export type ReferenceAssetContract = ReferenceAsset;
+
+export const UpdateReferenceAssetRoleSchema = z.object({
+  libraryRole: ReferenceRoleSchema
+});
+export type UpdateReferenceAssetRole = z.infer<typeof UpdateReferenceAssetRoleSchema>;
 
 export const PREVIEW_AVAILABILITIES = ["available", "unavailable"] as const;
 export const PreviewAvailabilitySchema = z.enum(PREVIEW_AVAILABILITIES);

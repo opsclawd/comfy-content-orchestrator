@@ -32,6 +32,7 @@ interface ReferenceAssetDbRow {
   height?: number | null;
   mime_type?: string | null;
   display_name?: string | null;
+  library_role?: string | null;
   group_id?: string | null;
   archived_at?: Date | string | null;
   scene_id?: string | null;
@@ -73,6 +74,9 @@ function mapRowToReferenceAsset(row: ReferenceAssetDbRow, includeSceneId = false
   }
   if (row.display_name !== null && row.display_name !== undefined) {
     asset.displayName = row.display_name;
+  }
+  if (row.library_role !== null && row.library_role !== undefined) {
+    asset.libraryRole = row.library_role as ReferenceRole;
   }
   if (row.group_id !== null && row.group_id !== undefined) {
     asset.groupId = row.group_id as ReferenceGroupId;
@@ -117,6 +121,7 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
         ra.height,
         ra.mime_type,
         ra.display_name,
+        ra.library_role,
         ra.group_id,
         ra.archived_at
       FROM scene_reference_assets sra
@@ -155,6 +160,7 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
         height,
         mime_type,
         display_name,
+        library_role,
         group_id,
         archived_at
       FROM reference_assets
@@ -191,6 +197,7 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
         height,
         mime_type,
         display_name,
+        library_role,
         group_id,
         archived_at
       FROM reference_assets
@@ -229,6 +236,7 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
         height,
         mime_type,
         display_name,
+        library_role,
         group_id,
         archived_at
       FROM reference_assets
@@ -432,15 +440,17 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
         height,
         mime_type,
         display_name,
+        library_role,
         group_id,
         archived_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       ON CONFLICT (asset_id) DO UPDATE SET
         group_id = EXCLUDED.group_id,
         width = EXCLUDED.width,
         height = EXCLUDED.height,
         mime_type = EXCLUDED.mime_type,
         display_name = EXCLUDED.display_name,
+        library_role = EXCLUDED.library_role,
         archived_at = EXCLUDED.archived_at
       WHERE reference_assets.client_id = EXCLUDED.client_id
       RETURNING *
@@ -456,6 +466,7 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
         asset.height ?? null,
         asset.mimeType ?? "image/png",
         asset.displayName ?? null,
+        asset.libraryRole ?? null,
         asset.groupId ?? null,
         asset.archivedAt ? new Date(asset.archivedAt) : null
       ]
@@ -489,6 +500,29 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
     return (result.rowCount ?? 0) > 0;
   }
 
+  async updateLibraryRole(
+    clientId: string,
+    id: ReferenceAssetId,
+    role: ReferenceRole
+  ): Promise<ReferenceAsset | undefined> {
+    assertValidReferenceRole(role);
+    const result = await this.client.query<ReferenceAssetDbRow>(
+      `
+      UPDATE reference_assets
+      SET library_role = $3
+      WHERE asset_id = $1 AND client_id = $2 AND archived_at IS NULL
+      RETURNING *
+      `,
+      [id, clientId, role]
+    );
+
+    const row = result.rows[0];
+    if (!row) {
+      return undefined;
+    }
+    return mapRowToReferenceAsset(row, false);
+  }
+
   async findByClientAndContentHash(
     clientId: string,
     contentHashSha256: string,
@@ -510,6 +544,7 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
         height,
         mime_type,
         display_name,
+        library_role,
         group_id,
         archived_at
       FROM reference_assets
@@ -541,11 +576,13 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
         height,
         mime_type,
         display_name,
+        library_role,
         group_id,
         archived_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULL)
       ON CONFLICT (storage_bucket, storage_object_key) DO UPDATE SET
-        archived_at = NULL
+        archived_at = NULL,
+        library_role = COALESCE(EXCLUDED.library_role, reference_assets.library_role)
       WHERE reference_assets.client_id = EXCLUDED.client_id
         AND reference_assets.content_hash_sha256 = EXCLUDED.content_hash_sha256
       RETURNING *
@@ -561,6 +598,7 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
         asset.height ?? null,
         asset.mimeType ?? "image/png",
         asset.displayName ?? null,
+        asset.libraryRole ?? null,
         asset.groupId ?? null
       ]
     );

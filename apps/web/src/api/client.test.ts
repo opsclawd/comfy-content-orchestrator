@@ -8,6 +8,10 @@ import {
   getCampaignDeliveryReel,
   submitReviewCommand,
   planCampaignStoryboard,
+  listClientReferences,
+  uploadClientReference,
+  archiveClientReference,
+  updateClientReferenceRole,
   ApiClientError,
   ApiValidationError,
   ReviewCommandApiError,
@@ -1436,6 +1440,104 @@ describe("Typed Control API Client", () => {
 
       const result = await getCampaignDeliveryReel(testCampaignId, "http://example.com", mockFetch);
       expect(result).toEqual(validCompletedDeliveryReel);
+    });
+  });
+
+  describe("Client Reference Library functions", () => {
+    const testClientId = "11111111-1111-1111-1111-111111111111";
+    const testRefId = "22222222-2222-2222-2222-222222222222";
+    const sampleReference = {
+      id: testRefId,
+      clientId: testClientId,
+      assetType: "image",
+      storageBucket: "cco-reference-assets",
+      storageObjectKey: "key-1",
+      contentHashSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      displayName: "Ref 1",
+      libraryRole: "subject_identity",
+      previewAvailability: "available",
+      previewUrl: "https://example.com/ref.png"
+    };
+
+    it("listClientReferences calls GET /api/clients/:clientId/references and parses response", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ references: [sampleReference] })
+      });
+
+      const refs = await listClientReferences(testClientId, mockFetch);
+      expect(refs).toHaveLength(1);
+      expect(refs[0]?.displayName).toBe("Ref 1");
+      expect(refs[0]?.libraryRole).toBe("subject_identity");
+      expect(mockFetch).toHaveBeenCalledWith(
+        `/api/clients/${testClientId}/references`,
+        expect.any(Object)
+      );
+    });
+
+    it("uploadClientReference calls POST /api/clients/:clientId/references with headers and body", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 201,
+        json: async () => sampleReference
+      });
+
+      const result = await uploadClientReference(
+        testClientId,
+        {
+          body: new Uint8Array([1, 2, 3]),
+          mimeType: "image/png",
+          displayName: "Hero",
+          libraryRole: "subject_identity"
+        },
+        mockFetch
+      );
+
+      expect(result.id).toBe(testRefId);
+      expect(mockFetch).toHaveBeenCalledWith(
+        `/api/clients/${testClientId}/references`,
+        expect.objectContaining({
+          method: "POST",
+          headers: {
+            "Content-Type": "image/png",
+            "x-reference-role": "subject_identity",
+            "X-Display-Name": "Hero"
+          }
+        })
+      );
+    });
+
+    it("archiveClientReference calls DELETE /api/clients/:clientId/references/:referenceId", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 204
+      });
+
+      await archiveClientReference(testClientId, testRefId, mockFetch);
+      expect(mockFetch).toHaveBeenCalledWith(
+        `/api/clients/${testClientId}/references/${testRefId}`,
+        expect.objectContaining({ method: "DELETE" })
+      );
+    });
+
+    it("updateClientReferenceRole calls PATCH /api/clients/:clientId/references/:referenceId", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ ...sampleReference, libraryRole: "product" })
+      });
+
+      const result = await updateClientReferenceRole(testClientId, testRefId, "product", mockFetch);
+      expect(result.libraryRole).toBe("product");
+      expect(mockFetch).toHaveBeenCalledWith(
+        `/api/clients/${testClientId}/references/${testRefId}`,
+        expect.objectContaining({
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ libraryRole: "product" })
+        })
+      );
     });
   });
 });
