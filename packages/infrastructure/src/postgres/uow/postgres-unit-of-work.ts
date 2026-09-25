@@ -6,6 +6,8 @@ import { PostgresClientRepository } from "../repositories/postgres-client-reposi
 import { PostgresDeliveryAssemblyJobQueue } from "../repositories/postgres-delivery-assembly-job-queue.js";
 import { PostgresGenerationManifestRepository } from "../repositories/postgres-generation-manifest-repository.js";
 import { PostgresTransactionalJobEnqueuer } from "../repositories/postgres-job-queue.js";
+import { PostgresReferenceAssetRepository } from "../repositories/postgres-reference-asset-repository.js";
+import { PostgresReferenceGroupRepository } from "../repositories/postgres-reference-group-repository.js";
 import { PostgresReviewEventStore } from "../repositories/postgres-review-event-store.js";
 import { PostgresSceneRepository } from "../repositories/postgres-scene-repository.js";
 import { PostgresStoryboardCandidateRepository } from "../repositories/postgres-storyboard-candidate-repository.js";
@@ -26,7 +28,9 @@ export class PostgresUnitOfWork implements UnitOfWork {
         jobs: new PostgresTransactionalJobEnqueuer(client),
         campaignProductionRuns: new PostgresCampaignProductionRunRepository(client),
         assemblyJobs: new PostgresDeliveryAssemblyJobQueue(client),
-        generationManifests: new PostgresGenerationManifestRepository(client)
+        generationManifests: new PostgresGenerationManifestRepository(client),
+        referenceAssets: new PostgresReferenceAssetRepository(client),
+        referenceGroups: new PostgresReferenceGroupRepository(client)
       };
 
       const result = await work(context);

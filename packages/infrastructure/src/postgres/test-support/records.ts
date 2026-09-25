@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 
 export interface LicenseRecordInput {
@@ -31,6 +32,20 @@ export interface ReferenceAssetRecordInput {
   contentHashSha256?: string;
   controlnetType?: string;
   defaultStrength?: number;
+  width?: number;
+  height?: number;
+  mimeType?: string;
+  displayName?: string | null;
+  groupId?: string | null;
+  archivedAt?: Date | string | null;
+}
+
+export interface ReferenceGroupRecordInput {
+  clientId: string;
+  campaignId?: string | null;
+  name?: string;
+  description?: string | null;
+  archivedAt?: Date | string | null;
 }
 
 export interface CampaignRecordInput {
@@ -68,7 +83,12 @@ export interface StoryboardSceneRecordInput {
 export interface SceneReferenceAssetRecordInput {
   sceneId: string;
   assetId: string;
+  specRevision?: number;
+  role?: string;
+  weight?: number | null;
+  hints?: Record<string, unknown> | null;
   overrideStrength?: number | null;
+  archivedAt?: Date | string | null;
 }
 
 export interface RenderJobRecordInput {
@@ -160,6 +180,21 @@ export interface InsertedReferenceAssetRecord {
   content_hash_sha256: string;
   controlnet_type: string;
   default_strength: string;
+  width: number | null;
+  height: number | null;
+  mime_type: string | null;
+  display_name: string | null;
+  group_id: string | null;
+  created_at: Date;
+  archived_at: Date | null;
+}
+
+export interface InsertedReferenceGroupRecord {
+  group_id: string;
+  client_id: string;
+  campaign_id: string | null;
+  name: string;
+  description: string | null;
   created_at: Date;
   archived_at: Date | null;
 }
@@ -207,7 +242,12 @@ export interface InsertedStoryboardSceneRecord {
 export interface InsertedSceneReferenceAssetRecord {
   scene_id: string;
   asset_id: string;
+  spec_revision: number;
+  role: string;
+  weight: string | null;
+  hints: Record<string, unknown> | null;
   override_strength: string | null;
+  archived_at: Date | null;
 }
 
 export interface InsertedRenderJobRecord {
@@ -399,11 +439,18 @@ export async function insertReferenceAssetRecord(
   const clientId = input.clientId;
   const assetType = input.assetType ?? "style_lora";
   const storageBucket = input.storageBucket ?? "godzspeed-reference";
-  const storageObjectKey = input.storageObjectKey ?? `assets/${clientId}/reference_01.png`;
+  const storageObjectKey =
+    input.storageObjectKey ?? `assets/${clientId}/reference_${randomUUID()}.png`;
   const contentHashSha256 =
     input.contentHashSha256 ?? "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
   const controlnetType = input.controlnetType ?? "depth";
   const defaultStrength = input.defaultStrength ?? 0.85;
+  const width = input.width !== undefined ? input.width : null;
+  const height = input.height !== undefined ? input.height : null;
+  const mimeType = input.mimeType !== undefined ? input.mimeType : null;
+  const displayName = input.displayName !== undefined ? input.displayName : null;
+  const groupId = input.groupId !== undefined ? input.groupId : null;
+  const archivedAt = input.archivedAt !== undefined ? input.archivedAt : null;
 
   const res = await client.query<InsertedReferenceAssetRecord>(
     `
@@ -414,8 +461,14 @@ export async function insertReferenceAssetRecord(
       storage_object_key,
       content_hash_sha256,
       controlnet_type,
-      default_strength
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+      default_strength,
+      width,
+      height,
+      mime_type,
+      display_name,
+      group_id,
+      archived_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
     RETURNING *
     `,
     [
@@ -425,13 +478,50 @@ export async function insertReferenceAssetRecord(
       storageObjectKey,
       contentHashSha256,
       controlnetType,
-      defaultStrength
+      defaultStrength,
+      width,
+      height,
+      mimeType,
+      displayName,
+      groupId,
+      archivedAt
     ]
   );
 
   const row = res.rows[0];
   if (!row) {
     throw new Error("Failed to insert reference asset record");
+  }
+  return row;
+}
+
+export async function insertReferenceGroupRecord(
+  client: PoolClient,
+  input: ReferenceGroupRecordInput
+): Promise<InsertedReferenceGroupRecord> {
+  const clientId = input.clientId;
+  const campaignId = input.campaignId !== undefined ? input.campaignId : null;
+  const name = input.name ?? "Test Reference Group";
+  const description = input.description !== undefined ? input.description : null;
+  const archivedAt = input.archivedAt !== undefined ? input.archivedAt : null;
+
+  const res = await client.query<InsertedReferenceGroupRecord>(
+    `
+    INSERT INTO reference_groups (
+      client_id,
+      campaign_id,
+      name,
+      description,
+      archived_at
+    ) VALUES ($1, $2, $3, $4, $5)
+    RETURNING *
+    `,
+    [clientId, campaignId, name, description, archivedAt]
+  );
+
+  const row = res.rows[0];
+  if (!row) {
+    throw new Error("Failed to insert reference group record");
   }
   return row;
 }
@@ -573,18 +663,37 @@ export async function insertSceneReferenceAssetRecord(
 ): Promise<InsertedSceneReferenceAssetRecord> {
   const sceneId = input.sceneId;
   const assetId = input.assetId;
+  const specRevision = input.specRevision ?? 1;
+  const role = input.role ?? "subject_identity";
+  const weight = input.weight !== undefined ? input.weight : null;
+  const hints = input.hints !== undefined ? input.hints : null;
   const overrideStrength = input.overrideStrength !== undefined ? input.overrideStrength : null;
+  const archivedAt = input.archivedAt !== undefined ? input.archivedAt : null;
 
   const res = await client.query<InsertedSceneReferenceAssetRecord>(
     `
     INSERT INTO scene_reference_assets (
       scene_id,
       asset_id,
-      override_strength
-    ) VALUES ($1, $2, $3)
+      spec_revision,
+      role,
+      weight,
+      hints,
+      override_strength,
+      archived_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     RETURNING *
     `,
-    [sceneId, assetId, overrideStrength]
+    [
+      sceneId,
+      assetId,
+      specRevision,
+      role,
+      weight,
+      hints ? JSON.stringify(hints) : null,
+      overrideStrength,
+      archivedAt
+    ]
   );
 
   const row = res.rows[0];

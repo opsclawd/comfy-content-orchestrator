@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 import type { ReferenceAsset, ReferenceAssetId } from "@cco/domain";
+import {
+  ArchivedReferenceBindingError,
+  CrossClientReferenceBindingError,
+  ReferenceAssetNotFoundError
+} from "@cco/domain";
 import type {
   PlanningModelClientPort,
   PlanningModelOutcome,
@@ -52,7 +57,28 @@ describe("PlanSceneConfigurationUseCase", () => {
 
   const validConfig = {
     prompt: "A cinematic shot of a refreshing beverage splashing with ice",
+    references: [
+      {
+        referenceId: validAssetId1,
+        role: "subject_identity" as const
+      }
+    ],
+    engineProfileId: "LTX_25_720P_5S_V1",
+    durationMs: 5000,
+    loraConfigurationId: "summer-lora-v1"
+  };
+
+  const expectedValidSceneConfig = {
+    prompt: validConfig.prompt,
     referenceIds: [validAssetId1],
+    referenceBindings: [
+      {
+        referenceAssetId: validAssetId1,
+        role: "subject_identity",
+        weight: null,
+        hints: null
+      }
+    ],
     engineProfileId: "LTX_25_720P_5S_V1",
     durationMs: 5000,
     loraConfigurationId: "summer-lora-v1"
@@ -93,6 +119,9 @@ describe("PlanSceneConfigurationUseCase", () => {
         repo.calledWithIds = ids;
         // only return assets where clientId matches
         return assets.filter((a) => a.clientId === clientId && ids.includes(a.id));
+      },
+      findByIdsGlobal: async (ids: readonly ReferenceAssetId[]) => {
+        return assets.filter((a) => ids.includes(a.id));
       }
     };
     return repo;
@@ -123,7 +152,7 @@ describe("PlanSceneConfigurationUseCase", () => {
       }
     });
 
-    expect(result).toEqual(validConfig);
+    expect(result).toEqual(expectedValidSceneConfig);
     expect(repo.calledWithClientId).toBe(testClientId);
     expect(primary.calls).toHaveLength(1);
     expect(fallback.calls).toHaveLength(0);
@@ -275,7 +304,7 @@ describe("PlanSceneConfigurationUseCase", () => {
       }
     });
 
-    expect(result).toEqual(validConfig);
+    expect(result).toEqual(expectedValidSceneConfig);
     expect(primary.calls).toHaveLength(2);
     expect(fallback.calls).toHaveLength(0);
   });
@@ -307,7 +336,7 @@ describe("PlanSceneConfigurationUseCase", () => {
       }
     });
 
-    expect(result).toEqual(validConfig);
+    expect(result).toEqual(expectedValidSceneConfig);
     expect(primary.calls).toHaveLength(2);
     expect(fallback.calls).toHaveLength(1);
   });
@@ -315,7 +344,12 @@ describe("PlanSceneConfigurationUseCase", () => {
   it("8. review witness scenario 2: Anthropic returns structurally invalid JSON (referenceIds not in resolved set) -> corrective retry -> still invalid -> falls back to OpenAI", async () => {
     const invalidConfig = {
       ...validConfig,
-      referenceIds: ["99999999-9999-9999-9999-999999999999"]
+      references: [
+        {
+          referenceId: "99999999-9999-9999-9999-999999999999",
+          role: "subject_identity" as const
+        }
+      ]
     };
 
     const repo = createMockRepo(resolvedAssets);
@@ -344,7 +378,7 @@ describe("PlanSceneConfigurationUseCase", () => {
       }
     });
 
-    expect(result).toEqual(validConfig);
+    expect(result).toEqual(expectedValidSceneConfig);
     expect(primary.calls).toHaveLength(2);
     // second call should have received corrective feedback
     expect(primary.calls[1]!.userPrompt).toContain("not present in resolved reference assets");
@@ -419,30 +453,18 @@ describe("PlanSceneConfigurationUseCase", () => {
       }
     });
 
-    expect(result).toEqual(validConfig);
+    expect(result).toEqual(expectedValidSceneConfig);
     expect(primary.calls).toHaveLength(2);
     expect(primary.calls[1]!.userPrompt).toContain("is not a certified profile");
     expect(fallback.calls).toHaveLength(1);
   });
 
-  it("11. review witness scenario 1: referenceIds containing a syntactically valid but nonexistent UUID is excluded by findByIds and rejected by validation", async () => {
+  it("11. candidateReferenceAssetIds containing a nonexistent UUID throws ReferenceAssetNotFoundError immediately", async () => {
     const nonexistentUuid = "88888888-8888-8888-8888-888888888888" as ReferenceAssetId;
     const repo = createMockRepo(resolvedAssets); // only contains validAssetId1, validAssetId2
 
-    // Both primary and fallback return the nonexistent UUID
-    const badConfig = {
-      ...validConfig,
-      referenceIds: [nonexistentUuid]
-    };
-
-    const primary = createMockClient("Anthropic", [
-      { kind: "success", rawText: JSON.stringify(badConfig) },
-      { kind: "success", rawText: JSON.stringify(badConfig) }
-    ]);
-    const fallback = createMockClient("OpenAI", [
-      { kind: "success", rawText: JSON.stringify(badConfig) },
-      { kind: "success", rawText: JSON.stringify(badConfig) }
-    ]);
+    const primary = createMockClient("Anthropic", []);
+    const fallback = createMockClient("OpenAI", []);
 
     const useCase = new PlanSceneConfigurationUseCase({
       referenceAssetRepository: repo,
@@ -461,12 +483,13 @@ describe("PlanSceneConfigurationUseCase", () => {
           allowedProviders: ["Anthropic", "OpenAI"]
         }
       })
-    ).rejects.toThrow(PlanningProviderExhaustedError);
+    ).rejects.toThrow(ReferenceAssetNotFoundError);
 
-    expect(repo.calledWithClientId).toBe(testClientId);
+    expect(primary.calls).toHaveLength(0);
+    expect(fallback.calls).toHaveLength(0);
   });
 
-  it("12. design A8 witness: candidateReferenceAssetIds includes an asset belonging to a different client -> findByIds excludes it -> validation rejects it", async () => {
+  it("12. candidateReferenceAssetIds includes an asset belonging to a different client -> fails closed with CrossClientReferenceBindingError", async () => {
     const crossTenantAsset: ReferenceAsset = {
       id: crossTenantAssetId,
       clientId: "client-other-tenant",
@@ -479,19 +502,8 @@ describe("PlanSceneConfigurationUseCase", () => {
     // Repo contains both client assets and other client's asset
     const repo = createMockRepo([...resolvedAssets, crossTenantAsset]);
 
-    const stolenAssetConfig = {
-      ...validConfig,
-      referenceIds: [crossTenantAssetId]
-    };
-
-    const primary = createMockClient("Anthropic", [
-      { kind: "success", rawText: JSON.stringify(stolenAssetConfig) },
-      { kind: "success", rawText: JSON.stringify(stolenAssetConfig) }
-    ]);
-    const fallback = createMockClient("OpenAI", [
-      { kind: "success", rawText: JSON.stringify(stolenAssetConfig) },
-      { kind: "success", rawText: JSON.stringify(stolenAssetConfig) }
-    ]);
+    const primary = createMockClient("Anthropic", []);
+    const fallback = createMockClient("OpenAI", []);
 
     const useCase = new PlanSceneConfigurationUseCase({
       referenceAssetRepository: repo,
@@ -510,10 +522,48 @@ describe("PlanSceneConfigurationUseCase", () => {
           allowedProviders: ["Anthropic", "OpenAI"]
         }
       })
-    ).rejects.toThrow(PlanningProviderExhaustedError);
+    ).rejects.toThrow(CrossClientReferenceBindingError);
 
-    // Verify findByIds was called with testClientId
-    expect(repo.calledWithClientId).toBe(testClientId);
+    expect(primary.calls).toHaveLength(0);
+    expect(fallback.calls).toHaveLength(0);
+  });
+
+  it("12b. candidateReferenceAssetIds includes an archived asset -> fails closed with ArchivedReferenceBindingError", async () => {
+    const archivedAsset: ReferenceAsset = {
+      id: validAssetId1,
+      clientId: testClientId,
+      assetType: "brand_logo",
+      storageBucket: "b",
+      storageObjectKey: "k1",
+      contentHashSha256: "h1",
+      archivedAt: "2026-09-24T12:00:00.000Z"
+    };
+
+    const repo = createMockRepo([archivedAsset]);
+    const primary = createMockClient("Anthropic", []);
+    const fallback = createMockClient("OpenAI", []);
+
+    const useCase = new PlanSceneConfigurationUseCase({
+      referenceAssetRepository: repo,
+      primaryClient: primary,
+      fallbackClient: fallback
+    });
+
+    await expect(
+      useCase.execute({
+        brief,
+        campaignId: testCampaignId,
+        clientId: testClientId,
+        candidateReferenceAssetIds: [validAssetId1],
+        externalProcessingPolicy: {
+          allowCloudPlanning: true,
+          allowedProviders: ["Anthropic", "OpenAI"]
+        }
+      })
+    ).rejects.toThrow(ArchivedReferenceBindingError);
+
+    expect(primary.calls).toHaveLength(0);
+    expect(fallback.calls).toHaveLength(0);
   });
 
   it("13. Both providers exhausted on transport/validation throws PlanningProviderExhaustedError with attempts recorded for both", async () => {
@@ -582,13 +632,18 @@ describe("PlanSceneConfigurationUseCase", () => {
       }
     });
 
-    expect(result).toEqual(validConfig);
+    expect(result).toEqual(expectedValidSceneConfig);
   });
 
   it("15. retryable_failure -> invalid success -> valid corrective success asserts three primary calls and zero fallback calls", async () => {
     const invalidConfig = {
       ...validConfig,
-      referenceIds: ["99999999-9999-9999-9999-999999999999"]
+      references: [
+        {
+          referenceId: "99999999-9999-9999-9999-999999999999",
+          role: "subject_identity" as const
+        }
+      ]
     };
 
     const repo = createMockRepo(resolvedAssets);
@@ -616,7 +671,7 @@ describe("PlanSceneConfigurationUseCase", () => {
       }
     });
 
-    expect(result).toEqual(validConfig);
+    expect(result).toEqual(expectedValidSceneConfig);
     expect(primary.calls).toHaveLength(3);
     expect(primary.calls[2]!.userPrompt).toContain("not present in resolved reference assets");
     expect(fallback.calls).toHaveLength(0);
@@ -857,7 +912,7 @@ describe("PlanSceneConfigurationUseCase", () => {
       }
     });
 
-    expect(result).toEqual(validConfig);
+    expect(result).toEqual(expectedValidSceneConfig);
     expect(primary.calls).toHaveLength(1); // Never retried on same provider!
     expect(fallback.calls).toHaveLength(1); // Fell back to OpenAI
   });

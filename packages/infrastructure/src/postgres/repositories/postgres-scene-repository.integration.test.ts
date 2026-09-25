@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { Pool, type PoolClient } from "pg";
-import type { CampaignId, CandidateId, SceneId } from "@cco/domain";
-import { Scene } from "@cco/domain";
+import type { CampaignId, CandidateId, ReferenceAssetId, SceneId } from "@cco/domain";
+import {
+  ArchivedReferenceBindingError,
+  CrossClientReferenceBindingError,
+  ReferenceAssetNotFoundError,
+  Scene
+} from "@cco/domain";
 import { runMigrations } from "../migration-runner.js";
 import {
   startPostgres18Container,
@@ -290,10 +295,10 @@ describe("PostgreSQL SceneRepository Adapter Integration", () => {
     );
     expect(updatedSnapshot.configuration.referenceIds).not.toContain(refAsset1.asset_id);
 
-    // Verify DB reference_assets table actually removed old and has new associations
+    // Verify DB reference_assets table actually removed old and has new associations for current revision
     const refRows = await client.query(
-      "SELECT asset_id FROM scene_reference_assets WHERE scene_id = $1",
-      [initialSceneRecord.scene_id]
+      "SELECT asset_id FROM scene_reference_assets WHERE scene_id = $1 AND spec_revision = $2",
+      [initialSceneRecord.scene_id, updatedSnapshot.specRevision]
     );
     const linkedAssetIds = refRows.rows.map((r: { asset_id: string }) => r.asset_id);
     expect(linkedAssetIds).toHaveLength(2);
@@ -441,6 +446,16 @@ describe("PostgreSQL SceneRepository Adapter Integration", () => {
       configuration: {
         prompt: "Newly created scene prompt from scratch",
         referenceIds: [refAsset.asset_id],
+        referenceBindings: [
+          {
+            sceneId: newSceneId,
+            specRevision: 1,
+            referenceAssetId: refAsset.asset_id,
+            role: "style",
+            weight: null,
+            hints: null
+          }
+        ],
         engineProfileId: "ltx_25",
         durationMs: 6000,
         loraConfigurationId: null
@@ -890,5 +905,437 @@ describe("PostgreSQL SceneRepository Adapter Integration", () => {
     });
     expect(allScenes).toHaveLength(2);
     expect(allScenes.map((s) => s.id)).toEqual([activeScene.scene_id, archivedScene.scene_id]);
+  });
+
+  it("rejects saving scene with cross-client reference and performs zero writes", async () => {
+    const clientA = await insertClientRecord(client);
+    const clientB = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientA.client_id });
+
+    const refClientB = await insertReferenceAssetRecord(client, {
+      clientId: clientB.client_id
+    });
+
+    const scene = Scene.create({
+      id: "01950c46-9e90-7d3d-82d2-8f1d3c000101" as SceneId,
+      campaignId: campaign.campaign_id as CampaignId,
+      configuration: {
+        prompt: "A scene with cross client ref",
+        referenceIds: [refClientB.asset_id],
+        engineProfileId: "ltx_25",
+        durationMs: 5000
+      },
+      sequenceIndex: 1
+    });
+
+    const repo = new PostgresSceneRepository(pool);
+    await expect(repo.save(scene)).rejects.toThrow(CrossClientReferenceBindingError);
+
+    // Verify ZERO writes occurred
+    const scenesInDb = await client.query("SELECT * FROM storyboard_scenes WHERE scene_id = $1", [
+      scene.id
+    ]);
+    expect(scenesInDb.rows).toHaveLength(0);
+
+    const bindingsInDb = await client.query(
+      "SELECT * FROM scene_reference_assets WHERE scene_id = $1",
+      [scene.id]
+    );
+    expect(bindingsInDb.rows).toHaveLength(0);
+  });
+
+  it("rejects newly binding an archived reference with ArchivedReferenceBindingError and performs zero writes", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+
+    const archivedRef = await insertReferenceAssetRecord(client, {
+      clientId: clientRecord.client_id,
+      archivedAt: new Date()
+    });
+
+    const scene = Scene.create({
+      id: "01950c46-9e90-7d3d-82d2-8f1d3c000102" as SceneId,
+      campaignId: campaign.campaign_id as CampaignId,
+      configuration: {
+        prompt: "A scene with archived ref",
+        referenceIds: [archivedRef.asset_id],
+        engineProfileId: "ltx_25",
+        durationMs: 5000
+      },
+      sequenceIndex: 1
+    });
+
+    const repo = new PostgresSceneRepository(pool);
+    await expect(repo.save(scene)).rejects.toThrow(ArchivedReferenceBindingError);
+
+    // Verify ZERO writes occurred
+    const scenesInDb = await client.query("SELECT * FROM storyboard_scenes WHERE scene_id = $1", [
+      scene.id
+    ]);
+    expect(scenesInDb.rows).toHaveLength(0);
+  });
+
+  it("permits preserving an existing binding in the same revision even if the reference has since been archived", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+
+    const ref = await insertReferenceAssetRecord(client, {
+      clientId: clientRecord.client_id
+    });
+
+    const sceneRecord = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      durationSeconds: 5.0,
+      visualDescription: "Initial visual description",
+      engineAssigned: "ltx_25",
+      status: "draft_pending",
+      specRevision: 1
+    });
+
+    await insertSceneReferenceAssetRecord(client, {
+      sceneId: sceneRecord.scene_id,
+      assetId: ref.asset_id,
+      specRevision: 1
+    });
+
+    // Archive the reference asset post-binding
+    await client.query(
+      "UPDATE reference_assets SET archived_at = CURRENT_TIMESTAMP WHERE asset_id = $1",
+      [ref.asset_id]
+    );
+
+    const repo = new PostgresSceneRepository(pool);
+    const loaded = await repo.findById(sceneRecord.scene_id as SceneId);
+    expect(loaded).toBeDefined();
+
+    // Saving in the same revision (specRevision 1) preserves existing binding
+    loaded!.cancel();
+    expect(loaded!.snapshot().specRevision).toBe(1);
+    await expect(repo.save(loaded!)).resolves.not.toThrow();
+
+    const reloaded = await repo.findById(sceneRecord.scene_id as SceneId);
+    expect(reloaded?.status).toBe("cancelled");
+    expect(reloaded?.snapshot().configuration.referenceIds).toEqual([ref.asset_id]);
+  });
+
+  it("rejects an archived reference when attempting to add or carry it into revision 2 after archiving", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+
+    const ref = await insertReferenceAssetRecord(client, {
+      clientId: clientRecord.client_id
+    });
+
+    const sceneRecord = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      durationSeconds: 5.0,
+      visualDescription: "Initial visual description",
+      engineAssigned: "ltx_25",
+      status: "draft_pending",
+      specRevision: 1
+    });
+
+    await insertSceneReferenceAssetRecord(client, {
+      sceneId: sceneRecord.scene_id,
+      assetId: ref.asset_id,
+      specRevision: 1
+    });
+
+    // Archive the reference asset post-binding in revision 1
+    await client.query(
+      "UPDATE reference_assets SET archived_at = CURRENT_TIMESTAMP WHERE asset_id = $1",
+      [ref.asset_id]
+    );
+
+    const repo = new PostgresSceneRepository(pool);
+    const loaded = await repo.findById(sceneRecord.scene_id as SceneId);
+    expect(loaded).toBeDefined();
+
+    // Advance to revision 2 attempting to retain/add the archived reference
+    loaded!.updatePrompt("Updated prompt text for revision 2");
+    expect(loaded!.snapshot().specRevision).toBe(2);
+
+    await expect(repo.save(loaded!)).rejects.toThrow(ArchivedReferenceBindingError);
+
+    // Verify zero writes occurred for revision 2 in scene_reference_assets
+    const rev2Rows = await client.query(
+      "SELECT * FROM scene_reference_assets WHERE scene_id = $1 AND spec_revision = 2",
+      [sceneRecord.scene_id]
+    );
+    expect(rev2Rows.rows).toHaveLength(0);
+  });
+
+  it("rejects when the current revision's requested binding is changed on an archived reference", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+
+    const ref = await insertReferenceAssetRecord(client, {
+      clientId: clientRecord.client_id
+    });
+
+    const sceneId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73852" as SceneId;
+    const scene = Scene.create({
+      id: sceneId,
+      campaignId: campaign.campaign_id as CampaignId,
+      configuration: {
+        prompt: "Initial prompt",
+        referenceIds: [ref.asset_id],
+        referenceBindings: [
+          {
+            sceneId,
+            specRevision: 1,
+            referenceAssetId: ref.asset_id as ReferenceAssetId,
+            role: "style",
+            weight: 0.5,
+            hints: null
+          }
+        ],
+        engineProfileId: "ltx_25",
+        durationMs: 5000
+      },
+      sequenceIndex: 1
+    });
+
+    const repo = new PostgresSceneRepository(pool);
+    await repo.save(scene);
+
+    // Archive the reference asset
+    await client.query(
+      "UPDATE reference_assets SET archived_at = CURRENT_TIMESTAMP WHERE asset_id = $1",
+      [ref.asset_id]
+    );
+
+    // Reconstitute scene at the same revision 1, but with changed binding (different weight)
+    const sceneWithChangedBinding = Scene.reconstitute({
+      ...scene.snapshot(),
+      configuration: {
+        ...scene.snapshot().configuration,
+        referenceBindings: [
+          {
+            sceneId,
+            specRevision: 1,
+            referenceAssetId: ref.asset_id as ReferenceAssetId,
+            role: "style",
+            weight: 0.9,
+            hints: null
+          }
+        ]
+      }
+    });
+
+    await expect(repo.save(sceneWithChangedBinding)).rejects.toThrow(ArchivedReferenceBindingError);
+  });
+
+  it("save rejects nonexistent reference with ReferenceAssetNotFoundError", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+
+    const scene = Scene.create({
+      id: "018e69e0-8a6a-72cb-b1b7-ec79a1f73851" as SceneId,
+      campaignId: campaign.campaign_id as CampaignId,
+      configuration: {
+        prompt: "Nonexistent reference test",
+        referenceIds: ["018e69e0-8a6a-72cb-b1b7-ec79a1f73899"],
+        engineProfileId: "ltx_25",
+        durationMs: 5000
+      },
+      sequenceIndex: 1
+    });
+
+    const repo = new PostgresSceneRepository(pool);
+    await expect(repo.save(scene)).rejects.toThrow(ReferenceAssetNotFoundError);
+  });
+
+  it("persists and reconstitutes referenceBindings across revisions without mutating prior revisions", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+
+    const ref1 = await insertReferenceAssetRecord(client, {
+      clientId: clientRecord.client_id,
+      storageObjectKey: "assets/ref1.png"
+    });
+    const ref2 = await insertReferenceAssetRecord(client, {
+      clientId: clientRecord.client_id,
+      storageObjectKey: "assets/ref2.png"
+    });
+
+    const sceneId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73850" as SceneId;
+    const scene = Scene.create({
+      id: sceneId,
+      campaignId: campaign.campaign_id as CampaignId,
+      configuration: {
+        prompt: "First revision prompt",
+        referenceIds: [ref1.asset_id],
+        referenceBindings: [
+          {
+            sceneId,
+            specRevision: 1,
+            referenceAssetId: ref1.asset_id as ReferenceAssetId,
+            role: "subject_identity",
+            weight: 0.85,
+            hints: { faceConfidence: 0.95 }
+          }
+        ],
+        engineProfileId: "ltx_25",
+        durationMs: 5000
+      },
+      sequenceIndex: 1
+    });
+
+    const repo = new PostgresSceneRepository(pool);
+    await repo.save(scene);
+
+    const loadedRev1 = await repo.findById(sceneId);
+    expect(loadedRev1).toBeDefined();
+    expect(loadedRev1?.snapshot().specRevision).toBe(1);
+    expect(loadedRev1?.snapshot().configuration.referenceIds).toEqual([ref1.asset_id]);
+    expect(loadedRev1?.snapshot().configuration.referenceBindings).toEqual([
+      {
+        sceneId,
+        specRevision: 1,
+        referenceAssetId: ref1.asset_id,
+        role: "subject_identity",
+        weight: 0.85,
+        hints: { faceConfidence: 0.95 }
+      }
+    ]);
+
+    // Advance to revision 2 with different binding role and second reference
+    loadedRev1!.updateReferences(
+      [ref1.asset_id, ref2.asset_id],
+      [
+        {
+          sceneId,
+          specRevision: 2,
+          referenceAssetId: ref1.asset_id as ReferenceAssetId,
+          role: "composition",
+          weight: 0.5,
+          hints: null
+        },
+        {
+          sceneId,
+          specRevision: 2,
+          referenceAssetId: ref2.asset_id as ReferenceAssetId,
+          role: "style",
+          weight: 0.7,
+          hints: { colorProfile: "vibrant" }
+        }
+      ]
+    );
+
+    await repo.save(loadedRev1!);
+
+    const loadedRev2 = await repo.findById(sceneId);
+    expect(loadedRev2).toBeDefined();
+    expect(loadedRev2?.snapshot().specRevision).toBe(2);
+    expect(loadedRev2?.snapshot().configuration.referenceIds).toEqual([
+      ref1.asset_id,
+      ref2.asset_id
+    ]);
+    expect(loadedRev2?.snapshot().configuration.referenceBindings).toHaveLength(2);
+    expect(loadedRev2?.snapshot().configuration.referenceBindings?.[0]?.role).toBe("composition");
+    expect(loadedRev2?.snapshot().configuration.referenceBindings?.[1]?.role).toBe("style");
+
+    // Verify in database that revision 1 bindings are PRESERVED and not deleted/overwritten
+    const rowsRev1 = await client.query(
+      "SELECT * FROM scene_reference_assets WHERE scene_id = $1 AND spec_revision = 1",
+      [sceneId]
+    );
+    expect(rowsRev1.rows).toHaveLength(1);
+    expect(rowsRev1.rows[0].role).toBe("subject_identity");
+
+    const rowsRev2 = await client.query(
+      "SELECT * FROM scene_reference_assets WHERE scene_id = $1 AND spec_revision = 2",
+      [sceneId]
+    );
+    expect(rowsRev2.rows).toHaveLength(2);
+  });
+
+  it("retains explicitly bound asset metadata while adding another reference ID without bindings", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+
+    const ref1 = await insertReferenceAssetRecord(client, {
+      clientId: clientRecord.client_id,
+      storageObjectKey: "assets/ref1_hero.png"
+    });
+    const ref2 = await insertReferenceAssetRecord(client, {
+      clientId: clientRecord.client_id,
+      storageObjectKey: "assets/ref2_extra.png"
+    });
+
+    const sceneId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73860" as SceneId;
+    const scene = Scene.create({
+      id: sceneId,
+      campaignId: campaign.campaign_id as CampaignId,
+      configuration: {
+        prompt: "Scene with initial explicit binding",
+        referenceIds: [ref1.asset_id],
+        referenceBindings: [
+          {
+            sceneId,
+            specRevision: 1,
+            referenceAssetId: ref1.asset_id as ReferenceAssetId,
+            role: "subject_identity",
+            weight: 0.95,
+            hints: { facialLandmarks: true }
+          }
+        ],
+        engineProfileId: "ltx_25",
+        durationMs: 5000
+      },
+      sequenceIndex: 1
+    });
+
+    const repo = new PostgresSceneRepository(pool);
+    await repo.save(scene);
+
+    const loaded = await repo.findById(sceneId);
+    expect(loaded).toBeDefined();
+
+    // Update references by providing referenceIds containing both ref1 and ref2, omitting referenceBindings
+    loaded!.updateReferences([ref1.asset_id, ref2.asset_id]);
+    await repo.save(loaded!);
+
+    const reloaded = await repo.findById(sceneId);
+    expect(reloaded).toBeDefined();
+    const snapshot = reloaded!.snapshot();
+
+    expect(snapshot.specRevision).toBe(2);
+    expect(snapshot.configuration.referenceIds).toEqual([ref1.asset_id, ref2.asset_id]);
+    expect(snapshot.configuration.referenceBindings).toHaveLength(2);
+
+    const binding1 = snapshot.configuration.referenceBindings?.find(
+      (b) => b.referenceAssetId === ref1.asset_id
+    );
+    expect(binding1).toBeDefined();
+    expect(binding1?.role).toBe("subject_identity");
+    expect(binding1?.weight).toBe(0.95);
+    expect(binding1?.hints).toEqual({ facialLandmarks: true });
+    expect(binding1?.specRevision).toBe(2);
+
+    const binding2 = snapshot.configuration.referenceBindings?.find(
+      (b) => b.referenceAssetId === ref2.asset_id
+    );
+    expect(binding2).toBeDefined();
+    expect(binding2?.role).toBe("style");
+    expect(binding2?.weight).toBeNull();
+    expect(binding2?.specRevision).toBe(2);
+
+    // Verify DB rows for both revisions
+    const rowsRev1 = await client.query(
+      "SELECT * FROM scene_reference_assets WHERE scene_id = $1 AND spec_revision = 1",
+      [sceneId]
+    );
+    expect(rowsRev1.rows).toHaveLength(1);
+    expect(rowsRev1.rows[0].role).toBe("subject_identity");
+
+    const rowsRev2 = await client.query(
+      "SELECT * FROM scene_reference_assets WHERE scene_id = $1 AND spec_revision = 2",
+      [sceneId]
+    );
+    expect(rowsRev2.rows).toHaveLength(2);
   });
 });

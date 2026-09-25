@@ -52,9 +52,17 @@ We define five canonical reference roles:
 
 #### Ownership & Entity Boundaries
 To prevent semantic entanglement and allow asset reuse:
-1. **`ReferenceAsset` (Immutable Storage Entity):** Represents the stored binary asset. Contains SHA-256 hash, byte size, MIME type, dimensions (width, height), and immutable storage key. An asset has **no fixed reference role**; it is pure media.
+1. **`ReferenceAsset` (Immutable Storage Entity with Declared Library Classification):** Represents the stored binary asset. Contains SHA-256 hash, byte size, MIME type, dimensions (width, height), and immutable storage key. Under Amendment (Issue #308), `ReferenceAsset` additionally carries a declared `libraryRole: ReferenceRole | null` representing an editor-declared default/intended classification of a reusable library asset. This declared classification is explicitly distinguished from `SceneReferenceBinding.role`; it does not constitute a scene assignment, binding, or executed conditioning fact.
 2. **`ReferenceGroup` (Logical Scope Entity):** An optional organizational collection of `ReferenceAsset`s belonging to a client or campaign (e.g. "Brand Assets - Fall 2026", "Hero Actor - Elena").
-3. **`SceneReferenceBinding` (Scene Revision Entity):** The binding connecting a `ReferenceAsset` to a specific `SceneSpec` revision. The binding declares the specific `ReferenceRole` (`subject_identity`, `product`, etc.), an optional conditioning strength/weight (0.0 to 1.0), and optional regional/bounding hints. A single `ReferenceAsset` can be bound as `subject_identity` in Scene 1 and as `style` in Scene 2.
+3. **`SceneReferenceBinding` (Scene Revision Entity):** The binding connecting a `ReferenceAsset` to a specific `SceneSpec` revision. The binding declares the specific `ReferenceRole` (`subject_identity`, `product`, etc.), an optional conditioning strength/weight (0.0 to 1.0), and optional regional/bounding hints. A single `ReferenceAsset` can be bound as `subject_identity` in Scene 1 and as `style` in Scene 2, regardless of its `libraryRole`.
+
+#### Amendment: Declared Library Role Classification (`libraryRole`)
+To satisfy Review Hub gallery visibility and role badge requirements (AC-1, REQ-DESIGN-2, REQ-DESIGN-8) without violating the clean boundary between declared intent, configured bindings, and executed conditioning:
+- Stored `ReferenceAsset` records support `libraryRole: ReferenceRole | null`.
+- Upload requires an explicit `ReferenceRole` selection.
+- Existing / legacy records default to `null` and render a clearly labeled `Unassigned` role badge in the UI until an authorized user explicitly assigns one via a dedicated role assignment action.
+- Automatic role inference from image content or pixels is strictly prohibited.
+- `libraryRole` must never be conflated with or automatically copied to `SceneReferenceBinding.role`. Scene reference bindings remain explicit, revisioned entities managed during campaign planning and scene generation (#309).
 
 ### 4. Canonical Geometry Authority & Lifecycle Invariants
 Conflicting geometric assumptions between draft generation, video synthesis, and vertical delivery are resolved as follows:

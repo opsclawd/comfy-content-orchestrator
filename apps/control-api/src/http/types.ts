@@ -19,9 +19,15 @@ import {
   CompleteCampaignProductionRunUseCases,
   CompleteCampaignProductionRunAssemblyUseCases,
   ResolveCampaignDeliveryReelUseCase,
+  UploadReferenceAssetUseCase,
+  ListClientReferencesUseCase,
+  ArchiveReferenceAssetUseCase,
+  UpdateReferenceAssetRoleUseCase,
   type CampaignDeliveryReelQueries,
+  type ClientContextResolver,
   type CurrentProductionAttemptQueries,
   type DeliveryAssemblyJobQueuePort,
+  type ImageInspectionPort,
   type JobQueuePort,
   type ObjectStoragePort,
   type PlanningModelClientPort,
@@ -34,6 +40,7 @@ import {
   type StorageTelemetryPort,
   type UnitOfWork
 } from "@cco/application";
+import { SharpImageInspectionAdapter } from "@cco/infrastructure";
 
 export interface ControlApiDependencies {
   readonly uow: UnitOfWork;
@@ -56,6 +63,7 @@ export interface ControlApiDependencies {
     readonly fallback: RankingModelClientPort;
   };
   readonly referenceAssetRepository?: ReferenceAssetRepository;
+  readonly imageValidator?: ImageInspectionPort;
   readonly planningOverallTimeoutMs?: number;
   readonly rankingOverallTimeoutMs?: number;
 }
@@ -79,6 +87,10 @@ export interface ControlApiUseCases {
   readonly completeCampaignProductionRun: CompleteCampaignProductionRunUseCases;
   readonly completeCampaignProductionRunAssembly: CompleteCampaignProductionRunAssemblyUseCases;
   readonly resolveCampaignDeliveryReel?: ResolveCampaignDeliveryReelUseCase | undefined;
+  readonly uploadReferenceAsset?: UploadReferenceAssetUseCase | undefined;
+  readonly listClientReferences?: ListClientReferencesUseCase | undefined;
+  readonly archiveReferenceAsset?: ArchiveReferenceAssetUseCase | undefined;
+  readonly updateReferenceAssetRole?: UpdateReferenceAssetRoleUseCase | undefined;
 }
 
 export interface ControlApiQueries {
@@ -166,7 +178,10 @@ export function createControlApiContainer(
           planCampaignBeatSheet,
           planSceneConfiguration,
           materializeStoryboard,
-          uow: dependencies.uow
+          uow: dependencies.uow,
+          ...(dependencies.referenceAssetRepository
+            ? { referenceAssetRepository: dependencies.referenceAssetRepository }
+            : {})
         })
       : undefined;
 
@@ -200,6 +215,34 @@ export function createControlApiContainer(
       })
     : undefined;
 
+  const uploadReferenceAsset =
+    dependencies.referenceAssetRepository && dependencies.objectStorage
+      ? new UploadReferenceAssetUseCase({
+          referenceAssetRepository: dependencies.referenceAssetRepository,
+          objectStorage: dependencies.objectStorage,
+          imageValidator: dependencies.imageValidator ?? new SharpImageInspectionAdapter(),
+          mediaDelivery: dependencies.reviewMediaDelivery
+        })
+      : undefined;
+
+  const listClientReferences = dependencies.referenceAssetRepository
+    ? new ListClientReferencesUseCase({
+        referenceAssetRepository: dependencies.referenceAssetRepository,
+        mediaDelivery: dependencies.reviewMediaDelivery
+      })
+    : undefined;
+
+  const archiveReferenceAsset = dependencies.referenceAssetRepository
+    ? new ArchiveReferenceAssetUseCase(dependencies.referenceAssetRepository)
+    : undefined;
+
+  const updateReferenceAssetRole = dependencies.referenceAssetRepository
+    ? new UpdateReferenceAssetRoleUseCase({
+        referenceAssetRepository: dependencies.referenceAssetRepository,
+        mediaDelivery: dependencies.reviewMediaDelivery
+      })
+    : undefined;
+
   return {
     dependencies,
     useCases: {
@@ -220,7 +263,11 @@ export function createControlApiContainer(
       ...(planCampaignBeatSheet !== undefined ? { planCampaignBeatSheet } : {}),
       ...(planCampaignStoryboard !== undefined ? { planCampaignStoryboard } : {}),
       ...(enforceStorageAdmission !== undefined ? { enforceStorageAdmission } : {}),
-      ...(rankReviewCandidates !== undefined ? { rankReviewCandidates } : {})
+      ...(rankReviewCandidates !== undefined ? { rankReviewCandidates } : {}),
+      ...(uploadReferenceAsset !== undefined ? { uploadReferenceAsset } : {}),
+      ...(listClientReferences !== undefined ? { listClientReferences } : {}),
+      ...(archiveReferenceAsset !== undefined ? { archiveReferenceAsset } : {}),
+      ...(updateReferenceAssetRole !== undefined ? { updateReferenceAssetRole } : {})
     },
     queries: {
       ...(dependencies.sceneReviewQueries !== undefined
@@ -247,8 +294,17 @@ export interface Clock {
 export type ControlApiHttpLogLevel =
   "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent";
 
+import type { ClientSessionMiddlewareOptions, VerifiedClientPrincipal } from "./client-context.js";
+
 export interface ControlApiAppOptions {
   readonly reviewerIdentityResolver?: ReviewerIdentityResolver;
+  readonly clientContextResolver?: ClientContextResolver<FastifyRequest>;
+  readonly clientSessionConfig?: ClientSessionMiddlewareOptions | undefined;
+  readonly clientSessionAuthenticator?:
+    | ((
+        request: FastifyRequest
+      ) => Promise<VerifiedClientPrincipal | null> | VerifiedClientPrincipal | null)
+    | undefined;
   readonly clock?: Clock;
   readonly logger?: boolean | { readonly level: ControlApiHttpLogLevel };
   readonly jobDispatch?: {

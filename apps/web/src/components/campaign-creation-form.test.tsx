@@ -14,9 +14,16 @@ import {
   MAX_SCENE_COUNT,
   MIN_TARGET_DURATION_MS,
   MAX_TARGET_DURATION_MS,
-  type PlanCampaignStoryboardResponse
+  type PlanCampaignStoryboardResponse,
+  type ReferenceAssetResponse
 } from "@cco/contracts";
-import { PlanCampaignStoryboardApiError } from "../api/client.js";
+import * as ClientApiModule from "../api/client.js";
+const { PlanCampaignStoryboardApiError } = ClientApiModule;
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 const mockPush = vi.fn();
 vi.mock("next/navigation", () => ({
@@ -660,6 +667,295 @@ describe("CampaignCreationForm Component", () => {
       await waitFor(() => {
         expect(mockPush).toHaveBeenCalledWith(`/campaigns/${sampleSuccessResponse.campaignId}`);
       });
+    });
+  });
+
+  describe("Reference Library and Campaign Selection Integration", () => {
+    const sampleRef1: ReferenceAssetResponse = {
+      id: "11111111-1111-1111-1111-111111111111",
+      clientId: validValues.clientId,
+      assetType: "image",
+      storageBucket: "cco-reference-assets",
+      storageObjectKey: "refs/ref-1.png",
+      contentHashSha256: "1111111111111111111111111111111111111111111111111111111111111111",
+      mimeType: "image/png",
+      displayName: "Hero Character Model",
+      libraryRole: "subject_identity",
+      previewAvailability: "available",
+      previewUrl: "https://example.com/ref-1.png",
+      width: 1024,
+      height: 1024
+    };
+
+    const sampleRef2: ReferenceAssetResponse = {
+      id: "22222222-2222-2222-2222-222222222222",
+      clientId: validValues.clientId,
+      assetType: "image",
+      storageBucket: "cco-reference-assets",
+      storageObjectKey: "refs/ref-2.png",
+      contentHashSha256: "2222222222222222222222222222222222222222222222222222222222222222",
+      mimeType: "image/png",
+      displayName: "Branded Product Bottle",
+      libraryRole: "product",
+      previewAvailability: "available",
+      previewUrl: "https://example.com/ref-2.png",
+      width: 1920,
+      height: 1080
+    };
+
+    it("renders prompt when client ID is not entered or invalid", () => {
+      render(
+        <CampaignCreationForm
+          initialValues={{ ...validValues, clientId: "" }}
+          initialReferences={[]}
+        />
+      );
+
+      expect(screen.getByTestId("reference-library-prompt")).toBeTruthy();
+      expect(screen.getByTestId("reference-library-prompt").textContent).toContain(
+        "Enter a valid Client ID above"
+      );
+    });
+
+    it("renders active reference assets with thumbnails and role badges", () => {
+      render(
+        <CampaignCreationForm
+          initialValues={validValues}
+          initialReferences={[sampleRef1, sampleRef2]}
+        />
+      );
+
+      const card1 = screen.getByTestId(`reference-card-${sampleRef1.id}`);
+      const card2 = screen.getByTestId(`reference-card-${sampleRef2.id}`);
+      expect(card1).toBeTruthy();
+      expect(card2).toBeTruthy();
+
+      expect(card1.textContent).toContain("Hero Character Model");
+      expect(card1.textContent).toContain("Subject Identity");
+      expect(card2.textContent).toContain("Branded Product Bottle");
+      expect(card2.textContent).toContain("Product");
+    });
+
+    it("toggles reference selection on card click and submits candidateReferenceAssetIds", async () => {
+      const mockSubmit = vi.fn().mockResolvedValue(sampleSuccessResponse);
+      render(
+        <CampaignCreationForm
+          submitCampaign={mockSubmit}
+          initialValues={validValues}
+          initialReferences={[sampleRef1, sampleRef2]}
+        />
+      );
+
+      const card1 = screen.getByTestId(`reference-card-${sampleRef1.id}`);
+      expect(card1.getAttribute("data-selected")).toBe("false");
+
+      fireEvent.click(card1);
+      expect(card1.getAttribute("data-selected")).toBe("true");
+      expect(screen.getByTestId("selected-reference-count").textContent).toContain("1 selected");
+
+      const submitBtn = screen.getByTestId("submit-campaign-button");
+      fireEvent.click(submitBtn);
+
+      await waitFor(() => {
+        expect(mockSubmit).toHaveBeenCalledTimes(1);
+      });
+
+      const submittedRequest = mockSubmit.mock.calls[0]![0];
+      expect(submittedRequest.candidateReferenceAssetIds).toEqual([sampleRef1.id]);
+    });
+
+    it("toggles multiple references and deselects", async () => {
+      const mockSubmit = vi.fn().mockResolvedValue(sampleSuccessResponse);
+      render(
+        <CampaignCreationForm
+          submitCampaign={mockSubmit}
+          initialValues={validValues}
+          initialReferences={[sampleRef1, sampleRef2]}
+        />
+      );
+
+      const card1 = screen.getByTestId(`reference-card-${sampleRef1.id}`);
+      const card2 = screen.getByTestId(`reference-card-${sampleRef2.id}`);
+
+      // Select both
+      fireEvent.click(card1);
+      fireEvent.click(card2);
+      expect(card1.getAttribute("data-selected")).toBe("true");
+      expect(card2.getAttribute("data-selected")).toBe("true");
+      expect(screen.getByTestId("selected-reference-count").textContent).toContain("2 selected");
+
+      // Deselect card1
+      fireEvent.click(card1);
+      expect(card1.getAttribute("data-selected")).toBe("false");
+      expect(card2.getAttribute("data-selected")).toBe("true");
+      expect(screen.getByTestId("selected-reference-count").textContent).toContain("1 selected");
+
+      const submitBtn = screen.getByTestId("submit-campaign-button");
+      fireEvent.click(submitBtn);
+
+      await waitFor(() => {
+        expect(mockSubmit).toHaveBeenCalledTimes(1);
+      });
+
+      expect(mockSubmit.mock.calls[0]![0].candidateReferenceAssetIds).toEqual([sampleRef2.id]);
+    });
+
+    it("client isolation: changing client ID clears selected references and loaded references", async () => {
+      render(
+        <CampaignCreationForm
+          initialValues={validValues}
+          initialReferences={[sampleRef1, sampleRef2]}
+        />
+      );
+
+      const card1 = screen.getByTestId(`reference-card-${sampleRef1.id}`);
+      fireEvent.click(card1);
+      expect(screen.getByTestId("selected-reference-count").textContent).toContain("1 selected");
+
+      // Change client ID to a different client
+      const clientIdInput = screen.getByTestId("client-id-input");
+      fireEvent.change(clientIdInput, {
+        target: { value: "33333333-3333-3333-3333-333333333333" }
+      });
+
+      // Selected reference count should be gone
+      expect(screen.queryByTestId("selected-reference-count")).toBeNull();
+      // Prior client cards should no longer be displayed
+      expect(screen.queryByTestId(`reference-card-${sampleRef1.id}`)).toBeNull();
+    });
+
+    it("opens Reference Library Drawer when clicking Manage Library / Upload", async () => {
+      render(<CampaignCreationForm initialValues={validValues} initialReferences={[sampleRef1]} />);
+
+      const manageBtn = screen.getByTestId("manage-references-button");
+      fireEvent.click(manageBtn);
+
+      expect(screen.getByTestId("reference-library-drawer")).toBeTruthy();
+      expect(screen.getByText("Client Reference Library")).toBeTruthy();
+    });
+
+    it("filters out foreign client rows from listClientReferences response", async () => {
+      const foreignRef: ReferenceAssetResponse = {
+        ...sampleRef1,
+        id: "foreign-id-9999",
+        clientId: "99999999-9999-9999-9999-999999999999",
+        displayName: "Foreign Client Asset"
+      };
+
+      vi.spyOn(ClientApiModule, "listClientReferences").mockResolvedValueOnce([
+        sampleRef1,
+        foreignRef
+      ]);
+
+      render(<CampaignCreationForm initialValues={validValues} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId(`reference-card-${sampleRef1.id}`)).toBeDefined();
+      });
+
+      expect(screen.queryByTestId(`reference-card-${foreignRef.id}`)).toBeNull();
+      expect(screen.queryByText("Foreign Client Asset")).toBeNull();
+    });
+
+    it("race condition: invalidates fetch generation when client ID changes to invalid UUID", async () => {
+      let resolveClientA!: (refs: readonly ReferenceAssetResponse[]) => void;
+      const clientAPromise = new Promise<readonly ReferenceAssetResponse[]>((resolve) => {
+        resolveClientA = resolve;
+      });
+
+      vi.spyOn(ClientApiModule, "listClientReferences").mockReturnValueOnce(clientAPromise);
+
+      render(<CampaignCreationForm initialValues={validValues} />);
+
+      // Change clientId to invalid UUID while fetch is in-flight
+      const clientIdInput = screen.getByTestId("client-id-input");
+      fireEvent.change(clientIdInput, { target: { value: "invalid-uuid" } });
+
+      // Client A's fetch resolves late
+      resolveClientA([sampleRef1]);
+
+      // Verify Client A's reference is NOT rendered and prompt is displayed
+      await waitFor(() => {
+        expect(screen.getByTestId("reference-library-prompt")).toBeDefined();
+      });
+      expect(screen.queryByTestId(`reference-card-${sampleRef1.id}`)).toBeNull();
+    });
+
+    it("refuses submission and shows error when client references failed to load", async () => {
+      vi.spyOn(ClientApiModule, "listClientReferences").mockRejectedValueOnce(
+        new Error("Network connection lost")
+      );
+
+      const mockSubmit = vi.fn().mockResolvedValue(sampleSuccessResponse);
+      render(
+        <CampaignCreationForm
+          submitCampaign={mockSubmit}
+          initialValues={{
+            ...validValues,
+            candidateReferenceAssetIds: [sampleRef1.id]
+          }}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("reference-gallery-error")).toBeDefined();
+      });
+
+      const submitBtn = screen.getByTestId("submit-campaign-button");
+      fireEvent.click(submitBtn);
+
+      expect(mockSubmit).not.toHaveBeenCalled();
+    });
+
+    it("refuses submission when client references load empty but candidateReferenceAssetIds are present", async () => {
+      vi.spyOn(ClientApiModule, "listClientReferences").mockResolvedValueOnce([]);
+
+      const mockSubmit = vi.fn().mockResolvedValue(sampleSuccessResponse);
+      render(
+        <CampaignCreationForm
+          submitCampaign={mockSubmit}
+          initialValues={{
+            ...validValues,
+            candidateReferenceAssetIds: [sampleRef1.id]
+          }}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("reference-gallery-empty")).toBeDefined();
+      });
+
+      const submitBtn = screen.getByTestId("submit-campaign-button");
+      fireEvent.click(submitBtn);
+
+      expect(mockSubmit).not.toHaveBeenCalled();
+      expect(screen.getByTestId("reference-gallery-error")).toBeDefined();
+      expect(screen.getByTestId("reference-gallery-error").textContent).toContain(
+        "selected reference asset(s) are not active references"
+      );
+    });
+
+    it("refuses submission when candidateReferenceAssetIds contains an ID outside loaded active references", async () => {
+      const mockSubmit = vi.fn().mockResolvedValue(sampleSuccessResponse);
+      render(
+        <CampaignCreationForm
+          submitCampaign={mockSubmit}
+          initialValues={{
+            ...validValues,
+            candidateReferenceAssetIds: ["unknown-id-8888"]
+          }}
+          initialReferences={[sampleRef1]}
+        />
+      );
+
+      const submitBtn = screen.getByTestId("submit-campaign-button");
+      fireEvent.click(submitBtn);
+
+      expect(mockSubmit).not.toHaveBeenCalled();
+      expect(screen.getByTestId("reference-gallery-error")).toBeDefined();
+      expect(screen.getByTestId("reference-gallery-error").textContent).toContain(
+        "selected reference asset(s) are not active references"
+      );
     });
   });
 });

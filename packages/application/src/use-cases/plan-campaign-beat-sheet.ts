@@ -11,6 +11,7 @@ import {
   decodePlanningAuthorizationPolicy
 } from "./planning-orchestration-kernel.js";
 import { buildBeatSheetPlanningPrompt } from "./beat-sheet-prompt.js";
+import { resolveCandidateReferenceAssets } from "./resolve-candidate-reference-assets.js";
 import {
   CampaignBeatSheetValidationError,
   validateCampaignBeatSheet,
@@ -109,9 +110,10 @@ export class PlanCampaignBeatSheetUseCase {
       policy,
       overallTimeoutMs: input.overallTimeoutMs,
       prepare: async (_signal: AbortSignal) => {
-        const resolvedReferenceAssets = await this.deps.referenceAssetRepository.findByIds(
+        const resolvedReferenceAssets = await resolveCandidateReferenceAssets(
+          this.deps.referenceAssetRepository,
           clientId,
-          input.candidateReferenceAssetIds ?? []
+          input.candidateReferenceAssetIds
         );
 
         return {

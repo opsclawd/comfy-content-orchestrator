@@ -9,9 +9,11 @@ import {
   AlreadyAcceptedProductionAttemptError,
   type CampaignId,
   type CandidateId,
+  type ReferenceAssetId,
   type SceneApprovalInput,
   type SceneConfiguration,
   type SceneId,
+  type SceneReferenceBindingInput,
   type SceneStatus,
   type SceneTransition,
   type SceneTransitionReason
@@ -94,6 +96,60 @@ describe("Scene domain contracts", () => {
       // @ts-expect-error campaignId is readonly and has no setter
       scene.campaignId = "campaign-2" as CampaignId;
     }).toThrow(TypeError);
+  });
+
+  it("stamps sceneId and specRevision on initial referenceBindings and projects unique referenceIds", () => {
+    const rawBindings: readonly SceneReferenceBindingInput[] = [
+      {
+        referenceAssetId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801" as ReferenceAssetId,
+        role: "subject_identity",
+        weight: 0.85,
+        hints: { face_detail: true }
+      },
+      {
+        referenceAssetId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801" as ReferenceAssetId,
+        role: "style",
+        weight: null,
+        hints: null
+      },
+      {
+        referenceAssetId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73802" as ReferenceAssetId,
+        role: "location",
+        weight: null,
+        hints: null
+      }
+    ];
+
+    const scene = Scene.create({
+      id: "scene-ref-1" as SceneId,
+      campaignId: "campaign-ref-1" as CampaignId,
+      configuration: {
+        prompt: "A scene with bindings",
+        referenceIds: [], // Even if empty, derived from referenceBindings
+        referenceBindings: rawBindings,
+        engineProfileId: "ltx-2.5@certified-v1",
+        durationMs: 4_000
+      }
+    });
+
+    const snapshot = scene.snapshot();
+    expect(snapshot.specRevision).toBe(1);
+    // Projection of unique asset IDs in order of first appearance
+    expect(snapshot.configuration.referenceIds).toEqual([
+      "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+      "018e69e0-8a6a-72cb-b1b7-ec79a1f73802"
+    ]);
+
+    expect(snapshot.configuration.referenceBindings).toHaveLength(3);
+    for (const binding of snapshot.configuration.referenceBindings!) {
+      expect(binding.sceneId).toBe("scene-ref-1");
+      expect(binding.specRevision).toBe(1);
+    }
+    expect(snapshot.configuration.referenceBindings![0]?.role).toBe("subject_identity");
+    expect(snapshot.configuration.referenceBindings![0]?.weight).toBe(0.85);
+    expect(snapshot.configuration.referenceBindings![0]?.hints).toEqual({ face_detail: true });
+    expect(snapshot.configuration.referenceBindings![1]?.role).toBe("style");
+    expect(snapshot.configuration.referenceBindings![2]?.role).toBe("location");
   });
 
   describe("typed domain errors", () => {

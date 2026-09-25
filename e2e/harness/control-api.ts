@@ -1,36 +1,50 @@
 import type { Pool } from "pg";
-import type {
-  ObjectStoragePort,
-  ReferenceAssetRepository,
-  ReviewMediaDeliveryPort
-} from "@cco/application";
+import type { ObjectStoragePort, ReviewMediaDeliveryPort } from "@cco/application";
 import {
   PostgresCampaignDeliveryReelQueries,
   PostgresCurrentProductionAttemptQueries,
   PostgresSceneReviewQueries,
-  PostgresUnitOfWork
+  PostgresUnitOfWork,
+  PostgresReferenceAssetRepository
 } from "@cco/infrastructure";
-import { createControlApiApp } from "control-api";
+import { createControlApiApp, createProductionClientSessionAuthenticator } from "control-api";
 import type { ScenarioPlanningModelClient } from "./scenario-planning-client.js";
 import type { FastifyInstance } from "fastify";
 import type { AddressInfo } from "node:net";
 
-// Neither port's methods are exercised by e2e coverage today: every test
-// campaign is fresh, so ResolveCampaignDeliveryReelUseCase always resolves
-// via the "not-started" branch, which never touches storage or media
-// delivery. These stubs exist only to satisfy the use case's construction
-// gate (apps/control-api/src/http/types.ts) -- without them,
-// resolveCampaignDeliveryReel is silently left undefined and every
-// /api/campaigns/:id/delivery-reel request 500s with CONFIGURATION_ERROR,
-// which the campaign review page (apps/web) now depends on for every
-// render since it fetches the delivery reel alongside the review summary.
-const notImplementedObjectStorage: ObjectStoragePort = {
-  putObject: async () => {
-    throw new Error("InMemoryObjectStorage stub: putObject is not implemented in the e2e harness");
+export const TEST_CLIENT_SESSION_SECRET = "test_client_session_secret_at_least_32_chars_long";
+
+const inMemoryStorage = new Map<
+  string,
+  { body: Uint8Array; contentType?: string | undefined; checksumSha256?: string | undefined }
+>();
+
+const testObjectStorage: ObjectStoragePort = {
+  putObject: async (input) => {
+    inMemoryStorage.set(`${input.bucket}/${input.key}`, {
+      body: input.body,
+      contentType: input.contentType,
+      checksumSha256: input.checksumSha256
+    });
+    return { bucket: input.bucket, key: input.key };
   },
-  getObject: async () => undefined,
-  copyObject: async () => {
-    throw new Error("InMemoryObjectStorage stub: copyObject is not implemented in the e2e harness");
+  getObject: async (locator) => {
+    const item = inMemoryStorage.get(`${locator.bucket}/${locator.key}`);
+    if (!item) return undefined;
+    return {
+      bucket: locator.bucket,
+      key: locator.key,
+      body: item.body,
+      ...(item.contentType !== undefined ? { contentType: item.contentType } : {}),
+      ...(item.checksumSha256 !== undefined ? { checksumSha256: item.checksumSha256 } : {})
+    };
+  },
+  copyObject: async (from, to) => {
+    const item = inMemoryStorage.get(`${from.bucket}/${from.key}`);
+    if (item) {
+      inMemoryStorage.set(`${to.bucket}/${to.key}`, { ...item });
+    }
+    return { bucket: to.bucket, key: to.key };
   }
 };
 
@@ -53,11 +67,7 @@ export async function startTestControlApi(options: {
   const sceneReviewQueries = new PostgresSceneReviewQueries(options.pool);
   const currentProductionAttemptQueries = new PostgresCurrentProductionAttemptQueries(options.pool);
   const campaignDeliveryReelQueries = new PostgresCampaignDeliveryReelQueries(options.pool);
-
-  const mockAssetRepo: ReferenceAssetRepository = {
-    listBySceneId: async () => [],
-    findByIds: async () => []
-  };
+  const referenceAssetRepository = new PostgresReferenceAssetRepository(options.pool);
 
   const app = createControlApiApp(
     {
@@ -65,7 +75,7 @@ export async function startTestControlApi(options: {
       sceneReviewQueries,
       currentProductionAttemptQueries,
       campaignDeliveryReelQueries,
-      objectStorage: notImplementedObjectStorage,
+      objectStorage: testObjectStorage,
       reviewMediaDelivery: mockMediaDelivery,
       planningModelClients: {
         primary: options.planningStub,
@@ -74,12 +84,16 @@ export async function startTestControlApi(options: {
           complete: (req) => options.planningStub.complete(req)
         }
       },
-      referenceAssetRepository: mockAssetRepo
+      referenceAssetRepository
     },
     {
       reviewerIdentityResolver: {
         resolve: () => "Integration Test Director"
       },
+      clientSessionAuthenticator: createProductionClientSessionAuthenticator({
+        secret: TEST_CLIENT_SESSION_SECRET,
+        pool: options.pool
+      }),
       logger: false
     }
   );
