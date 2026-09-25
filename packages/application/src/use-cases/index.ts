@@ -64,3 +64,4 @@ export * from "./image-validation-error.js";
 export * from "./upload-reference-asset.js";
 export * from "./list-client-references.js";
 export * from "./archive-reference-asset.js";
+export * from "./update-reference-asset-role.js";

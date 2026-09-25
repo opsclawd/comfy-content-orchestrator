@@ -1,6 +1,13 @@
 "use client";
 
-import React, { useReducer, useRef, useEffect, useLayoutEffect } from "react";
+import React, {
+  useReducer,
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  useState,
+  useCallback
+} from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -15,7 +22,12 @@ import {
 
 const MIN_TARGET_DURATION_SECONDS = Math.ceil(MIN_TARGET_DURATION_MS / 1000);
 const MAX_TARGET_DURATION_SECONDS = Math.floor(MAX_TARGET_DURATION_MS / 1000);
-import { PlanCampaignStoryboardApiError } from "../api/client";
+import {
+  PlanCampaignStoryboardApiError,
+  listClientReferences,
+  ApiClientError,
+  type ReferenceAssetResponse
+} from "../api/client";
 import { generateUuidV4 } from "../lib/generate-uuid";
 import {
   createInitialState,
@@ -24,6 +36,9 @@ import {
   type CampaignCreationFormValues,
   type CampaignCreationState
 } from "./campaign-creation-state";
+import { ReferenceGallery, ReferenceLibraryDrawer } from "./reference-library";
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface CampaignCreationFormProps {
   readonly submitCampaign?: (
@@ -32,6 +47,7 @@ export interface CampaignCreationFormProps {
   readonly initialValues?: Partial<CampaignCreationFormValues> | undefined;
   readonly state?: CampaignCreationState | undefined;
   readonly dispatch?: ((event: CampaignCreationEvent) => void) | undefined;
+  readonly initialReferences?: readonly ReferenceAssetResponse[] | undefined;
 }
 
 async function defaultSubmitCampaign(
@@ -76,7 +92,8 @@ export function CampaignCreationForm({
   submitCampaign,
   initialValues,
   state: controlledState,
-  dispatch: controlledDispatch
+  dispatch: controlledDispatch,
+  initialReferences
 }: CampaignCreationFormProps) {
   const [internalState, internalDispatch] = useReducer(
     (prevState: CampaignCreationState, event: CampaignCreationEvent) =>
@@ -87,6 +104,120 @@ export function CampaignCreationForm({
 
   const state = controlledState ?? internalState;
   const dispatch = controlledDispatch ?? internalDispatch;
+
+  const currentClientId = state.values.clientId.trim();
+  const prevClientIdRef = useRef(currentClientId);
+  const fetchGenerationRef = useRef(0);
+  const isInitialMountRef = useRef(true);
+  const candidateIdsRef = useRef(state.values.candidateReferenceAssetIds);
+  candidateIdsRef.current = state.values.candidateReferenceAssetIds;
+
+  // Synchronously invalidate request generation on EVERY client change, including invalid IDs
+  if (prevClientIdRef.current !== currentClientId) {
+    prevClientIdRef.current = currentClientId;
+    fetchGenerationRef.current++;
+  }
+
+  const [referenceState, setReferenceState] = useState<{
+    clientId: string;
+    references: readonly ReferenceAssetResponse[];
+    status: "idle" | "loading" | "loaded" | "error";
+    error: string | null;
+  }>(() => {
+    if (initialReferences !== undefined) {
+      return {
+        clientId: currentClientId,
+        references: initialReferences.filter(
+          (r) => r.clientId === currentClientId && !r.archivedAt
+        ),
+        status: "loaded",
+        error: null
+      };
+    }
+    return {
+      clientId: currentClientId,
+      references: [],
+      status: "idle",
+      error: null
+    };
+  });
+
+  const [isLibraryDrawerOpen, setIsLibraryDrawerOpen] = useState(false);
+
+  // Associate reference state with its client ID and render/use it only when that ID matches current client
+  const isCurrentClient = referenceState.clientId === currentClientId;
+  const references = isCurrentClient ? referenceState.references : [];
+  const isReferencesLoaded = isCurrentClient && referenceState.status === "loaded";
+  const isReferencesLoading = isCurrentClient
+    ? referenceState.status === "loading"
+    : UUID_REGEX.test(currentClientId);
+  const referencesError = isCurrentClient ? referenceState.error : null;
+
+  useEffect(() => {
+    // When client ID changes from previously loaded client, close drawer and clear candidate IDs
+    if (referenceState.clientId !== currentClientId) {
+      setIsLibraryDrawerOpen(false);
+      if (candidateIdsRef.current && candidateIdsRef.current.length > 0) {
+        dispatch({
+          type: "UPDATE_FIELDS",
+          values: { candidateReferenceAssetIds: [] }
+        });
+      }
+    }
+
+    if (isInitialMountRef.current) {
+      isInitialMountRef.current = false;
+      if (initialReferences !== undefined) {
+        return;
+      }
+    }
+
+    const isValidUuid = UUID_REGEX.test(currentClientId);
+    if (!isValidUuid) {
+      setReferenceState({
+        clientId: currentClientId,
+        references: [],
+        status: "idle",
+        error: null
+      });
+      return;
+    }
+
+    const generation = ++fetchGenerationRef.current;
+    setReferenceState({
+      clientId: currentClientId,
+      references: [],
+      status: "loading",
+      error: null
+    });
+
+    listClientReferences(currentClientId)
+      .then((data) => {
+        if (generation !== fetchGenerationRef.current) return;
+        const filtered = data.filter((ref) => ref.clientId === currentClientId && !ref.archivedAt);
+        setReferenceState({
+          clientId: currentClientId,
+          references: filtered,
+          status: "loaded",
+          error: null
+        });
+      })
+      .catch((err: unknown) => {
+        if (generation !== fetchGenerationRef.current) return;
+        const msg =
+          err instanceof ApiClientError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : "Failed to load client references.";
+        setReferenceState({
+          clientId: currentClientId,
+          references: [],
+          status: "error",
+          error: msg
+        });
+      });
+  }, [currentClientId, initialReferences, dispatch]);
 
   const submitCampaignRef = useRef(submitCampaign);
   const dispatchRef = useRef(dispatch);
@@ -166,10 +297,161 @@ export function CampaignCreationForm({
     router.push(`/campaigns/${campaignId}`);
   }, [state, router]);
 
+  const handleToggleReference = useCallback(
+    (referenceId: string) => {
+      // Only permit toggling references that are active members of current client
+      const isActiveMember = references.some(
+        (r) => r.id === referenceId && r.clientId === currentClientId && !r.archivedAt
+      );
+      if (!isActiveMember) {
+        return;
+      }
+
+      const currentSelected = state.values.candidateReferenceAssetIds ?? [];
+      const isSelected = currentSelected.includes(referenceId);
+      const nextSelected = isSelected
+        ? currentSelected.filter((id) => id !== referenceId)
+        : [...currentSelected, referenceId];
+
+      dispatch({
+        type: "UPDATE_FIELDS",
+        values: { candidateReferenceAssetIds: nextSelected }
+      });
+    },
+    [references, currentClientId, state.values.candidateReferenceAssetIds, dispatch]
+  );
+
+  const handleReferenceArchived = useCallback(
+    (archivedId: string) => {
+      setReferenceState((prev) => {
+        if (prev.clientId !== currentClientId) return prev;
+        return {
+          ...prev,
+          references: prev.references.filter((r) => r.id !== archivedId)
+        };
+      });
+      if (state.values.candidateReferenceAssetIds?.includes(archivedId)) {
+        dispatch({
+          type: "UPDATE_FIELDS",
+          values: {
+            candidateReferenceAssetIds: (state.values.candidateReferenceAssetIds ?? []).filter(
+              (id) => id !== archivedId
+            )
+          }
+        });
+      }
+    },
+    [currentClientId, state.values.candidateReferenceAssetIds, dispatch]
+  );
+
+  const handleReferenceAdded = useCallback(
+    (newReference: ReferenceAssetResponse) => {
+      if (newReference.clientId === currentClientId && !newReference.archivedAt) {
+        setReferenceState((prev) => {
+          if (prev.clientId !== currentClientId) return prev;
+          return {
+            ...prev,
+            references: [newReference, ...prev.references.filter((r) => r.id !== newReference.id)]
+          };
+        });
+      }
+    },
+    [currentClientId]
+  );
+
+  const handleReferenceRoleUpdated = useCallback(
+    (updatedRef: ReferenceAssetResponse) => {
+      if (updatedRef.clientId === currentClientId) {
+        setReferenceState((prev) => {
+          if (prev.clientId !== currentClientId) return prev;
+          const filtered = updatedRef.archivedAt
+            ? prev.references.filter((r) => r.id !== updatedRef.id)
+            : prev.references.map((r) => (r.id === updatedRef.id ? updatedRef : r));
+          return {
+            ...prev,
+            references: filtered
+          };
+        });
+      }
+    },
+    [currentClientId]
+  );
+
+  const handleRetryReferences = useCallback(() => {
+    if (!UUID_REGEX.test(currentClientId)) return;
+    const generation = ++fetchGenerationRef.current;
+    setReferenceState({
+      clientId: currentClientId,
+      references: [],
+      status: "loading",
+      error: null
+    });
+
+    listClientReferences(currentClientId)
+      .then((data) => {
+        if (generation !== fetchGenerationRef.current) return;
+        const filtered = data.filter((ref) => ref.clientId === currentClientId && !ref.archivedAt);
+        setReferenceState({
+          clientId: currentClientId,
+          references: filtered,
+          status: "loaded",
+          error: null
+        });
+      })
+      .catch((err: unknown) => {
+        if (generation !== fetchGenerationRef.current) return;
+        const msg =
+          err instanceof ApiClientError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : "Failed to load client references.";
+        setReferenceState({
+          clientId: currentClientId,
+          references: [],
+          status: "error",
+          error: msg
+        });
+      });
+  }, [currentClientId]);
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (state.phase === "submitting") {
       return;
+    }
+
+    const candidateIds = state.values.candidateReferenceAssetIds ?? [];
+    if (candidateIds.length > 0) {
+      // 1. Refuse submission if references for current client are not successfully loaded
+      if (!isReferencesLoaded) {
+        setReferenceState((prev) => ({
+          ...prev,
+          clientId: currentClientId,
+          status: "error",
+          error:
+            prev.error ??
+            (isReferencesLoading
+              ? "Cannot submit campaign: client references are still loading."
+              : "Cannot submit campaign: client references could not be verified.")
+        }));
+        return;
+      }
+
+      // 2. Refuse submission if any selected ID is outside the loaded active set (even if the set is empty)
+      const activeReferenceIdSet = new Set(
+        references.filter((r) => r.clientId === currentClientId && !r.archivedAt).map((r) => r.id)
+      );
+      const invalidCandidates = candidateIds.filter((id) => !activeReferenceIdSet.has(id));
+      if (invalidCandidates.length > 0) {
+        setReferenceState((prev) => ({
+          ...prev,
+          clientId: currentClientId,
+          status: "error",
+          error: `Cannot submit campaign: selected reference asset(s) are not active references for client ${currentClientId}.`
+        }));
+        return;
+      }
     }
 
     const freshKey = generateUuidV4();
@@ -180,6 +462,16 @@ export function CampaignCreationForm({
   }
 
   function handleFieldChange(field: keyof CampaignCreationFormValues, value: string) {
+    if (field === "clientId") {
+      const trimmed = value.trim();
+      if (trimmed !== state.values.clientId.trim()) {
+        dispatch({
+          type: "UPDATE_FIELDS",
+          values: { clientId: value, candidateReferenceAssetIds: [] }
+        });
+        return;
+      }
+    }
     dispatch({
       type: "UPDATE_FIELDS",
       values: { [field]: value }
@@ -424,6 +716,92 @@ export function CampaignCreationForm({
             >
               {fieldErrors.clientId}
             </span>
+          )}
+        </div>
+
+        {/* Reference Assets Multi-Select Section */}
+        <div className="form-group" data-testid="reference-assets-section">
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: "0.5rem"
+            }}
+          >
+            <div>
+              <label style={{ margin: 0 }}>Reference Assets (Optional)</label>
+              <span
+                style={{
+                  display: "block",
+                  fontSize: "0.75rem",
+                  color: "var(--text-muted)",
+                  marginTop: "0.25rem"
+                }}
+              >
+                Select reference assets to guide visual candidate generation for this campaign.
+                {values.candidateReferenceAssetIds &&
+                  values.candidateReferenceAssetIds.length > 0 && (
+                    <strong
+                      style={{ marginLeft: "0.5rem", color: "var(--color-primary, #6366f1)" }}
+                      data-testid="selected-reference-count"
+                    >
+                      ({values.candidateReferenceAssetIds.length} selected)
+                    </strong>
+                  )}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="action-button secondary"
+              data-testid="manage-references-button"
+              onClick={() => {
+                if (UUID_REGEX.test(values.clientId.trim()) && !isSubmitting) {
+                  setIsLibraryDrawerOpen(true);
+                }
+              }}
+              disabled={isSubmitting ? true : undefined}
+              aria-disabled={!UUID_REGEX.test(values.clientId.trim()) || isSubmitting}
+              style={{
+                fontSize: "0.8125rem",
+                padding: "0.375rem 0.75rem",
+                cursor:
+                  !UUID_REGEX.test(values.clientId.trim()) || isSubmitting
+                    ? "not-allowed"
+                    : "pointer"
+              }}
+            >
+              Manage Library / Upload
+            </button>
+          </div>
+
+          {!UUID_REGEX.test(values.clientId.trim()) ? (
+            <div
+              data-testid="reference-library-prompt"
+              style={{
+                padding: "1.5rem 1rem",
+                borderRadius: "var(--radius-md)",
+                border: "1px dashed var(--border-subtle)",
+                backgroundColor: "var(--bg-surface)",
+                color: "var(--text-muted)",
+                fontSize: "0.875rem",
+                textAlign: "center"
+              }}
+            >
+              Enter a valid Client ID above to browse and select reference assets.
+            </div>
+          ) : (
+            <ReferenceGallery
+              references={references}
+              selectedIds={values.candidateReferenceAssetIds ?? []}
+              onToggleSelect={handleToggleReference}
+              selectable={!isSubmitting}
+              isLoading={isReferencesLoading}
+              error={referencesError}
+              onRetry={handleRetryReferences}
+              expectedClientId={currentClientId}
+              emptyMessage="No active reference assets found for this client. Click “Manage Library / Upload” to add reference assets."
+            />
           )}
         </div>
 
@@ -740,6 +1118,20 @@ export function CampaignCreationForm({
           </button>
         </div>
       </form>
+
+      {/* Reference Library Drawer */}
+      {UUID_REGEX.test(values.clientId.trim()) && (
+        <ReferenceLibraryDrawer
+          clientId={values.clientId.trim()}
+          isOpen={isLibraryDrawerOpen}
+          onClose={() => setIsLibraryDrawerOpen(false)}
+          selectedIds={values.candidateReferenceAssetIds ?? []}
+          onToggleSelect={handleToggleReference}
+          onReferenceArchived={handleReferenceArchived}
+          onReferenceAdded={handleReferenceAdded}
+          onReferenceUpdated={handleReferenceRoleUpdated}
+        />
+      )}
     </section>
   );
 }

@@ -25,6 +25,7 @@ export interface CampaignCreationFormValues {
   readonly briefDescription: string;
   readonly briefVisualStyle: string;
   readonly targetEngineProfileId?: string | undefined;
+  readonly candidateReferenceAssetIds?: readonly string[] | undefined;
 }
 
 export const INITIAL_CAMPAIGN_FORM_VALUES: CampaignCreationFormValues = {
@@ -36,7 +37,8 @@ export const INITIAL_CAMPAIGN_FORM_VALUES: CampaignCreationFormValues = {
   sceneCountOverride: "",
   briefDescription: "",
   briefVisualStyle: "",
-  targetEngineProfileId: "MINIMAX_H3_720P_5S_I2V_V1"
+  targetEngineProfileId: "MINIMAX_H3_720P_5S_I2V_V1",
+  candidateReferenceAssetIds: []
 };
 
 export type CampaignCreationPhase =
@@ -231,6 +233,17 @@ export function buildRequestFromForm(
       ? values.targetEngineProfileId.trim()
       : undefined;
 
+  const candidateAssetIds =
+    values.candidateReferenceAssetIds && values.candidateReferenceAssetIds.length > 0
+      ? Array.from(
+          new Set(
+            values.candidateReferenceAssetIds.filter(
+              (id) => typeof id === "string" && id.trim().length > 0
+            )
+          )
+        ).sort()
+      : undefined;
+
   const candidate = {
     idempotencyKey,
     clientId,
@@ -239,6 +252,7 @@ export function buildRequestFromForm(
     ...(targetPlatform !== undefined ? { targetPlatform } : {}),
     ...(values.sceneCountMode === "custom" ? { sceneCountOverride } : {}),
     ...(targetEngine !== undefined ? { targetEngineProfileId: targetEngine } : {}),
+    ...(candidateAssetIds !== undefined ? { candidateReferenceAssetIds: candidateAssetIds } : {}),
     brief: briefCandidate
   };
 

@@ -31,3 +31,4 @@ export {
 export * from "./api-failure-classification.js";
 export * from "./error-redaction.js";
 export * from "./json-canonicalization.js";
+export * from "./client-session-token.js";

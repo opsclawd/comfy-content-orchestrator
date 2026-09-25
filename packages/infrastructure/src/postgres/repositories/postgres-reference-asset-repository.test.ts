@@ -173,4 +173,37 @@ describe("PostgresReferenceAssetRepository (Unit)", () => {
       "lock-key"
     ]);
   });
+
+  it("updates library_role using updateLibraryRole", async () => {
+    const mockClient = {
+      query: vi.fn().mockResolvedValueOnce({
+        rows: [
+          {
+            asset_id: asset.id,
+            client_id: asset.clientId,
+            asset_type: asset.assetType,
+            storage_bucket: asset.storageBucket,
+            storage_object_key: asset.storageObjectKey,
+            content_hash_sha256: asset.contentHashSha256,
+            width: asset.width,
+            height: asset.height,
+            mime_type: asset.mimeType,
+            display_name: asset.displayName,
+            library_role: "style",
+            archived_at: null
+          }
+        ]
+      })
+    } as unknown as PoolClient;
+
+    const repo = new PostgresReferenceAssetRepository(mockClient);
+    const result = await repo.updateLibraryRole(asset.clientId, asset.id, "style");
+
+    expect(result).toBeDefined();
+    expect(result?.libraryRole).toBe("style");
+    expect(mockClient.query).toHaveBeenCalledTimes(1);
+    const querySql = (mockClient.query as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
+    expect(querySql).toContain("UPDATE reference_assets");
+    expect(querySql).toContain("SET library_role = $3");
+  });
 });

@@ -22,6 +22,7 @@ import {
   UploadReferenceAssetUseCase,
   ListClientReferencesUseCase,
   ArchiveReferenceAssetUseCase,
+  UpdateReferenceAssetRoleUseCase,
   type CampaignDeliveryReelQueries,
   type ClientContextResolver,
   type CurrentProductionAttemptQueries,
@@ -89,6 +90,7 @@ export interface ControlApiUseCases {
   readonly uploadReferenceAsset?: UploadReferenceAssetUseCase | undefined;
   readonly listClientReferences?: ListClientReferencesUseCase | undefined;
   readonly archiveReferenceAsset?: ArchiveReferenceAssetUseCase | undefined;
+  readonly updateReferenceAssetRole?: UpdateReferenceAssetRoleUseCase | undefined;
 }
 
 export interface ControlApiQueries {
@@ -231,6 +233,13 @@ export function createControlApiContainer(
     ? new ArchiveReferenceAssetUseCase(dependencies.referenceAssetRepository)
     : undefined;
 
+  const updateReferenceAssetRole = dependencies.referenceAssetRepository
+    ? new UpdateReferenceAssetRoleUseCase({
+        referenceAssetRepository: dependencies.referenceAssetRepository,
+        mediaDelivery: dependencies.reviewMediaDelivery
+      })
+    : undefined;
+
   return {
     dependencies,
     useCases: {
@@ -254,7 +263,8 @@ export function createControlApiContainer(
       ...(rankReviewCandidates !== undefined ? { rankReviewCandidates } : {}),
       ...(uploadReferenceAsset !== undefined ? { uploadReferenceAsset } : {}),
       ...(listClientReferences !== undefined ? { listClientReferences } : {}),
-      ...(archiveReferenceAsset !== undefined ? { archiveReferenceAsset } : {})
+      ...(archiveReferenceAsset !== undefined ? { archiveReferenceAsset } : {}),
+      ...(updateReferenceAssetRole !== undefined ? { updateReferenceAssetRole } : {})
     },
     queries: {
       ...(dependencies.sceneReviewQueries !== undefined

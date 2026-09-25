@@ -16,6 +16,7 @@ describe("ListClientReferencesUseCase", () => {
     height: 1080,
     mimeType: "image/png",
     displayName: "Asset 1",
+    libraryRole: "subject_identity",
     archivedAt: null
   };
 
@@ -29,6 +30,7 @@ describe("ListClientReferencesUseCase", () => {
     height: 720,
     mimeType: "image/jpeg",
     displayName: "Asset 2",
+    libraryRole: null,
     archivedAt: null
   };
 
@@ -55,12 +57,14 @@ describe("ListClientReferencesUseCase", () => {
     const result = await useCase.execute({ clientId });
     expect(result.references).toHaveLength(2);
     expect(result.references[0]?.id).toBe(asset1.id);
+    expect(result.references[0]?.libraryRole).toBe("subject_identity");
     expect(result.references[0]?.previewAvailability).toBe("available");
     expect(result.references[0]?.previewUrl).toBe(
       `https://preview.godzspeed.internal/${asset1.storageObjectKey}`
     );
 
     expect(result.references[1]?.id).toBe(asset2.id);
+    expect(result.references[1]?.libraryRole).toBeNull();
     expect(result.references[1]?.previewAvailability).toBe("available");
   });
 

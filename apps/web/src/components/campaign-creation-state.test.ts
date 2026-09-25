@@ -46,7 +46,8 @@ describe("campaign creation state machine & form mapping", () => {
     sceneCountOverride: "",
     briefDescription: "High energy summer apparel advertisement",
     briefVisualStyle: "cinematic warm golden hour",
-    targetEngineProfileId: "MINIMAX_H3_720P_5S_I2V_V1"
+    targetEngineProfileId: "MINIMAX_H3_720P_5S_I2V_V1",
+    candidateReferenceAssetIds: []
   };
 
   const dummyIdempotencyKey = "99999999-9999-4999-8999-999999999999";
@@ -387,6 +388,28 @@ describe("campaign creation state machine & form mapping", () => {
       if (result.ok) return;
 
       expect(result.fieldErrors.targetEngineProfileId).toBeDefined();
+    });
+
+    it("omits candidateReferenceAssetIds when empty or undefined", () => {
+      const valuesEmpty: CampaignCreationFormValues = {
+        ...validFormValues,
+        candidateReferenceAssetIds: []
+      };
+      const result = buildRequestFromForm(valuesEmpty, dummyIdempotencyKey);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect("candidateReferenceAssetIds" in result.request).toBe(false);
+    });
+
+    it("includes sorted, deduplicated candidateReferenceAssetIds when selected", () => {
+      const values: CampaignCreationFormValues = {
+        ...validFormValues,
+        candidateReferenceAssetIds: ["ref-2", "ref-1", "ref-2"]
+      };
+      const result = buildRequestFromForm(values, dummyIdempotencyKey);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.request.candidateReferenceAssetIds).toEqual(["ref-1", "ref-2"]);
     });
   });
 
@@ -1010,6 +1033,37 @@ describe("campaign creation state machine & form mapping", () => {
       });
 
       expect((resubmittedState as SubmittingState).idempotencyKey).toBe(dummyIdempotencyKey);
+    });
+
+    it("materially changing reference asset selection after an error causes next submit to use a new identity", () => {
+      const initial = createInitialState(validFormValues);
+      const { state: submitting1 } = transitionCampaignCreationState(initial, {
+        type: "SUBMIT",
+        idempotencyKey: dummyIdempotencyKey
+      });
+
+      const { state: errorState } = transitionCampaignCreationState(submitting1, {
+        type: "SUBMIT_ERROR",
+        statusCode: 500,
+        error: { code: "INTERNAL_ERROR", message: "Failed" }
+      });
+
+      // Change reference asset selection
+      const { state: modifiedState } = transitionCampaignCreationState(errorState, {
+        type: "UPDATE_FIELDS",
+        values: {
+          candidateReferenceAssetIds: ["22222222-2222-2222-2222-222222222222"]
+        }
+      });
+
+      const freshKey = "88888888-8888-4888-8888-888888888888";
+      const { state: submitting2 } = transitionCampaignCreationState(modifiedState, {
+        type: "SUBMIT",
+        idempotencyKey: freshKey
+      });
+
+      expect(submitting2.phase).toBe("submitting");
+      expect((submitting2 as SubmittingState).idempotencyKey).toBe(freshKey);
     });
 
     describe("computeClientRequestFingerprint", () => {

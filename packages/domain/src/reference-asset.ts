@@ -25,6 +25,7 @@ export interface ReferenceAsset {
   readonly height?: number | undefined;
   readonly mimeType?: string | undefined;
   readonly displayName?: string | undefined;
+  readonly libraryRole?: ReferenceRole | null | undefined;
   readonly archivedAt?: string | null | undefined;
   readonly groupId?: ReferenceGroupId | null | undefined;
   // Legacy / convenience fields

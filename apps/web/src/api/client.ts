@@ -22,7 +22,11 @@ import {
   CampaignDeliveryReelReadModelSchema,
   type CampaignDeliveryReelReadModel,
   CampaignResponseSchema,
-  type CampaignResponse
+  type CampaignResponse,
+  ReferenceAssetResponseSchema,
+  type ReferenceAssetResponse,
+  ReferenceAssetListResponseSchema,
+  type ReferenceRole
 } from "@cco/contracts";
 import type { z } from "zod";
 import { resolveControlApiBaseUrl } from "./runtime-config";
@@ -41,7 +45,10 @@ export type {
   ReviewErrorResponse,
   SceneReviewDetailReadModel,
   CurrentProductionAttemptReadModel,
-  CampaignDeliveryMediaReadModel
+  CampaignDeliveryMediaReadModel,
+  ReferenceAssetResponse,
+  ReferenceRole,
+  UpdateReferenceAssetRole
 } from "@cco/contracts";
 
 export {
@@ -57,7 +64,12 @@ export {
   CurrentProductionAttemptReadModelSchema,
   CampaignDeliveryReelReadModelSchema,
   CampaignDeliveryReelStateSchema,
-  CampaignDeliveryMediaReadModelSchema
+  CampaignDeliveryMediaReadModelSchema,
+  ReferenceAssetResponseSchema,
+  ReferenceAssetListResponseSchema,
+  ReferenceRoleSchema,
+  REFERENCE_ROLES,
+  UpdateReferenceAssetRoleSchema
 } from "@cco/contracts";
 
 export interface ApiClientConfig {
@@ -514,4 +526,119 @@ export async function planCampaignStoryboard(
 ): Promise<PlanCampaignStoryboardResponse> {
   const client = createApiClient({ fetchFn: fetchImpl });
   return client.planCampaignStoryboard(request);
+}
+
+export async function listClientReferences(
+  clientId: string,
+  fetchImpl?: typeof fetch
+): Promise<readonly ReferenceAssetResponse[]> {
+  const fetchFn = fetchImpl ?? fetch;
+  const res = await fetchFn(`/api/clients/${encodeURIComponent(clientId)}/references`, {
+    cache: "no-store"
+  });
+  if (!res.ok) {
+    throw new ApiClientError(`Failed to list client references: HTTP ${res.status}`, res.status);
+  }
+  const data = await res.json();
+  const parsed = ReferenceAssetListResponseSchema.safeParse(data);
+  if (!parsed.success) {
+    throw new ApiValidationError("Invalid client references list response", parsed.error.issues);
+  }
+  return parsed.data.references;
+}
+
+export interface UploadClientReferenceInput {
+  readonly body: Blob | Buffer | Uint8Array;
+  readonly mimeType: string;
+  readonly displayName?: string | undefined;
+  readonly libraryRole: ReferenceRole;
+}
+
+export async function uploadClientReference(
+  clientId: string,
+  input: UploadClientReferenceInput,
+  fetchImpl?: typeof fetch
+): Promise<ReferenceAssetResponse> {
+  const fetchFn = fetchImpl ?? fetch;
+  const headers: Record<string, string> = {
+    "Content-Type": input.mimeType,
+    "x-reference-role": input.libraryRole
+  };
+  if (input.displayName) {
+    headers["X-Display-Name"] = input.displayName;
+  }
+  const res = await fetchFn(`/api/clients/${encodeURIComponent(clientId)}/references`, {
+    method: "POST",
+    headers,
+    body: input.body as unknown as BodyInit,
+    cache: "no-store"
+  });
+  if (!res.ok) {
+    const errorJson = (await res.json().catch(() => null)) as { message?: string } | null;
+    throw new ApiClientError(
+      errorJson?.message ?? `Upload failed with HTTP ${res.status}`,
+      res.status
+    );
+  }
+  const data = await res.json();
+  const parsed = ReferenceAssetResponseSchema.safeParse(data);
+  if (!parsed.success) {
+    throw new ApiValidationError("Invalid upload reference response", parsed.error.issues);
+  }
+  return parsed.data;
+}
+
+export async function archiveClientReference(
+  clientId: string,
+  referenceId: string,
+  fetchImpl?: typeof fetch
+): Promise<void> {
+  const fetchFn = fetchImpl ?? fetch;
+  const res = await fetchFn(
+    `/api/clients/${encodeURIComponent(clientId)}/references/${encodeURIComponent(referenceId)}`,
+    {
+      method: "DELETE",
+      cache: "no-store"
+    }
+  );
+  if (!res.ok && res.status !== 204) {
+    const errorJson = (await res.json().catch(() => null)) as { message?: string } | null;
+    throw new ApiClientError(
+      errorJson?.message ?? `Archive failed with HTTP ${res.status}`,
+      res.status
+    );
+  }
+}
+
+export async function updateClientReferenceRole(
+  clientId: string,
+  referenceId: string,
+  libraryRole: ReferenceRole,
+  fetchImpl?: typeof fetch
+): Promise<ReferenceAssetResponse> {
+  const fetchFn = fetchImpl ?? fetch;
+  const res = await fetchFn(
+    `/api/clients/${encodeURIComponent(clientId)}/references/${encodeURIComponent(referenceId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ libraryRole }),
+      cache: "no-store"
+    }
+  );
+  if (!res.ok) {
+    const errorJson = (await res.json().catch(() => null)) as { message?: string } | null;
+    throw new ApiClientError(
+      errorJson?.message ?? `Update role failed with HTTP ${res.status}`,
+      res.status
+    );
+  }
+  const data = await res.json();
+  const parsed = ReferenceAssetResponseSchema.safeParse(data);
+  if (!parsed.success) {
+    throw new ApiValidationError("Invalid update reference response", parsed.error.issues);
+  }
+  return parsed.data;
 }

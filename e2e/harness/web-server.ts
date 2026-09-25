@@ -2,6 +2,7 @@ import { spawn, type ChildProcess, execSync } from "node:child_process";
 import { createServer, type AddressInfo } from "node:net";
 import { resolve } from "node:path";
 import { existsSync, statSync, readdirSync } from "node:fs";
+import { TEST_CLIENT_SESSION_SECRET } from "./control-api.js";
 
 export interface TestWebServer {
   webUrl: string;
@@ -83,6 +84,10 @@ export async function startTestWebServer(options: {
         TAILSCALE_BIN_PATH: mockTailscalePath,
         PORT: String(port),
         CONTROL_API_URL: options.controlApiBaseUrl,
+        CONTROL_API_CLIENT_SESSION_SECRET: TEST_CLIENT_SESSION_SECRET,
+        REVIEW_HUB_DIRECTOR_CLIENT_MAPPINGS: JSON.stringify({
+          "integration test director": ["*"]
+        }),
         NODE_ENV: "production"
       }
     }
