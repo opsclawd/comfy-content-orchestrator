@@ -3,6 +3,8 @@ import {
   REFERENCE_ROLES,
   ReferenceRoleSchema,
   ReferenceAssetSchema,
+  ReferenceAssetResponseSchema,
+  ReferenceAssetListResponseSchema,
   ReferenceGroupSchema,
   SceneReferenceBindingSchema,
   SceneConfigurationSchema
@@ -243,6 +245,97 @@ describe("ReferenceAsset Contracts & Schemas", () => {
       });
 
       expect(parsed.referenceBindings).toBeUndefined();
+    });
+  });
+
+  describe("ReferenceAssetResponseSchema and ReferenceAssetListResponseSchema", () => {
+    const baseAsset = {
+      id: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+      clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73802",
+      storageBucket: "godzspeed-reference",
+      storageObjectKey:
+        "clients/018e69e0-8a6a-72cb-b1b7-ec79a1f73802/references/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      contentHashSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      width: 1920,
+      height: 1080,
+      mimeType: "image/png",
+      displayName: "Logo Hero",
+      archivedAt: null
+    };
+
+    it("accepts available preview state with valid previewUrl", () => {
+      const parsed = ReferenceAssetResponseSchema.parse({
+        ...baseAsset,
+        previewUrl: "https://minio.godzspeed.internal/godzspeed-reference/signed-url-123",
+        previewAvailability: "available"
+      });
+      expect(parsed.previewAvailability).toBe("available");
+      expect(parsed.previewUrl).toBe(
+        "https://minio.godzspeed.internal/godzspeed-reference/signed-url-123"
+      );
+    });
+
+    it("accepts unavailable preview state with null previewUrl", () => {
+      const parsed = ReferenceAssetResponseSchema.parse({
+        ...baseAsset,
+        previewUrl: null,
+        previewAvailability: "unavailable"
+      });
+      expect(parsed.previewAvailability).toBe("unavailable");
+      expect(parsed.previewUrl).toBeNull();
+    });
+
+    it("rejects conditional invariant violation: available with null URL", () => {
+      expect(() =>
+        ReferenceAssetResponseSchema.parse({
+          ...baseAsset,
+          previewUrl: null,
+          previewAvailability: "available"
+        })
+      ).toThrow();
+    });
+
+    it("rejects conditional invariant violation: unavailable with non-null URL", () => {
+      expect(() =>
+        ReferenceAssetResponseSchema.parse({
+          ...baseAsset,
+          previewUrl: "https://example.com/image.png",
+          previewAvailability: "unavailable"
+        })
+      ).toThrow();
+    });
+
+    it("rejects invalid availability literal", () => {
+      expect(() =>
+        ReferenceAssetResponseSchema.parse({
+          ...baseAsset,
+          previewUrl: "https://example.com/image.png",
+          previewAvailability: "pending"
+        })
+      ).toThrow();
+    });
+
+    it("parses ReferenceAssetListResponseSchema with multiple items", () => {
+      const list = {
+        references: [
+          {
+            ...baseAsset,
+            id: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+            previewUrl: "https://example.com/1",
+            previewAvailability: "available"
+          },
+          {
+            ...baseAsset,
+            id: "018e69e0-8a6a-72cb-b1b7-ec79a1f73809",
+            previewUrl: null,
+            previewAvailability: "unavailable"
+          }
+        ]
+      };
+      const parsed = ReferenceAssetListResponseSchema.parse(list);
+      expect(parsed.references).toHaveLength(2);
+      expect(parsed.references[0]?.previewAvailability).toBe("available");
+      expect(parsed.references[1]?.previewAvailability).toBe("unavailable");
     });
   });
 });

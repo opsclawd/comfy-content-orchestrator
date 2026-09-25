@@ -491,6 +491,53 @@ setTimeout(() => {
     }
   });
 
+  it("strips client identity headers (x-authenticated-client-id, etc.) from incoming requests", async () => {
+    const externalPort = await getFreePort();
+    const proxyProc = spawn("node", [peerProxyScript], {
+      env: {
+        ...process.env,
+        PORT: String(externalPort),
+        PEER_PROXY_CHILD_SCRIPT: mockChildScript,
+        DELAY_START_MS: "0"
+      },
+      stdio: "pipe"
+    });
+
+    try {
+      let ready = false;
+      const startWait = Date.now();
+      while (Date.now() - startWait < 3000) {
+        try {
+          const res = await fetch(`http://127.0.0.1:${externalPort}/healthz`);
+          if (res.status === 200) {
+            ready = true;
+            break;
+          }
+        } catch {
+          // ignore
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(ready).toBe(true);
+
+      const res = await fetch(`http://127.0.0.1:${externalPort}/echo-headers`, {
+        headers: {
+          "x-authenticated-client-id": "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+          "x-client-session-id": "session-123",
+          "tailscale-user-client-id": "client-456"
+        }
+      });
+      expect(res.status).toBe(200);
+      const headers = (await res.json()) as Record<string, string>;
+
+      expect(headers["x-authenticated-client-id"]).toBeUndefined();
+      expect(headers["x-client-session-id"]).toBeUndefined();
+      expect(headers["tailscale-user-client-id"]).toBeUndefined();
+    } finally {
+      await stopProxy(proxyProc);
+    }
+  });
+
   it("handles client abort before headers gracefully and keeps proxy alive", async () => {
     const externalPort = await getFreePort();
     const proxyProc = spawn("node", [peerProxyScript], {

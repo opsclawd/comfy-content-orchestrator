@@ -8,6 +8,7 @@ import {
   CandidateNotFoundError,
   ClientNotFoundError,
   IdempotencyConflictError,
+  ImageValidationError,
   InvalidSceneCountCombinationError,
   InvalidSceneCountError,
   InvalidSceneOrdinalSequenceError,
@@ -35,6 +36,7 @@ import {
   InvalidCandidateError,
   InvalidMutationError,
   InvalidTransitionError,
+  ReferenceAssetNotFoundError,
   TerminalStateError
 } from "@cco/domain";
 
@@ -42,6 +44,20 @@ export class ReviewerIdentityUnavailableError extends Error {
   constructor(message = "Reviewer identity could not be established.") {
     super(message);
     this.name = "ReviewerIdentityUnavailableError";
+  }
+}
+
+export class ClientAuthenticationRequiredError extends Error {
+  constructor(message = "Client authentication required.") {
+    super(message);
+    this.name = "ClientAuthenticationRequiredError";
+  }
+}
+
+export class ClientForbiddenError extends Error {
+  constructor(message = "Access to requested client resource is forbidden.") {
+    super(message);
+    this.name = "ClientForbiddenError";
   }
 }
 
@@ -117,7 +133,8 @@ export function formatReviewError(error: unknown): {
     error instanceof CampaignBeatSheetValidationError ||
     error instanceof InvalidSceneCountCombinationError ||
     error instanceof InvalidSceneCountError ||
-    error instanceof InvalidTargetDurationError
+    error instanceof InvalidTargetDurationError ||
+    error instanceof ImageValidationError
   ) {
     return {
       statusCode: 400,
@@ -155,12 +172,25 @@ export function formatReviewError(error: unknown): {
     };
   }
 
-  if (error instanceof ReviewerIdentityUnavailableError) {
+  if (
+    error instanceof ReviewerIdentityUnavailableError ||
+    error instanceof ClientAuthenticationRequiredError
+  ) {
     return {
       statusCode: 401,
       body: {
         code: "AUTHENTICATION_REQUIRED",
-        message: "Reviewer identity could not be established."
+        message: error.message
+      }
+    };
+  }
+
+  if (error instanceof ClientForbiddenError) {
+    return {
+      statusCode: 403,
+      body: {
+        code: "FORBIDDEN",
+        message: error.message
       }
     };
   }
@@ -169,7 +199,8 @@ export function formatReviewError(error: unknown): {
     error instanceof SceneNotFoundError ||
     error instanceof CandidateNotFoundError ||
     error instanceof CampaignNotFoundError ||
-    error instanceof ClientNotFoundError
+    error instanceof ClientNotFoundError ||
+    error instanceof ReferenceAssetNotFoundError
   ) {
     return {
       statusCode: 404,
@@ -309,7 +340,16 @@ export function formatReviewError(error: unknown): {
   }
 
   const fastifyErr = error as Partial<FastifyError>;
-  if (fastifyErr.validation !== undefined || fastifyErr.statusCode === 400) {
+  if (
+    fastifyErr.code === "FST_ERR_CTP_BODY_TOO_LARGE" ||
+    fastifyErr.code === "FST_ERR_CTP_INVALID_MEDIA_TYPE" ||
+    fastifyErr.code === "FST_ERR_CTP_EMPTY_TYPE" ||
+    fastifyErr.code === "FST_ERR_CTP_INVALID_CONTENT_LENGTH" ||
+    fastifyErr.statusCode === 413 ||
+    fastifyErr.statusCode === 415 ||
+    fastifyErr.validation !== undefined ||
+    fastifyErr.statusCode === 400
+  ) {
     return {
       statusCode: 400,
       body: {

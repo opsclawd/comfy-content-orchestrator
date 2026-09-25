@@ -65,6 +65,7 @@ export interface ControlApiRuntimeConfig {
   readonly jobDispatch: ControlApiJobDispatchConfig;
   readonly planningProviders?: ControlApiPlanningConfig;
   readonly rankingProviders?: ControlApiRankingConfig;
+  readonly clientSessionSecret?: string;
 }
 
 export class ControlApiConfigError extends Error {
@@ -464,6 +465,12 @@ export function parseControlApiRuntimeConfig(
         }
       : undefined;
 
+  const rawClientSessionSecret = env.CONTROL_API_CLIENT_SESSION_SECRET;
+  const clientSessionSecret =
+    rawClientSessionSecret !== undefined && rawClientSessionSecret.trim() !== ""
+      ? rawClientSessionSecret.trim()
+      : undefined;
+
   return {
     database: {
       url: databaseUrl
@@ -494,6 +501,7 @@ export function parseControlApiRuntimeConfig(
       heartbeatIntervalMs
     },
     ...(planningProviders !== undefined ? { planningProviders } : {}),
-    ...(rankingProviders !== undefined ? { rankingProviders } : {})
+    ...(rankingProviders !== undefined ? { rankingProviders } : {}),
+    ...(clientSessionSecret !== undefined ? { clientSessionSecret } : {})
   };
 }

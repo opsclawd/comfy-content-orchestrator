@@ -2,6 +2,7 @@ import process from "node:process";
 import { HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
 import type {
   CampaignDeliveryReelQueries,
+  ClientContextResolver,
   ObjectStoragePort,
   PlanningModelClientPort,
   PlanningModelOutcome,
@@ -30,9 +31,14 @@ import {
   type HostFsStorageTelemetryAdapterOptions
 } from "@cco/infrastructure";
 
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { Pool } from "pg";
 import { TailscaleReviewerIdentityResolver } from "./http/reviewer-identity.js";
+import {
+  SessionClientContextResolver,
+  createProductionClientSessionAuthenticator,
+  type VerifiedClientPrincipal
+} from "./http/client-context.js";
 import { startControlApiServer, type ServerListenOptions } from "./http/server.js";
 import type { ControlApiDependencies, ReviewerIdentityResolver } from "./http/types.js";
 import {
@@ -88,6 +94,12 @@ export interface ControlApiBootstrapOptions {
     options: ServerListenOptions
   ) => Promise<{ app: FastifyInstance; close: () => Promise<void>; port: number; host: string }>;
   readonly reviewerIdentityResolver?: ReviewerIdentityResolver;
+  readonly clientContextResolver?: ClientContextResolver<FastifyRequest>;
+  readonly clientSessionAuthenticator?:
+    | ((
+        request: FastifyRequest
+      ) => Promise<VerifiedClientPrincipal | null> | VerifiedClientPrincipal | null)
+    | undefined;
   readonly logger?: ControlApiLogger;
   readonly httpLogger?: ServerListenOptions["logger"];
   readonly processSignals?: ControlApiProcessSignals;
@@ -266,6 +278,41 @@ export async function runControlApi(
       options.reviewerIdentityResolver ??
       new TailscaleReviewerIdentityResolver(config.reviewerIdentity);
 
+    const effectiveNodeEnv = config.reviewerIdentity.nodeEnv ?? process.env.NODE_ENV;
+    const clientSessionHmac =
+      config.clientSessionSecret ?? process.env.CONTROL_API_CLIENT_SESSION_SECRET;
+
+    const signingKey = clientSessionHmac?.trim();
+    if (
+      effectiveNodeEnv === "production" &&
+      signingKey === "synthetic_control_api_client_session_secret"
+    ) {
+      throw new Error(
+        "Control API startup failed: default synthetic secret 'synthetic_control_api_client_session_secret' is forbidden in production. Configure a secure operator-generated CONTROL_API_CLIENT_SESSION_SECRET."
+      );
+    }
+    const clientSessionAuthenticator =
+      options.clientSessionAuthenticator ??
+      (signingKey && signingKey !== ""
+        ? createProductionClientSessionAuthenticator({
+            secret: signingKey,
+            pool
+          })
+        : undefined);
+
+    if (
+      effectiveNodeEnv === "production" &&
+      !options.clientContextResolver &&
+      !clientSessionAuthenticator
+    ) {
+      throw new Error(
+        "Control API startup failed: trusted client authentication provider is required in production but unavailable. Configure CONTROL_API_CLIENT_SESSION_SECRET or supply a trusted clientContextResolver."
+      );
+    }
+
+    const clientContextResolver =
+      options.clientContextResolver ?? new SessionClientContextResolver();
+
     const anthropicKey = config.planningProviders?.anthropicApiKey;
     const openAiKey = config.planningProviders?.openaiApiKey;
     const attemptTimeoutMs = config.planningProviders?.attemptTimeoutMs;
@@ -305,7 +352,7 @@ export async function runControlApi(
 
     const referenceAssetRepository =
       options.referenceAssetRepository ??
-      (planningModelClients ? new PostgresReferenceAssetRepository(pool) : undefined);
+      (pool ? new PostgresReferenceAssetRepository(pool) : undefined);
 
     const geminiKey = config.rankingProviders?.geminiApiKey;
     const rankingOpenAiKey = config.rankingProviders?.openaiApiKey;
@@ -370,6 +417,12 @@ export async function runControlApi(
         host: config.http.host,
         port: config.http.port,
         reviewerIdentityResolver,
+        clientContextResolver,
+        ...(clientSessionAuthenticator !== undefined ? { clientSessionAuthenticator } : {}),
+        clientSessionConfig: {
+          trustedProxyAddresses: config.reviewerIdentity.trustedProxyAddresses,
+          nodeEnv: effectiveNodeEnv
+        },
         jobDispatch: config.jobDispatch,
         logger: options.httpLogger ?? { level: config.http.logLevel }
       }

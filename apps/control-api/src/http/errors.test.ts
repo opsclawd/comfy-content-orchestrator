@@ -3,6 +3,7 @@ import {
   CampaignBeatSheetValidationError,
   CampaignIdempotencyConflictError,
   IdempotencyConflictError,
+  ImageValidationError,
   InvalidSceneCountCombinationError,
   InvalidSceneCountError,
   InvalidSceneOrdinalSequenceError,
@@ -23,8 +24,14 @@ import {
   TransactionalJobEnqueuerUnavailableError,
   UnsupportedProductionDurationError
 } from "@cco/application";
-import { AlreadyAcceptedProductionAttemptError, type SceneId } from "@cco/domain";
 import {
+  AlreadyAcceptedProductionAttemptError,
+  ReferenceAssetNotFoundError,
+  type SceneId
+} from "@cco/domain";
+import {
+  ClientAuthenticationRequiredError,
+  ClientForbiddenError,
   ReviewerIdentityUnavailableError,
   formatReviewError,
   handleReviewError
@@ -37,6 +44,74 @@ describe("formatReviewError", () => {
       body: {
         code: "AUTHENTICATION_REQUIRED",
         message: "Reviewer identity could not be established."
+      }
+    });
+  });
+
+  it("maps ClientAuthenticationRequiredError to 401 AUTHENTICATION_REQUIRED", () => {
+    expect(formatReviewError(new ClientAuthenticationRequiredError())).toEqual({
+      statusCode: 401,
+      body: {
+        code: "AUTHENTICATION_REQUIRED",
+        message: "Client authentication required."
+      }
+    });
+  });
+
+  it("maps ClientForbiddenError to 403 FORBIDDEN", () => {
+    expect(formatReviewError(new ClientForbiddenError())).toEqual({
+      statusCode: 403,
+      body: {
+        code: "FORBIDDEN",
+        message: "Access to requested client resource is forbidden."
+      }
+    });
+  });
+
+  it("maps ImageValidationError to 400 VALIDATION_FAILURE", () => {
+    expect(formatReviewError(new ImageValidationError("Invalid image buffer"))).toEqual({
+      statusCode: 400,
+      body: {
+        code: "VALIDATION_FAILURE",
+        message: "Invalid image buffer"
+      }
+    });
+  });
+
+  it("maps ReferenceAssetNotFoundError to 404 NOT_FOUND", () => {
+    expect(formatReviewError(new ReferenceAssetNotFoundError("ref-123"))).toEqual({
+      statusCode: 404,
+      body: {
+        code: "NOT_FOUND",
+        message: 'Reference asset "ref-123" was not found.'
+      }
+    });
+  });
+
+  it("maps Fastify FST_ERR_CTP_BODY_TOO_LARGE to 400 VALIDATION_FAILURE", () => {
+    const fastifyErr = Object.assign(new Error("Request body is too large"), {
+      code: "FST_ERR_CTP_BODY_TOO_LARGE",
+      statusCode: 413
+    });
+    expect(formatReviewError(fastifyErr)).toEqual({
+      statusCode: 400,
+      body: {
+        code: "VALIDATION_FAILURE",
+        message: "Request body is too large"
+      }
+    });
+  });
+
+  it("maps Fastify FST_ERR_CTP_INVALID_MEDIA_TYPE to 400 VALIDATION_FAILURE", () => {
+    const fastifyErr = Object.assign(new Error("Unsupported Media Type"), {
+      code: "FST_ERR_CTP_INVALID_MEDIA_TYPE",
+      statusCode: 415
+    });
+    expect(formatReviewError(fastifyErr)).toEqual({
+      statusCode: 400,
+      body: {
+        code: "VALIDATION_FAILURE",
+        message: "Unsupported Media Type"
       }
     });
   });

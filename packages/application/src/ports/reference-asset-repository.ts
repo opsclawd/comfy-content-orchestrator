@@ -46,4 +46,13 @@ export interface ReferenceAssetRepository {
 
   readonly save?: (asset: ReferenceAsset) => Promise<ReferenceAsset>;
   readonly archive?: (clientId: string, id: ReferenceAssetId) => Promise<boolean>;
+
+  readonly findByClientAndContentHash?: (
+    clientId: string,
+    contentHashSha256: string,
+    options?: Pick<ReferenceAssetRepositoryOptions, "includeArchived">
+  ) => Promise<ReferenceAsset | undefined>;
+
+  readonly saveOrReactivateByContentHash?: (asset: ReferenceAsset) => Promise<ReferenceAsset>;
+  readonly withLock?: <T>(key: string, action: () => Promise<T>) => Promise<T>;
 }

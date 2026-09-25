@@ -442,6 +442,7 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
         mime_type = EXCLUDED.mime_type,
         display_name = EXCLUDED.display_name,
         archived_at = EXCLUDED.archived_at
+      WHERE reference_assets.client_id = EXCLUDED.client_id
       RETURNING *
       `,
       [
@@ -462,6 +463,15 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
 
     const savedRow = result.rows[0];
     if (!savedRow) {
+      const existing = await this.client.query<ReferenceAssetDbRow>(
+        `SELECT client_id FROM reference_assets WHERE asset_id = $1`,
+        [asset.id]
+      );
+      if (existing.rows[0] && existing.rows[0].client_id !== asset.clientId) {
+        throw new Error(
+          `Inconsistent client ownership: asset belongs to client ${existing.rows[0].client_id}, not ${asset.clientId}`
+        );
+      }
       throw new Error("Failed to save reference asset");
     }
     return mapRowToReferenceAsset(savedRow, false);
@@ -477,5 +487,150 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
       [id, clientId]
     );
     return (result.rowCount ?? 0) > 0;
+  }
+
+  async findByClientAndContentHash(
+    clientId: string,
+    contentHashSha256: string,
+    options?: Pick<ReferenceAssetRepositoryOptions, "includeArchived">
+  ): Promise<ReferenceAsset | undefined> {
+    const includeArchived = options?.includeArchived ?? false;
+    const archivedFilter = includeArchived ? "" : "AND archived_at IS NULL";
+
+    const result = await this.client.query<ReferenceAssetDbRow>(
+      `
+      SELECT
+        asset_id,
+        client_id,
+        asset_type,
+        storage_bucket,
+        storage_object_key,
+        content_hash_sha256,
+        width,
+        height,
+        mime_type,
+        display_name,
+        group_id,
+        archived_at
+      FROM reference_assets
+      WHERE client_id = $1 AND content_hash_sha256 = $2 ${archivedFilter}
+      ORDER BY archived_at NULLS FIRST, created_at ASC
+      LIMIT 1
+      `,
+      [clientId, contentHashSha256]
+    );
+
+    const row = result.rows[0];
+    if (!row) {
+      return undefined;
+    }
+    return mapRowToReferenceAsset(row, false);
+  }
+
+  async saveOrReactivateByContentHash(asset: ReferenceAsset): Promise<ReferenceAsset> {
+    const result = await this.client.query<ReferenceAssetDbRow>(
+      `
+      INSERT INTO reference_assets (
+        asset_id,
+        client_id,
+        asset_type,
+        storage_bucket,
+        storage_object_key,
+        content_hash_sha256,
+        width,
+        height,
+        mime_type,
+        display_name,
+        group_id,
+        archived_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL)
+      ON CONFLICT (storage_bucket, storage_object_key) DO UPDATE SET
+        archived_at = NULL
+      WHERE reference_assets.client_id = EXCLUDED.client_id
+        AND reference_assets.content_hash_sha256 = EXCLUDED.content_hash_sha256
+      RETURNING *
+      `,
+      [
+        asset.id,
+        asset.clientId,
+        asset.assetType ?? "image",
+        asset.storageBucket,
+        asset.storageObjectKey,
+        asset.contentHashSha256,
+        asset.width ?? null,
+        asset.height ?? null,
+        asset.mimeType ?? "image/png",
+        asset.displayName ?? null,
+        asset.groupId ?? null
+      ]
+    );
+
+    const savedRow = result.rows[0];
+    if (!savedRow) {
+      const conflictResult = await this.client.query<ReferenceAssetDbRow>(
+        `
+        SELECT asset_id, client_id, content_hash_sha256, storage_bucket, storage_object_key
+        FROM reference_assets
+        WHERE storage_bucket = $1 AND storage_object_key = $2
+        `,
+        [asset.storageBucket, asset.storageObjectKey]
+      );
+      const conflictRow = conflictResult.rows[0];
+      if (conflictRow) {
+        if (conflictRow.client_id !== asset.clientId) {
+          throw new Error(
+            `Inconsistent client ownership: asset key belongs to client ${conflictRow.client_id}, not ${asset.clientId}`
+          );
+        }
+        if (conflictRow.content_hash_sha256 !== asset.contentHashSha256) {
+          throw new Error(
+            `Inconsistent content hash: asset key has hash ${conflictRow.content_hash_sha256}, not ${asset.contentHashSha256}`
+          );
+        }
+      }
+      throw new Error("Failed to save or reactivate reference asset");
+    }
+
+    if (savedRow.client_id !== asset.clientId) {
+      throw new Error(
+        `Inconsistent client ownership: asset key belongs to client ${savedRow.client_id}, not ${asset.clientId}`
+      );
+    }
+    if (savedRow.content_hash_sha256 !== asset.contentHashSha256) {
+      throw new Error(
+        `Inconsistent content hash: asset key has hash ${savedRow.content_hash_sha256}, not ${asset.contentHashSha256}`
+      );
+    }
+    if (
+      savedRow.storage_bucket !== asset.storageBucket ||
+      savedRow.storage_object_key !== asset.storageObjectKey
+    ) {
+      throw new Error("Returned row storage bucket or key does not match requested asset");
+    }
+
+    return mapRowToReferenceAsset(savedRow, false);
+  }
+
+  async withLock<T>(key: string, action: () => Promise<T>): Promise<T> {
+    if (isPool(this.client)) {
+      const client = await this.client.connect();
+      try {
+        await client.query("SELECT pg_advisory_lock(hashtext($1))", [key]);
+        try {
+          return await action();
+        } finally {
+          await client.query("SELECT pg_advisory_unlock(hashtext($1))", [key]).catch(() => {});
+        }
+      } finally {
+        client.release();
+      }
+    } else {
+      await this.client.query("SELECT pg_advisory_lock(hashtext($1))", [key]);
+      try {
+        return await action();
+      } finally {
+        await this.client.query("SELECT pg_advisory_unlock(hashtext($1))", [key]).catch(() => {});
+      }
+    }
   }
 }

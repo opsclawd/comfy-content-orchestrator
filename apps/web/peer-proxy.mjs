@@ -175,9 +175,12 @@ export function startPeerProxy(overrides = {}) {
     handleProxyError(err, req, res);
   });
 
-  // Delete-then-set discipline for peer IP header
+  // Delete-then-set discipline for peer IP header and strip untrusted client identity headers
   proxy.on("proxyReq", (proxyReq, req) => {
     proxyReq.removeHeader("x-cco-tailscale-peer-ip");
+    proxyReq.removeHeader("x-authenticated-client-id");
+    proxyReq.removeHeader("x-client-session-id");
+    proxyReq.removeHeader("tailscale-user-client-id");
     const remoteAddress = req.socket?.remoteAddress;
     if (remoteAddress) {
       const normalized = normalizeIpAddress(remoteAddress);
