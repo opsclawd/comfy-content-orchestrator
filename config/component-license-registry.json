@@ -53,7 +53,6 @@
       "status": "review_required",
       "licenseId": "MiniMax Community License",
       "licenseSource": "https://huggingface.co/Comfy-Org/MiniMax-H3/blob/main/README.md",
-      "reviewedAt": "2026-09-18T19:00:00.000Z",
       "policyRevision": "2026-08-29.1",
       "notes": "Pending production license and certification review; retains review_required absent exact approval evidence."
     },
