@@ -2,6 +2,19 @@ import { sortKeysDeep } from "@cco/shared";
 import { z } from "zod";
 import { CampaignStatusSchema } from "./campaign-status.js";
 import { SceneReferenceBindingSchema } from "./reference-asset.js";
+import {
+  ShotFramingSchema,
+  CameraAngleSchema,
+  CameraMovementSchema,
+  MovementSpeedSchema,
+  LightingStyleSchema,
+  ShotPlanStatusSchema,
+  ShotPlanRoutingModeSchema,
+  ShotPlanSubjectBlockingSchema,
+  ShotPlanTemporalBeatSchema,
+  ShotPlanDialogueIntentSchema,
+  ShotPlanContinuityConstraintsSchema
+} from "./shot-plan.js";
 
 export const SCENE_STATUSES = [
   "draft_pending",
@@ -30,7 +43,10 @@ export const REVIEW_ACTIONS = [
   "cancel",
   "candidate_select",
   "production_accept",
-  "production_rerender"
+  "production_rerender",
+  "select_shotplan",
+  "approve_shotplan",
+  "reroll_shotplan"
 ] as const;
 
 export const SceneStatusSchema = z.enum(SCENE_STATUSES);
@@ -100,6 +116,54 @@ export const SceneReviewCandidateGroupSchema = z.object({
 });
 export type SceneReviewCandidateGroup = z.infer<typeof SceneReviewCandidateGroupSchema>;
 
+export const ShotPlanReviewItemSchema = z.object({
+  shotPlanId: z.string().uuid(),
+  sceneId: z.string().uuid(),
+  specRevision: z.number().int().positive(),
+  variantOrdinal: z.number().int().positive(),
+  status: ShotPlanStatusSchema,
+  routingMode: ShotPlanRoutingModeSchema,
+  isCurrentRevision: z.boolean(),
+  targetDurationMs: z.number().int().positive(),
+  targetFrameCount: z.number().int().positive(),
+  framing: ShotFramingSchema,
+  angle: CameraAngleSchema,
+  cameraMovement: CameraMovementSchema,
+  movementSpeed: MovementSpeedSchema,
+  lensIntent: z.string(),
+  cameraPosition: z.string(),
+  cameraPromptDescription: z.string(),
+  actionSummary: z.string(),
+  lightingStyle: LightingStyleSchema,
+  environmentDescription: z.string(),
+  colorPalette: z.array(z.string()).default([]),
+  atmosphere: z.string().nullable().optional(),
+  subjects: z.array(ShotPlanSubjectBlockingSchema).default([]),
+  beats: z.array(ShotPlanTemporalBeatSchema).default([]),
+  dialogue: ShotPlanDialogueIntentSchema.nullable().optional(),
+  continuity: ShotPlanContinuityConstraintsSchema,
+  previs: z
+    .object({
+      candidateId: z.string().uuid().nullable().optional(),
+      media: MediaAvailabilitySchema,
+      reviewNotes: z.string().nullable().optional()
+    })
+    .nullable()
+    .optional(),
+  boundReferences: z
+    .array(
+      z.object({
+        referenceAssetId: z.string().uuid(),
+        role: z.string(),
+        displayName: z.string().optional()
+      })
+    )
+    .default([]),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+export type ShotPlanReviewItem = z.infer<typeof ShotPlanReviewItemSchema>;
+
 export const SceneReviewDetailReadModelSchema = z.object({
   sceneId: z.string().uuid(),
   campaignId: z.string().uuid(),
@@ -108,8 +172,12 @@ export const SceneReviewDetailReadModelSchema = z.object({
   configuration: SceneConfigurationSchema,
   selectedCandidateId: z.string().uuid().optional(),
   selectedCandidateRevision: z.number().int().positive().optional(),
+  selectedShotPlanId: z.string().uuid().optional(),
+  selectedShotPlanRevision: z.number().int().positive().optional(),
+  approvedShotPlanId: z.string().uuid().optional(),
   approval: SceneApprovalSchema.optional(),
   candidatesByRevision: z.array(SceneReviewCandidateGroupSchema),
+  shotPlans: z.array(ShotPlanReviewItemSchema).optional(),
   allowedActions: z.array(ReviewActionSchema)
 });
 export type SceneReviewDetailReadModel = z.infer<typeof SceneReviewDetailReadModelSchema>;
@@ -280,6 +348,39 @@ export const ProductionRerenderCommandSchema = BaseCommandEnvelope.extend({
 });
 export type ProductionRerenderCommand = z.infer<typeof ProductionRerenderCommandSchema>;
 
+export const SelectShotPlanPayloadSchema = z.object({
+  shotPlanId: z.string().uuid()
+});
+export type SelectShotPlanPayload = z.infer<typeof SelectShotPlanPayloadSchema>;
+
+export const ApproveShotPlanPayloadSchema = z
+  .object({
+    shotPlanId: z.string().uuid().optional()
+  })
+  .default({});
+export type ApproveShotPlanPayload = z.infer<typeof ApproveShotPlanPayloadSchema>;
+
+export const RerollShotPlanPayloadSchema = EmptyActionPayloadSchema;
+export type RerollShotPlanPayload = z.infer<typeof RerollShotPlanPayloadSchema>;
+
+export const SelectShotPlanCommandSchema = BaseCommandEnvelope.extend({
+  action: z.literal("select_shotplan"),
+  payload: SelectShotPlanPayloadSchema
+});
+export type SelectShotPlanCommand = z.infer<typeof SelectShotPlanCommandSchema>;
+
+export const ApproveShotPlanCommandSchema = BaseCommandEnvelope.extend({
+  action: z.literal("approve_shotplan"),
+  payload: ApproveShotPlanPayloadSchema
+});
+export type ApproveShotPlanCommand = z.infer<typeof ApproveShotPlanCommandSchema>;
+
+export const RerollShotPlanCommandSchema = BaseCommandEnvelope.extend({
+  action: z.literal("reroll_shotplan"),
+  payload: RerollShotPlanPayloadSchema
+});
+export type RerollShotPlanCommand = z.infer<typeof RerollShotPlanCommandSchema>;
+
 export const ReviewCommandSchema = z.discriminatedUnion("action", [
   CandidateSelectCommandSchema,
   ApproveCommandSchema,
@@ -292,7 +393,10 @@ export const ReviewCommandSchema = z.discriminatedUnion("action", [
   CancelCommandSchema,
   RejectCommandSchema,
   ProductionAcceptCommandSchema,
-  ProductionRerenderCommandSchema
+  ProductionRerenderCommandSchema,
+  SelectShotPlanCommandSchema,
+  ApproveShotPlanCommandSchema,
+  RerollShotPlanCommandSchema
 ]);
 export type ReviewCommand = z.infer<typeof ReviewCommandSchema>;
 
@@ -301,6 +405,8 @@ export const ReviewCommandResponseSchema = z.object({
   status: SceneStatusSchema,
   specRevision: z.number().int().positive(),
   selectedCandidateId: z.string().uuid().optional(),
+  selectedShotPlanId: z.string().uuid().optional(),
+  approvedShotPlanId: z.string().uuid().optional(),
   approval: SceneApprovalSchema.optional(),
   isIdempotentReplay: z.boolean(),
   activeProductionJobId: z.string().uuid().optional(),

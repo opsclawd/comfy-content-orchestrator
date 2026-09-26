@@ -18,7 +18,9 @@ import {
   type ReferenceAssetId,
   type ReferenceGroup,
   type ReferenceGroupId,
-  type SceneReferenceBinding
+  type SceneReferenceBinding,
+  type ShotPlan,
+  type ShotPlanId
 } from "@cco/domain";
 import type {
   CampaignProductionRunRepository,
@@ -35,6 +37,7 @@ import type {
   ReferenceGroupRepository,
   ReviewEventStore,
   SceneRepository,
+  ShotPlanRepository,
   StoryboardCandidateRepository,
   TransactionalJobEnqueuer,
   UnitOfWork,
@@ -46,12 +49,14 @@ import { CampaignIdempotencyConflictError } from "../ports/index.js";
 export class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _seededScenes: Map<SceneId, Scene>;
   private readonly _seededCandidates: Map<CandidateId, StoryboardCandidate>;
+  private readonly _seededShotPlans = new Map<ShotPlanId, ShotPlan>();
   private readonly _seededReviewEvents: Map<string, ReviewEvent>;
   private readonly _seededCampaigns: Map<string, CampaignRecord>;
   private readonly _seededClients: Map<string, ClientRecord>;
   private readonly _campaignHashes = new Map<string, string>();
   private readonly _storyboardCompletionHashes = new Map<string, string>();
   private readonly _savedScenes: Scene[] = [];
+  private readonly _savedShotPlans: ShotPlan[] = [];
   private readonly _reviewEvents: ReviewEvent[] = [];
   private readonly _savedCampaigns: CampaignRecord[] = [];
   private readonly _savedClients: ClientRecord[] = [];
@@ -200,6 +205,22 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     return this._savedScenes;
   }
 
+  get savedShotPlans(): readonly ShotPlan[] {
+    return this._savedShotPlans;
+  }
+
+  seedShotPlan(shotPlan: ShotPlan): this {
+    this._seededShotPlans.set(shotPlan.id, shotPlan);
+    return this;
+  }
+
+  seedShotPlans(shotPlans: Iterable<ShotPlan>): this {
+    for (const plan of shotPlans) {
+      this._seededShotPlans.set(plan.id, plan);
+    }
+    return this;
+  }
+
   get reviewEvents(): readonly ReviewEvent[] {
     return this._reviewEvents;
   }
@@ -323,6 +344,7 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     const stagedScenes: Scene[] = [];
     const stagedReviewEvents: ReviewEvent[] = [];
     const stagedCandidates: StoryboardCandidate[] = [];
+    const stagedShotPlans: ShotPlan[] = [];
     const stagedCampaigns: CampaignRecord[] = [];
     const stagedCampaignHashes = new Map<string, string>();
     const stagedCompletionHashes = new Map<string, string>();
@@ -427,6 +449,51 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
             (candidate) => candidate.sceneId === sceneId && candidate.specRevision === specRevision
           )
           .sort((a, b) => a.variantOrdinal - b.variantOrdinal);
+      }
+    };
+
+    const scopedShotPlans: ShotPlanRepository = {
+      findById: async (id: ShotPlanId): Promise<ShotPlan | undefined> => {
+        return stagedShotPlans.find((p) => p.id === id) ?? this._seededShotPlans.get(id);
+      },
+      save: async (shotPlan: ShotPlan): Promise<void> => {
+        const existingIdx = stagedShotPlans.findIndex((p) => p.id === shotPlan.id);
+        if (existingIdx >= 0) {
+          stagedShotPlans[existingIdx] = shotPlan;
+        } else {
+          stagedShotPlans.push(shotPlan);
+        }
+      },
+      saveMany: async (shotPlans: readonly ShotPlan[]): Promise<void> => {
+        for (const plan of shotPlans) {
+          const existingIdx = stagedShotPlans.findIndex((p) => p.id === plan.id);
+          if (existingIdx >= 0) {
+            stagedShotPlans[existingIdx] = plan;
+          } else {
+            stagedShotPlans.push(plan);
+          }
+        }
+      },
+      listBySceneAndRevision: async (
+        sceneId: SceneId,
+        specRevision: number
+      ): Promise<readonly ShotPlan[]> => {
+        const plansMap = new Map<ShotPlanId, ShotPlan>(this._seededShotPlans);
+        for (const plan of stagedShotPlans) {
+          plansMap.set(plan.id, plan);
+        }
+        return Array.from(plansMap.values())
+          .filter((p) => p.sceneId === sceneId && p.specRevision === specRevision)
+          .sort((a, b) => a.variantOrdinal - b.variantOrdinal);
+      },
+      listByScene: async (sceneId: SceneId): Promise<readonly ShotPlan[]> => {
+        const plansMap = new Map<ShotPlanId, ShotPlan>(this._seededShotPlans);
+        for (const plan of stagedShotPlans) {
+          plansMap.set(plan.id, plan);
+        }
+        return Array.from(plansMap.values())
+          .filter((p) => p.sceneId === sceneId)
+          .sort((a, b) => a.specRevision - b.specRevision || a.variantOrdinal - b.variantOrdinal);
       }
     };
 
@@ -725,6 +792,7 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       scenes: scopedScenes,
       reviewEvents: scopedReviewEvents,
       candidates: scopedCandidates,
+      shotPlans: scopedShotPlans,
       campaigns: scopedCampaigns,
       clients: scopedClients,
       jobs: scopedJobs,
@@ -738,6 +806,7 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     const result = await work(context);
 
     this._savedScenes.push(...stagedScenes);
+    this._savedShotPlans.push(...stagedShotPlans);
     this._reviewEvents.push(...stagedReviewEvents);
     this._savedCampaigns.push(...stagedCampaigns);
     this._savedClients.push(...stagedClients);
@@ -752,6 +821,9 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     }
     for (const scene of stagedScenes) {
       this._seededScenes.set(scene.id, scene);
+    }
+    for (const plan of stagedShotPlans) {
+      this._seededShotPlans.set(plan.id, plan);
     }
     for (const candidate of stagedCandidates) {
       this._seededCandidates.set(candidate.id, candidate);

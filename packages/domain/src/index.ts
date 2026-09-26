@@ -13,3 +13,4 @@ export * from "./client.js";
 export * from "./campaign-production-run.js";
 export * from "./approved-visual-production-input.js";
 export * from "./accepted-production-attempt-invariant.js";
+export * from "./shot-plan.js";

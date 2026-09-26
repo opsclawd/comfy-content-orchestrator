@@ -23,6 +23,9 @@ import {
   SceneCreationModeMismatchError,
   SceneNotFoundError,
   SceneNotInProductionRunError,
+  ShotPlanNotFoundError,
+  ShotPlanValidationError,
+  InvalidShotPlanVariantCountError,
   StaleProductionAttemptConflictError,
   StaleRevisionConflictError,
   StoryboardMaterializationConflictError,
@@ -35,6 +38,7 @@ import {
   AlreadyAcceptedProductionAttemptError,
   InvalidCandidateError,
   InvalidMutationError,
+  InvalidShotPlanError,
   InvalidTransitionError,
   ReferenceAssetNotFoundError,
   TerminalStateError
@@ -130,6 +134,8 @@ export function formatReviewError(error: unknown): {
 
   if (
     error instanceof SceneConfigurationValidationError ||
+    error instanceof ShotPlanValidationError ||
+    error instanceof InvalidShotPlanVariantCountError ||
     error instanceof CampaignBeatSheetValidationError ||
     error instanceof InvalidSceneCountCombinationError ||
     error instanceof InvalidSceneCountError ||
@@ -198,6 +204,7 @@ export function formatReviewError(error: unknown): {
   if (
     error instanceof SceneNotFoundError ||
     error instanceof CandidateNotFoundError ||
+    error instanceof ShotPlanNotFoundError ||
     error instanceof CampaignNotFoundError ||
     error instanceof ClientNotFoundError ||
     error instanceof ReferenceAssetNotFoundError
@@ -314,6 +321,7 @@ export function formatReviewError(error: unknown): {
     error instanceof InvalidTransitionError ||
     error instanceof InvalidMutationError ||
     error instanceof InvalidCandidateError ||
+    error instanceof InvalidShotPlanError ||
     error instanceof TerminalStateError ||
     error instanceof AlreadyAcceptedProductionAttemptError
   ) {

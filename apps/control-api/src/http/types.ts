@@ -10,6 +10,7 @@ import {
   PlanCampaignBeatSheetUseCase,
   PlanCampaignStoryboardUseCase,
   PlanSceneConfigurationUseCase,
+  PlanShotPlansUseCase,
   ProgressSceneProductionUseCases,
   RankReviewCandidatesUseCase,
   ReviewSceneUseCases,
@@ -91,6 +92,7 @@ export interface ControlApiUseCases {
   readonly listClientReferences?: ListClientReferencesUseCase | undefined;
   readonly archiveReferenceAsset?: ArchiveReferenceAssetUseCase | undefined;
   readonly updateReferenceAssetRole?: UpdateReferenceAssetRoleUseCase | undefined;
+  readonly planShotPlans?: PlanShotPlansUseCase | undefined;
 }
 
 export interface ControlApiQueries {
@@ -108,7 +110,17 @@ export interface ControlApiContainer {
 export function createControlApiContainer(
   dependencies: ControlApiDependencies
 ): ControlApiContainer {
-  const reviewScene = new ReviewSceneUseCases(dependencies.uow);
+  const planShotPlans = dependencies.planningModelClients
+    ? new PlanShotPlansUseCase({
+        uow: dependencies.uow,
+        primaryClient: dependencies.planningModelClients.primary,
+        fallbackClient: dependencies.planningModelClients.fallback,
+        ...(dependencies.planningOverallTimeoutMs !== undefined
+          ? { overallTimeoutMs: dependencies.planningOverallTimeoutMs }
+          : {})
+      })
+    : undefined;
+  const reviewScene = new ReviewSceneUseCases(dependencies.uow, planShotPlans);
   const enqueueSceneProductionRender = new EnqueueSceneProductionRenderUseCase(dependencies.uow);
   const productionReview = new ProductionReviewUseCases(
     dependencies.uow,
@@ -267,7 +279,8 @@ export function createControlApiContainer(
       ...(uploadReferenceAsset !== undefined ? { uploadReferenceAsset } : {}),
       ...(listClientReferences !== undefined ? { listClientReferences } : {}),
       ...(archiveReferenceAsset !== undefined ? { archiveReferenceAsset } : {}),
-      ...(updateReferenceAssetRole !== undefined ? { updateReferenceAssetRole } : {})
+      ...(updateReferenceAssetRole !== undefined ? { updateReferenceAssetRole } : {}),
+      ...(planShotPlans !== undefined ? { planShotPlans } : {})
     },
     queries: {
       ...(dependencies.sceneReviewQueries !== undefined

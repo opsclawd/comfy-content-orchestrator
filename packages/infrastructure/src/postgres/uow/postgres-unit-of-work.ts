@@ -10,6 +10,7 @@ import { PostgresReferenceAssetRepository } from "../repositories/postgres-refer
 import { PostgresReferenceGroupRepository } from "../repositories/postgres-reference-group-repository.js";
 import { PostgresReviewEventStore } from "../repositories/postgres-review-event-store.js";
 import { PostgresSceneRepository } from "../repositories/postgres-scene-repository.js";
+import { PostgresShotPlanRepository } from "../repositories/postgres-shot-plan-repository.js";
 import { PostgresStoryboardCandidateRepository } from "../repositories/postgres-storyboard-candidate-repository.js";
 
 export class PostgresUnitOfWork implements UnitOfWork {
@@ -23,6 +24,7 @@ export class PostgresUnitOfWork implements UnitOfWork {
         scenes: new PostgresSceneRepository(client, { forUpdate: true }),
         reviewEvents: new PostgresReviewEventStore(client),
         candidates: new PostgresStoryboardCandidateRepository(client),
+        shotPlans: new PostgresShotPlanRepository(client),
         campaigns: new PostgresCampaignRepository(client),
         clients: new PostgresClientRepository(client),
         jobs: new PostgresTransactionalJobEnqueuer(client),
