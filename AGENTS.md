@@ -28,6 +28,12 @@ To ensure deterministic speech synthesis and reproducible container builds acros
 - Run `./scripts/check-piper-version.sh` to verify that your local environment has the pinned voice artifacts cached and that `docker/piper/Dockerfile` matches its pinned SHA-256 digest.
 - `check-piper-version.sh` performs only static, on-disk artifact verification and intentionally does not start or probe a live Piper HTTP service — service lifecycle and readiness checking belongs to the Testcontainers-managed integration test (`pnpm test:piper`).
 
+## ComfyUI Core Environment Setup
+
+To ensure reproducible custom-node registration and core engine stability, ComfyUI core is pinned in `.comfyui-version`:
+- The pinned commit is `55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc`.
+- Run `./scripts/check-comfyui-version.sh` to independently verify that your target ComfyUI checkout matches the pinned revision and has native MiniMax-H3 nodes registered.
+
 ## MiniMax-H3 Environment Setup
 
 To ensure deterministic video generation and reproducible model weights across local development and the RTX 4090 render host, MiniMax-H3 model weights and revisions are pinned in `.minimax-h3-version`:

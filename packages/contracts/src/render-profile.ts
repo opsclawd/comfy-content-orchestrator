@@ -230,7 +230,7 @@ export const MINIMAX_H3_720P_5S_REF2V_V1_PROFILE: MinimaxH3Ref2vRenderProfile = 
   key: "MINIMAX_H3_720P_5S_REF2V_V1",
   version: 1,
   engine: "minimax_h3_ref2v",
-  workflowHash: "296ca44a3ff9b2836123874dd57985152514633daefcc3256849c8b969737d3b",
+  workflowHash: "37146c0f83e2ce74def1fdac46d0f636a0a408ddcc342b06c843b7acb04c7696",
   modelHashes: Object.freeze({
     "models/clip/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors":
       "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
@@ -282,6 +282,12 @@ export interface ProfileInjectionTopology {
   readonly refImageSize?: NodeInjectionTarget | undefined;
   readonly referenceNode?: NodeInjectionTarget | undefined;
   readonly referenceImages?: readonly NodeInjectionTarget[] | undefined;
+  /**
+   * Dotted Autogrow input keys on `referenceNode` for each `referenceImages` slot,
+   * e.g. "ref_images.ref_image_0" .. "ref_images.ref_image_8" (0-indexed, index-aligned
+   * with `referenceImages`). Present for N active slots; absent for inactive slots.
+   */
+  readonly referenceSlotFields?: readonly string[] | undefined;
 }
 
 export const LTX_25_720P_5S_V1_INJECTION_TOPOLOGY: ProfileInjectionTopology = Object.freeze({
@@ -387,7 +393,7 @@ export const MINIMAX_H3_720P_5S_REF2V_V1_INJECTION_TOPOLOGY: ProfileInjectionTop
     referenceNode: Object.freeze({
       nodeId: "105",
       classType: "MiniMaxH3ReferenceToVideo",
-      inputField: "ref_image_1"
+      inputField: "ref_images"
     }),
     referenceImages: Object.freeze([
       Object.freeze({ nodeId: "201", classType: "LoadImage", inputField: "image" }),
@@ -399,6 +405,17 @@ export const MINIMAX_H3_720P_5S_REF2V_V1_INJECTION_TOPOLOGY: ProfileInjectionTop
       Object.freeze({ nodeId: "207", classType: "LoadImage", inputField: "image" }),
       Object.freeze({ nodeId: "208", classType: "LoadImage", inputField: "image" }),
       Object.freeze({ nodeId: "209", classType: "LoadImage", inputField: "image" })
+    ]),
+    referenceSlotFields: Object.freeze([
+      "ref_images.ref_image_0",
+      "ref_images.ref_image_1",
+      "ref_images.ref_image_2",
+      "ref_images.ref_image_3",
+      "ref_images.ref_image_4",
+      "ref_images.ref_image_5",
+      "ref_images.ref_image_6",
+      "ref_images.ref_image_7",
+      "ref_images.ref_image_8"
     ])
   });
 

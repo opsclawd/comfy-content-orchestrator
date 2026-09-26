@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { LTX_FPS } from "@cco/contracts";
+import { LTX_FPS, MINIMAX_H3_720P_5S_REF2V_V1_INJECTION_TOPOLOGY } from "@cco/contracts";
 import {
   ApprovedCandidateMediaHashMismatchError,
   AssembleGenerationManifest,
@@ -58,6 +58,8 @@ import {
   ReferenceImageStagingError,
   RenderJobExecutionError,
   RenderJobPayloadValidationError,
+  validateDeclaredTopology,
+  validateMiniMaxH3ReferenceToVideoInputSchema,
   WorkflowHashMismatchError,
   type AssembleProductionManifestInput,
   type ProductionManifestAssembler,
@@ -2825,7 +2827,7 @@ describe("Certified Render Job Executor", () => {
 
     type WorkflowNodeMap = Record<string, { inputs: Record<string, unknown>; class_type?: string }>;
 
-    it("mutates Ref2V workflow with N=2 references by keeping slots 1..2 and pruning slots 3..9", async () => {
+    it("mutates Ref2V workflow with N=2 references by keeping slots 1..2 wired and pruning slots 3..9", async () => {
       const realRef2vPath = resolve(
         DEFAULT_REPO_ROOT,
         "templates/minimax_h3_720p_ref2v_124f_api.json"
@@ -2848,17 +2850,18 @@ describe("Certified Render Job Executor", () => {
       for (let slot = 3; slot <= 9; slot++) {
         expect(mutated[String(200 + slot)]).toBeUndefined();
       }
-      // Node 105 inputs connected directly to active loaders 201 and 202
+      // Node 105 keeps per-slot Autogrow connections for active slots 0..1
       const node105Inputs = mutated["105"]?.inputs;
-      expect(node105Inputs?.ref_image_1).toEqual(["201", 0]);
-      expect(node105Inputs?.ref_image_2).toEqual(["202", 0]);
-      for (let slot = 3; slot <= 9; slot++) {
-        expect(node105Inputs?.[`ref_image_${slot}`]).toBeUndefined();
+      expect(node105Inputs?.["ref_images.ref_image_0"]).toEqual(["201", 0]);
+      expect(node105Inputs?.["ref_images.ref_image_1"]).toEqual(["202", 0]);
+      // Inactive slots 2..8 pruned
+      for (let s = 2; s <= 8; s++) {
+        expect(node105Inputs?.[`ref_images.ref_image_${s}`]).toBeUndefined();
       }
       expect(node105Inputs?.ref_image_size).toBe("max");
     });
 
-    it("mutates Ref2V workflow with N=1 references by keeping slot 1, pruning slots 2..9, and connecting ref_image_1 to 201", async () => {
+    it("mutates Ref2V workflow with N=1 references by keeping slot 0 wired and pruning slots 1..8", async () => {
       const realRef2vPath = resolve(
         DEFAULT_REPO_ROOT,
         "templates/minimax_h3_720p_ref2v_124f_api.json"
@@ -2877,13 +2880,16 @@ describe("Certified Render Job Executor", () => {
       expect(mutated["201"]?.inputs.image).toBe("ref-slot-1.png");
       for (let slot = 2; slot <= 9; slot++) {
         expect(mutated[String(200 + slot)]).toBeUndefined();
-        expect(mutated["105"]?.inputs[`ref_image_${slot}`]).toBeUndefined();
       }
-      expect(mutated["105"]?.inputs.ref_image_1).toEqual(["201", 0]);
-      expect(mutated["105"]?.inputs.ref_image_size).toBe("max");
+      const node105Inputs = mutated["105"]?.inputs;
+      expect(node105Inputs?.["ref_images.ref_image_0"]).toEqual(["201", 0]);
+      for (let s = 1; s <= 8; s++) {
+        expect(node105Inputs?.[`ref_images.ref_image_${s}`]).toBeUndefined();
+      }
+      expect(node105Inputs?.ref_image_size).toBe("max");
     });
 
-    it("mutates Ref2V workflow with N=0 references by pruning all reference nodes and inputs", async () => {
+    it("mutates Ref2V workflow with N=0 references by pruning all loaders, omitting all ref_image slots, and omitting ref_image_size", async () => {
       const realRef2vPath = resolve(
         DEFAULT_REPO_ROOT,
         "templates/minimax_h3_720p_ref2v_124f_api.json"
@@ -2897,13 +2903,19 @@ describe("Certified Render Job Executor", () => {
           referenceImages: []
         },
         fakeMinimaxRef2vProfile
-      ) as unknown as WorkflowNodeMap;
+      ) as unknown as Record<string, { inputs: Record<string, unknown> } | undefined>;
 
+      // All 9 LoadImage nodes pruned
       for (let slot = 1; slot <= 9; slot++) {
         expect(mutated[String(200 + slot)]).toBeUndefined();
-        expect(mutated["105"]?.inputs[`ref_image_${slot}`]).toBeUndefined();
       }
-      expect(mutated["105"]?.inputs.ref_image_size).toBeUndefined();
+      // Node 105 inputs omit all per-slot ref_image fields and ref_image_size
+      const node105Inputs = mutated["105"]?.inputs;
+      for (let s = 0; s <= 8; s++) {
+        expect(node105Inputs?.[`ref_images.ref_image_${s}`]).toBeUndefined();
+      }
+      expect(node105Inputs?.ref_image_size).toBeUndefined();
+      expect(node105Inputs?.prompt).toBe("Zero ref prompt");
     });
 
     it("mutates Ref2V workflow with N=9 references retaining all slots and inputs", async () => {
@@ -2925,9 +2937,12 @@ describe("Certified Render Job Executor", () => {
       for (let slot = 1; slot <= 9; slot++) {
         expect(mutated[String(200 + slot)]).toBeDefined();
         expect(mutated[String(200 + slot)]?.inputs.image).toBe(`ref-${slot}.png`);
-        expect(mutated["105"]?.inputs[`ref_image_${slot}`]).toEqual([String(200 + slot), 0]);
       }
-      expect(mutated["105"]?.inputs.ref_image_size).toBe("max");
+      const node105Inputs = mutated["105"]?.inputs;
+      for (let s = 0; s <= 8; s++) {
+        expect(node105Inputs?.[`ref_images.ref_image_${s}`]).toEqual([String(201 + s), 0]);
+      }
+      expect(node105Inputs?.ref_image_size).toBe("max");
     });
 
     it("fails closed when more than 9 reference images are supplied", async () => {
@@ -3825,10 +3840,10 @@ describe("Certified Render Job Executor", () => {
         );
       });
 
-      it("fails closed on topology drift when a ref_image socket in Ref2V template is disconnected or wrong", async () => {
+      it("fails closed on topology drift when a ref_images.ref_image_N slot in Ref2V template is disconnected or wrong", async () => {
         const realRef2vJson = await readFile(realRef2vPath, "utf8");
         const corruptWorkflow = JSON.parse(realRef2vJson);
-        corruptWorkflow["105"].inputs.ref_image_1 = ["999", 0];
+        corruptWorkflow["105"].inputs["ref_images.ref_image_0"] = ["999", 0];
 
         expect(() =>
           mutateWorkflow(
@@ -3837,14 +3852,14 @@ describe("Certified Render Job Executor", () => {
             fakeMinimaxRef2vProfile
           )
         ).toThrow(
-          /Expected input "ref_image_1" on node "105" to connect to \["201", 0\], got \["999",0\]/
+          /Expected node "105" input "ref_images.ref_image_0" to connect to \["201",\s*0\], got \["999",\s*0\]/
         );
       });
 
-      it("fails closed on topology drift when a ref_image socket in Ref2V template is missing", async () => {
+      it("fails closed on topology drift when a LoadImage loader node in Ref2V template is missing", async () => {
         const realRef2vJson = await readFile(realRef2vPath, "utf8");
         const corruptWorkflow = JSON.parse(realRef2vJson);
-        delete corruptWorkflow["105"].inputs.ref_image_2;
+        delete corruptWorkflow["201"];
 
         expect(() =>
           mutateWorkflow(
@@ -3852,7 +3867,286 @@ describe("Certified Render Job Executor", () => {
             { prompt: "test prompt", seed: 42 },
             fakeMinimaxRef2vProfile
           )
-        ).toThrow(/Expected node "105" to contain input "ref_image_2" for reference injection/);
+        ).toThrow(/Expected node "201" to exist with class_type "LoadImage"/);
+      });
+
+      it("validates MiniMaxH3ReferenceToVideo registered input schema correctly", async () => {
+        const realRef2vJson = await readFile(realRef2vPath, "utf8");
+        const baseWorkflow = JSON.parse(realRef2vJson);
+
+        // N=1 schema validation succeeds with direct LoadImage link on slot 0
+        const n1Mutated = mutateWorkflow(
+          realRef2vJson,
+          { prompt: "test", referenceImages: ["image.png"] },
+          fakeMinimaxRef2vProfile
+        ) as unknown as Record<string, unknown>;
+        expect(() =>
+          validateMiniMaxH3ReferenceToVideoInputSchema("105", n1Mutated["105"], n1Mutated, 1)
+        ).not.toThrow();
+
+        // N=2 schema validation succeeds with direct LoadImage links on slots 0 and 1
+        const n2Mutated = mutateWorkflow(
+          realRef2vJson,
+          { prompt: "test", referenceImages: ["img1.png", "img2.png"] },
+          fakeMinimaxRef2vProfile
+        ) as unknown as Record<string, unknown>;
+        expect(() =>
+          validateMiniMaxH3ReferenceToVideoInputSchema("105", n2Mutated["105"], n2Mutated, 2)
+        ).not.toThrow();
+
+        // N=0 schema validation succeeds when all ref_image slots and ref_image_size are omitted
+        const n0Mutated = mutateWorkflow(
+          realRef2vJson,
+          { prompt: "test", referenceImages: [] },
+          fakeMinimaxRef2vProfile
+        ) as unknown as Record<string, unknown>;
+        expect(() =>
+          validateMiniMaxH3ReferenceToVideoInputSchema("105", n0Mutated["105"], n0Mutated, 0)
+        ).not.toThrow();
+
+        // N=0 schema validation throws if a ref_image slot is present
+        const n0WithRefImages = JSON.parse(JSON.stringify(n0Mutated));
+        n0WithRefImages["105"].inputs["ref_images.ref_image_0"] = ["201", 0];
+        expect(() =>
+          validateMiniMaxH3ReferenceToVideoInputSchema(
+            "105",
+            n0WithRefImages["105"],
+            n0WithRefImages,
+            0
+          )
+        ).toThrow(
+          /Node "105" input "ref_images.ref_image_0" must be omitted for inactive reference slot 0/
+        );
+
+        // Missing required input throws
+        const missingClip = JSON.parse(JSON.stringify(baseWorkflow));
+        delete missingClip["105"].inputs.clip;
+        expect(() =>
+          validateMiniMaxH3ReferenceToVideoInputSchema("105", missingClip["105"], missingClip, 1)
+        ).toThrow(/missing required registered input "clip"/);
+
+        // Active slot 1 with no link (activeReferenceCount claims 2 but slot 1 missing) throws
+        const missingSlot1 = JSON.parse(JSON.stringify(n1Mutated));
+        expect(() =>
+          validateMiniMaxH3ReferenceToVideoInputSchema("105", missingSlot1["105"], missingSlot1, 2)
+        ).toThrow(
+          /Node "105" input "ref_images.ref_image_1" must be a valid link tuple pointing to an existing upstream node for active reference slot 1/
+        );
+      });
+
+      it("fails closed on topology drift when duplicate node IDs appear in referenceImages", async () => {
+        const corruptTopology = {
+          ...MINIMAX_H3_720P_5S_REF2V_V1_INJECTION_TOPOLOGY,
+          referenceImages: [
+            { nodeId: "201", classType: "LoadImage", inputField: "image" },
+            { nodeId: "201", classType: "LoadImage", inputField: "image" }
+          ]
+        };
+        const realRef2vJson = await readFile(realRef2vPath, "utf8");
+        const workflow = JSON.parse(realRef2vJson);
+
+        expect(() => validateDeclaredTopology(workflow, corruptTopology)).toThrow(
+          /Duplicate node ID "201" in referenceImages topology targets/
+        );
+      });
+
+      it("executes reference-directed production render with multiple references (N=2): stages both, wires per-slot Autogrow inputs, and populates manifest", async () => {
+        const { createExecutor, validJob, mockRefAssetRepo, fakeAsset } =
+          await createValidRef2vSetup();
+
+        const fakeAsset2: DomainReferenceAsset = {
+          id: "asset-style-222" as ReferenceAssetId,
+          clientId: "client-001",
+          storageBucket: "cco-media",
+          storageObjectKey: "refs/style.png",
+          contentHashSha256: "b".repeat(64),
+          mimeType: "image/png",
+          assetType: "image",
+          libraryRole: "style"
+        };
+
+        (mockRefAssetRepo.listBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([
+          fakeAsset,
+          fakeAsset2
+        ]);
+        (mockRefAssetRepo.findByIds as ReturnType<typeof vi.fn>).mockResolvedValue([
+          fakeAsset,
+          fakeAsset2
+        ]);
+        (mockRefAssetRepo.listBindingsBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([
+          {
+            sceneId: sampleSceneId,
+            specRevision: 1,
+            referenceAssetId: fakeAsset.id,
+            role: "subject_identity",
+            weight: 1,
+            hints: null,
+            archivedAt: null
+          },
+          {
+            sceneId: sampleSceneId,
+            specRevision: 1,
+            referenceAssetId: fakeAsset2.id,
+            role: "style",
+            weight: 1,
+            hints: null,
+            archivedAt: null
+          }
+        ]);
+
+        const stagedFiles: string[] = [];
+        const mockStage = vi.fn().mockImplementation(async (file: string) => {
+          stagedFiles.push(file);
+          return { filename: file, subfolder: "", type: "input" as const };
+        });
+        const mockCleanup = vi.fn().mockResolvedValue(undefined);
+
+        const mockExecute = vi.fn().mockResolvedValue({
+          status: "succeeded",
+          promptId: "prompt-multi-ref",
+          outputObjectKeys: ["render.mp4"],
+          durationMs: 5000,
+          profile: {} as ProfileRenderIdentity,
+          preDispatchGpu: {
+            totalVramMb: 24576,
+            usedVramMb: 4096,
+            freeVramMb: 20480,
+            reservedVramMb: 4096,
+            measuredAt: new Date().toISOString()
+          }
+        });
+
+        const mockAssembler = vi.fn().mockReturnValue({ manifestId: "multi-ref-ok" });
+
+        const mockStorage: ObjectStoragePort = {
+          getObject: vi.fn().mockImplementation(async (input: { key: string }) => {
+            const isFirst = input.key.includes("hero");
+            return {
+              body: new Uint8Array([isFirst ? 1 : 2]),
+              contentLength: 1,
+              contentType: "image/png"
+            };
+          }),
+          putObject: vi.fn().mockResolvedValue(undefined),
+          deleteObject: vi.fn().mockResolvedValue(undefined),
+          copyObject: vi.fn().mockResolvedValue({ bucket: "cco-media", key: "refs/test.png" }),
+          headObject: vi.fn().mockResolvedValue({ contentLength: 1, contentType: "image/png" })
+        };
+
+        const executor = createExecutor({
+          executeProfileRender: mockExecute,
+          productionManifestAssembler: { assemble: mockAssembler },
+          objectStorage: mockStorage,
+          stageReferenceImage: { stage: mockStage, cleanup: mockCleanup },
+          hashBytes: {
+            hashBytes: async (bytes: Uint8Array) =>
+              bytes[0] === 1 ? "a".repeat(64) : "b".repeat(64)
+          }
+        });
+
+        const result = await executor(validJob);
+        expect(result).toBeDefined();
+
+        // 2 references staged and cleaned up
+        expect(mockStage).toHaveBeenCalledTimes(2);
+        expect(mockCleanup).toHaveBeenCalledTimes(2);
+
+        // Verify submitted workflow passed to executeProfileRender
+        expect(mockExecute).toHaveBeenCalledTimes(1);
+        const submittedWorkflow = mockExecute.mock.calls[0]![0].workflow;
+        // Node 105 connects slots 0 and 1 directly to their LoadImage nodes
+        expect(submittedWorkflow["105"].inputs["ref_images.ref_image_0"]).toEqual(["201", 0]);
+        expect(submittedWorkflow["105"].inputs["ref_images.ref_image_1"]).toEqual(["202", 0]);
+        expect(submittedWorkflow["105"].inputs.ref_image_size).toBe("max");
+        // Inactive slots pruned
+        for (let s = 2; s <= 8; s++) {
+          expect(submittedWorkflow["105"].inputs[`ref_images.ref_image_${s}`]).toBeUndefined();
+        }
+        // Active image loaders
+        expect(submittedWorkflow["201"]).toBeDefined();
+        expect(submittedWorkflow["202"]).toBeDefined();
+        // Inactive loaders pruned
+        expect(submittedWorkflow["203"]).toBeUndefined();
+        expect(submittedWorkflow["209"]).toBeUndefined();
+
+        // Verify manifest assembler received both references in canonical order
+        expect(mockAssembler).toHaveBeenCalledTimes(1);
+        const manifestArgs = mockAssembler.mock.calls[0]![0];
+        expect(manifestArgs.referenceImages).toHaveLength(2);
+        expect(manifestArgs.referenceImages[0].slotIndex).toBe(1);
+        expect(manifestArgs.referenceImages[0].promptTag).toBe("<Picture 1>");
+        expect(manifestArgs.referenceImages[0].role).toBe("subject_identity");
+        expect(manifestArgs.referenceImages[1].slotIndex).toBe(2);
+        expect(manifestArgs.referenceImages[1].promptTag).toBe("<Picture 2>");
+        expect(manifestArgs.referenceImages[1].role).toBe("style");
+      });
+
+      it("executes reference-directed production render with zero references (N=0 prompt-only): stages no images, prunes loaders/batch nodes, and populates manifest with referenceImages: []", async () => {
+        const { createExecutor, validJob, mockRefAssetRepo } = await createValidRef2vSetup();
+
+        (mockRefAssetRepo.listBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+        (mockRefAssetRepo.findByIds as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+        (mockRefAssetRepo.listBindingsBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+        const mockStage = vi.fn();
+        const mockCleanup = vi.fn();
+
+        const mockExecute = vi.fn().mockResolvedValue({
+          status: "succeeded",
+          promptId: "prompt-zero-ref",
+          outputObjectKeys: ["render.mp4"],
+          durationMs: 4000,
+          profile: {} as ProfileRenderIdentity,
+          preDispatchGpu: {
+            totalVramMb: 24576,
+            usedVramMb: 4096,
+            freeVramMb: 20480,
+            reservedVramMb: 4096,
+            measuredAt: new Date().toISOString()
+          }
+        });
+
+        const mockAssembler = vi.fn().mockReturnValue({ manifestId: "zero-ref-ok" });
+
+        const mockStorage: ObjectStoragePort = {
+          getObject: vi.fn(),
+          putObject: vi.fn(),
+          deleteObject: vi.fn(),
+          copyObject: vi.fn(),
+          headObject: vi.fn()
+        };
+
+        const executor = createExecutor({
+          executeProfileRender: mockExecute,
+          productionManifestAssembler: { assemble: mockAssembler },
+          objectStorage: mockStorage,
+          stageReferenceImage: { stage: mockStage, cleanup: mockCleanup }
+        });
+
+        const result = await executor(validJob);
+        expect(result).toBeDefined();
+
+        // Zero references staged or fetched
+        expect(mockStage).not.toHaveBeenCalled();
+        expect(mockStorage.getObject).not.toHaveBeenCalled();
+
+        // Verify submitted workflow passed to executeProfileRender
+        expect(mockExecute).toHaveBeenCalledTimes(1);
+        const submittedWorkflow = mockExecute.mock.calls[0]![0].workflow;
+        // Node 105 omits all per-slot ref_image fields and ref_image_size
+        for (let s = 0; s <= 8; s++) {
+          expect(submittedWorkflow["105"].inputs[`ref_images.ref_image_${s}`]).toBeUndefined();
+        }
+        expect(submittedWorkflow["105"].inputs.ref_image_size).toBeUndefined();
+        // All image loaders pruned
+        for (let slot = 1; slot <= 9; slot++) {
+          expect(submittedWorkflow[String(200 + slot)]).toBeUndefined();
+        }
+
+        // Verify manifest assembler received empty referenceImages array
+        expect(mockAssembler).toHaveBeenCalledTimes(1);
+        const manifestArgs = mockAssembler.mock.calls[0]![0];
+        expect(manifestArgs.referenceImages).toEqual([]);
       });
     });
   });

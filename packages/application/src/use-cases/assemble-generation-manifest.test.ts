@@ -1839,7 +1839,7 @@ describe("AssembleGenerationManifest use case", () => {
             width: 1344,
             height: 768,
             ref_image_size: "max",
-            ref_image_1: ["201", 0]
+            "ref_images.ref_image_0": ["201", 0]
           }
         }
       };
@@ -1954,14 +1954,14 @@ describe("AssembleGenerationManifest use case", () => {
               class_type: "MiniMaxH3ReferenceToVideo",
               inputs: {
                 ...(ref2vWorkflow["105"] as { inputs: Record<string, unknown> }).inputs,
-                ref_image_1: ["999", 0]
+                "ref_images.ref_image_0": ["999", 0]
               }
             }
           }
         })
-      ).rejects.toThrow(/referenceNode\.inputs\.ref_image_1/);
+      ).rejects.toThrow(/referenceNode\.inputs\.ref_images\.ref_image_0/);
 
-      // 8. Inactive socket on node 105 still present in submitted workflow
+      // 8. Inactive slot still present in submitted workflow for N=1
       await expect(
         assembler.assemble({
           ...input,
@@ -1971,13 +1971,121 @@ describe("AssembleGenerationManifest use case", () => {
               class_type: "MiniMaxH3ReferenceToVideo",
               inputs: {
                 ...(ref2vWorkflow["105"] as { inputs: Record<string, unknown> }).inputs,
-                ref_image_2: ["202", 0]
+                "ref_images.ref_image_1": ["201", 0]
               }
             }
           }
         })
       ).rejects.toThrow(
-        'referenceNode.inputs.ref_image_2 (inactive slot 2 must not be connected on node "105")'
+        /referenceNode\.inputs\.ref_images\.ref_image_1 \(must be omitted for inactive reference slot 1/
+      );
+
+      // 9. N=0 succeeds with referenceImages: [] and pruned workflow
+      const ref2vN0Inputs = {
+        ...(ref2vWorkflow["105"] as { inputs: Record<string, unknown> }).inputs
+      };
+      delete ref2vN0Inputs["ref_images.ref_image_0"];
+      delete ref2vN0Inputs.ref_image_size;
+      const ref2vN0Workflow: RenderWorkflow = {
+        ...ref2vWorkflow,
+        "105": {
+          ...(ref2vWorkflow["105"] as { class_type: string; inputs: Record<string, unknown> }),
+          inputs: ref2vN0Inputs
+        }
+      };
+      delete (ref2vN0Workflow as Record<string, unknown>)["201"];
+
+      const n0Result = await assembler.assemble({
+        ...input,
+        workflow: ref2vN0Workflow,
+        referenceImages: []
+      });
+      expect(n0Result.manifestPayload.referenceImages).toEqual([]);
+
+      // 9b. N=0 fails if a ref_image slot is not omitted
+      await expect(
+        assembler.assemble({
+          ...input,
+          workflow: {
+            ...ref2vN0Workflow,
+            "105": {
+              ...(ref2vN0Workflow["105"] as {
+                class_type: string;
+                inputs: Record<string, unknown>;
+              }),
+              inputs: {
+                ...ref2vN0Inputs,
+                "ref_images.ref_image_0": ["201", 0]
+              }
+            }
+          },
+          referenceImages: []
+        })
+      ).rejects.toThrow(/referenceNode\.inputs\.ref_images\.ref_image_0/);
+
+      // 10. N=2 with both slots directly wired succeeds
+      const ref2vN2Workflow: RenderWorkflow = {
+        ...ref2vWorkflow,
+        "202": { class_type: "LoadImage", inputs: { image: "staged/ref2.png" } },
+        "105": {
+          ...(ref2vWorkflow["105"] as { class_type: string; inputs: Record<string, unknown> }),
+          inputs: {
+            ...(ref2vWorkflow["105"] as { inputs: Record<string, unknown> }).inputs,
+            "ref_images.ref_image_1": ["202", 0]
+          }
+        }
+      };
+
+      const resultN2 = await assembler.assemble({
+        ...input,
+        workflow: ref2vN2Workflow,
+        referenceImages: [
+          input.referenceImages![0]!,
+          {
+            slotIndex: 2,
+            promptTag: "<Picture 2>",
+            assetId: "00000000-0000-4000-8000-000000000021",
+            contentHashSha256: "b".repeat(64),
+            role: "product",
+            stagedAs: { name: "ref2.png", subfolder: "staged" },
+            injectionTarget: { nodeId: "202", classType: "LoadImage", inputField: "image" }
+          }
+        ]
+      });
+      expect(resultN2.manifestPayload.referenceImages).toHaveLength(2);
+
+      // 11. Inactive slot 2 present when N=2 fails
+      await expect(
+        assembler.assemble({
+          ...input,
+          workflow: {
+            ...ref2vN2Workflow,
+            "105": {
+              ...(ref2vN2Workflow["105"] as {
+                class_type: string;
+                inputs: Record<string, unknown>;
+              }),
+              inputs: {
+                ...(ref2vN2Workflow["105"] as { inputs: Record<string, unknown> }).inputs,
+                "ref_images.ref_image_2": ["201", 0]
+              }
+            }
+          },
+          referenceImages: [
+            input.referenceImages![0]!,
+            {
+              slotIndex: 2,
+              promptTag: "<Picture 2>",
+              assetId: "00000000-0000-4000-8000-000000000021",
+              contentHashSha256: "b".repeat(64),
+              role: "product",
+              stagedAs: { name: "ref2.png", subfolder: "staged" },
+              injectionTarget: { nodeId: "202", classType: "LoadImage", inputField: "image" }
+            }
+          ]
+        })
+      ).rejects.toThrow(
+        /referenceNode\.inputs\.ref_images\.ref_image_2 \(must be omitted for inactive reference slot 2/
       );
     });
 

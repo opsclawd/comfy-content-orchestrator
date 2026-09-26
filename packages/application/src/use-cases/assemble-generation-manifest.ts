@@ -633,6 +633,9 @@ export class AssembleGenerationManifest {
           `executedInstruction.byteLength (expected ${expectedInstructionBytes}, got ${input.executedInstruction.byteLength})`
         );
       }
+      if (!input.referenceImages || !Array.isArray(input.referenceImages)) {
+        throw new IncompleteManifestError("referenceImages");
+      }
       if (input.referenceImages && input.referenceImages.length > 0) {
         for (const entry of input.referenceImages) {
           const injectedNode = input.workflow?.[entry.injectionTarget.nodeId] as
@@ -673,25 +676,36 @@ export class AssembleGenerationManifest {
             `referenceNode (node "${topology.referenceNode.nodeId}" with class "${topology.referenceNode.classType}" missing from workflow)`
           );
         }
-        const activeSlots = new Set((input.referenceImages ?? []).map((e) => e.slotIndex));
-        for (const entry of input.referenceImages ?? []) {
-          const expectedLink = [entry.injectionTarget.nodeId, 0];
-          const actualLink = refNode.inputs?.[`ref_image_${entry.slotIndex}`];
-          if (
-            !Array.isArray(actualLink) ||
-            actualLink[0] !== expectedLink[0] ||
-            actualLink[1] !== expectedLink[1]
-          ) {
-            throw new IncompleteManifestError(
-              `referenceNode.inputs.ref_image_${entry.slotIndex} (expected connection to ["${entry.injectionTarget.nodeId}", 0], got ${JSON.stringify(actualLink)})`
-            );
+        if (topology.referenceSlotFields) {
+          const N = (input.referenceImages ?? []).length;
+          for (let s = 0; s < topology.referenceSlotFields.length; s++) {
+            const slotField = topology.referenceSlotFields[s]!;
+            const actualLink = refNode.inputs?.[slotField];
+            if (s < N) {
+              const expectedNodeId = input.referenceImages![s]!.injectionTarget.nodeId;
+              if (
+                !Array.isArray(actualLink) ||
+                actualLink[0] !== expectedNodeId ||
+                actualLink[1] !== 0
+              ) {
+                throw new IncompleteManifestError(
+                  `referenceNode.inputs.${slotField} (expected connection to ${JSON.stringify([expectedNodeId, 0])}, got ${JSON.stringify(actualLink)})`
+                );
+              }
+            } else if (actualLink !== undefined) {
+              throw new IncompleteManifestError(
+                `referenceNode.inputs.${slotField} (must be omitted for inactive reference slot ${s}, got ${JSON.stringify(actualLink)})`
+              );
+            }
           }
-        }
-        for (let s = 1; s <= 9; s++) {
-          if (!activeSlots.has(s) && refNode.inputs?.[`ref_image_${s}`] !== undefined) {
-            throw new IncompleteManifestError(
-              `referenceNode.inputs.ref_image_${s} (inactive slot ${s} must not be connected on node "${topology.referenceNode.nodeId}")`
-            );
+          if (topology.refImageSize) {
+            const actualRefImageSize = refNode.inputs?.[topology.refImageSize.inputField];
+            const expectedRefImageSize = N > 0 ? "max" : undefined;
+            if (actualRefImageSize !== expectedRefImageSize) {
+              throw new IncompleteManifestError(
+                `referenceNode.inputs.${topology.refImageSize.inputField} (expected ${JSON.stringify(expectedRefImageSize)}, got ${JSON.stringify(actualRefImageSize)})`
+              );
+            }
           }
         }
       }

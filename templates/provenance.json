@@ -290,7 +290,7 @@
       "id": "minimax-h3-720p-124f-ref2v",
       "engine": "minimax_h3_ref2v",
       "workflowRelativePath": "minimax_h3_720p_ref2v_124f_api.json",
-      "expectedWorkflowHash": "296ca44a3ff9b2836123874dd57985152514633daefcc3256849c8b969737d3b",
+      "expectedWorkflowHash": "37146c0f83e2ce74def1fdac46d0f636a0a408ddcc342b06c843b7acb04c7696",
       "source": {
         "kind": "authored_from_spec",
         "uri": "https://github.com/comfyanonymous/ComfyUI",

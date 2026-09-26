@@ -647,7 +647,24 @@ export function validateDeclaredTopology(
     checkTarget(topology.refImageSize, "refImageSize");
   }
   if (topology.referenceNode) {
-    checkTarget(topology.referenceNode, "referenceNode");
+    if (topology.referenceSlotFields) {
+      // Per-slot Autogrow inputs (ref_images.ref_image_N) are validated separately below;
+      // the referenceNode itself has no static literal inputField key to check here.
+      const node = workflow[topology.referenceNode.nodeId];
+      if (
+        typeof node !== "object" ||
+        node === null ||
+        (node as { class_type?: string }).class_type !== topology.referenceNode.classType ||
+        typeof (node as { inputs?: unknown }).inputs !== "object" ||
+        (node as { inputs?: unknown }).inputs === null
+      ) {
+        throw new RenderJobExecutionError(
+          `Expected node "${topology.referenceNode.nodeId}" to exist with class_type "${topology.referenceNode.classType}" and inputs object for referenceNode injection`
+        );
+      }
+    } else {
+      checkTarget(topology.referenceNode, "referenceNode");
+    }
   }
   if (topology.referenceImage) {
     checkTarget(topology.referenceImage, "referenceImage");
@@ -659,33 +676,37 @@ export function validateDeclaredTopology(
     checkTarget(topology.lastFrame, "lastFrame");
   }
   if (topology.referenceImages) {
+    const seenImageNodeIds = new Set<string>();
     for (let i = 0; i < topology.referenceImages.length; i++) {
-      checkTarget(topology.referenceImages[i]!, `referenceImages[${i}]`);
+      const target = topology.referenceImages[i]!;
+      if (seenImageNodeIds.has(target.nodeId)) {
+        throw new RenderJobExecutionError(
+          `Duplicate node ID "${target.nodeId}" in referenceImages topology targets`
+        );
+      }
+      seenImageNodeIds.add(target.nodeId);
+      checkTarget(target, `referenceImages[${i}]`);
     }
-    if (topology.referenceNode) {
-      checkTarget(topology.referenceNode, "referenceNode");
+    if (topology.referenceSlotFields && topology.referenceNode) {
+      if (topology.referenceSlotFields.length !== topology.referenceImages.length) {
+        throw new RenderJobExecutionError(
+          `referenceSlotFields length (${topology.referenceSlotFields.length}) must match referenceImages length (${topology.referenceImages.length})`
+        );
+      }
       const refNode = workflow[topology.referenceNode.nodeId] as
         { class_type?: string; inputs?: Record<string, unknown> } | undefined;
-      const refInputs = refNode?.inputs;
-      if (refInputs) {
-        for (let s = 1; s <= 9; s++) {
-          const inputName = `ref_image_${s}`;
-          if (!Object.prototype.hasOwnProperty.call(refInputs, inputName)) {
-            throw new RenderJobExecutionError(
-              `Expected node "${topology.referenceNode.nodeId}" to contain input "${inputName}" for reference injection`
-            );
-          }
-          const expectedLoaderId = topology.referenceImages[s - 1]?.nodeId;
-          const actualLink = refInputs[inputName];
-          if (
-            !Array.isArray(actualLink) ||
-            actualLink[0] !== expectedLoaderId ||
-            actualLink[1] !== 0
-          ) {
-            throw new RenderJobExecutionError(
-              `Expected input "${inputName}" on node "${topology.referenceNode.nodeId}" to connect to ["${expectedLoaderId}", 0], got ${JSON.stringify(actualLink)}`
-            );
-          }
+      for (let i = 0; i < topology.referenceSlotFields.length; i++) {
+        const slotField = topology.referenceSlotFields[i]!;
+        const expectedTarget = topology.referenceImages[i]!;
+        const actualLink = refNode?.inputs?.[slotField];
+        if (
+          !Array.isArray(actualLink) ||
+          actualLink[0] !== expectedTarget.nodeId ||
+          actualLink[1] !== 0
+        ) {
+          throw new RenderJobExecutionError(
+            `Expected node "${topology.referenceNode.nodeId}" input "${slotField}" to connect to ${JSON.stringify([expectedTarget.nodeId, 0])}, got ${JSON.stringify(actualLink)}`
+          );
         }
       }
     }
@@ -894,20 +915,17 @@ export function mutateWorkflow(
         delete workflow[target.nodeId];
       }
 
-      // 3. Connect ref_image_1..N on referenceNode and prune inactive slots (N+1..9)
+      // 3. Prune unused per-slot ref_images.ref_image_N Autogrow inputs on referenceNode
+      // (slots 0..N-1 stay wired to their LoadImage nodes by the static template)
       const refNode = topology.referenceNode ? workflow[topology.referenceNode.nodeId] : undefined;
       const refNodeInputs =
         typeof refNode === "object" && refNode !== null && "inputs" in refNode
           ? (refNode as { inputs: Record<string, unknown> }).inputs
           : undefined;
 
-      if (refNodeInputs) {
-        for (let s = 1; s <= N; s++) {
-          const targetNodeId = topology.referenceImages[s - 1]!.nodeId;
-          refNodeInputs[`ref_image_${s}`] = [targetNodeId, 0];
-        }
-        for (let s = N + 1; s <= 9; s++) {
-          delete refNodeInputs[`ref_image_${s}`];
+      if (refNodeInputs && topology.referenceSlotFields) {
+        for (let i = N; i < topology.referenceSlotFields.length; i++) {
+          delete refNodeInputs[topology.referenceSlotFields[i]!];
         }
       }
 
@@ -923,6 +941,18 @@ export function mutateWorkflow(
       }
       if (topology.height && refNodeInputs && profile?.baseline.height) {
         refNodeInputs[topology.height.inputField] = profile.baseline.height;
+      }
+
+      if (
+        topology.referenceNode &&
+        topology.referenceNode.classType === "MiniMaxH3ReferenceToVideo"
+      ) {
+        validateMiniMaxH3ReferenceToVideoInputSchema(
+          topology.referenceNode.nodeId,
+          workflow[topology.referenceNode.nodeId],
+          workflow,
+          N
+        );
       }
     }
   } else {
@@ -999,6 +1029,111 @@ export function mutateWorkflow(
   }
 
   return workflow as RenderWorkflow;
+}
+
+export function validateMiniMaxH3ReferenceToVideoInputSchema(
+  nodeId: string,
+  nodeData: unknown,
+  workflow: Record<string, unknown>,
+  activeReferenceCount: number
+): void {
+  if (
+    typeof nodeData !== "object" ||
+    nodeData === null ||
+    (nodeData as { class_type?: string }).class_type !== "MiniMaxH3ReferenceToVideo"
+  ) {
+    throw new RenderJobExecutionError(
+      `Node "${nodeId}" must have class_type "MiniMaxH3ReferenceToVideo"`
+    );
+  }
+  const inputs = (nodeData as { inputs?: Record<string, unknown> }).inputs;
+  if (typeof inputs !== "object" || inputs === null) {
+    throw new RenderJobExecutionError(`Node "${nodeId}" inputs must be a valid object`);
+  }
+
+  // Required inputs
+  for (const req of ["clip", "vae", "audio_vae", "prompt", "width", "height", "length"]) {
+    if (!Object.prototype.hasOwnProperty.call(inputs, req)) {
+      throw new RenderJobExecutionError(
+        `Node "${nodeId}" (MiniMaxH3ReferenceToVideo) missing required registered input "${req}"`
+      );
+    }
+  }
+
+  // Check required link connections
+  for (const linkReq of ["clip", "vae", "audio_vae"]) {
+    const link = inputs[linkReq];
+    if (
+      !Array.isArray(link) ||
+      link.length !== 2 ||
+      typeof link[0] !== "string" ||
+      typeof link[1] !== "number" ||
+      !workflow[link[0]]
+    ) {
+      throw new RenderJobExecutionError(
+        `Node "${nodeId}" input "${linkReq}" must be a valid link tuple pointing to an existing upstream node`
+      );
+    }
+  }
+
+  // Check numeric controls
+  if (typeof inputs.width !== "number" || inputs.width <= 0) {
+    throw new RenderJobExecutionError(`Node "${nodeId}" input "width" must be a positive integer`);
+  }
+  if (typeof inputs.height !== "number" || inputs.height <= 0) {
+    throw new RenderJobExecutionError(`Node "${nodeId}" input "height" must be a positive integer`);
+  }
+  if (typeof inputs.length !== "number" || inputs.length <= 0) {
+    throw new RenderJobExecutionError(`Node "${nodeId}" input "length" must be a positive integer`);
+  }
+  if (typeof inputs.prompt !== "string" || inputs.prompt.trim().length === 0) {
+    throw new RenderJobExecutionError(`Node "${nodeId}" input "prompt" must be a non-empty string`);
+  }
+
+  // Optional inputs
+  if (inputs.ref_image_size !== undefined) {
+    if (inputs.ref_image_size !== "match" && inputs.ref_image_size !== "max") {
+      throw new RenderJobExecutionError(
+        `Node "${nodeId}" input "ref_image_size" must be "match" or "max", got "${inputs.ref_image_size}"`
+      );
+    }
+  }
+
+  if (activeReferenceCount === 0 && inputs.ref_image_size !== undefined) {
+    throw new RenderJobExecutionError(
+      `For N=0 references, node "${nodeId}" input "ref_image_size" must be omitted, got ${JSON.stringify(inputs.ref_image_size)}`
+    );
+  }
+
+  // ref_images is a native Autogrow input exposed as per-slot dotted keys
+  // ref_images.ref_image_0 .. ref_images.ref_image_8 (0-indexed, up to 9 slots).
+  for (let s = 0; s < 9; s++) {
+    const slotField = `ref_images.ref_image_${s}`;
+    const link = inputs[slotField];
+    if (s < activeReferenceCount) {
+      if (
+        !Array.isArray(link) ||
+        link.length !== 2 ||
+        typeof link[0] !== "string" ||
+        typeof link[1] !== "number" ||
+        !workflow[link[0]]
+      ) {
+        throw new RenderJobExecutionError(
+          `Node "${nodeId}" input "${slotField}" must be a valid link tuple pointing to an existing upstream node for active reference slot ${s}`
+        );
+      }
+      const upstreamNode = workflow[link[0]] as { class_type?: string } | undefined;
+      if (upstreamNode?.class_type !== "LoadImage") {
+        throw new RenderJobExecutionError(
+          `Node "${nodeId}" input "${slotField}" must connect to a LoadImage node, got "${upstreamNode?.class_type}"`
+        );
+      }
+    } else if (link !== undefined) {
+      throw new RenderJobExecutionError(
+        `Node "${nodeId}" input "${slotField}" must be omitted for inactive reference slot ${s} (activeReferenceCount=${activeReferenceCount})`
+      );
+    }
+  }
 }
 
 export function createCertifiedRenderJobExecutor(
@@ -1519,6 +1654,15 @@ export function createCertifiedRenderJobExecutor(
         },
         profile
       );
+
+      if (isRef2v && topology?.referenceNode) {
+        validateMiniMaxH3ReferenceToVideoInputSchema(
+          topology.referenceNode.nodeId,
+          (mutatedWorkflow as Record<string, unknown>)[topology.referenceNode.nodeId],
+          mutatedWorkflow as Record<string, unknown>,
+          stagedRefPaths.length
+        );
+      }
 
       // 5. Construct ProfileRenderIdentity
       const identity: ProfileRenderIdentity = Object.freeze({
