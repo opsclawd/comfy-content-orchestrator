@@ -54,6 +54,13 @@ export interface CertifyCliOptions {
   readonly runnerMode: "dynamicvram" | "highvram";
   readonly highvram: boolean;
   readonly referenceImagePath?: string | undefined;
+  /**
+   * All --reference-image occurrences in order. For single-reference profiles
+   * (e.g. LTX/i2v) this is a 0-1 element convenience alias of referenceImagePath;
+   * for multi-reference profiles (e.g. minimax_h3_ref2v) this supplies each
+   * Autogrow slot 0..N-1 in order (N=0 is a valid no-reference run).
+   */
+  readonly referenceImagePaths: readonly string[];
 }
 
 export type CertifyCliParsedArgs =
@@ -138,7 +145,10 @@ Optional flags:
   --output-root <path>             Root directory for certification evidence (default: certification/<engine-folder>)
   --highvram                       Enable HighVRAM comparator mode (default: DynamicVRAM)
   --runner-mode <mode>             Memory runner mode: dynamicvram | highvram (default: dynamicvram)
-  --reference-image <path>         Path to reference image PNG for image-to-video profiles
+  --reference-image <path>         Path to reference image PNG for image-to-video profiles.
+                                    Repeatable for multi-reference profiles (e.g. minimax-h3
+                                    ref2v): each occurrence fills the next Autogrow slot in
+                                    order (0 occurrences = a valid no-reference run).
   --help, -h                       Show this help message`;
 }
 
@@ -167,7 +177,7 @@ export function parseCertifyCliArgs(
   let outputRoot: string | undefined;
   let highvram = false;
   let runnerMode: "dynamicvram" | "highvram" | undefined;
-  let referenceImagePath: string | undefined;
+  const referenceImagePaths: string[] = [];
 
   const seenFlags = new Set<string>();
 
@@ -200,7 +210,7 @@ export function parseCertifyCliArgs(
         throw new Error(`Unknown flag: ${flag}`);
       }
 
-      if (seenFlags.has(flag)) {
+      if (flag !== "--reference-image" && seenFlags.has(flag)) {
         throw new Error(`Duplicate flag: ${flag}`);
       }
       seenFlags.add(flag);
@@ -274,7 +284,7 @@ export function parseCertifyCliArgs(
           }
           break;
         case "--reference-image":
-          referenceImagePath = value;
+          referenceImagePaths.push(value!);
           break;
       }
     } else {
@@ -327,7 +337,8 @@ export function parseCertifyCliArgs(
       outputRoot: effectiveOutputRoot,
       runnerMode: effectiveRunnerMode,
       highvram: effectiveRunnerMode === "highvram",
-      referenceImagePath
+      referenceImagePath: referenceImagePaths[0],
+      referenceImagePaths: Object.freeze([...referenceImagePaths])
     })
   });
 }
@@ -417,7 +428,8 @@ export async function runCertificationCli(
     gpuIndex,
     outputRoot,
     runnerMode,
-    referenceImagePath
+    referenceImagePath,
+    referenceImagePaths
   } = parsed.options;
 
   // Phase 2: Preflight validation
@@ -630,9 +642,100 @@ export async function runCertificationCli(
     });
 
   let stagedReferenceImage: StagedComfyUiInput | undefined;
+  const stagedReferenceImages: StagedComfyUiInput[] = [];
   let workflowToSubmit = parsedWorkflow;
 
-  if (topology?.referenceImage) {
+  if (topology?.referenceImages) {
+    const N = referenceImagePaths.length;
+    if (N > topology.referenceImages.length) {
+      stderr(
+        `[certify] Profile "${profile.id}" supports at most ${topology.referenceImages.length} reference images, got ${N}`
+      );
+      return 1;
+    }
+
+    const workflowCopy = JSON.parse(JSON.stringify(parsedWorkflow)) as Record<string, unknown>;
+
+    for (let i = 0; i < N; i++) {
+      const refImagePath = referenceImagePaths[i]!;
+      const target = topology.referenceImages[i]!;
+
+      let refImageBytes: Uint8Array;
+      try {
+        refImageBytes = await readReferenceImageFileFn(refImagePath);
+        if (refImageBytes.byteLength === 0) {
+          stderr(`[certify] Reference image at "${refImagePath}" is empty`);
+          return 1;
+        }
+      } catch (err) {
+        stderr(
+          `[certify] Failed to read reference image at "${refImagePath}" for slot ${i}: ${(err as Error).message}`
+        );
+        return 1;
+      }
+
+      const refImageSha256 = createHash("sha256").update(refImageBytes).digest("hex");
+      const stagingFilename = `cco-certify-${runId}-ref${i}-${refImageSha256.slice(0, 16)}.png`;
+
+      let staged: StagedComfyUiInput;
+      try {
+        staged = await stagingAdapter.stage({
+          filename: stagingFilename,
+          bytes: refImageBytes,
+          contentType: "image/png"
+        });
+      } catch (err) {
+        stderr(
+          `[certify] Failed to stage reference image "${stagingFilename}" for slot ${i}: ${(err as Error).message}`
+        );
+        return 1;
+      }
+      stagedReferenceImages.push(staged);
+
+      const node = workflowCopy[target.nodeId];
+      if (
+        typeof node !== "object" ||
+        node === null ||
+        !("inputs" in node) ||
+        typeof (node as { inputs: unknown }).inputs !== "object" ||
+        (node as { inputs: unknown }).inputs === null
+      ) {
+        stderr(
+          `[certify] Target node "${target.nodeId}" not found or has invalid inputs for referenceImages[${i}] injection`
+        );
+        return 1;
+      }
+
+      const stagedRefValue = staged.subfolder ? `${staged.subfolder}/${staged.name}` : staged.name;
+      (node as { inputs: Record<string, unknown> }).inputs[target.inputField] = stagedRefValue;
+    }
+
+    // Prune inactive slots (loader nodes and their Autogrow dotted keys on referenceNode)
+    for (let i = N; i < topology.referenceImages.length; i++) {
+      delete workflowCopy[topology.referenceImages[i]!.nodeId];
+    }
+    if (topology.referenceNode && topology.referenceSlotFields) {
+      const refNode = workflowCopy[topology.referenceNode.nodeId];
+      const refNodeInputs =
+        typeof refNode === "object" && refNode !== null && "inputs" in refNode
+          ? (refNode as { inputs: Record<string, unknown> }).inputs
+          : undefined;
+      if (refNodeInputs) {
+        for (let i = N; i < topology.referenceSlotFields.length; i++) {
+          delete refNodeInputs[topology.referenceSlotFields[i]!];
+        }
+        if (topology.refImageSize) {
+          if (N > 0) {
+            refNodeInputs[topology.refImageSize.inputField] = "max";
+          } else {
+            delete refNodeInputs[topology.refImageSize.inputField];
+          }
+        }
+      }
+    }
+
+    workflowToSubmit = workflowCopy;
+  } else if (topology?.referenceImage) {
     const refImagePath =
       referenceImagePath ??
       resolve(DEFAULT_REPO_ROOT, "tests/fixtures/deterministic-reference.png");
@@ -721,7 +824,7 @@ export async function runCertificationCli(
   const maxDurationMs =
     profile.engine === "flux_schnell"
       ? 30000
-      : profile.engine === "minimax_h3_i2v"
+      : profile.engine === "minimax_h3_i2v" || profile.engine === "minimax_h3_ref2v"
         ? 600000
         : 55000;
 
@@ -801,6 +904,11 @@ export async function runCertificationCli(
   } finally {
     if (stagedReferenceImage && stagingAdapter.cleanup) {
       await stagingAdapter.cleanup(stagedReferenceImage).catch(() => {});
+    }
+    if (stagingAdapter.cleanup) {
+      for (const staged of stagedReferenceImages) {
+        await stagingAdapter.cleanup(staged).catch(() => {});
+      }
     }
   }
 }
