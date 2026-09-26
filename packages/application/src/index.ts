@@ -3,3 +3,4 @@ export * from "./ports/index.js";
 export * from "./use-cases/index.js";
 export * from "./certification/index.js";
 export * from "./license-routing-policy.js";
+export * from "./shot-plan-compiler/index.js";

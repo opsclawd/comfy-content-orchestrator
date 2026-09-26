@@ -166,5 +166,12 @@ describe("ComponentLicenseRegistry contracts", () => {
     const aliasEntry = registry.entries.find((e) => e.componentId === "minimax-h3-720p-5s-i2v-v1");
     expect(aliasEntry).toBeDefined();
     expect(aliasEntry?.status).toBe("approved");
+
+    const ref2vEntry = registry.entries.find(
+      (e) => e.componentId === "MINIMAX_H3_720P_5S_REF2V_V1"
+    );
+    expect(ref2vEntry).toBeDefined();
+    expect(ref2vEntry?.status).toBe("review_required");
+    expect(ref2vEntry?.reviewedAt).toBeUndefined();
   });
 });

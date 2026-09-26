@@ -14,16 +14,19 @@ fi
 source "${VERSION_FILE}"
 
 if [[ -z "${MINIMAX_H3_VERSION:-}" || -z "${MINIMAX_H3_REPO:-}" || -z "${MINIMAX_H3_REVISION:-}" || \
+      -z "${COMFYUI_CORE_REPO:-}" || -z "${COMFYUI_CORE_REVISION:-}" || \
       -z "${MINIMAX_H3_DIFFUSION_FILE:-}" || -z "${MINIMAX_H3_DIFFUSION_SHA256:-}" || -z "${MINIMAX_H3_DIFFUSION_SIZE:-}" || \
       -z "${MINIMAX_H3_TEXT_ENCODER_FILE:-}" || -z "${MINIMAX_H3_TEXT_ENCODER_SHA256:-}" || -z "${MINIMAX_H3_TEXT_ENCODER_SIZE:-}" || \
       -z "${MINIMAX_H3_VIDEO_VAE_FILE:-}" || -z "${MINIMAX_H3_VIDEO_VAE_SHA256:-}" || -z "${MINIMAX_H3_VIDEO_VAE_SIZE:-}" || \
       -z "${MINIMAX_H3_AUDIO_VAE_FILE:-}" || -z "${MINIMAX_H3_AUDIO_VAE_SHA256:-}" || -z "${MINIMAX_H3_AUDIO_VAE_SIZE:-}" ]]; then
-  echo "Error: .minimax-h3-version must define MINIMAX_H3_VERSION, MINIMAX_H3_REPO, MINIMAX_H3_REVISION, and all model files/hashes/sizes" >&2
+  echo "Error: .minimax-h3-version must define MINIMAX_H3_VERSION, MINIMAX_H3_REPO, MINIMAX_H3_REVISION, COMFYUI_CORE_REPO, COMFYUI_CORE_REVISION, and all model files/hashes/sizes" >&2
   exit 1
 fi
 
 QUICK_MODE=false
 CUSTOM_MODELS_DIR=""
+CUSTOM_COMFY_DIR=""
+VERIFY_COMFY=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -35,10 +38,20 @@ while [[ $# -gt 0 ]]; do
       CUSTOM_MODELS_DIR="$2"
       shift 2
       ;;
+    --comfy-dir)
+      CUSTOM_COMFY_DIR="$2"
+      shift 2
+      ;;
+    --verify-comfy)
+      VERIFY_COMFY=true
+      shift
+      ;;
     -h|--help)
-      echo "Usage: $0 [--quick] [--models-dir <path>]"
-      echo "  --quick       Verify file existence and size without computing full SHA-256 hashes"
-      echo "  --models-dir  Explicit path to ComfyUI models directory containing diffusion_models, text_encoders, vae"
+      echo "Usage: $0 [--quick] [--models-dir <path>] [--comfy-dir <path>] [--verify-comfy]"
+      echo "  --quick         Verify file existence and size without computing full SHA-256 hashes"
+      echo "  --models-dir    Explicit path to ComfyUI models directory containing diffusion_models, text_encoders, vae"
+      echo "  --comfy-dir     Explicit path to ComfyUI repository root"
+      echo "  --verify-comfy  Require ComfyUI core revision verification (fails if ComfyUI dir not found)"
       exit 0
       ;;
     *)
@@ -58,8 +71,6 @@ elif [[ -n "${COMFYUI_MODELS_DIR:-}" && -d "${COMFYUI_MODELS_DIR}" ]]; then
   MODELS_DIR="${COMFYUI_MODELS_DIR}"
 elif [[ -n "${COMFYUI_DIR:-}" && -d "${COMFYUI_DIR}/models" ]]; then
   MODELS_DIR="${COMFYUI_DIR}/models"
-elif [[ -d "/home/gpoontip/ComfyUI/models" ]]; then
-  MODELS_DIR="/home/gpoontip/ComfyUI/models"
 elif [[ -d "${REPO_ROOT}/node_modules/.cache/minimax-h3-models" ]]; then
   MODELS_DIR="${REPO_ROOT}/node_modules/.cache/minimax-h3-models"
 else
@@ -86,6 +97,51 @@ get_file_size() {
     stat -c%s "${target_file}"
   fi
 }
+
+# 0. Check ComfyUI core revision
+RESOLVED_COMFY_DIR=""
+if [[ -n "${CUSTOM_COMFY_DIR}" ]]; then
+  RESOLVED_COMFY_DIR="${CUSTOM_COMFY_DIR}"
+elif [[ -n "${COMFYUI_DIR:-}" ]]; then
+  RESOLVED_COMFY_DIR="${COMFYUI_DIR}"
+elif [[ -d "${REPO_ROOT}/ComfyUI" ]]; then
+  RESOLVED_COMFY_DIR="${REPO_ROOT}/ComfyUI"
+elif [[ -d "${REPO_ROOT}/../ComfyUI" ]]; then
+  RESOLVED_COMFY_DIR="${REPO_ROOT}/../ComfyUI"
+fi
+
+if [[ -z "${RESOLVED_COMFY_DIR}" ]]; then
+  echo "Error: ComfyUI core directory must be provided via --comfy-dir or COMFYUI_DIR" >&2
+  exit 1
+fi
+
+if [[ ! -d "${RESOLVED_COMFY_DIR}" ]]; then
+  echo "Error: ComfyUI directory not found at ${RESOLVED_COMFY_DIR}" >&2
+  exit 1
+fi
+
+if [[ ! -d "${RESOLVED_COMFY_DIR}/.git" ]]; then
+  echo "Error: ComfyUI directory at ${RESOLVED_COMFY_DIR} is not a git repository" >&2
+  exit 1
+fi
+
+ACTUAL_COMFY_REV="$(git -C "${RESOLVED_COMFY_DIR}" rev-parse --verify HEAD 2>/dev/null || true)"
+if [[ -z "${ACTUAL_COMFY_REV}" ]]; then
+  echo "Error: Failed to read Git commit in ComfyUI directory: ${RESOLVED_COMFY_DIR}" >&2
+  exit 1
+fi
+
+if [[ "${ACTUAL_COMFY_REV}" != "${COMFYUI_CORE_REVISION}" ]]; then
+  echo "Error: ComfyUI core revision mismatch at ${RESOLVED_COMFY_DIR}!" >&2
+  echo "Expected: ${COMFYUI_CORE_REVISION}" >&2
+  echo "Actual:   ${ACTUAL_COMFY_REV}" >&2
+  exit 1
+fi
+
+if [[ ! -f "${RESOLVED_COMFY_DIR}/comfy_extras/nodes_minimax_h3.py" ]]; then
+  echo "Error: comfy_extras/nodes_minimax_h3.py missing in ComfyUI directory: ${RESOLVED_COMFY_DIR}" >&2
+  exit 1
+fi
 
 # 1. Check directory existence
 if [[ ! -d "${MODELS_DIR}" ]]; then

@@ -1,0 +1,5 @@
+# Pinned ComfyUI Core Revision
+COMFYUI_VERSION=55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc
+COMFYUI_REPO=https://github.com/comfyanonymous/ComfyUI
+COMFYUI_REVISION=55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc
+COMFYUI_CORE_REVISION=55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc

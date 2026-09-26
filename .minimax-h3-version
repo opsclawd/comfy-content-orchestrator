@@ -4,6 +4,10 @@ MINIMAX_H3_REPO=Comfy-Org/MiniMax-H3
 MINIMAX_H3_REVISION=7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1
 MINIMAX_H3_MODELS_DIR=models
 
+# Pinned ComfyUI Core (registers native MiniMax-H3 nodes in comfy_extras/nodes_minimax_h3.py)
+COMFYUI_CORE_REPO=https://github.com/comfyanonymous/ComfyUI
+COMFYUI_CORE_REVISION=55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc
+
 # Diffusion Models (Pruned INT8 convrot)
 # Reference-to-video (ref2va)
 MINIMAX_H3_DIFFUSION_REF2VA_FILE=diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors

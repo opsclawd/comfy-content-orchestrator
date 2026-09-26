@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { LTX_FPS } from "@cco/contracts";
+import { LTX_FPS, MINIMAX_H3_720P_5S_REF2V_V1_INJECTION_TOPOLOGY } from "@cco/contracts";
 import {
   ApprovedCandidateMediaHashMismatchError,
   AssembleGenerationManifest,
@@ -15,20 +15,26 @@ import {
   type EnforceLicenseRouting,
   type ObjectStoragePort,
   type ProfileRenderIdentity,
+  ReferenceCanonicalizationError,
   type ReferenceAssetRepository,
   type ResolvedApprovedVisualProductionMedia,
   type SceneRepository,
+  type ShotPlanRepository,
   type StagedComfyUiInput,
   type StoryboardCandidateRepository
 } from "@cco/application";
 import {
   Scene,
+  ShotPlan,
   type CampaignId,
   type CandidateId,
   type JobId,
   type LeaseToken,
+  type ReferenceAsset as DomainReferenceAsset,
+  type ReferenceAssetId,
   type RenderJob,
   type SceneId,
+  type ShotPlanId,
   type StoryboardCandidate
 } from "@cco/domain";
 import type {
@@ -52,9 +58,12 @@ import {
   ReferenceImageStagingError,
   RenderJobExecutionError,
   RenderJobPayloadValidationError,
+  validateDeclaredTopology,
+  validateMiniMaxH3ReferenceToVideoInputSchema,
   WorkflowHashMismatchError,
   type AssembleProductionManifestInput,
-  type ProductionManifestAssembler
+  type ProductionManifestAssembler,
+  type RenderJobExecutorDependencies
 } from "./render-job-executor.js";
 
 const DEFAULT_REPO_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)), "../../../");
@@ -177,6 +186,19 @@ const fakeRawFluxWorkflow = JSON.stringify({
   "5": {
     inputs: { width: 1024, height: 1024, batch_size: 1 },
     class_type: "EmptyLatentImage"
+  }
+});
+
+const fakeRawLtxWorkflow = JSON.stringify({
+  "1": {
+    inputs: { seed: 42, steps: 8, cfg: 1, sampler_name: "euler", scheduler: "simple", denoise: 1 },
+    class_type: "KSampler"
+  },
+  "3": { inputs: { text: "default prompt" }, class_type: "CLIPTextEncode" },
+  "4": { inputs: { text: "default negative" }, class_type: "CLIPTextEncode" },
+  "5": {
+    inputs: { width: 1280, height: 720, length: 97, batch_size: 1 },
+    class_type: "EmptyLTXVLatentVideo"
   }
 });
 
@@ -1091,7 +1113,7 @@ describe("Certified Render Job Executor", () => {
       readApprovedProvenance: async () => fakeLtxLiveProvenance,
       collectCertificationProvenance: async () => fakeLtxLiveProvenance,
       verifyGoldMasterProvenance: () => {},
-      readWorkflowFile: async () => fakeRawFluxWorkflow,
+      readWorkflowFile: async () => fakeRawLtxWorkflow,
       hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
       executeProfileRender: mockExecuteProfileRender,
       outputReader,
@@ -1112,7 +1134,7 @@ describe("Certified Render Job Executor", () => {
       readApprovedProvenance: async () => fakeLtxLiveProvenance,
       collectCertificationProvenance: async () => fakeLtxLiveProvenance,
       verifyGoldMasterProvenance: () => {},
-      readWorkflowFile: async () => fakeRawFluxWorkflow,
+      readWorkflowFile: async () => fakeRawLtxWorkflow,
       hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
       executeProfileRender: mockExecuteProfileRender,
       outputReader
@@ -1129,7 +1151,7 @@ describe("Certified Render Job Executor", () => {
       readApprovedProvenance: async () => fakeLtxLiveProvenance,
       collectCertificationProvenance: async () => fakeLtxLiveProvenance,
       verifyGoldMasterProvenance: () => {},
-      readWorkflowFile: async () => fakeRawFluxWorkflow,
+      readWorkflowFile: async () => fakeRawLtxWorkflow,
       hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
       executeProfileRender: mockExecuteProfileRender,
       outputReader,
@@ -1196,10 +1218,6 @@ describe("Certified Render Job Executor", () => {
     });
 
     const readApprovedSpy = vi.fn().mockResolvedValue(sharedCollectionProvenance);
-    const fakeRawLtxWorkflow = JSON.stringify({
-      ...JSON.parse(fakeRawFluxWorkflow),
-      _engine: "ltx_25"
-    });
 
     // Note: verifyGoldMasterProvenance is intentionally NOT mocked out;
     // this exercises the real preflight collection resolution end-to-end.
@@ -1297,7 +1315,7 @@ describe("Certified Render Job Executor", () => {
       readApprovedProvenance: async () => fakeLtxLiveProvenance,
       collectCertificationProvenance: async () => fakeLtxLiveProvenance,
       verifyGoldMasterProvenance: () => {},
-      readWorkflowFile: async () => fakeRawFluxWorkflow,
+      readWorkflowFile: async () => fakeRawLtxWorkflow,
       hashWorkflow: () => sampleLtxWorkflowHash,
       executeProfileRender: mockExecuteProfileRender,
       outputReader,
@@ -1344,7 +1362,7 @@ describe("Certified Render Job Executor", () => {
       readApprovedProvenance: async () => fakeLtxLiveProvenance,
       collectCertificationProvenance: async () => fakeLtxLiveProvenance,
       verifyGoldMasterProvenance: () => {},
-      readWorkflowFile: async () => fakeRawFluxWorkflow,
+      readWorkflowFile: async () => fakeRawLtxWorkflow,
       hashWorkflow: () => sampleLtxWorkflowHash,
       executeProfileRender: mockExecuteProfileRender,
       outputReader,
@@ -1789,7 +1807,8 @@ describe("Certified Render Job Executor", () => {
     it("throws descriptive error when frameCount node is missing or malformed in workflow", () => {
       const rawWithoutNode5 = JSON.stringify({
         "1": { class_type: "KSampler", inputs: { seed: 42 } },
-        "3": { class_type: "CLIPTextEncode", inputs: { text: "old" } }
+        "3": { class_type: "CLIPTextEncode", inputs: { text: "old" } },
+        "4": { class_type: "CLIPTextEncode", inputs: { text: "old negative" } }
       });
 
       expect(() => mutateWorkflow(rawWithoutNode5, { frameCount: 57 }, fakeLtxProfile)).toThrow(
@@ -2763,6 +2782,1372 @@ describe("Certified Render Job Executor", () => {
       expect(result.candidatePayload).toBeDefined();
       expect(mockResolve).not.toHaveBeenCalled();
       expect(mockStage).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("MiniMax-H3 Ref2V reference-directed execution and variable cardinality", () => {
+    const fakeMinimaxRef2vProfile: CertificationProfile = {
+      id: "minimax-h3-720p-124f-ref2v",
+      engine: "minimax_h3_ref2v",
+      workflowPath: "/templates/minimax_h3_720p_ref2v_124f_api.json",
+      workflowRelativePath: "minimax_h3_720p_ref2v_124f_api.json",
+      expectedWorkflowHash: "296ca44a3ff9b2836123874dd57985152514633daefcc3256849c8b969737d3b",
+      source: {
+        kind: "validated_host_export",
+        uri: "https://github.com/Comfy-Org/MiniMax-H3",
+        revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+        license: "MiniMax Community License"
+      },
+      baseline: {
+        width: 1344,
+        height: 768,
+        frames: 124,
+        steps: 20,
+        approximateDurationSeconds: 5
+      },
+      minFreeDiskGb: 50,
+      runnerProfile: "dynamicvram-offload-v1",
+      models: [
+        {
+          category: "diffusion_models",
+          relativePath: "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+        }
+      ],
+      assertions: [
+        { nodeId: "9", classType: "BasicScheduler", input: "steps", equals: 20 },
+        { nodeId: "105", classType: "MiniMaxH3ReferenceToVideo", input: "width", equals: 1344 },
+        { nodeId: "105", classType: "MiniMaxH3ReferenceToVideo", input: "height", equals: 768 },
+        { nodeId: "105", classType: "MiniMaxH3ReferenceToVideo", input: "length", equals: 124 }
+      ],
+      renderProfileIdentity: {
+        key: "MINIMAX_H3_720P_5S_REF2V_V1",
+        version: 1
+      }
+    };
+
+    type WorkflowNodeMap = Record<string, { inputs: Record<string, unknown>; class_type?: string }>;
+
+    it("mutates Ref2V workflow with N=2 references by keeping slots 1..2 wired and pruning slots 3..9", async () => {
+      const realRef2vPath = resolve(
+        DEFAULT_REPO_ROOT,
+        "templates/minimax_h3_720p_ref2v_124f_api.json"
+      );
+      const realRef2vJson = await readFile(realRef2vPath, "utf8");
+
+      const mutated = mutateWorkflow(
+        realRef2vJson,
+        {
+          prompt: "Compiled Ref2V instruction",
+          referenceImages: ["ref-slot-1.png", "ref-slot-2.png"]
+        },
+        fakeMinimaxRef2vProfile
+      ) as unknown as WorkflowNodeMap;
+
+      // Active slots 1 and 2
+      expect(mutated["201"]?.inputs.image).toBe("ref-slot-1.png");
+      expect(mutated["202"]?.inputs.image).toBe("ref-slot-2.png");
+      // Pruned slots 3..9
+      for (let slot = 3; slot <= 9; slot++) {
+        expect(mutated[String(200 + slot)]).toBeUndefined();
+      }
+      // Node 105 keeps per-slot Autogrow connections for active slots 0..1
+      const node105Inputs = mutated["105"]?.inputs;
+      expect(node105Inputs?.["ref_images.ref_image_0"]).toEqual(["201", 0]);
+      expect(node105Inputs?.["ref_images.ref_image_1"]).toEqual(["202", 0]);
+      // Inactive slots 2..8 pruned
+      for (let s = 2; s <= 8; s++) {
+        expect(node105Inputs?.[`ref_images.ref_image_${s}`]).toBeUndefined();
+      }
+      expect(node105Inputs?.ref_image_size).toBe("max");
+    });
+
+    it("mutates Ref2V workflow with N=1 references by keeping slot 0 wired and pruning slots 1..8", async () => {
+      const realRef2vPath = resolve(
+        DEFAULT_REPO_ROOT,
+        "templates/minimax_h3_720p_ref2v_124f_api.json"
+      );
+      const realRef2vJson = await readFile(realRef2vPath, "utf8");
+
+      const mutated = mutateWorkflow(
+        realRef2vJson,
+        {
+          prompt: "One ref prompt",
+          referenceImages: ["ref-slot-1.png"]
+        },
+        fakeMinimaxRef2vProfile
+      ) as unknown as WorkflowNodeMap;
+
+      expect(mutated["201"]?.inputs.image).toBe("ref-slot-1.png");
+      for (let slot = 2; slot <= 9; slot++) {
+        expect(mutated[String(200 + slot)]).toBeUndefined();
+      }
+      const node105Inputs = mutated["105"]?.inputs;
+      expect(node105Inputs?.["ref_images.ref_image_0"]).toEqual(["201", 0]);
+      for (let s = 1; s <= 8; s++) {
+        expect(node105Inputs?.[`ref_images.ref_image_${s}`]).toBeUndefined();
+      }
+      expect(node105Inputs?.ref_image_size).toBe("max");
+    });
+
+    it("mutates Ref2V workflow with N=0 references by pruning all loaders, omitting all ref_image slots, and omitting ref_image_size", async () => {
+      const realRef2vPath = resolve(
+        DEFAULT_REPO_ROOT,
+        "templates/minimax_h3_720p_ref2v_124f_api.json"
+      );
+      const realRef2vJson = await readFile(realRef2vPath, "utf8");
+
+      const mutated = mutateWorkflow(
+        realRef2vJson,
+        {
+          prompt: "Zero ref prompt",
+          referenceImages: []
+        },
+        fakeMinimaxRef2vProfile
+      ) as unknown as Record<string, { inputs: Record<string, unknown> } | undefined>;
+
+      // All 9 LoadImage nodes pruned
+      for (let slot = 1; slot <= 9; slot++) {
+        expect(mutated[String(200 + slot)]).toBeUndefined();
+      }
+      // Node 105 inputs omit all per-slot ref_image fields and ref_image_size
+      const node105Inputs = mutated["105"]?.inputs;
+      for (let s = 0; s <= 8; s++) {
+        expect(node105Inputs?.[`ref_images.ref_image_${s}`]).toBeUndefined();
+      }
+      expect(node105Inputs?.ref_image_size).toBeUndefined();
+      expect(node105Inputs?.prompt).toBe("Zero ref prompt");
+    });
+
+    it("mutates Ref2V workflow with N=9 references retaining all slots and inputs", async () => {
+      const realRef2vPath = resolve(
+        DEFAULT_REPO_ROOT,
+        "templates/minimax_h3_720p_ref2v_124f_api.json"
+      );
+      const realRef2vJson = await readFile(realRef2vPath, "utf8");
+
+      const nineRefs = Array.from({ length: 9 }, (_, i) => `ref-${i + 1}.png`);
+      const mutated = mutateWorkflow(
+        realRef2vJson,
+        {
+          prompt: "Max ref prompt",
+          referenceImages: nineRefs
+        },
+        fakeMinimaxRef2vProfile
+      ) as unknown as WorkflowNodeMap;
+      for (let slot = 1; slot <= 9; slot++) {
+        expect(mutated[String(200 + slot)]).toBeDefined();
+        expect(mutated[String(200 + slot)]?.inputs.image).toBe(`ref-${slot}.png`);
+      }
+      const node105Inputs = mutated["105"]?.inputs;
+      for (let s = 0; s <= 8; s++) {
+        expect(node105Inputs?.[`ref_images.ref_image_${s}`]).toEqual([String(201 + s), 0]);
+      }
+      expect(node105Inputs?.ref_image_size).toBe("max");
+    });
+
+    it("fails closed when more than 9 reference images are supplied", async () => {
+      const realRef2vPath = resolve(
+        DEFAULT_REPO_ROOT,
+        "templates/minimax_h3_720p_ref2v_124f_api.json"
+      );
+      const realRef2vJson = await readFile(realRef2vPath, "utf8");
+
+      const tenRefs = Array.from({ length: 10 }, (_, i) => `ref-${i + 1}.png`);
+      expect(() =>
+        mutateWorkflow(
+          realRef2vJson,
+          { prompt: "Exceeded prompt", referenceImages: tenRefs },
+          fakeMinimaxRef2vProfile
+        )
+      ).toThrow("Cannot inject more than 9 reference images");
+    });
+
+    it("executes reference-directed production render: compiles ShotPlan, stages references, and strictly isolates previs from conditioning", async () => {
+      const realRef2vPath = resolve(
+        DEFAULT_REPO_ROOT,
+        "templates/minimax_h3_720p_ref2v_124f_api.json"
+      );
+      const realRef2vJson = await readFile(realRef2vPath, "utf8");
+
+      const shotPlanId = "shot-plan-111" as ShotPlanId;
+      const refAssetId = "asset-hero-111" as ReferenceAssetId;
+
+      const fakeShotPlanDomain = ShotPlan.reconstitute({
+        id: shotPlanId,
+        sceneId: sampleSceneId,
+        specRevision: 1,
+        variantOrdinal: 1,
+        status: "approved",
+        routingMode: "reference_directed",
+        targetDurationMs: 5167,
+        targetFrameCount: 124,
+        durationToleranceMs: 355,
+        fps: 24,
+        framing: "medium",
+        angle: "eye_level",
+        lensIntent: "50mm prime",
+        cameraPosition: "standing height",
+        cameraMovement: "static",
+        movementSpeed: "slow",
+        cameraPromptDescription: "Static cinematic shot",
+        subjects: [
+          {
+            subjectId: "character_hero",
+            role: "subject_identity",
+            initialPosition: "screen_center",
+            movementTrajectory: "standing still",
+            referenceAssetId: refAssetId
+          }
+        ],
+        actionSummary: "Hero stands heroically holding reference <Picture 1>",
+        beats: [
+          {
+            beatIndex: 1,
+            startMs: 0,
+            endMs: 5000,
+            description: "Dramatic hold",
+            cameraAction: "Steady",
+            subjectAction: "Breathing"
+          }
+        ],
+        lightingStyle: "natural_golden_hour",
+        environmentDescription: "Golden hour field",
+        colorPalette: ["#FFD700", "#333333"],
+        atmosphere: "Peaceful",
+        continuity: {
+          incomingContinuityFromSceneId: null,
+          persistentSubjectIds: ["character_hero"],
+          lightingContinuityNote: null,
+          frameAnchorTarget: "none",
+          anchorCandidateId: null,
+          anchorMediaHashSha256: null
+        },
+        previs: {
+          candidateId: "previs-cand-001",
+          storageBucket: "godzspeed-review",
+          storageObjectKey: "previs/still.webp",
+          contentHashSha256: "b".repeat(64),
+          modelProfile: "flux_schnell",
+          generatedAt: "2026-09-20T00:00:00Z"
+        },
+        createdAt: "2026-09-25T00:00:00Z",
+        updatedAt: "2026-09-25T00:00:00Z"
+      });
+
+      const refBytes = new Uint8Array([10, 20, 30]);
+      const refHash = createHash("sha256").update(refBytes).digest("hex");
+
+      const fakeReferenceAsset: DomainReferenceAsset = {
+        id: refAssetId,
+        clientId: "client-001",
+        storageBucket: "cco-media",
+        storageObjectKey: "refs/hero.png",
+        contentHashSha256: refHash,
+        mimeType: "image/png",
+        assetType: "image",
+        libraryRole: "subject_identity"
+      };
+
+      const mockShotPlanRepo: ShotPlanRepository = {
+        findById: vi.fn().mockResolvedValue(fakeShotPlanDomain),
+        save: vi.fn(),
+        saveMany: vi.fn(),
+        listBySceneAndRevision: vi.fn(),
+        listByScene: vi.fn()
+      };
+
+      const mockRefAssetRepo: ReferenceAssetRepository = {
+        listBySceneId: vi.fn().mockResolvedValue([fakeReferenceAsset]),
+        findByIds: vi.fn().mockResolvedValue([fakeReferenceAsset]),
+        listBindingsBySceneId: vi.fn().mockResolvedValue([
+          {
+            sceneId: sampleSceneId,
+            specRevision: 1,
+            referenceAssetId: refAssetId,
+            role: "subject_identity",
+            weight: 1,
+            hints: null,
+            archivedAt: null
+          }
+        ])
+      };
+
+      const mockStage = vi.fn().mockImplementation(async (file: string, _bytes: Uint8Array) => ({
+        filename: file,
+        subfolder: "",
+        type: "input" as const
+      }));
+
+      const mockCleanup = vi.fn().mockResolvedValue(undefined);
+
+      const mockExecuteProfileRender = vi.fn().mockResolvedValue({
+        status: "succeeded",
+        promptId: "prompt-ref2v-999",
+        outputObjectKeys: ["renders/h3_ref2v_output.mp4"],
+        durationMs: 5000,
+        profile: {} as ProfileRenderIdentity,
+        preDispatchGpu: {
+          totalVramMb: 24576,
+          usedVramMb: 4096,
+          freeVramMb: 20480,
+          reservedVramMb: 4096,
+          measuredAt: new Date().toISOString()
+        }
+      });
+
+      const mockStorage: ObjectStoragePort = {
+        getObject: vi.fn().mockResolvedValue({
+          body: refBytes,
+          contentLength: refBytes.byteLength,
+          contentType: "image/png"
+        }),
+        putObject: vi.fn().mockResolvedValue(undefined),
+        deleteObject: vi.fn().mockResolvedValue(undefined),
+        copyObject: vi.fn().mockResolvedValue({ bucket: "cco-media", key: "refs/hero.png" }),
+        headObject: vi.fn().mockResolvedValue({ contentLength: 3, contentType: "image/png" })
+      };
+
+      const mockManifestAssembler = vi.fn().mockReturnValue({
+        manifestId: "test-manifest-ref2v",
+        sceneId: sampleSceneId,
+        jobId: "job-ref2v-1"
+      });
+
+      const mockSceneDomain = Scene.reconstitute({
+        id: sampleSceneId,
+        campaignId: "campaign-1" as CampaignId,
+        status: "approved",
+        specRevision: 1,
+        approvedShotPlanId: shotPlanId,
+        approvedShotPlanRevision: 1,
+        configuration: {
+          prompt: "Scene prompt",
+          referenceIds: [],
+          engineProfileId: "minimax-h3",
+          durationMs: 5000
+        }
+      });
+      const mockSceneRepo: SceneRepository = {
+        findById: vi.fn().mockResolvedValue(mockSceneDomain),
+        save: vi.fn()
+      };
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeMinimaxRef2vProfile,
+        readApprovedProvenance: async () => ({
+          version: 1,
+          profileId: "minimax-h3-720p-124f-ref2v",
+          generatedAt: "2026-09-25T00:00:00Z",
+          workflow: {
+            relativePath: "minimax_h3_720p_ref2v_124f_api.json",
+            sha256: fakeMinimaxRef2vProfile.expectedWorkflowHash,
+            source: fakeMinimaxRef2vProfile.source
+          },
+          models: [],
+          git: { comfyUiCommit: "a".repeat(40), customNodes: [] },
+          disk: { passes: true },
+          renderProfileProvenance: {
+            key: "MINIMAX_H3_720P_5S_REF2V_V1",
+            version: 1,
+            engine: "minimax_h3_ref2v",
+            frames: 124,
+            steps: 20,
+            workflowHash: fakeMinimaxRef2vProfile.expectedWorkflowHash,
+            modelHashes: {}
+          }
+        }),
+        collectCertificationProvenance: async () => ({
+          version: 1,
+          profileId: "minimax-h3-720p-124f-ref2v",
+          generatedAt: "2026-09-25T00:00:00Z",
+          workflow: {
+            relativePath: "minimax_h3_720p_ref2v_124f_api.json",
+            sha256: fakeMinimaxRef2vProfile.expectedWorkflowHash,
+            source: fakeMinimaxRef2vProfile.source
+          },
+          models: [],
+          git: { comfyUiCommit: "a".repeat(40), customNodes: [] },
+          disk: {
+            passes: true,
+            modelFootprintBytes: 0,
+            availableBytes: 100_000_000_000,
+            requiredFreeBytes: 50_000_000_000,
+            modelFootprintGb: 0,
+            availableGb: 100,
+            minFreeDiskGb: 50
+          },
+          renderProfileProvenance: {
+            key: "MINIMAX_H3_720P_5S_REF2V_V1",
+            version: 1,
+            engine: "minimax_h3_ref2v",
+            frames: 124,
+            steps: 20,
+            workflowHash: fakeMinimaxRef2vProfile.expectedWorkflowHash,
+            runnerProfile: "dynamicvram-offload-v1",
+            measuredDiskFootprintGb: 10,
+            minFreeDiskGb: 50,
+            modelHashes: {}
+          }
+        }),
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => realRef2vJson,
+        hashWorkflow: () => fakeMinimaxRef2vProfile.expectedWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        outputReader: new FakeOutputReader(
+          new Map([
+            [
+              "renders/h3_ref2v_output.mp4",
+              { bytes: new Uint8Array([1, 2, 3]), contentType: "video/mp4" }
+            ]
+          ])
+        ),
+        sceneRepository: mockSceneRepo,
+        shotPlanRepository: mockShotPlanRepo,
+        referenceAssetRepository: mockRefAssetRepo,
+        objectStorage: mockStorage,
+        stageReferenceImage: { stage: mockStage, cleanup: mockCleanup },
+        productionManifestAssembler: { assemble: mockManifestAssembler }
+      });
+
+      const ref2vJob = createSampleProductionJob({
+        workflowTemplate: "minimax-h3-720p-124f-ref2v",
+        injectedPayload: {
+          prompt: "Fallback prompt",
+          seed: 42,
+          shotPlanId,
+          specRevision: 1
+        }
+      });
+
+      const result = await executor(ref2vJob);
+      expect(result.manifestPayload).toBeDefined();
+
+      // Assert references were staged into ComfyUI input folder
+      expect(mockStage).toHaveBeenCalledTimes(1);
+      // Assert cleanup was executed in finally block
+      expect(mockCleanup).toHaveBeenCalledTimes(1);
+
+      // Verify manifest assembly call arguments:
+      // False Conditioning Invariant: conditioningImage MUST NOT be passed for reference-directed
+      expect(mockManifestAssembler).toHaveBeenCalledTimes(1);
+      const assemblerCallArgs = mockManifestAssembler.mock.calls[0]![0];
+      expect(assemblerCallArgs.conditioningImage).toBeUndefined();
+      expect(assemblerCallArgs.routingMode).toBe("reference_directed");
+      expect(assemblerCallArgs.referenceImages).toHaveLength(1);
+      expect(assemblerCallArgs.referenceImages![0]!.role).toBe("subject_identity");
+      expect(assemblerCallArgs.referenceImages![0]!.slotIndex).toBe(1);
+      expect(assemblerCallArgs.referenceImages![0]!.promptTag).toBe("<Picture 1>");
+      expect(assemblerCallArgs.executedInstruction).toBeDefined();
+      expect(assemblerCallArgs.previsReviewEvidence).toEqual({
+        candidateId: "previs-cand-001",
+        contentHashSha256: "b".repeat(64),
+        specRevision: 1,
+        variantOrdinal: 1,
+        storageBucket: "godzspeed-review",
+        storageObjectKey: "previs/still.webp"
+      });
+    });
+
+    describe("Ref2V adversarial integrity and governance gates", () => {
+      const realRef2vPath = resolve(
+        DEFAULT_REPO_ROOT,
+        "templates/minimax_h3_720p_ref2v_124f_api.json"
+      );
+
+      const createValidRef2vSetup = async () => {
+        const realRef2vJson = await readFile(realRef2vPath, "utf8");
+        const shotPlanId = "shot-plan-111" as ShotPlanId;
+        const refAssetId = "asset-hero-111" as ReferenceAssetId;
+
+        const fakeShotPlanDomain = ShotPlan.reconstitute({
+          id: shotPlanId,
+          sceneId: sampleSceneId,
+          specRevision: 1,
+          variantOrdinal: 1,
+          status: "approved",
+          routingMode: "reference_directed",
+          targetDurationMs: 5167,
+          targetFrameCount: 124,
+          durationToleranceMs: 355,
+          fps: 24,
+          framing: "medium",
+          angle: "eye_level",
+          lensIntent: "50mm prime",
+          cameraPosition: "standing height",
+          cameraMovement: "static",
+          movementSpeed: "slow",
+          cameraPromptDescription: "Static cinematic shot",
+          subjects: [],
+          actionSummary: "Hero stands in field",
+          beats: [
+            {
+              beatIndex: 1,
+              startMs: 0,
+              endMs: 5000,
+              description: "Hold",
+              cameraAction: "Static",
+              subjectAction: "Breathe"
+            }
+          ],
+          lightingStyle: "natural_golden_hour",
+          environmentDescription: "Field",
+          colorPalette: ["#FFD700"],
+          atmosphere: "Calm",
+          continuity: {
+            incomingContinuityFromSceneId: null,
+            persistentSubjectIds: [],
+            lightingContinuityNote: null,
+            frameAnchorTarget: "none",
+            anchorCandidateId: null,
+            anchorMediaHashSha256: null
+          },
+          createdAt: "2026-09-25T00:00:00Z",
+          updatedAt: "2026-09-25T00:00:00Z"
+        });
+
+        const fakeAsset: DomainReferenceAsset = {
+          id: refAssetId,
+          clientId: "client-001",
+          storageBucket: "cco-media",
+          storageObjectKey: "refs/hero.png",
+          contentHashSha256: "a".repeat(64),
+          mimeType: "image/png",
+          assetType: "image",
+          libraryRole: "subject_identity"
+        };
+
+        const mockShotPlanRepo: ShotPlanRepository = {
+          findById: vi.fn().mockResolvedValue(fakeShotPlanDomain),
+          save: vi.fn(),
+          saveMany: vi.fn(),
+          listBySceneAndRevision: vi.fn(),
+          listByScene: vi.fn()
+        };
+
+        const mockRefAssetRepo: ReferenceAssetRepository = {
+          listBySceneId: vi.fn().mockResolvedValue([fakeAsset]),
+          findByIds: vi.fn().mockResolvedValue([fakeAsset]),
+          listBindingsBySceneId: vi.fn().mockResolvedValue([])
+        };
+
+        const mockExecute = vi.fn().mockResolvedValue({
+          status: "succeeded",
+          promptId: "prompt-1",
+          outputObjectKeys: ["render.mp4"],
+          durationMs: 5000,
+          profile: {} as ProfileRenderIdentity,
+          preDispatchGpu: {
+            totalVramMb: 24576,
+            usedVramMb: 4096,
+            freeVramMb: 20480,
+            reservedVramMb: 4096,
+            measuredAt: new Date().toISOString()
+          }
+        });
+
+        const mockAssembler = vi.fn().mockReturnValue({ manifestId: "ok" });
+
+        const mockSceneDomain = Scene.reconstitute({
+          id: sampleSceneId,
+          campaignId: "campaign-1" as CampaignId,
+          status: "approved",
+          specRevision: 1,
+          approvedShotPlanId: shotPlanId,
+          approvedShotPlanRevision: 1,
+          configuration: {
+            prompt: "Scene prompt",
+            referenceIds: [],
+            engineProfileId: "minimax-h3",
+            durationMs: 5000
+          }
+        });
+        const mockSceneRepo: SceneRepository = {
+          findById: vi.fn().mockResolvedValue(mockSceneDomain),
+          save: vi.fn()
+        };
+
+        const createExecutor = (overrides?: Partial<RenderJobExecutorDependencies>) =>
+          createCertifiedRenderJobExecutor({
+            loadCertificationProfile: async () => fakeMinimaxRef2vProfile,
+            readApprovedProvenance: async () => ({
+              version: 1,
+              profileId: fakeMinimaxRef2vProfile.id,
+              generatedAt: "2026-09-25T00:00:00Z",
+              workflow: {
+                relativePath: fakeMinimaxRef2vProfile.workflowRelativePath,
+                sha256: fakeMinimaxRef2vProfile.expectedWorkflowHash,
+                source: fakeMinimaxRef2vProfile.source
+              },
+              models: [],
+              git: { comfyUiCommit: "a".repeat(40), customNodes: [] },
+              disk: { passes: true },
+              renderProfileProvenance: {
+                key: fakeMinimaxRef2vProfile.renderProfileIdentity!.key,
+                version: 1,
+                engine: fakeMinimaxRef2vProfile.engine,
+                frames: 124,
+                steps: 20,
+                workflowHash: fakeMinimaxRef2vProfile.expectedWorkflowHash,
+                modelHashes: {}
+              }
+            }),
+            collectCertificationProvenance: async () => ({
+              version: 1,
+              profileId: fakeMinimaxRef2vProfile.id,
+              generatedAt: "2026-09-25T00:00:00Z",
+              workflow: {
+                relativePath: fakeMinimaxRef2vProfile.workflowRelativePath,
+                sha256: fakeMinimaxRef2vProfile.expectedWorkflowHash,
+                source: fakeMinimaxRef2vProfile.source
+              },
+              models: [],
+              git: { comfyUiCommit: "a".repeat(40), customNodes: [] },
+              disk: {
+                passes: true,
+                modelFootprintBytes: 0,
+                availableBytes: 100_000_000_000,
+                requiredFreeBytes: 50_000_000_000,
+                modelFootprintGb: 0,
+                availableGb: 100,
+                minFreeDiskGb: 50
+              },
+              renderProfileProvenance: {
+                key: fakeMinimaxRef2vProfile.renderProfileIdentity!.key,
+                version: 1,
+                engine: fakeMinimaxRef2vProfile.engine,
+                frames: 124,
+                steps: 20,
+                workflowHash: fakeMinimaxRef2vProfile.expectedWorkflowHash,
+                runnerProfile: "dynamicvram-offload-v1",
+                measuredDiskFootprintGb: 10,
+                minFreeDiskGb: 50,
+                modelHashes: {}
+              }
+            }),
+            verifyGoldMasterProvenance: () => {},
+            readWorkflowFile: async () => realRef2vJson,
+            hashWorkflow: () => fakeMinimaxRef2vProfile.expectedWorkflowHash,
+            executeProfileRender: mockExecute,
+            outputReader: new FakeOutputReader(
+              new Map([["render.mp4", { bytes: new Uint8Array([1]), contentType: "video/mp4" }]])
+            ),
+            sceneRepository: mockSceneRepo,
+            shotPlanRepository: mockShotPlanRepo,
+            referenceAssetRepository: mockRefAssetRepo,
+            productionManifestAssembler: { assemble: mockAssembler },
+            ...overrides
+          });
+
+        const validJob = createSampleProductionJob({
+          workflowTemplate: "minimax-h3-720p-124f-ref2v",
+          injectedPayload: {
+            seed: 42,
+            shotPlanId,
+            specRevision: 1
+          }
+        });
+
+        return {
+          createExecutor,
+          validJob,
+          fakeShotPlanDomain,
+          fakeAsset,
+          mockShotPlanRepo,
+          mockRefAssetRepo,
+          mockSceneRepo,
+          mockSceneDomain,
+          shotPlanId
+        };
+      };
+
+      it("fails closed when sceneRepository is missing", async () => {
+        const { createExecutor, validJob } = await createValidRef2vSetup();
+        const executor = createExecutor({ sceneRepository: undefined });
+        await expect(executor(validJob)).rejects.toThrow(
+          "sceneRepository dependency is required for reference-directed execution"
+        );
+      });
+
+      it("fails closed when shotPlanRepository is missing", async () => {
+        const { createExecutor, validJob } = await createValidRef2vSetup();
+        const executor = createExecutor({ shotPlanRepository: undefined });
+        await expect(executor(validJob)).rejects.toThrow(
+          "shotPlanRepository dependency is required for reference-directed execution"
+        );
+      });
+
+      it("fails closed when referenceAssetRepository is missing", async () => {
+        const { createExecutor, validJob } = await createValidRef2vSetup();
+        const executor = createExecutor({ referenceAssetRepository: undefined });
+        await expect(executor(validJob)).rejects.toThrow(
+          "referenceAssetRepository dependency is required for reference-directed execution"
+        );
+      });
+
+      it("fails closed when referenceAssetRepository.listBindingsBySceneId is missing", async () => {
+        const { createExecutor, validJob, mockRefAssetRepo } = await createValidRef2vSetup();
+        const repoWithoutBindings: ReferenceAssetRepository = {
+          ...mockRefAssetRepo
+        };
+        delete (repoWithoutBindings as { listBindingsBySceneId?: unknown }).listBindingsBySceneId;
+        const executor = createExecutor({ referenceAssetRepository: repoWithoutBindings });
+        await expect(executor(validJob)).rejects.toThrow(
+          "referenceAssetRepository.listBindingsBySceneId is required for reference-directed execution"
+        );
+      });
+
+      it("fails closed when shotPlan is not found in repository", async () => {
+        const { createExecutor, validJob, mockShotPlanRepo } = await createValidRef2vSetup();
+        (mockShotPlanRepo.findById as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+        const executor = createExecutor();
+        await expect(executor(validJob)).rejects.toThrow(/not found in shotPlanRepository/);
+      });
+
+      it("fails closed when shotPlan is not approved", async () => {
+        const { createExecutor, validJob, mockShotPlanRepo, fakeShotPlanDomain } =
+          await createValidRef2vSetup();
+        const unapprovedPlan = ShotPlan.reconstitute({
+          ...fakeShotPlanDomain.snapshot(),
+          status: "draft"
+        });
+        (mockShotPlanRepo.findById as ReturnType<typeof vi.fn>).mockResolvedValue(unapprovedPlan);
+        const executor = createExecutor();
+        await expect(executor(validJob)).rejects.toThrow(/must be approved/);
+      });
+
+      it("fails closed when shotPlan belongs to another scene", async () => {
+        const { createExecutor, validJob, mockShotPlanRepo, fakeShotPlanDomain } =
+          await createValidRef2vSetup();
+        const otherScenePlan = ShotPlan.reconstitute({
+          ...fakeShotPlanDomain.snapshot(),
+          sceneId: "99999999-9999-4999-8999-999999999999" as SceneId
+        });
+        (mockShotPlanRepo.findById as ReturnType<typeof vi.fn>).mockResolvedValue(otherScenePlan);
+        const executor = createExecutor();
+        await expect(executor(validJob)).rejects.toThrow(/belongs to scene/);
+      });
+
+      it("fails closed when shotPlan specRevision does not match injected specRevision (revision drift)", async () => {
+        const { createExecutor, validJob, mockShotPlanRepo, fakeShotPlanDomain } =
+          await createValidRef2vSetup();
+        const driftedPlan = ShotPlan.reconstitute({
+          ...fakeShotPlanDomain.snapshot(),
+          specRevision: 2
+        });
+        (mockShotPlanRepo.findById as ReturnType<typeof vi.fn>).mockResolvedValue(driftedPlan);
+        const executor = createExecutor();
+        await expect(executor(validJob)).rejects.toThrow(
+          /specRevision 2 does not match injected specRevision 1/
+        );
+      });
+
+      it("fails closed when shotPlan routingMode is not reference_directed", async () => {
+        const { createExecutor, validJob, mockShotPlanRepo, fakeShotPlanDomain } =
+          await createValidRef2vSetup();
+        const frameAnchoredPlan = ShotPlan.reconstitute({
+          ...fakeShotPlanDomain.snapshot(),
+          routingMode: "frame_anchored"
+        });
+        (mockShotPlanRepo.findById as ReturnType<typeof vi.fn>).mockResolvedValue(
+          frameAnchoredPlan
+        );
+        const executor = createExecutor();
+        await expect(executor(validJob)).rejects.toThrow(
+          /routingMode must be "reference_directed"/
+        );
+      });
+
+      it("fails closed when sceneRepository exhibits revision drift against injected specRevision", async () => {
+        const { createExecutor, validJob } = await createValidRef2vSetup();
+        const mockSceneDomain = Scene.reconstitute({
+          id: sampleSceneId,
+          campaignId: "campaign-1" as CampaignId,
+          status: "approved",
+          specRevision: 2,
+          configuration: {
+            prompt: "Scene prompt",
+            referenceIds: [],
+            engineProfileId: "minimax-h3",
+            durationMs: 5000
+          }
+        });
+        const executor = createExecutor({
+          sceneRepository: {
+            findById: vi.fn().mockResolvedValue(mockSceneDomain),
+            save: vi.fn()
+          }
+        });
+        await expect(executor(validJob)).rejects.toThrow(
+          /specRevision 2 does not match injected specRevision 1/
+        );
+      });
+
+      it("fails closed when sceneRepository approvedShotPlanId does not match injected shotPlanId", async () => {
+        const { createExecutor, validJob } = await createValidRef2vSetup();
+        const mockSceneDomain = Scene.reconstitute({
+          id: sampleSceneId,
+          campaignId: "campaign-1" as CampaignId,
+          status: "approved",
+          specRevision: 1,
+          configuration: {
+            prompt: "Scene prompt",
+            referenceIds: [],
+            engineProfileId: "minimax-h3",
+            durationMs: 5000
+          },
+          approvedShotPlanId: "different-shot-plan" as ShotPlanId
+        });
+        const executor = createExecutor({
+          sceneRepository: {
+            findById: vi.fn().mockResolvedValue(mockSceneDomain),
+            save: vi.fn()
+          }
+        });
+        await expect(executor(validJob)).rejects.toThrow(
+          /approvedShotPlanId "different-shot-plan" does not match injected shotPlanId/
+        );
+      });
+
+      it("fails closed when scene has no approvedShotPlanId", async () => {
+        const { createExecutor, validJob } = await createValidRef2vSetup();
+        const mockSceneDomain = Scene.reconstitute({
+          id: sampleSceneId,
+          campaignId: "campaign-1" as CampaignId,
+          status: "approved",
+          specRevision: 1,
+          configuration: {
+            prompt: "Scene prompt",
+            referenceIds: [],
+            engineProfileId: "minimax-h3",
+            durationMs: 5000
+          }
+        });
+        const executor = createExecutor({
+          sceneRepository: {
+            findById: vi.fn().mockResolvedValue(mockSceneDomain),
+            save: vi.fn()
+          }
+        });
+        await expect(executor(validJob)).rejects.toThrow(/has no approvedShotPlanId/);
+      });
+
+      it("fails closed when scene approvedShotPlanRevision does not match injected specRevision", async () => {
+        const { createExecutor, validJob, shotPlanId } = await createValidRef2vSetup();
+        const mockSceneDomain = Scene.reconstitute({
+          id: sampleSceneId,
+          campaignId: "campaign-1" as CampaignId,
+          status: "approved",
+          specRevision: 1,
+          approvedShotPlanId: shotPlanId,
+          approvedShotPlanRevision: 2,
+          configuration: {
+            prompt: "Scene prompt",
+            referenceIds: [],
+            engineProfileId: "minimax-h3",
+            durationMs: 5000
+          }
+        });
+        const executor = createExecutor({
+          sceneRepository: {
+            findById: vi.fn().mockResolvedValue(mockSceneDomain),
+            save: vi.fn()
+          }
+        });
+        await expect(executor(validJob)).rejects.toThrow(
+          /approvedShotPlanRevision 2 does not match injected specRevision 1/
+        );
+      });
+
+      it("fails closed when scene reference binding exhibits specRevision drift", async () => {
+        const { createExecutor, validJob, mockRefAssetRepo } = await createValidRef2vSetup();
+        (mockRefAssetRepo.listBindingsBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([
+          {
+            sceneId: sampleSceneId,
+            specRevision: 2,
+            referenceAssetId: "asset-hero-111",
+            role: "subject_identity",
+            weight: 1,
+            hints: null,
+            archivedAt: null
+          }
+        ]);
+        const executor = createExecutor();
+        await expect(executor(validJob)).rejects.toThrow(
+          /specRevision 2, which does not match injected specRevision 1/
+        );
+      });
+
+      it("fails closed when reference binding has unsupported non-default weight", async () => {
+        const { createExecutor, validJob, mockRefAssetRepo } = await createValidRef2vSetup();
+        (mockRefAssetRepo.listBindingsBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([
+          {
+            sceneId: sampleSceneId,
+            specRevision: 1,
+            referenceAssetId: "asset-hero-111",
+            role: "subject_identity",
+            weight: 0.5,
+            hints: null,
+            archivedAt: null
+          }
+        ]);
+        const executor = createExecutor();
+        await expect(executor(validJob)).rejects.toThrow(ReferenceCanonicalizationError);
+      });
+
+      it("fails closed when reference binding has unsupported spatial hints", async () => {
+        const { createExecutor, validJob, mockRefAssetRepo } = await createValidRef2vSetup();
+        (mockRefAssetRepo.listBindingsBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([
+          {
+            sceneId: sampleSceneId,
+            specRevision: 1,
+            referenceAssetId: "asset-hero-111",
+            role: "subject_identity",
+            weight: 1,
+            hints: { boundingBox: [0, 0, 100, 100] },
+            archivedAt: null
+          }
+        ]);
+        const executor = createExecutor();
+        await expect(executor(validJob)).rejects.toThrow(ReferenceCanonicalizationError);
+      });
+
+      it("fails closed when referenced asset is archived", async () => {
+        const { createExecutor, validJob, mockRefAssetRepo, fakeAsset } =
+          await createValidRef2vSetup();
+        (mockRefAssetRepo.listBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([
+          { ...fakeAsset, archivedAt: "2026-09-24T00:00:00Z" }
+        ]);
+        (mockRefAssetRepo.listBindingsBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([
+          {
+            sceneId: sampleSceneId,
+            specRevision: 1,
+            referenceAssetId: "asset-hero-111",
+            role: "subject_identity",
+            weight: 1,
+            hints: null,
+            archivedAt: null
+          }
+        ]);
+        const executor = createExecutor();
+        await expect(executor(validJob)).rejects.toThrow(ReferenceCanonicalizationError);
+      });
+
+      it("fails closed when referenced asset has unsupported mimeType", async () => {
+        const { createExecutor, validJob, mockRefAssetRepo, fakeAsset } =
+          await createValidRef2vSetup();
+        (mockRefAssetRepo.listBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([
+          { ...fakeAsset, mimeType: "video/mp4" }
+        ]);
+        (mockRefAssetRepo.listBindingsBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([
+          {
+            sceneId: sampleSceneId,
+            specRevision: 1,
+            referenceAssetId: "asset-hero-111",
+            role: "subject_identity",
+            weight: 1,
+            hints: null,
+            archivedAt: null
+          }
+        ]);
+        const executor = createExecutor();
+        await expect(executor(validJob)).rejects.toThrow(ReferenceCanonicalizationError);
+      });
+
+      it("fails closed on topology drift when a declared template node is missing or has wrong class_type", async () => {
+        const realRef2vJson = await readFile(realRef2vPath, "utf8");
+        const corruptWorkflow = JSON.parse(realRef2vJson);
+        corruptWorkflow["105"].class_type = "WrongClass";
+
+        expect(() =>
+          mutateWorkflow(
+            JSON.stringify(corruptWorkflow),
+            { prompt: "test prompt", seed: 42 },
+            fakeMinimaxRef2vProfile
+          )
+        ).toThrow(/Expected node "105" to exist with class_type "MiniMaxH3ReferenceToVideo"/);
+      });
+
+      it("fails closed when scene has no approvedShotPlanRevision", async () => {
+        const { createExecutor, validJob, mockSceneDomain } = await createValidRef2vSetup();
+        const baseSnapshot = mockSceneDomain.snapshot();
+        const snapshotWithoutApprovedRevision = { ...baseSnapshot };
+        delete (snapshotWithoutApprovedRevision as { approvedShotPlanRevision?: number })
+          .approvedShotPlanRevision;
+        const mockSceneWithoutApprovedRevision = {
+          ...mockSceneDomain,
+          snapshot: () => snapshotWithoutApprovedRevision
+        };
+        const executor = createExecutor({
+          sceneRepository: {
+            findById: vi
+              .fn()
+              .mockResolvedValue(mockSceneWithoutApprovedRevision as unknown as Scene),
+            save: vi.fn()
+          }
+        });
+        await expect(executor(validJob)).rejects.toThrow(
+          /has no approvedShotPlanRevision; reference-directed execution requires verified current-revision approval/
+        );
+      });
+
+      it("fails closed when scene approval revision does not match injected specRevision", async () => {
+        const { createExecutor, validJob, shotPlanId } = await createValidRef2vSetup();
+        const mockSceneDomain = Scene.reconstitute({
+          id: sampleSceneId,
+          campaignId: "campaign-1" as CampaignId,
+          status: "approved",
+          specRevision: 1,
+          approvedShotPlanId: shotPlanId,
+          approvedShotPlanRevision: 1,
+          approval: {
+            approvedAt: "2026-09-25T00:00:00Z",
+            approvedBy: "reviewer-1",
+            revision: 2
+          },
+          configuration: {
+            prompt: "Scene prompt",
+            referenceIds: [],
+            engineProfileId: "minimax-h3",
+            durationMs: 5000
+          }
+        });
+        const executor = createExecutor({
+          sceneRepository: {
+            findById: vi.fn().mockResolvedValue(mockSceneDomain),
+            save: vi.fn()
+          }
+        });
+        await expect(executor(validJob)).rejects.toThrow(
+          /approval revision 2 does not match injected specRevision 1/
+        );
+      });
+
+      it("fails closed when scene has unsupported trim or loop intent", async () => {
+        const { createExecutor, validJob, mockSceneDomain } = await createValidRef2vSetup();
+        const baseSnapshot = mockSceneDomain.snapshot();
+        const mockSceneWithLoop = {
+          ...mockSceneDomain,
+          snapshot: () => ({ ...baseSnapshot, loop: true })
+        };
+        const executor = createExecutor({
+          sceneRepository: {
+            findById: vi.fn().mockResolvedValue(mockSceneWithLoop as unknown as Scene),
+            save: vi.fn()
+          }
+        });
+        await expect(executor(validJob)).rejects.toThrow(
+          /MiniMax-H3 does not support scene trim or loop controls; received unsupported intent/
+        );
+      });
+
+      it("fails closed on topology drift when a ref_images.ref_image_N slot in Ref2V template is disconnected or wrong", async () => {
+        const realRef2vJson = await readFile(realRef2vPath, "utf8");
+        const corruptWorkflow = JSON.parse(realRef2vJson);
+        corruptWorkflow["105"].inputs["ref_images.ref_image_0"] = ["999", 0];
+
+        expect(() =>
+          mutateWorkflow(
+            JSON.stringify(corruptWorkflow),
+            { prompt: "test prompt", seed: 42 },
+            fakeMinimaxRef2vProfile
+          )
+        ).toThrow(
+          /Expected node "105" input "ref_images.ref_image_0" to connect to \["201",\s*0\], got \["999",\s*0\]/
+        );
+      });
+
+      it("fails closed on topology drift when a LoadImage loader node in Ref2V template is missing", async () => {
+        const realRef2vJson = await readFile(realRef2vPath, "utf8");
+        const corruptWorkflow = JSON.parse(realRef2vJson);
+        delete corruptWorkflow["201"];
+
+        expect(() =>
+          mutateWorkflow(
+            JSON.stringify(corruptWorkflow),
+            { prompt: "test prompt", seed: 42 },
+            fakeMinimaxRef2vProfile
+          )
+        ).toThrow(/Expected node "201" to exist with class_type "LoadImage"/);
+      });
+
+      it("validates MiniMaxH3ReferenceToVideo registered input schema correctly", async () => {
+        const realRef2vJson = await readFile(realRef2vPath, "utf8");
+        const baseWorkflow = JSON.parse(realRef2vJson);
+
+        // N=1 schema validation succeeds with direct LoadImage link on slot 0
+        const n1Mutated = mutateWorkflow(
+          realRef2vJson,
+          { prompt: "test", referenceImages: ["image.png"] },
+          fakeMinimaxRef2vProfile
+        ) as unknown as Record<string, unknown>;
+        expect(() =>
+          validateMiniMaxH3ReferenceToVideoInputSchema("105", n1Mutated["105"], n1Mutated, 1)
+        ).not.toThrow();
+
+        // N=2 schema validation succeeds with direct LoadImage links on slots 0 and 1
+        const n2Mutated = mutateWorkflow(
+          realRef2vJson,
+          { prompt: "test", referenceImages: ["img1.png", "img2.png"] },
+          fakeMinimaxRef2vProfile
+        ) as unknown as Record<string, unknown>;
+        expect(() =>
+          validateMiniMaxH3ReferenceToVideoInputSchema("105", n2Mutated["105"], n2Mutated, 2)
+        ).not.toThrow();
+
+        // N=0 schema validation succeeds when all ref_image slots and ref_image_size are omitted
+        const n0Mutated = mutateWorkflow(
+          realRef2vJson,
+          { prompt: "test", referenceImages: [] },
+          fakeMinimaxRef2vProfile
+        ) as unknown as Record<string, unknown>;
+        expect(() =>
+          validateMiniMaxH3ReferenceToVideoInputSchema("105", n0Mutated["105"], n0Mutated, 0)
+        ).not.toThrow();
+
+        // N=0 schema validation throws if a ref_image slot is present
+        const n0WithRefImages = JSON.parse(JSON.stringify(n0Mutated));
+        n0WithRefImages["105"].inputs["ref_images.ref_image_0"] = ["201", 0];
+        expect(() =>
+          validateMiniMaxH3ReferenceToVideoInputSchema(
+            "105",
+            n0WithRefImages["105"],
+            n0WithRefImages,
+            0
+          )
+        ).toThrow(
+          /Node "105" input "ref_images.ref_image_0" must be omitted for inactive reference slot 0/
+        );
+
+        // Missing required input throws
+        const missingClip = JSON.parse(JSON.stringify(baseWorkflow));
+        delete missingClip["105"].inputs.clip;
+        expect(() =>
+          validateMiniMaxH3ReferenceToVideoInputSchema("105", missingClip["105"], missingClip, 1)
+        ).toThrow(/missing required registered input "clip"/);
+
+        // Active slot 1 with no link (activeReferenceCount claims 2 but slot 1 missing) throws
+        const missingSlot1 = JSON.parse(JSON.stringify(n1Mutated));
+        expect(() =>
+          validateMiniMaxH3ReferenceToVideoInputSchema("105", missingSlot1["105"], missingSlot1, 2)
+        ).toThrow(
+          /Node "105" input "ref_images.ref_image_1" must be a valid link tuple pointing to an existing upstream node for active reference slot 1/
+        );
+      });
+
+      it("fails closed on topology drift when duplicate node IDs appear in referenceImages", async () => {
+        const corruptTopology = {
+          ...MINIMAX_H3_720P_5S_REF2V_V1_INJECTION_TOPOLOGY,
+          referenceImages: [
+            { nodeId: "201", classType: "LoadImage", inputField: "image" },
+            { nodeId: "201", classType: "LoadImage", inputField: "image" }
+          ]
+        };
+        const realRef2vJson = await readFile(realRef2vPath, "utf8");
+        const workflow = JSON.parse(realRef2vJson);
+
+        expect(() => validateDeclaredTopology(workflow, corruptTopology)).toThrow(
+          /Duplicate node ID "201" in referenceImages topology targets/
+        );
+      });
+
+      it("executes reference-directed production render with multiple references (N=2): stages both, wires per-slot Autogrow inputs, and populates manifest", async () => {
+        const { createExecutor, validJob, mockRefAssetRepo, fakeAsset } =
+          await createValidRef2vSetup();
+
+        const fakeAsset2: DomainReferenceAsset = {
+          id: "asset-style-222" as ReferenceAssetId,
+          clientId: "client-001",
+          storageBucket: "cco-media",
+          storageObjectKey: "refs/style.png",
+          contentHashSha256: "b".repeat(64),
+          mimeType: "image/png",
+          assetType: "image",
+          libraryRole: "style"
+        };
+
+        (mockRefAssetRepo.listBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([
+          fakeAsset,
+          fakeAsset2
+        ]);
+        (mockRefAssetRepo.findByIds as ReturnType<typeof vi.fn>).mockResolvedValue([
+          fakeAsset,
+          fakeAsset2
+        ]);
+        (mockRefAssetRepo.listBindingsBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([
+          {
+            sceneId: sampleSceneId,
+            specRevision: 1,
+            referenceAssetId: fakeAsset.id,
+            role: "subject_identity",
+            weight: 1,
+            hints: null,
+            archivedAt: null
+          },
+          {
+            sceneId: sampleSceneId,
+            specRevision: 1,
+            referenceAssetId: fakeAsset2.id,
+            role: "style",
+            weight: 1,
+            hints: null,
+            archivedAt: null
+          }
+        ]);
+
+        const stagedFiles: string[] = [];
+        const mockStage = vi.fn().mockImplementation(async (file: string) => {
+          stagedFiles.push(file);
+          return { filename: file, subfolder: "", type: "input" as const };
+        });
+        const mockCleanup = vi.fn().mockResolvedValue(undefined);
+
+        const mockExecute = vi.fn().mockResolvedValue({
+          status: "succeeded",
+          promptId: "prompt-multi-ref",
+          outputObjectKeys: ["render.mp4"],
+          durationMs: 5000,
+          profile: {} as ProfileRenderIdentity,
+          preDispatchGpu: {
+            totalVramMb: 24576,
+            usedVramMb: 4096,
+            freeVramMb: 20480,
+            reservedVramMb: 4096,
+            measuredAt: new Date().toISOString()
+          }
+        });
+
+        const mockAssembler = vi.fn().mockReturnValue({ manifestId: "multi-ref-ok" });
+
+        const mockStorage: ObjectStoragePort = {
+          getObject: vi.fn().mockImplementation(async (input: { key: string }) => {
+            const isFirst = input.key.includes("hero");
+            return {
+              body: new Uint8Array([isFirst ? 1 : 2]),
+              contentLength: 1,
+              contentType: "image/png"
+            };
+          }),
+          putObject: vi.fn().mockResolvedValue(undefined),
+          deleteObject: vi.fn().mockResolvedValue(undefined),
+          copyObject: vi.fn().mockResolvedValue({ bucket: "cco-media", key: "refs/test.png" }),
+          headObject: vi.fn().mockResolvedValue({ contentLength: 1, contentType: "image/png" })
+        };
+
+        const executor = createExecutor({
+          executeProfileRender: mockExecute,
+          productionManifestAssembler: { assemble: mockAssembler },
+          objectStorage: mockStorage,
+          stageReferenceImage: { stage: mockStage, cleanup: mockCleanup },
+          hashBytes: {
+            hashBytes: async (bytes: Uint8Array) =>
+              bytes[0] === 1 ? "a".repeat(64) : "b".repeat(64)
+          }
+        });
+
+        const result = await executor(validJob);
+        expect(result).toBeDefined();
+
+        // 2 references staged and cleaned up
+        expect(mockStage).toHaveBeenCalledTimes(2);
+        expect(mockCleanup).toHaveBeenCalledTimes(2);
+
+        // Verify submitted workflow passed to executeProfileRender
+        expect(mockExecute).toHaveBeenCalledTimes(1);
+        const submittedWorkflow = mockExecute.mock.calls[0]![0].workflow;
+        // Node 105 connects slots 0 and 1 directly to their LoadImage nodes
+        expect(submittedWorkflow["105"].inputs["ref_images.ref_image_0"]).toEqual(["201", 0]);
+        expect(submittedWorkflow["105"].inputs["ref_images.ref_image_1"]).toEqual(["202", 0]);
+        expect(submittedWorkflow["105"].inputs.ref_image_size).toBe("max");
+        // Inactive slots pruned
+        for (let s = 2; s <= 8; s++) {
+          expect(submittedWorkflow["105"].inputs[`ref_images.ref_image_${s}`]).toBeUndefined();
+        }
+        // Active image loaders
+        expect(submittedWorkflow["201"]).toBeDefined();
+        expect(submittedWorkflow["202"]).toBeDefined();
+        // Inactive loaders pruned
+        expect(submittedWorkflow["203"]).toBeUndefined();
+        expect(submittedWorkflow["209"]).toBeUndefined();
+
+        // Verify manifest assembler received both references in canonical order
+        expect(mockAssembler).toHaveBeenCalledTimes(1);
+        const manifestArgs = mockAssembler.mock.calls[0]![0];
+        expect(manifestArgs.referenceImages).toHaveLength(2);
+        expect(manifestArgs.referenceImages[0].slotIndex).toBe(1);
+        expect(manifestArgs.referenceImages[0].promptTag).toBe("<Picture 1>");
+        expect(manifestArgs.referenceImages[0].role).toBe("subject_identity");
+        expect(manifestArgs.referenceImages[1].slotIndex).toBe(2);
+        expect(manifestArgs.referenceImages[1].promptTag).toBe("<Picture 2>");
+        expect(manifestArgs.referenceImages[1].role).toBe("style");
+      });
+
+      it("executes reference-directed production render with zero references (N=0 prompt-only): stages no images, prunes loaders/batch nodes, and populates manifest with referenceImages: []", async () => {
+        const { createExecutor, validJob, mockRefAssetRepo } = await createValidRef2vSetup();
+
+        (mockRefAssetRepo.listBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+        (mockRefAssetRepo.findByIds as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+        (mockRefAssetRepo.listBindingsBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+        const mockStage = vi.fn();
+        const mockCleanup = vi.fn();
+
+        const mockExecute = vi.fn().mockResolvedValue({
+          status: "succeeded",
+          promptId: "prompt-zero-ref",
+          outputObjectKeys: ["render.mp4"],
+          durationMs: 4000,
+          profile: {} as ProfileRenderIdentity,
+          preDispatchGpu: {
+            totalVramMb: 24576,
+            usedVramMb: 4096,
+            freeVramMb: 20480,
+            reservedVramMb: 4096,
+            measuredAt: new Date().toISOString()
+          }
+        });
+
+        const mockAssembler = vi.fn().mockReturnValue({ manifestId: "zero-ref-ok" });
+
+        const mockStorage: ObjectStoragePort = {
+          getObject: vi.fn(),
+          putObject: vi.fn(),
+          deleteObject: vi.fn(),
+          copyObject: vi.fn(),
+          headObject: vi.fn()
+        };
+
+        const executor = createExecutor({
+          executeProfileRender: mockExecute,
+          productionManifestAssembler: { assemble: mockAssembler },
+          objectStorage: mockStorage,
+          stageReferenceImage: { stage: mockStage, cleanup: mockCleanup }
+        });
+
+        const result = await executor(validJob);
+        expect(result).toBeDefined();
+
+        // Zero references staged or fetched
+        expect(mockStage).not.toHaveBeenCalled();
+        expect(mockStorage.getObject).not.toHaveBeenCalled();
+
+        // Verify submitted workflow passed to executeProfileRender
+        expect(mockExecute).toHaveBeenCalledTimes(1);
+        const submittedWorkflow = mockExecute.mock.calls[0]![0].workflow;
+        // Node 105 omits all per-slot ref_image fields and ref_image_size
+        for (let s = 0; s <= 8; s++) {
+          expect(submittedWorkflow["105"].inputs[`ref_images.ref_image_${s}`]).toBeUndefined();
+        }
+        expect(submittedWorkflow["105"].inputs.ref_image_size).toBeUndefined();
+        // All image loaders pruned
+        for (let slot = 1; slot <= 9; slot++) {
+          expect(submittedWorkflow[String(200 + slot)]).toBeUndefined();
+        }
+
+        // Verify manifest assembler received empty referenceImages array
+        expect(mockAssembler).toHaveBeenCalledTimes(1);
+        const manifestArgs = mockAssembler.mock.calls[0]![0];
+        expect(manifestArgs.referenceImages).toEqual([]);
+      });
     });
   });
 });

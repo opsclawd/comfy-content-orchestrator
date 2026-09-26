@@ -597,6 +597,22 @@ export async function runCertificationCli(
       comfyUiCommit: liveProvenance.git.comfyUiCommit,
       customNodes
     };
+  } else if (profile.engine === "minimax_h3_ref2v") {
+    workloadIdentity = {
+      profileId: "minimax-h3-720p-124f-ref2v",
+      renderProfileKey: (profile.renderProfileIdentity?.key ??
+        "MINIMAX_H3_720P_5S_REF2V_V1") as "MINIMAX_H3_720P_5S_REF2V_V1",
+      renderProfileVersion: 1,
+      engine: "minimax_h3_ref2v",
+      width: 1344,
+      height: 768,
+      frames: 124,
+      steps: 20,
+      workflowSha256: liveProvenance.workflow.sha256,
+      modelSha256: modelSha256Map,
+      comfyUiCommit: liveProvenance.git.comfyUiCommit,
+      customNodes
+    };
   } else {
     stderr(`[certify] Unsupported certification profile engine: "${profile.engine}"`);
     return 1;
@@ -674,7 +690,10 @@ export async function runCertificationCli(
     workflowToSubmit = workflowCopy;
   }
 
-  const renderTimeoutMs = profile.engine === "minimax_h3_i2v" ? 900_000 : 300_000;
+  const renderTimeoutMs =
+    profile.engine === "minimax_h3_i2v" || profile.engine === "minimax_h3_ref2v"
+      ? 900_000
+      : 300_000;
   const renderEngine = dependencies?.createRenderEngine
     ? dependencies.createRenderEngine({
         baseUrl: comfyUiUrl,

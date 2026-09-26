@@ -1,0 +1,252 @@
+{
+  "6": {
+    "inputs": {
+      "unet_name": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "9": {
+    "inputs": {
+      "model": ["6", 0],
+      "scheduler": "simple",
+      "steps": 20,
+      "denoise": 1
+    },
+    "class_type": "BasicScheduler",
+    "_meta": {
+      "title": "Basic Scheduler"
+    }
+  },
+  "10": {
+    "inputs": {
+      "samples": ["14", 0],
+      "vae": ["11", 0]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "Video VAE Decode"
+    }
+  },
+  "11": {
+    "inputs": {
+      "vae_name": "minimax_h3_video_vae_int8_convrot.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load Video VAE"
+    }
+  },
+  "13": {
+    "inputs": {
+      "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "type": "minimax",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "14": {
+    "inputs": {
+      "noise": ["15", 0],
+      "guider": ["16", 0],
+      "sampler": ["17", 0],
+      "sigmas": ["9", 0],
+      "latent_image": ["105", 1]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "Sampler Custom Advanced"
+    }
+  },
+  "15": {
+    "inputs": {
+      "noise_seed": 42
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "Random Noise"
+    }
+  },
+  "16": {
+    "inputs": {
+      "model": ["6", 0],
+      "conditioning": ["105", 0]
+    },
+    "class_type": "BasicGuider",
+    "_meta": {
+      "title": "Basic Guider"
+    }
+  },
+  "17": {
+    "inputs": {
+      "sampler_name": "res_multistep"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "KSampler Select"
+    }
+  },
+  "23": {
+    "inputs": {
+      "samples": ["14", 0],
+      "vae": ["24", 0]
+    },
+    "class_type": "VAEDecodeAudio",
+    "_meta": {
+      "title": "Audio VAE Decode"
+    }
+  },
+  "24": {
+    "inputs": {
+      "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load Audio VAE"
+    }
+  },
+  "91": {
+    "inputs": {
+      "images": ["10", 0],
+      "audio": ["23", 0],
+      "fps": 24
+    },
+    "class_type": "CreateVideo",
+    "_meta": {
+      "title": "Create Video"
+    }
+  },
+  "92": {
+    "inputs": {
+      "video": ["91", 0],
+      "filename_prefix": "minimax_h3_720p_ref2v_124f",
+      "format": "auto",
+      "codec": "auto"
+    },
+    "class_type": "SaveVideo",
+    "_meta": {
+      "title": "Save Video"
+    }
+  },
+  "105": {
+    "inputs": {
+      "clip": ["13", 0],
+      "vae": ["11", 0],
+      "audio_vae": ["24", 0],
+      "prompt": "A cinematic shot of a person smiling warmly, natural lighting, highly detailed skin texture, 8k hyperrealistic",
+      "width": 1344,
+      "height": 768,
+      "length": 124,
+      "ref_image_size": "max",
+      "ref_images.ref_image_0": ["201", 0],
+      "ref_images.ref_image_1": ["202", 0],
+      "ref_images.ref_image_2": ["203", 0],
+      "ref_images.ref_image_3": ["204", 0],
+      "ref_images.ref_image_4": ["205", 0],
+      "ref_images.ref_image_5": ["206", 0],
+      "ref_images.ref_image_6": ["207", 0],
+      "ref_images.ref_image_7": ["208", 0],
+      "ref_images.ref_image_8": ["209", 0]
+    },
+    "class_type": "MiniMaxH3ReferenceToVideo",
+    "_meta": {
+      "title": "MiniMax H3 Reference to Video"
+    }
+  },
+  "201": {
+    "inputs": {
+      "image": "ref_image_1.png",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Reference Image 1"
+    }
+  },
+  "202": {
+    "inputs": {
+      "image": "ref_image_2.png",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Reference Image 2"
+    }
+  },
+  "203": {
+    "inputs": {
+      "image": "ref_image_3.png",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Reference Image 3"
+    }
+  },
+  "204": {
+    "inputs": {
+      "image": "ref_image_4.png",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Reference Image 4"
+    }
+  },
+  "205": {
+    "inputs": {
+      "image": "ref_image_5.png",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Reference Image 5"
+    }
+  },
+  "206": {
+    "inputs": {
+      "image": "ref_image_6.png",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Reference Image 6"
+    }
+  },
+  "207": {
+    "inputs": {
+      "image": "ref_image_7.png",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Reference Image 7"
+    }
+  },
+  "208": {
+    "inputs": {
+      "image": "ref_image_8.png",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Reference Image 8"
+    }
+  },
+  "209": {
+    "inputs": {
+      "image": "ref_image_9.png",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Reference Image 9"
+    }
+  }
+}
