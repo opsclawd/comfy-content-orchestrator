@@ -530,6 +530,7 @@ In accordance with platform governance, empirical uncertainties identified in pr
 1. **Multi-Image Batch Wiring for `ref_images` in `MiniMaxH3ReferenceToVideo`:**
    - *Empirical Uncertainty:* The exact ComfyUI node graph topology for chaining up to 9 images into the single `ref_images` input (e.g. `ImageBatch` chain vs custom multi-slot adapter) requires verification against the live RTX 4090 ComfyUI host.
    - *Downstream Fence:* Issue #327 (contracts/persistence) requires only the ordered list of bound references with 1-based indices (`<Picture 1>` ... `<Picture 9>`). Issue #328 (worker execution) is responsible for the physical node batch wiring in the workflow template.
+   - *Resolved:* Live verification against the pinned RTX 4090 render host confirmed `ref_images` is a native Autogrow input exposed as up to 9 independent per-slot connections (`ref_images.ref_image_0` .. `ref_images.ref_image_8`), each a direct `LoadImage` link — not an `ImageBatch` chain. See [`docs/minimax-h3-ref2v-live-verification.md`](../minimax-h3-ref2v-live-verification.md).
 2. **Global vs. Per-Image Fidelity Mode (`ref_image_size`):**
    - *Empirical Uncertainty:* `ref_image_size` (`"match"` vs `"max"`) is a node-level parameter on `MiniMaxH3ReferenceToVideo`, indicating it applies globally to the entire reference batch.
    - *Downstream Fence:* Until ComfyUI supports per-image sizing, the production profile sets `ref_image_size: "max"` globally whenever any `subject_identity` or `product` reference is present, ensuring maximum likeness fidelity.
