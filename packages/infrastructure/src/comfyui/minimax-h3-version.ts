@@ -5,6 +5,9 @@ export const PINNED_MINIMAX_H3_VERSION = "v1.0.0";
 export const PINNED_MINIMAX_H3_REPO = "Comfy-Org/MiniMax-H3";
 export const PINNED_MINIMAX_H3_REVISION = "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1";
 
+export const PINNED_COMFYUI_CORE_REPO = "https://github.com/comfyanonymous/ComfyUI";
+export const PINNED_COMFYUI_CORE_REVISION = "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc";
+
 export const PINNED_MINIMAX_H3_DIFFUSION_REF2VA_FILE =
   "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors";
 export const PINNED_MINIMAX_H3_DIFFUSION_REF2VA_SHA256 =
@@ -37,6 +40,8 @@ export interface PinnedMiniMaxH3Version {
   readonly version: string;
   readonly repository: string;
   readonly revision: string;
+  readonly comfyUiCoreRepo: string;
+  readonly comfyUiCoreRevision: string;
   readonly diffusionRef2vaFile: string;
   readonly diffusionRef2vaSha256: string;
   readonly diffusionRef2vaSize: number;
@@ -78,6 +83,8 @@ export function loadPinnedMiniMaxH3Version(
   let version = PINNED_MINIMAX_H3_VERSION;
   let repository = PINNED_MINIMAX_H3_REPO;
   let revision = PINNED_MINIMAX_H3_REVISION;
+  let comfyUiCoreRepo = PINNED_COMFYUI_CORE_REPO;
+  let comfyUiCoreRevision = PINNED_COMFYUI_CORE_REVISION;
   let diffusionRef2vaFile = PINNED_MINIMAX_H3_DIFFUSION_REF2VA_FILE;
   let diffusionRef2vaSha256 = PINNED_MINIMAX_H3_DIFFUSION_REF2VA_SHA256;
   let diffusionRef2vaSize = PINNED_MINIMAX_H3_DIFFUSION_REF2VA_SIZE;
@@ -107,6 +114,8 @@ export function loadPinnedMiniMaxH3Version(
     version = getVar("MINIMAX_H3_VERSION") ?? version;
     repository = getVar("MINIMAX_H3_REPO") ?? repository;
     revision = getVar("MINIMAX_H3_REVISION") ?? revision;
+    comfyUiCoreRepo = getVar("COMFYUI_CORE_REPO") ?? comfyUiCoreRepo;
+    comfyUiCoreRevision = getVar("COMFYUI_CORE_REVISION") ?? comfyUiCoreRevision;
     diffusionRef2vaFile = getVar("MINIMAX_H3_DIFFUSION_REF2VA_FILE") ?? diffusionRef2vaFile;
     diffusionRef2vaSha256 = getVar("MINIMAX_H3_DIFFUSION_REF2VA_SHA256") ?? diffusionRef2vaSha256;
     diffusionRef2vaSize = Number(getVar("MINIMAX_H3_DIFFUSION_REF2VA_SIZE")) || diffusionRef2vaSize;
@@ -128,6 +137,8 @@ export function loadPinnedMiniMaxH3Version(
     version,
     repository,
     revision,
+    comfyUiCoreRepo,
+    comfyUiCoreRevision,
     diffusionRef2vaFile,
     diffusionRef2vaSha256,
     diffusionRef2vaSize,

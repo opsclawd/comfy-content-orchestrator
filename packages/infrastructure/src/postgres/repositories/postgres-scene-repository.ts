@@ -7,7 +7,9 @@ import type {
   SceneId,
   SceneReferenceBinding,
   SceneSnapshot,
-  SceneStatus
+  SceneStatus,
+  ShotPlanId,
+  ShotPlanRoutingMode
 } from "@cco/domain";
 import {
   ArchivedReferenceBindingError,
@@ -39,6 +41,11 @@ interface StoryboardSceneRow {
   director_notes: string | null;
   selected_candidate_id: string | null;
   selected_candidate_revision: number | null;
+  selected_shot_plan_id: string | null;
+  selected_shot_plan_revision: number | null;
+  approved_shot_plan_id: string | null;
+  approved_shot_plan_revision: number | null;
+  production_routing_mode: string | null;
   lora_configuration_id: string | null;
   approved_by: string | null;
   approved_at: Date | string | null;
@@ -144,6 +151,21 @@ function mapRowToScene(row: StoryboardSceneRow): Scene {
     ...(row.selected_candidate_revision != null
       ? { selectedCandidateRevision: Number(row.selected_candidate_revision) }
       : {}),
+    ...(row.selected_shot_plan_id
+      ? { selectedShotPlanId: row.selected_shot_plan_id as ShotPlanId }
+      : {}),
+    ...(row.selected_shot_plan_revision != null
+      ? { selectedShotPlanRevision: Number(row.selected_shot_plan_revision) }
+      : {}),
+    ...(row.approved_shot_plan_id
+      ? { approvedShotPlanId: row.approved_shot_plan_id as ShotPlanId }
+      : {}),
+    ...(row.approved_shot_plan_revision != null
+      ? { approvedShotPlanRevision: Number(row.approved_shot_plan_revision) }
+      : {}),
+    ...(row.production_routing_mode
+      ? { productionRoutingMode: row.production_routing_mode as ShotPlanRoutingMode }
+      : {}),
     ...(row.active_production_job_id
       ? { activeProductionJobId: row.active_production_job_id }
       : {}),
@@ -216,6 +238,11 @@ export class PostgresSceneRepository implements SceneRepository {
         s.director_notes,
         s.selected_candidate_id,
         s.selected_candidate_revision,
+        s.selected_shot_plan_id,
+        s.selected_shot_plan_revision,
+        s.approved_shot_plan_id,
+        s.approved_shot_plan_revision,
+        s.production_routing_mode,
         s.lora_configuration_id,
         s.approved_by,
         s.approved_at,
@@ -302,6 +329,11 @@ export class PostgresSceneRepository implements SceneRepository {
         s.director_notes,
         s.selected_candidate_id,
         s.selected_candidate_revision,
+        s.selected_shot_plan_id,
+        s.selected_shot_plan_revision,
+        s.approved_shot_plan_id,
+        s.approved_shot_plan_revision,
+        s.production_routing_mode,
         s.lora_configuration_id,
         s.approved_by,
         s.approved_at,
@@ -392,6 +424,11 @@ export class PostgresSceneRepository implements SceneRepository {
     const loraConfigurationId = snapshot.configuration.loraConfigurationId ?? null;
     const selectedCandidateId = snapshot.selectedCandidateId ?? null;
     const selectedCandidateRevision = snapshot.selectedCandidateRevision ?? null;
+    const selectedShotPlanId = snapshot.selectedShotPlanId ?? null;
+    const selectedShotPlanRevision = snapshot.selectedShotPlanRevision ?? null;
+    const approvedShotPlanId = snapshot.approvedShotPlanId ?? null;
+    const approvedShotPlanRevision = snapshot.approvedShotPlanRevision ?? null;
+    const productionRoutingMode = snapshot.productionRoutingMode ?? null;
     const failedFrom = snapshot.failedFrom ?? null;
     const activeProductionJobId = snapshot.activeProductionJobId ?? null;
     const productionAttemptOrdinal = snapshot.productionAttemptOrdinal ?? 0;
@@ -524,6 +561,11 @@ export class PostgresSceneRepository implements SceneRepository {
         active_production_job_id = $14,
         production_attempt_ordinal = $15,
         accepted_production_attempt_id = $16,
+        selected_shot_plan_id = $17,
+        selected_shot_plan_revision = $18,
+        approved_shot_plan_id = $19,
+        approved_shot_plan_revision = $20,
+        production_routing_mode = $21,
         updated_at = CURRENT_TIMESTAMP
       WHERE scene_id = $1
       `,
@@ -543,7 +585,12 @@ export class PostgresSceneRepository implements SceneRepository {
         failedFrom,
         activeProductionJobId,
         productionAttemptOrdinal,
-        acceptedProductionAttemptId
+        acceptedProductionAttemptId,
+        selectedShotPlanId,
+        selectedShotPlanRevision,
+        approvedShotPlanId,
+        approvedShotPlanRevision,
+        productionRoutingMode
       ]
     );
 
@@ -574,6 +621,11 @@ export class PostgresSceneRepository implements SceneRepository {
           active_production_job_id,
           production_attempt_ordinal,
           accepted_production_attempt_id,
+          selected_shot_plan_id,
+          selected_shot_plan_revision,
+          approved_shot_plan_id,
+          approved_shot_plan_revision,
+          production_routing_mode,
           updated_at
         ) VALUES (
           $1,
@@ -595,6 +647,11 @@ export class PostgresSceneRepository implements SceneRepository {
           $16,
           $17,
           $18,
+          $19,
+          $20,
+          $21,
+          $22,
+          $23,
           CURRENT_TIMESTAMP
         )
         `,
@@ -616,7 +673,12 @@ export class PostgresSceneRepository implements SceneRepository {
           failedFrom,
           activeProductionJobId,
           productionAttemptOrdinal,
-          acceptedProductionAttemptId
+          acceptedProductionAttemptId,
+          selectedShotPlanId,
+          selectedShotPlanRevision,
+          approvedShotPlanId,
+          approvedShotPlanRevision,
+          productionRoutingMode
         ]
       );
     }

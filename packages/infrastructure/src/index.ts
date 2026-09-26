@@ -16,6 +16,7 @@ export { PostgresCampaignProductionRunRepository } from "./postgres/repositories
 export { PostgresClientRepository } from "./postgres/repositories/postgres-client-repository.js";
 
 export { PostgresStoryboardCandidateRepository } from "./postgres/repositories/postgres-storyboard-candidate-repository.js";
+export { PostgresShotPlanRepository } from "./postgres/repositories/postgres-shot-plan-repository.js";
 
 export { PostgresReferenceAssetRepository } from "./postgres/repositories/postgres-reference-asset-repository.js";
 export { PostgresReferenceGroupRepository } from "./postgres/repositories/postgres-reference-group-repository.js";

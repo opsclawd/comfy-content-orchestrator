@@ -168,11 +168,28 @@ export const MinimaxH3WorkloadIdentitySchema = z.object({
 });
 export type MinimaxH3WorkloadIdentity = z.infer<typeof MinimaxH3WorkloadIdentitySchema>;
 
+export const MinimaxH3Ref2vWorkloadIdentitySchema = z.object({
+  profileId: z.literal("minimax-h3-720p-124f-ref2v"),
+  renderProfileKey: z.literal("MINIMAX_H3_720P_5S_REF2V_V1"),
+  renderProfileVersion: z.literal(1),
+  engine: z.literal("minimax_h3_ref2v"),
+  width: z.literal(1344),
+  height: z.literal(768),
+  frames: z.literal(124),
+  steps: z.literal(20),
+  workflowSha256: sha256HashSchema,
+  modelSha256: z.record(z.string().min(1), sha256HashSchema),
+  comfyUiCommit: gitCommitHashSchema,
+  customNodes: z.array(CustomNodeIdentitySchema)
+});
+export type MinimaxH3Ref2vWorkloadIdentity = z.infer<typeof MinimaxH3Ref2vWorkloadIdentitySchema>;
+
 export const CertificationWorkloadIdentitySchema = z.discriminatedUnion("engine", [
   LtxWorkloadIdentitySchema,
   LtxI2vWorkloadIdentitySchema,
   FluxSchnellWorkloadIdentitySchema,
-  MinimaxH3WorkloadIdentitySchema
+  MinimaxH3WorkloadIdentitySchema,
+  MinimaxH3Ref2vWorkloadIdentitySchema
 ]);
 export type CertificationWorkloadIdentity = z.infer<typeof CertificationWorkloadIdentitySchema>;
 

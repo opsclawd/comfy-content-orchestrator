@@ -849,6 +849,158 @@ describe("PostgresJobQueue integration", () => {
     expect(Number(manifestCount.rows[0]?.count)).toBe(0);
   });
 
+  it("queues a plan previs, advances the scene revision, completes the old job, and proves no current-revision candidate or association is created", async () => {
+    const { sceneId } = await createTestScene();
+    const queue = new PostgresJobQueue(pool);
+
+    const planRev1Id = "01950c46-9e90-7d3d-82d2-8f1d3c000011";
+    await client.query(
+      `
+      INSERT INTO shot_plans (
+        shot_plan_id,
+        scene_id,
+        spec_revision,
+        variant_ordinal,
+        status,
+        routing_mode,
+        target_duration_ms,
+        target_frame_count,
+        framing,
+        camera_angle,
+        camera_movement,
+        lighting_style,
+        structured_plan
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      `,
+      [
+        planRev1Id,
+        sceneId,
+        1,
+        1,
+        "draft",
+        "reference_directed",
+        4000,
+        96,
+        "wide",
+        "eye_level",
+        "static",
+        "natural_golden_hour",
+        JSON.stringify({ framing: "wide" })
+      ]
+    );
+
+    // Queue a previs job capturing revision 1
+    const queuedJob = await queue.enqueue({
+      sceneId: sceneId as SceneId,
+      jobKind: "candidate",
+      workflowTemplate: "flux-schnell-draft",
+      injectedPayload: {
+        prompt: "Wide establishing shot rev 1",
+        seed: 43,
+        variantOrdinal: 1,
+        shotPlanId: planRev1Id,
+        specRevision: 1
+      }
+    });
+
+    // Advance the scene revision to 2
+    await client.query("UPDATE storyboard_scenes SET spec_revision = 2 WHERE scene_id = $1", [
+      sceneId
+    ]);
+
+    // Create a new shot plan for revision 2
+    const planRev2Id = "01950c46-9e90-7d3d-82d2-8f1d3c000022";
+    await client.query(
+      `
+      INSERT INTO shot_plans (
+        shot_plan_id,
+        scene_id,
+        spec_revision,
+        variant_ordinal,
+        status,
+        routing_mode,
+        target_duration_ms,
+        target_frame_count,
+        framing,
+        camera_angle,
+        camera_movement,
+        lighting_style,
+        structured_plan
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      `,
+      [
+        planRev2Id,
+        sceneId,
+        2,
+        1,
+        "draft",
+        "reference_directed",
+        4000,
+        96,
+        "close_up",
+        "low_angle",
+        "tracking",
+        "neon_night",
+        JSON.stringify({ framing: "close_up" })
+      ]
+    );
+
+    // Worker claims and starts the queued job
+    const claimResult = await queue.claim({ workerId: "worker-fencing", leaseDurationMs: 60_000 });
+    expect(claimResult).toBeDefined();
+    expect(claimResult?.jobId).toBe(queuedJob.jobId);
+    const token = claimResult!.leaseToken!;
+
+    await queue.start(queuedJob.jobId, token);
+
+    // Worker completes the old job with captured specRevision 1
+    const candidatePayload = {
+      variantOrdinal: 1,
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: `candidates/${sceneId}/rev_1_var_1.webp`,
+      contentHashSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      shotPlanId: planRev1Id,
+      specRevision: 1
+    };
+
+    const completeResult = await queue.complete(
+      queuedJob.jobId,
+      token,
+      undefined,
+      candidatePayload
+    );
+
+    expect(completeResult.outcome).toBe("applied");
+
+    // Proves NO current-revision (revision 2) candidate was created
+    const rev2Candidates = await client.query(
+      "SELECT * FROM storyboard_candidates WHERE scene_id = $1 AND scene_spec_revision = 2",
+      [sceneId]
+    );
+    expect(rev2Candidates.rows).toHaveLength(0);
+
+    // Proves NO current-revision (revision 2) association was created
+    const rev2Plan = await client.query<{ previs_candidate_id: string | null }>(
+      "SELECT previs_candidate_id FROM shot_plans WHERE shot_plan_id = $1",
+      [planRev2Id]
+    );
+    expect(rev2Plan.rows[0]?.previs_candidate_id).toBeNull();
+
+    // Proves candidate was retained under revision 1 and attached to original revision 1 plan
+    const rev1Candidates = await client.query<{ candidate_id: string }>(
+      "SELECT candidate_id FROM storyboard_candidates WHERE scene_id = $1 AND scene_spec_revision = 1",
+      [sceneId]
+    );
+    expect(rev1Candidates.rows).toHaveLength(1);
+    const candidateId = rev1Candidates.rows[0]?.candidate_id;
+
+    const rev1Plan = await client.query<{ previs_candidate_id: string | null }>(
+      "SELECT previs_candidate_id FROM shot_plans WHERE shot_plan_id = $1",
+      [planRev1Id]
+    );
+    expect(rev1Plan.rows[0]?.previs_candidate_id).toBe(candidateId);
+  });
+
   it("rejects candidate completion without a candidate payload", async () => {
     const { sceneId } = await createTestScene();
     const token = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as LeaseToken;

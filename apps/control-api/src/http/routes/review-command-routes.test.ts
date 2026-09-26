@@ -9,6 +9,7 @@ import {
 } from "@cco/contracts";
 import {
   Scene,
+  ShotPlan,
   type CampaignId,
   type CampaignProductionRunRecord,
   type CampaignProductionRunSceneRecord,
@@ -18,14 +19,17 @@ import {
   type JobKind,
   type RenderJob,
   type SceneId,
+  type ShotPlanId,
   type StoryboardCandidate
 } from "@cco/domain";
 import type {
   ReviewEventStore,
   SceneRepository,
   StoryboardCandidateRepository,
+  ShotPlanRepository,
   EnqueueJobInput,
   ProductionAttemptRecord,
+  PlanningModelClientPort,
   UnitOfWork,
   UnitOfWorkContext
 } from "@cco/application";
@@ -79,6 +83,12 @@ class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _createdRuns: CampaignProductionRunRecord[] = [];
   private readonly _runScenes: CampaignProductionRunSceneRecord[] = [];
   private readonly _attempts = new Map<string, ProductionAttemptRecord>();
+  private readonly _seededShotPlans = new Map<ShotPlanId, ShotPlan>();
+  private readonly _savedShotPlans: ShotPlan[] = [];
+
+  seedShotPlan(shotPlan: ShotPlan): void {
+    this._seededShotPlans.set(shotPlan.id, shotPlan);
+  }
 
   seedRun(
     run: CampaignProductionRunRecord,
@@ -186,6 +196,10 @@ class InMemorySceneUnitOfWork implements UnitOfWork {
     return this._savedScenes;
   }
 
+  get savedShotPlans(): readonly ShotPlan[] {
+    return this._savedShotPlans;
+  }
+
   get reviewEvents(): readonly ReviewEvent[] {
     return this._reviewEvents;
   }
@@ -206,6 +220,7 @@ class InMemorySceneUnitOfWork implements UnitOfWork {
     const stagedScenes: Scene[] = [];
     const stagedReviewEvents: ReviewEvent[] = [];
     const stagedCandidates: StoryboardCandidate[] = [];
+    const stagedShotPlans: ShotPlan[] = [];
     const stagedRuns: CampaignProductionRunRecord[] = [];
     const stagedRunScenes: CampaignProductionRunSceneRecord[] = [];
     let stagedCampaign = { ...this._campaign };
@@ -272,10 +287,56 @@ class InMemorySceneUnitOfWork implements UnitOfWork {
       }
     };
 
+    const scopedShotPlans: ShotPlanRepository = {
+      findById: async (id: ShotPlanId): Promise<ShotPlan | undefined> => {
+        return stagedShotPlans.find((p) => p.id === id) ?? this._seededShotPlans.get(id);
+      },
+      save: async (shotPlan: ShotPlan): Promise<void> => {
+        const existingIdx = stagedShotPlans.findIndex((p) => p.id === shotPlan.id);
+        if (existingIdx >= 0) {
+          stagedShotPlans[existingIdx] = shotPlan;
+        } else {
+          stagedShotPlans.push(shotPlan);
+        }
+      },
+      saveMany: async (shotPlans: readonly ShotPlan[]): Promise<void> => {
+        for (const plan of shotPlans) {
+          const existingIdx = stagedShotPlans.findIndex((p) => p.id === plan.id);
+          if (existingIdx >= 0) {
+            stagedShotPlans[existingIdx] = plan;
+          } else {
+            stagedShotPlans.push(plan);
+          }
+        }
+      },
+      listBySceneAndRevision: async (
+        sceneId: SceneId,
+        specRevision: number
+      ): Promise<readonly ShotPlan[]> => {
+        const plansMap = new Map<ShotPlanId, ShotPlan>(this._seededShotPlans);
+        for (const plan of stagedShotPlans) {
+          plansMap.set(plan.id, plan);
+        }
+        return Array.from(plansMap.values())
+          .filter((p) => p.sceneId === sceneId && p.specRevision === specRevision)
+          .sort((a, b) => a.variantOrdinal - b.variantOrdinal);
+      },
+      listByScene: async (sceneId: SceneId): Promise<readonly ShotPlan[]> => {
+        const plansMap = new Map<ShotPlanId, ShotPlan>(this._seededShotPlans);
+        for (const plan of stagedShotPlans) {
+          plansMap.set(plan.id, plan);
+        }
+        return Array.from(plansMap.values())
+          .filter((p) => p.sceneId === sceneId)
+          .sort((a, b) => a.specRevision - b.specRevision || a.variantOrdinal - b.variantOrdinal);
+      }
+    };
+
     const context: UnitOfWorkContext = {
       scenes: scopedScenes,
       reviewEvents: scopedReviewEvents,
       candidates: scopedCandidates,
+      shotPlans: scopedShotPlans,
       campaigns: {
         findById: async () => stagedCampaign,
         findByIdForUpdate: async (cId) => ({ ...stagedCampaign, id: cId as CampaignId }),
@@ -381,12 +442,16 @@ class InMemorySceneUnitOfWork implements UnitOfWork {
     this._createdRuns.push(...stagedRuns);
     this._runScenes.push(...stagedRunScenes);
     this._savedScenes.push(...stagedScenes);
+    this._savedShotPlans.push(...stagedShotPlans);
     this._reviewEvents.push(...stagedReviewEvents);
     for (const scene of stagedScenes) {
       this._seededScenes.set(scene.id, scene);
     }
     for (const candidate of stagedCandidates) {
       this._seededCandidates.set(candidate.id, candidate);
+    }
+    for (const plan of stagedShotPlans) {
+      this._seededShotPlans.set(plan.id, plan);
     }
     for (const event of stagedReviewEvents) {
       this._seededReviewEvents.set(event.eventId, event);
@@ -1505,5 +1570,245 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
     expect(response.statusCode).toBe(409);
     const body = response.json() as ReviewErrorResponse;
     expect(body.code).toBe("STALE_PRODUCTION_ATTEMPT_CONFLICT");
+  });
+
+  function createTestShotPlan(id: ShotPlanId, variantOrdinal = 1, specRevision = 1): ShotPlan {
+    return ShotPlan.create({
+      id,
+      sceneId: sceneUuid,
+      specRevision,
+      variantOrdinal,
+      targetDurationMs: 4000,
+      targetFrameCount: 96,
+      framing: "wide",
+      angle: "eye_level",
+      lensIntent: "35mm prime",
+      cameraPosition: "eye_level tripod",
+      cameraMovement: "static",
+      movementSpeed: "medium",
+      cameraPromptDescription: "Previs test prompt",
+      actionSummary: "Character enters scene",
+      beats: [],
+      lightingStyle: "high_key_commercial",
+      environmentDescription: "Studio set",
+      colorPalette: ["#ffffff"],
+      subjects: [],
+      continuity: {
+        persistentSubjectIds: [],
+        frameAnchorTarget: "none"
+      }
+    });
+  }
+
+  it("select_shotplan selects ShotPlan and returns 200", async () => {
+    const shotPlanUuid = "01928374-abcd-7000-8000-000000000033" as ShotPlanId;
+    const scene = createReviewReadyScene();
+    const shotPlan = createTestShotPlan(shotPlanUuid);
+    const uow = new InMemorySceneUnitOfWork([scene]);
+    uow.seedShotPlan(shotPlan);
+    const app = createControlApiApp({ uow }, defaultTestOptions);
+
+    const command: ReviewCommand = {
+      actionId: actionUuid,
+      sceneId: sceneUuid,
+      expectedSpecRevision: 1,
+      action: "select_shotplan",
+      payload: {
+        shotPlanId: shotPlanUuid
+      }
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${sceneUuid}/review-command`,
+      payload: command
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    const parsed = ReviewCommandResponseSchema.safeParse(body);
+    expect(parsed.success).toBe(true);
+    const data = body as ReviewCommandResponse;
+    expect(data.selectedShotPlanId).toBe(shotPlanUuid);
+    expect(uow.reviewEvents).toHaveLength(1);
+    expect(uow.reviewEvents[0]?.action).toBe("select_shotplan");
+  });
+
+  it("approve_shotplan approves ShotPlan and transitions scene to approved", async () => {
+    const shotPlanUuid = "01928374-abcd-7000-8000-000000000033" as ShotPlanId;
+    const scene = createReviewReadyScene();
+    const shotPlan = createTestShotPlan(shotPlanUuid);
+    scene.selectShotPlan(shotPlanUuid, 1, scene.id);
+    const uow = new InMemorySceneUnitOfWork([scene]);
+    uow.seedShotPlan(shotPlan);
+    const app = createControlApiApp({ uow }, defaultTestOptions);
+
+    const command: ReviewCommand = {
+      actionId: actionUuid,
+      sceneId: sceneUuid,
+      expectedSpecRevision: 1,
+      action: "approve_shotplan",
+      payload: {
+        shotPlanId: shotPlanUuid
+      }
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${sceneUuid}/review-command`,
+      payload: command
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    const parsed = ReviewCommandResponseSchema.safeParse(body);
+    expect(parsed.success).toBe(true);
+    const data = body as ReviewCommandResponse;
+    expect(data.status).toBe("approved");
+    expect(data.approvedShotPlanId).toBe(shotPlanUuid);
+    expect(uow.reviewEvents).toHaveLength(1);
+    expect(uow.reviewEvents[0]?.action).toBe("approve_shotplan");
+  });
+
+  it("reroll_shotplan clears selection, generates new ShotPlans with non-colliding ordinals, and enqueues previs jobs", async () => {
+    const shotPlanUuid = "01928374-abcd-7000-8000-000000000033" as ShotPlanId;
+    const scene = createReviewReadyScene();
+    const shotPlan = createTestShotPlan(shotPlanUuid);
+    const jobs = new TestJobQueue();
+    const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, jobs);
+    uow.seedShotPlan(shotPlan);
+
+    const mockPrimary: PlanningModelClientPort = {
+      providerName: "Anthropic",
+      complete: async () => ({
+        kind: "success",
+        rawText: JSON.stringify([
+          {
+            framing: "wide",
+            angle: "eye_level",
+            cameraMovement: "tracking",
+            movementSpeed: "slow",
+            lensIntent: "35mm",
+            cameraPosition: "center",
+            cameraPromptDescription: "Reroll variant 1",
+            actionSummary: "Action 1",
+            lightingStyle: "high_key_commercial",
+            environmentDescription: "Transit",
+            colorPalette: [],
+            subjects: [],
+            beats: []
+          },
+          {
+            framing: "medium",
+            angle: "low_angle",
+            cameraMovement: "static",
+            movementSpeed: "medium",
+            lensIntent: "50mm",
+            cameraPosition: "low",
+            cameraPromptDescription: "Reroll variant 2",
+            actionSummary: "Action 2",
+            lightingStyle: "high_key_commercial",
+            environmentDescription: "Transit",
+            colorPalette: [],
+            subjects: [],
+            beats: []
+          },
+          {
+            framing: "close_up",
+            angle: "high_angle",
+            cameraMovement: "pan",
+            movementSpeed: "fast",
+            lensIntent: "85mm",
+            cameraPosition: "high",
+            cameraPromptDescription: "Reroll variant 3",
+            actionSummary: "Action 3",
+            lightingStyle: "high_key_commercial",
+            environmentDescription: "Transit",
+            colorPalette: [],
+            subjects: [],
+            beats: []
+          }
+        ])
+      })
+    };
+    const mockFallback: PlanningModelClientPort = {
+      providerName: "OpenAI",
+      complete: async () => ({ kind: "retryable_failure", message: "unused" })
+    };
+
+    const app = createControlApiApp(
+      {
+        uow,
+        planningModelClients: { primary: mockPrimary, fallback: mockFallback }
+      },
+      defaultTestOptions
+    );
+
+    const command: ReviewCommand = {
+      actionId: actionUuid,
+      sceneId: sceneUuid,
+      expectedSpecRevision: 1,
+      action: "reroll_shotplan",
+      payload: {}
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${sceneUuid}/review-command`,
+      payload: command
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    const parsed = ReviewCommandResponseSchema.safeParse(body);
+    expect(parsed.success).toBe(true);
+    const data = body as ReviewCommandResponse;
+    expect(data.status).toBe("generating_candidates");
+    expect(data.selectedShotPlanId).toBeUndefined();
+
+    // Verify original plan is superseded
+    const originalPlan = uow.savedShotPlans.find((p) => p.id === shotPlanUuid);
+    expect(originalPlan?.status).toBe("superseded");
+
+    // Verify 3 new plans exist with ordinals 2, 3, 4
+    const newPlans = uow.savedShotPlans.filter((p) => p.id !== shotPlanUuid);
+    expect(newPlans).toHaveLength(3);
+    expect(newPlans.map((p) => p.variantOrdinal)).toEqual([2, 3, 4]);
+
+    // Verify 3 candidate jobs were enqueued with corresponding shotPlanId
+    expect(jobs.jobs).toHaveLength(3);
+    for (let i = 0; i < 3; i++) {
+      const job = jobs.jobs[i]!;
+      const plan = newPlans[i]!;
+      expect(job.injectedPayload).toHaveProperty("shotPlanId", plan.id);
+      expect(job.injectedPayload).toHaveProperty("variantOrdinal", plan.variantOrdinal);
+      expect(job.injectedPayload).toHaveProperty("specRevision", plan.specRevision);
+    }
+
+    expect(uow.reviewEvents).toHaveLength(1);
+    expect(uow.reviewEvents[0]?.action).toBe("reroll_shotplan");
+  });
+
+  it("reroll_shotplan returns 500 CONFIGURATION_ERROR when planningModelClients is not configured", async () => {
+    const scene = createReviewReadyScene();
+    const uow = new InMemorySceneUnitOfWork([scene]);
+    const app = createControlApiApp({ uow }, defaultTestOptions);
+
+    const command: ReviewCommand = {
+      actionId: actionUuid,
+      sceneId: sceneUuid,
+      expectedSpecRevision: 1,
+      action: "reroll_shotplan",
+      payload: {}
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${sceneUuid}/review-command`,
+      payload: command
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toHaveProperty("code", "CONFIGURATION_ERROR");
   });
 });

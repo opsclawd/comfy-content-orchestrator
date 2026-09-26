@@ -4,6 +4,7 @@ import {
   InvalidJobCompletionPayloadError,
   StorageAdmissionError,
   StorageAdmissionUnavailableError,
+  type CandidateCompletionPayload,
   type JobMutationResult
 } from "@cco/application";
 import type { ControlApiContainer } from "../types.js";
@@ -136,6 +137,14 @@ export const completeJobSchema = {
             minLength: 64,
             maxLength: 64,
             pattern: "^[0-9a-fA-F]+$"
+          },
+          shotPlanId: {
+            type: "string",
+            format: "uuid"
+          },
+          specRevision: {
+            type: "integer",
+            minimum: 1
           },
           generationPayload: {
             type: "object"
@@ -344,15 +353,7 @@ export const jobRoutes: FastifyPluginAsync<JobRoutesOptions> = async (
         request.params.jobId as JobId,
         request.body.leaseToken as LeaseToken,
         request.body.manifestPayload,
-        request.body.candidatePayload as
-          | {
-              readonly variantOrdinal: number;
-              readonly storageBucket: string;
-              readonly storageObjectKey: string;
-              readonly contentHashSha256: string;
-              readonly generationPayload?: Readonly<Record<string, unknown>>;
-            }
-          | undefined
+        request.body.candidatePayload as CandidateCompletionPayload | undefined
       );
       if (
         (result.outcome === "applied" || result.outcome === "already_applied") &&

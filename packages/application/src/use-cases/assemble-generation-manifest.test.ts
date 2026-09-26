@@ -1804,5 +1804,364 @@ describe("AssembleGenerationManifest use case", () => {
       expect(result.manifestPayload.frameCount).toBe(124);
       expect(result.manifestPayload.fps).toBe(24);
     });
+
+    it("assembles a valid reference_directed manifest cross-checking executedInstruction and referenceImages", async () => {
+      const deps = createTestDeps();
+      const assembler = new AssembleGenerationManifest(deps);
+      const minimaxRef2vProfile: ManifestSourceProfile = {
+        id: "MINIMAX_H3_720P_5S_REF2V_V1",
+        engine: "minimax_h3_ref2v",
+        runnerProfile: "dynamicvram-offload-v1",
+        source: { kind: "authored_from_spec", license: "GPL-3.0" },
+        baseline: {
+          width: 1344,
+          height: 768,
+          frames: 124,
+          steps: 20,
+          approximateDurationSeconds: 5
+        },
+        renderProfileIdentity: { key: "MINIMAX_H3_720P_5S_REF2V_V1", version: 1 }
+      };
+
+      const ref2vWorkflow: RenderWorkflow = {
+        "15": { class_type: "RandomNoise", inputs: { noise_seed: 42 } },
+        "17": { class_type: "KSamplerSelect", inputs: { sampler_name: "res_multistep" } },
+        "9": {
+          class_type: "BasicScheduler",
+          inputs: { scheduler: "simple", steps: 20, denoise: 1 }
+        },
+        "201": { class_type: "LoadImage", inputs: { image: "staged/ref1.png" } },
+        "105": {
+          class_type: "MiniMaxH3ReferenceToVideo",
+          inputs: {
+            prompt: "Shot instruction with <Picture 1>",
+            length: 124,
+            width: 1344,
+            height: 768,
+            ref_image_size: "max",
+            "ref_images.ref_image_0": ["201", 0]
+          }
+        }
+      };
+
+      const instructionText = "Shot instruction with <Picture 1>";
+      const instructionHash = createHash("sha256")
+        .update(Buffer.from(instructionText, "utf8"))
+        .digest("hex");
+      const instructionBytes = Buffer.byteLength(instructionText, "utf8");
+
+      const input = createDefaultInput({
+        profile: minimaxRef2vProfile,
+        workflow: ref2vWorkflow,
+        routingMode: "reference_directed",
+        shotPlan: { id: "00000000-0000-4000-8000-000000000010", specRevision: 1 },
+        executedInstruction: {
+          text: instructionText,
+          sha256: instructionHash,
+          byteLength: instructionBytes
+        },
+        referenceImages: [
+          {
+            slotIndex: 1,
+            promptTag: "<Picture 1>",
+            assetId: "00000000-0000-4000-8000-000000000020",
+            contentHashSha256: "a".repeat(64),
+            role: "subject_identity",
+            stagedAs: { name: "ref1.png", subfolder: "staged" },
+            injectionTarget: { nodeId: "201", classType: "LoadImage", inputField: "image" }
+          }
+        ]
+      });
+
+      const result = await assembler.assemble(input);
+      expect(result.manifestPayload.routingMode).toBe("reference_directed");
+      expect(result.manifestPayload.renderProfile).toBe("MINIMAX_H3_720P_5S_REF2V_V1");
+      expect(
+        (result.manifestPayload as { executedInstruction?: { text?: string } }).executedInstruction
+          ?.text
+      ).toBe(instructionText);
+
+      // 1. Text mismatch
+      await expect(
+        assembler.assemble({
+          ...input,
+          executedInstruction: { ...input.executedInstruction!, text: "Wrong text" }
+        })
+      ).rejects.toThrow("executedInstruction.text");
+
+      // 2. Hash mismatch
+      await expect(
+        assembler.assemble({
+          ...input,
+          executedInstruction: { ...input.executedInstruction!, sha256: "b".repeat(64) }
+        })
+      ).rejects.toThrow("executedInstruction.sha256");
+
+      // 3. Byte length mismatch
+      await expect(
+        assembler.assemble({
+          ...input,
+          executedInstruction: { ...input.executedInstruction!, byteLength: 999 }
+        })
+      ).rejects.toThrow("executedInstruction.byteLength");
+
+      // 4. Reference injectionTarget node missing
+      await expect(
+        assembler.assemble({
+          ...input,
+          referenceImages: [
+            {
+              ...input.referenceImages![0]!,
+              injectionTarget: { nodeId: "999", classType: "LoadImage", inputField: "image" }
+            }
+          ]
+        })
+      ).rejects.toThrow("referenceImages.injectionTarget");
+
+      // 5. Reference injectionTarget value mismatch
+      await expect(
+        assembler.assemble({
+          ...input,
+          referenceImages: [
+            {
+              ...input.referenceImages![0]!,
+              stagedAs: { name: "different.png", subfolder: "staged" }
+            }
+          ]
+        })
+      ).rejects.toThrow("referenceImages.injectionTarget");
+
+      // 6. Unused reference node still present in workflow
+      await expect(
+        assembler.assemble({
+          ...input,
+          workflow: {
+            ...ref2vWorkflow,
+            "202": { class_type: "LoadImage", inputs: { image: "staged/ref2.png" } }
+          }
+        })
+      ).rejects.toThrow(
+        'referenceImages (unused topology node "202" still present in submitted workflow)'
+      );
+
+      // 7. Reference socket on node 105 connected to wrong node
+      await expect(
+        assembler.assemble({
+          ...input,
+          workflow: {
+            ...ref2vWorkflow,
+            "105": {
+              class_type: "MiniMaxH3ReferenceToVideo",
+              inputs: {
+                ...(ref2vWorkflow["105"] as { inputs: Record<string, unknown> }).inputs,
+                "ref_images.ref_image_0": ["999", 0]
+              }
+            }
+          }
+        })
+      ).rejects.toThrow(/referenceNode\.inputs\.ref_images\.ref_image_0/);
+
+      // 8. Inactive slot still present in submitted workflow for N=1
+      await expect(
+        assembler.assemble({
+          ...input,
+          workflow: {
+            ...ref2vWorkflow,
+            "105": {
+              class_type: "MiniMaxH3ReferenceToVideo",
+              inputs: {
+                ...(ref2vWorkflow["105"] as { inputs: Record<string, unknown> }).inputs,
+                "ref_images.ref_image_1": ["201", 0]
+              }
+            }
+          }
+        })
+      ).rejects.toThrow(
+        /referenceNode\.inputs\.ref_images\.ref_image_1 \(must be omitted for inactive reference slot 1/
+      );
+
+      // 9. N=0 succeeds with referenceImages: [] and pruned workflow
+      const ref2vN0Inputs = {
+        ...(ref2vWorkflow["105"] as { inputs: Record<string, unknown> }).inputs
+      };
+      delete ref2vN0Inputs["ref_images.ref_image_0"];
+      delete ref2vN0Inputs.ref_image_size;
+      const ref2vN0Workflow: RenderWorkflow = {
+        ...ref2vWorkflow,
+        "105": {
+          ...(ref2vWorkflow["105"] as { class_type: string; inputs: Record<string, unknown> }),
+          inputs: ref2vN0Inputs
+        }
+      };
+      delete (ref2vN0Workflow as Record<string, unknown>)["201"];
+
+      const n0Result = await assembler.assemble({
+        ...input,
+        workflow: ref2vN0Workflow,
+        referenceImages: []
+      });
+      expect(n0Result.manifestPayload.referenceImages).toEqual([]);
+
+      // 9b. N=0 fails if a ref_image slot is not omitted
+      await expect(
+        assembler.assemble({
+          ...input,
+          workflow: {
+            ...ref2vN0Workflow,
+            "105": {
+              ...(ref2vN0Workflow["105"] as {
+                class_type: string;
+                inputs: Record<string, unknown>;
+              }),
+              inputs: {
+                ...ref2vN0Inputs,
+                "ref_images.ref_image_0": ["201", 0]
+              }
+            }
+          },
+          referenceImages: []
+        })
+      ).rejects.toThrow(/referenceNode\.inputs\.ref_images\.ref_image_0/);
+
+      // 10. N=2 with both slots directly wired succeeds
+      const ref2vN2Workflow: RenderWorkflow = {
+        ...ref2vWorkflow,
+        "202": { class_type: "LoadImage", inputs: { image: "staged/ref2.png" } },
+        "105": {
+          ...(ref2vWorkflow["105"] as { class_type: string; inputs: Record<string, unknown> }),
+          inputs: {
+            ...(ref2vWorkflow["105"] as { inputs: Record<string, unknown> }).inputs,
+            "ref_images.ref_image_1": ["202", 0]
+          }
+        }
+      };
+
+      const resultN2 = await assembler.assemble({
+        ...input,
+        workflow: ref2vN2Workflow,
+        referenceImages: [
+          input.referenceImages![0]!,
+          {
+            slotIndex: 2,
+            promptTag: "<Picture 2>",
+            assetId: "00000000-0000-4000-8000-000000000021",
+            contentHashSha256: "b".repeat(64),
+            role: "product",
+            stagedAs: { name: "ref2.png", subfolder: "staged" },
+            injectionTarget: { nodeId: "202", classType: "LoadImage", inputField: "image" }
+          }
+        ]
+      });
+      expect(resultN2.manifestPayload.referenceImages).toHaveLength(2);
+
+      // 11. Inactive slot 2 present when N=2 fails
+      await expect(
+        assembler.assemble({
+          ...input,
+          workflow: {
+            ...ref2vN2Workflow,
+            "105": {
+              ...(ref2vN2Workflow["105"] as {
+                class_type: string;
+                inputs: Record<string, unknown>;
+              }),
+              inputs: {
+                ...(ref2vN2Workflow["105"] as { inputs: Record<string, unknown> }).inputs,
+                "ref_images.ref_image_2": ["201", 0]
+              }
+            }
+          },
+          referenceImages: [
+            input.referenceImages![0]!,
+            {
+              slotIndex: 2,
+              promptTag: "<Picture 2>",
+              assetId: "00000000-0000-4000-8000-000000000021",
+              contentHashSha256: "b".repeat(64),
+              role: "product",
+              stagedAs: { name: "ref2.png", subfolder: "staged" },
+              injectionTarget: { nodeId: "202", classType: "LoadImage", inputField: "image" }
+            }
+          ]
+        })
+      ).rejects.toThrow(
+        /referenceNode\.inputs\.ref_images\.ref_image_2 \(must be omitted for inactive reference slot 2/
+      );
+    });
+
+    it("assembles a valid frame_anchored manifest and verifies firstFrame and lastFrame injection targets", async () => {
+      const deps = createTestDeps();
+      const assembler = new AssembleGenerationManifest(deps);
+      const minimaxI2vProfile: ManifestSourceProfile = {
+        id: "MINIMAX_H3_720P_5S_I2V_V1",
+        engine: "minimax_h3_i2v",
+        runnerProfile: "dynamicvram-offload-v1",
+        source: { kind: "validated_host_export", license: "MiniMax Community License" },
+        baseline: {
+          width: 1344,
+          height: 768,
+          frames: 124,
+          steps: 20,
+          approximateDurationSeconds: 5
+        },
+        renderProfileIdentity: { key: "MINIMAX_H3_720P_5S_I2V_V1", version: 1 }
+      };
+
+      const i2vWorkflow: RenderWorkflow = {
+        "15": { class_type: "RandomNoise", inputs: { noise_seed: 42 } },
+        "17": { class_type: "KSamplerSelect", inputs: { sampler_name: "res_multistep" } },
+        "9": {
+          class_type: "BasicScheduler",
+          inputs: { scheduler: "simple", steps: 20, denoise: 1 }
+        },
+        "20": { class_type: "LoadImage", inputs: { image: "staged/first_anchor.png" } },
+        "104": {
+          class_type: "MiniMaxH3ImageToVideo",
+          inputs: {
+            prompt: "Anchor shot prompt",
+            length: 124,
+            width: 1344,
+            height: 768
+          }
+        }
+      };
+
+      const input = createDefaultInput({
+        profile: minimaxI2vProfile,
+        workflow: i2vWorkflow,
+        routingMode: "frame_anchored",
+        firstFrame: {
+          anchorType: "first_frame",
+          candidateId: "cand-202" as CandidateId,
+          contentHashSha256: "c".repeat(64),
+          stagedAs: { name: "first_anchor.png", subfolder: "staged" },
+          injectionTarget: { nodeId: "20", classType: "LoadImage", inputField: "image" }
+        }
+      });
+
+      const result = await assembler.assemble(input);
+      expect(result.manifestPayload.routingMode).toBe("frame_anchored");
+      expect(result.manifestPayload.renderProfile).toBe("MINIMAX_H3_720P_5S_I2V_V1");
+      expect(result.manifestPayload.firstFrame).toBeDefined();
+
+      // Missing firstFrame
+      await expect(
+        assembler.assemble({
+          ...input,
+          firstFrame: undefined
+        })
+      ).rejects.toThrow("firstFrame");
+
+      // Injection target value mismatch
+      await expect(
+        assembler.assemble({
+          ...input,
+          firstFrame: {
+            ...input.firstFrame!,
+            stagedAs: { name: "wrong.png", subfolder: "staged" }
+          }
+        })
+      ).rejects.toThrow("firstFrame.injectionTarget");
+    });
   });
 });

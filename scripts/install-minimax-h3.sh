@@ -76,8 +76,6 @@ elif [[ -n "${COMFYUI_MODELS_DIR:-}" && -d "${COMFYUI_MODELS_DIR}" ]]; then
   MODELS_DIR="${COMFYUI_MODELS_DIR}"
 elif [[ -n "${COMFYUI_DIR:-}" && -d "${COMFYUI_DIR}/models" ]]; then
   MODELS_DIR="${COMFYUI_DIR}/models"
-elif [[ -d "/home/gpoontip/ComfyUI/models" ]]; then
-  MODELS_DIR="/home/gpoontip/ComfyUI/models"
 else
   MODELS_DIR="${REPO_ROOT}/node_modules/.cache/minimax-h3-models"
 fi

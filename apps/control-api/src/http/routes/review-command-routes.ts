@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { ReviewCommandSchema, hashReviewCommand, type ReviewCommandResponse } from "@cco/contracts";
-import type { CandidateId } from "@cco/domain";
+import type { CandidateId, ShotPlanId } from "@cco/domain";
 import type { ReviewExecutionResult } from "@cco/application";
 import { defaultClock, type ControlApiAppOptions, type ControlApiContainer } from "../types.js";
 
@@ -219,6 +219,44 @@ export const reviewCommandRoutes: FastifyPluginAsync<ReviewCommandRoutesOptions>
           });
           break;
 
+        case "select_shotplan":
+          result = await container.useCases.reviewScene.selectShotPlan({
+            sceneId: body.sceneId,
+            eventId: body.actionId,
+            reviewerName,
+            occurredAt,
+            ...(body.directorNotes !== undefined ? { directorNotes: body.directorNotes } : {}),
+            expectedSpecRevision: body.expectedSpecRevision,
+            requestHashSha256,
+            shotPlanId: body.payload.shotPlanId as ShotPlanId
+          });
+          break;
+
+        case "approve_shotplan":
+          result = await container.useCases.reviewScene.approveShotPlan({
+            sceneId: body.sceneId,
+            eventId: body.actionId,
+            reviewerName,
+            occurredAt,
+            ...(body.directorNotes !== undefined ? { directorNotes: body.directorNotes } : {}),
+            expectedSpecRevision: body.expectedSpecRevision,
+            requestHashSha256,
+            shotPlanId: body.payload.shotPlanId as ShotPlanId
+          });
+          break;
+
+        case "reroll_shotplan":
+          result = await container.useCases.reviewScene.rerollShotPlan({
+            sceneId: body.sceneId,
+            eventId: body.actionId,
+            reviewerName,
+            occurredAt,
+            ...(body.directorNotes !== undefined ? { directorNotes: body.directorNotes } : {}),
+            expectedSpecRevision: body.expectedSpecRevision,
+            requestHashSha256
+          });
+          break;
+
         default: {
           const _exhaustive: never = body;
           throw new Error(`Unhandled action: ${(_exhaustive as { action: string }).action}`);
@@ -231,6 +269,15 @@ export const reviewCommandRoutes: FastifyPluginAsync<ReviewCommandRoutesOptions>
         specRevision: result.scene.specRevision,
         ...(result.scene.selectedCandidateId !== undefined
           ? { selectedCandidateId: result.scene.selectedCandidateId }
+          : {}),
+        ...(result.scene.selectedShotPlanId !== undefined
+          ? { selectedShotPlanId: result.scene.selectedShotPlanId }
+          : {}),
+        ...(result.scene.selectedShotPlanRevision !== undefined
+          ? { selectedShotPlanRevision: result.scene.selectedShotPlanRevision }
+          : {}),
+        ...(result.scene.approvedShotPlanId !== undefined
+          ? { approvedShotPlanId: result.scene.approvedShotPlanId }
           : {}),
         ...(result.scene.approval !== undefined ? { approval: result.scene.approval } : {}),
         isIdempotentReplay: result.isIdempotentReplay,

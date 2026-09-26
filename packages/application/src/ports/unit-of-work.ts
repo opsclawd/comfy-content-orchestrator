@@ -9,12 +9,14 @@ import type { ReferenceAssetRepository } from "./reference-asset-repository.js";
 import type { ReferenceGroupRepository } from "./reference-group-repository.js";
 import type { ReviewEventStore } from "./review-event-store.js";
 import type { SceneRepository } from "./scene-repository.js";
+import type { ShotPlanRepository } from "./shot-plan-repository.js";
 import type { StoryboardCandidateRepository } from "./storyboard-candidate-repository.js";
 
 export interface UnitOfWorkContext {
   readonly scenes: SceneRepository;
   readonly reviewEvents: ReviewEventStore;
   readonly candidates: StoryboardCandidateRepository;
+  readonly shotPlans?: ShotPlanRepository | undefined;
   readonly campaigns?: CampaignRepository<CampaignRecord> | undefined;
   readonly clients?: ClientRepository<ClientRecord> | undefined;
   readonly jobs?: TransactionalJobEnqueuer | undefined;

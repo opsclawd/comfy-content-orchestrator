@@ -33,7 +33,10 @@ export const ComponentLicenseEntrySchema = z
     status: LicensePolicyStatusSchema,
     licenseId: z.string().min(1).optional(),
     licenseSource: z.string().min(1, "licenseSource must not be empty"),
-    reviewedAt: z.string().datetime({ message: "reviewedAt must be an ISO 8601 datetime string" }),
+    reviewedAt: z
+      .string()
+      .datetime({ message: "reviewedAt must be an ISO 8601 datetime string" })
+      .optional(),
     policyRevision: z.string().min(1, "policyRevision must not be empty"),
     notes: z.string().min(1).optional(),
     territoryPolicy: z.string().min(1).optional(),
@@ -49,7 +52,7 @@ export type ComponentLicenseEntry = {
   readonly status: LicensePolicyStatus;
   readonly licenseId?: string | undefined;
   readonly licenseSource: string;
-  readonly reviewedAt: string;
+  readonly reviewedAt?: string | undefined;
   readonly policyRevision: string;
   readonly notes?: string | undefined;
   readonly territoryPolicy?: string | undefined;

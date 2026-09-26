@@ -1,9 +1,15 @@
-import type { CampaignReviewSummary, ReviewAction, SceneStatus } from "@cco/contracts";
+import type {
+  CampaignReviewSummary,
+  ReviewAction,
+  SceneStatus,
+  ShotPlanReviewItem
+} from "@cco/contracts";
 import type {
   CampaignId,
   CandidateId,
   SceneConfiguration,
   SceneId,
+  ShotPlanId,
   StoryboardCandidate
 } from "@cco/domain";
 
@@ -20,12 +26,16 @@ export interface SceneReviewDetail {
   readonly configuration: SceneConfiguration;
   readonly selectedCandidateId?: CandidateId;
   readonly selectedCandidateRevision?: number;
+  readonly selectedShotPlanId?: ShotPlanId;
+  readonly selectedShotPlanRevision?: number;
+  readonly approvedShotPlanId?: ShotPlanId;
   readonly approval?: {
     readonly revision: number;
     readonly approvedBy: string;
     readonly approvedAt: string;
   };
   readonly candidatesByRevision: readonly SceneReviewCandidateGroup[];
+  readonly shotPlans?: readonly ShotPlanReviewItem[];
   readonly allowedActions: readonly ReviewAction[];
 }
 

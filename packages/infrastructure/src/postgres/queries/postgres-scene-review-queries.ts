@@ -7,13 +7,15 @@ import type {
   CampaignReviewSummary,
   CampaignStatus,
   ReviewAction,
-  SceneStatus
+  SceneStatus,
+  ShotPlanReviewItem
 } from "@cco/contracts";
 import type {
   CampaignId,
   CandidateId,
   SceneConfiguration,
   SceneId,
+  ShotPlanId,
   StoryboardCandidate
 } from "@cco/domain";
 import type { Pool, PoolClient } from "pg";
@@ -28,11 +30,36 @@ interface StoryboardSceneRow {
   spec_revision: number;
   selected_candidate_id: string | null;
   selected_candidate_revision: number | null;
+  selected_shot_plan_id: string | null;
+  selected_shot_plan_revision: number | null;
+  approved_shot_plan_id: string | null;
   lora_configuration_id: string | null;
   approved_by: string | null;
   approved_at: Date | string | null;
   approved_revision: number | null;
   reference_asset_ids: string[] | null;
+}
+
+interface ShotPlanJoinedRow {
+  shot_plan_id: string;
+  scene_id: string;
+  spec_revision: number;
+  variant_ordinal: number;
+  status: string;
+  routing_mode: string;
+  target_duration_ms: number;
+  target_frame_count: number;
+  framing: string;
+  camera_angle: string;
+  camera_movement: string;
+  lighting_style: string;
+  previs_candidate_id: string | null;
+  structured_plan: Record<string, unknown> | string;
+  created_at: Date | string;
+  updated_at: Date | string;
+  storage_bucket: string | null;
+  storage_object_key: string | null;
+  content_hash_sha256: string | null;
 }
 
 interface StoryboardCandidateRow {
@@ -67,6 +94,80 @@ function mapRowToCandidate(row: StoryboardCandidateRow): StoryboardCandidate {
   };
 }
 
+function mapRowToShotPlanReviewItem(
+  row: ShotPlanJoinedRow,
+  currentRevision: number
+): ShotPlanReviewItem {
+  const structured =
+    typeof row.structured_plan === "string"
+      ? (JSON.parse(row.structured_plan) as Record<string, unknown>)
+      : (row.structured_plan ?? {});
+
+  const previsCandidateId =
+    row.previs_candidate_id ??
+    (structured.previs as Record<string, unknown> | undefined)?.candidateId;
+
+  const previs =
+    previsCandidateId && row.storage_bucket && row.storage_object_key && row.content_hash_sha256
+      ? {
+          candidateId: String(previsCandidateId),
+          media: {
+            available: true
+          },
+          reviewNotes:
+            (structured.previs as { reviewNotes?: string | null } | undefined)?.reviewNotes ?? null
+        }
+      : null;
+
+  return {
+    shotPlanId: row.shot_plan_id,
+    sceneId: row.scene_id,
+    specRevision: Number(row.spec_revision),
+    variantOrdinal: Number(row.variant_ordinal),
+    status: row.status as ShotPlanReviewItem["status"],
+    routingMode: row.routing_mode as ShotPlanReviewItem["routingMode"],
+    isCurrentRevision: Number(row.spec_revision) === currentRevision,
+    targetDurationMs: Number(row.target_duration_ms),
+    targetFrameCount: Number(row.target_frame_count),
+    framing: row.framing as ShotPlanReviewItem["framing"],
+    angle: row.camera_angle as ShotPlanReviewItem["angle"],
+    cameraMovement: row.camera_movement as ShotPlanReviewItem["cameraMovement"],
+    movementSpeed: ((structured.movementSpeed as string) ??
+      "normal") as ShotPlanReviewItem["movementSpeed"],
+    lensIntent: (structured.lensIntent as string) ?? "35mm standard",
+    cameraPosition: (structured.cameraPosition as string) ?? "eye_level",
+    cameraPromptDescription: (structured.cameraPromptDescription as string) ?? "",
+    actionSummary: (structured.actionSummary as string) ?? "",
+    lightingStyle: row.lighting_style as ShotPlanReviewItem["lightingStyle"],
+    environmentDescription: (structured.environmentDescription as string) ?? "",
+    colorPalette: Array.isArray(structured.colorPalette)
+      ? (structured.colorPalette as string[])
+      : [],
+    atmosphere: (structured.atmosphere as string | null | undefined) ?? null,
+    subjects: Array.isArray(structured.subjects)
+      ? (structured.subjects as ShotPlanReviewItem["subjects"])
+      : [],
+    beats: Array.isArray(structured.beats) ? (structured.beats as ShotPlanReviewItem["beats"]) : [],
+    dialogue: (structured.dialogue as ShotPlanReviewItem["dialogue"]) ?? null,
+    continuity: (structured.continuity as ShotPlanReviewItem["continuity"]) ?? {
+      persistentSubjectIds: [],
+      frameAnchorTarget: "none"
+    },
+    previs,
+    boundReferences: Array.isArray(structured.boundReferences)
+      ? (structured.boundReferences as ShotPlanReviewItem["boundReferences"])
+      : [],
+    createdAt:
+      row.created_at instanceof Date
+        ? row.created_at.toISOString()
+        : new Date(row.created_at).toISOString(),
+    updatedAt:
+      row.updated_at instanceof Date
+        ? row.updated_at.toISOString()
+        : new Date(row.updated_at).toISOString()
+  };
+}
+
 function deriveAllowedActions(status: SceneStatus): readonly ReviewAction[] {
   switch (status) {
     case "draft_pending":
@@ -85,6 +186,9 @@ function deriveAllowedActions(status: SceneStatus): readonly ReviewAction[] {
         "approve",
         "reroll",
         "candidate_select",
+        "select_shotplan",
+        "approve_shotplan",
+        "reroll_shotplan",
         "prompt_edit",
         "reference_change",
         "engine_change",
@@ -131,6 +235,9 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
         s.spec_revision,
         s.selected_candidate_id,
         s.selected_candidate_revision,
+        s.selected_shot_plan_id,
+        s.selected_shot_plan_revision,
+        s.approved_shot_plan_id,
         s.lora_configuration_id,
         s.approved_by,
         s.approved_at,
@@ -169,6 +276,36 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
       FROM storyboard_candidates
       WHERE scene_id = $1
       ORDER BY scene_spec_revision ASC, variant_ordinal ASC
+      `,
+      [sceneId]
+    );
+
+    const shotPlansResult = await this.client.query<ShotPlanJoinedRow>(
+      `
+      SELECT
+        sp.shot_plan_id,
+        sp.scene_id,
+        sp.spec_revision,
+        sp.variant_ordinal,
+        sp.status,
+        sp.routing_mode,
+        sp.target_duration_ms,
+        sp.target_frame_count,
+        sp.framing,
+        sp.camera_angle,
+        sp.camera_movement,
+        sp.lighting_style,
+        sp.previs_candidate_id,
+        sp.structured_plan,
+        sp.created_at,
+        sp.updated_at,
+        sc.storage_bucket,
+        sc.storage_object_key,
+        sc.content_hash_sha256
+      FROM shot_plans sp
+      LEFT JOIN storyboard_candidates sc ON sc.candidate_id = sp.previs_candidate_id
+      WHERE sp.scene_id = $1
+      ORDER BY sp.spec_revision ASC, sp.variant_ordinal ASC
       `,
       [sceneId]
     );
@@ -221,6 +358,10 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
       candidates: Object.freeze(candidates)
     }));
 
+    const shotPlans = shotPlansResult.rows.map((row) =>
+      mapRowToShotPlanReviewItem(row, Number(sceneRow.spec_revision))
+    );
+
     const status = sceneRow.status as SceneStatus;
     const allowedActions = deriveAllowedActions(status);
 
@@ -236,8 +377,18 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
       ...(sceneRow.selected_candidate_revision != null
         ? { selectedCandidateRevision: Number(sceneRow.selected_candidate_revision) }
         : {}),
+      ...(sceneRow.selected_shot_plan_id
+        ? { selectedShotPlanId: sceneRow.selected_shot_plan_id as ShotPlanId }
+        : {}),
+      ...(sceneRow.selected_shot_plan_revision != null
+        ? { selectedShotPlanRevision: Number(sceneRow.selected_shot_plan_revision) }
+        : {}),
+      ...(sceneRow.approved_shot_plan_id
+        ? { approvedShotPlanId: sceneRow.approved_shot_plan_id as ShotPlanId }
+        : {}),
       ...(approval !== undefined ? { approval } : {}),
       candidatesByRevision: Object.freeze(candidatesByRevision),
+      shotPlans: Object.freeze(shotPlans),
       allowedActions
     };
   }

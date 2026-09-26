@@ -1,6 +1,8 @@
 import { ReviewEventSchema, type ReviewAction } from "@cco/contracts";
 import {
   assertReferenceAssetSelectable,
+  InvalidShotPlanError,
+  InvalidTransitionError,
   ReferenceAssetNotFoundError,
   type CandidateId,
   type ReferenceAssetId,
@@ -8,13 +10,17 @@ import {
   type SceneId,
   type SceneReferenceBinding,
   type SceneSnapshot,
-  type SceneTransition
+  type SceneTransition,
+  type ShotPlanId
 } from "@cco/domain";
 import type { UnitOfWork, UnitOfWorkContext } from "../ports/unit-of-work.js";
 import { CandidateNotFoundError } from "./candidate-not-found-error.js";
 import { IdempotencyConflictError } from "./idempotency-conflict-error.js";
 import { SceneNotFoundError } from "./scene-not-found-error.js";
 import { StaleRevisionConflictError } from "./stale-revision-conflict-error.js";
+import { ShotPlanNotFoundError } from "./plan-shot-plans-errors.js";
+import type { PlanShotPlansUseCase } from "./plan-shot-plans.js";
+import { PlanningProviderNotConfiguredError } from "./scene-creation-errors.js";
 import {
   CANDIDATE_BASE_SEED,
   CANDIDATE_BATCH_SIZE,
@@ -43,6 +49,16 @@ export interface SelectCandidateInput extends ReviewAuditInput {
   readonly candidateId: CandidateId;
   readonly candidateRevision?: number;
 }
+
+export interface SelectShotPlanInput extends ReviewAuditInput {
+  readonly shotPlanId: ShotPlanId;
+}
+
+export interface ApproveShotPlanInput extends ReviewAuditInput {
+  readonly shotPlanId: ShotPlanId;
+}
+
+export type RerollShotPlanInput = ReviewAuditInput;
 
 export interface UpdatePromptInput extends ReviewAuditInput {
   readonly prompt: string;
@@ -193,7 +209,10 @@ export async function prepareReviewExecution(
 }
 
 export class ReviewSceneUseCases {
-  constructor(private readonly uow: UnitOfWork) {}
+  constructor(
+    private readonly uow: UnitOfWork,
+    private readonly planShotPlans?: PlanShotPlansUseCase | undefined
+  ) {}
 
   async selectCandidate(input: SelectCandidateInput): Promise<ReviewExecutionResult> {
     return await this.uow.execute(async (context) => {
@@ -228,6 +247,264 @@ export class ReviewSceneUseCases {
           candidateId: candidate.id,
           candidateRevision: candidate.specRevision
         },
+        priorSceneStatus,
+        resultingSceneStatus: transition.to,
+        ...(input.expectedSpecRevision !== undefined
+          ? { expectedSpecRevision: input.expectedSpecRevision }
+          : {}),
+        ...(input.resultingSpecRevision !== undefined
+          ? { resultingSpecRevision: input.resultingSpecRevision }
+          : {}),
+        ...(input.requestHashSha256 !== undefined
+          ? { requestHashSha256: input.requestHashSha256 }
+          : {}),
+        occurredAt: input.occurredAt
+      });
+
+      await context.reviewEvents.append(event);
+      await context.scenes.save(scene);
+
+      return {
+        isIdempotentReplay: false,
+        scene: scene.snapshot()
+      };
+    });
+  }
+
+  async selectShotPlan(input: SelectShotPlanInput): Promise<ReviewExecutionResult> {
+    return await this.uow.execute(async (context) => {
+      const prepared = await prepareReviewExecution(context, input);
+      if (prepared.isIdempotentReplay) {
+        return {
+          isIdempotentReplay: true,
+          scene: prepared.scene.snapshot()
+        };
+      }
+
+      const scene = prepared.scene;
+      if (!context.shotPlans) {
+        throw new Error("UnitOfWorkContext.shotPlans is not configured.");
+      }
+
+      const shotPlan = await context.shotPlans.findById(input.shotPlanId);
+      if (shotPlan === undefined) {
+        throw new ShotPlanNotFoundError(input.shotPlanId);
+      }
+
+      if (shotPlan.sceneId !== scene.id) {
+        throw new InvalidShotPlanError(
+          scene.id,
+          shotPlan.id,
+          "ShotPlan belongs to a different scene"
+        );
+      }
+
+      if (shotPlan.specRevision !== scene.snapshot().specRevision) {
+        throw new InvalidShotPlanError(
+          scene.id,
+          shotPlan.id,
+          "ShotPlan revision does not match current scene revision"
+        );
+      }
+
+      if (shotPlan.status !== "draft") {
+        throw new InvalidShotPlanError(
+          scene.id,
+          shotPlan.id,
+          `ShotPlan status must be 'draft' to select, but was '${shotPlan.status}'`
+        );
+      }
+
+      const priorSceneStatus = scene.status;
+      const transition = scene.selectShotPlan(shotPlan.id, shotPlan.specRevision, shotPlan.sceneId);
+
+      const event = ReviewEventSchema.parse({
+        eventId: input.eventId,
+        sceneId: input.sceneId,
+        reviewerName: input.reviewerName,
+        action: "select_shotplan",
+        ...(input.directorNotes !== undefined ? { directorNotes: input.directorNotes } : {}),
+        mutationPayload: {
+          shotPlanId: shotPlan.id,
+          shotPlanRevision: shotPlan.specRevision
+        },
+        priorSceneStatus,
+        resultingSceneStatus: transition.to,
+        ...(input.expectedSpecRevision !== undefined
+          ? { expectedSpecRevision: input.expectedSpecRevision }
+          : {}),
+        ...(input.resultingSpecRevision !== undefined
+          ? { resultingSpecRevision: input.resultingSpecRevision }
+          : {}),
+        ...(input.requestHashSha256 !== undefined
+          ? { requestHashSha256: input.requestHashSha256 }
+          : {}),
+        occurredAt: input.occurredAt
+      });
+
+      await context.reviewEvents.append(event);
+      await context.scenes.save(scene);
+
+      return {
+        isIdempotentReplay: false,
+        scene: scene.snapshot()
+      };
+    });
+  }
+
+  async approveShotPlan(input: ApproveShotPlanInput): Promise<ReviewExecutionResult> {
+    return await this.uow.execute(async (context) => {
+      const prepared = await prepareReviewExecution(context, input);
+      if (prepared.isIdempotentReplay) {
+        return {
+          isIdempotentReplay: true,
+          scene: prepared.scene.snapshot()
+        };
+      }
+
+      const scene = prepared.scene;
+      if (!context.shotPlans) {
+        throw new Error("UnitOfWorkContext.shotPlans is not configured.");
+      }
+
+      const shotPlan = await context.shotPlans.findById(input.shotPlanId);
+      if (shotPlan === undefined) {
+        throw new ShotPlanNotFoundError(input.shotPlanId);
+      }
+
+      if (shotPlan.sceneId !== scene.id) {
+        throw new InvalidShotPlanError(
+          scene.id,
+          shotPlan.id,
+          "ShotPlan belongs to a different scene"
+        );
+      }
+
+      if (shotPlan.specRevision !== scene.snapshot().specRevision) {
+        throw new InvalidShotPlanError(
+          scene.id,
+          shotPlan.id,
+          "ShotPlan revision does not match current scene revision"
+        );
+      }
+
+      if (shotPlan.status !== "draft") {
+        throw new InvalidShotPlanError(
+          scene.id,
+          shotPlan.id,
+          `ShotPlan status must be 'draft' to approve, but was '${shotPlan.status}'`
+        );
+      }
+
+      const snapshot = scene.snapshot();
+      if (snapshot.selectedShotPlanId === undefined) {
+        throw new InvalidTransitionError(
+          scene.id,
+          scene.status,
+          "approveShotPlan",
+          "Approval requires an active ShotPlan selection."
+        );
+      }
+
+      if (snapshot.selectedShotPlanId !== shotPlan.id) {
+        throw new InvalidTransitionError(
+          scene.id,
+          scene.status,
+          "approveShotPlan",
+          `Requested ShotPlan '${shotPlan.id}' does not match currently selected ShotPlan '${snapshot.selectedShotPlanId}'.`
+        );
+      }
+
+      const priorSceneStatus = scene.status;
+
+      const transition = scene.approveShotPlan({
+        shotPlanId: shotPlan.id,
+        shotPlanRevision: shotPlan.specRevision,
+        shotPlanSceneId: shotPlan.sceneId,
+        approvedBy: input.reviewerName,
+        approvedAt: input.occurredAt
+      });
+
+      shotPlan.approve();
+      await context.shotPlans.save(shotPlan);
+
+      const allPlans = await context.shotPlans.listBySceneAndRevision(scene.id, scene.specRevision);
+      for (const other of allPlans) {
+        if (other.id !== shotPlan.id && other.status === "draft") {
+          other.supersede();
+          await context.shotPlans.save(other);
+        }
+      }
+
+      const event = ReviewEventSchema.parse({
+        eventId: input.eventId,
+        sceneId: input.sceneId,
+        reviewerName: input.reviewerName,
+        action: "approve_shotplan",
+        ...(input.directorNotes !== undefined ? { directorNotes: input.directorNotes } : {}),
+        mutationPayload: {
+          shotPlanId: shotPlan.id,
+          shotPlanRevision: shotPlan.specRevision
+        },
+        priorSceneStatus,
+        resultingSceneStatus: transition.to,
+        ...(input.expectedSpecRevision !== undefined
+          ? { expectedSpecRevision: input.expectedSpecRevision }
+          : {}),
+        ...(input.resultingSpecRevision !== undefined
+          ? { resultingSpecRevision: input.resultingSpecRevision }
+          : {}),
+        ...(input.requestHashSha256 !== undefined
+          ? { requestHashSha256: input.requestHashSha256 }
+          : {}),
+        occurredAt: input.occurredAt
+      });
+
+      await context.reviewEvents.append(event);
+      await context.scenes.save(scene);
+
+      return {
+        isIdempotentReplay: false,
+        scene: scene.snapshot()
+      };
+    });
+  }
+
+  async rerollShotPlan(input: RerollShotPlanInput): Promise<ReviewExecutionResult> {
+    return await this.uow.execute(async (context) => {
+      const prepared = await prepareReviewExecution(context, input);
+      if (prepared.isIdempotentReplay) {
+        return {
+          isIdempotentReplay: true,
+          scene: prepared.scene.snapshot()
+        };
+      }
+
+      const scene = prepared.scene;
+      const priorSceneStatus = scene.status;
+
+      const transition = scene.rerollShotPlan();
+
+      if (!this.planShotPlans) {
+        throw new PlanningProviderNotConfiguredError(
+          "Shot plan planning is not available; planning model clients are not configured."
+        );
+      }
+
+      await this.planShotPlans.executeWithContext(context, {
+        sceneId: scene.id,
+        reroll: true,
+        variantCount: CANDIDATE_BATCH_SIZE,
+        enqueuePrevisJobs: true
+      });
+
+      const event = ReviewEventSchema.parse({
+        eventId: input.eventId,
+        sceneId: input.sceneId,
+        reviewerName: input.reviewerName,
+        action: "reroll_shotplan",
+        ...(input.directorNotes !== undefined ? { directorNotes: input.directorNotes } : {}),
+        mutationPayload: {},
         priorSceneStatus,
         resultingSceneStatus: transition.to,
         ...(input.expectedSpecRevision !== undefined
