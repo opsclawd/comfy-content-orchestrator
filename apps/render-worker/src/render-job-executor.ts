@@ -930,11 +930,10 @@ export function mutateWorkflow(
       }
 
       if (topology.refImageSize && refNodeInputs) {
-        if (N > 0) {
-          refNodeInputs[topology.refImageSize.inputField] = "max";
-        } else {
-          delete refNodeInputs[topology.refImageSize.inputField];
-        }
+        // ref_image_size is a required input on MiniMaxH3ReferenceToVideo (verified live on the
+        // pinned render host: omitting it fails ComfyUI validation with required_input_missing,
+        // even for N=0). "match" is used when there are no references to conform to.
+        refNodeInputs[topology.refImageSize.inputField] = N > 0 ? "max" : "match";
       }
       if (topology.width && refNodeInputs && profile?.baseline.width) {
         refNodeInputs[topology.width.inputField] = profile.baseline.width;
@@ -1090,18 +1089,11 @@ export function validateMiniMaxH3ReferenceToVideoInputSchema(
     throw new RenderJobExecutionError(`Node "${nodeId}" input "prompt" must be a non-empty string`);
   }
 
-  // Optional inputs
-  if (inputs.ref_image_size !== undefined) {
-    if (inputs.ref_image_size !== "match" && inputs.ref_image_size !== "max") {
-      throw new RenderJobExecutionError(
-        `Node "${nodeId}" input "ref_image_size" must be "match" or "max", got "${inputs.ref_image_size}"`
-      );
-    }
-  }
-
-  if (activeReferenceCount === 0 && inputs.ref_image_size !== undefined) {
+  // ref_image_size is a required input on the pinned MiniMaxH3ReferenceToVideo node (verified
+  // live: omitting it fails ComfyUI validation with required_input_missing, even for N=0).
+  if (inputs.ref_image_size !== "match" && inputs.ref_image_size !== "max") {
     throw new RenderJobExecutionError(
-      `For N=0 references, node "${nodeId}" input "ref_image_size" must be omitted, got ${JSON.stringify(inputs.ref_image_size)}`
+      `Node "${nodeId}" input "ref_image_size" must be "match" or "max", got "${JSON.stringify(inputs.ref_image_size)}"`
     );
   }
 

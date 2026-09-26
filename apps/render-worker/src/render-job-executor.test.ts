@@ -2889,7 +2889,7 @@ describe("Certified Render Job Executor", () => {
       expect(node105Inputs?.ref_image_size).toBe("max");
     });
 
-    it("mutates Ref2V workflow with N=0 references by pruning all loaders, omitting all ref_image slots, and omitting ref_image_size", async () => {
+    it("mutates Ref2V workflow with N=0 references by pruning all loaders, omitting all ref_image slots, and setting ref_image_size to match", async () => {
       const realRef2vPath = resolve(
         DEFAULT_REPO_ROOT,
         "templates/minimax_h3_720p_ref2v_124f_api.json"
@@ -2909,12 +2909,12 @@ describe("Certified Render Job Executor", () => {
       for (let slot = 1; slot <= 9; slot++) {
         expect(mutated[String(200 + slot)]).toBeUndefined();
       }
-      // Node 105 inputs omit all per-slot ref_image fields and ref_image_size
+      // Node 105 inputs omit all per-slot ref_image fields but keep the required ref_image_size
       const node105Inputs = mutated["105"]?.inputs;
       for (let s = 0; s <= 8; s++) {
         expect(node105Inputs?.[`ref_images.ref_image_${s}`]).toBeUndefined();
       }
-      expect(node105Inputs?.ref_image_size).toBeUndefined();
+      expect(node105Inputs?.ref_image_size).toBe("match");
       expect(node105Inputs?.prompt).toBe("Zero ref prompt");
     });
 
@@ -3894,7 +3894,7 @@ describe("Certified Render Job Executor", () => {
           validateMiniMaxH3ReferenceToVideoInputSchema("105", n2Mutated["105"], n2Mutated, 2)
         ).not.toThrow();
 
-        // N=0 schema validation succeeds when all ref_image slots and ref_image_size are omitted
+        // N=0 schema validation succeeds when all ref_image slots are omitted and ref_image_size is "match"
         const n0Mutated = mutateWorkflow(
           realRef2vJson,
           { prompt: "test", referenceImages: [] },
@@ -3903,6 +3903,20 @@ describe("Certified Render Job Executor", () => {
         expect(() =>
           validateMiniMaxH3ReferenceToVideoInputSchema("105", n0Mutated["105"], n0Mutated, 0)
         ).not.toThrow();
+
+        // ref_image_size is required by the pinned node even for N=0 (verified live: omitting
+        // it fails ComfyUI validation with required_input_missing) - schema validation must
+        // reject a workflow that omits it.
+        const n0MissingRefImageSize = JSON.parse(JSON.stringify(n0Mutated));
+        delete n0MissingRefImageSize["105"].inputs.ref_image_size;
+        expect(() =>
+          validateMiniMaxH3ReferenceToVideoInputSchema(
+            "105",
+            n0MissingRefImageSize["105"],
+            n0MissingRefImageSize,
+            0
+          )
+        ).toThrow(/input "ref_image_size" must be "match" or "max"/);
 
         // N=0 schema validation throws if a ref_image slot is present
         const n0WithRefImages = JSON.parse(JSON.stringify(n0Mutated));
@@ -4133,11 +4147,11 @@ describe("Certified Render Job Executor", () => {
         // Verify submitted workflow passed to executeProfileRender
         expect(mockExecute).toHaveBeenCalledTimes(1);
         const submittedWorkflow = mockExecute.mock.calls[0]![0].workflow;
-        // Node 105 omits all per-slot ref_image fields and ref_image_size
+        // Node 105 omits all per-slot ref_image fields but keeps the required ref_image_size
         for (let s = 0; s <= 8; s++) {
           expect(submittedWorkflow["105"].inputs[`ref_images.ref_image_${s}`]).toBeUndefined();
         }
-        expect(submittedWorkflow["105"].inputs.ref_image_size).toBeUndefined();
+        expect(submittedWorkflow["105"].inputs.ref_image_size).toBe("match");
         // All image loaders pruned
         for (let slot = 1; slot <= 9; slot++) {
           expect(submittedWorkflow[String(200 + slot)]).toBeUndefined();

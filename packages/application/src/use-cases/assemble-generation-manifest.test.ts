@@ -1981,11 +1981,13 @@ describe("AssembleGenerationManifest use case", () => {
       );
 
       // 9. N=0 succeeds with referenceImages: [] and pruned workflow
+      // ref_image_size is required by the pinned node even for N=0 (verified live: omitting
+      // it fails ComfyUI validation), so it stays set to "match" rather than being omitted.
       const ref2vN0Inputs = {
         ...(ref2vWorkflow["105"] as { inputs: Record<string, unknown> }).inputs
       };
       delete ref2vN0Inputs["ref_images.ref_image_0"];
-      delete ref2vN0Inputs.ref_image_size;
+      ref2vN0Inputs.ref_image_size = "match";
       const ref2vN0Workflow: RenderWorkflow = {
         ...ref2vWorkflow,
         "105": {
