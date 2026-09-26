@@ -725,11 +725,9 @@ export async function runCertificationCli(
           delete refNodeInputs[topology.referenceSlotFields[i]!];
         }
         if (topology.refImageSize) {
-          if (N > 0) {
-            refNodeInputs[topology.refImageSize.inputField] = "max";
-          } else {
-            delete refNodeInputs[topology.refImageSize.inputField];
-          }
+          // ref_image_size is a required input on MiniMaxH3ReferenceToVideo (verified live on
+          // the pinned render host: omitting it fails ComfyUI validation, even for N=0).
+          refNodeInputs[topology.refImageSize.inputField] = N > 0 ? "max" : "match";
         }
       }
     }

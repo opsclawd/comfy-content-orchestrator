@@ -1823,7 +1823,7 @@ describe("certify CLI", () => {
       for (let s = 0; s <= 8; s++) {
         expect(submittedWorkflow["105"]!.inputs[`ref_images.ref_image_${s}`]).toBeUndefined();
       }
-      expect(submittedWorkflow["105"]!.inputs.ref_image_size).toBeUndefined();
+      expect(submittedWorkflow["105"]!.inputs.ref_image_size).toBe("match");
       for (let slot = 201; slot <= 209; slot++) {
         expect(submittedWorkflow[String(slot)]).toBeUndefined();
       }

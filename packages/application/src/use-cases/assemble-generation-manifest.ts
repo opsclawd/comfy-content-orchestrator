@@ -699,8 +699,10 @@ export class AssembleGenerationManifest {
             }
           }
           if (topology.refImageSize) {
+            // ref_image_size is a required input on the pinned MiniMaxH3ReferenceToVideo node
+            // (verified live: omitting it fails ComfyUI validation, even for N=0).
             const actualRefImageSize = refNode.inputs?.[topology.refImageSize.inputField];
-            const expectedRefImageSize = N > 0 ? "max" : undefined;
+            const expectedRefImageSize = N > 0 ? "max" : "match";
             if (actualRefImageSize !== expectedRefImageSize) {
               throw new IncompleteManifestError(
                 `referenceNode.inputs.${topology.refImageSize.inputField} (expected ${JSON.stringify(expectedRefImageSize)}, got ${JSON.stringify(actualRefImageSize)})`
