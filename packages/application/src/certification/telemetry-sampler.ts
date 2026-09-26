@@ -304,6 +304,7 @@ export class TelemetrySampler {
         reservedVramMb: null,
         peakHostRamUsedMb: null,
         peakProcessRssMb: null,
+        peakSwapUsedMb: null,
         swapUsedDeltaMb: null,
         systemSwapInPageDelta: null,
         systemSwapOutPageDelta: null,
@@ -320,6 +321,7 @@ export class TelemetrySampler {
     let reservedVramMb = 0;
     let peakHostRamUsedMb = 0;
     let peakProcessRssMb = 0;
+    let peakSwapUsedMb = 0;
 
     for (const sample of this.samples) {
       if (sample.gpu.usedVramMb > peakVramMb) {
@@ -333,6 +335,9 @@ export class TelemetrySampler {
       }
       if (sample.host.processRssMb > peakProcessRssMb) {
         peakProcessRssMb = sample.host.processRssMb;
+      }
+      if (sample.host.swapUsedMb > peakSwapUsedMb) {
+        peakSwapUsedMb = sample.host.swapUsedMb;
       }
     }
 
@@ -398,6 +403,7 @@ export class TelemetrySampler {
       reservedVramMb,
       peakHostRamUsedMb,
       peakProcessRssMb,
+      peakSwapUsedMb,
       swapUsedDeltaMb,
       systemSwapInPageDelta,
       systemSwapOutPageDelta,

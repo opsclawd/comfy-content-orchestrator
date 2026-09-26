@@ -156,6 +156,7 @@ function createValidPassedFixture(
       reservedVramMb: 0,
       peakHostRamUsedMb: 19000,
       peakProcessRssMb: 4500,
+      peakSwapUsedMb: 0,
       swapUsedDeltaMb: 0,
       systemSwapInPageDelta: 0,
       systemSwapOutPageDelta: 0,

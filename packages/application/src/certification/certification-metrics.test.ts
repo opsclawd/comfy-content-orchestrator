@@ -179,6 +179,7 @@ function createCompleteArtifact(
       reservedVramMb: 0,
       peakHostRamUsedMb: 19000,
       peakProcessRssMb: 4500,
+      peakSwapUsedMb: 50,
       swapUsedDeltaMb: 50,
       systemSwapInPageDelta: 2,
       systemSwapOutPageDelta: 3,
@@ -380,6 +381,23 @@ describe("certification-metrics", () => {
       expect(resReuseChange.processMinorPageFaultDelta).toBeNull();
     });
 
+    it("tracks peakSwapUsedMb as a peak (not a first-to-last delta) since swap is a reclaimable gauge, not a monotonic counter", () => {
+      // Verified live on the pinned RTX 4090 render host: swap usage genuinely decreases
+      // mid-run (e.g. the kernel reclaims pages after model unload), which previously made
+      // swapUsedDeltaMb null and failed the telemetryComplete gate on an otherwise-successful
+      // render.
+      const sampleStart = createSample({ swapUsedMb: 3211 });
+      const samplePeak = createSample({ swapUsedMb: 4500 });
+      const sampleEnd = createSample({ swapUsedMb: 606 }); // swap reclaimed by the kernel
+
+      const result = aggregateCertificationTelemetry([sampleStart, samplePeak, sampleEnd]);
+
+      expect(result.peakSwapUsedMb).toBe(4500);
+      // swapUsedDeltaMb remains informational-only and may still be null; it is no longer
+      // required by the resource gate (see evaluateLtxResourceGate tests below).
+      expect(result.swapUsedDeltaMb).toBeNull();
+    });
+
     it("returns null for all aggregates when samples array is empty", () => {
       const errors: CertificationSamplingError[] = [
         { measuredAt: "2026-08-15T20:00:00.000Z", message: "Device unavailable" }
@@ -451,6 +469,34 @@ describe("certification-metrics", () => {
       const gatePidChange = evaluateLtxResourceGate({ render, telemetry: pidChangeTelemetry });
       expect(gatePidChange.passed).toBe(false);
       expect(gatePidChange.checks.telemetryComplete).toBe(false);
+    });
+
+    // Regression: a real certification run on the pinned RTX 4090 host passed rendering but
+    // failed this gate solely because swap usage decreased mid-run (kernel reclaim after model
+    // unload), which nulled the old delta-based swap metric. The gate must not depend on a
+    // metric that can be null for a perfectly healthy run.
+    it("does not fail telemetryComplete when swap usage decreases mid-run (peak-based, not delta-based)", () => {
+      const render: CertificationRenderExecution = {
+        executionId: "exec-swap",
+        status: "succeeded",
+        outputObjectKeys: ["out.mp4"],
+        startedAt: "2026-08-15T20:00:00.000Z",
+        completedAt: "2026-08-15T20:00:45.000Z",
+        totalDurationMs: 45000
+      };
+
+      const swapDecreaseTelemetry = aggregateCertificationTelemetry([
+        createSample({ phase: "pre_dispatch", swapUsedMb: 3211 }),
+        createSample({ phase: "sampling", swapUsedMb: 4500 }),
+        createSample({ phase: "post_unload", swapUsedMb: 606 })
+      ]);
+
+      expect(swapDecreaseTelemetry.swapUsedDeltaMb).toBeNull();
+      expect(swapDecreaseTelemetry.peakSwapUsedMb).toBe(4500);
+
+      const gate = evaluateLtxResourceGate({ render, telemetry: swapDecreaseTelemetry });
+      expect(gate.checks.telemetryComplete).toBe(true);
+      expect(gate.passed).toBe(true);
     });
 
     // Behavioral invariant: duration-boundary-is-inclusive

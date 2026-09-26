@@ -605,6 +605,7 @@ describe("certify CLI", () => {
       reservedVramMb: 0,
       peakHostRamUsedMb: 25000,
       peakProcessRssMb: 4000,
+      peakSwapUsedMb: 0,
       swapUsedDeltaMb: 0,
       systemSwapInPageDelta: 0,
       systemSwapOutPageDelta: 0,

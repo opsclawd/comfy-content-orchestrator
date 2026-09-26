@@ -491,6 +491,10 @@ describe("TelemetrySampler", () => {
     const data = await sampler.stop();
 
     expect(data.swapUsedDeltaMb).toBeNull();
+    // peakSwapUsedMb tracks the peak (500) regardless of the decrease, so a real run where
+    // swap usage drops mid-run (e.g. kernel reclaim after model unload) still reports a
+    // non-null, gate-relevant swap metric.
+    expect(data.peakSwapUsedMb).toBe(500);
     expect(data.systemSwapInPageDelta).toBeNull();
     expect(data.systemSwapOutPageDelta).toBe(0);
     expect(data.systemMajorPageFaultDelta).toBe(0);
@@ -611,6 +615,7 @@ describe("TelemetrySampler", () => {
     expect(data.reservedVramMb).toBe(0);
     expect(data.peakHostRamUsedMb).toBe(14000);
     expect(data.peakProcessRssMb).toBe(1200);
+    expect(data.peakSwapUsedMb).toBe(0);
     expect(data.swapUsedDeltaMb).toBe(0);
     expect(data.systemMajorPageFaultDelta).toBe(0);
     expect(data.postUnloadUsedVramMb).toBe(1024);
