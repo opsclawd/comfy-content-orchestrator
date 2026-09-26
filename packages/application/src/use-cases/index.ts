@@ -65,3 +65,7 @@ export * from "./upload-reference-asset.js";
 export * from "./list-client-references.js";
 export * from "./archive-reference-asset.js";
 export * from "./update-reference-asset-role.js";
+export * from "./plan-shot-plans-errors.js";
+export * from "./shot-plan-prompt.js";
+export * from "./shot-plan-response-parser.js";
+export * from "./plan-shot-plans.js";

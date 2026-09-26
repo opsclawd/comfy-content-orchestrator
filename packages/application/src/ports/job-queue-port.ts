@@ -1,4 +1,4 @@
-import type { JobId, JobKind, LeaseToken, RenderJob, SceneId } from "@cco/domain";
+import type { JobId, JobKind, LeaseToken, RenderJob, SceneId, ShotPlanId } from "@cco/domain";
 
 export interface EnqueueJobInput {
   readonly sceneId: SceneId;
@@ -31,6 +31,8 @@ export interface CandidateCompletionPayload {
   readonly storageObjectKey: string;
   readonly contentHashSha256: string;
   readonly generationPayload?: Readonly<Record<string, unknown>>;
+  readonly shotPlanId?: ShotPlanId | string | undefined;
+  readonly specRevision?: number | undefined;
 }
 
 export interface JobQueuePort {

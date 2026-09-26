@@ -259,9 +259,18 @@ interface ValidatedInjectedPayload {
   readonly approvedCandidateId?: CandidateId | undefined;
   readonly frameCount?: number | undefined;
   readonly referenceImage?: string | undefined;
+  readonly shotPlanId?: string | undefined;
+  readonly specRevision?: number | undefined;
 }
 
-const ALLOWED_CANDIDATE_KEYS = new Set(["prompt", "negativePrompt", "seed", "variantOrdinal"]);
+const ALLOWED_CANDIDATE_KEYS = new Set([
+  "prompt",
+  "negativePrompt",
+  "seed",
+  "variantOrdinal",
+  "shotPlanId",
+  "specRevision"
+]);
 const ALLOWED_PRODUCTION_KEYS = new Set([
   "prompt",
   "negativePrompt",
@@ -288,6 +297,16 @@ function validateInjectedPayload(
       if (jobKind === "production" && key === "variantOrdinal") {
         throw new RenderJobPayloadValidationError(
           "variantOrdinal is candidate-only and not allowed in production jobs"
+        );
+      }
+      if (jobKind === "production" && key === "shotPlanId") {
+        throw new RenderJobPayloadValidationError(
+          "shotPlanId is candidate-only and not allowed in production jobs"
+        );
+      }
+      if (jobKind === "production" && key === "specRevision") {
+        throw new RenderJobPayloadValidationError(
+          "specRevision is candidate-only and not allowed in production jobs"
         );
       }
       if (jobKind === "candidate" && key === "approvedCandidateId") {
@@ -470,6 +489,40 @@ function validateInjectedPayload(
     variantOrdinal = raw.variantOrdinal;
   }
 
+  let shotPlanId: string | undefined;
+  if ("shotPlanId" in raw && raw.shotPlanId !== undefined) {
+    if (jobKind !== "candidate") {
+      throw new RenderJobPayloadValidationError(
+        "shotPlanId is candidate-only and not allowed in production jobs"
+      );
+    }
+    if (typeof raw.shotPlanId !== "string" || raw.shotPlanId.trim().length === 0) {
+      throw new RenderJobPayloadValidationError(
+        "injectedPayload.shotPlanId must be a non-empty string"
+      );
+    }
+    shotPlanId = raw.shotPlanId.trim();
+  }
+
+  let specRevision: number | undefined;
+  if ("specRevision" in raw && raw.specRevision !== undefined) {
+    if (jobKind !== "candidate") {
+      throw new RenderJobPayloadValidationError(
+        "specRevision is candidate-only and not allowed in production jobs"
+      );
+    }
+    if (
+      typeof raw.specRevision !== "number" ||
+      !Number.isInteger(raw.specRevision) ||
+      raw.specRevision <= 0
+    ) {
+      throw new RenderJobPayloadValidationError(
+        "injectedPayload.specRevision must be a positive integer"
+      );
+    }
+    specRevision = raw.specRevision;
+  }
+
   return {
     prompt,
     negativePrompt,
@@ -477,7 +530,9 @@ function validateInjectedPayload(
     seed,
     variantOrdinal,
     approvedCandidateId,
-    frameCount
+    frameCount,
+    shotPlanId,
+    specRevision
   };
 }
 
@@ -1044,10 +1099,18 @@ export function createCertifiedRenderJobExecutor(
           storageBucket: primaryMedia.bucket,
           storageObjectKey: primaryMedia.key,
           contentHashSha256: primaryMedia.checksumSha256!,
+          ...(validatedInjected.shotPlanId ? { shotPlanId: validatedInjected.shotPlanId } : {}),
+          ...(validatedInjected.specRevision !== undefined
+            ? { specRevision: validatedInjected.specRevision }
+            : {}),
           generationPayload: Object.freeze({
             promptIdComfy: renderResult.promptId,
             profile: renderResult.profile,
-            originalOutputKey: renderResult.outputObjectKeys[0]!
+            originalOutputKey: renderResult.outputObjectKeys[0]!,
+            ...(validatedInjected.shotPlanId ? { shotPlanId: validatedInjected.shotPlanId } : {}),
+            ...(validatedInjected.specRevision !== undefined
+              ? { specRevision: validatedInjected.specRevision }
+              : {})
           })
         });
 

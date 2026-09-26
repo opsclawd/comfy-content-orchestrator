@@ -205,6 +205,29 @@ export const reviewReadRoutes: FastifyPluginAsync<ReviewReadRoutesOptions> = asy
         })
       );
 
+      const candidateMediaMap = new Map<string, { available: boolean; url?: string }>();
+      for (const group of candidatesByRevision) {
+        for (const c of group.candidates) {
+          candidateMediaMap.set(c.candidateId, c.media);
+        }
+      }
+
+      const shotPlans = detail.shotPlans?.map((plan) => {
+        if (plan.previs?.candidateId) {
+          const signedMedia = candidateMediaMap.get(plan.previs.candidateId);
+          if (signedMedia) {
+            return {
+              ...plan,
+              previs: {
+                ...plan.previs,
+                media: signedMedia
+              }
+            };
+          }
+        }
+        return plan;
+      });
+
       const readModel: SceneReviewDetailReadModel = {
         sceneId: detail.sceneId,
         campaignId: detail.campaignId,
@@ -223,8 +246,14 @@ export const reviewReadRoutes: FastifyPluginAsync<ReviewReadRoutesOptions> = asy
         ...(detail.selectedCandidateRevision !== undefined
           ? { selectedCandidateRevision: detail.selectedCandidateRevision }
           : {}),
+        ...(detail.selectedShotPlanId ? { selectedShotPlanId: detail.selectedShotPlanId } : {}),
+        ...(detail.selectedShotPlanRevision !== undefined
+          ? { selectedShotPlanRevision: detail.selectedShotPlanRevision }
+          : {}),
+        ...(detail.approvedShotPlanId ? { approvedShotPlanId: detail.approvedShotPlanId } : {}),
         ...(detail.approval ? { approval: detail.approval } : {}),
         candidatesByRevision,
+        ...(shotPlans !== undefined ? { shotPlans } : {}),
         allowedActions: [...detail.allowedActions]
       };
 

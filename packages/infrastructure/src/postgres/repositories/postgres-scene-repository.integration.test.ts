@@ -178,6 +178,7 @@ describe("PostgreSQL SceneRepository Adapter Integration", () => {
       status: "draft_pending",
       specRevision: 1,
       sequenceIndex: 1,
+      productionRoutingMode: "reference_directed",
       configuration: {
         prompt: "Draft prompt",
         referenceIds: [],
@@ -443,6 +444,7 @@ describe("PostgreSQL SceneRepository Adapter Integration", () => {
       status: "draft_pending",
       specRevision: 1,
       sequenceIndex: 1,
+      productionRoutingMode: "reference_directed",
       configuration: {
         prompt: "Newly created scene prompt from scratch",
         referenceIds: [refAsset.asset_id],

@@ -28,8 +28,8 @@ export const SCENE_STATUSES = [
 
 export type SceneStatus = (typeof SCENE_STATUSES)[number];
 
-import type { SceneId, CampaignId } from "./identifiers.js";
-export type { SceneId, CampaignId };
+import type { SceneId, CampaignId, ShotPlanId } from "./identifiers.js";
+export type { SceneId, CampaignId, ShotPlanId };
 
 export interface SceneConfiguration {
   readonly prompt: string;
@@ -85,6 +85,11 @@ export interface SceneSnapshot {
   readonly failedFrom?: SceneStatus;
   readonly selectedCandidateId?: CandidateId;
   readonly selectedCandidateRevision?: number;
+  readonly selectedShotPlanId?: ShotPlanId;
+  readonly selectedShotPlanRevision?: number;
+  readonly approvedShotPlanId?: ShotPlanId;
+  readonly approvedShotPlanRevision?: number;
+  readonly productionRoutingMode?: "reference_directed" | "frame_anchored";
   readonly activeProductionJobId?: string | undefined;
   readonly productionAttemptOrdinal?: number | undefined;
   readonly acceptedProductionAttemptId?: string | undefined;
@@ -105,6 +110,7 @@ export type SceneTransitionReason =
   | "cancelled"
   | "configuration_changed"
   | "candidate_selected"
+  | "shot_plan_selected"
   | "production_rerender_requested"
   | "production_accepted";
 
@@ -126,6 +132,20 @@ export class InvalidCandidateError extends Error {
     super(`Candidate '${candidateId}' is invalid for scene '${sceneId}': ${reason}`);
     this.sceneId = sceneId;
     this.candidateId = candidateId;
+    this.reason = reason;
+  }
+}
+
+export class InvalidShotPlanError extends Error {
+  override readonly name = "InvalidShotPlanError";
+  readonly sceneId: SceneId;
+  readonly shotPlanId: ShotPlanId;
+  readonly reason: string;
+
+  constructor(sceneId: SceneId, shotPlanId: ShotPlanId, reason: string) {
+    super(`ShotPlan '${shotPlanId}' is invalid for scene '${sceneId}': ${reason}`);
+    this.sceneId = sceneId;
+    this.shotPlanId = shotPlanId;
     this.reason = reason;
   }
 }
@@ -236,6 +256,11 @@ export class Scene {
   #failedFrom?: SceneStatus | undefined;
   #selectedCandidateId?: CandidateId | undefined;
   #selectedCandidateRevision?: number | undefined;
+  #selectedShotPlanId?: ShotPlanId | undefined;
+  #selectedShotPlanRevision?: number | undefined;
+  #approvedShotPlanId?: ShotPlanId | undefined;
+  #approvedShotPlanRevision?: number | undefined;
+  #productionRoutingMode: "reference_directed" | "frame_anchored";
   #activeProductionJobId?: string | undefined;
   #productionAttemptOrdinal: number;
   #acceptedProductionAttemptId?: string | undefined;
@@ -254,6 +279,7 @@ export class Scene {
     this.#configuration = freezeConfiguration(input.configuration);
     this.#productionAttemptOrdinal = 0;
     this.#acceptedProductionAttemptId = undefined;
+    this.#productionRoutingMode = "reference_directed";
   }
 
   static create(input: SceneCreateInput): Scene {
@@ -308,6 +334,11 @@ export class Scene {
     scene.#failedFrom = snapshot.failedFrom;
     scene.#selectedCandidateId = snapshot.selectedCandidateId;
     scene.#selectedCandidateRevision = snapshot.selectedCandidateRevision;
+    scene.#selectedShotPlanId = snapshot.selectedShotPlanId;
+    scene.#selectedShotPlanRevision = snapshot.selectedShotPlanRevision;
+    scene.#approvedShotPlanId = snapshot.approvedShotPlanId;
+    scene.#approvedShotPlanRevision = snapshot.approvedShotPlanRevision;
+    scene.#productionRoutingMode = snapshot.productionRoutingMode ?? "reference_directed";
     scene.#activeProductionJobId = snapshot.activeProductionJobId;
     scene.#productionAttemptOrdinal = snapshot.productionAttemptOrdinal ?? 0;
     scene.#acceptedProductionAttemptId = snapshot.acceptedProductionAttemptId;
@@ -328,6 +359,30 @@ export class Scene {
 
   get status(): SceneStatus {
     return this.#status;
+  }
+
+  get specRevision(): number {
+    return this.#specRevision;
+  }
+
+  get configuration(): Readonly<SceneConfiguration> {
+    return this.#configuration;
+  }
+
+  get selectedShotPlanId(): ShotPlanId | undefined {
+    return this.#selectedShotPlanId;
+  }
+
+  get selectedShotPlanRevision(): number | undefined {
+    return this.#selectedShotPlanRevision;
+  }
+
+  get approvedShotPlanId(): ShotPlanId | undefined {
+    return this.#approvedShotPlanId;
+  }
+
+  get approvedShotPlanRevision(): number | undefined {
+    return this.#approvedShotPlanRevision;
   }
 
   #isTerminal(): boolean {
@@ -413,6 +468,10 @@ export class Scene {
     this.#status = to;
     this.#selectedCandidateId = undefined;
     this.#selectedCandidateRevision = undefined;
+    this.#selectedShotPlanId = undefined;
+    this.#selectedShotPlanRevision = undefined;
+    this.#approvedShotPlanId = undefined;
+    this.#approvedShotPlanRevision = undefined;
     if (from === "approved") {
       this.#approval = undefined;
     }
@@ -600,6 +659,117 @@ export class Scene {
     );
   }
 
+  selectShotPlan(
+    shotPlanId: ShotPlanId,
+    shotPlanRevision: number,
+    shotPlanSceneId: SceneId
+  ): SceneTransition {
+    if (this.#isTerminal()) {
+      throw new TerminalStateError(this.#id, this.#status, "selectShotPlan");
+    }
+
+    if (this.#status !== "director_review") {
+      throw new InvalidTransitionError(this.#id, this.#status, "selectShotPlan");
+    }
+
+    if (shotPlanSceneId !== this.#id) {
+      throw new InvalidShotPlanError(this.#id, shotPlanId, "ShotPlan belongs to a different scene");
+    }
+
+    if (shotPlanRevision !== this.#specRevision) {
+      throw new InvalidShotPlanError(
+        this.#id,
+        shotPlanId,
+        "ShotPlan revision does not match current scene revision"
+      );
+    }
+
+    return this.#transition(
+      "selectShotPlan",
+      ["director_review"],
+      "director_review",
+      "shot_plan_selected",
+      () => {
+        this.#selectedShotPlanId = shotPlanId;
+        this.#selectedShotPlanRevision = shotPlanRevision;
+      }
+    );
+  }
+
+  approveShotPlan(input: {
+    shotPlanId?: ShotPlanId;
+    shotPlanRevision?: number;
+    shotPlanSceneId?: SceneId;
+    approvedBy: string;
+    approvedAt: string;
+  }): SceneTransition {
+    if (this.#isTerminal()) {
+      throw new TerminalStateError(this.#id, this.#status, "approveShotPlan");
+    }
+
+    if (this.#status !== "director_review") {
+      throw new InvalidTransitionError(this.#id, this.#status, "approveShotPlan");
+    }
+
+    if (this.#selectedShotPlanId === undefined) {
+      throw new InvalidTransitionError(
+        this.#id,
+        this.#status,
+        "approveShotPlan",
+        "Approval requires an active ShotPlan selection."
+      );
+    }
+
+    if (this.#selectedShotPlanRevision !== this.#specRevision) {
+      throw new InvalidTransitionError(
+        this.#id,
+        this.#status,
+        "approveShotPlan",
+        `Selected ShotPlan revision (${this.#selectedShotPlanRevision}) does not match current scene revision (${this.#specRevision}).`
+      );
+    }
+
+    const targetShotPlanId = input.shotPlanId ?? this.#selectedShotPlanId;
+    if (targetShotPlanId !== this.#selectedShotPlanId) {
+      throw new InvalidTransitionError(
+        this.#id,
+        this.#status,
+        "approveShotPlan",
+        `Requested ShotPlan '${targetShotPlanId}' does not match currently selected ShotPlan '${this.#selectedShotPlanId}'.`
+      );
+    }
+
+    const targetRevision = input.shotPlanRevision ?? this.#selectedShotPlanRevision;
+    if (targetRevision !== this.#specRevision) {
+      throw new InvalidTransitionError(
+        this.#id,
+        this.#status,
+        "approveShotPlan",
+        `ShotPlan revision (${targetRevision}) does not match current scene revision (${this.#specRevision}).`
+      );
+    }
+
+    if (input.shotPlanSceneId !== undefined && input.shotPlanSceneId !== this.#id) {
+      throw new InvalidShotPlanError(
+        this.#id,
+        targetShotPlanId,
+        "ShotPlan belongs to a different scene"
+      );
+    }
+
+    const approval: Readonly<SceneApproval> = Object.freeze({
+      revision: this.#specRevision,
+      approvedBy: input.approvedBy,
+      approvedAt: input.approvedAt
+    });
+
+    return this.#transition("approveShotPlan", ["director_review"], "approved", "approved", () => {
+      this.#approvedShotPlanId = targetShotPlanId;
+      this.#approvedShotPlanRevision = this.#specRevision;
+      this.#approval = approval;
+    });
+  }
+
   approve(input: SceneApprovalInput): SceneTransition {
     if (this.#isTerminal()) {
       throw new TerminalStateError(this.#id, this.#status, "approve");
@@ -609,10 +779,14 @@ export class Scene {
       throw new InvalidTransitionError(this.#id, this.#status, "approve");
     }
 
-    if (
-      this.#selectedCandidateId === undefined ||
-      this.#selectedCandidateRevision !== this.#specRevision
-    ) {
+    const hasValidCandidate =
+      this.#selectedCandidateId !== undefined &&
+      this.#selectedCandidateRevision === this.#specRevision;
+    const hasValidShotPlan =
+      this.#selectedShotPlanId !== undefined &&
+      this.#selectedShotPlanRevision === this.#specRevision;
+
+    if (!hasValidCandidate && !hasValidShotPlan) {
       throw new InvalidTransitionError(
         this.#id,
         this.#status,
@@ -629,7 +803,26 @@ export class Scene {
 
     return this.#transition("approve", ["director_review"], "approved", "approved", () => {
       this.#approval = approval;
+      if (hasValidShotPlan) {
+        this.#approvedShotPlanId = this.#selectedShotPlanId;
+        this.#approvedShotPlanRevision = this.#specRevision;
+      }
     });
+  }
+
+  rerollShotPlan(): SceneTransition {
+    return this.#transition(
+      "rerollShotPlan",
+      ["director_review"],
+      "generating_candidates",
+      "reroll_requested",
+      () => {
+        this.#selectedShotPlanId = undefined;
+        this.#selectedShotPlanRevision = undefined;
+        this.#approvedShotPlanId = undefined;
+        this.#approvedShotPlanRevision = undefined;
+      }
+    );
   }
 
   requestReroll(): SceneTransition {
@@ -642,6 +835,10 @@ export class Scene {
         this.#specRevision += 1;
         this.#selectedCandidateId = undefined;
         this.#selectedCandidateRevision = undefined;
+        this.#selectedShotPlanId = undefined;
+        this.#selectedShotPlanRevision = undefined;
+        this.#approvedShotPlanId = undefined;
+        this.#approvedShotPlanRevision = undefined;
       }
     );
   }
@@ -721,6 +918,8 @@ export class Scene {
   rejectQA(): SceneTransition {
     return this.#transition("rejectQA", ["qa"], "director_review", "qa_rejected", () => {
       this.#approval = undefined;
+      this.#approvedShotPlanId = undefined;
+      this.#approvedShotPlanRevision = undefined;
       this.#activeProductionJobId = undefined;
     });
   }
@@ -755,6 +954,8 @@ export class Scene {
       "recovered_to_review",
       () => {
         this.#approval = undefined;
+        this.#approvedShotPlanId = undefined;
+        this.#approvedShotPlanRevision = undefined;
         this.#activeProductionJobId = undefined;
       }
     );
@@ -796,6 +997,19 @@ export class Scene {
       ...(this.#selectedCandidateRevision !== undefined
         ? { selectedCandidateRevision: this.#selectedCandidateRevision }
         : {}),
+      ...(this.#selectedShotPlanId !== undefined
+        ? { selectedShotPlanId: this.#selectedShotPlanId }
+        : {}),
+      ...(this.#selectedShotPlanRevision !== undefined
+        ? { selectedShotPlanRevision: this.#selectedShotPlanRevision }
+        : {}),
+      ...(this.#approvedShotPlanId !== undefined
+        ? { approvedShotPlanId: this.#approvedShotPlanId }
+        : {}),
+      ...(this.#approvedShotPlanRevision !== undefined
+        ? { approvedShotPlanRevision: this.#approvedShotPlanRevision }
+        : {}),
+      productionRoutingMode: this.#productionRoutingMode,
       ...(this.#activeProductionJobId !== undefined
         ? { activeProductionJobId: this.#activeProductionJobId }
         : {}),

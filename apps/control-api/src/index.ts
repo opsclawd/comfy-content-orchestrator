@@ -17,6 +17,7 @@ export function createControlApi(dependencies: ControlApiDependencies): ControlA
 
 export {
   EnqueueSceneProductionRenderUseCase,
+  PlanShotPlansUseCase,
   ProgressSceneProductionUseCases,
   ReviewSceneUseCases,
   type CurrentProductionAttemptQueries,

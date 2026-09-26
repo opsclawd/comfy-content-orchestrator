@@ -27,7 +27,10 @@ const REVIEW_ACTION_LABELS: Record<ReviewAction, string> = {
   cancel: "Cancel",
   candidate_select: "Select Candidate",
   production_accept: "Accept Production",
-  production_rerender: "Re-render Production"
+  production_rerender: "Re-render Production",
+  select_shotplan: "Select Shot Plan",
+  approve_shotplan: "Approve Shot Plan",
+  reroll_shotplan: "Reroll Shot Plans"
 };
 
 export function formatSceneStatus(status: SceneStatus): string {

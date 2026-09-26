@@ -740,6 +740,56 @@ describe("Certified Render Job Executor", () => {
       "injectedPayload.approvedCandidateId must be a non-empty string"
     );
     expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+
+    // 12. shotPlanId in a production job (candidate-only)
+    const prodJobWithShotPlanId = createSampleProductionJob({
+      injectedPayload: {
+        prompt: "valid",
+        shotPlanId: "01928374-abcd-7000-8000-000000000010"
+      }
+    });
+    await expect(executor(prodJobWithShotPlanId)).rejects.toThrow(
+      "shotPlanId is candidate-only and not allowed in production jobs"
+    );
+    expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+
+    // 13. Empty shotPlanId in candidate job
+    const candidateJobWithEmptyShotPlanId = createSampleCandidateJob({
+      injectedPayload: {
+        prompt: "valid",
+        variantOrdinal: 1,
+        shotPlanId: "   "
+      }
+    });
+    await expect(executor(candidateJobWithEmptyShotPlanId)).rejects.toThrow(
+      "injectedPayload.shotPlanId must be a non-empty string"
+    );
+    expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+
+    // 14. specRevision in a production job (candidate-only)
+    const prodJobWithSpecRevision = createSampleProductionJob({
+      injectedPayload: {
+        prompt: "valid",
+        specRevision: 1
+      }
+    });
+    await expect(executor(prodJobWithSpecRevision)).rejects.toThrow(
+      "specRevision is candidate-only and not allowed in production jobs"
+    );
+    expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+
+    // 15. Invalid specRevision in candidate job
+    const candidateJobWithInvalidSpecRevision = createSampleCandidateJob({
+      injectedPayload: {
+        prompt: "valid",
+        variantOrdinal: 1,
+        specRevision: -1
+      }
+    });
+    await expect(executor(candidateJobWithInvalidSpecRevision)).rejects.toThrow(
+      "injectedPayload.specRevision must be a positive integer"
+    );
+    expect(mockExecuteProfileRender).not.toHaveBeenCalled();
   });
 
   it("requires one candidate output and a positive variant ordinal", async () => {
@@ -924,6 +974,73 @@ describe("Certified Render Job Executor", () => {
     const genPayloadStr = JSON.stringify(result.candidatePayload?.generationPayload);
     expect(genPayloadStr).not.toContain("lease-token");
     expect(result.candidatePayload?.generationPayload).not.toHaveProperty("bytes");
+  });
+
+  it("carries injected shotPlanId through to candidatePayload and generationPayload", async () => {
+    const rawBytes = new Uint8Array([72, 101, 108, 108, 111]);
+    const outputReader = new FakeOutputReader(
+      new Map([["out_001.png", { bytes: rawBytes, contentType: "image/png" }]])
+    );
+
+    const mockExecuteProfileRender = vi.fn().mockResolvedValue({
+      status: "succeeded",
+      promptId: "comfy-prompt-previs",
+      outputObjectKeys: ["out_001.png"],
+      durationMs: 1500,
+      profile: {
+        profileId: "flux-schnell-draft",
+        renderProfileKey: "FLUX_SCHNELL_DRAFT_V1",
+        renderProfileVersion: 1,
+        engine: "flux_schnell",
+        workflowSha256: sampleWorkflowHash,
+        modelSha256: fakeFluxLiveProvenance.renderProfileProvenance!.modelHashes,
+        runnerProfile: "dynamicvram-offload-v1",
+        comfyUiCommit: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+      },
+      preDispatchGpu: {
+        totalVramMb: 24576,
+        usedVramMb: 4096,
+        freeVramMb: 20480,
+        reservedVramMb: 4096,
+        measuredAt: new Date().toISOString()
+      }
+    });
+
+    const executor = createCertifiedRenderJobExecutor({
+      loadCertificationProfile: async () => fakeFluxProfile,
+      readApprovedProvenance: async () => fakeFluxLiveProvenance,
+      collectCertificationProvenance: async () => fakeFluxLiveProvenance,
+      verifyGoldMasterProvenance: () => {},
+      readWorkflowFile: async () => fakeRawFluxWorkflow,
+      hashWorkflow: () => sampleWorkflowHash,
+      executeProfileRender: mockExecuteProfileRender,
+      outputReader
+    });
+
+    const planId = "01928374-abcd-7000-8000-000000000099";
+    const job = createSampleCandidateJob({
+      injectedPayload: {
+        prompt: "Shot plan previs framing prompt",
+        variantOrdinal: 2,
+        seed: 42,
+        shotPlanId: planId,
+        specRevision: 3
+      }
+    });
+
+    const result = await executor(job);
+    expect(result.candidatePayload).toBeDefined();
+    expect(result.candidatePayload?.shotPlanId).toBe(planId);
+    expect(result.candidatePayload?.specRevision).toBe(3);
+    expect(result.candidatePayload?.variantOrdinal).toBe(2);
+    expect(
+      (result.candidatePayload?.generationPayload as Record<string, unknown> | undefined)
+        ?.shotPlanId
+    ).toBe(planId);
+    expect(
+      (result.candidatePayload?.generationPayload as Record<string, unknown> | undefined)
+        ?.specRevision
+    ).toBe(3);
   });
 
   it("requires the production manifest assembler result without a partial fallback", async () => {
