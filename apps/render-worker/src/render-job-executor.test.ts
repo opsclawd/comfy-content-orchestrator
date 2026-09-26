@@ -2789,7 +2789,7 @@ describe("Certified Render Job Executor", () => {
       engine: "minimax_h3_ref2v",
       workflowPath: "/templates/minimax_h3_720p_ref2v_124f_api.json",
       workflowRelativePath: "minimax_h3_720p_ref2v_124f_api.json",
-      expectedWorkflowHash: "cc5876b4ca9fd45e8ae50fade56db711107818a17a5eb48d7edf3e875dc2b7c7",
+      expectedWorkflowHash: "296ca44a3ff9b2836123874dd57985152514633daefcc3256849c8b969737d3b",
       source: {
         kind: "validated_host_export",
         uri: "https://github.com/Comfy-Org/MiniMax-H3",
@@ -2848,20 +2848,17 @@ describe("Certified Render Job Executor", () => {
       for (let slot = 3; slot <= 9; slot++) {
         expect(mutated[String(200 + slot)]).toBeUndefined();
       }
-      // Retained batch node 301 linking 201 and 202
-      expect(mutated["301"]?.inputs.image1).toEqual(["201", 0]);
-      expect(mutated["301"]?.inputs.image2).toEqual(["202", 0]);
-      // Pruned batch nodes 302..308
-      for (let b = 2; b <= 8; b++) {
-        expect(mutated[String(300 + b)]).toBeUndefined();
-      }
-      // Node 105 inputs connected to batch node 301
+      // Node 105 inputs connected directly to active loaders 201 and 202
       const node105Inputs = mutated["105"]?.inputs;
-      expect(node105Inputs?.ref_images).toEqual(["301", 0]);
+      expect(node105Inputs?.ref_image_1).toEqual(["201", 0]);
+      expect(node105Inputs?.ref_image_2).toEqual(["202", 0]);
+      for (let slot = 3; slot <= 9; slot++) {
+        expect(node105Inputs?.[`ref_image_${slot}`]).toBeUndefined();
+      }
       expect(node105Inputs?.ref_image_size).toBe("max");
     });
 
-    it("mutates Ref2V workflow with N=1 references by keeping slot 1, pruning batch nodes, and connecting ref_images to 201", async () => {
+    it("mutates Ref2V workflow with N=1 references by keeping slot 1, pruning slots 2..9, and connecting ref_image_1 to 201", async () => {
       const realRef2vPath = resolve(
         DEFAULT_REPO_ROOT,
         "templates/minimax_h3_720p_ref2v_124f_api.json"
@@ -2880,11 +2877,9 @@ describe("Certified Render Job Executor", () => {
       expect(mutated["201"]?.inputs.image).toBe("ref-slot-1.png");
       for (let slot = 2; slot <= 9; slot++) {
         expect(mutated[String(200 + slot)]).toBeUndefined();
+        expect(mutated["105"]?.inputs[`ref_image_${slot}`]).toBeUndefined();
       }
-      for (let b = 1; b <= 8; b++) {
-        expect(mutated[String(300 + b)]).toBeUndefined();
-      }
-      expect(mutated["105"]?.inputs.ref_images).toEqual(["201", 0]);
+      expect(mutated["105"]?.inputs.ref_image_1).toEqual(["201", 0]);
       expect(mutated["105"]?.inputs.ref_image_size).toBe("max");
     });
 
@@ -2906,11 +2901,9 @@ describe("Certified Render Job Executor", () => {
 
       for (let slot = 1; slot <= 9; slot++) {
         expect(mutated[String(200 + slot)]).toBeUndefined();
+        expect(mutated["105"]?.inputs[`ref_image_${slot}`]).toBeUndefined();
       }
-      for (let b = 1; b <= 8; b++) {
-        expect(mutated[String(300 + b)]).toBeUndefined();
-      }
-      expect(mutated["105"]?.inputs.ref_images).toBeUndefined();
+      expect(mutated["105"]?.inputs.ref_image_size).toBeUndefined();
     });
 
     it("mutates Ref2V workflow with N=9 references retaining all slots and inputs", async () => {
@@ -2932,11 +2925,8 @@ describe("Certified Render Job Executor", () => {
       for (let slot = 1; slot <= 9; slot++) {
         expect(mutated[String(200 + slot)]).toBeDefined();
         expect(mutated[String(200 + slot)]?.inputs.image).toBe(`ref-${slot}.png`);
+        expect(mutated["105"]?.inputs[`ref_image_${slot}`]).toEqual([String(200 + slot), 0]);
       }
-      for (let b = 1; b <= 8; b++) {
-        expect(mutated[String(300 + b)]).toBeDefined();
-      }
-      expect(mutated["105"]?.inputs.ref_images).toEqual(["308", 0]);
       expect(mutated["105"]?.inputs.ref_image_size).toBe("max");
     });
 
@@ -3108,6 +3098,25 @@ describe("Certified Render Job Executor", () => {
         jobId: "job-ref2v-1"
       });
 
+      const mockSceneDomain = Scene.reconstitute({
+        id: sampleSceneId,
+        campaignId: "campaign-1" as CampaignId,
+        status: "approved",
+        specRevision: 1,
+        approvedShotPlanId: shotPlanId,
+        approvedShotPlanRevision: 1,
+        configuration: {
+          prompt: "Scene prompt",
+          referenceIds: [],
+          engineProfileId: "minimax-h3",
+          durationMs: 5000
+        }
+      });
+      const mockSceneRepo: SceneRepository = {
+        findById: vi.fn().mockResolvedValue(mockSceneDomain),
+        save: vi.fn()
+      };
+
       const executor = createCertifiedRenderJobExecutor({
         loadCertificationProfile: async () => fakeMinimaxRef2vProfile,
         readApprovedProvenance: async () => ({
@@ -3177,6 +3186,7 @@ describe("Certified Render Job Executor", () => {
             ]
           ])
         ),
+        sceneRepository: mockSceneRepo,
         shotPlanRepository: mockShotPlanRepo,
         referenceAssetRepository: mockRefAssetRepo,
         objectStorage: mockStorage,
@@ -3322,6 +3332,25 @@ describe("Certified Render Job Executor", () => {
 
         const mockAssembler = vi.fn().mockReturnValue({ manifestId: "ok" });
 
+        const mockSceneDomain = Scene.reconstitute({
+          id: sampleSceneId,
+          campaignId: "campaign-1" as CampaignId,
+          status: "approved",
+          specRevision: 1,
+          approvedShotPlanId: shotPlanId,
+          approvedShotPlanRevision: 1,
+          configuration: {
+            prompt: "Scene prompt",
+            referenceIds: [],
+            engineProfileId: "minimax-h3",
+            durationMs: 5000
+          }
+        });
+        const mockSceneRepo: SceneRepository = {
+          findById: vi.fn().mockResolvedValue(mockSceneDomain),
+          save: vi.fn()
+        };
+
         const createExecutor = (overrides?: Partial<RenderJobExecutorDependencies>) =>
           createCertifiedRenderJobExecutor({
             loadCertificationProfile: async () => fakeMinimaxRef2vProfile,
@@ -3387,6 +3416,7 @@ describe("Certified Render Job Executor", () => {
             outputReader: new FakeOutputReader(
               new Map([["render.mp4", { bytes: new Uint8Array([1]), contentType: "video/mp4" }]])
             ),
+            sceneRepository: mockSceneRepo,
             shotPlanRepository: mockShotPlanRepo,
             referenceAssetRepository: mockRefAssetRepo,
             productionManifestAssembler: { assemble: mockAssembler },
@@ -3408,9 +3438,20 @@ describe("Certified Render Job Executor", () => {
           fakeShotPlanDomain,
           fakeAsset,
           mockShotPlanRepo,
-          mockRefAssetRepo
+          mockRefAssetRepo,
+          mockSceneRepo,
+          mockSceneDomain,
+          shotPlanId
         };
       };
+
+      it("fails closed when sceneRepository is missing", async () => {
+        const { createExecutor, validJob } = await createValidRef2vSetup();
+        const executor = createExecutor({ sceneRepository: undefined });
+        await expect(executor(validJob)).rejects.toThrow(
+          "sceneRepository dependency is required for reference-directed execution"
+        );
+      });
 
       it("fails closed when shotPlanRepository is missing", async () => {
         const { createExecutor, validJob } = await createValidRef2vSetup();
@@ -3425,6 +3466,18 @@ describe("Certified Render Job Executor", () => {
         const executor = createExecutor({ referenceAssetRepository: undefined });
         await expect(executor(validJob)).rejects.toThrow(
           "referenceAssetRepository dependency is required for reference-directed execution"
+        );
+      });
+
+      it("fails closed when referenceAssetRepository.listBindingsBySceneId is missing", async () => {
+        const { createExecutor, validJob, mockRefAssetRepo } = await createValidRef2vSetup();
+        const repoWithoutBindings: ReferenceAssetRepository = {
+          ...mockRefAssetRepo
+        };
+        delete (repoWithoutBindings as { listBindingsBySceneId?: unknown }).listBindingsBySceneId;
+        const executor = createExecutor({ referenceAssetRepository: repoWithoutBindings });
+        await expect(executor(validJob)).rejects.toThrow(
+          "referenceAssetRepository.listBindingsBySceneId is required for reference-directed execution"
         );
       });
 
@@ -3540,6 +3593,75 @@ describe("Certified Render Job Executor", () => {
         );
       });
 
+      it("fails closed when scene has no approvedShotPlanId", async () => {
+        const { createExecutor, validJob } = await createValidRef2vSetup();
+        const mockSceneDomain = Scene.reconstitute({
+          id: sampleSceneId,
+          campaignId: "campaign-1" as CampaignId,
+          status: "approved",
+          specRevision: 1,
+          configuration: {
+            prompt: "Scene prompt",
+            referenceIds: [],
+            engineProfileId: "minimax-h3",
+            durationMs: 5000
+          }
+        });
+        const executor = createExecutor({
+          sceneRepository: {
+            findById: vi.fn().mockResolvedValue(mockSceneDomain),
+            save: vi.fn()
+          }
+        });
+        await expect(executor(validJob)).rejects.toThrow(/has no approvedShotPlanId/);
+      });
+
+      it("fails closed when scene approvedShotPlanRevision does not match injected specRevision", async () => {
+        const { createExecutor, validJob, shotPlanId } = await createValidRef2vSetup();
+        const mockSceneDomain = Scene.reconstitute({
+          id: sampleSceneId,
+          campaignId: "campaign-1" as CampaignId,
+          status: "approved",
+          specRevision: 1,
+          approvedShotPlanId: shotPlanId,
+          approvedShotPlanRevision: 2,
+          configuration: {
+            prompt: "Scene prompt",
+            referenceIds: [],
+            engineProfileId: "minimax-h3",
+            durationMs: 5000
+          }
+        });
+        const executor = createExecutor({
+          sceneRepository: {
+            findById: vi.fn().mockResolvedValue(mockSceneDomain),
+            save: vi.fn()
+          }
+        });
+        await expect(executor(validJob)).rejects.toThrow(
+          /approvedShotPlanRevision 2 does not match injected specRevision 1/
+        );
+      });
+
+      it("fails closed when scene reference binding exhibits specRevision drift", async () => {
+        const { createExecutor, validJob, mockRefAssetRepo } = await createValidRef2vSetup();
+        (mockRefAssetRepo.listBindingsBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([
+          {
+            sceneId: sampleSceneId,
+            specRevision: 2,
+            referenceAssetId: "asset-hero-111",
+            role: "subject_identity",
+            weight: 1,
+            hints: null,
+            archivedAt: null
+          }
+        ]);
+        const executor = createExecutor();
+        await expect(executor(validJob)).rejects.toThrow(
+          /specRevision 2, which does not match injected specRevision 1/
+        );
+      });
+
       it("fails closed when reference binding has unsupported non-default weight", async () => {
         const { createExecutor, validJob, mockRefAssetRepo } = await createValidRef2vSetup();
         (mockRefAssetRepo.listBindingsBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([
@@ -3630,10 +3752,83 @@ describe("Certified Render Job Executor", () => {
         ).toThrow(/Expected node "105" to exist with class_type "MiniMaxH3ReferenceToVideo"/);
       });
 
-      it("fails closed on topology drift when ImageBatch chain in Ref2V template is broken", async () => {
+      it("fails closed when scene has no approvedShotPlanRevision", async () => {
+        const { createExecutor, validJob, mockSceneDomain } = await createValidRef2vSetup();
+        const baseSnapshot = mockSceneDomain.snapshot();
+        const snapshotWithoutApprovedRevision = { ...baseSnapshot };
+        delete (snapshotWithoutApprovedRevision as { approvedShotPlanRevision?: number })
+          .approvedShotPlanRevision;
+        const mockSceneWithoutApprovedRevision = {
+          ...mockSceneDomain,
+          snapshot: () => snapshotWithoutApprovedRevision
+        };
+        const executor = createExecutor({
+          sceneRepository: {
+            findById: vi
+              .fn()
+              .mockResolvedValue(mockSceneWithoutApprovedRevision as unknown as Scene),
+            save: vi.fn()
+          }
+        });
+        await expect(executor(validJob)).rejects.toThrow(
+          /has no approvedShotPlanRevision; reference-directed execution requires verified current-revision approval/
+        );
+      });
+
+      it("fails closed when scene approval revision does not match injected specRevision", async () => {
+        const { createExecutor, validJob, shotPlanId } = await createValidRef2vSetup();
+        const mockSceneDomain = Scene.reconstitute({
+          id: sampleSceneId,
+          campaignId: "campaign-1" as CampaignId,
+          status: "approved",
+          specRevision: 1,
+          approvedShotPlanId: shotPlanId,
+          approvedShotPlanRevision: 1,
+          approval: {
+            approvedAt: "2026-09-25T00:00:00Z",
+            approvedBy: "reviewer-1",
+            revision: 2
+          },
+          configuration: {
+            prompt: "Scene prompt",
+            referenceIds: [],
+            engineProfileId: "minimax-h3",
+            durationMs: 5000
+          }
+        });
+        const executor = createExecutor({
+          sceneRepository: {
+            findById: vi.fn().mockResolvedValue(mockSceneDomain),
+            save: vi.fn()
+          }
+        });
+        await expect(executor(validJob)).rejects.toThrow(
+          /approval revision 2 does not match injected specRevision 1/
+        );
+      });
+
+      it("fails closed when scene has unsupported trim or loop intent", async () => {
+        const { createExecutor, validJob, mockSceneDomain } = await createValidRef2vSetup();
+        const baseSnapshot = mockSceneDomain.snapshot();
+        const mockSceneWithLoop = {
+          ...mockSceneDomain,
+          snapshot: () => ({ ...baseSnapshot, loop: true })
+        };
+        const executor = createExecutor({
+          sceneRepository: {
+            findById: vi.fn().mockResolvedValue(mockSceneWithLoop as unknown as Scene),
+            save: vi.fn()
+          }
+        });
+        await expect(executor(validJob)).rejects.toThrow(
+          /MiniMax-H3 does not support scene trim or loop controls; received unsupported intent/
+        );
+      });
+
+      it("fails closed on topology drift when a ref_image socket in Ref2V template is disconnected or wrong", async () => {
         const realRef2vJson = await readFile(realRef2vPath, "utf8");
         const corruptWorkflow = JSON.parse(realRef2vJson);
-        corruptWorkflow["301"].class_type = "WrongBatchClass";
+        corruptWorkflow["105"].inputs.ref_image_1 = ["999", 0];
 
         expect(() =>
           mutateWorkflow(
@@ -3642,8 +3837,22 @@ describe("Certified Render Job Executor", () => {
             fakeMinimaxRef2vProfile
           )
         ).toThrow(
-          /Topology mismatch for ref_images ImageBatch chain: expected node "301" with class_type "ImageBatch"/
+          /Expected input "ref_image_1" on node "105" to connect to \["201", 0\], got \["999",0\]/
         );
+      });
+
+      it("fails closed on topology drift when a ref_image socket in Ref2V template is missing", async () => {
+        const realRef2vJson = await readFile(realRef2vPath, "utf8");
+        const corruptWorkflow = JSON.parse(realRef2vJson);
+        delete corruptWorkflow["105"].inputs.ref_image_2;
+
+        expect(() =>
+          mutateWorkflow(
+            JSON.stringify(corruptWorkflow),
+            { prompt: "test prompt", seed: 42 },
+            fakeMinimaxRef2vProfile
+          )
+        ).toThrow(/Expected node "105" to contain input "ref_image_2" for reference injection/);
       });
     });
   });

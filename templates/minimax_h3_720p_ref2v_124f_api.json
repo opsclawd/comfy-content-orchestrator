@@ -144,7 +144,15 @@
       "height": 768,
       "length": 124,
       "ref_image_size": "max",
-      "ref_images": ["308", 0]
+      "ref_image_1": ["201", 0],
+      "ref_image_2": ["202", 0],
+      "ref_image_3": ["203", 0],
+      "ref_image_4": ["204", 0],
+      "ref_image_5": ["205", 0],
+      "ref_image_6": ["206", 0],
+      "ref_image_7": ["207", 0],
+      "ref_image_8": ["208", 0],
+      "ref_image_9": ["209", 0]
     },
     "class_type": "MiniMaxH3ReferenceToVideo",
     "_meta": {
@@ -239,86 +247,6 @@
     "class_type": "LoadImage",
     "_meta": {
       "title": "Load Reference Image 9"
-    }
-  },
-  "301": {
-    "inputs": {
-      "image1": ["201", 0],
-      "image2": ["202", 0]
-    },
-    "class_type": "ImageBatch",
-    "_meta": {
-      "title": "Batch Reference Images (1+2)"
-    }
-  },
-  "302": {
-    "inputs": {
-      "image1": ["301", 0],
-      "image2": ["203", 0]
-    },
-    "class_type": "ImageBatch",
-    "_meta": {
-      "title": "Batch Reference Images (+3)"
-    }
-  },
-  "303": {
-    "inputs": {
-      "image1": ["302", 0],
-      "image2": ["204", 0]
-    },
-    "class_type": "ImageBatch",
-    "_meta": {
-      "title": "Batch Reference Images (+4)"
-    }
-  },
-  "304": {
-    "inputs": {
-      "image1": ["303", 0],
-      "image2": ["205", 0]
-    },
-    "class_type": "ImageBatch",
-    "_meta": {
-      "title": "Batch Reference Images (+5)"
-    }
-  },
-  "305": {
-    "inputs": {
-      "image1": ["304", 0],
-      "image2": ["206", 0]
-    },
-    "class_type": "ImageBatch",
-    "_meta": {
-      "title": "Batch Reference Images (+6)"
-    }
-  },
-  "306": {
-    "inputs": {
-      "image1": ["305", 0],
-      "image2": ["207", 0]
-    },
-    "class_type": "ImageBatch",
-    "_meta": {
-      "title": "Batch Reference Images (+7)"
-    }
-  },
-  "307": {
-    "inputs": {
-      "image1": ["306", 0],
-      "image2": ["208", 0]
-    },
-    "class_type": "ImageBatch",
-    "_meta": {
-      "title": "Batch Reference Images (+8)"
-    }
-  },
-  "308": {
-    "inputs": {
-      "image1": ["307", 0],
-      "image2": ["209", 0]
-    },
-    "class_type": "ImageBatch",
-    "_meta": {
-      "title": "Batch Reference Images (+9)"
     }
   }
 }

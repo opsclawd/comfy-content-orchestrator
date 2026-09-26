@@ -305,4 +305,29 @@ describe("GenerationManifestSchema", () => {
     };
     expect(GenerationManifestSchema.safeParse(mismatchProfile).success).toBe(false);
   });
+
+  it("fails closed if REF2V profile/engine is used without routingMode reference_directed", () => {
+    const invalidManifest = {
+      ...baseManifestFixture,
+      renderProfile: "MINIMAX_H3_720P_5S_REF2V_V1",
+      engine: "minimax_h3_ref2v",
+      routingMode: undefined
+    };
+    expect(GenerationManifestSchema.safeParse(invalidManifest).success).toBe(false);
+
+    const invalidWithFrameAnchored = {
+      ...baseManifestFixture,
+      renderProfile: "MINIMAX_H3_720P_5S_REF2V_V1",
+      engine: "minimax_h3_ref2v",
+      routingMode: "frame_anchored" as const,
+      firstFrame: {
+        anchorType: "first_frame" as const,
+        candidateId: "55555555-5555-4555-8555-555555555555",
+        contentHashSha256: "6666666666666666666666666666666666666666666666666666666666666666",
+        stagedAs: { name: "anchor.png", subfolder: "" },
+        injectionTarget: { nodeId: "20", classType: "LoadImage", inputField: "image" }
+      }
+    };
+    expect(GenerationManifestSchema.safeParse(invalidWithFrameAnchored).success).toBe(false);
+  });
 });

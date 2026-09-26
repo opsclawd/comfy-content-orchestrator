@@ -163,7 +163,18 @@ export const GenerationManifestSchema = z
     executionDurationMs: z.number().nonnegative()
   })
   .superRefine((data, ctx) => {
-    // Conditional Invariants based on routingMode:
+    if (
+      (data.renderProfile === "MINIMAX_H3_720P_5S_REF2V_V1" ||
+        data.engine === "minimax_h3_ref2v") &&
+      data.routingMode !== "reference_directed"
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Profile "MINIMAX_H3_720P_5S_REF2V_V1" / engine "minimax_h3_ref2v" requires routingMode "reference_directed", got "${data.routingMode}"`,
+        path: ["routingMode"]
+      });
+    }
+
     if (data.routingMode === "reference_directed") {
       // 1. Profile / Engine must match reference-directed H3
       if (

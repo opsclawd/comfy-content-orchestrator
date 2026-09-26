@@ -37,7 +37,6 @@ import {
   type NodeInjectionTarget,
   type ProfileInjectionTopology,
   RENDER_PROFILE_ALIASES,
-  type SceneReferenceBinding,
   type ShotPlanRoutingMode
 } from "@cco/contracts";
 import type {
@@ -663,18 +662,30 @@ export function validateDeclaredTopology(
     for (let i = 0; i < topology.referenceImages.length; i++) {
       checkTarget(topology.referenceImages[i]!, `referenceImages[${i}]`);
     }
-    if (topology.referenceNode?.inputField === "ref_images") {
-      for (let b = 1; b <= 8; b++) {
-        const batchNodeId = String(300 + b);
-        const batchNode = workflow[batchNodeId];
-        if (
-          typeof batchNode !== "object" ||
-          batchNode === null ||
-          (batchNode as { class_type?: string }).class_type !== "ImageBatch"
-        ) {
-          throw new RenderJobExecutionError(
-            `Topology mismatch for ref_images ImageBatch chain: expected node "${batchNodeId}" with class_type "ImageBatch"`
-          );
+    if (topology.referenceNode) {
+      checkTarget(topology.referenceNode, "referenceNode");
+      const refNode = workflow[topology.referenceNode.nodeId] as
+        { class_type?: string; inputs?: Record<string, unknown> } | undefined;
+      const refInputs = refNode?.inputs;
+      if (refInputs) {
+        for (let s = 1; s <= 9; s++) {
+          const inputName = `ref_image_${s}`;
+          if (!Object.prototype.hasOwnProperty.call(refInputs, inputName)) {
+            throw new RenderJobExecutionError(
+              `Expected node "${topology.referenceNode.nodeId}" to contain input "${inputName}" for reference injection`
+            );
+          }
+          const expectedLoaderId = topology.referenceImages[s - 1]?.nodeId;
+          const actualLink = refInputs[inputName];
+          if (
+            !Array.isArray(actualLink) ||
+            actualLink[0] !== expectedLoaderId ||
+            actualLink[1] !== 0
+          ) {
+            throw new RenderJobExecutionError(
+              `Expected input "${inputName}" on node "${topology.referenceNode.nodeId}" to connect to ["${expectedLoaderId}", 0], got ${JSON.stringify(actualLink)}`
+            );
+          }
         }
       }
     }
@@ -883,7 +894,7 @@ export function mutateWorkflow(
         delete workflow[target.nodeId];
       }
 
-      // 3. Connect ref_images on referenceNode and prune ImageBatch chain (nodes 301..308)
+      // 3. Connect ref_image_1..N on referenceNode and prune inactive slots (N+1..9)
       const refNode = topology.referenceNode ? workflow[topology.referenceNode.nodeId] : undefined;
       const refNodeInputs =
         typeof refNode === "object" && refNode !== null && "inputs" in refNode
@@ -891,36 +902,21 @@ export function mutateWorkflow(
           : undefined;
 
       if (refNodeInputs) {
-        if (topology.referenceNode?.inputField === "ref_images") {
-          // MiniMax-H3 native ref_images via ImageBatch chain
-          if (N === 0) {
-            // Delete all batch nodes 301..308
-            for (let b = 1; b <= 8; b++) {
-              delete workflow[String(300 + b)];
-            }
-            // In node 105: remove ref_images input completely for prompt-only execution
-            delete refNodeInputs.ref_images;
-          } else if (N === 1) {
-            // Delete all batch nodes 301..308
-            for (let b = 1; b <= 8; b++) {
-              delete workflow[String(300 + b)];
-            }
-            // Connect ref_images directly to loader 201
-            refNodeInputs.ref_images = ["201", 0];
-          } else {
-            // N >= 2: keep batch nodes 301 .. (300 + N - 1)
-            // Delete batch nodes (300 + N) .. 308
-            for (let b = N; b <= 8; b++) {
-              delete workflow[String(300 + b)];
-            }
-            // Connect ref_images to the last kept batch node: 300 + N - 1
-            refNodeInputs.ref_images = [String(300 + N - 1), 0];
-          }
+        for (let s = 1; s <= N; s++) {
+          const targetNodeId = topology.referenceImages[s - 1]!.nodeId;
+          refNodeInputs[`ref_image_${s}`] = [targetNodeId, 0];
+        }
+        for (let s = N + 1; s <= 9; s++) {
+          delete refNodeInputs[`ref_image_${s}`];
         }
       }
 
       if (topology.refImageSize && refNodeInputs) {
-        refNodeInputs[topology.refImageSize.inputField] = "max";
+        if (N > 0) {
+          refNodeInputs[topology.refImageSize.inputField] = "max";
+        } else {
+          delete refNodeInputs[topology.refImageSize.inputField];
+        }
       }
       if (topology.width && refNodeInputs && profile?.baseline.width) {
         refNodeInputs[topology.width.inputField] = profile.baseline.width;
@@ -1205,56 +1201,105 @@ export function createCertifiedRenderJobExecutor(
           );
         }
 
-        let sceneSpec: { revision: number; actionContext?: string; scriptContext?: string } = {
-          revision: validatedInjected.specRevision
+        if (!deps?.sceneRepository) {
+          throw new RenderJobExecutionError(
+            "sceneRepository dependency is required for reference-directed execution"
+          );
+        }
+
+        const sceneDomain = await deps.sceneRepository.findById(job.sceneId as SceneId);
+        if (!sceneDomain) {
+          throw new RenderJobExecutionError(`Scene "${job.sceneId}" not found in sceneRepository`);
+        }
+        const sceneSnapshot = sceneDomain.snapshot();
+        if (sceneSnapshot.specRevision !== validatedInjected.specRevision) {
+          throw new RenderJobExecutionError(
+            `Scene "${job.sceneId}" specRevision ${sceneSnapshot.specRevision} does not match injected specRevision ${validatedInjected.specRevision}`
+          );
+        }
+        if (!sceneSnapshot.approvedShotPlanId) {
+          throw new RenderJobExecutionError(
+            `Scene "${job.sceneId}" has no approvedShotPlanId; reference-directed execution requires current-scene ShotPlan approval`
+          );
+        }
+        if (sceneSnapshot.approvedShotPlanId !== validatedInjected.shotPlanId) {
+          throw new RenderJobExecutionError(
+            `Scene "${job.sceneId}" approvedShotPlanId "${sceneSnapshot.approvedShotPlanId}" does not match injected shotPlanId "${validatedInjected.shotPlanId}"`
+          );
+        }
+        if (
+          sceneSnapshot.approvedShotPlanRevision === undefined ||
+          sceneSnapshot.approvedShotPlanRevision === null
+        ) {
+          throw new RenderJobExecutionError(
+            `Scene "${job.sceneId}" has no approvedShotPlanRevision; reference-directed execution requires verified current-revision approval`
+          );
+        }
+        if (sceneSnapshot.approvedShotPlanRevision !== validatedInjected.specRevision) {
+          throw new RenderJobExecutionError(
+            `Scene "${job.sceneId}" approvedShotPlanRevision ${sceneSnapshot.approvedShotPlanRevision} does not match injected specRevision ${validatedInjected.specRevision}`
+          );
+        }
+        if (
+          sceneSnapshot.selectedShotPlanId &&
+          sceneSnapshot.selectedShotPlanId !== validatedInjected.shotPlanId
+        ) {
+          throw new RenderJobExecutionError(
+            `Scene "${job.sceneId}" selectedShotPlanId "${sceneSnapshot.selectedShotPlanId}" does not match injected shotPlanId "${validatedInjected.shotPlanId}"`
+          );
+        }
+        if (
+          sceneSnapshot.approval &&
+          sceneSnapshot.approval.revision !== validatedInjected.specRevision
+        ) {
+          throw new RenderJobExecutionError(
+            `Scene "${job.sceneId}" approval revision ${sceneSnapshot.approval.revision} does not match injected specRevision ${validatedInjected.specRevision}`
+          );
+        }
+        const rawScene = sceneSnapshot as unknown as Record<string, unknown>;
+        const rawConfig = sceneSnapshot.configuration as unknown as
+          Record<string, unknown> | undefined;
+        if (
+          rawScene.trim !== undefined ||
+          rawScene.loop !== undefined ||
+          rawConfig?.trim !== undefined ||
+          rawConfig?.loop !== undefined
+        ) {
+          throw new RenderJobExecutionError(
+            `MiniMax-H3 does not support scene trim or loop controls; received unsupported intent`
+          );
+        }
+        const sceneSpec = {
+          revision: validatedInjected.specRevision,
+          actionContext: sceneSnapshot.configuration?.prompt,
+          scriptContext: (sceneSnapshot as { scriptContext?: string }).scriptContext
         };
 
-        if (deps?.sceneRepository) {
-          const sceneDomain = await deps.sceneRepository.findById(job.sceneId as SceneId);
-          if (!sceneDomain) {
-            throw new RenderJobExecutionError(
-              `Scene "${job.sceneId}" not found in sceneRepository`
-            );
-          }
-          const sceneSnapshot = sceneDomain.snapshot();
-          if (sceneSnapshot.specRevision !== validatedInjected.specRevision) {
-            throw new RenderJobExecutionError(
-              `Scene "${job.sceneId}" specRevision ${sceneSnapshot.specRevision} does not match injected specRevision ${validatedInjected.specRevision}`
-            );
-          }
-          if (
-            sceneSnapshot.approvedShotPlanId &&
-            sceneSnapshot.approvedShotPlanId !== validatedInjected.shotPlanId
-          ) {
-            throw new RenderJobExecutionError(
-              `Scene "${job.sceneId}" approvedShotPlanId "${sceneSnapshot.approvedShotPlanId}" does not match injected shotPlanId "${validatedInjected.shotPlanId}"`
-            );
-          }
-          if (
-            sceneSnapshot.selectedShotPlanId &&
-            sceneSnapshot.selectedShotPlanId !== validatedInjected.shotPlanId
-          ) {
-            throw new RenderJobExecutionError(
-              `Scene "${job.sceneId}" selectedShotPlanId "${sceneSnapshot.selectedShotPlanId}" does not match injected shotPlanId "${validatedInjected.shotPlanId}"`
-            );
-          }
-          sceneSpec = {
-            revision: validatedInjected.specRevision,
-            actionContext: sceneSnapshot.configuration?.prompt
-          };
+        if (!deps.referenceAssetRepository.listBindingsBySceneId) {
+          throw new RenderJobExecutionError(
+            "referenceAssetRepository.listBindingsBySceneId is required for reference-directed execution"
+          );
         }
 
         const rawAssets = await deps.referenceAssetRepository.listBySceneId(job.sceneId as SceneId);
         const assetsById = new Map<string, DomainReferenceAsset>(rawAssets.map((a) => [a.id, a]));
 
-        let rawBindings: readonly SceneReferenceBinding[] = [];
-        if (deps.referenceAssetRepository.listBindingsBySceneId) {
-          rawBindings = await deps.referenceAssetRepository.listBindingsBySceneId(
-            job.sceneId as SceneId,
-            {
-              specRevision: validatedInjected.specRevision
-            }
-          );
+        const rawBindings = await deps.referenceAssetRepository.listBindingsBySceneId(
+          job.sceneId as SceneId,
+          {
+            specRevision: validatedInjected.specRevision
+          }
+        );
+
+        for (const binding of rawBindings) {
+          if (
+            binding.specRevision !== undefined &&
+            binding.specRevision !== validatedInjected.specRevision
+          ) {
+            throw new RenderJobExecutionError(
+              `SceneReferenceBinding for asset "${binding.referenceAssetId}" has specRevision ${binding.specRevision}, which does not match injected specRevision ${validatedInjected.specRevision}`
+            );
+          }
         }
 
         const canonicalRefs = canonicalizeReferenceBindings({

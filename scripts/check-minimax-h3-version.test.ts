@@ -95,4 +95,48 @@ describe("MiniMax-H3 version and integrity validation", () => {
       });
     }).toThrow();
   });
+
+  it("check-minimax-h3-version.sh fails when --verify-comfy is passed without comfy dir", () => {
+    expect(() => {
+      execFileSync("bash", [CHECK_SCRIPT, "--models-dir", tempDir, "--verify-comfy"], {
+        encoding: "utf-8",
+        stdio: "pipe"
+      });
+    }).toThrow();
+  });
+
+  it("check-minimax-h3-version.sh fails when --comfy-dir is not a git repo", () => {
+    const fakeComfy = path.join(tempDir, "fake-comfy");
+    fs.mkdirSync(fakeComfy, { recursive: true });
+    expect(() => {
+      execFileSync("bash", [CHECK_SCRIPT, "--models-dir", tempDir, "--comfy-dir", fakeComfy], {
+        encoding: "utf-8",
+        stdio: "pipe"
+      });
+    }).toThrow();
+  });
+
+  it("check-minimax-h3-version.sh fails when ComfyUI git revision mismatches", () => {
+    const fakeComfy = path.join(tempDir, "fake-comfy");
+    fs.mkdirSync(path.join(fakeComfy, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(fakeComfy, "comfy_extras"), { recursive: true });
+    fs.writeFileSync(path.join(fakeComfy, "comfy_extras", "nodes_minimax_h3.py"), "# mock");
+
+    // Initialize mock git repo with wrong commit
+    execFileSync("git", ["init", fakeComfy], { stdio: "ignore" });
+    execFileSync("git", ["-C", fakeComfy, "config", "user.name", "Test"], { stdio: "ignore" });
+    execFileSync("git", ["-C", fakeComfy, "config", "user.email", "test@test.com"], {
+      stdio: "ignore"
+    });
+    execFileSync("git", ["-C", fakeComfy, "commit", "--allow-empty", "-m", "wrong commit"], {
+      stdio: "ignore"
+    });
+
+    expect(() => {
+      execFileSync("bash", [CHECK_SCRIPT, "--models-dir", tempDir, "--comfy-dir", fakeComfy], {
+        encoding: "utf-8",
+        stdio: "pipe"
+      });
+    }).toThrow();
+  });
 });

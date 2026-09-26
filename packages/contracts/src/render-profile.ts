@@ -230,7 +230,7 @@ export const MINIMAX_H3_720P_5S_REF2V_V1_PROFILE: MinimaxH3Ref2vRenderProfile = 
   key: "MINIMAX_H3_720P_5S_REF2V_V1",
   version: 1,
   engine: "minimax_h3_ref2v",
-  workflowHash: "fc26f266a0032eeb7b2580879616d05e18e53a701c31d1d87d6c895140217912",
+  workflowHash: "296ca44a3ff9b2836123874dd57985152514633daefcc3256849c8b969737d3b",
   modelHashes: Object.freeze({
     "models/clip/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors":
       "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
@@ -387,7 +387,7 @@ export const MINIMAX_H3_720P_5S_REF2V_V1_INJECTION_TOPOLOGY: ProfileInjectionTop
     referenceNode: Object.freeze({
       nodeId: "105",
       classType: "MiniMaxH3ReferenceToVideo",
-      inputField: "ref_images"
+      inputField: "ref_image_1"
     }),
     referenceImages: Object.freeze([
       Object.freeze({ nodeId: "201", classType: "LoadImage", inputField: "image" }),

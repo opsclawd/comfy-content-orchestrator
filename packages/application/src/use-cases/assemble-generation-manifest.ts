@@ -653,6 +653,114 @@ export class AssembleGenerationManifest {
           }
         }
       }
+      if (topology?.referenceImages) {
+        const activeNodeIds = new Set(
+          (input.referenceImages ?? []).map((e) => e.injectionTarget.nodeId)
+        );
+        for (const target of topology.referenceImages) {
+          if (!activeNodeIds.has(target.nodeId) && input.workflow?.[target.nodeId]) {
+            throw new IncompleteManifestError(
+              `referenceImages (unused topology node "${target.nodeId}" still present in submitted workflow)`
+            );
+          }
+        }
+      }
+      if (topology?.referenceNode) {
+        const refNode = input.workflow?.[topology.referenceNode.nodeId] as
+          { class_type?: string; inputs?: Record<string, unknown> } | undefined;
+        if (!refNode || refNode.class_type !== topology.referenceNode.classType) {
+          throw new IncompleteManifestError(
+            `referenceNode (node "${topology.referenceNode.nodeId}" with class "${topology.referenceNode.classType}" missing from workflow)`
+          );
+        }
+        const activeSlots = new Set((input.referenceImages ?? []).map((e) => e.slotIndex));
+        for (const entry of input.referenceImages ?? []) {
+          const expectedLink = [entry.injectionTarget.nodeId, 0];
+          const actualLink = refNode.inputs?.[`ref_image_${entry.slotIndex}`];
+          if (
+            !Array.isArray(actualLink) ||
+            actualLink[0] !== expectedLink[0] ||
+            actualLink[1] !== expectedLink[1]
+          ) {
+            throw new IncompleteManifestError(
+              `referenceNode.inputs.ref_image_${entry.slotIndex} (expected connection to ["${entry.injectionTarget.nodeId}", 0], got ${JSON.stringify(actualLink)})`
+            );
+          }
+        }
+        for (let s = 1; s <= 9; s++) {
+          if (!activeSlots.has(s) && refNode.inputs?.[`ref_image_${s}`] !== undefined) {
+            throw new IncompleteManifestError(
+              `referenceNode.inputs.ref_image_${s} (inactive slot ${s} must not be connected on node "${topology.referenceNode.nodeId}")`
+            );
+          }
+        }
+      }
+    } else if (input.routingMode === "frame_anchored") {
+      if (!input.firstFrame) {
+        throw new IncompleteManifestError("firstFrame");
+      }
+      const injectedNode = input.workflow?.[input.firstFrame.injectionTarget.nodeId] as
+        { class_type?: string; inputs?: Record<string, unknown> } | undefined;
+      if (!injectedNode || injectedNode.class_type !== input.firstFrame.injectionTarget.classType) {
+        throw new IncompleteManifestError(
+          `firstFrame.injectionTarget (node "${input.firstFrame.injectionTarget.nodeId}" with class "${input.firstFrame.injectionTarget.classType}" missing from workflow)`
+        );
+      }
+      const expectedStagedValue = input.firstFrame.stagedAs.subfolder
+        ? `${input.firstFrame.stagedAs.subfolder}/${input.firstFrame.stagedAs.name}`
+        : input.firstFrame.stagedAs.name;
+      const actualInjectedValue =
+        injectedNode.inputs?.[input.firstFrame.injectionTarget.inputField];
+      if (actualInjectedValue !== expectedStagedValue) {
+        throw new IncompleteManifestError(
+          `firstFrame.injectionTarget (expected staged image "${expectedStagedValue}" at input "${input.firstFrame.injectionTarget.inputField}", got "${actualInjectedValue}")`
+        );
+      }
+      if (input.lastFrame) {
+        const lastNode = input.workflow?.[input.lastFrame.injectionTarget.nodeId] as
+          { class_type?: string; inputs?: Record<string, unknown> } | undefined;
+        if (!lastNode || lastNode.class_type !== input.lastFrame.injectionTarget.classType) {
+          throw new IncompleteManifestError(
+            `lastFrame.injectionTarget (node "${input.lastFrame.injectionTarget.nodeId}" with class "${input.lastFrame.injectionTarget.classType}" missing from workflow)`
+          );
+        }
+        const expectedLastStaged = input.lastFrame.stagedAs.subfolder
+          ? `${input.lastFrame.stagedAs.subfolder}/${input.lastFrame.stagedAs.name}`
+          : input.lastFrame.stagedAs.name;
+        const actualLastInjected = lastNode.inputs?.[input.lastFrame.injectionTarget.inputField];
+        if (actualLastInjected !== expectedLastStaged) {
+          throw new IncompleteManifestError(
+            `lastFrame.injectionTarget (expected staged image "${expectedLastStaged}" at input "${input.lastFrame.injectionTarget.inputField}", got "${actualLastInjected}")`
+          );
+        }
+      }
+      if (input.conditioningImage) {
+        const { resolved, stagedAs, injectionTarget } = input.conditioningImage;
+        approvedCandidate = {
+          id: resolved.input.candidateId,
+          contentHash: resolved.media.sha256,
+          specRevision: resolved.input.specRevision,
+          variantOrdinal: resolved.input.variantOrdinal
+        };
+        executionConditioning = {
+          candidateId: resolved.input.candidateId,
+          sceneId: resolved.input.sceneId,
+          specRevision: resolved.input.specRevision,
+          contentHashSha256: resolved.media.sha256,
+          media: {
+            bucket: resolved.media.bucket,
+            key: resolved.media.key,
+            sha256: resolved.media.sha256,
+            contentType: resolved.media.contentType
+          },
+          stagedAs: { name: stagedAs.name, subfolder: stagedAs.subfolder },
+          injectionTarget: {
+            nodeId: injectionTarget.nodeId,
+            classType: injectionTarget.classType,
+            inputField: injectionTarget.inputField
+          }
+        };
+      }
     } else if (input.conditioningImage) {
       const { resolved, stagedAs, injectionTarget } = input.conditioningImage;
 

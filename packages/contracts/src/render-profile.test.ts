@@ -478,7 +478,7 @@ describe("RenderProfileSchema", () => {
       expect(topology?.referenceNode).toEqual({
         nodeId: "105",
         classType: "MiniMaxH3ReferenceToVideo",
-        inputField: "ref_images"
+        inputField: "ref_image_1"
       });
       expect(topology?.referenceImages).toHaveLength(9);
       for (let i = 0; i < 9; i++) {

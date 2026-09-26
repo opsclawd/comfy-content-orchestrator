@@ -1839,7 +1839,7 @@ describe("AssembleGenerationManifest use case", () => {
             width: 1344,
             height: 768,
             ref_image_size: "max",
-            ref_images: ["201", 0]
+            ref_image_1: ["201", 0]
           }
         }
       };
@@ -1930,6 +1930,130 @@ describe("AssembleGenerationManifest use case", () => {
           ]
         })
       ).rejects.toThrow("referenceImages.injectionTarget");
+
+      // 6. Unused reference node still present in workflow
+      await expect(
+        assembler.assemble({
+          ...input,
+          workflow: {
+            ...ref2vWorkflow,
+            "202": { class_type: "LoadImage", inputs: { image: "staged/ref2.png" } }
+          }
+        })
+      ).rejects.toThrow(
+        'referenceImages (unused topology node "202" still present in submitted workflow)'
+      );
+
+      // 7. Reference socket on node 105 connected to wrong node
+      await expect(
+        assembler.assemble({
+          ...input,
+          workflow: {
+            ...ref2vWorkflow,
+            "105": {
+              class_type: "MiniMaxH3ReferenceToVideo",
+              inputs: {
+                ...(ref2vWorkflow["105"] as { inputs: Record<string, unknown> }).inputs,
+                ref_image_1: ["999", 0]
+              }
+            }
+          }
+        })
+      ).rejects.toThrow(/referenceNode\.inputs\.ref_image_1/);
+
+      // 8. Inactive socket on node 105 still present in submitted workflow
+      await expect(
+        assembler.assemble({
+          ...input,
+          workflow: {
+            ...ref2vWorkflow,
+            "105": {
+              class_type: "MiniMaxH3ReferenceToVideo",
+              inputs: {
+                ...(ref2vWorkflow["105"] as { inputs: Record<string, unknown> }).inputs,
+                ref_image_2: ["202", 0]
+              }
+            }
+          }
+        })
+      ).rejects.toThrow(
+        'referenceNode.inputs.ref_image_2 (inactive slot 2 must not be connected on node "105")'
+      );
+    });
+
+    it("assembles a valid frame_anchored manifest and verifies firstFrame and lastFrame injection targets", async () => {
+      const deps = createTestDeps();
+      const assembler = new AssembleGenerationManifest(deps);
+      const minimaxI2vProfile: ManifestSourceProfile = {
+        id: "MINIMAX_H3_720P_5S_I2V_V1",
+        engine: "minimax_h3_i2v",
+        runnerProfile: "dynamicvram-offload-v1",
+        source: { kind: "validated_host_export", license: "MiniMax Community License" },
+        baseline: {
+          width: 1344,
+          height: 768,
+          frames: 124,
+          steps: 20,
+          approximateDurationSeconds: 5
+        },
+        renderProfileIdentity: { key: "MINIMAX_H3_720P_5S_I2V_V1", version: 1 }
+      };
+
+      const i2vWorkflow: RenderWorkflow = {
+        "15": { class_type: "RandomNoise", inputs: { noise_seed: 42 } },
+        "17": { class_type: "KSamplerSelect", inputs: { sampler_name: "res_multistep" } },
+        "9": {
+          class_type: "BasicScheduler",
+          inputs: { scheduler: "simple", steps: 20, denoise: 1 }
+        },
+        "20": { class_type: "LoadImage", inputs: { image: "staged/first_anchor.png" } },
+        "104": {
+          class_type: "MiniMaxH3ImageToVideo",
+          inputs: {
+            prompt: "Anchor shot prompt",
+            length: 124,
+            width: 1344,
+            height: 768
+          }
+        }
+      };
+
+      const input = createDefaultInput({
+        profile: minimaxI2vProfile,
+        workflow: i2vWorkflow,
+        routingMode: "frame_anchored",
+        firstFrame: {
+          anchorType: "first_frame",
+          candidateId: "cand-202" as CandidateId,
+          contentHashSha256: "c".repeat(64),
+          stagedAs: { name: "first_anchor.png", subfolder: "staged" },
+          injectionTarget: { nodeId: "20", classType: "LoadImage", inputField: "image" }
+        }
+      });
+
+      const result = await assembler.assemble(input);
+      expect(result.manifestPayload.routingMode).toBe("frame_anchored");
+      expect(result.manifestPayload.renderProfile).toBe("MINIMAX_H3_720P_5S_I2V_V1");
+      expect(result.manifestPayload.firstFrame).toBeDefined();
+
+      // Missing firstFrame
+      await expect(
+        assembler.assemble({
+          ...input,
+          firstFrame: undefined
+        })
+      ).rejects.toThrow("firstFrame");
+
+      // Injection target value mismatch
+      await expect(
+        assembler.assemble({
+          ...input,
+          firstFrame: {
+            ...input.firstFrame!,
+            stagedAs: { name: "wrong.png", subfolder: "staged" }
+          }
+        })
+      ).rejects.toThrow("firstFrame.injectionTarget");
     });
   });
 });
