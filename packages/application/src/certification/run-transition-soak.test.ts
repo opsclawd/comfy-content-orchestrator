@@ -177,6 +177,7 @@ function createMockTelemetryData(
     reservedVramMb: 512,
     peakHostRamUsedMb: 28500,
     peakProcessRssMb: 26000,
+    peakSwapUsedMb: 0,
     swapUsedDeltaMb: 0,
     systemSwapInPageDelta: 0,
     systemSwapOutPageDelta: 0,

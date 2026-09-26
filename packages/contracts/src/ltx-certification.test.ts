@@ -121,6 +121,7 @@ describe("CertificationArtifactSchema", () => {
       reservedVramMb: 0,
       peakHostRamUsedMb: 14000,
       peakProcessRssMb: 1000,
+      peakSwapUsedMb: 0,
       swapUsedDeltaMb: 0,
       systemSwapInPageDelta: 0,
       systemSwapOutPageDelta: 0,

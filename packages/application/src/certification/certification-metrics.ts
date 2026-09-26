@@ -24,6 +24,11 @@ function calculateNonNegativeDelta(first: number, last: number): number | null {
  * Aggregates raw paired GPU and host telemetry samples into peak and delta metrics.
  * Non-negative deltas require stable window edges and stable process identities.
  * Missing samples or counter resets yield null aggregates.
+ *
+ * swapUsedMb is a gauge, not a monotonic counter: the kernel can reclaim swap mid-run
+ * (e.g. after model unload), so it is tracked as a peak (peakSwapUsedMb) like VRAM/RAM/RSS
+ * rather than a first-to-last delta. swapUsedDeltaMb is retained for informational
+ * reporting only and is not used by the resource gate.
  */
 export function aggregateCertificationTelemetry(
   options: AggregateCertificationTelemetryOptions
@@ -66,6 +71,7 @@ export function aggregateCertificationTelemetry(
       reservedVramMb: null,
       peakHostRamUsedMb: null,
       peakProcessRssMb: null,
+      peakSwapUsedMb: null,
       swapUsedDeltaMb: null,
       systemSwapInPageDelta: null,
       systemSwapOutPageDelta: null,
@@ -82,6 +88,7 @@ export function aggregateCertificationTelemetry(
   let reservedVramMb = 0;
   let peakHostRamUsedMb = 0;
   let peakProcessRssMb = 0;
+  let peakSwapUsedMb = 0;
 
   for (const sample of samples) {
     if (sample.gpu.usedVramMb > peakVramMb) {
@@ -95,6 +102,9 @@ export function aggregateCertificationTelemetry(
     }
     if (sample.host.processRssMb > peakProcessRssMb) {
       peakProcessRssMb = sample.host.processRssMb;
+    }
+    if (sample.host.swapUsedMb > peakSwapUsedMb) {
+      peakSwapUsedMb = sample.host.swapUsedMb;
     }
   }
 
@@ -154,6 +164,7 @@ export function aggregateCertificationTelemetry(
     reservedVramMb,
     peakHostRamUsedMb,
     peakProcessRssMb,
+    peakSwapUsedMb,
     swapUsedDeltaMb,
     systemSwapInPageDelta,
     systemSwapOutPageDelta,
@@ -249,7 +260,7 @@ export function evaluateLtxResourceGate(
     telemetry.reservedVramMb !== null &&
     telemetry.peakHostRamUsedMb !== null &&
     telemetry.peakProcessRssMb !== null &&
-    telemetry.swapUsedDeltaMb !== null &&
+    telemetry.peakSwapUsedMb !== null &&
     telemetry.systemSwapInPageDelta !== null &&
     telemetry.systemSwapOutPageDelta !== null &&
     telemetry.systemMajorPageFaultDelta !== null &&
@@ -365,6 +376,7 @@ export function renderCertificationSummary(artifact: LtxCertificationArtifact): 
     } |`,
     `| **Peak Host RAM Used** | ${formatVal(artifact.telemetry.peakHostRamUsedMb, "MB")} |`,
     `| **Peak Process RSS** | ${formatVal(artifact.telemetry.peakProcessRssMb, "MB")} |`,
+    `| **Peak Swap Used** | ${formatVal(artifact.telemetry.peakSwapUsedMb, "MB")} |`,
     `| **Swap Used Delta** | ${formatVal(artifact.telemetry.swapUsedDeltaMb, "MB")} |`,
     `| **System Swap-In Pages Delta** | ${formatVal(artifact.telemetry.systemSwapInPageDelta)} |`,
     `| **System Swap-Out Pages Delta** | ${formatVal(artifact.telemetry.systemSwapOutPageDelta)} |`,
