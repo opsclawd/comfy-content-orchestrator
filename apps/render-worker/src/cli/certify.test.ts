@@ -5,7 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   CertificationEnvironment,
   CertificationArtifact,
-  LtxI2vWorkloadIdentity
+  LtxI2vWorkloadIdentity,
+  MinimaxH3Ref2vWorkloadIdentity
 } from "@cco/contracts";
 import type { CertificationProfile, CertificationProvenanceReport } from "@cco/infrastructure";
 import type {
@@ -209,6 +210,57 @@ describe("certify CLI", () => {
     })
   });
 
+  const mockMinimaxRef2vProfile: CertificationProfile = Object.freeze({
+    id: "minimax-h3-720p-124f-ref2v",
+    engine: "minimax_h3_ref2v",
+    workflowPath: "/test/manifests/minimax_h3_720p_ref2v_124f_api.json",
+    workflowRelativePath: "minimax_h3_720p_ref2v_124f_api.json",
+    expectedWorkflowHash: "c".repeat(64),
+    source: Object.freeze({
+      kind: "validated_host_export" as const,
+      uri: "https://github.com/Comfy-Org/MiniMax-H3",
+      revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+      license: "MiniMax Community License"
+    }),
+    baseline: Object.freeze({
+      width: 1344,
+      height: 768,
+      frames: 124,
+      steps: 20,
+      approximateDurationSeconds: 5
+    }),
+    minFreeDiskGb: 50,
+    runnerProfile: "dynamicvram-offload-v1",
+    models: Object.freeze([
+      {
+        category: "clip" as const,
+        relativePath: "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+      },
+      {
+        category: "diffusion_models" as const,
+        relativePath: "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+      },
+      {
+        category: "vae" as const,
+        relativePath: "minimax_h3_audio_vae_fp32.safetensors"
+      },
+      {
+        category: "vae" as const,
+        relativePath: "minimax_h3_video_vae_int8_convrot.safetensors"
+      }
+    ]),
+    assertions: Object.freeze([
+      { nodeId: "9", classType: "BasicScheduler", input: "steps", equals: 20 },
+      { nodeId: "105", classType: "MiniMaxH3ReferenceToVideo", input: "width", equals: 1344 },
+      { nodeId: "105", classType: "MiniMaxH3ReferenceToVideo", input: "height", equals: 768 },
+      { nodeId: "105", classType: "MiniMaxH3ReferenceToVideo", input: "length", equals: 124 }
+    ]),
+    renderProfileIdentity: Object.freeze({
+      key: "MINIMAX_H3_720P_5S_REF2V_V1" as const,
+      version: 1 as const
+    })
+  });
+
   const mockApprovedProvenance: CertificationProvenanceReport = Object.freeze({
     version: 1,
     profileId: "ltx-25-720p-97f",
@@ -354,6 +406,82 @@ describe("certify CLI", () => {
       runnerProfile: "dynamicvram-offload-v1",
       measuredDiskFootprintGb: 0.000003,
       minFreeDiskGb: 100
+    })
+  });
+
+  const mockApprovedRef2vProvenance: CertificationProvenanceReport = Object.freeze({
+    version: 1,
+    profileId: "minimax-h3-720p-124f-ref2v",
+    generatedAt: "2026-08-15T12:00:00.000Z",
+    workflow: Object.freeze({
+      relativePath: "minimax_h3_720p_ref2v_124f_api.json",
+      sha256: "c".repeat(64),
+      source: Object.freeze({
+        kind: "validated_host_export" as const,
+        uri: "https://github.com/Comfy-Org/MiniMax-H3",
+        revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+        license: "MiniMax Community License"
+      })
+    }),
+    models: Object.freeze([
+      {
+        category: "clip" as const,
+        relativePath: "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        key: "clip/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        sha256: "4".repeat(64),
+        bytes: 1000
+      },
+      {
+        category: "diffusion_models" as const,
+        relativePath: "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+        key: "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+        sha256: "5".repeat(64),
+        bytes: 1000
+      },
+      {
+        category: "vae" as const,
+        relativePath: "minimax_h3_audio_vae_fp32.safetensors",
+        key: "vae/minimax_h3_audio_vae_fp32.safetensors",
+        sha256: "6".repeat(64),
+        bytes: 1000
+      },
+      {
+        category: "vae" as const,
+        relativePath: "minimax_h3_video_vae_int8_convrot.safetensors",
+        key: "vae/minimax_h3_video_vae_int8_convrot.safetensors",
+        sha256: "7".repeat(64),
+        bytes: 1000
+      }
+    ]),
+    git: Object.freeze({
+      comfyUiCommit: "d".repeat(40),
+      customNodes: Object.freeze([])
+    }),
+    disk: Object.freeze({
+      modelFootprintBytes: 4000,
+      availableBytes: 200_000_000_000,
+      requiredFreeBytes: 50_000_000_000,
+      modelFootprintGb: 0.000004,
+      availableGb: 200,
+      minFreeDiskGb: 50,
+      passes: true
+    }),
+    renderProfileProvenance: Object.freeze({
+      key: "MINIMAX_H3_720P_5S_REF2V_V1",
+      version: 1,
+      engine: "minimax_h3_ref2v",
+      workflowHash: "c".repeat(64),
+      modelHashes: Object.freeze({
+        "clip/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors": "4".repeat(64),
+        "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors": "5".repeat(64),
+        "vae/minimax_h3_audio_vae_fp32.safetensors": "6".repeat(64),
+        "vae/minimax_h3_video_vae_int8_convrot.safetensors": "7".repeat(64)
+      }),
+      frames: 124,
+      steps: 20,
+      runnerProfile: "dynamicvram-offload-v1",
+      measuredDiskFootprintGb: 0.000004,
+      minFreeDiskGb: 50
     })
   });
 
@@ -1453,6 +1581,313 @@ describe("certify CLI", () => {
       );
       expect(mockCleanup).toHaveBeenCalled();
       expect(writeCertificationArtifacts).toHaveBeenCalled();
+    });
+
+    it("executes certification run for MiniMax-H3 Ref2V profile with multiple reference images staged into per-slot Autogrow inputs (N=2)", async () => {
+      const stdout = vi.fn();
+      const stderr = vi.fn();
+
+      const ref2vArtifact: CertificationArtifact = {
+        ...mockPassedArtifact,
+        runId: "minimax-ref2v-cert-run-001",
+        identity: {
+          profileId: "minimax-h3-720p-124f-ref2v",
+          renderProfileKey: "MINIMAX_H3_720P_5S_REF2V_V1",
+          renderProfileVersion: 1,
+          engine: "minimax_h3_ref2v",
+          width: 1344,
+          height: 768,
+          frames: 124,
+          steps: 20,
+          workflowSha256: "c".repeat(64),
+          modelSha256: {
+            "clip/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors": "4".repeat(64),
+            "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors": "5".repeat(64),
+            "vae/minimax_h3_audio_vae_fp32.safetensors": "6".repeat(64),
+            "vae/minimax_h3_video_vae_int8_convrot.safetensors": "7".repeat(64)
+          },
+          comfyUiCommit: "d".repeat(40),
+          customNodes: []
+        } satisfies MinimaxH3Ref2vWorkloadIdentity
+      };
+
+      const writeCertificationArtifacts = vi.fn().mockResolvedValue({
+        runId: "minimax-ref2v-cert-run-001",
+        outputDirectory: "/test/certification/minimax-h3/minimax-ref2v-cert-run-001",
+        resultJsonPath: "/test/certification/minimax-h3/minimax-ref2v-cert-run-001/result.json",
+        summaryMdPath: "/test/certification/minimax-h3/minimax-ref2v-cert-run-001/summary.md",
+        relativeOutputDirectory: "certification/minimax-h3/minimax-ref2v-cert-run-001",
+        relativeResultJsonPath: "certification/minimax-h3/minimax-ref2v-cert-run-001/result.json",
+        relativeSummaryMdPath: "certification/minimax-h3/minimax-ref2v-cert-run-001/summary.md",
+        artifact: ref2vArtifact
+      });
+
+      const refImageNodeIds = ["201", "202", "203", "204", "205", "206", "207", "208", "209"];
+      const mockRef2vWorkflowJson = JSON.stringify({
+        "105": {
+          class_type: "MiniMaxH3ReferenceToVideo",
+          inputs: {
+            prompt: "test prompt",
+            width: 1344,
+            height: 768,
+            length: 124,
+            ref_image_size: "max",
+            ...Object.fromEntries(
+              refImageNodeIds.map((nodeId, i) => [`ref_images.ref_image_${i}`, [nodeId, 0]])
+            )
+          }
+        },
+        ...Object.fromEntries(
+          refImageNodeIds.map((nodeId, i) => [
+            nodeId,
+            { class_type: "LoadImage", inputs: { image: `ref_image_${i + 1}.png` } }
+          ])
+        )
+      });
+
+      const mockCleanup = vi.fn().mockResolvedValue(undefined);
+      let stageCallCount = 0;
+      const mockStagingAdapter: ComfyUiInputStagingPort = {
+        stage: vi.fn().mockImplementation(async () => {
+          stageCallCount += 1;
+          return { name: `staged-ref-${stageCallCount}.png`, subfolder: "conditioning" };
+        }),
+        cleanup: mockCleanup
+      };
+
+      const runCertification = vi.fn().mockResolvedValue(ref2vArtifact);
+
+      const deps = createStandardDependencies({
+        loadCertificationProfile: vi.fn().mockResolvedValue(mockMinimaxRef2vProfile),
+        readApprovedProvenance: vi.fn().mockResolvedValue(mockApprovedRef2vProvenance),
+        collectCertificationProvenance: vi.fn().mockResolvedValue(mockApprovedRef2vProvenance),
+        verifyGoldMasterProvenance,
+        readWorkflowFile: vi.fn().mockResolvedValue(mockRef2vWorkflowJson),
+        stageReferenceImage: mockStagingAdapter,
+        runCertification,
+        writeCertificationArtifacts
+      });
+
+      const fixtureRefImagePath = resolve(
+        fileURLToPath(
+          new URL("../../../../tests/fixtures/deterministic-reference.png", import.meta.url)
+        )
+      );
+
+      const exitCode = await runCertificationCli(
+        [
+          "--comfyui-dir=/comfy",
+          "--comfyui-url=http://127.0.0.1:8188",
+          "--comfyui-pid=12345",
+          "--gold-master-provenance=/gold.json",
+          "--profile=minimax-h3-720p-124f-ref2v",
+          "--run-id=minimax-ref2v-cert-run-001",
+          `--reference-image=${fixtureRefImagePath}`,
+          `--reference-image=${fixtureRefImagePath}`
+        ],
+        { stdout, stderr },
+        deps
+      );
+
+      expect(exitCode).toBe(0);
+      expect(mockStagingAdapter.stage).toHaveBeenCalledTimes(2);
+
+      const submittedWorkflow = runCertification.mock.calls[0]![0].renderInput.workflow as Record<
+        string,
+        { inputs: Record<string, unknown> }
+      >;
+
+      expect(submittedWorkflow["105"]!.inputs["ref_images.ref_image_0"]).toEqual(["201", 0]);
+      expect(submittedWorkflow["105"]!.inputs["ref_images.ref_image_1"]).toEqual(["202", 0]);
+      for (let s = 2; s <= 8; s++) {
+        expect(submittedWorkflow["105"]!.inputs[`ref_images.ref_image_${s}`]).toBeUndefined();
+      }
+      expect(submittedWorkflow["105"]!.inputs.ref_image_size).toBe("max");
+      expect(submittedWorkflow["201"]).toBeDefined();
+      expect((submittedWorkflow["201"] as { inputs: Record<string, unknown> }).inputs.image).toBe(
+        "conditioning/staged-ref-1.png"
+      );
+      expect(submittedWorkflow["202"]).toBeDefined();
+      expect((submittedWorkflow["202"] as { inputs: Record<string, unknown> }).inputs.image).toBe(
+        "conditioning/staged-ref-2.png"
+      );
+      for (let slot = 203; slot <= 209; slot++) {
+        expect(submittedWorkflow[String(slot)]).toBeUndefined();
+      }
+
+      expect(mockCleanup).toHaveBeenCalledTimes(2);
+      expect(writeCertificationArtifacts).toHaveBeenCalled();
+    });
+
+    it("executes certification run for MiniMax-H3 Ref2V profile with zero reference images (N=0 prompt-only)", async () => {
+      const stdout = vi.fn();
+      const stderr = vi.fn();
+
+      const ref2vArtifact: CertificationArtifact = {
+        ...mockPassedArtifact,
+        runId: "minimax-ref2v-cert-run-002",
+        identity: {
+          profileId: "minimax-h3-720p-124f-ref2v",
+          renderProfileKey: "MINIMAX_H3_720P_5S_REF2V_V1",
+          renderProfileVersion: 1,
+          engine: "minimax_h3_ref2v",
+          width: 1344,
+          height: 768,
+          frames: 124,
+          steps: 20,
+          workflowSha256: "c".repeat(64),
+          modelSha256: {
+            "clip/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors": "4".repeat(64),
+            "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors": "5".repeat(64),
+            "vae/minimax_h3_audio_vae_fp32.safetensors": "6".repeat(64),
+            "vae/minimax_h3_video_vae_int8_convrot.safetensors": "7".repeat(64)
+          },
+          comfyUiCommit: "d".repeat(40),
+          customNodes: []
+        } satisfies MinimaxH3Ref2vWorkloadIdentity
+      };
+
+      const writeCertificationArtifacts = vi.fn().mockResolvedValue({
+        runId: "minimax-ref2v-cert-run-002",
+        outputDirectory: "/test/certification/minimax-h3/minimax-ref2v-cert-run-002",
+        resultJsonPath: "/test/certification/minimax-h3/minimax-ref2v-cert-run-002/result.json",
+        summaryMdPath: "/test/certification/minimax-h3/minimax-ref2v-cert-run-002/summary.md",
+        relativeOutputDirectory: "certification/minimax-h3/minimax-ref2v-cert-run-002",
+        relativeResultJsonPath: "certification/minimax-h3/minimax-ref2v-cert-run-002/result.json",
+        relativeSummaryMdPath: "certification/minimax-h3/minimax-ref2v-cert-run-002/summary.md",
+        artifact: ref2vArtifact
+      });
+
+      const refImageNodeIds = ["201", "202", "203", "204", "205", "206", "207", "208", "209"];
+      const mockRef2vWorkflowJson = JSON.stringify({
+        "105": {
+          class_type: "MiniMaxH3ReferenceToVideo",
+          inputs: {
+            prompt: "prompt-only test",
+            width: 1344,
+            height: 768,
+            length: 124,
+            ref_image_size: "max",
+            ...Object.fromEntries(
+              refImageNodeIds.map((nodeId, i) => [`ref_images.ref_image_${i}`, [nodeId, 0]])
+            )
+          }
+        },
+        ...Object.fromEntries(
+          refImageNodeIds.map((nodeId, i) => [
+            nodeId,
+            { class_type: "LoadImage", inputs: { image: `ref_image_${i + 1}.png` } }
+          ])
+        )
+      });
+
+      const mockStagingAdapter: ComfyUiInputStagingPort = {
+        stage: vi.fn(),
+        cleanup: vi.fn().mockResolvedValue(undefined)
+      };
+
+      const runCertification = vi.fn().mockResolvedValue(ref2vArtifact);
+
+      const deps = createStandardDependencies({
+        loadCertificationProfile: vi.fn().mockResolvedValue(mockMinimaxRef2vProfile),
+        readApprovedProvenance: vi.fn().mockResolvedValue(mockApprovedRef2vProvenance),
+        collectCertificationProvenance: vi.fn().mockResolvedValue(mockApprovedRef2vProvenance),
+        verifyGoldMasterProvenance,
+        readWorkflowFile: vi.fn().mockResolvedValue(mockRef2vWorkflowJson),
+        stageReferenceImage: mockStagingAdapter,
+        runCertification,
+        writeCertificationArtifacts
+      });
+
+      const exitCode = await runCertificationCli(
+        [
+          "--comfyui-dir=/comfy",
+          "--comfyui-url=http://127.0.0.1:8188",
+          "--comfyui-pid=12345",
+          "--gold-master-provenance=/gold.json",
+          "--profile=minimax-h3-720p-124f-ref2v",
+          "--run-id=minimax-ref2v-cert-run-002"
+        ],
+        { stdout, stderr },
+        deps
+      );
+
+      expect(exitCode).toBe(0);
+      expect(mockStagingAdapter.stage).not.toHaveBeenCalled();
+
+      const submittedWorkflow = runCertification.mock.calls[0]![0].renderInput.workflow as Record<
+        string,
+        { inputs: Record<string, unknown> }
+      >;
+
+      for (let s = 0; s <= 8; s++) {
+        expect(submittedWorkflow["105"]!.inputs[`ref_images.ref_image_${s}`]).toBeUndefined();
+      }
+      expect(submittedWorkflow["105"]!.inputs.ref_image_size).toBeUndefined();
+      for (let slot = 201; slot <= 209; slot++) {
+        expect(submittedWorkflow[String(slot)]).toBeUndefined();
+      }
+      expect(writeCertificationArtifacts).toHaveBeenCalled();
+    });
+
+    it("fails closed when more reference images are supplied than the profile's Autogrow slot limit", async () => {
+      const stdout = vi.fn();
+      const stderr = vi.fn();
+
+      const refImageNodeIds = ["201", "202", "203", "204", "205", "206", "207", "208", "209"];
+      const mockRef2vWorkflowJson = JSON.stringify({
+        "105": {
+          class_type: "MiniMaxH3ReferenceToVideo",
+          inputs: {
+            prompt: "test",
+            width: 1344,
+            height: 768,
+            length: 124
+          }
+        },
+        ...Object.fromEntries(
+          refImageNodeIds.map((nodeId, i) => [
+            nodeId,
+            { class_type: "LoadImage", inputs: { image: `ref_image_${i + 1}.png` } }
+          ])
+        )
+      });
+
+      const deps = createStandardDependencies({
+        loadCertificationProfile: vi.fn().mockResolvedValue(mockMinimaxRef2vProfile),
+        readApprovedProvenance: vi.fn().mockResolvedValue(mockApprovedRef2vProvenance),
+        collectCertificationProvenance: vi.fn().mockResolvedValue(mockApprovedRef2vProvenance),
+        verifyGoldMasterProvenance,
+        readWorkflowFile: vi.fn().mockResolvedValue(mockRef2vWorkflowJson)
+      });
+
+      const fixtureRefImagePath = resolve(
+        fileURLToPath(
+          new URL("../../../../tests/fixtures/deterministic-reference.png", import.meta.url)
+        )
+      );
+
+      const tooManyFlags = Array.from(
+        { length: 10 },
+        () => `--reference-image=${fixtureRefImagePath}`
+      );
+
+      const exitCode = await runCertificationCli(
+        [
+          "--comfyui-dir=/comfy",
+          "--comfyui-url=http://127.0.0.1:8188",
+          "--comfyui-pid=12345",
+          "--gold-master-provenance=/gold.json",
+          "--profile=minimax-h3-720p-124f-ref2v",
+          "--run-id=minimax-ref2v-cert-run-003",
+          ...tooManyFlags
+        ],
+        { stdout, stderr },
+        deps
+      );
+
+      expect(exitCode).toBe(1);
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining("at most 9 reference images"));
     });
 
     it("executes certification run successfully for FLUX profile", async () => {
