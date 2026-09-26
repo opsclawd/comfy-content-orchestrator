@@ -8,7 +8,8 @@ export const RenderProfileKeySchema = z.enum([
   "LTX_25_720P_5S_V1",
   "FLUX_SCHNELL_DRAFT_V1",
   "LTX_25_720P_5S_I2V_V1",
-  "MINIMAX_H3_720P_5S_I2V_V1"
+  "MINIMAX_H3_720P_5S_I2V_V1",
+  "MINIMAX_H3_720P_5S_REF2V_V1"
 ]);
 export type RenderProfileKey = z.infer<typeof RenderProfileKeySchema>;
 
@@ -104,11 +105,35 @@ export const FluxSchnellRenderProfileSchema = z.object({
 });
 export type FluxSchnellRenderProfile = z.infer<typeof FluxSchnellRenderProfileSchema>;
 
+export const MinimaxH3Ref2vRenderProfileSchema = z.object({
+  key: z.literal("MINIMAX_H3_720P_5S_REF2V_V1"),
+  version: z.literal(1),
+  engine: z.literal("minimax_h3_ref2v"),
+  workflowHash: sha256HashSchema,
+  modelHashes: z.record(z.string(), sha256HashSchema),
+  frames: z.literal(124),
+  steps: z.literal(20),
+  runnerProfile: z.string().min(1),
+  measuredPeakVramMb: z.number().int().positive().optional(),
+  measuredTotalDurationMs: z.number().int().positive().optional(),
+  measuredSamplingDurationMs: z.number().int().positive().nullable().optional(),
+  measuredDiskFootprintGb: z.number().positive().finite().optional(),
+  measuredPeakHostRamMb: z.number().int().nonnegative().nullable().optional(),
+  measuredPeakProcessRssMb: z.number().int().nonnegative().nullable().optional(),
+  measuredSwapUsedMb: z.number().int().nonnegative().nullable().optional(),
+  measuredMajorPageFaults: z.number().int().nonnegative().nullable().optional(),
+  minFreeDiskGb: z.number().positive().finite(),
+  maxConcurrentGpuJobs: z.number().int().positive(),
+  requiresModelOffloading: z.boolean()
+});
+export type MinimaxH3Ref2vRenderProfile = z.infer<typeof MinimaxH3Ref2vRenderProfileSchema>;
+
 export const RenderProfileSchema = z.discriminatedUnion("key", [
   LtxRenderProfileSchema,
   FluxSchnellRenderProfileSchema,
   LtxI2vRenderProfileSchema,
-  MinimaxH3I2vRenderProfileSchema
+  MinimaxH3I2vRenderProfileSchema,
+  MinimaxH3Ref2vRenderProfileSchema
 ]);
 export type RenderProfile = z.infer<typeof RenderProfileSchema>;
 
@@ -201,6 +226,29 @@ export const MINIMAX_H3_720P_5S_I2V_V1_PROFILE: MinimaxH3I2vRenderProfile = Obje
   requiresModelOffloading: true
 });
 
+export const MINIMAX_H3_720P_5S_REF2V_V1_PROFILE: MinimaxH3Ref2vRenderProfile = Object.freeze({
+  key: "MINIMAX_H3_720P_5S_REF2V_V1",
+  version: 1,
+  engine: "minimax_h3_ref2v",
+  workflowHash: "fc26f266a0032eeb7b2580879616d05e18e53a701c31d1d87d6c895140217912",
+  modelHashes: Object.freeze({
+    "models/clip/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors":
+      "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
+    "models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors":
+      "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+    "models/vae/minimax_h3_audio_vae_fp32.safetensors":
+      "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48",
+    "models/vae/minimax_h3_video_vae_int8_convrot.safetensors":
+      "52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e"
+  }),
+  frames: 124,
+  steps: 20,
+  runnerProfile: "dynamicvram-offload-v1",
+  minFreeDiskGb: 50,
+  maxConcurrentGpuJobs: 1,
+  requiresModelOffloading: true
+});
+
 export const LTX_FPS = 24;
 export const LTX_FRAME_STEP = 8;
 export const LTX_SUPPORTED_FRAME_RANGE = [97, 97] as const;
@@ -227,6 +275,13 @@ export interface ProfileInjectionTopology {
   readonly audioPrompt?: NodeInjectionTarget | null | undefined;
   readonly frameCount?: NodeInjectionTarget | undefined;
   readonly referenceImage?: NodeInjectionTarget | undefined;
+  readonly firstFrame?: NodeInjectionTarget | undefined;
+  readonly lastFrame?: NodeInjectionTarget | undefined;
+  readonly width?: NodeInjectionTarget | undefined;
+  readonly height?: NodeInjectionTarget | undefined;
+  readonly refImageSize?: NodeInjectionTarget | undefined;
+  readonly referenceNode?: NodeInjectionTarget | undefined;
+  readonly referenceImages?: readonly NodeInjectionTarget[] | undefined;
 }
 
 export const LTX_25_720P_5S_V1_INJECTION_TOPOLOGY: ProfileInjectionTopology = Object.freeze({
@@ -276,9 +331,76 @@ export const MINIMAX_H3_720P_5S_I2V_V1_INJECTION_TOPOLOGY: ProfileInjectionTopol
       nodeId: "20",
       classType: "LoadImage",
       inputField: "image"
+    }),
+    firstFrame: Object.freeze({
+      nodeId: "20",
+      classType: "LoadImage",
+      inputField: "image"
+    }),
+    width: Object.freeze({
+      nodeId: "104",
+      classType: "MiniMaxH3ImageToVideo",
+      inputField: "width"
+    }),
+    height: Object.freeze({
+      nodeId: "104",
+      classType: "MiniMaxH3ImageToVideo",
+      inputField: "height"
     })
   }
 );
+
+export const MINIMAX_H3_720P_5S_REF2V_V1_INJECTION_TOPOLOGY: ProfileInjectionTopology =
+  Object.freeze({
+    prompt: Object.freeze({
+      nodeId: "105",
+      classType: "MiniMaxH3ReferenceToVideo",
+      inputField: "prompt"
+    }),
+    negativePrompt: undefined,
+    seed: Object.freeze({
+      nodeId: "15",
+      classType: "RandomNoise",
+      inputField: "noise_seed"
+    }),
+    audioPrompt: null,
+    frameCount: Object.freeze({
+      nodeId: "105",
+      classType: "MiniMaxH3ReferenceToVideo",
+      inputField: "length"
+    }),
+    width: Object.freeze({
+      nodeId: "105",
+      classType: "MiniMaxH3ReferenceToVideo",
+      inputField: "width"
+    }),
+    height: Object.freeze({
+      nodeId: "105",
+      classType: "MiniMaxH3ReferenceToVideo",
+      inputField: "height"
+    }),
+    refImageSize: Object.freeze({
+      nodeId: "105",
+      classType: "MiniMaxH3ReferenceToVideo",
+      inputField: "ref_image_size"
+    }),
+    referenceNode: Object.freeze({
+      nodeId: "105",
+      classType: "MiniMaxH3ReferenceToVideo",
+      inputField: "ref_images"
+    }),
+    referenceImages: Object.freeze([
+      Object.freeze({ nodeId: "201", classType: "LoadImage", inputField: "image" }),
+      Object.freeze({ nodeId: "202", classType: "LoadImage", inputField: "image" }),
+      Object.freeze({ nodeId: "203", classType: "LoadImage", inputField: "image" }),
+      Object.freeze({ nodeId: "204", classType: "LoadImage", inputField: "image" }),
+      Object.freeze({ nodeId: "205", classType: "LoadImage", inputField: "image" }),
+      Object.freeze({ nodeId: "206", classType: "LoadImage", inputField: "image" }),
+      Object.freeze({ nodeId: "207", classType: "LoadImage", inputField: "image" }),
+      Object.freeze({ nodeId: "208", classType: "LoadImage", inputField: "image" }),
+      Object.freeze({ nodeId: "209", classType: "LoadImage", inputField: "image" })
+    ])
+  });
 
 export const FLUX_SCHNELL_DRAFT_V1_INJECTION_TOPOLOGY: ProfileInjectionTopology = Object.freeze({
   prompt: Object.freeze({ nodeId: "3", classType: "CLIPTextEncode", inputField: "text" }),
@@ -328,6 +450,14 @@ export function getProfileInjectionTopology(
     return MINIMAX_H3_720P_5S_I2V_V1_INJECTION_TOPOLOGY;
   }
   if (
+    normalized === "minimax_h3_720p_5s_ref2v_v1" ||
+    normalized === "minimax-h3-720p-5s-ref2v-v1" ||
+    normalized === "minimax_h3_ref2v" ||
+    normalized === "minimax-h3-720p-124f-ref2v"
+  ) {
+    return MINIMAX_H3_720P_5S_REF2V_V1_INJECTION_TOPOLOGY;
+  }
+  if (
     normalized === "flux_schnell_draft_v1" ||
     normalized === "flux-schnell-draft" ||
     normalized === "flux_schnell"
@@ -354,5 +484,17 @@ export const RENDER_PROFILE_ALIASES: Readonly<Record<string, RenderProfileKey>> 
   "minimax-h3-720p-124f-i2v": "MINIMAX_H3_720P_5S_I2V_V1",
   "minimax-h3-720p-5s-i2v-v1": "MINIMAX_H3_720P_5S_I2V_V1",
   "minimax-h3": "MINIMAX_H3_720P_5S_I2V_V1",
-  "minimax-h3-i2v": "MINIMAX_H3_720P_5S_I2V_V1"
+  "minimax-h3-i2v": "MINIMAX_H3_720P_5S_I2V_V1",
+  "minimax-h3-720p-124f-ref2v": "MINIMAX_H3_720P_5S_REF2V_V1",
+  "minimax-h3-720p-5s-ref2v-v1": "MINIMAX_H3_720P_5S_REF2V_V1",
+  minimax_h3_ref2v: "MINIMAX_H3_720P_5S_REF2V_V1"
 });
+
+export function isProfileCertified(profile: RenderProfile): boolean {
+  return (
+    typeof profile.measuredPeakVramMb === "number" &&
+    profile.measuredPeakVramMb > 0 &&
+    typeof profile.measuredTotalDurationMs === "number" &&
+    profile.measuredTotalDurationMs > 0
+  );
+}

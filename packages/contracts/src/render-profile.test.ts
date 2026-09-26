@@ -12,7 +12,10 @@ import {
   LTX_25_720P_5S_I2V_V1_PROFILE,
   MINIMAX_H3_720P_5S_I2V_V1_PROFILE,
   MINIMAX_H3_720P_5S_I2V_V1_INJECTION_TOPOLOGY,
+  MINIMAX_H3_720P_5S_REF2V_V1_PROFILE,
+  MINIMAX_H3_720P_5S_REF2V_V1_INJECTION_TOPOLOGY,
   getProfileInjectionTopology,
+  isProfileCertified,
   LTX_FPS,
   LTX_FRAME_STEP,
   LTX_SUPPORTED_FRAME_RANGE,
@@ -448,6 +451,48 @@ describe("RenderProfileSchema", () => {
       expect(MINIMAX_H3_FRAME_GRID_STEP).toBe(17);
       expect(MINIMAX_H3_SUPPORTED_FRAME_RANGE).toEqual([124, 124]);
       expect(MINIMAX_H3_FRAME_QUANTIZATION_TOLERANCE_MS).toBe(355);
+    });
+
+    it("verifies MiniMax-H3 Ref2V profile contract and injection topology", () => {
+      expect(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE.engine).toBe("minimax_h3_ref2v");
+      expect(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE.frames).toBe(124);
+      expect(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE.steps).toBe(20);
+      expect(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE.runnerProfile).toBe("dynamicvram-offload-v1");
+      expect(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE.maxConcurrentGpuJobs).toBe(1);
+      expect(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE.requiresModelOffloading).toBe(true);
+
+      // Certification invariant: unmeasured in repository, never falsely certified
+      expect(isProfileCertified(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE)).toBe(false);
+      expect(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE.measuredPeakVramMb).toBeUndefined();
+      expect(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE.measuredTotalDurationMs).toBeUndefined();
+
+      // Injection topology checks
+      const topology = getProfileInjectionTopology("MINIMAX_H3_720P_5S_REF2V_V1");
+      expect(topology).toBeDefined();
+      expect(topology).toEqual(MINIMAX_H3_720P_5S_REF2V_V1_INJECTION_TOPOLOGY);
+      expect(topology?.prompt).toEqual({
+        nodeId: "105",
+        classType: "MiniMaxH3ReferenceToVideo",
+        inputField: "prompt"
+      });
+      expect(topology?.referenceNode).toEqual({
+        nodeId: "105",
+        classType: "MiniMaxH3ReferenceToVideo",
+        inputField: "ref_images"
+      });
+      expect(topology?.referenceImages).toHaveLength(9);
+      for (let i = 0; i < 9; i++) {
+        expect(topology?.referenceImages?.[i]).toEqual({
+          nodeId: String(201 + i),
+          classType: "LoadImage",
+          inputField: "image"
+        });
+      }
+
+      // Aliases
+      expect(getProfileInjectionTopology("minimax-h3-720p-124f-ref2v")).toEqual(topology);
+      expect(getProfileInjectionTopology("minimax-h3-720p-5s-ref2v-v1")).toEqual(topology);
+      expect(getProfileInjectionTopology("minimax_h3_ref2v")).toEqual(topology);
     });
 
     it("returns undefined for unknown profile keys", () => {

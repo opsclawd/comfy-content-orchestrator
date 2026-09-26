@@ -14,11 +14,12 @@ fi
 source "${VERSION_FILE}"
 
 if [[ -z "${MINIMAX_H3_VERSION:-}" || -z "${MINIMAX_H3_REPO:-}" || -z "${MINIMAX_H3_REVISION:-}" || \
+      -z "${COMFYUI_CORE_REPO:-}" || -z "${COMFYUI_CORE_REVISION:-}" || \
       -z "${MINIMAX_H3_DIFFUSION_FILE:-}" || -z "${MINIMAX_H3_DIFFUSION_SHA256:-}" || -z "${MINIMAX_H3_DIFFUSION_SIZE:-}" || \
       -z "${MINIMAX_H3_TEXT_ENCODER_FILE:-}" || -z "${MINIMAX_H3_TEXT_ENCODER_SHA256:-}" || -z "${MINIMAX_H3_TEXT_ENCODER_SIZE:-}" || \
       -z "${MINIMAX_H3_VIDEO_VAE_FILE:-}" || -z "${MINIMAX_H3_VIDEO_VAE_SHA256:-}" || -z "${MINIMAX_H3_VIDEO_VAE_SIZE:-}" || \
       -z "${MINIMAX_H3_AUDIO_VAE_FILE:-}" || -z "${MINIMAX_H3_AUDIO_VAE_SHA256:-}" || -z "${MINIMAX_H3_AUDIO_VAE_SIZE:-}" ]]; then
-  echo "Error: .minimax-h3-version must define MINIMAX_H3_VERSION, MINIMAX_H3_REPO, MINIMAX_H3_REVISION, and all model files/hashes/sizes" >&2
+  echo "Error: .minimax-h3-version must define MINIMAX_H3_VERSION, MINIMAX_H3_REPO, MINIMAX_H3_REVISION, COMFYUI_CORE_REPO, COMFYUI_CORE_REVISION, and all model files/hashes/sizes" >&2
   exit 1
 fi
 
@@ -86,6 +87,24 @@ get_file_size() {
     stat -c%s "${target_file}"
   fi
 }
+
+# 0. Check ComfyUI core revision if COMFYUI_DIR is present
+RESOLVED_COMFY_DIR=""
+if [[ -n "${COMFYUI_DIR:-}" && -d "${COMFYUI_DIR}" ]]; then
+  RESOLVED_COMFY_DIR="${COMFYUI_DIR}"
+elif [[ -d "/home/gpoontip/ComfyUI" ]]; then
+  RESOLVED_COMFY_DIR="/home/gpoontip/ComfyUI"
+fi
+
+if [[ -n "${RESOLVED_COMFY_DIR}" && -d "${RESOLVED_COMFY_DIR}/.git" ]]; then
+  ACTUAL_COMFY_REV="$(git -C "${RESOLVED_COMFY_DIR}" rev-parse HEAD 2>/dev/null || true)"
+  if [[ -n "${ACTUAL_COMFY_REV}" && "${ACTUAL_COMFY_REV}" != "${COMFYUI_CORE_REVISION}" ]]; then
+    echo "Error: ComfyUI core revision mismatch at ${RESOLVED_COMFY_DIR}!" >&2
+    echo "Expected: ${COMFYUI_CORE_REVISION}" >&2
+    echo "Actual:   ${ACTUAL_COMFY_REV}" >&2
+    exit 1
+  fi
+fi
 
 # 1. Check directory existence
 if [[ ! -d "${MODELS_DIR}" ]]; then

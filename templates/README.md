@@ -71,6 +71,22 @@ This directory contains the version-controlled, source-gated Gold Master ComfyUI
   - `models/vae/minimax_h3_video_vae_int8_convrot.safetensors`
   - `models/vae/minimax_h3_audio_vae_fp32.safetensors`
 
+### 5. `minimax-h3-720p-124f-ref2v` (`templates/minimax_h3_720p_ref2v_124f_api.json`)
+- **Source Kind:** Authored from specification (`authored_from_spec`).
+- **Source URI:** `https://github.com/comfyanonymous/ComfyUI`
+- **Revision:** `55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc`
+- **Redistribution Basis & License:** GPL-3.0.
+- **Workflow Format:** Exact ComfyUI API object map targeting 1344x768 resolution, 124 frames (~5 seconds at 24 fps), 20 DiT sampling steps, and declarative reference-directed multi-image conditioning (`MiniMaxH3ReferenceToVideo`) consuming up to 9 canonical reference assets.
+- **Canonical SHA-256:** `fc26f266a0032eeb7b2580879616d05e18e53a701c31d1d87d6c895140217912`
+- **Runner Profile:** `dynamicvram-offload-v1` (requiring DynamicVRAM / workflow-managed model offloading).
+- **Disk Space Requirement:** Minimum 50 GB free disk space reservation (`minFreeDiskGb: 50`).
+- **Render Profile Identity:** `MINIMAX_H3_720P_5S_REF2V_V1` (v1).
+- **Referenced Models:**
+  - `models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors`
+  - `models/clip/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`
+  - `models/vae/minimax_h3_video_vae_int8_convrot.safetensors`
+  - `models/vae/minimax_h3_audio_vae_fp32.safetensors`
+
 ---
 
 ## Canonical JSON Hashing and Immutability
@@ -103,6 +119,10 @@ The models listed in `templates/provenance.json` correspond to the following rel
 | `minimax-h3-720p-124f-i2v` | `clip` | `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` | `models/clip/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` |
 | `minimax-h3-720p-124f-i2v` | `vae` | `minimax_h3_video_vae_int8_convrot.safetensors` | `models/vae/minimax_h3_video_vae_int8_convrot.safetensors` |
 | `minimax-h3-720p-124f-i2v` | `vae` | `minimax_h3_audio_vae_fp32.safetensors` | `models/vae/minimax_h3_audio_vae_fp32.safetensors` |
+| `minimax-h3-720p-124f-ref2v` | `diffusion_models` | `minimax_h3_ref2va_pruned_int8_convrot.safetensors` | `models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors` |
+| `minimax-h3-720p-124f-ref2v` | `clip` | `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` | `models/clip/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` |
+| `minimax-h3-720p-124f-ref2v` | `vae` | `minimax_h3_video_vae_int8_convrot.safetensors` | `models/vae/minimax_h3_video_vae_int8_convrot.safetensors` |
+| `minimax-h3-720p-124f-ref2v` | `vae` | `minimax_h3_audio_vae_fp32.safetensors` | `models/vae/minimax_h3_audio_vae_fp32.safetensors` |
 
 
 ---

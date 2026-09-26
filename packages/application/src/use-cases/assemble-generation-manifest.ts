@@ -1,4 +1,14 @@
-import { getProfileInjectionTopology, LTX_FPS } from "@cco/contracts";
+import { createHash } from "node:crypto";
+import {
+  getProfileInjectionTopology,
+  LTX_FPS,
+  type ManifestExecutedInstruction,
+  type ManifestFrameAnchorEntry,
+  type ManifestPrevisReviewEvidence,
+  type ManifestReferenceImageEntry,
+  type ManifestShotPlanReference,
+  type ShotPlanRoutingMode
+} from "@cco/contracts";
 import type { CandidateId, RenderJob, SceneId } from "@cco/domain";
 import type {
   HashBytesPort,
@@ -115,6 +125,14 @@ export interface AssembleManifestInput {
   readonly mediaObjects: readonly PutObjectInput[];
   readonly approvedCandidateId?: CandidateId | undefined;
   readonly conditioningImage?: AssembleManifestConditioningInput | undefined;
+  readonly routingMode?: ShotPlanRoutingMode | undefined;
+  readonly shotPlan?: ManifestShotPlanReference | undefined;
+  readonly executedInstruction?: ManifestExecutedInstruction | undefined;
+  readonly referenceImages?: readonly ManifestReferenceImageEntry[] | undefined;
+  readonly firstFrame?: ManifestFrameAnchorEntry | undefined;
+  readonly lastFrame?: ManifestFrameAnchorEntry | undefined;
+  readonly previsReviewEvidence?: ManifestPrevisReviewEvidence | undefined;
+  readonly submittedWorkflowHash?: string | undefined;
 }
 
 export interface AssembleManifestResult {
@@ -262,7 +280,8 @@ export class AssembleGenerationManifest {
     }
     const workflowIdentity = {
       templateId: input.profile.id,
-      sha256: provenance.workflow.sha256
+      sha256: provenance.workflow.sha256,
+      ...(input.submittedWorkflowHash ? { submittedWorkflowHash: input.submittedWorkflowHash } : {})
     };
 
     // 6. LoRA identities and strengths
@@ -581,7 +600,60 @@ export class AssembleGenerationManifest {
       | undefined;
     let executionConditioning: ManifestExecutionConditioning | undefined;
 
-    if (input.conditioningImage) {
+    if (input.routingMode === "reference_directed") {
+      // In reference_directed mode, candidate stills NEVER enter execution conditioning
+      // (False Conditioning Invariant).
+      if (input.conditioningImage) {
+        throw new IncompleteManifestError(
+          "executionConditioning (False Conditioning Invariant: candidate conditioningImage is forbidden in reference_directed mode)"
+        );
+      }
+      if (!input.shotPlan) {
+        throw new IncompleteManifestError("shotPlan");
+      }
+      if (!input.executedInstruction) {
+        throw new IncompleteManifestError("executedInstruction");
+      }
+      if (input.executedInstruction.text !== prompts.prompt) {
+        throw new IncompleteManifestError(
+          `executedInstruction.text (submitted workflow prompt does not match executedInstruction)`
+        );
+      }
+      const expectedInstructionSha256 = createHash("sha256")
+        .update(Buffer.from(input.executedInstruction.text, "utf8"))
+        .digest("hex");
+      if (input.executedInstruction.sha256 !== expectedInstructionSha256) {
+        throw new IncompleteManifestError(
+          `executedInstruction.sha256 (expected "${expectedInstructionSha256}", got "${input.executedInstruction.sha256}")`
+        );
+      }
+      const expectedInstructionBytes = Buffer.byteLength(input.executedInstruction.text, "utf8");
+      if (input.executedInstruction.byteLength !== expectedInstructionBytes) {
+        throw new IncompleteManifestError(
+          `executedInstruction.byteLength (expected ${expectedInstructionBytes}, got ${input.executedInstruction.byteLength})`
+        );
+      }
+      if (input.referenceImages && input.referenceImages.length > 0) {
+        for (const entry of input.referenceImages) {
+          const injectedNode = input.workflow?.[entry.injectionTarget.nodeId] as
+            { class_type?: string; inputs?: Record<string, unknown> } | undefined;
+          if (!injectedNode || injectedNode.class_type !== entry.injectionTarget.classType) {
+            throw new IncompleteManifestError(
+              `referenceImages.injectionTarget (node "${entry.injectionTarget.nodeId}" with class "${entry.injectionTarget.classType}" missing from workflow)`
+            );
+          }
+          const expectedStagedValue = entry.stagedAs.subfolder
+            ? `${entry.stagedAs.subfolder}/${entry.stagedAs.name}`
+            : entry.stagedAs.name;
+          const actualInjectedValue = injectedNode.inputs?.[entry.injectionTarget.inputField];
+          if (actualInjectedValue !== expectedStagedValue) {
+            throw new IncompleteManifestError(
+              `referenceImages.injectionTarget (expected staged image "${expectedStagedValue}" at input "${entry.injectionTarget.inputField}", got "${actualInjectedValue}")`
+            );
+          }
+        }
+      }
+    } else if (input.conditioningImage) {
       const { resolved, stagedAs, injectionTarget } = input.conditioningImage;
 
       // 1. Scene identity
@@ -782,6 +854,47 @@ export class AssembleGenerationManifest {
       fps,
       prompts: Object.freeze(prompts),
       referenceAssets: Object.freeze(referenceAssetIdentities),
+      ...(input.routingMode !== undefined ? { routingMode: input.routingMode } : {}),
+      ...(input.shotPlan !== undefined ? { shotPlan: Object.freeze(input.shotPlan) } : {}),
+      ...(input.executedInstruction !== undefined
+        ? { executedInstruction: Object.freeze(input.executedInstruction) }
+        : {}),
+      ...(input.referenceImages !== undefined
+        ? {
+            referenceImages: Object.freeze(
+              input.referenceImages.map((entry) =>
+                Object.freeze({
+                  ...entry,
+                  stagedAs: Object.freeze({ ...entry.stagedAs }),
+                  injectionTarget: Object.freeze({ ...entry.injectionTarget })
+                })
+              )
+            )
+          }
+        : input.routingMode === "reference_directed"
+          ? { referenceImages: Object.freeze([]) }
+          : {}),
+      ...(input.firstFrame !== undefined
+        ? {
+            firstFrame: Object.freeze({
+              ...input.firstFrame,
+              stagedAs: Object.freeze({ ...input.firstFrame.stagedAs }),
+              injectionTarget: Object.freeze({ ...input.firstFrame.injectionTarget })
+            })
+          }
+        : {}),
+      ...(input.lastFrame !== undefined
+        ? {
+            lastFrame: Object.freeze({
+              ...input.lastFrame,
+              stagedAs: Object.freeze({ ...input.lastFrame.stagedAs }),
+              injectionTarget: Object.freeze({ ...input.lastFrame.injectionTarget })
+            })
+          }
+        : {}),
+      ...(input.previsReviewEvidence !== undefined
+        ? { previsReviewEvidence: Object.freeze(input.previsReviewEvidence) }
+        : {}),
       ...(approvedCandidate !== undefined
         ? { approvedCandidate: Object.freeze(approvedCandidate) }
         : {}),
