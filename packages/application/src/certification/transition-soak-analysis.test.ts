@@ -194,6 +194,7 @@ describe("transition-soak-analysis", () => {
         reservedVramMb: 513,
         peakHostRamUsedMb: hostUsed,
         peakProcessRssMb: hostRss,
+        peakSwapUsedMb: swapDelta,
         swapUsedDeltaMb: swapDelta,
         systemSwapInPageDelta: swapInDelta,
         systemSwapOutPageDelta: swapOutDelta,

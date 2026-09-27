@@ -220,6 +220,10 @@ export type CertificationSamplingError = z.infer<typeof CertificationSamplingErr
  *   distinguishing it from the nameplate total VRAM.
  * - `postUnloadUsedVramMb` / `postUnloadFreeVramMb`: Post-unload settle memory values relative
  *   to the allocatable pool.
+ * - `peakSwapUsedMb`: Maximum `swapUsedMb` observed across all samples. Unlike the monotonic
+ *   OS counters below, swap usage is an instantaneous gauge that the kernel can reclaim
+ *   mid-run, so it is tracked as a peak (like VRAM/RAM/RSS) rather than a first-to-last delta.
+ *   `swapUsedDeltaMb` is retained for informational reporting only and is not gate-relevant.
  */
 export const CertificationTelemetryDataSchema = z.object({
   sampleIntervalMs: z.literal(200),
@@ -229,6 +233,7 @@ export const CertificationTelemetryDataSchema = z.object({
   reservedVramMb: z.number().int().nonnegative().nullable(),
   peakHostRamUsedMb: z.number().int().nonnegative().nullable(),
   peakProcessRssMb: z.number().int().nonnegative().nullable(),
+  peakSwapUsedMb: z.number().int().nonnegative().nullable(),
   swapUsedDeltaMb: z.number().int().nonnegative().nullable(),
   systemSwapInPageDelta: z.number().int().nonnegative().nullable(),
   systemSwapOutPageDelta: z.number().int().nonnegative().nullable(),
@@ -384,7 +389,7 @@ export const CertificationArtifactSchema = CertificationArtifactBaseSchema.super
         "reservedVramMb",
         "peakHostRamUsedMb",
         "peakProcessRssMb",
-        "swapUsedDeltaMb",
+        "peakSwapUsedMb",
         "systemSwapInPageDelta",
         "systemSwapOutPageDelta",
         "systemMajorPageFaultDelta",

@@ -111,6 +111,7 @@ function createValidTelemetryData(): CertificationTelemetryData {
     reservedVramMb: 0,
     peakHostRamUsedMb: 14000,
     peakProcessRssMb: 1200,
+    peakSwapUsedMb: 0,
     swapUsedDeltaMb: 0,
     systemSwapInPageDelta: 0,
     systemSwapOutPageDelta: 0,

@@ -129,6 +129,7 @@ function createLtxFixture(runId = "trinidad-rtx4090-dynamicvram-v1"): LtxCertifi
       reservedVramMb: 0,
       peakHostRamUsedMb: 19000,
       peakProcessRssMb: 4500,
+      peakSwapUsedMb: 0,
       swapUsedDeltaMb: 0,
       systemSwapInPageDelta: 0,
       systemSwapOutPageDelta: 0,
