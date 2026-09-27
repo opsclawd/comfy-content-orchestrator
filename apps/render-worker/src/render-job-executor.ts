@@ -20,7 +20,11 @@ import {
   type ResolvedApprovedVisualProductionMedia,
   type SceneRepository,
   type ShotPlanRepository,
-  type StagedComfyUiInput
+  type StagedComfyUiInput,
+  type CampaignRepository,
+  type ImageInspectionPort,
+  type ValidatedImageMetadata,
+  parseImageByteHeader
 } from "@cco/application";
 import {
   getProfileInjectionTopology,
@@ -40,6 +44,7 @@ import {
   type ShotPlanRoutingMode
 } from "@cco/contracts";
 import type {
+  CampaignRecord,
   CandidateId,
   JobKind,
   ReferenceAsset as DomainReferenceAsset,
@@ -152,6 +157,7 @@ export interface AssembleProductionManifestInput {
       }
     | undefined;
   readonly routingMode?: ShotPlanRoutingMode | undefined;
+  readonly attemptId?: string | undefined;
   readonly shotPlan?: ManifestShotPlanReference | undefined;
   readonly executedInstruction?: ManifestExecutedInstruction | undefined;
   readonly referenceImages?: readonly ManifestReferenceImageEntry[] | undefined;
@@ -225,9 +231,12 @@ export interface RenderJobExecutorDependencies {
     | undefined;
   readonly objectStorage?: ObjectStoragePort | undefined;
   readonly stageReferenceImage?: ComfyUiInputStagingPort | undefined;
+  readonly imageValidator?: ImageInspectionPort | undefined;
+  readonly imageInspectionPort?: ImageInspectionPort | undefined;
   readonly referenceAssetRepository?: ReferenceAssetRepository | undefined;
   readonly shotPlanRepository?: ShotPlanRepository | undefined;
   readonly sceneRepository?: SceneRepository | undefined;
+  readonly campaignRepository?: CampaignRepository<CampaignRecord> | undefined;
   readonly now?: (() => Date) | undefined;
 }
 
@@ -293,6 +302,7 @@ interface ValidatedInjectedPayload {
   readonly referenceImages?: readonly string[] | undefined;
   readonly shotPlanId?: string | undefined;
   readonly specRevision?: number | undefined;
+  readonly attemptId?: string | undefined;
 }
 
 const ALLOWED_CANDIDATE_KEYS = new Set([
@@ -309,7 +319,8 @@ const ALLOWED_PRODUCTION_KEYS = new Set([
   "audioPrompt",
   "seed",
   "approvedCandidateId",
-  "frameCount"
+  "frameCount",
+  "attemptId"
 ]);
 const ALLOWED_REF2V_PRODUCTION_KEYS = new Set([
   "prompt",
@@ -318,7 +329,19 @@ const ALLOWED_REF2V_PRODUCTION_KEYS = new Set([
   "seed",
   "frameCount",
   "shotPlanId",
-  "specRevision"
+  "specRevision",
+  "attemptId"
+]);
+const ALLOWED_H3_I2V_PRODUCTION_KEYS = new Set([
+  "prompt",
+  "negativePrompt",
+  "audioPrompt",
+  "seed",
+  "approvedCandidateId",
+  "frameCount",
+  "shotPlanId",
+  "specRevision",
+  "attemptId"
 ]);
 
 function validateInjectedPayload(
@@ -335,12 +358,19 @@ function validateInjectedPayload(
     profile?.renderProfileIdentity?.key === "MINIMAX_H3_720P_5S_REF2V_V1" ||
     profile?.id === "minimax-h3-720p-124f-ref2v";
 
+  const isH3I2v =
+    profile?.engine === "minimax_h3_i2v" ||
+    profile?.renderProfileIdentity?.key === "MINIMAX_H3_720P_5S_I2V_V1" ||
+    profile?.id === "minimax-h3-720p-124f-i2v";
+
   const allowedKeys =
     jobKind === "candidate"
       ? ALLOWED_CANDIDATE_KEYS
       : isRef2v
         ? ALLOWED_REF2V_PRODUCTION_KEYS
-        : ALLOWED_PRODUCTION_KEYS;
+        : isH3I2v
+          ? ALLOWED_H3_I2V_PRODUCTION_KEYS
+          : ALLOWED_PRODUCTION_KEYS;
   const keys = Object.keys(payload);
 
   for (const key of keys) {
@@ -350,12 +380,12 @@ function validateInjectedPayload(
           "variantOrdinal is candidate-only and not allowed in production jobs"
         );
       }
-      if (jobKind === "production" && !isRef2v && key === "shotPlanId") {
+      if (jobKind === "production" && !isRef2v && !isH3I2v && key === "shotPlanId") {
         throw new RenderJobPayloadValidationError(
           "shotPlanId is candidate-only and not allowed in production jobs"
         );
       }
-      if (jobKind === "production" && !isRef2v && key === "specRevision") {
+      if (jobKind === "production" && !isRef2v && !isH3I2v && key === "specRevision") {
         throw new RenderJobPayloadValidationError(
           "specRevision is candidate-only and not allowed in production jobs"
         );
@@ -373,6 +403,11 @@ function validateInjectedPayload(
       if (jobKind === "candidate" && key === "frameCount") {
         throw new RenderJobPayloadValidationError(
           "frameCount is production-only and not allowed in candidate jobs"
+        );
+      }
+      if (jobKind === "candidate" && key === "attemptId") {
+        throw new RenderJobPayloadValidationError(
+          "attemptId is production-only and not allowed in candidate jobs"
         );
       }
       throw new RenderJobPayloadValidationError(`Unknown injected payload field: "${key}"`);
@@ -556,7 +591,7 @@ function validateInjectedPayload(
 
   let shotPlanId: string | undefined;
   if ("shotPlanId" in raw && raw.shotPlanId !== undefined) {
-    if (jobKind !== "candidate" && !isRef2v) {
+    if (jobKind !== "candidate" && !isRef2v && !isH3I2v) {
       throw new RenderJobPayloadValidationError(
         "shotPlanId is candidate-only and not allowed in production jobs"
       );
@@ -571,7 +606,7 @@ function validateInjectedPayload(
 
   let specRevision: number | undefined;
   if ("specRevision" in raw && raw.specRevision !== undefined) {
-    if (jobKind !== "candidate" && !isRef2v) {
+    if (jobKind !== "candidate" && !isRef2v && !isH3I2v) {
       throw new RenderJobPayloadValidationError(
         "specRevision is candidate-only and not allowed in production jobs"
       );
@@ -588,6 +623,21 @@ function validateInjectedPayload(
     specRevision = raw.specRevision;
   }
 
+  let attemptId: string | undefined;
+  if ("attemptId" in raw && raw.attemptId !== undefined) {
+    if (jobKind !== "production") {
+      throw new RenderJobPayloadValidationError(
+        "attemptId is production-only and not allowed in candidate jobs"
+      );
+    }
+    if (typeof raw.attemptId !== "string" || raw.attemptId.trim().length === 0) {
+      throw new RenderJobPayloadValidationError(
+        "injectedPayload.attemptId must be a non-empty string"
+      );
+    }
+    attemptId = raw.attemptId.trim();
+  }
+
   return {
     prompt,
     negativePrompt,
@@ -597,7 +647,8 @@ function validateInjectedPayload(
     approvedCandidateId,
     frameCount,
     shotPlanId,
-    specRevision
+    specRevision,
+    attemptId
   };
 }
 
@@ -1262,6 +1313,11 @@ export function createCertifiedRenderJobExecutor(
       profile.renderProfileIdentity.key === "MINIMAX_H3_720P_5S_REF2V_V1" ||
       profile.id === "minimax-h3-720p-124f-ref2v";
 
+    const isH3I2v =
+      profile.engine === "minimax_h3_i2v" ||
+      profile.renderProfileIdentity.key === "MINIMAX_H3_720P_5S_I2V_V1" ||
+      profile.id === "minimax-h3-720p-124f-i2v";
+
     let resolvedCandidateMedia: ResolvedApprovedVisualProductionMedia | undefined;
     let stagedReferenceImage: StagedComfyUiInput | undefined;
     let stagingFilename: string | undefined;
@@ -1402,6 +1458,19 @@ export function createCertifiedRenderJobExecutor(
           scriptContext: (sceneSnapshot as { scriptContext?: string }).scriptContext
         };
 
+        if (!deps?.campaignRepository) {
+          throw new RenderJobExecutionError(
+            "campaignRepository dependency is required for reference-directed execution"
+          );
+        }
+        const campaign = await deps.campaignRepository.findById(sceneSnapshot.campaignId);
+        if (!campaign || !campaign.clientId) {
+          throw new RenderJobExecutionError(
+            `Campaign "${sceneSnapshot.campaignId}" not found or lacks clientId in campaignRepository`
+          );
+        }
+        const expectedClientId = campaign.clientId;
+
         if (!deps.referenceAssetRepository.listBindingsBySceneId) {
           throw new RenderJobExecutionError(
             "referenceAssetRepository.listBindingsBySceneId is required for reference-directed execution"
@@ -1419,6 +1488,11 @@ export function createCertifiedRenderJobExecutor(
         );
 
         for (const binding of rawBindings) {
+          if (binding.sceneId && binding.sceneId !== job.sceneId) {
+            throw new RenderJobExecutionError(
+              `SceneReferenceBinding for asset "${binding.referenceAssetId}" belongs to scene "${binding.sceneId}", which does not match job sceneId "${job.sceneId}"`
+            );
+          }
           if (
             binding.specRevision !== undefined &&
             binding.specRevision !== validatedInjected.specRevision
@@ -1431,7 +1505,9 @@ export function createCertifiedRenderJobExecutor(
 
         const canonicalRefs = canonicalizeReferenceBindings({
           bindings: rawBindings,
-          assetsById
+          assetsById,
+          expectedClientId,
+          expectedSceneId: job.sceneId
         });
 
         if (canonicalRefs.length > 0) {
@@ -1445,8 +1521,27 @@ export function createCertifiedRenderJobExecutor(
               "stageReferenceImage dependency is required for reference image staging"
             );
           }
+          const imageValidator = deps?.imageValidator ?? deps?.imageInspectionPort;
+          if (!imageValidator) {
+            throw new RenderJobExecutionError(
+              "imageValidator dependency is required for reference image staging"
+            );
+          }
 
           for (const ref of canonicalRefs) {
+            if (ref.asset.clientId !== expectedClientId) {
+              throw new ReferenceImageIntegrityError(
+                `Reference asset "${ref.referenceAssetId}" client "${ref.asset.clientId}" does not match scene campaign client "${expectedClientId}"`
+              );
+            }
+
+            const refAssetSceneId = (ref.asset as { sceneId?: string }).sceneId;
+            if (refAssetSceneId && refAssetSceneId !== job.sceneId) {
+              throw new ReferenceImageIntegrityError(
+                `Reference asset "${ref.referenceAssetId}" belongs to scene "${refAssetSceneId}", which does not match job sceneId "${job.sceneId}"`
+              );
+            }
+
             const stored = await deps.objectStorage.getObject(
               { bucket: ref.asset.storageBucket, key: ref.asset.storageObjectKey },
               { maxBytes: MAX_CANDIDATE_IMAGE_BYTES }
@@ -1457,10 +1552,76 @@ export function createCertifiedRenderJobExecutor(
               );
             }
 
+            const bytes = stored.body;
+            if (bytes.length < 8) {
+              throw new ReferenceImageIntegrityError(
+                `Reference image object "${ref.asset.storageObjectKey}" buffer is too small to be a valid image`
+              );
+            }
+
+            const declaredMime = (ref.asset.mimeType ?? "image/png").toLowerCase();
+            const imageInfo = parseImageByteHeader(bytes);
+            if (!imageInfo) {
+              throw new ReferenceImageIntegrityError(
+                `Reference image object "${ref.asset.storageObjectKey}" has unknown or unsupported image format magic bytes`
+              );
+            }
+            if (imageInfo.mimeType !== declaredMime) {
+              throw new ReferenceImageIntegrityError(
+                `Reference image object "${ref.asset.storageObjectKey}" detected format "${imageInfo.mimeType}" does not match declared MIME "${declaredMime}"`
+              );
+            }
+            if (imageInfo.width <= 0 || imageInfo.height <= 0) {
+              throw new ReferenceImageIntegrityError(
+                `Reference image object "${ref.asset.storageObjectKey}" must have positive dimensions`
+              );
+            }
+            if (ref.asset.width !== undefined && imageInfo.width !== ref.asset.width) {
+              throw new ReferenceImageIntegrityError(
+                `Reference image object "${ref.asset.storageObjectKey}" width mismatch: expected ${ref.asset.width}, got ${imageInfo.width}`
+              );
+            }
+            if (ref.asset.height !== undefined && imageInfo.height !== ref.asset.height) {
+              throw new ReferenceImageIntegrityError(
+                `Reference image object "${ref.asset.storageObjectKey}" height mismatch: expected ${ref.asset.height}, got ${imageInfo.height}`
+              );
+            }
+
             const actualSha256 = await hashBytesPort.hashBytes(stored.body);
             if (actualSha256 !== ref.asset.contentHashSha256) {
               throw new ReferenceImageIntegrityError(
                 `Reference image sha256 mismatch for asset "${ref.referenceAssetId}": expected "${ref.asset.contentHashSha256}", got "${actualSha256}"`
+              );
+            }
+
+            let inspected: ValidatedImageMetadata;
+            try {
+              inspected = await imageValidator.inspectAndValidate(bytes, declaredMime);
+            } catch (cause) {
+              throw new ReferenceImageIntegrityError(
+                `Reference image object "${ref.asset.storageObjectKey}" decode validation failed: ${(cause as Error).message}`,
+                { cause }
+              );
+            }
+
+            if (inspected.detectedMimeType !== declaredMime) {
+              throw new ReferenceImageIntegrityError(
+                `Reference image object "${ref.asset.storageObjectKey}" detected format "${inspected.detectedMimeType}" does not match declared MIME "${declaredMime}"`
+              );
+            }
+            if (inspected.width <= 0 || inspected.height <= 0) {
+              throw new ReferenceImageIntegrityError(
+                `Reference image object "${ref.asset.storageObjectKey}" must have positive dimensions`
+              );
+            }
+            if (ref.asset.width !== undefined && inspected.width !== ref.asset.width) {
+              throw new ReferenceImageIntegrityError(
+                `Reference image object "${ref.asset.storageObjectKey}" width mismatch: expected ${ref.asset.width}, got ${inspected.width}`
+              );
+            }
+            if (ref.asset.height !== undefined && inspected.height !== ref.asset.height) {
+              throw new ReferenceImageIntegrityError(
+                `Reference image object "${ref.asset.storageObjectKey}" height mismatch: expected ${ref.asset.height}, got ${inspected.height}`
               );
             }
 
@@ -1493,6 +1654,7 @@ export function createCertifiedRenderJobExecutor(
 
             const injectionTarget = topology!.referenceImages![ref.slotIndex - 1]!;
             manifestRefImages.push({
+              bindingId: ref.bindingId,
               slotIndex: ref.slotIndex,
               promptTag: ref.promptTag,
               assetId: ref.referenceAssetId,
@@ -1553,6 +1715,83 @@ export function createCertifiedRenderJobExecutor(
           );
         }
 
+        if (isH3I2v && validatedInjected.shotPlanId) {
+          if (!deps?.shotPlanRepository) {
+            throw new RenderJobExecutionError(
+              "shotPlanRepository dependency is required for frame-anchored execution"
+            );
+          }
+          if (validatedInjected.specRevision === undefined) {
+            throw new RenderJobExecutionError(
+              "injectedPayload.specRevision is required for frame-anchored execution"
+            );
+          }
+          const shotPlanDomain = await deps.shotPlanRepository.findById(
+            validatedInjected.shotPlanId as ShotPlanId
+          );
+          if (!shotPlanDomain) {
+            throw new RenderJobExecutionError(
+              `ShotPlan "${validatedInjected.shotPlanId}" not found in shotPlanRepository`
+            );
+          }
+          const shotPlanDoc = shotPlanDomain.snapshot();
+          if (shotPlanDoc.status !== "approved") {
+            throw new RenderJobExecutionError(
+              `ShotPlan "${shotPlanDoc.id}" must be approved, got status "${shotPlanDoc.status}"`
+            );
+          }
+          if (shotPlanDoc.sceneId !== job.sceneId) {
+            throw new RenderJobExecutionError(
+              `ShotPlan "${shotPlanDoc.id}" belongs to scene "${shotPlanDoc.sceneId}", but render job is for scene "${job.sceneId}"`
+            );
+          }
+          if (shotPlanDoc.specRevision !== validatedInjected.specRevision) {
+            throw new RenderJobExecutionError(
+              `ShotPlan "${shotPlanDoc.id}" specRevision ${shotPlanDoc.specRevision} does not match injected specRevision ${validatedInjected.specRevision}`
+            );
+          }
+          if (shotPlanDoc.routingMode !== "frame_anchored") {
+            throw new RenderJobExecutionError(
+              `ShotPlan "${shotPlanDoc.id}" routingMode must be "frame_anchored", got "${shotPlanDoc.routingMode}"`
+            );
+          }
+          if (!shotPlanDoc.continuity) {
+            throw new RenderJobExecutionError(
+              `ShotPlan "${shotPlanDoc.id}" missing continuity for frame-anchored execution`
+            );
+          }
+          if (shotPlanDoc.continuity.frameAnchorTarget !== "first_frame") {
+            throw new RenderJobExecutionError(
+              `ShotPlan "${shotPlanDoc.id}" frameAnchorTarget must be "first_frame", got "${shotPlanDoc.continuity.frameAnchorTarget}"`
+            );
+          }
+          if (!shotPlanDoc.continuity.anchorCandidateId) {
+            throw new RenderJobExecutionError(
+              `ShotPlan "${shotPlanDoc.id}" frame-anchored execution requires explicit anchorCandidateId`
+            );
+          }
+          if (!shotPlanDoc.continuity.anchorMediaHashSha256) {
+            throw new RenderJobExecutionError(
+              `ShotPlan "${shotPlanDoc.id}" frame-anchored execution requires explicit anchorMediaHashSha256`
+            );
+          }
+          if (shotPlanDoc.continuity.anchorCandidateId !== validatedInjected.approvedCandidateId) {
+            throw new RenderJobExecutionError(
+              `ShotPlan "${shotPlanDoc.id}" anchorCandidateId "${shotPlanDoc.continuity.anchorCandidateId}" does not match injected approvedCandidateId "${validatedInjected.approvedCandidateId}"`
+            );
+          }
+          if (shotPlanDoc.previs) {
+            previsReviewEvidence = {
+              candidateId: shotPlanDoc.previs.candidateId,
+              contentHashSha256: shotPlanDoc.previs.contentHashSha256,
+              specRevision: shotPlanDoc.specRevision,
+              variantOrdinal: shotPlanDoc.variantOrdinal,
+              storageBucket: shotPlanDoc.previs.storageBucket,
+              storageObjectKey: shotPlanDoc.previs.storageObjectKey
+            };
+          }
+        }
+
         resolvedCandidateMedia = await deps.resolveApprovedCandidateMedia.execute({
           sceneId: job.sceneId as SceneId,
           approvedCandidateId: validatedInjected.approvedCandidateId
@@ -1577,6 +1816,21 @@ export function createCertifiedRenderJobExecutor(
           throw new ReferenceImageIntegrityError(
             `Reference image sha256 mismatch: expected "${resolvedCandidateMedia.media.sha256}", got "${actualSha256}"`
           );
+        }
+
+        if (isH3I2v && validatedInjected.shotPlanId && deps?.shotPlanRepository) {
+          const shotPlanDomain = await deps.shotPlanRepository.findById(
+            validatedInjected.shotPlanId as ShotPlanId
+          );
+          const shotPlanDoc = shotPlanDomain?.snapshot();
+          if (
+            shotPlanDoc?.continuity?.anchorMediaHashSha256 &&
+            shotPlanDoc.continuity.anchorMediaHashSha256 !== actualSha256
+          ) {
+            throw new ReferenceImageIntegrityError(
+              `Reference image sha256 mismatch with ShotPlan anchor: expected "${shotPlanDoc.continuity.anchorMediaHashSha256}", got "${actualSha256}"`
+            );
+          }
         }
 
         stagingFilename = buildDeterministicStagingFilename(
@@ -1772,6 +2026,9 @@ export function createCertifiedRenderJobExecutor(
         mediaObjects: Object.freeze(mediaObjects),
         liveProvenance,
         workflow: mutatedWorkflow,
+        ...(validatedInjected.attemptId !== undefined
+          ? { attemptId: validatedInjected.attemptId }
+          : {}),
         ...(isRef2v
           ? {
               routingMode: "reference_directed" as const,
@@ -1787,6 +2044,34 @@ export function createCertifiedRenderJobExecutor(
           : {
               ...(validatedInjected.approvedCandidateId !== undefined
                 ? { approvedCandidateId: validatedInjected.approvedCandidateId }
+                : {}),
+              ...(isH3I2v && validatedInjected.shotPlanId && validatedInjected.specRevision
+                ? {
+                    routingMode: "frame_anchored" as const,
+                    shotPlan: {
+                      id: validatedInjected.shotPlanId,
+                      specRevision: validatedInjected.specRevision
+                    },
+                    ...(resolvedCandidateMedia && stagedReferenceImage && topology?.referenceImage
+                      ? {
+                          firstFrame: {
+                            anchorType: "first_frame" as const,
+                            candidateId: validatedInjected.approvedCandidateId,
+                            contentHashSha256: resolvedCandidateMedia.media.sha256,
+                            stagedAs: {
+                              name: stagedReferenceImage.name,
+                              subfolder: stagedReferenceImage.subfolder
+                            },
+                            injectionTarget: {
+                              nodeId: topology.referenceImage.nodeId,
+                              classType: topology.referenceImage.classType,
+                              inputField: topology.referenceImage.inputField
+                            }
+                          }
+                        }
+                      : {}),
+                    ...(previsReviewEvidence ? { previsReviewEvidence } : {})
+                  }
                 : {}),
               ...(resolvedCandidateMedia && stagedReferenceImage && topology?.referenceImage
                 ? {

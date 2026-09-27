@@ -24,6 +24,7 @@ export interface ReferenceAssetLike {
   readonly storageBucket: string;
   readonly storageObjectKey: string;
   readonly contentHashSha256: string;
+  readonly sceneId?: string | undefined;
   readonly assetType?: string | undefined;
   readonly mimeType?: string | undefined;
   readonly width?: number | undefined;
@@ -43,6 +44,7 @@ export interface ReferenceBindingLike {
   readonly archivedAt?: string | null | undefined;
   readonly sceneId?: string | undefined;
   readonly specRevision?: number | undefined;
+  readonly bindingId?: string | undefined;
 }
 
 export interface CanonicalReferenceEntry {
@@ -50,6 +52,7 @@ export interface CanonicalReferenceEntry {
   readonly promptTag: string; // "<Picture 1>" .. "<Picture 9>"
   readonly role: ReferenceRole;
   readonly referenceAssetId: string;
+  readonly bindingId: string;
   readonly contentHashSha256: string;
   readonly asset: ReferenceAssetLike;
 }
@@ -57,6 +60,8 @@ export interface CanonicalReferenceEntry {
 export interface CanonicalizeReferenceBindingsOptions {
   readonly bindings: readonly ReferenceBindingLike[];
   readonly assetsById: ReadonlyMap<string, ReferenceAssetLike> | Record<string, ReferenceAssetLike>;
+  readonly expectedClientId?: string | undefined;
+  readonly expectedSceneId?: string | undefined;
 }
 
 export function canonicalizeReferenceBindings(
@@ -128,6 +133,45 @@ export function canonicalizeReferenceBindings(
       );
     }
 
+    if (options.expectedSceneId && binding.sceneId && binding.sceneId !== options.expectedSceneId) {
+      throw new ReferenceCanonicalizationError(
+        `Reference binding for asset "${binding.referenceAssetId}" belongs to scene "${binding.sceneId}", expected "${options.expectedSceneId}"`,
+        "REFERENCE_BINDING_SCENE_MISMATCH"
+      );
+    }
+
+    if (options.expectedClientId && asset.clientId !== options.expectedClientId) {
+      throw new ReferenceCanonicalizationError(
+        `Reference asset "${binding.referenceAssetId}" belongs to client "${asset.clientId}", expected "${options.expectedClientId}"`,
+        "REFERENCE_ASSET_CLIENT_MISMATCH"
+      );
+    }
+
+    const assetWithScene = asset as { sceneId?: string };
+    if (
+      options.expectedSceneId &&
+      assetWithScene.sceneId &&
+      assetWithScene.sceneId !== options.expectedSceneId
+    ) {
+      throw new ReferenceCanonicalizationError(
+        `Reference asset "${binding.referenceAssetId}" belongs to scene "${assetWithScene.sceneId}", expected "${options.expectedSceneId}"`,
+        "REFERENCE_ASSET_SCENE_MISMATCH"
+      );
+    }
+
+    const firstActiveAsset =
+      activeBindings.length > 0 ? getAsset(activeBindings[0]!.referenceAssetId) : undefined;
+    if (
+      !options.expectedClientId &&
+      firstActiveAsset &&
+      asset.clientId !== firstActiveAsset.clientId
+    ) {
+      throw new ReferenceCanonicalizationError(
+        `Cross-client reference binding detected: asset "${binding.referenceAssetId}" belongs to client "${asset.clientId}", expected "${firstActiveAsset.clientId}"`,
+        "REFERENCE_ASSET_CLIENT_MISMATCH"
+      );
+    }
+
     if (asset.archivedAt) {
       throw new ReferenceCanonicalizationError(
         `Reference asset "${binding.referenceAssetId}" is archived and cannot be used`,
@@ -147,9 +191,14 @@ export function canonicalizeReferenceBindings(
       );
     }
 
-    if (!asset.mimeType || !asset.mimeType.toLowerCase().startsWith("image/")) {
+    const normalizedMime = (asset.mimeType ?? "").toLowerCase();
+    if (
+      !asset.mimeType ||
+      !asset.mimeType.toLowerCase().startsWith("image/") ||
+      !["image/png", "image/jpeg", "image/webp"].includes(normalizedMime)
+    ) {
       throw new ReferenceCanonicalizationError(
-        `Unsupported reference mimeType "${asset.mimeType}" for asset "${asset.id}". MiniMax-H3 supports only image references.`,
+        `Unsupported reference mimeType "${asset.mimeType}" for asset "${asset.id}". MiniMax-H3 supports only PNG, JPEG, and WebP images.`,
         "UNSUPPORTED_REFERENCE_MEDIA"
       );
     }
@@ -180,12 +229,18 @@ export function canonicalizeReferenceBindings(
       const slotIndex = idx + 1;
       const promptTag = `<Picture ${slotIndex}>`;
       const asset = getAsset(binding.referenceAssetId)!;
+      const bindingId =
+        binding.bindingId ??
+        (binding.sceneId && binding.specRevision !== undefined
+          ? `${binding.sceneId}:${binding.specRevision}:${binding.referenceAssetId}:${binding.role}`
+          : `${binding.referenceAssetId}:${binding.role}`);
 
       return Object.freeze({
         slotIndex,
         promptTag,
         role: binding.role,
         referenceAssetId: binding.referenceAssetId,
+        bindingId,
         contentHashSha256: asset.contentHashSha256,
         asset
       });

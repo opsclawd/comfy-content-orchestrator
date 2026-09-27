@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { FastifyRequest } from "fastify";
 import {
   CreateCampaignUseCase,
@@ -28,6 +29,7 @@ import {
   type ClientContextResolver,
   type CurrentProductionAttemptQueries,
   type DeliveryAssemblyJobQueuePort,
+  type HashBytesPort,
   type ImageInspectionPort,
   type JobQueuePort,
   type ObjectStoragePort,
@@ -50,6 +52,7 @@ export interface ControlApiDependencies {
   readonly currentProductionAttemptQueries?: CurrentProductionAttemptQueries;
   readonly campaignDeliveryReelQueries?: CampaignDeliveryReelQueries;
   readonly objectStorage?: ObjectStoragePort;
+  readonly hashBytes?: HashBytesPort;
   readonly reviewMediaDelivery?: ReviewMediaDeliveryPort;
   readonly storageTelemetry?: StorageTelemetryPort;
   readonly storageMetricsRegistry?: StorageMetricsRegistryPort;
@@ -121,7 +124,14 @@ export function createControlApiContainer(
       })
     : undefined;
   const reviewScene = new ReviewSceneUseCases(dependencies.uow, planShotPlans);
-  const enqueueSceneProductionRender = new EnqueueSceneProductionRenderUseCase(dependencies.uow);
+  const hashBytes = dependencies.hashBytes ?? {
+    hashBytes: async (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
+  };
+  const enqueueSceneProductionRender = new EnqueueSceneProductionRenderUseCase(dependencies.uow, {
+    objectStorage: dependencies.objectStorage,
+    hashBytes,
+    imageValidator: dependencies.imageValidator
+  });
   const productionReview = new ProductionReviewUseCases(
     dependencies.uow,
     enqueueSceneProductionRender

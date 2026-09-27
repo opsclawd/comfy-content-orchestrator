@@ -13,6 +13,7 @@ describe("GenerationManifestSchema", () => {
     engine: "minimax_h3_ref2v",
     renderProfile: "MINIMAX_H3_720P_5S_REF2V_V1",
     renderProfileVersion: 1,
+    attemptId: "00000000-0000-4000-8000-000000000005",
     models: [
       {
         category: "diffusion_models",
@@ -86,6 +87,7 @@ describe("GenerationManifestSchema", () => {
         {
           slotIndex: 1,
           promptTag: "<Picture 1>",
+          bindingId: "scene-1:2:33333333-3333-4333-8333-333333333333:subject_identity",
           assetId: "33333333-3333-4333-8333-333333333333",
           contentHashSha256: "4444444444444444444444444444444444444444444444444444444444444444",
           role: "subject_identity",
@@ -329,5 +331,122 @@ describe("GenerationManifestSchema", () => {
       }
     };
     expect(GenerationManifestSchema.safeParse(invalidWithFrameAnchored).success).toBe(false);
+  });
+
+  it("fails closed when attemptId is missing in reference_directed mode", () => {
+    const withoutAttemptId = {
+      ...baseManifestFixture,
+      attemptId: undefined,
+      routingMode: "reference_directed" as const,
+      shotPlan: {
+        id: "11111111-1111-4111-8111-111111111111",
+        specRevision: 2
+      },
+      executedInstruction: {
+        text: "Compiled shot instruction with 0 pictures",
+        sha256: "2222222222222222222222222222222222222222222222222222222222222222",
+        byteLength: 40
+      },
+      referenceImages: []
+    };
+    const res = GenerationManifestSchema.safeParse(withoutAttemptId);
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues.some((i) => i.path.includes("attemptId"))).toBe(true);
+    }
+  });
+
+  it("fails closed when bindingId is missing on referenceImages in reference_directed mode", () => {
+    const withoutBindingId = {
+      ...baseManifestFixture,
+      routingMode: "reference_directed" as const,
+      shotPlan: {
+        id: "11111111-1111-4111-8111-111111111111",
+        specRevision: 2
+      },
+      executedInstruction: {
+        text: "Compiled shot instruction with <Picture 1>",
+        sha256: "2222222222222222222222222222222222222222222222222222222222222222",
+        byteLength: 42
+      },
+      referenceImages: [
+        {
+          slotIndex: 1,
+          promptTag: "<Picture 1>",
+          // bindingId is omitted
+          assetId: "33333333-3333-4333-8333-333333333333",
+          contentHashSha256: "4444444444444444444444444444444444444444444444444444444444444444",
+          role: "subject_identity",
+          stagedAs: { name: "ref-1.png", subfolder: "" },
+          injectionTarget: { nodeId: "201", classType: "LoadImage", inputField: "image" }
+        }
+      ]
+    };
+    const res = GenerationManifestSchema.safeParse(withoutBindingId);
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues.some((i) => i.message.includes("bindingId is required"))).toBe(true);
+    }
+  });
+
+  it("fails closed when attemptId is missing in frame_anchored mode", () => {
+    const withoutAttemptId = {
+      ...baseManifestFixture,
+      attemptId: undefined,
+      engine: "minimax_h3_i2v",
+      renderProfile: "MINIMAX_H3_720P_5S_I2V_V1",
+      routingMode: "frame_anchored" as const,
+      firstFrame: {
+        anchorType: "first_frame" as const,
+        candidateId: "55555555-5555-4555-8555-555555555555",
+        contentHashSha256: "6666666666666666666666666666666666666666666666666666666666666666",
+        stagedAs: { name: "anchor.png", subfolder: "" },
+        injectionTarget: { nodeId: "20", classType: "LoadImage", inputField: "image" }
+      }
+    };
+    const res = GenerationManifestSchema.safeParse(withoutAttemptId);
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues.some((i) => i.path.includes("attemptId"))).toBe(true);
+    }
+  });
+
+  it("fails closed when candidateId is missing from firstFrame in frame_anchored mode", () => {
+    const withoutCandidateId = {
+      ...baseManifestFixture,
+      engine: "minimax_h3_i2v",
+      renderProfile: "MINIMAX_H3_720P_5S_I2V_V1",
+      routingMode: "frame_anchored" as const,
+      firstFrame: {
+        anchorType: "first_frame" as const,
+        // candidateId is omitted
+        contentHashSha256: "6666666666666666666666666666666666666666666666666666666666666666",
+        stagedAs: { name: "anchor.png", subfolder: "" },
+        injectionTarget: { nodeId: "20", classType: "LoadImage", inputField: "image" }
+      }
+    };
+    const res = GenerationManifestSchema.safeParse(withoutCandidateId);
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues.some((i) => i.path.includes("candidateId"))).toBe(true);
+    }
+  });
+
+  it("preserves historical first-frame manifest without routingMode, attemptId or bindingId", () => {
+    const historicalManifest = {
+      ...baseManifestFixture,
+      attemptId: undefined,
+      engine: "ltx_25_i2v",
+      renderProfile: "LTX_25_720P_5S_I2V_V1",
+      routingMode: undefined,
+      firstFrame: {
+        anchorType: "first_frame" as const,
+        contentHashSha256: "6666666666666666666666666666666666666666666666666666666666666666",
+        stagedAs: { name: "anchor.png", subfolder: "" },
+        injectionTarget: { nodeId: "20", classType: "LoadImage", inputField: "image" }
+      }
+    };
+    const res = GenerationManifestSchema.safeParse(historicalManifest);
+    expect(res.success).toBe(true);
   });
 });

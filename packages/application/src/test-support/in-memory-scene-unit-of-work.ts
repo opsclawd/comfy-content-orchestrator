@@ -307,6 +307,14 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     return this;
   }
 
+  seedSceneBinding(binding: SceneReferenceBinding): this {
+    this._sceneBindings.set(
+      `${binding.sceneId}:${binding.specRevision}:${binding.referenceAssetId}:${binding.role}`,
+      binding
+    );
+    return this;
+  }
+
   enqueuedAssemblyJobs(): readonly EnqueueDeliveryAssemblyJobInput[] {
     return this._enqueuedAssemblyJobs;
   }
@@ -900,7 +908,7 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       recordProductionAttempt: async (input) => {
         const attempt: ProductionAttemptRecord = {
           ...input,
-          attemptId: `attempt-${this._seededAttempts.size + 1}`,
+          attemptId: input.attemptId ?? `attempt-${this._seededAttempts.size + 1}`,
           createdAt: new Date().toISOString()
         };
         this._seededAttempts.set(attempt.attemptId, attempt);

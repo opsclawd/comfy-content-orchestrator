@@ -17,12 +17,20 @@ import {
   type GpuTelemetryPort,
   type HashBytesPort,
   type ReferenceAssetRepository,
+  type CampaignRepository,
+  type ImageInspectionPort,
   type RenderEnginePort,
   type ResolvedApprovedVisualProductionMedia,
   type SceneRepository,
   type StoryboardCandidateRepository
 } from "@cco/application";
-import { JOB_KINDS, type CandidateId, type JobKind, type SceneId } from "@cco/domain";
+import {
+  JOB_KINDS,
+  type CampaignRecord,
+  type CandidateId,
+  type JobKind,
+  type SceneId
+} from "@cco/domain";
 import {
   ComfyUiClient,
   ComfyUiRenderEngineAdapter,
@@ -33,10 +41,12 @@ import {
   loadComponentLicenseRegistrySync,
   LocalFsGpuLeaseAdapter,
   NvidiaSmiTelemetryAdapter,
+  PostgresCampaignRepository,
   PostgresReferenceAssetRepository,
   PostgresSceneRepository,
   PostgresStoryboardCandidateRepository,
   S3ObjectStorage,
+  SharpImageInspectionAdapter,
   type collectCertificationProvenance,
   type ComfyUiOutputReader,
   type hashWorkflow,
@@ -103,6 +113,7 @@ export interface ProductionWorkerOverrides extends Partial<WorkerDependencies> {
   readonly sceneRepository?: SceneRepository | undefined;
   readonly storyboardCandidateRepository?: StoryboardCandidateRepository | undefined;
   readonly referenceAssetRepository?: ReferenceAssetRepository | undefined;
+  readonly campaignRepository?: CampaignRepository<CampaignRecord> | undefined;
   readonly hashBytes?: HashBytesPort | undefined;
   readonly pool?: pg.Pool | undefined;
   readonly renderEngine?: RenderEnginePort | undefined;
@@ -132,6 +143,7 @@ export interface ProductionWorkerOverrides extends Partial<WorkerDependencies> {
       }
     | undefined;
   readonly stageReferenceImage?: ComfyUiInputStagingPort | undefined;
+  readonly imageValidator?: ImageInspectionPort | undefined;
   readonly now?: (() => Date) | undefined;
 }
 
@@ -613,6 +625,7 @@ export function createProductionWorker(
   let sceneRepository: SceneRepository | undefined;
   let storyboardCandidateRepository: StoryboardCandidateRepository | undefined;
   let referenceAssetRepository: ReferenceAssetRepository | undefined;
+  let campaignRepository: CampaignRepository<CampaignRecord> | undefined;
 
   if (includesProduction) {
     pool =
@@ -628,16 +641,21 @@ export function createProductionWorker(
     referenceAssetRepository =
       overrides?.referenceAssetRepository ??
       (pool ? new PostgresReferenceAssetRepository(pool) : undefined);
+    campaignRepository =
+      overrides?.campaignRepository ?? (pool ? new PostgresCampaignRepository(pool) : undefined);
 
     const needsRepositories =
       !overrides?.productionManifestAssembler || !overrides?.resolveApprovedCandidateMedia;
 
     if (
       needsRepositories &&
-      (!sceneRepository || !storyboardCandidateRepository || !referenceAssetRepository)
+      (!sceneRepository ||
+        !storyboardCandidateRepository ||
+        !referenceAssetRepository ||
+        !campaignRepository)
     ) {
       throw new WorkerConfigError(
-        "DATABASE_URL or repository dependencies (sceneRepository, storyboardCandidateRepository, referenceAssetRepository) are required when production jobs are enabled"
+        "DATABASE_URL or repository dependencies (sceneRepository, storyboardCandidateRepository, referenceAssetRepository, campaignRepository) are required when production jobs are enabled"
       );
     }
   }
@@ -758,7 +776,11 @@ export function createProductionWorker(
           ? {
               resolveApprovedCandidateMedia,
               objectStorage,
-              stageReferenceImage
+              stageReferenceImage,
+              imageValidator: overrides?.imageValidator ?? new SharpImageInspectionAdapter(),
+              campaignRepository,
+              sceneRepository,
+              referenceAssetRepository
             }
           : {}),
         ...(overrides?.loadCertificationProfile !== undefined

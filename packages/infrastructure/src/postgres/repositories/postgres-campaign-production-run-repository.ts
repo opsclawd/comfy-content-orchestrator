@@ -363,6 +363,7 @@ export class PostgresCampaignProductionRunRepository implements CampaignProducti
     const result = await this.client.query<ProductionAttemptRow>(
       `
       INSERT INTO production_attempts (
+        attempt_id,
         scene_id,
         run_id,
         ordinal,
@@ -372,7 +373,7 @@ export class PostgresCampaignProductionRunRepository implements CampaignProducti
         selected_candidate_revision,
         seed,
         created_reason
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ) VALUES (COALESCE($1::uuid, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING
         attempt_id,
         scene_id,
@@ -387,6 +388,7 @@ export class PostgresCampaignProductionRunRepository implements CampaignProducti
         created_at
       `,
       [
+        input.attemptId ?? null,
         input.sceneId,
         input.runId ?? null,
         input.ordinal,
