@@ -158,6 +158,154 @@ export async function applySceneApprovalToScene(
   };
 }
 
+export async function applyShotPlanApprovalToScene(
+  context: UnitOfWorkContext,
+  scene: Scene,
+  input: ApproveShotPlanInput
+): Promise<{ readonly isIdempotentReplay: boolean; readonly scene: Scene }> {
+  const existingEvent = await context.reviewEvents.findById(input.eventId);
+  if (existingEvent !== undefined) {
+    if (existingEvent.sceneId !== input.sceneId) {
+      throw new IdempotencyConflictError(input.eventId);
+    }
+
+    if (
+      (input.requestHashSha256 !== undefined || existingEvent.requestHashSha256 !== undefined) &&
+      input.requestHashSha256 !== existingEvent.requestHashSha256
+    ) {
+      throw new IdempotencyConflictError(input.eventId);
+    }
+
+    return {
+      isIdempotentReplay: true,
+      scene
+    };
+  }
+
+  if (
+    input.expectedSpecRevision !== undefined &&
+    scene.snapshot().specRevision !== input.expectedSpecRevision
+  ) {
+    throw new StaleRevisionConflictError(
+      input.sceneId,
+      input.expectedSpecRevision,
+      scene.snapshot().specRevision
+    );
+  }
+
+  if (!context.shotPlans) {
+    throw new Error("UnitOfWorkContext.shotPlans is not configured.");
+  }
+
+  const snapshot = scene.snapshot();
+  const shotPlanId = input.shotPlanId ?? snapshot.selectedShotPlanId;
+  if (!shotPlanId) {
+    throw new InvalidTransitionError(
+      scene.id,
+      scene.status,
+      "approveShotPlan",
+      "Approval requires an active ShotPlan selection."
+    );
+  }
+
+  const shotPlan = await context.shotPlans.findById(shotPlanId);
+  if (shotPlan === undefined) {
+    throw new ShotPlanNotFoundError(shotPlanId);
+  }
+
+  if (shotPlan.sceneId !== scene.id) {
+    throw new InvalidShotPlanError(scene.id, shotPlan.id, "ShotPlan belongs to a different scene");
+  }
+
+  if (shotPlan.specRevision !== snapshot.specRevision) {
+    throw new InvalidShotPlanError(
+      scene.id,
+      shotPlan.id,
+      "ShotPlan revision does not match current scene revision"
+    );
+  }
+
+  if (shotPlan.status !== "draft") {
+    throw new InvalidShotPlanError(
+      scene.id,
+      shotPlan.id,
+      `ShotPlan status must be 'draft' to approve, but was '${shotPlan.status}'`
+    );
+  }
+
+  if (snapshot.selectedShotPlanId === undefined) {
+    throw new InvalidTransitionError(
+      scene.id,
+      scene.status,
+      "approveShotPlan",
+      "Approval requires an active ShotPlan selection."
+    );
+  }
+
+  if (snapshot.selectedShotPlanId !== shotPlan.id) {
+    throw new InvalidTransitionError(
+      scene.id,
+      scene.status,
+      "approveShotPlan",
+      `Requested ShotPlan '${shotPlan.id}' does not match currently selected ShotPlan '${snapshot.selectedShotPlanId}'.`
+    );
+  }
+
+  const priorSceneStatus = scene.status;
+
+  const transition = scene.approveShotPlan({
+    shotPlanId: shotPlan.id,
+    shotPlanRevision: shotPlan.specRevision,
+    shotPlanSceneId: shotPlan.sceneId,
+    routingMode: shotPlan.routingMode,
+    approvedBy: input.reviewerName,
+    approvedAt: input.occurredAt
+  });
+
+  shotPlan.approve();
+  await context.shotPlans.save(shotPlan);
+
+  const allPlans = await context.shotPlans.listBySceneAndRevision(scene.id, scene.specRevision);
+  for (const other of allPlans) {
+    if (other.id !== shotPlan.id && other.status === "draft") {
+      other.supersede();
+      await context.shotPlans.save(other);
+    }
+  }
+
+  const event = ReviewEventSchema.parse({
+    eventId: input.eventId,
+    sceneId: input.sceneId,
+    reviewerName: input.reviewerName,
+    action: "approve_shotplan",
+    ...(input.directorNotes !== undefined ? { directorNotes: input.directorNotes } : {}),
+    mutationPayload: {
+      shotPlanId: shotPlan.id,
+      shotPlanRevision: shotPlan.specRevision
+    },
+    priorSceneStatus,
+    resultingSceneStatus: transition.to,
+    ...(input.expectedSpecRevision !== undefined
+      ? { expectedSpecRevision: input.expectedSpecRevision }
+      : {}),
+    ...(input.resultingSpecRevision !== undefined
+      ? { resultingSpecRevision: input.resultingSpecRevision }
+      : {}),
+    ...(input.requestHashSha256 !== undefined
+      ? { requestHashSha256: input.requestHashSha256 }
+      : {}),
+    occurredAt: input.occurredAt
+  });
+
+  await context.reviewEvents.append(event);
+  await context.scenes.save(scene);
+
+  return {
+    isIdempotentReplay: false,
+    scene
+  };
+}
+
 export async function prepareReviewExecution(
   context: UnitOfWorkContext,
   input: ReviewAuditInput
@@ -354,118 +502,14 @@ export class ReviewSceneUseCases {
 
   async approveShotPlan(input: ApproveShotPlanInput): Promise<ReviewExecutionResult> {
     return await this.uow.execute(async (context) => {
-      const prepared = await prepareReviewExecution(context, input);
-      if (prepared.isIdempotentReplay) {
-        return {
-          isIdempotentReplay: true,
-          scene: prepared.scene.snapshot()
-        };
+      const scene = await context.scenes.findById(input.sceneId as SceneId);
+      if (scene === undefined) {
+        throw new SceneNotFoundError(input.sceneId);
       }
-
-      const scene = prepared.scene;
-      if (!context.shotPlans) {
-        throw new Error("UnitOfWorkContext.shotPlans is not configured.");
-      }
-
-      const shotPlan = await context.shotPlans.findById(input.shotPlanId);
-      if (shotPlan === undefined) {
-        throw new ShotPlanNotFoundError(input.shotPlanId);
-      }
-
-      if (shotPlan.sceneId !== scene.id) {
-        throw new InvalidShotPlanError(
-          scene.id,
-          shotPlan.id,
-          "ShotPlan belongs to a different scene"
-        );
-      }
-
-      if (shotPlan.specRevision !== scene.snapshot().specRevision) {
-        throw new InvalidShotPlanError(
-          scene.id,
-          shotPlan.id,
-          "ShotPlan revision does not match current scene revision"
-        );
-      }
-
-      if (shotPlan.status !== "draft") {
-        throw new InvalidShotPlanError(
-          scene.id,
-          shotPlan.id,
-          `ShotPlan status must be 'draft' to approve, but was '${shotPlan.status}'`
-        );
-      }
-
-      const snapshot = scene.snapshot();
-      if (snapshot.selectedShotPlanId === undefined) {
-        throw new InvalidTransitionError(
-          scene.id,
-          scene.status,
-          "approveShotPlan",
-          "Approval requires an active ShotPlan selection."
-        );
-      }
-
-      if (snapshot.selectedShotPlanId !== shotPlan.id) {
-        throw new InvalidTransitionError(
-          scene.id,
-          scene.status,
-          "approveShotPlan",
-          `Requested ShotPlan '${shotPlan.id}' does not match currently selected ShotPlan '${snapshot.selectedShotPlanId}'.`
-        );
-      }
-
-      const priorSceneStatus = scene.status;
-
-      const transition = scene.approveShotPlan({
-        shotPlanId: shotPlan.id,
-        shotPlanRevision: shotPlan.specRevision,
-        shotPlanSceneId: shotPlan.sceneId,
-        approvedBy: input.reviewerName,
-        approvedAt: input.occurredAt
-      });
-
-      shotPlan.approve();
-      await context.shotPlans.save(shotPlan);
-
-      const allPlans = await context.shotPlans.listBySceneAndRevision(scene.id, scene.specRevision);
-      for (const other of allPlans) {
-        if (other.id !== shotPlan.id && other.status === "draft") {
-          other.supersede();
-          await context.shotPlans.save(other);
-        }
-      }
-
-      const event = ReviewEventSchema.parse({
-        eventId: input.eventId,
-        sceneId: input.sceneId,
-        reviewerName: input.reviewerName,
-        action: "approve_shotplan",
-        ...(input.directorNotes !== undefined ? { directorNotes: input.directorNotes } : {}),
-        mutationPayload: {
-          shotPlanId: shotPlan.id,
-          shotPlanRevision: shotPlan.specRevision
-        },
-        priorSceneStatus,
-        resultingSceneStatus: transition.to,
-        ...(input.expectedSpecRevision !== undefined
-          ? { expectedSpecRevision: input.expectedSpecRevision }
-          : {}),
-        ...(input.resultingSpecRevision !== undefined
-          ? { resultingSpecRevision: input.resultingSpecRevision }
-          : {}),
-        ...(input.requestHashSha256 !== undefined
-          ? { requestHashSha256: input.requestHashSha256 }
-          : {}),
-        occurredAt: input.occurredAt
-      });
-
-      await context.reviewEvents.append(event);
-      await context.scenes.save(scene);
-
+      const result = await applyShotPlanApprovalToScene(context, scene, input);
       return {
-        isIdempotentReplay: false,
-        scene: scene.snapshot()
+        isIdempotentReplay: result.isIdempotentReplay,
+        scene: result.scene.snapshot()
       };
     });
   }

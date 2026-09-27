@@ -509,4 +509,47 @@ describe("ReviewCommandControls Component", () => {
     expect(html).toContain("Attempt #2");
     expect(html).toContain("job-prod-3333");
   });
+
+  it("suppresses select_shotplan and approve_shotplan from generic chip toolbar", () => {
+    const detail = createSampleDetail({
+      allowedActions: [
+        "approve",
+        "select_shotplan",
+        "approve_shotplan",
+        "reroll_shotplan",
+        "cancel"
+      ]
+    });
+
+    const html = renderToStaticMarkup(<ReviewCommandControls detail={detail} />);
+
+    expect(html).toContain('data-testid="action-button-approve"');
+    expect(html).toContain('data-testid="action-button-reroll_shotplan"');
+    expect(html).toContain('data-testid="action-button-cancel"');
+    expect(html).not.toContain('data-testid="action-button-select_shotplan"');
+    expect(html).not.toContain('data-testid="action-button-approve_shotplan"');
+  });
+
+  it("renders shot plan identity in confirmation dialog for approve_shotplan", () => {
+    const detail = createSampleDetail({ specRevision: 2 });
+    const confirmingState: ReviewCommandState = {
+      phase: "confirming",
+      detail,
+      stagedAction: {
+        action: "approve_shotplan",
+        payload: {
+          shotPlanId: "99999999-9999-4999-8999-999999999999",
+          expectedSpecRevision: 2
+        },
+        displayLabel: "Approve Shot Plan"
+      }
+    };
+
+    const html = renderToStaticMarkup(
+      <ReviewCommandControls detail={detail} state={confirmingState} />
+    );
+
+    expect(html).toContain('data-testid="dialog-shot-plan-identity"');
+    expect(html).toContain("99999999-9999-4999-8999-999999999999");
+  });
 });

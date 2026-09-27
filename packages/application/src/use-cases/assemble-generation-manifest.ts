@@ -134,6 +134,7 @@ export interface AssembleManifestInput {
   readonly previsReviewEvidence?: ManifestPrevisReviewEvidence | undefined;
   readonly submittedWorkflowHash?: string | undefined;
   readonly attemptId?: string | undefined;
+  readonly attemptOrdinal?: number | undefined;
 }
 
 export interface AssembleManifestResult {
@@ -240,7 +241,9 @@ export class AssembleGenerationManifest {
     const sceneId = input.job.sceneId;
 
     // 2. Render attempt & timestamp
-    const renderAttempt = input.job.retryCount + 1;
+    const sceneSnapshot = scene.snapshot();
+    const renderAttempt =
+      input.attemptOrdinal ?? sceneSnapshot.productionAttemptOrdinal ?? input.job.retryCount + 1;
     const provenance = input.provenance ?? input.liveProvenance;
     if (!provenance || !provenance.generatedAt) {
       throw new IncompleteManifestError("renderedAt");
@@ -255,7 +258,7 @@ export class AssembleGenerationManifest {
       throw new IncompleteManifestError("renderProfile");
     }
     const engine = input.profile.engine;
-    const renderProfile = input.profile.id;
+    const renderProfile = input.profile.renderProfileIdentity?.key ?? input.profile.id;
     // License-routing components are matched on (componentId, versionOrRevision)
     // — see execute-profile-render.ts's own requiredComponents construction.
     // Persisting the version here (not just the profile id string) lets

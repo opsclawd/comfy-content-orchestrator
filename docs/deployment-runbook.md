@@ -195,6 +195,30 @@ Each element inside `profiles` is identical to a single-profile record body. Com
 
 As of 2026-09-04, single-record approved provenance files like `certification/flux-schnell/approved-provenance.json` and `certification/ltx-25/approved-provenance.json` were hand-reshaped from passed certification run results (`result.json`), since `result.json` has all the same underlying data but nested differently (`identity.profileId`, `identity.workflowSha256`, `identity.modelSha256`, no `workflow`/`renderProfileProvenance` keys at all). Track the actual fix (`certify.ts` should write this file automatically on a passing run) via #176.
 
+## Post-Pivot Authority Model & ShotPlan-to-H3 Operation (#325 / #331)
+
+### Authority Model Runtime Invariants
+- **Visual Separation in Review Hub**:
+  The Review Hub UI (`apps/web`) distinctly renders:
+  1. **Previs / Storyboard**: FLUX.1 [schnell] visual representation of composition, labeled as non-authoritative.
+  2. **ShotPlan**: Structured intent (composition, blocking, temporal beats, camera movement, lens intent, duration, lighting, bound references).
+  3. **Reference Assets**: Visual authority for subject identity, product fidelity, location, style, and composition, with signed ephemeral preview URLs.
+  4. **Production Attempt**: Generated H3 video reviewed in the QA gate.
+- **Production Admission & Atomic Dispatch**:
+  - The director selects and approves a ShotPlan using variant-bound, revision-fenced actions (`select_shotplan`, `approve_shotplan`).
+  - `approve_shotplan` is the atomic production-admission approval. It routes through `ApproveSceneAndDispatchCampaignProductionUseCase`.
+  - Stale revision commands are rejected with HTTP 409 (`STALE_REVISION_CONFLICT`).
+  - When all campaign scenes are approved, the campaign production run is atomically created in `dispatched` status and scene jobs are enqueued.
+- **Render Worker Staging Invariants**:
+  - In `reference_directed` mode (default), the worker stages exact ordered reference images with their SHA-256 digests and binding roles; generated previs JPEGs are **never** injected into diffusion conditioning.
+  - In `frame_anchored` mode, only the declared authoritative anchor frame asset is injected as first frame.
+- **ComfyUI Environment Verification**:
+  - ComfyUI commit is pinned in `.comfyui-version` (`55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc`), providing native `comfy_extras/nodes_minimax_h3.py` nodes (`EmptyMiniMaxH3LatentAV`, `MiniMaxH3ImageToVideo`, `MiniMaxH3ReferenceToVideo`).
+  - Run `./scripts/check-comfyui-version.sh` and `./scripts/check-minimax-h3-version.sh` to verify host environment readiness.
+- **Autonomous vs. Operator Boundary**:
+  - Issue #331 covers autonomous code and automated E2E lifecycle coverage.
+  - Real-host RTX 4090 multi-scene execution, visual quality evaluation, and physical hardware certification are explicitly owned by the subsequent operator issue (#332).
+
 ## Where to find real values
 
 Real credentials and IPs are deliberately not recorded in this file. As of 2026-09-04:
@@ -206,3 +230,5 @@ Real credentials and IPs are deliberately not recorded in this file. As of 2026-
 
 - #175 — the `generating_candidates -> director_review` transition is not yet wired up; a director can currently see real generated candidates via the API but can't act on them (this is the last blocker after a successful worker run).
 - #176 — automate generating the certification provenance file described above.
+- #331 — Review Hub authority model alignment and automated ShotPlan-to-H3 E2E lifecycle coverage.
+- #332 — Operator issue: Real RTX 4090 multi-scene execution and human visual quality acceptance.

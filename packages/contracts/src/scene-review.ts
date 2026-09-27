@@ -1,7 +1,12 @@
 import { sortKeysDeep } from "@cco/shared";
 import { z } from "zod";
 import { CampaignStatusSchema } from "./campaign-status.js";
-import { SceneReferenceBindingSchema } from "./reference-asset.js";
+import {
+  SceneReferenceBindingSchema,
+  ReferenceRoleSchema,
+  PreviewAvailabilitySchema
+} from "./reference-asset.js";
+import { sha256HashSchema } from "./persistent-media.js";
 import {
   ShotFramingSchema,
   CameraAngleSchema,
@@ -116,6 +121,28 @@ export const SceneReviewCandidateGroupSchema = z.object({
 });
 export type SceneReviewCandidateGroup = z.infer<typeof SceneReviewCandidateGroupSchema>;
 
+export const ShotPlanReferenceBindingReviewItemSchema = z.object({
+  referenceAssetId: z.string().uuid(),
+  sceneId: z.string().uuid().optional(),
+  specRevision: z.number().int().positive().optional(),
+  role: ReferenceRoleSchema,
+  libraryRole: ReferenceRoleSchema.nullable().optional(),
+  bindingOrder: z.number().int().nonnegative().optional(),
+  weight: z.number().min(0).max(1).nullable().optional(),
+  hints: z.record(z.string(), z.unknown()).nullable().optional(),
+  displayName: z.string().optional(),
+  description: z.string().nullable().optional(),
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
+  mimeType: z.string().min(1).optional(),
+  contentHashSha256: sha256HashSchema.optional(),
+  previewUrl: z.string().min(1).nullable().optional(),
+  previewAvailability: PreviewAvailabilitySchema.default("unavailable")
+});
+export type ShotPlanReferenceBindingReviewItem = z.infer<
+  typeof ShotPlanReferenceBindingReviewItemSchema
+>;
+
 export const ShotPlanReviewItemSchema = z.object({
   shotPlanId: z.string().uuid(),
   sceneId: z.string().uuid(),
@@ -150,15 +177,7 @@ export const ShotPlanReviewItemSchema = z.object({
     })
     .nullable()
     .optional(),
-  boundReferences: z
-    .array(
-      z.object({
-        referenceAssetId: z.string().uuid(),
-        role: z.string(),
-        displayName: z.string().optional()
-      })
-    )
-    .default([]),
+  boundReferences: z.array(ShotPlanReferenceBindingReviewItemSchema).default([]),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });

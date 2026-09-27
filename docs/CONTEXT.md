@@ -32,12 +32,17 @@
 - **CampaignProductionRun & CampaignProductionRunScene:** Aggregate and scene-link entities coordinating multi-scene production rendering, production review gating, and delivery assembly admission across a dedicated lifecycle (`dispatched -> production_review -> assembling -> completed/failed`). Decoupled from individual scene lifecycle progression.
 - **AcceptedProductionAttempt:** The explicitly selected and accepted production attempt for a scene (`acceptedAttemptId`, `acceptedProductionJobId`, `acceptedAttemptOrdinal`). Only explicitly accepted attempts matching the scene's current SceneSpec revision are permitted to feed downstream delivery assembly.
 
-## Review Plane Actions & Behavioral Invariants
+## Review Plane Actions & Behavioral Invariants (Post-Pivot Authority Model)
 
-- **`candidate_select`:** Action choosing an immutable candidate belonging to the current `sceneSpecRevision`. In `reference_directed` mode, this candidate represents non-authoritative visual review evidence (`previsCandidateId`). In `frame_anchored` mode, it conditions the production anchor frame.
+- **Separation of Authorities:**
+  - **Previs / Storyboard:** Non-authoritative visualization of proposed shot intent (FLUX.1 [schnell] draft stills). In the default `reference_directed` routing mode, previs candidate JPEGs are **never** injected or conditioned into production diffusion models as first frames. FLUX Schnell is intentionally retained for low-cost framing and composition review.
+  - **ShotPlan:** The primary structured production intent contract owning composition/framing, subject/object blocking, action and temporal beats, camera movement/lens intent, lighting/environment, target duration/framing, and continuity. Bridges high-level script copy with diffusion model execution. Selected and approved by the director.
+  - **Reference Assets:** The definitive visual conditioning authority for subject identity, product fidelity, location, style, and composition semantics. Bound to scenes with explicit roles (`subject_identity`, `product`, `location`, `style`, `composition`) and staged directly into H3 diffusion workflows.
+  - **Production Attempt:** High-fidelity generated video (MiniMax-H3) evaluated in production review (`qa`) against the approved ShotPlan intent.
 - **`select_shotplan`:** Action selecting an active `ShotPlan` variant for the current `sceneSpecRevision`. Sets `selected_shot_plan_id` and `selected_shot_plan_revision`.
-- **`approve_shotplan`:** Action approving the selected `ShotPlan` for the current `sceneSpecRevision`, locking the plan against mutation and admitting the scene to the production queue.
+- **`approve_shotplan`:** The production-admission approval action approving the selected `ShotPlan` for the current `sceneSpecRevision`. Routed through `ApproveSceneAndDispatchCampaignProductionUseCase`, it locks the plan, passes `routingMode` to `scene.approveShotPlan`, supersedes competing draft plans, records the `approve_shotplan` review event, and when all campaign scenes are approved, atomically creates the idempotent campaign production run and enqueues scene jobs.
 - **`reroll_shotplan`:** Creative rejection or regeneration of ShotPlan variants (`reroll_shotplan`), resetting selection and approval.
+- **`candidate_select`:** Legacy/frame-anchored action choosing an immutable candidate belonging to the current `sceneSpecRevision`. In `reference_directed` mode, this candidate represents non-authoritative visual review evidence (`previsCandidateId`). In `frame_anchored` mode, it conditions the production anchor frame.
 - **`reject` vs. `reroll`:**
   - `reject`: Strictly QA rejection of rendered production video (`qa -> director_review`), clearing prior approval while retaining the approved candidate selection.
   - `reroll`: Storyboard candidate regeneration in review (`director_review -> generating_candidates`), invalidating current candidate selection and clearing approval.

@@ -1,14 +1,27 @@
-import type { CampaignProductionRunSceneRecord, SceneId } from "@cco/domain";
+import type { CampaignProductionRunSceneRecord, SceneId, ShotPlanId } from "@cco/domain";
 import type { UnitOfWork } from "../ports/unit-of-work.js";
 import { CampaignNotFoundError } from "./campaign-not-found-error.js";
 import { computeCampaignProductionRunFingerprint } from "./campaign-production-fingerprint.js";
 import type { EnqueueSceneProductionRenderUseCase } from "./enqueue-scene-production-render.js";
 import {
   applySceneApprovalToScene,
-  type ApproveSceneInput,
+  applyShotPlanApprovalToScene,
   type ReviewExecutionResult
 } from "./review-scene.js";
 import { SceneNotFoundError } from "./scene-not-found-error.js";
+
+export interface ApproveSceneAndDispatchCampaignProductionInput {
+  readonly sceneId: string;
+  readonly eventId: string;
+  readonly reviewerName: string;
+  readonly occurredAt: string;
+  readonly directorNotes?: string | undefined;
+  readonly expectedSpecRevision?: number | undefined;
+  readonly resultingSpecRevision?: number | undefined;
+  readonly requestHashSha256?: string | undefined;
+  readonly action?: "approve" | "approve_shotplan" | undefined;
+  readonly shotPlanId?: ShotPlanId | undefined;
+}
 
 export class ApproveSceneAndDispatchCampaignProductionUseCase {
   constructor(
@@ -16,7 +29,9 @@ export class ApproveSceneAndDispatchCampaignProductionUseCase {
     private readonly enqueueSceneProductionRender: EnqueueSceneProductionRenderUseCase
   ) {}
 
-  async execute(input: ApproveSceneInput): Promise<ReviewExecutionResult> {
+  async execute(
+    input: ApproveSceneAndDispatchCampaignProductionInput
+  ): Promise<ReviewExecutionResult> {
     return await this.uow.execute(async (context) => {
       const scenesRepo = context.scenes;
       const campaignsRepo = context.campaigns;
@@ -52,7 +67,44 @@ export class ApproveSceneAndDispatchCampaignProductionUseCase {
         throw new SceneNotFoundError(input.sceneId);
       }
 
-      const approvalResult = await applySceneApprovalToScene(context, targetScene, input);
+      const isShotPlanApproval =
+        input.action === "approve_shotplan" || input.shotPlanId !== undefined;
+
+      const approvalResult = isShotPlanApproval
+        ? await applyShotPlanApprovalToScene(context, targetScene, {
+            sceneId: input.sceneId,
+            eventId: input.eventId,
+            reviewerName: input.reviewerName,
+            occurredAt: input.occurredAt,
+            ...(input.directorNotes !== undefined ? { directorNotes: input.directorNotes } : {}),
+            ...(input.expectedSpecRevision !== undefined
+              ? { expectedSpecRevision: input.expectedSpecRevision }
+              : {}),
+            ...(input.resultingSpecRevision !== undefined
+              ? { resultingSpecRevision: input.resultingSpecRevision }
+              : {}),
+            ...(input.requestHashSha256 !== undefined
+              ? { requestHashSha256: input.requestHashSha256 }
+              : {}),
+            shotPlanId: input.shotPlanId as ShotPlanId
+          })
+        : await applySceneApprovalToScene(context, targetScene, {
+            sceneId: input.sceneId as SceneId,
+            eventId: input.eventId,
+            reviewerName: input.reviewerName,
+            occurredAt: input.occurredAt,
+            ...(input.directorNotes !== undefined ? { directorNotes: input.directorNotes } : {}),
+            ...(input.expectedSpecRevision !== undefined
+              ? { expectedSpecRevision: input.expectedSpecRevision }
+              : {}),
+            ...(input.resultingSpecRevision !== undefined
+              ? { resultingSpecRevision: input.resultingSpecRevision }
+              : {}),
+            ...(input.requestHashSha256 !== undefined
+              ? { requestHashSha256: input.requestHashSha256 }
+              : {})
+          });
+
       if (approvalResult.isIdempotentReplay) {
         return {
           isIdempotentReplay: true,

@@ -1,4 +1,5 @@
 import type {
+  InternalSceneReferenceBindingWithStorage,
   SceneReviewCandidateGroup,
   SceneReviewDetail,
   SceneReviewQueries
@@ -8,17 +9,38 @@ import type {
   CampaignStatus,
   ReviewAction,
   SceneStatus,
+  ShotPlanReferenceBindingReviewItem,
   ShotPlanReviewItem
 } from "@cco/contracts";
 import type {
   CampaignId,
   CandidateId,
+  ReferenceAssetId,
+  ReferenceRole,
   SceneConfiguration,
   SceneId,
   ShotPlanId,
   StoryboardCandidate
 } from "@cco/domain";
 import type { Pool, PoolClient } from "pg";
+
+interface SceneReferenceJoinedRow {
+  asset_id: string;
+  scene_id: string;
+  spec_revision: number;
+  role: string;
+  weight: number | string | null;
+  hints: Record<string, unknown> | null;
+  display_name: string | null;
+  description: string | null;
+  library_role: string | null;
+  width: number | null;
+  height: number | null;
+  mime_type: string | null;
+  content_hash_sha256: string | null;
+  storage_bucket: string;
+  storage_object_key: string;
+}
 
 interface StoryboardSceneRow {
   scene_id: string;
@@ -96,7 +118,8 @@ function mapRowToCandidate(row: StoryboardCandidateRow): StoryboardCandidate {
 
 function mapRowToShotPlanReviewItem(
   row: ShotPlanJoinedRow,
-  currentRevision: number
+  currentRevision: number,
+  currentBoundReferences: readonly ShotPlanReferenceBindingReviewItem[] = []
 ): ShotPlanReviewItem {
   const structured =
     typeof row.structured_plan === "string"
@@ -119,6 +142,8 @@ function mapRowToShotPlanReviewItem(
         }
       : null;
 
+  const isCurrent = Number(row.spec_revision) === currentRevision;
+
   return {
     shotPlanId: row.shot_plan_id,
     sceneId: row.scene_id,
@@ -126,7 +151,7 @@ function mapRowToShotPlanReviewItem(
     variantOrdinal: Number(row.variant_ordinal),
     status: row.status as ShotPlanReviewItem["status"],
     routingMode: row.routing_mode as ShotPlanReviewItem["routingMode"],
-    isCurrentRevision: Number(row.spec_revision) === currentRevision,
+    isCurrentRevision: isCurrent,
     targetDurationMs: Number(row.target_duration_ms),
     targetFrameCount: Number(row.target_frame_count),
     framing: row.framing as ShotPlanReviewItem["framing"],
@@ -154,9 +179,7 @@ function mapRowToShotPlanReviewItem(
       frameAnchorTarget: "none"
     },
     previs,
-    boundReferences: Array.isArray(structured.boundReferences)
-      ? (structured.boundReferences as ShotPlanReviewItem["boundReferences"])
-      : [],
+    boundReferences: isCurrent ? [...currentBoundReferences] : [],
     createdAt:
       row.created_at instanceof Date
         ? row.created_at.toISOString()
@@ -310,8 +333,81 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
       [sceneId]
     );
 
+    const bindingsResult = await this.client.query<SceneReferenceJoinedRow>(
+      `
+      SELECT
+        sra.asset_id,
+        sra.scene_id,
+        sra.spec_revision,
+        sra.role,
+        sra.weight,
+        sra.hints,
+        ra.display_name,
+        ra.description,
+        ra.library_role,
+        ra.width,
+        ra.height,
+        ra.mime_type,
+        ra.content_hash_sha256,
+        ra.storage_bucket,
+        ra.storage_object_key
+      FROM scene_reference_assets sra
+      JOIN reference_assets ra ON ra.asset_id = sra.asset_id
+      WHERE sra.scene_id = $1
+        AND sra.spec_revision = $2
+        AND sra.archived_at IS NULL
+        AND ra.archived_at IS NULL
+      ORDER BY sra.asset_id ASC, sra.role ASC
+      `,
+      [sceneId, Number(sceneRow.spec_revision)]
+    );
+
+    const referenceBindingsWithStorage: InternalSceneReferenceBindingWithStorage[] =
+      bindingsResult.rows.map((row, index) => ({
+        referenceAssetId: row.asset_id,
+        sceneId: row.scene_id,
+        specRevision: Number(row.spec_revision),
+        role: row.role as ReferenceRole,
+        libraryRole: (row.library_role as ReferenceRole | null | undefined) ?? null,
+        bindingOrder: index,
+        weight: row.weight !== null && row.weight !== undefined ? Number(row.weight) : null,
+        hints: row.hints ?? null,
+        displayName: row.display_name ?? undefined,
+        description: row.description ?? null,
+        width: row.width !== null && row.width !== undefined ? Number(row.width) : undefined,
+        height: row.height !== null && row.height !== undefined ? Number(row.height) : undefined,
+        mimeType: row.mime_type ?? undefined,
+        contentHashSha256: row.content_hash_sha256 ?? undefined,
+        storageBucket: row.storage_bucket,
+        storageObjectKey: row.storage_object_key
+      }));
+
+    const currentBoundReferences: ShotPlanReferenceBindingReviewItem[] =
+      referenceBindingsWithStorage.map((b) => ({
+        referenceAssetId: b.referenceAssetId,
+        sceneId: b.sceneId,
+        specRevision: b.specRevision,
+        role: b.role,
+        libraryRole: b.libraryRole,
+        bindingOrder: b.bindingOrder,
+        weight: b.weight,
+        hints: b.hints,
+        displayName: b.displayName,
+        description: b.description,
+        width: b.width,
+        height: b.height,
+        mimeType: b.mimeType,
+        contentHashSha256: b.contentHashSha256,
+        previewUrl: null,
+        previewAvailability: "unavailable"
+      }));
+
     const referenceIds = Object.freeze(
-      Array.isArray(sceneRow.reference_asset_ids) ? sceneRow.reference_asset_ids : []
+      referenceBindingsWithStorage.length > 0
+        ? [...new Set(referenceBindingsWithStorage.map((b) => b.referenceAssetId))]
+        : Array.isArray(sceneRow.reference_asset_ids)
+          ? sceneRow.reference_asset_ids
+          : []
     );
 
     const durationSeconds =
@@ -323,6 +419,20 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
     const configuration: SceneConfiguration = {
       prompt: sceneRow.visual_description,
       referenceIds,
+      ...(referenceBindingsWithStorage.length > 0
+        ? {
+            referenceBindings: Object.freeze(
+              referenceBindingsWithStorage.map((b) => ({
+                sceneId: b.sceneId as SceneId,
+                specRevision: b.specRevision,
+                referenceAssetId: b.referenceAssetId as ReferenceAssetId,
+                role: b.role,
+                weight: b.weight,
+                hints: b.hints
+              }))
+            )
+          }
+        : {}),
       engineProfileId: sceneRow.engine_assigned,
       durationMs,
       loraConfigurationId: sceneRow.lora_configuration_id
@@ -359,7 +469,7 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
     }));
 
     const shotPlans = shotPlansResult.rows.map((row) =>
-      mapRowToShotPlanReviewItem(row, Number(sceneRow.spec_revision))
+      mapRowToShotPlanReviewItem(row, Number(sceneRow.spec_revision), currentBoundReferences)
     );
 
     const status = sceneRow.status as SceneStatus;
@@ -389,6 +499,7 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
       ...(approval !== undefined ? { approval } : {}),
       candidatesByRevision: Object.freeze(candidatesByRevision),
       shotPlans: Object.freeze(shotPlans),
+      referenceBindingsWithStorage: Object.freeze(referenceBindingsWithStorage),
       allowedActions
     };
   }

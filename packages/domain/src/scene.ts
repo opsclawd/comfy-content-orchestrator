@@ -385,6 +385,10 @@ export class Scene {
     return this.#approvedShotPlanRevision;
   }
 
+  get productionAttemptOrdinal(): number | undefined {
+    return this.#productionAttemptOrdinal > 0 ? this.#productionAttemptOrdinal : undefined;
+  }
+
   #isTerminal(): boolean {
     return this.#status === "completed" || this.#status === "cancelled";
   }

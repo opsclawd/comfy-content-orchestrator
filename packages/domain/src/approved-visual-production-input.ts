@@ -226,8 +226,13 @@ export function verifyApprovedVisualProductionInput(params: {
 }): ApprovedVisualProductionInput {
   const { candidate, scene, job } = params;
 
+  const isFrameAnchored = scene.productionRoutingMode === "frame_anchored";
+
   // 1. Missing candidate selection
-  if (scene.selectedCandidateId === undefined || scene.selectedCandidateRevision === undefined) {
+  if (
+    !isFrameAnchored &&
+    (scene.selectedCandidateId === undefined || scene.selectedCandidateRevision === undefined)
+  ) {
     throw new MissingCandidateSelectionError(
       scene.id,
       scene.selectedCandidateId,
@@ -236,7 +241,7 @@ export function verifyApprovedVisualProductionInput(params: {
   }
 
   // 2. Scene selected candidate ID mismatch
-  if (scene.selectedCandidateId !== candidate.id) {
+  if (!isFrameAnchored && scene.selectedCandidateId !== candidate.id) {
     throw new CandidateIdentityMismatchError(
       candidate.id,
       scene.selectedCandidateId,
@@ -276,12 +281,12 @@ export function verifyApprovedVisualProductionInput(params: {
   }
 
   // 7. Selected candidate revision mismatch
-  if (scene.selectedCandidateRevision !== candidate.specRevision) {
+  if (!isFrameAnchored && scene.selectedCandidateRevision !== candidate.specRevision) {
     throw new SelectedCandidateRevisionMismatchError(
       candidate.id,
       scene.id,
       candidate.specRevision,
-      scene.selectedCandidateRevision
+      scene.selectedCandidateRevision!
     );
   }
 
