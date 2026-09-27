@@ -7,6 +7,7 @@ import {
   LtxRenderProfileSchema,
   LtxI2vRenderProfileSchema,
   MinimaxH3I2vRenderProfileSchema,
+  MinimaxH3Ref2vRenderProfileSchema,
   RenderProfileKeySchema,
   LTX_25_720P_5S_V1_PROFILE,
   LTX_25_720P_5S_I2V_V1_PROFILE,
@@ -231,6 +232,37 @@ describe("RenderProfileSchema", () => {
     const certJson = JSON.parse(certContent);
 
     expect(MINIMAX_H3_720P_5S_I2V_V1_PROFILE.modelHashes).toEqual(certJson.identity.modelSha256);
+  });
+
+  it("validates that config/render-profiles/MINIMAX_H3_720P_5S_REF2V_V1.json matches schema and constant", async () => {
+    const jsonPath = resolve(
+      fileURLToPath(
+        new URL("../../../config/render-profiles/MINIMAX_H3_720P_5S_REF2V_V1.json", import.meta.url)
+      )
+    );
+    const content = await readFile(jsonPath, "utf8");
+    const parsedJson = JSON.parse(content);
+
+    const validated = MinimaxH3Ref2vRenderProfileSchema.parse(parsedJson);
+    expect(validated).toEqual(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE);
+  });
+
+  it("verifies frozen MiniMax-H3 Ref2V modelHashes strictly match host-validated minimax-ref2v-cert-run-001 artifact", async () => {
+    const certPath = resolve(
+      fileURLToPath(
+        new URL(
+          "../../../certification/minimax-h3/minimax-ref2v-cert-run-001/result.json",
+          import.meta.url
+        )
+      )
+    );
+    const certContent = await readFile(certPath, "utf8");
+    const certJson = JSON.parse(certContent);
+
+    expect(certJson.status).toBe("passed");
+    expect(certJson.gate.passed).toBe(true);
+    expect(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE.modelHashes).toEqual(certJson.identity.modelSha256);
+    expect(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE.workflowHash).toBe(certJson.identity.workflowSha256);
   });
 
   it("accepts a compliant FLUX profile", () => {
@@ -461,10 +493,11 @@ describe("RenderProfileSchema", () => {
       expect(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE.maxConcurrentGpuJobs).toBe(1);
       expect(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE.requiresModelOffloading).toBe(true);
 
-      // Certification invariant: unmeasured in repository, never falsely certified
-      expect(isProfileCertified(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE)).toBe(false);
-      expect(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE.measuredPeakVramMb).toBeUndefined();
-      expect(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE.measuredTotalDurationMs).toBeUndefined();
+      // Certified on the pinned RTX 4090 render host (issue #329): N=0, N=1, N=2, and a
+      // repeated N=2 stability run all passed with consistent resource usage.
+      expect(isProfileCertified(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE)).toBe(true);
+      expect(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE.measuredPeakVramMb).toBe(21738);
+      expect(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE.measuredTotalDurationMs).toBe(421875);
 
       // Injection topology checks
       const topology = getProfileInjectionTopology("MINIMAX_H3_720P_5S_REF2V_V1");
