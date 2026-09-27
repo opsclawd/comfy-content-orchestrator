@@ -63,6 +63,38 @@ This is real evidence that the pinned node conditions on reference *content*,
 not just reference *presence* — closing the gap left by the earlier
 plumbing-only smoke tests for issue #329's "representative reference-role
 combinations execute and are visually sanity-checked" acceptance criterion.
-A follow-up wide-establishing-shot run (different prompt framing, same four
-references) was submitted to check whether location/product/style references
-become more visible in a scene shot rather than a tight portrait.
+
+## Follow-up: wide establishing shot (same 4 references, different framing)
+
+The portrait shot above is tightly framed, so it can't show whether the
+location/product/style references have any visible influence beyond the
+dominant subject reference. To check that, the same four reference images
+were resubmitted directly against the pinned ComfyUI instance (bypassing
+`certify.ts`'s harness, since this is an exploratory visual check rather
+than a resource/duration certification run) with a different prompt asking
+for a wide, full-body establishing shot instead of a close-up. The exact
+submitted graph is saved as `wide-shot-workflow.json`; the output is
+`wide-shot-frame.png` (frame 60 of `minimax_h3_720p_ref2v_124f_00013_.mp4`).
+
+Result: markedly stronger cross-reference influence than the portrait shot:
+
+- **Subject** (dreadlocks, dark skin tone): full body now visible from
+  behind, with matching textured/dreadlock hair and skin tone — consistent
+  identity carried through even in a different pose and framing.
+- **Location** (Port of Spain aerial waterfront): the standout result. The
+  generated scene is a **colorful Caribbean coastal town street** — yellow
+  buildings with white balconies and red roofs, palm trees, ocean visible at
+  the end of the street. The architecture style and color palette closely
+  echo the reference photo's tropical waterfront aesthetic, even though the
+  reference was an aerial shot and the output is street-level. This is the
+  clearest evidence yet that a non-subject reference measurably steers
+  generated content, not just the dominant identity reference.
+- **Product** (Angostura bottles) and **style** (steel pan drum): still no
+  literal presence in this frame. Across both test frames, these two
+  references have not visibly manifested — plausibly because with 4 active
+  references the model still weights the subject and scene-setting
+  references most heavily, or because a single frame can't capture every
+  reference's influence. This is not evidence they're being ignored (the
+  earlier SHA-256 differential test already proved the node consumes
+  distinct image content per slot), just that this specific visual spot-check
+  didn't happen to surface them.
