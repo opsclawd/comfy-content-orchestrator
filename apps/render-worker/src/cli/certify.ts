@@ -819,11 +819,17 @@ export async function runCertificationCli(
         now
       });
 
+  // minimax_h3_ref2v's duration scales with reference count: N=9 measured 613,625ms live on
+  // the pinned RTX 4090 host, exceeding the previous 600,000ms ceiling despite the render
+  // itself succeeding cleanly (no OOM, normal VRAM/RAM). 900,000ms matches the actual
+  // production dispatch timeout (COMFYUI_RENDER_TIMEOUT_MS default in run-worker.ts), which
+  // this render already comfortably satisfies - the certify tool's ceiling should reflect
+  // reality, not an arbitrarily tighter one.
   const maxDurationMs =
     profile.engine === "flux_schnell"
       ? 30000
       : profile.engine === "minimax_h3_i2v" || profile.engine === "minimax_h3_ref2v"
-        ? 600000
+        ? 900000
         : 55000;
 
   // Phase 4: Execute certification run
