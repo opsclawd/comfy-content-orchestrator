@@ -174,11 +174,16 @@ export function isMiniMaxEngineOrProfile(engineOrProfile?: string | undefined): 
   return (
     normalized === "minimax_h3" ||
     normalized === "minimax_h3_i2v" ||
+    normalized === "minimax_h3_ref2v" ||
     normalized === "minimax-h3" ||
     normalized === "minimax-h3-i2v" ||
+    normalized === "minimax-h3-ref2v" ||
     normalized === "minimax_h3_720p_5s_i2v_v1" ||
     normalized === "minimax-h3-720p-5s-i2v-v1" ||
-    normalized === "minimax-h3-720p-124f-i2v"
+    normalized === "minimax-h3-720p-124f-i2v" ||
+    normalized === "minimax_h3_720p_5s_ref2v_v1" ||
+    normalized === "minimax-h3-720p-5s-ref2v-v1" ||
+    normalized === "minimax-h3-720p-124f-ref2v"
   );
 }
 

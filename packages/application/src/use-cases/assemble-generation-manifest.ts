@@ -133,6 +133,7 @@ export interface AssembleManifestInput {
   readonly lastFrame?: ManifestFrameAnchorEntry | undefined;
   readonly previsReviewEvidence?: ManifestPrevisReviewEvidence | undefined;
   readonly submittedWorkflowHash?: string | undefined;
+  readonly attemptId?: string | undefined;
 }
 
 export interface AssembleManifestResult {
@@ -969,6 +970,15 @@ export class AssembleGenerationManifest {
       engine,
       renderProfile,
       renderProfileVersion,
+      specRevision: scene.specRevision,
+      ...((input.attemptId ??
+        (typeof input.job.injectedPayload?.attemptId === "string"
+          ? input.job.injectedPayload.attemptId
+          : undefined)) !== undefined
+        ? {
+            attemptId: input.attemptId ?? (input.job.injectedPayload?.attemptId as string)
+          }
+        : {}),
       models: Object.freeze(models),
       workflow: Object.freeze(workflowIdentity),
       loras: Object.freeze(loras),

@@ -6,6 +6,7 @@ import type {
 } from "@cco/domain";
 
 export interface RecordProductionAttemptInput {
+  readonly attemptId?: string | undefined;
   readonly sceneId: SceneId;
   readonly runId: string | undefined;
   readonly ordinal: number;

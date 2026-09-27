@@ -19,7 +19,7 @@ const inMemoryStorage = new Map<
   { body: Uint8Array; contentType?: string | undefined; checksumSha256?: string | undefined }
 >();
 
-const testObjectStorage: ObjectStoragePort = {
+export const testObjectStorage: ObjectStoragePort = {
   putObject: async (input) => {
     inMemoryStorage.set(`${input.bucket}/${input.key}`, {
       body: input.body,

@@ -203,4 +203,116 @@ describe("canonicalizeReferenceBindings", () => {
     const result = canonicalizeReferenceBindings({ bindings: [], assetsById: new Map() });
     expect(result).toEqual([]);
   });
+
+  it("throws REFERENCE_ASSET_CLIENT_MISMATCH when asset does not belong to expectedClientId", () => {
+    const bindings: ReferenceBindingLike[] = [
+      { referenceAssetId: "asset-wrong-client", role: "subject_identity" }
+    ];
+    const assetsById = new Map<string, ReferenceAssetLike>([
+      ["asset-wrong-client", makeAsset("asset-wrong-client", { clientId: "client-other" })]
+    ]);
+
+    expect(() =>
+      canonicalizeReferenceBindings({
+        bindings,
+        assetsById,
+        expectedClientId: "client-001"
+      })
+    ).toThrow(ReferenceCanonicalizationError);
+
+    try {
+      canonicalizeReferenceBindings({
+        bindings,
+        assetsById,
+        expectedClientId: "client-001"
+      });
+    } catch (err) {
+      expect((err as ReferenceCanonicalizationError).code).toBe("REFERENCE_ASSET_CLIENT_MISMATCH");
+    }
+  });
+
+  it("throws REFERENCE_ASSET_CLIENT_MISMATCH when bindings span multiple clients", () => {
+    const bindings: ReferenceBindingLike[] = [
+      { referenceAssetId: "asset-1", role: "subject_identity" },
+      { referenceAssetId: "asset-2", role: "product" }
+    ];
+    const assetsById = new Map<string, ReferenceAssetLike>([
+      ["asset-1", makeAsset("asset-1", { clientId: "client-1" })],
+      ["asset-2", makeAsset("asset-2", { clientId: "client-2" })]
+    ]);
+
+    expect(() => canonicalizeReferenceBindings({ bindings, assetsById })).toThrow(
+      ReferenceCanonicalizationError
+    );
+  });
+
+  it("populates bindingId accurately from binding or composite key", () => {
+    const bindings: ReferenceBindingLike[] = [
+      {
+        referenceAssetId: "asset-1",
+        role: "subject_identity",
+        sceneId: "scene-100",
+        specRevision: 3
+      },
+      {
+        referenceAssetId: "asset-2",
+        role: "style",
+        bindingId: "custom-binding-uuid"
+      }
+    ];
+    const assetsById = new Map<string, ReferenceAssetLike>([
+      ["asset-1", makeAsset("asset-1")],
+      ["asset-2", makeAsset("asset-2")]
+    ]);
+
+    const result = canonicalizeReferenceBindings({ bindings, assetsById });
+    expect(result).toHaveLength(2);
+    expect(result[0]!.bindingId).toBe("scene-100:3:asset-1:subject_identity");
+    expect(result[1]!.bindingId).toBe("custom-binding-uuid");
+  });
+
+  it("throws REFERENCE_BINDING_SCENE_MISMATCH when binding belongs to different scene", () => {
+    const bindings: ReferenceBindingLike[] = [
+      { referenceAssetId: "asset-1", role: "subject_identity", sceneId: "other-scene" }
+    ];
+    const assetsById = new Map<string, ReferenceAssetLike>([["asset-1", makeAsset("asset-1")]]);
+
+    expect(() =>
+      canonicalizeReferenceBindings({
+        bindings,
+        assetsById,
+        expectedSceneId: "target-scene"
+      })
+    ).toThrow(ReferenceCanonicalizationError);
+  });
+
+  it("throws REFERENCE_ASSET_SCENE_MISMATCH when asset belongs to different scene", () => {
+    const bindings: ReferenceBindingLike[] = [
+      { referenceAssetId: "asset-1", role: "subject_identity" }
+    ];
+    const assetsById = new Map<string, ReferenceAssetLike>([
+      ["asset-1", { ...makeAsset("asset-1"), sceneId: "other-scene" }]
+    ]);
+
+    expect(() =>
+      canonicalizeReferenceBindings({
+        bindings,
+        assetsById,
+        expectedSceneId: "target-scene"
+      })
+    ).toThrow(ReferenceCanonicalizationError);
+  });
+
+  it("throws UNSUPPORTED_REFERENCE_MEDIA when asset has unsupported image mimeType (e.g. image/gif)", () => {
+    const bindings: ReferenceBindingLike[] = [
+      { referenceAssetId: "asset-1", role: "subject_identity" }
+    ];
+    const assetsById = new Map<string, ReferenceAssetLike>([
+      ["asset-1", makeAsset("asset-1", { mimeType: "image/gif" })]
+    ]);
+
+    expect(() => canonicalizeReferenceBindings({ bindings, assetsById })).toThrow(
+      ReferenceCanonicalizationError
+    );
+  });
 });

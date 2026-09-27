@@ -700,6 +700,7 @@ export class Scene {
     shotPlanId?: ShotPlanId;
     shotPlanRevision?: number;
     shotPlanSceneId?: SceneId;
+    routingMode?: "reference_directed" | "frame_anchored";
     approvedBy: string;
     approvedAt: string;
   }): SceneTransition {
@@ -766,8 +767,15 @@ export class Scene {
     return this.#transition("approveShotPlan", ["director_review"], "approved", "approved", () => {
       this.#approvedShotPlanId = targetShotPlanId;
       this.#approvedShotPlanRevision = this.#specRevision;
+      if (input.routingMode) {
+        this.#productionRoutingMode = input.routingMode;
+      }
       this.#approval = approval;
     });
+  }
+
+  setProductionRoutingMode(mode: "reference_directed" | "frame_anchored"): void {
+    this.#productionRoutingMode = mode;
   }
 
   approve(input: SceneApprovalInput): SceneTransition {

@@ -21,12 +21,16 @@ import {
   type SceneRepository,
   type ShotPlanRepository,
   type StagedComfyUiInput,
-  type StoryboardCandidateRepository
+  type StoryboardCandidateRepository,
+  type CampaignRepository,
+  type ImageInspectionPort,
+  parseImageByteHeader
 } from "@cco/application";
 import {
   Scene,
   ShotPlan,
   type CampaignId,
+  type CampaignRecord,
   type CandidateId,
   type JobId,
   type LeaseToken,
@@ -3034,7 +3038,10 @@ describe("Certified Render Job Executor", () => {
         updatedAt: "2026-09-25T00:00:00Z"
       });
 
-      const refBytes = new Uint8Array([10, 20, 30]);
+      const refBytes = new Uint8Array([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0,
+        0, 10, 0, 0, 0, 10, 8, 2, 0, 0, 0
+      ]);
       const refHash = createHash("sha256").update(refBytes).digest("hex");
 
       const fakeReferenceAsset: DomainReferenceAsset = {
@@ -3131,6 +3138,34 @@ describe("Certified Render Job Executor", () => {
         findById: vi.fn().mockResolvedValue(mockSceneDomain),
         save: vi.fn()
       };
+      const mockCampaignRepo = {
+        findById: vi.fn().mockResolvedValue({ id: "campaign-1", clientId: "client-001" })
+      } as unknown as CampaignRepository<CampaignRecord>;
+
+      const mockImageValidator: ImageInspectionPort = {
+        inspectAndValidate: vi
+          .fn()
+          .mockImplementation(async (buf: Uint8Array, declaredMime: string) => {
+            if (buf.length < 24) {
+              throw new Error("Malformed or unparseable image buffer: premature end of file");
+            }
+            const header = parseImageByteHeader(buf);
+            if (!header) {
+              throw new Error("Malformed or unparseable image buffer: unrecognized image format");
+            }
+            if (header.mimeType !== declaredMime) {
+              throw new Error(
+                `MIME type mismatch: declared Content-Type "${declaredMime}" does not match detected format "${header.mimeType}".`
+              );
+            }
+            return {
+              detectedMimeType: header.mimeType,
+              width: header.width,
+              height: header.height,
+              byteLength: buf.byteLength
+            };
+          })
+      };
 
       const executor = createCertifiedRenderJobExecutor({
         loadCertificationProfile: async () => fakeMinimaxRef2vProfile,
@@ -3202,10 +3237,12 @@ describe("Certified Render Job Executor", () => {
           ])
         ),
         sceneRepository: mockSceneRepo,
+        campaignRepository: mockCampaignRepo,
         shotPlanRepository: mockShotPlanRepo,
         referenceAssetRepository: mockRefAssetRepo,
         objectStorage: mockStorage,
         stageReferenceImage: { stage: mockStage, cleanup: mockCleanup },
+        imageValidator: mockImageValidator,
         productionManifestAssembler: { assemble: mockManifestAssembler }
       });
 
@@ -3365,6 +3402,34 @@ describe("Certified Render Job Executor", () => {
           findById: vi.fn().mockResolvedValue(mockSceneDomain),
           save: vi.fn()
         };
+        const mockCampaignRepo = {
+          findById: vi.fn().mockResolvedValue({ id: "campaign-1", clientId: "client-001" })
+        } as unknown as CampaignRepository<CampaignRecord>;
+
+        const mockImageValidator: ImageInspectionPort = {
+          inspectAndValidate: vi
+            .fn()
+            .mockImplementation(async (buf: Uint8Array, declaredMime: string) => {
+              if (buf.length < 24) {
+                throw new Error("Malformed or unparseable image buffer: premature end of file");
+              }
+              const header = parseImageByteHeader(buf);
+              if (!header) {
+                throw new Error("Malformed or unparseable image buffer: unrecognized image format");
+              }
+              if (header.mimeType !== declaredMime) {
+                throw new Error(
+                  `MIME type mismatch: declared Content-Type "${declaredMime}" does not match detected format "${header.mimeType}".`
+                );
+              }
+              return {
+                detectedMimeType: header.mimeType,
+                width: header.width,
+                height: header.height,
+                byteLength: buf.byteLength
+              };
+            })
+        };
 
         const createExecutor = (overrides?: Partial<RenderJobExecutorDependencies>) =>
           createCertifiedRenderJobExecutor({
@@ -3432,8 +3497,10 @@ describe("Certified Render Job Executor", () => {
               new Map([["render.mp4", { bytes: new Uint8Array([1]), contentType: "video/mp4" }]])
             ),
             sceneRepository: mockSceneRepo,
+            campaignRepository: mockCampaignRepo,
             shotPlanRepository: mockShotPlanRepo,
             referenceAssetRepository: mockRefAssetRepo,
+            imageValidator: mockImageValidator,
             productionManifestAssembler: { assemble: mockAssembler },
             ...overrides
           });
@@ -3456,6 +3523,7 @@ describe("Certified Render Job Executor", () => {
           mockRefAssetRepo,
           mockSceneRepo,
           mockSceneDomain,
+          mockCampaignRepo,
           shotPlanId
         };
       };
@@ -3493,6 +3561,38 @@ describe("Certified Render Job Executor", () => {
         const executor = createExecutor({ referenceAssetRepository: repoWithoutBindings });
         await expect(executor(validJob)).rejects.toThrow(
           "referenceAssetRepository.listBindingsBySceneId is required for reference-directed execution"
+        );
+      });
+
+      it("fails closed when campaignRepository is missing", async () => {
+        const { createExecutor, validJob } = await createValidRef2vSetup();
+        const executor = createExecutor({ campaignRepository: undefined });
+        await expect(executor(validJob)).rejects.toThrow(
+          "campaignRepository dependency is required for reference-directed execution"
+        );
+      });
+
+      it("fails closed when campaign is not found in campaignRepository", async () => {
+        const { createExecutor, validJob } = await createValidRef2vSetup();
+        const executor = createExecutor({
+          campaignRepository: {
+            findById: vi.fn().mockResolvedValue(undefined)
+          } as unknown as CampaignRepository<CampaignRecord>
+        });
+        await expect(executor(validJob)).rejects.toThrow(
+          /Campaign "campaign-1" not found or lacks clientId in campaignRepository/
+        );
+      });
+
+      it("fails closed when campaign lacks clientId in campaignRepository", async () => {
+        const { createExecutor, validJob } = await createValidRef2vSetup();
+        const executor = createExecutor({
+          campaignRepository: {
+            findById: vi.fn().mockResolvedValue({ id: "campaign-1", clientId: "" })
+          } as unknown as CampaignRepository<CampaignRecord>
+        });
+        await expect(executor(validJob)).rejects.toThrow(
+          /Campaign "campaign-1" not found or lacks clientId in campaignRepository/
         );
       });
 
@@ -3751,6 +3851,242 @@ describe("Certified Render Job Executor", () => {
         ]);
         const executor = createExecutor();
         await expect(executor(validJob)).rejects.toThrow(ReferenceCanonicalizationError);
+      });
+
+      it("fails closed when reference asset client does not match campaign client", async () => {
+        const { createExecutor, validJob, mockRefAssetRepo, fakeAsset } =
+          await createValidRef2vSetup();
+        const foreignAsset: DomainReferenceAsset = {
+          ...fakeAsset,
+          clientId: "foreign-client-999"
+        };
+        (mockRefAssetRepo.listBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([
+          foreignAsset
+        ]);
+        (mockRefAssetRepo.findByIds as ReturnType<typeof vi.fn>).mockResolvedValue([foreignAsset]);
+        (mockRefAssetRepo.listBindingsBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([
+          {
+            sceneId: sampleSceneId,
+            specRevision: 1,
+            referenceAssetId: foreignAsset.id,
+            role: "subject_identity",
+            weight: 1,
+            hints: null,
+            archivedAt: null
+          }
+        ]);
+        const executor = createExecutor();
+        await expect(executor(validJob)).rejects.toThrow(ReferenceCanonicalizationError);
+      });
+
+      it("fails closed when reference image bytes are corrupted / invalid header", async () => {
+        const { createExecutor, validJob, mockRefAssetRepo, fakeAsset } =
+          await createValidRef2vSetup();
+        (mockRefAssetRepo.listBindingsBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([
+          {
+            sceneId: sampleSceneId,
+            specRevision: 1,
+            referenceAssetId: fakeAsset.id,
+            role: "subject_identity",
+            weight: 1,
+            hints: null,
+            archivedAt: null
+          }
+        ]);
+        const corruptBytes = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        const mockStorage: ObjectStoragePort = {
+          getObject: vi.fn().mockResolvedValue({
+            body: corruptBytes,
+            contentLength: corruptBytes.byteLength,
+            contentType: "image/png"
+          }),
+          putObject: vi.fn(),
+          deleteObject: vi.fn(),
+          copyObject: vi.fn(),
+          headObject: vi.fn()
+        };
+        const executor = createExecutor({
+          objectStorage: mockStorage,
+          stageReferenceImage: { stage: vi.fn(), cleanup: vi.fn() }
+        });
+        await expect(executor(validJob)).rejects.toThrow(
+          /has unknown or unsupported image format magic bytes/
+        );
+      });
+
+      it("fails closed when imageValidator dependency is missing for reference staging", async () => {
+        const { createExecutor, validJob, mockRefAssetRepo, fakeAsset } =
+          await createValidRef2vSetup();
+        (mockRefAssetRepo.listBindingsBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([
+          {
+            sceneId: sampleSceneId,
+            specRevision: 1,
+            referenceAssetId: fakeAsset.id,
+            role: "subject_identity",
+            weight: 1,
+            hints: null,
+            archivedAt: null
+          }
+        ]);
+        const executor = createExecutor({
+          objectStorage: { getObject: vi.fn() } as unknown as ObjectStoragePort,
+          imageValidator: undefined,
+          imageInspectionPort: undefined,
+          stageReferenceImage: { stage: vi.fn(), cleanup: vi.fn() }
+        });
+        await expect(executor(validJob)).rejects.toThrow(
+          "imageValidator dependency is required for reference image staging"
+        );
+      });
+
+      it("fails closed before ComfyUI when reference image decode validation fails (corrupt image payload with valid header)", async () => {
+        const { createExecutor, validJob, mockRefAssetRepo, fakeAsset } =
+          await createValidRef2vSetup();
+        (mockRefAssetRepo.listBindingsBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([
+          {
+            sceneId: sampleSceneId,
+            specRevision: 1,
+            referenceAssetId: fakeAsset.id,
+            role: "subject_identity",
+            weight: 1,
+            hints: null,
+            archivedAt: null
+          }
+        ]);
+        // Valid 29-byte PNG header so parseImageByteHeader passes, but truncated payload fails decode
+        const validHeaderCorruptData = new Uint8Array([
+          0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0,
+          0, 10, 0, 0, 0, 10, 8, 2, 0, 0, 0
+        ]);
+        const testHash = createHash("sha256").update(validHeaderCorruptData).digest("hex");
+        const corruptAsset = { ...fakeAsset, contentHashSha256: testHash };
+        (mockRefAssetRepo.listBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([
+          corruptAsset
+        ]);
+        (mockRefAssetRepo.findByIds as ReturnType<typeof vi.fn>).mockResolvedValue([corruptAsset]);
+
+        const mockStorage: ObjectStoragePort = {
+          getObject: vi.fn().mockResolvedValue({
+            body: validHeaderCorruptData,
+            contentLength: validHeaderCorruptData.byteLength,
+            contentType: "image/png"
+          }),
+          putObject: vi.fn(),
+          deleteObject: vi.fn(),
+          copyObject: vi.fn(),
+          headObject: vi.fn()
+        };
+        const mockDecodeFailValidator: ImageInspectionPort = {
+          inspectAndValidate: vi
+            .fn()
+            .mockRejectedValue(
+              new Error("Malformed or unparseable image buffer: CRC error in chunk IDAT")
+            )
+        };
+        const mockStage = vi.fn();
+        const mockExecute = vi.fn();
+        const executor = createExecutor({
+          objectStorage: mockStorage,
+          stageReferenceImage: { stage: mockStage, cleanup: vi.fn() },
+          imageValidator: mockDecodeFailValidator,
+          executeProfileRender: mockExecute
+        });
+        await expect(executor(validJob)).rejects.toThrow(/decode validation failed/);
+        expect(mockStage).not.toHaveBeenCalled();
+        expect(mockExecute).not.toHaveBeenCalled();
+      });
+
+      it("fails closed when reference image detected format does not match declared MIME", async () => {
+        const { createExecutor, validJob, mockRefAssetRepo, fakeAsset } =
+          await createValidRef2vSetup();
+        const jpegAsset: DomainReferenceAsset = {
+          ...fakeAsset,
+          mimeType: "image/jpeg"
+        };
+        (mockRefAssetRepo.listBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([jpegAsset]);
+        (mockRefAssetRepo.findByIds as ReturnType<typeof vi.fn>).mockResolvedValue([jpegAsset]);
+        (mockRefAssetRepo.listBindingsBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([
+          {
+            sceneId: sampleSceneId,
+            specRevision: 1,
+            referenceAssetId: jpegAsset.id,
+            role: "subject_identity",
+            weight: 1,
+            hints: null,
+            archivedAt: null
+          }
+        ]);
+        // PNG bytes but declared image/jpeg
+        const validPngBytes = new Uint8Array([
+          0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0,
+          0, 10, 0, 0, 0, 10, 8, 2, 0, 0, 0
+        ]);
+        const mockStorage: ObjectStoragePort = {
+          getObject: vi.fn().mockResolvedValue({
+            body: validPngBytes,
+            contentLength: validPngBytes.byteLength,
+            contentType: "image/jpeg"
+          }),
+          putObject: vi.fn(),
+          deleteObject: vi.fn(),
+          copyObject: vi.fn(),
+          headObject: vi.fn()
+        };
+        const executor = createExecutor({
+          objectStorage: mockStorage,
+          stageReferenceImage: { stage: vi.fn(), cleanup: vi.fn() }
+        });
+        await expect(executor(validJob)).rejects.toThrow(
+          /detected format "image\/png" does not match declared MIME "image\/jpeg"/
+        );
+      });
+
+      it("fails closed when reference image byte dimensions do not match asset declared dimensions", async () => {
+        const { createExecutor, validJob, mockRefAssetRepo, fakeAsset } =
+          await createValidRef2vSetup();
+        const dimensionedAsset: DomainReferenceAsset = {
+          ...fakeAsset,
+          width: 500,
+          height: 500
+        };
+        (mockRefAssetRepo.listBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([
+          dimensionedAsset
+        ]);
+        (mockRefAssetRepo.findByIds as ReturnType<typeof vi.fn>).mockResolvedValue([
+          dimensionedAsset
+        ]);
+        (mockRefAssetRepo.listBindingsBySceneId as ReturnType<typeof vi.fn>).mockResolvedValue([
+          {
+            sceneId: sampleSceneId,
+            specRevision: 1,
+            referenceAssetId: dimensionedAsset.id,
+            role: "subject_identity",
+            weight: 1,
+            hints: null,
+            archivedAt: null
+          }
+        ]);
+        // 10x10 PNG bytes
+        const validPngBytes = new Uint8Array([
+          0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0,
+          0, 10, 0, 0, 0, 10, 8, 2, 0, 0, 0
+        ]);
+        const mockStorage: ObjectStoragePort = {
+          getObject: vi.fn().mockResolvedValue({
+            body: validPngBytes,
+            contentLength: validPngBytes.byteLength,
+            contentType: "image/png"
+          }),
+          putObject: vi.fn(),
+          deleteObject: vi.fn(),
+          copyObject: vi.fn(),
+          headObject: vi.fn()
+        };
+        const executor = createExecutor({
+          objectStorage: mockStorage,
+          stageReferenceImage: { stage: vi.fn(), cleanup: vi.fn() }
+        });
+        await expect(executor(validJob)).rejects.toThrow(/width mismatch: expected 500, got 10/);
       });
 
       it("fails closed on topology drift when a declared template node is missing or has wrong class_type", async () => {
@@ -4035,9 +4371,41 @@ describe("Certified Render Job Executor", () => {
         const mockStorage: ObjectStoragePort = {
           getObject: vi.fn().mockImplementation(async (input: { key: string }) => {
             const isFirst = input.key.includes("hero");
+            const body = new Uint8Array([
+              0x89,
+              0x50,
+              0x4e,
+              0x47,
+              0x0d,
+              0x0a,
+              0x1a,
+              0x0a,
+              0,
+              0,
+              0,
+              13,
+              0x49,
+              0x48,
+              0x44,
+              0x52,
+              0,
+              0,
+              0,
+              10,
+              0,
+              0,
+              0,
+              10,
+              8,
+              2,
+              0,
+              0,
+              0,
+              isFirst ? 1 : 2
+            ]);
             return {
-              body: new Uint8Array([isFirst ? 1 : 2]),
-              contentLength: 1,
+              body,
+              contentLength: body.byteLength,
               contentType: "image/png"
             };
           }),
@@ -4054,7 +4422,7 @@ describe("Certified Render Job Executor", () => {
           stageReferenceImage: { stage: mockStage, cleanup: mockCleanup },
           hashBytes: {
             hashBytes: async (bytes: Uint8Array) =>
-              bytes[0] === 1 ? "a".repeat(64) : "b".repeat(64)
+              bytes[bytes.length - 1] === 1 ? "a".repeat(64) : "b".repeat(64)
           }
         });
 
@@ -4161,6 +4529,405 @@ describe("Certified Render Job Executor", () => {
         expect(mockAssembler).toHaveBeenCalledTimes(1);
         const manifestArgs = mockAssembler.mock.calls[0]![0];
         expect(manifestArgs.referenceImages).toEqual([]);
+      });
+    });
+
+    describe("MiniMax-H3 I2V frame-anchored execution", () => {
+      const sampleH3I2vWorkflowHash = "1".repeat(64);
+      const fakeH3I2vProfile: CertificationProfile = {
+        id: "minimax-h3-720p-124f-i2v",
+        engine: "minimax_h3_i2v",
+        workflowPath: "/templates/minimax_h3_720p_i2v_124f_api.json",
+        workflowRelativePath: "minimax_h3_720p_i2v_124f_api.json",
+        expectedWorkflowHash: sampleH3I2vWorkflowHash,
+        source: {
+          kind: "validated_host_export",
+          uri: "https://github.com/comfyanonymous/ComfyUI",
+          revision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+          license: "GPL-3.0"
+        },
+        baseline: {
+          width: 1280,
+          height: 720,
+          frames: 124,
+          steps: 20,
+          approximateDurationSeconds: 5
+        },
+        minFreeDiskGb: 50,
+        runnerProfile: "dynamicvram-offload-v1",
+        models: [],
+        assertions: [],
+        renderProfileIdentity: {
+          key: "MINIMAX_H3_720P_5S_I2V_V1",
+          version: 1
+        }
+      };
+
+      const fakeRawH3I2vWorkflow = JSON.stringify({
+        "15": {
+          inputs: { noise_seed: 42 },
+          class_type: "RandomNoise"
+        },
+        "20": {
+          inputs: { image: "reference_frame.png", upload: "image" },
+          class_type: "LoadImage"
+        },
+        "104": {
+          inputs: {
+            prompt: "Positive prompt",
+            length: 124,
+            width: 1280,
+            height: 720,
+            image: ["20", 0]
+          },
+          class_type: "MiniMaxH3ImageToVideo"
+        }
+      });
+
+      const fakeH3I2vProvenance: CertificationProvenanceReport = {
+        version: 1,
+        profileId: "minimax-h3-720p-124f-i2v",
+        generatedAt: "2026-09-25T00:00:00Z",
+        models: [],
+        git: { comfyUiCommit: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc", customNodes: [] },
+        disk: {
+          modelFootprintBytes: 0,
+          availableBytes: 100_000_000_000,
+          requiredFreeBytes: 0,
+          modelFootprintGb: 0,
+          availableGb: 100,
+          minFreeDiskGb: 50,
+          passes: true
+        },
+        workflow: {
+          relativePath: "minimax_h3_720p_i2v_124f_api.json",
+          sha256: sampleH3I2vWorkflowHash,
+          source: {
+            kind: "validated_host_export",
+            uri: "https://github.com/comfyanonymous/ComfyUI",
+            revision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+            license: "GPL-3.0"
+          }
+        },
+        renderProfileProvenance: {
+          key: "MINIMAX_H3_720P_5S_I2V_V1",
+          version: 1,
+          engine: "minimax_h3_i2v",
+          workflowHash: sampleH3I2vWorkflowHash,
+          frames: 124,
+          steps: 20,
+          runnerProfile: "dynamicvram-offload-v1",
+          measuredDiskFootprintGb: 10,
+          minFreeDiskGb: 50,
+          modelHashes: {}
+        }
+      };
+
+      it("executes frame-anchored production render: validates ShotPlan continuity, stages candidate frame, passes firstFrame to manifest assembler, and isolates previs", async () => {
+        const shotPlanId = "shotplan-fa-1";
+        const candidateId = "cand-fa-1" as CandidateId;
+        const candidateHash = "c".repeat(64);
+        const candidateBytes = Buffer.from("frame anchor candidate bytes");
+
+        const fakeShotPlanDomain = ShotPlan.create({
+          id: shotPlanId as ShotPlanId,
+          sceneId: sampleSceneId,
+          specRevision: 1,
+          variantOrdinal: 1,
+          status: "approved",
+          routingMode: "frame_anchored",
+          targetDurationMs: 5000,
+          targetFrameCount: 124,
+          framing: "medium",
+          angle: "eye_level",
+          lensIntent: "50mm",
+          cameraPosition: "tripod front",
+          cameraMovement: "static",
+          movementSpeed: "slow",
+          cameraPromptDescription: "Static eye-level shot",
+          actionSummary: "Frame anchored action",
+          lightingStyle: "natural_golden_hour",
+          environmentDescription: "Studio set",
+          continuity: {
+            incomingContinuityFromSceneId: null,
+            persistentSubjectIds: [],
+            lightingContinuityNote: null,
+            frameAnchorTarget: "first_frame",
+            anchorCandidateId: candidateId,
+            anchorMediaHashSha256: candidateHash
+          },
+          previs: {
+            candidateId: "previs-cand-001",
+            contentHashSha256: "b".repeat(64),
+            modelProfile: "test-profile",
+            storageBucket: "godzspeed-review",
+            storageObjectKey: "previs/still.webp",
+            generatedAt: "2026-09-25T00:00:00Z"
+          }
+        });
+
+        const mockShotPlanRepo: ShotPlanRepository = {
+          findById: vi.fn().mockResolvedValue(fakeShotPlanDomain),
+          save: vi.fn(),
+          saveMany: vi.fn(),
+          listBySceneAndRevision: vi.fn(),
+          listByScene: vi.fn()
+        };
+
+        const mockResolvedMedia = {
+          input: {
+            candidateId,
+            sceneId: sampleSceneId,
+            specRevision: 1,
+            variantOrdinal: 1,
+            contentHashSha256: candidateHash
+          },
+          media: {
+            bucket: "cco-media",
+            key: "candidates/frame.png",
+            sha256: candidateHash,
+            contentType: "image/png"
+          }
+        };
+
+        const mockStorage: ObjectStoragePort = {
+          getObject: vi.fn().mockResolvedValue({
+            body: candidateBytes,
+            contentLength: candidateBytes.byteLength,
+            contentType: "image/png"
+          }),
+          putObject: vi.fn().mockResolvedValue(undefined),
+          deleteObject: vi.fn().mockResolvedValue(undefined),
+          copyObject: vi.fn(),
+          headObject: vi.fn()
+        };
+
+        const mockHashBytesPort = {
+          hashBytes: vi.fn().mockResolvedValue(candidateHash)
+        };
+
+        const mockStage = vi.fn().mockImplementation(async (req: { filename?: string }) => ({
+          name: req.filename ?? "staged_frame.png",
+          subfolder: "conditioning"
+        }));
+        const mockCleanup = vi.fn().mockResolvedValue(undefined);
+
+        const mockManifestAssembler = vi.fn().mockReturnValue({ manifestId: "fa-manifest-ok" });
+        const mockExecute = vi.fn().mockResolvedValue({
+          status: "succeeded",
+          promptId: "prompt-fa-1",
+          outputObjectKeys: ["renders/h3_i2v_output.mp4"],
+          durationMs: 5000,
+          profile: {} as ProfileRenderIdentity,
+          preDispatchGpu: {
+            totalVramMb: 24576,
+            usedVramMb: 4096,
+            freeVramMb: 20480,
+            reservedVramMb: 4096,
+            measuredAt: new Date().toISOString()
+          }
+        });
+
+        const executor = createCertifiedRenderJobExecutor({
+          loadCertificationProfile: async () => fakeH3I2vProfile,
+          readApprovedProvenance: async () => fakeH3I2vProvenance,
+          collectCertificationProvenance: async () => fakeH3I2vProvenance,
+          verifyGoldMasterProvenance: () => {},
+          readWorkflowFile: async () => fakeRawH3I2vWorkflow,
+          hashWorkflow: () => sampleH3I2vWorkflowHash,
+          executeProfileRender: mockExecute,
+          outputReader: new FakeOutputReader(
+            new Map([
+              [
+                "renders/h3_i2v_output.mp4",
+                { bytes: new Uint8Array([1, 2]), contentType: "video/mp4" }
+              ]
+            ])
+          ),
+          shotPlanRepository: mockShotPlanRepo,
+          resolveApprovedCandidateMedia: { execute: vi.fn().mockResolvedValue(mockResolvedMedia) },
+          objectStorage: mockStorage,
+          hashBytes: mockHashBytesPort,
+          stageReferenceImage: { stage: mockStage, cleanup: mockCleanup },
+          productionManifestAssembler: { assemble: mockManifestAssembler }
+        });
+
+        const job = createSampleProductionJob({
+          workflowTemplate: "minimax-h3-720p-124f-i2v",
+          injectedPayload: {
+            prompt: "Action prompt",
+            seed: 42,
+            approvedCandidateId: candidateId,
+            shotPlanId,
+            specRevision: 1,
+            frameCount: 124
+          }
+        });
+
+        const result = await executor(job);
+        expect(result).toBeDefined();
+
+        expect(mockStage).toHaveBeenCalledTimes(1);
+        expect(mockCleanup).toHaveBeenCalledTimes(1);
+
+        expect(mockManifestAssembler).toHaveBeenCalledTimes(1);
+        const assemblerCallArgs = mockManifestAssembler.mock.calls[0]![0];
+        expect(assemblerCallArgs.routingMode).toBe("frame_anchored");
+        expect(assemblerCallArgs.shotPlan).toEqual({
+          id: shotPlanId,
+          specRevision: 1
+        });
+        expect(assemblerCallArgs.firstFrame).toBeDefined();
+        expect(assemblerCallArgs.firstFrame.anchorType).toBe("first_frame");
+        expect(assemblerCallArgs.firstFrame.candidateId).toBe(candidateId);
+        expect(assemblerCallArgs.firstFrame.contentHashSha256).toBe(candidateHash);
+        expect(assemblerCallArgs.previsReviewEvidence).toBeDefined();
+        expect(assemblerCallArgs.previsReviewEvidence.candidateId).toBe("previs-cand-001");
+      });
+
+      it("fails closed when frame-anchored ShotPlan has frameAnchorTarget 'none'", async () => {
+        const shotPlanId = "shotplan-fa-badtarget";
+        const candidateId = "cand-fa-1" as CandidateId;
+        const fakeShotPlanDomain = ShotPlan.create({
+          id: shotPlanId as ShotPlanId,
+          sceneId: sampleSceneId,
+          specRevision: 1,
+          variantOrdinal: 1,
+          status: "approved",
+          routingMode: "frame_anchored",
+          targetDurationMs: 5000,
+          targetFrameCount: 124,
+          framing: "medium",
+          angle: "eye_level",
+          lensIntent: "50mm",
+          cameraPosition: "tripod front",
+          cameraMovement: "static",
+          movementSpeed: "slow",
+          cameraPromptDescription: "Static camera",
+          actionSummary: "Frame anchored action",
+          lightingStyle: "natural_golden_hour",
+          environmentDescription: "Studio set",
+          continuity: {
+            incomingContinuityFromSceneId: null,
+            persistentSubjectIds: [],
+            lightingContinuityNote: null,
+            frameAnchorTarget: "none",
+            anchorCandidateId: candidateId,
+            anchorMediaHashSha256: null
+          }
+        });
+
+        const executor = createCertifiedRenderJobExecutor({
+          loadCertificationProfile: async () => fakeH3I2vProfile,
+          readApprovedProvenance: async () => fakeH3I2vProvenance,
+          collectCertificationProvenance: async () => fakeH3I2vProvenance,
+          verifyGoldMasterProvenance: () => {},
+          readWorkflowFile: async () => fakeRawH3I2vWorkflow,
+          hashWorkflow: () => sampleH3I2vWorkflowHash,
+          executeProfileRender: vi.fn(),
+          shotPlanRepository: {
+            findById: vi.fn().mockResolvedValue(fakeShotPlanDomain),
+            save: vi.fn(),
+            saveMany: vi.fn(),
+            listBySceneAndRevision: vi.fn(),
+            listByScene: vi.fn()
+          },
+          resolveApprovedCandidateMedia: { execute: vi.fn() },
+          objectStorage: {
+            getObject: vi.fn(),
+            putObject: vi.fn(),
+            deleteObject: vi.fn(),
+            copyObject: vi.fn(),
+            headObject: vi.fn()
+          },
+          stageReferenceImage: { stage: vi.fn(), cleanup: vi.fn() }
+        });
+
+        const job = createSampleProductionJob({
+          workflowTemplate: "minimax-h3-720p-124f-i2v",
+          injectedPayload: {
+            prompt: "Action prompt",
+            seed: 42,
+            approvedCandidateId: candidateId,
+            shotPlanId,
+            specRevision: 1,
+            frameCount: 124
+          }
+        });
+
+        await expect(executor(job)).rejects.toThrow(RenderJobExecutionError);
+      });
+
+      it("fails closed when frame-anchored ShotPlan anchorCandidateId does not match injected approvedCandidateId", async () => {
+        const shotPlanId = "shotplan-fa-cand-mismatch";
+        const fakeShotPlanDomain = ShotPlan.create({
+          id: shotPlanId as ShotPlanId,
+          sceneId: sampleSceneId,
+          specRevision: 1,
+          variantOrdinal: 1,
+          status: "approved",
+          routingMode: "frame_anchored",
+          targetDurationMs: 5000,
+          targetFrameCount: 124,
+          framing: "medium",
+          angle: "eye_level",
+          lensIntent: "50mm",
+          cameraPosition: "tripod front",
+          cameraMovement: "static",
+          movementSpeed: "slow",
+          cameraPromptDescription: "Static camera",
+          actionSummary: "Frame anchored action",
+          lightingStyle: "natural_golden_hour",
+          environmentDescription: "Studio set",
+          continuity: {
+            incomingContinuityFromSceneId: null,
+            persistentSubjectIds: [],
+            lightingContinuityNote: null,
+            frameAnchorTarget: "first_frame",
+            anchorCandidateId: "different-cand" as CandidateId,
+            anchorMediaHashSha256: null
+          }
+        });
+
+        const executor = createCertifiedRenderJobExecutor({
+          loadCertificationProfile: async () => fakeH3I2vProfile,
+          readApprovedProvenance: async () => fakeH3I2vProvenance,
+          collectCertificationProvenance: async () => fakeH3I2vProvenance,
+          verifyGoldMasterProvenance: () => {},
+          readWorkflowFile: async () => fakeRawH3I2vWorkflow,
+          hashWorkflow: () => sampleH3I2vWorkflowHash,
+          executeProfileRender: vi.fn(),
+          shotPlanRepository: {
+            findById: vi.fn().mockResolvedValue(fakeShotPlanDomain),
+            save: vi.fn(),
+            saveMany: vi.fn(),
+            listBySceneAndRevision: vi.fn(),
+            listByScene: vi.fn()
+          },
+          resolveApprovedCandidateMedia: { execute: vi.fn() },
+          objectStorage: {
+            getObject: vi.fn(),
+            putObject: vi.fn(),
+            deleteObject: vi.fn(),
+            copyObject: vi.fn(),
+            headObject: vi.fn()
+          },
+          stageReferenceImage: { stage: vi.fn(), cleanup: vi.fn() }
+        });
+
+        const job = createSampleProductionJob({
+          workflowTemplate: "minimax-h3-720p-124f-i2v",
+          injectedPayload: {
+            prompt: "Action prompt",
+            seed: 42,
+            approvedCandidateId: "cand-fa-1" as CandidateId,
+            shotPlanId,
+            specRevision: 1,
+            frameCount: 124
+          }
+        });
+
+        await expect(executor(job)).rejects.toThrow(RenderJobExecutionError);
       });
     });
   });
