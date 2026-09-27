@@ -493,11 +493,14 @@ describe("RenderProfileSchema", () => {
       expect(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE.maxConcurrentGpuJobs).toBe(1);
       expect(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE.requiresModelOffloading).toBe(true);
 
-      // Certified on the pinned RTX 4090 render host (issue #329): N=0, N=1, N=2, and a
-      // repeated N=2 stability run all passed with consistent resource usage.
+      // Certified on the pinned RTX 4090 render host (issue #329): N=0, N=1, N=2, a repeated
+      // N=2 stability run, and N=9 (max reference slots) all passed with consistent VRAM/RAM
+      // usage. measuredTotalDurationMs reflects N=9's real-world worst case (duration scales
+      // with reference count); a mode-transition check confirmed the already-certified I2V
+      // profile is unaffected by running Ref2V (including N=9) immediately beforehand.
       expect(isProfileCertified(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE)).toBe(true);
       expect(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE.measuredPeakVramMb).toBe(21738);
-      expect(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE.measuredTotalDurationMs).toBe(421875);
+      expect(MINIMAX_H3_720P_5S_REF2V_V1_PROFILE.measuredTotalDurationMs).toBe(613570);
 
       // Injection topology checks
       const topology = getProfileInjectionTopology("MINIMAX_H3_720P_5S_REF2V_V1");
