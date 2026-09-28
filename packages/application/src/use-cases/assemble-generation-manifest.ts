@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { sortKeysDeep } from "@cco/shared";
 import {
   getProfileInjectionTopology,
   LTX_FPS,
@@ -134,6 +135,7 @@ export interface AssembleManifestInput {
   readonly previsReviewEvidence?: ManifestPrevisReviewEvidence | undefined;
   readonly submittedWorkflowHash?: string | undefined;
   readonly attemptId?: string | undefined;
+  readonly attemptOrdinal?: number | undefined;
 }
 
 export interface AssembleManifestResult {
@@ -240,7 +242,9 @@ export class AssembleGenerationManifest {
     const sceneId = input.job.sceneId;
 
     // 2. Render attempt & timestamp
-    const renderAttempt = input.job.retryCount + 1;
+    const sceneSnapshot = scene.snapshot();
+    const renderAttempt =
+      input.attemptOrdinal ?? sceneSnapshot.productionAttemptOrdinal ?? input.job.retryCount + 1;
     const provenance = input.provenance ?? input.liveProvenance;
     if (!provenance || !provenance.generatedAt) {
       throw new IncompleteManifestError("renderedAt");
@@ -255,7 +259,7 @@ export class AssembleGenerationManifest {
       throw new IncompleteManifestError("renderProfile");
     }
     const engine = input.profile.engine;
-    const renderProfile = input.profile.id;
+    const renderProfile = input.profile.renderProfileIdentity?.key ?? input.profile.id;
     // License-routing components are matched on (componentId, versionOrRevision)
     // — see execute-profile-render.ts's own requiredComponents construction.
     // Persisting the version here (not just the profile id string) lets
@@ -279,10 +283,18 @@ export class AssembleGenerationManifest {
     if (!provenance.workflow?.sha256) {
       throw new IncompleteManifestError("workflow.sha256");
     }
+    const submittedWorkflowHash =
+      input.submittedWorkflowHash ??
+      (input.routingMode && input.workflow
+        ? createHash("sha256")
+            .update(JSON.stringify(sortKeysDeep(input.workflow)), "utf8")
+            .digest("hex")
+        : undefined);
+
     const workflowIdentity = {
       templateId: input.profile.id,
       sha256: provenance.workflow.sha256,
-      ...(input.submittedWorkflowHash ? { submittedWorkflowHash: input.submittedWorkflowHash } : {})
+      ...(submittedWorkflowHash ? { submittedWorkflowHash } : {})
     };
 
     // 6. LoRA identities and strengths

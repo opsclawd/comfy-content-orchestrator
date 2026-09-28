@@ -7,11 +7,31 @@ import type {
 import type {
   CampaignId,
   CandidateId,
+  ReferenceRole,
   SceneConfiguration,
   SceneId,
   ShotPlanId,
   StoryboardCandidate
 } from "@cco/domain";
+
+export interface InternalSceneReferenceBindingWithStorage {
+  readonly referenceAssetId: string;
+  readonly sceneId: string;
+  readonly specRevision: number;
+  readonly role: ReferenceRole;
+  readonly libraryRole?: ReferenceRole | null | undefined;
+  readonly bindingOrder: number;
+  readonly weight?: number | null | undefined;
+  readonly hints?: Record<string, unknown> | null | undefined;
+  readonly displayName?: string | undefined;
+  readonly description?: string | null | undefined;
+  readonly width?: number | undefined;
+  readonly height?: number | undefined;
+  readonly mimeType?: string | undefined;
+  readonly contentHashSha256?: string | undefined;
+  readonly storageBucket: string;
+  readonly storageObjectKey: string;
+}
 
 export interface SceneReviewCandidateGroup {
   readonly specRevision: number;
@@ -36,6 +56,7 @@ export interface SceneReviewDetail {
   };
   readonly candidatesByRevision: readonly SceneReviewCandidateGroup[];
   readonly shotPlans?: readonly ShotPlanReviewItem[];
+  readonly referenceBindingsWithStorage?: readonly InternalSceneReferenceBindingWithStorage[];
   readonly allowedActions: readonly ReviewAction[];
 }
 

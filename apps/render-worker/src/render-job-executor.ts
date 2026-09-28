@@ -158,6 +158,7 @@ export interface AssembleProductionManifestInput {
     | undefined;
   readonly routingMode?: ShotPlanRoutingMode | undefined;
   readonly attemptId?: string | undefined;
+  readonly attemptOrdinal?: number | undefined;
   readonly shotPlan?: ManifestShotPlanReference | undefined;
   readonly executedInstruction?: ManifestExecutedInstruction | undefined;
   readonly referenceImages?: readonly ManifestReferenceImageEntry[] | undefined;
@@ -2070,6 +2071,7 @@ export function createCertifiedRenderJobExecutor(
                           }
                         }
                       : {}),
+                    submittedWorkflowHash: hashWorkflowFn(JSON.stringify(mutatedWorkflow)),
                     ...(previsReviewEvidence ? { previsReviewEvidence } : {})
                   }
                 : {}),

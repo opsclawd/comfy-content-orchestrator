@@ -212,20 +212,61 @@ export const reviewReadRoutes: FastifyPluginAsync<ReviewReadRoutesOptions> = asy
         }
       }
 
+      const referenceMediaMap = new Map<string, { available: boolean; url?: string }>();
+      if (detail.referenceBindingsWithStorage && detail.referenceBindingsWithStorage.length > 0) {
+        await Promise.all(
+          detail.referenceBindingsWithStorage.map(async (binding) => {
+            if (!binding.storageBucket || !binding.storageObjectKey || !binding.contentHashSha256) {
+              referenceMediaMap.set(binding.referenceAssetId, { available: false });
+              return;
+            }
+            if (mediaDelivery) {
+              try {
+                const url = await mediaDelivery.generatePresignedReadUrl({
+                  bucket: binding.storageBucket,
+                  key: binding.storageObjectKey,
+                  contentHash: binding.contentHashSha256
+                });
+                if (url) {
+                  referenceMediaMap.set(binding.referenceAssetId, { available: true, url });
+                  return;
+                }
+              } catch {
+                // signing failed or media unavailable
+              }
+            }
+            referenceMediaMap.set(binding.referenceAssetId, { available: false });
+          })
+        );
+      }
+
       const shotPlans = detail.shotPlans?.map((plan) => {
+        let previs = plan.previs;
         if (plan.previs?.candidateId) {
           const signedMedia = candidateMediaMap.get(plan.previs.candidateId);
           if (signedMedia) {
-            return {
-              ...plan,
-              previs: {
-                ...plan.previs,
-                media: signedMedia
-              }
+            previs = {
+              ...plan.previs,
+              media: signedMedia
             };
           }
         }
-        return plan;
+
+        const boundReferences = plan.boundReferences?.map((ref) => {
+          const media = referenceMediaMap.get(ref.referenceAssetId);
+          return {
+            ...ref,
+            previewUrl: media?.url ?? null,
+            previewAvailability: (media?.available ? "available" : "unavailable") as
+              "available" | "unavailable"
+          };
+        });
+
+        return {
+          ...plan,
+          ...(previs !== undefined ? { previs } : {}),
+          ...(boundReferences !== undefined ? { boundReferences } : {})
+        };
       });
 
       const readModel: SceneReviewDetailReadModel = {
@@ -236,6 +277,18 @@ export const reviewReadRoutes: FastifyPluginAsync<ReviewReadRoutesOptions> = asy
         configuration: {
           prompt: detail.configuration.prompt,
           referenceIds: [...detail.configuration.referenceIds],
+          ...(detail.configuration.referenceBindings !== undefined
+            ? {
+                referenceBindings: detail.configuration.referenceBindings.map((b) => ({
+                  sceneId: b.sceneId,
+                  specRevision: b.specRevision,
+                  referenceAssetId: b.referenceAssetId,
+                  role: b.role,
+                  ...(b.weight !== undefined ? { weight: b.weight } : {}),
+                  ...(b.hints !== undefined ? { hints: b.hints } : {})
+                }))
+              }
+            : {}),
           engineProfileId: detail.configuration.engineProfileId,
           durationMs: detail.configuration.durationMs,
           ...(detail.configuration.loraConfigurationId !== undefined

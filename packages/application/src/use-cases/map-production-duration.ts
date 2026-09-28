@@ -183,7 +183,8 @@ export function isMiniMaxEngineOrProfile(engineOrProfile?: string | undefined): 
     normalized === "minimax-h3-720p-124f-i2v" ||
     normalized === "minimax_h3_720p_5s_ref2v_v1" ||
     normalized === "minimax-h3-720p-5s-ref2v-v1" ||
-    normalized === "minimax-h3-720p-124f-ref2v"
+    normalized === "minimax-h3-720p-124f-ref2v" ||
+    normalized === "minimax-h3-720p@certified-v1"
   );
 }
 

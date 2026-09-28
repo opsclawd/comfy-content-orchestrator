@@ -68,7 +68,8 @@ export const ACCEPTED_PRODUCTION_ENGINE_PROFILE_IDS: ReadonlySet<string> = new S
   "minimax-h3-720p-5s-ref2v-v1",
   "minimax_h3_ref2v",
   "minimax_h3",
-  "minimax-h3"
+  "minimax-h3",
+  "minimax-h3-720p@certified-v1"
 ]);
 
 export interface EnqueueSceneProductionRenderOptions {

@@ -7,6 +7,7 @@ import type { CurrentProductionAttemptReadModel } from "../api/client";
 import { CandidateGallery } from "./candidate-gallery";
 import { ReviewCommandControls } from "./review-command-controls";
 import { ProductionReviewPanel } from "./production-review-panel";
+import { ShotPlanPanel } from "./shot-plan-panel";
 import {
   areCommandsDisabled,
   createInitialState,
@@ -187,6 +188,28 @@ export function SceneReviewDetailView({
                 )}
               </dd>
             </div>
+            {detail.selectedShotPlanId && (
+              <div className="definition-item">
+                <dt>Selected Shot Plan</dt>
+                <dd data-testid="selected-shot-plan-status">
+                  <code>{detail.selectedShotPlanId}</code>
+                  {detail.selectedShotPlanRevision !== undefined && (
+                    <span className="selection-revision-badge">
+                      {" "}
+                      (Revision {detail.selectedShotPlanRevision})
+                    </span>
+                  )}
+                </dd>
+              </div>
+            )}
+            {detail.approvedShotPlanId && (
+              <div className="definition-item">
+                <dt>Approved Shot Plan</dt>
+                <dd data-testid="approved-shot-plan-status">
+                  <code>{detail.approvedShotPlanId}</code>
+                </dd>
+              </div>
+            )}
           </dl>
         </section>
 
@@ -200,6 +223,21 @@ export function SceneReviewDetailView({
           onDetailChange={onDetailChange}
         />
       </div>
+
+      {/* Structured Shot Plans */}
+      {detail.shotPlans && detail.shotPlans.length > 0 && (
+        <ShotPlanPanel
+          shotPlans={detail.shotPlans}
+          selectedShotPlanId={detail.selectedShotPlanId}
+          approvedShotPlanId={detail.approvedShotPlanId}
+          currentSpecRevision={detail.specRevision}
+          candidatesByRevision={detail.candidatesByRevision}
+          allowedActions={detail.allowedActions}
+          state={state}
+          dispatch={dispatch}
+          disabled={disabled}
+        />
+      )}
 
       {/* Production Review Panel (when production attempt exists) */}
       <ProductionReviewPanel
