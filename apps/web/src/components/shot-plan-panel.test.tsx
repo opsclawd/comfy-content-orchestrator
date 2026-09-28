@@ -145,13 +145,15 @@ describe("ShotPlanPanel Component", () => {
     expect(html).toContain("Approve Intent");
   });
 
-  it("renders frame-anchored routing mode and authoritative anchor identity", () => {
+  it("renders frame-anchored routing mode and authoritative anchor identity when valid and confirmed", () => {
+    const candidateHash = "a".repeat(64);
     const plan = createSampleShotPlan({
       routingMode: "frame_anchored",
       continuity: {
         persistentSubjectIds: [],
         frameAnchorTarget: "first_frame",
-        anchorCandidateId: "anchor-candidate-uuid-9999"
+        anchorCandidateId: "anchor-candidate-uuid-9999",
+        anchorMediaHashSha256: candidateHash
       },
       previs: {
         candidateId: "anchor-candidate-uuid-9999",
@@ -162,7 +164,33 @@ describe("ShotPlanPanel Component", () => {
       }
     });
 
-    const html = renderToStaticMarkup(<ShotPlanPanel shotPlans={[plan]} currentSpecRevision={2} />);
+    const candidateGroups = [
+      {
+        specRevision: 2,
+        candidates: [
+          {
+            candidateId: "anchor-candidate-uuid-9999",
+            sceneId: "22222222-2222-4222-8222-222222222222",
+            specRevision: 2,
+            variantOrdinal: 1,
+            contentHash: candidateHash,
+            media: {
+              available: true,
+              url: "https://media.example.com/anchor.jpg"
+            },
+            createdAt: "2026-09-27T12:00:00.000Z"
+          }
+        ]
+      }
+    ];
+
+    const html = renderToStaticMarkup(
+      <ShotPlanPanel
+        shotPlans={[plan]}
+        currentSpecRevision={2}
+        candidatesByRevision={candidateGroups}
+      />
+    );
 
     expect(html).toContain("Frame Anchored");
     expect(html).toContain('data-testid="shot-plan-frame-anchor-notice"');
@@ -171,6 +199,10 @@ describe("ShotPlanPanel Component", () => {
     expect(html).toContain('data-testid="shot-plan-frame-anchor-asset"');
     expect(html).toContain("anchor-candidate-uuid-9999");
     expect(html).toContain("Anchor source for declared frame-anchored route");
+
+    // Approve button MUST be enabled for confirmed authoritative anchor
+    const approveBtnMatch = html.match(/data-testid="shot-plan-approve-button"[^>]*disabled=""/);
+    expect(approveBtnMatch).toBeNull();
   });
 
   it("marks stale shot plans and disables action buttons", () => {
@@ -209,5 +241,193 @@ describe("ShotPlanPanel Component", () => {
 
     expect(html).toContain('data-testid="shot-plan-selected-badge"');
     expect(html).toContain("Selected Plan");
+  });
+
+  it("renders missing anchor error and disables approval when frame-anchored plan lacks anchor", () => {
+    const invalidPlan = createSampleShotPlan({
+      routingMode: "frame_anchored",
+      continuity: {
+        persistentSubjectIds: [],
+        frameAnchorTarget: "none",
+        anchorCandidateId: null
+      },
+      previs: {
+        candidateId: "previs-candidate-should-not-be-inferred",
+        media: {
+          available: true,
+          url: "https://media.example.com/previs-fallback.jpg"
+        }
+      }
+    });
+
+    const html = renderToStaticMarkup(
+      <ShotPlanPanel shotPlans={[invalidPlan]} currentSpecRevision={2} />
+    );
+
+    expect(html).toContain("Frame Anchored");
+    expect(html).toContain('data-testid="shot-plan-frame-anchor-missing"');
+    expect(html).toContain("Missing authoritative anchor");
+    // Ensure no fallback inference to previs candidate or first_frame
+    expect(html).not.toContain("previs-candidate-should-not-be-inferred");
+    expect(html).not.toContain('data-testid="shot-plan-frame-anchor-target"');
+
+    // Approve button MUST be disabled because frame anchor is invalid/missing
+    const approveBtnMatch = html.match(/data-testid="shot-plan-approve-button"[^>]*disabled=""/);
+    expect(approveBtnMatch).not.toBeNull();
+  });
+
+  it("disables approval and shows invalid anchor state when frame anchor target is unsupported", () => {
+    const candidateHash = "b".repeat(64);
+    const plan = createSampleShotPlan({
+      routingMode: "frame_anchored",
+      continuity: {
+        persistentSubjectIds: [],
+        frameAnchorTarget: "last_frame",
+        anchorCandidateId: "anchor-candidate-uuid-9999",
+        anchorMediaHashSha256: candidateHash
+      }
+    });
+
+    const candidateGroups = [
+      {
+        specRevision: 2,
+        candidates: [
+          {
+            candidateId: "anchor-candidate-uuid-9999",
+            sceneId: "22222222-2222-4222-8222-222222222222",
+            specRevision: 2,
+            variantOrdinal: 1,
+            contentHash: candidateHash,
+            media: { available: true },
+            createdAt: "2026-09-27T12:00:00.000Z"
+          }
+        ]
+      }
+    ];
+
+    const html = renderToStaticMarkup(
+      <ShotPlanPanel
+        shotPlans={[plan]}
+        currentSpecRevision={2}
+        candidatesByRevision={candidateGroups}
+      />
+    );
+
+    expect(html).toContain('data-testid="shot-plan-frame-anchor-invalid"');
+    expect(html).toContain("Invalid authoritative anchor");
+    expect(html).toContain("last_frame");
+    expect(html).toContain("only &quot;first_frame&quot; is currently supported");
+    const approveBtnMatch = html.match(/data-testid="shot-plan-approve-button"[^>]*disabled=""/);
+    expect(approveBtnMatch).not.toBeNull();
+  });
+
+  it("disables approval and shows invalid anchor state when candidate cannot be resolved", () => {
+    const plan = createSampleShotPlan({
+      routingMode: "frame_anchored",
+      continuity: {
+        persistentSubjectIds: [],
+        frameAnchorTarget: "first_frame",
+        anchorCandidateId: "missing-candidate-uuid",
+        anchorMediaHashSha256: "c".repeat(64)
+      }
+    });
+
+    const html = renderToStaticMarkup(
+      <ShotPlanPanel shotPlans={[plan]} currentSpecRevision={2} candidatesByRevision={[]} />
+    );
+
+    expect(html).toContain('data-testid="shot-plan-frame-anchor-invalid"');
+    expect(html).toContain("Invalid authoritative anchor");
+    expect(html).toContain("missing-candidate-uuid");
+    expect(html).toContain("was not found in candidate history");
+    const approveBtnMatch = html.match(/data-testid="shot-plan-approve-button"[^>]*disabled=""/);
+    expect(approveBtnMatch).not.toBeNull();
+  });
+
+  it("disables approval and shows invalid anchor state when candidate revision is stale", () => {
+    const candidateHash = "d".repeat(64);
+    const plan = createSampleShotPlan({
+      routingMode: "frame_anchored",
+      continuity: {
+        persistentSubjectIds: [],
+        frameAnchorTarget: "first_frame",
+        anchorCandidateId: "stale-candidate-uuid",
+        anchorMediaHashSha256: candidateHash
+      }
+    });
+
+    const candidateGroups = [
+      {
+        specRevision: 1, // older revision
+        candidates: [
+          {
+            candidateId: "stale-candidate-uuid",
+            sceneId: "22222222-2222-4222-8222-222222222222",
+            specRevision: 1,
+            variantOrdinal: 1,
+            contentHash: candidateHash,
+            media: { available: true },
+            createdAt: "2026-09-27T12:00:00.000Z"
+          }
+        ]
+      }
+    ];
+
+    const html = renderToStaticMarkup(
+      <ShotPlanPanel
+        shotPlans={[plan]}
+        currentSpecRevision={2}
+        candidatesByRevision={candidateGroups}
+      />
+    );
+
+    expect(html).toContain('data-testid="shot-plan-frame-anchor-invalid"');
+    expect(html).toContain("Invalid authoritative anchor");
+    expect(html).toContain("does not match current scene revision");
+    const approveBtnMatch = html.match(/data-testid="shot-plan-approve-button"[^>]*disabled=""/);
+    expect(approveBtnMatch).not.toBeNull();
+  });
+
+  it("disables approval and shows invalid anchor state when candidate content hash mismatches", () => {
+    const plan = createSampleShotPlan({
+      routingMode: "frame_anchored",
+      continuity: {
+        persistentSubjectIds: [],
+        frameAnchorTarget: "first_frame",
+        anchorCandidateId: "hash-mismatch-candidate-uuid",
+        anchorMediaHashSha256: "e".repeat(64)
+      }
+    });
+
+    const candidateGroups = [
+      {
+        specRevision: 2,
+        candidates: [
+          {
+            candidateId: "hash-mismatch-candidate-uuid",
+            sceneId: "22222222-2222-4222-8222-222222222222",
+            specRevision: 2,
+            variantOrdinal: 1,
+            contentHash: "f".repeat(64), // mismatched hash!
+            media: { available: true },
+            createdAt: "2026-09-27T12:00:00.000Z"
+          }
+        ]
+      }
+    ];
+
+    const html = renderToStaticMarkup(
+      <ShotPlanPanel
+        shotPlans={[plan]}
+        currentSpecRevision={2}
+        candidatesByRevision={candidateGroups}
+      />
+    );
+
+    expect(html).toContain('data-testid="shot-plan-frame-anchor-invalid"');
+    expect(html).toContain("Invalid authoritative anchor");
+    expect(html).toContain("does not match ShotPlan declared anchorMediaHashSha256");
+    const approveBtnMatch = html.match(/data-testid="shot-plan-approve-button"[^>]*disabled=""/);
+    expect(approveBtnMatch).not.toBeNull();
   });
 });

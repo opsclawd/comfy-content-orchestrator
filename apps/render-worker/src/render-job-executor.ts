@@ -2071,6 +2071,7 @@ export function createCertifiedRenderJobExecutor(
                           }
                         }
                       : {}),
+                    submittedWorkflowHash: hashWorkflowFn(JSON.stringify(mutatedWorkflow)),
                     ...(previsReviewEvidence ? { previsReviewEvidence } : {})
                   }
                 : {}),

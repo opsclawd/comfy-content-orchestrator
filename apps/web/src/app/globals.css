@@ -1743,6 +1743,12 @@ a:hover {
   border-radius: var(--radius-sm);
 }
 
+.shot-plan-frame-anchor-notice.shot-plan-frame-anchor-invalid {
+  background-color: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+}
+
 .shot-plan-previs-box {
   background-color: var(--bg-surface);
   border: 1px dashed var(--border-prominent);

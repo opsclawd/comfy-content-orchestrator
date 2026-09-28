@@ -4,16 +4,137 @@ import React from "react";
 import type {
   ReviewAction,
   ShotPlanReviewItem,
-  ShotPlanReferenceBindingReviewItem
+  ShotPlanReferenceBindingReviewItem,
+  SceneReviewCandidateGroup,
+  CandidateReadModel
 } from "@cco/contracts";
 import type { ReviewCommandEvent, ReviewCommandState } from "./review-command-state";
 import { formatDurationMs, formatReviewAction } from "./format-review-value";
+
+export const RUNTIME_SUPPORTED_FRAME_ANCHOR_TARGETS = new Set(["first_frame"] as const);
+
+export interface AnchorValidationResult {
+  readonly isValid: boolean;
+  readonly isMissing: boolean;
+  readonly reason?: string | undefined;
+  readonly target?: string | undefined;
+  readonly candidateId?: string | undefined;
+}
+
+export function validateFrameAnchor(
+  plan: ShotPlanReviewItem,
+  currentSpecRevision: number,
+  candidateGroups: readonly SceneReviewCandidateGroup[] = []
+): AnchorValidationResult {
+  if (plan.routingMode !== "frame_anchored") {
+    return { isValid: true, isMissing: false };
+  }
+
+  const target = plan.continuity?.frameAnchorTarget;
+  const candidateId = plan.continuity?.anchorCandidateId ?? undefined;
+  const expectedHash = plan.continuity?.anchorMediaHashSha256 ?? undefined;
+
+  if (!target || target === "none") {
+    return {
+      isValid: false,
+      isMissing: true,
+      reason:
+        "Frame-anchored execution requires an explicitly declared frameAnchorTarget (supported: 'first_frame')."
+    };
+  }
+
+  if (target !== "first_frame") {
+    return {
+      isValid: false,
+      isMissing: false,
+      target,
+      candidateId,
+      reason: `Frame anchor target "${target}" is not supported by runtime profile (only "first_frame" is currently supported).`
+    };
+  }
+
+  if (!candidateId) {
+    return {
+      isValid: false,
+      isMissing: true,
+      target,
+      reason: "Frame-anchored execution requires an explicitly declared anchorCandidateId."
+    };
+  }
+
+  if (!expectedHash) {
+    return {
+      isValid: false,
+      isMissing: true,
+      target,
+      candidateId,
+      reason: "Frame-anchored execution requires an explicitly declared anchorMediaHashSha256."
+    };
+  }
+
+  let matchedCandidate: CandidateReadModel | undefined;
+  for (const group of candidateGroups) {
+    const found = group.candidates.find((c) => c.candidateId === candidateId);
+    if (found) {
+      matchedCandidate = found;
+      break;
+    }
+  }
+
+  if (!matchedCandidate) {
+    return {
+      isValid: false,
+      isMissing: false,
+      target,
+      candidateId,
+      reason: `Authoritative anchor candidate "${candidateId}" was not found in candidate history.`
+    };
+  }
+
+  if (matchedCandidate.specRevision !== currentSpecRevision) {
+    return {
+      isValid: false,
+      isMissing: false,
+      target,
+      candidateId,
+      reason: `Authoritative anchor candidate "${candidateId}" belongs to revision ${matchedCandidate.specRevision}, which does not match current scene revision ${currentSpecRevision}.`
+    };
+  }
+
+  if (plan.sceneId && matchedCandidate.sceneId && matchedCandidate.sceneId !== plan.sceneId) {
+    return {
+      isValid: false,
+      isMissing: false,
+      target,
+      candidateId,
+      reason: `Authoritative anchor candidate "${candidateId}" belongs to scene "${matchedCandidate.sceneId}", not "${plan.sceneId}".`
+    };
+  }
+
+  if (matchedCandidate.contentHash !== expectedHash) {
+    return {
+      isValid: false,
+      isMissing: false,
+      target,
+      candidateId,
+      reason: `Authoritative anchor candidate "${candidateId}" content hash "${matchedCandidate.contentHash}" does not match ShotPlan declared anchorMediaHashSha256 "${expectedHash}".`
+    };
+  }
+
+  return {
+    isValid: true,
+    isMissing: false,
+    target,
+    candidateId
+  };
+}
 
 export interface ShotPlanPanelProps {
   shotPlans?: ShotPlanReviewItem[] | undefined;
   selectedShotPlanId?: string | undefined;
   approvedShotPlanId?: string | undefined;
   currentSpecRevision: number;
+  candidatesByRevision?: SceneReviewCandidateGroup[] | undefined;
   allowedActions?: ReviewAction[] | undefined;
   state?: ReviewCommandState | undefined;
   dispatch?: ((event: ReviewCommandEvent) => void) | undefined;
@@ -27,13 +148,16 @@ export function ShotPlanPanel({
   selectedShotPlanId,
   approvedShotPlanId,
   currentSpecRevision,
+  candidatesByRevision,
   allowedActions,
-  state: _state,
+  state: stateProp,
   dispatch,
   onSelectShotPlan,
   onApproveShotPlan,
   disabled = false
 }: ShotPlanPanelProps) {
+  const candidateGroups = candidatesByRevision ?? stateProp?.detail?.candidatesByRevision ?? [];
+
   if (!shotPlans || shotPlans.length === 0) {
     return (
       <section
@@ -75,6 +199,13 @@ export function ShotPlanPanel({
   }
 
   function handleApprove(shotPlanId: string) {
+    const plan = shotPlans.find((p) => p.shotPlanId === shotPlanId);
+    if (plan?.routingMode === "frame_anchored") {
+      const validation = validateFrameAnchor(plan, currentSpecRevision, candidateGroups);
+      if (!validation.isValid) {
+        return;
+      }
+    }
     if (onApproveShotPlan) {
       onApproveShotPlan(shotPlanId);
       return;
@@ -119,6 +250,8 @@ export function ShotPlanPanel({
           const isApproved = approvedShotPlanId === plan.shotPlanId || plan.status === "approved";
           const isCurrent = plan.isCurrentRevision && plan.specRevision === currentSpecRevision;
           const isFrameAnchored = plan.routingMode === "frame_anchored";
+          const anchorValidation = validateFrameAnchor(plan, currentSpecRevision, candidateGroups);
+          const hasValidAnchor = anchorValidation.isValid;
 
           return (
             <article
@@ -171,24 +304,46 @@ export function ShotPlanPanel({
                   </div>
                 </div>
 
-                {isFrameAnchored && (
-                  <div
-                    className="shot-plan-frame-anchor-notice"
-                    data-testid="shot-plan-frame-anchor-notice"
-                  >
-                    <strong>Declared Target:</strong>{" "}
-                    <code data-testid="shot-plan-frame-anchor-target">
-                      {plan.continuity?.frameAnchorTarget ?? "first_frame"}
-                    </code>{" "}
-                    | <strong>Authoritative Anchor Asset:</strong>{" "}
-                    <code data-testid="shot-plan-frame-anchor-asset">
-                      {plan.continuity?.anchorCandidateId ??
-                        plan.previs?.candidateId ??
-                        "Primary Frame Target"}
-                    </code>{" "}
-                    (Explicitly declared frame asset)
-                  </div>
-                )}
+                {isFrameAnchored &&
+                  (hasValidAnchor ? (
+                    <div
+                      className="shot-plan-frame-anchor-notice"
+                      data-testid="shot-plan-frame-anchor-notice"
+                      data-status="valid"
+                    >
+                      <strong>Declared Target:</strong>{" "}
+                      <code data-testid="shot-plan-frame-anchor-target">
+                        {plan.continuity.frameAnchorTarget}
+                      </code>{" "}
+                      | <strong>Authoritative Anchor Asset:</strong>{" "}
+                      <code data-testid="shot-plan-frame-anchor-asset">
+                        {plan.continuity.anchorCandidateId}
+                      </code>{" "}
+                      (Explicitly declared frame asset)
+                    </div>
+                  ) : (
+                    <div
+                      className="shot-plan-frame-anchor-notice shot-plan-frame-anchor-invalid"
+                      data-testid="shot-plan-frame-anchor-notice"
+                      data-status={anchorValidation.isMissing ? "missing" : "invalid"}
+                    >
+                      <span
+                        className="shot-plan-frame-anchor-missing-message shot-plan-frame-anchor-invalid-message"
+                        data-testid={
+                          anchorValidation.isMissing
+                            ? "shot-plan-frame-anchor-missing"
+                            : "shot-plan-frame-anchor-invalid"
+                        }
+                      >
+                        <strong>
+                          {anchorValidation.isMissing
+                            ? "Missing authoritative anchor:"
+                            : "Invalid authoritative anchor:"}
+                        </strong>{" "}
+                        {anchorValidation.reason}
+                      </span>
+                    </div>
+                  ))}
               </div>
 
               {/* Previs Visualization Section */}
@@ -199,7 +354,11 @@ export function ShotPlanPanel({
                   </span>
                   <span className="previs-label-note">
                     {isFrameAnchored
-                      ? "Anchor source for declared frame-anchored route"
+                      ? hasValidAnchor
+                        ? "Anchor source for declared frame-anchored route"
+                        : anchorValidation.isMissing
+                          ? "Non-authoritative visualization; missing declared frame anchor"
+                          : "Non-authoritative visualization; invalid declared frame anchor"
                       : "Proposed shot intent; not conditioned as first-frame in reference-directed H3"}
                   </span>
                 </div>
@@ -391,7 +550,9 @@ export function ShotPlanPanel({
                   className="shot-plan-action-btn approve-plan-btn"
                   data-testid="shot-plan-approve-button"
                   data-shot-plan-id={plan.shotPlanId}
-                  disabled={disabled || !isCurrent || isApproved || !canApproveAction}
+                  disabled={
+                    disabled || !isCurrent || isApproved || !canApproveAction || !hasValidAnchor
+                  }
                   onClick={() => handleApprove(plan.shotPlanId)}
                 >
                   {isApproved ? "Approved Intent" : "Approve Intent"}

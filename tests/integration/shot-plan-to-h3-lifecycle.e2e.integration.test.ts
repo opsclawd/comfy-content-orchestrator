@@ -43,12 +43,14 @@ import {
   AssembleGenerationManifest,
   ResolveApprovedCandidateMediaUseCase,
   UploadReferenceAssetUseCase,
+  PlanShotPlansUseCase,
   ReviewSceneUseCases,
   ProductionReviewUseCases,
   ProgressSceneProductionUseCases,
   CompleteCampaignProductionRunUseCases,
   CompleteCampaignProductionRunAssemblyUseCases,
   type HashBytesPort,
+  type PlanningModelClientPort,
   type StagedComfyUiInput
 } from "@cco/application";
 import {
@@ -64,6 +66,7 @@ import { BUCKET_NAMES, BUCKETS } from "@cco/shared";
 import {
   GenerationManifestSchema,
   SceneReviewDetailReadModelSchema,
+  LTX_FPS,
   type GenerationManifest
 } from "@cco/contracts";
 import { createCertifiedRenderJobExecutor } from "../../apps/render-worker/src/render-job-executor.js";
@@ -269,7 +272,122 @@ describe("ShotPlan-to-H3 E2E Integration (#331)", () => {
     });
 
     // -------------------------------------------------------------------------
-    // 5. Seed Previs Candidates (Storyboards) in MinIO and Postgres
+    // 5. Generate ShotPlans via PlanShotPlansUseCase with Deterministic Model Client
+    // -------------------------------------------------------------------------
+    const uow = new PostgresUnitOfWork(pool);
+
+    const mockPlanningClient: PlanningModelClientPort = {
+      providerName: "Anthropic",
+      complete: async () => ({
+        kind: "success",
+        rawText: JSON.stringify({
+          variants: [
+            {
+              framing: "medium_close_up",
+              angle: "eye_level",
+              cameraMovement: "dolly_in",
+              movementSpeed: "slow",
+              lensIntent: "50mm prime",
+              cameraPosition: "eye height",
+              cameraPromptDescription: "Slow dolly forward",
+              actionSummary: "Operative activates scanner",
+              lightingStyle: "neon_night",
+              environmentDescription: "Rainy alleyway",
+              colorPalette: ["cyan", "magenta"],
+              atmosphere: "foggy rain",
+              subjects: [
+                {
+                  subjectId: "hero-operative",
+                  role: "subject_identity",
+                  referenceAssetId: refAsset1Id,
+                  initialPosition: "screen_center",
+                  movementTrajectory: "stationary"
+                }
+              ],
+              beats: [
+                {
+                  beatIndex: 1,
+                  startMs: 0,
+                  endMs: 5000,
+                  description: "Scan target",
+                  cameraAction: "dolly in",
+                  subjectAction: "activate scanner"
+                }
+              ]
+            },
+            {
+              framing: "close_up",
+              angle: "low_angle",
+              cameraMovement: "static",
+              movementSpeed: "slow",
+              lensIntent: "85mm",
+              cameraPosition: "low tripod",
+              cameraPromptDescription: "Static low angle",
+              actionSummary: "Operative stares intently",
+              lightingStyle: "chiaroscuro",
+              environmentDescription: "Dark doorway",
+              colorPalette: ["blue"],
+              atmosphere: "dark",
+              subjects: [
+                {
+                  subjectId: "hero-operative",
+                  role: "subject_identity",
+                  referenceAssetId: refAsset1Id,
+                  initialPosition: "screen_center",
+                  movementTrajectory: "static"
+                }
+              ],
+              beats: [
+                {
+                  beatIndex: 1,
+                  startMs: 0,
+                  endMs: 5000,
+                  description: "Stare",
+                  cameraAction: "static",
+                  subjectAction: "breathing"
+                }
+              ]
+            }
+          ]
+        })
+      })
+    };
+
+    const mockFallbackClient: PlanningModelClientPort = {
+      providerName: "OpenAI",
+      complete: async () => ({
+        kind: "permanent_failure",
+        error: "Fallback client should not be called in test"
+      })
+    };
+
+    const planShotPlans = new PlanShotPlansUseCase({
+      uow,
+      primaryClient: mockPlanningClient,
+      fallbackClient: mockFallbackClient
+    });
+
+    const planResultScene1 = await planShotPlans.execute({
+      sceneId: scene1Id,
+      variantCount: 2,
+      enqueuePrevisJobs: false,
+      externalProcessingPolicy: {
+        allowCloudPlanning: true,
+        allowedProviders: ["Anthropic", "OpenAI"]
+      }
+    });
+    expect(planResultScene1.shotPlans).toHaveLength(2);
+    expect(planResultScene1.shotPlans[0]!.routingMode).toBe("reference_directed");
+    expect(planResultScene1.shotPlans[0]!.variantOrdinal).toBe(1);
+    expect(planResultScene1.shotPlans[1]!.variantOrdinal).toBe(2);
+
+    const plan1Scene1 = planResultScene1.shotPlans[0]!;
+    const plan2Scene1 = planResultScene1.shotPlans[1]!;
+    const shotPlan1Scene1Id = plan1Scene1.id;
+    const shotPlan2Scene1Id = plan2Scene1.id;
+
+    // -------------------------------------------------------------------------
+    // 6. Seed Previs Candidates (Storyboards) in MinIO and Postgres
     // -------------------------------------------------------------------------
     const previs1Jpeg = await sharp({
       create: { width: 1024, height: 1024, channels: 3, background: { r: 120, g: 120, b: 120 } }
@@ -323,115 +441,18 @@ describe("ShotPlan-to-H3 E2E Integration (#331)", () => {
     const previsCand1Id = cand1.candidate_id as CandidateId;
     const previsCand2Id = cand2.candidate_id as CandidateId;
 
-    // -------------------------------------------------------------------------
-    // 6. Seed ShotPlans in Postgres via PostgresUnitOfWork
-    // -------------------------------------------------------------------------
-    const uow = new PostgresUnitOfWork(pool);
+    // Attach previs association to plan1Scene1
+    plan1Scene1.attachPrevis({
+      candidateId: previsCand1Id,
+      storageBucket: BUCKETS.REVIEW,
+      storageObjectKey: previsKey1,
+      contentHashSha256: previs1Sha256,
+      modelProfile: "flux_schnell",
+      generatedAt: "2026-09-27T10:15:00.000Z",
+      reviewNotes: "Previs visualization"
+    });
 
-    const shotPlan1Scene1Id = "01928374-abcd-7000-8000-000000000031" as ShotPlanId;
-    const shotPlan2Scene1Id = "01928374-abcd-7000-8000-000000000032" as ShotPlanId;
     const shotPlan1Scene2Id = "01928374-abcd-7000-8000-000000000041" as ShotPlanId;
-
-    const plan1Scene1 = ShotPlan.create({
-      id: shotPlan1Scene1Id,
-      sceneId: scene1Id,
-      specRevision: 1,
-      variantOrdinal: 1,
-      routingMode: "reference_directed",
-      targetDurationMs: 5000,
-      targetFrameCount: 124,
-      framing: "medium_close_up",
-      angle: "eye_level",
-      cameraMovement: "dolly_in",
-      movementSpeed: "slow",
-      lensIntent: "50mm prime",
-      cameraPosition: "eye height",
-      cameraPromptDescription: "Slow dolly forward",
-      actionSummary: "Operative activates scanner",
-      lightingStyle: "neon_night",
-      environmentDescription: "Rainy alleyway",
-      colorPalette: ["cyan", "magenta"],
-      atmosphere: "foggy rain",
-      subjects: [
-        {
-          subjectId: "hero-operative",
-          role: "subject_identity",
-          referenceAssetId: refAsset1Id,
-          initialPosition: "screen_center",
-          movementTrajectory: "stationary"
-        }
-      ],
-      beats: [
-        {
-          beatIndex: 1,
-          startMs: 0,
-          endMs: 5000,
-          description: "Scan target",
-          cameraAction: "dolly in",
-          subjectAction: "activate scanner"
-        }
-      ],
-      continuity: {
-        persistentSubjectIds: ["hero-operative"],
-        frameAnchorTarget: "none"
-      },
-      previs: {
-        candidateId: previsCand1Id,
-        storageBucket: BUCKETS.REVIEW,
-        storageObjectKey: previsKey1,
-        contentHashSha256: previs1Sha256,
-        modelProfile: "flux_schnell",
-        generatedAt: "2026-09-27T10:15:00.000Z",
-        reviewNotes: "Previs visualization"
-      }
-    });
-
-    const plan2Scene1 = ShotPlan.create({
-      id: shotPlan2Scene1Id,
-      sceneId: scene1Id,
-      specRevision: 1,
-      variantOrdinal: 2,
-      routingMode: "reference_directed",
-      targetDurationMs: 5000,
-      targetFrameCount: 124,
-      framing: "close_up",
-      angle: "low_angle",
-      cameraMovement: "static",
-      movementSpeed: "slow",
-      lensIntent: "85mm",
-      cameraPosition: "low tripod",
-      cameraPromptDescription: "Static low angle",
-      actionSummary: "Operative stares intently",
-      lightingStyle: "chiaroscuro",
-      environmentDescription: "Dark doorway",
-      colorPalette: ["blue"],
-      atmosphere: "dark",
-      subjects: [
-        {
-          subjectId: "hero-operative",
-          role: "subject_identity",
-          referenceAssetId: refAsset1Id,
-          initialPosition: "screen_center",
-          movementTrajectory: "static"
-        }
-      ],
-      beats: [
-        {
-          beatIndex: 1,
-          startMs: 0,
-          endMs: 5000,
-          description: "Stare",
-          cameraAction: "static",
-          subjectAction: "breathing"
-        }
-      ],
-      continuity: {
-        persistentSubjectIds: ["hero-operative"],
-        frameAnchorTarget: "none"
-      },
-      previs: null
-    });
-
     const plan1Scene2 = ShotPlan.create({
       id: shotPlan1Scene2Id,
       sceneId: scene2Id,
@@ -489,7 +510,7 @@ describe("ShotPlan-to-H3 E2E Integration (#331)", () => {
     });
 
     await uow.execute(async (ctx) => {
-      await ctx.shotPlans.saveMany([plan1Scene1, plan2Scene1, plan1Scene2]);
+      await ctx.shotPlans.saveMany([plan1Scene1, plan1Scene2]);
     });
 
     // -------------------------------------------------------------------------
@@ -708,6 +729,12 @@ describe("ShotPlan-to-H3 E2E Integration (#331)", () => {
       workflow: Record<string, unknown>;
     }> = [];
     const stagedRefInputs: StagedComfyUiInput[] = [];
+    const stagedRecords: Array<{
+      filename: string;
+      bytes: Uint8Array;
+      contentType: string;
+      sha256: string;
+    }> = [];
 
     function getLiveProvenance(profile: CertificationProfile) {
       return {
@@ -750,6 +777,13 @@ describe("ShotPlan-to-H3 E2E Integration (#331)", () => {
       objectStorage,
       stageReferenceImage: {
         stage: async (input) => {
+          const sha256 = createHash("sha256").update(input.bytes).digest("hex");
+          stagedRecords.push({
+            filename: input.filename,
+            bytes: input.bytes,
+            contentType: input.contentType,
+            sha256
+          });
           const staged: StagedComfyUiInput = {
             name: input.filename,
             subfolder: "references"
@@ -812,6 +846,14 @@ describe("ShotPlan-to-H3 E2E Integration (#331)", () => {
 
     // Verify [AC-1]: Stage reference assets and verify conditioning in submitted workflow
     expect(stagedRefInputs).toHaveLength(2);
+    expect(stagedRecords).toHaveLength(2);
+
+    // Verify staged bytes match declared hashes and fixture bytes
+    expect(stagedRecords[0]!.sha256).toBe(ref1Sha256);
+    expect(stagedRecords[1]!.sha256).toBe(ref2Sha256);
+    expect(Buffer.from(stagedRecords[0]!.bytes)).toEqual(heroPng);
+    expect(Buffer.from(stagedRecords[1]!.bytes)).toEqual(stylePng);
+
     const captured1 = capturedWorkflows.find((c) => c.renderJobId === dbJob1.job_id)!;
     const workflow1 = captured1.workflow;
 
@@ -836,8 +878,31 @@ describe("ShotPlan-to-H3 E2E Integration (#331)", () => {
     expect(parsedManifest1.success).toBe(true);
     expect(manifestScene1.routingMode).toBe("reference_directed");
     expect(manifestScene1.referenceImages).toHaveLength(2);
+    expect(manifestScene1.referenceImages![0]!.contentHashSha256).toBe(ref1Sha256);
+    expect(manifestScene1.referenceImages![1]!.contentHashSha256).toBe(ref2Sha256);
+    expect(manifestScene1.referenceImages![0]!.stagedAs.name).toBe(stagedRecords[0]!.filename);
+    expect(manifestScene1.referenceImages![1]!.stagedAs.name).toBe(stagedRecords[1]!.filename);
     expect(manifestScene1.shotPlan?.id).toBe(shotPlan1Scene1Id);
     expect(manifestScene1.firstFrame).toBeUndefined();
+    expect(manifestScene1.executionConditioning).toBeUndefined();
+
+    // Verify manifestScene1 reconstructed from observed execution matches actual submitted workflow and output
+    const workflow1Hash = hashWorkflow(JSON.stringify(workflow1));
+    expect(manifestScene1.workflow.submittedWorkflowHash).toBe(workflow1Hash);
+    expect(manifestScene1.referenceImages![0]!.injectionTarget).toEqual({
+      nodeId: "201",
+      classType: "LoadImage",
+      inputField: "image"
+    });
+    expect(manifestScene1.referenceImages![1]!.injectionTarget).toEqual({
+      nodeId: "202",
+      classType: "LoadImage",
+      inputField: "image"
+    });
+
+    const dummyVideoBytes = Buffer.from("dummy-video-bytes-h3-720p");
+    const dummyVideoSha256 = createHash("sha256").update(dummyVideoBytes).digest("hex");
+    expect(manifestScene1.outputs[0]!.checksumSha256).toBe(dummyVideoSha256);
 
     // Persist manifest for Job 1 in Postgres
     await insertGenerationManifestRecord(client, {
@@ -874,6 +939,12 @@ describe("ShotPlan-to-H3 E2E Integration (#331)", () => {
     const execResult2 = await workerExecutor(execJob2Input);
     expect(execResult2.manifestPayload).toBeDefined();
 
+    // Verify [AC-2]: Explicit frame-anchored route stages exact anchor candidate
+    expect(stagedRecords).toHaveLength(3);
+    const anchorRecord = stagedRecords[2]!;
+    expect(anchorRecord.sha256).toBe(previs2Sha256);
+    expect(Buffer.from(anchorRecord.bytes)).toEqual(previs2Jpeg);
+
     const captured2 = capturedWorkflows.find((c) => c.renderJobId === dbJob2.job_id)!;
     const workflow2 = captured2.workflow;
     const node20 = workflow2["20"] as { inputs: { image: string } };
@@ -884,6 +955,178 @@ describe("ShotPlan-to-H3 E2E Integration (#331)", () => {
     expect(manifestScene2.routingMode).toBe("frame_anchored");
     expect(manifestScene2.firstFrame?.candidateId).toBe(previsCand2Id);
     expect(manifestScene2.firstFrame?.contentHashSha256).toBe(previs2Sha256);
+    expect(manifestScene2.firstFrame?.stagedAs.name).toBe(anchorRecord.filename);
+    expect(manifestScene2.referenceImages).toBeUndefined();
+    expect(manifestScene2.shotPlan?.id).toBe(shotPlan1Scene2Id);
+    expect(manifestScene2.firstFrame?.injectionTarget).toEqual({
+      nodeId: "20",
+      classType: "LoadImage",
+      inputField: "image"
+    });
+    const workflow2Hash = hashWorkflow(JSON.stringify(workflow2));
+    expect(manifestScene2.workflow.submittedWorkflowHash).toBe(workflow2Hash);
+
+    const profile1 = await loadCertificationProfile(manifestPath, "minimax-h3-720p-124f-ref2v");
+
+    // -------------------------------------------------------------------------
+    // Manifest dimensions/fps provenance
+    //
+    // NOTE: manifestScene1.dimensions/fps are populated from the certified
+    // profile's configured baseline (profile.baseline) and the node-driven
+    // frame-count topology override (fps pinned to LTX_FPS when the profile's
+    // injection topology declares a workflow-driven frameCount node, as
+    // MiniMax H3 Ref2V's does) — not from probing the actual rendered output
+    // bytes. The production pipeline has no ffprobe (or equivalent) wiring
+    // from real media into GenerationManifest assembly for any render profile
+    // today. Real media-probe integration is tracked separately in
+    // https://github.com/opsclawd/comfy-content-orchestrator/issues/345 and is
+    // out of scope for this issue. This assertion checks the manifest against
+    // the configured values it is actually derived from, not against an
+    // independently measured value.
+    // -------------------------------------------------------------------------
+    expect(manifestScene1.dimensions.width).toBe(profile1.baseline.width);
+    expect(manifestScene1.dimensions.height).toBe(profile1.baseline.height);
+    expect(manifestScene1.fps).toBe(LTX_FPS);
+
+    // Reconstruct GenerationManifest directly via AssembleGenerationManifest
+    // from the captured workflow/staging execution results and verified output
+    const standaloneAssembler = new AssembleGenerationManifest({
+      hashBytes: hashBytesPort,
+      sceneRepository: new PostgresSceneRepository(pool),
+      storyboardCandidateRepository: new PostgresStoryboardCandidateRepository(pool),
+      referenceAssetRepository: referenceAssetRepo
+    });
+
+    const reconstructedDirectly = await standaloneAssembler.assemble({
+      job: execJob1Input,
+      profile: profile1,
+      liveProvenance: getLiveProvenance(profile1),
+      renderResult: {
+        status: "succeeded",
+        promptId: manifestScene1.promptIdComfy,
+        outputObjectKeys: ["output.mp4"],
+        durationMs: 5000,
+        profile: {
+          profileId: profile1.id,
+          renderProfileKey: profile1.renderProfileIdentity.key,
+          renderProfileVersion: profile1.renderProfileIdentity.version,
+          engine: profile1.engine as "minimax_h3_ref2v",
+          workflowSha256: profile1.expectedWorkflowHash,
+          modelSha256: [],
+          runnerProfile: profile1.runnerProfile,
+          comfyUiCommit: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+        }
+      },
+      workflow: workflow1 as Record<string, unknown>,
+      mediaObjects: [
+        {
+          bucket: output1.bucket,
+          key: output1.key,
+          body: dummyVideoBytes,
+          contentType: "video/mp4",
+          checksumSha256: dummyVideoSha256
+        }
+      ],
+      routingMode: "reference_directed",
+      shotPlan: {
+        id: shotPlan1Scene1Id,
+        specRevision: 1,
+        variantOrdinal: 1
+      },
+      executedInstruction: {
+        text: (workflow1["105"] as { inputs: { prompt: string } }).inputs.prompt,
+        sha256: createHash("sha256")
+          .update(
+            Buffer.from((workflow1["105"] as { inputs: { prompt: string } }).inputs.prompt, "utf8")
+          )
+          .digest("hex"),
+        byteLength: Buffer.byteLength(
+          (workflow1["105"] as { inputs: { prompt: string } }).inputs.prompt,
+          "utf8"
+        )
+      },
+      referenceImages: manifestScene1.referenceImages!
+    });
+
+    const parsedDirectly = GenerationManifestSchema.safeParse(
+      reconstructedDirectly.manifestPayload
+    );
+    expect(parsedDirectly.success).toBe(true);
+    const directManifest = reconstructedDirectly.manifestPayload as unknown as GenerationManifest;
+    expect(directManifest.manifestId).toBe(manifestScene1.manifestId);
+    expect(directManifest.routingMode).toBe("reference_directed");
+    expect(directManifest.workflow.submittedWorkflowHash).toBe(workflow1Hash);
+    expect(directManifest.outputs[0]!.checksumSha256).toBe(dummyVideoSha256);
+    expect(directManifest.dimensions.width).toBe(profile1.baseline.width);
+    expect(directManifest.dimensions.height).toBe(profile1.baseline.height);
+    expect(directManifest.fps).toBe(LTX_FPS);
+
+    // Assert conditional invalid manifests are rejected:
+    // 1. reference_directed with firstFrame fails
+    const invalidRefDirectedWithFirstFrame = {
+      ...manifestScene1,
+      firstFrame: {
+        anchorType: "first_frame",
+        candidateId: previsCand1Id,
+        contentHashSha256: previs1Sha256,
+        stagedAs: { name: "invalid.png", subfolder: "references" },
+        injectionTarget: { nodeId: "20", classType: "LoadImage", inputField: "image" }
+      }
+    };
+    expect(GenerationManifestSchema.safeParse(invalidRefDirectedWithFirstFrame).success).toBe(
+      false
+    );
+
+    // 2. reference_directed with executionConditioning fails (False Conditioning Invariant)
+    const invalidRefDirectedWithConditioning = {
+      ...manifestScene1,
+      executionConditioning: {
+        candidateId: previsCand1Id,
+        sceneId: scene1Id,
+        specRevision: 1,
+        contentHashSha256: previs1Sha256,
+        media: {
+          bucket: BUCKETS.REVIEW,
+          key: previsKey1,
+          sha256: previs1Sha256,
+          contentType: "image/jpeg"
+        },
+        stagedAs: { name: "invalid.png", subfolder: "references" },
+        injectionTarget: { nodeId: "20", classType: "LoadImage", inputField: "image" }
+      }
+    };
+    expect(GenerationManifestSchema.safeParse(invalidRefDirectedWithConditioning).success).toBe(
+      false
+    );
+
+    // 3. frame_anchored without firstFrame fails
+    const invalidFrameAnchoredWithoutFirstFrame = {
+      ...manifestScene2,
+      firstFrame: undefined
+    };
+    expect(GenerationManifestSchema.safeParse(invalidFrameAnchoredWithoutFirstFrame).success).toBe(
+      false
+    );
+
+    // 4. frame_anchored with referenceImages fails
+    const invalidFrameAnchoredWithReferences = {
+      ...manifestScene2,
+      referenceImages: [
+        {
+          slotIndex: 1,
+          promptTag: "<Picture 1>",
+          bindingId: "binding-1",
+          assetId: refAsset1Id,
+          contentHashSha256: ref1Sha256,
+          role: "subject_identity",
+          stagedAs: { name: "invalid.png", subfolder: "references" },
+          injectionTarget: { nodeId: "201", classType: "LoadImage", inputField: "image" }
+        }
+      ]
+    };
+    expect(GenerationManifestSchema.safeParse(invalidFrameAnchoredWithReferences).success).toBe(
+      false
+    );
 
     // Persist manifest for Job 2 in Postgres
     const manifestRecord2 = await insertGenerationManifestRecord(client, {

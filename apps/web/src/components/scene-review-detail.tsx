@@ -231,6 +231,7 @@ export function SceneReviewDetailView({
           selectedShotPlanId={detail.selectedShotPlanId}
           approvedShotPlanId={detail.approvedShotPlanId}
           currentSpecRevision={detail.specRevision}
+          candidatesByRevision={detail.candidatesByRevision}
           allowedActions={detail.allowedActions}
           state={state}
           dispatch={dispatch}

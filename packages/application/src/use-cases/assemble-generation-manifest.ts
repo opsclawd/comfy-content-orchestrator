@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { sortKeysDeep } from "@cco/shared";
 import {
   getProfileInjectionTopology,
   LTX_FPS,
@@ -282,10 +283,18 @@ export class AssembleGenerationManifest {
     if (!provenance.workflow?.sha256) {
       throw new IncompleteManifestError("workflow.sha256");
     }
+    const submittedWorkflowHash =
+      input.submittedWorkflowHash ??
+      (input.routingMode && input.workflow
+        ? createHash("sha256")
+            .update(JSON.stringify(sortKeysDeep(input.workflow)), "utf8")
+            .digest("hex")
+        : undefined);
+
     const workflowIdentity = {
       templateId: input.profile.id,
       sha256: provenance.workflow.sha256,
-      ...(input.submittedWorkflowHash ? { submittedWorkflowHash: input.submittedWorkflowHash } : {})
+      ...(submittedWorkflowHash ? { submittedWorkflowHash } : {})
     };
 
     // 6. LoRA identities and strengths
