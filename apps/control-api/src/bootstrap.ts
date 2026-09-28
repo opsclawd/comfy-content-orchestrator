@@ -1,8 +1,11 @@
 import process from "node:process";
+import { createHash } from "node:crypto";
 import { HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
 import type {
   CampaignDeliveryReelQueries,
   ClientContextResolver,
+  HashBytesPort,
+  ImageInspectionPort,
   ObjectStoragePort,
   PlanningModelClientPort,
   PlanningModelOutcome,
@@ -27,6 +30,7 @@ import {
   PostgresUnitOfWork,
   S3ObjectStorage,
   S3ReviewMediaDelivery,
+  SharpImageInspectionAdapter,
   StorageAwareJobAdmissionGate,
   type HostFsStorageTelemetryAdapterOptions
 } from "@cco/infrastructure";
@@ -89,6 +93,8 @@ export interface ControlApiBootstrapOptions {
   readonly referenceAssetRepository?: ReferenceAssetRepository;
   readonly campaignDeliveryReelQueries?: CampaignDeliveryReelQueries;
   readonly objectStorage?: ObjectStoragePort;
+  readonly hashBytes?: HashBytesPort;
+  readonly imageValidator?: ImageInspectionPort;
   readonly serverStarter?: (
     dependencies: ControlApiDependencies,
     options: ServerListenOptions
@@ -257,6 +263,11 @@ export async function runControlApi(
       defaultExpirySeconds: config.s3.defaultExpirySeconds
     });
 
+    const hashBytes = options.hashBytes ?? {
+      hashBytes: async (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
+    };
+    const imageValidator = options.imageValidator ?? new SharpImageInspectionAdapter();
+
     const storageTelemetryOptions: HostFsStorageTelemetryAdapterOptions = {
       storagePath: config.storageTelemetry.path,
       bucketUsageProvider: async () => []
@@ -402,6 +413,8 @@ export async function runControlApi(
         currentProductionAttemptQueries,
         campaignDeliveryReelQueries,
         objectStorage,
+        hashBytes,
+        imageValidator,
         reviewMediaDelivery,
         storageTelemetry,
         storageMetricsRegistry,

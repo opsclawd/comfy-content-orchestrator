@@ -19,6 +19,7 @@ export type ManifestNodeInjectionTarget = z.infer<typeof ManifestNodeInjectionTa
 export const ManifestReferenceImageEntrySchema = z.object({
   slotIndex: z.number().int().min(1).max(9),
   promptTag: z.string().regex(/^<Picture [1-9]>$/),
+  bindingId: z.string().min(1, "bindingId must not be empty").optional(),
   assetId: z.string().uuid("assetId must be a valid UUID"),
   contentHashSha256: sha256HashSchema,
   role: ReferenceRoleSchema,
@@ -133,6 +134,8 @@ export const GenerationManifestSchema = z
     engine: z.string().min(1),
     renderProfile: z.string().min(1),
     renderProfileVersion: z.number().int().positive().nullable(),
+    specRevision: z.number().int().positive().optional(),
+    attemptId: z.string().optional(),
 
     // Route identity and execution
     routingMode: ShotPlanRoutingModeSchema.optional(),
@@ -176,6 +179,15 @@ export const GenerationManifestSchema = z
     }
 
     if (data.routingMode === "reference_directed") {
+      // 0. attemptId is required for reference-directed execution
+      if (!data.attemptId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'routingMode "reference_directed" requires attemptId',
+          path: ["attemptId"]
+        });
+      }
+
       // 1. Profile / Engine must match reference-directed H3
       if (
         data.renderProfile !== "MINIMAX_H3_720P_5S_REF2V_V1" ||
@@ -222,11 +234,18 @@ export const GenerationManifestSchema = z
           });
         }
 
-        // Verify slot ordering and tag bijection
+        // Verify slot ordering, tag bijection, and bindingId
         const seenSlots = new Set<number>();
         const seenTags = new Set<string>();
         for (let i = 0; i < data.referenceImages.length; i++) {
           const entry = data.referenceImages[i]!;
+          if (!entry.bindingId) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `referenceImages[${i}].bindingId is required in "reference_directed" mode`,
+              path: ["referenceImages", i, "bindingId"]
+            });
+          }
           const expectedSlot = i + 1;
           if (entry.slotIndex !== expectedSlot) {
             ctx.addIssue({
@@ -280,6 +299,15 @@ export const GenerationManifestSchema = z
         });
       }
     } else if (data.routingMode === "frame_anchored") {
+      // 0. attemptId is required for frame-anchored execution
+      if (!data.attemptId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'routingMode "frame_anchored" requires attemptId',
+          path: ["attemptId"]
+        });
+      }
+
       // 1. Profile / Engine must match an explicit frame-anchored I2V profile
       const isAllowedI2v =
         (data.renderProfile === "MINIMAX_H3_720P_5S_I2V_V1" && data.engine === "minimax_h3_i2v") ||
@@ -292,12 +320,18 @@ export const GenerationManifestSchema = z
         });
       }
 
-      // 2. First frame must be present
+      // 2. First frame must be present and identify authoritative candidateId
       if (!data.firstFrame) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: 'routingMode "frame_anchored" requires firstFrame',
           path: ["firstFrame"]
+        });
+      } else if (!data.firstFrame.candidateId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'firstFrame.candidateId is required in "frame_anchored" mode',
+          path: ["firstFrame", "candidateId"]
         });
       }
 

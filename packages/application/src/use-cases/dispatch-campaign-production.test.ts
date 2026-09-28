@@ -2,12 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import {
   InvalidMutationError,
   Scene,
+  ShotPlan,
   type CampaignId,
   type CampaignProductionRunRecord,
   type CampaignRecord,
   type CandidateId,
+  type JobId,
   type RenderJob,
   type SceneId,
+  type ShotPlanId,
   type StoryboardCandidate
 } from "@cco/domain";
 
@@ -17,6 +20,7 @@ import type {
   EnqueueSceneProductionRenderUseCase,
   ReviewEventStore,
   SceneRepository,
+  ShotPlanRepository,
   StoryboardCandidateRepository,
   UnitOfWork,
   UnitOfWorkContext
@@ -780,5 +784,163 @@ describe("ApproveSceneAndDispatchCampaignProductionUseCase", () => {
     expect(enqueuedJobs).toEqual(["scene-1", "scene-2", "scene-3"]);
     expect(currentCampaign.status).toBe("queued");
     expect(currentCampaign.approvedScenes).toBe(3);
+  });
+
+  it("atomically approves ShotPlan and dispatches campaign production when all scenes are approved", async () => {
+    const campaignId = "camp-shotplan-1" as CampaignId;
+    const scene1 = createMockScene("scene-sp-1", campaignId, 1, "approved");
+    const scene2 = createMockScene("scene-sp-2", campaignId, 2, "director_review");
+    const shotPlanId = "01928374-abcd-7000-8000-000000000099" as ShotPlanId;
+    const shotPlan = ShotPlan.create({
+      id: shotPlanId,
+      sceneId: scene2.id,
+      specRevision: 1,
+      variantOrdinal: 1,
+      targetDurationMs: 4000,
+      targetFrameCount: 96,
+      framing: "wide",
+      angle: "eye_level",
+      lensIntent: "28mm",
+      cameraPosition: "tripod",
+      cameraMovement: "static",
+      movementSpeed: "medium",
+      cameraPromptDescription: "previs",
+      actionSummary: "action",
+      beats: [
+        {
+          beatIndex: 1,
+          startMs: 0,
+          endMs: 4000,
+          description: "Full action",
+          cameraAction: "holds",
+          subjectAction: "moves"
+        }
+      ],
+      lightingStyle: "softbox_studio",
+      environmentDescription: "studio",
+      routingMode: "reference_directed",
+      continuity: {
+        persistentSubjectIds: [],
+        frameAnchorTarget: "none"
+      }
+    });
+    scene2.selectShotPlan(shotPlanId, 1, scene2.id);
+
+    let currentCampaign = {
+      ...createMockCampaign(campaignId, 2),
+      approvedScenes: 1
+    };
+
+    const mockScenesRepo: SceneRepository = {
+      findById: vi.fn(async (id: SceneId) => (id === scene2.id ? scene2 : scene1)),
+      save: vi.fn(async () => {}),
+      findCampaignIdBySceneId: vi.fn(async () => campaignId),
+      findByCampaignId: vi.fn(async () => [scene1, scene2])
+    };
+
+    const mockCampaignsRepo: CampaignRepository<CampaignRecord> = {
+      findById: vi.fn(async () => currentCampaign),
+      findByIdForUpdate: vi.fn(async () => currentCampaign),
+      save: vi.fn(async (c) => {
+        currentCampaign = c;
+      }),
+      transitionStatusIf: vi.fn(async (_id, _from, to, meta) => {
+        currentCampaign = {
+          ...currentCampaign,
+          status: to,
+          ...(meta?.approvedScenes !== undefined ? { approvedScenes: meta.approvedScenes } : {})
+        };
+        return true;
+      })
+    };
+
+    let createdRun = false;
+    const mockRunsRepo: CampaignProductionRunRepository = createMockCampaignProductionRuns({
+      createIfAbsent: vi.fn(async (input) => {
+        createdRun = true;
+        const run: CampaignProductionRunRecord = {
+          id: "run-sp-1",
+          campaignId: input.campaignId as CampaignId,
+          fingerprint: input.fingerprint,
+          status: "dispatched",
+          expectedTotalDurationMs: input.expectedTotalDurationMs,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        return { run, created: true };
+      }),
+      insertRunScenes: vi.fn(async () => {})
+    });
+
+    const mockReviewEvents: ReviewEventStore = {
+      findById: vi.fn(async () => undefined),
+      append: vi.fn(async () => {})
+    };
+
+    const mockShotPlansRepo: ShotPlanRepository = {
+      findById: vi.fn(async (id: ShotPlanId) => (id === shotPlanId ? shotPlan : undefined)),
+      save: vi.fn(async () => {}),
+      saveMany: vi.fn(async () => {}),
+      listBySceneAndRevision: vi.fn(async () => [shotPlan]),
+      listByScene: vi.fn(async () => [shotPlan])
+    };
+
+    const mockUow: UnitOfWork = {
+      execute: vi.fn(async (work) => {
+        const ctx: UnitOfWorkContext = {
+          scenes: mockScenesRepo,
+          campaigns: mockCampaignsRepo,
+          campaignProductionRuns: mockRunsRepo,
+          reviewEvents: mockReviewEvents,
+          candidates: {
+            findById: vi.fn(),
+            insert: vi.fn(),
+            listBySceneAndRevision: vi.fn(async () => [])
+          },
+          shotPlans: mockShotPlansRepo
+        };
+        return work(ctx);
+      })
+    };
+
+    const enqueuedScenes: string[] = [];
+    const mockEnqueueProductionRender = {
+      execute: vi.fn(),
+      executeWithContext: vi.fn(async (_ctx, input) => {
+        enqueuedScenes.push(input.sceneId);
+        return {
+          job: {
+            jobId: `job-${input.sceneId}` as JobId,
+            sceneId: input.sceneId,
+            jobKind: "production",
+            status: "queued"
+          } as unknown as RenderJob,
+          isExisting: false
+        };
+      })
+    } as unknown as EnqueueSceneProductionRenderUseCase;
+
+    const useCase = new ApproveSceneAndDispatchCampaignProductionUseCase(
+      mockUow,
+      mockEnqueueProductionRender
+    );
+
+    const result = await useCase.execute({
+      action: "approve_shotplan",
+      shotPlanId,
+      sceneId: scene2.id,
+      eventId: "evt-approve-sp",
+      reviewerName: "Director",
+      occurredAt: new Date().toISOString(),
+      expectedSpecRevision: 1
+    });
+
+    expect(result.scene.status).toBe("approved");
+    expect(result.scene.approvedShotPlanId).toBe(shotPlanId);
+    expect(shotPlan.status).toBe("approved");
+    expect(createdRun).toBe(true);
+    expect(enqueuedScenes).toEqual([scene1.id, scene2.id]);
+    expect(currentCampaign.status).toBe("queued");
+    expect(currentCampaign.approvedScenes).toBe(2);
   });
 });

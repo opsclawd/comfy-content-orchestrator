@@ -1,6 +1,14 @@
 import { test, expect } from "../harness/fixture.js";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { insertStoryboardCandidateRecord } from "@cco/infrastructure/testing";
+import { PostgresShotPlanRepository } from "@cco/infrastructure";
+import { ShotPlan, type ShotPlanId, type SceneId } from "@cco/domain";
+import { testObjectStorage } from "../harness/control-api.js";
+
+// A minimal valid 1x1 transparent PNG, so admission's decode/dimension validation
+// (see #330) succeeds against real, Sharp-decodable bytes rather than arbitrary data.
+const MINIMAL_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
 test.describe("MiniMax-H3 End-to-End Campaign Execution and Review Lifecycle", () => {
   test("Single-scene campaign planned with MiniMax-H3 profile dispatches 124-frame production render and completes delivery (AC-1, AC-2, AC-3)", async ({
@@ -74,20 +82,71 @@ test.describe("MiniMax-H3 End-to-End Campaign Execution and Review Lifecycle", (
     const client = await testEnv.postgres.pool.connect();
     const candidateId = randomUUID();
     try {
+      const candidateBytes = Buffer.from(MINIMAL_PNG_BASE64, "base64");
+      const candidateContentHash = createHash("sha256").update(candidateBytes).digest("hex");
+      const candidateStorageKey = `candidates/${firstSceneId}/candidate-1.png`;
+
+      // Admission now verifies authoritative object bytes exist and decode (see #330),
+      // so the candidate's storage object must be real, not just DB metadata.
+      await testObjectStorage.putObject({
+        bucket: "test-bucket",
+        key: candidateStorageKey,
+        body: candidateBytes,
+        contentType: "image/png",
+        checksumSha256: candidateContentHash
+      });
+
       await insertStoryboardCandidateRecord(client, {
         candidateId,
         sceneId: firstSceneId!,
         sceneSpecRevision: 1,
         variantOrdinal: 1,
         storageBucket: "test-bucket",
-        storageObjectKey: `candidates/${firstSceneId}/candidate-1.png`,
-        contentHashSha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        storageObjectKey: candidateStorageKey,
+        contentHashSha256: candidateContentHash,
         generationPayload: { prompt: "Test prompt", model: "FLUX" }
       });
 
+      // Production admission now requires an approved current-revision ShotPlan
+      // (see #330). MiniMax-H3 I2V is a frame-anchored profile, so the ShotPlan's
+      // continuity must identify this candidate as the authoritative anchor frame.
+      const shotPlan = ShotPlan.create({
+        id: randomUUID() as ShotPlanId,
+        sceneId: firstSceneId as SceneId,
+        specRevision: 1,
+        variantOrdinal: 1,
+        status: "approved",
+        routingMode: "frame_anchored",
+        targetDurationMs: 5000,
+        targetFrameCount: 124,
+        framing: "medium_close_up",
+        angle: "eye_level",
+        lensIntent: "50mm prime, shallow depth of field",
+        cameraPosition: "eye level, static tripod",
+        cameraMovement: "static",
+        movementSpeed: "slow",
+        cameraPromptDescription: "Static eye-level medium close-up, natural morning light",
+        actionSummary: "Subject holds a warm, natural smile",
+        lightingStyle: "natural_golden_hour",
+        environmentDescription: "Outdoor, soft natural morning light",
+        continuity: {
+          persistentSubjectIds: [],
+          frameAnchorTarget: "first_frame",
+          anchorCandidateId: candidateId,
+          anchorMediaHashSha256: candidateContentHash
+        }
+      });
+      await new PostgresShotPlanRepository(client).save(shotPlan);
+
       await client.query(
-        "UPDATE storyboard_scenes SET status = 'director_review', updated_at = NOW() WHERE scene_id = $1",
-        [firstSceneId]
+        `UPDATE storyboard_scenes
+         SET status = 'director_review',
+             approved_shot_plan_id = $2,
+             approved_shot_plan_revision = $3,
+             production_routing_mode = $4,
+             updated_at = NOW()
+         WHERE scene_id = $1`,
+        [firstSceneId, shotPlan.id, shotPlan.specRevision, shotPlan.routingMode]
       );
     } finally {
       client.release();

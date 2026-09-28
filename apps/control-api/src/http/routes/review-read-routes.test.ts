@@ -371,6 +371,116 @@ describe("Review Read Endpoints", () => {
     });
   });
 
+  it("GET /api/scenes/:sceneId/review presigns previewUrl for boundReferences on shotPlans", async () => {
+    const refAssetId = "44444444-4444-4444-8444-444444444444";
+    const detailWithShotPlans: SceneReviewDetail = {
+      ...sampleDetail,
+      referenceBindingsWithStorage: [
+        {
+          referenceAssetId: refAssetId,
+          sceneId: sceneUuid,
+          specRevision: 2,
+          role: "subject_identity",
+          libraryRole: "subject_identity",
+          bindingOrder: 0,
+          weight: 1.0,
+          hints: null,
+          displayName: "Hero Character",
+          description: "Main actor front angle",
+          width: 1024,
+          height: 1024,
+          mimeType: "image/png",
+          contentHashSha256: "a".repeat(64),
+          storageBucket: "ref-bucket",
+          storageObjectKey: "ref-hero.png"
+        }
+      ],
+      shotPlans: [
+        {
+          shotPlanId: "11111111-1111-4111-8111-111111111111",
+          sceneId: sceneUuid,
+          specRevision: 2,
+          variantOrdinal: 1,
+          status: "draft",
+          routingMode: "reference_directed",
+          isCurrentRevision: true,
+          targetDurationMs: 4000,
+          targetFrameCount: 97,
+          framing: "medium_close_up",
+          angle: "eye_level",
+          cameraMovement: "dolly_in",
+          movementSpeed: "slow",
+          lensIntent: "50mm",
+          cameraPosition: "eye-level",
+          cameraPromptDescription: "Push in slowly",
+          actionSummary: "Character speaks",
+          lightingStyle: "neon_night",
+          environmentDescription: "City at night",
+          colorPalette: ["blue"],
+          atmosphere: "foggy",
+          subjects: [],
+          beats: [],
+          dialogue: null,
+          continuity: { persistentSubjectIds: [], frameAnchorTarget: "none" },
+          boundReferences: [
+            {
+              referenceAssetId: refAssetId,
+              role: "subject_identity",
+              displayName: "Hero Character",
+              contentHashSha256: "a".repeat(64),
+              previewAvailability: "unavailable"
+            }
+          ],
+          createdAt: "2026-08-18T10:00:00.000Z",
+          updatedAt: "2026-08-18T10:00:00.000Z"
+        }
+      ]
+    };
+
+    const sceneReviewQueries: SceneReviewQueries = {
+      async getCampaignReviewSummary() {
+        return undefined;
+      },
+      async getSceneReviewDetail(sceneId: SceneId) {
+        if (sceneId === sceneUuid) {
+          return detailWithShotPlans;
+        }
+        return undefined;
+      }
+    };
+
+    const reviewMediaDelivery: ReviewMediaDeliveryPort = {
+      async generatePresignedReadUrl(locator: PersistentObjectLocator) {
+        return `https://storage.local/${locator.bucket}/${locator.key}?sig=${locator.contentHash}`;
+      }
+    };
+
+    const app = createControlApiApp({
+      uow: new FakeUnitOfWork(),
+      sceneReviewQueries,
+      reviewMediaDelivery
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/scenes/${sceneUuid}/review`
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    const parsed = SceneReviewDetailReadModelSchema.safeParse(body);
+    expect(parsed.error?.format()).toBeUndefined();
+
+    expect(body.shotPlans).toBeDefined();
+    expect(body.shotPlans).toHaveLength(1);
+    const plan = body.shotPlans[0];
+    expect(plan.boundReferences).toHaveLength(1);
+    expect(plan.boundReferences[0].previewAvailability).toBe("available");
+    expect(plan.boundReferences[0].previewUrl).toBe(
+      `https://storage.local/ref-bucket/ref-hero.png?sig=${"a".repeat(64)}`
+    );
+  });
+
   it("GET /api/scenes/:sceneId/review defaults to available: false when reviewMediaDelivery dependency is not provided", async () => {
     const sceneReviewQueries: SceneReviewQueries = {
       async getCampaignReviewSummary() {

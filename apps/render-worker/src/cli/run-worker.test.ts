@@ -6,7 +6,8 @@ import {
   type RenderJob,
   type JobId,
   type SceneId,
-  type LeaseToken
+  type LeaseToken,
+  type CampaignRecord
 } from "@cco/domain";
 import type {
   JobMutationResult,
@@ -16,7 +17,8 @@ import type {
   ObjectStoragePort,
   GpuExecutionLeasePort,
   GpuLeaseHolder,
-  RenderEnginePort
+  RenderEnginePort,
+  CampaignRepository
 } from "@cco/application";
 import type { CertificationProvenanceReport } from "@cco/infrastructure";
 import type { ControlApiClient } from "../control-api-client.js";
@@ -548,7 +550,7 @@ describe("run-worker CLI", () => {
           sleep: testSleep
         })
       ).toThrow(
-        "DATABASE_URL or repository dependencies (sceneRepository, storyboardCandidateRepository, referenceAssetRepository) are required when production jobs are enabled"
+        "DATABASE_URL or repository dependencies (sceneRepository, storyboardCandidateRepository, referenceAssetRepository, campaignRepository) are required when production jobs are enabled"
       );
 
       // 2. Explicitly allowed production jobs without DB: throws WorkerConfigError
@@ -607,6 +609,9 @@ describe("run-worker CLI", () => {
           listBySceneAndRevision: async () => []
         },
         referenceAssetRepository: { listBySceneId: async () => [], findByIds: async () => [] },
+        campaignRepository: {
+          findById: async () => undefined
+        } as unknown as CampaignRepository<CampaignRecord>,
         logger: testLogger,
         sleep: testSleep
       });

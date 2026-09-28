@@ -431,7 +431,11 @@ export function ReviewCommandControls({
     }
 
     const isDirectAction =
-      action === "approve" || action === "reject" || action === "reroll" || action === "cancel";
+      action === "approve" ||
+      action === "reject" ||
+      action === "reroll" ||
+      action === "cancel" ||
+      action === "reroll_shotplan";
 
     if (isDirectAction) {
       dispatch({
@@ -515,7 +519,11 @@ export function ReviewCommandControls({
   const activeDetail = state.detail;
   const allowedActions = activeDetail.allowedActions ?? [];
   const chipActions = allowedActions.filter(
-    (action) => action !== "production_accept" && action !== "production_rerender"
+    (action) =>
+      action !== "production_accept" &&
+      action !== "production_rerender" &&
+      action !== "select_shotplan" &&
+      action !== "approve_shotplan"
   );
 
   const currentAction =
@@ -533,6 +541,14 @@ export function ReviewCommandControls({
       : state.phase === "submitting"
         ? (state.frozenIntent.command.payload as { expectedProductionJobId?: string } | undefined)
             ?.expectedProductionJobId
+        : undefined;
+  const isShotPlanAction =
+    currentAction === "select_shotplan" || currentAction === "approve_shotplan";
+  const expectedShotPlanId =
+    state.phase === "confirming"
+      ? (state.stagedAction.payload as { shotPlanId?: string } | undefined)?.shotPlanId
+      : state.phase === "submitting"
+        ? (state.frozenIntent.command.payload as { shotPlanId?: string } | undefined)?.shotPlanId
         : undefined;
 
   return (
@@ -870,6 +886,14 @@ export function ReviewCommandControls({
                     <dd>
                       Attempt #{productionAttempt?.attemptOrdinal ?? 1} (job{" "}
                       <code>{expectedProductionJobId}</code>)
+                    </dd>
+                  </div>
+                )}
+                {isShotPlanAction && expectedShotPlanId && (
+                  <div className="dialog-detail-item" data-testid="dialog-shot-plan-identity">
+                    <dt>Shot Plan:</dt>
+                    <dd>
+                      <code>{expectedShotPlanId}</code>
                     </dd>
                   </div>
                 )}

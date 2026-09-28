@@ -64,3 +64,6 @@ export {
   FakeComfyUiWebSocket,
   type RecordedFetchCall
 } from "./comfyui/test-support/fake-comfyui.js";
+
+import sharp from "sharp";
+export { sharp };

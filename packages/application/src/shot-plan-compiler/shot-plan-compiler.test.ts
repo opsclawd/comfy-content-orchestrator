@@ -78,6 +78,7 @@ function makeApprovedShotPlan(overrides: Partial<ShotPlanDocument> = {}): ShotPl
 
 const mockReferences: readonly CanonicalReferenceEntry[] = [
   {
+    bindingId: "binding-1",
     slotIndex: 1,
     promptTag: "<Picture 1>",
     role: "subject_identity",

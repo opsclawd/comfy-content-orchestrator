@@ -2,8 +2,8 @@
 
 **Project Name:** Godzspeed Sovereign Content Orchestration Platform & Creative Review Hub  
 **Repository:** `opsclawd/comfy-content-orchestrator`  
-**Document Version:** 3.7.0 (Final Delivery Packaging & Playback Surface)  
-**Status:** Implementation Ready — Sprint 5 / Issue #213 Certified  
+**Document Version:** 3.8.0 (Post-Pivot Authority Model & ShotPlan-to-H3 Architecture)  
+**Status:** Implementation Ready — Sprint 5 / Issue #213 Certified; Sprint 6 / Issue #325 Autonomous Scope Validated  
 **Runtime & Stack:** TypeScript / Node.js 24 LTS ("Krypton") | Next.js Review Hub | ComfyUI Headless | Tailscale (WireGuard Mesh) | PostgreSQL 18.6 | MinIO (S3-Compatible Review Media Store)  
 **Hardware Profile:** AMD Ryzen 7 7700 (8C/16T) | 32GB DDR5-5600 RAM certified for the dedicated Phase 1 single-render workload | NVIDIA RTX 4090 (24GB GDDR6X) | 2TB PCIe 4.0 NVMe SSD  
 **Key Stakeholders:**
@@ -11,15 +11,31 @@
 - **Technical Lead & Content Creator:** Agency Lead (Godzspeed Trinidad & Tobago Division)
 - **Cloud Control Plane:** Hetzner Cloud CPX31 VPS (Falkenstein, Germany / Tailscale-only application access)
 
-## 0. Version 3.7.0 Change Summary
+## 0. Version 3.8.0 Change Summary (Post-Pivot Authority Model)
 
-PRD v3.7.0 formalizes the Final Delivery Packaging and Playback Surface (Parent #213, Issues #276–#278), closing the full MVP user journey end-to-end inside the product:
+PRD v3.8.0 formalizes the post-pivot authority model (Parent #325, Issues #325.1–#325.6 / ADR 0007), replacing the legacy assumption that every production video job requires an approved storyboard first frame with structured `ShotPlan` intent and role-bound `ReferenceAsset` visual authority:
+
+1. **Separation of Authorities:**
+   - **Previs / Storyboard:** Non-authoritative visualization of proposed shot intent, generated using FLUX.1 [schnell] for rapid, cheap feedback. In the default `reference_directed` routing mode, previs candidate JPEGs are **never** injected or conditioned into production diffusion models as first frames. FLUX Schnell is intentionally retained for low-cost framing and composition review.
+   - **ShotPlan:** The primary structured production intent contract owning composition/framing, subject/object blocking, action and temporal beats, camera movement/lens intent, lighting/environment, target duration/framing, and continuity. Bridges high-level script copy with diffusion model execution. Selected and approved by the director.
+   - **Reference Assets:** The definitive visual conditioning authority for subject identity, product fidelity, location, style, and composition semantics. Bound to scenes with explicit roles (`subject_identity`, `product`, `location`, `style`, `composition`) and staged directly into H3 diffusion workflows.
+   - **Production Attempt:** High-fidelity generated video (MiniMax-H3) evaluated in production review (`qa`) against the approved ShotPlan intent.
+2. **Explicit Routing Modes:**
+   - `reference_directed` (platform default): Stages exact ordered reference assets with roles and SHA-256 digests; generated previs is completely absent from conditioning inputs.
+   - `frame_anchored`: Explicit route using only its declared authoritative anchor frame asset(s).
+3. **Review Hub & Atomic Production Admission:**
+   - The Review Hub presents ShotPlan variants with concise structured information (framing, blocking, beats, camera/lens, lighting, duration, bound references with signed previews).
+   - Variant-bound, revision-fenced ShotPlan actions (`select_shotplan`, `approve_shotplan`, `reroll_shotplan`).
+   - `approve_shotplan` is the atomic production-admission approval routed through `ApproveSceneAndDispatchCampaignProductionUseCase`, which verifies revision fencing, deterministically updates scene state, evaluates campaign-wide approval readiness, and creates the idempotent production run with queued scene jobs.
+   - Historical candidate records, manifests, and production attempts remain fully auditable and append-only.
+
+Material changes carried forward from v3.7.0:
 
 1. **Closed MVP User Journey Invariant:** Proves the complete pipeline invariant: `storyboard approved -> production rendered -> production reviewed/accepted (#215) -> final reel assembled -> director watches/downloads the result (#213)`.
-2. **Canonical Delivery Reel Read Plane:** Introduces `CampaignDeliveryReelReadModelSchema`, `PostgresCampaignDeliveryReelQueries`, `ResolveCampaignDeliveryReelUseCase`, and mounts `/api/campaigns/:campaignId/delivery-reel` and alias `/api/campaigns/:campaignId/delivery`. Exposes five canonical mutually exclusive states (`not-started`, `assembling`, `completed`, `failed`, `unavailable-artifact`).
-3. **Fail-Closed Artifact & Namespace Verification:** Eliminates cross-tenant data leakage by enforcing multi-tenant storage namespace isolation (`campaigns/${campaignId}/...`) and fails closed to `unavailable-artifact` if manifest schema validation fails, physical media is missing, or SHA-256 checksum mismatches occur.
-4. **Director Playback & Download Surface:** Delivers `CampaignDeliveryReelPanel` in `apps/web`, providing integrated HTML5 video playback via presigned URLs, error recovery with reel reloading, metadata badges, and direct `.mp4` downloads.
-5. **Production Review Gate Maintained:** Preserves all accepted-attempt invariants and attempt-fenced review semantics from PRD v3.6.0 unchanged.
+2. **Canonical Delivery Reel Read Plane:** Exposes five canonical states (`not-started`, `assembling`, `completed`, `failed`, `unavailable-artifact`).
+3. **Fail-Closed Artifact & Namespace Verification:** Eliminates cross-tenant data leakage by enforcing multi-tenant storage namespace isolation (`campaigns/${campaignId}/...`).
+4. **Director Playback & Download Surface:** `CampaignDeliveryReelPanel` in `apps/web`.
+5. **Production Review Gate Maintained:** Preserves all accepted-attempt invariants and attempt-fenced review semantics unchanged.
 
 Material changes carried forward from v3.5.2:
 

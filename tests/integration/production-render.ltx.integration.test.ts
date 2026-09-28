@@ -928,7 +928,7 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
         );
         expect(dbManifest.rows).toHaveLength(1);
         const payload = dbManifest.rows[0]?.manifest_payload;
-        expect(payload.renderProfile).toBe("ltx-25-720p-97f-i2v");
+        expect(payload.renderProfile).toBe("LTX_25_720P_5S_I2V_V1");
         expect(payload.engine).toBe("ltx_25_i2v");
         expect(payload.executionConditioning.candidateId).toBe(candidateId);
         expect(payload.executionConditioning.contentHashSha256).toBe(candidateHash);
