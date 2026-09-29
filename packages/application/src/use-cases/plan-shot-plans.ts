@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { ShotPlan, type SceneId, type ShotPlanId } from "@cco/domain";
 import type { PlanningModelClientPort } from "../ports/planning-model-client-port.js";
 import type { UnitOfWork, UnitOfWorkContext } from "../ports/unit-of-work.js";
-import { CANDIDATE_BASE_SEED, CANDIDATE_WORKFLOW_TEMPLATE } from "./progress-scene-production.js";
+import { CANDIDATE_BASE_SEED } from "./progress-scene-production.js";
+import {
+  compileStoryboardPrevisPrompt,
+  STORYBOARD_PREVIS_WORKFLOW_TEMPLATE
+} from "../shot-plan-compiler/index.js";
 import { SceneNotFoundError } from "./scene-not-found-error.js";
 import {
   decodePlanningAuthorizationPolicy,
@@ -219,12 +223,14 @@ export class PlanShotPlansUseCase {
         await context.scenes.save(scene);
       }
       for (const plan of shotPlans) {
+        const previsPrompt = compileStoryboardPrevisPrompt(plan);
         await context.jobs.enqueue({
           sceneId: scene.id,
           jobKind: "candidate",
-          workflowTemplate: CANDIDATE_WORKFLOW_TEMPLATE,
+          workflowTemplate: STORYBOARD_PREVIS_WORKFLOW_TEMPLATE,
           injectedPayload: {
-            prompt: plan.cameraPromptDescription || scene.configuration.prompt,
+            prompt: previsPrompt.prompt,
+            negativePrompt: previsPrompt.negativePrompt,
             seed: CANDIDATE_BASE_SEED + plan.variantOrdinal,
             variantOrdinal: plan.variantOrdinal,
             shotPlanId: plan.id,

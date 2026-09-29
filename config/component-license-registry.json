@@ -89,6 +89,16 @@
       "notes": "Internal policy approved for Phase 1 commercial use per docs/prd.md §3.5"
     },
     {
+      "componentId": "FLUX_SCHNELL_STORYBOARD_V1",
+      "componentType": "model",
+      "versionOrRevision": "1",
+      "status": "approved",
+      "licenseSource": "docs/prd.md §3.5",
+      "reviewedAt": "2026-09-29T00:00:00.000Z",
+      "policyRevision": "2026-08-29.1",
+      "notes": "Internal policy approved for Phase 1 commercial use per docs/prd.md §3.5 and issue #352"
+    },
+    {
       "componentId": "flux-1-dev",
       "componentType": "model",
       "versionOrRevision": "unpinned",

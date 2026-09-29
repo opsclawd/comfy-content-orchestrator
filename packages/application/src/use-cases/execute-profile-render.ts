@@ -91,6 +91,7 @@ function validateIdentity(identity: unknown): asserts identity is ProfileRenderI
   const validProfileKey =
     identity.renderProfileKey === "LTX_25_720P_5S_V1" ||
     identity.renderProfileKey === "FLUX_SCHNELL_DRAFT_V1" ||
+    identity.renderProfileKey === "FLUX_SCHNELL_STORYBOARD_V1" ||
     identity.renderProfileKey === "LTX_25_720P_5S_I2V_V1" ||
     identity.renderProfileKey === "MINIMAX_H3_720P_5S_I2V_V1" ||
     identity.renderProfileKey === "MINIMAX_H3_720P_5S_REF2V_V1";

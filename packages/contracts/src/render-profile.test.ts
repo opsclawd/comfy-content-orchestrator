@@ -9,6 +9,9 @@ import {
   MinimaxH3I2vRenderProfileSchema,
   MinimaxH3Ref2vRenderProfileSchema,
   RenderProfileKeySchema,
+  FluxSchnellStoryboardRenderProfileSchema,
+  FLUX_SCHNELL_STORYBOARD_V1_INJECTION_TOPOLOGY,
+  RENDER_PROFILE_ALIASES,
   LTX_25_720P_5S_V1_PROFILE,
   LTX_25_720P_5S_I2V_V1_PROFILE,
   MINIMAX_H3_720P_5S_I2V_V1_PROFILE,
@@ -125,6 +128,9 @@ describe("RenderProfileSchema", () => {
   it("accepts canonical profile keys including LTX_25_720P_5S_I2V_V1 and MINIMAX_H3_720P_5S_I2V_V1 and rejects unknown keys", () => {
     expect(RenderProfileKeySchema.parse("LTX_25_720P_5S_V1")).toBe("LTX_25_720P_5S_V1");
     expect(RenderProfileKeySchema.parse("FLUX_SCHNELL_DRAFT_V1")).toBe("FLUX_SCHNELL_DRAFT_V1");
+    expect(RenderProfileKeySchema.parse("FLUX_SCHNELL_STORYBOARD_V1")).toBe(
+      "FLUX_SCHNELL_STORYBOARD_V1"
+    );
     expect(RenderProfileKeySchema.parse("LTX_25_720P_5S_I2V_V1")).toBe("LTX_25_720P_5S_I2V_V1");
     expect(RenderProfileKeySchema.parse("MINIMAX_H3_720P_5S_I2V_V1")).toBe(
       "MINIMAX_H3_720P_5S_I2V_V1"
@@ -270,6 +276,17 @@ describe("RenderProfileSchema", () => {
     expect(parsed).toEqual(measuredFluxFixture);
   });
 
+  it("accepts a compliant FLUX storyboard profile", () => {
+    const storyboardFixture = {
+      ...measuredFluxFixture,
+      key: "FLUX_SCHNELL_STORYBOARD_V1" as const
+    };
+    const parsed = RenderProfileSchema.parse(storyboardFixture);
+    expect(parsed).toEqual(storyboardFixture);
+    const parsedStoryboard = FluxSchnellStoryboardRenderProfileSchema.parse(storyboardFixture);
+    expect(parsedStoryboard).toEqual(storyboardFixture);
+  });
+
   it("rejects unknown render profile keys", () => {
     expect(
       RenderProfileSchema.safeParse({
@@ -401,6 +418,40 @@ describe("RenderProfileSchema", () => {
       expect(topology?.audioPrompt).toBeNull();
       expect(topology?.frameCount).toBeUndefined();
       expect(topology?.referenceImage).toBeUndefined();
+    });
+
+    it("returns explicit topology for Flux storyboard profile with audioPrompt, frameCount, and referenceImage undefined/null", () => {
+      const topology = getProfileInjectionTopology("flux_schnell_storyboard_v1");
+      expect(topology).toBeDefined();
+      expect(topology).toEqual(FLUX_SCHNELL_STORYBOARD_V1_INJECTION_TOPOLOGY);
+      expect(topology?.prompt).toEqual({
+        nodeId: "3",
+        classType: "CLIPTextEncode",
+        inputField: "text"
+      });
+      expect(topology?.negativePrompt).toEqual({
+        nodeId: "4",
+        classType: "CLIPTextEncode",
+        inputField: "text"
+      });
+      expect(topology?.seed).toEqual({
+        nodeId: "1",
+        classType: "KSampler",
+        inputField: "seed"
+      });
+      expect(topology?.audioPrompt).toBeNull();
+      expect(topology?.frameCount).toBeUndefined();
+      expect(topology?.referenceImage).toBeUndefined();
+
+      // Aliases
+      expect(getProfileInjectionTopology("FLUX_SCHNELL_STORYBOARD_V1")).toEqual(topology);
+      expect(getProfileInjectionTopology("flux-schnell-storyboard-v1")).toEqual(topology);
+      expect(RENDER_PROFILE_ALIASES["flux_schnell_storyboard_v1"]).toBe(
+        "FLUX_SCHNELL_STORYBOARD_V1"
+      );
+      expect(RENDER_PROFILE_ALIASES["flux-schnell-storyboard-v1"]).toBe(
+        "FLUX_SCHNELL_STORYBOARD_V1"
+      );
     });
 
     it("returns explicit topology for LTX I2V profile with referenceImage target", () => {

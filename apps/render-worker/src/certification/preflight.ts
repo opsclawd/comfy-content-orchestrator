@@ -88,7 +88,10 @@ function verifyProfileWorkload(profile: CertificationProfile): void {
   if (profile.id === "ltx-25-720p-97f-i2v" && profile.engine !== "ltx_25_i2v") {
     throw new PreflightError(`Invalid profile engine "${profile.engine}": expected "ltx_25_i2v"`);
   }
-  if (profile.id === "flux-schnell-draft" && profile.engine !== "flux_schnell") {
+  if (
+    (profile.id === "flux-schnell-draft" || profile.id === "flux_schnell_storyboard_v1") &&
+    profile.engine !== "flux_schnell"
+  ) {
     throw new PreflightError(`Invalid profile engine "${profile.engine}": expected "flux_schnell"`);
   }
   if (profile.id === "minimax-h3-720p-124f-i2v" && profile.engine !== "minimax_h3_i2v") {
@@ -223,8 +226,10 @@ function verifyProfileWorkload(profile: CertificationProfile): void {
       );
     }
   } else if (profile.engine === "flux_schnell") {
-    if (profile.id !== "flux-schnell-draft") {
-      throw new PreflightError(`Invalid profile ID "${profile.id}": expected "flux-schnell-draft"`);
+    if (profile.id !== "flux-schnell-draft" && profile.id !== "flux_schnell_storyboard_v1") {
+      throw new PreflightError(
+        `Invalid profile ID "${profile.id}": expected "flux-schnell-draft" or "flux_schnell_storyboard_v1"`
+      );
     }
     if (profile.baseline.width !== 1024) {
       throw new PreflightError(
@@ -246,14 +251,26 @@ function verifyProfileWorkload(profile: CertificationProfile): void {
         `Invalid baseline steps ${String(profile.baseline.steps)}: expected 4`
       );
     }
-    if (
-      profile.renderProfileIdentity === null ||
-      profile.renderProfileIdentity.key !== "FLUX_SCHNELL_DRAFT_V1" ||
-      profile.renderProfileIdentity.version !== 1
-    ) {
-      throw new PreflightError(
-        `Invalid renderProfileIdentity: expected key "FLUX_SCHNELL_DRAFT_V1" version 1`
-      );
+    if (profile.id === "flux_schnell_storyboard_v1") {
+      if (
+        profile.renderProfileIdentity === null ||
+        profile.renderProfileIdentity.key !== "FLUX_SCHNELL_STORYBOARD_V1" ||
+        profile.renderProfileIdentity.version !== 1
+      ) {
+        throw new PreflightError(
+          `Invalid renderProfileIdentity: expected key "FLUX_SCHNELL_STORYBOARD_V1" version 1`
+        );
+      }
+    } else {
+      if (
+        profile.renderProfileIdentity === null ||
+        profile.renderProfileIdentity.key !== "FLUX_SCHNELL_DRAFT_V1" ||
+        profile.renderProfileIdentity.version !== 1
+      ) {
+        throw new PreflightError(
+          `Invalid renderProfileIdentity: expected key "FLUX_SCHNELL_DRAFT_V1" version 1`
+        );
+      }
     }
     const assertions = profile.assertions;
     if (!Array.isArray(assertions) || assertions.length === 0) {
@@ -466,6 +483,7 @@ function validateApprovedReportEntry(
     (rpp.key !== "LTX_25_720P_5S_V1" &&
       rpp.key !== "LTX_25_720P_5S_I2V_V1" &&
       rpp.key !== "FLUX_SCHNELL_DRAFT_V1" &&
+      rpp.key !== "FLUX_SCHNELL_STORYBOARD_V1" &&
       rpp.key !== "MINIMAX_H3_720P_5S_I2V_V1" &&
       rpp.key !== "MINIMAX_H3_720P_5S_REF2V_V1") ||
     rpp.version !== 1

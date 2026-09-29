@@ -642,4 +642,39 @@ describe("ExecuteProfileRenderUseCase", () => {
       code: "invalid_input"
     });
   });
+
+  it("accepts valid FLUX_SCHNELL_STORYBOARD_V1 identity and executes successfully", async () => {
+    const registry = {
+      getSnapshot: () => ({
+        registryRevision: "2026-08-29.1",
+        generatedAt: "2026-08-29T12:00:00.000Z",
+        entries: [
+          {
+            componentId: "FLUX_SCHNELL_STORYBOARD_V1",
+            componentType: "model" as const,
+            versionOrRevision: "1",
+            status: "approved" as const,
+            licenseId: "Apache-2.0",
+            licenseSource: "docs/prd.md §3.5",
+            reviewedAt: "2026-08-29T12:00:00.000Z",
+            policyRevision: "1"
+          }
+        ]
+      })
+    };
+    const enforceLicenseRouting = new EnforceLicenseRouting({ registry });
+    const { useCase, renderEngine } = createUseCase({ enforceLicenseRouting });
+
+    const storyboardIdentity = createIdentity({
+      profileId: "flux_schnell_storyboard_v1",
+      renderProfileKey: "FLUX_SCHNELL_STORYBOARD_V1",
+      engine: "flux_schnell"
+    });
+    const input = createInput({ identity: storyboardIdentity });
+
+    const result = await useCase.execute(input);
+    expect(result.status).toBe("succeeded");
+    expect(result.profile).toEqual(storyboardIdentity);
+    expect(renderEngine.queueInputs[0]!.renderProfileKey).toBe("FLUX_SCHNELL_STORYBOARD_V1");
+  });
 });
