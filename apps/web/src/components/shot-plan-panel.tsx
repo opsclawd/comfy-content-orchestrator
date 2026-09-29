@@ -10,7 +10,17 @@ import type {
   CandidateReadModel
 } from "@cco/contracts";
 import type { ReviewCommandEvent, ReviewCommandState } from "./review-command-state";
-import { formatDurationMs, formatReviewAction } from "./format-review-value";
+import {
+  formatDurationMs,
+  formatReviewAction,
+  formatShotFraming,
+  formatCameraAngle,
+  formatCameraMovement,
+  formatMovementSpeed,
+  formatBlockingPosition,
+  formatLightingStyle,
+  formatSceneSlug
+} from "./format-review-value";
 
 export const RUNTIME_SUPPORTED_FRAME_ANCHOR_TARGETS = new Set(["first_frame"] as const);
 
@@ -388,7 +398,7 @@ export function ShotPlanPanel({
           return (
             <article
               key={plan.shotPlanId}
-              className={`shot-plan-card ${isSelected ? "shot-plan-card-selected" : ""} ${
+              className={`shot-plan-card storyboard-panel ${isSelected ? "shot-plan-card-selected" : ""} ${
                 isApproved ? "shot-plan-card-approved" : ""
               } ${!isCurrent ? "shot-plan-card-stale" : ""}`}
               data-testid="shot-plan-card"
@@ -396,10 +406,16 @@ export function ShotPlanPanel({
               data-status={plan.status}
               data-routing-mode={plan.routingMode}
             >
-              {/* Card Header & Status */}
+              {/* Card Header & Slate Slugline */}
               <div className="shot-plan-card-header">
                 <div className="shot-plan-card-title-row">
-                  <span className="shot-plan-variant-label">Variant #{plan.variantOrdinal}</span>
+                  <div className="shot-plan-slate-info">
+                    <span className="storyboard-slate-title" data-testid="storyboard-slate-title">
+                      SCENE {formatSceneSlug(plan.sceneId ?? sceneId)} · SHOTPLAN V
+                      {plan.variantOrdinal}
+                    </span>
+                    <span className="shot-plan-variant-label">Variant #{plan.variantOrdinal}</span>
+                  </div>
                   <div className="shot-plan-badges">
                     <span
                       className="shot-plan-status-badge"
@@ -445,11 +461,11 @@ export function ShotPlanPanel({
                     >
                       <strong>Declared Target:</strong>{" "}
                       <code data-testid="shot-plan-frame-anchor-target">
-                        {plan.continuity.frameAnchorTarget}
+                        {plan.continuity?.frameAnchorTarget}
                       </code>{" "}
                       | <strong>Authoritative Anchor Asset:</strong>{" "}
                       <code data-testid="shot-plan-frame-anchor-asset">
-                        {plan.continuity.anchorCandidateId}
+                        {plan.continuity?.anchorCandidateId}
                       </code>{" "}
                       (Explicitly declared frame asset)
                     </div>
@@ -478,86 +494,191 @@ export function ShotPlanPanel({
                   ))}
               </div>
 
-              {/* Previs Visualization Section */}
-              <div className="shot-plan-previs-box" data-testid="shot-plan-previs-visualization">
-                <div className="previs-box-header">
-                  <span className="previs-label-title">
-                    Previs Visualization (Non-Authoritative)
-                  </span>
-                  <span className="previs-label-note">
-                    {isFrameAnchored
-                      ? hasValidAnchor
-                        ? "Anchor source for declared frame-anchored route"
-                        : anchorValidation.isMissing
-                          ? "Non-authoritative visualization; missing declared frame anchor"
-                          : "Non-authoritative visualization; invalid declared frame anchor"
-                      : "Proposed shot intent; not conditioned as first-frame in reference-directed H3"}
-                  </span>
+              {/* Two-Column Storyboard Body */}
+              <div className="storyboard-panel-body">
+                {/* Left Column: Storyboard Viewfinder Frame & Authority Badge */}
+                <div className="storyboard-media-col">
+                  <div
+                    className="storyboard-viewfinder-box shot-plan-previs-box"
+                    data-testid="shot-plan-previs-visualization"
+                  >
+                    <div className="previs-box-header">
+                      <span className="previs-label-title">
+                        Previs Visualization (Non-Authoritative)
+                      </span>
+                      <span className="previs-label-note">
+                        {isFrameAnchored
+                          ? hasValidAnchor
+                            ? "Anchor source for declared frame-anchored route"
+                            : anchorValidation.isMissing
+                              ? "Non-authoritative visualization; missing declared frame anchor"
+                              : "Non-authoritative visualization; invalid declared frame anchor"
+                          : "Proposed shot intent; not conditioned as first-frame in reference-directed H3"}
+                      </span>
+                    </div>
+
+                    <div className="storyboard-viewfinder-matte">
+                      {plan.previs?.media.available && plan.previs.media.url ? (
+                        <div className="previs-media-container">
+                          <img
+                            src={plan.previs.media.url}
+                            alt={`Previs visualization for Variant #${plan.variantOrdinal}`}
+                            className="previs-image"
+                            data-testid="previs-preview-image"
+                          />
+                        </div>
+                      ) : (
+                        <div className="previs-unavailable" data-testid="previs-unavailable">
+                          <span>Previs visualization not rendered</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Persistent Visual Treatment Banner */}
+                    <div
+                      className={`storyboard-non-production-badge ${
+                        isFrameAnchored
+                          ? hasValidAnchor
+                            ? "badge-frame-anchor-valid"
+                            : "badge-frame-anchor-invalid"
+                          : "badge-previs-non-production"
+                      }`}
+                      data-testid="previs-non-production-badge"
+                      data-routing-mode={plan.routingMode}
+                    >
+                      <span className="badge-text">
+                        {!isFrameAnchored
+                          ? "Storyboard / Previs — non-production image"
+                          : hasValidAnchor
+                            ? `Frame Anchor Candidate — conditional pixel anchor (${plan.continuity?.frameAnchorTarget})`
+                            : "Storyboard / Previs — non-production image (missing frame anchor)"}
+                      </span>
+                      <span className="badge-subtext">
+                        {!isFrameAnchored
+                          ? "Visual truth is supplied by bound reference assets. Previs pixels are not conditioned into production."
+                          : hasValidAnchor
+                            ? `Declared target: ${plan.continuity?.frameAnchorTarget} | Anchor asset: ${plan.continuity?.anchorCandidateId}`
+                            : (anchorValidation.reason ??
+                              "Authoritative anchor candidate is missing or unverified.")}
+                      </span>
+                    </div>
+
+                    {plan.previs?.reviewNotes && (
+                      <p className="previs-review-notes" data-testid="previs-review-notes">
+                        <em>Previs notes:</em> {plan.previs.reviewNotes}
+                      </p>
+                    )}
+                  </div>
                 </div>
-                {plan.previs?.media.available && plan.previs.media.url ? (
-                  <div className="previs-media-container">
-                    <img
-                      src={plan.previs.media.url}
-                      alt={`Previs visualization for Variant #${plan.variantOrdinal}`}
-                      className="previs-image"
-                      data-testid="previs-preview-image"
-                    />
-                  </div>
-                ) : (
-                  <div className="previs-unavailable" data-testid="previs-unavailable">
-                    <span>Previs visualization not rendered</span>
-                  </div>
-                )}
-                {plan.previs?.reviewNotes && (
-                  <p className="previs-review-notes" data-testid="previs-review-notes">
-                    <em>Previs notes:</em> {plan.previs.reviewNotes}
-                  </p>
-                )}
-              </div>
 
-              {/* Structured Production Intent Details */}
-              <div className="shot-plan-intent-details" data-testid="shot-plan-intent-details">
-                <dl className="intent-attribute-list">
-                  <div className="intent-attribute-item">
-                    <dt>Duration &amp; Frames</dt>
-                    <dd data-testid="shot-plan-duration">
-                      {formatDurationMs(plan.targetDurationMs)} ({plan.targetFrameCount} frames)
-                    </dd>
-                  </div>
+                {/* Right Column: Authoritative Structured ShotPlan Metadata */}
+                <div
+                  className="storyboard-metadata-col shot-plan-intent-details"
+                  data-testid="shot-plan-intent-details"
+                >
+                  {/* Camera Sluglines Callout */}
+                  <div
+                    className="storyboard-camera-callout"
+                    data-testid="storyboard-camera-callout"
+                  >
+                    <div className="camera-slugline-primary" data-testid="shot-plan-framing">
+                      <span className="slugline-main">
+                        {formatShotFraming(plan.framing).toUpperCase()} ·{" "}
+                        {formatCameraAngle(plan.angle).toUpperCase()} · {plan.lensIntent}
+                      </span>
+                      <span className="technical-code-caption">
+                        <code>{plan.framing}</code> / <code>{plan.angle}</code>
+                      </span>
+                    </div>
 
-                  <div className="intent-attribute-item">
-                    <dt>Framing &amp; Angle</dt>
-                    <dd data-testid="shot-plan-framing">
-                      <code>{plan.framing}</code> / <code>{plan.angle}</code>
-                    </dd>
-                  </div>
+                    <div className="camera-slugline-movement" data-testid="shot-plan-camera">
+                      <span className="slugline-movement-main">
+                        {formatCameraMovement(plan.cameraMovement).toUpperCase()} ·{" "}
+                        {formatMovementSpeed(plan.movementSpeed).toUpperCase()}
+                      </span>
+                      <div className="technical-code-caption">
+                        <strong>Movement:</strong> {plan.cameraMovement} ({plan.movementSpeed})
+                        <br />
+                        <strong>Lens:</strong> {plan.lensIntent}
+                        <br />
+                        <strong>Position:</strong> {plan.cameraPosition}
+                      </div>
+                    </div>
 
-                  <div className="intent-attribute-item">
-                    <dt>Camera &amp; Lens</dt>
-                    <dd data-testid="shot-plan-camera">
-                      <strong>Movement:</strong> {plan.cameraMovement} ({plan.movementSpeed})<br />
-                      <strong>Lens:</strong> {plan.lensIntent}
-                      <br />
-                      <strong>Position:</strong> {plan.cameraPosition}
-                    </dd>
+                    {plan.cameraPromptDescription && (
+                      <p className="camera-prompt-desc">{plan.cameraPromptDescription}</p>
+                    )}
                   </div>
 
-                  <div className="intent-attribute-item">
-                    <dt>Camera Description</dt>
-                    <dd className="camera-prompt-desc">{plan.cameraPromptDescription}</dd>
-                  </div>
+                  {/* Staging & Blocking */}
+                  {plan.subjects && plan.subjects.length > 0 && (
+                    <div className="storyboard-blocking-section">
+                      <h5 className="storyboard-section-title">Staging &amp; Blocking</h5>
+                      <div data-testid="shot-plan-subjects">
+                        <ul className="storyboard-blocking-list subjects-list">
+                          {plan.subjects.map((sub, idx) => {
+                            const boundRef = sub.referenceAssetId
+                              ? plan.boundReferences?.find(
+                                  (r) => r.referenceAssetId === sub.referenceAssetId
+                                )
+                              : plan.boundReferences?.find((r) => r.role === sub.role);
+                            const rolePrefix = sub.role === "product" ? "Product" : "Subject";
+                            return (
+                              <li key={idx} className="storyboard-blocking-item">
+                                <span className="blocking-entity">
+                                  <strong>{rolePrefix}:</strong> {sub.subjectId}
+                                </span>{" "}
+                                <span className="blocking-ref-tag" data-testid="blocking-ref-tag">
+                                  [{boundRef?.displayName ?? "unbound"} ·{" "}
+                                  {boundRef?.role ?? sub.role}]
+                                </span>{" "}
+                                ·{" "}
+                                <span className="blocking-trajectory">
+                                  {formatBlockingPosition(sub.initialPosition)} →{" "}
+                                  {sub.movementTrajectory}
+                                </span>
+                                {sub.interactionSummary ? (
+                                  <span className="blocking-interaction">
+                                    {" "}
+                                    — {sub.interactionSummary}
+                                  </span>
+                                ) : null}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    </div>
+                  )}
 
-                  <div className="intent-attribute-item">
-                    <dt>Action Summary</dt>
-                    <dd className="action-summary-text" data-testid="shot-plan-action">
+                  {/* Action Summary & Temporal Beats */}
+                  <div className="storyboard-action-section">
+                    <h5 className="storyboard-section-title">Action Summary</h5>
+                    <p className="action-summary-text" data-testid="shot-plan-action">
                       {plan.actionSummary}
-                    </dd>
+                    </p>
+
+                    {plan.beats && plan.beats.length > 0 && (
+                      <div className="storyboard-beats-sublist" data-testid="shot-plan-beats">
+                        <h6 className="storyboard-subsection-title">Temporal Beats</h6>
+                        <ol className="beats-list">
+                          {plan.beats.map((beat) => (
+                            <li key={beat.beatIndex}>
+                              [{beat.startMs}ms - {beat.endMs}ms] {beat.description} (Camera:{" "}
+                              {beat.cameraAction}, Subject: {beat.subjectAction})
+                            </li>
+                          ))}
+                        </ol>
+                      </div>
+                    )}
                   </div>
 
-                  <div className="intent-attribute-item">
-                    <dt>Lighting &amp; Environment</dt>
-                    <dd data-testid="shot-plan-lighting-env">
-                      <strong>Lighting:</strong> {plan.lightingStyle}
+                  {/* Environment & Lighting Concept */}
+                  <div className="storyboard-env-lighting-section">
+                    <h5 className="storyboard-section-title">Environment &amp; Lighting</h5>
+                    <div className="storyboard-env-lighting" data-testid="shot-plan-lighting-env">
+                      <strong>Lighting:</strong> {formatLightingStyle(plan.lightingStyle)}{" "}
+                      <span className="technical-code-caption">({plan.lightingStyle})</span>
                       <br />
                       <strong>Environment:</strong> {plan.environmentDescription}
                       {plan.atmosphere ? (
@@ -572,97 +693,81 @@ export function ShotPlanPanel({
                           <strong>Palette:</strong> {plan.colorPalette.join(", ")}
                         </>
                       ) : null}
-                    </dd>
+                    </div>
                   </div>
 
-                  {plan.subjects && plan.subjects.length > 0 && (
-                    <div className="intent-attribute-item">
-                      <dt>Subject Blocking</dt>
-                      <dd data-testid="shot-plan-subjects">
-                        <ul className="subjects-list">
-                          {plan.subjects.map((sub, idx) => (
-                            <li key={idx}>
-                              <strong>{sub.subjectId}</strong> ({sub.role}, {sub.initialPosition}):{" "}
-                              {sub.movementTrajectory}
-                              {sub.interactionSummary ? ` — ${sub.interactionSummary}` : ""}
-                            </li>
-                          ))}
-                        </ul>
-                      </dd>
+                  {/* Bound References Strip (Beside the image) */}
+                  <div
+                    className="shot-plan-references-section storyboard-reference-strip"
+                    data-testid="shot-plan-references"
+                  >
+                    <div className="references-header">
+                      <h4>Authoritative Reference Assets (Visual Authority)</h4>
+                      <span className="references-note">
+                        Joined persisted bindings scoped to scene revision
+                      </span>
                     </div>
-                  )}
-
-                  {plan.beats && plan.beats.length > 0 && (
-                    <div className="intent-attribute-item">
-                      <dt>Temporal Beats</dt>
-                      <dd data-testid="shot-plan-beats">
-                        <ol className="beats-list">
-                          {plan.beats.map((beat) => (
-                            <li key={beat.beatIndex}>
-                              [{beat.startMs}ms - {beat.endMs}ms] {beat.description} (Camera:{" "}
-                              {beat.cameraAction}, Subject: {beat.subjectAction})
-                            </li>
-                          ))}
-                        </ol>
-                      </dd>
-                    </div>
-                  )}
-                </dl>
-              </div>
-
-              {/* Bound References (Visual Authority) */}
-              <div className="shot-plan-references-section" data-testid="shot-plan-references">
-                <div className="references-header">
-                  <h4>Authoritative Reference Assets (Visual Authority)</h4>
-                  <span className="references-note">
-                    Joined persisted bindings scoped to scene revision
-                  </span>
-                </div>
-                {plan.boundReferences && plan.boundReferences.length > 0 ? (
-                  <div className="reference-badges-grid">
-                    {plan.boundReferences.map((ref: ShotPlanReferenceBindingReviewItem) => (
-                      <div
-                        key={ref.referenceAssetId}
-                        className="reference-binding-card"
-                        data-testid="shot-plan-reference-item"
-                        data-asset-id={ref.referenceAssetId}
-                        data-role={ref.role}
-                      >
-                        {ref.previewUrl && ref.previewAvailability === "available" ? (
-                          <div className="ref-preview-thumbnail">
-                            <img
-                              src={ref.previewUrl}
-                              alt={ref.displayName ?? ref.referenceAssetId}
-                              className="ref-thumb-img"
-                              data-testid="reference-preview-image"
-                            />
+                    {plan.boundReferences && plan.boundReferences.length > 0 ? (
+                      <div className="reference-badges-grid">
+                        {plan.boundReferences.map((ref: ShotPlanReferenceBindingReviewItem) => (
+                          <div
+                            key={ref.referenceAssetId}
+                            className="reference-binding-card"
+                            data-testid="shot-plan-reference-item"
+                            data-asset-id={ref.referenceAssetId}
+                            data-role={ref.role}
+                          >
+                            {ref.previewUrl && ref.previewAvailability === "available" ? (
+                              <div className="ref-preview-thumbnail">
+                                <img
+                                  src={ref.previewUrl}
+                                  alt={ref.displayName ?? ref.referenceAssetId}
+                                  className="ref-thumb-img"
+                                  data-testid="reference-preview-image"
+                                />
+                              </div>
+                            ) : (
+                              <div className="ref-preview-placeholder">
+                                <span>No preview</span>
+                              </div>
+                            )}
+                            <div className="ref-binding-info">
+                              <span className="ref-name">
+                                {ref.displayName || <code>{ref.referenceAssetId.slice(0, 8)}</code>}
+                              </span>
+                              <span className="ref-role-pill" data-role={ref.role}>
+                                {ref.role}
+                              </span>
+                              {ref.width && ref.height && (
+                                <span className="ref-dims">
+                                  {ref.width}×{ref.height}
+                                </span>
+                              )}
+                            </div>
                           </div>
-                        ) : (
-                          <div className="ref-preview-placeholder">
-                            <span>No preview</span>
-                          </div>
-                        )}
-                        <div className="ref-binding-info">
-                          <span className="ref-name">
-                            {ref.displayName || <code>{ref.referenceAssetId.slice(0, 8)}</code>}
-                          </span>
-                          <span className="ref-role-pill" data-role={ref.role}>
-                            {ref.role}
-                          </span>
-                          {ref.width && ref.height && (
-                            <span className="ref-dims">
-                              {ref.width}×{ref.height}
-                            </span>
-                          )}
-                        </div>
+                        ))}
                       </div>
-                    ))}
+                    ) : (
+                      <div className="empty-references" data-testid="empty-references">
+                        <span>No bound references</span>
+                      </div>
+                    )}
                   </div>
-                ) : (
-                  <div className="empty-references" data-testid="empty-references">
-                    <span>No bound references</span>
+
+                  {/* Technical Footprint & Duration */}
+                  <div className="storyboard-technical-footprint">
+                    <div className="technical-footprint-item">
+                      <span className="technical-footprint-label">Duration:</span>{" "}
+                      <span data-testid="shot-plan-duration">
+                        {formatDurationMs(plan.targetDurationMs)} ({plan.targetFrameCount} frames)
+                      </span>
+                    </div>
+                    <div className="technical-footprint-item">
+                      <span className="technical-footprint-label">Routing Mode:</span>{" "}
+                      <span>{isFrameAnchored ? "Frame Anchored" : "Reference Directed"}</span>
+                    </div>
                   </div>
-                )}
+                </div>
               </div>
 
               {/* Variant Actions */}
