@@ -281,6 +281,39 @@ describe("Certification Profile Manifest", () => {
     expect(profile.runnerProfile).toBe("dynamicvram-offload-v1");
   });
 
+  it("loads the real repository templates manifest with flux_schnell_storyboard_v1 and historical flux-schnell-draft", async () => {
+    const templatesManifestPath = fileURLToPath(
+      new URL("../../../../../templates/provenance.json", import.meta.url)
+    );
+    const storyboardProfile = await loadCertificationProfile(
+      templatesManifestPath,
+      "flux_schnell_storyboard_v1"
+    );
+
+    expect(storyboardProfile.id).toBe("flux_schnell_storyboard_v1");
+    expect(storyboardProfile.engine).toBe("flux_schnell");
+    expect(storyboardProfile.workflowRelativePath).toBe("flux_schnell_draft_api.json");
+    expect(storyboardProfile.baseline.width).toBe(1024);
+    expect(storyboardProfile.baseline.height).toBe(1024);
+    expect(storyboardProfile.baseline.steps).toBe(4);
+    expect(storyboardProfile.baseline.frames).toBe(1);
+    expect(storyboardProfile.renderProfileIdentity).toEqual({
+      key: "FLUX_SCHNELL_STORYBOARD_V1",
+      version: 1
+    });
+
+    const historicalProfile = await loadCertificationProfile(
+      templatesManifestPath,
+      "flux-schnell-draft"
+    );
+    expect(historicalProfile.id).toBe("flux-schnell-draft");
+    expect(historicalProfile.engine).toBe("flux_schnell");
+    expect(historicalProfile.renderProfileIdentity).toEqual({
+      key: "FLUX_SCHNELL_DRAFT_V1",
+      version: 1
+    });
+  });
+
   it("manifest loading rejects duplicate profile and model identities", async () => {
     // Duplicate profile ID
     const duplicateProfileManifest = createValidManifest();

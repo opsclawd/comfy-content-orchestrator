@@ -192,10 +192,13 @@ describe("PlanShotPlansUseCase", () => {
       expect.objectContaining({
         sceneId: scene.id,
         jobKind: "candidate",
+        workflowTemplate: "flux_schnell_storyboard_v1",
         injectedPayload: expect.objectContaining({
           shotPlanId: v1.id,
           variantOrdinal: 1,
-          specRevision: scene.specRevision
+          specRevision: scene.specRevision,
+          prompt: expect.stringContaining("Professional advertising storyboard illustration"),
+          negativePrompt: expect.stringContaining("photorealistic")
         })
       })
     );

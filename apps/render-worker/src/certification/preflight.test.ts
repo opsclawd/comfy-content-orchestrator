@@ -1560,5 +1560,159 @@ describe("apps/render-worker/src/certification/preflight", () => {
         })
       ).not.toThrow();
     });
+
+    it("verifies and accepts a valid flux_schnell_storyboard_v1 profile", () => {
+      const storyboardProfile: CertificationProfile = {
+        id: "flux_schnell_storyboard_v1",
+        engine: "flux_schnell",
+        workflowPath: "/home/gary/workflows/flux_schnell_draft_api.json",
+        workflowRelativePath: "flux_schnell_draft_api.json",
+        expectedWorkflowHash: "af8528239790f6536ce7f0733f92095501fecfd8e919084a9decdded59e6ecf5",
+        source: {
+          kind: "validated_host_export",
+          uri: "https://github.com/comfyanonymous/ComfyUI",
+          revision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+          license: "GPL-3.0"
+        },
+        baseline: {
+          width: 1024,
+          height: 1024,
+          steps: 4,
+          frames: 1
+        },
+        minFreeDiskGb: 0,
+        runnerProfile: "dynamicvram-offload-v1",
+        models: [
+          {
+            category: "diffusion_models",
+            relativePath: "flux1-schnell.safetensors"
+          }
+        ],
+        assertions: [
+          { nodeId: "1", classType: "KSampler", input: "steps", equals: 4 },
+          { nodeId: "5", classType: "EmptyLatentImage", input: "width", equals: 1024 },
+          { nodeId: "5", classType: "EmptyLatentImage", input: "height", equals: 1024 }
+        ],
+        renderProfileIdentity: {
+          key: "FLUX_SCHNELL_STORYBOARD_V1",
+          version: 1
+        }
+      };
+
+      const approved = {
+        version: 1,
+        profileId: "flux_schnell_storyboard_v1",
+        workflow: {
+          sha256: "af8528239790f6536ce7f0733f92095501fecfd8e919084a9decdded59e6ecf5",
+          source: {
+            kind: "validated_host_export",
+            revision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+            uri: "https://github.com/comfyanonymous/ComfyUI",
+            license: "GPL-3.0"
+          }
+        },
+        renderProfileProvenance: {
+          key: "FLUX_SCHNELL_STORYBOARD_V1",
+          version: 1,
+          engine: "flux_schnell",
+          frames: 1,
+          steps: 4,
+          workflowHash: "af8528239790f6536ce7f0733f92095501fecfd8e919084a9decdded59e6ecf5",
+          modelHashes: {
+            "models/diffusion_models/flux1-schnell.safetensors": "a".repeat(64)
+          }
+        }
+      };
+
+      const live: CertificationProvenanceReport = {
+        version: 1,
+        profileId: "flux_schnell_storyboard_v1",
+        generatedAt: "2026-09-29T00:00:00.000Z",
+        workflow: {
+          relativePath: "flux_schnell_draft_api.json",
+          sha256: "af8528239790f6536ce7f0733f92095501fecfd8e919084a9decdded59e6ecf5",
+          source: {
+            kind: "authored_from_spec",
+            revision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+            uri: "https://github.com/comfyanonymous/ComfyUI",
+            license: "GPL-3.0"
+          }
+        },
+        models: [
+          {
+            category: "diffusion_models",
+            relativePath: "flux1-schnell.safetensors",
+            key: "models/diffusion_models/flux1-schnell.safetensors",
+            bytes: 1000,
+            sha256: "a".repeat(64)
+          }
+        ],
+        git: {
+          comfyUiCommit: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+          customNodes: []
+        },
+        disk: {
+          modelFootprintBytes: 1000,
+          availableBytes: 100_000_000_000,
+          requiredFreeBytes: 0,
+          modelFootprintGb: 1,
+          availableGb: 100,
+          minFreeDiskGb: 0,
+          passes: true
+        },
+        renderProfileProvenance: {
+          key: "FLUX_SCHNELL_STORYBOARD_V1",
+          version: 1,
+          engine: "flux_schnell",
+          frames: 1,
+          steps: 4,
+          workflowHash: "af8528239790f6536ce7f0733f92095501fecfd8e919084a9decdded59e6ecf5",
+          runnerProfile: "dynamicvram-offload-v1",
+          measuredDiskFootprintGb: 1,
+          minFreeDiskGb: 0,
+          modelHashes: {
+            "models/diffusion_models/flux1-schnell.safetensors": "a".repeat(64)
+          }
+        }
+      };
+
+      expect(() =>
+        verifyGoldMasterProvenance({
+          approved,
+          live,
+          profile: storyboardProfile
+        })
+      ).not.toThrow();
+
+      // Rejects key mismatch
+      expect(() =>
+        verifyGoldMasterProvenance({
+          approved,
+          live,
+          profile: {
+            ...storyboardProfile,
+            renderProfileIdentity: {
+              key: "FLUX_SCHNELL_DRAFT_V1" as unknown as "FLUX_SCHNELL_STORYBOARD_V1",
+              version: 1
+            }
+          }
+        })
+      ).toThrow(PreflightError);
+
+      // Rejects baseline steps mismatch
+      expect(() =>
+        verifyGoldMasterProvenance({
+          approved,
+          live,
+          profile: {
+            ...storyboardProfile,
+            baseline: {
+              ...storyboardProfile.baseline,
+              steps: 8
+            }
+          }
+        })
+      ).toThrow(PreflightError);
+    });
   });
 });

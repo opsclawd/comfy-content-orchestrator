@@ -927,15 +927,22 @@ export class PostgresJobQueue implements JobQueuePort {
 
     const candidateId = insertRes.rows[0]?.candidate_id;
     if (candidateId) {
+      const profilePayload = candidatePayload.generationPayload?.profile;
+      const resolvedModelProfile =
+        typeof profilePayload === "string" && profilePayload.trim().length > 0
+          ? profilePayload
+          : typeof (profilePayload as Record<string, unknown> | undefined)?.profileId ===
+                "string" &&
+              ((profilePayload as Record<string, unknown>).profileId as string).trim().length > 0
+            ? ((profilePayload as Record<string, unknown>).profileId as string)
+            : (jobRow?.workflow_template ?? "flux_schnell_storyboard_v1");
+
       const previsObj = {
         candidateId,
         storageBucket: candidatePayload.storageBucket,
         storageObjectKey: candidatePayload.storageObjectKey,
         contentHashSha256: candidatePayload.contentHashSha256,
-        modelProfile:
-          typeof candidatePayload.generationPayload?.profile === "string"
-            ? candidatePayload.generationPayload.profile
-            : "flux-schnell",
+        modelProfile: resolvedModelProfile,
         generatedAt: new Date().toISOString(),
         reviewNotes: null
       };
