@@ -100,9 +100,12 @@ export function startPeerProxy(overrides = {}) {
     path.join(__dirname, "server.js");
 
   const INTERNAL_HOST = "127.0.0.1";
-  // This is deliberately not configurable: the readiness and trust boundary
-  // depend on the child being reachable only on this loopback port.
-  const INTERNAL_PORT = 3100;
+  // Pinned internal port 127.0.0.1:3100 in production, overridable via options/env for test isolation
+  const INTERNAL_PORT =
+    overrides.internalPort ||
+    (process.env.PEER_PROXY_INTERNAL_PORT
+      ? parseInt(process.env.PEER_PROXY_INTERNAL_PORT, 10)
+      : 3100);
   const EXTERNAL_PORT = overrides.externalPort || parseInt(process.env.PORT || "3000", 10);
 
   let childReady = false;

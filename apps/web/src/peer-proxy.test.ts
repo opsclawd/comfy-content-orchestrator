@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import net from "node:net";
 import fs from "node:fs";
 import path from "node:path";
@@ -47,7 +47,10 @@ async function waitForPortFree(port: number, host = "127.0.0.1"): Promise<void> 
   }
 }
 
-async function stopProxy(proxyProc: ReturnType<typeof spawn>): Promise<void> {
+async function stopProxy(
+  proxyProc: ReturnType<typeof spawn>,
+  internalPort?: number
+): Promise<void> {
   if (proxyProc.exitCode === null) {
     proxyProc.kill("SIGTERM");
     await new Promise<void>((resolve) => {
@@ -62,7 +65,9 @@ async function stopProxy(proxyProc: ReturnType<typeof spawn>): Promise<void> {
       }, 3000);
     });
   }
-  await waitForPortFree(3100);
+  if (internalPort) {
+    await waitForPortFree(internalPort);
+  }
 }
 
 describe("normalizeIpAddress", () => {
@@ -385,16 +390,14 @@ setTimeout(() => {
     }
   });
 
-  beforeEach(async () => {
-    await waitForPortFree(3100);
-  });
-
   it("returns 503 with Retry-After: 1 before readiness, then transitions to 200", async () => {
     const externalPort = await getFreePort();
+    const internalPort = await getFreePort();
     const proxyProc = spawn("node", [peerProxyScript], {
       env: {
         ...process.env,
         PORT: String(externalPort),
+        PEER_PROXY_INTERNAL_PORT: String(internalPort),
         PEER_PROXY_CHILD_SCRIPT: mockChildScript,
         DELAY_START_MS: "600"
       },
@@ -441,16 +444,18 @@ setTimeout(() => {
       }
       expect(readyResponse).toBe(true);
     } finally {
-      await stopProxy(proxyProc);
+      await stopProxy(proxyProc, internalPort);
     }
   });
 
   it("strips forged x-cco-tailscale-peer-ip and sets normalized real peer IP", async () => {
     const externalPort = await getFreePort();
+    const internalPort = await getFreePort();
     const proxyProc = spawn("node", [peerProxyScript], {
       env: {
         ...process.env,
         PORT: String(externalPort),
+        PEER_PROXY_INTERNAL_PORT: String(internalPort),
         PEER_PROXY_CHILD_SCRIPT: mockChildScript,
         DELAY_START_MS: "0"
       },
@@ -487,16 +492,18 @@ setTimeout(() => {
       // The backend must observe 127.0.0.1 (real socket remoteAddress), NOT the forged 100.64.0.99
       expect(headers["x-cco-tailscale-peer-ip"]).toBe("127.0.0.1");
     } finally {
-      await stopProxy(proxyProc);
+      await stopProxy(proxyProc, internalPort);
     }
   });
 
   it("strips client identity headers (x-authenticated-client-id, etc.) from incoming requests", async () => {
     const externalPort = await getFreePort();
+    const internalPort = await getFreePort();
     const proxyProc = spawn("node", [peerProxyScript], {
       env: {
         ...process.env,
         PORT: String(externalPort),
+        PEER_PROXY_INTERNAL_PORT: String(internalPort),
         PEER_PROXY_CHILD_SCRIPT: mockChildScript,
         DELAY_START_MS: "0"
       },
@@ -534,16 +541,18 @@ setTimeout(() => {
       expect(headers["x-client-session-id"]).toBeUndefined();
       expect(headers["tailscale-user-client-id"]).toBeUndefined();
     } finally {
-      await stopProxy(proxyProc);
+      await stopProxy(proxyProc, internalPort);
     }
   });
 
   it("handles client abort before headers gracefully and keeps proxy alive", async () => {
     const externalPort = await getFreePort();
+    const internalPort = await getFreePort();
     const proxyProc = spawn("node", [peerProxyScript], {
       env: {
         ...process.env,
         PORT: String(externalPort),
+        PEER_PROXY_INTERNAL_PORT: String(internalPort),
         PEER_PROXY_CHILD_SCRIPT: mockChildScript,
         DELAY_START_MS: "0"
       },
@@ -591,16 +600,18 @@ setTimeout(() => {
       const data = (await resAfter.json()) as { status: string };
       expect(data.status).toBe("ok");
     } finally {
-      await stopProxy(proxyProc);
+      await stopProxy(proxyProc, internalPort);
     }
   });
 
   it("handles controllable backend connection drop, returns 502, and proxy survives", async () => {
     const externalPort = await getFreePort();
+    const internalPort = await getFreePort();
     const proxyProc = spawn("node", [peerProxyScript], {
       env: {
         ...process.env,
         PORT: String(externalPort),
+        PEER_PROXY_INTERNAL_PORT: String(internalPort),
         PEER_PROXY_CHILD_SCRIPT: mockChildScript,
         DELAY_START_MS: "0"
       },
@@ -639,16 +650,18 @@ setTimeout(() => {
       const data = (await resAfter.json()) as { status: string };
       expect(data.status).toBe("ok");
     } finally {
-      await stopProxy(proxyProc);
+      await stopProxy(proxyProc, internalPort);
     }
   });
 
   it("exits with child exit code when child process dies", async () => {
     const externalPort = await getFreePort();
+    const internalPort = await getFreePort();
     const proxyProc = spawn("node", [peerProxyScript], {
       env: {
         ...process.env,
         PORT: String(externalPort),
+        PEER_PROXY_INTERNAL_PORT: String(internalPort),
         PEER_PROXY_CHILD_SCRIPT: mockChildScript,
         DELAY_START_MS: "0"
       },
@@ -683,7 +696,7 @@ setTimeout(() => {
 
       expect(exitCode).toBe(42);
     } finally {
-      await stopProxy(proxyProc);
+      await stopProxy(proxyProc, internalPort);
     }
   });
 });

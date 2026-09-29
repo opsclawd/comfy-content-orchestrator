@@ -32,6 +32,9 @@ import {
   ShotPlanPrevisAssociationSchema,
   ShotPlanDocumentSchema,
   ShotPlanCreateInputSchema,
+  PlanShotPlansRequestSchema,
+  PlanShotPlansResponseSchema,
+  PlanShotPlansErrorResponseSchema,
   computeH3FrameCount,
   computeH3DurationMs,
   getH3DurationWindow,
@@ -518,6 +521,92 @@ describe("ShotPlan Contracts & Schemas", () => {
         expect(validateShotPlanDuration(5167, 0)).toBe(false);
         expect(validateShotPlanDuration(5167, -5)).toBe(false);
       });
+    });
+  });
+
+  describe("PlanShotPlansRequestSchema", () => {
+    it("parses empty object and valid variantCount/reroll options", () => {
+      expect(PlanShotPlansRequestSchema.parse({})).toEqual({});
+      expect(PlanShotPlansRequestSchema.parse({ variantCount: 2, reroll: false })).toEqual({
+        variantCount: 2,
+        reroll: false
+      });
+      expect(PlanShotPlansRequestSchema.parse({ variantCount: 5, reroll: true })).toEqual({
+        variantCount: 5,
+        reroll: true
+      });
+    });
+
+    it("rejects invalid variantCount", () => {
+      expect(() => PlanShotPlansRequestSchema.parse({ variantCount: 0 })).toThrow();
+      expect(() => PlanShotPlansRequestSchema.parse({ variantCount: 6 })).toThrow();
+      expect(() => PlanShotPlansRequestSchema.parse({ variantCount: 2.5 })).toThrow();
+    });
+
+    it("strictly rejects externalProcessingPolicy and unexpected fields", () => {
+      expect(() =>
+        PlanShotPlansRequestSchema.parse({
+          variantCount: 2,
+          externalProcessingPolicy: { allowCloudPlanning: true }
+        })
+      ).toThrow();
+    });
+  });
+
+  describe("PlanShotPlansResponseSchema", () => {
+    it("parses valid shot plans planning response", () => {
+      const sampleDoc = {
+        id: "01923456-789a-7b3c-9d4e-5f60718293a1",
+        sceneId: "01923456-789a-7b3c-9d4e-5f6071829300",
+        specRevision: 1,
+        targetDurationMs: 5167,
+        targetFrameCount: 124,
+        framing: "wide",
+        angle: "low_angle",
+        lensIntent: "24mm wide angle",
+        cameraPosition: "low to the floor",
+        cameraMovement: "static",
+        movementSpeed: "medium",
+        cameraPromptDescription: "Static wide low angle view of lobby",
+        actionSummary: "Character enters lobby",
+        lightingStyle: "high_key_commercial",
+        environmentDescription: "Modern corporate atrium",
+        createdAt: "2026-09-25T10:20:00.000Z",
+        updatedAt: "2026-09-25T10:20:00.000Z"
+      };
+      const response = {
+        sceneId: "01923456-789a-7b3c-9d4e-5f6071829300",
+        shotPlans: [sampleDoc],
+        isIdempotentReplay: false
+      };
+      const parsed = PlanShotPlansResponseSchema.parse(response);
+      expect(parsed.sceneId).toBe(response.sceneId);
+      expect(parsed.shotPlans).toHaveLength(1);
+      expect(parsed.isIdempotentReplay).toBe(false);
+    });
+
+    it("rejects invalid UUID in sceneId", () => {
+      expect(() =>
+        PlanShotPlansResponseSchema.parse({
+          sceneId: "not-a-uuid",
+          shotPlans: [],
+          isIdempotentReplay: false
+        })
+      ).toThrow();
+    });
+  });
+
+  describe("PlanShotPlansErrorResponseSchema", () => {
+    it("parses structured error response", () => {
+      const err = {
+        code: "CLOUD_PLANNING_NOT_AUTHORIZED",
+        message: "allowCloudPlanning disabled",
+        details: { provider: "Anthropic" }
+      };
+      const parsed = PlanShotPlansErrorResponseSchema.parse(err);
+      expect(parsed.code).toBe("CLOUD_PLANNING_NOT_AUTHORIZED");
+      expect(parsed.message).toBe("allowCloudPlanning disabled");
+      expect(parsed.details).toEqual({ provider: "Anthropic" });
     });
   });
 });

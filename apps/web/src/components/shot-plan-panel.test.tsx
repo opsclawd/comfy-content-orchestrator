@@ -1,8 +1,18 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { ShotPlanPanel } from "./shot-plan-panel.js";
 import type { ShotPlanReviewItem } from "@cco/contracts";
+
+const mockRefresh = vi.fn();
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({
+    refresh: mockRefresh,
+    push: vi.fn()
+  })
+}));
 
 function createSampleShotPlan(overrides?: Partial<ShotPlanReviewItem>): ShotPlanReviewItem {
   return {
@@ -429,5 +439,227 @@ describe("ShotPlanPanel Component", () => {
     expect(html).toContain("does not match ShotPlan declared anchorMediaHashSha256");
     const approveBtnMatch = html.match(/data-testid="shot-plan-approve-button"[^>]*disabled=""/);
     expect(approveBtnMatch).not.toBeNull();
+  });
+
+  describe("Generate Shot Plans Action in Empty State", () => {
+    const sceneId = "123e4567-e89b-12d3-a456-426614174000";
+
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
+    afterEach(() => {
+      cleanup();
+      vi.restoreAllMocks();
+    });
+
+    it("renders Generate Shot Plans button in empty state when sceneId is present", () => {
+      render(<ShotPlanPanel shotPlans={[]} currentSpecRevision={1} sceneId={sceneId} />);
+
+      const button = screen.getByTestId("generate-shot-plans-button");
+      expect(button).toBeDefined();
+      expect(button.textContent).toBe("Generate Shot Plans");
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    it("disables button when sceneId is absent or disabled prop is true", () => {
+      const { rerender } = render(
+        <ShotPlanPanel shotPlans={[]} currentSpecRevision={1} sceneId={undefined} />
+      );
+      const buttonWithoutSceneId = screen.getByTestId(
+        "generate-shot-plans-button"
+      ) as HTMLButtonElement;
+      expect(buttonWithoutSceneId.disabled).toBe(true);
+
+      rerender(
+        <ShotPlanPanel shotPlans={[]} currentSpecRevision={1} sceneId={sceneId} disabled={true} />
+      );
+      const buttonDisabled = screen.getByTestId("generate-shot-plans-button") as HTMLButtonElement;
+      expect(buttonDisabled.disabled).toBe(true);
+    });
+
+    it("submits exact default payload { variantCount: 2, reroll: false } and invokes onRefresh and router.refresh on success", async () => {
+      const onGenerateShotPlans = vi.fn().mockResolvedValue(undefined);
+      const onRefresh = vi.fn().mockResolvedValue(undefined);
+
+      render(
+        <ShotPlanPanel
+          shotPlans={[]}
+          currentSpecRevision={1}
+          sceneId={sceneId}
+          onGenerateShotPlans={onGenerateShotPlans}
+          onRefresh={onRefresh}
+        />
+      );
+
+      const button = screen.getByTestId("generate-shot-plans-button");
+      fireEvent.click(button);
+
+      await waitFor(() => {
+        expect(onGenerateShotPlans).toHaveBeenCalledTimes(1);
+      });
+      expect(onGenerateShotPlans).toHaveBeenCalledWith({ variantCount: 2, reroll: false });
+      expect(onRefresh).toHaveBeenCalledTimes(1);
+      expect(mockRefresh).toHaveBeenCalledTimes(1);
+    });
+
+    it("calls same-origin fetch with count 2 and reroll false when onGenerateShotPlans is not provided", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ sceneId, shotPlans: [], isIdempotentReplay: false })
+      });
+      vi.stubGlobal("fetch", mockFetch);
+
+      render(<ShotPlanPanel shotPlans={[]} currentSpecRevision={1} sceneId={sceneId} />);
+
+      const button = screen.getByTestId("generate-shot-plans-button");
+      fireEvent.click(button);
+
+      await waitFor(() => {
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+      expect(mockFetch).toHaveBeenCalledWith(`/api/scenes/${sceneId}/shot-plans`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json"
+        },
+        body: JSON.stringify({ variantCount: 2, reroll: false })
+      });
+      expect(mockRefresh).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows pending state and blocks duplicate submissions while in-flight", async () => {
+      let resolvePromise: () => void = () => {};
+      const pendingPromise = new Promise<void>((res) => {
+        resolvePromise = res;
+      });
+      const onGenerateShotPlans = vi.fn().mockReturnValue(pendingPromise);
+
+      render(
+        <ShotPlanPanel
+          shotPlans={[]}
+          currentSpecRevision={1}
+          sceneId={sceneId}
+          onGenerateShotPlans={onGenerateShotPlans}
+        />
+      );
+
+      const button = screen.getByTestId("generate-shot-plans-button") as HTMLButtonElement;
+      fireEvent.click(button);
+
+      // Pending state is visible
+      expect(button.disabled).toBe(true);
+      expect(button.textContent).toBe("Generating Shot Plans...");
+      expect(screen.getByTestId("generating-shot-plans-status")).toBeDefined();
+      expect(screen.getByTestId("generating-shot-plans-status").textContent).toContain(
+        "Generating shot plans (2 variants)..."
+      );
+
+      // Attempt second click while in-flight
+      fireEvent.click(button);
+      expect(onGenerateShotPlans).toHaveBeenCalledTimes(1);
+
+      // Resolve pending operation
+      resolvePromise();
+      await waitFor(() => {
+        expect(button.disabled).toBe(false);
+      });
+      expect(button.textContent).toBe("Generate Shot Plans");
+      expect(screen.queryByTestId("generating-shot-plans-status")).toBeNull();
+    });
+
+    it("surfaces actionable message on CLOUD_PLANNING_NOT_AUTHORIZED error", async () => {
+      const onGenerateShotPlans = vi.fn().mockRejectedValue({
+        status: 403,
+        error: {
+          code: "CLOUD_PLANNING_NOT_AUTHORIZED",
+          message: "allowCloudPlanning disabled"
+        }
+      });
+
+      render(
+        <ShotPlanPanel
+          shotPlans={[]}
+          currentSpecRevision={1}
+          sceneId={sceneId}
+          onGenerateShotPlans={onGenerateShotPlans}
+        />
+      );
+
+      const button = screen.getByTestId("generate-shot-plans-button");
+      fireEvent.click(button);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("shot-plan-error-message")).toBeDefined();
+      });
+      const errorMsg = screen.getByTestId("shot-plan-error-message");
+      expect(errorMsg.textContent).toContain(
+        "Cloud planning not authorized: allowCloudPlanning disabled"
+      );
+    });
+
+    it("surfaces actionable message on CONFIGURATION_ERROR error", async () => {
+      const onGenerateShotPlans = vi.fn().mockRejectedValue({
+        status: 503,
+        error: {
+          code: "CONFIGURATION_ERROR",
+          message: "Shot plan planning is not available; planning model clients are not configured."
+        }
+      });
+
+      render(
+        <ShotPlanPanel
+          shotPlans={[]}
+          currentSpecRevision={1}
+          sceneId={sceneId}
+          onGenerateShotPlans={onGenerateShotPlans}
+        />
+      );
+
+      const button = screen.getByTestId("generate-shot-plans-button");
+      fireEvent.click(button);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("shot-plan-error-message")).toBeDefined();
+      });
+      const errorMsg = screen.getByTestId("shot-plan-error-message");
+      expect(errorMsg.textContent).toContain(
+        "Planning configuration error: Shot plan planning is not available"
+      );
+    });
+
+    it("surfaces safe generic message on unexpected errors and clears error on retry", async () => {
+      const onGenerateShotPlans = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("Network connection dropped"))
+        .mockResolvedValueOnce(undefined);
+
+      render(
+        <ShotPlanPanel
+          shotPlans={[]}
+          currentSpecRevision={1}
+          sceneId={sceneId}
+          onGenerateShotPlans={onGenerateShotPlans}
+        />
+      );
+
+      const button = screen.getByTestId("generate-shot-plans-button");
+      fireEvent.click(button);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("shot-plan-error-message")).toBeDefined();
+      });
+      expect(screen.getByTestId("shot-plan-error-message").textContent).toContain(
+        "Failed to generate shot plans. Please try again."
+      );
+
+      // Retry: clicking button clears old error
+      fireEvent.click(button);
+      await waitFor(() => {
+        expect(screen.queryByTestId("shot-plan-error-message")).toBeNull();
+      });
+    });
   });
 });
