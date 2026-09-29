@@ -96,6 +96,10 @@ function createSampleShotPlan(overrides?: Partial<ShotPlanReviewItem>): ShotPlan
 }
 
 describe("ShotPlanPanel Component", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   it("renders empty state when no shot plans are present", () => {
     const html = renderToStaticMarkup(<ShotPlanPanel shotPlans={[]} currentSpecRevision={2} />);
 
@@ -439,6 +443,251 @@ describe("ShotPlanPanel Component", () => {
     expect(html).toContain("does not match ShotPlan declared anchorMediaHashSha256");
     const approveBtnMatch = html.match(/data-testid="shot-plan-approve-button"[^>]*disabled=""/);
     expect(approveBtnMatch).not.toBeNull();
+  });
+
+  it("presents ShotPlan variant as a professional storyboard panel with camera sluglines, blocking, and non-production banner", () => {
+    const plan = createSampleShotPlan();
+    const html = renderToStaticMarkup(<ShotPlanPanel shotPlans={[plan]} currentSpecRevision={2} />);
+
+    // Director slate slugline
+    expect(html).toContain('data-testid="storyboard-slate-title"');
+    expect(html).toContain("SCENE 22222222 · SHOTPLAN V1");
+
+    // Persistent Non-Production visual treatment
+    expect(html).toContain('data-testid="previs-non-production-badge"');
+    expect(html).toContain("Storyboard / Previs — non-production image");
+    expect(html).toContain(
+      "Visual truth is supplied by bound reference assets. Previs pixels are not conditioned into production."
+    );
+
+    // Cinematic camera sluglines in uppercase
+    expect(html).toContain("MEDIUM CLOSE-UP · EYE LEVEL · 50mm prime cinematic");
+    expect(html).toContain("DOLLY IN · SLOW");
+
+    // Directional Staging & Blocking
+    expect(html).toContain("Staging &amp; Blocking");
+    expect(html).toContain("Subject:");
+    expect(html).toContain("subject-hero-1");
+    expect(html).toContain("[Protagonist Face Model · subject_identity]");
+    expect(html).toContain("screen center → stationary, raises arm forward");
+
+    // Technical Footprint & Routing
+    expect(html).toContain("Duration:");
+    expect(html).toContain("4000 ms (4.00s) (97 frames)");
+    expect(html).toContain("Routing Mode:");
+    expect(html).toContain("Reference Directed");
+  });
+
+  it("renders director slate format with custom sceneId and variantOrdinal", () => {
+    const plan = createSampleShotPlan({
+      sceneId: "scene-04",
+      variantOrdinal: 2
+    });
+    const html = renderToStaticMarkup(<ShotPlanPanel shotPlans={[plan]} currentSpecRevision={2} />);
+
+    expect(html).toContain("SCENE 04 · SHOTPLAN V2");
+    expect(html).toContain("Variant #2");
+  });
+
+  it("associates subject blocking with bound references by referenceAssetId or role", () => {
+    const plan = createSampleShotPlan({
+      subjects: [
+        {
+          subjectId: "subject-elena",
+          referenceAssetId: "55555555-5555-4555-8555-555555555555",
+          role: "subject_identity",
+          initialPosition: "screen_left",
+          movementTrajectory: "screen left → center",
+          interactionSummary: "reaches for product"
+        },
+        {
+          subjectId: "product-can",
+          referenceAssetId: "66666666-6666-4666-8666-666666666666",
+          role: "product",
+          initialPosition: "foreground_right",
+          movementTrajectory: "stationary on counter",
+          interactionSummary: null
+        }
+      ],
+      boundReferences: [
+        {
+          referenceAssetId: "55555555-5555-4555-8555-555555555555",
+          role: "subject_identity",
+          displayName: "Elena Vance",
+          width: 1024,
+          height: 1024,
+          previewUrl: "https://media.example.com/elena.png",
+          previewAvailability: "available"
+        },
+        {
+          referenceAssetId: "66666666-6666-4666-8666-666666666666",
+          role: "product",
+          displayName: "Cyber Cola Can",
+          width: 512,
+          height: 512,
+          previewUrl: "https://media.example.com/cola.png",
+          previewAvailability: "available"
+        }
+      ]
+    });
+
+    const html = renderToStaticMarkup(<ShotPlanPanel shotPlans={[plan]} currentSpecRevision={2} />);
+
+    expect(html).toContain("Subject:");
+    expect(html).toContain("subject-elena");
+    expect(html).toContain("[Elena Vance · subject_identity]");
+    expect(html).toContain("screen left → screen left → center");
+    expect(html).toContain("reaches for product");
+
+    expect(html).toContain("Product:");
+    expect(html).toContain("product-can");
+    expect(html).toContain("[Cyber Cola Can · product]");
+    expect(html).toContain("foreground right → stationary on counter");
+  });
+
+  it("dispatches identity-based select_shotplan command on Select Plan click", () => {
+    const plan = createSampleShotPlan();
+    const dispatch = vi.fn();
+
+    render(
+      <ShotPlanPanel
+        shotPlans={[plan]}
+        currentSpecRevision={2}
+        dispatch={dispatch}
+        allowedActions={["select_shotplan"]}
+      />
+    );
+
+    const selectBtn = screen.getByTestId("shot-plan-select-button");
+    fireEvent.click(selectBtn);
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "REQUEST_CONFIRMATION",
+      stagedAction: {
+        action: "select_shotplan",
+        payload: {
+          shotPlanId: plan.shotPlanId,
+          expectedSpecRevision: 2
+        },
+        displayLabel: "Select Shot Plan"
+      }
+    });
+  });
+
+  it("dispatches identity-based approve_shotplan command on Approve Intent click", () => {
+    const plan = createSampleShotPlan();
+    const dispatch = vi.fn();
+
+    render(
+      <ShotPlanPanel
+        shotPlans={[plan]}
+        currentSpecRevision={2}
+        dispatch={dispatch}
+        allowedActions={["approve_shotplan"]}
+      />
+    );
+
+    const approveBtn = screen.getByTestId("shot-plan-approve-button");
+    fireEvent.click(approveBtn);
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "REQUEST_CONFIRMATION",
+      stagedAction: {
+        action: "approve_shotplan",
+        payload: {
+          shotPlanId: plan.shotPlanId,
+          expectedSpecRevision: 2
+        },
+        displayLabel: "Approve Shot Plan"
+      }
+    });
+  });
+
+  it("calls onSelectShotPlan and onApproveShotPlan callback props directly when provided", () => {
+    const plan = createSampleShotPlan();
+    const onSelect = vi.fn();
+    const onApprove = vi.fn();
+
+    render(
+      <ShotPlanPanel
+        shotPlans={[plan]}
+        currentSpecRevision={2}
+        onSelectShotPlan={onSelect}
+        onApproveShotPlan={onApprove}
+        allowedActions={["select_shotplan", "approve_shotplan"]}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("shot-plan-select-button"));
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith(plan.shotPlanId);
+
+    fireEvent.click(screen.getByTestId("shot-plan-approve-button"));
+    expect(onApprove).toHaveBeenCalledTimes(1);
+    expect(onApprove).toHaveBeenCalledWith(plan.shotPlanId);
+  });
+
+  it("renders explicit non-production status for frame-anchored route with missing anchor", () => {
+    const invalidPlan = createSampleShotPlan({
+      routingMode: "frame_anchored",
+      continuity: {
+        persistentSubjectIds: [],
+        frameAnchorTarget: "none",
+        anchorCandidateId: null
+      }
+    });
+
+    const html = renderToStaticMarkup(
+      <ShotPlanPanel shotPlans={[invalidPlan]} currentSpecRevision={2} />
+    );
+
+    expect(html).toContain('data-testid="previs-non-production-badge"');
+    expect(html).toContain("Storyboard / Previs — non-production image (missing frame anchor)");
+    expect(html).toContain("badge-frame-anchor-invalid");
+  });
+
+  it("renders conditional pixel anchor status for confirmed frame-anchored route", () => {
+    const candidateHash = "a".repeat(64);
+    const plan = createSampleShotPlan({
+      routingMode: "frame_anchored",
+      continuity: {
+        persistentSubjectIds: [],
+        frameAnchorTarget: "first_frame",
+        anchorCandidateId: "anchor-cand-1234",
+        anchorMediaHashSha256: candidateHash
+      }
+    });
+
+    const candidateGroups = [
+      {
+        specRevision: 2,
+        candidates: [
+          {
+            candidateId: "anchor-cand-1234",
+            sceneId: "22222222-2222-4222-8222-222222222222",
+            specRevision: 2,
+            variantOrdinal: 1,
+            contentHash: candidateHash,
+            media: { available: true },
+            createdAt: "2026-09-27T12:00:00.000Z"
+          }
+        ]
+      }
+    ];
+
+    const html = renderToStaticMarkup(
+      <ShotPlanPanel
+        shotPlans={[plan]}
+        currentSpecRevision={2}
+        candidatesByRevision={candidateGroups}
+      />
+    );
+
+    expect(html).toContain('data-testid="previs-non-production-badge"');
+    expect(html).toContain("Frame Anchor Candidate — conditional pixel anchor (first_frame)");
+    expect(html).toContain("badge-frame-anchor-valid");
   });
 
   describe("Generate Shot Plans Action in Empty State", () => {
