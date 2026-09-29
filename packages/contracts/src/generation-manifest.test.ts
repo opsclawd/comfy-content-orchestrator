@@ -449,4 +449,279 @@ describe("GenerationManifestSchema", () => {
     const res = GenerationManifestSchema.safeParse(historicalManifest);
     expect(res.success).toBe(true);
   });
+
+  describe("configuredMedia and measuredMedia provenance", () => {
+    const validConfigured = {
+      outputKey: "scenes/scene-1/output.mp4",
+      checksumSha256: "1111111111111111111111111111111111111111111111111111111111111111",
+      dimensions: { width: 1344, height: 768 },
+      frameCount: 124,
+      fps: 24,
+      source: "render_profile_and_executed_workflow" as const
+    };
+
+    const validMeasuredFfprobe = {
+      outputKey: "scenes/scene-1/output.mp4",
+      checksumSha256: "1111111111111111111111111111111111111111111111111111111111111111",
+      container: "ffprobe" as const,
+      dimensions: { width: 1344, height: 768 },
+      frameCount: 124,
+      fps: 24,
+      durationMs: 5167,
+      formatDurationMs: 5170,
+      video: {
+        codecName: "h264",
+        pixelFormat: "yuv420p"
+      },
+      measurement: "source_bytes" as const
+    };
+
+    it("validates manifest with paired configuredMedia and measuredMedia (ffprobe)", () => {
+      const manifest = {
+        ...baseManifestFixture,
+        engine: "ltx_25",
+        renderProfile: "LTX_25_720P_5S_V1",
+        configuredMedia: validConfigured,
+        measuredMedia: validMeasuredFfprobe
+      };
+      const res = GenerationManifestSchema.safeParse(manifest);
+      expect(res.success).toBe(true);
+    });
+
+    it("validates manifest with paired configuredMedia and measuredMedia (animated_webp_demux with uniform delays)", () => {
+      const manifest = {
+        ...baseManifestFixture,
+        engine: "ltx_25",
+        renderProfile: "LTX_25_720P_5S_V1",
+        outputs: [
+          {
+            bucket: "delivery",
+            key: "scenes/scene-1/output.webp",
+            filename: "output.webp",
+            checksumSha256: "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ],
+        outputObjectKeys: ["output.webp"],
+        configuredMedia: {
+          ...validConfigured,
+          outputKey: "scenes/scene-1/output.webp",
+          frameCount: 3,
+          fps: 25
+        },
+        measuredMedia: {
+          outputKey: "scenes/scene-1/output.webp",
+          checksumSha256: "1111111111111111111111111111111111111111111111111111111111111111",
+          container: "animated_webp_demux" as const,
+          dimensions: { width: 1280, height: 720 },
+          frameCount: 3,
+          fps: 25,
+          durationMs: 120,
+          formatDurationMs: 120,
+          frameDurationsMs: [40, 40, 40],
+          measurement: "source_bytes" as const
+        }
+      };
+      const res = GenerationManifestSchema.safeParse(manifest);
+      expect(res.success).toBe(true);
+    });
+
+    it("validates animated WebP with variable frame delays and null fps", () => {
+      const manifest = {
+        ...baseManifestFixture,
+        engine: "ltx_25",
+        renderProfile: "LTX_25_720P_5S_V1",
+        outputs: [
+          {
+            bucket: "delivery",
+            key: "scenes/scene-1/output.webp",
+            filename: "output.webp",
+            checksumSha256: "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ],
+        outputObjectKeys: ["output.webp"],
+        configuredMedia: {
+          ...validConfigured,
+          outputKey: "scenes/scene-1/output.webp",
+          frameCount: 3,
+          fps: 24
+        },
+        measuredMedia: {
+          outputKey: "scenes/scene-1/output.webp",
+          checksumSha256: "1111111111111111111111111111111111111111111111111111111111111111",
+          container: "animated_webp_demux" as const,
+          dimensions: { width: 1280, height: 720 },
+          frameCount: 3,
+          fps: null,
+          durationMs: 125,
+          formatDurationMs: 125,
+          frameDurationsMs: [41, 42, 42],
+          measurement: "source_bytes" as const
+        }
+      };
+      const res = GenerationManifestSchema.safeParse(manifest);
+      expect(res.success).toBe(true);
+    });
+
+    it("fails closed when configuredMedia is provided without measuredMedia", () => {
+      const manifest = {
+        ...baseManifestFixture,
+        configuredMedia: validConfigured
+      };
+      const res = GenerationManifestSchema.safeParse(manifest);
+      expect(res.success).toBe(false);
+      expect(res.error?.issues.some((i) => i.message.includes("must be provided together"))).toBe(
+        true
+      );
+    });
+
+    it("fails closed when measuredMedia is provided without configuredMedia", () => {
+      const manifest = {
+        ...baseManifestFixture,
+        measuredMedia: validMeasuredFfprobe
+      };
+      const res = GenerationManifestSchema.safeParse(manifest);
+      expect(res.success).toBe(false);
+      expect(res.error?.issues.some((i) => i.message.includes("must be provided together"))).toBe(
+        true
+      );
+    });
+
+    it("fails closed on mismatched outputKey between configuredMedia and measuredMedia", () => {
+      const manifest = {
+        ...baseManifestFixture,
+        configuredMedia: validConfigured,
+        measuredMedia: {
+          ...validMeasuredFfprobe,
+          outputKey: "scenes/scene-1/different.mp4"
+        }
+      };
+      const res = GenerationManifestSchema.safeParse(manifest);
+      expect(res.success).toBe(false);
+      expect(res.error?.issues.some((i) => i.message.includes("outputKey"))).toBe(true);
+    });
+
+    it("fails closed on mismatched checksumSha256 between configuredMedia and measuredMedia", () => {
+      const manifest = {
+        ...baseManifestFixture,
+        configuredMedia: validConfigured,
+        measuredMedia: {
+          ...validMeasuredFfprobe,
+          checksumSha256: "2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      };
+      const res = GenerationManifestSchema.safeParse(manifest);
+      expect(res.success).toBe(false);
+      expect(res.error?.issues.some((i) => i.message.includes("checksumSha256"))).toBe(true);
+    });
+
+    it("fails closed when WebP durationMs does not equal sum of frameDurationsMs", () => {
+      const manifest = {
+        ...baseManifestFixture,
+        configuredMedia: validConfigured,
+        measuredMedia: {
+          outputKey: validConfigured.outputKey,
+          checksumSha256: validConfigured.checksumSha256,
+          container: "animated_webp_demux" as const,
+          dimensions: { width: 1280, height: 720 },
+          frameCount: 2,
+          fps: 25,
+          durationMs: 100, // actual sum is 40 + 40 = 80
+          formatDurationMs: 100,
+          frameDurationsMs: [40, 40],
+          measurement: "source_bytes" as const
+        }
+      };
+      const res = GenerationManifestSchema.safeParse(manifest);
+      expect(res.success).toBe(false);
+      expect(res.error?.issues.some((i) => i.message.includes("durationMs"))).toBe(true);
+    });
+
+    it("fails closed when WebP frameDurationsMs length does not match frameCount", () => {
+      const manifest = {
+        ...baseManifestFixture,
+        configuredMedia: validConfigured,
+        measuredMedia: {
+          outputKey: validConfigured.outputKey,
+          checksumSha256: validConfigured.checksumSha256,
+          container: "animated_webp_demux" as const,
+          dimensions: { width: 1280, height: 720 },
+          frameCount: 3, // array has 2
+          fps: 25,
+          durationMs: 80,
+          formatDurationMs: 80,
+          frameDurationsMs: [40, 40],
+          measurement: "source_bytes" as const
+        }
+      };
+      const res = GenerationManifestSchema.safeParse(manifest);
+      expect(res.success).toBe(false);
+      expect(res.error?.issues.some((i) => i.message.includes("frameDurationsMs length"))).toBe(
+        true
+      );
+    });
+
+    it("fails closed when WebP includes video stream object", () => {
+      const manifest = {
+        ...baseManifestFixture,
+        configuredMedia: validConfigured,
+        measuredMedia: {
+          outputKey: validConfigured.outputKey,
+          checksumSha256: validConfigured.checksumSha256,
+          container: "animated_webp_demux" as const,
+          dimensions: { width: 1280, height: 720 },
+          frameCount: 2,
+          fps: 25,
+          durationMs: 80,
+          formatDurationMs: 80,
+          frameDurationsMs: [40, 40],
+          video: { codecName: "webp", pixelFormat: "yuv420p" },
+          measurement: "source_bytes" as const
+        }
+      };
+      const res = GenerationManifestSchema.safeParse(manifest);
+      expect(res.success).toBe(false);
+      expect(
+        res.error?.issues.some((i) => i.message.includes("video stream details must be omitted"))
+      ).toBe(true);
+    });
+
+    it("allows null fps for ffprobe when constant rate is not supported, and fails closed when video is missing", () => {
+      const manifestNullFps = {
+        ...baseManifestFixture,
+        engine: "ltx_25",
+        renderProfile: "LTX_25_720P_5S_V1",
+        configuredMedia: validConfigured,
+        measuredMedia: {
+          ...validMeasuredFfprobe,
+          fps: null
+        }
+      };
+      expect(GenerationManifestSchema.safeParse(manifestNullFps).success).toBe(true);
+
+      const manifestNoVideo = {
+        ...baseManifestFixture,
+        engine: "ltx_25",
+        renderProfile: "LTX_25_720P_5S_V1",
+        configuredMedia: validConfigured,
+        measuredMedia: {
+          ...validMeasuredFfprobe,
+          video: undefined
+        }
+      };
+      expect(GenerationManifestSchema.safeParse(manifestNoVideo).success).toBe(false);
+    });
+
+    it("preserves historical manifest without configuredMedia or measuredMedia", () => {
+      const historical: Record<string, unknown> = {
+        ...baseManifestFixture,
+        engine: "ltx_25",
+        renderProfile: "LTX_25_720P_5S_V1"
+      };
+      expect(historical["configuredMedia"]).toBeUndefined();
+      expect(historical["measuredMedia"]).toBeUndefined();
+      const parsed = GenerationManifestSchema.parse(historical);
+      expect(parsed.configuredMedia).toBeUndefined();
+      expect(parsed.measuredMedia).toBeUndefined();
+    });
+  });
 });

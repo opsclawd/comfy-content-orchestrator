@@ -2065,6 +2065,21 @@ describe("RenderWorker write-side admission gating and deferral", () => {
       }),
       outputReader: fakeOutputReader as unknown as ComfyUiOutputReader,
       hashBytes,
+      formatAwareProber: (options) => ({
+        outputKey: options.outputKey,
+        checksumSha256: options.checksumSha256,
+        container: "ffprobe",
+        dimensions: { width: 1280, height: 720 },
+        frameCount: 97,
+        fps: 24,
+        durationMs: 4042,
+        formatDurationMs: 4042,
+        video: {
+          codecName: "h264",
+          pixelFormat: "yuv420p"
+        },
+        measurement: "source_bytes"
+      }),
       productionManifestAssembler: async (input) => {
         const res = await manifestAssembler.assemble(input);
         return res.manifestPayload;
