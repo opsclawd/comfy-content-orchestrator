@@ -1,6 +1,7 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
+import { useRouter } from "next/navigation";
 import type {
   ReviewAction,
   ShotPlanReviewItem,
@@ -129,6 +130,11 @@ export function validateFrameAnchor(
   };
 }
 
+export interface GenerateShotPlansOptions {
+  readonly variantCount: number;
+  readonly reroll: boolean;
+}
+
 export interface ShotPlanPanelProps {
   shotPlans?: ShotPlanReviewItem[] | undefined;
   selectedShotPlanId?: string | undefined;
@@ -141,6 +147,9 @@ export interface ShotPlanPanelProps {
   onSelectShotPlan?: ((shotPlanId: string) => void) | undefined;
   onApproveShotPlan?: ((shotPlanId: string) => void) | undefined;
   disabled?: boolean | undefined;
+  sceneId?: string | undefined;
+  onGenerateShotPlans?: ((options: GenerateShotPlansOptions) => Promise<void>) | undefined;
+  onRefresh?: (() => void | Promise<void>) | undefined;
 }
 
 export function ShotPlanPanel({
@@ -154,9 +163,105 @@ export function ShotPlanPanel({
   dispatch,
   onSelectShotPlan,
   onApproveShotPlan,
-  disabled = false
+  disabled = false,
+  sceneId,
+  onGenerateShotPlans,
+  onRefresh
 }: ShotPlanPanelProps) {
   const candidateGroups = candidatesByRevision ?? stateProp?.detail?.candidatesByRevision ?? [];
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generationError, setGenerationError] = useState<string | null>(null);
+
+  let router: { refresh: () => void } | null = null;
+  try {
+    router = useRouter();
+  } catch {
+    router = null;
+  }
+
+  async function handleGenerateShotPlans() {
+    if (isGenerating || disabled || !sceneId) {
+      return;
+    }
+
+    setIsGenerating(true);
+    setGenerationError(null);
+
+    try {
+      if (onGenerateShotPlans) {
+        await onGenerateShotPlans({ variantCount: 2, reroll: false });
+      } else {
+        const res = await fetch(`/api/scenes/${encodeURIComponent(sceneId)}/shot-plans`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json"
+          },
+          body: JSON.stringify({ variantCount: 2, reroll: false })
+        });
+
+        if (!res.ok) {
+          let errorData: unknown;
+          try {
+            errorData = await res.json();
+          } catch {
+            errorData = null;
+          }
+          throw { status: res.status, error: errorData };
+        }
+      }
+
+      if (onRefresh) {
+        await onRefresh();
+      }
+      if (router) {
+        router.refresh();
+      }
+    } catch (err: unknown) {
+      let formatted = "Failed to generate shot plans. Please try again.";
+
+      if (typeof err === "object" && err !== null) {
+        const status =
+          "statusCode" in err
+            ? (err as { statusCode: number }).statusCode
+            : "status" in err
+              ? (err as { status: number }).status
+              : undefined;
+
+        const errorPayload =
+          "error" in err
+            ? (err as { error: unknown }).error
+            : "body" in err
+              ? (err as { body: unknown }).body
+              : err;
+
+        if (typeof errorPayload === "object" && errorPayload !== null) {
+          const code =
+            "code" in errorPayload ? String((errorPayload as { code: unknown }).code) : undefined;
+          const message =
+            "message" in errorPayload
+              ? String((errorPayload as { message: unknown }).message)
+              : undefined;
+
+          if (code === "CLOUD_PLANNING_NOT_AUTHORIZED" || status === 403) {
+            formatted = message
+              ? `Cloud planning not authorized: ${message}`
+              : "Cloud planning is not authorized for this client. Please check your configuration.";
+          } else if (code === "CONFIGURATION_ERROR" || status === 503) {
+            formatted = message
+              ? `Planning configuration error: ${message}`
+              : "Shot plan planning is unavailable because planning model clients are not configured.";
+          } else if (message && status !== undefined && status < 500) {
+            formatted = message;
+          }
+        }
+      }
+
+      setGenerationError(formatted);
+    } finally {
+      setIsGenerating(false);
+    }
+  }
 
   if (!shotPlans || shotPlans.length === 0) {
     return (
@@ -170,6 +275,33 @@ export function ShotPlanPanel({
         </div>
         <div className="empty-state" data-testid="no-shot-plans-state">
           <p>No shot plans have been generated for this scene.</p>
+          <div className="empty-state-actions">
+            <button
+              type="button"
+              className="action-button generate-shot-plans-button"
+              data-testid="generate-shot-plans-button"
+              onClick={handleGenerateShotPlans}
+              disabled={disabled || isGenerating || !sceneId}
+              aria-busy={isGenerating ? "true" : undefined}
+            >
+              {isGenerating ? "Generating Shot Plans..." : "Generate Shot Plans"}
+            </button>
+          </div>
+          {isGenerating && (
+            <div
+              className="generating-indicator"
+              data-testid="generating-shot-plans-status"
+              role="status"
+              aria-live="polite"
+            >
+              Generating shot plans (2 variants)...
+            </div>
+          )}
+          {generationError && (
+            <div className="review-error-banner" data-testid="shot-plan-error-message" role="alert">
+              <p>{generationError}</p>
+            </div>
+          )}
         </div>
       </section>
     );

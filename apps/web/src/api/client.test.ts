@@ -15,13 +15,18 @@ import {
   ApiClientError,
   ApiValidationError,
   ReviewCommandApiError,
-  PlanCampaignStoryboardApiError
+  PlanCampaignStoryboardApiError,
+  PlanShotPlansApiError,
+  planShotPlans
 } from "./client.js";
 import type {
   CampaignReviewSummary,
   PlanCampaignStoryboardErrorResponse,
   PlanCampaignStoryboardRequest,
   PlanCampaignStoryboardResponse,
+  PlanShotPlansErrorResponse,
+  PlanShotPlansRequest,
+  PlanShotPlansResponse,
   ReviewCommand,
   ReviewCommandResponse,
   ReviewErrorResponse,
@@ -1130,6 +1135,200 @@ describe("Typed Control API Client", () => {
         ApiValidationError
       );
       expect(mockFetch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("planShotPlans", () => {
+    const sceneId = "123e4567-e89b-12d3-a456-426614174000";
+    const validPlanShotPlansRequest: PlanShotPlansRequest = {
+      variantCount: 2,
+      reroll: false
+    };
+
+    const sampleShotPlanDoc = {
+      id: "01923456-789a-7b3c-9d4e-5f60718293a1",
+      sceneId,
+      specRevision: 1,
+      variantOrdinal: 1,
+      status: "draft" as const,
+      routingMode: "reference_directed" as const,
+      targetDurationMs: 5167,
+      targetFrameCount: 124,
+      durationToleranceMs: 355,
+      fps: 24 as const,
+      framing: "wide" as const,
+      angle: "low_angle" as const,
+      lensIntent: "24mm wide angle",
+      cameraPosition: "low to the floor",
+      cameraMovement: "static" as const,
+      movementSpeed: "medium" as const,
+      cameraPromptDescription: "Static wide low angle view of lobby",
+      subjects: [],
+      actionSummary: "Character enters lobby",
+      beats: [],
+      lightingStyle: "high_key_commercial" as const,
+      environmentDescription: "Modern corporate atrium",
+      colorPalette: [],
+      continuity: {
+        frameAnchorTarget: "none" as const,
+        persistentSubjectIds: []
+      },
+      createdAt: "2026-09-25T10:20:00.000Z",
+      updatedAt: "2026-09-25T10:20:00.000Z"
+    };
+
+    const validPlanShotPlansResponse: PlanShotPlansResponse = {
+      sceneId,
+      shotPlans: [sampleShotPlanDoc],
+      isIdempotentReplay: false
+    };
+
+    it("parses and returns valid shot plans response on success", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => validPlanShotPlansResponse
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      const result = await client.planShotPlans(sceneId, validPlanShotPlansRequest);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch).toHaveBeenCalledWith(
+        `http://example.com/api/scenes/${sceneId}/shot-plans`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json"
+          },
+          cache: "no-store",
+          body: expect.any(String)
+        }
+      );
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string);
+      expect(callBody).toEqual({
+        variantCount: 2,
+        reroll: false
+      });
+      // Assert no externalProcessingPolicy is sent client-side
+      expect("externalProcessingPolicy" in callBody).toBe(false);
+
+      expect(result).toEqual(validPlanShotPlansResponse);
+
+      // Verify convenience function also works
+      const convenienceResult = await planShotPlans(sceneId, validPlanShotPlansRequest, mockFetch);
+      expect(convenienceResult).toEqual(validPlanShotPlansResponse);
+    });
+
+    it("works without request payload", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => validPlanShotPlansResponse
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      const result = await client.planShotPlans(sceneId);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        `http://example.com/api/scenes/${sceneId}/shot-plans`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json"
+          },
+          cache: "no-store"
+        }
+      );
+      expect(result).toEqual(validPlanShotPlansResponse);
+    });
+
+    it("throws PlanShotPlansApiError on 403 CLOUD_PLANNING_NOT_AUTHORIZED", async () => {
+      const authError: PlanShotPlansErrorResponse = {
+        code: "CLOUD_PLANNING_NOT_AUTHORIZED",
+        message: "allowCloudPlanning disabled"
+      };
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+        json: async () => authError
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      let capturedError: unknown;
+      try {
+        await client.planShotPlans(sceneId, validPlanShotPlansRequest);
+      } catch (err) {
+        capturedError = err;
+      }
+
+      expect(capturedError).toBeInstanceOf(PlanShotPlansApiError);
+      const apiErr = capturedError as PlanShotPlansApiError;
+      expect(apiErr.statusCode).toBe(403);
+      expect(apiErr.error.code).toBe("CLOUD_PLANNING_NOT_AUTHORIZED");
+      expect(apiErr.error.message).toBe("allowCloudPlanning disabled");
+      expect(apiErr.body).toEqual(authError);
+    });
+
+    it("throws PlanShotPlansApiError on 503 CONFIGURATION_ERROR", async () => {
+      const configError: PlanShotPlansErrorResponse = {
+        code: "CONFIGURATION_ERROR",
+        message: "Shot plan planning is not available; planning model clients are not configured."
+      };
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 503,
+        json: async () => configError
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      let capturedError: unknown;
+      try {
+        await client.planShotPlans(sceneId, validPlanShotPlansRequest);
+      } catch (err) {
+        capturedError = err;
+      }
+
+      expect(capturedError).toBeInstanceOf(PlanShotPlansApiError);
+      const apiErr = capturedError as PlanShotPlansApiError;
+      expect(apiErr.statusCode).toBe(503);
+      expect(apiErr.error.code).toBe("CONFIGURATION_ERROR");
+      expect(apiErr.error.message).toContain("planning model clients are not configured");
+    });
+
+    it("throws ApiValidationError when request schema validation fails", async () => {
+      const mockFetch = vi.fn();
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+
+      const invalidRequest = {
+        variantCount: 10 // max is 5
+      } as unknown as PlanShotPlansRequest;
+
+      await expect(client.planShotPlans(sceneId, invalidRequest)).rejects.toThrow(
+        ApiValidationError
+      );
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it("throws ApiClientError when response is HTTP 500 without structured error body", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        statusText: "Internal Server Error",
+        json: async () => {
+          throw new Error("Cannot parse");
+        }
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      await expect(client.planShotPlans(sceneId, validPlanShotPlansRequest)).rejects.toThrow(
+        ApiClientError
+      );
     });
   });
 

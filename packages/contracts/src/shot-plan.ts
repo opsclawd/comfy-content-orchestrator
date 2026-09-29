@@ -304,6 +304,32 @@ export const ShotPlanCreateInputSchema = z.object({
 export type ShotPlanCreateInput = z.infer<typeof ShotPlanCreateInputSchema>;
 
 // ============================================================================
+// Plan Shot Plans Route / Operation Schemas
+// ============================================================================
+
+export const PlanShotPlansRequestSchema = z
+  .object({
+    variantCount: z.number().int().min(1).max(5).optional(),
+    reroll: z.boolean().optional()
+  })
+  .strict();
+export type PlanShotPlansRequest = z.infer<typeof PlanShotPlansRequestSchema>;
+
+export const PlanShotPlansResponseSchema = z.object({
+  sceneId: z.string().uuid("sceneId must be a valid UUID"),
+  shotPlans: z.array(ShotPlanDocumentSchema),
+  isIdempotentReplay: z.boolean()
+});
+export type PlanShotPlansResponse = z.infer<typeof PlanShotPlansResponseSchema>;
+
+export const PlanShotPlansErrorResponseSchema = z.object({
+  code: z.string().optional(),
+  message: z.string(),
+  details: z.unknown().optional()
+});
+export type PlanShotPlansErrorResponse = z.infer<typeof PlanShotPlansErrorResponseSchema>;
+
+// ============================================================================
 // Timing & Quantization Helper Functions
 // ============================================================================
 

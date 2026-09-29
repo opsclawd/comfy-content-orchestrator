@@ -225,19 +225,18 @@ export function SceneReviewDetailView({
       </div>
 
       {/* Structured Shot Plans */}
-      {detail.shotPlans && detail.shotPlans.length > 0 && (
-        <ShotPlanPanel
-          shotPlans={detail.shotPlans}
-          selectedShotPlanId={detail.selectedShotPlanId}
-          approvedShotPlanId={detail.approvedShotPlanId}
-          currentSpecRevision={detail.specRevision}
-          candidatesByRevision={detail.candidatesByRevision}
-          allowedActions={detail.allowedActions}
-          state={state}
-          dispatch={dispatch}
-          disabled={disabled}
-        />
-      )}
+      <ShotPlanPanel
+        shotPlans={detail.shotPlans ?? []}
+        selectedShotPlanId={detail.selectedShotPlanId}
+        approvedShotPlanId={detail.approvedShotPlanId}
+        currentSpecRevision={detail.specRevision}
+        candidatesByRevision={detail.candidatesByRevision}
+        allowedActions={detail.allowedActions}
+        state={state}
+        dispatch={dispatch}
+        disabled={disabled}
+        sceneId={detail.sceneId}
+      />
 
       {/* Production Review Panel (when production attempt exists) */}
       <ProductionReviewPanel

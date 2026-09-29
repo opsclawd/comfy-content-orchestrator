@@ -26,7 +26,13 @@ import {
   ReferenceAssetResponseSchema,
   type ReferenceAssetResponse,
   ReferenceAssetListResponseSchema,
-  type ReferenceRole
+  type ReferenceRole,
+  PlanShotPlansRequestSchema,
+  type PlanShotPlansRequest,
+  PlanShotPlansResponseSchema,
+  type PlanShotPlansResponse,
+  PlanShotPlansErrorResponseSchema,
+  type PlanShotPlansErrorResponse
 } from "@cco/contracts";
 import type { z } from "zod";
 import { resolveControlApiBaseUrl } from "./runtime-config";
@@ -40,6 +46,9 @@ export type {
   PlanCampaignStoryboardErrorResponse,
   PlanCampaignStoryboardRequest,
   PlanCampaignStoryboardResponse,
+  PlanShotPlansErrorResponse,
+  PlanShotPlansRequest,
+  PlanShotPlansResponse,
   ReviewCommand,
   ReviewCommandResponse,
   ReviewErrorResponse,
@@ -57,6 +66,9 @@ export {
   PlanCampaignStoryboardErrorResponseSchema,
   PlanCampaignStoryboardRequestSchema,
   PlanCampaignStoryboardResponseSchema,
+  PlanShotPlansErrorResponseSchema,
+  PlanShotPlansRequestSchema,
+  PlanShotPlansResponseSchema,
   ReviewCommandSchema,
   ReviewCommandResponseSchema,
   ReviewErrorResponseSchema,
@@ -132,6 +144,23 @@ export class PlanCampaignStoryboardApiError extends Error {
   }
 }
 
+export class PlanShotPlansApiError extends Error {
+  override readonly name = "PlanShotPlansApiError";
+
+  constructor(
+    public readonly statusCode: number,
+    public readonly error: PlanShotPlansErrorResponse
+  ) {
+    super(
+      `Shot plan generation failed with HTTP ${statusCode}${error.code ? ` (${error.code})` : ""}: ${error.message}`
+    );
+  }
+
+  get body(): PlanShotPlansErrorResponse {
+    return this.error;
+  }
+}
+
 export interface ReviewerIdentity {
   readonly login: string;
   readonly displayName?: string;
@@ -154,6 +183,7 @@ export interface ApiClient {
   planCampaignStoryboard(
     request: PlanCampaignStoryboardRequest
   ): Promise<PlanCampaignStoryboardResponse>;
+  planShotPlans(sceneId: string, request?: PlanShotPlansRequest): Promise<PlanShotPlansResponse>;
 }
 
 function formatFetchErrorMessage(err: unknown): string {
@@ -457,6 +487,83 @@ export function createApiClient(config?: ApiClientConfig): ApiClient {
       }
 
       return responseParseResult.data;
+    },
+
+    async planShotPlans(
+      sceneId: string,
+      request?: PlanShotPlansRequest
+    ): Promise<PlanShotPlansResponse> {
+      const encodedSceneId = encodeURIComponent(sceneId);
+      const url = `${baseUrl}/api/scenes/${encodedSceneId}/shot-plans`;
+
+      let serializedBody: string | undefined;
+      if (request !== undefined) {
+        const parseResult = PlanShotPlansRequestSchema.safeParse(request);
+        if (!parseResult.success) {
+          throw new ApiValidationError(
+            `Plan shot plans request failed validation: ${parseResult.error.message}`,
+            parseResult.error.issues
+          );
+        }
+        serializedBody = JSON.stringify(parseResult.data);
+      }
+
+      let res: Response;
+      try {
+        res = await fetchFn(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json"
+          },
+          cache: "no-store",
+          ...(serializedBody !== undefined ? { body: serializedBody } : {})
+        });
+      } catch (err) {
+        throw new ApiClientError(formatFetchErrorMessage(err), undefined, err);
+      }
+
+      if (!res.ok) {
+        let errorData: unknown;
+        try {
+          errorData = await res.json();
+        } catch {
+          throw new ApiClientError(
+            `Control API returned HTTP ${res.status}: ${res.statusText}`,
+            res.status
+          );
+        }
+
+        const errorParseResult = PlanShotPlansErrorResponseSchema.safeParse(errorData);
+        if (errorParseResult.success) {
+          throw new PlanShotPlansApiError(res.status, errorParseResult.data);
+        }
+
+        throw new ApiValidationError(
+          `Control API returned HTTP ${res.status} with malformed error payload: ${errorParseResult.error.message}`,
+          errorParseResult.error.issues
+        );
+      }
+
+      let successData: unknown;
+      try {
+        successData = await res.json();
+      } catch (err) {
+        throw new ApiValidationError(
+          `Failed to parse response JSON from Control API: ${err instanceof Error ? err.message : String(err)}`,
+          err
+        );
+      }
+
+      const responseParseResult = PlanShotPlansResponseSchema.safeParse(successData);
+      if (!responseParseResult.success) {
+        throw new ApiValidationError(
+          `Control API response failed schema validation: ${responseParseResult.error.message}`,
+          responseParseResult.error.issues
+        );
+      }
+
+      return responseParseResult.data;
     }
   };
 }
@@ -526,6 +633,15 @@ export async function planCampaignStoryboard(
 ): Promise<PlanCampaignStoryboardResponse> {
   const client = createApiClient({ fetchFn: fetchImpl });
   return client.planCampaignStoryboard(request);
+}
+
+export async function planShotPlans(
+  sceneId: string,
+  request?: PlanShotPlansRequest,
+  fetchImpl?: typeof fetch
+): Promise<PlanShotPlansResponse> {
+  const client = createApiClient({ fetchFn: fetchImpl });
+  return client.planShotPlans(sceneId, request);
 }
 
 export async function listClientReferences(
