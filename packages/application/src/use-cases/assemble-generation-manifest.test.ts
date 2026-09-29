@@ -21,6 +21,7 @@ import type {
   StoryboardCandidate
 } from "@cco/domain";
 import { Scene } from "@cco/domain";
+import { GenerationManifestSchema } from "@cco/contracts";
 import type {
   HashBytesPort,
   PutObjectInput,
@@ -2164,6 +2165,241 @@ describe("AssembleGenerationManifest use case", () => {
           }
         })
       ).rejects.toThrow("firstFrame.injectionTarget");
+    });
+  });
+
+  describe("configuredMedia and measuredMedia output facts provenance", () => {
+    const validOutputKey = "scenes/scene-123/jobs/job-789/output.mp4";
+    const validChecksum = "4444444444444444444444444444444444444444444444444444444444444444";
+
+    it("assembles manifest with measuredMedia and preserves distinct configured and measured facts", async () => {
+      const deps = createTestDeps();
+      const assembler = new AssembleGenerationManifest(deps);
+
+      const input = createDefaultInput({
+        measuredMedia: {
+          outputKey: validOutputKey,
+          checksumSha256: validChecksum,
+          container: "ffprobe",
+          dimensions: { width: 1920, height: 1080 },
+          frameCount: 120,
+          fps: 24,
+          durationMs: 5000,
+          formatDurationMs: 5000,
+          video: {
+            codecName: "h264",
+            pixelFormat: "yuv420p"
+          },
+          measurement: "source_bytes"
+        }
+      });
+
+      const result = await assembler.assemble(input);
+      const manifest = result.manifestPayload;
+
+      // Configured facts remain from profile/topology
+      expect(manifest.dimensions).toEqual({ width: 1280, height: 720 });
+      expect(manifest.frameCount).toBe(97);
+      expect(manifest.fps).toBe(24);
+      expect(manifest.executionDurationMs).toBe(4250);
+
+      // Measured facts are distinct
+      expect(manifest.measuredMedia).toBeDefined();
+      const measured = manifest.measuredMedia as Record<string, unknown>;
+      expect(measured.outputKey).toBe(validOutputKey);
+      expect(measured.checksumSha256).toBe(validChecksum);
+      expect(measured.dimensions).toEqual({ width: 1920, height: 1080 });
+      expect(measured.frameCount).toBe(120);
+      expect(measured.durationMs).toBe(5000);
+      expect(measured.formatDurationMs).toBe(5000);
+
+      // configuredMedia was auto-populated from configured facts
+      expect(manifest.configuredMedia).toBeDefined();
+      const configured = manifest.configuredMedia as Record<string, unknown>;
+      expect(configured.outputKey).toBe(validOutputKey);
+      expect(configured.checksumSha256).toBe(validChecksum);
+      expect(configured.dimensions).toEqual({ width: 1280, height: 720 });
+      expect(configured.frameCount).toBe(97);
+      expect(configured.fps).toBe(24);
+      expect(configured.source).toBe("render_profile_and_executed_workflow");
+
+      // Manifest passes full contract schema validation
+      expect(() =>
+        GenerationManifestSchema.parse({
+          ...manifest,
+          campaignId: "11111111-1111-4111-8111-111111111111",
+          sceneId: "22222222-2222-4222-8222-222222222222"
+        })
+      ).not.toThrow();
+    });
+
+    it("accepts explicit configuredMedia matching measuredMedia", async () => {
+      const deps = createTestDeps();
+      const assembler = new AssembleGenerationManifest(deps);
+
+      const input = createDefaultInput({
+        configuredMedia: {
+          outputKey: validOutputKey,
+          checksumSha256: validChecksum,
+          dimensions: { width: 1280, height: 720 },
+          frameCount: 97,
+          fps: 24,
+          source: "render_profile_and_executed_workflow"
+        },
+        measuredMedia: {
+          outputKey: validOutputKey,
+          checksumSha256: validChecksum,
+          container: "ffprobe",
+          dimensions: { width: 1280, height: 720 },
+          frameCount: 97,
+          fps: 24,
+          durationMs: 4041.67,
+          formatDurationMs: 4042,
+          video: {
+            codecName: "h264",
+            pixelFormat: "yuv420p"
+          },
+          measurement: "source_bytes"
+        }
+      });
+
+      const result = await assembler.assemble(input);
+      expect(() =>
+        GenerationManifestSchema.parse({
+          ...result.manifestPayload,
+          campaignId: "11111111-1111-4111-8111-111111111111",
+          sceneId: "22222222-2222-4222-8222-222222222222"
+        })
+      ).not.toThrow();
+    });
+
+    it("omits configuredMedia and measuredMedia when neither is provided for historical compatibility", async () => {
+      const deps = createTestDeps();
+      const assembler = new AssembleGenerationManifest(deps);
+
+      const input = createDefaultInput();
+      const result = await assembler.assemble(input);
+
+      expect(result.manifestPayload.configuredMedia).toBeUndefined();
+      expect(result.manifestPayload.measuredMedia).toBeUndefined();
+      expect(() =>
+        GenerationManifestSchema.parse({
+          ...result.manifestPayload,
+          campaignId: "11111111-1111-4111-8111-111111111111",
+          sceneId: "22222222-2222-4222-8222-222222222222"
+        })
+      ).not.toThrow();
+    });
+
+    it("throws IncompleteManifestError when configuredMedia is provided without measuredMedia", async () => {
+      const deps = createTestDeps();
+      const assembler = new AssembleGenerationManifest(deps);
+
+      const input = createDefaultInput({
+        configuredMedia: {
+          outputKey: validOutputKey,
+          checksumSha256: validChecksum,
+          dimensions: { width: 1280, height: 720 },
+          frameCount: 97,
+          fps: 24,
+          source: "render_profile_and_executed_workflow"
+        }
+      });
+
+      await expect(assembler.assemble(input)).rejects.toThrow(
+        new IncompleteManifestError("measuredMedia")
+      );
+    });
+
+    it("throws IncompleteManifestError when measuredMedia does not match any output object", async () => {
+      const deps = createTestDeps();
+      const assembler = new AssembleGenerationManifest(deps);
+
+      const input = createDefaultInput({
+        measuredMedia: {
+          outputKey: "unknown/path/output.mp4",
+          checksumSha256: validChecksum,
+          container: "ffprobe",
+          dimensions: { width: 1280, height: 720 },
+          frameCount: 97,
+          fps: 24,
+          durationMs: 4041.67,
+          formatDurationMs: 4042,
+          video: {
+            codecName: "h264",
+            pixelFormat: "yuv420p"
+          },
+          measurement: "source_bytes"
+        }
+      });
+
+      await expect(assembler.assemble(input)).rejects.toThrow("measuredMedia");
+    });
+
+    it("throws IncompleteManifestError when configuredMedia outputKey mismatches measuredMedia", async () => {
+      const deps = createTestDeps();
+      const assembler = new AssembleGenerationManifest(deps);
+
+      const input = createDefaultInput({
+        configuredMedia: {
+          outputKey: "different/key.mp4",
+          checksumSha256: validChecksum,
+          dimensions: { width: 1280, height: 720 },
+          frameCount: 97,
+          fps: 24,
+          source: "render_profile_and_executed_workflow"
+        },
+        measuredMedia: {
+          outputKey: validOutputKey,
+          checksumSha256: validChecksum,
+          container: "ffprobe",
+          dimensions: { width: 1280, height: 720 },
+          frameCount: 97,
+          fps: 24,
+          durationMs: 4041.67,
+          formatDurationMs: 4042,
+          video: {
+            codecName: "h264",
+            pixelFormat: "yuv420p"
+          },
+          measurement: "source_bytes"
+        }
+      });
+
+      await expect(assembler.assemble(input)).rejects.toThrow("configuredMedia.outputKey");
+    });
+
+    it("throws IncompleteManifestError when configuredMedia checksum mismatches measuredMedia", async () => {
+      const deps = createTestDeps();
+      const assembler = new AssembleGenerationManifest(deps);
+
+      const input = createDefaultInput({
+        configuredMedia: {
+          outputKey: validOutputKey,
+          checksumSha256: "1".repeat(64),
+          dimensions: { width: 1280, height: 720 },
+          frameCount: 97,
+          fps: 24,
+          source: "render_profile_and_executed_workflow"
+        },
+        measuredMedia: {
+          outputKey: validOutputKey,
+          checksumSha256: validChecksum,
+          container: "ffprobe",
+          dimensions: { width: 1280, height: 720 },
+          frameCount: 97,
+          fps: 24,
+          durationMs: 4041.67,
+          formatDurationMs: 4042,
+          video: {
+            codecName: "h264",
+            pixelFormat: "yuv420p"
+          },
+          measurement: "source_bytes"
+        }
+      });
+
+      await expect(assembler.assemble(input)).rejects.toThrow("configuredMedia.checksumSha256");
     });
   });
 });

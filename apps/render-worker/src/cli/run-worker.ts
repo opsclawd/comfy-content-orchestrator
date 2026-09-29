@@ -99,6 +99,7 @@ export interface WorkerRuntimeConfig {
   readonly s3CandidateBucket: string;
   readonly s3DeliveryBucket: string;
   readonly s3Config: S3ObjectStorageOptions;
+  readonly ffprobePath: string;
 }
 
 export class WorkerConfigError extends Error {
@@ -332,8 +333,23 @@ function parseAllowedJobKinds(
 }
 
 export function parseWorkerRuntimeConfig(
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  argv: readonly string[] = process.argv.slice(2)
 ): WorkerRuntimeConfig {
+  const getArg = (name: string): string | undefined => {
+    const prefix = `--${name}=`;
+    for (let i = 0; i < argv.length; i++) {
+      const arg = argv[i];
+      if (arg?.startsWith(prefix)) {
+        return arg.slice(prefix.length);
+      }
+      if (arg === `--${name}` && i + 1 < argv.length) {
+        return argv[i + 1];
+      }
+    }
+    return undefined;
+  };
+
   // 1. Control API / Worker Identity
   const rawControlApiUrl = env.CONTROL_API_BASE_URL ?? env.CONTROL_API_URL;
   const controlApiVarName =
@@ -557,6 +573,13 @@ export function parseWorkerRuntimeConfig(
     databaseUrl = parseDatabaseUrl(rawDbUrl, dbVarName);
   }
 
+  // 10. Probing Configuration
+  const rawFfprobePath = getArg("ffprobe-path") ?? env.FFPROBE_PATH ?? "ffprobe";
+  const ffprobePath = rawFfprobePath.trim();
+  if (ffprobePath.length === 0) {
+    throw new WorkerConfigError("ffprobePath must not be empty");
+  }
+
   return {
     storageTelemetryPath,
     controlApiBaseUrl,
@@ -584,7 +607,8 @@ export function parseWorkerRuntimeConfig(
     s3SecretAccessKey,
     s3CandidateBucket,
     s3DeliveryBucket,
-    s3Config
+    s3Config,
+    ffprobePath
   };
 }
 
@@ -806,7 +830,8 @@ export function createProductionWorker(
         goldMasterProvenancePath: effectiveConfig.goldMasterProvenancePath,
         comfyUiDir: effectiveConfig.comfyUiDir,
         candidateBucket: effectiveConfig.s3CandidateBucket,
-        deliveryBucket: effectiveConfig.s3DeliveryBucket
+        deliveryBucket: effectiveConfig.s3DeliveryBucket,
+        ffprobePath: effectiveConfig.ffprobePath
       }
     );
 
@@ -861,12 +886,12 @@ export function createProductionWorker(
 }
 
 export async function runWorkerCli(
-  _argv: readonly string[] = process.argv.slice(2),
+  argv: readonly string[] = process.argv.slice(2),
   env: NodeJS.ProcessEnv = process.env,
   depsOverrides?: ProductionWorkerOverrides | undefined
 ): Promise<number> {
   try {
-    const config = parseWorkerRuntimeConfig(env);
+    const config = parseWorkerRuntimeConfig(env, argv);
     const worker = createProductionWorker(config, depsOverrides);
 
     const abortController = new AbortController();

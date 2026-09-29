@@ -1,6 +1,7 @@
-import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { readFile, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   canonicalizeReferenceBindings,
@@ -28,10 +29,13 @@ import {
 } from "@cco/application";
 import {
   getProfileInjectionTopology,
+  LTX_FPS,
   LTX_FRAME_STEP,
   LTX_SUPPORTED_FRAME_RANGE,
+  type ManifestConfiguredMedia,
   type ManifestExecutedInstruction,
   type ManifestFrameAnchorEntry,
+  type ManifestMeasuredMedia,
   type ManifestPrevisReviewEvidence,
   type ManifestReferenceImageEntry,
   type ManifestShotPlanReference,
@@ -54,12 +58,17 @@ import type {
 } from "@cco/domain";
 import {
   collectCertificationProvenance,
+  defaultSpawnRunner,
+  demuxAnimatedWebp,
   hashWorkflow,
   HttpComfyUiOutputReader,
+  isAnimatedWebp,
   loadCertificationProfile,
+  probeMedia,
   type CertificationProfile,
   type CertificationProvenanceReport,
-  type ComfyUiOutputReader
+  type ComfyUiOutputReader,
+  type SpawnLikeFn
 } from "@cco/infrastructure";
 import { BUCKETS } from "@cco/shared";
 import { PreflightError, verifyGoldMasterProvenance } from "./certification/preflight.js";
@@ -85,6 +94,23 @@ export class CandidateOutputCardinalityError extends RenderJobExecutionError {
 
 export class ProductionManifestAssemblyError extends RenderJobExecutionError {
   override readonly name: string = "ProductionManifestAssemblyError";
+  readonly jobId?: string | undefined;
+  readonly outputKey?: string | undefined;
+  readonly formatPath?: "ffprobe" | "animated_webp_demux" | undefined;
+
+  constructor(
+    message: string,
+    options?: ErrorOptions & {
+      jobId?: string | undefined;
+      outputKey?: string | undefined;
+      formatPath?: "ffprobe" | "animated_webp_demux" | undefined;
+    }
+  ) {
+    super(message, options);
+    this.jobId = options?.jobId;
+    this.outputKey = options?.outputKey;
+    this.formatPath = options?.formatPath;
+  }
 }
 
 export class WorkflowHashMismatchError extends RenderJobExecutionError {
@@ -166,6 +192,8 @@ export interface AssembleProductionManifestInput {
   readonly lastFrame?: ManifestFrameAnchorEntry | undefined;
   readonly previsReviewEvidence?: ManifestPrevisReviewEvidence | undefined;
   readonly submittedWorkflowHash?: string | undefined;
+  readonly configuredMedia?: ManifestConfiguredMedia | undefined;
+  readonly measuredMedia?: ManifestMeasuredMedia | undefined;
 }
 
 export type ProductionManifestAssembler =
@@ -239,6 +267,20 @@ export interface RenderJobExecutorDependencies {
   readonly sceneRepository?: SceneRepository | undefined;
   readonly campaignRepository?: CampaignRepository<CampaignRecord> | undefined;
   readonly now?: (() => Date) | undefined;
+  readonly probeMedia?: typeof probeMedia | undefined;
+  readonly isAnimatedWebp?: typeof isAnimatedWebp | undefined;
+  readonly demuxAnimatedWebp?: typeof demuxAnimatedWebp | undefined;
+  readonly spawnRunner?: SpawnLikeFn | undefined;
+  readonly ffprobePath?: string | undefined;
+  readonly formatAwareProber?:
+    | ((options: {
+        outputKey: string;
+        checksumSha256: string;
+        bytes: Uint8Array;
+        filename: string;
+        contentType?: string | undefined;
+      }) => Promise<ManifestMeasuredMedia> | ManifestMeasuredMedia)
+    | undefined;
 }
 
 export interface RenderJobExecutorOptions {
@@ -247,6 +289,7 @@ export interface RenderJobExecutorOptions {
   readonly comfyUiDir?: string | undefined;
   readonly candidateBucket?: string | undefined;
   readonly deliveryBucket?: string | undefined;
+  readonly ffprobePath?: string | undefined;
   readonly buildObjectKey?:
     | ((sceneId: string, jobId: string, outputKey: string, contentHashSha256: string) => string)
     | undefined;
@@ -262,6 +305,41 @@ const CONTENT_TYPE_TO_EXTENSION: Readonly<Record<string, string>> = {
   "audio/mpeg": ".mp3",
   "audio/ogg": ".ogg"
 };
+
+export function isVideoMediaObject(
+  obj: PutObjectInput,
+  isAnimatedWebpFn: (bytes: Uint8Array) => boolean,
+  hasCustomProber = false
+): boolean {
+  const keyLower = obj.key.toLowerCase();
+  const contentTypeLower = obj.contentType?.toLowerCase() ?? "";
+  if (
+    keyLower.endsWith(".mp4") ||
+    keyLower.endsWith(".webm") ||
+    keyLower.endsWith(".mov") ||
+    keyLower.endsWith(".mkv") ||
+    contentTypeLower.startsWith("video/")
+  ) {
+    return true;
+  }
+  if (keyLower.endsWith(".webp") || contentTypeLower === "image/webp") {
+    if (hasCustomProber) {
+      return true;
+    }
+    if (obj.body) {
+      const bytes =
+        obj.body instanceof Uint8Array
+          ? obj.body
+          : Buffer.isBuffer(obj.body)
+            ? new Uint8Array(obj.body)
+            : new Uint8Array(Buffer.from(obj.body));
+      if (isAnimatedWebpFn(bytes)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 
 export function buildDeterministicStagingFilename(
   sceneId: string,
@@ -2020,6 +2098,223 @@ export function createCertifiedRenderJobExecutor(
         );
       }
 
+      // Format-aware probe of primary video output for production manifest assembly
+      const isAnimatedWebpFn = deps?.isAnimatedWebp ?? isAnimatedWebp;
+      const demuxAnimatedWebpFn = deps?.demuxAnimatedWebp ?? demuxAnimatedWebp;
+      const hasCustomProber = typeof deps?.formatAwareProber === "function";
+
+      let primaryOutput = mediaObjects.find((obj) =>
+        isVideoMediaObject(obj, isAnimatedWebpFn, hasCustomProber)
+      );
+      if (!primaryOutput && hasCustomProber && mediaObjects.length > 0) {
+        primaryOutput = mediaObjects[0];
+      }
+      const jobId = job.jobId ?? (job as { id?: string }).id ?? "";
+      if (!primaryOutput || !primaryOutput.body || !primaryOutput.checksumSha256) {
+        throw new ProductionManifestAssemblyError(
+          `Primary video output not found or missing bytes for media probing in job "${jobId}"`,
+          { jobId }
+        );
+      }
+
+      const outputKey = primaryOutput.key;
+
+      let measuredMedia: ManifestMeasuredMedia;
+      if (deps?.formatAwareProber) {
+        const bodyBytes =
+          primaryOutput.body instanceof Uint8Array
+            ? primaryOutput.body
+            : Buffer.isBuffer(primaryOutput.body)
+              ? new Uint8Array(primaryOutput.body)
+              : new Uint8Array(Buffer.from(primaryOutput.body));
+        measuredMedia = await deps.formatAwareProber({
+          outputKey: primaryOutput.key,
+          checksumSha256: primaryOutput.checksumSha256,
+          bytes: bodyBytes,
+          filename: primaryOutput.key.split("/").pop() ?? primaryOutput.key,
+          ...(primaryOutput.contentType ? { contentType: primaryOutput.contentType } : {})
+        });
+      } else {
+        const bodyBytes =
+          primaryOutput.body instanceof Uint8Array
+            ? primaryOutput.body
+            : Buffer.isBuffer(primaryOutput.body)
+              ? new Uint8Array(primaryOutput.body)
+              : new Uint8Array(Buffer.from(primaryOutput.body));
+
+        if (isAnimatedWebpFn(bodyBytes)) {
+          try {
+            const demuxed = demuxAnimatedWebpFn(bodyBytes);
+            if (!demuxed.frames || demuxed.frames.length === 0) {
+              throw new ProductionManifestAssemblyError(
+                `Job "${jobId}": Animated WebP demux returned 0 frames for primary output "${outputKey}"`,
+                { jobId, outputKey, formatPath: "animated_webp_demux" }
+              );
+            }
+            const frameDurationsMs = demuxed.frames.map((f) => f.durationMs);
+            const totalDurationMs = frameDurationsMs.reduce((acc, d) => acc + d, 0);
+            const firstDuration = frameDurationsMs[0]!;
+            const isUniform = frameDurationsMs.every((d) => d === firstDuration);
+            const fps = isUniform && firstDuration > 0 ? 1000 / firstDuration : null;
+
+            measuredMedia = {
+              outputKey: primaryOutput.key,
+              checksumSha256: primaryOutput.checksumSha256,
+              container: "animated_webp_demux",
+              dimensions: {
+                width: demuxed.width,
+                height: demuxed.height
+              },
+              frameCount: demuxed.frames.length,
+              fps,
+              durationMs: totalDurationMs,
+              formatDurationMs: totalDurationMs,
+              frameDurationsMs,
+              measurement: "source_bytes"
+            };
+          } catch (err) {
+            if (err instanceof ProductionManifestAssemblyError) {
+              throw err;
+            }
+            throw new ProductionManifestAssemblyError(
+              `Job "${jobId}": Failed to demux animated WebP output for measurement in "${outputKey}": ${(err as Error).message}`,
+              { cause: err, jobId, outputKey, formatPath: "animated_webp_demux" }
+            );
+          }
+        } else {
+          const keyLower = primaryOutput.key.toLowerCase();
+          let ext = ".mp4";
+          if (keyLower.endsWith(".webm") || primaryOutput.contentType === "video/webm") {
+            ext = ".webm";
+          } else if (keyLower.endsWith(".mov") || primaryOutput.contentType === "video/quicktime") {
+            ext = ".mov";
+          } else if (keyLower.endsWith(".mkv")) {
+            ext = ".mkv";
+          } else if (keyLower.endsWith(".mp4") || primaryOutput.contentType === "video/mp4") {
+            ext = ".mp4";
+          } else {
+            const filename = primaryOutput.key.split("/").pop() ?? "";
+            const dotIdx = filename.lastIndexOf(".");
+            if (dotIdx !== -1) {
+              ext = filename.slice(dotIdx);
+            }
+          }
+
+          const tempFileName = `cco-probe-${randomUUID()}${ext}`;
+          const tempFilePath = join(tmpdir(), tempFileName);
+
+          try {
+            await writeFile(tempFilePath, bodyBytes, { flag: "wx" });
+            const probeMediaFn = deps?.probeMedia ?? probeMedia;
+            const runner = deps?.spawnRunner ?? defaultSpawnRunner;
+            const ffprobe = deps?.ffprobePath ?? options?.ffprobePath ?? "ffprobe";
+
+            const probed = await probeMediaFn({
+              runner,
+              ffprobePath: ffprobe,
+              filePath: tempFilePath,
+              isOutput: true,
+              countFrames: true,
+              checkFrameIntervals: true,
+              errorContext: {
+                jobId,
+                outputKey
+              }
+            });
+
+            const videoStream = probed.videoStream;
+            if (!videoStream || !videoStream.frameCount || videoStream.frameCount <= 0) {
+              throw new ProductionManifestAssemblyError(
+                `Job "${jobId}": Probed video stream in "${outputKey}" is missing a positive frameCount`,
+                { jobId, outputKey, formatPath: "ffprobe" }
+              );
+            }
+            if (videoStream.width <= 0 || videoStream.height <= 0) {
+              throw new ProductionManifestAssemblyError(
+                `Job "${jobId}": Probed video stream in "${outputKey}" has invalid dimensions (${videoStream.width}x${videoStream.height})`,
+                { jobId, outputKey, formatPath: "ffprobe" }
+              );
+            }
+            if (videoStream.frameRate !== null && videoStream.frameRate <= 0) {
+              throw new ProductionManifestAssemblyError(
+                `Job "${jobId}": Probed video stream in "${outputKey}" has invalid frameRate (${videoStream.frameRate})`,
+                { jobId, outputKey, formatPath: "ffprobe" }
+              );
+            }
+
+            measuredMedia = {
+              outputKey: primaryOutput.key,
+              checksumSha256: primaryOutput.checksumSha256,
+              container: "ffprobe",
+              dimensions: {
+                width: videoStream.width,
+                height: videoStream.height
+              },
+              frameCount: videoStream.frameCount,
+              fps: videoStream.frameRate,
+              durationMs: videoStream.durationMs,
+              formatDurationMs: probed.formatDurationMs,
+              video: {
+                codecName: videoStream.codecName,
+                pixelFormat: videoStream.pixelFormat
+              },
+              ...(probed.audioStream
+                ? {
+                    audio: {
+                      codecName: probed.audioStream.codecName,
+                      sampleRateHz: probed.audioStream.sampleRateHz,
+                      channels: probed.audioStream.channels,
+                      durationMs: probed.audioStream.durationMs,
+                      ...(probed.audioStream.bitrateKbps !== undefined
+                        ? { bitrateKbps: probed.audioStream.bitrateKbps }
+                        : {})
+                    }
+                  }
+                : {}),
+              measurement: "source_bytes"
+            };
+          } catch (err) {
+            if (err instanceof ProductionManifestAssemblyError) {
+              throw err;
+            }
+            throw new ProductionManifestAssemblyError(
+              `Job "${jobId}": Failed to probe primary output media for measurement in "${outputKey}": ${(err as Error).message}`,
+              { cause: err, jobId, outputKey, formatPath: "ffprobe" }
+            );
+          } finally {
+            await unlink(tempFilePath).catch(() => {});
+          }
+        }
+      }
+
+      // Construct configuredMedia representing intent/workflow configuration
+      const configuredDimensions = {
+        width: profile.baseline.width!,
+        height: profile.baseline.height!
+      };
+      let configuredFrameCount = profile.baseline.frames!;
+      let configuredFps = profile.baseline.frames! / profile.baseline.approximateDurationSeconds!;
+      if (topology?.frameCount) {
+        const frameNode = mutatedWorkflow[topology.frameCount.nodeId] as
+          { class_type?: string; inputs?: Record<string, unknown> } | undefined;
+        if (
+          frameNode?.class_type === topology.frameCount.classType &&
+          typeof frameNode.inputs?.[topology.frameCount.inputField] === "number" &&
+          (frameNode.inputs[topology.frameCount.inputField] as number) > 0
+        ) {
+          configuredFrameCount = frameNode.inputs[topology.frameCount.inputField] as number;
+          configuredFps = LTX_FPS;
+        }
+      }
+      const configuredMedia: ManifestConfiguredMedia = {
+        outputKey: primaryOutput.key,
+        checksumSha256: primaryOutput.checksumSha256,
+        dimensions: configuredDimensions,
+        frameCount: configuredFrameCount,
+        fps: configuredFps,
+        source: "render_profile_and_executed_workflow"
+      };
+
       const assembleInput: AssembleProductionManifestInput = {
         job,
         profile,
@@ -2027,6 +2322,8 @@ export function createCertifiedRenderJobExecutor(
         mediaObjects: Object.freeze(mediaObjects),
         liveProvenance,
         workflow: mutatedWorkflow,
+        configuredMedia,
+        measuredMedia,
         ...(validatedInjected.attemptId !== undefined
           ? { attemptId: validatedInjected.attemptId }
           : {}),

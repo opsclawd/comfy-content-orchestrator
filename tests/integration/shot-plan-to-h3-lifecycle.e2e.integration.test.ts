@@ -799,6 +799,21 @@ describe("ShotPlan-to-H3 E2E Integration (#331)", () => {
           contentType: "video/mp4"
         })
       },
+      formatAwareProber: (options) => ({
+        outputKey: options.outputKey,
+        checksumSha256: options.checksumSha256,
+        container: "ffprobe",
+        dimensions: { width: 1280, height: 720 },
+        frameCount: 124,
+        fps: 24,
+        durationMs: 5166,
+        formatDurationMs: 5166,
+        video: {
+          codecName: "h264",
+          pixelFormat: "yuv420p"
+        },
+        measurement: "source_bytes"
+      }),
       executeProfileRender: async (input) => {
         capturedWorkflows.push({
           renderJobId: input.renderJobId,
@@ -1045,7 +1060,9 @@ describe("ShotPlan-to-H3 E2E Integration (#331)", () => {
           "utf8"
         )
       },
-      referenceImages: manifestScene1.referenceImages!
+      referenceImages: manifestScene1.referenceImages!,
+      configuredMedia: manifestScene1.configuredMedia,
+      measuredMedia: manifestScene1.measuredMedia
     });
 
     const parsedDirectly = GenerationManifestSchema.safeParse(

@@ -43,9 +43,11 @@ import {
   type StorageAdmissionEnforcer,
   type WorkerLogger
 } from "../../apps/render-worker/src/worker.js";
+import type { ManifestMeasuredMedia } from "@cco/contracts";
 import {
   createCertifiedRenderJobExecutor,
-  type ProductionManifestAssembler
+  type ProductionManifestAssembler,
+  type RenderJobExecutorDependencies
 } from "../../apps/render-worker/src/render-job-executor.js";
 
 function sha256Hex(bytes: Uint8Array): string {
@@ -437,6 +439,24 @@ describe("Render Worker Cross-App Durable Integration Tests", () => {
       workerOrigin: "worker-a"
     });
 
+    const fakeFormatAwareProber: NonNullable<RenderJobExecutorDependencies["formatAwareProber"]> = (
+      opts
+    ): ManifestMeasuredMedia => ({
+      outputKey: opts.outputKey,
+      checksumSha256: opts.checksumSha256,
+      container: "ffprobe",
+      dimensions: { width: 1024, height: 1024 },
+      frameCount: 1,
+      fps: 24,
+      durationMs: 1000,
+      formatDurationMs: 1000,
+      video: {
+        codecName: "h264",
+        pixelFormat: "yuv420p"
+      },
+      measurement: "source_bytes"
+    });
+
     const executorA = createCertifiedRenderJobExecutor({
       loadCertificationProfile: async () => fakeProfile,
       readApprovedProvenance: async () => fakeLiveProvenance,
@@ -466,6 +486,7 @@ describe("Render Worker Cross-App Durable Integration Tests", () => {
         };
       },
       outputReader: outputReaderA,
+      formatAwareProber: fakeFormatAwareProber,
       productionManifestAssembler: assemblerA
     });
 
@@ -569,6 +590,7 @@ describe("Render Worker Cross-App Durable Integration Tests", () => {
         }
       }),
       outputReader: outputReaderB,
+      formatAwareProber: fakeFormatAwareProber,
       productionManifestAssembler: assemblerB
     });
 

@@ -44,6 +44,8 @@ export interface FfmpegAssemblyErrorContext {
   readonly actualDurationMs?: number | undefined;
   readonly toleranceMs?: number | undefined;
   readonly assemblyId?: string | undefined;
+  readonly jobId?: string | undefined;
+  readonly outputKey?: string | undefined;
   readonly details?: unknown;
 }
 

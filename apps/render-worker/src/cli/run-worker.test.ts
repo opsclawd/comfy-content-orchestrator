@@ -206,7 +206,8 @@ describe("run-worker CLI", () => {
             accessKeyId: "aws-key",
             secretAccessKey: "aws-secret"
           }
-        }
+        },
+        ffprobePath: "ffprobe"
       });
     });
 
@@ -523,6 +524,43 @@ describe("run-worker CLI", () => {
         })
       ).toThrow(
         "Invalid URL in variable: CONTROL_API_DATABASE_URL (must be a valid connection URL)"
+      );
+    });
+
+    it("parses and validates ffprobePath with CLI arg, environment variable, and defaults", () => {
+      // 1. Defaults to "ffprobe"
+      expect(parseWorkerRuntimeConfig(minimalValidEnv(), []).ffprobePath).toBe("ffprobe");
+
+      // 2. FFPROBE_PATH environment variable
+      expect(
+        parseWorkerRuntimeConfig(
+          { ...minimalValidEnv(), FFPROBE_PATH: "/usr/local/bin/ffprobe" },
+          []
+        ).ffprobePath
+      ).toBe("/usr/local/bin/ffprobe");
+
+      // 3. CLI argument --ffprobe-path
+      expect(
+        parseWorkerRuntimeConfig(minimalValidEnv(), ["--ffprobe-path=/opt/ffmpeg/ffprobe"])
+          .ffprobePath
+      ).toBe("/opt/ffmpeg/ffprobe");
+
+      // 4. CLI argument --ffprobe-path overrides env var
+      expect(
+        parseWorkerRuntimeConfig({ ...minimalValidEnv(), FFPROBE_PATH: "/usr/local/bin/ffprobe" }, [
+          "--ffprobe-path",
+          "/custom/ffprobe"
+        ]).ffprobePath
+      ).toBe("/custom/ffprobe");
+
+      // 5. Rejects empty ffprobePath from env
+      expect(() =>
+        parseWorkerRuntimeConfig({ ...minimalValidEnv(), FFPROBE_PATH: "" }, [])
+      ).toThrow("ffprobePath must not be empty");
+
+      // 6. Rejects empty ffprobePath from CLI
+      expect(() => parseWorkerRuntimeConfig(minimalValidEnv(), ["--ffprobe-path="])).toThrow(
+        "ffprobePath must not be empty"
       );
     });
   });

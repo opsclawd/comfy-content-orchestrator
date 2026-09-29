@@ -3,8 +3,10 @@ import { sortKeysDeep } from "@cco/shared";
 import {
   getProfileInjectionTopology,
   LTX_FPS,
+  type ManifestConfiguredMedia,
   type ManifestExecutedInstruction,
   type ManifestFrameAnchorEntry,
+  type ManifestMeasuredMedia,
   type ManifestPrevisReviewEvidence,
   type ManifestReferenceImageEntry,
   type ManifestShotPlanReference,
@@ -136,6 +138,8 @@ export interface AssembleManifestInput {
   readonly submittedWorkflowHash?: string | undefined;
   readonly attemptId?: string | undefined;
   readonly attemptOrdinal?: number | undefined;
+  readonly configuredMedia?: ManifestConfiguredMedia | undefined;
+  readonly measuredMedia?: ManifestMeasuredMedia | undefined;
 }
 
 export interface AssembleManifestResult {
@@ -971,6 +975,48 @@ export class AssembleGenerationManifest {
     const outputObjectKeys = input.renderResult.outputObjectKeys;
     const executionDurationMs = input.renderResult.durationMs;
 
+    let configuredMedia: ManifestConfiguredMedia | undefined;
+    let measuredMedia: ManifestMeasuredMedia | undefined;
+
+    if (input.measuredMedia) {
+      const matchingOutput = outputs.find(
+        (o) =>
+          o.key === input.measuredMedia!.outputKey &&
+          o.checksumSha256 === input.measuredMedia!.checksumSha256
+      );
+      if (!matchingOutput) {
+        throw new IncompleteManifestError(
+          `measuredMedia (no matching output found for outputKey "${input.measuredMedia.outputKey}" and checksum "${input.measuredMedia.checksumSha256}")`
+        );
+      }
+
+      if (input.configuredMedia) {
+        if (input.configuredMedia.outputKey !== input.measuredMedia.outputKey) {
+          throw new IncompleteManifestError(
+            `configuredMedia.outputKey ("${input.configuredMedia.outputKey}") must match measuredMedia.outputKey ("${input.measuredMedia.outputKey}")`
+          );
+        }
+        if (input.configuredMedia.checksumSha256 !== input.measuredMedia.checksumSha256) {
+          throw new IncompleteManifestError(
+            `configuredMedia.checksumSha256 ("${input.configuredMedia.checksumSha256}") must match measuredMedia.checksumSha256 ("${input.measuredMedia.checksumSha256}")`
+          );
+        }
+        configuredMedia = input.configuredMedia;
+      } else {
+        configuredMedia = {
+          outputKey: input.measuredMedia.outputKey,
+          checksumSha256: input.measuredMedia.checksumSha256,
+          dimensions,
+          frameCount,
+          fps,
+          source: "render_profile_and_executed_workflow"
+        };
+      }
+      measuredMedia = input.measuredMedia;
+    } else if (input.configuredMedia) {
+      throw new IncompleteManifestError("measuredMedia");
+    }
+
     const manifestPayload: Readonly<Record<string, unknown>> = Object.freeze({
       manifestId,
       jobId,
@@ -1060,7 +1106,28 @@ export class AssembleGenerationManifest {
       governance: Object.freeze(governance),
       outputs: Object.freeze(outputs),
       outputObjectKeys: Object.freeze([...outputObjectKeys]),
-      executionDurationMs
+      executionDurationMs,
+      ...(configuredMedia !== undefined
+        ? {
+            configuredMedia: Object.freeze({
+              ...configuredMedia,
+              dimensions: Object.freeze({ ...configuredMedia.dimensions })
+            })
+          }
+        : {}),
+      ...(measuredMedia !== undefined
+        ? {
+            measuredMedia: Object.freeze({
+              ...measuredMedia,
+              dimensions: Object.freeze({ ...measuredMedia.dimensions }),
+              ...(measuredMedia.video ? { video: Object.freeze({ ...measuredMedia.video }) } : {}),
+              ...(measuredMedia.audio ? { audio: Object.freeze({ ...measuredMedia.audio }) } : {}),
+              ...(measuredMedia.frameDurationsMs
+                ? { frameDurationsMs: Object.freeze([...measuredMedia.frameDurationsMs]) }
+                : {})
+            })
+          }
+        : {})
     });
 
     return { manifestPayload };

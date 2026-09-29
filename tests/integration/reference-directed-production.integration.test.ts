@@ -421,6 +421,21 @@ describe("Reference-directed Production Integration (Postgres + MinIO)", () => {
       stageReferenceImage: mockStagePort,
       hashBytes: hashBytesPort,
       imageValidator: new SharpImageInspectionAdapter(),
+      formatAwareProber: (options) => ({
+        outputKey: options.outputKey,
+        checksumSha256: options.checksumSha256,
+        container: "ffprobe",
+        dimensions: { width: 1280, height: 720 },
+        frameCount: 124,
+        fps: 24,
+        durationMs: 5166,
+        formatDurationMs: 5166,
+        video: {
+          codecName: "h264",
+          pixelFormat: "yuv420p"
+        },
+        measurement: "source_bytes"
+      }),
       productionManifestAssembler: async (input) => {
         const res = await manifestAssembler.assemble(input);
         return res.manifestPayload;

@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -29,8 +31,12 @@ import {
   HttpComfyUiInputStagingAdapter,
   ComfyUiRenderEngineAdapter,
   type CertificationProfile,
-  type CertificationProvenanceReport
+  type CertificationProvenanceReport,
+  defaultSpawnRunner,
+  demuxAnimatedWebp,
+  probeMedia
 } from "@cco/infrastructure";
+import { generateSyntheticStems } from "../../packages/infrastructure/src/ffmpeg/test-support/synthetic-stem-fixtures.js";
 import {
   EnqueueSceneProductionRenderUseCase,
   ApproveSceneAndDispatchCampaignProductionUseCase,
@@ -48,7 +54,8 @@ import { createControlApiApp } from "../../apps/control-api/src/http/app.js";
 import { createControlApiClient } from "../../apps/render-worker/src/control-api-client.js";
 import {
   createCertifiedRenderJobExecutor,
-  MissingCertifiedProfileError
+  MissingCertifiedProfileError,
+  type RenderJobExecutorDependencies
 } from "../../apps/render-worker/src/render-job-executor.js";
 import { RenderWorker } from "../../apps/render-worker/src/worker.js";
 import { createProductionWorker } from "../../apps/render-worker/src/cli/run-worker.js";
@@ -422,6 +429,8 @@ interface CreateTestWorkerOptions {
   readonly loadProfile?: () => Promise<CertificationProfile>;
   readonly licenseError?: Error;
   readonly fakeVideoBytes?: Uint8Array;
+  readonly outputContentType?: string;
+  readonly formatAwareProber?: RenderJobExecutorDependencies["formatAwareProber"] | null;
 }
 
 function createTestRenderWorker(options: CreateTestWorkerOptions) {
@@ -515,6 +524,24 @@ function createTestRenderWorker(options: CreateTestWorkerOptions) {
   const fakeVideoBytes =
     options.fakeVideoBytes ?? new Uint8Array([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70]);
 
+  const defaultFormatAwareProber: NonNullable<
+    RenderJobExecutorDependencies["formatAwareProber"]
+  > = (opts) => ({
+    outputKey: opts.outputKey,
+    checksumSha256: opts.checksumSha256,
+    container: "ffprobe",
+    dimensions: { width: 1280, height: 720 },
+    frameCount: 97,
+    fps: 25,
+    durationMs: 3880,
+    formatDurationMs: 3880,
+    video: {
+      codecName: "h264",
+      pixelFormat: "yuv420p"
+    },
+    measurement: "source_bytes"
+  });
+
   const executor = createCertifiedRenderJobExecutor({
     loadCertificationProfile: options.loadProfile ?? (async () => fakeLtxI2vProfile),
     readApprovedProvenance: async () => fakeLtxI2vProvenance,
@@ -529,9 +556,12 @@ function createTestRenderWorker(options: CreateTestWorkerOptions) {
     outputReader: {
       readOutput: async () => ({
         bytes: fakeVideoBytes,
-        contentType: "video/mp4"
+        contentType: options.outputContentType ?? "video/mp4"
       })
     },
+    ...(options.formatAwareProber === null
+      ? {}
+      : { formatAwareProber: options.formatAwareProber ?? defaultFormatAwareProber }),
     productionManifestAssembler: productionAssembler
   });
 
@@ -948,6 +978,282 @@ describe("LTX-2.5 Production Render End-to-End Integration", () => {
         verifyClient2.release();
       }
     } finally {
+      if (origEnableI2v !== undefined) {
+        process.env.ENABLE_I2V_PRODUCTION = origEnableI2v;
+      } else {
+        delete process.env.ENABLE_I2V_PRODUCTION;
+      }
+      if (origCcoEnableI2v !== undefined) {
+        process.env.CCO_ENABLE_I2V_PRODUCTION = origCcoEnableI2v;
+      } else {
+        delete process.env.CCO_ENABLE_I2V_PRODUCTION;
+      }
+    }
+  });
+
+  it("AC-1, AC-2: production render carries media facts measured from exact rendered bytes via real ffprobe, distinct from configured baseline", async () => {
+    const origEnableI2v = process.env.ENABLE_I2V_PRODUCTION;
+    const origCcoEnableI2v = process.env.CCO_ENABLE_I2V_PRODUCTION;
+    const stemTempDir = join(
+      tmpdir(),
+      `cco-integ-mp4-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    delete process.env.ENABLE_I2V_PRODUCTION;
+    delete process.env.CCO_ENABLE_I2V_PRODUCTION;
+
+    try {
+      const [syntheticStem] = await generateSyntheticStems({
+        outputDir: stemTempDir,
+        count: 1,
+        durationSec: 1.0,
+        width: 640,
+        height: 360,
+        fps: 30,
+        format: "mp4"
+      });
+      expect(syntheticStem).toBeDefined();
+
+      const { uow, url: controlApiBaseUrl } = await startControlApi();
+      const client = await pool.connect();
+      let sceneId: string;
+      try {
+        const setup = await setupTestScene(client, objectStorage, {
+          engineAssigned: "LTX_25_720P_5S_I2V_V1"
+        });
+        sceneId = setup.sceneRecord.scene_id;
+      } finally {
+        client.release();
+      }
+
+      const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow);
+      const approveAndDispatch = new ApproveSceneAndDispatchCampaignProductionUseCase(
+        uow,
+        enqueueUseCase
+      );
+      await approveAndDispatch.execute({
+        sceneId,
+        eventId: randomUUID(),
+        reviewerName: "director-byte-grounded",
+        occurredAt: new Date().toISOString()
+      });
+
+      const controlApiClient = createControlApiClient({ baseUrl: controlApiBaseUrl });
+      const claimedJob = await controlApiClient.claim("worker-ltx-byte-grounded", ["production"]);
+      expect(claimedJob).toBeDefined();
+
+      const { transport } = setupRecordingComfyUiTransport();
+      const { worker } = createTestRenderWorker({
+        controlApiClient,
+        uow,
+        objectStorage,
+        transport,
+        fakeVideoBytes: syntheticStem!.bytes,
+        outputContentType: "video/mp4",
+        formatAwareProber: null // Exercises real probeMedia + ffprobe
+      });
+
+      const outcome = await worker.processJob(claimedJob!);
+      expect(outcome).toBe("completed");
+
+      const verifyClient = await pool.connect();
+      try {
+        const dbManifest = await verifyClient.query(
+          "SELECT manifest_payload FROM generation_manifests WHERE job_id = $1",
+          [claimedJob!.jobId]
+        );
+        expect(dbManifest.rows).toHaveLength(1);
+        const payload = dbManifest.rows[0]?.manifest_payload;
+
+        // Configured baseline is 1280x720, 97 frames, 25 fps
+        expect(payload.configuredMedia).toEqual({
+          outputKey: payload.outputs[0].key,
+          checksumSha256: syntheticStem!.sha256,
+          dimensions: { width: 1280, height: 720 },
+          frameCount: 97,
+          fps: LTX_FPS,
+          source: "render_profile_and_executed_workflow"
+        });
+
+        // Measured media traces back to real bytes probed by pinned ffprobe (640x360, 30 frames, 30 fps)
+        const measured = payload.measuredMedia;
+        expect(measured).toBeDefined();
+        expect(measured.container).toBe("ffprobe");
+        expect(measured.checksumSha256).toBe(syntheticStem!.sha256);
+        expect(measured.dimensions).toEqual({ width: 640, height: 360 });
+        expect(measured.frameCount).toBe(30);
+        expect(measured.fps).toBe(30);
+        expect(measured.durationMs).toBe(1000);
+        expect(measured.video?.codecName).toBe("h264");
+        expect(measured.video?.pixelFormat).toBe("yuv420p");
+
+        // Verify exact stored S3 bytes match and probe identically
+        const storedVideo = await objectStorage.getObject({
+          bucket: BUCKETS.DELIVERY,
+          key: payload.outputs[0].key
+        });
+        expect(storedVideo).toBeDefined();
+        expect(sha256Hex(storedVideo!.body)).toBe(syntheticStem!.sha256);
+
+        const indepTempPath = join(stemTempDir, "indep-stored-probe.mp4");
+        await writeFile(indepTempPath, storedVideo!.body);
+        const independentProbe = await probeMedia({
+          runner: defaultSpawnRunner,
+          ffprobePath: "ffprobe",
+          filePath: indepTempPath,
+          isOutput: true,
+          countFrames: true
+        });
+
+        expect(measured.dimensions.width).toBe(independentProbe.videoStream.width);
+        expect(measured.dimensions.height).toBe(independentProbe.videoStream.height);
+        expect(measured.frameCount).toBe(independentProbe.videoStream.frameCount);
+        expect(measured.fps).toBe(independentProbe.videoStream.frameRate);
+        expect(measured.durationMs).toBe(independentProbe.videoStream.durationMs);
+
+        // Assert configured baseline is deliberately different from measured facts
+        expect(payload.configuredMedia.dimensions).not.toEqual(measured.dimensions);
+        expect(payload.configuredMedia.frameCount).not.toEqual(measured.frameCount);
+        expect(payload.configuredMedia.fps).not.toEqual(measured.fps);
+      } finally {
+        verifyClient.release();
+      }
+    } finally {
+      await rm(stemTempDir, { recursive: true, force: true }).catch(() => {});
+      if (origEnableI2v !== undefined) {
+        process.env.ENABLE_I2V_PRODUCTION = origEnableI2v;
+      } else {
+        delete process.env.ENABLE_I2V_PRODUCTION;
+      }
+      if (origCcoEnableI2v !== undefined) {
+        process.env.CCO_ENABLE_I2V_PRODUCTION = origCcoEnableI2v;
+      } else {
+        delete process.env.CCO_ENABLE_I2V_PRODUCTION;
+      }
+    }
+  });
+
+  it("AC-1, AC-2: production render of animated WebP carries measured facts from demux of exact rendered bytes, distinct from configured baseline", async () => {
+    const origEnableI2v = process.env.ENABLE_I2V_PRODUCTION;
+    const origCcoEnableI2v = process.env.CCO_ENABLE_I2V_PRODUCTION;
+    const stemTempDir = join(
+      tmpdir(),
+      `cco-integ-webp-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    delete process.env.ENABLE_I2V_PRODUCTION;
+    delete process.env.CCO_ENABLE_I2V_PRODUCTION;
+
+    try {
+      const [syntheticWebp] = await generateSyntheticStems({
+        outputDir: stemTempDir,
+        count: 1,
+        durationSec: 1.0,
+        width: 320,
+        height: 240,
+        fps: 20,
+        format: "webp"
+      });
+      expect(syntheticWebp).toBeDefined();
+
+      const { uow, url: controlApiBaseUrl } = await startControlApi();
+      const client = await pool.connect();
+      let sceneId: string;
+      try {
+        const setup = await setupTestScene(client, objectStorage, {
+          engineAssigned: "LTX_25_720P_5S_I2V_V1"
+        });
+        sceneId = setup.sceneRecord.scene_id;
+      } finally {
+        client.release();
+      }
+
+      const enqueueUseCase = new EnqueueSceneProductionRenderUseCase(uow);
+      const approveAndDispatch = new ApproveSceneAndDispatchCampaignProductionUseCase(
+        uow,
+        enqueueUseCase
+      );
+      await approveAndDispatch.execute({
+        sceneId,
+        eventId: randomUUID(),
+        reviewerName: "director-byte-grounded-webp",
+        occurredAt: new Date().toISOString()
+      });
+
+      const controlApiClient = createControlApiClient({ baseUrl: controlApiBaseUrl });
+      const claimedJob = await controlApiClient.claim("worker-ltx-byte-grounded-webp", [
+        "production"
+      ]);
+      expect(claimedJob).toBeDefined();
+
+      const { transport } = setupRecordingComfyUiTransport();
+      const { worker } = createTestRenderWorker({
+        controlApiClient,
+        uow,
+        objectStorage,
+        transport,
+        fakeVideoBytes: syntheticWebp!.bytes,
+        outputContentType: "image/webp",
+        formatAwareProber: null // Exercises real isAnimatedWebp + demuxAnimatedWebp
+      });
+
+      const outcome = await worker.processJob(claimedJob!);
+      expect(outcome).toBe("completed");
+
+      const verifyClient = await pool.connect();
+      try {
+        const dbManifest = await verifyClient.query(
+          "SELECT manifest_payload FROM generation_manifests WHERE job_id = $1",
+          [claimedJob!.jobId]
+        );
+        expect(dbManifest.rows).toHaveLength(1);
+        const payload = dbManifest.rows[0]?.manifest_payload;
+
+        // Configured baseline is 1280x720, 97 frames, 25 fps
+        expect(payload.configuredMedia).toEqual({
+          outputKey: payload.outputs[0].key,
+          checksumSha256: syntheticWebp!.sha256,
+          dimensions: { width: 1280, height: 720 },
+          frameCount: 97,
+          fps: LTX_FPS,
+          source: "render_profile_and_executed_workflow"
+        });
+
+        // Measured media traces back to real demuxed WebP bytes
+        const measured = payload.measuredMedia;
+        expect(measured).toBeDefined();
+        expect(measured.container).toBe("animated_webp_demux");
+        expect(measured.checksumSha256).toBe(syntheticWebp!.sha256);
+        expect(measured.dimensions).toEqual({ width: 320, height: 240 });
+        expect(measured.frameCount).toBe(20);
+        expect(measured.fps).toBe(20);
+        expect(measured.durationMs).toBe(1000);
+        expect(measured.frameDurationsMs).toHaveLength(20);
+
+        // Verify exact stored S3 bytes match and demux identically
+        const storedWebp = await objectStorage.getObject({
+          bucket: BUCKETS.DELIVERY,
+          key: payload.outputs[0].key
+        });
+        expect(storedWebp).toBeDefined();
+        expect(sha256Hex(storedWebp!.body)).toBe(syntheticWebp!.sha256);
+
+        const independentDemux = demuxAnimatedWebp(storedWebp!.body);
+        expect(measured.dimensions.width).toBe(independentDemux.width);
+        expect(measured.dimensions.height).toBe(independentDemux.height);
+        expect(measured.frameCount).toBe(independentDemux.frames.length);
+        expect(measured.frameDurationsMs).toEqual(independentDemux.frames.map((f) => f.durationMs));
+        expect(measured.durationMs).toBe(
+          independentDemux.frames.reduce((acc, f) => acc + f.durationMs, 0)
+        );
+
+        // Assert configured baseline is deliberately different from measured facts
+        expect(payload.configuredMedia.dimensions).not.toEqual(measured.dimensions);
+        expect(payload.configuredMedia.frameCount).not.toEqual(measured.frameCount);
+        expect(payload.configuredMedia.fps).not.toEqual(measured.fps);
+      } finally {
+        verifyClient.release();
+      }
+    } finally {
+      await rm(stemTempDir, { recursive: true, force: true }).catch(() => {});
       if (origEnableI2v !== undefined) {
         process.env.ENABLE_I2V_PRODUCTION = origEnableI2v;
       } else {
