@@ -252,6 +252,21 @@ function parseFrameDuration(frame: RawFfprobeFrame): number | undefined {
   return Number.isFinite(val) && val > 0 ? val : undefined;
 }
 
+// Tolerance for frame-to-frame timing deviation before a stream is judged
+// non-constant-rate. Real CFR sources (including ComfyUI/ffmpeg-produced
+// output) typically show sub-millisecond decode/timestamp jitter, so 1ms/2%
+// comfortably passes genuine constant-rate video while still catching VFR
+// sources whose actual frame spacing varies meaningfully.
+const FRAME_INTERVAL_ABSOLUTE_TOLERANCE_SECONDS = 0.001;
+const FRAME_INTERVAL_RELATIVE_TOLERANCE = 0.02;
+
+function frameIntervalTolerance(expectedIntervalSeconds: number): number {
+  return Math.max(
+    FRAME_INTERVAL_ABSOLUTE_TOLERANCE_SECONDS,
+    expectedIntervalSeconds * FRAME_INTERVAL_RELATIVE_TOLERANCE
+  );
+}
+
 function checkFrameIntervalsConstantRate(
   frames: readonly RawFfprobeFrame[],
   candidateRate: number | null
@@ -261,7 +276,7 @@ function checkFrameIntervalsConstantRate(
       const dur = parseFrameDuration(frames[0]!);
       if (dur !== undefined) {
         const expected = 1 / candidateRate;
-        return Math.abs(dur - expected) <= Math.max(0.0025, expected * 0.05);
+        return Math.abs(dur - expected) <= frameIntervalTolerance(expected);
       }
     }
     return true;
@@ -299,7 +314,7 @@ function checkFrameIntervalsConstantRate(
     return false;
   }
 
-  const tolerance = Math.max(0.0025, expectedInterval * 0.05);
+  const tolerance = frameIntervalTolerance(expectedInterval);
   for (const interval of intervals) {
     if (Math.abs(interval - expectedInterval) > tolerance) {
       return false;

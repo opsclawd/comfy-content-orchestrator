@@ -310,6 +310,48 @@ describe("ffprobe-client", () => {
     expect(result.videoStream.avgFrameRate).toBe(25);
   });
 
+  it("emits positive frameRate for a real CFR stream with sub-millisecond decode jitter, not incorrectly rejected as VFR by the tightened tolerance", async () => {
+    // 24fps => expected interval ~0.0416667s. Each interval below is jittered
+    // by roughly +/-0.0003s (0.3ms), well inside the 1ms/2% tolerance, mirroring
+    // realistic decode/timestamp jitter on genuinely constant-rate output.
+    const jsonOutput = JSON.stringify({
+      streams: [
+        {
+          codec_type: "video",
+          codec_name: "h264",
+          pix_fmt: "yuv420p",
+          width: 1280,
+          height: 720,
+          r_frame_rate: "24/1",
+          avg_frame_rate: "24/1",
+          duration: "1.000000",
+          nb_frames: "5"
+        }
+      ],
+      frames: [
+        { pts_time: "0.000000" },
+        { pts_time: "0.041950" },
+        { pts_time: "0.083383" },
+        { pts_time: "0.125300" },
+        { pts_time: "0.166650" }
+      ],
+      format: {
+        duration: "1.000000"
+      }
+    });
+
+    const runner = fakeRunnerWithJson(jsonOutput);
+    const result = await probeMedia({
+      runner,
+      ffprobePath: "ffprobe",
+      filePath: "/fake/path/cfr_jitter.mp4",
+      checkFrameIntervals: true
+    });
+
+    expect(result.videoStream.frameRate).toBe(24);
+    expect(result.videoStream.avgFrameRate).toBe(24);
+  });
+
   it("emits null frameRate when checkFrameIntervals is requested but ffprobe returns no frame records to confirm cadence, even though metadata rates agree", async () => {
     const jsonOutput = JSON.stringify({
       streams: [
