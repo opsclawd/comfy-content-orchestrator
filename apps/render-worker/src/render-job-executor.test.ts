@@ -1,9 +1,15 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { LTX_FPS, MINIMAX_H3_720P_5S_REF2V_V1_INJECTION_TOPOLOGY } from "@cco/contracts";
+import {
+  LTX_FPS,
+  MINIMAX_H3_720P_5S_REF2V_V1_INJECTION_TOPOLOGY,
+  type ManifestMeasuredMedia
+} from "@cco/contracts";
 import {
   ApprovedCandidateMediaHashMismatchError,
   AssembleGenerationManifest,
@@ -41,12 +47,17 @@ import {
   type ShotPlanId,
   type StoryboardCandidate
 } from "@cco/domain";
-import type {
-  CertificationProfile,
-  CertificationProvenanceReport,
-  ComfyUiOutput,
-  ComfyUiOutputReader
+import {
+  type CertificationProfile,
+  type CertificationProvenanceReport,
+  type ComfyUiOutput,
+  type ComfyUiOutputReader,
+  type ProbedMedia,
+  defaultSpawnRunner,
+  demuxAnimatedWebp,
+  probeMedia
 } from "@cco/infrastructure";
+import { generateSyntheticStems } from "../../../packages/infrastructure/src/ffmpeg/test-support/synthetic-stem-fixtures.js";
 import { PreflightError } from "./certification/preflight.js";
 import {
   buildDeterministicStagingFilename,
@@ -77,6 +88,47 @@ const sampleLeaseToken = "33333333-3333-4333-8333-333333333333" as LeaseToken;
 
 const sampleWorkflowHash = "af8528239790f6536ce7f0733f92095501fecfd8e919084a9decdded59e6ecf5";
 const sampleLtxWorkflowHash = "94f397eee3ad8b0cee000036119e524e8c7a012b88d79d00b74172df9d9bf539";
+
+const defaultTestFormatAwareProber = (options: {
+  outputKey: string;
+  checksumSha256: string;
+  bytes: Uint8Array;
+  filename: string;
+  contentType?: string | undefined;
+}): ManifestMeasuredMedia => {
+  const isWebp = options.filename.endsWith(".webp") || options.contentType === "image/webp";
+  if (isWebp) {
+    const frameDurationsMs = Array(97).fill(42);
+    const durationMs = 97 * 42;
+    return {
+      outputKey: options.outputKey,
+      checksumSha256: options.checksumSha256,
+      container: "animated_webp_demux",
+      dimensions: { width: 1280, height: 720 },
+      frameCount: 97,
+      fps: 1000 / 42,
+      durationMs,
+      formatDurationMs: durationMs,
+      frameDurationsMs,
+      measurement: "source_bytes"
+    };
+  }
+  return {
+    outputKey: options.outputKey,
+    checksumSha256: options.checksumSha256,
+    container: "ffprobe",
+    dimensions: { width: 1280, height: 720 },
+    frameCount: 97,
+    fps: 24,
+    durationMs: 4042,
+    formatDurationMs: 4042,
+    video: {
+      codecName: "h264",
+      pixelFormat: "yuv420p"
+    },
+    measurement: "source_bytes"
+  };
+};
 
 const fakeFluxProfile: CertificationProfile = {
   id: "flux-schnell-draft",
@@ -1121,7 +1173,8 @@ describe("Certified Render Job Executor", () => {
       hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
       executeProfileRender: mockExecuteProfileRender,
       outputReader,
-      productionManifestAssembler: mockAssembler
+      productionManifestAssembler: mockAssembler,
+      formatAwareProber: defaultTestFormatAwareProber
     });
 
     const job = createSampleProductionJob();
@@ -1141,7 +1194,8 @@ describe("Certified Render Job Executor", () => {
       readWorkflowFile: async () => fakeRawLtxWorkflow,
       hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
       executeProfileRender: mockExecuteProfileRender,
-      outputReader
+      outputReader,
+      formatAwareProber: defaultTestFormatAwareProber
     });
 
     await expect(executorNoAssembler(job)).rejects.toThrow(ProductionManifestAssemblyError);
@@ -1159,7 +1213,8 @@ describe("Certified Render Job Executor", () => {
       hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
       executeProfileRender: mockExecuteProfileRender,
       outputReader,
-      productionManifestAssembler: emptyAssembler
+      productionManifestAssembler: emptyAssembler,
+      formatAwareProber: defaultTestFormatAwareProber
     });
 
     await expect(executorEmptyAssembler(job)).rejects.toThrow(ProductionManifestAssemblyError);
@@ -1249,7 +1304,8 @@ describe("Certified Render Job Executor", () => {
       },
       executeProfileRender: mockExecuteProfileRender,
       outputReader,
-      productionManifestAssembler: mockAssembler
+      productionManifestAssembler: mockAssembler,
+      formatAwareProber: defaultTestFormatAwareProber
     });
 
     // 1. Candidate job (flux-schnell-draft) succeeds against collection provenance
@@ -1323,7 +1379,8 @@ describe("Certified Render Job Executor", () => {
       hashWorkflow: () => sampleLtxWorkflowHash,
       executeProfileRender: mockExecuteProfileRender,
       outputReader,
-      productionManifestAssembler: manifestFn
+      productionManifestAssembler: manifestFn,
+      formatAwareProber: defaultTestFormatAwareProber
     });
 
     const job = createSampleProductionJob();
@@ -1370,7 +1427,8 @@ describe("Certified Render Job Executor", () => {
       hashWorkflow: () => sampleLtxWorkflowHash,
       executeProfileRender: mockExecuteProfileRender,
       outputReader,
-      productionManifestAssembler: assembleMethodAssembler
+      productionManifestAssembler: assembleMethodAssembler,
+      formatAwareProber: defaultTestFormatAwareProber
     });
 
     const job = createSampleProductionJob();
@@ -1643,7 +1701,8 @@ describe("Certified Render Job Executor", () => {
         hashWorkflow: () => sampleLtxWorkflowHash,
         executeProfileRender: mockExecuteProfileRender,
         outputReader,
-        productionManifestAssembler: mockAssembler
+        productionManifestAssembler: mockAssembler,
+        formatAwareProber: defaultTestFormatAwareProber
       });
 
       const job = createSampleProductionJob({
@@ -1886,7 +1945,8 @@ describe("Certified Render Job Executor", () => {
             ]
           ])
         ),
-        productionManifestAssembler: mockAssembler
+        productionManifestAssembler: mockAssembler,
+        formatAwareProber: defaultTestFormatAwareProber
       });
 
       const productionJob = createSampleProductionJob({
@@ -2076,7 +2136,8 @@ describe("Certified Render Job Executor", () => {
           ])
         ),
         productionManifestAssembler: realAssembler,
-        hashBytes: hashBytes
+        hashBytes: hashBytes,
+        formatAwareProber: defaultTestFormatAwareProber
       });
 
       const productionJob = createSampleProductionJob({
@@ -2133,6 +2194,22 @@ describe("Certified Render Job Executor", () => {
           contentType: "image/webp"
         }
       ]);
+      expect(manifest.configuredMedia).toEqual({
+        outputKey: `scenes/${sampleSceneId}/jobs/${productionJob.jobId}/${expectedOutputHash.slice(0, 16)}-output.webp`,
+        checksumSha256: expectedOutputHash,
+        dimensions: { width: 1280, height: 720 },
+        frameCount: 97,
+        fps: LTX_FPS,
+        source: "render_profile_and_executed_workflow"
+      });
+      expect(manifest.measuredMedia).toEqual(
+        expect.objectContaining({
+          outputKey: `scenes/${sampleSceneId}/jobs/${productionJob.jobId}/${expectedOutputHash.slice(0, 16)}-output.webp`,
+          checksumSha256: expectedOutputHash,
+          container: "animated_webp_demux",
+          measurement: "source_bytes"
+        })
+      );
     });
   });
 
@@ -2300,7 +2377,8 @@ describe("Certified Render Job Executor", () => {
         resolveApprovedCandidateMedia: mockResolveApprovedCandidateMedia,
         objectStorage: mockObjectStorage,
         stageReferenceImage: mockStageReferenceImage,
-        productionManifestAssembler: mockAssembler
+        productionManifestAssembler: mockAssembler,
+        formatAwareProber: defaultTestFormatAwareProber
       });
 
       const i2vJob = createSampleProductionJob({
@@ -2599,7 +2677,8 @@ describe("Certified Render Job Executor", () => {
           stage: vi.fn().mockResolvedValue(stagedReference),
           cleanup: vi.fn().mockRejectedValue(new Error("Disk permission denied on unlink"))
         },
-        productionManifestAssembler: { assembleManifest: async () => ({ manifestId: "ok" }) }
+        productionManifestAssembler: { assembleManifest: async () => ({ manifestId: "ok" }) },
+        formatAwareProber: defaultTestFormatAwareProber
       });
 
       const job = createSampleProductionJob({
@@ -3243,7 +3322,8 @@ describe("Certified Render Job Executor", () => {
         objectStorage: mockStorage,
         stageReferenceImage: { stage: mockStage, cleanup: mockCleanup },
         imageValidator: mockImageValidator,
-        productionManifestAssembler: { assemble: mockManifestAssembler }
+        productionManifestAssembler: { assemble: mockManifestAssembler },
+        formatAwareProber: defaultTestFormatAwareProber
       });
 
       const ref2vJob = createSampleProductionJob({
@@ -3502,6 +3582,7 @@ describe("Certified Render Job Executor", () => {
             referenceAssetRepository: mockRefAssetRepo,
             imageValidator: mockImageValidator,
             productionManifestAssembler: { assemble: mockAssembler },
+            formatAwareProber: defaultTestFormatAwareProber,
             ...overrides
           });
 
@@ -4749,7 +4830,8 @@ describe("Certified Render Job Executor", () => {
           objectStorage: mockStorage,
           hashBytes: mockHashBytesPort,
           stageReferenceImage: { stage: mockStage, cleanup: mockCleanup },
-          productionManifestAssembler: { assemble: mockManifestAssembler }
+          productionManifestAssembler: { assemble: mockManifestAssembler },
+          formatAwareProber: defaultTestFormatAwareProber
         });
 
         const job = createSampleProductionJob({
@@ -4929,6 +5011,1053 @@ describe("Certified Render Job Executor", () => {
 
         await expect(executor(job)).rejects.toThrow(RenderJobExecutionError);
       });
+    });
+  });
+
+  describe("Format-aware media probing and manifest integration", () => {
+    it("probes MP4 output via probeMedia, captures video and audio facts, and cleans up temp file in finally", async () => {
+      const outputBytes = new Uint8Array([0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70]);
+      let probedFilePath: string | undefined;
+
+      const mockProbedMedia: ProbedMedia = {
+        formatDurationMs: 4050,
+        videoStream: {
+          codecName: "h264",
+          width: 1280,
+          height: 720,
+          frameRate: 24,
+          durationMs: 4042,
+          frameCount: 97,
+          pixelFormat: "yuv420p"
+        },
+        audioStream: {
+          codecName: "aac",
+          sampleRateHz: 48000,
+          channels: 2,
+          durationMs: 4050,
+          bitrateKbps: 192
+        }
+      };
+
+      const mockProbeMedia = vi.fn().mockImplementation(async (options: { filePath: string }) => {
+        probedFilePath = options.filePath;
+        // Verify the file was materialized on disk during probing
+        expect(existsSync(options.filePath)).toBe(true);
+        expect(options.filePath.startsWith(tmpdir())).toBe(true);
+        expect(options.filePath.endsWith(".mp4")).toBe(true);
+        return mockProbedMedia;
+      });
+
+      let capturedAssembleInput: AssembleProductionManifestInput | undefined;
+      const mockAssembler: ProductionManifestAssembler = {
+        assembleManifest: vi
+          .fn()
+          .mockImplementation(async (input: AssembleProductionManifestInput) => {
+            capturedAssembleInput = input;
+            return { manifestId: "test-manifest-123", ok: true };
+          })
+      };
+
+      const outputReader = new FakeOutputReader(
+        new Map([["output.mp4", { bytes: outputBytes, contentType: "video/mp4" }]])
+      );
+
+      const mockExecuteProfileRender = vi.fn().mockResolvedValue({
+        status: "succeeded",
+        promptId: "prompt-probe-1",
+        outputObjectKeys: ["output.mp4"],
+        durationMs: 7500,
+        profile: {
+          profileId: "ltx-25-720p-97f",
+          renderProfileKey: "LTX_25_720P_5S_V1",
+          renderProfileVersion: 1,
+          engine: "ltx_25",
+          workflowSha256: sampleLtxWorkflowHash,
+          modelSha256: fakeLtxLiveProvenance.renderProfileProvenance!.modelHashes,
+          runnerProfile: "dynamicvram-offload-v1",
+          comfyUiCommit: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+        },
+        preDispatchGpu: {
+          totalVramMb: 24576,
+          usedVramMb: 4096,
+          freeVramMb: 20480,
+          reservedVramMb: 4096,
+          measuredAt: new Date().toISOString()
+        }
+      });
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxProfile,
+        readApprovedProvenance: async () => fakeLtxLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => fakeRawLtxWorkflow,
+        hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        outputReader,
+        productionManifestAssembler: mockAssembler,
+        probeMedia: mockProbeMedia
+      });
+
+      const job = createSampleProductionJob();
+      const result = await executor(job);
+
+      expect(mockProbeMedia).toHaveBeenCalledTimes(1);
+      expect(probedFilePath).toBeDefined();
+      // Verify temp file was cleaned up in finally
+      expect(existsSync(probedFilePath!)).toBe(false);
+
+      expect(capturedAssembleInput).toBeDefined();
+      const expectedOutputHash = createHash("sha256").update(outputBytes).digest("hex");
+      const expectedOutputKey = `scenes/${sampleSceneId}/jobs/${job.jobId}/${expectedOutputHash.slice(0, 16)}-output.mp4`;
+
+      // Configured media reflects configured baseline and topology
+      expect(capturedAssembleInput!.configuredMedia).toEqual({
+        outputKey: expectedOutputKey,
+        checksumSha256: expectedOutputHash,
+        dimensions: { width: 1280, height: 720 },
+        frameCount: 97,
+        fps: LTX_FPS,
+        source: "render_profile_and_executed_workflow"
+      });
+
+      // Measured media reflects real probe results
+      expect(capturedAssembleInput!.measuredMedia).toEqual({
+        outputKey: expectedOutputKey,
+        checksumSha256: expectedOutputHash,
+        container: "ffprobe",
+        dimensions: { width: 1280, height: 720 },
+        frameCount: 97,
+        fps: 24,
+        durationMs: 4042,
+        formatDurationMs: 4050,
+        video: {
+          codecName: "h264",
+          pixelFormat: "yuv420p"
+        },
+        audio: {
+          codecName: "aac",
+          sampleRateHz: 48000,
+          channels: 2,
+          durationMs: 4050,
+          bitrateKbps: 192
+        },
+        measurement: "source_bytes"
+      });
+      expect(result.manifestPayload).toEqual({ manifestId: "test-manifest-123", ok: true });
+    });
+
+    it("probes MP4 output via probeMedia when frame intervals indicate variable frame rate, emitting fps: null", async () => {
+      const outputBytes = new Uint8Array([0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70]);
+      let probedFilePath: string | undefined;
+      const mockProbeMedia = vi.fn().mockImplementation(async (options: { filePath: string }) => {
+        probedFilePath = options.filePath;
+        const readBack = await readFile(options.filePath);
+        expect(Array.from(readBack)).toEqual(Array.from(outputBytes));
+        return {
+          videoStream: {
+            codecName: "h264",
+            pixelFormat: "yuv420p",
+            width: 1280,
+            height: 720,
+            frameRate: null,
+            avgFrameRate: 24,
+            durationMs: 4042,
+            frameCount: 97
+          },
+          formatDurationMs: 4050
+        };
+      });
+
+      let capturedAssembleInput: AssembleProductionManifestInput | undefined;
+      const mockAssembler: ProductionManifestAssembler = {
+        assembleManifest: vi
+          .fn()
+          .mockImplementation(async (input: AssembleProductionManifestInput) => {
+            capturedAssembleInput = input;
+            return { manifestId: "vfr-manifest-123", ok: true };
+          })
+      };
+
+      const outputReader = new FakeOutputReader(
+        new Map([["output.mp4", { bytes: outputBytes, contentType: "video/mp4" }]])
+      );
+
+      const mockExecuteProfileRender = vi.fn().mockResolvedValue({
+        status: "succeeded",
+        promptId: "prompt-vfr-probe",
+        outputObjectKeys: ["output.mp4"],
+        durationMs: 6500,
+        profile: {
+          profileId: "ltx-25-720p-97f",
+          renderProfileKey: "LTX_25_720P_5S_V1",
+          renderProfileVersion: 1,
+          engine: "ltx_25",
+          workflowSha256: sampleLtxWorkflowHash,
+          modelSha256: fakeLtxLiveProvenance.renderProfileProvenance!.modelHashes,
+          runnerProfile: "dynamicvram-offload-v1",
+          comfyUiCommit: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+        },
+        preDispatchGpu: {
+          totalVramMb: 24576,
+          usedVramMb: 4096,
+          freeVramMb: 20480,
+          reservedVramMb: 4096,
+          measuredAt: new Date().toISOString()
+        }
+      });
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxProfile,
+        readApprovedProvenance: async () => fakeLtxLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => fakeRawLtxWorkflow,
+        hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        outputReader,
+        productionManifestAssembler: mockAssembler,
+        probeMedia: mockProbeMedia
+      });
+
+      const job = createSampleProductionJob();
+      const result = await executor(job);
+
+      expect(mockProbeMedia).toHaveBeenCalledTimes(1);
+      expect(mockProbeMedia).toHaveBeenCalledWith(
+        expect.objectContaining({ checkFrameIntervals: true, countFrames: true, isOutput: true })
+      );
+      expect(probedFilePath).toBeDefined();
+      expect(existsSync(probedFilePath!)).toBe(false);
+      expect(capturedAssembleInput).toBeDefined();
+      expect(capturedAssembleInput!.measuredMedia).toBeDefined();
+      expect(capturedAssembleInput!.measuredMedia!.fps).toBeNull();
+      expect(capturedAssembleInput!.measuredMedia!.frameCount).toBe(97);
+      expect(result.manifestPayload).toEqual({ manifestId: "vfr-manifest-123", ok: true });
+    });
+
+    it("probes animated WebP output via demuxAnimatedWebp with uniform frame delays, deriving positive fps", async () => {
+      const outputBytes = new Uint8Array([
+        0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50
+      ]);
+      const mockProbeMedia = vi.fn();
+      const mockIsAnimatedWebp = vi.fn().mockReturnValue(true);
+      const frameDurations = Array(97).fill(40); // 40ms each -> 25 fps
+      const mockDemuxAnimatedWebp = vi.fn().mockReturnValue({
+        width: 1280,
+        height: 720,
+        loopCount: 0,
+        frames: frameDurations.map((d) => ({ durationMs: d }))
+      });
+
+      let capturedAssembleInput: AssembleProductionManifestInput | undefined;
+      const mockAssembler: ProductionManifestAssembler = {
+        assembleManifest: vi
+          .fn()
+          .mockImplementation(async (input: AssembleProductionManifestInput) => {
+            capturedAssembleInput = input;
+            return { manifestId: "webp-uniform-manifest", ok: true };
+          })
+      };
+
+      const outputReader = new FakeOutputReader(
+        new Map([["output.webp", { bytes: outputBytes, contentType: "image/webp" }]])
+      );
+
+      const mockExecuteProfileRender = vi.fn().mockResolvedValue({
+        status: "succeeded",
+        promptId: "prompt-webp-1",
+        outputObjectKeys: ["output.webp"],
+        durationMs: 6500,
+        profile: {
+          profileId: "ltx-25-720p-97f",
+          renderProfileKey: "LTX_25_720P_5S_V1",
+          renderProfileVersion: 1,
+          engine: "ltx_25",
+          workflowSha256: sampleLtxWorkflowHash,
+          modelSha256: fakeLtxLiveProvenance.renderProfileProvenance!.modelHashes,
+          runnerProfile: "dynamicvram-offload-v1",
+          comfyUiCommit: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+        },
+        preDispatchGpu: {
+          totalVramMb: 24576,
+          usedVramMb: 4096,
+          freeVramMb: 20480,
+          reservedVramMb: 4096,
+          measuredAt: new Date().toISOString()
+        }
+      });
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxProfile,
+        readApprovedProvenance: async () => fakeLtxLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => fakeRawLtxWorkflow,
+        hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        outputReader,
+        productionManifestAssembler: mockAssembler,
+        probeMedia: mockProbeMedia,
+        isAnimatedWebp: mockIsAnimatedWebp,
+        demuxAnimatedWebp: mockDemuxAnimatedWebp
+      });
+
+      const job = createSampleProductionJob();
+      const result = await executor(job);
+
+      // ffprobe must NEVER be called for animated WebP
+      expect(mockProbeMedia).not.toHaveBeenCalled();
+      expect(mockIsAnimatedWebp).toHaveBeenCalledWith(outputBytes);
+      expect(mockDemuxAnimatedWebp).toHaveBeenCalledWith(outputBytes);
+
+      expect(capturedAssembleInput).toBeDefined();
+      const expectedOutputHash = createHash("sha256").update(outputBytes).digest("hex");
+      const expectedOutputKey = `scenes/${sampleSceneId}/jobs/${job.jobId}/${expectedOutputHash.slice(0, 16)}-output.webp`;
+
+      expect(capturedAssembleInput!.measuredMedia).toEqual({
+        outputKey: expectedOutputKey,
+        checksumSha256: expectedOutputHash,
+        container: "animated_webp_demux",
+        dimensions: { width: 1280, height: 720 },
+        frameCount: 97,
+        fps: 25,
+        durationMs: 3880,
+        formatDurationMs: 3880,
+        frameDurationsMs: frameDurations,
+        measurement: "source_bytes"
+      });
+      expect(result.manifestPayload).toEqual({ manifestId: "webp-uniform-manifest", ok: true });
+    });
+
+    it("probes animated WebP output with variable frame delays, setting fps: null and preserving durations", async () => {
+      const outputBytes = new Uint8Array([
+        0x52, 0x49, 0x46, 0x46, 0x01, 0x02, 0x03, 0x04, 0x57, 0x45, 0x42, 0x50
+      ]);
+      const mockIsAnimatedWebp = vi.fn().mockReturnValue(true);
+      const variableDelays = [40, 50, 40];
+      const mockDemuxAnimatedWebp = vi.fn().mockReturnValue({
+        width: 1280,
+        height: 720,
+        loopCount: 0,
+        frames: variableDelays.map((d) => ({ durationMs: d }))
+      });
+
+      let capturedAssembleInput: AssembleProductionManifestInput | undefined;
+      const mockAssembler: ProductionManifestAssembler = {
+        assembleManifest: vi
+          .fn()
+          .mockImplementation(async (input: AssembleProductionManifestInput) => {
+            capturedAssembleInput = input;
+            return { manifestId: "webp-vfr-manifest", ok: true };
+          })
+      };
+
+      const outputReader = new FakeOutputReader(
+        new Map([["output.webp", { bytes: outputBytes, contentType: "image/webp" }]])
+      );
+
+      const mockExecuteProfileRender = vi.fn().mockResolvedValue({
+        status: "succeeded",
+        promptId: "prompt-webp-vfr",
+        outputObjectKeys: ["output.webp"],
+        durationMs: 6500,
+        profile: {
+          profileId: "ltx-25-720p-97f",
+          renderProfileKey: "LTX_25_720P_5S_V1",
+          renderProfileVersion: 1,
+          engine: "ltx_25",
+          workflowSha256: sampleLtxWorkflowHash,
+          modelSha256: fakeLtxLiveProvenance.renderProfileProvenance!.modelHashes,
+          runnerProfile: "dynamicvram-offload-v1",
+          comfyUiCommit: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+        },
+        preDispatchGpu: {
+          totalVramMb: 24576,
+          usedVramMb: 4096,
+          freeVramMb: 20480,
+          reservedVramMb: 4096,
+          measuredAt: new Date().toISOString()
+        }
+      });
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxProfile,
+        readApprovedProvenance: async () => fakeLtxLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => fakeRawLtxWorkflow,
+        hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        outputReader,
+        productionManifestAssembler: mockAssembler,
+        isAnimatedWebp: mockIsAnimatedWebp,
+        demuxAnimatedWebp: mockDemuxAnimatedWebp
+      });
+
+      const job = createSampleProductionJob();
+      await executor(job);
+
+      expect(capturedAssembleInput!.measuredMedia?.fps).toBeNull();
+      expect(capturedAssembleInput!.measuredMedia?.frameDurationsMs).toEqual(variableDelays);
+      expect(capturedAssembleInput!.measuredMedia?.durationMs).toBe(130);
+      expect(capturedAssembleInput!.measuredMedia?.frameCount).toBe(3);
+    });
+
+    it("cleans up temporary file in finally even when probeMedia fails", async () => {
+      const outputBytes = new Uint8Array([0x01, 0x02, 0x03, 0x04]);
+      let probedFilePath: string | undefined;
+
+      const mockProbeMedia = vi.fn().mockImplementation(async (options: { filePath: string }) => {
+        probedFilePath = options.filePath;
+        expect(existsSync(options.filePath)).toBe(true);
+        throw new Error("ffprobe crashed with segmentation fault");
+      });
+
+      const outputReader = new FakeOutputReader(
+        new Map([["output.mp4", { bytes: outputBytes, contentType: "video/mp4" }]])
+      );
+
+      const mockExecuteProfileRender = vi.fn().mockResolvedValue({
+        status: "succeeded",
+        promptId: "prompt-probe-err",
+        outputObjectKeys: ["output.mp4"],
+        durationMs: 1000,
+        profile: {} as ProfileRenderIdentity,
+        preDispatchGpu: {
+          totalVramMb: 24576,
+          usedVramMb: 4096,
+          freeVramMb: 20480,
+          reservedVramMb: 4096,
+          measuredAt: new Date().toISOString()
+        }
+      });
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxProfile,
+        readApprovedProvenance: async () => fakeLtxLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => fakeRawLtxWorkflow,
+        hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        outputReader,
+        productionManifestAssembler: { assembleManifest: async () => ({}) },
+        probeMedia: mockProbeMedia
+      });
+
+      const job = createSampleProductionJob();
+      await expect(executor(job)).rejects.toThrow(ProductionManifestAssemblyError);
+
+      expect(mockProbeMedia).toHaveBeenCalledTimes(1);
+      expect(probedFilePath).toBeDefined();
+      expect(existsSync(probedFilePath!)).toBe(false);
+    });
+
+    it("cleans up temporary file in finally even when assembler fails", async () => {
+      const outputBytes = new Uint8Array([0x01, 0x02, 0x03, 0x04]);
+      let probedFilePath: string | undefined;
+
+      const mockProbeMedia = vi.fn().mockImplementation(async (options: { filePath: string }) => {
+        probedFilePath = options.filePath;
+        expect(existsSync(options.filePath)).toBe(true);
+        return {
+          formatDurationMs: 1000,
+          videoStream: {
+            codecName: "h264",
+            pixelFormat: "yuv420p",
+            width: 1280,
+            height: 720,
+            frameRate: 24,
+            durationMs: 1000,
+            frameCount: 24
+          }
+        };
+      });
+
+      const outputReader = new FakeOutputReader(
+        new Map([["output.mp4", { bytes: outputBytes, contentType: "video/mp4" }]])
+      );
+
+      const mockExecuteProfileRender = vi.fn().mockResolvedValue({
+        status: "succeeded",
+        promptId: "prompt-asm-err",
+        outputObjectKeys: ["output.mp4"],
+        durationMs: 1000,
+        profile: {} as ProfileRenderIdentity,
+        preDispatchGpu: {
+          totalVramMb: 24576,
+          usedVramMb: 4096,
+          freeVramMb: 20480,
+          reservedVramMb: 4096,
+          measuredAt: new Date().toISOString()
+        }
+      });
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxProfile,
+        readApprovedProvenance: async () => fakeLtxLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => fakeRawLtxWorkflow,
+        hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        outputReader,
+        productionManifestAssembler: {
+          assembleManifest: async () => {
+            throw new Error("Assembler failed to reach database");
+          }
+        },
+        probeMedia: mockProbeMedia
+      });
+
+      const job = createSampleProductionJob();
+      await expect(executor(job)).rejects.toThrow("Assembler failed to reach database");
+
+      expect(mockProbeMedia).toHaveBeenCalledTimes(1);
+      expect(probedFilePath).toBeDefined();
+      expect(existsSync(probedFilePath!)).toBe(false);
+    });
+
+    it("fails closed when no video media object exists among render outputs", async () => {
+      const outputBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]); // PNG header
+      const outputReader = new FakeOutputReader(
+        new Map([["static_preview.png", { bytes: outputBytes, contentType: "image/png" }]])
+      );
+
+      const mockExecuteProfileRender = vi.fn().mockResolvedValue({
+        status: "succeeded",
+        promptId: "prompt-png-only",
+        outputObjectKeys: ["static_preview.png"],
+        durationMs: 1000,
+        profile: {} as ProfileRenderIdentity,
+        preDispatchGpu: {
+          totalVramMb: 24576,
+          usedVramMb: 4096,
+          freeVramMb: 20480,
+          reservedVramMb: 4096,
+          measuredAt: new Date().toISOString()
+        }
+      });
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxProfile,
+        readApprovedProvenance: async () => fakeLtxLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => fakeRawLtxWorkflow,
+        hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        outputReader,
+        productionManifestAssembler: { assembleManifest: async () => ({}) },
+        isAnimatedWebp: () => false
+      });
+
+      const job = createSampleProductionJob();
+      await expect(executor(job)).rejects.toThrow(
+        /Primary video output not found or missing bytes for media probing/
+      );
+    });
+
+    it("fails closed when demuxAnimatedWebp throws an error", async () => {
+      const outputBytes = new Uint8Array([
+        0x52, 0x49, 0x46, 0x46, 0x01, 0x02, 0x03, 0x04, 0x57, 0x45, 0x42, 0x50
+      ]);
+      const outputReader = new FakeOutputReader(
+        new Map([["corrupt.webp", { bytes: outputBytes, contentType: "image/webp" }]])
+      );
+
+      const mockExecuteProfileRender = vi.fn().mockResolvedValue({
+        status: "succeeded",
+        promptId: "prompt-demux-err",
+        outputObjectKeys: ["corrupt.webp"],
+        durationMs: 1000,
+        profile: {} as ProfileRenderIdentity,
+        preDispatchGpu: {
+          totalVramMb: 24576,
+          usedVramMb: 4096,
+          freeVramMb: 20480,
+          reservedVramMb: 4096,
+          measuredAt: new Date().toISOString()
+        }
+      });
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxProfile,
+        readApprovedProvenance: async () => fakeLtxLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => fakeRawLtxWorkflow,
+        hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        outputReader,
+        productionManifestAssembler: { assembleManifest: async () => ({}) },
+        isAnimatedWebp: () => true,
+        demuxAnimatedWebp: () => {
+          throw new Error("Invalid VP8X chunk payload");
+        }
+      });
+
+      const job = createSampleProductionJob();
+      await expect(executor(job)).rejects.toThrow(
+        /Failed to demux animated WebP output for measurement/
+      );
+    });
+
+    it("proves measured facts trace back to real produced MP4 bytes via real ffprobe, distinct from configured baseline", async () => {
+      const stemTempDir = join(
+        tmpdir(),
+        `cco-test-stems-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      );
+      try {
+        const [syntheticStem] = await generateSyntheticStems({
+          outputDir: stemTempDir,
+          count: 1,
+          durationSec: 1.0,
+          width: 640,
+          height: 360,
+          fps: 30,
+          format: "mp4"
+        });
+        expect(syntheticStem).toBeDefined();
+
+        let capturedAssembleInput: AssembleProductionManifestInput | undefined;
+        const mockAssembler: ProductionManifestAssembler = {
+          assembleManifest: vi
+            .fn()
+            .mockImplementation(async (input: AssembleProductionManifestInput) => {
+              capturedAssembleInput = input;
+              return { manifestId: "real-media-manifest", ok: true };
+            })
+        };
+
+        const outputReader = new FakeOutputReader(
+          new Map([
+            ["rendered_output.mp4", { bytes: syntheticStem!.bytes, contentType: "video/mp4" }]
+          ])
+        );
+
+        const mockExecuteProfileRender = vi.fn().mockResolvedValue({
+          status: "succeeded",
+          promptId: "prompt-real-media-1",
+          outputObjectKeys: ["rendered_output.mp4"],
+          durationMs: 4200,
+          profile: {
+            profileId: "ltx-25-720p-97f",
+            renderProfileKey: "LTX_25_720P_5S_V1",
+            renderProfileVersion: 1,
+            engine: "ltx_25",
+            workflowSha256: sampleLtxWorkflowHash,
+            modelSha256: fakeLtxLiveProvenance.renderProfileProvenance!.modelHashes,
+            runnerProfile: "dynamicvram-offload-v1",
+            comfyUiCommit: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+          },
+          preDispatchGpu: {
+            totalVramMb: 24576,
+            usedVramMb: 4096,
+            freeVramMb: 20480,
+            reservedVramMb: 4096,
+            measuredAt: new Date().toISOString()
+          }
+        });
+
+        const executor = createCertifiedRenderJobExecutor({
+          loadCertificationProfile: async () => fakeLtxProfile,
+          readApprovedProvenance: async () => fakeLtxLiveProvenance,
+          collectCertificationProvenance: async () => fakeLtxLiveProvenance,
+          verifyGoldMasterProvenance: () => {},
+          readWorkflowFile: async () => fakeRawLtxWorkflow,
+          hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
+          executeProfileRender: mockExecuteProfileRender,
+          outputReader,
+          productionManifestAssembler: mockAssembler
+          // Notice: NO mock probeMedia, NO formatAwareProber -> exercises real production probe path
+        });
+
+        const job = createSampleProductionJob();
+        const result = await executor(job);
+        expect(result.manifestPayload).toBeDefined();
+        expect(capturedAssembleInput).toBeDefined();
+
+        // Configured baseline is 1280x720, 97 frames, 25 fps
+        expect(capturedAssembleInput!.configuredMedia).toEqual({
+          outputKey: expect.stringContaining("rendered_output.mp4"),
+          checksumSha256: syntheticStem!.sha256,
+          dimensions: { width: 1280, height: 720 },
+          frameCount: 97,
+          fps: LTX_FPS,
+          source: "render_profile_and_executed_workflow"
+        });
+
+        // Measured media traces back to real bytes probed by real ffprobe (640x360, 30 frames, 30 fps)
+        expect(capturedAssembleInput!.measuredMedia).toBeDefined();
+        const measured = capturedAssembleInput!.measuredMedia!;
+        expect(measured.container).toBe("ffprobe");
+        expect(measured.checksumSha256).toBe(syntheticStem!.sha256);
+        expect(measured.dimensions).toEqual({ width: 640, height: 360 });
+        expect(measured.frameCount).toBe(30);
+        expect(measured.fps).toBe(30);
+        expect(measured.durationMs).toBe(1000);
+        expect(measured.video?.codecName).toBe("h264");
+        expect(measured.video?.pixelFormat).toBe("yuv420p");
+
+        // Independent probe of the exact produced bytes
+        const indepTempPath = join(stemTempDir, "independent-check.mp4");
+        await writeFile(indepTempPath, syntheticStem!.bytes);
+        const independentProbe = await probeMedia({
+          runner: defaultSpawnRunner,
+          ffprobePath: "ffprobe",
+          filePath: indepTempPath,
+          isOutput: true,
+          countFrames: true
+        });
+
+        expect(measured.dimensions.width).toBe(independentProbe.videoStream.width);
+        expect(measured.dimensions.height).toBe(independentProbe.videoStream.height);
+        expect(measured.frameCount).toBe(independentProbe.videoStream.frameCount);
+        expect(measured.fps).toBe(independentProbe.videoStream.frameRate);
+        expect(measured.durationMs).toBe(independentProbe.videoStream.durationMs);
+
+        // Explicitly assert configured baseline is deliberately different from measured facts
+        expect(capturedAssembleInput!.configuredMedia!.dimensions).not.toEqual(measured.dimensions);
+        expect(capturedAssembleInput!.configuredMedia!.frameCount).not.toEqual(measured.frameCount);
+        expect(capturedAssembleInput!.configuredMedia!.fps).not.toEqual(measured.fps);
+      } finally {
+        await rm(stemTempDir, { recursive: true, force: true }).catch(() => {});
+      }
+    });
+
+    it("proves measured facts for real produced VFR MP4 bytes with positive avg_frame_rate emit fps: null", async () => {
+      const stemTempDir = join(
+        tmpdir(),
+        `cco-test-vfr-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      );
+      try {
+        await mkdir(stemTempDir, { recursive: true });
+        const part1Path = join(stemTempDir, "part1.mp4");
+        const part2Path = join(stemTempDir, "part2.mp4");
+        const vfrPath = join(stemTempDir, "vfr.mp4");
+
+        await defaultSpawnRunner("ffmpeg", [
+          "-y",
+          "-f",
+          "lavfi",
+          "-i",
+          "testsrc2=size=320x240:rate=30:duration=0.333333",
+          "-c:v",
+          "libx264",
+          "-preset",
+          "ultrafast",
+          part1Path
+        ]);
+        await defaultSpawnRunner("ffmpeg", [
+          "-y",
+          "-f",
+          "lavfi",
+          "-i",
+          "testsrc2=size=320x240:rate=15:duration=0.666667",
+          "-c:v",
+          "libx264",
+          "-preset",
+          "ultrafast",
+          part2Path
+        ]);
+        await defaultSpawnRunner("ffmpeg", [
+          "-y",
+          "-i",
+          part1Path,
+          "-i",
+          part2Path,
+          "-filter_complex",
+          "[0:v][1:v]concat=n=2:v=1:a=0[v]",
+          "-map",
+          "[v]",
+          "-c:v",
+          "libx264",
+          "-preset",
+          "ultrafast",
+          "-fps_mode",
+          "vfr",
+          vfrPath
+        ]);
+
+        const vfrBytes = await readFile(vfrPath);
+        const vfrSha256 = createHash("sha256").update(vfrBytes).digest("hex");
+
+        let capturedAssembleInput: AssembleProductionManifestInput | undefined;
+        const mockAssembler: ProductionManifestAssembler = {
+          assembleManifest: vi
+            .fn()
+            .mockImplementation(async (input: AssembleProductionManifestInput) => {
+              capturedAssembleInput = input;
+              return { manifestId: "real-vfr-manifest", ok: true };
+            })
+        };
+
+        const outputReader = new FakeOutputReader(
+          new Map([["vfr_output.mp4", { bytes: vfrBytes, contentType: "video/mp4" }]])
+        );
+
+        const mockExecuteProfileRender = vi.fn().mockResolvedValue({
+          status: "succeeded",
+          promptId: "prompt-vfr-real",
+          outputObjectKeys: ["vfr_output.mp4"],
+          durationMs: 4000,
+          profile: {
+            profileId: "ltx-25-720p-97f",
+            renderProfileKey: "LTX_25_720P_5S_V1",
+            renderProfileVersion: 1,
+            engine: "ltx_25",
+            workflowSha256: sampleLtxWorkflowHash,
+            modelSha256: fakeLtxLiveProvenance.renderProfileProvenance!.modelHashes,
+            runnerProfile: "dynamicvram-offload-v1",
+            comfyUiCommit: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+          },
+          preDispatchGpu: {
+            totalVramMb: 24576,
+            usedVramMb: 4096,
+            freeVramMb: 20480,
+            reservedVramMb: 4096,
+            measuredAt: new Date().toISOString()
+          }
+        });
+
+        const executor = createCertifiedRenderJobExecutor({
+          loadCertificationProfile: async () => fakeLtxProfile,
+          readApprovedProvenance: async () => fakeLtxLiveProvenance,
+          collectCertificationProvenance: async () => fakeLtxLiveProvenance,
+          verifyGoldMasterProvenance: () => {},
+          readWorkflowFile: async () => fakeRawLtxWorkflow,
+          hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
+          executeProfileRender: mockExecuteProfileRender,
+          outputReader,
+          productionManifestAssembler: mockAssembler
+        });
+
+        const job = createSampleProductionJob();
+        const result = await executor(job);
+        expect(result.manifestPayload).toBeDefined();
+        expect(capturedAssembleInput).toBeDefined();
+
+        const measured = capturedAssembleInput!.measuredMedia!;
+        expect(measured.container).toBe("ffprobe");
+        expect(measured.checksumSha256).toBe(vfrSha256);
+        expect(measured.frameCount).toBe(20);
+        expect(measured.fps).toBeNull();
+      } finally {
+        await rm(stemTempDir, { recursive: true, force: true }).catch(() => {});
+      }
+    });
+
+    it("proves measured facts trace back to real produced animated WebP bytes via real demux, distinct from configured baseline", async () => {
+      const stemTempDir = join(
+        tmpdir(),
+        `cco-test-webp-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      );
+      try {
+        const [syntheticWebp] = await generateSyntheticStems({
+          outputDir: stemTempDir,
+          count: 1,
+          durationSec: 1.0,
+          width: 320,
+          height: 240,
+          fps: 20,
+          format: "webp"
+        });
+        expect(syntheticWebp).toBeDefined();
+
+        let capturedAssembleInput: AssembleProductionManifestInput | undefined;
+        const mockAssembler: ProductionManifestAssembler = {
+          assembleManifest: vi
+            .fn()
+            .mockImplementation(async (input: AssembleProductionManifestInput) => {
+              capturedAssembleInput = input;
+              return { manifestId: "real-webp-manifest", ok: true };
+            })
+        };
+
+        const outputReader = new FakeOutputReader(
+          new Map([["animation.webp", { bytes: syntheticWebp!.bytes, contentType: "image/webp" }]])
+        );
+
+        const mockExecuteProfileRender = vi.fn().mockResolvedValue({
+          status: "succeeded",
+          promptId: "prompt-real-webp-1",
+          outputObjectKeys: ["animation.webp"],
+          durationMs: 3800,
+          profile: {
+            profileId: "ltx-25-720p-97f",
+            renderProfileKey: "LTX_25_720P_5S_V1",
+            renderProfileVersion: 1,
+            engine: "ltx_25",
+            workflowSha256: sampleLtxWorkflowHash,
+            modelSha256: fakeLtxLiveProvenance.renderProfileProvenance!.modelHashes,
+            runnerProfile: "dynamicvram-offload-v1",
+            comfyUiCommit: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+          },
+          preDispatchGpu: {
+            totalVramMb: 24576,
+            usedVramMb: 4096,
+            freeVramMb: 20480,
+            reservedVramMb: 4096,
+            measuredAt: new Date().toISOString()
+          }
+        });
+
+        const executor = createCertifiedRenderJobExecutor({
+          loadCertificationProfile: async () => fakeLtxProfile,
+          readApprovedProvenance: async () => fakeLtxLiveProvenance,
+          collectCertificationProvenance: async () => fakeLtxLiveProvenance,
+          verifyGoldMasterProvenance: () => {},
+          readWorkflowFile: async () => fakeRawLtxWorkflow,
+          hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
+          executeProfileRender: mockExecuteProfileRender,
+          outputReader,
+          productionManifestAssembler: mockAssembler
+          // Notice: NO formatAwareProber, NO mock demux -> uses real isAnimatedWebp + demuxAnimatedWebp
+        });
+
+        const job = createSampleProductionJob();
+        const result = await executor(job);
+
+        expect(result.manifestPayload).toBeDefined();
+        expect(capturedAssembleInput).toBeDefined();
+
+        // Configured baseline is 1280x720, 97 frames, 25 fps
+        expect(capturedAssembleInput!.configuredMedia).toEqual({
+          outputKey: expect.stringContaining("animation.webp"),
+          checksumSha256: syntheticWebp!.sha256,
+          dimensions: { width: 1280, height: 720 },
+          frameCount: 97,
+          fps: LTX_FPS,
+          source: "render_profile_and_executed_workflow"
+        });
+
+        // Measured media traces back to real demuxed WebP bytes (320x240, 20 frames, uniform 50ms delays)
+        const measured = capturedAssembleInput!.measuredMedia!;
+        expect(measured.container).toBe("animated_webp_demux");
+        expect(measured.checksumSha256).toBe(syntheticWebp!.sha256);
+        expect(measured.dimensions).toEqual({ width: 320, height: 240 });
+        expect(measured.frameCount).toBe(20);
+        expect(measured.fps).toBe(20);
+        expect(measured.durationMs).toBe(1000);
+        expect(measured.frameDurationsMs).toHaveLength(20);
+
+        // Independent demux of the exact produced bytes
+        const independentDemux = demuxAnimatedWebp(syntheticWebp!.bytes);
+        expect(measured.dimensions.width).toBe(independentDemux.width);
+        expect(measured.dimensions.height).toBe(independentDemux.height);
+        expect(measured.frameCount).toBe(independentDemux.frames.length);
+        expect(measured.frameDurationsMs).toEqual(independentDemux.frames.map((f) => f.durationMs));
+        expect(measured.durationMs).toBe(
+          independentDemux.frames.reduce((acc, f) => acc + f.durationMs, 0)
+        );
+
+        // Deliberately different from configured baseline
+        expect(capturedAssembleInput!.configuredMedia!.dimensions).not.toEqual(measured.dimensions);
+        expect(capturedAssembleInput!.configuredMedia!.frameCount).not.toEqual(measured.frameCount);
+        expect(capturedAssembleInput!.configuredMedia!.fps).not.toEqual(measured.fps);
+      } finally {
+        await rm(stemTempDir, { recursive: true, force: true }).catch(() => {});
+      }
+    });
+
+    it("enriches ProductionManifestAssemblyError with jobId, outputKey, formatPath, and cause when probe fails", async () => {
+      const corruptBytes = new Uint8Array([
+        0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70, 0xff, 0xff
+      ]);
+      const outputReader = new FakeOutputReader(
+        new Map([["corrupt.mp4", { bytes: corruptBytes, contentType: "video/mp4" }]])
+      );
+
+      const mockExecuteProfileRender = vi.fn().mockResolvedValue({
+        status: "succeeded",
+        promptId: "prompt-err-ctx",
+        outputObjectKeys: ["corrupt.mp4"],
+        durationMs: 1000,
+        profile: {} as ProfileRenderIdentity,
+        preDispatchGpu: {
+          totalVramMb: 24576,
+          usedVramMb: 4096,
+          freeVramMb: 20480,
+          reservedVramMb: 4096,
+          measuredAt: new Date().toISOString()
+        }
+      });
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxProfile,
+        readApprovedProvenance: async () => fakeLtxLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => fakeRawLtxWorkflow,
+        hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        outputReader,
+        productionManifestAssembler: { assembleManifest: async () => ({}) }
+      });
+
+      const job = createSampleProductionJob();
+      let caughtError: unknown;
+      try {
+        await executor(job);
+      } catch (err) {
+        caughtError = err;
+      }
+
+      expect(caughtError).toBeInstanceOf(ProductionManifestAssemblyError);
+      const probeError = caughtError as ProductionManifestAssemblyError;
+      expect(probeError.jobId).toBe(job.jobId);
+      expect(probeError.outputKey).toContain("corrupt.mp4");
+      expect(probeError.formatPath).toBe("ffprobe");
+      expect(probeError.cause).toBeDefined();
+    });
+
+    it("enriches ProductionManifestAssemblyError with jobId when no primary output can be selected", async () => {
+      const outputBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+      const outputReader = new FakeOutputReader(
+        new Map([["image.png", { bytes: outputBytes, contentType: "image/png" }]])
+      );
+
+      const mockExecuteProfileRender = vi.fn().mockResolvedValue({
+        status: "succeeded",
+        promptId: "prompt-no-video",
+        outputObjectKeys: ["image.png"],
+        durationMs: 1000,
+        profile: {} as ProfileRenderIdentity,
+        preDispatchGpu: {
+          totalVramMb: 24576,
+          usedVramMb: 4096,
+          freeVramMb: 20480,
+          reservedVramMb: 4096,
+          measuredAt: new Date().toISOString()
+        }
+      });
+
+      const executor = createCertifiedRenderJobExecutor({
+        loadCertificationProfile: async () => fakeLtxProfile,
+        readApprovedProvenance: async () => fakeLtxLiveProvenance,
+        collectCertificationProvenance: async () => fakeLtxLiveProvenance,
+        verifyGoldMasterProvenance: () => {},
+        readWorkflowFile: async () => fakeRawLtxWorkflow,
+        hashWorkflow: () => fakeLtxProfile.expectedWorkflowHash,
+        executeProfileRender: mockExecuteProfileRender,
+        outputReader,
+        productionManifestAssembler: { assembleManifest: async () => ({}) },
+        isAnimatedWebp: () => false
+      });
+
+      const job = createSampleProductionJob();
+      let caughtError: unknown;
+      try {
+        await executor(job);
+      } catch (err) {
+        caughtError = err;
+      }
+
+      expect(caughtError).toBeInstanceOf(ProductionManifestAssemblyError);
+      const probeError = caughtError as ProductionManifestAssemblyError;
+      expect(probeError.jobId).toBe(job.jobId);
     });
   });
 });

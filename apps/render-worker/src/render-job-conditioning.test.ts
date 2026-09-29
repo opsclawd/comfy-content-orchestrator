@@ -34,6 +34,7 @@ import {
   type CertificationProvenanceReport
 } from "@cco/infrastructure";
 import { FakeComfyUiTransport } from "@cco/infrastructure/testing";
+import type { ManifestMeasuredMedia } from "@cco/contracts";
 import {
   createCertifiedRenderJobExecutor,
   RenderJobPayloadValidationError,
@@ -46,6 +47,47 @@ const DEFAULT_REPO_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)), 
 function sha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
+
+const defaultTestFormatAwareProber = (options: {
+  outputKey: string;
+  checksumSha256: string;
+  bytes: Uint8Array;
+  filename: string;
+  contentType?: string | undefined;
+}): ManifestMeasuredMedia => {
+  const isWebp = options.filename.endsWith(".webp") || options.contentType === "image/webp";
+  if (isWebp) {
+    const frameDurationsMs = Array(97).fill(42);
+    const durationMs = 97 * 42;
+    return {
+      outputKey: options.outputKey,
+      checksumSha256: options.checksumSha256,
+      container: "animated_webp_demux",
+      dimensions: { width: 1280, height: 720 },
+      frameCount: 97,
+      fps: 1000 / 42,
+      durationMs,
+      formatDurationMs: durationMs,
+      frameDurationsMs,
+      measurement: "source_bytes"
+    };
+  }
+  return {
+    outputKey: options.outputKey,
+    checksumSha256: options.checksumSha256,
+    container: "ffprobe",
+    dimensions: { width: 1280, height: 720 },
+    frameCount: 124,
+    fps: 24,
+    durationMs: 5166,
+    formatDurationMs: 5166,
+    video: {
+      codecName: "h264",
+      pixelFormat: "yuv420p"
+    },
+    measurement: "source_bytes"
+  };
+};
 
 interface RecordedUpload {
   readonly filename: string;
@@ -499,7 +541,8 @@ describe("End-to-End Conditioning Injection (Criterion 11 & Governance)", () => 
       objectStorage,
       stageReferenceImage,
       productionManifestAssembler: mockAssembler,
-      hashBytes: hashBytesPort
+      hashBytes: hashBytesPort,
+      formatAwareProber: defaultTestFormatAwareProber
     });
 
     // Job A: Uses candidate A
@@ -1087,7 +1130,8 @@ describe("End-to-End Conditioning Injection (Criterion 11 & Governance)", () => 
         objectStorage,
         stageReferenceImage,
         productionManifestAssembler: mockAssembler,
-        hashBytes: hashBytesPort
+        hashBytes: hashBytesPort,
+        formatAwareProber: defaultTestFormatAwareProber
       });
 
       const job: RenderJob = {

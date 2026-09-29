@@ -6,8 +6,10 @@ export interface ProbedVideoStream {
   readonly pixelFormat: string;
   readonly width: number;
   readonly height: number;
-  readonly frameRate: number;
+  readonly frameRate: number | null;
   readonly durationMs: number;
+  readonly frameCount?: number | undefined;
+  readonly avgFrameRate?: number | undefined;
 }
 
 export interface ProbedAudioStream {
@@ -31,6 +33,8 @@ export interface ProbeMediaOptions {
   readonly errorContext?: FfmpegAssemblyErrorContext | undefined;
   readonly isOutput?: boolean | undefined;
   readonly timeoutMs?: number | undefined;
+  readonly countFrames?: boolean | undefined;
+  readonly checkFrameIntervals?: boolean | undefined;
 }
 
 export interface ProbeAudioMediaOptions {
@@ -65,6 +69,12 @@ function parseDurationMs(durationStr: string | undefined): number | undefined {
   return undefined;
 }
 
+function parseFrameCount(raw: string | undefined): number | undefined {
+  if (!raw || typeof raw !== "string") return undefined;
+  const parsed = parseInt(raw.trim(), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 interface RawFfprobeStream {
   codec_type?: string;
   codec_name?: string;
@@ -77,6 +87,19 @@ interface RawFfprobeStream {
   sample_rate?: string;
   channels?: number;
   bit_rate?: string;
+  nb_frames?: string;
+  nb_read_frames?: string;
+  index?: number;
+}
+
+interface RawFfprobeFrame {
+  media_type?: string;
+  stream_index?: number;
+  pts_time?: string;
+  best_effort_timestamp_time?: string;
+  duration_time?: string;
+  pkt_pts_time?: string;
+  pkt_duration_time?: string;
 }
 
 interface ParsedFfprobeJson {
@@ -84,6 +107,7 @@ interface ParsedFfprobeJson {
   format?: {
     duration?: string;
   };
+  frames?: RawFfprobeFrame[];
 }
 
 async function runFfprobeAndParse(options: {
@@ -94,8 +118,11 @@ async function runFfprobeAndParse(options: {
   readonly fileLabel?: string | undefined;
   readonly errorContext?: FfmpegAssemblyErrorContext | undefined;
   readonly timeoutMs?: number | undefined;
+  readonly countFrames?: boolean | undefined;
+  readonly checkFrameIntervals?: boolean | undefined;
 }): Promise<{
   readonly streams: RawFfprobeStream[];
+  readonly frames: RawFfprobeFrame[];
   readonly formatDurationMs: number;
   readonly args: string[];
 }> {
@@ -106,10 +133,27 @@ async function runFfprobeAndParse(options: {
     failureCode,
     fileLabel = "",
     errorContext = {},
-    timeoutMs
+    timeoutMs,
+    countFrames = false,
+    checkFrameIntervals = false
   } = options;
 
-  const args = ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", filePath];
+  const args = [
+    "-v",
+    "error",
+    "-print_format",
+    "json",
+    "-show_format",
+    "-show_streams",
+    ...(countFrames ? ["-count_frames"] : []),
+    ...(checkFrameIntervals
+      ? [
+          "-show_entries",
+          "frame=media_type,stream_index,pts_time,duration_time,best_effort_timestamp_time,pkt_pts_time,pkt_duration_time"
+        ]
+      : []),
+    filePath
+  ];
   let runResult;
   try {
     runResult = await runner(ffprobePath, args, { timeoutMs });
@@ -153,9 +197,131 @@ async function runFfprobeAndParse(options: {
   }
 
   const streams = Array.isArray(parsedJson.streams) ? parsedJson.streams : [];
+  const frames = Array.isArray(parsedJson.frames) ? parsedJson.frames : [];
   const formatDurationMs = parseDurationMs(parsedJson.format?.duration) ?? 0;
 
-  return { streams, formatDurationMs, args };
+  return { streams, frames, formatDurationMs, args };
+}
+
+function determineFrameRate(rawVideoStream: RawFfprobeStream): {
+  readonly frameRate: number | null;
+  readonly avgFrameRate?: number | undefined;
+} {
+  const rFrameRate = parseFrameRate(rawVideoStream.r_frame_rate);
+  const avgFrameRate = parseFrameRate(rawVideoStream.avg_frame_rate);
+  const avgResult = avgFrameRate > 0 ? avgFrameRate : undefined;
+
+  // When avg_frame_rate is explicitly "0/0" and r_frame_rate is a timebase (e.g. 90000/1)
+  if (rawVideoStream.avg_frame_rate === "0/0" && (rFrameRate === 0 || rFrameRate > 1000)) {
+    return { frameRate: null, avgFrameRate: undefined };
+  }
+
+  // When both rates are positive:
+  if (rFrameRate > 0 && avgFrameRate > 0) {
+    // If rates differ significantly (e.g. 90000/1 vs 24/1), it's variable frame rate
+    if (Math.abs(rFrameRate - avgFrameRate) > 0.05) {
+      return { frameRate: null, avgFrameRate: avgResult };
+    }
+    return { frameRate: rFrameRate, avgFrameRate: avgResult };
+  }
+
+  // If only r_frame_rate is provided and in a reasonable range (CFR or mock test)
+  if (rFrameRate > 0 && rFrameRate <= 1000) {
+    return { frameRate: rFrameRate, avgFrameRate: avgResult };
+  }
+
+  // If only avg_frame_rate is provided: positive avg_frame_rate alone does NOT establish constant frame spacing
+  if (avgFrameRate > 0 && avgFrameRate <= 1000) {
+    return { frameRate: null, avgFrameRate: avgResult };
+  }
+
+  return { frameRate: null, avgFrameRate: avgResult };
+}
+
+function parseTimestamp(frame: RawFfprobeFrame): number | undefined {
+  const raw = frame.pts_time ?? frame.best_effort_timestamp_time ?? frame.pkt_pts_time;
+  if (!raw || typeof raw !== "string") return undefined;
+  const val = parseFloat(raw.trim());
+  return Number.isFinite(val) ? val : undefined;
+}
+
+function parseFrameDuration(frame: RawFfprobeFrame): number | undefined {
+  const raw = frame.duration_time ?? frame.pkt_duration_time;
+  if (!raw || typeof raw !== "string") return undefined;
+  const val = parseFloat(raw.trim());
+  return Number.isFinite(val) && val > 0 ? val : undefined;
+}
+
+// Tolerance for frame-to-frame timing deviation before a stream is judged
+// non-constant-rate. Real CFR sources (including ComfyUI/ffmpeg-produced
+// output) typically show sub-millisecond decode/timestamp jitter, so 1ms/2%
+// comfortably passes genuine constant-rate video while still catching VFR
+// sources whose actual frame spacing varies meaningfully.
+const FRAME_INTERVAL_ABSOLUTE_TOLERANCE_SECONDS = 0.001;
+const FRAME_INTERVAL_RELATIVE_TOLERANCE = 0.02;
+
+function frameIntervalTolerance(expectedIntervalSeconds: number): number {
+  return Math.max(
+    FRAME_INTERVAL_ABSOLUTE_TOLERANCE_SECONDS,
+    expectedIntervalSeconds * FRAME_INTERVAL_RELATIVE_TOLERANCE
+  );
+}
+
+function checkFrameIntervalsConstantRate(
+  frames: readonly RawFfprobeFrame[],
+  candidateRate: number | null
+): boolean {
+  if (frames.length <= 1) {
+    if (frames.length === 1 && candidateRate !== null && candidateRate > 0) {
+      const dur = parseFrameDuration(frames[0]!);
+      if (dur !== undefined) {
+        const expected = 1 / candidateRate;
+        return Math.abs(dur - expected) <= frameIntervalTolerance(expected);
+      }
+    }
+    return true;
+  }
+
+  const timestamps = frames.map(parseTimestamp);
+  const allTimestampsValid = timestamps.every((t) => t !== undefined);
+  let intervals: number[] = [];
+
+  if (allTimestampsValid) {
+    const sorted = [...(timestamps as number[])].sort((a, b) => a - b);
+    for (let i = 0; i < sorted.length - 1; i++) {
+      intervals.push(sorted[i + 1]! - sorted[i]!);
+    }
+  } else {
+    const durations = frames.map(parseFrameDuration);
+    const allDurationsValid = durations.every((d) => d !== undefined);
+    if (allDurationsValid) {
+      intervals = durations as number[];
+    } else {
+      return false;
+    }
+  }
+
+  if (intervals.length === 0 || intervals.some((d) => d <= 0)) {
+    return false;
+  }
+
+  const expectedInterval =
+    candidateRate !== null && candidateRate > 0
+      ? 1 / candidateRate
+      : intervals.reduce((acc, v) => acc + v, 0) / intervals.length;
+
+  if (expectedInterval <= 0) {
+    return false;
+  }
+
+  const tolerance = frameIntervalTolerance(expectedInterval);
+  for (const interval of intervals) {
+    if (Math.abs(interval - expectedInterval) > tolerance) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function parseAudioStream(
@@ -183,16 +349,27 @@ function parseAudioStream(
 }
 
 export async function probeMedia(options: ProbeMediaOptions): Promise<ProbedMedia> {
-  const { runner, ffprobePath, filePath, errorContext = {}, isOutput = false, timeoutMs } = options;
+  const {
+    runner,
+    ffprobePath,
+    filePath,
+    errorContext = {},
+    isOutput = false,
+    timeoutMs,
+    countFrames,
+    checkFrameIntervals
+  } = options;
   const failureCode = isOutput ? "OUTPUT_PROBE_FAILED" : "STEM_PROBE_FAILED";
 
-  const { streams, formatDurationMs, args } = await runFfprobeAndParse({
+  const { streams, frames, formatDurationMs, args } = await runFfprobeAndParse({
     runner,
     ffprobePath,
     filePath,
     failureCode,
     errorContext,
-    timeoutMs
+    timeoutMs,
+    countFrames,
+    checkFrameIntervals
   });
 
   const rawVideoStream = streams.find((s) => s.codec_type === "video");
@@ -216,9 +393,42 @@ export async function probeMedia(options: ProbeMediaOptions): Promise<ProbedMedi
     );
   }
 
-  const frameRate =
-    parseFrameRate(rawVideoStream.r_frame_rate) || parseFrameRate(rawVideoStream.avg_frame_rate);
-  if (frameRate <= 0) {
+  const determined = determineFrameRate(rawVideoStream);
+  let frameRate = determined.frameRate;
+  const avgFrameRate = determined.avgFrameRate;
+
+  if (checkFrameIntervals) {
+    // The caller explicitly asked for cadence verification: a positive frame
+    // rate must be confirmed by actual frame timing, not merely inferred from
+    // stream metadata agreeing with itself. If we don't have usable frame
+    // records to confirm constant spacing, fail closed to null rather than
+    // silently trusting the metadata-derived candidate.
+    const videoFrames = frames.filter(
+      (f) =>
+        (f.media_type ? f.media_type === "video" : true) &&
+        (f.stream_index !== undefined && rawVideoStream.index !== undefined
+          ? f.stream_index === rawVideoStream.index
+          : true)
+    );
+
+    if (videoFrames.length > 0) {
+      const isConstant = checkFrameIntervalsConstantRate(
+        videoFrames,
+        frameRate ?? avgFrameRate ?? null
+      );
+      if (isConstant) {
+        if (frameRate === null && avgFrameRate !== undefined) {
+          frameRate = avgFrameRate;
+        }
+      } else {
+        frameRate = null;
+      }
+    } else {
+      frameRate = null;
+    }
+  }
+
+  if (frameRate === null && avgFrameRate === undefined && rawVideoStream.avg_frame_rate !== "0/0") {
     throw new FfmpegAssemblyError(
       failureCode,
       `Unable to determine frame rate for video stream in ${filePath}`,
@@ -226,13 +436,18 @@ export async function probeMedia(options: ProbeMediaOptions): Promise<ProbedMedi
     );
   }
 
+  const frameCount =
+    parseFrameCount(rawVideoStream.nb_read_frames) ?? parseFrameCount(rawVideoStream.nb_frames);
+
   const videoStream: ProbedVideoStream = {
     codecName: rawVideoStream.codec_name ?? "",
     pixelFormat: rawVideoStream.pix_fmt ?? "",
     width: rawVideoStream.width ?? 0,
     height: rawVideoStream.height ?? 0,
     frameRate,
-    durationMs: videoDurationMs
+    durationMs: videoDurationMs,
+    ...(avgFrameRate !== undefined ? { avgFrameRate } : {}),
+    ...(frameCount !== undefined ? { frameCount } : {})
   };
 
   const rawAudioStream = streams.find((s) => s.codec_type === "audio");

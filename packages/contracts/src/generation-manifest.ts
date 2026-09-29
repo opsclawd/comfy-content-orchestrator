@@ -122,6 +122,88 @@ export const ManifestGovernanceSchema = z.object({
 });
 export type ManifestGovernance = z.infer<typeof ManifestGovernanceSchema>;
 
+export const ManifestConfiguredMediaSchema = z.object({
+  outputKey: z.string().min(1),
+  checksumSha256: sha256HashSchema,
+  dimensions: ManifestDimensionsSchema,
+  frameCount: z.number().int().positive(),
+  fps: z.number().positive(),
+  source: z.literal("render_profile_and_executed_workflow")
+});
+export type ManifestConfiguredMedia = z.infer<typeof ManifestConfiguredMediaSchema>;
+
+export const ManifestMeasuredMediaSchema = z
+  .object({
+    outputKey: z.string().min(1),
+    checksumSha256: sha256HashSchema,
+    container: z.enum(["ffprobe", "animated_webp_demux"]),
+    dimensions: ManifestDimensionsSchema,
+    frameCount: z.number().int().positive(),
+    fps: z.number().positive().nullable(),
+    durationMs: z.number().positive(),
+    formatDurationMs: z.number().positive(),
+    frameDurationsMs: z.array(z.number().int().positive()).optional(),
+    video: z
+      .object({
+        codecName: z.string(),
+        pixelFormat: z.string()
+      })
+      .optional(),
+    audio: z
+      .object({
+        codecName: z.string(),
+        sampleRateHz: z.number().int().positive(),
+        channels: z.number().int().positive(),
+        durationMs: z.number().positive(),
+        bitrateKbps: z.number().positive().optional()
+      })
+      .optional(),
+    measurement: z.literal("source_bytes")
+  })
+  .superRefine((data, ctx) => {
+    if (data.container === "animated_webp_demux") {
+      if (!data.frameDurationsMs) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'frameDurationsMs is required for container "animated_webp_demux"',
+          path: ["frameDurationsMs"]
+        });
+      } else {
+        if (data.frameDurationsMs.length !== data.frameCount) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `frameDurationsMs length (${data.frameDurationsMs.length}) must equal frameCount (${data.frameCount})`,
+            path: ["frameDurationsMs"]
+          });
+        }
+        const sumDuration = data.frameDurationsMs.reduce((acc, d) => acc + d, 0);
+        if (sumDuration !== data.durationMs) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `durationMs (${data.durationMs}) must equal sum of frameDurationsMs (${sumDuration})`,
+            path: ["durationMs"]
+          });
+        }
+      }
+      if (data.video !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'video stream details must be omitted for "animated_webp_demux"',
+          path: ["video"]
+        });
+      }
+    } else if (data.container === "ffprobe") {
+      if (!data.video) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'video is required for container "ffprobe"',
+          path: ["video"]
+        });
+      }
+    }
+  });
+export type ManifestMeasuredMedia = z.infer<typeof ManifestMeasuredMediaSchema>;
+
 export const GenerationManifestSchema = z
   .object({
     manifestId: z.string().min(1),
@@ -163,9 +245,35 @@ export const GenerationManifestSchema = z
     governance: ManifestGovernanceSchema,
     outputs: z.array(ManifestOutputEntrySchema),
     outputObjectKeys: z.array(z.string()),
-    executionDurationMs: z.number().nonnegative()
+    executionDurationMs: z.number().nonnegative(),
+    configuredMedia: ManifestConfiguredMediaSchema.optional(),
+    measuredMedia: ManifestMeasuredMediaSchema.optional()
   })
   .superRefine((data, ctx) => {
+    if (data.configuredMedia || data.measuredMedia) {
+      if (!data.configuredMedia || !data.measuredMedia) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "configuredMedia and measuredMedia must be provided together",
+          path: [data.configuredMedia ? "measuredMedia" : "configuredMedia"]
+        });
+      } else {
+        if (data.configuredMedia.outputKey !== data.measuredMedia.outputKey) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `configuredMedia.outputKey ("${data.configuredMedia.outputKey}") must match measuredMedia.outputKey ("${data.measuredMedia.outputKey}")`,
+            path: ["measuredMedia", "outputKey"]
+          });
+        }
+        if (data.configuredMedia.checksumSha256 !== data.measuredMedia.checksumSha256) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `configuredMedia.checksumSha256 ("${data.configuredMedia.checksumSha256}") must match measuredMedia.checksumSha256 ("${data.measuredMedia.checksumSha256}")`,
+            path: ["measuredMedia", "checksumSha256"]
+          });
+        }
+      }
+    }
     if (
       (data.renderProfile === "MINIMAX_H3_720P_5S_REF2V_V1" ||
         data.engine === "minimax_h3_ref2v") &&
