@@ -4,9 +4,9 @@ AI-native content-production orchestration for Godzspeed Communications. The pla
 
 ## Status
 
-**PRD:** v3.4.0 — Implementation Ready Engineering Baseline with empirical LTX-2.5 hardware certification.
+**PRD:** v3.8.0 — Post-Pivot Authority Model & ShotPlan-to-H3 Architecture, with empirical LTX-2.5 hardware certification.
 
-Implementation is beginning with **Sprint 1: Core Runtime, Domain Boundaries & Hardware Certification**. Sprint issues are intentionally bounded so they can be executed independently by the `opsclawd/automation` orchestrator.
+Implementation has progressed through Sprint 6: the post-pivot reference-directed MiniMax-H3 architecture (epic [#325](https://github.com/opsclawd/comfy-content-orchestrator/issues/325)) is merged to `main` — structured `ShotPlan` intent, immutable reference-asset bindings, non-authoritative storyboard previs, and Review Hub/automated E2E coverage are all in place. The remaining step before the epic closes is [#332](https://github.com/opsclawd/comfy-content-orchestrator/issues/332), an operator-only real-host production acceptance run. Sprint issues are intentionally bounded so they can be executed independently by the `opsclawd/automation` orchestrator.
 
 ## What this system is
 
@@ -108,8 +108,8 @@ Dependency direction is enforced in CI:
 - [LTX Hardware Certification Runbook](docs/ltx-hardware-certification.md)
 - [FLUX ↔ LTX Transition Soak Certification Runbook](docs/transition-soak-certification.md)
 - [Render Worker CLI Runbook](docs/render-worker-cli.md)
-- ADRs will live under `docs/adr/` as implementation decisions are made.
-- `docs/CONTEXT.md` will define the project's ubiquitous language and invariants during Sprint 1 bootstrap.
+- ADRs live under `docs/adr/` as implementation decisions are made.
+- [`docs/CONTEXT.md`](docs/CONTEXT.md) defines the project's ubiquitous language and invariants.
 
 ## Automation execution discipline
 
