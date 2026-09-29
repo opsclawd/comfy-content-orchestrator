@@ -64,6 +64,68 @@
       }
     },
     {
+      "id": "flux_schnell_storyboard_v1",
+      "engine": "flux_schnell",
+      "workflowRelativePath": "flux_schnell_draft_api.json",
+      "expectedWorkflowHash": "af8528239790f6536ce7f0733f92095501fecfd8e919084a9decdded59e6ecf5",
+      "source": {
+        "kind": "validated_host_export",
+        "uri": "https://github.com/comfyanonymous/ComfyUI",
+        "revision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        "license": "GPL-3.0"
+      },
+      "baseline": {
+        "width": 1024,
+        "height": 1024,
+        "steps": 4,
+        "frames": 1
+      },
+      "minFreeDiskGb": 0,
+      "runnerProfile": "dynamicvram-offload-v1",
+      "models": [
+        {
+          "category": "diffusion_models",
+          "relativePath": "flux1-schnell.safetensors"
+        },
+        {
+          "category": "clip",
+          "relativePath": "t5xxl_fp8_e4m3fn.safetensors"
+        },
+        {
+          "category": "clip",
+          "relativePath": "clip_l.safetensors"
+        },
+        {
+          "category": "vae",
+          "relativePath": "ae.safetensors"
+        }
+      ],
+      "assertions": [
+        {
+          "nodeId": "1",
+          "classType": "KSampler",
+          "input": "steps",
+          "equals": 4
+        },
+        {
+          "nodeId": "5",
+          "classType": "EmptyLatentImage",
+          "input": "width",
+          "equals": 1024
+        },
+        {
+          "nodeId": "5",
+          "classType": "EmptyLatentImage",
+          "input": "height",
+          "equals": 1024
+        }
+      ],
+      "renderProfileIdentity": {
+        "key": "FLUX_SCHNELL_STORYBOARD_V1",
+        "version": 1
+      }
+    },
+    {
       "id": "ltx-25-720p-97f",
       "engine": "ltx_25",
       "workflowRelativePath": "ltx_25_720p_97f_api.json",
