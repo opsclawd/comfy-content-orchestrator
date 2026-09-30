@@ -21,6 +21,8 @@ import {
   type CurrentProductionAttemptReadModel,
   CampaignDeliveryReelReadModelSchema,
   type CampaignDeliveryReelReadModel,
+  CampaignAnimaticReadModelSchema,
+  type CampaignAnimaticReadModel,
   CampaignResponseSchema,
   type CampaignResponse,
   ReferenceAssetResponseSchema,
@@ -32,7 +34,13 @@ import {
   PlanShotPlansResponseSchema,
   type PlanShotPlansResponse,
   PlanShotPlansErrorResponseSchema,
-  type PlanShotPlansErrorResponse
+  type PlanShotPlansErrorResponse,
+  CreateShotPlanVariationRequestSchema,
+  type CreateShotPlanVariationRequest,
+  CreateShotPlanVariationResponseSchema,
+  type CreateShotPlanVariationResponse,
+  CreateShotPlanVariationErrorResponseSchema,
+  type CreateShotPlanVariationErrorResponse
 } from "@cco/contracts";
 import type { z } from "zod";
 import { resolveControlApiBaseUrl } from "./runtime-config";
@@ -40,6 +48,7 @@ import { resolveControlApiBaseUrl } from "./runtime-config";
 export type {
   CampaignDeliveryReelReadModel,
   CampaignDeliveryReelState,
+  CampaignAnimaticReadModel,
   CampaignResponse,
   CampaignReviewSummary,
   HealthResponse,
@@ -49,6 +58,9 @@ export type {
   PlanShotPlansErrorResponse,
   PlanShotPlansRequest,
   PlanShotPlansResponse,
+  CreateShotPlanVariationErrorResponse,
+  CreateShotPlanVariationRequest,
+  CreateShotPlanVariationResponse,
   ReviewCommand,
   ReviewCommandResponse,
   ReviewErrorResponse,
@@ -69,6 +81,9 @@ export {
   PlanShotPlansErrorResponseSchema,
   PlanShotPlansRequestSchema,
   PlanShotPlansResponseSchema,
+  CreateShotPlanVariationErrorResponseSchema,
+  CreateShotPlanVariationRequestSchema,
+  CreateShotPlanVariationResponseSchema,
   ReviewCommandSchema,
   ReviewCommandResponseSchema,
   ReviewErrorResponseSchema,
@@ -76,6 +91,7 @@ export {
   CurrentProductionAttemptReadModelSchema,
   CampaignDeliveryReelReadModelSchema,
   CampaignDeliveryReelStateSchema,
+  CampaignAnimaticReadModelSchema,
   CampaignDeliveryMediaReadModelSchema,
   ReferenceAssetResponseSchema,
   ReferenceAssetListResponseSchema,
@@ -161,6 +177,23 @@ export class PlanShotPlansApiError extends Error {
   }
 }
 
+export class CreateShotPlanVariationApiError extends Error {
+  override readonly name = "CreateShotPlanVariationApiError";
+
+  constructor(
+    public readonly statusCode: number,
+    public readonly error: CreateShotPlanVariationErrorResponse
+  ) {
+    super(
+      `Shot plan variation creation failed with HTTP ${statusCode}${error.code ? ` (${error.code})` : ""}: ${error.message}`
+    );
+  }
+
+  get body(): CreateShotPlanVariationErrorResponse {
+    return this.error;
+  }
+}
+
 export interface ReviewerIdentity {
   readonly login: string;
   readonly displayName?: string;
@@ -175,6 +208,7 @@ export interface ApiClient {
     sceneId: string
   ): Promise<CurrentProductionAttemptReadModel | undefined>;
   getCampaignDeliveryReel(campaignId: string): Promise<CampaignDeliveryReelReadModel>;
+  getCampaignAnimatic(campaignId: string): Promise<CampaignAnimaticReadModel>;
   submitReviewCommand(
     sceneId: string,
     command: ReviewCommand,
@@ -184,6 +218,10 @@ export interface ApiClient {
     request: PlanCampaignStoryboardRequest
   ): Promise<PlanCampaignStoryboardResponse>;
   planShotPlans(sceneId: string, request?: PlanShotPlansRequest): Promise<PlanShotPlansResponse>;
+  createShotPlanVariation(
+    sceneId: string,
+    request: CreateShotPlanVariationRequest
+  ): Promise<CreateShotPlanVariationResponse>;
 }
 
 function formatFetchErrorMessage(err: unknown): string {
@@ -319,6 +357,15 @@ export function createApiClient(config?: ApiClientConfig): ApiClient {
       return requestJson(
         `${baseUrl}/api/campaigns/${encoded}/delivery-reel`,
         CampaignDeliveryReelReadModelSchema,
+        fetchFn
+      );
+    },
+
+    async getCampaignAnimatic(campaignId: string): Promise<CampaignAnimaticReadModel> {
+      const encoded = encodeURIComponent(campaignId);
+      return requestJson(
+        `${baseUrl}/api/campaigns/${encoded}/animatic`,
+        CampaignAnimaticReadModelSchema,
         fetchFn
       );
     },
@@ -564,6 +611,79 @@ export function createApiClient(config?: ApiClientConfig): ApiClient {
       }
 
       return responseParseResult.data;
+    },
+
+    async createShotPlanVariation(
+      sceneId: string,
+      request: CreateShotPlanVariationRequest
+    ): Promise<CreateShotPlanVariationResponse> {
+      const url = `${baseUrl}/api/scenes/${encodeURIComponent(sceneId)}/shot-plans/variations`;
+
+      const parseResult = CreateShotPlanVariationRequestSchema.safeParse(request);
+      if (!parseResult.success) {
+        throw new ApiValidationError(
+          `Create shot plan variation request failed validation: ${parseResult.error.message}`,
+          parseResult.error.issues
+        );
+      }
+      const serializedBody = JSON.stringify(parseResult.data);
+
+      let res: Response;
+      try {
+        res = await fetchFn(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json"
+          },
+          cache: "no-store",
+          body: serializedBody
+        });
+      } catch (err) {
+        throw new ApiClientError(formatFetchErrorMessage(err), undefined, err);
+      }
+
+      if (!res.ok) {
+        let errorData: unknown;
+        try {
+          errorData = await res.json();
+        } catch {
+          throw new ApiClientError(
+            `Control API returned HTTP ${res.status}: ${res.statusText}`,
+            res.status
+          );
+        }
+
+        const errorParseResult = CreateShotPlanVariationErrorResponseSchema.safeParse(errorData);
+        if (errorParseResult.success) {
+          throw new CreateShotPlanVariationApiError(res.status, errorParseResult.data);
+        }
+
+        throw new ApiValidationError(
+          `Control API returned HTTP ${res.status} with malformed error payload: ${errorParseResult.error.message}`,
+          errorParseResult.error.issues
+        );
+      }
+
+      let successData: unknown;
+      try {
+        successData = await res.json();
+      } catch (err) {
+        throw new ApiValidationError(
+          `Failed to parse response JSON from Control API: ${err instanceof Error ? err.message : String(err)}`,
+          err
+        );
+      }
+
+      const responseParseResult = CreateShotPlanVariationResponseSchema.safeParse(successData);
+      if (!responseParseResult.success) {
+        throw new ApiValidationError(
+          `Control API response failed schema validation: ${responseParseResult.error.message}`,
+          responseParseResult.error.issues
+        );
+      }
+
+      return responseParseResult.data;
     }
   };
 }
@@ -617,6 +737,17 @@ export async function getCampaignDeliveryReel(
   return client.getCampaignDeliveryReel(campaignId);
 }
 
+export async function getCampaignAnimatic(
+  campaignId: string,
+  baseUrlOrFetch?: string | typeof fetch,
+  fetchFn?: typeof fetch
+): Promise<CampaignAnimaticReadModel> {
+  const baseUrl = typeof baseUrlOrFetch === "string" ? baseUrlOrFetch : undefined;
+  const fetchImpl = typeof baseUrlOrFetch === "function" ? baseUrlOrFetch : fetchFn;
+  const client = createApiClient({ baseUrl, fetchFn: fetchImpl });
+  return client.getCampaignAnimatic(campaignId);
+}
+
 export async function submitReviewCommand(
   sceneId: string,
   command: ReviewCommand,
@@ -642,6 +773,15 @@ export async function planShotPlans(
 ): Promise<PlanShotPlansResponse> {
   const client = createApiClient({ fetchFn: fetchImpl });
   return client.planShotPlans(sceneId, request);
+}
+
+export async function createShotPlanVariation(
+  sceneId: string,
+  request: CreateShotPlanVariationRequest,
+  fetchImpl?: typeof fetch
+): Promise<CreateShotPlanVariationResponse> {
+  const client = createApiClient({ fetchFn: fetchImpl });
+  return client.createShotPlanVariation(sceneId, request);
 }
 
 export async function listClientReferences(

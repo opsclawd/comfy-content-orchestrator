@@ -6,6 +6,7 @@ import {
   getSceneReviewDetail,
   getCurrentProductionAttempt,
   getCampaignDeliveryReel,
+  getCampaignAnimatic,
   submitReviewCommand,
   planCampaignStoryboard,
   listClientReferences,
@@ -17,7 +18,9 @@ import {
   ReviewCommandApiError,
   PlanCampaignStoryboardApiError,
   PlanShotPlansApiError,
-  planShotPlans
+  planShotPlans,
+  CreateShotPlanVariationApiError,
+  createShotPlanVariation
 } from "./client.js";
 import type {
   CampaignReviewSummary,
@@ -27,11 +30,15 @@ import type {
   PlanShotPlansErrorResponse,
   PlanShotPlansRequest,
   PlanShotPlansResponse,
+  CreateShotPlanVariationErrorResponse,
+  CreateShotPlanVariationRequest,
+  CreateShotPlanVariationResponse,
   ReviewCommand,
   ReviewCommandResponse,
   ReviewErrorResponse,
   SceneReviewDetailReadModel,
-  CampaignDeliveryReelReadModel
+  CampaignDeliveryReelReadModel,
+  CampaignAnimaticReadModel
 } from "@cco/contracts";
 
 const validCampaignReviewSummary: CampaignReviewSummary = {
@@ -1332,6 +1339,243 @@ describe("Typed Control API Client", () => {
     });
   });
 
+  describe("createShotPlanVariation", () => {
+    const sceneId = "123e4567-e89b-12d3-a456-426614174000";
+    const sourceShotPlanId = "223e4567-e89b-12d3-a456-426614174000";
+    const validVariationRequest: CreateShotPlanVariationRequest = {
+      sourceShotPlanId,
+      expectedSpecRevision: 1,
+      directorGuidance: "Make it a tighter 50mm shot with slow push in",
+      variantCount: 1,
+      idempotencyKey: "test-idem-key-42"
+    };
+
+    const sampleVariationShotPlanDoc = {
+      id: "323e4567-e89b-12d3-a456-426614174000",
+      sceneId,
+      specRevision: 1,
+      variantOrdinal: 2,
+      derivedFromShotPlanId: sourceShotPlanId,
+      derivation: {
+        sourceShotPlanId,
+        sourceVariantOrdinal: 1,
+        directorGuidance: "Make it a tighter 50mm shot with slow push in",
+        provider: "mock-provider",
+        machineModel: "mock-model",
+        requestedAt: "2026-09-28T12:05:00.000Z"
+      },
+      status: "draft" as const,
+      routingMode: "reference_directed" as const,
+      targetDurationMs: 4000,
+      targetFrameCount: 97,
+      durationToleranceMs: 355,
+      fps: 24 as const,
+      framing: "medium_close_up" as const,
+      angle: "eye_level" as const,
+      lensIntent: "50mm prime",
+      cameraPosition: "eye level",
+      cameraMovement: "dolly_in" as const,
+      movementSpeed: "slow" as const,
+      cameraPromptDescription: "Slow push in on 50mm lens",
+      subjects: [],
+      actionSummary: "Character enters scene",
+      beats: [],
+      lightingStyle: "high_key_commercial" as const,
+      environmentDescription: "Bright room",
+      colorPalette: [],
+      continuity: {
+        frameAnchorTarget: "none" as const,
+        persistentSubjectIds: [],
+        incomingContinuityFromSceneId: null,
+        lightingContinuityNote: null,
+        anchorCandidateId: null,
+        anchorMediaHashSha256: null
+      },
+      createdAt: "2026-09-28T12:05:00.000Z",
+      updatedAt: "2026-09-28T12:05:00.000Z"
+    };
+
+    const validVariationResponse: CreateShotPlanVariationResponse = {
+      sceneId,
+      sourceShotPlanId,
+      shotPlans: [sampleVariationShotPlanDoc],
+      isIdempotentReplay: false
+    };
+
+    it("parses and returns valid variation response on success", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => validVariationResponse
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      const result = await client.createShotPlanVariation(sceneId, validVariationRequest);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch).toHaveBeenCalledWith(
+        `http://example.com/api/scenes/${sceneId}/shot-plans/variations`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json"
+          },
+          cache: "no-store",
+          body: expect.any(String)
+        }
+      );
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string);
+      expect(callBody).toEqual(validVariationRequest);
+      expect(result).toEqual(validVariationResponse);
+
+      // Verify convenience function also works
+      const convenienceResult = await createShotPlanVariation(
+        sceneId,
+        validVariationRequest,
+        mockFetch
+      );
+      expect(convenienceResult).toEqual(validVariationResponse);
+    });
+
+    it("throws CreateShotPlanVariationApiError on 403 CLOUD_PLANNING_NOT_AUTHORIZED", async () => {
+      const authError: CreateShotPlanVariationErrorResponse = {
+        code: "CLOUD_PLANNING_NOT_AUTHORIZED",
+        message: "allowCloudPlanning disabled"
+      };
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+        json: async () => authError
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      let capturedError: unknown;
+      try {
+        await client.createShotPlanVariation(sceneId, validVariationRequest);
+      } catch (err) {
+        capturedError = err;
+      }
+
+      expect(capturedError).toBeInstanceOf(CreateShotPlanVariationApiError);
+      const apiErr = capturedError as CreateShotPlanVariationApiError;
+      expect(apiErr.statusCode).toBe(403);
+      expect(apiErr.error.code).toBe("CLOUD_PLANNING_NOT_AUTHORIZED");
+      expect(apiErr.body).toEqual(authError);
+    });
+
+    it("throws CreateShotPlanVariationApiError on 404 SOURCE_SHOT_PLAN_NOT_FOUND", async () => {
+      const notFoundError: CreateShotPlanVariationErrorResponse = {
+        code: "SOURCE_SHOT_PLAN_NOT_FOUND",
+        message: `Source shot plan ${sourceShotPlanId} not found`
+      };
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        json: async () => notFoundError
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      let capturedError: unknown;
+      try {
+        await client.createShotPlanVariation(sceneId, validVariationRequest);
+      } catch (err) {
+        capturedError = err;
+      }
+
+      expect(capturedError).toBeInstanceOf(CreateShotPlanVariationApiError);
+      const apiErr = capturedError as CreateShotPlanVariationApiError;
+      expect(apiErr.statusCode).toBe(404);
+      expect(apiErr.error.code).toBe("SOURCE_SHOT_PLAN_NOT_FOUND");
+    });
+
+    it("throws CreateShotPlanVariationApiError on 409 IDEMPOTENCY_CONFLICT", async () => {
+      const conflictError: CreateShotPlanVariationErrorResponse = {
+        code: "IDEMPOTENCY_CONFLICT",
+        message: "Conflicting request payload for idempotency key"
+      };
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 409,
+        json: async () => conflictError
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      let capturedError: unknown;
+      try {
+        await client.createShotPlanVariation(sceneId, validVariationRequest);
+      } catch (err) {
+        capturedError = err;
+      }
+
+      expect(capturedError).toBeInstanceOf(CreateShotPlanVariationApiError);
+      const apiErr = capturedError as CreateShotPlanVariationApiError;
+      expect(apiErr.statusCode).toBe(409);
+      expect(apiErr.error.code).toBe("IDEMPOTENCY_CONFLICT");
+    });
+
+    it("throws CreateShotPlanVariationApiError on 503 CONFIGURATION_ERROR", async () => {
+      const configError: CreateShotPlanVariationErrorResponse = {
+        code: "CONFIGURATION_ERROR",
+        message: "Shot plan variation is not available; planning model clients are not configured."
+      };
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 503,
+        json: async () => configError
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      let capturedError: unknown;
+      try {
+        await client.createShotPlanVariation(sceneId, validVariationRequest);
+      } catch (err) {
+        capturedError = err;
+      }
+
+      expect(capturedError).toBeInstanceOf(CreateShotPlanVariationApiError);
+      const apiErr = capturedError as CreateShotPlanVariationApiError;
+      expect(apiErr.statusCode).toBe(503);
+      expect(apiErr.error.code).toBe("CONFIGURATION_ERROR");
+    });
+
+    it("throws ApiValidationError when request schema validation fails", async () => {
+      const mockFetch = vi.fn();
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+
+      const invalidRequest = {
+        ...validVariationRequest,
+        directorGuidance: "" // empty guidance not allowed
+      } as unknown as CreateShotPlanVariationRequest;
+
+      await expect(client.createShotPlanVariation(sceneId, invalidRequest)).rejects.toThrow(
+        ApiValidationError
+      );
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it("throws ApiClientError when response is HTTP 500 without structured error body", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        statusText: "Internal Server Error",
+        json: async () => {
+          throw new Error("Cannot parse");
+        }
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      await expect(client.createShotPlanVariation(sceneId, validVariationRequest)).rejects.toThrow(
+        ApiClientError
+      );
+    });
+  });
+
   describe("getCurrentProductionAttempt", () => {
     const validAttempt = {
       runId: "123e4567-e89b-12d3-a456-426614174001",
@@ -1737,6 +1981,67 @@ describe("Typed Control API Client", () => {
           body: JSON.stringify({ libraryRole: "product" })
         })
       );
+    });
+  });
+
+  describe("getCampaignAnimatic", () => {
+    const campaignId = "01950c46-9e90-7d3d-82d2-8f1d3c000001";
+    const sampleAnimatic: CampaignAnimaticReadModel = {
+      campaignId,
+      campaignName: "Test Campaign",
+      readSnapshotId: "cas-mock-fingerprint-12345678",
+      totalDurationMs: 4000,
+      includedShotPlanDurationMs: 4000,
+      totalScenes: 1,
+      gapCount: 0,
+      approvedShotCount: 1,
+      draftShotCount: 0,
+      segments: [],
+      nonProductionNotice: "CAMPAIGN STORYBOARD ANIMATIC — NON-PRODUCTION PLANNING PREVIEW",
+      compiledAt: "2026-09-27T12:00:00.000Z"
+    };
+
+    it("fetches and parses CampaignAnimaticReadModel from GET /api/campaigns/:campaignId/animatic", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => sampleAnimatic
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      const result = await client.getCampaignAnimatic(campaignId);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        `http://example.com/api/campaigns/${campaignId}/animatic`,
+        expect.objectContaining({ method: "GET" })
+      );
+      expect(result).toEqual(sampleAnimatic);
+
+      // Also verify standalone convenience function
+      const standaloneResult = await getCampaignAnimatic(campaignId, mockFetch);
+      expect(standaloneResult).toEqual(sampleAnimatic);
+    });
+
+    it("throws ApiClientError when request returns 404", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        statusText: "Not Found"
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      await expect(client.getCampaignAnimatic(campaignId)).rejects.toThrow(ApiClientError);
+    });
+
+    it("throws ApiValidationError when response schema does not match", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ invalid: "payload" })
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      await expect(client.getCampaignAnimatic(campaignId)).rejects.toThrow(ApiValidationError);
     });
   });
 });

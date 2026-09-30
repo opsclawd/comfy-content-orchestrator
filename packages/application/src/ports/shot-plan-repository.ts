@@ -6,4 +6,5 @@ export interface ShotPlanRepository {
   saveMany(shotPlans: readonly ShotPlan[]): Promise<void>;
   listBySceneAndRevision(sceneId: SceneId, specRevision: number): Promise<readonly ShotPlan[]>;
   listByScene(sceneId: SceneId): Promise<readonly ShotPlan[]>;
+  listByIdempotencyKey(sceneId: SceneId, idempotencyKey: string): Promise<readonly ShotPlan[]>;
 }

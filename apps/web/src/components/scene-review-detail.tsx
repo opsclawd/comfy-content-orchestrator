@@ -113,7 +113,95 @@ export function SceneReviewDetailView({
             <div className="definition-item">
               <dt>Reference Images</dt>
               <dd data-testid="scene-references">
-                {hasReferences ? (
+                {detail.boundReferences && detail.boundReferences.length > 0 ? (
+                  <div
+                    className="scene-production-references-grid"
+                    data-testid="scene-production-references-grid"
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: "0.5rem",
+                      marginTop: "0.25rem"
+                    }}
+                  >
+                    {detail.boundReferences.map((binding) => {
+                      const hasPreview =
+                        binding.previewAvailability === "available" && Boolean(binding.previewUrl);
+                      const displayName =
+                        binding.displayName || binding.referenceAssetId.slice(0, 8);
+                      return (
+                        <div
+                          key={binding.referenceAssetId}
+                          className="scene-reference-chip"
+                          data-testid={`scene-reference-chip-${binding.referenceAssetId}`}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "0.5rem",
+                            padding: "0.25rem 0.5rem",
+                            backgroundColor: "var(--bg-surface, #1e293b)",
+                            border: "1px solid var(--border-subtle, #334155)",
+                            borderRadius: "var(--radius-sm, 6px)",
+                            fontSize: "0.8125rem"
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: "24px",
+                              height: "24px",
+                              borderRadius: "3px",
+                              overflow: "hidden",
+                              backgroundColor: "#020617",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              flexShrink: 0
+                            }}
+                          >
+                            {hasPreview ? (
+                              <img
+                                src={binding.previewUrl!}
+                                alt={displayName}
+                                style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                              />
+                            ) : (
+                              <span
+                                style={{
+                                  fontSize: "0.625rem",
+                                  color: "var(--text-muted, #94a3b8)"
+                                }}
+                              >
+                                Img
+                              </span>
+                            )}
+                          </div>
+                          <span style={{ fontWeight: 600 }}>{displayName}</span>
+                          <span
+                            style={{
+                              fontSize: "0.6875rem",
+                              padding: "0.0625rem 0.25rem",
+                              borderRadius: "3px",
+                              backgroundColor: "rgba(56, 189, 248, 0.15)",
+                              color: "var(--color-primary, #38bdf8)"
+                            }}
+                          >
+                            {binding.role}
+                          </span>
+                          {binding.libraryRole && (
+                            <span
+                              style={{
+                                fontSize: "0.6875rem",
+                                color: "var(--text-muted, #94a3b8)"
+                              }}
+                            >
+                              (lib: {binding.libraryRole})
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : hasReferences ? (
                   <ul className="reference-list">
                     {configuration.referenceIds.map((refId) => (
                       <li key={refId} className="reference-item">

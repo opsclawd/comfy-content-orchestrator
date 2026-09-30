@@ -18,6 +18,7 @@ import {
   PlanningProviderExhaustedError,
   PlanningProviderNotConfiguredError,
   PlanningSafetyRefusalError,
+  ReferenceCanonicalizationError,
   SceneConfigurationCountMismatchError,
   SceneConfigurationValidationError,
   SceneCreationModeMismatchError,
@@ -26,6 +27,12 @@ import {
   ShotPlanNotFoundError,
   ShotPlanValidationError,
   InvalidShotPlanVariantCountError,
+  CrossSceneSourceShotPlanError,
+  InvalidSceneStateForVariationError,
+  ShotPlanVariationIdempotencyConflictError,
+  SourceShotPlanNotFoundError,
+  StaleSourceShotPlanRevisionError,
+  SupersededSourceShotPlanError,
   StaleProductionAttemptConflictError,
   StaleRevisionConflictError,
   StoryboardMaterializationConflictError,
@@ -36,6 +43,9 @@ import {
 import type { ReviewErrorResponse } from "@cco/contracts";
 import {
   AlreadyAcceptedProductionAttemptError,
+  ArchivedReferenceBindingError,
+  ContradictoryReferencePayloadError,
+  CrossClientReferenceBindingError,
   InvalidCandidateError,
   InvalidMutationError,
   InvalidShotPlanError,
@@ -140,7 +150,10 @@ export function formatReviewError(error: unknown): {
     error instanceof InvalidSceneCountCombinationError ||
     error instanceof InvalidSceneCountError ||
     error instanceof InvalidTargetDurationError ||
-    error instanceof ImageValidationError
+    error instanceof ImageValidationError ||
+    error instanceof ContradictoryReferencePayloadError ||
+    error instanceof ReferenceCanonicalizationError ||
+    error instanceof CrossSceneSourceShotPlanError
   ) {
     return {
       statusCode: 400,
@@ -191,7 +204,7 @@ export function formatReviewError(error: unknown): {
     };
   }
 
-  if (error instanceof ClientForbiddenError) {
+  if (error instanceof ClientForbiddenError || error instanceof CrossClientReferenceBindingError) {
     return {
       statusCode: 403,
       body: {
@@ -207,13 +220,57 @@ export function formatReviewError(error: unknown): {
     error instanceof ShotPlanNotFoundError ||
     error instanceof CampaignNotFoundError ||
     error instanceof ClientNotFoundError ||
-    error instanceof ReferenceAssetNotFoundError
+    error instanceof ReferenceAssetNotFoundError ||
+    error instanceof SourceShotPlanNotFoundError
   ) {
     return {
       statusCode: 404,
       body: {
         code: "NOT_FOUND",
         message: error.message
+      }
+    };
+  }
+
+  if (error instanceof StaleSourceShotPlanRevisionError) {
+    return {
+      statusCode: 409,
+      body: {
+        code: "STALE_REVISION_CONFLICT",
+        message: error.message,
+        details: {
+          sourceShotPlanId: error.sourceShotPlanId,
+          sourceRevision: error.sourceRevision,
+          currentSceneRevision: error.currentRevision
+        }
+      }
+    };
+  }
+
+  if (error instanceof SupersededSourceShotPlanError) {
+    return {
+      statusCode: 409,
+      body: {
+        code: "SUPERSEDED_SOURCE_SHOT_PLAN",
+        message: error.message,
+        details: {
+          sourceShotPlanId: error.sourceShotPlanId,
+          status: error.status
+        }
+      }
+    };
+  }
+
+  if (error instanceof InvalidSceneStateForVariationError) {
+    return {
+      statusCode: 409,
+      body: {
+        code: "INVALID_SCENE_STATE",
+        message: error.message,
+        details: {
+          sceneId: error.sceneId,
+          currentStatus: error.status
+        }
       }
     };
   }
@@ -288,6 +345,19 @@ export function formatReviewError(error: unknown): {
     };
   }
 
+  if (error instanceof ShotPlanVariationIdempotencyConflictError) {
+    return {
+      statusCode: 409,
+      body: {
+        code: "IDEMPOTENCY_CONFLICT",
+        message: error.message,
+        details: {
+          idempotencyKey: error.idempotencyKey
+        }
+      }
+    };
+  }
+
   if (error instanceof StoryboardPartiallyMaterializedError) {
     return {
       statusCode: 409,
@@ -323,7 +393,8 @@ export function formatReviewError(error: unknown): {
     error instanceof InvalidCandidateError ||
     error instanceof InvalidShotPlanError ||
     error instanceof TerminalStateError ||
-    error instanceof AlreadyAcceptedProductionAttemptError
+    error instanceof AlreadyAcceptedProductionAttemptError ||
+    error instanceof ArchivedReferenceBindingError
   ) {
     return {
       statusCode: 422,

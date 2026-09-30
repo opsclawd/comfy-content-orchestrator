@@ -7,8 +7,13 @@ import type {
   ShotPlanReviewItem,
   ShotPlanReferenceBindingReviewItem,
   SceneReviewCandidateGroup,
-  CandidateReadModel
+  CandidateReadModel,
+  CreateShotPlanVariationRequest,
+  CreateShotPlanVariationResponse
 } from "@cco/contracts";
+import { compileShotPlanAnimaticTimeline } from "@cco/contracts";
+import { ShotPlanAnimaticPlayer } from "./animatic/shot-plan-animatic-player";
+import { ShotPlanVariationModal } from "./shot-plan-variation-modal";
 import type { ReviewCommandEvent, ReviewCommandState } from "./review-command-state";
 import {
   formatDurationMs,
@@ -160,6 +165,9 @@ export interface ShotPlanPanelProps {
   sceneId?: string | undefined;
   onGenerateShotPlans?: ((options: GenerateShotPlansOptions) => Promise<void>) | undefined;
   onRefresh?: (() => void | Promise<void>) | undefined;
+  onCreateVariation?:
+    | ((payload: CreateShotPlanVariationRequest) => Promise<CreateShotPlanVariationResponse>)
+    | undefined;
 }
 
 export function ShotPlanPanel({
@@ -176,11 +184,14 @@ export function ShotPlanPanel({
   disabled = false,
   sceneId,
   onGenerateShotPlans,
-  onRefresh
+  onRefresh,
+  onCreateVariation
 }: ShotPlanPanelProps) {
   const candidateGroups = candidatesByRevision ?? stateProp?.detail?.candidatesByRevision ?? [];
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
+  const [activeBeatByPlan, setActiveBeatByPlan] = useState<Record<string, number | null>>({});
+  const [variationModalPlan, setVariationModalPlan] = useState<ShotPlanReviewItem | null>(null);
 
   let router: { refresh: () => void } | null = null;
   try {
@@ -449,8 +460,28 @@ export function ShotPlanPanel({
                         Approved Intent
                       </span>
                     )}
+                    {(plan.derivation?.sourceVariantOrdinal || plan.derivedFromShotPlanId) && (
+                      <span
+                        className="shot-plan-badge-variation"
+                        data-testid="shot-plan-variation-badge"
+                      >
+                        {plan.derivation?.sourceVariantOrdinal
+                          ? `Variation of V${plan.derivation.sourceVariantOrdinal}`
+                          : "Variation"}
+                      </span>
+                    )}
                   </div>
                 </div>
+
+                {plan.derivation?.directorGuidance && (
+                  <div
+                    className="shot-plan-derivation-note"
+                    data-testid="shot-plan-derivation-note"
+                    title={`Derived from V${plan.derivation.sourceVariantOrdinal}`}
+                  >
+                    Variation guidance: &ldquo;{plan.derivation.directorGuidance}&rdquo;
+                  </div>
+                )}
 
                 {isFrameAnchored &&
                   (hasValidAnchor ? (
@@ -517,22 +548,18 @@ export function ShotPlanPanel({
                       </span>
                     </div>
 
-                    <div className="storyboard-viewfinder-matte">
-                      {plan.previs?.media.available && plan.previs.media.url ? (
-                        <div className="previs-media-container">
-                          <img
-                            src={plan.previs.media.url}
-                            alt={`Previs visualization for Variant #${plan.variantOrdinal}`}
-                            className="previs-image"
-                            data-testid="previs-preview-image"
-                          />
-                        </div>
-                      ) : (
-                        <div className="previs-unavailable" data-testid="previs-unavailable">
-                          <span>Previs visualization not rendered</span>
-                        </div>
-                      )}
-                    </div>
+                    <ShotPlanAnimaticPlayer
+                      timeline={compileShotPlanAnimaticTimeline(plan)}
+                      isCurrentRevision={
+                        plan.isCurrentRevision ?? plan.specRevision === currentSpecRevision
+                      }
+                      onActiveBeatChange={(beatIndex) => {
+                        setActiveBeatByPlan((prev) => ({
+                          ...prev,
+                          [plan.shotPlanId]: beatIndex
+                        }));
+                      }}
+                    />
 
                     {/* Persistent Visual Treatment Banner */}
                     <div
@@ -662,12 +689,19 @@ export function ShotPlanPanel({
                       <div className="storyboard-beats-sublist" data-testid="shot-plan-beats">
                         <h6 className="storyboard-subsection-title">Temporal Beats</h6>
                         <ol className="beats-list">
-                          {plan.beats.map((beat) => (
-                            <li key={beat.beatIndex}>
-                              [{beat.startMs}ms - {beat.endMs}ms] {beat.description} (Camera:{" "}
-                              {beat.cameraAction}, Subject: {beat.subjectAction})
-                            </li>
-                          ))}
+                          {plan.beats.map((beat) => {
+                            const isActive = activeBeatByPlan[plan.shotPlanId] === beat.beatIndex;
+                            return (
+                              <li
+                                key={beat.beatIndex}
+                                className={`storyboard-beat-item ${isActive ? "storyboard-beat-item-active" : ""}`}
+                                data-active-beat={isActive ? "true" : undefined}
+                              >
+                                [{beat.startMs}ms - {beat.endMs}ms] {beat.description} (Camera:{" "}
+                                {beat.cameraAction}, Subject: {beat.subjectAction})
+                              </li>
+                            );
+                          })}
                         </ol>
                       </div>
                     )}
@@ -794,11 +828,38 @@ export function ShotPlanPanel({
                 >
                   {isApproved ? "Approved Intent" : "Approve Intent"}
                 </button>
+                <button
+                  type="button"
+                  className="shot-plan-action-btn variation-plan-btn"
+                  data-testid="shot-plan-create-variation-button"
+                  data-shot-plan-id={plan.shotPlanId}
+                  disabled={disabled || !isCurrent}
+                  onClick={() => setVariationModalPlan(plan)}
+                >
+                  Create variation
+                </button>
               </div>
             </article>
           );
         })}
       </div>
+
+      <ShotPlanVariationModal
+        isOpen={variationModalPlan !== null}
+        sceneId={sceneId ?? ""}
+        currentSpecRevision={currentSpecRevision}
+        sourcePlan={variationModalPlan}
+        onClose={() => setVariationModalPlan(null)}
+        onSuccess={async () => {
+          if (onRefresh) {
+            await onRefresh();
+          }
+          if (router) {
+            router.refresh();
+          }
+        }}
+        onCreateVariation={onCreateVariation}
+      />
     </section>
   );
 }

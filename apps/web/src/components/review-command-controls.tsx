@@ -10,7 +10,8 @@ import type {
   ReviewCommandResponse,
   ReviewErrorResponse,
   SceneConfiguration,
-  SceneReviewDetailReadModel
+  SceneReviewDetailReadModel,
+  ShotPlanReferenceBindingReviewItem
 } from "@cco/contracts";
 import {
   areCommandsDisabled,
@@ -24,6 +25,10 @@ import {
 import { formatReviewAction } from "./format-review-value";
 import { ApiClientError, ReviewCommandApiError } from "../api/client";
 import { generateUuidV4 as generateActionId } from "../lib/generate-uuid";
+import {
+  SceneReferenceOverridesEditor,
+  type VisualReferenceBindingItem
+} from "./scene-reference-overrides-editor";
 
 export interface ReviewCommandControlsProps {
   detail: SceneReviewDetailReadModel;
@@ -37,13 +42,26 @@ export interface ReviewCommandControlsProps {
 
 function getInitialDraftPayload(
   action: ReviewAction,
-  config: SceneConfiguration
+  config: SceneConfiguration,
+  boundReferences?: readonly ShotPlanReferenceBindingReviewItem[]
 ): Record<string, unknown> {
   switch (action) {
     case "prompt_edit":
       return { prompt: config.prompt };
     case "reference_change":
-      return { referenceIds: [...config.referenceIds] };
+      return {
+        referenceIds: [...config.referenceIds],
+        referenceBindings: (boundReferences ?? []).map((b) => ({
+          referenceAssetId: b.referenceAssetId,
+          role: b.role,
+          displayName: b.displayName,
+          libraryRole: b.libraryRole,
+          previewUrl: b.previewUrl,
+          previewAvailability: b.previewAvailability,
+          ...(b.weight !== null && b.weight !== undefined ? { weight: b.weight } : {}),
+          ...(b.hints !== null && b.hints !== undefined ? { hints: b.hints } : {})
+        }))
+      };
     case "engine_change":
       return { engineProfileId: config.engineProfileId };
     case "duration_change":
@@ -100,14 +118,13 @@ export function ReviewCommandControls({
 
   // Form draft state for editing action parameters
   const [draftPrompt, setDraftPrompt] = useState("");
-  const [draftReferences, setDraftReferences] = useState("");
+  const [draftBindings, setDraftBindings] = useState<readonly VisualReferenceBindingItem[]>([]);
   const [draftEngine, setDraftEngine] = useState("");
   const [draftDuration, setDraftDuration] = useState("");
   const [draftLora, setDraftLora] = useState("");
   const [draftNotes, setDraftNotes] = useState("");
 
   const promptInputId = useId();
-  const refInputId = useId();
   const engineInputId = useId();
   const durationInputId = useId();
   const loraInputId = useId();
@@ -118,9 +135,43 @@ export function ReviewCommandControls({
     if (state.phase === "drafting") {
       const payload = state.draft.payload ?? {};
       setDraftPrompt(typeof payload.prompt === "string" ? payload.prompt : "");
-      setDraftReferences(
-        Array.isArray(payload.referenceIds) ? (payload.referenceIds as string[]).join(", ") : ""
-      );
+
+      if (state.draft.action === "reference_change") {
+        const bindingsFromPayload = Array.isArray(payload.referenceBindings)
+          ? (payload.referenceBindings as readonly VisualReferenceBindingItem[])
+          : undefined;
+
+        if (bindingsFromPayload && bindingsFromPayload.length > 0) {
+          setDraftBindings(bindingsFromPayload);
+        } else {
+          const bound = state.detail.boundReferences ?? [];
+          if (bound.length > 0) {
+            setDraftBindings(
+              bound.map((b) => ({
+                referenceAssetId: b.referenceAssetId,
+                role: b.role,
+                displayName: b.displayName,
+                libraryRole: b.libraryRole,
+                previewUrl: b.previewUrl,
+                previewAvailability: b.previewAvailability,
+                weight: b.weight,
+                hints: b.hints
+              }))
+            );
+          } else {
+            const refIds = Array.isArray(payload.referenceIds)
+              ? (payload.referenceIds as string[])
+              : state.detail.configuration.referenceIds;
+            setDraftBindings(
+              refIds.map((id) => ({
+                referenceAssetId: id,
+                role: "subject_identity"
+              }))
+            );
+          }
+        }
+      }
+
       setDraftEngine(typeof payload.engineProfileId === "string" ? payload.engineProfileId : "");
       setDraftDuration(typeof payload.durationMs === "number" ? String(payload.durationMs) : "");
       setDraftLora(
@@ -447,7 +498,11 @@ export function ReviewCommandControls({
         }
       });
     } else {
-      const initialPayload = getInitialDraftPayload(action, state.detail.configuration);
+      const initialPayload = getInitialDraftPayload(
+        action,
+        state.detail.configuration,
+        state.detail.boundReferences
+      );
       dispatch({
         type: "START_DRAFT",
         draft: {
@@ -473,10 +528,13 @@ export function ReviewCommandControls({
         break;
       case "reference_change":
         payload = {
-          referenceIds: draftReferences
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean)
+          referenceBindings: draftBindings.map((b) => ({
+            referenceAssetId: b.referenceAssetId,
+            role: b.role,
+            ...(b.weight !== null && b.weight !== undefined ? { weight: b.weight } : {}),
+            ...(b.hints !== null && b.hints !== undefined ? { hints: b.hints } : {})
+          })),
+          referenceIds: draftBindings.map((b) => b.referenceAssetId)
         };
         break;
       case "engine_change":
@@ -760,15 +818,12 @@ export function ReviewCommandControls({
             )}
 
             {state.draft.action === "reference_change" && (
-              <div className="form-group">
-                <label htmlFor={refInputId}>Reference Image IDs (comma-separated)</label>
-                <input
-                  id={refInputId}
-                  data-testid="draft-references-input"
-                  type="text"
-                  value={draftReferences}
-                  onChange={(e) => setDraftReferences(e.target.value)}
-                  placeholder="ref-1, ref-2"
+              <div className="form-group" data-testid="draft-references-group">
+                <SceneReferenceOverridesEditor
+                  clientId={activeDetail.clientId}
+                  bindings={draftBindings}
+                  onChange={setDraftBindings}
+                  disabled={disabled}
                 />
               </div>
             )}
@@ -868,6 +923,32 @@ export function ReviewCommandControls({
                 : state.frozenIntent.displayLabel}
             </h3>
 
+            {(state.phase === "confirming"
+              ? state.stagedAction.action
+              : state.frozenIntent.command.action) === "reference_change" && (
+              <div
+                className="dialog-invalidation-warning"
+                data-testid="dialog-invalidation-warning"
+                role="alert"
+                style={{
+                  padding: "0.75rem 1rem",
+                  backgroundColor: "rgba(239, 68, 68, 0.1)",
+                  border: "1px solid var(--color-danger, #ef4444)",
+                  borderRadius: "var(--radius-sm, 4px)",
+                  color: "var(--color-danger, #ef4444)",
+                  marginBottom: "1rem",
+                  fontSize: "0.875rem"
+                }}
+              >
+                <strong>Warning: Downstream Invalidation</strong>
+                <p style={{ margin: "0.25rem 0 0 0" }}>
+                  Changing production visual references increments the SceneSpec revision and
+                  invalidates current ShotPlan / previs approvals. Production is blocked until a new
+                  ShotPlan is replanned and approved.
+                </p>
+              </div>
+            )}
+
             <div className="dialog-summary" data-testid="dialog-summary">
               <dl className="dialog-detail-list">
                 <div className="dialog-detail-item">
@@ -907,6 +988,58 @@ export function ReviewCommandControls({
                     </code>
                   </dd>
                 </div>
+                {(state.phase === "confirming"
+                  ? state.stagedAction.action
+                  : state.frozenIntent.command.action) === "reference_change" &&
+                  (() => {
+                    const stagedPayload =
+                      state.phase === "confirming"
+                        ? (state.stagedAction.payload as Record<string, unknown> | undefined)
+                        : (state.frozenIntent.command.payload as
+                            Record<string, unknown> | undefined);
+                    const stagedBindings: readonly VisualReferenceBindingItem[] =
+                      Array.isArray(stagedPayload?.referenceBindings) &&
+                      stagedPayload.referenceBindings.length > 0
+                        ? (stagedPayload.referenceBindings as readonly VisualReferenceBindingItem[])
+                        : draftBindings.length > 0
+                          ? draftBindings
+                          : Array.isArray(stagedPayload?.referenceIds)
+                            ? (stagedPayload.referenceIds as string[]).map((id) => ({
+                                referenceAssetId: id,
+                                role: "subject_identity" as const
+                              }))
+                            : [];
+
+                    return (
+                      <div className="dialog-detail-item" data-testid="dialog-references-summary">
+                        <dt>Staged References:</dt>
+                        <dd>
+                          {stagedBindings.length === 0 ? (
+                            <em>None (clearing visual references)</em>
+                          ) : (
+                            <ul style={{ margin: "0.25rem 0 0 0", paddingLeft: "1.25rem" }}>
+                              {stagedBindings.map((b) => (
+                                <li key={b.referenceAssetId}>
+                                  <strong>{b.displayName || b.referenceAssetId.slice(0, 8)}</strong>
+                                  : <code>{b.role}</code>
+                                  {b.libraryRole && (
+                                    <span
+                                      style={{
+                                        color: "var(--text-muted, #94a3b8)",
+                                        marginLeft: "0.25rem"
+                                      }}
+                                    >
+                                      (library role: {b.libraryRole})
+                                    </span>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </dd>
+                      </div>
+                    );
+                  })()}
                 {state.phase === "confirming" && state.stagedAction.directorNotes && (
                   <div className="dialog-detail-item">
                     <dt>Director Notes:</dt>

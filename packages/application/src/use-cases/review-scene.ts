@@ -1,6 +1,9 @@
 import { ReviewEventSchema, type ReviewAction } from "@cco/contracts";
 import {
   assertReferenceAssetSelectable,
+  assertValidReferenceRole,
+  assertValidReferenceWeight,
+  ContradictoryReferencePayloadError,
   InvalidShotPlanError,
   InvalidTransitionError,
   ReferenceAssetNotFoundError,
@@ -9,10 +12,12 @@ import {
   type Scene,
   type SceneId,
   type SceneReferenceBinding,
+  type SceneReferenceBindingInput,
   type SceneSnapshot,
   type SceneTransition,
   type ShotPlanId
 } from "@cco/domain";
+import { ReferenceCanonicalizationError } from "../shot-plan-compiler/canonicalize-reference-bindings.js";
 import type { UnitOfWork, UnitOfWorkContext } from "../ports/unit-of-work.js";
 import { CandidateNotFoundError } from "./candidate-not-found-error.js";
 import { IdempotencyConflictError } from "./idempotency-conflict-error.js";
@@ -66,7 +71,8 @@ export interface UpdatePromptInput extends ReviewAuditInput {
 
 export interface UpdateReferencesInput extends ReviewAuditInput {
   readonly referenceIds?: readonly string[] | undefined;
-  readonly referenceBindings?: readonly SceneReferenceBinding[] | undefined;
+  readonly referenceBindings?:
+    readonly (SceneReferenceBinding | SceneReferenceBindingInput)[] | undefined;
 }
 
 export interface UpdateEngineInput extends ReviewAuditInput {
@@ -604,11 +610,47 @@ export class ReviewSceneUseCases {
   }
 
   async updateReferences(input: UpdateReferencesInput): Promise<ReviewExecutionResult> {
+    if (input.referenceIds === undefined && input.referenceBindings === undefined) {
+      throw new ContradictoryReferencePayloadError(
+        "Either referenceBindings or referenceIds must be provided."
+      );
+    }
+
+    if (input.referenceIds !== undefined && input.referenceBindings !== undefined) {
+      const idsFromRefIds = new Set<string>(input.referenceIds);
+      const idsFromBindings = new Set<string>(
+        input.referenceBindings.map((b) => b.referenceAssetId)
+      );
+      if (
+        input.referenceIds.length !== idsFromRefIds.size ||
+        idsFromRefIds.size !== idsFromBindings.size ||
+        !input.referenceIds.every((id) => idsFromBindings.has(id))
+      ) {
+        throw new ContradictoryReferencePayloadError(
+          "Contradictory referenceIds and referenceBindings provided in reference_change payload."
+        );
+      }
+    }
+
     const effectiveReferenceIds =
-      input.referenceIds ??
-      (input.referenceBindings
+      input.referenceBindings !== undefined
         ? Array.from(new Set(input.referenceBindings.map((b) => b.referenceAssetId)))
-        : []);
+        : (input.referenceIds ?? []);
+
+    if (effectiveReferenceIds.length > 9) {
+      throw new ReferenceCanonicalizationError(
+        `Cannot exceed 9 reference assets for MiniMax-H3 reference-directed execution (received ${effectiveReferenceIds.length})`,
+        "REFERENCE_LIMIT_EXCEEDED"
+      );
+    }
+
+    if (input.referenceBindings !== undefined) {
+      for (const binding of input.referenceBindings) {
+        assertValidReferenceRole(binding.role);
+        assertValidReferenceWeight(binding.weight);
+      }
+    }
+
     return await this.executeReviewAction(
       input,
       "reference_change",
@@ -681,8 +723,6 @@ export class ReviewSceneUseCases {
       const scene = prepared.scene;
       const priorSceneStatus = scene.status;
 
-      const transition = apply(scene);
-
       if (action === "reference_change" && context.referenceAssets !== undefined) {
         const refIds = (payload as { referenceIds?: readonly string[] }).referenceIds ?? [];
         const bindings =
@@ -714,6 +754,8 @@ export class ReviewSceneUseCases {
           }
         }
       }
+
+      const transition = apply(scene);
       if (enqueueCandidates) {
         if (context.jobs === undefined) {
           throw new TransactionalJobEnqueuerUnavailableError();

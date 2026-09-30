@@ -807,6 +807,64 @@ describe("Review Command Envelopes, Discriminated Action Payloads, and Canonical
       referenceIds: ["id-1", "id-2"]
     });
 
+    const validBinding = {
+      referenceAssetId: "11111111-1111-4111-8111-111111111111",
+      role: "subject_identity" as const,
+      weight: 0.9,
+      hints: { focus: "face" }
+    };
+    expect(
+      ReferenceChangePayloadSchema.parse({
+        referenceBindings: [validBinding]
+      })
+    ).toEqual({
+      referenceBindings: [validBinding]
+    });
+
+    // Dual payload with matching IDs passes
+    expect(
+      ReferenceChangePayloadSchema.parse({
+        referenceIds: ["11111111-1111-4111-8111-111111111111"],
+        referenceBindings: [validBinding]
+      })
+    ).toEqual({
+      referenceIds: ["11111111-1111-4111-8111-111111111111"],
+      referenceBindings: [validBinding]
+    });
+
+    // Contradictory dual payload fails
+    expect(
+      ReferenceChangePayloadSchema.safeParse({
+        referenceIds: ["22222222-2222-4222-8222-222222222222"],
+        referenceBindings: [validBinding]
+      }).success
+    ).toBe(false);
+
+    // Duplicate IDs in referenceIds fails contradiction check
+    expect(
+      ReferenceChangePayloadSchema.safeParse({
+        referenceIds: [
+          "11111111-1111-4111-8111-111111111111",
+          "11111111-1111-4111-8111-111111111111"
+        ],
+        referenceBindings: [validBinding]
+      }).success
+    ).toBe(false);
+
+    // Empty payload (neither provided) fails
+    expect(ReferenceChangePayloadSchema.safeParse({}).success).toBe(false);
+
+    // Payload exceeding 9 references fails
+    const tenBindings = Array.from({ length: 10 }, (_, i) => ({
+      referenceAssetId: `11111111-1111-4111-8111-11111111111${i}`,
+      role: "style" as const
+    }));
+    expect(
+      ReferenceChangePayloadSchema.safeParse({
+        referenceBindings: tenBindings
+      }).success
+    ).toBe(false);
+
     expect(EngineChangePayloadSchema.parse({ engineProfileId: "ltx_25" })).toEqual({
       engineProfileId: "ltx_25"
     });

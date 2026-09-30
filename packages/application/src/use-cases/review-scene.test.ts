@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   ArchivedReferenceBindingError,
+  ContradictoryReferencePayloadError,
   CrossClientReferenceBindingError,
   InvalidCandidateError,
   InvalidMutationError,
@@ -15,6 +16,8 @@ import {
   type SceneId,
   type StoryboardCandidate
 } from "@cco/domain";
+import { ReferenceCanonicalizationError } from "../shot-plan-compiler/canonicalize-reference-bindings.js";
+import { StaleRevisionConflictError } from "./stale-revision-conflict-error.js";
 import type {
   ReviewEventStore,
   SceneRepository,
@@ -438,6 +441,121 @@ describe("ReviewSceneUseCases", () => {
       expect(saved.snapshot().specRevision).toBe(2);
       expect(saved.snapshot().configuration.referenceIds).toEqual(["ref-hero"]);
       expect(saved.snapshot().configuration.referenceBindings).toEqual(bindings);
+    });
+
+    it("rejects contradictory referenceIds and referenceBindings with ContradictoryReferencePayloadError", async () => {
+      const scene = createSceneInApproved("scene-ref-contradictory");
+      const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [seededCampaign]);
+      uow.seedReferenceAsset(createReferenceAsset("ref-hero"));
+      uow.seedReferenceAsset(createReferenceAsset("ref-other"));
+      const useCases = new ReviewSceneUseCases(uow);
+
+      await expect(
+        useCases.updateReferences({
+          sceneId: "scene-ref-contradictory",
+          eventId: "event-ref-contra-1",
+          reviewerName: "Director Alice",
+          occurredAt: "2026-08-15T03:01:00.000Z",
+          referenceIds: ["ref-hero"],
+          referenceBindings: [
+            {
+              sceneId: "scene-ref-contradictory" as SceneId,
+              specRevision: 2,
+              referenceAssetId: "ref-other" as ReferenceAssetId,
+              role: "product",
+              weight: null,
+              hints: null
+            }
+          ]
+        })
+      ).rejects.toThrow(ContradictoryReferencePayloadError);
+    });
+
+    it("rejects when reference count exceeds 9 with ReferenceCanonicalizationError", async () => {
+      const scene = createSceneInApproved("scene-ref-limit");
+      const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [seededCampaign]);
+      const tenRefIds = Array.from({ length: 10 }, (_, i) => `ref-limit-${i}`);
+      for (const id of tenRefIds) {
+        uow.seedReferenceAsset(createReferenceAsset(id));
+      }
+      const useCases = new ReviewSceneUseCases(uow);
+
+      await expect(
+        useCases.updateReferences({
+          sceneId: "scene-ref-limit",
+          eventId: "event-ref-limit-1",
+          reviewerName: "Director Alice",
+          occurredAt: "2026-08-15T03:01:00.000Z",
+          referenceIds: tenRefIds
+        })
+      ).rejects.toThrow(ReferenceCanonicalizationError);
+    });
+
+    it("unchanged referenceBindings preserves revision and approval without churn", async () => {
+      const scene = createSceneInApproved("scene-ref-noop");
+      const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [seededCampaign]);
+      uow.seedReferenceAsset(createReferenceAsset("ref-hero"));
+      const useCases = new ReviewSceneUseCases(uow);
+
+      // First change to set bindings
+      const initResult = await useCases.updateReferences({
+        sceneId: "scene-ref-noop",
+        eventId: "event-ref-init",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T03:01:00.000Z",
+        referenceBindings: [
+          {
+            sceneId: "scene-ref-noop" as SceneId,
+            specRevision: 2,
+            referenceAssetId: "ref-hero" as ReferenceAssetId,
+            role: "subject_identity",
+            weight: 1.0,
+            hints: null
+          }
+        ]
+      });
+
+      expect(initResult.scene.specRevision).toBe(2);
+
+      // Re-submit identical bindings
+      const result = await useCases.updateReferences({
+        sceneId: "scene-ref-noop",
+        eventId: "event-ref-noop-2",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T03:02:00.000Z",
+        expectedSpecRevision: 2,
+        referenceBindings: [
+          {
+            sceneId: "scene-ref-noop" as SceneId,
+            specRevision: 2,
+            referenceAssetId: "ref-hero" as ReferenceAssetId,
+            role: "subject_identity",
+            weight: 1.0,
+            hints: null
+          }
+        ]
+      });
+
+      expect(result.isIdempotentReplay).toBe(false);
+      expect(result.scene.specRevision).toBe(2);
+    });
+
+    it("rejects with StaleRevisionConflictError if expectedSpecRevision does not match", async () => {
+      const scene = createSceneInApproved("scene-ref-stale");
+      const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [seededCampaign]);
+      uow.seedReferenceAsset(createReferenceAsset("ref-hero"));
+      const useCases = new ReviewSceneUseCases(uow);
+
+      await expect(
+        useCases.updateReferences({
+          sceneId: "scene-ref-stale",
+          eventId: "event-ref-stale-1",
+          reviewerName: "Director Alice",
+          occurredAt: "2026-08-15T03:01:00.000Z",
+          expectedSpecRevision: 99,
+          referenceIds: ["ref-hero"]
+        })
+      ).rejects.toThrow(StaleRevisionConflictError);
     });
   });
 

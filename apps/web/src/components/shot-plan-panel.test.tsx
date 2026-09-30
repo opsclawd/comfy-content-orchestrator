@@ -911,4 +911,180 @@ describe("ShotPlanPanel Component", () => {
       });
     });
   });
+
+  describe("Animatic Integration & Dual-Column Synchronization", () => {
+    it("renders animatic player with controls and watermarking in storyboard panel", () => {
+      const plan = createSampleShotPlan();
+      const html = renderToStaticMarkup(
+        <ShotPlanPanel shotPlans={[plan]} currentSpecRevision={2} />
+      );
+
+      expect(html).toContain('data-testid="shot-plan-animatic-player"');
+      expect(html).toContain('data-testid="animatic-play-toggle"');
+      expect(html).toContain('data-testid="animatic-restart-button"');
+      expect(html).toContain('data-testid="animatic-scrubber"');
+      expect(html).toContain('data-testid="animatic-time-display"');
+      expect(html).toContain('data-testid="animatic-non-production-watermark"');
+      expect(html).toContain("STORYBOARD ANIMATIC — NON-PRODUCTION");
+    });
+
+    it("dynamically synchronizes active beat highlight in right-column script breakdown when scrubbed", () => {
+      const plan = createSampleShotPlan();
+      render(<ShotPlanPanel shotPlans={[plan]} currentSpecRevision={2} />);
+
+      // Initially Beat 1 is active (at 0ms)
+      const beatsList = screen.getByTestId("shot-plan-beats");
+      const beatItems = beatsList.querySelectorAll(".storyboard-beat-item");
+      expect(beatItems).toHaveLength(2);
+
+      expect(beatItems[0]?.classList.contains("storyboard-beat-item-active")).toBe(true);
+      expect(beatItems[0]?.getAttribute("data-active-beat")).toBe("true");
+      expect(beatItems[1]?.classList.contains("storyboard-beat-item-active")).toBe(false);
+
+      // Scrub animatic player to 3000ms (Beat 2: [2000, 4000])
+      const scrubber = screen.getByTestId("animatic-scrubber");
+      fireEvent.change(scrubber, { target: { value: "3000" } });
+
+      // Beat 2 should now be highlighted with storyboard-beat-item-active
+      expect(beatItems[0]?.classList.contains("storyboard-beat-item-active")).toBe(false);
+      expect(beatItems[1]?.classList.contains("storyboard-beat-item-active")).toBe(true);
+      expect(beatItems[1]?.getAttribute("data-active-beat")).toBe("true");
+    });
+  });
+
+  describe("Directed ShotPlan Variations UX", () => {
+    const sceneId = "22222222-2222-4222-8222-222222222222";
+
+    it("renders Create variation button on current shot plans and disables it on stale plans", () => {
+      const currentPlan = createSampleShotPlan({
+        shotPlanId: "plan-current-1",
+        variantOrdinal: 1,
+        specRevision: 2,
+        isCurrentRevision: true
+      });
+      const stalePlan = createSampleShotPlan({
+        shotPlanId: "plan-stale-2",
+        variantOrdinal: 2,
+        specRevision: 1,
+        isCurrentRevision: false
+      });
+
+      render(
+        <ShotPlanPanel
+          shotPlans={[currentPlan, stalePlan]}
+          currentSpecRevision={2}
+          sceneId={sceneId}
+        />
+      );
+
+      const variationButtons = screen.getAllByTestId("shot-plan-create-variation-button");
+      expect(variationButtons).toHaveLength(2);
+
+      const currentBtn = variationButtons[0] as HTMLButtonElement;
+      const staleBtn = variationButtons[1] as HTMLButtonElement;
+
+      expect(currentBtn.disabled).toBe(false);
+      expect(currentBtn.textContent).toBe("Create variation");
+      expect(staleBtn.disabled).toBe(true);
+    });
+
+    it("disables Create variation button when disabled prop is true", () => {
+      const plan = createSampleShotPlan();
+      render(
+        <ShotPlanPanel
+          shotPlans={[plan]}
+          currentSpecRevision={2}
+          sceneId={sceneId}
+          disabled={true}
+        />
+      );
+
+      const btn = screen.getByTestId("shot-plan-create-variation-button") as HTMLButtonElement;
+      expect(btn.disabled).toBe(true);
+    });
+
+    it("opens variation modal with chosen source variant identity when clicked", () => {
+      const plan = createSampleShotPlan({
+        variantOrdinal: 2,
+        lensIntent: "85mm portrait"
+      });
+
+      render(<ShotPlanPanel shotPlans={[plan]} currentSpecRevision={2} sceneId={sceneId} />);
+
+      // Modal is not visible initially
+      expect(screen.queryByTestId("shot-plan-variation-modal")).toBeNull();
+
+      // Click Create variation
+      const btn = screen.getByTestId("shot-plan-create-variation-button");
+      fireEvent.click(btn);
+
+      // Modal is opened
+      const modal = screen.getByTestId("shot-plan-variation-modal");
+      expect(modal).toBeDefined();
+
+      const identity = screen.getByTestId("variation-source-identity");
+      expect(identity.textContent).toContain("Source Variant: V2 (Rev 2)");
+      expect(identity.textContent).toContain("85mm portrait");
+    });
+
+    it("displays Variation of V1 badge and guidance note when shot plan has derivation provenance", () => {
+      const derivedPlan = createSampleShotPlan({
+        variantOrdinal: 3,
+        derivedFromShotPlanId: "11111111-1111-4111-8111-111111111111",
+        derivation: {
+          sourceShotPlanId: "11111111-1111-4111-8111-111111111111",
+          sourceVariantOrdinal: 1,
+          directorGuidance: "Make it a tighter 50mm shot and use slow dolly in",
+          requestedAt: "2026-09-28T12:00:00.000Z"
+        }
+      });
+
+      render(<ShotPlanPanel shotPlans={[derivedPlan]} currentSpecRevision={2} sceneId={sceneId} />);
+
+      const badge = screen.getByTestId("shot-plan-variation-badge");
+      expect(badge).toBeDefined();
+      expect(badge.textContent).toBe("Variation of V1");
+
+      const note = screen.getByTestId("shot-plan-derivation-note");
+      expect(note).toBeDefined();
+      expect(note.textContent).toContain("Make it a tighter 50mm shot and use slow dolly in");
+    });
+
+    it("invokes onRefresh and router.refresh when variation is successfully created", async () => {
+      const onRefresh = vi.fn();
+      const mockCreate = vi.fn().mockResolvedValue({
+        sceneId,
+        sourceShotPlanId: "11111111-1111-4111-8111-111111111111",
+        shotPlans: [createSampleShotPlan({ variantOrdinal: 2 })],
+        isIdempotentReplay: false
+      });
+
+      const plan = createSampleShotPlan();
+      render(
+        <ShotPlanPanel
+          shotPlans={[plan]}
+          currentSpecRevision={2}
+          sceneId={sceneId}
+          onRefresh={onRefresh}
+          onCreateVariation={mockCreate}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId("shot-plan-create-variation-button"));
+
+      const textarea = screen.getByTestId("variation-guidance-input");
+      fireEvent.change(textarea, { target: { value: "More dynamic angle" } });
+
+      fireEvent.click(screen.getByTestId("submit-variation-button"));
+
+      await waitFor(() => {
+        expect(mockCreate).toHaveBeenCalledTimes(1);
+        expect(onRefresh).toHaveBeenCalledTimes(1);
+        expect(mockRefresh).toHaveBeenCalledTimes(1);
+      });
+
+      // Modal closes after success
+      expect(screen.queryByTestId("shot-plan-variation-modal")).toBeNull();
+    });
+  });
 });

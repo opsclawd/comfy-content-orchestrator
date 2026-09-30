@@ -3139,7 +3139,8 @@ describe("Certified Render Job Executor", () => {
         save: vi.fn(),
         saveMany: vi.fn(),
         listBySceneAndRevision: vi.fn(),
-        listByScene: vi.fn()
+        listByScene: vi.fn(),
+        listByIdempotencyKey: vi.fn()
       };
 
       const mockRefAssetRepo: ReferenceAssetRepository = {
@@ -3438,7 +3439,8 @@ describe("Certified Render Job Executor", () => {
           save: vi.fn(),
           saveMany: vi.fn(),
           listBySceneAndRevision: vi.fn(),
-          listByScene: vi.fn()
+          listByScene: vi.fn(),
+          listByIdempotencyKey: vi.fn()
         };
 
         const mockRefAssetRepo: ReferenceAssetRepository = {
@@ -4752,7 +4754,8 @@ describe("Certified Render Job Executor", () => {
           save: vi.fn(),
           saveMany: vi.fn(),
           listBySceneAndRevision: vi.fn(),
-          listByScene: vi.fn()
+          listByScene: vi.fn(),
+          listByIdempotencyKey: vi.fn()
         };
 
         const mockResolvedMedia = {
@@ -4912,7 +4915,8 @@ describe("Certified Render Job Executor", () => {
             save: vi.fn(),
             saveMany: vi.fn(),
             listBySceneAndRevision: vi.fn(),
-            listByScene: vi.fn()
+            listByScene: vi.fn(),
+            listByIdempotencyKey: vi.fn()
           },
           resolveApprovedCandidateMedia: { execute: vi.fn() },
           objectStorage: {
@@ -4984,7 +4988,8 @@ describe("Certified Render Job Executor", () => {
             save: vi.fn(),
             saveMany: vi.fn(),
             listBySceneAndRevision: vi.fn(),
-            listByScene: vi.fn()
+            listByScene: vi.fn(),
+            listByIdempotencyKey: vi.fn()
           },
           resolveApprovedCandidateMedia: { execute: vi.fn() },
           objectStorage: {

@@ -1,3 +1,4 @@
+import { sortKeysDeep } from "@cco/shared";
 import type {
   ReferenceAssetId,
   SceneReferenceBinding,
@@ -109,6 +110,7 @@ export type SceneTransitionReason =
   | "recovered_to_review"
   | "cancelled"
   | "configuration_changed"
+  | "references_unchanged"
   | "candidate_selected"
   | "shot_plan_selected"
   | "production_rerender_requested"
@@ -245,6 +247,62 @@ function freezeConfiguration(config: SceneConfiguration): Readonly<SceneConfigur
   });
 }
 
+function areBindingsEquivalent(
+  currentBindings?: readonly SceneReferenceBinding[],
+  nextBindings?: readonly (SceneReferenceBinding | SceneReferenceBindingInput)[],
+  currentRefIds?: readonly string[],
+  nextRefIds?: readonly string[]
+): boolean {
+  const hasCurrentBindings = currentBindings !== undefined && currentBindings.length > 0;
+  const hasNextBindings = nextBindings !== undefined && nextBindings.length > 0;
+
+  if (!hasCurrentBindings && !hasNextBindings) {
+    const curIds = [...(currentRefIds ?? [])].sort();
+    const nxtIds = [...(nextRefIds ?? [])].sort();
+    if (curIds.length !== nxtIds.length) return false;
+    return curIds.every((id, i) => id === nxtIds[i]);
+  }
+
+  if (hasCurrentBindings !== hasNextBindings) {
+    return false;
+  }
+
+  const cur = [...currentBindings!].sort((a, b) => {
+    const roleCmp = a.role.localeCompare(b.role);
+    if (roleCmp !== 0) return roleCmp;
+    return a.referenceAssetId.localeCompare(b.referenceAssetId);
+  });
+  const nxt = [...nextBindings!].sort((a, b) => {
+    const roleCmp = a.role.localeCompare(b.role);
+    if (roleCmp !== 0) return roleCmp;
+    return a.referenceAssetId.localeCompare(b.referenceAssetId);
+  });
+
+  if (cur.length !== nxt.length) return false;
+
+  for (let i = 0; i < cur.length; i++) {
+    const c = cur[i]!;
+    const n = nxt[i]!;
+    if (c.referenceAssetId !== n.referenceAssetId) return false;
+    if (c.role !== n.role) return false;
+    const cWeight = c.weight ?? null;
+    const nWeight = n.weight ?? null;
+    if (cWeight !== nWeight) return false;
+    const cHints =
+      c.hints && Object.keys(c.hints).length > 0 ? JSON.stringify(sortKeysDeep(c.hints)) : null;
+    const nHints =
+      n.hints && Object.keys(n.hints).length > 0 ? JSON.stringify(sortKeysDeep(n.hints)) : null;
+    if (cHints !== nHints) return false;
+  }
+
+  const curIds = [...(currentRefIds ?? [])].sort();
+  const nxtIds = [...(nextRefIds ?? [])].sort();
+  if (curIds.length !== nxtIds.length) return false;
+  if (!curIds.every((id, i) => id === nxtIds[i])) return false;
+
+  return true;
+}
+
 export class Scene {
   readonly #id: SceneId;
   readonly #campaignId: CampaignId;
@@ -289,6 +347,7 @@ export class Scene {
             input.configuration.referenceBindings.map((b) =>
               Object.freeze({
                 ...b,
+                referenceAssetId: b.referenceAssetId as ReferenceAssetId,
                 sceneId: input.id,
                 specRevision: 1
               })
@@ -520,6 +579,7 @@ export class Scene {
       nextBindings = referenceBindings.map((b) =>
         Object.freeze({
           ...b,
+          referenceAssetId: b.referenceAssetId as ReferenceAssetId,
           sceneId: this.#id,
           specRevision: nextRevision
         })
@@ -544,6 +604,34 @@ export class Scene {
           weight: null,
           hints: null
         });
+      });
+    }
+
+    if (
+      areBindingsEquivalent(
+        this.#configuration.referenceBindings,
+        nextBindings,
+        this.#configuration.referenceIds,
+        effectiveReferenceIds
+      )
+    ) {
+      if (this.#isTerminal()) {
+        throw new TerminalStateError(this.#id, this.#status, "updateReferences");
+      }
+      const editableStatuses: readonly SceneStatus[] = [
+        "draft_pending",
+        "director_review",
+        "approved"
+      ];
+      if (!editableStatuses.includes(this.#status)) {
+        throw new InvalidMutationError(this.#id, this.#status, "references");
+      }
+      return Object.freeze({
+        sceneId: this.#id,
+        from: this.#status,
+        to: this.#status,
+        revision: this.#specRevision,
+        reason: "references_unchanged"
       });
     }
 

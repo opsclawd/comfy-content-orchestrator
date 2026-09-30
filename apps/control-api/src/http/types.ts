@@ -12,6 +12,7 @@ import {
   PlanCampaignStoryboardUseCase,
   PlanSceneConfigurationUseCase,
   PlanShotPlansUseCase,
+  CreateShotPlanVariationUseCase,
   ProgressSceneProductionUseCases,
   RankReviewCandidatesUseCase,
   ReviewSceneUseCases,
@@ -21,10 +22,12 @@ import {
   CompleteCampaignProductionRunUseCases,
   CompleteCampaignProductionRunAssemblyUseCases,
   ResolveCampaignDeliveryReelUseCase,
+  ResolveCampaignAnimaticUseCase,
   UploadReferenceAssetUseCase,
   ListClientReferencesUseCase,
   ArchiveReferenceAssetUseCase,
   UpdateReferenceAssetRoleUseCase,
+  type CampaignAnimaticQueries,
   type CampaignDeliveryReelQueries,
   type ClientContextResolver,
   type CurrentProductionAttemptQueries,
@@ -51,6 +54,7 @@ export interface ControlApiDependencies {
   readonly sceneReviewQueries?: SceneReviewQueries;
   readonly currentProductionAttemptQueries?: CurrentProductionAttemptQueries;
   readonly campaignDeliveryReelQueries?: CampaignDeliveryReelQueries;
+  readonly campaignAnimaticQueries?: CampaignAnimaticQueries;
   readonly objectStorage?: ObjectStoragePort;
   readonly hashBytes?: HashBytesPort;
   readonly reviewMediaDelivery?: ReviewMediaDeliveryPort;
@@ -91,17 +95,20 @@ export interface ControlApiUseCases {
   readonly completeCampaignProductionRun: CompleteCampaignProductionRunUseCases;
   readonly completeCampaignProductionRunAssembly: CompleteCampaignProductionRunAssemblyUseCases;
   readonly resolveCampaignDeliveryReel?: ResolveCampaignDeliveryReelUseCase | undefined;
+  readonly resolveCampaignAnimatic?: ResolveCampaignAnimaticUseCase | undefined;
   readonly uploadReferenceAsset?: UploadReferenceAssetUseCase | undefined;
   readonly listClientReferences?: ListClientReferencesUseCase | undefined;
   readonly archiveReferenceAsset?: ArchiveReferenceAssetUseCase | undefined;
   readonly updateReferenceAssetRole?: UpdateReferenceAssetRoleUseCase | undefined;
   readonly planShotPlans?: PlanShotPlansUseCase | undefined;
+  readonly createShotPlanVariation?: CreateShotPlanVariationUseCase | undefined;
 }
 
 export interface ControlApiQueries {
   readonly sceneReview?: SceneReviewQueries;
   readonly currentProductionAttempt?: CurrentProductionAttemptQueries;
   readonly campaignDeliveryReel?: CampaignDeliveryReelQueries;
+  readonly campaignAnimatic?: CampaignAnimaticQueries;
 }
 
 export interface ControlApiContainer {
@@ -115,6 +122,16 @@ export function createControlApiContainer(
 ): ControlApiContainer {
   const planShotPlans = dependencies.planningModelClients
     ? new PlanShotPlansUseCase({
+        uow: dependencies.uow,
+        primaryClient: dependencies.planningModelClients.primary,
+        fallbackClient: dependencies.planningModelClients.fallback,
+        ...(dependencies.planningOverallTimeoutMs !== undefined
+          ? { overallTimeoutMs: dependencies.planningOverallTimeoutMs }
+          : {})
+      })
+    : undefined;
+  const createShotPlanVariation = dependencies.planningModelClients
+    ? new CreateShotPlanVariationUseCase({
         uow: dependencies.uow,
         primaryClient: dependencies.planningModelClients.primary,
         fallbackClient: dependencies.planningModelClients.fallback,
@@ -168,6 +185,14 @@ export function createControlApiContainer(
           mediaDelivery: dependencies.reviewMediaDelivery
         })
       : undefined;
+  const resolveCampaignAnimatic = dependencies.campaignAnimaticQueries
+    ? new ResolveCampaignAnimaticUseCase({
+        queries: dependencies.campaignAnimaticQueries,
+        ...(dependencies.reviewMediaDelivery !== undefined
+          ? { mediaDelivery: dependencies.reviewMediaDelivery }
+          : {})
+      })
+    : undefined;
   const planSceneConfiguration =
     dependencies.planningModelClients && dependencies.referenceAssetRepository
       ? new PlanSceneConfigurationUseCase({
@@ -282,6 +307,7 @@ export function createControlApiContainer(
       completeCampaignProductionRun,
       completeCampaignProductionRunAssembly,
       ...(resolveCampaignDeliveryReel !== undefined ? { resolveCampaignDeliveryReel } : {}),
+      ...(resolveCampaignAnimatic !== undefined ? { resolveCampaignAnimatic } : {}),
       ...(planCampaignBeatSheet !== undefined ? { planCampaignBeatSheet } : {}),
       ...(planCampaignStoryboard !== undefined ? { planCampaignStoryboard } : {}),
       ...(enforceStorageAdmission !== undefined ? { enforceStorageAdmission } : {}),
@@ -290,7 +316,8 @@ export function createControlApiContainer(
       ...(listClientReferences !== undefined ? { listClientReferences } : {}),
       ...(archiveReferenceAsset !== undefined ? { archiveReferenceAsset } : {}),
       ...(updateReferenceAssetRole !== undefined ? { updateReferenceAssetRole } : {}),
-      ...(planShotPlans !== undefined ? { planShotPlans } : {})
+      ...(planShotPlans !== undefined ? { planShotPlans } : {}),
+      ...(createShotPlanVariation !== undefined ? { createShotPlanVariation } : {})
     },
     queries: {
       ...(dependencies.sceneReviewQueries !== undefined
@@ -301,6 +328,9 @@ export function createControlApiContainer(
         : {}),
       ...(dependencies.campaignDeliveryReelQueries !== undefined
         ? { campaignDeliveryReel: dependencies.campaignDeliveryReelQueries }
+        : {}),
+      ...(dependencies.campaignAnimaticQueries !== undefined
+        ? { campaignAnimatic: dependencies.campaignAnimaticQueries }
         : {})
     }
   };

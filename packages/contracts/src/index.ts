@@ -23,4 +23,6 @@ export * from "./production-attempt.js";
 export * from "./campaign-delivery-reel.js";
 export * from "./reference-asset.js";
 export * from "./shot-plan.js";
+export * from "./shot-plan-animatic.js";
+export * from "./campaign-animatic.js";
 export * from "./generation-manifest.js";

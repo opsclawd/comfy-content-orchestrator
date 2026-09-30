@@ -1,5 +1,9 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
-import { GenerationAdmissionResponseSchema } from "@cco/contracts";
+import {
+  CreateShotPlanVariationRequestSchema,
+  CreateShotPlanVariationResponseSchema,
+  GenerationAdmissionResponseSchema
+} from "@cco/contracts";
 import type { ControlApiContainer } from "../types.js";
 
 export interface SceneGenerationRoutesOptions {
@@ -14,6 +18,58 @@ export const sceneGenerationRouteSchema = {
       sceneId: {
         type: "string",
         format: "uuid"
+      }
+    },
+    additionalProperties: false
+  }
+} as const;
+
+export const createShotPlanVariationRouteSchema = {
+  params: {
+    type: "object",
+    required: ["sceneId"],
+    properties: {
+      sceneId: {
+        type: "string",
+        format: "uuid"
+      }
+    },
+    additionalProperties: false
+  },
+  body: {
+    type: "object",
+    required: ["sourceShotPlanId", "expectedSpecRevision", "directorGuidance", "idempotencyKey"],
+    properties: {
+      sourceShotPlanId: {
+        type: "string",
+        format: "uuid"
+      },
+      expectedSpecRevision: {
+        type: "integer",
+        minimum: 1
+      },
+      directorGuidance: {
+        type: "string",
+        minLength: 1
+      },
+      variantCount: {
+        type: "integer",
+        minimum: 1,
+        maximum: 3
+      },
+      idempotencyKey: {
+        type: "string",
+        minLength: 1
+      },
+      externalProcessingPolicy: {
+        type: "object"
+      },
+      overallTimeoutMs: {
+        type: "integer",
+        minimum: 1
+      },
+      enqueuePrevisJobs: {
+        type: "boolean"
       }
     },
     additionalProperties: false
@@ -143,5 +199,62 @@ export const sceneGenerationRoutes: FastifyPluginAsync<SceneGenerationRoutesOpti
     "/api/scenes/:sceneId/plan-shot-plans",
     { schema: planShotPlansRouteSchema },
     handlePlanShotPlans
+  );
+
+  fastify.post<{
+    Params: { sceneId: string };
+    Body: {
+      sourceShotPlanId: string;
+      expectedSpecRevision: number;
+      directorGuidance: string;
+      variantCount?: number;
+      idempotencyKey: string;
+      externalProcessingPolicy?: Record<string, unknown>;
+      overallTimeoutMs?: number;
+      enqueuePrevisJobs?: boolean;
+    };
+  }>(
+    "/api/scenes/:sceneId/shot-plans/variations",
+    { schema: createShotPlanVariationRouteSchema },
+    async (
+      request: FastifyRequest<{
+        Params: { sceneId: string };
+        Body: {
+          sourceShotPlanId: string;
+          expectedSpecRevision: number;
+          directorGuidance: string;
+          variantCount?: number;
+          idempotencyKey: string;
+          externalProcessingPolicy?: Record<string, unknown>;
+          overallTimeoutMs?: number;
+          enqueuePrevisJobs?: boolean;
+        };
+      }>,
+      reply: FastifyReply
+    ) => {
+      if (!container.useCases.createShotPlanVariation) {
+        return reply.status(503).send({
+          code: "CONFIGURATION_ERROR",
+          message:
+            "Shot plan variation is not available; planning model clients are not configured."
+        });
+      }
+
+      const parsedBody = CreateShotPlanVariationRequestSchema.parse(request.body);
+
+      const result = await container.useCases.createShotPlanVariation.execute({
+        sceneId: request.params.sceneId,
+        ...parsedBody
+      });
+
+      const response = CreateShotPlanVariationResponseSchema.parse({
+        sceneId: result.sceneId,
+        sourceShotPlanId: result.sourceShotPlanId,
+        shotPlans: result.shotPlans.map((p) => p.snapshot()),
+        isIdempotentReplay: result.isIdempotentReplay
+      });
+
+      return reply.status(200).send(response);
+    }
   );
 };

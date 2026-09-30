@@ -164,4 +164,48 @@ describe("ShotPlan domain model", () => {
 
     expect(reconstituted.snapshot()).toEqual(snapshot);
   });
+
+  it("stores and preserves derivation provenance and lineage", () => {
+    const sourcePlanId = "01928374-abcd-7000-8000-000000000010" as ShotPlanId;
+    const derivedInput = {
+      ...baseInput,
+      id: "01928374-abcd-7000-8000-000000000011" as ShotPlanId,
+      variantOrdinal: 2,
+      derivedFromShotPlanId: sourcePlanId,
+      derivation: {
+        sourceShotPlanId: sourcePlanId,
+        sourceVariantOrdinal: 1,
+        directorGuidance: "Make it a tighter close-up on the magnifying glass",
+        machineModel: "claude-3-5-sonnet",
+        provider: "Anthropic",
+        requestedAt: "2026-09-29T21:00:00.000Z",
+        idempotencyKey: "var-idemp-1",
+        requestHashSha256: "8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b"
+      },
+      idempotencyKey: "var-idemp-1",
+      requestHashSha256: "8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b"
+    };
+
+    const derivedPlan = ShotPlan.create(derivedInput);
+
+    expect(derivedPlan.derivedFromShotPlanId).toBe(sourcePlanId);
+    expect(derivedPlan.derivation).toEqual(derivedInput.derivation);
+    expect(derivedPlan.idempotencyKey).toBe("var-idemp-1");
+    expect(derivedPlan.requestHashSha256).toBe(
+      "8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b"
+    );
+
+    const snapshot = derivedPlan.snapshot();
+    expect(snapshot.derivedFromShotPlanId).toBe(sourcePlanId);
+    expect(snapshot.derivation).toEqual(derivedInput.derivation);
+    expect(snapshot.idempotencyKey).toBe("var-idemp-1");
+    expect(snapshot.requestHashSha256).toBe(
+      "8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b"
+    );
+
+    const reconstituted = ShotPlan.reconstitute(snapshot);
+    expect(reconstituted.derivedFromShotPlanId).toBe(sourcePlanId);
+    expect(reconstituted.derivation).toEqual(derivedInput.derivation);
+    expect(reconstituted.snapshot()).toEqual(snapshot);
+  });
 });

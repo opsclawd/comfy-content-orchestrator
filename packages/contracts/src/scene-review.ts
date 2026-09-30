@@ -18,7 +18,8 @@ import {
   ShotPlanSubjectBlockingSchema,
   ShotPlanTemporalBeatSchema,
   ShotPlanDialogueIntentSchema,
-  ShotPlanContinuityConstraintsSchema
+  ShotPlanContinuityConstraintsSchema,
+  ShotPlanDerivationProvenanceSchema
 } from "./shot-plan.js";
 
 export const SCENE_STATUSES = [
@@ -177,6 +178,8 @@ export const ShotPlanReviewItemSchema = z.object({
     })
     .nullable()
     .optional(),
+  derivedFromShotPlanId: z.string().uuid().nullable().optional(),
+  derivation: ShotPlanDerivationProvenanceSchema.nullable().optional(),
   boundReferences: z.array(ShotPlanReferenceBindingReviewItemSchema).default([]),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
@@ -186,6 +189,7 @@ export type ShotPlanReviewItem = z.infer<typeof ShotPlanReviewItemSchema>;
 export const SceneReviewDetailReadModelSchema = z.object({
   sceneId: z.string().uuid(),
   campaignId: z.string().uuid(),
+  clientId: z.string().uuid().optional(),
   status: SceneStatusSchema,
   specRevision: z.number().int().positive(),
   configuration: SceneConfigurationSchema,
@@ -197,6 +201,7 @@ export const SceneReviewDetailReadModelSchema = z.object({
   approval: SceneApprovalSchema.optional(),
   candidatesByRevision: z.array(SceneReviewCandidateGroupSchema),
   shotPlans: z.array(ShotPlanReviewItemSchema).optional(),
+  boundReferences: z.array(ShotPlanReferenceBindingReviewItemSchema).optional(),
   allowedActions: z.array(ReviewActionSchema)
 });
 export type SceneReviewDetailReadModel = z.infer<typeof SceneReviewDetailReadModelSchema>;
@@ -268,9 +273,44 @@ export const PromptEditPayloadSchema = z.object({
 });
 export type PromptEditPayload = z.infer<typeof PromptEditPayloadSchema>;
 
-export const ReferenceChangePayloadSchema = z.object({
-  referenceIds: z.array(z.string())
+export const SceneReferenceBindingInputSchema = z.object({
+  referenceAssetId: z.string().uuid(),
+  role: ReferenceRoleSchema,
+  weight: z.number().min(0).max(1).nullable().optional(),
+  hints: z.record(z.string(), z.unknown()).nullable().optional()
 });
+export type SceneReferenceBindingInput = z.infer<typeof SceneReferenceBindingInputSchema>;
+
+export const ReferenceChangePayloadSchema = z
+  .object({
+    referenceIds: z.array(z.string()).max(9).optional(),
+    referenceBindings: z.array(SceneReferenceBindingInputSchema).max(9).optional()
+  })
+  .superRefine((val, ctx) => {
+    if (val.referenceIds === undefined && val.referenceBindings === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Either referenceBindings or referenceIds must be provided."
+      });
+      return;
+    }
+
+    if (val.referenceIds !== undefined && val.referenceBindings !== undefined) {
+      const idsFromRefIds = new Set(val.referenceIds);
+      const idsFromBindings = new Set(val.referenceBindings.map((b) => b.referenceAssetId));
+      if (
+        val.referenceIds.length !== idsFromRefIds.size ||
+        idsFromRefIds.size !== idsFromBindings.size ||
+        !val.referenceIds.every((id) => idsFromBindings.has(id))
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "Contradictory referenceIds and referenceBindings provided in reference_change payload."
+        });
+      }
+    }
+  });
 export type ReferenceChangePayload = z.infer<typeof ReferenceChangePayloadSchema>;
 
 export const EngineChangePayloadSchema = z.object({
