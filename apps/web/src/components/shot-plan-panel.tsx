@@ -11,9 +11,10 @@ import type {
   CreateShotPlanVariationRequest,
   CreateShotPlanVariationResponse
 } from "@cco/contracts";
-import { compileShotPlanAnimaticTimeline } from "@cco/contracts";
+import { compileShotPlanAnimaticTimeline, resolveShotPlanDiffSource } from "@cco/contracts";
 import { ShotPlanAnimaticPlayer } from "./animatic/shot-plan-animatic-player";
 import { ShotPlanVariationModal } from "./shot-plan-variation-modal";
+import { ShotPlanComparisonModal } from "./shot-plan-comparison-modal";
 import type { ReviewCommandEvent, ReviewCommandState } from "./review-command-state";
 import {
   formatDurationMs,
@@ -192,6 +193,7 @@ export function ShotPlanPanel({
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [activeBeatByPlan, setActiveBeatByPlan] = useState<Record<string, number | null>>({});
   const [variationModalPlan, setVariationModalPlan] = useState<ShotPlanReviewItem | null>(null);
+  const [comparisonModalPlan, setComparisonModalPlan] = useState<ShotPlanReviewItem | null>(null);
 
   let router: { refresh: () => void } | null = null;
   try {
@@ -838,6 +840,18 @@ export function ShotPlanPanel({
                 >
                   Create variation
                 </button>
+                <button
+                  type="button"
+                  className="shot-plan-action-btn compare-plan-btn"
+                  data-testid="shot-plan-compare-button"
+                  data-shot-plan-id={plan.shotPlanId}
+                  disabled={disabled || shotPlans.length < 2}
+                  onClick={() => setComparisonModalPlan(plan)}
+                >
+                  {resolveShotPlanDiffSource(plan, shotPlans).sourcePlan
+                    ? "Compare to source"
+                    : "Compare"}
+                </button>
               </div>
             </article>
           );
@@ -859,6 +873,20 @@ export function ShotPlanPanel({
           }
         }}
         onCreateVariation={onCreateVariation}
+      />
+
+      <ShotPlanComparisonModal
+        isOpen={comparisonModalPlan !== null}
+        targetPlan={comparisonModalPlan}
+        shotPlans={shotPlans}
+        currentSpecRevision={currentSpecRevision}
+        initialSourceShotPlanId={
+          comparisonModalPlan
+            ? (resolveShotPlanDiffSource(comparisonModalPlan, shotPlans).sourceShotPlanId ??
+              undefined)
+            : undefined
+        }
+        onClose={() => setComparisonModalPlan(null)}
       />
     </section>
   );
