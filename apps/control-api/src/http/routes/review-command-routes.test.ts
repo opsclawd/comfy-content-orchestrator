@@ -329,6 +329,18 @@ class InMemorySceneUnitOfWork implements UnitOfWork {
         return Array.from(plansMap.values())
           .filter((p) => p.sceneId === sceneId)
           .sort((a, b) => a.specRevision - b.specRevision || a.variantOrdinal - b.variantOrdinal);
+      },
+      listByIdempotencyKey: async (
+        sceneId: SceneId,
+        idempotencyKey: string
+      ): Promise<readonly ShotPlan[]> => {
+        const plansMap = new Map<ShotPlanId, ShotPlan>(this._seededShotPlans);
+        for (const plan of stagedShotPlans) {
+          plansMap.set(plan.id, plan);
+        }
+        return Array.from(plansMap.values())
+          .filter((p) => p.sceneId === sceneId && p.idempotencyKey === idempotencyKey)
+          .sort((a, b) => a.variantOrdinal - b.variantOrdinal);
       }
     };
 

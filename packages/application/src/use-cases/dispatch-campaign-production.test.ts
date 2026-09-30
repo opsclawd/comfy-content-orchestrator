@@ -882,7 +882,8 @@ describe("ApproveSceneAndDispatchCampaignProductionUseCase", () => {
       save: vi.fn(async () => {}),
       saveMany: vi.fn(async () => {}),
       listBySceneAndRevision: vi.fn(async () => [shotPlan]),
-      listByScene: vi.fn(async () => [shotPlan])
+      listByScene: vi.fn(async () => [shotPlan]),
+      listByIdempotencyKey: vi.fn(async () => [])
     };
 
     const mockUow: UnitOfWork = {

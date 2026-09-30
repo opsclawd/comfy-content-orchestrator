@@ -30,11 +30,16 @@ import {
   ShotPlanDialogueIntentSchema,
   ShotPlanContinuityConstraintsSchema,
   ShotPlanPrevisAssociationSchema,
+  ShotPlanDerivationProvenanceSchema,
   ShotPlanDocumentSchema,
   ShotPlanCreateInputSchema,
   PlanShotPlansRequestSchema,
   PlanShotPlansResponseSchema,
   PlanShotPlansErrorResponseSchema,
+  CreateShotPlanVariationRequestSchema,
+  CreateShotPlanVariationResponseSchema,
+  canonicalizeShotPlanVariationRequest,
+  hashShotPlanVariationRequest,
   computeH3FrameCount,
   computeH3DurationMs,
   getH3DurationWindow,
@@ -607,6 +612,154 @@ describe("ShotPlan Contracts & Schemas", () => {
       expect(parsed.code).toBe("CLOUD_PLANNING_NOT_AUTHORIZED");
       expect(parsed.message).toBe("allowCloudPlanning disabled");
       expect(parsed.details).toEqual({ provider: "Anthropic" });
+    });
+  });
+
+  describe("ShotPlanDerivationProvenanceSchema", () => {
+    it("parses valid derivation provenance", () => {
+      const provenance = {
+        sourceShotPlanId: "01923456-789a-7b3c-9d4e-5f60718293a1",
+        sourceVariantOrdinal: 2,
+        directorGuidance: "Make it a tighter 50mm shot with slow dolly in",
+        machineModel: "claude-3-5-sonnet",
+        provider: "Anthropic",
+        requestedAt: "2026-09-29T21:00:00.000Z",
+        idempotencyKey: "var-key-123",
+        requestHashSha256: validSha256
+      };
+      const parsed = ShotPlanDerivationProvenanceSchema.parse(provenance);
+      expect(parsed.sourceShotPlanId).toBe(provenance.sourceShotPlanId);
+      expect(parsed.sourceVariantOrdinal).toBe(2);
+      expect(parsed.directorGuidance).toBe(provenance.directorGuidance);
+      expect(parsed.provider).toBe("Anthropic");
+    });
+
+    it("rejects non-uuid sourceShotPlanId", () => {
+      expect(() =>
+        ShotPlanDerivationProvenanceSchema.parse({
+          sourceShotPlanId: "invalid-id",
+          sourceVariantOrdinal: 1,
+          directorGuidance: "Guidance",
+          requestedAt: "2026-09-29T21:00:00.000Z"
+        })
+      ).toThrow();
+    });
+
+    it("rejects empty directorGuidance", () => {
+      expect(() =>
+        ShotPlanDerivationProvenanceSchema.parse({
+          sourceShotPlanId: "01923456-789a-7b3c-9d4e-5f60718293a1",
+          sourceVariantOrdinal: 1,
+          directorGuidance: "",
+          requestedAt: "2026-09-29T21:00:00.000Z"
+        })
+      ).toThrow();
+    });
+  });
+
+  describe("CreateShotPlanVariationRequestSchema", () => {
+    it("parses valid variation request", () => {
+      const req = {
+        sourceShotPlanId: "01923456-789a-7b3c-9d4e-5f60718293a1",
+        expectedSpecRevision: 2,
+        directorGuidance: "Keep composition, make it a tighter 50mm shot",
+        variantCount: 1,
+        idempotencyKey: "idemp-var-1"
+      };
+      const parsed = CreateShotPlanVariationRequestSchema.parse(req);
+      expect(parsed.sourceShotPlanId).toBe(req.sourceShotPlanId);
+      expect(parsed.expectedSpecRevision).toBe(2);
+      expect(parsed.variantCount).toBe(1);
+    });
+
+    it("defaults variantCount to 1", () => {
+      const req = {
+        sourceShotPlanId: "01923456-789a-7b3c-9d4e-5f60718293a1",
+        expectedSpecRevision: 1,
+        directorGuidance: "Tighter shot",
+        idempotencyKey: "idemp-var-2"
+      };
+      const parsed = CreateShotPlanVariationRequestSchema.parse(req);
+      expect(parsed.variantCount).toBe(1);
+    });
+
+    it("rejects variantCount > 3", () => {
+      expect(() =>
+        CreateShotPlanVariationRequestSchema.parse({
+          sourceShotPlanId: "01923456-789a-7b3c-9d4e-5f60718293a1",
+          expectedSpecRevision: 1,
+          directorGuidance: "Tighter shot",
+          variantCount: 4,
+          idempotencyKey: "idemp-var-3"
+        })
+      ).toThrow();
+    });
+
+    it("rejects empty directorGuidance", () => {
+      expect(() =>
+        CreateShotPlanVariationRequestSchema.parse({
+          sourceShotPlanId: "01923456-789a-7b3c-9d4e-5f60718293a1",
+          expectedSpecRevision: 1,
+          directorGuidance: "   ",
+          idempotencyKey: "idemp-var-4"
+        })
+      ).toThrow();
+    });
+  });
+
+  describe("CreateShotPlanVariationResponseSchema", () => {
+    it("parses valid variation response", () => {
+      const response = {
+        sceneId: "01923456-789a-7b3c-9d4e-5f6071829300",
+        sourceShotPlanId: "01923456-789a-7b3c-9d4e-5f60718293a1",
+        shotPlans: [],
+        isIdempotentReplay: false
+      };
+      const parsed = CreateShotPlanVariationResponseSchema.parse(response);
+      expect(parsed.sceneId).toBe(response.sceneId);
+      expect(parsed.sourceShotPlanId).toBe(response.sourceShotPlanId);
+      expect(parsed.isIdempotentReplay).toBe(false);
+    });
+  });
+
+  describe("hashShotPlanVariationRequest", () => {
+    it("produces deterministic SHA-256 hash irrespective of key order", async () => {
+      const input = {
+        sceneId: "01923456-789a-7b3c-9d4e-5f6071829300",
+        sourceShotPlanId: "01923456-789a-7b3c-9d4e-5f60718293a1",
+        expectedSpecRevision: 2,
+        directorGuidance: "Make it closer",
+        variantCount: 1
+      };
+      const hash1 = await hashShotPlanVariationRequest(input);
+      const hash2 = await hashShotPlanVariationRequest({
+        variantCount: 1,
+        expectedSpecRevision: 2,
+        directorGuidance: "Make it closer",
+        sourceShotPlanId: "01923456-789a-7b3c-9d4e-5f60718293a1",
+        sceneId: "01923456-789a-7b3c-9d4e-5f6071829300"
+      });
+      expect(hash1).toMatch(/^[0-9a-f]{64}$/);
+      expect(hash1).toBe(hash2);
+      expect(canonicalizeShotPlanVariationRequest(input)).toContain('"variantCount":1');
+    });
+
+    it("trims directorGuidance whitespace", async () => {
+      const hash1 = await hashShotPlanVariationRequest({
+        sceneId: "01923456-789a-7b3c-9d4e-5f6071829300",
+        sourceShotPlanId: "01923456-789a-7b3c-9d4e-5f60718293a1",
+        expectedSpecRevision: 2,
+        directorGuidance: "  Make it closer   ",
+        variantCount: 1
+      });
+      const hash2 = await hashShotPlanVariationRequest({
+        sceneId: "01923456-789a-7b3c-9d4e-5f6071829300",
+        sourceShotPlanId: "01923456-789a-7b3c-9d4e-5f60718293a1",
+        expectedSpecRevision: 2,
+        directorGuidance: "Make it closer",
+        variantCount: 1
+      });
+      expect(hash1).toBe(hash2);
     });
   });
 });

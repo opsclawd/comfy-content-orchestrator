@@ -582,4 +582,84 @@ describe("PostgreSQL ShotPlanRepository Adapter Integration", () => {
       ])
     ).rejects.toThrow(/storyboard_scene_selected_shot_plan_revision_current/);
   });
+
+  it("persists derivation lineage and retrieves by idempotency key", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaignRecord = await insertCampaignRecord(client, {
+      clientId: clientRecord.client_id
+    });
+    const sceneRecord = await insertStoryboardSceneRecord(client, {
+      campaignId: campaignRecord.campaign_id,
+      specRevision: 1
+    });
+    const sceneId = sceneRecord.scene_id as SceneId;
+
+    const shotPlanRepo = new PostgresShotPlanRepository(client);
+
+    // Save source shot plan
+    const sourcePlan = createTestShotPlan({
+      id: "01928374-abcd-7000-8000-000000000091" as ShotPlanId,
+      sceneId,
+      specRevision: 1,
+      variantOrdinal: 1
+    });
+    await shotPlanRepo.save(sourcePlan);
+
+    // Create variation with derivation provenance
+    const variationPlan = ShotPlan.create({
+      id: "01928374-abcd-7000-8000-000000000092" as ShotPlanId,
+      sceneId,
+      specRevision: 1,
+      variantOrdinal: 2,
+      targetDurationMs: 4000,
+      targetFrameCount: 96,
+      framing: "close_up",
+      angle: "eye_level",
+      lensIntent: "50mm prime",
+      cameraPosition: "eye level center",
+      cameraMovement: "dolly_in",
+      movementSpeed: "slow",
+      cameraPromptDescription: "Close up tracking shot",
+      actionSummary: "Close up of hero",
+      lightingStyle: "high_key_commercial",
+      environmentDescription: "Bright terminal",
+      derivedFromShotPlanId: sourcePlan.id,
+      derivation: {
+        sourceShotPlanId: sourcePlan.id,
+        sourceVariantOrdinal: 1,
+        directorGuidance: "Make it a tighter 50mm shot with slow dolly in",
+        machineModel: "claude-3-5-sonnet",
+        provider: "Anthropic",
+        requestedAt: "2026-09-29T21:00:00.000Z",
+        idempotencyKey: "var-idemp-key-1",
+        requestHashSha256: "8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b"
+      },
+      idempotencyKey: "var-idemp-key-1",
+      requestHashSha256: "8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b"
+    });
+    await shotPlanRepo.save(variationPlan);
+
+    // Verify findById reconstitutes lineage
+    const found = await shotPlanRepo.findById(variationPlan.id);
+    expect(found).toBeDefined();
+    expect(found?.derivedFromShotPlanId).toBe(sourcePlan.id);
+    expect(found?.derivation?.sourceShotPlanId).toBe(sourcePlan.id);
+    expect(found?.derivation?.sourceVariantOrdinal).toBe(1);
+    expect(found?.derivation?.directorGuidance).toBe(
+      "Make it a tighter 50mm shot with slow dolly in"
+    );
+    expect(found?.idempotencyKey).toBe("var-idemp-key-1");
+    expect(found?.requestHashSha256).toBe(
+      "8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b"
+    );
+
+    // Verify listByIdempotencyKey
+    const byKey = await shotPlanRepo.listByIdempotencyKey(sceneId, "var-idemp-key-1");
+    expect(byKey).toHaveLength(1);
+    expect(byKey[0]?.id).toBe(variationPlan.id);
+
+    // Verify empty result for unknown idempotency key
+    const empty = await shotPlanRepo.listByIdempotencyKey(sceneId, "non-existent-key");
+    expect(empty).toHaveLength(0);
+  });
 });

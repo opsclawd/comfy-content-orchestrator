@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sortKeysDeep } from "@cco/shared";
 import { sha256HashSchema } from "./persistent-media.js";
 import { MINIMAX_H3_FPS } from "./render-profile.js";
 
@@ -196,6 +197,18 @@ export const ShotPlanPrevisAssociationSchema = z.object({
 });
 export type ShotPlanPrevisAssociation = z.infer<typeof ShotPlanPrevisAssociationSchema>;
 
+export const ShotPlanDerivationProvenanceSchema = z.object({
+  sourceShotPlanId: z.string().uuid("sourceShotPlanId must be a valid UUID"),
+  sourceVariantOrdinal: z.number().int().positive("sourceVariantOrdinal must be positive"),
+  directorGuidance: z.string().min(1, "directorGuidance must not be empty"),
+  machineModel: z.string().nullable().optional(),
+  provider: z.string().nullable().optional(),
+  requestedAt: z.string().datetime({ message: "requestedAt must be ISO 8601 datetime" }),
+  idempotencyKey: z.string().nullable().optional(),
+  requestHashSha256: sha256HashSchema.nullable().optional()
+});
+export type ShotPlanDerivationProvenance = z.infer<typeof ShotPlanDerivationProvenanceSchema>;
+
 // ============================================================================
 // Canonical ShotPlan Document Schema
 // ============================================================================
@@ -250,6 +263,16 @@ export const ShotPlanDocumentSchema = z.object({
   // Optional Previs Association
   previs: ShotPlanPrevisAssociationSchema.nullable().optional(),
 
+  // Lineage & Derivation Provenance
+  derivedFromShotPlanId: z
+    .string()
+    .uuid("derivedFromShotPlanId must be a valid UUID")
+    .nullable()
+    .optional(),
+  derivation: ShotPlanDerivationProvenanceSchema.nullable().optional(),
+  idempotencyKey: z.string().nullable().optional(),
+  requestHashSha256: sha256HashSchema.nullable().optional(),
+
   // Metadata & Timestamps
   machineModel: z.string().nullable().optional(),
   createdAt: z.string().datetime({ message: "createdAt must be a valid ISO 8601 datetime" }),
@@ -299,6 +322,14 @@ export const ShotPlanCreateInputSchema = z.object({
     anchorMediaHashSha256: null
   }),
   previs: ShotPlanPrevisAssociationSchema.nullable().optional(),
+  derivedFromShotPlanId: z
+    .string()
+    .uuid("derivedFromShotPlanId must be a valid UUID")
+    .nullable()
+    .optional(),
+  derivation: ShotPlanDerivationProvenanceSchema.nullable().optional(),
+  idempotencyKey: z.string().nullable().optional(),
+  requestHashSha256: sha256HashSchema.nullable().optional(),
   machineModel: z.string().nullable().optional()
 });
 export type ShotPlanCreateInput = z.infer<typeof ShotPlanCreateInputSchema>;
@@ -328,6 +359,73 @@ export const PlanShotPlansErrorResponseSchema = z.object({
   details: z.unknown().optional()
 });
 export type PlanShotPlansErrorResponse = z.infer<typeof PlanShotPlansErrorResponseSchema>;
+
+// ============================================================================
+// Create Shot Plan Variation Route / Operation Schemas
+// ============================================================================
+
+export const CreateShotPlanVariationRequestSchema = z
+  .object({
+    sourceShotPlanId: z.string().uuid("sourceShotPlanId must be a valid UUID"),
+    expectedSpecRevision: z.number().int().positive("expectedSpecRevision must be positive"),
+    directorGuidance: z.string().trim().min(1, "directorGuidance must not be empty"),
+    variantCount: z.number().int().min(1).max(3).default(1),
+    idempotencyKey: z.string().min(1, "idempotencyKey must not be empty"),
+    externalProcessingPolicy: z.record(z.unknown()).optional(),
+    overallTimeoutMs: z.number().int().positive().optional(),
+    enqueuePrevisJobs: z.boolean().optional()
+  })
+  .strict();
+export type CreateShotPlanVariationRequest = z.infer<typeof CreateShotPlanVariationRequestSchema>;
+
+export const CreateShotPlanVariationResponseSchema = z.object({
+  sceneId: z.string().uuid("sceneId must be a valid UUID"),
+  sourceShotPlanId: z.string().uuid("sourceShotPlanId must be a valid UUID"),
+  shotPlans: z.array(ShotPlanDocumentSchema),
+  isIdempotentReplay: z.boolean()
+});
+export type CreateShotPlanVariationResponse = z.infer<typeof CreateShotPlanVariationResponseSchema>;
+
+export const CreateShotPlanVariationErrorResponseSchema = z.object({
+  code: z.string().optional(),
+  message: z.string(),
+  details: z.unknown().optional()
+});
+export type CreateShotPlanVariationErrorResponse = z.infer<
+  typeof CreateShotPlanVariationErrorResponseSchema
+>;
+
+export function canonicalizeShotPlanVariationRequest(input: {
+  sceneId: string;
+  sourceShotPlanId: string;
+  expectedSpecRevision: number;
+  directorGuidance: string;
+  variantCount: number;
+}): string {
+  const normalized = {
+    directorGuidance: input.directorGuidance.trim(),
+    expectedSpecRevision: input.expectedSpecRevision,
+    sceneId: input.sceneId,
+    sourceShotPlanId: input.sourceShotPlanId,
+    variantCount: input.variantCount
+  };
+  return JSON.stringify(sortKeysDeep(normalized));
+}
+
+export async function hashShotPlanVariationRequest(input: {
+  sceneId: string;
+  sourceShotPlanId: string;
+  expectedSpecRevision: number;
+  directorGuidance: string;
+  variantCount: number;
+}): Promise<string> {
+  const canonical = canonicalizeShotPlanVariationRequest(input);
+  const data = new TextEncoder().encode(canonical);
+  const buffer = await globalThis.crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(buffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
 
 // ============================================================================
 // Timing & Quantization Helper Functions

@@ -12,6 +12,7 @@ import {
   PlanCampaignStoryboardUseCase,
   PlanSceneConfigurationUseCase,
   PlanShotPlansUseCase,
+  CreateShotPlanVariationUseCase,
   ProgressSceneProductionUseCases,
   RankReviewCandidatesUseCase,
   ReviewSceneUseCases,
@@ -96,6 +97,7 @@ export interface ControlApiUseCases {
   readonly archiveReferenceAsset?: ArchiveReferenceAssetUseCase | undefined;
   readonly updateReferenceAssetRole?: UpdateReferenceAssetRoleUseCase | undefined;
   readonly planShotPlans?: PlanShotPlansUseCase | undefined;
+  readonly createShotPlanVariation?: CreateShotPlanVariationUseCase | undefined;
 }
 
 export interface ControlApiQueries {
@@ -115,6 +117,16 @@ export function createControlApiContainer(
 ): ControlApiContainer {
   const planShotPlans = dependencies.planningModelClients
     ? new PlanShotPlansUseCase({
+        uow: dependencies.uow,
+        primaryClient: dependencies.planningModelClients.primary,
+        fallbackClient: dependencies.planningModelClients.fallback,
+        ...(dependencies.planningOverallTimeoutMs !== undefined
+          ? { overallTimeoutMs: dependencies.planningOverallTimeoutMs }
+          : {})
+      })
+    : undefined;
+  const createShotPlanVariation = dependencies.planningModelClients
+    ? new CreateShotPlanVariationUseCase({
         uow: dependencies.uow,
         primaryClient: dependencies.planningModelClients.primary,
         fallbackClient: dependencies.planningModelClients.fallback,
@@ -290,7 +302,8 @@ export function createControlApiContainer(
       ...(listClientReferences !== undefined ? { listClientReferences } : {}),
       ...(archiveReferenceAsset !== undefined ? { archiveReferenceAsset } : {}),
       ...(updateReferenceAssetRole !== undefined ? { updateReferenceAssetRole } : {}),
-      ...(planShotPlans !== undefined ? { planShotPlans } : {})
+      ...(planShotPlans !== undefined ? { planShotPlans } : {}),
+      ...(createShotPlanVariation !== undefined ? { createShotPlanVariation } : {})
     },
     queries: {
       ...(dependencies.sceneReviewQueries !== undefined

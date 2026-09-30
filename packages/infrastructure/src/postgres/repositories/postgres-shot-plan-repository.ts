@@ -30,6 +30,9 @@ interface ShotPlanRow {
   structured_plan: Record<string, unknown> | string;
   created_at: Date | string;
   updated_at: Date | string;
+  derived_from_shot_plan_id?: string | null;
+  idempotency_key?: string | null;
+  request_hash_sha256?: string | null;
 }
 
 function mapRowToShotPlan(row: ShotPlanRow): ShotPlan {
@@ -53,6 +56,13 @@ function mapRowToShotPlan(row: ShotPlanRow): ShotPlan {
     cameraMovement: row.camera_movement as CameraMovement,
     lightingStyle: row.lighting_style as LightingStyle,
     previs: structured.previs ?? null,
+    derivedFromShotPlanId:
+      (row.derived_from_shot_plan_id as ShotPlanId | undefined) ??
+      structured.derivedFromShotPlanId ??
+      null,
+    derivation: structured.derivation ?? null,
+    idempotencyKey: row.idempotency_key ?? structured.idempotencyKey ?? null,
+    requestHashSha256: row.request_hash_sha256 ?? structured.requestHashSha256 ?? null,
     createdAt:
       row.created_at instanceof Date
         ? row.created_at.toISOString()
@@ -86,7 +96,10 @@ export class PostgresShotPlanRepository implements ShotPlanRepository {
         previs_candidate_id,
         structured_plan,
         created_at,
-        updated_at
+        updated_at,
+        derived_from_shot_plan_id,
+        idempotency_key,
+        request_hash_sha256
       FROM shot_plans
       WHERE shot_plan_id = $1
       `,
@@ -125,14 +138,20 @@ export class PostgresShotPlanRepository implements ShotPlanRepository {
         previs_candidate_id,
         structured_plan,
         created_at,
-        updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        updated_at,
+        derived_from_shot_plan_id,
+        idempotency_key,
+        request_hash_sha256
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
       ON CONFLICT (shot_plan_id) DO UPDATE SET
         status = EXCLUDED.status,
         routing_mode = EXCLUDED.routing_mode,
         previs_candidate_id = EXCLUDED.previs_candidate_id,
         structured_plan = EXCLUDED.structured_plan,
-        updated_at = EXCLUDED.updated_at
+        updated_at = EXCLUDED.updated_at,
+        derived_from_shot_plan_id = EXCLUDED.derived_from_shot_plan_id,
+        idempotency_key = EXCLUDED.idempotency_key,
+        request_hash_sha256 = EXCLUDED.request_hash_sha256
       `,
       [
         snap.id,
@@ -150,7 +169,10 @@ export class PostgresShotPlanRepository implements ShotPlanRepository {
         previsCandidateId,
         JSON.stringify(snap),
         createdAt,
-        updatedAt
+        updatedAt,
+        snap.derivedFromShotPlanId ?? null,
+        snap.idempotencyKey ?? null,
+        snap.requestHashSha256 ?? null
       ]
     );
   }
@@ -183,7 +205,10 @@ export class PostgresShotPlanRepository implements ShotPlanRepository {
         previs_candidate_id,
         structured_plan,
         created_at,
-        updated_at
+        updated_at,
+        derived_from_shot_plan_id,
+        idempotency_key,
+        request_hash_sha256
       FROM shot_plans
       WHERE scene_id = $1 AND spec_revision = $2
       ORDER BY variant_ordinal ASC
@@ -213,12 +238,51 @@ export class PostgresShotPlanRepository implements ShotPlanRepository {
         previs_candidate_id,
         structured_plan,
         created_at,
-        updated_at
+        updated_at,
+        derived_from_shot_plan_id,
+        idempotency_key,
+        request_hash_sha256
       FROM shot_plans
       WHERE scene_id = $1
       ORDER BY spec_revision ASC, variant_ordinal ASC
       `,
       [sceneId]
+    );
+
+    return Object.freeze(result.rows.map(mapRowToShotPlan));
+  }
+
+  async listByIdempotencyKey(
+    sceneId: SceneId,
+    idempotencyKey: string
+  ): Promise<readonly ShotPlan[]> {
+    const result = await this.client.query<ShotPlanRow>(
+      `
+      SELECT
+        shot_plan_id,
+        scene_id,
+        spec_revision,
+        variant_ordinal,
+        status,
+        routing_mode,
+        target_duration_ms,
+        target_frame_count,
+        framing,
+        camera_angle,
+        camera_movement,
+        lighting_style,
+        previs_candidate_id,
+        structured_plan,
+        created_at,
+        updated_at,
+        derived_from_shot_plan_id,
+        idempotency_key,
+        request_hash_sha256
+      FROM shot_plans
+      WHERE scene_id = $1 AND idempotency_key = $2
+      ORDER BY variant_ordinal ASC
+      `,
+      [sceneId, idempotencyKey]
     );
 
     return Object.freeze(result.rows.map(mapRowToShotPlan));

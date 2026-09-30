@@ -18,7 +18,8 @@ import {
   ShotPlanSubjectBlockingSchema,
   ShotPlanTemporalBeatSchema,
   ShotPlanDialogueIntentSchema,
-  ShotPlanContinuityConstraintsSchema
+  ShotPlanContinuityConstraintsSchema,
+  ShotPlanDerivationProvenanceSchema
 } from "./shot-plan.js";
 
 export const SCENE_STATUSES = [
@@ -177,6 +178,8 @@ export const ShotPlanReviewItemSchema = z.object({
     })
     .nullable()
     .optional(),
+  derivedFromShotPlanId: z.string().uuid().nullable().optional(),
+  derivation: ShotPlanDerivationProvenanceSchema.nullable().optional(),
   boundReferences: z.array(ShotPlanReferenceBindingReviewItemSchema).default([]),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
