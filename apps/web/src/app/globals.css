@@ -2705,6 +2705,163 @@ a:hover {
 }
 
 /* ============================================================================
+   ShotPlan Semantic Comparison Modal (#371)
+   ============================================================================ */
+
+.shot-plan-comparison-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(15, 23, 42, 0.75);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.shot-plan-comparison-modal {
+  width: 100%;
+  max-width: 680px;
+  max-height: 85vh;
+  overflow-y: auto;
+  background-color: var(--bg-surface, #1e293b);
+  border: 1px solid var(--border-prominent, #334155);
+  border-radius: var(--radius-md, 8px);
+  padding: 1.5rem;
+  box-shadow:
+    0 20px 25px -5px rgba(0, 0, 0, 0.5),
+    0 8px 10px -6px rgba(0, 0, 0, 0.5);
+  color: var(--text-primary, #f8fafc);
+}
+
+.shot-plan-comparison-modal-header h3 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin-bottom: 0.75rem;
+}
+
+.shot-plan-comparison-source-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.shot-plan-comparison-source-picker select {
+  background-color: var(--bg-canvas, #0f172a);
+  border: 1px solid var(--border-prominent, #334155);
+  border-radius: var(--radius-sm, 4px);
+  padding: 0.5rem 0.75rem;
+  color: var(--text-primary, #f8fafc);
+}
+
+.shot-plan-comparison-rejected {
+  background-color: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  padding: 0.75rem;
+  border-radius: var(--radius-sm, 4px);
+}
+
+.shot-plan-comparison-revision-badges {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.shot-plan-comparison-historical-fence {
+  background-color: rgba(234, 179, 8, 0.15);
+  border: 1px solid rgba(234, 179, 8, 0.4);
+  color: #fde68a;
+  padding: 0.75rem;
+  border-radius: var(--radius-sm, 4px);
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.shot-plan-comparison-read-only-notice {
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary, #94a3b8);
+  text-transform: uppercase;
+  margin-bottom: 1rem;
+}
+
+.shot-plan-comparison-previs-row {
+  display: flex;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.shot-plan-comparison-previs-thumb img {
+  max-width: 120px;
+  border-radius: var(--radius-sm, 4px);
+}
+
+.comparison-previs-label {
+  display: block;
+  font-size: 0.65rem;
+  color: var(--text-secondary, #94a3b8);
+}
+
+.shot-plan-comparison-changed-section h4 {
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+
+.shot-plan-comparison-group h5 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary, #94a3b8);
+  margin: 0.75rem 0 0.25rem;
+}
+
+.shot-plan-comparison-collection-entry h6 {
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin: 0.5rem 0 0.25rem;
+}
+
+.shot-plan-comparison-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--border-subtle, #1e293b);
+  font-size: 0.85rem;
+}
+
+.shot-plan-comparison-row-unchanged {
+  opacity: 0.7;
+}
+
+.comparison-row-label {
+  color: var(--text-secondary, #94a3b8);
+  min-width: 140px;
+}
+
+.shot-plan-comparison-unchanged-section {
+  margin-top: 1rem;
+  border-top: 1px solid var(--border-prominent, #334155);
+  padding-top: 0.75rem;
+}
+
+.shot-plan-comparison-unchanged-section summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text-secondary, #94a3b8);
+}
+
+.shot-plan-comparison-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 1.25rem;
+}
+
+/* ============================================================================
    Campaign Storyboard Animatic & Rough-Cut Playback Styles (#362)
    ============================================================================ */
 
