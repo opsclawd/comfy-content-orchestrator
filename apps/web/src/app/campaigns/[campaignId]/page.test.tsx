@@ -4,22 +4,29 @@ import { renderToStaticMarkup } from "react-dom/server";
 import CampaignPage, { dynamic } from "./page.js";
 import CampaignNotFound from "./not-found.js";
 import CampaignError from "./error.js";
+import { CampaignAnimaticPanel } from "../../../components/campaign-animatic-panel.js";
 import { CampaignDeliveryReelPanel } from "../../../components/campaign-delivery-reel-panel.js";
 import {
   getCampaignReviewSummary,
   getCampaignDeliveryReel,
+  getCampaignAnimatic,
   ApiClientError
 } from "../../../api/client.js";
 import type * as ClientModule from "../../../api/client.js";
 import { notFound } from "next/navigation";
-import type { CampaignReviewSummary, CampaignDeliveryReelReadModel } from "@cco/contracts";
+import type {
+  CampaignReviewSummary,
+  CampaignDeliveryReelReadModel,
+  CampaignAnimaticReadModel
+} from "@cco/contracts";
 
 vi.mock("../../../api/client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ClientModule>();
   return {
     ...actual,
     getCampaignReviewSummary: vi.fn(),
-    getCampaignDeliveryReel: vi.fn()
+    getCampaignDeliveryReel: vi.fn(),
+    getCampaignAnimatic: vi.fn()
   };
 });
 
@@ -217,7 +224,12 @@ function findAllByTestId(node: ReactNode, testId: string): TestElement[] {
       if (element.props?.["data-testid"] === testId) {
         results.push(element);
       }
-      if ("type" in n && typeof n.type === "function" && n.type !== CampaignDeliveryReelPanel) {
+      if (
+        "type" in n &&
+        typeof n.type === "function" &&
+        n.type !== CampaignDeliveryReelPanel &&
+        n.type !== CampaignAnimaticPanel
+      ) {
         try {
           const rendered = (n.type as (props: unknown) => ReactNode)(n.props);
           traverse(rendered);
@@ -242,7 +254,8 @@ function collectText(node: ReactNode): string {
     if (
       "type" in node &&
       typeof node.type === "function" &&
-      node.type !== CampaignDeliveryReelPanel
+      node.type !== CampaignDeliveryReelPanel &&
+      node.type !== CampaignAnimaticPanel
     ) {
       try {
         const rendered = (node.type as (props: unknown) => ReactNode)(node.props);
@@ -268,6 +281,7 @@ describe("Campaign Review Page", () => {
       state: "not-started",
       updatedAt: "2026-08-25T12:00:00.000Z"
     });
+    vi.mocked(getCampaignAnimatic).mockRejectedValue(new Error("Not found"));
   });
 
   it("exports dynamic = 'force-dynamic'", () => {
@@ -430,6 +444,54 @@ describe("Campaign Review Page", () => {
 
     const sceneRows = findAllByTestId(jsx, "scene-row");
     expect(sceneRows).toHaveLength(1);
+  });
+
+  it("passes campaign animatic read model to summary view when available", async () => {
+    const summaryFixture: CampaignReviewSummary = {
+      campaignId: "c1111111-1111-4111-8111-111111111111",
+      campaignName: "Animatic Test Campaign",
+      status: "pending_director_review",
+      totalScenes: 1,
+      pendingReviewCount: 0,
+      approvedCount: 1,
+      completedCount: 0,
+      scenesByStatus: { approved: 1 },
+      scenes: [
+        {
+          sceneId: "s1111111-1111-4111-8111-111111111111",
+          specRevision: 1,
+          status: "approved"
+        }
+      ],
+      updatedAt: "2026-08-25T12:00:00.000Z"
+    };
+
+    const animaticFixture: CampaignAnimaticReadModel = {
+      campaignId: "c1111111-1111-4111-8111-111111111111",
+      campaignName: "Animatic Test Campaign",
+      readSnapshotId: "snapshot-123456",
+      totalDurationMs: 4000,
+      includedShotPlanDurationMs: 4000,
+      totalScenes: 1,
+      gapCount: 0,
+      approvedShotCount: 1,
+      draftShotCount: 0,
+      compiledAt: "2026-08-25T12:00:00.000Z",
+      nonProductionNotice: "Planning animatic — non-production media",
+      segments: []
+    };
+
+    vi.mocked(getCampaignReviewSummary).mockResolvedValue(summaryFixture);
+    vi.mocked(getCampaignAnimatic).mockResolvedValue(animaticFixture);
+
+    const jsx = (await CampaignPage({
+      params: Promise.resolve({ campaignId: "c1111111-1111-4111-8111-111111111111" })
+    })) as TestElement;
+
+    expect(getCampaignAnimatic).toHaveBeenCalledWith("c1111111-1111-4111-8111-111111111111");
+
+    const summaryView = jsx.props.children as TestElement;
+    expect(summaryView.props.animatic).toEqual(animaticFixture);
   });
 
   it("renders an explicit empty campaign state", async () => {

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
 import type {
   CampaignDeliveryReelQueries,
+  CampaignAnimaticQueries,
   ClientContextResolver,
   HashBytesPort,
   ImageInspectionPort,
@@ -22,6 +23,7 @@ import {
   OpenAiCandidateRankingClient,
   OpenAiPlanningModelClient,
   PostgresCampaignDeliveryReelQueries,
+  PostgresCampaignAnimaticQueries,
   PostgresDeliveryAssemblyJobQueue,
   PostgresJobQueue,
   PostgresReferenceAssetRepository,
@@ -92,6 +94,7 @@ export interface ControlApiBootstrapOptions {
   };
   readonly referenceAssetRepository?: ReferenceAssetRepository;
   readonly campaignDeliveryReelQueries?: CampaignDeliveryReelQueries;
+  readonly campaignAnimaticQueries?: CampaignAnimaticQueries;
   readonly objectStorage?: ObjectStoragePort;
   readonly hashBytes?: HashBytesPort;
   readonly imageValidator?: ImageInspectionPort;
@@ -262,6 +265,9 @@ export async function runControlApi(
       forcePathStyle: config.s3.forcePathStyle,
       defaultExpirySeconds: config.s3.defaultExpirySeconds
     });
+    const campaignAnimaticQueries =
+      options.campaignAnimaticQueries ??
+      new PostgresCampaignAnimaticQueries(pool, reviewMediaDelivery);
 
     const hashBytes = options.hashBytes ?? {
       hashBytes: async (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
@@ -412,6 +418,7 @@ export async function runControlApi(
         sceneReviewQueries,
         currentProductionAttemptQueries,
         campaignDeliveryReelQueries,
+        campaignAnimaticQueries,
         objectStorage,
         hashBytes,
         imageValidator,
