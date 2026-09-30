@@ -9,6 +9,8 @@ import type {
   SceneReviewCandidateGroup,
   CandidateReadModel
 } from "@cco/contracts";
+import { compileShotPlanAnimaticTimeline } from "@cco/contracts";
+import { ShotPlanAnimaticPlayer } from "./animatic/shot-plan-animatic-player.js";
 import type { ReviewCommandEvent, ReviewCommandState } from "./review-command-state";
 import {
   formatDurationMs,
@@ -181,6 +183,7 @@ export function ShotPlanPanel({
   const candidateGroups = candidatesByRevision ?? stateProp?.detail?.candidatesByRevision ?? [];
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
+  const [activeBeatByPlan, setActiveBeatByPlan] = useState<Record<string, number | null>>({});
 
   let router: { refresh: () => void } | null = null;
   try {
@@ -517,22 +520,18 @@ export function ShotPlanPanel({
                       </span>
                     </div>
 
-                    <div className="storyboard-viewfinder-matte">
-                      {plan.previs?.media.available && plan.previs.media.url ? (
-                        <div className="previs-media-container">
-                          <img
-                            src={plan.previs.media.url}
-                            alt={`Previs visualization for Variant #${plan.variantOrdinal}`}
-                            className="previs-image"
-                            data-testid="previs-preview-image"
-                          />
-                        </div>
-                      ) : (
-                        <div className="previs-unavailable" data-testid="previs-unavailable">
-                          <span>Previs visualization not rendered</span>
-                        </div>
-                      )}
-                    </div>
+                    <ShotPlanAnimaticPlayer
+                      timeline={compileShotPlanAnimaticTimeline(plan)}
+                      isCurrentRevision={
+                        plan.isCurrentRevision ?? plan.specRevision === currentSpecRevision
+                      }
+                      onActiveBeatChange={(beatIndex) => {
+                        setActiveBeatByPlan((prev) => ({
+                          ...prev,
+                          [plan.shotPlanId]: beatIndex
+                        }));
+                      }}
+                    />
 
                     {/* Persistent Visual Treatment Banner */}
                     <div
@@ -662,12 +661,19 @@ export function ShotPlanPanel({
                       <div className="storyboard-beats-sublist" data-testid="shot-plan-beats">
                         <h6 className="storyboard-subsection-title">Temporal Beats</h6>
                         <ol className="beats-list">
-                          {plan.beats.map((beat) => (
-                            <li key={beat.beatIndex}>
-                              [{beat.startMs}ms - {beat.endMs}ms] {beat.description} (Camera:{" "}
-                              {beat.cameraAction}, Subject: {beat.subjectAction})
-                            </li>
-                          ))}
+                          {plan.beats.map((beat) => {
+                            const isActive = activeBeatByPlan[plan.shotPlanId] === beat.beatIndex;
+                            return (
+                              <li
+                                key={beat.beatIndex}
+                                className={`storyboard-beat-item ${isActive ? "storyboard-beat-item-active" : ""}`}
+                                data-active-beat={isActive ? "true" : undefined}
+                              >
+                                [{beat.startMs}ms - {beat.endMs}ms] {beat.description} (Camera:{" "}
+                                {beat.cameraAction}, Subject: {beat.subjectAction})
+                              </li>
+                            );
+                          })}
                         </ol>
                       </div>
                     )}

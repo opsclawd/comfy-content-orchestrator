@@ -911,4 +911,44 @@ describe("ShotPlanPanel Component", () => {
       });
     });
   });
+
+  describe("Animatic Integration & Dual-Column Synchronization", () => {
+    it("renders animatic player with controls and watermarking in storyboard panel", () => {
+      const plan = createSampleShotPlan();
+      const html = renderToStaticMarkup(
+        <ShotPlanPanel shotPlans={[plan]} currentSpecRevision={2} />
+      );
+
+      expect(html).toContain('data-testid="shot-plan-animatic-player"');
+      expect(html).toContain('data-testid="animatic-play-toggle"');
+      expect(html).toContain('data-testid="animatic-restart-button"');
+      expect(html).toContain('data-testid="animatic-scrubber"');
+      expect(html).toContain('data-testid="animatic-time-display"');
+      expect(html).toContain('data-testid="animatic-non-production-watermark"');
+      expect(html).toContain("STORYBOARD ANIMATIC — NON-PRODUCTION");
+    });
+
+    it("dynamically synchronizes active beat highlight in right-column script breakdown when scrubbed", () => {
+      const plan = createSampleShotPlan();
+      render(<ShotPlanPanel shotPlans={[plan]} currentSpecRevision={2} />);
+
+      // Initially Beat 1 is active (at 0ms)
+      const beatsList = screen.getByTestId("shot-plan-beats");
+      const beatItems = beatsList.querySelectorAll(".storyboard-beat-item");
+      expect(beatItems).toHaveLength(2);
+
+      expect(beatItems[0]?.classList.contains("storyboard-beat-item-active")).toBe(true);
+      expect(beatItems[0]?.getAttribute("data-active-beat")).toBe("true");
+      expect(beatItems[1]?.classList.contains("storyboard-beat-item-active")).toBe(false);
+
+      // Scrub animatic player to 3000ms (Beat 2: [2000, 4000])
+      const scrubber = screen.getByTestId("animatic-scrubber");
+      fireEvent.change(scrubber, { target: { value: "3000" } });
+
+      // Beat 2 should now be highlighted with storyboard-beat-item-active
+      expect(beatItems[0]?.classList.contains("storyboard-beat-item-active")).toBe(false);
+      expect(beatItems[1]?.classList.contains("storyboard-beat-item-active")).toBe(true);
+      expect(beatItems[1]?.getAttribute("data-active-beat")).toBe("true");
+    });
+  });
 });
