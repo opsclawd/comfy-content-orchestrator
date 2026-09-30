@@ -10,7 +10,7 @@ import type {
   CandidateReadModel
 } from "@cco/contracts";
 import { compileShotPlanAnimaticTimeline } from "@cco/contracts";
-import { ShotPlanAnimaticPlayer } from "./animatic/shot-plan-animatic-player.js";
+import { ShotPlanAnimaticPlayer } from "./animatic/shot-plan-animatic-player";
 import type { ReviewCommandEvent, ReviewCommandState } from "./review-command-state";
 import {
   formatDurationMs,
