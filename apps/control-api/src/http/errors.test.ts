@@ -12,6 +12,7 @@ import {
   PlanningProviderExhaustedError,
   PlanningProviderNotConfiguredError,
   PlanningSafetyRefusalError,
+  ReferenceCanonicalizationError,
   SceneConfigurationCountMismatchError,
   SceneConfigurationValidationError,
   SceneCreationModeMismatchError,
@@ -26,6 +27,9 @@ import {
 } from "@cco/application";
 import {
   AlreadyAcceptedProductionAttemptError,
+  ArchivedReferenceBindingError,
+  ContradictoryReferencePayloadError,
+  CrossClientReferenceBindingError,
   ReferenceAssetNotFoundError,
   type SceneId
 } from "@cco/domain";
@@ -84,6 +88,50 @@ describe("formatReviewError", () => {
       body: {
         code: "NOT_FOUND",
         message: 'Reference asset "ref-123" was not found.'
+      }
+    });
+  });
+
+  it("maps ContradictoryReferencePayloadError to 400 VALIDATION_FAILURE", () => {
+    expect(
+      formatReviewError(new ContradictoryReferencePayloadError("Contradictory reference payload"))
+    ).toEqual({
+      statusCode: 400,
+      body: {
+        code: "VALIDATION_FAILURE",
+        message: "Contradictory reference payload"
+      }
+    });
+  });
+
+  it("maps ReferenceCanonicalizationError to 400 VALIDATION_FAILURE", () => {
+    expect(formatReviewError(new ReferenceCanonicalizationError("Exceeded 9 references"))).toEqual({
+      statusCode: 400,
+      body: {
+        code: "VALIDATION_FAILURE",
+        message: "Exceeded 9 references"
+      }
+    });
+  });
+
+  it("maps CrossClientReferenceBindingError to 403 FORBIDDEN", () => {
+    const err = new CrossClientReferenceBindingError("ref-1", "client-a", "client-b");
+    expect(formatReviewError(err)).toEqual({
+      statusCode: 403,
+      body: {
+        code: "FORBIDDEN",
+        message: err.message
+      }
+    });
+  });
+
+  it("maps ArchivedReferenceBindingError to 422 INVALID_DOMAIN_TRANSITION", () => {
+    const err = new ArchivedReferenceBindingError("ref-1");
+    expect(formatReviewError(err)).toEqual({
+      statusCode: 422,
+      body: {
+        code: "INVALID_DOMAIN_TRANSITION",
+        message: err.message
       }
     });
   });

@@ -1102,6 +1102,63 @@ describe("Scene domain contracts", () => {
       expect("loraConfigurationId" in snapshotWithoutLora.configuration).toBe(false);
     });
 
+    it("updateReferences with unchanged reference set returns references_unchanged and preserves revision and approval", () => {
+      const scene = createTestScene({
+        referenceIds: ["asset-a"],
+        referenceBindings: [
+          {
+            sceneId: "scene-1" as SceneId,
+            specRevision: 1,
+            referenceAssetId: "asset-a" as ReferenceAssetId,
+            role: "subject_identity",
+            weight: 0.9,
+            hints: null
+          }
+        ]
+      });
+      scene.beginCandidateGeneration();
+      scene.submitCandidatesForReview();
+      scene.selectCandidate("candidate-1" as CandidateId, 1, scene.id);
+      scene.approve(fixedApprovalInput);
+
+      expect(scene.status).toBe("approved");
+      expect(scene.specRevision).toBe(1);
+
+      // Re-submitting identical bindings returns references_unchanged
+      const transition = scene.updateReferences(undefined, [
+        {
+          referenceAssetId: "asset-a" as ReferenceAssetId,
+          role: "subject_identity",
+          weight: 0.9,
+          hints: null
+        }
+      ]);
+
+      expect(transition.reason).toBe("references_unchanged");
+      expect(transition.revision).toBe(1);
+      expect(transition.from).toBe("approved");
+      expect(transition.to).toBe("approved");
+      expect(scene.status).toBe("approved");
+      expect(scene.specRevision).toBe(1);
+      expect(scene.snapshot().approval).toBeDefined();
+
+      // Mutating role is a material change that invalidates approval and advances revision
+      const materialTransition = scene.updateReferences(undefined, [
+        {
+          referenceAssetId: "asset-a" as ReferenceAssetId,
+          role: "product",
+          weight: 0.9,
+          hints: null
+        }
+      ]);
+
+      expect(materialTransition.reason).toBe("configuration_changed");
+      expect(materialTransition.revision).toBe(2);
+      expect(scene.status).toBe("director_review");
+      expect(scene.specRevision).toBe(2);
+      expect(scene.snapshot().approval).toBeUndefined();
+    });
+
     it("keeps editable non-approved scenes in place while advancing revision", () => {
       type EditableSetup = {
         readonly state: SceneStatus;

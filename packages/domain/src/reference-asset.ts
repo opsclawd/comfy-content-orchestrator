@@ -47,7 +47,7 @@ export interface SceneReferenceBinding {
 export interface SceneReferenceBindingInput {
   readonly sceneId?: SceneId | undefined;
   readonly specRevision?: number | undefined;
-  readonly referenceAssetId: ReferenceAssetId;
+  readonly referenceAssetId: ReferenceAssetId | string;
   readonly role: ReferenceRole;
   readonly weight?: number | null | undefined;
   readonly hints?: Record<string, unknown> | null | undefined;

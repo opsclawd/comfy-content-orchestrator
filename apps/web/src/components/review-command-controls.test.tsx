@@ -333,7 +333,7 @@ describe("ReviewCommandControls Component", () => {
         }}
       />
     );
-    expect(refDraftHtml).toContain('data-testid="draft-references-input"');
+    expect(refDraftHtml).toContain('data-testid="scene-reference-overrides-editor"');
 
     // engine_change
     const engineDraftHtml = renderToStaticMarkup(
@@ -551,5 +551,38 @@ describe("ReviewCommandControls Component", () => {
 
     expect(html).toContain('data-testid="dialog-shot-plan-identity"');
     expect(html).toContain("99999999-9999-4999-8999-999999999999");
+  });
+
+  it("renders downstream invalidation warning and references summary in confirmation dialog for reference_change", () => {
+    const detail = createSampleDetail({ specRevision: 2 });
+    const confirmingState: ReviewCommandState = {
+      phase: "confirming",
+      detail,
+      stagedAction: {
+        action: "reference_change",
+        payload: {
+          referenceIds: ["11111111-1111-4111-8111-111111111111"],
+          referenceBindings: [
+            {
+              referenceAssetId: "11111111-1111-4111-8111-111111111111",
+              role: "subject_identity",
+              displayName: "Elena Portrait",
+              libraryRole: "subject_identity"
+            }
+          ]
+        },
+        displayLabel: "Change References"
+      }
+    };
+
+    const html = renderToStaticMarkup(
+      <ReviewCommandControls detail={detail} state={confirmingState} />
+    );
+
+    expect(html).toContain('data-testid="dialog-invalidation-warning"');
+    expect(html).toContain("Warning: Downstream Invalidation");
+    expect(html).toContain('data-testid="dialog-references-summary"');
+    expect(html).toContain("Elena Portrait");
+    expect(html).toContain("subject_identity");
   });
 });

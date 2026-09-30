@@ -993,6 +993,69 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
     expect((loraRes.json() as ReviewCommandResponse).specRevision).toBe(6);
   });
 
+  it("reference_change with typed referenceBindings updates bindings and increments revision", async () => {
+    const scene = createReviewReadyScene();
+    const uow = new InMemorySceneUnitOfWork([scene]);
+    const app = createControlApiApp({ uow }, defaultTestOptions);
+
+    const refAsset1 = "11111111-1111-4111-8111-111111111111";
+    const refAsset2 = "22222222-2222-4222-8222-222222222222";
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${sceneUuid}/review-command`,
+      payload: {
+        actionId: "77777777-7777-4777-8777-777777777777",
+        sceneId: sceneUuid,
+        expectedSpecRevision: 1,
+        action: "reference_change",
+        payload: {
+          referenceBindings: [
+            { referenceAssetId: refAsset1, role: "subject_identity" },
+            { referenceAssetId: refAsset2, role: "product" }
+          ]
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as ReviewCommandResponse;
+    expect(body.specRevision).toBe(2);
+    expect(body.isIdempotentReplay).toBe(false);
+  });
+
+  it("reference_change rejects contradictory referenceIds and referenceBindings with 400", async () => {
+    const scene = createReviewReadyScene();
+    const uow = new InMemorySceneUnitOfWork([scene]);
+    const app = createControlApiApp({ uow }, defaultTestOptions);
+
+    const refAsset1 = "11111111-1111-4111-8111-111111111111";
+    const refAsset2 = "22222222-2222-4222-8222-222222222222";
+    const refAsset3 = "33333333-3333-4333-8333-333333333333";
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${sceneUuid}/review-command`,
+      payload: {
+        actionId: "88888888-8888-4888-8888-888888888888",
+        sceneId: sceneUuid,
+        expectedSpecRevision: 1,
+        action: "reference_change",
+        payload: {
+          referenceIds: [refAsset1, refAsset2],
+          referenceBindings: [
+            { referenceAssetId: refAsset1, role: "subject_identity" },
+            { referenceAssetId: refAsset3, role: "product" }
+          ]
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(400);
+    const body = response.json() as { code: string; message: string };
+    expect(body.code).toBe("VALIDATION_FAILURE");
+  });
+
   it("cancel transitions scene to cancelled", async () => {
     const scene = createReviewReadyScene();
     const uow = new InMemorySceneUnitOfWork([scene]);
