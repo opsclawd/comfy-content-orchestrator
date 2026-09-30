@@ -21,6 +21,8 @@ import {
   type CurrentProductionAttemptReadModel,
   CampaignDeliveryReelReadModelSchema,
   type CampaignDeliveryReelReadModel,
+  CampaignAnimaticReadModelSchema,
+  type CampaignAnimaticReadModel,
   CampaignResponseSchema,
   type CampaignResponse,
   ReferenceAssetResponseSchema,
@@ -46,6 +48,7 @@ import { resolveControlApiBaseUrl } from "./runtime-config";
 export type {
   CampaignDeliveryReelReadModel,
   CampaignDeliveryReelState,
+  CampaignAnimaticReadModel,
   CampaignResponse,
   CampaignReviewSummary,
   HealthResponse,
@@ -88,6 +91,7 @@ export {
   CurrentProductionAttemptReadModelSchema,
   CampaignDeliveryReelReadModelSchema,
   CampaignDeliveryReelStateSchema,
+  CampaignAnimaticReadModelSchema,
   CampaignDeliveryMediaReadModelSchema,
   ReferenceAssetResponseSchema,
   ReferenceAssetListResponseSchema,
@@ -204,6 +208,7 @@ export interface ApiClient {
     sceneId: string
   ): Promise<CurrentProductionAttemptReadModel | undefined>;
   getCampaignDeliveryReel(campaignId: string): Promise<CampaignDeliveryReelReadModel>;
+  getCampaignAnimatic(campaignId: string): Promise<CampaignAnimaticReadModel>;
   submitReviewCommand(
     sceneId: string,
     command: ReviewCommand,
@@ -352,6 +357,15 @@ export function createApiClient(config?: ApiClientConfig): ApiClient {
       return requestJson(
         `${baseUrl}/api/campaigns/${encoded}/delivery-reel`,
         CampaignDeliveryReelReadModelSchema,
+        fetchFn
+      );
+    },
+
+    async getCampaignAnimatic(campaignId: string): Promise<CampaignAnimaticReadModel> {
+      const encoded = encodeURIComponent(campaignId);
+      return requestJson(
+        `${baseUrl}/api/campaigns/${encoded}/animatic`,
+        CampaignAnimaticReadModelSchema,
         fetchFn
       );
     },
@@ -721,6 +735,17 @@ export async function getCampaignDeliveryReel(
   const fetchImpl = typeof baseUrlOrFetch === "function" ? baseUrlOrFetch : fetchFn;
   const client = createApiClient({ baseUrl, fetchFn: fetchImpl });
   return client.getCampaignDeliveryReel(campaignId);
+}
+
+export async function getCampaignAnimatic(
+  campaignId: string,
+  baseUrlOrFetch?: string | typeof fetch,
+  fetchFn?: typeof fetch
+): Promise<CampaignAnimaticReadModel> {
+  const baseUrl = typeof baseUrlOrFetch === "string" ? baseUrlOrFetch : undefined;
+  const fetchImpl = typeof baseUrlOrFetch === "function" ? baseUrlOrFetch : fetchFn;
+  const client = createApiClient({ baseUrl, fetchFn: fetchImpl });
+  return client.getCampaignAnimatic(campaignId);
 }
 
 export async function submitReviewCommand(

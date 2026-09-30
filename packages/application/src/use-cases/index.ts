@@ -70,3 +70,4 @@ export * from "./shot-plan-prompt.js";
 export * from "./shot-plan-response-parser.js";
 export * from "./plan-shot-plans.js";
 export * from "./create-shot-plan-variation.js";
+export * from "./resolve-campaign-animatic.js";

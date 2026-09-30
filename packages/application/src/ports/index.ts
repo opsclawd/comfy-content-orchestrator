@@ -41,3 +41,4 @@ export * from "./campaign-delivery-reel-queries.js";
 export * from "./client-context-resolver.js";
 export * from "./image-inspection-port.js";
 export * from "./shot-plan-repository.js";
+export * from "./campaign-animatic-queries.js";

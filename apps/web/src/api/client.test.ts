@@ -6,6 +6,7 @@ import {
   getSceneReviewDetail,
   getCurrentProductionAttempt,
   getCampaignDeliveryReel,
+  getCampaignAnimatic,
   submitReviewCommand,
   planCampaignStoryboard,
   listClientReferences,
@@ -36,7 +37,8 @@ import type {
   ReviewCommandResponse,
   ReviewErrorResponse,
   SceneReviewDetailReadModel,
-  CampaignDeliveryReelReadModel
+  CampaignDeliveryReelReadModel,
+  CampaignAnimaticReadModel
 } from "@cco/contracts";
 
 const validCampaignReviewSummary: CampaignReviewSummary = {
@@ -1979,6 +1981,67 @@ describe("Typed Control API Client", () => {
           body: JSON.stringify({ libraryRole: "product" })
         })
       );
+    });
+  });
+
+  describe("getCampaignAnimatic", () => {
+    const campaignId = "01950c46-9e90-7d3d-82d2-8f1d3c000001";
+    const sampleAnimatic: CampaignAnimaticReadModel = {
+      campaignId,
+      campaignName: "Test Campaign",
+      readSnapshotId: "cas-mock-fingerprint-12345678",
+      totalDurationMs: 4000,
+      includedShotPlanDurationMs: 4000,
+      totalScenes: 1,
+      gapCount: 0,
+      approvedShotCount: 1,
+      draftShotCount: 0,
+      segments: [],
+      nonProductionNotice: "CAMPAIGN STORYBOARD ANIMATIC — NON-PRODUCTION PLANNING PREVIEW",
+      compiledAt: "2026-09-27T12:00:00.000Z"
+    };
+
+    it("fetches and parses CampaignAnimaticReadModel from GET /api/campaigns/:campaignId/animatic", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => sampleAnimatic
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      const result = await client.getCampaignAnimatic(campaignId);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        `http://example.com/api/campaigns/${campaignId}/animatic`,
+        expect.objectContaining({ method: "GET" })
+      );
+      expect(result).toEqual(sampleAnimatic);
+
+      // Also verify standalone convenience function
+      const standaloneResult = await getCampaignAnimatic(campaignId, mockFetch);
+      expect(standaloneResult).toEqual(sampleAnimatic);
+    });
+
+    it("throws ApiClientError when request returns 404", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        statusText: "Not Found"
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      await expect(client.getCampaignAnimatic(campaignId)).rejects.toThrow(ApiClientError);
+    });
+
+    it("throws ApiValidationError when response schema does not match", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ invalid: "payload" })
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      await expect(client.getCampaignAnimatic(campaignId)).rejects.toThrow(ApiValidationError);
     });
   });
 });
