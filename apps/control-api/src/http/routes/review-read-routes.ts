@@ -269,9 +269,33 @@ export const reviewReadRoutes: FastifyPluginAsync<ReviewReadRoutesOptions> = asy
         };
       });
 
+      const sceneBoundReferences = detail.referenceBindingsWithStorage?.map((binding) => {
+        const media = referenceMediaMap.get(binding.referenceAssetId);
+        return {
+          referenceAssetId: binding.referenceAssetId,
+          sceneId: binding.sceneId,
+          specRevision: binding.specRevision,
+          role: binding.role,
+          libraryRole: binding.libraryRole ?? null,
+          bindingOrder: binding.bindingOrder,
+          weight: binding.weight ?? null,
+          hints: binding.hints ?? null,
+          displayName: binding.displayName,
+          description: binding.description ?? null,
+          width: binding.width,
+          height: binding.height,
+          mimeType: binding.mimeType,
+          contentHashSha256: binding.contentHashSha256,
+          previewUrl: media?.url ?? null,
+          previewAvailability: (media?.available ? "available" : "unavailable") as
+            "available" | "unavailable"
+        };
+      });
+
       const readModel: SceneReviewDetailReadModel = {
         sceneId: detail.sceneId,
         campaignId: detail.campaignId,
+        ...(detail.clientId ? { clientId: detail.clientId } : {}),
         status: detail.status,
         specRevision: detail.specRevision,
         configuration: {
@@ -307,6 +331,7 @@ export const reviewReadRoutes: FastifyPluginAsync<ReviewReadRoutesOptions> = asy
         ...(detail.approval ? { approval: detail.approval } : {}),
         candidatesByRevision,
         ...(shotPlans !== undefined ? { shotPlans } : {}),
+        ...(sceneBoundReferences !== undefined ? { boundReferences: sceneBoundReferences } : {}),
         allowedActions: [...detail.allowedActions]
       };
 

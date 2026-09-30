@@ -45,6 +45,7 @@ interface SceneReferenceJoinedRow {
 interface StoryboardSceneRow {
   scene_id: string;
   campaign_id: string;
+  client_id?: string;
   duration_seconds: string | number;
   visual_description: string;
   engine_assigned: string;
@@ -251,6 +252,7 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
       SELECT
         s.scene_id,
         s.campaign_id,
+        c.client_id,
         s.duration_seconds,
         s.visual_description,
         s.engine_assigned,
@@ -274,6 +276,7 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
           '{}'
         ) AS reference_asset_ids
       FROM storyboard_scenes s
+      LEFT JOIN campaigns c ON c.campaign_id = s.campaign_id
       WHERE s.scene_id = $1
       `,
       [sceneId]
@@ -478,6 +481,7 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
     return {
       sceneId: sceneRow.scene_id as SceneId,
       campaignId: sceneRow.campaign_id as CampaignId,
+      ...(sceneRow.client_id ? { clientId: sceneRow.client_id } : {}),
       status,
       specRevision: Number(sceneRow.spec_revision),
       configuration,

@@ -41,6 +41,7 @@ export interface SceneReviewCandidateGroup {
 export interface SceneReviewDetail {
   readonly sceneId: SceneId;
   readonly campaignId: CampaignId;
+  readonly clientId?: string;
   readonly status: SceneStatus;
   readonly specRevision: number;
   readonly configuration: SceneConfiguration;

@@ -77,3 +77,11 @@ export function assertReferenceAssetSelectable(
     throw new ArchivedReferenceBindingError(asset.id);
   }
 }
+
+export class ContradictoryReferencePayloadError extends Error {
+  override readonly name = "ContradictoryReferencePayloadError";
+
+  constructor(message = "Contradictory referenceIds and referenceBindings provided.") {
+    super(message);
+  }
+}

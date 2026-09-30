@@ -14,6 +14,7 @@ export interface ReferenceLibraryDrawerProps {
   readonly onClose: () => void;
   readonly selectedIds?: readonly string[] | undefined;
   readonly onToggleSelect?: ((id: string) => void) | undefined;
+  readonly onSelectAsset?: ((asset: ReferenceAssetResponse) => void) | undefined;
   readonly onReferenceArchived?: ((archivedId: string) => void) | undefined;
   readonly onReferenceAdded?: ((newReference: ReferenceAssetResponse) => void) | undefined;
   readonly onReferenceUpdated?: ((updatedReference: ReferenceAssetResponse) => void) | undefined;
@@ -25,6 +26,7 @@ export function ReferenceLibraryDrawer({
   onClose,
   selectedIds = [],
   onToggleSelect,
+  onSelectAsset,
   onReferenceArchived,
   onReferenceAdded,
   onReferenceUpdated
@@ -124,16 +126,21 @@ export function ReferenceLibraryDrawer({
 
   const handleToggleSelect = useCallback(
     (id: string) => {
-      if (!onToggleSelect) return;
+      if (!onToggleSelect && !onSelectAsset) return;
       // Refuse toggle if the id is not an active reference of the current client
       const activeRef = references.find(
         (r) => r.id === id && r.clientId === clientId && !r.archivedAt
       );
       if (activeRef) {
-        onToggleSelect(id);
+        if (onSelectAsset) {
+          onSelectAsset(activeRef);
+        }
+        if (onToggleSelect) {
+          onToggleSelect(id);
+        }
       }
     },
-    [onToggleSelect, references, clientId]
+    [onSelectAsset, onToggleSelect, references, clientId]
   );
 
   const handleRetry = useCallback(() => {
@@ -284,10 +291,10 @@ export function ReferenceLibraryDrawer({
           <ReferenceGallery
             references={references}
             selectedIds={selectedIds}
-            onToggleSelect={onToggleSelect ? handleToggleSelect : undefined}
+            onToggleSelect={onToggleSelect || onSelectAsset ? handleToggleSelect : undefined}
             onArchive={(ref) => setArchiveTarget(ref)}
             onEditRole={(ref) => setRoleEditTarget(ref)}
-            selectable={Boolean(onToggleSelect)}
+            selectable={Boolean(onToggleSelect || onSelectAsset)}
             isLoading={isLoading}
             error={error}
             onRetry={handleRetry}

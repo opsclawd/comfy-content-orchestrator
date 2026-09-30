@@ -126,7 +126,12 @@ export const reviewCommandRoutes: FastifyPluginAsync<ReviewCommandRoutesOptions>
             ...(body.directorNotes !== undefined ? { directorNotes: body.directorNotes } : {}),
             expectedSpecRevision: body.expectedSpecRevision,
             requestHashSha256,
-            referenceIds: body.payload.referenceIds
+            ...(body.payload.referenceIds !== undefined
+              ? { referenceIds: body.payload.referenceIds }
+              : {}),
+            ...(body.payload.referenceBindings !== undefined
+              ? { referenceBindings: body.payload.referenceBindings }
+              : {})
           });
           break;
 

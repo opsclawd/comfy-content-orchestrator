@@ -18,6 +18,7 @@ import {
   PlanningProviderExhaustedError,
   PlanningProviderNotConfiguredError,
   PlanningSafetyRefusalError,
+  ReferenceCanonicalizationError,
   SceneConfigurationCountMismatchError,
   SceneConfigurationValidationError,
   SceneCreationModeMismatchError,
@@ -36,6 +37,9 @@ import {
 import type { ReviewErrorResponse } from "@cco/contracts";
 import {
   AlreadyAcceptedProductionAttemptError,
+  ArchivedReferenceBindingError,
+  ContradictoryReferencePayloadError,
+  CrossClientReferenceBindingError,
   InvalidCandidateError,
   InvalidMutationError,
   InvalidShotPlanError,
@@ -140,7 +144,9 @@ export function formatReviewError(error: unknown): {
     error instanceof InvalidSceneCountCombinationError ||
     error instanceof InvalidSceneCountError ||
     error instanceof InvalidTargetDurationError ||
-    error instanceof ImageValidationError
+    error instanceof ImageValidationError ||
+    error instanceof ContradictoryReferencePayloadError ||
+    error instanceof ReferenceCanonicalizationError
   ) {
     return {
       statusCode: 400,
@@ -191,7 +197,7 @@ export function formatReviewError(error: unknown): {
     };
   }
 
-  if (error instanceof ClientForbiddenError) {
+  if (error instanceof ClientForbiddenError || error instanceof CrossClientReferenceBindingError) {
     return {
       statusCode: 403,
       body: {
@@ -323,7 +329,8 @@ export function formatReviewError(error: unknown): {
     error instanceof InvalidCandidateError ||
     error instanceof InvalidShotPlanError ||
     error instanceof TerminalStateError ||
-    error instanceof AlreadyAcceptedProductionAttemptError
+    error instanceof AlreadyAcceptedProductionAttemptError ||
+    error instanceof ArchivedReferenceBindingError
   ) {
     return {
       statusCode: 422,
