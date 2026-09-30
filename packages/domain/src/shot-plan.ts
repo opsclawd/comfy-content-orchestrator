@@ -126,6 +126,17 @@ export interface ShotPlanPrevisAssociation {
   readonly reviewNotes?: string | null;
 }
 
+export interface ShotPlanDerivationProvenance {
+  readonly sourceShotPlanId: ShotPlanId;
+  readonly sourceVariantOrdinal: number;
+  readonly directorGuidance: string;
+  readonly machineModel?: string | null;
+  readonly provider?: string | null;
+  readonly requestedAt: string;
+  readonly idempotencyKey?: string | null;
+  readonly requestHashSha256?: string | null;
+}
+
 export interface ShotPlanSnapshot {
   readonly id: ShotPlanId;
   readonly sceneId: SceneId;
@@ -154,6 +165,10 @@ export interface ShotPlanSnapshot {
   readonly dialogue?: ShotPlanDialogueIntent | null;
   readonly continuity: ShotPlanContinuityConstraints;
   readonly previs?: ShotPlanPrevisAssociation | null;
+  readonly derivedFromShotPlanId?: ShotPlanId | null;
+  readonly derivation?: ShotPlanDerivationProvenance | null;
+  readonly idempotencyKey?: string | null;
+  readonly requestHashSha256?: string | null;
   readonly machineModel?: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -187,6 +202,10 @@ export interface ShotPlanCreateInput {
   readonly dialogue?: ShotPlanDialogueIntent | null;
   readonly continuity?: ShotPlanContinuityConstraints;
   readonly previs?: ShotPlanPrevisAssociation | null;
+  readonly derivedFromShotPlanId?: ShotPlanId | null;
+  readonly derivation?: ShotPlanDerivationProvenance | null;
+  readonly idempotencyKey?: string | null;
+  readonly requestHashSha256?: string | null;
   readonly machineModel?: string | null;
   readonly createdAt?: string;
   readonly updatedAt?: string;
@@ -268,6 +287,10 @@ export class ShotPlan {
   readonly #dialogue?: ShotPlanDialogueIntent | null;
   readonly #continuity: ShotPlanContinuityConstraints;
   #previs?: ShotPlanPrevisAssociation | null;
+  readonly #derivedFromShotPlanId?: ShotPlanId | null;
+  readonly #derivation?: ShotPlanDerivationProvenance | null;
+  readonly #idempotencyKey?: string | null;
+  readonly #requestHashSha256?: string | null;
   readonly #machineModel?: string | null;
   readonly #createdAt: string;
   #updatedAt: string;
@@ -300,6 +323,10 @@ export class ShotPlan {
     this.#dialogue = input.dialogue ? Object.freeze({ ...input.dialogue }) : null;
     this.#continuity = Object.freeze({ ...input.continuity });
     this.#previs = input.previs ? Object.freeze({ ...input.previs }) : null;
+    this.#derivedFromShotPlanId = input.derivedFromShotPlanId ?? null;
+    this.#derivation = input.derivation ? Object.freeze({ ...input.derivation }) : null;
+    this.#idempotencyKey = input.idempotencyKey ?? null;
+    this.#requestHashSha256 = input.requestHashSha256 ?? null;
     this.#machineModel = input.machineModel ?? null;
     this.#createdAt = input.createdAt;
     this.#updatedAt = input.updatedAt;
@@ -361,6 +388,10 @@ export class ShotPlan {
       dialogue: input.dialogue ?? null,
       continuity,
       previs: input.previs ?? null,
+      derivedFromShotPlanId: input.derivedFromShotPlanId ?? null,
+      derivation: input.derivation ?? null,
+      idempotencyKey: input.idempotencyKey ?? null,
+      requestHashSha256: input.requestHashSha256 ?? null,
       machineModel: input.machineModel ?? null,
       createdAt: input.createdAt ?? now,
       updatedAt: input.updatedAt ?? now
@@ -479,6 +510,22 @@ export class ShotPlan {
     return this.#previs;
   }
 
+  get derivedFromShotPlanId(): ShotPlanId | null | undefined {
+    return this.#derivedFromShotPlanId;
+  }
+
+  get derivation(): ShotPlanDerivationProvenance | null | undefined {
+    return this.#derivation;
+  }
+
+  get idempotencyKey(): string | null | undefined {
+    return this.#idempotencyKey;
+  }
+
+  get requestHashSha256(): string | null | undefined {
+    return this.#requestHashSha256;
+  }
+
   get machineModel(): string | null | undefined {
     return this.#machineModel;
   }
@@ -549,6 +596,14 @@ export class ShotPlan {
       ...(this.#dialogue !== undefined ? { dialogue: this.#dialogue } : {}),
       continuity: this.#continuity,
       ...(this.#previs !== undefined ? { previs: this.#previs } : {}),
+      ...(this.#derivedFromShotPlanId !== undefined
+        ? { derivedFromShotPlanId: this.#derivedFromShotPlanId }
+        : {}),
+      ...(this.#derivation !== undefined ? { derivation: this.#derivation } : {}),
+      ...(this.#idempotencyKey !== undefined ? { idempotencyKey: this.#idempotencyKey } : {}),
+      ...(this.#requestHashSha256 !== undefined
+        ? { requestHashSha256: this.#requestHashSha256 }
+        : {}),
       ...(this.#machineModel !== undefined ? { machineModel: this.#machineModel } : {}),
       createdAt: this.#createdAt,
       updatedAt: this.#updatedAt

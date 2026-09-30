@@ -23,7 +23,13 @@ import {
   StoryboardMaterializationConflictError,
   StoryboardPartiallyMaterializedError,
   TransactionalJobEnqueuerUnavailableError,
-  UnsupportedProductionDurationError
+  UnsupportedProductionDurationError,
+  CrossSceneSourceShotPlanError,
+  InvalidSceneStateForVariationError,
+  ShotPlanVariationIdempotencyConflictError,
+  SourceShotPlanNotFoundError,
+  StaleSourceShotPlanRevisionError,
+  SupersededSourceShotPlanError
 } from "@cco/application";
 import {
   AlreadyAcceptedProductionAttemptError,
@@ -233,6 +239,106 @@ describe("formatReviewError", () => {
         details: { actionId }
       }
     });
+  });
+
+  it("maps SourceShotPlanNotFoundError to 404 NOT_FOUND", () => {
+    expect(
+      formatReviewError(new SourceShotPlanNotFoundError("01928374-abcd-7000-8000-000000000010"))
+    ).toEqual({
+      statusCode: 404,
+      body: {
+        code: "NOT_FOUND",
+        message: expect.any(String)
+      }
+    });
+  });
+
+  it("maps CrossSceneSourceShotPlanError to 400 VALIDATION_FAILURE", () => {
+    expect(
+      formatReviewError(
+        new CrossSceneSourceShotPlanError(
+          "01928374-abcd-7000-8000-000000000001",
+          "01928374-abcd-7000-8000-000000000010",
+          "01928374-abcd-7000-8000-000000000099"
+        )
+      )
+    ).toEqual({
+      statusCode: 400,
+      body: {
+        code: "VALIDATION_FAILURE",
+        message: expect.any(String)
+      }
+    });
+  });
+
+  it("maps StaleSourceShotPlanRevisionError to 409 STALE_REVISION_CONFLICT with details", () => {
+    expect(
+      formatReviewError(
+        new StaleSourceShotPlanRevisionError("01928374-abcd-7000-8000-000000000010", 1, 2)
+      )
+    ).toEqual({
+      statusCode: 409,
+      body: {
+        code: "STALE_REVISION_CONFLICT",
+        message: expect.any(String),
+        details: {
+          sourceShotPlanId: "01928374-abcd-7000-8000-000000000010",
+          sourceRevision: 1,
+          currentSceneRevision: 2
+        }
+      }
+    });
+  });
+
+  it("maps SupersededSourceShotPlanError to 409 SUPERSEDED_SOURCE_SHOT_PLAN with details", () => {
+    expect(
+      formatReviewError(
+        new SupersededSourceShotPlanError("01928374-abcd-7000-8000-000000000010", "superseded")
+      )
+    ).toEqual({
+      statusCode: 409,
+      body: {
+        code: "SUPERSEDED_SOURCE_SHOT_PLAN",
+        message: expect.any(String),
+        details: {
+          sourceShotPlanId: "01928374-abcd-7000-8000-000000000010",
+          status: "superseded"
+        }
+      }
+    });
+  });
+
+  it("maps InvalidSceneStateForVariationError to 409 INVALID_SCENE_STATE with details", () => {
+    expect(
+      formatReviewError(
+        new InvalidSceneStateForVariationError("01928374-abcd-7000-8000-000000000001", "completed")
+      )
+    ).toEqual({
+      statusCode: 409,
+      body: {
+        code: "INVALID_SCENE_STATE",
+        message: expect.any(String),
+        details: {
+          sceneId: "01928374-abcd-7000-8000-000000000001",
+          currentStatus: "completed"
+        }
+      }
+    });
+  });
+
+  it("maps ShotPlanVariationIdempotencyConflictError to 409 IDEMPOTENCY_CONFLICT with details", () => {
+    expect(formatReviewError(new ShotPlanVariationIdempotencyConflictError("var-key-123"))).toEqual(
+      {
+        statusCode: 409,
+        body: {
+          code: "IDEMPOTENCY_CONFLICT",
+          message: expect.any(String),
+          details: {
+            idempotencyKey: "var-key-123"
+          }
+        }
+      }
+    );
   });
 
   it("maps UnsupportedProductionDurationError to 400 UNSUPPORTED_PRODUCTION_DURATION with details", () => {

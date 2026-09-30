@@ -83,6 +83,7 @@ interface ShotPlanJoinedRow {
   storage_bucket: string | null;
   storage_object_key: string | null;
   content_hash_sha256: string | null;
+  derived_from_shot_plan_id?: string | null;
 }
 
 interface StoryboardCandidateRow {
@@ -180,6 +181,11 @@ function mapRowToShotPlanReviewItem(
       frameAnchorTarget: "none"
     },
     previs,
+    derivedFromShotPlanId:
+      row.derived_from_shot_plan_id ??
+      (structured.derivedFromShotPlanId as string | null | undefined) ??
+      null,
+    derivation: (structured.derivation as ShotPlanReviewItem["derivation"]) ?? null,
     boundReferences: isCurrent ? [...currentBoundReferences] : [],
     createdAt:
       row.created_at instanceof Date
@@ -325,6 +331,7 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
         sp.structured_plan,
         sp.created_at,
         sp.updated_at,
+        sp.derived_from_shot_plan_id,
         sc.storage_bucket,
         sc.storage_object_key,
         sc.content_hash_sha256
