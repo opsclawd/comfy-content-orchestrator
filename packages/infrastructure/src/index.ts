@@ -30,6 +30,7 @@ export { PostgresUnitOfWork } from "./postgres/uow/postgres-unit-of-work.js";
 export { PostgresSceneReviewQueries } from "./postgres/queries/postgres-scene-review-queries.js";
 export { PostgresCurrentProductionAttemptQueries } from "./postgres/queries/postgres-current-production-attempt-queries.js";
 export { PostgresCampaignDeliveryReelQueries } from "./postgres/queries/postgres-campaign-delivery-reel-queries.js";
+export { PostgresCampaignAnimaticQueries } from "./postgres/queries/postgres-campaign-animatic-queries.js";
 
 export {
   PostgresJobQueue,

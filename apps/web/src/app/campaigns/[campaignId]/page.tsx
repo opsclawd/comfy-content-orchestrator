@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import {
   ApiClientError,
+  getCampaignAnimatic,
   getCampaignDeliveryReel,
   getCampaignReviewSummary
 } from "../../../api/client";
@@ -22,6 +23,11 @@ export default async function CampaignPage({ params }: CampaignPageProps) {
     return undefined;
   });
 
+  const animaticPromise = getCampaignAnimatic(campaignId).catch((err: unknown) => {
+    console.error(`Failed to fetch animatic for campaign ${campaignId}:`, err);
+    return undefined;
+  });
+
   let summary;
   try {
     summary = await getCampaignReviewSummary(campaignId);
@@ -32,11 +38,15 @@ export default async function CampaignPage({ params }: CampaignPageProps) {
     throw err;
   }
 
-  const deliveryReel = await deliveryReelPromise;
+  const [deliveryReel, animatic] = await Promise.all([deliveryReelPromise, animaticPromise]);
 
   return (
     <div className="campaign-page-container">
-      <CampaignReviewSummaryView summary={summary} deliveryReel={deliveryReel} />
+      <CampaignReviewSummaryView
+        summary={summary}
+        deliveryReel={deliveryReel}
+        animatic={animatic}
+      />
     </div>
   );
 }
