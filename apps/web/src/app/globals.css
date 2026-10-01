@@ -2154,13 +2154,14 @@ a:hover {
 
 .shot-plan-card-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.75rem;
   margin-top: auto;
   padding-top: 0.5rem;
 }
 
 .shot-plan-action-btn {
-  flex: 1;
+  flex: 1 1 140px;
   padding: 0.5rem 0.75rem;
   font-size: 0.85rem;
   font-weight: 600;
@@ -2168,6 +2169,11 @@ a:hover {
   cursor: pointer;
   transition: all 0.15s ease;
   border: 1px solid transparent;
+  text-align: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
 }
 
 .select-plan-btn {
@@ -2188,6 +2194,18 @@ a:hover {
 
 .approve-plan-btn:hover:not(:disabled) {
   background-color: #16a34a;
+}
+
+.compare-plan-btn {
+  background-color: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: #38bdf8;
+}
+
+.compare-plan-btn:hover:not(:disabled) {
+  background-color: rgba(56, 189, 248, 0.22);
+  border-color: #38bdf8;
+  color: #7dd3fc;
 }
 
 .shot-plan-action-btn:disabled {
@@ -2735,10 +2753,35 @@ a:hover {
   color: var(--text-primary, #f8fafc);
 }
 
+.shot-plan-comparison-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
 .shot-plan-comparison-modal-header h3 {
   font-size: 1.25rem;
   font-weight: 700;
-  margin-bottom: 0.75rem;
+  margin: 0;
+}
+
+.shot-plan-comparison-header-close-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary, #94a3b8);
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--radius-sm, 4px);
+  transition: all 0.15s ease;
+}
+
+.shot-plan-comparison-header-close-btn:hover {
+  color: var(--text-primary, #f8fafc);
+  background-color: rgba(255, 255, 255, 0.08);
 }
 
 .shot-plan-comparison-source-picker {
@@ -2859,6 +2902,28 @@ a:hover {
   display: flex;
   justify-content: flex-end;
   margin-top: 1.25rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-subtle, #334155);
+}
+
+.shot-plan-comparison-modal-actions .action-button,
+.shot-plan-comparison-modal-actions .close-comparison-button {
+  background-color: var(--bg-surface, #1e293b);
+  border: 1px solid var(--border-prominent, #334155);
+  color: var(--text-primary, #f8fafc);
+  border-radius: var(--radius-sm, 4px);
+  padding: 0.5rem 1.25rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.shot-plan-comparison-modal-actions .action-button:hover,
+.shot-plan-comparison-modal-actions .close-comparison-button:hover {
+  background-color: var(--bg-surface-elevated, #334155);
+  border-color: #38bdf8;
+  color: #38bdf8;
 }
 
 /* ============================================================================
@@ -3459,4 +3524,48 @@ a:hover {
 
 .animatic-boundary-segment.seg-gap {
   background-color: #ef4444;
+}
+
+/* ============================================================================
+   Mobile Responsive Adjustments for Review Hub (#371)
+   ============================================================================ */
+
+@media (max-width: 640px) {
+  .shot-plan-card-actions {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .shot-plan-action-btn {
+    width: 100%;
+    flex: none;
+    min-height: 42px;
+  }
+
+  .shot-plan-comparison-modal-backdrop {
+    padding: 0.5rem;
+  }
+
+  .shot-plan-comparison-modal {
+    padding: 1rem;
+    max-height: 90vh;
+  }
+
+  .shot-plan-comparison-row {
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .comparison-row-label {
+    min-width: unset;
+  }
+
+  .shot-plan-comparison-modal-actions .action-button,
+  .shot-plan-comparison-modal-actions .close-comparison-button {
+    width: 100%;
+    min-height: 42px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
 }
