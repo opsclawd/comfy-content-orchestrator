@@ -24,7 +24,10 @@
     "render": "tsx src/cli/render.ts",
     "worker": "tsx src/cli/run-worker.ts",
     "assembler": "tsx src/cli/run-delivery-assembler.ts",
-    "start:assembler": "node dist/cli/run-delivery-assembler.js"
+    "start:assembler": "node dist/cli/run-delivery-assembler.js",
+    "acceptance:install": "tsx src/cli/acceptance.ts install",
+    "acceptance:verify": "tsx src/cli/acceptance.ts verify",
+    "acceptance:preflight": "tsx src/cli/acceptance.ts preflight"
   },
   "dependencies": {
     "@cco/application": "workspace:*",

@@ -43,3 +43,5 @@ export * from "./image-inspection-port.js";
 export * from "./shot-plan-repository.js";
 export * from "./campaign-animatic-queries.js";
 export * from "./campaign-readiness-queries.js";
+export * from "./acceptance-fixture-asset-source-port.js";
+export * from "./acceptance-preflight-probe-ports.js";

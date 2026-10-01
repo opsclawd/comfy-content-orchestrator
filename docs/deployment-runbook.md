@@ -232,3 +232,4 @@ Real credentials and IPs are deliberately not recorded in this file. As of 2026-
 - #176 — automate generating the certification provenance file described above.
 - #331 — Review Hub authority model alignment and automated ShotPlan-to-H3 E2E lifecycle coverage.
 - #332 — Operator issue: Real RTX 4090 multi-scene execution and human visual quality acceptance.
+- #373 — Preparation-only tooling for the #354/#332 operator acceptance campaign: deterministic fixture, GPU-free preflight (`pnpm acceptance:preflight`), and blank evidence templates. See `docs/h3-acceptance-campaign.md` and `docs/h3-acceptance-operator-runbook.md`.
