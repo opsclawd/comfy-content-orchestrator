@@ -116,6 +116,15 @@ export function ShotPlanComparisonModal({
                 : `V${targetPlan.variantOrdinal} vs V${sourcePlan.variantOrdinal}`
               : `V${targetPlan.variantOrdinal} — Compare`}
           </h3>
+          <button
+            type="button"
+            className="shot-plan-comparison-header-close-btn"
+            data-testid="close-comparison-header-button"
+            onClick={onClose}
+            aria-label="Close comparison modal"
+          >
+            ✕
+          </button>
         </div>
 
         {!sourcePlan && (
@@ -164,7 +173,7 @@ export function ShotPlanComparisonModal({
         <div className="shot-plan-comparison-modal-actions">
           <button
             type="button"
-            className="action-button"
+            className="action-button close-comparison-button"
             data-testid="close-comparison-button"
             onClick={onClose}
           >

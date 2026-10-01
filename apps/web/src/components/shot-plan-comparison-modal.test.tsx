@@ -294,4 +294,23 @@ describe("ShotPlanComparisonModal", () => {
     fireEvent.click(screen.getByTestId("close-comparison-button"));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it("calls onClose when the header close button is clicked", () => {
+    const source = createPlan();
+    const target = createVariation(source);
+    const onClose = vi.fn();
+
+    render(
+      <ShotPlanComparisonModal
+        isOpen={true}
+        targetPlan={target}
+        shotPlans={[source, target]}
+        currentSpecRevision={2}
+        onClose={onClose}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("close-comparison-header-button"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });
