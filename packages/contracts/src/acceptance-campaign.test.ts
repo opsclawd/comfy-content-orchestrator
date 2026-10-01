@@ -100,33 +100,37 @@ describe("acceptance-campaign fixture", () => {
     }
   });
 
-  it("computes a deterministic fingerprint that is stable across repeated calls", () => {
-    const first = computeAcceptanceCampaignFingerprint(ACCEPTANCE_H3_REPRESENTATIVE_CAMPAIGN);
-    const second = computeAcceptanceCampaignFingerprint(ACCEPTANCE_H3_REPRESENTATIVE_CAMPAIGN);
+  it("computes a deterministic fingerprint that is stable across repeated calls", async () => {
+    const first = await computeAcceptanceCampaignFingerprint(ACCEPTANCE_H3_REPRESENTATIVE_CAMPAIGN);
+    const second = await computeAcceptanceCampaignFingerprint(
+      ACCEPTANCE_H3_REPRESENTATIVE_CAMPAIGN
+    );
     expect(first).toBe(second);
     expect(first).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("changes the fingerprint when any scene field changes", () => {
-    const baseline = computeAcceptanceCampaignFingerprint(ACCEPTANCE_H3_REPRESENTATIVE_CAMPAIGN);
+  it("changes the fingerprint when any scene field changes", async () => {
+    const baseline = await computeAcceptanceCampaignFingerprint(
+      ACCEPTANCE_H3_REPRESENTATIVE_CAMPAIGN
+    );
     const mutated: AcceptanceCampaignFixture = {
       ...ACCEPTANCE_H3_REPRESENTATIVE_CAMPAIGN,
       scenes: ACCEPTANCE_H3_REPRESENTATIVE_CAMPAIGN.scenes.map((scene, i) =>
         i === 0 ? { ...scene, prompt: `${scene.prompt} (mutated)` } : scene
       )
     };
-    const mutatedFingerprint = computeAcceptanceCampaignFingerprint(mutated);
+    const mutatedFingerprint = await computeAcceptanceCampaignFingerprint(mutated);
     expect(mutatedFingerprint).not.toBe(baseline);
   });
 
-  it("is not affected by key ordering (isolation from object insertion order)", () => {
+  it("is not affected by key ordering (isolation from object insertion order)", async () => {
     const reordered: AcceptanceCampaignFixture = JSON.parse(
       JSON.stringify(ACCEPTANCE_H3_REPRESENTATIVE_CAMPAIGN)
     );
-    const fingerprintA = computeAcceptanceCampaignFingerprint(
+    const fingerprintA = await computeAcceptanceCampaignFingerprint(
       ACCEPTANCE_H3_REPRESENTATIVE_CAMPAIGN
     );
-    const fingerprintB = computeAcceptanceCampaignFingerprint(reordered);
+    const fingerprintB = await computeAcceptanceCampaignFingerprint(reordered);
     expect(fingerprintA).toBe(fingerprintB);
   });
 });

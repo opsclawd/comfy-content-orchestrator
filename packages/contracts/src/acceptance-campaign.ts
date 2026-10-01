@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { sortKeysDeep } from "@cco/shared";
 import { z } from "zod";
 import { ReferenceRoleSchema } from "./reference-asset.js";
@@ -707,8 +706,13 @@ export function verifyAcceptanceCoverage(
  * the campaign fixture's identity, asset slots, and scenes. Pure function: no I/O, no
  * randomness, no wall-clock dependency. Two installs of the same fixture definition always
  * produce the same fingerprint, and any drift in the fixture shape changes it.
+ *
+ * Uses WebCrypto (globalThis.crypto.subtle) rather than node:crypto so this module stays
+ * importable by apps/web client components: node:crypto cannot be bundled by webpack.
  */
-export function computeAcceptanceCampaignFingerprint(campaign: AcceptanceCampaignFixture): string {
+export async function computeAcceptanceCampaignFingerprint(
+  campaign: AcceptanceCampaignFixture
+): Promise<string> {
   const canonical = sortKeysDeep({
     fixtureId: campaign.fixtureId,
     fixtureVersion: campaign.fixtureVersion,
@@ -717,5 +721,9 @@ export function computeAcceptanceCampaignFingerprint(campaign: AcceptanceCampaig
     scenes: campaign.scenes,
     coverageRequirements: campaign.coverageRequirements
   });
-  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+  const data = new TextEncoder().encode(JSON.stringify(canonical));
+  const buffer = await globalThis.crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(buffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }

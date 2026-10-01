@@ -56,7 +56,7 @@ describe("EvaluateAcceptancePreflightUseCase", () => {
     expect(report.coverage.satisfied).toBe(true);
     expect(report.fixtureId).toBe(ACCEPTANCE_H3_REPRESENTATIVE_CAMPAIGN.fixtureId);
     expect(report.fixtureFingerprint).toBe(
-      computeAcceptanceCampaignFingerprint(ACCEPTANCE_H3_REPRESENTATIVE_CAMPAIGN)
+      await computeAcceptanceCampaignFingerprint(ACCEPTANCE_H3_REPRESENTATIVE_CAMPAIGN)
     );
   });
 

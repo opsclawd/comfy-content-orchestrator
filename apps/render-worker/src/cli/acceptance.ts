@@ -175,9 +175,11 @@ async function runInstall(args: AcceptanceCliArgs, env: NodeJS.ProcessEnv): Prom
   }
 }
 
-function runVerify(): number {
+async function runVerify(): Promise<number> {
   const coverage = verifyAcceptanceCoverage(ACCEPTANCE_H3_REPRESENTATIVE_CAMPAIGN);
-  const fingerprint = computeAcceptanceCampaignFingerprint(ACCEPTANCE_H3_REPRESENTATIVE_CAMPAIGN);
+  const fingerprint = await computeAcceptanceCampaignFingerprint(
+    ACCEPTANCE_H3_REPRESENTATIVE_CAMPAIGN
+  );
 
   console.log(
     JSON.stringify(
@@ -256,7 +258,7 @@ export async function runAcceptanceCli(
 
   try {
     if (args.subcommand === "verify") {
-      return runVerify();
+      return await runVerify();
     }
     if (args.subcommand === "preflight") {
       return await runPreflight(env);

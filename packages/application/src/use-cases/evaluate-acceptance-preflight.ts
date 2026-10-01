@@ -84,7 +84,7 @@ export class EvaluateAcceptancePreflightUseCase {
     const campaign = input.campaign ?? ACCEPTANCE_H3_REPRESENTATIVE_CAMPAIGN;
 
     const coverage = verifyAcceptanceCoverage(campaign);
-    const fixtureFingerprint = computeAcceptanceCampaignFingerprint(campaign);
+    const fixtureFingerprint = await computeAcceptanceCampaignFingerprint(campaign);
 
     const [
       profileIdentity,
