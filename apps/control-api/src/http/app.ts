@@ -13,6 +13,7 @@ import { jobRoutes } from "./routes/job-routes.js";
 import { deliveryAssemblyRoutes } from "./routes/delivery-assembly-routes.js";
 import { deliveryReelRoutes } from "./routes/delivery-reel-routes.js";
 import { campaignAnimaticRoutes } from "./routes/campaign-animatic-routes.js";
+import { campaignReadinessRoutes } from "./routes/campaign-readiness-routes.js";
 import { campaignRoutes } from "./routes/campaign-routes.js";
 import { clientRoutes } from "./routes/client-routes.js";
 import { referenceRoutes } from "./routes/reference-routes.js";
@@ -119,6 +120,10 @@ export function createControlApiApp(
   });
 
   app.register(campaignAnimaticRoutes, {
+    container
+  });
+
+  app.register(campaignReadinessRoutes, {
     container
   });
 

@@ -10,6 +10,7 @@ import {
   getCampaignReviewSummary,
   getCampaignDeliveryReel,
   getCampaignAnimatic,
+  getCampaignPreProductionReadiness,
   ApiClientError
 } from "../../../api/client.js";
 import type * as ClientModule from "../../../api/client.js";
@@ -26,7 +27,8 @@ vi.mock("../../../api/client.js", async (importOriginal) => {
     ...actual,
     getCampaignReviewSummary: vi.fn(),
     getCampaignDeliveryReel: vi.fn(),
-    getCampaignAnimatic: vi.fn()
+    getCampaignAnimatic: vi.fn(),
+    getCampaignPreProductionReadiness: vi.fn()
   };
 });
 
@@ -282,6 +284,7 @@ describe("Campaign Review Page", () => {
       updatedAt: "2026-08-25T12:00:00.000Z"
     });
     vi.mocked(getCampaignAnimatic).mockRejectedValue(new Error("Not found"));
+    vi.mocked(getCampaignPreProductionReadiness).mockRejectedValue(new Error("Not found"));
   });
 
   it("exports dynamic = 'force-dynamic'", () => {
@@ -492,6 +495,100 @@ describe("Campaign Review Page", () => {
 
     const summaryView = jsx.props.children as TestElement;
     expect(summaryView.props.animatic).toEqual(animaticFixture);
+  });
+
+  it("passes campaign readiness read model to summary view when available", async () => {
+    const summaryFixture: CampaignReviewSummary = {
+      campaignId: "c1111111-1111-4111-8111-111111111111",
+      campaignName: "Readiness Test Campaign",
+      status: "pending_director_review",
+      totalScenes: 1,
+      pendingReviewCount: 0,
+      approvedCount: 1,
+      completedCount: 0,
+      scenesByStatus: { approved: 1 },
+      scenes: [
+        {
+          sceneId: "s1111111-1111-4111-8111-111111111111",
+          specRevision: 1,
+          status: "approved"
+        }
+      ],
+      updatedAt: "2026-08-25T12:00:00.000Z"
+    };
+
+    const readinessFixture = {
+      campaignId: "c1111111-1111-4111-8111-111111111111",
+      campaignName: "Readiness Test Campaign",
+      campaignStatus: "planning_ready" as const,
+      readinessStatus: "planning_ready" as const,
+      readSnapshotId: "cpr-snapshot-123456",
+      aggregates: {
+        totalScenes: 1,
+        planningReadyCount: 1,
+        needsAttentionCount: 0,
+        blockedForPlanningCount: 0,
+        currentReferenceSceneCount: 1,
+        scenesWithCurrentShotPlansCount: 1,
+        scenesWithSelectionCount: 1,
+        approvedSceneCount: 1,
+        scenesWithPrevisCount: 1,
+        scenesInCampaignAnimaticCount: 1,
+        staleSceneCount: 0
+      },
+      scenes: [],
+      planningOnlyNotice:
+        "PRE-PRODUCTION PLANNING READINESS — NOT A PRODUCTION-INPUT CERTIFICATION",
+      computedAt: "2026-08-25T12:00:00.000Z"
+    };
+
+    vi.mocked(getCampaignReviewSummary).mockResolvedValue(summaryFixture);
+    vi.mocked(getCampaignPreProductionReadiness).mockResolvedValue(readinessFixture);
+
+    const jsx = (await CampaignPage({
+      params: Promise.resolve({ campaignId: "c1111111-1111-4111-8111-111111111111" })
+    })) as TestElement;
+
+    expect(getCampaignPreProductionReadiness).toHaveBeenCalledWith(
+      "c1111111-1111-4111-8111-111111111111"
+    );
+
+    const summaryView = jsx.props.children as TestElement;
+    expect(summaryView.props.readiness).toEqual(readinessFixture);
+  });
+
+  it("renders campaign summary when getCampaignPreProductionReadiness rejects", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const summaryFixture: CampaignReviewSummary = {
+      campaignId: "c8000800-0800-4800-8800-080008000800",
+      campaignName: "Readiness Outage Campaign",
+      status: "drafting",
+      totalScenes: 0,
+      pendingReviewCount: 0,
+      approvedCount: 0,
+      completedCount: 0,
+      scenesByStatus: {},
+      scenes: [],
+      updatedAt: "2026-08-25T12:00:00.000Z"
+    };
+
+    vi.mocked(getCampaignReviewSummary).mockResolvedValueOnce(summaryFixture);
+    vi.mocked(getCampaignPreProductionReadiness).mockRejectedValueOnce(
+      new ApiClientError("Internal readiness error", 500)
+    );
+
+    const jsx = (await CampaignPage({
+      params: Promise.resolve({ campaignId: "c8000800-0800-4800-8800-080008000800" })
+    })) as TestElement;
+
+    expect(notFound).not.toHaveBeenCalled();
+
+    const html = renderToStaticMarkup(jsx);
+    const htmlTree = parseHtml(html);
+    expect(findHtmlByTestId(htmlTree, "campaign-summary")).not.toBeNull();
+    expect(findHtmlByTestId(htmlTree, "campaign-readiness-panel")).toBeNull();
+
+    consoleErrorSpy.mockRestore();
   });
 
   it("renders an explicit empty campaign state", async () => {

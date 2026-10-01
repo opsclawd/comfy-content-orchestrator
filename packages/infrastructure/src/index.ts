@@ -31,6 +31,7 @@ export { PostgresSceneReviewQueries } from "./postgres/queries/postgres-scene-re
 export { PostgresCurrentProductionAttemptQueries } from "./postgres/queries/postgres-current-production-attempt-queries.js";
 export { PostgresCampaignDeliveryReelQueries } from "./postgres/queries/postgres-campaign-delivery-reel-queries.js";
 export { PostgresCampaignAnimaticQueries } from "./postgres/queries/postgres-campaign-animatic-queries.js";
+export { PostgresCampaignReadinessQueries } from "./postgres/queries/postgres-campaign-readiness-queries.js";
 
 export {
   PostgresJobQueue,

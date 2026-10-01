@@ -23,6 +23,8 @@ import {
   type CampaignDeliveryReelReadModel,
   CampaignAnimaticReadModelSchema,
   type CampaignAnimaticReadModel,
+  CampaignPreProductionReadinessReadModelSchema,
+  type CampaignPreProductionReadinessReadModel,
   CampaignResponseSchema,
   type CampaignResponse,
   ReferenceAssetResponseSchema,
@@ -49,6 +51,7 @@ export type {
   CampaignDeliveryReelReadModel,
   CampaignDeliveryReelState,
   CampaignAnimaticReadModel,
+  CampaignPreProductionReadinessReadModel,
   CampaignResponse,
   CampaignReviewSummary,
   HealthResponse,
@@ -209,6 +212,9 @@ export interface ApiClient {
   ): Promise<CurrentProductionAttemptReadModel | undefined>;
   getCampaignDeliveryReel(campaignId: string): Promise<CampaignDeliveryReelReadModel>;
   getCampaignAnimatic(campaignId: string): Promise<CampaignAnimaticReadModel>;
+  getCampaignPreProductionReadiness(
+    campaignId: string
+  ): Promise<CampaignPreProductionReadinessReadModel>;
   submitReviewCommand(
     sceneId: string,
     command: ReviewCommand,
@@ -366,6 +372,17 @@ export function createApiClient(config?: ApiClientConfig): ApiClient {
       return requestJson(
         `${baseUrl}/api/campaigns/${encoded}/animatic`,
         CampaignAnimaticReadModelSchema,
+        fetchFn
+      );
+    },
+
+    async getCampaignPreProductionReadiness(
+      campaignId: string
+    ): Promise<CampaignPreProductionReadinessReadModel> {
+      const encoded = encodeURIComponent(campaignId);
+      return requestJson(
+        `${baseUrl}/api/campaigns/${encoded}/pre-production-readiness`,
+        CampaignPreProductionReadinessReadModelSchema,
         fetchFn
       );
     },
@@ -746,6 +763,17 @@ export async function getCampaignAnimatic(
   const fetchImpl = typeof baseUrlOrFetch === "function" ? baseUrlOrFetch : fetchFn;
   const client = createApiClient({ baseUrl, fetchFn: fetchImpl });
   return client.getCampaignAnimatic(campaignId);
+}
+
+export async function getCampaignPreProductionReadiness(
+  campaignId: string,
+  baseUrlOrFetch?: string | typeof fetch,
+  fetchFn?: typeof fetch
+): Promise<CampaignPreProductionReadinessReadModel> {
+  const baseUrl = typeof baseUrlOrFetch === "string" ? baseUrlOrFetch : undefined;
+  const fetchImpl = typeof baseUrlOrFetch === "function" ? baseUrlOrFetch : fetchFn;
+  const client = createApiClient({ baseUrl, fetchFn: fetchImpl });
+  return client.getCampaignPreProductionReadiness(campaignId);
 }
 
 export async function submitReviewCommand(
