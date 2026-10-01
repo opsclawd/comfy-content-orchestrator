@@ -1087,4 +1087,80 @@ describe("ShotPlanPanel Component", () => {
       expect(screen.queryByTestId("shot-plan-variation-modal")).toBeNull();
     });
   });
+
+  describe("ShotPlan comparison", () => {
+    it("disables the compare button when only a single plan exists", () => {
+      const plan = createSampleShotPlan();
+      render(<ShotPlanPanel shotPlans={[plan]} currentSpecRevision={2} />);
+
+      const compareButton = screen.getByTestId("shot-plan-compare-button") as HTMLButtonElement;
+      expect(compareButton.disabled).toBe(true);
+      expect(compareButton.textContent).toBe("Compare");
+    });
+
+    it("labels the compare button 'Compare to source' for a derived variation", () => {
+      const source = createSampleShotPlan({ variantOrdinal: 2 });
+      const variation = createSampleShotPlan({
+        shotPlanId: "55555555-5555-4555-8555-555555555555",
+        variantOrdinal: 4,
+        derivedFromShotPlanId: source.shotPlanId,
+        derivation: {
+          sourceShotPlanId: source.shotPlanId,
+          sourceVariantOrdinal: source.variantOrdinal,
+          directorGuidance: "Tighter 50mm, product forward, slow dolly-in",
+          requestedAt: "2026-09-28T12:00:00.000Z"
+        }
+      });
+
+      render(<ShotPlanPanel shotPlans={[source, variation]} currentSpecRevision={2} />);
+
+      const compareButtons = screen.getAllByTestId("shot-plan-compare-button");
+      const variationButton = compareButtons.find(
+        (btn) => btn.getAttribute("data-shot-plan-id") === variation.shotPlanId
+      )! as HTMLButtonElement;
+      expect(variationButton.textContent).toBe("Compare to source");
+      expect(variationButton.disabled).toBe(false);
+    });
+
+    it("opens the comparison modal pre-loaded with the resolved source variant and performs no fetch or dispatch", () => {
+      const fetchSpy = vi.spyOn(global, "fetch");
+      const dispatch = vi.fn();
+
+      const source = createSampleShotPlan({ variantOrdinal: 2, framing: "medium" });
+      const variation = createSampleShotPlan({
+        shotPlanId: "55555555-5555-4555-8555-555555555555",
+        variantOrdinal: 4,
+        framing: "medium_close_up",
+        derivedFromShotPlanId: source.shotPlanId,
+        derivation: {
+          sourceShotPlanId: source.shotPlanId,
+          sourceVariantOrdinal: source.variantOrdinal,
+          directorGuidance: "Tighter 50mm, product forward, slow dolly-in",
+          requestedAt: "2026-09-28T12:00:00.000Z"
+        }
+      });
+
+      render(
+        <ShotPlanPanel
+          shotPlans={[source, variation]}
+          currentSpecRevision={2}
+          dispatch={dispatch}
+        />
+      );
+
+      const compareButtons = screen.getAllByTestId("shot-plan-compare-button");
+      const variationButton = compareButtons.find(
+        (btn) => btn.getAttribute("data-shot-plan-id") === variation.shotPlanId
+      )!;
+      fireEvent.click(variationButton);
+
+      expect(screen.getByTestId("shot-plan-comparison-modal")).toBeTruthy();
+      expect(screen.getByTestId("comparison-source-revision-badge").textContent).toContain("V2");
+      expect(screen.getByTestId("comparison-target-revision-badge").textContent).toContain("V4");
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalled();
+
+      fetchSpy.mockRestore();
+    });
+  });
 });

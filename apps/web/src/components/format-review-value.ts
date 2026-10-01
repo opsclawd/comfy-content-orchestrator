@@ -8,6 +8,15 @@ import type {
   BlockingInitialPosition,
   LightingStyle
 } from "@cco/contracts";
+import {
+  shotFramingLabel,
+  cameraAngleLabel,
+  cameraMovementLabel,
+  movementSpeedLabel,
+  blockingPositionLabel,
+  lightingStyleLabel,
+  formatDurationSecondsLabel
+} from "@cco/contracts";
 
 const SCENE_STATUS_LABELS: Record<SceneStatus, string> = {
   draft_pending: "Draft Pending",
@@ -79,87 +88,27 @@ export function formatDateTime(isoString: string): string {
 }
 
 export function formatShotFraming(framing: ShotFraming | string): string {
-  const map: Record<string, string> = {
-    extreme_wide: "Extreme Wide",
-    wide: "Wide",
-    full_shot: "Full Shot",
-    medium_wide: "Medium Wide",
-    medium: "Medium",
-    medium_close_up: "Medium Close-up",
-    close_up: "Close-up",
-    extreme_close_up: "Extreme Close-up"
-  };
-  return map[framing] ?? framing.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  return shotFramingLabel(framing);
 }
 
 export function formatCameraAngle(angle: CameraAngle | string): string {
-  const map: Record<string, string> = {
-    eye_level: "Eye Level",
-    low_angle: "Low Angle",
-    high_angle: "High Angle",
-    bird_eye: "Bird's Eye",
-    worm_eye: "Worm's Eye",
-    dutch_angle: "Dutch Angle",
-    over_the_shoulder: "Over The Shoulder"
-  };
-  return map[angle] ?? angle.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  return cameraAngleLabel(angle);
 }
 
 export function formatCameraMovement(movement: CameraMovement | string): string {
-  const map: Record<string, string> = {
-    static: "Static",
-    pan_left: "Pan Left",
-    pan_right: "Pan Right",
-    tilt_up: "Tilt Up",
-    tilt_down: "Tilt Down",
-    dolly_in: "Dolly In",
-    dolly_out: "Dolly Out",
-    tracking: "Tracking",
-    pedestal_up: "Pedestal Up",
-    pedestal_down: "Pedestal Down",
-    crane: "Crane",
-    arc: "Arc",
-    orbit: "Orbit",
-    whip_pan: "Whip Pan"
-  };
-  return map[movement] ?? movement.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  return cameraMovementLabel(movement);
 }
 
 export function formatMovementSpeed(speed: MovementSpeed | string): string {
-  const map: Record<string, string> = {
-    slow: "Slow",
-    medium: "Medium",
-    fast: "Fast",
-    variable: "Variable"
-  };
-  return map[speed] ?? speed.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  return movementSpeedLabel(speed);
 }
 
 export function formatBlockingPosition(position: BlockingInitialPosition | string): string {
-  const map: Record<string, string> = {
-    screen_left: "screen left",
-    screen_center: "screen center",
-    screen_right: "screen right",
-    foreground_left: "foreground left",
-    foreground_center: "foreground center",
-    foreground_right: "foreground right",
-    background_center: "background center"
-  };
-  return map[position] ?? position.replace(/_/g, " ");
+  return blockingPositionLabel(position);
 }
 
 export function formatLightingStyle(style: LightingStyle | string): string {
-  const map: Record<string, string> = {
-    natural_golden_hour: "Natural Golden Hour",
-    high_key_commercial: "High Key Commercial",
-    low_key_dramatic: "Low Key Dramatic",
-    chiaroscuro: "Chiaroscuro",
-    softbox_studio: "Softbox Studio",
-    neon_night: "Neon Night",
-    overcast_diffused: "Overcast Diffused",
-    practical_interior: "Practical Interior"
-  };
-  return map[style] ?? style.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  return lightingStyleLabel(style);
 }
 
 export function formatSceneSlug(sceneId?: string): string {
@@ -173,6 +122,5 @@ export function formatSceneSlug(sceneId?: string): string {
 }
 
 export function formatDurationSeconds(durationMs: number): string {
-  const seconds = (durationMs / 1000).toFixed(2);
-  return `${seconds} sec`;
+  return formatDurationSecondsLabel(durationMs);
 }

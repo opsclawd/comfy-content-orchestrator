@@ -101,7 +101,11 @@ export function SceneReviewDetailView({
 
       <div className="scene-detail-grid">
         {/* Configuration Summary */}
-        <section className="scene-section configuration-section" aria-label="Scene Configuration">
+        <section
+          id="scene-references"
+          className="scene-section configuration-section"
+          aria-label="Scene Configuration"
+        >
           <h2>Scene Configuration</h2>
           <dl className="definition-list" data-testid="scene-configuration">
             <div className="definition-item">
@@ -238,7 +242,11 @@ export function SceneReviewDetailView({
         </section>
 
         {/* Review & Approval State */}
-        <section className="scene-section review-state-section" aria-label="Review State">
+        <section
+          id="scene-previs"
+          className="scene-section review-state-section"
+          aria-label="Review State"
+        >
           <h2>Review & Approval State</h2>
           <dl className="definition-list" data-testid="scene-review-state">
             <div className="definition-item">

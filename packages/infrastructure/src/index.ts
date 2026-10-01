@@ -1,6 +1,31 @@
 export const infrastructureName = "infrastructure";
 
 export {
+  FsAcceptanceFixtureAssetSource,
+  type FsAcceptanceFixtureAssetSourceOptions
+} from "./acceptance/fs-acceptance-fixture-asset-source.js";
+export {
+  FsProfileIdentityProbe,
+  REQUIRED_ACCEPTANCE_PROFILE_IDS,
+  type FsProfileIdentityProbeOptions
+} from "./acceptance/fs-profile-identity-probe.js";
+export {
+  FsEvidenceTemplateProbe,
+  ACCEPTANCE_EVIDENCE_SENTINEL,
+  DEFAULT_ACCEPTANCE_EVIDENCE_TEMPLATE_PATHS,
+  type FsEvidenceTemplateProbeOptions
+} from "./acceptance/fs-evidence-template-probe.js";
+export { PostgresAcceptanceReadinessProbe } from "./acceptance/postgres-acceptance-readiness-probe.js";
+export {
+  PostgresAcceptanceCampaignLedgerProbe,
+  type PostgresAcceptanceCampaignLedgerProbeOptions
+} from "./acceptance/postgres-acceptance-campaign-ledger-probe.js";
+export {
+  S3AcceptanceReadinessProbe,
+  type S3AcceptanceReadinessProbeOptions
+} from "./acceptance/s3-acceptance-readiness-probe.js";
+
+export {
   runMigrations,
   type MigrationRunOptions,
   type AppliedMigration
@@ -31,6 +56,7 @@ export { PostgresSceneReviewQueries } from "./postgres/queries/postgres-scene-re
 export { PostgresCurrentProductionAttemptQueries } from "./postgres/queries/postgres-current-production-attempt-queries.js";
 export { PostgresCampaignDeliveryReelQueries } from "./postgres/queries/postgres-campaign-delivery-reel-queries.js";
 export { PostgresCampaignAnimaticQueries } from "./postgres/queries/postgres-campaign-animatic-queries.js";
+export { PostgresCampaignReadinessQueries } from "./postgres/queries/postgres-campaign-readiness-queries.js";
 
 export {
   PostgresJobQueue,

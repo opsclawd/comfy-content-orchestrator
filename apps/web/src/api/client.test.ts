@@ -7,6 +7,7 @@ import {
   getCurrentProductionAttempt,
   getCampaignDeliveryReel,
   getCampaignAnimatic,
+  getCampaignPreProductionReadiness,
   submitReviewCommand,
   planCampaignStoryboard,
   listClientReferences,
@@ -38,7 +39,8 @@ import type {
   ReviewErrorResponse,
   SceneReviewDetailReadModel,
   CampaignDeliveryReelReadModel,
-  CampaignAnimaticReadModel
+  CampaignAnimaticReadModel,
+  CampaignPreProductionReadinessReadModel
 } from "@cco/contracts";
 
 const validCampaignReviewSummary: CampaignReviewSummary = {
@@ -2042,6 +2044,80 @@ describe("Typed Control API Client", () => {
 
       const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
       await expect(client.getCampaignAnimatic(campaignId)).rejects.toThrow(ApiValidationError);
+    });
+  });
+
+  describe("getCampaignPreProductionReadiness", () => {
+    const campaignId = "01950c46-9e90-7d3d-82d2-8f1d3c000001";
+    const sampleReadiness: CampaignPreProductionReadinessReadModel = {
+      campaignId,
+      campaignName: "Test Campaign",
+      campaignStatus: "planning_ready",
+      readinessStatus: "planning_ready",
+      readSnapshotId: "cpr-mock-fingerprint-12345678",
+      aggregates: {
+        totalScenes: 1,
+        planningReadyCount: 1,
+        needsAttentionCount: 0,
+        blockedForPlanningCount: 0,
+        currentReferenceSceneCount: 1,
+        scenesWithCurrentShotPlansCount: 1,
+        scenesWithSelectionCount: 1,
+        approvedSceneCount: 1,
+        scenesWithPrevisCount: 1,
+        scenesInCampaignAnimaticCount: 1,
+        staleSceneCount: 0
+      },
+      scenes: [],
+      planningOnlyNotice:
+        "PRE-PRODUCTION PLANNING READINESS — NOT A PRODUCTION-INPUT CERTIFICATION",
+      computedAt: "2026-09-27T12:00:00.000Z"
+    };
+
+    it("fetches and parses the readiness read model from GET /api/campaigns/:campaignId/pre-production-readiness", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => sampleReadiness
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      const result = await client.getCampaignPreProductionReadiness(campaignId);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        `http://example.com/api/campaigns/${campaignId}/pre-production-readiness`,
+        expect.objectContaining({ method: "GET" })
+      );
+      expect(result).toEqual(sampleReadiness);
+
+      const standaloneResult = await getCampaignPreProductionReadiness(campaignId, mockFetch);
+      expect(standaloneResult).toEqual(sampleReadiness);
+    });
+
+    it("throws ApiClientError when request returns 404", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        statusText: "Not Found"
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      await expect(client.getCampaignPreProductionReadiness(campaignId)).rejects.toThrow(
+        ApiClientError
+      );
+    });
+
+    it("throws ApiValidationError when response schema does not match", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ invalid: "payload" })
+      });
+
+      const client = createApiClient({ baseUrl: "http://example.com", fetchFn: mockFetch });
+      await expect(client.getCampaignPreProductionReadiness(campaignId)).rejects.toThrow(
+        ApiValidationError
+      );
     });
   });
 });

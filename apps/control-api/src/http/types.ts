@@ -23,11 +23,13 @@ import {
   CompleteCampaignProductionRunAssemblyUseCases,
   ResolveCampaignDeliveryReelUseCase,
   ResolveCampaignAnimaticUseCase,
+  ResolveCampaignPreProductionReadinessUseCase,
   UploadReferenceAssetUseCase,
   ListClientReferencesUseCase,
   ArchiveReferenceAssetUseCase,
   UpdateReferenceAssetRoleUseCase,
   type CampaignAnimaticQueries,
+  type CampaignReadinessQueries,
   type CampaignDeliveryReelQueries,
   type ClientContextResolver,
   type CurrentProductionAttemptQueries,
@@ -55,6 +57,7 @@ export interface ControlApiDependencies {
   readonly currentProductionAttemptQueries?: CurrentProductionAttemptQueries;
   readonly campaignDeliveryReelQueries?: CampaignDeliveryReelQueries;
   readonly campaignAnimaticQueries?: CampaignAnimaticQueries;
+  readonly campaignReadinessQueries?: CampaignReadinessQueries;
   readonly objectStorage?: ObjectStoragePort;
   readonly hashBytes?: HashBytesPort;
   readonly reviewMediaDelivery?: ReviewMediaDeliveryPort;
@@ -96,6 +99,8 @@ export interface ControlApiUseCases {
   readonly completeCampaignProductionRunAssembly: CompleteCampaignProductionRunAssemblyUseCases;
   readonly resolveCampaignDeliveryReel?: ResolveCampaignDeliveryReelUseCase | undefined;
   readonly resolveCampaignAnimatic?: ResolveCampaignAnimaticUseCase | undefined;
+  readonly resolveCampaignPreProductionReadiness?:
+    ResolveCampaignPreProductionReadinessUseCase | undefined;
   readonly uploadReferenceAsset?: UploadReferenceAssetUseCase | undefined;
   readonly listClientReferences?: ListClientReferencesUseCase | undefined;
   readonly archiveReferenceAsset?: ArchiveReferenceAssetUseCase | undefined;
@@ -109,6 +114,7 @@ export interface ControlApiQueries {
   readonly currentProductionAttempt?: CurrentProductionAttemptQueries;
   readonly campaignDeliveryReel?: CampaignDeliveryReelQueries;
   readonly campaignAnimatic?: CampaignAnimaticQueries;
+  readonly campaignReadiness?: CampaignReadinessQueries;
 }
 
 export interface ControlApiContainer {
@@ -191,6 +197,11 @@ export function createControlApiContainer(
         ...(dependencies.reviewMediaDelivery !== undefined
           ? { mediaDelivery: dependencies.reviewMediaDelivery }
           : {})
+      })
+    : undefined;
+  const resolveCampaignPreProductionReadiness = dependencies.campaignReadinessQueries
+    ? new ResolveCampaignPreProductionReadinessUseCase({
+        queries: dependencies.campaignReadinessQueries
       })
     : undefined;
   const planSceneConfiguration =
@@ -308,6 +319,9 @@ export function createControlApiContainer(
       completeCampaignProductionRunAssembly,
       ...(resolveCampaignDeliveryReel !== undefined ? { resolveCampaignDeliveryReel } : {}),
       ...(resolveCampaignAnimatic !== undefined ? { resolveCampaignAnimatic } : {}),
+      ...(resolveCampaignPreProductionReadiness !== undefined
+        ? { resolveCampaignPreProductionReadiness }
+        : {}),
       ...(planCampaignBeatSheet !== undefined ? { planCampaignBeatSheet } : {}),
       ...(planCampaignStoryboard !== undefined ? { planCampaignStoryboard } : {}),
       ...(enforceStorageAdmission !== undefined ? { enforceStorageAdmission } : {}),
@@ -331,6 +345,9 @@ export function createControlApiContainer(
         : {}),
       ...(dependencies.campaignAnimaticQueries !== undefined
         ? { campaignAnimatic: dependencies.campaignAnimaticQueries }
+        : {}),
+      ...(dependencies.campaignReadinessQueries !== undefined
+        ? { campaignReadiness: dependencies.campaignReadinessQueries }
         : {})
     }
   };
