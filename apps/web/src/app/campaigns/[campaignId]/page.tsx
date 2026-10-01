@@ -3,6 +3,7 @@ import {
   ApiClientError,
   getCampaignAnimatic,
   getCampaignDeliveryReel,
+  getCampaignPreProductionReadiness,
   getCampaignReviewSummary
 } from "../../../api/client";
 import { CampaignReviewSummaryView } from "../../../components/campaign-review-summary";
@@ -28,6 +29,11 @@ export default async function CampaignPage({ params }: CampaignPageProps) {
     return undefined;
   });
 
+  const readinessPromise = getCampaignPreProductionReadiness(campaignId).catch((err: unknown) => {
+    console.error(`Failed to fetch pre-production readiness for campaign ${campaignId}:`, err);
+    return undefined;
+  });
+
   let summary;
   try {
     summary = await getCampaignReviewSummary(campaignId);
@@ -38,7 +44,11 @@ export default async function CampaignPage({ params }: CampaignPageProps) {
     throw err;
   }
 
-  const [deliveryReel, animatic] = await Promise.all([deliveryReelPromise, animaticPromise]);
+  const [deliveryReel, animatic, readiness] = await Promise.all([
+    deliveryReelPromise,
+    animaticPromise,
+    readinessPromise
+  ]);
 
   return (
     <div className="campaign-page-container">
@@ -46,6 +56,7 @@ export default async function CampaignPage({ params }: CampaignPageProps) {
         summary={summary}
         deliveryReel={deliveryReel}
         animatic={animatic}
+        readiness={readiness}
       />
     </div>
   );

@@ -204,6 +204,68 @@ export function findPreviousSegmentStartTime(
 }
 
 // ============================================================================
+// Shared Gap Classification
+// ============================================================================
+
+export interface AnimaticGapClassificationInput {
+  readonly sceneId: string;
+  readonly sceneOrder: number;
+  readonly specRevision: number;
+  readonly selectedShotPlanId: string | null;
+  readonly selectedShotPlanRevision: number | null;
+  readonly selectedShotPlan?: { readonly specRevision: number } | null | undefined;
+}
+
+export interface AnimaticGapClassification {
+  readonly reason: CampaignAnimaticGapReason;
+  readonly message: string;
+}
+
+/**
+ * Fixed decision ladder used by both the campaign animatic compiler and the
+ * campaign pre-production readiness compiler to determine whether a scene's
+ * current-revision ShotPlan selection resolves to playable content. Extracted
+ * so both compilers share a single source of truth for gap semantics.
+ */
+export function classifyCampaignAnimaticGap(
+  scene: AnimaticGapClassificationInput
+): AnimaticGapClassification | null {
+  if (!scene.selectedShotPlanId) {
+    return {
+      reason: "NO_SELECTION",
+      message: `Scene ${scene.sceneOrder} has no ShotPlan selected for Revision ${scene.specRevision}`
+    };
+  }
+
+  if (
+    scene.selectedShotPlanRevision !== null &&
+    scene.selectedShotPlanRevision !== undefined &&
+    scene.selectedShotPlanRevision !== scene.specRevision
+  ) {
+    return {
+      reason: "STALE_SELECTION",
+      message: `Scene ${scene.sceneOrder} selection is from Revision ${scene.selectedShotPlanRevision}, but current spec is Revision ${scene.specRevision}`
+    };
+  }
+
+  if (!scene.selectedShotPlan) {
+    return {
+      reason: "SHOT_PLAN_NOT_FOUND",
+      message: `Selected ShotPlan ${scene.selectedShotPlanId} was not found`
+    };
+  }
+
+  if (scene.selectedShotPlan.specRevision !== scene.specRevision) {
+    return {
+      reason: "SPEC_REVISION_MISMATCH",
+      message: `Selected ShotPlan is Revision ${scene.selectedShotPlan.specRevision}, but current scene spec is Revision ${scene.specRevision}`
+    };
+  }
+
+  return null;
+}
+
+// ============================================================================
 // Pure Deterministic Compiler
 // ============================================================================
 
@@ -272,28 +334,9 @@ export function compileCampaignAnimaticReadModel(
     const sceneTargetDurationMs = Math.max(1000, Math.round(rawDurationSec * 1000));
 
     // Evaluate plan resolution and gap conditions
-    let gapReason: CampaignAnimaticGapReason | null = null;
-    let gapMessage: string | null = null;
+    const gap = classifyCampaignAnimaticGap(scene);
 
-    if (!scene.selectedShotPlanId) {
-      gapReason = "NO_SELECTION";
-      gapMessage = `Scene ${scene.sceneOrder} has no ShotPlan selected for Revision ${scene.specRevision}`;
-    } else if (
-      scene.selectedShotPlanRevision !== null &&
-      scene.selectedShotPlanRevision !== undefined &&
-      scene.selectedShotPlanRevision !== scene.specRevision
-    ) {
-      gapReason = "STALE_SELECTION";
-      gapMessage = `Scene ${scene.sceneOrder} selection is from Revision ${scene.selectedShotPlanRevision}, but current spec is Revision ${scene.specRevision}`;
-    } else if (!scene.selectedShotPlan) {
-      gapReason = "SHOT_PLAN_NOT_FOUND";
-      gapMessage = `Selected ShotPlan ${scene.selectedShotPlanId} was not found`;
-    } else if (scene.selectedShotPlan.specRevision !== scene.specRevision) {
-      gapReason = "SPEC_REVISION_MISMATCH";
-      gapMessage = `Selected ShotPlan is Revision ${scene.selectedShotPlan.specRevision}, but current scene spec is Revision ${scene.specRevision}`;
-    }
-
-    if (gapReason !== null && gapMessage !== null) {
+    if (gap !== null) {
       const targetDurationMs = sceneTargetDurationMs;
       const endMs = startMs + targetDurationMs;
       runningOffsetMs = endMs;
@@ -304,8 +347,8 @@ export function compileCampaignAnimaticReadModel(
         sceneOrder: scene.sceneOrder,
         specRevision: scene.specRevision,
         hasPlan: false,
-        gapReason,
-        gapMessage,
+        gapReason: gap.reason,
+        gapMessage: gap.message,
         targetDurationMs,
         startMs,
         endMs

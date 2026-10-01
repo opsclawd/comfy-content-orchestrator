@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CampaignAnimaticReadModelSchema,
   CAMPAIGN_ANIMATIC_NON_PRODUCTION_NOTICE,
+  classifyCampaignAnimaticGap,
   compileCampaignAnimaticReadModel,
   computeCampaignAnimaticSnapshotId,
   computeShotLocalTimeMs,
@@ -510,5 +511,65 @@ describe("Campaign Animatic Contracts & Deterministic Compiler", () => {
       sceneInputs1
     );
     expect(id4).not.toBe(id1);
+  });
+});
+
+describe("classifyCampaignAnimaticGap", () => {
+  it("returns NO_SELECTION when no ShotPlan is selected", () => {
+    const gap = classifyCampaignAnimaticGap({
+      sceneId: "scene-1",
+      sceneOrder: 1,
+      specRevision: 1,
+      selectedShotPlanId: null,
+      selectedShotPlanRevision: null
+    });
+    expect(gap?.reason).toBe("NO_SELECTION");
+  });
+
+  it("returns STALE_SELECTION when the selection revision does not match the spec revision", () => {
+    const gap = classifyCampaignAnimaticGap({
+      sceneId: "scene-1",
+      sceneOrder: 1,
+      specRevision: 2,
+      selectedShotPlanId: "plan-1",
+      selectedShotPlanRevision: 1
+    });
+    expect(gap?.reason).toBe("STALE_SELECTION");
+  });
+
+  it("returns SHOT_PLAN_NOT_FOUND when the selected plan cannot be resolved", () => {
+    const gap = classifyCampaignAnimaticGap({
+      sceneId: "scene-1",
+      sceneOrder: 1,
+      specRevision: 1,
+      selectedShotPlanId: "plan-1",
+      selectedShotPlanRevision: 1,
+      selectedShotPlan: null
+    });
+    expect(gap?.reason).toBe("SHOT_PLAN_NOT_FOUND");
+  });
+
+  it("returns SPEC_REVISION_MISMATCH when the resolved plan's revision disagrees", () => {
+    const gap = classifyCampaignAnimaticGap({
+      sceneId: "scene-1",
+      sceneOrder: 1,
+      specRevision: 2,
+      selectedShotPlanId: "plan-1",
+      selectedShotPlanRevision: 2,
+      selectedShotPlan: { specRevision: 1 }
+    });
+    expect(gap?.reason).toBe("SPEC_REVISION_MISMATCH");
+  });
+
+  it("returns null when the selection resolves cleanly at the current revision", () => {
+    const gap = classifyCampaignAnimaticGap({
+      sceneId: "scene-1",
+      sceneOrder: 1,
+      specRevision: 1,
+      selectedShotPlanId: "plan-1",
+      selectedShotPlanRevision: 1,
+      selectedShotPlan: { specRevision: 1 }
+    });
+    expect(gap).toBeNull();
   });
 });

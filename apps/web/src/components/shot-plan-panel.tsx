@@ -289,6 +289,7 @@ export function ShotPlanPanel({
   if (!shotPlans || shotPlans.length === 0) {
     return (
       <section
+        id="shot-plans"
         className="scene-section shot-plan-panel-surface"
         aria-label="Shot Plan Proposals"
         data-testid="shot-plan-panel"
@@ -382,6 +383,7 @@ export function ShotPlanPanel({
 
   return (
     <section
+      id="shot-plans"
       className="scene-section shot-plan-panel-surface"
       aria-label="Shot Plan Proposals"
       data-testid="shot-plan-panel"
@@ -399,7 +401,7 @@ export function ShotPlanPanel({
         </p>
       </div>
 
-      <div className="shot-plan-cards-grid">
+      <div id="scene-approval" className="shot-plan-cards-grid">
         {shotPlans.map((plan) => {
           const isSelected = selectedShotPlanId === plan.shotPlanId;
           const isApproved = approvedShotPlanId === plan.shotPlanId || plan.status === "approved";

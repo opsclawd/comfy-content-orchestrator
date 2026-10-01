@@ -2,9 +2,11 @@ import Link from "next/link";
 import type {
   CampaignAnimaticReadModel,
   CampaignDeliveryReelReadModel,
+  CampaignPreProductionReadinessReadModel,
   CampaignReviewSummary
 } from "@cco/contracts";
 import { CampaignAnimaticPanel } from "./campaign-animatic-panel";
+import { CampaignPreProductionReadinessPanel } from "./campaign-pre-production-readiness-panel";
 import { CampaignDeliveryReelPanel } from "./campaign-delivery-reel-panel";
 import { CampaignPlanningPoller } from "./campaign-planning-poller";
 
@@ -12,12 +14,14 @@ export interface CampaignReviewSummaryProps {
   summary: CampaignReviewSummary;
   deliveryReel?: CampaignDeliveryReelReadModel | undefined;
   animatic?: CampaignAnimaticReadModel | undefined;
+  readiness?: CampaignPreProductionReadinessReadModel | undefined;
 }
 
 export function CampaignReviewSummaryView({
   summary,
   deliveryReel,
-  animatic
+  animatic,
+  readiness
 }: CampaignReviewSummaryProps) {
   const statusEntries = Object.entries(summary.scenesByStatus);
 
@@ -60,6 +64,8 @@ export function CampaignReviewSummaryView({
           </p>
         </div>
       )}
+
+      <CampaignPreProductionReadinessPanel readiness={readiness} />
 
       <CampaignAnimaticPanel animatic={animatic} />
 
