@@ -29,3 +29,4 @@ export * from "./shot-plan-semantic-diff.js";
 export * from "./campaign-animatic.js";
 export * from "./campaign-readiness.js";
 export * from "./generation-manifest.js";
+export * from "./acceptance-campaign.js";
