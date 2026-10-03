@@ -417,7 +417,7 @@ describe("ProductionReviewPanel", () => {
 
   it("omits buttons when allowedActions does not include them", () => {
     const detail = createSampleDetail({
-      allowedActions: ["approve", "reject"]
+      allowedActions: ["approve"]
     });
     const attempt = createSampleAttempt({ productionJobId: "prod-job-xyz" });
     const state = createInitialState(detail);
@@ -434,6 +434,38 @@ describe("ProductionReviewPanel", () => {
 
     expect(screen.queryByTestId("action-button-production_accept")).toBeNull();
     expect(screen.queryByTestId("action-button-production_rerender")).toBeNull();
+    expect(screen.queryByTestId("action-button-reject")).toBeNull();
+  });
+
+  it("renders Reject button when allowedActions contains reject", () => {
+    const detail = createSampleDetail({
+      allowedActions: ["reject"]
+    });
+    const attempt = createSampleAttempt();
+    const state = createInitialState(detail);
+    const dispatch = vi.fn();
+
+    render(
+      <ProductionReviewPanel
+        detail={detail}
+        productionAttempt={attempt}
+        state={state}
+        dispatch={dispatch}
+      />
+    );
+
+    const rejectBtn = screen.getByTestId("action-button-reject");
+    expect(rejectBtn).toBeDefined();
+    fireEvent.click(rejectBtn);
+
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "REQUEST_CONFIRMATION",
+      stagedAction: {
+        action: "reject",
+        payload: {},
+        displayLabel: "Reject"
+      }
+    });
   });
 
   it("disables buttons when disabled prop is true", () => {

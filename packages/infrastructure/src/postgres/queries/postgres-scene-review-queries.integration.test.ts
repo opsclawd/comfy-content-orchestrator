@@ -324,10 +324,9 @@ describe("PostgreSQL SceneReviewQueries Read Adapter Integration", () => {
     const qaDetail = await queryAdapter.getSceneReviewDetail(qaScene.scene_id as SceneId);
     expect(qaDetail?.status).toBe("qa");
     expect(qaDetail?.allowedActions).toEqual(
-      expect.arrayContaining(["production_accept", "production_rerender"])
+      expect.arrayContaining(["production_accept", "production_rerender", "reject"])
     );
     expect(qaDetail?.allowedActions).not.toContain("approve");
-    expect(qaDetail?.allowedActions).not.toContain("reject");
     expect(qaDetail?.allowedActions).not.toContain("reroll");
 
     let sceneOrder = 4;

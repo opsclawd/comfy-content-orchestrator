@@ -381,6 +381,10 @@ export function ShotPlanPanel({
     }
   }
 
+  const hasCurrentPlans = shotPlans.some(
+    (plan) => plan.isCurrentRevision && plan.specRevision === currentSpecRevision
+  );
+
   return (
     <section
       id="shot-plans"
@@ -400,6 +404,58 @@ export function ShotPlanPanel({
           role-bound reference assets. Previs is a non-authoritative visualization.
         </p>
       </div>
+
+      {!hasCurrentPlans && shotPlans.length > 0 && (
+        <div
+          className="review-conflict-banner"
+          data-testid="shot-plan-stale-spec-banner"
+          role="alert"
+          style={{ marginBottom: "1.5rem" }}
+        >
+          <h3>Spec Revision Updated</h3>
+          <p>
+            The shot plans below were generated for spec revision{" "}
+            <strong>{shotPlans[0]?.specRevision}</strong>, but the scene is at spec revision{" "}
+            <strong>{currentSpecRevision}</strong>. Plans from prior revisions cannot be selected or
+            approved for this prompt.
+          </p>
+          <div className="empty-state-actions" style={{ marginTop: "0.75rem" }}>
+            <button
+              type="button"
+              className="action-button generate-shot-plans-button"
+              data-testid="generate-current-revision-shot-plans-button"
+              onClick={handleGenerateShotPlans}
+              disabled={disabled || isGenerating || !sceneId}
+              aria-busy={isGenerating ? "true" : undefined}
+            >
+              {isGenerating
+                ? "Generating Shot Plans..."
+                : `Generate Shot Plans for Revision ${currentSpecRevision}`}
+            </button>
+          </div>
+          {isGenerating && (
+            <div
+              className="generating-indicator"
+              data-testid="generating-shot-plans-status"
+              role="status"
+              aria-live="polite"
+              style={{ marginTop: "0.5rem" }}
+            >
+              Generating shot plans (2 variants)...
+            </div>
+          )}
+          {generationError && (
+            <div
+              className="review-error-banner"
+              data-testid="shot-plan-error-message"
+              role="alert"
+              style={{ marginTop: "0.5rem" }}
+            >
+              <p>{generationError}</p>
+            </div>
+          )}
+        </div>
+      )}
 
       <div id="scene-approval" className="shot-plan-cards-grid">
         {shotPlans.map((plan) => {
