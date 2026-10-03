@@ -381,7 +381,9 @@ export class EnqueueSceneProductionRenderUseCase {
         );
       }
 
-      const rawBindings = await context.referenceAssets.listBindingsBySceneId(scene.id as SceneId);
+      const rawBindings = await context.referenceAssets.listBindingsBySceneId(scene.id as SceneId, {
+        specRevision: snapshot.specRevision
+      });
       for (const binding of rawBindings) {
         if (binding.sceneId && binding.sceneId !== scene.id) {
           throw new InvalidTransitionError(
@@ -401,7 +403,9 @@ export class EnqueueSceneProductionRenderUseCase {
         }
       }
 
-      const rawAssets = await context.referenceAssets.listBySceneId(scene.id as SceneId);
+      const rawAssets = await context.referenceAssets.listBySceneId(scene.id as SceneId, {
+        specRevision: snapshot.specRevision
+      });
       const assetsById = new Map(rawAssets.map((a) => [a.id, a]));
 
       if (!context.campaigns) {

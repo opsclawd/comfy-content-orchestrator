@@ -70,6 +70,12 @@ describe("PostgresCurrentProductionAttemptQueries Unit Tests", () => {
       expect.stringContaining("campaign_production_run_scenes"),
       [runId, sceneId, campaignId]
     );
+    expect(pool.query).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "LEFT JOIN production_attempts pa ON pa.attempt_id = rs.current_attempt_id"
+      ),
+      [runId, sceneId, campaignId]
+    );
   });
 
   it("returns available with reviewReady: false when scene is not yet in qa", async () => {
@@ -300,6 +306,12 @@ describe("PostgresCurrentProductionAttemptQueries Unit Tests", () => {
       expect(pool.query).toHaveBeenCalledWith(expect.stringContaining("WHERE rs.scene_id = $1"), [
         sceneId
       ]);
+      expect(pool.query).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "LEFT JOIN production_attempts pa ON pa.attempt_id = rs.current_attempt_id"
+        ),
+        [sceneId]
+      );
     });
 
     it("returns undefined when scene has no production run row", async () => {
