@@ -74,6 +74,7 @@ export function ProductionReviewPanel({
   const canRerender =
     Boolean(productionAttempt.productionJobId) &&
     detail.allowedActions?.includes("production_rerender");
+  const canReject = detail.allowedActions?.includes("reject");
 
   const handleAccept = () => {
     if (!productionAttempt.productionJobId) return;
@@ -99,6 +100,17 @@ export function ProductionReviewPanel({
           expectedProductionJobId: productionAttempt.productionJobId
         },
         displayLabel: formatReviewAction("production_rerender")
+      }
+    });
+  };
+
+  const handleReject = () => {
+    dispatch({
+      type: "REQUEST_CONFIRMATION",
+      stagedAction: {
+        action: "reject",
+        payload: {},
+        displayLabel: formatReviewAction("reject")
       }
     });
   };
@@ -251,7 +263,7 @@ export function ProductionReviewPanel({
           </div>
         </div>
 
-        {(canAccept || canRerender) && (
+        {(canAccept || canRerender || canReject) && (
           <div className="production-review-actions" data-testid="production-review-actions">
             {canAccept && (
               <button
@@ -275,6 +287,18 @@ export function ProductionReviewPanel({
                 onClick={handleRerender}
               >
                 {formatReviewAction("production_rerender")}
+              </button>
+            )}
+            {canReject && (
+              <button
+                type="button"
+                className="review-action-btn review-action-reject"
+                data-testid="action-button-reject"
+                data-action="reject"
+                disabled={disabled}
+                onClick={handleReject}
+              >
+                {formatReviewAction("reject")}
               </button>
             )}
           </div>

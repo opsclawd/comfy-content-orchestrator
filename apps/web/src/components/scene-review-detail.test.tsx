@@ -201,4 +201,67 @@ describe("SceneReviewDetailView: ShotPlanPanel Reachability & Generation", () =>
     expect(screen.queryByTestId("shot-plan-card")).toBeNull();
     expect(screen.getByTestId("no-shot-plans-state")).toBeDefined();
   });
+
+  it("clicking reject in production review panel opens confirmation modal and submits reject command", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        sceneId: "123e4567-e89b-12d3-a456-426614174000",
+        status: "director_review",
+        specRevision: 2,
+        isIdempotentReplay: false
+      })
+    });
+    vi.stubGlobal("fetch", mockFetch);
+
+    const detail = createSampleDetail({
+      status: "qa",
+      allowedActions: ["production_accept", "production_rerender", "reject"]
+    });
+    const attempt = {
+      runId: "run-1",
+      sceneId: detail.sceneId,
+      attemptOrdinal: 1,
+      specRevision: 2,
+      productionJobId: "job-1",
+      technicalState: "completed" as const,
+      reviewReady: true,
+      availability: "available" as const,
+      media: {
+        url: "https://example.com/clip.mp4",
+        generationManifestId: "gen-1"
+      }
+    };
+
+    render(<SceneReviewDetailView detail={detail} productionAttempt={attempt} />);
+
+    // There are two reject buttons: one in toolbar, one in production panel.
+    const rejectButtons = screen.getAllByTestId("action-button-reject");
+    expect(rejectButtons.length).toBeGreaterThanOrEqual(1);
+
+    // Click the one in the production review panel
+    const targetButton = rejectButtons[rejectButtons.length - 1];
+    expect(targetButton).toBeDefined();
+    fireEvent.click(targetButton!);
+
+    // Modal dialog should appear!
+    const dialog = await screen.findByTestId("review-command-dialog");
+    expect(dialog).toBeDefined();
+    expect(screen.getByTestId("confirm-dialog-title").textContent).toContain("Reject");
+
+    // Click confirm
+    const confirmBtn = screen.getByTestId("confirm-command-button");
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith(
+        `/api/scenes/${detail.sceneId}/review-command`,
+        expect.objectContaining({
+          method: "POST",
+          body: expect.stringContaining('"action":"reject"')
+        })
+      );
+    });
+  });
 });

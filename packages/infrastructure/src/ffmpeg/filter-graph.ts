@@ -11,9 +11,9 @@ export const FIT_BLURRED_FILL_BLUR_SIGMA = 20;
  * Builds the filter_complex string for fit_blurred_fill mode.
  *
  * For each input stem i:
- * 1. Background: scale to 1080x1920 with increase ratio, crop to 1080x1920, apply gblur sigma=20, setsar=1
- * 2. Foreground: scale to 1080:-2 with decrease ratio, setsar=1
- * 3. Overlay: center (W-w)/2:(H-h)/2, shortest=1, fps=30, format=yuv420p
+ * 1. Background: scale to 1080x1920 with increase ratio, crop to 1080x1920, apply gblur sigma=20, setsar=1, fps=30
+ * 2. Foreground: scale to 1080:-2 with decrease ratio, setsar=1, fps=30
+ * 3. Overlay: center (W-w)/2:(H-h)/2, format=yuv420p
  *
  * Then concatenate all stems in order.
  */
@@ -26,9 +26,9 @@ export function buildFitBlurredFillGraph(stemCount: number): string {
 
   for (let i = 0; i < stemCount; i++) {
     parts.push(
-      `[${i}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=${FIT_BLURRED_FILL_BLUR_SIGMA},setsar=1[bg${i}]`,
-      `[${i}:v]scale=1080:-2:force_original_aspect_ratio=decrease,setsar=1[fg${i}]`,
-      `[bg${i}][fg${i}]overlay=(W-w)/2:(H-h)/2:shortest=1,fps=30,format=yuv420p[v${i}]`
+      `[${i}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=${FIT_BLURRED_FILL_BLUR_SIGMA},setsar=1,fps=30[bg${i}]`,
+      `[${i}:v]scale=1080:-2:force_original_aspect_ratio=decrease,setsar=1,fps=30[fg${i}]`,
+      `[bg${i}][fg${i}]overlay=(W-w)/2:(H-h)/2,format=yuv420p[v${i}]`
     );
     vLabels.push(`[v${i}]`);
   }

@@ -240,7 +240,7 @@ function deriveAllowedActions(status: SceneStatus): readonly ReviewAction[] {
     case "failed":
       return Object.freeze(["cancel"]);
     case "qa":
-      return Object.freeze(["production_accept", "production_rerender"]);
+      return Object.freeze(["production_accept", "production_rerender", "reject"]);
     case "completed":
     case "cancelled":
       return Object.freeze([]);

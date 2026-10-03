@@ -910,6 +910,19 @@ describe("ShotPlanPanel Component", () => {
         expect(screen.queryByTestId("shot-plan-error-message")).toBeNull();
       });
     });
+
+    it("renders stale spec banner and generation button when all shot plans belong to a prior revision", () => {
+      const stalePlan = createSampleShotPlan({
+        specRevision: 1,
+        isCurrentRevision: false
+      });
+      const html = renderToStaticMarkup(
+        <ShotPlanPanel shotPlans={[stalePlan]} currentSpecRevision={2} sceneId={sceneId} />
+      );
+      expect(html).toContain('data-testid="shot-plan-stale-spec-banner"');
+      expect(html).toContain("Spec Revision Updated");
+      expect(html).toContain("Generate Shot Plans for Revision 2");
+    });
   });
 
   describe("Animatic Integration & Dual-Column Synchronization", () => {

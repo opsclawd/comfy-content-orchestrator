@@ -37,7 +37,7 @@ export class PostgresCurrentProductionAttemptQueries implements CurrentProductio
       SELECT
         rs.run_id,
         rs.scene_id,
-        rs.spec_revision,
+        COALESCE(pa.spec_revision, rs.spec_revision) AS spec_revision,
         rs.production_job_id,
         rs.current_attempt_ordinal,
         rj.status AS job_status,
@@ -46,6 +46,7 @@ export class PostgresCurrentProductionAttemptQueries implements CurrentProductio
       FROM campaign_production_run_scenes rs
       JOIN campaign_production_runs r ON r.run_id = rs.run_id
       JOIN storyboard_scenes s ON s.scene_id = rs.scene_id
+      LEFT JOIN production_attempts pa ON pa.attempt_id = rs.current_attempt_id
       LEFT JOIN render_jobs rj ON rj.job_id = rs.production_job_id
       WHERE rs.run_id = $1
         AND rs.scene_id = $2
@@ -74,7 +75,7 @@ export class PostgresCurrentProductionAttemptQueries implements CurrentProductio
       SELECT
         rs.run_id,
         rs.scene_id,
-        rs.spec_revision,
+        COALESCE(pa.spec_revision, rs.spec_revision) AS spec_revision,
         rs.production_job_id,
         rs.current_attempt_ordinal,
         rj.status AS job_status,
@@ -83,6 +84,7 @@ export class PostgresCurrentProductionAttemptQueries implements CurrentProductio
       FROM campaign_production_run_scenes rs
       JOIN campaign_production_runs r ON r.run_id = rs.run_id
       JOIN storyboard_scenes s ON s.scene_id = rs.scene_id
+      LEFT JOIN production_attempts pa ON pa.attempt_id = rs.current_attempt_id
       LEFT JOIN render_jobs rj ON rj.job_id = rs.production_job_id
       WHERE rs.scene_id = $1
       ORDER BY r.created_at DESC
