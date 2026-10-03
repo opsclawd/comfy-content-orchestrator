@@ -19,14 +19,12 @@ describe("filter-graph & command builder", () => {
     it("builds correct filter string for single stem", () => {
       const graph = buildFitBlurredFillGraph(1);
       expect(graph).toContain(
-        "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=20,setsar=1[bg0]"
+        "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=20,setsar=1,fps=30[bg0]"
       );
       expect(graph).toContain(
-        "[0:v]scale=1080:-2:force_original_aspect_ratio=decrease,setsar=1[fg0]"
+        "[0:v]scale=1080:-2:force_original_aspect_ratio=decrease,setsar=1,fps=30[fg0]"
       );
-      expect(graph).toContain(
-        "[bg0][fg0]overlay=(W-w)/2:(H-h)/2:shortest=1,fps=30,format=yuv420p[v0]"
-      );
+      expect(graph).toContain("[bg0][fg0]overlay=(W-w)/2:(H-h)/2,format=yuv420p[v0]");
       expect(graph).toContain("[v0]concat=n=1:v=1:a=0[outv]");
     });
 
@@ -34,14 +32,12 @@ describe("filter-graph & command builder", () => {
       const graph = buildFitBlurredFillGraph(3);
       for (let i = 0; i < 3; i++) {
         expect(graph).toContain(
-          `[${i}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=20,setsar=1[bg${i}]`
+          `[${i}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=20,setsar=1,fps=30[bg${i}]`
         );
         expect(graph).toContain(
-          `[${i}:v]scale=1080:-2:force_original_aspect_ratio=decrease,setsar=1[fg${i}]`
+          `[${i}:v]scale=1080:-2:force_original_aspect_ratio=decrease,setsar=1,fps=30[fg${i}]`
         );
-        expect(graph).toContain(
-          `[bg${i}][fg${i}]overlay=(W-w)/2:(H-h)/2:shortest=1,fps=30,format=yuv420p[v${i}]`
-        );
+        expect(graph).toContain(`[bg${i}][fg${i}]overlay=(W-w)/2:(H-h)/2,format=yuv420p[v${i}]`);
       }
       expect(graph).toContain("[v0][v1][v2]concat=n=3:v=1:a=0[outv]");
     });
