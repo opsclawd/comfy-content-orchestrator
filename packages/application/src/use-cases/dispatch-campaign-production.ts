@@ -3,6 +3,8 @@ import type { UnitOfWork } from "../ports/unit-of-work.js";
 import { CampaignNotFoundError } from "./campaign-not-found-error.js";
 import { computeCampaignProductionRunFingerprint } from "./campaign-production-fingerprint.js";
 import type { EnqueueSceneProductionRenderUseCase } from "./enqueue-scene-production-render.js";
+import type { PrepareSceneProductionInputsUseCase } from "./prepare-scene-production-inputs.js";
+import { ProductionInputFingerprintMismatchError } from "./production-input-fingerprint-mismatch-error.js";
 import {
   applySceneApprovalToScene,
   applyShotPlanApprovalToScene,
@@ -21,13 +23,20 @@ export interface ApproveSceneAndDispatchCampaignProductionInput {
   readonly requestHashSha256?: string | undefined;
   readonly action?: "approve" | "approve_shotplan" | undefined;
   readonly shotPlanId?: ShotPlanId | undefined;
+  readonly expectedProductionInputFingerprint?: string | undefined;
 }
 
 export class ApproveSceneAndDispatchCampaignProductionUseCase {
+  private readonly prepareInputsUseCase?: PrepareSceneProductionInputsUseCase;
+
   constructor(
     private readonly uow: UnitOfWork,
-    private readonly enqueueSceneProductionRender: EnqueueSceneProductionRenderUseCase
-  ) {}
+    private readonly enqueueSceneProductionRender: EnqueueSceneProductionRenderUseCase,
+    prepareSceneProductionInputs?: PrepareSceneProductionInputsUseCase
+  ) {
+    this.prepareInputsUseCase =
+      prepareSceneProductionInputs ?? enqueueSceneProductionRender.prepareInputsUseCase;
+  }
 
   async execute(
     input: ApproveSceneAndDispatchCampaignProductionInput
@@ -65,6 +74,32 @@ export class ApproveSceneAndDispatchCampaignProductionUseCase {
       const targetScene = scenes.find((s) => s.id === input.sceneId);
       if (targetScene === undefined) {
         throw new SceneNotFoundError(input.sceneId);
+      }
+
+      if (input.expectedProductionInputFingerprint !== undefined) {
+        const existingEvent = await context.reviewEvents.findById(input.eventId);
+        if (existingEvent === undefined) {
+          if (!this.prepareInputsUseCase) {
+            throw new Error(
+              "PrepareSceneProductionInputsUseCase is required for fingerprint verification"
+            );
+          }
+          const dryRunResult = await this.prepareInputsUseCase.executeWithContext(context, {
+            sceneId: targetScene.id,
+            ...(input.shotPlanId !== undefined ? { shotPlanId: input.shotPlanId } : {}),
+            dryRun: true
+          });
+          if (
+            dryRunResult.inspection.productionInputFingerprint !==
+            input.expectedProductionInputFingerprint
+          ) {
+            throw new ProductionInputFingerprintMismatchError(
+              targetScene.id,
+              input.expectedProductionInputFingerprint,
+              dryRunResult.inspection.productionInputFingerprint
+            );
+          }
+        }
       }
 
       const isShotPlanApproval =

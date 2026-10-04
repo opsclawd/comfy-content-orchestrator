@@ -1745,6 +1745,152 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
     expect(uow.reviewEvents[0]?.action).toBe("approve_shotplan");
   });
 
+  it("approve_shotplan returns 409 PRODUCTION_INPUT_FINGERPRINT_MISMATCH when expectedProductionInputFingerprint diverges", async () => {
+    const shotPlanUuid = "01928374-abcd-7000-8000-000000000033" as ShotPlanId;
+    const scene = createReviewReadyScene({
+      configuration: {
+        prompt: "A cinematic shot of a mountain sunrise",
+        referenceIds: [],
+        engineProfileId: "MINIMAX_H3_720P_5S_I2V_V1",
+        durationMs: 5000
+      }
+    });
+    const shotPlan = ShotPlan.create({
+      id: shotPlanUuid,
+      sceneId: sceneUuid,
+      specRevision: 1,
+      variantOrdinal: 1,
+      targetDurationMs: 5000,
+      targetFrameCount: 124,
+      framing: "wide",
+      angle: "eye_level",
+      lensIntent: "35mm prime",
+      cameraPosition: "eye_level tripod",
+      cameraMovement: "static",
+      movementSpeed: "medium",
+      cameraPromptDescription: "Previs test prompt",
+      actionSummary: "Character enters scene",
+      beats: [],
+      lightingStyle: "high_key_commercial",
+      environmentDescription: "Studio set",
+      colorPalette: ["#ffffff"],
+      subjects: [],
+      routingMode: "frame_anchored",
+      continuity: {
+        persistentSubjectIds: [],
+        frameAnchorTarget: "first_frame",
+        anchorCandidateId: candidateUuid,
+        anchorMediaHashSha256: "hash-c1"
+      }
+    });
+    scene.selectCandidate(candidateUuid, 1, scene.id);
+    scene.selectShotPlan(shotPlanUuid, 1, scene.id);
+    const candidate = createCandidate(candidateUuid, 1);
+    const uow = new InMemorySceneUnitOfWork([scene], [candidate]);
+    uow.seedShotPlan(shotPlan);
+    const app = createControlApiApp({ uow }, defaultTestOptions);
+
+    const command: ReviewCommand = {
+      actionId: actionUuid,
+      sceneId: sceneUuid,
+      expectedSpecRevision: 1,
+      action: "approve_shotplan",
+      payload: {
+        shotPlanId: shotPlanUuid,
+        expectedProductionInputFingerprint: "0".repeat(64)
+      }
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${sceneUuid}/review-command`,
+      payload: command
+    });
+
+    expect(response.statusCode).toBe(409);
+    const body = response.json();
+    expect(body.code).toBe("PRODUCTION_INPUT_FINGERPRINT_MISMATCH");
+    expect(body.details.expectedFingerprint).toBe("0".repeat(64));
+    expect(body.details.actualFingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(uow.reviewEvents).toHaveLength(0);
+  });
+
+  it("approve_shotplan succeeds with 200 when expectedProductionInputFingerprint matches", async () => {
+    const shotPlanUuid = "01928374-abcd-7000-8000-000000000033" as ShotPlanId;
+    const scene = createReviewReadyScene({
+      configuration: {
+        prompt: "A cinematic shot of a mountain sunrise",
+        referenceIds: [],
+        engineProfileId: "MINIMAX_H3_720P_5S_I2V_V1",
+        durationMs: 5000
+      }
+    });
+    const shotPlan = ShotPlan.create({
+      id: shotPlanUuid,
+      sceneId: sceneUuid,
+      specRevision: 1,
+      variantOrdinal: 1,
+      targetDurationMs: 5000,
+      targetFrameCount: 124,
+      framing: "wide",
+      angle: "eye_level",
+      lensIntent: "35mm prime",
+      cameraPosition: "eye_level tripod",
+      cameraMovement: "static",
+      movementSpeed: "medium",
+      cameraPromptDescription: "Previs test prompt",
+      actionSummary: "Character enters scene",
+      beats: [],
+      lightingStyle: "high_key_commercial",
+      environmentDescription: "Studio set",
+      colorPalette: ["#ffffff"],
+      subjects: [],
+      routingMode: "frame_anchored",
+      continuity: {
+        persistentSubjectIds: [],
+        frameAnchorTarget: "first_frame",
+        anchorCandidateId: candidateUuid,
+        anchorMediaHashSha256: "hash-c1"
+      }
+    });
+    scene.selectCandidate(candidateUuid, 1, scene.id);
+    scene.selectShotPlan(shotPlanUuid, 1, scene.id);
+    const candidate = createCandidate(candidateUuid, 1);
+    const uow = new InMemorySceneUnitOfWork([scene], [candidate]);
+    uow.seedShotPlan(shotPlan);
+    const app = createControlApiApp({ uow }, defaultTestOptions);
+
+    const inspectionResponse = await app.inject({
+      method: "GET",
+      url: `/api/scenes/${sceneUuid}/production-inspection?shotPlanId=${shotPlanUuid}`
+    });
+    expect(inspectionResponse.statusCode).toBe(200);
+    const expectedFingerprint = inspectionResponse.json().productionInputFingerprint;
+
+    const command: ReviewCommand = {
+      actionId: actionUuid,
+      sceneId: sceneUuid,
+      expectedSpecRevision: 1,
+      action: "approve_shotplan",
+      payload: {
+        shotPlanId: shotPlanUuid,
+        expectedProductionInputFingerprint: expectedFingerprint
+      }
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${sceneUuid}/review-command`,
+      payload: command
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.status).toBe("approved");
+    expect(uow.reviewEvents).toHaveLength(1);
+    expect(uow.reviewEvents[0]?.action).toBe("approve_shotplan");
+  });
+
   it("reroll_shotplan clears selection, generates new ShotPlans with non-colliding ordinals, and enqueues previs jobs", async () => {
     const shotPlanUuid = "01928374-abcd-7000-8000-000000000033" as ShotPlanId;
     const scene = createReviewReadyScene();

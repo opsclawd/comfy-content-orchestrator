@@ -30,3 +30,4 @@ export * from "./campaign-animatic.js";
 export * from "./campaign-readiness.js";
 export * from "./generation-manifest.js";
 export * from "./acceptance-campaign.js";
+export * from "./production-inspection.js";

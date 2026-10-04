@@ -42,7 +42,9 @@ import {
   CreateShotPlanVariationResponseSchema,
   type CreateShotPlanVariationResponse,
   CreateShotPlanVariationErrorResponseSchema,
-  type CreateShotPlanVariationErrorResponse
+  type CreateShotPlanVariationErrorResponse,
+  H3ProductionInspectionReadModelSchema,
+  type H3ProductionInspectionReadModel
 } from "@cco/contracts";
 import type { z } from "zod";
 import { resolveControlApiBaseUrl } from "./runtime-config";
@@ -70,6 +72,7 @@ export type {
   SceneReviewDetailReadModel,
   CurrentProductionAttemptReadModel,
   CampaignDeliveryMediaReadModel,
+  H3ProductionInspectionReadModel,
   ReferenceAssetResponse,
   ReferenceRole,
   UpdateReferenceAssetRole
@@ -210,6 +213,10 @@ export interface ApiClient {
   getCurrentProductionAttempt(
     sceneId: string
   ): Promise<CurrentProductionAttemptReadModel | undefined>;
+  getSceneProductionInspection(
+    sceneId: string,
+    shotPlanId?: string
+  ): Promise<H3ProductionInspectionReadModel>;
   getCampaignDeliveryReel(campaignId: string): Promise<CampaignDeliveryReelReadModel>;
   getCampaignAnimatic(campaignId: string): Promise<CampaignAnimaticReadModel>;
   getCampaignPreProductionReadiness(
@@ -356,6 +363,17 @@ export function createApiClient(config?: ApiClientConfig): ApiClient {
         }
         throw err;
       }
+    },
+
+    async getSceneProductionInspection(
+      sceneId: string,
+      shotPlanId?: string
+    ): Promise<H3ProductionInspectionReadModel> {
+      const encoded = encodeURIComponent(sceneId);
+      const url = shotPlanId
+        ? `${baseUrl}/api/scenes/${encoded}/production-inspection?shotPlanId=${encodeURIComponent(shotPlanId)}`
+        : `${baseUrl}/api/scenes/${encoded}/production-inspection`;
+      return requestJson(url, H3ProductionInspectionReadModelSchema, fetchFn);
     },
 
     async getCampaignDeliveryReel(campaignId: string): Promise<CampaignDeliveryReelReadModel> {
@@ -741,6 +759,18 @@ export async function getCurrentProductionAttempt(
 ): Promise<CurrentProductionAttemptReadModel | undefined> {
   const client = createApiClient({ baseUrl, fetchFn });
   return client.getCurrentProductionAttempt(sceneId);
+}
+
+export async function getSceneProductionInspection(
+  sceneId: string,
+  shotPlanId?: string,
+  baseUrlOrFetch?: string | typeof fetch,
+  fetchFn?: typeof fetch
+): Promise<H3ProductionInspectionReadModel> {
+  const baseUrl = typeof baseUrlOrFetch === "string" ? baseUrlOrFetch : undefined;
+  const fetchImpl = typeof baseUrlOrFetch === "function" ? baseUrlOrFetch : fetchFn;
+  const client = createApiClient({ baseUrl, fetchFn: fetchImpl });
+  return client.getSceneProductionInspection(sceneId, shotPlanId);
 }
 
 export async function getCampaignDeliveryReel(

@@ -83,7 +83,13 @@ export const reviewCommandRoutes: FastifyPluginAsync<ReviewCommandRoutesOptions>
               occurredAt,
               ...(body.directorNotes !== undefined ? { directorNotes: body.directorNotes } : {}),
               expectedSpecRevision: body.expectedSpecRevision,
-              requestHashSha256
+              requestHashSha256,
+              ...(body.payload.expectedProductionInputFingerprint !== undefined
+                ? {
+                    expectedProductionInputFingerprint:
+                      body.payload.expectedProductionInputFingerprint
+                  }
+                : {})
             });
           result = {
             scene: dispatchResult.scene,
@@ -248,7 +254,13 @@ export const reviewCommandRoutes: FastifyPluginAsync<ReviewCommandRoutesOptions>
               expectedSpecRevision: body.expectedSpecRevision,
               requestHashSha256,
               action: "approve_shotplan",
-              shotPlanId: body.payload.shotPlanId as ShotPlanId
+              shotPlanId: body.payload.shotPlanId as ShotPlanId,
+              ...(body.payload.expectedProductionInputFingerprint !== undefined
+                ? {
+                    expectedProductionInputFingerprint:
+                      body.payload.expectedProductionInputFingerprint
+                  }
+                : {})
             });
           result = {
             scene: dispatchResult.scene,

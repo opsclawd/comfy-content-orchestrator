@@ -2,7 +2,7 @@
 
 import React, { useEffect, useReducer, useRef } from "react";
 import Link from "next/link";
-import type { SceneReviewDetailReadModel } from "@cco/contracts";
+import type { SceneReviewDetailReadModel, H3ProductionInspectionReadModel } from "@cco/contracts";
 import type { CurrentProductionAttemptReadModel } from "../api/client";
 import { CandidateGallery } from "./candidate-gallery";
 import { ReviewCommandControls } from "./review-command-controls";
@@ -25,12 +25,14 @@ import {
 export interface SceneReviewDetailProps {
   detail: SceneReviewDetailReadModel;
   productionAttempt?: CurrentProductionAttemptReadModel | undefined;
+  productionInspection?: H3ProductionInspectionReadModel | null | undefined;
   onDetailChange?: ((detail: SceneReviewDetailReadModel) => void) | undefined;
 }
 
 export function SceneReviewDetailView({
   detail,
   productionAttempt,
+  productionInspection,
   onDetailChange
 }: SceneReviewDetailProps) {
   const { configuration, approval } = detail;
@@ -313,6 +315,7 @@ export function SceneReviewDetailView({
         <ReviewCommandControls
           detail={detail}
           productionAttempt={productionAttempt}
+          productionInspection={productionInspection}
           state={state}
           dispatch={dispatch}
           disabled={disabled}
@@ -332,6 +335,7 @@ export function SceneReviewDetailView({
         dispatch={dispatch}
         disabled={disabled}
         sceneId={detail.sceneId}
+        productionInspection={productionInspection}
       />
 
       {/* Production Review Panel (when production attempt exists) */}

@@ -11,7 +11,8 @@ import type {
   ReviewErrorResponse,
   SceneConfiguration,
   SceneReviewDetailReadModel,
-  ShotPlanReferenceBindingReviewItem
+  ShotPlanReferenceBindingReviewItem,
+  H3ProductionInspectionReadModel
 } from "@cco/contracts";
 import {
   areCommandsDisabled,
@@ -33,6 +34,7 @@ import {
 export interface ReviewCommandControlsProps {
   detail: SceneReviewDetailReadModel;
   productionAttempt?: CurrentProductionAttemptReadModel | undefined;
+  productionInspection?: H3ProductionInspectionReadModel | null | undefined;
   state?: ReviewCommandState | undefined;
   dispatch?: ((event: ReviewCommandEvent) => void) | undefined;
   onDetailChange?: ((detail: SceneReviewDetailReadModel) => void) | undefined;
@@ -76,6 +78,7 @@ function getInitialDraftPayload(
 export function ReviewCommandControls({
   detail,
   productionAttempt,
+  productionInspection,
   state: controlledState,
   dispatch: controlledDispatch,
   onDetailChange,
@@ -493,7 +496,13 @@ export function ReviewCommandControls({
         type: "REQUEST_CONFIRMATION",
         stagedAction: {
           action,
-          payload: {},
+          payload:
+            action === "approve" && productionInspection?.productionInputFingerprint
+              ? {
+                  expectedProductionInputFingerprint:
+                    productionInspection.productionInputFingerprint
+                }
+              : {},
           displayLabel: formatReviewAction(action)
         }
       });
@@ -607,6 +616,21 @@ export function ReviewCommandControls({
       ? (state.stagedAction.payload as { shotPlanId?: string } | undefined)?.shotPlanId
       : state.phase === "submitting"
         ? (state.frozenIntent.command.payload as { shotPlanId?: string } | undefined)?.shotPlanId
+        : undefined;
+
+  const stagedPayload =
+    state.phase === "confirming"
+      ? (state.stagedAction.payload as Record<string, unknown> | undefined)
+      : state.phase === "submitting"
+        ? (state.frozenIntent.command.payload as Record<string, unknown> | undefined)
+        : undefined;
+
+  const expectedFingerprint =
+    typeof stagedPayload?.expectedProductionInputFingerprint === "string"
+      ? stagedPayload.expectedProductionInputFingerprint
+      : (currentAction === "approve" || currentAction === "approve_shotplan") &&
+          productionInspection?.productionInputFingerprint
+        ? productionInspection.productionInputFingerprint
         : undefined;
 
   return (
@@ -978,6 +1002,88 @@ export function ReviewCommandControls({
                     </dd>
                   </div>
                 )}
+                {(currentAction === "approve" || currentAction === "approve_shotplan") && (
+                  <div
+                    className="dialog-production-input-summary"
+                    data-testid="dialog-production-input-summary"
+                  >
+                    <div className="dialog-detail-item">
+                      <dt style={{ fontWeight: 600 }}>PRODUCTION INPUT / What H3 will receive:</dt>
+                      <dd>
+                        {productionInspection ? (
+                          <span
+                            className={`status-pill status-${productionInspection.admission.readiness}`}
+                            data-testid="dialog-inspection-status"
+                            style={{
+                              padding: "0.125rem 0.5rem",
+                              borderRadius: "9999px",
+                              fontSize: "0.75rem",
+                              fontWeight: 600
+                            }}
+                          >
+                            {productionInspection.admission.readiness.toUpperCase()}
+                          </span>
+                        ) : (
+                          <span
+                            style={{ fontSize: "0.75rem", color: "var(--text-muted, #94a3b8)" }}
+                          >
+                            Verified Inspection
+                          </span>
+                        )}
+                      </dd>
+                    </div>
+                    {expectedFingerprint && (
+                      <div
+                        className="dialog-detail-item"
+                        data-testid="dialog-production-fingerprint"
+                      >
+                        <dt>Production Fingerprint:</dt>
+                        <dd>
+                          <code
+                            className="dialog-fingerprint-code"
+                            style={{ wordBreak: "break-all", fontSize: "0.8125rem" }}
+                          >
+                            {expectedFingerprint}
+                          </code>
+                        </dd>
+                      </div>
+                    )}
+                    {productionInspection && productionInspection.admission.blockers.length > 0 && (
+                      <div className="dialog-detail-item">
+                        <dt style={{ color: "var(--color-danger, #ef4444)" }}>Blockers:</dt>
+                        <dd>
+                          <ul
+                            className="dialog-blockers-list"
+                            style={{
+                              color: "var(--color-danger, #ef4444)",
+                              margin: "0.25rem 0 0 0",
+                              paddingLeft: "1.25rem"
+                            }}
+                          >
+                            {productionInspection.admission.blockers.map((b, i) => (
+                              <li key={i}>{b.message}</li>
+                            ))}
+                          </ul>
+                        </dd>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {expectedFingerprint &&
+                  currentAction !== "approve" &&
+                  currentAction !== "approve_shotplan" && (
+                    <div className="dialog-detail-item" data-testid="dialog-production-fingerprint">
+                      <dt>Production Fingerprint:</dt>
+                      <dd>
+                        <code
+                          className="dialog-fingerprint-code"
+                          style={{ wordBreak: "break-all", fontSize: "0.8125rem" }}
+                        >
+                          {expectedFingerprint}
+                        </code>
+                      </dd>
+                    </div>
+                  )}
                 <div className="dialog-detail-item">
                   <dt>Action:</dt>
                   <dd>

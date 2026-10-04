@@ -585,4 +585,107 @@ describe("ReviewCommandControls Component", () => {
     expect(html).toContain("Elena Portrait");
     expect(html).toContain("subject_identity");
   });
+
+  it("renders PRODUCTION INPUT section and fingerprint in confirmation dialog when approving with fingerprint", () => {
+    const detail = createSampleDetail({ specRevision: 2 });
+    const sampleFingerprint = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+    const confirmingState: ReviewCommandState = {
+      phase: "confirming",
+      detail,
+      stagedAction: {
+        action: "approve",
+        payload: {
+          expectedProductionInputFingerprint: sampleFingerprint
+        },
+        displayLabel: "Approve Scene"
+      }
+    };
+
+    const html = renderToStaticMarkup(
+      <ReviewCommandControls detail={detail} state={confirmingState} />
+    );
+
+    expect(html).toContain('data-testid="dialog-production-input-summary"');
+    expect(html).toContain("PRODUCTION INPUT / What H3 will receive");
+    expect(html).toContain('data-testid="dialog-production-fingerprint"');
+    expect(html).toContain(sampleFingerprint);
+  });
+
+  it("renders production inspection status and blockers in confirmation dialog when inspection prop is provided", () => {
+    const detail = createSampleDetail({ specRevision: 2 });
+    const confirmingState: ReviewCommandState = {
+      phase: "confirming",
+      detail,
+      stagedAction: {
+        action: "approve",
+        payload: {},
+        displayLabel: "Approve Scene"
+      }
+    };
+
+    const inspection = {
+      authority: {
+        sceneId: detail.sceneId,
+        specRevision: 2,
+        shotPlanId: null,
+        variantOrdinal: null,
+        shotPlanStatus: null,
+        isCurrentRevision: true
+      },
+      route: {
+        routingMode: "reference_directed" as const,
+        renderProfileKey: "MINIMAX_H3_720P_5S_REF2V_V1",
+        workflowTemplate: "minimax-h3-720p-124f-ref2v",
+        targetDurationMs: 4000,
+        targetFrameCount: 97,
+        fps: 24 as const,
+        width: 1344 as const,
+        height: 768 as const
+      },
+      visualInputs: {
+        references: [],
+        frameAnchor: null
+      },
+      instruction: {
+        compiledText: "Cyberpunk neon street",
+        compiledSha256: "a".repeat(64),
+        cameraIntentSummary: {
+          framing: "medium" as const,
+          angle: "eye_level" as const,
+          cameraMovement: "static" as const,
+          movementSpeed: "medium" as const,
+          lensIntent: "50mm",
+          cameraPosition: "chest height"
+        }
+      },
+      admission: {
+        readiness: "blocked" as const,
+        blockers: [
+          {
+            code: "MISSING_SHOT_PLAN",
+            message: "Scene has no approved shot plan for production"
+          }
+        ]
+      },
+      runtimeContext: {
+        durationCeilingSeconds: 15
+      },
+      productionInputFingerprint: "1111222233334444555566667777888811112222333344445555666677778888"
+    };
+
+    const html = renderToStaticMarkup(
+      <ReviewCommandControls
+        detail={detail}
+        state={confirmingState}
+        productionInspection={inspection}
+      />
+    );
+
+    expect(html).toContain('data-testid="dialog-production-input-summary"');
+    expect(html).toContain('data-testid="dialog-inspection-status"');
+    expect(html).toContain("BLOCKED");
+    expect(html).toContain("Scene has no approved shot plan for production");
+    expect(html).toContain('data-testid="dialog-production-fingerprint"');
+    expect(html).toContain(inspection.productionInputFingerprint);
+  });
 });

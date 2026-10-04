@@ -27,6 +27,7 @@ export interface CompileShotPlanInput {
   readonly references?: readonly CanonicalReferenceEntry[] | undefined;
   readonly routingMode?: ShotPlanRoutingMode | undefined;
   readonly configuredDurationMs?: number | undefined;
+  readonly allowUnapproved?: boolean | undefined;
 }
 
 export interface CompiledShotPlanInstruction {
@@ -56,11 +57,12 @@ export function compileShotPlan(input: CompileShotPlanInput): CompiledShotPlanIn
     sceneSpec,
     references = [],
     routingMode = shotPlan.routingMode ?? "reference_directed",
-    configuredDurationMs = shotPlan.targetDurationMs
+    configuredDurationMs = shotPlan.targetDurationMs,
+    allowUnapproved = false
   } = input;
 
   // 1. Validate ShotPlan approval status
-  if (shotPlan.status !== "approved") {
+  if (!allowUnapproved && shotPlan.status !== "approved") {
     throw new ShotPlanCompilerError(
       `Cannot compile unapproved ShotPlan "${shotPlan.id}" (status: "${shotPlan.status}"). ShotPlans must be approved.`,
       "SHOT_PLAN_NOT_APPROVED"

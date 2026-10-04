@@ -140,6 +140,16 @@ describe("compileShotPlan", () => {
     }
   });
 
+  it("allows compiling unapproved shotPlan when allowUnapproved is true", () => {
+    const unapproved = makeApprovedShotPlan({ status: "draft" });
+    const result = compileShotPlan({
+      shotPlan: unapproved,
+      allowUnapproved: true
+    });
+    expect(result.instructionText).toContain("[Scene Context]");
+    expect(result.instructionHashSha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
   it("throws ROUTING_MODE_MISMATCH when shotPlan routingMode diverges", () => {
     const shotPlan = makeApprovedShotPlan({ routingMode: "frame_anchored" });
     expect(() =>

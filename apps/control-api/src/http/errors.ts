@@ -38,7 +38,8 @@ import {
   StoryboardMaterializationConflictError,
   StoryboardPartiallyMaterializedError,
   TransactionalJobEnqueuerUnavailableError,
-  UnsupportedProductionDurationError
+  UnsupportedProductionDurationError,
+  ProductionInputFingerprintMismatchError
 } from "@cco/application";
 import type { ReviewErrorResponse } from "@cco/contracts";
 import {
@@ -284,6 +285,21 @@ export function formatReviewError(error: unknown): {
         details: {
           expectedRevision: error.expectedRevision,
           currentRevision: error.actualRevision
+        }
+      }
+    };
+  }
+
+  if (error instanceof ProductionInputFingerprintMismatchError) {
+    return {
+      statusCode: 409,
+      body: {
+        code: "PRODUCTION_INPUT_FINGERPRINT_MISMATCH",
+        message: error.message,
+        details: {
+          sceneId: error.sceneId,
+          expectedFingerprint: error.expectedFingerprint,
+          actualFingerprint: error.actualFingerprint
         }
       }
     };
