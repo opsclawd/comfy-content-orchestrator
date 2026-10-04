@@ -22,7 +22,8 @@ import {
   type RenderEnginePort,
   type ResolvedApprovedVisualProductionMedia,
   type SceneRepository,
-  type StoryboardCandidateRepository
+  type StoryboardCandidateRepository,
+  type ShotPlanRepository
 } from "@cco/application";
 import {
   JOB_KINDS,
@@ -44,6 +45,7 @@ import {
   PostgresCampaignRepository,
   PostgresReferenceAssetRepository,
   PostgresSceneRepository,
+  PostgresShotPlanRepository,
   PostgresStoryboardCandidateRepository,
   S3ObjectStorage,
   SharpImageInspectionAdapter,
@@ -115,6 +117,7 @@ export interface ProductionWorkerOverrides extends Partial<WorkerDependencies> {
   readonly storyboardCandidateRepository?: StoryboardCandidateRepository | undefined;
   readonly referenceAssetRepository?: ReferenceAssetRepository | undefined;
   readonly campaignRepository?: CampaignRepository<CampaignRecord> | undefined;
+  readonly shotPlanRepository?: ShotPlanRepository | undefined;
   readonly hashBytes?: HashBytesPort | undefined;
   readonly pool?: pg.Pool | undefined;
   readonly renderEngine?: RenderEnginePort | undefined;
@@ -650,6 +653,7 @@ export function createProductionWorker(
   let storyboardCandidateRepository: StoryboardCandidateRepository | undefined;
   let referenceAssetRepository: ReferenceAssetRepository | undefined;
   let campaignRepository: CampaignRepository<CampaignRecord> | undefined;
+  let shotPlanRepository: ShotPlanRepository | undefined;
 
   if (includesProduction) {
     pool =
@@ -667,6 +671,8 @@ export function createProductionWorker(
       (pool ? new PostgresReferenceAssetRepository(pool) : undefined);
     campaignRepository =
       overrides?.campaignRepository ?? (pool ? new PostgresCampaignRepository(pool) : undefined);
+    shotPlanRepository =
+      overrides?.shotPlanRepository ?? (pool ? new PostgresShotPlanRepository(pool) : undefined);
 
     const needsRepositories =
       !overrides?.productionManifestAssembler || !overrides?.resolveApprovedCandidateMedia;
@@ -804,7 +810,8 @@ export function createProductionWorker(
               imageValidator: overrides?.imageValidator ?? new SharpImageInspectionAdapter(),
               campaignRepository,
               sceneRepository,
-              referenceAssetRepository
+              referenceAssetRepository,
+              shotPlanRepository
             }
           : {}),
         ...(overrides?.loadCertificationProfile !== undefined

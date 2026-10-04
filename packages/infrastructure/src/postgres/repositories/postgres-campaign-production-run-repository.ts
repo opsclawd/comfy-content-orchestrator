@@ -440,7 +440,13 @@ export class PostgresCampaignProductionRunRepository implements CampaignProducti
     await this.client.query(
       `
       UPDATE campaign_production_run_scenes
-      SET current_attempt_id = $1, current_attempt_ordinal = $2, production_job_id = $3
+      SET current_attempt_id = $1,
+          current_attempt_ordinal = $2,
+          production_job_id = $3,
+          spec_revision = COALESCE(
+            (SELECT spec_revision FROM production_attempts WHERE attempt_id = $1),
+            spec_revision
+          )
       WHERE run_id = $4 AND scene_id = $5
       `,
       [attempt.attemptId, attempt.attemptOrdinal, attempt.productionJobId, runId, sceneId]

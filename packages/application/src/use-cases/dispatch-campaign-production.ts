@@ -119,6 +119,20 @@ export class ApproveSceneAndDispatchCampaignProductionUseCase {
 
       // 6. If not ready, update UI projection counter if changed and return
       if (!ready) {
+        // If this scene belongs to an existing production run in the campaign,
+        // it is a re-approval of a rejected/revised scene. Enqueue it directly for rendering!
+        const existingRunScene = await runsRepo.findRunSceneBySceneId(targetScene.id);
+        if (existingRunScene !== undefined && targetScene.status === "approved") {
+          await this.enqueueSceneProductionRender.executeWithContext(context, {
+            sceneId: targetScene.id,
+            runId: existingRunScene.runId
+          });
+          return {
+            isIdempotentReplay: false,
+            scene: targetScene.snapshot()
+          };
+        }
+
         const approvedCount = scenes.filter((s) => s.status === "approved").length;
         if (campaign.approvedScenes !== approvedCount) {
           await campaignsRepo.save({

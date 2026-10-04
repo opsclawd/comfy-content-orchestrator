@@ -171,7 +171,7 @@ describe("ComponentLicenseRegistry contracts", () => {
       (e) => e.componentId === "MINIMAX_H3_720P_5S_REF2V_V1"
     );
     expect(ref2vEntry).toBeDefined();
-    expect(ref2vEntry?.status).toBe("review_required");
-    expect(ref2vEntry?.reviewedAt).toBeUndefined();
+    expect(ref2vEntry?.status).toBe("approved");
+    expect(ref2vEntry?.reviewedAt).toBeDefined();
   });
 });
