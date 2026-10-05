@@ -2,7 +2,7 @@ import { test, expect } from "../harness/fixture.js";
 import { randomUUID } from "node:crypto";
 
 test.describe("Campaign Creation Handoff and Review Hub Integration", () => {
-  test("Auto scene-count happy path navigates to Review Hub with canonical scenes and admitted candidate generation (AC-1, AC-2, AC-3, AC-4, AC-5)", async ({
+  test("Auto scene-count happy path navigates to Review Hub with canonical scenes awaiting ShotPlan generation (AC-1, AC-2, AC-3, AC-4, AC-5)", async ({
     page,
     testEnv
   }) => {
@@ -63,13 +63,14 @@ test.describe("Campaign Creation Handoff and Review Hub Integration", () => {
       const href = await sceneLink.getAttribute("href");
       expect(href).toMatch(/^\/scenes\/[0-9a-f-]+$/);
 
-      // AC-3: Candidate generation is already admitted/under way after handoff
+      // AC-3: Materialized scenes stay in draft_pending (no auto-admitted
+      // candidate generation) until the director explicitly generates ShotPlans.
       const statusBadge = row.locator(".status-badge");
-      await expect(statusBadge).toHaveAttribute("data-status", "generating_candidates");
-      await expect(statusBadge).toHaveText("generating_candidates");
+      await expect(statusBadge).toHaveAttribute("data-status", "draft_pending");
+      await expect(statusBadge).toHaveText("draft_pending");
     }
 
-    // AC-4: Existing candidate-review controls work unchanged after creation
+    // AC-4: Scene review controls render correctly for a freshly materialized scene
     // Click into the first scene
     const firstSceneLink = sceneRows.first().getByTestId("scene-link");
     const firstSceneHref = await firstSceneLink.getAttribute("href");

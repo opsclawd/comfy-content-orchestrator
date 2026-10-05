@@ -2,13 +2,9 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { Pool, type PoolClient } from "pg";
 import type { CampaignId, SceneConfiguration } from "@cco/domain";
 import {
-  CANDIDATE_BATCH_SIZE,
   MaterializeStoryboardUseCase,
-  ProgressSceneProductionUseCases,
   StoryboardMaterializationConflictError,
-  type OrderedSceneConfiguration,
-  type ProgressSceneProductionInput,
-  type UnitOfWorkContext
+  type OrderedSceneConfiguration
 } from "@cco/application";
 import { runMigrations } from "../migration-runner.js";
 import {
@@ -16,7 +12,6 @@ import {
   type StartedPostgres18Container
 } from "../test-support/postgres-18.js";
 import { insertClientRecord, insertCampaignRecord } from "../test-support/records.js";
-import { PostgresJobQueue } from "../repositories/postgres-job-queue.js";
 import { PostgresUnitOfWork } from "./postgres-unit-of-work.js";
 
 describe("MaterializeStoryboardUseCase Integration", () => {
@@ -66,7 +61,7 @@ describe("MaterializeStoryboardUseCase Integration", () => {
     }));
   };
 
-  it("materializes N scenes and candidate jobs atomically, preserving exact sequenceIndex and duration", async () => {
+  it("materializes N scenes atomically in draft_pending, preserving exact sequenceIndex and duration, with no candidate jobs enqueued", async () => {
     const clientRecord = await insertClientRecord(client);
     const campaign = await insertCampaignRecord(client, {
       clientId: clientRecord.client_id,
@@ -74,9 +69,7 @@ describe("MaterializeStoryboardUseCase Integration", () => {
     });
 
     const uow = new PostgresUnitOfWork(pool);
-    const queue = new PostgresJobQueue(pool);
-    const progressUseCases = new ProgressSceneProductionUseCases(uow, undefined, queue);
-    const useCase = new MaterializeStoryboardUseCase(uow, progressUseCases);
+    const useCase = new MaterializeStoryboardUseCase(uow);
 
     const configs = createSceneConfigs(3);
     const result = await useCase.execute({
@@ -107,7 +100,10 @@ describe("MaterializeStoryboardUseCase Integration", () => {
 
     expect(sceneRows.rows).toHaveLength(3);
     expect(sceneRows.rows.map((r) => r.scene_order)).toEqual([1, 2, 3]);
-    expect(sceneRows.rows.every((r) => r.status === "generating_candidates")).toBe(true);
+    // Materialization no longer auto-admits candidate generation: a freshly
+    // materialized scene stays in draft_pending until the director explicitly
+    // generates ShotPlans.
+    expect(sceneRows.rows.every((r) => r.status === "draft_pending")).toBe(true);
     expect(sceneRows.rows.every((r) => r.spec_revision === 1)).toBe(true);
 
     // Check duration conversion fidelity (e.g. 5001ms -> "5.001", 5500ms -> "5.500", 6000ms -> "6.000")
@@ -116,21 +112,9 @@ describe("MaterializeStoryboardUseCase Integration", () => {
     expect(parseFloat(sceneRows.rows[1]!.duration_seconds)).toBe(5.5);
     expect(parseFloat(sceneRows.rows[2]!.duration_seconds)).toBe(6.0);
 
-    // Verify raw PostgreSQL render_jobs rows
-    const jobRows = await client.query<{
-      job_id: string;
-      scene_id: string;
-      job_kind: string;
-      status: string;
-    }>(
-      `SELECT job_id, scene_id, job_kind, status
-       FROM render_jobs
-       ORDER BY created_at ASC`
-    );
-
-    expect(jobRows.rows).toHaveLength(3 * CANDIDATE_BATCH_SIZE);
-    expect(jobRows.rows.every((r) => r.job_kind === "candidate")).toBe(true);
-    expect(jobRows.rows.every((r) => r.status === "queued")).toBe(true);
+    // No render_jobs rows are created by materialization anymore.
+    const jobRows = await client.query(`SELECT count(*)::int AS count FROM render_jobs`);
+    expect(jobRows.rows[0]?.count).toBe(0);
 
     // Idempotent replay: executing again returns existing scenes without inserting new rows
     const replayResult = await useCase.execute({
@@ -148,9 +132,6 @@ describe("MaterializeStoryboardUseCase Integration", () => {
       [campaign.campaign_id]
     );
     expect(recheckSceneRows.rows[0]?.count).toBe(3);
-
-    const recheckJobRows = await client.query(`SELECT count(*)::int AS count FROM render_jobs`);
-    expect(recheckJobRows.rows[0]?.count).toBe(3 * CANDIDATE_BATCH_SIZE);
   });
 
   it("serializes concurrent executions on the same campaign shell so exactly one executes and one replays", async () => {
@@ -161,9 +142,7 @@ describe("MaterializeStoryboardUseCase Integration", () => {
     });
 
     const uow = new PostgresUnitOfWork(pool);
-    const queue = new PostgresJobQueue(pool);
-    const progressUseCases = new ProgressSceneProductionUseCases(uow, undefined, queue);
-    const useCase = new MaterializeStoryboardUseCase(uow, progressUseCases);
+    const useCase = new MaterializeStoryboardUseCase(uow);
 
     const configs = createSceneConfigs(3);
 
@@ -180,63 +159,6 @@ describe("MaterializeStoryboardUseCase Integration", () => {
       [campaign.campaign_id]
     );
     expect(sceneCount.rows[0]?.count).toBe(3);
-
-    const jobCount = await client.query<{ count: number }>(
-      `SELECT count(*)::int AS count FROM render_jobs`
-    );
-    expect(jobCount.rows[0]?.count).toBe(3 * CANDIDATE_BATCH_SIZE);
-  });
-
-  it("rolls back all scene and candidate records if failure occurs midway through transaction", async () => {
-    const clientRecord = await insertClientRecord(client);
-    const campaign = await insertCampaignRecord(client, {
-      clientId: clientRecord.client_id,
-      totalScenes: 3
-    });
-
-    let callCount = 0;
-    const failingProgressUseCases = {
-      async beginCandidateGenerationWithContext(
-        context: UnitOfWorkContext,
-        input: ProgressSceneProductionInput
-      ) {
-        callCount++;
-        if (callCount === 2) {
-          throw new Error("Simulated mid-flight failure during candidate admission");
-        }
-        const realProgress = new ProgressSceneProductionUseCases(
-          new PostgresUnitOfWork(pool),
-          undefined,
-          new PostgresJobQueue(pool)
-        );
-        return realProgress.beginCandidateGenerationWithContext(context, input);
-      }
-    } as unknown as ProgressSceneProductionUseCases;
-
-    const uow = new PostgresUnitOfWork(pool);
-    const useCase = new MaterializeStoryboardUseCase(uow, failingProgressUseCases);
-
-    const configs = createSceneConfigs(3);
-
-    await expect(
-      useCase.execute({
-        campaignId: campaign.campaign_id as CampaignId,
-        scenes: configs
-      })
-    ).rejects.toThrow("Simulated mid-flight failure during candidate admission");
-
-    // Complete rollback: zero scenes persisted for this campaign
-    const sceneCount = await client.query<{ count: number }>(
-      `SELECT count(*)::int AS count FROM storyboard_scenes WHERE campaign_id = $1`,
-      [campaign.campaign_id]
-    );
-    expect(sceneCount.rows[0]?.count).toBe(0);
-
-    // Zero render_jobs persisted
-    const jobCount = await client.query<{ count: number }>(
-      `SELECT count(*)::int AS count FROM render_jobs`
-    );
-    expect(jobCount.rows[0]?.count).toBe(0);
   });
 
   it("durably persists and reconstitutes non-centisecond duration values (5001ms) exactly from PostgreSQL", async () => {
@@ -247,9 +169,7 @@ describe("MaterializeStoryboardUseCase Integration", () => {
     });
 
     const uow = new PostgresUnitOfWork(pool);
-    const queue = new PostgresJobQueue(pool);
-    const progressUseCases = new ProgressSceneProductionUseCases(uow, undefined, queue);
-    const useCase = new MaterializeStoryboardUseCase(uow, progressUseCases);
+    const useCase = new MaterializeStoryboardUseCase(uow);
 
     const result = await useCase.execute({
       campaignId: campaign.campaign_id as CampaignId,
@@ -282,7 +202,7 @@ describe("MaterializeStoryboardUseCase Integration", () => {
     expect(repoScene!.snapshot().configuration.durationMs).toBe(5001);
   });
 
-  it("atomically commits completion proof with scenes and jobs, and verifies proof on replay", async () => {
+  it("atomically commits completion proof with scenes, and verifies proof on replay", async () => {
     const clientRecord = await insertClientRecord(client);
     const campaign = await insertCampaignRecord(client, {
       clientId: clientRecord.client_id,
@@ -290,9 +210,7 @@ describe("MaterializeStoryboardUseCase Integration", () => {
     });
 
     const uow = new PostgresUnitOfWork(pool);
-    const queue = new PostgresJobQueue(pool);
-    const progressUseCases = new ProgressSceneProductionUseCases(uow, undefined, queue);
-    const useCase = new MaterializeStoryboardUseCase(uow, progressUseCases);
+    const useCase = new MaterializeStoryboardUseCase(uow);
 
     const configs = createSceneConfigs(3);
     const completionHash = "e".repeat(64);
