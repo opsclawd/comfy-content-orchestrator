@@ -90,7 +90,7 @@ export const H3ProductionInspectionReadModelSchema = z.object({
     routingMode: ShotPlanRoutingModeSchema,
     renderProfileKey: z.string().min(1),
     workflowTemplate: z.string().min(1),
-    targetDurationMs: z.number().int().positive(),
+    targetDurationMs: z.number().positive(),
     targetFrameCount: z.number().int().positive(),
     fps: z.literal(24),
     width: z.literal(1344),

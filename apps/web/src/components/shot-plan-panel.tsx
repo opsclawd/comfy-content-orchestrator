@@ -17,7 +17,6 @@ import { ShotPlanAnimaticPlayer } from "./animatic/shot-plan-animatic-player";
 import { ShotPlanVariationModal } from "./shot-plan-variation-modal";
 import { ShotPlanComparisonModal } from "./shot-plan-comparison-modal";
 import { ProductionInputInspector } from "./production-input-inspector";
-import { getSceneProductionInspection } from "../api/client";
 import type { ReviewCommandEvent, ReviewCommandState } from "./review-command-state";
 import {
   formatDurationMs,
@@ -217,9 +216,33 @@ export function ShotPlanPanel({
     setLoadingPlanIds((prev) => ({ ...prev, [planId]: true }));
     setInspectionErrors((prev) => ({ ...prev, [planId]: null }));
     try {
-      const result = await (fetchProductionInspection
-        ? fetchProductionInspection(sceneId, planId)
-        : getSceneProductionInspection(sceneId, planId));
+      let result: H3ProductionInspectionReadModel;
+      if (fetchProductionInspection) {
+        result = await fetchProductionInspection(sceneId, planId);
+      } else {
+        const query = planId ? `?shotPlanId=${encodeURIComponent(planId)}` : "";
+        const res = await fetch(
+          `/api/scenes/${encodeURIComponent(sceneId)}/production-inspection${query}`,
+          {
+            headers: {
+              Accept: "application/json"
+            }
+          }
+        );
+        if (!res.ok) {
+          let message = `Failed to load production inspection (HTTP ${res.status})`;
+          try {
+            const errData = await res.json();
+            if (errData?.message) {
+              message = errData.message;
+            }
+          } catch {
+            // retain default message
+          }
+          throw new Error(message);
+        }
+        result = (await res.json()) as H3ProductionInspectionReadModel;
+      }
       setInspectionsByPlanId((prev) => ({ ...prev, [planId]: result }));
     } catch (err: unknown) {
       setInspectionErrors((prev) => ({
@@ -945,31 +968,37 @@ export function ShotPlanPanel({
                 <div
                   className="shot-plan-inspector-trigger"
                   data-testid="shot-plan-inspector-trigger"
-                  style={{
-                    padding: "0.75rem 1.25rem",
-                    borderTop: "1px solid var(--border-subtle, #334155)"
-                  }}
                 >
                   <button
                     type="button"
-                    className="action-button-secondary inspect-production-input-button"
+                    className="inspect-production-input-button action-button-secondary"
                     data-testid="inspect-production-input-button"
                     data-shot-plan-id={plan.shotPlanId}
                     onClick={() => handleRefreshInspection(plan.shotPlanId)}
                     disabled={disabled || loadingPlanIds[plan.shotPlanId]}
                   >
-                    Inspect H3 Production Inputs
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <circle cx="11" cy="11" r="8" />
+                      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                    </svg>
+                    <span>
+                      {loadingPlanIds[plan.shotPlanId]
+                        ? "Loading H3 Inputs..."
+                        : "Inspect H3 Production Inputs"}
+                    </span>
                   </button>
                   {inspectionErrors[plan.shotPlanId] && (
-                    <p
-                      className="inspection-error"
-                      role="alert"
-                      style={{
-                        color: "var(--color-danger, #ef4444)",
-                        marginTop: "0.25rem",
-                        fontSize: "0.8125rem"
-                      }}
-                    >
+                    <p className="inspection-error" role="alert">
                       {inspectionErrors[plan.shotPlanId]}
                     </p>
                   )}

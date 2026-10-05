@@ -3899,3 +3899,56 @@ a:hover {
   color: var(--text-secondary, #cbd5e1);
   font-weight: 600;
 }
+
+/* Production Input Inspector Trigger Button (#363) */
+.shot-plan-inspector-trigger {
+  padding: 0.75rem 1.25rem;
+  border-top: 1px solid var(--border-subtle, #334155);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.inspect-production-input-button,
+.action-button-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1.125rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  font-family: inherit;
+  border-radius: var(--radius-sm, 6px);
+  background-color: var(--bg-surface-elevated, #1e293b);
+  border: 1px solid var(--border-prominent, #475569);
+  color: var(--text-primary, #f8fafc);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.inspect-production-input-button:hover:not(:disabled),
+.action-button-secondary:hover:not(:disabled) {
+  background-color: #334155;
+  border-color: #38bdf8;
+  color: #38bdf8;
+  box-shadow: 0 0 0 1px #38bdf8;
+}
+
+.inspect-production-input-button:disabled,
+.action-button-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.inspect-production-input-button svg {
+  flex-shrink: 0;
+}
+
+.inspection-error {
+  color: var(--color-danger, #ef4444);
+  margin-top: 0.25rem;
+  font-size: 0.8125rem;
+}
