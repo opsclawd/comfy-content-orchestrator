@@ -9,12 +9,14 @@ import type {
   SceneReviewCandidateGroup,
   CandidateReadModel,
   CreateShotPlanVariationRequest,
-  CreateShotPlanVariationResponse
+  CreateShotPlanVariationResponse,
+  H3ProductionInspectionReadModel
 } from "@cco/contracts";
 import { compileShotPlanAnimaticTimeline, resolveShotPlanDiffSource } from "@cco/contracts";
 import { ShotPlanAnimaticPlayer } from "./animatic/shot-plan-animatic-player";
 import { ShotPlanVariationModal } from "./shot-plan-variation-modal";
 import { ShotPlanComparisonModal } from "./shot-plan-comparison-modal";
+import { ProductionInputInspector } from "./production-input-inspector";
 import type { ReviewCommandEvent, ReviewCommandState } from "./review-command-state";
 import {
   formatDurationMs,
@@ -161,13 +163,19 @@ export interface ShotPlanPanelProps {
   state?: ReviewCommandState | undefined;
   dispatch?: ((event: ReviewCommandEvent) => void) | undefined;
   onSelectShotPlan?: ((shotPlanId: string) => void) | undefined;
-  onApproveShotPlan?: ((shotPlanId: string) => void) | undefined;
+  onApproveShotPlan?:
+    ((shotPlanId: string, expectedProductionInputFingerprint?: string) => void) | undefined;
   disabled?: boolean | undefined;
   sceneId?: string | undefined;
   onGenerateShotPlans?: ((options: GenerateShotPlansOptions) => Promise<void>) | undefined;
   onRefresh?: (() => void | Promise<void>) | undefined;
   onCreateVariation?:
     | ((payload: CreateShotPlanVariationRequest) => Promise<CreateShotPlanVariationResponse>)
+    | undefined;
+  productionInspection?: H3ProductionInspectionReadModel | null | undefined;
+  productionInspectionsByPlanId?: Record<string, H3ProductionInspectionReadModel> | undefined;
+  fetchProductionInspection?:
+    | ((sceneId: string, shotPlanId?: string) => Promise<H3ProductionInspectionReadModel>)
     | undefined;
 }
 
@@ -186,7 +194,10 @@ export function ShotPlanPanel({
   sceneId,
   onGenerateShotPlans,
   onRefresh,
-  onCreateVariation
+  onCreateVariation,
+  productionInspection,
+  productionInspectionsByPlanId,
+  fetchProductionInspection
 }: ShotPlanPanelProps) {
   const candidateGroups = candidatesByRevision ?? stateProp?.detail?.candidatesByRevision ?? [];
   const [isGenerating, setIsGenerating] = useState(false);
@@ -194,6 +205,54 @@ export function ShotPlanPanel({
   const [activeBeatByPlan, setActiveBeatByPlan] = useState<Record<string, number | null>>({});
   const [variationModalPlan, setVariationModalPlan] = useState<ShotPlanReviewItem | null>(null);
   const [comparisonModalPlan, setComparisonModalPlan] = useState<ShotPlanReviewItem | null>(null);
+  const [inspectionsByPlanId, setInspectionsByPlanId] = useState<
+    Record<string, H3ProductionInspectionReadModel>
+  >({});
+  const [loadingPlanIds, setLoadingPlanIds] = useState<Record<string, boolean>>({});
+  const [inspectionErrors, setInspectionErrors] = useState<Record<string, string | null>>({});
+
+  const handleRefreshInspection = async (planId: string) => {
+    if (!sceneId) return;
+    setLoadingPlanIds((prev) => ({ ...prev, [planId]: true }));
+    setInspectionErrors((prev) => ({ ...prev, [planId]: null }));
+    try {
+      let result: H3ProductionInspectionReadModel;
+      if (fetchProductionInspection) {
+        result = await fetchProductionInspection(sceneId, planId);
+      } else {
+        const query = planId ? `?shotPlanId=${encodeURIComponent(planId)}` : "";
+        const res = await fetch(
+          `/api/scenes/${encodeURIComponent(sceneId)}/production-inspection${query}`,
+          {
+            headers: {
+              Accept: "application/json"
+            }
+          }
+        );
+        if (!res.ok) {
+          let message = `Failed to load production inspection (HTTP ${res.status})`;
+          try {
+            const errData = await res.json();
+            if (errData?.message) {
+              message = errData.message;
+            }
+          } catch {
+            // retain default message
+          }
+          throw new Error(message);
+        }
+        result = (await res.json()) as H3ProductionInspectionReadModel;
+      }
+      setInspectionsByPlanId((prev) => ({ ...prev, [planId]: result }));
+    } catch (err: unknown) {
+      setInspectionErrors((prev) => ({
+        ...prev,
+        [planId]: err instanceof Error ? err.message : "Failed to load production inspection"
+      }));
+    } finally {
+      setLoadingPlanIds((prev) => ({ ...prev, [planId]: false }));
+    }
+  };
 
   let router: { refresh: () => void } | null = null;
   try {
@@ -362,8 +421,28 @@ export function ShotPlanPanel({
         return;
       }
     }
+
+    const matchingInspection =
+      productionInspectionsByPlanId?.[shotPlanId] ??
+      inspectionsByPlanId[shotPlanId] ??
+      (productionInspection &&
+      (productionInspection.authority.shotPlanId === shotPlanId ||
+        (!productionInspection.authority.shotPlanId &&
+          (shotPlanId === selectedShotPlanId ||
+            shotPlanId === approvedShotPlanId ||
+            shotPlans.length === 1)) ||
+        shotPlans.length === 1)
+        ? productionInspection
+        : undefined);
+
+    const expectedFingerprint = matchingInspection?.productionInputFingerprint;
+
     if (onApproveShotPlan) {
-      onApproveShotPlan(shotPlanId);
+      if (expectedFingerprint) {
+        onApproveShotPlan(shotPlanId, expectedFingerprint);
+      } else {
+        onApproveShotPlan(shotPlanId);
+      }
       return;
     }
     if (dispatch) {
@@ -373,7 +452,10 @@ export function ShotPlanPanel({
           action: "approve_shotplan",
           payload: {
             shotPlanId,
-            expectedSpecRevision: currentSpecRevision
+            expectedSpecRevision: currentSpecRevision,
+            ...(expectedFingerprint
+              ? { expectedProductionInputFingerprint: expectedFingerprint }
+              : {})
           },
           displayLabel: formatReviewAction("approve_shotplan")
         }
@@ -465,6 +547,16 @@ export function ShotPlanPanel({
           const isFrameAnchored = plan.routingMode === "frame_anchored";
           const anchorValidation = validateFrameAnchor(plan, currentSpecRevision, candidateGroups);
           const hasValidAnchor = anchorValidation.isValid;
+          const activeInspection =
+            productionInspectionsByPlanId?.[plan.shotPlanId] ??
+            inspectionsByPlanId[plan.shotPlanId] ??
+            (productionInspection &&
+            (productionInspection.authority.shotPlanId === plan.shotPlanId ||
+              (!productionInspection.authority.shotPlanId &&
+                (isSelected || isApproved || shotPlans.length === 1)) ||
+              shotPlans.length === 1)
+              ? productionInspection
+              : undefined);
 
           return (
             <article
@@ -863,6 +955,55 @@ export function ShotPlanPanel({
                   </div>
                 </div>
               </div>
+
+              {/* Production Input Inspector / What H3 will receive */}
+              {activeInspection || loadingPlanIds[plan.shotPlanId] ? (
+                <ProductionInputInspector
+                  inspection={activeInspection}
+                  isLoading={loadingPlanIds[plan.shotPlanId]}
+                  error={inspectionErrors[plan.shotPlanId]}
+                  onRefresh={() => handleRefreshInspection(plan.shotPlanId)}
+                />
+              ) : isCurrent ? (
+                <div
+                  className="shot-plan-inspector-trigger"
+                  data-testid="shot-plan-inspector-trigger"
+                >
+                  <button
+                    type="button"
+                    className="inspect-production-input-button action-button-secondary"
+                    data-testid="inspect-production-input-button"
+                    data-shot-plan-id={plan.shotPlanId}
+                    onClick={() => handleRefreshInspection(plan.shotPlanId)}
+                    disabled={disabled || loadingPlanIds[plan.shotPlanId]}
+                  >
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <circle cx="11" cy="11" r="8" />
+                      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                    </svg>
+                    <span>
+                      {loadingPlanIds[plan.shotPlanId]
+                        ? "Loading H3 Inputs..."
+                        : "Inspect H3 Production Inputs"}
+                    </span>
+                  </button>
+                  {inspectionErrors[plan.shotPlanId] && (
+                    <p className="inspection-error" role="alert">
+                      {inspectionErrors[plan.shotPlanId]}
+                    </p>
+                  )}
+                </div>
+              ) : null}
 
               {/* Variant Actions */}
               <div className="shot-plan-card-actions" data-testid="shot-plan-card-actions">

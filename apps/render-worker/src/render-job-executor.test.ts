@@ -868,6 +868,31 @@ describe("Certified Render Job Executor", () => {
       "injectedPayload.specRevision must be a positive integer"
     );
     expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+
+    // 16. productionInputFingerprint in candidate job (production-only)
+    const candidateJobWithFingerprint = createSampleCandidateJob({
+      injectedPayload: {
+        prompt: "valid",
+        variantOrdinal: 1,
+        productionInputFingerprint: "sha256-abc123"
+      }
+    });
+    await expect(executor(candidateJobWithFingerprint)).rejects.toThrow(
+      "productionInputFingerprint is production-only and not allowed in candidate jobs"
+    );
+    expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+
+    // 17. Empty productionInputFingerprint in production job
+    const prodJobWithEmptyFingerprint = createSampleProductionJob({
+      injectedPayload: {
+        prompt: "valid",
+        productionInputFingerprint: "   "
+      }
+    });
+    await expect(executor(prodJobWithEmptyFingerprint)).rejects.toThrow(
+      "injectedPayload.productionInputFingerprint must be a non-empty string"
+    );
+    expect(mockExecuteProfileRender).not.toHaveBeenCalled();
   });
 
   it("requires one candidate output and a positive variant ordinal", async () => {

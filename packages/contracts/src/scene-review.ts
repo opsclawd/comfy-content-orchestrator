@@ -250,7 +250,8 @@ export const REVIEW_ERROR_CODES = [
   "VALIDATION_FAILURE",
   "MEDIA_UNAVAILABLE",
   "AUTHENTICATION_REQUIRED",
-  "UNSUPPORTED_PRODUCTION_DURATION"
+  "UNSUPPORTED_PRODUCTION_DURATION",
+  "PRODUCTION_INPUT_FINGERPRINT_MISMATCH"
 ] as const;
 
 export const ReviewErrorCodeSchema = z.enum(REVIEW_ERROR_CODES);
@@ -333,6 +334,16 @@ export const EmptyActionPayloadSchema = z
   .or(z.object({}))
   .default({});
 
+export const ApprovePayloadSchema = z
+  .object({
+    expectedProductionInputFingerprint: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/i)
+      .optional()
+  })
+  .default({});
+export type ApprovePayload = z.infer<typeof ApprovePayloadSchema>;
+
 const BaseCommandEnvelope = z.object({
   actionId: z.string().uuid(),
   sceneId: z.string().uuid(),
@@ -347,7 +358,7 @@ export const CandidateSelectCommandSchema = BaseCommandEnvelope.extend({
 
 export const ApproveCommandSchema = BaseCommandEnvelope.extend({
   action: z.literal("approve"),
-  payload: EmptyActionPayloadSchema
+  payload: ApprovePayloadSchema
 });
 
 export const RerollCommandSchema = BaseCommandEnvelope.extend({
@@ -414,7 +425,11 @@ export type SelectShotPlanPayload = z.infer<typeof SelectShotPlanPayloadSchema>;
 
 export const ApproveShotPlanPayloadSchema = z
   .object({
-    shotPlanId: z.string().uuid().optional()
+    shotPlanId: z.string().uuid().optional(),
+    expectedProductionInputFingerprint: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/i)
+      .optional()
   })
   .default({});
 export type ApproveShotPlanPayload = z.infer<typeof ApproveShotPlanPayloadSchema>;

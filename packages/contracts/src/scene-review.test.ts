@@ -437,7 +437,8 @@ describe("Review Read Model and Error Contracts", () => {
       "VALIDATION_FAILURE",
       "MEDIA_UNAVAILABLE",
       "AUTHENTICATION_REQUIRED",
-      "UNSUPPORTED_PRODUCTION_DURATION"
+      "UNSUPPORTED_PRODUCTION_DURATION",
+      "PRODUCTION_INPUT_FINGERPRINT_MISMATCH"
     ];
     expect(REVIEW_ERROR_CODES).toEqual(expectedCodes);
 

@@ -1176,4 +1176,154 @@ describe("ShotPlanPanel Component", () => {
       fetchSpy.mockRestore();
     });
   });
+
+  describe("H3 Production Input Inspector Integration", () => {
+    const sampleInspection = {
+      authority: {
+        sceneId: "22222222-2222-4222-8222-222222222222",
+        shotPlanId: "11111111-1111-4111-8111-111111111111",
+        specRevision: 2,
+        variantOrdinal: 1,
+        shotPlanStatus: "approved" as const,
+        isCurrentRevision: true
+      },
+      route: {
+        routingMode: "reference_directed" as const,
+        renderProfileKey: "MINIMAX_H3_720P_5S_REF2V_V1",
+        workflowTemplate: "minimax-h3-720p-124f-ref2v",
+        targetDurationMs: 4000,
+        targetFrameCount: 97,
+        fps: 24 as const,
+        width: 1344 as const,
+        height: 768 as const
+      },
+      visualInputs: {
+        references: [
+          {
+            slotIndex: 1,
+            promptTag: "<Picture 1>" as const,
+            referenceAssetId: "44444444-4444-4444-8444-444444444444",
+            role: "subject_identity" as const,
+            displayName: "Hero Character",
+            contentHashSha256: "a".repeat(64),
+            previewUrl: "https://media.example.com/ref.png",
+            previewAvailability: "available" as const
+          }
+        ],
+        frameAnchor: null
+      },
+      instruction: {
+        compiledText: "Rain-slicked alleyway in Neo-Tokyo",
+        compiledSha256: "b".repeat(64),
+        cameraIntentSummary: {
+          framing: "medium_close_up" as const,
+          angle: "eye_level" as const,
+          cameraMovement: "dolly_in" as const,
+          movementSpeed: "slow" as const,
+          lensIntent: "50mm prime cinematic",
+          cameraPosition: "chest height",
+          cameraPromptDescription: "Slow push in"
+        }
+      },
+      admission: {
+        readiness: "ready" as const,
+        blockers: []
+      },
+      runtimeContext: {
+        durationCeilingSeconds: 15
+      },
+      productionInputFingerprint: "deadbeef0123456789abcdef0123456789abcdef0123456789abcdef01234567"
+    };
+
+    it("renders ProductionInputInspector within shot plan card when inspection prop is provided", () => {
+      const plan = createSampleShotPlan();
+      render(
+        <ShotPlanPanel
+          shotPlans={[plan]}
+          currentSpecRevision={2}
+          productionInspection={sampleInspection}
+        />
+      );
+
+      expect(screen.getByTestId("production-input-inspector")).toBeTruthy();
+      expect(screen.getByText("PRODUCTION INPUT")).toBeTruthy();
+      expect(screen.getByText("What H3 will receive")).toBeTruthy();
+      expect(screen.getByTestId("inspector-readiness-badge").textContent).toContain("READY");
+      expect(screen.getByTestId("inspector-fingerprint").textContent).toContain("deadbeef");
+    });
+
+    it("attaches expectedProductionInputFingerprint when clicking Approve Intent with inspection", () => {
+      const plan = createSampleShotPlan();
+      const dispatch = vi.fn();
+      render(
+        <ShotPlanPanel
+          shotPlans={[plan]}
+          currentSpecRevision={2}
+          productionInspection={sampleInspection}
+          dispatch={dispatch}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId("shot-plan-approve-button"));
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(dispatch).toHaveBeenCalledWith({
+        type: "REQUEST_CONFIRMATION",
+        stagedAction: {
+          action: "approve_shotplan",
+          payload: {
+            shotPlanId: plan.shotPlanId,
+            expectedSpecRevision: 2,
+            expectedProductionInputFingerprint: sampleInspection.productionInputFingerprint
+          },
+          displayLabel: "Approve Shot Plan"
+        }
+      });
+    });
+
+    it("calls onApproveShotPlan callback with fingerprint when provided", () => {
+      const plan = createSampleShotPlan();
+      const onApprove = vi.fn();
+      render(
+        <ShotPlanPanel
+          shotPlans={[plan]}
+          currentSpecRevision={2}
+          productionInspection={sampleInspection}
+          onApproveShotPlan={onApprove}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId("shot-plan-approve-button"));
+      expect(onApprove).toHaveBeenCalledTimes(1);
+      expect(onApprove).toHaveBeenCalledWith(
+        plan.shotPlanId,
+        sampleInspection.productionInputFingerprint
+      );
+    });
+
+    it("allows loading inspection dynamically on button click", async () => {
+      const plan = createSampleShotPlan();
+      const fetchInspectionMock = vi.fn().mockResolvedValue(sampleInspection);
+
+      render(
+        <ShotPlanPanel
+          shotPlans={[plan]}
+          currentSpecRevision={2}
+          sceneId={plan.sceneId}
+          fetchProductionInspection={fetchInspectionMock}
+        />
+      );
+
+      expect(screen.queryByTestId("production-input-inspector")).toBeNull();
+      const inspectBtn = screen.getByTestId("inspect-production-input-button");
+      expect(inspectBtn).toBeTruthy();
+
+      fireEvent.click(inspectBtn);
+
+      await waitFor(() => {
+        expect(fetchInspectionMock).toHaveBeenCalledWith(plan.sceneId, plan.shotPlanId);
+        expect(screen.getByTestId("production-input-inspector")).toBeTruthy();
+        expect(screen.getByTestId("inspector-fingerprint").textContent).toContain("deadbeef");
+      });
+    });
+  });
 });

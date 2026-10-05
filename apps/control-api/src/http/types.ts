@@ -14,6 +14,7 @@ import {
   PlanShotPlansUseCase,
   CreateShotPlanVariationUseCase,
   ProgressSceneProductionUseCases,
+  PrepareSceneProductionInputsUseCase,
   RankReviewCandidatesUseCase,
   ReviewSceneUseCases,
   ProductionReviewUseCases,
@@ -94,6 +95,7 @@ export interface ControlApiUseCases {
   readonly planCampaignStoryboard?: PlanCampaignStoryboardUseCase | undefined;
   readonly rankReviewCandidates?: RankReviewCandidatesUseCase | undefined;
   readonly enforceStorageAdmission?: EnforceStorageAdmission;
+  readonly prepareSceneProductionInputs: PrepareSceneProductionInputsUseCase;
   readonly approveSceneAndDispatchCampaignProduction: ApproveSceneAndDispatchCampaignProductionUseCase;
   readonly completeCampaignProductionRun: CompleteCampaignProductionRunUseCases;
   readonly completeCampaignProductionRunAssembly: CompleteCampaignProductionRunAssemblyUseCases;
@@ -172,10 +174,17 @@ export function createControlApiContainer(
     dependencies.uow,
     progressSceneProduction
   );
+  const prepareSceneProductionInputs = new PrepareSceneProductionInputsUseCase(dependencies.uow, {
+    objectStorage: dependencies.objectStorage,
+    hashBytes,
+    imageValidator: dependencies.imageValidator,
+    mediaDelivery: dependencies.reviewMediaDelivery
+  });
   const approveSceneAndDispatchCampaignProduction =
     new ApproveSceneAndDispatchCampaignProductionUseCase(
       dependencies.uow,
-      enqueueSceneProductionRender
+      enqueueSceneProductionRender,
+      prepareSceneProductionInputs
     );
   const completeCampaignProductionRun = new CompleteCampaignProductionRunUseCases(dependencies.uow);
   const completeCampaignProductionRunAssembly = new CompleteCampaignProductionRunAssemblyUseCases(
@@ -314,6 +323,7 @@ export function createControlApiContainer(
       createScene,
       submitSceneCreation,
       materializeStoryboard,
+      prepareSceneProductionInputs,
       approveSceneAndDispatchCampaignProduction,
       completeCampaignProductionRun,
       completeCampaignProductionRunAssembly,

@@ -32,7 +32,8 @@ import {
   ProgressSceneProductionUseCases,
   CompleteCampaignProductionRunUseCases,
   CompleteCampaignProductionRunAssemblyUseCases,
-  ApproveSceneAndDispatchCampaignProductionUseCase
+  ApproveSceneAndDispatchCampaignProductionUseCase,
+  PrepareSceneProductionInputsUseCase
 } from "@cco/application";
 import type { ControlApiContainer } from "./types.js";
 
@@ -570,7 +571,8 @@ describe("ShotPlan-to-H3 E2E Lifecycle (Unit / Orchestration)", () => {
         completeCampaignProductionRun: new CompleteCampaignProductionRunUseCases(uow),
         completeCampaignProductionRunAssembly: new CompleteCampaignProductionRunAssemblyUseCases(
           uow
-        )
+        ),
+        prepareSceneProductionInputs: new PrepareSceneProductionInputsUseCase(uow)
       },
       queries: {
         sceneReview: sceneReviewQueries

@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import {
   ApiClientError,
   getCurrentProductionAttempt,
+  getSceneProductionInspection,
   getSceneReviewDetail
 } from "../../../api/client";
 import { SceneReviewDetailView } from "../../../components/scene-review-detail";
@@ -19,13 +20,16 @@ export default async function ScenePage({ params }: ScenePageProps) {
 
   let detail;
   let productionAttempt;
+  let productionInspection = null;
   try {
-    const [detailResult, productionAttemptResult] = await Promise.all([
+    const [detailResult, productionAttemptResult, inspectionResult] = await Promise.all([
       getSceneReviewDetail(sceneId),
-      getCurrentProductionAttempt(sceneId)
+      getCurrentProductionAttempt(sceneId),
+      getSceneProductionInspection(sceneId).catch(() => null)
     ]);
     detail = detailResult;
     productionAttempt = productionAttemptResult;
+    productionInspection = inspectionResult;
   } catch (err) {
     if (err instanceof ApiClientError && err.statusCode === 404) {
       notFound();
@@ -35,7 +39,11 @@ export default async function ScenePage({ params }: ScenePageProps) {
 
   return (
     <div className="scene-page-container">
-      <SceneReviewDetailView detail={detail} productionAttempt={productionAttempt} />
+      <SceneReviewDetailView
+        detail={detail}
+        productionAttempt={productionAttempt}
+        productionInspection={productionInspection}
+      />
     </div>
   );
 }
