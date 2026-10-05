@@ -1,9 +1,11 @@
 import {
+  BLOCKING_INITIAL_POSITIONS,
   CAMERA_ANGLES,
   CAMERA_MOVEMENTS,
   LIGHTING_STYLES,
   MOVEMENT_SPEEDS,
   SHOT_FRAMINGS,
+  type BlockingInitialPosition,
   type CameraAngle,
   type CameraMovement,
   type LightingStyle,
@@ -102,6 +104,23 @@ function normalizeCameraMovement(value: unknown): CameraMovement | undefined {
   if (s === "pull_out" || s === "zoom_out") return "dolly_out";
   if (s === "tilt") return "tilt_up";
   if (s === "pedestal") return "pedestal_up";
+  return undefined;
+}
+
+function normalizeInitialPosition(value: unknown): BlockingInitialPosition | undefined {
+  if (typeof value !== "string") return undefined;
+  const s = value.trim().toLowerCase().replace(/-/g, "_");
+  if (BLOCKING_INITIAL_POSITIONS.includes(s as BlockingInitialPosition)) {
+    return s as BlockingInitialPosition;
+  }
+  if (s.includes("foreground")) {
+    if (s.includes("left")) return "foreground_left";
+    if (s.includes("right")) return "foreground_right";
+    return "foreground_center";
+  }
+  if (s.includes("background")) return "background_center";
+  if (s.includes("left")) return "screen_left";
+  if (s.includes("right")) return "screen_right";
   return undefined;
 }
 
@@ -211,10 +230,7 @@ function validateShotPlanProposal(item: unknown, variantOrdinal: number): ShotPl
           subjectId: String(s.subjectId ?? `subject-${subjects.length + 1}`),
           ...(s.referenceAssetId ? { referenceAssetId: String(s.referenceAssetId) } : {}),
           role: s.role === "product" ? "product" : "subject_identity",
-          initialPosition:
-            typeof s.initialPosition === "string"
-              ? (s.initialPosition as ShotPlanSubjectBlocking["initialPosition"])
-              : "screen_center",
+          initialPosition: normalizeInitialPosition(s.initialPosition) ?? "screen_center",
           movementTrajectory: String(s.movementTrajectory ?? "stationary"),
           ...(s.interactionSummary ? { interactionSummary: String(s.interactionSummary) } : {})
         });
