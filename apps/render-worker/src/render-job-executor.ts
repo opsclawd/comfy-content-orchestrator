@@ -382,6 +382,7 @@ interface ValidatedInjectedPayload {
   readonly shotPlanId?: string | undefined;
   readonly specRevision?: number | undefined;
   readonly attemptId?: string | undefined;
+  readonly productionInputFingerprint?: string | undefined;
 }
 
 const ALLOWED_CANDIDATE_KEYS = new Set([
@@ -399,7 +400,8 @@ const ALLOWED_PRODUCTION_KEYS = new Set([
   "seed",
   "approvedCandidateId",
   "frameCount",
-  "attemptId"
+  "attemptId",
+  "productionInputFingerprint"
 ]);
 const ALLOWED_REF2V_PRODUCTION_KEYS = new Set([
   "prompt",
@@ -409,7 +411,8 @@ const ALLOWED_REF2V_PRODUCTION_KEYS = new Set([
   "frameCount",
   "shotPlanId",
   "specRevision",
-  "attemptId"
+  "attemptId",
+  "productionInputFingerprint"
 ]);
 const ALLOWED_H3_I2V_PRODUCTION_KEYS = new Set([
   "prompt",
@@ -420,7 +423,8 @@ const ALLOWED_H3_I2V_PRODUCTION_KEYS = new Set([
   "frameCount",
   "shotPlanId",
   "specRevision",
-  "attemptId"
+  "attemptId",
+  "productionInputFingerprint"
 ]);
 
 function validateInjectedPayload(
@@ -487,6 +491,11 @@ function validateInjectedPayload(
       if (jobKind === "candidate" && key === "attemptId") {
         throw new RenderJobPayloadValidationError(
           "attemptId is production-only and not allowed in candidate jobs"
+        );
+      }
+      if (jobKind === "candidate" && key === "productionInputFingerprint") {
+        throw new RenderJobPayloadValidationError(
+          "productionInputFingerprint is production-only and not allowed in candidate jobs"
         );
       }
       throw new RenderJobPayloadValidationError(`Unknown injected payload field: "${key}"`);
@@ -717,6 +726,24 @@ function validateInjectedPayload(
     attemptId = raw.attemptId.trim();
   }
 
+  let productionInputFingerprint: string | undefined;
+  if ("productionInputFingerprint" in raw && raw.productionInputFingerprint !== undefined) {
+    if (jobKind !== "production") {
+      throw new RenderJobPayloadValidationError(
+        "productionInputFingerprint is production-only and not allowed in candidate jobs"
+      );
+    }
+    if (
+      typeof raw.productionInputFingerprint !== "string" ||
+      raw.productionInputFingerprint.trim().length === 0
+    ) {
+      throw new RenderJobPayloadValidationError(
+        "injectedPayload.productionInputFingerprint must be a non-empty string"
+      );
+    }
+    productionInputFingerprint = raw.productionInputFingerprint.trim();
+  }
+
   return {
     prompt,
     negativePrompt,
@@ -727,7 +754,8 @@ function validateInjectedPayload(
     frameCount,
     shotPlanId,
     specRevision,
-    attemptId
+    attemptId,
+    productionInputFingerprint
   };
 }
 
