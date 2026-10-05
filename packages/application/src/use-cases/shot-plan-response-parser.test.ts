@@ -33,7 +33,7 @@ describe("parseShotPlanResponse", () => {
       ]
     });
 
-    const [proposal] = parseShotPlanResponse(JSON.stringify([raw]));
+    const proposal = parseShotPlanResponse(JSON.stringify([raw]))[0]!;
 
     expect(BLOCKING_INITIAL_POSITIONS).toContain(proposal.subjects[0]!.initialPosition);
     expect(proposal.subjects[0]!.initialPosition).toBe("screen_left");
@@ -46,7 +46,7 @@ describe("parseShotPlanResponse", () => {
       ]
     });
 
-    const [proposal] = parseShotPlanResponse(JSON.stringify([raw]));
+    const proposal = parseShotPlanResponse(JSON.stringify([raw]))[0]!;
 
     expect(proposal.subjects[0]!.initialPosition).toBe("screen_center");
   });
@@ -58,7 +58,7 @@ describe("parseShotPlanResponse", () => {
       ]
     });
 
-    const [proposal] = parseShotPlanResponse(JSON.stringify([raw]));
+    const proposal = parseShotPlanResponse(JSON.stringify([raw]))[0]!;
 
     expect(proposal.subjects[0]!.initialPosition).toBe("background_center");
   });
