@@ -849,6 +849,56 @@ describe("PostgresJobQueue integration", () => {
     expect(Number(manifestCount.rows[0]?.count)).toBe(0);
   });
 
+  it("marks a candidate job superseded instead of looping on 500s when a sibling job already recorded the same scene/revision/variant slot", async () => {
+    const { sceneId } = await createTestScene();
+
+    // A sibling job already won the race and recorded the candidate for
+    // (sceneId, revision 1, variant 2).
+    await insertStoryboardCandidateRecord(client, {
+      sceneId,
+      sceneSpecRevision: 1,
+      variantOrdinal: 2
+    });
+
+    // This job targets the exact same slot but is a different job_id — it
+    // can never win the unique constraint, no matter how many times it's
+    // retried.
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000099" as LeaseToken;
+    const losingJob = await insertRenderJobRecord(client, {
+      sceneId,
+      jobKind: "candidate",
+      status: "rendering",
+      workerId: "worker-loses-race",
+      leaseToken: token,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 0,
+      maxRetries: 3
+    });
+
+    const queue = new PostgresJobQueue(pool);
+    const result = await queue.complete(losingJob.job_id as JobId, token, undefined, {
+      variantOrdinal: 2,
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: `candidates/${sceneId}/rev_1_var_2_loser.webp`,
+      contentHashSha256: "f3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      generationPayload: {}
+    });
+
+    expect(result.outcome).toBe("superseded");
+
+    const jobRow = await client.query<{ status: string }>(
+      "SELECT status FROM render_jobs WHERE job_id = $1",
+      [losingJob.job_id]
+    );
+    expect(jobRow.rows[0]?.status).toBe("failed");
+
+    const candidateRows = await client.query<{ count: string }>(
+      "SELECT count(*) FROM storyboard_candidates WHERE scene_id = $1",
+      [sceneId]
+    );
+    expect(Number(candidateRows.rows[0]?.count)).toBe(1);
+  });
+
   it("queues a plan previs, advances the scene revision, completes the old job, and proves no current-revision candidate or association is created", async () => {
     const { sceneId } = await createTestScene();
     const queue = new PostgresJobQueue(pool);
