@@ -1076,19 +1076,50 @@ a:hover {
   cursor: not-allowed;
 }
 
-.cancel-button {
-  background-color: transparent;
-  border: 1px solid var(--border-prominent);
-  color: var(--text-secondary);
+/*
+ * .action-button is used as a shared base class alongside a specific modifier
+ * (e.g. "action-button cancel-button"). It carries only layout, not color, so
+ * every modifier must still set its own background/color — this base rule
+ * exists so a modifier that forgets to isn't left completely unstyled.
+ */
+.action-button {
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   padding: 0.5rem 1rem;
   font-size: 0.875rem;
   cursor: pointer;
 }
 
-.cancel-button:hover:not(:disabled) {
+.action-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.cancel-button,
+.secondary,
+.secondary-action,
+.close-comparison-button {
+  background-color: transparent;
+  border-color: var(--border-prominent);
+  color: var(--text-secondary);
+}
+
+.cancel-button:hover:not(:disabled),
+.secondary:hover:not(:disabled),
+.secondary-action:hover:not(:disabled),
+.close-comparison-button:hover:not(:disabled) {
   background-color: var(--bg-surface-elevated);
   color: var(--text-primary);
+}
+
+.generate-shot-plans-button {
+  background-color: var(--color-primary);
+  color: var(--bg-primary);
+  font-weight: 600;
+}
+
+.generate-shot-plans-button:hover:not(:disabled) {
+  background-color: var(--color-primary-hover);
 }
 
 /* Confirmation Dialog Modal */
