@@ -638,6 +638,34 @@ export class PostgresJobQueue implements JobQueuePort {
             }
           }
         }
+
+        /*
+         * A 23505 on the storyboard_candidates (scene, revision, variant)
+         * uniqueness constraint, where THIS job's own render_jobs row was not
+         * already completed, means a sibling job targeting the same variant
+         * slot already won the race and committed first (e.g. two ShotPlan
+         * generations for the same scene/revision/variant). Retrying can
+         * never succeed — the slot is permanently taken. Without this branch,
+         * the error fell through to an unhandled 500 that the worker retries
+         * forever, indefinitely blocking the single-threaded worker on a job
+         * that can never complete.
+         */
+        if (
+          pgError.constraint === "storyboard_candidates_scene_id_scene_spec_revision_variant__key"
+        ) {
+          await this.pool.query(
+            `
+            UPDATE render_jobs
+            SET status = 'failed', error_trace = $2, updated_at = NOW()
+            WHERE job_id = $1 AND status <> 'completed'
+            `,
+            [
+              jobId,
+              "Superseded: a different job already recorded the storyboard candidate for this scene/revision/variant."
+            ]
+          );
+          return { outcome: "superseded" };
+        }
       }
 
       throw error;
