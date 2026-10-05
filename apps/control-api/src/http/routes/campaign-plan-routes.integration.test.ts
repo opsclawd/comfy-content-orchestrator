@@ -180,7 +180,7 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
       }))
   };
 
-  it("1. Success: creates campaign shell, plans beat-sheet and scenes, materializes N scenes and admits candidate jobs in PostgreSQL", async () => {
+  it("1. Success: creates campaign shell, plans beat-sheet and scenes, materializes N scenes in draft_pending in PostgreSQL", async () => {
     const clientRecord = await insertClientRecord(client, {
       companyName: "Acme Studios",
       externalProcessingPolicy: cloudEnabledPolicy
@@ -261,9 +261,9 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
     );
     expect(sceneRows.rows).toHaveLength(3);
     expect(sceneRows.rows.map((r: { scene_order: number }) => r.scene_order)).toEqual([1, 2, 3]);
-    expect(
-      sceneRows.rows.every((r: { status: string }) => r.status === "generating_candidates")
-    ).toBe(true);
+    expect(sceneRows.rows.every((r: { status: string }) => r.status === "draft_pending")).toBe(
+      true
+    );
 
     // Assert exact per-ordinal duration equality against uneven beat targets:
     expect(stubPrimary.emittedBeats.map((b) => b.targetDurationMs)).toEqual([3000, 7000, 5000]);
@@ -274,14 +274,13 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
       expect(Math.round(durationSecondsNum * 1000)).toBe(beat.targetDurationMs);
     }
 
-    // Verify candidate jobs in render_jobs table (3 candidates per scene = 9 jobs)
+    // Materialization no longer auto-admits candidate generation: no render
+    // jobs are enqueued until the director explicitly generates ShotPlans.
     const jobRows = await client.query(
       "SELECT job_id, scene_id, job_kind, status FROM render_jobs WHERE scene_id = ANY($1::uuid[])",
       [sceneRows.rows.map((r: { scene_id: string }) => r.scene_id)]
     );
-    expect(jobRows.rows).toHaveLength(9);
-    expect(jobRows.rows.every((r: { job_kind: string }) => r.job_kind === "candidate")).toBe(true);
-    expect(jobRows.rows.every((r: { status: string }) => r.status === "queued")).toBe(true);
+    expect(jobRows.rows).toHaveLength(0);
   });
 
   it("2. Idempotent replay under provider outage: short-circuits before LLM call and succeeds (Finding 1 Witness Scenario)", async () => {
@@ -374,12 +373,12 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
     );
     expect(sceneCount.rows[0]?.count).toBe(3);
 
-    // Zero new jobs in Postgres
+    // No candidate jobs are enqueued by materialization anymore.
     const jobCount = await client.query(
       "SELECT count(*)::int as count FROM render_jobs WHERE scene_id = ANY($1::uuid[])",
       [replayBody.scenes.map((s: { sceneId: string }) => s.sceneId)]
     );
-    expect(jobCount.rows[0]?.count).toBe(9);
+    expect(jobCount.rows[0]?.count).toBe(0);
   });
 
   it("3. Idempotent retry of drafting shell: re-runs planning when 0 scenes exist", async () => {
@@ -679,96 +678,9 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
     );
     expect(sceneRows.rows[0]?.count).toBe(0);
 
-    // 0 render jobs committed (candidate jobs for scene 1 were also rolled back)
+    // 0 render jobs committed (materialization no longer enqueues candidate jobs at all)
     const jobRows = await client.query("SELECT count(*)::int as count FROM render_jobs");
     expect(jobRows.rows[0]?.count).toBe(0);
-  });
-
-  it("5b. Pre-write configuration failure: missing transactional job enqueuer returns CONFIGURATION_ERROR with 0 scenes committed", async () => {
-    const clientRecord = await insertClientRecord(client, {
-      companyName: "Acme Studios",
-      externalProcessingPolicy: cloudEnabledPolicy
-    });
-
-    const stubPrimary = new IntegrationStubPlanningModelClient("Anthropic");
-    const stubFallback: PlanningModelClientPort = {
-      providerName: "OpenAI",
-      complete: (req) => stubPrimary.complete(req)
-    };
-
-    // Wrap PostgresUnitOfWork to omit context.jobs, forcing TransactionalJobEnqueuerUnavailableError in step 5
-    class PostgresUowWithoutJobs implements UnitOfWork {
-      constructor(private readonly inner: UnitOfWork) {}
-      async execute<TResult>(
-        work: (context: UnitOfWorkContext) => Promise<TResult>
-      ): Promise<TResult> {
-        return this.inner.execute(async (ctx) => {
-          return work({
-            ...ctx,
-            jobs: undefined
-          });
-        });
-      }
-    }
-
-    const uow = new PostgresUowWithoutJobs(new PostgresUnitOfWork(pool));
-    const app = createControlApiApp(
-      {
-        uow,
-        planningModelClients: { primary: stubPrimary, fallback: stubFallback },
-        referenceAssetRepository: mockAssetRepo
-      },
-      defaultTestOptions
-    );
-
-    const idempotencyKey = randomUUID();
-    const response = await app.inject({
-      method: "POST",
-      url: "/api/campaigns/plan",
-      payload: {
-        idempotencyKey,
-        clientId: clientRecord.client_id,
-        title: "Missing Jobs Campaign",
-        targetPlatform: "instagram_reels",
-        targetTotalDurationMs: 15000,
-        brief: {
-          title: "Materialize Failure",
-          description: "Fails when materializing storyboard"
-        }
-      }
-    });
-
-    expect(response.statusCode).toBe(202);
-
-    // Poll until background pipeline fails and transitions shell status to 'failed'
-    let shellStatus5b;
-    for (let attempt = 0; attempt < 50; attempt++) {
-      const sRows = await client.query(
-        "SELECT campaign_id, status FROM campaigns WHERE idempotency_key = $1",
-        [idempotencyKey]
-      );
-      if (sRows.rows[0]?.status === "failed") {
-        shellStatus5b = sRows.rows[0]?.status;
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    expect(shellStatus5b).toBe("failed");
-
-    // Shell was committed in step 1 transaction
-    const shellRows = await client.query(
-      "SELECT campaign_id, status FROM campaigns WHERE idempotency_key = $1",
-      [idempotencyKey]
-    );
-    expect(shellRows.rows).toHaveLength(1);
-    expect(shellRows.rows[0]?.status).toBe("failed");
-
-    // 0 scenes committed
-    const sceneRows = await client.query(
-      "SELECT count(*)::int as count FROM storyboard_scenes WHERE campaign_id = $1",
-      [shellRows.rows[0]?.campaign_id]
-    );
-    expect(sceneRows.rows[0]?.count).toBe(0);
   });
 
   it("6. Defensive branch: partially materialized storyboard throws StoryboardPartiallyMaterializedError (409)", async () => {
