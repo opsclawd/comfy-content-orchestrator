@@ -14,10 +14,6 @@ import { MaterializeStoryboardUseCase } from "./materialize-storyboard.js";
 import { PlanCampaignBeatSheetUseCase } from "./plan-campaign-beat-sheet.js";
 import { PlanSceneConfigurationUseCase } from "./plan-scene-configuration.js";
 import { PlanCampaignStoryboardUseCase } from "./plan-campaign-storyboard.js";
-import {
-  CANDIDATE_BATCH_SIZE,
-  ProgressSceneProductionUseCases
-} from "./progress-scene-production.js";
 import { MIN_SCENE_COUNT, MAX_SCENE_COUNT, resolveSceneCount } from "./scene-count-policy.js";
 import { PlanningProviderExhaustedError } from "./plan-scene-configuration-errors.js";
 import { CampaignIdempotencyConflictError } from "./campaign-idempotency-conflict-error.js";
@@ -183,7 +179,6 @@ describe("PlanCampaignStoryboardUseCase", () => {
 
   function createTestHarness(options?: {
     stubClient?: StubPlanningModelClient;
-    omitJobQueue?: boolean;
     referenceAssetRepository?: ReferenceAssetRepository;
   }) {
     const stubClient = options?.stubClient ?? new StubPlanningModelClient("Anthropic");
@@ -218,15 +213,8 @@ describe("PlanCampaignStoryboardUseCase", () => {
       libraryRole: "style",
       description: `Description for ${allowedAsset2}`
     });
-    if (!options?.omitJobQueue) {
-      uow = uow.withJobs(queue);
-    }
+    uow = uow.withJobs(queue);
 
-    const progressSceneProduction = new ProgressSceneProductionUseCases(
-      uow,
-      undefined,
-      options?.omitJobQueue ? undefined : queue
-    );
     const createCampaignShell = new CreateCampaignShellUseCase(uow);
     const planCampaignBeatSheet = new PlanCampaignBeatSheetUseCase({
       uow,
@@ -239,7 +227,7 @@ describe("PlanCampaignStoryboardUseCase", () => {
       primaryClient: stubClient,
       fallbackClient
     });
-    const materializeStoryboard = new MaterializeStoryboardUseCase(uow, progressSceneProduction);
+    const materializeStoryboard = new MaterializeStoryboardUseCase(uow);
 
     const useCase = new PlanCampaignStoryboardUseCase({
       createCampaignShell,
@@ -338,13 +326,12 @@ describe("PlanCampaignStoryboardUseCase", () => {
       const totalDuration = result.scenes.reduce((sum, s) => sum + s.configuration.durationMs, 0);
       expect(totalDuration).toBe(targetTotalDurationMs);
 
-      // 6. Candidate admission using batch-size policy (CANDIDATE_BATCH_SIZE = 3)
-      expect(queue.jobs).toHaveLength(expectedDerivedN * CANDIDATE_BATCH_SIZE);
-      expect(uow.enqueuedJobs).toHaveLength(expectedDerivedN * CANDIDATE_BATCH_SIZE);
+      // 6. Materialization no longer auto-admits candidate generation: scenes
+      // stay in draft_pending until the director explicitly generates ShotPlans.
+      expect(queue.jobs).toHaveLength(0);
+      expect(uow.enqueuedJobs).toHaveLength(0);
       for (const scene of result.scenes) {
-        const sceneJobs = queue.jobs.filter((j) => j.sceneId === scene.id);
-        expect(sceneJobs).toHaveLength(CANDIDATE_BATCH_SIZE);
-        expect(sceneJobs.every((j) => j.jobKind === "candidate")).toBe(true);
+        expect(scene.status).toBe("draft_pending");
       }
 
       // 7. Stub client recorded exactly 1 beat-sheet invocation and N scene-config invocations
@@ -436,7 +423,7 @@ describe("PlanCampaignStoryboardUseCase", () => {
       expect(stubClient.beatSheetInvocations).toBe(1);
       expect(stubClient.sceneConfigInvocations).toBe(3);
       const initialJobCount = queue.jobs.length;
-      expect(initialJobCount).toBe(3 * CANDIDATE_BATCH_SIZE);
+      expect(initialJobCount).toBe(0);
 
       // Reset invocation counters
       stubClient.resetCounts();
@@ -755,31 +742,6 @@ describe("PlanCampaignStoryboardUseCase", () => {
       expect(queue.jobs).toHaveLength(0);
     });
 
-    it("materialize failure (missing job queue) leaves shell intact with 0 scenes committed", async () => {
-      const { useCase, uow } = createTestHarness({ omitJobQueue: true });
-      const idempotencyKey = "018e69e0-8a6a-72cb-b1b7-ec79a1f73890";
-
-      await expect(
-        useCase.execute({
-          idempotencyKey,
-          clientId,
-          title: "Failed Materialize Step",
-          targetTotalDurationMs: 15000,
-          brief: defaultBrief
-        })
-      ).rejects.toThrow(/Unit of work does not provide a transactional job enqueuer/);
-
-      // Shell exists
-      const savedShell = await uow.execute((ctx) =>
-        ctx.campaigns!.findByIdempotencyKey!(idempotencyKey)
-      );
-      expect(savedShell).toBeDefined();
-
-      // Zero scenes persisted
-      const scenes = await uow.execute((ctx) => ctx.scenes.findByCampaignId!(savedShell!.id));
-      expect(scenes).toHaveLength(0);
-    });
-
     describe("Pre-Materialization Reference Asset Validation (Fail-Closed Semantics)", () => {
       const unselectedAsset = "018e69e0-8a6a-72cb-b1b7-ec79a1f73899" as ReferenceAssetId;
 
@@ -944,7 +906,7 @@ describe("PlanCampaignStoryboardUseCase", () => {
           expect(scene.configuration.referenceBindings![1]?.sceneId).toBe(scene.id);
           expect(scene.configuration.referenceBindings![1]?.specRevision).toBe(1);
         }
-        expect(queue.jobs).toHaveLength(3 * CANDIDATE_BATCH_SIZE);
+        expect(queue.jobs).toHaveLength(0);
       });
     });
   });

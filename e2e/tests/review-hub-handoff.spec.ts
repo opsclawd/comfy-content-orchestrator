@@ -61,7 +61,7 @@ test.describe("Post-Handoff Candidate Review Flow", () => {
     await expect(page.getByTestId("review-command-controls")).toBeVisible();
     await expect(page.getByTestId("review-actions-toolbar")).toBeVisible();
 
-    // Scene is in generating_candidates status; cancel action is immediately available
+    // Scene is in draft_pending status; cancel action is immediately available
     await expect(page.getByTestId("action-button-cancel")).toBeVisible();
 
     // 2. Simulate candidate generation completing by inserting a candidate in Postgres

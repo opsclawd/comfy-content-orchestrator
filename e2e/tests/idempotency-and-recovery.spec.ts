@@ -233,17 +233,18 @@ test.describe("Idempotency, Recovery, and Conflict Lifecycle", () => {
     const sceneRows = page.getByTestId("scene-row");
     await expect(sceneRows).toHaveCount(dbScenes.length, { timeout: 15_000 });
 
-    // Confirm candidate generation admitted for all retry scenes in DOM
+    // Confirm retry scenes materialized in draft_pending (no auto-admitted
+    // candidate generation) in DOM
     for (let i = 0; i < dbScenes.length; i++) {
       const row = sceneRows.nth(i);
       const statusBadge = row.locator(".status-badge");
-      await expect(statusBadge).toHaveAttribute("data-status", "generating_candidates");
-      await expect(statusBadge).toHaveText("generating_candidates");
+      await expect(statusBadge).toHaveAttribute("data-status", "draft_pending");
+      await expect(statusBadge).toHaveText("draft_pending");
     }
 
-    // Confirm candidate generation admitted directly in Postgres database
+    // Confirm materialization directly in Postgres database
     for (const sceneRow of dbScenes) {
-      expect(sceneRow.status).toBe("generating_candidates");
+      expect(sceneRow.status).toBe("draft_pending");
     }
   });
 

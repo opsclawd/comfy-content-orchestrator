@@ -170,10 +170,7 @@ export function createControlApiContainer(
   const createCampaignShell = new CreateCampaignShellUseCase(dependencies.uow);
   const createClient = new CreateClientUseCase(dependencies.uow);
   const createScene = new CreateSceneUseCase(dependencies.uow);
-  const materializeStoryboard = new MaterializeStoryboardUseCase(
-    dependencies.uow,
-    progressSceneProduction
-  );
+  const materializeStoryboard = new MaterializeStoryboardUseCase(dependencies.uow);
   const prepareSceneProductionInputs = new PrepareSceneProductionInputsUseCase(dependencies.uow, {
     objectStorage: dependencies.objectStorage,
     hashBytes,

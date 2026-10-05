@@ -11,8 +11,6 @@ import {
 import type { UnitOfWork, UnitOfWorkContext } from "../ports/index.js";
 import { CampaignNotFoundError } from "./campaign-not-found-error.js";
 import { InvalidSceneOrdinalSequenceError } from "./invalid-scene-ordinal-sequence-error.js";
-import { TransactionalJobEnqueuerUnavailableError } from "./job-queue-errors.js";
-import type { ProgressSceneProductionUseCases } from "./progress-scene-production.js";
 import { resolveCandidateReferenceAssets } from "./resolve-candidate-reference-assets.js";
 import { SceneConfigurationCountMismatchError } from "./scene-configuration-count-mismatch-error.js";
 import { SceneConfigurationValidationError } from "./validate-scene-configuration.js";
@@ -37,10 +35,7 @@ export interface MaterializeStoryboardResult {
 }
 
 export class MaterializeStoryboardUseCase {
-  constructor(
-    private readonly uow: UnitOfWork,
-    private readonly progressSceneProduction: ProgressSceneProductionUseCases
-  ) {}
+  constructor(private readonly uow: UnitOfWork) {}
 
   async execute(input: MaterializeStoryboardInput): Promise<MaterializeStoryboardResult> {
     return this.uow.execute((context) => this.executeWithContext(context, input));
@@ -135,10 +130,6 @@ export class MaterializeStoryboardUseCase {
       );
     }
 
-    if (context.jobs === undefined) {
-      throw new TransactionalJobEnqueuerUnavailableError();
-    }
-
     const allAssignedAssetIds = Array.from(
       new Set(
         sortedInputScenes.flatMap((s) => [
@@ -184,11 +175,7 @@ export class MaterializeStoryboardUseCase {
         sequenceIndex: item.ordinal
       });
       await context.scenes.save(scene);
-      const admission = await this.progressSceneProduction.beginCandidateGenerationWithContext(
-        context,
-        { sceneId: scene.id }
-      );
-      materializedScenes.push(admission.scene);
+      materializedScenes.push(scene.snapshot());
     }
 
     if (
