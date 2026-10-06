@@ -113,6 +113,60 @@ describe("SceneReviewDetailView: ShotPlanPanel Reachability & Generation", () =>
     expect(generateBtn).toBeDefined();
   });
 
+  it("withholds direct candidate selection once ShotPlans exist (ShotPlan is the sole selection authority)", () => {
+    const detail = createSampleDetail({
+      shotPlans: [sampleShotPlan],
+      candidatesByRevision: [
+        {
+          specRevision: 2,
+          candidates: [
+            {
+              candidateId: "cand-2222-uuid",
+              specRevision: 2,
+              variantOrdinal: 1,
+              storageBucket: "b",
+              storageObjectKey: "k",
+              contentHashSha256: "0".repeat(64),
+              createdAt: "2026-09-28T12:00:00.000Z",
+              isCurrent: true,
+              media: { available: false }
+            }
+          ]
+        }
+      ]
+    } as unknown as Partial<SceneReviewDetailReadModel>);
+    render(<SceneReviewDetailView detail={detail} />);
+
+    expect(screen.queryByTestId("select-candidate-button")).toBeNull();
+  });
+
+  it("keeps direct candidate selection for legacy scenes with no ShotPlans", () => {
+    const detail = createSampleDetail({
+      shotPlans: [],
+      candidatesByRevision: [
+        {
+          specRevision: 2,
+          candidates: [
+            {
+              candidateId: "cand-2222-uuid",
+              specRevision: 2,
+              variantOrdinal: 1,
+              storageBucket: "b",
+              storageObjectKey: "k",
+              contentHashSha256: "0".repeat(64),
+              createdAt: "2026-09-28T12:00:00.000Z",
+              isCurrent: true,
+              media: { available: false }
+            }
+          ]
+        }
+      ]
+    } as unknown as Partial<SceneReviewDetailReadModel>);
+    render(<SceneReviewDetailView detail={detail} />);
+
+    expect(screen.getAllByTestId("select-candidate-button").length).toBeGreaterThan(0);
+  });
+
   it("renders populated ShotPlan cards grid when shotPlans are present", () => {
     const detail = createSampleDetail({ shotPlans: [sampleShotPlan] });
     render(<SceneReviewDetailView detail={detail} />);

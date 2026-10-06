@@ -58,6 +58,11 @@ export function SceneReviewDetailView({
     }
   }, [detail]);
 
+  // Once ShotPlans exist they are the sole selection authority; candidates are
+  // then only a visual preview of the selected plan, so direct candidate
+  // selection is withheld to prevent selecting an unrelated candidate.
+  const hasShotPlans = (detail.shotPlans?.length ?? 0) > 0;
+
   function handleSelectCandidate(candidateId: string) {
     dispatch({
       type: "REQUEST_CONFIRMATION",
@@ -353,7 +358,7 @@ export function SceneReviewDetailView({
         currentSpecRevision={detail.specRevision}
         selectedCandidateId={detail.selectedCandidateId}
         selectedCandidateRevision={detail.selectedCandidateRevision}
-        onSelectCandidate={handleSelectCandidate}
+        onSelectCandidate={hasShotPlans ? undefined : handleSelectCandidate}
         disabled={disabled}
       />
     </div>
