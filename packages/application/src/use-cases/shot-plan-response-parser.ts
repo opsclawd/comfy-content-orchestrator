@@ -245,7 +245,7 @@ function validateShotPlanProposal(item: unknown, variantOrdinal: number): ShotPl
       if (typeof b === "object" && b !== null) {
         const beatObj = b as Record<string, unknown>;
         beats.push({
-          beatIndex: Number(beatObj.beatIndex ?? i + 1),
+          beatIndex: i + 1,
           startMs: Number(beatObj.startMs ?? 0),
           endMs: Number(beatObj.endMs ?? 0),
           description: String(beatObj.description ?? `Beat ${i + 1}`),

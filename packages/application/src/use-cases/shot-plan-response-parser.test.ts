@@ -51,6 +51,19 @@ describe("parseShotPlanResponse", () => {
     expect(proposal.subjects[0]!.initialPosition).toBe("screen_center");
   });
 
+  it("numbers beats by position so model-supplied duplicate or zero-based beatIndex values cannot break validation", () => {
+    const raw = rawShotPlan({
+      beats: [
+        { beatIndex: 0, startMs: 0, endMs: 2000, description: "a", subjectAction: "x" },
+        { beatIndex: 1, startMs: 2000, endMs: 4000, description: "b", subjectAction: "y" }
+      ]
+    });
+
+    const [proposal] = parseShotPlanResponse(JSON.stringify([raw]));
+
+    expect(proposal!.beats.map((b) => b.beatIndex)).toEqual([1, 2]);
+  });
+
   it("passes through an already-valid enum value unchanged", () => {
     const raw = rawShotPlan({
       subjects: [
