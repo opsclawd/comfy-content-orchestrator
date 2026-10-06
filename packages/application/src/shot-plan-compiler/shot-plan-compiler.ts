@@ -109,6 +109,19 @@ export function compileShotPlan(input: CompileShotPlanInput): CompiledShotPlanIn
   // 5. Build section components in fixed, documented sequence
   const lines: string[] = [];
 
+  const getUsableDescription = (ref: CanonicalReferenceEntry): string | undefined => {
+    const desc = ref.asset.description?.replace(/[\r\n\t]+/g, " ").trim();
+    return desc && desc.length > 0 ? desc : undefined;
+  };
+
+  const boundSubjectIdentityRefs = references.filter((r) => r.role === "subject_identity");
+  const boundLocationRefs = references.filter((r) => r.role === "location");
+
+  const usableSubjectIdentityRefs = boundSubjectIdentityRefs.filter(
+    (r) => getUsableDescription(r) !== undefined
+  );
+  const usableLocationRefs = boundLocationRefs.filter((r) => getUsableDescription(r) !== undefined);
+
   // Section 1: Scene Context
   const contextText =
     sceneSpec?.actionContext?.trim() ||
@@ -121,9 +134,45 @@ export function compileShotPlan(input: CompileShotPlanInput): CompiledShotPlanIn
     `[Camera]: Framing: ${shotPlan.framing} | Angle: ${shotPlan.angle} | Lens: ${shotPlan.lensIntent} | Position: ${shotPlan.cameraPosition} | Movement: ${shotPlan.cameraMovement} (${shotPlan.movementSpeed}) | Notes: ${shotPlan.cameraPromptDescription}`
   );
 
-  // Section 3: Subjects & Blocking
+  // Section 3: Subject Identity (when active subject_identity reference with description exists)
+  if (usableSubjectIdentityRefs.length > 0) {
+    const subjectClauses = usableSubjectIdentityRefs.map(
+      (r) => `${r.promptTag}: ${getUsableDescription(r)!}`
+    );
+    lines.push(`[Subject Identity]: ${subjectClauses.join("; ")}`);
+  }
+
+  // Section 4: Subjects & Blocking
   if (shotPlan.subjects.length > 0) {
     const subjectDescriptions = shotPlan.subjects.map((sub) => {
+      if (sub.role === "subject_identity") {
+        let matchingRef: CanonicalReferenceEntry | undefined;
+        if (sub.referenceAssetId) {
+          matchingRef = boundSubjectIdentityRefs.find(
+            (r) => r.referenceAssetId.toLowerCase() === sub.referenceAssetId?.toLowerCase()
+          );
+        } else if (boundSubjectIdentityRefs.length === 1) {
+          matchingRef = boundSubjectIdentityRefs[0];
+        }
+
+        if (matchingRef) {
+          let desc = `${matchingRef.promptTag} (${sub.role}): Initial: ${sub.initialPosition}, Path: ${sub.movementTrajectory}`;
+          if (sub.interactionSummary) {
+            desc += `, Interaction: ${sub.interactionSummary}`;
+          }
+          return desc;
+        }
+
+        // When bound subject_identity references exist, suppress planner-authored subjectId
+        if (boundSubjectIdentityRefs.length > 0) {
+          let desc = `(${sub.role}): Initial: ${sub.initialPosition}, Path: ${sub.movementTrajectory}`;
+          if (sub.interactionSummary) {
+            desc += `, Interaction: ${sub.interactionSummary}`;
+          }
+          return desc;
+        }
+      }
+
       let desc = `${sub.subjectId} (${sub.role}): Initial: ${sub.initialPosition}, Path: ${sub.movementTrajectory}`;
       if (sub.interactionSummary) {
         desc += `, Interaction: ${sub.interactionSummary}`;
@@ -141,10 +190,10 @@ export function compileShotPlan(input: CompileShotPlanInput): CompiledShotPlanIn
     lines.push(`[Subjects]: ${subjectDescriptions.join("; ")}`);
   }
 
-  // Section 4: Action Summary
+  // Section 5: Action Summary
   lines.push(`[Action Summary]: ${shotPlan.actionSummary.trim()}`);
 
-  // Section 5: Temporal Beats
+  // Section 6: Temporal Beats
   if (sortedBeats.length > 0) {
     const beatDescriptions = sortedBeats.map(
       (b) =>
@@ -153,8 +202,19 @@ export function compileShotPlan(input: CompileShotPlanInput): CompiledShotPlanIn
     lines.push(`[Temporal Beats]:\n${beatDescriptions.join("\n")}`);
   }
 
-  // Section 6: Environment & Lighting
-  let envText = `[Environment & Lighting]: Style: ${shotPlan.lightingStyle} | Environment: ${shotPlan.environmentDescription}`;
+  // Section 7: Location (when active location reference with description exists)
+  if (usableLocationRefs.length > 0) {
+    const locationClauses = usableLocationRefs.map(
+      (r) => `${r.promptTag}: ${getUsableDescription(r)!}`
+    );
+    lines.push(`[Location]: ${locationClauses.join("; ")}`);
+  }
+
+  // Section 8: Environment & Lighting
+  let envText = `[Environment & Lighting]: Style: ${shotPlan.lightingStyle}`;
+  if (boundLocationRefs.length === 0) {
+    envText += ` | Environment: ${shotPlan.environmentDescription}`;
+  }
   if (shotPlan.colorPalette && shotPlan.colorPalette.length > 0) {
     envText += ` | Palette: ${shotPlan.colorPalette.join(", ")}`;
   }
@@ -163,18 +223,52 @@ export function compileShotPlan(input: CompileShotPlanInput): CompiledShotPlanIn
   }
   lines.push(envText);
 
-  // Section 7: Continuity
-  let contText = `[Continuity]: Persistent Subjects: ${
-    shotPlan.continuity.persistentSubjectIds.length > 0
-      ? shotPlan.continuity.persistentSubjectIds.join(", ")
-      : "none"
-  }`;
+  // Section 9: Continuity
+  let persistentSubjectsText = "none";
+  if (shotPlan.continuity.persistentSubjectIds.length > 0) {
+    const mappedPersistentIds = shotPlan.continuity.persistentSubjectIds.map((id) => {
+      const matchingSub = shotPlan.subjects.find(
+        (s) => s.subjectId.toLowerCase() === id.toLowerCase()
+      );
+
+      if (matchingSub && matchingSub.role === "subject_identity") {
+        if (matchingSub.referenceAssetId) {
+          const matchingRef = boundSubjectIdentityRefs.find(
+            (r) => r.referenceAssetId.toLowerCase() === matchingSub.referenceAssetId?.toLowerCase()
+          );
+          if (matchingRef) {
+            return matchingRef.promptTag;
+          }
+          return boundSubjectIdentityRefs.length > 0 ? "unspecified_subject" : id;
+        }
+        if (boundSubjectIdentityRefs.length === 1) {
+          return boundSubjectIdentityRefs[0]!.promptTag;
+        }
+        return boundSubjectIdentityRefs.length > 0 ? "unspecified_subject" : id;
+      }
+
+      if (!matchingSub) {
+        if (boundSubjectIdentityRefs.length === 1) {
+          return boundSubjectIdentityRefs[0]!.promptTag;
+        }
+        if (boundSubjectIdentityRefs.length > 1) {
+          return "unspecified_subject";
+        }
+        return id;
+      }
+
+      return id;
+    });
+    persistentSubjectsText = mappedPersistentIds.join(", ");
+  }
+
+  let contText = `[Continuity]: Persistent Subjects: ${persistentSubjectsText}`;
   if (shotPlan.continuity.lightingContinuityNote) {
     contText += ` | Lighting Note: ${shotPlan.continuity.lightingContinuityNote}`;
   }
   lines.push(contText);
 
-  // Section 8: Dialogue & Performance
+  // Section 10: Dialogue & Performance
   if (shotPlan.dialogue) {
     const d = shotPlan.dialogue;
     const parts: string[] = [];
@@ -187,7 +281,7 @@ export function compileShotPlan(input: CompileShotPlanInput): CompiledShotPlanIn
     }
   }
 
-  // Section 9: Reference Visuals / Picture Tag Declarations
+  // Section 11: Reference Visuals / Picture Tag Declarations
   if (references.length > 0) {
     const refDeclarations = references.map((r) => {
       const label = r.asset.displayName || r.referenceAssetId;
