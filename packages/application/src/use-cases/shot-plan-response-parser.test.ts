@@ -51,11 +51,11 @@ describe("parseShotPlanResponse", () => {
     expect(proposal.subjects[0]!.initialPosition).toBe("screen_center");
   });
 
-  it("normalizes a zero-based or non-numeric beatIndex to a positive 1-based index instead of failing validation", () => {
+  it("numbers beats by position so model-supplied duplicate or zero-based beatIndex values cannot break validation", () => {
     const raw = rawShotPlan({
       beats: [
         { beatIndex: 0, startMs: 0, endMs: 2000, description: "a", subjectAction: "x" },
-        { beatIndex: "beat-2", startMs: 2000, endMs: 4000, description: "b", subjectAction: "y" }
+        { beatIndex: 1, startMs: 2000, endMs: 4000, description: "b", subjectAction: "y" }
       ]
     });
 
