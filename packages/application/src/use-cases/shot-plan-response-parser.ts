@@ -124,11 +124,6 @@ function normalizeInitialPosition(value: unknown): BlockingInitialPosition | und
   return undefined;
 }
 
-function normalizeBeatIndex(value: unknown, fallback: number): number {
-  const n = typeof value === "number" ? value : Number(value);
-  return Number.isInteger(n) && n > 0 ? n : fallback;
-}
-
 function normalizeMovementSpeed(value: unknown): MovementSpeed | undefined {
   if (typeof value !== "string") return undefined;
   const s = value.trim().toLowerCase();
@@ -250,7 +245,7 @@ function validateShotPlanProposal(item: unknown, variantOrdinal: number): ShotPl
       if (typeof b === "object" && b !== null) {
         const beatObj = b as Record<string, unknown>;
         beats.push({
-          beatIndex: normalizeBeatIndex(beatObj.beatIndex, i + 1),
+          beatIndex: i + 1,
           startMs: Number(beatObj.startMs ?? 0),
           endMs: Number(beatObj.endMs ?? 0),
           description: String(beatObj.description ?? `Beat ${i + 1}`),
