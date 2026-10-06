@@ -46,6 +46,24 @@ import type {
 } from "../ports/index.js";
 import { CampaignIdempotencyConflictError } from "../ports/index.js";
 
+class InMemoryMutex {
+  private queue: Promise<void> = Promise.resolve();
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    let release: () => void;
+    const wait = new Promise<void>((r) => {
+      release = r;
+    });
+    const prev = this.queue;
+    this.queue = prev.then(() => wait);
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release!();
+    }
+  }
+}
+
 export class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _seededScenes: Map<SceneId, Scene>;
   private readonly _seededCandidates: Map<CandidateId, StoryboardCandidate>;
@@ -71,6 +89,7 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _seededReferenceGroups = new Map<ReferenceGroupId, ReferenceGroup>();
   private readonly _sceneBindings = new Map<string, SceneReferenceBinding>();
   private readonly _enqueuedAssemblyJobs: EnqueueDeliveryAssemblyJobInput[] = [];
+  private readonly _mutexes = new Map<string, InMemoryMutex>();
   private _beforeSaveWithRequestHash?:
     ((campaign: CampaignShellRecord, hash: string) => Promise<void> | void) | undefined;
   private _executeLock: Promise<unknown> = Promise.resolve();
@@ -780,6 +799,35 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
         if (!asset || asset.clientId !== clientId || asset.archivedAt != null) return false;
         this._seededReferenceAssets.set(id, { ...asset, archivedAt: new Date().toISOString() });
         return true;
+      },
+      findDescriptionByContentHash: async (contentHashSha256) => {
+        for (const asset of this._seededReferenceAssets.values()) {
+          if (
+            asset.contentHashSha256 === contentHashSha256 &&
+            asset.description &&
+            asset.description.trim().length > 0
+          ) {
+            return asset.description.trim();
+          }
+        }
+        return undefined;
+      },
+      updateDescriptionByContentHash: async (contentHashSha256, description) => {
+        const trimmed = description.trim();
+        if (!trimmed) return;
+        for (const [id, asset] of this._seededReferenceAssets.entries()) {
+          if (asset.contentHashSha256 === contentHashSha256) {
+            this._seededReferenceAssets.set(id, Object.freeze({ ...asset, description: trimmed }));
+          }
+        }
+      },
+      withLock: async <T>(key: string, action: () => Promise<T>): Promise<T> => {
+        let mutex = this._mutexes.get(key);
+        if (!mutex) {
+          mutex = new InMemoryMutex();
+          this._mutexes.set(key, mutex);
+        }
+        return await mutex.run(action);
       }
     };
 

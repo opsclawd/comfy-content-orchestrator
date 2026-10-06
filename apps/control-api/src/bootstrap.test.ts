@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { main, runControlApi } from "./bootstrap.js";
+import { main, runControlApi, OpenAiAsAnthropicPlanningModelClient } from "./bootstrap.js";
 import { SessionClientContextResolver } from "./http/client-context.js";
 import type { ControlApiRuntimeConfig } from "./runtime-config.js";
 import { HeadBucketCommand, type S3Client } from "@aws-sdk/client-s3";
@@ -8,6 +8,7 @@ import type { FastifyInstance } from "fastify";
 import {
   HostFsStorageTelemetryAdapter,
   InMemoryStorageMetricsRegistry,
+  OpenAiPlanningModelClient,
   PostgresJobQueue,
   StorageAwareJobAdmissionGate,
   type HostFsStorageTelemetryAdapterOptions,
@@ -895,5 +896,78 @@ describe("bootstrap", () => {
       process.exitCode = originalExitCode;
       consoleErrorSpy.mockRestore();
     }
+  });
+
+  describe("OpenAiAsAnthropicPlanningModelClient", () => {
+    it("declares Anthropic provider with imageCapability=false and supportsImages=false", () => {
+      const mockOpenAi = new OpenAiPlanningModelClient({
+        apiKey: "test-openai-key",
+        model: "MiniMax-M3",
+        fetch: vi.fn()
+      });
+      const client = new OpenAiAsAnthropicPlanningModelClient(mockOpenAi);
+
+      expect(client.providerName).toBe("Anthropic");
+      expect(client.imageCapability).toBe(false);
+      expect(client.supportsImages).toBe(false);
+      expect(client.maxImages).toBe(0);
+    });
+
+    it("strips image list before delegating to inner client to guarantee no image blocks are emitted", async () => {
+      let capturedBody: { messages?: Array<{ role: string; content: unknown }> } | undefined;
+      const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        if (init?.body) {
+          capturedBody = JSON.parse(init.body as string);
+        }
+        return {
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              choices: [{ message: { role: "assistant", content: "Result" } }]
+            })
+        } as unknown as Response;
+      });
+
+      const inner = new OpenAiPlanningModelClient({
+        apiKey: "test-openai-key",
+        model: "MiniMax-M3",
+        fetch: fetchMock
+      });
+      // Inner client itself is image-capable for MiniMax-M3
+      expect(inner.imageCapability).toBe(true);
+
+      const wrapped = new OpenAiAsAnthropicPlanningModelClient(inner);
+
+      await wrapped.complete({
+        systemPrompt: "System",
+        userPrompt: "User prompt",
+        bindingCount: 1,
+        maxImages: 1,
+        images: [{ mimeType: "image/png", base64Data: "BASE64" }]
+      });
+
+      expect(capturedBody?.messages?.[1]?.role).toBe("user");
+      // Must be plain string, NOT an array of content blocks with image_url
+      expect(typeof capturedBody?.messages?.[1]?.content).toBe("string");
+      expect(capturedBody?.messages?.[1]?.content).toBe("User prompt");
+    });
+
+    it("delegates text-only request untouched to inner client", async () => {
+      const completeSpy = vi.fn().mockResolvedValue({ kind: "success", rawText: "OK" });
+      const fakeInner = {
+        providerName: "OpenAI",
+        complete: completeSpy
+      } as unknown as OpenAiPlanningModelClient;
+
+      const wrapped = new OpenAiAsAnthropicPlanningModelClient(fakeInner);
+      const request = {
+        systemPrompt: "System",
+        userPrompt: "User prompt"
+      };
+
+      const result = await wrapped.complete(request);
+      expect(result).toEqual({ kind: "success", rawText: "OK" });
+      expect(completeSpy).toHaveBeenCalledWith(request);
+    });
   });
 });

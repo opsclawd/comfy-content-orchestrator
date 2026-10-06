@@ -68,10 +68,22 @@ export interface ControlApiProcessSignals {
   exit?(code: number): void;
 }
 
-class OpenAiAsAnthropicPlanningModelClient implements PlanningModelClientPort {
+export class OpenAiAsAnthropicPlanningModelClient implements PlanningModelClientPort {
   readonly providerName = "Anthropic" as const;
+  readonly imageCapability = false;
+  readonly supportsImages = false;
+  readonly maxImages = 0;
   constructor(private readonly inner: OpenAiPlanningModelClient) {}
   complete(request: PlanningModelRequest): Promise<PlanningModelOutcome> {
+    if (request.images && request.images.length > 0) {
+      const strippedRequest: PlanningModelRequest = {
+        ...request,
+        images: undefined,
+        bindingCount: undefined,
+        maxImages: undefined
+      };
+      return this.inner.complete(strippedRequest);
+    }
     return this.inner.complete(request);
   }
 }

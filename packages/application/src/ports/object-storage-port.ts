@@ -34,6 +34,7 @@ export interface StoredObject {
 
 export interface GetObjectOptions {
   readonly maxBytes?: number | undefined;
+  readonly signal?: AbortSignal | undefined;
 }
 
 export interface CopyObjectOptions {

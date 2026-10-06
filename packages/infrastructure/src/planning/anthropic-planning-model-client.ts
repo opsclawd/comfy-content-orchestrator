@@ -82,6 +82,8 @@ function detectStructuredRefusalDiscriminator(
 
 export class AnthropicPlanningModelClient implements PlanningModelClientPort {
   readonly providerName = "Anthropic" as const;
+  readonly imageCapability = false;
+  readonly supportsImages = false;
   private readonly apiKey: string;
   private readonly baseUrl: string;
   private readonly model: string;

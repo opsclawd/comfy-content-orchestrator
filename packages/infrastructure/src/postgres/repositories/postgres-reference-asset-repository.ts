@@ -690,4 +690,40 @@ export class PostgresReferenceAssetRepository implements ReferenceAssetRepositor
       }
     }
   }
+
+  async findDescriptionByContentHash(contentHashSha256: string): Promise<string | undefined> {
+    const result = await this.client.query<{ description: string }>(
+      `
+      SELECT description
+      FROM reference_assets
+      WHERE content_hash_sha256 = $1
+        AND description IS NOT NULL
+        AND trim(description) != ''
+      ORDER BY archived_at NULLS FIRST, created_at ASC
+      LIMIT 1
+      `,
+      [contentHashSha256]
+    );
+
+    const desc = result.rows[0]?.description?.trim();
+    return desc && desc.length > 0 ? desc : undefined;
+  }
+
+  async updateDescriptionByContentHash(
+    contentHashSha256: string,
+    description: string
+  ): Promise<void> {
+    const trimmed = description.trim();
+    if (!trimmed) {
+      return;
+    }
+    await this.client.query(
+      `
+      UPDATE reference_assets
+      SET description = $2
+      WHERE content_hash_sha256 = $1
+      `,
+      [contentHashSha256, trimmed]
+    );
+  }
 }

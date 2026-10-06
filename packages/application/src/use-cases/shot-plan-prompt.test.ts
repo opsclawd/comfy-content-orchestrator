@@ -49,6 +49,38 @@ describe("ShotPlan Prompt Builders", () => {
       expect(prompt.userPrompt).toContain("Target Duration: 4000 ms");
       expect(prompt.userPrompt).toContain("Bound Reference Assets: ref-hero-1");
     });
+
+    it("formats bound references with canonical tags, roles, and descriptions and adds directives", () => {
+      const prompt = buildShotPlanPrompt({
+        scenePrompt: "A couple having a drink by the pool house",
+        sceneDurationMs: 5000,
+        engineProfileId: "ltx-2.5@certified-v1",
+        variantCount: 2,
+        boundReferences: [
+          {
+            promptTag: "<Picture 1>",
+            role: "subject_identity",
+            description: "A smiling couple in casual clothing outdoors."
+          },
+          {
+            promptTag: "<Picture 2>",
+            role: "location",
+            description: "A modern pool house with glass walls and a stone patio."
+          }
+        ]
+      });
+
+      expect(prompt.userPrompt).toContain(
+        "Bound Reference Assets:\n<Picture 1> | subject_identity | A smiling couple in casual clothing outdoors.\n<Picture 2> | location | A modern pool house with glass walls and a stone patio."
+      );
+      expect(prompt.systemPrompt).toContain("Reference Asset Directives:");
+      expect(prompt.systemPrompt).toContain(
+        "- For 'subject_identity': The character or subject identity must strictly follow the described appearance and characteristics."
+      );
+      expect(prompt.systemPrompt).toContain(
+        "- For 'location': The scene setting, architecture, and physical environment must strictly match the described location."
+      );
+    });
   });
 
   describe("buildShotPlanVariationPrompt", () => {
