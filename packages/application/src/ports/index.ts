@@ -45,3 +45,5 @@ export * from "./campaign-animatic-queries.js";
 export * from "./campaign-readiness-queries.js";
 export * from "./acceptance-fixture-asset-source-port.js";
 export * from "./acceptance-preflight-probe-ports.js";
+export * from "./campaign-reference-bible-repository.js";
+export * from "./campaign-reference-bible-errors.js";

@@ -19,7 +19,7 @@ export class InvalidShotPlanVariantCountError extends Error {
 }
 
 export class ShotPlanValidationError extends Error {
-  override readonly name = "ShotPlanValidationError";
+  override readonly name: string = "ShotPlanValidationError";
 
   constructor(message: string) {
     super(message);
@@ -119,3 +119,22 @@ export class ReferenceAssetDescriptionGenerationError extends Error {
     this.referenceAssetId = assetId;
   }
 }
+
+export class InvalidPersistentSubjectIdError extends ShotPlanValidationError {
+  override readonly name = "InvalidPersistentSubjectIdError";
+  readonly code = "INVALID_PERSISTENT_SUBJECT_ID";
+  readonly persistentId: string;
+  readonly reason: string;
+
+  constructor(persistentId: string, reason: string) {
+    super(`Invalid persistent subject ID "${persistentId}": ${reason}`);
+    this.persistentId = persistentId;
+    this.reason = reason;
+  }
+}
+
+export {
+  CampaignReferenceBibleRoleConflictError,
+  StaleBibleEntryConflictError,
+  StaleBibleBindingMismatchError
+} from "../ports/campaign-reference-bible-errors.js";

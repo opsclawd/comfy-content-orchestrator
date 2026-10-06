@@ -671,6 +671,16 @@ describe("EnqueueSceneProductionRenderUseCase", () => {
     uow.seedShotPlan(shotPlan);
     uow.seedReferenceAsset(refAsset);
     uow.seedSceneBinding(binding);
+    uow.seedCampaignReferenceBible({
+      campaignId: validCampaign.id,
+      referenceAssetId: refAsset.id,
+      role: "subject_identity",
+      description: "Default subject description",
+      biblePromptTag: "<Picture 1>",
+      sourceContentHashSha256: refAsset.contentHashSha256,
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z"
+    });
 
     const objectStorage = {
       getObject: vi.fn().mockResolvedValue({ body: validPngBytes }),
@@ -1061,6 +1071,16 @@ describe("EnqueueSceneProductionRenderUseCase", () => {
     uow.seedShotPlan(shotPlan);
     uow.seedReferenceAsset(refAsset);
     uow.seedSceneBinding(binding);
+    uow.seedCampaignReferenceBible({
+      campaignId: campaign.id,
+      referenceAssetId: refAsset.id,
+      role: "subject_identity",
+      description: "Default subject description",
+      biblePromptTag: "<Picture 1>",
+      sourceContentHashSha256: refAsset.contentHashSha256,
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z"
+    });
 
     const objectStorage = {
       getObject: vi.fn().mockResolvedValue({ body: validPngBytes }),
@@ -1117,6 +1137,16 @@ describe("EnqueueSceneProductionRenderUseCase", () => {
     uow.seedShotPlan(shotPlan);
     uow.seedReferenceAsset(refAsset);
     uow.seedSceneBinding(binding);
+    uow.seedCampaignReferenceBible({
+      campaignId: validCampaign.id,
+      referenceAssetId: refAsset.id,
+      role: "subject_identity",
+      description: "Default subject description",
+      biblePromptTag: "<Picture 1>",
+      sourceContentHashSha256: refAsset.contentHashSha256,
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z"
+    });
 
     const objectStorage = {
       getObject: vi.fn().mockResolvedValue({ body: corruptBytes }),
@@ -1198,6 +1228,16 @@ describe("EnqueueSceneProductionRenderUseCase", () => {
     uow.seedShotPlan(shotPlan);
     uow.seedReferenceAsset(refAsset);
     uow.seedSceneBinding(binding);
+    uow.seedCampaignReferenceBible({
+      campaignId: scene.campaignId,
+      referenceAssetId: refAsset.id,
+      role: "subject_identity",
+      description: "Default subject description",
+      biblePromptTag: "<Picture 1>",
+      sourceContentHashSha256: refAsset.contentHashSha256,
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z"
+    });
 
     const useCase = new EnqueueSceneProductionRenderUseCase(uow, {
       objectStorage: {
@@ -1253,6 +1293,16 @@ describe("EnqueueSceneProductionRenderUseCase", () => {
     uow.seedShotPlan(shotPlan);
     uow.seedReferenceAsset(refAsset);
     uow.seedSceneBinding(binding);
+    uow.seedCampaignReferenceBible({
+      campaignId: campaignWithoutClientId.id,
+      referenceAssetId: refAsset.id,
+      role: "subject_identity",
+      description: "Default subject description",
+      biblePromptTag: "<Picture 1>",
+      sourceContentHashSha256: refAsset.contentHashSha256,
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z"
+    });
 
     const useCase = new EnqueueSceneProductionRenderUseCase(uow, {
       objectStorage: {
@@ -1299,6 +1349,16 @@ describe("EnqueueSceneProductionRenderUseCase", () => {
     uow.seedShotPlan(shotPlan);
     uow.seedReferenceAsset(refAsset);
     uow.seedSceneBinding(binding);
+    uow.seedCampaignReferenceBible({
+      campaignId: validCampaign.id,
+      referenceAssetId: refAsset.id,
+      role: "subject_identity",
+      description: "Default subject description",
+      biblePromptTag: "<Picture 1>",
+      sourceContentHashSha256: refAsset.contentHashSha256,
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z"
+    });
 
     const useCase = new EnqueueSceneProductionRenderUseCase(uow, {
       objectStorage: {
@@ -1347,6 +1407,16 @@ describe("EnqueueSceneProductionRenderUseCase", () => {
     uow.seedShotPlan(shotPlan);
     uow.seedReferenceAsset(refAsset);
     uow.seedSceneBinding(binding);
+    uow.seedCampaignReferenceBible({
+      campaignId: validCampaign.id,
+      referenceAssetId: refAsset.id,
+      role: "subject_identity",
+      description: "Default subject description",
+      biblePromptTag: "<Picture 1>",
+      sourceContentHashSha256: refAsset.contentHashSha256,
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z"
+    });
 
     const useCase = new EnqueueSceneProductionRenderUseCase(uow, {
       objectStorage: {

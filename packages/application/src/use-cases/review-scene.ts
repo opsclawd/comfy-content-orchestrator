@@ -8,6 +8,7 @@ import {
   InvalidTransitionError,
   ReferenceAssetNotFoundError,
   type CandidateId,
+  type ReferenceAsset,
   type ReferenceAssetId,
   type Scene,
   type SceneId,
@@ -23,7 +24,12 @@ import { CandidateNotFoundError } from "./candidate-not-found-error.js";
 import { IdempotencyConflictError } from "./idempotency-conflict-error.js";
 import { SceneNotFoundError } from "./scene-not-found-error.js";
 import { StaleRevisionConflictError } from "./stale-revision-conflict-error.js";
-import { ShotPlanNotFoundError } from "./plan-shot-plans-errors.js";
+import {
+  ReferenceAssetDescriptionGenerationError,
+  ShotPlanNotFoundError
+} from "./plan-shot-plans-errors.js";
+import { CampaignReferenceBibleRoleConflictError } from "../ports/campaign-reference-bible-errors.js";
+import type { CampaignReferenceBibleRole } from "../ports/campaign-reference-bible-repository.js";
 import type { PlanShotPlansUseCase } from "./plan-shot-plans.js";
 import { PlanningProviderNotConfiguredError } from "./scene-creation-errors.js";
 import {
@@ -729,6 +735,7 @@ export class ReviewSceneUseCases {
           (payload as { referenceBindings?: readonly SceneReferenceBinding[] }).referenceBindings ??
           [];
         const allRefIds = [...new Set([...refIds, ...bindings.map((b) => b.referenceAssetId)])];
+        let assetMap = new Map<string, ReferenceAsset>();
         if (allRefIds.length > 0 && context.campaigns !== undefined) {
           const campaign = await context.campaigns.findById(scene.campaignId);
           if (campaign !== undefined) {
@@ -743,13 +750,287 @@ export class ReviewSceneUseCases {
                     allRefIds as unknown as readonly ReferenceAssetId[],
                     { includeArchived: true }
                   );
-            const assetMap = new Map(assets.map((a) => [a.id as string, a]));
+            assetMap = new Map(assets.map((a) => [a.id as string, a]));
             for (const refId of allRefIds) {
               const asset = assetMap.get(refId);
               if (!asset) {
                 throw new ReferenceAssetNotFoundError(refId);
               }
               assertReferenceAssetSelectable(asset, campaign.clientId);
+            }
+          }
+        }
+
+        if (context.campaignReferenceBible !== undefined) {
+          const bibleRepo = context.campaignReferenceBible;
+          const existingBible = await bibleRepo.findByCampaignId(scene.campaignId);
+
+          const campaignScenes =
+            context.scenes && typeof context.scenes.findByCampaignId === "function"
+              ? await context.scenes.findByCampaignId(scene.campaignId)
+              : [scene];
+          let campaignHasShotPlans = false;
+          if (context.shotPlans) {
+            for (const s of campaignScenes) {
+              const plans = await context.shotPlans.listBySceneAndRevision(s.id, s.specRevision);
+              if (plans.length > 0) {
+                campaignHasShotPlans = true;
+                break;
+              }
+            }
+          }
+
+          const campaignChanges = await bibleRepo.listChanges(scene.campaignId);
+          const isBibleInitialized =
+            existingBible.length > 0 || campaignHasShotPlans || campaignChanges.length > 0;
+
+          if (isBibleInitialized) {
+            const priorBindings = scene.configuration.referenceBindings ?? [];
+            const rawNewBindings =
+              (
+                payload as {
+                  referenceBindings?: readonly (
+                    SceneReferenceBinding | SceneReferenceBindingInput
+                  )[];
+                }
+              ).referenceBindings ?? [];
+
+            // Other campaign scenes check for conflicting roles
+            const otherScenes = campaignScenes.filter((s) => s.id !== scene.id);
+
+            const otherSceneRoles = new Map<string, CampaignReferenceBibleRole>();
+            for (const otherScene of otherScenes) {
+              const otherBindings = [
+                ...(otherScene.configuration.referenceBindings ?? []),
+                ...(context.referenceAssets?.listBindingsBySceneId
+                  ? await context.referenceAssets.listBindingsBySceneId(otherScene.id, {
+                      specRevision: otherScene.specRevision
+                    })
+                  : [])
+              ];
+              for (const ob of otherBindings.filter((b) => !b.archivedAt)) {
+                if (ob.role === "subject_identity" || ob.role === "location") {
+                  otherSceneRoles.set(ob.referenceAssetId.toLowerCase(), ob.role);
+                }
+              }
+            }
+
+            // Map new eligible bindings by lowercase asset ID
+            const newEligibleMap = new Map<
+              string,
+              SceneReferenceBinding | SceneReferenceBindingInput
+            >();
+            for (const nb of rawNewBindings) {
+              if (nb.role === "subject_identity" || nb.role === "location") {
+                const lower = nb.referenceAssetId.toLowerCase();
+                const otherRole = otherSceneRoles.get(lower);
+                if (otherRole && otherRole !== nb.role) {
+                  throw new CampaignReferenceBibleRoleConflictError(nb.referenceAssetId, [
+                    otherRole,
+                    nb.role
+                  ]);
+                }
+                newEligibleMap.set(lower, nb);
+              }
+            }
+
+            // Map prior eligible bindings
+            const priorEligibleMap = new Map<string, SceneReferenceBinding>();
+            for (const pb of priorBindings) {
+              if (pb.role === "subject_identity" || pb.role === "location") {
+                priorEligibleMap.set(pb.referenceAssetId.toLowerCase(), pb);
+              }
+            }
+
+            const existingBibleMap = new Map(
+              existingBible.map((e) => [e.referenceAssetId.toLowerCase(), e])
+            );
+
+            let maxOrdinal = 0;
+            for (const e of existingBible) {
+              const m = e.biblePromptTag.match(/<Picture\s+(\d+)>/i);
+              if (m) {
+                maxOrdinal = Math.max(maxOrdinal, parseInt(m[1]!, 10));
+              }
+            }
+            for (const c of campaignChanges) {
+              const tag = c.newBiblePromptTag ?? c.oldBiblePromptTag;
+              if (tag) {
+                const m = tag.match(/<Picture\s+(\d+)>/i);
+                if (m) {
+                  maxOrdinal = Math.max(maxOrdinal, parseInt(m[1]!, 10));
+                }
+              }
+            }
+
+            // 1. Handle Added / Role-changed assets in newBindings
+            for (const [lower, nb] of newEligibleMap.entries()) {
+              const existingEntry = existingBibleMap.get(lower);
+
+              if (!existingEntry) {
+                maxOrdinal += 1;
+                const nextTag = `<Picture ${maxOrdinal}>`;
+                let desc = "";
+                let contentHash = "";
+                const asset =
+                  assetMap.get(nb.referenceAssetId) ??
+                  assetMap.get(lower) ??
+                  (context.referenceAssets?.findByIdsGlobal
+                    ? (
+                        await context.referenceAssets.findByIdsGlobal([
+                          nb.referenceAssetId as unknown as ReferenceAssetId
+                        ])
+                      )[0]
+                    : undefined);
+                if (asset) {
+                  contentHash = asset.contentHashSha256;
+                  if (asset.description && asset.description.trim().length > 0) {
+                    desc = asset.description.trim();
+                  } else if (
+                    typeof context.referenceAssets?.findDescriptionByContentHash === "function"
+                  ) {
+                    const cached = await context.referenceAssets.findDescriptionByContentHash(
+                      asset.contentHashSha256
+                    );
+                    if (cached) desc = cached.trim();
+                  }
+                }
+                if (!desc || desc.trim().length === 0) {
+                  throw new ReferenceAssetDescriptionGenerationError(
+                    nb.referenceAssetId,
+                    `No description available for added reference asset "${nb.referenceAssetId}".`
+                  );
+                }
+
+                await bibleRepo.updateEntryWithAudit({
+                  campaignId: scene.campaignId,
+                  referenceAssetId: nb.referenceAssetId,
+                  next: {
+                    role: nb.role as CampaignReferenceBibleRole,
+                    description: desc,
+                    biblePromptTag: nextTag,
+                    sourceContentHashSha256: contentHash
+                  },
+                  change: {
+                    changeReason: "added",
+                    sourceSceneId: scene.id,
+                    sourceSpecRevision: scene.specRevision + 1,
+                    sourceBindingId: `${scene.id}-${nb.referenceAssetId}`,
+                    actorKind: "user",
+                    actorId: input.reviewerName
+                  }
+                });
+              } else {
+                const assetChanges = campaignChanges.filter(
+                  (c) => c.referenceAssetId.toLowerCase() === lower
+                );
+                const lastChange =
+                  assetChanges.length > 0 ? assetChanges[assetChanges.length - 1] : undefined;
+                const isRemovedCampaignWide = lastChange?.changeReason === "removed";
+
+                if (isRemovedCampaignWide) {
+                  // Asset was previously removed campaign-wide and is now being re-added.
+                  // Retain and recover its original campaign identity tag!
+                  let desc = existingEntry.description;
+                  let contentHash = existingEntry.sourceContentHashSha256;
+                  const asset =
+                    assetMap.get(nb.referenceAssetId) ??
+                    assetMap.get(lower) ??
+                    (context.referenceAssets?.findByIdsGlobal
+                      ? (
+                          await context.referenceAssets.findByIdsGlobal([
+                            nb.referenceAssetId as unknown as ReferenceAssetId
+                          ])
+                        )[0]
+                      : undefined);
+                  if (asset) {
+                    if (asset.contentHashSha256) {
+                      contentHash = asset.contentHashSha256;
+                    }
+                    if (asset.description && asset.description.trim().length > 0) {
+                      desc = asset.description.trim();
+                    } else if (
+                      typeof context.referenceAssets?.findDescriptionByContentHash === "function"
+                    ) {
+                      const cached = await context.referenceAssets.findDescriptionByContentHash(
+                        asset.contentHashSha256
+                      );
+                      if (cached) desc = cached.trim();
+                    }
+                  }
+
+                  const updatedEntry = await bibleRepo.updateEntryWithAudit({
+                    campaignId: scene.campaignId,
+                    referenceAssetId: existingEntry.referenceAssetId,
+                    expectedUpdatedAt: existingEntry.updatedAt,
+                    next: {
+                      role: nb.role as CampaignReferenceBibleRole,
+                      description: desc,
+                      biblePromptTag: existingEntry.biblePromptTag,
+                      sourceContentHashSha256: contentHash
+                    },
+                    change: {
+                      changeReason: "added",
+                      sourceSceneId: scene.id,
+                      sourceSpecRevision: scene.specRevision + 1,
+                      sourceBindingId: `${scene.id}-${nb.referenceAssetId}`,
+                      actorKind: "user",
+                      actorId: input.reviewerName,
+                      oldRole: null,
+                      oldDescription: null,
+                      oldBiblePromptTag: null,
+                      oldSourceContentHashSha256: null
+                    }
+                  });
+                  existingBibleMap.set(lower, updatedEntry);
+                } else if (existingEntry.role !== nb.role) {
+                  const updatedEntry = await bibleRepo.updateEntryWithAudit({
+                    campaignId: scene.campaignId,
+                    referenceAssetId: existingEntry.referenceAssetId,
+                    expectedUpdatedAt: existingEntry.updatedAt,
+                    next: {
+                      role: nb.role as CampaignReferenceBibleRole,
+                      description: existingEntry.description,
+                      biblePromptTag: existingEntry.biblePromptTag,
+                      sourceContentHashSha256: existingEntry.sourceContentHashSha256
+                    },
+                    change: {
+                      changeReason: "role_change",
+                      sourceSceneId: scene.id,
+                      sourceSpecRevision: scene.specRevision + 1,
+                      sourceBindingId: `${scene.id}-${nb.referenceAssetId}`,
+                      actorKind: "user",
+                      actorId: input.reviewerName
+                    }
+                  });
+                  existingBibleMap.set(lower, updatedEntry);
+                }
+              }
+            }
+
+            // 2. Handle Removals
+            for (const [lower, pb] of priorEligibleMap.entries()) {
+              if (!newEligibleMap.has(lower)) {
+                if (!otherSceneRoles.has(lower)) {
+                  const existingEntry = existingBibleMap.get(lower);
+                  if (existingEntry) {
+                    await bibleRepo.updateEntryWithAudit({
+                      campaignId: scene.campaignId,
+                      referenceAssetId: existingEntry.referenceAssetId,
+                      expectedUpdatedAt: existingEntry.updatedAt,
+                      next: null,
+                      change: {
+                        changeReason: "removed",
+                        sourceSceneId: scene.id,
+                        sourceSpecRevision: scene.specRevision + 1,
+                        sourceBindingId: `${scene.id}-${pb.referenceAssetId}`,
+                        actorKind: "user",
+                        actorId: input.reviewerName
+                      }
+                    });
+                  }
+                }
+              }
             }
           }
         }

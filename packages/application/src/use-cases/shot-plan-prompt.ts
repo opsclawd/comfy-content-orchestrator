@@ -13,6 +13,7 @@ export interface BoundReferencePromptInput {
   readonly promptTag: string;
   readonly role: ReferenceRole;
   readonly description: string;
+  readonly referenceAssetId?: string | undefined;
 }
 
 export interface BuildShotPlanPromptInput {
@@ -62,7 +63,7 @@ export function buildShotPlanPrompt(input: BuildShotPlanPromptInput): PlanningMo
           "",
           "Reference Asset Directives:",
           "When Bound Reference Assets are provided, they are authoritative reference constraints, not optional inspiration:",
-          "- For 'subject_identity': The character or subject identity must strictly follow the described appearance and characteristics.",
+          "- For 'subject_identity': The character or subject identity must strictly follow the described appearance and characteristics. Set subjects[].referenceAssetId to the bound reference's assetId, and in continuity.persistentSubjectIds specify the exact assetId for persistent subjects.",
           "- For 'product': The product appearance, packaging, and branding must strictly follow the described product details.",
           "- For 'location': The scene setting, architecture, and physical environment must strictly match the described location.",
           "- For 'style' and 'composition': The aesthetic cues, framing, color palette, and visual mood must follow the described cues."
@@ -81,7 +82,8 @@ export function buildShotPlanPrompt(input: BuildShotPlanPromptInput): PlanningMo
   if (hasBoundReferences) {
     userPromptLines.push("Bound Reference Assets:");
     for (const ref of input.boundReferences!) {
-      userPromptLines.push(`${ref.promptTag} | ${ref.role} | ${ref.description}`);
+      const assetPart = ref.referenceAssetId ? ` | assetId: ${ref.referenceAssetId}` : "";
+      userPromptLines.push(`${ref.promptTag} | ${ref.role} | ${ref.description}${assetPart}`);
     }
   } else if (input.referenceAssetIds && input.referenceAssetIds.length > 0) {
     userPromptLines.push(`Bound Reference Assets: ${input.referenceAssetIds.join(", ")}`);
@@ -153,7 +155,7 @@ export function buildShotPlanVariationPrompt(
           "",
           "Reference Asset Directives:",
           "When Bound Reference Assets are provided, they are authoritative reference constraints, not optional inspiration:",
-          "- For 'subject_identity': The character or subject identity must strictly follow the described appearance and characteristics.",
+          "- For 'subject_identity': The character or subject identity must strictly follow the described appearance and characteristics. Set subjects[].referenceAssetId to the bound reference's assetId, and in continuity.persistentSubjectIds specify the exact assetId for persistent subjects.",
           "- For 'product': The product appearance, packaging, and branding must strictly follow the described product details.",
           "- For 'location': The scene setting, architecture, and physical environment must strictly match the described location.",
           "- For 'style' and 'composition': The aesthetic cues, framing, color palette, and visual mood must follow the described cues."
@@ -174,7 +176,8 @@ export function buildShotPlanVariationPrompt(
   if (hasBoundReferences) {
     userPromptLines.push("Bound Reference Assets:");
     for (const ref of input.boundReferences!) {
-      userPromptLines.push(`${ref.promptTag} | ${ref.role} | ${ref.description}`);
+      const assetPart = ref.referenceAssetId ? ` | assetId: ${ref.referenceAssetId}` : "";
+      userPromptLines.push(`${ref.promptTag} | ${ref.role} | ${ref.description}${assetPart}`);
     }
   } else if (input.referenceAssetIds && input.referenceAssetIds.length > 0) {
     userPromptLines.push(`Bound Reference Assets: ${input.referenceAssetIds.join(", ")}`);

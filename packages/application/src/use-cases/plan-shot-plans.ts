@@ -30,8 +30,16 @@ import { parseShotPlanResponse, type ShotPlanProposal } from "./shot-plan-respon
 import {
   InvalidShotPlanVariantCountError,
   ReferenceAssetDescriptionGenerationError,
-  ShotPlanValidationError
+  ShotPlanValidationError,
+  CampaignReferenceBibleRoleConflictError,
+  InvalidPersistentSubjectIdError,
+  StaleBibleBindingMismatchError
 } from "./plan-shot-plans-errors.js";
+import type {
+  CampaignReferenceBibleEntry,
+  CampaignReferenceBibleEntryInput,
+  CampaignReferenceBibleRole
+} from "../ports/campaign-reference-bible-repository.js";
 import { PlanningNotAuthorizedError } from "./plan-scene-configuration-errors.js";
 import { DEFAULT_EXTERNAL_PROCESSING_POLICY } from "./create-client.js";
 
@@ -113,6 +121,167 @@ export class PlanShotPlansUseCase {
     return authorized;
   }
 
+  private async ensureAssetDescription(
+    asset: ReferenceAsset,
+    role: string,
+    descriptionsByHash: Map<string, string>,
+    refRepo: ReferenceAssetRepository & {
+      readonly findDescriptionByContentHash: (
+        contentHashSha256: string
+      ) => Promise<string | undefined>;
+      readonly updateDescriptionByContentHash: (
+        contentHashSha256: string,
+        description: string
+      ) => Promise<void>;
+      readonly withLock: <T>(key: string, action: () => Promise<T>) => Promise<T>;
+    },
+    policy: PlanningAuthorizationPolicy,
+    signal: AbortSignal
+  ): Promise<string> {
+    if (
+      !refRepo ||
+      typeof refRepo.findDescriptionByContentHash !== "function" ||
+      typeof refRepo.updateDescriptionByContentHash !== "function" ||
+      typeof refRepo.withLock !== "function"
+    ) {
+      throw new ReferenceAssetDescriptionGenerationError(
+        asset.id,
+        "ReferenceAsset repository lacks required description caching or locking operations (findDescriptionByContentHash, updateDescriptionByContentHash, withLock)."
+      );
+    }
+
+    const hash = asset.contentHashSha256;
+    if (descriptionsByHash.has(hash)) {
+      return descriptionsByHash.get(hash)!;
+    }
+
+    if (asset.description && asset.description.trim().length > 0) {
+      const trimmed = asset.description.trim();
+      descriptionsByHash.set(hash, trimmed);
+      return trimmed;
+    }
+
+    const cached = await refRepo.findDescriptionByContentHash(hash);
+    if (cached && cached.trim().length > 0) {
+      const trimmed = cached.trim();
+      descriptionsByHash.set(hash, trimmed);
+      return trimmed;
+    }
+
+    return await refRepo.withLock(hash, async () => {
+      if (descriptionsByHash.has(hash)) {
+        return descriptionsByHash.get(hash)!;
+      }
+
+      const rechecked = await refRepo.findDescriptionByContentHash(hash);
+      if (rechecked && rechecked.trim().length > 0) {
+        const trimmed = rechecked.trim();
+        descriptionsByHash.set(hash, trimmed);
+        return trimmed;
+      }
+
+      if (signal.aborted) {
+        throw signal.reason ?? new Error("Planning deadline exceeded");
+      }
+
+      const imageClient = this.resolveImageDescriptionClient(policy, asset.id);
+
+      if (!this.deps.objectStorage) {
+        throw new ReferenceAssetDescriptionGenerationError(
+          asset.id,
+          "ObjectStoragePort is required to retrieve reference asset image for description generation."
+        );
+      }
+
+      let objResult;
+      try {
+        objResult = await this.deps.objectStorage.getObject(
+          { bucket: asset.storageBucket, key: asset.storageObjectKey },
+          { signal, maxBytes: MAX_REFERENCE_IMAGE_BYTES }
+        );
+      } catch (err) {
+        if (signal.aborted) {
+          throw signal.reason ?? err;
+        }
+        throw new ReferenceAssetDescriptionGenerationError(
+          asset.id,
+          `Failed to retrieve storage object for reference asset "${asset.id}": ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+      }
+
+      if (!objResult || !objResult.body || objResult.body.length === 0) {
+        throw new ReferenceAssetDescriptionGenerationError(
+          asset.id,
+          `Storage object for reference asset "${asset.id}" is empty or not found.`
+        );
+      }
+
+      if (objResult.body.byteLength > MAX_REFERENCE_IMAGE_BYTES) {
+        throw new ReferenceAssetDescriptionGenerationError(
+          asset.id,
+          `Storage object for reference asset "${asset.id}" exceeds max image size limit (${MAX_REFERENCE_IMAGE_BYTES} bytes).`
+        );
+      }
+
+      const base64Data = Buffer.from(objResult.body).toString("base64");
+      const mimeType = asset.mimeType ?? "image/jpeg";
+
+      let outcome: PlanningModelOutcome;
+      try {
+        outcome = await imageClient.complete({
+          systemPrompt:
+            "You are a specialized visual analysis assistant for video production. Describe the provided reference image concisely and objectively, focusing on visual details, appearance, and physical characteristics relevant to video generation. Return only the description text with no conversational preamble or markdown formatting.",
+          userPrompt: `Provide a concise, objective visual description of this reference image (role: ${role}).`,
+          images: [{ mimeType, base64Data }],
+          bindingCount: 1,
+          maxImages: 1,
+          signal
+        });
+      } catch (err) {
+        if (signal.aborted) {
+          throw signal.reason ?? err;
+        }
+        throw new ReferenceAssetDescriptionGenerationError(
+          asset.id,
+          `Failed to complete description request for reference asset "${asset.id}": ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+      }
+
+      if (signal.aborted) {
+        throw signal.reason ?? new Error("Planning deadline exceeded");
+      }
+
+      if (outcome.kind !== "success") {
+        const failureReason =
+          outcome.kind === "retryable_failure" || outcome.kind === "permanent_failure"
+            ? outcome.message
+            : outcome.kind === "safety_refusal"
+              ? "safety refusal"
+              : "unknown failure";
+        throw new ReferenceAssetDescriptionGenerationError(
+          asset.id,
+          `Description generation failed for reference asset "${asset.id}": ${failureReason}`
+        );
+      }
+
+      const generatedDesc = outcome.rawText.trim();
+      if (generatedDesc.length === 0) {
+        throw new ReferenceAssetDescriptionGenerationError(
+          asset.id,
+          `Generated description for reference asset "${asset.id}" was blank.`
+        );
+      }
+
+      await refRepo.updateDescriptionByContentHash(hash, generatedDesc);
+      descriptionsByHash.set(hash, generatedDesc);
+      return generatedDesc;
+    });
+  }
+
   async execute(input: PlanShotPlansInput): Promise<PlanShotPlansResult> {
     const variantCount = input.variantCount ?? 3;
     if (!Number.isInteger(variantCount) || variantCount < 1 || variantCount > 5) {
@@ -185,6 +354,257 @@ export class PlanShotPlansUseCase {
           : [];
         const activeBindings = bindings.filter((b) => !b.archivedAt);
 
+        const refRepo = context.referenceAssets as
+          | (ReferenceAssetRepository & {
+              readonly findDescriptionByContentHash: (
+                contentHashSha256: string
+              ) => Promise<string | undefined>;
+              readonly updateDescriptionByContentHash: (
+                contentHashSha256: string,
+                description: string
+              ) => Promise<void>;
+              readonly withLock: <T>(key: string, action: () => Promise<T>) => Promise<T>;
+            })
+          | undefined;
+
+        let campaignBibleEntries: readonly CampaignReferenceBibleEntry[] = [];
+
+        if (context.campaignReferenceBible) {
+          const bibleRepo = context.campaignReferenceBible;
+          const existingBible = await bibleRepo.findByCampaignId(scene.campaignId);
+
+          if (existingBible.length > 0) {
+            campaignBibleEntries = existingBible;
+
+            // Validate current scene bindings against existing bible
+            for (const b of activeBindings) {
+              if (b.role === "subject_identity" || b.role === "location") {
+                const matched = campaignBibleEntries.find(
+                  (e) => e.referenceAssetId.toLowerCase() === b.referenceAssetId.toLowerCase()
+                );
+                if (!matched) {
+                  throw new StaleBibleBindingMismatchError(
+                    scene.id,
+                    b.referenceAssetId,
+                    `Asset "${b.referenceAssetId}" is bound to scene "${scene.id}" with role "${b.role}" but does not exist in campaign bible.`
+                  );
+                }
+                if (matched.role !== b.role) {
+                  throw new StaleBibleBindingMismatchError(
+                    scene.id,
+                    b.referenceAssetId,
+                    `Asset "${b.referenceAssetId}" is bound with role "${b.role}" in scene "${scene.id}", but campaign bible has role "${matched.role}".`
+                  );
+                }
+              }
+            }
+          } else {
+            // Check if any scene in the campaign already had a planning run
+            const campaignScenes =
+              context.scenes && typeof context.scenes.findByCampaignId === "function"
+                ? await context.scenes.findByCampaignId(scene.campaignId)
+                : [scene];
+            let campaignHasShotPlans = false;
+            for (const s of campaignScenes) {
+              const plans = context.shotPlans
+                ? await context.shotPlans.listBySceneAndRevision(s.id, s.specRevision)
+                : [];
+              if (plans.length > 0) {
+                campaignHasShotPlans = true;
+                break;
+              }
+            }
+
+            if (campaignHasShotPlans) {
+              // Bible is empty from prior run; any eligible bindings in this scene mismatch
+              for (const b of activeBindings) {
+                if (b.role === "subject_identity" || b.role === "location") {
+                  throw new StaleBibleBindingMismatchError(
+                    scene.id,
+                    b.referenceAssetId,
+                    `Campaign bible is empty but scene "${scene.id}" has bound asset "${b.referenceAssetId}".`
+                  );
+                }
+              }
+              campaignBibleEntries = [];
+            } else {
+              // First planning run for campaign! Initialize bible snapshot from all campaign scenes
+              const rolesByAssetId = new Map<string, Set<CampaignReferenceBibleRole>>();
+              const assetIdCasing = new Map<string, string>();
+
+              for (const s of campaignScenes) {
+                const sBindings = context.referenceAssets?.listBindingsBySceneId
+                  ? await context.referenceAssets.listBindingsBySceneId(s.id, {
+                      specRevision: s.specRevision
+                    })
+                  : [];
+                for (const b of sBindings.filter((b) => !b.archivedAt)) {
+                  if (b.role === "subject_identity" || b.role === "location") {
+                    const lower = b.referenceAssetId.toLowerCase();
+                    if (!assetIdCasing.has(lower)) {
+                      assetIdCasing.set(lower, b.referenceAssetId);
+                    }
+                    if (!rolesByAssetId.has(lower)) {
+                      rolesByAssetId.set(lower, new Set());
+                    }
+                    rolesByAssetId.get(lower)!.add(b.role);
+                  }
+                }
+              }
+
+              // Detect conflicting roles across campaign scenes
+              for (const [lower, roles] of rolesByAssetId.entries()) {
+                if (roles.size > 1) {
+                  throw new CampaignReferenceBibleRoleConflictError(
+                    assetIdCasing.get(lower)!,
+                    Array.from(roles)
+                  );
+                }
+              }
+
+              if (rolesByAssetId.size === 0) {
+                const initRes = await bibleRepo.initializeSnapshot({
+                  campaignId: scene.campaignId,
+                  entries: []
+                });
+                campaignBibleEntries = initRes.entries;
+              } else {
+                if (!context.referenceAssets || !refRepo) {
+                  throw new ReferenceAssetDescriptionGenerationError(
+                    Array.from(assetIdCasing.values())[0]!,
+                    "ReferenceAsset repository is not configured on UnitOfWorkContext."
+                  );
+                }
+
+                const eligibleAssetIds = Array.from(assetIdCasing.values());
+                const campaignRecord = context.campaigns
+                  ? await context.campaigns.findById(scene.campaignId)
+                  : undefined;
+                const clientId = campaignRecord?.clientId;
+
+                let allEligibleAssets: readonly ReferenceAsset[] = [];
+                if (context.referenceAssets.findByIdsGlobal) {
+                  allEligibleAssets = await context.referenceAssets.findByIdsGlobal(
+                    eligibleAssetIds as unknown as readonly ReferenceAssetId[]
+                  );
+                } else if (clientId && context.referenceAssets.findByIds) {
+                  allEligibleAssets = await context.referenceAssets.findByIds(
+                    clientId,
+                    eligibleAssetIds as unknown as readonly ReferenceAssetId[]
+                  );
+                } else {
+                  const found = new Map<string, ReferenceAsset>();
+                  for (const s of campaignScenes) {
+                    const list = await context.referenceAssets.listBySceneId(s.id, {
+                      specRevision: s.specRevision
+                    });
+                    for (const a of list) {
+                      found.set(a.id.toLowerCase(), a);
+                    }
+                  }
+                  allEligibleAssets = Array.from(found.values());
+                }
+
+                const eligibleAssetsMap = new Map<string, ReferenceAsset>();
+                for (const a of allEligibleAssets) {
+                  eligibleAssetsMap.set(a.id.toLowerCase(), a);
+                }
+                for (const id of eligibleAssetIds) {
+                  if (!eligibleAssetsMap.has(id.toLowerCase())) {
+                    throw new ReferenceAssetDescriptionGenerationError(
+                      id,
+                      `Reference asset "${id}" could not be resolved for campaign "${scene.campaignId}".`
+                    );
+                  }
+                }
+
+                const bibleDescriptionsByHash = new Map<string, string>();
+                for (const id of eligibleAssetIds) {
+                  const asset = eligibleAssetsMap.get(id.toLowerCase())!;
+                  const role = Array.from(rolesByAssetId.get(id.toLowerCase())!)[0]!;
+                  await this.ensureAssetDescription(
+                    asset,
+                    role,
+                    bibleDescriptionsByHash,
+                    refRepo,
+                    policy,
+                    signal
+                  );
+                }
+
+                const sortedAssets = Array.from(eligibleAssetsMap.values()).sort((a, b) => {
+                  const roleA = Array.from(rolesByAssetId.get(a.id.toLowerCase())!)[0]!;
+                  const roleB = Array.from(rolesByAssetId.get(b.id.toLowerCase())!)[0]!;
+                  const priorityA = roleA === "subject_identity" ? 0 : 1;
+                  const priorityB = roleB === "subject_identity" ? 0 : 1;
+                  if (priorityA !== priorityB) {
+                    return priorityA - priorityB;
+                  }
+                  const idA = a.id.toLowerCase();
+                  const idB = b.id.toLowerCase();
+                  if (idA < idB) return -1;
+                  if (idA > idB) return 1;
+                  if (a.id < b.id) return -1;
+                  if (a.id > b.id) return 1;
+                  return 0;
+                });
+
+                const snapshotEntries: CampaignReferenceBibleEntryInput[] = sortedAssets.map(
+                  (asset, index) => {
+                    const role = Array.from(rolesByAssetId.get(asset.id.toLowerCase())!)[0]!;
+                    const desc =
+                      bibleDescriptionsByHash.get(asset.contentHashSha256) ??
+                      asset.description ??
+                      "";
+                    if (!desc || desc.trim().length === 0) {
+                      throw new ReferenceAssetDescriptionGenerationError(
+                        asset.id,
+                        `No description available for reference asset "${asset.id}".`
+                      );
+                    }
+                    return {
+                      referenceAssetId: asset.id,
+                      role,
+                      description: desc.trim(),
+                      biblePromptTag: `<Picture ${index + 1}>`,
+                      sourceContentHashSha256: asset.contentHashSha256
+                    };
+                  }
+                );
+
+                const initRes = await bibleRepo.initializeSnapshot({
+                  campaignId: scene.campaignId,
+                  entries: snapshotEntries
+                });
+                campaignBibleEntries = initRes.entries;
+
+                // Validate scene active bindings against winner
+                for (const b of activeBindings) {
+                  if (b.role === "subject_identity" || b.role === "location") {
+                    const matched = campaignBibleEntries.find(
+                      (e) => e.referenceAssetId.toLowerCase() === b.referenceAssetId.toLowerCase()
+                    );
+                    if (!matched) {
+                      throw new StaleBibleBindingMismatchError(
+                        scene.id,
+                        b.referenceAssetId,
+                        `Asset "${b.referenceAssetId}" is bound to scene "${scene.id}" with role "${b.role}" but does not exist in campaign bible.`
+                      );
+                    }
+                    if (matched.role !== b.role) {
+                      throw new StaleBibleBindingMismatchError(
+                        scene.id,
+                        b.referenceAssetId,
+                        `Asset "${b.referenceAssetId}" is bound with role "${b.role}" in scene "${scene.id}", but campaign bible has role "${matched.role}".`
+                      );
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
         if (activeBindings.length > 0) {
           if (signal.aborted) {
             throw signal.reason ?? new Error("Planning deadline exceeded");
@@ -197,27 +617,12 @@ export class PlanShotPlansUseCase {
             );
           }
 
-          if (
-            typeof context.referenceAssets.findDescriptionByContentHash !== "function" ||
-            typeof context.referenceAssets.updateDescriptionByContentHash !== "function" ||
-            typeof context.referenceAssets.withLock !== "function"
-          ) {
+          if (!refRepo && !context.campaignReferenceBible) {
             throw new ReferenceAssetDescriptionGenerationError(
               activeBindings[0]!.referenceAssetId,
               "ReferenceAsset repository lacks required description caching or locking operations (findDescriptionByContentHash, updateDescriptionByContentHash, withLock)."
             );
           }
-
-          const refRepo = context.referenceAssets as ReferenceAssetRepository & {
-            readonly findDescriptionByContentHash: (
-              contentHashSha256: string
-            ) => Promise<string | undefined>;
-            readonly updateDescriptionByContentHash: (
-              contentHashSha256: string,
-              description: string
-            ) => Promise<void>;
-            readonly withLock: <T>(key: string, action: () => Promise<T>) => Promise<T>;
-          };
 
           const sceneAssets = await context.referenceAssets.listBySceneId(scene.id, {
             specRevision: scene.specRevision
@@ -255,148 +660,35 @@ export class PlanShotPlansUseCase {
             }
           }
 
-          const descriptionsByHash = new Map<string, string>();
-
+          const sceneDescriptionsByHash = new Map<string, string>();
           for (const b of activeBindings) {
-            if (signal.aborted) {
-              throw signal.reason ?? new Error("Planning deadline exceeded");
-            }
-
             const asset = (assetsMap.get(b.referenceAssetId) ??
               assetsMap.get(b.referenceAssetId.toLowerCase()))!;
-            const hash = asset.contentHashSha256;
-
-            if (descriptionsByHash.has(hash)) {
-              continue;
+            const bibleEntry = campaignBibleEntries.find(
+              (e) => e.referenceAssetId.toLowerCase() === b.referenceAssetId.toLowerCase()
+            );
+            if (bibleEntry) {
+              sceneDescriptionsByHash.set(asset.contentHashSha256, bibleEntry.description);
+            } else if (refRepo) {
+              await this.ensureAssetDescription(
+                asset,
+                b.role,
+                sceneDescriptionsByHash,
+                refRepo,
+                policy,
+                signal
+              );
             }
-
-            if (asset.description && asset.description.trim().length > 0) {
-              descriptionsByHash.set(hash, asset.description.trim());
-              continue;
-            }
-
-            const cached = await refRepo.findDescriptionByContentHash(hash);
-            if (cached && cached.trim().length > 0) {
-              descriptionsByHash.set(hash, cached.trim());
-              continue;
-            }
-
-            await refRepo.withLock(hash, async () => {
-              if (descriptionsByHash.has(hash)) {
-                return;
-              }
-
-              const rechecked = await refRepo.findDescriptionByContentHash(hash);
-              if (rechecked && rechecked.trim().length > 0) {
-                descriptionsByHash.set(hash, rechecked.trim());
-                return;
-              }
-
-              if (signal.aborted) {
-                throw signal.reason ?? new Error("Planning deadline exceeded");
-              }
-
-              const imageClient = this.resolveImageDescriptionClient(policy, asset.id);
-
-              if (!this.deps.objectStorage) {
-                throw new ReferenceAssetDescriptionGenerationError(
-                  asset.id,
-                  "ObjectStoragePort is required to retrieve reference asset image for description generation."
-                );
-              }
-
-              let objResult;
-              try {
-                objResult = await this.deps.objectStorage.getObject(
-                  { bucket: asset.storageBucket, key: asset.storageObjectKey },
-                  { signal, maxBytes: MAX_REFERENCE_IMAGE_BYTES }
-                );
-              } catch (err) {
-                if (signal.aborted) {
-                  throw signal.reason ?? err;
-                }
-                throw new ReferenceAssetDescriptionGenerationError(
-                  asset.id,
-                  `Failed to retrieve storage object for reference asset "${asset.id}": ${
-                    err instanceof Error ? err.message : String(err)
-                  }`
-                );
-              }
-
-              if (!objResult || !objResult.body || objResult.body.length === 0) {
-                throw new ReferenceAssetDescriptionGenerationError(
-                  asset.id,
-                  `Storage object for reference asset "${asset.id}" is empty or not found.`
-                );
-              }
-
-              if (objResult.body.byteLength > MAX_REFERENCE_IMAGE_BYTES) {
-                throw new ReferenceAssetDescriptionGenerationError(
-                  asset.id,
-                  `Storage object for reference asset "${asset.id}" exceeds max image size limit (${MAX_REFERENCE_IMAGE_BYTES} bytes).`
-                );
-              }
-
-              const base64Data = Buffer.from(objResult.body).toString("base64");
-              const mimeType = asset.mimeType ?? "image/jpeg";
-
-              let outcome: PlanningModelOutcome;
-              try {
-                outcome = await imageClient.complete({
-                  systemPrompt:
-                    "You are a specialized visual analysis assistant for video production. Describe the provided reference image concisely and objectively, focusing on visual details, appearance, and physical characteristics relevant to video generation. Return only the description text with no conversational preamble or markdown formatting.",
-                  userPrompt: `Provide a concise, objective visual description of this reference image (role: ${b.role}).`,
-                  images: [{ mimeType, base64Data }],
-                  bindingCount: 1,
-                  maxImages: 1,
-                  signal
-                });
-              } catch (err) {
-                if (signal.aborted) {
-                  throw signal.reason ?? err;
-                }
-                throw new ReferenceAssetDescriptionGenerationError(
-                  asset.id,
-                  `Failed to complete description request for reference asset "${asset.id}": ${
-                    err instanceof Error ? err.message : String(err)
-                  }`
-                );
-              }
-
-              if (signal.aborted) {
-                throw signal.reason ?? new Error("Planning deadline exceeded");
-              }
-
-              if (outcome.kind !== "success") {
-                const failureReason =
-                  outcome.kind === "retryable_failure" || outcome.kind === "permanent_failure"
-                    ? outcome.message
-                    : outcome.kind === "safety_refusal"
-                      ? "safety refusal"
-                      : "unknown failure";
-                throw new ReferenceAssetDescriptionGenerationError(
-                  asset.id,
-                  `Description generation failed for reference asset "${asset.id}": ${failureReason}`
-                );
-              }
-
-              const generatedDesc = outcome.rawText.trim();
-              if (generatedDesc.length === 0) {
-                throw new ReferenceAssetDescriptionGenerationError(
-                  asset.id,
-                  `Generated description for reference asset "${asset.id}" was blank.`
-                );
-              }
-
-              await refRepo.updateDescriptionByContentHash(hash, generatedDesc);
-
-              descriptionsByHash.set(hash, generatedDesc);
-            });
           }
 
           const enrichedAssetsById = new Map<string, ReferenceAsset>();
           for (const [id, a] of assetsMap.entries()) {
-            const desc = descriptionsByHash.get(a.contentHashSha256) ?? a.description;
+            const bibleEntry = campaignBibleEntries.find(
+              (e) => e.referenceAssetId.toLowerCase() === a.id.toLowerCase()
+            );
+            const desc = bibleEntry
+              ? bibleEntry.description
+              : (sceneDescriptionsByHash.get(a.contentHashSha256) ?? a.description);
             const enriched = Object.freeze({
               ...a,
               description: desc
@@ -410,8 +702,12 @@ export class PlanShotPlansUseCase {
           });
 
           boundReferences = canonicalRefs.map((ref) => {
-            const desc =
-              descriptionsByHash.get(ref.contentHashSha256) ?? ref.asset.description ?? "";
+            const bibleEntry = campaignBibleEntries.find(
+              (e) => e.referenceAssetId.toLowerCase() === ref.referenceAssetId.toLowerCase()
+            );
+            const desc = bibleEntry
+              ? bibleEntry.description
+              : (sceneDescriptionsByHash.get(ref.contentHashSha256) ?? ref.asset.description ?? "");
             if (!desc || desc.trim().length === 0) {
               throw new ReferenceAssetDescriptionGenerationError(
                 ref.referenceAssetId,
@@ -421,10 +717,25 @@ export class PlanShotPlansUseCase {
             return {
               promptTag: ref.promptTag,
               role: ref.role,
-              description: desc.trim()
+              description: desc.trim(),
+              referenceAssetId: ref.referenceAssetId
             };
           });
         }
+
+        const activeSubjectAssetIds = new Set(
+          activeBindings
+            .filter((b) => b.role === "subject_identity")
+            .map((b) => b.referenceAssetId.toLowerCase())
+        );
+        const activeLocationAssetIds = new Set(
+          activeBindings
+            .filter((b) => b.role === "location")
+            .map((b) => b.referenceAssetId.toLowerCase())
+        );
+        const boundReferenceIds = new Set(
+          activeBindings.map((b) => b.referenceAssetId.toLowerCase())
+        );
 
         return {
           buildRequest: (correctiveFeedback?: string) =>
@@ -456,6 +767,37 @@ export class PlanShotPlansUseCase {
                   ) {
                     throw new ShotPlanValidationError(
                       `Variant ${i + 1} beat ${beat.beatIndex} has invalid timing [${beat.startMs}, ${beat.endMs}] for duration ${targetDurationMs}ms.`
+                    );
+                  }
+                }
+              }
+
+              if (proposal.continuity && proposal.continuity.persistentSubjectIds.length > 0) {
+                for (const persistentId of proposal.continuity.persistentSubjectIds) {
+                  const lower = persistentId.toLowerCase();
+                  if (activeLocationAssetIds.has(lower)) {
+                    throw new InvalidPersistentSubjectIdError(
+                      persistentId,
+                      `Persistent subject ID "${persistentId}" references a location asset, but only subject_identity assets are allowed in continuity.`
+                    );
+                  }
+                  if (!activeSubjectAssetIds.has(lower)) {
+                    throw new InvalidPersistentSubjectIdError(
+                      persistentId,
+                      `Persistent subject ID "${persistentId}" does not match any active scene-bound subject_identity reference in the campaign bible.`
+                    );
+                  }
+                }
+              }
+
+              if (proposal.subjects.length > 0) {
+                for (const subject of proposal.subjects) {
+                  if (
+                    subject.referenceAssetId &&
+                    !boundReferenceIds.has(subject.referenceAssetId.toLowerCase())
+                  ) {
+                    throw new ShotPlanValidationError(
+                      `Variant ${i + 1} subject '${subject.subjectId}' references unbound asset ID '${subject.referenceAssetId}'.`
                     );
                   }
                 }

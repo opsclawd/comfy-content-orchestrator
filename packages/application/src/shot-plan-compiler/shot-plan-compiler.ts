@@ -151,6 +151,14 @@ export function compileShotPlan(input: CompileShotPlanInput): CompiledShotPlanIn
           matchingRef = boundSubjectIdentityRefs.find(
             (r) => r.referenceAssetId.toLowerCase() === sub.referenceAssetId?.toLowerCase()
           );
+        } else if (
+          boundSubjectIdentityRefs.some(
+            (r) => r.referenceAssetId.toLowerCase() === sub.subjectId.toLowerCase()
+          )
+        ) {
+          matchingRef = boundSubjectIdentityRefs.find(
+            (r) => r.referenceAssetId.toLowerCase() === sub.subjectId.toLowerCase()
+          );
         } else if (boundSubjectIdentityRefs.length === 1) {
           matchingRef = boundSubjectIdentityRefs[0];
         }
@@ -227,6 +235,14 @@ export function compileShotPlan(input: CompileShotPlanInput): CompiledShotPlanIn
   let persistentSubjectsText = "none";
   if (shotPlan.continuity.persistentSubjectIds.length > 0) {
     const mappedPersistentIds = shotPlan.continuity.persistentSubjectIds.map((id) => {
+      // 1. Direct asset ID match against bound subject references
+      const directAssetRef = boundSubjectIdentityRefs.find(
+        (r) => r.referenceAssetId.toLowerCase() === id.toLowerCase()
+      );
+      if (directAssetRef) {
+        return directAssetRef.promptTag;
+      }
+
       const matchingSub = shotPlan.subjects.find(
         (s) => s.subjectId.toLowerCase() === id.toLowerCase()
       );

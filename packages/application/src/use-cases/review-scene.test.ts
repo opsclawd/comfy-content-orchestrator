@@ -8,16 +8,20 @@ import {
   InvalidTransitionError,
   ReferenceAssetNotFoundError,
   Scene,
+  ShotPlan,
   type CampaignId,
   type CampaignRecord,
   type CandidateId,
   type ReferenceAsset,
   type ReferenceAssetId,
   type SceneId,
+  type ShotPlanId,
   type StoryboardCandidate
 } from "@cco/domain";
 import { ReferenceCanonicalizationError } from "../shot-plan-compiler/canonicalize-reference-bindings.js";
 import { StaleRevisionConflictError } from "./stale-revision-conflict-error.js";
+import { CampaignReferenceBibleRoleConflictError } from "../ports/campaign-reference-bible-errors.js";
+import { ReferenceAssetDescriptionGenerationError } from "./plan-shot-plans-errors.js";
 import type {
   ReviewEventStore,
   SceneRepository,
@@ -47,14 +51,16 @@ describe("ReviewSceneUseCases", () => {
   const createReferenceAsset = (
     id: string,
     clientId: string = "client-1",
-    archivedAt?: string
+    archivedAt?: string,
+    description?: string
   ): ReferenceAsset => ({
     id: id as ReferenceAssetId,
     clientId,
     storageBucket: "ref-bucket",
     storageObjectKey: `assets/${id}.png`,
     contentHashSha256: "1".repeat(64),
-    ...(archivedAt !== undefined ? { archivedAt } : {})
+    ...(archivedAt !== undefined ? { archivedAt } : {}),
+    ...(description !== undefined ? { description } : {})
   });
   const createTestScene = (id: string = "scene-1"): Scene => {
     return Scene.create({
@@ -556,6 +562,556 @@ describe("ReviewSceneUseCases", () => {
           referenceIds: ["ref-hero"]
         })
       ).rejects.toThrow(StaleRevisionConflictError);
+    });
+
+    describe("campaign reference bible reconciliation", () => {
+      it("adds new eligible asset to existing campaign bible and records change event", async () => {
+        const scene = createSceneInApproved("scene-bible-reconcile-add");
+        const heroAsset = createReferenceAsset("ref-hero", "client-1", undefined, "Hero character");
+        const sidekickAsset = createReferenceAsset(
+          "ref-sidekick",
+          "client-1",
+          undefined,
+          "Sidekick character"
+        );
+
+        const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [seededCampaign]);
+        uow.seedReferenceAsset(heroAsset);
+        uow.seedReferenceAsset(sidekickAsset);
+
+        // Pre-initialize bible with hero
+        await uow.execute(async (ctx) => {
+          await ctx.campaignReferenceBible!.initializeSnapshot({
+            campaignId: scene.campaignId,
+            entries: [
+              {
+                referenceAssetId: heroAsset.id,
+                role: "subject_identity",
+                description: heroAsset.description!,
+                biblePromptTag: "<Picture 1>",
+                sourceContentHashSha256: heroAsset.contentHashSha256
+              }
+            ]
+          });
+        });
+
+        const useCases = new ReviewSceneUseCases(uow);
+        await useCases.updateReferences({
+          sceneId: scene.id,
+          eventId: "event-add-sidekick",
+          reviewerName: "Director Alice",
+          occurredAt: "2026-08-15T03:05:00.000Z",
+          referenceBindings: [
+            {
+              sceneId: scene.id,
+              specRevision: scene.specRevision,
+              referenceAssetId: heroAsset.id,
+              role: "subject_identity"
+            },
+            {
+              sceneId: scene.id,
+              specRevision: scene.specRevision,
+              referenceAssetId: sidekickAsset.id,
+              role: "subject_identity"
+            }
+          ]
+        });
+
+        const bible = await uow.execute((ctx) =>
+          ctx.campaignReferenceBible!.findByCampaignId(scene.campaignId)
+        );
+        expect(bible.length).toBe(2);
+        expect(bible[1]!.referenceAssetId).toBe(sidekickAsset.id);
+        expect(bible[1]!.biblePromptTag).toBe("<Picture 2>");
+
+        const changes = await uow.execute((ctx) =>
+          ctx.campaignReferenceBible!.listChanges(scene.campaignId)
+        );
+        expect(changes.length).toBe(1);
+        expect(changes[0]!.changeReason).toBe("added");
+        expect(changes[0]!.referenceAssetId).toBe(sidekickAsset.id);
+        expect(changes[0]!.oldRole).toBeNull();
+        expect(changes[0]!.newRole).toBe("subject_identity");
+        expect(changes[0]!.newBiblePromptTag).toBe("<Picture 2>");
+      });
+
+      it("updates bible entry role on role change and records change event", async () => {
+        const scene = createSceneInApproved("scene-bible-reconcile-role");
+        const asset = createReferenceAsset(
+          "ref-versatile",
+          "client-1",
+          undefined,
+          "Versatile asset"
+        );
+
+        const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [seededCampaign]);
+        uow.seedReferenceAsset(asset);
+
+        await uow.execute(async (ctx) => {
+          await ctx.campaignReferenceBible!.initializeSnapshot({
+            campaignId: scene.campaignId,
+            entries: [
+              {
+                referenceAssetId: asset.id,
+                role: "subject_identity",
+                description: asset.description!,
+                biblePromptTag: "<Picture 1>",
+                sourceContentHashSha256: asset.contentHashSha256
+              }
+            ]
+          });
+        });
+
+        const useCases = new ReviewSceneUseCases(uow);
+        await useCases.updateReferences({
+          sceneId: scene.id,
+          eventId: "event-change-role",
+          reviewerName: "Director Alice",
+          occurredAt: "2026-08-15T03:06:00.000Z",
+          referenceBindings: [
+            {
+              sceneId: scene.id,
+              specRevision: scene.specRevision,
+              referenceAssetId: asset.id,
+              role: "location"
+            }
+          ]
+        });
+
+        const bible = await uow.execute((ctx) =>
+          ctx.campaignReferenceBible!.findByCampaignId(scene.campaignId)
+        );
+        expect(bible.length).toBe(1);
+        expect(bible[0]!.role).toBe("location");
+
+        const changes = await uow.execute((ctx) =>
+          ctx.campaignReferenceBible!.listChanges(scene.campaignId)
+        );
+        expect(changes.length).toBe(1);
+        expect(changes[0]!.changeReason).toBe("role_change");
+        expect(changes[0]!.oldRole).toBe("subject_identity");
+        expect(changes[0]!.newRole).toBe("location");
+      });
+
+      it("records removal change event when eligible asset is removed campaign-wide", async () => {
+        const scene = createSceneInApproved("scene-bible-reconcile-rem");
+        const asset = createReferenceAsset(
+          "ref-to-remove",
+          "client-1",
+          undefined,
+          "Asset to remove"
+        );
+
+        // Seed scene with prior binding for ref-to-remove
+        scene.updateReferences(
+          [asset.id],
+          [
+            {
+              sceneId: scene.id,
+              specRevision: 1,
+              referenceAssetId: asset.id,
+              role: "subject_identity"
+            }
+          ]
+        );
+
+        const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [seededCampaign]);
+        uow.seedReferenceAsset(asset);
+
+        await uow.execute(async (ctx) => {
+          await ctx.campaignReferenceBible!.initializeSnapshot({
+            campaignId: scene.campaignId,
+            entries: [
+              {
+                referenceAssetId: asset.id,
+                role: "subject_identity",
+                description: asset.description!,
+                biblePromptTag: "<Picture 1>",
+                sourceContentHashSha256: asset.contentHashSha256
+              }
+            ]
+          });
+        });
+
+        const useCases = new ReviewSceneUseCases(uow);
+        await useCases.updateReferences({
+          sceneId: scene.id,
+          eventId: "event-remove-asset",
+          reviewerName: "Director Alice",
+          occurredAt: "2026-08-15T03:07:00.000Z",
+          referenceBindings: []
+        });
+
+        // Row is retained in campaign bible; change history preserved
+        const bible = await uow.execute((ctx) =>
+          ctx.campaignReferenceBible!.findByCampaignId(scene.campaignId)
+        );
+        expect(bible.length).toBe(1);
+        expect(bible[0]!.biblePromptTag).toBe("<Picture 1>");
+
+        // Audit change record emitted
+        const changes = await uow.execute((ctx) =>
+          ctx.campaignReferenceBible!.listChanges(scene.campaignId)
+        );
+        expect(changes.length).toBe(1);
+        expect(changes[0]!.changeReason).toBe("removed");
+        expect(changes[0]!.oldRole).toBe("subject_identity");
+        expect(changes[0]!.newRole).toBeNull();
+      });
+
+      it("rejects with CampaignReferenceBibleRoleConflictError when updating reference with a role that conflicts with another campaign scene", async () => {
+        const scene1 = createSceneInApproved("scene-conf-1");
+        const scene2 = createSceneInApproved("scene-conf-2");
+        const asset = createReferenceAsset(
+          "ref-shared-conf",
+          "client-1",
+          undefined,
+          "Shared conflict"
+        );
+
+        const uow = new InMemorySceneUnitOfWork([scene1, scene2], undefined, undefined, [
+          seededCampaign
+        ]);
+        uow.seedReferenceAsset(asset);
+        uow.seedSceneBinding({
+          sceneId: scene1.id,
+          specRevision: scene1.specRevision,
+          referenceAssetId: asset.id,
+          role: "subject_identity"
+        });
+
+        await uow.execute(async (ctx) => {
+          await ctx.campaignReferenceBible!.initializeSnapshot({
+            campaignId: scene1.campaignId,
+            entries: [
+              {
+                referenceAssetId: asset.id,
+                role: "subject_identity",
+                description: asset.description!,
+                biblePromptTag: "<Picture 1>",
+                sourceContentHashSha256: asset.contentHashSha256
+              }
+            ]
+          });
+        });
+
+        const useCases = new ReviewSceneUseCases(uow);
+        await expect(
+          useCases.updateReferences({
+            sceneId: scene2.id,
+            eventId: "event-conf-role",
+            reviewerName: "Director Alice",
+            occurredAt: "2026-08-15T03:08:00.000Z",
+            referenceBindings: [
+              {
+                sceneId: scene2.id,
+                specRevision: scene2.specRevision,
+                referenceAssetId: asset.id,
+                role: "location"
+              }
+            ]
+          })
+        ).rejects.toThrow(CampaignReferenceBibleRoleConflictError);
+      });
+
+      it("does not record removal event when asset is removed from one scene but still bound in another scene", async () => {
+        const scene1 = createSceneInApproved("scene-multi-1");
+        const scene2 = createSceneInApproved("scene-multi-2");
+        const heroAsset = createReferenceAsset("ref-shared-hero", "client-1", undefined, "Hero");
+
+        scene1.updateReferences(
+          [heroAsset.id],
+          [
+            {
+              sceneId: scene1.id,
+              specRevision: 1,
+              referenceAssetId: heroAsset.id,
+              role: "subject_identity"
+            }
+          ]
+        );
+        scene2.updateReferences(
+          [heroAsset.id],
+          [
+            {
+              sceneId: scene2.id,
+              specRevision: 1,
+              referenceAssetId: heroAsset.id,
+              role: "subject_identity"
+            }
+          ]
+        );
+
+        const uow = new InMemorySceneUnitOfWork([scene1, scene2], undefined, undefined, [
+          seededCampaign
+        ]);
+        uow.seedReferenceAsset(heroAsset);
+
+        await uow.execute(async (ctx) => {
+          await ctx.campaignReferenceBible!.initializeSnapshot({
+            campaignId: scene1.campaignId,
+            entries: [
+              {
+                referenceAssetId: heroAsset.id,
+                role: "subject_identity",
+                description: heroAsset.description!,
+                biblePromptTag: "<Picture 1>",
+                sourceContentHashSha256: heroAsset.contentHashSha256
+              }
+            ]
+          });
+        });
+
+        const useCases = new ReviewSceneUseCases(uow);
+
+        // Remove from scene1 only
+        await useCases.updateReferences({
+          sceneId: scene1.id,
+          eventId: "event-rem-scene1",
+          reviewerName: "Director Alice",
+          occurredAt: "2026-08-15T03:09:00.000Z",
+          referenceBindings: []
+        });
+
+        // Scene2 still binds it -> NO removal event should be emitted
+        let changes = await uow.execute((ctx) =>
+          ctx.campaignReferenceBible!.listChanges(scene1.campaignId)
+        );
+        expect(changes.length).toBe(0);
+
+        // Now remove from scene2 as well
+        await useCases.updateReferences({
+          sceneId: scene2.id,
+          eventId: "event-rem-scene2",
+          reviewerName: "Director Alice",
+          occurredAt: "2026-08-15T03:10:00.000Z",
+          referenceBindings: []
+        });
+
+        // Now that no scene binds it, a removal event MUST be emitted
+        changes = await uow.execute((ctx) =>
+          ctx.campaignReferenceBible!.listChanges(scene1.campaignId)
+        );
+        expect(changes.length).toBe(1);
+        expect(changes[0]!.changeReason).toBe("removed");
+        expect(changes[0]!.referenceAssetId).toBe(heroAsset.id);
+        expect(changes[0]!.oldRole).toBe("subject_identity");
+        expect(changes[0]!.newRole).toBeNull();
+
+        const bibleAfterBothRemovals = await uow.execute((ctx) =>
+          ctx.campaignReferenceBible!.findByCampaignId(scene1.campaignId)
+        );
+        expect(bibleAfterBothRemovals.length).toBe(1);
+        expect(bibleAfterBothRemovals[0]!.biblePromptTag).toBe("<Picture 1>");
+      });
+
+      it("records removal event when asset is removed campaign-wide, and records added event when subsequently re-added", async () => {
+        const scene = createSceneInApproved("scene-readd");
+        const heroAsset = createReferenceAsset("ref-readd-hero", "client-1", undefined, "Hero");
+
+        scene.updateReferences(
+          [heroAsset.id],
+          [
+            {
+              sceneId: scene.id,
+              specRevision: 1,
+              referenceAssetId: heroAsset.id,
+              role: "subject_identity"
+            }
+          ]
+        );
+
+        const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [seededCampaign]);
+        uow.seedReferenceAsset(heroAsset);
+
+        await uow.execute(async (ctx) => {
+          await ctx.campaignReferenceBible!.initializeSnapshot({
+            campaignId: scene.campaignId,
+            entries: [
+              {
+                referenceAssetId: heroAsset.id,
+                role: "subject_identity",
+                description: heroAsset.description!,
+                biblePromptTag: "<Picture 1>",
+                sourceContentHashSha256: heroAsset.contentHashSha256
+              }
+            ]
+          });
+        });
+
+        const useCases = new ReviewSceneUseCases(uow);
+
+        // 1. Remove campaign-wide
+        await useCases.updateReferences({
+          sceneId: scene.id,
+          eventId: "event-readd-rem",
+          reviewerName: "Director Alice",
+          occurredAt: "2026-08-15T03:11:00.000Z",
+          referenceBindings: []
+        });
+
+        let changes = await uow.execute((ctx) =>
+          ctx.campaignReferenceBible!.listChanges(scene.campaignId)
+        );
+        expect(changes.length).toBe(1);
+        expect(changes[0]!.changeReason).toBe("removed");
+
+        let bible = await uow.execute((ctx) =>
+          ctx.campaignReferenceBible!.findByCampaignId(scene.campaignId)
+        );
+        expect(bible.length).toBe(1);
+        expect(bible[0]!.biblePromptTag).toBe("<Picture 1>");
+
+        // 2. Re-add to the scene
+        await useCases.updateReferences({
+          sceneId: scene.id,
+          eventId: "event-readd-add",
+          reviewerName: "Director Alice",
+          occurredAt: "2026-08-15T03:12:00.000Z",
+          referenceBindings: [
+            {
+              sceneId: scene.id,
+              specRevision: scene.specRevision,
+              referenceAssetId: heroAsset.id,
+              role: "subject_identity"
+            }
+          ]
+        });
+
+        changes = await uow.execute((ctx) =>
+          ctx.campaignReferenceBible!.listChanges(scene.campaignId)
+        );
+        expect(changes.length).toBe(2);
+        expect(changes[1]!.changeReason).toBe("added");
+        expect(changes[1]!.referenceAssetId).toBe(heroAsset.id);
+        expect(changes[1]!.oldRole).toBeNull();
+        expect(changes[1]!.newRole).toBe("subject_identity");
+
+        bible = await uow.execute((ctx) =>
+          ctx.campaignReferenceBible!.findByCampaignId(scene.campaignId)
+        );
+        expect(bible.length).toBe(1);
+        expect(bible[0]!.biblePromptTag).toBe("<Picture 1>");
+      });
+
+      it("fails with ReferenceAssetDescriptionGenerationError when added reference asset has empty description", async () => {
+        const scene = createSceneInApproved("scene-empty-desc");
+        const emptyAsset = createReferenceAsset("ref-no-desc", "client-1", undefined, "   ");
+
+        const plan = ShotPlan.create({
+          id: "01928374-abcd-7000-8000-000000000889" as ShotPlanId,
+          sceneId: scene.id,
+          specRevision: 1,
+          variantOrdinal: 1,
+          status: "draft",
+          routingMode: "reference_directed",
+          targetDurationMs: 4000,
+          targetFrameCount: 96,
+          framing: "wide",
+          angle: "eye_level",
+          lensIntent: "35mm prime",
+          cameraPosition: "eye level tripod",
+          cameraMovement: "static",
+          movementSpeed: "slow",
+          cameraPromptDescription: "Wide static shot",
+          actionSummary: "Nothing",
+          lightingStyle: "neon_night",
+          environmentDescription: "Empty room",
+          colorPalette: ["#000000"],
+          subjects: [],
+          beats: []
+        });
+
+        const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [
+          seededCampaign
+        ]).seedShotPlan(plan);
+        uow.seedReferenceAsset(emptyAsset);
+
+        const useCases = new ReviewSceneUseCases(uow);
+
+        await expect(
+          useCases.updateReferences({
+            sceneId: scene.id,
+            eventId: "event-no-desc",
+            reviewerName: "Director Alice",
+            occurredAt: "2026-08-15T03:13:00.000Z",
+            referenceBindings: [
+              {
+                sceneId: scene.id,
+                specRevision: scene.specRevision,
+                referenceAssetId: emptyAsset.id,
+                role: "subject_identity"
+              }
+            ]
+          })
+        ).rejects.toThrow(ReferenceAssetDescriptionGenerationError);
+      });
+
+      it("reconciles newly added reference when campaign bible was initially empty", async () => {
+        const scene = createSceneInApproved("scene-init-empty");
+        const heroAsset = createReferenceAsset("ref-hero-empty", "client-1", undefined, "Hero");
+
+        // Seed a shot plan so campaignHasShotPlans is true
+        const plan = ShotPlan.create({
+          id: "01928374-abcd-7000-8000-000000000888" as ShotPlanId,
+          sceneId: scene.id,
+          specRevision: 1,
+          variantOrdinal: 1,
+          status: "draft",
+          routingMode: "reference_directed",
+          targetDurationMs: 4000,
+          targetFrameCount: 96,
+          framing: "wide",
+          angle: "eye_level",
+          lensIntent: "35mm prime",
+          cameraPosition: "eye level tripod",
+          cameraMovement: "static",
+          movementSpeed: "slow",
+          cameraPromptDescription: "Wide static shot",
+          actionSummary: "Nothing",
+          lightingStyle: "neon_night",
+          environmentDescription: "Empty room",
+          colorPalette: ["#000000"],
+          subjects: [],
+          beats: []
+        });
+
+        const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [
+          seededCampaign
+        ]).seedShotPlan(plan);
+        uow.seedReferenceAsset(heroAsset);
+
+        // Bible is currently empty (e.g. from an initial planning run with 0 references)
+        const useCases = new ReviewSceneUseCases(uow);
+        await useCases.updateReferences({
+          sceneId: scene.id,
+          eventId: "event-init-empty-add",
+          reviewerName: "Director Alice",
+          occurredAt: "2026-08-15T03:14:00.000Z",
+          referenceBindings: [
+            {
+              sceneId: scene.id,
+              specRevision: scene.specRevision,
+              referenceAssetId: heroAsset.id,
+              role: "subject_identity"
+            }
+          ]
+        });
+
+        const bible = await uow.execute((ctx) =>
+          ctx.campaignReferenceBible!.findByCampaignId(scene.campaignId)
+        );
+        expect(bible.length).toBe(1);
+        expect(bible[0]!.referenceAssetId).toBe(heroAsset.id);
+        expect(bible[0]!.role).toBe("subject_identity");
+        expect(bible[0]!.biblePromptTag).toBe("<Picture 1>");
+
+        const changes = await uow.execute((ctx) =>
+          ctx.campaignReferenceBible!.listChanges(scene.campaignId)
+        );
+        expect(changes.length).toBe(1);
+        expect(changes[0]!.changeReason).toBe("added");
+      });
     });
   });
 

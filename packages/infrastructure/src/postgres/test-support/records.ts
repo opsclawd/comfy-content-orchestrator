@@ -91,6 +91,17 @@ export interface SceneReferenceAssetRecordInput {
   archivedAt?: Date | string | null;
 }
 
+export interface CampaignReferenceBibleRecordInput {
+  campaignId: string;
+  referenceAssetId: string;
+  role?: "subject_identity" | "location";
+  description?: string;
+  biblePromptTag?: string;
+  sourceContentHashSha256?: string;
+  createdAt?: Date | string;
+  updatedAt?: Date | string;
+}
+
 export interface RenderJobRecordInput {
   sceneId: string;
   jobKind?: string;
@@ -248,6 +259,17 @@ export interface InsertedSceneReferenceAssetRecord {
   hints: Record<string, unknown> | null;
   override_strength: string | null;
   archived_at: Date | null;
+}
+
+export interface InsertedCampaignReferenceBibleRecord {
+  campaign_id: string;
+  reference_asset_id: string;
+  role: "subject_identity" | "location";
+  description: string;
+  bible_prompt_tag: string;
+  source_content_hash_sha256: string;
+  created_at: Date;
+  updated_at: Date;
 }
 
 export interface InsertedRenderJobRecord {
@@ -699,6 +721,54 @@ export async function insertSceneReferenceAssetRecord(
   const row = res.rows[0];
   if (!row) {
     throw new Error("Failed to insert scene reference asset record");
+  }
+  return row;
+}
+
+export async function insertCampaignReferenceBibleRecord(
+  client: PoolClient,
+  input: CampaignReferenceBibleRecordInput
+): Promise<InsertedCampaignReferenceBibleRecord> {
+  const campaignId = input.campaignId;
+  const referenceAssetId = input.referenceAssetId;
+  const role = input.role ?? "subject_identity";
+  const description = input.description ?? "Reference description";
+  const biblePromptTag = input.biblePromptTag ?? "<Picture 1>";
+  const sourceContentHashSha256 =
+    input.sourceContentHashSha256 ??
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+  const createdAt = input.createdAt ?? new Date();
+  const updatedAt = input.updatedAt ?? new Date();
+
+  const res = await client.query<InsertedCampaignReferenceBibleRecord>(
+    `
+    INSERT INTO campaign_reference_bibles (
+      campaign_id,
+      reference_asset_id,
+      role,
+      description,
+      bible_prompt_tag,
+      source_content_hash_sha256,
+      created_at,
+      updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    RETURNING *
+    `,
+    [
+      campaignId,
+      referenceAssetId,
+      role,
+      description,
+      biblePromptTag,
+      sourceContentHashSha256,
+      createdAt,
+      updatedAt
+    ]
+  );
+
+  const row = res.rows[0];
+  if (!row) {
+    throw new Error("Failed to insert campaign reference bible record");
   }
   return row;
 }
