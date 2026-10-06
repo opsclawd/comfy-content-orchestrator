@@ -115,7 +115,7 @@ test.describe("MiniMax-H3 End-to-End Campaign Execution and Review Lifecycle", (
         sceneId: firstSceneId as SceneId,
         specRevision: 1,
         variantOrdinal: 1,
-        status: "approved",
+        status: "draft",
         routingMode: "frame_anchored",
         targetDurationMs: 5000,
         targetFrameCount: 124,
@@ -141,12 +141,10 @@ test.describe("MiniMax-H3 End-to-End Campaign Execution and Review Lifecycle", (
       await client.query(
         `UPDATE storyboard_scenes
          SET status = 'director_review',
-             approved_shot_plan_id = $2,
-             approved_shot_plan_revision = $3,
-             production_routing_mode = $4,
+             production_routing_mode = $2,
              updated_at = NOW()
          WHERE scene_id = $1`,
-        [firstSceneId, shotPlan.id, shotPlan.specRevision, shotPlan.routingMode]
+        [firstSceneId, shotPlan.routingMode]
       );
     } finally {
       client.release();
@@ -156,8 +154,9 @@ test.describe("MiniMax-H3 End-to-End Campaign Execution and Review Lifecycle", (
     await expect(page.getByTestId("scene-review-detail")).toBeVisible();
     await expect(page.getByTestId("candidate-card")).toHaveCount(1);
 
-    // 4. Select the candidate
-    await page.getByTestId("select-candidate-button").first().click();
+    // 4. Select and approve the ShotPlan: it is the sole selection authority once
+    // ShotPlans exist, and approval dispatches production through this path.
+    await page.getByTestId("shot-plan-select-button").first().click();
     await expect(page.getByTestId("review-command-dialog")).toBeVisible();
     const selectPromise = page.waitForResponse(
       (resp) => resp.url().includes("/review-command") && resp.status() === 200
@@ -165,11 +164,9 @@ test.describe("MiniMax-H3 End-to-End Campaign Execution and Review Lifecycle", (
     await page.getByTestId("confirm-command-button").click();
     await selectPromise;
 
-    // 5. Approve candidate to dispatch MiniMax-H3 production rendering
-    await expect(page.getByTestId("action-button-approve")).toBeVisible();
-    await page.getByTestId("action-button-approve").click();
-
-    // Confirm dialog
+    // 5. Approve the selected ShotPlan to dispatch MiniMax-H3 production rendering
+    await expect(page.getByTestId("shot-plan-approve-button").first()).toBeVisible();
+    await page.getByTestId("shot-plan-approve-button").first().click();
     await expect(page.getByTestId("review-command-dialog")).toBeVisible();
     const approvePromise = page.waitForResponse(
       (resp) => resp.url().includes("/review-command") && resp.status() === 200

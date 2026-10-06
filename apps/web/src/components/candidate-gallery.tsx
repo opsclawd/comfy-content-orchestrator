@@ -10,7 +10,7 @@ export interface CandidateGalleryProps {
   currentSpecRevision: number;
   selectedCandidateId?: string | undefined;
   selectedCandidateRevision?: number | undefined;
-  onSelectCandidate?: (candidateId: string, specRevision: number) => void;
+  onSelectCandidate?: ((candidateId: string, specRevision: number) => void) | undefined;
   disabled?: boolean;
 }
 
