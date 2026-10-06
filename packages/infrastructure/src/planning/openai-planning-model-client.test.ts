@@ -998,4 +998,102 @@ describe("OpenAiPlanningModelClient", () => {
     expect(Array.isArray(userContent)).toBe(true);
     expect(userContent).toHaveLength(4); // 1 text + 3 images
   });
+
+  it("is byte-for-byte identical to the #394 request when image capability is off", async () => {
+    let capturedBodyBaseline: string | undefined;
+    let capturedBodyWithImagesOff: string | undefined;
+    let capturedBodyNonMiniMax: string | undefined;
+
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+      return {
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: "Plan result" } }]
+          })
+      } as unknown as Response;
+    });
+
+    const baselineClient = new OpenAiPlanningModelClient({
+      apiKey: "test-openai-key",
+      model: "MiniMax-M3",
+      imageCapability: false,
+      fetch: async (url, init) => {
+        capturedBodyBaseline = init?.body as string;
+        return fetchMock(url, init);
+      }
+    });
+
+    // Baseline #394 request (no images property)
+    await baselineClient.complete({
+      systemPrompt: "System instruction prompt",
+      userPrompt: "Generate cinematic shot plan JSON"
+    });
+
+    const clientWithImagesCapabilityOff = new OpenAiPlanningModelClient({
+      apiKey: "test-openai-key",
+      model: "MiniMax-M3",
+      imageCapability: false,
+      fetch: async (url, init) => {
+        capturedBodyWithImagesOff = init?.body as string;
+        return fetchMock(url, init);
+      }
+    });
+
+    // Request with images provided, but capability is false
+    await clientWithImagesCapabilityOff.complete({
+      systemPrompt: "System instruction prompt",
+      userPrompt: "Generate cinematic shot plan JSON",
+      images: [
+        {
+          mimeType: "image/png",
+          base64Data:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        },
+        { mimeType: "image/jpeg", base64Data: "/9j/4AAQSkZJRg==" }
+      ],
+      bindingCount: 2,
+      maxImages: 9
+    });
+
+    // Must be byte-for-byte identical
+    expect(capturedBodyWithImagesOff).toBeDefined();
+    expect(capturedBodyBaseline).toBeDefined();
+    expect(capturedBodyWithImagesOff).toBe(capturedBodyBaseline);
+
+    const nonMiniMaxClient = new OpenAiPlanningModelClient({
+      apiKey: "test-openai-key",
+      model: "gpt-5.6-sol",
+      fetch: async (url, init) => {
+        capturedBodyNonMiniMax = init?.body as string;
+        return fetchMock(url, init);
+      }
+    });
+
+    let nonMiniMaxBaseline: string | undefined;
+    const nonMiniMaxBaselineClient = new OpenAiPlanningModelClient({
+      apiKey: "test-openai-key",
+      model: "gpt-5.6-sol",
+      fetch: async (url, init) => {
+        nonMiniMaxBaseline = init?.body as string;
+        return fetchMock(url, init);
+      }
+    });
+
+    await nonMiniMaxBaselineClient.complete({
+      systemPrompt: "System instruction prompt",
+      userPrompt: "Generate cinematic shot plan JSON"
+    });
+
+    await nonMiniMaxClient.complete({
+      systemPrompt: "System instruction prompt",
+      userPrompt: "Generate cinematic shot plan JSON",
+      images: [{ mimeType: "image/png", base64Data: "DATA" }],
+      bindingCount: 1
+    });
+
+    expect(capturedBodyNonMiniMax).toBeDefined();
+    expect(nonMiniMaxBaseline).toBeDefined();
+    expect(capturedBodyNonMiniMax).toBe(nonMiniMaxBaseline);
+  });
 });

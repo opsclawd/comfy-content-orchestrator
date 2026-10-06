@@ -6,9 +6,12 @@ import {
   type SceneId,
   type ShotPlanId
 } from "@cco/domain";
-import type {
-  PlanningModelClientPort,
-  PlanningModelOutcome
+import {
+  MAX_PLANNING_IMAGES,
+  type PlanningModelClientPort,
+  type PlanningModelImage,
+  type PlanningModelOutcome,
+  type PlanningModelRequest
 } from "../ports/planning-model-client-port.js";
 import type { ObjectStoragePort } from "../ports/object-storage-port.js";
 import type { ReferenceAssetRepository } from "../ports/reference-asset-repository.js";
@@ -30,6 +33,7 @@ import { parseShotPlanResponse, type ShotPlanProposal } from "./shot-plan-respon
 import {
   InvalidShotPlanVariantCountError,
   ReferenceAssetDescriptionGenerationError,
+  PlannerReferenceImageAcquisitionError,
   ShotPlanValidationError,
   CampaignReferenceBibleRoleConflictError,
   InvalidPersistentSubjectIdError,
@@ -44,6 +48,49 @@ import { PlanningNotAuthorizedError } from "./plan-scene-configuration-errors.js
 import { DEFAULT_EXTERNAL_PROCESSING_POLICY } from "./create-client.js";
 
 export const MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MiB
+
+const SUPPORTED_PLANNER_IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/webp"]);
+
+export function resolveAndValidatePlannerImageMime(
+  referenceAssetId: string,
+  assetMime?: string | undefined,
+  storageContentType?: string | undefined
+): string {
+  const normalize = (mime?: string): string | undefined => {
+    if (!mime) return undefined;
+    const base = mime.split(";")[0]?.trim().toLowerCase();
+    return base && base.length > 0 ? base : undefined;
+  };
+
+  const normalizedAssetMime = normalize(assetMime);
+  const normalizedStorageMime = normalize(storageContentType);
+
+  // Storage contentType, when present, must be verified as supported (never accept generic application/octet-stream or unsupported types)
+  if (normalizedStorageMime !== undefined) {
+    if (!SUPPORTED_PLANNER_IMAGE_MIMES.has(normalizedStorageMime)) {
+      throw new PlannerReferenceImageAcquisitionError(
+        referenceAssetId,
+        `Storage object has unsupported or generic contentType '${normalizedStorageMime}'. Supported types: image/png, image/jpeg, image/webp.`,
+        "INVALID_MIME_TYPE"
+      );
+    }
+  }
+
+  // Precedence rule:
+  // Verified storage contentType takes precedence when provided; otherwise fall back to validated ReferenceAsset domain metadata.
+  const chosenMime = normalizedStorageMime ?? normalizedAssetMime;
+
+  if (!chosenMime || !SUPPORTED_PLANNER_IMAGE_MIMES.has(chosenMime)) {
+    const detail = chosenMime ?? "missing";
+    throw new PlannerReferenceImageAcquisitionError(
+      referenceAssetId,
+      `Unsupported, generic, or missing MIME type '${detail}'. Supported types: image/png, image/jpeg, image/webp.`,
+      "INVALID_MIME_TYPE"
+    );
+  }
+
+  return chosenMime;
+}
 
 export interface PlanShotPlansDeps {
   readonly uow: UnitOfWork;
@@ -346,6 +393,9 @@ export class PlanShotPlansUseCase {
       overallTimeoutMs: input.overallTimeoutMs,
       prepare: async (signal: AbortSignal) => {
         let boundReferences: BoundReferencePromptInput[] | undefined;
+        let plannerImages: readonly PlanningModelImage[] | undefined;
+        let bindingCount: number | undefined;
+        let maxImages: number | undefined;
 
         const bindings = context.referenceAssets?.listBindingsBySceneId
           ? await context.referenceAssets.listBindingsBySceneId(scene.id, {
@@ -721,6 +771,89 @@ export class PlanShotPlansUseCase {
               referenceAssetId: ref.referenceAssetId
             };
           });
+
+          const isClientCapable = (client: PlanningModelClientPort): boolean =>
+            client.imageCapability === true || client.supportsImages === true;
+
+          const hasInvokableImageCapableClient =
+            (policy.allowedProviders.has(this.deps.primaryClient.providerName) &&
+              isClientCapable(this.deps.primaryClient)) ||
+            (policy.allowedProviders.has(this.deps.fallbackClient.providerName) &&
+              isClientCapable(this.deps.fallbackClient));
+
+          if (hasInvokableImageCapableClient && canonicalRefs.length > 0) {
+            if (!this.deps.objectStorage) {
+              throw new PlannerReferenceImageAcquisitionError(
+                canonicalRefs[0]!.referenceAssetId,
+                "ObjectStoragePort is required to retrieve reference images for planning when an image-capable planning client is configured.",
+                "MISSING_STORAGE_PORT"
+              );
+            }
+
+            const acquiredImages: PlanningModelImage[] = [];
+            for (const ref of canonicalRefs) {
+              if (signal.aborted) {
+                throw signal.reason ?? new Error("Planning deadline exceeded");
+              }
+
+              const asset = ref.asset;
+              let objResult;
+              try {
+                objResult = await this.deps.objectStorage.getObject(
+                  { bucket: asset.storageBucket, key: asset.storageObjectKey },
+                  { signal, maxBytes: MAX_REFERENCE_IMAGE_BYTES }
+                );
+              } catch (err) {
+                if (signal.aborted) {
+                  throw signal.reason ?? err;
+                }
+                throw new PlannerReferenceImageAcquisitionError(
+                  ref.referenceAssetId,
+                  `Failed to retrieve storage object for reference asset "${ref.referenceAssetId}": ${
+                    err instanceof Error ? err.message : String(err)
+                  }`,
+                  "RETRIEVAL_FAILED",
+                  { cause: err }
+                );
+              }
+
+              if (signal.aborted) {
+                throw signal.reason ?? new Error("Planning deadline exceeded");
+              }
+
+              if (!objResult || !objResult.body || objResult.body.length === 0) {
+                throw new PlannerReferenceImageAcquisitionError(
+                  ref.referenceAssetId,
+                  `Storage object for reference asset "${ref.referenceAssetId}" is empty or not found.`,
+                  "EMPTY_IMAGE"
+                );
+              }
+
+              if (objResult.body.byteLength > MAX_REFERENCE_IMAGE_BYTES) {
+                throw new PlannerReferenceImageAcquisitionError(
+                  ref.referenceAssetId,
+                  `Storage object for reference asset "${ref.referenceAssetId}" exceeds max image size limit (${MAX_REFERENCE_IMAGE_BYTES} bytes).`,
+                  "OVERSIZED_IMAGE"
+                );
+              }
+
+              const mimeType = resolveAndValidatePlannerImageMime(
+                ref.referenceAssetId,
+                asset.mimeType,
+                objResult.contentType
+              );
+
+              const base64Data = Buffer.from(objResult.body).toString("base64");
+              acquiredImages.push({
+                mimeType,
+                base64Data
+              });
+            }
+
+            plannerImages = acquiredImages;
+            bindingCount = canonicalRefs.length;
+            maxImages = Math.min(canonicalRefs.length, MAX_PLANNING_IMAGES);
+          }
         }
 
         const activeSubjectAssetIds = new Set(
@@ -738,8 +871,8 @@ export class PlanShotPlansUseCase {
         );
 
         return {
-          buildRequest: (correctiveFeedback?: string) =>
-            buildShotPlanPrompt({
+          buildRequest: (correctiveFeedback?: string): PlanningModelRequest => {
+            const baseRequest = buildShotPlanPrompt({
               scenePrompt: scene.configuration.prompt,
               sceneDurationMs: targetDurationMs,
               engineProfileId: scene.configuration.engineProfileId,
@@ -748,7 +881,19 @@ export class PlanShotPlansUseCase {
                 ? { boundReferences }
                 : { referenceAssetIds: scene.configuration.referenceIds }),
               correctiveFeedback
-            }),
+            });
+
+            if (plannerImages !== undefined && plannerImages.length > 0) {
+              return {
+                ...baseRequest,
+                images: plannerImages,
+                bindingCount,
+                maxImages
+              };
+            }
+
+            return baseRequest;
+          },
           parseAndValidate: (rawText: string): readonly ShotPlanProposal[] => {
             const parsed = parseShotPlanResponse(rawText);
             const selected = parsed.slice(0, input.variantCount);

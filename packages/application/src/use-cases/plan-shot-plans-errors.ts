@@ -120,6 +120,28 @@ export class ReferenceAssetDescriptionGenerationError extends Error {
   }
 }
 
+export class PlannerReferenceImageAcquisitionError extends Error {
+  override readonly name = "PlannerReferenceImageAcquisitionError";
+  readonly code: string;
+  readonly referenceAssetId: string;
+  readonly assetId: string;
+
+  constructor(
+    referenceAssetId: string,
+    message: string,
+    code = "PLANNER_REFERENCE_IMAGE_ACQUISITION_FAILED",
+    options?: ErrorOptions
+  ) {
+    super(
+      `Failed to acquire planner reference image for asset '${referenceAssetId}': ${message}`,
+      options
+    );
+    this.referenceAssetId = referenceAssetId;
+    this.assetId = referenceAssetId;
+    this.code = code;
+  }
+}
+
 export class InvalidPersistentSubjectIdError extends ShotPlanValidationError {
   override readonly name = "InvalidPersistentSubjectIdError";
   readonly code = "INVALID_PERSISTENT_SUBJECT_ID";

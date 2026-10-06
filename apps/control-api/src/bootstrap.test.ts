@@ -899,10 +899,24 @@ describe("bootstrap", () => {
   });
 
   describe("OpenAiAsAnthropicPlanningModelClient", () => {
-    it("declares Anthropic provider with imageCapability=false and supportsImages=false", () => {
+    it("derives imageCapability=true, supportsImages=true, and maxImages from inner MiniMax-M3 client", () => {
       const mockOpenAi = new OpenAiPlanningModelClient({
         apiKey: "test-openai-key",
         model: "MiniMax-M3",
+        fetch: vi.fn()
+      });
+      const client = new OpenAiAsAnthropicPlanningModelClient(mockOpenAi);
+
+      expect(client.providerName).toBe("Anthropic");
+      expect(client.imageCapability).toBe(true);
+      expect(client.supportsImages).toBe(true);
+      expect(client.maxImages).toBe(9);
+    });
+
+    it("derives imageCapability=false and maxImages=0 when inner client is not image-capable", () => {
+      const mockOpenAi = new OpenAiPlanningModelClient({
+        apiKey: "test-openai-key",
+        model: "gpt-5.6-sol",
         fetch: vi.fn()
       });
       const client = new OpenAiAsAnthropicPlanningModelClient(mockOpenAi);
@@ -913,7 +927,7 @@ describe("bootstrap", () => {
       expect(client.maxImages).toBe(0);
     });
 
-    it("strips image list before delegating to inner client to guarantee no image blocks are emitted", async () => {
+    it("forwards image-bearing request unchanged to inner MiniMax-M3 client so image_url parts are emitted", async () => {
       let capturedBody: { messages?: Array<{ role: string; content: unknown }> } | undefined;
       const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
         if (init?.body) {
@@ -933,8 +947,54 @@ describe("bootstrap", () => {
         model: "MiniMax-M3",
         fetch: fetchMock
       });
-      // Inner client itself is image-capable for MiniMax-M3
       expect(inner.imageCapability).toBe(true);
+
+      const wrapped = new OpenAiAsAnthropicPlanningModelClient(inner);
+
+      await wrapped.complete({
+        systemPrompt: "System",
+        userPrompt: "User prompt",
+        bindingCount: 1,
+        maxImages: 1,
+        images: [{ mimeType: "image/png", base64Data: "BASE64" }]
+      });
+
+      expect(capturedBody?.messages?.[1]?.role).toBe("user");
+      expect(Array.isArray(capturedBody?.messages?.[1]?.content)).toBe(true);
+      const userContent = capturedBody?.messages?.[1]?.content as Array<{
+        type: string;
+        text?: string;
+        image_url?: { url: string };
+      }>;
+      expect(userContent).toHaveLength(2);
+      expect(userContent[0]).toEqual({ type: "text", text: "User prompt" });
+      expect(userContent[1]).toEqual({
+        type: "image_url",
+        image_url: { url: "data:image/png;base64,BASE64" }
+      });
+    });
+
+    it("strips image list before delegating to inner client when inner client is not image-capable", async () => {
+      let capturedBody: { messages?: Array<{ role: string; content: unknown }> } | undefined;
+      const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        if (init?.body) {
+          capturedBody = JSON.parse(init.body as string);
+        }
+        return {
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              choices: [{ message: { role: "assistant", content: "Result" } }]
+            })
+        } as unknown as Response;
+      });
+
+      const inner = new OpenAiPlanningModelClient({
+        apiKey: "test-openai-key",
+        model: "gpt-5.6-sol",
+        fetch: fetchMock
+      });
+      expect(inner.imageCapability).toBe(false);
 
       const wrapped = new OpenAiAsAnthropicPlanningModelClient(inner);
 
@@ -956,6 +1016,7 @@ describe("bootstrap", () => {
       const completeSpy = vi.fn().mockResolvedValue({ kind: "success", rawText: "OK" });
       const fakeInner = {
         providerName: "OpenAI",
+        imageCapability: true,
         complete: completeSpy
       } as unknown as OpenAiPlanningModelClient;
 
@@ -968,6 +1029,89 @@ describe("bootstrap", () => {
       const result = await wrapped.complete(request);
       expect(result).toEqual({ kind: "success", rawText: "OK" });
       expect(completeSpy).toHaveBeenCalledWith(request);
+    });
+
+    it("bootstrap configures single-provider MiniMax primary path which emits image_url parts", async () => {
+      let capturedOutboundBody: unknown;
+      const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        if (init?.body) {
+          capturedOutboundBody = JSON.parse(init.body as string);
+        }
+        return {
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              choices: [{ message: { role: "assistant", content: "OK" } }]
+            })
+        } as unknown as Response;
+      });
+
+      // Hetzner single-provider topology: MiniMax-M3, no Anthropic key
+      const configWithMiniMax: ControlApiRuntimeConfig = {
+        ...validConfig,
+        planningProviders: {
+          openaiApiKey: "minimax-api-key",
+          openaiBaseUrl: "https://api.minimax.io/v1",
+          openaiModel: "MiniMax-M3"
+        }
+      };
+
+      let capturedDeps: ControlApiDependencies | undefined;
+      const starter = vi.fn(async (deps: ControlApiDependencies) => {
+        capturedDeps = deps;
+        return {
+          app: {} as FastifyInstance,
+          close: vi.fn(),
+          port: 3000,
+          host: "100.64.0.1"
+        };
+      });
+
+      const runtime = await runControlApi({
+        config: configWithMiniMax,
+        poolFactory: () =>
+          ({
+            query: vi.fn().mockResolvedValue({ rows: [{ "?column?": 1 }] }),
+            end: vi.fn()
+          }) as unknown as Pool,
+        s3ClientFactory: () =>
+          ({
+            send: vi.fn().mockResolvedValue({}),
+            destroy: vi.fn()
+          }) as unknown as S3Client,
+        serverStarter: starter
+      });
+
+      expect(capturedDeps?.planningModelClients).toBeDefined();
+      const primary = capturedDeps!.planningModelClients!.primary;
+      expect(primary.providerName).toBe("Anthropic");
+      expect(primary.imageCapability).toBe(true);
+
+      // Call primary with an image
+      await (primary as unknown as { inner: { fetchFn: typeof globalThis.fetch } }).inner;
+      // Inject fetchMock into inner client
+      const inner = (primary as unknown as { inner: OpenAiPlanningModelClient }).inner;
+      (inner as unknown as { fetchFn: typeof globalThis.fetch }).fetchFn = fetchMock;
+
+      await primary.complete({
+        systemPrompt: "System",
+        userPrompt: "User prompt",
+        bindingCount: 1,
+        maxImages: 1,
+        images: [{ mimeType: "image/png", base64Data: "BASE64" }]
+      });
+
+      const body = capturedOutboundBody as {
+        messages: Array<{ role: string; content: unknown }>;
+      };
+      expect(Array.isArray(body.messages[1]!.content)).toBe(true);
+      const userContent = body.messages[1]!.content as Array<{
+        type: string;
+        image_url?: { url: string };
+      }>;
+      expect(userContent[1]!.type).toBe("image_url");
+
+      await runtime.stop();
     });
   });
 });
