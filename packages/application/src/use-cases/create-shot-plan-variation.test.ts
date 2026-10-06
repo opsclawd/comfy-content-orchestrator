@@ -3,7 +3,10 @@ import {
   Scene,
   ShotPlan,
   type CampaignId,
+  type CampaignRecord,
   type JobId,
+  type ReferenceAsset,
+  type ReferenceAssetId,
   type RenderJob,
   type SceneId,
   type ShotPlanId
@@ -22,6 +25,7 @@ import {
   PlanningNotAuthorizedError,
   ShotPlanVariationIdempotencyConflictError,
   SourceShotPlanNotFoundError,
+  StaleBibleBindingMismatchError,
   StaleRevisionConflictError,
   StaleSourceShotPlanRevisionError,
   SupersededSourceShotPlanError
@@ -618,5 +622,144 @@ describe("CreateShotPlanVariationUseCase", () => {
     expect(enqueuedJobs).toHaveLength(1);
     expect(enqueuedJobs[0]!.jobKind).toBe("candidate");
     expect(enqueuedJobs[0]!.workflowTemplate).toBe("flux_schnell_storyboard_v1");
+  });
+
+  it("includes bound references with campaign reference bible descriptions in variation prompt", async () => {
+    const assetId = "01923456-789a-7b3c-9d4e-5f6071829311" as ReferenceAssetId;
+    const scene = createTestScene({
+      configuration: {
+        prompt: "A neon-lit cyberpunk alleyway with rain reflections",
+        referenceIds: [assetId],
+        referenceBindings: [
+          {
+            sceneId,
+            specRevision: 1,
+            referenceAssetId: assetId,
+            role: "subject_identity"
+          }
+        ],
+        engineProfileId: "ltx-2.5@certified-v1",
+        durationMs: 4000
+      }
+    });
+    const sourcePlan = createTestSourcePlan();
+    const asset: ReferenceAsset = {
+      id: assetId,
+      clientId: "client-test",
+      storageBucket: "ref-bucket",
+      storageObjectKey: `assets/${assetId}.png`,
+      contentHashSha256: "a".repeat(64),
+      mimeType: "image/png",
+      description: "Default unreviewed description"
+    };
+    const campaign: CampaignRecord = {
+      id: campaignId,
+      clientId: "client-test",
+      title: "Test Campaign",
+      targetPlatform: "instagram_reels",
+      status: "drafting",
+      totalScenes: 1,
+      approvedScenes: 0,
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z"
+    };
+
+    const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [campaign]).seedShotPlan(
+      sourcePlan
+    );
+    uow.seedReferenceAsset(asset);
+    uow.seedCampaignReferenceBible({
+      campaignId,
+      referenceAssetId: assetId,
+      role: "subject_identity",
+      description: "Authoritative Campaign Bible Hero Description",
+      biblePromptTag: "<Picture 1>",
+      sourceContentHashSha256: asset.contentHashSha256,
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z"
+    });
+
+    const { primaryClient, fallbackClient, primaryComplete } = createMockClients();
+    const useCase = new CreateShotPlanVariationUseCase({
+      uow,
+      primaryClient,
+      fallbackClient
+    });
+
+    const result = await useCase.execute({
+      sceneId: scene.id,
+      sourceShotPlanId: sourcePlan.id,
+      expectedSpecRevision: 1,
+      directorGuidance: "Make it tighter with dramatic lighting",
+      variantCount: 1,
+      idempotencyKey: "var-bible-desc-key",
+      externalProcessingPolicy: {
+        allowCloudPlanning: true,
+        allowedProviders: ["Anthropic", "OpenAI"]
+      }
+    });
+
+    expect(result.shotPlans).toHaveLength(1);
+    expect(primaryComplete).toHaveBeenCalledTimes(1);
+    const sentRequest = primaryComplete.mock.calls[0]![0];
+    expect(sentRequest.userPrompt).toContain("Bound Reference Assets:");
+    expect(sentRequest.userPrompt).toContain("<Picture 1>");
+    expect(sentRequest.userPrompt).toContain("subject_identity");
+    expect(sentRequest.userPrompt).toContain("Authoritative Campaign Bible Hero Description");
+  });
+
+  it("fails with StaleBibleBindingMismatchError when active binding is missing from campaign reference bible", async () => {
+    const assetId = "01923456-789a-7b3c-9d4e-5f6071829311" as ReferenceAssetId;
+    const scene = createTestScene({
+      configuration: {
+        prompt: "A neon-lit cyberpunk alleyway with rain reflections",
+        referenceIds: [assetId],
+        referenceBindings: [
+          {
+            sceneId,
+            specRevision: 1,
+            referenceAssetId: assetId,
+            role: "subject_identity"
+          }
+        ],
+        engineProfileId: "ltx-2.5@certified-v1",
+        durationMs: 4000
+      }
+    });
+    const sourcePlan = createTestSourcePlan();
+    const asset: ReferenceAsset = {
+      id: assetId,
+      clientId: "client-test",
+      storageBucket: "ref-bucket",
+      storageObjectKey: `assets/${assetId}.png`,
+      contentHashSha256: "a".repeat(64),
+      description: "Default description"
+    };
+
+    const uow = new InMemorySceneUnitOfWork([scene]).seedShotPlan(sourcePlan);
+    uow.seedReferenceAsset(asset);
+
+    const { primaryClient, fallbackClient, primaryComplete } = createMockClients();
+    const useCase = new CreateShotPlanVariationUseCase({
+      uow,
+      primaryClient,
+      fallbackClient
+    });
+
+    await expect(
+      useCase.execute({
+        sceneId: scene.id,
+        sourceShotPlanId: sourcePlan.id,
+        expectedSpecRevision: 1,
+        directorGuidance: "Make it tighter",
+        idempotencyKey: "var-missing-bible-key",
+        externalProcessingPolicy: {
+          allowCloudPlanning: true,
+          allowedProviders: ["Anthropic", "OpenAI"]
+        }
+      })
+    ).rejects.toThrow(StaleBibleBindingMismatchError);
+
+    expect(primaryComplete).not.toHaveBeenCalled();
   });
 });

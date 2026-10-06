@@ -16,6 +16,7 @@ import {
   insertCampaignRecord,
   insertReferenceAssetRecord,
   insertSceneReferenceAssetRecord,
+  insertCampaignReferenceBibleRecord,
   MIGRATIONS_DIRECTORY_URL
 } from "@cco/infrastructure/testing";
 import {
@@ -234,6 +235,15 @@ describe("Reference-directed Production Integration (Postgres + MinIO)", () => {
         specRevision: 1,
         role: "subject_identity",
         weight: 1
+      });
+
+      await insertCampaignReferenceBibleRecord(client, {
+        campaignId,
+        referenceAssetId: assetId,
+        role: "subject_identity",
+        description: "Studio background character",
+        biblePromptTag: "<Picture 1>",
+        sourceContentHashSha256: validPngHash
       });
     } finally {
       client.release();
@@ -607,6 +617,15 @@ describe("Reference-directed Production Integration (Postgres + MinIO)", () => {
         specRevision: 1,
         role: "subject_identity",
         weight: 1
+      });
+
+      await insertCampaignReferenceBibleRecord(client, {
+        campaignId,
+        referenceAssetId: assetId,
+        role: "subject_identity",
+        description: "Studio background character",
+        biblePromptTag: "<Picture 1>",
+        sourceContentHashSha256: validPngHash
       });
     } finally {
       client.release();

@@ -154,6 +154,16 @@ describe("Production Input Inspector & Equivalence Tests", () => {
     uow.seedShotPlan(shotPlan);
     uow.seedReferenceAsset(refAsset);
     uow.seedSceneBinding(binding);
+    uow.seedCampaignReferenceBible({
+      campaignId: validCampaign.id,
+      referenceAssetId: refAsset.id,
+      role: "subject_identity",
+      description: "test subject description",
+      biblePromptTag: "<Picture 1>",
+      sourceContentHashSha256: refAsset.contentHashSha256,
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z"
+    });
 
     const objectStorage = {
       getObject: vi.fn().mockResolvedValue({ body: validPngBytes }),
@@ -323,6 +333,16 @@ describe("Production Input Inspector & Equivalence Tests", () => {
     uow.seedShotPlan(shotPlan);
     uow.seedReferenceAsset(refAsset);
     uow.seedSceneBinding(binding);
+    uow.seedCampaignReferenceBible({
+      campaignId: validCampaign.id,
+      referenceAssetId: refAsset.id,
+      role: "subject_identity",
+      description: "test subject description",
+      biblePromptTag: "<Picture 1>",
+      sourceContentHashSha256: refAsset.contentHashSha256,
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z"
+    });
 
     const objectStorage = {
       getObject: vi.fn().mockResolvedValue({ body: validPngBytes }),
@@ -383,6 +403,16 @@ describe("Production Input Inspector & Equivalence Tests", () => {
     uow1.seedShotPlan(shotPlan);
     uow1.seedReferenceAsset(refAsset1);
     uow1.seedSceneBinding(binding1);
+    uow1.seedCampaignReferenceBible({
+      campaignId: validCampaign.id,
+      referenceAssetId: refAsset1.id,
+      role: "subject_identity",
+      description: "test subject 1 description",
+      biblePromptTag: "<Picture 1>",
+      sourceContentHashSha256: refAsset1.contentHashSha256,
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z"
+    });
 
     const objectStorage = {
       getObject: vi.fn().mockResolvedValue({ body: validPngBytes }),
@@ -427,6 +457,16 @@ describe("Production Input Inspector & Equivalence Tests", () => {
     uow2.seedShotPlan(shotPlan);
     uow2.seedReferenceAsset(refAsset2);
     uow2.seedSceneBinding(binding2);
+    uow2.seedCampaignReferenceBible({
+      campaignId: validCampaign.id,
+      referenceAssetId: refAsset2.id,
+      role: "subject_identity",
+      description: "test subject 2 description",
+      biblePromptTag: "<Picture 1>",
+      sourceContentHashSha256: refAsset2.contentHashSha256,
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z"
+    });
 
     const hashBytes2 = {
       hashBytes: vi.fn().mockResolvedValue(validHash2)
@@ -475,6 +515,16 @@ describe("Production Input Inspector & Equivalence Tests", () => {
     uow.seedShotPlan(shotPlan);
     uow.seedReferenceAsset(refAsset);
     uow.seedSceneBinding(binding);
+    uow.seedCampaignReferenceBible({
+      campaignId: validCampaign.id,
+      referenceAssetId: refAsset.id,
+      role: "subject_identity",
+      description: "test subject description",
+      biblePromptTag: "<Picture 1>",
+      sourceContentHashSha256: refAsset.contentHashSha256,
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z"
+    });
 
     const objectStorage = {
       getObject: vi.fn().mockResolvedValue({ body: validPngBytes }),
@@ -534,6 +584,16 @@ describe("Production Input Inspector & Equivalence Tests", () => {
     uow.seedShotPlan(shotPlan);
     uow.seedReferenceAsset(refAsset);
     uow.seedSceneBinding(binding);
+    uow.seedCampaignReferenceBible({
+      campaignId: validCampaign.id,
+      referenceAssetId: refAsset.id,
+      role: "subject_identity",
+      description: "test subject description",
+      biblePromptTag: "<Picture 1>",
+      sourceContentHashSha256: refAsset.contentHashSha256,
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z"
+    });
 
     const objectStorage = {
       getObject: vi.fn().mockResolvedValue({ body: validPngBytes }),
@@ -606,6 +666,16 @@ describe("Production Input Inspector & Equivalence Tests", () => {
     uow.seedShotPlan(shotPlan);
     uow.seedReferenceAsset(refAsset);
     uow.seedSceneBinding(binding);
+    uow.seedCampaignReferenceBible({
+      campaignId: validCampaign.id,
+      referenceAssetId: refAsset.id,
+      role: "subject_identity",
+      description: "test subject description",
+      biblePromptTag: "<Picture 1>",
+      sourceContentHashSha256: refAsset.contentHashSha256,
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z"
+    });
 
     const objectStorage = {
       getObject: vi.fn().mockResolvedValue({ body: validPngBytes }),

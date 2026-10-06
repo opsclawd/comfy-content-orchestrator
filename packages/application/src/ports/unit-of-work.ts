@@ -1,5 +1,6 @@
 import type { CampaignRecord, ClientRecord } from "@cco/domain";
 import type { CampaignProductionRunRepository } from "./campaign-production-run-repository.js";
+import type { CampaignReferenceBibleRepository } from "./campaign-reference-bible-repository.js";
 import type { CampaignRepository } from "./campaign-repository.js";
 import type { ClientRepository } from "./client-repository.js";
 import type { DeliveryAssemblyJobQueuePort } from "./delivery-assembly-job-queue-port.js";
@@ -25,6 +26,7 @@ export interface UnitOfWorkContext {
   readonly generationManifests?: GenerationManifestRepository | undefined;
   readonly referenceAssets?: ReferenceAssetRepository | undefined;
   readonly referenceGroups?: ReferenceGroupRepository | undefined;
+  readonly campaignReferenceBible?: CampaignReferenceBibleRepository | undefined;
 }
 
 export interface UnitOfWork {

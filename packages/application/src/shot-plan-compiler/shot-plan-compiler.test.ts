@@ -1109,5 +1109,122 @@ describe("compileShotPlan", () => {
       expect(result.instructionText).toContain("<Picture 1> represents product");
       expect(result.instructionText).toContain("<Picture 2> represents style");
     });
+
+    it("lossless mapping: scene binding only Location B (stable campaign bible tag <Picture 2>) maps to scene-effective <Picture 1> in sections 7, 8, and 11 with authoritative bible description", () => {
+      const shotPlan = makeApprovedShotPlan({
+        subjects: [],
+        continuity: {
+          incomingContinuityFromSceneId: null,
+          persistentSubjectIds: [],
+          lightingContinuityNote: null,
+          frameAnchorTarget: "none",
+          anchorCandidateId: null,
+          anchorMediaHashSha256: null
+        },
+        environmentDescription: "Generic fallback beach"
+      });
+
+      const references: readonly CanonicalReferenceEntry[] = [
+        {
+          bindingId: "b-loc-b",
+          slotIndex: 1,
+          promptTag: "<Picture 1>",
+          role: "location",
+          referenceAssetId: "loc-beach-b",
+          contentHashSha256: "b".repeat(64),
+          asset: {
+            id: "loc-beach-b",
+            clientId: "client-001",
+            storageBucket: "cco-test",
+            storageObjectKey: "refs/beach.png",
+            contentHashSha256: "b".repeat(64),
+            mimeType: "image/png",
+            description: "Sunny tropical beach with turquoise water and white sand dunes"
+          }
+        }
+      ];
+
+      const result = compileShotPlan({ shotPlan, references });
+
+      // Section 7: Location contains scene-effective <Picture 1> with bible description
+      expect(result.instructionText).toContain(
+        "[Location]: <Picture 1>: Sunny tropical beach with turquoise water and white sand dunes"
+      );
+
+      // Section 8: Environment description is suppressed because active location reference exists
+      expect(result.instructionText).not.toContain("Generic fallback beach");
+
+      // Section 11: Reference Visuals declares <Picture 1> represents location
+      expect(result.instructionText).toContain("<Picture 1> represents location (loc-beach-b)");
+
+      // Verify stable campaign tag <Picture 2> is not emitted
+      expect(result.instructionText).not.toContain("<Picture 2>");
+    });
+
+    it("lossless mapping: scene binding Subject B (stable campaign bible tag <Picture 2>) maps to scene-effective <Picture 1> in sections 3, 4, 9, and 11 with authoritative bible description", () => {
+      const shotPlan = makeApprovedShotPlan({
+        subjects: [
+          {
+            subjectId: "character_groom",
+            role: "subject_identity",
+            initialPosition: "screen_center",
+            movementTrajectory: "standing",
+            interactionSummary: "waiting at altar",
+            referenceAssetId: "ref-groom-b"
+          }
+        ],
+        continuity: {
+          incomingContinuityFromSceneId: null,
+          persistentSubjectIds: ["ref-groom-b"],
+          lightingContinuityNote: null,
+          frameAnchorTarget: "none",
+          anchorCandidateId: null,
+          anchorMediaHashSha256: null
+        }
+      });
+
+      const references: readonly CanonicalReferenceEntry[] = [
+        {
+          bindingId: "b-subj-b",
+          slotIndex: 1,
+          promptTag: "<Picture 1>",
+          role: "subject_identity",
+          referenceAssetId: "ref-groom-b",
+          contentHashSha256: "c".repeat(64),
+          asset: {
+            id: "ref-groom-b",
+            clientId: "client-001",
+            storageBucket: "cco-test",
+            storageObjectKey: "refs/groom.png",
+            contentHashSha256: "c".repeat(64),
+            mimeType: "image/png",
+            description: "Groom in tailored charcoal tuxedo"
+          }
+        }
+      ];
+
+      const result = compileShotPlan({ shotPlan, references });
+
+      // Section 3: Subject Identity uses scene-effective <Picture 1> with bible description
+      expect(result.instructionText).toContain(
+        "[Subject Identity]: <Picture 1>: Groom in tailored charcoal tuxedo"
+      );
+
+      // Section 4: Subjects & Blocking maps to <Picture 1> and suppresses planner subjectId
+      expect(result.instructionText).toContain(
+        "<Picture 1> (subject_identity): Initial: screen_center, Path: standing, Interaction: waiting at altar"
+      );
+      expect(result.instructionText).not.toContain("character_groom");
+
+      // Section 9: Continuity maps persistentSubjectIds ref-groom-b to <Picture 1>
+      expect(result.instructionText).toContain("[Continuity]: Persistent Subjects: <Picture 1>");
+
+      // Section 11: Reference Visuals
+      expect(result.instructionText).toContain(
+        "<Picture 1> represents subject identity (ref-groom-b)"
+      );
+
+      expect(result.instructionText).not.toContain("<Picture 2>");
+    });
   });
 });
