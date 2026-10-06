@@ -1,7 +1,8 @@
-import type {
-  PlanningModelClientPort,
-  PlanningModelOutcome,
-  PlanningModelRequest
+import {
+  MAX_PLANNING_IMAGES,
+  type PlanningModelClientPort,
+  type PlanningModelOutcome,
+  type PlanningModelRequest
 } from "@cco/application";
 import { classifyError, isSafetyRefusalSignal, type RefusalEvidence } from "@cco/shared";
 
@@ -11,6 +12,8 @@ export interface OpenAiPlanningModelClientOptions {
   readonly model?: string;
   readonly fetch?: typeof globalThis.fetch;
   readonly timeoutMs?: number;
+  readonly imageCapability?: boolean;
+  readonly maxImages?: number;
 }
 
 function executeWithSignal<T>(
@@ -82,6 +85,11 @@ function detectStructuredRefusalDiscriminator(
 
 export class OpenAiPlanningModelClient implements PlanningModelClientPort {
   readonly providerName = "OpenAI" as const;
+  readonly imageCapability: boolean;
+  readonly maxImages: number;
+  get supportsImages(): boolean {
+    return this.imageCapability;
+  }
   private readonly apiKey: string;
   private readonly baseUrl: string;
   private readonly model: string;
@@ -97,6 +105,10 @@ export class OpenAiPlanningModelClient implements PlanningModelClientPort {
     this.model = options.model ?? "gpt-5.6-sol";
     this.fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.timeoutMs = options.timeoutMs ?? 30_000;
+    this.maxImages = options.maxImages ?? MAX_PLANNING_IMAGES;
+    // Image capability is strictly true ONLY for configured MiniMax-M3 model.
+    // Non-MiniMax models can never have image capability enabled.
+    this.imageCapability = this.model === "MiniMax-M3" && options.imageCapability !== false;
   }
 
   async complete(request: PlanningModelRequest): Promise<PlanningModelOutcome> {
@@ -107,6 +119,38 @@ export class OpenAiPlanningModelClient implements PlanningModelClientPort {
       authorization: `Bearer ${this.apiKey}`
     };
 
+    let userContent: unknown = request.userPrompt;
+    if (
+      this.imageCapability &&
+      this.model === "MiniMax-M3" &&
+      request.images &&
+      request.images.length > 0
+    ) {
+      const bindingCap =
+        request.bindingCount !== undefined
+          ? Math.max(0, request.bindingCount)
+          : request.maxImages !== undefined
+            ? Math.max(0, request.maxImages)
+            : this.maxImages;
+      const effectiveCap = Math.min(bindingCap, this.maxImages, MAX_PLANNING_IMAGES);
+      const imagesToAttach = request.images.slice(0, effectiveCap);
+
+      if (imagesToAttach.length > 0) {
+        userContent = [
+          {
+            type: "text",
+            text: request.userPrompt
+          },
+          ...imagesToAttach.map((img) => ({
+            type: "image_url",
+            image_url: {
+              url: `data:${img.mimeType};base64,${img.base64Data}`
+            }
+          }))
+        ];
+      }
+    }
+
     const payload = {
       model: this.model,
       messages: [
@@ -116,7 +160,7 @@ export class OpenAiPlanningModelClient implements PlanningModelClientPort {
         },
         {
           role: "user",
-          content: request.userPrompt
+          content: userContent
         }
       ]
     };

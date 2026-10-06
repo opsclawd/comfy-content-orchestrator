@@ -556,4 +556,446 @@ describe("OpenAiPlanningModelClient", () => {
     expect(JSON.stringify(capturedBody)).not.toContain("image_url");
     expect(JSON.stringify(capturedBody)).not.toContain("base64");
   });
+
+  it("encodes a single image as an image_url data URL block in user message", async () => {
+    let capturedBody: { messages?: Array<{ role: string; content: unknown }> } | undefined;
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      if (init?.body) {
+        capturedBody = JSON.parse(init.body as string);
+      }
+      return {
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: "A smiling couple" } }]
+          })
+      } as unknown as Response;
+    });
+
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-openai-key",
+      model: "MiniMax-M3",
+      fetch: fetchMock
+    });
+
+    const result = await client.complete({
+      systemPrompt: "Describe image",
+      userPrompt: "Describe reference image",
+      images: [
+        {
+          mimeType: "image/png",
+          base64Data:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        }
+      ]
+    });
+
+    expect(result.kind).toBe("success");
+    expect(capturedBody?.messages).toHaveLength(2);
+    expect(capturedBody?.messages?.[0]?.role).toBe("system");
+    expect(capturedBody?.messages?.[1]?.role).toBe("user");
+    expect(Array.isArray(capturedBody?.messages?.[1]?.content)).toBe(true);
+
+    const userContent = capturedBody?.messages?.[1]?.content as Array<{
+      type: string;
+      text?: string;
+      image_url?: { url: string };
+    }>;
+    expect(userContent).toHaveLength(2);
+    expect(userContent[0]).toEqual({
+      type: "text",
+      text: "Describe reference image"
+    });
+    expect(userContent[1]).toEqual({
+      type: "image_url",
+      image_url: {
+        url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+      }
+    });
+  });
+
+  it("encodes multiple ordered images preserving array order", async () => {
+    let capturedBody: { messages?: Array<{ role: string; content: unknown }> } | undefined;
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      if (init?.body) {
+        capturedBody = JSON.parse(init.body as string);
+      }
+      return {
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: "Description" } }]
+          })
+      } as unknown as Response;
+    });
+
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-openai-key",
+      model: "MiniMax-M3",
+      fetch: fetchMock
+    });
+
+    await client.complete({
+      systemPrompt: "System",
+      userPrompt: "User",
+      images: [
+        { mimeType: "image/jpeg", base64Data: "FIRST_IMAGE" },
+        { mimeType: "image/webp", base64Data: "SECOND_IMAGE" },
+        { mimeType: "image/png", base64Data: "THIRD_IMAGE" }
+      ]
+    });
+
+    const userContent = capturedBody?.messages?.[1]?.content as Array<{
+      type: string;
+      text?: string;
+      image_url?: { url: string };
+    }>;
+    expect(userContent).toHaveLength(4);
+    expect(userContent[0]).toEqual({ type: "text", text: "User" });
+    expect(userContent[1]).toEqual({
+      type: "image_url",
+      image_url: { url: "data:image/jpeg;base64,FIRST_IMAGE" }
+    });
+    expect(userContent[2]).toEqual({
+      type: "image_url",
+      image_url: { url: "data:image/webp;base64,SECOND_IMAGE" }
+    });
+    expect(userContent[3]).toEqual({
+      type: "image_url",
+      image_url: { url: "data:image/png;base64,THIRD_IMAGE" }
+    });
+  });
+
+  it("omits image content blocks when imageCapability is false for non-MiniMax model", async () => {
+    let capturedBody: { messages?: Array<{ role: string; content: unknown }> } | undefined;
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      if (init?.body) {
+        capturedBody = JSON.parse(init.body as string);
+      }
+      return {
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: "Text only" } }]
+          })
+      } as unknown as Response;
+    });
+
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-openai-key",
+      model: "gpt-5.6-sol",
+      fetch: fetchMock
+    });
+
+    expect(client.imageCapability).toBe(false);
+
+    await client.complete({
+      systemPrompt: "System",
+      userPrompt: "User prompt",
+      images: [{ mimeType: "image/png", base64Data: "BASE64" }]
+    });
+
+    expect(capturedBody?.messages?.[1]?.role).toBe("user");
+    expect(typeof capturedBody?.messages?.[1]?.content).toBe("string");
+    expect(capturedBody?.messages?.[1]?.content).toBe("User prompt");
+  });
+
+  it("forces imageCapability to false for non-MiniMax model even if imageCapability: true is provided in options", async () => {
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-openai-key",
+      model: "gpt-5.6-sol",
+      imageCapability: true,
+      fetch: vi.fn()
+    });
+
+    expect(client.imageCapability).toBe(false);
+    expect(client.supportsImages).toBe(false);
+  });
+
+  it("never emits image blocks for non-MiniMax model even if imageCapability: true is set in options", async () => {
+    let capturedBody: { messages?: Array<{ role: string; content: unknown }> } | undefined;
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      if (init?.body) {
+        capturedBody = JSON.parse(init.body as string);
+      }
+      return {
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: "Text only" } }]
+          })
+      } as unknown as Response;
+    });
+
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-openai-key",
+      model: "gpt-5.6-sol",
+      imageCapability: true,
+      fetch: fetchMock
+    });
+
+    await client.complete({
+      systemPrompt: "System",
+      userPrompt: "User prompt",
+      images: [{ mimeType: "image/png", base64Data: "BASE64" }]
+    });
+
+    expect(capturedBody?.messages?.[1]?.role).toBe("user");
+    expect(typeof capturedBody?.messages?.[1]?.content).toBe("string");
+    expect(capturedBody?.messages?.[1]?.content).toBe("User prompt");
+  });
+
+  it("allows disabling imageCapability for MiniMax-M3 via imageCapability: false", async () => {
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-openai-key",
+      model: "MiniMax-M3",
+      imageCapability: false,
+      fetch: vi.fn()
+    });
+
+    expect(client.imageCapability).toBe(false);
+    expect(client.supportsImages).toBe(false);
+  });
+
+  it("never emits image blocks for MiniMax-M3 when imageCapability: false is set in options", async () => {
+    let capturedBody: { messages?: Array<{ role: string; content: unknown }> } | undefined;
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      if (init?.body) {
+        capturedBody = JSON.parse(init.body as string);
+      }
+      return {
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: "Text only" } }]
+          })
+      } as unknown as Response;
+    });
+
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-openai-key",
+      model: "MiniMax-M3",
+      imageCapability: false,
+      fetch: fetchMock
+    });
+
+    await client.complete({
+      systemPrompt: "System",
+      userPrompt: "User prompt",
+      images: [{ mimeType: "image/png", base64Data: "BASE64" }]
+    });
+
+    expect(capturedBody?.messages?.[1]?.role).toBe("user");
+    expect(typeof capturedBody?.messages?.[1]?.content).toBe("string");
+    expect(capturedBody?.messages?.[1]?.content).toBe("User prompt");
+  });
+
+  it("keeps user message text-only when images array is empty", async () => {
+    let capturedBody: { messages?: Array<{ role: string; content: unknown }> } | undefined;
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      if (init?.body) {
+        capturedBody = JSON.parse(init.body as string);
+      }
+      return {
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: "Text only" } }]
+          })
+      } as unknown as Response;
+    });
+
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-openai-key",
+      fetch: fetchMock
+    });
+
+    await client.complete({
+      systemPrompt: "System",
+      userPrompt: "User prompt",
+      images: []
+    });
+
+    expect(capturedBody?.messages?.[1]?.role).toBe("user");
+    expect(typeof capturedBody?.messages?.[1]?.content).toBe("string");
+    expect(capturedBody?.messages?.[1]?.content).toBe("User prompt");
+  });
+
+  it("caps attached images to bindingCount when bindingCount is provided", async () => {
+    let capturedBody: { messages?: Array<{ role: string; content: unknown }> } | undefined;
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      if (init?.body) {
+        capturedBody = JSON.parse(init.body as string);
+      }
+      return {
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: "Plan result" } }]
+          })
+      } as unknown as Response;
+    });
+
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-openai-key",
+      model: "MiniMax-M3",
+      fetch: fetchMock
+    });
+
+    await client.complete({
+      systemPrompt: "System",
+      userPrompt: "Plan prompt",
+      bindingCount: 2,
+      images: [
+        { mimeType: "image/png", base64Data: "IMG_1" },
+        { mimeType: "image/png", base64Data: "IMG_2" },
+        { mimeType: "image/png", base64Data: "IMG_3" },
+        { mimeType: "image/png", base64Data: "IMG_4" }
+      ]
+    });
+
+    expect(capturedBody?.messages?.[1]?.role).toBe("user");
+    const userContent = capturedBody?.messages?.[1]?.content as Array<{
+      type: string;
+      text?: string;
+      image_url?: { url: string };
+    }>;
+    expect(Array.isArray(userContent)).toBe(true);
+    // 1 text block + 2 capped image blocks
+    expect(userContent).toHaveLength(3);
+    expect(userContent[0]).toEqual({ type: "text", text: "Plan prompt" });
+    expect(userContent[1]).toEqual({
+      type: "image_url",
+      image_url: { url: "data:image/png;base64,IMG_1" }
+    });
+    expect(userContent[2]).toEqual({
+      type: "image_url",
+      image_url: { url: "data:image/png;base64,IMG_2" }
+    });
+  });
+
+  it("caps attached images to MAX_PLANNING_IMAGES (9) when more than 9 images are provided without bindingCount", async () => {
+    let capturedBody: { messages?: Array<{ role: string; content: unknown }> } | undefined;
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      if (init?.body) {
+        capturedBody = JSON.parse(init.body as string);
+      }
+      return {
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: "Plan result" } }]
+          })
+      } as unknown as Response;
+    });
+
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-openai-key",
+      model: "MiniMax-M3",
+      fetch: fetchMock
+    });
+
+    const twelveImages = Array.from({ length: 12 }, (_, i) => ({
+      mimeType: "image/png",
+      base64Data: `DATA_${i + 1}`
+    }));
+
+    await client.complete({
+      systemPrompt: "System",
+      userPrompt: "Plan prompt",
+      images: twelveImages
+    });
+
+    const userContent = capturedBody?.messages?.[1]?.content as Array<{
+      type: string;
+      text?: string;
+      image_url?: { url: string };
+    }>;
+    expect(Array.isArray(userContent)).toBe(true);
+    // 1 text block + 9 images (capped at MAX_PLANNING_IMAGES = 9)
+    expect(userContent).toHaveLength(10);
+    expect(userContent[0]).toEqual({ type: "text", text: "Plan prompt" });
+    for (let i = 1; i <= 9; i++) {
+      expect(userContent[i]).toEqual({
+        type: "image_url",
+        image_url: { url: `data:image/png;base64,DATA_${i}` }
+      });
+    }
+  });
+
+  it("emits text-only when bindingCount is 0 even if images are provided", async () => {
+    let capturedBody: { messages?: Array<{ role: string; content: unknown }> } | undefined;
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      if (init?.body) {
+        capturedBody = JSON.parse(init.body as string);
+      }
+      return {
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: "Plan result" } }]
+          })
+      } as unknown as Response;
+    });
+
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-openai-key",
+      model: "MiniMax-M3",
+      fetch: fetchMock
+    });
+
+    await client.complete({
+      systemPrompt: "System",
+      userPrompt: "Plan prompt",
+      bindingCount: 0,
+      images: [{ mimeType: "image/png", base64Data: "DATA_1" }]
+    });
+
+    expect(capturedBody?.messages?.[1]?.role).toBe("user");
+    expect(typeof capturedBody?.messages?.[1]?.content).toBe("string");
+    expect(capturedBody?.messages?.[1]?.content).toBe("Plan prompt");
+  });
+
+  it("caps attached images to maxImages option when configured on client", async () => {
+    let capturedBody: { messages?: Array<{ role: string; content: unknown }> } | undefined;
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      if (init?.body) {
+        capturedBody = JSON.parse(init.body as string);
+      }
+      return {
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: "Plan result" } }]
+          })
+      } as unknown as Response;
+    });
+
+    const client = new OpenAiPlanningModelClient({
+      apiKey: "test-openai-key",
+      model: "MiniMax-M3",
+      maxImages: 3,
+      fetch: fetchMock
+    });
+
+    await client.complete({
+      systemPrompt: "System",
+      userPrompt: "Plan prompt",
+      images: [
+        { mimeType: "image/png", base64Data: "IMG_1" },
+        { mimeType: "image/png", base64Data: "IMG_2" },
+        { mimeType: "image/png", base64Data: "IMG_3" },
+        { mimeType: "image/png", base64Data: "IMG_4" },
+        { mimeType: "image/png", base64Data: "IMG_5" }
+      ]
+    });
+
+    const userContent = capturedBody?.messages?.[1]?.content as Array<{
+      type: string;
+      text?: string;
+      image_url?: { url: string };
+    }>;
+    expect(Array.isArray(userContent)).toBe(true);
+    expect(userContent).toHaveLength(4); // 1 text + 3 images
+  });
 });

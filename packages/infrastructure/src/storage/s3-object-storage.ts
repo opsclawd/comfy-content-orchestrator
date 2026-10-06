@@ -55,8 +55,13 @@ function isMissingKeyError(error: unknown): boolean {
 async function readBodyWithLimit(
   body: unknown,
   locator: ObjectLocator,
-  maxBytes?: number
+  maxBytes?: number,
+  signal?: AbortSignal
 ): Promise<Uint8Array> {
+  if (signal?.aborted) {
+    throw signal.reason ?? new Error("Aborted");
+  }
+
   if (!body) {
     return new Uint8Array();
   }
@@ -73,8 +78,37 @@ async function readBodyWithLimit(
     const chunks: Uint8Array[] = [];
     let totalBytes = 0;
 
+    let onAbort: (() => void) | undefined;
+    const abortPromise = signal
+      ? new Promise<never>((_, reject) => {
+          onAbort = () => {
+            if (typeof stream.destroy === "function") {
+              try {
+                stream.destroy(signal.reason ?? new Error("Aborted"));
+              } catch {
+                // ignore destroy errors
+              }
+            }
+            reject(signal.reason ?? new Error("Aborted"));
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+        })
+      : undefined;
+
+    const iterator = stream[Symbol.asyncIterator]();
     try {
-      for await (const rawChunk of stream) {
+      while (true) {
+        if (signal?.aborted) {
+          throw signal.reason ?? new Error("Aborted");
+        }
+        const nextPromise = iterator.next();
+        const iterResult = abortPromise
+          ? await Promise.race([nextPromise, abortPromise])
+          : await nextPromise;
+        if (iterResult.done) {
+          break;
+        }
+        const rawChunk = iterResult.value;
         const chunk =
           rawChunk instanceof Uint8Array
             ? rawChunk
@@ -100,12 +134,30 @@ async function readBodyWithLimit(
     } catch (err) {
       if (typeof stream.destroy === "function") {
         try {
-          stream.destroy();
+          stream.destroy(err instanceof Error ? err : undefined);
         } catch {
           // ignore destroy errors
         }
       }
+      if (signal?.aborted) {
+        throw signal.reason ?? (err instanceof Error ? err : new Error("Aborted"));
+      }
       throw err;
+    } finally {
+      if (signal && onAbort) {
+        signal.removeEventListener("abort", onAbort);
+      }
+      if (typeof iterator.return === "function") {
+        try {
+          await iterator.return();
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    if (signal?.aborted) {
+      throw signal.reason ?? new Error("Aborted");
     }
 
     const merged = new Uint8Array(totalBytes);
@@ -121,9 +173,66 @@ async function readBodyWithLimit(
     typeof (body as { transformToByteArray?: () => Promise<Uint8Array> }).transformToByteArray ===
     "function"
   ) {
-    const bytes = await (
-      body as { transformToByteArray: () => Promise<Uint8Array> }
-    ).transformToByteArray();
+    const streamBody = body as {
+      transformToByteArray: () => Promise<Uint8Array>;
+      destroy?: (error?: Error) => void;
+    };
+
+    if (signal?.aborted) {
+      if (typeof streamBody.destroy === "function") {
+        try {
+          streamBody.destroy(signal.reason ?? new Error("Aborted"));
+        } catch {
+          // ignore destroy errors
+        }
+      }
+      throw signal.reason ?? new Error("Aborted");
+    }
+
+    let onAbort: (() => void) | undefined;
+    const abortPromise = signal
+      ? new Promise<never>((_, reject) => {
+          onAbort = () => {
+            if (typeof streamBody.destroy === "function") {
+              try {
+                streamBody.destroy(signal.reason ?? new Error("Aborted"));
+              } catch {
+                // ignore destroy errors
+              }
+            }
+            reject(signal.reason ?? new Error("Aborted"));
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+        })
+      : undefined;
+
+    let bytes: Uint8Array;
+    try {
+      bytes = abortPromise
+        ? await Promise.race([streamBody.transformToByteArray(), abortPromise])
+        : await streamBody.transformToByteArray();
+    } catch (err) {
+      if (typeof streamBody.destroy === "function") {
+        try {
+          streamBody.destroy(err instanceof Error ? err : undefined);
+        } catch {
+          // ignore destroy errors
+        }
+      }
+      if (signal?.aborted) {
+        throw signal.reason ?? (err instanceof Error ? err : new Error("Aborted"));
+      }
+      throw err;
+    } finally {
+      if (signal && onAbort) {
+        signal.removeEventListener("abort", onAbort);
+      }
+    }
+
+    if (signal?.aborted) {
+      throw signal.reason ?? new Error("Aborted");
+    }
+
     if (maxBytes !== undefined && bytes.byteLength > maxBytes) {
       throw new Error(
         `Object ${locator.bucket}/${locator.key} byteLength (${bytes.byteLength}) exceeds maxBytes limit (${maxBytes})`
@@ -204,19 +313,41 @@ export class S3ObjectStorage implements ObjectStoragePort {
     locator: ObjectLocator,
     options?: GetObjectOptions
   ): Promise<StoredObject | undefined> {
+    if (options?.signal?.aborted) {
+      throw options.signal.reason ?? new Error("Aborted");
+    }
+
     let response;
     try {
       response = await this.client.send(
         new GetObjectCommand({
           Bucket: locator.bucket,
           Key: locator.key
-        })
+        }),
+        options?.signal ? { abortSignal: options.signal } : undefined
       );
     } catch (error: unknown) {
+      if (options?.signal?.aborted) {
+        throw options.signal.reason ?? error;
+      }
       if (isMissingKeyError(error)) {
         return undefined;
       }
       throw error;
+    }
+
+    if (options?.signal?.aborted) {
+      if (
+        response.Body &&
+        typeof (response.Body as { destroy?: () => void }).destroy === "function"
+      ) {
+        try {
+          (response.Body as { destroy: () => void }).destroy();
+        } catch {
+          // ignore destroy errors
+        }
+      }
+      throw options.signal.reason ?? new Error("Aborted");
     }
 
     if (
@@ -239,7 +370,12 @@ export class S3ObjectStorage implements ObjectStoragePort {
       );
     }
 
-    const body = await readBodyWithLimit(response.Body, locator, options?.maxBytes);
+    const body = await readBodyWithLimit(
+      response.Body,
+      locator,
+      options?.maxBytes,
+      options?.signal
+    );
 
     const storedChecksum = response.Metadata?.["checksum-sha256"];
     if (storedChecksum !== undefined) {

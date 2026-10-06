@@ -61,5 +61,12 @@ export interface ReferenceAssetRepository {
   ) => Promise<ReferenceAsset | undefined>;
 
   readonly saveOrReactivateByContentHash?: (asset: ReferenceAsset) => Promise<ReferenceAsset>;
+  readonly findDescriptionByContentHash?: (
+    contentHashSha256: string
+  ) => Promise<string | undefined>;
+  readonly updateDescriptionByContentHash?: (
+    contentHashSha256: string,
+    description: string
+  ) => Promise<void>;
   readonly withLock?: <T>(key: string, action: () => Promise<T>) => Promise<T>;
 }

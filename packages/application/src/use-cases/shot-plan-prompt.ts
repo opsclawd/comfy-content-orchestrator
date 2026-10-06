@@ -4,20 +4,31 @@ import {
   LIGHTING_STYLES,
   MOVEMENT_SPEEDS,
   SHOT_FRAMINGS,
+  type ReferenceRole,
   type ShotPlanSnapshot
 } from "@cco/domain";
 import type { PlanningModelRequest } from "../ports/planning-model-client-port.js";
+
+export interface BoundReferencePromptInput {
+  readonly promptTag: string;
+  readonly role: ReferenceRole;
+  readonly description: string;
+}
 
 export interface BuildShotPlanPromptInput {
   readonly scenePrompt: string;
   readonly sceneDurationMs: number;
   readonly engineProfileId: string;
   readonly variantCount: number;
+  readonly boundReferences?: readonly BoundReferencePromptInput[] | undefined;
   readonly referenceAssetIds?: readonly string[] | undefined;
   readonly correctiveFeedback?: string | undefined;
 }
 
 export function buildShotPlanPrompt(input: BuildShotPlanPromptInput): PlanningModelRequest {
+  const hasBoundReferences =
+    input.boundReferences !== undefined && input.boundReferences.length > 0;
+
   const systemPrompt = [
     "You are a specialized cinematography director and storyboard planning assistant for AI video synthesis.",
     `Your goal is to propose ${input.variantCount} distinct, structured ShotPlan variants for a scene based on the scene visual description and duration.`,
@@ -45,7 +56,18 @@ export function buildShotPlanPrompt(input: BuildShotPlanPromptInput): PlanningMo
     "- colorPalette: array of strings describing dominant colors",
     "- subjects: array of objects with { subjectId, role ('subject_identity'|'product'), initialPosition, movementTrajectory }",
     "- beats: array of temporal beats covering the duration, each with { beatIndex, startMs, endMs, description, cameraAction, subjectAction }",
-    `  NOTE: The beats must partition the scene duration (total ${input.sceneDurationMs} ms).`
+    `  NOTE: The beats must partition the scene duration (total ${input.sceneDurationMs} ms).`,
+    ...(hasBoundReferences
+      ? [
+          "",
+          "Reference Asset Directives:",
+          "When Bound Reference Assets are provided, they are authoritative reference constraints, not optional inspiration:",
+          "- For 'subject_identity': The character or subject identity must strictly follow the described appearance and characteristics.",
+          "- For 'product': The product appearance, packaging, and branding must strictly follow the described product details.",
+          "- For 'location': The scene setting, architecture, and physical environment must strictly match the described location.",
+          "- For 'style' and 'composition': The aesthetic cues, framing, color palette, and visual mood must follow the described cues."
+        ]
+      : [])
   ].join("\n");
 
   const userPromptLines: string[] = [
@@ -56,7 +78,12 @@ export function buildShotPlanPrompt(input: BuildShotPlanPromptInput): PlanningMo
     `Engine Profile: ${input.engineProfileId}`
   ];
 
-  if (input.referenceAssetIds && input.referenceAssetIds.length > 0) {
+  if (hasBoundReferences) {
+    userPromptLines.push("Bound Reference Assets:");
+    for (const ref of input.boundReferences!) {
+      userPromptLines.push(`${ref.promptTag} | ${ref.role} | ${ref.description}`);
+    }
+  } else if (input.referenceAssetIds && input.referenceAssetIds.length > 0) {
     userPromptLines.push(`Bound Reference Assets: ${input.referenceAssetIds.join(", ")}`);
   }
 
@@ -77,6 +104,7 @@ export interface BuildShotPlanVariationPromptInput {
   readonly sourceShotPlan: ShotPlanSnapshot;
   readonly directorGuidance: string;
   readonly variantCount: number;
+  readonly boundReferences?: readonly BoundReferencePromptInput[] | undefined;
   readonly referenceAssetIds?: readonly string[] | undefined;
   readonly correctiveFeedback?: string | undefined;
 }
@@ -84,6 +112,9 @@ export interface BuildShotPlanVariationPromptInput {
 export function buildShotPlanVariationPrompt(
   input: BuildShotPlanVariationPromptInput
 ): PlanningModelRequest {
+  const hasBoundReferences =
+    input.boundReferences !== undefined && input.boundReferences.length > 0;
+
   const systemPrompt = [
     "You are a specialized cinematography director and storyboard planning assistant for AI video synthesis.",
     `Your task is to create ${input.variantCount} directed ShotPlan variation(s) based on a preferred source ShotPlan and specific director guidance.`,
@@ -116,7 +147,18 @@ export function buildShotPlanVariationPrompt(
     "- environmentDescription: string describing set, backdrop, and atmosphere",
     "- colorPalette: array of strings describing dominant colors",
     "- subjects: array of objects with { subjectId, role ('subject_identity'|'product'), initialPosition, movementTrajectory }",
-    "- beats: array of temporal beats covering the duration, each with { beatIndex, startMs, endMs, description, cameraAction, subjectAction }"
+    "- beats: array of temporal beats covering the duration, each with { beatIndex, startMs, endMs, description, cameraAction, subjectAction }",
+    ...(hasBoundReferences
+      ? [
+          "",
+          "Reference Asset Directives:",
+          "When Bound Reference Assets are provided, they are authoritative reference constraints, not optional inspiration:",
+          "- For 'subject_identity': The character or subject identity must strictly follow the described appearance and characteristics.",
+          "- For 'product': The product appearance, packaging, and branding must strictly follow the described product details.",
+          "- For 'location': The scene setting, architecture, and physical environment must strictly match the described location.",
+          "- For 'style' and 'composition': The aesthetic cues, framing, color palette, and visual mood must follow the described cues."
+        ]
+      : [])
   ].join("\n");
 
   const userPromptLines: string[] = [
@@ -129,7 +171,12 @@ export function buildShotPlanVariationPrompt(
     `Engine Profile: ${input.engineProfileId}`
   ];
 
-  if (input.referenceAssetIds && input.referenceAssetIds.length > 0) {
+  if (hasBoundReferences) {
+    userPromptLines.push("Bound Reference Assets:");
+    for (const ref of input.boundReferences!) {
+      userPromptLines.push(`${ref.promptTag} | ${ref.role} | ${ref.description}`);
+    }
+  } else if (input.referenceAssetIds && input.referenceAssetIds.length > 0) {
     userPromptLines.push(`Bound Reference Assets: ${input.referenceAssetIds.join(", ")}`);
   }
 

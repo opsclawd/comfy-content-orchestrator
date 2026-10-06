@@ -599,4 +599,65 @@ describe("PostgresReferenceAssetRepository Integration", () => {
     const repeatArchived = await repo.archive(client1.client_id, ref.asset_id as ReferenceAssetId);
     expect(repeatArchived).toBe(false);
   });
+
+  it("findDescriptionByContentHash ignores blank descriptions and returns undefined on cache miss", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const repo = new PostgresReferenceAssetRepository(client);
+    const hash = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+
+    // No asset exists yet
+    const notFound = await repo.findDescriptionByContentHash(hash);
+    expect(notFound).toBeUndefined();
+
+    // Asset with null description
+    await insertReferenceAssetRecord(client, {
+      clientId: clientRecord.client_id,
+      contentHashSha256: hash,
+      storageObjectKey: "assets/no-desc.png"
+    });
+    const stillNotFound = await repo.findDescriptionByContentHash(hash);
+    expect(stillNotFound).toBeUndefined();
+
+    // Update with whitespace only -> should not be treated as a valid cache hit
+    await client.query(
+      "UPDATE reference_assets SET description = '   ' WHERE content_hash_sha256 = $1",
+      [hash]
+    );
+    const whitespaceNotFound = await repo.findDescriptionByContentHash(hash);
+    expect(whitespaceNotFound).toBeUndefined();
+  });
+
+  it("updateDescriptionByContentHash updates all assets sharing the same content hash and findDescriptionByContentHash finds it", async () => {
+    const clientA = await insertClientRecord(client);
+    const clientB = await insertClientRecord(client);
+    const repo = new PostgresReferenceAssetRepository(client);
+    const sharedHash = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+
+    await insertReferenceAssetRecord(client, {
+      clientId: clientA.client_id,
+      contentHashSha256: sharedHash,
+      storageObjectKey: "assets/shared-a.png"
+    });
+    await insertReferenceAssetRecord(client, {
+      clientId: clientB.client_id,
+      contentHashSha256: sharedHash,
+      storageObjectKey: "assets/shared-b.png"
+    });
+
+    const descriptionText = "A stylish couple sitting at a modern outdoor lounge.";
+    await repo.updateDescriptionByContentHash(sharedHash, descriptionText);
+
+    // Verify lookup by content hash
+    const cachedDesc = await repo.findDescriptionByContentHash(sharedHash);
+    expect(cachedDesc).toBe(descriptionText);
+
+    // Verify both rows were updated
+    const rows = await client.query<{ description: string }>(
+      "SELECT description FROM reference_assets WHERE content_hash_sha256 = $1 ORDER BY asset_id ASC",
+      [sharedHash]
+    );
+    expect(rows.rows).toHaveLength(2);
+    expect(rows.rows[0]?.description).toBe(descriptionText);
+    expect(rows.rows[1]?.description).toBe(descriptionText);
+  });
 });

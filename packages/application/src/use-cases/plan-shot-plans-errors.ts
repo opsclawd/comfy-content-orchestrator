@@ -107,3 +107,15 @@ export class ShotPlanVariationIdempotencyConflictError extends Error {
     this.idempotencyKey = idempotencyKey;
   }
 }
+
+export class ReferenceAssetDescriptionGenerationError extends Error {
+  override readonly name = "ReferenceAssetDescriptionGenerationError";
+  readonly assetId: string;
+  readonly referenceAssetId: string;
+
+  constructor(assetId: string, message: string, options?: ErrorOptions) {
+    super(`Failed to generate description for reference asset '${assetId}': ${message}`, options);
+    this.assetId = assetId;
+    this.referenceAssetId = assetId;
+  }
+}
