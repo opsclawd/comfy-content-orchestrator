@@ -75,4 +75,22 @@ describe("parseShotPlanResponse", () => {
 
     expect(proposal.subjects[0]!.initialPosition).toBe("background_center");
   });
+
+  it("removes <think>...</think> reasoning blocks before parsing shot-plan JSON", () => {
+    const raw = rawShotPlan({
+      actionSummary: "Couple walks down stone steps.",
+      cameraPromptDescription: "Medium shot of couple on stone steps"
+    });
+
+    const responseWithThink = `<think>
+The user wants a shot plan based on the wedding photo and house references.
+I will set framing to medium, eye_level angle, and describe the action.
+</think>
+${JSON.stringify([raw])}`;
+
+    const [proposal] = parseShotPlanResponse(responseWithThink);
+    expect(proposal).toBeDefined();
+    expect(proposal!.actionSummary).toBe("Couple walks down stone steps.");
+    expect(proposal!.cameraPromptDescription).toBe("Medium shot of couple on stone steps");
+  });
 });

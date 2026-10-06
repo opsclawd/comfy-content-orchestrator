@@ -22,6 +22,7 @@ import { MAX_REFERENCE_IMAGE_BYTES, PlanShotPlansUseCase } from "./plan-shot-pla
 import {
   InvalidShotPlanVariantCountError,
   ReferenceAssetDescriptionGenerationError,
+  PlannerReferenceImageAcquisitionError,
   CampaignReferenceBibleRoleConflictError,
   StaleBibleBindingMismatchError
 } from "./plan-shot-plans-errors.js";
@@ -1948,6 +1949,770 @@ describe("PlanShotPlansUseCase", () => {
       });
       expect(result2.shotPlans).toHaveLength(1);
       expect(imageClientCalls).toBe(1); // Cached! No additional image-description call
+    });
+  });
+
+  describe("Planner receives reference images (gated)", () => {
+    it("attaches canonical reference images in canonical slot order and ignores unbound campaign assets", async () => {
+      const scene = Scene.create({
+        id: "01928374-abcd-7000-8000-000000000301" as SceneId,
+        campaignId,
+        configuration: {
+          prompt: "A couple in front of a white house with turquoise pool",
+          referenceIds: [],
+          engineProfileId: "ltx-2.5@certified-v1",
+          durationMs: 4000
+        }
+      });
+
+      // Asset 1: Subject (wedding photo)
+      const subjectAsset = createTestAsset({
+        id: "01928374-abcd-7000-8000-000000000401" as ReferenceAssetId,
+        contentHashSha256: "hash-subj-wedding",
+        description: "An East Asian couple in wedding attire on stone steps",
+        mimeType: "image/png"
+      });
+
+      // Asset 2: Location (pool house)
+      const locationAsset = createTestAsset({
+        id: "01928374-abcd-7000-8000-000000000402" as ReferenceAssetId,
+        contentHashSha256: "hash-loc-house",
+        description: "White stucco house with dark gables and turquoise pool",
+        mimeType: "image/webp"
+      });
+
+      // Asset 3: Unbound campaign asset
+      const unboundAsset = createTestAsset({
+        id: "01928374-abcd-7000-8000-000000000403" as ReferenceAssetId,
+        contentHashSha256: "hash-unbound-car",
+        description: "Vintage convertible sports car",
+        mimeType: "image/jpeg"
+      });
+
+      // Insert bindings in REVERSED order (location first, subject second)
+      const bindingLocation = createTestBinding(scene.id, {
+        referenceAssetId: locationAsset.id,
+        role: "location"
+      });
+      const bindingSubject = createTestBinding(scene.id, {
+        referenceAssetId: subjectAsset.id,
+        role: "subject_identity"
+      });
+
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      uow.seedReferenceAsset(subjectAsset);
+      uow.seedReferenceAsset(locationAsset);
+      uow.seedReferenceAsset(unboundAsset);
+      uow.seedSceneBinding(bindingLocation);
+      uow.seedSceneBinding(bindingSubject);
+
+      const subjBytes = Buffer.from("subj-png-bytes");
+      const locBytes = Buffer.from("loc-webp-bytes");
+      const unboundBytes = Buffer.from("unbound-bytes");
+
+      const storage = createMockStorage({
+        [subjectAsset.storageObjectKey]: subjBytes,
+        [locationAsset.storageObjectKey]: locBytes,
+        [unboundAsset.storageObjectKey]: unboundBytes
+      });
+
+      const capturedRequests: PlanningModelRequest[] = [];
+      const primaryClient: PlanningModelClientPort = {
+        providerName: "Anthropic",
+        imageCapability: true,
+        supportsImages: true,
+        complete: vi.fn().mockImplementation(async (req: PlanningModelRequest) => {
+          capturedRequests.push(req);
+          return {
+            kind: "success",
+            rawText: JSON.stringify(validVariantJson)
+          };
+        })
+      };
+      const fallbackClient = createMockClient("OpenAI", []);
+
+      const useCase = new PlanShotPlansUseCase({
+        uow,
+        primaryClient,
+        fallbackClient,
+        objectStorage: storage
+      });
+
+      const result = await useCase.execute({
+        sceneId: scene.id,
+        variantCount: 1,
+        externalProcessingPolicy: {
+          allowCloudPlanning: true,
+          allowedProviders: ["Anthropic"]
+        }
+      });
+
+      expect(result.shotPlans).toHaveLength(1);
+      expect(capturedRequests).toHaveLength(1);
+
+      const req = capturedRequests[0]!;
+      expect(req.images).toBeDefined();
+      expect(req.images).toHaveLength(2);
+      expect(req.bindingCount).toBe(2);
+      expect(req.maxImages).toBe(2);
+
+      // Canonical ordering dictates subject_identity (slot 1 / <Picture 1>) comes before location (slot 2 / <Picture 2>)
+      expect(req.images![0]!.mimeType).toBe("image/png");
+      expect(req.images![0]!.base64Data).toBe(subjBytes.toString("base64"));
+
+      expect(req.images![1]!.mimeType).toBe("image/webp");
+      expect(req.images![1]!.base64Data).toBe(locBytes.toString("base64"));
+
+      // Unbound asset is strictly excluded from storage requests and planner images
+      expect(storage.getCalls.map((c) => c.key)).not.toContain(unboundAsset.storageObjectKey);
+      expect(req.images!.some((img) => img.base64Data === unboundBytes.toString("base64"))).toBe(
+        false
+      );
+    });
+
+    it("fails closed with PlannerReferenceImageAcquisitionError naming failing asset when first image retrieval fails in a two-image case", async () => {
+      const scene = Scene.create({
+        id: "01928374-abcd-7000-8000-000000000302" as SceneId,
+        campaignId,
+        configuration: {
+          prompt: "A scene with two references",
+          referenceIds: [],
+          engineProfileId: "ltx-2.5@certified-v1",
+          durationMs: 4000
+        }
+      });
+
+      const subjectAsset = createTestAsset({
+        id: "01928374-abcd-7000-8000-000000000404" as ReferenceAssetId,
+        contentHashSha256: "hash-subj-fail",
+        description: "Subject character"
+      });
+      const locationAsset = createTestAsset({
+        id: "01928374-abcd-7000-8000-000000000405" as ReferenceAssetId,
+        contentHashSha256: "hash-loc-ok",
+        description: "Location set"
+      });
+
+      const bindingSubject = createTestBinding(scene.id, {
+        referenceAssetId: subjectAsset.id,
+        role: "subject_identity"
+      });
+      const bindingLocation = createTestBinding(scene.id, {
+        referenceAssetId: locationAsset.id,
+        role: "location"
+      });
+
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      uow.seedReferenceAsset(subjectAsset);
+      uow.seedReferenceAsset(locationAsset);
+      uow.seedSceneBinding(bindingSubject);
+      uow.seedSceneBinding(bindingLocation);
+
+      // Custom storage that throws on subject asset retrieval
+      const storage: ObjectStoragePort = {
+        putObject: vi.fn(),
+        copyObject: vi.fn(),
+        getObject: vi.fn(async (options: { bucket: string; key: string }) => {
+          if (options.key === subjectAsset.storageObjectKey) {
+            throw new Error("S3 read network failure");
+          }
+          return {
+            bucket: options.bucket,
+            key: options.key,
+            body: Buffer.from("loc-bytes"),
+            contentType: "image/jpeg"
+          };
+        })
+      };
+
+      const primaryClientComplete = vi.fn();
+      const primaryClient: PlanningModelClientPort = {
+        providerName: "Anthropic",
+        imageCapability: true,
+        supportsImages: true,
+        complete: primaryClientComplete
+      };
+      const fallbackClient = createMockClient("OpenAI", []);
+
+      const useCase = new PlanShotPlansUseCase({
+        uow,
+        primaryClient,
+        fallbackClient,
+        objectStorage: storage
+      });
+
+      let caughtError: unknown;
+      try {
+        await useCase.execute({
+          sceneId: scene.id,
+          variantCount: 1,
+          externalProcessingPolicy: {
+            allowCloudPlanning: true,
+            allowedProviders: ["Anthropic"]
+          }
+        });
+      } catch (err) {
+        caughtError = err;
+      }
+
+      expect(caughtError).toBeInstanceOf(PlannerReferenceImageAcquisitionError);
+      const typedErr = caughtError as PlannerReferenceImageAcquisitionError;
+      expect(typedErr.referenceAssetId).toBe(subjectAsset.id);
+      expect(typedErr.code).toBe("RETRIEVAL_FAILED");
+
+      // Verify no partial or shifted image list reached the planning model
+      expect(primaryClientComplete).not.toHaveBeenCalled();
+    });
+
+    it("fails closed with PlannerReferenceImageAcquisitionError when storage object is empty", async () => {
+      const scene = Scene.create({
+        id: "01928374-abcd-7000-8000-000000000303" as SceneId,
+        campaignId,
+        configuration: {
+          prompt: "Scene",
+          referenceIds: [],
+          engineProfileId: "ltx-2.5@certified-v1",
+          durationMs: 4000
+        }
+      });
+      const asset = createTestAsset({
+        id: "01928374-abcd-7000-8000-000000000406" as ReferenceAssetId,
+        contentHashSha256: "hash-empty",
+        description: "Asset with empty storage"
+      });
+      const binding = createTestBinding(scene.id, {
+        referenceAssetId: asset.id,
+        role: "subject_identity"
+      });
+
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      uow.seedReferenceAsset(asset);
+      uow.seedSceneBinding(binding);
+
+      const storage = createMockStorage({
+        [asset.storageObjectKey]: new Uint8Array(0)
+      });
+
+      const primaryClient: PlanningModelClientPort = {
+        providerName: "Anthropic",
+        imageCapability: true,
+        supportsImages: true,
+        complete: vi.fn()
+      };
+      const fallbackClient = createMockClient("OpenAI", []);
+
+      const useCase = new PlanShotPlansUseCase({
+        uow,
+        primaryClient,
+        fallbackClient,
+        objectStorage: storage
+      });
+
+      let caughtError: unknown;
+      try {
+        await useCase.execute({
+          sceneId: scene.id,
+          variantCount: 1,
+          externalProcessingPolicy: {
+            allowCloudPlanning: true,
+            allowedProviders: ["Anthropic"]
+          }
+        });
+      } catch (err) {
+        caughtError = err;
+      }
+
+      expect(caughtError).toBeInstanceOf(PlannerReferenceImageAcquisitionError);
+      const typedErr = caughtError as PlannerReferenceImageAcquisitionError;
+      expect(typedErr.referenceAssetId).toBe(asset.id);
+      expect(typedErr.code).toBe("EMPTY_IMAGE");
+    });
+
+    it("fails closed with PlannerReferenceImageAcquisitionError when storage object exceeds MAX_REFERENCE_IMAGE_BYTES", async () => {
+      const scene = Scene.create({
+        id: "01928374-abcd-7000-8000-000000000304" as SceneId,
+        campaignId,
+        configuration: {
+          prompt: "Scene",
+          referenceIds: [],
+          engineProfileId: "ltx-2.5@certified-v1",
+          durationMs: 4000
+        }
+      });
+      const asset = createTestAsset({
+        id: "01928374-abcd-7000-8000-000000000407" as ReferenceAssetId,
+        contentHashSha256: "hash-oversized",
+        description: "Oversized asset"
+      });
+      const binding = createTestBinding(scene.id, {
+        referenceAssetId: asset.id,
+        role: "subject_identity"
+      });
+
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      uow.seedReferenceAsset(asset);
+      uow.seedSceneBinding(binding);
+
+      const oversizedBody = new Uint8Array(MAX_REFERENCE_IMAGE_BYTES + 1);
+      const storage: ObjectStoragePort = {
+        putObject: vi.fn(),
+        copyObject: vi.fn(),
+        getObject: vi.fn(async (options: { bucket: string; key: string }) => ({
+          bucket: options.bucket,
+          key: options.key,
+          body: oversizedBody
+        }))
+      };
+
+      const primaryClient: PlanningModelClientPort = {
+        providerName: "Anthropic",
+        imageCapability: true,
+        supportsImages: true,
+        complete: vi.fn()
+      };
+      const fallbackClient = createMockClient("OpenAI", []);
+
+      const useCase = new PlanShotPlansUseCase({
+        uow,
+        primaryClient,
+        fallbackClient,
+        objectStorage: storage
+      });
+
+      let caughtError: unknown;
+      try {
+        await useCase.execute({
+          sceneId: scene.id,
+          variantCount: 1,
+          externalProcessingPolicy: {
+            allowCloudPlanning: true,
+            allowedProviders: ["Anthropic"]
+          }
+        });
+      } catch (err) {
+        caughtError = err;
+      }
+
+      expect(caughtError).toBeInstanceOf(PlannerReferenceImageAcquisitionError);
+      const typedErr = caughtError as PlannerReferenceImageAcquisitionError;
+      expect(typedErr.referenceAssetId).toBe(asset.id);
+      expect(typedErr.code).toBe("OVERSIZED_IMAGE");
+    });
+
+    it("fails closed with PlannerReferenceImageAcquisitionError on unsupported, generic, or missing MIME type", async () => {
+      const scene = Scene.create({
+        id: "01928374-abcd-7000-8000-000000000305" as SceneId,
+        campaignId,
+        configuration: {
+          prompt: "Scene",
+          referenceIds: [],
+          engineProfileId: "ltx-2.5@certified-v1",
+          durationMs: 4000
+        }
+      });
+      const asset = createTestAsset({
+        id: "01928374-abcd-7000-8000-000000000408" as ReferenceAssetId,
+        contentHashSha256: "hash-generic-mime",
+        description: "Asset with generic mime",
+        mimeType: "image/png"
+      });
+      const binding = createTestBinding(scene.id, {
+        referenceAssetId: asset.id,
+        role: "subject_identity"
+      });
+
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      uow.seedReferenceAsset(asset);
+      uow.seedSceneBinding(binding);
+
+      const storage: ObjectStoragePort = {
+        putObject: vi.fn(),
+        copyObject: vi.fn(),
+        getObject: vi.fn(async (options: { bucket: string; key: string }) => ({
+          bucket: options.bucket,
+          key: options.key,
+          body: Buffer.from("image bytes"),
+          contentType: "application/octet-stream"
+        }))
+      };
+
+      const primaryClient: PlanningModelClientPort = {
+        providerName: "Anthropic",
+        imageCapability: true,
+        supportsImages: true,
+        complete: vi.fn()
+      };
+      const fallbackClient = createMockClient("OpenAI", []);
+
+      const useCase = new PlanShotPlansUseCase({
+        uow,
+        primaryClient,
+        fallbackClient,
+        objectStorage: storage
+      });
+
+      let caughtError: unknown;
+      try {
+        await useCase.execute({
+          sceneId: scene.id,
+          variantCount: 1,
+          externalProcessingPolicy: {
+            allowCloudPlanning: true,
+            allowedProviders: ["Anthropic"]
+          }
+        });
+      } catch (err) {
+        caughtError = err;
+      }
+
+      expect(caughtError).toBeInstanceOf(PlannerReferenceImageAcquisitionError);
+      const typedErr = caughtError as PlannerReferenceImageAcquisitionError;
+      expect(typedErr.referenceAssetId).toBe(asset.id);
+      expect(typedErr.code).toBe("INVALID_MIME_TYPE");
+    });
+
+    it("follows MIME precedence: verified storage contentType takes precedence when provided; otherwise falls back to validated asset metadata", async () => {
+      const scene = Scene.create({
+        id: "01928374-abcd-7000-8000-000000000306" as SceneId,
+        campaignId,
+        configuration: {
+          prompt: "Scene",
+          referenceIds: [],
+          engineProfileId: "ltx-2.5@certified-v1",
+          durationMs: 4000
+        }
+      });
+      // Asset 1 has domain mimeType image/png; storage has contentType image/jpeg -> jpeg wins
+      const asset1 = createTestAsset({
+        id: "01928374-abcd-7000-8000-000000000409" as ReferenceAssetId,
+        contentHashSha256: "hash-mime-prec-1",
+        description: "Asset 1",
+        mimeType: "image/png"
+      });
+      // Asset 2 has domain mimeType image/webp; storage returns no contentType -> webp wins
+      const asset2 = createTestAsset({
+        id: "01928374-abcd-7000-8000-000000000410" as ReferenceAssetId,
+        contentHashSha256: "hash-mime-prec-2",
+        description: "Asset 2",
+        mimeType: "image/webp"
+      });
+
+      const binding1 = createTestBinding(scene.id, {
+        referenceAssetId: asset1.id,
+        role: "subject_identity"
+      });
+      const binding2 = createTestBinding(scene.id, {
+        referenceAssetId: asset2.id,
+        role: "location"
+      });
+
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      uow.seedReferenceAsset(asset1);
+      uow.seedReferenceAsset(asset2);
+      uow.seedSceneBinding(binding1);
+      uow.seedSceneBinding(binding2);
+
+      const storage: ObjectStoragePort = {
+        putObject: vi.fn(),
+        copyObject: vi.fn(),
+        getObject: vi.fn(async (options: { bucket: string; key: string }) => {
+          if (options.key === asset1.storageObjectKey) {
+            return {
+              bucket: options.bucket,
+              key: options.key,
+              body: Buffer.from("asset1-bytes"),
+              contentType: "image/jpeg"
+            };
+          }
+          return {
+            bucket: options.bucket,
+            key: options.key,
+            body: Buffer.from("asset2-bytes")
+          };
+        })
+      };
+
+      const capturedRequests: PlanningModelRequest[] = [];
+      const primaryClient: PlanningModelClientPort = {
+        providerName: "Anthropic",
+        imageCapability: true,
+        supportsImages: true,
+        complete: vi.fn().mockImplementation(async (req: PlanningModelRequest) => {
+          capturedRequests.push(req);
+          return {
+            kind: "success",
+            rawText: JSON.stringify(validVariantJson)
+          };
+        })
+      };
+      const fallbackClient = createMockClient("OpenAI", []);
+
+      const useCase = new PlanShotPlansUseCase({
+        uow,
+        primaryClient,
+        fallbackClient,
+        objectStorage: storage
+      });
+
+      await useCase.execute({
+        sceneId: scene.id,
+        variantCount: 1,
+        externalProcessingPolicy: {
+          allowCloudPlanning: true,
+          allowedProviders: ["Anthropic"]
+        }
+      });
+
+      expect(capturedRequests).toHaveLength(1);
+      const req = capturedRequests[0]!;
+      expect(req.images![0]!.mimeType).toBe("image/jpeg"); // Verified storage contentType takes precedence
+      expect(req.images![1]!.mimeType).toBe("image/webp"); // Fallback to domain metadata when storage has no contentType
+    });
+
+    it("propagates deadline cancellation when abort occurs during planner image acquisition", async () => {
+      const scene = Scene.create({
+        id: "01928374-abcd-7000-8000-000000000307" as SceneId,
+        campaignId,
+        configuration: {
+          prompt: "Scene",
+          referenceIds: [],
+          engineProfileId: "ltx-2.5@certified-v1",
+          durationMs: 4000
+        }
+      });
+      const asset = createTestAsset({
+        id: "01928374-abcd-7000-8000-000000000411" as ReferenceAssetId,
+        contentHashSha256: "hash-abort",
+        description: "Asset to abort"
+      });
+      const binding = createTestBinding(scene.id, {
+        referenceAssetId: asset.id,
+        role: "subject_identity"
+      });
+
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      uow.seedReferenceAsset(asset);
+      uow.seedSceneBinding(binding);
+
+      const storage: ObjectStoragePort = {
+        putObject: vi.fn(),
+        copyObject: vi.fn(),
+        getObject: vi.fn(
+          async (
+            _options: { bucket: string; key: string },
+            execOptions?: { signal?: AbortSignal }
+          ) => {
+            if (execOptions?.signal?.aborted) {
+              throw execOptions.signal.reason ?? new Error("Aborted");
+            }
+            throw new Error("Deadline exceeded");
+          }
+        )
+      };
+
+      const primaryClient: PlanningModelClientPort = {
+        providerName: "Anthropic",
+        imageCapability: true,
+        supportsImages: true,
+        complete: vi.fn()
+      };
+      const fallbackClient = createMockClient("OpenAI", []);
+
+      const useCase = new PlanShotPlansUseCase({
+        uow,
+        primaryClient,
+        fallbackClient,
+        objectStorage: storage
+      });
+
+      // Pass an already expired overall timeout
+      await expect(
+        useCase.execute({
+          sceneId: scene.id,
+          variantCount: 1,
+          overallTimeoutMs: 1,
+          externalProcessingPolicy: {
+            allowCloudPlanning: true,
+            allowedProviders: ["Anthropic"]
+          }
+        })
+      ).rejects.toThrow();
+    });
+
+    it("requires no object storage and produces byte-identical text-only request when model image capability is off", async () => {
+      const scene = Scene.create({
+        id: "01928374-abcd-7000-8000-000000000308" as SceneId,
+        campaignId,
+        configuration: {
+          prompt: "Scene with reference description but no image capability",
+          referenceIds: [],
+          engineProfileId: "ltx-2.5@certified-v1",
+          durationMs: 4000
+        }
+      });
+      const asset = createTestAsset({
+        id: "01928374-abcd-7000-8000-000000000412" as ReferenceAssetId,
+        contentHashSha256: "hash-text-only",
+        description: "Pre-existing cached description"
+      });
+      const binding = createTestBinding(scene.id, {
+        referenceAssetId: asset.id,
+        role: "subject_identity"
+      });
+
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      uow.seedReferenceAsset(asset);
+      uow.seedSceneBinding(binding);
+
+      const capturedRequests: PlanningModelRequest[] = [];
+      const primaryClient: PlanningModelClientPort = {
+        providerName: "Anthropic",
+        imageCapability: false,
+        supportsImages: false,
+        complete: vi.fn().mockImplementation(async (req: PlanningModelRequest) => {
+          capturedRequests.push(req);
+          return {
+            kind: "success",
+            rawText: JSON.stringify(validVariantJson)
+          };
+        })
+      };
+      const fallbackClient: PlanningModelClientPort = {
+        providerName: "OpenAI",
+        imageCapability: false,
+        supportsImages: false,
+        complete: vi.fn()
+      };
+
+      // Notice objectStorage is NOT provided!
+      const useCase = new PlanShotPlansUseCase({
+        uow,
+        primaryClient,
+        fallbackClient
+      });
+
+      const result = await useCase.execute({
+        sceneId: scene.id,
+        variantCount: 1,
+        externalProcessingPolicy: {
+          allowCloudPlanning: true,
+          allowedProviders: ["Anthropic"]
+        }
+      });
+
+      expect(result.shotPlans).toHaveLength(1);
+      expect(capturedRequests).toHaveLength(1);
+
+      const req = capturedRequests[0]!;
+      expect(req.images).toBeUndefined();
+      expect(req.bindingCount).toBeUndefined();
+      expect(req.maxImages).toBeUndefined();
+      expect(req.userPrompt).toContain("Pre-existing cached description");
+    });
+
+    it("satisfies DESIGN-2: downstream ShotPlan contracts and saved shot plans remain intact without storing transient planner images", async () => {
+      const scene = Scene.create({
+        id: "01928374-abcd-7000-8000-000000000309" as SceneId,
+        campaignId,
+        configuration: {
+          prompt: "Scene for DESIGN-2 contract preservation verification",
+          referenceIds: [],
+          engineProfileId: "ltx-2.5@certified-v1",
+          durationMs: 4000
+        }
+      });
+      const asset = createTestAsset({
+        id: "01928374-abcd-7000-8000-000000000413" as ReferenceAssetId,
+        contentHashSha256: "hash-design-2",
+        description: "Subject reference for DESIGN-2 test",
+        storageObjectKey: "refs/design-2.png",
+        mimeType: "image/png"
+      });
+      const binding = createTestBinding(scene.id, {
+        referenceAssetId: asset.id,
+        role: "subject_identity"
+      });
+
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      uow.seedReferenceAsset(asset);
+      uow.seedSceneBinding(binding);
+
+      const storage: ObjectStoragePort = {
+        putObject: vi.fn(),
+        copyObject: vi.fn(),
+        getObject: vi.fn(async (options: { bucket: string; key: string }) => ({
+          bucket: options.bucket,
+          key: options.key,
+          body: Buffer.from("image-bytes-design-2"),
+          contentType: "image/png"
+        }))
+      };
+
+      const capturedRequests: PlanningModelRequest[] = [];
+      const primaryClient: PlanningModelClientPort = {
+        providerName: "Anthropic",
+        imageCapability: true,
+        supportsImages: true,
+        complete: vi.fn().mockImplementation(async (req: PlanningModelRequest) => {
+          capturedRequests.push(req);
+          return {
+            kind: "success",
+            rawText: JSON.stringify(validVariantJson)
+          };
+        })
+      };
+      const fallbackClient = createMockClient("OpenAI", []);
+
+      const useCase = new PlanShotPlansUseCase({
+        uow,
+        primaryClient,
+        fallbackClient,
+        objectStorage: storage
+      });
+
+      const result = await useCase.execute({
+        sceneId: scene.id,
+        variantCount: 1,
+        externalProcessingPolicy: {
+          allowCloudPlanning: true,
+          allowedProviders: ["Anthropic"]
+        }
+      });
+
+      // 1. Planner request received the transient images
+      expect(capturedRequests).toHaveLength(1);
+      expect(capturedRequests[0]!.images).toBeDefined();
+      expect(capturedRequests[0]!.images).toHaveLength(1);
+      expect(capturedRequests[0]!.images![0]!.mimeType).toBe("image/png");
+
+      // 2. Saved ShotPlan records and returned contracts are completely intact and do not store transient images
+      expect(result.shotPlans).toHaveLength(1);
+      expect(uow.savedShotPlans).toHaveLength(1);
+      const savedPlan = uow.savedShotPlans[0]!;
+
+      // ShotPlan schema fields are populated per contract
+      expect(savedPlan.sceneId).toBe(scene.id);
+      expect(savedPlan.specRevision).toBe(scene.specRevision);
+      expect(savedPlan.variantOrdinal).toBe(1);
+      expect(savedPlan.status).toBe("draft");
+      expect(savedPlan.routingMode).toBe("reference_directed");
+      expect(savedPlan.actionSummary).toBe(validVariantJson[0]!.actionSummary);
+      expect(savedPlan.cameraPromptDescription).toBe(validVariantJson[0]!.cameraPromptDescription);
+
+      // Verify no transient planner image data leaked into ShotPlan record or entity
+      expect((savedPlan as unknown as Record<string, unknown>)["images"]).toBeUndefined();
+      expect((savedPlan as unknown as Record<string, unknown>)["base64Data"]).toBeUndefined();
+
+      // 3. SceneReferenceBindings in storage remain unmodified
+      await uow.execute(async (ctx) => {
+        expect(ctx.referenceAssets?.listBindingsBySceneId).toBeDefined();
+        const sceneBindings = await ctx.referenceAssets!.listBindingsBySceneId!(scene.id, {
+          specRevision: scene.specRevision
+        });
+        expect(sceneBindings).toHaveLength(1);
+        expect(sceneBindings[0]!.referenceAssetId).toBe(asset.id);
+        expect(sceneBindings[0]!.role).toBe("subject_identity");
+      });
     });
   });
 });

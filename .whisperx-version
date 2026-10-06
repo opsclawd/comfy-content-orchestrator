@@ -6,6 +6,9 @@ WHISPERX_TORCHAUDIO_VERSION=2.5.1
 # time. It is not declared by whisperx's own package metadata for this version, so
 # it must be installed explicitly or `import whisperx` fails outright.
 WHISPERX_MATPLOTLIB_VERSION=3.11.1
+# transformers 5.18+ requires torch.accelerator (PyTorch >= 2.6). With torchaudio/torch 2.5.1,
+# transformers must be pinned < 5.18.0.
+WHISPERX_TRANSFORMERS_VERSION=5.17.0
 WHISPERX_VENV_DIR=node_modules/.cache/whisperx-venv
 WHISPERX_MODEL_DIR=node_modules/.cache/whisperx-model
 WHISPERX_ALIGNMENT_MODEL_ID=WAV2VEC2_ASR_BASE_960H

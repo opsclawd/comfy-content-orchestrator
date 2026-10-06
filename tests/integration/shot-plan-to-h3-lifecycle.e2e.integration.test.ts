@@ -281,7 +281,7 @@ describe("ShotPlan-to-H3 E2E Integration (#331)", () => {
       imageCapability: true,
       supportsImages: true,
       complete: async (req) => {
-        if (req.images && req.images.length > 0) {
+        if (req.systemPrompt?.includes("visual analysis assistant")) {
           return {
             kind: "success",
             rawText: "Cyberpunk reference asset visual description"

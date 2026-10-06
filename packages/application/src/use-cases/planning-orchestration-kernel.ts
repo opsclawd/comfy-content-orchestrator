@@ -233,7 +233,8 @@ export class PlanningOrchestrationKernel {
       // One corrective retry against the same client with feedback
       attempts.push({ provider: providerName, failureReason: rejectionReason });
       const correctiveRequest = promptBuilder(rejectionReason);
-      const correctiveOutcome = await client.complete(correctiveRequest);
+      const effectiveCorrectiveRequest = this.projectRequestForClient(correctiveRequest, client);
+      const correctiveOutcome = await client.complete(effectiveCorrectiveRequest);
 
       if (correctiveOutcome.kind === "safety_refusal") {
         throw new PlanningSafetyRefusalError(correctiveOutcome.message, {
@@ -267,7 +268,8 @@ export class PlanningOrchestrationKernel {
     }
 
     const initialRequest = promptBuilder();
-    const firstOutcome = await client.complete(initialRequest);
+    const effectiveInitialRequest = this.projectRequestForClient(initialRequest, client);
+    const firstOutcome = await client.complete(effectiveInitialRequest);
     const firstDecision = decidePlanningFallback(firstOutcome, 1);
 
     if (firstDecision === "terminal_safety_refusal") {
@@ -301,7 +303,7 @@ export class PlanningOrchestrationKernel {
       }
 
       // Second attempt on same client
-      const secondOutcome = await client.complete(initialRequest);
+      const secondOutcome = await client.complete(effectiveInitialRequest);
       const secondDecision = decidePlanningFallback(secondOutcome, 2);
 
       if (secondDecision === "terminal_safety_refusal") {
@@ -333,5 +335,28 @@ export class PlanningOrchestrationKernel {
       failureReason: (firstOutcome as { readonly message: string }).message
     });
     return undefined;
+  }
+
+  private projectRequestForClient(
+    request: PlanningModelRequest,
+    client: PlanningModelClientPort
+  ): PlanningModelRequest {
+    const isCapable = client.imageCapability === true || client.supportsImages === true;
+    if (isCapable) {
+      return request;
+    }
+    if (
+      request.images !== undefined ||
+      request.bindingCount !== undefined ||
+      request.maxImages !== undefined
+    ) {
+      return {
+        ...request,
+        images: undefined,
+        bindingCount: undefined,
+        maxImages: undefined
+      };
+    }
+    return request;
   }
 }
