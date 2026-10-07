@@ -138,7 +138,7 @@ export const LtxI2vWorkloadIdentitySchema = z.object({
 });
 export type LtxI2vWorkloadIdentity = z.infer<typeof LtxI2vWorkloadIdentitySchema>;
 
-export const FluxSchnellWorkloadIdentitySchema = z.object({
+const FluxSchnellDraftWorkloadIdentitySchema = z.object({
   profileId: z.literal("flux-schnell-draft"),
   renderProfileKey: z.literal("FLUX_SCHNELL_DRAFT_V1"),
   renderProfileVersion: z.literal(1),
@@ -152,6 +152,25 @@ export const FluxSchnellWorkloadIdentitySchema = z.object({
   comfyUiCommit: gitCommitHashSchema,
   customNodes: z.array(CustomNodeIdentitySchema)
 });
+const FluxSchnellStoryboardWorkloadIdentitySchema = z.object({
+  profileId: z.literal("flux_schnell_storyboard_v1"),
+  renderProfileKey: z.literal("FLUX_SCHNELL_STORYBOARD_V1"),
+  renderProfileVersion: z.literal(1),
+  engine: z.literal("flux_schnell"),
+  width: z.literal(1024),
+  height: z.literal(1024),
+  frames: z.literal(1),
+  steps: z.literal(4),
+  workflowSha256: sha256HashSchema,
+  modelSha256: z.record(z.string().min(1), sha256HashSchema),
+  comfyUiCommit: gitCommitHashSchema,
+  customNodes: z.array(CustomNodeIdentitySchema)
+});
+// Each FLUX profile ID is valid only with its own render key.
+export const FluxSchnellWorkloadIdentitySchema = z.union([
+  FluxSchnellDraftWorkloadIdentitySchema,
+  FluxSchnellStoryboardWorkloadIdentitySchema
+]);
 export const MinimaxH3WorkloadIdentitySchema = z.object({
   profileId: z.literal("minimax-h3-720p-124f-i2v"),
   renderProfileKey: z.literal("MINIMAX_H3_720P_5S_I2V_V1"),
@@ -184,7 +203,7 @@ export const MinimaxH3Ref2vWorkloadIdentitySchema = z.object({
 });
 export type MinimaxH3Ref2vWorkloadIdentity = z.infer<typeof MinimaxH3Ref2vWorkloadIdentitySchema>;
 
-export const CertificationWorkloadIdentitySchema = z.discriminatedUnion("engine", [
+export const CertificationWorkloadIdentitySchema = z.union([
   LtxWorkloadIdentitySchema,
   LtxI2vWorkloadIdentitySchema,
   FluxSchnellWorkloadIdentitySchema,
