@@ -227,6 +227,44 @@ describe("PostgreSQL SceneReviewQueries Read Adapter Integration", () => {
     );
   });
 
+  it('withholds legacy "reroll" once a scene has ShotPlans, keeping only "reroll_shotplan" (regression for #408)', async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+
+    const sceneRecord = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      durationSeconds: 5.0,
+      visualDescription: "A scene with ShotPlans already generated.",
+      engineAssigned: "minimax_h3_ref2v",
+      status: "director_review",
+      specRevision: 1
+    });
+
+    await client.query(
+      `
+      INSERT INTO shot_plans (
+        scene_id, spec_revision, variant_ordinal, status, routing_mode,
+        target_duration_ms, target_frame_count, framing, camera_angle,
+        camera_movement, lighting_style, structured_plan
+      ) VALUES (
+        $1, $2, $3, $4, 'reference_directed',
+        5000, 124, 'medium', 'eye_level',
+        'static', 'natural_golden_hour',
+        '{"movementSpeed": "medium", "actionSummary": "Subject walks forward", "beats": [], "subjects": []}'::jsonb
+      )
+      `,
+      [sceneRecord.scene_id, 1, 1, "draft"]
+    );
+
+    const queryAdapter = new PostgresSceneReviewQueries(client);
+    const detail = await queryAdapter.getSceneReviewDetail(sceneRecord.scene_id as SceneId);
+
+    expect(detail?.shotPlans?.length ?? 0).toBeGreaterThan(0);
+    expect(detail?.allowedActions).toContain("reroll_shotplan");
+    expect(detail?.allowedActions).not.toContain("reroll");
+  });
+
   it("returns undefined when sceneId is not found", async () => {
     const queryAdapter = new PostgresSceneReviewQueries(client);
     const result = await queryAdapter.getSceneReviewDetail(
