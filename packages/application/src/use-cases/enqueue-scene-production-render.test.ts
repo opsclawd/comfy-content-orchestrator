@@ -771,6 +771,79 @@ describe("EnqueueSceneProductionRenderUseCase", () => {
     expect(hashBytes.hashBytes).toHaveBeenCalledWith(testBytes);
   });
 
+  it("uses the compiled ShotPlan instruction text as the MiniMax-H3 job prompt, not the scene's raw configuration prompt (regression for #406)", async () => {
+    // createApprovedSceneWithShotPlan always sets this fixed raw prompt.
+    const rawScenePrompt = "Cinematic sunset over mountain peak";
+    const shotPlan = createApprovedShotPlan("scene-406-compiled-prompt", {
+      routingMode: "reference_directed"
+    });
+    const scene = createApprovedSceneWithShotPlan("scene-406-compiled-prompt", shotPlan, {
+      engineProfileId: "MINIMAX_H3_720P_5S_REF2V_V1"
+    });
+
+    const refAsset: ReferenceAsset = {
+      id: "ref-asset-406" as ReferenceAssetId,
+      clientId: "client-1",
+      storageBucket: "assets",
+      storageObjectKey: "refs/asset-406.png",
+      contentHashSha256: validHash,
+      mimeType: "image/png",
+      assetType: "image"
+    };
+    const binding: SceneReferenceBinding = {
+      sceneId: scene.id,
+      specRevision: 1,
+      referenceAssetId: refAsset.id,
+      role: "subject_identity",
+      weight: 1
+    };
+
+    const queue = new InMemoryJobQueue();
+    const uow = new InMemorySceneUnitOfWork([scene]).withJobs(queue);
+    uow.seedCampaign(validCampaign);
+    uow.seedShotPlan(shotPlan);
+    uow.seedReferenceAsset(refAsset);
+    uow.seedSceneBinding(binding);
+    uow.seedCampaignReferenceBible({
+      campaignId: validCampaign.id,
+      referenceAssetId: refAsset.id,
+      role: "subject_identity",
+      description: "Bible description that must reach the real production prompt (#406)",
+      biblePromptTag: "<Picture 1>",
+      sourceContentHashSha256: refAsset.contentHashSha256,
+      createdAt: "2026-08-15T00:00:00.000Z",
+      updatedAt: "2026-08-15T00:00:00.000Z"
+    });
+
+    const objectStorage = {
+      getObject: vi.fn().mockResolvedValue({ body: validPngBytes }),
+      putObject: vi.fn(),
+      copyObject: vi.fn(),
+      deleteObject: vi.fn(),
+      headObject: vi.fn()
+    };
+    const hashBytes = {
+      hashBytes: vi.fn().mockResolvedValue(refAsset.contentHashSha256)
+    };
+
+    const useCase = new EnqueueSceneProductionRenderUseCase(uow, {
+      objectStorage,
+      hashBytes
+    });
+
+    const result = await useCase.execute({ sceneId: "scene-406-compiled-prompt" });
+    const payload = result.job.injectedPayload as { prompt: string };
+
+    // The raw scene prompt alone must never reach the real job payload for MiniMax-H3 —
+    // it must be the ShotPlan compiler's output, which pulls the bound reference's bible
+    // description into a "[Subject Identity]" clause tagged with its <Picture N> tag.
+    expect(payload.prompt).not.toBe(rawScenePrompt);
+    expect(payload.prompt).toContain("<Picture 1>");
+    expect(payload.prompt).toContain(
+      "Bible description that must reach the real production prompt (#406)"
+    );
+  });
+
   it("fails closed when reference asset bytes are missing or empty in storage", async () => {
     const shotPlan = createApprovedShotPlan("scene-storage-empty", {
       routingMode: "reference_directed"

@@ -202,7 +202,7 @@ export class EnqueueSceneProductionRenderUseCase {
     }
 
     const injectedPayload: Record<string, unknown> = {
-      prompt: snapshot.configuration.prompt,
+      prompt: prep.inspection.instruction.compiledText,
       seed,
       shotPlanId: prep.inspection.authority.shotPlanId,
       specRevision: snapshot.specRevision,
