@@ -1208,6 +1208,15 @@ a:hover {
   cursor: not-allowed;
 }
 
+.confirm-button.confirm-button-danger {
+  background-color: var(--color-danger, #ef4444);
+  color: #ffffff;
+}
+
+.confirm-button.confirm-button-danger:hover:not(:disabled) {
+  background-color: #dc2626;
+}
+
 /* Indicators and Banners */
 .syncing-indicator {
   background-color: var(--status-active-bg);

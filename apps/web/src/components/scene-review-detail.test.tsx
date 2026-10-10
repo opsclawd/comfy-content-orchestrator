@@ -318,4 +318,94 @@ describe("SceneReviewDetailView: ShotPlanPanel Reachability & Generation", () =>
       );
     });
   });
+
+  it("clicking cancel in toolbar opens confirmation modal with irreversible warning and requires explicit confirmation before submitting cancel command", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        sceneId: "123e4567-e89b-12d3-a456-426614174000",
+        status: "cancelled",
+        specRevision: 2,
+        isIdempotentReplay: false
+      })
+    });
+    vi.stubGlobal("fetch", mockFetch);
+
+    const detail = createSampleDetail({
+      allowedActions: ["approve", "reject", "reroll", "cancel"]
+    });
+
+    render(<SceneReviewDetailView detail={detail} />);
+
+    // Cancel action button is present in toolbar
+    const cancelButton = screen.getByTestId("action-button-cancel");
+    expect(cancelButton).toBeDefined();
+
+    // 1. Initial click on Cancel toolbar button: NO fetch command is issued!
+    fireEvent.click(cancelButton);
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    // 2. Modal dialog appears with explicit cancellation warning and custom button
+    const dialog = await screen.findByTestId("review-command-dialog");
+    expect(dialog).toBeDefined();
+
+    const warning = screen.getByTestId("dialog-cancellation-warning");
+    expect(warning).toBeDefined();
+    expect(warning.getAttribute("role")).toBe("alert");
+    expect(warning.textContent).toContain(
+      "This permanently cancels the scene. This cannot be undone."
+    );
+
+    const confirmBtn = screen.getByTestId("confirm-command-button");
+    expect(confirmBtn.textContent).toBe("Permanently Cancel Scene");
+    expect(confirmBtn.classList.contains("confirm-button-danger")).toBe(true);
+
+    // 3. User can cancel/dismiss out of the modal without submitting
+    const cancelModalBtn = screen.getByTestId("cancel-confirmation-button");
+    fireEvent.click(cancelModalBtn);
+    expect(screen.queryByTestId("review-command-dialog")).toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    // 4. Re-open modal and explicitly click "Permanently Cancel Scene"
+    fireEvent.click(cancelButton);
+    const reopenedDialog = await screen.findByTestId("review-command-dialog");
+    expect(reopenedDialog).toBeDefined();
+
+    const finalConfirmBtn = screen.getByTestId("confirm-command-button");
+    fireEvent.click(finalConfirmBtn);
+
+    // Command submission proceeds after secondary confirmation click
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith(
+        `/api/scenes/${detail.sceneId}/review-command`,
+        expect.objectContaining({
+          method: "POST",
+          body: expect.stringContaining('"action":"cancel"')
+        })
+      );
+    });
+  });
+
+  it("clicking non-cancel toolbar action does not show cancellation warning and uses standard Confirm & Submit wording", async () => {
+    const detail = createSampleDetail({
+      allowedActions: ["approve", "reject", "cancel"]
+    });
+
+    render(<SceneReviewDetailView detail={detail} />);
+
+    const rejectButton = screen.getByTestId("action-button-reject");
+    fireEvent.click(rejectButton);
+
+    const dialog = await screen.findByTestId("review-command-dialog");
+    expect(dialog).toBeDefined();
+
+    // Does NOT render cancellation warning
+    expect(screen.queryByTestId("dialog-cancellation-warning")).toBeNull();
+
+    // Confirm button has standard label, not cancellation label
+    const confirmBtn = screen.getByTestId("confirm-command-button");
+    expect(confirmBtn.textContent).toBe("Confirm & Submit");
+    expect(confirmBtn.classList.contains("confirm-button-danger")).toBe(false);
+  });
 });

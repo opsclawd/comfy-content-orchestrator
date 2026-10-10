@@ -973,6 +973,28 @@ export function ReviewCommandControls({
               </div>
             )}
 
+            {currentAction === "cancel" && (
+              <div
+                className="dialog-cancellation-warning"
+                data-testid="dialog-cancellation-warning"
+                role="alert"
+                style={{
+                  padding: "0.75rem 1rem",
+                  backgroundColor: "rgba(239, 68, 68, 0.1)",
+                  border: "1px solid var(--color-danger, #ef4444)",
+                  borderRadius: "var(--radius-sm, 4px)",
+                  color: "var(--color-danger, #ef4444)",
+                  marginBottom: "1rem",
+                  fontSize: "0.875rem"
+                }}
+              >
+                <strong>Warning: Permanent Cancellation</strong>
+                <p style={{ margin: "0.25rem 0 0 0" }}>
+                  This permanently cancels the scene. This cannot be undone.
+                </p>
+              </div>
+            )}
+
             <div className="dialog-summary" data-testid="dialog-summary">
               <dl className="dialog-detail-list">
                 <div className="dialog-detail-item">
@@ -1164,12 +1186,16 @@ export function ReviewCommandControls({
             <div className="dialog-actions">
               <button
                 type="button"
-                className="confirm-button"
+                className={`confirm-button${currentAction === "cancel" ? " confirm-button-danger" : ""}`}
                 data-testid="confirm-command-button"
                 disabled={isSubmitting}
                 onClick={handleConfirmClick}
               >
-                {isSubmitting ? "Submitting..." : "Confirm & Submit"}
+                {isSubmitting
+                  ? "Submitting..."
+                  : currentAction === "cancel"
+                    ? "Permanently Cancel Scene"
+                    : "Confirm & Submit"}
               </button>
               <button
                 type="button"
