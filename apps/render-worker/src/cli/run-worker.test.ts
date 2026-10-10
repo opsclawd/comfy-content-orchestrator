@@ -1,3 +1,7 @@
+import { existsSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   type StorageAdmissionPolicy,
@@ -20,12 +24,17 @@ import type {
   RenderEnginePort,
   CampaignRepository
 } from "@cco/application";
-import type { CertificationProvenanceReport } from "@cco/infrastructure";
+import {
+  HostFsStorageTelemetryAdapter,
+  HostFsStorageTelemetryError,
+  type CertificationProvenanceReport
+} from "@cco/infrastructure";
 import type { ControlApiClient } from "../control-api-client.js";
 import { RenderWorker, type StorageAdmissionEnforcer, type WorkerLogger } from "../worker.js";
 import {
   WorkerConfigError,
   createProductionWorker,
+  ensureStorageTelemetryDirectory,
   isDirectExecution,
   parseStorageTelemetryPath,
   parseWorkerRuntimeConfig,
@@ -120,7 +129,7 @@ function validProductionEnv(): NodeJS.ProcessEnv {
 
 function minimalValidEnv(): NodeJS.ProcessEnv {
   return {
-    STORAGE_TELEMETRY_PATH: "/var/run/storage",
+    STORAGE_TELEMETRY_PATH: path.join(tmpdir(), "cco-storage-observation-test"),
     CONTROL_API_BASE_URL: "http://localhost:3000",
     COMFYUI_URL: "http://127.0.0.1:8188",
     COMFYUI_DIR: "/opt/comfyui",
@@ -1122,6 +1131,135 @@ describe("run-worker CLI", () => {
       expect(process.listenerCount("SIGTERM")).toBe(sigtermCountBefore);
 
       consoleSpy.mockRestore();
+    });
+
+    it("creates previously nonexistent storagePath so getStorageTelemetry succeeds where it previously threw ENOENT", async () => {
+      const tempBase = await mkdtemp(path.join(tmpdir(), "cco-telemetry-test-"));
+      const nonexistentPath = path.join(tempBase, "nested", "telemetry-observation");
+
+      try {
+        expect(existsSync(nonexistentPath)).toBe(false);
+
+        // Before bootstrap creation: adapter throws HostFsStorageTelemetryError with ENOENT
+        const adapter = new HostFsStorageTelemetryAdapter({ storagePath: nonexistentPath });
+        await expect(adapter.getStorageTelemetry()).rejects.toThrow(HostFsStorageTelemetryError);
+        await expect(adapter.getStorageTelemetry()).rejects.toThrow("ENOENT");
+
+        // Worker bootstrap creates the directory
+        await ensureStorageTelemetryDirectory(nonexistentPath);
+        expect(existsSync(nonexistentPath)).toBe(true);
+
+        // After bootstrap creation: getStorageTelemetry succeeds and returns valid telemetry
+        const telemetry = await adapter.getStorageTelemetry();
+        expect(telemetry.totalBytes).toBeGreaterThan(0);
+        expect(telemetry.freeBytes).toBeGreaterThan(0);
+        expect(telemetry.buckets.length).toBeGreaterThan(0);
+      } finally {
+        await rm(tempBase, { recursive: true, force: true });
+      }
+    });
+
+    it("creates nonexistent STORAGE_TELEMETRY_PATH before worker.start() begins", async () => {
+      const tempBase = await mkdtemp(path.join(tmpdir(), "cco-cli-test-"));
+      const nonexistentPath = path.join(tempBase, "new-storage", "observation");
+      expect(existsSync(nonexistentPath)).toBe(false);
+
+      let pathExistedWhenStartCalled = false;
+      const startSpy = vi.spyOn(RenderWorker.prototype, "start").mockImplementation(async function (
+        this: RenderWorker
+      ) {
+        pathExistedWhenStartCalled = existsSync(nonexistentPath);
+      });
+
+      try {
+        const env: NodeJS.ProcessEnv = {
+          ...minimalValidEnv(),
+          STORAGE_TELEMETRY_PATH: nonexistentPath,
+          WORKER_ALLOWED_JOB_KINDS: "candidate"
+        };
+
+        const exitCode = await runWorkerCli([], env, {
+          controlApiClient: new TestControlApiClient(),
+          objectStorage: new TestObjectStorage(),
+          enforceStorageAdmission: new TestAdmissionEnforcer(),
+          renderJobExecutor: async () => ({ candidatePayload: { variantOrdinal: 1 } }),
+          logger: testLogger,
+          sleep: testSleep
+        });
+
+        expect(exitCode).toBe(0);
+        expect(pathExistedWhenStartCalled).toBe(true);
+        expect(existsSync(nonexistentPath)).toBe(true);
+      } finally {
+        startSpy.mockRestore();
+        await rm(tempBase, { recursive: true, force: true });
+      }
+    });
+
+    it("guarantees ordering: directory creation completes before worker is started", async () => {
+      const executionOrder: string[] = [];
+      const startSpy = vi.spyOn(RenderWorker.prototype, "start").mockImplementation(async () => {
+        executionOrder.push("worker.start");
+      });
+
+      try {
+        const env: NodeJS.ProcessEnv = {
+          ...minimalValidEnv(),
+          WORKER_ALLOWED_JOB_KINDS: "candidate"
+        };
+
+        const exitCode = await runWorkerCli([], env, {
+          ensureStorageTelemetryDirectory: async () => {
+            executionOrder.push("ensureStorageTelemetryDirectory");
+          },
+          controlApiClient: new TestControlApiClient(),
+          objectStorage: new TestObjectStorage(),
+          enforceStorageAdmission: new TestAdmissionEnforcer(),
+          renderJobExecutor: async () => ({ candidatePayload: { variantOrdinal: 1 } }),
+          logger: testLogger,
+          sleep: testSleep
+        });
+
+        expect(exitCode).toBe(0);
+        expect(executionOrder).toEqual(["ensureStorageTelemetryDirectory", "worker.start"]);
+      } finally {
+        startSpy.mockRestore();
+      }
+    });
+
+    it("fails closed with exit code 1 when directory creation fails, preventing worker startup", async () => {
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const startSpy = vi.spyOn(RenderWorker.prototype, "start");
+
+      try {
+        const env: NodeJS.ProcessEnv = {
+          ...minimalValidEnv(),
+          STORAGE_TELEMETRY_PATH: "/nonexistent-root-dir/impossible/path",
+          WORKER_ALLOWED_JOB_KINDS: "candidate"
+        };
+
+        const exitCode = await runWorkerCli([], env, {
+          ensureStorageTelemetryDirectory: async () => {
+            throw new Error("EACCES: permission denied, mkdir '/nonexistent-root-dir'");
+          },
+          controlApiClient: new TestControlApiClient(),
+          objectStorage: new TestObjectStorage(),
+          enforceStorageAdmission: new TestAdmissionEnforcer(),
+          renderJobExecutor: async () => ({ candidatePayload: { variantOrdinal: 1 } }),
+          logger: testLogger,
+          sleep: testSleep
+        });
+
+        expect(exitCode).toBe(1);
+        expect(startSpy).not.toHaveBeenCalled();
+        expect(consoleSpy).toHaveBeenCalledWith(
+          "Worker execution failed:",
+          expect.stringContaining("permission denied")
+        );
+      } finally {
+        startSpy.mockRestore();
+        consoleSpy.mockRestore();
+      }
     });
   });
 

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { mkdir } from "node:fs/promises";
 import path, { resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -112,6 +113,7 @@ export class WorkerConfigError extends Error {
 }
 
 export interface ProductionWorkerOverrides extends Partial<WorkerDependencies> {
+  readonly ensureStorageTelemetryDirectory?: ((storagePath: string) => Promise<void>) | undefined;
   readonly productionManifestAssembler?: ProductionManifestAssembler | undefined;
   readonly sceneRepository?: SceneRepository | undefined;
   readonly storyboardCandidateRepository?: StoryboardCandidateRepository | undefined;
@@ -892,6 +894,10 @@ export function createProductionWorker(
   return new RenderWorker(dependencies, options);
 }
 
+export async function ensureStorageTelemetryDirectory(storagePath: string): Promise<void> {
+  await mkdir(storagePath, { recursive: true });
+}
+
 export async function runWorkerCli(
   argv: readonly string[] = process.argv.slice(2),
   env: NodeJS.ProcessEnv = process.env,
@@ -899,6 +905,9 @@ export async function runWorkerCli(
 ): Promise<number> {
   try {
     const config = parseWorkerRuntimeConfig(env, argv);
+    const ensureDir =
+      depsOverrides?.ensureStorageTelemetryDirectory ?? ensureStorageTelemetryDirectory;
+    await ensureDir(config.storageTelemetryPath);
     const worker = createProductionWorker(config, depsOverrides);
 
     const abortController = new AbortController();

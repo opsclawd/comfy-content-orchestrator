@@ -96,7 +96,7 @@ Note: `.env.example`'s committed default for `CONTROL_API_URL` was corrected to 
 - `CONTROL_API_URL` must be the control-plane's **tailnet** hostname/IP (`http://<tailnet-ip-or-hostname>:3000`), not the Docker-internal `control-api:3000` value that appears in the control-plane's own `.env` — the worker isn't in that Docker network.
 - `S3_STORAGE_ENDPOINT` similarly must be the tailnet-reachable endpoint. The control-plane's own `.env` has `S3_STORAGE_ENDPOINT=http://minio:9000` (Docker-internal) — use its `S3_SIGNING_ENDPOINT` value instead (`http://<tailnet-ip>:9000`), the same one browsers use for presigned URLs.
 - `COMFYUI_DIR` must point at the real ComfyUI checkout path on that specific host (varies per host — check `ps aux | grep ComfyUI` if unsure).
-- `STORAGE_TELEMETRY_PATH`'s directory must exist before the worker starts — nothing creates it automatically. `mkdir -p` it first (a job will otherwise render successfully and then fail at the final write-side storage-admission check with `HostFsStorageTelemetryError: ENOENT`).
+- `STORAGE_TELEMETRY_PATH` is created automatically at worker startup if it does not already exist, but operators should ensure it is pointed at a persistent, correctly mounted filesystem that survives reboots (e.g. `/var/lib/cco/storage-observation`, as in `.env.example`).
 - `GOLD_MASTER_PROVENANCE_PATH` is a real gap — see "Certification provenance format" below before assuming a value works.
 
 Run as a systemd service rather than ad-hoc (survives reboots/disconnects):
