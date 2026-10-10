@@ -779,6 +779,129 @@ describe("ShotPlanPanel Component", () => {
       expect(mockRefresh).toHaveBeenCalledTimes(1);
     });
 
+    it("polls /api/scenes/[sceneId]/review when 202 accepted response is returned until scene leaves generating_candidates", async () => {
+      let pollCount = 0;
+      const onRefresh = vi.fn().mockResolvedValue(undefined);
+      const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes("/shot-plans")) {
+          return {
+            ok: true,
+            status: 202,
+            json: async () => ({
+              sceneId,
+              status: "generating_candidates",
+              specRevision: 1,
+              shotPlans: [],
+              isIdempotentReplay: false
+            })
+          };
+        }
+        if (url.includes("/review")) {
+          pollCount++;
+          if (pollCount === 1) {
+            return {
+              ok: true,
+              status: 200,
+              json: async () => ({ status: "generating_candidates", shotPlans: [] })
+            };
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ status: "director_review", shotPlans: [createSampleShotPlan()] })
+          };
+        }
+        return { ok: false, status: 404 };
+      });
+      vi.stubGlobal("fetch", mockFetch);
+
+      render(
+        <ShotPlanPanel
+          shotPlans={[]}
+          currentSpecRevision={1}
+          sceneId={sceneId}
+          onRefresh={onRefresh}
+        />
+      );
+
+      const button = screen.getByTestId("generate-shot-plans-button");
+      fireEvent.click(button);
+
+      await waitFor(() => {
+        expect(onRefresh).toHaveBeenCalledTimes(1);
+      });
+      expect(mockRefresh).toHaveBeenCalledTimes(1);
+    });
+
+    it("displays error message if polled review status returns failed", async () => {
+      const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes("/shot-plans")) {
+          return {
+            ok: true,
+            status: 202,
+            json: async () => ({
+              sceneId,
+              status: "generating_candidates",
+              specRevision: 1,
+              shotPlans: [],
+              isIdempotentReplay: false
+            })
+          };
+        }
+        if (url.includes("/review")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ status: "failed", shotPlans: [] })
+          };
+        }
+        return { ok: false, status: 404 };
+      });
+      vi.stubGlobal("fetch", mockFetch);
+
+      render(<ShotPlanPanel shotPlans={[]} currentSpecRevision={1} sceneId={sceneId} />);
+
+      const button = screen.getByTestId("generate-shot-plans-button");
+      fireEvent.click(button);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("shot-plan-error-message")).toBeDefined();
+      });
+      expect(screen.getByTestId("shot-plan-error-message").textContent).toContain(
+        "Shot plan generation failed. Please try again."
+      );
+    });
+
+    it("automatically polls /api/scenes/[sceneId]/review when mounted with sceneStatus='generating_candidates'", async () => {
+      const onRefresh = vi.fn().mockResolvedValue(undefined);
+      const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes("/review")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ status: "director_review", shotPlans: [createSampleShotPlan()] })
+          };
+        }
+        return { ok: false, status: 404 };
+      });
+      vi.stubGlobal("fetch", mockFetch);
+
+      render(
+        <ShotPlanPanel
+          shotPlans={[]}
+          currentSpecRevision={1}
+          sceneId={sceneId}
+          sceneStatus="generating_candidates"
+          onRefresh={onRefresh}
+        />
+      );
+
+      await waitFor(() => {
+        expect(onRefresh).toHaveBeenCalledTimes(1);
+      });
+      expect(mockRefresh).toHaveBeenCalledTimes(1);
+    });
+
     it("shows pending state and blocks duplicate submissions while in-flight", async () => {
       let resolvePromise: () => void = () => {};
       const pendingPromise = new Promise<void>((res) => {

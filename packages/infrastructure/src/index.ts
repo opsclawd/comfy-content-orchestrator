@@ -68,6 +68,15 @@ export {
   type RenderJobRow
 } from "./postgres/repositories/postgres-job-queue.js";
 export { PostgresDeliveryAssemblyJobQueue } from "./postgres/repositories/postgres-delivery-assembly-job-queue.js";
+export {
+  recoverInterruptedPlanningRuns,
+  startPlanningRecoveryReaper,
+  DEFAULT_PLANNING_INTERRUPTED_REASON,
+  type RecoverInterruptedPlanningRunsOptions,
+  type RecoverInterruptedPlanningRunsLogger,
+  type PlanningRecoveryReaper,
+  type StartPlanningRecoveryReaperOptions
+} from "./postgres/shot-plan-planning-recovery.js";
 
 export {
   ComfyUiRenderEngineAdapter,

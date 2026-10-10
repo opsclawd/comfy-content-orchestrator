@@ -60,6 +60,7 @@ interface StoryboardSceneRow {
   approved_by: string | null;
   approved_at: Date | string | null;
   approved_revision: number | null;
+  failure_reason?: string | null;
   reference_asset_ids: string[] | null;
 }
 
@@ -277,6 +278,7 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
         s.approved_by,
         s.approved_at,
         s.approved_revision,
+        s.failure_reason,
         COALESCE(
           (
             SELECT array_agg(sra.asset_id::text ORDER BY sra.asset_id ASC)
@@ -512,6 +514,7 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
         ? { approvedShotPlanId: sceneRow.approved_shot_plan_id as ShotPlanId }
         : {}),
       ...(approval !== undefined ? { approval } : {}),
+      ...(sceneRow.failure_reason ? { failureReason: sceneRow.failure_reason } : {}),
       candidatesByRevision: Object.freeze(candidatesByRevision),
       shotPlans: Object.freeze(shotPlans),
       referenceBindingsWithStorage: Object.freeze(referenceBindingsWithStorage),

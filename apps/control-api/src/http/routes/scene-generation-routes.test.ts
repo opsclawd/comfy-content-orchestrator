@@ -7,7 +7,8 @@ import {
   type UnitOfWorkContext,
   type SceneRepository,
   type PlanningModelClientPort,
-  type PlanningModelOutcome
+  type PlanningModelOutcome,
+  PlanShotPlansUseCase
 } from "@cco/application";
 import {
   Scene,
@@ -20,9 +21,11 @@ import {
 } from "@cco/domain";
 import {
   CreateShotPlanVariationResponseSchema,
-  GenerationAdmissionResponseSchema
+  GenerationAdmissionResponseSchema,
+  PlanShotPlansResponseSchema
 } from "@cco/contracts";
 import { createControlApiApp } from "../app.js";
+import { ShotPlanPlanningCoordinator } from "../../shot-plan-planning-coordinator.js";
 
 class FakeUnitOfWork implements UnitOfWork {
   private readonly _scenes = new Map<SceneId, Scene>();
@@ -677,5 +680,321 @@ describe("POST /api/scenes/:sceneId/shot-plans/variations", () => {
     });
 
     expect(res.statusCode).toBe(400);
+  });
+});
+
+describe("POST /api/scenes/:sceneId/shot-plans (Asynchronous Planning)", () => {
+  const validSceneId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73899";
+  const validCampaignId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73800";
+
+  const createDraftScene = (): Scene => {
+    return Scene.create({
+      id: validSceneId as SceneId,
+      campaignId: validCampaignId as CampaignId,
+      configuration: {
+        prompt: "A cinematic shot of an ancient library",
+        referenceIds: [],
+        engineProfileId: "ltx_25",
+        durationMs: 5000
+      }
+    });
+  };
+
+  const sampleShotPlanProposals = [
+    {
+      framing: "wide",
+      angle: "eye_level",
+      cameraMovement: "static",
+      movementSpeed: "slow",
+      lensIntent: "35mm prime",
+      cameraPosition: "tripod",
+      cameraPromptDescription: "Wide static shot",
+      actionSummary: "Ancient library interior",
+      lightingStyle: "softbox_studio",
+      environmentDescription: "Dusty library",
+      colorPalette: ["#111111", "#222222"],
+      subjects: [],
+      beats: [
+        {
+          beatIndex: 1,
+          startMs: 0,
+          endMs: 4000,
+          description: "Dust motes floating",
+          cameraAction: "holds",
+          subjectAction: "none"
+        }
+      ]
+    },
+    {
+      framing: "medium",
+      angle: "eye_level",
+      cameraMovement: "dolly_in",
+      movementSpeed: "slow",
+      lensIntent: "50mm prime",
+      cameraPosition: "eye level",
+      cameraPromptDescription: "Medium push in shot",
+      actionSummary: "Closer look at ancient books",
+      lightingStyle: "softbox_studio",
+      environmentDescription: "Dusty library",
+      colorPalette: ["#111111", "#222222"],
+      subjects: [],
+      beats: [
+        {
+          beatIndex: 1,
+          startMs: 0,
+          endMs: 4000,
+          description: "Camera pushes in slowly",
+          cameraAction: "slow push",
+          subjectAction: "none"
+        }
+      ]
+    }
+  ];
+
+  function createMockPlanningClients(outcome?: PlanningModelOutcome) {
+    const primaryComplete = vi.fn().mockResolvedValue(
+      outcome ?? {
+        kind: "success",
+        rawText: JSON.stringify(sampleShotPlanProposals)
+      }
+    );
+    const primary: PlanningModelClientPort = {
+      providerName: "Anthropic",
+      complete: primaryComplete
+    };
+    const fallback: PlanningModelClientPort = {
+      providerName: "OpenAI",
+      complete: vi.fn().mockResolvedValue(
+        outcome ?? {
+          kind: "success",
+          rawText: JSON.stringify(sampleShotPlanProposals)
+        }
+      )
+    };
+    return { primary, fallback, primaryComplete };
+  }
+
+  it("returns 503 when planning model clients are not configured", async () => {
+    const scene = createDraftScene();
+    const { queue } = createRecordingJobQueue();
+    const uow = new FakeUnitOfWork([scene], queue);
+    const app = createControlApiApp(
+      {
+        uow,
+        storageTelemetry: createFakeStorageTelemetry(),
+        jobQueue: queue
+      },
+      { jobDispatch: defaultDispatchConfig }
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${validSceneId}/shot-plans`,
+      payload: { variantCount: 2 }
+    });
+
+    expect(res.statusCode).toBe(503);
+    expect(res.json().code).toBe("CONFIGURATION_ERROR");
+  });
+
+  it("admits scene immediately, transitions to generating_candidates, and returns 202 quickly", async () => {
+    const scene = createDraftScene();
+    const { queue } = createRecordingJobQueue();
+    const uow = new FakeUnitOfWork([scene], queue);
+    const { primary, fallback } = createMockPlanningClients();
+
+    const app = createControlApiApp(
+      {
+        uow,
+        storageTelemetry: createFakeStorageTelemetry(),
+        jobQueue: queue,
+        planningModelClients: { primary, fallback }
+      },
+      { jobDispatch: defaultDispatchConfig }
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${validSceneId}/shot-plans`,
+      payload: { variantCount: 2 }
+    });
+
+    expect(res.statusCode).toBe(202);
+    const body = res.json();
+    expect(PlanShotPlansResponseSchema.parse(body)).toEqual(body);
+    expect(body.sceneId).toBe(validSceneId);
+    expect(body.status).toBe("generating_candidates");
+    expect(body.specRevision).toBe(1);
+    expect(body.shotPlans).toEqual([]);
+    expect(body.isIdempotentReplay).toBe(false);
+
+    // Repository was transitioned to generating_candidates during admission
+    expect(uow.savedScenes.some((s) => s.status === "generating_candidates")).toBe(true);
+  });
+
+  it("completes planning in background, persisting shot plans and previs jobs", async () => {
+    const scene = createDraftScene();
+    const { queue } = createRecordingJobQueue();
+    const uow = new FakeUnitOfWork([scene], queue);
+    const { primary, fallback } = createMockPlanningClients();
+
+    const coordinator = new ShotPlanPlanningCoordinator({
+      planShotPlansUseCase: new PlanShotPlansUseCase({
+        uow,
+        primaryClient: primary,
+        fallbackClient: fallback
+      })
+    });
+
+    const app = createControlApiApp(
+      {
+        uow,
+        storageTelemetry: createFakeStorageTelemetry(),
+        jobQueue: queue,
+        planningModelClients: { primary, fallback },
+        planningCoordinator: coordinator
+      },
+      { jobDispatch: defaultDispatchConfig }
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${validSceneId}/shot-plans`,
+      payload: { variantCount: 2, enqueuePrevisJobs: true }
+    });
+
+    expect(res.statusCode).toBe(202);
+
+    // Wait for in-flight background planning task to settle deterministically
+    await coordinator.waitForAllInFlight();
+
+    // Shot plans are saved
+    expect(uow.savedShotPlans.length).toBe(2);
+    expect(uow.savedShotPlans[0]!.framing).toBe("wide");
+    expect(uow.savedShotPlans[1]!.framing).toBe("medium");
+  });
+
+  it("returns 200 idempotent replay when plans already exist for revision and reroll is false", async () => {
+    const scene = createDraftScene();
+    const existingPlan = ShotPlan.create({
+      id: "018e69e0-8a6a-72cb-b1b7-ec79a1f73810" as ShotPlanId,
+      sceneId: validSceneId as SceneId,
+      specRevision: 1,
+      variantOrdinal: 1,
+      status: "draft",
+      routingMode: "reference_directed",
+      targetDurationMs: 4000,
+      targetFrameCount: 96,
+      framing: "wide",
+      angle: "eye_level",
+      lensIntent: "35mm prime",
+      cameraPosition: "tripod",
+      cameraMovement: "static",
+      movementSpeed: "slow",
+      cameraPromptDescription: "Wide static shot",
+      actionSummary: "Ancient library interior",
+      lightingStyle: "softbox_studio",
+      environmentDescription: "Dusty library",
+      colorPalette: ["#111111", "#222222"],
+      subjects: [],
+      beats: []
+    });
+
+    const { queue } = createRecordingJobQueue();
+    const uow = new FakeUnitOfWork([scene], queue, [existingPlan]);
+    const { primary, fallback, primaryComplete } = createMockPlanningClients();
+
+    const app = createControlApiApp(
+      {
+        uow,
+        storageTelemetry: createFakeStorageTelemetry(),
+        jobQueue: queue,
+        planningModelClients: { primary, fallback }
+      },
+      { jobDispatch: defaultDispatchConfig }
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${validSceneId}/shot-plans`,
+      payload: { variantCount: 2, reroll: false }
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.isIdempotentReplay).toBe(true);
+    expect(body.shotPlans).toHaveLength(1);
+    expect(primaryComplete).not.toHaveBeenCalled();
+  });
+
+  it("works with /api/scenes/:sceneId/plan-shot-plans alias", async () => {
+    const scene = createDraftScene();
+    const { queue } = createRecordingJobQueue();
+    const uow = new FakeUnitOfWork([scene], queue);
+    const { primary, fallback } = createMockPlanningClients();
+
+    const app = createControlApiApp(
+      {
+        uow,
+        storageTelemetry: createFakeStorageTelemetry(),
+        jobQueue: queue,
+        planningModelClients: { primary, fallback }
+      },
+      { jobDispatch: defaultDispatchConfig }
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${validSceneId}/plan-shot-plans`,
+      payload: { variantCount: 2 }
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(res.json().status).toBe("generating_candidates");
+  });
+
+  it("marks scene as failed when background planning throws an error", async () => {
+    const scene = createDraftScene();
+    const { queue } = createRecordingJobQueue();
+    const uow = new FakeUnitOfWork([scene], queue);
+    const { primary, fallback } = createMockPlanningClients({
+      kind: "permanent_failure",
+      httpStatus: 429,
+      message: "Model quota exceeded"
+    });
+
+    const coordinator = new ShotPlanPlanningCoordinator({
+      planShotPlansUseCase: new PlanShotPlansUseCase({
+        uow,
+        primaryClient: primary,
+        fallbackClient: fallback
+      })
+    });
+
+    const app = createControlApiApp(
+      {
+        uow,
+        storageTelemetry: createFakeStorageTelemetry(),
+        jobQueue: queue,
+        planningModelClients: { primary, fallback },
+        planningCoordinator: coordinator
+      },
+      { jobDispatch: defaultDispatchConfig }
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${validSceneId}/shot-plans`,
+      payload: { variantCount: 2 }
+    });
+
+    expect(res.statusCode).toBe(202);
+
+    // Let background task settle deterministically
+    await coordinator.waitForAllInFlight();
+
+    // Scene transitioned to failed
+    const finalScene = [...uow.savedScenes].reverse().find((s) => s.id === validSceneId);
+    expect(finalScene?.status).toBe("failed");
   });
 });

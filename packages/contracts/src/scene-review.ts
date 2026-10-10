@@ -199,6 +199,7 @@ export const SceneReviewDetailReadModelSchema = z.object({
   selectedShotPlanRevision: z.number().int().positive().optional(),
   approvedShotPlanId: z.string().uuid().optional(),
   approval: SceneApprovalSchema.optional(),
+  failureReason: z.string().nullable().optional(),
   candidatesByRevision: z.array(SceneReviewCandidateGroupSchema),
   shotPlans: z.array(ShotPlanReviewItemSchema).optional(),
   boundReferences: z.array(ShotPlanReferenceBindingReviewItemSchema).optional(),

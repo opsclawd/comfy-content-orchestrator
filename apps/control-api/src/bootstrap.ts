@@ -16,6 +16,7 @@ import type {
   ReferenceAssetRepository,
   StorageTelemetryPort
 } from "@cco/application";
+import { PlanShotPlansUseCase } from "@cco/application";
 import {
   AnthropicPlanningModelClient,
   GeminiCandidateRankingClient,
@@ -49,6 +50,10 @@ import {
 } from "./http/client-context.js";
 import { startControlApiServer, type ServerListenOptions } from "./http/server.js";
 import type { ControlApiDependencies, ReviewerIdentityResolver } from "./http/types.js";
+import {
+  ShotPlanPlanningCoordinator,
+  type PlanningRecoveryReaper
+} from "./shot-plan-planning-coordinator.js";
 import {
   parseControlApiRuntimeConfig,
   type ControlApiDatabaseConfig,
@@ -136,6 +141,8 @@ export interface ControlApiBootstrapOptions {
   readonly logger?: ControlApiLogger;
   readonly httpLogger?: ServerListenOptions["logger"];
   readonly processSignals?: ControlApiProcessSignals;
+  readonly planningCoordinator?: ShotPlanPlanningCoordinator | undefined;
+  readonly planningRecoveryReaperIntervalMs?: number | undefined;
 }
 
 export type ControlApiRuntimeState = "starting" | "running" | "stopping" | "stopped";
@@ -160,6 +167,8 @@ export async function runControlApi(
   let currentState: ControlApiRuntimeState = "starting";
   const getState = (): ControlApiRuntimeState => currentState;
   let pool: Pool | undefined;
+  let planningCoordinator: ShotPlanPlanningCoordinator | undefined;
+  let planningRecoveryReaper: PlanningRecoveryReaper | undefined;
   let s3ReadinessClient: S3Client | undefined;
   let serverHandle:
     { app: FastifyInstance; close: () => Promise<void>; port: number; host: string } | undefined;
@@ -190,6 +199,25 @@ export async function runControlApi(
       } catch (err) {
         logger.error(
           "Error closing HTTP server:",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+
+      // 1b. Shut down in-flight shot planning tasks and recovery reaper before closing PostgreSQL pool
+      try {
+        if (planningRecoveryReaper) {
+          planningRecoveryReaper.stop();
+          planningRecoveryReaper = undefined;
+        }
+        if (planningCoordinator) {
+          const coordinator = planningCoordinator;
+          planningCoordinator = undefined;
+          logger.info("Waiting for in-flight shot planning tasks to complete...");
+          await coordinator.shutdown();
+        }
+      } catch (err) {
+        logger.error(
+          "Error shutting down shot planning coordinator:",
           err instanceof Error ? err.message : String(err)
         );
       }
@@ -421,6 +449,47 @@ export async function runControlApi(
           }
         : undefined);
 
+    const planShotPlansUseCase = planningModelClients
+      ? new PlanShotPlansUseCase({
+          uow,
+          primaryClient: planningModelClients.primary,
+          fallbackClient: planningModelClients.fallback,
+          ...(objectStorage !== undefined ? { objectStorage } : {}),
+          ...(overallTimeoutMs !== undefined ? { overallTimeoutMs } : {})
+        })
+      : undefined;
+
+    planningCoordinator =
+      options.planningCoordinator ??
+      (planShotPlansUseCase
+        ? new ShotPlanPlanningCoordinator({ planShotPlansUseCase, logger })
+        : undefined);
+
+    if (pool) {
+      try {
+        await ShotPlanPlanningCoordinator.recoverInterruptedRuns({ pool, logger });
+      } catch (sweepErr) {
+        logger.error(
+          "Failed to complete startup recovery sweep for interrupted shot planning runs:",
+          sweepErr instanceof Error ? sweepErr.message : String(sweepErr)
+        );
+      }
+
+      const reaperOptions = {
+        pool,
+        logger,
+        ...(options.planningRecoveryReaperIntervalMs !== undefined
+          ? { intervalMs: options.planningRecoveryReaperIntervalMs }
+          : {})
+      };
+
+      if (planningCoordinator) {
+        planningCoordinator.startRecoveryReaper(reaperOptions);
+      } else {
+        planningRecoveryReaper = ShotPlanPlanningCoordinator.startRecoveryReaper(reaperOptions);
+      }
+    }
+
     // 5. Install signal handlers
     sigtermHandler = () => {
       logger.info("Received SIGTERM, initiating graceful shutdown...");
@@ -455,6 +524,7 @@ export async function runControlApi(
         jobQueue,
         deliveryAssemblyJobQueue,
         ...(planningModelClients ? { planningModelClients } : {}),
+        ...(planningCoordinator ? { planningCoordinator } : {}),
         ...(referenceAssetRepository ? { referenceAssetRepository } : {}),
         ...(overallTimeoutMs !== undefined ? { planningOverallTimeoutMs: overallTimeoutMs } : {}),
         ...(candidateRankerClients ? { candidateRankerClients } : {}),
@@ -505,6 +575,22 @@ export async function runControlApi(
   } catch (error) {
     const safeMessage = error instanceof Error ? error.message : String(error);
     logger.error("Control API startup failed:", safeMessage);
+
+    if (planningRecoveryReaper) {
+      try {
+        planningRecoveryReaper.stop();
+        planningRecoveryReaper = undefined;
+      } catch {
+        // ignore
+      }
+    }
+    if (planningCoordinator) {
+      try {
+        planningCoordinator.stopRecoveryReaper();
+      } catch {
+        // ignore
+      }
+    }
 
     if (serverHandle) {
       try {

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import type {
   ReviewAction,
@@ -161,6 +161,8 @@ export interface ShotPlanPanelProps {
   candidatesByRevision?: SceneReviewCandidateGroup[] | undefined;
   allowedActions?: ReviewAction[] | undefined;
   state?: ReviewCommandState | undefined;
+  sceneStatus?: string | undefined;
+  failureReason?: string | null | undefined;
   dispatch?: ((event: ReviewCommandEvent) => void) | undefined;
   onSelectShotPlan?: ((shotPlanId: string) => void) | undefined;
   onApproveShotPlan?:
@@ -187,6 +189,8 @@ export function ShotPlanPanel({
   candidatesByRevision,
   allowedActions,
   state: stateProp,
+  sceneStatus,
+  failureReason: failureReasonProp,
   dispatch,
   onSelectShotPlan,
   onApproveShotPlan,
@@ -200,8 +204,95 @@ export function ShotPlanPanel({
   fetchProductionInspection
 }: ShotPlanPanelProps) {
   const candidateGroups = candidatesByRevision ?? stateProp?.detail?.candidatesByRevision ?? [];
+  const currentSceneStatus = sceneStatus ?? stateProp?.detail?.status;
+  const effectiveFailureReason = failureReasonProp ?? stateProp?.detail?.failureReason;
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (currentSceneStatus === "failed" && effectiveFailureReason && !generationError) {
+      setGenerationError(`Shot plan generation failed: ${effectiveFailureReason}`);
+    }
+  }, [currentSceneStatus, effectiveFailureReason, generationError]);
+
+  async function pollUntilComplete(targetSceneId: string) {
+    const maxAttempts = 60;
+    const pollIntervalMs = process.env.NODE_ENV === "test" ? 10 : 2000;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (!isMountedRef.current) return;
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+      if (!isMountedRef.current) return;
+
+      try {
+        const reviewRes = await fetch(`/api/scenes/${encodeURIComponent(targetSceneId)}/review`, {
+          headers: { Accept: "application/json" }
+        });
+        if (!reviewRes.ok) {
+          continue;
+        }
+        const reviewData = (await reviewRes.json()) as {
+          status?: string;
+          shotPlans?: unknown[];
+          failureReason?: string | null;
+        };
+        const status = reviewData.status;
+
+        if (status === "failed") {
+          if (isMountedRef.current) {
+            setGenerationError(
+              reviewData.failureReason
+                ? `Shot plan generation failed: ${reviewData.failureReason}`
+                : "Shot plan generation failed. Please try again."
+            );
+          }
+          if (onRefresh) await onRefresh();
+          if (router) router.refresh();
+          return;
+        }
+
+        if (status !== "generating_candidates") {
+          if (onRefresh) await onRefresh();
+          if (router) router.refresh();
+          return;
+        }
+      } catch {
+        // tolerate temporary network glitch while polling
+      }
+    }
+
+    if (isMountedRef.current) {
+      setGenerationError("Shot plan generation timed out. Please refresh the page.");
+    }
+  }
+
+  useEffect(() => {
+    if (
+      currentSceneStatus === "generating_candidates" &&
+      (!shotPlans || shotPlans.length === 0) &&
+      !isGenerating &&
+      sceneId
+    ) {
+      setIsGenerating(true);
+      (async () => {
+        try {
+          await pollUntilComplete(sceneId);
+        } finally {
+          if (isMountedRef.current) {
+            setIsGenerating(false);
+          }
+        }
+      })();
+    }
+  }, [currentSceneStatus, sceneId, shotPlans?.length]);
   const [activeBeatByPlan, setActiveBeatByPlan] = useState<Record<string, number | null>>({});
   const [variationModalPlan, setVariationModalPlan] = useState<ShotPlanReviewItem | null>(null);
   const [comparisonModalPlan, setComparisonModalPlan] = useState<ShotPlanReviewItem | null>(null);
@@ -272,6 +363,12 @@ export function ShotPlanPanel({
     try {
       if (onGenerateShotPlans) {
         await onGenerateShotPlans({ variantCount: 2, reroll: false });
+        if (onRefresh) {
+          await onRefresh();
+        }
+        if (router) {
+          router.refresh();
+        }
       } else {
         const res = await fetch(`/api/scenes/${encodeURIComponent(sceneId)}/shot-plans`, {
           method: "POST",
@@ -291,13 +388,34 @@ export function ShotPlanPanel({
           }
           throw { status: res.status, error: errorData };
         }
-      }
 
-      if (onRefresh) {
-        await onRefresh();
-      }
-      if (router) {
-        router.refresh();
+        let data: { status?: string; shotPlans?: unknown[]; isIdempotentReplay?: boolean } | null =
+          null;
+        try {
+          data = (await res.json()) as {
+            status?: string;
+            shotPlans?: unknown[];
+            isIdempotentReplay?: boolean;
+          };
+        } catch {
+          data = null;
+        }
+
+        if (
+          res.status === 202 ||
+          (data &&
+            data.status === "generating_candidates" &&
+            (!data.shotPlans || data.shotPlans.length === 0))
+        ) {
+          await pollUntilComplete(sceneId);
+        } else {
+          if (onRefresh) {
+            await onRefresh();
+          }
+          if (router) {
+            router.refresh();
+          }
+        }
       }
     } catch (err: unknown) {
       let formatted = "Failed to generate shot plans. Please try again.";

@@ -50,6 +50,7 @@ import {
   type UnitOfWork
 } from "@cco/application";
 import { SharpImageInspectionAdapter } from "@cco/infrastructure";
+import { ShotPlanPlanningCoordinator } from "../shot-plan-planning-coordinator.js";
 
 export interface ControlApiDependencies {
   readonly uow: UnitOfWork;
@@ -78,6 +79,7 @@ export interface ControlApiDependencies {
   readonly imageValidator?: ImageInspectionPort;
   readonly planningOverallTimeoutMs?: number;
   readonly rankingOverallTimeoutMs?: number;
+  readonly planningCoordinator?: ShotPlanPlanningCoordinator | undefined;
 }
 
 export interface ControlApiUseCases {
@@ -123,6 +125,7 @@ export interface ControlApiContainer {
   readonly dependencies: ControlApiDependencies;
   readonly useCases: ControlApiUseCases;
   readonly queries: ControlApiQueries;
+  readonly planningCoordinator?: ShotPlanPlanningCoordinator | undefined;
 }
 
 export function createControlApiContainer(
@@ -141,6 +144,11 @@ export function createControlApiContainer(
           : {})
       })
     : undefined;
+  const planningCoordinator =
+    dependencies.planningCoordinator ??
+    (planShotPlans
+      ? new ShotPlanPlanningCoordinator({ planShotPlansUseCase: planShotPlans })
+      : undefined);
   const createShotPlanVariation = dependencies.planningModelClients
     ? new CreateShotPlanVariationUseCase({
         uow: dependencies.uow,
@@ -359,7 +367,8 @@ export function createControlApiContainer(
       ...(dependencies.campaignReadinessQueries !== undefined
         ? { campaignReadiness: dependencies.campaignReadinessQueries }
         : {})
-    }
+    },
+    ...(planningCoordinator !== undefined ? { planningCoordinator } : {})
   };
 }
 

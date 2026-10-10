@@ -78,6 +78,9 @@ export interface StoryboardSceneRecordInput {
   approvedAt?: Date | string | null;
   approvedRevision?: number | null;
   failedFrom?: string | null;
+  failureReason?: string | null;
+  activePlanningRunId?: string | null;
+  activePlanningExpiresAt?: Date | string | null;
 }
 
 export interface SceneReferenceAssetRecordInput {
@@ -245,6 +248,9 @@ export interface InsertedStoryboardSceneRecord {
   approved_at: Date | null;
   approved_revision: number | null;
   failed_from: string | null;
+  failure_reason: string | null;
+  active_planning_run_id: string | null;
+  active_planning_expires_at: Date | null;
   created_at: Date;
   updated_at: Date;
   archived_at: Date | null;
@@ -621,6 +627,11 @@ export async function insertStoryboardSceneRecord(
   const approvedAt = input.approvedAt !== undefined ? input.approvedAt : null;
   const approvedRevision = input.approvedRevision !== undefined ? input.approvedRevision : null;
   const failedFrom = input.failedFrom !== undefined ? input.failedFrom : null;
+  const failureReason = input.failureReason !== undefined ? input.failureReason : null;
+  const activePlanningRunId =
+    input.activePlanningRunId !== undefined ? input.activePlanningRunId : null;
+  const activePlanningExpiresAt =
+    input.activePlanningExpiresAt !== undefined ? input.activePlanningExpiresAt : null;
 
   const res = await client.query<InsertedStoryboardSceneRecord>(
     `
@@ -644,8 +655,11 @@ export async function insertStoryboardSceneRecord(
       approved_by,
       approved_at,
       approved_revision,
-      failed_from
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+      failed_from,
+      failure_reason,
+      active_planning_run_id,
+      active_planning_expires_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
     RETURNING *
     `,
     [
@@ -668,7 +682,10 @@ export async function insertStoryboardSceneRecord(
       approvedBy,
       approvedAt,
       approvedRevision,
-      failedFrom
+      failedFrom,
+      failureReason,
+      activePlanningRunId,
+      activePlanningExpiresAt
     ]
   );
 

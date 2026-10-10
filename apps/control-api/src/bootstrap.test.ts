@@ -152,6 +152,7 @@ describe("bootstrap", () => {
     expect(harness.events).toEqual([
       "pool.query:SELECT 1",
       "s3.headBucket:godzspeed-review",
+      expect.stringContaining("UPDATE storyboard_scenes"),
       "server.start"
     ]);
 
@@ -1112,6 +1113,42 @@ describe("bootstrap", () => {
       expect(userContent[1]!.type).toBe("image_url");
 
       await runtime.stop();
+    });
+
+    it("starts recurring shot planning recovery reaper and terminates it on stop", async () => {
+      const harness = createTestHarness();
+
+      let queryCount = 0;
+      harness.mockPool.query.mockImplementation(async (sql: string) => {
+        if (sql.includes("active_planning_expires_at")) {
+          queryCount++;
+        }
+        return { rows: [{ "?column?": 1 }] };
+      });
+
+      const runtime = await runControlApi({
+        config: validConfig,
+        poolFactory: () => harness.mockPool as unknown as Pool,
+        s3ClientFactory: () => harness.mockS3Client as unknown as S3Client,
+        serverStarter: harness.mockServerStarter,
+        processSignals: harness.mockSignals,
+        logger: harness.mockLogger,
+        planningRecoveryReaperIntervalMs: 20
+      });
+
+      // At startup, the recovery query should have run at least once
+      expect(queryCount).toBeGreaterThanOrEqual(1);
+
+      // Wait a short time for recurring reaper sweeps to execute
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      const countDuringRun = queryCount;
+      expect(countDuringRun).toBeGreaterThan(1);
+
+      await runtime.stop();
+
+      // After stop, no more sweeps should execute
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(queryCount).toBe(countDuringRun);
     });
   });
 });
