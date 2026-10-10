@@ -45,6 +45,7 @@ export { PostgresShotPlanRepository } from "./postgres/repositories/postgres-sho
 
 export { PostgresReferenceAssetRepository } from "./postgres/repositories/postgres-reference-asset-repository.js";
 export { PostgresReferenceGroupRepository } from "./postgres/repositories/postgres-reference-group-repository.js";
+export { PostgresCampaignReferenceBibleRepository } from "./postgres/repositories/postgres-campaign-reference-bible-repository.js";
 
 export { PostgresGenerationManifestRepository } from "./postgres/repositories/postgres-generation-manifest-repository.js";
 

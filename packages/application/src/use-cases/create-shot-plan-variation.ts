@@ -1,13 +1,21 @@
 import { randomUUID } from "node:crypto";
-import { ShotPlan, type SceneId, type ShotPlanId } from "@cco/domain";
+import {
+  ShotPlan,
+  type ReferenceAsset,
+  type ReferenceAssetId,
+  type SceneId,
+  type ShotPlanId
+} from "@cco/domain";
 import { hashShotPlanVariationRequest } from "@cco/contracts";
 import type { PlanningModelClientPort } from "../ports/planning-model-client-port.js";
+import type { CampaignReferenceBibleEntry } from "../ports/campaign-reference-bible-repository.js";
 import type { UnitOfWork, UnitOfWorkContext } from "../ports/unit-of-work.js";
 import { CANDIDATE_BASE_SEED } from "./progress-scene-production.js";
 import {
   compileStoryboardPrevisPrompt,
   STORYBOARD_PREVIS_WORKFLOW_TEMPLATE
 } from "../shot-plan-compiler/index.js";
+import { canonicalizeReferenceBindings } from "../shot-plan-compiler/canonicalize-reference-bindings.js";
 import { SceneNotFoundError } from "./scene-not-found-error.js";
 import { StaleRevisionConflictError } from "./stale-revision-conflict-error.js";
 import {
@@ -15,15 +23,21 @@ import {
   PlanningOrchestrationKernel,
   type PlanningAuthorizationPolicy
 } from "./planning-orchestration-kernel.js";
-import { buildShotPlanVariationPrompt } from "./shot-plan-prompt.js";
+import {
+  buildShotPlanVariationPrompt,
+  type BoundReferencePromptInput
+} from "./shot-plan-prompt.js";
 import { parseShotPlanResponse, type ShotPlanProposal } from "./shot-plan-response-parser.js";
 import {
   CrossSceneSourceShotPlanError,
+  InvalidPersistentSubjectIdError,
   InvalidSceneStateForVariationError,
   InvalidShotPlanVariantCountError,
+  ReferenceAssetDescriptionGenerationError,
   ShotPlanValidationError,
   ShotPlanVariationIdempotencyConflictError,
   SourceShotPlanNotFoundError,
+  StaleBibleBindingMismatchError,
   StaleSourceShotPlanRevisionError,
   SupersededSourceShotPlanError
 } from "./plan-shot-plans-errors.js";
@@ -196,12 +210,141 @@ export class CreateShotPlanVariationUseCase {
     const targetDurationMs = scene.configuration.durationMs;
     const targetFrameCount = Math.round((targetDurationMs / 1000) * 24);
     const sourceSnapshot = sourceShotPlan.snapshot();
-    const boundReferenceIds = new Set(scene.configuration.referenceIds ?? []);
-
     const proposals = await this.kernel.run({
       policy,
       overallTimeoutMs: input.overallTimeoutMs,
       prepare: async (_signal: AbortSignal) => {
+        const rawBindings = context.referenceAssets?.listBindingsBySceneId
+          ? await context.referenceAssets.listBindingsBySceneId(scene.id, {
+              specRevision: scene.specRevision
+            })
+          : [];
+        const bindings =
+          rawBindings.length > 0 ? rawBindings : (scene.configuration.referenceBindings ?? []);
+        const activeBindings = bindings.filter((b) => !b.archivedAt);
+
+        let campaignBibleEntries: readonly CampaignReferenceBibleEntry[] = [];
+        if (context.campaignReferenceBible) {
+          campaignBibleEntries = await context.campaignReferenceBible.findByCampaignId(
+            scene.campaignId
+          );
+          for (const b of activeBindings) {
+            if (b.role === "subject_identity" || b.role === "location") {
+              const matched = campaignBibleEntries.find(
+                (e) => e.referenceAssetId.toLowerCase() === b.referenceAssetId.toLowerCase()
+              );
+              if (!matched) {
+                throw new StaleBibleBindingMismatchError(
+                  scene.id,
+                  b.referenceAssetId,
+                  `Asset "${b.referenceAssetId}" is bound to scene "${scene.id}" with role "${b.role}" but does not exist in campaign bible.`
+                );
+              }
+              if (matched.role !== b.role) {
+                throw new StaleBibleBindingMismatchError(
+                  scene.id,
+                  b.referenceAssetId,
+                  `Asset "${b.referenceAssetId}" is bound with role "${b.role}" in scene "${scene.id}", but campaign bible has role "${matched.role}".`
+                );
+              }
+            }
+          }
+        }
+
+        const activeSubjectAssetIds = new Set(
+          activeBindings
+            .filter((b) => b.role === "subject_identity")
+            .map((b) => b.referenceAssetId.toLowerCase())
+        );
+        const activeLocationAssetIds = new Set(
+          activeBindings
+            .filter((b) => b.role === "location")
+            .map((b) => b.referenceAssetId.toLowerCase())
+        );
+
+        let boundReferences: BoundReferencePromptInput[] | undefined;
+        if (activeBindings.length > 0) {
+          const sceneAssets = context.referenceAssets
+            ? await context.referenceAssets.listBySceneId(scene.id, {
+                specRevision: scene.specRevision
+              })
+            : [];
+          const assetsMap = new Map<string, ReferenceAsset>();
+          for (const a of sceneAssets) {
+            assetsMap.set(a.id, a);
+            assetsMap.set(a.id.toLowerCase(), a);
+          }
+
+          const missingIds = activeBindings
+            .map((b) => b.referenceAssetId)
+            .filter((id) => !assetsMap.has(id) && !assetsMap.has(id.toLowerCase()));
+
+          if (missingIds.length > 0 && context.referenceAssets?.findByIdsGlobal) {
+            const globalAssets = await context.referenceAssets.findByIdsGlobal(
+              missingIds as readonly ReferenceAssetId[]
+            );
+            for (const a of globalAssets) {
+              assetsMap.set(a.id, a);
+              assetsMap.set(a.id.toLowerCase(), a);
+            }
+          }
+
+          for (const b of activeBindings) {
+            const resolved =
+              assetsMap.get(b.referenceAssetId) ?? assetsMap.get(b.referenceAssetId.toLowerCase());
+            if (!resolved) {
+              throw new ReferenceAssetDescriptionGenerationError(
+                b.referenceAssetId,
+                `Reference asset "${b.referenceAssetId}" could not be resolved for scene "${scene.id}".`
+              );
+            }
+          }
+
+          const enrichedAssetsById = new Map<string, ReferenceAsset>();
+          for (const [id, a] of assetsMap.entries()) {
+            const bibleEntry = campaignBibleEntries.find(
+              (e) => e.referenceAssetId.toLowerCase() === a.id.toLowerCase()
+            );
+            const desc = bibleEntry ? bibleEntry.description : a.description;
+            enrichedAssetsById.set(
+              id,
+              Object.freeze({
+                ...a,
+                description: desc
+              })
+            );
+          }
+
+          const canonicalRefs = canonicalizeReferenceBindings({
+            bindings: activeBindings,
+            assetsById: enrichedAssetsById
+          });
+
+          boundReferences = canonicalRefs.map((ref) => {
+            const bibleEntry = campaignBibleEntries.find(
+              (e) => e.referenceAssetId.toLowerCase() === ref.referenceAssetId.toLowerCase()
+            );
+            const desc = bibleEntry ? bibleEntry.description : (ref.asset.description ?? "");
+            if (!desc || desc.trim().length === 0) {
+              throw new ReferenceAssetDescriptionGenerationError(
+                ref.referenceAssetId,
+                `No description available for reference asset "${ref.referenceAssetId}".`
+              );
+            }
+            return {
+              promptTag: ref.promptTag,
+              role: ref.role,
+              description: desc.trim(),
+              referenceAssetId: ref.referenceAssetId
+            };
+          });
+        }
+
+        const boundReferenceIds = new Set([
+          ...(scene.configuration.referenceIds ?? []).map((id) => id.toLowerCase()),
+          ...activeBindings.map((b) => b.referenceAssetId.toLowerCase())
+        ]);
+
         return {
           buildRequest: (correctiveFeedback?: string) =>
             buildShotPlanVariationPrompt({
@@ -211,7 +354,9 @@ export class CreateShotPlanVariationUseCase {
               sourceShotPlan: sourceSnapshot,
               directorGuidance: input.directorGuidance,
               variantCount: input.variantCount,
-              referenceAssetIds: scene.configuration.referenceIds,
+              ...(boundReferences !== undefined && boundReferences.length > 0
+                ? { boundReferences }
+                : { referenceAssetIds: scene.configuration.referenceIds }),
               correctiveFeedback
             }),
           parseAndValidate: (rawText: string): readonly ShotPlanProposal[] => {
@@ -237,11 +382,29 @@ export class CreateShotPlanVariationUseCase {
                 }
               }
 
+              if (proposal.continuity && proposal.continuity.persistentSubjectIds.length > 0) {
+                for (const persistentId of proposal.continuity.persistentSubjectIds) {
+                  const lower = persistentId.toLowerCase();
+                  if (activeLocationAssetIds.has(lower)) {
+                    throw new InvalidPersistentSubjectIdError(
+                      persistentId,
+                      `Persistent subject ID "${persistentId}" references a location asset, but only subject_identity assets are allowed in continuity.`
+                    );
+                  }
+                  if (!activeSubjectAssetIds.has(lower)) {
+                    throw new InvalidPersistentSubjectIdError(
+                      persistentId,
+                      `Persistent subject ID "${persistentId}" does not match any active scene-bound subject_identity reference in the campaign bible.`
+                    );
+                  }
+                }
+              }
+
               if (proposal.subjects.length > 0) {
                 for (const subject of proposal.subjects) {
                   if (
                     subject.referenceAssetId &&
-                    !boundReferenceIds.has(subject.referenceAssetId)
+                    !boundReferenceIds.has(subject.referenceAssetId.toLowerCase())
                   ) {
                     throw new ShotPlanValidationError(
                       `Variant ${i + 1} subject '${subject.subjectId}' references unbound asset ID '${subject.referenceAssetId}'.`

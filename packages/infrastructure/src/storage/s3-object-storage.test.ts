@@ -100,6 +100,163 @@ describe("S3ObjectStorage (unit)", () => {
     expect(result?.contentType).toBe("text/plain");
   });
 
+  it("aborts immediately when signal is already aborted before calling getObject", async () => {
+    let sendCalled = false;
+    const fakeClient = {
+      send: async () => {
+        sendCalled = true;
+        return {};
+      }
+    } as unknown as S3Client;
+
+    const storage = new S3ObjectStorage({
+      endpoint: "http://localhost:9000",
+      client: fakeClient
+    });
+
+    const controller = new AbortController();
+    controller.abort(new Error("Pre-aborted"));
+
+    await expect(
+      storage.getObject({ bucket: "test-bucket", key: "test-key" }, { signal: controller.signal })
+    ).rejects.toThrow("Pre-aborted");
+
+    expect(sendCalled).toBe(false);
+  });
+
+  it("passes abortSignal to client.send and propagates abort", async () => {
+    let receivedOptions: { abortSignal?: AbortSignal } | undefined;
+    const controller = new AbortController();
+
+    const fakeClient = {
+      send: async (_cmd: unknown, options?: { abortSignal?: AbortSignal }) => {
+        receivedOptions = options;
+        controller.abort(new Error("Aborted in flight"));
+        throw new Error("AbortError");
+      }
+    } as unknown as S3Client;
+
+    const storage = new S3ObjectStorage({
+      endpoint: "http://localhost:9000",
+      client: fakeClient
+    });
+
+    await expect(
+      storage.getObject({ bucket: "test-bucket", key: "test-key" }, { signal: controller.signal })
+    ).rejects.toThrow("Aborted in flight");
+
+    expect(receivedOptions?.abortSignal).toBe(controller.signal);
+  });
+
+  it("destroys the response stream when aborted during body read", async () => {
+    let streamDestroyed = false;
+    const controller = new AbortController();
+
+    const fakeStream = new Readable({
+      read() {
+        this.push(Buffer.from("first chunk"));
+        // Abort right after first chunk is emitted
+        controller.abort(new Error("Aborted during stream"));
+      },
+      destroy(err, cb) {
+        streamDestroyed = true;
+        cb(err);
+      }
+    });
+
+    const fakeClient = {
+      send: async () => ({
+        ContentLength: 100,
+        Body: fakeStream
+      })
+    } as unknown as S3Client;
+
+    const storage = new S3ObjectStorage({
+      endpoint: "http://localhost:9000",
+      client: fakeClient
+    });
+
+    await expect(
+      storage.getObject({ bucket: "test-bucket", key: "test-key" }, { signal: controller.signal })
+    ).rejects.toThrow("Aborted during stream");
+
+    expect(streamDestroyed).toBe(true);
+  });
+
+  it("interrupts and destroys body when aborted during transformToByteArray", async () => {
+    let destroyCalled = false;
+    const controller = new AbortController();
+
+    const fakeBody = {
+      transformToByteArray: () =>
+        new Promise<Uint8Array>((_resolve) => {
+          setTimeout(() => {
+            controller.abort(new Error("Deadline exceeded during transformToByteArray"));
+          }, 10);
+        }),
+      destroy: () => {
+        destroyCalled = true;
+      }
+    };
+
+    const fakeClient = {
+      send: async () => ({
+        ContentLength: 100,
+        Body: fakeBody
+      })
+    } as unknown as S3Client;
+
+    const storage = new S3ObjectStorage({
+      endpoint: "http://localhost:9000",
+      client: fakeClient
+    });
+
+    await expect(
+      storage.getObject({ bucket: "test-bucket", key: "test-key" }, { signal: controller.signal })
+    ).rejects.toThrow("Deadline exceeded during transformToByteArray");
+
+    expect(destroyCalled).toBe(true);
+  });
+
+  it("interrupts stalled async iterable stream when aborted", async () => {
+    let destroyCalled = false;
+    const controller = new AbortController();
+
+    const fakeStalledStream = {
+      [Symbol.asyncIterator]() {
+        return {
+          next: () =>
+            new Promise<IteratorResult<Uint8Array>>((_resolve) => {
+              setTimeout(() => {
+                controller.abort(new Error("Stalled stream aborted by deadline"));
+              }, 10);
+            })
+        };
+      },
+      destroy: () => {
+        destroyCalled = true;
+      }
+    };
+
+    const fakeClient = {
+      send: async () => ({
+        ContentLength: 100,
+        Body: fakeStalledStream
+      })
+    } as unknown as S3Client;
+
+    const storage = new S3ObjectStorage({
+      endpoint: "http://localhost:9000",
+      client: fakeClient
+    });
+
+    await expect(
+      storage.getObject({ bucket: "test-bucket", key: "test-key" }, { signal: controller.signal })
+    ).rejects.toThrow("Stalled stream aborted by deadline");
+
+    expect(destroyCalled).toBe(true);
+  });
+
   it("passes IfNoneMatch to PutObjectCommand and returns locator", async () => {
     let sentCommand: { input: { IfNoneMatch?: string } } | undefined;
     const fakeClient = {

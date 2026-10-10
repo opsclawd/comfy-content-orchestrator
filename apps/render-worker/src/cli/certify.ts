@@ -577,6 +577,22 @@ export async function runCertificationCli(
       comfyUiCommit: liveProvenance.git.comfyUiCommit,
       customNodes
     };
+  } else if (profile.engine === "flux_schnell" && profile.id === "flux_schnell_storyboard_v1") {
+    workloadIdentity = {
+      profileId: "flux_schnell_storyboard_v1",
+      renderProfileKey: (profile.renderProfileIdentity?.key ??
+        "FLUX_SCHNELL_STORYBOARD_V1") as "FLUX_SCHNELL_STORYBOARD_V1",
+      renderProfileVersion: 1,
+      engine: "flux_schnell",
+      width: 1024,
+      height: 1024,
+      frames: 1,
+      steps: 4,
+      workflowSha256: liveProvenance.workflow.sha256,
+      modelSha256: modelSha256Map,
+      comfyUiCommit: liveProvenance.git.comfyUiCommit,
+      customNodes
+    };
   } else if (profile.engine === "flux_schnell") {
     workloadIdentity = {
       profileId: "flux-schnell-draft",

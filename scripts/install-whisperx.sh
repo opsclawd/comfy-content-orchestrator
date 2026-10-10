@@ -227,9 +227,9 @@ if [[ -d "${HOME}/.cache/pip" && "${PIP_CACHE_DIR}" != "${HOME}/.cache/pip" ]]; 
   fi
 fi
 
-echo "Upgrading pip and installing whisperx==${WHISPERX_PIP_VERSION} torchaudio==${WHISPERX_TORCHAUDIO_VERSION} matplotlib==${WHISPERX_MATPLOTLIB_VERSION}..."
+echo "Upgrading pip and installing whisperx==${WHISPERX_PIP_VERSION} torchaudio==${WHISPERX_TORCHAUDIO_VERSION} matplotlib==${WHISPERX_MATPLOTLIB_VERSION} transformers==${WHISPERX_TRANSFORMERS_VERSION:-5.17.0}..."
 "${PIP_BIN}" install --cache-dir "${PIP_CACHE_DIR}" --upgrade pip
-"${PIP_BIN}" install --cache-dir "${PIP_CACHE_DIR}" "whisperx==${WHISPERX_PIP_VERSION}" "torchaudio==${WHISPERX_TORCHAUDIO_VERSION}" "matplotlib==${WHISPERX_MATPLOTLIB_VERSION}"
+"${PIP_BIN}" install --cache-dir "${PIP_CACHE_DIR}" "whisperx==${WHISPERX_PIP_VERSION}" "torchaudio==${WHISPERX_TORCHAUDIO_VERSION}" "matplotlib==${WHISPERX_MATPLOTLIB_VERSION}" "transformers==${WHISPERX_TRANSFORMERS_VERSION:-5.17.0}"
 
 # Clear executable stack flag from ctranslate2 shared libraries if present to prevent
 # "cannot enable executable stack as shared object requires: Invalid argument" on strict kernels

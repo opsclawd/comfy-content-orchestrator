@@ -278,79 +278,89 @@ describe("ShotPlan-to-H3 E2E Integration (#331)", () => {
 
     const mockPlanningClient: PlanningModelClientPort = {
       providerName: "Anthropic",
-      complete: async () => ({
-        kind: "success",
-        rawText: JSON.stringify({
-          variants: [
-            {
-              framing: "medium_close_up",
-              angle: "eye_level",
-              cameraMovement: "dolly_in",
-              movementSpeed: "slow",
-              lensIntent: "50mm prime",
-              cameraPosition: "eye height",
-              cameraPromptDescription: "Slow dolly forward",
-              actionSummary: "Operative activates scanner",
-              lightingStyle: "neon_night",
-              environmentDescription: "Rainy alleyway",
-              colorPalette: ["cyan", "magenta"],
-              atmosphere: "foggy rain",
-              subjects: [
-                {
-                  subjectId: "hero-operative",
-                  role: "subject_identity",
-                  referenceAssetId: refAsset1Id,
-                  initialPosition: "screen_center",
-                  movementTrajectory: "stationary"
-                }
-              ],
-              beats: [
-                {
-                  beatIndex: 1,
-                  startMs: 0,
-                  endMs: 5000,
-                  description: "Scan target",
-                  cameraAction: "dolly in",
-                  subjectAction: "activate scanner"
-                }
-              ]
-            },
-            {
-              framing: "close_up",
-              angle: "low_angle",
-              cameraMovement: "static",
-              movementSpeed: "slow",
-              lensIntent: "85mm",
-              cameraPosition: "low tripod",
-              cameraPromptDescription: "Static low angle",
-              actionSummary: "Operative stares intently",
-              lightingStyle: "chiaroscuro",
-              environmentDescription: "Dark doorway",
-              colorPalette: ["blue"],
-              atmosphere: "dark",
-              subjects: [
-                {
-                  subjectId: "hero-operative",
-                  role: "subject_identity",
-                  referenceAssetId: refAsset1Id,
-                  initialPosition: "screen_center",
-                  movementTrajectory: "static"
-                }
-              ],
-              beats: [
-                {
-                  beatIndex: 1,
-                  startMs: 0,
-                  endMs: 5000,
-                  description: "Stare",
-                  cameraAction: "static",
-                  subjectAction: "breathing"
-                }
-              ]
-            }
-          ]
-        })
-      })
+      imageCapability: true,
+      supportsImages: true,
+      complete: async (req) => {
+        if (req.systemPrompt?.includes("visual analysis assistant")) {
+          return {
+            kind: "success",
+            rawText: "Cyberpunk reference asset visual description"
+          };
+        }
+        return {
+          kind: "success",
+          rawText: JSON.stringify({
+            variants: [
+              {
+                framing: "medium_close_up",
+                angle: "eye_level",
+                cameraMovement: "dolly_in",
+                movementSpeed: "slow",
+                lensIntent: "50mm prime",
+                cameraPosition: "eye height",
+                cameraPromptDescription: "Slow dolly forward",
+                actionSummary: "Operative activates scanner",
+                lightingStyle: "neon_night",
+                environmentDescription: "Rainy alleyway",
+                colorPalette: ["cyan", "magenta"],
+                atmosphere: "foggy rain",
+                subjects: [
+                  {
+                    subjectId: "hero-operative",
+                    role: "subject_identity",
+                    referenceAssetId: refAsset1Id,
+                    initialPosition: "screen_center",
+                    movementTrajectory: "stationary"
+                  }
+                ],
+                beats: [
+                  {
+                    beatIndex: 1,
+                    startMs: 0,
+                    endMs: 5000,
+                    description: "Scan target",
+                    cameraAction: "dolly in",
+                    subjectAction: "activate scanner"
+                  }
+                ]
+              },
+              {
+                framing: "close_up",
+                angle: "low_angle",
+                cameraMovement: "static",
+                movementSpeed: "slow",
+                lensIntent: "85mm",
+                cameraPosition: "low tripod",
+                cameraPromptDescription: "Static low angle",
+                actionSummary: "Operative stares intently",
+                lightingStyle: "chiaroscuro",
+                environmentDescription: "Dark doorway",
+                colorPalette: ["blue"],
+                atmosphere: "dark",
+                subjects: [
+                  {
+                    subjectId: "hero-operative",
+                    role: "subject_identity",
+                    referenceAssetId: refAsset1Id,
+                    initialPosition: "screen_center",
+                    movementTrajectory: "static"
+                  }
+                ],
+                beats: [
+                  {
+                    beatIndex: 1,
+                    startMs: 0,
+                    endMs: 5000,
+                    description: "Stare",
+                    cameraAction: "static",
+                    subjectAction: "breathing"
+                  }
+                ]
+              }
+            ]
+          })
+        };
+      }
     };
 
     const mockFallbackClient: PlanningModelClientPort = {
@@ -364,7 +374,8 @@ describe("ShotPlan-to-H3 E2E Integration (#331)", () => {
     const planShotPlans = new PlanShotPlansUseCase({
       uow,
       primaryClient: mockPlanningClient,
-      fallbackClient: mockFallbackClient
+      fallbackClient: mockFallbackClient,
+      objectStorage
     });
 
     const planResultScene1 = await planShotPlans.execute({

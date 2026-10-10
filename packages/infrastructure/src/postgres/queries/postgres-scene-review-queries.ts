@@ -198,7 +198,7 @@ function mapRowToShotPlanReviewItem(
   };
 }
 
-function deriveAllowedActions(status: SceneStatus): readonly ReviewAction[] {
+function deriveAllowedActions(status: SceneStatus, hasShotPlans: boolean): readonly ReviewAction[] {
   switch (status) {
     case "draft_pending":
       return Object.freeze([
@@ -214,7 +214,11 @@ function deriveAllowedActions(status: SceneStatus): readonly ReviewAction[] {
     case "director_review":
       return Object.freeze([
         "approve",
-        "reroll",
+        // Once ShotPlans exist, "reroll" (the legacy pre-ShotPlan candidate flow,
+        // which fires photoreal `flux-schnell-draft` jobs with no sketch-style
+        // compilation) is withheld in favor of "reroll_shotplan" — same precedent
+        // as withholding "candidate_select" once ShotPlans exist (#385).
+        ...(hasShotPlans ? [] : (["reroll"] as const)),
         "candidate_select",
         "select_shotplan",
         "approve_shotplan",
@@ -483,7 +487,7 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
     );
 
     const status = sceneRow.status as SceneStatus;
-    const allowedActions = deriveAllowedActions(status);
+    const allowedActions = deriveAllowedActions(status, shotPlans.length > 0);
 
     return {
       sceneId: sceneRow.scene_id as SceneId,

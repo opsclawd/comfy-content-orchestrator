@@ -133,6 +133,9 @@ export function createControlApiContainer(
         uow: dependencies.uow,
         primaryClient: dependencies.planningModelClients.primary,
         fallbackClient: dependencies.planningModelClients.fallback,
+        ...(dependencies.objectStorage !== undefined
+          ? { objectStorage: dependencies.objectStorage }
+          : {}),
         ...(dependencies.planningOverallTimeoutMs !== undefined
           ? { overallTimeoutMs: dependencies.planningOverallTimeoutMs }
           : {})

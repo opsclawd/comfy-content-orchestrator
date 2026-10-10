@@ -19,7 +19,7 @@ export class InvalidShotPlanVariantCountError extends Error {
 }
 
 export class ShotPlanValidationError extends Error {
-  override readonly name = "ShotPlanValidationError";
+  override readonly name: string = "ShotPlanValidationError";
 
   constructor(message: string) {
     super(message);
@@ -107,3 +107,56 @@ export class ShotPlanVariationIdempotencyConflictError extends Error {
     this.idempotencyKey = idempotencyKey;
   }
 }
+
+export class ReferenceAssetDescriptionGenerationError extends Error {
+  override readonly name = "ReferenceAssetDescriptionGenerationError";
+  readonly assetId: string;
+  readonly referenceAssetId: string;
+
+  constructor(assetId: string, message: string, options?: ErrorOptions) {
+    super(`Failed to generate description for reference asset '${assetId}': ${message}`, options);
+    this.assetId = assetId;
+    this.referenceAssetId = assetId;
+  }
+}
+
+export class PlannerReferenceImageAcquisitionError extends Error {
+  override readonly name = "PlannerReferenceImageAcquisitionError";
+  readonly code: string;
+  readonly referenceAssetId: string;
+  readonly assetId: string;
+
+  constructor(
+    referenceAssetId: string,
+    message: string,
+    code = "PLANNER_REFERENCE_IMAGE_ACQUISITION_FAILED",
+    options?: ErrorOptions
+  ) {
+    super(
+      `Failed to acquire planner reference image for asset '${referenceAssetId}': ${message}`,
+      options
+    );
+    this.referenceAssetId = referenceAssetId;
+    this.assetId = referenceAssetId;
+    this.code = code;
+  }
+}
+
+export class InvalidPersistentSubjectIdError extends ShotPlanValidationError {
+  override readonly name = "InvalidPersistentSubjectIdError";
+  readonly code = "INVALID_PERSISTENT_SUBJECT_ID";
+  readonly persistentId: string;
+  readonly reason: string;
+
+  constructor(persistentId: string, reason: string) {
+    super(`Invalid persistent subject ID "${persistentId}": ${reason}`);
+    this.persistentId = persistentId;
+    this.reason = reason;
+  }
+}
+
+export {
+  CampaignReferenceBibleRoleConflictError,
+  StaleBibleEntryConflictError,
+  StaleBibleBindingMismatchError
+} from "../ports/campaign-reference-bible-errors.js";

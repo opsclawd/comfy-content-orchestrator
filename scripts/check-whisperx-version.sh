@@ -23,13 +23,17 @@ TARGET_MODEL_DIR="${REPO_ROOT}/${WHISPERX_MODEL_DIR}"
 MANIFEST_FILE="${TARGET_MODEL_DIR}/model_manifest.json"
 MODEL_FILE="${TARGET_MODEL_DIR}/${WHISPERX_ALIGNMENT_MODEL_FILE}"
 
-PYTHON_BIN="${TARGET_VENV_DIR}/bin/python3"
-if [[ ! -f "${PYTHON_BIN}" ]]; then
-  PYTHON_BIN="${TARGET_VENV_DIR}/bin/python"
+if [[ -n "${WHISPERX_PYTHON_PATH:-}" ]]; then
+  PYTHON_BIN="${WHISPERX_PYTHON_PATH}"
+else
+  PYTHON_BIN="${TARGET_VENV_DIR}/bin/python3"
+  if [[ ! -f "${PYTHON_BIN}" ]]; then
+    PYTHON_BIN="${TARGET_VENV_DIR}/bin/python"
+  fi
 fi
 
 if [[ ! -f "${PYTHON_BIN}" ]]; then
-  echo "Error: Pinned WhisperX virtualenv not found at ${TARGET_VENV_DIR}" >&2
+  echo "Error: Pinned WhisperX virtualenv not found at ${PYTHON_BIN}" >&2
   echo "Please run '${REPO_ROOT}/scripts/install-whisperx.sh' to install the pinned WhisperX environment." >&2
   exit 1
 fi

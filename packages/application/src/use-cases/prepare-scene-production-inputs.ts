@@ -32,7 +32,7 @@ import {
 import { UnrepresentableProductionConfigurationError } from "./production-configuration-errors.js";
 import { MAX_CANDIDATE_IMAGE_BYTES } from "./resolve-approved-candidate-media.js";
 import { SceneNotFoundError } from "./scene-not-found-error.js";
-import { ShotPlanNotFoundError } from "./plan-shot-plans-errors.js";
+import { ShotPlanNotFoundError, StaleBibleBindingMismatchError } from "./plan-shot-plans-errors.js";
 import {
   ACCEPTED_PRODUCTION_ENGINE_PROFILE_IDS,
   MINIMAX_H3_I2V_PRODUCTION_RENDER_PROFILE_KEY,
@@ -349,6 +349,65 @@ export class PrepareSceneProductionInputsUseCase {
           })
         : [];
       const assetsById = new Map(rawAssets.map((a) => [a.id, a]));
+
+      if (context.campaignReferenceBible) {
+        const bibleEntries = await context.campaignReferenceBible.findByCampaignId(
+          scene.campaignId
+        );
+        const bibleMap = new Map(bibleEntries.map((e) => [e.referenceAssetId.toLowerCase(), e]));
+
+        for (const b of rawBindings) {
+          if (b.role === "subject_identity" || b.role === "location") {
+            const entry = bibleMap.get(b.referenceAssetId.toLowerCase());
+            if (!entry) {
+              const msg = `Asset "${b.referenceAssetId}" is bound to scene "${scene.id}" with role "${b.role}" but does not exist in campaign bible.`;
+              if (!dryRun) {
+                throw new StaleBibleBindingMismatchError(scene.id, b.referenceAssetId, msg);
+              }
+              blockers.push({
+                code: "STALE_BIBLE_BINDING_MISMATCH",
+                message: msg
+              });
+            } else if (entry.role !== b.role) {
+              const msg = `Asset "${b.referenceAssetId}" is bound with role "${b.role}" in scene "${scene.id}", but campaign bible has role "${entry.role}".`;
+              if (!dryRun) {
+                throw new StaleBibleBindingMismatchError(scene.id, b.referenceAssetId, msg);
+              }
+              blockers.push({
+                code: "STALE_BIBLE_BINDING_MISMATCH",
+                message: msg
+              });
+            }
+          }
+        }
+
+        for (const [id, asset] of assetsById.entries()) {
+          const entry = bibleMap.get(id.toLowerCase());
+          if (entry && (entry.role === "subject_identity" || entry.role === "location")) {
+            assetsById.set(
+              id,
+              Object.freeze({
+                ...asset,
+                description: entry.description
+              })
+            );
+          }
+        }
+      } else {
+        const hasEligibleBindings = rawBindings.some(
+          (b) => b.role === "subject_identity" || b.role === "location"
+        );
+        if (hasEligibleBindings) {
+          const msg = `campaignReferenceBible repository is required in UnitOfWorkContext for scene "${scene.id}" with subject/location bindings.`;
+          if (!dryRun) {
+            throw new StaleBibleBindingMismatchError(scene.id, "", msg);
+          }
+          blockers.push({
+            code: "STALE_BIBLE_BINDING_MISMATCH",
+            message: msg
+          });
+        }
+      }
 
       if (!context.campaigns) {
         if (!dryRun) {

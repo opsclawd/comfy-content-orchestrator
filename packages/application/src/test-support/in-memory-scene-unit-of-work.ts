@@ -42,9 +42,30 @@ import type {
   TransactionalJobEnqueuer,
   UnitOfWork,
   UnitOfWorkContext,
-  VideoStemSourceRecord
+  VideoStemSourceRecord,
+  CampaignReferenceBibleRepository,
+  CampaignReferenceBibleEntry,
+  CampaignReferenceBibleChange
 } from "../ports/index.js";
-import { CampaignIdempotencyConflictError } from "../ports/index.js";
+import { CampaignIdempotencyConflictError, StaleBibleEntryConflictError } from "../ports/index.js";
+
+class InMemoryMutex {
+  private queue: Promise<void> = Promise.resolve();
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    let release: () => void;
+    const wait = new Promise<void>((r) => {
+      release = r;
+    });
+    const prev = this.queue;
+    this.queue = prev.then(() => wait);
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release!();
+    }
+  }
+}
 
 export class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _seededScenes: Map<SceneId, Scene>;
@@ -70,7 +91,10 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _seededReferenceAssets = new Map<ReferenceAssetId, ReferenceAsset>();
   private readonly _seededReferenceGroups = new Map<ReferenceGroupId, ReferenceGroup>();
   private readonly _sceneBindings = new Map<string, SceneReferenceBinding>();
+  private readonly _campaignReferenceBibles = new Map<string, CampaignReferenceBibleEntry>();
+  private readonly _campaignReferenceBibleChanges: CampaignReferenceBibleChange[] = [];
   private readonly _enqueuedAssemblyJobs: EnqueueDeliveryAssemblyJobInput[] = [];
+  private readonly _mutexes = new Map<string, InMemoryMutex>();
   private _beforeSaveWithRequestHash?:
     ((campaign: CampaignShellRecord, hash: string) => Promise<void> | void) | undefined;
   private _executeLock: Promise<unknown> = Promise.resolve();
@@ -237,6 +261,14 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     return this._enqueuedJobs;
   }
 
+  get campaignReferenceBibles(): ReadonlyMap<string, CampaignReferenceBibleEntry> {
+    return this._campaignReferenceBibles;
+  }
+
+  get campaignReferenceBibleChanges(): readonly CampaignReferenceBibleChange[] {
+    return this._campaignReferenceBibleChanges;
+  }
+
   withJobs(enqueuer: TransactionalJobEnqueuer): this {
     this._jobEnqueuer = enqueuer;
     return this;
@@ -315,6 +347,11 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     return this;
   }
 
+  seedCampaignReferenceBible(entry: CampaignReferenceBibleEntry): this {
+    this._campaignReferenceBibles.set(`${entry.campaignId}:${entry.referenceAssetId}`, entry);
+    return this;
+  }
+
   enqueuedAssemblyJobs(): readonly EnqueueDeliveryAssemblyJobInput[] {
     return this._enqueuedAssemblyJobs;
   }
@@ -358,6 +395,12 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     const stagedCompletionHashes = new Map<string, string>();
     const stagedClients: ClientRecord[] = [];
     const stagedJobs: RenderJob[] = [];
+
+    const scopedBibles = new Map<string, CampaignReferenceBibleEntry>();
+    for (const [key, entry] of this._campaignReferenceBibles.entries()) {
+      scopedBibles.set(key, { ...entry });
+    }
+    const stagedBibleChanges: CampaignReferenceBibleChange[] = [];
 
     let scopedJobs: TransactionalJobEnqueuer | undefined;
     if (this._jobEnqueuer !== undefined) {
@@ -780,6 +823,35 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
         if (!asset || asset.clientId !== clientId || asset.archivedAt != null) return false;
         this._seededReferenceAssets.set(id, { ...asset, archivedAt: new Date().toISOString() });
         return true;
+      },
+      findDescriptionByContentHash: async (contentHashSha256) => {
+        for (const asset of this._seededReferenceAssets.values()) {
+          if (
+            asset.contentHashSha256 === contentHashSha256 &&
+            asset.description &&
+            asset.description.trim().length > 0
+          ) {
+            return asset.description.trim();
+          }
+        }
+        return undefined;
+      },
+      updateDescriptionByContentHash: async (contentHashSha256, description) => {
+        const trimmed = description.trim();
+        if (!trimmed) return;
+        for (const [id, asset] of this._seededReferenceAssets.entries()) {
+          if (asset.contentHashSha256 === contentHashSha256) {
+            this._seededReferenceAssets.set(id, Object.freeze({ ...asset, description: trimmed }));
+          }
+        }
+      },
+      withLock: async <T>(key: string, action: () => Promise<T>): Promise<T> => {
+        let mutex = this._mutexes.get(key);
+        if (!mutex) {
+          mutex = new InMemoryMutex();
+          this._mutexes.set(key, mutex);
+        }
+        return await mutex.run(action);
       }
     };
 
@@ -808,6 +880,217 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       }
     };
 
+    const scopedCampaignReferenceBible: CampaignReferenceBibleRepository = {
+      findByCampaignId: async (campaignId: string) => {
+        return Array.from(scopedBibles.values())
+          .filter((e) => e.campaignId === campaignId)
+          .sort((a, b) => {
+            const priorityA = a.role === "subject_identity" ? 0 : 1;
+            const priorityB = b.role === "subject_identity" ? 0 : 1;
+            if (priorityA !== priorityB) return priorityA - priorityB;
+            const idA = a.referenceAssetId.toLowerCase();
+            const idB = b.referenceAssetId.toLowerCase();
+            if (idA < idB) return -1;
+            if (idA > idB) return 1;
+            return 0;
+          });
+      },
+      findByCampaignAndAsset: async (campaignId: string, referenceAssetId: string) => {
+        for (const entry of scopedBibles.values()) {
+          if (
+            entry.campaignId === campaignId &&
+            entry.referenceAssetId.toLowerCase() === referenceAssetId.toLowerCase()
+          ) {
+            return entry;
+          }
+        }
+        return null;
+      },
+      initializeSnapshot: async (input) => {
+        const existing = Array.from(scopedBibles.values()).filter(
+          (e) => e.campaignId === input.campaignId
+        );
+        if (existing.length > 0) {
+          const sorted = existing.sort((a, b) => {
+            const priorityA = a.role === "subject_identity" ? 0 : 1;
+            const priorityB = b.role === "subject_identity" ? 0 : 1;
+            if (priorityA !== priorityB) return priorityA - priorityB;
+            return a.referenceAssetId.toLowerCase() < b.referenceAssetId.toLowerCase() ? -1 : 1;
+          });
+          return { entries: sorted, created: false };
+        }
+        const created: CampaignReferenceBibleEntry[] = [];
+        const now = new Date().toISOString();
+        for (const e of input.entries) {
+          const entry: CampaignReferenceBibleEntry = {
+            campaignId: input.campaignId,
+            referenceAssetId: e.referenceAssetId,
+            role: e.role,
+            description: e.description,
+            biblePromptTag: e.biblePromptTag,
+            sourceContentHashSha256: e.sourceContentHashSha256,
+            createdAt: now,
+            updatedAt: now
+          };
+          scopedBibles.set(`${input.campaignId}:${e.referenceAssetId.toLowerCase()}`, entry);
+          created.push(entry);
+        }
+        return { entries: created, created: true };
+      },
+      updateEntryWithAudit: async (input) => {
+        const key = `${input.campaignId}:${input.referenceAssetId.toLowerCase()}`;
+        const existing = scopedBibles.get(key);
+
+        if (input.expectedUpdatedAt !== undefined) {
+          if (!existing) {
+            throw new StaleBibleEntryConflictError(
+              input.campaignId,
+              input.referenceAssetId,
+              input.expectedUpdatedAt,
+              undefined
+            );
+          }
+          if (
+            new Date(existing.updatedAt).getTime() !== new Date(input.expectedUpdatedAt).getTime()
+          ) {
+            throw new StaleBibleEntryConflictError(
+              input.campaignId,
+              input.referenceAssetId,
+              input.expectedUpdatedAt,
+              existing.updatedAt
+            );
+          }
+        }
+
+        const now = new Date().toISOString();
+
+        if (input.next) {
+          const oldRole =
+            input.change.oldRole !== undefined
+              ? input.change.oldRole
+              : input.change.changeReason === "added"
+                ? null
+                : existing
+                  ? existing.role
+                  : null;
+          const oldDescription =
+            input.change.oldDescription !== undefined
+              ? input.change.oldDescription
+              : input.change.changeReason === "added"
+                ? null
+                : existing
+                  ? existing.description
+                  : null;
+          const oldBiblePromptTag =
+            input.change.oldBiblePromptTag !== undefined
+              ? input.change.oldBiblePromptTag
+              : input.change.changeReason === "added"
+                ? null
+                : existing
+                  ? existing.biblePromptTag
+                  : null;
+          const oldSourceContentHashSha256 =
+            input.change.oldSourceContentHashSha256 !== undefined
+              ? input.change.oldSourceContentHashSha256
+              : input.change.changeReason === "added"
+                ? null
+                : existing
+                  ? existing.sourceContentHashSha256
+                  : null;
+
+          if (existing || input.change.changeReason !== "added") {
+            const isDiff =
+              oldRole !== input.next.role ||
+              oldDescription !== input.next.description ||
+              oldBiblePromptTag !== input.next.biblePromptTag ||
+              oldSourceContentHashSha256 !== input.next.sourceContentHashSha256;
+            if (!isDiff) {
+              throw new Error("Bible entry update requires at least one value to differ.");
+            }
+          }
+
+          const updatedEntry: CampaignReferenceBibleEntry = {
+            campaignId: input.campaignId,
+            referenceAssetId: input.referenceAssetId,
+            role: input.next.role,
+            description: input.next.description,
+            biblePromptTag: input.next.biblePromptTag,
+            sourceContentHashSha256: input.next.sourceContentHashSha256,
+            createdAt: existing ? existing.createdAt : now,
+            updatedAt: now
+          };
+          scopedBibles.set(key, updatedEntry);
+
+          stagedBibleChanges.push({
+            changeId: `change-${stagedBibleChanges.length + 1}`,
+            campaignId: input.campaignId,
+            referenceAssetId: input.referenceAssetId,
+            oldRole,
+            newRole: input.next.role,
+            oldDescription,
+            newDescription: input.next.description,
+            oldBiblePromptTag,
+            newBiblePromptTag: input.next.biblePromptTag,
+            oldSourceContentHashSha256,
+            newSourceContentHashSha256: input.next.sourceContentHashSha256,
+            changedAt: now,
+            changeReason: input.change.changeReason,
+            sourceSceneId: input.change.sourceSceneId,
+            sourceSpecRevision: input.change.sourceSpecRevision,
+            sourceBindingId: input.change.sourceBindingId,
+            actorKind: input.change.actorKind,
+            actorId: input.change.actorId ?? null
+          });
+
+          return updatedEntry;
+        } else {
+          if (!existing) {
+            throw new Error(
+              `Cannot record removal for nonexistent bible entry "${input.referenceAssetId}" in campaign "${input.campaignId}".`
+            );
+          }
+          const updatedEntry: CampaignReferenceBibleEntry = {
+            ...existing,
+            updatedAt: now
+          };
+          scopedBibles.set(key, updatedEntry);
+
+          stagedBibleChanges.push({
+            changeId: `change-${stagedBibleChanges.length + 1}`,
+            campaignId: input.campaignId,
+            referenceAssetId: input.referenceAssetId,
+            oldRole: existing.role,
+            newRole: null,
+            oldDescription: existing.description,
+            newDescription: null,
+            oldBiblePromptTag: existing.biblePromptTag,
+            newBiblePromptTag: null,
+            oldSourceContentHashSha256: existing.sourceContentHashSha256,
+            newSourceContentHashSha256: null,
+            changedAt: now,
+            changeReason: input.change.changeReason,
+            sourceSceneId: input.change.sourceSceneId,
+            sourceSpecRevision: input.change.sourceSpecRevision,
+            sourceBindingId: input.change.sourceBindingId,
+            actorKind: input.change.actorKind,
+            actorId: input.change.actorId ?? null
+          });
+          return updatedEntry;
+        }
+      },
+      listChanges: async (campaignId: string, referenceAssetId?: string) => {
+        const allChanges = [...this._campaignReferenceBibleChanges, ...stagedBibleChanges];
+        return allChanges
+          .filter(
+            (c) =>
+              c.campaignId === campaignId &&
+              (!referenceAssetId ||
+                c.referenceAssetId.toLowerCase() === referenceAssetId.toLowerCase())
+          )
+          .sort((a, b) => a.changedAt.localeCompare(b.changedAt));
+      }
+    };
+
     const context: UnitOfWorkContext = {
       scenes: scopedScenes,
       reviewEvents: scopedReviewEvents,
@@ -820,7 +1103,8 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       assemblyJobs: defaultAssemblyJobs,
       generationManifests: defaultGenerationManifests,
       referenceAssets: scopedReferenceAssets,
-      referenceGroups: scopedReferenceGroups
+      referenceGroups: scopedReferenceGroups,
+      campaignReferenceBible: scopedCampaignReferenceBible
     };
 
     const result = await work(context);
@@ -863,6 +1147,11 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     for (const client of stagedClients) {
       this._seededClients.set(client.id, client);
     }
+    this._campaignReferenceBibles.clear();
+    for (const [key, entry] of scopedBibles.entries()) {
+      this._campaignReferenceBibles.set(key, entry);
+    }
+    this._campaignReferenceBibleChanges.push(...stagedBibleChanges);
 
     return result;
   }
