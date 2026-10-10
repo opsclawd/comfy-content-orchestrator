@@ -86,6 +86,7 @@ export interface PlanningOrchestrationInput<T> {
   readonly buildRequest?: (correctiveFeedback?: string) => PlanningModelRequest;
   readonly parseAndValidate?: (rawText: string) => T;
   readonly overallTimeoutMs?: number | undefined;
+  readonly signal?: AbortSignal | undefined;
 }
 
 export class PlanningOrchestrationKernel {
@@ -96,6 +97,18 @@ export class PlanningOrchestrationKernel {
       input.overallTimeoutMs ?? this.deps.overallTimeoutMs ?? DEFAULT_OVERALL_PLANNING_TIMEOUT_MS;
 
     const overallController = new AbortController();
+    if (input.signal?.aborted) {
+      overallController.abort(input.signal.reason ?? new Error("Planning cancelled"));
+    } else if (input.signal) {
+      input.signal.addEventListener(
+        "abort",
+        () => {
+          overallController.abort(input.signal?.reason ?? new Error("Planning cancelled"));
+        },
+        { once: true }
+      );
+    }
+
     let overallTimedOut = false;
     const timeoutId = setTimeout(() => {
       overallTimedOut = true;
@@ -157,6 +170,11 @@ export class PlanningOrchestrationKernel {
       const attempts: PlanningProviderAttempt[] = [];
 
       if (overallTimedOut || overallController.signal.aborted) {
+        if (input.signal?.aborted) {
+          throw input.signal.reason instanceof Error
+            ? input.signal.reason
+            : new Error(String(input.signal.reason ?? "Planning cancelled"));
+        }
         throw new PlanningProviderExhaustedError("All planning providers exhausted", [
           {
             provider: this.deps.primaryClient.providerName,
@@ -202,6 +220,12 @@ export class PlanningOrchestrationKernel {
 
       if (fallbackResult !== undefined) {
         return fallbackResult;
+      }
+
+      if (input.signal?.aborted) {
+        throw input.signal.reason instanceof Error
+          ? input.signal.reason
+          : new Error(String(input.signal.reason ?? "Planning cancelled"));
       }
 
       // 6. Exhausted
@@ -260,9 +284,15 @@ export class PlanningOrchestrationKernel {
     };
 
     if (signal.aborted) {
+      const abortReason =
+        signal.reason instanceof Error
+          ? signal.reason.message
+          : typeof signal.reason === "string"
+            ? signal.reason
+            : `Overall planning deadline of ${overallTimeoutMs}ms exceeded`;
       attempts.push({
         provider: providerName,
-        failureReason: `Overall planning deadline of ${overallTimeoutMs}ms exceeded`
+        failureReason: abortReason
       });
       return undefined;
     }
@@ -295,9 +325,15 @@ export class PlanningOrchestrationKernel {
       });
 
       if (signal.aborted) {
+        const abortReason =
+          signal.reason instanceof Error
+            ? signal.reason.message
+            : typeof signal.reason === "string"
+              ? signal.reason
+              : `Overall planning deadline of ${overallTimeoutMs}ms exceeded`;
         attempts.push({
           provider: providerName,
-          failureReason: `Overall planning deadline of ${overallTimeoutMs}ms exceeded`
+          failureReason: abortReason
         });
         return undefined;
       }

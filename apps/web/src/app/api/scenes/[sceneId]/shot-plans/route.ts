@@ -62,7 +62,9 @@ export async function POST(request: Request, context: RouteContext): Promise<Res
     };
 
     const result = await planShotPlans(sceneId, payload);
-    return Response.json(result, { status: 200 });
+    const statusCode =
+      result.status === "generating_candidates" && result.shotPlans.length === 0 ? 202 : 200;
+    return Response.json(result, { status: statusCode });
   } catch (err) {
     if (err instanceof PlanShotPlansApiError) {
       return Response.json(err.error, { status: err.statusCode });

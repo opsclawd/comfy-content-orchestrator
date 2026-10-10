@@ -590,6 +590,22 @@ describe("ShotPlan Contracts & Schemas", () => {
       expect(parsed.isIdempotentReplay).toBe(false);
     });
 
+    it("parses asynchronous admission response with status and specRevision", () => {
+      const admissionResponse = {
+        sceneId: "01923456-789a-7b3c-9d4e-5f6071829300",
+        shotPlans: [],
+        isIdempotentReplay: false,
+        status: "generating_candidates",
+        specRevision: 2
+      };
+      const parsed = PlanShotPlansResponseSchema.parse(admissionResponse);
+      expect(parsed.sceneId).toBe(admissionResponse.sceneId);
+      expect(parsed.shotPlans).toHaveLength(0);
+      expect(parsed.isIdempotentReplay).toBe(false);
+      expect(parsed.status).toBe("generating_candidates");
+      expect(parsed.specRevision).toBe(2);
+    });
+
     it("rejects invalid UUID in sceneId", () => {
       expect(() =>
         PlanShotPlansResponseSchema.parse({
