@@ -33,6 +33,7 @@ import {
 } from "./planning-orchestration-kernel.js";
 import { buildShotPlanPrompt, type BoundReferencePromptInput } from "./shot-plan-prompt.js";
 import { parseShotPlanResponse, type ShotPlanProposal } from "./shot-plan-response-parser.js";
+import { stripReasoningBlock } from "./strip-reasoning-block.js";
 import {
   InvalidShotPlanVariantCountError,
   ReferenceAssetDescriptionGenerationError,
@@ -370,7 +371,7 @@ export class PlanShotPlansUseCase {
         );
       }
 
-      const generatedDesc = outcome.rawText.trim();
+      const generatedDesc = stripReasoningBlock(outcome.rawText);
       if (generatedDesc.length === 0) {
         throw new ReferenceAssetDescriptionGenerationError(
           asset.id,
