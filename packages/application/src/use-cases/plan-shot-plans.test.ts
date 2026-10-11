@@ -2920,6 +2920,31 @@ An astronaut standing on the red, rocky surface of Mars.`
   });
 
   describe("Asynchronous planning admission and execution pipeline", () => {
+    it("prepareAdmission's planning lease honors the deps-level overallTimeoutMs default when the call site omits it (regression: route never forwards a per-request overallTimeoutMs, so the server's configured PLANNING_OVERALL_TIMEOUT_MS must not be silently discarded in favor of the 60s hardcoded floor)", async () => {
+      const scene = createTestScene();
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const primaryClient = createMockClient("Anthropic", []);
+      const fallbackClient = createMockClient("OpenAI", []);
+
+      const useCase = new PlanShotPlansUseCase({
+        uow,
+        primaryClient,
+        fallbackClient,
+        overallTimeoutMs: 240_000
+      });
+      const before = Date.now();
+      const admission = await useCase.prepareAdmission({ sceneId: scene.id, variantCount: 2 });
+
+      expect(admission.kind).toBe("admitted");
+      if (admission.kind === "admitted") {
+        const saved = await uow.execute((ctx) => ctx.scenes.findById(scene.id));
+        expect(saved?.activePlanningExpiresAt).toBeDefined();
+        const leaseDurationMs = new Date(saved!.activePlanningExpiresAt!).getTime() - before;
+        // Expected: max(240_000, 60_000) + 30_000 = 270_000, not the 60_000-floor-derived 90_000.
+        expect(leaseDurationMs).toBeGreaterThan(200_000);
+      }
+    });
+
     it("prepareAdmission establishes planning lease and transitions scene to generating_candidates", async () => {
       const scene = createTestScene();
       const uow = new InMemorySceneUnitOfWork([scene]);

@@ -998,7 +998,8 @@ export class PlanShotPlansUseCase {
       }
 
       const runId = randomUUID();
-      const leaseDurationMs = Math.max(input.overallTimeoutMs ?? 60_000, 60_000) + 30_000;
+      const effectiveOverallTimeoutMs = input.overallTimeoutMs ?? this.deps.overallTimeoutMs;
+      const leaseDurationMs = Math.max(effectiveOverallTimeoutMs ?? 60_000, 60_000) + 30_000;
       const expiresAt = new Date(now + leaseDurationMs).toISOString();
       const planningLease = { runId, expiresAt };
 
