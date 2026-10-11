@@ -1,13 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   Scene,
+  ShotPlan,
   type CampaignId,
   type JobId,
   type ReferenceAsset,
   type ReferenceAssetId,
   type RenderJob,
   type SceneId,
-  type SceneReferenceBinding
+  type SceneReferenceBinding,
+  type ShotPlanId
 } from "@cco/domain";
 import type {
   PlanningModelClientPort,
@@ -18,7 +20,12 @@ import type { ObjectStoragePort, StoredObject } from "../ports/object-storage-po
 import type { EnqueueJobInput, TransactionalJobEnqueuer } from "../ports/job-queue-port.js";
 import type { UnitOfWork, UnitOfWorkContext } from "../ports/unit-of-work.js";
 import { InMemorySceneUnitOfWork } from "../test-support/in-memory-scene-unit-of-work.js";
-import { MAX_REFERENCE_IMAGE_BYTES, PlanShotPlansUseCase } from "./plan-shot-plans.js";
+import {
+  deriveStoryboardPrevisSeed,
+  MAX_REFERENCE_IMAGE_BYTES,
+  PlanShotPlansUseCase,
+  STORYBOARD_PREVIS_BEAT_SEED_OFFSET_MULTIPLIER
+} from "./plan-shot-plans.js";
 import {
   InvalidShotPlanVariantCountError,
   ReferenceAssetDescriptionGenerationError,
@@ -207,9 +214,10 @@ describe("PlanShotPlansUseCase", () => {
     expect(v3.variantOrdinal).toBe(3);
     expect(v3.framing).toBe("close_up");
 
-    // Previs candidate render jobs enqueued
-    expect(mockJobs.enqueue).toHaveBeenCalledTimes(3);
-    expect(mockJobs.enqueue).toHaveBeenCalledWith(
+    // Previs candidate render jobs enqueued per beat (variant 1 has 2 beats, variants 2 and 3 have 1 beat each = 4 total)
+    expect(mockJobs.enqueue).toHaveBeenCalledTimes(4);
+    expect(mockJobs.enqueue).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
         sceneId: scene.id,
         jobKind: "candidate",
@@ -217,6 +225,25 @@ describe("PlanShotPlansUseCase", () => {
         injectedPayload: expect.objectContaining({
           shotPlanId: v1.id,
           variantOrdinal: 1,
+          beatIndex: 1,
+          seed: 43,
+          specRevision: scene.specRevision,
+          prompt: expect.stringContaining("Professional advertising storyboard illustration"),
+          negativePrompt: expect.stringContaining("photorealistic")
+        })
+      })
+    );
+    expect(mockJobs.enqueue).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        sceneId: scene.id,
+        jobKind: "candidate",
+        workflowTemplate: "flux_schnell_storyboard_v1",
+        injectedPayload: expect.objectContaining({
+          shotPlanId: v1.id,
+          variantOrdinal: 1,
+          beatIndex: 2,
+          seed: 1043,
           specRevision: scene.specRevision,
           prompt: expect.stringContaining("Professional advertising storyboard illustration"),
           negativePrompt: expect.stringContaining("photorealistic")
@@ -259,7 +286,7 @@ describe("PlanShotPlansUseCase", () => {
     });
     expect(firstResult.isIdempotentReplay).toBe(false);
     expect(primaryClient.calls).toHaveLength(1);
-    expect(mockJobs.enqueue).toHaveBeenCalledTimes(3);
+    expect(mockJobs.enqueue).toHaveBeenCalledTimes(4);
 
     // Second call replays
     const secondResult = await useCase.execute({
@@ -270,7 +297,7 @@ describe("PlanShotPlansUseCase", () => {
     expect(secondResult.isIdempotentReplay).toBe(true);
     expect(secondResult.shotPlans).toHaveLength(3);
     expect(primaryClient.calls).toHaveLength(1); // Model not called again
-    expect(mockJobs.enqueue).toHaveBeenCalledTimes(3); // Jobs not enqueued again
+    expect(mockJobs.enqueue).toHaveBeenCalledTimes(4); // Jobs not enqueued again
   });
 
   it("handles reroll by superseding previous draft plans and generating new variants", async () => {
@@ -3151,6 +3178,330 @@ An astronaut standing on the red, rocky surface of Mars.`
       expect(result).toEqual([]);
       const savedScene = await uow.execute((ctx) => ctx.scenes.findById(scene.id));
       expect(savedScene?.activePlanningRunId).toBe("newer-run-id");
+    });
+  });
+
+  describe("Per-beat previs candidate enqueue (#390)", () => {
+    it("enqueues one previs job per beat of a saved ShotPlan, each carrying beatIndex and beat-specific prompt", async () => {
+      const scene = createTestScene();
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const mockJobs: TransactionalJobEnqueuer = {
+        enqueue: vi.fn(async (input: EnqueueJobInput) => createMockJob(input)),
+        areAllJobsTerminal: vi.fn(async () => false)
+      };
+      uow.withJobs(mockJobs);
+
+      const threeBeatVariant = [
+        {
+          framing: "wide",
+          angle: "eye_level",
+          cameraMovement: "tracking",
+          movementSpeed: "slow",
+          lensIntent: "24mm prime",
+          cameraPosition: "tripod at eye level",
+          cameraPromptDescription: "Camera slowly tracks character moving through plaza",
+          actionSummary: "Operative traverses rain-soaked plaza under surveillance",
+          lightingStyle: "neon_night",
+          environmentDescription: "Neon-lit urban plaza in pouring rain",
+          colorPalette: ["#ff0055", "#00ffff"],
+          subjects: [
+            {
+              subjectId: "hero-1",
+              role: "subject_identity",
+              initialPosition: "screen_left",
+              movementTrajectory: "crosses from left to right"
+            }
+          ],
+          beats: [
+            {
+              beatIndex: 1,
+              startMs: 0,
+              endMs: 1200,
+              description: "Hero enters plaza from shadows",
+              cameraAction: "slow track forward",
+              subjectAction: "steps out from archway"
+            },
+            {
+              beatIndex: 2,
+              startMs: 1200,
+              endMs: 2800,
+              description: "Hero notices surveillance drone above",
+              cameraAction: "tilts up slightly",
+              subjectAction: "glances toward rooftops"
+            },
+            {
+              beatIndex: 3,
+              startMs: 2800,
+              endMs: 4000,
+              description: "Hero quickens pace into crowd",
+              cameraAction: "pans right following subject",
+              subjectAction: "blends into passing pedestrian group"
+            }
+          ]
+        }
+      ];
+
+      const primaryClient = createMockClient("Anthropic", [
+        { kind: "success", rawText: JSON.stringify(threeBeatVariant) }
+      ]);
+      const fallbackClient = createMockClient("OpenAI", []);
+
+      const useCase = new PlanShotPlansUseCase({ uow, primaryClient, fallbackClient });
+      const result = await useCase.execute({
+        sceneId: scene.id,
+        variantCount: 1,
+        externalProcessingPolicy: { allowCloudPlanning: true, allowedProviders: ["Anthropic"] }
+      });
+
+      expect(result.shotPlans).toHaveLength(1);
+      const plan = result.shotPlans[0]!;
+      expect(plan.beats).toHaveLength(3);
+
+      // Acceptance Criteria 1: A plan with N beats enqueues N previs jobs, each carrying its beat index
+      expect(mockJobs.enqueue).toHaveBeenCalledTimes(3);
+
+      const calls = (mockJobs.enqueue as ReturnType<typeof vi.fn>).mock.calls;
+
+      // Job 1
+      expect(calls[0]![0]).toEqual(
+        expect.objectContaining({
+          sceneId: scene.id,
+          jobKind: "candidate",
+          workflowTemplate: "flux_schnell_storyboard_v1",
+          injectedPayload: expect.objectContaining({
+            shotPlanId: plan.id,
+            variantOrdinal: 1,
+            specRevision: scene.specRevision,
+            beatIndex: 1,
+            seed: deriveStoryboardPrevisSeed(1, 0),
+            prompt: expect.stringMatching(
+              /^Professional advertising storyboard illustration.*Action: Beat 1 \[0ms-1200ms\]: steps out from archway \(Hero enters plaza from shadows\)\. Camera: slow track forward\..*Clean storyboard frame artwork/
+            ),
+            negativePrompt: expect.stringContaining("photorealistic")
+          })
+        })
+      );
+
+      // Job 2
+      expect(calls[1]![0]).toEqual(
+        expect.objectContaining({
+          sceneId: scene.id,
+          jobKind: "candidate",
+          workflowTemplate: "flux_schnell_storyboard_v1",
+          injectedPayload: expect.objectContaining({
+            shotPlanId: plan.id,
+            variantOrdinal: 1,
+            specRevision: scene.specRevision,
+            beatIndex: 2,
+            seed: deriveStoryboardPrevisSeed(1, 1),
+            prompt: expect.stringMatching(
+              /^Professional advertising storyboard illustration.*Action: Beat 2 \[1200ms-2800ms\]: glances toward rooftops \(Hero notices surveillance drone above\)\. Camera: tilts up slightly\..*Clean storyboard frame artwork/
+            ),
+            negativePrompt: expect.stringContaining("photorealistic")
+          })
+        })
+      );
+
+      // Job 3
+      expect(calls[2]![0]).toEqual(
+        expect.objectContaining({
+          sceneId: scene.id,
+          jobKind: "candidate",
+          workflowTemplate: "flux_schnell_storyboard_v1",
+          injectedPayload: expect.objectContaining({
+            shotPlanId: plan.id,
+            variantOrdinal: 1,
+            specRevision: scene.specRevision,
+            beatIndex: 3,
+            seed: deriveStoryboardPrevisSeed(1, 2),
+            prompt: expect.stringMatching(
+              /^Professional advertising storyboard illustration.*Action: Beat 3 \[2800ms-4000ms\]: blends into passing pedestrian group \(Hero quickens pace into crowd\)\. Camera: pans right following subject\..*Clean storyboard frame artwork/
+            ),
+            negativePrompt: expect.stringContaining("photorealistic")
+          })
+        })
+      );
+
+      // Distinct seeds
+      const seeds = calls.map((c) => c[0].injectedPayload["seed"] as number);
+      expect(new Set(seeds).size).toBe(3);
+    });
+
+    it("deriveStoryboardPrevisSeed produces distinct, deterministic seeds across variants and beats without collisions", () => {
+      const generatedSeeds = new Map<number, { variantOrdinal: number; beatPosition: number }>();
+
+      for (let variantOrdinal = 1; variantOrdinal <= 10; variantOrdinal++) {
+        for (let beatPosition = 0; beatPosition < 20; beatPosition++) {
+          const seed = deriveStoryboardPrevisSeed(variantOrdinal, beatPosition);
+          const collision = generatedSeeds.get(seed);
+          if (collision) {
+            throw new Error(
+              `Collision detected for seed ${seed}: variant ${variantOrdinal}, beat ${beatPosition} collided with variant ${collision.variantOrdinal}, beat ${collision.beatPosition}`
+            );
+          }
+          generatedSeeds.set(seed, { variantOrdinal, beatPosition });
+        }
+      }
+
+      expect(generatedSeeds.size).toBe(200);
+
+      // Base seed compatibility: beat position 0 retains CANDIDATE_BASE_SEED + variantOrdinal
+      expect(deriveStoryboardPrevisSeed(1, 0)).toBe(43);
+      expect(deriveStoryboardPrevisSeed(2, 0)).toBe(44);
+      // Beat position 1 has offset 1000
+      expect(deriveStoryboardPrevisSeed(1, 1)).toBe(1043);
+      expect(deriveStoryboardPrevisSeed(2, 1)).toBe(1044);
+      expect(STORYBOARD_PREVIS_BEAT_SEED_OFFSET_MULTIPLIER).toBe(1000);
+    });
+
+    it("emits zero previs jobs when a plan has an empty beats list while successfully persisting plan and updating scene state", async () => {
+      const scene = createTestScene();
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const mockJobs: TransactionalJobEnqueuer = {
+        enqueue: vi.fn(async (input: EnqueueJobInput) => createMockJob(input)),
+        areAllJobsTerminal: vi.fn(async () => false)
+      };
+      uow.withJobs(mockJobs);
+
+      const emptyBeatsPlan = ShotPlan.create({
+        id: "01928374-abcd-7000-8000-000000000088" as ShotPlanId,
+        sceneId: scene.id,
+        specRevision: scene.specRevision,
+        variantOrdinal: 1,
+        status: "draft",
+        routingMode: "reference_directed",
+        targetDurationMs: 4000,
+        targetFrameCount: 96,
+        framing: "wide",
+        angle: "eye_level",
+        lensIntent: "35mm",
+        cameraPosition: "eye level",
+        cameraMovement: "static",
+        movementSpeed: "slow",
+        cameraPromptDescription: "Wide static shot",
+        subjects: [],
+        actionSummary: "Quiet alleyway with zero temporal beats",
+        beats: [],
+        lightingStyle: "neon_night",
+        environmentDescription: "Empty alley",
+        colorPalette: ["#111111"],
+        continuity: { persistentSubjectIds: [], frameAnchorTarget: "none" }
+      });
+
+      const primaryClient = createMockClient("Anthropic", []);
+      const fallbackClient = createMockClient("OpenAI", []);
+      const useCase = new PlanShotPlansUseCase({ uow, primaryClient, fallbackClient });
+
+      type PrivatePersistenceInvoker = {
+        persistShotPlansAndPrevisJobs(params: {
+          context: UnitOfWorkContext;
+          scene: Scene;
+          shotPlans: readonly ShotPlan[];
+          enqueuePrevisJobs?: boolean;
+        }): Promise<readonly ShotPlan[]>;
+      };
+
+      await uow.execute(async (context) => {
+        return await (
+          useCase as unknown as PrivatePersistenceInvoker
+        ).persistShotPlansAndPrevisJobs({
+          context,
+          scene,
+          shotPlans: [emptyBeatsPlan],
+          enqueuePrevisJobs: true
+        });
+      });
+
+      // No jobs enqueued because beats array is empty
+      expect(mockJobs.enqueue).not.toHaveBeenCalled();
+
+      // ShotPlan was persisted successfully
+      expect(uow.savedShotPlans).toHaveLength(1);
+      expect(uow.savedShotPlans[0]!.id).toBe(emptyBeatsPlan.id);
+
+      // Scene state was updated to generating_candidates
+      const savedScene = await uow.execute((ctx) => ctx.scenes.findById(scene.id));
+      expect(savedScene?.status).toBe("generating_candidates");
+      expect(savedScene?.activePlanningRunId).toBeUndefined();
+    });
+
+    it("discards staged in-memory plan saves and enqueued jobs when a beat job enqueue fails", async () => {
+      const scene = createTestScene();
+      const uow = new InMemorySceneUnitOfWork([scene]);
+
+      let callCount = 0;
+      const mockJobs: TransactionalJobEnqueuer = {
+        enqueue: vi.fn(async (input: EnqueueJobInput) => {
+          callCount++;
+          if (callCount === 2) {
+            throw new Error("Job queue broker connection lost during beat 2 dispatch");
+          }
+          return createMockJob(input);
+        }),
+        areAllJobsTerminal: vi.fn(async () => false)
+      };
+      uow.withJobs(mockJobs);
+
+      const twoBeatVariant = [
+        {
+          framing: "wide",
+          angle: "eye_level",
+          cameraMovement: "static",
+          movementSpeed: "slow",
+          lensIntent: "35mm prime",
+          cameraPosition: "eye level",
+          cameraPromptDescription: "Wide static shot",
+          actionSummary: "Operative pauses at intersection",
+          lightingStyle: "neon_night",
+          environmentDescription: "Rainy alleyway",
+          colorPalette: ["#ff0055"],
+          subjects: [],
+          beats: [
+            {
+              beatIndex: 1,
+              startMs: 0,
+              endMs: 2000,
+              description: "Hero arrives at corner",
+              cameraAction: "holds",
+              subjectAction: "stops walking"
+            },
+            {
+              beatIndex: 2,
+              startMs: 2000,
+              endMs: 4000,
+              description: "Hero checks corner",
+              cameraAction: "holds",
+              subjectAction: "peers around corner"
+            }
+          ]
+        }
+      ];
+
+      const primaryClient = createMockClient("Anthropic", [
+        { kind: "success", rawText: JSON.stringify(twoBeatVariant) }
+      ]);
+      const fallbackClient = createMockClient("OpenAI", []);
+      const useCase = new PlanShotPlansUseCase({ uow, primaryClient, fallbackClient });
+
+      await expect(
+        useCase.execute({
+          sceneId: scene.id,
+          variantCount: 1,
+          externalProcessingPolicy: { allowCloudPlanning: true, allowedProviders: ["Anthropic"] }
+        })
+      ).rejects.toThrow("Job queue broker connection lost during beat 2 dispatch");
+
+      // Verify in-memory staging rollback semantics:
+      // When any beat job enqueue fails, the unit-of-work callback rejects and
+      // InMemorySceneUnitOfWork discards its staged mutations without committing them
+      // to savedShotPlans or enqueuedJobs.
+      //
+      // Note: This unit test verifies application-level staging discard in the test double.
+      // Database-level ACID transactional rollback of rows across shot_plans and render_jobs
+      // is verified in the adapter integration suite (see
+      // packages/infrastructure/src/postgres/uow/postgres-unit-of-work.integration.test.ts).
+      expect(uow.savedShotPlans).toHaveLength(0);
+      expect(uow.enqueuedJobs).toHaveLength(0);
     });
   });
 });

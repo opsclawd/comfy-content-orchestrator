@@ -67,6 +67,19 @@ class InMemoryMutex {
   }
 }
 
+/**
+ * In-memory test double for UnitOfWork.
+ *
+ * Staging semantics:
+ * During `execute(work)`, all repository mutations and job enqueues are buffered
+ * in local staged collections (e.g. `stagedScenes`, `stagedShotPlans`, `stagedJobs`).
+ * If the `work` callback rejects, staged changes are discarded, providing in-memory
+ * staging rollback coverage for use-case unit tests.
+ *
+ * Staged changes are only committed to the publicly inspectable collections
+ * (`savedScenes`, `savedShotPlans`, `enqueuedJobs`, etc.) after `work` resolves successfully.
+ * Note: For transactional rollback across real PostgreSQL tables, refer to `PostgresUnitOfWork`.
+ */
 export class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _seededScenes: Map<SceneId, Scene>;
   private readonly _seededCandidates: Map<CandidateId, StoryboardCandidate>;
