@@ -351,4 +351,107 @@ describe("compileStoryboardPrevisPrompt", () => {
       expect(result.prompt).toBeDefined();
     });
   });
+
+  describe("per-beat compilation", () => {
+    it("compiles for a specific beat with beat action, description, timing, and camera action", () => {
+      const plan = createMinimalShotPlan({
+        actionSummary: "Plan-wide summary that should be replaced",
+        beats: [
+          {
+            beatIndex: 1,
+            startMs: 0,
+            endMs: 2000,
+            description: "Beat 1 description",
+            cameraAction: "slow zoom",
+            subjectAction: "turns around"
+          },
+          {
+            beatIndex: 2,
+            startMs: 2000,
+            endMs: 4000,
+            description: "Operative leaps over barrier",
+            cameraAction: "rapid whip pan right",
+            subjectAction: "vaults concrete barricade"
+          }
+        ]
+      });
+
+      const selectedBeat = plan.beats![1]!;
+      const result = compileStoryboardPrevisPrompt(plan, selectedBeat);
+
+      // Verify style header and clean panel directive remain intact
+      expect(result.prompt.startsWith(STORYBOARD_STYLE_HEADER)).toBe(true);
+      expect(result.prompt.endsWith(STORYBOARD_CLEAN_PANEL_DIRECTIVE)).toBe(true);
+      expect(result.negativePrompt).toBe(STORYBOARD_NEGATIVE_PROMPT);
+      expect(result.profileId).toBe(STORYBOARD_PREVIS_PROFILE_ID);
+      expect(result.renderProfileKey).toBe(STORYBOARD_PREVIS_RENDER_PROFILE_KEY);
+      expect(result.version).toBe(1);
+
+      // Verify shared sections remain intact
+      expect(result.prompt).toContain(
+        "Camera staging: medium wide shot framing, eye-level camera angle."
+      );
+      expect(result.prompt).toContain("Character [hero-operative] staged at screen center");
+      expect(result.prompt).toContain("Setting: Rain-slicked alleyway with reflective puddles.");
+      expect(result.prompt).toContain("Lighting: Impressionistic neon night lighting");
+      expect(result.prompt).toContain("Continuity: Persistent subject(s) [hero-operative].");
+
+      // Verify beat-specific action, timing, description, and camera action are emitted
+      expect(result.prompt).toContain(
+        "Action: Beat 2 [2000ms-4000ms]: vaults concrete barricade (Operative leaps over barrier). Camera: rapid whip pan right."
+      );
+
+      // Verify plan-wide action summary and first beat are NOT in the action section
+      expect(result.prompt).not.toContain("Plan-wide summary that should be replaced");
+      expect(result.prompt).not.toContain("Primary staging: turns around");
+      expect(result.prompt).not.toContain("Beat 1 description");
+    });
+
+    it("handles beat without cameraAction gracefully", () => {
+      const plan = createMinimalShotPlan();
+      const beat = {
+        beatIndex: 1,
+        startMs: 0,
+        endMs: 2500,
+        description: "Operative pauses",
+        subjectAction: "stands still"
+      };
+
+      const result = compileStoryboardPrevisPrompt(plan, beat);
+
+      expect(result.prompt).toContain(
+        "Action: Beat 1 [0ms-2500ms]: stands still (Operative pauses)."
+      );
+      expect(result.prompt).not.toMatch(/Action:[^.]*Camera:/);
+    });
+
+    it("handles beat with optional fields omitted", () => {
+      const plan = createMinimalShotPlan();
+      const beat = {
+        description: "Simple action note",
+        subjectAction: "steps forward"
+      };
+
+      const result = compileStoryboardPrevisPrompt(plan, beat);
+
+      expect(result.prompt).toContain("Action: Beat: steps forward (Simple action note).");
+      expect(result.prompt.startsWith(STORYBOARD_STYLE_HEADER)).toBe(true);
+      expect(result.negativePrompt).toBe(STORYBOARD_NEGATIVE_PROMPT);
+    });
+
+    it("regression: retains identical one-argument behavior when beat parameter is omitted", () => {
+      const plan = createMinimalShotPlan();
+      const resultNoArg = compileStoryboardPrevisPrompt(plan);
+      const resultUndefinedArg = compileStoryboardPrevisPrompt(plan, undefined);
+
+      expect(resultNoArg.prompt).toBe(resultUndefinedArg.prompt);
+      expect(resultNoArg.negativePrompt).toBe(resultUndefinedArg.negativePrompt);
+      expect(resultNoArg.prompt).toContain(
+        "Action: Operative activates scanner in rainy alleyway."
+      );
+      expect(resultNoArg.prompt).toContain(
+        "Primary staging: raises device to eye level (beat 1: Operative powers up scanner)."
+      );
+    });
+  });
 });
