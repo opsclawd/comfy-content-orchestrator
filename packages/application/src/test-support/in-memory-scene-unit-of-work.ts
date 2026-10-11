@@ -1255,7 +1255,10 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       },
       claimForProductionReview: async (runId) => {
         const run = this._seededRuns.get(runId);
-        if (!run || run.status !== "dispatched") return undefined;
+        if (!run || (run.status !== "dispatched" && run.status !== "failed")) return undefined;
+        for (const rs of this._seededRunScenes.values()) {
+          if (rs.runId === runId && !rs.productionJobId) return undefined;
+        }
         const updated = {
           ...run,
           status: "production_review" as const,
@@ -1299,7 +1302,13 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       },
       claimFailure: async (runId) => {
         const run = this._seededRuns.get(runId);
-        if (!run || (run.status !== "dispatched" && run.status !== "assembling")) return undefined;
+        if (
+          !run ||
+          (run.status !== "dispatched" &&
+            run.status !== "production_review" &&
+            run.status !== "assembling")
+        )
+          return undefined;
         const updated = { ...run, status: "failed" as const, updatedAt: new Date().toISOString() };
         this._seededRuns.set(runId, updated);
         return updated;

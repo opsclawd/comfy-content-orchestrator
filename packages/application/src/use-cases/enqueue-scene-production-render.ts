@@ -365,4 +365,57 @@ export class EnqueueSceneProductionRenderUseCase {
 
     return { job, attemptId: recordedAttemptId, attemptOrdinal };
   }
+
+  async executeFailureRecoveryWithContext(
+    context: UnitOfWorkContext,
+    scene: Scene,
+    run: CampaignProductionRunRecord
+  ): Promise<{
+    readonly job: RenderJob;
+    readonly attemptId: string;
+    readonly attemptOrdinal: number;
+  }> {
+    if (context.jobs === undefined) {
+      throw new TransactionalJobEnqueuerUnavailableError();
+    }
+
+    const snapshot = scene.snapshot();
+    const attemptOrdinal = (snapshot.productionAttemptOrdinal ?? 0) + 1;
+    const attemptId = randomUUID();
+    const { enqueueInput, seed, selectedCandidateId, selectedCandidateRevision } =
+      await this.#buildProductionEnqueueInput(
+        context,
+        scene,
+        attemptOrdinal,
+        attemptId,
+        "queueForProduction"
+      );
+
+    const job = await context.jobs.enqueue(enqueueInput);
+
+    let recordedAttemptId: string = attemptId;
+    if (context.campaignProductionRuns !== undefined) {
+      const attempt = await context.campaignProductionRuns.recordProductionAttempt({
+        attemptId,
+        sceneId: scene.id,
+        runId: run.id,
+        ordinal: attemptOrdinal,
+        productionJobId: job.jobId,
+        specRevision: snapshot.specRevision,
+        selectedCandidateId,
+        selectedCandidateRevision,
+        seed,
+        createdReason: "failure_recovery"
+      });
+      recordedAttemptId = attempt.attemptId;
+
+      await context.campaignProductionRuns.updateCurrentAttempt(run.id, scene.id, {
+        attemptId: recordedAttemptId,
+        attemptOrdinal,
+        productionJobId: job.jobId
+      });
+    }
+
+    return { job, attemptId: recordedAttemptId, attemptOrdinal };
+  }
 }

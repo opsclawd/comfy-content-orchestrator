@@ -53,7 +53,11 @@ export { PostgresReviewEventStore } from "./postgres/repositories/postgres-revie
 
 export { PostgresUnitOfWork } from "./postgres/uow/postgres-unit-of-work.js";
 
-export { PostgresSceneReviewQueries } from "./postgres/queries/postgres-scene-review-queries.js";
+export {
+  PostgresSceneReviewQueries,
+  deriveAllowedActions,
+  type DeriveAllowedActionsOptions
+} from "./postgres/queries/postgres-scene-review-queries.js";
 export { PostgresCurrentProductionAttemptQueries } from "./postgres/queries/postgres-current-production-attempt-queries.js";
 export { PostgresCampaignDeliveryReelQueries } from "./postgres/queries/postgres-campaign-delivery-reel-queries.js";
 export { PostgresCampaignAnimaticQueries } from "./postgres/queries/postgres-campaign-animatic-queries.js";
@@ -68,6 +72,15 @@ export {
   type RenderJobRow
 } from "./postgres/repositories/postgres-job-queue.js";
 export { PostgresDeliveryAssemblyJobQueue } from "./postgres/repositories/postgres-delivery-assembly-job-queue.js";
+export {
+  recoverInterruptedPlanningRuns,
+  startPlanningRecoveryReaper,
+  DEFAULT_PLANNING_INTERRUPTED_REASON,
+  type RecoverInterruptedPlanningRunsOptions,
+  type RecoverInterruptedPlanningRunsLogger,
+  type PlanningRecoveryReaper,
+  type StartPlanningRecoveryReaperOptions
+} from "./postgres/shot-plan-planning-recovery.js";
 
 export {
   ComfyUiRenderEngineAdapter,

@@ -101,6 +101,26 @@ describe("Shot Plans Route Handler: POST /api/scenes/[sceneId]/shot-plans", () =
     });
   });
 
+  it("returns 202 when upstream admits scene into generating_candidates", async () => {
+    const admissionResponse: PlanShotPlansResponse = {
+      sceneId,
+      status: "generating_candidates",
+      specRevision: 1,
+      shotPlans: [],
+      isIdempotentReplay: false
+    };
+    vi.mocked(planShotPlans).mockResolvedValueOnce(admissionResponse);
+
+    const request = createJsonRequest(routeUrl, { variantCount: 2 });
+    const response = await POST(request, {
+      params: Promise.resolve({ sceneId })
+    });
+
+    expect(response.status).toBe(202);
+    const body = await response.json();
+    expect(body).toEqual(admissionResponse);
+  });
+
   it("handles empty string body by defaulting to variantCount 2, reroll false", async () => {
     vi.mocked(planShotPlans).mockResolvedValueOnce(defaultSuccessResponse);
 

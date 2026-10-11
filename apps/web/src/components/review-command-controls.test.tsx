@@ -688,4 +688,100 @@ describe("ReviewCommandControls Component", () => {
     expect(html).toContain('data-testid="dialog-production-fingerprint"');
     expect(html).toContain(inspection.productionInputFingerprint);
   });
+
+  it("renders cancellation warning and specific button label in confirmation dialog when action is cancel", () => {
+    const detail = createSampleDetail({ specRevision: 3 });
+    const confirmingState: ReviewCommandState = {
+      phase: "confirming",
+      detail,
+      stagedAction: {
+        action: "cancel",
+        payload: {},
+        displayLabel: "Cancel"
+      }
+    };
+
+    const html = renderToStaticMarkup(
+      <ReviewCommandControls detail={detail} state={confirmingState} />
+    );
+
+    expect(html).toContain('data-testid="dialog-cancellation-warning"');
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("Warning: Permanent Cancellation");
+    expect(html).toContain("This permanently cancels the scene. This cannot be undone.");
+    expect(html).toContain('data-testid="confirm-command-button"');
+    expect(html).toContain("Permanently Cancel Scene");
+    expect(html).toContain("confirm-button-danger");
+    expect(html).not.toContain("Confirm &amp; Submit");
+  });
+
+  it("renders cancellation warning in submitting state when action is cancel", () => {
+    const detail = createSampleDetail({ specRevision: 3 });
+    const submittingState: ReviewCommandState = {
+      phase: "submitting",
+      detail,
+      frozenIntent: {
+        command: {
+          actionId: "cancel-action-uuid-1111",
+          sceneId: detail.sceneId,
+          expectedSpecRevision: 3,
+          action: "cancel",
+          payload: {}
+        },
+        displayLabel: "Cancel"
+      }
+    };
+
+    const html = renderToStaticMarkup(
+      <ReviewCommandControls detail={detail} state={submittingState} />
+    );
+
+    expect(html).toContain('data-testid="dialog-cancellation-warning"');
+    expect(html).toContain("This permanently cancels the scene. This cannot be undone.");
+    expect(html).toContain('data-testid="confirm-command-button"');
+    expect(html).toContain("Submitting...");
+    expect(html).toContain('disabled=""');
+  });
+
+  it("does not render cancellation warning or cancel-specific button label for non-cancel actions", () => {
+    const detail = createSampleDetail({ specRevision: 3 });
+    const rejectingState: ReviewCommandState = {
+      phase: "confirming",
+      detail,
+      stagedAction: {
+        action: "reject",
+        payload: {},
+        displayLabel: "Reject"
+      }
+    };
+
+    const html = renderToStaticMarkup(
+      <ReviewCommandControls detail={detail} state={rejectingState} />
+    );
+
+    expect(html).not.toContain('data-testid="dialog-cancellation-warning"');
+    expect(html).not.toContain("This permanently cancels the scene");
+    expect(html).toContain('data-testid="confirm-command-button"');
+    expect(html).toContain("Confirm &amp; Submit");
+    expect(html).not.toContain("Permanently Cancel Scene");
+    expect(html).not.toContain("confirm-button-danger");
+  });
+
+  it("toolbar only renders cancel action button when cancel is included in allowedActions", () => {
+    const detailWithoutCancel = createSampleDetail({
+      allowedActions: ["approve", "reject"]
+    });
+    const htmlWithoutCancel = renderToStaticMarkup(
+      <ReviewCommandControls detail={detailWithoutCancel} />
+    );
+    expect(htmlWithoutCancel).not.toContain('data-testid="action-button-cancel"');
+
+    const detailWithCancel = createSampleDetail({
+      allowedActions: ["approve", "reject", "cancel"]
+    });
+    const htmlWithCancel = renderToStaticMarkup(
+      <ReviewCommandControls detail={detailWithCancel} />
+    );
+    expect(htmlWithCancel).toContain('data-testid="action-button-cancel"');
+  });
 });

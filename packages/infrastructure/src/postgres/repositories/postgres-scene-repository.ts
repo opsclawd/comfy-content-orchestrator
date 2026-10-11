@@ -51,6 +51,9 @@ interface StoryboardSceneRow {
   approved_at: Date | string | null;
   approved_revision: number | null;
   failed_from: string | null;
+  failure_reason?: string | null;
+  active_planning_run_id?: string | null;
+  active_planning_expires_at?: Date | string | null;
   active_production_job_id: string | null;
   production_attempt_ordinal: number | null;
   accepted_production_attempt_id: string | null;
@@ -145,6 +148,16 @@ function mapRowToScene(row: StoryboardSceneRow): Scene {
     },
     ...(approval !== undefined ? { approval } : {}),
     ...(row.failed_from ? { failedFrom: row.failed_from as SceneStatus } : {}),
+    ...(row.failure_reason ? { failureReason: row.failure_reason } : {}),
+    ...(row.active_planning_run_id ? { activePlanningRunId: row.active_planning_run_id } : {}),
+    ...(row.active_planning_expires_at
+      ? {
+          activePlanningExpiresAt:
+            row.active_planning_expires_at instanceof Date
+              ? row.active_planning_expires_at.toISOString()
+              : new Date(row.active_planning_expires_at).toISOString()
+        }
+      : {}),
     ...(row.selected_candidate_id
       ? { selectedCandidateId: row.selected_candidate_id as CandidateId }
       : {}),
@@ -248,6 +261,9 @@ export class PostgresSceneRepository implements SceneRepository {
         s.approved_at,
         s.approved_revision,
         s.failed_from,
+        s.failure_reason,
+        s.active_planning_run_id,
+        s.active_planning_expires_at,
         s.active_production_job_id,
         s.production_attempt_ordinal,
         s.accepted_production_attempt_id,
@@ -339,6 +355,9 @@ export class PostgresSceneRepository implements SceneRepository {
         s.approved_at,
         s.approved_revision,
         s.failed_from,
+        s.failure_reason,
+        s.active_planning_run_id,
+        s.active_planning_expires_at,
         s.active_production_job_id,
         s.production_attempt_ordinal,
         s.accepted_production_attempt_id,
@@ -430,6 +449,11 @@ export class PostgresSceneRepository implements SceneRepository {
     const approvedShotPlanRevision = snapshot.approvedShotPlanRevision ?? null;
     const productionRoutingMode = snapshot.productionRoutingMode ?? null;
     const failedFrom = snapshot.failedFrom ?? null;
+    const failureReason = snapshot.failureReason ?? null;
+    const activePlanningRunId = snapshot.activePlanningRunId ?? null;
+    const activePlanningExpiresAt = snapshot.activePlanningExpiresAt
+      ? new Date(snapshot.activePlanningExpiresAt)
+      : null;
     const activeProductionJobId = snapshot.activeProductionJobId ?? null;
     const productionAttemptOrdinal = snapshot.productionAttemptOrdinal ?? 0;
     const acceptedProductionAttemptId = snapshot.acceptedProductionAttemptId ?? null;
@@ -558,14 +582,17 @@ export class PostgresSceneRepository implements SceneRepository {
         approved_at = $11,
         approved_revision = $12,
         failed_from = $13,
-        active_production_job_id = $14,
-        production_attempt_ordinal = $15,
-        accepted_production_attempt_id = $16,
-        selected_shot_plan_id = $17,
-        selected_shot_plan_revision = $18,
-        approved_shot_plan_id = $19,
-        approved_shot_plan_revision = $20,
-        production_routing_mode = $21,
+        failure_reason = $14,
+        active_planning_run_id = $15,
+        active_planning_expires_at = $16,
+        active_production_job_id = $17,
+        production_attempt_ordinal = $18,
+        accepted_production_attempt_id = $19,
+        selected_shot_plan_id = $20,
+        selected_shot_plan_revision = $21,
+        approved_shot_plan_id = $22,
+        approved_shot_plan_revision = $23,
+        production_routing_mode = $24,
         updated_at = CURRENT_TIMESTAMP
       WHERE scene_id = $1
       `,
@@ -583,6 +610,9 @@ export class PostgresSceneRepository implements SceneRepository {
         approvedAt,
         approvedRevision,
         failedFrom,
+        failureReason,
+        activePlanningRunId,
+        activePlanningExpiresAt,
         activeProductionJobId,
         productionAttemptOrdinal,
         acceptedProductionAttemptId,
@@ -618,6 +648,9 @@ export class PostgresSceneRepository implements SceneRepository {
           approved_at,
           approved_revision,
           failed_from,
+          failure_reason,
+          active_planning_run_id,
+          active_planning_expires_at,
           active_production_job_id,
           production_attempt_ordinal,
           accepted_production_attempt_id,
@@ -652,6 +685,9 @@ export class PostgresSceneRepository implements SceneRepository {
           $21,
           $22,
           $23,
+          $24,
+          $25,
+          $26,
           CURRENT_TIMESTAMP
         )
         `,
@@ -671,6 +707,9 @@ export class PostgresSceneRepository implements SceneRepository {
           approvedAt,
           approvedRevision,
           failedFrom,
+          failureReason,
+          activePlanningRunId,
+          activePlanningExpiresAt,
           activeProductionJobId,
           productionAttemptOrdinal,
           acceptedProductionAttemptId,

@@ -55,6 +55,7 @@ export interface SceneReviewDetail {
     readonly approvedBy: string;
     readonly approvedAt: string;
   };
+  readonly failureReason?: string | undefined;
   readonly candidatesByRevision: readonly SceneReviewCandidateGroup[];
   readonly shotPlans?: readonly ShotPlanReviewItem[];
   readonly referenceBindingsWithStorage?: readonly InternalSceneReferenceBindingWithStorage[];

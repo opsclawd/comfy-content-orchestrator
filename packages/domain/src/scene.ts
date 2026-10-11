@@ -84,6 +84,9 @@ export interface SceneSnapshot {
   readonly sequenceIndex?: number | undefined;
   readonly approval?: SceneApproval;
   readonly failedFrom?: SceneStatus;
+  readonly failureReason?: string | undefined;
+  readonly activePlanningRunId?: string | undefined;
+  readonly activePlanningExpiresAt?: string | undefined;
   readonly selectedCandidateId?: CandidateId;
   readonly selectedCandidateRevision?: number;
   readonly selectedShotPlanId?: ShotPlanId;
@@ -312,6 +315,9 @@ export class Scene {
   #configuration: Readonly<SceneConfiguration>;
   #approval?: Readonly<SceneApproval> | undefined;
   #failedFrom?: SceneStatus | undefined;
+  #failureReason?: string | undefined;
+  #activePlanningRunId?: string | undefined;
+  #activePlanningExpiresAt?: string | undefined;
   #selectedCandidateId?: CandidateId | undefined;
   #selectedCandidateRevision?: number | undefined;
   #selectedShotPlanId?: ShotPlanId | undefined;
@@ -391,6 +397,9 @@ export class Scene {
     scene.#sequenceIndex = snapshot.sequenceIndex ?? 1;
     scene.#approval = snapshot.approval ? Object.freeze({ ...snapshot.approval }) : undefined;
     scene.#failedFrom = snapshot.failedFrom;
+    scene.#failureReason = snapshot.failureReason;
+    scene.#activePlanningRunId = snapshot.activePlanningRunId;
+    scene.#activePlanningExpiresAt = snapshot.activePlanningExpiresAt;
     scene.#selectedCandidateId = snapshot.selectedCandidateId;
     scene.#selectedCandidateRevision = snapshot.selectedCandidateRevision;
     scene.#selectedShotPlanId = snapshot.selectedShotPlanId;
@@ -426,6 +435,22 @@ export class Scene {
 
   get configuration(): Readonly<SceneConfiguration> {
     return this.#configuration;
+  }
+
+  get failedFrom(): SceneStatus | undefined {
+    return this.#failedFrom;
+  }
+
+  get failureReason(): string | undefined {
+    return this.#failureReason;
+  }
+
+  get activePlanningRunId(): string | undefined {
+    return this.#activePlanningRunId;
+  }
+
+  get activePlanningExpiresAt(): string | undefined {
+    return this.#activePlanningExpiresAt;
   }
 
   get selectedShotPlanId(): ShotPlanId | undefined {
@@ -472,6 +497,7 @@ export class Scene {
 
     if (from === "failed") {
       this.#failedFrom = undefined;
+      this.#failureReason = undefined;
     }
 
     if (onSuccess) {
@@ -692,12 +718,18 @@ export class Scene {
     });
   }
 
-  beginCandidateGeneration(): SceneTransition {
+  beginCandidateGeneration(planningLease?: { runId: string; expiresAt: string }): SceneTransition {
     return this.#transition(
       "beginCandidateGeneration",
-      ["draft_pending", "director_review"],
+      ["draft_pending", "director_review", "generating_candidates"],
       "generating_candidates",
-      "candidate_generation_started"
+      "candidate_generation_started",
+      () => {
+        if (planningLease) {
+          this.#activePlanningRunId = planningLease.runId;
+          this.#activePlanningExpiresAt = planningLease.expiresAt;
+        }
+      }
     );
   }
 
@@ -706,8 +738,17 @@ export class Scene {
       "submitCandidatesForReview",
       ["generating_candidates"],
       "director_review",
-      "candidates_submitted"
+      "candidates_submitted",
+      () => {
+        this.#activePlanningRunId = undefined;
+        this.#activePlanningExpiresAt = undefined;
+      }
     );
+  }
+
+  clearPlanningRun(): void {
+    this.#activePlanningRunId = undefined;
+    this.#activePlanningExpiresAt = undefined;
   }
 
   selectCandidate(
@@ -910,7 +951,7 @@ export class Scene {
     });
   }
 
-  rerollShotPlan(): SceneTransition {
+  rerollShotPlan(planningLease?: { runId: string; expiresAt: string }): SceneTransition {
     return this.#transition(
       "rerollShotPlan",
       ["director_review"],
@@ -921,6 +962,10 @@ export class Scene {
         this.#selectedShotPlanRevision = undefined;
         this.#approvedShotPlanId = undefined;
         this.#approvedShotPlanRevision = undefined;
+        if (planningLease) {
+          this.#activePlanningRunId = planningLease.runId;
+          this.#activePlanningExpiresAt = planningLease.expiresAt;
+        }
       }
     );
   }
@@ -1024,7 +1069,7 @@ export class Scene {
     });
   }
 
-  fail(): SceneTransition {
+  fail(reason?: string): SceneTransition {
     if (this.#isTerminal()) {
       throw new TerminalStateError(this.#id, this.#status, "fail");
     }
@@ -1043,6 +1088,9 @@ export class Scene {
     const failedSource = this.#status;
     return this.#transition("fail", allowedSources, "failed", "failed", () => {
       this.#failedFrom = failedSource;
+      this.#failureReason = reason ?? undefined;
+      this.#activePlanningRunId = undefined;
+      this.#activePlanningExpiresAt = undefined;
     });
   }
 
@@ -1077,6 +1125,8 @@ export class Scene {
       "cancelled",
       () => {
         this.#activeProductionJobId = undefined;
+        this.#activePlanningRunId = undefined;
+        this.#activePlanningExpiresAt = undefined;
       }
     );
   }
@@ -1091,6 +1141,13 @@ export class Scene {
       sequenceIndex: this.#sequenceIndex,
       ...(this.#approval !== undefined ? { approval: this.#approval } : {}),
       ...(this.#failedFrom !== undefined ? { failedFrom: this.#failedFrom } : {}),
+      ...(this.#failureReason !== undefined ? { failureReason: this.#failureReason } : {}),
+      ...(this.#activePlanningRunId !== undefined
+        ? { activePlanningRunId: this.#activePlanningRunId }
+        : {}),
+      ...(this.#activePlanningExpiresAt !== undefined
+        ? { activePlanningExpiresAt: this.#activePlanningExpiresAt }
+        : {}),
       ...(this.#selectedCandidateId !== undefined
         ? { selectedCandidateId: this.#selectedCandidateId }
         : {}),

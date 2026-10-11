@@ -56,10 +56,15 @@ interface StoryboardSceneRow {
   selected_shot_plan_id: string | null;
   selected_shot_plan_revision: number | null;
   approved_shot_plan_id: string | null;
+  approved_shot_plan_revision?: number | null;
   lora_configuration_id: string | null;
   approved_by: string | null;
   approved_at: Date | string | null;
   approved_revision: number | null;
+  failure_reason?: string | null;
+  failed_from?: string | null;
+  active_production_job_id?: string | null;
+  has_production_run?: boolean;
   reference_asset_ids: string[] | null;
 }
 
@@ -198,7 +203,27 @@ function mapRowToShotPlanReviewItem(
   };
 }
 
-function deriveAllowedActions(status: SceneStatus, hasShotPlans: boolean): readonly ReviewAction[] {
+export interface DeriveAllowedActionsOptions {
+  readonly hasShotPlans?: boolean;
+  readonly isProductionRecoverable?: boolean;
+}
+
+export function deriveAllowedActions(
+  status: SceneStatus,
+  hasShotPlansOrOptions?: boolean | DeriveAllowedActionsOptions,
+  isProductionRecoverableArg?: boolean
+): readonly ReviewAction[] {
+  let hasShotPlans = false;
+  let isProductionRecoverable = false;
+
+  if (typeof hasShotPlansOrOptions === "boolean") {
+    hasShotPlans = hasShotPlansOrOptions;
+    isProductionRecoverable = isProductionRecoverableArg ?? false;
+  } else if (hasShotPlansOrOptions && typeof hasShotPlansOrOptions === "object") {
+    hasShotPlans = hasShotPlansOrOptions.hasShotPlans ?? false;
+    isProductionRecoverable = hasShotPlansOrOptions.isProductionRecoverable ?? false;
+  }
+
   switch (status) {
     case "draft_pending":
       return Object.freeze([
@@ -241,8 +266,11 @@ function deriveAllowedActions(status: SceneStatus, hasShotPlans: boolean): reado
       ]);
     case "queued":
     case "rendering":
-    case "failed":
       return Object.freeze(["cancel"]);
+    case "failed":
+      return isProductionRecoverable
+        ? Object.freeze(["production_rerender", "cancel"])
+        : Object.freeze(["cancel"]);
     case "qa":
       return Object.freeze(["production_accept", "production_rerender", "reject"]);
     case "completed":
@@ -273,10 +301,21 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
         s.selected_shot_plan_id,
         s.selected_shot_plan_revision,
         s.approved_shot_plan_id,
+        s.approved_shot_plan_revision,
         s.lora_configuration_id,
         s.approved_by,
         s.approved_at,
         s.approved_revision,
+        s.failure_reason,
+        s.failed_from,
+        s.active_production_job_id,
+        EXISTS (
+          SELECT 1
+          FROM campaign_production_run_scenes cprs
+          JOIN campaign_production_runs cpr ON cpr.run_id = cprs.run_id
+          WHERE cprs.production_job_id = s.active_production_job_id
+            AND cprs.scene_id = s.scene_id
+        ) AS has_production_run,
         COALESCE(
           (
             SELECT array_agg(sra.asset_id::text ORDER BY sra.asset_id ASC)
@@ -487,7 +526,43 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
     );
 
     const status = sceneRow.status as SceneStatus;
-    const allowedActions = deriveAllowedActions(status, shotPlans.length > 0);
+    const hasCurrentApproval = Boolean(
+      sceneRow.approved_by &&
+      sceneRow.approved_at &&
+      sceneRow.approved_revision != null &&
+      Number(sceneRow.approved_revision) === Number(sceneRow.spec_revision)
+    );
+    const isRecoverableFailedFrom =
+      sceneRow.failed_from === "queued" ||
+      sceneRow.failed_from === "rendering" ||
+      sceneRow.failed_from === "qa";
+    const hasActiveProductionJob = Boolean(sceneRow.active_production_job_id);
+    const hasProductionRun = Boolean(sceneRow.has_production_run);
+    const hasCurrentApprovedShotPlan = Boolean(
+      sceneRow.approved_shot_plan_id &&
+      (sceneRow.approved_shot_plan_revision == null ||
+        Number(sceneRow.approved_shot_plan_revision) === Number(sceneRow.spec_revision)) &&
+      shotPlans.some(
+        (sp) =>
+          sp.shotPlanId === sceneRow.approved_shot_plan_id &&
+          sp.status === "approved" &&
+          sp.specRevision === Number(sceneRow.spec_revision)
+      )
+    );
+
+    const isProductionRecoverable =
+      status === "failed" &&
+      isRecoverableFailedFrom &&
+      hasCurrentApproval &&
+      hasCurrentApprovedShotPlan &&
+      hasActiveProductionJob &&
+      hasProductionRun;
+
+    const allowedActions = deriveAllowedActions(
+      status,
+      shotPlans.length > 0,
+      isProductionRecoverable
+    );
 
     return {
       sceneId: sceneRow.scene_id as SceneId,
@@ -512,6 +587,7 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
         ? { approvedShotPlanId: sceneRow.approved_shot_plan_id as ShotPlanId }
         : {}),
       ...(approval !== undefined ? { approval } : {}),
+      ...(sceneRow.failure_reason ? { failureReason: sceneRow.failure_reason } : {}),
       candidatesByRevision: Object.freeze(candidatesByRevision),
       shotPlans: Object.freeze(shotPlans),
       referenceBindingsWithStorage: Object.freeze(referenceBindingsWithStorage),

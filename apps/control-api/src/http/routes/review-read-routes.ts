@@ -329,6 +329,7 @@ export const reviewReadRoutes: FastifyPluginAsync<ReviewReadRoutesOptions> = asy
           : {}),
         ...(detail.approvedShotPlanId ? { approvedShotPlanId: detail.approvedShotPlanId } : {}),
         ...(detail.approval ? { approval: detail.approval } : {}),
+        ...(detail.failureReason ? { failureReason: detail.failureReason } : {}),
         candidatesByRevision,
         ...(shotPlans !== undefined ? { shotPlans } : {}),
         ...(sceneBoundReferences !== undefined ? { boundReferences: sceneBoundReferences } : {}),

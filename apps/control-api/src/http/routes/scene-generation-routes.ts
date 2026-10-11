@@ -5,6 +5,7 @@ import {
   GenerationAdmissionResponseSchema
 } from "@cco/contracts";
 import type { ControlApiContainer } from "../types.js";
+import { ShotPlanPlanningCoordinator } from "../../shot-plan-planning-coordinator.js";
 
 export interface SceneGenerationRoutesOptions {
   readonly container: ControlApiContainer;
@@ -152,14 +153,22 @@ export const sceneGenerationRoutes: FastifyPluginAsync<SceneGenerationRoutesOpti
     }>,
     reply: FastifyReply
   ) => {
-    if (!container.useCases.planShotPlans) {
+    const coordinator =
+      container.planningCoordinator ??
+      (container.useCases.planShotPlans
+        ? new ShotPlanPlanningCoordinator({
+            planShotPlansUseCase: container.useCases.planShotPlans
+          })
+        : undefined);
+
+    if (!coordinator) {
       return reply.status(503).send({
         code: "CONFIGURATION_ERROR",
         message: "Shot plan planning is not available; planning model clients are not configured."
       });
     }
 
-    const result = await container.useCases.planShotPlans.execute({
+    const admission = await coordinator.prepareAdmission({
       sceneId: request.params.sceneId,
       variantCount: request.body?.variantCount,
       externalProcessingPolicy: request.body?.externalProcessingPolicy,
@@ -168,10 +177,22 @@ export const sceneGenerationRoutes: FastifyPluginAsync<SceneGenerationRoutesOpti
       reroll: request.body?.reroll
     });
 
-    return reply.status(200).send({
+    if (admission.kind === "replay") {
+      return reply.status(200).send({
+        sceneId: request.params.sceneId,
+        status: admission.status,
+        specRevision: admission.specRevision,
+        shotPlans: admission.shotPlans.map((p) => p.snapshot()),
+        isIdempotentReplay: true
+      });
+    }
+
+    return reply.status(202).send({
       sceneId: request.params.sceneId,
-      shotPlans: result.shotPlans.map((p) => p.snapshot()),
-      isIdempotentReplay: result.isIdempotentReplay
+      status: admission.status,
+      specRevision: admission.specRevision,
+      shotPlans: [],
+      isIdempotentReplay: false
     });
   };
 

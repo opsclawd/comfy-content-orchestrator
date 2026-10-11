@@ -349,7 +349,9 @@ export type PlanShotPlansRequest = z.infer<typeof PlanShotPlansRequestSchema>;
 export const PlanShotPlansResponseSchema = z.object({
   sceneId: z.string().uuid("sceneId must be a valid UUID"),
   shotPlans: z.array(ShotPlanDocumentSchema),
-  isIdempotentReplay: z.boolean()
+  isIdempotentReplay: z.boolean(),
+  status: z.string().optional(),
+  specRevision: z.number().int().positive().optional()
 });
 export type PlanShotPlansResponse = z.infer<typeof PlanShotPlansResponseSchema>;
 

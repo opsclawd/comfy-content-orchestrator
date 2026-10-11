@@ -1053,6 +1053,209 @@ describe("PlanShotPlansUseCase", () => {
     });
   });
 
+  it("strips <think> reasoning blocks from generated reference asset descriptions before storing", async () => {
+    const scene = createTestScene();
+    const asset = createTestAsset({
+      id: "01928374-abcd-7000-8000-000000000055" as ReferenceAssetId,
+      contentHashSha256: "hash-think-desc",
+      storageObjectKey: "refs/think.jpg",
+      description: null
+    });
+    const binding = createTestBinding(scene.id, {
+      referenceAssetId: asset.id,
+      role: "subject_identity"
+    });
+
+    const uow = new InMemorySceneUnitOfWork([scene]);
+    uow.seedReferenceAsset(asset);
+    uow.seedSceneBinding(binding);
+
+    const storage = createMockStorage();
+
+    const primaryClient = createMockClient("Anthropic", [
+      { kind: "success", rawText: JSON.stringify(validVariantJson) }
+    ]);
+
+    const fallbackClient = createFlexibleMockClient(
+      "OpenAI",
+      (req) => {
+        if (req.images && req.images.length > 0) {
+          return {
+            kind: "success",
+            rawText: `<think>
+1. Analyze the image: An astronaut standing on red Martian soil.
+2. Formulate concise description.
+</think>
+An astronaut standing on the red, rocky surface of Mars.`
+          };
+        }
+        return { kind: "success", rawText: JSON.stringify(validVariantJson) };
+      },
+      { imageCapability: true }
+    );
+
+    const useCase = new PlanShotPlansUseCase({
+      uow,
+      primaryClient,
+      fallbackClient,
+      objectStorage: storage
+    });
+
+    const result = await useCase.execute({
+      sceneId: scene.id,
+      variantCount: 1,
+      externalProcessingPolicy: {
+        allowCloudPlanning: true,
+        allowedProviders: ["Anthropic", "OpenAI"]
+      }
+    });
+
+    expect(result.shotPlans).toHaveLength(1);
+
+    // Verify stored description in reference assets repository excludes <think>
+    const storedDesc = await uow.execute(async (ctx) => {
+      return await ctx.referenceAssets?.findDescriptionByContentHash?.(asset.contentHashSha256);
+    });
+    expect(storedDesc).toBe("An astronaut standing on the red, rocky surface of Mars.");
+    expect(storedDesc).not.toContain("<think>");
+
+    // Verify campaign reference bible snapshot entry excludes <think>
+    const bibleEntries = await uow.execute(async (ctx) =>
+      ctx.campaignReferenceBible!.findByCampaignId(scene.campaignId)
+    );
+    expect(bibleEntries).toHaveLength(1);
+    expect(bibleEntries[0]!.description).toBe(
+      "An astronaut standing on the red, rocky surface of Mars."
+    );
+    expect(bibleEntries[0]!.description).not.toContain("<think>");
+
+    // Verify planner prompt receives clean description without <think>
+    const shotPlanCall = primaryClient.calls.find((c) => !c.images || c.images.length === 0);
+    expect(shotPlanCall?.userPrompt).toContain(
+      "<Picture 1> | subject_identity | An astronaut standing on the red, rocky surface of Mars."
+    );
+    expect(shotPlanCall?.userPrompt).not.toContain("<think>");
+  });
+
+  it("fails closed with asset ID when description generation output is empty after stripping <think> block", async () => {
+    const scene = createTestScene();
+    const asset = createTestAsset({
+      id: "01928374-abcd-7000-8000-000000000056" as ReferenceAssetId,
+      contentHashSha256: "hash-only-think-desc",
+      storageObjectKey: "refs/only-think.jpg",
+      description: null
+    });
+    const binding = createTestBinding(scene.id, {
+      referenceAssetId: asset.id,
+      role: "subject_identity"
+    });
+
+    const uow = new InMemorySceneUnitOfWork([scene]);
+    uow.seedReferenceAsset(asset);
+    uow.seedSceneBinding(binding);
+
+    const storage = createMockStorage();
+
+    const primaryClient = createMockClient("Anthropic", []);
+
+    const fallbackClient = createFlexibleMockClient(
+      "OpenAI",
+      (req) => {
+        if (req.images && req.images.length > 0) {
+          return {
+            kind: "success",
+            rawText:
+              "<think>\nThinking about what to say but outputting nothing else...\n</think>\n   \n"
+          };
+        }
+        return { kind: "success", rawText: JSON.stringify(validVariantJson) };
+      },
+      { imageCapability: true }
+    );
+
+    const useCase = new PlanShotPlansUseCase({
+      uow,
+      primaryClient,
+      fallbackClient,
+      objectStorage: storage
+    });
+
+    const promise = useCase.execute({
+      sceneId: scene.id,
+      variantCount: 1,
+      externalProcessingPolicy: {
+        allowCloudPlanning: true,
+        allowedProviders: ["Anthropic", "OpenAI"]
+      }
+    });
+
+    await expect(promise).rejects.toThrow(ReferenceAssetDescriptionGenerationError);
+    await expect(promise).rejects.toMatchObject({
+      assetId: asset.id
+    });
+  });
+
+  it("stores generated description unchanged (trimmed) when no reasoning block is present", async () => {
+    const scene = createTestScene();
+    const asset = createTestAsset({
+      id: "01928374-abcd-7000-8000-000000000057" as ReferenceAssetId,
+      contentHashSha256: "hash-no-think-desc",
+      storageObjectKey: "refs/no-think.jpg",
+      description: null
+    });
+    const binding = createTestBinding(scene.id, {
+      referenceAssetId: asset.id,
+      role: "subject_identity"
+    });
+
+    const uow = new InMemorySceneUnitOfWork([scene]);
+    uow.seedReferenceAsset(asset);
+    uow.seedSceneBinding(binding);
+
+    const storage = createMockStorage();
+
+    const primaryClient = createMockClient("Anthropic", [
+      { kind: "success", rawText: JSON.stringify(validVariantJson) }
+    ]);
+
+    const fallbackClient = createFlexibleMockClient(
+      "OpenAI",
+      (req) => {
+        if (req.images && req.images.length > 0) {
+          return {
+            kind: "success",
+            rawText: "   A clean reference asset description without thinking tags.   \n"
+          };
+        }
+        return { kind: "success", rawText: JSON.stringify(validVariantJson) };
+      },
+      { imageCapability: true }
+    );
+
+    const useCase = new PlanShotPlansUseCase({
+      uow,
+      primaryClient,
+      fallbackClient,
+      objectStorage: storage
+    });
+
+    const result = await useCase.execute({
+      sceneId: scene.id,
+      variantCount: 1,
+      externalProcessingPolicy: {
+        allowCloudPlanning: true,
+        allowedProviders: ["Anthropic", "OpenAI"]
+      }
+    });
+
+    expect(result.shotPlans).toHaveLength(1);
+
+    const storedDesc = await uow.execute(async (ctx) => {
+      return await ctx.referenceAssets?.findDescriptionByContentHash?.(asset.contentHashSha256);
+    });
+    expect(storedDesc).toBe("A clean reference asset description without thinking tags.");
+  });
+
   it("AC-4: fails closed with asset ID when active bound asset cannot be resolved", async () => {
     const scene = createTestScene();
     const unresolvableId = "01928374-abcd-7000-8000-000000000099" as ReferenceAssetId;
@@ -2713,6 +2916,241 @@ describe("PlanShotPlansUseCase", () => {
         expect(sceneBindings[0]!.referenceAssetId).toBe(asset.id);
         expect(sceneBindings[0]!.role).toBe("subject_identity");
       });
+    });
+  });
+
+  describe("Asynchronous planning admission and execution pipeline", () => {
+    it("prepareAdmission's planning lease honors the deps-level overallTimeoutMs default when the call site omits it (regression: route never forwards a per-request overallTimeoutMs, so the server's configured PLANNING_OVERALL_TIMEOUT_MS must not be silently discarded in favor of the 60s hardcoded floor)", async () => {
+      const scene = createTestScene();
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const primaryClient = createMockClient("Anthropic", []);
+      const fallbackClient = createMockClient("OpenAI", []);
+
+      const useCase = new PlanShotPlansUseCase({
+        uow,
+        primaryClient,
+        fallbackClient,
+        overallTimeoutMs: 240_000
+      });
+      const before = Date.now();
+      const admission = await useCase.prepareAdmission({ sceneId: scene.id, variantCount: 2 });
+
+      expect(admission.kind).toBe("admitted");
+      if (admission.kind === "admitted") {
+        const saved = await uow.execute((ctx) => ctx.scenes.findById(scene.id));
+        expect(saved?.activePlanningExpiresAt).toBeDefined();
+        const leaseDurationMs = new Date(saved!.activePlanningExpiresAt!).getTime() - before;
+        // Expected: max(240_000, 60_000) + 30_000 = 270_000, not the 60_000-floor-derived 90_000.
+        expect(leaseDurationMs).toBeGreaterThan(200_000);
+      }
+    });
+
+    it("prepareAdmission establishes planning lease and transitions scene to generating_candidates", async () => {
+      const scene = createTestScene();
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const primaryClient = createMockClient("Anthropic", []);
+      const fallbackClient = createMockClient("OpenAI", []);
+
+      const useCase = new PlanShotPlansUseCase({ uow, primaryClient, fallbackClient });
+      const admission = await useCase.prepareAdmission({ sceneId: scene.id, variantCount: 2 });
+
+      expect(admission.kind).toBe("admitted");
+      if (admission.kind === "admitted") {
+        expect(admission.runId).toBeDefined();
+        expect(admission.isDuplicate).toBe(false);
+        expect(admission.status).toBe("generating_candidates");
+
+        // Verify scene has lease saved in repo
+        const saved = await uow.execute((ctx) => ctx.scenes.findById(scene.id));
+        expect(saved?.status).toBe("generating_candidates");
+        expect(saved?.activePlanningRunId).toBe(admission.runId);
+        expect(saved?.activePlanningExpiresAt).toBeDefined();
+      }
+    });
+
+    it("prepareAdmission returns isDuplicate true when scene already has an active unexpired lease", async () => {
+      const scene = createTestScene();
+      const existingRunId = "existing-run-id-999";
+      const futureExpiresAt = new Date(Date.now() + 120_000).toISOString();
+      scene.beginCandidateGeneration({ runId: existingRunId, expiresAt: futureExpiresAt });
+
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const primaryClient = createMockClient("Anthropic", []);
+      const fallbackClient = createMockClient("OpenAI", []);
+
+      const useCase = new PlanShotPlansUseCase({ uow, primaryClient, fallbackClient });
+      const admission = await useCase.prepareAdmission({ sceneId: scene.id, variantCount: 2 });
+
+      expect(admission.kind).toBe("admitted");
+      if (admission.kind === "admitted") {
+        expect(admission.runId).toBe(existingRunId);
+        expect(admission.isDuplicate).toBe(true);
+      }
+    });
+
+    it("executePlanningPipeline persists plans, enqueues previs, and clears planning lease on success", async () => {
+      const scene = createTestScene();
+      const runId = "test-run-success";
+      scene.beginCandidateGeneration({
+        runId,
+        expiresAt: new Date(Date.now() + 60_000).toISOString()
+      });
+
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const primaryClient = createMockClient("Anthropic", [
+        { kind: "success", rawText: JSON.stringify(validVariantJson) }
+      ]);
+      const fallbackClient = createMockClient("OpenAI", []);
+
+      const useCase = new PlanShotPlansUseCase({ uow, primaryClient, fallbackClient });
+      const plans = await useCase.executePlanningPipeline(
+        scene.id,
+        scene.specRevision,
+        {
+          sceneId: scene.id,
+          variantCount: 2,
+          externalProcessingPolicy: {
+            allowCloudPlanning: true,
+            allowedProviders: ["Anthropic", "OpenAI"]
+          }
+        },
+        runId
+      );
+
+      expect(plans).toHaveLength(2);
+      const savedScene = await uow.execute((ctx) => ctx.scenes.findById(scene.id));
+      expect(savedScene?.status).toBe("generating_candidates");
+      expect(savedScene?.activePlanningRunId).toBeUndefined();
+      expect(savedScene?.activePlanningExpiresAt).toBeUndefined();
+    });
+
+    it("executePlanningPipeline records failure reason and transitions scene to failed on error", async () => {
+      const scene = createTestScene();
+      const runId = "test-run-failure";
+      scene.beginCandidateGeneration({
+        runId,
+        expiresAt: new Date(Date.now() + 60_000).toISOString()
+      });
+
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const primaryClient = createMockClient("Anthropic", [
+        { kind: "permanent_failure", httpStatus: 400, message: "API quota exceeded" }
+      ]);
+      const fallbackClient = createMockClient("OpenAI", [
+        { kind: "permanent_failure", httpStatus: 429, message: "Rate limit reached" }
+      ]);
+
+      const useCase = new PlanShotPlansUseCase({ uow, primaryClient, fallbackClient });
+
+      await expect(
+        useCase.executePlanningPipeline(
+          scene.id,
+          scene.specRevision,
+          {
+            sceneId: scene.id,
+            variantCount: 2,
+            externalProcessingPolicy: {
+              allowCloudPlanning: true,
+              allowedProviders: ["Anthropic", "OpenAI"]
+            }
+          },
+          runId
+        )
+      ).rejects.toThrow();
+
+      const savedScene = await uow.execute((ctx) => ctx.scenes.findById(scene.id));
+      expect(savedScene?.status).toBe("failed");
+      expect(savedScene?.failedFrom).toBe("generating_candidates");
+      expect(savedScene?.failureReason).toBeDefined();
+      expect(savedScene?.failureReason).toBe("All planning providers exhausted");
+      expect(savedScene?.activePlanningRunId).toBeUndefined();
+      expect(savedScene?.activePlanningExpiresAt).toBeUndefined();
+    });
+
+    it("executePlanningPipeline aborts promptly when AbortSignal triggers and records cancellation reason", async () => {
+      const scene = createTestScene();
+      const runId = "test-run-abort";
+      scene.beginCandidateGeneration({
+        runId,
+        expiresAt: new Date(Date.now() + 60_000).toISOString()
+      });
+
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const abortController = new AbortController();
+      abortController.abort(new Error("Coordinator shutting down"));
+
+      const primaryClient = createMockClient("Anthropic", []);
+      const fallbackClient = createMockClient("OpenAI", []);
+
+      const useCase = new PlanShotPlansUseCase({ uow, primaryClient, fallbackClient });
+
+      await expect(
+        useCase.executePlanningPipeline(
+          scene.id,
+          scene.specRevision,
+          {
+            sceneId: scene.id,
+            variantCount: 2,
+            externalProcessingPolicy: {
+              allowCloudPlanning: true,
+              allowedProviders: ["Anthropic", "OpenAI"]
+            }
+          },
+          runId,
+          abortController.signal
+        )
+      ).rejects.toThrow("Coordinator shutting down");
+
+      const savedScene = await uow.execute((ctx) => ctx.scenes.findById(scene.id));
+      expect(savedScene?.status).toBe("failed");
+      expect(savedScene?.failedFrom).toBe("generating_candidates");
+      expect(savedScene?.failureReason).toBe("Coordinator shutting down");
+      expect(savedScene?.activePlanningRunId).toBeUndefined();
+    });
+
+    it("executePlanningPipeline refuses to write plans if activePlanningRunId was superseded (fenced)", async () => {
+      const scene = createTestScene();
+      const initialRunId = "initial-run-id";
+      scene.beginCandidateGeneration({
+        runId: initialRunId,
+        expiresAt: new Date(Date.now() + 60_000).toISOString()
+      });
+
+      const uow = new InMemorySceneUnitOfWork([scene]);
+      const primaryClient = createMockClient("Anthropic", [
+        { kind: "success", rawText: JSON.stringify(validVariantJson) }
+      ]);
+      const fallbackClient = createMockClient("OpenAI", []);
+
+      // Another runner supersedes the lease before this pipeline finishes
+      await uow.execute(async (ctx) => {
+        const s = await ctx.scenes.findById(scene.id);
+        s?.beginCandidateGeneration({
+          runId: "newer-run-id",
+          expiresAt: new Date(Date.now() + 120_000).toISOString()
+        });
+        if (s) await ctx.scenes.save(s);
+      });
+
+      const useCase = new PlanShotPlansUseCase({ uow, primaryClient, fallbackClient });
+      const result = await useCase.executePlanningPipeline(
+        scene.id,
+        scene.specRevision,
+        {
+          sceneId: scene.id,
+          variantCount: 2,
+          externalProcessingPolicy: {
+            allowCloudPlanning: true,
+            allowedProviders: ["Anthropic", "OpenAI"]
+          }
+        },
+        initialRunId // using the stale runId
+      );
+
+      // Stale pipeline execution should return empty array and not overwrite the newer run
+      expect(result).toEqual([]);
+      const savedScene = await uow.execute((ctx) => ctx.scenes.findById(scene.id));
+      expect(savedScene?.activePlanningRunId).toBe("newer-run-id");
     });
   });
 });
