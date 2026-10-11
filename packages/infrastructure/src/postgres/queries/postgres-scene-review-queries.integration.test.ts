@@ -12,7 +12,8 @@ import {
   insertReferenceAssetRecord,
   insertStoryboardSceneRecord,
   insertSceneReferenceAssetRecord,
-  insertStoryboardCandidateRecord
+  insertStoryboardCandidateRecord,
+  insertRenderJobRecord
 } from "../test-support/records.js";
 import { PostgresSceneReviewQueries } from "./postgres-scene-review-queries.js";
 
@@ -401,6 +402,198 @@ describe("PostgreSQL SceneReviewQueries Read Adapter Integration", () => {
       expect(detail?.status).toBe(st);
       expect(detail?.allowedActions).toEqual([]);
     }
+
+    // 6. Eligible failed production scene with approved ShotPlan, active production job, and linked run
+    const failedProdScene = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: sceneOrder++,
+      durationSeconds: 5.0,
+      visualDescription: "Failed production scene recoverable by director",
+      engineAssigned: "minimax_h3",
+      status: "failed",
+      specRevision: 1,
+      approvedBy: "Supervisor Sam",
+      approvedAt: approvedAtIso,
+      approvedRevision: 1,
+      failedFrom: "rendering",
+      failureReason: "Render timeout on node"
+    });
+
+    const failedJob = await insertRenderJobRecord(client, {
+      sceneId: failedProdScene.scene_id,
+      jobKind: "production",
+      status: "failed"
+    });
+    const failedJobId = failedJob.job_id;
+
+    const shotPlanResult = await client.query<{ shot_plan_id: string }>(
+      `
+      INSERT INTO shot_plans (
+        scene_id, spec_revision, variant_ordinal, status, routing_mode,
+        target_duration_ms, target_frame_count, framing, camera_angle,
+        camera_movement, lighting_style, structured_plan
+      ) VALUES (
+        $1, 1, 1, 'approved', 'reference_directed',
+        5000, 124, 'medium', 'eye_level',
+        'static', 'natural_golden_hour',
+        '{"movementSpeed": "medium", "actionSummary": "Subject walks forward", "beats": [], "subjects": []}'::jsonb
+      )
+      RETURNING shot_plan_id
+      `,
+      [failedProdScene.scene_id]
+    );
+    const approvedShotPlanId = shotPlanResult.rows[0]!.shot_plan_id;
+
+    await client.query(
+      `
+      UPDATE storyboard_scenes
+      SET active_production_job_id = $1,
+          selected_shot_plan_id = $2,
+          selected_shot_plan_revision = 1,
+          approved_shot_plan_id = $2,
+          approved_shot_plan_revision = 1
+      WHERE scene_id = $3
+      `,
+      [failedJobId, approvedShotPlanId, failedProdScene.scene_id]
+    );
+
+    const runId = "01950c46-9e90-7d3d-82d2-8f1d3c000088";
+    await client.query(
+      `
+      INSERT INTO campaign_production_runs (
+        run_id, campaign_id, fingerprint, status, expected_total_duration_ms
+      ) VALUES ($1, $2, 'fp-test', 'dispatched', 5000)
+      `,
+      [runId, campaign.campaign_id]
+    );
+
+    await client.query(
+      `
+      INSERT INTO campaign_production_run_scenes (
+        run_id, scene_id, spec_revision, sequence_index, expected_duration_ms,
+        production_job_id, current_attempt_ordinal
+      ) VALUES ($1, $2, 1, 1, 5000, $3, 1)
+      `,
+      [runId, failedProdScene.scene_id, failedJobId]
+    );
+
+    const failedDetail = await queryAdapter.getSceneReviewDetail(
+      failedProdScene.scene_id as SceneId
+    );
+    expect(failedDetail).toBeDefined();
+    expect(failedDetail?.status).toBe("failed");
+    expect(failedDetail?.allowedActions).toEqual(["production_rerender", "cancel"]);
+
+    // 7. Ineligible failed production scene: missing approved ShotPlan
+    const failedNoPlanScene = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: sceneOrder++,
+      durationSeconds: 5.0,
+      visualDescription: "Failed production scene without approved shot plan",
+      engineAssigned: "minimax_h3",
+      status: "failed",
+      specRevision: 1,
+      approvedBy: "Supervisor Sam",
+      approvedAt: approvedAtIso,
+      approvedRevision: 1,
+      failedFrom: "rendering",
+      failureReason: "Render timeout on node"
+    });
+
+    const failedNoPlanJob = await insertRenderJobRecord(client, {
+      sceneId: failedNoPlanScene.scene_id,
+      jobKind: "production",
+      status: "failed"
+    });
+    await client.query(
+      `
+      UPDATE storyboard_scenes
+      SET active_production_job_id = $1
+      WHERE scene_id = $2
+      `,
+      [failedNoPlanJob.job_id, failedNoPlanScene.scene_id]
+    );
+
+    await client.query(
+      `
+      INSERT INTO campaign_production_run_scenes (
+        run_id, scene_id, spec_revision, sequence_index, expected_duration_ms,
+        production_job_id, current_attempt_ordinal
+      ) VALUES ($1, $2, 1, 2, 5000, $3, 1)
+      `,
+      [runId, failedNoPlanScene.scene_id, failedNoPlanJob.job_id]
+    );
+
+    const failedNoPlanDetail = await queryAdapter.getSceneReviewDetail(
+      failedNoPlanScene.scene_id as SceneId
+    );
+    expect(failedNoPlanDetail).toBeDefined();
+    expect(failedNoPlanDetail?.status).toBe("failed");
+    expect(failedNoPlanDetail?.allowedActions).toEqual(["cancel"]);
+
+    // 8. Ineligible failed production scene: stale ShotPlan from earlier revision
+    const failedStalePlanScene = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: sceneOrder++,
+      durationSeconds: 5.0,
+      visualDescription: "Failed production scene with stale shot plan from rev 1",
+      engineAssigned: "minimax_h3",
+      status: "failed",
+      specRevision: 2,
+      approvedBy: "Supervisor Sam",
+      approvedAt: approvedAtIso,
+      approvedRevision: 2,
+      failedFrom: "rendering",
+      failureReason: "Render timeout on node"
+    });
+
+    const failedStaleJob = await insertRenderJobRecord(client, {
+      sceneId: failedStalePlanScene.scene_id,
+      jobKind: "production",
+      status: "failed"
+    });
+
+    await client.query(
+      `
+      INSERT INTO shot_plans (
+        scene_id, spec_revision, variant_ordinal, status, routing_mode,
+        target_duration_ms, target_frame_count, framing, camera_angle,
+        camera_movement, lighting_style, structured_plan
+      ) VALUES (
+        $1, 1, 1, 'approved', 'reference_directed',
+        5000, 124, 'medium', 'eye_level',
+        'static', 'natural_golden_hour',
+        '{"movementSpeed": "medium", "actionSummary": "Rev 1 plan", "beats": [], "subjects": []}'::jsonb
+      )
+      `,
+      [failedStalePlanScene.scene_id]
+    );
+
+    await client.query(
+      `
+      UPDATE storyboard_scenes
+      SET active_production_job_id = $1
+      WHERE scene_id = $2
+      `,
+      [failedStaleJob.job_id, failedStalePlanScene.scene_id]
+    );
+
+    await client.query(
+      `
+      INSERT INTO campaign_production_run_scenes (
+        run_id, scene_id, spec_revision, sequence_index, expected_duration_ms,
+        production_job_id, current_attempt_ordinal
+      ) VALUES ($1, $2, 2, 3, 5000, $3, 1)
+      `,
+      [runId, failedStalePlanScene.scene_id, failedStaleJob.job_id]
+    );
+
+    const failedStaleDetail = await queryAdapter.getSceneReviewDetail(
+      failedStalePlanScene.scene_id as SceneId
+    );
+    expect(failedStaleDetail).toBeDefined();
+    expect(failedStaleDetail?.status).toBe("failed");
+    expect(failedStaleDetail?.allowedActions).toEqual(["cancel"]);
   });
 
   it("works with pg.Pool instance as well as pg.PoolClient", async () => {

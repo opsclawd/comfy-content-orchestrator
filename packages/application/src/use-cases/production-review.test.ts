@@ -43,6 +43,41 @@ describe("ProductionReviewUseCases", () => {
     return scene;
   };
 
+  const createFailedProductionScene = (
+    sceneId: string = "scene-failed-1",
+    jobId: string = "job-failed-1",
+    failedFrom: "queued" | "rendering" | "qa" = "rendering"
+  ): Scene => {
+    const scene = Scene.create({
+      id: sceneId as SceneId,
+      campaignId: "camp-1" as CampaignId,
+      configuration: {
+        prompt: "Epic mountain landscape at dawn",
+        referenceIds: [],
+        engineProfileId: "ltx_25",
+        durationMs: 4042
+      }
+    });
+
+    scene.beginCandidateGeneration();
+    scene.submitCandidatesForReview();
+    scene.selectCandidate("cand-1" as CandidateId, 1, scene.id);
+    scene.approve({
+      approvedBy: "Director Dave",
+      approvedAt: "2026-09-01T10:00:00.000Z"
+    });
+    scene.queueForProduction(jobId);
+    if (failedFrom === "rendering" || failedFrom === "qa") {
+      scene.startRendering();
+    }
+    if (failedFrom === "qa") {
+      scene.submitForQA();
+    }
+    scene.fail("Transitory infrastructure failure");
+
+    return scene;
+  };
+
   const setupTestContext = (scene: Scene, initialJobId: string = "job-prod-1") => {
     const queue = new InMemoryJobQueue();
     const uow = new InMemorySceneUnitOfWork([scene]).withJobs(queue);
@@ -471,6 +506,145 @@ describe("ProductionReviewUseCases", () => {
           occurredAt: "2026-09-01T12:00:00.000Z",
           expectedSpecRevision: 1,
           expectedProductionJobId: "job-prod-1"
+        })
+      ).rejects.toThrow(InvalidTransitionError);
+    });
+
+    it("successfully recovers failed production scene: enqueues new job, creates attempt with createdReason failure_recovery, resets to queued, logs review event", async () => {
+      const scene = createFailedProductionScene(
+        "scene-failed-retry",
+        "job-failed-prod-1",
+        "rendering"
+      );
+      const { uow, queue, useCases } = setupTestContext(scene, "job-failed-prod-1");
+
+      const result = await useCases.requestProductionRerender({
+        sceneId: "scene-failed-retry",
+        eventId: "evt-failed-retry-1",
+        reviewerName: "Supervisor Sam",
+        occurredAt: "2026-09-01T12:00:00.000Z",
+        expectedSpecRevision: 1,
+        expectedProductionJobId: "job-failed-prod-1",
+        directorNotes: "Retrying after transient infra bug"
+      });
+
+      expect(result.isIdempotentReplay).toBe(false);
+      expect(result.scene.status).toBe("queued");
+      expect(result.scene.productionAttemptOrdinal).toBe(2);
+      expect(result.scene.activeProductionJobId).not.toBe("job-failed-prod-1");
+
+      // Verify a new job was enqueued
+      expect(queue.jobs).toHaveLength(1);
+      const enqueuedJob = queue.jobs[0]!;
+      expect(enqueuedJob.jobId).toBe(result.scene.activeProductionJobId);
+      expect(enqueuedJob.jobKind).toBe("production");
+
+      // Verify run repository has attempt #2 recorded with createdReason: failure_recovery
+      const attempt2 = await uow.campaignProductionRuns.findAttemptByProductionJobId(
+        enqueuedJob.jobId
+      );
+      expect(attempt2).toBeDefined();
+      expect(attempt2?.ordinal).toBe(2);
+      expect(attempt2?.createdReason).toBe("failure_recovery");
+
+      // Verify run scene current attempt updated to the new job
+      const runScene = await uow.campaignProductionRuns.findRunSceneBySceneId("scene-failed-retry");
+      expect(runScene?.currentAttemptId).toBe(attempt2?.attemptId);
+      expect(runScene?.currentAttemptOrdinal).toBe(2);
+      expect(runScene?.productionJobId).toBe(enqueuedJob.jobId);
+
+      // Verify review event was appended with priorSceneStatus: "failed" and resultingSceneStatus: "queued"
+      const savedEvents = uow.reviewEvents;
+      expect(savedEvents).toHaveLength(1);
+      const event = savedEvents[0]!;
+      expect(event.action).toBe("production_rerender");
+      expect(event.sceneId).toBe("scene-failed-retry");
+      expect(event.priorSceneStatus).toBe("failed");
+      expect(event.resultingSceneStatus).toBe("queued");
+      expect(event.directorNotes).toBe("Retrying after transient infra bug");
+      expect(event.mutationPayload).toEqual({
+        productionJobId: enqueuedJob.jobId,
+        attemptId: attempt2?.attemptId,
+        attemptOrdinal: 2,
+        previousProductionJobId: "job-failed-prod-1"
+      });
+    });
+
+    it("returns idempotent replay when retrying failed scene repeatedly with the same eventId", async () => {
+      const scene = createFailedProductionScene(
+        "scene-failed-idem",
+        "job-failed-prod-1",
+        "rendering"
+      );
+      const { queue, useCases } = setupTestContext(scene, "job-failed-prod-1");
+
+      const first = await useCases.requestProductionRerender({
+        sceneId: "scene-failed-idem",
+        eventId: "evt-failed-idem-1",
+        reviewerName: "Supervisor Sam",
+        occurredAt: "2026-09-01T12:00:00.000Z",
+        expectedSpecRevision: 1,
+        expectedProductionJobId: "job-failed-prod-1"
+      });
+      expect(first.isIdempotentReplay).toBe(false);
+      expect(queue.jobs).toHaveLength(1);
+
+      const second = await useCases.requestProductionRerender({
+        sceneId: "scene-failed-idem",
+        eventId: "evt-failed-idem-1",
+        reviewerName: "Supervisor Sam",
+        occurredAt: "2026-09-01T12:00:00.000Z",
+        expectedSpecRevision: 1,
+        expectedProductionJobId: "job-failed-prod-1"
+      });
+      expect(second.isIdempotentReplay).toBe(true);
+      expect(queue.jobs).toHaveLength(1);
+    });
+
+    it("rejects failed scene retry with StaleProductionAttemptConflictError when expectedProductionJobId does not match failed attempt", async () => {
+      const scene = createFailedProductionScene(
+        "scene-failed-stale",
+        "job-failed-actual",
+        "rendering"
+      );
+      const { useCases } = setupTestContext(scene, "job-failed-actual");
+
+      await expect(
+        useCases.requestProductionRerender({
+          sceneId: "scene-failed-stale",
+          eventId: "evt-failed-stale-1",
+          reviewerName: "Supervisor Sam",
+          occurredAt: "2026-09-01T12:00:00.000Z",
+          expectedSpecRevision: 1,
+          expectedProductionJobId: "job-failed-wrong"
+        })
+      ).rejects.toThrow(StaleProductionAttemptConflictError);
+    });
+
+    it("rejects failed scene retry with InvalidTransitionError when failure originated from generating_candidates", async () => {
+      const scene = Scene.create({
+        id: "scene-failed-from-candidates" as SceneId,
+        campaignId: "camp-1" as CampaignId,
+        configuration: {
+          prompt: "Epic mountain landscape at dawn",
+          referenceIds: [],
+          engineProfileId: "ltx_25",
+          durationMs: 4042
+        }
+      });
+      scene.beginCandidateGeneration();
+      scene.fail("Planning engine timeout");
+
+      const { useCases } = setupTestContext(scene, "job-none");
+
+      await expect(
+        useCases.requestProductionRerender({
+          sceneId: "scene-failed-from-candidates",
+          eventId: "evt-failed-unrecoverable",
+          reviewerName: "Supervisor Sam",
+          occurredAt: "2026-09-01T12:00:00.000Z",
+          expectedSpecRevision: 1,
+          expectedProductionJobId: "job-none"
         })
       ).rejects.toThrow(InvalidTransitionError);
     });

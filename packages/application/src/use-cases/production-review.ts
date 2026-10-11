@@ -4,7 +4,8 @@ import {
   InvalidTransitionError,
   type CampaignProductionRunRecord,
   type CampaignProductionRunSceneRecord,
-  type Scene
+  type Scene,
+  type SceneStatus
 } from "@cco/domain";
 import type { UnitOfWork, UnitOfWorkContext } from "../ports/unit-of-work.js";
 import type { EnqueueSceneProductionRenderUseCase } from "./enqueue-scene-production-render.js";
@@ -133,8 +134,72 @@ export class ProductionReviewUseCases {
       }
 
       const scene = prepared.scene;
-      if (scene.status !== "qa") {
+      if (scene.status !== "qa" && scene.status !== "failed") {
         throw new InvalidTransitionError(scene.id, scene.status, "requestProductionRerender");
+      }
+
+      if (scene.status === "failed") {
+        const allowedFailedFrom: readonly SceneStatus[] = ["queued", "rendering", "qa"];
+        const snapshot = scene.snapshot();
+        const isRecoverable =
+          scene.failedFrom !== undefined &&
+          allowedFailedFrom.includes(scene.failedFrom) &&
+          snapshot.approval !== undefined &&
+          snapshot.approval.revision === snapshot.specRevision &&
+          snapshot.activeProductionJobId !== undefined;
+
+        if (!isRecoverable) {
+          throw new InvalidTransitionError(
+            scene.id,
+            scene.status,
+            "requestProductionRerender",
+            `Scene '${scene.id}' in failed status is not eligible for production recovery.`
+          );
+        }
+
+        const { run } = await this.resolveAndLockRun(context, scene, input.expectedProductionJobId);
+
+        const recoveryResult =
+          await this.enqueueSceneProductionRender.executeFailureRecoveryWithContext(
+            context,
+            scene,
+            run
+          );
+
+        const priorSceneStatus = scene.status;
+        const transition = scene.queueForProduction(recoveryResult.job.jobId);
+
+        const event = ReviewEventSchema.parse({
+          eventId: input.eventId,
+          sceneId: input.sceneId,
+          reviewerName: input.reviewerName,
+          action: "production_rerender",
+          ...(input.directorNotes !== undefined ? { directorNotes: input.directorNotes } : {}),
+          mutationPayload: {
+            productionJobId: recoveryResult.job.jobId,
+            attemptId: recoveryResult.attemptId,
+            attemptOrdinal: recoveryResult.attemptOrdinal,
+            previousProductionJobId: input.expectedProductionJobId
+          },
+          priorSceneStatus,
+          resultingSceneStatus: transition.to,
+          expectedSpecRevision: input.expectedSpecRevision,
+          ...(input.resultingSpecRevision !== undefined
+            ? { resultingSpecRevision: input.resultingSpecRevision }
+            : {}),
+          ...(input.requestHashSha256 !== undefined
+            ? { requestHashSha256: input.requestHashSha256 }
+            : {}),
+          occurredAt: input.occurredAt
+        });
+
+        await context.reviewEvents.append(event);
+        await context.scenes.save(scene);
+
+        return {
+          isIdempotentReplay: false,
+          scene: scene.snapshot()
+        };
       }
 
       const { run } = await this.resolveAndLockRun(context, scene, input.expectedProductionJobId);
@@ -198,7 +263,7 @@ export class ProductionReviewUseCases {
     const snapshot = scene.snapshot();
     const currentJobId = snapshot.activeProductionJobId;
     if (currentJobId === undefined) {
-      throw new Error(`Scene '${scene.id}' in qa has no active production job id.`);
+      throw new Error(`Scene '${scene.id}' in ${scene.status} has no active production job id.`);
     }
 
     const runScene = await runsRepo.findRunSceneByProductionJobId(currentJobId);

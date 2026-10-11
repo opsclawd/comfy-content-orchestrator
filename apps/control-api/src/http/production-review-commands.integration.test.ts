@@ -943,4 +943,272 @@ describe("Production Review Commands Integration (#263)", () => {
 
     await app.close();
   });
+
+  it("failed scene recovery: enqueues new production render referencing existing approved ShotPlan with failure_recovery attempt", async () => {
+    const app = createTestApp();
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, {
+      clientId: clientRecord.client_id,
+      totalScenes: 1,
+      status: "queued"
+    });
+
+    const candidateId = "01950c46-9e90-7d3d-82d2-8f1d3c000101" as CandidateId;
+    const shotPlanId = "01950c46-9e90-7d3d-82d2-8f1d3c000201";
+    const initialJobId = "01950c46-9e90-7d3d-82d2-8f1d3c000301";
+    const runId = "01950c46-9e90-7d3d-82d2-8f1d3c000401";
+
+    const scene = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      durationSeconds: 5.0,
+      visualDescription: "A cinematic castle atop a rocky precipice",
+      engineAssigned: "minimax_h3",
+      status: "failed",
+      specRevision: 1,
+      approvedBy: "Director Dave",
+      approvedAt: new Date().toISOString(),
+      approvedRevision: 1,
+      failedFrom: "rendering",
+      failureReason: "Transitory worker disconnection"
+    });
+
+    await insertStoryboardCandidateRecord(client, {
+      candidateId,
+      sceneId: scene.scene_id,
+      sceneSpecRevision: 1,
+      variantOrdinal: 1,
+      contentHashSha256: "b".repeat(64)
+    });
+
+    await client.query(
+      `
+      UPDATE storyboard_scenes
+      SET selected_candidate_id = $1,
+          selected_candidate_revision = 1
+      WHERE scene_id = $2
+      `,
+      [candidateId, scene.scene_id]
+    );
+
+    await client.query(
+      `
+      INSERT INTO shot_plans (
+        shot_plan_id, scene_id, spec_revision, variant_ordinal, status, routing_mode,
+        target_duration_ms, target_frame_count, framing, camera_angle, camera_movement,
+        lighting_style, previs_candidate_id, structured_plan
+      ) VALUES (
+        $1, $2, 1, 1, 'approved', 'frame_anchored',
+        5000, 124, 'wide', 'eye_level', 'static',
+        'natural_golden_hour', $3,
+        $4::jsonb
+      )
+      `,
+      [
+        shotPlanId,
+        scene.scene_id,
+        candidateId,
+        JSON.stringify({
+          movementSpeed: "medium",
+          actionSummary: "Castle towers visible in distance",
+          environmentDescription: "A rocky precipice beneath a looming castle",
+          colorPalette: ["#1a1a2e", "#8899aa"],
+          beats: [],
+          subjects: [],
+          continuity: {
+            persistentSubjectIds: [],
+            frameAnchorTarget: "first_frame",
+            anchorCandidateId: candidateId,
+            anchorMediaHashSha256: "b".repeat(64)
+          }
+        })
+      ]
+    );
+
+    await client.query(
+      `
+      UPDATE storyboard_scenes
+      SET selected_shot_plan_id = $1,
+          selected_shot_plan_revision = 1,
+          approved_shot_plan_id = $1,
+          approved_shot_plan_revision = 1,
+          production_routing_mode = 'frame_anchored',
+          active_production_job_id = $2,
+          production_attempt_ordinal = 1
+      WHERE scene_id = $3
+      `,
+      [shotPlanId, initialJobId, scene.scene_id]
+    );
+
+    await client.query(
+      `
+      INSERT INTO render_jobs (
+        job_id, scene_id, job_kind, workflow_template, injected_payload, status
+      ) VALUES ($1, $2, 'production', 'minimax_h3_t2v_production_v1.json', '{}', 'failed')
+      `,
+      [initialJobId, scene.scene_id]
+    );
+
+    await client.query(
+      `
+      INSERT INTO campaign_production_runs (
+        run_id, campaign_id, fingerprint, status, expected_total_duration_ms
+      ) VALUES ($1, $2, 'fp-fail-recov-1', 'dispatched', 5000)
+      `,
+      [runId, campaign.campaign_id]
+    );
+
+    const initialAttemptId = "01950c46-9e90-7d3d-82d2-8f1d3c000501";
+    await client.query(
+      `
+      INSERT INTO production_attempts (
+        attempt_id, scene_id, run_id, ordinal, production_job_id,
+        spec_revision, selected_candidate_id, selected_candidate_revision,
+        seed, created_reason
+      ) VALUES (
+        $1, $2, $3, 1, $4,
+        1, $5, 1, 42, 'initial_dispatch'
+      )
+      `,
+      [initialAttemptId, scene.scene_id, runId, initialJobId, candidateId]
+    );
+
+    await client.query(
+      `
+      INSERT INTO campaign_production_run_scenes (
+        run_id, scene_id, spec_revision, sequence_index, expected_duration_ms,
+        production_job_id, current_attempt_id, current_attempt_ordinal
+      ) VALUES (
+        $1, $2, 1, 1, 5000, $3, $4, 1
+      )
+      `,
+      [runId, scene.scene_id, initialJobId, initialAttemptId]
+    );
+
+    // Stale expectedProductionJobId fence verification
+    const staleResponse = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${scene.scene_id}/review-command`,
+      payload: {
+        actionId: "01950c46-9e90-7d3d-82d2-8f1d3c000600",
+        sceneId: scene.scene_id,
+        expectedSpecRevision: 1,
+        action: "production_rerender",
+        payload: {
+          expectedProductionJobId: "01950c46-9e90-7d3d-82d2-8f1d3c000999"
+        }
+      }
+    });
+    expect(staleResponse.statusCode).toBe(409);
+    const staleBody = staleResponse.json<ReviewErrorResponse>();
+    expect(staleBody.code).toBe("STALE_PRODUCTION_ATTEMPT_CONFLICT");
+
+    // Successful recovery submission
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/scenes/${scene.scene_id}/review-command`,
+      payload: {
+        actionId: "01950c46-9e90-7d3d-82d2-8f1d3c000601",
+        sceneId: scene.scene_id,
+        expectedSpecRevision: 1,
+        action: "production_rerender",
+        payload: {
+          expectedProductionJobId: initialJobId
+        },
+        directorNotes: "Recovering failed scene from approved ShotPlan"
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<ReviewCommandResponse>();
+    expect(body.status).toBe("queued");
+    expect(body.productionAttemptOrdinal).toBe(2);
+    expect(body.activeProductionJobId).toBeDefined();
+    expect(body.activeProductionJobId).not.toBe(initialJobId);
+    expect(body.approvedShotPlanId).toBe(shotPlanId);
+    expect(body.isIdempotentReplay).toBe(false);
+
+    // 1. Verify new production render_job references the existing approved ShotPlan
+    const newJobDb = await client.query<{
+      job_id: string;
+      injected_payload: Record<string, unknown>;
+      status: string;
+    }>("SELECT job_id, injected_payload, status FROM render_jobs WHERE job_id = $1", [
+      body.activeProductionJobId
+    ]);
+    expect(newJobDb.rows).toHaveLength(1);
+    expect(newJobDb.rows[0]?.status).toBe("queued");
+    const injected = newJobDb.rows[0]?.injected_payload;
+    expect(injected?.shotPlanId).toBe(shotPlanId);
+    expect(injected?.specRevision).toBe(1);
+
+    // 2. Verify prior ShotPlan selection/approval remains intact and no new ShotPlan was created
+    const shotPlansDb = await client.query<{ shot_plan_id: string; status: string }>(
+      "SELECT shot_plan_id, status FROM shot_plans WHERE scene_id = $1",
+      [scene.scene_id]
+    );
+    expect(shotPlansDb.rows).toHaveLength(1);
+    expect(shotPlansDb.rows[0]?.shot_plan_id).toBe(shotPlanId);
+    expect(shotPlansDb.rows[0]?.status).toBe("approved");
+
+    const sceneDb = await client.query<{
+      status: string;
+      approved_shot_plan_id: string;
+      selected_shot_plan_id: string;
+      spec_revision: number;
+    }>(
+      "SELECT status, approved_shot_plan_id, selected_shot_plan_id, spec_revision FROM storyboard_scenes WHERE scene_id = $1",
+      [scene.scene_id]
+    );
+    expect(sceneDb.rows[0]?.status).toBe("queued");
+    expect(sceneDb.rows[0]?.approved_shot_plan_id).toBe(shotPlanId);
+    expect(sceneDb.rows[0]?.selected_shot_plan_id).toBe(shotPlanId);
+    expect(sceneDb.rows[0]?.spec_revision).toBe(1);
+
+    // 3. Verify attempt row uses failure_recovery
+    const attemptsDb = await client.query<{
+      ordinal: number;
+      created_reason: string;
+      production_job_id: string;
+    }>(
+      "SELECT ordinal, created_reason, production_job_id FROM production_attempts WHERE scene_id = $1 ORDER BY ordinal ASC",
+      [scene.scene_id]
+    );
+    expect(attemptsDb.rows).toHaveLength(2);
+    expect(attemptsDb.rows[0]?.ordinal).toBe(1);
+    expect(attemptsDb.rows[0]?.created_reason).toBe("initial_dispatch");
+    expect(attemptsDb.rows[1]?.ordinal).toBe(2);
+    expect(attemptsDb.rows[1]?.created_reason).toBe("failure_recovery");
+    expect(attemptsDb.rows[1]?.production_job_id).toBe(body.activeProductionJobId);
+
+    // 4. Verify run scene pointer advanced
+    const runSceneDb = await client.query<{
+      current_attempt_ordinal: number;
+      production_job_id: string;
+    }>(
+      "SELECT current_attempt_ordinal, production_job_id FROM campaign_production_run_scenes WHERE scene_id = $1",
+      [scene.scene_id]
+    );
+    expect(runSceneDb.rows[0]?.current_attempt_ordinal).toBe(2);
+    expect(runSceneDb.rows[0]?.production_job_id).toBe(body.activeProductionJobId);
+
+    // 5. Verify review event contains expected prior/resulting state and lineage
+    const eventDb = await client.query<{
+      action: string;
+      prior_scene_status: string;
+      resulting_scene_status: string;
+      mutation_payload: Record<string, unknown>;
+    }>(
+      "SELECT action, prior_scene_status, resulting_scene_status, mutation_payload FROM review_events WHERE scene_id = $1 ORDER BY created_at DESC LIMIT 1",
+      [scene.scene_id]
+    );
+    expect(eventDb.rows).toHaveLength(1);
+    expect(eventDb.rows[0]?.action).toBe("production_rerender");
+    expect(eventDb.rows[0]?.prior_scene_status).toBe("failed");
+    expect(eventDb.rows[0]?.resulting_scene_status).toBe("queued");
+    expect(eventDb.rows[0]?.mutation_payload.previousProductionJobId).toBe(initialJobId);
+    expect(eventDb.rows[0]?.mutation_payload.productionJobId).toBe(body.activeProductionJobId);
+
+    await app.close();
+  });
 });
