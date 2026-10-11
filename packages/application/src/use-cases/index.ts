@@ -77,3 +77,4 @@ export * from "./install-acceptance-campaign-fixture.js";
 export * from "./evaluate-acceptance-preflight.js";
 export * from "./prepare-scene-production-inputs.js";
 export * from "./production-input-fingerprint-mismatch-error.js";
+export * from "./auto-plan-first-pass.js";
