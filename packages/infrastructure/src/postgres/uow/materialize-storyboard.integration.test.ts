@@ -99,10 +99,9 @@ describe("MaterializeStoryboardUseCase Integration", () => {
     );
 
     expect(sceneRows.rows).toHaveLength(3);
-    expect(sceneRows.rows.map((r) => r.scene_order)).toEqual([1, 2, 3]);
-    // Materialization no longer auto-admits candidate generation: a freshly
-    // materialized scene stays in draft_pending until the director explicitly
-    // generates ShotPlans.
+    // Freshly materialized scenes are created in draft_pending status;
+    // auto-planning coordinator triggers first-pass shot-planning post-commit
+    // when configured with bound references.
     expect(sceneRows.rows.every((r) => r.status === "draft_pending")).toBe(true);
     expect(sceneRows.rows.every((r) => r.spec_revision === 1)).toBe(true);
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   ArchivedReferenceBindingError,
   CrossClientReferenceBindingError,
@@ -308,5 +308,122 @@ describe("CreateSceneUseCase", () => {
         }
       })
     ).rejects.toThrow(ArchivedReferenceBindingError);
+  });
+
+  it("auto-triggers first-pass planning when references are bound and autoPlanCoordinator is provided", async () => {
+    const uow = new InMemorySceneUnitOfWork(undefined, undefined, undefined, [seededCampaign]);
+    const refAssetId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73802" as ReferenceAssetId;
+    uow.seedReferenceAsset({
+      id: refAssetId,
+      clientId: seededCampaign.clientId,
+      storageBucket: "ref-bucket",
+      storageObjectKey: "assets/caldera.png",
+      contentHashSha256: "1".repeat(64)
+    });
+
+    const coordinator = {
+      prepareAdmission: vi.fn().mockResolvedValue({ kind: "admitted" })
+    };
+
+    const useCase = new CreateSceneUseCase(uow, coordinator);
+
+    const scene = await useCase.execute({
+      campaignId: seededCampaign.id,
+      configuration: {
+        prompt: "A scene with references",
+        referenceIds: [refAssetId],
+        engineProfileId: "ltx_25",
+        durationMs: 5000
+      }
+    });
+
+    expect(scene.id).toBeDefined();
+    expect(coordinator.prepareAdmission).toHaveBeenCalledTimes(1);
+    expect(coordinator.prepareAdmission).toHaveBeenCalledWith({ sceneId: scene.id });
+  });
+
+  it("does not auto-trigger planning when scene has no reference bindings", async () => {
+    const uow = new InMemorySceneUnitOfWork(undefined, undefined, undefined, [seededCampaign]);
+    const coordinator = {
+      prepareAdmission: vi.fn().mockResolvedValue({ kind: "admitted" })
+    };
+
+    const useCase = new CreateSceneUseCase(uow, coordinator);
+
+    const scene = await useCase.execute({
+      campaignId: seededCampaign.id,
+      configuration: {
+        prompt: "A scene without references",
+        engineProfileId: "ltx_25",
+        durationMs: 5000
+      }
+    });
+
+    expect(scene.id).toBeDefined();
+    expect(coordinator.prepareAdmission).not.toHaveBeenCalled();
+  });
+
+  it("logs warning when coordinator is not configured on scene with bound references", async () => {
+    const uow = new InMemorySceneUnitOfWork(undefined, undefined, undefined, [seededCampaign]);
+    const refAssetId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73802" as ReferenceAssetId;
+    uow.seedReferenceAsset({
+      id: refAssetId,
+      clientId: seededCampaign.clientId,
+      storageBucket: "ref-bucket",
+      storageObjectKey: "assets/caldera.png",
+      contentHashSha256: "1".repeat(64)
+    });
+
+    const logger = { warn: vi.fn() };
+    const useCase = new CreateSceneUseCase(uow, undefined, logger);
+
+    const scene = await useCase.execute({
+      campaignId: seededCampaign.id,
+      configuration: {
+        prompt: "A scene with references and no coordinator",
+        referenceIds: [refAssetId],
+        engineProfileId: "ltx_25",
+        durationMs: 5000
+      }
+    });
+
+    expect(scene.id).toBeDefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("planning coordinator is not configured")
+    );
+  });
+
+  it("logs warning and preserves created scene when post-commit auto-planning encounters error", async () => {
+    const uow = new InMemorySceneUnitOfWork(undefined, undefined, undefined, [seededCampaign]);
+    const refAssetId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73802" as ReferenceAssetId;
+    uow.seedReferenceAsset({
+      id: refAssetId,
+      clientId: seededCampaign.clientId,
+      storageBucket: "ref-bucket",
+      storageObjectKey: "assets/caldera.png",
+      contentHashSha256: "1".repeat(64)
+    });
+
+    const coordinator = {
+      prepareAdmission: vi.fn().mockRejectedValue(new Error("Coordinator failed"))
+    };
+    const logger = { warn: vi.fn() };
+    const useCase = new CreateSceneUseCase(uow, coordinator, logger);
+
+    const scene = await useCase.execute({
+      campaignId: seededCampaign.id,
+      configuration: {
+        prompt: "A scene with failing coordinator",
+        referenceIds: [refAssetId],
+        engineProfileId: "ltx_25",
+        durationMs: 5000
+      }
+    });
+
+    expect(scene.id).toBeDefined();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("First-pass shot-plan auto-trigger failed")
+    );
   });
 });

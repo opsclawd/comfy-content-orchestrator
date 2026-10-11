@@ -37,6 +37,7 @@ export interface ReferenceAssetRecordInput {
   mimeType?: string;
   displayName?: string | null;
   groupId?: string | null;
+  description?: string | null;
   archivedAt?: Date | string | null;
 }
 
@@ -199,6 +200,7 @@ export interface InsertedReferenceAssetRecord {
   mime_type: string | null;
   display_name: string | null;
   group_id: string | null;
+  description: string | null;
   created_at: Date;
   archived_at: Date | null;
 }
@@ -478,6 +480,7 @@ export async function insertReferenceAssetRecord(
   const mimeType = input.mimeType !== undefined ? input.mimeType : null;
   const displayName = input.displayName !== undefined ? input.displayName : null;
   const groupId = input.groupId !== undefined ? input.groupId : null;
+  const description = input.description !== undefined ? input.description : null;
   const archivedAt = input.archivedAt !== undefined ? input.archivedAt : null;
 
   const res = await client.query<InsertedReferenceAssetRecord>(
@@ -495,8 +498,9 @@ export async function insertReferenceAssetRecord(
       mime_type,
       display_name,
       group_id,
+      description,
       archived_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
     RETURNING *
     `,
     [
@@ -512,6 +516,7 @@ export async function insertReferenceAssetRecord(
       mimeType,
       displayName,
       groupId,
+      description,
       archivedAt
     ]
   );

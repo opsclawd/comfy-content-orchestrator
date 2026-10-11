@@ -9,8 +9,12 @@ import {
   type SceneConfigurationInput,
   type SceneId
 } from "@cco/domain";
-import type { UnitOfWork } from "../ports/index.js";
+import type { ShotPlanPlanningAdmissionPort, UnitOfWork } from "../ports/index.js";
 import { CampaignNotFoundError } from "./campaign-not-found-error.js";
+import {
+  triggerFirstPassShotPlanningIfEligible,
+  type AutoPlanFirstPassLogger
+} from "./auto-plan-first-pass.js";
 
 export interface CreateSceneInput {
   readonly campaignId: string;
@@ -18,10 +22,14 @@ export interface CreateSceneInput {
 }
 
 export class CreateSceneUseCase {
-  constructor(private readonly uow: UnitOfWork) {}
+  constructor(
+    private readonly uow: UnitOfWork,
+    private readonly autoPlanCoordinator?: ShotPlanPlanningAdmissionPort | undefined,
+    private readonly logger?: AutoPlanFirstPassLogger | undefined
+  ) {}
 
   async execute(input: CreateSceneInput): Promise<Scene> {
-    return this.uow.execute(async (context) => {
+    const scene = await this.uow.execute(async (context) => {
       if (context.campaigns === undefined) {
         throw new Error(
           "UnitOfWorkContext.campaigns is not configured for this UnitOfWork implementation."
@@ -83,5 +91,34 @@ export class CreateSceneUseCase {
       await context.scenes.save(scene);
       return scene;
     });
+
+    if (this.autoPlanCoordinator) {
+      try {
+        await triggerFirstPassShotPlanningIfEligible({
+          sceneId: scene.id,
+          uow: this.uow,
+          coordinator: this.autoPlanCoordinator,
+          logger: this.logger
+        });
+      } catch (err) {
+        // Defensive: post-commit auto-planning failures must not fail the created scene
+        this.logger?.warn?.(
+          `Unexpected error during first-pass shot planning for scene '${scene.id}': ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+      }
+    } else {
+      const hasReferences =
+        (input.configuration.referenceIds && input.configuration.referenceIds.length > 0) ||
+        (input.configuration.referenceBindings && input.configuration.referenceBindings.length > 0);
+      if (hasReferences) {
+        this.logger?.warn?.(
+          `First-pass shot-plan auto-trigger skipped for scene '${scene.id}': planning coordinator is not configured`
+        );
+      }
+    }
+
+    return scene;
   }
 }

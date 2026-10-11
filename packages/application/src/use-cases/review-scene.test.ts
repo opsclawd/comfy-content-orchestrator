@@ -564,6 +564,140 @@ describe("ReviewSceneUseCases", () => {
       ).rejects.toThrow(StaleRevisionConflictError);
     });
 
+    it("auto-triggers first pass planning when updating references on a draft_pending scene with no existing plans", async () => {
+      const scene = Scene.create({
+        id: "scene-draft-first-pass" as SceneId,
+        campaignId: "campaign-1" as CampaignId,
+        configuration: {
+          prompt: "A fresh scene without initial references",
+          engineProfileId: "ltx_25",
+          durationMs: 5000
+        }
+      });
+      const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [seededCampaign]);
+      uow.seedReferenceAsset(createReferenceAsset("ref-hero"));
+
+      const coordinator = {
+        prepareAdmission: vi.fn().mockResolvedValue({ kind: "admitted" })
+      };
+      const useCases = new ReviewSceneUseCases(uow, undefined, coordinator);
+
+      const result = await useCases.updateReferences({
+        sceneId: scene.id,
+        eventId: "event-ref-bind-first",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T03:01:00.000Z",
+        referenceIds: ["ref-hero"]
+      });
+
+      expect(result.isIdempotentReplay).toBe(false);
+      expect(coordinator.prepareAdmission).toHaveBeenCalledTimes(1);
+      expect(coordinator.prepareAdmission).toHaveBeenCalledWith({ sceneId: scene.id });
+    });
+
+    it("does not auto-trigger planning when updating references on an already reviewed scene", async () => {
+      const scene = createSceneInDirectorReview("scene-in-review-refs");
+      const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [seededCampaign]);
+      uow.seedReferenceAsset(createReferenceAsset("ref-hero"));
+
+      const coordinator = {
+        prepareAdmission: vi.fn().mockResolvedValue({ kind: "admitted" })
+      };
+      const useCases = new ReviewSceneUseCases(uow, undefined, coordinator);
+
+      const result = await useCases.updateReferences({
+        sceneId: scene.id,
+        eventId: "event-ref-bind-reviewed",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T03:01:00.000Z",
+        referenceIds: ["ref-hero"]
+      });
+
+      expect(result.isIdempotentReplay).toBe(false);
+      expect(coordinator.prepareAdmission).not.toHaveBeenCalled();
+    });
+
+    it("preserves committed reference change when post-commit eligibility read rejects", async () => {
+      const scene = Scene.create({
+        id: "scene-draft-post-commit-fail" as SceneId,
+        campaignId: "campaign-1" as CampaignId,
+        configuration: {
+          prompt: "A fresh scene without initial references",
+          engineProfileId: "ltx_25",
+          durationMs: 5000
+        }
+      });
+      const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [seededCampaign]);
+      uow.seedReferenceAsset(createReferenceAsset("ref-hero"));
+
+      const coordinator = {
+        prepareAdmission: vi.fn()
+      };
+
+      let executeCalls = 0;
+      const originalExecute = uow.execute.bind(uow);
+      vi.spyOn(uow, "execute").mockImplementation(async (fn) => {
+        executeCalls++;
+        if (executeCalls > 1) {
+          throw new Error("Post-commit eligibility read failed");
+        }
+        return originalExecute(fn);
+      });
+
+      const logger = {
+        warn: vi.fn()
+      };
+
+      const useCases = new ReviewSceneUseCases(uow, undefined, coordinator, logger);
+
+      const result = await useCases.updateReferences({
+        sceneId: scene.id,
+        eventId: "event-ref-post-commit-err",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T03:01:00.000Z",
+        referenceIds: ["ref-hero"]
+      });
+
+      expect(result.isIdempotentReplay).toBe(false);
+      expect(result.scene.configuration.referenceIds).toEqual(["ref-hero"]);
+      expect(coordinator.prepareAdmission).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("First-pass shot-plan eligibility check failed")
+      );
+    });
+
+    it("logs warning when coordinator is not configured on reference change with bound references", async () => {
+      const scene = Scene.create({
+        id: "scene-draft-no-coord" as SceneId,
+        campaignId: "campaign-1" as CampaignId,
+        configuration: {
+          prompt: "A fresh scene without initial references",
+          engineProfileId: "ltx_25",
+          durationMs: 5000
+        }
+      });
+      const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [seededCampaign]);
+      uow.seedReferenceAsset(createReferenceAsset("ref-hero"));
+
+      const logger = { warn: vi.fn() };
+      const useCases = new ReviewSceneUseCases(uow, undefined, undefined, logger);
+
+      const result = await useCases.updateReferences({
+        sceneId: scene.id,
+        eventId: "event-ref-bind-no-coord",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T03:01:00.000Z",
+        referenceIds: ["ref-hero"]
+      });
+
+      expect(result.isIdempotentReplay).toBe(false);
+      expect(result.scene.configuration.referenceIds).toEqual(["ref-hero"]);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("planning coordinator is not configured")
+      );
+    });
+
     describe("campaign reference bible reconciliation", () => {
       it("adds new eligible asset to existing campaign bible and records change event", async () => {
         const scene = createSceneInApproved("scene-bible-reconcile-add");

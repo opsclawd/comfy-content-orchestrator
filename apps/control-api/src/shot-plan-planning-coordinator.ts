@@ -1,7 +1,8 @@
 import type {
   PlanShotPlansUseCase,
   PlanShotPlansInput,
-  PlanShotPlansAdmissionResult
+  PlanShotPlansAdmissionResult,
+  ShotPlanPlanningAdmissionPort
 } from "@cco/application";
 import type { SceneId } from "@cco/domain";
 import {
@@ -38,7 +39,7 @@ export interface InFlightPlanningTask {
 
 export type RecoverInterruptedRunsOptions = RecoverInterruptedPlanningRunsOptions;
 
-export class ShotPlanPlanningCoordinator {
+export class ShotPlanPlanningCoordinator implements ShotPlanPlanningAdmissionPort {
   private readonly inFlightTasks = new Map<string, InFlightPlanningTask>();
   private recoveryReaper?: PlanningRecoveryReaper | undefined;
 

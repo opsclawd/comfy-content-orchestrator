@@ -8,7 +8,11 @@ import {
   type SceneId,
   type SceneSnapshot
 } from "@cco/domain";
-import type { UnitOfWork, UnitOfWorkContext } from "../ports/index.js";
+import type {
+  ShotPlanPlanningAdmissionPort,
+  UnitOfWork,
+  UnitOfWorkContext
+} from "../ports/index.js";
 import { CampaignNotFoundError } from "./campaign-not-found-error.js";
 import { InvalidSceneOrdinalSequenceError } from "./invalid-scene-ordinal-sequence-error.js";
 import { resolveCandidateReferenceAssets } from "./resolve-candidate-reference-assets.js";
@@ -16,6 +20,10 @@ import { SceneConfigurationCountMismatchError } from "./scene-configuration-coun
 import { SceneConfigurationValidationError } from "./validate-scene-configuration.js";
 import { StoryboardPartiallyMaterializedError } from "./storyboard-partially-materialized-error.js";
 import { StoryboardMaterializationConflictError } from "./storyboard-materialization-conflict-error.js";
+import {
+  triggerFirstPassShotPlanningIfEligible,
+  type AutoPlanFirstPassLogger
+} from "./auto-plan-first-pass.js";
 
 export interface OrderedSceneConfiguration {
   readonly ordinal: number;
@@ -35,10 +43,50 @@ export interface MaterializeStoryboardResult {
 }
 
 export class MaterializeStoryboardUseCase {
-  constructor(private readonly uow: UnitOfWork) {}
+  constructor(
+    private readonly uow: UnitOfWork,
+    private readonly autoPlanCoordinator?: ShotPlanPlanningAdmissionPort | undefined,
+    private readonly logger?: AutoPlanFirstPassLogger | undefined
+  ) {}
 
   async execute(input: MaterializeStoryboardInput): Promise<MaterializeStoryboardResult> {
-    return this.uow.execute((context) => this.executeWithContext(context, input));
+    const result = await this.uow.execute((context) => this.executeWithContext(context, input));
+
+    if (!result.isIdempotentReplay) {
+      if (this.autoPlanCoordinator) {
+        for (const scene of result.scenes) {
+          try {
+            await triggerFirstPassShotPlanningIfEligible({
+              sceneId: scene.id,
+              uow: this.uow,
+              coordinator: this.autoPlanCoordinator,
+              logger: this.logger
+            });
+          } catch (err) {
+            // Defensive: post-commit auto-planning failures must not fail the materialized storyboard
+            this.logger?.warn?.(
+              `Unexpected error during first-pass shot planning for scene '${scene.id}': ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            );
+          }
+        }
+      } else {
+        for (const scene of result.scenes) {
+          const hasReferences =
+            (scene.configuration.referenceIds && scene.configuration.referenceIds.length > 0) ||
+            (scene.configuration.referenceBindings &&
+              scene.configuration.referenceBindings.length > 0);
+          if (hasReferences) {
+            this.logger?.warn?.(
+              `First-pass shot-plan auto-trigger skipped for scene '${scene.id}': planning coordinator is not configured`
+            );
+          }
+        }
+      }
+    }
+
+    return result;
   }
 
   async executeWithContext(

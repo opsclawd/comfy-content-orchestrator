@@ -19,7 +19,15 @@ import {
   type ShotPlanId
 } from "@cco/domain";
 import { ReferenceCanonicalizationError } from "../shot-plan-compiler/canonicalize-reference-bindings.js";
-import type { UnitOfWork, UnitOfWorkContext } from "../ports/unit-of-work.js";
+import type {
+  ShotPlanPlanningAdmissionPort,
+  UnitOfWork,
+  UnitOfWorkContext
+} from "../ports/index.js";
+import {
+  triggerFirstPassShotPlanningIfEligible,
+  type AutoPlanFirstPassLogger
+} from "./auto-plan-first-pass.js";
 import { CandidateNotFoundError } from "./candidate-not-found-error.js";
 import { IdempotencyConflictError } from "./idempotency-conflict-error.js";
 import { SceneNotFoundError } from "./scene-not-found-error.js";
@@ -371,7 +379,9 @@ export async function prepareReviewExecution(
 export class ReviewSceneUseCases {
   constructor(
     private readonly uow: UnitOfWork,
-    private readonly planShotPlans?: PlanShotPlansUseCase | undefined
+    private readonly planShotPlans?: PlanShotPlansUseCase | undefined,
+    private readonly autoPlanCoordinator?: ShotPlanPlanningAdmissionPort | undefined,
+    private readonly logger?: AutoPlanFirstPassLogger | undefined
   ) {}
 
   async selectCandidate(input: SelectCandidateInput): Promise<ReviewExecutionResult> {
@@ -657,7 +667,7 @@ export class ReviewSceneUseCases {
       }
     }
 
-    return await this.executeReviewAction(
+    const result = await this.executeReviewAction(
       input,
       "reference_change",
       {
@@ -668,6 +678,37 @@ export class ReviewSceneUseCases {
       },
       (scene) => scene.updateReferences(effectiveReferenceIds, input.referenceBindings)
     );
+
+    if (!result.isIdempotentReplay) {
+      if (this.autoPlanCoordinator) {
+        try {
+          await triggerFirstPassShotPlanningIfEligible({
+            sceneId: input.sceneId,
+            uow: this.uow,
+            coordinator: this.autoPlanCoordinator,
+            logger: this.logger
+          });
+        } catch (err) {
+          // Defensive: post-commit auto-planning failures must not fail the committed reference change
+          this.logger?.warn?.(
+            `Unexpected error during first-pass shot planning for scene '${input.sceneId}': ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          );
+        }
+      } else {
+        const hasReferences =
+          effectiveReferenceIds.length > 0 ||
+          (input.referenceBindings !== undefined && input.referenceBindings.length > 0);
+        if (hasReferences) {
+          this.logger?.warn?.(
+            `First-pass shot-plan auto-trigger skipped for scene '${input.sceneId}': planning coordinator is not configured`
+          );
+        }
+      }
+    }
+
+    return result;
   }
 
   async updateEngine(input: UpdateEngineInput): Promise<ReviewExecutionResult> {
