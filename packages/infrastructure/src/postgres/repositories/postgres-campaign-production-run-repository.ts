@@ -486,11 +486,57 @@ export class PostgresCampaignProductionRunRepository implements CampaignProducti
   }
 
   async claimForProductionReview(runId: string): Promise<CampaignProductionRunRecord | undefined> {
+    // 1. Explicitly lock all linked render_jobs in deterministic order (by job_id) FOR SHARE.
+    // This serializes review claims with concurrent render_jobs status changes (e.g. uncommitted failure updates),
+    // ensuring the review eligibility check observes the final committed state.
+    const lockedJobs = await this.client.query<{ job_id: string; status: string }>(
+      `
+      SELECT rj.job_id, rj.status
+      FROM render_jobs rj
+      WHERE rj.job_id IN (
+        SELECT rs.production_job_id
+        FROM campaign_production_run_scenes rs
+        WHERE rs.run_id = $1 AND rs.production_job_id IS NOT NULL
+      )
+      ORDER BY rj.job_id
+      FOR SHARE
+      `,
+      [runId]
+    );
+
+    // If any linked job is not completed, eligibility check fails immediately
+    if (lockedJobs.rows.some((row) => row.status !== "completed")) {
+      return undefined;
+    }
+
+    const incompleteCheck = await this.client.query<{ count: string | number }>(
+      `
+      SELECT COUNT(*)::int AS count
+      FROM campaign_production_run_scenes rs
+      LEFT JOIN render_jobs rj ON rj.job_id = rs.production_job_id
+      WHERE rs.run_id = $1
+        AND (rs.production_job_id IS NULL OR rj.job_id IS NULL OR rj.status <> 'completed')
+      `,
+      [runId]
+    );
+
+    if (Number(incompleteCheck.rows[0]?.count ?? 0) > 0) {
+      return undefined;
+    }
+
     const result = await this.client.query<CampaignProductionRunRow>(
       `
       UPDATE campaign_production_runs
       SET status = 'production_review', updated_at = CURRENT_TIMESTAMP
-      WHERE run_id = $1 AND status = 'dispatched'
+      WHERE run_id = $1
+        AND status IN ('dispatched', 'failed')
+        AND NOT EXISTS (
+          SELECT 1
+          FROM campaign_production_run_scenes rs
+          LEFT JOIN render_jobs rj ON rj.job_id = rs.production_job_id
+          WHERE rs.run_id = campaign_production_runs.run_id
+            AND (rs.production_job_id IS NULL OR rj.job_id IS NULL OR rj.status <> 'completed')
+        )
       RETURNING
         run_id,
         campaign_id,
@@ -566,6 +612,23 @@ export class PostgresCampaignProductionRunRepository implements CampaignProducti
   }
 
   async claimFailure(runId: string): Promise<CampaignProductionRunRecord | undefined> {
+    // Coordinate on the same lock and order as claimForProductionReview to prevent deadlocks
+    // and serialize failure claims with concurrent completion/review claims.
+    await this.client.query(
+      `
+      SELECT rj.job_id
+      FROM render_jobs rj
+      WHERE rj.job_id IN (
+        SELECT rs.production_job_id
+        FROM campaign_production_run_scenes rs
+        WHERE rs.run_id = $1 AND rs.production_job_id IS NOT NULL
+      )
+      ORDER BY rj.job_id
+      FOR SHARE
+      `,
+      [runId]
+    );
+
     const result = await this.client.query<CampaignProductionRunRow>(
       `
       UPDATE campaign_production_runs

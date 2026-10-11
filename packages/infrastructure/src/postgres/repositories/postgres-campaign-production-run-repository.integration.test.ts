@@ -248,6 +248,186 @@ describe("PostgresCampaignProductionRunRepository Integration", () => {
     expect(failed!.status).toBe("failed");
   });
 
+  it("claims production review from failed status when all run scene jobs are completed", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+    const scene1 = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      status: "qa"
+    });
+    const scene2 = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 2,
+      status: "qa"
+    });
+    const job1 = await insertRenderJobRecord(client, {
+      sceneId: scene1.scene_id,
+      jobKind: "production",
+      status: "completed"
+    });
+    const job2 = await insertRenderJobRecord(client, {
+      sceneId: scene2.scene_id,
+      jobKind: "production",
+      status: "completed"
+    });
+
+    const repo = new PostgresCampaignProductionRunRepository(client);
+    const { run } = await repo.createIfAbsent({
+      campaignId: campaign.campaign_id as CampaignId,
+      fingerprint: `fp_recover_${Date.now()}`,
+      status: "dispatched",
+      expectedTotalDurationMs: 8000
+    });
+    await repo.insertRunScenes(run.id, [
+      {
+        runId: run.id,
+        sceneId: scene1.scene_id as SceneId,
+        specRevision: 1,
+        sequenceIndex: 1,
+        expectedDurationMs: 4000,
+        productionJobId: job1.job_id
+      },
+      {
+        runId: run.id,
+        sceneId: scene2.scene_id as SceneId,
+        specRevision: 1,
+        sequenceIndex: 2,
+        expectedDurationMs: 4000,
+        productionJobId: job2.job_id
+      }
+    ]);
+
+    // Claim failure first to simulate run failure
+    const failed = await repo.claimFailure(run.id);
+    expect(failed).toBeDefined();
+    expect(failed!.status).toBe("failed");
+
+    // All jobs are completed -> claimForProductionReview recovers the failed run
+    const recovered = await repo.claimForProductionReview(run.id);
+    expect(recovered).toBeDefined();
+    expect(recovered!.status).toBe("production_review");
+
+    // Repeated claim returns undefined (idempotent)
+    const secondClaim = await repo.claimForProductionReview(run.id);
+    expect(secondClaim).toBeUndefined();
+  });
+
+  it("refuses to claim production review from failed status when any scene has an incomplete job, and recovers once retried", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+    const scene1 = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      status: "qa"
+    });
+    const scene2 = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 2,
+      status: "qa"
+    });
+    const job1 = await insertRenderJobRecord(client, {
+      sceneId: scene1.scene_id,
+      jobKind: "production",
+      status: "completed"
+    });
+    const job2 = await insertRenderJobRecord(client, {
+      sceneId: scene2.scene_id,
+      jobKind: "production",
+      status: "failed"
+    });
+
+    const repo = new PostgresCampaignProductionRunRepository(client);
+    const { run } = await repo.createIfAbsent({
+      campaignId: campaign.campaign_id as CampaignId,
+      fingerprint: `fp_recover_incomplete_${Date.now()}`,
+      status: "dispatched",
+      expectedTotalDurationMs: 8000
+    });
+    await repo.insertRunScenes(run.id, [
+      {
+        runId: run.id,
+        sceneId: scene1.scene_id as SceneId,
+        specRevision: 1,
+        sequenceIndex: 1,
+        expectedDurationMs: 4000,
+        productionJobId: job1.job_id
+      },
+      {
+        runId: run.id,
+        sceneId: scene2.scene_id as SceneId,
+        specRevision: 1,
+        sequenceIndex: 2,
+        expectedDurationMs: 4000,
+        productionJobId: job2.job_id
+      }
+    ]);
+
+    // Claim failure first
+    const failed = await repo.claimFailure(run.id);
+    expect(failed).toBeDefined();
+    expect(failed!.status).toBe("failed");
+
+    // Sibling job2 is still failed -> claimForProductionReview refuses to claim
+    const refused = await repo.claimForProductionReview(run.id);
+    expect(refused).toBeUndefined();
+
+    // Verify run remains in failed status
+    const currentRun = await repo.findById(run.id);
+    expect(currentRun?.status).toBe("failed");
+
+    // Simulate retry of job2 completing successfully
+    await client.query("UPDATE render_jobs SET status = 'completed' WHERE job_id = $1", [
+      job2.job_id
+    ]);
+
+    // Now all jobs are completed -> claimForProductionReview succeeds
+    const recovered = await repo.claimForProductionReview(run.id);
+    expect(recovered).toBeDefined();
+    expect(recovered!.status).toBe("production_review");
+  });
+
+  it("refuses to claim production review from dispatched status when a scene has an incomplete job", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+    const scene1 = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      status: "approved"
+    });
+    const job1 = await insertRenderJobRecord(client, {
+      sceneId: scene1.scene_id,
+      jobKind: "production",
+      status: "rendering"
+    });
+
+    const repo = new PostgresCampaignProductionRunRepository(client);
+    const { run } = await repo.createIfAbsent({
+      campaignId: campaign.campaign_id as CampaignId,
+      fingerprint: `fp_dispatched_incomplete_${Date.now()}`,
+      status: "dispatched",
+      expectedTotalDurationMs: 4000
+    });
+    await repo.insertRunScenes(run.id, [
+      {
+        runId: run.id,
+        sceneId: scene1.scene_id as SceneId,
+        specRevision: 1,
+        sequenceIndex: 1,
+        expectedDurationMs: 4000,
+        productionJobId: job1.job_id
+      }
+    ]);
+
+    // Job is still rendering -> claimForProductionReview returns undefined
+    const claim = await repo.claimForProductionReview(run.id);
+    expect(claim).toBeUndefined();
+
+    // Status remains dispatched
+    const currentRun = await repo.findById(run.id);
+    expect(currentRun?.status).toBe("dispatched");
+  });
+
   it("claims failure from dispatched or assembling status", async () => {
     const clientRecord = await insertClientRecord(client);
     const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
@@ -447,6 +627,223 @@ describe("PostgresCampaignProductionRunRepository Integration", () => {
     } finally {
       first.release();
       second.release();
+      await client.query("BEGIN");
+    }
+  });
+
+  it("serializes review claim with concurrent sibling failure update, proving no spurious qa transition occurs", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, {
+      clientId: clientRecord.client_id,
+      status: "failed"
+    });
+    const scene1 = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      status: "qa"
+    });
+    const scene2 = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 2,
+      status: "qa"
+    });
+    const job1 = await insertRenderJobRecord(client, {
+      sceneId: scene1.scene_id,
+      jobKind: "production",
+      status: "completed"
+    });
+    const job2 = await insertRenderJobRecord(client, {
+      sceneId: scene2.scene_id,
+      jobKind: "production",
+      status: "rendering"
+    });
+
+    const repo = new PostgresCampaignProductionRunRepository(client);
+    const { run } = await repo.createIfAbsent({
+      campaignId: campaign.campaign_id as CampaignId,
+      fingerprint: `fp_concurrency_race_${Date.now()}`,
+      status: "dispatched",
+      expectedTotalDurationMs: 8000
+    });
+    await repo.insertRunScenes(run.id, [
+      {
+        runId: run.id,
+        sceneId: scene1.scene_id as SceneId,
+        specRevision: 1,
+        sequenceIndex: 1,
+        expectedDurationMs: 4000,
+        productionJobId: job1.job_id
+      },
+      {
+        runId: run.id,
+        sceneId: scene2.scene_id as SceneId,
+        specRevision: 1,
+        sequenceIndex: 2,
+        expectedDurationMs: 4000,
+        productionJobId: job2.job_id
+      }
+    ]);
+
+    const failedRun = await repo.claimFailure(run.id);
+    expect(failedRun).toBeDefined();
+    expect(failedRun!.status).toBe("failed");
+
+    // Commit fixture setup so independent connections observe it
+    await client.query("COMMIT");
+
+    const failureConn = await pool.connect();
+    const recoveryConn = await pool.connect();
+
+    try {
+      // 1. Transaction A starts and updates job2 to failed (holding uncommitted exclusive lock on job2)
+      await failureConn.query("BEGIN");
+      await failureConn.query("UPDATE render_jobs SET status = 'failed' WHERE job_id = $1", [
+        job2.job_id
+      ]);
+
+      // 2. Transaction B starts and attempts claimForProductionReview.
+      // Because claimForProductionReview takes FOR SHARE on linked render_jobs,
+      // it must wait for Transaction A's uncommitted update on job2 to commit.
+      await recoveryConn.query("BEGIN");
+      const recoveryRepo = new PostgresCampaignProductionRunRepository(recoveryConn);
+
+      let recoveryFinished = false;
+      const recoveryPromise = recoveryRepo.claimForProductionReview(run.id).then((result) => {
+        recoveryFinished = true;
+        return result;
+      });
+
+      // Give recovery query time to execute and block on the row lock
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(recoveryFinished).toBe(false);
+
+      // 3. Transaction A claims run failure and commits
+      const failureRepo = new PostgresCampaignProductionRunRepository(failureConn);
+      await failureRepo.claimFailure(run.id);
+      await failureConn.query("COMMIT");
+
+      // 4. Transaction B now unblocks, observes the committed job2 failure, and refuses the claim
+      const recoveryResult = await recoveryPromise;
+      await recoveryConn.query("COMMIT");
+
+      expect(recoveryResult).toBeUndefined();
+
+      // Assert that the run stays failed and cannot finish in production_review
+      const currentRun = await repo.findById(run.id);
+      expect(currentRun).toBeDefined();
+      expect(currentRun!.status).toBe("failed");
+
+      // Verify campaign status is still failed and never spuriously advanced to qa
+      const campaignCheck = await client.query<{ status: string }>(
+        "SELECT status FROM campaigns WHERE campaign_id = $1",
+        [campaign.campaign_id]
+      );
+      expect(campaignCheck.rows[0]?.status).toBe("failed");
+    } finally {
+      failureConn.release();
+      recoveryConn.release();
+      await client.query("BEGIN");
+    }
+  });
+
+  it("interleaves review claim with sibling failure commit and asserts run cannot finish in production_review while that job is failed", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, {
+      clientId: clientRecord.client_id,
+      status: "failed"
+    });
+    const scene1 = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      status: "qa"
+    });
+    const scene2 = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 2,
+      status: "qa"
+    });
+    const job1 = await insertRenderJobRecord(client, {
+      sceneId: scene1.scene_id,
+      jobKind: "production",
+      status: "completed"
+    });
+    const job2 = await insertRenderJobRecord(client, {
+      sceneId: scene2.scene_id,
+      jobKind: "production",
+      status: "completed"
+    });
+
+    const repo = new PostgresCampaignProductionRunRepository(client);
+    const { run } = await repo.createIfAbsent({
+      campaignId: campaign.campaign_id as CampaignId,
+      fingerprint: `fp_pending_claim_race_${Date.now()}`,
+      status: "dispatched",
+      expectedTotalDurationMs: 8000
+    });
+    await repo.insertRunScenes(run.id, [
+      {
+        runId: run.id,
+        sceneId: scene1.scene_id as SceneId,
+        specRevision: 1,
+        sequenceIndex: 1,
+        expectedDurationMs: 4000,
+        productionJobId: job1.job_id
+      },
+      {
+        runId: run.id,
+        sceneId: scene2.scene_id as SceneId,
+        specRevision: 1,
+        sequenceIndex: 2,
+        expectedDurationMs: 4000,
+        productionJobId: job2.job_id
+      }
+    ]);
+
+    await client.query("COMMIT");
+
+    const failureConn = await pool.connect();
+    const recoveryConn = await pool.connect();
+
+    try {
+      // 1. Connection A begins and updates job2 to failed
+      await failureConn.query("BEGIN");
+      await failureConn.query("UPDATE render_jobs SET status = 'failed' WHERE job_id = $1", [
+        job2.job_id
+      ]);
+
+      // 2. Connection B begins and attempts claimForProductionReview
+      await recoveryConn.query("BEGIN");
+      const recoveryRepo = new PostgresCampaignProductionRunRepository(recoveryConn);
+
+      let claimFinished = false;
+      const claimPromise = recoveryRepo.claimForProductionReview(run.id).then((res) => {
+        claimFinished = true;
+        return res;
+      });
+
+      // Ensure Connection B is blocked waiting for Connection A's lock on job2
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(claimFinished).toBe(false);
+
+      // 3. Connection A claims failure on run and commits
+      const failureRepo = new PostgresCampaignProductionRunRepository(failureConn);
+      const failedResult = await failureRepo.claimFailure(run.id);
+      expect(failedResult).toBeDefined();
+      expect(failedResult!.status).toBe("failed");
+      await failureConn.query("COMMIT");
+
+      // 4. Connection B unblocks. It must see job2 is failed and return undefined!
+      const claimResult = await claimPromise;
+      await recoveryConn.query("COMMIT");
+
+      expect(claimResult).toBeUndefined();
+
+      // Run must remain failed in DB and cannot finish in production_review
+      const currentRun = await repo.findById(run.id);
+      expect(currentRun?.status).toBe("failed");
+    } finally {
+      failureConn.release();
+      recoveryConn.release();
       await client.query("BEGIN");
     }
   });
