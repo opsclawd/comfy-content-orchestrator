@@ -208,4 +208,184 @@ describe("ShotPlan domain model", () => {
     expect(reconstituted.derivation).toEqual(derivedInput.derivation);
     expect(reconstituted.snapshot()).toEqual(snapshot);
   });
+
+  describe("Beat-indexed previs associations", () => {
+    const previs1 = {
+      beatIndex: 1,
+      candidateId: "01928374-abcd-7000-8000-000000000091",
+      storageBucket: "previs-bucket",
+      storageObjectKey: "scenes/scene-1/rev-1/previs-1.png",
+      contentHashSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      modelProfile: "sdxl-storyboard-fast",
+      generatedAt: "2026-10-11T12:00:00.000Z",
+      reviewNotes: "Beat 1 wide angle"
+    };
+
+    const previs2 = {
+      beatIndex: 2,
+      candidateId: "01928374-abcd-7000-8000-000000000092",
+      storageBucket: "previs-bucket",
+      storageObjectKey: "scenes/scene-1/rev-1/previs-2.png",
+      contentHashSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b856",
+      modelProfile: "sdxl-storyboard-fast",
+      generatedAt: "2026-10-11T12:01:00.000Z",
+      reviewNotes: "Beat 2 reaction shot"
+    };
+
+    it("creates a plan with multiple beat-indexed previs associations", () => {
+      const plan = ShotPlan.create({
+        ...baseInput,
+        previsAssociations: [previs1, previs2]
+      });
+
+      expect(plan.previsAssociations).toHaveLength(2);
+      expect(plan.previsAssociations[0]?.beatIndex).toBe(1);
+      expect(plan.previsAssociations[1]?.beatIndex).toBe(2);
+
+      // Single-frame compatibility accessor returns beat 1 candidate
+      expect(plan.previs).toBeDefined();
+      expect(plan.previs?.candidateId).toBe(previs1.candidateId);
+
+      // Beat lookup helper
+      expect(plan.getPrevisForBeat(1)?.candidateId).toBe(previs1.candidateId);
+      expect(plan.getPrevisForBeat(2)?.candidateId).toBe(previs2.candidateId);
+      expect(plan.getPrevisForBeat(3)).toBeUndefined();
+
+      const snapshot = plan.snapshot();
+      expect(snapshot.previsAssociations).toHaveLength(2);
+      expect(snapshot.previs?.candidateId).toBe(previs1.candidateId);
+
+      const reconstituted = ShotPlan.reconstitute(snapshot);
+      expect(reconstituted.previsAssociations).toHaveLength(2);
+      expect(reconstituted.previs?.candidateId).toBe(previs1.candidateId);
+    });
+
+    it("rejects associations with non-positive beatIndex", () => {
+      expect(() =>
+        ShotPlan.create({
+          ...baseInput,
+          previsAssociations: [{ ...previs1, beatIndex: 0 }]
+        })
+      ).toThrow(/beatIndex must be a positive integer/);
+
+      expect(() =>
+        ShotPlan.create({
+          ...baseInput,
+          previsAssociations: [{ ...previs1, beatIndex: -1 }]
+        })
+      ).toThrow(/beatIndex must be a positive integer/);
+
+      expect(() =>
+        ShotPlan.create({
+          ...baseInput,
+          previsAssociations: [{ ...previs1, beatIndex: 1.5 }]
+        })
+      ).toThrow(/beatIndex must be a positive integer/);
+    });
+
+    it("rejects duplicate beatIndex in previs associations", () => {
+      expect(() =>
+        ShotPlan.create({
+          ...baseInput,
+          previsAssociations: [previs1, { ...previs2, beatIndex: 1 }]
+        })
+      ).toThrow(/Duplicate beatIndex in previs associations/);
+    });
+
+    it("rejects association referencing non-existent beat in plan", () => {
+      expect(() =>
+        ShotPlan.create({
+          ...baseInput,
+          // baseInput only has beats 1 and 2
+          previsAssociations: [{ ...previs1, beatIndex: 3 }]
+        })
+      ).toThrow(/references non-existent beat 3 in shot plan/);
+    });
+
+    it("supports legacy single-frame previs mapping and compatibility fallback", () => {
+      const plan = ShotPlan.create({
+        ...baseInput,
+        previs: {
+          candidateId: previs1.candidateId,
+          storageBucket: previs1.storageBucket,
+          storageObjectKey: previs1.storageObjectKey,
+          contentHashSha256: previs1.contentHashSha256,
+          modelProfile: previs1.modelProfile,
+          generatedAt: previs1.generatedAt
+        }
+      });
+
+      expect(plan.previs?.candidateId).toBe(previs1.candidateId);
+      // Legacy previs maps to beat 1 association
+      expect(plan.previsAssociations).toHaveLength(1);
+      expect(plan.previsAssociations[0]?.beatIndex).toBe(1);
+      expect(plan.previsAssociations[0]?.candidateId).toBe(previs1.candidateId);
+      expect(plan.getPrevisForBeat(1)?.candidateId).toBe(previs1.candidateId);
+    });
+
+    it("attaches previs for a specific beat via attachPrevis", () => {
+      const plan = ShotPlan.create(baseInput);
+      expect(plan.previs).toBeNull();
+      expect(plan.previsAssociations).toHaveLength(0);
+
+      // Attach beat 2
+      plan.attachPrevis(previs2);
+      expect(plan.previsAssociations).toHaveLength(1);
+      expect(plan.getPrevisForBeat(2)?.candidateId).toBe(previs2.candidateId);
+
+      // Attach beat 1
+      plan.attachPrevis(previs1);
+      expect(plan.previsAssociations).toHaveLength(2);
+      expect(plan.getPrevisForBeat(1)?.candidateId).toBe(previs1.candidateId);
+      expect(plan.getPrevisForBeat(2)?.candidateId).toBe(previs2.candidateId);
+
+      // Compatibility accessor returns beat 1
+      expect(plan.previs?.candidateId).toBe(previs1.candidateId);
+
+      // Attaching to non-existent beat throws
+      expect(() => plan.attachPrevis({ ...previs1, beatIndex: 99 })).toThrow(
+        /references non-existent beat 99 in shot plan/
+      );
+    });
+
+    it("treats explicit empty previsAssociations as authoritative and does not synthesize from scalar previs", () => {
+      // 1. On ShotPlan.create
+      const plan = ShotPlan.create({
+        ...baseInput,
+        previs: {
+          candidateId: previs1.candidateId,
+          storageBucket: previs1.storageBucket,
+          storageObjectKey: previs1.storageObjectKey,
+          contentHashSha256: previs1.contentHashSha256,
+          modelProfile: previs1.modelProfile,
+          generatedAt: previs1.generatedAt
+        },
+        previsAssociations: []
+      });
+
+      expect(plan.previs).toBeNull();
+      expect(plan.previsAssociations).toHaveLength(0);
+      expect(plan.snapshot().previs).toBeNull();
+      expect(plan.snapshot().previsAssociations).toHaveLength(0);
+
+      // 2. On ShotPlan.reconstitute
+      const initialPlan = ShotPlan.create({
+        ...baseInput,
+        previsAssociations: [previs1, previs2]
+      });
+      expect(initialPlan.previsAssociations).toHaveLength(2);
+      expect(initialPlan.previs?.candidateId).toBe(previs1.candidateId);
+
+      // Reconstitute with empty previsAssociations WITHOUT clearing previs manually
+      const clearedPlan = ShotPlan.reconstitute({
+        ...initialPlan.snapshot(),
+        previsAssociations: []
+      });
+
+      expect(clearedPlan.previsAssociations).toHaveLength(0);
+      expect(clearedPlan.previs).toBeNull();
+      expect(clearedPlan.snapshot().previs).toBeNull();
+      expect(clearedPlan.snapshot().previsAssociations).toHaveLength(0);
+    });
+  });
 });

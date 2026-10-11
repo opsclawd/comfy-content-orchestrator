@@ -96,6 +96,7 @@ interface StoryboardCandidateRow {
   scene_id: string;
   scene_spec_revision: number;
   variant_ordinal: number;
+  beat_index?: number | null;
   storage_bucket: string;
   storage_object_key: string;
   content_hash_sha256: string;
@@ -109,6 +110,7 @@ function mapRowToCandidate(row: StoryboardCandidateRow): StoryboardCandidate {
     sceneId: row.scene_id as SceneId,
     specRevision: Number(row.scene_spec_revision),
     variantOrdinal: Number(row.variant_ordinal),
+    beatIndex: Number(row.beat_index ?? 1),
     storageBucket: row.storage_bucket,
     storageObjectKey: row.storage_object_key,
     contentHash: row.content_hash_sha256,
@@ -343,6 +345,7 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
         scene_id,
         scene_spec_revision,
         variant_ordinal,
+        beat_index,
         storage_bucket,
         storage_object_key,
         content_hash_sha256,
@@ -350,7 +353,7 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
         created_at
       FROM storyboard_candidates
       WHERE scene_id = $1
-      ORDER BY scene_spec_revision ASC, variant_ordinal ASC
+      ORDER BY scene_spec_revision ASC, variant_ordinal ASC, beat_index ASC
       `,
       [sceneId]
     );

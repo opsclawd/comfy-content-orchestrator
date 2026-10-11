@@ -187,6 +187,7 @@ export const ShotPlanContinuityConstraintsSchema = z
 export type ShotPlanContinuityConstraints = z.infer<typeof ShotPlanContinuityConstraintsSchema>;
 
 export const ShotPlanPrevisAssociationSchema = z.object({
+  beatIndex: z.number().int().positive("beatIndex must be a positive integer").optional(),
   candidateId: z.string().uuid("candidateId must be a valid UUID"),
   storageBucket: z.string().min(1, "storageBucket must not be empty"),
   storageObjectKey: z.string().min(1, "storageObjectKey must not be empty"),
@@ -196,6 +197,18 @@ export const ShotPlanPrevisAssociationSchema = z.object({
   reviewNotes: z.string().nullable().optional()
 });
 export type ShotPlanPrevisAssociation = z.infer<typeof ShotPlanPrevisAssociationSchema>;
+
+export const ShotPlanBeatPrevisAssociationSchema = z.object({
+  beatIndex: z.number().int().positive("beatIndex must be a positive integer"),
+  candidateId: z.string().uuid("candidateId must be a valid UUID"),
+  storageBucket: z.string().min(1, "storageBucket must not be empty"),
+  storageObjectKey: z.string().min(1, "storageObjectKey must not be empty"),
+  contentHashSha256: sha256HashSchema,
+  modelProfile: z.string().min(1, "modelProfile must not be empty"),
+  generatedAt: z.string().datetime({ message: "generatedAt must be a valid ISO 8601 datetime" }),
+  reviewNotes: z.string().nullable().optional()
+});
+export type ShotPlanBeatPrevisAssociation = z.infer<typeof ShotPlanBeatPrevisAssociationSchema>;
 
 export const ShotPlanDerivationProvenanceSchema = z.object({
   sourceShotPlanId: z.string().uuid("sourceShotPlanId must be a valid UUID"),
@@ -263,6 +276,9 @@ export const ShotPlanDocumentSchema = z.object({
   // Optional Previs Association
   previs: ShotPlanPrevisAssociationSchema.nullable().optional(),
 
+  // Beat-indexed Previs Associations
+  previsAssociations: z.array(ShotPlanBeatPrevisAssociationSchema).optional(),
+
   // Lineage & Derivation Provenance
   derivedFromShotPlanId: z
     .string()
@@ -322,6 +338,7 @@ export const ShotPlanCreateInputSchema = z.object({
     anchorMediaHashSha256: null
   }),
   previs: ShotPlanPrevisAssociationSchema.nullable().optional(),
+  previsAssociations: z.array(ShotPlanBeatPrevisAssociationSchema).optional(),
   derivedFromShotPlanId: z
     .string()
     .uuid("derivedFromShotPlanId must be a valid UUID")

@@ -55,7 +55,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
   it("migrates an empty PostgreSQL 18.6 database through the baseline", async () => {
     const applied = await runMigrations(client, { migrationsDirectory });
 
-    expect(applied).toHaveLength(24);
+    expect(applied).toHaveLength(25);
     expect(applied[0]?.version).toBe("001");
     expect(applied[1]?.version).toBe("002");
     expect(applied[2]?.version).toBe("003");
@@ -80,6 +80,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
     expect(applied[21]?.version).toBe("022");
     expect(applied[22]?.version).toBe("023");
     expect(applied[23]?.version).toBe("024");
+    expect(applied[24]?.version).toBe("025");
 
     const schemaRes = await client.query(
       "SELECT version FROM schema_migrations ORDER BY version ASC"
@@ -108,7 +109,8 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       { version: "021" },
       { version: "022" },
       { version: "023" },
-      { version: "024" }
+      { version: "024" },
+      { version: "025" }
     ]);
 
     const tablesRes = await client.query<{ table_name: string }>(
@@ -138,6 +140,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       "review_events",
       "scene_reference_assets",
       "schema_migrations",
+      "shot_plan_previs_associations",
       "shot_plans",
       "storyboard_candidates",
       "storyboard_scenes"
@@ -743,6 +746,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       storageObjectKey: "candidates/s2/rev1_var1.webp"
     });
     expect(candidate.candidate_id).toBeDefined();
+    expect(candidate.beat_index).toBe(1);
 
     // 1. Non-positive scene_spec_revision (<= 0)
     await expect(
@@ -766,7 +770,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       })
     ).rejects.toThrow();
 
-    // 3. Duplicate (scene_id, scene_spec_revision, variant_ordinal)
+    // 3. Duplicate (scene_id, scene_spec_revision, variant_ordinal, beat_index)
     await expect(
       insertStoryboardCandidateRecord(client, {
         sceneId: scene.scene_id,
@@ -785,6 +789,42 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
         variantOrdinal: 2,
         storageBucket: "godzspeed-temp",
         storageObjectKey: "candidates/s2/rev1_var1.webp"
+      })
+    ).rejects.toThrow();
+
+    // 5. Coexistence: Two frames for the same variant at different beat indexes can coexist
+    const candidateBeat2 = await insertStoryboardCandidateRecord(client, {
+      sceneId: scene.scene_id,
+      sceneSpecRevision: 1,
+      variantOrdinal: 1,
+      beatIndex: 2,
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: "candidates/s2/rev1_var1_beat2.webp"
+    });
+    expect(candidateBeat2.candidate_id).toBeDefined();
+    expect(candidateBeat2.beat_index).toBe(2);
+
+    // 6. Duplicate same beat_index rejects
+    await expect(
+      insertStoryboardCandidateRecord(client, {
+        sceneId: scene.scene_id,
+        sceneSpecRevision: 1,
+        variantOrdinal: 1,
+        beatIndex: 2,
+        storageBucket: "godzspeed-temp",
+        storageObjectKey: "candidates/s2/rev1_var1_beat2_dup.webp"
+      })
+    ).rejects.toThrow();
+
+    // 7. Non-positive beat_index rejects (<= 0)
+    await expect(
+      insertStoryboardCandidateRecord(client, {
+        sceneId: scene.scene_id,
+        sceneSpecRevision: 1,
+        variantOrdinal: 1,
+        beatIndex: 0,
+        storageBucket: "godzspeed-temp",
+        storageObjectKey: "candidates/s2/rev1_var1_beat0.webp"
       })
     ).rejects.toThrow();
   });

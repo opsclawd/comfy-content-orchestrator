@@ -25,7 +25,10 @@ export class PostgresUnitOfWork implements UnitOfWork {
         scenes: new PostgresSceneRepository(client, { forUpdate: true }),
         reviewEvents: new PostgresReviewEventStore(client),
         candidates: new PostgresStoryboardCandidateRepository(client),
-        shotPlans: new PostgresShotPlanRepository(client),
+        shotPlans: new PostgresShotPlanRepository(client, {
+          externalTransaction: true,
+          useSavepoint: true
+        }),
         campaigns: new PostgresCampaignRepository(client),
         clients: new PostgresClientRepository(client),
         jobs: new PostgresTransactionalJobEnqueuer(client),

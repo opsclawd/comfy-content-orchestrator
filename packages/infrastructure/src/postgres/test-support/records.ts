@@ -1085,6 +1085,7 @@ export interface StoryboardCandidateRecordInput {
   sceneId: string;
   sceneSpecRevision?: number;
   variantOrdinal?: number;
+  beatIndex?: number;
   storageBucket?: string;
   storageObjectKey?: string;
   contentHashSha256?: string;
@@ -1096,6 +1097,7 @@ export interface InsertedStoryboardCandidateRecord {
   scene_id: string;
   scene_spec_revision: number;
   variant_ordinal: number;
+  beat_index: number;
   storage_bucket: string;
   storage_object_key: string;
   content_hash_sha256: string;
@@ -1110,10 +1112,13 @@ export async function insertStoryboardCandidateRecord(
   const sceneId = input.sceneId;
   const sceneSpecRevision = input.sceneSpecRevision ?? 1;
   const variantOrdinal = input.variantOrdinal ?? 1;
+  const beatIndex = input.beatIndex ?? 1;
   const storageBucket = input.storageBucket ?? "godzspeed-temp";
   const storageObjectKey =
     input.storageObjectKey ??
-    `candidates/${sceneId}/rev_${sceneSpecRevision}_var_${variantOrdinal}.webp`;
+    (input.beatIndex !== undefined && input.beatIndex > 1
+      ? `candidates/${sceneId}/rev_${sceneSpecRevision}_var_${variantOrdinal}_beat_${beatIndex}.webp`
+      : `candidates/${sceneId}/rev_${sceneSpecRevision}_var_${variantOrdinal}.webp`);
   const contentHashSha256 =
     input.contentHashSha256 ?? "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
   const generationPayload = input.generationPayload ?? {};
@@ -1126,11 +1131,12 @@ export async function insertStoryboardCandidateRecord(
           scene_id,
           scene_spec_revision,
           variant_ordinal,
+          beat_index,
           storage_bucket,
           storage_object_key,
           content_hash_sha256,
           generation_payload
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         RETURNING *
         `
       : `
@@ -1138,11 +1144,12 @@ export async function insertStoryboardCandidateRecord(
           scene_id,
           scene_spec_revision,
           variant_ordinal,
+          beat_index,
           storage_bucket,
           storage_object_key,
           content_hash_sha256,
           generation_payload
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
         `;
 
@@ -1153,6 +1160,7 @@ export async function insertStoryboardCandidateRecord(
           sceneId,
           sceneSpecRevision,
           variantOrdinal,
+          beatIndex,
           storageBucket,
           storageObjectKey,
           contentHashSha256,
@@ -1162,6 +1170,7 @@ export async function insertStoryboardCandidateRecord(
           sceneId,
           sceneSpecRevision,
           variantOrdinal,
+          beatIndex,
           storageBucket,
           storageObjectKey,
           contentHashSha256,

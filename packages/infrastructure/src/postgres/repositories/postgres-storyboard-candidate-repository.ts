@@ -7,6 +7,7 @@ interface StoryboardCandidateRow {
   scene_id: string;
   scene_spec_revision: number;
   variant_ordinal: number;
+  beat_index?: number | null;
   storage_bucket: string;
   storage_object_key: string;
   content_hash_sha256: string;
@@ -20,6 +21,7 @@ function mapRowToCandidate(row: StoryboardCandidateRow): StoryboardCandidate {
     sceneId: row.scene_id as SceneId,
     specRevision: Number(row.scene_spec_revision),
     variantOrdinal: Number(row.variant_ordinal),
+    beatIndex: Number(row.beat_index ?? 1),
     storageBucket: row.storage_bucket,
     storageObjectKey: row.storage_object_key,
     contentHash: row.content_hash_sha256,
@@ -45,6 +47,7 @@ export class PostgresStoryboardCandidateRepository implements StoryboardCandidat
         scene_id,
         scene_spec_revision,
         variant_ordinal,
+        beat_index,
         storage_bucket,
         storage_object_key,
         content_hash_sha256,
@@ -67,6 +70,7 @@ export class PostgresStoryboardCandidateRepository implements StoryboardCandidat
   async insert(candidate: StoryboardCandidate): Promise<void> {
     const createdAt = candidate.createdAt ? new Date(candidate.createdAt) : new Date();
     const generationPayload = candidate.generationMetadata ?? {};
+    const beatIndex = candidate.beatIndex ?? 1;
 
     await this.client.query(
       `
@@ -75,18 +79,20 @@ export class PostgresStoryboardCandidateRepository implements StoryboardCandidat
         scene_id,
         scene_spec_revision,
         variant_ordinal,
+        beat_index,
         storage_bucket,
         storage_object_key,
         content_hash_sha256,
         generation_payload,
         created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       `,
       [
         candidate.id,
         candidate.sceneId,
         candidate.specRevision,
         candidate.variantOrdinal,
+        beatIndex,
         candidate.storageBucket,
         candidate.storageObjectKey,
         candidate.contentHash,
@@ -107,6 +113,7 @@ export class PostgresStoryboardCandidateRepository implements StoryboardCandidat
         scene_id,
         scene_spec_revision,
         variant_ordinal,
+        beat_index,
         storage_bucket,
         storage_object_key,
         content_hash_sha256,
@@ -114,7 +121,7 @@ export class PostgresStoryboardCandidateRepository implements StoryboardCandidat
         created_at
       FROM storyboard_candidates
       WHERE scene_id = $1 AND scene_spec_revision = $2
-      ORDER BY variant_ordinal ASC
+      ORDER BY variant_ordinal ASC, beat_index ASC
       `,
       [sceneId, specRevision]
     );

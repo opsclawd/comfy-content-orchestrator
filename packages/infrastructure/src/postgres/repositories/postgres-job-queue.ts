@@ -651,7 +651,16 @@ export class PostgresJobQueue implements JobQueuePort {
          * that can never complete.
          */
         if (
-          pgError.constraint === "storyboard_candidates_scene_id_scene_spec_revision_variant__key"
+          pgError.constraint ===
+            "storyboard_candidates_scene_id_scene_spec_revision_variant__key" ||
+          pgError.constraint ===
+            "storyboard_candidates_scene_id_scene_spec_revision_variant_ordi" ||
+          pgError.constraint ===
+            "storyboard_candidates_scene_id_scene_spec_revision_variant_ordinal_key" ||
+          pgError.constraint?.startsWith(
+            "storyboard_candidates_scene_id_scene_spec_revision_variant"
+          ) ||
+          pgError.constraint === "uq_storyboard_candidates_variant_beat"
         ) {
           await this.pool.query(
             `
