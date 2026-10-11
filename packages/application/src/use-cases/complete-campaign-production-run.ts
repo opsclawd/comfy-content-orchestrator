@@ -83,10 +83,10 @@ export class CompleteCampaignProductionRunUseCases {
       }
 
       // Monotonically advance campaign status to "qa" (production review ready).
-      // Catch up from legal lagging predecessors (queued or rendering).
+      // Catch up from legal lagging predecessors (queued, rendering, or failed).
       const transitioned = await campaignsRepo.transitionStatusIf(
         claimedRun.campaignId,
-        ["rendering", "queued"],
+        ["rendering", "queued", "failed"],
         "qa"
       );
       if (!transitioned) {
@@ -120,7 +120,7 @@ export class CompleteCampaignProductionRunUseCases {
       if (failedRun !== undefined) {
         const transitioned = await campaignsRepo.transitionStatusIf(
           failedRun.campaignId,
-          ["queued", "rendering", "drafting"],
+          ["queued", "rendering", "drafting", "qa"],
           "failed"
         );
         if (!transitioned) {

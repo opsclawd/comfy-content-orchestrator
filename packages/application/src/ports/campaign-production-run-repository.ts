@@ -66,8 +66,10 @@ export interface CampaignProductionRunRepository {
    */
   countIncompleteRunScenes(runId: string): Promise<number>;
   /**
-   * Atomically claims the run for production review (transitions status from 'dispatched' to 'production_review').
-   * Returns the updated run record if claimed, or undefined if another caller won the claim.
+   * Atomically claims the run for production review (transitions status from 'dispatched' or 'failed' to 'production_review').
+   * Requires that every linked run scene has a completed production job.
+   * Serializes with concurrent render_jobs status changes before evaluating completeness.
+   * Returns the updated run record if claimed, or undefined if ineligible, incomplete, or if another caller won the claim.
    */
   claimForProductionReview(runId: string): Promise<CampaignProductionRunRecord | undefined>;
   /**
