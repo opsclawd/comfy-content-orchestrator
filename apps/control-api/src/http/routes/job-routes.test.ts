@@ -1600,6 +1600,98 @@ describe("Job Dispatch Routes", () => {
     await app.close();
   });
 
+  it("candidate completion accepts explicit beatIndex and passes it to the queue", async () => {
+    const queue = createFakeJobQueue({
+      complete: vi.fn().mockResolvedValue({ outcome: "applied", job: sampleCompletedJob })
+    });
+
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    const candidatePayload = {
+      variantOrdinal: 1,
+      beatIndex: 2,
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: `candidates/${sampleJobId}/rev_1_var_1_beat_2.webp`,
+      contentHashSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      generationPayload: { promptIdComfy: "prompt-cand-beat-2" }
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${sampleJobId}/complete`,
+      payload: {
+        leaseToken: sampleLeaseToken,
+        candidatePayload
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(queue.complete).toHaveBeenCalledTimes(1);
+    expect(queue.complete).toHaveBeenCalledWith(
+      sampleJobId,
+      sampleLeaseToken,
+      undefined,
+      candidatePayload
+    );
+
+    await app.close();
+  });
+
+  it("candidate completion rejects non-positive or non-integer beatIndex", async () => {
+    const queue = createFakeJobQueue();
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig
+      }
+    );
+
+    const invalidBeatIndices = [0, -1, 1.5, "1", null, true];
+
+    for (const invalidBeat of invalidBeatIndices) {
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/jobs/${sampleJobId}/complete`,
+        payload: {
+          leaseToken: sampleLeaseToken,
+          candidatePayload: {
+            variantOrdinal: 1,
+            beatIndex: invalidBeat,
+            storageBucket: "godzspeed-temp",
+            storageObjectKey: `candidates/${sampleJobId}/rev_1_var_1.webp`,
+            contentHashSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        }
+      });
+
+      expect(
+        response.statusCode,
+        `Expected status 400 for beatIndex: ${JSON.stringify(invalidBeat)}`
+      ).toBe(400);
+      expect(response.json()).toEqual(
+        expect.objectContaining({
+          code: "VALIDATION_FAILURE"
+        })
+      );
+    }
+
+    expect(queue.complete).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it("complete returns 503 when storage telemetry is unavailable", async () => {
     const queue = createFakeJobQueue();
     const failingTelemetry: StorageTelemetryPort = {

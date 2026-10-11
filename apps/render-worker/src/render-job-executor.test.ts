@@ -628,6 +628,101 @@ describe("Certified Render Job Executor", () => {
     expect(output.candidatePayload?.variantOrdinal).toBe(1);
   });
 
+  it("threads candidate beatIndex into top-level candidatePayload and generationPayload", async () => {
+    const job = createSampleCandidateJob({
+      injectedPayload: {
+        prompt: "cinematic sunset",
+        negativePrompt: "blurry, dark",
+        seed: 99999,
+        variantOrdinal: 1,
+        beatIndex: 2
+      }
+    });
+    const mockExecuteProfileRender = vi
+      .fn()
+      .mockImplementation(
+        async (input: ExecuteProfileRenderInput): Promise<ExecuteProfileRenderResult> => ({
+          status: "succeeded",
+          promptId: "prompt-12345",
+          outputObjectKeys: ["flux_schnell_00001_.png"],
+          durationMs: 4200,
+          profile: input.identity,
+          preDispatchGpu: {
+            totalVramMb: 24576,
+            usedVramMb: 4096,
+            freeVramMb: 20480,
+            reservedVramMb: 4096,
+            measuredAt: new Date().toISOString()
+          }
+        })
+      );
+
+    const outputReader = new FakeOutputReader();
+
+    const executor = createCertifiedRenderJobExecutor({
+      loadCertificationProfile: async () => fakeFluxProfile,
+      readApprovedProvenance: async () => fakeFluxLiveProvenance,
+      collectCertificationProvenance: async () => fakeFluxLiveProvenance,
+      verifyGoldMasterProvenance: () => {},
+      readWorkflowFile: async () => fakeRawFluxWorkflow,
+      hashWorkflow: () => sampleWorkflowHash,
+      executeProfileRender: mockExecuteProfileRender,
+      outputReader
+    });
+
+    const output = await executor(job);
+
+    expect(output.candidatePayload).toBeDefined();
+    expect(output.candidatePayload?.beatIndex).toBe(2);
+    expect((output.candidatePayload?.generationPayload as Record<string, unknown>)?.beatIndex).toBe(
+      2
+    );
+  });
+
+  it("preserves omission of beatIndex when not supplied in candidate job", async () => {
+    const job = createSampleCandidateJob({
+      injectedPayload: {
+        prompt: "cinematic sunset",
+        variantOrdinal: 1
+      }
+    });
+    const mockExecuteProfileRender = vi.fn().mockResolvedValue({
+      status: "succeeded",
+      promptId: "prompt-12345",
+      outputObjectKeys: ["flux_schnell_00001_.png"],
+      durationMs: 4200,
+      profile: {
+        profileId: "flux-schnell-draft",
+        renderProfileKey: "FLUX_SCHNELL_DRAFT_V1",
+        renderProfileVersion: 1,
+        engine: "flux_schnell",
+        workflowSha256: sampleWorkflowHash,
+        modelSha256: {},
+        runnerProfile: "dynamicvram-offload-v1",
+        comfyUiCommit: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+      }
+    });
+
+    const executor = createCertifiedRenderJobExecutor({
+      loadCertificationProfile: async () => fakeFluxProfile,
+      readApprovedProvenance: async () => fakeFluxLiveProvenance,
+      collectCertificationProvenance: async () => fakeFluxLiveProvenance,
+      verifyGoldMasterProvenance: () => {},
+      readWorkflowFile: async () => fakeRawFluxWorkflow,
+      hashWorkflow: () => sampleWorkflowHash,
+      executeProfileRender: mockExecuteProfileRender,
+      outputReader: new FakeOutputReader()
+    });
+
+    const output = await executor(job);
+
+    expect(output.candidatePayload).toBeDefined();
+    expect(output.candidatePayload?.beatIndex).toBeUndefined();
+    expect(
+      (output.candidatePayload?.generationPayload as Record<string, unknown>)?.beatIndex
+    ).toBeUndefined();
+  });
+
   it("rejects unknown injected fields before render dispatch", async () => {
     const mockExecuteProfileRender = vi.fn();
     const outputReader = new FakeOutputReader();
@@ -686,6 +781,122 @@ describe("Certified Render Job Executor", () => {
       "variantOrdinal is candidate-only and not allowed in production jobs"
     );
     expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+
+    // 4b. beatIndex in a production job (candidate-only)
+    const productionJobWithBeatIndex = createSampleProductionJob({
+      injectedPayload: {
+        prompt: "valid",
+        beatIndex: 1
+      }
+    });
+    await expect(executor(productionJobWithBeatIndex)).rejects.toThrow(
+      "beatIndex is candidate-only and not allowed in production jobs"
+    );
+    expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+
+    // 4b-ii. beatIndex on Ref2V production job
+    const ref2vExecutor = createCertifiedRenderJobExecutor({
+      loadCertificationProfile: async () => ({
+        ...fakeFluxProfile,
+        id: "minimax-h3-720p-124f-ref2v",
+        engine: "minimax_h3_ref2v",
+        renderProfileIdentity: {
+          key: "MINIMAX_H3_720P_5S_REF2V_V1",
+          version: 1
+        }
+      }),
+      readApprovedProvenance: async () => fakeFluxLiveProvenance,
+      collectCertificationProvenance: async () => fakeFluxLiveProvenance,
+      verifyGoldMasterProvenance: () => {},
+      readWorkflowFile: async () => fakeRawFluxWorkflow,
+      hashWorkflow: () => sampleWorkflowHash
+    });
+    const ref2vJobWithBeatIndex = createSampleProductionJob({
+      workflowTemplate: "minimax-h3-720p-124f-ref2v",
+      injectedPayload: {
+        prompt: "valid",
+        beatIndex: 1,
+        shotPlanId: "01928374-abcd-7000-8000-000000000010",
+        specRevision: 1
+      }
+    });
+    await expect(ref2vExecutor(ref2vJobWithBeatIndex)).rejects.toThrow(
+      "beatIndex is candidate-only and not allowed in production jobs"
+    );
+
+    // 4b-iii. beatIndex on H3 I2V production job
+    const h3I2vExecutor = createCertifiedRenderJobExecutor({
+      loadCertificationProfile: async () => ({
+        ...fakeFluxProfile,
+        id: "minimax-h3-720p-124f-i2v",
+        engine: "minimax_h3_i2v",
+        renderProfileIdentity: {
+          key: "MINIMAX_H3_720P_5S_I2V_V1",
+          version: 1
+        }
+      }),
+      readApprovedProvenance: async () => fakeFluxLiveProvenance,
+      collectCertificationProvenance: async () => fakeFluxLiveProvenance,
+      verifyGoldMasterProvenance: () => {},
+      readWorkflowFile: async () => fakeRawFluxWorkflow,
+      hashWorkflow: () => sampleWorkflowHash
+    });
+    const h3I2vJobWithBeatIndex = createSampleProductionJob({
+      workflowTemplate: "minimax-h3-720p-124f-i2v",
+      injectedPayload: {
+        prompt: "valid",
+        beatIndex: 1,
+        approvedCandidateId: "cand-123"
+      }
+    });
+    await expect(h3I2vExecutor(h3I2vJobWithBeatIndex)).rejects.toThrow(
+      "beatIndex is candidate-only and not allowed in production jobs"
+    );
+
+    // 4c. Invalid beatIndex in a candidate job
+    const candidateJobWithZeroBeat = createSampleCandidateJob({
+      injectedPayload: {
+        prompt: "valid",
+        variantOrdinal: 1,
+        beatIndex: 0
+      }
+    });
+    await expect(executor(candidateJobWithZeroBeat)).rejects.toThrow(
+      "injectedPayload.beatIndex must be a positive integer"
+    );
+
+    const candidateJobWithNegativeBeat = createSampleCandidateJob({
+      injectedPayload: {
+        prompt: "valid",
+        variantOrdinal: 1,
+        beatIndex: -1
+      }
+    });
+    await expect(executor(candidateJobWithNegativeBeat)).rejects.toThrow(
+      "injectedPayload.beatIndex must be a positive integer"
+    );
+
+    const candidateJobWithFloatBeat = createSampleCandidateJob({
+      injectedPayload: {
+        prompt: "valid",
+        variantOrdinal: 1,
+        beatIndex: 1.5
+      }
+    });
+    await expect(executor(candidateJobWithFloatBeat)).rejects.toThrow(
+      "injectedPayload.beatIndex must be a positive integer"
+    );
+
+    const candidateJobWithStringBeat = createSampleCandidateJob({
+      injectedPayload: {
+        prompt: "valid",
+        variantOrdinal: 1,
+        beatIndex: "1" as unknown as number
+      }
+    });
+    await expect(executor(candidateJobWithStringBeat)).rejects.toThrow(
+      "injectedPayload.beatIndex must be a positive integer"
+    );
 
     // 5. audioPrompt in a candidate job (production-only)
     const candidateJobWithAudio = createSampleCandidateJob({
