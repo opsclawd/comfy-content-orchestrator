@@ -375,6 +375,7 @@ interface ValidatedInjectedPayload {
   readonly audioPrompt?: string | undefined;
   readonly seed?: number | undefined;
   readonly variantOrdinal?: number | undefined;
+  readonly beatIndex?: number | undefined;
   readonly approvedCandidateId?: CandidateId | undefined;
   readonly frameCount?: number | undefined;
   readonly referenceImage?: string | undefined;
@@ -390,6 +391,7 @@ const ALLOWED_CANDIDATE_KEYS = new Set([
   "negativePrompt",
   "seed",
   "variantOrdinal",
+  "beatIndex",
   "shotPlanId",
   "specRevision"
 ]);
@@ -458,6 +460,11 @@ function validateInjectedPayload(
 
   for (const key of keys) {
     if (!allowedKeys.has(key)) {
+      if (jobKind === "production" && key === "beatIndex") {
+        throw new RenderJobPayloadValidationError(
+          "beatIndex is candidate-only and not allowed in production jobs"
+        );
+      }
       if (jobKind === "production" && key === "variantOrdinal") {
         throw new RenderJobPayloadValidationError(
           "variantOrdinal is candidate-only and not allowed in production jobs"
@@ -677,6 +684,25 @@ function validateInjectedPayload(
     variantOrdinal = raw.variantOrdinal;
   }
 
+  let beatIndex: number | undefined;
+  if ("beatIndex" in raw && raw.beatIndex !== undefined) {
+    if (jobKind !== "candidate") {
+      throw new RenderJobPayloadValidationError(
+        "beatIndex is candidate-only and not allowed in production jobs"
+      );
+    }
+    if (
+      typeof raw.beatIndex !== "number" ||
+      !Number.isInteger(raw.beatIndex) ||
+      raw.beatIndex <= 0
+    ) {
+      throw new RenderJobPayloadValidationError(
+        "injectedPayload.beatIndex must be a positive integer"
+      );
+    }
+    beatIndex = raw.beatIndex;
+  }
+
   let shotPlanId: string | undefined;
   if ("shotPlanId" in raw && raw.shotPlanId !== undefined) {
     if (jobKind !== "candidate" && !isRef2v && !isH3I2v) {
@@ -750,6 +776,7 @@ function validateInjectedPayload(
     audioPrompt,
     seed,
     variantOrdinal,
+    beatIndex,
     approvedCandidateId,
     frameCount,
     shotPlanId,
@@ -2097,6 +2124,9 @@ export function createCertifiedRenderJobExecutor(
           storageBucket: primaryMedia.bucket,
           storageObjectKey: primaryMedia.key,
           contentHashSha256: primaryMedia.checksumSha256!,
+          ...(validatedInjected.beatIndex !== undefined
+            ? { beatIndex: validatedInjected.beatIndex }
+            : {}),
           ...(validatedInjected.shotPlanId ? { shotPlanId: validatedInjected.shotPlanId } : {}),
           ...(validatedInjected.specRevision !== undefined
             ? { specRevision: validatedInjected.specRevision }
@@ -2105,6 +2135,9 @@ export function createCertifiedRenderJobExecutor(
             promptIdComfy: renderResult.promptId,
             profile: renderResult.profile,
             originalOutputKey: renderResult.outputObjectKeys[0]!,
+            ...(validatedInjected.beatIndex !== undefined
+              ? { beatIndex: validatedInjected.beatIndex }
+              : {}),
             ...(validatedInjected.shotPlanId ? { shotPlanId: validatedInjected.shotPlanId } : {}),
             ...(validatedInjected.specRevision !== undefined
               ? { specRevision: validatedInjected.specRevision }

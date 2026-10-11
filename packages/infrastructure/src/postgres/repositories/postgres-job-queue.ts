@@ -582,11 +582,11 @@ export class PostgresJobQueue implements JobQueuePort {
             `Inconsistent duplicate state: completed production job ${jobId} has ${count} manifests`
           );
         }
-        const candidateCountRes = await client.query<{ count: string }>(
-          "SELECT count(*) FROM storyboard_candidates WHERE scene_id = $1",
-          [currentRow.scene_id]
+        const candidateCount = await this.countMatchingCandidates(
+          client,
+          currentRow,
+          candidatePayload
         );
-        const candidateCount = Number(candidateCountRes.rows[0]?.count);
         if (candidateCount > 0) {
           await client.query("COMMIT");
           return {
@@ -626,11 +626,12 @@ export class PostgresJobQueue implements JobQueuePort {
               };
             }
           } else if (currentRow.job_kind === "candidate") {
-            const candidateCountRes = await this.pool.query<{ count: string }>(
-              "SELECT count(*) FROM storyboard_candidates WHERE scene_id = $1",
-              [currentRow.scene_id]
+            const candidateCount = await this.countMatchingCandidates(
+              this.pool,
+              currentRow,
+              candidatePayload
             );
-            if (Number(candidateCountRes.rows[0]?.count) > 0) {
+            if (candidateCount > 0) {
               return {
                 outcome: "already_applied",
                 job: this.mapRowToRenderJob(currentRow)
@@ -640,27 +641,25 @@ export class PostgresJobQueue implements JobQueuePort {
         }
 
         /*
-         * A 23505 on the storyboard_candidates (scene, revision, variant)
+         * A 23505 on the storyboard_candidates (scene, revision, variant, beat)
          * uniqueness constraint, where THIS job's own render_jobs row was not
          * already completed, means a sibling job targeting the same variant
          * slot already won the race and committed first (e.g. two ShotPlan
-         * generations for the same scene/revision/variant). Retrying can
+         * generations for the same scene/revision/variant/beat). Retrying can
          * never succeed — the slot is permanently taken. Without this branch,
          * the error fell through to an unhandled 500 that the worker retries
          * forever, indefinitely blocking the single-threaded worker on a job
          * that can never complete.
          */
         if (
+          pgError.constraint === "uq_storyboard_candidates_variant_beat" ||
           pgError.constraint ===
             "storyboard_candidates_scene_id_scene_spec_revision_variant__key" ||
+          pgError.constraint === "storyboard_candidates_scene_id_scene_spec_revision_variant_ord" ||
           pgError.constraint ===
             "storyboard_candidates_scene_id_scene_spec_revision_variant_ordi" ||
           pgError.constraint ===
-            "storyboard_candidates_scene_id_scene_spec_revision_variant_ordinal_key" ||
-          pgError.constraint?.startsWith(
-            "storyboard_candidates_scene_id_scene_spec_revision_variant"
-          ) ||
-          pgError.constraint === "uq_storyboard_candidates_variant_beat"
+            "storyboard_candidates_scene_id_scene_spec_revision_variant_ordinal_key"
         ) {
           await this.pool.query(
             `
@@ -797,6 +796,109 @@ export class PostgresJobQueue implements JobQueuePort {
     return queryAllJobsTerminal(this.pool, sceneId, jobKind);
   }
 
+  private async countMatchingCandidates(
+    runner: Pool | PoolClient,
+    currentRow: RenderJobRow,
+    candidatePayload?: CandidateCompletionPayload
+  ): Promise<number> {
+    let injectedPayload: Record<string, unknown> = {};
+    if (typeof currentRow.injected_payload === "object" && currentRow.injected_payload !== null) {
+      injectedPayload = currentRow.injected_payload as Record<string, unknown>;
+    } else if (typeof currentRow.injected_payload === "string") {
+      try {
+        injectedPayload = JSON.parse(currentRow.injected_payload) as Record<string, unknown>;
+      } catch {
+        // Ignore JSON parse error on unexpected non-JSON payload
+      }
+    }
+
+    let specRevision =
+      candidatePayload?.specRevision ??
+      (typeof injectedPayload["specRevision"] === "number" &&
+      Number.isInteger(injectedPayload["specRevision"]) &&
+      injectedPayload["specRevision"] > 0
+        ? injectedPayload["specRevision"]
+        : undefined);
+
+    let variantOrdinal =
+      candidatePayload?.variantOrdinal ??
+      (typeof injectedPayload["variantOrdinal"] === "number" &&
+      Number.isInteger(injectedPayload["variantOrdinal"]) &&
+      injectedPayload["variantOrdinal"] > 0
+        ? injectedPayload["variantOrdinal"]
+        : undefined);
+
+    const shotPlanId =
+      candidatePayload?.shotPlanId ??
+      (typeof injectedPayload["shotPlanId"] === "string" &&
+      injectedPayload["shotPlanId"].trim().length > 0
+        ? injectedPayload["shotPlanId"].trim()
+        : undefined);
+
+    if (shotPlanId && (specRevision === undefined || variantOrdinal === undefined)) {
+      const planRes = await runner.query<{ spec_revision: number; variant_ordinal: number }>(
+        "SELECT spec_revision, variant_ordinal FROM shot_plans WHERE shot_plan_id = $1 AND scene_id = $2",
+        [shotPlanId, currentRow.scene_id]
+      );
+      if (planRes.rows[0]) {
+        if (specRevision === undefined) {
+          specRevision = Number(planRes.rows[0].spec_revision);
+        }
+        if (variantOrdinal === undefined) {
+          variantOrdinal = Number(planRes.rows[0].variant_ordinal);
+        }
+      }
+    }
+
+    const beatIndex =
+      candidatePayload?.beatIndex ??
+      (typeof injectedPayload["beatIndex"] === "number" &&
+      Number.isInteger(injectedPayload["beatIndex"]) &&
+      injectedPayload["beatIndex"] > 0
+        ? injectedPayload["beatIndex"]
+        : 1);
+
+    if (specRevision !== undefined && variantOrdinal !== undefined) {
+      const res = await runner.query<{ count: string }>(
+        `SELECT count(*) FROM storyboard_candidates
+         WHERE scene_id = $1
+           AND scene_spec_revision = $2
+           AND variant_ordinal = $3
+           AND beat_index = $4`,
+        [currentRow.scene_id, specRevision, variantOrdinal, beatIndex]
+      );
+      return Number(res.rows[0]?.count ?? 0);
+    }
+
+    if (variantOrdinal !== undefined) {
+      const res = await runner.query<{ count: string }>(
+        `SELECT count(*) FROM storyboard_candidates
+         WHERE scene_id = $1
+           AND variant_ordinal = $2
+           AND beat_index = $3`,
+        [currentRow.scene_id, variantOrdinal, beatIndex]
+      );
+      return Number(res.rows[0]?.count ?? 0);
+    }
+
+    const res = await runner.query<{ count: string }>(
+      `SELECT count(*) FROM storyboard_candidates
+       WHERE scene_id = $1
+         AND beat_index = $2`,
+      [currentRow.scene_id, beatIndex]
+    );
+    const count = Number(res.rows[0]?.count ?? 0);
+    if (count > 0) {
+      return count;
+    }
+
+    const fallbackRes = await runner.query<{ count: string }>(
+      "SELECT count(*) FROM storyboard_candidates WHERE scene_id = $1",
+      [currentRow.scene_id]
+    );
+    return Number(fallbackRes.rows[0]?.count ?? 0);
+  }
+
   private async insertCandidateRow(
     client: PoolClient,
     sceneId: string,
@@ -836,6 +938,18 @@ export class PostgresJobQueue implements JobQueuePort {
       );
     }
 
+    if (candidatePayload.beatIndex !== undefined) {
+      if (
+        typeof candidatePayload.beatIndex !== "number" ||
+        !Number.isInteger(candidatePayload.beatIndex) ||
+        candidatePayload.beatIndex <= 0
+      ) {
+        throw new InvalidJobCompletionPayloadError(
+          "candidatePayload.beatIndex must be a positive integer"
+        );
+      }
+    }
+
     const sceneRes = await client.query<{ spec_revision: number }>(
       "SELECT spec_revision FROM storyboard_scenes WHERE scene_id = $1",
       [sceneId]
@@ -847,6 +961,7 @@ export class PostgresJobQueue implements JobQueuePort {
 
     let injectedShotPlanId: string | undefined;
     let injectedSpecRevision: number | undefined;
+    let injectedBeatIndex: number | undefined;
     if (typeof jobRow?.injected_payload === "object" && jobRow.injected_payload !== null) {
       const payload = jobRow.injected_payload as Record<string, unknown>;
       if (typeof payload.shotPlanId === "string" && payload.shotPlanId.trim().length > 0) {
@@ -858,6 +973,13 @@ export class PostgresJobQueue implements JobQueuePort {
         payload.specRevision > 0
       ) {
         injectedSpecRevision = payload.specRevision;
+      }
+      if (
+        typeof payload.beatIndex === "number" &&
+        Number.isInteger(payload.beatIndex) &&
+        payload.beatIndex > 0
+      ) {
+        injectedBeatIndex = payload.beatIndex;
       }
     } else if (typeof jobRow?.injected_payload === "string") {
       try {
@@ -871,6 +993,13 @@ export class PostgresJobQueue implements JobQueuePort {
           parsed.specRevision > 0
         ) {
           injectedSpecRevision = parsed.specRevision;
+        }
+        if (
+          typeof parsed.beatIndex === "number" &&
+          Number.isInteger(parsed.beatIndex) &&
+          parsed.beatIndex > 0
+        ) {
+          injectedBeatIndex = parsed.beatIndex;
         }
       } catch {
         // Ignore JSON parse error on unexpected non-JSON payload
@@ -893,6 +1022,50 @@ export class PostgresJobQueue implements JobQueuePort {
       ) {
         throw new InvalidJobCompletionPayloadError(
           `candidatePayload.specRevision (${candidatePayload.specRevision}) does not match injected job specRevision (${injectedSpecRevision})`
+        );
+      }
+    }
+
+    if (
+      injectedBeatIndex !== undefined &&
+      candidatePayload.beatIndex !== undefined &&
+      candidatePayload.beatIndex !== injectedBeatIndex
+    ) {
+      throw new InvalidJobCompletionPayloadError(
+        `candidatePayload.beatIndex (${candidatePayload.beatIndex}) does not match injected job beatIndex (${injectedBeatIndex})`
+      );
+    }
+
+    const resolvedBeatIndex = candidatePayload.beatIndex ?? injectedBeatIndex ?? 1;
+    if (!Number.isInteger(resolvedBeatIndex) || resolvedBeatIndex <= 0) {
+      throw new InvalidJobCompletionPayloadError(
+        "candidatePayload.beatIndex must be a positive integer"
+      );
+    }
+
+    const generationPayload = (candidatePayload.generationPayload ?? {}) as Record<string, unknown>;
+    const generationBeatIndex = generationPayload.beatIndex;
+    if (generationBeatIndex !== undefined) {
+      if (
+        typeof generationBeatIndex !== "number" ||
+        !Number.isInteger(generationBeatIndex) ||
+        generationBeatIndex <= 0
+      ) {
+        throw new InvalidJobCompletionPayloadError(
+          "candidatePayload.generationPayload.beatIndex must be a positive integer"
+        );
+      }
+      if (
+        candidatePayload.beatIndex !== undefined &&
+        generationBeatIndex !== candidatePayload.beatIndex
+      ) {
+        throw new InvalidJobCompletionPayloadError(
+          `candidatePayload.generationPayload.beatIndex (${generationBeatIndex}) does not match candidatePayload.beatIndex (${candidatePayload.beatIndex})`
+        );
+      }
+      if (candidatePayload.beatIndex === undefined && generationBeatIndex !== resolvedBeatIndex) {
+        throw new InvalidJobCompletionPayloadError(
+          `candidatePayload.generationPayload.beatIndex (${generationBeatIndex}) does not match resolved beatIndex (${resolvedBeatIndex})`
         );
       }
     }
@@ -936,7 +1109,73 @@ export class PostgresJobQueue implements JobQueuePort {
       );
     }
 
-    const generationPayload = candidatePayload.generationPayload ?? {};
+    let targetPlanRow:
+      | {
+          shot_plan_id: string;
+          spec_revision: number;
+          structured_plan: unknown;
+          previs_candidate_id: string | null;
+        }
+      | undefined;
+
+    if (targetShotPlanId) {
+      const planRes = await client.query<{
+        shot_plan_id: string;
+        spec_revision: number;
+        structured_plan: unknown;
+        previs_candidate_id: string | null;
+      }>(
+        "SELECT shot_plan_id, spec_revision, structured_plan, previs_candidate_id FROM shot_plans WHERE shot_plan_id = $1 AND scene_id = $2 AND spec_revision = $3",
+        [targetShotPlanId, sceneId, targetSpecRevision]
+      );
+      targetPlanRow = planRes.rows[0];
+      if (!targetPlanRow) {
+        throw new InvalidJobCompletionPayloadError(
+          `Target shot plan ${targetShotPlanId} not found for scene ${sceneId} at spec revision ${targetSpecRevision}`
+        );
+      }
+    } else {
+      const planRes = await client.query<{
+        shot_plan_id: string;
+        spec_revision: number;
+        structured_plan: unknown;
+        previs_candidate_id: string | null;
+      }>(
+        "SELECT shot_plan_id, spec_revision, structured_plan, previs_candidate_id FROM shot_plans WHERE scene_id = $1 AND spec_revision = $2 AND variant_ordinal = $3",
+        [sceneId, targetSpecRevision, candidatePayload.variantOrdinal]
+      );
+      targetPlanRow = planRes.rows[0];
+    }
+
+    if (targetPlanRow) {
+      let structuredPlan: Record<string, unknown> | null = null;
+      if (
+        typeof targetPlanRow.structured_plan === "object" &&
+        targetPlanRow.structured_plan !== null
+      ) {
+        structuredPlan = targetPlanRow.structured_plan as Record<string, unknown>;
+      } else if (typeof targetPlanRow.structured_plan === "string") {
+        try {
+          structuredPlan = JSON.parse(targetPlanRow.structured_plan) as Record<string, unknown>;
+        } catch {
+          // Ignore JSON parse error on unexpected non-JSON payload
+        }
+      }
+
+      if (Array.isArray(structuredPlan?.beats) && structuredPlan.beats.length > 0) {
+        const hasMatchingBeat = structuredPlan.beats.some(
+          (b: unknown) =>
+            typeof b === "object" &&
+            b !== null &&
+            (b as { beatIndex?: unknown }).beatIndex === resolvedBeatIndex
+        );
+        if (!hasMatchingBeat) {
+          throw new InvalidJobCompletionPayloadError(
+            `Shot plan ${targetPlanRow.shot_plan_id} does not contain beatIndex ${resolvedBeatIndex}`
+          );
+        }
+      }
+    }
 
     const insertRes = await client.query<{ candidate_id: string }>(
       `
@@ -947,8 +1186,9 @@ export class PostgresJobQueue implements JobQueuePort {
         storage_bucket,
         storage_object_key,
         content_hash_sha256,
-        generation_payload
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        generation_payload,
+        beat_index
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING candidate_id
       `,
       [
@@ -958,72 +1198,100 @@ export class PostgresJobQueue implements JobQueuePort {
         candidatePayload.storageBucket,
         candidatePayload.storageObjectKey,
         candidatePayload.contentHashSha256,
-        JSON.stringify(generationPayload)
+        JSON.stringify(generationPayload),
+        resolvedBeatIndex
       ]
     );
 
     const candidateId = insertRes.rows[0]?.candidate_id;
-    if (candidateId) {
-      const profilePayload = candidatePayload.generationPayload?.profile;
-      const resolvedModelProfile =
-        typeof profilePayload === "string" && profilePayload.trim().length > 0
-          ? profilePayload
-          : typeof (profilePayload as Record<string, unknown> | undefined)?.profileId ===
-                "string" &&
-              ((profilePayload as Record<string, unknown>).profileId as string).trim().length > 0
-            ? ((profilePayload as Record<string, unknown>).profileId as string)
-            : (jobRow?.workflow_template ?? "flux_schnell_storyboard_v1");
+    if (!candidateId) {
+      throw new Error("Failed to insert candidate row");
+    }
 
-      const previsObj = {
-        candidateId,
-        storageBucket: candidatePayload.storageBucket,
-        storageObjectKey: candidatePayload.storageObjectKey,
-        contentHashSha256: candidatePayload.contentHashSha256,
-        modelProfile: resolvedModelProfile,
-        generatedAt: new Date().toISOString(),
-        reviewNotes: null
-      };
+    if (targetPlanRow) {
+      await client.query(
+        `
+        INSERT INTO shot_plan_previs_associations (
+          shot_plan_id,
+          beat_index,
+          candidate_id,
+          scene_id,
+          spec_revision,
+          created_at,
+          updated_at
+        ) VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+        ON CONFLICT (shot_plan_id, beat_index) DO UPDATE
+        SET
+          candidate_id = EXCLUDED.candidate_id,
+          scene_id = EXCLUDED.scene_id,
+          spec_revision = EXCLUDED.spec_revision,
+          updated_at = NOW()
+        `,
+        [targetPlanRow.shot_plan_id, resolvedBeatIndex, candidateId, sceneId, targetSpecRevision]
+      );
 
-      if (targetShotPlanId) {
-        await client.query(
-          `
-          UPDATE shot_plans
-          SET
-            previs_candidate_id = $3,
-            structured_plan = jsonb_set(
-              structured_plan,
-              '{previs}',
-              $5::jsonb,
-              true
-            ),
-            updated_at = NOW()
-          WHERE shot_plan_id = $1 AND scene_id = $2 AND spec_revision = $4
-          `,
-          [targetShotPlanId, sceneId, candidateId, targetSpecRevision, JSON.stringify(previsObj)]
-        );
-      } else {
-        await client.query(
-          `
-          UPDATE shot_plans
-          SET
-            previs_candidate_id = $4,
-            structured_plan = jsonb_set(
-              structured_plan,
-              '{previs}',
-              $5::jsonb,
-              true
-            ),
-            updated_at = NOW()
-          WHERE scene_id = $1 AND spec_revision = $2 AND variant_ordinal = $3 AND previs_candidate_id IS NULL
-          `,
-          [
-            sceneId,
-            targetSpecRevision,
-            candidatePayload.variantOrdinal,
-            candidateId,
-            JSON.stringify(previsObj)
-          ]
-        );
+      if (resolvedBeatIndex === 1) {
+        const profilePayload = candidatePayload.generationPayload?.profile;
+        const resolvedModelProfile =
+          typeof profilePayload === "string" && profilePayload.trim().length > 0
+            ? profilePayload
+            : typeof (profilePayload as Record<string, unknown> | undefined)?.profileId ===
+                  "string" &&
+                ((profilePayload as Record<string, unknown>).profileId as string).trim().length > 0
+              ? ((profilePayload as Record<string, unknown>).profileId as string)
+              : (jobRow?.workflow_template ?? "flux_schnell_storyboard_v1");
+
+        const previsObj = {
+          candidateId,
+          storageBucket: candidatePayload.storageBucket,
+          storageObjectKey: candidatePayload.storageObjectKey,
+          contentHashSha256: candidatePayload.contentHashSha256,
+          modelProfile: resolvedModelProfile,
+          generatedAt: new Date().toISOString(),
+          reviewNotes: null
+        };
+
+        if (targetShotPlanId) {
+          await client.query(
+            `
+            UPDATE shot_plans
+            SET
+              previs_candidate_id = $3,
+              structured_plan = jsonb_set(
+                structured_plan,
+                '{previs}',
+                $5::jsonb,
+                true
+              ),
+              updated_at = NOW()
+            WHERE shot_plan_id = $1 AND scene_id = $2 AND spec_revision = $4
+            `,
+            [targetShotPlanId, sceneId, candidateId, targetSpecRevision, JSON.stringify(previsObj)]
+          );
+        } else {
+          await client.query(
+            `
+            UPDATE shot_plans
+            SET
+              previs_candidate_id = $4,
+              structured_plan = jsonb_set(
+                structured_plan,
+                '{previs}',
+                $5::jsonb,
+                true
+              ),
+              updated_at = NOW()
+            WHERE scene_id = $1 AND spec_revision = $2 AND variant_ordinal = $3 AND previs_candidate_id IS NULL
+            `,
+            [
+              sceneId,
+              targetSpecRevision,
+              candidatePayload.variantOrdinal,
+              candidateId,
+              JSON.stringify(previsObj)
+            ]
+          );
+        }
       }
     }
   }
