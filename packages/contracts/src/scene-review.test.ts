@@ -40,6 +40,10 @@ import {
   DurationChangePayloadSchema,
   LoraTunePayloadSchema,
   EmptyActionPayloadSchema,
+  SHOT_PLAN_BEAT_FRAME_STATUSES,
+  ShotPlanBeatFrameStatusSchema,
+  ShotPlanBeatFrameReviewItemSchema,
+  ShotPlanReviewItemSchema,
   canonicalizeReviewCommand,
   hashReviewCommand
 } from "./scene-review.js";
@@ -987,5 +991,170 @@ describe("Review Command Envelopes, Discriminated Action Payloads, and Canonical
         enqueuedJobIds: ["job-1", ""]
       }).success
     ).toBe(false);
+  });
+});
+
+describe("ShotPlan Beat Frame Review Contracts", () => {
+  const sampleShotPlan = {
+    shotPlanId: "11111111-1111-4111-8111-111111111111",
+    sceneId: "22222222-2222-4222-8222-222222222222",
+    specRevision: 1,
+    variantOrdinal: 1,
+    status: "draft" as const,
+    routingMode: "reference_directed" as const,
+    isCurrentRevision: true,
+    targetDurationMs: 4000,
+    targetFrameCount: 97,
+    framing: "wide" as const,
+    angle: "eye_level" as const,
+    cameraMovement: "static" as const,
+    movementSpeed: "medium" as const,
+    lensIntent: "35mm standard",
+    cameraPosition: "eye_level",
+    cameraPromptDescription: "Static wide shot",
+    actionSummary: "Character enters scene",
+    lightingStyle: "natural_golden_hour" as const,
+    environmentDescription: "Open field",
+    continuity: { persistentSubjectIds: [], frameAnchorTarget: "none" as const },
+    createdAt: "2026-09-01T12:00:00.000Z",
+    updatedAt: "2026-09-01T12:00:00.000Z"
+  };
+
+  it("validates all canonical beat frame statuses", () => {
+    for (const status of SHOT_PLAN_BEAT_FRAME_STATUSES) {
+      expect(ShotPlanBeatFrameStatusSchema.parse(status)).toBe(status);
+    }
+    expect(SHOT_PLAN_BEAT_FRAME_STATUSES).toEqual(["pending", "ready", "failed", "unavailable"]);
+
+    expect(ShotPlanBeatFrameStatusSchema.safeParse("unknown").success).toBe(false);
+  });
+
+  it("validates ShotPlanBeatFrameReviewItemSchema across all 4 statuses", () => {
+    const readyFrame = {
+      beatIndex: 1,
+      status: "ready" as const,
+      candidateId: "33333333-3333-4333-8333-333333333333",
+      media: { available: true, url: "https://storage.local/frame-1.webp" }
+    };
+    expect(ShotPlanBeatFrameReviewItemSchema.parse(readyFrame)).toEqual(readyFrame);
+
+    const pendingFrame = {
+      beatIndex: 2,
+      status: "pending" as const,
+      media: { available: false }
+    };
+    expect(ShotPlanBeatFrameReviewItemSchema.parse(pendingFrame)).toEqual(pendingFrame);
+
+    const failedFrame = {
+      beatIndex: 3,
+      status: "failed" as const,
+      media: { available: false }
+    };
+    expect(ShotPlanBeatFrameReviewItemSchema.parse(failedFrame)).toEqual(failedFrame);
+
+    const unavailableFrame = {
+      beatIndex: 4,
+      status: "unavailable" as const,
+      media: { available: false }
+    };
+    expect(ShotPlanBeatFrameReviewItemSchema.parse(unavailableFrame)).toEqual(unavailableFrame);
+  });
+
+  it("rejects invalid beatIndex values", () => {
+    const base = {
+      status: "pending" as const,
+      media: { available: false }
+    };
+    expect(ShotPlanBeatFrameReviewItemSchema.safeParse({ ...base, beatIndex: 0 }).success).toBe(
+      false
+    );
+    expect(ShotPlanBeatFrameReviewItemSchema.safeParse({ ...base, beatIndex: -1 }).success).toBe(
+      false
+    );
+    expect(ShotPlanBeatFrameReviewItemSchema.safeParse({ ...base, beatIndex: 1.5 }).success).toBe(
+      false
+    );
+  });
+
+  it("validates ShotPlanReviewItemSchema with beatFrames array", () => {
+    const threeBeats = [
+      {
+        beatIndex: 1,
+        status: "ready" as const,
+        candidateId: "33333333-3333-4333-8333-333333333333",
+        media: { available: true, url: "https://storage.local/frame-1.webp" }
+      },
+      {
+        beatIndex: 2,
+        status: "pending" as const,
+        media: { available: false }
+      },
+      {
+        beatIndex: 3,
+        status: "failed" as const,
+        media: { available: false }
+      }
+    ];
+
+    const planWithFrames = {
+      ...sampleShotPlan,
+      beatFrames: threeBeats
+    };
+
+    const parsed = ShotPlanReviewItemSchema.parse(planWithFrames);
+    expect(parsed.beatFrames).toEqual(threeBeats);
+  });
+
+  it("preserves backward compatibility when beatFrames is omitted", () => {
+    const parsed = ShotPlanReviewItemSchema.parse(sampleShotPlan);
+    expect(parsed.beatFrames).toBeUndefined();
+  });
+
+  it("validates nested scene review detail read model containing beatFrames", () => {
+    const detail = {
+      sceneId: "22222222-2222-4222-8222-222222222222",
+      campaignId: "44444444-4444-4444-8444-444444444444",
+      status: "director_review" as const,
+      specRevision: 1,
+      configuration: {
+        prompt: "A test prompt",
+        referenceIds: [],
+        engineProfileId: "minimax_h3",
+        durationMs: 5000
+      },
+      candidatesByRevision: [],
+      shotPlans: [
+        {
+          ...sampleShotPlan,
+          beatFrames: [
+            {
+              beatIndex: 1,
+              status: "ready" as const,
+              candidateId: "33333333-3333-4333-8333-333333333333",
+              media: { available: true, url: "https://storage.local/frame-1.webp" }
+            },
+            {
+              beatIndex: 2,
+              status: "pending" as const,
+              media: { available: false }
+            },
+            {
+              beatIndex: 3,
+              status: "unavailable" as const,
+              media: { available: false }
+            }
+          ]
+        }
+      ],
+      allowedActions: ["approve_shotplan", "select_shotplan"] as const
+    };
+
+    const parsed = SceneReviewDetailReadModelSchema.parse(detail);
+    const firstPlan = parsed.shotPlans?.[0];
+    expect(firstPlan).toBeDefined();
+    expect(firstPlan?.beatFrames).toHaveLength(3);
+    expect(firstPlan?.beatFrames?.[0]?.status).toBe("ready");
+    expect(firstPlan?.beatFrames?.[1]?.status).toBe("pending");
+    expect(firstPlan?.beatFrames?.[2]?.status).toBe("unavailable");
   });
 });

@@ -1449,4 +1449,288 @@ describe("ShotPlanPanel Component", () => {
       });
     });
   });
+
+  describe("Per-beat frame strip in ShotPlan UI", () => {
+    it("renders one frame per beat in beatIndex order beside the textual beat list for a three-beat plan", () => {
+      const plan = createSampleShotPlan({
+        beats: [
+          {
+            beatIndex: 3,
+            startMs: 2500,
+            endMs: 4000,
+            description: "Final reaction",
+            cameraAction: "pan left",
+            subjectAction: "turns head"
+          },
+          {
+            beatIndex: 1,
+            startMs: 0,
+            endMs: 1200,
+            description: "Initial glance",
+            cameraAction: "push in",
+            subjectAction: "opens eyes"
+          },
+          {
+            beatIndex: 2,
+            startMs: 1200,
+            endMs: 2500,
+            description: "Mid action",
+            cameraAction: "track",
+            subjectAction: "steps forward"
+          }
+        ],
+        beatFrames: [
+          {
+            beatIndex: 1,
+            status: "ready",
+            candidateId: "cand-1",
+            media: { available: true, url: "https://media.example.com/beat-1.jpg" }
+          },
+          {
+            beatIndex: 2,
+            status: "pending",
+            media: { available: false }
+          },
+          {
+            beatIndex: 3,
+            status: "failed",
+            media: { available: false }
+          }
+        ]
+      });
+
+      render(<ShotPlanPanel shotPlans={[plan]} currentSpecRevision={2} />);
+
+      // Strip container
+      const strip = screen.getByTestId("shot-plan-beat-strip");
+      expect(strip).toBeTruthy();
+      expect(strip.getAttribute("data-shot-plan-id")).toBe(plan.shotPlanId);
+
+      // Non-authoritative badge
+      const badge = screen.getByTestId("beat-strip-badge");
+      expect(badge.textContent).toContain("Beat frames — non-authoritative");
+
+      // Beat slots in sorted order
+      const slots = screen.getAllByTestId("shot-plan-beat-slot");
+      expect(slots).toHaveLength(3);
+
+      expect(slots[0]?.getAttribute("data-beat-index")).toBe("1");
+      expect(slots[0]?.getAttribute("data-status")).toBe("ready");
+      const img = slots[0]?.querySelector("img");
+      expect(img?.getAttribute("src")).toBe("https://media.example.com/beat-1.jpg");
+
+      expect(slots[1]?.getAttribute("data-beat-index")).toBe("2");
+      expect(slots[1]?.getAttribute("data-status")).toBe("pending");
+      const placeholder2 = slots[1]?.querySelector('[data-testid="shot-plan-beat-placeholder"]');
+      expect(placeholder2?.textContent).toBe("Frame pending");
+
+      expect(slots[2]?.getAttribute("data-beat-index")).toBe("3");
+      expect(slots[2]?.getAttribute("data-status")).toBe("failed");
+      const placeholder3 = slots[2]?.querySelector('[data-testid="shot-plan-beat-placeholder"]');
+      expect(placeholder3?.textContent).toBe("Frame failed");
+
+      // Textual list also ordered by beatIndex
+      const beatsList = screen.getByTestId("shot-plan-beats");
+      const beatItems = beatsList.querySelectorAll(".storyboard-beat-item");
+      expect(beatItems).toHaveLength(3);
+      expect(beatItems[0]?.textContent).toContain("Initial glance");
+      expect(beatItems[1]?.textContent).toContain("Mid action");
+      expect(beatItems[2]?.textContent).toContain("Final reaction");
+    });
+
+    it("displays 'Beat frames — non-authoritative' badge in both routing modes", () => {
+      const candidateHash = "b".repeat(64);
+      const planRef = createSampleShotPlan({
+        routingMode: "reference_directed",
+        beats: [
+          {
+            beatIndex: 1,
+            startMs: 0,
+            endMs: 1000,
+            description: "Beat 1",
+            cameraAction: "static",
+            subjectAction: "none"
+          }
+        ],
+        beatFrames: [
+          {
+            beatIndex: 1,
+            status: "ready",
+            candidateId: "cand-1",
+            media: { available: true, url: "https://media.example.com/beat-1.jpg" }
+          }
+        ]
+      });
+
+      const planAnchor = createSampleShotPlan({
+        routingMode: "frame_anchored",
+        continuity: {
+          persistentSubjectIds: [],
+          frameAnchorTarget: "first_frame",
+          anchorCandidateId: "cand-anchor-1",
+          anchorMediaHashSha256: candidateHash
+        },
+        beats: [
+          {
+            beatIndex: 1,
+            startMs: 0,
+            endMs: 1000,
+            description: "Beat 1",
+            cameraAction: "static",
+            subjectAction: "none"
+          }
+        ],
+        beatFrames: [
+          {
+            beatIndex: 1,
+            status: "ready",
+            candidateId: "cand-1",
+            media: { available: true, url: "https://media.example.com/beat-1.jpg" }
+          }
+        ]
+      });
+
+      const { rerender } = render(<ShotPlanPanel shotPlans={[planRef]} currentSpecRevision={2} />);
+      expect(screen.getByTestId("beat-strip-badge").textContent).toContain(
+        "Beat frames — non-authoritative"
+      );
+
+      rerender(
+        <ShotPlanPanel
+          shotPlans={[planAnchor]}
+          currentSpecRevision={2}
+          candidatesByRevision={[
+            {
+              specRevision: 2,
+              candidates: [
+                {
+                  candidateId: "cand-anchor-1",
+                  sceneId: planAnchor.sceneId,
+                  specRevision: 2,
+                  variantOrdinal: 1,
+                  contentHash: candidateHash,
+                  media: { available: true, url: "https://media.example.com/anchor.jpg" },
+                  createdAt: "2026-09-27T12:00:00.000Z"
+                }
+              ]
+            }
+          ]}
+        />
+      );
+      expect(screen.getByTestId("beat-strip-badge").textContent).toContain(
+        "Beat frames — non-authoritative"
+      );
+    });
+
+    it("does not render beat strip or empty slots when plan has no beats", () => {
+      const plan = createSampleShotPlan({
+        beats: []
+      });
+
+      render(<ShotPlanPanel shotPlans={[plan]} currentSpecRevision={2} />);
+      expect(screen.queryByTestId("shot-plan-beat-strip")).toBeNull();
+      expect(screen.queryByTestId("shot-plan-beats")).toBeNull();
+    });
+
+    it("keeps select and approve buttons enabled and does not block approval on pending or failed frames", () => {
+      const plan = createSampleShotPlan({
+        beats: [
+          {
+            beatIndex: 1,
+            startMs: 0,
+            endMs: 1000,
+            description: "Beat 1",
+            cameraAction: "static",
+            subjectAction: "none"
+          },
+          {
+            beatIndex: 2,
+            startMs: 1000,
+            endMs: 2000,
+            description: "Beat 2",
+            cameraAction: "static",
+            subjectAction: "none"
+          },
+          {
+            beatIndex: 3,
+            startMs: 2000,
+            endMs: 3000,
+            description: "Beat 3",
+            cameraAction: "static",
+            subjectAction: "none"
+          }
+        ],
+        beatFrames: [
+          {
+            beatIndex: 1,
+            status: "pending",
+            media: { available: false }
+          },
+          {
+            beatIndex: 2,
+            status: "failed",
+            media: { available: false }
+          },
+          {
+            beatIndex: 3,
+            status: "unavailable",
+            media: { available: false }
+          }
+        ]
+      });
+
+      const onSelect = vi.fn();
+      const onApprove = vi.fn();
+
+      render(
+        <ShotPlanPanel
+          shotPlans={[plan]}
+          currentSpecRevision={2}
+          onSelectShotPlan={onSelect}
+          onApproveShotPlan={onApprove}
+        />
+      );
+
+      const selectBtn = screen.getByTestId("shot-plan-select-button") as HTMLButtonElement;
+      const approveBtn = screen.getByTestId("shot-plan-approve-button") as HTMLButtonElement;
+
+      expect(selectBtn.disabled).toBe(false);
+      expect(approveBtn.disabled).toBe(false);
+
+      fireEvent.click(selectBtn);
+      expect(onSelect).toHaveBeenCalledWith(plan.shotPlanId);
+
+      fireEvent.click(approveBtn);
+      expect(onApprove).toHaveBeenCalledWith(plan.shotPlanId);
+    });
+
+    it("does not expose candidate selection controls on beat frame thumbnails", () => {
+      const plan = createSampleShotPlan({
+        beats: [
+          {
+            beatIndex: 1,
+            startMs: 0,
+            endMs: 1000,
+            description: "Beat 1",
+            cameraAction: "static",
+            subjectAction: "none"
+          }
+        ],
+        beatFrames: [
+          {
+            beatIndex: 1,
+            status: "ready",
+            candidateId: "cand-1",
+            media: { available: true, url: "https://media.example.com/beat-1.jpg" }
+          }
+        ]
+      });
+
+      render(<ShotPlanPanel shotPlans={[plan]} currentSpecRevision={2} />);
+
+      const strip = screen.getByTestId("shot-plan-beat-strip");
+      const buttonsInsideStrip = strip.querySelectorAll("button");
+      expect(buttonsInsideStrip).toHaveLength(0);
+    });
+  });
 });

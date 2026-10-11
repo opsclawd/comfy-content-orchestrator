@@ -144,6 +144,18 @@ export type ShotPlanReferenceBindingReviewItem = z.infer<
   typeof ShotPlanReferenceBindingReviewItemSchema
 >;
 
+export const SHOT_PLAN_BEAT_FRAME_STATUSES = ["pending", "ready", "failed", "unavailable"] as const;
+export const ShotPlanBeatFrameStatusSchema = z.enum(SHOT_PLAN_BEAT_FRAME_STATUSES);
+export type ShotPlanBeatFrameStatus = z.infer<typeof ShotPlanBeatFrameStatusSchema>;
+
+export const ShotPlanBeatFrameReviewItemSchema = z.object({
+  beatIndex: z.number().int().positive(),
+  status: ShotPlanBeatFrameStatusSchema,
+  candidateId: z.string().uuid().optional(),
+  media: MediaAvailabilitySchema
+});
+export type ShotPlanBeatFrameReviewItem = z.infer<typeof ShotPlanBeatFrameReviewItemSchema>;
+
 export const ShotPlanReviewItemSchema = z.object({
   shotPlanId: z.string().uuid(),
   sceneId: z.string().uuid(),
@@ -168,6 +180,7 @@ export const ShotPlanReviewItemSchema = z.object({
   atmosphere: z.string().nullable().optional(),
   subjects: z.array(ShotPlanSubjectBlockingSchema).default([]),
   beats: z.array(ShotPlanTemporalBeatSchema).default([]),
+  beatFrames: z.array(ShotPlanBeatFrameReviewItemSchema).optional(),
   dialogue: ShotPlanDialogueIntentSchema.nullable().optional(),
   continuity: ShotPlanContinuityConstraintsSchema,
   previs: z
