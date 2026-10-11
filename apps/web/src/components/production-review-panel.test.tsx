@@ -394,6 +394,46 @@ describe("ProductionReviewPanel", () => {
     });
   });
 
+  it("renders Re-render button and failure banner for failed scene when allowedActions includes production_rerender and productionJobId is present", () => {
+    const detail = createSampleDetail({
+      status: "failed",
+      allowedActions: ["production_rerender", "cancel"]
+    });
+    const attempt = createSampleAttempt({
+      technicalState: "failed",
+      productionJobId: "prod-job-failed-123"
+    });
+    const state = createInitialState(detail);
+    const dispatch = vi.fn();
+
+    render(
+      <ProductionReviewPanel
+        detail={detail}
+        productionAttempt={attempt}
+        state={state}
+        dispatch={dispatch}
+      />
+    );
+
+    expect(screen.getByTestId("production-failed-banner")).toBeDefined();
+    expect(screen.queryByTestId("action-button-production_accept")).toBeNull();
+
+    const rerenderBtn = screen.getByTestId("action-button-production_rerender");
+    expect(rerenderBtn).toBeDefined();
+    fireEvent.click(rerenderBtn);
+
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "REQUEST_CONFIRMATION",
+      stagedAction: {
+        action: "production_rerender",
+        payload: {
+          expectedProductionJobId: "prod-job-failed-123"
+        },
+        displayLabel: "Re-render Production"
+      }
+    });
+  });
+
   it("omits buttons when productionJobId is missing or undefined", () => {
     const detail = createSampleDetail({
       allowedActions: ["production_accept", "production_rerender"]
