@@ -607,7 +607,7 @@ export class MinimaxH3TargetPreflight implements MinimaxH3TargetPreflightPort {
   async verifyDiskSpace(
     targetDir: string,
     minFreeGb: number
-  ): Promise<{ ok: boolean; freeGb: number; blocker?: string }> {
+  ): Promise<{ ok: boolean; freeGb: number | null; blocker?: string }> {
     try {
       const stats = await statfs(targetDir);
       const freeBytes = stats.bavail * stats.bsize;
@@ -624,7 +624,11 @@ export class MinimaxH3TargetPreflight implements MinimaxH3TargetPreflightPort {
     } catch (err) {
       return {
         ok: false,
-        freeGb: 0,
+        // null, not 0 — statfs failed, so capacity is genuinely unknown,
+        // not "confirmed zero bytes free". A caller logging/persisting
+        // this value must be able to tell "unverifiable" apart from
+        // "actually full".
+        freeGb: null,
         blocker: `Failed to verify disk space at ${targetDir}: ${(err as Error).message}`
       };
     }

@@ -99,7 +99,7 @@ export interface MinimaxH3TargetPreflightPort {
   verifyDiskSpace(
     targetDir: string,
     minFreeGb: number
-  ): Promise<{ ok: boolean; freeGb: number; blocker?: string }>;
+  ): Promise<{ ok: boolean; freeGb: number | null; blocker?: string }>;
   verifyEnvironmentTools?(
     pythonPath: string,
     ffmpegPath?: string
