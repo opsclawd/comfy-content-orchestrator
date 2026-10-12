@@ -69,6 +69,26 @@ const mockRef2vTemplate = {
   "209": { class_type: "LoadImage", inputs: { image: "ref9.png" } }
 };
 
+// A valid provenance.json with real expectedWorkflowHash entries for both
+// mock templates. The service now fails closed when a profile entry or its
+// expectedWorkflowHash is missing (see "fails closed when provenance.json
+// has no matching profile entry" below) — an empty `profiles: []` fixture
+// would no longer exercise the happy path, it would exercise the
+// vulnerability the fail-closed check exists to prevent.
+const mockProvenanceJson = JSON.stringify({
+  version: 1,
+  profiles: [
+    {
+      workflowRelativePath: "minimax_h3_720p_i2v_124f_api.json",
+      expectedWorkflowHash: sha256Hex(canonicalizeJson(mockI2vTemplate))
+    },
+    {
+      workflowRelativePath: "minimax_h3_720p_ref2v_124f_api.json",
+      expectedWorkflowHash: sha256Hex(canonicalizeJson(mockRef2vTemplate))
+    }
+  ]
+});
+
 class InMemoryStore implements MinimaxH3ExperimentStorePort {
   public files = new Map<string, string>();
   public staged = new Map<string, string>();
@@ -345,7 +365,7 @@ describe("MiniMax-H3 Experiment Service (Preparation & Validation)", () => {
       "templates/minimax_h3_720p_ref2v_124f_api.json",
       JSON.stringify(mockRef2vTemplate)
     );
-    store.files.set("templates/provenance.json", JSON.stringify({ version: 1, profiles: [] }));
+    store.files.set("templates/provenance.json", mockProvenanceJson);
     store.files.set(
       "manifest.json",
       JSON.stringify({
@@ -363,6 +383,32 @@ describe("MiniMax-H3 Experiment Service (Preparation & Validation)", () => {
     );
     return store;
   }
+
+  it("fails closed when provenance.json has no matching profile entry (templates-dir trust-root bypass)", async () => {
+    const store = createInitializedStore();
+    // Simulate a caller-supplied --templates-dir with an empty/unrelated
+    // provenance manifest — this must not let an unverified template
+    // silently become the trusted base.
+    store.files.set("templates/provenance.json", JSON.stringify({ version: 1, profiles: [] }));
+    const service = new MinimaxH3ExperimentService(store);
+
+    await expect(
+      service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A cinematic shot of a sunset",
+        operatorLabel: "operator-01",
+        runId: "run-i2v-002",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest.json"
+      })
+    ).rejects.toThrow(/no expectedWorkflowHash entry/);
+  });
 
   it("prepares and validates an isolated I2V experiment", async () => {
     const store = createInitializedStore();
@@ -532,7 +578,7 @@ describe("MiniMax-H3 Experiment Service (Reconcile Crash Recovery)", () => {
   it("reconstructs result.json from scratch when result.json never existed", async () => {
     const store = new InMemoryStore();
     store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));
-    store.files.set("templates/provenance.json", JSON.stringify({ version: 1, profiles: [] }));
+    store.files.set("templates/provenance.json", mockProvenanceJson);
     store.files.set(
       "manifest.json",
       JSON.stringify({
@@ -646,7 +692,7 @@ describe("MiniMax-H3 Experiment Service (Reconcile Crash Recovery)", () => {
   it("reconstructs failed result with offline server when stored terminal evidence contains CUDA OOM error", async () => {
     const store = new InMemoryStore();
     store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));
-    store.files.set("templates/provenance.json", JSON.stringify({ version: 1, profiles: [] }));
+    store.files.set("templates/provenance.json", mockProvenanceJson);
     store.files.set(
       "manifest.json",
       JSON.stringify({
@@ -761,7 +807,7 @@ describe("MiniMax-H3 Experiment Service (Reconcile Crash Recovery)", () => {
   it("reconstructs completed result with offline server when stored terminal evidence indicates success with output", async () => {
     const store = new InMemoryStore();
     store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));
-    store.files.set("templates/provenance.json", JSON.stringify({ version: 1, profiles: [] }));
+    store.files.set("templates/provenance.json", mockProvenanceJson);
     store.files.set(
       "manifest.json",
       JSON.stringify({
@@ -894,7 +940,7 @@ describe("MiniMax-H3 Experiment Service (Reconcile Crash Recovery)", () => {
   it("reconstructs completed result with offline server using pinned PreviewVideo images output contract", async () => {
     const store = new InMemoryStore();
     store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));
-    store.files.set("templates/provenance.json", JSON.stringify({ version: 1, profiles: [] }));
+    store.files.set("templates/provenance.json", mockProvenanceJson);
     store.files.set(
       "manifest.json",
       JSON.stringify({
@@ -1033,7 +1079,7 @@ describe("MiniMax-H3 Experiment Service (Reconcile Crash Recovery)", () => {
   it("retains engine execution success and adds stop recommendation when stop policy threshold is crossed", async () => {
     const store = new InMemoryStore();
     store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));
-    store.files.set("templates/provenance.json", JSON.stringify({ version: 1, profiles: [] }));
+    store.files.set("templates/provenance.json", mockProvenanceJson);
     store.files.set(
       "manifest.json",
       JSON.stringify({

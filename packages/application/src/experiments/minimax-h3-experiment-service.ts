@@ -315,24 +315,24 @@ export class MinimaxH3ExperimentService {
     const provenanceSource =
       route === "i2v" ? ("authored_from_spec" as const) : ("validated_host_export" as const);
 
-    try {
-      const provenanceParsed = JSON.parse(provenanceRaw) as {
-        profiles?: Array<{ workflowRelativePath?: string; expectedWorkflowHash?: string }>;
-      };
-      const matchingProfile = provenanceParsed.profiles?.find(
-        (p) => p.workflowRelativePath === templateFileName
+    const provenanceParsed = JSON.parse(provenanceRaw) as {
+      profiles?: Array<{ workflowRelativePath?: string; expectedWorkflowHash?: string }>;
+    };
+    const matchingProfile = provenanceParsed.profiles?.find(
+      (p) => p.workflowRelativePath === templateFileName
+    );
+    // Fail closed rather than silently skipping verification: a
+    // --templates-dir supplying an empty or missing profile entry must not
+    // be able to make an unverified template become the trusted base.
+    if (!matchingProfile?.expectedWorkflowHash) {
+      throw new Error(
+        `provenance.json at "${provenanceManifestPath}" has no expectedWorkflowHash entry for "${templateFileName}"; cannot verify the base template against an independent pin.`
       );
-      if (matchingProfile?.expectedWorkflowHash) {
-        if (baseCanonicalWorkflowDigest !== matchingProfile.expectedWorkflowHash) {
-          throw new Error(
-            `Base template ${templateFileName} canonical hash (${baseCanonicalWorkflowDigest}) does not match provenance expectedWorkflowHash (${matchingProfile.expectedWorkflowHash})`
-          );
-        }
-      }
-    } catch (err) {
-      if ((err as Error).message.includes("does not match provenance expectedWorkflowHash")) {
-        throw err;
-      }
+    }
+    if (baseCanonicalWorkflowDigest !== matchingProfile.expectedWorkflowHash) {
+      throw new Error(
+        `Base template ${templateFileName} canonical hash (${baseCanonicalWorkflowDigest}) does not match provenance expectedWorkflowHash (${matchingProfile.expectedWorkflowHash})`
+      );
     }
 
     // Read input manifest
@@ -835,7 +835,17 @@ export class MinimaxH3ExperimentService {
           measurementTemplate.observedRunner.effectiveMode.value !== null ||
           measurementTemplate.collection.status !== "not_started" ||
           measurementTemplate.collection.sampleCount.attempted !== 0 ||
+          // Every collection metric must be null, not only gpuPeakUsedVramMb
+          // — a populated host/process/swap reading would mean a prior real
+          // measurement leaked into what must be an unstarted dry-run
+          // template.
           measurementTemplate.collection.metrics.gpuPeakUsedVramMb !== null ||
+          measurementTemplate.collection.metrics.gpuAllocatableVramMb !== null ||
+          measurementTemplate.collection.metrics.hostPeakRamUsedMb !== null ||
+          measurementTemplate.collection.metrics.processPeakRssMb !== null ||
+          measurementTemplate.collection.metrics.hostSwapUsedMb !== null ||
+          measurementTemplate.collection.metrics.hostSwapDeltaMb !== null ||
+          measurementTemplate.collection.errors.length !== 0 ||
           measurementTemplate.probe.status !== "not_started" ||
           measurementTemplate.probe.outputFile !== null ||
           measurementTemplate.probe.outputSha256 !== null ||
@@ -877,12 +887,17 @@ export class MinimaxH3ExperimentService {
       const matchingProfile = provenanceParsed.profiles?.find(
         (p) => p.workflowRelativePath === templateFileName
       );
-      if (matchingProfile?.expectedWorkflowHash) {
-        if (descriptor.baseCanonicalWorkflowDigest !== matchingProfile.expectedWorkflowHash) {
-          errors.push(
-            `Base canonical workflow digest in descriptor (${descriptor.baseCanonicalWorkflowDigest}) does not match provenance expectedWorkflowHash (${matchingProfile.expectedWorkflowHash})`
-          );
-        }
+      // Fail closed rather than silently skipping verification: a
+      // --templates-dir supplying an empty or missing profile entry must
+      // not be able to make an unverified template pass validation.
+      if (!matchingProfile?.expectedWorkflowHash) {
+        errors.push(
+          `provenance.json at "${provenanceManifestPath}" has no expectedWorkflowHash entry for "${templateFileName}"; cannot verify the base template against an independent pin.`
+        );
+      } else if (descriptor.baseCanonicalWorkflowDigest !== matchingProfile.expectedWorkflowHash) {
+        errors.push(
+          `Base canonical workflow digest in descriptor (${descriptor.baseCanonicalWorkflowDigest}) does not match provenance expectedWorkflowHash (${matchingProfile.expectedWorkflowHash})`
+        );
       }
     } catch (err) {
       errors.push(`Failed to verify provenance.json: ${(err as Error).message}`);

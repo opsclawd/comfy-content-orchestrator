@@ -7,6 +7,8 @@ import {
 } from "./experiment-minimax-h3.js";
 import {
   MinimaxH3ExperimentService,
+  canonicalizeJson,
+  sha256Hex,
   type MinimaxH3ComfyUiTransportPort,
   type MinimaxH3ExperimentStorePort,
   type MinimaxH3OutputProberPort,
@@ -176,7 +178,22 @@ function createMockDeps(): {
   );
 
   store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));
-  store.files.set("templates/provenance.json", JSON.stringify({ version: 1, profiles: [] }));
+  // A real expectedWorkflowHash entry, not an empty profiles array — the
+  // service now fails closed when provenance.json has no matching entry
+  // for the template (see minimax-h3-experiment.test.ts for the dedicated
+  // regression test of that behavior).
+  store.files.set(
+    "templates/provenance.json",
+    JSON.stringify({
+      version: 1,
+      profiles: [
+        {
+          workflowRelativePath: "minimax_h3_720p_i2v_124f_api.json",
+          expectedWorkflowHash: sha256Hex(canonicalizeJson(mockI2vTemplate))
+        }
+      ]
+    })
+  );
   store.files.set(
     "inputs.json",
     JSON.stringify({

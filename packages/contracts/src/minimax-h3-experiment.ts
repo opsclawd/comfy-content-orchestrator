@@ -302,15 +302,20 @@ export const MinimaxH3TargetSpecificationSchema = z
   .strict();
 export type MinimaxH3TargetSpecification = z.infer<typeof MinimaxH3TargetSpecificationSchema>;
 
+// Upper bounds exist so a tampered/malformed descriptor can't encode an
+// effectively-unbounded timeout (e.g. Number.MAX_SAFE_INTEGER) that would
+// hang the harness indefinitely; each cap is well above its corresponding
+// default in DEFAULT_MINIMAX_H3_EXPERIMENT_TIMEOUTS below to allow operator
+// tuning without permitting unbounded values.
 export const MinimaxH3ExperimentTimeoutsSchema = z
   .object({
-    startupTimeoutMs: z.number().int().positive(),
-    submissionTimeoutMs: z.number().int().positive(),
-    pollIntervalMs: z.number().int().positive(),
-    totalRenderTimeoutMs: z.number().int().positive(),
-    probeTimeoutMs: z.number().int().positive(),
-    settlementTimeoutMs: z.number().int().positive(),
-    shutdownTimeoutMs: z.number().int().positive()
+    startupTimeoutMs: z.number().int().positive().max(600_000),
+    submissionTimeoutMs: z.number().int().positive().max(300_000),
+    pollIntervalMs: z.number().int().positive().max(60_000),
+    totalRenderTimeoutMs: z.number().int().positive().max(3_600_000),
+    probeTimeoutMs: z.number().int().positive().max(300_000),
+    settlementTimeoutMs: z.number().int().positive().max(120_000),
+    shutdownTimeoutMs: z.number().int().positive().max(120_000)
   })
   .strict();
 export type MinimaxH3ExperimentTimeouts = z.infer<typeof MinimaxH3ExperimentTimeoutsSchema>;
@@ -372,7 +377,7 @@ export const MinimaxH3ExperimentDescriptorSchema = z
     requestedRunner: MinimaxH3RequestedRunnerPolicySchema,
     configuredRunner: MinimaxH3ConfiguredRunnerPolicySchema,
     target: MinimaxH3TargetSpecificationSchema,
-    collectionIntervalMs: z.number().int().positive(),
+    collectionIntervalMs: z.number().int().positive().max(60_000),
     timeouts: MinimaxH3ExperimentTimeoutsSchema,
     configDigest: sha256HashSchema,
     descriptorDigest: sha256HashSchema.optional(),
@@ -416,6 +421,23 @@ export const MinimaxH3ExperimentDescriptorSchema = z
         code: z.ZodIssueCode.custom,
         message: `configuredFrames ${val.configuredFrames} is not on the grid (frames - 5) % 17 === 0`,
         path: ["configuredFrames"]
+      });
+    }
+    // width/height admission only happens in prepareExperiment
+    // (resolution must be the default or one of the named supported
+    // variants). Without this check here too, a hand-crafted or tampered
+    // descriptor.json with arbitrary dimensions would still pass schema
+    // validation during validateExperiment, bypassing admission entirely.
+    const isSupportedDimensionPair =
+      (val.width === 1344 && val.height === 768) || // default
+      (val.width === 1280 && val.height === 720) || // 720p
+      (val.width === 1024 && val.height === 576) || // 576p
+      (val.width === 896 && val.height === 512); // 512p
+    if (!isSupportedDimensionPair) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `width/height ${val.width}x${val.height} is not the default (1344x768) or a supported named resolution variant (1280x720, 1024x576, 896x512)`,
+        path: ["width"]
       });
     }
     const computedPromptDigest = sha256Hex(val.prompt);
