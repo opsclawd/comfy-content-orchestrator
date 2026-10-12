@@ -1431,34 +1431,45 @@ export class MinimaxH3ExperimentService {
     const conformanceReasons: string[] = [];
 
     if (probeResult.status === "succeeded") {
-      const hasAllRequiredFacts =
-        probeResult.measuredFacts.measuredFrames !== null &&
-        probeResult.measuredFacts.width !== null &&
-        probeResult.measuredFacts.height !== null &&
-        probeResult.measuredFacts.fps !== null &&
-        probeResult.measuredFacts.measuredVideoDurationMs !== null;
+      // An established mismatch (a check that is explicitly false, or a
+      // reported discrepancy flag) must win over "unknown" even when
+      // some unrelated fact also happens to be missing -- e.g. a frame
+      // count that definitely doesn't match must not be masked as
+      // "unknown" just because fps couldn't be measured. Evaluate
+      // established mismatches first, independent of completeness.
+      const establishedMismatchReasons: string[] = [];
+      if (conformanceChecks.frameCountMatches === false) {
+        establishedMismatchReasons.push("frame_count_mismatch");
+      }
+      if (conformanceChecks.geometryMatches === false) {
+        establishedMismatchReasons.push("geometry_mismatch");
+      }
+      if (conformanceChecks.fpsMatches === false) {
+        establishedMismatchReasons.push("fps_mismatch");
+      }
+      if (conformanceChecks.timingWithinTolerance === false) {
+        establishedMismatchReasons.push("duration_mismatch");
+      }
+      for (const flag of probeResult.discrepancyFlags) {
+        establishedMismatchReasons.push(`discrepancy_${flag}`);
+      }
 
-      if (!hasAllRequiredFacts) {
-        conformanceStatus = "unknown";
-        conformanceReasons.push("missing_measured_facts");
-      } else if (
-        conformanceChecks.frameCountMatches &&
-        conformanceChecks.geometryMatches &&
-        conformanceChecks.fpsMatches &&
-        conformanceChecks.timingWithinTolerance &&
-        probeResult.discrepancyFlags.length === 0
-      ) {
-        conformanceStatus = "conformant";
-      } else {
+      if (establishedMismatchReasons.length > 0) {
         conformanceStatus = "nonconformant";
-        if (!conformanceChecks.frameCountMatches) conformanceReasons.push("frame_count_mismatch");
-        if (!conformanceChecks.geometryMatches) conformanceReasons.push("geometry_mismatch");
-        if (!conformanceChecks.fpsMatches) conformanceReasons.push("fps_mismatch");
-        if (!conformanceChecks.timingWithinTolerance) conformanceReasons.push("duration_mismatch");
-        if (probeResult.discrepancyFlags.length > 0) {
-          for (const flag of probeResult.discrepancyFlags) {
-            conformanceReasons.push(`discrepancy_${flag}`);
-          }
+        conformanceReasons.push(...establishedMismatchReasons);
+      } else {
+        const hasAllRequiredFacts =
+          probeResult.measuredFacts.measuredFrames !== null &&
+          probeResult.measuredFacts.width !== null &&
+          probeResult.measuredFacts.height !== null &&
+          probeResult.measuredFacts.fps !== null &&
+          probeResult.measuredFacts.measuredVideoDurationMs !== null;
+
+        if (!hasAllRequiredFacts) {
+          conformanceStatus = "unknown";
+          conformanceReasons.push("missing_measured_facts");
+        } else {
+          conformanceStatus = "conformant";
         }
       }
     } else {

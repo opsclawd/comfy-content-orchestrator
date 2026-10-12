@@ -723,6 +723,117 @@ describe("MiniMax-H3 Experiment Service (Reconcile Crash Recovery)", () => {
     expect(await store.readResult(runDir)).not.toBeNull();
   });
 
+  it("reports nonconformant (not unknown) when a measured fact is missing but another fact already establishes a mismatch", async () => {
+    // fps is unmeasurable (null) here, which previously forced
+    // conformanceStatus all the way to "unknown" with reason
+    // "missing_measured_facts" -- masking the fact that frame count was
+    // already measured and definitively wrong. An established mismatch
+    // must win over an unrelated missing fact.
+    const store = new InMemoryStore();
+    store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));
+    store.files.set("templates/provenance.json", mockProvenanceJson);
+    store.files.set(
+      "manifest.json",
+      JSON.stringify({
+        referenceSetId: "ref-test-1",
+        references: [
+          {
+            assetPath: "/tmp/ref1.png",
+            stagedFilename: "ref1.png",
+            role: "first_frame",
+            tag: "<Picture 1>",
+            order: 0
+          }
+        ]
+      })
+    );
+
+    const mockTransport: MinimaxH3ComfyUiTransportPort = {
+      waitForReadiness: async () => ({ ok: true }),
+      submitPrompt: async () => ({ ok: true, promptId: "prompt-masking-1" }),
+      pollPromptHistory: async () => ({
+        status: "completed",
+        outputFilename: "output.mp4",
+        rawHistory: { status: "success" }
+      }),
+      getQueue: async () => ({ running: [], pending: [] }),
+      findPromptByWorkflowDigestOrClient: async () => null
+    };
+
+    const mockProber: MinimaxH3OutputProberPort = {
+      probeOutput: async (filePath) => ({
+        status: "succeeded",
+        outputFile: filePath,
+        outputSha256: "c".repeat(64),
+        outputSizeBytes: 5000000,
+        measuredFacts: {
+          measuredFrames: 1, // definitively wrong vs. descriptor's 124
+          countedFramesSource: "nb_read_frames",
+          declaredNbFrames: 1,
+          measuredVideoDurationMs: 5167,
+          measuredContainerDurationMs: 5167,
+          width: 1344,
+          height: 768,
+          fps: null, // unmeasurable -- must not mask the frame-count mismatch
+          rFrameRate: null,
+          avgFrameRate: null,
+          videoCodec: "h264",
+          audioCodec: "aac",
+          audioChannels: 2,
+          audioSampleRate: 44100
+        },
+        discrepancyFlags: [],
+        toolIdentity: { ffprobePath: "/usr/bin/ffprobe", version: "7.0.2-static" },
+        errors: []
+      })
+    };
+
+    const service = new MinimaxH3ExperimentService(
+      store,
+      undefined,
+      undefined,
+      mockTransport,
+      undefined,
+      mockProber
+    );
+
+    const { runDir, descriptor } = await service.prepareExperiment({
+      route: "i2v",
+      frames: 124,
+      seed: 42,
+      prompt: "A sunset",
+      operatorLabel: "operator-01",
+      runId: "run-masking-test",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest.json"
+    });
+
+    await store.writeIntent(runDir, {
+      runId: descriptor.runId,
+      clientId: "client-1",
+      workflowDigest: descriptor.derivedWorkflowDigest,
+      requestFingerprint: "fp-1",
+      timestamp: new Date().toISOString()
+    });
+    await store.writeReceipt(runDir, {
+      runId: descriptor.runId,
+      promptId: "prompt-masking-1",
+      acceptedAt: new Date().toISOString()
+    });
+
+    const reconstructed = await service.reconcileExperiment(runDir, {
+      outputRoot: ".ai-runs/minimax-h3-experiments"
+    });
+
+    expect(reconstructed.outputConformance.status).toBe("nonconformant");
+    expect(reconstructed.outputConformance.reasons).toContain("frame_count_mismatch");
+    expect(reconstructed.outputConformance.reasons).not.toContain("missing_measured_facts");
+  });
+
   it("reconstructs failed result with offline server when stored terminal evidence contains CUDA OOM error", async () => {
     const store = new InMemoryStore();
     store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));
