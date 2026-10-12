@@ -65,6 +65,50 @@ describe("MinimaxH3ExperimentStore", () => {
       await rm(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("refuses to overwrite an already-written intent.json or receipt.json", async () => {
+    // intent.json/receipt.json are a run's claim markers. A second,
+    // delayed invocation of executeExperiment for the same run directory
+    // only discovers the collision here (its own precondition check
+    // happens long before, at the top of the function) -- so this guard
+    // is the actual point that must fail closed rather than silently
+    // clobber a run that already completed.
+    const tmpDir = await mkdtemp(join(os.tmpdir(), "h3-exp-immutable-test-"));
+    try {
+      const store = new MinimaxH3ExperimentStore(tmpDir);
+      const runDir = join(tmpDir, "run-001");
+
+      const intent = {
+        runId: "run-001",
+        clientId: "client-abc",
+        workflowDigest: "a".repeat(64),
+        requestFingerprint: "b".repeat(64),
+        timestamp: "2026-10-12T10:00:00.000Z"
+      };
+      await store.writeIntent(runDir, intent);
+
+      await expect(
+        store.writeIntent(runDir, { ...intent, timestamp: "2026-10-12T11:00:00.000Z" })
+      ).rejects.toThrow(/Cannot overwrite immutable record/);
+
+      const receipt = {
+        runId: "run-001",
+        promptId: "prompt-123",
+        acceptedAt: "2026-10-12T10:00:01.000Z"
+      };
+      await store.writeReceipt(runDir, receipt);
+
+      await expect(
+        store.writeReceipt(runDir, { ...receipt, promptId: "prompt-999" })
+      ).rejects.toThrow(/Cannot overwrite immutable record/);
+
+      // The original records must be unchanged after the rejected writes.
+      expect(await store.readIntent(runDir)).toEqual(intent);
+      expect(await store.readReceipt(runDir)).toEqual(receipt);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("MinimaxH3TargetPreflight", () => {

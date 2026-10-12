@@ -25,6 +25,12 @@ export class MinimaxH3TelemetrySampler implements MinimaxH3TelemetrySamplerPort 
     let currentPhase: "before" | "during" | "after" = "before";
     let isStopped = false;
     let isSampling = false;
+    let pendingRetrigger = false;
+    // One-way: once stop() gives up waiting on a sample and returns, no
+    // sample started before that point may deliver onSample afterward,
+    // even if it resolves later (e.g. a slow nvidia-smi call). Unlike a
+    // toggled flag, this never re-opens once stop() has moved on.
+    let stopFinalized = false;
     let timer: NodeJS.Timeout | null = null;
     let inFlightSample: Promise<void> | null = null;
 
@@ -120,15 +126,26 @@ export class MinimaxH3TelemetrySampler implements MinimaxH3TelemetrySamplerPort 
           error: errors.length > 0 ? errors.join("; ") : null
         };
 
-        await Promise.resolve(onSample(sample));
+        if (!stopFinalized) {
+          await Promise.resolve(onSample(sample));
+        }
       } finally {
         isSampling = false;
+        if (pendingRetrigger && !isStopped) {
+          // An interval tick arrived while this sample was still in flight
+          // and was deferred rather than dropped. Run it now so a slow
+          // nvidia-smi/host read doesn't silently erase telemetry coverage
+          // for that window.
+          pendingRetrigger = false;
+          triggerSample().catch(() => {});
+        }
       }
     };
 
     const triggerSample = (force = false): Promise<void> => {
       if (isSampling) {
-        return Promise.resolve();
+        pendingRetrigger = true;
+        return inFlightSample ?? Promise.resolve();
       }
       inFlightSample = sampleOnce(force);
       return inFlightSample;
@@ -153,16 +170,26 @@ export class MinimaxH3TelemetrySampler implements MinimaxH3TelemetrySamplerPort 
         }
         isStopped = true;
         if (inFlightSample) {
-          await Promise.race([
-            inFlightSample.catch(() => {}),
-            new Promise((r) => setTimeout(r, 5000))
+          const timedOut = await Promise.race([
+            inFlightSample.then(() => false).catch(() => false),
+            new Promise<boolean>((r) => setTimeout(() => r(true), 5000))
           ]);
+          if (timedOut) {
+            // The in-flight sample is still running past our wait budget.
+            // Give up on it now rather than let it deliver onSample
+            // whenever it eventually resolves, which could be well after
+            // this stop() call has already returned to the caller (who
+            // may have finalized/closed the telemetry sink by then).
+            stopFinalized = true;
+            return;
+          }
         }
         currentPhase = "after";
         await Promise.race([
           sampleOnce(true).catch(() => {}),
-          new Promise((r) => setTimeout(r, 5000))
+          new Promise<void>((r) => setTimeout(r, 5000))
         ]);
+        stopFinalized = true;
       }
     };
   }

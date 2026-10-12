@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   MinimaxH3ExperimentService,
   canonicalizeJson,
-  sha256Hex
+  sha256Hex,
+  computeExecutionLatencyMs
 } from "./minimax-h3-experiment-service.js";
 import {
   validateRunnerVariantAndArgv,
@@ -220,6 +221,39 @@ class InMemoryStore implements MinimaxH3ExperimentStorePort {
     return content;
   }
 }
+
+describe("computeExecutionLatencyMs", () => {
+  it("derives latency from real started/terminated timestamps", () => {
+    const result = computeExecutionLatencyMs(
+      "2026-10-12T10:00:00.000Z",
+      "2026-10-12T10:00:05.500Z",
+      null
+    );
+    expect(result).toBe(5500);
+  });
+
+  it("falls back to the previous value when terminatedAt is missing", () => {
+    // Guards against fabricating a latency measured against "now" (the
+    // caller's own synthesized display fallback) when the engine never
+    // actually recorded a real completion time.
+    const result = computeExecutionLatencyMs("2026-10-12T10:00:00.000Z", null, 42);
+    expect(result).toBe(42);
+  });
+
+  it("falls back to the previous value when startedAt is missing", () => {
+    const result = computeExecutionLatencyMs(null, "2026-10-12T10:00:05.500Z", null);
+    expect(result).toBeNull();
+  });
+
+  it("falls back rather than return a negative latency from an out-of-order pair", () => {
+    const result = computeExecutionLatencyMs(
+      "2026-10-12T10:00:05.000Z",
+      "2026-10-12T10:00:00.000Z",
+      7
+    );
+    expect(result).toBe(7);
+  });
+});
 
 describe("MiniMax-H3 CLI Parser Semantics (CPU-only)", () => {
   it("validates baseline dynamicvram-offload-v1 runner configuration", () => {

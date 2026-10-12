@@ -272,7 +272,20 @@ export class MinimaxH3ExperimentStore implements MinimaxH3ExperimentStorePort {
       (filePath.endsWith("/descriptor.json") ||
         filePath.endsWith("\\descriptor.json") ||
         filePath.endsWith("/config.json") ||
-        filePath.endsWith("\\config.json")) &&
+        filePath.endsWith("\\config.json") ||
+        // intent.json/receipt.json are the run's claim markers: once
+        // written they record "this run was submitted/accepted". The
+        // caller's own existingIntent precondition check happens long
+        // before this point (host checks, model verification, GPU lock
+        // acquisition, process spawn, submitPrompt can all take seconds
+        // to minutes), so a second, delayed invocation of the same run
+        // directory can pass that early check and only collide here --
+        // this is the actual atomic claim point, and it must refuse to
+        // silently overwrite a run that already has a recorded outcome.
+        filePath.endsWith("/intent.json") ||
+        filePath.endsWith("\\intent.json") ||
+        filePath.endsWith("/receipt.json") ||
+        filePath.endsWith("\\receipt.json")) &&
       existsSync(filePath)
     ) {
       throw new Error(`Cannot overwrite immutable record: ${filePath}`);

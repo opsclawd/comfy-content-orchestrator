@@ -65,6 +65,32 @@ export function sha256Hex(content: string): string {
 
 export { computeComparisonKey };
 
+// Derives end-to-end execution latency from real recorded timestamps
+// rather than carrying forward whatever the measurement template last
+// held (which starts, and without this, permanently stays, null). Falls
+// back to the previously stored value only when either timestamp is
+// genuinely absent, so a run with no real terminatedAt yet doesn't get a
+// fabricated latency measured against "now".
+export function computeExecutionLatencyMs(
+  startedAt: string | null,
+  terminatedAt: string | null,
+  previousLatencyMs: number | null
+): number | null {
+  if (!startedAt || !terminatedAt) {
+    return previousLatencyMs;
+  }
+  const startMs = new Date(startedAt).getTime();
+  const endMs = new Date(terminatedAt).getTime();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+    return previousLatencyMs;
+  }
+  const latencyMs = endMs - startMs;
+  if (!Number.isFinite(latencyMs) || latencyMs < 0) {
+    return previousLatencyMs;
+  }
+  return Math.round(latencyMs);
+}
+
 export const SUPPORTED_RESOLUTION_VARIANTS: Record<string, { width: number; height: number }> = {
   "720p": { width: 1280, height: 720 },
   "576p": { width: 1024, height: 576 },
@@ -1539,7 +1565,18 @@ export class MinimaxH3ExperimentService {
         promptId,
         terminalEvidence,
         engineError,
-        latencyMs: baseResult.execution.latencyMs
+        // latencyMs is always carried forward from the (initially blank)
+        // measurement template unless we actually compute it here. Derive
+        // it from the real recorded started/terminated timestamps -- not
+        // the synthesized "now" fallback used above for display purposes
+        // -- so a missing real terminatedAt doesn't produce a bogus
+        // latency measured against the moment reconciliation happened to
+        // run.
+        latencyMs: computeExecutionLatencyMs(
+          baseResult.timestamps.startedAt ?? intent?.timestamp ?? null,
+          baseResult.timestamps.terminatedAt ?? null,
+          baseResult.execution.latencyMs
+        )
       },
       collection: {
         status: collectionStatus,
@@ -2073,7 +2110,14 @@ export class MinimaxH3ExperimentService {
         runId: descriptor.runId,
         clientId,
         workflowDigest: descriptor.derivedWorkflowDigest,
-        requestFingerprint: sha256Hex(descriptor.runId + descriptor.derivedWorkflowDigest),
+        // requestFingerprint must identify the exact payload actually
+        // submitted, not just restate the runId/workflowDigest pairing
+        // (which is already recorded separately and doesn't prove what
+        // was POSTed). Hash the canonical form of validatedGraph -- the
+        // same in-memory graph passed to submitPrompt below -- so this
+        // is a true fingerprint of the request, usable to independently
+        // verify what was actually sent.
+        requestFingerprint: sha256Hex(canonicalizeJson(validatedGraph)),
         timestamp: new Date().toISOString()
       };
       await this.store.writeIntent(runDir, intent);
