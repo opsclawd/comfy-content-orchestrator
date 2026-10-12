@@ -1902,6 +1902,14 @@ export class MinimaxH3ExperimentService {
       setPhase: (phase: "before" | "during" | "after") => void;
     } | null = null;
     let executeError: Error | null = null;
+    // Hoisted out of the try block below (where they used to be declared)
+    // so the catch block can see them: a stop-policy threshold trip
+    // aborts execution the same way an operator cancellation does, and
+    // the catch block needs to tell them apart from a genuine engine
+    // error rather than persisting a deliberate, policy-triggered stop
+    // as execution.status "error".
+    let stopTriggered = false;
+    const stopAbortController = new AbortController();
 
     try {
       // 5. Spawn owned child with absolute paths and clean environment
@@ -2033,9 +2041,7 @@ export class MinimaxH3ExperimentService {
       await this.store.writeProcessRecord(runDir, updatedProcessRecord);
 
       // 9. Start telemetry sampler
-      let stopTriggered = false;
       let initialSampleSwap: number | null = null;
-      const stopAbortController = new AbortController();
 
       telemetryControl = this.telemetry.start({
         targetGpuUuid: descriptor.target.gpuUuid,
@@ -2277,7 +2283,15 @@ export class MinimaxH3ExperimentService {
       try {
         const existingEvidence = await this.store.readTerminalEvidence(runDir);
         if (!existingEvidence) {
-          const isInterrupted = options?.abortSignal?.aborted ?? false;
+          // A stop-policy threshold trip (stopTriggered/stopAbortController)
+          // cancels execution the same way an external operator abort
+          // does -- both are deliberate, expected stops, not an
+          // unexpected engine failure, and must not be persisted as
+          // status "error".
+          const isInterrupted =
+            (options?.abortSignal?.aborted ?? false) ||
+            stopAbortController.signal.aborted ||
+            stopTriggered;
           await this.store.writeTerminalEvidence(runDir, {
             source: "process",
             status: isInterrupted ? "interrupted" : "error",
