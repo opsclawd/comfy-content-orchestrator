@@ -439,3 +439,5 @@ export {
   DEFAULT_MAX_HEIGHT,
   DEFAULT_MAX_PIXELS
 } from "./image/sharp-image-inspection-adapter.js";
+
+export * from "./experiments/index.js";

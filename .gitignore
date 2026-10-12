@@ -30,3 +30,6 @@ __pycache__/
 
 
 validate/
+prompt.md
+validation.result
+implementation-log.md

@@ -1,0 +1,1147 @@
+import { basename } from "node:path";
+import { describe, expect, it } from "vitest";
+import {
+  MinimaxH3ExperimentService,
+  canonicalizeJson,
+  sha256Hex
+} from "./minimax-h3-experiment-service.js";
+import {
+  validateRunnerVariantAndArgv,
+  predictMemoryPolicyFromArgv,
+  analyzeStartupDiagnostics
+} from "./minimax-h3-cli-parser-semantics.js";
+import type {
+  MinimaxH3ExperimentDescriptor,
+  MinimaxH3ExperimentIntent,
+  MinimaxH3ExperimentReceipt,
+  MinimaxH3ExperimentResult,
+  MinimaxH3ProcessRecord,
+  MinimaxH3TelemetrySample,
+  MinimaxH3TerminalEvidence
+} from "@cco/contracts";
+import type {
+  MinimaxH3ExperimentStorePort,
+  MinimaxH3ComfyUiTransportPort,
+  MinimaxH3OutputProberPort
+} from "../ports/minimax-h3-experiment-ports.js";
+
+// Minimal mock templates
+const mockI2vTemplate = {
+  "15": { class_type: "RandomNoise", inputs: { noise_seed: 0 } },
+  "20": { class_type: "LoadImage", inputs: { image: "ref.png" } },
+  "92": { class_type: "SaveVideo", inputs: { filename_prefix: "minimax_h3_720p_i2v_124f" } },
+  "104": {
+    class_type: "MiniMaxH3ImageToVideo",
+    inputs: { length: 124, width: 1344, height: 768, prompt: "base" }
+  }
+};
+
+const mockRef2vTemplate = {
+  "15": { class_type: "RandomNoise", inputs: { noise_seed: 0 } },
+  "92": { class_type: "SaveVideo", inputs: { filename_prefix: "minimax_h3_720p_ref2v_124f" } },
+  "105": {
+    class_type: "MiniMaxH3ReferenceToVideo",
+    inputs: {
+      length: 124,
+      width: 1344,
+      height: 768,
+      prompt: "base",
+      ref_image_size: "max",
+      "ref_images.ref_image_0": ["201", 0],
+      "ref_images.ref_image_1": ["202", 0],
+      "ref_images.ref_image_2": ["203", 0],
+      "ref_images.ref_image_3": ["204", 0],
+      "ref_images.ref_image_4": ["205", 0],
+      "ref_images.ref_image_5": ["206", 0],
+      "ref_images.ref_image_6": ["207", 0],
+      "ref_images.ref_image_7": ["208", 0],
+      "ref_images.ref_image_8": ["209", 0]
+    }
+  },
+  "201": { class_type: "LoadImage", inputs: { image: "ref1.png" } },
+  "202": { class_type: "LoadImage", inputs: { image: "ref2.png" } },
+  "203": { class_type: "LoadImage", inputs: { image: "ref3.png" } },
+  "204": { class_type: "LoadImage", inputs: { image: "ref4.png" } },
+  "205": { class_type: "LoadImage", inputs: { image: "ref5.png" } },
+  "206": { class_type: "LoadImage", inputs: { image: "ref6.png" } },
+  "207": { class_type: "LoadImage", inputs: { image: "ref7.png" } },
+  "208": { class_type: "LoadImage", inputs: { image: "ref8.png" } },
+  "209": { class_type: "LoadImage", inputs: { image: "ref9.png" } }
+};
+
+class InMemoryStore implements MinimaxH3ExperimentStorePort {
+  public files = new Map<string, string>();
+  public staged = new Map<string, string>();
+  public descriptor: MinimaxH3ExperimentDescriptor | null = null;
+  public config: Record<string, unknown> | null = null;
+  public inputManifest: unknown = null;
+  public measurementTemplate: MinimaxH3ExperimentResult | null = null;
+  public intent: MinimaxH3ExperimentIntent | null = null;
+  public receipt: MinimaxH3ExperimentReceipt | null = null;
+  public events: Array<{ timestamp: string; event: string; details?: unknown }> = [];
+  public telemetry: MinimaxH3TelemetrySample[] = [];
+  public result: MinimaxH3ExperimentResult | null = null;
+
+  async writeDescriptor(_runDir: string, descriptor: MinimaxH3ExperimentDescriptor): Promise<void> {
+    this.descriptor = descriptor;
+  }
+  async readDescriptor(_runDir: string): Promise<MinimaxH3ExperimentDescriptor> {
+    if (!this.descriptor) throw new Error("Descriptor not found");
+    return this.descriptor;
+  }
+  async writeConfig(_runDir: string, config: Record<string, unknown>): Promise<string> {
+    this.config = config;
+    return sha256Hex(canonicalizeJson(config));
+  }
+  async readConfig(_runDir: string): Promise<Record<string, unknown>> {
+    if (!this.config) throw new Error("Config not found");
+    return this.config;
+  }
+  async writeInputManifest(_runDir: string, manifest: unknown): Promise<void> {
+    this.inputManifest = manifest;
+  }
+  async readInputManifest(_runDir: string): Promise<unknown> {
+    return this.inputManifest;
+  }
+  async writeMeasurementTemplate(
+    _runDir: string,
+    template: MinimaxH3ExperimentResult
+  ): Promise<void> {
+    this.measurementTemplate = template;
+  }
+  async readMeasurementTemplate(_runDir: string): Promise<MinimaxH3ExperimentResult | null> {
+    return this.measurementTemplate;
+  }
+  async writeIntent(_runDir: string, intent: MinimaxH3ExperimentIntent): Promise<void> {
+    this.intent = intent;
+  }
+  async readIntent(_runDir: string): Promise<MinimaxH3ExperimentIntent | null> {
+    return this.intent;
+  }
+  async writeReceipt(_runDir: string, receipt: MinimaxH3ExperimentReceipt): Promise<void> {
+    this.receipt = receipt;
+  }
+  async readReceipt(_runDir: string): Promise<MinimaxH3ExperimentReceipt | null> {
+    return this.receipt;
+  }
+  async appendEvent(
+    _runDir: string,
+    event: { timestamp: string; event: string; details?: unknown }
+  ): Promise<void> {
+    this.events.push(event);
+  }
+  async readEvents(
+    _runDir: string
+  ): Promise<Array<{ timestamp: string; event: string; details?: unknown }>> {
+    return this.events;
+  }
+  async appendTelemetry(_runDir: string, sample: MinimaxH3TelemetrySample): Promise<void> {
+    this.telemetry.push(sample);
+  }
+  async readTelemetry(_runDir: string): Promise<MinimaxH3TelemetrySample[]> {
+    return this.telemetry;
+  }
+  async createRunDirectory(_runDir: string): Promise<void> {}
+  public processRecord: MinimaxH3ProcessRecord | null = null;
+  async writeProcessRecord(_runDir: string, record: MinimaxH3ProcessRecord): Promise<void> {
+    this.processRecord = record;
+  }
+  async readProcessRecord(_runDir: string): Promise<MinimaxH3ProcessRecord | null> {
+    return this.processRecord;
+  }
+  public terminalEvidence: MinimaxH3TerminalEvidence | null = null;
+  async writeTerminalEvidence(_runDir: string, evidence: MinimaxH3TerminalEvidence): Promise<void> {
+    this.terminalEvidence = evidence;
+  }
+  async readTerminalEvidence(_runDir: string): Promise<MinimaxH3TerminalEvidence | null> {
+    return this.terminalEvidence;
+  }
+  async inspectAsset(
+    _filePath: string
+  ): Promise<{ width: number; height: number; mimeType: string }> {
+    return { width: 1344, height: 768, mimeType: "image/png" };
+  }
+  async deleteRunFiles(_runDir: string, _keepOutputs?: boolean): Promise<void> {}
+  async writeResult(_runDir: string, result: MinimaxH3ExperimentResult): Promise<void> {
+    this.result = result;
+  }
+  async readResult(_runDir: string): Promise<MinimaxH3ExperimentResult | null> {
+    return this.result;
+  }
+  verifyContainment(targetPath: string, rootDir: string): boolean {
+    return targetPath.startsWith(rootDir);
+  }
+  async stageInputFile(sourcePath: string, destPath: string): Promise<void> {
+    this.staged.set(destPath, sourcePath);
+  }
+  async hashFile(_filePath: string): Promise<{ sha256: string; sizeBytes: number }> {
+    return { sha256: "0".repeat(64), sizeBytes: 1024 };
+  }
+  async readJsonFile<T = unknown>(filePath: string): Promise<T> {
+    const content =
+      this.files.get(filePath) ??
+      this.files.get(basename(filePath)) ??
+      this.files.get(`templates/${basename(filePath)}`);
+    if (!content) throw new Error(`File not found: ${filePath}`);
+    return JSON.parse(content);
+  }
+  async writeDurableJson(filePath: string, content: unknown): Promise<void> {
+    this.files.set(filePath, JSON.stringify(content));
+  }
+  async writeTextFile(filePath: string, content: string): Promise<void> {
+    this.files.set(filePath, content);
+  }
+  async readTextFile(filePath: string): Promise<string> {
+    const content =
+      this.files.get(filePath) ??
+      this.files.get(basename(filePath)) ??
+      this.files.get(`templates/${basename(filePath)}`);
+    if (!content) throw new Error(`File not found: ${filePath}`);
+    return content;
+  }
+}
+
+describe("MiniMax-H3 CLI Parser Semantics (CPU-only)", () => {
+  it("validates baseline dynamicvram-offload-v1 runner configuration", () => {
+    const result = validateRunnerVariantAndArgv({
+      variantName: "dynamicvram-offload-v1",
+      variantReason: null
+    });
+    expect(result.requestedPolicy).toBe("dynamic_vram");
+    expect(result.predictedPolicy).toBe("dynamic_vram");
+    expect(result.generatedArgv).toEqual([]);
+  });
+
+  it("rejects dynamicvram-offload-v1 when contradictory flags are passed", () => {
+    expect(() =>
+      validateRunnerVariantAndArgv({
+        variantName: "dynamicvram-offload-v1",
+        variantReason: null,
+        customArgv: ["--disable-dynamic-vram"]
+      })
+    ).toThrow(/expects dynamic VRAM enabled/);
+
+    expect(() =>
+      validateRunnerVariantAndArgv({
+        variantName: "dynamicvram-offload-v1",
+        variantReason: null,
+        customArgv: ["--lowvram"]
+      })
+    ).toThrow(/expects dynamic VRAM baseline/);
+  });
+
+  it("validates comparator static-lowvram-v1 generating both flags", () => {
+    const result = validateRunnerVariantAndArgv({
+      variantName: "static-lowvram-v1",
+      variantReason: "Testing memory scaling comparator"
+    });
+    expect(result.requestedPolicy).toBe("static_lowvram");
+    expect(result.predictedPolicy).toBe("static_lowvram");
+    expect(result.generatedArgv).toContain("--disable-dynamic-vram");
+    expect(result.generatedArgv).toContain("--lowvram");
+  });
+
+  it("rejects static-lowvram-v1 without operator reason", () => {
+    expect(() =>
+      validateRunnerVariantAndArgv({
+        variantName: "static-lowvram-v1",
+        variantReason: null
+      })
+    ).toThrow(/requires an explicit operator --variant-reason/);
+  });
+
+  it("rejects forbidden flags: --cpu, --gpu-only, --highvram, --enable-dynamic-vram", () => {
+    expect(() =>
+      validateRunnerVariantAndArgv({
+        variantName: "dynamicvram-offload-v1",
+        variantReason: null,
+        customArgv: ["--cpu"]
+      })
+    ).toThrow(/Forbidden runner flag/);
+
+    expect(() =>
+      validateRunnerVariantAndArgv({
+        variantName: "dynamicvram-offload-v1",
+        variantReason: null,
+        customArgv: ["--enable-dynamic-vram"]
+      })
+    ).toThrow(/Forbidden runner flag/);
+  });
+
+  it("predicts dynamic_vram when lone --lowvram is passed at pinned ComfyUI", () => {
+    // Lone --lowvram does not disable dynamic VRAM
+    const prediction = predictMemoryPolicyFromArgv(["--lowvram"]);
+    expect(prediction.predictedPolicy).toBe("dynamic_vram");
+  });
+
+  it("predicts static_lowvram only when both --disable-dynamic-vram and --lowvram are present", () => {
+    const prediction = predictMemoryPolicyFromArgv(["--disable-dynamic-vram", "--lowvram"]);
+    expect(prediction.predictedPolicy).toBe("static_lowvram");
+  });
+
+  it("analyzes startup logs and identifies verified dynamic VRAM", () => {
+    const logs = `
+      [aimdo] Dynamic VRAM enabled
+      Loaded ComfyUI models successfully
+    `;
+    const mode = analyzeStartupDiagnostics(logs, "dynamic_vram");
+    expect(mode.status).toBe("verified");
+    expect(mode.value).toBe("dynamic_vram");
+    expect(mode.unknownReason).toBeNull();
+  });
+
+  it("identifies verified dynamic VRAM using exact pinned main.py:280 diagnostic", () => {
+    const logs = `
+      Python version: 3.12.2
+      ComfyUI version: 0.3.10
+      DynamicVRAM support detected and enabled
+      Loaded ComfyUI models successfully
+    `;
+    const mode = analyzeStartupDiagnostics(logs, "dynamic_vram");
+    expect(mode.status).toBe("verified");
+    expect(mode.value).toBe("dynamic_vram");
+    expect(mode.unknownReason).toBeNull();
+  });
+
+  it("detects fallback to legacy patcher in dynamic VRAM startup logs (main.py:282)", () => {
+    const logs = `
+      WARNING: No working comfy-aimdo install detected. DynamicVRAM support disabled. Falling back to legacy ModelPatcher. VRAM estimates may be unreliable especially on Windows
+    `;
+    const mode = analyzeStartupDiagnostics(logs, "dynamic_vram");
+    expect(mode.status).toBe("unknown");
+    expect(mode.value).toBeNull();
+    expect(mode.unknownReason).toContain("Prerequisite failure");
+  });
+
+  it("analyzes startup logs and identifies verified static lowvram with exact pinned bytes", () => {
+    const logs = `
+      WARNING: Dynamic vram disabled with argument. If you have any issues with dynamic vram enabled please give us a detailed reports as this argument will be removed soon. If you use gguf we recommend keeping dynamic vram enabled and using native ComfyUI model formats instead. ComfyUI native formats like fp8 will be faster even if they are larger than your memory.
+      INFO: Set vram state to: LOW_VRAM
+    `;
+    const mode = analyzeStartupDiagnostics(logs, "static_lowvram");
+    expect(mode.status).toBe("verified");
+    expect(mode.value).toBe("static_lowvram");
+    expect(mode.unknownReason).toBeNull();
+  });
+
+  it("detects contradictory dynamic enablement when static_lowvram is requested", () => {
+    const logs = `
+      Dynamic vram disabled with argument.
+      DynamicVRAM support detected and enabled
+      Set vram state to: LOW_VRAM
+    `;
+    const mode = analyzeStartupDiagnostics(logs, "static_lowvram");
+    expect(mode.status).toBe("unknown");
+    expect(mode.value).toBeNull();
+    expect(mode.unknownReason).toContain("Contradictory diagnostic");
+  });
+});
+
+describe("MiniMax-H3 Experiment Service (Preparation & Validation)", () => {
+  function createInitializedStore(): InMemoryStore {
+    const store = new InMemoryStore();
+    store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));
+    store.files.set(
+      "templates/minimax_h3_720p_ref2v_124f_api.json",
+      JSON.stringify(mockRef2vTemplate)
+    );
+    store.files.set("templates/provenance.json", JSON.stringify({ version: 1, profiles: [] }));
+    store.files.set(
+      "manifest.json",
+      JSON.stringify({
+        referenceSetId: "ref-test-1",
+        references: [
+          {
+            assetPath: "/tmp/ref1.png",
+            stagedFilename: "ref1.png",
+            role: "first_frame",
+            tag: "<Picture 1>",
+            order: 0
+          }
+        ]
+      })
+    );
+    return store;
+  }
+
+  it("prepares and validates an isolated I2V experiment", async () => {
+    const store = createInitializedStore();
+    const service = new MinimaxH3ExperimentService(store);
+
+    const { descriptor, runDir } = await service.prepareExperiment({
+      route: "i2v",
+      frames: 124,
+      seed: 42,
+      prompt: "A cinematic shot of a sunset",
+      operatorLabel: "operator-01",
+      runId: "run-i2v-001",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest.json"
+    });
+
+    expect(descriptor.runId).toBe("run-i2v-001");
+    expect(descriptor.configuredFrames).toBe(124);
+    expect(runDir).toBe(".ai-runs/minimax-h3-experiments/run-i2v-001");
+
+    // Validation offline dry path
+    const validation = await service.validateExperiment(runDir, {
+      outputRoot: ".ai-runs/minimax-h3-experiments"
+    });
+    expect(validation.ok).toBe(true);
+    expect(validation.errors).toHaveLength(0);
+  });
+
+  it("prepares Ref2V with 2 references and prunes unused slots 3..9", async () => {
+    const store = createInitializedStore();
+    store.files.set(
+      "manifest-ref2v.json",
+      JSON.stringify({
+        referenceSetId: "ref2v-test",
+        references: [
+          {
+            assetPath: "/tmp/ref1.png",
+            stagedFilename: "ref1.png",
+            tag: "<Picture 1>",
+            order: 0
+          },
+          {
+            assetPath: "/tmp/ref2.png",
+            stagedFilename: "ref2.png",
+            tag: "<Picture 2>",
+            order: 1
+          }
+        ]
+      })
+    );
+
+    const service = new MinimaxH3ExperimentService(store);
+    const { descriptor, runDir } = await service.prepareExperiment({
+      route: "ref2v",
+      frames: 192,
+      seed: 1234,
+      prompt: "A video of <Picture 1> walking with <Picture 2>",
+      operatorLabel: "operator-01",
+      runId: "run-ref2v-001",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest-ref2v.json"
+    });
+
+    expect(descriptor.configuredFrames).toBe(192);
+    expect(store.config).toBeDefined();
+
+    // Check node 105 inputs
+    const node105 = store.config!["105"] as { inputs: Record<string, unknown> };
+    expect(node105.inputs.length).toBe(192);
+    expect(node105.inputs["ref_images.ref_image_0"]).toBeDefined();
+    expect(node105.inputs["ref_images.ref_image_1"]).toBeDefined();
+    expect(node105.inputs["ref_images.ref_image_2"]).toBeUndefined();
+    expect(store.config!["201"]).toBeDefined();
+    expect(store.config!["202"]).toBeDefined();
+    expect(store.config!["203"]).toBeUndefined();
+
+    const validation = await service.validateExperiment(runDir, {
+      outputRoot: ".ai-runs/minimax-h3-experiments"
+    });
+    expect(validation.ok).toBe(true);
+  });
+
+  it("rejects Ref2V prompt that references absent picture tag", async () => {
+    const store = createInitializedStore();
+    const service = new MinimaxH3ExperimentService(store);
+
+    await expect(
+      service.prepareExperiment({
+        route: "ref2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A scene with <Picture 1> and <Picture 5>", // only 1 ref in manifest!
+        operatorLabel: "operator-01",
+        runId: "run-tag-err",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest.json"
+      })
+    ).rejects.toThrow(/Prompt references tag "<Picture 5>" but only 1 reference/);
+  });
+
+  it("rejects output paths that target forbidden directories", async () => {
+    const store = createInitializedStore();
+    const service = new MinimaxH3ExperimentService(store);
+
+    await expect(
+      service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A sunset",
+        operatorLabel: "operator-01",
+        runId: "run-forbidden",
+        outputRoot: "certification/runs", // FORBIDDEN!
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest.json"
+      })
+    ).rejects.toThrow(/violates governance rules/);
+  });
+
+  it("detects tampered SaveVideo prefix in offline validation", async () => {
+    const store = createInitializedStore();
+    const service = new MinimaxH3ExperimentService(store);
+
+    const { runDir } = await service.prepareExperiment({
+      route: "i2v",
+      frames: 124,
+      seed: 42,
+      prompt: "A sunset",
+      operatorLabel: "operator-01",
+      runId: "run-tamper-check",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest.json"
+    });
+
+    // Tamper with SaveVideo prefix
+    (store.config!["92"] as { inputs: { filename_prefix: string } }).inputs.filename_prefix =
+      "tampered_prefix";
+
+    const validation = await service.validateExperiment(runDir, {
+      outputRoot: ".ai-runs/minimax-h3-experiments"
+    });
+    expect(validation.ok).toBe(false);
+    expect(validation.errors.some((e) => e.includes("tampered"))).toBe(true);
+  });
+});
+
+describe("MiniMax-H3 Experiment Service (Reconcile Crash Recovery)", () => {
+  it("reconstructs result.json from scratch when result.json never existed", async () => {
+    const store = new InMemoryStore();
+    store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));
+    store.files.set("templates/provenance.json", JSON.stringify({ version: 1, profiles: [] }));
+    store.files.set(
+      "manifest.json",
+      JSON.stringify({
+        referenceSetId: "ref-test-1",
+        references: [
+          {
+            assetPath: "/tmp/ref1.png",
+            stagedFilename: "ref1.png",
+            role: "first_frame",
+            tag: "<Picture 1>",
+            order: 0
+          }
+        ]
+      })
+    );
+
+    const mockTransport: MinimaxH3ComfyUiTransportPort = {
+      waitForReadiness: async () => ({ ok: true }),
+      submitPrompt: async () => ({ ok: true, promptId: "prompt-reconcile-1" }),
+      pollPromptHistory: async () => ({
+        status: "completed",
+        outputFilename: "output.mp4",
+        rawHistory: { status: "success" }
+      }),
+      getQueue: async () => ({ running: [], pending: [] }),
+      findPromptByWorkflowDigestOrClient: async () => null
+    };
+
+    const mockProber: MinimaxH3OutputProberPort = {
+      probeOutput: async (filePath) => ({
+        status: "succeeded",
+        outputFile: filePath,
+        outputSha256: "c".repeat(64),
+        outputSizeBytes: 5000000,
+        measuredFacts: {
+          measuredFrames: 124,
+          countedFramesSource: "nb_read_frames",
+          declaredNbFrames: 124,
+          measuredVideoDurationMs: 5167,
+          measuredContainerDurationMs: 5167,
+          width: 1344,
+          height: 768,
+          fps: 24,
+          rFrameRate: "24/1",
+          avgFrameRate: "24/1",
+          videoCodec: "h264",
+          audioCodec: "aac",
+          audioChannels: 2,
+          audioSampleRate: 44100
+        },
+        discrepancyFlags: [],
+        toolIdentity: { ffprobePath: "/usr/bin/ffprobe", version: "7.0.2-static" },
+        errors: []
+      })
+    };
+
+    const service = new MinimaxH3ExperimentService(
+      store,
+      undefined,
+      undefined,
+      mockTransport,
+      undefined,
+      mockProber
+    );
+
+    const { runDir, descriptor } = await service.prepareExperiment({
+      route: "i2v",
+      frames: 124,
+      seed: 42,
+      prompt: "A sunset",
+      operatorLabel: "operator-01",
+      runId: "run-crash-test",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest.json"
+    });
+
+    // Simulate crash after intent and receipt were written, before result.json was created
+    await store.writeIntent(runDir, {
+      runId: descriptor.runId,
+      clientId: "client-1",
+      workflowDigest: descriptor.derivedWorkflowDigest,
+      requestFingerprint: "fp-1",
+      timestamp: new Date().toISOString()
+    });
+    await store.writeReceipt(runDir, {
+      runId: descriptor.runId,
+      promptId: "prompt-reconcile-1",
+      acceptedAt: new Date().toISOString()
+    });
+
+    // Ensure result.json is null (never existed)
+    expect(await store.readResult(runDir)).toBeNull();
+
+    // Reconcile
+    const reconstructed = await service.reconcileExperiment(runDir, {
+      outputRoot: ".ai-runs/minimax-h3-experiments"
+    });
+
+    expect(reconstructed).toBeDefined();
+    expect(reconstructed.execution.status).toBe("completed");
+    expect(reconstructed.execution.promptId).toBe("prompt-reconcile-1");
+    expect(reconstructed.probe.status).toBe("succeeded");
+    expect(reconstructed.outputConformance.status).toBe("conformant");
+    expect(await store.readResult(runDir)).not.toBeNull();
+  });
+
+  it("reconstructs failed result with offline server when stored terminal evidence contains CUDA OOM error", async () => {
+    const store = new InMemoryStore();
+    store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));
+    store.files.set("templates/provenance.json", JSON.stringify({ version: 1, profiles: [] }));
+    store.files.set(
+      "manifest.json",
+      JSON.stringify({
+        referenceSetId: "ref-test-1",
+        references: [
+          {
+            assetPath: "/tmp/ref1.png",
+            stagedFilename: "ref1.png",
+            role: "first_frame",
+            tag: "<Picture 1>",
+            order: 0
+          }
+        ]
+      })
+    );
+
+    const offlineTransport: MinimaxH3ComfyUiTransportPort = {
+      waitForReadiness: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+      submitPrompt: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+      pollPromptHistory: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+      getQueue: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+      findPromptByWorkflowDigestOrClient: async () => null
+    };
+
+    const service = new MinimaxH3ExperimentService(
+      store,
+      undefined,
+      undefined,
+      offlineTransport,
+      undefined,
+      undefined
+    );
+
+    const { runDir, descriptor } = await service.prepareExperiment({
+      route: "i2v",
+      frames: 124,
+      seed: 42,
+      prompt: "A sunset",
+      operatorLabel: "operator-01",
+      runId: "run-oom-crash-test",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest.json"
+    });
+
+    await store.writeIntent(runDir, {
+      runId: descriptor.runId,
+      clientId: "client-1",
+      workflowDigest: descriptor.derivedWorkflowDigest,
+      requestFingerprint: "fp-1",
+      timestamp: new Date().toISOString()
+    });
+    await store.writeReceipt(runDir, {
+      runId: descriptor.runId,
+      promptId: "prompt-reconcile-oom",
+      acceptedAt: new Date().toISOString()
+    });
+
+    // Write terminal evidence recording CUDA OOM error before server went offline
+    await store.writeTerminalEvidence(runDir, {
+      status: "error",
+      source: "history",
+      rawDetails: {
+        "prompt-reconcile-oom": {
+          status: {
+            status_str: "error",
+            completed: true,
+            messages: [
+              [
+                "execution_error",
+                {
+                  node_id: "104",
+                  node_type: "MiniMaxH3ImageToVideo",
+                  exception_message: "CUDA out of memory. Tried to allocate 2.00 GiB",
+                  exception_type: "torch.cuda.OutOfMemoryError",
+                  traceback: ["..."]
+                }
+              ]
+            ]
+          },
+          outputs: {}
+        }
+      },
+      error: {
+        message:
+          "torch.cuda.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB (node 104)"
+      }
+    });
+
+    const reconstructed = await service.reconcileExperiment(runDir, {
+      outputRoot: ".ai-runs/minimax-h3-experiments"
+    });
+
+    expect(reconstructed).toBeDefined();
+    expect(reconstructed.execution.status).toBe("failed");
+    expect(reconstructed.execution.engineError?.message).toContain("CUDA out of memory");
+    expect(reconstructed.probe.status).toBe("not_started");
+    expect(reconstructed.lifecycle).toBe("failed");
+  });
+
+  it("reconstructs completed result with offline server when stored terminal evidence indicates success with output", async () => {
+    const store = new InMemoryStore();
+    store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));
+    store.files.set("templates/provenance.json", JSON.stringify({ version: 1, profiles: [] }));
+    store.files.set(
+      "manifest.json",
+      JSON.stringify({
+        referenceSetId: "ref-test-1",
+        references: [
+          {
+            assetPath: "/tmp/ref1.png",
+            stagedFilename: "ref1.png",
+            role: "first_frame",
+            tag: "<Picture 1>",
+            order: 0
+          }
+        ]
+      })
+    );
+
+    const offlineTransport: MinimaxH3ComfyUiTransportPort = {
+      waitForReadiness: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+      submitPrompt: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+      pollPromptHistory: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+      getQueue: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+      findPromptByWorkflowDigestOrClient: async () => null
+    };
+
+    const mockProber: MinimaxH3OutputProberPort = {
+      probeOutput: async (filePath) => ({
+        status: "succeeded",
+        outputFile: filePath,
+        outputSha256: "c".repeat(64),
+        outputSizeBytes: 5000000,
+        measuredFacts: {
+          measuredFrames: 124,
+          countedFramesSource: "nb_read_frames",
+          declaredNbFrames: 124,
+          measuredVideoDurationMs: 5167,
+          measuredContainerDurationMs: 5167,
+          width: 1344,
+          height: 768,
+          fps: 24,
+          rFrameRate: "24/1",
+          avgFrameRate: "24/1",
+          videoCodec: "h264",
+          audioCodec: "aac",
+          audioChannels: 2,
+          audioSampleRate: 44100
+        },
+        discrepancyFlags: [],
+        toolIdentity: { ffprobePath: "/usr/bin/ffprobe", version: "7.0.2-static" },
+        errors: []
+      })
+    };
+
+    const service = new MinimaxH3ExperimentService(
+      store,
+      undefined,
+      undefined,
+      offlineTransport,
+      undefined,
+      mockProber
+    );
+
+    const { runDir, descriptor } = await service.prepareExperiment({
+      route: "i2v",
+      frames: 124,
+      seed: 42,
+      prompt: "A sunset",
+      operatorLabel: "operator-01",
+      runId: "run-success-offline-test",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest.json"
+    });
+
+    await store.writeIntent(runDir, {
+      runId: descriptor.runId,
+      clientId: "client-1",
+      workflowDigest: descriptor.derivedWorkflowDigest,
+      requestFingerprint: "fp-1",
+      timestamp: new Date().toISOString()
+    });
+    await store.writeReceipt(runDir, {
+      runId: descriptor.runId,
+      promptId: "prompt-reconcile-success",
+      acceptedAt: new Date().toISOString()
+    });
+
+    // Write terminal evidence recording success before server was stopped
+    await store.writeTerminalEvidence(runDir, {
+      status: "success",
+      source: "history",
+      outputFilename: "output.mp4",
+      rawDetails: {
+        "prompt-reconcile-success": {
+          status: {
+            status_str: "success",
+            completed: true,
+            messages: []
+          },
+          outputs: {
+            "92": {
+              videos: [{ filename: "output.mp4" }]
+            }
+          }
+        }
+      }
+    });
+
+    const reconstructed = await service.reconcileExperiment(runDir, {
+      outputRoot: ".ai-runs/minimax-h3-experiments"
+    });
+
+    expect(reconstructed).toBeDefined();
+    expect(reconstructed.execution.status).toBe("completed");
+    expect(reconstructed.probe.status).toBe("succeeded");
+    expect(reconstructed.lifecycle).toBe("completed");
+    expect(reconstructed.outputConformance.status).toBe("conformant");
+  });
+
+  it("reconstructs completed result with offline server using pinned PreviewVideo images output contract", async () => {
+    const store = new InMemoryStore();
+    store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));
+    store.files.set("templates/provenance.json", JSON.stringify({ version: 1, profiles: [] }));
+    store.files.set(
+      "manifest.json",
+      JSON.stringify({
+        referenceSetId: "ref-test-pinned-1",
+        references: [
+          {
+            assetPath: "/tmp/ref1.png",
+            stagedFilename: "ref1.png",
+            role: "first_frame",
+            tag: "<Picture 1>",
+            order: 0
+          }
+        ]
+      })
+    );
+
+    const offlineTransport: MinimaxH3ComfyUiTransportPort = {
+      waitForReadiness: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+      submitPrompt: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+      pollPromptHistory: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+      getQueue: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+      findPromptByWorkflowDigestOrClient: async () => null
+    };
+
+    const mockProber: MinimaxH3OutputProberPort = {
+      probeOutput: async (filePath) => ({
+        status: "succeeded",
+        outputFile: filePath,
+        outputSha256: "d".repeat(64),
+        outputSizeBytes: 5000000,
+        measuredFacts: {
+          measuredFrames: 124,
+          countedFramesSource: "nb_read_frames",
+          declaredNbFrames: 124,
+          measuredVideoDurationMs: 5167,
+          measuredContainerDurationMs: 5167,
+          width: 1344,
+          height: 768,
+          fps: 24,
+          rFrameRate: "24/1",
+          avgFrameRate: "24/1",
+          videoCodec: "h264",
+          audioCodec: "aac",
+          audioChannels: 2,
+          audioSampleRate: 44100
+        },
+        discrepancyFlags: [],
+        toolIdentity: { ffprobePath: "/usr/bin/ffprobe", version: "7.0.2-static" },
+        errors: []
+      })
+    };
+
+    const service = new MinimaxH3ExperimentService(
+      store,
+      undefined,
+      undefined,
+      offlineTransport,
+      undefined,
+      mockProber
+    );
+
+    const { runDir, descriptor } = await service.prepareExperiment({
+      route: "i2v",
+      frames: 124,
+      seed: 42,
+      prompt: "A sunset",
+      operatorLabel: "operator-01",
+      runId: "run-pinned-images-offline-test",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest.json"
+    });
+
+    await store.writeIntent(runDir, {
+      runId: descriptor.runId,
+      clientId: "client-1",
+      workflowDigest: descriptor.derivedWorkflowDigest,
+      requestFingerprint: "fp-1",
+      timestamp: new Date().toISOString()
+    });
+    await store.writeReceipt(runDir, {
+      runId: descriptor.runId,
+      promptId: "prompt-pinned-images",
+      acceptedAt: new Date().toISOString()
+    });
+
+    // Pinned ComfyUI PreviewVideo outputs under "images" array
+    await store.writeTerminalEvidence(runDir, {
+      status: "success",
+      source: "history",
+      outputFilename: "minimax_h3_i2v_run-pinned-images-offline-test_00001_.mp4",
+      rawDetails: {
+        "prompt-pinned-images": {
+          status: {
+            status_str: "success",
+            completed: true,
+            messages: []
+          },
+          outputs: {
+            "92": {
+              images: [
+                {
+                  filename: "minimax_h3_i2v_run-pinned-images-offline-test_00001_.mp4",
+                  subfolder: "",
+                  type: "output"
+                }
+              ]
+            }
+          }
+        }
+      }
+    });
+
+    const reconstructed = await service.reconcileExperiment(runDir, {
+      outputRoot: ".ai-runs/minimax-h3-experiments"
+    });
+
+    expect(reconstructed).toBeDefined();
+    expect(reconstructed.execution.status).toBe("completed");
+    expect(reconstructed.probe.status).toBe("succeeded");
+    expect(reconstructed.lifecycle).toBe("completed");
+    expect(reconstructed.outputConformance.status).toBe("conformant");
+  });
+
+  it("retains engine execution success and adds stop recommendation when stop policy threshold is crossed", async () => {
+    const store = new InMemoryStore();
+    store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));
+    store.files.set("templates/provenance.json", JSON.stringify({ version: 1, profiles: [] }));
+    store.files.set(
+      "manifest.json",
+      JSON.stringify({
+        referenceSetId: "ref-test-1",
+        references: [
+          {
+            assetPath: "/tmp/ref1.png",
+            stagedFilename: "ref1.png",
+            role: "first_frame",
+            tag: "<Picture 1>",
+            order: 0
+          }
+        ]
+      })
+    );
+
+    const mockTransport: MinimaxH3ComfyUiTransportPort = {
+      waitForReadiness: async () => ({ ok: true }),
+      submitPrompt: async () => ({ ok: true, promptId: "prompt-stop-1" }),
+      pollPromptHistory: async () => ({
+        status: "completed",
+        outputFilename: "output.mp4",
+        rawHistory: { status: "success" }
+      }),
+      getQueue: async () => ({ running: [], pending: [] }),
+      findPromptByWorkflowDigestOrClient: async () => null
+    };
+
+    const mockProber: MinimaxH3OutputProberPort = {
+      probeOutput: async (filePath) => ({
+        status: "succeeded",
+        outputFile: filePath,
+        outputSha256: "c".repeat(64),
+        outputSizeBytes: 5000000,
+        measuredFacts: {
+          measuredFrames: 124,
+          countedFramesSource: "nb_read_frames",
+          declaredNbFrames: 124,
+          measuredVideoDurationMs: 5167,
+          measuredContainerDurationMs: 5167,
+          width: 1344,
+          height: 768,
+          fps: 24,
+          rFrameRate: "24/1",
+          avgFrameRate: "24/1",
+          videoCodec: "h264",
+          audioCodec: "aac",
+          audioChannels: 2,
+          audioSampleRate: 44100
+        },
+        discrepancyFlags: [],
+        toolIdentity: { ffprobePath: "/usr/bin/ffprobe", version: "7.0.2-static" },
+        errors: []
+      })
+    };
+
+    const service = new MinimaxH3ExperimentService(
+      store,
+      undefined,
+      undefined,
+      mockTransport,
+      undefined,
+      mockProber
+    );
+
+    const { runDir, descriptor } = await service.prepareExperiment({
+      route: "i2v",
+      frames: 124,
+      seed: 42,
+      prompt: "A sunset",
+      operatorLabel: "operator-01",
+      runId: "run-stop-threshold-test",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest.json"
+    });
+
+    await store.writeIntent(runDir, {
+      runId: descriptor.runId,
+      clientId: "client-1",
+      workflowDigest: descriptor.derivedWorkflowDigest,
+      requestFingerprint: "fp-1",
+      timestamp: new Date().toISOString()
+    });
+    await store.writeReceipt(runDir, {
+      runId: descriptor.runId,
+      promptId: "prompt-stop-1",
+      acceptedAt: new Date().toISOString()
+    });
+
+    // Append stop threshold crossed event
+    await store.appendEvent(runDir, {
+      timestamp: new Date().toISOString(),
+      event: "stop_threshold_crossed",
+      details: { metric: "peak_vram", value: 24500, limit: 24000 }
+    });
+
+    const reconstructed = await service.reconcileExperiment(runDir, {
+      outputRoot: ".ai-runs/minimax-h3-experiments"
+    });
+
+    expect(reconstructed).toBeDefined();
+    // Engine execution status must remain completed, NOT overridden to error
+    expect(reconstructed.execution.status).toBe("completed");
+    expect(reconstructed.stopRecommendation.recommended).toBe(true);
+    expect(reconstructed.stopRecommendation.reasons).toContain("stop_threshold_crossed_peak_vram");
+  });
+});
