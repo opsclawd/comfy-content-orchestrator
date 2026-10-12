@@ -1086,6 +1086,8 @@ export class MinimaxH3ExperimentService {
             serverAddress: descriptor.target.address,
             serverPort: descriptor.target.port,
             outputFilename: historyRes.outputFilename ?? outputFilename,
+            subfolder: historyRes.outputSubfolder ?? null,
+            outputType: historyRes.outputType ?? null,
             rawDetails: historyRes.rawHistory ?? { status: "completed" }
           };
           outputFilename = historyRes.outputFilename ?? outputFilename;
@@ -1347,12 +1349,21 @@ export class MinimaxH3ExperimentService {
       }
     }
 
-    // Probe output if file found and prober available
+    // Probe output if file found and prober available. ComfyUI's type:
+    // "temp" media is written to --temp-directory, not
+    // --output-directory, and a non-empty subfolder nests under either —
+    // assuming everything lives flat in outputs/ would silently probe the
+    // wrong (or a nonexistent) path for either case.
     let probeResult = baseResult.probe;
     if (outputFilename && this.prober && probeResult.status === "not_started") {
       try {
-        const fullOutputPath = `${runDir}/outputs/${outputFilename}`;
-        probeResult = await this.prober.probeOutput(fullOutputPath, 60000);
+        const outputBaseDir =
+          terminalEvidence?.outputType === "temp" ? `${runDir}/temp` : `${runDir}/outputs`;
+        const outputDir = terminalEvidence?.subfolder
+          ? `${outputBaseDir}/${terminalEvidence.subfolder}`
+          : outputBaseDir;
+        const fullOutputPath = `${outputDir}/${outputFilename}`;
+        probeResult = await this.prober.probeOutput(fullOutputPath, 60000, outputDir);
       } catch (err) {
         probeResult = {
           ...probeResult,
@@ -1840,13 +1851,22 @@ export class MinimaxH3ExperimentService {
         gpuUuid: descriptor.target.gpuUuid
       });
 
-      let actualArgv = descriptor.configuredRunner.argv;
-      let actualEnv = descriptor.configuredRunner.env;
+      // actualArgv/actualEnv start undefined (not the requested config) so
+      // that, unless readActualProcessInfo below genuinely observes the
+      // live process, the persisted record has no argv/env at all rather
+      // than silently echoing back the request as if it were an
+      // observation. actualCommandLine has no optional counterpart in the
+      // schema, so it still falls back to a best-effort reconstruction,
+      // but actualProcessInfoVerified records whether it is a real
+      // observation or that reconstruction.
+      let actualArgv: readonly string[] | undefined;
+      let actualEnv: Record<string, string> | undefined;
       let actualCommandLine = [
         descriptor.target.pythonPath,
         "main.py",
         ...descriptor.configuredRunner.argv
       ].join(" ");
+      let actualProcessInfoVerified = false;
 
       if (typeof ownedChild.readActualProcessInfo === "function") {
         try {
@@ -1860,8 +1880,13 @@ export class MinimaxH3ExperimentService {
           if (procInfo.commandLine) {
             actualCommandLine = procInfo.commandLine;
           }
+          actualProcessInfoVerified = Boolean(
+            procInfo.argv?.length && procInfo.env && Object.keys(procInfo.env).length > 0
+          );
         } catch {
-          // ignore
+          // Verification failed — actualArgv/actualEnv stay undefined and
+          // actualProcessInfoVerified stays false, rather than silently
+          // substituting the requested configuration.
         }
       }
 
@@ -1878,8 +1903,9 @@ export class MinimaxH3ExperimentService {
         gpuUuid: descriptor.target.gpuUuid,
         commandLine: actualCommandLine,
         startedAt: new Date().toISOString(),
-        argv: [...actualArgv],
-        env: { ...actualEnv },
+        ...(actualArgv !== undefined ? { argv: [...actualArgv] } : {}),
+        ...(actualEnv !== undefined ? { env: { ...actualEnv } } : {}),
+        actualProcessInfoVerified,
         ...(lock.lockToken !== undefined ? { gpuLockToken: lock.lockToken } : {}),
         launcherPid: process.pid,
         launcherStartTimeTicks: lock.processStartTimeTicks ?? null
@@ -2155,6 +2181,8 @@ export class MinimaxH3ExperimentService {
         serverAddress: descriptor.target.address,
         serverPort: descriptor.target.port,
         outputFilename: pollRes.outputFilename,
+        subfolder: pollRes.outputSubfolder ?? null,
+        outputType: pollRes.outputType ?? null,
         error: pollRes.error ? { message: pollRes.error } : null,
         rawDetails: pollRes.rawHistory ?? {
           status: pollRes.status,

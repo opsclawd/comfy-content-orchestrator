@@ -643,6 +643,13 @@ export const MinimaxH3ProcessRecordSchema = z
     effectiveMode: MinimaxH3ObservedEffectiveModeSchema.optional(),
     argv: z.array(z.string()).optional(),
     env: z.record(z.string(), z.string()).optional(),
+    // True only when argv/env/commandLine above were independently read
+    // from the live process (e.g. /proc/[pid]/cmdline and /environ).
+    // Absent or false means readActualProcessInfo failed or returned
+    // nothing, and argv/env/commandLine are the *requested* configuration
+    // echoed back — not an observation — so evidence consumers must not
+    // treat them as proof of what actually ran.
+    actualProcessInfoVerified: z.boolean().optional(),
     // Identity of the GPU lock holder (the launcher process that called
     // acquireGpuLock), distinct from `pid`/`startTimeTicks` above which
     // identify the spawned ComfyUI child. A later, separate `cleanup`

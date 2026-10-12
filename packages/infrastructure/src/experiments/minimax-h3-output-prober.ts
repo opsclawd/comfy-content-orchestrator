@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { realpath, stat } from "node:fs/promises";
+import { basename, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import type { MinimaxH3ProbeResult } from "@cco/contracts";
 import type { MinimaxH3OutputProberPort } from "@cco/application";
@@ -50,7 +50,11 @@ export class MinimaxH3OutputProber implements MinimaxH3OutputProberPort {
     this.ffprobePath = ffprobePath;
   }
 
-  async probeOutput(filePath: string, timeoutMs = 60000): Promise<MinimaxH3ProbeResult> {
+  async probeOutput(
+    filePath: string,
+    timeoutMs = 60000,
+    expectedContainingDir?: string
+  ): Promise<MinimaxH3ProbeResult> {
     const resolvedPath = resolve(filePath);
     const errors: Array<{ message: string; stage?: string }> = [];
     const discrepancyFlags: string[] = [];
@@ -59,6 +63,26 @@ export class MinimaxH3OutputProber implements MinimaxH3OutputProberPort {
     let outputSha256: string | null = null;
 
     try {
+      // Canonical containment check: resolvedPath's own real (symlink-
+      // followed) location must still be inside expectedContainingDir.
+      // Without this, a symlink planted at the expected output path (by a
+      // compromised render step, or by filesystem corruption) would be
+      // transparently followed by stat()/createReadStream() below, letting
+      // probeOutput hash and report metadata for an arbitrary file outside
+      // the run's own output directory.
+      if (expectedContainingDir !== undefined) {
+        const realResolvedPath = await realpath(resolvedPath);
+        const realContainingDir = await realpath(resolve(expectedContainingDir));
+        const withinContainingDir =
+          realResolvedPath === realContainingDir ||
+          realResolvedPath.startsWith(realContainingDir + sep);
+        if (!withinContainingDir) {
+          throw new Error(
+            `Output target "${resolvedPath}" resolves to "${realResolvedPath}", which is outside the expected output directory "${realContainingDir}" (symlink escape?).`
+          );
+        }
+      }
+
       const st = await stat(resolvedPath);
       if (!st.isFile()) {
         throw new Error(`Output target is not a regular file: ${resolvedPath}`);

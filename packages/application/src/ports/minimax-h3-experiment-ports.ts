@@ -171,6 +171,8 @@ export interface MinimaxH3ComfyUiTransportPort {
   ): Promise<{
     status: "completed" | "failed" | "timeout";
     outputFilename?: string | undefined;
+    outputSubfolder?: string | undefined;
+    outputType?: "output" | "temp" | undefined;
     rawHistory?: unknown;
     error?: string | undefined;
   }>;
@@ -182,6 +184,8 @@ export interface MinimaxH3ComfyUiTransportPort {
     promptId?: string;
     status?: "completed" | "failed" | "running" | "queued";
     outputFilename?: string;
+    outputSubfolder?: string;
+    outputType?: "output" | "temp";
   } | null>;
 }
 
@@ -199,7 +203,11 @@ export interface MinimaxH3TelemetrySamplerPort {
 }
 
 export interface MinimaxH3OutputProberPort {
-  probeOutput(filePath: string, timeoutMs: number): Promise<MinimaxH3ProbeResult>;
+  probeOutput(
+    filePath: string,
+    timeoutMs: number,
+    expectedContainingDir?: string
+  ): Promise<MinimaxH3ProbeResult>;
 }
 
 export interface PrepareMinimaxH3ExperimentOptions {

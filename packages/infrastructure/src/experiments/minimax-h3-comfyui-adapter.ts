@@ -172,6 +172,8 @@ export class MinimaxH3ComfyUiAdapter implements MinimaxH3ComfyUiTransportPort {
   ): Promise<{
     status: "completed" | "failed" | "timeout";
     outputFilename?: string;
+    outputSubfolder?: string;
+    outputType?: "output" | "temp";
     rawHistory?: unknown;
     error?: string;
   }> {
@@ -250,6 +252,8 @@ export class MinimaxH3ComfyUiAdapter implements MinimaxH3ComfyUiTransportPort {
             // Pinned ComfyUI PreviewVideo/SaveVideo serializes outputs under "images",
             // while some custom nodes serialize under "videos". We support both, preferring "images".
             let outputFilename: string | undefined;
+            let outputSubfolder: string | undefined;
+            let outputType: "output" | "temp" | undefined;
             const node92Output = entry.outputs?.["92"];
             const mediaList = Array.isArray(node92Output?.images)
               ? node92Output.images
@@ -261,7 +265,7 @@ export class MinimaxH3ComfyUiAdapter implements MinimaxH3ComfyUiTransportPort {
               const media = mediaList[0];
               const rawFilename = media?.filename;
               const subfolder = media?.subfolder ?? "";
-              const outputType = media?.type ?? "output";
+              const mediaType = media?.type ?? "output";
 
               if (
                 rawFilename &&
@@ -269,15 +273,26 @@ export class MinimaxH3ComfyUiAdapter implements MinimaxH3ComfyUiTransportPort {
                 !rawFilename.includes("/") &&
                 !rawFilename.includes("\\") &&
                 !subfolder.includes("..") &&
-                (outputType === "output" || outputType === "temp")
+                (mediaType === "output" || mediaType === "temp")
               ) {
                 outputFilename = rawFilename;
+                // subfolder/type must be carried alongside outputFilename —
+                // callers that assume every output lives flat in the
+                // top-level outputs directory will look in the wrong place
+                // (or the wrong directory entirely for type: "temp", which
+                // ComfyUI writes to --temp-directory, not
+                // --output-directory) and silently fail to find the real
+                // file.
+                outputSubfolder = subfolder;
+                outputType = mediaType;
               }
             }
 
             return {
               status: "completed",
               ...(outputFilename !== undefined ? { outputFilename } : {}),
+              ...(outputSubfolder !== undefined ? { outputSubfolder } : {}),
+              ...(outputType !== undefined ? { outputType } : {}),
               rawHistory: entry
             };
           }
@@ -315,6 +330,8 @@ export class MinimaxH3ComfyUiAdapter implements MinimaxH3ComfyUiTransportPort {
     promptId?: string;
     status?: "completed" | "failed" | "running" | "queued";
     outputFilename?: string;
+    outputSubfolder?: string;
+    outputType?: "output" | "temp";
   } | null> {
     // 1. Check history
     const res = await this.fetchJsonWithTimeout<
@@ -354,6 +371,8 @@ export class MinimaxH3ComfyUiAdapter implements MinimaxH3ComfyUiTransportPort {
           const isSuccess = entry.status?.status_str === "success";
 
           let outputFilename: string | undefined;
+          let outputSubfolder: string | undefined;
+          let outputType: "output" | "temp" | undefined;
           if (isSuccess && !isError && !isInterrupted) {
             const node92Output = entry.outputs?.["92"];
             const mediaList = Array.isArray(node92Output?.images)
@@ -365,16 +384,18 @@ export class MinimaxH3ComfyUiAdapter implements MinimaxH3ComfyUiTransportPort {
               const media = mediaList[0];
               const rawFilename = media?.filename;
               const subfolder = media?.subfolder ?? "";
-              const outputType = media?.type ?? "output";
+              const mediaType = media?.type ?? "output";
               if (
                 rawFilename &&
                 !rawFilename.includes("..") &&
                 !rawFilename.includes("/") &&
                 !rawFilename.includes("\\") &&
                 !subfolder.includes("..") &&
-                (outputType === "output" || outputType === "temp")
+                (mediaType === "output" || mediaType === "temp")
               ) {
                 outputFilename = rawFilename;
+                outputSubfolder = subfolder;
+                outputType = mediaType;
               }
             }
           }
@@ -382,7 +403,9 @@ export class MinimaxH3ComfyUiAdapter implements MinimaxH3ComfyUiTransportPort {
           return {
             promptId: pId,
             status: isError || isInterrupted ? "failed" : isSuccess ? "completed" : "running",
-            ...(outputFilename ? { outputFilename } : {})
+            ...(outputFilename ? { outputFilename } : {}),
+            ...(outputSubfolder !== undefined ? { outputSubfolder } : {}),
+            ...(outputType !== undefined ? { outputType } : {})
           };
         }
       }
