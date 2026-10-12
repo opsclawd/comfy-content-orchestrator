@@ -135,6 +135,54 @@ function parseImageDimensions(buf: Buffer): { width: number; height: number; mim
 
 export class MinimaxH3ExperimentStore implements MinimaxH3ExperimentStorePort {
   private readonly outputRoot: string;
+  // Directory fsync failing with EINVAL/ENOTSUP means this filesystem
+  // genuinely cannot provide a directory-entry durability barrier --
+  // hard-failing every write on such a filesystem would be a worse
+  // default than tolerating it, so writeDurableJson still continues.
+  // But continuing silently, with no record anywhere, means a later
+  // "why did intent.json disappear after a crash" investigation has no
+  // breadcrumb explaining that the barrier was never established in the
+  // first place. Track every occurrence so a caller (or a human) can
+  // inspect this after the fact instead of it being invisible.
+  public readonly directorySyncWarnings: Array<{
+    path: string;
+    code: string;
+    timestamp: string;
+  }> = [];
+  // A corrupt line used to be assumed to be a trailing partial write from
+  // a crash, so parsing stopped at the first one -- silently discarding
+  // every line after it even if those were perfectly valid (e.g. a
+  // single bit-flipped line in the middle of the file). Lines are now
+  // parsed independently; a bad one is skipped, not treated as "nothing
+  // after this point exists", and every skip is recorded here instead of
+  // being fully silent.
+  public readonly jsonlParseWarnings: Array<{
+    path: string;
+    lineNumber: number;
+    timestamp: string;
+  }> = [];
+
+  private parseJsonlTolerant<T>(filePath: string, raw: string): T[] {
+    const lines = raw.split("\n");
+    const entries: T[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line || line.trim().length === 0) continue;
+      try {
+        entries.push(JSON.parse(line) as T);
+      } catch {
+        this.jsonlParseWarnings.push({
+          path: filePath,
+          lineNumber: i + 1,
+          timestamp: new Date().toISOString()
+        });
+        console.warn(
+          `MinimaxH3ExperimentStore: skipping unparseable JSONL line ${i + 1} in "${filePath}" (corrupt or partial write) -- continuing to parse the rest of the file rather than discarding everything after it.`
+        );
+      }
+    }
+    return entries;
+  }
 
   constructor(outputRoot: string) {
     this.outputRoot = resolve(outputRoot);
@@ -319,6 +367,11 @@ export class MinimaxH3ExperimentStore implements MinimaxH3ExperimentStorePort {
       if (code !== "EINVAL" && code !== "ENOTSUP") {
         throw err;
       }
+      const warning = { path: filePath, code, timestamp: new Date().toISOString() };
+      this.directorySyncWarnings.push(warning);
+      console.warn(
+        `MinimaxH3ExperimentStore: directory fsync unsupported (${code}) while writing "${filePath}" -- this write has no durability barrier against a crash before the directory entry reaches disk.`
+      );
     }
   }
 
@@ -479,17 +532,7 @@ export class MinimaxH3ExperimentStore implements MinimaxH3ExperimentStorePort {
     this.assertSafePath(filePath);
     try {
       const raw = await readFile(filePath, "utf8");
-      const lines = raw.split("\n").filter((l) => l.trim().length > 0);
-      const events: MinimaxH3ExperimentEvent[] = [];
-      for (const line of lines) {
-        try {
-          events.push(JSON.parse(line));
-        } catch {
-          // Trailing line corrupted / partial write from crash: stop and return valid prefix
-          break;
-        }
-      }
-      return events;
+      return this.parseJsonlTolerant<MinimaxH3ExperimentEvent>(filePath, raw);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
         return [];
@@ -517,17 +560,7 @@ export class MinimaxH3ExperimentStore implements MinimaxH3ExperimentStorePort {
     this.assertSafePath(filePath);
     try {
       const raw = await readFile(filePath, "utf8");
-      const lines = raw.split("\n").filter((l) => l.trim().length > 0);
-      const samples: MinimaxH3TelemetrySample[] = [];
-      for (const line of lines) {
-        try {
-          samples.push(JSON.parse(line));
-        } catch {
-          // Trailing line corrupted / partial write from crash: stop and return valid prefix
-          break;
-        }
-      }
-      return samples;
+      return this.parseJsonlTolerant<MinimaxH3TelemetrySample>(filePath, raw);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
         return [];

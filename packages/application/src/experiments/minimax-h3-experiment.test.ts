@@ -983,6 +983,101 @@ describe("MiniMax-H3 Experiment Service (Reconcile Crash Recovery)", () => {
     ).toBe(true);
   });
 
+  it("surfaces an events.jsonl read failure as a collection error instead of silently treating it as 'no events happened'", async () => {
+    // A read failure (not ENOENT -- an actual I/O or parse failure) used
+    // to be swallowed into an empty array, indistinguishable from "this
+    // run never crossed a stop threshold". That could hide a genuine
+    // safety-relevant stop_threshold_crossed event behind what looks
+    // like a clean run.
+    class EventsReadFailureStore extends InMemoryStore {
+      override async readEvents(): Promise<
+        Array<{ timestamp: string; event: string; details?: unknown }>
+      > {
+        throw new Error("EIO: I/O error reading events.jsonl");
+      }
+    }
+
+    const store = new EventsReadFailureStore();
+    store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));
+    store.files.set("templates/provenance.json", mockProvenanceJson);
+    store.files.set(
+      "manifest.json",
+      JSON.stringify({
+        referenceSetId: "ref-test-1",
+        references: [
+          {
+            assetPath: "/tmp/ref1.png",
+            stagedFilename: "ref1.png",
+            role: "first_frame",
+            tag: "<Picture 1>",
+            order: 0
+          }
+        ]
+      })
+    );
+
+    const service = new MinimaxH3ExperimentService(store);
+
+    const { runDir, descriptor } = await service.prepareExperiment({
+      route: "i2v",
+      frames: 124,
+      seed: 42,
+      prompt: "A sunset",
+      operatorLabel: "operator-01",
+      runId: "run-events-read-failure",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest.json"
+    });
+
+    // Give collection something to have actually started with -- the
+    // read-failure must only surface as a collection error once
+    // collection isn't "not_started" (the schema forbids a non-empty
+    // errors array for that status, since nothing was ever collected
+    // to have hidden a failure about).
+    store.telemetry = [
+      {
+        timestamp: "2026-10-12T10:00:00.000Z",
+        phase: "before",
+        gpu: {
+          timestamp: "2026-10-12T10:00:00.000Z",
+          deviceUuid: descriptor.target.gpuUuid,
+          totalVramMb: 8192,
+          usedVramMb: 1024,
+          freeVramMb: 7168,
+          allocatableVramMb: 8192
+        },
+        host: {
+          timestamp: "2026-10-12T10:00:00.000Z",
+          totalRamMb: 16000,
+          availableRamMb: 8000,
+          usedRamMb: 8000,
+          processPid: 1111,
+          processStartTimeTicks: 5000,
+          processRssMb: 100,
+          swapTotalMb: 0,
+          swapUsedMb: 0,
+          swapInPages: 0,
+          swapOutPages: 0
+        },
+        error: null
+      }
+    ];
+
+    // reconcileExperiment must still complete (degrade, not throw)...
+    const reconstructed = await service.reconcileExperiment(runDir, {
+      outputRoot: ".ai-runs/minimax-h3-experiments"
+    });
+
+    // ...but the failure must be visible in the result, not erased.
+    expect(
+      reconstructed.collection.errors.some((e) => e.message.includes("Failed to read events.jsonl"))
+    ).toBe(true);
+  });
+
   it("reconstructs failed result with offline server when stored terminal evidence contains CUDA OOM error", async () => {
     const store = new InMemoryStore();
     store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));

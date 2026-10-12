@@ -1517,7 +1517,32 @@ export class MinimaxH3ExperimentService {
     }
 
     // Stop recommendation
-    const events = await this.store.readEvents(runDir).catch(() => []);
+    // A read failure here used to be fully swallowed into an empty
+    // array, indistinguishable from "no events were ever recorded" --
+    // which could silently hide a genuine stop_threshold_crossed event
+    // (a safety-relevant fact) behind what looks like a clean run. An
+    // empty result is the correct outcome, but a read FAILURE (as
+    // opposed to the file never existing) must be surfaced, not erased.
+    // It's only recorded as a collection error when collection actually
+    // started: the schema requires collection.errors to be empty for
+    // status "not_started" (nothing was ever collected, so there's
+    // nothing this failure could have hidden), and collectionStatus is
+    // already finalized above by this point in the function.
+    let events: Awaited<ReturnType<typeof this.store.readEvents>> = [];
+    try {
+      events = await this.store.readEvents(runDir);
+    } catch (err) {
+      if (collectionStatus !== "not_started") {
+        uniqueErrors.push({
+          timestamp: new Date().toISOString(),
+          message: `Failed to read events.jsonl during reconciliation: ${(err as Error).message}`
+        });
+      } else {
+        console.warn(
+          `MinimaxH3ExperimentService: failed to read events.jsonl during reconciliation of "${runDir}": ${(err as Error).message}`
+        );
+      }
+    }
     const stopReasons: string[] = [];
     for (const evt of events) {
       if (evt.event === "stop_threshold_crossed") {

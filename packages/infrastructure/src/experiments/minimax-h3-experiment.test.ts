@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as os from "node:os";
 import * as net from "node:net";
-import { mkdtemp, rm } from "node:fs/promises";
+import { appendFile, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { MinimaxH3ExperimentStore } from "./minimax-h3-experiment-store.js";
 import { MinimaxH3TargetPreflight } from "./minimax-h3-target-preflight.js";
@@ -61,6 +61,39 @@ describe("MinimaxH3ExperimentStore", () => {
       const events = await store.readEvents(runDir);
       expect(events).toHaveLength(1);
       expect(events[0]?.event).toBe("test_event");
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips an isolated corrupt JSONL line without discarding valid lines that come after it", async () => {
+    const tmpDir = await mkdtemp(join(os.tmpdir(), "h3-exp-jsonl-test-"));
+    try {
+      const store = new MinimaxH3ExperimentStore(tmpDir);
+      const runDir = join(tmpDir, "run-jsonl");
+
+      await store.appendEvent(runDir, {
+        timestamp: "2026-10-12T10:00:00.000Z",
+        event: "event_before",
+        details: {}
+      });
+      // Directly corrupt the file with a mid-file bad line -- this is
+      // NOT the "trailing partial write from a crash" shape the old code
+      // assumed; a line after it is still perfectly valid and must not
+      // be silently discarded along with the corrupt one.
+      await appendFile(`${runDir}/events.jsonl`, "{not valid json\n", "utf8");
+      await store.appendEvent(runDir, {
+        timestamp: "2026-10-12T10:00:02.000Z",
+        event: "event_after",
+        details: {}
+      });
+
+      const events = await store.readEvents(runDir);
+      expect(events.map((e) => e.event)).toEqual(["event_before", "event_after"]);
+
+      expect(store.jsonlParseWarnings).toHaveLength(1);
+      expect(store.jsonlParseWarnings[0]?.path).toContain("events.jsonl");
+      expect(store.jsonlParseWarnings[0]?.lineNumber).toBe(2);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
