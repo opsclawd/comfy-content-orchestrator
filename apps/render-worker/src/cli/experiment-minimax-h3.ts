@@ -646,12 +646,62 @@ export async function runExperimentCli(
                 return 1;
               }
             } else if (sidecarType === "operator_decision") {
-              const d = sidecar as { comparisonKey: string };
+              const d = sidecar as { comparisonKey: string; status: string };
               if (d.comparisonKey !== descriptor.comparisonKey) {
                 stderr(
                   `Error: Sidecar comparisonKey "${d.comparisonKey}" does not match descriptor comparisonKey "${descriptor.comparisonKey}"`
                 );
                 return 1;
+              }
+              // The sidecar schema only requires a non-empty evidenceBundle
+              // of arbitrary strings -- it has no way to verify those
+              // strings are true. An "approve_candidate" claim must be
+              // checked against the run's own persisted result using the
+              // exact same prerequisites the embedded operatorDecision
+              // field enforces (see MinimaxH3ExperimentResultSchema's
+              // superRefine), not trusted on the sidecar author's word.
+              if (d.status === "approve_candidate") {
+                const result = await store.readResult(runDir);
+                const prereqFailures: string[] = [];
+                if (!result) {
+                  prereqFailures.push("no result.json exists for this run");
+                } else {
+                  if (result.execution.status !== "completed") {
+                    prereqFailures.push(
+                      `execution status is "${result.execution.status}", not "completed"`
+                    );
+                  }
+                  if (
+                    result.observedRunner.effectiveMode.status !== "verified" ||
+                    !result.observedRunner.effectiveMode.value
+                  ) {
+                    prereqFailures.push("observedRunner.effectiveMode is not verified");
+                  }
+                  if (result.collection.status !== "complete") {
+                    prereqFailures.push(
+                      `collection status is "${result.collection.status}", not "complete"`
+                    );
+                  }
+                  if (result.outputConformance.status !== "conformant") {
+                    prereqFailures.push(
+                      `outputConformance status is "${result.outputConformance.status}", not "conformant"`
+                    );
+                  }
+                  if (
+                    result.visualReview.status !== "reviewed" ||
+                    result.visualReview.findings?.continuity !== "pass" ||
+                    result.visualReview.findings?.identityFidelity !== "pass" ||
+                    result.visualReview.findings?.visualDegradation !== "pass"
+                  ) {
+                    prereqFailures.push("visualReview is not 'reviewed' with all findings 'pass'");
+                  }
+                }
+                if (prereqFailures.length > 0) {
+                  stderr(
+                    `Error: Sidecar claims status "approve_candidate" but the run's actual result does not meet the prerequisites: ${prereqFailures.join("; ")}`
+                  );
+                  return 1;
+                }
               }
             }
           }

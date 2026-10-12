@@ -1796,7 +1796,23 @@ export class MinimaxH3ExperimentService {
         try {
           const sidecar = await this.store.readJsonFile(sidecarPath);
           const parsed = MinimaxH3VisualReviewSidecarSchema.parse(sidecar);
-          if (parsed.runId === baselineDescriptor.runId && parsed.status === "reviewed") {
+          // The sidecar schema carries outputSha256/configuredFrames/route
+          // specifically so a review can be bound to the exact bytes it
+          // was reviewing. Checking only runId/status accepts a sidecar
+          // for the right run ID that reviewed a different output
+          // entirely (e.g. from a re-run that overwrote the probed
+          // output after the sidecar was written, or a copy-pasted
+          // sidecar from another run with the same ID reused across a
+          // rerun). Bind it to what was actually probed for this
+          // baseline before trusting "reviewed".
+          if (
+            parsed.runId === baselineDescriptor.runId &&
+            parsed.status === "reviewed" &&
+            parsed.route === baselineDescriptor.route &&
+            parsed.configuredFrames === baselineDescriptor.configuredFrames &&
+            baselineResult.probe.outputSha256 !== null &&
+            parsed.outputSha256 === baselineResult.probe.outputSha256
+          ) {
             baselineVisualStatus = "reviewed";
           }
         } catch {
