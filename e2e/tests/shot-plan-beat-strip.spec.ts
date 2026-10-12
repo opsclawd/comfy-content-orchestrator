@@ -145,7 +145,9 @@ test.describe("Per-beat frame strip in the ShotPlan UI (Issue #392)", () => {
                 subjectAction: "gaze fixes on terminal"
               }
             ],
-            subjects: []
+            subjects: [],
+            environmentDescription: "A rain-slicked alleyway beneath neon signage",
+            colorPalette: ["#1a1a2e", "#8899aa"]
           }),
           candidateId
         ]
