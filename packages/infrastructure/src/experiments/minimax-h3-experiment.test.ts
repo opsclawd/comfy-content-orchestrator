@@ -246,4 +246,42 @@ describe("MinimaxH3ComfyUiAdapter", () => {
     expect(history.status).toBe("completed");
     expect(history.outputFilename).toBe("minimax_h3_i2v_run-1_00001_.mp4");
   });
+
+  it("rejects an oversized chunked response body without fully materializing it first", async () => {
+    // No Content-Length header (chunked), and a body stream that keeps
+    // yielding chunks past the 50MB limit. The fast-path Content-Length
+    // check can't catch this; only reading-with-a-running-total can.
+    const chunkSize = 1024 * 1024; // 1MB
+    const chunksToExceedLimit = 60; // 60MB > 50MB limit
+    let chunksEmitted = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (chunksEmitted >= chunksToExceedLimit) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(new Uint8Array(chunkSize).fill(97)); // 'a'
+        chunksEmitted++;
+      }
+    });
+
+    const mockFetch = async (): Promise<Response> => {
+      return new Response(body, { status: 200 });
+    };
+
+    const adapter = new MinimaxH3ComfyUiAdapter(mockFetch as unknown as typeof fetch);
+    const submit = await adapter.submitPrompt(
+      "http://127.0.0.1:8199",
+      { dummy: true },
+      "client-oversized",
+      5000
+    );
+
+    expect(submit.ok).toBe(false);
+    expect(submit.error).toContain("exceeds maximum allowed size");
+    // The stream must have been aborted well before all 60 chunks were
+    // pulled — otherwise the "without fully materializing it first" claim
+    // in the fix doesn't actually hold.
+    expect(chunksEmitted).toBeLessThan(chunksToExceedLimit);
+  });
 });

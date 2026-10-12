@@ -1,5 +1,57 @@
 import type { MinimaxH3ComfyUiTransportPort } from "@cco/application";
 
+const MAX_RESPONSE_BODY_BYTES = 50 * 1024 * 1024;
+
+// Reads a Response body incrementally, aborting as soon as the byte limit
+// is exceeded instead of fully materializing it first. res.text()
+// allocates the complete body before any size check can run — for a
+// chunked response (no Content-Length) or one that lies about its
+// Content-Length, that defeats the size guard entirely and lets an
+// oversized or adversarial response exhaust memory before it's rejected.
+async function readBodyWithLimit(res: Response, maxBytes: number): Promise<string> {
+  if (!res.body) {
+    // Some environments/responses have no readable stream (e.g. HEAD
+    // responses, or test doubles); fall back to text() with a post-hoc
+    // check — still better than nothing, and the Content-Length check
+    // upstream already covers the common case this path represents.
+    const text = await res.text();
+    if (text.length > maxBytes) {
+      throw new Error(`Response body exceeds maximum allowed size (${maxBytes} bytes)`);
+    }
+    return text;
+  }
+
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        totalBytes += value.byteLength;
+        if (totalBytes > maxBytes) {
+          throw new Error(`Response body exceeds maximum allowed size (${maxBytes} bytes)`);
+        }
+        chunks.push(value);
+      }
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      // already closed/cancelled
+    }
+  }
+  const combined = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder("utf-8").decode(combined);
+}
+
 export class MinimaxH3ComfyUiAdapter implements MinimaxH3ComfyUiTransportPort {
   private readonly fetchFn: typeof globalThis.fetch;
 
@@ -37,9 +89,10 @@ export class MinimaxH3ComfyUiAdapter implements MinimaxH3ComfyUiTransportPort {
       if (!res.ok) {
         let errorBody = "";
         try {
-          errorBody = await res.text();
+          errorBody = await readBodyWithLimit(res, MAX_RESPONSE_BODY_BYTES);
         } catch {
-          // ignore error reading body
+          // ignore error reading body (including an over-limit body —
+          // readBodyWithLimit's own abort already bounded the memory cost)
         }
         return {
           ok: false,
@@ -50,19 +103,20 @@ export class MinimaxH3ComfyUiAdapter implements MinimaxH3ComfyUiTransportPort {
             : `HTTP ${res.status}: ${res.statusText}`
         };
       }
+      // The Content-Length check is a fast-path rejection for the common
+      // case; readBodyWithLimit enforces the real bound regardless of
+      // whether Content-Length is present, absent, or understated (e.g. a
+      // chunked response).
       const contentLengthHeader = res.headers?.get?.("content-length");
       if (contentLengthHeader) {
         const len = parseInt(contentLengthHeader, 10);
-        if (!Number.isNaN(len) && len > 50 * 1024 * 1024) {
-          throw new Error(`Response body exceeds maximum allowed size (50MB): ${len} bytes`);
+        if (!Number.isNaN(len) && len > MAX_RESPONSE_BODY_BYTES) {
+          throw new Error(
+            `Response body exceeds maximum allowed size (${MAX_RESPONSE_BODY_BYTES} bytes): ${len} bytes`
+          );
         }
       }
-      const text = await res.text();
-      if (text.length > 50 * 1024 * 1024) {
-        throw new Error(
-          `Response body text exceeds maximum allowed size (50MB): ${text.length} bytes`
-        );
-      }
+      const text = await readBodyWithLimit(res, MAX_RESPONSE_BODY_BYTES);
       const data = JSON.parse(text) as T;
       return { ok: true, status: res.status, statusText: res.statusText, data };
     } catch (err) {
