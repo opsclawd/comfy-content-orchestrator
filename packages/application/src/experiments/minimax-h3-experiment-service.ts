@@ -1293,11 +1293,33 @@ export class MinimaxH3ExperimentService {
       if (sample.phase === "during") duringCoverage = true;
       if (sample.phase === "after") afterCoverage = true;
 
-      const isSampleSuccess = !sample.error && sample.gpu !== null && sample.host !== null;
+      // Host samples are only identity-verified at the source (the host
+      // telemetry adapter throws on PID-reuse mismatch, which surfaces as
+      // sample.error, not a null host). That protection depends on every
+      // caller wiring an expected start-time tick through; re-verify
+      // independently here against the run's own stored process record
+      // so a sample that slips through with the wrong process's data
+      // (e.g. identity check not configured, or telemetry read back from
+      // a differently-sourced run) can't silently count toward "success"
+      // and get folded into peak metrics for this run.
+      const hasIdentityMismatch =
+        !!sample.host &&
+        !!storedProcessRecord &&
+        (sample.host.processPid !== storedProcessRecord.pid ||
+          sample.host.processStartTimeTicks !== storedProcessRecord.startTimeTicks);
+
+      const isSampleSuccess =
+        !sample.error && sample.gpu !== null && sample.host !== null && !hasIdentityMismatch;
 
       if (!isSampleSuccess) {
         sampleFailures++;
-        if (sample.error) {
+        if (hasIdentityMismatch) {
+          errors.push({
+            timestamp: sample.timestamp,
+            message: `Host sample identity mismatch: expected pid ${storedProcessRecord?.pid}/startTimeTicks ${storedProcessRecord?.startTimeTicks}, got pid ${sample.host?.processPid}/startTimeTicks ${sample.host?.processStartTimeTicks}`,
+            phase: sample.phase
+          });
+        } else if (sample.error) {
           errors.push({ timestamp: sample.timestamp, message: sample.error, phase: sample.phase });
         } else {
           errors.push({
@@ -1318,7 +1340,7 @@ export class MinimaxH3ExperimentService {
           allocatableVram = sample.gpu.allocatableVramMb;
         }
       }
-      if (sample.host) {
+      if (sample.host && !hasIdentityMismatch) {
         if (peakHostRam === null || sample.host.usedRamMb > peakHostRam) {
           peakHostRam = sample.host.usedRamMb;
         }

@@ -834,6 +834,155 @@ describe("MiniMax-H3 Experiment Service (Reconcile Crash Recovery)", () => {
     expect(reconstructed.outputConformance.reasons).not.toContain("missing_measured_facts");
   });
 
+  it("does not count a telemetry sample with mismatched process identity toward collection success or peak metrics", async () => {
+    // A host sample whose pid/startTimeTicks don't match this run's own
+    // stored process record must not be trusted, even though the sample
+    // itself is well-formed (gpu/host both present, no error string) --
+    // the only lower-layer protection against this is the host telemetry
+    // adapter's own identity check at the moment of sampling, and that
+    // depends on every call site wiring an expected start-time tick
+    // through. This test bypasses that layer entirely (directly
+    // injecting the sample) to prove the aggregation step itself also
+    // verifies identity rather than blindly trusting sample.host !== null.
+    const store = new InMemoryStore();
+    store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));
+    store.files.set("templates/provenance.json", mockProvenanceJson);
+    store.files.set(
+      "manifest.json",
+      JSON.stringify({
+        referenceSetId: "ref-test-1",
+        references: [
+          {
+            assetPath: "/tmp/ref1.png",
+            stagedFilename: "ref1.png",
+            role: "first_frame",
+            tag: "<Picture 1>",
+            order: 0
+          }
+        ]
+      })
+    );
+
+    const offlineTransport: MinimaxH3ComfyUiTransportPort = {
+      waitForReadiness: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+      submitPrompt: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+      pollPromptHistory: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+      getQueue: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+      findPromptByWorkflowDigestOrClient: async () => null
+    };
+
+    const service = new MinimaxH3ExperimentService(
+      store,
+      undefined,
+      undefined,
+      offlineTransport,
+      undefined,
+      undefined
+    );
+
+    const { runDir, descriptor } = await service.prepareExperiment({
+      route: "i2v",
+      frames: 124,
+      seed: 42,
+      prompt: "A sunset",
+      operatorLabel: "operator-01",
+      runId: "run-identity-mismatch-test",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest.json"
+    });
+
+    await store.writeProcessRecord(runDir, {
+      pid: 1111,
+      startTimeTicks: 5000,
+      address: "127.0.0.1",
+      port: 8199,
+      gpuUuid: descriptor.target.gpuUuid,
+      commandLine: "python3 main.py",
+      startedAt: new Date().toISOString()
+    });
+
+    const goodHostSample = {
+      timestamp: "2026-10-12T10:00:00.000Z",
+      totalRamMb: 16000,
+      availableRamMb: 8000,
+      usedRamMb: 8000,
+      processPid: 1111,
+      processStartTimeTicks: 5000,
+      processRssMb: 100,
+      swapTotalMb: 0,
+      swapUsedMb: 0,
+      swapInPages: 0,
+      swapOutPages: 0
+    };
+    const mismatchedHostSample = {
+      ...goodHostSample,
+      timestamp: "2026-10-12T10:00:05.000Z",
+      processPid: 9999, // a different process entirely
+      processStartTimeTicks: 1234,
+      processRssMb: 999999, // deliberately large so a contamination bug would be obvious
+      swapUsedMb: 999999
+    };
+    const gpuSample = {
+      timestamp: "2026-10-12T10:00:00.000Z",
+      deviceUuid: descriptor.target.gpuUuid,
+      totalVramMb: 8192,
+      usedVramMb: 1024,
+      freeVramMb: 7168,
+      allocatableVramMb: 8192
+    };
+
+    store.telemetry = [
+      {
+        timestamp: "2026-10-12T10:00:00.000Z",
+        phase: "before",
+        gpu: gpuSample,
+        host: goodHostSample,
+        error: null
+      },
+      {
+        timestamp: "2026-10-12T10:00:05.000Z",
+        phase: "during",
+        gpu: gpuSample,
+        host: mismatchedHostSample,
+        error: null
+      },
+      {
+        timestamp: "2026-10-12T10:00:10.000Z",
+        phase: "after",
+        gpu: gpuSample,
+        host: goodHostSample,
+        error: null
+      }
+    ];
+
+    const reconstructed = await service.reconcileExperiment(runDir, {
+      outputRoot: ".ai-runs/minimax-h3-experiments"
+    });
+
+    // The mismatched sample must not have been trusted for peak RAM/swap
+    // -- if it had, these would read 999999.
+    expect(reconstructed.collection.metrics.hostPeakRamUsedMb).toBe(8000);
+    expect(reconstructed.collection.metrics.processPeakRssMb).toBe(100);
+    expect(reconstructed.collection.metrics.hostSwapUsedMb).toBe(0);
+    // It must count as a failure, with the mismatch surfaced in errors.
+    expect(reconstructed.collection.sampleCount.failed).toBe(1);
+    expect(
+      reconstructed.collection.errors.some((e) => e.message.includes("identity mismatch"))
+    ).toBe(true);
+  });
+
   it("reconstructs failed result with offline server when stored terminal evidence contains CUDA OOM error", async () => {
     const store = new InMemoryStore();
     store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));
