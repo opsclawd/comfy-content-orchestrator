@@ -1319,6 +1319,362 @@ describe("experiment:minimax-h3 CLI", () => {
     expect(code).toBe(0);
   });
 
+  it("import-sidecar imports an operator_decision sidecar into result.json's operatorDecision field", async () => {
+    // import-sidecar used to only understand visual review sidecars --
+    // an operator_decision had no supported way to reach result.json at
+    // all except a hand-edit that bypassed every check. This mirrors
+    // the same approve_candidate prerequisite verification validate-
+    // sidecar already enforces.
+    const { deps, stdout, store } = createMockDeps();
+
+    await runExperimentCli(
+      [
+        "prepare",
+        "--route",
+        "i2v",
+        "--frames",
+        "124",
+        "--seed",
+        "42",
+        "--inputs",
+        "inputs.json",
+        "--prompt",
+        "A test prompt",
+        "--target-host",
+        "worker-01",
+        "--gpu-uuid",
+        "GPU-12345678-1234-1234-1234-123456789abc",
+        "--comfyui-dir",
+        "/opt/comfyui",
+        "--python",
+        "/usr/bin/python3",
+        "--run-id",
+        "run-import-decision-test",
+        "--output-root",
+        ".ai-runs/minimax-h3-experiments"
+      ],
+      deps
+    );
+    const prepareOutput = JSON.parse(stdout[0]!);
+    const runDir = prepareOutput.runDir;
+    const comparisonKey = store.descriptor!.comparisonKey;
+    stdout.length = 0;
+
+    store.result = {
+      schemaVersion: 1,
+      runId: "run-import-decision-test",
+      descriptorDigest: "0".repeat(64),
+      configDigest: "0".repeat(64),
+      comparisonKey,
+      lifecycle: "completed",
+      observedRunner: {
+        argv: [],
+        env: {},
+        pid: 1234,
+        processStartTimeTicks: 100,
+        targetGpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        effectiveMode: {
+          status: "verified",
+          value: "dynamic_vram",
+          unknownReason: null,
+          evidence: null
+        }
+      },
+      timestamps: {
+        preparedAt: new Date().toISOString(),
+        startedAt: new Date().toISOString(),
+        submittedAt: new Date().toISOString(),
+        terminatedAt: new Date().toISOString()
+      },
+      execution: {
+        status: "completed",
+        promptId: "prompt-1",
+        terminalEvidence: { source: "history", status: "success" },
+        engineError: null,
+        latencyMs: 10000
+      },
+      collection: {
+        status: "complete",
+        phaseCoverage: { before: true, during: true, after: true },
+        sampleCount: { attempted: 1, succeeded: 1, failed: 0 },
+        metrics: {
+          gpuPeakUsedVramMb: 12000,
+          gpuAllocatableVramMb: 24000,
+          hostPeakRamUsedMb: 16000,
+          processPeakRssMb: 8000,
+          hostSwapUsedMb: 0,
+          hostSwapDeltaMb: 0
+        },
+        errors: []
+      },
+      probe: {
+        status: "succeeded",
+        outputFile: `${runDir}/outputs/video.mp4`,
+        outputSha256: "a".repeat(64),
+        outputSizeBytes: 5000000,
+        measuredFacts: {
+          measuredFrames: 124,
+          countedFramesSource: "nb_read_frames",
+          declaredNbFrames: 124,
+          measuredVideoDurationMs: 5167,
+          measuredContainerDurationMs: 5167,
+          width: 1344,
+          height: 768,
+          fps: 24,
+          rFrameRate: "24/1",
+          avgFrameRate: "24/1",
+          videoCodec: "h264",
+          audioCodec: null,
+          audioChannels: null,
+          audioSampleRate: null
+        },
+        discrepancyFlags: [],
+        toolIdentity: null,
+        errors: []
+      },
+      outputConformance: {
+        status: "conformant",
+        checks: {
+          frameCountMatches: true,
+          geometryMatches: true,
+          fpsMatches: true,
+          timingWithinTolerance: true
+        },
+        reasons: []
+      },
+      visualReview: {
+        status: "reviewed",
+        outputSha256: "a".repeat(64),
+        reviewedAt: new Date().toISOString(),
+        reviewer: "tester-1",
+        findings: { continuity: "pass", identityFidelity: "pass", visualDegradation: "pass" },
+        notes: "Flawless",
+        unavailableReason: null
+      },
+      operatorDecision: {
+        status: "pending",
+        operator: null,
+        decidedAt: null,
+        comparisonKey: null,
+        reason: null
+      },
+      stopRecommendation: { recommended: false, reasons: [] }
+    };
+
+    store.files.set(
+      "approval.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        runId: "run-import-decision-test",
+        route: "i2v",
+        configuredFrames: 124,
+        comparisonKey,
+        status: "approve_candidate",
+        operator: "operator-1",
+        decidedAt: new Date().toISOString(),
+        reason: "Looks great, ship it",
+        evidenceBundle: { foo: "bar" }
+      })
+    );
+
+    const code = await runExperimentCli(
+      [
+        "import-sidecar",
+        "--run-dir",
+        runDir,
+        "--sidecar",
+        "approval.json",
+        "--output-root",
+        ".ai-runs/minimax-h3-experiments"
+      ],
+      deps
+    );
+
+    expect(code).toBe(0);
+    const parsedOut = JSON.parse(stdout[0]!);
+    expect(parsedOut.status).toBe("imported");
+    expect(parsedOut.operatorDecisionStatus).toBe("approve_candidate");
+    expect(store.result!.operatorDecision.status).toBe("approve_candidate");
+    expect(store.result!.operatorDecision.operator).toBe("operator-1");
+  });
+
+  it("import-sidecar rejects an operator_decision sidecar claiming approve_candidate when the run's result doesn't meet the prerequisites", async () => {
+    const { deps, stdout, stderr, store } = createMockDeps();
+
+    await runExperimentCli(
+      [
+        "prepare",
+        "--route",
+        "i2v",
+        "--frames",
+        "124",
+        "--seed",
+        "42",
+        "--inputs",
+        "inputs.json",
+        "--prompt",
+        "A test prompt",
+        "--target-host",
+        "worker-01",
+        "--gpu-uuid",
+        "GPU-12345678-1234-1234-1234-123456789abc",
+        "--comfyui-dir",
+        "/opt/comfyui",
+        "--python",
+        "/usr/bin/python3",
+        "--run-id",
+        "run-import-decision-reject-test",
+        "--output-root",
+        ".ai-runs/minimax-h3-experiments"
+      ],
+      deps
+    );
+    const prepareOutput = JSON.parse(stdout[0]!);
+    const runDir = prepareOutput.runDir;
+    const comparisonKey = store.descriptor!.comparisonKey;
+    stdout.length = 0;
+
+    store.result = {
+      schemaVersion: 1,
+      runId: "run-import-decision-reject-test",
+      descriptorDigest: "0".repeat(64),
+      configDigest: "0".repeat(64),
+      comparisonKey,
+      lifecycle: "running",
+      observedRunner: {
+        argv: [],
+        env: {},
+        pid: 1234,
+        processStartTimeTicks: 100,
+        targetGpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        effectiveMode: {
+          status: "unknown",
+          value: null,
+          unknownReason: "not yet started",
+          evidence: null
+        }
+      },
+      timestamps: {
+        preparedAt: new Date().toISOString(),
+        startedAt: null,
+        submittedAt: null,
+        terminatedAt: new Date().toISOString()
+      },
+      execution: {
+        status: "not_started",
+        promptId: null,
+        terminalEvidence: null,
+        engineError: null,
+        latencyMs: null
+      },
+      collection: {
+        status: "not_started",
+        phaseCoverage: { before: false, during: false, after: false },
+        sampleCount: { attempted: 0, succeeded: 0, failed: 0 },
+        metrics: {
+          gpuPeakUsedVramMb: null,
+          gpuAllocatableVramMb: null,
+          hostPeakRamUsedMb: null,
+          processPeakRssMb: null,
+          hostSwapUsedMb: null,
+          hostSwapDeltaMb: null
+        },
+        errors: []
+      },
+      probe: {
+        status: "not_started",
+        outputFile: null,
+        outputSha256: null,
+        outputSizeBytes: null,
+        measuredFacts: {
+          measuredFrames: null,
+          countedFramesSource: null,
+          declaredNbFrames: null,
+          measuredVideoDurationMs: null,
+          measuredContainerDurationMs: null,
+          width: null,
+          height: null,
+          fps: null,
+          rFrameRate: null,
+          avgFrameRate: null,
+          videoCodec: null,
+          audioCodec: null,
+          audioChannels: null,
+          audioSampleRate: null
+        },
+        discrepancyFlags: [],
+        toolIdentity: null,
+        errors: []
+      },
+      outputConformance: {
+        status: "unknown",
+        checks: {
+          frameCountMatches: null,
+          geometryMatches: null,
+          fpsMatches: null,
+          timingWithinTolerance: null
+        },
+        reasons: ["probe_not_succeeded"]
+      },
+      visualReview: {
+        status: "pending",
+        outputSha256: null,
+        reviewedAt: null,
+        reviewer: null,
+        findings: null,
+        notes: null,
+        unavailableReason: null
+      },
+      operatorDecision: {
+        status: "pending",
+        operator: null,
+        decidedAt: null,
+        comparisonKey: null,
+        reason: null
+      },
+      stopRecommendation: { recommended: false, reasons: [] }
+    };
+
+    store.files.set(
+      "approval.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        runId: "run-import-decision-reject-test",
+        route: "i2v",
+        configuredFrames: 124,
+        comparisonKey,
+        status: "approve_candidate",
+        operator: "operator-1",
+        decidedAt: new Date().toISOString(),
+        reason: "Looks great, ship it",
+        evidenceBundle: { foo: "bar" }
+      })
+    );
+
+    const code = await runExperimentCli(
+      [
+        "import-sidecar",
+        "--run-dir",
+        runDir,
+        "--sidecar",
+        "approval.json",
+        "--output-root",
+        ".ai-runs/minimax-h3-experiments"
+      ],
+      deps
+    );
+
+    expect(code).toBe(1);
+    expect(
+      stderr.some(
+        (line) =>
+          line.includes("approve_candidate") && line.includes('execution status is "not_started"')
+      )
+    ).toBe(true);
+    // The result must not have been mutated by the rejected import.
+    expect(store.result!.operatorDecision.status).toBe("pending");
+  });
+
   it("cleanup preserves outputs by default and deletes them when --remove-outputs is passed", async () => {
     const { deps, store } = createMockDeps();
 

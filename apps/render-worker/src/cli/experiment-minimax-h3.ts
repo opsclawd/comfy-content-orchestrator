@@ -742,13 +742,15 @@ export async function runExperimentCli(
           return 1;
         }
 
-        let sidecar;
-        try {
-          sidecar = MinimaxH3VisualReviewSidecarSchema.parse(sidecarRaw);
-        } catch (err) {
-          stderr(`Error: Invalid visual review sidecar schema: ${(err as Error).message}`);
-          return 1;
-        }
+        // Visual review was the only importable sidecar type; an
+        // operator_decision sidecar had no way to reach result.json at
+        // all except by hand-editing it, bypassing every check below.
+        // Detect which schema the file actually matches (same approach
+        // validate-sidecar already uses) and import either.
+        const visualCheck = MinimaxH3VisualReviewSidecarSchema.safeParse(sidecarRaw);
+        const decisionCheck = visualCheck.success
+          ? null
+          : MinimaxH3OperatorDecisionSidecarSchema.safeParse(sidecarRaw);
 
         let descriptor: MinimaxH3ExperimentDescriptor;
         try {
@@ -758,52 +760,139 @@ export async function runExperimentCli(
           return 1;
         }
 
-        if (sidecar.runId !== descriptor.runId) {
-          stderr(
-            `Error: Sidecar runId "${sidecar.runId}" does not match run descriptor "${descriptor.runId}"`
-          );
-          return 1;
-        }
-
         const result = await store.readResult(runDir);
         if (!result) {
           stderr(`Error: No result.json found in run directory "${runDir}" to import sidecar into`);
           return 1;
         }
 
-        if (result.probe.outputSha256 && sidecar.outputSha256 !== result.probe.outputSha256) {
-          stderr(
-            `Error: Sidecar outputSha256 "${sidecar.outputSha256}" does not match result probe outputSha256 "${result.probe.outputSha256}"`
+        if (visualCheck.success) {
+          const sidecar = visualCheck.data;
+          if (sidecar.runId !== descriptor.runId) {
+            stderr(
+              `Error: Sidecar runId "${sidecar.runId}" does not match run descriptor "${descriptor.runId}"`
+            );
+            return 1;
+          }
+          if (result.probe.outputSha256 && sidecar.outputSha256 !== result.probe.outputSha256) {
+            stderr(
+              `Error: Sidecar outputSha256 "${sidecar.outputSha256}" does not match result probe outputSha256 "${result.probe.outputSha256}"`
+            );
+            return 1;
+          }
+
+          const updatedResult = {
+            ...result,
+            visualReview: {
+              status: sidecar.status,
+              outputSha256: sidecar.outputSha256,
+              reviewedAt: sidecar.reviewedAt,
+              reviewer: sidecar.reviewer,
+              findings: sidecar.findings,
+              notes: sidecar.notes,
+              unavailableReason: sidecar.unavailableReason
+            }
+          };
+
+          await store.writeResult(runDir, updatedResult);
+          stdout(
+            JSON.stringify(
+              { status: "imported", runId: descriptor.runId, visualReviewStatus: sidecar.status },
+              null,
+              2
+            )
           );
-          return 1;
+          return 0;
         }
 
-        const updatedResult = {
-          ...result,
-          visualReview: {
-            status: sidecar.status,
-            outputSha256: sidecar.outputSha256,
-            reviewedAt: sidecar.reviewedAt,
-            reviewer: sidecar.reviewer,
-            findings: sidecar.findings,
-            notes: sidecar.notes,
-            unavailableReason: sidecar.unavailableReason
+        if (decisionCheck?.success) {
+          const sidecar = decisionCheck.data;
+          if (sidecar.runId !== descriptor.runId) {
+            stderr(
+              `Error: Sidecar runId "${sidecar.runId}" does not match run descriptor "${descriptor.runId}"`
+            );
+            return 1;
           }
-        };
+          if (sidecar.comparisonKey !== descriptor.comparisonKey) {
+            stderr(
+              `Error: Sidecar comparisonKey "${sidecar.comparisonKey}" does not match descriptor comparisonKey "${descriptor.comparisonKey}"`
+            );
+            return 1;
+          }
+          // Mirror validate-sidecar's approve_candidate check exactly:
+          // a non-empty evidenceBundle of arbitrary strings is not proof
+          // of anything on its own -- the run's own persisted result
+          // must actually satisfy the prerequisites before this import
+          // can grant approve_candidate.
+          if (sidecar.status === "approve_candidate") {
+            const prereqFailures: string[] = [];
+            if (result.execution.status !== "completed") {
+              prereqFailures.push(
+                `execution status is "${result.execution.status}", not "completed"`
+              );
+            }
+            if (
+              result.observedRunner.effectiveMode.status !== "verified" ||
+              !result.observedRunner.effectiveMode.value
+            ) {
+              prereqFailures.push("observedRunner.effectiveMode is not verified");
+            }
+            if (result.collection.status !== "complete") {
+              prereqFailures.push(
+                `collection status is "${result.collection.status}", not "complete"`
+              );
+            }
+            if (result.outputConformance.status !== "conformant") {
+              prereqFailures.push(
+                `outputConformance status is "${result.outputConformance.status}", not "conformant"`
+              );
+            }
+            if (
+              result.visualReview.status !== "reviewed" ||
+              result.visualReview.findings?.continuity !== "pass" ||
+              result.visualReview.findings?.identityFidelity !== "pass" ||
+              result.visualReview.findings?.visualDegradation !== "pass"
+            ) {
+              prereqFailures.push("visualReview is not 'reviewed' with all findings 'pass'");
+            }
+            if (prereqFailures.length > 0) {
+              stderr(
+                `Error: Sidecar claims status "approve_candidate" but the run's actual result does not meet the prerequisites: ${prereqFailures.join("; ")}`
+              );
+              return 1;
+            }
+          }
 
-        await store.writeResult(runDir, updatedResult);
-        stdout(
-          JSON.stringify(
-            {
-              status: "imported",
-              runId: descriptor.runId,
-              visualReviewStatus: sidecar.status
-            },
-            null,
-            2
-          )
+          const updatedResult = {
+            ...result,
+            operatorDecision: {
+              status: sidecar.status,
+              operator: sidecar.operator,
+              decidedAt: sidecar.decidedAt,
+              comparisonKey: sidecar.comparisonKey,
+              reason: sidecar.reason
+            }
+          };
+
+          await store.writeResult(runDir, updatedResult);
+          stdout(
+            JSON.stringify(
+              {
+                status: "imported",
+                runId: descriptor.runId,
+                operatorDecisionStatus: sidecar.status
+              },
+              null,
+              2
+            )
+          );
+          return 0;
+        }
+
+        stderr(
+          `Error: File does not match MinimaxH3VisualReviewSidecarSchema or MinimaxH3OperatorDecisionSidecarSchema:\nVisual review errors: ${visualCheck.error.message}\nOperator decision errors: ${decisionCheck?.error.message}`
         );
-        return 0;
+        return 1;
       }
 
       case "cleanup": {
