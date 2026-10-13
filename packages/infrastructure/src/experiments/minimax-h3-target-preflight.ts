@@ -8,16 +8,28 @@ import { resolve } from "node:path";
 import { promisify } from "node:util";
 import {
   type MinimaxH3TargetSpecification,
+  type MinimaxH3RequiredRuntimeManifest,
   PINNED_COMFYUI_CORE_REVISION,
   PINNED_COMFYUI_SOURCE_HASHES
 } from "@cco/contracts";
 import type { MinimaxH3TargetPreflightPort } from "@cco/application";
+import {
+  type ExperimentRuntimeRegistry,
+  defaultExperimentRuntimeRegistry,
+  type ExperimentRuntimeVerificationResult
+} from "./minimax-h3-runtime-registry.js";
 
 const execFileAsync = promisify(execFile);
 
 export { PINNED_COMFYUI_CORE_REVISION };
 
 export class MinimaxH3TargetPreflight implements MinimaxH3TargetPreflightPort {
+  private runtimeRegistry: ExperimentRuntimeRegistry;
+
+  constructor(options: { runtimeRegistry?: ExperimentRuntimeRegistry } = {}) {
+    this.runtimeRegistry = options.runtimeRegistry ?? defaultExperimentRuntimeRegistry;
+  }
+
   // Deletes lockPath only if it still holds expectedToken AND the path
   // still resolves to the exact inode we read that token from --
   // plain read-token-then-unlink-by-path has a window between the
@@ -741,5 +753,14 @@ export class MinimaxH3TargetPreflight implements MinimaxH3TargetPreflightPort {
       pythonVersion,
       ffmpegVersion
     };
+  }
+
+  async verifyExperimentRuntime(options: {
+    comfyUiDir: string;
+    pythonPath: string;
+    requiredRuntime: MinimaxH3RequiredRuntimeManifest;
+    requiredRuntimeDigest: string;
+  }): Promise<ExperimentRuntimeVerificationResult> {
+    return this.runtimeRegistry.verify(options);
   }
 }

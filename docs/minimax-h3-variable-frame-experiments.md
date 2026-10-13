@@ -581,3 +581,146 @@ sidecar's own evidence trail.
   "measuredFrames": null
 }
 ```
+
+---
+
+## 9. V2 Experiment Protocol, Phase Accounting & Comparator Guide
+
+Issue #441 extends the harness to schema version 2, introducing deterministic monotonic phase accounting, single-variable factor tracking, and an automated pairwise comparator.
+
+### 9.1 V2 CLI Flags & Invocations
+
+In addition to standard flags, `prepare` supports optimization variants:
+- `--step-override <steps>`: Sets scheduler step count (e.g. 15 or 10 instead of canonical 20).
+- `--checkpoint-override <ref2va|fl2va>`: Selects diffusion model checkpoint for provenance audits.
+- `--variant-purpose <purpose>`: Declares experiment purpose (`performance`, `prompt_conditioning`, or `controlled_multifactor`).
+- `--variant-reason <text>`: Documents the engineering hypothesis.
+
+#### Example: Preparing a Step-Count Reduction Variant
+```bash
+pnpm --filter @cco/render-worker experiment:minimax-h3 prepare \
+  --route i2v \
+  --frames 124 \
+  --seed 42 \
+  --step-override 15 \
+  --variant-purpose performance \
+  --variant-reason "Evaluate latency reduction from 15-step scheduling" \
+  --inputs inputs.json \
+  --prompt "A wide cinematic panning shot..." \
+  --target-host render-worker-01 \
+  --gpu-uuid GPU-12345678-1234-1234-1234-123456789abc \
+  --comfyui-dir /opt/comfyui \
+  --python /opt/comfyui/venv/bin/python3 \
+  --run-id run-i2v-124f-step15 \
+  --output-root .ai-runs/minimax-h3-experiments
+```
+
+### 9.2 Monotonic Child Clock Phase Accounting
+
+Execution phase durations are tracked through `minimax-h3-collector.py` hooked into ComfyUI's server, model management, conditioning, scheduler, and decode operations. Events are streamed into `phase-events.jsonl` in the run directory.
+
+#### Phase Hierarchy (14 Tracked Phases)
+1. `environment_startup`: Server initialization and socket binding.
+2. `model_loading`: Checkpoint file IO, weight reconstruction, and device allocation.
+3. `lazy_gpu_residency_transfer`: On-demand model parameter movement between host RAM and VRAM.
+4. `conditioning`: Aggregate text and reference visual conditioning token generation.
+5. `text_encode`: Text encoder (Qwen3-VL) forward pass.
+6. `vae_reference_encode`: Video VAE reference image encoding.
+7. `sampling`: Outer diffusion loop covering all scheduler steps.
+8. `sampling_step`: Individual sampler iteration $s \in [0, \text{steps}-1]$.
+9. `attention_forward`: DiT transformer block forward execution.
+10. `vae_decode_video`: Video VAE temporal and spatial latent decoding.
+11. `vae_decode_audio`: Audio VAE latent decoding.
+12. `mux_and_save`: MP4 container packaging and disk flush (`SaveVideo`).
+13. `teardown`: Child process shutdown and memory cleanup.
+14. `whole_attempt_wall`: Full child lifecycle duration.
+
+#### Reducer Principles (Anti-Fabrication Rules)
+- **Disjoint Interval Union:** Overlapping spans within the same phase are reduced using mathematical interval unions. Sub-phases are never summed blindly into parent phases to prevent double-counting.
+- **Explicit Unknowns:** If an instrumentation event is unmeasured, omitted, or unsupported by the runtime environment, its status in `result.json` is set to `"unknown"` with `durationMs: null`. Durations are never fabricated or estimated by subtracting other phases from total wall-clock time.
+- **Sampling Step Metrics:** Each sampling step records start time, end time, duration, and GPU memory residency, enabling step-level latency regression analysis.
+
+### 9.3 Pairwise Comparator Subcommand (`compare`)
+
+The `compare` subcommand admits candidate runs against a controlled baseline:
+```bash
+pnpm --filter @cco/render-worker experiment:minimax-h3 compare \
+  --baseline .ai-runs/minimax-h3-experiments/run-i2v-124f-baseline \
+  --candidate .ai-runs/minimax-h3-experiments/run-i2v-124f-step15
+```
+
+#### Admission Gates
+- **Invariant Control Fencing:** The comparator validates declared factor differences and invariant controls. Descriptors alone cannot produce timing comparisons; results and evidence must also be eligible.
+- **Purpose Rules:** Performance comparisons keep prompt and conditioning fixed. Prompt/conditioning changes require explicit purpose and typed changes. Multi-factor comparisons are reported as confounded.
+- **Runtime Compatibility:** V2 preflight requires a registered runtime verifier and exact manifest digest. An absent verifier or unregistered runtime blocks execution.
+
+---
+
+## 10. Controlled Experiment Hypotheses & Comparison Matrix
+
+To resolve the compute scaling bottlenecks observed in #423, optimization experiments are organized across four decoupled hypotheses:
+
+| Hypothesis ID | Category | Baseline Value | Experimental Variant | Target Evaluation Metric |
+| :--- | :--- | :--- | :--- | :--- |
+| **H-ATTN-01** | Attention Kernel | PyTorch SDPA (`default`) | SageAttention / FlashAttention-2 | `samplingWallTimeMs`, Attention GPU kernel time |
+| **H-STEP-01** | Sampler Steps | 20 steps (`res_multistep`) | 15 steps (`res_multistep`) | Latency speedup, Visual Review continuity |
+| **H-STEP-02** | Sampler Steps | 20 steps (`res_multistep`) | 10 steps (`res_multistep`) | Latency speedup, Visual Review degradation |
+| **H-MEM-01** | Memory Offload | Dynamic VRAM (`default`) | Static LowVRAM (`--lowvram`) | Host swap delta, PCIe transfer latency |
+| **H-PROV-01** | Checkpoint Audit | Ref2VA (`ref2va_pruned`) | FL2VA (`fl2va_pruned`) | First-frame temporal adherence, Visual Review drift |
+
+### Blank Comparison Matrix Template (Operator Sidecar)
+
+Operators may copy this blank worksheet for their own measurements. It is not a completed report or approval record:
+
+```markdown
+# MiniMax-H3 Optimization Experiment Matrix
+
+## Metadata
+- **Date:** YYYY-MM-DD
+- **Target Host:** (e.g. RTX 4090 24GB, Driver 560.35, CUDA 12.4)
+- **Baseline Run ID:** run-i2v-124f-baseline-01
+- **Candidate Run ID:** run-i2v-124f-step15-01
+- **Hypothesis Tested:** H-STEP-01 (20 steps -> 15 steps)
+- **Admission Verdict:** [Admitted | Rejected]
+
+## Controlled Invariants Verification
+- [ ] Route identical (i2v / ref2v)
+- [ ] Frame count identical (124 / 192 / 243 / 362)
+- [ ] Resolution identical (1344x768)
+- [ ] Seed identical (42)
+- [ ] Input asset identical (SHA-256 match)
+- [ ] Invariant projection key match confirmed
+
+## Measured Phase Timings (Milliseconds)
+| Phase | Baseline (20 steps) | Candidate (15 steps) | Delta (%) | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| Environment Startup | | | | [measured/unknown] |
+| Model Loading | | | | [measured/unknown] |
+| Text / Ref Conditioning | | | | [measured/unknown] |
+| Sampler Execution (Total) | | | | [measured/unknown] |
+| - Step Mean Duration | | | | [measured/unknown] |
+| Video VAE Decode | | | | [measured/unknown] |
+| Video Mux & Save | | | | [measured/unknown] |
+| Whole Attempt Wall Time | | | | [measured/unknown] |
+| GPU Kernel Time (profiler evidence only) | | | | [measured/unknown] |
+
+## Resource Envelope
+| Metric | Baseline | Candidate | Delta | Threshold Limit |
+| :--- | :--- | :--- | :--- | :--- |
+| Peak VRAM (MiB) | | | | [operator stop-policy limit] |
+| Host RAM Peak (MiB) | | | | [operator stop-policy limit] |
+| Host Swap Delta (MiB) | | | | [operator stop-policy limit] |
+
+## Output Conformance & Visual Review
+- Output Probed Frames: _____ (Expected: _____)
+- Probed Duration: _____ ms
+- Continuity Finding: [Pass | Defect | Fail]
+- Identity Fidelity Finding: [Pass | Defect | Fail]
+- Visual Degradation Finding: [Pass | Defect | Fail]
+
+## Operator Decision
+- [ ] Operator outcome: continue review
+- [ ] Operator outcome: reject variant
+- [ ] Operator outcome: inconclusive
+- **Operator Notes:** __________________________________________________
+```

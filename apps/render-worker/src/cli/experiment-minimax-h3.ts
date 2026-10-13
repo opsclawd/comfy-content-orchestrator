@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import {
   findRepositoryRoot,
   MinimaxH3ExperimentService,
+  compareMinimaxH3Experiments,
   type MinimaxH3ComfyUiTransportPort,
   type MinimaxH3ExperimentStorePort,
   type MinimaxH3OutputProberPort,
@@ -25,7 +26,7 @@ import {
   MinimaxH3OperatorDecisionSidecarSchema,
   MinimaxH3VisualReviewSidecarSchema,
   type MinimaxH3ExperimentCandidateFrames,
-  type MinimaxH3ExperimentDescriptor,
+  type MinimaxH3AnyExperimentDescriptor,
   type MinimaxH3ProcessRecord
 } from "@cco/contracts";
 import {
@@ -63,6 +64,7 @@ Subcommands:
   validate       Dry-run offline validation of descriptor, graph hashes, and environment rules
   run            Execute isolated experiment on owned local ComfyUI child with telemetry
   reconcile      Reconstruct and persist result.json from durable records and server state
+  compare        Compare completed baseline and candidate experiment runs under controlled protocol
   cleanup        Release GPU lock and clean up temporary files without mutating results
   import-sidecar Import visual review sidecar into an existing run result.json
 
@@ -94,6 +96,9 @@ Options for 'prepare':
   --probe-timeout-ms <ms>        ffprobe output verification timeout (default: 60000, max: 300000)
   --settlement-timeout-ms <ms>   Post-completion settlement wait (default: 10000, max: 120000)
   --shutdown-timeout-ms <ms>     Child process graceful shutdown timeout (default: 15000, max: 120000)
+  --step-override <steps>        Override scheduler step count (e.g. 10..30)
+  --checkpoint-override <name>   Override diffusion checkpoint ('ref2va' or 'fl2va')
+  --variant-purpose <purpose>    Variant purpose ('performance' | 'prompt_conditioning' | 'controlled_multifactor')
 
 Options for 'validate':
   --run-dir <path>               Prepared run directory path (required)
@@ -109,6 +114,11 @@ Options for 'run':
 
 Options for 'reconcile':
   --run-dir <path>               Experiment run directory to reconcile (required)
+  --output-root <dir>            Experiment output root (default: ${DEFAULT_OUTPUT_ROOT})
+
+Options for 'compare':
+  --baseline <path>              Completed baseline run directory (required)
+  --candidate <path>             Completed candidate run directory (or --variant) (required)
   --output-root <dir>            Experiment output root (default: ${DEFAULT_OUTPUT_ROOT})
 
 Options for 'cleanup':
@@ -235,11 +245,22 @@ const ALLOWED_FLAGS_BY_SUBCOMMAND: Record<string, Set<string>> = {
     "total-render-timeout-ms",
     "probe-timeout-ms",
     "settlement-timeout-ms",
-    "shutdown-timeout-ms"
+    "shutdown-timeout-ms",
+    "step-override",
+    "checkpoint-override",
+    "variant-purpose"
   ]),
   validate: new Set(["run-dir", "output-root", "templates-dir"]),
   run: new Set(["run-dir", "output-root", "stop-policy", "baseline-run-dir", "templates-dir"]),
   reconcile: new Set(["run-dir", "output-root"]),
+  compare: new Set([
+    "baseline",
+    "baseline-run-dir",
+    "candidate",
+    "variant",
+    "variant-run-dir",
+    "output-root"
+  ]),
   cleanup: new Set(["run-dir", "output-root", "keep-outputs", "remove-outputs", "delete-outputs"]),
   "import-sidecar": new Set(["run-dir", "output-root", "sidecar", "file"]),
   "validate-sidecar": new Set(["file", "sidecar", "run-dir", "output-root"])
@@ -274,9 +295,16 @@ const VALUE_FLAGS = new Set([
   "probe-timeout-ms",
   "settlement-timeout-ms",
   "shutdown-timeout-ms",
+  "step-override",
+  "checkpoint-override",
+  "variant-purpose",
   "run-dir",
   "stop-policy",
   "baseline-run-dir",
+  "baseline",
+  "candidate",
+  "variant",
+  "variant-run-dir",
   "file",
   "sidecar"
 ]);
@@ -460,6 +488,43 @@ export async function runExperimentCli(
           }
         }
 
+        let stepOverride: number | undefined;
+        if (flags["step-override"] !== undefined) {
+          const parsed = parseStrictInt(flags["step-override"]);
+          if (parsed === null || parsed <= 0) {
+            stderr("Error: --step-override must be a positive integer.");
+            return 1;
+          }
+          stepOverride = parsed;
+        }
+
+        let checkpointOverride: "ref2va" | "fl2va" | undefined;
+        if (flags["checkpoint-override"] !== undefined) {
+          const cp = flags["checkpoint-override"].toLowerCase();
+          if (cp !== "ref2va" && cp !== "fl2va") {
+            stderr("Error: --checkpoint-override must be 'ref2va' or 'fl2va'.");
+            return 1;
+          }
+          checkpointOverride = cp as "ref2va" | "fl2va";
+        }
+
+        let variantPurpose:
+          "performance" | "prompt_conditioning" | "controlled_multifactor" | undefined;
+        if (flags["variant-purpose"] !== undefined) {
+          const p = flags["variant-purpose"];
+          if (
+            p !== "performance" &&
+            p !== "prompt_conditioning" &&
+            p !== "controlled_multifactor"
+          ) {
+            stderr(
+              "Error: --variant-purpose must be 'performance', 'prompt_conditioning', or 'controlled_multifactor'."
+            );
+            return 1;
+          }
+          variantPurpose = p;
+        }
+
         const resolvedTemplatesDir = resolveCliPath(flags["templates-dir"]);
         const prepared = await service.prepareExperiment({
           route,
@@ -482,7 +547,10 @@ export async function runExperimentCli(
           inputManifestPath: inputs,
           ...(resolvedTemplatesDir !== undefined ? { templatesDir: resolvedTemplatesDir } : {}),
           ...(typeof requestedDurationMs === "number" ? { requestedDurationMs } : {}),
-          ...(Object.keys(timeoutsOverride).length > 0 ? { timeouts: timeoutsOverride } : {})
+          ...(Object.keys(timeoutsOverride).length > 0 ? { timeouts: timeoutsOverride } : {}),
+          ...(stepOverride !== undefined ? { stepOverride } : {}),
+          ...(checkpointOverride !== undefined ? { checkpointOverride } : {}),
+          ...(variantPurpose !== undefined ? { variantPurpose } : {})
         });
 
         stdout(
@@ -591,6 +659,43 @@ export async function runExperimentCli(
         const result = await service.reconcileExperiment(runDir, { outputRoot });
         stdout(JSON.stringify(result, null, 2));
         return 0;
+      }
+
+      case "compare": {
+        const rawBaseline = flags["baseline"] ?? flags["baseline-run-dir"];
+        const rawCandidate = flags["candidate"] ?? flags["variant"] ?? flags["variant-run-dir"];
+        const baselineDir = resolveCliPath(rawBaseline);
+        const candidateDir = resolveCliPath(rawCandidate);
+        if (!baselineDir || !candidateDir) {
+          stderr(
+            "Error: 'compare' requires both a baseline directory (--baseline or --baseline-run-dir) and a candidate directory (--candidate, --variant, or --variant-run-dir)."
+          );
+          return 1;
+        }
+
+        const baselineResult = await store.readResult(baselineDir);
+        if (!baselineResult) {
+          stderr(`Error: Could not read result.json from baseline run directory: ${baselineDir}`);
+          return 1;
+        }
+
+        const candidateResult = await store.readResult(candidateDir);
+        if (!candidateResult) {
+          stderr(`Error: Could not read result.json from candidate run directory: ${candidateDir}`);
+          return 1;
+        }
+
+        const baselineDescriptor = await store.readDescriptor(baselineDir);
+        const candidateDescriptor = await store.readDescriptor(candidateDir);
+
+        const report = compareMinimaxH3Experiments({
+          baselineDescriptor,
+          baselineResult,
+          variantDescriptor: candidateDescriptor,
+          variantResult: candidateResult
+        });
+        stdout(JSON.stringify(report, null, 2));
+        return report.structuralAdmission.eligible ? 0 : 1;
       }
 
       case "validate-sidecar": {
@@ -806,7 +911,7 @@ export async function runExperimentCli(
           ? null
           : MinimaxH3OperatorDecisionSidecarSchema.safeParse(sidecarRaw);
 
-        let descriptor: MinimaxH3ExperimentDescriptor;
+        let descriptor: MinimaxH3AnyExperimentDescriptor;
         try {
           descriptor = await store.readDescriptor(runDir);
         } catch (err) {
@@ -976,7 +1081,7 @@ export async function runExperimentCli(
           return 1;
         }
 
-        let descriptor: MinimaxH3ExperimentDescriptor;
+        let descriptor: MinimaxH3AnyExperimentDescriptor;
         try {
           descriptor = await store.readDescriptor(runDir);
         } catch (err) {
