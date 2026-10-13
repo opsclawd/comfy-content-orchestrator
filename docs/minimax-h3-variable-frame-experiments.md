@@ -1,0 +1,583 @@
+# Variable-Frame MiniMax-H3 Feasibility Harness & Operator Runbook
+
+## 1. Purpose and Non-Production Boundary
+
+Issue #422 supplies GPU-independent engineering and an isolated, deterministic feasibility harness for testing continuous MiniMax-H3 video clips longer than the certified 124-frame baseline. This runbook guides human or operator agents during live execution on dedicated physical hardware (Issue #423).
+
+### Strict Boundary Rules
+- **Non-Production Isolation:** This harness evaluates candidate continuous frame counts (`124`, `192`, `243`, `362` at 24 fps). It does **not** modify `MINIMAX_H3_SUPPORTED_FRAME_RANGE`, default render profiles (`MINIMAX_H3_720P_5S_I2V_V1`, `MINIMAX_H3_720P_5S_REF2V_V1`), worker queue dispatch, or Review Hub approval gating.
+- **No In-Place Template Mutation:** Canonical workflow templates (`templates/minimax_h3_720p_i2v_124f_api.json` and `templates/minimax_h3_720p_ref2v_124f_api.json`) are strictly immutable. The harness deep-clones templates into isolated run directories (`.ai-runs/minimax-h3-experiments/<run-id>/`) with derived workflow digests.
+- **Evidence Paths Never Agent-Authored:** Per `AGENTS.md`, paths under `certification/`, `baseline/`, and `config/render-profiles/` hold physical hardware measurements. Automated agents must never author synthetic measurements or fabricate hardware certifications. Physical execution and GO/NO-GO determination belong strictly to the operator on live hardware.
+
+### Grounding in System Architecture
+- **ADR-0007 Alignment:**
+  - Route `ref2v` (`reference_directed`): Uses `MiniMaxH3ReferenceToVideo` (node 105), wiring up to 9 Autogrow reference slots (`ref_images.ref_image_0` through `ref_images.ref_image_8`) directly from `LoadImage` nodes, pruning unreferenced slots and nodes. Conditioning prompt references use 1-based tags `<Picture 1>` through `<Picture N>`.
+  - Route `i2v` (`frame_anchored`): Uses `MiniMaxH3ImageToVideo` (node 104), taking a single start-frame image from `LoadImage` (node 20).
+- **Target Geometry & Cadence:** Standard production resolution `1344x768`, 24 fps (`MINIMAX_H3_FPS`).
+- **Diffusion Model Weights:** Pinned `minimax_h3_ref2va_pruned_int8_convrot.safetensors` for both routes, matching `.minimax-h3-version`.
+
+### Native-Conditioning Wiring & Source Verification
+
+`MiniMaxH3ReferenceToVideo` natively accepts up to 9 reference images directly
+(no external ControlNet-style preprocessing node is required or used; see
+`docs/minimax-h3-ref2v-live-verification.md` for the live confirmation that
+the node actually consumes and is conditioned by the connected image). The
+harness wires and re-verifies this deterministically, per run:
+
+1. **Deterministic slot-to-node binding:** `prepare` assigns reference `i`
+   (0-indexed, matching `--inputs` manifest order) to `LoadImage` node
+   `201 + i` (nodes `201`–`209` for up to 9 slots), and that node's output
+   feeds `ref_images.ref_image_<i>` on node 105. Unused slot nodes
+   (`i >= N` for `N` supplied references) are deleted from the derived
+   graph entirely, not merely left unwired — a slot that doesn't exist in
+   the manifest cannot be accidentally populated by a stale or shared
+   workflow fragment. (`i2v` is simpler: its single start frame always
+   binds to `LoadImage` node `20`.)
+2. **Source re-verification before submission:** the SHA-256 of each
+   staged input file is checked against the hash recorded in
+   `descriptor.references[].sha256` twice — once during `validate` (offline)
+   and again immediately before `run` submits the prompt — specifically so
+   a file swapped on disk after `prepare` staged it (intentionally or by a
+   concurrent process) is caught as `"Staged input asset tampered before
+   POST"` rather than silently conditioning the node on different content
+   than what was reviewed/approved at `prepare` time.
+
+---
+
+## 2. Pinned Environment & Runner Regimes
+
+All experiments require the exact pinned revisions verified across repositories:
+
+| Component | Pinned Version / Commit | Verification Script |
+| --- | --- | --- |
+| ComfyUI Core | `55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc` | `./scripts/check-comfyui-version.sh` |
+| MiniMax-H3 Models | Revision `7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1` | `./scripts/check-minimax-h3-version.sh` |
+| FFmpeg | `7.0.2-static` | `./scripts/check-ffmpeg-version.sh` |
+
+### Pinned Model Files (loaded by both routes)
+
+Both `i2v` and `ref2v` templates load four model files, not just the
+diffusion weights. `prepare`/`validate`/`run` verify all four against the
+hashes in `pinFileIdentities.modelDigests`/`resolvedModelPaths` before any
+submission — a render host missing the text encoder or either VAE fails
+preflight the same way a missing diffusion checkpoint does, but an operator
+provisioning a new host by hand needs to know these paths ahead of time:
+
+| Role | Loader Node | Expected Path (under `--comfyui-dir/models/`) |
+| --- | --- | --- |
+| Diffusion (UNet) | `UNETLoader` | `diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors` |
+| Text Encoder (CLIP) | `CLIPLoader` | `text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` |
+| Video VAE | `VAELoader` | `vae/minimax_h3_video_vae_int8_convrot.safetensors` |
+| Audio VAE | `VAELoader` | `vae/minimax_h3_audio_vae_fp32.safetensors` |
+
+### CLI Memory Regimes & Pinned Semantics
+In ComfyUI commit `55b6a9b1`, `cli_args.py` keeps Dynamic VRAM offloading active by default unless explicitly disabled. Passing `--lowvram` alone does **not** disable dynamic VRAM.
+- **Baseline Regime (`dynamicvram-offload-v1`):** Default execution mode. No memory flags passed to ComfyUI. Leverages ComfyUI's dynamic VRAM memory allocator.
+- **Comparator Variant (`static-lowvram-v1`):** Distinct fallback memory regime. Requires passing both `--disable-dynamic-vram` and `--lowvram`, accompanied by an explicit `--variant-reason` explaining the comparison hypothesis.
+
+---
+
+## 3. Frame Grid & Candidate Set
+
+Candidate frame counts are constrained by the MiniMax-H3 latent temporal compression ratio:
+$$\text{frames} = 17k + 5 \quad \text{where } k \in \mathbb{N}$$
+
+The harness strictly admits only four candidate counts. All off-grid or out-of-scope counts fail closed at validation time:
+
+| Frame Count | Grid Step $k$ | Nominal Duration (s) | Configured Duration (ms) | Experiment Role |
+| --- | --- | --- | --- | --- |
+| **124** | 7 | $31/6 \approx 5.167$s | 5,167 ms | Certified Control Baseline |
+| **192** | 11 | $8.000$s | 8,000 ms | Candidate Tier 1 |
+| **243** | 14 | $81/8 = 10.125$s | 10,125 ms | Candidate Tier 2 |
+| **362** | 21 | $181/12 \approx 15.083$s | 15,083 ms | Candidate Tier 3 |
+
+---
+
+## 4. Render Host Preflight Verification
+
+Before initiating any live runs on the physical host (e.g. RTX 4090), verify environment readiness:
+
+### 1. Verify Pinned Artifacts
+```bash
+./scripts/check-comfyui-version.sh --comfy-dir /path/to/ComfyUI
+./scripts/check-minimax-h3-version.sh --models-dir /path/to/ComfyUI/models
+./scripts/check-ffmpeg-version.sh
+```
+
+### 2. Verify Target Isolation
+- **Host Identity:** Confirm execution on the target host matching `--target-host`.
+- **GPU Exclusivity:** Ensure no other process holds `/tmp/cco-gpu-locks/gpu-<uuid>.lock`. The harness enforces exclusive atomic acquisition by GPU UUID, recording PID and start-time ticks.
+- **Port Inode Ownership:** Default port is `8199` on loopback `127.0.0.1`. The runner validates `/proc/net/tcp` inode matches against `/proc/${pid}/fd` to ensure no socket hijacking. Wildcard addresses (`0.0.0.0`) are strictly rejected.
+
+---
+
+## 5. Experiment Lifecycle & CLI Commands
+
+The harness CLI is accessed via `pnpm experiment:minimax-h3 <subcommand>`.
+
+### Subcommand 1: `prepare`
+Generates isolated run descriptors, wires the workflow, validates prompt picture tokens, verifies input asset dimensions, and stages input assets.
+
+#### I2V Preparation Example:
+```bash
+pnpm experiment:minimax-h3 prepare \
+  --route i2v \
+  --frames 124 \
+  --seed 42 \
+  --inputs ./test-assets/i2v-manifest.json \
+  --prompt "Cinematic camera pan across misty mountains at dawn" \
+  --target-host "$(hostname)" \
+  --gpu-uuid "GPU-00000000-0000-0000-0000-000000000000" \
+  --comfyui-dir /path/to/ComfyUI \
+  --python /path/to/ComfyUI/venv/bin/python3 \
+  --run-id "run-i2v-124f-baseline" \
+  --operator-label "operator-alex" \
+  --output-root .ai-runs/minimax-h3-experiments
+```
+
+#### Ref2V Preparation Example (with Autogrow Reference Slots):
+```bash
+pnpm experiment:minimax-h3 prepare \
+  --route ref2v \
+  --frames 192 \
+  --seed 42 \
+  --inputs ./test-assets/ref2v-manifest.json \
+  --prompt "A wide shot of <Picture 1> wearing <Picture 2> walking through <Picture 3>" \
+  --target-host "$(hostname)" \
+  --gpu-uuid "GPU-00000000-0000-0000-0000-000000000000" \
+  --comfyui-dir /path/to/ComfyUI \
+  --python /path/to/ComfyUI/venv/bin/python3 \
+  --run-id "run-ref2v-192f-candidate" \
+  --operator-label "operator-alex" \
+  --output-root .ai-runs/minimax-h3-experiments
+```
+
+#### Comparator Variant Example — Complete Baseline Chain:
+A comparator variant (`static-lowvram-v1`) is a **different runner regime**
+from the default baseline regime (`dynamicvram-offload-v1`) — escalating a
+comparator candidate past 124 frames requires its own 124-frame comparator
+baseline via `--baseline-run-dir`, not the default regime's baseline. The
+`run` command's baseline-escalation check verifies the stop-policy digest
+matches too, so the same `--stop-policy` file must be reused across the
+whole chain for a given variant:
+
+```bash
+# 1. Prepare and run the comparator variant's OWN 124-frame baseline first.
+pnpm experiment:minimax-h3 prepare \
+  --route i2v \
+  --frames 124 \
+  --seed 42 \
+  --inputs ./test-assets/i2v-manifest.json \
+  --prompt "Cinematic camera pan across misty mountains at dawn" \
+  --runner-variant static-lowvram-v1 \
+  --variant-reason "Evaluate memory fragmentation under static lowvram regime" \
+  --target-host "$(hostname)" \
+  --gpu-uuid "GPU-00000000-0000-0000-0000-000000000000" \
+  --comfyui-dir /path/to/ComfyUI \
+  --python /path/to/ComfyUI/venv/bin/python3 \
+  --run-id "run-i2v-124f-static-baseline" \
+  --operator-label "operator-alex" \
+  --output-root .ai-runs/minimax-h3-experiments
+
+pnpm experiment:minimax-h3 run \
+  --run-dir .ai-runs/minimax-h3-experiments/run-i2v-124f-static-baseline \
+  --stop-policy ./operator-stop-policy.json
+
+# 2. Only after the static-lowvram baseline above is completed/conformant/
+#    reviewed, escalate the SAME variant to 192 frames, pointing
+#    --baseline-run-dir at the static-lowvram baseline (not a
+#    dynamicvram-offload-v1 baseline -- they are not interchangeable).
+pnpm experiment:minimax-h3 prepare \
+  --route i2v \
+  --frames 192 \
+  --seed 42 \
+  --inputs ./test-assets/i2v-manifest.json \
+  --prompt "Cinematic camera pan across misty mountains at dawn" \
+  --runner-variant static-lowvram-v1 \
+  --variant-reason "Evaluate memory fragmentation under static lowvram regime" \
+  --target-host "$(hostname)" \
+  --gpu-uuid "GPU-00000000-0000-0000-0000-000000000000" \
+  --comfyui-dir /path/to/ComfyUI \
+  --python /path/to/ComfyUI/venv/bin/python3 \
+  --run-id "run-i2v-192f-static" \
+  --operator-label "operator-alex" \
+  --output-root .ai-runs/minimax-h3-experiments
+
+pnpm experiment:minimax-h3 run \
+  --run-dir .ai-runs/minimax-h3-experiments/run-i2v-192f-static \
+  --baseline-run-dir .ai-runs/minimax-h3-experiments/run-i2v-124f-static-baseline \
+  --stop-policy ./operator-stop-policy.json
+```
+
+#### Candidate Tier 2 (243 frames) and Tier 3 (362 frames) Examples:
+`--baseline-run-dir` must always point at a **124-frame** run for the exact
+same route, variant, geometry, seed, prompt, and references — `run` rejects
+a baseline with any other frame count outright. This holds for every tier:
+243 and 362 both reference the same 124-frame baseline directly, not the
+192-frame or 243-frame run that preceded them:
+
+```bash
+# Tier 2: 243 frames (ref2v, dynamicvram-offload-v1 default regime)
+pnpm experiment:minimax-h3 prepare \
+  --route ref2v \
+  --frames 243 \
+  --seed 42 \
+  --inputs ./test-assets/ref2v-manifest.json \
+  --prompt "A wide shot of <Picture 1> wearing <Picture 2> walking through <Picture 3>" \
+  --target-host "$(hostname)" \
+  --gpu-uuid "GPU-00000000-0000-0000-0000-000000000000" \
+  --comfyui-dir /path/to/ComfyUI \
+  --python /path/to/ComfyUI/venv/bin/python3 \
+  --run-id "run-ref2v-243f-candidate" \
+  --operator-label "operator-alex" \
+  --output-root .ai-runs/minimax-h3-experiments
+
+pnpm experiment:minimax-h3 run \
+  --run-dir .ai-runs/minimax-h3-experiments/run-ref2v-243f-candidate \
+  --baseline-run-dir .ai-runs/minimax-h3-experiments/run-ref2v-124f-baseline \
+  --stop-policy ./operator-stop-policy.json
+
+# Tier 3: 362 frames (i2v, dynamicvram-offload-v1 default regime)
+pnpm experiment:minimax-h3 prepare \
+  --route i2v \
+  --frames 362 \
+  --seed 42 \
+  --inputs ./test-assets/i2v-manifest.json \
+  --prompt "Cinematic camera pan across misty mountains at dawn" \
+  --target-host "$(hostname)" \
+  --gpu-uuid "GPU-00000000-0000-0000-0000-000000000000" \
+  --comfyui-dir /path/to/ComfyUI \
+  --python /path/to/ComfyUI/venv/bin/python3 \
+  --run-id "run-i2v-362f-candidate" \
+  --operator-label "operator-alex" \
+  --output-root .ai-runs/minimax-h3-experiments
+
+pnpm experiment:minimax-h3 run \
+  --run-dir .ai-runs/minimax-h3-experiments/run-i2v-362f-candidate \
+  --baseline-run-dir .ai-runs/minimax-h3-experiments/run-i2v-124f-baseline \
+  --stop-policy ./operator-stop-policy.json
+```
+
+#### Lowered-Resolution Variant Example:
+`--width`/`--height` default to `1344x768` and otherwise must be one of the
+three named lower resolutions the schema admits (`1280x720`, `1024x576`,
+`896x512`); any other pair fails validation. These are independent of the
+frame-count escalation grid — a 124-frame baseline at a lowered resolution
+still needs its own baseline before escalating that same resolution past
+124 frames, since `run`'s baseline-escalation check also requires the
+baseline's geometry to match the candidate's exactly:
+
+```bash
+pnpm experiment:minimax-h3 prepare \
+  --route i2v \
+  --frames 124 \
+  --width 1280 \
+  --height 720 \
+  --seed 42 \
+  --inputs ./test-assets/i2v-manifest.json \
+  --prompt "Cinematic camera pan across misty mountains at dawn" \
+  --target-host "$(hostname)" \
+  --gpu-uuid "GPU-00000000-0000-0000-0000-000000000000" \
+  --comfyui-dir /path/to/ComfyUI \
+  --python /path/to/ComfyUI/venv/bin/python3 \
+  --run-id "run-i2v-124f-720p-baseline" \
+  --operator-label "operator-alex" \
+  --output-root .ai-runs/minimax-h3-experiments
+```
+
+### Subcommand 2: `validate`
+Performs an offline, zero-GPU dry run check. Reconstructs the expected graph from authoritative base templates and verifies it against `config.json`, validates staged asset hashes, and verifies schema contracts.
+```bash
+pnpm experiment:minimax-h3 validate \
+  --run-dir .ai-runs/minimax-h3-experiments/run-i2v-124f-baseline
+```
+
+### Subcommand 3: `run`
+Launches the live experiment on the host. Spawns ComfyUI with exact array arguments, polls readiness, streams telemetry (`telemetry.jsonl`), submits the verified in-memory graph, polls history, probes output video with ffprobe, evaluates conformance, and writes durable `terminal-evidence.json`, `process.json`, and `result.json`.
+For candidate runs (`frames > 124`), `--baseline-run-dir` pointing to a completed 124-frame baseline run for the matching route is strictly required:
+```bash
+pnpm experiment:minimax-h3 run \
+  --run-dir .ai-runs/minimax-h3-experiments/run-ref2v-192f-candidate \
+  --baseline-run-dir .ai-runs/minimax-h3-experiments/run-ref2v-124f-baseline \
+  --stop-policy ./operator-stop-policy.json
+```
+
+### Subcommand 4: `reconcile`
+Idempotent crash-recovery utility. If a run terminated prematurely (e.g. process crash, OOM, power loss), `reconcile` reads persisted `intent.json`, `receipt.json`, `terminal-evidence.json`, `process.json`, and outputs to reconstruct and durably persist `result.json`—even if `result.json` never existed.
+```bash
+pnpm experiment:minimax-h3 reconcile \
+  --run-dir .ai-runs/minimax-h3-experiments/run-ref2v-192f-candidate
+```
+
+### Subcommand 5: `cleanup`
+Safely stops any surviving child process, releases the GPU lock, and removes staging/temporary files (`temp`, `inputs`, `user`) while preserving control records (`descriptor.json`, `result.json`, `*.jsonl`). Generated output video files in `outputs/` are **preserved by default** (`--keep-outputs` is default behavior). To delete output videos along with temporary files, pass `--remove-outputs`.
+```bash
+# Default: cleans up temporary files and retains output videos
+pnpm experiment:minimax-h3 cleanup \
+  --run-dir .ai-runs/minimax-h3-experiments/run-ref2v-192f-candidate
+
+# Remove outputs as well:
+pnpm experiment:minimax-h3 cleanup \
+  --run-dir .ai-runs/minimax-h3-experiments/run-ref2v-192f-candidate \
+  --remove-outputs
+```
+
+### Subcommand 6: `import-sidecar`
+Imports a reviewed visual review sidecar (`visual-review.json`) **or** an
+operator decision sidecar (`decision.json`) into an existing `result.json`
+(the CLI auto-detects which schema the file matches). For a visual review,
+verifies the sidecar's `runId` and `outputSha256` match the probed facts of
+the run — this enables completed baseline runs to satisfy the visual
+review prerequisite required for candidate escalation. For an operator
+decision claiming `approve_candidate`, independently re-verifies the run's
+actual `result.json` against every approval prerequisite (execution
+completed, effective mode verified and matching the requested policy,
+collection complete, output conformant, visual review reviewed with all
+findings passing) rather than trusting the sidecar's own claims.
+```bash
+pnpm experiment:minimax-h3 import-sidecar \
+  --run-dir .ai-runs/minimax-h3-experiments/run-i2v-124f-baseline \
+  --sidecar ./visual-review.json
+
+pnpm experiment:minimax-h3 import-sidecar \
+  --run-dir .ai-runs/minimax-h3-experiments/run-i2v-124f-baseline \
+  --sidecar ./decision.json
+```
+
+### Input Manifest Schema & Examples
+
+The `--inputs` flag expects a JSON manifest specifying input assets and reference slot metadata.
+
+#### Sample `i2v-manifest.json` (Route `i2v`):
+```json
+{
+  "referenceSetId": "ref-set-i2v-sunset",
+  "references": [
+    {
+      "assetPath": "/path/to/sunset_start_frame.png",
+      "stagedFilename": "start_frame.png",
+      "role": "first_frame",
+      "tag": "<Picture 1>",
+      "order": 0
+    }
+  ]
+}
+```
+
+#### Sample `ref2v-manifest.json` (Route `ref2v`):
+```json
+{
+  "referenceSetId": "ref-set-character-action",
+  "references": [
+    {
+      "assetPath": "/path/to/character.png",
+      "stagedFilename": "character.png",
+      "role": "character_identity",
+      "tag": "<Picture 1>",
+      "order": 0
+    },
+    {
+      "assetPath": "/path/to/costume.png",
+      "stagedFilename": "costume.png",
+      "role": "costume",
+      "tag": "<Picture 2>",
+      "order": 1
+    },
+    {
+      "assetPath": "/path/to/environment.png",
+      "stagedFilename": "environment.png",
+      "role": "background",
+      "tag": "<Picture 3>",
+      "order": 2
+    }
+  ]
+}
+```
+
+---
+
+## 6. Staged Escalation Methodology
+
+Testing must proceed strictly in escalating frame counts:
+$$\text{Baseline 124f (Control)} \longrightarrow \text{192f} \longrightarrow \text{243f} \longrightarrow \text{362f}$$
+
+1. **Baseline Control Run (124 frames):**
+   Execute 124 frames first to confirm absolute parity with certified production baseline. Peak VRAM, host swap, and execution latency establish the control reference.
+2. **Escalate to 192 frames:**
+   If baseline passes with zero stop triggers, proceed to 192 frames, providing `--baseline-run-dir`.
+3. **Escalate to 243 frames:**
+   If 192 frames passes conformance and visual inspection, proceed to 243 frames.
+4. **Escalate to 362 frames:**
+   Final candidate tier. Highest memory pressure and thermal envelope.
+
+### Stopping Criteria (Fail-Closed Gates)
+Do **NOT** advance to subsequent frame counts if any of the following occur:
+- **CUDA Out-of-Memory (OOM):** ComfyUI process exits with CUDA out of memory or allocator failure.
+- **Host Swap Delta Spike:** Host swap usage increases by $> 1024$ MiB during the run.
+- **Process Crash / Non-Zero Exit:** ComfyUI crashes, terminates via signal, or drops socket connection.
+- **Output Conformance Failure:**
+  - `measuredFrames !== configuredFrames`
+  - Container / stream duration discrepancy $> 0.2$s
+  - Geometry or fps mismatch
+- **Visual Collapse:**
+  - Complete static black/gray output
+  - Severe spatial tiling / checkerboard artifacts
+  - Temporal blur disintegration / identity melting beyond acceptable continuity
+
+---
+
+## 7. Crash Recovery & Troubleshooting Runbook
+
+### Scenario A: ComfyUI Crashes with CUDA OOM
+1. Execute `reconcile`:
+   ```bash
+   pnpm experiment:minimax-h3 reconcile --run-dir .ai-runs/minimax-h3-experiments/<run-id>
+   ```
+2. Inspect `result.json`: Verify `execution.status: "failed"` and terminal evidence details.
+3. Halt escalation for this route/regime.
+
+### Scenario B: Process Terminated by SIGINT / Operator Abort
+1. Run `reconcile`:
+   ```bash
+   pnpm experiment:minimax-h3 reconcile --run-dir .ai-runs/minimax-h3-experiments/<run-id>
+   ```
+2. Inspect result and run cleanup if needed:
+   ```bash
+   pnpm experiment:minimax-h3 cleanup --run-dir .ai-runs/minimax-h3-experiments/<run-id> --keep-outputs
+   ```
+
+### Scenario C: Port / Socket Collision
+If preflight reports port `8199` is occupied:
+1. Verify child process state via `cleanup`:
+   ```bash
+   pnpm experiment:minimax-h3 cleanup --run-dir .ai-runs/minimax-h3-experiments/<run-id>
+   ```
+2. If another process is using the socket, specify an alternate port during `prepare`: `--port 8200`.
+
+---
+
+## 8. Blank Observation Templates & Evidence Schemas
+
+Per `AGENTS.md`, benchmark and certification records must NEVER be populated with fake data by automated tools. The schemas below describe operator-owned records. Populate policy thresholds from the operator's operating limits before `run`; there is no executable default policy. The policy example is instructional and becomes valid only after numeric limits replace its placeholders.
+
+### 8.1 Stop Policy Template (`stop-policy.json`)
+```json
+{
+  "policyId": "<operator-defined-policy-id>",
+  "maxPeakVramMb": "<operator-defined positive integer>",
+  "maxHostRamMb": "<operator-defined positive integer>",
+  "maxSwapUsedMb": "<operator-defined positive integer>",
+  "maxSwapDeltaMb": "<operator-defined positive integer>",
+  "maxExecutionDurationMs": "<operator-defined positive integer>",
+  "requireCompleteTelemetry": true,
+  "requireConformantProbe": true,
+  "visualStopConditions": [
+    "severe_flicker_or_tearing",
+    "subject_identity_collapse",
+    "extreme_motion_blur_or_distortion"
+  ]
+}
+```
+
+### 8.2 Visual Review Template (`visual-review.json`)
+The schema requires `outputSha256` to always be a well-formed 64-hex-char
+string (it is not nullable, even while `status` is `"pending"`), so the
+all-zero value below is a sentinel placeholder, not a real hash.
+**Before review**, replace it with this run's actual `probe.outputSha256`
+from `result.json` — `import-sidecar` independently re-verifies this field
+against the run's probed facts and rejects a mismatch, so leaving the
+placeholder in place fails loudly rather than silently importing a review
+bound to the wrong output.
+```json
+{
+  "schemaVersion": 1,
+  "runId": "exp-i2v-124-001",
+  "route": "i2v",
+  "configuredFrames": 124,
+  "outputSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "status": "pending",
+  "reviewer": null,
+  "reviewedAt": null,
+  "findings": null,
+  "notes": null,
+  "unavailableReason": null
+}
+```
+
+### 8.3 Operator Decision Sidecar (`decision.json`)
+`evidenceBundle` is a free-form string map (the schema only requires it be
+non-empty when approving) — `resultDigest` and `observedMode` below are
+illustrative keys an operator may choose to record, not schema-mandated
+fields. **`observedMode` must be copied from this run's actual
+`result.json` (`observedRunner.effectiveMode.value`) after it completes**,
+not left as the literal example value shown here: the CLI's
+`approve_candidate` prerequisite check verifies `effectiveMode.value`
+against the descriptor's requested policy directly from `result.json`
+regardless of what this sidecar's `evidenceBundle` claims, but recording
+the wrong observed mode here would still misrepresent the run in the
+sidecar's own evidence trail.
+```json
+{
+  "schemaVersion": 1,
+  "runId": "exp-i2v-124-001",
+  "route": "i2v",
+  "configuredFrames": 124,
+  "comparisonKey": "0000000000000000000000000000000000000000000000000000000000000000",
+  "status": "pending",
+  "operator": null,
+  "decidedAt": null,
+  "reason": null,
+  "evidenceBundle": {
+    "resultDigest": "<sha256-hex-digest-of-reconciled-result.json>",
+    "observedMode": "<copy from result.json's observedRunner.effectiveMode.value>"
+  }
+}
+```
+
+### 8.4 Downstream Matrix Candidate Evaluation Row (`matrix-row.json`)
+```json
+{
+  "schemaVersion": 1,
+  "route": "i2v",
+  "configuredFrames": 192,
+  "requestedDurationMs": 8000,
+  "configuredDurationMs": 8000,
+  "width": 1344,
+  "height": 768,
+  "seed": 42,
+  "promptDigest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "referenceSetId": "ref-set-1",
+  "references": [
+    {
+      "slotIndex": 0,
+      "role": "first_frame",
+      "tag": "<Picture 1>",
+      "order": 0,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  "requestedRunnerVariant": "dynamicvram-offload-v1",
+  "configuredRunnerVariant": "dynamicvram-offload-v1",
+  "effectiveRunnerMode": "unknown",
+  "descriptorDigest": null,
+  "configDigest": null,
+  "policyDigest": null,
+  "comparisonKey": "0000000000000000000000000000000000000000000000000000000000000000",
+  "runId": null,
+  "baselineRunId": null,
+  "attemptStatus": "unattempted",
+  "blockReason": "Not yet scheduled in feasibility escalation order",
+  "executionStatus": "not_started",
+  "collectionStatus": "not_started",
+  "probeStatus": "not_started",
+  "outputConformanceStatus": "unknown",
+  "visualReviewStatus": "pending",
+  "stopRecommendation": null,
+  "operatorDecision": "pending",
+  "measuredPeakVramMb": null,
+  "measuredHostRamMb": null,
+  "measuredSwapDeltaMb": null,
+  "measuredDurationMs": null,
+  "measuredFrames": null
+}
+```

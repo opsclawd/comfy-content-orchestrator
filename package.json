@@ -13,6 +13,7 @@
     "certify:ltx-i2v": "pnpm --filter render-worker certify:ltx-i2v",
     "certify:minimax-h3": "pnpm --filter render-worker certify:minimax-h3",
     "certify:transition-soak": "pnpm --filter render-worker certify:transition-soak",
+    "experiment:minimax-h3": "pnpm --filter render-worker experiment:minimax-h3",
     "db:migrate": "pnpm --filter @cco/infrastructure db:migrate",
     "format": "prettier --check .",
     "format:fix": "prettier --write .",
