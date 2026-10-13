@@ -47,3 +47,4 @@ export * from "./acceptance-fixture-asset-source-port.js";
 export * from "./acceptance-preflight-probe-ports.js";
 export * from "./campaign-reference-bible-repository.js";
 export * from "./campaign-reference-bible-errors.js";
+export * from "./shot-plan-planning-admission-port.js";

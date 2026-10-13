@@ -53,6 +53,24 @@ import { DEFAULT_EXTERNAL_PROCESSING_POLICY } from "./create-client.js";
 
 export const MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MiB
 
+export const STORYBOARD_PREVIS_BEAT_SEED_OFFSET_MULTIPLIER = 1_000;
+
+/**
+ * Derives a deterministic, reproducible seed for a storyboard previs render job
+ * based on the plan variant ordinal and beat position.
+ *
+ * Uses CANDIDATE_BASE_SEED + variantOrdinal as the plan base, adding a distinct
+ * 1,000 * beatPosition offset per beat to guarantee no collisions between beats
+ * of the same plan or across variants within the supported range.
+ */
+export function deriveStoryboardPrevisSeed(variantOrdinal: number, beatPosition: number): number {
+  return (
+    CANDIDATE_BASE_SEED +
+    variantOrdinal +
+    beatPosition * STORYBOARD_PREVIS_BEAT_SEED_OFFSET_MULTIPLIER
+  );
+}
+
 const SUPPORTED_PLANNER_IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/webp"]);
 
 export function resolveAndValidatePlannerImageMime(
@@ -911,20 +929,25 @@ export class PlanShotPlansUseCase {
       await context.scenes.save(scene);
 
       for (const plan of shotPlans) {
-        const previsPrompt = compileStoryboardPrevisPrompt(plan);
-        await context.jobs.enqueue({
-          sceneId: scene.id,
-          jobKind: "candidate",
-          workflowTemplate: STORYBOARD_PREVIS_WORKFLOW_TEMPLATE,
-          injectedPayload: {
-            prompt: previsPrompt.prompt,
-            negativePrompt: previsPrompt.negativePrompt,
-            seed: CANDIDATE_BASE_SEED + plan.variantOrdinal,
-            variantOrdinal: plan.variantOrdinal,
-            shotPlanId: plan.id,
-            specRevision: plan.specRevision
-          }
-        });
+        const beats = plan.beats ?? [];
+        for (let beatPosition = 0; beatPosition < beats.length; beatPosition++) {
+          const beat = beats[beatPosition]!;
+          const previsPrompt = compileStoryboardPrevisPrompt(plan, beat);
+          await context.jobs.enqueue({
+            sceneId: scene.id,
+            jobKind: "candidate",
+            workflowTemplate: STORYBOARD_PREVIS_WORKFLOW_TEMPLATE,
+            injectedPayload: {
+              prompt: previsPrompt.prompt,
+              negativePrompt: previsPrompt.negativePrompt,
+              seed: deriveStoryboardPrevisSeed(plan.variantOrdinal, beatPosition),
+              variantOrdinal: plan.variantOrdinal,
+              shotPlanId: plan.id,
+              specRevision: plan.specRevision,
+              beatIndex: beat.beatIndex
+            }
+          });
+        }
       }
     } else if (enqueuePrevisJobs === false) {
       if (scene.status === "generating_candidates") {

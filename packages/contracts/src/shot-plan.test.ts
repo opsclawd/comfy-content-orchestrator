@@ -30,6 +30,7 @@ import {
   ShotPlanDialogueIntentSchema,
   ShotPlanContinuityConstraintsSchema,
   ShotPlanPrevisAssociationSchema,
+  ShotPlanBeatPrevisAssociationSchema,
   ShotPlanDerivationProvenanceSchema,
   ShotPlanDocumentSchema,
   ShotPlanCreateInputSchema,
@@ -270,6 +271,33 @@ describe("ShotPlan Contracts & Schemas", () => {
         expect(parsed.contentHashSha256).toBe(validCandidateSha);
       });
 
+      it("parses previs association with optional beatIndex", () => {
+        const parsed = ShotPlanPrevisAssociationSchema.parse({
+          beatIndex: 2,
+          candidateId: "01923456-789a-7b3c-9d4e-5f6071829399",
+          storageBucket: "cco-previs",
+          storageObjectKey: "previs/campaign-1/scene-1-cand-1.png",
+          contentHashSha256: validCandidateSha,
+          modelProfile: "FLUX_SCHNELL_DRAFT_V1",
+          generatedAt: "2026-09-25T10:15:30.000Z"
+        });
+        expect(parsed.beatIndex).toBe(2);
+      });
+
+      it("rejects non-positive beatIndex", () => {
+        expect(() =>
+          ShotPlanPrevisAssociationSchema.parse({
+            beatIndex: 0,
+            candidateId: "01923456-789a-7b3c-9d4e-5f6071829399",
+            storageBucket: "cco-previs",
+            storageObjectKey: "previs/scene.png",
+            contentHashSha256: validCandidateSha,
+            modelProfile: "FLUX_SCHNELL_DRAFT_V1",
+            generatedAt: "2026-09-25T10:15:30.000Z"
+          })
+        ).toThrow();
+      });
+
       it("rejects invalid hash or datetime", () => {
         expect(() =>
           ShotPlanPrevisAssociationSchema.parse({
@@ -279,6 +307,33 @@ describe("ShotPlan Contracts & Schemas", () => {
             contentHashSha256: "not-a-sha256",
             modelProfile: "FLUX_SCHNELL_DRAFT_V1",
             generatedAt: "invalid-date"
+          })
+        ).toThrow();
+      });
+    });
+
+    describe("ShotPlanBeatPrevisAssociationSchema", () => {
+      it("requires positive beatIndex and parses valid association", () => {
+        const parsed = ShotPlanBeatPrevisAssociationSchema.parse({
+          beatIndex: 1,
+          candidateId: "01923456-789a-7b3c-9d4e-5f6071829399",
+          storageBucket: "cco-previs",
+          storageObjectKey: "previs/scene.png",
+          contentHashSha256: validCandidateSha,
+          modelProfile: "FLUX_SCHNELL_DRAFT_V1",
+          generatedAt: "2026-09-25T10:15:30.000Z"
+        });
+        expect(parsed.beatIndex).toBe(1);
+
+        // Missing beatIndex rejected
+        expect(() =>
+          ShotPlanBeatPrevisAssociationSchema.parse({
+            candidateId: "01923456-789a-7b3c-9d4e-5f6071829399",
+            storageBucket: "cco-previs",
+            storageObjectKey: "previs/scene.png",
+            contentHashSha256: validCandidateSha,
+            modelProfile: "FLUX_SCHNELL_DRAFT_V1",
+            generatedAt: "2026-09-25T10:15:30.000Z"
           })
         ).toThrow();
       });
@@ -362,6 +417,26 @@ describe("ShotPlan Contracts & Schemas", () => {
       expect(parsed.subjects).toHaveLength(1);
       expect(parsed.beats).toHaveLength(1);
       expect(parsed.previs?.contentHashSha256).toBe(validSha256);
+      expect(parsed.previsAssociations).toBeUndefined();
+    });
+
+    it("parses ShotPlan document with previsAssociations", () => {
+      const parsed = ShotPlanDocumentSchema.parse({
+        ...fullShotPlanDoc,
+        previsAssociations: [
+          {
+            beatIndex: 1,
+            candidateId: "01923456-789a-7b3c-9d4e-5f6071829399",
+            storageBucket: "cco-previs",
+            storageObjectKey: "previs/campaign-1/scene-1-cand-1.png",
+            contentHashSha256: validSha256,
+            modelProfile: "FLUX_SCHNELL_DRAFT_V1",
+            generatedAt: "2026-09-25T10:15:30.000Z"
+          }
+        ]
+      });
+      expect(parsed.previsAssociations).toHaveLength(1);
+      expect(parsed.previsAssociations?.[0]?.beatIndex).toBe(1);
     });
 
     it("applies defaults for variantOrdinal, status, routingMode, durationToleranceMs, and fps", () => {

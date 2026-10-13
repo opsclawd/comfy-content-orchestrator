@@ -47,7 +47,8 @@ import {
   type SceneReviewQueries,
   type StorageMetricsRegistryPort,
   type StorageTelemetryPort,
-  type UnitOfWork
+  type UnitOfWork,
+  type AutoPlanFirstPassLogger
 } from "@cco/application";
 import { SharpImageInspectionAdapter } from "@cco/infrastructure";
 import { ShotPlanPlanningCoordinator } from "../shot-plan-planning-coordinator.js";
@@ -80,6 +81,7 @@ export interface ControlApiDependencies {
   readonly planningOverallTimeoutMs?: number;
   readonly rankingOverallTimeoutMs?: number;
   readonly planningCoordinator?: ShotPlanPlanningCoordinator | undefined;
+  readonly logger?: AutoPlanFirstPassLogger | undefined;
 }
 
 export interface ControlApiUseCases {
@@ -159,7 +161,13 @@ export function createControlApiContainer(
           : {})
       })
     : undefined;
-  const reviewScene = new ReviewSceneUseCases(dependencies.uow, planShotPlans);
+  const autoPlanLogger: AutoPlanFirstPassLogger = dependencies.logger ?? console;
+  const reviewScene = new ReviewSceneUseCases(
+    dependencies.uow,
+    planShotPlans,
+    planningCoordinator,
+    autoPlanLogger
+  );
   const hashBytes = dependencies.hashBytes ?? {
     hashBytes: async (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
   };
@@ -180,8 +188,12 @@ export function createControlApiContainer(
   const createCampaign = new CreateCampaignUseCase(dependencies.uow);
   const createCampaignShell = new CreateCampaignShellUseCase(dependencies.uow);
   const createClient = new CreateClientUseCase(dependencies.uow);
-  const createScene = new CreateSceneUseCase(dependencies.uow);
-  const materializeStoryboard = new MaterializeStoryboardUseCase(dependencies.uow);
+  const createScene = new CreateSceneUseCase(dependencies.uow, planningCoordinator, autoPlanLogger);
+  const materializeStoryboard = new MaterializeStoryboardUseCase(
+    dependencies.uow,
+    planningCoordinator,
+    autoPlanLogger
+  );
   const prepareSceneProductionInputs = new PrepareSceneProductionInputsUseCase(dependencies.uow, {
     objectStorage: dependencies.objectStorage,
     hashBytes,

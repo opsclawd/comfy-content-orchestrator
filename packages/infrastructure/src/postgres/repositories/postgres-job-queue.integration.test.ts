@@ -899,6 +899,524 @@ describe("PostgresJobQueue integration", () => {
     expect(Number(candidateRows.rows[0]?.count)).toBe(1);
   });
 
+  it("completes beat 1 and beat 2 for the same shot plan without overwriting beat 1 compatibility fields", async () => {
+    const { sceneId } = await createTestScene();
+    const queue = new PostgresJobQueue(pool);
+
+    const planId = "01950c46-9e90-7d3d-82d2-8f1d3c000077";
+    await client.query(
+      `
+      INSERT INTO shot_plans (
+        shot_plan_id,
+        scene_id,
+        spec_revision,
+        variant_ordinal,
+        status,
+        routing_mode,
+        target_duration_ms,
+        target_frame_count,
+        framing,
+        camera_angle,
+        camera_movement,
+        lighting_style,
+        structured_plan
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      `,
+      [
+        planId,
+        sceneId,
+        1,
+        1,
+        "draft",
+        "reference_directed",
+        4000,
+        96,
+        "wide",
+        "eye_level",
+        "static",
+        "natural_golden_hour",
+        JSON.stringify({
+          framing: "wide",
+          beats: [
+            { beatIndex: 1, startMs: 0, endMs: 2000, description: "Beat 1" },
+            { beatIndex: 2, startMs: 2000, endMs: 4000, description: "Beat 2" }
+          ]
+        })
+      ]
+    );
+
+    // Enqueue & complete beat 1
+    const jobBeat1 = await queue.enqueue({
+      sceneId: sceneId as SceneId,
+      jobKind: "candidate",
+      workflowTemplate: "flux-schnell-draft",
+      injectedPayload: {
+        variantOrdinal: 1,
+        shotPlanId: planId,
+        specRevision: 1,
+        beatIndex: 1
+      }
+    });
+
+    const claim1 = await queue.claim({ workerId: "worker-beat-1", leaseDurationMs: 60_000 });
+    expect(claim1?.jobId).toBe(jobBeat1.jobId);
+    await queue.start(jobBeat1.jobId, claim1!.leaseToken!);
+
+    const completeResult1 = await queue.complete(jobBeat1.jobId, claim1!.leaseToken!, undefined, {
+      variantOrdinal: 1,
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: `candidates/${sceneId}/rev_1_var_1_beat_1.webp`,
+      contentHashSha256: "1111111111111111111111111111111111111111111111111111111111111111",
+      shotPlanId: planId,
+      specRevision: 1,
+      beatIndex: 1
+    });
+    expect(completeResult1.outcome).toBe("applied");
+
+    const planAfterBeat1 = await client.query<{
+      previs_candidate_id: string;
+      structured_plan: { previs?: { candidateId?: string } };
+    }>("SELECT previs_candidate_id, structured_plan FROM shot_plans WHERE shot_plan_id = $1", [
+      planId
+    ]);
+    const candidate1Id = planAfterBeat1.rows[0]?.previs_candidate_id;
+    expect(candidate1Id).toBeDefined();
+
+    // Verify candidate row for beat 1
+    const candidate1Row = await client.query<{ beat_index: number }>(
+      "SELECT beat_index FROM storyboard_candidates WHERE candidate_id = $1",
+      [candidate1Id]
+    );
+    expect(candidate1Row.rows[0]?.beat_index).toBe(1);
+
+    // Verify shot_plan_previs_associations for beat 1
+    const assoc1 = await client.query<{ candidate_id: string }>(
+      "SELECT candidate_id FROM shot_plan_previs_associations WHERE shot_plan_id = $1 AND beat_index = 1",
+      [planId]
+    );
+    expect(assoc1.rows[0]?.candidate_id).toBe(candidate1Id);
+
+    // Enqueue & complete beat 2
+    const jobBeat2 = await queue.enqueue({
+      sceneId: sceneId as SceneId,
+      jobKind: "candidate",
+      workflowTemplate: "flux-schnell-draft",
+      injectedPayload: {
+        variantOrdinal: 1,
+        shotPlanId: planId,
+        specRevision: 1,
+        beatIndex: 2
+      }
+    });
+
+    const claim2 = await queue.claim({ workerId: "worker-beat-2", leaseDurationMs: 60_000 });
+    expect(claim2?.jobId).toBe(jobBeat2.jobId);
+    await queue.start(jobBeat2.jobId, claim2!.leaseToken!);
+
+    const completeResult2 = await queue.complete(jobBeat2.jobId, claim2!.leaseToken!, undefined, {
+      variantOrdinal: 1,
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: `candidates/${sceneId}/rev_1_var_1_beat_2.webp`,
+      contentHashSha256: "2222222222222222222222222222222222222222222222222222222222222222",
+      shotPlanId: planId,
+      specRevision: 1,
+      beatIndex: 2
+    });
+    expect(completeResult2.outcome).toBe("applied");
+
+    // CRITICAL: plan previs_candidate_id must still be candidate1Id (not overwritten by beat 2)
+    const planAfterBeat2 = await client.query<{
+      previs_candidate_id: string;
+      structured_plan: { previs?: { candidateId?: string } };
+    }>("SELECT previs_candidate_id, structured_plan FROM shot_plans WHERE shot_plan_id = $1", [
+      planId
+    ]);
+    expect(planAfterBeat2.rows[0]?.previs_candidate_id).toBe(candidate1Id);
+
+    // Both candidate rows exist with correct beat_index
+    const allCandidates = await client.query<{ candidate_id: string; beat_index: number }>(
+      "SELECT candidate_id, beat_index FROM storyboard_candidates WHERE scene_id = $1 ORDER BY beat_index ASC",
+      [sceneId]
+    );
+    expect(allCandidates.rows).toHaveLength(2);
+    expect(allCandidates.rows[0]?.beat_index).toBe(1);
+    expect(allCandidates.rows[1]?.beat_index).toBe(2);
+    const candidate2Id = allCandidates.rows[1]?.candidate_id;
+
+    // Both associations exist in shot_plan_previs_associations
+    const allAssocs = await client.query<{ beat_index: number; candidate_id: string }>(
+      "SELECT beat_index, candidate_id FROM shot_plan_previs_associations WHERE shot_plan_id = $1 ORDER BY beat_index ASC",
+      [planId]
+    );
+    expect(allAssocs.rows).toHaveLength(2);
+    expect(allAssocs.rows[0]).toEqual({ beat_index: 1, candidate_id: candidate1Id });
+    expect(allAssocs.rows[1]).toEqual({ beat_index: 2, candidate_id: candidate2Id });
+  });
+
+  it("resolves duplicate collision on beat 1 as superseded without affecting sibling beat 2", async () => {
+    const { sceneId } = await createTestScene();
+    const queue = new PostgresJobQueue(pool);
+
+    const planId = "01950c46-9e90-7d3d-82d2-8f1d3c000078";
+    await client.query(
+      `
+      INSERT INTO shot_plans (
+        shot_plan_id, scene_id, spec_revision, variant_ordinal, status,
+        routing_mode, target_duration_ms, target_frame_count, framing,
+        camera_angle, camera_movement, lighting_style, structured_plan
+      ) VALUES ($1, $2, 1, 1, 'draft', 'reference_directed', 4000, 96, 'wide', 'eye_level', 'static', 'natural_golden_hour', $3)
+      `,
+      [
+        planId,
+        sceneId,
+        JSON.stringify({
+          framing: "wide",
+          beats: [
+            { beatIndex: 1, startMs: 0, endMs: 2000, description: "Beat 1" },
+            { beatIndex: 2, startMs: 2000, endMs: 4000, description: "Beat 2" }
+          ]
+        })
+      ]
+    );
+
+    // Pre-insert candidate for beat 1
+    await insertStoryboardCandidateRecord(client, {
+      sceneId,
+      sceneSpecRevision: 1,
+      variantOrdinal: 1,
+      beatIndex: 1
+    });
+
+    // Job 1 targets beat 1 (slot already taken -> collision)
+    const token1 = "01950c46-9e90-7d3d-82d2-8f1d3c000101" as LeaseToken;
+    const job1 = await insertRenderJobRecord(client, {
+      sceneId,
+      jobKind: "candidate",
+      status: "rendering",
+      workerId: "worker-beat-1-loser",
+      leaseToken: token1,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 0,
+      maxRetries: 3
+    });
+
+    // Job 2 targets beat 2 (different slot -> should succeed!)
+    const token2 = "01950c46-9e90-7d3d-82d2-8f1d3c000102" as LeaseToken;
+    const job2 = await insertRenderJobRecord(client, {
+      sceneId,
+      jobKind: "candidate",
+      status: "rendering",
+      workerId: "worker-beat-2-winner",
+      leaseToken: token2,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 0,
+      maxRetries: 3
+    });
+
+    // Complete Job 1 -> superseded
+    const result1 = await queue.complete(job1.job_id as JobId, token1, undefined, {
+      variantOrdinal: 1,
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: `candidates/${sceneId}/rev_1_var_1_beat_1_loser.webp`,
+      contentHashSha256: "3333333333333333333333333333333333333333333333333333333333333333",
+      shotPlanId: planId,
+      specRevision: 1,
+      beatIndex: 1
+    });
+    expect(result1.outcome).toBe("superseded");
+
+    const job1Row = await client.query<{ status: string; error_trace: string | null }>(
+      "SELECT status, error_trace FROM render_jobs WHERE job_id = $1",
+      [job1.job_id]
+    );
+    expect(job1Row.rows[0]?.status).toBe("failed");
+    expect(job1Row.rows[0]?.error_trace).toContain("Superseded");
+
+    // Complete Job 2 -> applied
+    const result2 = await queue.complete(job2.job_id as JobId, token2, undefined, {
+      variantOrdinal: 1,
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: `candidates/${sceneId}/rev_1_var_1_beat_2.webp`,
+      contentHashSha256: "4444444444444444444444444444444444444444444444444444444444444444",
+      shotPlanId: planId,
+      specRevision: 1,
+      beatIndex: 2
+    });
+    expect(result2.outcome).toBe("applied");
+
+    const job2Row = await client.query<{ status: string }>(
+      "SELECT status FROM render_jobs WHERE job_id = $1",
+      [job2.job_id]
+    );
+    expect(job2Row.rows[0]?.status).toBe("completed");
+
+    // Beat 2 candidate row exists
+    const beat2Cand = await client.query<{ candidate_id: string }>(
+      "SELECT candidate_id FROM storyboard_candidates WHERE scene_id = $1 AND beat_index = 2",
+      [sceneId]
+    );
+    expect(beat2Cand.rows).toHaveLength(1);
+  });
+
+  it("defaults beatIndex to 1 when omitted on candidate completion", async () => {
+    const { sceneId } = await createTestScene();
+    const queue = new PostgresJobQueue(pool);
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000103" as LeaseToken;
+
+    const job = await insertRenderJobRecord(client, {
+      sceneId,
+      jobKind: "candidate",
+      status: "rendering",
+      workerId: "worker-legacy",
+      leaseToken: token,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 0,
+      maxRetries: 3
+    });
+
+    const result = await queue.complete(job.job_id as JobId, token, undefined, {
+      variantOrdinal: 1,
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: `candidates/${sceneId}/rev_1_var_1_legacy.webp`,
+      contentHashSha256: "5555555555555555555555555555555555555555555555555555555555555555"
+    });
+    expect(result.outcome).toBe("applied");
+
+    const candRow = await client.query<{ beat_index: number }>(
+      "SELECT beat_index FROM storyboard_candidates WHERE scene_id = $1",
+      [sceneId]
+    );
+    expect(candRow.rows[0]?.beat_index).toBe(1);
+  });
+
+  it("rejects candidate completion when beatIndex does not exist in ShotPlan explicit beats", async () => {
+    const { sceneId } = await createTestScene();
+    const queue = new PostgresJobQueue(pool);
+
+    const planId = "01950c46-9e90-7d3d-82d2-8f1d3c000079";
+    await client.query(
+      `
+      INSERT INTO shot_plans (
+        shot_plan_id, scene_id, spec_revision, variant_ordinal, status,
+        routing_mode, target_duration_ms, target_frame_count, framing,
+        camera_angle, camera_movement, lighting_style, structured_plan
+      ) VALUES ($1, $2, 1, 1, 'draft', 'reference_directed', 4000, 96, 'wide', 'eye_level', 'static', 'natural_golden_hour', $3)
+      `,
+      [
+        planId,
+        sceneId,
+        JSON.stringify({
+          framing: "wide",
+          beats: [
+            { beatIndex: 1, startMs: 0, endMs: 2000, description: "Beat 1" },
+            { beatIndex: 2, startMs: 2000, endMs: 4000, description: "Beat 2" }
+          ]
+        })
+      ]
+    );
+
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000104" as LeaseToken;
+    const job = await insertRenderJobRecord(client, {
+      sceneId,
+      jobKind: "candidate",
+      status: "rendering",
+      workerId: "worker-invalid-beat",
+      leaseToken: token,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 0,
+      maxRetries: 3
+    });
+
+    await expect(
+      queue.complete(job.job_id as JobId, token, undefined, {
+        variantOrdinal: 1,
+        storageBucket: "godzspeed-temp",
+        storageObjectKey: `candidates/${sceneId}/rev_1_var_1_beat_99.webp`,
+        contentHashSha256: "6666666666666666666666666666666666666666666666666666666666666666",
+        shotPlanId: planId,
+        specRevision: 1,
+        beatIndex: 99
+      })
+    ).rejects.toThrow(InvalidJobCompletionPayloadError);
+  });
+
+  it("rejects candidate completion and rolls back transaction when explicit targetShotPlanId is missing or revision-mismatched", async () => {
+    const { sceneId } = await createTestScene();
+    const queue = new PostgresJobQueue(pool);
+
+    const existingPlanId = "01950c46-9e90-7d3d-82d2-8f1d3c000080";
+    await client.query(
+      `
+      INSERT INTO shot_plans (
+        shot_plan_id, scene_id, spec_revision, variant_ordinal, status,
+        routing_mode, target_duration_ms, target_frame_count, framing,
+        camera_angle, camera_movement, lighting_style, structured_plan
+      ) VALUES ($1, $2, 1, 1, 'draft', 'reference_directed', 4000, 96, 'wide', 'eye_level', 'static', 'natural_golden_hour', $3)
+      `,
+      [
+        existingPlanId,
+        sceneId,
+        JSON.stringify({
+          framing: "wide",
+          beats: [{ beatIndex: 1, startMs: 0, endMs: 2000, description: "Beat 1" }]
+        })
+      ]
+    );
+
+    // Case A: Missing explicit plan ID
+    const tokenA = "01950c46-9e90-7d3d-82d2-8f1d3c000105" as LeaseToken;
+    const jobA = await insertRenderJobRecord(client, {
+      sceneId,
+      jobKind: "candidate",
+      status: "rendering",
+      workerId: "worker-missing-plan",
+      leaseToken: tokenA,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 0,
+      maxRetries: 3
+    });
+
+    const missingPlanId = "01950c46-9e90-7d3d-82d2-8f1d3c000099";
+    await expect(
+      queue.complete(jobA.job_id as JobId, tokenA, undefined, {
+        variantOrdinal: 1,
+        storageBucket: "godzspeed-temp",
+        storageObjectKey: `candidates/${sceneId}/rev_1_var_1_missing.webp`,
+        contentHashSha256: "7777777777777777777777777777777777777777777777777777777777777777",
+        shotPlanId: missingPlanId,
+        specRevision: 1,
+        beatIndex: 1
+      })
+    ).rejects.toThrow(InvalidJobCompletionPayloadError);
+
+    // Assert writes rolled back: candidate not created, job still rendering
+    const candsA = await client.query(
+      "SELECT * FROM storyboard_candidates WHERE storage_object_key = $1",
+      [`candidates/${sceneId}/rev_1_var_1_missing.webp`]
+    );
+    expect(candsA.rows).toHaveLength(0);
+
+    const jobRowA = await client.query<{ status: string }>(
+      "SELECT status FROM render_jobs WHERE job_id = $1",
+      [jobA.job_id]
+    );
+    expect(jobRowA.rows[0]?.status).toBe("rendering");
+
+    const assocsA = await client.query(
+      "SELECT * FROM shot_plan_previs_associations WHERE shot_plan_id = $1",
+      [missingPlanId]
+    );
+    expect(assocsA.rows).toHaveLength(0);
+
+    // Case B: Revision-mismatched explicit plan ID (existing plan is revision 1, job completion targets revision 2)
+    // Advance scene to revision 2 so targetSpecRevision 2 does not exceed sceneCurrentRevision
+    await client.query("UPDATE storyboard_scenes SET spec_revision = 2 WHERE scene_id = $1", [
+      sceneId
+    ]);
+
+    const tokenB = "01950c46-9e90-7d3d-82d2-8f1d3c000106" as LeaseToken;
+    const jobB = await insertRenderJobRecord(client, {
+      sceneId,
+      jobKind: "candidate",
+      status: "rendering",
+      workerId: "worker-mismatched-plan",
+      leaseToken: tokenB,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      retryCount: 0,
+      maxRetries: 3
+    });
+
+    await expect(
+      queue.complete(jobB.job_id as JobId, tokenB, undefined, {
+        variantOrdinal: 1,
+        storageBucket: "godzspeed-temp",
+        storageObjectKey: `candidates/${sceneId}/rev_2_var_1_mismatch.webp`,
+        contentHashSha256: "8888888888888888888888888888888888888888888888888888888888888888",
+        shotPlanId: existingPlanId,
+        specRevision: 2,
+        beatIndex: 1
+      })
+    ).rejects.toThrow(InvalidJobCompletionPayloadError);
+
+    // Assert writes rolled back
+    const candsB = await client.query(
+      "SELECT * FROM storyboard_candidates WHERE storage_object_key = $1",
+      [`candidates/${sceneId}/rev_2_var_1_mismatch.webp`]
+    );
+    expect(candsB.rows).toHaveLength(0);
+
+    const jobRowB = await client.query<{ status: string }>(
+      "SELECT status FROM render_jobs WHERE job_id = $1",
+      [jobB.job_id]
+    );
+    expect(jobRowB.rows[0]?.status).toBe("rendering");
+
+    const assocsB = await client.query(
+      "SELECT * FROM shot_plan_previs_associations WHERE shot_plan_id = $1 AND spec_revision = 2",
+      [existingPlanId]
+    );
+    expect(assocsB.rows).toHaveLength(0);
+  });
+
+  it("rethrows unrelated 23505 unique constraint violations without terminalizing candidate jobs", async () => {
+    const { sceneId } = await createTestScene();
+    const token = "01950c46-9e90-7d3d-82d2-8f1d3c000107" as LeaseToken;
+    const candidateJob = await insertRenderJobRecord(client, {
+      sceneId,
+      jobKind: "candidate",
+      status: "rendering",
+      workerId: "worker-unrelated-unique",
+      leaseToken: token,
+      retryCount: 0
+    });
+
+    // Error with constraint starting with prefix but NOT in exact enumerated set
+    const fakeUniqueError = Object.assign(
+      new Error(
+        'duplicate key value violates unique constraint "storyboard_candidates_scene_id_scene_spec_revision_variant_unrelated"'
+      ),
+      {
+        code: "23505",
+        constraint: "storyboard_candidates_scene_id_scene_spec_revision_variant_unrelated"
+      }
+    );
+
+    const faultyPool = {
+      connect: async () => {
+        const actualClient = await pool.connect();
+        return {
+          query: (sql: string | { text: string }, values?: unknown[]) => {
+            const sqlText = typeof sql === "string" ? sql : sql.text;
+            if (sqlText.includes("INSERT INTO storyboard_candidates")) {
+              throw fakeUniqueError;
+            }
+            return actualClient.query(sql as string, values);
+          },
+          release: () => actualClient.release()
+        } as unknown as PoolClient;
+      },
+      query: pool.query.bind(pool)
+    } as unknown as Pool;
+
+    const queueWithFaultyPool = new PostgresJobQueue(faultyPool);
+    await expect(
+      queueWithFaultyPool.complete(candidateJob.job_id as JobId, token, undefined, {
+        variantOrdinal: 1,
+        storageBucket: "godzspeed-temp",
+        storageObjectKey: `candidates/${sceneId}/rev_1_var_1_faulty.webp`,
+        contentHashSha256: "9999999999999999999999999999999999999999999999999999999999999999"
+      })
+    ).rejects.toThrow("storyboard_candidates_scene_id_scene_spec_revision_variant_unrelated");
+
+    // Verify row was rolled back and still rendering (NOT marked failed/superseded)
+    const jobRow = await client.query<{ status: string; error_trace: string | null }>(
+      "SELECT status, error_trace FROM render_jobs WHERE job_id = $1",
+      [candidateJob.job_id]
+    );
+    expect(jobRow.rows[0]?.status).toBe("rendering");
+    expect(jobRow.rows[0]?.error_trace).toBeNull();
+  });
+
   it("queues a plan previs, advances the scene revision, completes the old job, and proves no current-revision candidate or association is created", async () => {
     const { sceneId } = await createTestScene();
     const queue = new PostgresJobQueue(pool);

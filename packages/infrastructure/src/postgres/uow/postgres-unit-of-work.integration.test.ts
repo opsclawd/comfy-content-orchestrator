@@ -1,6 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { Pool, type PoolClient } from "pg";
-import type { CampaignId, CampaignRecord, CandidateId, SceneId } from "@cco/domain";
+import {
+  ShotPlan,
+  type CampaignId,
+  type CampaignRecord,
+  type CandidateId,
+  type SceneId,
+  type ShotPlanId
+} from "@cco/domain";
 import type { ReviewEvent } from "@cco/contracts";
 import { ProgressSceneProductionUseCases, ReviewSceneUseCases } from "@cco/application";
 import { runMigrations } from "../migration-runner.js";
@@ -475,6 +482,101 @@ describe("PostgreSQL UnitOfWork Integration", () => {
     expect(committedJobs.rows.every((r) => r.workflow_template === "flux-schnell-draft")).toBe(
       true
     );
+  });
+
+  it("rolls back both ShotPlan saves and enqueued jobs atomically if a subsequent beat job enqueue fails", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+    const sceneRecord = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      durationSeconds: 4.0,
+      visualDescription: "Scene for shot plan atomic rollback test",
+      engineAssigned: "ltx_25",
+      status: "generating_candidates",
+      specRevision: 1
+    });
+
+    const shotPlan = ShotPlan.create({
+      id: "01928374-abcd-7000-8000-000000000099" as ShotPlanId,
+      sceneId: sceneRecord.scene_id as SceneId,
+      specRevision: 1,
+      variantOrdinal: 1,
+      status: "draft",
+      routingMode: "reference_directed",
+      targetDurationMs: 4000,
+      targetFrameCount: 96,
+      framing: "wide",
+      angle: "eye_level",
+      lensIntent: "35mm prime",
+      cameraPosition: "eye level center",
+      cameraMovement: "tracking",
+      movementSpeed: "slow",
+      cameraPromptDescription: "Wide tracking shot",
+      actionSummary: "Commuters move through transit hall",
+      beats: [
+        {
+          beatIndex: 1,
+          startMs: 0,
+          endMs: 2000,
+          description: "Establish bustling transit area",
+          cameraAction: "slow track forward",
+          subjectAction: "crowd traverses frame"
+        },
+        {
+          beatIndex: 2,
+          startMs: 2000,
+          endMs: 4000,
+          description: "Hero turns toward gates",
+          cameraAction: "pan left slightly",
+          subjectAction: "hero emerges from crowd"
+        }
+      ],
+      lightingStyle: "high_key_commercial",
+      environmentDescription: "Sleek glass terminal",
+      colorPalette: ["#112233"]
+    });
+
+    const uow = new PostgresUnitOfWork(pool);
+
+    // Verify failure case: ShotPlan is saved and beat 1 job enqueued, then beat 2 job enqueue throws
+    const failureAttempt = uow.execute(async (context) => {
+      expect(context.shotPlans).toBeDefined();
+      expect(context.jobs).toBeDefined();
+
+      // 1. Save ShotPlan in transaction
+      await context.shotPlans!.save(shotPlan);
+
+      // 2. Enqueue first beat job in transaction
+      await context.jobs!.enqueue({
+        sceneId: sceneRecord.scene_id as SceneId,
+        jobKind: "candidate",
+        workflowTemplate: "flux_schnell_storyboard_v1",
+        injectedPayload: {
+          shotPlanId: shotPlan.id,
+          beatIndex: 1,
+          seed: 43
+        }
+      });
+
+      // 3. Simulated failure during beat 2 enqueue
+      throw new Error("Simulated failure during beat 2 job enqueue");
+    });
+
+    await expect(failureAttempt).rejects.toThrow("Simulated failure during beat 2 job enqueue");
+
+    // Verify ACID rollback: ShotPlan was not committed to shot_plans table
+    const shotPlanResult = await client.query(
+      "SELECT shot_plan_id FROM shot_plans WHERE shot_plan_id = $1",
+      [shotPlan.id]
+    );
+    expect(shotPlanResult.rows).toHaveLength(0);
+
+    // Verify ACID rollback: Beat 1 job was rolled back from render_jobs table
+    const jobsResult = await client.query("SELECT job_id FROM render_jobs WHERE scene_id = $1", [
+      sceneRecord.scene_id
+    ]);
+    expect(jobsResult.rows).toHaveLength(0);
   });
 
   it("ProgressSceneProductionUseCases.beginCandidateGeneration commits scene transition and 3 jobs atomically against real PostgreSQL", async () => {

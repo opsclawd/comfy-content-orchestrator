@@ -14,6 +14,7 @@ import type {
 } from "@cco/contracts";
 import { compileShotPlanAnimaticTimeline, resolveShotPlanDiffSource } from "@cco/contracts";
 import { ShotPlanAnimaticPlayer } from "./animatic/shot-plan-animatic-player";
+import { ShotPlanBeatStrip } from "./shot-plan-beat-strip";
 import { ShotPlanVariationModal } from "./shot-plan-variation-modal";
 import { ShotPlanComparisonModal } from "./shot-plan-comparison-modal";
 import { ProductionInputInspector } from "./production-input-inspector";
@@ -675,6 +676,10 @@ export function ShotPlanPanel({
               shotPlans.length === 1)
               ? productionInspection
               : undefined);
+          const sortedBeats =
+            plan.beats && plan.beats.length > 0
+              ? [...plan.beats].sort((a, b) => a.beatIndex - b.beatIndex)
+              : [];
 
           return (
             <article
@@ -955,24 +960,31 @@ export function ShotPlanPanel({
                       {plan.actionSummary}
                     </p>
 
-                    {plan.beats && plan.beats.length > 0 && (
-                      <div className="storyboard-beats-sublist" data-testid="shot-plan-beats">
-                        <h6 className="storyboard-subsection-title">Temporal Beats</h6>
-                        <ol className="beats-list">
-                          {plan.beats.map((beat) => {
-                            const isActive = activeBeatByPlan[plan.shotPlanId] === beat.beatIndex;
-                            return (
-                              <li
-                                key={beat.beatIndex}
-                                className={`storyboard-beat-item ${isActive ? "storyboard-beat-item-active" : ""}`}
-                                data-active-beat={isActive ? "true" : undefined}
-                              >
-                                [{beat.startMs}ms - {beat.endMs}ms] {beat.description} (Camera:{" "}
-                                {beat.cameraAction}, Subject: {beat.subjectAction})
-                              </li>
-                            );
-                          })}
-                        </ol>
+                    {sortedBeats.length > 0 && (
+                      <div className="storyboard-beats-layout">
+                        <div className="storyboard-beats-sublist" data-testid="shot-plan-beats">
+                          <h6 className="storyboard-subsection-title">Temporal Beats</h6>
+                          <ol className="beats-list">
+                            {sortedBeats.map((beat) => {
+                              const isActive = activeBeatByPlan[plan.shotPlanId] === beat.beatIndex;
+                              return (
+                                <li
+                                  key={beat.beatIndex}
+                                  className={`storyboard-beat-item ${isActive ? "storyboard-beat-item-active" : ""}`}
+                                  data-active-beat={isActive ? "true" : undefined}
+                                >
+                                  [{beat.startMs}ms - {beat.endMs}ms] {beat.description} (Camera:{" "}
+                                  {beat.cameraAction}, Subject: {beat.subjectAction})
+                                </li>
+                              );
+                            })}
+                          </ol>
+                        </div>
+                        <ShotPlanBeatStrip
+                          beats={sortedBeats}
+                          beatFrames={plan.beatFrames}
+                          planId={plan.shotPlanId}
+                        />
                       </div>
                     )}
                   </div>

@@ -117,6 +117,18 @@ export interface ShotPlanContinuityConstraints {
 }
 
 export interface ShotPlanPrevisAssociation {
+  readonly beatIndex?: number;
+  readonly candidateId: string;
+  readonly storageBucket: string;
+  readonly storageObjectKey: string;
+  readonly contentHashSha256: string;
+  readonly modelProfile: string;
+  readonly generatedAt: string;
+  readonly reviewNotes?: string | null;
+}
+
+export interface ShotPlanBeatPrevisAssociation {
+  readonly beatIndex: number;
   readonly candidateId: string;
   readonly storageBucket: string;
   readonly storageObjectKey: string;
@@ -165,6 +177,7 @@ export interface ShotPlanSnapshot {
   readonly dialogue?: ShotPlanDialogueIntent | null;
   readonly continuity: ShotPlanContinuityConstraints;
   readonly previs?: ShotPlanPrevisAssociation | null;
+  readonly previsAssociations?: readonly ShotPlanBeatPrevisAssociation[];
   readonly derivedFromShotPlanId?: ShotPlanId | null;
   readonly derivation?: ShotPlanDerivationProvenance | null;
   readonly idempotencyKey?: string | null;
@@ -202,6 +215,7 @@ export interface ShotPlanCreateInput {
   readonly dialogue?: ShotPlanDialogueIntent | null;
   readonly continuity?: ShotPlanContinuityConstraints;
   readonly previs?: ShotPlanPrevisAssociation | null;
+  readonly previsAssociations?: readonly ShotPlanBeatPrevisAssociation[];
   readonly derivedFromShotPlanId?: ShotPlanId | null;
   readonly derivation?: ShotPlanDerivationProvenance | null;
   readonly idempotencyKey?: string | null;
@@ -259,6 +273,32 @@ function validateBeats(
   }
 }
 
+function validatePrevisAssociations(
+  associations: readonly ShotPlanBeatPrevisAssociation[],
+  beats: readonly ShotPlanTemporalBeat[]
+): void {
+  const beatIndices = new Set(beats.map((b) => b.beatIndex));
+  const seen = new Set<number>();
+  for (const assoc of associations) {
+    if (!Number.isInteger(assoc.beatIndex) || assoc.beatIndex <= 0) {
+      throw new ShotPlanValidationError(
+        `Previs association beatIndex must be a positive integer, got ${assoc.beatIndex}`
+      );
+    }
+    if (seen.has(assoc.beatIndex)) {
+      throw new ShotPlanValidationError(
+        `Duplicate beatIndex in previs associations: ${assoc.beatIndex}`
+      );
+    }
+    seen.add(assoc.beatIndex);
+    if (beats.length > 0 && !beatIndices.has(assoc.beatIndex)) {
+      throw new ShotPlanValidationError(
+        `Previs association references non-existent beat ${assoc.beatIndex} in shot plan`
+      );
+    }
+  }
+}
+
 export class ShotPlan {
   readonly #id: ShotPlanId;
   readonly #sceneId: SceneId;
@@ -287,6 +327,7 @@ export class ShotPlan {
   readonly #dialogue?: ShotPlanDialogueIntent | null;
   readonly #continuity: ShotPlanContinuityConstraints;
   #previs?: ShotPlanPrevisAssociation | null;
+  #previsAssociations: readonly ShotPlanBeatPrevisAssociation[];
   readonly #derivedFromShotPlanId?: ShotPlanId | null;
   readonly #derivation?: ShotPlanDerivationProvenance | null;
   readonly #idempotencyKey?: string | null;
@@ -322,7 +363,34 @@ export class ShotPlan {
     this.#atmosphere = input.atmosphere ?? null;
     this.#dialogue = input.dialogue ? Object.freeze({ ...input.dialogue }) : null;
     this.#continuity = Object.freeze({ ...input.continuity });
-    this.#previs = input.previs ? Object.freeze({ ...input.previs }) : null;
+
+    const hasExplicitAssocs = input.previsAssociations !== undefined;
+    const rawAssocs = input.previsAssociations ?? [];
+    const assocs: ShotPlanBeatPrevisAssociation[] = rawAssocs.map((a) => Object.freeze({ ...a }));
+    if (!hasExplicitAssocs && input.previs) {
+      const beatIndex = input.previs.beatIndex ?? 1;
+      assocs.push(
+        Object.freeze({
+          ...input.previs,
+          beatIndex
+        })
+      );
+    }
+    this.#previsAssociations = Object.freeze(assocs.sort((a, b) => a.beatIndex - b.beatIndex));
+
+    if (hasExplicitAssocs) {
+      if (this.#previsAssociations.length === 0) {
+        this.#previs = null;
+      } else {
+        const beat1 = this.#previsAssociations.find((a) => a.beatIndex === 1);
+        this.#previs = beat1
+          ? Object.freeze({ ...beat1 })
+          : Object.freeze({ ...this.#previsAssociations[0]! });
+      }
+    } else {
+      this.#previs = input.previs ? Object.freeze({ ...input.previs }) : null;
+    }
+
     this.#derivedFromShotPlanId = input.derivedFromShotPlanId ?? null;
     this.#derivation = input.derivation ? Object.freeze({ ...input.derivation }) : null;
     this.#idempotencyKey = input.idempotencyKey ?? null;
@@ -349,6 +417,34 @@ export class ShotPlan {
     const tolerance = input.durationToleranceMs ?? 355;
     const beats = input.beats ?? [];
     validateBeats(beats, input.targetDurationMs, tolerance);
+
+    const hasExplicitAssocs = input.previsAssociations !== undefined;
+    const inputAssociations = input.previsAssociations ?? [];
+    validatePrevisAssociations(inputAssociations, beats);
+
+    if (input.previs?.beatIndex !== undefined) {
+      if (!Number.isInteger(input.previs.beatIndex) || input.previs.beatIndex <= 0) {
+        throw new ShotPlanValidationError(
+          `Previs association beatIndex must be a positive integer, got ${input.previs.beatIndex}`
+        );
+      }
+      if (beats.length > 0 && !beats.some((b) => b.beatIndex === input.previs!.beatIndex)) {
+        throw new ShotPlanValidationError(
+          `Previs association references non-existent beat ${input.previs.beatIndex} in shot plan`
+        );
+      }
+    }
+
+    const associations = [...inputAssociations];
+    if (!hasExplicitAssocs && input.previs) {
+      const beatIndex = input.previs.beatIndex ?? 1;
+      if (beats.length === 0 || beats.some((b) => b.beatIndex === beatIndex)) {
+        associations.push({
+          ...input.previs,
+          beatIndex
+        });
+      }
+    }
 
     const now = new Date().toISOString();
     const continuity: ShotPlanContinuityConstraints = input.continuity ?? {
@@ -387,7 +483,12 @@ export class ShotPlan {
       atmosphere: input.atmosphere ?? null,
       dialogue: input.dialogue ?? null,
       continuity,
-      previs: input.previs ?? null,
+      previs: hasExplicitAssocs
+        ? associations.length === 0
+          ? null
+          : (associations.find((a) => a.beatIndex === 1) ?? associations[0] ?? null)
+        : (input.previs ?? null),
+      previsAssociations: associations,
       derivedFromShotPlanId: input.derivedFromShotPlanId ?? null,
       derivation: input.derivation ?? null,
       idempotencyKey: input.idempotencyKey ?? null,
@@ -507,7 +608,26 @@ export class ShotPlan {
   }
 
   get previs(): ShotPlanPrevisAssociation | null | undefined {
-    return this.#previs;
+    if (this.#previsAssociations.length === 0) {
+      return null;
+    }
+    if (this.#previs !== undefined && this.#previs !== null) {
+      return this.#previs;
+    }
+    const beat1 = this.#previsAssociations.find((a) => a.beatIndex === 1);
+    return beat1 ?? this.#previsAssociations[0] ?? null;
+  }
+
+  get previsAssociations(): readonly ShotPlanBeatPrevisAssociation[] {
+    return this.#previsAssociations;
+  }
+
+  get beatPrevis(): readonly ShotPlanBeatPrevisAssociation[] {
+    return this.#previsAssociations;
+  }
+
+  getPrevisForBeat(beatIndex: number): ShotPlanBeatPrevisAssociation | undefined {
+    return this.#previsAssociations.find((a) => a.beatIndex === beatIndex);
   }
 
   get derivedFromShotPlanId(): ShotPlanId | null | undefined {
@@ -563,11 +683,37 @@ export class ShotPlan {
   }
 
   attachPrevis(previs: ShotPlanPrevisAssociation): void {
-    this.#previs = Object.freeze({ ...previs });
+    const beatIndex = previs.beatIndex ?? 1;
+    if (!Number.isInteger(beatIndex) || beatIndex <= 0) {
+      throw new ShotPlanValidationError(
+        `Previs association beatIndex must be a positive integer, got ${beatIndex}`
+      );
+    }
+    if (this.#beats.length > 0 && !this.#beats.some((b) => b.beatIndex === beatIndex)) {
+      throw new ShotPlanValidationError(
+        `Previs association references non-existent beat ${beatIndex} in shot plan`
+      );
+    }
+    const beatAssoc: ShotPlanBeatPrevisAssociation = Object.freeze({
+      ...previs,
+      beatIndex
+    });
+    const remaining = this.#previsAssociations.filter((a) => a.beatIndex !== beatIndex);
+    this.#previsAssociations = Object.freeze(
+      [...remaining, beatAssoc].sort((a, b) => a.beatIndex - b.beatIndex)
+    );
+    if (beatIndex === 1 || !this.#previs) {
+      this.#previs = Object.freeze({ ...previs, beatIndex });
+    }
     this.#updatedAt = new Date().toISOString();
   }
 
+  attachBeatPrevis(previs: ShotPlanBeatPrevisAssociation): void {
+    this.attachPrevis(previs);
+  }
+
   snapshot(): Readonly<ShotPlanSnapshot> {
+    const effectivePrevis = this.previs;
     return Object.freeze({
       id: this.#id,
       sceneId: this.#sceneId,
@@ -595,7 +741,10 @@ export class ShotPlan {
       ...(this.#atmosphere !== undefined ? { atmosphere: this.#atmosphere } : {}),
       ...(this.#dialogue !== undefined ? { dialogue: this.#dialogue } : {}),
       continuity: this.#continuity,
-      ...(this.#previs !== undefined ? { previs: this.#previs } : {}),
+      ...(effectivePrevis !== undefined && effectivePrevis !== null
+        ? { previs: effectivePrevis }
+        : { previs: null }),
+      previsAssociations: this.#previsAssociations,
       ...(this.#derivedFromShotPlanId !== undefined
         ? { derivedFromShotPlanId: this.#derivedFromShotPlanId }
         : {}),

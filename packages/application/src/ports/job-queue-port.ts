@@ -30,6 +30,7 @@ export interface CandidateCompletionPayload {
   readonly storageBucket: string;
   readonly storageObjectKey: string;
   readonly contentHashSha256: string;
+  readonly beatIndex?: number | undefined;
   readonly generationPayload?: Readonly<Record<string, unknown>>;
   readonly shotPlanId?: ShotPlanId | string | undefined;
   readonly specRevision?: number | undefined;

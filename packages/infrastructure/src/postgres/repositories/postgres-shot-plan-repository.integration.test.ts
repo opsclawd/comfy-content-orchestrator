@@ -662,4 +662,336 @@ describe("PostgreSQL ShotPlanRepository Adapter Integration", () => {
     const empty = await shotPlanRepo.listByIdempotencyKey(sceneId, "non-existent-key");
     expect(empty).toHaveLength(0);
   });
+
+  it("persists, round-trips multiple beat previs associations, and verifies single-frame compatibility", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+    const sceneRecord = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      specRevision: 1
+    });
+
+    // Create 2 candidates for the same variant at beat 1 and beat 2
+    const candidateBeat1 = await insertStoryboardCandidateRecord(client, {
+      sceneId: sceneRecord.scene_id,
+      sceneSpecRevision: 1,
+      variantOrdinal: 1,
+      beatIndex: 1,
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: `candidates/${sceneRecord.scene_id}/rev1_var1_beat1.webp`
+    });
+
+    const candidateBeat2 = await insertStoryboardCandidateRecord(client, {
+      sceneId: sceneRecord.scene_id,
+      sceneSpecRevision: 1,
+      variantOrdinal: 1,
+      beatIndex: 2,
+      storageBucket: "godzspeed-temp",
+      storageObjectKey: `candidates/${sceneRecord.scene_id}/rev1_var1_beat2.webp`
+    });
+
+    const shotPlanRepo = new PostgresShotPlanRepository(client);
+
+    const shotPlan = ShotPlan.create({
+      id: "01928374-abcd-7000-8000-000000000095" as ShotPlanId,
+      sceneId: sceneRecord.scene_id as SceneId,
+      specRevision: 1,
+      variantOrdinal: 1,
+      targetDurationMs: 4000,
+      targetFrameCount: 96,
+      framing: "wide",
+      angle: "eye_level",
+      lensIntent: "24mm prime",
+      cameraPosition: "tripod eye level",
+      cameraMovement: "static",
+      movementSpeed: "slow",
+      cameraPromptDescription: "Two-beat sequence",
+      actionSummary: "Hero enters, then pauses",
+      beats: [
+        {
+          beatIndex: 1,
+          startMs: 0,
+          endMs: 2000,
+          description: "Hero enters frame",
+          cameraAction: "static hold",
+          subjectAction: "steps forward"
+        },
+        {
+          beatIndex: 2,
+          startMs: 2000,
+          endMs: 4000,
+          description: "Hero pauses and turns",
+          cameraAction: "static hold",
+          subjectAction: "turns to camera"
+        }
+      ],
+      lightingStyle: "high_key_commercial",
+      environmentDescription: "Studio set",
+      previsAssociations: [
+        {
+          beatIndex: 1,
+          candidateId: candidateBeat1.candidate_id,
+          storageBucket: candidateBeat1.storage_bucket,
+          storageObjectKey: candidateBeat1.storage_object_key,
+          contentHashSha256: candidateBeat1.content_hash_sha256,
+          modelProfile: "storyboard-fast",
+          generatedAt: new Date().toISOString()
+        },
+        {
+          beatIndex: 2,
+          candidateId: candidateBeat2.candidate_id,
+          storageBucket: candidateBeat2.storage_bucket,
+          storageObjectKey: candidateBeat2.storage_object_key,
+          contentHashSha256: candidateBeat2.content_hash_sha256,
+          modelProfile: "storyboard-fast",
+          generatedAt: new Date().toISOString()
+        }
+      ]
+    });
+
+    await shotPlanRepo.save(shotPlan);
+
+    // Retrieve via findById
+    const retrieved = await shotPlanRepo.findById(shotPlan.id);
+    expect(retrieved).toBeDefined();
+    expect(retrieved!.previsAssociations).toHaveLength(2);
+    expect(retrieved!.previsAssociations[0]?.beatIndex).toBe(1);
+    expect(retrieved!.previsAssociations[0]?.candidateId).toBe(candidateBeat1.candidate_id);
+    expect(retrieved!.previsAssociations[1]?.beatIndex).toBe(2);
+    expect(retrieved!.previsAssociations[1]?.candidateId).toBe(candidateBeat2.candidate_id);
+
+    // Single-frame compatibility accessor returns beat 1 candidate
+    expect(retrieved!.previs?.candidateId).toBe(candidateBeat1.candidate_id);
+
+    // Lookup by beat helper
+    expect(retrieved!.getPrevisForBeat(1)?.candidateId).toBe(candidateBeat1.candidate_id);
+    expect(retrieved!.getPrevisForBeat(2)?.candidateId).toBe(candidateBeat2.candidate_id);
+
+    // Verify row in shot_plans table has previs_candidate_id set to beat 1 candidate
+    const rawPlanRow = await client.query<{ previs_candidate_id: string }>(
+      "SELECT previs_candidate_id FROM shot_plans WHERE shot_plan_id = $1",
+      [shotPlan.id]
+    );
+    expect(rawPlanRow.rows[0]?.previs_candidate_id).toBe(candidateBeat1.candidate_id);
+
+    // Verify rows in shot_plan_previs_associations table
+    const assocRows = await client.query<{ beat_index: number; candidate_id: string }>(
+      "SELECT beat_index, candidate_id FROM shot_plan_previs_associations WHERE shot_plan_id = $1 ORDER BY beat_index ASC",
+      [shotPlan.id]
+    );
+    expect(assocRows.rows).toEqual([
+      { beat_index: 1, candidate_id: candidateBeat1.candidate_id },
+      { beat_index: 2, candidate_id: candidateBeat2.candidate_id }
+    ]);
+  });
+
+  it("removes an association and verifies it stays removed after reload", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+    const scene = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      specRevision: 1
+    });
+
+    const candidateBeat1 = await insertStoryboardCandidateRecord(client, {
+      sceneId: scene.scene_id,
+      sceneSpecRevision: 1,
+      variantOrdinal: 1,
+      beatIndex: 1
+    });
+
+    const candidateBeat2 = await insertStoryboardCandidateRecord(client, {
+      sceneId: scene.scene_id,
+      sceneSpecRevision: 1,
+      variantOrdinal: 1,
+      beatIndex: 2
+    });
+
+    const shotPlanRepo = new PostgresShotPlanRepository(client);
+
+    // 1. Initial plan with 2 beats and associations for both beats
+    const shotPlan = ShotPlan.create({
+      id: "01928374-abcd-7000-8000-000000000097" as ShotPlanId,
+      sceneId: scene.scene_id as SceneId,
+      specRevision: 1,
+      variantOrdinal: 1,
+      targetDurationMs: 4000,
+      targetFrameCount: 96,
+      framing: "wide",
+      angle: "eye_level",
+      lensIntent: "24mm prime",
+      cameraPosition: "tripod eye level",
+      cameraMovement: "static",
+      movementSpeed: "slow",
+      cameraPromptDescription: "Multi-beat removal test",
+      actionSummary: "Two beat sequence",
+      beats: [
+        {
+          beatIndex: 1,
+          startMs: 0,
+          endMs: 2000,
+          description: "Beat 1 description",
+          cameraAction: "static hold",
+          subjectAction: "steps forward"
+        },
+        {
+          beatIndex: 2,
+          startMs: 2000,
+          endMs: 4000,
+          description: "Beat 2 description",
+          cameraAction: "pan right",
+          subjectAction: "turns right"
+        }
+      ],
+      lightingStyle: "high_key_commercial",
+      environmentDescription: "Studio set",
+      previsAssociations: [
+        {
+          beatIndex: 1,
+          candidateId: candidateBeat1.candidate_id,
+          storageBucket: candidateBeat1.storage_bucket,
+          storageObjectKey: candidateBeat1.storage_object_key,
+          contentHashSha256: candidateBeat1.content_hash_sha256,
+          modelProfile: "storyboard-fast",
+          generatedAt: new Date().toISOString()
+        },
+        {
+          beatIndex: 2,
+          candidateId: candidateBeat2.candidate_id,
+          storageBucket: candidateBeat2.storage_bucket,
+          storageObjectKey: candidateBeat2.storage_object_key,
+          contentHashSha256: candidateBeat2.content_hash_sha256,
+          modelProfile: "storyboard-fast",
+          generatedAt: new Date().toISOString()
+        }
+      ]
+    });
+
+    await shotPlanRepo.save(shotPlan);
+
+    const initialLoaded = await shotPlanRepo.findById(shotPlan.id);
+    expect(initialLoaded?.previsAssociations).toHaveLength(2);
+
+    // 2. Save revised plan with beat 2 association removed (only beat 1 remains)
+    const revisedSnapshot = {
+      ...shotPlan.snapshot(),
+      previsAssociations: shotPlan.snapshot().previsAssociations!.filter((a) => a.beatIndex === 1)
+    };
+    const revisedPlan = ShotPlan.reconstitute(revisedSnapshot);
+    await shotPlanRepo.save(revisedPlan);
+
+    const reloaded = await shotPlanRepo.findById(shotPlan.id);
+    expect(reloaded).toBeDefined();
+    expect(reloaded!.previsAssociations).toHaveLength(1);
+    expect(reloaded!.previsAssociations[0]?.beatIndex).toBe(1);
+    expect(reloaded!.getPrevisForBeat(2)).toBeUndefined();
+
+    // Verify row in database table was deleted
+    const assocRowsAfterRemove = await client.query<{ beat_index: number }>(
+      "SELECT beat_index FROM shot_plan_previs_associations WHERE shot_plan_id = $1",
+      [shotPlan.id]
+    );
+    expect(assocRowsAfterRemove.rows).toEqual([{ beat_index: 1 }]);
+
+    // 3. Save revised plan with all associations removed without manually setting previs to null
+    const allRemovedSnapshot = {
+      ...revisedPlan.snapshot(),
+      previsAssociations: []
+    };
+    const allRemovedPlan = ShotPlan.reconstitute(allRemovedSnapshot);
+    await shotPlanRepo.save(allRemovedPlan);
+
+    const reloadedEmpty = await shotPlanRepo.findById(shotPlan.id);
+    expect(reloadedEmpty).toBeDefined();
+    expect(reloadedEmpty!.previsAssociations).toHaveLength(0);
+    expect(reloadedEmpty!.previs).toBeNull();
+
+    const assocRowsAfterAllRemoved = await client.query<{ beat_index: number }>(
+      "SELECT beat_index FROM shot_plan_previs_associations WHERE shot_plan_id = $1",
+      [shotPlan.id]
+    );
+    expect(assocRowsAfterAllRemoved.rows).toHaveLength(0);
+
+    // Verify previs_candidate_id and structured_plan.previs in shot_plans table are cleared
+    const planRowAfterAllRemoved = await client.query<{
+      previs_candidate_id: string | null;
+      structured_plan: string | { previs?: unknown };
+    }>("SELECT previs_candidate_id, structured_plan FROM shot_plans WHERE shot_plan_id = $1", [
+      shotPlan.id
+    ]);
+    expect(planRowAfterAllRemoved.rows[0]?.previs_candidate_id).toBeNull();
+    const structuredPlanJson =
+      typeof planRowAfterAllRemoved.rows[0]?.structured_plan === "string"
+        ? (JSON.parse(planRowAfterAllRemoved.rows[0].structured_plan) as { previs?: unknown })
+        : planRowAfterAllRemoved.rows[0]?.structured_plan;
+    expect(structuredPlanJson?.previs).toBeNull();
+  });
+
+  it("enforces composite foreign key on beat previs associations rejecting cross-scene or cross-revision candidates", async () => {
+    const clientRecord = await insertClientRecord(client);
+    const campaign = await insertCampaignRecord(client, { clientId: clientRecord.client_id });
+    const scene1 = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 1,
+      specRevision: 1
+    });
+    const scene2 = await insertStoryboardSceneRecord(client, {
+      campaignId: campaign.campaign_id,
+      sceneOrder: 2,
+      specRevision: 1
+    });
+
+    // Candidate belongs to scene2
+    const candidateOfScene2 = await insertStoryboardCandidateRecord(client, {
+      sceneId: scene2.scene_id,
+      sceneSpecRevision: 1,
+      variantOrdinal: 1,
+      beatIndex: 1
+    });
+
+    const shotPlanRepo = new PostgresShotPlanRepository(client);
+
+    // Attempting to attach candidate from scene2 to a shot plan of scene1 via previsAssociations
+    const crossScenePlan = ShotPlan.create({
+      id: "01928374-abcd-7000-8000-000000000096" as ShotPlanId,
+      sceneId: scene1.scene_id as SceneId,
+      specRevision: 1,
+      variantOrdinal: 1,
+      targetDurationMs: 4000,
+      targetFrameCount: 96,
+      framing: "wide",
+      angle: "eye_level",
+      lensIntent: "24mm prime",
+      cameraPosition: "tripod eye level",
+      cameraMovement: "static",
+      movementSpeed: "slow",
+      cameraPromptDescription: "Cross scene plan",
+      actionSummary: "Hero enters",
+      beats: [
+        {
+          beatIndex: 1,
+          startMs: 0,
+          endMs: 4000,
+          description: "Hero enters frame",
+          cameraAction: "static hold",
+          subjectAction: "steps forward"
+        }
+      ],
+      lightingStyle: "high_key_commercial",
+      environmentDescription: "Studio set",
+      previsAssociations: [
+        {
+          beatIndex: 1,
+          candidateId: candidateOfScene2.candidate_id,
+          storageBucket: candidateOfScene2.storage_bucket,
+          storageObjectKey: candidateOfScene2.storage_object_key,
+          contentHashSha256: candidateOfScene2.content_hash_sha256,
+          modelProfile: "storyboard-fast",
+          generatedAt: new Date().toISOString()
+        }
+      ]
+    });
+
+    await expect(shotPlanRepo.save(crossScenePlan)).rejects.toThrow();
+  });
 });

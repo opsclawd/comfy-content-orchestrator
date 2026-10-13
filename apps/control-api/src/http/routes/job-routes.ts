@@ -122,6 +122,10 @@ export const completeJobSchema = {
             type: "integer",
             minimum: 1
           },
+          beatIndex: {
+            type: "integer",
+            minimum: 1
+          },
           storageBucket: {
             type: "string",
             minLength: 1,
@@ -330,7 +334,9 @@ export const jobRoutes: FastifyPluginAsync<JobRoutesOptions> = async (
     Body: {
       leaseToken: string;
       manifestPayload?: Record<string, unknown>;
-      candidatePayload?: Record<string, unknown>;
+      candidatePayload?: Record<string, unknown> & {
+        beatIndex?: number;
+      };
     };
   }>("/api/jobs/:jobId/complete", { schema: completeJobSchema }, async (request, reply) => {
     try {

@@ -481,6 +481,323 @@ describe("Review Read Endpoints", () => {
     );
   });
 
+  it("GET /api/scenes/:sceneId/review maps beatFrames with presigned candidate URLs and preserves pending/failed", async () => {
+    const candidateUuidBeat1 = "01950c46-9e90-7d3d-82d2-8f1d3c000088";
+    const detailWithBeatFrames: SceneReviewDetail = {
+      ...sampleDetail,
+      candidatesByRevision: [
+        {
+          specRevision: 2,
+          candidates: [
+            {
+              id: candidateUuidBeat1 as CandidateId,
+              sceneId: sceneUuid as SceneId,
+              specRevision: 2,
+              variantOrdinal: 1,
+              beatIndex: 1,
+              storageBucket: "review-bucket",
+              storageObjectKey: "frames/beat-1.webp",
+              contentHash: "hash-beat-1",
+              generationMetadata: {},
+              createdAt: "2026-09-01T12:00:00.000Z"
+            }
+          ]
+        }
+      ],
+      shotPlans: [
+        {
+          shotPlanId: "11111111-1111-4111-8111-111111111111",
+          sceneId: sceneUuid,
+          specRevision: 2,
+          variantOrdinal: 1,
+          status: "draft",
+          routingMode: "reference_directed",
+          isCurrentRevision: true,
+          targetDurationMs: 4000,
+          targetFrameCount: 97,
+          framing: "medium_close_up",
+          angle: "eye_level",
+          cameraMovement: "dolly_in",
+          movementSpeed: "slow",
+          lensIntent: "50mm",
+          cameraPosition: "eye-level",
+          cameraPromptDescription: "Push in slowly",
+          actionSummary: "Character speaks across three beats",
+          lightingStyle: "neon_night",
+          environmentDescription: "City at night",
+          colorPalette: ["blue"],
+          atmosphere: "foggy",
+          subjects: [],
+          beats: [
+            {
+              beatIndex: 1,
+              startMs: 0,
+              endMs: 1000,
+              description: "Beat 1",
+              cameraAction: "hold",
+              subjectAction: "moves"
+            },
+            {
+              beatIndex: 2,
+              startMs: 1000,
+              endMs: 2500,
+              description: "Beat 2",
+              cameraAction: "pan",
+              subjectAction: "speaks"
+            },
+            {
+              beatIndex: 3,
+              startMs: 2500,
+              endMs: 4000,
+              description: "Beat 3",
+              cameraAction: "tilt",
+              subjectAction: "exits"
+            }
+          ],
+          beatFrames: [
+            {
+              beatIndex: 1,
+              status: "ready",
+              candidateId: candidateUuidBeat1,
+              media: { available: true }
+            },
+            {
+              beatIndex: 2,
+              status: "pending",
+              media: { available: false }
+            },
+            {
+              beatIndex: 3,
+              status: "failed",
+              media: { available: false }
+            }
+          ],
+          dialogue: null,
+          continuity: { persistentSubjectIds: [], frameAnchorTarget: "none" },
+          boundReferences: [],
+          createdAt: "2026-08-18T10:00:00.000Z",
+          updatedAt: "2026-08-18T10:00:00.000Z"
+        }
+      ]
+    };
+
+    const sceneReviewQueries: SceneReviewQueries = {
+      async getCampaignReviewSummary() {
+        return undefined;
+      },
+      async getSceneReviewDetail(sceneId: SceneId) {
+        if (sceneId === sceneUuid) {
+          return detailWithBeatFrames;
+        }
+        return undefined;
+      }
+    };
+
+    const reviewMediaDelivery: ReviewMediaDeliveryPort = {
+      async generatePresignedReadUrl(locator: PersistentObjectLocator) {
+        return `https://storage.local/${locator.bucket}/${locator.key}?token=presigned`;
+      }
+    };
+
+    const app = createControlApiApp({
+      uow: new FakeUnitOfWork(),
+      sceneReviewQueries,
+      reviewMediaDelivery
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/scenes/${sceneUuid}/review`
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    const parsed = SceneReviewDetailReadModelSchema.safeParse(body);
+    expect(parsed.success).toBe(true);
+
+    const plan = body.shotPlans[0];
+    expect(plan.beatFrames).toHaveLength(3);
+
+    // Unchanged beat order
+    expect(plan.beatFrames.map((f: { beatIndex: number }) => f.beatIndex)).toEqual([1, 2, 3]);
+
+    // Beat 1 is ready with signed URL
+    expect(plan.beatFrames[0].status).toBe("ready");
+    expect(plan.beatFrames[0].media.available).toBe(true);
+    expect(plan.beatFrames[0].media.url).toBe(
+      "https://storage.local/review-bucket/frames/beat-1.webp?token=presigned"
+    );
+
+    // Beat 2 is pending without URL
+    expect(plan.beatFrames[1].status).toBe("pending");
+    expect(plan.beatFrames[1].media.available).toBe(false);
+    expect("url" in plan.beatFrames[1].media).toBe(false);
+
+    // Beat 3 is failed without URL
+    expect(plan.beatFrames[2].status).toBe("failed");
+    expect(plan.beatFrames[2].media.available).toBe(false);
+    expect("url" in plan.beatFrames[2].media).toBe(false);
+
+    // Verify response does not leak internal storage buckets or keys in beatFrames
+    expect(plan.beatFrames[0]).not.toHaveProperty("storageBucket");
+    expect(plan.beatFrames[0]).not.toHaveProperty("storageObjectKey");
+    expect(plan.beatFrames[1]).not.toHaveProperty("storageBucket");
+    expect(plan.beatFrames[2]).not.toHaveProperty("storageBucket");
+  });
+
+  it("GET /api/scenes/:sceneId/review marks ready beatFrame unavailable when candidate media cannot be signed", async () => {
+    const missingCandidateId = "01950c46-9e90-7d3d-82d2-8f1d3c000099";
+    const throwingCandidateId = "01950c46-9e90-7d3d-82d2-8f1d3c000077";
+
+    const detail: SceneReviewDetail = {
+      ...sampleDetail,
+      candidatesByRevision: [
+        {
+          specRevision: 2,
+          candidates: [
+            {
+              id: throwingCandidateId as CandidateId,
+              sceneId: sceneUuid as SceneId,
+              specRevision: 2,
+              variantOrdinal: 1,
+              beatIndex: 2,
+              storageBucket: "review-bucket",
+              storageObjectKey: "frames/beat-2.webp",
+              contentHash: "hash-beat-2",
+              generationMetadata: {},
+              createdAt: "2026-09-01T12:00:00.000Z"
+            }
+          ]
+        }
+      ],
+      shotPlans: [
+        {
+          shotPlanId: "11111111-1111-4111-8111-111111111111",
+          sceneId: sceneUuid,
+          specRevision: 2,
+          variantOrdinal: 1,
+          status: "draft",
+          routingMode: "reference_directed",
+          isCurrentRevision: true,
+          targetDurationMs: 4000,
+          targetFrameCount: 97,
+          framing: "wide",
+          angle: "eye_level",
+          cameraMovement: "static",
+          movementSpeed: "slow",
+          lensIntent: "50mm",
+          cameraPosition: "eye-level",
+          cameraPromptDescription: "Static",
+          actionSummary: "Action",
+          lightingStyle: "neon_night",
+          environmentDescription: "City",
+          colorPalette: [],
+          atmosphere: null,
+          subjects: [],
+          beats: [
+            {
+              beatIndex: 1,
+              startMs: 0,
+              endMs: 1000,
+              description: "B1",
+              cameraAction: "a",
+              subjectAction: "b"
+            },
+            {
+              beatIndex: 2,
+              startMs: 1000,
+              endMs: 2000,
+              description: "B2",
+              cameraAction: "a",
+              subjectAction: "b"
+            },
+            {
+              beatIndex: 3,
+              startMs: 2000,
+              endMs: 3000,
+              description: "B3",
+              cameraAction: "a",
+              subjectAction: "b"
+            }
+          ],
+          beatFrames: [
+            {
+              beatIndex: 1,
+              status: "ready",
+              candidateId: missingCandidateId, // Not in candidatesByRevision
+              media: { available: true }
+            },
+            {
+              beatIndex: 2,
+              status: "ready",
+              candidateId: throwingCandidateId, // Throws during presign
+              media: { available: true }
+            },
+            {
+              beatIndex: 3,
+              status: "failed", // Preserved as failed
+              media: { available: false }
+            }
+          ],
+          dialogue: null,
+          continuity: { persistentSubjectIds: [], frameAnchorTarget: "none" },
+          boundReferences: [],
+          createdAt: "2026-08-18T10:00:00.000Z",
+          updatedAt: "2026-08-18T10:00:00.000Z"
+        }
+      ]
+    };
+
+    const sceneReviewQueries: SceneReviewQueries = {
+      async getCampaignReviewSummary() {
+        return undefined;
+      },
+      async getSceneReviewDetail(sceneId: SceneId) {
+        if (sceneId === sceneUuid) {
+          return detail;
+        }
+        return undefined;
+      }
+    };
+
+    const reviewMediaDelivery: ReviewMediaDeliveryPort = {
+      async generatePresignedReadUrl(locator: PersistentObjectLocator) {
+        if (locator.key.includes("beat-2")) {
+          throw new Error("S3 timeout");
+        }
+        return `https://storage.local/${locator.bucket}/${locator.key}`;
+      }
+    };
+
+    const app = createControlApiApp({
+      uow: new FakeUnitOfWork(),
+      sceneReviewQueries,
+      reviewMediaDelivery
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/scenes/${sceneUuid}/review`
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(SceneReviewDetailReadModelSchema.safeParse(body).success).toBe(true);
+
+    const plan = body.shotPlans[0];
+    // Candidate missing from map becomes unavailable (NOT failed)
+    expect(plan.beatFrames[0].status).toBe("unavailable");
+    expect(plan.beatFrames[0].media.available).toBe(false);
+
+    // Signing error becomes unavailable (NOT failed)
+    expect(plan.beatFrames[1].status).toBe("unavailable");
+    expect(plan.beatFrames[1].media.available).toBe(false);
+
+    // True generation failure remains failed
+    expect(plan.beatFrames[2].status).toBe("failed");
+    expect(plan.beatFrames[2].media.available).toBe(false);
+  });
+
   it("GET /api/scenes/:sceneId/review defaults to available: false when reviewMediaDelivery dependency is not provided", async () => {
     const sceneReviewQueries: SceneReviewQueries = {
       async getCampaignReviewSummary() {

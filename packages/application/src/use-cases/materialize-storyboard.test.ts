@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   Scene,
   type CampaignId,
@@ -71,10 +71,9 @@ describe("MaterializeStoryboardUseCase", () => {
     for (let i = 0; i < 3; i++) {
       const sceneSnap = result.scenes[i]!;
       expect(sceneSnap.sequenceIndex).toBe(i + 1);
-      // Materialization no longer auto-admits candidate generation: ShotPlan
-      // generation (triggered explicitly via "Generate Shot Plans") is now
-      // the only path into generating_candidates, so a freshly materialized
-      // scene stays in its natural post-creation state.
+      // Freshly materialized scenes are created in draft_pending status;
+      // if an autoPlanCoordinator is configured and references are bound,
+      // first-pass shot planning is triggered post-commit outside the transaction.
       expect(sceneSnap.status).toBe("draft_pending");
       expect(sceneSnap.specRevision).toBe(1);
       expect(sceneSnap.configuration.durationMs).toBe(configs[i]!.configuration.durationMs);
@@ -320,6 +319,95 @@ describe("MaterializeStoryboardUseCase", () => {
       })
     ).rejects.toThrow(
       "UnitOfWorkContext.campaigns is not configured for this UnitOfWork implementation."
+    );
+  });
+
+  it("auto-triggers planning for each materialized scene with bound references when autoPlanCoordinator is provided", async () => {
+    const campaign = createSeededCampaign(3);
+    const uow = new InMemorySceneUnitOfWork(undefined, undefined, undefined, [campaign]);
+    const coordinator = {
+      prepareAdmission: vi.fn().mockResolvedValue({ kind: "admitted" })
+    };
+    const useCase = new MaterializeStoryboardUseCase(uow, coordinator);
+
+    const configs = createSceneConfigs(3);
+    const result = await useCase.execute({
+      campaignId,
+      scenes: configs
+    });
+
+    expect(result.isIdempotentReplay).toBe(false);
+    expect(result.scenes).toHaveLength(3);
+    expect(coordinator.prepareAdmission).toHaveBeenCalledTimes(3);
+    for (const scene of result.scenes) {
+      expect(coordinator.prepareAdmission).toHaveBeenCalledWith({ sceneId: scene.id });
+    }
+  });
+
+  it("does not auto-trigger planning on idempotent replay", async () => {
+    const campaign = createSeededCampaign(3);
+    const uow = new InMemorySceneUnitOfWork(undefined, undefined, undefined, [campaign]);
+    const coordinator = {
+      prepareAdmission: vi.fn().mockResolvedValue({ kind: "admitted" })
+    };
+    const useCase = new MaterializeStoryboardUseCase(uow, coordinator);
+
+    const configs = createSceneConfigs(3);
+    const firstResult = await useCase.execute({
+      campaignId,
+      scenes: configs
+    });
+    expect(firstResult.isIdempotentReplay).toBe(false);
+    expect(coordinator.prepareAdmission).toHaveBeenCalledTimes(3);
+
+    coordinator.prepareAdmission.mockClear();
+
+    const secondResult = await useCase.execute({
+      campaignId,
+      scenes: configs
+    });
+    expect(secondResult.isIdempotentReplay).toBe(true);
+    expect(coordinator.prepareAdmission).not.toHaveBeenCalled();
+  });
+
+  it("logs warning when coordinator is not configured on materialized scenes with bound references", async () => {
+    const campaign = createSeededCampaign(2);
+    const uow = new InMemorySceneUnitOfWork(undefined, undefined, undefined, [campaign]);
+    const logger = { warn: vi.fn() };
+    const useCase = new MaterializeStoryboardUseCase(uow, undefined, logger);
+
+    const configs = createSceneConfigs(2);
+    const result = await useCase.execute({
+      campaignId,
+      scenes: configs
+    });
+
+    expect(result.isIdempotentReplay).toBe(false);
+    expect(result.scenes).toHaveLength(2);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("planning coordinator is not configured")
+    );
+  });
+
+  it("logs warning and preserves materialized scenes when post-commit auto-planning encounters error", async () => {
+    const campaign = createSeededCampaign(2);
+    const uow = new InMemorySceneUnitOfWork(undefined, undefined, undefined, [campaign]);
+    const coordinator = {
+      prepareAdmission: vi.fn().mockRejectedValue(new Error("Coordinator failed"))
+    };
+    const logger = { warn: vi.fn() };
+    const useCase = new MaterializeStoryboardUseCase(uow, coordinator, logger);
+
+    const configs = createSceneConfigs(2);
+    const result = await useCase.execute({
+      campaignId,
+      scenes: configs
+    });
+
+    expect(result.isIdempotentReplay).toBe(false);
+    expect(result.scenes).toHaveLength(2);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("First-pass shot-plan auto-trigger failed")
     );
   });
 });

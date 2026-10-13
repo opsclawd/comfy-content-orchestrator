@@ -118,7 +118,8 @@ function describeLighting(lighting: string): string {
 }
 
 export function compileStoryboardPrevisPrompt(
-  shotPlan: StoryboardPrevisShotPlanInput
+  shotPlan: StoryboardPrevisShotPlanInput,
+  beat?: StoryboardShotPlanBeat
 ): StoryboardPrevisPromptResult {
   const sections: string[] = [STORYBOARD_STYLE_HEADER];
 
@@ -159,12 +160,32 @@ export function compileStoryboardPrevisPrompt(
   }
 
   // 3. Action & Staging
-  let actionText = `Action: ${shotPlan.actionSummary}.`;
-  if (shotPlan.beats && shotPlan.beats.length > 0) {
-    const firstBeat = shotPlan.beats[0]!;
-    actionText += ` Primary staging: ${firstBeat.subjectAction} (beat 1: ${firstBeat.description}).`;
+  if (beat) {
+    const beatIndexPrefix = beat.beatIndex !== undefined ? `Beat ${beat.beatIndex}` : "Beat";
+    const timingClause =
+      beat.startMs !== undefined && beat.endMs !== undefined
+        ? ` [${beat.startMs}ms-${beat.endMs}ms]`
+        : "";
+    const cleanAction = beat.subjectAction.trim().replace(/\.+$/, "");
+    const cleanDesc =
+      beat.description && beat.description.trim().length > 0
+        ? beat.description.trim().replace(/\.+$/, "")
+        : "";
+    const descClause = cleanDesc.length > 0 ? ` (${cleanDesc})` : "";
+    let beatActionText = `Action: ${beatIndexPrefix}${timingClause}: ${cleanAction}${descClause}.`;
+    if (beat.cameraAction && beat.cameraAction.trim().length > 0) {
+      const cleanCamera = beat.cameraAction.trim().replace(/\.+$/, "");
+      beatActionText += ` Camera: ${cleanCamera}.`;
+    }
+    sections.push(beatActionText);
+  } else {
+    let actionText = `Action: ${shotPlan.actionSummary}.`;
+    if (shotPlan.beats && shotPlan.beats.length > 0) {
+      const firstBeat = shotPlan.beats[0]!;
+      actionText += ` Primary staging: ${firstBeat.subjectAction} (beat 1: ${firstBeat.description}).`;
+    }
+    sections.push(actionText);
   }
-  sections.push(actionText);
 
   // 4. Environment & Atmosphere
   let envText = `Setting: ${shotPlan.environmentDescription}.`;

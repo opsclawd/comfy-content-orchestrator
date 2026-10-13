@@ -9,6 +9,7 @@ import type {
   CampaignStatus,
   ReviewAction,
   SceneStatus,
+  ShotPlanBeatFrameReviewItem,
   ShotPlanReferenceBindingReviewItem,
   ShotPlanReviewItem
 } from "@cco/contracts";
@@ -96,11 +97,47 @@ interface StoryboardCandidateRow {
   scene_id: string;
   scene_spec_revision: number;
   variant_ordinal: number;
+  beat_index?: number | null;
   storage_bucket: string;
   storage_object_key: string;
   content_hash_sha256: string;
   generation_payload: Record<string, unknown> | string;
   created_at: Date | string;
+}
+
+interface ShotPlanPrevisAssociationRow {
+  shot_plan_id: string;
+  beat_index: number | string;
+  candidate_id: string;
+  scene_id: string;
+  spec_revision: number | string;
+  matched_candidate_id?: string | null;
+  candidate_beat_index?: number | string | null;
+  storage_bucket?: string | null;
+  storage_object_key?: string | null;
+  content_hash_sha256?: string | null;
+}
+
+interface CandidateJobRow {
+  job_id: string;
+  scene_id: string;
+  job_kind: string;
+  status: string;
+  injected_payload: unknown;
+  created_at: Date | string;
+}
+
+export function parsePositiveInteger(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isInteger(value) && value > 0 ? value : null;
+  }
+  if (typeof value === "string") {
+    if (/^[1-9]\d*$/.test(value)) {
+      const parsed = Number(value);
+      return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+    }
+  }
+  return null;
 }
 
 function mapRowToCandidate(row: StoryboardCandidateRow): StoryboardCandidate {
@@ -109,6 +146,7 @@ function mapRowToCandidate(row: StoryboardCandidateRow): StoryboardCandidate {
     sceneId: row.scene_id as SceneId,
     specRevision: Number(row.scene_spec_revision),
     variantOrdinal: Number(row.variant_ordinal),
+    beatIndex: Number(row.beat_index ?? 1),
     storageBucket: row.storage_bucket,
     storageObjectKey: row.storage_object_key,
     contentHash: row.content_hash_sha256,
@@ -126,7 +164,9 @@ function mapRowToCandidate(row: StoryboardCandidateRow): StoryboardCandidate {
 function mapRowToShotPlanReviewItem(
   row: ShotPlanJoinedRow,
   currentRevision: number,
-  currentBoundReferences: readonly ShotPlanReferenceBindingReviewItem[] = []
+  currentBoundReferences: readonly ShotPlanReferenceBindingReviewItem[] = [],
+  associatedCandidateMap: ReadonlyMap<string, { candidateId: string }> = new Map(),
+  latestCandidateJobMap: ReadonlyMap<string, { jobId: string; status: string }> = new Map()
 ): ShotPlanReviewItem {
   const structured =
     typeof row.structured_plan === "string"
@@ -150,6 +190,92 @@ function mapRowToShotPlanReviewItem(
       : null;
 
   const isCurrent = Number(row.spec_revision) === currentRevision;
+
+  const rawBeats = Array.isArray(structured.beats)
+    ? (structured.beats as Array<Record<string, unknown>>)
+    : [];
+
+  const declaredBeats = rawBeats
+    .filter(
+      (b): b is Record<string, unknown> & { beatIndex: number } =>
+        typeof b === "object" &&
+        b !== null &&
+        !Array.isArray(b) &&
+        typeof b.beatIndex === "number" &&
+        Number.isInteger(b.beatIndex) &&
+        b.beatIndex > 0
+    )
+    .slice()
+    .sort((a, b) => a.beatIndex - b.beatIndex);
+
+  const beatFrames: ShotPlanBeatFrameReviewItem[] = declaredBeats.map((beat) => {
+    const beatIndex = beat.beatIndex;
+    const assocKey = `${row.shot_plan_id}:${beatIndex}`;
+    const assoc = associatedCandidateMap.get(assocKey);
+
+    if (assoc) {
+      return {
+        beatIndex,
+        status: "ready" as const,
+        candidateId: assoc.candidateId,
+        media: {
+          available: true
+        }
+      };
+    }
+
+    const jobKey = `${row.shot_plan_id}:${Number(row.spec_revision)}:${beatIndex}`;
+    const job = latestCandidateJobMap.get(jobKey);
+
+    if (job) {
+      if (job.status === "queued" || job.status === "leased" || job.status === "rendering") {
+        return {
+          beatIndex,
+          status: "pending" as const,
+          media: {
+            available: false
+          }
+        };
+      }
+
+      if (job.status === "failed") {
+        return {
+          beatIndex,
+          status: "failed" as const,
+          media: {
+            available: false
+          }
+        };
+      }
+
+      if (job.status === "cancelled" || job.status === "completed") {
+        return {
+          beatIndex,
+          status: "unavailable" as const,
+          media: {
+            available: false
+          }
+        };
+      }
+
+      return {
+        beatIndex,
+        status: "unavailable" as const,
+        media: {
+          available: false
+        }
+      };
+    }
+
+    // No association or matching job yet
+    return {
+      beatIndex,
+      status: "pending" as const,
+      media: {
+        available: false
+      }
+    };
+  });
 
   return {
     shotPlanId: row.shot_plan_id,
@@ -180,6 +306,7 @@ function mapRowToShotPlanReviewItem(
       ? (structured.subjects as ShotPlanReviewItem["subjects"])
       : [],
     beats: Array.isArray(structured.beats) ? (structured.beats as ShotPlanReviewItem["beats"]) : [],
+    beatFrames,
     dialogue: (structured.dialogue as ShotPlanReviewItem["dialogue"]) ?? null,
     continuity: (structured.continuity as ShotPlanReviewItem["continuity"]) ?? {
       persistentSubjectIds: [],
@@ -343,6 +470,7 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
         scene_id,
         scene_spec_revision,
         variant_ordinal,
+        beat_index,
         storage_bucket,
         storage_object_key,
         content_hash_sha256,
@@ -350,7 +478,7 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
         created_at
       FROM storyboard_candidates
       WHERE scene_id = $1
-      ORDER BY scene_spec_revision ASC, variant_ordinal ASC
+      ORDER BY scene_spec_revision ASC, variant_ordinal ASC, beat_index ASC
       `,
       [sceneId]
     );
@@ -382,6 +510,46 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
       LEFT JOIN storyboard_candidates sc ON sc.candidate_id = sp.previs_candidate_id
       WHERE sp.scene_id = $1
       ORDER BY sp.spec_revision ASC, sp.variant_ordinal ASC
+      `,
+      [sceneId]
+    );
+
+    const associationsResult = await this.client.query<ShotPlanPrevisAssociationRow>(
+      `
+      SELECT
+        a.shot_plan_id,
+        a.beat_index,
+        a.candidate_id,
+        a.scene_id,
+        a.spec_revision,
+        sc.candidate_id AS matched_candidate_id,
+        sc.beat_index AS candidate_beat_index,
+        sc.storage_bucket,
+        sc.storage_object_key,
+        sc.content_hash_sha256
+      FROM shot_plan_previs_associations a
+      JOIN storyboard_candidates sc
+        ON sc.candidate_id = a.candidate_id
+        AND sc.scene_id = a.scene_id
+        AND sc.scene_spec_revision = a.spec_revision
+      WHERE a.scene_id = $1
+      `,
+      [sceneId]
+    );
+
+    const jobsResult = await this.client.query<CandidateJobRow>(
+      `
+      SELECT
+        job_id,
+        scene_id,
+        job_kind,
+        status,
+        injected_payload,
+        created_at
+      FROM render_jobs
+      WHERE scene_id = $1
+        AND job_kind = 'candidate'
+      ORDER BY created_at DESC, job_id DESC
       `,
       [sceneId]
     );
@@ -521,8 +689,88 @@ export class PostgresSceneReviewQueries implements SceneReviewQueries {
       candidates: Object.freeze(candidates)
     }));
 
+    const associatedCandidateMap = new Map<string, { candidateId: string }>();
+    for (const row of associationsResult.rows) {
+      const beatIndex = parsePositiveInteger(row.beat_index);
+      const candidateBeatIndex =
+        row.candidate_beat_index !== null && row.candidate_beat_index !== undefined
+          ? parsePositiveInteger(row.candidate_beat_index)
+          : null;
+
+      const hasValidMedia = Boolean(
+        row.matched_candidate_id &&
+        row.storage_bucket &&
+        row.storage_object_key &&
+        row.content_hash_sha256
+      );
+
+      if (
+        beatIndex !== null &&
+        candidateBeatIndex !== null &&
+        candidateBeatIndex === beatIndex &&
+        hasValidMedia
+      ) {
+        associatedCandidateMap.set(`${row.shot_plan_id}:${beatIndex}`, {
+          candidateId: row.candidate_id
+        });
+      }
+    }
+
+    const latestCandidateJobMap = new Map<string, { jobId: string; status: string }>();
+    for (const row of jobsResult.rows) {
+      try {
+        let rawPayload: unknown = null;
+        if (typeof row.injected_payload === "string") {
+          try {
+            rawPayload = JSON.parse(row.injected_payload);
+          } catch {
+            rawPayload = null;
+          }
+        } else {
+          rawPayload = row.injected_payload;
+        }
+
+        if (rawPayload === null || typeof rawPayload !== "object" || Array.isArray(rawPayload)) {
+          continue;
+        }
+
+        const payload = rawPayload as Record<string, unknown>;
+        if (typeof payload.shotPlanId !== "string" || payload.shotPlanId.length === 0) {
+          continue;
+        }
+
+        if (typeof payload.sceneId === "string" && payload.sceneId !== sceneId) {
+          continue;
+        }
+
+        const shotPlanId = payload.shotPlanId;
+        const specRevision = parsePositiveInteger(payload.specRevision);
+        const beatIndex = parsePositiveInteger(payload.beatIndex);
+
+        if (specRevision === null || beatIndex === null) {
+          continue;
+        }
+
+        const key = `${shotPlanId}:${specRevision}:${beatIndex}`;
+        if (!latestCandidateJobMap.has(key)) {
+          latestCandidateJobMap.set(key, {
+            jobId: row.job_id,
+            status: row.status
+          });
+        }
+      } catch {
+        continue;
+      }
+    }
+
     const shotPlans = shotPlansResult.rows.map((row) =>
-      mapRowToShotPlanReviewItem(row, Number(sceneRow.spec_revision), currentBoundReferences)
+      mapRowToShotPlanReviewItem(
+        row,
+        Number(sceneRow.spec_revision),
+        currentBoundReferences,
+        associatedCandidateMap,
+        latestCandidateJobMap
+      )
     );
 
     const status = sceneRow.status as SceneStatus;

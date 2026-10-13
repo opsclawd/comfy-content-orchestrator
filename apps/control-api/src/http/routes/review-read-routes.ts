@@ -262,9 +262,40 @@ export const reviewReadRoutes: FastifyPluginAsync<ReviewReadRoutesOptions> = asy
           };
         });
 
+        const beatFrames = plan.beatFrames?.map((frame) => {
+          if (frame.status === "ready" && frame.candidateId) {
+            const signedMedia = candidateMediaMap.get(frame.candidateId);
+            if (signedMedia?.available && signedMedia.url && signedMedia.url.trim().length > 0) {
+              return {
+                ...frame,
+                status: "ready" as const,
+                media: {
+                  available: true,
+                  url: signedMedia.url
+                }
+              };
+            }
+            return {
+              ...frame,
+              status: "unavailable" as const,
+              media: {
+                available: false
+              }
+            };
+          }
+
+          return {
+            ...frame,
+            media: {
+              available: false
+            }
+          };
+        });
+
         return {
           ...plan,
           ...(previs !== undefined ? { previs } : {}),
+          ...(beatFrames !== undefined ? { beatFrames } : {}),
           ...(boundReferences !== undefined ? { boundReferences } : {})
         };
       });
