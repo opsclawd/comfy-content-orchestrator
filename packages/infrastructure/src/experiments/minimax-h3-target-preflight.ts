@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, readFile, stat, unlink, writeFile, statfs } from "node:fs/promises";
+import { mkdir, open, readFile, stat, unlink, writeFile, statfs } from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import { resolve } from "node:path";
@@ -18,6 +18,53 @@ const execFileAsync = promisify(execFile);
 export { PINNED_COMFYUI_CORE_REVISION };
 
 export class MinimaxH3TargetPreflight implements MinimaxH3TargetPreflightPort {
+  // Deletes lockPath only if it still holds expectedToken AND the path
+  // still resolves to the exact inode we read that token from --
+  // plain read-token-then-unlink-by-path has a window between the
+  // read and the unlink where another process can replace the file
+  // (e.g. legitimately re-acquiring a lock it also found stale),
+  // and a bare path-based unlink in that window deletes the NEW
+  // process's lock, not the stale one this call actually verified.
+  // Binding the delete to the inode observed at read time closes that
+  // window down to the gap between the second stat and the unlink
+  // itself -- not perfectly atomic (true atomicity needs OS-level
+  // advisory locking such as flock(), which this file-based scheme
+  // doesn't use), but it means a same-path replacement can no longer
+  // be silently deleted out from under its new owner.
+  private async unlinkLockFileIfTokenMatches(
+    lockPath: string,
+    expectedToken: string
+  ): Promise<void> {
+    let handle;
+    try {
+      handle = await open(lockPath, "r");
+    } catch {
+      return; // already gone
+    }
+    try {
+      const observedStat = await handle.stat();
+      const raw = await handle.readFile("utf8");
+      const parsed = JSON.parse(raw) as { lockToken?: string };
+      if (parsed.lockToken !== expectedToken) {
+        return;
+      }
+      let currentStat;
+      try {
+        currentStat = await stat(lockPath);
+      } catch {
+        return; // already gone/replaced-then-removed
+      }
+      if (currentStat.dev !== observedStat.dev || currentStat.ino !== observedStat.ino) {
+        return; // path now points at a different file -- don't touch it
+      }
+      await unlink(lockPath);
+    } catch {
+      // malformed JSON, or unlink raced with another deletion -- ignore
+    } finally {
+      await handle.close();
+    }
+  }
+
   async checkTargetHost(
     target: MinimaxH3TargetSpecification
   ): Promise<{ ok: boolean; blocker?: string }> {
@@ -226,14 +273,8 @@ export class MinimaxH3TargetPreflight implements MinimaxH3TargetPreflightPort {
           }
 
           // Stale lock: clean it up only if lockToken matches and attempt re-acquire
-          try {
-            const currentRaw = await readFile(lockPath, "utf8");
-            const current = JSON.parse(currentRaw) as { lockToken?: string };
-            if (current.lockToken === existing.lockToken) {
-              await unlink(lockPath);
-            }
-          } catch {
-            // ignore
+          if (existing.lockToken) {
+            await this.unlinkLockFileIfTokenMatches(lockPath, existing.lockToken);
           }
         } catch (checkErr) {
           return {
@@ -254,15 +295,7 @@ export class MinimaxH3TargetPreflight implements MinimaxH3TargetPreflightPort {
     }
 
     const release = async (): Promise<void> => {
-      try {
-        const currentRaw = await readFile(lockPath, "utf8");
-        const current = JSON.parse(currentRaw) as { lockToken?: string };
-        if (current.lockToken === lockToken) {
-          await unlink(lockPath);
-        }
-      } catch {
-        // ignore if already deleted or unreadable
-      }
+      await this.unlinkLockFileIfTokenMatches(lockPath, lockToken);
     };
 
     return { acquired: true, release, lockToken, processStartTimeTicks: startTicks };
@@ -276,8 +309,18 @@ export class MinimaxH3TargetPreflight implements MinimaxH3TargetPreflightPort {
   ): Promise<{ released: boolean; reason?: string }> {
     const lockDir = resolve(os.tmpdir(), "cco-gpu-locks");
     const lockPath = resolve(lockDir, `gpu-${gpuUuid}.lock`);
+    let handle;
     try {
-      const content = await readFile(lockPath, "utf8");
+      handle = await open(lockPath, "r");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return { released: true };
+      }
+      return { released: false, reason: (err as Error).message };
+    }
+    try {
+      const observedStat = await handle.stat();
+      const content = await handle.readFile("utf8");
       const record = JSON.parse(content) as {
         pid?: number;
         launcherPid?: number;
@@ -305,6 +348,21 @@ export class MinimaxH3TargetPreflight implements MinimaxH3TargetPreflightPort {
       ) {
         return { released: false, reason: "Lock ticks do not match expected ticks" };
       }
+      // Same read-then-unlink TOCTOU guard as
+      // unlinkLockFileIfTokenMatches above: confirm the path still
+      // resolves to the exact file we just validated before deleting
+      // it, so a replacement written between the read and the unlink
+      // (e.g. a legitimate new acquisition) can't be deleted out from
+      // under its new owner.
+      let currentStat;
+      try {
+        currentStat = await stat(lockPath);
+      } catch {
+        return { released: true }; // already gone
+      }
+      if (currentStat.dev !== observedStat.dev || currentStat.ino !== observedStat.ino) {
+        return { released: false, reason: "Lock file was replaced before it could be released" };
+      }
       await unlink(lockPath);
       return { released: true };
     } catch (err) {
@@ -312,6 +370,8 @@ export class MinimaxH3TargetPreflight implements MinimaxH3TargetPreflightPort {
         return { released: true };
       }
       return { released: false, reason: (err as Error).message };
+    } finally {
+      await handle.close();
     }
   }
 
