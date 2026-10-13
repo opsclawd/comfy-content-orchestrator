@@ -14,6 +14,14 @@ import type {
 
 export interface MinimaxH3ExperimentStorePort {
   createRunDirectory(runDir: string): Promise<void>;
+  // ComfyUI's own argparse requires --output-directory/--temp-directory/
+  // --user-directory to already exist, and exits immediately with a
+  // usage error otherwise (confirmed via live run against real
+  // hardware: the harness never created these before spawning, and the
+  // resulting near-instant child death went undiagnosed for the full
+  // readiness-wait timeout -- see the process-runner's own liveness
+  // check for the other half of that fix). Idempotent/recursive.
+  ensureRunSubdirectories(runDir: string): Promise<void>;
   writeDescriptor(runDir: string, descriptor: MinimaxH3ExperimentDescriptor): Promise<void>;
   readDescriptor(runDir: string): Promise<MinimaxH3ExperimentDescriptor>;
 

@@ -1,0 +1,33 @@
+{
+  "referenceSetId": "trinidad-ref2v-baseline",
+  "references": [
+    {
+      "assetPath": "./trinidad_subject.jpg",
+      "stagedFilename": "subject.jpg",
+      "role": "subject_identity",
+      "tag": "<Picture 1>",
+      "order": 0
+    },
+    {
+      "assetPath": "./trinidad_product.jpg",
+      "stagedFilename": "product.jpg",
+      "role": "product",
+      "tag": "<Picture 2>",
+      "order": 1
+    },
+    {
+      "assetPath": "./trinidad_location.jpg",
+      "stagedFilename": "location.jpg",
+      "role": "location",
+      "tag": "<Picture 3>",
+      "order": 2
+    },
+    {
+      "assetPath": "./trinidad_style.jpg",
+      "stagedFilename": "style.jpg",
+      "role": "style",
+      "tag": "<Picture 4>",
+      "order": 3
+    }
+  ]
+}

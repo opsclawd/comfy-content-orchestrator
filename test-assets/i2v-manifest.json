@@ -1,0 +1,12 @@
+{
+  "referenceSetId": "trinidad-subject-i2v-baseline",
+  "references": [
+    {
+      "assetPath": "./trinidad_subject_16x9.jpg",
+      "stagedFilename": "start_frame.jpg",
+      "role": "first_frame",
+      "tag": "<Picture 1>",
+      "order": 0
+    }
+  ]
+}

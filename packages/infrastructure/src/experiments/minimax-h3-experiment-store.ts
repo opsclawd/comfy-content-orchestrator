@@ -311,6 +311,15 @@ export class MinimaxH3ExperimentStore implements MinimaxH3ExperimentStorePort {
     await mkdir(runDir, { recursive: false });
   }
 
+  async ensureRunSubdirectories(runDir: string): Promise<void> {
+    this.assertSafePath(runDir);
+    await Promise.all(
+      ["outputs", "temp", "user", "inputs"].map((sub) =>
+        mkdir(`${runDir}/${sub}`, { recursive: true })
+      )
+    );
+  }
+
   /**
    * Writes content atomically and flushes both the file and parent directory to disk.
    */
