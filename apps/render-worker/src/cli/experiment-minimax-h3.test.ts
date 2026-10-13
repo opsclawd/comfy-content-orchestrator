@@ -1319,6 +1319,185 @@ describe("experiment:minimax-h3 CLI", () => {
     expect(code).toBe(0);
   });
 
+  it("validate-sidecar rejects an operator_decision sidecar claiming approve_candidate when the effective mode doesn't match the requested memory policy", async () => {
+    // "some effective mode was verified" is a weaker claim than "the
+    // policy that was actually requested was verified" -- a run that
+    // silently fell back to a different memory policy than what was
+    // asked for must not be approvable just because *a* mode got
+    // verified.
+    const { deps, stdout, stderr, store } = createMockDeps();
+
+    await runExperimentCli(
+      [
+        "prepare",
+        "--route",
+        "i2v",
+        "--frames",
+        "124",
+        "--seed",
+        "42",
+        "--inputs",
+        "inputs.json",
+        "--prompt",
+        "A test prompt",
+        "--target-host",
+        "worker-01",
+        "--gpu-uuid",
+        "GPU-12345678-1234-1234-1234-123456789abc",
+        "--comfyui-dir",
+        "/opt/comfyui",
+        "--python",
+        "/usr/bin/python3",
+        "--run-id",
+        "run-policy-mismatch-test",
+        "--output-root",
+        ".ai-runs/minimax-h3-experiments"
+      ],
+      deps
+    );
+    const prepareOutput = JSON.parse(stdout[0]!);
+    const runDir = prepareOutput.runDir;
+    const comparisonKey = store.descriptor!.comparisonKey;
+    const requestedPolicy = store.descriptor!.requestedRunner.memoryPolicy;
+    const mismatchedPolicy = requestedPolicy === "dynamic_vram" ? "static_lowvram" : "dynamic_vram";
+    stdout.length = 0;
+
+    store.result = {
+      schemaVersion: 1,
+      runId: "run-policy-mismatch-test",
+      descriptorDigest: "0".repeat(64),
+      configDigest: "0".repeat(64),
+      comparisonKey,
+      lifecycle: "completed",
+      observedRunner: {
+        argv: [],
+        env: {},
+        pid: 1234,
+        processStartTimeTicks: 100,
+        targetGpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        effectiveMode: {
+          status: "verified",
+          value: mismatchedPolicy,
+          unknownReason: null,
+          evidence: null
+        }
+      },
+      timestamps: {
+        preparedAt: new Date().toISOString(),
+        startedAt: new Date().toISOString(),
+        submittedAt: new Date().toISOString(),
+        terminatedAt: new Date().toISOString()
+      },
+      execution: {
+        status: "completed",
+        promptId: "prompt-1",
+        terminalEvidence: { source: "history", status: "success" },
+        engineError: null,
+        latencyMs: 10000
+      },
+      collection: {
+        status: "complete",
+        phaseCoverage: { before: true, during: true, after: true },
+        sampleCount: { attempted: 1, succeeded: 1, failed: 0 },
+        metrics: {
+          gpuPeakUsedVramMb: 12000,
+          gpuAllocatableVramMb: 24000,
+          hostPeakRamUsedMb: 16000,
+          processPeakRssMb: 8000,
+          hostSwapUsedMb: 0,
+          hostSwapDeltaMb: 0
+        },
+        errors: []
+      },
+      probe: {
+        status: "succeeded",
+        outputFile: `${runDir}/outputs/video.mp4`,
+        outputSha256: "a".repeat(64),
+        outputSizeBytes: 5000000,
+        measuredFacts: {
+          measuredFrames: 124,
+          countedFramesSource: "nb_read_frames",
+          declaredNbFrames: 124,
+          measuredVideoDurationMs: 5167,
+          measuredContainerDurationMs: 5167,
+          width: 1344,
+          height: 768,
+          fps: 24,
+          rFrameRate: "24/1",
+          avgFrameRate: "24/1",
+          videoCodec: "h264",
+          audioCodec: null,
+          audioChannels: null,
+          audioSampleRate: null
+        },
+        discrepancyFlags: [],
+        toolIdentity: null,
+        errors: []
+      },
+      outputConformance: {
+        status: "conformant",
+        checks: {
+          frameCountMatches: true,
+          geometryMatches: true,
+          fpsMatches: true,
+          timingWithinTolerance: true
+        },
+        reasons: []
+      },
+      visualReview: {
+        status: "reviewed",
+        outputSha256: "a".repeat(64),
+        reviewedAt: new Date().toISOString(),
+        reviewer: "tester-1",
+        findings: { continuity: "pass", identityFidelity: "pass", visualDegradation: "pass" },
+        notes: "Flawless",
+        unavailableReason: null
+      },
+      operatorDecision: {
+        status: "pending",
+        operator: null,
+        decidedAt: null,
+        comparisonKey: null,
+        reason: null
+      },
+      stopRecommendation: { recommended: false, reasons: [] }
+    };
+
+    store.files.set(
+      "approval.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        runId: "run-policy-mismatch-test",
+        route: "i2v",
+        configuredFrames: 124,
+        comparisonKey,
+        status: "approve_candidate",
+        operator: "operator-1",
+        decidedAt: new Date().toISOString(),
+        reason: "Looks great, ship it",
+        evidenceBundle: { foo: "bar" }
+      })
+    );
+
+    const code = await runExperimentCli(
+      [
+        "validate-sidecar",
+        "--file",
+        "approval.json",
+        "--run-dir",
+        runDir,
+        "--output-root",
+        ".ai-runs/minimax-h3-experiments"
+      ],
+      deps
+    );
+
+    expect(code).toBe(1);
+    expect(stderr.some((line) => line.includes("does not match the requested memory policy"))).toBe(
+      true
+    );
+  });
+
   it("import-sidecar imports an operator_decision sidecar into result.json's operatorDecision field", async () => {
     // import-sidecar used to only understand visual review sidecars --
     // an operator_decision had no supported way to reach result.json at

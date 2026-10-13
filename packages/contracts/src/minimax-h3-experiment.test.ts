@@ -430,6 +430,125 @@ describe("MiniMax-H3 Experiment Contracts", () => {
       ).toThrow(/forbids any failed samples/);
     });
 
+    it("rejects operator approval when requestedMemoryPolicy doesn't match the verified effective mode", () => {
+      const template = createEmptyMinimaxH3MeasurementTemplate(validDescriptor);
+      const fullyApprovableBase = {
+        ...template,
+        requestedMemoryPolicy: "dynamic_vram" as const,
+        execution: {
+          status: "completed" as const,
+          promptId: "prompt-1",
+          terminalEvidence: {
+            source: "history" as const,
+            status: "success" as const,
+            rawDetails: { status: { status_str: "success", completed: true } }
+          },
+          engineError: null,
+          latencyMs: 5000
+        },
+        observedRunner: {
+          ...template.observedRunner,
+          effectiveMode: {
+            status: "verified" as const,
+            value: "dynamic_vram" as const,
+            unknownReason: null,
+            evidence: {
+              diagnostics: ["[aimdo] Dynamic VRAM enabled"],
+              sourceRevision: "abc123",
+              sourcePath: "/opt/comfyui/comfy/model_management.py",
+              sourceDigest: sampleDigest
+            }
+          }
+        },
+        collection: {
+          status: "complete" as const,
+          phaseCoverage: { before: true, during: true, after: true },
+          sampleCount: { attempted: 10, succeeded: 10, failed: 0 },
+          metrics: {
+            gpuPeakUsedVramMb: 20000,
+            gpuAllocatableVramMb: 24000,
+            hostPeakRamUsedMb: 16000,
+            processPeakRssMb: 12000,
+            hostSwapUsedMb: 0,
+            hostSwapDeltaMb: 0
+          },
+          errors: []
+        },
+        probe: {
+          status: "succeeded" as const,
+          outputFile: "/runs/exp-i2v-124-001/outputs/video.mp4",
+          outputSha256: sampleDigest,
+          outputSizeBytes: 5000000,
+          measuredFacts: {
+            measuredFrames: 124,
+            countedFramesSource: "nb_read_frames" as const,
+            declaredNbFrames: 124,
+            measuredVideoDurationMs: 5167,
+            measuredContainerDurationMs: 5167,
+            width: 1344,
+            height: 768,
+            fps: 24,
+            rFrameRate: "24/1",
+            avgFrameRate: "24/1",
+            videoCodec: "h264",
+            audioCodec: null,
+            audioChannels: null,
+            audioSampleRate: null
+          },
+          discrepancyFlags: [],
+          toolIdentity: null,
+          errors: []
+        },
+        outputConformance: {
+          status: "conformant" as const,
+          checks: {
+            frameCountMatches: true,
+            geometryMatches: true,
+            fpsMatches: true,
+            timingWithinTolerance: true
+          },
+          reasons: []
+        },
+        visualReview: {
+          status: "reviewed" as const,
+          outputSha256: sampleDigest,
+          reviewedAt: "2026-10-12T10:30:00.000Z",
+          reviewer: "bob",
+          findings: {
+            continuity: "pass" as const,
+            identityFidelity: "pass" as const,
+            visualDegradation: "pass" as const
+          },
+          notes: "Looks great",
+          unavailableReason: null
+        },
+        operatorDecision: {
+          status: "approve_candidate" as const,
+          operator: "alice",
+          decidedAt: "2026-10-12T11:00:00.000Z",
+          comparisonKey: validDescriptor.comparisonKey,
+          reason: "Looks good"
+        }
+      };
+
+      // Sanity: with matching requestedMemoryPolicy/effectiveMode.value,
+      // this fixture is actually a valid approval (proves the mismatch
+      // below is what trips the rejection, not some other field).
+      expect(() => MinimaxH3ExperimentResultSchema.parse(fullyApprovableBase)).not.toThrow();
+
+      // requestedMemoryPolicy denormalizes what the descriptor actually
+      // asked for, specifically so it can be checked against the
+      // *effective* mode that was verified -- "some policy was
+      // verified" is not the same claim as "the policy that was
+      // actually requested was verified".
+      expect(() =>
+        MinimaxH3ExperimentResultSchema.parse({
+          ...fullyApprovableBase,
+          requestedMemoryPolicy: "static_lowvram" as const
+        })
+      ).toThrow(/requires observedRunner.effectiveMode.value .* to match requestedMemoryPolicy/);
+    });
+
     it("rejects operator approval without complete evidence and pass visual findings", () => {
       const template = createEmptyMinimaxH3MeasurementTemplate(validDescriptor);
       expect(() =>

@@ -676,6 +676,13 @@ export async function runExperimentCli(
                     !result.observedRunner.effectiveMode.value
                   ) {
                     prereqFailures.push("observedRunner.effectiveMode is not verified");
+                  } else if (
+                    result.observedRunner.effectiveMode.value !==
+                    descriptor.requestedRunner.memoryPolicy
+                  ) {
+                    prereqFailures.push(
+                      `observedRunner.effectiveMode.value "${result.observedRunner.effectiveMode.value}" does not match the requested memory policy "${descriptor.requestedRunner.memoryPolicy}"`
+                    );
                   }
                   if (result.collection.status !== "complete") {
                     prereqFailures.push(
@@ -836,6 +843,12 @@ export async function runExperimentCli(
               !result.observedRunner.effectiveMode.value
             ) {
               prereqFailures.push("observedRunner.effectiveMode is not verified");
+            } else if (
+              result.observedRunner.effectiveMode.value !== descriptor.requestedRunner.memoryPolicy
+            ) {
+              prereqFailures.push(
+                `observedRunner.effectiveMode.value "${result.observedRunner.effectiveMode.value}" does not match the requested memory policy "${descriptor.requestedRunner.memoryPolicy}"`
+              );
             }
             if (result.collection.status !== "complete") {
               prereqFailures.push(

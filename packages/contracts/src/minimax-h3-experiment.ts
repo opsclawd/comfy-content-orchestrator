@@ -1047,6 +1047,13 @@ export const MinimaxH3ExperimentResultSchema = z
     comparisonKey: z.string().min(1),
     lifecycle: MinimaxH3LifecycleStatusSchema,
     observedRunner: MinimaxH3ObservedRunnerPolicySchema,
+    // Denormalized from the descriptor (which this schema otherwise
+    // only carries a digest of) specifically so an approve_candidate
+    // claim can be checked against what was actually requested, not
+    // just that *some* effective mode was verified. Optional for
+    // backward compatibility with results written before this field
+    // existed; new results should always set it.
+    requestedMemoryPolicy: MinimaxH3MemoryPolicySchema.optional(),
     policyDigest: sha256HashSchema.optional(),
     baselineRunId: z.string().nullable().optional(),
     baselineResultDigest: sha256HashSchema.nullable().optional(),
@@ -1302,6 +1309,17 @@ export const MinimaxH3ExperimentResultSchema = z
           code: z.ZodIssueCode.custom,
           message: "Operator approval requires observedRunner.effectiveMode.evidence",
           path: ["observedRunner", "effectiveMode", "evidence"]
+        });
+      }
+      if (
+        val.requestedMemoryPolicy &&
+        val.observedRunner.effectiveMode.value &&
+        val.requestedMemoryPolicy !== val.observedRunner.effectiveMode.value
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Operator approval requires observedRunner.effectiveMode.value ("${val.observedRunner.effectiveMode.value}") to match requestedMemoryPolicy ("${val.requestedMemoryPolicy}")`,
+          path: ["observedRunner", "effectiveMode", "value"]
         });
       }
       if (val.collection.status !== "complete") {

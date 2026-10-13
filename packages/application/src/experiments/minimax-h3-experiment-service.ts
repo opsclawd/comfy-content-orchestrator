@@ -1594,6 +1594,7 @@ export class MinimaxH3ExperimentService {
         computeDescriptorDigest(descriptor as unknown as Record<string, unknown>),
       configDigest: descriptor.configDigest,
       comparisonKey: descriptor.comparisonKey,
+      requestedMemoryPolicy: descriptor.requestedRunner.memoryPolicy,
       lifecycle,
       observedRunner: {
         ...baseResult.observedRunner,
@@ -1803,6 +1804,24 @@ export class MinimaxH3ExperimentService {
       ) {
         throw new Error(
           `Baseline run effective mode value "${baselineResult.observedRunner.effectiveMode.value}" does not match requested memory policy "${descriptor.requestedRunner.memoryPolicy}".`
+        );
+      }
+      // The baseline and candidate must have been run under the exact
+      // same stop-policy thresholds -- otherwise a candidate escalated
+      // under a looser policy (e.g. a much higher maxPeakVramMb) isn't
+      // actually comparable to the baseline it's claiming to extend.
+      // Both digests are already computed by this point (stopPolicy was
+      // read in step 2 above; baselineResult.policyDigest was computed
+      // the same way when the baseline itself was reconciled).
+      const candidatePolicyDigest = sha256Hex(canonicalizeJson(stopPolicy));
+      if (!baselineResult.policyDigest) {
+        throw new Error(
+          `Baseline run at ${options.baselineRunDir} has no recorded policyDigest; cannot verify it used the same stop policy as this candidate.`
+        );
+      }
+      if (baselineResult.policyDigest !== candidatePolicyDigest) {
+        throw new Error(
+          `Baseline run stop-policy digest "${baselineResult.policyDigest}" does not match this candidate's stop-policy digest "${candidatePolicyDigest}": they must use the exact same stop-policy thresholds to be comparable.`
         );
       }
       if (baselineResult.collection.status !== "complete") {
