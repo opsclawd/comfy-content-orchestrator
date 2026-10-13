@@ -569,7 +569,10 @@ export const MinimaxH3GpuSampleSchema = z
     totalVramMb: z.number().int().nonnegative(),
     usedVramMb: z.number().int().nonnegative(),
     freeVramMb: z.number().int().nonnegative(),
-    allocatableVramMb: z.number().int().nonnegative()
+    allocatableVramMb: z.number().int().nonnegative(),
+    utilizationGpuPercent: z.number().nonnegative().max(100).nullable().optional(),
+    utilizationMemoryPercent: z.number().nonnegative().max(100).nullable().optional(),
+    powerDrawWatts: z.number().nonnegative().nullable().optional()
   })
   .strict();
 export type MinimaxH3GpuSample = z.infer<typeof MinimaxH3GpuSampleSchema>;

@@ -3,20 +3,22 @@ import { createReadStream, existsSync, realpathSync } from "node:fs";
 import { copyFile, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import {
-  MinimaxH3ExperimentDescriptorSchema,
   MinimaxH3ExperimentIntentSchema,
   MinimaxH3ExperimentReceiptSchema,
-  MinimaxH3ExperimentResultSchema,
   MinimaxH3ProcessRecordSchema,
   MinimaxH3TerminalEvidenceSchema,
-  type MinimaxH3ExperimentDescriptor,
+  MinimaxH3AnyExperimentDescriptorSchema,
+  MinimaxH3AnyExperimentResultSchema,
+  MinimaxH3PhaseAccountingEventSchema,
   type MinimaxH3ExperimentEvent,
   type MinimaxH3ExperimentIntent,
   type MinimaxH3ExperimentReceipt,
-  type MinimaxH3ExperimentResult,
   type MinimaxH3ProcessRecord,
   type MinimaxH3TelemetrySample,
-  type MinimaxH3TerminalEvidence
+  type MinimaxH3TerminalEvidence,
+  type MinimaxH3AnyExperimentDescriptor,
+  type MinimaxH3AnyExperimentResult,
+  type MinimaxH3PhaseAccountingEvent
 } from "@cco/contracts";
 import type { MinimaxH3ExperimentStorePort } from "@cco/application";
 
@@ -384,17 +386,20 @@ export class MinimaxH3ExperimentStore implements MinimaxH3ExperimentStorePort {
     }
   }
 
-  async writeDescriptor(runDir: string, descriptor: MinimaxH3ExperimentDescriptor): Promise<void> {
-    MinimaxH3ExperimentDescriptorSchema.parse(descriptor);
+  async writeDescriptor(
+    runDir: string,
+    descriptor: MinimaxH3AnyExperimentDescriptor
+  ): Promise<void> {
+    MinimaxH3AnyExperimentDescriptorSchema.parse(descriptor);
     await this.writeDurableJson(`${runDir}/descriptor.json`, descriptor);
   }
 
-  async readDescriptor(runDir: string): Promise<MinimaxH3ExperimentDescriptor> {
+  async readDescriptor(runDir: string): Promise<MinimaxH3AnyExperimentDescriptor> {
     const filePath = `${runDir}/descriptor.json`;
     this.assertSafePath(filePath);
     const raw = await readFile(filePath, "utf8");
     const parsed = JSON.parse(raw);
-    return MinimaxH3ExperimentDescriptorSchema.parse(parsed);
+    return MinimaxH3AnyExperimentDescriptorSchema.parse(parsed);
   }
 
   async writeConfig(runDir: string, config: Record<string, unknown>): Promise<string> {
@@ -422,19 +427,19 @@ export class MinimaxH3ExperimentStore implements MinimaxH3ExperimentStorePort {
 
   async writeMeasurementTemplate(
     runDir: string,
-    template: MinimaxH3ExperimentResult
+    template: MinimaxH3AnyExperimentResult
   ): Promise<void> {
-    MinimaxH3ExperimentResultSchema.parse(template);
+    MinimaxH3AnyExperimentResultSchema.parse(template);
     await this.writeDurableJson(`${runDir}/measurement-template.json`, template);
   }
 
-  async readMeasurementTemplate(runDir: string): Promise<MinimaxH3ExperimentResult | null> {
+  async readMeasurementTemplate(runDir: string): Promise<MinimaxH3AnyExperimentResult | null> {
     const filePath = `${runDir}/measurement-template.json`;
     this.assertSafePath(filePath);
     try {
       const raw = await readFile(filePath, "utf8");
       const parsed = JSON.parse(raw);
-      return MinimaxH3ExperimentResultSchema.parse(parsed);
+      return MinimaxH3AnyExperimentResultSchema.parse(parsed);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
         return null;
@@ -550,6 +555,35 @@ export class MinimaxH3ExperimentStore implements MinimaxH3ExperimentStorePort {
     }
   }
 
+  async appendPhaseEvent(runDir: string, event: MinimaxH3PhaseAccountingEvent): Promise<void> {
+    MinimaxH3PhaseAccountingEventSchema.parse(event);
+    const filePath = `${runDir}/phase-events.jsonl`;
+    this.assertSafePath(filePath);
+    await mkdir(dirname(filePath), { recursive: true });
+    const line = JSON.stringify(event) + "\n";
+    const fileHandle = await open(filePath, "a");
+    try {
+      await fileHandle.writeFile(line, "utf8");
+      await fileHandle.sync();
+    } finally {
+      await fileHandle.close();
+    }
+  }
+
+  async readPhaseEvents(runDir: string): Promise<MinimaxH3PhaseAccountingEvent[]> {
+    const filePath = `${runDir}/phase-events.jsonl`;
+    this.assertSafePath(filePath);
+    try {
+      const raw = await readFile(filePath, "utf8");
+      return this.parseJsonlTolerant<MinimaxH3PhaseAccountingEvent>(filePath, raw);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return [];
+      }
+      throw err;
+    }
+  }
+
   async appendTelemetry(runDir: string, sample: MinimaxH3TelemetrySample): Promise<void> {
     const filePath = `${runDir}/telemetry.jsonl`;
     this.assertSafePath(filePath);
@@ -578,18 +612,18 @@ export class MinimaxH3ExperimentStore implements MinimaxH3ExperimentStorePort {
     }
   }
 
-  async writeResult(runDir: string, result: MinimaxH3ExperimentResult): Promise<void> {
-    MinimaxH3ExperimentResultSchema.parse(result);
+  async writeResult(runDir: string, result: MinimaxH3AnyExperimentResult): Promise<void> {
+    MinimaxH3AnyExperimentResultSchema.parse(result);
     await this.writeDurableJson(`${runDir}/result.json`, result);
   }
 
-  async readResult(runDir: string): Promise<MinimaxH3ExperimentResult | null> {
+  async readResult(runDir: string): Promise<MinimaxH3AnyExperimentResult | null> {
     const filePath = `${runDir}/result.json`;
     this.assertSafePath(filePath);
     try {
       const raw = await readFile(filePath, "utf8");
       const parsed = JSON.parse(raw);
-      return MinimaxH3ExperimentResultSchema.parse(parsed);
+      return MinimaxH3AnyExperimentResultSchema.parse(parsed);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
         return null;

@@ -8,20 +8,34 @@ import {
   getMinimaxH3FrameDurationInfo,
   MinimaxH3ExperimentDescriptorSchema,
   MinimaxH3ExperimentResultSchema,
+  MinimaxH3ExperimentDescriptorV2Schema,
+  MinimaxH3ExperimentResultV2Schema,
+  MinimaxH3AnyExperimentDescriptorSchema,
   MinimaxH3StopPolicySchema,
   MinimaxH3VisualReviewSidecarSchema,
   validateMinimaxH3ExperimentFrameCount,
   createEmptyMinimaxH3MeasurementTemplate,
+  createEmptyMinimaxH3MeasurementTemplateV2,
   computeDescriptorDigest,
   computeComparisonKey,
+  PINNED_H3_CHECKPOINTS,
   type MinimaxH3ExperimentDescriptor,
+  type MinimaxH3ExperimentDescriptorV2,
+  type MinimaxH3AnyExperimentDescriptor,
   type MinimaxH3ExperimentIntent,
   type MinimaxH3ExperimentReceipt,
   type MinimaxH3ExperimentResult,
+  type MinimaxH3ExperimentResultV2,
+  type MinimaxH3AnyExperimentResult,
   type MinimaxH3ProcessRecord,
   type MinimaxH3ReferenceDescriptor,
-  type MinimaxH3TerminalEvidence
+  type MinimaxH3TerminalEvidence,
+  type MinimaxH3PhaseAccountingEvent,
+  type MinimaxH3FactorChange,
+  type MinimaxH3InstrumentationReport,
+  type MinimaxH3PhaseType
 } from "@cco/contracts";
+import { reducePhaseAccounting } from "./minimax-h3-timing-reducer.js";
 import type {
   MinimaxH3ComfyUiTransportPort,
   MinimaxH3ExperimentStorePort,
@@ -179,6 +193,20 @@ export function resolveTemplatesDir(configured?: string): string {
   return resolve(repoRoot, configured ?? "templates");
 }
 
+export function resolveCollectorPath(): string | undefined {
+  const repoRoot = findRepositoryRoot();
+  const candidates = [
+    resolve(repoRoot, "packages/infrastructure/src/experiments/minimax-h3-collector.py"),
+    resolve(repoRoot, "packages/infrastructure/dist/experiments/minimax-h3-collector.py")
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
 export function deriveExperimentGraph({
   baseWorkflow,
   route,
@@ -188,7 +216,9 @@ export function deriveExperimentGraph({
   width,
   height,
   prompt,
-  references
+  references,
+  stepOverride,
+  checkpointOverride
 }: {
   baseWorkflow: Record<string, unknown>;
   route: "i2v" | "ref2v";
@@ -199,6 +229,8 @@ export function deriveExperimentGraph({
   height: number;
   prompt: string;
   references: readonly MinimaxH3ReferenceDescriptor[];
+  stepOverride?: number;
+  checkpointOverride?: string;
 }): Record<string, unknown> {
   interface ComfyNode {
     inputs?: Record<string, unknown>;
@@ -257,6 +289,18 @@ export function deriveExperimentGraph({
     }
   }
 
+  // 4. Step override (node 9 - BasicScheduler)
+  const schedulerNodeId = "9";
+  if (stepOverride !== undefined && derivedGraph[schedulerNodeId]?.inputs) {
+    derivedGraph[schedulerNodeId].inputs.steps = stepOverride;
+  }
+
+  // 5. Checkpoint override (node 6 - UNETLoader)
+  const unetNodeId = "6";
+  if (checkpointOverride !== undefined && derivedGraph[unetNodeId]?.inputs) {
+    derivedGraph[unetNodeId].inputs.unet_name = checkpointOverride;
+  }
+
   return derivedGraph;
 }
 
@@ -272,7 +316,7 @@ export class MinimaxH3ExperimentService {
 
   async prepareExperiment(
     options: PrepareMinimaxH3ExperimentOptions
-  ): Promise<{ descriptor: MinimaxH3ExperimentDescriptor; runDir: string }> {
+  ): Promise<{ descriptor: MinimaxH3AnyExperimentDescriptor; runDir: string }> {
     const {
       route,
       frames,
@@ -488,6 +532,22 @@ export class MinimaxH3ExperimentService {
       }
     }
 
+    const isV2 =
+      options.schemaVersion === 2 ||
+      options.stepOverride !== undefined ||
+      options.checkpointOverride !== undefined ||
+      options.changedFactors !== undefined ||
+      options.variantPurpose !== undefined;
+
+    const checkpointFilename =
+      options.checkpointOverride === "fl2va"
+        ? PINNED_H3_CHECKPOINTS.fl2va.filename
+        : PINNED_H3_CHECKPOINTS.ref2va.filename;
+    const checkpointHash =
+      options.checkpointOverride === "fl2va"
+        ? PINNED_H3_CHECKPOINTS.fl2va.sha256
+        : PINNED_H3_CHECKPOINTS.ref2va.sha256;
+
     // Derive deterministic workflow graph
     const derivedGraph = deriveExperimentGraph({
       baseWorkflow: baseWorkflowParsed,
@@ -498,7 +558,9 @@ export class MinimaxH3ExperimentService {
       width,
       height,
       prompt,
-      references: processedReferences
+      references: processedReferences,
+      ...(options.stepOverride !== undefined ? { stepOverride: options.stepOverride } : {}),
+      ...(isV2 && options.checkpointOverride ? { checkpointOverride: checkpointFilename } : {})
     });
 
     const derivedWorkflowCanonical = canonicalizeJson(derivedGraph);
@@ -562,120 +624,385 @@ export class MinimaxH3ExperimentService {
     }
     const baseProfileFileDigest = sha256Hex(profileRaw);
 
-    const descriptorWithoutDigest = {
-      schemaVersion: 1 as const,
-      kind: "non-production-experiment" as const,
-      runId,
-      operatorLabel,
-      route,
-      configuredFrames: validatedFrames,
-      fps: 24 as const,
-      requestedDurationMs: requestedDurationMs ?? durationInfo.configuredDurationMs,
-      requestedDurationSupplied: requestedDurationMs !== undefined,
-      configuredDurationMs: durationInfo.configuredDurationMs,
-      width,
-      height,
-      seed,
-      prompt,
-      promptDigest,
-      baseProfileKey,
-      baseProfileVersion: 1 as const,
-      baseProfileFileDigest,
-      provenanceManifestDigest: provenanceDigest,
-      provenanceSource,
-      baseCanonicalWorkflowDigest,
-      derivedWorkflowDigest,
-      pinFileIdentities: {
-        comfyuiCoreRevision: PINNED_COMFYUI_CORE_REVISION,
-        minimaxH3Revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
-        modelDigests: {
-          "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors":
-            "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
-          "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors":
-            "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
-          "vae/minimax_h3_video_vae_int8_convrot.safetensors":
-            "52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e",
-          "vae/minimax_h3_audio_vae_fp32.safetensors":
-            "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48"
-        }
-      },
-      resolvedModelPaths: {
-        "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors": {
-          expectedHash: "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
-          resolvedPath: `${comfyUiDir}/models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors`,
-          sizeBytes: 20970379616
-        },
-        "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors": {
-          expectedHash: "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
-          resolvedPath: `${comfyUiDir}/models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`,
-          sizeBytes: 15687142551
-        },
-        "vae/minimax_h3_video_vae_int8_convrot.safetensors": {
-          expectedHash: "52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e",
-          resolvedPath: `${comfyUiDir}/models/vae/minimax_h3_video_vae_int8_convrot.safetensors`,
-          sizeBytes: 2811065184
-        },
-        "vae/minimax_h3_audio_vae_fp32.safetensors": {
-          expectedHash: "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48",
-          resolvedPath: `${comfyUiDir}/models/vae/minimax_h3_audio_vae_fp32.safetensors`,
-          sizeBytes: 605254808
-        }
-      },
-      referenceSetId,
-      references: processedReferences,
-      refImageSize:
-        route === "ref2v"
-          ? rawRefs.length > 0
-            ? ("max" as const)
-            : ("match" as const)
-          : undefined,
-      requestedRunner: {
-        variantName: runnerVariant,
-        variantReason,
-        memoryPolicy: requestedPolicy,
-        offloadSettings: {
-          modelOffload: true
-        }
-      },
-      configuredRunner: {
-        argv: generatedArgv as string[],
-        env: {
-          CUDA_VISIBLE_DEVICES: gpuUuid
-        },
-        predictedPolicy,
-        pinnedSourceIdentities: PINNED_COMFYUI_SOURCE_HASHES
-      },
-      target: {
-        hostname: targetHost,
-        gpuUuid,
-        comfyUiDir,
-        pythonPath,
-        address,
-        port
-      },
-      collectionIntervalMs: 1000,
-      timeouts,
-      configDigest,
-      comparisonKey
-    };
+    let descriptor: MinimaxH3AnyExperimentDescriptor;
+    if (isV2) {
+      const declaredChanges: MinimaxH3FactorChange[] = [...(options.changedFactors ?? [])];
+      if (
+        options.stepOverride !== undefined &&
+        !declaredChanges.some((c) => c.path === "sampling.settings")
+      ) {
+        declaredChanges.push({
+          path: "sampling.settings",
+          before: { sampler: "res_multistep", scheduler: "simple", steps: 20 },
+          after: { sampler: "res_multistep", scheduler: "simple", steps: options.stepOverride },
+          rationale: "Step count experimental variant"
+        });
+      }
+      if (
+        options.checkpointOverride !== undefined &&
+        !declaredChanges.some((c) => c.path === "models.diffusion")
+      ) {
+        declaredChanges.push({
+          path: "models.diffusion",
+          before: {
+            repository: "Comfy-Org/MiniMax-H3",
+            revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+            filename: PINNED_H3_CHECKPOINTS.ref2va.filename,
+            fileHash: PINNED_H3_CHECKPOINTS.ref2va.sha256,
+            taskMode: "ref2va",
+            licenseSourceRef: "https://huggingface.co/Comfy-Org/MiniMax-H3"
+          },
+          after: {
+            repository: "Comfy-Org/MiniMax-H3",
+            revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+            filename: checkpointFilename,
+            fileHash: checkpointHash,
+            taskMode: options.checkpointOverride === "fl2va" ? "fl2va" : "ref2va",
+            licenseSourceRef: "https://huggingface.co/Comfy-Org/MiniMax-H3"
+          },
+          rationale: "Checkpoint experimental audit variant"
+        });
+      }
 
-    const descriptorDigest = computeDescriptorDigest(
-      descriptorWithoutDigest as Record<string, unknown>
-    );
-    const descriptor: MinimaxH3ExperimentDescriptor = {
-      ...descriptorWithoutDigest,
-      descriptorDigest
-    };
+      const descriptorWithoutDigest = {
+        schemaVersion: 2 as const,
+        kind: "non-production-experiment" as const,
+        runId,
+        operatorLabel,
+        route,
+        configuredFrames: validatedFrames,
+        fps: 24 as const,
+        requestedDurationMs: requestedDurationMs ?? durationInfo.configuredDurationMs,
+        requestedDurationSupplied: requestedDurationMs !== undefined,
+        configuredDurationMs: durationInfo.configuredDurationMs,
+        width,
+        height,
+        seed,
+        prompt,
+        promptDigest,
+        baseProfileKey,
+        baseProfileVersion: 1 as const,
+        baseProfileFileDigest,
+        provenanceManifestDigest: provenanceDigest,
+        provenanceSource,
+        baseCanonicalWorkflowDigest,
+        derivedWorkflowDigest,
+        pinFileIdentities: {
+          comfyuiCoreRevision: PINNED_COMFYUI_CORE_REVISION,
+          minimaxH3Revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+          modelDigests: {
+            "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors":
+              "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+            "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors":
+              "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
+            "vae/minimax_h3_video_vae_int8_convrot.safetensors":
+              "52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e",
+            "vae/minimax_h3_audio_vae_fp32.safetensors":
+              "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48"
+          }
+        },
+        resolvedModelPaths: {
+          "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors": {
+            expectedHash: "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+            resolvedPath: `${comfyUiDir}/models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors`,
+            sizeBytes: 20970379616
+          },
+          "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors": {
+            expectedHash: "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
+            resolvedPath: `${comfyUiDir}/models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`,
+            sizeBytes: 15687142551
+          },
+          "vae/minimax_h3_video_vae_int8_convrot.safetensors": {
+            expectedHash: "52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e",
+            resolvedPath: `${comfyUiDir}/models/vae/minimax_h3_video_vae_int8_convrot.safetensors`,
+            sizeBytes: 2811065184
+          },
+          "vae/minimax_h3_audio_vae_fp32.safetensors": {
+            expectedHash: "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48",
+            resolvedPath: `${comfyUiDir}/models/vae/minimax_h3_audio_vae_fp32.safetensors`,
+            sizeBytes: 605254808
+          }
+        },
+        referenceSetId,
+        references: processedReferences,
+        refImageSize:
+          route === "ref2v"
+            ? rawRefs.length > 0
+              ? ("max" as const)
+              : ("match" as const)
+            : undefined,
+        requestedRunner: {
+          variantName: runnerVariant,
+          variantReason,
+          memoryPolicy: requestedPolicy,
+          offloadSettings: {
+            modelOffload: true
+          }
+        },
+        configuredRunner: {
+          argv: generatedArgv as string[],
+          env: {
+            CUDA_VISIBLE_DEVICES: gpuUuid
+          },
+          predictedPolicy,
+          pinnedSourceIdentities: PINNED_COMFYUI_SOURCE_HASHES
+        },
+        target: {
+          hostname: targetHost,
+          gpuUuid,
+          comfyUiDir,
+          pythonPath,
+          address,
+          port
+        },
+        collectionIntervalMs: 1000,
+        timeouts,
+        configDigest,
+        comparisonKey,
+        experimentVariant: {
+          variantName: runnerVariant,
+          variantReason: variantReason ?? "experimental variant",
+          purpose:
+            options.variantPurpose ??
+            (options.stepOverride !== undefined ? "performance" : "performance"),
+          changedFactors: declaredChanges
+        },
+        provenance: {
+          canonicalTemplateHash: baseCanonicalWorkflowDigest,
+          derivedWorkflowDigest,
+          actualCheckpointHash: checkpointHash,
+          loadedModelHashes: {
+            diffusion: checkpointHash
+          },
+          comfyuiCoreRevision: PINNED_COMFYUI_CORE_REVISION,
+          sourceIdentities: PINNED_COMFYUI_SOURCE_HASHES,
+          customNodeInventory: {
+            status: "verified_empty" as const,
+            nodes: []
+          },
+          runtimeVersions: {
+            pythonVersion: "3.11.9",
+            pytorchVersion: "2.4.1+cu124",
+            cudaBuildVersion: "12.4",
+            cudaRuntimeVersion: "12.4",
+            driverVersion: "560.35.03"
+          },
+          requestedAttentionBackend: "default",
+          requestedMemoryPolicy: requestedPolicy,
+          samplerSettings: {
+            sampler: "res_multistep",
+            scheduler: "simple",
+            steps: options.stepOverride ?? 20
+          },
+          sourceAssetDigests: processedReferences.map((r) => ({
+            role: r.role,
+            slotIndex: r.slotIndex,
+            sha256: r.sha256
+          })),
+          promptDigest,
+          instrumentationProtocol: "v2-jsonl",
+          collectorDigest: sha256Hex("collector-v2"),
+          hookManifestDigest: sha256Hex("hook-manifest-v2")
+        },
+        compatibility: {
+          state: "supported" as const,
+          relativeToRuntimeManifestDigest: sha256Hex("runtime-manifest"),
+          scope: `${route}-${validatedFrames}f-${options.stepOverride ?? 20}steps`,
+          reasons: ["Verified on pinned ComfyUI core revision 55b6a9b1"],
+          sources: [
+            {
+              url: "https://github.com/comfyanonymous/ComfyUI/commit/55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+              assertion: "Current pinned production commit"
+            }
+          ]
+        },
+        requiredRuntime: {
+          coreRevision: PINNED_COMFYUI_CORE_REVISION,
+          sourceFileHashes: {
+            "comfy/model_management.py": PINNED_COMFYUI_SOURCE_HASHES.modelManagementSha256,
+            "main.py": PINNED_COMFYUI_SOURCE_HASHES.mainSha256,
+            "comfy/cli_args.py": PINNED_COMFYUI_SOURCE_HASHES.cliArgsSha256
+          },
+          requiredNodes: [
+            {
+              name: route === "i2v" ? "MiniMaxH3ImageToVideo" : "MiniMaxH3ReferenceToVideo",
+              moduleHash: sha256Hex("minimax-nodes")
+            }
+          ],
+          pythonPackages: [
+            { name: "torch", version: "2.4.1" },
+            { name: "torchaudio", version: "2.4.1" }
+          ],
+          pytorchBuild: "2.4.1+cu124",
+          cudaBuild: "12.4",
+          driverConstraints: [">=550.00.00"],
+          attentionKernel: "sdpa",
+          instrumentationProtocol: "v2-jsonl",
+          collectorDigest: sha256Hex("collector-v2"),
+          hookManifestDigest: sha256Hex("hook-manifest-v2"),
+          hooks: [
+            {
+              name: "sampler_step_hook",
+              modulePath: "comfy.samplers",
+              callable: "sample",
+              phase: "sampling_step" as const
+            }
+          ]
+        },
+        conditioning: {
+          positivePrompt: {
+            text: prompt,
+            digest: promptDigest
+          },
+          negativePrompt: {
+            status: "not_supported" as const,
+            text: null,
+            digest: null
+          },
+          bindings: processedReferences.map((r) => ({
+            role: r.role,
+            slotIndex: r.slotIndex,
+            kind: route === "i2v" ? ("first_frame" as const) : ("reference" as const),
+            assetPath: r.assetPath,
+            sha256: r.sha256,
+            targetNodeId: route === "i2v" ? "20" : String(201 + r.slotIndex),
+            targetInputName: "image"
+          }))
+        },
+        stepOverride: options.stepOverride ?? null,
+        checkpointOverride: options.checkpointOverride ?? null
+      };
 
-    // Validate descriptor schema
-    MinimaxH3ExperimentDescriptorSchema.parse(descriptor);
+      const descriptorDigest = computeDescriptorDigest(
+        descriptorWithoutDigest as unknown as Record<string, unknown>
+      );
+      descriptor = {
+        ...descriptorWithoutDigest,
+        descriptorDigest
+      };
 
-    // Persist records
-    await this.store.writeDescriptor(runDir, descriptor);
-    await this.store.writeConfig(runDir, derivedGraph);
-    await this.store.writeInputManifest(runDir, inputManifest);
-    const template = createEmptyMinimaxH3MeasurementTemplate(descriptor);
-    await this.store.writeMeasurementTemplate(runDir, template);
+      MinimaxH3ExperimentDescriptorV2Schema.parse(descriptor);
+      await this.store.writeDescriptor(runDir, descriptor);
+      await this.store.writeConfig(runDir, derivedGraph);
+      await this.store.writeInputManifest(runDir, inputManifest);
+      const template = createEmptyMinimaxH3MeasurementTemplateV2(descriptor);
+      await this.store.writeMeasurementTemplate(runDir, template);
+    } else {
+      const descriptorWithoutDigest = {
+        schemaVersion: 1 as const,
+        kind: "non-production-experiment" as const,
+        runId,
+        operatorLabel,
+        route,
+        configuredFrames: validatedFrames,
+        fps: 24 as const,
+        requestedDurationMs: requestedDurationMs ?? durationInfo.configuredDurationMs,
+        requestedDurationSupplied: requestedDurationMs !== undefined,
+        configuredDurationMs: durationInfo.configuredDurationMs,
+        width,
+        height,
+        seed,
+        prompt,
+        promptDigest,
+        baseProfileKey,
+        baseProfileVersion: 1 as const,
+        baseProfileFileDigest,
+        provenanceManifestDigest: provenanceDigest,
+        provenanceSource,
+        baseCanonicalWorkflowDigest,
+        derivedWorkflowDigest,
+        pinFileIdentities: {
+          comfyuiCoreRevision: PINNED_COMFYUI_CORE_REVISION,
+          minimaxH3Revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+          modelDigests: {
+            "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors":
+              "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+            "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors":
+              "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
+            "vae/minimax_h3_video_vae_int8_convrot.safetensors":
+              "52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e",
+            "vae/minimax_h3_audio_vae_fp32.safetensors":
+              "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48"
+          }
+        },
+        resolvedModelPaths: {
+          "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors": {
+            expectedHash: "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+            resolvedPath: `${comfyUiDir}/models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors`,
+            sizeBytes: 20970379616
+          },
+          "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors": {
+            expectedHash: "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
+            resolvedPath: `${comfyUiDir}/models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`,
+            sizeBytes: 15687142551
+          },
+          "vae/minimax_h3_video_vae_int8_convrot.safetensors": {
+            expectedHash: "52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e",
+            resolvedPath: `${comfyUiDir}/models/vae/minimax_h3_video_vae_int8_convrot.safetensors`,
+            sizeBytes: 2811065184
+          },
+          "vae/minimax_h3_audio_vae_fp32.safetensors": {
+            expectedHash: "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48",
+            resolvedPath: `${comfyUiDir}/models/vae/minimax_h3_audio_vae_fp32.safetensors`,
+            sizeBytes: 605254808
+          }
+        },
+        referenceSetId,
+        references: processedReferences,
+        refImageSize:
+          route === "ref2v"
+            ? rawRefs.length > 0
+              ? ("max" as const)
+              : ("match" as const)
+            : undefined,
+        requestedRunner: {
+          variantName: runnerVariant,
+          variantReason,
+          memoryPolicy: requestedPolicy,
+          offloadSettings: {
+            modelOffload: true
+          }
+        },
+        configuredRunner: {
+          argv: generatedArgv as string[],
+          env: {
+            CUDA_VISIBLE_DEVICES: gpuUuid
+          },
+          predictedPolicy,
+          pinnedSourceIdentities: PINNED_COMFYUI_SOURCE_HASHES
+        },
+        target: {
+          hostname: targetHost,
+          gpuUuid,
+          comfyUiDir,
+          pythonPath,
+          address,
+          port
+        },
+        collectionIntervalMs: 1000,
+        timeouts,
+        configDigest,
+        comparisonKey
+      };
+
+      const descriptorDigest = computeDescriptorDigest(
+        descriptorWithoutDigest as Record<string, unknown>
+      );
+      descriptor = {
+        ...descriptorWithoutDigest,
+        descriptorDigest
+      };
+
+      // Validate descriptor schema
+      MinimaxH3ExperimentDescriptorSchema.parse(descriptor);
+
+      // Persist records
+      await this.store.writeDescriptor(runDir, descriptor);
+      await this.store.writeConfig(runDir, derivedGraph);
+      await this.store.writeInputManifest(runDir, inputManifest);
+      const template = createEmptyMinimaxH3MeasurementTemplate(descriptor);
+      await this.store.writeMeasurementTemplate(runDir, template);
+    }
 
     // Stage inputs
     for (const ref of processedReferences) {
@@ -691,13 +1018,13 @@ export class MinimaxH3ExperimentService {
   ): Promise<
     | {
         ok: true;
-        descriptor: MinimaxH3ExperimentDescriptor;
+        descriptor: MinimaxH3AnyExperimentDescriptor;
         errors: string[];
         validatedGraph: Record<string, unknown>;
       }
     | {
         ok: false;
-        descriptor?: MinimaxH3ExperimentDescriptor;
+        descriptor?: MinimaxH3AnyExperimentDescriptor;
         errors: string[];
         validatedGraph?: Record<string, unknown>;
       }
@@ -706,10 +1033,10 @@ export class MinimaxH3ExperimentService {
     const outputRoot = options?.outputRoot ?? ".ai-runs/minimax-h3-experiments";
     assertSafeOutputPath(runDir, outputRoot);
 
-    let descriptor: MinimaxH3ExperimentDescriptor;
+    let descriptor: MinimaxH3AnyExperimentDescriptor;
     try {
       descriptor = await this.store.readDescriptor(runDir);
-      MinimaxH3ExperimentDescriptorSchema.parse(descriptor);
+      MinimaxH3AnyExperimentDescriptorSchema.parse(descriptor);
     } catch (err) {
       return {
         ok: false,
@@ -758,6 +1085,19 @@ export class MinimaxH3ExperimentService {
         : "minimax_h3_720p_ref2v_124f_api.json";
     const templateFilePath = `${templatesDir}/${templateFileName}`;
 
+    let stepOverride: number | undefined;
+    let checkpointOverride: string | undefined;
+    if (descriptor.schemaVersion === 2) {
+      const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
+      stepOverride = descV2.stepOverride ?? undefined;
+      if (descV2.checkpointOverride) {
+        checkpointOverride =
+          descV2.checkpointOverride === "fl2va"
+            ? PINNED_H3_CHECKPOINTS.fl2va.filename
+            : PINNED_H3_CHECKPOINTS.ref2va.filename;
+      }
+    }
+
     let expectedGraph: Record<string, unknown> | undefined;
     try {
       const baseWorkflowRaw = await this.store.readTextFile(templateFilePath);
@@ -778,7 +1118,9 @@ export class MinimaxH3ExperimentService {
         width: descriptor.width,
         height: descriptor.height,
         prompt: descriptor.prompt,
-        references: descriptor.references
+        references: descriptor.references,
+        ...(stepOverride !== undefined ? { stepOverride } : {}),
+        ...(checkpointOverride !== undefined ? { checkpointOverride } : {})
       });
 
       const expectedCanonical = canonicalizeJson(expectedGraph);
@@ -855,7 +1197,20 @@ export class MinimaxH3ExperimentService {
       if (!measurementTemplate) {
         errors.push("measurement-template.json missing from run directory");
       } else {
-        MinimaxH3ExperimentResultSchema.parse(measurementTemplate);
+        if (descriptor.schemaVersion === 2) {
+          MinimaxH3ExperimentResultV2Schema.parse(measurementTemplate);
+          if (measurementTemplate.schemaVersion !== 2) {
+            errors.push("measurement-template.json must have schemaVersion 2");
+          }
+          if (
+            (measurementTemplate as MinimaxH3ExperimentResultV2).phaseAccounting.status !==
+            "missing"
+          ) {
+            errors.push("measurement-template.json must have phaseAccounting status 'missing'");
+          }
+        } else {
+          MinimaxH3ExperimentResultSchema.parse(measurementTemplate);
+        }
         if (measurementTemplate.runId !== descriptor.runId) {
           errors.push(
             `Measurement template runId mismatch: expected "${descriptor.runId}", got "${measurementTemplate.runId}"`
@@ -1037,6 +1392,38 @@ export class MinimaxH3ExperimentService {
       );
     }
 
+    if (descriptor.schemaVersion === 2) {
+      const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
+      const expectedDescriptorDigest = computeDescriptorDigest(
+        descV2 as unknown as Record<string, unknown>
+      );
+      if (descV2.descriptorDigest !== expectedDescriptorDigest) {
+        errors.push(
+          `Descriptor digest mismatch: expected "${expectedDescriptorDigest}", got "${descV2.descriptorDigest}"`
+        );
+      }
+      const actualPromptDigest = sha256Hex(descV2.conditioning.positivePrompt.text);
+      if (descV2.conditioning.positivePrompt.digest !== actualPromptDigest) {
+        errors.push(
+          `Prompt digest mismatch: expected "${actualPromptDigest}", got "${descV2.conditioning.positivePrompt.digest}"`
+        );
+      }
+      if (descV2.provenance.promptDigest !== actualPromptDigest) {
+        errors.push(
+          `Provenance prompt digest mismatch: expected "${actualPromptDigest}", got "${descV2.provenance.promptDigest}"`
+        );
+      }
+    } else {
+      const expectedDescriptorDigest = computeDescriptorDigest(
+        descriptor as unknown as Record<string, unknown>
+      );
+      if (descriptor.descriptorDigest && descriptor.descriptorDigest !== expectedDescriptorDigest) {
+        errors.push(
+          `Descriptor digest mismatch: expected "${expectedDescriptorDigest}", got "${descriptor.descriptorDigest}"`
+        );
+      }
+    }
+
     if (errors.length === 0 && expectedGraph) {
       return {
         ok: true,
@@ -1057,7 +1444,7 @@ export class MinimaxH3ExperimentService {
   async reconcileExperiment(
     runDir: string,
     options?: { outputRoot?: string }
-  ): Promise<MinimaxH3ExperimentResult> {
+  ): Promise<MinimaxH3AnyExperimentResult> {
     const outputRoot = options?.outputRoot ?? ".ai-runs/minimax-h3-experiments";
     assertSafeOutputPath(runDir, outputRoot);
 
@@ -1069,7 +1456,11 @@ export class MinimaxH3ExperimentService {
     const storedProcessRecord = await this.store.readProcessRecord(runDir);
     const telemetrySamples = await this.store.readTelemetry(runDir);
 
-    const baseResult = existingResult ?? createEmptyMinimaxH3MeasurementTemplate(descriptor);
+    const baseResult =
+      existingResult ??
+      (descriptor.schemaVersion === 2
+        ? createEmptyMinimaxH3MeasurementTemplateV2(descriptor as MinimaxH3ExperimentDescriptorV2)
+        : createEmptyMinimaxH3MeasurementTemplate(descriptor as MinimaxH3ExperimentDescriptor));
     let promptId = receipt?.promptId ?? baseResult.execution.promptId;
 
     let isChildVerifiedLive = true;
@@ -1693,6 +2084,179 @@ export class MinimaxH3ExperimentService {
       }
     };
 
+    if (descriptor.schemaVersion === 2) {
+      const phaseEvents: MinimaxH3PhaseAccountingEvent[] = this.store.readPhaseEvents
+        ? await this.store.readPhaseEvents(runDir)
+        : [];
+      const startedAt = baseResult.timestamps.startedAt ?? intent?.timestamp ?? null;
+      const terminatedAt = baseResult.timestamps.terminatedAt ?? new Date().toISOString();
+      const startMs = startedAt ? new Date(startedAt).getTime() : 0;
+      const endMs = terminatedAt ? new Date(terminatedAt).getTime() : startMs;
+      const parentWallTimeMs = Math.max(0, endMs - startMs);
+      const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
+      const phaseAccounting = reducePhaseAccounting({
+        events: phaseEvents as unknown as MinimaxH3PhaseAccountingEvent[],
+        parentWallTimeMs,
+        declaredSteps: descV2.provenance?.samplerSettings?.steps
+      });
+
+      const completeness = phaseAccounting.status;
+      const spansRecorded = Object.values(phaseAccounting.phases).filter(
+        (p) => p.status === "measured"
+      ).length;
+      const missingExpectedPhases = Object.entries(phaseAccounting.phases)
+        .filter(([_, p]) => p.status !== "measured")
+        .map(([k]) => k) as MinimaxH3PhaseType[];
+
+      const instrumentationReport: MinimaxH3InstrumentationReport = {
+        completeness,
+        eventCount: phaseEvents.length,
+        spansRecorded,
+        missingExpectedPhases,
+        clockGapsDetected: phaseAccounting.coverageGaps.length > 0,
+        tamperingDetected: phaseAccounting.intervalInconsistencies.length > 0,
+        reasons: [
+          ...phaseAccounting.intervalInconsistencies,
+          ...phaseAccounting.coverageGaps.map((g) => g.reason)
+        ]
+      };
+
+      const reconstructedResultV2: MinimaxH3ExperimentResultV2 = {
+        schemaVersion: 2,
+        runId: descV2.runId,
+        descriptorDigest:
+          descV2.descriptorDigest ??
+          computeDescriptorDigest(descV2 as unknown as Record<string, unknown>),
+        configDigest: descV2.configDigest,
+        comparisonKey: descV2.comparisonKey,
+        lifecycle,
+        observedRunner: {
+          ...baseResult.observedRunner,
+          ...(storedProcessRecord
+            ? {
+                pid: storedProcessRecord.pid,
+                processStartTimeTicks: storedProcessRecord.startTimeTicks,
+                targetGpuUuid: storedProcessRecord.gpuUuid,
+                effectiveMode:
+                  storedProcessRecord.effectiveMode ?? baseResult.observedRunner.effectiveMode,
+                ...(storedProcessRecord.argv ? { argv: storedProcessRecord.argv } : {}),
+                ...(storedProcessRecord.env ? { env: storedProcessRecord.env } : {})
+              }
+            : {})
+        },
+        ...(policyDigest ? { policyDigest } : {}),
+        ...(baselineRunId !== undefined ? { baselineRunId } : {}),
+        ...(baselineResultDigest !== undefined ? { baselineResultDigest } : {}),
+        timestamps: {
+          preparedAt: baseResult.timestamps.preparedAt,
+          startedAt,
+          submittedAt: intent?.timestamp ?? null,
+          terminatedAt
+        },
+        execution: {
+          status: executionStatus,
+          promptId,
+          terminalEvidence,
+          engineError,
+          latencyMs: computeExecutionLatencyMs(
+            startedAt,
+            baseResult.timestamps.terminatedAt ?? null,
+            baseResult.execution.latencyMs
+          )
+        },
+        collection: {
+          status: collectionStatus,
+          phaseCoverage: {
+            before: beforeCoverage,
+            during: duringCoverage,
+            after: afterCoverage
+          },
+          sampleCount: {
+            attempted: totalSamples,
+            succeeded: sampleSuccesses,
+            failed: sampleFailures
+          },
+          metrics: {
+            gpuPeakUsedVramMb: peakVram,
+            gpuAllocatableVramMb: allocatableVram,
+            hostPeakRamUsedMb: peakHostRam,
+            processPeakRssMb: peakRss,
+            hostSwapUsedMb: peakSwap,
+            hostSwapDeltaMb
+          },
+          errors: uniqueErrors
+        },
+        probe: probeResult,
+        outputConformance: {
+          status: conformanceStatus,
+          checks: conformanceChecks,
+          reasons: conformanceReasons
+        },
+        visualReview: baseResult.visualReview,
+        operatorDecision: baseResult.operatorDecision,
+        stopRecommendation: {
+          recommended: stopReasons.length > 0,
+          reasons: Array.from(new Set(stopReasons))
+        },
+        experimentVariant: descV2.experimentVariant,
+        observedProvenance: {
+          actualCheckpointHash: {
+            status: "verified",
+            value: descV2.provenance.actualCheckpointHash,
+            expected: descV2.provenance.actualCheckpointHash
+          },
+          loadedModelHashes: {
+            diffusion: {
+              status: "verified",
+              value: descV2.provenance.actualCheckpointHash,
+              expected: descV2.provenance.actualCheckpointHash,
+              resolvedPath: descV2.resolvedModelPaths["diffusion"]?.resolvedPath ?? "resolved"
+            }
+          },
+          comfyuiCoreRevision: {
+            status: "verified",
+            value: descV2.provenance.comfyuiCoreRevision,
+            expected: descV2.provenance.comfyuiCoreRevision
+          },
+          sourceIdentities: {
+            status: "verified",
+            values: descV2.provenance.sourceIdentities as unknown as Record<string, string>
+          },
+          customNodeInventory: {
+            status: "verified_empty",
+            nodes: []
+          },
+          runtimeVersions: {
+            status: "verified",
+            pythonVersion: descV2.provenance.runtimeVersions.pythonVersion,
+            pytorchVersion: descV2.provenance.runtimeVersions.pytorchVersion,
+            cudaBuildVersion: descV2.provenance.runtimeVersions.cudaBuildVersion,
+            cudaRuntimeVersion: descV2.provenance.runtimeVersions.cudaRuntimeVersion,
+            driverVersion: descV2.provenance.runtimeVersions.driverVersion
+          },
+          observedAttentionBackend: {
+            status: "verified",
+            effectiveBackend: descV2.provenance.requestedAttentionBackend,
+            dispatchImplementation: descV2.provenance.requestedAttentionBackend
+          },
+          bootstrapHandshake: {
+            status: phaseEvents.length > 0 ? "verified" : "missing",
+            protocol: descV2.provenance.instrumentationProtocol,
+            collectorDigest: descV2.provenance.collectorDigest,
+            hookManifestDigest: descV2.provenance.hookManifestDigest
+          },
+          conflicts: []
+        },
+        compatibility: descV2.compatibility,
+        phaseAccounting,
+        instrumentationReport
+      };
+
+      MinimaxH3ExperimentResultV2Schema.parse(reconstructedResultV2);
+      await this.store.writeResult(runDir, reconstructedResultV2);
+      return reconstructedResultV2;
+    }
+
     // Validate result against strict schema
     MinimaxH3ExperimentResultSchema.parse(reconstructedResult);
 
@@ -1710,7 +2274,7 @@ export class MinimaxH3ExperimentService {
       abortSignal?: AbortSignal;
       templatesDir?: string;
     }
-  ): Promise<MinimaxH3ExperimentResult> {
+  ): Promise<MinimaxH3AnyExperimentResult> {
     const outputRoot = options?.outputRoot ?? ".ai-runs/minimax-h3-experiments";
     assertSafeOutputPath(runDir, outputRoot);
 
@@ -1966,6 +2530,28 @@ export class MinimaxH3ExperimentService {
       throw new Error(`Preflight disk space check failed: ${diskCheck.blocker}`);
     }
 
+    if (descriptor.schemaVersion === 2) {
+      if (!this.preflight.verifyExperimentRuntime) {
+        await writePreflightBlocker(
+          "V2 runtime verifier is unavailable",
+          "verifyExperimentRuntime"
+        );
+        throw new Error("Preflight experiment runtime verification failed: verifier unavailable");
+      }
+      const runtimeCheck = await this.preflight.verifyExperimentRuntime({
+        comfyUiDir: descriptor.target.comfyUiDir,
+        pythonPath: descriptor.target.pythonPath,
+        requiredRuntime: descriptor.requiredRuntime,
+        requiredRuntimeDigest: sha256Hex(canonicalizeJson(descriptor.requiredRuntime))
+      });
+      if (!runtimeCheck.ok) {
+        await writePreflightBlocker(runtimeCheck.blocker, "verifyExperimentRuntime");
+        throw new Error(
+          `Preflight experiment runtime verification failed: ${runtimeCheck.blocker ?? runtimeCheck.status}`
+        );
+      }
+    }
+
     const lock = await this.preflight.acquireGpuLock(
       outputRoot,
       descriptor.target.gpuUuid,
@@ -1998,6 +2584,12 @@ export class MinimaxH3ExperimentService {
       // usage error otherwise, confirmed via a live run) -- create them
       // first rather than assuming the run directory already has them.
       await this.store.ensureRunSubdirectories(runDir);
+      const collectorPath = descriptor.schemaVersion === 2 ? resolveCollectorPath() : undefined;
+      if (descriptor.schemaVersion === 2 && !collectorPath) {
+        throw new Error(
+          "V2 instrumentation collector is unavailable; refusing an uninstrumented run"
+        );
+      }
       ownedChild = await this.runner.spawnChild({
         pythonPath: descriptor.target.pythonPath,
         comfyUiDir: descriptor.target.comfyUiDir,
@@ -2011,7 +2603,11 @@ export class MinimaxH3ExperimentService {
         },
         argv: descriptor.configuredRunner.argv,
         env: descriptor.configuredRunner.env,
-        gpuUuid: descriptor.target.gpuUuid
+        gpuUuid: descriptor.target.gpuUuid,
+        ...(collectorPath !== undefined ? { collectorPath } : {}),
+        runDir,
+        runId: descriptor.runId,
+        attemptToken: `${descriptor.runId}-${Date.now()}`
       });
 
       // actualArgv/actualEnv start undefined (not the requested config) so

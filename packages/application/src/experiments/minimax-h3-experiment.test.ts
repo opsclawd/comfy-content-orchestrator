@@ -11,19 +11,23 @@ import {
   predictMemoryPolicyFromArgv,
   analyzeStartupDiagnostics
 } from "./minimax-h3-cli-parser-semantics.js";
-import type {
-  MinimaxH3ExperimentDescriptor,
-  MinimaxH3ExperimentIntent,
-  MinimaxH3ExperimentReceipt,
-  MinimaxH3ExperimentResult,
-  MinimaxH3ProcessRecord,
-  MinimaxH3TelemetrySample,
-  MinimaxH3TerminalEvidence
+import {
+  DEFAULT_MINIMAX_H3_STOP_POLICY,
+  type MinimaxH3ExperimentIntent,
+  type MinimaxH3ExperimentReceipt,
+  type MinimaxH3ProcessRecord,
+  type MinimaxH3TelemetrySample,
+  type MinimaxH3TerminalEvidence,
+  type MinimaxH3AnyExperimentDescriptor,
+  type MinimaxH3AnyExperimentResult,
+  type MinimaxH3PhaseAccountingEvent
 } from "@cco/contracts";
 import type {
   MinimaxH3ExperimentStorePort,
   MinimaxH3ComfyUiTransportPort,
-  MinimaxH3OutputProberPort
+  MinimaxH3OutputProberPort,
+  MinimaxH3TargetPreflightPort,
+  MinimaxH3ProcessRunnerPort
 } from "../ports/minimax-h3-experiment-ports.js";
 
 // Minimal mock templates
@@ -93,20 +97,24 @@ const mockProvenanceJson = JSON.stringify({
 class InMemoryStore implements MinimaxH3ExperimentStorePort {
   public files = new Map<string, string>();
   public staged = new Map<string, string>();
-  public descriptor: MinimaxH3ExperimentDescriptor | null = null;
+  public descriptor: MinimaxH3AnyExperimentDescriptor | null = null;
   public config: Record<string, unknown> | null = null;
   public inputManifest: unknown = null;
-  public measurementTemplate: MinimaxH3ExperimentResult | null = null;
+  public measurementTemplate: MinimaxH3AnyExperimentResult | null = null;
   public intent: MinimaxH3ExperimentIntent | null = null;
   public receipt: MinimaxH3ExperimentReceipt | null = null;
   public events: Array<{ timestamp: string; event: string; details?: unknown }> = [];
   public telemetry: MinimaxH3TelemetrySample[] = [];
-  public result: MinimaxH3ExperimentResult | null = null;
+  public result: MinimaxH3AnyExperimentResult | null = null;
+  public phaseEvents: MinimaxH3PhaseAccountingEvent[] = [];
 
-  async writeDescriptor(_runDir: string, descriptor: MinimaxH3ExperimentDescriptor): Promise<void> {
+  async writeDescriptor(
+    _runDir: string,
+    descriptor: MinimaxH3AnyExperimentDescriptor
+  ): Promise<void> {
     this.descriptor = descriptor;
   }
-  async readDescriptor(_runDir: string): Promise<MinimaxH3ExperimentDescriptor> {
+  async readDescriptor(_runDir: string): Promise<MinimaxH3AnyExperimentDescriptor> {
     if (!this.descriptor) throw new Error("Descriptor not found");
     return this.descriptor;
   }
@@ -126,11 +134,11 @@ class InMemoryStore implements MinimaxH3ExperimentStorePort {
   }
   async writeMeasurementTemplate(
     _runDir: string,
-    template: MinimaxH3ExperimentResult
+    template: MinimaxH3AnyExperimentResult
   ): Promise<void> {
     this.measurementTemplate = template;
   }
-  async readMeasurementTemplate(_runDir: string): Promise<MinimaxH3ExperimentResult | null> {
+  async readMeasurementTemplate(_runDir: string): Promise<MinimaxH3AnyExperimentResult | null> {
     return this.measurementTemplate;
   }
   async writeIntent(_runDir: string, intent: MinimaxH3ExperimentIntent): Promise<void> {
@@ -155,6 +163,12 @@ class InMemoryStore implements MinimaxH3ExperimentStorePort {
     _runDir: string
   ): Promise<Array<{ timestamp: string; event: string; details?: unknown }>> {
     return this.events;
+  }
+  async appendPhaseEvent(_runDir: string, event: MinimaxH3PhaseAccountingEvent): Promise<void> {
+    this.phaseEvents.push(event);
+  }
+  async readPhaseEvents(_runDir: string): Promise<MinimaxH3PhaseAccountingEvent[]> {
+    return this.phaseEvents;
   }
   async appendTelemetry(_runDir: string, sample: MinimaxH3TelemetrySample): Promise<void> {
     this.telemetry.push(sample);
@@ -184,10 +198,10 @@ class InMemoryStore implements MinimaxH3ExperimentStorePort {
     return { width: 1344, height: 768, mimeType: "image/png" };
   }
   async deleteRunFiles(_runDir: string, _keepOutputs?: boolean): Promise<void> {}
-  async writeResult(_runDir: string, result: MinimaxH3ExperimentResult): Promise<void> {
+  async writeResult(_runDir: string, result: MinimaxH3AnyExperimentResult): Promise<void> {
     this.result = result;
   }
-  async readResult(_runDir: string): Promise<MinimaxH3ExperimentResult | null> {
+  async readResult(_runDir: string): Promise<MinimaxH3AnyExperimentResult | null> {
     return this.result;
   }
   verifyContainment(targetPath: string, rootDir: string): boolean {
@@ -221,6 +235,32 @@ class InMemoryStore implements MinimaxH3ExperimentStorePort {
     if (!content) throw new Error(`File not found: ${filePath}`);
     return content;
   }
+}
+
+function createInitializedStore(): InMemoryStore {
+  const store = new InMemoryStore();
+  store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));
+  store.files.set(
+    "templates/minimax_h3_720p_ref2v_124f_api.json",
+    JSON.stringify(mockRef2vTemplate)
+  );
+  store.files.set("templates/provenance.json", mockProvenanceJson);
+  store.files.set(
+    "manifest.json",
+    JSON.stringify({
+      referenceSetId: "ref-test-1",
+      references: [
+        {
+          assetPath: "/tmp/ref1.png",
+          stagedFilename: "ref1.png",
+          role: "first_frame",
+          tag: "<Picture 1>",
+          order: 0
+        }
+      ]
+    })
+  );
+  return store;
 }
 
 describe("computeExecutionLatencyMs", () => {
@@ -393,32 +433,6 @@ describe("MiniMax-H3 CLI Parser Semantics (CPU-only)", () => {
 });
 
 describe("MiniMax-H3 Experiment Service (Preparation & Validation)", () => {
-  function createInitializedStore(): InMemoryStore {
-    const store = new InMemoryStore();
-    store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));
-    store.files.set(
-      "templates/minimax_h3_720p_ref2v_124f_api.json",
-      JSON.stringify(mockRef2vTemplate)
-    );
-    store.files.set("templates/provenance.json", mockProvenanceJson);
-    store.files.set(
-      "manifest.json",
-      JSON.stringify({
-        referenceSetId: "ref-test-1",
-        references: [
-          {
-            assetPath: "/tmp/ref1.png",
-            stagedFilename: "ref1.png",
-            role: "first_frame",
-            tag: "<Picture 1>",
-            order: 0
-          }
-        ]
-      })
-    );
-    return store;
-  }
-
   it("applies an operator-supplied timeouts override, keeping defaults for unspecified fields", async () => {
     // MinimaxH3ExperimentTimeoutsSchema's bounds exist specifically "to
     // allow operator tuning" above the defaults (e.g. a longer render
@@ -1738,5 +1752,258 @@ describe("MiniMax-H3 Experiment Service (Reconcile Crash Recovery)", () => {
     expect(reconstructed.execution.status).toBe("completed");
     expect(reconstructed.stopRecommendation.recommended).toBe(true);
     expect(reconstructed.stopRecommendation.reasons).toContain("stop_threshold_crossed_peak_vram");
+  });
+});
+
+describe("MiniMax-H3 Experiment Service V2 & Phase Accounting", () => {
+  it("prepares, validates, and reconciles an instrumented v2 experiment with phase accounting", async () => {
+    const store = createInitializedStore();
+
+    const service = new MinimaxH3ExperimentService(store);
+    const { descriptor, runDir } = await service.prepareExperiment({
+      route: "i2v",
+      frames: 124,
+      seed: 42,
+      prompt: "A neon cyborg in rainy Tokyo",
+      operatorLabel: "operator-v2",
+      runId: "run-v2-test",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest.json",
+      stepOverride: 15,
+      variantPurpose: "performance"
+    });
+
+    expect(descriptor.schemaVersion).toBe(2);
+    if (descriptor.schemaVersion !== 2) throw new Error("Expected schemaVersion 2");
+    expect(descriptor.experimentVariant.purpose).toBe("performance");
+    expect(descriptor.provenance.samplerSettings.steps).toBe(15);
+    expect(descriptor.conditioning.positivePrompt.text).toBe("A neon cyborg in rainy Tokyo");
+    expect(descriptor.compatibility.state).toBe("supported");
+
+    // Offline validation
+    const validation = await service.validateExperiment(runDir);
+    expect(validation.ok).toBe(true);
+    if (!validation.ok) throw new Error("Expected validation to pass");
+    expect(validation.descriptor.schemaVersion).toBe(2);
+
+    // Populate execution facts for reconciliation
+    await store.writeIntent(runDir, {
+      runId: descriptor.runId,
+      clientId: "client-v2",
+      workflowDigest: descriptor.derivedWorkflowDigest,
+      requestFingerprint: "fp-v2",
+      timestamp: "2026-10-12T10:00:00.000Z"
+    });
+    await store.writeReceipt(runDir, {
+      runId: descriptor.runId,
+      promptId: "prompt-v2-1",
+      acceptedAt: "2026-10-12T10:00:01.000Z"
+    });
+    await store.writeTerminalEvidence(runDir, {
+      source: "history",
+      status: "success",
+      outputFilename: "output.mp4",
+      rawDetails: {
+        "prompt-v2-1": {
+          status: {
+            status_str: "success",
+            completed: true,
+            messages: []
+          },
+          outputs: {
+            "92": {
+              videos: [{ filename: "output.mp4" }]
+            }
+          }
+        }
+      }
+    });
+
+    // Populate phase events using start/end spans
+    let seq = 0;
+    const addSpan = async (
+      phase: MinimaxH3PhaseAccountingEvent["phase"],
+      spanId: string,
+      startMs: number,
+      endMs: number,
+      extra: Record<string, unknown> = {}
+    ) => {
+      seq++;
+      await store.appendPhaseEvent(runDir, {
+        protocolVersion: "v2-jsonl",
+        sequence: seq,
+        runId: descriptor.runId,
+        attemptToken: "att-v2-1",
+        spanId,
+        phase,
+        type: "span_start",
+        boundarySource: "child_bootstrap",
+        clockDomain: "mono_child",
+        monotonicMs: startMs,
+        ...extra
+      });
+      seq++;
+      await store.appendPhaseEvent(runDir, {
+        protocolVersion: "v2-jsonl",
+        sequence: seq,
+        runId: descriptor.runId,
+        attemptToken: "att-v2-1",
+        spanId,
+        phase,
+        type: "span_end",
+        boundarySource: "child_bootstrap",
+        clockDomain: "mono_child",
+        monotonicMs: endMs,
+        outcome: "success",
+        ...extra
+      });
+    };
+
+    await addSpan("environment_startup", "span-1", 100, 5100);
+    await addSpan("model_loading", "span-2", 5100, 15100);
+    await addSpan("sampling_step", "span-3", 15100, 25100, { stepIndex: 1 });
+    await addSpan("sampling_step", "span-4", 25100, 35100, { stepIndex: 2 });
+    await addSpan("vae_decode_video", "span-5", 35100, 42100);
+
+    const reconciled = await service.reconcileExperiment(runDir, {
+      outputRoot: ".ai-runs/minimax-h3-experiments"
+    });
+
+    expect(reconciled.schemaVersion).toBe(2);
+    if (reconciled.schemaVersion !== 2) throw new Error("Expected reconciled schemaVersion 2");
+    expect(reconciled.phaseAccounting.phases.environment_startup!.status).toBe("measured");
+    expect(reconciled.phaseAccounting.phases.environment_startup!.durationMs).toBe(5000);
+    expect(reconciled.phaseAccounting.phases.model_loading!.status).toBe("measured");
+    expect(reconciled.phaseAccounting.phases.model_loading!.durationMs).toBe(10000);
+    expect(reconciled.phaseAccounting.phases.sampling_step!.status).toBe("measured");
+    expect(reconciled.phaseAccounting.phases.sampling_step!.durationMs).toBe(20000);
+    expect(reconciled.phaseAccounting.phases.vae_decode_audio!.status).toBe("unknown");
+    expect(reconciled.phaseAccounting.phases.vae_decode_audio!.durationMs).toBeNull();
+  });
+
+  it("detects tampered prompt conditioning or factor changes in offline validation", async () => {
+    const store = createInitializedStore();
+
+    const service = new MinimaxH3ExperimentService(store);
+    const { descriptor, runDir } = await service.prepareExperiment({
+      route: "i2v",
+      frames: 124,
+      seed: 42,
+      prompt: "A neon cyborg in rainy Tokyo",
+      operatorLabel: "operator-v2",
+      runId: "run-v2-tamper",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest.json",
+      stepOverride: 15
+    });
+
+    if (descriptor.schemaVersion !== 2) throw new Error("Expected v2 descriptor");
+
+    // Tamper with prompt text in descriptor without re-hashing
+    const tamperedDescriptor = {
+      ...descriptor,
+      conditioning: {
+        ...descriptor.conditioning,
+        positivePrompt: {
+          text: "Tampered prompt text",
+          digest: descriptor.conditioning.positivePrompt.digest
+        }
+      }
+    };
+    await store.writeDescriptor(runDir, tamperedDescriptor);
+
+    const validation = await service.validateExperiment(runDir);
+    expect(validation.ok).toBe(false);
+    expect(validation.errors.some((e) => e.includes("Prompt digest mismatch"))).toBe(true);
+  });
+
+  it("fails closed when runtime compatibility state is conflict before child spawn (Witness F2)", async () => {
+    const store = createInitializedStore();
+    store.files.set(
+      ".ai-runs/minimax-h3-experiments/stop-policy.json",
+      JSON.stringify(DEFAULT_MINIMAX_H3_STOP_POLICY)
+    );
+
+    let childSpawned = false;
+    const mockRunner: MinimaxH3ProcessRunnerPort = {
+      spawnChild: async () => {
+        childSpawned = true;
+        throw new Error("Should not be called");
+      }
+    };
+
+    const mockPreflight: MinimaxH3TargetPreflightPort = {
+      checkTargetHost: async () => ({ ok: true }),
+      checkPortAvailable: async () => ({ ok: true }),
+      verifyCheckout: async () => ({ ok: true, revision: "55b6a9b1", nodesPresent: true }),
+      verifyModels: async () => ({ ok: true, resolvedPaths: {} }),
+      verifyDiskSpace: async () => ({ ok: true, freeGb: 100 }),
+      acquireGpuLock: async () => ({
+        acquired: true,
+        release: async () => {}
+      }),
+      verifyExperimentRuntime: async () => ({
+        ok: false,
+        status: "conflict",
+        blocker:
+          "Runtime conflict: unpinned custom nodes detected conflicting with attention kernel",
+        adapterRegistered: true
+      })
+    };
+
+    const mockTransport: MinimaxH3ComfyUiTransportPort = {
+      waitForReadiness: async () => ({ ok: true }),
+      submitPrompt: async () => ({ ok: true, promptId: "p-1" }),
+      pollPromptHistory: async () => ({ status: "completed" }),
+      getQueue: async () => ({ running: [], pending: [] }),
+      findPromptByWorkflowDigestOrClient: async () => null
+    };
+
+    const mockTelemetry = {
+      start: () => ({
+        stop: async () => {},
+        setPhase: () => {}
+      })
+    };
+
+    const service = new MinimaxH3ExperimentService(
+      store,
+      mockPreflight,
+      mockRunner,
+      mockTransport,
+      mockTelemetry
+    );
+    const { runDir } = await service.prepareExperiment({
+      route: "i2v",
+      frames: 124,
+      seed: 42,
+      prompt: "A prompt",
+      operatorLabel: "operator-f2",
+      runId: "run-f2-conflict",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest.json",
+      stepOverride: 15
+    });
+
+    await expect(
+      service.executeExperiment(runDir, {
+        stopPolicyPath: ".ai-runs/minimax-h3-experiments/stop-policy.json",
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      })
+    ).rejects.toThrow(/Preflight experiment runtime verification failed: Runtime conflict/);
+
+    expect(childSpawned).toBe(false);
   });
 });

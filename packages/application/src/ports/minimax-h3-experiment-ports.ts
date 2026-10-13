@@ -1,15 +1,19 @@
 import type {
   MinimaxH3ExperimentCandidateFrames,
-  MinimaxH3ExperimentDescriptor,
   MinimaxH3ExperimentEvent,
   MinimaxH3ExperimentIntent,
   MinimaxH3ExperimentReceipt,
-  MinimaxH3ExperimentResult,
   MinimaxH3ProbeResult,
   MinimaxH3ProcessRecord,
   MinimaxH3TargetSpecification,
   MinimaxH3TelemetrySample,
-  MinimaxH3TerminalEvidence
+  MinimaxH3TerminalEvidence,
+  MinimaxH3AnyExperimentDescriptor,
+  MinimaxH3AnyExperimentResult,
+  MinimaxH3FactorChange,
+  MinimaxH3PhaseAccountingEvent,
+  MinimaxH3RequiredRuntimeManifest,
+  MinimaxH3ObservedProvenance
 } from "@cco/contracts";
 
 export interface MinimaxH3ExperimentStorePort {
@@ -22,8 +26,8 @@ export interface MinimaxH3ExperimentStorePort {
   // readiness-wait timeout -- see the process-runner's own liveness
   // check for the other half of that fix). Idempotent/recursive.
   ensureRunSubdirectories(runDir: string): Promise<void>;
-  writeDescriptor(runDir: string, descriptor: MinimaxH3ExperimentDescriptor): Promise<void>;
-  readDescriptor(runDir: string): Promise<MinimaxH3ExperimentDescriptor>;
+  writeDescriptor(runDir: string, descriptor: MinimaxH3AnyExperimentDescriptor): Promise<void>;
+  readDescriptor(runDir: string): Promise<MinimaxH3AnyExperimentDescriptor>;
 
   writeConfig(runDir: string, config: Record<string, unknown>): Promise<string>;
   readConfig(runDir: string): Promise<Record<string, unknown>>;
@@ -31,8 +35,8 @@ export interface MinimaxH3ExperimentStorePort {
   writeInputManifest(runDir: string, manifest: unknown): Promise<void>;
   readInputManifest(runDir: string): Promise<unknown>;
 
-  writeMeasurementTemplate(runDir: string, template: MinimaxH3ExperimentResult): Promise<void>;
-  readMeasurementTemplate(runDir: string): Promise<MinimaxH3ExperimentResult | null>;
+  writeMeasurementTemplate(runDir: string, template: MinimaxH3AnyExperimentResult): Promise<void>;
+  readMeasurementTemplate(runDir: string): Promise<MinimaxH3AnyExperimentResult | null>;
 
   writeIntent(runDir: string, intent: MinimaxH3ExperimentIntent): Promise<void>;
   readIntent(runDir: string): Promise<MinimaxH3ExperimentIntent | null>;
@@ -43,11 +47,14 @@ export interface MinimaxH3ExperimentStorePort {
   appendEvent(runDir: string, event: MinimaxH3ExperimentEvent): Promise<void>;
   readEvents(runDir: string): Promise<MinimaxH3ExperimentEvent[]>;
 
+  appendPhaseEvent?(runDir: string, event: MinimaxH3PhaseAccountingEvent): Promise<void>;
+  readPhaseEvents?(runDir: string): Promise<MinimaxH3PhaseAccountingEvent[]>;
+
   appendTelemetry(runDir: string, sample: MinimaxH3TelemetrySample): Promise<void>;
   readTelemetry(runDir: string): Promise<MinimaxH3TelemetrySample[]>;
 
-  writeResult(runDir: string, result: MinimaxH3ExperimentResult): Promise<void>;
-  readResult(runDir: string): Promise<MinimaxH3ExperimentResult | null>;
+  writeResult(runDir: string, result: MinimaxH3AnyExperimentResult): Promise<void>;
+  readResult(runDir: string): Promise<MinimaxH3AnyExperimentResult | null>;
 
   writeProcessRecord(runDir: string, record: MinimaxH3ProcessRecord): Promise<void>;
   readProcessRecord(runDir: string): Promise<MinimaxH3ProcessRecord | null>;
@@ -118,6 +125,18 @@ export interface MinimaxH3TargetPreflightPort {
     expectedStartTimeTicks?: number,
     expectedLockToken?: string
   ): Promise<{ released: boolean; reason?: string }>;
+  verifyExperimentRuntime?(options: {
+    comfyUiDir: string;
+    pythonPath: string;
+    requiredRuntime: MinimaxH3RequiredRuntimeManifest;
+    requiredRuntimeDigest: string;
+  }): Promise<{
+    ok: boolean;
+    status: "verified" | "conflict" | "unknown";
+    blocker?: string;
+    observations?: MinimaxH3ObservedProvenance;
+    adapterRegistered: boolean;
+  }>;
 }
 
 export interface MinimaxH3OwnedProcess {
@@ -154,6 +173,10 @@ export interface MinimaxH3ProcessRunnerPort {
     argv: readonly string[];
     env: Record<string, string>;
     gpuUuid: string;
+    collectorPath?: string;
+    runDir?: string;
+    runId?: string;
+    attemptToken?: string;
   }): Promise<MinimaxH3OwnedProcess>;
 }
 
@@ -247,12 +270,6 @@ export interface PrepareMinimaxH3ExperimentOptions {
   requestedDurationMs?: number;
   templatesDir?: string;
   pinFilesDir?: string;
-  // MinimaxH3ExperimentTimeoutsSchema's own bounds are explicitly set
-  // "well above" DEFAULT_MINIMAX_H3_EXPERIMENT_TIMEOUTS's defaults "to
-  // allow operator tuning" (see the schema's comment) -- but no caller
-  // ever had a way to actually supply a non-default value. Partial:
-  // only the fields the operator wants to override; the rest keep their
-  // defaults.
   timeouts?: Partial<{
     startupTimeoutMs: number;
     submissionTimeoutMs: number;
@@ -262,4 +279,9 @@ export interface PrepareMinimaxH3ExperimentOptions {
     settlementTimeoutMs: number;
     shutdownTimeoutMs: number;
   }>;
+  schemaVersion?: 1 | 2;
+  stepOverride?: number;
+  checkpointOverride?: "ref2va" | "fl2va";
+  changedFactors?: MinimaxH3FactorChange[];
+  variantPurpose?: "performance" | "prompt_conditioning" | "controlled_multifactor";
 }

@@ -17,12 +17,13 @@ import {
   type MinimaxH3TelemetrySamplerPort
 } from "@cco/application";
 import type {
-  MinimaxH3ExperimentDescriptor,
   MinimaxH3ExperimentEvent,
   MinimaxH3ExperimentIntent,
   MinimaxH3ExperimentReceipt,
   MinimaxH3ExperimentResult,
-  MinimaxH3TelemetrySample
+  MinimaxH3TelemetrySample,
+  MinimaxH3AnyExperimentDescriptor,
+  MinimaxH3AnyExperimentResult
 } from "@cco/contracts";
 
 const mockI2vTemplate = {
@@ -37,11 +38,11 @@ const mockI2vTemplate = {
 
 class MockStore implements MinimaxH3ExperimentStorePort {
   public files = new Map<string, string>();
-  public descriptor: MinimaxH3ExperimentDescriptor | null = null;
+  public descriptor: MinimaxH3AnyExperimentDescriptor | null = null;
   public config: Record<string, unknown> | null = null;
   public intent: MinimaxH3ExperimentIntent | null = null;
   public receipt: MinimaxH3ExperimentReceipt | null = null;
-  public result: MinimaxH3ExperimentResult | null = null;
+  public result: MinimaxH3AnyExperimentResult | null = null;
 
   public measurementTemplate: MinimaxH3ExperimentResult | null = null;
 
@@ -63,18 +64,41 @@ class MockStore implements MinimaxH3ExperimentStorePort {
     this.deleteRunFilesCalls.push({ runDir, removeOutputs });
   }
 
-  async writeDescriptor(_runDir: string, descriptor: MinimaxH3ExperimentDescriptor): Promise<void> {
+  public descriptorsByRunDir = new Map<string, MinimaxH3AnyExperimentDescriptor>();
+  public resultsByRunDir = new Map<string, MinimaxH3AnyExperimentResult>();
+  public configsByRunDir = new Map<string, Record<string, unknown>>();
+
+  async writeDescriptor(
+    runDir: string,
+    descriptor: MinimaxH3AnyExperimentDescriptor
+  ): Promise<void> {
     this.descriptor = descriptor;
+    this.descriptorsByRunDir.set(runDir, descriptor);
+    this.descriptorsByRunDir.set(basename(runDir), descriptor);
   }
-  async readDescriptor(_runDir: string): Promise<MinimaxH3ExperimentDescriptor> {
+  async readDescriptor(runDir?: string): Promise<MinimaxH3AnyExperimentDescriptor> {
+    if (runDir && this.descriptorsByRunDir.has(runDir)) {
+      return this.descriptorsByRunDir.get(runDir)!;
+    }
+    if (runDir && this.descriptorsByRunDir.has(basename(runDir))) {
+      return this.descriptorsByRunDir.get(basename(runDir))!;
+    }
     if (!this.descriptor) throw new Error("Descriptor not found");
     return this.descriptor;
   }
-  async writeConfig(_runDir: string, config: Record<string, unknown>): Promise<string> {
+  async writeConfig(runDir: string, config: Record<string, unknown>): Promise<string> {
     this.config = config;
+    this.configsByRunDir.set(runDir, config);
+    this.configsByRunDir.set(basename(runDir), config);
     return "c".repeat(64);
   }
-  async readConfig(_runDir: string): Promise<Record<string, unknown>> {
+  async readConfig(runDir?: string): Promise<Record<string, unknown>> {
+    if (runDir && this.configsByRunDir.has(runDir)) {
+      return this.configsByRunDir.get(runDir)!;
+    }
+    if (runDir && this.configsByRunDir.has(basename(runDir))) {
+      return this.configsByRunDir.get(basename(runDir))!;
+    }
     if (!this.config) throw new Error("Config not found");
     return this.config;
   }
@@ -114,10 +138,18 @@ class MockStore implements MinimaxH3ExperimentStorePort {
   async readTelemetry(): Promise<MinimaxH3TelemetrySample[]> {
     return [];
   }
-  async writeResult(_runDir: string, result: MinimaxH3ExperimentResult): Promise<void> {
+  async writeResult(runDir: string, result: MinimaxH3AnyExperimentResult): Promise<void> {
     this.result = result;
+    this.resultsByRunDir.set(runDir, result);
+    this.resultsByRunDir.set(basename(runDir), result);
   }
-  async readResult(): Promise<MinimaxH3ExperimentResult | null> {
+  async readResult(runDir?: string): Promise<MinimaxH3AnyExperimentResult | null> {
+    if (runDir && this.resultsByRunDir.has(runDir)) {
+      return this.resultsByRunDir.get(runDir)!;
+    }
+    if (runDir && this.resultsByRunDir.has(basename(runDir))) {
+      return this.resultsByRunDir.get(basename(runDir))!;
+    }
     return this.result;
   }
   verifyContainment(targetPath: string, rootDir: string): boolean {
@@ -1911,5 +1943,283 @@ describe("experiment:minimax-h3 CLI", () => {
     );
     expect(store.deleteRunFilesCalls.length).toBe(2);
     expect(store.deleteRunFilesCalls[1]!.removeOutputs).toBe(true);
+  });
+
+  it("prepare subcommand supports --step-override and --variant-purpose", async () => {
+    const { deps, stdout, store } = createMockDeps();
+
+    const code = await runExperimentCli(
+      [
+        "prepare",
+        "--route",
+        "i2v",
+        "--frames",
+        "124",
+        "--seed",
+        "42",
+        "--step-override",
+        "15",
+        "--variant-purpose",
+        "performance",
+        "--variant-reason",
+        "Evaluate 15-step sampling",
+        "--inputs",
+        "inputs.json",
+        "--prompt",
+        "A sunset",
+        "--target-host",
+        "render-worker-01",
+        "--gpu-uuid",
+        "GPU-12345678-1234-1234-1234-123456789abc",
+        "--comfyui-dir",
+        "/opt/comfyui",
+        "--python",
+        "/usr/bin/python3",
+        "--run-id",
+        "run-cli-step-override",
+        "--output-root",
+        ".ai-runs/minimax-h3-experiments"
+      ],
+      deps
+    );
+    expect(code).toBe(0);
+    const prepareOutput = JSON.parse(stdout[0]!);
+    expect(prepareOutput.status).toBe("prepared");
+
+    // Inspect the written descriptor
+    const descriptor = store.descriptorsByRunDir.get(prepareOutput.runDir);
+    expect(descriptor).toBeDefined();
+    expect(descriptor!.schemaVersion).toBe(2);
+    if (descriptor!.schemaVersion === 2) {
+      expect(descriptor!.experimentVariant.purpose).toBe("performance");
+      expect(descriptor!.experimentVariant.variantReason).toBe("Evaluate 15-step sampling");
+      expect(descriptor!.experimentVariant.changedFactors).toContainEqual(
+        expect.objectContaining({ path: "sampling.settings" })
+      );
+    }
+  });
+
+  it("compare subcommand admits single-factor variant against baseline", async () => {
+    const { deps, stdout } = createMockDeps();
+
+    // Prepare & run baseline (20 steps)
+    await runExperimentCli(
+      [
+        "prepare",
+        "--route",
+        "i2v",
+        "--frames",
+        "124",
+        "--seed",
+        "42",
+        "--inputs",
+        "inputs.json",
+        "--prompt",
+        "A sunset",
+        "--target-host",
+        "render-worker-01",
+        "--gpu-uuid",
+        "GPU-12345678-1234-1234-1234-123456789abc",
+        "--comfyui-dir",
+        "/opt/comfyui",
+        "--python",
+        "/usr/bin/python3",
+        "--run-id",
+        "run-baseline-for-compare",
+        "--output-root",
+        ".ai-runs/minimax-h3-experiments"
+      ],
+      deps
+    );
+    const baselineRunDir = ".ai-runs/minimax-h3-experiments/run-baseline-for-compare";
+    await runExperimentCli(
+      [
+        "run",
+        "--run-dir",
+        baselineRunDir,
+        "--output-root",
+        ".ai-runs/minimax-h3-experiments",
+        "--stop-policy",
+        "operator-stop-policy.json"
+      ],
+      deps
+    );
+
+    // Prepare & run candidate (15 steps)
+    await runExperimentCli(
+      [
+        "prepare",
+        "--route",
+        "i2v",
+        "--frames",
+        "124",
+        "--seed",
+        "42",
+        "--step-override",
+        "15",
+        "--variant-purpose",
+        "performance",
+        "--variant-reason",
+        "Evaluate 15-step sampling",
+        "--inputs",
+        "inputs.json",
+        "--prompt",
+        "A sunset",
+        "--target-host",
+        "render-worker-01",
+        "--gpu-uuid",
+        "GPU-12345678-1234-1234-1234-123456789abc",
+        "--comfyui-dir",
+        "/opt/comfyui",
+        "--python",
+        "/usr/bin/python3",
+        "--run-id",
+        "run-candidate-for-compare",
+        "--output-root",
+        ".ai-runs/minimax-h3-experiments"
+      ],
+      deps
+    );
+    const candidateRunDir = ".ai-runs/minimax-h3-experiments/run-candidate-for-compare";
+    await runExperimentCli(
+      [
+        "run",
+        "--run-dir",
+        candidateRunDir,
+        "--output-root",
+        ".ai-runs/minimax-h3-experiments",
+        "--stop-policy",
+        "operator-stop-policy.json"
+      ],
+      deps
+    );
+
+    stdout.length = 0;
+    const compareCode = await runExperimentCli(
+      [
+        "compare",
+        "--baseline",
+        baselineRunDir,
+        "--candidate",
+        candidateRunDir,
+        "--output-root",
+        ".ai-runs/minimax-h3-experiments"
+      ],
+      deps
+    );
+    expect(compareCode).toBe(0);
+    const comparison = JSON.parse(stdout[0]!);
+    expect(comparison.structuralAdmission.eligible).toBe(true);
+    expect(comparison.factorDifferences).toContainEqual(
+      expect.objectContaining({ path: "sampling.settings" })
+    );
+  });
+
+  it("compare subcommand exits with code 1 when runs differ on invariants", async () => {
+    const { deps, stdout } = createMockDeps();
+
+    // Prepare baseline
+    await runExperimentCli(
+      [
+        "prepare",
+        "--route",
+        "i2v",
+        "--frames",
+        "124",
+        "--seed",
+        "42",
+        "--inputs",
+        "inputs.json",
+        "--prompt",
+        "A sunset",
+        "--target-host",
+        "render-worker-01",
+        "--gpu-uuid",
+        "GPU-12345678-1234-1234-1234-123456789abc",
+        "--comfyui-dir",
+        "/opt/comfyui",
+        "--python",
+        "/usr/bin/python3",
+        "--run-id",
+        "run-baseline-invar-1",
+        "--output-root",
+        ".ai-runs/minimax-h3-experiments"
+      ],
+      deps
+    );
+    const baselineRunDir = ".ai-runs/minimax-h3-experiments/run-baseline-invar-1";
+    await runExperimentCli(
+      [
+        "run",
+        "--run-dir",
+        baselineRunDir,
+        "--output-root",
+        ".ai-runs/minimax-h3-experiments",
+        "--stop-policy",
+        "operator-stop-policy.json"
+      ],
+      deps
+    );
+
+    // Prepare candidate with different seed (confounder)
+    await runExperimentCli(
+      [
+        "prepare",
+        "--route",
+        "i2v",
+        "--frames",
+        "124",
+        "--seed",
+        "999",
+        "--inputs",
+        "inputs.json",
+        "--prompt",
+        "A sunset",
+        "--target-host",
+        "render-worker-01",
+        "--gpu-uuid",
+        "GPU-12345678-1234-1234-1234-123456789abc",
+        "--comfyui-dir",
+        "/opt/comfyui",
+        "--python",
+        "/usr/bin/python3",
+        "--run-id",
+        "run-candidate-invar-diff",
+        "--output-root",
+        ".ai-runs/minimax-h3-experiments"
+      ],
+      deps
+    );
+    const candidateRunDir = ".ai-runs/minimax-h3-experiments/run-candidate-invar-diff";
+    await runExperimentCli(
+      [
+        "run",
+        "--run-dir",
+        candidateRunDir,
+        "--output-root",
+        ".ai-runs/minimax-h3-experiments",
+        "--stop-policy",
+        "operator-stop-policy.json"
+      ],
+      deps
+    );
+
+    stdout.length = 0;
+    const compareCode = await runExperimentCli(
+      [
+        "compare",
+        "--baseline",
+        baselineRunDir,
+        "--candidate",
+        candidateRunDir,
+        "--output-root",
+        ".ai-runs/minimax-h3-experiments"
+      ],
+      deps
+    );
+    expect(compareCode).toBe(1);
+    const comparison = JSON.parse(stdout[0]!);
+    expect(comparison.structuralAdmission.eligible).toBe(false);
+    expect(comparison.structuralAdmission.reasons.length).toBeGreaterThan(0);
   });
 });

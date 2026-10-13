@@ -40,11 +40,30 @@ export class MinimaxH3TelemetrySampler implements MinimaxH3TelemetrySamplerPort 
     });
 
     const collectGpuSample = async (): Promise<MinimaxH3GpuSample> => {
-      const { stdout } = await execFileAsync(
-        "nvidia-smi",
-        ["--query-gpu=uuid,memory.total,memory.used,memory.free", "--format=csv,noheader,nounits"],
-        { timeout: 5000 }
-      );
+      let stdout: string;
+      let hasExtended = false;
+      try {
+        const res = await execFileAsync(
+          "nvidia-smi",
+          [
+            "--query-gpu=uuid,memory.total,memory.used,memory.free,utilization.gpu,utilization.memory,power.draw",
+            "--format=csv,noheader,nounits"
+          ],
+          { timeout: 5000 }
+        );
+        stdout = res.stdout;
+        hasExtended = true;
+      } catch {
+        const res = await execFileAsync(
+          "nvidia-smi",
+          [
+            "--query-gpu=uuid,memory.total,memory.used,memory.free",
+            "--format=csv,noheader,nounits"
+          ],
+          { timeout: 5000 }
+        );
+        stdout = res.stdout;
+      }
 
       const lines = stdout.split(/\r?\n/).filter((l) => l.trim().length > 0);
       let matchedRow: string | null = null;
@@ -73,13 +92,35 @@ export class MinimaxH3TelemetrySampler implements MinimaxH3TelemetrySamplerPort 
         throw new Error(`Failed to parse numeric VRAM values from nvidia-smi row: "${matchedRow}"`);
       }
 
+      let utilizationGpuPercent: number | null = null;
+      let utilizationMemoryPercent: number | null = null;
+      let powerDrawWatts: number | null = null;
+
+      if (hasExtended && cols.length >= 7) {
+        const gpuUtil = parseFloat(cols[4] || "");
+        if (!Number.isNaN(gpuUtil) && gpuUtil >= 0 && gpuUtil <= 100) {
+          utilizationGpuPercent = Math.round(gpuUtil);
+        }
+        const memUtil = parseFloat(cols[5] || "");
+        if (!Number.isNaN(memUtil) && memUtil >= 0 && memUtil <= 100) {
+          utilizationMemoryPercent = Math.round(memUtil);
+        }
+        const power = parseFloat(cols[6] || "");
+        if (!Number.isNaN(power) && power >= 0) {
+          powerDrawWatts = Math.round(power * 10) / 10;
+        }
+      }
+
       return {
         timestamp: new Date().toISOString(),
         deviceUuid: targetGpuUuid,
         totalVramMb,
         usedVramMb,
         freeVramMb,
-        allocatableVramMb: usedVramMb + freeVramMb
+        allocatableVramMb: usedVramMb + freeVramMb,
+        utilizationGpuPercent,
+        utilizationMemoryPercent,
+        powerDrawWatts
       };
     };
 

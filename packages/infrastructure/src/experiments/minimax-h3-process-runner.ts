@@ -51,6 +51,7 @@ export class OwnedProcessInstance implements MinimaxH3OwnedProcess {
   private hasExited = false;
   private readonly expectedPythonPath: string;
   private readonly expectedCwd: string;
+  private readonly expectedEntrypoint: string;
 
   constructor(options: {
     child: ChildProcess;
@@ -60,6 +61,7 @@ export class OwnedProcessInstance implements MinimaxH3OwnedProcess {
     gpuUuid: string;
     expectedPythonPath: string;
     expectedCwd: string;
+    expectedEntrypoint?: string;
   }) {
     this.child = options.child;
     this.pid = options.child.pid!;
@@ -69,6 +71,7 @@ export class OwnedProcessInstance implements MinimaxH3OwnedProcess {
     this.gpuUuid = options.gpuUuid;
     this.expectedPythonPath = options.expectedPythonPath;
     this.expectedCwd = options.expectedCwd;
+    this.expectedEntrypoint = options.expectedEntrypoint ?? "main.py";
 
     this.child.once("exit", () => {
       this.hasExited = true;
@@ -131,10 +134,10 @@ export class OwnedProcessInstance implements MinimaxH3OwnedProcess {
           reason: `PID ${this.pid} executable "${actualExecutable ?? ""}" does not match expected interpreter "${this.expectedPythonPath}" (unexpected process identity)`
         };
       }
-      if (actualEntrypoint !== "main.py") {
+      if (actualEntrypoint !== this.expectedEntrypoint && actualEntrypoint !== "main.py") {
         return {
           ok: false,
-          reason: `PID ${this.pid} entrypoint argument "${actualEntrypoint ?? ""}" is not "main.py" (unexpected process identity)`
+          reason: `PID ${this.pid} entrypoint argument "${actualEntrypoint ?? ""}" does not match expected entrypoint "${this.expectedEntrypoint}" (unexpected process identity)`
         };
       }
     } catch (err) {
@@ -427,11 +430,30 @@ export class MinimaxH3ProcessRunner implements MinimaxH3ProcessRunnerPort {
     argv: readonly string[];
     env: Record<string, string>;
     gpuUuid: string;
+    collectorPath?: string;
+    runDir?: string;
+    runId?: string;
+    attemptToken?: string;
   }): Promise<MinimaxH3OwnedProcess> {
-    const { pythonPath, comfyUiDir, address, port, dirs, argv, env, gpuUuid } = options;
+    const {
+      pythonPath,
+      comfyUiDir,
+      address,
+      port,
+      dirs,
+      argv,
+      env,
+      gpuUuid,
+      collectorPath,
+      runDir,
+      runId,
+      attemptToken
+    } = options;
 
-    const childArgs = [
-      "main.py",
+    let childArgs: string[];
+    let expectedEntrypoint = "main.py";
+
+    const commonComfyArgs = [
       "--listen",
       address,
       "--port",
@@ -446,6 +468,18 @@ export class MinimaxH3ProcessRunner implements MinimaxH3ProcessRunnerPort {
       resolve(dirs.userDir),
       ...argv
     ];
+
+    if (collectorPath) {
+      expectedEntrypoint = collectorPath;
+      childArgs = [
+        collectorPath,
+        "--bootstrap-entrypoint",
+        resolve(comfyUiDir, "main.py"),
+        ...commonComfyArgs
+      ];
+    } else {
+      childArgs = ["main.py", ...commonComfyArgs];
+    }
 
     const cleanEnv: Record<string, string> = {};
     for (const key of [
@@ -464,6 +498,14 @@ export class MinimaxH3ProcessRunner implements MinimaxH3ProcessRunnerPort {
     }
     Object.assign(cleanEnv, env);
     cleanEnv["CUDA_VISIBLE_DEVICES"] = gpuUuid;
+
+    if (collectorPath) {
+      const activeRunDir = resolve(runDir ?? dirs.outputDir);
+      cleanEnv["CCO_EXPERIMENT_RUN_DIR"] = activeRunDir;
+      cleanEnv["CCO_EXPERIMENT_RUN_ID"] = runId ?? "experiment-run";
+      cleanEnv["CCO_EXPERIMENT_ATTEMPT_TOKEN"] = attemptToken ?? "attempt-1";
+      cleanEnv["CCO_EXPERIMENT_EVENT_LOG"] = resolve(activeRunDir, "phase-events.jsonl");
+    }
 
     const child = spawn(pythonPath, childArgs, {
       cwd: resolve(comfyUiDir),
@@ -493,7 +535,8 @@ export class MinimaxH3ProcessRunner implements MinimaxH3ProcessRunnerPort {
       port,
       gpuUuid,
       expectedPythonPath: pythonPath,
-      expectedCwd: resolve(comfyUiDir)
+      expectedCwd: resolve(comfyUiDir),
+      expectedEntrypoint
     });
   }
 }
