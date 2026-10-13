@@ -513,6 +513,12 @@ export class MinimaxH3ExperimentService {
       referenceHashes: processedReferences.map((r) => r.sha256),
       runnerVariant,
       memoryPolicy: requestedPolicy,
+      // Matches requestedRunner.offloadSettings.modelOffload below
+      // (currently always true -- there is no configurable path for
+      // this yet). Keep this literal in sync if that ever changes.
+      modelOffload: true,
+      workflowDigest: derivedWorkflowDigest,
+      comfyuiCoreRevision: PINNED_COMFYUI_CORE_REVISION,
       modelDigests: {
         "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors":
           "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
@@ -1005,11 +1011,14 @@ export class MinimaxH3ExperimentService {
       referenceHashes: descriptor.references.map((r) => r.sha256),
       runnerVariant: descriptor.requestedRunner.variantName,
       memoryPolicy: descriptor.requestedRunner.memoryPolicy,
+      modelOffload: descriptor.requestedRunner.offloadSettings.modelOffload,
       modelDigests: descriptor.pinFileIdentities.modelDigests,
       target: {
         hostname: descriptor.target.hostname,
         gpuUuid: descriptor.target.gpuUuid
-      }
+      },
+      workflowDigest: descriptor.derivedWorkflowDigest,
+      comfyuiCoreRevision: descriptor.pinFileIdentities.comfyuiCoreRevision
     });
     if (descriptor.comparisonKey !== recomputedComparisonKey) {
       errors.push(

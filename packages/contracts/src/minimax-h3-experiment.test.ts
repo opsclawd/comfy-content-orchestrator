@@ -7,6 +7,7 @@ import {
   validateMinimaxH3ExperimentFrameCount,
   getMinimaxH3FrameDurationInfo,
   createEmptyMinimaxH3MeasurementTemplate,
+  computeComparisonKey,
   MinimaxH3ExperimentDescriptorSchema,
   MinimaxH3ExperimentResultSchema,
   MinimaxH3MatrixRowSchema,
@@ -194,6 +195,57 @@ describe("MiniMax-H3 Experiment Contracts", () => {
       expect(() => validateMinimaxH3ExperimentFrameCount(5)).toThrow(/out-of-scope/);
       expect(() => validateMinimaxH3ExperimentFrameCount(22)).toThrow(/out-of-scope/);
       expect(() => validateMinimaxH3ExperimentFrameCount(141)).toThrow(/out-of-scope/);
+    });
+  });
+
+  describe("computeComparisonKey", () => {
+    const baseOptions = {
+      route: "i2v",
+      frames: 124,
+      requestedDurationMs: 5167,
+      width: 1344,
+      height: 768,
+      promptDigest: sampleDigest,
+      seed: 42,
+      referenceHashes: [sampleDigest2],
+      runnerVariant: "dynamicvram-offload-v1",
+      memoryPolicy: "dynamic_vram",
+      modelOffload: true,
+      modelDigests: { "diffusion_models/x.safetensors": sampleDigest },
+      target: { hostname: "render-worker-01", gpuUuid: "GPU-1" },
+      workflowDigest: sampleDigest,
+      comfyuiCoreRevision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+    } as const;
+
+    it("changes when the workflow digest changes, even with every other field identical", () => {
+      // comparisonKey is the identity two runs are compared *by* -- a
+      // later template/graph change previously left it unchanged even
+      // though the thing actually being measured was now different.
+      const keyA = computeComparisonKey(baseOptions);
+      const keyB = computeComparisonKey({
+        ...baseOptions,
+        workflowDigest: sampleDigest2
+      });
+      expect(keyA).not.toBe(keyB);
+    });
+
+    it("changes when the ComfyUI core revision changes, even with every other field identical", () => {
+      const keyA = computeComparisonKey(baseOptions);
+      const keyB = computeComparisonKey({
+        ...baseOptions,
+        comfyuiCoreRevision: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+      });
+      expect(keyA).not.toBe(keyB);
+    });
+
+    it("changes when modelOffload changes, even with every other field identical", () => {
+      const keyA = computeComparisonKey(baseOptions);
+      const keyB = computeComparisonKey({ ...baseOptions, modelOffload: false });
+      expect(keyA).not.toBe(keyB);
+    });
+
+    it("is deterministic for identical input", () => {
+      expect(computeComparisonKey(baseOptions)).toBe(computeComparisonKey(baseOptions));
     });
   });
 

@@ -73,8 +73,22 @@ export function computeComparisonKey(options: {
   referenceHashes?: readonly string[];
   runnerVariant: string;
   memoryPolicy: string;
+  // Whether model-offload was requested -- distinct from the memory
+  // policy itself (two runs can share a memoryPolicy/runnerVariant but
+  // differ on this), and previously omitted entirely, so two runs that
+  // weren't actually configured the same way could share a
+  // comparisonKey.
+  modelOffload?: boolean | null;
   modelDigests?: Record<string, string> | null;
   target?: { hostname: string; gpuUuid: string } | null;
+  // The exact derived workflow graph and the ComfyUI core revision it
+  // was built against. Omitting these meant a later template/graph
+  // change, or a ComfyUI core upgrade, left the comparisonKey unchanged
+  // even though the thing actually being measured was now different --
+  // comparisonKey is the identity two runs are compared *by*, so it
+  // must change when either does.
+  workflowDigest?: string | null;
+  comfyuiCoreRevision?: string | null;
 }): string {
   const payload = {
     route: options.route,
@@ -97,8 +111,11 @@ export function computeComparisonKey(options: {
         : []),
     runnerVariant: options.runnerVariant,
     memoryPolicy: options.memoryPolicy,
+    modelOffload: options.modelOffload ?? null,
     modelDigests: options.modelDigests ?? null,
-    target: options.target ?? null
+    target: options.target ?? null,
+    workflowDigest: options.workflowDigest ?? null,
+    comfyuiCoreRevision: options.comfyuiCoreRevision ?? null
   };
   return sha256Hex(canonicalizeJson(payload));
 }
