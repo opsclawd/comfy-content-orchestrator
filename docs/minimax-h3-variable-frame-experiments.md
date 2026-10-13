@@ -28,6 +28,22 @@ All experiments require the exact pinned revisions verified across repositories:
 | MiniMax-H3 Models | Revision `7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1` | `./scripts/check-minimax-h3-version.sh` |
 | FFmpeg | `7.0.2-static` | `./scripts/check-ffmpeg-version.sh` |
 
+### Pinned Model Files (loaded by both routes)
+
+Both `i2v` and `ref2v` templates load four model files, not just the
+diffusion weights. `prepare`/`validate`/`run` verify all four against the
+hashes in `pinFileIdentities.modelDigests`/`resolvedModelPaths` before any
+submission — a render host missing the text encoder or either VAE fails
+preflight the same way a missing diffusion checkpoint does, but an operator
+provisioning a new host by hand needs to know these paths ahead of time:
+
+| Role | Loader Node | Expected Path (under `--comfyui-dir/models/`) |
+| --- | --- | --- |
+| Diffusion (UNet) | `UNETLoader` | `diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors` |
+| Text Encoder (CLIP) | `CLIPLoader` | `text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` |
+| Video VAE | `VAELoader` | `vae/minimax_h3_video_vae_int8_convrot.safetensors` |
+| Audio VAE | `VAELoader` | `vae/minimax_h3_audio_vae_fp32.safetensors` |
+
 ### CLI Memory Regimes & Pinned Semantics
 In ComfyUI commit `55b6a9b1`, `cli_args.py` keeps Dynamic VRAM offloading active by default unless explicitly disabled. Passing `--lowvram` alone does **not** disable dynamic VRAM.
 - **Baseline Regime (`dynamicvram-offload-v1`):** Default execution mode. No memory flags passed to ComfyUI. Leverages ComfyUI's dynamic VRAM memory allocator.
@@ -110,8 +126,41 @@ pnpm experiment:minimax-h3 prepare \
   --output-root .ai-runs/minimax-h3-experiments
 ```
 
-#### Comparator Variant Example:
+#### Comparator Variant Example — Complete Baseline Chain:
+A comparator variant (`static-lowvram-v1`) is a **different runner regime**
+from the default baseline regime (`dynamicvram-offload-v1`) — escalating a
+comparator candidate past 124 frames requires its own 124-frame comparator
+baseline via `--baseline-run-dir`, not the default regime's baseline. The
+`run` command's baseline-escalation check verifies the stop-policy digest
+matches too, so the same `--stop-policy` file must be reused across the
+whole chain for a given variant:
+
 ```bash
+# 1. Prepare and run the comparator variant's OWN 124-frame baseline first.
+pnpm experiment:minimax-h3 prepare \
+  --route i2v \
+  --frames 124 \
+  --seed 42 \
+  --inputs ./test-assets/i2v-manifest.json \
+  --prompt "Cinematic camera pan across misty mountains at dawn" \
+  --runner-variant static-lowvram-v1 \
+  --variant-reason "Evaluate memory fragmentation under static lowvram regime" \
+  --target-host "$(hostname)" \
+  --gpu-uuid "GPU-00000000-0000-0000-0000-000000000000" \
+  --comfyui-dir /path/to/ComfyUI \
+  --python /path/to/ComfyUI/venv/bin/python3 \
+  --run-id "run-i2v-124f-static-baseline" \
+  --operator-label "operator-alex" \
+  --output-root .ai-runs/minimax-h3-experiments
+
+pnpm experiment:minimax-h3 run \
+  --run-dir .ai-runs/minimax-h3-experiments/run-i2v-124f-static-baseline \
+  --stop-policy ./operator-stop-policy.json
+
+# 2. Only after the static-lowvram baseline above is completed/conformant/
+#    reviewed, escalate the SAME variant to 192 frames, pointing
+#    --baseline-run-dir at the static-lowvram baseline (not a
+#    dynamicvram-offload-v1 baseline -- they are not interchangeable).
 pnpm experiment:minimax-h3 prepare \
   --route i2v \
   --frames 192 \
@@ -125,6 +174,87 @@ pnpm experiment:minimax-h3 prepare \
   --comfyui-dir /path/to/ComfyUI \
   --python /path/to/ComfyUI/venv/bin/python3 \
   --run-id "run-i2v-192f-static" \
+  --operator-label "operator-alex" \
+  --output-root .ai-runs/minimax-h3-experiments
+
+pnpm experiment:minimax-h3 run \
+  --run-dir .ai-runs/minimax-h3-experiments/run-i2v-192f-static \
+  --baseline-run-dir .ai-runs/minimax-h3-experiments/run-i2v-124f-static-baseline \
+  --stop-policy ./operator-stop-policy.json
+```
+
+#### Candidate Tier 2 (243 frames) and Tier 3 (362 frames) Examples:
+`--baseline-run-dir` must always point at a **124-frame** run for the exact
+same route, variant, geometry, seed, prompt, and references — `run` rejects
+a baseline with any other frame count outright. This holds for every tier:
+243 and 362 both reference the same 124-frame baseline directly, not the
+192-frame or 243-frame run that preceded them:
+
+```bash
+# Tier 2: 243 frames (ref2v, dynamicvram-offload-v1 default regime)
+pnpm experiment:minimax-h3 prepare \
+  --route ref2v \
+  --frames 243 \
+  --seed 42 \
+  --inputs ./test-assets/ref2v-manifest.json \
+  --prompt "A wide shot of <Picture 1> wearing <Picture 2> walking through <Picture 3>" \
+  --target-host "$(hostname)" \
+  --gpu-uuid "GPU-00000000-0000-0000-0000-000000000000" \
+  --comfyui-dir /path/to/ComfyUI \
+  --python /path/to/ComfyUI/venv/bin/python3 \
+  --run-id "run-ref2v-243f-candidate" \
+  --operator-label "operator-alex" \
+  --output-root .ai-runs/minimax-h3-experiments
+
+pnpm experiment:minimax-h3 run \
+  --run-dir .ai-runs/minimax-h3-experiments/run-ref2v-243f-candidate \
+  --baseline-run-dir .ai-runs/minimax-h3-experiments/run-ref2v-124f-baseline \
+  --stop-policy ./operator-stop-policy.json
+
+# Tier 3: 362 frames (i2v, dynamicvram-offload-v1 default regime)
+pnpm experiment:minimax-h3 prepare \
+  --route i2v \
+  --frames 362 \
+  --seed 42 \
+  --inputs ./test-assets/i2v-manifest.json \
+  --prompt "Cinematic camera pan across misty mountains at dawn" \
+  --target-host "$(hostname)" \
+  --gpu-uuid "GPU-00000000-0000-0000-0000-000000000000" \
+  --comfyui-dir /path/to/ComfyUI \
+  --python /path/to/ComfyUI/venv/bin/python3 \
+  --run-id "run-i2v-362f-candidate" \
+  --operator-label "operator-alex" \
+  --output-root .ai-runs/minimax-h3-experiments
+
+pnpm experiment:minimax-h3 run \
+  --run-dir .ai-runs/minimax-h3-experiments/run-i2v-362f-candidate \
+  --baseline-run-dir .ai-runs/minimax-h3-experiments/run-i2v-124f-baseline \
+  --stop-policy ./operator-stop-policy.json
+```
+
+#### Lowered-Resolution Variant Example:
+`--width`/`--height` default to `1344x768` and otherwise must be one of the
+three named lower resolutions the schema admits (`1280x720`, `1024x576`,
+`896x512`); any other pair fails validation. These are independent of the
+frame-count escalation grid — a 124-frame baseline at a lowered resolution
+still needs its own baseline before escalating that same resolution past
+124 frames, since `run`'s baseline-escalation check also requires the
+baseline's geometry to match the candidate's exactly:
+
+```bash
+pnpm experiment:minimax-h3 prepare \
+  --route i2v \
+  --frames 124 \
+  --width 1280 \
+  --height 720 \
+  --seed 42 \
+  --inputs ./test-assets/i2v-manifest.json \
+  --prompt "Cinematic camera pan across misty mountains at dawn" \
+  --target-host "$(hostname)" \
+  --gpu-uuid "GPU-00000000-0000-0000-0000-000000000000" \
+  --comfyui-dir /path/to/ComfyUI \
+  --python /path/to/ComfyUI/venv/bin/python3 \
+  --run-id "run-i2v-124f-720p-baseline" \
   --operator-label "operator-alex" \
   --output-root .ai-runs/minimax-h3-experiments
 ```
