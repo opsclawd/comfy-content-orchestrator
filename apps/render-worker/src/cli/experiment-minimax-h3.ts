@@ -87,6 +87,13 @@ Options for 'prepare':
   --height <pixels>              Video height (default: 768)
   --requested-duration-ms <ms>   Explicit operator duration intent in milliseconds
   --templates-dir <path>         Path to workflow templates directory (optional)
+  --startup-timeout-ms <ms>      ComfyUI child readiness timeout (default: 120000, max: 600000)
+  --submission-timeout-ms <ms>   Prompt submission HTTP timeout (default: 30000, max: 300000)
+  --poll-interval-ms <ms>        History poll interval (default: 1000, max: 60000)
+  --total-render-timeout-ms <ms> Max time to wait for render completion (default: 1200000, max: 3600000)
+  --probe-timeout-ms <ms>        ffprobe output verification timeout (default: 60000, max: 300000)
+  --settlement-timeout-ms <ms>   Post-completion settlement wait (default: 10000, max: 120000)
+  --shutdown-timeout-ms <ms>     Child process graceful shutdown timeout (default: 15000, max: 120000)
 
 Options for 'validate':
   --run-dir <path>               Prepared run directory path (required)
@@ -221,7 +228,14 @@ const ALLOWED_FLAGS_BY_SUBCOMMAND: Record<string, Set<string>> = {
     "height",
     "requested-duration-ms",
     "operator-label",
-    "templates-dir"
+    "templates-dir",
+    "startup-timeout-ms",
+    "submission-timeout-ms",
+    "poll-interval-ms",
+    "total-render-timeout-ms",
+    "probe-timeout-ms",
+    "settlement-timeout-ms",
+    "shutdown-timeout-ms"
   ]),
   validate: new Set(["run-dir", "output-root", "templates-dir"]),
   run: new Set(["run-dir", "output-root", "stop-policy", "baseline-run-dir", "templates-dir"]),
@@ -253,6 +267,13 @@ const VALUE_FLAGS = new Set([
   "requested-duration-ms",
   "operator-label",
   "templates-dir",
+  "startup-timeout-ms",
+  "submission-timeout-ms",
+  "poll-interval-ms",
+  "total-render-timeout-ms",
+  "probe-timeout-ms",
+  "settlement-timeout-ms",
+  "shutdown-timeout-ms",
   "run-dir",
   "stop-policy",
   "baseline-run-dir",
@@ -414,6 +435,31 @@ export async function runExperimentCli(
           requestedDurationMs = parsed;
         }
 
+        // Schema's own bounds exist specifically "to allow operator
+        // tuning" of these timeouts above their defaults (e.g. a longer
+        // render budget for a higher frame count) -- but until now no
+        // caller had a way to actually supply one.
+        const timeoutFlagNames = [
+          ["startup-timeout-ms", "startupTimeoutMs"],
+          ["submission-timeout-ms", "submissionTimeoutMs"],
+          ["poll-interval-ms", "pollIntervalMs"],
+          ["total-render-timeout-ms", "totalRenderTimeoutMs"],
+          ["probe-timeout-ms", "probeTimeoutMs"],
+          ["settlement-timeout-ms", "settlementTimeoutMs"],
+          ["shutdown-timeout-ms", "shutdownTimeoutMs"]
+        ] as const;
+        const timeoutsOverride: Record<string, number> = {};
+        for (const [flagName, field] of timeoutFlagNames) {
+          if (flags[flagName] !== undefined) {
+            const parsed = parseStrictInt(flags[flagName]);
+            if (parsed === null || parsed <= 0) {
+              stderr(`Error: --${flagName} must be a positive integer.`);
+              return 1;
+            }
+            timeoutsOverride[field] = parsed;
+          }
+        }
+
         const resolvedTemplatesDir = resolveCliPath(flags["templates-dir"]);
         const prepared = await service.prepareExperiment({
           route,
@@ -435,7 +481,8 @@ export async function runExperimentCli(
           variantReason,
           inputManifestPath: inputs,
           ...(resolvedTemplatesDir !== undefined ? { templatesDir: resolvedTemplatesDir } : {}),
-          ...(typeof requestedDurationMs === "number" ? { requestedDurationMs } : {})
+          ...(typeof requestedDurationMs === "number" ? { requestedDurationMs } : {}),
+          ...(Object.keys(timeoutsOverride).length > 0 ? { timeouts: timeoutsOverride } : {})
         });
 
         stdout(

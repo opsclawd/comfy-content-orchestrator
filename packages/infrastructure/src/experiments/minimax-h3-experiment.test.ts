@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as os from "node:os";
 import * as net from "node:net";
-import { appendFile, mkdtemp, rm } from "node:fs/promises";
+import { appendFile, mkdtemp, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { MinimaxH3ExperimentStore } from "./minimax-h3-experiment-store.js";
 import { MinimaxH3TargetPreflight } from "./minimax-h3-target-preflight.js";
@@ -94,6 +94,31 @@ describe("MinimaxH3ExperimentStore", () => {
       expect(store.jsonlParseWarnings).toHaveLength(1);
       expect(store.jsonlParseWarnings[0]?.path).toContain("events.jsonl");
       expect(store.jsonlParseWarnings[0]?.lineNumber).toBe(2);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ensureRunSubdirectories creates outputs/temp/user/inputs before ComfyUI needs them", async () => {
+    // Found via a live run on real hardware: ComfyUI's own argparse
+    // requires --output-directory/--temp-directory/--user-directory to
+    // already exist, and exits immediately with a usage error
+    // otherwise. executeExperiment never created these before
+    // spawning, so every real run failed this way.
+    const tmpDir = await mkdtemp(join(os.tmpdir(), "h3-exp-subdirs-test-"));
+    try {
+      const store = new MinimaxH3ExperimentStore(tmpDir);
+      const runDir = join(tmpDir, "run-subdirs");
+
+      await store.ensureRunSubdirectories(runDir);
+
+      for (const sub of ["outputs", "temp", "user", "inputs"]) {
+        const s = await stat(`${runDir}/${sub}`);
+        expect(s.isDirectory()).toBe(true);
+      }
+
+      // Idempotent: calling again on existing directories must not throw.
+      await expect(store.ensureRunSubdirectories(runDir)).resolves.toBeUndefined();
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
