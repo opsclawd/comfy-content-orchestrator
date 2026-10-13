@@ -16,6 +16,32 @@ Issue #422 supplies GPU-independent engineering and an isolated, deterministic f
 - **Target Geometry & Cadence:** Standard production resolution `1344x768`, 24 fps (`MINIMAX_H3_FPS`).
 - **Diffusion Model Weights:** Pinned `minimax_h3_ref2va_pruned_int8_convrot.safetensors` for both routes, matching `.minimax-h3-version`.
 
+### Native-Conditioning Wiring & Source Verification
+
+`MiniMaxH3ReferenceToVideo` natively accepts up to 9 reference images directly
+(no external ControlNet-style preprocessing node is required or used; see
+`docs/minimax-h3-ref2v-live-verification.md` for the live confirmation that
+the node actually consumes and is conditioned by the connected image). The
+harness wires and re-verifies this deterministically, per run:
+
+1. **Deterministic slot-to-node binding:** `prepare` assigns reference `i`
+   (0-indexed, matching `--inputs` manifest order) to `LoadImage` node
+   `201 + i` (nodes `201`–`209` for up to 9 slots), and that node's output
+   feeds `ref_images.ref_image_<i>` on node 105. Unused slot nodes
+   (`i >= N` for `N` supplied references) are deleted from the derived
+   graph entirely, not merely left unwired — a slot that doesn't exist in
+   the manifest cannot be accidentally populated by a stale or shared
+   workflow fragment. (`i2v` is simpler: its single start frame always
+   binds to `LoadImage` node `20`.)
+2. **Source re-verification before submission:** the SHA-256 of each
+   staged input file is checked against the hash recorded in
+   `descriptor.references[].sha256` twice — once during `validate` (offline)
+   and again immediately before `run` submits the prompt — specifically so
+   a file swapped on disk after `prepare` staged it (intentionally or by a
+   concurrent process) is caught as `"Staged input asset tampered before
+   POST"` rather than silently conditioning the node on different content
+   than what was reviewed/approved at `prepare` time.
+
 ---
 
 ## 2. Pinned Environment & Runner Regimes
@@ -297,11 +323,25 @@ pnpm experiment:minimax-h3 cleanup \
 ```
 
 ### Subcommand 6: `import-sidecar`
-Imports a reviewed visual review sidecar (`visual-review.json`) into an existing `result.json`. Verifies that the sidecar's `runId` and `outputSha256` match the probed facts of the run before updating `result.json`. This enables completed baseline runs to satisfy the visual review prerequisite required for candidate escalation.
+Imports a reviewed visual review sidecar (`visual-review.json`) **or** an
+operator decision sidecar (`decision.json`) into an existing `result.json`
+(the CLI auto-detects which schema the file matches). For a visual review,
+verifies the sidecar's `runId` and `outputSha256` match the probed facts of
+the run — this enables completed baseline runs to satisfy the visual
+review prerequisite required for candidate escalation. For an operator
+decision claiming `approve_candidate`, independently re-verifies the run's
+actual `result.json` against every approval prerequisite (execution
+completed, effective mode verified and matching the requested policy,
+collection complete, output conformant, visual review reviewed with all
+findings passing) rather than trusting the sidecar's own claims.
 ```bash
 pnpm experiment:minimax-h3 import-sidecar \
   --run-dir .ai-runs/minimax-h3-experiments/run-i2v-124f-baseline \
   --sidecar ./visual-review.json
+
+pnpm experiment:minimax-h3 import-sidecar \
+  --run-dir .ai-runs/minimax-h3-experiments/run-i2v-124f-baseline \
+  --sidecar ./decision.json
 ```
 
 ### Input Manifest Schema & Examples
@@ -440,6 +480,14 @@ Per `AGENTS.md`, benchmark and certification records must NEVER be populated wit
 ```
 
 ### 8.2 Visual Review Template (`visual-review.json`)
+The schema requires `outputSha256` to always be a well-formed 64-hex-char
+string (it is not nullable, even while `status` is `"pending"`), so the
+all-zero value below is a sentinel placeholder, not a real hash.
+**Before review**, replace it with this run's actual `probe.outputSha256`
+from `result.json` — `import-sidecar` independently re-verifies this field
+against the run's probed facts and rejects a mismatch, so leaving the
+placeholder in place fails loudly rather than silently importing a review
+bound to the wrong output.
 ```json
 {
   "schemaVersion": 1,
@@ -457,6 +505,17 @@ Per `AGENTS.md`, benchmark and certification records must NEVER be populated wit
 ```
 
 ### 8.3 Operator Decision Sidecar (`decision.json`)
+`evidenceBundle` is a free-form string map (the schema only requires it be
+non-empty when approving) — `resultDigest` and `observedMode` below are
+illustrative keys an operator may choose to record, not schema-mandated
+fields. **`observedMode` must be copied from this run's actual
+`result.json` (`observedRunner.effectiveMode.value`) after it completes**,
+not left as the literal example value shown here: the CLI's
+`approve_candidate` prerequisite check verifies `effectiveMode.value`
+against the descriptor's requested policy directly from `result.json`
+regardless of what this sidecar's `evidenceBundle` claims, but recording
+the wrong observed mode here would still misrepresent the run in the
+sidecar's own evidence trail.
 ```json
 {
   "schemaVersion": 1,
@@ -470,7 +529,7 @@ Per `AGENTS.md`, benchmark and certification records must NEVER be populated wit
   "reason": null,
   "evidenceBundle": {
     "resultDigest": "<sha256-hex-digest-of-reconciled-result.json>",
-    "observedMode": "dynamic_vram"
+    "observedMode": "<copy from result.json's observedRunner.effectiveMode.value>"
   }
 }
 ```
