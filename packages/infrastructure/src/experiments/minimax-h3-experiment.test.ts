@@ -324,6 +324,71 @@ describe("MinimaxH3ComfyUiAdapter", () => {
     expect(history.outputFilename).toBe("minimax_h3_i2v_run-1_00001_.mp4");
   });
 
+  it("marks a caller-aborted poll as interrupted, distinct from a genuine engine error", async () => {
+    // Our own abort signal firing (operator cancel or a stop-policy
+    // threshold trip) and a genuine ComfyUI-reported execution error
+    // both surface as status "failed" -- interrupted is what lets the
+    // caller tell a deliberate stop apart from an actual failure.
+    const mockFetch = async (): Promise<Response> => new Response("{}", { status: 200 });
+    const adapter = new MinimaxH3ComfyUiAdapter(mockFetch as unknown as typeof fetch);
+
+    const abortController = new AbortController();
+    abortController.abort();
+
+    const result = await adapter.pollPromptHistory(
+      "http://127.0.0.1:8199",
+      "test-prompt-aborted",
+      5000,
+      100,
+      abortController.signal
+    );
+    expect(result.status).toBe("failed");
+    expect(result.interrupted).toBe(true);
+  });
+
+  it("marks a ComfyUI-reported interruption as interrupted, but a genuine execution error as not interrupted", async () => {
+    const mockResponses: Record<string, unknown> = {
+      "/history/test-prompt-interrupted": {
+        "test-prompt-interrupted": {
+          status: { status_str: "interrupted", completed: false }
+        }
+      },
+      "/history/test-prompt-oom": {
+        "test-prompt-oom": {
+          status: { status_str: "error", completed: false, messages: [["execution_error", {}]] }
+        }
+      }
+    };
+    const mockFetch = async (input: unknown): Promise<Response> => {
+      const urlStr = String(input);
+      for (const [route, data] of Object.entries(mockResponses)) {
+        if (urlStr.includes(route)) {
+          return new Response(JSON.stringify(data), { status: 200 });
+        }
+      }
+      return new Response("Not found", { status: 404 });
+    };
+    const adapter = new MinimaxH3ComfyUiAdapter(mockFetch as unknown as typeof fetch);
+
+    const interruptedResult = await adapter.pollPromptHistory(
+      "http://127.0.0.1:8199",
+      "test-prompt-interrupted",
+      5000,
+      100
+    );
+    expect(interruptedResult.status).toBe("failed");
+    expect(interruptedResult.interrupted).toBe(true);
+
+    const oomResult = await adapter.pollPromptHistory(
+      "http://127.0.0.1:8199",
+      "test-prompt-oom",
+      5000,
+      100
+    );
+    expect(oomResult.status).toBe("failed");
+    expect(oomResult.interrupted).toBeFalsy();
+  });
+
   it("rejects an oversized chunked response body without fully materializing it first", async () => {
     // No Content-Length header (chunked), and a body stream that keeps
     // yielding chunks past the 50MB limit. The fast-path Content-Length

@@ -1193,6 +1193,109 @@ describe("MiniMax-H3 Experiment Service (Reconcile Crash Recovery)", () => {
     expect(reconstructed.lifecycle).toBe("failed");
   });
 
+  it("reconstructs a deliberate stop (terminal evidence status 'interrupted') as unknown, not failed, with no engineError", async () => {
+    // A deliberate stop -- our own abort signal firing, or ComfyUI
+    // itself reporting the execution as interrupted -- must not be
+    // indistinguishable from a genuine engine failure. This exercises
+    // the consumer side of that distinction (reconcileExperiment's
+    // interpretation of a stored terminalEvidence.status of
+    // "interrupted"); the producer side (the write sites in
+    // executeExperiment/pollPromptHistory that must actually produce
+    // this status instead of "error" for an aborted run) has no
+    // dedicated test, for the reason noted in prior commits:
+    // executeExperiment has no test harness.
+    const store = new InMemoryStore();
+    store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));
+    store.files.set("templates/provenance.json", mockProvenanceJson);
+    store.files.set(
+      "manifest.json",
+      JSON.stringify({
+        referenceSetId: "ref-test-1",
+        references: [
+          {
+            assetPath: "/tmp/ref1.png",
+            stagedFilename: "ref1.png",
+            role: "first_frame",
+            tag: "<Picture 1>",
+            order: 0
+          }
+        ]
+      })
+    );
+
+    const offlineTransport: MinimaxH3ComfyUiTransportPort = {
+      waitForReadiness: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+      submitPrompt: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+      pollPromptHistory: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+      getQueue: async () => {
+        throw new Error("ECONNREFUSED");
+      },
+      findPromptByWorkflowDigestOrClient: async () => null
+    };
+
+    const service = new MinimaxH3ExperimentService(
+      store,
+      undefined,
+      undefined,
+      offlineTransport,
+      undefined,
+      undefined
+    );
+
+    const { runDir, descriptor } = await service.prepareExperiment({
+      route: "i2v",
+      frames: 124,
+      seed: 42,
+      prompt: "A sunset",
+      operatorLabel: "operator-01",
+      runId: "run-interrupted-test",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest.json"
+    });
+
+    await store.writeIntent(runDir, {
+      runId: descriptor.runId,
+      clientId: "client-1",
+      workflowDigest: descriptor.derivedWorkflowDigest,
+      requestFingerprint: "fp-1",
+      timestamp: new Date().toISOString()
+    });
+    await store.writeReceipt(runDir, {
+      runId: descriptor.runId,
+      promptId: "prompt-reconcile-interrupted",
+      acceptedAt: new Date().toISOString()
+    });
+
+    await store.writeTerminalEvidence(runDir, {
+      status: "interrupted",
+      source: "history",
+      rawDetails: {
+        "prompt-reconcile-interrupted": {
+          status: { status_str: "interrupted", completed: false },
+          outputs: {}
+        }
+      },
+      error: { message: "Polling aborted by operator signal" }
+    });
+
+    const reconstructed = await service.reconcileExperiment(runDir, {
+      outputRoot: ".ai-runs/minimax-h3-experiments"
+    });
+
+    expect(reconstructed.execution.status).toBe("unknown");
+    expect(reconstructed.execution.engineError).toBeNull();
+  });
+
   it("reconstructs completed result with offline server when stored terminal evidence indicates success with output", async () => {
     const store = new InMemoryStore();
     store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));

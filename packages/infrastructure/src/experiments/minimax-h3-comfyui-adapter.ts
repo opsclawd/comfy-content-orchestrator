@@ -230,6 +230,7 @@ export class MinimaxH3ComfyUiAdapter implements MinimaxH3ComfyUiTransportPort {
     outputType?: "output" | "temp";
     rawHistory?: unknown;
     error?: string;
+    interrupted?: boolean;
   }> {
     const start = Date.now();
 
@@ -237,7 +238,8 @@ export class MinimaxH3ComfyUiAdapter implements MinimaxH3ComfyUiTransportPort {
       if (abortSignal?.aborted) {
         return {
           status: "failed",
-          error: "Polling aborted by operator signal"
+          error: "Polling aborted by operator signal",
+          interrupted: true
         };
       }
       const remainingMs = Math.max(100, timeoutMs - (Date.now() - start));
@@ -281,7 +283,8 @@ export class MinimaxH3ComfyUiAdapter implements MinimaxH3ComfyUiTransportPort {
             return {
               status: "failed",
               rawHistory: entry,
-              error: "ComfyUI execution interrupted"
+              error: "ComfyUI execution interrupted",
+              interrupted: true
             };
           }
 

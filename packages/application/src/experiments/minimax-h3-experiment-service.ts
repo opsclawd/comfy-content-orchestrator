@@ -2263,9 +2263,21 @@ export class MinimaxH3ExperimentService {
       }
 
       if (!submitRes.ok || !submitRes.promptId) {
+        // A rejection caused by our own abort signal (operator
+        // cancellation or a stop-policy threshold trip) is a deliberate
+        // stop, not an engine failure -- submitPrompt's pre-POST abort
+        // check returns the same ok:false shape either way, so this is
+        // the only place that can still tell them apart. Writing status
+        // "error" unconditionally here means the catch block's own
+        // (correctly abort-aware) terminal evidence write never takes
+        // effect, since it only writes when none exists yet.
+        const isAbortedRejection =
+          (options?.abortSignal?.aborted ?? false) ||
+          stopAbortController.signal.aborted ||
+          stopTriggered;
         await this.store.writeTerminalEvidence(runDir, {
           source: "process",
-          status: "error",
+          status: isAbortedRejection ? "interrupted" : "error",
           runId: descriptor.runId,
           serverAddress: descriptor.target.address,
           serverPort: descriptor.target.port,
@@ -2273,7 +2285,8 @@ export class MinimaxH3ExperimentService {
           rawDetails: {
             ambiguousSubmission: false,
             error: submitRes.error,
-            phase: "prompt_submission"
+            phase: "prompt_submission",
+            interrupted: isAbortedRejection
           }
         });
         throw new Error(`ComfyUI prompt submission failed: ${submitRes.error}`);
@@ -2303,9 +2316,23 @@ export class MinimaxH3ExperimentService {
           });
         }
       }
-      stopAbortController.signal.addEventListener("abort", () => combinedAbortController.abort(), {
-        once: true
-      });
+      // A stop-policy threshold can cross during the submitPrompt/
+      // writeReceipt window above, before this listener is attached.
+      // AbortSignal's "abort" event fires exactly once, at the moment
+      // .abort() is called -- a listener added after that point never
+      // fires, so an already-aborted stopAbortController would
+      // otherwise be silently missed for the entire poll, unlike the
+      // options?.abortSignal branch above which already guards against
+      // this.
+      if (stopAbortController.signal.aborted) {
+        combinedAbortController.abort();
+      } else {
+        stopAbortController.signal.addEventListener(
+          "abort",
+          () => combinedAbortController.abort(),
+          { once: true }
+        );
+      }
 
       const pollRes = await this.transport.pollPromptHistory(
         baseUrl,
@@ -2316,11 +2343,22 @@ export class MinimaxH3ExperimentService {
       );
 
       // Persist terminal evidence BEFORE process teardown!
+      // pollRes.status "failed" is returned for three distinct reasons:
+      // our own abort signal fired, ComfyUI itself reported the
+      // execution as interrupted, or ComfyUI reported a genuine
+      // execution error (e.g. CUDA OOM). Collapsing all three into
+      // "error" made a deliberate stop (operator cancel, or a
+      // stop-policy threshold trip) indistinguishable from an actual
+      // engine failure. pollRes.interrupted (set only for the first two
+      // cases) is what pollPromptHistory provides specifically so this
+      // distinction survives.
       const terminalStatus =
         pollRes.status === "completed"
           ? "success"
           : pollRes.status === "failed"
-            ? "error"
+            ? pollRes.interrupted
+              ? "interrupted"
+              : "error"
             : pollRes.status === "timeout"
               ? "timeout"
               : "error";

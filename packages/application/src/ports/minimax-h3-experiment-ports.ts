@@ -175,6 +175,13 @@ export interface MinimaxH3ComfyUiTransportPort {
     outputType?: "output" | "temp" | undefined;
     rawHistory?: unknown;
     error?: string | undefined;
+    // true when status "failed" means our own abort signal fired or
+    // ComfyUI itself reported the execution as interrupted -- distinct
+    // from a genuine engine-reported execution error (e.g. CUDA OOM).
+    // Without this, a deliberate stop (operator cancel or a stop-policy
+    // threshold trip) and a real engine failure are indistinguishable
+    // to the caller, both just "failed".
+    interrupted?: boolean | undefined;
   }>;
   getQueue(baseUrl: string): Promise<{ running: unknown[]; pending: unknown[] }>;
   findPromptByWorkflowDigestOrClient(
