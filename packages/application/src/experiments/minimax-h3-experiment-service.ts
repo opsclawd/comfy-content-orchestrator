@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import {
   DEFAULT_MINIMAX_H3_EXPERIMENT_TIMEOUTS,
+  MinimaxH3ExperimentTimeoutsSchema,
   getMinimaxH3FrameDurationInfo,
   MinimaxH3ExperimentDescriptorSchema,
   MinimaxH3ExperimentResultSchema,
@@ -291,8 +292,18 @@ export class MinimaxH3ExperimentService {
       runnerVariant = "dynamicvram-offload-v1",
       variantReason = null,
       inputManifestPath,
-      requestedDurationMs
+      requestedDurationMs,
+      timeouts: timeoutsOverride
     } = options;
+
+    // MinimaxH3ExperimentTimeoutsSchema's bounds exist specifically to
+    // allow operator tuning above the defaults (e.g. a longer render for
+    // a higher frame count) -- parse+validate the merged result so an
+    // override can't exceed the schema's own caps.
+    const timeouts = MinimaxH3ExperimentTimeoutsSchema.parse({
+      ...DEFAULT_MINIMAX_H3_EXPERIMENT_TIMEOUTS,
+      ...timeoutsOverride
+    });
 
     const validatedFrames = validateMinimaxH3ExperimentFrameCount(frames);
     const durationInfo = getMinimaxH3FrameDurationInfo(validatedFrames);
@@ -643,7 +654,7 @@ export class MinimaxH3ExperimentService {
         port
       },
       collectionIntervalMs: 1000,
-      timeouts: DEFAULT_MINIMAX_H3_EXPERIMENT_TIMEOUTS,
+      timeouts,
       configDigest,
       comparisonKey
     };

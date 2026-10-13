@@ -247,4 +247,19 @@ export interface PrepareMinimaxH3ExperimentOptions {
   requestedDurationMs?: number;
   templatesDir?: string;
   pinFilesDir?: string;
+  // MinimaxH3ExperimentTimeoutsSchema's own bounds are explicitly set
+  // "well above" DEFAULT_MINIMAX_H3_EXPERIMENT_TIMEOUTS's defaults "to
+  // allow operator tuning" (see the schema's comment) -- but no caller
+  // ever had a way to actually supply a non-default value. Partial:
+  // only the fields the operator wants to override; the rest keep their
+  // defaults.
+  timeouts?: Partial<{
+    startupTimeoutMs: number;
+    submissionTimeoutMs: number;
+    pollIntervalMs: number;
+    totalRenderTimeoutMs: number;
+    probeTimeoutMs: number;
+    settlementTimeoutMs: number;
+    shutdownTimeoutMs: number;
+  }>;
 }

@@ -419,6 +419,62 @@ describe("MiniMax-H3 Experiment Service (Preparation & Validation)", () => {
     return store;
   }
 
+  it("applies an operator-supplied timeouts override, keeping defaults for unspecified fields", async () => {
+    // MinimaxH3ExperimentTimeoutsSchema's bounds exist specifically "to
+    // allow operator tuning" above the defaults (e.g. a longer render
+    // budget for a higher frame count) -- but prepareExperiment ignored
+    // the option entirely and always wrote
+    // DEFAULT_MINIMAX_H3_EXPERIMENT_TIMEOUTS verbatim, found live while
+    // escalating a real run past the default 20-minute render budget.
+    const store = createInitializedStore();
+    const service = new MinimaxH3ExperimentService(store);
+
+    const { descriptor } = await service.prepareExperiment({
+      route: "i2v",
+      frames: 124,
+      seed: 42,
+      prompt: "A sunset",
+      operatorLabel: "operator-01",
+      runId: "run-timeout-override",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest.json",
+      timeouts: { totalRenderTimeoutMs: 1_800_000 }
+    });
+
+    expect(descriptor.timeouts.totalRenderTimeoutMs).toBe(1_800_000);
+    // Unspecified fields keep their defaults.
+    expect(descriptor.timeouts.startupTimeoutMs).toBe(120_000);
+    expect(descriptor.timeouts.pollIntervalMs).toBe(1_000);
+  });
+
+  it("rejects a timeouts override that exceeds the schema's own upper bound", async () => {
+    const store = createInitializedStore();
+    const service = new MinimaxH3ExperimentService(store);
+
+    await expect(
+      service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A sunset",
+        operatorLabel: "operator-01",
+        runId: "run-timeout-over-bound",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest.json",
+        // Schema caps totalRenderTimeoutMs at 3_600_000.
+        timeouts: { totalRenderTimeoutMs: 3_600_001 }
+      })
+    ).rejects.toThrow();
+  });
+
   it("fails closed when provenance.json has no matching profile entry (templates-dir trust-root bypass)", async () => {
     const store = createInitializedStore();
     // Simulate a caller-supplied --templates-dir with an empty/unrelated
