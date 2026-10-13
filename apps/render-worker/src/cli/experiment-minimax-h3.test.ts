@@ -46,6 +46,7 @@ class MockStore implements MinimaxH3ExperimentStorePort {
   public measurementTemplate: MinimaxH3ExperimentResult | null = null;
 
   async createRunDirectory(_runDir: string): Promise<void> {}
+  async ensureRunSubdirectories(_runDir: string): Promise<void> {}
   async writeProcessRecord(): Promise<void> {}
   async readProcessRecord(): Promise<null> {
     return null;

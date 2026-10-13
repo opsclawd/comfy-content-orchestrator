@@ -163,6 +163,7 @@ class InMemoryStore implements MinimaxH3ExperimentStorePort {
     return this.telemetry;
   }
   async createRunDirectory(_runDir: string): Promise<void> {}
+  async ensureRunSubdirectories(_runDir: string): Promise<void> {}
   public processRecord: MinimaxH3ProcessRecord | null = null;
   async writeProcessRecord(_runDir: string, record: MinimaxH3ProcessRecord): Promise<void> {
     this.processRecord = record;

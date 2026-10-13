@@ -1981,7 +1981,12 @@ export class MinimaxH3ExperimentService {
     const stopAbortController = new AbortController();
 
     try {
-      // 5. Spawn owned child with absolute paths and clean environment
+      // 5. Spawn owned child with absolute paths and clean environment.
+      // ComfyUI's argparse requires --output-directory/--temp-directory/
+      // --user-directory to already exist (it exits immediately with a
+      // usage error otherwise, confirmed via a live run) -- create them
+      // first rather than assuming the run directory already has them.
+      await this.store.ensureRunSubdirectories(runDir);
       ownedChild = await this.runner.spawnChild({
         pythonPath: descriptor.target.pythonPath,
         comfyUiDir: descriptor.target.comfyUiDir,
@@ -2061,13 +2066,47 @@ export class MinimaxH3ExperimentService {
 
       const baseUrl = `http://${descriptor.target.address}:${descriptor.target.port}`;
 
-      // 6. Wait for readiness
-      const readyCheck = await this.transport.waitForReadiness(
-        baseUrl,
-        descriptor.timeouts.startupTimeoutMs,
-        options?.abortSignal
-      );
+      // 6. Wait for readiness. waitForReadiness only knows about the
+      // HTTP endpoint, not the child process -- a child that exits
+      // immediately (e.g. a bad CLI argument) would otherwise still be
+      // polled for the full startupTimeoutMs before failing, with no
+      // indication the process had already died. Race it against a
+      // liveness poll on the owned child so a dead child fails fast
+      // with a clear reason instead of a generic readiness timeout.
+      const readinessAbortController = new AbortController();
+      if (options?.abortSignal) {
+        if (options.abortSignal.aborted) {
+          readinessAbortController.abort();
+        } else {
+          options.abortSignal.addEventListener("abort", () => readinessAbortController.abort(), {
+            once: true
+          });
+        }
+      }
+      let childDiedDuringReadinessWait = false;
+      const livenessPollHandle = setInterval(() => {
+        if (!ownedChild!.isRunning()) {
+          childDiedDuringReadinessWait = true;
+          readinessAbortController.abort();
+        }
+      }, 250);
+      let readyCheck: { ok: boolean; blocker?: string };
+      try {
+        readyCheck = await this.transport.waitForReadiness(
+          baseUrl,
+          descriptor.timeouts.startupTimeoutMs,
+          readinessAbortController.signal
+        );
+      } finally {
+        clearInterval(livenessPollHandle);
+      }
       if (!readyCheck.ok) {
+        if (childDiedDuringReadinessWait) {
+          const exitStderr = ownedChild.getStderr();
+          throw new Error(
+            `ComfyUI child process exited before becoming ready${exitStderr ? `: ${exitStderr.trim().slice(-2000)}` : " (no stderr captured)"}`
+          );
+        }
         throw new Error(`ComfyUI child failed to become ready: ${readyCheck.blocker}`);
       }
 
