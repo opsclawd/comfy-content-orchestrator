@@ -33,9 +33,24 @@ import {
   type MinimaxH3PhaseAccountingEvent,
   type MinimaxH3FactorChange,
   type MinimaxH3InstrumentationReport,
-  type MinimaxH3PhaseType
+  type MinimaxH3PhaseType,
+  computeAttentionTopologyDigest,
+  computeAttentionRuntimeLockDigest,
+  computeAttentionConfigDigest,
+  type MinimaxH3AttentionVariantName,
+  type MinimaxH3AttentionObservation,
+  type MinimaxH3AttentionTopology,
+  type MinimaxH3RequiredRuntimeManifest,
+  type MinimaxH3ObservedProvenance,
+  MinimaxH3ObservedProvenanceSchema
 } from "@cco/contracts";
 import { reducePhaseAccounting } from "./minimax-h3-timing-reducer.js";
+import {
+  deriveAttentionGraph,
+  validateAttentionTopology
+} from "./minimax-h3-attention-topology.js";
+import { getAttentionCatalogEntry } from "./minimax-h3-attention-catalog.js";
+import { reduceAttentionObservation } from "./minimax-h3-attention-reducer.js";
 import type {
   MinimaxH3ComfyUiTransportPort,
   MinimaxH3ExperimentStorePort,
@@ -537,7 +552,18 @@ export class MinimaxH3ExperimentService {
       options.stepOverride !== undefined ||
       options.checkpointOverride !== undefined ||
       options.changedFactors !== undefined ||
-      options.variantPurpose !== undefined;
+      options.variantPurpose !== undefined ||
+      options.attentionVariant !== undefined;
+
+    const attentionVariant: MinimaxH3AttentionVariantName | undefined = options.attentionVariant;
+    const attentionCatalogEntry = attentionVariant
+      ? getAttentionCatalogEntry(attentionVariant, route, {
+          coreRevision: options.coreRevision,
+          matchedVariant: options.matchedVariant
+        })
+      : undefined;
+    const effectiveArgv =
+      attentionVariant === "sage" ? [...generatedArgv, "--use-sage-attention"] : [...generatedArgv];
 
     const checkpointFilename =
       options.checkpointOverride === "fl2va"
@@ -549,7 +575,7 @@ export class MinimaxH3ExperimentService {
         : PINNED_H3_CHECKPOINTS.ref2va.sha256;
 
     // Derive deterministic workflow graph
-    const derivedGraph = deriveExperimentGraph({
+    const baseDerivedGraph = deriveExperimentGraph({
       baseWorkflow: baseWorkflowParsed,
       route,
       runId,
@@ -563,9 +589,40 @@ export class MinimaxH3ExperimentService {
       ...(isV2 && options.checkpointOverride ? { checkpointOverride: checkpointFilename } : {})
     });
 
+    let derivedGraph = baseDerivedGraph;
+    let attentionTopology: MinimaxH3AttentionTopology | undefined;
+
+    if (attentionVariant !== undefined && attentionCatalogEntry) {
+      const { graph: attGraph, topology } = deriveAttentionGraph({
+        graph: baseDerivedGraph,
+        attentionVariant,
+        route
+      });
+      derivedGraph = attGraph;
+      attentionTopology = topology;
+
+      const topoValidation = validateAttentionTopology(derivedGraph, {
+        expectedVariant: attentionVariant,
+        route,
+        argv: effectiveArgv
+      });
+      if (!topoValidation.valid) {
+        throw new Error(
+          `Attention topology validation failed for variant "${attentionVariant}":\n${topoValidation.errors.join("\n")}`
+        );
+      }
+    }
+
     const derivedWorkflowCanonical = canonicalizeJson(derivedGraph);
     const derivedWorkflowDigest = sha256Hex(derivedWorkflowCanonical);
-    const configDigest = derivedWorkflowDigest;
+    const configDigest =
+      isV2 && options.attentionVariant !== undefined
+        ? computeAttentionConfigDigest({
+            workflowDigest: derivedWorkflowDigest,
+            argv: effectiveArgv,
+            attentionVariant: options.attentionVariant
+          })
+        : derivedWorkflowDigest;
 
     const promptDigest = sha256Hex(prompt);
     const comparisonKey = computeComparisonKey({
@@ -591,7 +648,9 @@ export class MinimaxH3ExperimentService {
       // this yet). Keep this literal in sync if that ever changes.
       modelOffload: true,
       workflowDigest: derivedWorkflowDigest,
-      comfyuiCoreRevision: PINNED_COMFYUI_CORE_REVISION,
+      comfyuiCoreRevision: attentionCatalogEntry
+        ? attentionCatalogEntry.comfyuiCoreRevision
+        : PINNED_COMFYUI_CORE_REVISION,
       modelDigests: {
         "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors":
           "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
@@ -662,6 +721,135 @@ export class MinimaxH3ExperimentService {
           },
           rationale: "Checkpoint experimental audit variant"
         });
+      }
+
+      const collectorPath = resolveCollectorPath();
+      if (!collectorPath || !existsSync(collectorPath)) {
+        throw new Error(
+          `Collector script not found at resolved path: ${collectorPath ?? "none"}. Cannot prepare experiment.`
+        );
+      }
+      let genuineCollectorDigest: string;
+      try {
+        const rawCollector = await readFile(collectorPath);
+        genuineCollectorDigest = createHash("sha256").update(rawCollector).digest("hex");
+      } catch (err: unknown) {
+        throw new Error(
+          `Failed to read collector script at ${collectorPath}: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+      const standardHooks = [
+        {
+          name: "sampler_step_hook",
+          modulePath: "comfy.samplers",
+          callable: "sample",
+          phase: "sampling_step" as const
+        }
+      ];
+      const genuineHookManifestDigest = sha256Hex(canonicalizeJson(standardHooks));
+
+      const baseRequiredRuntime: MinimaxH3RequiredRuntimeManifest = {
+        coreRevision: PINNED_COMFYUI_CORE_REVISION,
+        sourceFileHashes: {
+          "comfy/model_management.py": PINNED_COMFYUI_SOURCE_HASHES.modelManagementSha256,
+          "main.py": PINNED_COMFYUI_SOURCE_HASHES.mainSha256,
+          "comfy/cli_args.py": PINNED_COMFYUI_SOURCE_HASHES.cliArgsSha256
+        },
+        requiredNodes: [
+          {
+            name: route === "i2v" ? "MiniMaxH3ImageToVideo" : "MiniMaxH3ReferenceToVideo"
+          }
+        ],
+        pythonPackages: [{ name: "torch", version: "2.5.1+cu124" }],
+        pytorchBuild: "2.5.1+cu124",
+        cudaBuild: "12.4",
+        driverConstraints: [">=550.00.00"],
+        attentionKernel: "torch_sdpa",
+        instrumentationProtocol: "v2-jsonl",
+        collectorDigest: genuineCollectorDigest,
+        hookManifestDigest: genuineHookManifestDigest,
+        hooks: standardHooks
+      };
+
+      const upgradedRequiredRuntime: MinimaxH3RequiredRuntimeManifest = attentionCatalogEntry
+        ? {
+            coreRevision: attentionCatalogEntry.comfyuiCoreRevision,
+            sourceFileHashes: {
+              "comfy/model_management.py": PINNED_COMFYUI_SOURCE_HASHES.modelManagementSha256,
+              "main.py": PINNED_COMFYUI_SOURCE_HASHES.mainSha256,
+              "comfy/cli_args.py": PINNED_COMFYUI_SOURCE_HASHES.cliArgsSha256
+            },
+            requiredNodes: [
+              {
+                name: route === "i2v" ? "MiniMaxH3ImageToVideo" : "MiniMaxH3ReferenceToVideo"
+              },
+              ...attentionCatalogEntry.requiredNodes.map((n) => ({
+                name: n.name,
+                revision: n.revision
+              }))
+            ],
+            pythonPackages:
+              attentionCatalogEntry.pythonPackages.length > 0
+                ? attentionCatalogEntry.pythonPackages.map((p) => ({
+                    name: p.name,
+                    version: p.version
+                  }))
+                : [{ name: "torch", version: "2.5.1+cu124" }],
+            pytorchBuild: "2.5.1+cu124",
+            cudaBuild: "12.4",
+            driverConstraints: [">=550.00.00"],
+            attentionKernel: attentionCatalogEntry.kernel,
+            instrumentationProtocol: "v2-jsonl",
+            collectorDigest: genuineCollectorDigest,
+            hookManifestDigest: genuineHookManifestDigest,
+            hooks: standardHooks
+          }
+        : baseRequiredRuntime;
+
+      const baseRuntimeManifestDigest = sha256Hex(canonicalizeJson(baseRequiredRuntime));
+      const upgradedRuntimeManifestDigest = sha256Hex(canonicalizeJson(upgradedRequiredRuntime));
+      const baseHookManifestDigest = sha256Hex(canonicalizeJson(baseRequiredRuntime.hooks));
+      const upgradedHookManifestDigest = sha256Hex(canonicalizeJson(upgradedRequiredRuntime.hooks));
+
+      if (
+        options.attentionVariant !== undefined &&
+        options.attentionVariant !== "dense" &&
+        attentionCatalogEntry &&
+        attentionTopology
+      ) {
+        if (!declaredChanges.some((c) => c.path === "attention.configuration")) {
+          declaredChanges.push({
+            path: "attention.configuration",
+            before: {
+              backend: "torch_sdpa",
+              topologyDigest: computeAttentionTopologyDigest([]),
+              patches: []
+            },
+            after: {
+              backend: attentionCatalogEntry.backend,
+              topologyDigest: attentionTopology.topologyDigest,
+              patches: attentionTopology.patches.map((p) => p.classType)
+            },
+            rationale: `Attention optimization variant: ${options.attentionVariant}`
+          });
+        }
+        if (
+          attentionCatalogEntry.comfyuiCoreRevision !== PINNED_COMFYUI_CORE_REVISION &&
+          !declaredChanges.some((c) => c.path === "runtime.manifest")
+        ) {
+          declaredChanges.push({
+            path: "runtime.manifest",
+            before: {
+              runtimeManifestDigest: baseRuntimeManifestDigest,
+              hookManifestDigest: baseHookManifestDigest
+            },
+            after: {
+              runtimeManifestDigest: upgradedRuntimeManifestDigest,
+              hookManifestDigest: upgradedHookManifestDigest
+            },
+            rationale: `Isolated runtime upgrade required for attention backend: ${options.attentionVariant}`
+          });
+        }
       }
 
       const descriptorWithoutDigest = {
@@ -740,7 +928,7 @@ export class MinimaxH3ExperimentService {
           }
         },
         configuredRunner: {
-          argv: generatedArgv as string[],
+          argv: effectiveArgv as string[],
           env: {
             CUDA_VISIBLE_DEVICES: gpuUuid
           },
@@ -774,7 +962,9 @@ export class MinimaxH3ExperimentService {
           loadedModelHashes: {
             diffusion: checkpointHash
           },
-          comfyuiCoreRevision: PINNED_COMFYUI_CORE_REVISION,
+          comfyuiCoreRevision: attentionCatalogEntry
+            ? attentionCatalogEntry.comfyuiCoreRevision
+            : PINNED_COMFYUI_CORE_REVISION,
           sourceIdentities: PINNED_COMFYUI_SOURCE_HASHES,
           customNodeInventory: {
             status: "verified_empty" as const,
@@ -787,7 +977,10 @@ export class MinimaxH3ExperimentService {
             cudaRuntimeVersion: "12.4",
             driverVersion: "560.35.03"
           },
-          requestedAttentionBackend: "default",
+          requestedAttentionBackend:
+            options.attentionVariant !== undefined && attentionCatalogEntry
+              ? attentionCatalogEntry.backend
+              : "default",
           requestedMemoryPolicy: requestedPolicy,
           samplerSettings: {
             sampler: "res_multistep",
@@ -801,54 +994,35 @@ export class MinimaxH3ExperimentService {
           })),
           promptDigest,
           instrumentationProtocol: "v2-jsonl",
-          collectorDigest: sha256Hex("collector-v2"),
-          hookManifestDigest: sha256Hex("hook-manifest-v2")
+          collectorDigest: genuineCollectorDigest,
+          hookManifestDigest: genuineHookManifestDigest
         },
-        compatibility: {
-          state: "supported" as const,
-          relativeToRuntimeManifestDigest: sha256Hex("runtime-manifest"),
-          scope: `${route}-${validatedFrames}f-${options.stepOverride ?? 20}steps`,
-          reasons: ["Verified on pinned ComfyUI core revision 55b6a9b1"],
-          sources: [
-            {
-              url: "https://github.com/comfyanonymous/ComfyUI/commit/55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
-              assertion: "Current pinned production commit"
-            }
-          ]
-        },
-        requiredRuntime: {
-          coreRevision: PINNED_COMFYUI_CORE_REVISION,
-          sourceFileHashes: {
-            "comfy/model_management.py": PINNED_COMFYUI_SOURCE_HASHES.modelManagementSha256,
-            "main.py": PINNED_COMFYUI_SOURCE_HASHES.mainSha256,
-            "comfy/cli_args.py": PINNED_COMFYUI_SOURCE_HASHES.cliArgsSha256
-          },
-          requiredNodes: [
-            {
-              name: route === "i2v" ? "MiniMaxH3ImageToVideo" : "MiniMaxH3ReferenceToVideo",
-              moduleHash: sha256Hex("minimax-nodes")
-            }
-          ],
-          pythonPackages: [
-            { name: "torch", version: "2.4.1" },
-            { name: "torchaudio", version: "2.4.1" }
-          ],
-          pytorchBuild: "2.4.1+cu124",
-          cudaBuild: "12.4",
-          driverConstraints: [">=550.00.00"],
-          attentionKernel: "sdpa",
-          instrumentationProtocol: "v2-jsonl",
-          collectorDigest: sha256Hex("collector-v2"),
-          hookManifestDigest: sha256Hex("hook-manifest-v2"),
-          hooks: [
-            {
-              name: "sampler_step_hook",
-              modulePath: "comfy.samplers",
-              callable: "sample",
-              phase: "sampling_step" as const
-            }
-          ]
-        },
+        compatibility:
+          options.attentionVariant !== undefined && attentionCatalogEntry
+            ? {
+                state: attentionCatalogEntry.compatibilityState,
+                relativeToRuntimeManifestDigest:
+                  attentionCatalogEntry.comfyuiCoreRevision === PINNED_COMFYUI_CORE_REVISION
+                    ? baseRuntimeManifestDigest
+                    : upgradedRuntimeManifestDigest,
+                scope: attentionCatalogEntry.scope,
+                reasons: attentionCatalogEntry.blockers,
+                sources: attentionCatalogEntry.evidence
+              }
+            : {
+                state: "supported" as const,
+                relativeToRuntimeManifestDigest: baseRuntimeManifestDigest,
+                scope: `${route}-${validatedFrames}f-${options.stepOverride ?? 20}steps`,
+                reasons: ["Verified on pinned ComfyUI core revision 55b6a9b1"],
+                sources: [
+                  {
+                    url: "https://github.com/comfyanonymous/ComfyUI/commit/55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+                    assertion: "Current pinned production commit"
+                  }
+                ]
+              },
+        requiredRuntime:
+          options.attentionVariant !== undefined ? upgradedRequiredRuntime : baseRequiredRuntime,
         conditioning: {
           positivePrompt: {
             text: prompt,
@@ -870,7 +1044,36 @@ export class MinimaxH3ExperimentService {
           }))
         },
         stepOverride: options.stepOverride ?? null,
-        checkpointOverride: options.checkpointOverride ?? null
+        checkpointOverride: options.checkpointOverride ?? null,
+        ...(options.attentionVariant !== undefined && attentionCatalogEntry && attentionTopology
+          ? {
+              attentionRequest: {
+                attentionVariant: options.attentionVariant,
+                catalogDigest: attentionCatalogEntry.catalogDigest,
+                expectedBackend: attentionCatalogEntry.backend,
+                expectedKernel: attentionCatalogEntry.kernel,
+                topologyDigest: attentionTopology.topologyDigest,
+                patches: attentionTopology.patches,
+                runtimeLockDigest: computeAttentionRuntimeLockDigest({
+                  comfyuiCoreRevision: attentionCatalogEntry.comfyuiCoreRevision,
+                  customNodeRevision: attentionCatalogEntry.customNode?.revision,
+                  pythonPackages: attentionCatalogEntry.pythonPackages,
+                  cudaRequirement: attentionCatalogEntry.cudaRequirement,
+                  computeCapability: attentionCatalogEntry.computeCapability
+                }),
+                candidateOnly: !attentionCatalogEntry.runnable,
+                ...(attentionCatalogEntry.predictor
+                  ? {
+                      predictorIdentity: {
+                        filename: attentionCatalogEntry.predictor.filename,
+                        sha256: attentionCatalogEntry.predictor.sha256
+                      }
+                    }
+                  : {}),
+                denseRegionPolicy: attentionCatalogEntry.denseRegionPolicy
+              }
+            }
+          : {})
       };
 
       const descriptorDigest = computeDescriptorDigest(
@@ -879,13 +1082,15 @@ export class MinimaxH3ExperimentService {
       descriptor = {
         ...descriptorWithoutDigest,
         descriptorDigest
-      };
+      } as MinimaxH3ExperimentDescriptorV2;
 
       MinimaxH3ExperimentDescriptorV2Schema.parse(descriptor);
       await this.store.writeDescriptor(runDir, descriptor);
       await this.store.writeConfig(runDir, derivedGraph);
       await this.store.writeInputManifest(runDir, inputManifest);
-      const template = createEmptyMinimaxH3MeasurementTemplateV2(descriptor);
+      const template = createEmptyMinimaxH3MeasurementTemplateV2(
+        descriptor as MinimaxH3ExperimentDescriptorV2
+      );
       await this.store.writeMeasurementTemplate(runDir, template);
     } else {
       const descriptorWithoutDigest = {
@@ -1020,12 +1225,18 @@ export class MinimaxH3ExperimentService {
         ok: true;
         descriptor: MinimaxH3AnyExperimentDescriptor;
         errors: string[];
+        graphValid: boolean;
+        executionBlocked: boolean;
+        executionBlockers: string[];
         validatedGraph: Record<string, unknown>;
       }
     | {
         ok: false;
         descriptor?: MinimaxH3AnyExperimentDescriptor;
         errors: string[];
+        graphValid?: boolean;
+        executionBlocked?: boolean;
+        executionBlockers?: string[];
         validatedGraph?: Record<string, unknown>;
       }
   > {
@@ -1056,16 +1267,42 @@ export class MinimaxH3ExperimentService {
     }
 
     // Verify config canonical digest matches descriptor
-    const actualConfigDigest = sha256Hex(canonicalizeJson(config));
-    if (actualConfigDigest !== descriptor.configDigest) {
+    const actualWorkflowDigest = sha256Hex(canonicalizeJson(config));
+    if (actualWorkflowDigest !== descriptor.derivedWorkflowDigest) {
       errors.push(
-        `Config digest mismatch: expected ${descriptor.configDigest}, got ${actualConfigDigest}`
+        `Derived workflow digest mismatch: expected ${descriptor.derivedWorkflowDigest}, got ${actualWorkflowDigest}`
       );
     }
-    if (actualConfigDigest !== descriptor.derivedWorkflowDigest) {
-      errors.push(
-        `Derived workflow digest mismatch: expected ${descriptor.derivedWorkflowDigest}, got ${actualConfigDigest}`
-      );
+
+    if (descriptor.schemaVersion === 2) {
+      const v2Desc = descriptor as MinimaxH3ExperimentDescriptorV2;
+      if (v2Desc.attentionRequest !== undefined) {
+        const expectedConfigDigest = computeAttentionConfigDigest({
+          workflowDigest: descriptor.derivedWorkflowDigest,
+          argv: descriptor.configuredRunner.argv,
+          attentionVariant: v2Desc.attentionRequest.attentionVariant
+        });
+        if (descriptor.configDigest !== expectedConfigDigest) {
+          errors.push(
+            `Config digest mismatch: expected ${expectedConfigDigest}, got ${descriptor.configDigest}`
+          );
+        }
+      } else {
+        if (
+          descriptor.configDigest !== descriptor.derivedWorkflowDigest &&
+          descriptor.configDigest !== actualWorkflowDigest
+        ) {
+          errors.push(
+            `Config digest mismatch: expected ${descriptor.derivedWorkflowDigest}, got ${descriptor.configDigest}`
+          );
+        }
+      }
+    } else {
+      if (actualWorkflowDigest !== descriptor.configDigest) {
+        errors.push(
+          `Config digest mismatch: expected ${descriptor.configDigest}, got ${actualWorkflowDigest}`
+        );
+      }
     }
 
     // Verify SaveVideo prefix
@@ -1109,7 +1346,7 @@ export class MinimaxH3ExperimentService {
         );
       }
 
-      expectedGraph = deriveExperimentGraph({
+      const baseExpectedGraph = deriveExperimentGraph({
         baseWorkflow: baseWorkflowParsed,
         route: descriptor.route,
         runId: descriptor.runId,
@@ -1122,6 +1359,47 @@ export class MinimaxH3ExperimentService {
         ...(stepOverride !== undefined ? { stepOverride } : {}),
         ...(checkpointOverride !== undefined ? { checkpointOverride } : {})
       });
+
+      const descV2 =
+        descriptor.schemaVersion === 2 ? (descriptor as MinimaxH3ExperimentDescriptorV2) : null;
+      if (descV2?.attentionRequest) {
+        const { graph: attnExpectedGraph } = deriveAttentionGraph({
+          graph: baseExpectedGraph,
+          attentionVariant: descV2.attentionRequest.attentionVariant,
+          route: descriptor.route
+        });
+        expectedGraph = attnExpectedGraph;
+
+        const topoValidation = validateAttentionTopology(config, {
+          expectedVariant: descV2.attentionRequest.attentionVariant,
+          route: descriptor.route,
+          argv: descV2.configuredRunner?.argv
+        });
+        if (!topoValidation.valid) {
+          errors.push(...topoValidation.errors);
+        }
+        if (topoValidation.topology.topologyDigest !== descV2.attentionRequest.topologyDigest) {
+          errors.push(
+            `Attention topology digest mismatch: expected "${descV2.attentionRequest.topologyDigest}", got "${topoValidation.topology.topologyDigest}".`
+          );
+        }
+        const expectedCatalogEntry = getAttentionCatalogEntry(
+          descV2.attentionRequest.attentionVariant,
+          descriptor.route,
+          {
+            catalogDigest: descV2.attentionRequest.catalogDigest,
+            coreRevision: descV2.requiredRuntime?.coreRevision,
+            scope: descV2.compatibility?.scope
+          }
+        );
+        if (descV2.attentionRequest.catalogDigest !== expectedCatalogEntry.catalogDigest) {
+          errors.push(
+            `Attention catalog digest mismatch: expected "${expectedCatalogEntry.catalogDigest}", got "${descV2.attentionRequest.catalogDigest}".`
+          );
+        }
+      } else {
+        expectedGraph = baseExpectedGraph;
+      }
 
       const expectedCanonical = canonicalizeJson(expectedGraph);
       const actualCanonical = canonicalizeJson(config);
@@ -1384,7 +1662,10 @@ export class MinimaxH3ExperimentService {
         gpuUuid: descriptor.target.gpuUuid
       },
       workflowDigest: descriptor.derivedWorkflowDigest,
-      comfyuiCoreRevision: descriptor.pinFileIdentities.comfyuiCoreRevision
+      comfyuiCoreRevision:
+        descriptor.schemaVersion === 2
+          ? (descriptor as MinimaxH3ExperimentDescriptorV2).provenance.comfyuiCoreRevision
+          : descriptor.pinFileIdentities.comfyuiCoreRevision
     });
     if (descriptor.comparisonKey !== recomputedComparisonKey) {
       errors.push(
@@ -1424,11 +1705,58 @@ export class MinimaxH3ExperimentService {
       }
     }
 
+    const descV2 =
+      descriptor.schemaVersion === 2 ? (descriptor as MinimaxH3ExperimentDescriptorV2) : null;
+    let executionBlocked = false;
+    const executionBlockers: string[] = [];
+
+    if (descV2?.attentionRequest) {
+      const entry = getAttentionCatalogEntry(
+        descV2.attentionRequest.attentionVariant,
+        descriptor.route,
+        {
+          catalogDigest: descV2.attentionRequest.catalogDigest,
+          coreRevision: descV2.requiredRuntime?.coreRevision,
+          scope: descV2.compatibility?.scope
+        }
+      );
+      if (!entry.runnable) {
+        executionBlocked = true;
+        executionBlockers.push(
+          `Attention variant "${descV2.attentionRequest.attentionVariant}" is candidate-only (runnable: false).`
+        );
+      }
+      if (entry.blockers && entry.blockers.length > 0) {
+        executionBlocked = true;
+        executionBlockers.push(...entry.blockers);
+      }
+      if (entry.licensing.securityReviewStatus === "pending") {
+        executionBlocked = true;
+        executionBlockers.push(
+          `Attention variant "${descV2.attentionRequest.attentionVariant}" has pending security review.`
+        );
+      }
+    }
+
+    const graphValid =
+      Boolean(expectedGraph) &&
+      !errors.some(
+        (e) =>
+          e.includes("workflow") ||
+          e.includes("graph") ||
+          e.includes("topology") ||
+          e.includes("Config") ||
+          e.includes("SaveVideo")
+      );
+
     if (errors.length === 0 && expectedGraph) {
       return {
         ok: true,
         descriptor,
         errors,
+        graphValid,
+        executionBlocked,
+        executionBlockers,
         validatedGraph: expectedGraph
       };
     }
@@ -1437,6 +1765,9 @@ export class MinimaxH3ExperimentService {
       ok: false,
       descriptor,
       errors,
+      graphValid,
+      executionBlocked,
+      executionBlockers,
       ...(expectedGraph ? { validatedGraph: expectedGraph } : {})
     };
   }
@@ -2121,6 +2452,52 @@ export class MinimaxH3ExperimentService {
         ]
       };
 
+      let attemptToken: string | undefined;
+      try {
+        const attemptMeta = await this.store.readJsonFile<{ attemptToken?: string }>(
+          `${runDir}/attempt.json`
+        );
+        attemptToken = attemptMeta?.attemptToken;
+      } catch {
+        // ignore
+      }
+
+      let attentionObservation: MinimaxH3AttentionObservation | undefined;
+      if (descV2.attentionRequest) {
+        attentionObservation = reduceAttentionObservation({
+          events: phaseEvents,
+          attentionRequest: descV2.attentionRequest,
+          expectedRunId: descV2.runId,
+          expectedAttemptToken: attemptToken,
+          expectedPromptId: promptId
+        });
+      }
+
+      let preflightObservations: MinimaxH3ObservedProvenance | undefined;
+      try {
+        preflightObservations = await this.store.readJsonFile<MinimaxH3ObservedProvenance>(
+          `${runDir}/preflight-observations.json`
+        );
+      } catch {
+        preflightObservations = (existingResult as Partial<MinimaxH3ExperimentResultV2>)
+          ?.observedProvenance;
+      }
+
+      const effectiveStopReasons = [...stopReasons];
+      if (attentionObservation) {
+        if (attentionObservation.status === "fallback") {
+          effectiveStopReasons.push("attention_fallback_detected");
+        } else if (attentionObservation.status === "failed") {
+          effectiveStopReasons.push(
+            `attention_failed_${attentionObservation.failureReason ?? "unknown"}`
+          );
+        }
+        if (attentionObservation.missingKernelFailure) {
+          effectiveStopReasons.push("attention_missing_kernel");
+        }
+      }
+
+      const handshakeConflicts: string[] = [];
       const reconstructedResultV2: MinimaxH3ExperimentResultV2 = {
         schemaVersion: 2,
         runId: descV2.runId,
@@ -2195,61 +2572,157 @@ export class MinimaxH3ExperimentService {
         visualReview: baseResult.visualReview,
         operatorDecision: baseResult.operatorDecision,
         stopRecommendation: {
-          recommended: stopReasons.length > 0,
-          reasons: Array.from(new Set(stopReasons))
+          recommended: effectiveStopReasons.length > 0,
+          reasons: Array.from(new Set(effectiveStopReasons))
         },
         experimentVariant: descV2.experimentVariant,
         observedProvenance: {
-          actualCheckpointHash: {
-            status: "verified",
-            value: descV2.provenance.actualCheckpointHash,
-            expected: descV2.provenance.actualCheckpointHash
-          },
-          loadedModelHashes: {
-            diffusion: {
-              status: "verified",
-              value: descV2.provenance.actualCheckpointHash,
-              expected: descV2.provenance.actualCheckpointHash,
-              resolvedPath: descV2.resolvedModelPaths["diffusion"]?.resolvedPath ?? "resolved"
-            }
-          },
-          comfyuiCoreRevision: {
-            status: "verified",
-            value: descV2.provenance.comfyuiCoreRevision,
+          actualCheckpointHash:
+            preflightObservations?.actualCheckpointHash?.expected &&
+            preflightObservations.actualCheckpointHash.expected.length === 64
+              ? preflightObservations.actualCheckpointHash
+              : {
+                  status: "unknown",
+                  value: null,
+                  expected: descV2.provenance.actualCheckpointHash,
+                  unknownReason: "runtime_observation_unavailable"
+                },
+          loadedModelHashes: preflightObservations?.loadedModelHashes ?? {},
+          comfyuiCoreRevision: preflightObservations?.comfyuiCoreRevision ?? {
+            status: "unknown",
+            value: null,
             expected: descV2.provenance.comfyuiCoreRevision
           },
-          sourceIdentities: {
-            status: "verified",
-            values: descV2.provenance.sourceIdentities as unknown as Record<string, string>
+          sourceIdentities: preflightObservations?.sourceIdentities ?? {
+            status: "unknown",
+            values: {}
           },
-          customNodeInventory: {
-            status: "verified_empty",
+          customNodeInventory: preflightObservations?.customNodeInventory ?? {
+            status: "unknown",
             nodes: []
           },
-          runtimeVersions: {
-            status: "verified",
-            pythonVersion: descV2.provenance.runtimeVersions.pythonVersion,
-            pytorchVersion: descV2.provenance.runtimeVersions.pytorchVersion,
-            cudaBuildVersion: descV2.provenance.runtimeVersions.cudaBuildVersion,
-            cudaRuntimeVersion: descV2.provenance.runtimeVersions.cudaRuntimeVersion,
-            driverVersion: descV2.provenance.runtimeVersions.driverVersion
+          runtimeVersions: preflightObservations?.runtimeVersions ?? {
+            status: "unknown",
+            pythonVersion: null,
+            pytorchVersion: null,
+            cudaBuildVersion: null,
+            cudaRuntimeVersion: null,
+            driverVersion: null
           },
-          observedAttentionBackend: {
-            status: "verified",
-            effectiveBackend: descV2.provenance.requestedAttentionBackend,
-            dispatchImplementation: descV2.provenance.requestedAttentionBackend
-          },
-          bootstrapHandshake: {
-            status: phaseEvents.length > 0 ? "verified" : "missing",
-            protocol: descV2.provenance.instrumentationProtocol,
-            collectorDigest: descV2.provenance.collectorDigest,
-            hookManifestDigest: descV2.provenance.hookManifestDigest
-          },
-          conflicts: []
+          observedAttentionBackend: attentionObservation
+            ? {
+                status:
+                  attentionObservation.status === "fallback"
+                    ? "fallback"
+                    : attentionObservation.status === "verified"
+                      ? "verified"
+                      : "unknown",
+                effectiveBackend: attentionObservation.actualBackend,
+                dispatchImplementation: attentionObservation.dispatchImplementation,
+                ...(attentionObservation.status !== "verified" && attentionObservation.failureReason
+                  ? { unknownReason: attentionObservation.failureReason }
+                  : {})
+              }
+            : (preflightObservations?.observedAttentionBackend ?? {
+                status: "unknown",
+                effectiveBackend: null,
+                dispatchImplementation: null,
+                unknownReason: "attention_observation_unavailable"
+              }),
+          bootstrapHandshake: (() => {
+            const handshakeEvent = phaseEvents.find(
+              (e) =>
+                e.type === "point_event" &&
+                (e.boundarySource === "child_bootstrap" || e.phase === "environment_startup") &&
+                (e.runId === undefined || e.runId === descV2.runId) &&
+                (!attemptToken ||
+                  e.attemptToken === undefined ||
+                  e.attemptToken === attemptToken) &&
+                ((e.metadata as Record<string, unknown> | undefined)?.handshake === "v2-jsonl" ||
+                  (e.metadata as Record<string, unknown> | undefined)?.protocolVersion ===
+                    "v2-jsonl")
+            );
+            if (!handshakeEvent) {
+              const mismatchedEvent = phaseEvents.find(
+                (e) =>
+                  e.type === "point_event" &&
+                  (e.boundarySource === "child_bootstrap" || e.phase === "environment_startup") &&
+                  ((e.metadata as Record<string, unknown> | undefined)?.handshake === "v2-jsonl" ||
+                    (e.metadata as Record<string, unknown> | undefined)?.protocolVersion ===
+                      "v2-jsonl")
+              );
+              if (mismatchedEvent) {
+                handshakeConflicts.push(
+                  `Handshake event runId/attemptToken mismatch: expected runId=${descV2.runId}, attemptToken=${attemptToken ?? "none"}, observed runId=${mismatchedEvent.runId}, attemptToken=${mismatchedEvent.attemptToken ?? "none"}`
+                );
+              }
+            }
+            const handshakeMeta = handshakeEvent?.metadata as Record<string, unknown> | undefined;
+            let handshakeStatus: "verified" | "missing" | "unsupported" = "missing";
+            let observedProtocol: string | null = null;
+            let observedCollectorDigest: string | null = null;
+            let observedHookManifestDigest: string | null = null;
+
+            if (handshakeEvent) {
+              observedProtocol =
+                typeof handshakeMeta?.protocolVersion === "string"
+                  ? handshakeMeta.protocolVersion
+                  : typeof handshakeMeta?.handshake === "string"
+                    ? handshakeMeta.handshake
+                    : null;
+
+              if (
+                typeof handshakeMeta?.collectorDigest === "string" &&
+                /^[a-f0-9]{64}$/.test(handshakeMeta.collectorDigest)
+              ) {
+                observedCollectorDigest = handshakeMeta.collectorDigest;
+              }
+              if (
+                typeof handshakeMeta?.hookManifestDigest === "string" &&
+                /^[a-f0-9]{64}$/.test(handshakeMeta.hookManifestDigest)
+              ) {
+                observedHookManifestDigest = handshakeMeta.hookManifestDigest;
+              }
+
+              if (!observedCollectorDigest || !observedHookManifestDigest) {
+                handshakeStatus = "missing";
+                handshakeConflicts.push(
+                  "Handshake event is missing valid collectorDigest or hookManifestDigest"
+                );
+              } else if (
+                descV2.provenance.collectorDigest &&
+                observedCollectorDigest !== descV2.provenance.collectorDigest
+              ) {
+                handshakeStatus = "missing";
+                handshakeConflicts.push(
+                  `Collector digest mismatch: observed ${observedCollectorDigest} !== expected ${descV2.provenance.collectorDigest}`
+                );
+              } else if (
+                descV2.provenance.hookManifestDigest &&
+                observedHookManifestDigest !== descV2.provenance.hookManifestDigest
+              ) {
+                handshakeStatus = "missing";
+                handshakeConflicts.push(
+                  `Hook manifest digest mismatch: observed ${observedHookManifestDigest} !== expected ${descV2.provenance.hookManifestDigest}`
+                );
+              } else {
+                handshakeStatus = "verified";
+              }
+            }
+
+            return {
+              status: handshakeStatus,
+              protocol: observedProtocol,
+              collectorDigest: observedCollectorDigest,
+              hookManifestDigest: observedHookManifestDigest
+            };
+          })(),
+          conflicts: [...(preflightObservations?.conflicts ?? []), ...handshakeConflicts]
         },
         compatibility: descV2.compatibility,
         phaseAccounting,
-        instrumentationReport
+        instrumentationReport,
+        ...(attentionObservation ? { attentionObservation } : {})
       };
 
       MinimaxH3ExperimentResultV2Schema.parse(reconstructedResultV2);
@@ -2501,7 +2974,14 @@ export class MinimaxH3ExperimentService {
       throw new Error(`Preflight port check failed: ${portCheck.blocker}`);
     }
 
-    const checkoutCheck = await this.preflight.verifyCheckout(descriptor.target.comfyUiDir);
+    const expectedCoreRevision =
+      descriptor.schemaVersion === 2
+        ? descriptor.requiredRuntime.coreRevision
+        : descriptor.pinFileIdentities.comfyuiCoreRevision;
+    const checkoutCheck = await this.preflight.verifyCheckout(
+      descriptor.target.comfyUiDir,
+      expectedCoreRevision
+    );
     if (!checkoutCheck.ok) {
       await writePreflightBlocker(checkoutCheck.blocker, "verifyCheckout");
       throw new Error(`Preflight checkout check failed: ${checkoutCheck.blocker}`);
@@ -2531,6 +3011,37 @@ export class MinimaxH3ExperimentService {
     }
 
     if (descriptor.schemaVersion === 2) {
+      const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
+      if (descV2.attentionRequest) {
+        if (descV2.attentionRequest.candidateOnly) {
+          await writePreflightBlocker(
+            `Attention variant "${descV2.attentionRequest.attentionVariant}" is candidate-only and cannot be executed`,
+            "candidateOnlyGuard"
+          );
+          throw new Error(
+            `Execution rejected: attention variant "${descV2.attentionRequest.attentionVariant}" is candidate-only`
+          );
+        }
+        const entry = getAttentionCatalogEntry(
+          descV2.attentionRequest.attentionVariant,
+          descV2.route,
+          {
+            catalogDigest: descV2.attentionRequest.catalogDigest,
+            coreRevision: descV2.requiredRuntime.coreRevision,
+            scope: descV2.compatibility?.scope
+          }
+        );
+        if (entry && !entry.runnable) {
+          await writePreflightBlocker(
+            `Attention variant "${descV2.attentionRequest.attentionVariant}" is non-runnable in catalog: ${entry.blockers.join("; ")}`,
+            "nonRunnableCatalogGuard"
+          );
+          throw new Error(
+            `Execution rejected: attention variant "${descV2.attentionRequest.attentionVariant}" is marked non-runnable`
+          );
+        }
+      }
+
       if (!this.preflight.verifyExperimentRuntime) {
         await writePreflightBlocker(
           "V2 runtime verifier is unavailable",
@@ -2542,12 +3053,20 @@ export class MinimaxH3ExperimentService {
         comfyUiDir: descriptor.target.comfyUiDir,
         pythonPath: descriptor.target.pythonPath,
         requiredRuntime: descriptor.requiredRuntime,
-        requiredRuntimeDigest: sha256Hex(canonicalizeJson(descriptor.requiredRuntime))
+        requiredRuntimeDigest: sha256Hex(canonicalizeJson(descriptor.requiredRuntime)),
+        expectedCheckpointHash: descV2.provenance.actualCheckpointHash
       });
       if (!runtimeCheck.ok) {
         await writePreflightBlocker(runtimeCheck.blocker, "verifyExperimentRuntime");
         throw new Error(
           `Preflight experiment runtime verification failed: ${runtimeCheck.blocker ?? runtimeCheck.status}`
+        );
+      }
+      if (runtimeCheck.observations) {
+        MinimaxH3ObservedProvenanceSchema.parse(runtimeCheck.observations);
+        await this.store.writeDurableJson(
+          `${runDir}/preflight-observations.json`,
+          runtimeCheck.observations
         );
       }
     }
@@ -2590,6 +3109,33 @@ export class MinimaxH3ExperimentService {
           "V2 instrumentation collector is unavailable; refusing an uninstrumented run"
         );
       }
+      const attemptToken = `${descriptor.runId}-${Date.now()}`;
+      try {
+        await this.store.writeDurableJson(`${runDir}/attempt.json`, {
+          attemptToken,
+          runId: descriptor.runId
+        });
+      } catch {
+        // ignore secondary failure
+      }
+      const childEnv: Record<string, string> = { ...descriptor.configuredRunner.env };
+      if (descriptor.schemaVersion === 2) {
+        const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
+        if (descV2.requiredRuntime?.collectorDigest) {
+          childEnv.CCO_EXPERIMENT_COLLECTOR_DIGEST = descV2.requiredRuntime.collectorDigest;
+        }
+        if (descV2.requiredRuntime?.hookManifestDigest) {
+          childEnv.CCO_EXPERIMENT_HOOK_MANIFEST_DIGEST = descV2.requiredRuntime.hookManifestDigest;
+        }
+        if (descV2.attentionRequest) {
+          childEnv.CCO_EXPERIMENT_EXPECTED_ATTENTION_BACKEND =
+            descV2.attentionRequest.expectedBackend;
+          childEnv.CCO_EXPERIMENT_ALLOW_PLANNED_DENSE = descV2.attentionRequest.denseRegionPolicy
+            .allowPlannedDense
+            ? "true"
+            : "false";
+        }
+      }
       ownedChild = await this.runner.spawnChild({
         pythonPath: descriptor.target.pythonPath,
         comfyUiDir: descriptor.target.comfyUiDir,
@@ -2602,12 +3148,12 @@ export class MinimaxH3ExperimentService {
           userDir: `${runDir}/user`
         },
         argv: descriptor.configuredRunner.argv,
-        env: descriptor.configuredRunner.env,
+        env: childEnv,
         gpuUuid: descriptor.target.gpuUuid,
         ...(collectorPath !== undefined ? { collectorPath } : {}),
         runDir,
         runId: descriptor.runId,
-        attemptToken: `${descriptor.runId}-${Date.now()}`
+        attemptToken
       });
 
       // actualArgv/actualEnv start undefined (not the requested config) so

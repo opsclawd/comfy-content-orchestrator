@@ -1,0 +1,11 @@
+{
+  "comfyuiCoreRevision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+  "auditedSourceFiles": {
+    "comfy/ldm/modules/attention.py": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+    "comfy/cli_args.py": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+  },
+  "supportedCliFlags": ["--use-sage-attention"],
+  "availableDispatchers": ["attention_pytorch", "attention_sage", "optimized_attention"],
+  "sparseAttentionPresent": false,
+  "notes": "Pinned production core has no ModelSparseAttention or Veda nodes. SageAttention flag exists but requires external package."
+}

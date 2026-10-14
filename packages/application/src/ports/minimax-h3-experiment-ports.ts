@@ -13,7 +13,8 @@ import type {
   MinimaxH3FactorChange,
   MinimaxH3PhaseAccountingEvent,
   MinimaxH3RequiredRuntimeManifest,
-  MinimaxH3ObservedProvenance
+  MinimaxH3ObservedProvenance,
+  MinimaxH3AttentionVariantName
 } from "@cco/contracts";
 
 export interface MinimaxH3ExperimentStorePort {
@@ -88,7 +89,10 @@ export interface MinimaxH3TargetPreflightPort {
     processStartTimeTicks?: number | null;
   }>;
   checkPortAvailable(address: string, port: number): Promise<{ ok: boolean; blocker?: string }>;
-  verifyCheckout(comfyUiDir: string): Promise<{
+  verifyCheckout(
+    comfyUiDir: string,
+    expectedRevision?: string
+  ): Promise<{
     ok: boolean;
     revision: string;
     nodesPresent: boolean;
@@ -130,6 +134,7 @@ export interface MinimaxH3TargetPreflightPort {
     pythonPath: string;
     requiredRuntime: MinimaxH3RequiredRuntimeManifest;
     requiredRuntimeDigest: string;
+    expectedCheckpointHash?: string;
   }): Promise<{
     ok: boolean;
     status: "verified" | "conflict" | "unknown";
@@ -284,4 +289,7 @@ export interface PrepareMinimaxH3ExperimentOptions {
   checkpointOverride?: "ref2va" | "fl2va";
   changedFactors?: MinimaxH3FactorChange[];
   variantPurpose?: "performance" | "prompt_conditioning" | "controlled_multifactor";
+  attentionVariant?: MinimaxH3AttentionVariantName;
+  coreRevision?: string;
+  matchedVariant?: MinimaxH3AttentionVariantName;
 }

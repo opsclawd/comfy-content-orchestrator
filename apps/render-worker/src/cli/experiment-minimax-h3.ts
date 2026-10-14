@@ -5,6 +5,7 @@ import {
   findRepositoryRoot,
   MinimaxH3ExperimentService,
   compareMinimaxH3Experiments,
+  listAttentionCatalogEntries,
   type MinimaxH3ComfyUiTransportPort,
   type MinimaxH3ExperimentStorePort,
   type MinimaxH3OutputProberPort,
@@ -27,7 +28,8 @@ import {
   MinimaxH3VisualReviewSidecarSchema,
   type MinimaxH3ExperimentCandidateFrames,
   type MinimaxH3AnyExperimentDescriptor,
-  type MinimaxH3ProcessRecord
+  type MinimaxH3ProcessRecord,
+  type MinimaxH3AttentionVariantName
 } from "@cco/contracts";
 import {
   MinimaxH3ComfyUiAdapter,
@@ -60,6 +62,7 @@ Usage:
   experiment:minimax-h3 <subcommand> [options]
 
 Subcommands:
+  catalog        List and inspect MiniMax-H3 attention optimization variants
   prepare        Create isolated experiment directory, derive workflow, and stage inputs
   validate       Dry-run offline validation of descriptor, graph hashes, and environment rules
   run            Execute isolated experiment on owned local ComfyUI child with telemetry
@@ -67,6 +70,12 @@ Subcommands:
   compare        Compare completed baseline and candidate experiment runs under controlled protocol
   cleanup        Release GPU lock and clean up temporary files without mutating results
   import-sidecar Import visual review sidecar into an existing run result.json
+
+Options for 'catalog':
+  --route <i2v|ref2v>            Filter catalog by generation route (optional)
+  --variant <variant>            Filter catalog by attention variant name (optional)
+  --matched-variant <variant>    Filter catalog by matched dense baseline variant (optional)
+  --json                         Output catalog as JSON (default)
 
 Options for 'prepare':
   --route <i2v|ref2v>            Generation route (required)
@@ -99,6 +108,9 @@ Options for 'prepare':
   --step-override <steps>        Override scheduler step count (e.g. 10..30)
   --checkpoint-override <name>   Override diffusion checkpoint ('ref2va' or 'fl2va')
   --variant-purpose <purpose>    Variant purpose ('performance' | 'prompt_conditioning' | 'controlled_multifactor')
+  --attention-variant <variant>  Attention variant ('dense' | 'sage' | 'native-sol-attn' | 'veda')
+  --matched-variant <variant>    Matched dense control target variant ('sage' | 'native-sol-attn' | 'veda')
+  --comfyui-core-revision <rev>  Override ComfyUI core revision for catalog lookup (e.g. for upgraded dense control)
 
 Options for 'validate':
   --run-dir <path>               Prepared run directory path (required)
@@ -131,6 +143,10 @@ Options for 'import-sidecar':
   --run-dir <path>               Prepared or executed run directory path (required)
   --sidecar <path>               Visual review sidecar JSON file path (required)
   --output-root <dir>            Experiment output root (default: ${DEFAULT_OUTPUT_ROOT})
+
+Options for 'catalog':
+  --route <i2v|ref2v>            Filter catalog entries by route (optional)
+  --attention-variant <variant>  Filter catalog entries by attention variant (optional)
 `);
 }
 
@@ -248,7 +264,11 @@ const ALLOWED_FLAGS_BY_SUBCOMMAND: Record<string, Set<string>> = {
     "shutdown-timeout-ms",
     "step-override",
     "checkpoint-override",
-    "variant-purpose"
+    "variant-purpose",
+    "attention-variant",
+    "matched-variant",
+    "comfyui-core-revision",
+    "core-revision"
   ]),
   validate: new Set(["run-dir", "output-root", "templates-dir"]),
   run: new Set(["run-dir", "output-root", "stop-policy", "baseline-run-dir", "templates-dir"]),
@@ -263,7 +283,16 @@ const ALLOWED_FLAGS_BY_SUBCOMMAND: Record<string, Set<string>> = {
   ]),
   cleanup: new Set(["run-dir", "output-root", "keep-outputs", "remove-outputs", "delete-outputs"]),
   "import-sidecar": new Set(["run-dir", "output-root", "sidecar", "file"]),
-  "validate-sidecar": new Set(["file", "sidecar", "run-dir", "output-root"])
+  "validate-sidecar": new Set(["file", "sidecar", "run-dir", "output-root"]),
+  catalog: new Set([
+    "route",
+    "attention-variant",
+    "matched-variant",
+    "variant",
+    "output-root",
+    "comfyui-core-revision",
+    "core-revision"
+  ])
 };
 
 const VALUE_FLAGS = new Set([
@@ -298,6 +327,10 @@ const VALUE_FLAGS = new Set([
   "step-override",
   "checkpoint-override",
   "variant-purpose",
+  "attention-variant",
+  "matched-variant",
+  "comfyui-core-revision",
+  "core-revision",
   "run-dir",
   "stop-policy",
   "baseline-run-dir",
@@ -525,6 +558,32 @@ export async function runExperimentCli(
           variantPurpose = p;
         }
 
+        let attentionVariant: "dense" | "sage" | "native-sol-attn" | "veda" | undefined;
+        if (flags["attention-variant"] !== undefined) {
+          const av = flags["attention-variant"].toLowerCase();
+          if (av !== "dense" && av !== "sage" && av !== "native-sol-attn" && av !== "veda") {
+            stderr(
+              "Error: --attention-variant must be 'dense', 'sage', 'native-sol-attn', or 'veda'."
+            );
+            return 1;
+          }
+          attentionVariant = av as "dense" | "sage" | "native-sol-attn" | "veda";
+        }
+
+        let matchedVariant: "dense" | "sage" | "native-sol-attn" | "veda" | undefined;
+        if (flags["matched-variant"] !== undefined) {
+          const mv = flags["matched-variant"].toLowerCase();
+          if (mv !== "dense" && mv !== "sage" && mv !== "native-sol-attn" && mv !== "veda") {
+            stderr(
+              "Error: --matched-variant must be 'dense', 'sage', 'native-sol-attn', or 'veda'."
+            );
+            return 1;
+          }
+          matchedVariant = mv as "dense" | "sage" | "native-sol-attn" | "veda";
+        }
+
+        const coreRevision = flags["comfyui-core-revision"] ?? flags["core-revision"];
+
         const resolvedTemplatesDir = resolveCliPath(flags["templates-dir"]);
         const prepared = await service.prepareExperiment({
           route,
@@ -550,7 +609,10 @@ export async function runExperimentCli(
           ...(Object.keys(timeoutsOverride).length > 0 ? { timeouts: timeoutsOverride } : {}),
           ...(stepOverride !== undefined ? { stepOverride } : {}),
           ...(checkpointOverride !== undefined ? { checkpointOverride } : {}),
-          ...(variantPurpose !== undefined ? { variantPurpose } : {})
+          ...(variantPurpose !== undefined ? { variantPurpose } : {}),
+          ...(attentionVariant !== undefined ? { attentionVariant } : {}),
+          ...(matchedVariant !== undefined ? { matchedVariant } : {}),
+          ...(coreRevision !== undefined ? { coreRevision } : {})
         });
 
         stdout(
@@ -599,7 +661,10 @@ export async function runExperimentCli(
               route: result.descriptor.route,
               configuredFrames: result.descriptor.configuredFrames,
               configDigest: result.descriptor.configDigest,
-              comparisonKey: result.descriptor.comparisonKey
+              comparisonKey: result.descriptor.comparisonKey,
+              graphValid: result.graphValid ?? true,
+              executionBlocked: result.executionBlocked ?? false,
+              executionBlockers: result.executionBlockers ?? []
             },
             null,
             2
@@ -1289,6 +1354,37 @@ export async function runExperimentCli(
             2
           )
         );
+        return 0;
+      }
+
+      case "catalog": {
+        const routeFilter = flags["route"] as "i2v" | "ref2v" | undefined;
+        const variantFilter = (flags["attention-variant"] ?? flags["variant"]) as
+          MinimaxH3AttentionVariantName | undefined;
+
+        if (routeFilter && routeFilter !== "i2v" && routeFilter !== "ref2v") {
+          stderr(`Invalid --route "${routeFilter}". Must be "i2v" or "ref2v".`);
+          return 1;
+        }
+
+        const coreRevision = flags["comfyui-core-revision"] ?? flags["core-revision"];
+        const matchedVariantFilter = flags["matched-variant"]?.toLowerCase();
+
+        let entries = listAttentionCatalogEntries({
+          ...(routeFilter !== undefined ? { route: routeFilter } : {}),
+          ...(variantFilter !== undefined ? { variantName: variantFilter } : {}),
+          ...(coreRevision !== undefined ? { coreRevision } : {})
+        });
+
+        if (matchedVariantFilter) {
+          entries = entries.filter(
+            (e) =>
+              e.scope.startsWith(`${matchedVariantFilter}-matched`) ||
+              (matchedVariantFilter === "native-sol-attn" && e.scope.startsWith("sol-attn-matched"))
+          );
+        }
+
+        stdout(JSON.stringify(entries, null, 2));
         return 0;
       }
 

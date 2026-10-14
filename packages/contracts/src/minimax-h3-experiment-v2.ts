@@ -26,6 +26,13 @@ import {
   type MinimaxH3ExperimentResult
 } from "./minimax-h3-experiment.js";
 import { sha256HashSchema } from "./persistent-media.js";
+import {
+  MinimaxH3CompatibilityStateSchema,
+  MinimaxH3SourceEvidenceRefSchema,
+  MinimaxH3AttentionRequestSchema,
+  MinimaxH3AttentionObservationSchema,
+  MinimaxH3AttentionEventMetadataSchema
+} from "./minimax-h3-attention.js";
 
 export const MinimaxH3ExperimentDescriptorV1Schema = MinimaxH3ExperimentDescriptorSchema;
 export type MinimaxH3ExperimentDescriptorV1 = MinimaxH3ExperimentDescriptor;
@@ -122,7 +129,7 @@ export const MinimaxH3InstrumentationEventSchema = z
       })
       .strict()
       .optional(),
-    metadata: z.record(z.string(), z.unknown()).optional()
+    metadata: MinimaxH3AttentionEventMetadataSchema.optional()
   })
   .strict();
 export type MinimaxH3InstrumentationEvent = z.infer<typeof MinimaxH3InstrumentationEventSchema>;
@@ -557,23 +564,6 @@ export type MinimaxH3ExperimentVariant = z.infer<typeof MinimaxH3ExperimentVaria
 // ---------------------------------------------------------------------------
 // Compatibility & Isolated-Runtime Manifests (KTD6 - Witness F2)
 // ---------------------------------------------------------------------------
-export const MinimaxH3CompatibilityStateSchema = z.enum([
-  "supported",
-  "requires_isolated_upgrade",
-  "unsupported",
-  "unverified"
-]);
-export type MinimaxH3CompatibilityState = z.infer<typeof MinimaxH3CompatibilityStateSchema>;
-
-export const MinimaxH3SourceEvidenceRefSchema = z
-  .object({
-    url: z.string().min(1),
-    revision: z.string().optional(),
-    digest: sha256HashSchema.optional(),
-    assertion: z.string().min(1)
-  })
-  .strict();
-export type MinimaxH3SourceEvidenceRef = z.infer<typeof MinimaxH3SourceEvidenceRefSchema>;
 
 export const MinimaxH3CompatibilityAssessmentSchema = z
   .object({
@@ -606,7 +596,8 @@ export const MinimaxH3RequiredRuntimeManifestSchema = z
         .object({
           name: z.string().min(1),
           version: z.string().min(1),
-          artifactHash: sha256HashSchema.optional()
+          artifactHash: sha256HashSchema.optional(),
+          importModule: z.string().optional()
         })
         .strict()
     ),
@@ -869,7 +860,8 @@ export const MinimaxH3ExperimentDescriptorV2Schema = z
     requiredRuntime: MinimaxH3RequiredRuntimeManifestSchema,
     conditioning: MinimaxH3PromptConditioningSchema,
     stepOverride: z.number().int().positive().max(100).nullable().optional(),
-    checkpointOverride: z.enum(["ref2va", "fl2va"]).nullable().optional()
+    checkpointOverride: z.enum(["ref2va", "fl2va"]).nullable().optional(),
+    attentionRequest: MinimaxH3AttentionRequestSchema.optional()
   })
   .strict()
   .superRefine((val, ctx) => {
@@ -923,6 +915,32 @@ export const MinimaxH3ExperimentDescriptorV2Schema = z
         path: ["width"]
       });
     }
+
+    const hasAttentionFactor = val.experimentVariant.changedFactors.some(
+      (f) => f.path === "attention.configuration"
+    );
+    const hasAttentionBackend = val.provenance.requestedAttentionBackend !== "default";
+    if ((hasAttentionFactor || hasAttentionBackend) && !val.attentionRequest) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "attentionRequest is required whenever an attention variant or attention factor change is selected",
+        path: ["attentionRequest"]
+      });
+    }
+
+    if (val.attentionRequest) {
+      if (
+        val.provenance.requestedAttentionBackend !== "default" &&
+        val.attentionRequest.expectedBackend !== val.provenance.requestedAttentionBackend
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `attentionRequest expectedBackend '${val.attentionRequest.expectedBackend}' must match requestedAttentionBackend '${val.provenance.requestedAttentionBackend}'`,
+          path: ["attentionRequest", "expectedBackend"]
+        });
+      }
+    }
   });
 export type MinimaxH3ExperimentDescriptorV2 = z.infer<typeof MinimaxH3ExperimentDescriptorV2Schema>;
 
@@ -963,9 +981,79 @@ export const MinimaxH3ExperimentResultV2Schema = z
     observedProvenance: MinimaxH3ObservedProvenanceSchema,
     compatibility: MinimaxH3CompatibilityAssessmentSchema,
     phaseAccounting: MinimaxH3PhaseAccountingResultSchema,
-    instrumentationReport: MinimaxH3InstrumentationReportSchema
+    instrumentationReport: MinimaxH3InstrumentationReportSchema,
+    attentionObservation: MinimaxH3AttentionObservationSchema.optional()
   })
-  .strict();
+  .strict()
+  .superRefine((val, ctx) => {
+    const hasAttentionFactor = val.experimentVariant.changedFactors.some(
+      (f) => f.path === "attention.configuration"
+    );
+    const effBackend = val.observedProvenance.observedAttentionBackend?.effectiveBackend;
+    const hasAttentionBackend =
+      effBackend !== null && effBackend !== undefined && effBackend !== "default";
+    if (
+      val.execution.status === "completed" &&
+      (hasAttentionFactor || hasAttentionBackend) &&
+      !val.attentionObservation
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "attentionObservation is required for completed results whenever an attention factor change or non-default attention backend is present",
+        path: ["attentionObservation"]
+      });
+    }
+
+    if (val.attentionObservation) {
+      if (val.attentionObservation.status === "verified") {
+        if (
+          !val.attentionObservation.actualBackend ||
+          !val.attentionObservation.dispatchImplementation
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "attentionObservation with status 'verified' requires non-null actualBackend and dispatchImplementation",
+            path: ["attentionObservation"]
+          });
+        }
+        if (val.attentionObservation.missingKernelFailure) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "attentionObservation with status 'verified' cannot have missingKernelFailure",
+            path: ["attentionObservation", "missingKernelFailure"]
+          });
+        }
+      }
+    }
+
+    if (val.attentionObservation && val.observedProvenance.observedAttentionBackend) {
+      const eff = val.observedProvenance.observedAttentionBackend.effectiveBackend;
+      const act = val.attentionObservation.actualBackend;
+      if (val.attentionObservation.status === "verified" && eff && act && eff !== act) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `observedProvenance effectiveBackend '${eff}' does not match attentionObservation actualBackend '${act}'`,
+          path: ["attentionObservation", "actualBackend"]
+        });
+      }
+      const effImpl = val.observedProvenance.observedAttentionBackend.dispatchImplementation;
+      const actImpl = val.attentionObservation.dispatchImplementation;
+      if (
+        val.attentionObservation.status === "verified" &&
+        effImpl &&
+        actImpl &&
+        effImpl !== actImpl
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `observedProvenance dispatchImplementation '${effImpl}' does not match attentionObservation dispatchImplementation '${actImpl}'`,
+          path: ["attentionObservation", "dispatchImplementation"]
+        });
+      }
+    }
+  });
 export type MinimaxH3ExperimentResultV2 = z.infer<typeof MinimaxH3ExperimentResultV2Schema>;
 
 // ---------------------------------------------------------------------------
@@ -1318,6 +1406,33 @@ export function createEmptyMinimaxH3MeasurementTemplateV2(
       clockGapsDetected: false,
       tamperingDetected: false,
       reasons: ["Run has not executed; template initialized with empty measurements"]
-    }
+    },
+    ...(descriptor.attentionRequest
+      ? {
+          attentionObservation: {
+            status: "unknown" as const,
+            actualBackend: null,
+            dispatchImplementation: null,
+            acceleratedCallCount: 0,
+            denseCallCount: 0,
+            plannedDenseCallCount: 0,
+            fallbackEvents: [],
+            failureReason: null,
+            missingKernelFailure: null,
+            dtypeLayoutDiagnostics: null,
+            measurementCoverage: {
+              samplingCallsRecorded: 0,
+              attentionCallsRecorded: 0,
+              complete: false
+            },
+            timings: {
+              deviceElapsedMs: null,
+              kernelElapsedMs: null,
+              timingUnavailableReason:
+                "Run has not executed; template initialized with empty measurements"
+            }
+          }
+        }
+      : {})
   };
 }

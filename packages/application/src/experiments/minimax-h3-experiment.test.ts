@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -20,8 +21,11 @@ import {
   type MinimaxH3TerminalEvidence,
   type MinimaxH3AnyExperimentDescriptor,
   type MinimaxH3AnyExperimentResult,
+  type MinimaxH3ExperimentDescriptorV2,
+  type MinimaxH3ExperimentResultV2,
   type MinimaxH3PhaseAccountingEvent
 } from "@cco/contracts";
+import { compareMinimaxH3Experiments } from "./minimax-h3-comparator.js";
 import type {
   MinimaxH3ExperimentStorePort,
   MinimaxH3ComfyUiTransportPort,
@@ -2005,5 +2009,348 @@ describe("MiniMax-H3 Experiment Service V2 & Phase Accounting", () => {
     ).rejects.toThrow(/Preflight experiment runtime verification failed: Runtime conflict/);
 
     expect(childSpawned).toBe(false);
+  });
+
+  it("completes full lifecycle: prepare, child bootstrap handshake event, reconcile and compare with zero conflicts using unmodified descriptor [F-f78eab0f]", async () => {
+    const store = new InMemoryStore();
+    store.files.set("templates/minimax_h3_720p_i2v_124f_api.json", JSON.stringify(mockI2vTemplate));
+    store.files.set("templates/provenance.json", mockProvenanceJson);
+    store.files.set(
+      "manifest.json",
+      JSON.stringify({
+        referenceSetId: "ref-test-1",
+        references: [
+          {
+            assetPath: "/tmp/ref1.png",
+            stagedFilename: "ref1.png",
+            role: "first_frame",
+            tag: "<Picture 1>",
+            order: 0
+          }
+        ]
+      })
+    );
+
+    const service = new MinimaxH3ExperimentService(store);
+
+    // 1. Prepare baseline experiment without manual descriptor manipulation
+    const { runDir: baseRunDir, descriptor: baseDescriptor } = await service.prepareExperiment({
+      route: "i2v",
+      frames: 124,
+      seed: 42,
+      prompt: "A test prompt",
+      operatorLabel: "operator-01",
+      runId: "run-e2e-base-test",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest.json",
+      schemaVersion: 2
+    });
+
+    const v2BaseDesc = baseDescriptor as MinimaxH3ExperimentDescriptorV2;
+    // Genuine digests must be present in provenance and requiredRuntime, not placeholder strings
+    expect(v2BaseDesc.provenance.collectorDigest).toBe(v2BaseDesc.requiredRuntime.collectorDigest);
+    expect(v2BaseDesc.provenance.hookManifestDigest).toBe(
+      v2BaseDesc.requiredRuntime.hookManifestDigest
+    );
+
+    const attemptTokenBase = "attempt-token-base-1";
+    await store.writeDurableJson(`${baseRunDir}/attempt.json`, { attemptToken: attemptTokenBase });
+    await store.writeReceipt(baseRunDir, {
+      runId: v2BaseDesc.runId,
+      promptId: "prompt-base-1",
+      acceptedAt: "2026-10-12T10:00:01.000Z"
+    });
+    await store.writeTerminalEvidence(baseRunDir, {
+      source: "history",
+      status: "success",
+      outputFilename: "output.mp4",
+      rawDetails: {
+        "prompt-base-1": {
+          status: { status_str: "success", completed: true, messages: [] },
+          outputs: {}
+        }
+      }
+    });
+
+    // Write child events matching the genuine handshake digests reported by collector
+    store.phaseEvents = [
+      {
+        protocolVersion: "v2-jsonl",
+        sequence: 1,
+        runId: v2BaseDesc.runId,
+        attemptToken: attemptTokenBase,
+        spanId: "span-boot-1",
+        phase: "environment_startup",
+        type: "point_event",
+        boundarySource: "child_bootstrap",
+        clockDomain: "mono_child",
+        monotonicMs: 100.0,
+        metadata: {
+          handshake: "v2-jsonl",
+          collectorDigest: v2BaseDesc.requiredRuntime.collectorDigest,
+          hookManifestDigest: v2BaseDesc.requiredRuntime.hookManifestDigest
+        }
+      },
+      {
+        protocolVersion: "v2-jsonl",
+        sequence: 2,
+        runId: v2BaseDesc.runId,
+        attemptToken: attemptTokenBase,
+        spanId: "span-samp-1",
+        phase: "sampling",
+        type: "span_start",
+        boundarySource: "child_bootstrap",
+        clockDomain: "mono_child",
+        monotonicMs: 200.0
+      },
+      {
+        protocolVersion: "v2-jsonl",
+        sequence: 3,
+        runId: v2BaseDesc.runId,
+        attemptToken: attemptTokenBase,
+        spanId: "span-samp-1",
+        phase: "sampling",
+        type: "span_end",
+        boundarySource: "child_bootstrap",
+        clockDomain: "mono_child",
+        monotonicMs: 1200.0,
+        outcome: "success"
+      }
+    ];
+
+    const baseResult = (await service.reconcileExperiment(baseRunDir, {
+      outputRoot: ".ai-runs/minimax-h3-experiments"
+    })) as MinimaxH3ExperimentResultV2;
+
+    // Reconciliation must succeed with zero conflicts and verified handshake
+    expect(baseResult.observedProvenance.conflicts).toEqual([]);
+    expect(baseResult.observedProvenance.bootstrapHandshake?.status).toBe("verified");
+
+    // 2. Prepare candidate experiment
+    const { runDir: candRunDir, descriptor: candDescriptor } = await service.prepareExperiment({
+      route: "i2v",
+      frames: 124,
+      seed: 42,
+      prompt: "A test prompt",
+      operatorLabel: "operator-01",
+      runId: "run-e2e-cand-test",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest.json",
+      schemaVersion: 2,
+      stepOverride: 15
+    });
+
+    const v2CandDesc = candDescriptor as MinimaxH3ExperimentDescriptorV2;
+    expect(v2CandDesc.provenance.collectorDigest).toBe(v2CandDesc.requiredRuntime.collectorDigest);
+
+    const attemptTokenCand = "attempt-token-cand-1";
+    await store.writeDurableJson(`${candRunDir}/attempt.json`, { attemptToken: attemptTokenCand });
+    await store.writeReceipt(candRunDir, {
+      runId: v2CandDesc.runId,
+      promptId: "prompt-cand-1",
+      acceptedAt: "2026-10-12T10:05:01.000Z"
+    });
+    await store.writeTerminalEvidence(candRunDir, {
+      source: "history",
+      status: "success",
+      outputFilename: "output.mp4",
+      rawDetails: {
+        "prompt-cand-1": {
+          status: { status_str: "success", completed: true, messages: [] },
+          outputs: {}
+        }
+      }
+    });
+
+    store.phaseEvents = [
+      {
+        protocolVersion: "v2-jsonl",
+        sequence: 1,
+        runId: v2CandDesc.runId,
+        attemptToken: attemptTokenCand,
+        spanId: "span-boot-2",
+        phase: "environment_startup",
+        type: "point_event",
+        boundarySource: "child_bootstrap",
+        clockDomain: "mono_child",
+        monotonicMs: 100.0,
+        metadata: {
+          handshake: "v2-jsonl",
+          collectorDigest: v2CandDesc.requiredRuntime.collectorDigest,
+          hookManifestDigest: v2CandDesc.requiredRuntime.hookManifestDigest
+        }
+      },
+      {
+        protocolVersion: "v2-jsonl",
+        sequence: 2,
+        runId: v2CandDesc.runId,
+        attemptToken: attemptTokenCand,
+        spanId: "span-samp-2",
+        phase: "sampling",
+        type: "span_start",
+        boundarySource: "child_bootstrap",
+        clockDomain: "mono_child",
+        monotonicMs: 200.0
+      },
+      {
+        protocolVersion: "v2-jsonl",
+        sequence: 3,
+        runId: v2CandDesc.runId,
+        attemptToken: attemptTokenCand,
+        spanId: "span-samp-2",
+        phase: "sampling",
+        type: "span_end",
+        boundarySource: "child_bootstrap",
+        clockDomain: "mono_child",
+        monotonicMs: 1000.0,
+        outcome: "success"
+      }
+    ];
+
+    const candResult = (await service.reconcileExperiment(candRunDir, {
+      outputRoot: ".ai-runs/minimax-h3-experiments"
+    })) as MinimaxH3ExperimentResultV2;
+
+    expect(candResult.observedProvenance.conflicts).toEqual([]);
+    expect(candResult.observedProvenance.bootstrapHandshake?.status).toBe("verified");
+
+    // 3. Compare baseline and candidate
+    const report = compareMinimaxH3Experiments({
+      baselineDescriptor: v2BaseDesc,
+      baselineResult: baseResult,
+      variantDescriptor: v2CandDesc,
+      variantResult: candResult
+    });
+
+    expect(report.structuralAdmission.eligible).toBe(true);
+    expect(report.metricEligibility.wallTimeEligible).toBe(true);
+  });
+});
+
+describe("MiniMax-H3 Upgraded Dense Attention Validation (F-437dab51)", () => {
+  it("prepares and validates an upgraded dense attention experiment against real canonical templates", async () => {
+    const store = new InMemoryStore();
+    store.files.set(
+      "templates/minimax_h3_720p_i2v_124f_api.json",
+      readFileSync("templates/minimax_h3_720p_i2v_124f_api.json", "utf-8")
+    );
+    store.files.set(
+      "templates/provenance.json",
+      readFileSync("templates/provenance.json", "utf-8")
+    );
+    store.files.set(
+      "manifest.json",
+      JSON.stringify({
+        referenceSetId: "ref-test-real-1",
+        references: [
+          {
+            assetPath: "/tmp/ref1.png",
+            stagedFilename: "ref1.png",
+            role: "first_frame",
+            tag: "<Picture 1>",
+            order: 0
+          }
+        ]
+      })
+    );
+
+    const service = new MinimaxH3ExperimentService(store);
+
+    const { runDir, descriptor } = await service.prepareExperiment({
+      route: "i2v",
+      frames: 124,
+      seed: 42,
+      prompt:
+        "A cinematic shot of a person smiling warmly, natural lighting, highly detailed skin texture, 8k hyperrealistic",
+      operatorLabel: "operator-01",
+      runId: "run-upgraded-dense-regression",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui-experimental",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest.json",
+      attentionVariant: "dense",
+      coreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf"
+    });
+
+    const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
+    expect(descV2.attentionRequest?.attentionVariant).toBe("dense");
+    expect(descV2.compatibility?.scope).toBe("upgraded-dense-attention-control-i2v");
+    expect(descV2.provenance?.comfyuiCoreRevision).toBe("94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf");
+
+    const validation = await service.validateExperiment(runDir, {
+      outputRoot: ".ai-runs/minimax-h3-experiments"
+    });
+
+    expect(validation.errors).toEqual([]);
+    expect(validation.ok).toBe(true);
+  });
+
+  it("prepares and validates a matched dense attention experiment (matchedVariant: sol-attn)", async () => {
+    const store = new InMemoryStore();
+    store.files.set(
+      "templates/minimax_h3_720p_i2v_124f_api.json",
+      readFileSync("templates/minimax_h3_720p_i2v_124f_api.json", "utf-8")
+    );
+    store.files.set(
+      "templates/provenance.json",
+      readFileSync("templates/provenance.json", "utf-8")
+    );
+    store.files.set(
+      "manifest.json",
+      JSON.stringify({
+        referenceSetId: "ref-test-real-2",
+        references: [
+          {
+            assetPath: "/tmp/ref1.png",
+            stagedFilename: "ref1.png",
+            role: "first_frame",
+            tag: "<Picture 1>",
+            order: 0
+          }
+        ]
+      })
+    );
+
+    const service = new MinimaxH3ExperimentService(store);
+
+    const { runDir, descriptor } = await service.prepareExperiment({
+      route: "i2v",
+      frames: 124,
+      seed: 42,
+      prompt:
+        "A cinematic shot of a person smiling warmly, natural lighting, highly detailed skin texture, 8k hyperrealistic",
+      operatorLabel: "operator-01",
+      runId: "run-sol-attn-matched-dense-regression",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui-experimental",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest.json",
+      attentionVariant: "dense",
+      matchedVariant: "native-sol-attn"
+    });
+
+    const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
+    expect(descV2.attentionRequest?.attentionVariant).toBe("dense");
+    expect(descV2.compatibility?.scope).toBe("sol-attn-matched-dense-attention-i2v");
+    expect(descV2.provenance?.comfyuiCoreRevision).toBe("94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf");
+
+    const validation = await service.validateExperiment(runDir, {
+      outputRoot: ".ai-runs/minimax-h3-experiments"
+    });
+
+    expect(validation.errors).toEqual([]);
+    expect(validation.ok).toBe(true);
   });
 });

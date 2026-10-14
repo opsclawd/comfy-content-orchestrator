@@ -1,0 +1,14 @@
+{
+  "candidateCoreRevision": "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+  "status": "candidate_unresolved",
+  "nodeId": "ModelSparseAttention",
+  "classType": "ModelSparseAttention",
+  "inputSignature": {
+    "required": {
+      "model": ["MODEL"],
+      "sparse_type": ["STRING", { "default": "sol-attn" }]
+    }
+  },
+  "returnTypes": ["MODEL"],
+  "notes": "Upstream commit unverified via GitHub API (HTTP 422). Requires comfy-kitchen sol-attn kernel."
+}

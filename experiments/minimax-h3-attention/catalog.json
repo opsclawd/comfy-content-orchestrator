@@ -1,0 +1,991 @@
+[
+  {
+    "variantName": "dense",
+    "route": "i2v",
+    "compatibilityState": "unverified",
+    "scope": "baseline-dense-attention-i2v",
+    "comfyuiCoreRevision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+    "runnable": false,
+    "backend": "torch_sdpa",
+    "kernel": "torch.nn.functional.scaled_dot_product_attention",
+    "requiredNodes": [],
+    "pythonPackages": [
+      {
+        "name": "torch",
+        "version": "2.5.1+cu124",
+        "importModule": "torch"
+      }
+    ],
+    "cudaRequirement": ">=12.4",
+    "computeCapability": "sm_89",
+    "supportedDtypes": ["float16", "bfloat16"],
+    "checkpointCompatibility": {
+      "filename": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+      "taskMode": "ref2va_pruned_int8"
+    },
+    "licensing": {
+      "status": "review_required",
+      "licenseSourceRef": "https://github.com/pytorch/pytorch/blob/v2.5.1/LICENSE",
+      "securityReviewStatus": "pending"
+    },
+    "denseRegionPolicy": {
+      "allowPlannedDense": true,
+      "description": "Control regime: all attention layers and steps execute dense SDPA."
+    },
+    "isolationInstructions": {
+      "venvSetup": "Standard pinned production venv with PyTorch 2.5.1+cu124.",
+      "installRecipe": "No additional packages required.",
+      "teardownRecipe": "Preserve standard pinned environment."
+    },
+    "blockers": [
+      "Target runtime environment not yet inspected for hardware PyTorch/CUDA dispatch verification",
+      "Security review pending"
+    ],
+    "evidence": [
+      {
+        "url": "https://github.com/Comfy-Org/ComfyUI/blob/55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc/comfy/ldm/modules/attention.py",
+        "revision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        "assertion": "Default attention path dispatches to attention_pytorch (torch.nn.functional.scaled_dot_product_attention)."
+      }
+    ],
+    "catalogDigest": "7948e2f2b7060c6a8b835095f0a8be865740bee8fd3519e599cafaef89924508"
+  },
+  {
+    "variantName": "dense",
+    "route": "ref2v",
+    "compatibilityState": "unverified",
+    "scope": "baseline-dense-attention-ref2v",
+    "comfyuiCoreRevision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+    "runnable": false,
+    "backend": "torch_sdpa",
+    "kernel": "torch.nn.functional.scaled_dot_product_attention",
+    "requiredNodes": [],
+    "pythonPackages": [
+      {
+        "name": "torch",
+        "version": "2.5.1+cu124",
+        "importModule": "torch"
+      }
+    ],
+    "cudaRequirement": ">=12.4",
+    "computeCapability": "sm_89",
+    "supportedDtypes": ["float16", "bfloat16"],
+    "checkpointCompatibility": {
+      "filename": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+      "taskMode": "ref2va_pruned_int8"
+    },
+    "licensing": {
+      "status": "review_required",
+      "licenseSourceRef": "https://github.com/pytorch/pytorch/blob/v2.5.1/LICENSE",
+      "securityReviewStatus": "pending"
+    },
+    "denseRegionPolicy": {
+      "allowPlannedDense": true,
+      "description": "Control regime: all attention layers and steps execute dense SDPA."
+    },
+    "isolationInstructions": {
+      "venvSetup": "Standard pinned production venv with PyTorch 2.5.1+cu124.",
+      "installRecipe": "No additional packages required.",
+      "teardownRecipe": "Preserve standard pinned environment."
+    },
+    "blockers": [
+      "Target runtime environment not yet inspected for hardware PyTorch/CUDA dispatch verification",
+      "Security review pending"
+    ],
+    "evidence": [
+      {
+        "url": "https://github.com/Comfy-Org/ComfyUI/blob/55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc/comfy/ldm/modules/attention.py",
+        "revision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        "assertion": "Default attention path dispatches to attention_pytorch (torch.nn.functional.scaled_dot_product_attention)."
+      }
+    ],
+    "catalogDigest": "e54616b47135e1870067d4a890bf61f8cfeefffeb0c9c32b3d95532b806dd180"
+  },
+  {
+    "variantName": "dense",
+    "route": "i2v",
+    "compatibilityState": "requires_isolated_upgrade",
+    "scope": "upgraded-dense-attention-control-i2v",
+    "comfyuiCoreRevision": "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+    "runnable": false,
+    "backend": "torch_sdpa",
+    "kernel": "torch.nn.functional.scaled_dot_product_attention",
+    "requiredNodes": [],
+    "pythonPackages": [
+      {
+        "name": "torch",
+        "version": "2.5.1+cu124",
+        "importModule": "torch"
+      }
+    ],
+    "cudaRequirement": ">=12.4",
+    "computeCapability": "sm_89",
+    "supportedDtypes": ["float16", "bfloat16"],
+    "checkpointCompatibility": {
+      "filename": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+      "taskMode": "ref2va_pruned_int8"
+    },
+    "licensing": {
+      "status": "review_required",
+      "licenseSourceRef": "https://github.com/pytorch/pytorch/blob/v2.5.1/LICENSE",
+      "securityReviewStatus": "pending"
+    },
+    "denseRegionPolicy": {
+      "allowPlannedDense": true,
+      "description": "Upgraded control regime: all attention layers and steps execute dense SDPA on upgraded core."
+    },
+    "isolationInstructions": {
+      "venvSetup": "Clone ComfyUI at 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf in .ai-checkouts/comfyui-upgraded with PyTorch 2.5.1+cu124.",
+      "installRecipe": "No additional packages required.",
+      "teardownRecipe": "Remove .ai-checkouts/comfyui-upgraded and isolated venv."
+    },
+    "blockers": [
+      "Target experimental upgrade checkout not yet provisioned",
+      "Security review pending"
+    ],
+    "evidence": [
+      {
+        "url": "https://github.com/Comfy-Org/ComfyUI/blob/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf/comfy/ldm/modules/attention.py",
+        "revision": "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        "assertion": "Default attention path dispatches to attention_pytorch."
+      }
+    ],
+    "catalogDigest": "fa64c639174b040bd73a812212875e1061be5a813c27d5aaf49d41e9b49a843b"
+  },
+  {
+    "variantName": "dense",
+    "route": "ref2v",
+    "compatibilityState": "requires_isolated_upgrade",
+    "scope": "upgraded-dense-attention-control-ref2v",
+    "comfyuiCoreRevision": "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+    "runnable": false,
+    "backend": "torch_sdpa",
+    "kernel": "torch.nn.functional.scaled_dot_product_attention",
+    "requiredNodes": [],
+    "pythonPackages": [
+      {
+        "name": "torch",
+        "version": "2.5.1+cu124",
+        "importModule": "torch"
+      }
+    ],
+    "cudaRequirement": ">=12.4",
+    "computeCapability": "sm_89",
+    "supportedDtypes": ["float16", "bfloat16"],
+    "checkpointCompatibility": {
+      "filename": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+      "taskMode": "ref2va_pruned_int8"
+    },
+    "licensing": {
+      "status": "review_required",
+      "licenseSourceRef": "https://github.com/pytorch/pytorch/blob/v2.5.1/LICENSE",
+      "securityReviewStatus": "pending"
+    },
+    "denseRegionPolicy": {
+      "allowPlannedDense": true,
+      "description": "Upgraded control regime: all attention layers and steps execute dense SDPA on upgraded core."
+    },
+    "isolationInstructions": {
+      "venvSetup": "Clone ComfyUI at 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf in .ai-checkouts/comfyui-upgraded with PyTorch 2.5.1+cu124.",
+      "installRecipe": "No additional packages required.",
+      "teardownRecipe": "Remove .ai-checkouts/comfyui-upgraded and isolated venv."
+    },
+    "blockers": [
+      "Target experimental upgrade checkout not yet provisioned",
+      "Security review pending"
+    ],
+    "evidence": [
+      {
+        "url": "https://github.com/Comfy-Org/ComfyUI/blob/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf/comfy/ldm/modules/attention.py",
+        "revision": "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        "assertion": "Default attention path dispatches to attention_pytorch."
+      }
+    ],
+    "catalogDigest": "f66f1560357ec0ed1c0b9e0752fcdafc7767730b35ed953e48ff35bc7fa0bdaa"
+  },
+  {
+    "variantName": "sage",
+    "route": "i2v",
+    "compatibilityState": "unverified",
+    "scope": "sageattention-flag-isolated-venv-i2v",
+    "comfyuiCoreRevision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+    "runnable": false,
+    "backend": "sage",
+    "kernel": "sageattention.sageattn",
+    "requiredNodes": [],
+    "pythonPackages": [
+      {
+        "name": "sageattention",
+        "version": "2.1.1",
+        "importModule": "sageattention"
+      },
+      {
+        "name": "torch",
+        "version": "2.5.1+cu124",
+        "importModule": "torch"
+      }
+    ],
+    "cudaRequirement": ">=12.4",
+    "computeCapability": "sm_89",
+    "supportedDtypes": ["float16", "bfloat16"],
+    "checkpointCompatibility": {
+      "filename": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+      "taskMode": "ref2va_pruned_int8"
+    },
+    "licensing": {
+      "status": "review_required",
+      "licenseSourceRef": "https://github.com/thu-ml/SageAttention/blob/v2.1.1/LICENSE",
+      "securityReviewStatus": "pending"
+    },
+    "denseRegionPolicy": {
+      "allowPlannedDense": false,
+      "description": "Accelerated regime: all compatible attention layers must execute SageAttention; any fallback to PyTorch SDPA is an experiment failure."
+    },
+    "isolationInstructions": {
+      "venvSetup": "Create isolated venv from pinned base: python3 -m venv .ai-venvs/minimax-h3-sage",
+      "installRecipe": "pip install sageattention==2.1.1 --extra-index-url https://download.pytorch.org/whl/cu124",
+      "teardownRecipe": "Deactivate and remove .ai-venvs/minimax-h3-sage directory; production venv is untouched."
+    },
+    "blockers": [
+      "sageattention Python package not verified in isolated venv",
+      "Exact tensor dtype eligibility on INT8 ConvRot model unverified on SM89/RTX 4090",
+      "Hardware dispatch pending operator execution",
+      "Security review pending"
+    ],
+    "evidence": [
+      {
+        "url": "https://github.com/Comfy-Org/ComfyUI/blob/55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc/comfy/cli_args.py",
+        "revision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        "assertion": "ComfyUI CLI exposes --use-sage-attention flag."
+      },
+      {
+        "url": "https://github.com/Comfy-Org/ComfyUI/blob/55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc/comfy/ldm/modules/attention.py",
+        "revision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        "assertion": "attention_sage dispatches to sageattention when available; falls back to dense if absent."
+      }
+    ],
+    "catalogDigest": "59626ab55428ade42a556ef00c5d375badc60ae7571aa89cc4012284130ef2ff"
+  },
+  {
+    "variantName": "sage",
+    "route": "ref2v",
+    "compatibilityState": "unverified",
+    "scope": "sageattention-flag-isolated-venv-ref2v",
+    "comfyuiCoreRevision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+    "runnable": false,
+    "backend": "sage",
+    "kernel": "sageattention.sageattn",
+    "requiredNodes": [],
+    "pythonPackages": [
+      {
+        "name": "sageattention",
+        "version": "2.1.1",
+        "importModule": "sageattention"
+      },
+      {
+        "name": "torch",
+        "version": "2.5.1+cu124",
+        "importModule": "torch"
+      }
+    ],
+    "cudaRequirement": ">=12.4",
+    "computeCapability": "sm_89",
+    "supportedDtypes": ["float16", "bfloat16"],
+    "checkpointCompatibility": {
+      "filename": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+      "taskMode": "ref2va_pruned_int8"
+    },
+    "licensing": {
+      "status": "review_required",
+      "licenseSourceRef": "https://github.com/thu-ml/SageAttention/blob/v2.1.1/LICENSE",
+      "securityReviewStatus": "pending"
+    },
+    "denseRegionPolicy": {
+      "allowPlannedDense": false,
+      "description": "Accelerated regime: all compatible attention layers must execute SageAttention; any fallback to PyTorch SDPA is an experiment failure."
+    },
+    "isolationInstructions": {
+      "venvSetup": "Create isolated venv from pinned base: python3 -m venv .ai-venvs/minimax-h3-sage",
+      "installRecipe": "pip install sageattention==2.1.1 --extra-index-url https://download.pytorch.org/whl/cu124",
+      "teardownRecipe": "Deactivate and remove .ai-venvs/minimax-h3-sage directory; production venv is untouched."
+    },
+    "blockers": [
+      "sageattention Python package not verified in isolated venv",
+      "Exact tensor dtype eligibility on INT8 ConvRot model unverified on SM89/RTX 4090",
+      "Hardware dispatch pending operator execution",
+      "Security review pending"
+    ],
+    "evidence": [
+      {
+        "url": "https://github.com/Comfy-Org/ComfyUI/blob/55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc/comfy/cli_args.py",
+        "revision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        "assertion": "ComfyUI CLI exposes --use-sage-attention flag."
+      },
+      {
+        "url": "https://github.com/Comfy-Org/ComfyUI/blob/55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc/comfy/ldm/modules/attention.py",
+        "revision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        "assertion": "attention_sage dispatches to sageattention when available; falls back to dense if absent."
+      }
+    ],
+    "catalogDigest": "c1a593137bf0761636f127c6e7ee782e2966787d1524c18465bc46372c1b3cab"
+  },
+  {
+    "variantName": "native-sol-attn",
+    "route": "i2v",
+    "compatibilityState": "requires_isolated_upgrade",
+    "scope": "native-sparse-sol-attn-upgrade-i2v",
+    "comfyuiCoreRevision": "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+    "runnable": false,
+    "backend": "sol_attn",
+    "kernel": "comfy_kitchen.sol_attn",
+    "requiredNodes": [
+      {
+        "name": "ModelSparseAttention",
+        "classType": "ModelSparseAttention",
+        "revision": "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf"
+      }
+    ],
+    "pythonPackages": [
+      {
+        "name": "comfy-kitchen",
+        "version": "0.2.31",
+        "importModule": "comfy_kitchen"
+      },
+      {
+        "name": "torch",
+        "version": "2.5.1+cu124",
+        "importModule": "torch"
+      }
+    ],
+    "cudaRequirement": ">=12.4",
+    "computeCapability": "sm_89",
+    "supportedDtypes": ["float16", "bfloat16"],
+    "checkpointCompatibility": {
+      "filename": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+      "taskMode": "ref2va_pruned_int8"
+    },
+    "licensing": {
+      "status": "review_required",
+      "licenseSourceRef": "https://github.com/Comfy-Org/comfy-kitchen/blob/v0.2.31/LICENSE",
+      "securityReviewStatus": "pending"
+    },
+    "denseRegionPolicy": {
+      "allowPlannedDense": true,
+      "minTokensThreshold": 1024,
+      "description": "Native sparse attention executes sol-attn on layers above 1024 tokens; short sequences execute dense attention by design."
+    },
+    "isolationInstructions": {
+      "venvSetup": "Clone ComfyUI at experimental revision 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf into .ai-checkouts/comfyui-sol-attn",
+      "installRecipe": "pip install comfy-kitchen==0.2.31",
+      "teardownRecipe": "Remove .ai-checkouts/comfyui-sol-attn and isolated venv; production checkout remains pinned at 55b6a9b1."
+    },
+    "blockers": [
+      "ComfyUI core upgrade required (ModelSparseAttention node not present in pinned core 55b6a9b1)",
+      "comfy-kitchen sol-attn kernel requires CUDA SM89 compilation verification",
+      "Isolated experimental checkout required",
+      "Security review pending"
+    ],
+    "evidence": [
+      {
+        "url": "https://github.com/Comfy-Org/docs/blob/main/tutorials/video/minimax/minimax-h3.mdx",
+        "assertion": "Model Sparse Attention requires sol-attn kernel from comfy-kitchen and CUDA."
+      },
+      {
+        "url": "https://github.com/Comfy-Org/ComfyUI/blob/55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc/nodes_model_advanced.py",
+        "revision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        "assertion": "Pinned ComfyUI core does not contain ModelSparseAttention node."
+      }
+    ],
+    "catalogDigest": "4642c6847e1904e4980dae648a91677f2b32f664f5820582a957a4c8ad4dca40"
+  },
+  {
+    "variantName": "native-sol-attn",
+    "route": "ref2v",
+    "compatibilityState": "requires_isolated_upgrade",
+    "scope": "native-sparse-sol-attn-upgrade-ref2v",
+    "comfyuiCoreRevision": "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+    "runnable": false,
+    "backend": "sol_attn",
+    "kernel": "comfy_kitchen.sol_attn",
+    "requiredNodes": [
+      {
+        "name": "ModelSparseAttention",
+        "classType": "ModelSparseAttention",
+        "revision": "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf"
+      }
+    ],
+    "pythonPackages": [
+      {
+        "name": "comfy-kitchen",
+        "version": "0.2.31",
+        "importModule": "comfy_kitchen"
+      },
+      {
+        "name": "torch",
+        "version": "2.5.1+cu124",
+        "importModule": "torch"
+      }
+    ],
+    "cudaRequirement": ">=12.4",
+    "computeCapability": "sm_89",
+    "supportedDtypes": ["float16", "bfloat16"],
+    "checkpointCompatibility": {
+      "filename": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+      "taskMode": "ref2va_pruned_int8"
+    },
+    "licensing": {
+      "status": "review_required",
+      "licenseSourceRef": "https://github.com/Comfy-Org/comfy-kitchen/blob/v0.2.31/LICENSE",
+      "securityReviewStatus": "pending"
+    },
+    "denseRegionPolicy": {
+      "allowPlannedDense": true,
+      "minTokensThreshold": 1024,
+      "description": "Native sparse attention executes sol-attn on layers above 1024 tokens; short sequences execute dense attention by design."
+    },
+    "isolationInstructions": {
+      "venvSetup": "Clone ComfyUI at experimental revision 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf into .ai-checkouts/comfyui-sol-attn",
+      "installRecipe": "pip install comfy-kitchen==0.2.31",
+      "teardownRecipe": "Remove .ai-checkouts/comfyui-sol-attn and isolated venv; production checkout remains pinned at 55b6a9b1."
+    },
+    "blockers": [
+      "ComfyUI core upgrade required (ModelSparseAttention node not present in pinned core 55b6a9b1)",
+      "comfy-kitchen sol-attn kernel requires CUDA SM89 compilation verification",
+      "Isolated experimental checkout required",
+      "Security review pending"
+    ],
+    "evidence": [
+      {
+        "url": "https://github.com/Comfy-Org/docs/blob/main/tutorials/video/minimax/minimax-h3.mdx",
+        "assertion": "Model Sparse Attention requires sol-attn kernel from comfy-kitchen and CUDA."
+      },
+      {
+        "url": "https://github.com/Comfy-Org/ComfyUI/blob/55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc/nodes_model_advanced.py",
+        "revision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        "assertion": "Pinned ComfyUI core does not contain ModelSparseAttention node."
+      }
+    ],
+    "catalogDigest": "c34bacb643e51069e87382da06681593bfc43aed5dca168a94dedeb20bda6b58"
+  },
+  {
+    "variantName": "veda",
+    "route": "i2v",
+    "compatibilityState": "requires_isolated_upgrade",
+    "scope": "veda-sparse-attention-i2v",
+    "comfyuiCoreRevision": "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+    "customNode": {
+      "name": "Veda-on-ComfyUI",
+      "repository": "https://github.com/veda-sparse/Veda-on-ComfyUI",
+      "revision": "67e4eb5541b648555563144401ebaba832bd73ec"
+    },
+    "runnable": false,
+    "backend": "veda",
+    "kernel": "veda_sparse_attention.triton_kernel",
+    "requiredNodes": [
+      {
+        "name": "VedaSparseAttention",
+        "classType": "VedaSparseAttention",
+        "revision": "67e4eb5541b648555563144401ebaba832bd73ec"
+      }
+    ],
+    "pythonPackages": [
+      {
+        "name": "triton",
+        "version": "3.0.0",
+        "importModule": "triton"
+      },
+      {
+        "name": "torch",
+        "version": "2.5.1+cu124",
+        "importModule": "torch"
+      }
+    ],
+    "cudaRequirement": ">=12.4",
+    "computeCapability": "sm_89",
+    "supportedDtypes": ["float16", "bfloat16"],
+    "checkpointCompatibility": {
+      "filename": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+      "taskMode": "ref2va_pruned_int8"
+    },
+    "predictor": {
+      "repository": "https://github.com/veda-sparse/Veda-on-ComfyUI",
+      "revision": "67e4eb5541b648555563144401ebaba832bd73ec",
+      "filename": "minimax_h3_i2v_veda_predictor.safetensors",
+      "sha256": "c4f830382348db497db21966db98d89cb2169ca004313f8aa54a11f2a4ad85b1",
+      "taskMode": "i2v_tracking",
+      "reviewStatus": "pending"
+    },
+    "licensing": {
+      "status": "review_required",
+      "licenseSourceRef": "https://github.com/veda-sparse/Veda-on-ComfyUI/blob/67e4eb5541b648555563144401ebaba832bd73ec/LICENSE",
+      "securityReviewStatus": "pending"
+    },
+    "denseRegionPolicy": {
+      "allowPlannedDense": false,
+      "description": "Veda sparse attention masks attention tokens via predictor; does not combine with native sparse attention."
+    },
+    "isolationInstructions": {
+      "venvSetup": "Clone Veda into custom_nodes/ of an isolated ComfyUI checkout (revision >= 0.38.0, e.g. 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf).",
+      "installRecipe": "pip install triton==3.0.0; download verified predictor weights into models/predictors/",
+      "teardownRecipe": "Remove isolated checkout; release all GPU locks."
+    },
+    "blockers": [
+      "ComfyUI core upgrade required (>=0.38.0)",
+      "Veda custom node installation required (commit 67e4eb5541b648555563144401ebaba832bd73ec)",
+      "Triton 3.0.0 required",
+      "Task/predictor alignment with Ref2VA checkpoint unverified for I2V route",
+      "SM89/RTX 4090 GPU kernel suitability unverified",
+      "Predictor license and security review pending",
+      "Security review pending"
+    ],
+    "evidence": [
+      {
+        "url": "https://github.com/veda-sparse/Veda-on-ComfyUI/blob/67e4eb5541b648555563144401ebaba832bd73ec/pyproject.toml",
+        "revision": "67e4eb5541b648555563144401ebaba832bd73ec",
+        "assertion": "Veda declares ComfyUI >= 0.38.0, Triton >= 3.0."
+      }
+    ],
+    "catalogDigest": "a5180511e03075574462c5d44b86561e73fdb361846f66e6263b0067553a23de"
+  },
+  {
+    "variantName": "veda",
+    "route": "ref2v",
+    "compatibilityState": "requires_isolated_upgrade",
+    "scope": "veda-sparse-attention-ref2v",
+    "comfyuiCoreRevision": "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+    "customNode": {
+      "name": "Veda-on-ComfyUI",
+      "repository": "https://github.com/veda-sparse/Veda-on-ComfyUI",
+      "revision": "67e4eb5541b648555563144401ebaba832bd73ec"
+    },
+    "runnable": false,
+    "backend": "veda",
+    "kernel": "veda_sparse_attention.triton_kernel",
+    "requiredNodes": [
+      {
+        "name": "VedaSparseAttention",
+        "classType": "VedaSparseAttention",
+        "revision": "67e4eb5541b648555563144401ebaba832bd73ec"
+      }
+    ],
+    "pythonPackages": [
+      {
+        "name": "triton",
+        "version": "3.0.0",
+        "importModule": "triton"
+      },
+      {
+        "name": "torch",
+        "version": "2.5.1+cu124",
+        "importModule": "torch"
+      }
+    ],
+    "cudaRequirement": ">=12.4",
+    "computeCapability": "sm_89",
+    "supportedDtypes": ["float16", "bfloat16"],
+    "checkpointCompatibility": {
+      "filename": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+      "taskMode": "ref2va_pruned_int8"
+    },
+    "predictor": {
+      "repository": "https://github.com/veda-sparse/Veda-on-ComfyUI",
+      "revision": "67e4eb5541b648555563144401ebaba832bd73ec",
+      "filename": "minimax_h3_ref2v_veda_predictor.safetensors",
+      "sha256": "d7a16b9f298cb28db7800049281a4bca99283f47e304bfa92305a462cb380931",
+      "taskMode": "ref2v_reference_tracking",
+      "reviewStatus": "pending"
+    },
+    "licensing": {
+      "status": "review_required",
+      "licenseSourceRef": "https://github.com/veda-sparse/Veda-on-ComfyUI/blob/67e4eb5541b648555563144401ebaba832bd73ec/LICENSE",
+      "securityReviewStatus": "pending"
+    },
+    "denseRegionPolicy": {
+      "allowPlannedDense": false,
+      "description": "Veda sparse attention masks attention tokens via predictor; does not combine with native sparse attention."
+    },
+    "isolationInstructions": {
+      "venvSetup": "Clone Veda into custom_nodes/ of an isolated ComfyUI checkout (revision >= 0.38.0, e.g. 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf).",
+      "installRecipe": "pip install triton==3.0.0; download verified predictor weights into models/predictors/",
+      "teardownRecipe": "Remove isolated checkout; release all GPU locks."
+    },
+    "blockers": [
+      "ComfyUI core upgrade required (>=0.38.0)",
+      "Veda custom node installation required (commit 67e4eb5541b648555563144401ebaba832bd73ec)",
+      "Triton 3.0.0 required",
+      "SM89/RTX 4090 GPU kernel suitability unverified",
+      "Predictor license and security review pending",
+      "Security review pending"
+    ],
+    "evidence": [
+      {
+        "url": "https://github.com/veda-sparse/Veda-on-ComfyUI/blob/67e4eb5541b648555563144401ebaba832bd73ec/pyproject.toml",
+        "revision": "67e4eb5541b648555563144401ebaba832bd73ec",
+        "assertion": "Veda declares ComfyUI >= 0.38.0, Triton >= 3.0."
+      }
+    ],
+    "catalogDigest": "b4a0aaad00d933e461972f38785a6c7b2db581ce132eeda5eb65d74988e214ff"
+  },
+  {
+    "variantName": "dense",
+    "route": "i2v",
+    "compatibilityState": "unverified",
+    "scope": "sage-matched-dense-attention-i2v",
+    "comfyuiCoreRevision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+    "runnable": false,
+    "backend": "torch_sdpa",
+    "kernel": "torch.nn.functional.scaled_dot_product_attention",
+    "requiredNodes": [],
+    "pythonPackages": [
+      {
+        "name": "sageattention",
+        "version": "2.1.1",
+        "importModule": "sageattention"
+      },
+      {
+        "name": "torch",
+        "version": "2.5.1+cu124",
+        "importModule": "torch"
+      }
+    ],
+    "cudaRequirement": ">=12.4",
+    "computeCapability": "sm_89",
+    "supportedDtypes": ["float16", "bfloat16"],
+    "checkpointCompatibility": {
+      "filename": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+      "taskMode": "ref2va_pruned_int8"
+    },
+    "licensing": {
+      "status": "review_required",
+      "licenseSourceRef": "https://github.com/thu-ml/SageAttention/blob/v2.1.1/LICENSE",
+      "securityReviewStatus": "pending"
+    },
+    "denseRegionPolicy": {
+      "allowPlannedDense": true,
+      "description": "Matched dense control in SageAttention isolated venv; executes dense SDPA."
+    },
+    "isolationInstructions": {
+      "venvSetup": "Create isolated venv from pinned base: python3 -m venv .ai-venvs/minimax-h3-sage",
+      "installRecipe": "pip install sageattention==2.1.1 --extra-index-url https://download.pytorch.org/whl/cu124",
+      "teardownRecipe": "Deactivate and remove .ai-venvs/minimax-h3-sage directory; production venv is untouched."
+    },
+    "blockers": [
+      "Target runtime environment not yet inspected for hardware PyTorch/CUDA dispatch verification",
+      "Security review pending"
+    ],
+    "evidence": [
+      {
+        "url": "https://github.com/Comfy-Org/ComfyUI/blob/55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc/comfy/ldm/modules/attention.py",
+        "revision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        "assertion": "Default attention path dispatches to attention_pytorch."
+      }
+    ],
+    "catalogDigest": "7e2bf2b40ead1047d0ac3cd2fa2c4ae7ebb4adcef71809d3c9e5e7ed97a7b128"
+  },
+  {
+    "variantName": "dense",
+    "route": "ref2v",
+    "compatibilityState": "unverified",
+    "scope": "sage-matched-dense-attention-ref2v",
+    "comfyuiCoreRevision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+    "runnable": false,
+    "backend": "torch_sdpa",
+    "kernel": "torch.nn.functional.scaled_dot_product_attention",
+    "requiredNodes": [],
+    "pythonPackages": [
+      {
+        "name": "sageattention",
+        "version": "2.1.1",
+        "importModule": "sageattention"
+      },
+      {
+        "name": "torch",
+        "version": "2.5.1+cu124",
+        "importModule": "torch"
+      }
+    ],
+    "cudaRequirement": ">=12.4",
+    "computeCapability": "sm_89",
+    "supportedDtypes": ["float16", "bfloat16"],
+    "checkpointCompatibility": {
+      "filename": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+      "taskMode": "ref2va_pruned_int8"
+    },
+    "licensing": {
+      "status": "review_required",
+      "licenseSourceRef": "https://github.com/thu-ml/SageAttention/blob/v2.1.1/LICENSE",
+      "securityReviewStatus": "pending"
+    },
+    "denseRegionPolicy": {
+      "allowPlannedDense": true,
+      "description": "Matched dense control in SageAttention isolated venv; executes dense SDPA."
+    },
+    "isolationInstructions": {
+      "venvSetup": "Create isolated venv from pinned base: python3 -m venv .ai-venvs/minimax-h3-sage",
+      "installRecipe": "pip install sageattention==2.1.1 --extra-index-url https://download.pytorch.org/whl/cu124",
+      "teardownRecipe": "Deactivate and remove .ai-venvs/minimax-h3-sage directory; production venv is untouched."
+    },
+    "blockers": [
+      "Target runtime environment not yet inspected for hardware PyTorch/CUDA dispatch verification",
+      "Security review pending"
+    ],
+    "evidence": [
+      {
+        "url": "https://github.com/Comfy-Org/ComfyUI/blob/55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc/comfy/ldm/modules/attention.py",
+        "revision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        "assertion": "Default attention path dispatches to attention_pytorch."
+      }
+    ],
+    "catalogDigest": "75c2ae55ed751d2fd739dd5a6cba93016b91a60b0620d987e85bb96bc3949ecf"
+  },
+  {
+    "variantName": "dense",
+    "route": "i2v",
+    "compatibilityState": "requires_isolated_upgrade",
+    "scope": "sol-attn-matched-dense-attention-i2v",
+    "comfyuiCoreRevision": "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+    "runnable": false,
+    "backend": "torch_sdpa",
+    "kernel": "torch.nn.functional.scaled_dot_product_attention",
+    "requiredNodes": [],
+    "pythonPackages": [
+      {
+        "name": "comfy-kitchen",
+        "version": "0.2.31",
+        "importModule": "comfy_kitchen"
+      },
+      {
+        "name": "torch",
+        "version": "2.5.1+cu124",
+        "importModule": "torch"
+      }
+    ],
+    "cudaRequirement": ">=12.4",
+    "computeCapability": "sm_89",
+    "supportedDtypes": ["float16", "bfloat16"],
+    "checkpointCompatibility": {
+      "filename": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+      "taskMode": "ref2va_pruned_int8"
+    },
+    "licensing": {
+      "status": "review_required",
+      "licenseSourceRef": "https://github.com/Comfy-Org/comfy-kitchen/blob/v0.2.31/LICENSE",
+      "securityReviewStatus": "pending"
+    },
+    "denseRegionPolicy": {
+      "allowPlannedDense": true,
+      "description": "Matched dense control in sol-attn isolated checkout; executes dense SDPA on upgraded core."
+    },
+    "isolationInstructions": {
+      "venvSetup": "Clone ComfyUI at experimental revision 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf into .ai-checkouts/comfyui-sol-attn",
+      "installRecipe": "pip install comfy-kitchen==0.2.31",
+      "teardownRecipe": "Remove .ai-checkouts/comfyui-sol-attn and isolated venv; production checkout remains pinned at 55b6a9b1."
+    },
+    "blockers": [
+      "Target experimental upgrade checkout not yet provisioned",
+      "Security review pending"
+    ],
+    "evidence": [
+      {
+        "url": "https://github.com/Comfy-Org/ComfyUI/blob/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf/comfy/ldm/modules/attention.py",
+        "revision": "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        "assertion": "Default attention path dispatches to attention_pytorch."
+      }
+    ],
+    "catalogDigest": "79d0cb3f2d8d41ded54a9421bb1ef0200fdc0f53d9e08ef3dc5f40027e547439"
+  },
+  {
+    "variantName": "dense",
+    "route": "ref2v",
+    "compatibilityState": "requires_isolated_upgrade",
+    "scope": "sol-attn-matched-dense-attention-ref2v",
+    "comfyuiCoreRevision": "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+    "runnable": false,
+    "backend": "torch_sdpa",
+    "kernel": "torch.nn.functional.scaled_dot_product_attention",
+    "requiredNodes": [],
+    "pythonPackages": [
+      {
+        "name": "comfy-kitchen",
+        "version": "0.2.31",
+        "importModule": "comfy_kitchen"
+      },
+      {
+        "name": "torch",
+        "version": "2.5.1+cu124",
+        "importModule": "torch"
+      }
+    ],
+    "cudaRequirement": ">=12.4",
+    "computeCapability": "sm_89",
+    "supportedDtypes": ["float16", "bfloat16"],
+    "checkpointCompatibility": {
+      "filename": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+      "taskMode": "ref2va_pruned_int8"
+    },
+    "licensing": {
+      "status": "review_required",
+      "licenseSourceRef": "https://github.com/Comfy-Org/comfy-kitchen/blob/v0.2.31/LICENSE",
+      "securityReviewStatus": "pending"
+    },
+    "denseRegionPolicy": {
+      "allowPlannedDense": true,
+      "description": "Matched dense control in sol-attn isolated checkout; executes dense SDPA on upgraded core."
+    },
+    "isolationInstructions": {
+      "venvSetup": "Clone ComfyUI at experimental revision 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf into .ai-checkouts/comfyui-sol-attn",
+      "installRecipe": "pip install comfy-kitchen==0.2.31",
+      "teardownRecipe": "Remove .ai-checkouts/comfyui-sol-attn and isolated venv; production checkout remains pinned at 55b6a9b1."
+    },
+    "blockers": [
+      "Target experimental upgrade checkout not yet provisioned",
+      "Security review pending"
+    ],
+    "evidence": [
+      {
+        "url": "https://github.com/Comfy-Org/ComfyUI/blob/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf/comfy/ldm/modules/attention.py",
+        "revision": "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        "assertion": "Default attention path dispatches to attention_pytorch."
+      }
+    ],
+    "catalogDigest": "dada4caec74ef022b189228031e6753e881237119b54ab326db89bd29a8c1e43"
+  },
+  {
+    "variantName": "dense",
+    "route": "i2v",
+    "compatibilityState": "requires_isolated_upgrade",
+    "scope": "veda-matched-dense-attention-i2v",
+    "comfyuiCoreRevision": "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+    "customNode": {
+      "name": "Veda-on-ComfyUI",
+      "repository": "https://github.com/veda-sparse/Veda-on-ComfyUI",
+      "revision": "67e4eb5541b648555563144401ebaba832bd73ec"
+    },
+    "runnable": false,
+    "backend": "torch_sdpa",
+    "kernel": "torch.nn.functional.scaled_dot_product_attention",
+    "requiredNodes": [],
+    "pythonPackages": [
+      {
+        "name": "torch",
+        "version": "2.5.1+cu124",
+        "importModule": "torch"
+      },
+      {
+        "name": "triton",
+        "version": "3.0.0",
+        "importModule": "triton"
+      }
+    ],
+    "cudaRequirement": ">=12.4",
+    "computeCapability": "sm_89",
+    "supportedDtypes": ["float16", "bfloat16"],
+    "checkpointCompatibility": {
+      "filename": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+      "taskMode": "ref2va_pruned_int8"
+    },
+    "licensing": {
+      "status": "review_required",
+      "licenseSourceRef": "https://github.com/veda-sparse/Veda-on-ComfyUI/blob/67e4eb5541b648555563144401ebaba832bd73ec/LICENSE",
+      "securityReviewStatus": "pending"
+    },
+    "denseRegionPolicy": {
+      "allowPlannedDense": true,
+      "description": "Matched dense control in Veda isolated checkout with Veda-on-ComfyUI and Triton 3.0.0; executes dense SDPA."
+    },
+    "isolationInstructions": {
+      "venvSetup": "Clone Veda into custom_nodes/ of an isolated ComfyUI checkout (revision >= 0.38.0, e.g. 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf).",
+      "installRecipe": "pip install triton==3.0.0",
+      "teardownRecipe": "Remove isolated checkout; release all GPU locks."
+    },
+    "blockers": [
+      "Target experimental upgrade checkout and Veda custom node not yet provisioned",
+      "Security review pending"
+    ],
+    "evidence": [
+      {
+        "url": "https://github.com/Comfy-Org/ComfyUI/blob/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf/comfy/ldm/modules/attention.py",
+        "revision": "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        "assertion": "Default attention path dispatches to attention_pytorch."
+      }
+    ],
+    "catalogDigest": "e39c3406468dbb3da692e98a4c0f5c32af96feb70119597d4d43e39eabe56be4"
+  },
+  {
+    "variantName": "dense",
+    "route": "ref2v",
+    "compatibilityState": "requires_isolated_upgrade",
+    "scope": "veda-matched-dense-attention-ref2v",
+    "comfyuiCoreRevision": "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+    "customNode": {
+      "name": "Veda-on-ComfyUI",
+      "repository": "https://github.com/veda-sparse/Veda-on-ComfyUI",
+      "revision": "67e4eb5541b648555563144401ebaba832bd73ec"
+    },
+    "runnable": false,
+    "backend": "torch_sdpa",
+    "kernel": "torch.nn.functional.scaled_dot_product_attention",
+    "requiredNodes": [],
+    "pythonPackages": [
+      {
+        "name": "torch",
+        "version": "2.5.1+cu124",
+        "importModule": "torch"
+      },
+      {
+        "name": "triton",
+        "version": "3.0.0",
+        "importModule": "triton"
+      }
+    ],
+    "cudaRequirement": ">=12.4",
+    "computeCapability": "sm_89",
+    "supportedDtypes": ["float16", "bfloat16"],
+    "checkpointCompatibility": {
+      "filename": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+      "taskMode": "ref2va_pruned_int8"
+    },
+    "licensing": {
+      "status": "review_required",
+      "licenseSourceRef": "https://github.com/veda-sparse/Veda-on-ComfyUI/blob/67e4eb5541b648555563144401ebaba832bd73ec/LICENSE",
+      "securityReviewStatus": "pending"
+    },
+    "denseRegionPolicy": {
+      "allowPlannedDense": true,
+      "description": "Matched dense control in Veda isolated checkout with Veda-on-ComfyUI and Triton 3.0.0; executes dense SDPA."
+    },
+    "isolationInstructions": {
+      "venvSetup": "Clone Veda into custom_nodes/ of an isolated ComfyUI checkout (revision >= 0.38.0, e.g. 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf).",
+      "installRecipe": "pip install triton==3.0.0",
+      "teardownRecipe": "Remove isolated checkout; release all GPU locks."
+    },
+    "blockers": [
+      "Target experimental upgrade checkout and Veda custom node not yet provisioned",
+      "Security review pending"
+    ],
+    "evidence": [
+      {
+        "url": "https://github.com/Comfy-Org/ComfyUI/blob/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf/comfy/ldm/modules/attention.py",
+        "revision": "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        "assertion": "Default attention path dispatches to attention_pytorch."
+      }
+    ],
+    "catalogDigest": "926b57ee8b1735327b5f58a8e6270b3a5a74a16792b3028329cdfcf340c5274e"
+  }
+]

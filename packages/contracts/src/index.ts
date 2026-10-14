@@ -33,3 +33,4 @@ export * from "./acceptance-campaign.js";
 export * from "./production-inspection.js";
 export * from "./minimax-h3-experiment.js";
 export * from "./minimax-h3-experiment-v2.js";
+export * from "./minimax-h3-attention.js";
