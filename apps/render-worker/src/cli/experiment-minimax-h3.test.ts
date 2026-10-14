@@ -27,12 +27,28 @@ import type {
 } from "@cco/contracts";
 
 const mockI2vTemplate = {
+  "6": {
+    class_type: "UNETLoader",
+    inputs: { unet_name: "minimax_h3_ref2va_pruned_int8_convrot.safetensors" }
+  },
+  "9": {
+    class_type: "BasicScheduler",
+    inputs: { model: ["6", 0], scheduler: "simple", steps: 20 }
+  },
+  "14": {
+    class_type: "SamplerCustomAdvanced",
+    inputs: { guider: ["16", 0], sigmas: ["9", 0], latent_image: ["104", 1] }
+  },
   "15": { class_type: "RandomNoise", inputs: { noise_seed: 0 } },
+  "16": {
+    class_type: "BasicGuider",
+    inputs: { model: ["6", 0], conditioning: ["104", 0] }
+  },
   "20": { class_type: "LoadImage", inputs: { image: "ref.png" } },
   "92": { class_type: "SaveVideo", inputs: { filename_prefix: "minimax_h3_720p_i2v_124f" } },
   "104": {
     class_type: "MiniMaxH3ImageToVideo",
-    inputs: { length: 124, width: 1344, height: 768, prompt: "base" }
+    inputs: { length: 124, width: 1344, height: 768, prompt: "base", first_frame: ["20", 0] }
   }
 };
 
@@ -2221,5 +2237,148 @@ describe("experiment:minimax-h3 CLI", () => {
     const comparison = JSON.parse(stdout[0]!);
     expect(comparison.structuralAdmission.eligible).toBe(false);
     expect(comparison.structuralAdmission.reasons.length).toBeGreaterThan(0);
+  });
+
+  describe("Attention Variant CLI Flags", () => {
+    it("rejects invalid --attention-variant option", async () => {
+      const { deps, stderr } = createMockDeps();
+      const exitCode = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-invalid-attn",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--attention-variant",
+          "invalid-kernel"
+        ],
+        deps
+      );
+      expect(exitCode).toBe(1);
+      expect(
+        stderr.some((e) =>
+          e.includes("--attention-variant must be 'dense', 'sage', 'native-sol-attn', or 'veda'")
+        )
+      ).toBe(true);
+    });
+
+    it("prepares experiment with --attention-variant sage successfully", async () => {
+      const { deps, stdout, store } = createMockDeps();
+      const exitCode = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-sage-attn",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--attention-variant",
+          "sage"
+        ],
+        deps
+      );
+      expect(exitCode).toBe(0);
+      const parsed = JSON.parse(stdout[0]!);
+      expect(parsed.status).toBe("prepared");
+      expect(parsed.runId).toBe("run-sage-attn");
+
+      const desc = store.descriptorsByRunDir.get(parsed.runDir);
+      expect(desc).toBeDefined();
+      expect(desc!.schemaVersion).toBe(2);
+      const descV2 = desc as unknown as {
+        attentionRequest?: { attentionVariant: string };
+        configuredRunner?: { argv?: string[] };
+      };
+      expect(descV2.attentionRequest?.attentionVariant).toBe("sage");
+      expect(descV2.configuredRunner?.argv).toContain("--use-sage-attention");
+    });
+
+    it("prepares and validates experiment with --attention-variant sage with zero errors [F-0e112829]", async () => {
+      const { deps, stdout } = createMockDeps();
+      const prepExit = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-sage-validate",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--attention-variant",
+          "sage"
+        ],
+        deps
+      );
+      expect(prepExit).toBe(0);
+      const parsed = JSON.parse(stdout[0]!);
+      expect(parsed.status).toBe("prepared");
+
+      const valExit = await runExperimentCli(
+        [
+          "validate",
+          "--run-dir",
+          parsed.runDir,
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments"
+        ],
+        deps
+      );
+      expect(valExit).toBe(0);
+      const valOutput = JSON.parse(stdout[1]!);
+      expect(valOutput.status).toBe("valid");
+      expect(valOutput.graphValid).toBe(true);
+      expect(valOutput.runId).toBe("run-sage-validate");
+    });
   });
 });

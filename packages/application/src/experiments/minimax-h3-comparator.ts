@@ -203,6 +203,75 @@ export function compareMinimaxH3Experiments(
     );
   }
 
+  // Attention variant pair admission checks
+  const variantDescV2 = variantDescriptor as Partial<MinimaxH3ExperimentDescriptorV2>;
+  const baselineDescV2 = baselineDescriptor as Partial<MinimaxH3ExperimentDescriptorV2>;
+  if (baselineDescV2.attentionRequest && !variantDescV2.attentionRequest) {
+    admissionReasons.push(
+      "Baseline has an attentionRequest but variant does not. Attention comparisons require both descriptors to specify attention requests."
+    );
+  }
+  if (variantDescV2.attentionRequest) {
+    const varAttn = variantDescV2.attentionRequest.attentionVariant;
+    if (varAttn !== "dense") {
+      if (!baselineDescV2.attentionRequest) {
+        admissionReasons.push(
+          "Attention variant comparisons require an explicit dense baseline attentionRequest with matching runtime substrate."
+        );
+      } else {
+        const baseAttn = baselineDescV2.attentionRequest.attentionVariant;
+        if (baseAttn !== "dense") {
+          admissionReasons.push(
+            `Attention variant comparisons require an untouched dense baseline control. Baseline requested accelerated variant "${baseAttn}".`
+          );
+        }
+        if (
+          variantDescV2.attentionRequest.runtimeLockDigest !==
+          baselineDescV2.attentionRequest.runtimeLockDigest
+        ) {
+          admissionReasons.push(
+            `Runtime lock digest mismatch across attention comparison pair: baseline is "${baselineDescV2.attentionRequest.runtimeLockDigest}", variant is "${variantDescV2.attentionRequest.runtimeLockDigest}". Attention comparison requires identical runtime lock (matched dependency substrate).`
+          );
+        }
+      }
+      const baseCore = baselineDescV2.requiredRuntime?.coreRevision;
+      const varCore = variantDescV2.requiredRuntime?.coreRevision;
+      if (!baseCore || !varCore || baseCore !== varCore) {
+        admissionReasons.push(
+          `Core revision mismatch across attention comparison pair: baseline is "${baseCore}", variant is "${varCore}". Attention comparison requires identical core revision (matched dense substrate).`
+        );
+      }
+    } else {
+      // Both are dense control: require identical coreRevision and identical runtimeLockDigest
+      if (
+        baselineDescV2.attentionRequest &&
+        baselineDescV2.attentionRequest.attentionVariant !== "dense"
+      ) {
+        admissionReasons.push(
+          `Dense control comparison requires baseline to be dense. Baseline requested variant "${baselineDescV2.attentionRequest.attentionVariant}".`
+        );
+      }
+      if (
+        baselineDescV2.attentionRequest?.attentionVariant === "dense" &&
+        variantDescV2.attentionRequest.runtimeLockDigest !==
+          baselineDescV2.attentionRequest.runtimeLockDigest
+      ) {
+        admissionReasons.push(
+          `Runtime lock digest mismatch across dense control pair: baseline is "${baselineDescV2.attentionRequest.runtimeLockDigest}", variant is "${variantDescV2.attentionRequest.runtimeLockDigest}".`
+        );
+      }
+      if (
+        baselineDescV2.requiredRuntime?.coreRevision &&
+        variantDescV2.requiredRuntime?.coreRevision &&
+        variantDescV2.requiredRuntime.coreRevision !== baselineDescV2.requiredRuntime.coreRevision
+      ) {
+        admissionReasons.push(
+          `Core revision mismatch across dense control pair: baseline is "${baselineDescV2.requiredRuntime.coreRevision}", variant is "${variantDescV2.requiredRuntime.coreRevision}".`
+        );
+      }
+    }
+  }
+
   const isEligible = admissionReasons.length === 0;
 
   // Metric eligibility (KTD5, KTD5a - Witness F1)
@@ -221,7 +290,7 @@ export function compareMinimaxH3Experiments(
     );
   }
 
-  const wallTimeEligible = isEligible && baselineExecuted && variantExecuted;
+  let wallTimeEligible = isEligible && baselineExecuted && variantExecuted;
   let samplingWallEligible = false;
   let kernelTimeEligible = false;
 
@@ -258,31 +327,153 @@ export function compareMinimaxH3Experiments(
         "Prompt-conditioning variation: duration and sampling timings are valid_comparable; exact output hash and token counts are non_comparable."
       );
     }
+
+    // Attention variant verification
+    if (variantDescV2.attentionRequest) {
+      const varResV2 = variantResult as Partial<MinimaxH3ExperimentResultV2>;
+      const obs = varResV2.attentionObservation;
+      const expectedBackend = variantDescV2.attentionRequest.expectedBackend;
+      const expectedKernel = variantDescV2.attentionRequest.expectedKernel;
+      const isAccelerated = variantDescV2.attentionRequest.attentionVariant !== "dense";
+      const baseResV2 = baselineResult as Partial<MinimaxH3ExperimentResultV2>;
+      const baseObs = baseResV2.attentionObservation;
+      let attentionValid = true;
+
+      // Verify baseline attention observation
+      if (!baseObs) {
+        metricReasons.push(
+          "Baseline result lacks attention observation evidence. A verified baseline execution is required for attention comparison."
+        );
+        attentionValid = false;
+      } else if (baseObs.status !== "verified") {
+        metricReasons.push(
+          `Baseline dense control observation was not verified (status: "${baseObs.status}"). Speedup metrics disqualified.`
+        );
+        attentionValid = false;
+      } else if (baseObs.denseCallCount === 0) {
+        metricReasons.push(
+          "Baseline observed 0 dense attention calls during sampling. Speedup metrics disqualified."
+        );
+        attentionValid = false;
+      } else if (baseObs.fallbackEvents.length > 0) {
+        metricReasons.push(
+          `Baseline experienced attention fallback (${baseObs.fallbackEvents.length} event(s)). Speedup metrics disqualified.`
+        );
+        attentionValid = false;
+      } else if (!baseObs.measurementCoverage?.complete) {
+        metricReasons.push(
+          "Baseline attention measurement coverage is incomplete. Speedup metrics disqualified."
+        );
+        attentionValid = false;
+      }
+
+      const baseExpectedBackend = baselineDescV2.attentionRequest?.expectedBackend ?? "torch_sdpa";
+      const baseExpectedKernel =
+        baselineDescV2.attentionRequest?.expectedKernel ??
+        "torch.nn.functional.scaled_dot_product_attention";
+      if (baseObs?.actualBackend && baseObs.actualBackend !== baseExpectedBackend) {
+        metricReasons.push(
+          `Baseline observed attention backend "${baseObs.actualBackend}" does not match expected "${baseExpectedBackend}". Speedup metrics disqualified.`
+        );
+        attentionValid = false;
+      }
+      if (
+        baseObs?.dispatchImplementation &&
+        baseObs.dispatchImplementation !== baseExpectedKernel
+      ) {
+        metricReasons.push(
+          `Baseline observed dispatch implementation "${baseObs.dispatchImplementation}" does not match expected "${baseExpectedKernel}". Speedup metrics disqualified.`
+        );
+        attentionValid = false;
+      }
+
+      if (!obs) {
+        metricReasons.push(
+          "Variant result lacks verified attention observation evidence. Historical data or uninstrumented runs cannot support a speedup claim."
+        );
+        attentionValid = false;
+      } else {
+        if (obs.status !== "verified") {
+          metricReasons.push(
+            `Variant requested attention backend "${expectedBackend}" but observed status was "${obs.status}" (${obs.failureReason ?? "unverified"}). Speedup metrics disqualified.`
+          );
+          attentionValid = false;
+        }
+        if (obs.actualBackend && obs.actualBackend !== expectedBackend) {
+          metricReasons.push(
+            `Observed attention backend "${obs.actualBackend}" does not match requested expectedBackend "${expectedBackend}". Speedup metrics disqualified.`
+          );
+          attentionValid = false;
+        }
+        if (obs.dispatchImplementation && obs.dispatchImplementation !== expectedKernel) {
+          metricReasons.push(
+            `Observed dispatch implementation "${obs.dispatchImplementation}" does not match requested expectedKernel "${expectedKernel}". Speedup metrics disqualified.`
+          );
+          attentionValid = false;
+        }
+        if (isAccelerated && obs.status === "verified" && obs.acceleratedCallCount === 0) {
+          metricReasons.push(
+            `Variant observed 0 accelerated attention calls during sampling (undetected no-op). Speedup metrics disqualified.`
+          );
+          attentionValid = false;
+        }
+        if (obs.fallbackEvents.length > 0) {
+          metricReasons.push(
+            `Variant experienced attention fallback during attention dispatch (${obs.fallbackEvents.length} fallback event(s)). Speedup metrics disqualified.`
+          );
+          attentionValid = false;
+        }
+        if (obs.missingKernelFailure !== null && obs.missingKernelFailure !== undefined) {
+          metricReasons.push(
+            `Variant experienced missing kernel failure: ${obs.missingKernelFailure}. Speedup metrics disqualified.`
+          );
+          attentionValid = false;
+        }
+        if (!obs.measurementCoverage?.complete) {
+          metricReasons.push(
+            "Variant attention measurement coverage is incomplete. Speedup metrics disqualified."
+          );
+          attentionValid = false;
+        }
+      }
+
+      if (!attentionValid) {
+        wallTimeEligible = false;
+        samplingWallEligible = false;
+        kernelTimeEligible = false;
+      }
+    }
   }
 
   // Calculate metric values
   let metrics: MinimaxH3ComparisonReport["metrics"] = null;
-  if (isEligible && (wallTimeEligible || samplingWallEligible)) {
+  if (isEligible && (wallTimeEligible || samplingWallEligible || kernelTimeEligible)) {
     const baselineWallMs =
       baselineResult.execution.latencyMs ?? baselinePhase?.wholeAttemptWallMs ?? null;
     const variantWallMs =
       variantResult.execution.latencyMs ?? variantPhase?.wholeAttemptWallMs ?? null;
     const wallRatio =
-      baselineWallMs !== null && variantWallMs !== null && baselineWallMs > 0
+      wallTimeEligible && baselineWallMs !== null && variantWallMs !== null && baselineWallMs > 0
         ? Number((variantWallMs / baselineWallMs).toFixed(4))
         : null;
 
     const baselineSamplingMs = baselinePhase?.samplingWallTimeMs ?? null;
     const variantSamplingMs = variantPhase?.samplingWallTimeMs ?? null;
     const samplingRatio =
-      baselineSamplingMs !== null && variantSamplingMs !== null && baselineSamplingMs > 0
+      samplingWallEligible &&
+      baselineSamplingMs !== null &&
+      variantSamplingMs !== null &&
+      baselineSamplingMs > 0
         ? Number((variantSamplingMs / baselineSamplingMs).toFixed(4))
         : null;
 
     const baselineKernelMs = baselinePhase?.gpuKernelTimeMs ?? null;
     const variantKernelMs = variantPhase?.gpuKernelTimeMs ?? null;
     const kernelRatio =
-      baselineKernelMs !== null && variantKernelMs !== null && baselineKernelMs > 0
+      kernelTimeEligible &&
+      baselineKernelMs !== null &&
+      variantKernelMs !== null &&
+      baselineKernelMs > 0
         ? Number((variantKernelMs / baselineKernelMs).toFixed(4))
         : null;
 

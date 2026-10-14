@@ -3,6 +3,7 @@ import { compareMinimaxH3Experiments } from "./minimax-h3-comparator.js";
 import {
   PINNED_H3_CHECKPOINTS,
   createEmptyMinimaxH3MeasurementTemplateV2,
+  computeAttentionRuntimeLockDigest,
   type MinimaxH3ExperimentDescriptorV2,
   type MinimaxH3ExperimentResultV2
 } from "@cco/contracts";
@@ -276,6 +277,29 @@ function createCompletedResultV2(
       wholeAttemptWallMs: 420000,
       samplingWallTimeMs: 380000
     },
+    attentionObservation:
+      descriptor.attentionRequest?.attentionVariant === "dense"
+        ? {
+            status: "verified",
+            actualBackend: "torch_sdpa",
+            dispatchImplementation: "torch.nn.functional.scaled_dot_product_attention",
+            acceleratedCallCount: 0,
+            denseCallCount: 40,
+            plannedDenseCallCount: 0,
+            fallbackEvents: [],
+            failureReason: null,
+            missingKernelFailure: null,
+            measurementCoverage: {
+              samplingCallsRecorded: 1,
+              attentionCallsRecorded: 40,
+              complete: true
+            },
+            timings: {
+              deviceElapsedMs: null,
+              kernelElapsedMs: null
+            }
+          }
+        : undefined,
     ...overrides
   };
 }
@@ -520,6 +544,834 @@ describe("MinimaxH3Comparator", () => {
         report.metricEligibility.reasons.some((r) => r.includes("did not complete successfully"))
       ).toBe(true);
       expect(report.metrics).toBeNull();
+    });
+  });
+
+  describe("Attention Optimization Experiments & Invariants", () => {
+    it("requires baseline to be dense control when comparing an accelerated attention variant", () => {
+      const baselineDesc = createTestDescriptorV2({
+        runId: "base-sage",
+        attentionRequest: {
+          attentionVariant: "sage",
+          expectedBackend: "sage",
+          expectedKernel: "sageattention.sageattn",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_1,
+          patches: [],
+          runtimeLockDigest: DUMMY_HASH_2,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+      const baselineResult = createCompletedResultV2(baselineDesc);
+
+      const candidateDesc = createTestDescriptorV2({
+        runId: "cand-sol-attn",
+        attentionRequest: {
+          attentionVariant: "native-sol-attn",
+          expectedBackend: "sol_attn",
+          expectedKernel: "sol_attn",
+          topologyDigest: DUMMY_HASH_3,
+          catalogDigest: DUMMY_HASH_3,
+          patches: [],
+          runtimeLockDigest: DUMMY_HASH_4,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+      const candidateResult = createCompletedResultV2(candidateDesc);
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baselineDesc,
+        baselineResult,
+        variantDescriptor: candidateDesc,
+        variantResult: candidateResult
+      });
+
+      expect(report.structuralAdmission.eligible).toBe(false);
+      expect(
+        report.structuralAdmission.reasons.some((r) =>
+          r.includes("require an untouched dense baseline control")
+        )
+      ).toBe(true);
+    });
+
+    it("disqualifies samplingWallEligible and kernelTimeEligible if candidate experienced fallback", () => {
+      const baselineDesc = createTestDescriptorV2({
+        runId: "base-dense",
+        attentionRequest: {
+          attentionVariant: "dense",
+          expectedBackend: "torch_sdpa",
+          expectedKernel: "torch.nn.functional.scaled_dot_product_attention",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_1,
+          patches: [],
+          runtimeLockDigest: DUMMY_HASH_2,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+      const baselineResult = createCompletedResultV2(baselineDesc);
+
+      const candidateDesc = createTestDescriptorV2({
+        runId: "cand-sage-fallback",
+        attentionRequest: {
+          attentionVariant: "sage",
+          expectedBackend: "sage",
+          expectedKernel: "sageattention.sageattn",
+          topologyDigest: DUMMY_HASH_3,
+          catalogDigest: DUMMY_HASH_3,
+          patches: [],
+          runtimeLockDigest: DUMMY_HASH_2,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+      const candidateResult = createCompletedResultV2(candidateDesc, {
+        observedProvenance: {
+          ...baselineResult.observedProvenance,
+          observedAttentionBackend: {
+            status: "fallback",
+            effectiveBackend: "torch_sdpa",
+            dispatchImplementation: "torch.nn.functional.scaled_dot_product_attention",
+            unknownReason: "Mask unsupported"
+          }
+        },
+        attentionObservation: {
+          status: "fallback",
+          actualBackend: "torch_sdpa",
+          dispatchImplementation: "torch.nn.functional.scaled_dot_product_attention",
+          acceleratedCallCount: 0,
+          denseCallCount: 40,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [
+            {
+              stepIndex: 0,
+              layerIndex: null,
+              requestedBackend: "sage",
+              fallbackBackend: "torch_sdpa",
+              reason: "Mask unsupported",
+              monotonicMs: 1234.5
+            }
+          ],
+          failureReason: "Fallback occurred",
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: {
+            deviceElapsedMs: null,
+            kernelElapsedMs: null
+          }
+        }
+      });
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baselineDesc,
+        baselineResult,
+        variantDescriptor: candidateDesc,
+        variantResult: candidateResult
+      });
+
+      expect(report.metricEligibility.wallTimeEligible).toBe(false);
+      expect(report.metricEligibility.samplingWallEligible).toBe(false);
+      expect(report.metricEligibility.kernelTimeEligible).toBe(false);
+      expect(report.metricEligibility.reasons.some((r) => r.includes("fallback"))).toBe(true);
+      expect(report.metrics).toBeNull();
+    });
+
+    it("admits clean accelerated candidate against dense control baseline with matched runtime locks", () => {
+      const baselineDesc = createTestDescriptorV2({
+        runId: "base-dense-clean",
+        attentionRequest: {
+          attentionVariant: "dense",
+          expectedBackend: "torch_sdpa",
+          expectedKernel: "torch.nn.functional.scaled_dot_product_attention",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_1,
+          patches: [],
+          runtimeLockDigest: DUMMY_HASH_2,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+      const baselineResult = createCompletedResultV2(baselineDesc);
+
+      const candidateDesc = createTestDescriptorV2({
+        runId: "cand-sage-clean",
+        attentionRequest: {
+          attentionVariant: "sage",
+          expectedBackend: "sage",
+          expectedKernel: "sageattention.sageattn",
+          topologyDigest: DUMMY_HASH_3,
+          catalogDigest: DUMMY_HASH_3,
+          patches: [],
+          runtimeLockDigest: DUMMY_HASH_2,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+      const candidateResult = createCompletedResultV2(candidateDesc, {
+        observedProvenance: {
+          ...baselineResult.observedProvenance,
+          observedAttentionBackend: {
+            status: "verified",
+            effectiveBackend: "sage",
+            dispatchImplementation: "sageattention.sageattn"
+          }
+        },
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "sage",
+          dispatchImplementation: "sageattention.sageattn",
+          acceleratedCallCount: 40,
+          denseCallCount: 0,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: {
+            deviceElapsedMs: null,
+            kernelElapsedMs: null
+          }
+        }
+      });
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baselineDesc,
+        baselineResult,
+        variantDescriptor: candidateDesc,
+        variantResult: candidateResult
+      });
+
+      expect(report.structuralAdmission.eligible).toBe(true);
+      expect(report.metricEligibility.wallTimeEligible).toBe(true);
+      expect(report.metricEligibility.samplingWallEligible).toBe(true);
+    });
+
+    it("rejects attention comparison when runtimeLockDigest differs across pair", () => {
+      const baselineDesc = createTestDescriptorV2({
+        runId: "base-dense",
+        attentionRequest: {
+          attentionVariant: "dense",
+          expectedBackend: "torch_sdpa",
+          expectedKernel: "torch.nn.functional.scaled_dot_product_attention",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_1,
+          patches: [],
+          runtimeLockDigest: DUMMY_HASH_1,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+      const baselineResult = createCompletedResultV2(baselineDesc);
+
+      const candidateDesc = createTestDescriptorV2({
+        runId: "cand-sage",
+        attentionRequest: {
+          attentionVariant: "sage",
+          expectedBackend: "sage",
+          expectedKernel: "sageattention.sageattn",
+          topologyDigest: DUMMY_HASH_2,
+          catalogDigest: DUMMY_HASH_2,
+          patches: [],
+          runtimeLockDigest: DUMMY_HASH_3,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+      const candidateResult = createCompletedResultV2(candidateDesc);
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baselineDesc,
+        baselineResult,
+        variantDescriptor: candidateDesc,
+        variantResult: candidateResult
+      });
+
+      expect(report.structuralAdmission.eligible).toBe(false);
+      expect(
+        report.structuralAdmission.reasons.some((r) => r.includes("Runtime lock digest mismatch"))
+      ).toBe(true);
+    });
+
+    it("rejects attention comparison when coreRevision differs across pair", () => {
+      const baseTemplate = createTestDescriptorV2();
+      const baselineDesc = createTestDescriptorV2({
+        runId: "base-dense-pinned",
+        requiredRuntime: {
+          ...baseTemplate.requiredRuntime,
+          coreRevision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+        },
+        attentionRequest: {
+          attentionVariant: "dense",
+          expectedBackend: "torch_sdpa",
+          expectedKernel: "torch.nn.functional.scaled_dot_product_attention",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_1,
+          patches: [],
+          runtimeLockDigest: DUMMY_HASH_2,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+      const baselineResult = createCompletedResultV2(baselineDesc);
+
+      const candidateDesc = createTestDescriptorV2({
+        runId: "cand-sol-attn-upgraded",
+        requiredRuntime: {
+          ...baseTemplate.requiredRuntime,
+          coreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf"
+        },
+        attentionRequest: {
+          attentionVariant: "native-sol-attn",
+          expectedBackend: "sol_attn",
+          expectedKernel: "sol_attn",
+          topologyDigest: DUMMY_HASH_3,
+          catalogDigest: DUMMY_HASH_3,
+          patches: [],
+          runtimeLockDigest: DUMMY_HASH_2,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+      const candidateResult = createCompletedResultV2(candidateDesc);
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baselineDesc,
+        baselineResult,
+        variantDescriptor: candidateDesc,
+        variantResult: candidateResult
+      });
+
+      expect(report.structuralAdmission.eligible).toBe(false);
+      expect(
+        report.structuralAdmission.reasons.some((r) => r.includes("Core revision mismatch"))
+      ).toBe(true);
+    });
+
+    it("disqualifies metrics when baseline has unverified attention observation", () => {
+      const baselineDesc = createTestDescriptorV2({
+        runId: "base-dense",
+        attentionRequest: {
+          attentionVariant: "dense",
+          expectedBackend: "torch_sdpa",
+          expectedKernel: "torch.nn.functional.scaled_dot_product_attention",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_1,
+          patches: [],
+          runtimeLockDigest: DUMMY_HASH_2,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+      const baselineResult = createCompletedResultV2(baselineDesc, {
+        attentionObservation: {
+          status: "unknown",
+          actualBackend: null,
+          dispatchImplementation: null,
+          acceleratedCallCount: 0,
+          denseCallCount: 0,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: "No events",
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 0,
+            attentionCallsRecorded: 0,
+            complete: false
+          },
+          timings: {
+            deviceElapsedMs: null,
+            kernelElapsedMs: null
+          }
+        }
+      });
+
+      const candidateDesc = createTestDescriptorV2({
+        runId: "cand-sage-clean",
+        attentionRequest: {
+          attentionVariant: "sage",
+          expectedBackend: "sage",
+          expectedKernel: "sageattention.sageattn",
+          topologyDigest: DUMMY_HASH_3,
+          catalogDigest: DUMMY_HASH_3,
+          patches: [],
+          runtimeLockDigest: DUMMY_HASH_2,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+      const candidateResult = createCompletedResultV2(candidateDesc, {
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "sage",
+          dispatchImplementation: "sageattention.sageattn",
+          acceleratedCallCount: 40,
+          denseCallCount: 0,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: {
+            deviceElapsedMs: null,
+            kernelElapsedMs: null
+          }
+        }
+      });
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baselineDesc,
+        baselineResult,
+        variantDescriptor: candidateDesc,
+        variantResult: candidateResult
+      });
+
+      expect(report.structuralAdmission.eligible).toBe(true);
+      expect(report.metricEligibility.wallTimeEligible).toBe(false);
+      expect(
+        report.metricEligibility.reasons.some((r) =>
+          r.includes("Baseline dense control observation was not verified")
+        )
+      ).toBe(true);
+    });
+
+    it("disqualifies metrics when candidate experienced attention fallback", () => {
+      const baselineDesc = createTestDescriptorV2({
+        runId: "base-dense-valid",
+        attentionRequest: {
+          attentionVariant: "dense",
+          expectedBackend: "torch_sdpa",
+          expectedKernel: "torch.nn.functional.scaled_dot_product_attention",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_1,
+          patches: [],
+          runtimeLockDigest: DUMMY_HASH_2,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+      const baselineResult = createCompletedResultV2(baselineDesc, {
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "torch_sdpa",
+          dispatchImplementation: "torch.nn.functional.scaled_dot_product_attention",
+          acceleratedCallCount: 0,
+          denseCallCount: 40,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const candidateDesc = createTestDescriptorV2({
+        runId: "cand-sage-fallback",
+        attentionRequest: {
+          attentionVariant: "sage",
+          expectedBackend: "sage",
+          expectedKernel: "sageattention.sageattn",
+          topologyDigest: DUMMY_HASH_3,
+          catalogDigest: DUMMY_HASH_3,
+          patches: [],
+          runtimeLockDigest: DUMMY_HASH_2,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+      const candidateResult = createCompletedResultV2(candidateDesc, {
+        attentionObservation: {
+          status: "fallback",
+          actualBackend: "sage",
+          dispatchImplementation: "sageattention.sageattn",
+          acceleratedCallCount: 30,
+          denseCallCount: 10,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [
+            {
+              stepIndex: 5,
+              layerIndex: 1,
+              requestedBackend: "sage",
+              fallbackBackend: "torch_sdpa",
+              reason: "CUDA out of memory in Sage kernel",
+              monotonicMs: 1000
+            }
+          ],
+          failureReason: "attention_fallback_detected",
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baselineDesc,
+        baselineResult,
+        variantDescriptor: candidateDesc,
+        variantResult: candidateResult
+      });
+
+      expect(report.structuralAdmission.eligible).toBe(true);
+      expect(report.metricEligibility.wallTimeEligible).toBe(false);
+      expect(report.metricEligibility.samplingWallEligible).toBe(false);
+      expect(report.metricEligibility.kernelTimeEligible).toBe(false);
+      expect(report.metrics).toBeNull();
+      expect(
+        report.metricEligibility.reasons.some((r) => r.includes("experienced attention fallback"))
+      ).toBe(true);
+    });
+
+    it("disqualifies metrics when candidate has missing kernel failure", () => {
+      const baselineDesc = createTestDescriptorV2({
+        runId: "base-dense-valid",
+        attentionRequest: {
+          attentionVariant: "dense",
+          expectedBackend: "torch_sdpa",
+          expectedKernel: "torch.nn.functional.scaled_dot_product_attention",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_1,
+          patches: [],
+          runtimeLockDigest: DUMMY_HASH_2,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+      const baselineResult = createCompletedResultV2(baselineDesc, {
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "torch_sdpa",
+          dispatchImplementation: "torch.nn.functional.scaled_dot_product_attention",
+          acceleratedCallCount: 0,
+          denseCallCount: 40,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const candidateDesc = createTestDescriptorV2({
+        runId: "cand-sol-missing-kernel",
+        attentionRequest: {
+          attentionVariant: "native-sol-attn",
+          expectedBackend: "sol_attn",
+          expectedKernel: "sol_attn",
+          topologyDigest: DUMMY_HASH_3,
+          catalogDigest: DUMMY_HASH_3,
+          patches: [],
+          runtimeLockDigest: DUMMY_HASH_2,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+      const candidateResult = createCompletedResultV2(candidateDesc, {
+        attentionObservation: {
+          status: "failed",
+          actualBackend: null,
+          dispatchImplementation: null,
+          acceleratedCallCount: 0,
+          denseCallCount: 0,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: "missing_kernel",
+          missingKernelFailure: "sol_attn kernel not compiled",
+          measurementCoverage: {
+            samplingCallsRecorded: 0,
+            attentionCallsRecorded: 0,
+            complete: false
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baselineDesc,
+        baselineResult,
+        variantDescriptor: candidateDesc,
+        variantResult: candidateResult
+      });
+
+      expect(report.metricEligibility.wallTimeEligible).toBe(false);
+      expect(report.metrics).toBeNull();
+      expect(
+        report.metricEligibility.reasons.some((r) => r.includes("missing kernel failure"))
+      ).toBe(true);
+    });
+
+    it("disqualifies metrics when candidate observed dispatchImplementation does not match expectedKernel", () => {
+      const baselineDesc = createTestDescriptorV2({
+        runId: "base-dense-valid",
+        attentionRequest: {
+          attentionVariant: "dense",
+          expectedBackend: "torch_sdpa",
+          expectedKernel: "torch.nn.functional.scaled_dot_product_attention",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_1,
+          patches: [],
+          runtimeLockDigest: DUMMY_HASH_2,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+      const baselineResult = createCompletedResultV2(baselineDesc, {
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "torch_sdpa",
+          dispatchImplementation: "torch.nn.functional.scaled_dot_product_attention",
+          acceleratedCallCount: 0,
+          denseCallCount: 40,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const candidateDesc = createTestDescriptorV2({
+        runId: "cand-sage-wrong-kernel",
+        attentionRequest: {
+          attentionVariant: "sage",
+          expectedBackend: "sage",
+          expectedKernel: "sageattention.sageattn",
+          topologyDigest: DUMMY_HASH_3,
+          catalogDigest: DUMMY_HASH_3,
+          patches: [],
+          runtimeLockDigest: DUMMY_HASH_2,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+      const candidateResult = createCompletedResultV2(candidateDesc, {
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "sage",
+          dispatchImplementation: "unexpected.custom.kernel",
+          acceleratedCallCount: 40,
+          denseCallCount: 0,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baselineDesc,
+        baselineResult,
+        variantDescriptor: candidateDesc,
+        variantResult: candidateResult
+      });
+
+      expect(report.metricEligibility.wallTimeEligible).toBe(false);
+      expect(report.metrics).toBeNull();
+      expect(
+        report.metricEligibility.reasons.some((r) =>
+          r.includes("does not match requested expectedKernel")
+        )
+      ).toBe(true);
+    });
+
+    it("admits matched dense control vs SageAttention with identical runtimeLockDigest", () => {
+      const sagePackages = [
+        { name: "sageattention", version: "2.1.1", importModule: "sageattention" },
+        { name: "torch", version: "2.5.1+cu124", importModule: "torch" }
+      ];
+      const sageRuntimeLock = computeAttentionRuntimeLockDigest({
+        comfyuiCoreRevision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        pythonPackages: sagePackages,
+        cudaRequirement: ">=12.4",
+        computeCapability: "sm_89"
+      });
+
+      const baselineDesc = createTestDescriptorV2({
+        runId: "base-sage-matched-dense",
+        requiredRuntime: {
+          coreRevision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+          sourceFileHashes: {},
+          requiredNodes: [{ name: "MiniMaxH3ImageToVideo" }],
+          pythonPackages: sagePackages,
+          pytorchBuild: "2.5.1+cu124",
+          cudaBuild: "12.4",
+          driverConstraints: [">=550.00"],
+          attentionKernel: "torch_sdpa",
+          instrumentationProtocol: "v2-jsonl",
+          collectorDigest: DUMMY_HASH_1,
+          hookManifestDigest: DUMMY_HASH_2,
+          hooks: []
+        },
+        attentionRequest: {
+          attentionVariant: "dense",
+          expectedBackend: "torch_sdpa",
+          expectedKernel: "torch.nn.functional.scaled_dot_product_attention",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_1,
+          patches: [],
+          runtimeLockDigest: sageRuntimeLock,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+
+      const baselineResult = createCompletedResultV2(baselineDesc, {
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "torch_sdpa",
+          dispatchImplementation: "torch.nn.functional.scaled_dot_product_attention",
+          acceleratedCallCount: 0,
+          denseCallCount: 40,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const candidateDesc = createTestDescriptorV2({
+        runId: "cand-sage-matched",
+        requiredRuntime: {
+          coreRevision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+          sourceFileHashes: {},
+          requiredNodes: [{ name: "MiniMaxH3ImageToVideo" }],
+          pythonPackages: sagePackages,
+          pytorchBuild: "2.5.1+cu124",
+          cudaBuild: "12.4",
+          driverConstraints: [">=550.00"],
+          attentionKernel: "sageattention.sageattn",
+          instrumentationProtocol: "v2-jsonl",
+          collectorDigest: DUMMY_HASH_1,
+          hookManifestDigest: DUMMY_HASH_2,
+          hooks: []
+        },
+        attentionRequest: {
+          attentionVariant: "sage",
+          expectedBackend: "sage",
+          expectedKernel: "sageattention.sageattn",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_3,
+          patches: [],
+          runtimeLockDigest: sageRuntimeLock,
+          denseRegionPolicy: { allowPlannedDense: false, description: "policy" }
+        }
+      });
+
+      const candidateResult = createCompletedResultV2(candidateDesc, {
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "sage",
+          dispatchImplementation: "sageattention.sageattn",
+          acceleratedCallCount: 40,
+          denseCallCount: 0,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baselineDesc,
+        baselineResult,
+        variantDescriptor: candidateDesc,
+        variantResult: candidateResult
+      });
+
+      expect(report.structuralAdmission.eligible).toBe(true);
+      expect(report.structuralAdmission.reasons).toHaveLength(0);
+    });
+
+    it("rejects comparison pair when baseline runtimeLockDigest does not match candidate runtimeLockDigest", () => {
+      const pureTorchLock = computeAttentionRuntimeLockDigest({
+        comfyuiCoreRevision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        pythonPackages: [{ name: "torch", version: "2.5.1+cu124", importModule: "torch" }],
+        cudaRequirement: ">=12.4",
+        computeCapability: "sm_89"
+      });
+      const sageRuntimeLock = computeAttentionRuntimeLockDigest({
+        comfyuiCoreRevision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        pythonPackages: [
+          { name: "sageattention", version: "2.1.1", importModule: "sageattention" },
+          { name: "torch", version: "2.5.1+cu124", importModule: "torch" }
+        ],
+        cudaRequirement: ">=12.4",
+        computeCapability: "sm_89"
+      });
+
+      const baselineDesc = createTestDescriptorV2({
+        runId: "base-pure-torch-dense",
+        attentionRequest: {
+          attentionVariant: "dense",
+          expectedBackend: "torch_sdpa",
+          expectedKernel: "torch.nn.functional.scaled_dot_product_attention",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_1,
+          patches: [],
+          runtimeLockDigest: pureTorchLock,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+      const baselineResult = createCompletedResultV2(baselineDesc);
+
+      const candidateDesc = createTestDescriptorV2({
+        runId: "cand-sage-mismatched-lock",
+        attentionRequest: {
+          attentionVariant: "sage",
+          expectedBackend: "sage",
+          expectedKernel: "sageattention.sageattn",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_3,
+          patches: [],
+          runtimeLockDigest: sageRuntimeLock,
+          denseRegionPolicy: { allowPlannedDense: false, description: "policy" }
+        }
+      });
+      const candidateResult = createCompletedResultV2(candidateDesc);
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baselineDesc,
+        baselineResult,
+        variantDescriptor: candidateDesc,
+        variantResult: candidateResult
+      });
+
+      expect(report.structuralAdmission.eligible).toBe(false);
+      expect(
+        report.structuralAdmission.reasons.some((r) =>
+          r.includes("Runtime lock digest mismatch across attention comparison pair")
+        )
+      ).toBe(true);
     });
   });
 });

@@ -417,7 +417,10 @@ export class MinimaxH3TargetPreflight implements MinimaxH3TargetPreflightPort {
     });
   }
 
-  async verifyCheckout(comfyUiDir: string): Promise<{
+  async verifyCheckout(
+    comfyUiDir: string,
+    expectedRevision: string = PINNED_COMFYUI_CORE_REVISION
+  ): Promise<{
     ok: boolean;
     revision: string;
     nodesPresent: boolean;
@@ -444,12 +447,12 @@ export class MinimaxH3TargetPreflight implements MinimaxH3TargetPreflightPort {
       };
     }
 
-    if (revision !== PINNED_COMFYUI_CORE_REVISION) {
+    if (revision !== expectedRevision) {
       return {
         ok: false,
         revision,
         nodesPresent: false,
-        blocker: `ComfyUI checkout revision mismatch: expected ${PINNED_COMFYUI_CORE_REVISION}, got ${revision}`
+        blocker: `ComfyUI checkout revision mismatch: expected ${expectedRevision}, got ${revision}`
       };
     }
 
@@ -521,29 +524,31 @@ export class MinimaxH3TargetPreflight implements MinimaxH3TargetPreflightPort {
       };
     }
 
-    if (cliArgsSha256 !== PINNED_COMFYUI_SOURCE_HASHES.cliArgsSha256) {
-      return {
-        ok: false,
-        revision,
-        nodesPresent: true,
-        blocker: `comfy/cli_args.py SHA-256 hash mismatch: expected ${PINNED_COMFYUI_SOURCE_HASHES.cliArgsSha256}, got ${cliArgsSha256}`
-      };
-    }
-    if (mainSha256 !== PINNED_COMFYUI_SOURCE_HASHES.mainSha256) {
-      return {
-        ok: false,
-        revision,
-        nodesPresent: true,
-        blocker: `main.py SHA-256 hash mismatch: expected ${PINNED_COMFYUI_SOURCE_HASHES.mainSha256}, got ${mainSha256}`
-      };
-    }
-    if (modelManagementSha256 !== PINNED_COMFYUI_SOURCE_HASHES.modelManagementSha256) {
-      return {
-        ok: false,
-        revision,
-        nodesPresent: true,
-        blocker: `comfy/model_management.py SHA-256 hash mismatch: expected ${PINNED_COMFYUI_SOURCE_HASHES.modelManagementSha256}, got ${modelManagementSha256}`
-      };
+    if (expectedRevision === PINNED_COMFYUI_CORE_REVISION) {
+      if (cliArgsSha256 !== PINNED_COMFYUI_SOURCE_HASHES.cliArgsSha256) {
+        return {
+          ok: false,
+          revision,
+          nodesPresent: true,
+          blocker: `comfy/cli_args.py SHA-256 hash mismatch: expected ${PINNED_COMFYUI_SOURCE_HASHES.cliArgsSha256}, got ${cliArgsSha256}`
+        };
+      }
+      if (mainSha256 !== PINNED_COMFYUI_SOURCE_HASHES.mainSha256) {
+        return {
+          ok: false,
+          revision,
+          nodesPresent: true,
+          blocker: `main.py SHA-256 hash mismatch: expected ${PINNED_COMFYUI_SOURCE_HASHES.mainSha256}, got ${mainSha256}`
+        };
+      }
+      if (modelManagementSha256 !== PINNED_COMFYUI_SOURCE_HASHES.modelManagementSha256) {
+        return {
+          ok: false,
+          revision,
+          nodesPresent: true,
+          blocker: `comfy/model_management.py SHA-256 hash mismatch: expected ${PINNED_COMFYUI_SOURCE_HASHES.modelManagementSha256}, got ${modelManagementSha256}`
+        };
+      }
     }
 
     return {
@@ -760,6 +765,7 @@ export class MinimaxH3TargetPreflight implements MinimaxH3TargetPreflightPort {
     pythonPath: string;
     requiredRuntime: MinimaxH3RequiredRuntimeManifest;
     requiredRuntimeDigest: string;
+    expectedCheckpointHash?: string;
   }): Promise<ExperimentRuntimeVerificationResult> {
     return this.runtimeRegistry.verify(options);
   }

@@ -1,0 +1,28 @@
+{
+  "repository": "https://github.com/veda-sparse/Veda-on-ComfyUI",
+  "revision": "67e4eb5541b648555563144401ebaba832bd73ec",
+  "nodeId": "VedaSparseAttention",
+  "classType": "VedaSparseAttention",
+  "sourceFile": "veda_comfy/nodes.py",
+  "sourceLines": "137-189",
+  "inputSignature": {
+    "required": {
+      "model": ["MODEL"],
+      "predictor": ["COMBO"],
+      "generated_sparsity": [
+        "STRING",
+        { "default": "<DEFAULT_BUDGET, not independently audited>" }
+      ],
+      "reference_sparsity": [
+        "STRING",
+        { "default": "<DEFAULT_BUDGET, not independently audited>" }
+      ],
+      "full_attention_layers": ["STRING", { "default": "" }],
+      "full_attention_steps": ["STRING", { "default": "" }],
+      "verbose": ["BOOLEAN", { "default": false }]
+    }
+  },
+  "returnTypes": ["MODEL"],
+  "category": "model/patch/minimax",
+  "notes": "Corrected against the pinned node's own define_schema(). The prior version of this fixture declared a fabricated 'sparse_ratio: FLOAT' field that does not exist in the upstream schema. generated_sparsity/reference_sparsity actual default comes from the module-private veda_settings.DEFAULT_BUDGET constant, which this audit has not independently inspected; this fixture intentionally does not guess that value."
+}
