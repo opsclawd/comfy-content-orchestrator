@@ -8,6 +8,7 @@ import {
 } from "./render-profile.js";
 
 export const PINNED_COMFYUI_CORE_REVISION = "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc";
+export const FASTH3_ISOLATED_CORE_REVISION = "ee71d5c4993f29086b27fde1629a945ae48425bf";
 
 export const PINNED_COMFYUI_SOURCE_HASHES = Object.freeze({
   cliArgsSha256: "139324c0ed7d0f70431a097032fec6fbe34e8b26f42d896e5364704b139defe8",
@@ -241,7 +242,9 @@ export const MinimaxH3ConfiguredRunnerPolicySchema = z
       .object({
         cliArgsSha256: sha256HashSchema,
         mainSha256: sha256HashSchema,
-        modelManagementSha256: sha256HashSchema
+        modelManagementSha256: sha256HashSchema,
+        nodesMinimaxH3Sha256: sha256HashSchema.optional(),
+        nodesPySha256: sha256HashSchema.optional()
       })
       .strict()
   })

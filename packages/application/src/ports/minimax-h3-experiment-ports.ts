@@ -14,7 +14,8 @@ import type {
   MinimaxH3PhaseAccountingEvent,
   MinimaxH3RequiredRuntimeManifest,
   MinimaxH3ObservedProvenance,
-  MinimaxH3AttentionVariantName
+  MinimaxH3AttentionVariantName,
+  MinimaxH3SamplingRecipeName
 } from "@cco/contracts";
 
 export interface MinimaxH3ExperimentStorePort {
@@ -292,4 +293,5 @@ export interface PrepareMinimaxH3ExperimentOptions {
   attentionVariant?: MinimaxH3AttentionVariantName;
   coreRevision?: string;
   matchedVariant?: MinimaxH3AttentionVariantName;
+  samplingRecipe?: MinimaxH3SamplingRecipeName;
 }

@@ -286,25 +286,48 @@ export function reducePhaseAccounting(
 
     if (phase === "sampling") {
       const stepSpans = phaseSpans.get("sampling_step") ?? [];
-      const steps: MinimaxH3StepRecord[] = stepSpans
-        .filter((s) => s.stepIndex !== undefined)
+      const seenStepIndices = new Set<number>();
+      const dedupedSpans: typeof stepSpans = [];
+      for (const s of stepSpans) {
+        if (s.stepIndex !== undefined) {
+          if (seenStepIndices.has(s.stepIndex)) {
+            inconsistencies.push(`Duplicate sampling_step detected for stepIndex ${s.stepIndex}`);
+            continue;
+          }
+          seenStepIndices.add(s.stepIndex);
+          dedupedSpans.push(s);
+        }
+      }
+      const steps: MinimaxH3StepRecord[] = dedupedSpans
         .sort((a, b) => (a.stepIndex ?? 0) - (b.stepIndex ?? 0))
-        .map((s) => ({
-          stepIndex: s.stepIndex!,
-          startMs: s.startMs,
-          endMs: s.endMs,
-          durationMs: s.durationMs,
-          status: s.outcome === "failed" ? ("unknown" as const) : ("measured" as const),
-          unknownReason: s.outcome === "failed" ? "step_failed" : null
-        }));
+        .map((s) => {
+          const isUnknown = s.outcome === "failed" || s.durationMs === 0;
+          return {
+            stepIndex: s.stepIndex!,
+            startMs: s.startMs,
+            endMs: s.endMs,
+            durationMs: s.durationMs,
+            status: isUnknown ? ("unknown" as const) : ("measured" as const),
+            unknownReason:
+              s.outcome === "failed"
+                ? "step_failed"
+                : s.durationMs === 0
+                  ? "no_reliable_start_boundary"
+                  : null
+          };
+        });
 
       record.stepCount = steps.length;
       record.steps = steps;
 
-      if (declaredSteps !== undefined && steps.length < declaredSteps) {
+      if (declaredSteps !== undefined && steps.length !== declaredSteps) {
         inconsistencies.push(
-          `Observed step count (${steps.length}) is less than declared steps (${declaredSteps})`
+          `Observed step count (${steps.length}) does not match declared steps (${declaredSteps})`
         );
+        record.status = "unknown";
+        record.durationMs = null;
+        record.unknownReason =
+          steps.length < declaredSteps ? "incomplete_sampling_steps" : "excess_sampling_steps";
       }
     }
 

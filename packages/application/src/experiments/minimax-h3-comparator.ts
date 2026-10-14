@@ -1,7 +1,9 @@
 import {
   MinimaxH3ComparisonReportSchema,
   computeInvariantProjectionKey,
+  computeAttentionTopologyDigest,
   PINNED_H3_CHECKPOINTS,
+  PINNED_COMFYUI_CORE_REVISION,
   type MinimaxH3AnyExperimentDescriptor,
   type MinimaxH3AnyExperimentResult,
   type MinimaxH3ComparisonReport,
@@ -29,10 +31,22 @@ export function compareMinimaxH3Experiments(
     (variantDescriptor as Partial<MinimaxH3ExperimentDescriptorV2>).experimentVariant?.purpose ??
     "performance";
 
+  const baselineDescV2 = baselineDescriptor as Partial<MinimaxH3ExperimentDescriptorV2>;
+  const variantDescV2 = variantDescriptor as Partial<MinimaxH3ExperimentDescriptorV2>;
+
   const declaredFactorChanges: MinimaxH3FactorChange[] =
-    (variantDescriptor as Partial<MinimaxH3ExperimentDescriptorV2>).experimentVariant
-      ?.changedFactors ?? [];
+    variantDescV2.experimentVariant?.changedFactors ?? [];
   const declaredPaths = declaredFactorChanges.map((f) => f.path);
+
+  if (
+    variantDescV2.attentionRequest &&
+    (!baselineDescV2.attentionRequest ||
+      variantDescV2.attentionRequest.attentionVariant !==
+        baselineDescV2.attentionRequest.attentionVariant) &&
+    !declaredPaths.includes("attention.configuration")
+  ) {
+    declaredPaths.push("attention.configuration");
+  }
 
   const admissionReasons: string[] = [];
   const operationalDifferences: Array<{
@@ -144,6 +158,29 @@ export function compareMinimaxH3Experiments(
     }
   }
 
+  const baselineAuxiliary = baselineDescV2.samplingRecipe?.lora
+    ? [
+        {
+          name: baselineDescV2.samplingRecipe.lora.filename,
+          hash: baselineDescV2.samplingRecipe.lora.sha256,
+          strength: baselineDescV2.samplingRecipe.lora.strengthModel,
+          role: "lora",
+          order: 0
+        }
+      ]
+    : undefined;
+  const baselineSigmaShift = baselineDescV2.samplingRecipe?.sigmaShift ?? undefined;
+  const baselineAttentionDigest =
+    baselineDescV2.attentionRequest?.topologyDigest ??
+    baselineDescV2.samplingRecipe?.attentionTopology?.topologyDigest;
+
+  const baselineRuntimeManifestDigest =
+    baselineDescV2.compatibility?.relativeToRuntimeManifestDigest ??
+    (variantDescV2.requiredRuntime?.coreRevision === PINNED_COMFYUI_CORE_REVISION ||
+    variantDescV2.provenance?.comfyuiCoreRevision === PINNED_COMFYUI_CORE_REVISION
+      ? variantDescV2.compatibility?.relativeToRuntimeManifestDigest
+      : undefined);
+
   // Calculate invariant projection key for pair admission
   const baselineKey = computeInvariantProjectionKey({
     route: baselineDescriptor.route,
@@ -157,12 +194,40 @@ export function compareMinimaxH3Experiments(
     positivePromptText: baselineDescriptor.prompt,
     references: baselineDescriptor.references,
     diffusionModelFileHash:
-      (baselineDescriptor as Partial<MinimaxH3ExperimentDescriptorV2>).provenance
-        ?.actualCheckpointHash ?? PINNED_H3_CHECKPOINTS.ref2va.sha256,
-    samplerSettings: (baselineDescriptor as Partial<MinimaxH3ExperimentDescriptorV2>).provenance
-      ?.samplerSettings ?? { sampler: "res_multistep", scheduler: "simple", steps: 20 },
-    memoryPolicy: baselineDescriptor.requestedRunner.memoryPolicy
+      baselineDescV2.provenance?.actualCheckpointHash ?? PINNED_H3_CHECKPOINTS.ref2va.sha256,
+    samplerSettings: baselineDescV2.provenance?.samplerSettings ?? {
+      sampler: "res_multistep",
+      scheduler: "simple",
+      steps: 20
+    },
+    memoryPolicy: baselineDescriptor.requestedRunner.memoryPolicy,
+    ...(baselineAuxiliary ? { auxiliaryModels: baselineAuxiliary } : {}),
+    ...(baselineSigmaShift ? { sigmaShift: baselineSigmaShift } : {}),
+    ...(baselineAttentionDigest ? { attentionTopologyDigest: baselineAttentionDigest } : {}),
+    coreRevision:
+      baselineDescV2.provenance?.comfyuiCoreRevision ??
+      baselineDescV2.requiredRuntime?.coreRevision ??
+      PINNED_COMFYUI_CORE_REVISION,
+    ...(baselineRuntimeManifestDigest
+      ? { runtimeManifestDigest: baselineRuntimeManifestDigest }
+      : {})
   });
+
+  const variantAuxiliary = variantDescV2.samplingRecipe?.lora
+    ? [
+        {
+          name: variantDescV2.samplingRecipe.lora.filename,
+          hash: variantDescV2.samplingRecipe.lora.sha256,
+          strength: variantDescV2.samplingRecipe.lora.strengthModel,
+          role: "lora",
+          order: 0
+        }
+      ]
+    : undefined;
+  const variantSigmaShift = variantDescV2.samplingRecipe?.sigmaShift ?? undefined;
+  const variantAttentionDigest =
+    variantDescV2.attentionRequest?.topologyDigest ??
+    variantDescV2.samplingRecipe?.attentionTopology?.topologyDigest;
 
   const variantKey = computeInvariantProjectionKey({
     route: variantDescriptor.route,
@@ -176,17 +241,274 @@ export function compareMinimaxH3Experiments(
     positivePromptText: variantDescriptor.prompt,
     references: variantDescriptor.references,
     diffusionModelFileHash:
-      (variantDescriptor as Partial<MinimaxH3ExperimentDescriptorV2>).provenance
-        ?.actualCheckpointHash ?? PINNED_H3_CHECKPOINTS.ref2va.sha256,
-    samplerSettings: (variantDescriptor as Partial<MinimaxH3ExperimentDescriptorV2>).provenance
-      ?.samplerSettings ?? { sampler: "res_multistep", scheduler: "simple", steps: 20 },
-    memoryPolicy: variantDescriptor.requestedRunner.memoryPolicy
+      variantDescV2.provenance?.actualCheckpointHash ?? PINNED_H3_CHECKPOINTS.ref2va.sha256,
+    samplerSettings: variantDescV2.provenance?.samplerSettings ?? {
+      sampler: "res_multistep",
+      scheduler: "simple",
+      steps: 20
+    },
+    memoryPolicy: variantDescriptor.requestedRunner.memoryPolicy,
+    ...(variantAuxiliary ? { auxiliaryModels: variantAuxiliary } : {}),
+    ...(variantSigmaShift ? { sigmaShift: variantSigmaShift } : {}),
+    ...(variantAttentionDigest ? { attentionTopologyDigest: variantAttentionDigest } : {}),
+    coreRevision:
+      variantDescV2.provenance?.comfyuiCoreRevision ??
+      variantDescV2.requiredRuntime?.coreRevision ??
+      PINNED_COMFYUI_CORE_REVISION,
+    ...(variantDescV2.compatibility?.relativeToRuntimeManifestDigest
+      ? { runtimeManifestDigest: variantDescV2.compatibility.relativeToRuntimeManifestDigest }
+      : {})
   });
 
   if (baselineKey !== variantKey) {
     admissionReasons.push(
       "Invariant projection keys do not match across controlled baseline and variant."
     );
+  }
+
+  // Validate declared factor changes before/after against actual descriptors
+  for (const factor of declaredFactorChanges) {
+    if (factor.path === "sampling.settings") {
+      const baseSettings = baselineDescV2.provenance?.samplerSettings;
+      const varSettings = variantDescV2.provenance?.samplerSettings;
+      const beforeObj = factor.before as { sampler?: string; scheduler?: string; steps?: number };
+      const afterObj = factor.after as { sampler?: string; scheduler?: string; steps?: number };
+      const beforeMatch =
+        !baseSettings ||
+        (beforeObj.sampler === baseSettings.sampler &&
+          beforeObj.scheduler === baseSettings.scheduler &&
+          beforeObj.steps === baseSettings.steps);
+      const afterMatch =
+        !varSettings ||
+        (afterObj.sampler === varSettings.sampler &&
+          afterObj.scheduler === varSettings.scheduler &&
+          afterObj.steps === varSettings.steps);
+      if (!beforeMatch || !afterMatch) {
+        admissionReasons.push(
+          `Declared factor "sampling.settings" before/after does not match actual descriptor sampler settings.`
+        );
+      }
+    } else if (factor.path === "models.diffusion") {
+      const baseHash = baselineDescV2.provenance?.actualCheckpointHash;
+      const varHash = variantDescV2.provenance?.actualCheckpointHash;
+      const beforeObj = factor.before as { fileHash?: string };
+      const afterObj = factor.after as { fileHash?: string };
+      const beforeMatch = !baseHash || beforeObj.fileHash === baseHash;
+      const afterMatch = !varHash || afterObj.fileHash === varHash;
+      if (!beforeMatch || !afterMatch) {
+        admissionReasons.push(
+          `Declared factor "models.diffusion" before/after does not match actual descriptor checkpoint hashes.`
+        );
+      }
+    } else if (factor.path === "runtime.manifest") {
+      const baseDigest = baselineDescV2.compatibility?.relativeToRuntimeManifestDigest;
+      const varDigest = variantDescV2.compatibility?.relativeToRuntimeManifestDigest;
+      const beforeObj = factor.before as { runtimeManifestDigest?: string };
+      const afterObj = factor.after as { runtimeManifestDigest?: string };
+      const beforeMatch = !baseDigest || beforeObj.runtimeManifestDigest === baseDigest;
+      const afterMatch = !varDigest || afterObj.runtimeManifestDigest === varDigest;
+      if (!beforeMatch || !afterMatch) {
+        admissionReasons.push(
+          `Declared factor "runtime.manifest" before/after does not match actual descriptor runtime manifest digests.`
+        );
+      }
+    } else if (factor.path === "attention.configuration") {
+      const baseBackend =
+        baselineDescV2.provenance?.requestedAttentionBackend ??
+        baselineDescV2.samplingRecipe?.attentionTopology?.backend ??
+        baselineDescV2.attentionRequest?.expectedBackend ??
+        "torch_sdpa";
+      const varBackend =
+        variantDescV2.provenance?.requestedAttentionBackend ??
+        variantDescV2.samplingRecipe?.attentionTopology?.backend ??
+        variantDescV2.attentionRequest?.expectedBackend ??
+        "torch_sdpa";
+      const baseTopologyDigest =
+        baselineDescV2.samplingRecipe?.attentionTopology?.topologyDigest ??
+        baselineDescV2.attentionRequest?.topologyDigest ??
+        computeAttentionTopologyDigest([]);
+      const varTopologyDigest =
+        variantDescV2.samplingRecipe?.attentionTopology?.topologyDigest ??
+        variantDescV2.attentionRequest?.topologyDigest ??
+        computeAttentionTopologyDigest([]);
+      const beforeObj = factor.before as {
+        backend?: string;
+        topologyDigest?: string;
+        patches?: string[];
+      };
+      const afterObj = factor.after as {
+        backend?: string;
+        topologyDigest?: string;
+        patches?: string[];
+      };
+      const beforeMatch =
+        !baseBackend ||
+        beforeObj.backend === baseBackend ||
+        (baseBackend === "default" && beforeObj.backend === "torch_sdpa");
+      const afterMatch =
+        !varBackend ||
+        afterObj.backend === varBackend ||
+        (varBackend === "default" && afterObj.backend === "torch_sdpa");
+      if (!beforeMatch || !afterMatch) {
+        admissionReasons.push(
+          `Declared factor "attention.configuration" before/after does not match actual descriptor attention backend.`
+        );
+      }
+      if (
+        beforeObj.topologyDigest !== undefined &&
+        baselineDescV2.samplingRecipe?.attentionTopology &&
+        beforeObj.topologyDigest !== baseTopologyDigest
+      ) {
+        admissionReasons.push(
+          `Declared factor "attention.configuration" before topologyDigest does not match actual baseline topology.`
+        );
+      }
+      if (
+        afterObj.topologyDigest !== undefined &&
+        variantDescV2.samplingRecipe?.attentionTopology &&
+        afterObj.topologyDigest !== varTopologyDigest
+      ) {
+        admissionReasons.push(
+          `Declared factor "attention.configuration" after topologyDigest does not match actual variant topology.`
+        );
+      }
+      if (Array.isArray(beforeObj.patches) && beforeObj.patches.length > 0) {
+        const expectedBasePatches =
+          baselineDescV2.samplingRecipe?.attentionTopology?.patches.map((p) => p.classType) ?? [];
+        if (
+          beforeObj.patches.length !== expectedBasePatches.length ||
+          !beforeObj.patches.every((p, idx) => p === expectedBasePatches[idx])
+        ) {
+          admissionReasons.push(
+            `Declared factor "attention.configuration" before patches does not match baseline topology patches.`
+          );
+        }
+      }
+      if (Array.isArray(afterObj.patches) && afterObj.patches.length > 0) {
+        const expectedVarPatches =
+          variantDescV2.samplingRecipe?.attentionTopology?.patches.map((p) => p.classType) ??
+          variantDescV2.attentionRequest?.patches?.map((p) => p.classType) ??
+          [];
+        if (
+          afterObj.patches.length !== expectedVarPatches.length ||
+          !afterObj.patches.every((p, idx) => p === expectedVarPatches[idx])
+        ) {
+          admissionReasons.push(
+            `Declared factor "attention.configuration" after patches does not match variant topology patches.`
+          );
+        }
+      }
+    } else if (factor.path === "models.auxiliary") {
+      const baseLora = baselineDescV2.samplingRecipe?.lora;
+      const varLora = variantDescV2.samplingRecipe?.lora;
+      const beforeList = factor.before as
+        | Array<{ hash?: string; name?: string; strength?: number; order?: number }>
+        | null
+        | undefined;
+      const afterList = factor.after as
+        | Array<{ hash?: string; name?: string; strength?: number; order?: number }>
+        | null
+        | undefined;
+      if (baseLora) {
+        if (!Array.isArray(beforeList) || beforeList.length !== 1) {
+          admissionReasons.push(
+            `Declared factor "models.auxiliary" before must contain exactly one LoRA matching baseline.`
+          );
+        } else {
+          const entry = beforeList[0];
+          if (
+            !entry ||
+            entry.hash !== baseLora.sha256 ||
+            (entry.strength !== undefined && entry.strength !== baseLora.strengthModel) ||
+            (entry.order !== undefined && entry.order !== 0)
+          ) {
+            admissionReasons.push(
+              `Declared factor "models.auxiliary" before does not match baseline recipe LoRA attributes (hash, strength, order).`
+            );
+          }
+        }
+      } else if (Array.isArray(beforeList) && beforeList.length > 0) {
+        admissionReasons.push(
+          `Declared factor "models.auxiliary" before must be empty when baseline has no LoRA.`
+        );
+      }
+      if (varLora) {
+        if (!Array.isArray(afterList) || afterList.length !== 1) {
+          admissionReasons.push(
+            `Declared factor "models.auxiliary" after must contain exactly one LoRA matching variant.`
+          );
+        } else {
+          const entry = afterList[0];
+          if (
+            !entry ||
+            entry.hash !== varLora.sha256 ||
+            (entry.strength !== undefined && entry.strength !== varLora.strengthModel) ||
+            (entry.order !== undefined && entry.order !== 0)
+          ) {
+            admissionReasons.push(
+              `Declared factor "models.auxiliary" after does not match variant recipe LoRA attributes (hash, strength, order).`
+            );
+          }
+        }
+      } else if (Array.isArray(afterList) && afterList.length > 0) {
+        admissionReasons.push(
+          `Declared factor "models.auxiliary" after must be empty when variant has no LoRA.`
+        );
+      }
+    } else if (factor.path === "sampling.sigmaShift") {
+      const baseShift = baselineDescV2.samplingRecipe?.sigmaShift;
+      const varShift = variantDescV2.samplingRecipe?.sigmaShift;
+      const beforeObj = factor.before as
+        | {
+            enabled?: boolean;
+            videoShift?: number;
+            audioShift?: number;
+          }
+        | null
+        | undefined;
+      const afterObj = factor.after as
+        | {
+            enabled?: boolean;
+            videoShift?: number;
+            audioShift?: number;
+          }
+        | null
+        | undefined;
+
+      if (baseShift) {
+        if (
+          !beforeObj ||
+          beforeObj.enabled !== baseShift.enabled ||
+          beforeObj.videoShift !== baseShift.videoShift ||
+          beforeObj.audioShift !== baseShift.audioShift
+        ) {
+          admissionReasons.push(
+            `Declared factor "sampling.sigmaShift" before does not match baseline recipe sigmaShift.`
+          );
+        }
+      } else if (beforeObj && beforeObj.enabled === true) {
+        admissionReasons.push(
+          `Declared factor "sampling.sigmaShift" before must not be enabled when baseline has no sigmaShift.`
+        );
+      }
+
+      if (varShift) {
+        if (
+          !afterObj ||
+          afterObj.enabled !== varShift.enabled ||
+          afterObj.videoShift !== varShift.videoShift ||
+          afterObj.audioShift !== varShift.audioShift
+        ) {
+          admissionReasons.push(
+            `Declared factor "sampling.sigmaShift" after does not match variant recipe sigmaShift.`
+          );
+        }
+      } else if (afterObj && afterObj.enabled === true) {
+        admissionReasons.push(
+          `Declared factor "sampling.sigmaShift" after must not be enabled when variant has no sigmaShift.`
+        );
+      }
+    }
   }
 
   // Runtime compatibility verification (Witness F2)
@@ -204,8 +526,6 @@ export function compareMinimaxH3Experiments(
   }
 
   // Attention variant pair admission checks
-  const variantDescV2 = variantDescriptor as Partial<MinimaxH3ExperimentDescriptorV2>;
-  const baselineDescV2 = baselineDescriptor as Partial<MinimaxH3ExperimentDescriptorV2>;
   if (baselineDescV2.attentionRequest && !variantDescV2.attentionRequest) {
     admissionReasons.push(
       "Baseline has an attentionRequest but variant does not. Attention comparisons require both descriptors to specify attention requests."
@@ -297,14 +617,14 @@ export function compareMinimaxH3Experiments(
   const baselinePhase = (baselineResult as Partial<MinimaxH3ExperimentResultV2>).phaseAccounting;
   const variantPhase = (variantResult as Partial<MinimaxH3ExperimentResultV2>).phaseAccounting;
 
-  if (wallTimeEligible) {
+  if (baselineExecuted && variantExecuted) {
     if (
       baselinePhase?.samplingWallTimeMs !== null &&
       baselinePhase?.samplingWallTimeMs !== undefined &&
       variantPhase?.samplingWallTimeMs !== null &&
       variantPhase?.samplingWallTimeMs !== undefined
     ) {
-      samplingWallEligible = true;
+      samplingWallEligible = isEligible;
     } else {
       metricReasons.push("Sampling phase wall time was not measured in one or both runs.");
     }
@@ -315,7 +635,7 @@ export function compareMinimaxH3Experiments(
       variantPhase?.gpuKernelTimeMs !== null &&
       variantPhase?.gpuKernelTimeMs !== undefined
     ) {
-      kernelTimeEligible = true;
+      kernelTimeEligible = isEligible;
     } else {
       metricReasons.push(
         "GPU kernel profiling time was not recorded (profiler inactive or unsupported)."
@@ -326,6 +646,100 @@ export function compareMinimaxH3Experiments(
       metricReasons.push(
         "Prompt-conditioning variation: duration and sampling timings are valid_comparable; exact output hash and token counts are non_comparable."
       );
+    }
+
+    // Require verified observed sampling, conditioning, and attention
+    // Require verified observed sampling, conditioning, and attention
+    if (variantDescV2.samplingRecipe || baselineDescV2.samplingRecipe) {
+      if (!variantProv?.observedSampling || variantProv.observedSampling.status !== "verified") {
+        metricReasons.push(
+          `Variant observed sampling was not verified (status: "${variantProv?.observedSampling?.status ?? "missing"}"). Speedup metrics disqualified for step-reduction experiment.`
+        );
+        samplingWallEligible = false;
+        wallTimeEligible = false;
+        kernelTimeEligible = false;
+      }
+      if (
+        !variantProv?.observedConditioning ||
+        variantProv.observedConditioning.status !== "verified"
+      ) {
+        metricReasons.push(
+          `Variant observed conditioning was not verified (status: "${variantProv?.observedConditioning?.status ?? "missing"}"). Speedup metrics disqualified for step-reduction experiment.`
+        );
+        samplingWallEligible = false;
+        wallTimeEligible = false;
+        kernelTimeEligible = false;
+      }
+      if (variantDescV2.samplingRecipe?.attentionTopology) {
+        if (
+          !variantProv?.observedAttentionBackend ||
+          variantProv.observedAttentionBackend.status !== "verified"
+        ) {
+          metricReasons.push(
+            `Variant observed attention backend was not verified (status: "${variantProv?.observedAttentionBackend?.status ?? "missing"}"). Speedup metrics disqualified for FastH3 step-reduction experiment.`
+          );
+          samplingWallEligible = false;
+          wallTimeEligible = false;
+          kernelTimeEligible = false;
+        }
+        const varAttnObs = (variantResult as Partial<MinimaxH3ExperimentResultV2>)
+          ?.attentionObservation;
+        if (!varAttnObs || varAttnObs.status !== "verified") {
+          metricReasons.push(
+            `Variant attention observation was not verified (status: "${varAttnObs?.status ?? "missing"}"). Speedup metrics disqualified for FastH3 step-reduction experiment.`
+          );
+          samplingWallEligible = false;
+          wallTimeEligible = false;
+          kernelTimeEligible = false;
+        }
+      }
+      if (!baselineProv?.observedSampling || baselineProv.observedSampling.status !== "verified") {
+        metricReasons.push(
+          `Baseline observed sampling was not verified (status: "${baselineProv?.observedSampling?.status ?? "missing"}"). Speedup metrics disqualified for step-reduction experiment.`
+        );
+        samplingWallEligible = false;
+        wallTimeEligible = false;
+        kernelTimeEligible = false;
+      }
+      if (
+        !baselineProv?.observedConditioning ||
+        baselineProv.observedConditioning.status !== "verified"
+      ) {
+        metricReasons.push(
+          `Baseline observed conditioning was not verified (status: "${baselineProv?.observedConditioning?.status ?? "missing"}"). Speedup metrics disqualified for step-reduction experiment.`
+        );
+        samplingWallEligible = false;
+        wallTimeEligible = false;
+        kernelTimeEligible = false;
+      }
+    }
+    if (baselineProv?.observedSampling?.status === "conflict") {
+      metricReasons.push(`Baseline observed sampling had conflicts. Speedup metrics disqualified.`);
+      samplingWallEligible = false;
+      wallTimeEligible = false;
+      kernelTimeEligible = false;
+    }
+    if (variantProv?.observedSampling?.status === "conflict") {
+      metricReasons.push(`Variant observed sampling had conflicts. Speedup metrics disqualified.`);
+      samplingWallEligible = false;
+      wallTimeEligible = false;
+      kernelTimeEligible = false;
+    }
+    if (baselineProv?.observedConditioning?.status === "conflict") {
+      metricReasons.push(
+        `Baseline observed conditioning had conflicts. Speedup metrics disqualified.`
+      );
+      samplingWallEligible = false;
+      wallTimeEligible = false;
+      kernelTimeEligible = false;
+    }
+    if (variantProv?.observedConditioning?.status === "conflict") {
+      metricReasons.push(
+        `Variant observed conditioning had conflicts. Speedup metrics disqualified.`
+      );
+      samplingWallEligible = false;
+      wallTimeEligible = false;
+      kernelTimeEligible = false;
     }
 
     // Attention variant verification

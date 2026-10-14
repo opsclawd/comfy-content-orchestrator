@@ -1,5 +1,8 @@
 import { basename, isAbsolute, relative, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { execSync } from "node:child_process";
+import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import {
   runExperimentCli,
   parseArgs,
@@ -9,6 +12,7 @@ import {
   MinimaxH3ExperimentService,
   canonicalizeJson,
   sha256Hex,
+  getAttentionCatalogEntry,
   type MinimaxH3ComfyUiTransportPort,
   type MinimaxH3ExperimentStorePort,
   type MinimaxH3OutputProberPort,
@@ -16,15 +20,22 @@ import {
   type MinimaxH3TargetPreflightPort,
   type MinimaxH3TelemetrySamplerPort
 } from "@cco/application";
-import type {
-  MinimaxH3ExperimentEvent,
-  MinimaxH3ExperimentIntent,
-  MinimaxH3ExperimentReceipt,
-  MinimaxH3ExperimentResult,
-  MinimaxH3TelemetrySample,
-  MinimaxH3AnyExperimentDescriptor,
-  MinimaxH3AnyExperimentResult
+import {
+  PINNED_COMFYUI_CORE_REVISION,
+  buildRequiredRuntimeManifestFromAttentionCatalog,
+  type MinimaxH3ExperimentEvent,
+  type MinimaxH3ExperimentIntent,
+  type MinimaxH3ExperimentReceipt,
+  type MinimaxH3ExperimentResult,
+  type MinimaxH3TelemetrySample,
+  type MinimaxH3AnyExperimentDescriptor,
+  type MinimaxH3AnyExperimentResult
 } from "@cco/contracts";
+import {
+  CurrentPinExperimentRuntimeAdapter,
+  IsolatedUpgradeExperimentRuntimeAdapter,
+  ExperimentRuntimeRegistry
+} from "@cco/infrastructure";
 
 const mockI2vTemplate = {
   "6": {
@@ -2380,5 +2391,484 @@ describe("experiment:minimax-h3 CLI", () => {
       expect(valOutput.graphValid).toBe(true);
       expect(valOutput.runId).toBe("run-sage-validate");
     });
+  });
+
+  describe("Sampling Recipe CLI Flags", () => {
+    it("lists all recipes with catalog --recipes", async () => {
+      const { deps, stdout } = createMockDeps();
+      const exitCode = await runExperimentCli(["catalog", "--recipes"], deps);
+      expect(exitCode).toBe(0);
+      const parsed = JSON.parse(stdout[0]!);
+      expect(Array.isArray(parsed)).toBe(true);
+      expect(parsed).toHaveLength(5);
+      const names = parsed.map((r: { name: string }) => r.name);
+      expect(names).toContain("canonical-base-20");
+      expect(names).toContain("fl2va-base-20");
+      expect(names).toContain("fl2va-turbo-8");
+      expect(names).toContain("ref2va-turbo-4");
+      expect(names).toContain("fasth3-i2v-8");
+    });
+
+    it("filters recipes by route with catalog --recipes --route ref2v", async () => {
+      const { deps, stdout } = createMockDeps();
+      const exitCode = await runExperimentCli(["catalog", "--recipes", "--route", "ref2v"], deps);
+      expect(exitCode).toBe(0);
+      const parsed = JSON.parse(stdout[0]!);
+      expect(Array.isArray(parsed)).toBe(true);
+      const names = parsed.map((r: { name: string }) => r.name);
+      expect(names).toContain("canonical-base-20");
+      expect(names).toContain("ref2va-turbo-4");
+      expect(names).not.toContain("fl2va-turbo-8");
+      expect(names).not.toContain("fasth3-i2v-8");
+    });
+
+    it("rejects invalid --sampling-recipe option", async () => {
+      const { deps, stderr } = createMockDeps();
+      const exitCode = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-bad-recipe",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--sampling-recipe",
+          "non-existent"
+        ],
+        deps
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr[0]).toContain('Unknown --sampling-recipe "non-existent"');
+    });
+
+    it("rejects --step-override when combined with --sampling-recipe", async () => {
+      const { deps, stderr } = createMockDeps();
+      const exitCode = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-conflict",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--sampling-recipe",
+          "fl2va-turbo-8",
+          "--step-override",
+          "20"
+        ],
+        deps
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr[0]).toContain(
+        "Cannot specify --step-override when using a distillation --sampling-recipe"
+      );
+    });
+
+    it("rejects route incompatibility (e.g. fasth3-i2v-8 on ref2v route)", async () => {
+      const { deps, stderr } = createMockDeps();
+      const exitCode = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "ref2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-incompat-route",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--sampling-recipe",
+          "fasth3-i2v-8"
+        ],
+        deps
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr[0]).toContain(
+        "FastH3 8-step is strictly restricted to I2V / frame-anchored route; Ref2V is rejected"
+      );
+    });
+
+    it("prepares and validates experiment with --sampling-recipe fl2va-turbo-8", async () => {
+      const { deps, stdout } = createMockDeps();
+      const prepExit = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-fl2va-turbo-8",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--sampling-recipe",
+          "fl2va-turbo-8"
+        ],
+        deps
+      );
+      expect(prepExit).toBe(0);
+      const parsed = JSON.parse(stdout[0]!);
+      expect(parsed.status).toBe("prepared");
+
+      const valExit = await runExperimentCli(
+        [
+          "validate",
+          "--run-dir",
+          parsed.runDir,
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments"
+        ],
+        deps
+      );
+      expect(valExit).toBe(0);
+      const valOutput = JSON.parse(stdout[1]!);
+      expect(valOutput.status).toBe("valid");
+      expect(valOutput.graphValid).toBe(true);
+    });
+
+    it("prepares and validates experiment with --sampling-recipe fasth3-i2v-8", async () => {
+      const { deps, stdout } = createMockDeps();
+      const prepExit = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-fasth3-i2v-8",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--sampling-recipe",
+          "fasth3-i2v-8"
+        ],
+        deps
+      );
+      expect(prepExit).toBe(0);
+      const parsed = JSON.parse(stdout[0]!);
+      expect(parsed.status).toBe("prepared");
+
+      const valExit = await runExperimentCli(
+        [
+          "validate",
+          "--run-dir",
+          parsed.runDir,
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments"
+        ],
+        deps
+      );
+      expect(valExit).toBe(0);
+      const valOutput = JSON.parse(stdout[1]!);
+      expect(valOutput.status).toBe("valid");
+      expect(valOutput.graphValid).toBe(true);
+    });
+  });
+});
+
+describe("MiniMax-H3 Real Attention Catalog Runtime Manifest Verification (F-6d0e1377)", () => {
+  const mockRootDir = path.resolve(".ai-tmp/test-cli-runtime-mock");
+  const mockComfyDir = path.join(mockRootDir, "comfyui-pinned");
+  const mockUpgradeComfyDir = path.join(mockRootDir, "comfyui-upgrade");
+  const mockPythonPath = path.join(mockRootDir, "mock-python.sh");
+
+  beforeAll(() => {
+    // Setup pinned ComfyUI dir
+    fs.mkdirSync(path.join(mockComfyDir, "comfy_extras"), { recursive: true });
+    fs.writeFileSync(
+      path.join(mockComfyDir, "comfy_extras", "nodes_minimax_h3.py"),
+      "class MiniMaxH3ImageToVideo:\n    INPUT_TYPES = {}\nclass MiniMaxH3ReferenceToVideo:\n    INPUT_TYPES = {}\nclass MiniMaxH3SigmaShift:\n    INPUT_TYPES = {}\n"
+    );
+    fs.writeFileSync(
+      path.join(mockComfyDir, "nodes.py"),
+      "class LoraLoaderModelOnly:\n    INPUT_TYPES = {}\n"
+    );
+    fs.writeFileSync(
+      path.join(mockComfyDir, "comfy_extras", "nodes_model_advanced.py"),
+      "class ModelAttentionBackend:\n    INPUT_TYPES = {}\n"
+    );
+    fs.writeFileSync(
+      path.join(mockComfyDir, "comfy_extras", "nodes_sparse_attention.py"),
+      "class BlockSparseAttention:\n    INPUT_TYPES = {}\nclass ModelSparseAttention:\n    INPUT_TYPES = {}\nclass VedaSparseAttention:\n    INPUT_TYPES = {}\n"
+    );
+    execSync("git init -b main", { cwd: mockComfyDir });
+    execSync('git config user.email "test@test.com"', { cwd: mockComfyDir });
+    execSync('git config user.name "Test"', { cwd: mockComfyDir });
+    execSync("git add .", { cwd: mockComfyDir });
+    execSync('git commit -m "init"', { cwd: mockComfyDir });
+    fs.writeFileSync(path.join(mockComfyDir, ".git", "HEAD"), `${PINNED_COMFYUI_CORE_REVISION}\n`);
+
+    // Setup isolated upgrade ComfyUI dir (revision 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf)
+    fs.mkdirSync(path.join(mockUpgradeComfyDir, "comfy_extras"), { recursive: true });
+    fs.writeFileSync(
+      path.join(mockUpgradeComfyDir, "comfy_extras", "nodes_minimax_h3.py"),
+      "class MiniMaxH3ImageToVideo:\n    INPUT_TYPES = {}\nclass MiniMaxH3ReferenceToVideo:\n    INPUT_TYPES = {}\nclass MiniMaxH3SigmaShift:\n    INPUT_TYPES = {}\n"
+    );
+    fs.writeFileSync(
+      path.join(mockUpgradeComfyDir, "nodes.py"),
+      "class LoraLoaderModelOnly:\n    INPUT_TYPES = {}\n"
+    );
+    fs.writeFileSync(
+      path.join(mockUpgradeComfyDir, "comfy_extras", "nodes_model_advanced.py"),
+      "class ModelAttentionBackend:\n    INPUT_TYPES = {}\n"
+    );
+    fs.writeFileSync(
+      path.join(mockUpgradeComfyDir, "comfy_extras", "nodes_sparse_attention.py"),
+      "class BlockSparseAttention:\n    INPUT_TYPES = {}\nclass ModelSparseAttention:\n    INPUT_TYPES = {}\nclass VedaSparseAttention:\n    INPUT_TYPES = {}\n"
+    );
+    execSync("git init -b main", { cwd: mockUpgradeComfyDir });
+    execSync('git config user.email "test@test.com"', { cwd: mockUpgradeComfyDir });
+    execSync('git config user.name "Test"', { cwd: mockUpgradeComfyDir });
+    execSync("git add .", { cwd: mockUpgradeComfyDir });
+    execSync('git commit -m "init"', { cwd: mockUpgradeComfyDir });
+    fs.writeFileSync(
+      path.join(mockUpgradeComfyDir, ".git", "HEAD"),
+      "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf\n"
+    );
+
+    const mockPythonScript = `#!/bin/sh
+if [ "$1" = "-c" ]; then
+  if echo "$2" | grep -q "torch.__version__"; then
+    echo "2.5.1+cu124|12.4"
+    exit 0
+  fi
+  if echo "$2" | grep -q "scaled_dot_product_attention" || echo "$2" | grep -q "sageattention" || echo "$2" | grep -q "comfy_kitchen" || echo "$2" | grep -q "veda_sparse_attention" || echo "$2" | grep -q "block_sparse"; then
+    echo "ok"
+    exit 0
+  fi
+  if echo "$2" | grep -q "dist_name = sys.argv\\[1\\]"; then
+    if [ "$3" = "comfy-kitchen" ]; then
+      if [ -n "$4" ] && [ "$4" != "0.2.34" ] && [ "$4" != "0.2.31" ]; then
+        echo "version_mismatch:expected_$4_got_0.2.31"
+        exit 1
+      fi
+      echo "ok"
+      exit 0
+    fi
+    if [ "$3" = "sageattention" ] || [ "$3" = "veda-sparse-attention" ] || [ "$3" = "triton" ] || [ "$3" = "torch" ]; then
+      echo "ok"
+      exit 0
+    fi
+  fi
+fi
+exec /usr/bin/python3 "$@"
+`;
+    fs.writeFileSync(mockPythonPath, mockPythonScript, { mode: 0o755 });
+  });
+
+  afterAll(() => {
+    if (fs.existsSync(mockRootDir)) {
+      fs.rmSync(mockRootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("verifies real dense catalog entry against CurrentPinExperimentRuntimeAdapter with torch_sdpa alias", async () => {
+    const entry = getAttentionCatalogEntry("dense", "i2v");
+    const manifest = buildRequiredRuntimeManifestFromAttentionCatalog(entry, "i2v", {
+      sourceFileHashes: {}
+    });
+    expect(manifest.attentionKernel).toBe("torch.nn.functional.scaled_dot_product_attention");
+
+    const adapter = new CurrentPinExperimentRuntimeAdapter();
+    const res = await adapter.verify({
+      comfyUiDir: mockComfyDir,
+      pythonPath: mockPythonPath,
+      requiredRuntime: manifest
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.status).toBe("verified");
+  });
+
+  it("verifies real sage catalog entry against CurrentPinExperimentRuntimeAdapter with sageattention alias", async () => {
+    const entry = getAttentionCatalogEntry("sage", "i2v");
+    const manifest = buildRequiredRuntimeManifestFromAttentionCatalog(entry, "i2v", {
+      sourceFileHashes: {}
+    });
+    expect(manifest.attentionKernel).toBe("sageattention.sageattn");
+
+    const adapter = new CurrentPinExperimentRuntimeAdapter();
+    const res = await adapter.verify({
+      comfyUiDir: mockComfyDir,
+      pythonPath: mockPythonPath,
+      requiredRuntime: manifest
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.status).toBe("verified");
+  });
+
+  it("verifies CurrentPinExperimentRuntimeAdapter rejects real native-sol-attn catalog entry (requires isolated upgrade)", async () => {
+    const entry = getAttentionCatalogEntry("native-sol-attn", "i2v", {
+      coreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf"
+    });
+    const manifest = buildRequiredRuntimeManifestFromAttentionCatalog(entry, "i2v", {
+      sourceFileHashes: {}
+    });
+    expect(manifest.attentionKernel).toBe("comfy_kitchen.sol_attn");
+
+    const adapter = new CurrentPinExperimentRuntimeAdapter();
+    const res = await adapter.verify({
+      comfyUiDir: mockComfyDir,
+      pythonPath: mockPythonPath,
+      requiredRuntime: manifest
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.status).toBe("conflict");
+  });
+
+  it("verifies real native-sol-attn catalog entry against IsolatedUpgradeExperimentRuntimeAdapter", async () => {
+    const entry = getAttentionCatalogEntry("native-sol-attn", "i2v", {
+      coreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf"
+    });
+    const manifest = buildRequiredRuntimeManifestFromAttentionCatalog(entry, "i2v", {
+      sourceFileHashes: {}
+    });
+    expect(manifest.attentionKernel).toBe("comfy_kitchen.sol_attn");
+
+    const adapter = new IsolatedUpgradeExperimentRuntimeAdapter(
+      "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+      "sol-attn-upgrade-adapter",
+      ["ModelSparseAttention"]
+    );
+    const res = await adapter.verify({
+      comfyUiDir: mockUpgradeComfyDir,
+      pythonPath: mockPythonPath,
+      requiredRuntime: manifest
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.status).toBe("verified");
+  });
+
+  it("verifies real veda catalog entry against IsolatedUpgradeExperimentRuntimeAdapter", async () => {
+    const entry = getAttentionCatalogEntry("veda", "i2v");
+    const manifest = buildRequiredRuntimeManifestFromAttentionCatalog(entry, "i2v", {
+      sourceFileHashes: {}
+    });
+    expect(manifest.attentionKernel).toBe("veda_sparse_attention.triton_kernel");
+
+    const adapter = new IsolatedUpgradeExperimentRuntimeAdapter(
+      "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+      "veda-upgrade-adapter",
+      ["VedaSparseAttention"]
+    );
+    const res = await adapter.verify({
+      comfyUiDir: mockUpgradeComfyDir,
+      pythonPath: mockPythonPath,
+      requiredRuntime: manifest
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.status).toBe("verified");
+  });
+
+  it("verifies ExperimentRuntimeRegistry dispatches real catalog manifests to the correct adapter", async () => {
+    const registry = new ExperimentRuntimeRegistry();
+
+    const denseEntry = getAttentionCatalogEntry("dense", "i2v");
+    const denseManifest = buildRequiredRuntimeManifestFromAttentionCatalog(denseEntry, "i2v", {
+      sourceFileHashes: {}
+    });
+    const denseRes = await registry.verify({
+      comfyUiDir: mockComfyDir,
+      pythonPath: mockPythonPath,
+      requiredRuntime: denseManifest,
+      requiredRuntimeDigest: sha256Hex(canonicalizeJson(denseManifest))
+    });
+    expect(denseRes.ok).toBe(true);
+    expect(denseRes.status).toBe("verified");
+
+    const solEntry = getAttentionCatalogEntry("native-sol-attn", "i2v", {
+      coreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf"
+    });
+    const solManifest = buildRequiredRuntimeManifestFromAttentionCatalog(solEntry, "i2v", {
+      sourceFileHashes: {}
+    });
+    const solRes = await registry.verify({
+      comfyUiDir: mockUpgradeComfyDir,
+      pythonPath: mockPythonPath,
+      requiredRuntime: solManifest,
+      requiredRuntimeDigest: sha256Hex(canonicalizeJson(solManifest))
+    });
+    expect(solRes.ok).toBe(true);
+    expect(solRes.status).toBe("verified");
   });
 });

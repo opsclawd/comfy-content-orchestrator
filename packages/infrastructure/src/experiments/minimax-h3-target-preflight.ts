@@ -10,7 +10,9 @@ import {
   type MinimaxH3TargetSpecification,
   type MinimaxH3RequiredRuntimeManifest,
   PINNED_COMFYUI_CORE_REVISION,
-  PINNED_COMFYUI_SOURCE_HASHES
+  PINNED_COMFYUI_SOURCE_HASHES,
+  FASTH3_ISOLATED_CORE_REVISION,
+  FASTH3_COMFYUI_SOURCE_HASHES
 } from "@cco/contracts";
 import type { MinimaxH3TargetPreflightPort } from "@cco/application";
 import {
@@ -547,6 +549,31 @@ export class MinimaxH3TargetPreflight implements MinimaxH3TargetPreflightPort {
           revision,
           nodesPresent: true,
           blocker: `comfy/model_management.py SHA-256 hash mismatch: expected ${PINNED_COMFYUI_SOURCE_HASHES.modelManagementSha256}, got ${modelManagementSha256}`
+        };
+      }
+    } else if (expectedRevision === FASTH3_ISOLATED_CORE_REVISION) {
+      if (cliArgsSha256 !== FASTH3_COMFYUI_SOURCE_HASHES["comfy/cli_args.py"]) {
+        return {
+          ok: false,
+          revision,
+          nodesPresent: true,
+          blocker: `comfy/cli_args.py SHA-256 hash mismatch: expected ${FASTH3_COMFYUI_SOURCE_HASHES["comfy/cli_args.py"]}, got ${cliArgsSha256}`
+        };
+      }
+      if (mainSha256 !== FASTH3_COMFYUI_SOURCE_HASHES["main.py"]) {
+        return {
+          ok: false,
+          revision,
+          nodesPresent: true,
+          blocker: `main.py SHA-256 hash mismatch: expected ${FASTH3_COMFYUI_SOURCE_HASHES["main.py"]}, got ${mainSha256}`
+        };
+      }
+      if (modelManagementSha256 !== FASTH3_COMFYUI_SOURCE_HASHES["comfy/model_management.py"]) {
+        return {
+          ok: false,
+          revision,
+          nodesPresent: true,
+          blocker: `comfy/model_management.py SHA-256 hash mismatch: expected ${FASTH3_COMFYUI_SOURCE_HASHES["comfy/model_management.py"]}, got ${modelManagementSha256}`
         };
       }
     }

@@ -575,7 +575,8 @@ export class MinimaxH3ExperimentStore implements MinimaxH3ExperimentStorePort {
     this.assertSafePath(filePath);
     try {
       const raw = await readFile(filePath, "utf8");
-      return this.parseJsonlTolerant<MinimaxH3PhaseAccountingEvent>(filePath, raw);
+      const items = this.parseJsonlTolerant<MinimaxH3PhaseAccountingEvent>(filePath, raw);
+      return items.map((item) => MinimaxH3PhaseAccountingEventSchema.parse(item));
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
         return [];
