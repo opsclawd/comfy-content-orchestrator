@@ -2354,3 +2354,541 @@ describe("MiniMax-H3 Upgraded Dense Attention Validation (F-437dab51)", () => {
     expect(validation.ok).toBe(true);
   });
 });
+
+describe("MiniMax-H3 Step Reduction Sampling Recipe Validation & Tampering Detection", () => {
+  function createRealTemplateStore(): InMemoryStore {
+    const store = new InMemoryStore();
+    store.files.set(
+      "templates/minimax_h3_720p_i2v_124f_api.json",
+      readFileSync("templates/minimax_h3_720p_i2v_124f_api.json", "utf-8")
+    );
+    store.files.set(
+      "templates/minimax_h3_720p_ref2v_124f_api.json",
+      readFileSync("templates/minimax_h3_720p_ref2v_124f_api.json", "utf-8")
+    );
+    store.files.set(
+      "templates/provenance.json",
+      readFileSync("templates/provenance.json", "utf-8")
+    );
+    store.files.set(
+      "manifest-i2v.json",
+      JSON.stringify({
+        referenceSetId: "ref-test-i2v",
+        references: [
+          {
+            assetPath: "/tmp/ref1.png",
+            stagedFilename: "ref1.png",
+            role: "first_frame",
+            tag: "<Picture 1>",
+            order: 0
+          }
+        ]
+      })
+    );
+    store.files.set(
+      "manifest-ref2v.json",
+      JSON.stringify({
+        referenceSetId: "ref-test-ref2v",
+        references: [
+          {
+            assetPath: "/tmp/ref1.png",
+            stagedFilename: "ref1.png",
+            role: "reference",
+            tag: "<Picture 1>",
+            order: 0
+          },
+          {
+            assetPath: "/tmp/ref2.png",
+            stagedFilename: "ref2.png",
+            role: "reference",
+            tag: "<Picture 2>",
+            order: 1
+          }
+        ]
+      })
+    );
+    return store;
+  }
+
+  it("prepares and validates an isolated I2V experiment with fl2va-turbo-8 recipe against canonical templates", async () => {
+    const store = createRealTemplateStore();
+    const service = new MinimaxH3ExperimentService(store);
+
+    const { runDir, descriptor } = await service.prepareExperiment({
+      route: "i2v",
+      frames: 124,
+      seed: 42,
+      prompt:
+        "A cinematic shot of a person smiling warmly, natural lighting, highly detailed skin texture, 8k hyperrealistic",
+      operatorLabel: "operator-01",
+      runId: "run-fl2va-turbo-8-prep-val",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest-i2v.json",
+      samplingRecipe: "fl2va-turbo-8"
+    });
+
+    const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
+    expect(descV2.samplingRecipe?.name).toBe("fl2va-turbo-8");
+    expect(descV2.samplingRecipe?.expectedSteps).toBe(8);
+    expect(descV2.samplingRecipe?.lora?.filename).toBe(
+      "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors"
+    );
+    expect(descV2.samplingRecipe?.lora?.strengthModel).toBe(1.0);
+    expect(
+      descV2.requiredRuntime?.requiredNodes.some((n) => n.name === "LoraLoaderModelOnly")
+    ).toBe(true);
+
+    // Factors must declare models.auxiliary, sampling.settings, and runtime.manifest
+    const factorPaths = descV2.experimentVariant.changedFactors.map((f) => f.path);
+    expect(factorPaths).toContain("models.auxiliary");
+    expect(factorPaths).toContain("sampling.settings");
+    expect(factorPaths).toContain("runtime.manifest");
+
+    // Config graph must contain node 301 LoraLoaderModelOnly wired to BasicGuider
+    const config = store.config!;
+    expect(config["301"]).toBeDefined();
+    expect((config["301"] as { class_type: string }).class_type).toBe("LoraLoaderModelOnly");
+    expect((config["16"] as { inputs: { model: unknown } }).inputs.model).toEqual(["301", 0]);
+    expect((config["9"] as { inputs: { steps: number } }).inputs.steps).toBe(8);
+
+    const validation = await service.validateExperiment(runDir, {
+      outputRoot: ".ai-runs/minimax-h3-experiments"
+    });
+    expect(validation.errors).toEqual([]);
+    expect(validation.ok).toBe(true);
+  });
+
+  it("prepares and validates an isolated Ref2V experiment with ref2va-turbo-4 recipe against canonical templates", async () => {
+    const store = createRealTemplateStore();
+    const service = new MinimaxH3ExperimentService(store);
+
+    const { runDir, descriptor } = await service.prepareExperiment({
+      route: "ref2v",
+      frames: 124,
+      seed: 42,
+      prompt: "A scene with <Picture 1> and <Picture 2>",
+      operatorLabel: "operator-01",
+      runId: "run-ref2va-turbo-4-prep-val",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest-ref2v.json",
+      samplingRecipe: "ref2va-turbo-4"
+    });
+
+    const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
+    expect(descV2.samplingRecipe?.name).toBe("ref2va-turbo-4");
+    expect(descV2.samplingRecipe?.expectedSteps).toBe(4);
+    expect(descV2.samplingRecipe?.lora?.filename).toBe(
+      "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
+    );
+    expect(descV2.samplingRecipe?.lora?.strengthModel).toBe(1.0);
+
+    const config = store.config!;
+    expect(config["301"]).toBeDefined();
+    expect((config["9"] as { inputs: { steps: number } }).inputs.steps).toBe(4);
+
+    const validation = await service.validateExperiment(runDir, {
+      outputRoot: ".ai-runs/minimax-h3-experiments"
+    });
+    expect(validation.errors).toEqual([]);
+    expect(validation.ok).toBe(true);
+  });
+
+  it("prepares and validates an isolated I2V experiment with fasth3-i2v-8 recipe against canonical templates", async () => {
+    const store = createRealTemplateStore();
+    const service = new MinimaxH3ExperimentService(store);
+
+    const { runDir, descriptor } = await service.prepareExperiment({
+      route: "i2v",
+      frames: 124,
+      seed: 42,
+      prompt:
+        "A cinematic shot of a person smiling warmly, natural lighting, highly detailed skin texture, 8k hyperrealistic",
+      operatorLabel: "operator-01",
+      runId: "run-fasth3-i2v-8-prep-val",
+      outputRoot: ".ai-runs/minimax-h3-experiments",
+      targetHost: "render-worker-01",
+      gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+      comfyUiDir: "/opt/comfyui",
+      pythonPath: "/usr/bin/python3",
+      inputManifestPath: "manifest-i2v.json",
+      samplingRecipe: "fasth3-i2v-8"
+    });
+
+    const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
+    expect(descV2.samplingRecipe?.name).toBe("fasth3-i2v-8");
+    expect(descV2.samplingRecipe?.expectedSteps).toBe(8);
+    expect(descV2.samplingRecipe?.sigmaShift?.enabled).toBe(true);
+    expect(descV2.samplingRecipe?.sigmaShift?.videoShift).toBe(10.0);
+    expect(descV2.requiredRuntime?.coreRevision).toBe("ee71d5c4993f29086b27fde1629a945ae48425bf");
+    expect(descV2.requiredRuntime?.attentionKernel).toBe("block_sparse_triton");
+
+    const fastH3FactorPaths = descV2.experimentVariant.changedFactors.map((f) => f.path);
+    expect(fastH3FactorPaths).toContain("attention.configuration");
+    expect(fastH3FactorPaths).toContain("runtime.manifest");
+
+    const config = store.config!;
+    expect(config["301"]).toBeDefined();
+    expect((config["301"] as { class_type: string }).class_type).toBe("MiniMaxH3SigmaShift");
+    expect(config["302"]).toBeDefined();
+    expect((config["302"] as { class_type: string }).class_type).toBe("ModelAttentionBackend");
+    expect(config["303"]).toBeDefined();
+    expect((config["303"] as { class_type: string }).class_type).toBe("BlockSparseAttention");
+    expect((config["6"] as { inputs: { unet_name: string } }).inputs.unet_name).toBe(
+      "fastvideo_fasth3_8step_v2_pruned_int8_convrot.safetensors"
+    );
+    expect((config["9"] as { inputs: { steps: number } }).inputs.steps).toBe(8);
+
+    const validation = await service.validateExperiment(runDir, {
+      outputRoot: ".ai-runs/minimax-h3-experiments"
+    });
+    expect(validation.errors).toEqual([]);
+    expect(validation.ok).toBe(true);
+  });
+
+  describe("Adversarial Tampering Detection", () => {
+    it("detects tampered descriptor diffusion model filename/hash", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+
+      const { runDir, descriptor } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A test prompt",
+        operatorLabel: "operator-01",
+        runId: "run-tamper-diff-model",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        samplingRecipe: "fl2va-turbo-8"
+      });
+
+      const tamperedDesc = structuredClone(descriptor as MinimaxH3ExperimentDescriptorV2);
+      tamperedDesc.samplingRecipe!.diffusionModel.filename = "tampered_checkpoint.safetensors";
+      store.descriptor = tamperedDesc;
+
+      const validation = await service.validateExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      });
+      expect(validation.ok).toBe(false);
+      expect(
+        validation.errors.some(
+          (e) =>
+            e.toLowerCase().includes("diffusionmodel") ||
+            e.toLowerCase().includes("diffusion model") ||
+            e.toLowerCase().includes("digest mismatch") ||
+            e.includes("Descriptor validation failed")
+        )
+      ).toBe(true);
+    });
+
+    it("detects tampered descriptor expectedSteps", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+
+      const { runDir, descriptor } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A test prompt",
+        operatorLabel: "operator-01",
+        runId: "run-tamper-steps",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        samplingRecipe: "fl2va-turbo-8"
+      });
+
+      const tamperedDesc = structuredClone(descriptor as MinimaxH3ExperimentDescriptorV2);
+      tamperedDesc.samplingRecipe!.expectedSteps = 4;
+      store.descriptor = tamperedDesc;
+
+      const validation = await service.validateExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      });
+      expect(validation.ok).toBe(false);
+      expect(
+        validation.errors.some(
+          (e) =>
+            e.toLowerCase().includes("expectedsteps") ||
+            e.toLowerCase().includes("digest mismatch") ||
+            e.includes("Descriptor validation failed")
+        )
+      ).toBe(true);
+    });
+
+    it("detects tampered descriptor LoRA strength", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+
+      const { runDir, descriptor } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A test prompt",
+        operatorLabel: "operator-01",
+        runId: "run-tamper-lora-strength",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        samplingRecipe: "fl2va-turbo-8"
+      });
+
+      const tamperedDesc = structuredClone(descriptor as MinimaxH3ExperimentDescriptorV2);
+      tamperedDesc.samplingRecipe!.lora!.strengthModel = 0.5;
+      store.descriptor = tamperedDesc;
+
+      const validation = await service.validateExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      });
+      expect(validation.ok).toBe(false);
+      expect(
+        validation.errors.some(
+          (e) =>
+            e.toLowerCase().includes("lora") ||
+            e.toLowerCase().includes("digest mismatch") ||
+            e.includes("Descriptor validation failed")
+        )
+      ).toBe(true);
+    });
+
+    it("detects tampered descriptor sigmaShift parameters", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+
+      const { runDir, descriptor } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A test prompt",
+        operatorLabel: "operator-01",
+        runId: "run-tamper-sigmashift",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        samplingRecipe: "fasth3-i2v-8"
+      });
+
+      const tamperedDesc = structuredClone(descriptor as MinimaxH3ExperimentDescriptorV2);
+      tamperedDesc.samplingRecipe!.sigmaShift!.videoShift = 2.0;
+      store.descriptor = tamperedDesc;
+
+      const validation = await service.validateExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      });
+      expect(validation.ok).toBe(false);
+      expect(
+        validation.errors.some(
+          (e) =>
+            e.toLowerCase().includes("sigmashift") ||
+            e.toLowerCase().includes("digest mismatch") ||
+            e.includes("Descriptor validation failed")
+        )
+      ).toBe(true);
+    });
+
+    it("detects tampered descriptor requiredRuntime coreRevision", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+
+      const { runDir, descriptor } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A test prompt",
+        operatorLabel: "operator-01",
+        runId: "run-tamper-core-rev",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        samplingRecipe: "fasth3-i2v-8"
+      });
+
+      const tamperedDesc = structuredClone(descriptor as MinimaxH3ExperimentDescriptorV2);
+      tamperedDesc.requiredRuntime!.coreRevision = "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc";
+      store.descriptor = tamperedDesc;
+
+      const validation = await service.validateExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      });
+      expect(validation.ok).toBe(false);
+      expect(
+        validation.errors.some(
+          (e) => e.includes("coreRevision") || e.includes("Descriptor validation failed")
+        )
+      ).toBe(true);
+    });
+
+    it("detects bypassed LoRA node 301 in workflow config", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+
+      const { runDir } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A test prompt",
+        operatorLabel: "operator-01",
+        runId: "run-tamper-bypass-lora",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        samplingRecipe: "fl2va-turbo-8"
+      });
+
+      // Rewire node 16 model input directly to node 6, bypassing node 301 LoRA
+      const tamperedConfig = structuredClone(store.config!);
+      (tamperedConfig["16"] as { inputs: { model: unknown } }).inputs.model = ["6", 0];
+      store.config = tamperedConfig;
+
+      const validation = await service.validateExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      });
+      expect(validation.ok).toBe(false);
+      expect(
+        validation.errors.some(
+          (e) =>
+            e.includes("Config.json on disk does not match") ||
+            e.includes("guider model connection")
+        )
+      ).toBe(true);
+    });
+
+    it("detects altered scheduler steps in workflow config", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+
+      const { runDir } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A test prompt",
+        operatorLabel: "operator-01",
+        runId: "run-tamper-config-steps",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        samplingRecipe: "fl2va-turbo-8"
+      });
+
+      // Change node 9 steps from 8 to 20
+      const tamperedConfig = structuredClone(store.config!);
+      (tamperedConfig["9"] as { inputs: { steps: number } }).inputs.steps = 20;
+      store.config = tamperedConfig;
+
+      const validation = await service.validateExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      });
+      expect(validation.ok).toBe(false);
+      expect(
+        validation.errors.some(
+          (e) => e.includes("Config.json on disk does not match") || e.includes("scheduler steps")
+        )
+      ).toBe(true);
+    });
+
+    it("detects altered UNETLoader unet_name in workflow config", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+
+      const { runDir } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A test prompt",
+        operatorLabel: "operator-01",
+        runId: "run-tamper-config-unet",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        samplingRecipe: "fl2va-turbo-8"
+      });
+
+      // Change node 6 unet_name to something else
+      const tamperedConfig = structuredClone(store.config!);
+      (tamperedConfig["6"] as { inputs: { unet_name: string } }).inputs.unet_name =
+        "nonexistent_unet.safetensors";
+      store.config = tamperedConfig;
+
+      const validation = await service.validateExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      });
+      expect(validation.ok).toBe(false);
+      expect(
+        validation.errors.some(
+          (e) => e.includes("Config.json on disk does not match") || e.includes("unet_name")
+        )
+      ).toBe(true);
+    });
+
+    it("detects removed SigmaShift node in FastH3 workflow config", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+
+      const { runDir } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A test prompt",
+        operatorLabel: "operator-01",
+        runId: "run-tamper-remove-sigmashift",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        samplingRecipe: "fasth3-i2v-8"
+      });
+
+      // Delete node 301 (MiniMaxH3SigmaShift) and rewire node 302 model input back to node 6
+      const tamperedConfig = structuredClone(store.config!);
+      delete tamperedConfig["301"];
+      (tamperedConfig["302"] as { inputs: { model: unknown } }).inputs.model = ["6", 0];
+      store.config = tamperedConfig;
+
+      const validation = await service.validateExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      });
+      expect(validation.ok).toBe(false);
+      expect(
+        validation.errors.some(
+          (e) =>
+            e.includes("Config.json on disk does not match") || e.includes("MiniMaxH3SigmaShift")
+        )
+      ).toBe(true);
+    });
+  });
+});

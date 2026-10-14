@@ -5,3 +5,5 @@ export * from "./minimax-h3-comparator.js";
 export * from "./minimax-h3-attention-catalog.js";
 export * from "./minimax-h3-attention-topology.js";
 export * from "./minimax-h3-attention-reducer.js";
+export * from "./minimax-h3-step-reduction-catalog.js";
+export * from "./minimax-h3-step-reduction-compiler.js";

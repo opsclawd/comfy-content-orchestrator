@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { canonicalizeJson, sha256Hex } from "./minimax-h3-experiment.js";
+import {
+  canonicalizeJson,
+  sha256Hex,
+  PINNED_COMFYUI_CORE_REVISION,
+  FASTH3_ISOLATED_CORE_REVISION
+} from "./minimax-h3-experiment.js";
 import { sha256HashSchema } from "./persistent-media.js";
 
 // ---------------------------------------------------------------------------
@@ -18,6 +23,100 @@ export const MinimaxH3AttentionBackendNameSchema = z.enum([
   "unknown"
 ]);
 export type MinimaxH3AttentionBackendName = z.infer<typeof MinimaxH3AttentionBackendNameSchema>;
+
+// ---------------------------------------------------------------------------
+// Audited Attention Kernel Descriptors & Resolution
+// ---------------------------------------------------------------------------
+export interface AuditedKernelDescriptor {
+  readonly canonicalName: string;
+  readonly aliases: readonly string[];
+  readonly backend: MinimaxH3AttentionBackendName;
+  readonly supportedCoreRevisions: readonly string[];
+  readonly pythonImportModule?: string;
+  readonly description: string;
+}
+
+export const AUDITED_ATTENTION_KERNELS: readonly AuditedKernelDescriptor[] = Object.freeze([
+  {
+    canonicalName: "torch_sdpa",
+    aliases: [
+      "torch_sdpa",
+      "torch.nn.functional.scaled_dot_product_attention",
+      "sdpa",
+      "pytorch_sdpa",
+      "default"
+    ],
+    backend: "torch_sdpa" as const,
+    supportedCoreRevisions: [
+      PINNED_COMFYUI_CORE_REVISION,
+      "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+      FASTH3_ISOLATED_CORE_REVISION
+    ],
+    pythonImportModule: "torch",
+    description: "Standard PyTorch scaled dot-product attention (dense baseline)"
+  },
+  {
+    canonicalName: "sage",
+    aliases: ["sage", "sageattention", "sageattention.sageattn", "sageattn"],
+    backend: "sage" as const,
+    supportedCoreRevisions: [
+      PINNED_COMFYUI_CORE_REVISION,
+      "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf"
+    ],
+    pythonImportModule: "sageattention",
+    description: "SageAttention 8-bit / quantized accelerated attention kernel"
+  },
+  {
+    canonicalName: "sol_attn",
+    aliases: ["sol_attn", "comfy_kitchen.sol_attn", "kitchen_sol_attn", "native-sol-attn"],
+    backend: "sol_attn" as const,
+    supportedCoreRevisions: ["94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf"],
+    pythonImportModule: "comfy_kitchen",
+    description: "Comfy Kitchen native fast attention kernel"
+  },
+  {
+    canonicalName: "veda",
+    aliases: [
+      "veda",
+      "veda_sparse_attention",
+      "veda_sparse_attention.triton_kernel",
+      "veda_sparse"
+    ],
+    backend: "veda" as const,
+    supportedCoreRevisions: ["94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf"],
+    pythonImportModule: "veda_sparse_attention",
+    description: "Veda Sparse Attention Triton kernel"
+  },
+  {
+    canonicalName: "block_sparse_triton",
+    aliases: ["block_sparse_triton", "comfy kitchen attention", "block_sparse"],
+    backend: "sol_attn" as const,
+    supportedCoreRevisions: [FASTH3_ISOLATED_CORE_REVISION],
+    pythonImportModule: "torch",
+    description: "Block sparse Triton attention kernel for FastH3"
+  }
+]);
+
+export function resolveAuditedKernel(kernelName: string): AuditedKernelDescriptor | null {
+  const normalized = kernelName.trim().toLowerCase();
+  for (const descriptor of AUDITED_ATTENTION_KERNELS) {
+    if (
+      descriptor.canonicalName.toLowerCase() === normalized ||
+      descriptor.aliases.some((a) => a.toLowerCase() === normalized)
+    ) {
+      return descriptor;
+    }
+  }
+  return null;
+}
+
+export function isKernelSupportedOnRevision(kernelName: string, coreRevision: string): boolean {
+  const descriptor = resolveAuditedKernel(kernelName);
+  if (!descriptor) {
+    return false;
+  }
+  return descriptor.supportedCoreRevisions.includes(coreRevision);
+}
 
 // Compatibility states
 export const MinimaxH3CompatibilityStateSchema = z.enum([

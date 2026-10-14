@@ -6,6 +6,8 @@ import {
   MinimaxH3ExperimentService,
   compareMinimaxH3Experiments,
   listAttentionCatalogEntries,
+  listSamplingRecipes,
+  validateRecipeRouteCompatibility,
   type MinimaxH3ComfyUiTransportPort,
   type MinimaxH3ExperimentStorePort,
   type MinimaxH3OutputProberPort,
@@ -26,6 +28,8 @@ import {
   MinimaxH3MatrixRowSchema,
   MinimaxH3OperatorDecisionSidecarSchema,
   MinimaxH3VisualReviewSidecarSchema,
+  MINIMAX_H3_SAMPLING_RECIPE_NAMES,
+  type MinimaxH3SamplingRecipeName,
   type MinimaxH3ExperimentCandidateFrames,
   type MinimaxH3AnyExperimentDescriptor,
   type MinimaxH3ProcessRecord,
@@ -75,6 +79,8 @@ Options for 'catalog':
   --route <i2v|ref2v>            Filter catalog by generation route (optional)
   --variant <variant>            Filter catalog by attention variant name (optional)
   --matched-variant <variant>    Filter catalog by matched dense baseline variant (optional)
+  --recipes                      List sampling recipes instead of attention catalog entries
+  --type <attention|recipes>     Catalog type to inspect (default: attention)
   --json                         Output catalog as JSON (default)
 
 Options for 'prepare':
@@ -107,6 +113,7 @@ Options for 'prepare':
   --shutdown-timeout-ms <ms>     Child process graceful shutdown timeout (default: 15000, max: 120000)
   --step-override <steps>        Override scheduler step count (e.g. 10..30)
   --checkpoint-override <name>   Override diffusion checkpoint ('ref2va' or 'fl2va')
+  --sampling-recipe <name>       Pre-configured distillation/Lightning sampling recipe
   --variant-purpose <purpose>    Variant purpose ('performance' | 'prompt_conditioning' | 'controlled_multifactor')
   --attention-variant <variant>  Attention variant ('dense' | 'sage' | 'native-sol-attn' | 'veda')
   --matched-variant <variant>    Matched dense control target variant ('sage' | 'native-sol-attn' | 'veda')
@@ -264,6 +271,7 @@ const ALLOWED_FLAGS_BY_SUBCOMMAND: Record<string, Set<string>> = {
     "shutdown-timeout-ms",
     "step-override",
     "checkpoint-override",
+    "sampling-recipe",
     "variant-purpose",
     "attention-variant",
     "matched-variant",
@@ -291,7 +299,9 @@ const ALLOWED_FLAGS_BY_SUBCOMMAND: Record<string, Set<string>> = {
     "variant",
     "output-root",
     "comfyui-core-revision",
-    "core-revision"
+    "core-revision",
+    "recipes",
+    "type"
   ])
 };
 
@@ -326,6 +336,7 @@ const VALUE_FLAGS = new Set([
   "shutdown-timeout-ms",
   "step-override",
   "checkpoint-override",
+  "sampling-recipe",
   "variant-purpose",
   "attention-variant",
   "matched-variant",
@@ -339,7 +350,8 @@ const VALUE_FLAGS = new Set([
   "variant",
   "variant-run-dir",
   "file",
-  "sidecar"
+  "sidecar",
+  "type"
 ]);
 
 export async function runExperimentCli(
@@ -582,6 +594,40 @@ export async function runExperimentCli(
           matchedVariant = mv as "dense" | "sage" | "native-sol-attn" | "veda";
         }
 
+        let samplingRecipe: MinimaxH3SamplingRecipeName | undefined;
+        if (flags["sampling-recipe"] !== undefined) {
+          const sr = flags["sampling-recipe"].toLowerCase();
+          if (!MINIMAX_H3_SAMPLING_RECIPE_NAMES.includes(sr as MinimaxH3SamplingRecipeName)) {
+            stderr(
+              `Error: Unknown --sampling-recipe "${flags["sampling-recipe"]}". Supported recipes: ${MINIMAX_H3_SAMPLING_RECIPE_NAMES.join(", ")}.`
+            );
+            return 1;
+          }
+          if (stepOverride !== undefined) {
+            stderr(
+              "Error: Cannot specify --step-override when using a distillation --sampling-recipe."
+            );
+            return 1;
+          }
+          if (checkpointOverride !== undefined) {
+            stderr(
+              "Error: Cannot specify --checkpoint-override when using a distillation --sampling-recipe."
+            );
+            return 1;
+          }
+          if (attentionVariant !== undefined) {
+            stderr("Error: Cannot specify --attention-variant when using --sampling-recipe.");
+            return 1;
+          }
+          try {
+            validateRecipeRouteCompatibility(sr as MinimaxH3SamplingRecipeName, route);
+          } catch (routeErr) {
+            stderr(`Error: ${(routeErr as Error).message}`);
+            return 1;
+          }
+          samplingRecipe = sr as MinimaxH3SamplingRecipeName;
+        }
+
         const coreRevision = flags["comfyui-core-revision"] ?? flags["core-revision"];
 
         const resolvedTemplatesDir = resolveCliPath(flags["templates-dir"]);
@@ -612,7 +658,8 @@ export async function runExperimentCli(
           ...(variantPurpose !== undefined ? { variantPurpose } : {}),
           ...(attentionVariant !== undefined ? { attentionVariant } : {}),
           ...(matchedVariant !== undefined ? { matchedVariant } : {}),
-          ...(coreRevision !== undefined ? { coreRevision } : {})
+          ...(coreRevision !== undefined ? { coreRevision } : {}),
+          ...(samplingRecipe !== undefined ? { samplingRecipe } : {})
         });
 
         stdout(
@@ -1359,13 +1406,22 @@ export async function runExperimentCli(
 
       case "catalog": {
         const routeFilter = flags["route"] as "i2v" | "ref2v" | undefined;
-        const variantFilter = (flags["attention-variant"] ?? flags["variant"]) as
-          MinimaxH3AttentionVariantName | undefined;
-
         if (routeFilter && routeFilter !== "i2v" && routeFilter !== "ref2v") {
           stderr(`Invalid --route "${routeFilter}". Must be "i2v" or "ref2v".`);
           return 1;
         }
+
+        if (booleanFlags.has("recipes") || flags["type"] === "recipes") {
+          let recipes = listSamplingRecipes();
+          if (routeFilter) {
+            recipes = recipes.filter((r) => r.compatibleRoute === routeFilter);
+          }
+          stdout(JSON.stringify(recipes, null, 2));
+          return 0;
+        }
+
+        const variantFilter = (flags["attention-variant"] ?? flags["variant"]) as
+          MinimaxH3AttentionVariantName | undefined;
 
         const coreRevision = flags["comfyui-core-revision"] ?? flags["core-revision"];
         const matchedVariantFilter = flags["matched-variant"]?.toLowerCase();

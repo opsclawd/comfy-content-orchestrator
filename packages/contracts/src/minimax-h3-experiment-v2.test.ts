@@ -9,8 +9,18 @@ import {
   createEmptyMinimaxH3MeasurementTemplateV2,
   computeInvariantProjectionKey,
   PINNED_H3_CHECKPOINTS,
+  PINNED_H3_LORAS,
+  PINNED_FASTH3_CHECKPOINT,
+  PINNED_COMFYUI_NODES_PY_SHA256,
+  PINNED_COMFYUI_NODES_MINIMAX_H3_PY_SHA256,
+  FASTH3_COMFYUI_SOURCE_HASHES,
+  MinimaxH3SamplingRecipeSchema,
+  computeSamplingRecipeDigest,
+  FactorChangeSigmaShiftSchema,
+  getSamplingRecipe,
   type MinimaxH3ExperimentDescriptorV2,
-  type MinimaxH3FactorChange
+  type MinimaxH3FactorChange,
+  type MinimaxH3SamplingRecipe
 } from "./minimax-h3-experiment-v2.js";
 import { sha256Hex } from "./minimax-h3-experiment.js";
 
@@ -710,6 +720,781 @@ describe("MiniMax-H3 Experiment V2 Contracts", () => {
       const v2Desc = createValidDescriptorV2();
       const parsed = MinimaxH3AnyExperimentDescriptorSchema.parse(v2Desc);
       expect(parsed.schemaVersion).toBe(2);
+    });
+  });
+
+  describe("Step Reduction & Distillation Sampling Recipes", () => {
+    function createSyntheticFl2vaTurboRecipe(): MinimaxH3SamplingRecipe {
+      const partial = {
+        name: "fl2va-turbo-8" as const,
+        recipeVersion: 1 as const,
+        taskFamily: "i2v" as const,
+        compatibleRoute: "i2v" as const,
+        diffusionModel: {
+          filename: PINNED_H3_CHECKPOINTS.fl2va.filename,
+          sha256: PINNED_H3_CHECKPOINTS.fl2va.sha256,
+          sizeBytes: 20970379616,
+          quantization: "int8_convrot",
+          repository: "Comfy-Org/MiniMax-H3",
+          revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1"
+        },
+        lora: {
+          filename: PINNED_H3_LORAS.fl2vaTurbo8.filename,
+          sha256: PINNED_H3_LORAS.fl2vaTurbo8.sha256,
+          sizeBytes: PINNED_H3_LORAS.fl2vaTurbo8.sizeBytes,
+          strengthModel: 1.0,
+          repository: "lightx2v/Minimax-h3-Turbo",
+          revision: "3ec17a324ced54151364f24f8b5fb6bf7e26414f"
+        },
+        expectedSteps: 8,
+        sampler: "res_multistep",
+        scheduler: "simple",
+        denoise: 1.0,
+        sigmaShift: null,
+        conditioningMode: "frame_anchored" as const,
+        requiredRuntimeRevision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        licensing: {
+          status: "review_required" as const,
+          licenseSourceRef: "https://huggingface.co/lightx2v/Minimax-h3-Turbo"
+        },
+        sourceReferences: [
+          {
+            url: "https://github.com/Comfy-Org/docs/blob/main/tutorials/video/minimax/minimax-h3.mdx",
+            assertion: "Official FL2VA 8-step Turbo LoRA documentation"
+          }
+        ]
+      };
+      return {
+        ...partial,
+        recipeDigest: computeSamplingRecipeDigest(partial)
+      };
+    }
+
+    function createSyntheticFastH3Recipe(): MinimaxH3SamplingRecipe {
+      const partial = {
+        name: "fasth3-i2v-8" as const,
+        recipeVersion: 1 as const,
+        taskFamily: "i2v" as const,
+        compatibleRoute: "i2v" as const,
+        diffusionModel: {
+          filename: PINNED_FASTH3_CHECKPOINT.filename,
+          sha256: PINNED_FASTH3_CHECKPOINT.sha256,
+          sizeBytes: PINNED_FASTH3_CHECKPOINT.sizeBytes,
+          quantization: "int8_convrot",
+          repository: "FastVideo/FastVideo-FastH3-Comfy",
+          revision: "ec1e3aa374a91c57b0b94a1623b7e657c0498cf2"
+        },
+        lora: null,
+        expectedSteps: 8,
+        sampler: "res_multistep",
+        scheduler: "simple",
+        denoise: 1.0,
+        sigmaShift: {
+          enabled: true,
+          videoShift: 10,
+          audioShift: 3
+        },
+        conditioningMode: "frame_anchored" as const,
+        requiredRuntimeRevision: "ee71d5c4993f29086b27fde1629a945ae48425bf",
+        licensing: {
+          status: "restricted" as const,
+          licenseSourceRef: "https://huggingface.co/FastVideo/FastVideo-FastH3-Comfy"
+        },
+        sourceReferences: [
+          {
+            url: "https://github.com/Comfy-Org/workflow_templates/blob/main/templates/video_fastvideo_fasth3_i2v.json",
+            assertion: "Official FastH3 I2V workflow template"
+          }
+        ]
+      };
+      return {
+        ...partial,
+        recipeDigest: computeSamplingRecipeDigest(partial)
+      };
+    }
+
+    it("validates sampling recipe schema and computed digest against authoritative catalog", () => {
+      const recipe = getSamplingRecipe("fl2va-turbo-8");
+      expect(MinimaxH3SamplingRecipeSchema.parse(recipe)).toBeDefined();
+
+      const corruptDigest = { ...recipe, recipeDigest: DUMMY_HASH_4 };
+      expect(() => MinimaxH3SamplingRecipeSchema.parse(corruptDigest)).toThrow(
+        /samplingRecipe recipeDigest mismatch/
+      );
+
+      const tamperedSteps = {
+        ...recipe,
+        expectedSteps: 4,
+        recipeDigest: computeSamplingRecipeDigest({ ...recipe, expectedSteps: 4 })
+      };
+      expect(() => MinimaxH3SamplingRecipeSchema.parse(tamperedSteps)).toThrow(
+        /samplingRecipe expectedSteps mismatch/
+      );
+    });
+
+    it("parses FactorChangeSigmaShiftSchema in MinimaxH3FactorChangeSchema", () => {
+      const shiftFactor = {
+        path: "sampling.sigmaShift" as const,
+        before: { enabled: false, videoShift: 12, audioShift: 3 },
+        after: { enabled: true, videoShift: 10, audioShift: 3 },
+        rationale: "FastH3 8-step recipe video flow shift 10, audio shift 3"
+      };
+      const parsed = FactorChangeSigmaShiftSchema.parse(shiftFactor);
+      expect(parsed.path).toBe("sampling.sigmaShift");
+    });
+
+    it("admits valid fl2va-turbo-8 recipe on I2V route with 8 steps", () => {
+      const recipe = getSamplingRecipe("fl2va-turbo-8");
+      const desc = createValidDescriptorV2({
+        route: "i2v",
+        samplingRecipe: recipe,
+        stepOverride: 8,
+        pinFileIdentities: {
+          comfyuiCoreRevision: recipe.requiredRuntimeRevision,
+          minimaxH3Revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+          modelDigests: {
+            diffusion: recipe.diffusionModel.sha256,
+            lora: recipe.lora!.sha256
+          }
+        },
+        resolvedModelPaths: {
+          diffusion: {
+            expectedHash: recipe.diffusionModel.sha256,
+            resolvedPath: `/models/diffusion_models/${recipe.diffusionModel.filename}`,
+            sizeBytes: recipe.diffusionModel.sizeBytes
+          },
+          lora: {
+            expectedHash: recipe.lora!.sha256,
+            resolvedPath: `/models/loras/${recipe.lora!.filename}`,
+            sizeBytes: recipe.lora!.sizeBytes
+          }
+        },
+        requiredRuntime: {
+          ...createValidDescriptorV2().requiredRuntime,
+          coreRevision: recipe.requiredRuntimeRevision,
+          requiredNodes: [{ name: "MiniMaxH3ImageToVideo" }, { name: "LoraLoaderModelOnly" }],
+          sourceFileHashes: {
+            "nodes.py": PINNED_COMFYUI_NODES_PY_SHA256,
+            "comfy_extras/nodes_minimax_h3.py": PINNED_COMFYUI_NODES_MINIMAX_H3_PY_SHA256
+          }
+        },
+        provenance: {
+          ...createValidDescriptorV2().provenance,
+          actualCheckpointHash: recipe.diffusionModel.sha256,
+          loadedModelHashes: {
+            diffusion: recipe.diffusionModel.sha256,
+            lora: recipe.lora!.sha256
+          },
+          samplerSettings: {
+            sampler: recipe.sampler,
+            scheduler: recipe.scheduler,
+            steps: 8
+          },
+          comfyuiCoreRevision: recipe.requiredRuntimeRevision
+        }
+      });
+      expect(MinimaxH3ExperimentDescriptorV2Schema.parse(desc)).toBeDefined();
+    });
+
+    it("rejects fasth3-i2v-8 on Ref2V route", () => {
+      const recipe = createSyntheticFastH3Recipe();
+      const desc = createValidDescriptorV2({
+        route: "ref2v",
+        baseProfileKey: "MINIMAX_H3_720P_5S_REF2V_V1",
+        references: [
+          {
+            slotIndex: 0,
+            role: "reference",
+            tag: "<Picture 1>",
+            order: 0,
+            assetPath: "/assets/ref0.png",
+            stagedFilename: "ref0.png",
+            sha256: DUMMY_HASH_1,
+            width: 1344,
+            height: 768,
+            mimeType: "image/png"
+          }
+        ],
+        samplingRecipe: recipe
+      });
+      expect(() => MinimaxH3ExperimentDescriptorV2Schema.parse(desc)).toThrow(
+        /FastH3 8-step is strictly restricted to I2V/
+      );
+    });
+
+    it("rejects fl2va-turbo-8 on Ref2V route", () => {
+      const recipe = createSyntheticFl2vaTurboRecipe();
+      const desc = createValidDescriptorV2({
+        route: "ref2v",
+        baseProfileKey: "MINIMAX_H3_720P_5S_REF2V_V1",
+        references: [
+          {
+            slotIndex: 0,
+            role: "reference",
+            tag: "<Picture 1>",
+            order: 0,
+            assetPath: "/assets/ref0.png",
+            stagedFilename: "ref0.png",
+            sha256: DUMMY_HASH_1,
+            width: 1344,
+            height: 768,
+            mimeType: "image/png"
+          }
+        ],
+        samplingRecipe: recipe
+      });
+      expect(() => MinimaxH3ExperimentDescriptorV2Schema.parse(desc)).toThrow(
+        /FL2VA Turbo 8-step LoRA is strictly restricted to I2V route/
+      );
+    });
+
+    it("rejects stepOverride that conflicts with recipe expectedSteps", () => {
+      const recipe = createSyntheticFl2vaTurboRecipe();
+      const desc = createValidDescriptorV2({
+        route: "i2v",
+        samplingRecipe: recipe,
+        stepOverride: 20 // conflicts with recipe's 8 steps
+      });
+      expect(() => MinimaxH3ExperimentDescriptorV2Schema.parse(desc)).toThrow(
+        /stepOverride \(20\) conflicts with sampling recipe expectedSteps \(8\)/
+      );
+    });
+
+    it("rejects recipeDigest mismatch in descriptor", () => {
+      const recipe = { ...createSyntheticFl2vaTurboRecipe(), recipeDigest: DUMMY_HASH_4 };
+      const desc = createValidDescriptorV2({
+        route: "i2v",
+        samplingRecipe: recipe
+      });
+      expect(() => MinimaxH3ExperimentDescriptorV2Schema.parse(desc)).toThrow(
+        /samplingRecipe recipeDigest mismatch/
+      );
+    });
+
+    it("proves computeInvariantProjectionKey detects undeclared auxiliary model (LoRA) variations", () => {
+      const optionsBase = {
+        route: "i2v",
+        frames: 124,
+        width: 1344,
+        height: 768,
+        fps: 24,
+        seed: 42,
+        baseProfileKey: "MINIMAX_H3_720P_5S_I2V_V1",
+        declaredPaths: [],
+        positivePromptText: "A person smiling warmly",
+        references: [{ slotIndex: 0, role: "first_frame", sha256: DUMMY_HASH_1 }],
+        diffusionModelFileHash: PINNED_H3_CHECKPOINTS.fl2va.sha256,
+        samplerSettings: { sampler: "res_multistep", scheduler: "simple", steps: 20 },
+        memoryPolicy: "dynamic_vram"
+      };
+
+      const keyWithoutLora = computeInvariantProjectionKey({
+        ...optionsBase,
+        auxiliaryModels: []
+      });
+
+      const keyWithTurboLora = computeInvariantProjectionKey({
+        ...optionsBase,
+        auxiliaryModels: [
+          {
+            name: PINNED_H3_LORAS.fl2vaTurbo8.filename,
+            hash: PINNED_H3_LORAS.fl2vaTurbo8.sha256,
+            strength: 1.0,
+            role: "lora",
+            order: 0
+          }
+        ]
+      });
+
+      // Without declaring models.auxiliary, keys must NOT match (fail closed)
+      expect(keyWithoutLora).not.toBe(keyWithTurboLora);
+
+      // When declared, both project to the placeholder and match
+      const keyWithoutLoraDeclared = computeInvariantProjectionKey({
+        ...optionsBase,
+        declaredPaths: ["models.auxiliary"],
+        auxiliaryModels: []
+      });
+
+      const keyWithTurboLoraDeclared = computeInvariantProjectionKey({
+        ...optionsBase,
+        declaredPaths: ["models.auxiliary"],
+        auxiliaryModels: [
+          {
+            name: PINNED_H3_LORAS.fl2vaTurbo8.filename,
+            hash: PINNED_H3_LORAS.fl2vaTurbo8.sha256,
+            strength: 1.0,
+            role: "lora",
+            order: 0
+          }
+        ]
+      });
+
+      expect(keyWithoutLoraDeclared).toBe(keyWithTurboLoraDeclared);
+    });
+
+    it("proves computeInvariantProjectionKey detects undeclared sigmaShift variations", () => {
+      const optionsBase = {
+        route: "i2v",
+        frames: 124,
+        width: 1344,
+        height: 768,
+        fps: 24,
+        seed: 42,
+        baseProfileKey: "MINIMAX_H3_720P_5S_I2V_V1",
+        declaredPaths: [],
+        positivePromptText: "A person smiling warmly",
+        references: [{ slotIndex: 0, role: "first_frame", sha256: DUMMY_HASH_1 }],
+        diffusionModelFileHash: PINNED_H3_CHECKPOINTS.fl2va.sha256,
+        samplerSettings: { sampler: "res_multistep", scheduler: "simple", steps: 20 },
+        memoryPolicy: "dynamic_vram"
+      };
+
+      const keyDefaultShift = computeInvariantProjectionKey({
+        ...optionsBase,
+        sigmaShift: { enabled: false, videoShift: 12, audioShift: 3 }
+      });
+
+      const keyFastH3Shift = computeInvariantProjectionKey({
+        ...optionsBase,
+        sigmaShift: { enabled: true, videoShift: 10, audioShift: 3 }
+      });
+
+      expect(keyDefaultShift).not.toBe(keyFastH3Shift);
+
+      const keyDefaultShiftDeclared = computeInvariantProjectionKey({
+        ...optionsBase,
+        declaredPaths: ["sampling.sigmaShift"],
+        sigmaShift: { enabled: false, videoShift: 12, audioShift: 3 }
+      });
+
+      const keyFastH3ShiftDeclared = computeInvariantProjectionKey({
+        ...optionsBase,
+        declaredPaths: ["sampling.sigmaShift"],
+        sigmaShift: { enabled: true, videoShift: 10, audioShift: 3 }
+      });
+
+      expect(keyDefaultShiftDeclared).toBe(keyFastH3ShiftDeclared);
+    });
+
+    it("proves computeInvariantProjectionKey detects undeclared coreRevision differences", () => {
+      const optionsBase = {
+        route: "i2v" as const,
+        frames: 124,
+        width: 1344,
+        height: 768,
+        fps: 24,
+        seed: 42,
+        baseProfileKey: "MINIMAX_H3_720P_5S_I2V_V1" as const,
+        declaredPaths: [],
+        positivePromptText: "A person smiling warmly",
+        references: [{ slotIndex: 0, role: "first_frame" as const, sha256: DUMMY_HASH_1 }],
+        diffusionModelFileHash: PINNED_H3_CHECKPOINTS.fl2va.sha256,
+        samplerSettings: { sampler: "res_multistep", scheduler: "simple", steps: 20 },
+        memoryPolicy: "dynamic_vram" as const
+      };
+
+      const keyPinCore = computeInvariantProjectionKey({
+        ...optionsBase,
+        coreRevision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+      });
+
+      const keyFastH3Core = computeInvariantProjectionKey({
+        ...optionsBase,
+        coreRevision: "ee71d5c4993f29086b27fde1629a945ae48425bf"
+      });
+
+      expect(keyPinCore).not.toBe(keyFastH3Core);
+
+      const keyPinCoreDeclared = computeInvariantProjectionKey({
+        ...optionsBase,
+        declaredPaths: ["runtime.manifest"],
+        coreRevision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+      });
+
+      const keyFastH3CoreDeclared = computeInvariantProjectionKey({
+        ...optionsBase,
+        declaredPaths: ["runtime.manifest"],
+        coreRevision: "ee71d5c4993f29086b27fde1629a945ae48425bf"
+      });
+
+      expect(keyPinCoreDeclared).toBe(keyFastH3CoreDeclared);
+    });
+
+    it("superRefine rejects rehashed tampered sampling recipes against authoritative catalog", () => {
+      const validDesc = createValidDescriptorV2();
+      const genuineTurbo = getSamplingRecipe("fl2va-turbo-8");
+      const validTurboRecipe = genuineTurbo;
+
+      // 1. Adversarial tamper: change expectedSteps to 20 and recompute recipeDigest
+      const tamperedSteps = { ...genuineTurbo, expectedSteps: 20 };
+      const rehashedSteps = {
+        ...tamperedSteps,
+        recipeDigest: computeSamplingRecipeDigest(tamperedSteps)
+      };
+      expect(() =>
+        MinimaxH3ExperimentDescriptorV2Schema.parse({
+          ...validDesc,
+          samplingRecipe: rehashedSteps
+        })
+      ).toThrow(/samplingRecipe expectedSteps mismatch/);
+
+      // 2. Adversarial tamper: swap diffusionModel to ref2va and recompute recipeDigest
+      const tamperedModel = {
+        ...genuineTurbo,
+        diffusionModel: {
+          ...genuineTurbo.diffusionModel,
+          filename: PINNED_H3_CHECKPOINTS.ref2va.filename,
+          sha256: PINNED_H3_CHECKPOINTS.ref2va.sha256
+        }
+      };
+      const rehashedModel = {
+        ...tamperedModel,
+        recipeDigest: computeSamplingRecipeDigest(tamperedModel)
+      };
+      expect(() =>
+        MinimaxH3ExperimentDescriptorV2Schema.parse({
+          ...validDesc,
+          samplingRecipe: rehashedModel
+        })
+      ).toThrow(/samplingRecipe diffusionModel mismatch/);
+
+      // 3. Adversarial tamper: set lora to null and recompute recipeDigest
+      const tamperedLora = { ...genuineTurbo, lora: null };
+      const rehashedLora = {
+        ...tamperedLora,
+        recipeDigest: computeSamplingRecipeDigest(tamperedLora)
+      };
+      expect(() =>
+        MinimaxH3ExperimentDescriptorV2Schema.parse({
+          ...validDesc,
+          samplingRecipe: rehashedLora
+        })
+      ).toThrow(/samplingRecipe lora mismatch/);
+
+      // 4. Adversarial tamper: set wrong LoRA (ref2va turbo 4) and recompute recipeDigest
+      const tamperedWrongLora = {
+        ...genuineTurbo,
+        lora: {
+          filename: PINNED_H3_LORAS.ref2vaTurbo4.filename,
+          sha256: PINNED_H3_LORAS.ref2vaTurbo4.sha256,
+          sizeBytes: PINNED_H3_LORAS.ref2vaTurbo4.sizeBytes,
+          strengthModel: 1.0,
+          repository: "lightx2v/Minimax-h3-Turbo",
+          revision: "3ec17a324ced54151364f24f8b5fb6bf7e26414f"
+        }
+      };
+      const rehashedWrongLora = {
+        ...tamperedWrongLora,
+        recipeDigest: computeSamplingRecipeDigest(tamperedWrongLora)
+      };
+      expect(() =>
+        MinimaxH3ExperimentDescriptorV2Schema.parse({
+          ...validDesc,
+          samplingRecipe: rehashedWrongLora
+        })
+      ).toThrow(/samplingRecipe lora mismatch/);
+
+      // Direct MinimaxH3SamplingRecipeSchema validation against tampering
+      expect(() => MinimaxH3SamplingRecipeSchema.parse(rehashedSteps)).toThrow(
+        /samplingRecipe expectedSteps mismatch/
+      );
+      expect(() => MinimaxH3SamplingRecipeSchema.parse(rehashedModel)).toThrow(
+        /samplingRecipe diffusionModel mismatch/
+      );
+      expect(() => MinimaxH3SamplingRecipeSchema.parse(rehashedLora)).toThrow(
+        /samplingRecipe lora mismatch/
+      );
+      expect(() => MinimaxH3SamplingRecipeSchema.parse(rehashedWrongLora)).toThrow(
+        /samplingRecipe lora mismatch/
+      );
+
+      const tamperedScheduler = { ...genuineTurbo, scheduler: "karras" as const };
+      const rehashedScheduler = {
+        ...tamperedScheduler,
+        recipeDigest: computeSamplingRecipeDigest(tamperedScheduler)
+      };
+      expect(() => MinimaxH3SamplingRecipeSchema.parse(rehashedScheduler)).toThrow(
+        /samplingRecipe sampler\/scheduler\/denoise mismatch/
+      );
+
+      const tamperedShift = {
+        ...genuineTurbo,
+        sigmaShift: { enabled: true, videoShift: 10, audioShift: 3 }
+      };
+      const rehashedShift = {
+        ...tamperedShift,
+        recipeDigest: computeSamplingRecipeDigest(tamperedShift)
+      };
+      expect(() => MinimaxH3SamplingRecipeSchema.parse(rehashedShift)).toThrow(
+        /samplingRecipe sigmaShift must be null or omitted/
+      );
+
+      // Adversarial tamper: LoRA strength modified (1.0 -> 0.5) and recomputed recipeDigest
+      const tamperedStrength = {
+        ...genuineTurbo,
+        lora: { ...genuineTurbo.lora!, strengthModel: 0.5 }
+      };
+      const rehashedStrength = {
+        ...tamperedStrength,
+        recipeDigest: computeSamplingRecipeDigest(tamperedStrength)
+      };
+      expect(() =>
+        MinimaxH3ExperimentDescriptorV2Schema.parse({
+          ...validDesc,
+          samplingRecipe: rehashedStrength
+        })
+      ).toThrow(/samplingRecipe lora mismatch/);
+      expect(() => MinimaxH3SamplingRecipeSchema.parse(rehashedStrength)).toThrow(
+        /samplingRecipe lora mismatch/
+      );
+
+      // Adversarial tamper: conditioningMode modified (frame_anchored -> reference_directed) and recomputed recipeDigest
+      const tamperedCond = {
+        ...genuineTurbo,
+        conditioningMode: "reference_directed" as const
+      };
+      const rehashedCond = {
+        ...tamperedCond,
+        recipeDigest: computeSamplingRecipeDigest(tamperedCond)
+      };
+      expect(() =>
+        MinimaxH3ExperimentDescriptorV2Schema.parse({
+          ...validDesc,
+          samplingRecipe: rehashedCond
+        })
+      ).toThrow(/samplingRecipe conditioningMode mismatch/);
+      expect(() => MinimaxH3SamplingRecipeSchema.parse(rehashedCond)).toThrow(
+        /samplingRecipe conditioningMode mismatch/
+      );
+
+      // Adversarial tamper on FastH3: sigmaShift modified and recomputed recipeDigest
+      const fastH3ForTamperTest = getSamplingRecipe("fasth3-i2v-8");
+      const tamperedFastH3Sigma = {
+        ...fastH3ForTamperTest,
+        sigmaShift: { enabled: true, videoShift: 15.0, audioShift: 5.0 }
+      };
+      const rehashedFastH3Sigma = {
+        ...tamperedFastH3Sigma,
+        recipeDigest: computeSamplingRecipeDigest(tamperedFastH3Sigma)
+      };
+      expect(() =>
+        MinimaxH3ExperimentDescriptorV2Schema.parse({
+          ...validDesc,
+          samplingRecipe: rehashedFastH3Sigma
+        })
+      ).toThrow(/samplingRecipe sigmaShift mismatch/);
+      expect(() => MinimaxH3SamplingRecipeSchema.parse(rehashedFastH3Sigma)).toThrow(
+        /samplingRecipe sigmaShift mismatch/
+      );
+
+      // 5. Valid recipe parses cleanly
+      const descWithValidRecipe = {
+        ...validDesc,
+        samplingRecipe: validTurboRecipe,
+        stepOverride: 8,
+        pinFileIdentities: {
+          comfyuiCoreRevision: validTurboRecipe.requiredRuntimeRevision,
+          minimaxH3Revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+          modelDigests: {
+            diffusion: validTurboRecipe.diffusionModel.sha256,
+            lora: validTurboRecipe.lora!.sha256
+          }
+        },
+        resolvedModelPaths: {
+          diffusion: {
+            expectedHash: validTurboRecipe.diffusionModel.sha256,
+            resolvedPath: `/models/diffusion_models/${validTurboRecipe.diffusionModel.filename}`,
+            sizeBytes: validTurboRecipe.diffusionModel.sizeBytes
+          },
+          lora: {
+            expectedHash: validTurboRecipe.lora!.sha256,
+            resolvedPath: `/models/loras/${validTurboRecipe.lora!.filename}`,
+            sizeBytes: validTurboRecipe.lora!.sizeBytes
+          }
+        },
+        requiredRuntime: {
+          ...validDesc.requiredRuntime,
+          coreRevision: validTurboRecipe.requiredRuntimeRevision,
+          requiredNodes: [{ name: "MiniMaxH3ImageToVideo" }, { name: "LoraLoaderModelOnly" }],
+          sourceFileHashes: {
+            "nodes.py": PINNED_COMFYUI_NODES_PY_SHA256,
+            "comfy_extras/nodes_minimax_h3.py": PINNED_COMFYUI_NODES_MINIMAX_H3_PY_SHA256
+          }
+        },
+        provenance: {
+          ...validDesc.provenance,
+          actualCheckpointHash: validTurboRecipe.diffusionModel.sha256,
+          loadedModelHashes: {
+            diffusion: validTurboRecipe.diffusionModel.sha256,
+            lora: validTurboRecipe.lora!.sha256
+          },
+          samplerSettings: {
+            sampler: validTurboRecipe.sampler,
+            scheduler: validTurboRecipe.scheduler,
+            steps: 8
+          },
+          comfyuiCoreRevision: validTurboRecipe.requiredRuntimeRevision
+        }
+      };
+      expect(() => MinimaxH3ExperimentDescriptorV2Schema.parse(descWithValidRecipe)).not.toThrow();
+
+      // 6. Adversarial tamper: mismatch in samplerSettings steps
+      expect(() =>
+        MinimaxH3ExperimentDescriptorV2Schema.parse({
+          ...descWithValidRecipe,
+          provenance: {
+            ...descWithValidRecipe.provenance,
+            samplerSettings: {
+              ...descWithValidRecipe.provenance.samplerSettings,
+              steps: 20
+            }
+          }
+        })
+      ).toThrow(/provenance.samplerSettings/);
+
+      // 7. Adversarial tamper: missing LoraLoaderModelOnly in requiredNodes
+      expect(() =>
+        MinimaxH3ExperimentDescriptorV2Schema.parse({
+          ...descWithValidRecipe,
+          requiredRuntime: {
+            ...descWithValidRecipe.requiredRuntime,
+            requiredNodes: [{ name: "MiniMaxH3ImageToVideo" }]
+          }
+        })
+      ).toThrow(/requires.*LoraLoaderModelOnly/);
+
+      // 8. Adversarial tamper: wrong nodes.py hash in sourceFileHashes
+      expect(() =>
+        MinimaxH3ExperimentDescriptorV2Schema.parse({
+          ...descWithValidRecipe,
+          requiredRuntime: {
+            ...descWithValidRecipe.requiredRuntime,
+            sourceFileHashes: {
+              "nodes.py": DUMMY_HASH_1,
+              "comfy_extras/nodes_minimax_h3.py": PINNED_COMFYUI_NODES_MINIMAX_H3_PY_SHA256
+            }
+          }
+        })
+      ).toThrow(/Turbo recipe requires nodes\.py hash to match/);
+
+      // Adversarial tamper: wrong comfy_extras/nodes_minimax_h3.py hash
+      expect(() =>
+        MinimaxH3ExperimentDescriptorV2Schema.parse({
+          ...descWithValidRecipe,
+          requiredRuntime: {
+            ...descWithValidRecipe.requiredRuntime,
+            sourceFileHashes: {
+              "nodes.py": PINNED_COMFYUI_NODES_PY_SHA256,
+              "comfy_extras/nodes_minimax_h3.py": DUMMY_HASH_1
+            }
+          }
+        })
+      ).toThrow(/Turbo recipe requires comfy_extras\/nodes_minimax_h3\.py hash to match/);
+
+      // 9. FastH3 descriptor validation: requires block_sparse_triton, comfy-kitchen 0.2.34, torch, sigma shift, and all source hashes
+      const genuineFastH3 = getSamplingRecipe("fasth3-i2v-8");
+      const validFastH3Desc = {
+        ...validDesc,
+        samplingRecipe: genuineFastH3,
+        stepOverride: 8,
+        pinFileIdentities: {
+          comfyuiCoreRevision: genuineFastH3.requiredRuntimeRevision,
+          minimaxH3Revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+          modelDigests: {
+            diffusion: genuineFastH3.diffusionModel.sha256
+          }
+        },
+        resolvedModelPaths: {
+          diffusion: {
+            expectedHash: genuineFastH3.diffusionModel.sha256,
+            resolvedPath: `/models/diffusion_models/${genuineFastH3.diffusionModel.filename}`,
+            sizeBytes: genuineFastH3.diffusionModel.sizeBytes
+          }
+        },
+        requiredRuntime: {
+          ...validDesc.requiredRuntime,
+          coreRevision: genuineFastH3.requiredRuntimeRevision,
+          attentionKernel: "block_sparse_triton",
+          sourceFileHashes: { ...FASTH3_COMFYUI_SOURCE_HASHES },
+          requiredNodes: [
+            { name: "MiniMaxH3ImageToVideo" },
+            { name: "BlockSparseAttention" },
+            { name: "ModelAttentionBackend" },
+            { name: "MiniMaxH3SigmaShift" }
+          ],
+          pythonPackages: [
+            { name: "torch", version: "2.5.1+cu124" },
+            { name: "comfy-kitchen", version: "0.2.34" }
+          ],
+          pytorchBuild: "2.5.1+cu124"
+        },
+        provenance: {
+          ...validDesc.provenance,
+          actualCheckpointHash: genuineFastH3.diffusionModel.sha256,
+          loadedModelHashes: {
+            diffusion: genuineFastH3.diffusionModel.sha256
+          },
+          samplerSettings: {
+            sampler: genuineFastH3.sampler,
+            scheduler: genuineFastH3.scheduler,
+            steps: 8
+          },
+          comfyuiCoreRevision: genuineFastH3.requiredRuntimeRevision
+        }
+      };
+      expect(() => MinimaxH3ExperimentDescriptorV2Schema.parse(validFastH3Desc)).not.toThrow();
+
+      // FastH3 with wrong attentionKernel is rejected
+      expect(() =>
+        MinimaxH3ExperimentDescriptorV2Schema.parse({
+          ...validFastH3Desc,
+          requiredRuntime: {
+            ...validFastH3Desc.requiredRuntime,
+            attentionKernel: "torch_sdpa"
+          }
+        })
+      ).toThrow(/FastH3 recipe requires attentionKernel.*block_sparse_triton/);
+
+      // FastH3 with wrong comfy-kitchen version is rejected
+      expect(() =>
+        MinimaxH3ExperimentDescriptorV2Schema.parse({
+          ...validFastH3Desc,
+          requiredRuntime: {
+            ...validFastH3Desc.requiredRuntime,
+            pythonPackages: [{ name: "comfy-kitchen", version: "0.2.7" }]
+          }
+        })
+      ).toThrow(/FastH3 recipe requires pythonPackage.*comfy-kitchen.*0\.2\.34/);
+
+      // FastH3 missing MiniMaxH3SigmaShift node is rejected
+      expect(() =>
+        MinimaxH3ExperimentDescriptorV2Schema.parse({
+          ...validFastH3Desc,
+          requiredRuntime: {
+            ...validFastH3Desc.requiredRuntime,
+            requiredNodes: [
+              { name: "MiniMaxH3ImageToVideo" },
+              { name: "BlockSparseAttention" },
+              { name: "ModelAttentionBackend" }
+            ]
+          }
+        })
+      ).toThrow(/FastH3 recipe requires node .*MiniMaxH3SigmaShift/);
+
+      // FastH3 with mismatched source file hash is rejected
+      expect(() =>
+        MinimaxH3ExperimentDescriptorV2Schema.parse({
+          ...validFastH3Desc,
+          requiredRuntime: {
+            ...validFastH3Desc.requiredRuntime,
+            sourceFileHashes: {
+              ...FASTH3_COMFYUI_SOURCE_HASHES,
+              "main.py": DUMMY_HASH_1
+            }
+          }
+        })
+      ).toThrow(/FastH3 recipe requires sourceFileHashes/);
     });
   });
 });

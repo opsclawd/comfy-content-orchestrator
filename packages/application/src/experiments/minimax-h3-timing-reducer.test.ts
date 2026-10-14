@@ -269,6 +269,142 @@ describe("MiniMax-H3 Timing Reducer", () => {
       );
       expect(result.intervalInconsistencies.some((i) => i.includes("exceeds parent"))).toBe(true);
     });
+
+    it("marks sampling phase unknown and null duration when step count does not match declared steps", () => {
+      const makeStep = (
+        seq: number,
+        idx: number,
+        startMs: number,
+        endMs: number
+      ): MinimaxH3InstrumentationEvent[] => [
+        {
+          protocolVersion: "v2-jsonl",
+          sequence: seq,
+          runId: "r1",
+          attemptToken: "a1",
+          spanId: `step-${idx}`,
+          parentSpanId: "sampling-span",
+          phase: "sampling_step",
+          type: "span_start",
+          boundarySource: "child_bootstrap",
+          clockDomain: "mono_child",
+          monotonicMs: startMs,
+          stepIndex: idx
+        },
+        {
+          protocolVersion: "v2-jsonl",
+          sequence: seq + 1,
+          runId: "r1",
+          attemptToken: "a1",
+          spanId: `step-${idx}`,
+          parentSpanId: "sampling-span",
+          phase: "sampling_step",
+          type: "span_end",
+          boundarySource: "child_bootstrap",
+          clockDomain: "mono_child",
+          monotonicMs: endMs,
+          stepIndex: idx,
+          outcome: "success"
+        }
+      ];
+
+      // Case 1: Fewer steps than declared (e.g. 4 steps vs 8 declared)
+      const eventsFew: MinimaxH3InstrumentationEvent[] = [
+        {
+          protocolVersion: "v2-jsonl",
+          sequence: 0,
+          runId: "r1",
+          attemptToken: "a1",
+          spanId: "sampling-span",
+          phase: "sampling",
+          type: "span_start",
+          boundarySource: "child_bootstrap",
+          clockDomain: "mono_child",
+          monotonicMs: 100
+        },
+        ...makeStep(1, 0, 110, 150),
+        ...makeStep(3, 1, 150, 190),
+        ...makeStep(5, 2, 190, 230),
+        ...makeStep(7, 3, 230, 270),
+        {
+          protocolVersion: "v2-jsonl",
+          sequence: 9,
+          runId: "r1",
+          attemptToken: "a1",
+          spanId: "sampling-span",
+          phase: "sampling",
+          type: "span_end",
+          boundarySource: "child_bootstrap",
+          clockDomain: "mono_child",
+          monotonicMs: 280,
+          outcome: "success"
+        }
+      ];
+
+      const resultFew = reducePhaseAccounting({
+        events: eventsFew,
+        parentWallTimeMs: 500,
+        declaredSteps: 8
+      });
+
+      expect(resultFew.phases.sampling).toBeDefined();
+      expect(resultFew.phases.sampling?.status).toBe("unknown");
+      expect(resultFew.phases.sampling?.durationMs).toBeNull();
+      expect(resultFew.phases.sampling?.unknownReason).toBe("incomplete_sampling_steps");
+      expect(resultFew.intervalInconsistencies).toContain(
+        "Observed step count (4) does not match declared steps (8)"
+      );
+      expect(resultFew.samplingWallTimeMs).toBeNull();
+
+      // Case 2: Excess steps than declared (e.g. 5 steps vs 4 declared)
+      const eventsExcess: MinimaxH3InstrumentationEvent[] = [
+        {
+          protocolVersion: "v2-jsonl",
+          sequence: 0,
+          runId: "r1",
+          attemptToken: "a1",
+          spanId: "sampling-span",
+          phase: "sampling",
+          type: "span_start",
+          boundarySource: "child_bootstrap",
+          clockDomain: "mono_child",
+          monotonicMs: 100
+        },
+        ...makeStep(1, 0, 110, 150),
+        ...makeStep(3, 1, 150, 190),
+        ...makeStep(5, 2, 190, 230),
+        ...makeStep(7, 3, 230, 270),
+        ...makeStep(9, 4, 270, 310),
+        {
+          protocolVersion: "v2-jsonl",
+          sequence: 11,
+          runId: "r1",
+          attemptToken: "a1",
+          spanId: "sampling-span",
+          phase: "sampling",
+          type: "span_end",
+          boundarySource: "child_bootstrap",
+          clockDomain: "mono_child",
+          monotonicMs: 320,
+          outcome: "success"
+        }
+      ];
+
+      const resultExcess = reducePhaseAccounting({
+        events: eventsExcess,
+        parentWallTimeMs: 500,
+        declaredSteps: 4
+      });
+
+      expect(resultExcess.phases.sampling).toBeDefined();
+      expect(resultExcess.phases.sampling?.status).toBe("unknown");
+      expect(resultExcess.phases.sampling?.durationMs).toBeNull();
+      expect(resultExcess.phases.sampling?.unknownReason).toBe("excess_sampling_steps");
+      expect(resultExcess.intervalInconsistencies).toContain(
+        "Observed step count (5) does not match declared steps (4)"
+      );
+      expect(resultExcess.samplingWallTimeMs).toBeNull();
+    });
   });
 
   describe("Python Collector Bootstrap Smoke Test", () => {

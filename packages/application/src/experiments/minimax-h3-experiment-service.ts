@@ -19,6 +19,11 @@ import {
   computeDescriptorDigest,
   computeComparisonKey,
   PINNED_H3_CHECKPOINTS,
+  FASTH3_ISOLATED_CORE_REVISION,
+  FASTH3_COMFYUI_SOURCE_HASHES,
+  PINNED_COMFYUI_NODES_PY_SHA256,
+  PINNED_COMFYUI_NODES_MINIMAX_H3_PY_SHA256,
+  buildRequiredRuntimeManifestFromAttentionCatalog,
   type MinimaxH3ExperimentDescriptor,
   type MinimaxH3ExperimentDescriptorV2,
   type MinimaxH3AnyExperimentDescriptor,
@@ -42,6 +47,8 @@ import {
   type MinimaxH3AttentionTopology,
   type MinimaxH3RequiredRuntimeManifest,
   type MinimaxH3ObservedProvenance,
+  type MinimaxH3SamplingRecipe,
+  type MinimaxH3SamplingRecipeName,
   MinimaxH3ObservedProvenanceSchema
 } from "@cco/contracts";
 import { reducePhaseAccounting } from "./minimax-h3-timing-reducer.js";
@@ -51,6 +58,14 @@ import {
 } from "./minimax-h3-attention-topology.js";
 import { getAttentionCatalogEntry } from "./minimax-h3-attention-catalog.js";
 import { reduceAttentionObservation } from "./minimax-h3-attention-reducer.js";
+import {
+  getSamplingRecipe,
+  validateRecipeRouteCompatibility
+} from "./minimax-h3-step-reduction-catalog.js";
+import {
+  applySamplingRecipeToGraph,
+  validateSamplingRecipeTopology
+} from "./minimax-h3-step-reduction-compiler.js";
 import type {
   MinimaxH3ComfyUiTransportPort,
   MinimaxH3ExperimentStorePort,
@@ -553,7 +568,51 @@ export class MinimaxH3ExperimentService {
       options.checkpointOverride !== undefined ||
       options.changedFactors !== undefined ||
       options.variantPurpose !== undefined ||
-      options.attentionVariant !== undefined;
+      options.attentionVariant !== undefined ||
+      options.samplingRecipe !== undefined;
+
+    const samplingRecipeName: MinimaxH3SamplingRecipeName | undefined = options.samplingRecipe;
+    const samplingRecipe: MinimaxH3SamplingRecipe | undefined = samplingRecipeName
+      ? getSamplingRecipe(samplingRecipeName, route)
+      : undefined;
+
+    if (samplingRecipe) {
+      if (options.attentionVariant !== undefined) {
+        throw new Error(
+          "Cannot specify attentionVariant when using samplingRecipe; the recipe defines its own attention configuration."
+        );
+      }
+      if (options.stepOverride !== undefined) {
+        throw new Error(
+          `Cannot specify stepOverride when using samplingRecipe; recipe "${samplingRecipe.name}" specifies its exact expectedSteps (${samplingRecipe.expectedSteps}).`
+        );
+      }
+      if (options.checkpointOverride !== undefined) {
+        throw new Error(
+          `Cannot specify checkpointOverride when using samplingRecipe; recipe "${samplingRecipe.name}" specifies its exact diffusionModel.`
+        );
+      }
+      if (options.coreRevision !== undefined) {
+        throw new Error(
+          `Cannot specify coreRevision when using samplingRecipe; recipe "${samplingRecipe.name}" specifies its requiredRuntime.`
+        );
+      }
+      if (options.matchedVariant !== undefined) {
+        throw new Error(
+          `Cannot specify matchedVariant when using samplingRecipe; recipe "${samplingRecipe.name}" defines its own configuration.`
+        );
+      }
+      if (
+        samplingRecipe.name === "fasth3-i2v-8" &&
+        options.variantPurpose !== undefined &&
+        options.variantPurpose !== "controlled_multifactor"
+      ) {
+        throw new Error(
+          `FastH3 recipe changes multiple factors (models.diffusion, sampling.settings, sampling.sigmaShift, attention.configuration, runtime.manifest); variantPurpose must be "controlled_multifactor", received "${options.variantPurpose}".`
+        );
+      }
+      validateRecipeRouteCompatibility(samplingRecipe.name, route);
+    }
 
     const attentionVariant: MinimaxH3AttentionVariantName | undefined = options.attentionVariant;
     const attentionCatalogEntry = attentionVariant
@@ -565,12 +624,14 @@ export class MinimaxH3ExperimentService {
     const effectiveArgv =
       attentionVariant === "sage" ? [...generatedArgv, "--use-sage-attention"] : [...generatedArgv];
 
-    const checkpointFilename =
-      options.checkpointOverride === "fl2va"
+    const checkpointFilename = samplingRecipe
+      ? samplingRecipe.diffusionModel.filename
+      : options.checkpointOverride === "fl2va"
         ? PINNED_H3_CHECKPOINTS.fl2va.filename
         : PINNED_H3_CHECKPOINTS.ref2va.filename;
-    const checkpointHash =
-      options.checkpointOverride === "fl2va"
+    const checkpointHash = samplingRecipe
+      ? samplingRecipe.diffusionModel.sha256
+      : options.checkpointOverride === "fl2va"
         ? PINNED_H3_CHECKPOINTS.fl2va.sha256
         : PINNED_H3_CHECKPOINTS.ref2va.sha256;
 
@@ -592,7 +653,19 @@ export class MinimaxH3ExperimentService {
     let derivedGraph = baseDerivedGraph;
     let attentionTopology: MinimaxH3AttentionTopology | undefined;
 
-    if (attentionVariant !== undefined && attentionCatalogEntry) {
+    if (samplingRecipe) {
+      derivedGraph = applySamplingRecipeToGraph({
+        baseWorkflow: baseDerivedGraph,
+        recipe: samplingRecipe,
+        route
+      });
+      const recipeValidation = validateSamplingRecipeTopology(derivedGraph, samplingRecipe, route);
+      if (!recipeValidation.valid) {
+        throw new Error(
+          `Sampling recipe topology validation failed for recipe "${samplingRecipe.name}":\n${recipeValidation.errors.join("\n")}`
+        );
+      }
+    } else if (attentionVariant !== undefined && attentionCatalogEntry) {
       const { graph: attGraph, topology } = deriveAttentionGraph({
         graph: baseDerivedGraph,
         attentionVariant,
@@ -648,12 +721,16 @@ export class MinimaxH3ExperimentService {
       // this yet). Keep this literal in sync if that ever changes.
       modelOffload: true,
       workflowDigest: derivedWorkflowDigest,
-      comfyuiCoreRevision: attentionCatalogEntry
-        ? attentionCatalogEntry.comfyuiCoreRevision
-        : PINNED_COMFYUI_CORE_REVISION,
+      comfyuiCoreRevision: samplingRecipe
+        ? samplingRecipe.requiredRuntimeRevision
+        : attentionCatalogEntry
+          ? attentionCatalogEntry.comfyuiCoreRevision
+          : PINNED_COMFYUI_CORE_REVISION,
       modelDigests: {
-        "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors":
-          "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+        [`diffusion_models/${checkpointFilename}`]: checkpointHash,
+        ...(samplingRecipe?.lora
+          ? { [`loras/${samplingRecipe.lora.filename}`]: samplingRecipe.lora.sha256 }
+          : {}),
         "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors":
           "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
         "vae/minimax_h3_video_vae_int8_convrot.safetensors":
@@ -723,6 +800,86 @@ export class MinimaxH3ExperimentService {
         });
       }
 
+      if (samplingRecipe) {
+        if (samplingRecipe.lora && !declaredChanges.some((c) => c.path === "models.auxiliary")) {
+          declaredChanges.push({
+            path: "models.auxiliary",
+            before: [],
+            after: [
+              {
+                name: samplingRecipe.lora.filename,
+                hash: samplingRecipe.lora.sha256,
+                strength: samplingRecipe.lora.strengthModel,
+                role: "lora",
+                order: 0
+              }
+            ],
+            rationale: `Sampling recipe LoRA distillation: ${samplingRecipe.name}`
+          });
+        }
+        if (
+          samplingRecipe.expectedSteps !== 20 &&
+          !declaredChanges.some((c) => c.path === "sampling.settings")
+        ) {
+          declaredChanges.push({
+            path: "sampling.settings",
+            before: { sampler: "res_multistep", scheduler: "simple", steps: 20 },
+            after: {
+              sampler: samplingRecipe.sampler,
+              scheduler: samplingRecipe.scheduler,
+              steps: samplingRecipe.expectedSteps
+            },
+            rationale: `Sampling recipe step schedule: ${samplingRecipe.name} (${samplingRecipe.expectedSteps} steps)`
+          });
+        }
+        if (
+          samplingRecipe.sigmaShift?.enabled &&
+          !declaredChanges.some((c) => c.path === "sampling.sigmaShift")
+        ) {
+          declaredChanges.push({
+            path: "sampling.sigmaShift",
+            before: { enabled: false, videoShift: 12.0, audioShift: 3.0 },
+            after: {
+              enabled: true,
+              videoShift: samplingRecipe.sigmaShift.videoShift,
+              audioShift: samplingRecipe.sigmaShift.audioShift
+            },
+            rationale: `Sampling recipe sigma shift: ${samplingRecipe.name}`
+          });
+        }
+        if (
+          samplingRecipe.name !== "fl2va-turbo-8" &&
+          samplingRecipe.diffusionModel.filename !== PINNED_H3_CHECKPOINTS.ref2va.filename &&
+          !declaredChanges.some((c) => c.path === "models.diffusion")
+        ) {
+          const beforeCheckpoint =
+            samplingRecipe.name === "fasth3-i2v-8"
+              ? PINNED_H3_CHECKPOINTS.fl2va
+              : PINNED_H3_CHECKPOINTS.ref2va;
+          const beforeTaskMode = samplingRecipe.name === "fasth3-i2v-8" ? "fl2va" : "ref2va";
+          declaredChanges.push({
+            path: "models.diffusion",
+            before: {
+              repository: "Comfy-Org/MiniMax-H3",
+              revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+              filename: beforeCheckpoint.filename,
+              fileHash: beforeCheckpoint.sha256,
+              taskMode: beforeTaskMode,
+              licenseSourceRef: "https://huggingface.co/Comfy-Org/MiniMax-H3"
+            },
+            after: {
+              repository: samplingRecipe.diffusionModel.repository,
+              revision: samplingRecipe.diffusionModel.revision,
+              filename: samplingRecipe.diffusionModel.filename,
+              fileHash: samplingRecipe.diffusionModel.sha256,
+              taskMode: samplingRecipe.taskFamily,
+              licenseSourceRef: samplingRecipe.licensing.licenseSourceRef
+            },
+            rationale: `Sampling recipe checkpoint: ${samplingRecipe.name}`
+          });
+        }
+      }
+
       const collectorPath = resolveCollectorPath();
       if (!collectorPath || !existsSync(collectorPath)) {
         throw new Error(
@@ -771,45 +928,121 @@ export class MinimaxH3ExperimentService {
         hooks: standardHooks
       };
 
-      const upgradedRequiredRuntime: MinimaxH3RequiredRuntimeManifest = attentionCatalogEntry
-        ? {
-            coreRevision: attentionCatalogEntry.comfyuiCoreRevision,
+      let recipeRequiredRuntime: MinimaxH3RequiredRuntimeManifest | undefined;
+      if (samplingRecipe) {
+        if (samplingRecipe.name === "fasth3-i2v-8") {
+          recipeRequiredRuntime = {
+            coreRevision: FASTH3_ISOLATED_CORE_REVISION,
+            sourceFileHashes: { ...FASTH3_COMFYUI_SOURCE_HASHES },
+            requiredNodes: [
+              { name: "MiniMaxH3ImageToVideo" },
+              { name: "BlockSparseAttention" },
+              { name: "MiniMaxH3SigmaShift" },
+              { name: "ModelAttentionBackend" }
+            ],
+            pythonPackages: [
+              { name: "torch", version: "2.5.1+cu124" },
+              { name: "comfy-kitchen", version: "0.2.34" }
+            ],
+            pytorchBuild: "2.5.1+cu124",
+            cudaBuild: "12.4",
+            driverConstraints: [">=550.00.00"],
+            attentionKernel: "block_sparse_triton",
+            instrumentationProtocol: "v2-jsonl",
+            collectorDigest: genuineCollectorDigest,
+            hookManifestDigest: genuineHookManifestDigest,
+            hooks: standardHooks
+          };
+        } else if (samplingRecipe.lora) {
+          recipeRequiredRuntime = {
+            coreRevision: PINNED_COMFYUI_CORE_REVISION,
             sourceFileHashes: {
               "comfy/model_management.py": PINNED_COMFYUI_SOURCE_HASHES.modelManagementSha256,
               "main.py": PINNED_COMFYUI_SOURCE_HASHES.mainSha256,
-              "comfy/cli_args.py": PINNED_COMFYUI_SOURCE_HASHES.cliArgsSha256
+              "comfy/cli_args.py": PINNED_COMFYUI_SOURCE_HASHES.cliArgsSha256,
+              "nodes.py": PINNED_COMFYUI_NODES_PY_SHA256,
+              "comfy_extras/nodes_minimax_h3.py": PINNED_COMFYUI_NODES_MINIMAX_H3_PY_SHA256
             },
             requiredNodes: [
               {
                 name: route === "i2v" ? "MiniMaxH3ImageToVideo" : "MiniMaxH3ReferenceToVideo"
               },
-              ...attentionCatalogEntry.requiredNodes.map((n) => ({
-                name: n.name,
-                revision: n.revision
-              }))
+              {
+                name: "LoraLoaderModelOnly"
+              }
             ],
-            pythonPackages:
-              attentionCatalogEntry.pythonPackages.length > 0
-                ? attentionCatalogEntry.pythonPackages.map((p) => ({
-                    name: p.name,
-                    version: p.version
-                  }))
-                : [{ name: "torch", version: "2.5.1+cu124" }],
+            pythonPackages: [{ name: "torch", version: "2.5.1+cu124" }],
             pytorchBuild: "2.5.1+cu124",
             cudaBuild: "12.4",
             driverConstraints: [">=550.00.00"],
-            attentionKernel: attentionCatalogEntry.kernel,
+            attentionKernel: "torch_sdpa",
             instrumentationProtocol: "v2-jsonl",
             collectorDigest: genuineCollectorDigest,
             hookManifestDigest: genuineHookManifestDigest,
             hooks: standardHooks
-          }
-        : baseRequiredRuntime;
+          };
+        } else {
+          recipeRequiredRuntime = baseRequiredRuntime;
+        }
+      }
+
+      const upgradedRequiredRuntime: MinimaxH3RequiredRuntimeManifest = attentionCatalogEntry
+        ? buildRequiredRuntimeManifestFromAttentionCatalog(attentionCatalogEntry, route, {
+            collectorDigest: genuineCollectorDigest,
+            hookManifestDigest: genuineHookManifestDigest,
+            hooks: standardHooks
+          })
+        : (recipeRequiredRuntime ?? baseRequiredRuntime);
 
       const baseRuntimeManifestDigest = sha256Hex(canonicalizeJson(baseRequiredRuntime));
       const upgradedRuntimeManifestDigest = sha256Hex(canonicalizeJson(upgradedRequiredRuntime));
+      const recipeRuntimeManifestDigest = recipeRequiredRuntime
+        ? sha256Hex(canonicalizeJson(recipeRequiredRuntime))
+        : baseRuntimeManifestDigest;
       const baseHookManifestDigest = sha256Hex(canonicalizeJson(baseRequiredRuntime.hooks));
       const upgradedHookManifestDigest = sha256Hex(canonicalizeJson(upgradedRequiredRuntime.hooks));
+      const recipeHookManifestDigest = recipeRequiredRuntime
+        ? sha256Hex(canonicalizeJson(recipeRequiredRuntime.hooks))
+        : baseHookManifestDigest;
+
+      if (samplingRecipe) {
+        if (
+          samplingRecipe.attentionTopology &&
+          !declaredChanges.some((c) => c.path === "attention.configuration")
+        ) {
+          declaredChanges.push({
+            path: "attention.configuration",
+            before: {
+              backend: "torch_sdpa",
+              topologyDigest: computeAttentionTopologyDigest([]),
+              patches: []
+            },
+            after: {
+              backend: samplingRecipe.attentionTopology.backend,
+              topologyDigest: samplingRecipe.attentionTopology.topologyDigest,
+              patches: samplingRecipe.attentionTopology.patches.map((p) => p.classType)
+            },
+            rationale: `Sampling recipe attention topology: ${samplingRecipe.name}`
+          });
+        }
+        if (
+          recipeRuntimeManifestDigest !== baseRuntimeManifestDigest &&
+          !declaredChanges.some((c) => c.path === "runtime.manifest")
+        ) {
+          declaredChanges.push({
+            path: "runtime.manifest",
+            before: {
+              runtimeManifestDigest: baseRuntimeManifestDigest,
+              hookManifestDigest: baseHookManifestDigest
+            },
+            after: {
+              runtimeManifestDigest: recipeRuntimeManifestDigest,
+              hookManifestDigest: recipeHookManifestDigest
+            },
+            rationale: `Isolated runtime configuration required for sampling recipe: ${samplingRecipe.name}`
+          });
+        }
+      }
 
       if (
         options.attentionVariant !== undefined &&
@@ -876,11 +1109,15 @@ export class MinimaxH3ExperimentService {
         baseCanonicalWorkflowDigest,
         derivedWorkflowDigest,
         pinFileIdentities: {
-          comfyuiCoreRevision: PINNED_COMFYUI_CORE_REVISION,
+          comfyuiCoreRevision: samplingRecipe
+            ? samplingRecipe.requiredRuntimeRevision
+            : PINNED_COMFYUI_CORE_REVISION,
           minimaxH3Revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
           modelDigests: {
-            "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors":
-              "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+            [`diffusion_models/${checkpointFilename}`]: checkpointHash,
+            ...(samplingRecipe?.lora
+              ? { [`loras/${samplingRecipe.lora.filename}`]: samplingRecipe.lora.sha256 }
+              : {}),
             "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors":
               "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
             "vae/minimax_h3_video_vae_int8_convrot.safetensors":
@@ -890,11 +1127,20 @@ export class MinimaxH3ExperimentService {
           }
         },
         resolvedModelPaths: {
-          "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors": {
-            expectedHash: "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
-            resolvedPath: `${comfyUiDir}/models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors`,
-            sizeBytes: 20970379616
+          [`diffusion_models/${checkpointFilename}`]: {
+            expectedHash: checkpointHash,
+            resolvedPath: `${comfyUiDir}/models/diffusion_models/${checkpointFilename}`,
+            sizeBytes: samplingRecipe?.diffusionModel.sizeBytes ?? 20970379616
           },
+          ...(samplingRecipe?.lora
+            ? {
+                [`loras/${samplingRecipe.lora.filename}`]: {
+                  expectedHash: samplingRecipe.lora.sha256,
+                  resolvedPath: `${comfyUiDir}/models/loras/${samplingRecipe.lora.filename}`,
+                  sizeBytes: samplingRecipe.lora.sizeBytes
+                }
+              }
+            : {}),
           "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors": {
             expectedHash: "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
             resolvedPath: `${comfyUiDir}/models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`,
@@ -933,7 +1179,19 @@ export class MinimaxH3ExperimentService {
             CUDA_VISIBLE_DEVICES: gpuUuid
           },
           predictedPolicy,
-          pinnedSourceIdentities: PINNED_COMFYUI_SOURCE_HASHES
+          pinnedSourceIdentities:
+            samplingRecipe?.name === "fasth3-i2v-8"
+              ? {
+                  cliArgsSha256: FASTH3_COMFYUI_SOURCE_HASHES["comfy/cli_args.py"],
+                  mainSha256: FASTH3_COMFYUI_SOURCE_HASHES["main.py"],
+                  modelManagementSha256: FASTH3_COMFYUI_SOURCE_HASHES["comfy/model_management.py"]
+                }
+              : samplingRecipe?.lora
+                ? {
+                    ...PINNED_COMFYUI_SOURCE_HASHES,
+                    nodesPySha256: PINNED_COMFYUI_NODES_PY_SHA256
+                  }
+                : PINNED_COMFYUI_SOURCE_HASHES
         },
         target: {
           hostname: targetHost,
@@ -952,7 +1210,11 @@ export class MinimaxH3ExperimentService {
           variantReason: variantReason ?? "experimental variant",
           purpose:
             options.variantPurpose ??
-            (options.stepOverride !== undefined ? "performance" : "performance"),
+            (samplingRecipe?.name === "fasth3-i2v-8"
+              ? "controlled_multifactor"
+              : options.stepOverride !== undefined
+                ? "performance"
+                : "performance"),
           changedFactors: declaredChanges
         },
         provenance: {
@@ -960,12 +1222,35 @@ export class MinimaxH3ExperimentService {
           derivedWorkflowDigest,
           actualCheckpointHash: checkpointHash,
           loadedModelHashes: {
-            diffusion: checkpointHash
+            diffusion: checkpointHash,
+            [`diffusion_models/${checkpointFilename}`]: checkpointHash,
+            ...(samplingRecipe?.lora
+              ? {
+                  lora: samplingRecipe.lora.sha256,
+                  [`loras/${samplingRecipe.lora.filename}`]: samplingRecipe.lora.sha256
+                }
+              : {})
           },
-          comfyuiCoreRevision: attentionCatalogEntry
-            ? attentionCatalogEntry.comfyuiCoreRevision
-            : PINNED_COMFYUI_CORE_REVISION,
-          sourceIdentities: PINNED_COMFYUI_SOURCE_HASHES,
+          comfyuiCoreRevision: samplingRecipe
+            ? samplingRecipe.requiredRuntimeRevision
+            : attentionCatalogEntry
+              ? attentionCatalogEntry.comfyuiCoreRevision
+              : PINNED_COMFYUI_CORE_REVISION,
+          sourceIdentities:
+            samplingRecipe?.name === "fasth3-i2v-8"
+              ? {
+                  cliArgsSha256: FASTH3_COMFYUI_SOURCE_HASHES["comfy/cli_args.py"],
+                  mainSha256: FASTH3_COMFYUI_SOURCE_HASHES["main.py"],
+                  modelManagementSha256: FASTH3_COMFYUI_SOURCE_HASHES["comfy/model_management.py"],
+                  nodesMinimaxH3Sha256:
+                    FASTH3_COMFYUI_SOURCE_HASHES["comfy_extras/nodes_minimax_h3.py"]
+                }
+              : samplingRecipe?.lora
+                ? {
+                    ...PINNED_COMFYUI_SOURCE_HASHES,
+                    nodesPySha256: PINNED_COMFYUI_NODES_PY_SHA256
+                  }
+                : PINNED_COMFYUI_SOURCE_HASHES,
           customNodeInventory: {
             status: "verified_empty" as const,
             nodes: []
@@ -977,15 +1262,16 @@ export class MinimaxH3ExperimentService {
             cudaRuntimeVersion: "12.4",
             driverVersion: "560.35.03"
           },
-          requestedAttentionBackend:
-            options.attentionVariant !== undefined && attentionCatalogEntry
+          requestedAttentionBackend: samplingRecipe?.attentionTopology
+            ? samplingRecipe.attentionTopology.backend
+            : options.attentionVariant !== undefined && attentionCatalogEntry
               ? attentionCatalogEntry.backend
               : "default",
           requestedMemoryPolicy: requestedPolicy,
           samplerSettings: {
-            sampler: "res_multistep",
-            scheduler: "simple",
-            steps: options.stepOverride ?? 20
+            sampler: samplingRecipe?.sampler ?? "res_multistep",
+            scheduler: samplingRecipe?.scheduler ?? "simple",
+            steps: samplingRecipe?.expectedSteps ?? options.stepOverride ?? 20
           },
           sourceAssetDigests: processedReferences.map((r) => ({
             role: r.role,
@@ -995,10 +1281,22 @@ export class MinimaxH3ExperimentService {
           promptDigest,
           instrumentationProtocol: "v2-jsonl",
           collectorDigest: genuineCollectorDigest,
-          hookManifestDigest: genuineHookManifestDigest
+          hookManifestDigest: samplingRecipe ? recipeHookManifestDigest : genuineHookManifestDigest
         },
-        compatibility:
-          options.attentionVariant !== undefined && attentionCatalogEntry
+        compatibility: samplingRecipe
+          ? {
+              state:
+                samplingRecipe.requiredRuntimeRevision === PINNED_COMFYUI_CORE_REVISION
+                  ? ("supported" as const)
+                  : ("requires_isolated_upgrade" as const),
+              relativeToRuntimeManifestDigest: recipeRuntimeManifestDigest,
+              scope: `${route}-${samplingRecipe.name}`,
+              reasons: [
+                `Sampling recipe ${samplingRecipe.name} targeting revision ${samplingRecipe.requiredRuntimeRevision}`
+              ],
+              sources: samplingRecipe.sourceReferences
+            }
+          : options.attentionVariant !== undefined && attentionCatalogEntry
             ? {
                 state: attentionCatalogEntry.compatibilityState,
                 relativeToRuntimeManifestDigest:
@@ -1021,8 +1319,11 @@ export class MinimaxH3ExperimentService {
                   }
                 ]
               },
-        requiredRuntime:
-          options.attentionVariant !== undefined ? upgradedRequiredRuntime : baseRequiredRuntime,
+        requiredRuntime: samplingRecipe
+          ? recipeRequiredRuntime!
+          : options.attentionVariant !== undefined
+            ? upgradedRequiredRuntime
+            : baseRequiredRuntime,
         conditioning: {
           positivePrompt: {
             text: prompt,
@@ -1045,6 +1346,7 @@ export class MinimaxH3ExperimentService {
         },
         stepOverride: options.stepOverride ?? null,
         checkpointOverride: options.checkpointOverride ?? null,
+        ...(samplingRecipe ? { samplingRecipe } : {}),
         ...(options.attentionVariant !== undefined && attentionCatalogEntry && attentionTopology
           ? {
               attentionRequest: {
@@ -1362,7 +1664,257 @@ export class MinimaxH3ExperimentService {
 
       const descV2 =
         descriptor.schemaVersion === 2 ? (descriptor as MinimaxH3ExperimentDescriptorV2) : null;
-      if (descV2?.attentionRequest) {
+      if (descV2?.samplingRecipe) {
+        let canonicalRecipe: MinimaxH3SamplingRecipe;
+        try {
+          canonicalRecipe = getSamplingRecipe(descV2.samplingRecipe.name, descriptor.route);
+          if (canonicalRecipe.recipeDigest !== descV2.samplingRecipe.recipeDigest) {
+            errors.push(
+              `Sampling recipe digest mismatch for "${descV2.samplingRecipe.name}": descriptor has ${descV2.samplingRecipe.recipeDigest}, authoritative catalog has ${canonicalRecipe.recipeDigest}`
+            );
+          }
+          if (canonicalRecipe.recipeVersion !== descV2.samplingRecipe.recipeVersion) {
+            errors.push(
+              `Sampling recipe version mismatch: expected ${canonicalRecipe.recipeVersion}, got ${descV2.samplingRecipe.recipeVersion}`
+            );
+          }
+          if (canonicalRecipe.compatibleRoute !== descV2.samplingRecipe.compatibleRoute) {
+            errors.push(
+              `Sampling recipe compatibleRoute mismatch: expected ${canonicalRecipe.compatibleRoute}, got ${descV2.samplingRecipe.compatibleRoute}`
+            );
+          }
+          if (
+            canonicalRecipe.diffusionModel.filename !==
+              descV2.samplingRecipe.diffusionModel.filename ||
+            canonicalRecipe.diffusionModel.sha256 !== descV2.samplingRecipe.diffusionModel.sha256
+          ) {
+            errors.push(
+              `Sampling recipe diffusion model mismatch: expected ${canonicalRecipe.diffusionModel.filename} (${canonicalRecipe.diffusionModel.sha256}), got ${descV2.samplingRecipe.diffusionModel.filename} (${descV2.samplingRecipe.diffusionModel.sha256})`
+            );
+          }
+          if (canonicalRecipe.expectedSteps !== descV2.samplingRecipe.expectedSteps) {
+            errors.push(
+              `Sampling recipe expectedSteps mismatch: expected ${canonicalRecipe.expectedSteps}, got ${descV2.samplingRecipe.expectedSteps}`
+            );
+          }
+          if (
+            canonicalRecipe.sampler !== descV2.samplingRecipe.sampler ||
+            canonicalRecipe.scheduler !== descV2.samplingRecipe.scheduler ||
+            canonicalRecipe.denoise !== descV2.samplingRecipe.denoise
+          ) {
+            errors.push(
+              `Sampling recipe sampler/scheduler/denoise mismatch for "${descV2.samplingRecipe.name}"`
+            );
+          }
+          if (canonicalRecipe.lora) {
+            if (
+              !descV2.samplingRecipe.lora ||
+              descV2.samplingRecipe.lora.filename !== canonicalRecipe.lora.filename ||
+              descV2.samplingRecipe.lora.sha256 !== canonicalRecipe.lora.sha256 ||
+              descV2.samplingRecipe.lora.strengthModel !== canonicalRecipe.lora.strengthModel
+            ) {
+              errors.push(`Sampling recipe LoRA mismatch for "${descV2.samplingRecipe.name}"`);
+            }
+          } else if (descV2.samplingRecipe.lora) {
+            errors.push(`Sampling recipe LoRA must be null for "${descV2.samplingRecipe.name}"`);
+          }
+          if (canonicalRecipe.sigmaShift) {
+            if (
+              !descV2.samplingRecipe.sigmaShift ||
+              descV2.samplingRecipe.sigmaShift.enabled !== canonicalRecipe.sigmaShift.enabled ||
+              descV2.samplingRecipe.sigmaShift.videoShift !==
+                canonicalRecipe.sigmaShift.videoShift ||
+              descV2.samplingRecipe.sigmaShift.audioShift !== canonicalRecipe.sigmaShift.audioShift
+            ) {
+              errors.push(
+                `Sampling recipe sigmaShift mismatch for "${descV2.samplingRecipe.name}"`
+              );
+            }
+          } else if (descV2.samplingRecipe.sigmaShift) {
+            errors.push(
+              `Sampling recipe sigmaShift must be null for "${descV2.samplingRecipe.name}"`
+            );
+          }
+          if (canonicalRecipe.conditioningMode !== descV2.samplingRecipe.conditioningMode) {
+            errors.push(
+              `Sampling recipe conditioningMode mismatch: expected ${canonicalRecipe.conditioningMode}, got ${descV2.samplingRecipe.conditioningMode}`
+            );
+          }
+          if (
+            canonicalRecipe.requiredRuntimeRevision !==
+            descV2.samplingRecipe.requiredRuntimeRevision
+          ) {
+            errors.push(
+              `Sampling recipe requiredRuntimeRevision mismatch: expected ${canonicalRecipe.requiredRuntimeRevision}, got ${descV2.samplingRecipe.requiredRuntimeRevision}`
+            );
+          }
+
+          // Validate descriptor-level provenance against authoritative recipe
+          if (descV2.provenance?.samplerSettings) {
+            if (descV2.provenance.samplerSettings.steps !== canonicalRecipe.expectedSteps) {
+              errors.push(
+                `Descriptor provenance sampler steps mismatch: expected ${canonicalRecipe.expectedSteps}, got ${descV2.provenance.samplerSettings.steps}`
+              );
+            }
+            if (descV2.provenance.samplerSettings.sampler !== canonicalRecipe.sampler) {
+              errors.push(
+                `Descriptor provenance sampler mismatch: expected "${canonicalRecipe.sampler}", got "${descV2.provenance.samplerSettings.sampler}"`
+              );
+            }
+            if (descV2.provenance.samplerSettings.scheduler !== canonicalRecipe.scheduler) {
+              errors.push(
+                `Descriptor provenance scheduler mismatch: expected "${canonicalRecipe.scheduler}", got "${descV2.provenance.samplerSettings.scheduler}"`
+              );
+            }
+          }
+          if (
+            descV2.provenance?.actualCheckpointHash &&
+            descV2.provenance.actualCheckpointHash !== canonicalRecipe.diffusionModel.sha256
+          ) {
+            errors.push(
+              `Descriptor provenance actualCheckpointHash mismatch: expected ${canonicalRecipe.diffusionModel.sha256}, got ${descV2.provenance.actualCheckpointHash}`
+            );
+          }
+          if (!descV2.requiredRuntime) {
+            errors.push(
+              `Sampling recipe "${descV2.samplingRecipe.name}" requires requiredRuntime to be specified`
+            );
+          } else {
+            if (descV2.requiredRuntime.coreRevision !== canonicalRecipe.requiredRuntimeRevision) {
+              errors.push(
+                `Descriptor requiredRuntime coreRevision mismatch: expected ${canonicalRecipe.requiredRuntimeRevision}, got ${descV2.requiredRuntime.coreRevision}`
+              );
+            }
+            if (canonicalRecipe.name === "fasth3-i2v-8") {
+              if (descV2.requiredRuntime.attentionKernel !== "block_sparse_triton") {
+                errors.push(
+                  `FastH3 recipe requires attentionKernel "block_sparse_triton", got "${descV2.requiredRuntime.attentionKernel}"`
+                );
+              }
+              for (const [filePath, expectedHash] of Object.entries(FASTH3_COMFYUI_SOURCE_HASHES)) {
+                if (descV2.requiredRuntime.sourceFileHashes[filePath] !== expectedHash) {
+                  errors.push(
+                    `FastH3 recipe requires sourceFileHashes["${filePath}"] to match "${expectedHash}", got "${descV2.requiredRuntime.sourceFileHashes[filePath] ?? "missing"}"`
+                  );
+                }
+              }
+              const requiredNodeNames = [
+                "BlockSparseAttention",
+                "ModelAttentionBackend",
+                "MiniMaxH3ImageToVideo",
+                "MiniMaxH3SigmaShift"
+              ];
+              for (const nodeName of requiredNodeNames) {
+                if (!descV2.requiredRuntime.requiredNodes.some((n) => n.name === nodeName)) {
+                  errors.push(
+                    `FastH3 recipe requires node "${nodeName}" in requiredRuntime.requiredNodes`
+                  );
+                }
+              }
+              if (
+                !descV2.requiredRuntime.pythonPackages.some(
+                  (p) => p.name === "comfy-kitchen" && p.version === "0.2.34"
+                )
+              ) {
+                errors.push(
+                  `FastH3 recipe requires pythonPackage "comfy-kitchen" version "0.2.34"`
+                );
+              }
+              if (
+                !descV2.requiredRuntime.pythonPackages.some(
+                  (p) => p.name === "torch" && p.version === descV2.requiredRuntime!.pytorchBuild
+                ) ||
+                !descV2.requiredRuntime.pytorchBuild
+              ) {
+                errors.push(
+                  `FastH3 recipe requires pythonPackage "torch" matching requiredRuntime.pytorchBuild`
+                );
+              }
+            }
+            if (canonicalRecipe.lora) {
+              if (
+                !descV2.requiredRuntime.requiredNodes.some((n) => n.name === "LoraLoaderModelOnly")
+              ) {
+                errors.push(
+                  `Turbo recipe requires "LoraLoaderModelOnly" in requiredRuntime.requiredNodes`
+                );
+              }
+              const expectedConditionerNode =
+                descV2.route === "i2v" ? "MiniMaxH3ImageToVideo" : "MiniMaxH3ReferenceToVideo";
+              if (
+                !descV2.requiredRuntime.requiredNodes.some(
+                  (n) => n.name === expectedConditionerNode
+                )
+              ) {
+                errors.push(
+                  `Turbo recipe requires conditioner node "${expectedConditionerNode}" in requiredRuntime.requiredNodes`
+                );
+              }
+              if (
+                descV2.requiredRuntime.sourceFileHashes["nodes.py"] !==
+                PINNED_COMFYUI_NODES_PY_SHA256
+              ) {
+                errors.push(
+                  `Turbo recipe requires nodes.py hash to match PINNED_COMFYUI_NODES_PY_SHA256`
+                );
+              }
+              if (
+                descV2.requiredRuntime.sourceFileHashes["comfy_extras/nodes_minimax_h3.py"] !==
+                PINNED_COMFYUI_NODES_MINIMAX_H3_PY_SHA256
+              ) {
+                errors.push(
+                  `Turbo recipe requires comfy_extras/nodes_minimax_h3.py hash to match PINNED_COMFYUI_NODES_MINIMAX_H3_PY_SHA256`
+                );
+              }
+            }
+          }
+          if (canonicalRecipe.lora && descV2.pinFileIdentities?.modelDigests) {
+            const loraKey = `loras/${canonicalRecipe.lora.filename}`;
+            const recordedLoraHash = descV2.pinFileIdentities.modelDigests[loraKey];
+            if (recordedLoraHash !== canonicalRecipe.lora.sha256) {
+              errors.push(
+                `Descriptor provenance LoRA digest mismatch for "${loraKey}": expected ${canonicalRecipe.lora.sha256}, got ${recordedLoraHash}`
+              );
+            }
+          }
+          if (descV2.stepOverride !== null && descV2.stepOverride !== undefined) {
+            errors.push("Descriptor stepOverride must be null when samplingRecipe is specified");
+          }
+          if (descV2.checkpointOverride !== null && descV2.checkpointOverride !== undefined) {
+            errors.push(
+              "Descriptor checkpointOverride must be null when samplingRecipe is specified"
+            );
+          }
+          if (!canonicalRecipe.attentionTopology && descV2.attentionRequest) {
+            errors.push(
+              "Descriptor attentionRequest must not be set when samplingRecipe has no attentionTopology"
+            );
+          }
+        } catch (err: unknown) {
+          errors.push(
+            `Authoritative recipe lookup failed: ${err instanceof Error ? err.message : String(err)}`
+          );
+          return {
+            ok: false,
+            descriptor,
+            errors
+          };
+        }
+
+        expectedGraph = applySamplingRecipeToGraph({
+          baseWorkflow: baseExpectedGraph,
+          recipe: canonicalRecipe,
+          route: descriptor.route
+        });
+        const recipeValidation = validateSamplingRecipeTopology(
+          config,
+          canonicalRecipe,
+          descriptor.route
+        );
+        if (!recipeValidation.valid) {
+          errors.push(...recipeValidation.errors);
+        }
+      } else if (descV2?.attentionRequest) {
         const { graph: attnExpectedGraph } = deriveAttentionGraph({
           graph: baseExpectedGraph,
           attentionVariant: descV2.attentionRequest.attentionVariant,
@@ -2416,20 +2968,49 @@ export class MinimaxH3ExperimentService {
     };
 
     if (descriptor.schemaVersion === 2) {
-      const phaseEvents: MinimaxH3PhaseAccountingEvent[] = this.store.readPhaseEvents
+      let attemptToken: string | undefined;
+      try {
+        const attemptMeta = await this.store.readJsonFile<{ attemptToken?: string }>(
+          `${runDir}/attempt.json`
+        );
+        attemptToken = attemptMeta?.attemptToken;
+      } catch {
+        // ignore
+      }
+
+      const rawPhaseEvents: MinimaxH3PhaseAccountingEvent[] = this.store.readPhaseEvents
         ? await this.store.readPhaseEvents(runDir)
         : [];
+      const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
+
+      const handshakeConflicts: string[] = [];
+      const phaseEvents = rawPhaseEvents.filter((e) => {
+        if (!e.runId || e.runId !== descV2.runId) return false;
+        if (attemptToken && e.attemptToken && e.attemptToken !== attemptToken) return false;
+        if (promptId && e.promptId && e.promptId !== promptId) return false;
+        return true;
+      });
+      const foreignEvents = rawPhaseEvents.filter((e) => !phaseEvents.includes(e));
+      if (foreignEvents.length > 0) {
+        handshakeConflicts.push(
+          `Foreign events detected in events.jsonl: ${foreignEvents.length} event(s) did not match runId=${descV2.runId}, attemptToken=${attemptToken ?? "any"}, promptId=${promptId ?? "any"}`
+        );
+      }
+
       const startedAt = baseResult.timestamps.startedAt ?? intent?.timestamp ?? null;
       const terminatedAt = baseResult.timestamps.terminatedAt ?? new Date().toISOString();
       const startMs = startedAt ? new Date(startedAt).getTime() : 0;
       const endMs = terminatedAt ? new Date(terminatedAt).getTime() : startMs;
       const parentWallTimeMs = Math.max(0, endMs - startMs);
-      const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
       const phaseAccounting = reducePhaseAccounting({
         events: phaseEvents as unknown as MinimaxH3PhaseAccountingEvent[],
         parentWallTimeMs,
         declaredSteps: descV2.provenance?.samplerSettings?.steps
       });
+
+      if (executionStatus !== "completed") {
+        phaseAccounting.samplingWallTimeMs = null;
+      }
 
       const completeness = phaseAccounting.status;
       const spansRecorded = Object.values(phaseAccounting.phases).filter(
@@ -2452,21 +3033,29 @@ export class MinimaxH3ExperimentService {
         ]
       };
 
-      let attemptToken: string | undefined;
-      try {
-        const attemptMeta = await this.store.readJsonFile<{ attemptToken?: string }>(
-          `${runDir}/attempt.json`
-        );
-        attemptToken = attemptMeta?.attemptToken;
-      } catch {
-        // ignore
+      let effectiveAttentionRequest = descV2.attentionRequest;
+      if (!effectiveAttentionRequest && descV2.samplingRecipe?.attentionTopology) {
+        effectiveAttentionRequest = {
+          attentionVariant: "sage" as MinimaxH3AttentionVariantName,
+          catalogDigest: sha256Hex(canonicalizeJson(descV2.samplingRecipe.attentionTopology)),
+          expectedBackend: descV2.samplingRecipe.attentionTopology.backend,
+          expectedKernel: descV2.requiredRuntime.attentionKernel,
+          topologyDigest: descV2.samplingRecipe.attentionTopology.topologyDigest,
+          patches: descV2.samplingRecipe.attentionTopology.patches,
+          runtimeLockDigest: sha256Hex(canonicalizeJson(descV2.requiredRuntime)),
+          candidateOnly: false,
+          denseRegionPolicy: {
+            allowPlannedDense: true,
+            description: "FastH3 VSA block-sparse attention"
+          }
+        };
       }
 
       let attentionObservation: MinimaxH3AttentionObservation | undefined;
-      if (descV2.attentionRequest) {
+      if (effectiveAttentionRequest) {
         attentionObservation = reduceAttentionObservation({
           events: phaseEvents,
-          attentionRequest: descV2.attentionRequest,
+          attentionRequest: effectiveAttentionRequest,
           expectedRunId: descV2.runId,
           expectedAttemptToken: attemptToken,
           expectedPromptId: promptId
@@ -2496,8 +3085,6 @@ export class MinimaxH3ExperimentService {
           effectiveStopReasons.push("attention_missing_kernel");
         }
       }
-
-      const handshakeConflicts: string[] = [];
       const reconstructedResultV2: MinimaxH3ExperimentResultV2 = {
         schemaVersion: 2,
         runId: descV2.runId,
@@ -2717,7 +3304,357 @@ export class MinimaxH3ExperimentService {
               hookManifestDigest: observedHookManifestDigest
             };
           })(),
-          conflicts: [...(preflightObservations?.conflicts ?? []), ...handshakeConflicts]
+          observedSampling: (() => {
+            const expectedSteps =
+              descV2.samplingRecipe?.expectedSteps ??
+              descV2.provenance?.samplerSettings?.steps ??
+              20;
+            const expectedSampler =
+              descV2.samplingRecipe?.sampler ??
+              descV2.provenance?.samplerSettings?.sampler ??
+              "res_multistep";
+            const expectedScheduler =
+              descV2.samplingRecipe?.scheduler ??
+              descV2.provenance?.samplerSettings?.scheduler ??
+              "simple";
+
+            const samplingSpans = phaseEvents.filter((e) => e.phase === "sampling");
+            const samplingStarts = samplingSpans.filter((e) => e.type === "span_start");
+            const samplingEnds = samplingSpans.filter((e) => e.type === "span_end");
+
+            const enclosingSampling = samplingEnds[0] ?? samplingStarts[0];
+            const observedSamplerName =
+              typeof enclosingSampling?.metadata?.samplerName === "string"
+                ? enclosingSampling.metadata.samplerName
+                : (descV2.samplingRecipe?.sampler ?? descV2.provenance?.samplerSettings?.sampler);
+            const observedSchedulerName =
+              typeof enclosingSampling?.metadata?.schedulerName === "string"
+                ? enclosingSampling.metadata.schedulerName
+                : (descV2.samplingRecipe?.scheduler ??
+                  descV2.provenance?.samplerSettings?.scheduler);
+
+            const reasons: string[] = [];
+            if (samplingStarts.length > 1) {
+              reasons.push(
+                `Multiple enclosing sampler invocations detected (${samplingStarts.length} sampling start spans)`
+              );
+            }
+
+            if (
+              enclosingSampling?.metadata?.samplerName &&
+              enclosingSampling.metadata.samplerName !== expectedSampler
+            ) {
+              reasons.push(
+                `Sampler name mismatch in metadata: expected "${expectedSampler}", observed "${enclosingSampling.metadata.samplerName}"`
+              );
+            }
+            if (
+              enclosingSampling?.metadata?.schedulerName &&
+              enclosingSampling.metadata.schedulerName !== expectedScheduler
+            ) {
+              reasons.push(
+                `Scheduler name mismatch in metadata: expected "${expectedScheduler}", observed "${enclosingSampling.metadata.schedulerName}"`
+              );
+            }
+
+            const stepSpans = phaseEvents.filter(
+              (e) =>
+                e.phase === "sampling_step" &&
+                e.type === "span_end" &&
+                e.outcome === "success" &&
+                e.stepIndex !== undefined
+            );
+            const uniqueStepIndices = new Set<number>();
+            let hasDuplicates = false;
+            for (const span of stepSpans) {
+              if (uniqueStepIndices.has(span.stepIndex!)) {
+                hasDuplicates = true;
+              }
+              uniqueStepIndices.add(span.stepIndex!);
+            }
+            if (uniqueStepIndices.size === 0) {
+              if (reasons.length > 0) {
+                return {
+                  status: "conflict" as const,
+                  completedSteps: null,
+                  expectedSteps,
+                  samplerName: observedSamplerName ?? null,
+                  schedulerName: observedSchedulerName ?? null,
+                  unknownReason: reasons.join("; ")
+                };
+              }
+              return {
+                status: "unknown" as const,
+                completedSteps: null,
+                expectedSteps,
+                samplerName: observedSamplerName ?? null,
+                schedulerName: observedSchedulerName ?? null,
+                unknownReason: "step_spans_not_recorded"
+              };
+            }
+            const completedSteps = uniqueStepIndices.size;
+            if (executionStatus !== "completed") {
+              return {
+                status: "unknown" as const,
+                completedSteps: completedSteps > 0 ? completedSteps : null,
+                expectedSteps,
+                samplerName: observedSamplerName ?? null,
+                schedulerName: observedSchedulerName ?? null,
+                unknownReason: `execution_${executionStatus}`
+              };
+            }
+            let hasGaps = false;
+            for (let i = 0; i < expectedSteps; i++) {
+              if (!uniqueStepIndices.has(i)) {
+                hasGaps = true;
+                break;
+              }
+            }
+            const hasOutOfRange = Array.from(uniqueStepIndices).some(
+              (idx) => idx < 0 || idx >= expectedSteps
+            );
+            if (hasDuplicates) reasons.push("Duplicate sampling step completions detected");
+            if (hasGaps || hasOutOfRange)
+              reasons.push(
+                `Non-contiguous sampling step sequence (expected indices 0..${expectedSteps - 1})`
+              );
+            if (completedSteps !== expectedSteps)
+              reasons.push(
+                `Observed completed steps (${completedSteps}) does not match expected (${expectedSteps})`
+              );
+
+            if (reasons.length > 0) {
+              return {
+                status: "conflict" as const,
+                completedSteps,
+                expectedSteps,
+                samplerName: observedSamplerName ?? null,
+                schedulerName: observedSchedulerName ?? null,
+                unknownReason: reasons.join("; ")
+              };
+            }
+            return {
+              status: "verified" as const,
+              completedSteps,
+              expectedSteps,
+              samplerName: observedSamplerName ?? null,
+              schedulerName: observedSchedulerName ?? null
+            };
+          })(),
+          observedConditioning: (() => {
+            const expectedClass =
+              descV2.route === "i2v" ? "MiniMaxH3ImageToVideo" : "MiniMaxH3ReferenceToVideo";
+            const condEvents = phaseEvents.filter((e) => e.phase === "conditioning");
+            if (condEvents.length === 0) {
+              return {
+                status: "unknown" as const,
+                nodeClass: null,
+                taskMode: null,
+                referenceCount: null,
+                unknownReason: "conditioning_event_not_recorded"
+              };
+            }
+            const condStarts = condEvents.filter((e) => e.type === "span_start");
+            const condEnds = condEvents.filter((e) => e.type === "span_end");
+
+            const reasons: string[] = [];
+            for (const endEvt of condEnds) {
+              if (endEvt.outcome !== "success") {
+                reasons.push(`Conditioning span ended with outcome: ${endEvt.outcome}`);
+              }
+            }
+
+            const primaryCond =
+              condEnds.find((e) => e.classType === expectedClass) ??
+              condStarts.find((e) => e.classType === expectedClass) ??
+              condEnds[0] ??
+              condStarts[0] ??
+              condEvents[0];
+
+            const observedClass = primaryCond?.classType ?? null;
+            const observedTaskMode =
+              typeof primaryCond?.metadata?.taskMode === "string"
+                ? primaryCond.metadata.taskMode
+                : null;
+            const observedRefCount =
+              typeof primaryCond?.metadata?.referenceCount === "number"
+                ? primaryCond.metadata.referenceCount
+                : null;
+
+            if (observedClass !== expectedClass) {
+              reasons.push(`nodeClass (${observedClass} vs ${expectedClass})`);
+            }
+            if (observedTaskMode && observedTaskMode !== descV2.route) {
+              reasons.push(`taskMode (${observedTaskMode} vs ${descV2.route})`);
+            }
+            if (observedRefCount !== null && observedRefCount !== descV2.references.length) {
+              reasons.push(`refCount (${observedRefCount} vs ${descV2.references.length})`);
+            }
+            if (condEnds.length === 0) {
+              reasons.push("Conditioning span did not complete (missing span_end)");
+            }
+
+            for (const evt of condEvents) {
+              if (evt.metadata?.taskMode && evt.metadata.taskMode !== descV2.route) {
+                const r = `Conflicting taskMode in conditioning event: ${evt.metadata.taskMode} vs ${descV2.route}`;
+                if (!reasons.includes(r)) reasons.push(r);
+              }
+              if (
+                typeof evt.metadata?.referenceCount === "number" &&
+                evt.metadata.referenceCount !== descV2.references.length
+              ) {
+                const r = `Conflicting referenceCount in conditioning event: ${evt.metadata.referenceCount} vs ${descV2.references.length}`;
+                if (!reasons.includes(r)) reasons.push(r);
+              }
+            }
+
+            const status = reasons.length > 0 ? ("conflict" as const) : ("verified" as const);
+            return {
+              status,
+              nodeClass: observedClass,
+              taskMode: observedTaskMode,
+              referenceCount: observedRefCount,
+              ...(status === "conflict" ? { unknownReason: reasons.join("; ") } : {})
+            };
+          })(),
+          conflicts: [
+            ...(preflightObservations?.conflicts ?? []),
+            ...handshakeConflicts,
+            ...(() => {
+              const expectedSteps =
+                descV2.samplingRecipe?.expectedSteps ??
+                descV2.provenance?.samplerSettings?.steps ??
+                20;
+              const stepSpans = phaseEvents.filter(
+                (e) =>
+                  e.phase === "sampling_step" &&
+                  e.type === "span_end" &&
+                  e.outcome === "success" &&
+                  e.stepIndex !== undefined
+              );
+              const uniqueSteps = new Set<number>();
+              let hasDups = false;
+              for (const s of stepSpans) {
+                if (uniqueSteps.has(s.stepIndex!)) hasDups = true;
+                uniqueSteps.add(s.stepIndex!);
+              }
+              const errs: string[] = [];
+              if (hasDups) {
+                errs.push("Duplicate sampling step completions detected");
+              }
+              const completedSteps = uniqueSteps.size;
+              if (completedSteps === 0) {
+                if (
+                  descV2.samplingRecipe &&
+                  (phaseEvents.some((e) => e.phase === "sampling") ||
+                    executionStatus === "completed")
+                ) {
+                  errs.push(
+                    `No successful sampling step spans recorded during execution (expected ${expectedSteps} steps)`
+                  );
+                }
+              } else if (executionStatus === "completed" && completedSteps !== expectedSteps) {
+                errs.push(
+                  `Observed sampling steps (${completedSteps}) does not match expected (${expectedSteps})`
+                );
+              }
+              for (let i = 0; i < expectedSteps; i++) {
+                if (completedSteps > 0 && !uniqueSteps.has(i)) {
+                  errs.push(`Missing sampling step index ${i} in sequence 0..${expectedSteps - 1}`);
+                  break;
+                }
+              }
+              const hasOutOfRange = Array.from(uniqueSteps).some(
+                (idx) => idx < 0 || idx >= expectedSteps
+              );
+              if (hasOutOfRange) {
+                errs.push(`Sampling step indices out of range [0..${expectedSteps - 1}]`);
+              }
+              return errs;
+            })(),
+            ...(() => {
+              const expectedClass =
+                descV2.route === "i2v" ? "MiniMaxH3ImageToVideo" : "MiniMaxH3ReferenceToVideo";
+              const condEvents = phaseEvents.filter((e) => e.phase === "conditioning");
+              const condStart = condEvents.find((e) => e.type === "span_start");
+              const condEnd = condEvents.find((e) => e.type === "span_end");
+              const condEvent = condEnd ?? condStart ?? condEvents[0];
+              if (condEvent) {
+                const errs: string[] = [];
+                if (!condEnd) {
+                  errs.push("Conditioning span did not complete (missing span_end)");
+                } else if (condEnd.outcome !== "success") {
+                  errs.push(`Conditioning span outcome was "${condEnd.outcome}"`);
+                }
+                const observedClass = condEvent.classType;
+                if (!observedClass || observedClass !== expectedClass) {
+                  errs.push(
+                    `Conditioning node class mismatch: expected ${expectedClass}, got ${observedClass ?? "none"}`
+                  );
+                }
+                const observedTaskMode = condEvent.metadata?.taskMode;
+                if (!observedTaskMode || observedTaskMode !== descV2.route) {
+                  errs.push(
+                    `Conditioning taskMode mismatch: expected ${descV2.route}, got ${observedTaskMode ?? "none"}`
+                  );
+                }
+                const observedRefCount = condEvent.metadata?.referenceCount;
+                if (
+                  typeof observedRefCount !== "number" ||
+                  observedRefCount !== descV2.references.length
+                ) {
+                  errs.push(
+                    `Conditioning referenceCount mismatch: expected ${descV2.references.length}, got ${observedRefCount ?? "none"}`
+                  );
+                }
+                return errs;
+              }
+              if (
+                descV2.samplingRecipe &&
+                (phaseEvents.some(
+                  (e) =>
+                    e.phase === "sampling" || e.phase === "conditioning" || e.type === "span_start"
+                ) ||
+                  executionStatus === "completed")
+              ) {
+                return ["Conditioning span was not recorded during execution"];
+              }
+              return [];
+            })(),
+            ...(() => {
+              if (descV2.samplingRecipe?.attentionTopology) {
+                if (!attentionObservation) {
+                  return [
+                    "Attention observation evidence missing for recipe requiring block-sparse attention"
+                  ];
+                }
+                if (attentionObservation.status !== "verified") {
+                  return [
+                    `Recipe requires verified block-sparse attention, observed status was "${attentionObservation.status}" (${attentionObservation.failureReason ?? "unverified"})`
+                  ];
+                }
+              }
+              if (attentionObservation) {
+                const attnErrs: string[] = [];
+                if (attentionObservation.status === "fallback") {
+                  attnErrs.push(
+                    `Attention fallback: ${attentionObservation.failureReason ?? "fallback detected"}`
+                  );
+                } else if (attentionObservation.status === "failed") {
+                  attnErrs.push(
+                    `Attention failed: ${attentionObservation.failureReason ?? "unknown failure"}`
+                  );
+                }
+                if (attentionObservation.missingKernelFailure) {
+                  attnErrs.push(
+                    `Missing attention kernel: ${attentionObservation.missingKernelFailure}`
+                  );
+                }
+                return attnErrs;
+              }
+              return [];
+            })()
+          ]
         },
         compatibility: descV2.compatibility,
         phaseAccounting,
@@ -3119,6 +4056,10 @@ export class MinimaxH3ExperimentService {
         // ignore secondary failure
       }
       const childEnv: Record<string, string> = { ...descriptor.configuredRunner.env };
+      childEnv.CCO_EXPERIMENT_RUN_DIR = runDir;
+      childEnv.CCO_EXPERIMENT_RUN_ID = descriptor.runId;
+      childEnv.CCO_EXPERIMENT_ATTEMPT_TOKEN = attemptToken;
+      childEnv.CCO_EXPERIMENT_EVENT_LOG = `${runDir}/phase-events.jsonl`;
       if (descriptor.schemaVersion === 2) {
         const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
         if (descV2.requiredRuntime?.collectorDigest) {
@@ -3134,6 +4075,10 @@ export class MinimaxH3ExperimentService {
             .allowPlannedDense
             ? "true"
             : "false";
+        } else if (descV2.samplingRecipe?.attentionTopology) {
+          childEnv.CCO_EXPERIMENT_EXPECTED_ATTENTION_BACKEND =
+            descV2.samplingRecipe.attentionTopology.backend;
+          childEnv.CCO_EXPERIMENT_ALLOW_PLANNED_DENSE = "true";
         }
       }
       ownedChild = await this.runner.spawnChild({
