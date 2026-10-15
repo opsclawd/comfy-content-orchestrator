@@ -1,0 +1,404 @@
+{
+  "schemaVersion": 1,
+  "studyId": "study-i2v-yellow-backdrop-continuity",
+  "studyDigest": "bb7e82c484c1b3c20258160757379a760869728a6fc7cb5b25f817180f886fbc",
+  "rubricVersion": 1,
+  "rubricDigest": "4325dbb8c351676fe6d82de3ea808cf71b9fb738b270bfca9e1604e10b5103be",
+  "sourceEvidenceReferences": [
+    {
+      "url": "https://github.com/org/repo/issues/423",
+      "assertion": "Observed I2V continuity failures: 124f excessive camera push; 243f wardrobe departs and yellow backdrop temporarily lost; 362f background/lighting collapse ~3.3-6.7s recovering ~8.3s; 192f missing run."
+    }
+  ],
+  "scenarios": [
+    {
+      "scenarioId": "scenario-i2v-yellow-backdrop-moving",
+      "scenarioRole": "historical_baseline",
+      "subjectMotionIntent": "moving",
+      "route": "i2v",
+      "conditioningMode": "frame_anchored",
+      "status": "pending_source",
+      "pendingReason": "Historical original prompt text and exact random seed from issue #423 operator study not checked into git repository; pending operator retrieval from run logs before execution",
+      "originalPrompt": null,
+      "constrainedPrompts": [
+        {
+          "promptId": "tight_backdrop_lighting",
+          "label": "Strict wardrobe and seamless yellow backdrop continuity with stable illumination",
+          "text": "A continuous single-take shot of the subject from <Picture 1> in front of an invariant bright yellow seamless backdrop. Lighting remains stable throughout with no dimming, flickering, or blackout. Initial identity, appearance, and wardrobe remain invariant throughout the shot. Continuous shot without unrequested cuts, fades, scene substitutions, or unrequested transitions.",
+          "digest": "9c0c480c68c0e5ae4929786ad1341e506c7d1cfff03ff4449c3ef1e735fa706a",
+          "constraintsApplied": [
+            "fixed_lighting",
+            "fixed_background",
+            "fixed_wardrobe",
+            "camera_push_only",
+            "no_transitions"
+          ]
+        }
+      ],
+      "referenceManifest": {
+        "referenceSetId": "trinidad-subject-i2v-moving",
+        "manifestDigest": "3b06834b59f9ffe7d02161bd9b70b6588fb307bd1bd3cb24b40cb83ca9ae9ef4",
+        "references": [
+          {
+            "slotIndex": 0,
+            "role": "first_frame",
+            "tag": "<Picture 1>",
+            "sourceAssetPath": "test-assets/trinidad_subject_16x9.jpg",
+            "sourceSha256": "776145851c2bd2dba5a29fd0f45e222f5b09ee016b2371ed013582e1d41f6eb8",
+            "sourceSizeBytes": 122528,
+            "mimeType": "image/jpeg",
+            "width": 1024,
+            "height": 585,
+            "derivation": "Center cropped from 1024x819 to 1024x585 (16:9 aspect ratio)"
+          }
+        ]
+      }
+    },
+    {
+      "scenarioId": "scenario-i2v-yellow-backdrop-static",
+      "scenarioRole": "motion_variant",
+      "subjectMotionIntent": "static",
+      "route": "i2v",
+      "conditioningMode": "frame_anchored",
+      "status": "pending_source",
+      "pendingReason": "Static-subject counterpart to historical #423 study pending operator baseline capture before execution",
+      "originalPrompt": null,
+      "constrainedPrompts": [
+        {
+          "promptId": "tight_backdrop_lighting",
+          "label": "Strict static pose, wardrobe, and seamless yellow backdrop continuity with stable illumination",
+          "text": "A continuous single-take shot of the subject from <Picture 1> maintaining a static pose in front of an invariant bright yellow seamless backdrop. Lighting remains stable throughout with no dimming, flickering, or blackout. Initial identity, appearance, and wardrobe remain invariant throughout the shot. Continuous shot without unrequested cuts, fades, scene substitutions, or unrequested transitions.",
+          "digest": "e68bf758825ddc511254f1bd5d3ceaa0e90a1b299c27c836de14d5574b83433b",
+          "constraintsApplied": [
+            "fixed_lighting",
+            "fixed_background",
+            "fixed_wardrobe",
+            "camera_push_only",
+            "no_transitions"
+          ]
+        }
+      ],
+      "referenceManifest": {
+        "referenceSetId": "trinidad-subject-i2v-static",
+        "manifestDigest": "b8610aff943577f03a139124538db7b79b8a3be5067c07492059d2624c6752e1",
+        "references": [
+          {
+            "slotIndex": 0,
+            "role": "first_frame",
+            "tag": "<Picture 1>",
+            "sourceAssetPath": "test-assets/trinidad_subject_16x9.jpg",
+            "sourceSha256": "776145851c2bd2dba5a29fd0f45e222f5b09ee016b2371ed013582e1d41f6eb8",
+            "sourceSizeBytes": 122528,
+            "mimeType": "image/jpeg",
+            "width": 1024,
+            "height": 585,
+            "derivation": "Center cropped from 1024x819 to 1024x585 (16:9 aspect ratio)"
+          }
+        ]
+      }
+    }
+  ],
+  "studyControls": {
+    "width": 1344,
+    "height": 768,
+    "fps": 24,
+    "seed": 42,
+    "runnerVariant": "dynamicvram-offload-v1",
+    "schedule": {
+      "sampler": "res_multistep",
+      "scheduler": "simple",
+      "steps": 20
+    },
+    "candidateFrames": [124, 192, 243, 362],
+    "diffusionCheckpoint": {
+      "repository": "Comfy-Org/MiniMax-H3",
+      "revision": "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+      "filename": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779"
+    }
+  },
+  "cells": [
+    {
+      "cellId": "cell-scenario-i2v-yellow-backdrop-moving-124f-base",
+      "scenarioId": "scenario-i2v-yellow-backdrop-moving",
+      "frames": 124,
+      "arm": "baseline",
+      "promptVariantId": "original",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Historical original prompt text and exact random seed from issue #423 operator study not checked into git repository; pending operator retrieval from run logs before execution",
+      "safetyBaseline124fCellId": null
+    },
+    {
+      "cellId": "cell-scenario-i2v-yellow-backdrop-moving-124f-tight_backdrop_lighting",
+      "scenarioId": "scenario-i2v-yellow-backdrop-moving",
+      "frames": 124,
+      "arm": "prompt_only",
+      "promptVariantId": "tight_backdrop_lighting",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Historical original prompt text and exact random seed from issue #423 operator study not checked into git repository; pending operator retrieval from run logs before execution",
+      "safetyBaseline124fCellId": null
+    },
+    {
+      "cellId": "cell-scenario-i2v-yellow-backdrop-moving-192f-base",
+      "scenarioId": "scenario-i2v-yellow-backdrop-moving",
+      "frames": 192,
+      "arm": "baseline",
+      "promptVariantId": "original",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Historical original prompt text and exact random seed from issue #423 operator study not checked into git repository; pending operator retrieval from run logs before execution",
+      "safetyBaseline124fCellId": "cell-scenario-i2v-yellow-backdrop-moving-124f-base"
+    },
+    {
+      "cellId": "cell-scenario-i2v-yellow-backdrop-moving-192f-tight_backdrop_lighting",
+      "scenarioId": "scenario-i2v-yellow-backdrop-moving",
+      "frames": 192,
+      "arm": "prompt_only",
+      "promptVariantId": "tight_backdrop_lighting",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Historical original prompt text and exact random seed from issue #423 operator study not checked into git repository; pending operator retrieval from run logs before execution",
+      "safetyBaseline124fCellId": "cell-scenario-i2v-yellow-backdrop-moving-124f-tight_backdrop_lighting"
+    },
+    {
+      "cellId": "cell-scenario-i2v-yellow-backdrop-moving-243f-base",
+      "scenarioId": "scenario-i2v-yellow-backdrop-moving",
+      "frames": 243,
+      "arm": "baseline",
+      "promptVariantId": "original",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Historical original prompt text and exact random seed from issue #423 operator study not checked into git repository; pending operator retrieval from run logs before execution",
+      "safetyBaseline124fCellId": "cell-scenario-i2v-yellow-backdrop-moving-124f-base"
+    },
+    {
+      "cellId": "cell-scenario-i2v-yellow-backdrop-moving-243f-tight_backdrop_lighting",
+      "scenarioId": "scenario-i2v-yellow-backdrop-moving",
+      "frames": 243,
+      "arm": "prompt_only",
+      "promptVariantId": "tight_backdrop_lighting",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Historical original prompt text and exact random seed from issue #423 operator study not checked into git repository; pending operator retrieval from run logs before execution",
+      "safetyBaseline124fCellId": "cell-scenario-i2v-yellow-backdrop-moving-124f-tight_backdrop_lighting"
+    },
+    {
+      "cellId": "cell-scenario-i2v-yellow-backdrop-moving-362f-base",
+      "scenarioId": "scenario-i2v-yellow-backdrop-moving",
+      "frames": 362,
+      "arm": "baseline",
+      "promptVariantId": "original",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Historical original prompt text and exact random seed from issue #423 operator study not checked into git repository; pending operator retrieval from run logs before execution",
+      "safetyBaseline124fCellId": "cell-scenario-i2v-yellow-backdrop-moving-124f-base"
+    },
+    {
+      "cellId": "cell-scenario-i2v-yellow-backdrop-moving-362f-tight_backdrop_lighting",
+      "scenarioId": "scenario-i2v-yellow-backdrop-moving",
+      "frames": 362,
+      "arm": "prompt_only",
+      "promptVariantId": "tight_backdrop_lighting",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Historical original prompt text and exact random seed from issue #423 operator study not checked into git repository; pending operator retrieval from run logs before execution",
+      "safetyBaseline124fCellId": "cell-scenario-i2v-yellow-backdrop-moving-124f-tight_backdrop_lighting"
+    },
+    {
+      "cellId": "cell-scenario-i2v-yellow-backdrop-static-124f-base",
+      "scenarioId": "scenario-i2v-yellow-backdrop-static",
+      "frames": 124,
+      "arm": "baseline",
+      "promptVariantId": "original",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Static-subject counterpart to historical #423 study pending operator baseline capture before execution",
+      "safetyBaseline124fCellId": null
+    },
+    {
+      "cellId": "cell-scenario-i2v-yellow-backdrop-static-124f-tight_backdrop_lighting",
+      "scenarioId": "scenario-i2v-yellow-backdrop-static",
+      "frames": 124,
+      "arm": "prompt_only",
+      "promptVariantId": "tight_backdrop_lighting",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Static-subject counterpart to historical #423 study pending operator baseline capture before execution",
+      "safetyBaseline124fCellId": null
+    },
+    {
+      "cellId": "cell-scenario-i2v-yellow-backdrop-static-192f-base",
+      "scenarioId": "scenario-i2v-yellow-backdrop-static",
+      "frames": 192,
+      "arm": "baseline",
+      "promptVariantId": "original",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Static-subject counterpart to historical #423 study pending operator baseline capture before execution",
+      "safetyBaseline124fCellId": "cell-scenario-i2v-yellow-backdrop-static-124f-base"
+    },
+    {
+      "cellId": "cell-scenario-i2v-yellow-backdrop-static-192f-tight_backdrop_lighting",
+      "scenarioId": "scenario-i2v-yellow-backdrop-static",
+      "frames": 192,
+      "arm": "prompt_only",
+      "promptVariantId": "tight_backdrop_lighting",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Static-subject counterpart to historical #423 study pending operator baseline capture before execution",
+      "safetyBaseline124fCellId": "cell-scenario-i2v-yellow-backdrop-static-124f-tight_backdrop_lighting"
+    },
+    {
+      "cellId": "cell-scenario-i2v-yellow-backdrop-static-243f-base",
+      "scenarioId": "scenario-i2v-yellow-backdrop-static",
+      "frames": 243,
+      "arm": "baseline",
+      "promptVariantId": "original",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Static-subject counterpart to historical #423 study pending operator baseline capture before execution",
+      "safetyBaseline124fCellId": "cell-scenario-i2v-yellow-backdrop-static-124f-base"
+    },
+    {
+      "cellId": "cell-scenario-i2v-yellow-backdrop-static-243f-tight_backdrop_lighting",
+      "scenarioId": "scenario-i2v-yellow-backdrop-static",
+      "frames": 243,
+      "arm": "prompt_only",
+      "promptVariantId": "tight_backdrop_lighting",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Static-subject counterpart to historical #423 study pending operator baseline capture before execution",
+      "safetyBaseline124fCellId": "cell-scenario-i2v-yellow-backdrop-static-124f-tight_backdrop_lighting"
+    },
+    {
+      "cellId": "cell-scenario-i2v-yellow-backdrop-static-362f-base",
+      "scenarioId": "scenario-i2v-yellow-backdrop-static",
+      "frames": 362,
+      "arm": "baseline",
+      "promptVariantId": "original",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Static-subject counterpart to historical #423 study pending operator baseline capture before execution",
+      "safetyBaseline124fCellId": "cell-scenario-i2v-yellow-backdrop-static-124f-base"
+    },
+    {
+      "cellId": "cell-scenario-i2v-yellow-backdrop-static-362f-tight_backdrop_lighting",
+      "scenarioId": "scenario-i2v-yellow-backdrop-static",
+      "frames": 362,
+      "arm": "prompt_only",
+      "promptVariantId": "tight_backdrop_lighting",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Static-subject counterpart to historical #423 study pending operator baseline capture before execution",
+      "safetyBaseline124fCellId": "cell-scenario-i2v-yellow-backdrop-static-124f-tight_backdrop_lighting"
+    }
+  ],
+  "comparisonEdges": [
+    {
+      "edgeId": "cmp-scenario-i2v-yellow-backdrop-moving-124f-prompt-tight_backdrop_lighting",
+      "frames": 124,
+      "scenarioId": "scenario-i2v-yellow-backdrop-moving",
+      "arm": "prompt_only",
+      "baselineCellId": "cell-scenario-i2v-yellow-backdrop-moving-124f-base",
+      "candidateCellId": "cell-scenario-i2v-yellow-backdrop-moving-124f-tight_backdrop_lighting",
+      "declaredFactorPaths": ["conditioning.positivePrompt"],
+      "status": "pending_source",
+      "pendingReason": "Baseline or candidate prompt source pending"
+    },
+    {
+      "edgeId": "cmp-scenario-i2v-yellow-backdrop-moving-192f-prompt-tight_backdrop_lighting",
+      "frames": 192,
+      "scenarioId": "scenario-i2v-yellow-backdrop-moving",
+      "arm": "prompt_only",
+      "baselineCellId": "cell-scenario-i2v-yellow-backdrop-moving-192f-base",
+      "candidateCellId": "cell-scenario-i2v-yellow-backdrop-moving-192f-tight_backdrop_lighting",
+      "declaredFactorPaths": ["conditioning.positivePrompt"],
+      "status": "pending_source",
+      "pendingReason": "Baseline or candidate prompt source pending"
+    },
+    {
+      "edgeId": "cmp-scenario-i2v-yellow-backdrop-moving-243f-prompt-tight_backdrop_lighting",
+      "frames": 243,
+      "scenarioId": "scenario-i2v-yellow-backdrop-moving",
+      "arm": "prompt_only",
+      "baselineCellId": "cell-scenario-i2v-yellow-backdrop-moving-243f-base",
+      "candidateCellId": "cell-scenario-i2v-yellow-backdrop-moving-243f-tight_backdrop_lighting",
+      "declaredFactorPaths": ["conditioning.positivePrompt"],
+      "status": "pending_source",
+      "pendingReason": "Baseline or candidate prompt source pending"
+    },
+    {
+      "edgeId": "cmp-scenario-i2v-yellow-backdrop-moving-362f-prompt-tight_backdrop_lighting",
+      "frames": 362,
+      "scenarioId": "scenario-i2v-yellow-backdrop-moving",
+      "arm": "prompt_only",
+      "baselineCellId": "cell-scenario-i2v-yellow-backdrop-moving-362f-base",
+      "candidateCellId": "cell-scenario-i2v-yellow-backdrop-moving-362f-tight_backdrop_lighting",
+      "declaredFactorPaths": ["conditioning.positivePrompt"],
+      "status": "pending_source",
+      "pendingReason": "Baseline or candidate prompt source pending"
+    },
+    {
+      "edgeId": "cmp-scenario-i2v-yellow-backdrop-static-124f-prompt-tight_backdrop_lighting",
+      "frames": 124,
+      "scenarioId": "scenario-i2v-yellow-backdrop-static",
+      "arm": "prompt_only",
+      "baselineCellId": "cell-scenario-i2v-yellow-backdrop-static-124f-base",
+      "candidateCellId": "cell-scenario-i2v-yellow-backdrop-static-124f-tight_backdrop_lighting",
+      "declaredFactorPaths": ["conditioning.positivePrompt"],
+      "status": "pending_source",
+      "pendingReason": "Baseline or candidate prompt source pending"
+    },
+    {
+      "edgeId": "cmp-scenario-i2v-yellow-backdrop-static-192f-prompt-tight_backdrop_lighting",
+      "frames": 192,
+      "scenarioId": "scenario-i2v-yellow-backdrop-static",
+      "arm": "prompt_only",
+      "baselineCellId": "cell-scenario-i2v-yellow-backdrop-static-192f-base",
+      "candidateCellId": "cell-scenario-i2v-yellow-backdrop-static-192f-tight_backdrop_lighting",
+      "declaredFactorPaths": ["conditioning.positivePrompt"],
+      "status": "pending_source",
+      "pendingReason": "Baseline or candidate prompt source pending"
+    },
+    {
+      "edgeId": "cmp-scenario-i2v-yellow-backdrop-static-243f-prompt-tight_backdrop_lighting",
+      "frames": 243,
+      "scenarioId": "scenario-i2v-yellow-backdrop-static",
+      "arm": "prompt_only",
+      "baselineCellId": "cell-scenario-i2v-yellow-backdrop-static-243f-base",
+      "candidateCellId": "cell-scenario-i2v-yellow-backdrop-static-243f-tight_backdrop_lighting",
+      "declaredFactorPaths": ["conditioning.positivePrompt"],
+      "status": "pending_source",
+      "pendingReason": "Baseline or candidate prompt source pending"
+    },
+    {
+      "edgeId": "cmp-scenario-i2v-yellow-backdrop-static-362f-prompt-tight_backdrop_lighting",
+      "frames": 362,
+      "scenarioId": "scenario-i2v-yellow-backdrop-static",
+      "arm": "prompt_only",
+      "baselineCellId": "cell-scenario-i2v-yellow-backdrop-static-362f-base",
+      "candidateCellId": "cell-scenario-i2v-yellow-backdrop-static-362f-tight_backdrop_lighting",
+      "declaredFactorPaths": ["conditioning.positivePrompt"],
+      "status": "pending_source",
+      "pendingReason": "Baseline or candidate prompt source pending"
+    }
+  ]
+}

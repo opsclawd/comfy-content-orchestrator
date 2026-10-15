@@ -456,6 +456,12 @@ export class MinimaxH3ExperimentService {
         role?: string;
         tag?: string;
         order?: number;
+        sha256?: string;
+        sizeBytes?: number;
+        width?: number;
+        height?: number;
+        sourceAssetPath?: string;
+        derivation?: string;
       }>;
     };
 
@@ -522,6 +528,26 @@ export class MinimaxH3ExperimentService {
       );
       const hashInfo = await this.store.hashFile(resolvedAsset);
       const assetInspection = await this.store.inspectAsset(resolvedAsset);
+      if (ref.sha256 && ref.sha256 !== hashInfo.sha256) {
+        throw new Error(
+          `Input manifest reference at index ${i} SHA-256 mismatch: expected ${ref.sha256}, got ${hashInfo.sha256}`
+        );
+      }
+      if (ref.sizeBytes && ref.sizeBytes !== hashInfo.sizeBytes) {
+        throw new Error(
+          `Input manifest reference at index ${i} size mismatch: expected ${ref.sizeBytes}, got ${hashInfo.sizeBytes}`
+        );
+      }
+      if (ref.width && ref.width !== assetInspection.width) {
+        throw new Error(
+          `Input manifest reference at index ${i} width mismatch: expected ${ref.width}, got ${assetInspection.width}`
+        );
+      }
+      if (ref.height && ref.height !== assetInspection.height) {
+        throw new Error(
+          `Input manifest reference at index ${i} height mismatch: expected ${ref.height}, got ${assetInspection.height}`
+        );
+      }
       processedReferences.push({
         slotIndex: i,
         role: ref.role ?? expectedRole,
