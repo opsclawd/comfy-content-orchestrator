@@ -39,7 +39,8 @@ import {
   computeAttentionTopologyDigest,
   type MinimaxH3AttentionPatchNode,
   type MinimaxH3AttentionTopology,
-  type MinimaxH3AttentionCatalogEntry
+  type MinimaxH3AttentionCatalogEntry,
+  type MinimaxH3AttentionObservation
 } from "./minimax-h3-attention.js";
 
 export const MinimaxH3ExperimentDescriptorV1Schema = MinimaxH3ExperimentDescriptorSchema;
@@ -2118,23 +2119,6 @@ export const MinimaxH3ExperimentDescriptorV2Schema = z
       });
     }
 
-    const hasAttentionFactor = val.experimentVariant.changedFactors.some(
-      (f) => f.path === "attention.configuration"
-    );
-    const hasAttentionBackend = val.provenance.requestedAttentionBackend !== "default";
-    if (
-      !val.samplingRecipe &&
-      (hasAttentionFactor || hasAttentionBackend) &&
-      !val.attentionRequest
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          "attentionRequest is required whenever an attention variant or attention factor change is selected",
-        path: ["attentionRequest"]
-      });
-    }
-
     if (val.attentionRequest) {
       if (
         val.provenance.requestedAttentionBackend !== "default" &&
@@ -2192,25 +2176,6 @@ export const MinimaxH3ExperimentResultV2Schema = z
   })
   .strict()
   .superRefine((val, ctx) => {
-    const hasAttentionFactor = val.experimentVariant.changedFactors.some(
-      (f) => f.path === "attention.configuration"
-    );
-    const effBackend = val.observedProvenance.observedAttentionBackend?.effectiveBackend;
-    const hasAttentionBackend =
-      effBackend !== null && effBackend !== undefined && effBackend !== "default";
-    if (
-      val.execution.status === "completed" &&
-      (hasAttentionFactor || hasAttentionBackend) &&
-      !val.attentionObservation
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          "attentionObservation is required for completed results whenever an attention factor change or non-default attention backend is present",
-        path: ["attentionObservation"]
-      });
-    }
-
     if (val.attentionObservation) {
       if (val.attentionObservation.status === "verified") {
         if (
@@ -2261,6 +2226,71 @@ export const MinimaxH3ExperimentResultV2Schema = z
     }
   });
 export type MinimaxH3ExperimentResultV2 = z.infer<typeof MinimaxH3ExperimentResultV2Schema>;
+
+/**
+ * Derives an attention verification view for an experiment descriptor and result.
+ * For historical artifacts lacking modern attentionRequest / attentionObservation fields,
+ * returns an observation with status: "unknown" instead of rejecting the artifact.
+ */
+export function getDerivedAttentionVerificationView(
+  _descriptor?:
+    | {
+        provenance?: { requestedAttentionBackend?: string | null | undefined } | null | undefined;
+        attentionRequest?: { expectedBackend?: string } | null | undefined;
+      }
+    | null
+    | undefined,
+  result?:
+    | {
+        observedProvenance?:
+          | {
+              observedAttentionBackend?:
+                | {
+                    effectiveBackend?: string | null | undefined;
+                    dispatchImplementation?: string | null | undefined;
+                  }
+                | null
+                | undefined;
+            }
+          | null
+          | undefined;
+        attentionObservation?: MinimaxH3AttentionObservation | null | undefined;
+      }
+    | null
+    | undefined
+): MinimaxH3AttentionObservation {
+  if (result?.attentionObservation) {
+    return result.attentionObservation;
+  }
+  const observedBackend =
+    result?.observedProvenance?.observedAttentionBackend?.effectiveBackend ?? null;
+  const dispatchImplementation =
+    result?.observedProvenance?.observedAttentionBackend?.dispatchImplementation ?? null;
+
+  return {
+    status: "unknown",
+    actualBackend: observedBackend,
+    dispatchImplementation,
+    acceleratedCallCount: 0,
+    denseCallCount: 0,
+    plannedDenseCallCount: 0,
+    fallbackEvents: [],
+    stepRecords: [],
+    failureReason: null,
+    missingKernelFailure: null,
+    dtypeLayoutDiagnostics: null,
+    measurementCoverage: {
+      samplingCallsRecorded: 0,
+      attentionCallsRecorded: 0,
+      complete: false
+    },
+    timings: {
+      deviceElapsedMs: null,
+      kernelElapsedMs: null,
+      timingUnavailableReason: "Historical artifact without attention observation"
+    }
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Controlled Comparison Specification & Report (KTD5, KTD5a - Witness F1)

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { basename } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -14,6 +14,7 @@ import {
 } from "./minimax-h3-cli-parser-semantics.js";
 import {
   DEFAULT_MINIMAX_H3_STOP_POLICY,
+  computeDescriptorDigest,
   type MinimaxH3ExperimentIntent,
   type MinimaxH3ExperimentReceipt,
   type MinimaxH3ProcessRecord,
@@ -221,7 +222,8 @@ class InMemoryStore implements MinimaxH3ExperimentStorePort {
     const content =
       this.files.get(filePath) ??
       this.files.get(basename(filePath)) ??
-      this.files.get(`templates/${basename(filePath)}`);
+      this.files.get(`templates/${basename(filePath)}`) ??
+      (existsSync(filePath) ? readFileSync(filePath, "utf-8") : undefined);
     if (!content) throw new Error(`File not found: ${filePath}`);
     return JSON.parse(content);
   }
@@ -235,7 +237,8 @@ class InMemoryStore implements MinimaxH3ExperimentStorePort {
     const content =
       this.files.get(filePath) ??
       this.files.get(basename(filePath)) ??
-      this.files.get(`templates/${basename(filePath)}`);
+      this.files.get(`templates/${basename(filePath)}`) ??
+      (existsSync(filePath) ? readFileSync(filePath, "utf-8") : undefined);
     if (!content) throw new Error(`File not found: ${filePath}`);
     return content;
   }
@@ -2236,7 +2239,56 @@ describe("MiniMax-H3 Experiment Service V2 & Phase Accounting", () => {
 });
 
 describe("MiniMax-H3 Upgraded Dense Attention Validation (F-437dab51)", () => {
-  it("prepares and validates an upgraded dense attention experiment against real canonical templates", async () => {
+  it("rejects preparing an upgraded dense attention experiment against unconfirmed core SHA 94cfeb3a", async () => {
+    const store = new InMemoryStore();
+    store.files.set(
+      "templates/minimax_h3_720p_i2v_124f_api.json",
+      readFileSync("templates/minimax_h3_720p_i2v_124f_api.json", "utf-8")
+    );
+    store.files.set(
+      "templates/provenance.json",
+      readFileSync("templates/provenance.json", "utf-8")
+    );
+    store.files.set(
+      "manifest.json",
+      JSON.stringify({
+        referenceSetId: "ref-test-real-1",
+        references: [
+          {
+            assetPath: "/tmp/ref1.png",
+            stagedFilename: "ref1.png",
+            role: "first_frame",
+            tag: "<Picture 1>",
+            order: 0
+          }
+        ]
+      })
+    );
+
+    const service = new MinimaxH3ExperimentService(store);
+
+    await expect(
+      service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt:
+          "A cinematic shot of a person smiling warmly, natural lighting, highly detailed skin texture, 8k hyperrealistic",
+        operatorLabel: "operator-01",
+        runId: "run-upgraded-dense-regression",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui-experimental",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest.json",
+        attentionVariant: "dense",
+        coreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf"
+      })
+    ).rejects.toThrow(/unavailable upstream.*HTTP 422/);
+  });
+
+  it("prepares and validates dense attention on the pinned core revision", async () => {
     const store = new InMemoryStore();
     store.files.set(
       "templates/minimax_h3_720p_i2v_124f_api.json",
@@ -2271,21 +2323,19 @@ describe("MiniMax-H3 Upgraded Dense Attention Validation (F-437dab51)", () => {
       prompt:
         "A cinematic shot of a person smiling warmly, natural lighting, highly detailed skin texture, 8k hyperrealistic",
       operatorLabel: "operator-01",
-      runId: "run-upgraded-dense-regression",
+      runId: "run-pinned-dense-regression",
       outputRoot: ".ai-runs/minimax-h3-experiments",
       targetHost: "render-worker-01",
       gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
       comfyUiDir: "/opt/comfyui-experimental",
       pythonPath: "/usr/bin/python3",
       inputManifestPath: "manifest.json",
-      attentionVariant: "dense",
-      coreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf"
+      attentionVariant: "dense"
     });
 
     const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
     expect(descV2.attentionRequest?.attentionVariant).toBe("dense");
-    expect(descV2.compatibility?.scope).toBe("upgraded-dense-attention-control-i2v");
-    expect(descV2.provenance?.comfyuiCoreRevision).toBe("94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf");
+    expect(descV2.provenance?.comfyuiCoreRevision).toBe("55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc");
 
     const validation = await service.validateExperiment(runDir, {
       outputRoot: ".ai-runs/minimax-h3-experiments"
@@ -2293,9 +2343,10 @@ describe("MiniMax-H3 Upgraded Dense Attention Validation (F-437dab51)", () => {
 
     expect(validation.errors).toEqual([]);
     expect(validation.ok).toBe(true);
+    expect(validation.graphValid).toBe(true);
   });
 
-  it("prepares and validates a matched dense attention experiment (matchedVariant: sol-attn)", async () => {
+  it("rejects preparing a matched dense attention experiment against unconfirmed core SHA", async () => {
     const store = new InMemoryStore();
     store.files.set(
       "templates/minimax_h3_720p_i2v_124f_api.json",
@@ -2323,14 +2374,62 @@ describe("MiniMax-H3 Upgraded Dense Attention Validation (F-437dab51)", () => {
 
     const service = new MinimaxH3ExperimentService(store);
 
+    await expect(
+      service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt:
+          "A cinematic shot of a person smiling warmly, natural lighting, highly detailed skin texture, 8k hyperrealistic",
+        operatorLabel: "operator-01",
+        runId: "run-sol-attn-matched-dense-regression",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui-experimental",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest.json",
+        attentionVariant: "dense",
+        matchedVariant: "native-sol-attn"
+      })
+    ).rejects.toThrow(/unavailable upstream.*HTTP 422/);
+  });
+
+  it("forwards configuredRunner.env through prepareExperiment and validates without conflict", async () => {
+    const store = new InMemoryStore();
+    store.files.set(
+      "templates/minimax_h3_720p_i2v_124f_api.json",
+      readFileSync("templates/minimax_h3_720p_i2v_124f_api.json", "utf-8")
+    );
+    store.files.set(
+      "templates/provenance.json",
+      readFileSync("templates/provenance.json", "utf-8")
+    );
+    store.files.set(
+      "manifest.json",
+      JSON.stringify({
+        referenceSetId: "ref-test-env-1",
+        references: [
+          {
+            assetPath: "/tmp/ref1.png",
+            stagedFilename: "ref1.png",
+            role: "first_frame",
+            tag: "<Picture 1>",
+            order: 0
+          }
+        ]
+      })
+    );
+
+    const service = new MinimaxH3ExperimentService(store);
+
     const { runDir, descriptor } = await service.prepareExperiment({
       route: "i2v",
       frames: 124,
       seed: 42,
-      prompt:
-        "A cinematic shot of a person smiling warmly, natural lighting, highly detailed skin texture, 8k hyperrealistic",
+      prompt: "A test prompt",
       operatorLabel: "operator-01",
-      runId: "run-sol-attn-matched-dense-regression",
+      runId: "run-env-forwarding-test",
       outputRoot: ".ai-runs/minimax-h3-experiments",
       targetHost: "render-worker-01",
       gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
@@ -2338,20 +2437,72 @@ describe("MiniMax-H3 Upgraded Dense Attention Validation (F-437dab51)", () => {
       pythonPath: "/usr/bin/python3",
       inputManifestPath: "manifest.json",
       attentionVariant: "dense",
-      matchedVariant: "native-sol-attn"
+      env: {
+        MY_CUSTOM_FLAG: "1"
+      }
     });
 
     const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
-    expect(descV2.attentionRequest?.attentionVariant).toBe("dense");
-    expect(descV2.compatibility?.scope).toBe("sol-attn-matched-dense-attention-i2v");
-    expect(descV2.provenance?.comfyuiCoreRevision).toBe("94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf");
+    expect(descV2.configuredRunner.env).toEqual({
+      CUDA_VISIBLE_DEVICES: "GPU-12345678-1234-1234-1234-123456789abc",
+      MY_CUSTOM_FLAG: "1"
+    });
 
     const validation = await service.validateExperiment(runDir, {
       outputRoot: ".ai-runs/minimax-h3-experiments"
     });
-
-    expect(validation.errors).toEqual([]);
     expect(validation.ok).toBe(true);
+    expect(validation.graphValid).toBe(true);
+  });
+
+  it("rejects conflicting attention environment variable passed via options.env in prepareExperiment", async () => {
+    const store = new InMemoryStore();
+    store.files.set(
+      "templates/minimax_h3_720p_i2v_124f_api.json",
+      readFileSync("templates/minimax_h3_720p_i2v_124f_api.json", "utf-8")
+    );
+    store.files.set(
+      "templates/provenance.json",
+      readFileSync("templates/provenance.json", "utf-8")
+    );
+    store.files.set(
+      "manifest.json",
+      JSON.stringify({
+        referenceSetId: "ref-test-env-2",
+        references: [
+          {
+            assetPath: "/tmp/ref1.png",
+            stagedFilename: "ref1.png",
+            role: "first_frame",
+            tag: "<Picture 1>",
+            order: 0
+          }
+        ]
+      })
+    );
+
+    const service = new MinimaxH3ExperimentService(store);
+
+    await expect(
+      service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A test prompt",
+        operatorLabel: "operator-01",
+        runId: "run-env-conflict-test",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui-experimental",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest.json",
+        attentionVariant: "dense",
+        env: {
+          COMFYUI_ATTENTION_BACKEND: "sage"
+        }
+      })
+    ).rejects.toThrow(/Conflicting COMFYUI_ATTENTION_BACKEND/);
   });
 });
 
@@ -2889,6 +3040,157 @@ describe("MiniMax-H3 Step Reduction Sampling Recipe Validation & Tampering Detec
             e.includes("Config.json on disk does not match") || e.includes("MiniMaxH3SigmaShift")
         )
       ).toBe(true);
+    });
+
+    it("invalidates graphValid and omits validatedGraph when validate-time env tampers attention backend", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+
+      const { runDir, descriptor } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A test prompt",
+        operatorLabel: "operator-01",
+        runId: "run-tamper-attn-env",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        attentionVariant: "dense"
+      });
+
+      // Tamper configuredRunner.env in descriptor to inject conflicting COMFYUI_ATTENTION_BACKEND="sage"
+      const tamperedDesc = structuredClone(descriptor as MinimaxH3ExperimentDescriptorV2);
+      tamperedDesc.configuredRunner = {
+        ...tamperedDesc.configuredRunner,
+        env: {
+          ...tamperedDesc.configuredRunner?.env,
+          COMFYUI_ATTENTION_BACKEND: "sage"
+        }
+      };
+      tamperedDesc.descriptorDigest = computeDescriptorDigest(
+        tamperedDesc as unknown as Record<string, unknown>
+      );
+      store.descriptor = tamperedDesc;
+
+      const validation = await service.validateExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      });
+      expect(validation.ok).toBe(false);
+      expect(validation.graphValid).toBe(false);
+      expect(validation.validatedGraph).toBeUndefined();
+      expect(
+        validation.errors.some((e) =>
+          e.includes("Conflicting COMFYUI_ATTENTION_BACKEND environment variable")
+        )
+      ).toBe(true);
+    });
+
+    it("invalidates graphValid and omits validatedGraph when validate-time env contains unknown attention variable", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+
+      const { runDir, descriptor } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A test prompt",
+        operatorLabel: "operator-01",
+        runId: "run-unknown-attn-env",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        attentionVariant: "dense"
+      });
+
+      const tamperedDesc = structuredClone(descriptor as MinimaxH3ExperimentDescriptorV2);
+      tamperedDesc.configuredRunner = {
+        ...tamperedDesc.configuredRunner,
+        env: {
+          ...tamperedDesc.configuredRunner?.env,
+          COMFYUI_ATTENTION_EXPERIMENTAL: "1"
+        }
+      };
+      tamperedDesc.descriptorDigest = computeDescriptorDigest(
+        tamperedDesc as unknown as Record<string, unknown>
+      );
+      store.descriptor = tamperedDesc;
+
+      const validation = await service.validateExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      });
+      expect(validation.ok).toBe(false);
+      expect(validation.graphValid).toBe(false);
+      expect(validation.validatedGraph).toBeUndefined();
+      expect(
+        validation.errors.some((e) =>
+          e.includes("Unknown or conflicting attention environment variable")
+        )
+      ).toBe(true);
+    });
+
+    it("validates graphValid true when validate-time env matches configured attention backend", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+
+      const { runDir } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A test prompt",
+        operatorLabel: "operator-01",
+        runId: "run-matching-attn-env",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        attentionVariant: "dense"
+      });
+
+      const validation = await service.validateExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      });
+      expect(validation.ok).toBe(true);
+      expect(validation.graphValid).toBe(true);
+      expect(validation.validatedGraph).toBeDefined();
+      expect(validation.errors).toEqual([]);
+    });
+
+    it("allows FastH3 recipe experiment with samplingRecipe.attentionTopology through executeExperiment admission", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+
+      const { runDir } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A test prompt",
+        operatorLabel: "operator-01",
+        runId: "run-fasth3-admission",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        samplingRecipe: "fasth3-i2v-8"
+      });
+
+      // executeExperiment should pass admission check and reach stop policy validation,
+      // instead of rejecting with "Execution rejected: attention experiment descriptor lacks required modern attentionRequest"
+      await expect(
+        service.executeExperiment(runDir, {
+          outputRoot: ".ai-runs/minimax-h3-experiments"
+        })
+      ).rejects.toThrow("Execution requires an operator-authored, versioned --stop-policy file.");
     });
   });
 });

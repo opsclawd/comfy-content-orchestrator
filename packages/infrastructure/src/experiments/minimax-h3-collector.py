@@ -8,14 +8,31 @@ It records deterministic, additive phase accounting without modifying ComfyUI ch
 """
 
 import atexit
+import builtins
+import contextlib
+import contextvars
 import hashlib
 import inspect
 import json
 import os
 import sys
+import threading
 import time
 import traceback
 from typing import Any, Dict, Optional
+
+_CURRENT_PLANNED_EXCLUSION: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar(
+    "_CURRENT_PLANNED_EXCLUSION", default=None
+)
+_ACTIVE_OVERRIDE_INSTANCE: contextvars.ContextVar[Optional[Any]] = contextvars.ContextVar(
+    "_ACTIVE_OVERRIDE_INSTANCE", default=None
+)
+_ACTIVE_OVERRIDE_CALL_ARGS: contextvars.ContextVar[Optional[tuple]] = contextvars.ContextVar(
+    "_ACTIVE_OVERRIDE_CALL_ARGS", default=None
+)
+_IN_DENSE_DISPATCH: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "_IN_DENSE_DISPATCH", default=False
+)
 
 # Clock domain: Monotonic child clock
 def now_mono_ms() -> float:
@@ -81,6 +98,9 @@ class Collector:
         if metadata is not None:
             record["metadata"] = metadata
 
+        if self.file.closed:
+            return
+
         line = json.dumps(record, separators=(",", ":"))
         self.file.write(line + "\n")
         self.file.flush()
@@ -145,6 +165,8 @@ class Collector:
         )
 
     def close(self):
+        if self.file.closed:
+            return
         # Close any lingering spans as interrupted
         for span_id, span in list(self.active_spans.items()):
             self.emit(
@@ -179,6 +201,7 @@ class Collector:
 
 class AttentionTracker:
     def __init__(self):
+        self._lock = threading.RLock()
         self.accelerated_call_count = 0
         self.dense_call_count = 0
         self.planned_dense_call_count = 0
@@ -193,53 +216,78 @@ class AttentionTracker:
         self.expected_backend = os.environ.get("CCO_EXPERIMENT_EXPECTED_ATTENTION_BACKEND", os.environ.get("CCO_EXPECTED_ATTENTION_BACKEND"))
         allow_planned = os.environ.get("CCO_EXPERIMENT_ALLOW_PLANNED_DENSE", "true")
         self.allow_planned_dense = allow_planned.lower() in ("1", "true", "yes")
+        self.current_step_index = None
 
     def record_accelerated(self, backend: str, impl: str, step_index: Optional[int] = None):
-        self.accelerated_call_count += 1
-        self.actual_backend = backend
-        self.dispatch_impl = impl
-        if self.status != "fallback" and self.status != "failed":
-            self.status = "verified"
-        if step_index is not None:
-            self.step_records.append({
-                "stepIndex": int(step_index),
-                "backend": backend,
-                "implementation": impl,
-                "callType": "accelerated",
-                "monotonicMs": now_mono_ms()
-            })
-
-    def record_dense(self, is_planned: bool = False, step_index: Optional[int] = None):
-        call_type = "planned_dense" if is_planned else "dense"
-        if is_planned:
-            self.planned_dense_call_count += 1
-            if self.expected_backend and self.expected_backend not in ("torch_sdpa", "dense", "default") and not self.allow_planned_dense:
-                reason = "Planned dense attention call executed under zero-dense policy regime"
-                self.record_fallback(self.expected_backend, "torch_sdpa", reason, step_index=step_index or 0)
-                return
-        else:
-            self.dense_call_count += 1
-            if self.expected_backend and self.expected_backend not in ("torch_sdpa", "dense", "default"):
-                reason = "Unexpected dense attention call executed during accelerated regime"
-                if not self.allow_planned_dense:
-                    reason += " (allowPlannedDense=false)"
-                self.record_fallback(self.expected_backend, "torch_sdpa", reason, step_index=step_index or 0)
-                return
-        if self.status != "fallback" and self.status != "failed":
-            if self.actual_backend in ("unknown", None):
-                self.actual_backend = "torch_sdpa"
-                self.dispatch_impl = "torch.nn.functional.scaled_dot_product_attention"
+        with self._lock:
+            step_idx = step_index if step_index is not None else self.current_step_index
+            self.accelerated_call_count += 1
+            self.actual_backend = backend
+            self.dispatch_impl = impl
+            if self.status != "fallback" and self.status != "failed":
                 self.status = "verified"
-        if step_index is not None:
-            self.step_records.append({
-                "stepIndex": int(step_index),
+            if step_idx is not None:
+                self.step_records.append({
+                    "stepIndex": int(step_idx),
+                    "backend": backend,
+                    "implementation": impl,
+                    "callType": "accelerated",
+                    "monotonicMs": now_mono_ms()
+                })
+
+    def record_dense(
+        self,
+        is_planned: bool = False,
+        metadata: Optional[Dict[str, Any]] = None,
+        step_index: Optional[int] = None
+    ):
+        with self._lock:
+            step_idx = step_index if step_index is not None else self.current_step_index
+            is_accelerated = bool(
+                self.expected_backend and self.expected_backend not in ("torch_sdpa", "dense", "default")
+            )
+
+            if not is_planned:
+                self.dense_call_count += 1
+                if is_accelerated:
+                    reason = "Unexpected dense attention call executed during accelerated regime"
+                    if not self.allow_planned_dense:
+                        reason += " (allowPlannedDense=false)"
+                    self.record_fallback(self.expected_backend, "torch_sdpa", reason, step_index=step_idx or 0, terminal=True)
+                    return
+            else:
+                if not self.allow_planned_dense:
+                    self.dense_call_count += 1
+                    reason = "Planned dense attention call executed under zero-dense policy regime (allowPlannedDense=false)"
+                    self.record_fallback(self.expected_backend, "torch_sdpa", reason, step_index=step_idx or 0, terminal=True)
+                    return
+                self.planned_dense_call_count += 1
+
+            if not is_accelerated and self.status != "fallback" and self.status != "failed":
+                if self.actual_backend in ("unknown", None):
+                    self.actual_backend = "torch_sdpa"
+                    self.dispatch_impl = "torch.nn.functional.scaled_dot_product_attention"
+                    self.status = "verified"
+
+            call_record = {
+                "stepIndex": int(step_idx) if step_idx is not None else 0,
                 "backend": "torch_sdpa",
                 "implementation": "torch.nn.functional.scaled_dot_product_attention",
-                "callType": call_type,
+                "callType": "planned_dense" if is_planned else "dense",
                 "monotonicMs": now_mono_ms()
-            })
+            }
+            if metadata:
+                call_record["metadata"] = metadata
+            self.step_records.append(call_record)
 
-    def record_fallback(self, requested: str, fallback: str, reason: str, step_index: int = 0):
+    def record_fallback(
+        self,
+        requested: str,
+        fallback: str,
+        reason: str,
+        step_index: int = 0,
+        terminal: bool = False
+    ):
         event = {
             "stepIndex": int(step_index),
             "layerIndex": None,
@@ -248,40 +296,54 @@ class AttentionTracker:
             "reason": reason,
             "monotonicMs": now_mono_ms()
         }
-        self.fallback_events.append(event)
-        self.status = "fallback"
-        self.failure_reason = reason
-        self.step_records.append({
-            "stepIndex": int(step_index),
-            "backend": fallback,
-            "implementation": "torch.nn.functional.scaled_dot_product_attention",
-            "callType": "fallback",
-            "monotonicMs": now_mono_ms()
-        })
-        if self.expected_backend and self.expected_backend not in ("torch_sdpa", "dense", "default") and not self.allow_planned_dense:
+        with self._lock:
+            self.fallback_events.append(event)
+            self.status = "fallback"
+            self.failure_reason = reason
+            self.step_records.append({
+                "stepIndex": int(step_index),
+                "backend": fallback,
+                "implementation": "torch.nn.functional.scaled_dot_product_attention",
+                "callType": "fallback",
+                "monotonicMs": now_mono_ms()
+            })
+            is_accelerated = bool(
+                self.expected_backend and self.expected_backend not in ("torch_sdpa", "dense", "default")
+            )
+            should_fail_terminal = terminal or is_accelerated
+        if should_fail_terminal:
             self.status = "failed"
             print(f"[ERROR] Terminal attention experiment failure: {reason}", file=sys.stderr)
             if _GLOBAL_COLLECTOR:
                 _GLOBAL_COLLECTOR.close()
             sys.exit(1)
 
+    @contextlib.contextmanager
+    def planned_exclusion(self, reason: str, metadata: Optional[Dict[str, Any]] = None):
+        payload = {"reason": reason, **(metadata or {})}
+        reset_handle = _CURRENT_PLANNED_EXCLUSION.set(payload)
+        try:
+            yield
+        finally:
+            _CURRENT_PLANNED_EXCLUSION.reset(reset_handle)
+
     def summary(self) -> Dict[str, Any]:
-        return {
-            "acceleratedCallCount": self.accelerated_call_count,
-            "denseCallCount": self.dense_call_count,
-            "plannedDenseCallCount": self.planned_dense_call_count,
-            "fallbackEvents": self.fallback_events,
-            "actualBackend": self.actual_backend,
-            "dispatchImplementation": self.dispatch_impl,
-            "missingKernelFailure": self.missing_kernel_failure,
-            "status": self.status,
-            "failureReason": self.failure_reason,
-            "dtypeLayoutDiagnostics": self.dtype_diagnostics
-        }
+        with self._lock:
+            return {
+                "acceleratedCallCount": self.accelerated_call_count,
+                "denseCallCount": self.dense_call_count,
+                "plannedDenseCallCount": self.planned_dense_call_count,
+                "fallbackEvents": list(self.fallback_events),
+                "actualBackend": self.actual_backend,
+                "dispatchImplementation": self.dispatch_impl,
+                "missingKernelFailure": self.missing_kernel_failure,
+                "status": self.status,
+                "failureReason": self.failure_reason,
+                "dtypeLayoutDiagnostics": dict(self.dtype_diagnostics)
+            }
 
 _ATTENTION_TRACKER = AttentionTracker()
 _GLOBAL_COLLECTOR: Optional[Collector] = None
-_IN_DENSE_DISPATCH = False
 
 def get_global_collector() -> Optional[Collector]:
     return _GLOBAL_COLLECTOR
@@ -308,6 +370,265 @@ def classify_node_phase(node_id: str, class_type: str) -> str:
     if class_type in ("CreateVideo", "SaveVideo"):
         return "mux_and_save"
     return "unattributed"
+
+def load_veda_exclusion_spec() -> Dict[str, Any]:
+    fixture_path = os.environ.get("CCO_VEDA_FIXTURE_PATH", os.environ.get("CCO_EXPERIMENT_VEDA_FIXTURE_PATH"))
+    if not fixture_path:
+        candidate = os.path.normpath(
+            os.path.join(
+                os.path.dirname(__file__),
+                "../../../../experiments/minimax-h3-attention/fixtures/veda-sparse-attention-api.json"
+            )
+        )
+        if os.path.exists(candidate):
+            fixture_path = candidate
+    if fixture_path and os.path.exists(fixture_path):
+        try:
+            with open(fixture_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                hooks = data.get("exclusionHooks")
+                if isinstance(hooks, dict):
+                    return hooks
+        except Exception:
+            pass
+    return {
+        "patchClass": "VedaPatch",
+        "sourceFile": "veda_comfy/comfy_patch.py",
+        "decisionMethods": ["make_override", "_routed_forward", "_dense_reason", "_block_reason"],
+        "supportedExclusionReasons": ["full-attention layer", "full-attention step"]
+    }
+
+_VEDA_EXCLUSION_SPEC = load_veda_exclusion_spec()
+VERIFIED_VEDA_EXCLUSION_REASONS = frozenset(
+    _VEDA_EXCLUSION_SPEC.get("supportedExclusionReasons", ["full-attention layer", "full-attention step"])
+)
+
+def extract_layer_and_step(args, kwargs):
+    layer = None
+    step = None
+
+    def inspect_dict(d: dict, depth: int = 0):
+        nonlocal layer, step
+        if depth > 3:
+            return
+        if layer is None:
+            for k in ("block_index", "layer", "transformer_index"):
+                if k in d and d[k] is not None:
+                    layer = d[k]
+                    break
+            if layer is None and "block" in d and d["block"] is not None:
+                b = d["block"]
+                if isinstance(b, (list, tuple)) and len(b) > 1 and isinstance(b[1], int):
+                    layer = b[1]
+                else:
+                    layer = b
+        if step is None:
+            for k in ("step", "sub_step", "step_index"):
+                if k in d and d[k] is not None:
+                    step = d[k]
+                    break
+        for sub_k in ("options", "extra_options", "transformer_options"):
+            if sub_k in d and isinstance(d[sub_k], dict):
+                inspect_dict(d[sub_k], depth + 1)
+
+    for arg in args:
+        if isinstance(arg, dict):
+            inspect_dict(arg)
+    for v in kwargs.values():
+        if isinstance(v, dict):
+            inspect_dict(v)
+
+    if layer is None or step is None:
+        active_call = _ACTIVE_OVERRIDE_CALL_ARGS.get()
+        if active_call is not None:
+            call_args, call_kwargs = active_call
+            for arg in call_args:
+                if isinstance(arg, dict):
+                    inspect_dict(arg)
+            for v in call_kwargs.values():
+                if isinstance(v, dict):
+                    inspect_dict(v)
+
+    return layer, step
+
+def is_verified_veda_patch_class(cls) -> bool:
+    if not isinstance(cls, type):
+        return False
+    spec = _VEDA_EXCLUSION_SPEC
+    if cls.__name__ != spec.get("patchClass", "VedaPatch"):
+        return False
+
+    expected_source_file = spec.get("sourceFile", "veda_comfy/comfy_patch.py").replace("\\", "/")
+    expected_module = expected_source_file.replace("/", ".").replace(".py", "")
+
+    mod_name = getattr(cls, "__module__", "")
+    source_file = ""
+    try:
+        source_file = (inspect.getfile(cls) or "").replace("\\", "/")
+    except (TypeError, OSError):
+        pass
+
+    # Source file MUST be present and end with the verified relative path
+    if not source_file or not source_file.endswith(expected_source_file):
+        return False
+
+    # Module name MUST match or end with the verified module
+    if not (mod_name == expected_module or mod_name.endswith("." + expected_module)):
+        return False
+
+    # All decision methods from the fixture specification must be present and callable
+    expected_methods = spec.get(
+        "decisionMethods",
+        ["make_override", "_routed_forward", "_dense_reason", "_block_reason"]
+    )
+    for method_name in expected_methods:
+        if not callable(getattr(cls, method_name, None)):
+            return False
+
+    # Verify method shapes and parameter signatures against pinned upstream signatures
+    try:
+        sig_dense = inspect.signature(getattr(cls, "_dense_reason"))
+        params_dense = list(sig_dense.parameters.keys())
+        if len(params_dense) < 3 or params_dense[0] != "self" or params_dense[1] != "q":
+            return False
+
+        sig_block = inspect.signature(getattr(cls, "_block_reason"))
+        params_block = list(sig_block.parameters.keys())
+        if len(params_block) < 2 or params_block[0] != "self":
+            return False
+
+        sig_override = inspect.signature(getattr(cls, "make_override"))
+        params_override = list(sig_override.parameters.keys())
+        if len(params_override) < 2 or params_override[0] != "self":
+            return False
+
+        sig_routed = inspect.signature(getattr(cls, "_routed_forward"))
+        params_routed = list(sig_routed.parameters.keys())
+        if len(params_routed) < 5 or params_routed[0] != "self" or params_routed[1] != "func" or params_routed[2] != "q":
+            return False
+    except (ValueError, TypeError):
+        return False
+
+    return True
+
+def hook_veda_patch_class(cls):
+    if not is_verified_veda_patch_class(cls):
+        return
+
+    def hook_instance_methods(instance):
+        for method_name in ("_dense_reason", "_block_reason"):
+            if method_name in instance.__dict__:
+                orig_fn = instance.__dict__[method_name]
+                if callable(orig_fn) and not getattr(orig_fn, "_cco_hooked", False):
+                    def make_hooked_inst_reason(m_name, f_orig):
+                        def hooked_inst_reason(*args, **kwargs):
+                            res = f_orig(*args, **kwargs)
+                            active_instance = _ACTIVE_OVERRIDE_INSTANCE.get()
+                            if active_instance is not None and active_instance is instance:
+                                if isinstance(res, str) and res in VERIFIED_VEDA_EXCLUSION_REASONS:
+                                    if _CURRENT_PLANNED_EXCLUSION.get() is None:
+                                        layer, step = extract_layer_and_step(args, kwargs)
+                                        _CURRENT_PLANNED_EXCLUSION.set({
+                                            "patchClass": instance.__class__.__name__,
+                                            "decisionMethod": m_name,
+                                            "hook": f"{instance.__class__.__name__}.{m_name}",
+                                            "reason": res,
+                                            "layer": layer,
+                                            "step": step
+                                        })
+                                elif res:
+                                    _CURRENT_PLANNED_EXCLUSION.set(None)
+                            return res
+                        hooked_inst_reason._cco_hooked = True
+                        return hooked_inst_reason
+                    instance.__dict__[method_name] = make_hooked_inst_reason(method_name, orig_fn)
+
+    def hook_reason_method(target_cls, method_name):
+        orig_fn = getattr(target_cls, method_name, None)
+        if callable(orig_fn) and not getattr(orig_fn, "_cco_hooked", False):
+            def hooked_reason(self, *args, **kwargs):
+                res = orig_fn(self, *args, **kwargs)
+                active_instance = _ACTIVE_OVERRIDE_INSTANCE.get()
+                if active_instance is not None and active_instance is self:
+                    if isinstance(res, str) and res in VERIFIED_VEDA_EXCLUSION_REASONS:
+                        if _CURRENT_PLANNED_EXCLUSION.get() is None:
+                            layer, step = extract_layer_and_step(args, kwargs)
+                            _CURRENT_PLANNED_EXCLUSION.set({
+                                "patchClass": self.__class__.__name__,
+                                "decisionMethod": method_name,
+                                "hook": f"{self.__class__.__name__}.{method_name}",
+                                "reason": res,
+                                "layer": layer,
+                                "step": step
+                            })
+                    elif res:
+                        # Truthy return that is NOT a verified exclusion reason
+                        # (e.g. 'layer outside the predictor'). Upstream may dispatch
+                        # dense attention, but this must NOT be counted as planned.
+                        _CURRENT_PLANNED_EXCLUSION.set(None)
+                return res
+            hooked_reason._cco_hooked = True
+            setattr(target_cls, method_name, hooked_reason)
+
+    hook_reason_method(cls, "_dense_reason")
+    hook_reason_method(cls, "_block_reason")
+
+    orig_make_override = getattr(cls, "make_override", None)
+    if callable(orig_make_override) and not getattr(orig_make_override, "_cco_hooked", False):
+        def hooked_make_override(self, *args, **kwargs):
+            hook_instance_methods(self)
+            override = orig_make_override(self, *args, **kwargs)
+            if not callable(override):
+                return override
+
+            def wrapped_override(*o_args, **o_kwargs):
+                hook_instance_methods(self)
+                # If we're already running inside an active scope for this same
+                # instance (e.g. _routed_forward delegated into make_override's
+                # returned override), don't clobber the enclosing scope's
+                # _CURRENT_PLANNED_EXCLUSION / _ACTIVE_OVERRIDE_INSTANCE: the
+                # outer scope owns the decision lifetime, not this nested call.
+                if _ACTIVE_OVERRIDE_INSTANCE.get() is self:
+                    return override(*o_args, **o_kwargs)
+                token_instance = _ACTIVE_OVERRIDE_INSTANCE.set(self)
+                token_excl = _CURRENT_PLANNED_EXCLUSION.set(None)
+                token_args = _ACTIVE_OVERRIDE_CALL_ARGS.set((o_args, o_kwargs))
+                try:
+                    return override(*o_args, **o_kwargs)
+                finally:
+                    _ACTIVE_OVERRIDE_CALL_ARGS.reset(token_args)
+                    _CURRENT_PLANNED_EXCLUSION.reset(token_excl)
+                    _ACTIVE_OVERRIDE_INSTANCE.reset(token_instance)
+
+            wrapped_override._cco_hooked = True
+            return wrapped_override
+
+        hooked_make_override._cco_hooked = True
+        cls.make_override = hooked_make_override
+
+    orig_routed_forward = getattr(cls, "_routed_forward", None)
+    if callable(orig_routed_forward) and not getattr(orig_routed_forward, "_cco_hooked", False):
+        def hooked_routed_forward(self, *args, **kwargs):
+            hook_instance_methods(self)
+            # Same nesting guard as wrapped_override: if make_override's
+            # returned override already delegated into _routed_forward for
+            # this same instance, preserve the enclosing scope's
+            # _CURRENT_PLANNED_EXCLUSION / _ACTIVE_OVERRIDE_INSTANCE instead
+            # of resetting it out from under the active decision.
+            if _ACTIVE_OVERRIDE_INSTANCE.get() is self:
+                return orig_routed_forward(self, *args, **kwargs)
+            token_instance = _ACTIVE_OVERRIDE_INSTANCE.set(self)
+            token_excl = _CURRENT_PLANNED_EXCLUSION.set(None)
+            token_args = _ACTIVE_OVERRIDE_CALL_ARGS.set((args, kwargs))
+            try:
+                return orig_routed_forward(self, *args, **kwargs)
+            finally:
+                _ACTIVE_OVERRIDE_CALL_ARGS.reset(token_args)
+                _CURRENT_PLANNED_EXCLUSION.reset(token_excl)
+                _ACTIVE_OVERRIDE_INSTANCE.reset(token_instance)
+
+        hooked_routed_forward._cco_hooked = True
+        cls._routed_forward = hooked_routed_forward
 
 def install_hooks(collector: Collector):
     """
@@ -673,31 +994,37 @@ def install_hooks(collector: Collector):
         sdp_fn = getattr(comfy_attn, "sdp", None)
         if sdp_fn:
             def hooked_sdp(*args, **kwargs):
-                global _IN_DENSE_DISPATCH
-                if _IN_DENSE_DISPATCH:
+                if _IN_DENSE_DISPATCH.get():
                     return sdp_fn(*args, **kwargs)
-                _IN_DENSE_DISPATCH = True
+                dispatch_handle = _IN_DENSE_DISPATCH.set(True)
                 try:
                     res = sdp_fn(*args, **kwargs)
-                    _ATTENTION_TRACKER.record_dense()
+                    exclusion = _CURRENT_PLANNED_EXCLUSION.get()
+                    _ATTENTION_TRACKER.record_dense(
+                        is_planned=(exclusion is not None),
+                        metadata=exclusion
+                    )
                     return res
                 finally:
-                    _IN_DENSE_DISPATCH = False
+                    _IN_DENSE_DISPATCH.reset(dispatch_handle)
             comfy_attn.sdp = hooked_sdp
 
         orig_attention_pytorch = getattr(comfy_attn, "attention_pytorch", None)
         if orig_attention_pytorch:
             def hooked_attention_pytorch(*args, **kwargs):
-                global _IN_DENSE_DISPATCH
-                if _IN_DENSE_DISPATCH:
+                if _IN_DENSE_DISPATCH.get():
                     return orig_attention_pytorch(*args, **kwargs)
-                _IN_DENSE_DISPATCH = True
+                dispatch_handle = _IN_DENSE_DISPATCH.set(True)
                 try:
                     res = orig_attention_pytorch(*args, **kwargs)
-                    _ATTENTION_TRACKER.record_dense()
+                    exclusion = _CURRENT_PLANNED_EXCLUSION.get()
+                    _ATTENTION_TRACKER.record_dense(
+                        is_planned=(exclusion is not None),
+                        metadata=exclusion
+                    )
                     return res
                 finally:
-                    _IN_DENSE_DISPATCH = False
+                    _IN_DENSE_DISPATCH.reset(dispatch_handle)
             comfy_attn.attention_pytorch = hooked_attention_pytorch
 
         orig_attention_sage = getattr(comfy_attn, "attention_sage", None)
@@ -734,16 +1061,19 @@ def install_hooks(collector: Collector):
         orig_sdpa = getattr(comfy_ops, "scaled_dot_product_attention", None)
         if orig_sdpa:
             def hooked_sdpa(*args, **kwargs):
-                global _IN_DENSE_DISPATCH
-                if _IN_DENSE_DISPATCH:
+                if _IN_DENSE_DISPATCH.get():
                     return orig_sdpa(*args, **kwargs)
-                _IN_DENSE_DISPATCH = True
+                dispatch_handle = _IN_DENSE_DISPATCH.set(True)
                 try:
                     res = orig_sdpa(*args, **kwargs)
-                    _ATTENTION_TRACKER.record_dense()
+                    exclusion = _CURRENT_PLANNED_EXCLUSION.get()
+                    _ATTENTION_TRACKER.record_dense(
+                        is_planned=(exclusion is not None),
+                        metadata=exclusion
+                    )
                     return res
                 finally:
-                    _IN_DENSE_DISPATCH = False
+                    _IN_DENSE_DISPATCH.reset(dispatch_handle)
             comfy_ops.scaled_dot_product_attention = hooked_sdpa
     except (ImportError, AttributeError):
         pass
@@ -753,16 +1083,19 @@ def install_hooks(collector: Collector):
         orig_torch_sdpa = getattr(F, "scaled_dot_product_attention", None)
         if orig_torch_sdpa:
             def hooked_torch_sdpa(*args, **kwargs):
-                global _IN_DENSE_DISPATCH
-                if _IN_DENSE_DISPATCH:
+                if _IN_DENSE_DISPATCH.get():
                     return orig_torch_sdpa(*args, **kwargs)
-                _IN_DENSE_DISPATCH = True
+                dispatch_handle = _IN_DENSE_DISPATCH.set(True)
                 try:
                     res = orig_torch_sdpa(*args, **kwargs)
-                    _ATTENTION_TRACKER.record_dense()
+                    exclusion = _CURRENT_PLANNED_EXCLUSION.get()
+                    _ATTENTION_TRACKER.record_dense(
+                        is_planned=(exclusion is not None),
+                        metadata=exclusion
+                    )
                     return res
                 finally:
-                    _IN_DENSE_DISPATCH = False
+                    _IN_DENSE_DISPATCH.reset(dispatch_handle)
             F.scaled_dot_product_attention = hooked_torch_sdpa
     except (ImportError, AttributeError):
         pass
@@ -821,6 +1154,30 @@ def install_hooks(collector: Collector):
             comfy_kitchen.sol_attn_chunked = hooked_sol_chunked
     except (ImportError, AttributeError):
         pass
+
+    # 8c. Hook VedaPatch and dynamic module loading for planned exclusion tracking
+    for mod_name in list(sys.modules.keys()):
+        mod = sys.modules.get(mod_name)
+        if mod and hasattr(mod, "VedaPatch"):
+            hook_veda_patch_class(getattr(mod, "VedaPatch"))
+
+    orig_import = builtins.__import__
+    if not getattr(orig_import, "_cco_hooked", False):
+        def hooked_import(name, globals=None, locals=None, fromlist=(), level=0):
+            mod = orig_import(name, globals, locals, fromlist, level)
+            try:
+                if hasattr(mod, "VedaPatch"):
+                    hook_veda_patch_class(getattr(mod, "VedaPatch"))
+                for m_key in ("veda_comfy.comfy_patch", "veda_comfy.patch", name):
+                    if m_key in sys.modules:
+                        patch_mod = sys.modules.get(m_key)
+                        if patch_mod and hasattr(patch_mod, "VedaPatch"):
+                            hook_veda_patch_class(getattr(patch_mod, "VedaPatch"))
+            except Exception:
+                pass
+            return mod
+        hooked_import._cco_hooked = True
+        builtins.__import__ = hooked_import
 
     # Check for missing accelerated kernels when accelerated regime is requested
     expected_backend = os.environ.get("CCO_EXPERIMENT_EXPECTED_ATTENTION_BACKEND", os.environ.get("CCO_EXPECTED_ATTENTION_BACKEND"))

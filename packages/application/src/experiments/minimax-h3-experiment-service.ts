@@ -43,6 +43,7 @@ import {
   computeAttentionRuntimeLockDigest,
   computeAttentionConfigDigest,
   type MinimaxH3AttentionVariantName,
+  type MinimaxH3AttentionCatalogEntry,
   type MinimaxH3AttentionObservation,
   type MinimaxH3AttentionTopology,
   type MinimaxH3RequiredRuntimeManifest,
@@ -56,6 +57,11 @@ import {
   deriveAttentionGraph,
   validateAttentionTopology
 } from "./minimax-h3-attention-topology.js";
+import {
+  parseAttentionEvidence,
+  resolveAttentionEvidence,
+  type MinimaxH3AttentionEvidence
+} from "./minimax-h3-attention-evidence.js";
 import { getAttentionCatalogEntry } from "./minimax-h3-attention-catalog.js";
 import { reduceAttentionObservation } from "./minimax-h3-attention-reducer.js";
 import {
@@ -235,6 +241,50 @@ export function resolveCollectorPath(): string | undefined {
     }
   }
   return undefined;
+}
+
+export function resolveAttentionFixturesDir(configured?: string): string {
+  if (configured && existsSync(configured)) {
+    return resolve(configured);
+  }
+  const repoRoot = findRepositoryRoot();
+  const searchRoots = [process.cwd()];
+  if (process.env.INIT_CWD && !searchRoots.includes(process.env.INIT_CWD)) {
+    searchRoots.push(process.env.INIT_CWD);
+  }
+  if (!searchRoots.includes(repoRoot)) {
+    searchRoots.push(repoRoot);
+  }
+  const subpath = "experiments/minimax-h3-attention/fixtures";
+  for (const root of searchRoots) {
+    let curr = root;
+    for (let i = 0; i < 6; i++) {
+      const candidate = resolve(curr, configured ?? subpath);
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+      const parent = dirname(curr);
+      if (parent === curr) break;
+      curr = parent;
+    }
+  }
+  return resolve(repoRoot, configured ?? subpath);
+}
+
+export function getAttentionFixturePath(
+  variant: MinimaxH3AttentionVariantName,
+  fixturesDir?: string
+): string {
+  const dir = resolveAttentionFixturesDir(fixturesDir);
+  switch (variant) {
+    case "dense":
+    case "sage":
+      return join(dir, "pinned-core-attention-api.json");
+    case "native-sol-attn":
+      return join(dir, "native-sol-attn-api.json");
+    case "veda":
+      return join(dir, "veda-sparse-attention-api.json");
+  }
 }
 
 export function deriveExperimentGraph({
@@ -649,6 +699,10 @@ export class MinimaxH3ExperimentService {
       : undefined;
     const effectiveArgv =
       attentionVariant === "sage" ? [...generatedArgv, "--use-sage-attention"] : [...generatedArgv];
+    const effectiveEnv: Record<string, string> = {
+      CUDA_VISIBLE_DEVICES: gpuUuid,
+      ...(options.env ?? {})
+    };
 
     const checkpointFilename = samplingRecipe
       ? samplingRecipe.diffusionModel.filename
@@ -692,10 +746,37 @@ export class MinimaxH3ExperimentService {
         );
       }
     } else if (attentionVariant !== undefined && attentionCatalogEntry) {
+      const fixturePath = getAttentionFixturePath(attentionVariant, options.fixturesDir);
+      let fixtureRaw: unknown;
+      try {
+        fixtureRaw = await this.store.readJsonFile<unknown>(fixturePath);
+      } catch (err) {
+        throw new Error(
+          `Attention fixture missing or unreadable at "${fixturePath}": ${(err as Error).message}`
+        );
+      }
+      const evidence = parseAttentionEvidence(fixtureRaw);
+      const targetCoreRevision = options.coreRevision ?? attentionCatalogEntry.comfyuiCoreRevision;
+      const targetCustomNode = attentionCatalogEntry.customNode;
+      const resolved = resolveAttentionEvidence({
+        variant: attentionVariant,
+        evidence,
+        coreRevision: targetCoreRevision,
+        customNode: targetCustomNode
+      });
+      if (!resolved.valid || !resolved.isResolved) {
+        throw new Error(
+          `Attention evidence resolution failed for variant "${attentionVariant}":\n${resolved.errors.join("\n")}`
+        );
+      }
+
       const { graph: attGraph, topology } = deriveAttentionGraph({
         graph: baseDerivedGraph,
         attentionVariant,
-        route
+        route,
+        evidence,
+        coreRevision: targetCoreRevision,
+        customNode: targetCustomNode
       });
       derivedGraph = attGraph;
       attentionTopology = topology;
@@ -703,7 +784,11 @@ export class MinimaxH3ExperimentService {
       const topoValidation = validateAttentionTopology(derivedGraph, {
         expectedVariant: attentionVariant,
         route,
-        argv: effectiveArgv
+        argv: effectiveArgv,
+        env: effectiveEnv,
+        evidence,
+        coreRevision: targetCoreRevision,
+        customNode: targetCustomNode
       });
       if (!topoValidation.valid) {
         throw new Error(
@@ -1201,9 +1286,7 @@ export class MinimaxH3ExperimentService {
         },
         configuredRunner: {
           argv: effectiveArgv as string[],
-          env: {
-            CUDA_VISIBLE_DEVICES: gpuUuid
-          },
+          env: effectiveEnv,
           predictedPolicy,
           pinnedSourceIdentities:
             samplingRecipe?.name === "fasth3-i2v-8"
@@ -1498,9 +1581,7 @@ export class MinimaxH3ExperimentService {
         },
         configuredRunner: {
           argv: generatedArgv as string[],
-          env: {
-            CUDA_VISIBLE_DEVICES: gpuUuid
-          },
+          env: effectiveEnv,
           predictedPolicy,
           pinnedSourceIdentities: PINNED_COMFYUI_SOURCE_HASHES
         },
@@ -1547,7 +1628,7 @@ export class MinimaxH3ExperimentService {
 
   async validateExperiment(
     runDir: string,
-    options?: { templatesDir?: string; outputRoot?: string }
+    options?: { templatesDir?: string; outputRoot?: string; fixturesDir?: string }
   ): Promise<
     | {
         ok: true;
@@ -1664,11 +1745,16 @@ export class MinimaxH3ExperimentService {
     }
 
     let expectedGraph: Record<string, unknown> | undefined;
+    let workflowValid = true;
+    let evidenceValid = true;
+    let topologyValid = true;
+    let graphMatchValid = true;
     try {
       const baseWorkflowRaw = await this.store.readTextFile(templateFilePath);
       const baseWorkflowParsed = JSON.parse(baseWorkflowRaw) as Record<string, unknown>;
       const baseCanonical = sha256Hex(canonicalizeJson(baseWorkflowParsed));
       if (baseCanonical !== descriptor.baseCanonicalWorkflowDigest) {
+        workflowValid = false;
         errors.push(
           `Base workflow digest mismatch: expected ${descriptor.baseCanonicalWorkflowDigest}, got ${baseCanonical}`
         );
@@ -1938,55 +2024,112 @@ export class MinimaxH3ExperimentService {
           descriptor.route
         );
         if (!recipeValidation.valid) {
+          topologyValid = false;
           errors.push(...recipeValidation.errors);
         }
       } else if (descV2?.attentionRequest) {
-        const { graph: attnExpectedGraph } = deriveAttentionGraph({
-          graph: baseExpectedGraph,
-          attentionVariant: descV2.attentionRequest.attentionVariant,
-          route: descriptor.route
-        });
-        expectedGraph = attnExpectedGraph;
+        let expectedCatalogEntry: MinimaxH3AttentionCatalogEntry | undefined;
+        try {
+          expectedCatalogEntry = getAttentionCatalogEntry(
+            descV2.attentionRequest.attentionVariant,
+            descriptor.route,
+            {
+              catalogDigest: descV2.attentionRequest.catalogDigest,
+              coreRevision: descV2.requiredRuntime?.coreRevision,
+              scope: descV2.compatibility?.scope
+            }
+          );
+          if (descV2.attentionRequest.catalogDigest !== expectedCatalogEntry.catalogDigest) {
+            evidenceValid = false;
+            errors.push(
+              `Attention catalog digest mismatch: expected "${expectedCatalogEntry.catalogDigest}", got "${descV2.attentionRequest.catalogDigest}".`
+            );
+          }
+        } catch (err) {
+          evidenceValid = false;
+          errors.push(
+            `Failed to resolve expected attention catalog entry: ${(err as Error).message}`
+          );
+        }
+
+        let evidence: MinimaxH3AttentionEvidence | undefined;
+        try {
+          const fixturePath = getAttentionFixturePath(
+            descV2.attentionRequest.attentionVariant,
+            options?.fixturesDir
+          );
+          const fixtureRaw = await this.store.readJsonFile<unknown>(fixturePath);
+          evidence = parseAttentionEvidence(fixtureRaw);
+          const resolved = resolveAttentionEvidence({
+            variant: descV2.attentionRequest.attentionVariant,
+            evidence,
+            coreRevision: descV2.requiredRuntime?.coreRevision,
+            customNode: expectedCatalogEntry?.customNode
+          });
+          if (!resolved.valid || !resolved.isResolved) {
+            evidenceValid = false;
+            errors.push(...resolved.errors);
+          }
+        } catch (err) {
+          evidenceValid = false;
+          errors.push(`Failed to load or parse attention evidence: ${(err as Error).message}`);
+        }
+
+        if (evidence && evidenceValid) {
+          try {
+            const { graph: attnExpectedGraph } = deriveAttentionGraph({
+              graph: baseExpectedGraph,
+              attentionVariant: descV2.attentionRequest.attentionVariant,
+              route: descriptor.route,
+              evidence,
+              coreRevision: descV2.requiredRuntime?.coreRevision,
+              customNode: expectedCatalogEntry?.customNode
+            });
+            expectedGraph = attnExpectedGraph;
+          } catch (err) {
+            topologyValid = false;
+            errors.push(`Failed to derive expected attention graph: ${(err as Error).message}`);
+          }
+        }
 
         const topoValidation = validateAttentionTopology(config, {
           expectedVariant: descV2.attentionRequest.attentionVariant,
           route: descriptor.route,
-          argv: descV2.configuredRunner?.argv
+          argv: descV2.configuredRunner?.argv,
+          env: descV2.configuredRunner?.env,
+          evidence,
+          coreRevision: descV2.requiredRuntime?.coreRevision,
+          customNode: expectedCatalogEntry?.customNode
         });
         if (!topoValidation.valid) {
+          topologyValid = false;
           errors.push(...topoValidation.errors);
         }
         if (topoValidation.topology.topologyDigest !== descV2.attentionRequest.topologyDigest) {
+          topologyValid = false;
           errors.push(
             `Attention topology digest mismatch: expected "${descV2.attentionRequest.topologyDigest}", got "${topoValidation.topology.topologyDigest}".`
-          );
-        }
-        const expectedCatalogEntry = getAttentionCatalogEntry(
-          descV2.attentionRequest.attentionVariant,
-          descriptor.route,
-          {
-            catalogDigest: descV2.attentionRequest.catalogDigest,
-            coreRevision: descV2.requiredRuntime?.coreRevision,
-            scope: descV2.compatibility?.scope
-          }
-        );
-        if (descV2.attentionRequest.catalogDigest !== expectedCatalogEntry.catalogDigest) {
-          errors.push(
-            `Attention catalog digest mismatch: expected "${expectedCatalogEntry.catalogDigest}", got "${descV2.attentionRequest.catalogDigest}".`
           );
         }
       } else {
         expectedGraph = baseExpectedGraph;
       }
 
-      const expectedCanonical = canonicalizeJson(expectedGraph);
-      const actualCanonical = canonicalizeJson(config);
-      if (expectedCanonical !== actualCanonical) {
-        errors.push(
-          "Config.json on disk does not match the reconstructed workflow graph derived from base template and descriptor."
-        );
+      if (expectedGraph) {
+        const expectedCanonical = canonicalizeJson(expectedGraph);
+        const actualCanonical = canonicalizeJson(config);
+        if (expectedCanonical !== actualCanonical) {
+          graphMatchValid = false;
+          errors.push(
+            "Config.json on disk does not match the reconstructed workflow graph derived from base template and descriptor."
+          );
+        }
+      } else {
+        graphMatchValid = false;
+        errors.push("Expected workflow graph could not be reconstructed.");
       }
     } catch (err) {
+      workflowValid = false;
       errors.push(
         `Failed to verify base workflow template or reconstruct graph: ${(err as Error).message}`
       );
@@ -2304,6 +2447,12 @@ export class MinimaxH3ExperimentService {
           `Attention variant "${descV2.attentionRequest.attentionVariant}" is candidate-only (runnable: false).`
         );
       }
+      if (entry.compatibilityState === "unsupported") {
+        executionBlocked = true;
+        executionBlockers.push(
+          `Attention variant "${descV2.attentionRequest.attentionVariant}" is unsupported.`
+        );
+      }
       if (entry.blockers && entry.blockers.length > 0) {
         executionBlocked = true;
         executionBlockers.push(...entry.blockers);
@@ -2317,17 +2466,11 @@ export class MinimaxH3ExperimentService {
     }
 
     const graphValid =
-      Boolean(expectedGraph) &&
-      !errors.some(
-        (e) =>
-          e.includes("workflow") ||
-          e.includes("graph") ||
-          e.includes("topology") ||
-          e.includes("Config") ||
-          e.includes("SaveVideo")
-      );
+      Boolean(expectedGraph) && workflowValid && evidenceValid && topologyValid && graphMatchValid;
 
-    if (errors.length === 0 && expectedGraph) {
+    const validatedGraph = graphValid ? expectedGraph : undefined;
+
+    if (errors.length === 0 && validatedGraph) {
       return {
         ok: true,
         descriptor,
@@ -2335,7 +2478,7 @@ export class MinimaxH3ExperimentService {
         graphValid,
         executionBlocked,
         executionBlockers,
-        validatedGraph: expectedGraph
+        validatedGraph
       };
     }
 
@@ -2346,7 +2489,7 @@ export class MinimaxH3ExperimentService {
       graphValid,
       executionBlocked,
       executionBlockers,
-      ...(expectedGraph ? { validatedGraph: expectedGraph } : {})
+      ...(validatedGraph ? { validatedGraph } : {})
     };
   }
 
@@ -3709,6 +3852,7 @@ export class MinimaxH3ExperimentService {
       outputRoot?: string;
       abortSignal?: AbortSignal;
       templatesDir?: string;
+      fixturesDir?: string;
     }
   ): Promise<MinimaxH3AnyExperimentResult> {
     const outputRoot = options?.outputRoot ?? ".ai-runs/minimax-h3-experiments";
@@ -3731,8 +3875,28 @@ export class MinimaxH3ExperimentService {
     if (!validation.ok || !validation.validatedGraph) {
       throw new Error(`Experiment validation failed:\n${validation.errors.join("\n")}`);
     }
+    if (validation.executionBlocked) {
+      throw new Error(
+        `Experiment execution is blocked:\n${validation.executionBlockers.join("\n")}`
+      );
+    }
     const descriptor = validation.descriptor;
     const validatedGraph = validation.validatedGraph;
+
+    if (descriptor.schemaVersion === 2) {
+      const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
+      const isAttentionExperiment =
+        descV2.compatibility.scope.includes("attention") ||
+        descV2.experimentVariant.changedFactors.some((f) => f.path === "attention.configuration") ||
+        descV2.provenance.requestedAttentionBackend !== "default";
+      const hasModernAttentionContract =
+        Boolean(descV2.attentionRequest) || Boolean(descV2.samplingRecipe?.attentionTopology);
+      if (isAttentionExperiment && !hasModernAttentionContract) {
+        throw new Error(
+          "Execution rejected: attention experiment descriptor lacks required modern attentionRequest"
+        );
+      }
+    }
 
     // 2. Validate stop policy if provided
     if (!options?.stopPolicyPath) {

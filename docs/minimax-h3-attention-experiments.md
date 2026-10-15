@@ -18,19 +18,22 @@ Every proposed variant has an explicit compatibility state declared in `experime
 | Variant | Backend Mechanism | Patch Nodes | CLI Flag | Compatibility State | Target Core Revision |
 | --- | --- | --- | --- | --- | --- |
 | `dense` | PyTorch SDPA (`F.scaled_dot_product_attention`) | None (0) | None | `unverified` | `55b6a9b1` (Pinned) |
-| `dense` (upgraded control) | PyTorch SDPA (`F.scaled_dot_product_attention`) | None (0) | None | `requires_isolated_upgrade` | `94cfeb3a` (Experimental) |
+| `dense` (upgraded control) | PyTorch SDPA (`F.scaled_dot_product_attention`) | None (0) | None | `unsupported` | `94cfeb3a` (Unavailable upstream, HTTP 422) |
 | `dense` (sage-matched control) | PyTorch SDPA (`F.scaled_dot_product_attention`) | None (0) | None | `unverified` | `55b6a9b1` (Sage venv) |
-| `dense` (sol-attn-matched control) | PyTorch SDPA (`F.scaled_dot_product_attention`) | None (0) | None | `requires_isolated_upgrade` | `94cfeb3a` (comfy-kitchen venv) |
-| `dense` (veda-matched control) | PyTorch SDPA (`F.scaled_dot_product_attention`) | None (0) | None | `requires_isolated_upgrade` | `94cfeb3a` (Triton + Veda custom node venv) |
+| `dense` (sol-attn-matched control) | PyTorch SDPA (`F.scaled_dot_product_attention`) | None (0) | None | `unsupported` | `94cfeb3a` (Unavailable upstream, HTTP 422) |
+| `dense` (veda-matched control) | PyTorch SDPA (`F.scaled_dot_product_attention`) | None (0) | None | `unsupported` | `94cfeb3a` (Unavailable upstream, HTTP 422) |
 | `sage` | SageAttention (`sageattention.sageattn`) | None (0) | `--use-sage-attention` | `unverified` | `55b6a9b1` (Pinned) |
-| `native-sol-attn` | Native Model Sparse Attention (`sol-attn`) | Node 301 (`ModelSparseAttention`) | None | `requires_isolated_upgrade` | `94cfeb3a` (Experimental) |
-| `veda` | Veda Sparse Attention (`VedaSparseAttention`) | Node 301 (`VedaSparseAttention`) | None | `requires_isolated_upgrade` | `94cfeb3a` (Experimental Core with Node Repo `67e4eb55`) |
+| `native-sol-attn` | Native Model Sparse Attention (`sol-attn`) | Node 301 (`ModelSparseAttention`) | None | `unsupported` | `94cfeb3a` (Unavailable upstream, HTTP 422) |
+| `veda` | Veda Sparse Attention (`VedaSparseAttention`) | Node 301 (`VedaSparseAttention`) | None | `unsupported` | `94cfeb3a` (Unavailable upstream, HTTP 422; Node Repo `67e4eb55`) |
 
 ### Compatibility State Definitions
 - **`supported`**: Structurally validated and supported on the target experiment runtime environment. Note: `supported` within the experiment harness denotes experimental compatibility only and does **not** constitute production certification, default profile approval, or authorization to alter production render pipelines.
 - **`requires_isolated_upgrade`**: Requires a separate, isolated experimental ComfyUI checkout and environment (e.g. native sol-attn sparse nodes or Veda custom nodes); never upgraded in place.
 - **`unverified`**: Candidate variant whose source and environment are structurally defined but pending hardware inspection, dependency lock verification, or security/licensing audit sign-off.
-- **`unsupported`**: Incompatible with the model architecture, precision (INT8 ConvRot), or GPU capability.
+- **`unsupported`**: Incompatible with the model architecture, precision (INT8 ConvRot), or GPU capability, or bound to an unavailable upstream core commit.
+
+### Source-Verified Core Evidence (Issue #448)
+On 2026-10-14, GitHub API inspection confirmed that ComfyUI core revision `94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf` does not exist in upstream `Comfy-Org/ComfyUI` (HTTP 422 `No commit found for SHA`). In accordance with fail-closed resolution against real upstream APIs, `native-sol-attn`, `veda`, and all upgraded dense control variants are marked `unsupported` in the catalog. Graph derivation and validation fail closed on unconfirmed or unresolved core revisions.
 
 ---
 
@@ -244,6 +247,9 @@ git status --porcelain
 ```
 
 ### Native sol-attn Isolation Recipe
+> [!WARNING]
+> Pinned core revision `94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf` is confirmed unavailable upstream (GitHub API HTTP 422: `No commit found for SHA`). Do not attempt to clone or check out this nonexistent SHA; the candidate remains `unsupported`. The recipe below is retained as prospective reference if a confirmed upstream revision is ever identified.
+
 ```bash
 # 1. Clone isolated experimental checkout (never mutate production ComfyUI)
 git clone https://github.com/comfyanonymous/ComfyUI .ai-checkouts/comfyui-sol-attn
@@ -265,6 +271,9 @@ rm -rf .ai-checkouts/comfyui-sol-attn .ai-venvs/minimax-h3-sol-attn
 ```
 
 ### Veda Sparse Attention Isolation Recipe
+> [!WARNING]
+> Pinned core revision `94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf` is confirmed unavailable upstream (GitHub API HTTP 422: `No commit found for SHA`). While the custom node repository (`Veda-on-ComfyUI` @ `67e4eb55`) has a verified schema, the target core revision is unavailable, so the candidate remains `unsupported`.
+
 ```bash
 # 1. Clone isolated experimental core checkout and custom node
 git clone https://github.com/comfyanonymous/ComfyUI .ai-checkouts/comfyui-veda

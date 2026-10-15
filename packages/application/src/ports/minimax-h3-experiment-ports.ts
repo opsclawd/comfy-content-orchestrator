@@ -294,4 +294,6 @@ export interface PrepareMinimaxH3ExperimentOptions {
   coreRevision?: string;
   matchedVariant?: MinimaxH3AttentionVariantName;
   samplingRecipe?: MinimaxH3SamplingRecipeName;
+  env?: Record<string, string>;
+  fixturesDir?: string;
 }

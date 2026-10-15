@@ -210,7 +210,8 @@ class MockStore implements MinimaxH3ExperimentStorePort {
       const content =
         this.files.get(filePath) ??
         this.files.get(basename(filePath)) ??
-        this.files.get(`templates/${basename(filePath)}`);
+        this.files.get(`templates/${basename(filePath)}`) ??
+        (fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : undefined);
       if (content) {
         return { sha256: sha256Hex(content), sizeBytes: Buffer.byteLength(content) };
       }
@@ -221,7 +222,8 @@ class MockStore implements MinimaxH3ExperimentStorePort {
     const content =
       this.files.get(filePath) ??
       this.files.get(basename(filePath)) ??
-      this.files.get(`templates/${basename(filePath)}`);
+      this.files.get(`templates/${basename(filePath)}`) ??
+      (fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : undefined);
     if (!content) throw new Error(`Not found: ${filePath}`);
     return JSON.parse(content);
   }
@@ -229,7 +231,8 @@ class MockStore implements MinimaxH3ExperimentStorePort {
     const content =
       this.files.get(filePath) ??
       this.files.get(basename(filePath)) ??
-      this.files.get(`templates/${basename(filePath)}`);
+      this.files.get(`templates/${basename(filePath)}`) ??
+      (fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : undefined);
     if (!content) throw new Error(`Not found: ${filePath}`);
     return content;
   }
@@ -2896,8 +2899,11 @@ exec /usr/bin/python3 "$@"
       requiredRuntime: solManifest,
       requiredRuntimeDigest: sha256Hex(canonicalizeJson(solManifest))
     });
-    expect(solRes.ok).toBe(true);
-    expect(solRes.status).toBe("verified");
+    expect(solRes.ok).toBe(false);
+    expect(solRes.status).toBe("conflict");
+    expect(solRes.blocker).toContain(
+      "No registered experiment adapter found for required runtime core revision 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf"
+    );
   });
 
   describe("CLI continuity study commands and sidecar handling", () => {

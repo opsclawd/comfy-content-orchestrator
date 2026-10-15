@@ -530,4 +530,140 @@ describe("MiniMax-H3 Attention Reducer", () => {
     expect(obs!.fallbackEvents).toHaveLength(1);
     expect(obs!.fallbackEvents[0]!.fallbackBackend).toBe("unknown");
   });
+
+  it("fails when unplanned dense calls occur even when allowPlannedDense=true", () => {
+    const plannedRequest: MinimaxH3AttentionRequest = {
+      ...baseRequest,
+      denseRegionPolicy: {
+        allowPlannedDense: true,
+        description: "Allow dense fallback only if planned"
+      }
+    };
+
+    const event: MinimaxH3InstrumentationEvent = {
+      protocolVersion: "v2-jsonl",
+      sequence: 1,
+      runId: "run-unplanned-dense",
+      attemptToken: "token-unplanned",
+      spanId: "span-1",
+      phase: "sampling",
+      type: "point_event",
+      boundarySource: "child_bootstrap",
+      clockDomain: "mono_child",
+      monotonicMs: 1000.0,
+      metadata: {
+        attentionSummary: {
+          acceleratedCallCount: 30,
+          denseCallCount: 2, // unplanned dense!
+          plannedDenseCallCount: 5,
+          fallbackEvents: [],
+          actualBackend: "sage",
+          dispatchImplementation: "sageattention.sageattn"
+        }
+      }
+    };
+
+    const obs = reduceAttentionObservation({
+      events: [event],
+      attentionRequest: plannedRequest
+    });
+
+    expect(obs).toBeDefined();
+    expect(obs!.status).toBe("failed");
+    expect(obs!.failureReason).toContain(
+      "Unexpected unplanned dense attention calls (2) observed for accelerated variant"
+    );
+    expect(obs!.measurementCoverage.complete).toBe(false);
+  });
+
+  it("succeeds when only planned dense calls occur under allowPlannedDense=true", () => {
+    const plannedRequest: MinimaxH3AttentionRequest = {
+      ...baseRequest,
+      denseRegionPolicy: {
+        allowPlannedDense: true,
+        description: "Allow dense fallback only if planned"
+      }
+    };
+
+    const event: MinimaxH3InstrumentationEvent = {
+      protocolVersion: "v2-jsonl",
+      sequence: 1,
+      runId: "run-planned-dense-ok",
+      attemptToken: "token-planned-ok",
+      spanId: "span-1",
+      phase: "sampling",
+      type: "point_event",
+      boundarySource: "child_bootstrap",
+      clockDomain: "mono_child",
+      monotonicMs: 1000.0,
+      metadata: {
+        attentionSummary: {
+          acceleratedCallCount: 35,
+          denseCallCount: 0,
+          plannedDenseCallCount: 5,
+          fallbackEvents: [],
+          actualBackend: "sage",
+          dispatchImplementation: "sageattention.sageattn"
+        }
+      }
+    };
+
+    const obs = reduceAttentionObservation({
+      events: [event],
+      attentionRequest: plannedRequest
+    });
+
+    expect(obs).toBeDefined();
+    expect(obs!.status).toBe("verified");
+    expect(obs!.acceleratedCallCount).toBe(35);
+    expect(obs!.denseCallCount).toBe(0);
+    expect(obs!.plannedDenseCallCount).toBe(5);
+    expect(obs!.failureReason).toBeNull();
+    expect(obs!.measurementCoverage.complete).toBe(true);
+  });
+
+  it("fails when planned dense calls occur under allowPlannedDense=false", () => {
+    const strictRequest: MinimaxH3AttentionRequest = {
+      ...baseRequest,
+      denseRegionPolicy: {
+        allowPlannedDense: false,
+        description: "Zero dense calls permitted"
+      }
+    };
+
+    const event: MinimaxH3InstrumentationEvent = {
+      protocolVersion: "v2-jsonl",
+      sequence: 1,
+      runId: "run-planned-under-strict",
+      attemptToken: "token-strict-planned",
+      spanId: "span-1",
+      phase: "sampling",
+      type: "point_event",
+      boundarySource: "child_bootstrap",
+      clockDomain: "mono_child",
+      monotonicMs: 1000.0,
+      metadata: {
+        attentionSummary: {
+          acceleratedCallCount: 35,
+          denseCallCount: 0,
+          plannedDenseCallCount: 5,
+          fallbackEvents: [],
+          actualBackend: "sage",
+          dispatchImplementation: "sageattention.sageattn"
+        }
+      }
+    };
+
+    const obs = reduceAttentionObservation({
+      events: [event],
+      attentionRequest: strictRequest
+    });
+
+    expect(obs).toBeDefined();
+    expect(obs!.status).toBe("failed");
+    expect(obs!.failureReason).toContain(
+      "Planned dense attention calls (5) observed under zero-dense policy"
+    );
+    expect(obs!.measurementCoverage.complete).toBe(false);
+  });
 });

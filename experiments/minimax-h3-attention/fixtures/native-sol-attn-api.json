@@ -1,6 +1,12 @@
 {
   "candidateCoreRevision": "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
   "status": "candidate_unresolved",
+  "apiUrl": "https://api.github.com/repos/Comfy-Org/ComfyUI/commits/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+  "httpStatus": 422,
+  "checkedDate": "2026-10-14",
+  "repository": "https://github.com/Comfy-Org/ComfyUI",
+  "requestedRevision": "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+  "returnedMessage": "No commit found for SHA",
   "nodeId": "ModelSparseAttention",
   "classType": "ModelSparseAttention",
   "inputSignature": {
@@ -10,5 +16,5 @@
     }
   },
   "returnTypes": ["MODEL"],
-  "notes": "Upstream commit unverified via GitHub API (HTTP 422). Requires comfy-kitchen sol-attn kernel."
+  "notes": "Upstream commit unverified via GitHub API (HTTP 422: No commit found for SHA). Pinned candidate remains unsupported."
 }
