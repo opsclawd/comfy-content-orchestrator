@@ -258,9 +258,6 @@ export function reduceAttentionObservation(
     } else if (acceleratedCallCount === 0) {
       status = "failed";
       failureReason = `Zero accelerated attention calls were observed for variant "${requestedVariant}" (undetected no-op).`;
-    } else if (!attentionRequest.denseRegionPolicy.allowPlannedDense && denseCallCount > 0) {
-      status = "failed";
-      failureReason = `Unexpected dense attention calls (${denseCallCount}) observed under zero-dense policy for variant "${requestedVariant}".`;
     } else if (!actualBackend || !dispatchImplementation) {
       status = "unknown";
       failureReason = `Attention dispatch was not independently observed for variant "${requestedVariant}".`;
@@ -270,6 +267,14 @@ export function reduceAttentionObservation(
     } else if (dispatchImplementation !== expectedKernel) {
       status = "failed";
       failureReason = `Observed dispatch implementation "${dispatchImplementation}" does not match requested "${expectedKernel}".`;
+    } else if (denseCallCount > 0) {
+      status = "failed";
+      failureReason = !attentionRequest.denseRegionPolicy.allowPlannedDense
+        ? `Unexpected dense attention calls (${denseCallCount}) observed under zero-dense policy for variant "${requestedVariant}".`
+        : `Unexpected unplanned dense attention calls (${denseCallCount}) observed for accelerated variant "${requestedVariant}".`;
+    } else if (plannedDenseCallCount > 0 && !attentionRequest.denseRegionPolicy.allowPlannedDense) {
+      status = "failed";
+      failureReason = `Planned dense attention calls (${plannedDenseCallCount}) observed under zero-dense policy (allowPlannedDense=false) for variant "${requestedVariant}".`;
     } else {
       status = "verified";
     }
@@ -282,7 +287,10 @@ export function reduceAttentionObservation(
     totalCalls > 0 &&
     fallbackEvents.length === 0 &&
     !missingKernelFailure &&
-    (attentionRequest.denseRegionPolicy.allowPlannedDense || denseCallCount === 0);
+    (requestedVariant === "dense"
+      ? acceleratedCallCount === 0
+      : denseCallCount === 0 &&
+        (attentionRequest.denseRegionPolicy.allowPlannedDense || plannedDenseCallCount === 0));
 
   return {
     status,

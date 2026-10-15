@@ -924,13 +924,6 @@ export class ExperimentRuntimeRegistry {
     this.registerAdapter(new CurrentPinExperimentRuntimeAdapter());
     this.registerAdapter(
       new IsolatedUpgradeExperimentRuntimeAdapter(
-        "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
-        "upgraded-core-isolated-adapter-v1",
-        ["ModelSparseAttention", "VedaSparseAttention"]
-      )
-    );
-    this.registerAdapter(
-      new IsolatedUpgradeExperimentRuntimeAdapter(
         "ee71d5c4993f29086b27fde1629a945ae48425bf",
         "fasth3-isolated-upgrade-adapter-v1",
         [

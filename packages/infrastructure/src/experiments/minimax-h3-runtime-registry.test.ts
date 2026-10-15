@@ -112,10 +112,10 @@ exec /usr/bin/python3 "$@"
     hooks: []
   };
 
-  it("registers adapters for pinned core, sol-attn, and FastH3 isolated upgrades", () => {
+  it("registers adapters for pinned core and FastH3 isolated upgrades (no speculative sol-attn adapter)", () => {
     const registry = new ExperimentRuntimeRegistry();
     expect(registry.hasAdapter(PINNED_COMFYUI_CORE_REVISION)).toBe(true);
-    expect(registry.hasAdapter("94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf")).toBe(true);
+    expect(registry.hasAdapter("94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf")).toBe(false);
     expect(registry.hasAdapter("ee71d5c4993f29086b27fde1629a945ae48425bf")).toBe(true);
     expect(registry.hasAdapter("94cfeb3a0efdb9d6d7be76f2d48c8b6b2fa983eb")).toBe(false);
     expect(registry.hasAdapter("67e4eb5541b648555563144401ebaba832bd73ec")).toBe(false);

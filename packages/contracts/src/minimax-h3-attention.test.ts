@@ -3,11 +3,14 @@ import {
   MinimaxH3AttentionVariantNameSchema,
   MinimaxH3AttentionCatalogEntrySchema,
   MinimaxH3AttentionObservationSchema,
+  MinimaxH3AttentionStepRecordSchema,
+  MinimaxH3AttentionExclusionMetadataSchema,
   computeAttentionTopologyDigest,
   computeAttentionCatalogDigest,
   type MinimaxH3AttentionCatalogEntry,
   type MinimaxH3AttentionPatchNode
 } from "./minimax-h3-attention.js";
+import { MinimaxH3PhaseAccountingEventSchema } from "./minimax-h3-experiment-v2.js";
 
 describe("MiniMax-H3 Attention Contracts", () => {
   describe("MinimaxH3AttentionVariantNameSchema", () => {
@@ -188,6 +191,104 @@ describe("MiniMax-H3 Attention Contracts", () => {
       });
       expect(obs.status).toBe("fallback");
       expect(obs.fallbackEvents).toHaveLength(1);
+    });
+  });
+
+  describe("MinimaxH3AttentionStepRecordSchema & Metadata", () => {
+    it("admits step record without metadata", () => {
+      const parsed = MinimaxH3AttentionStepRecordSchema.parse({
+        stepIndex: 2,
+        layerIndex: 4,
+        backend: "torch_sdpa",
+        implementation: "torch.nn.functional.scaled_dot_product_attention",
+        callType: "dense",
+        monotonicMs: 1234.56
+      });
+      expect(parsed.stepIndex).toBe(2);
+      expect(parsed.callType).toBe("dense");
+      expect(parsed.metadata).toBeUndefined();
+    });
+
+    it("admits planned_dense step record with verified exclusion metadata", () => {
+      const meta = MinimaxH3AttentionExclusionMetadataSchema.parse({
+        patchClass: "VedaSparseAttention",
+        hook: "forward",
+        decisionMethod: "_dense_reason",
+        reason: "full-attention layer",
+        layer: 0,
+        step: null
+      });
+      expect(meta.reason).toBe("full-attention layer");
+
+      const record = MinimaxH3AttentionStepRecordSchema.parse({
+        stepIndex: 0,
+        layerIndex: 0,
+        backend: "torch_sdpa",
+        implementation: "torch.nn.functional.scaled_dot_product_attention",
+        callType: "planned_dense",
+        monotonicMs: 4567.89,
+        metadata: {
+          patchClass: "VedaSparseAttention",
+          hook: "forward",
+          decisionMethod: "_dense_reason",
+          reason: "full-attention layer",
+          layer: 0
+        }
+      });
+      expect(record.callType).toBe("planned_dense");
+      expect(record.metadata?.reason).toBe("full-attention layer");
+      expect(record.metadata?.patchClass).toBe("VedaSparseAttention");
+    });
+
+    it("parses phase accounting event containing planned dense step records with metadata", () => {
+      const event = MinimaxH3PhaseAccountingEventSchema.parse({
+        protocolVersion: "v2-jsonl",
+        sequence: 1,
+        runId: "run-01",
+        attemptToken: "tok-01",
+        spanId: "span-01",
+        phase: "sampling",
+        type: "point_event",
+        boundarySource: "child_bootstrap",
+        clockDomain: "mono_child",
+        monotonicMs: 1234.5,
+        metadata: {
+          attentionEvent: "step_record",
+          attentionCall: "planned_dense",
+          attentionStepRecord: {
+            stepIndex: 1,
+            layerIndex: 0,
+            backend: "torch_sdpa",
+            implementation: "torch.nn.functional.scaled_dot_product_attention",
+            callType: "planned_dense",
+            monotonicMs: 123.45,
+            metadata: {
+              reason: "full-attention step",
+              decisionMethod: "_block_reason",
+              step: 1
+            }
+          },
+          stepRecords: [
+            {
+              stepIndex: 1,
+              layerIndex: 0,
+              backend: "torch_sdpa",
+              implementation: "torch.nn.functional.scaled_dot_product_attention",
+              callType: "planned_dense",
+              monotonicMs: 123.45,
+              metadata: {
+                reason: "full-attention step",
+                decisionMethod: "_block_reason",
+                step: 1
+              }
+            }
+          ]
+        }
+      });
+      expect(event.phase).toBe("sampling");
+      expect(event.metadata?.attentionCall).toBe("planned_dense");
+      expect(event.metadata?.attentionStepRecord?.metadata?.reason).toBe("full-attention step");
+      expect(event.metadata?.stepRecords?.[0]?.metadata?.reason).toBe("full-attention step");
     });
   });
 });

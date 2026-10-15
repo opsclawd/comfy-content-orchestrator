@@ -410,6 +410,20 @@ export const MinimaxH3AttentionFallbackEventSchema = z
   .strict();
 export type MinimaxH3AttentionFallbackEvent = z.infer<typeof MinimaxH3AttentionFallbackEventSchema>;
 
+export const MinimaxH3AttentionExclusionMetadataSchema = z
+  .object({
+    patchClass: z.string().optional(),
+    hook: z.string().optional(),
+    decisionMethod: z.string().optional(),
+    reason: z.string().optional(),
+    layer: z.union([z.number(), z.string()]).nullable().optional(),
+    step: z.union([z.number(), z.string()]).nullable().optional()
+  })
+  .passthrough();
+export type MinimaxH3AttentionExclusionMetadata = z.infer<
+  typeof MinimaxH3AttentionExclusionMetadataSchema
+>;
+
 export const MinimaxH3AttentionStepRecordSchema = z
   .object({
     stepIndex: z.number().int().nonnegative(),
@@ -417,7 +431,8 @@ export const MinimaxH3AttentionStepRecordSchema = z
     backend: z.string().min(1),
     implementation: z.string().min(1),
     callType: z.enum(["accelerated", "dense", "planned_dense", "fallback"]),
-    monotonicMs: z.number().nonnegative().optional()
+    monotonicMs: z.number().nonnegative().optional(),
+    metadata: MinimaxH3AttentionExclusionMetadataSchema.optional()
   })
   .strict();
 export type MinimaxH3AttentionStepRecord = z.infer<typeof MinimaxH3AttentionStepRecordSchema>;

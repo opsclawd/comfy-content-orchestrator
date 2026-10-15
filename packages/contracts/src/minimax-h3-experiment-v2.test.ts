@@ -3,6 +3,7 @@ import {
   MinimaxH3ExperimentDescriptorV2Schema,
   MinimaxH3ExperimentResultV2Schema,
   MinimaxH3AnyExperimentDescriptorSchema,
+  MinimaxH3AnyExperimentResultSchema,
   MinimaxH3PhaseRecordSchema,
   MinimaxH3RequiredRuntimeManifestSchema,
   MinimaxH3ExperimentVariantSchema,
@@ -18,11 +19,16 @@ import {
   computeSamplingRecipeDigest,
   FactorChangeSigmaShiftSchema,
   getSamplingRecipe,
+  getDerivedAttentionVerificationView,
   type MinimaxH3ExperimentDescriptorV2,
   type MinimaxH3FactorChange,
   type MinimaxH3SamplingRecipe
 } from "./minimax-h3-experiment-v2.js";
-import { sha256Hex } from "./minimax-h3-experiment.js";
+import {
+  sha256Hex,
+  createEmptyMinimaxH3MeasurementTemplate,
+  MinimaxH3ExperimentDescriptorSchema
+} from "./minimax-h3-experiment.js";
 
 const DUMMY_HASH_1 = "1111111111111111111111111111111111111111111111111111111111111111";
 const DUMMY_HASH_2 = "2222222222222222222222222222222222222222222222222222222222222222";
@@ -625,10 +631,10 @@ describe("MiniMax-H3 Experiment V2 Contracts", () => {
   });
 
   describe("Backward Compatibility: V1 and Any Dispatch", () => {
-    it("accepts a legacy v1 descriptor in MinimaxH3AnyExperimentDescriptorSchema", () => {
+    function createValidDescriptorV1() {
       const v1Prompt = "prompt v1";
       const v1PromptDigest = sha256Hex(v1Prompt);
-      const v1Desc = {
+      return {
         schemaVersion: 1 as const,
         kind: "non-production-experiment" as const,
         runId: "v1-run-001",
@@ -711,7 +717,10 @@ describe("MiniMax-H3 Experiment V2 Contracts", () => {
         configDigest: DUMMY_HASH_1,
         comparisonKey: "cmp-key-1"
       };
+    }
 
+    it("accepts a legacy v1 descriptor in MinimaxH3AnyExperimentDescriptorSchema", () => {
+      const v1Desc = createValidDescriptorV1();
       const parsed = MinimaxH3AnyExperimentDescriptorSchema.parse(v1Desc);
       expect(parsed.schemaVersion).toBe(1);
     });
@@ -719,6 +728,20 @@ describe("MiniMax-H3 Experiment V2 Contracts", () => {
     it("accepts a v2 descriptor in MinimaxH3AnyExperimentDescriptorSchema", () => {
       const v2Desc = createValidDescriptorV2();
       const parsed = MinimaxH3AnyExperimentDescriptorSchema.parse(v2Desc);
+      expect(parsed.schemaVersion).toBe(2);
+    });
+
+    it("accepts a legacy v1 result in MinimaxH3AnyExperimentResultSchema", () => {
+      const v1Desc = MinimaxH3ExperimentDescriptorSchema.parse(createValidDescriptorV1());
+      const v1Result = createEmptyMinimaxH3MeasurementTemplate(v1Desc);
+      const parsed = MinimaxH3AnyExperimentResultSchema.parse(v1Result);
+      expect(parsed.schemaVersion).toBe(1);
+    });
+
+    it("accepts a v2 result in MinimaxH3AnyExperimentResultSchema", () => {
+      const v2Desc = createValidDescriptorV2();
+      const v2Result = createEmptyMinimaxH3MeasurementTemplateV2(v2Desc);
+      const parsed = MinimaxH3AnyExperimentResultSchema.parse(v2Result);
       expect(parsed.schemaVersion).toBe(2);
     });
   });
@@ -1495,6 +1518,131 @@ describe("MiniMax-H3 Experiment V2 Contracts", () => {
           }
         })
       ).toThrow(/FastH3 recipe requires sourceFileHashes/);
+    });
+  });
+
+  describe("Historical Artifact Readability and Derived Verification View", () => {
+    it("parses historical v2 descriptor with non-default attention backend without attentionRequest", () => {
+      const baseDesc = createValidDescriptorV2();
+      const desc = {
+        ...baseDesc,
+        provenance: {
+          ...baseDesc.provenance,
+          requestedAttentionBackend: "sage"
+        },
+        experimentVariant: {
+          variantName: "sage-test",
+          variantReason: "historical test",
+          purpose: "performance" as const,
+          changedFactors: [
+            {
+              path: "attention.configuration" as const,
+              before: {
+                backend: "torch_sdpa",
+                topologyDigest: DUMMY_HASH_1,
+                patches: []
+              },
+              after: {
+                backend: "sage",
+                topologyDigest: DUMMY_HASH_2,
+                patches: []
+              },
+              rationale: "Historical Sage comparison"
+            }
+          ]
+        }
+      };
+      // Ensure attentionRequest is undefined
+      delete (desc as Record<string, unknown>).attentionRequest;
+
+      const parsed = MinimaxH3ExperimentDescriptorV2Schema.parse(desc);
+      expect(parsed.provenance.requestedAttentionBackend).toBe("sage");
+      expect(parsed.attentionRequest).toBeUndefined();
+    });
+
+    it("parses historical v2 completed result with non-default observed backend without attentionObservation", () => {
+      const baseDesc = createValidDescriptorV2();
+      const desc = {
+        ...baseDesc,
+        provenance: {
+          ...baseDesc.provenance,
+          requestedAttentionBackend: "sage"
+        }
+      };
+      delete (desc as Record<string, unknown>).attentionRequest;
+
+      const template = createEmptyMinimaxH3MeasurementTemplateV2(desc);
+      const promptId = "prompt-001";
+      const completedResult = {
+        ...template,
+        lifecycle: "completed" as const,
+        execution: {
+          status: "completed" as const,
+          promptId,
+          terminalEvidence: {
+            source: "history" as const,
+            status: "success",
+            rawDetails: { [promptId]: { status: "success" } }
+          },
+          engineError: null,
+          latencyMs: 5000
+        },
+        observedProvenance: {
+          ...template.observedProvenance,
+          observedAttentionBackend: {
+            status: "verified" as const,
+            effectiveBackend: "sage",
+            dispatchImplementation: "sageattention.sageattn"
+          }
+        }
+      };
+      // Ensure attentionObservation is undefined
+      delete (completedResult as Record<string, unknown>).attentionObservation;
+
+      const parsed = MinimaxH3ExperimentResultV2Schema.parse(completedResult);
+      expect(parsed.observedProvenance.observedAttentionBackend?.effectiveBackend).toBe("sage");
+      expect(parsed.attentionObservation).toBeUndefined();
+
+      // Derived verification view maps absent observation to status: "unknown"
+      const view = getDerivedAttentionVerificationView(desc, parsed);
+      expect(view.status).toBe("unknown");
+      expect(view.actualBackend).toBe("sage");
+      expect(view.dispatchImplementation).toBe("sageattention.sageattn");
+      expect(view.acceleratedCallCount).toBe(0);
+      expect(view.timings.timingUnavailableReason).toContain("Historical artifact");
+    });
+
+    it("preserves modern attentionObservation in getDerivedAttentionVerificationView", () => {
+      const observation = {
+        status: "verified" as const,
+        actualBackend: "sage",
+        dispatchImplementation: "sageattention.sageattn",
+        acceleratedCallCount: 20,
+        denseCallCount: 0,
+        plannedDenseCallCount: 0,
+        fallbackEvents: [],
+        stepRecords: [],
+        failureReason: null,
+        missingKernelFailure: null,
+        dtypeLayoutDiagnostics: null,
+        measurementCoverage: {
+          samplingCallsRecorded: 20,
+          attentionCallsRecorded: 20,
+          complete: true
+        },
+        timings: {
+          deviceElapsedMs: 1200,
+          kernelElapsedMs: 1100
+        }
+      };
+
+      const view = getDerivedAttentionVerificationView(null, {
+        observedProvenance: null,
+        attentionObservation: observation
+      });
+      expect(view).toBe(observation);
+      expect(view.status).toBe("verified");
+      expect(view.acceleratedCallCount).toBe(20);
     });
   });
 });
