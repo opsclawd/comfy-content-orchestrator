@@ -11,8 +11,10 @@ import atexit
 import builtins
 import contextlib
 import contextvars
+import csv
 import hashlib
 import inspect
+import io
 import json
 import os
 import sys
@@ -355,6 +357,33 @@ def compute_file_sha256(path: str) -> str:
             h.update(chunk)
     return h.hexdigest()
 
+def _resolve_custom_node_git_revision(source_file: str) -> Optional[str]:
+    """Walk upward from a registered node's source file to find the git
+    checkout root of the custom-node package that defines it (if any), and
+    return its current HEAD commit SHA. Returns None if the file is not
+    inside a git checkout or git is unavailable/times out."""
+    try:
+        import subprocess
+        d = os.path.dirname(os.path.abspath(source_file))
+        for _ in range(8):
+            if os.path.isdir(os.path.join(d, ".git")):
+                proc = subprocess.run(
+                    ["git", "-C", d, "rev-parse", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if proc.returncode == 0 and proc.stdout.strip():
+                    return proc.stdout.strip()
+                return None
+            parent = os.path.dirname(d)
+            if parent == d:
+                break
+            d = parent
+    except Exception:
+        pass
+    return None
+
 def classify_node_phase(node_id: str, class_type: str) -> str:
     # Deterministic phase classification for MiniMax-H3 pipeline nodes
     if class_type in ("UNETLoader", "VAELoader", "CLIPLoader"):
@@ -630,6 +659,379 @@ def hook_veda_patch_class(cls):
         hooked_routed_forward._cco_hooked = True
         cls._routed_forward = hooked_routed_forward
 
+_INSTALLED_WRAPPERS = {}
+_BOOTSTRAP_ENTRYPOINT = os.environ.get("CCO_EXPERIMENT_BOOTSTRAP_ENTRYPOINT", None)
+
+def get_collector_digest() -> str:
+    h = hashlib.sha256()
+    with open(__file__, "rb") as f:
+        while chunk := f.read(65536):
+            h.update(chunk)
+    return h.hexdigest()
+
+def get_installed_hooks_evidence() -> list:
+    hooks = []
+
+    attached_import = False
+    try:
+        cur_imp = builtins.__import__
+        attached_import = bool(getattr(cur_imp, "_cco_hooked", False) is True and cur_imp is _INSTALLED_WRAPPERS.get("attention_deferred_import_hook"))
+    except Exception:
+        pass
+    hooks.append({
+        "name": "attention_deferred_import_hook",
+        "modulePath": "builtins",
+        "callable": "__import__",
+        "phase": "attention",
+        "attached": attached_import
+    })
+
+    attached_ks = False
+    try:
+        import comfy.samplers as samplers
+        ks = getattr(samplers, "KSampler", None)
+        fn = getattr(ks, "sample", None)
+        attached_ks = bool(fn is not None and getattr(fn, "_cco_hooked", False) is True and fn is _INSTALLED_WRAPPERS.get("ksampler_sample"))
+    except Exception:
+        pass
+    hooks.append({
+        "name": "ksampler_sample",
+        "modulePath": "comfy.samplers",
+        "callable": "KSampler.sample",
+        "phase": "sampling",
+        "attached": attached_ks
+    })
+
+    attached_mm = False
+    try:
+        import comfy.model_management as mm
+        fn = getattr(mm, "load_models_gpu", None)
+        attached_mm = bool(fn is not None and getattr(fn, "_cco_hooked", False) is True and fn is _INSTALLED_WRAPPERS.get("load_models_gpu"))
+    except Exception:
+        pass
+    hooks.append({
+        "name": "load_models_gpu",
+        "modulePath": "comfy.model_management",
+        "callable": "load_models_gpu",
+        "phase": "lazy_gpu_residency_transfer",
+        "attached": attached_mm
+    })
+
+    attached_cond = False
+    try:
+        import comfy_extras.nodes_minimax_h3 as nmh3
+        node = getattr(nmh3, "MiniMaxH3ImageToVideo", None)
+        raw = getattr(node, "__dict__", {}).get("execute", None)
+        unbound = getattr(raw, "__func__", raw)
+        attached_cond = bool(unbound is not None and getattr(unbound, "_cco_hooked", False) is True and unbound is _INSTALLED_WRAPPERS.get("minimax_h3_image_to_video_execute"))
+    except Exception:
+        pass
+    hooks.append({
+        "name": "minimax_h3_image_to_video_execute",
+        "modulePath": "comfy_extras.nodes_minimax_h3",
+        "callable": "MiniMaxH3ImageToVideo.execute",
+        "phase": "conditioning",
+        "attached": attached_cond
+    })
+
+    attached_pe = False
+    try:
+        import execution
+        pe = getattr(execution, "PromptExecutor", None)
+        fn = getattr(pe, "execute", None)
+        attached_pe = bool(fn is not None and getattr(fn, "_cco_hooked", False) is True and fn is _INSTALLED_WRAPPERS.get("prompt_executor_execute"))
+    except Exception:
+        pass
+    hooks.append({
+        "name": "prompt_executor_execute",
+        "modulePath": "execution",
+        "callable": "PromptExecutor.execute",
+        "phase": "prompt_execution",
+        "attached": attached_pe
+    })
+
+    attached_cs = False
+    try:
+        import comfy_extras.nodes_custom_sampler as custom_sampler
+        cs = getattr(custom_sampler, "SamplerCustomAdvanced", None)
+        raw = getattr(cs, "__dict__", {}).get("execute", None) or getattr(cs, "__dict__", {}).get("sample", None)
+        unbound = getattr(raw, "__func__", raw)
+        attached_cs = bool(unbound is not None and getattr(unbound, "_cco_hooked", False) is True and unbound is _INSTALLED_WRAPPERS.get("sampler_custom_advanced_execute"))
+    except Exception:
+        pass
+    hooks.append({
+        "name": "sampler_custom_advanced_execute",
+        "modulePath": "comfy_extras.nodes_custom_sampler",
+        "callable": "SamplerCustomAdvanced.execute",
+        "phase": "sampling",
+        "attached": attached_cs
+    })
+
+    return sorted(hooks, key=lambda x: x["name"])
+
+def compute_hook_manifest_digest(hooks: list) -> str:
+    canonical_items = [
+        {
+            "callable": h["callable"],
+            "modulePath": h["modulePath"],
+            "name": h["name"],
+            "phase": h["phase"]
+        }
+        for h in hooks
+    ]
+    sorted_hooks = sorted(canonical_items, key=lambda x: x["name"])
+    canonical = json.dumps(sorted_hooks, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+def register_capability_route(prompt_server, collector: Collector):
+    try:
+        from aiohttp import web
+
+        async def capability_handler(request):
+            nonce = request.query.get("nonce", "")
+
+            registered_nodes = {}
+            try:
+                import nodes
+                mappings = getattr(nodes, "NODE_CLASS_MAPPINGS", {})
+                for name, cls in mappings.items():
+                    mod_name = getattr(cls, "__module__", "")
+                    src_file = ""
+                    mod_hash = None
+                    try:
+                        import inspect
+                        src_file = inspect.getsourcefile(cls) or ""
+                    except Exception:
+                        pass
+                    if not src_file and mod_name and mod_name in sys.modules:
+                        src_file = getattr(sys.modules[mod_name], "__file__", "") or ""
+                    if src_file and os.path.isfile(src_file):
+                        try:
+                            with open(src_file, "rb") as f:
+                                mod_hash = hashlib.sha256(f.read()).hexdigest()
+                        except Exception:
+                            pass
+                    entry = {
+                        "className": getattr(cls, "__name__", str(name)),
+                        "module": mod_name,
+                        "sourceFile": src_file
+                    }
+                    if mod_hash:
+                        entry["moduleHash"] = mod_hash
+                    # The collector never reported a node's custom-node
+                    # revision, so a catalog entry that pins a required
+                    # node's revision (e.g. the Veda custom node's commit
+                    # SHA) could never be satisfied even when the correct
+                    # revision is installed (AC-3, F-e35ea06e). Walk up from
+                    # the node's source file to the enclosing custom-node
+                    # package's git checkout, if any, and report its HEAD.
+                    if src_file:
+                        revision = _resolve_custom_node_git_revision(src_file)
+                        if revision:
+                            entry["revision"] = revision
+                    registered_nodes[str(name)] = entry
+            except Exception:
+                pass
+
+            installed_hooks = get_installed_hooks_evidence()
+            hook_manifest_digest = compute_hook_manifest_digest(installed_hooks)
+            collector_digest = get_collector_digest()
+
+            python_ver = sys.version.split()[0]
+            pytorch_ver = None
+            cuda_build = None
+            try:
+                import torch
+                pytorch_ver = getattr(torch, "__version__", None)
+                cuda_build = getattr(getattr(torch, "version", None), "cuda", None)
+            except Exception:
+                pass
+
+            # Child interpreter identity: the handshake previously reported only
+            # the Python version string, which does not distinguish between
+            # interpreter builds/ABIs/toolchains that could satisfy the same
+            # version constraint while differing in substance (AC-4, F-e35ea06e).
+            python_executable_hash = None
+            python_abi_tag = None
+            python_compiler = None
+            try:
+                import platform
+                import sysconfig
+                python_compiler = platform.python_compiler()
+                python_abi_tag = sysconfig.get_config_var("SOABI") or getattr(
+                    sys.implementation, "cache_tag", None
+                )
+                exe_path = sys.executable
+                if exe_path and os.path.isfile(exe_path):
+                    with open(exe_path, "rb") as f:
+                        python_executable_hash = hashlib.sha256(f.read()).hexdigest()
+            except Exception:
+                pass
+
+            driver_ver = None
+            try:
+                import subprocess
+                proc = subprocess.run(
+                    ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=5
+                )
+                if proc.returncode == 0 and proc.stdout.strip():
+                    driver_ver = proc.stdout.strip().split("\n")[0].strip()
+            except Exception:
+                pass
+
+            expected_backend = os.environ.get("CCO_EXPERIMENT_EXPECTED_ATTENTION_BACKEND", "").strip()
+            kernel_callable_available = False
+            try:
+                import torch
+                import torch.nn.functional as F
+                base_callable = hasattr(F, "scaled_dot_product_attention") and callable(F.scaled_dot_product_attention)
+                if not expected_backend or expected_backend in ("sdpa", "torch_sdpa"):
+                    kernel_callable_available = base_callable
+                elif "sage" in expected_backend:
+                    import sageattention
+                    kernel_callable_available = hasattr(sageattention, "sageattn") and callable(sageattention.sageattn)
+                elif "kitchen" in expected_backend or "sol" in expected_backend:
+                    import comfy_kitchen
+                    kernel_callable_available = hasattr(comfy_kitchen, "sol_attn") and callable(comfy_kitchen.sol_attn)
+                else:
+                    kernel_callable_available = base_callable
+            except Exception:
+                kernel_callable_available = False
+
+            package_identities = []
+            try:
+                import importlib.metadata
+                req_pkg_env = os.environ.get("CCO_EXPERIMENT_REQUIRED_PACKAGES", "")
+                dists_to_check = ["torch", "comfy-kitchen"]
+                if req_pkg_env:
+                    try:
+                        if req_pkg_env.startswith("["):
+                            parsed = json.loads(req_pkg_env)
+                            for item in parsed:
+                                name = item if isinstance(item, str) else item.get("name")
+                                if name and name not in dists_to_check:
+                                    dists_to_check.append(name)
+                        else:
+                            for p in req_pkg_env.split(","):
+                                p_clean = p.strip()
+                                if p_clean and p_clean not in dists_to_check:
+                                    dists_to_check.append(p_clean)
+                    except Exception:
+                        pass
+                for dist_name in dists_to_check:
+                    try:
+                        dist = importlib.metadata.distribution(dist_name)
+                        rec = dist.read_text("RECORD")
+                        if rec and rec.strip():
+                            valid_files = []
+                            for row in csv.reader(io.StringIO(rec)):
+                                if not row or not row[0].strip():
+                                    continue
+                                norm_p = row[0].strip().replace("\\", "/")
+                                if norm_p.endswith(".pyc") or "/__pycache__/" in norm_p or norm_p.endswith(".dist-info/RECORD"):
+                                    continue
+                                loc = dist.locate_file(row[0].strip())
+                                if os.path.isfile(str(loc)):
+                                    with open(str(loc), "rb") as f:
+                                        valid_files.append((norm_p, hashlib.sha256(f.read()).hexdigest()))
+                            valid_files.sort(key=lambda x: x[0])
+                            p_payload = {
+                                "files": [{"path": p, "sha256": s} for p, s in valid_files],
+                                "method": "installed_record_sha256_v1",
+                                "name": dist_name,
+                                "version": dist.version
+                            }
+                            h = hashlib.sha256(json.dumps(p_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+                            package_identities.append({
+                                "name": dist_name,
+                                "version": dist.version,
+                                "artifactHash": h,
+                                "artifactMethod": "installed_record_sha256_v1"
+                            })
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            source_identities = {}
+            try:
+                source_modules = {
+                    "main": "main.py",
+                    "comfy.model_management": "comfy/model_management.py",
+                    "comfy.cli_args": "comfy/cli_args.py",
+                    "nodes": "nodes.py",
+                    "comfy_extras.nodes_minimax_h3": "comfy_extras/nodes_minimax_h3.py",
+                    "execution": "execution.py",
+                    "comfy.samplers": "comfy/samplers.py",
+                    "comfy_extras.nodes_custom_sampler": "comfy_extras/nodes_custom_sampler.py",
+                }
+                for mod_k, identity_path in source_modules.items():
+                    if mod_k in sys.modules:
+                        f_path = getattr(sys.modules[mod_k], "__file__", "")
+                        if f_path and os.path.isfile(f_path):
+                            with open(f_path, "rb") as f:
+                                source_identities[identity_path] = hashlib.sha256(f.read()).hexdigest()
+
+                entrypoint = _BOOTSTRAP_ENTRYPOINT or os.environ.get("CCO_EXPERIMENT_BOOTSTRAP_ENTRYPOINT")
+                if entrypoint and os.path.isfile(entrypoint):
+                    if "main.py" not in source_identities:
+                        with open(entrypoint, "rb") as f:
+                            source_identities["main.py"] = hashlib.sha256(f.read()).hexdigest()
+                    base_dir = os.path.dirname(os.path.abspath(entrypoint))
+                    for identity_path in source_modules.values():
+                        if identity_path not in source_identities:
+                            cand = os.path.join(base_dir, identity_path)
+                            if os.path.isfile(cand):
+                                with open(cand, "rb") as f:
+                                    source_identities[identity_path] = hashlib.sha256(f.read()).hexdigest()
+            except Exception:
+                pass
+
+            all_hooks_attached = all(h.get("attached", False) for h in installed_hooks)
+            status_val = "ok" if all_hooks_attached else "pending"
+            failure_reason = None if all_hooks_attached else "deferred_hooks_pending"
+
+            handshake_payload = {
+                "status": status_val,
+                "protocol": "v2-jsonl",
+                "protocolVersion": "v2-jsonl",
+                "runId": collector.run_id,
+                "attemptToken": collector.attempt_token,
+                "pid": os.getpid(),
+                "nonce": nonce,
+                "collectorDigest": collector_digest,
+                "hookManifestDigest": hook_manifest_digest,
+                "kernelCallableAvailable": kernel_callable_available,
+                "installedHooks": installed_hooks,
+                "registeredNodes": registered_nodes,
+                "packageIdentities": package_identities,
+                "sourceIdentities": source_identities,
+                "runtimeVersions": {
+                    "pythonVersion": python_ver,
+                    "pythonExecutableHash": python_executable_hash,
+                    "pythonAbiTag": python_abi_tag,
+                    "pythonCompiler": python_compiler,
+                    "pytorchVersion": pytorch_ver,
+                    "cudaBuildVersion": cuda_build,
+                    "cudaRuntimeVersion": None,
+                    "driverVersion": driver_ver
+                }
+            }
+            if failure_reason:
+                handshake_payload["failureReason"] = failure_reason
+            return web.json_response(handshake_payload)
+
+        if hasattr(prompt_server, "app") and hasattr(prompt_server.app, "router"):
+            prompt_server.app.router.add_get("/experiment/minimax-h3/capability", capability_handler)
+        elif hasattr(prompt_server, "routes"):
+            prompt_server.routes.get("/experiment/minimax-h3/capability")(capability_handler)
+    except Exception:
+        pass
+
 def install_hooks(collector: Collector):
     """
     Hook into ComfyUI modules in-memory.
@@ -651,7 +1053,9 @@ def install_hooks(collector: Collector):
                 except Exception as e:
                     collector.end_span(span_id, outcome="failed", error={"message": str(e), "exceptionType": type(e).__name__})
                     raise
+            hooked_load_models_gpu._cco_hooked = True
             mm.load_models_gpu = hooked_load_models_gpu
+            _INSTALLED_WRAPPERS["load_models_gpu"] = hooked_load_models_gpu
     except (ImportError, AttributeError):
         pass
 
@@ -667,7 +1071,9 @@ def install_hooks(collector: Collector):
                     if args and len(args) > 1 and isinstance(args[1], str):
                         collector.prompt_id = args[1]
                     return orig_execute(self, *args, **kwargs)
+                hooked_prompt_execute._cco_hooked = True
                 prompt_executor_cls.execute = hooked_prompt_execute
+                _INSTALLED_WRAPPERS["prompt_executor_execute"] = hooked_prompt_execute
     except (ImportError, AttributeError):
         pass
 
@@ -741,7 +1147,9 @@ def install_hooks(collector: Collector):
                             error={"message": str(e), "exceptionType": type(e).__name__}
                         )
                         raise
+                hooked_sample._cco_hooked = True
                 ksampler_cls.sample = hooked_sample
+                _INSTALLED_WRAPPERS["ksampler_sample"] = hooked_sample
     except (ImportError, AttributeError):
         pass
 
@@ -851,6 +1259,8 @@ def install_hooks(collector: Collector):
                         if orig_guider_sample is not None:
                             guider.sample = orig_guider_sample
 
+                hooked_custom_execute._cco_hooked = True
+                _INSTALLED_WRAPPERS["sampler_custom_advanced_execute"] = hooked_custom_execute
                 wrapped_execute = classmethod(hooked_custom_execute)
                 custom_node_cls.execute = wrapped_execute
                 custom_node_cls.sample = wrapped_execute
@@ -954,6 +1364,9 @@ def install_hooks(collector: Collector):
                                     metadata=metadata
                                 )
                                 raise
+                        hooked_execute._cco_hooked = True
+                        if c_name == "MiniMaxH3ImageToVideo":
+                            _INSTALLED_WRAPPERS["minimax_h3_image_to_video_execute"] = hooked_execute
                         return classmethod(hooked_execute)
 
                     hooked_func = make_hooked_execute(cls_name, orig_execute)
@@ -1166,6 +1579,18 @@ def install_hooks(collector: Collector):
         def hooked_import(name, globals=None, locals=None, fromlist=(), level=0):
             mod = orig_import(name, globals, locals, fromlist, level)
             try:
+                if name == "server" or name.startswith("server."):
+                    if hasattr(mod, "PromptServer"):
+                        ps_cls = getattr(mod, "PromptServer")
+                        orig_init = getattr(ps_cls, "__init__", None)
+                        if orig_init and not getattr(orig_init, "_cco_hooked", False):
+                            def hooked_server_init(self, *args, **kwargs):
+                                orig_init(self, *args, **kwargs)
+                                register_capability_route(self, collector)
+                            hooked_server_init._cco_hooked = True
+                            ps_cls.__init__ = hooked_server_init
+                        if hasattr(ps_cls, "instance") and ps_cls.instance is not None:
+                            register_capability_route(ps_cls.instance, collector)
                 if hasattr(mod, "VedaPatch"):
                     hook_veda_patch_class(getattr(mod, "VedaPatch"))
                 for m_key in ("veda_comfy.comfy_patch", "veda_comfy.patch", name):
@@ -1178,6 +1603,24 @@ def install_hooks(collector: Collector):
             return mod
         hooked_import._cco_hooked = True
         builtins.__import__ = hooked_import
+        _INSTALLED_WRAPPERS["attention_deferred_import_hook"] = hooked_import
+
+    # Hook server.PromptServer if already available
+    try:
+        import server
+        if hasattr(server, "PromptServer"):
+            ps_cls = getattr(server, "PromptServer")
+            orig_init = getattr(ps_cls, "__init__", None)
+            if orig_init and not getattr(orig_init, "_cco_hooked", False):
+                def hooked_server_init(self, *args, **kwargs):
+                    orig_init(self, *args, **kwargs)
+                    register_capability_route(self, collector)
+                hooked_server_init._cco_hooked = True
+                ps_cls.__init__ = hooked_server_init
+            if hasattr(ps_cls, "instance") and ps_cls.instance is not None:
+                register_capability_route(ps_cls.instance, collector)
+    except (ImportError, AttributeError):
+        pass
 
     # Check for missing accelerated kernels when accelerated regime is requested
     expected_backend = os.environ.get("CCO_EXPERIMENT_EXPECTED_ATTENTION_BACKEND", os.environ.get("CCO_EXPECTED_ATTENTION_BACKEND"))
@@ -1207,7 +1650,7 @@ def install_hooks(collector: Collector):
         raise RuntimeError(f"Terminal attention experiment failure: {err}")
 
 def main():
-    global _GLOBAL_COLLECTOR
+    global _GLOBAL_COLLECTOR, _BOOTSTRAP_ENTRYPOINT
 
     run_dir = os.environ.get("CCO_EXPERIMENT_RUN_DIR", os.getcwd())
     run_id = os.environ.get("CCO_EXPERIMENT_RUN_ID", "default-run")
@@ -1226,6 +1669,7 @@ def main():
     elif args:
         target_script = args[0]
         target_argv = args
+    _BOOTSTRAP_ENTRYPOINT = target_script
 
     startup_span_id = collector.start_span("environment_startup")
 
@@ -1241,6 +1685,10 @@ def main():
         sys.exit(1)
 
     # Handshake record emitted after hooks successfully installed
+    installed_hooks_evidence = get_installed_hooks_evidence()
+    hook_manifest_digest = compute_hook_manifest_digest(installed_hooks_evidence)
+    collector_digest = get_collector_digest()
+
     collector.emit(
         phase="environment_startup",
         event_type="point_event",
@@ -1249,8 +1697,8 @@ def main():
             "handshake": "v2-jsonl",
             "protocol": "v2-jsonl",
             "protocolVersion": "v2-jsonl",
-            "collectorDigest": os.environ.get("CCO_EXPERIMENT_COLLECTOR_DIGEST", ""),
-            "hookManifestDigest": os.environ.get("CCO_EXPERIMENT_HOOK_MANIFEST_DIGEST", ""),
+            "collectorDigest": collector_digest,
+            "hookManifestDigest": hook_manifest_digest,
             "pythonVersion": sys.version,
             "pid": os.getpid(),
             "attentionSummary": _ATTENTION_TRACKER.summary()

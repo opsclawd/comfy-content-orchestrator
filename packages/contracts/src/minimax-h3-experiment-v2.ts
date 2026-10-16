@@ -36,7 +36,10 @@ import {
   MinimaxH3AttentionObservationSchema,
   MinimaxH3AttentionEventMetadataSchema,
   MinimaxH3AttentionTopologySchema,
+  MinimaxH3CapabilityHandshakeSchema,
+  MinimaxH3AttentionIdentityEnvelopeSchema,
   computeAttentionTopologyDigest,
+  STANDARD_MINIMAX_H3_HOOKS,
   type MinimaxH3AttentionPatchNode,
   type MinimaxH3AttentionTopology,
   type MinimaxH3AttentionCatalogEntry,
@@ -1194,6 +1197,9 @@ export type MinimaxH3CompatibilityAssessment = z.infer<
 export const MinimaxH3RequiredRuntimeManifestSchema = z
   .object({
     coreRevision: z.string().min(1),
+    customNodeRevision: z.string().optional(),
+    cudaRequirement: z.string().optional(),
+    computeCapability: z.string().optional(),
     sourceFileHashes: z.record(z.string(), sha256HashSchema),
     requiredNodes: z.array(
       z
@@ -1210,10 +1216,20 @@ export const MinimaxH3RequiredRuntimeManifestSchema = z
           name: z.string().min(1),
           version: z.string().min(1),
           artifactHash: sha256HashSchema.optional(),
+          artifactMethod: z.string().optional(),
           importModule: z.string().optional()
         })
         .strict()
     ),
+    interpreter: z
+      .object({
+        pythonVersion: z.string().min(1),
+        pythonExecutableHash: sha256HashSchema.optional(),
+        pythonAbi: z.string().optional(),
+        pythonCompiler: z.string().optional()
+      })
+      .strict()
+      .optional(),
     pytorchBuild: z.string().min(1),
     cudaBuild: z.string().min(1),
     driverConstraints: z.array(z.string().min(1)),
@@ -1227,7 +1243,7 @@ export const MinimaxH3RequiredRuntimeManifestSchema = z
           name: z.string().min(1),
           modulePath: z.string().min(1),
           callable: z.string().min(1),
-          phase: MinimaxH3PhaseTypeSchema
+          phase: z.string().min(1)
         })
         .strict()
     )
@@ -1251,6 +1267,8 @@ export type MinimaxH3RequiredRuntimeManifest = z.infer<
   typeof MinimaxH3RequiredRuntimeManifestSchema
 >;
 
+export { STANDARD_MINIMAX_H3_HOOKS };
+
 export function buildRequiredRuntimeManifestFromAttentionCatalog(
   entry: MinimaxH3AttentionCatalogEntry,
   route: "i2v" | "ref2v",
@@ -1258,45 +1276,148 @@ export function buildRequiredRuntimeManifestFromAttentionCatalog(
     collectorDigest?: string;
     hookManifestDigest?: string;
     sourceFileHashes?: Record<string, string>;
+    pytorchBuild?: string;
+    cudaBuild?: string;
+    driverConstraints?: readonly string[];
     hooks?: ReadonlyArray<{
       name: string;
       modulePath: string;
       callable: string;
-      phase: MinimaxH3PhaseType;
+      phase: string;
+    }>;
+    interpreter?: {
+      pythonVersion: string;
+      pythonExecutableHash?: string;
+      pythonAbi?: string;
+      pythonCompiler?: string;
+    };
+    pythonPackages?: ReadonlyArray<{
+      name: string;
+      version: string;
+      artifactHash?: string;
+      artifactMethod?: string;
+      importModule?: string;
     }>;
   }
 ): MinimaxH3RequiredRuntimeManifest {
-  const defaultHooks: ReadonlyArray<{
-    name: string;
-    modulePath: string;
-    callable: string;
-    phase: MinimaxH3PhaseType;
-  }> = [
-    {
-      name: "minimax-h3-instrumentation-v2",
-      modulePath: "comfy/model_management.py",
-      callable: "sample",
-      phase: "sampling_step"
+  const isIsolated = entry.comfyuiCoreRevision !== PINNED_COMFYUI_CORE_REVISION;
+
+  if (isIsolated) {
+    if (!options?.collectorDigest) {
+      throw new Error(
+        `Isolated upgrade manifest for revision "${entry.comfyuiCoreRevision}" requires explicit collectorDigest.`
+      );
     }
-  ];
-  const hooks = options?.hooks ?? defaultHooks;
+    if (!options?.sourceFileHashes || Object.keys(options.sourceFileHashes).length === 0) {
+      throw new Error(
+        `Isolated upgrade manifest for revision "${entry.comfyuiCoreRevision}" requires explicit sourceFileHashes.`
+      );
+    }
+    if (!options?.pytorchBuild || !options?.cudaBuild) {
+      throw new Error(
+        `Isolated upgrade manifest for revision "${entry.comfyuiCoreRevision}" requires explicit pytorchBuild and cudaBuild.`
+      );
+    }
+  }
+
+  const hooks = options?.hooks ?? STANDARD_MINIMAX_H3_HOOKS;
   const genuineHookManifestDigest =
     options?.hookManifestDigest ?? sha256Hex(canonicalizeJson(hooks));
-  const genuineCollectorDigest =
-    options?.collectorDigest ?? "0000000000000000000000000000000000000000000000000000000000000000";
 
-  const sourceFileHashes =
-    options?.sourceFileHashes ??
-    (entry.comfyuiCoreRevision === FASTH3_ISOLATED_CORE_REVISION
-      ? { ...FASTH3_COMFYUI_SOURCE_HASHES }
+  const genuineCollectorDigest = options?.collectorDigest ?? "0".repeat(64);
+
+  const sourceFileHashes: Record<string, string> =
+    options?.sourceFileHashes !== undefined
+      ? { ...options.sourceFileHashes }
       : {
           "comfy/model_management.py": PINNED_COMFYUI_SOURCE_HASHES.modelManagementSha256,
           "main.py": PINNED_COMFYUI_SOURCE_HASHES.mainSha256,
           "comfy/cli_args.py": PINNED_COMFYUI_SOURCE_HASHES.cliArgsSha256
-        });
+        };
+
+  const pytorchBuild = options?.pytorchBuild ?? "2.5.1+cu124";
+  const cudaBuild = options?.cudaBuild ?? "12.4";
+  const driverConstraints = options?.driverConstraints
+    ? [...options.driverConstraints]
+    : [">=550.00.00"];
+
+  const catalogPackages =
+    entry.pythonPackages.length > 0
+      ? entry.pythonPackages
+      : [{ name: "torch", version: "2.5.1+cu124" }];
+  const measuredPackagesMap = new Map((options?.pythonPackages ?? []).map((p) => [p.name, p]));
+
+  const pkgs: Array<{
+    name: string;
+    version: string;
+    importModule?: string;
+    artifactHash?: string;
+    artifactMethod?: string;
+  }> = catalogPackages.map((catPkg) => {
+    const measured = measuredPackagesMap.get(catPkg.name);
+    const importModule = measured?.importModule ?? catPkg.importModule;
+    const artifactHash = measured?.artifactHash ?? catPkg.artifactHash;
+    const artifactMethod = measured?.artifactMethod ?? catPkg.artifactMethod;
+    const item: {
+      name: string;
+      version: string;
+      importModule?: string;
+      artifactHash?: string;
+      artifactMethod?: string;
+    } = {
+      name: catPkg.name,
+      version: measured?.version ?? catPkg.version
+    };
+    if (importModule) item.importModule = importModule;
+    if (artifactHash) item.artifactHash = artifactHash;
+    if (artifactMethod) item.artifactMethod = artifactMethod;
+    return item;
+  });
+
+  if (!pkgs.some((p) => p.name === "torch")) {
+    const measuredTorch = measuredPackagesMap.get("torch");
+    const torchItem: {
+      name: string;
+      version: string;
+      importModule?: string;
+      artifactHash?: string;
+      artifactMethod?: string;
+    } = {
+      name: "torch",
+      version: measuredTorch?.version ?? pytorchBuild.split("+")[0] ?? "2.5.1",
+      importModule: "torch"
+    };
+    if (measuredTorch?.artifactHash) torchItem.artifactHash = measuredTorch.artifactHash;
+    if (measuredTorch?.artifactMethod) torchItem.artifactMethod = measuredTorch.artifactMethod;
+    pkgs.push(torchItem);
+  }
+
+  for (const optPkg of options?.pythonPackages ?? []) {
+    if (!pkgs.some((p) => p.name === optPkg.name)) {
+      const optItem: {
+        name: string;
+        version: string;
+        importModule?: string;
+        artifactHash?: string;
+        artifactMethod?: string;
+      } = {
+        name: optPkg.name,
+        version: optPkg.version
+      };
+      if (optPkg.importModule) optItem.importModule = optPkg.importModule;
+      if (optPkg.artifactHash) optItem.artifactHash = optPkg.artifactHash;
+      if (optPkg.artifactMethod) optItem.artifactMethod = optPkg.artifactMethod;
+      pkgs.push(optItem);
+    }
+  }
+
+  const interpreter = options?.interpreter;
 
   return {
     coreRevision: entry.comfyuiCoreRevision,
+    ...(entry.customNode?.revision ? { customNodeRevision: entry.customNode.revision } : {}),
+    ...(entry.cudaRequirement ? { cudaRequirement: entry.cudaRequirement } : {}),
+    ...(entry.computeCapability ? { computeCapability: entry.computeCapability } : {}),
     sourceFileHashes,
     requiredNodes: [
       {
@@ -1307,18 +1428,11 @@ export function buildRequiredRuntimeManifestFromAttentionCatalog(
         ...(n.revision ? { revision: n.revision } : {})
       }))
     ],
-    pythonPackages:
-      entry.pythonPackages.length > 0
-        ? entry.pythonPackages.map((p) => ({
-            name: p.name,
-            version: p.version,
-            ...(p.importModule ? { importModule: p.importModule } : {}),
-            ...(p.artifactHash ? { artifactHash: p.artifactHash } : {})
-          }))
-        : [{ name: "torch", version: "2.5.1+cu124" }],
-    pytorchBuild: "2.5.1+cu124",
-    cudaBuild: "12.4",
-    driverConstraints: [">=550.00.00"],
+    pythonPackages: pkgs,
+    ...(interpreter ? { interpreter } : {}),
+    pytorchBuild,
+    cudaBuild,
+    driverConstraints,
     attentionKernel: entry.kernel,
     instrumentationProtocol: "v2-jsonl",
     collectorDigest: genuineCollectorDigest,
@@ -1453,6 +1567,16 @@ export const MinimaxH3ObservedProvenanceSchema = z
         driverVersion: z.string().nullable()
       })
       .strict(),
+    interpreter: z
+      .object({
+        status: z.enum(["verified", "unknown", "conflict"]),
+        pythonVersion: z.string().nullable(),
+        pythonExecutableHash: sha256HashSchema.nullable().optional(),
+        pythonAbi: z.string().nullable().optional(),
+        pythonCompiler: z.string().nullable().optional()
+      })
+      .strict()
+      .optional(),
     observedAttentionBackend: z
       .object({
         status: z.enum(["verified", "unknown", "fallback"]),
@@ -1490,6 +1614,20 @@ export const MinimaxH3ObservedProvenanceSchema = z
       })
       .strict()
       .optional(),
+    packageIdentities: z
+      .array(
+        z
+          .object({
+            name: z.string().min(1),
+            version: z.string().min(1),
+            artifactHash: sha256HashSchema.optional(),
+            artifactMethod: z.string().optional()
+          })
+          .strict()
+      )
+      .optional(),
+    capabilityHandshake: MinimaxH3CapabilityHandshakeSchema.optional(),
+    attentionIdentity: MinimaxH3AttentionIdentityEnvelopeSchema.optional(),
     conflicts: z.array(z.string())
   })
   .strict();

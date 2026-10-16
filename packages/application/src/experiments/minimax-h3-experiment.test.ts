@@ -14,6 +14,7 @@ import {
 } from "./minimax-h3-cli-parser-semantics.js";
 import {
   DEFAULT_MINIMAX_H3_STOP_POLICY,
+  PINNED_H3_CHECKPOINTS,
   computeDescriptorDigest,
   type MinimaxH3ExperimentIntent,
   type MinimaxH3ExperimentReceipt,
@@ -24,7 +25,8 @@ import {
   type MinimaxH3AnyExperimentResult,
   type MinimaxH3ExperimentDescriptorV2,
   type MinimaxH3ExperimentResultV2,
-  type MinimaxH3PhaseAccountingEvent
+  type MinimaxH3PhaseAccountingEvent,
+  STANDARD_MINIMAX_H3_HOOKS
 } from "@cco/contracts";
 import { compareMinimaxH3Experiments } from "./minimax-h3-comparator.js";
 import type {
@@ -32,7 +34,8 @@ import type {
   MinimaxH3ComfyUiTransportPort,
   MinimaxH3OutputProberPort,
   MinimaxH3TargetPreflightPort,
-  MinimaxH3ProcessRunnerPort
+  MinimaxH3ProcessRunnerPort,
+  MinimaxH3TelemetrySamplerPort
 } from "../ports/minimax-h3-experiment-ports.js";
 
 // Minimal mock templates
@@ -2062,6 +2065,55 @@ describe("MiniMax-H3 Experiment Service V2 & Phase Accounting", () => {
 
     const attemptTokenBase = "attempt-token-base-1";
     await store.writeDurableJson(`${baseRunDir}/attempt.json`, { attemptToken: attemptTokenBase });
+    const baseCapabilityHandshake = {
+      status: "ok" as const,
+      protocol: "v2-jsonl",
+      protocolVersion: "v2-jsonl",
+      runId: v2BaseDesc.runId,
+      attemptToken: attemptTokenBase,
+      pid: 12345,
+      nonce: "boot-nonce-base",
+      collectorDigest: v2BaseDesc.requiredRuntime.collectorDigest,
+      hookManifestDigest: v2BaseDesc.requiredRuntime.hookManifestDigest,
+      installedHooks: STANDARD_MINIMAX_H3_HOOKS.map((h) => ({ ...h, attached: true })),
+      registeredNodes: {
+        MiniMaxH3ImageToVideo: {
+          className: "MiniMaxH3ImageToVideo",
+          module: "comfy_extras.nodes_minimax_h3"
+        }
+      },
+      runtimeVersions: {
+        driverVersion: "560.35.03",
+        cudaBuildVersion: v2BaseDesc.requiredRuntime.cudaBuild ?? "12.4",
+        cudaRuntimeVersion: "12.4",
+        pytorchVersion: v2BaseDesc.requiredRuntime.pytorchBuild ?? "2.5.1+cu124",
+        pythonVersion: v2BaseDesc.requiredRuntime.interpreter?.pythonVersion ?? "3.11.9"
+      },
+      packageIdentities: (v2BaseDesc.requiredRuntime.pythonPackages ?? []).map((p) => ({
+        name: p.name,
+        version: p.version,
+        ...(p.artifactHash ? { artifactHash: p.artifactHash } : {}),
+        ...(p.artifactMethod ? { artifactMethod: p.artifactMethod } : {})
+      })),
+      ...(v2BaseDesc.requiredRuntime.sourceFileHashes
+        ? { sourceIdentities: v2BaseDesc.requiredRuntime.sourceFileHashes }
+        : {})
+    };
+    await store.writeDurableJson(
+      `${baseRunDir}/capability-handshake.json`,
+      baseCapabilityHandshake
+    );
+    await store.writeIntent(baseRunDir, {
+      runId: v2BaseDesc.runId,
+      clientId: `client-${v2BaseDesc.runId}`,
+      workflowDigest: v2BaseDesc.derivedWorkflowDigest,
+      requestFingerprint: "fp-base",
+      timestamp: "2026-10-12T10:00:00.000Z",
+      attemptToken: attemptTokenBase,
+      pid: 12345,
+      handshakeNonce: "boot-nonce-base",
+      capabilityHandshakeDigest: sha256Hex(canonicalizeJson(baseCapabilityHandshake))
+    });
     await store.writeReceipt(baseRunDir, {
       runId: v2BaseDesc.runId,
       promptId: "prompt-base-1",
@@ -2156,6 +2208,55 @@ describe("MiniMax-H3 Experiment Service V2 & Phase Accounting", () => {
 
     const attemptTokenCand = "attempt-token-cand-1";
     await store.writeDurableJson(`${candRunDir}/attempt.json`, { attemptToken: attemptTokenCand });
+    const candCapabilityHandshake = {
+      status: "ok" as const,
+      protocol: "v2-jsonl",
+      protocolVersion: "v2-jsonl",
+      runId: v2CandDesc.runId,
+      attemptToken: attemptTokenCand,
+      pid: 12346,
+      nonce: "boot-nonce-cand",
+      collectorDigest: v2CandDesc.requiredRuntime.collectorDigest,
+      hookManifestDigest: v2CandDesc.requiredRuntime.hookManifestDigest,
+      installedHooks: STANDARD_MINIMAX_H3_HOOKS.map((h) => ({ ...h, attached: true })),
+      registeredNodes: {
+        MiniMaxH3ImageToVideo: {
+          className: "MiniMaxH3ImageToVideo",
+          module: "comfy_extras.nodes_minimax_h3"
+        }
+      },
+      runtimeVersions: {
+        driverVersion: "560.35.03",
+        cudaBuildVersion: v2CandDesc.requiredRuntime.cudaBuild ?? "12.4",
+        cudaRuntimeVersion: "12.4",
+        pytorchVersion: v2CandDesc.requiredRuntime.pytorchBuild ?? "2.5.1+cu124",
+        pythonVersion: v2CandDesc.requiredRuntime.interpreter?.pythonVersion ?? "3.11.9"
+      },
+      packageIdentities: (v2CandDesc.requiredRuntime.pythonPackages ?? []).map((p) => ({
+        name: p.name,
+        version: p.version,
+        ...(p.artifactHash ? { artifactHash: p.artifactHash } : {}),
+        ...(p.artifactMethod ? { artifactMethod: p.artifactMethod } : {})
+      })),
+      ...(v2CandDesc.requiredRuntime.sourceFileHashes
+        ? { sourceIdentities: v2CandDesc.requiredRuntime.sourceFileHashes }
+        : {})
+    };
+    await store.writeDurableJson(
+      `${candRunDir}/capability-handshake.json`,
+      candCapabilityHandshake
+    );
+    await store.writeIntent(candRunDir, {
+      runId: v2CandDesc.runId,
+      clientId: `client-${v2CandDesc.runId}`,
+      workflowDigest: v2CandDesc.derivedWorkflowDigest,
+      requestFingerprint: "fp-cand",
+      timestamp: "2026-10-12T10:05:00.000Z",
+      attemptToken: attemptTokenCand,
+      pid: 12346,
+      handshakeNonce: "boot-nonce-cand",
+      capabilityHandshakeDigest: sha256Hex(canonicalizeJson(candCapabilityHandshake))
+    });
     await store.writeReceipt(candRunDir, {
       runId: v2CandDesc.runId,
       promptId: "prompt-cand-1",
@@ -3191,6 +3292,901 @@ describe("MiniMax-H3 Step Reduction Sampling Recipe Validation & Tampering Detec
           outputRoot: ".ai-runs/minimax-h3-experiments"
         })
       ).rejects.toThrow("Execution requires an operator-authored, versioned --stop-policy file.");
+    });
+  });
+
+  describe("Pre-submit Capability Handshake Verification", () => {
+    it("handshake failure blocks submission", async () => {
+      const store = createRealTemplateStore();
+      store.files.set("stop-policy.json", JSON.stringify(DEFAULT_MINIMAX_H3_STOP_POLICY));
+
+      let submitCalled = false;
+      const mockTransport: MinimaxH3ComfyUiTransportPort = {
+        waitForReadiness: async () => ({ ok: true }),
+        getCapabilityHandshake: async () => ({
+          ok: false,
+          error:
+            "Capability probe failed: /experiment/minimax-h3/capability 500 Internal Server Error"
+        }),
+        submitPrompt: async () => {
+          submitCalled = true;
+          return { ok: true, promptId: "prompt-hs-test" };
+        },
+        pollPromptHistory: async () => ({ status: "completed", rawHistory: {} }),
+        getQueue: async () => ({ running: [], pending: [] }),
+        findPromptByWorkflowDigestOrClient: async () => null
+      };
+
+      const mockPreflight: MinimaxH3TargetPreflightPort = {
+        checkTargetHost: async () => ({ ok: true }),
+        checkPortAvailable: async () => ({ ok: true }),
+        verifyCheckout: async () => ({ ok: true, revision: "55b6a9b1", nodesPresent: true }),
+        verifyModels: async () => ({ ok: true, resolvedPaths: {} }),
+        verifyDiskSpace: async () => ({ ok: true, freeGb: 100 }),
+        acquireGpuLock: async () => ({ acquired: true, release: async () => {} }),
+        verifyExperimentRuntime: async () => ({
+          ok: true,
+          status: "verified",
+          adapterRegistered: true,
+          observations: {
+            actualCheckpointHash: {
+              status: "verified",
+              value: PINNED_H3_CHECKPOINTS.ref2va.sha256,
+              expected: PINNED_H3_CHECKPOINTS.ref2va.sha256
+            },
+            loadedModelHashes: {},
+            comfyuiCoreRevision: {
+              status: "verified",
+              value: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+              expected: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+            },
+            sourceIdentities: {
+              status: "verified",
+              values: {}
+            },
+            customNodeInventory: {
+              status: "verified_empty",
+              nodes: []
+            },
+            runtimeVersions: {
+              status: "verified",
+              pythonVersion: "3.11.9",
+              pytorchVersion: "2.4.1+cu124",
+              cudaBuildVersion: "12.4",
+              cudaRuntimeVersion: "12.4",
+              driverVersion: "560.35.03"
+            },
+            observedAttentionBackend: {
+              status: "unknown",
+              effectiveBackend: null,
+              dispatchImplementation: null
+            },
+            bootstrapHandshake: {
+              status: "missing",
+              protocol: null,
+              collectorDigest: null,
+              hookManifestDigest: null
+            },
+            conflicts: []
+          }
+        })
+      };
+
+      let childTerminated = false;
+      let running = true;
+      const mockRunner: MinimaxH3ProcessRunnerPort = {
+        spawnChild: async () => ({
+          pid: 4321,
+          startTimeTicks: 1000,
+          address: "127.0.0.1",
+          port: 8188,
+          gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+          isRunning: () => running,
+          verifySocketOwnership: async () => ({ ok: true }),
+          verifyChildEnvironment: async () => ({ ok: true }),
+          getStdout: () =>
+            "[Patcher] using dynamic VRAM policy (Free: 24000.0MB, Total: 24576.0MB)\n",
+          getStderr: () => "",
+          stop: async () => {
+            childTerminated = true;
+            running = false;
+          }
+        })
+      };
+
+      const mockTelemetry: MinimaxH3TelemetrySamplerPort = {
+        start: () => ({
+          stop: async () => {},
+          setPhase: () => {}
+        })
+      };
+
+      const service = new MinimaxH3ExperimentService(
+        store,
+        mockPreflight,
+        mockRunner,
+        mockTransport,
+        mockTelemetry
+      );
+
+      const { runDir } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A test prompt",
+        operatorLabel: "operator-01",
+        runId: "run-hs-fail-test",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        schemaVersion: 2
+      });
+
+      await expect(
+        service.executeExperiment(runDir, {
+          outputRoot: ".ai-runs/minimax-h3-experiments",
+          stopPolicyPath: "stop-policy.json"
+        })
+      ).rejects.toThrow(/Capability handshake failed/);
+
+      expect(submitCalled).toBe(false);
+      expect(childTerminated).toBe(true);
+    });
+
+    it("mismatched collectorDigest in capability handshake blocks prompt submission", async () => {
+      const store = createRealTemplateStore();
+      store.files.set("stop-policy.json", JSON.stringify(DEFAULT_MINIMAX_H3_STOP_POLICY));
+
+      let submitCalled = false;
+      let capturedAttemptToken: string | undefined;
+      let gpuLockReleased = false;
+
+      const mockTransport: MinimaxH3ComfyUiTransportPort = {
+        waitForReadiness: async () => ({ ok: true }),
+        getCapabilityHandshake: async (_baseUrl, nonce) => {
+          const desc = store.descriptor as MinimaxH3ExperimentDescriptorV2;
+          return {
+            ok: true,
+            handshake: {
+              status: "ok",
+              protocol: "v2-jsonl",
+              protocolVersion: "v2-jsonl",
+              runId: "run-hs-mismatch-test",
+              attemptToken: capturedAttemptToken ?? "unknown-token",
+              pid: 4321,
+              nonce,
+              collectorDigest: "0".repeat(64),
+              hookManifestDigest: desc?.requiredRuntime?.hookManifestDigest ?? "0".repeat(64),
+              installedHooks: STANDARD_MINIMAX_H3_HOOKS.map((h) => ({ ...h, attached: true })),
+              registeredNodes: {
+                MiniMaxH3ImageToVideo: {
+                  className: "MiniMaxH3ImageToVideo",
+                  module: "comfy_extras.nodes_minimax_h3"
+                }
+              }
+            }
+          };
+        },
+        submitPrompt: async () => {
+          submitCalled = true;
+          return { ok: true, promptId: "prompt-hs-test" };
+        },
+        pollPromptHistory: async () => ({ status: "completed", rawHistory: {} }),
+        getQueue: async () => ({ running: [], pending: [] }),
+        findPromptByWorkflowDigestOrClient: async () => null
+      };
+
+      const mockPreflight: MinimaxH3TargetPreflightPort = {
+        checkTargetHost: async () => ({ ok: true }),
+        checkPortAvailable: async () => ({ ok: true }),
+        verifyCheckout: async () => ({ ok: true, revision: "55b6a9b1", nodesPresent: true }),
+        verifyModels: async () => ({ ok: true, resolvedPaths: {} }),
+        verifyDiskSpace: async () => ({ ok: true, freeGb: 100 }),
+        acquireGpuLock: async () => ({
+          acquired: true,
+          release: async () => {
+            gpuLockReleased = true;
+          }
+        }),
+        verifyExperimentRuntime: async () => ({
+          ok: true,
+          status: "verified",
+          adapterRegistered: true,
+          observations: {
+            actualCheckpointHash: {
+              status: "verified",
+              value: PINNED_H3_CHECKPOINTS.ref2va.sha256,
+              expected: PINNED_H3_CHECKPOINTS.ref2va.sha256
+            },
+            loadedModelHashes: {},
+            comfyuiCoreRevision: {
+              status: "verified",
+              value: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+              expected: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+            },
+            sourceIdentities: {
+              status: "verified",
+              values: {}
+            },
+            customNodeInventory: {
+              status: "verified_empty",
+              nodes: []
+            },
+            runtimeVersions: {
+              status: "verified",
+              pythonVersion: "3.11.9",
+              pytorchVersion: "2.4.1+cu124",
+              cudaBuildVersion: "12.4",
+              cudaRuntimeVersion: "12.4",
+              driverVersion: "560.35.03"
+            },
+            observedAttentionBackend: {
+              status: "unknown",
+              effectiveBackend: null,
+              dispatchImplementation: null
+            },
+            bootstrapHandshake: {
+              status: "missing",
+              protocol: null,
+              collectorDigest: null,
+              hookManifestDigest: null
+            },
+            conflicts: []
+          }
+        })
+      };
+
+      let childTerminated = false;
+      let running = true;
+      const mockRunner: MinimaxH3ProcessRunnerPort = {
+        spawnChild: async (params) => {
+          capturedAttemptToken = params.attemptToken;
+          return {
+            pid: 4321,
+            startTimeTicks: 1000,
+            address: "127.0.0.1",
+            port: 8188,
+            gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+            isRunning: () => running,
+            verifySocketOwnership: async () => ({ ok: true }),
+            verifyChildEnvironment: async () => ({ ok: true }),
+            getStdout: () =>
+              "[Patcher] using dynamic VRAM policy (Free: 24000.0MB, Total: 24576.0MB)\n",
+            getStderr: () => "",
+            stop: async () => {
+              childTerminated = true;
+              running = false;
+            }
+          };
+        }
+      };
+
+      const mockTelemetry: MinimaxH3TelemetrySamplerPort = {
+        start: () => ({
+          stop: async () => {},
+          setPhase: () => {}
+        })
+      };
+
+      const service = new MinimaxH3ExperimentService(
+        store,
+        mockPreflight,
+        mockRunner,
+        mockTransport,
+        mockTelemetry
+      );
+
+      const { runDir } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A test prompt",
+        operatorLabel: "operator-01",
+        runId: "run-hs-mismatch-test",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        schemaVersion: 2
+      });
+
+      await expect(
+        service.executeExperiment(runDir, {
+          outputRoot: ".ai-runs/minimax-h3-experiments",
+          stopPolicyPath: "stop-policy.json"
+        })
+      ).rejects.toThrow(/Capability handshake failed:.*collectorDigest mismatch/);
+
+      expect(submitCalled).toBe(false);
+      expect(childTerminated).toBe(true);
+      expect(gpuLockReleased).toBe(true);
+      expect(store.files.has(`${runDir}/intent.json`)).toBe(false);
+    });
+
+    it("missing child PID or nonce in capability handshake blocks prompt submission", async () => {
+      const store = createRealTemplateStore();
+      store.files.set("stop-policy.json", JSON.stringify(DEFAULT_MINIMAX_H3_STOP_POLICY));
+
+      let submitCalled = false;
+      let childTerminated = false;
+      const mockTransport: MinimaxH3ComfyUiTransportPort = {
+        waitForReadiness: async () => ({ ok: true }),
+        getCapabilityHandshake: async () => {
+          return {
+            ok: true,
+            handshake: {
+              status: "ok",
+              protocol: "v2-jsonl",
+              protocolVersion: "v2-jsonl",
+              runId: "run-pid-missing-test",
+              attemptToken: "att-1",
+              pid: 0,
+              nonce: "",
+              collectorDigest: "0".repeat(64),
+              hookManifestDigest: "0".repeat(64),
+              installedHooks: [],
+              registeredNodes: {}
+            }
+          };
+        },
+        submitPrompt: async () => {
+          submitCalled = true;
+          return { ok: true, promptId: "prompt-hs-test" };
+        },
+        pollPromptHistory: async () => ({ status: "completed", rawHistory: {} }),
+        getQueue: async () => ({ running: [], pending: [] }),
+        findPromptByWorkflowDigestOrClient: async () => null
+      };
+
+      const mockPreflight: MinimaxH3TargetPreflightPort = {
+        checkTargetHost: async () => ({ ok: true }),
+        checkPortAvailable: async () => ({ ok: true }),
+        verifyCheckout: async () => ({ ok: true, revision: "55b6a9b1", nodesPresent: true }),
+        verifyModels: async () => ({ ok: true, resolvedPaths: {} }),
+        verifyDiskSpace: async () => ({ ok: true, freeGb: 100 }),
+        acquireGpuLock: async () => ({ acquired: true, release: async () => {} }),
+        verifyExperimentRuntime: async () => ({
+          ok: true,
+          status: "verified",
+          adapterRegistered: true,
+          observations: {
+            actualCheckpointHash: {
+              status: "verified",
+              value: PINNED_H3_CHECKPOINTS.ref2va.sha256,
+              expected: PINNED_H3_CHECKPOINTS.ref2va.sha256
+            },
+            loadedModelHashes: {},
+            comfyuiCoreRevision: {
+              status: "verified",
+              value: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+              expected: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+            },
+            sourceIdentities: { status: "verified", values: {} },
+            customNodeInventory: { status: "verified_empty", nodes: [] },
+            runtimeVersions: {
+              status: "verified",
+              pythonVersion: "3.11.9",
+              pytorchVersion: "2.4.1+cu124",
+              cudaBuildVersion: "12.4",
+              cudaRuntimeVersion: "12.4",
+              driverVersion: "560.35.03"
+            },
+            observedAttentionBackend: {
+              status: "unknown",
+              effectiveBackend: null,
+              dispatchImplementation: null
+            },
+            bootstrapHandshake: {
+              status: "missing",
+              protocol: null,
+              collectorDigest: null,
+              hookManifestDigest: null
+            },
+            conflicts: []
+          }
+        })
+      };
+
+      const mockRunner: MinimaxH3ProcessRunnerPort = {
+        spawnChild: async () => ({
+          pid: 5678,
+          startTimeTicks: 1000,
+          address: "127.0.0.1",
+          port: 8188,
+          gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+          isRunning: () => true,
+          verifySocketOwnership: async () => ({ ok: true }),
+          verifyChildEnvironment: async () => ({ ok: true }),
+          getStdout: () => "",
+          getStderr: () => "",
+          stop: async () => {
+            childTerminated = true;
+          }
+        })
+      };
+
+      const mockTelemetry: MinimaxH3TelemetrySamplerPort = {
+        start: () => ({ stop: async () => {}, setPhase: () => {} })
+      };
+
+      const service = new MinimaxH3ExperimentService(
+        store,
+        mockPreflight,
+        mockRunner,
+        mockTransport,
+        mockTelemetry
+      );
+
+      const { runDir } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A test prompt",
+        operatorLabel: "operator-01",
+        runId: "run-pid-missing-test",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        schemaVersion: 2
+      });
+
+      await expect(
+        service.executeExperiment(runDir, {
+          outputRoot: ".ai-runs/minimax-h3-experiments",
+          stopPolicyPath: "stop-policy.json"
+        })
+      ).rejects.toThrow(/Capability handshake failed:.*(child PID|nonce)/);
+
+      expect(submitCalled).toBe(false);
+      expect(childTerminated).toBe(true);
+    });
+
+    it("completes full lifecycle through pre-submit capability handshake, submission, and reconciliation", async () => {
+      const store = createRealTemplateStore();
+      store.files.set("stop-policy.json", JSON.stringify(DEFAULT_MINIMAX_H3_STOP_POLICY));
+
+      let capturedAttemptToken: string | undefined;
+      let submitCalled = false;
+      let gpuLockReleased = false;
+
+      const mockTransport: MinimaxH3ComfyUiTransportPort = {
+        waitForReadiness: async () => ({ ok: true }),
+        getCapabilityHandshake: async (_baseUrl, nonce) => {
+          const desc = store.descriptor as MinimaxH3ExperimentDescriptorV2;
+          return {
+            ok: true,
+            handshake: {
+              status: "ok",
+              protocol: "v2-jsonl",
+              protocolVersion: "v2-jsonl",
+              runId: "run-lifecycle-test",
+              attemptToken: capturedAttemptToken ?? "unknown-token",
+              pid: 5678,
+              nonce,
+              collectorDigest: desc?.requiredRuntime?.collectorDigest ?? "0".repeat(64),
+              hookManifestDigest: desc?.requiredRuntime?.hookManifestDigest ?? "0".repeat(64),
+              installedHooks: STANDARD_MINIMAX_H3_HOOKS.map((h) => ({ ...h, attached: true })),
+              registeredNodes: {
+                MiniMaxH3ImageToVideo: {
+                  className: "MiniMaxH3ImageToVideo",
+                  module: "comfy_extras.nodes_minimax_h3"
+                }
+              },
+              runtimeVersions: {
+                driverVersion: "560.35.03",
+                cudaBuildVersion: desc?.requiredRuntime?.cudaBuild ?? "12.4",
+                cudaRuntimeVersion: "12.4",
+                pytorchVersion: desc?.requiredRuntime?.pytorchBuild ?? "2.4.1+cu124",
+                pythonVersion: desc?.requiredRuntime?.interpreter?.pythonVersion ?? "3.11.9"
+              },
+              packageIdentities: (desc?.requiredRuntime?.pythonPackages ?? []).map((p) => ({
+                name: p.name,
+                version: p.version,
+                ...(p.artifactHash ? { artifactHash: p.artifactHash } : {}),
+                ...(p.artifactMethod ? { artifactMethod: p.artifactMethod } : {})
+              })),
+              sourceIdentities: desc?.requiredRuntime?.sourceFileHashes ?? {}
+            }
+          };
+        },
+        submitPrompt: async () => {
+          submitCalled = true;
+          return { ok: true, promptId: "prompt-lifecycle-test" };
+        },
+        pollPromptHistory: async () => ({
+          status: "completed",
+          rawHistory: {
+            "prompt-lifecycle-test": {
+              outputs: {
+                "20": {
+                  videos: [{ filename: "output.mp4", subfolder: "", type: "output" }]
+                }
+              }
+            }
+          }
+        }),
+        getQueue: async () => ({ running: [], pending: [] }),
+        findPromptByWorkflowDigestOrClient: async () => null
+      };
+
+      const mockPreflight: MinimaxH3TargetPreflightPort = {
+        checkTargetHost: async () => ({ ok: true }),
+        checkPortAvailable: async () => ({ ok: true }),
+        verifyCheckout: async () => ({ ok: true, revision: "55b6a9b1", nodesPresent: true }),
+        verifyModels: async () => ({ ok: true, resolvedPaths: {} }),
+        verifyDiskSpace: async () => ({ ok: true, freeGb: 100 }),
+        acquireGpuLock: async () => ({
+          acquired: true,
+          release: async () => {
+            gpuLockReleased = true;
+          }
+        }),
+        verifyExperimentRuntime: async () => ({
+          ok: true,
+          status: "verified",
+          adapterRegistered: true,
+          observations: {
+            actualCheckpointHash: {
+              status: "verified",
+              value: PINNED_H3_CHECKPOINTS.ref2va.sha256,
+              expected: PINNED_H3_CHECKPOINTS.ref2va.sha256
+            },
+            loadedModelHashes: {},
+            comfyuiCoreRevision: {
+              status: "verified",
+              value: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+              expected: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+            },
+            sourceIdentities: {
+              status: "verified",
+              values: {}
+            },
+            customNodeInventory: {
+              status: "verified_empty",
+              nodes: []
+            },
+            runtimeVersions: {
+              status: "verified",
+              pythonVersion: "3.11.9",
+              pytorchVersion: "2.4.1+cu124",
+              cudaBuildVersion: "12.4",
+              cudaRuntimeVersion: "12.4",
+              driverVersion: "560.35.03"
+            },
+            observedAttentionBackend: {
+              status: "verified",
+              effectiveBackend: "torch_sdpa",
+              dispatchImplementation: "torch.nn.functional.scaled_dot_product_attention"
+            },
+            bootstrapHandshake: {
+              status: "missing",
+              protocol: null,
+              collectorDigest: null,
+              hookManifestDigest: null
+            },
+            conflicts: []
+          }
+        })
+      };
+
+      let childTerminated = false;
+      let running = true;
+      const mockRunner: MinimaxH3ProcessRunnerPort = {
+        spawnChild: async (params) => {
+          capturedAttemptToken = params.attemptToken;
+          return {
+            pid: 5678,
+            startTimeTicks: 1000,
+            address: "127.0.0.1",
+            port: 8188,
+            gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+            isRunning: () => running,
+            verifySocketOwnership: async () => ({ ok: true }),
+            verifyChildEnvironment: async () => ({ ok: true }),
+            getStdout: () =>
+              "[Patcher] using dynamic VRAM policy (Free: 24000.0MB, Total: 24576.0MB)\n",
+            getStderr: () => "",
+            stop: async () => {
+              childTerminated = true;
+              running = false;
+            }
+          };
+        }
+      };
+
+      const mockTelemetry: MinimaxH3TelemetrySamplerPort = {
+        start: () => ({
+          stop: async () => {},
+          setPhase: () => {}
+        })
+      };
+
+      const service = new MinimaxH3ExperimentService(
+        store,
+        mockPreflight,
+        mockRunner,
+        mockTransport,
+        mockTelemetry
+      );
+
+      const { runDir } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A test prompt",
+        operatorLabel: "operator-01",
+        runId: "run-lifecycle-test",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        schemaVersion: 2
+      });
+
+      const execResult = (await service.executeExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        stopPolicyPath: "stop-policy.json"
+      })) as MinimaxH3ExperimentResultV2;
+
+      expect(submitCalled).toBe(true);
+      expect(execResult.execution.status).toBe("completed");
+      expect(execResult.observedProvenance.capabilityHandshake).toBeDefined();
+      expect(execResult.observedProvenance.capabilityHandshake?.runId).toBe("run-lifecycle-test");
+      expect(childTerminated).toBe(true);
+      expect(gpuLockReleased).toBe(true);
+    });
+
+    it("retries capability handshake when status is pending until ready and succeeds", async () => {
+      const store = createRealTemplateStore();
+      store.files.set("stop-policy.json", JSON.stringify(DEFAULT_MINIMAX_H3_STOP_POLICY));
+
+      let capturedAttemptToken: string | undefined;
+      let submitCalled = false;
+      let handshakeCalls = 0;
+
+      const mockTransport: MinimaxH3ComfyUiTransportPort = {
+        waitForReadiness: async () => ({ ok: true }),
+        getCapabilityHandshake: async (_baseUrl, nonce) => {
+          handshakeCalls++;
+          const desc = store.descriptor as MinimaxH3ExperimentDescriptorV2;
+          if (handshakeCalls === 1) {
+            return {
+              ok: true,
+              handshake: {
+                status: "pending",
+                protocol: "v2-jsonl",
+                protocolVersion: "v2-jsonl",
+                runId: "run-pending-test",
+                attemptToken: capturedAttemptToken ?? "unknown-token",
+                pid: 5678,
+                nonce,
+                collectorDigest: desc?.requiredRuntime?.collectorDigest ?? "0".repeat(64),
+                hookManifestDigest: desc?.requiredRuntime?.hookManifestDigest ?? "0".repeat(64),
+                installedHooks: [],
+                registeredNodes: {}
+              }
+            };
+          }
+          return {
+            ok: true,
+            handshake: {
+              status: "ok",
+              protocol: "v2-jsonl",
+              protocolVersion: "v2-jsonl",
+              runId: "run-pending-test",
+              attemptToken: capturedAttemptToken ?? "unknown-token",
+              pid: 5678,
+              nonce,
+              collectorDigest: desc?.requiredRuntime?.collectorDigest ?? "0".repeat(64),
+              hookManifestDigest: desc?.requiredRuntime?.hookManifestDigest ?? "0".repeat(64),
+              installedHooks: STANDARD_MINIMAX_H3_HOOKS.map((h) => ({ ...h, attached: true })),
+              registeredNodes: {
+                MiniMaxH3ImageToVideo: {
+                  className: "MiniMaxH3ImageToVideo",
+                  module: "comfy_extras.nodes_minimax_h3"
+                }
+              },
+              runtimeVersions: {
+                driverVersion: "560.35.03",
+                cudaBuildVersion: desc?.requiredRuntime?.cudaBuild ?? "12.4",
+                cudaRuntimeVersion: "12.4",
+                pytorchVersion: desc?.requiredRuntime?.pytorchBuild ?? "2.4.1+cu124",
+                pythonVersion: desc?.requiredRuntime?.interpreter?.pythonVersion ?? "3.11.9"
+              },
+              packageIdentities: (desc?.requiredRuntime?.pythonPackages ?? []).map((p) => ({
+                name: p.name,
+                version: p.version,
+                ...(p.artifactHash ? { artifactHash: p.artifactHash } : {}),
+                ...(p.artifactMethod ? { artifactMethod: p.artifactMethod } : {})
+              })),
+              sourceIdentities: desc?.requiredRuntime?.sourceFileHashes ?? {}
+            }
+          };
+        },
+        submitPrompt: async () => {
+          submitCalled = true;
+          return { ok: true, promptId: "prompt-pending-test" };
+        },
+        pollPromptHistory: async () => ({
+          status: "completed",
+          rawHistory: {
+            "prompt-pending-test": {
+              outputs: {
+                "20": {
+                  videos: [{ filename: "output.mp4", subfolder: "", type: "output" }]
+                }
+              }
+            }
+          }
+        }),
+        getQueue: async () => ({ running: [], pending: [] }),
+        findPromptByWorkflowDigestOrClient: async () => null
+      };
+
+      const mockPreflight: MinimaxH3TargetPreflightPort = {
+        checkTargetHost: async () => ({ ok: true }),
+        checkPortAvailable: async () => ({ ok: true }),
+        verifyCheckout: async () => ({ ok: true, revision: "55b6a9b1", nodesPresent: true }),
+        verifyModels: async () => ({ ok: true, resolvedPaths: {} }),
+        verifyDiskSpace: async () => ({ ok: true, freeGb: 100 }),
+        acquireGpuLock: async () => ({
+          acquired: true,
+          release: async () => {}
+        }),
+        verifyExperimentRuntime: async () => ({
+          ok: true,
+          status: "verified",
+          adapterRegistered: true,
+          observations: {
+            actualCheckpointHash: {
+              status: "verified",
+              value: PINNED_H3_CHECKPOINTS.ref2va.sha256,
+              expected: PINNED_H3_CHECKPOINTS.ref2va.sha256
+            },
+            loadedModelHashes: {},
+            comfyuiCoreRevision: {
+              status: "verified",
+              value: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+              expected: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+            },
+            sourceIdentities: {
+              status: "verified",
+              values: {}
+            },
+            customNodeInventory: {
+              status: "verified_empty",
+              nodes: []
+            },
+            runtimeVersions: {
+              status: "verified",
+              pythonVersion: "3.11.9",
+              pytorchVersion: "2.4.1+cu124",
+              cudaBuildVersion: "12.4",
+              cudaRuntimeVersion: "12.4",
+              driverVersion: "560.35.03"
+            },
+            observedAttentionBackend: {
+              status: "verified",
+              effectiveBackend: "torch_sdpa",
+              dispatchImplementation: "torch.nn.functional.scaled_dot_product_attention"
+            },
+            bootstrapHandshake: {
+              status: "missing",
+              protocol: null,
+              collectorDigest: null,
+              hookManifestDigest: null
+            },
+            conflicts: []
+          }
+        }),
+        inspectEnvironmentIdentity: async () => ({
+          ok: true,
+          identity: {
+            interpreter: {
+              pythonVersion: "3.11.9",
+              pythonExecutableHash: "a".repeat(64),
+              pythonCompiler: "GCC 11.4.0",
+              pythonAbiFlags: ""
+            },
+            toolchain: {
+              pytorchBuild: "2.4.1+cu124",
+              cudaBuildVersion: "12.4",
+              cudaRuntimeVersion: "12.4",
+              driverVersion: "560.35.03"
+            },
+            verifiedPackages: [
+              {
+                name: "torch",
+                version: "2.4.1+cu124",
+                artifactHash: "b".repeat(64),
+                artifactMethod: "installed_record_sha256_v1"
+              }
+            ],
+            sourceIdentities: {
+              "execution.py": "c".repeat(64),
+              "comfy/samplers.py": "c".repeat(64),
+              "comfy_extras/nodes_custom_sampler.py": "c".repeat(64)
+            }
+          }
+        })
+      };
+
+      let childTerminated = false;
+      let running = true;
+      const mockRunner: MinimaxH3ProcessRunnerPort = {
+        spawnChild: async (params) => {
+          capturedAttemptToken = params.attemptToken;
+          return {
+            pid: 5678,
+            startTimeTicks: 1000,
+            address: "127.0.0.1",
+            port: 8188,
+            gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+            isRunning: () => running,
+            verifySocketOwnership: async () => ({ ok: true }),
+            verifyChildEnvironment: async () => ({ ok: true }),
+            getStdout: () =>
+              "[Patcher] using dynamic VRAM policy (Free: 24000.0MB, Total: 24576.0MB)\n",
+            getStderr: () => "",
+            stop: async () => {
+              childTerminated = true;
+              running = false;
+            }
+          };
+        }
+      };
+
+      const mockTelemetry: MinimaxH3TelemetrySamplerPort = {
+        start: () => ({
+          stop: async () => {},
+          setPhase: () => {}
+        })
+      };
+
+      const service = new MinimaxH3ExperimentService(
+        store,
+        mockPreflight,
+        mockRunner,
+        mockTransport,
+        mockTelemetry
+      );
+
+      const { runDir } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A test prompt",
+        operatorLabel: "operator-01",
+        runId: "run-pending-test",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        schemaVersion: 2
+      });
+
+      const execResult = (await service.executeExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        stopPolicyPath: "stop-policy.json"
+      })) as MinimaxH3ExperimentResultV2;
+
+      expect(handshakeCalls).toBeGreaterThanOrEqual(2);
+      expect(submitCalled).toBe(true);
+      expect(execResult.execution.status).toBe("completed");
+      expect(execResult.observedProvenance.capabilityHandshake?.status).toBe("ok");
+      expect(childTerminated).toBe(true);
     });
   });
 });

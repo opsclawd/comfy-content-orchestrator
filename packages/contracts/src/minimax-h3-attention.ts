@@ -213,6 +213,7 @@ export const MinimaxH3AttentionCatalogEntrySchema = z
           name: z.string().min(1),
           version: z.string().min(1),
           artifactHash: sha256HashSchema.optional(),
+          artifactMethod: z.string().optional(),
           importModule: z.string().optional()
         })
         .strict()
@@ -326,35 +327,330 @@ export function computeAttentionCatalogDigest(
   return sha256Hex(canonicalizeJson(copy));
 }
 
-export function computeAttentionRuntimeLockDigest(manifest: {
-  comfyuiCoreRevision: string;
-  customNodeRevision?: string | undefined;
-  pythonPackages: readonly {
-    name: string;
-    version: string;
-    artifactHash?: string | undefined;
-    importModule?: string | undefined;
+export interface AttentionRuntimeSubstrateManifest {
+  readonly comfyuiCoreRevision: string;
+  readonly customNodeRevision?: string | undefined;
+  readonly sourceFileHashes?: Record<string, string> | undefined;
+  readonly interpreter?:
+    | {
+        readonly pythonVersion?: string | undefined;
+        readonly pythonExecutableHash?: string | undefined;
+        readonly pythonAbi?: string | undefined;
+        readonly pythonCompiler?: string | undefined;
+      }
+    | undefined;
+  readonly pytorchBuild?: string | undefined;
+  readonly cudaBuild?: string | undefined;
+  readonly driverConstraints?: readonly string[] | undefined;
+  readonly pythonPackages: readonly {
+    readonly name: string;
+    readonly version: string;
+    readonly artifactHash?: string | undefined;
+    readonly artifactMethod?: string | undefined;
+    readonly importModule?: string | undefined;
   }[];
-  cudaRequirement?: string | undefined;
-  computeCapability?: string | undefined;
-}): string {
+  readonly cudaRequirement?: string | undefined;
+  readonly computeCapability?: string | undefined;
+  readonly instrumentationProtocol?: string | undefined;
+  readonly collectorDigest?: string | undefined;
+  readonly hookManifestDigest?: string | undefined;
+  readonly hooks?:
+    | readonly {
+        readonly name: string;
+        readonly modulePath: string;
+        readonly callable: string;
+        readonly phase: string;
+      }[]
+    | undefined;
+}
+
+const DOTTED_NUMERIC_REGEX = /^\d+(?:\.\d+)*$/;
+
+export function compareDottedVersions(a: string, b: string): number {
+  const parseParts = (v: string): number[] => {
+    const trimmed = v.trim();
+    if (!DOTTED_NUMERIC_REGEX.test(trimmed)) {
+      throw new Error(`Invalid dotted-numeric version format: "${v}".`);
+    }
+    return trimmed.split(".").map((p) => Number(p));
+  };
+
+  const partsA = parseParts(a);
+  const partsB = parseParts(b);
+  const maxLen = Math.max(partsA.length, partsB.length);
+
+  for (let i = 0; i < maxLen; i++) {
+    const valA = i < partsA.length ? partsA[i]! : 0;
+    const valB = i < partsB.length ? partsB[i]! : 0;
+    if (valA > valB) return 1;
+    if (valA < valB) return -1;
+  }
+  return 0;
+}
+
+export function satisfiesDriverConstraint(
+  driverVersion: string,
+  constraint: string
+): { satisfied: boolean; error?: string } {
+  const trimmedConstraint = constraint.trim();
+  const match = trimmedConstraint.match(/^([><]=?|==|=)\s*(\S+)$/);
+  if (!match) {
+    return {
+      satisfied: false,
+      error: `Malformed or unsupported driver constraint "${constraint}".`
+    };
+  }
+  const op = match[1]!;
+  const targetVer = match[2]!;
+
+  if (!DOTTED_NUMERIC_REGEX.test(targetVer)) {
+    return {
+      satisfied: false,
+      error: `Malformed or unsupported driver constraint "${constraint}".`
+    };
+  }
+
+  const trimmedDriverVer = driverVersion.trim();
+  if (!DOTTED_NUMERIC_REGEX.test(trimmedDriverVer)) {
+    return {
+      satisfied: false,
+      error: `Malformed driver version "${driverVersion}".`
+    };
+  }
+
+  try {
+    const cmp = compareDottedVersions(trimmedDriverVer, targetVer);
+    switch (op) {
+      case ">=":
+        return { satisfied: cmp >= 0 };
+      case ">":
+        return { satisfied: cmp > 0 };
+      case "<=":
+        return { satisfied: cmp <= 0 };
+      case "<":
+        return { satisfied: cmp < 0 };
+      case "==":
+      case "=":
+        return { satisfied: cmp === 0 };
+      default:
+        return { satisfied: false, error: `Unsupported driver constraint operator "${op}".` };
+    }
+  } catch (err) {
+    return { satisfied: false, error: `Invalid version comparison: ${(err as Error).message}` };
+  }
+}
+
+export function computeAttentionRuntimeLockDigest(
+  manifest: AttentionRuntimeSubstrateManifest
+): string {
   const {
     comfyuiCoreRevision,
     customNodeRevision,
+    sourceFileHashes,
+    interpreter,
+    pytorchBuild,
+    cudaBuild,
+    driverConstraints,
     pythonPackages,
     cudaRequirement,
-    computeCapability
+    computeCapability,
+    instrumentationProtocol,
+    collectorDigest,
+    hookManifestDigest,
+    hooks
   } = manifest;
-  return sha256Hex(
-    canonicalizeJson({
-      comfyuiCoreRevision,
-      ...(customNodeRevision ? { customNodeRevision } : {}),
-      pythonPackages: [...pythonPackages].sort((a, b) => a.name.localeCompare(b.name)),
-      ...(cudaRequirement ? { cudaRequirement } : {}),
-      ...(computeCapability ? { computeCapability } : {})
-    })
-  );
+
+  // Validate no duplicate package names
+  const packageNames = new Set<string>();
+  for (const pkg of pythonPackages) {
+    if (packageNames.has(pkg.name)) {
+      throw new Error(`Duplicate package identity: "${pkg.name}"`);
+    }
+    packageNames.add(pkg.name);
+  }
+
+  // Canonical sorted packages
+  const sortedPackages = [...pythonPackages]
+    .map((p) => ({
+      name: p.name,
+      version: p.version,
+      ...(p.artifactHash ? { artifactHash: p.artifactHash } : {}),
+      ...(p.artifactMethod ? { artifactMethod: p.artifactMethod } : {})
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  // Canonical sorted source file hashes
+  let sortedSourceFiles: Record<string, string> | undefined;
+  if (sourceFileHashes) {
+    sortedSourceFiles = Object.keys(sourceFileHashes)
+      .sort((a, b) => a.localeCompare(b))
+      .reduce<Record<string, string>>((acc, key) => {
+        acc[key] = sourceFileHashes[key]!;
+        return acc;
+      }, {});
+  }
+
+  // Canonical sorted hooks
+  let sortedHooks:
+    | ReadonlyArray<{ name: string; modulePath: string; callable: string; phase: string }>
+    | undefined;
+  if (hooks) {
+    const hookKeys = new Set<string>();
+    for (const h of hooks) {
+      const key = `${h.name}:${h.modulePath}:${h.callable}:${h.phase}`;
+      if (hookKeys.has(key)) {
+        throw new Error(`Duplicate hook identity: "${key}"`);
+      }
+      hookKeys.add(key);
+    }
+    sortedHooks = [...hooks].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  const normalizedComputeCapability = computeCapability
+    ? computeCapability.replace(/^sm_(\d+)(\d)$/, "$1.$2")
+    : undefined;
+
+  const substrateObject: Record<string, unknown> = {
+    comfyuiCoreRevision,
+    ...(customNodeRevision ? { customNodeRevision } : {}),
+    ...(sortedSourceFiles ? { sourceFileHashes: sortedSourceFiles } : {}),
+    ...(interpreter ? { interpreter } : {}),
+    ...(pytorchBuild ? { pytorchBuild } : {}),
+    ...(cudaBuild ? { cudaBuild } : {}),
+    ...(driverConstraints && driverConstraints.length > 0
+      ? { driverConstraints: [...driverConstraints].sort() }
+      : {}),
+    pythonPackages: sortedPackages,
+    ...(cudaRequirement ? { cudaRequirement } : {}),
+    ...(normalizedComputeCapability ? { computeCapability: normalizedComputeCapability } : {}),
+    ...(instrumentationProtocol ? { instrumentationProtocol } : {}),
+    ...(collectorDigest ? { collectorDigest } : {}),
+    ...(hookManifestDigest ? { hookManifestDigest } : {}),
+    ...(sortedHooks ? { hooks: sortedHooks } : {})
+  };
+
+  return sha256Hex(canonicalizeJson(substrateObject));
 }
+
+// ---------------------------------------------------------------------------
+// Capability Handshake Schema (Live Child Verification)
+// ---------------------------------------------------------------------------
+export const MinimaxH3CapabilityHandshakeSchema = z
+  .object({
+    status: z.enum(["ok", "failed", "pending"]).optional(),
+    failureReason: z.string().optional(),
+    protocol: z.string().min(1),
+    protocolVersion: z.string().min(1),
+    runId: z.string().min(1),
+    attemptToken: z.string().min(1),
+    pid: z.number().int().positive(),
+    nonce: z.string().min(1),
+    collectorDigest: sha256HashSchema,
+    hookManifestDigest: sha256HashSchema,
+    kernelCallableAvailable: z.boolean().optional(),
+    installedHooks: z.array(
+      z
+        .object({
+          name: z.string().min(1),
+          modulePath: z.string().min(1),
+          callable: z.string().min(1),
+          phase: z.string().min(1),
+          attached: z.boolean(),
+          details: z.string().optional()
+        })
+        .strict()
+    ),
+    registeredNodes: z.record(
+      z.string(),
+      z
+        .object({
+          className: z.string().min(1),
+          module: z.string().optional(),
+          sourceFile: z.string().optional(),
+          moduleHash: sha256HashSchema.optional(),
+          revision: z.string().optional()
+        })
+        .strict()
+    ),
+    runtimeVersions: z
+      .object({
+        pythonVersion: z.string().min(1),
+        pythonExecutableHash: sha256HashSchema.nullable().optional(),
+        pythonAbiTag: z.string().nullable().optional(),
+        pythonCompiler: z.string().nullable().optional(),
+        pytorchVersion: z.string().optional(),
+        cudaBuildVersion: z.string().nullable().optional(),
+        cudaRuntimeVersion: z.string().nullable().optional(),
+        driverVersion: z.string().nullable().optional()
+      })
+      .strict()
+      .optional(),
+    packageIdentities: z
+      .array(
+        z
+          .object({
+            name: z.string().min(1),
+            version: z.string().min(1),
+            artifactHash: sha256HashSchema.optional(),
+            artifactMethod: z.string().optional()
+          })
+          .strict()
+      )
+      .optional(),
+    sourceIdentities: z.record(z.string(), sha256HashSchema).optional()
+  })
+  .strict();
+export type MinimaxH3CapabilityHandshake = z.infer<typeof MinimaxH3CapabilityHandshakeSchema>;
+
+export const MinimaxH3AttentionIdentityEnvelopeSchema = z
+  .object({
+    identityVersion: z.literal(1),
+    substrateDigest: sha256HashSchema,
+    interpreter: z
+      .object({
+        pythonVersion: z.string().min(1),
+        pythonExecutableHash: sha256HashSchema.optional(),
+        pythonAbi: z.string().optional(),
+        pythonCompiler: z.string().optional()
+      })
+      .strict(),
+    toolchain: z
+      .object({
+        pytorchBuild: z.string().min(1),
+        cudaBuildVersion: z.string().nullable(),
+        cudaRuntimeVersion: z.string().nullable(),
+        driverVersion: z.string().nullable()
+      })
+      .strict(),
+    packageArtifacts: z.array(
+      z
+        .object({
+          name: z.string().min(1),
+          version: z.string().min(1),
+          artifactHash: sha256HashSchema,
+          artifactMethod: z.string().min(1)
+        })
+        .strict()
+    ),
+    sourceIdentities: z.record(z.string(), sha256HashSchema),
+    registeredNodes: z.record(
+      z.string(),
+      z
+        .object({
+          className: z.string().min(1),
+          module: z.string().optional(),
+          sourceFile: z.string().optional(),
+          moduleHash: sha256HashSchema.optional(),
+          revision: z.string().optional()
+        })
+        .strict()
+    ),
+    handshake: MinimaxH3CapabilityHandshakeSchema
+  })
+  .strict();
+export type MinimaxH3AttentionIdentityEnvelope = z.infer<
+  typeof MinimaxH3AttentionIdentityEnvelopeSchema
+>;
 
 export function computeAttentionConfigDigest(params: {
   workflowDigest: string;
@@ -522,3 +818,42 @@ export const MinimaxH3AttentionEventMetadataSchema = z
   })
   .passthrough();
 export type MinimaxH3AttentionEventMetadata = z.infer<typeof MinimaxH3AttentionEventMetadataSchema>;
+
+export const STANDARD_MINIMAX_H3_HOOKS = Object.freeze([
+  {
+    name: "attention_deferred_import_hook",
+    modulePath: "builtins",
+    callable: "__import__",
+    phase: "attention"
+  },
+  {
+    name: "ksampler_sample",
+    modulePath: "comfy.samplers",
+    callable: "KSampler.sample",
+    phase: "sampling"
+  },
+  {
+    name: "load_models_gpu",
+    modulePath: "comfy.model_management",
+    callable: "load_models_gpu",
+    phase: "lazy_gpu_residency_transfer"
+  },
+  {
+    name: "minimax_h3_image_to_video_execute",
+    modulePath: "comfy_extras.nodes_minimax_h3",
+    callable: "MiniMaxH3ImageToVideo.execute",
+    phase: "conditioning"
+  },
+  {
+    name: "prompt_executor_execute",
+    modulePath: "execution",
+    callable: "PromptExecutor.execute",
+    phase: "prompt_execution"
+  },
+  {
+    name: "sampler_custom_advanced_execute",
+    modulePath: "comfy_extras.nodes_custom_sampler",
+    callable: "SamplerCustomAdvanced.execute",
+    phase: "sampling"
+  }
+] as const);

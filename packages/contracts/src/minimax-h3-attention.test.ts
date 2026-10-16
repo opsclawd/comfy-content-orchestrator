@@ -7,6 +7,10 @@ import {
   MinimaxH3AttentionExclusionMetadataSchema,
   computeAttentionTopologyDigest,
   computeAttentionCatalogDigest,
+  computeAttentionRuntimeLockDigest,
+  MinimaxH3CapabilityHandshakeSchema,
+  compareDottedVersions,
+  satisfiesDriverConstraint,
   type MinimaxH3AttentionCatalogEntry,
   type MinimaxH3AttentionPatchNode
 } from "./minimax-h3-attention.js";
@@ -289,6 +293,261 @@ describe("MiniMax-H3 Attention Contracts", () => {
       expect(event.metadata?.attentionCall).toBe("planned_dense");
       expect(event.metadata?.attentionStepRecord?.metadata?.reason).toBe("full-attention step");
       expect(event.metadata?.stepRecords?.[0]?.metadata?.reason).toBe("full-attention step");
+    });
+  });
+
+  describe("computeAttentionRuntimeLockDigest (Substrate Projection)", () => {
+    const baseManifest = {
+      comfyuiCoreRevision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+      sourceFileHashes: {
+        "comfy/model_management.py":
+          "1111111111111111111111111111111111111111111111111111111111111111",
+        "main.py": "2222222222222222222222222222222222222222222222222222222222222222",
+        "comfy/cli_args.py": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      interpreter: {
+        pythonVersion: "3.11.9",
+        pythonExecutableHash: "4444444444444444444444444444444444444444444444444444444444444444",
+        pythonAbi: "cpython-311-x86_64-linux-gnu",
+        pythonCompiler: "GCC 11.4.0"
+      },
+      pytorchBuild: "2.5.1+cu124",
+      cudaBuild: "12.4",
+      driverConstraints: [">=550.00.00"],
+      pythonPackages: [
+        {
+          name: "torch",
+          version: "2.5.1+cu124",
+          artifactHash: "5555555555555555555555555555555555555555555555555555555555555555",
+          artifactMethod: "installed_record_sha256_v1"
+        },
+        {
+          name: "sageattention",
+          version: "2.1.1",
+          artifactHash: "6666666666666666666666666666666666666666666666666666666666666666",
+          artifactMethod: "installed_record_sha256_v1"
+        }
+      ],
+      cudaRequirement: ">=12.4",
+      computeCapability: "sm_89",
+      instrumentationProtocol: "v2-jsonl",
+      collectorDigest: "7777777777777777777777777777777777777777777777777777777777777777",
+      hookManifestDigest: "8888888888888888888888888888888888888888888888888888888888888888",
+      hooks: [
+        {
+          name: "sampler_hook",
+          modulePath: "comfy.samplers",
+          callable: "sample",
+          phase: "sampling_step"
+        }
+      ]
+    };
+
+    it("computes deterministic digest and is insensitive to package or source key ordering", () => {
+      const digest1 = computeAttentionRuntimeLockDigest(baseManifest);
+      const reorderedManifest = {
+        ...baseManifest,
+        pythonPackages: [...baseManifest.pythonPackages].reverse(),
+        sourceFileHashes: {
+          "main.py": "2222222222222222222222222222222222222222222222222222222222222222",
+          "comfy/cli_args.py": "3333333333333333333333333333333333333333333333333333333333333333",
+          "comfy/model_management.py":
+            "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      };
+      const digest2 = computeAttentionRuntimeLockDigest(reorderedManifest);
+      expect(digest1).toBe(digest2);
+      expect(digest1).toMatch(/^[a-f0-9]{64}$/);
+    });
+
+    it("normalizes computeCapability so sm_89 and 8.9 produce identical lock digests", () => {
+      const digestSm = computeAttentionRuntimeLockDigest({
+        ...baseManifest,
+        computeCapability: "sm_89"
+      });
+      const digestDotted = computeAttentionRuntimeLockDigest({
+        ...baseManifest,
+        computeCapability: "8.9"
+      });
+      expect(digestSm).toBe(digestDotted);
+    });
+
+    it("projects packages to canonical identity, ignoring uncanonical fields like importModule", () => {
+      const digestWithoutImport = computeAttentionRuntimeLockDigest(baseManifest);
+      const digestWithImport = computeAttentionRuntimeLockDigest({
+        ...baseManifest,
+        pythonPackages: baseManifest.pythonPackages.map((p) => ({
+          ...p,
+          importModule: p.name === "torch" ? "torch" : "sageattention"
+        }))
+      });
+      expect(digestWithImport).toBe(digestWithoutImport);
+    });
+
+    it("changes digest when any interpreter, toolchain, source file, package, or hook changes", () => {
+      const baseDigest = computeAttentionRuntimeLockDigest(baseManifest);
+
+      // Interpreter changed
+      const changedPy = computeAttentionRuntimeLockDigest({
+        ...baseManifest,
+        interpreter: { ...baseManifest.interpreter, pythonVersion: "3.12.0" }
+      });
+      expect(changedPy).not.toBe(baseDigest);
+
+      // Toolchain pytorchBuild changed
+      const changedPt = computeAttentionRuntimeLockDigest({
+        ...baseManifest,
+        pytorchBuild: "2.6.0+cu124"
+      });
+      expect(changedPt).not.toBe(baseDigest);
+
+      // cudaBuild changed
+      const changedCuda = computeAttentionRuntimeLockDigest({
+        ...baseManifest,
+        cudaBuild: "12.6"
+      });
+      expect(changedCuda).not.toBe(baseDigest);
+
+      // Source file hash changed
+      const changedSrc = computeAttentionRuntimeLockDigest({
+        ...baseManifest,
+        sourceFileHashes: {
+          ...baseManifest.sourceFileHashes,
+          "main.py": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      });
+      expect(changedSrc).not.toBe(baseDigest);
+
+      // Package artifact changed
+      const changedPkg = computeAttentionRuntimeLockDigest({
+        ...baseManifest,
+        pythonPackages: [
+          baseManifest.pythonPackages[0]!,
+          {
+            ...baseManifest.pythonPackages[1]!,
+            artifactHash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ]
+      });
+      expect(changedPkg).not.toBe(baseDigest);
+
+      // Collector changed
+      const changedCollector = computeAttentionRuntimeLockDigest({
+        ...baseManifest,
+        collectorDigest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      });
+      expect(changedCollector).not.toBe(baseDigest);
+
+      // Hook changed
+      const changedHook = computeAttentionRuntimeLockDigest({
+        ...baseManifest,
+        hookManifestDigest: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      });
+      expect(changedHook).not.toBe(baseDigest);
+    });
+
+    it("rejects duplicate package identities or duplicate hooks", () => {
+      expect(() =>
+        computeAttentionRuntimeLockDigest({
+          ...baseManifest,
+          pythonPackages: [baseManifest.pythonPackages[0]!, baseManifest.pythonPackages[0]!]
+        })
+      ).toThrow(/Duplicate package identity/);
+
+      expect(() =>
+        computeAttentionRuntimeLockDigest({
+          ...baseManifest,
+          hooks: [baseManifest.hooks[0]!, baseManifest.hooks[0]!]
+        })
+      ).toThrow(/Duplicate hook identity/);
+    });
+  });
+
+  describe("MinimaxH3CapabilityHandshakeSchema", () => {
+    it("validates valid capability handshake payload", () => {
+      const valid = {
+        protocol: "v2-jsonl",
+        protocolVersion: "v2-jsonl",
+        runId: "run-001",
+        attemptToken: "attempt-1",
+        pid: 12345,
+        nonce: "test-nonce-123",
+        collectorDigest: "1111111111111111111111111111111111111111111111111111111111111111",
+        hookManifestDigest: "2222222222222222222222222222222222222222222222222222222222222222",
+        installedHooks: [
+          {
+            name: "sampler_hook",
+            modulePath: "comfy.samplers",
+            callable: "sample",
+            phase: "sampling_step",
+            attached: true
+          }
+        ],
+        registeredNodes: {
+          MiniMaxH3ImageToVideo: {
+            className: "MiniMaxH3ImageToVideo",
+            module: "comfy_extras.nodes_minimax_h3"
+          }
+        }
+      };
+      const parsed = MinimaxH3CapabilityHandshakeSchema.parse(valid);
+      expect(parsed.runId).toBe("run-001");
+      expect(parsed.registeredNodes.MiniMaxH3ImageToVideo?.className).toBe("MiniMaxH3ImageToVideo");
+    });
+  });
+
+  describe("compareDottedVersions & satisfiesDriverConstraint (F-780279b3)", () => {
+    it("compares valid dotted-numeric versions", () => {
+      expect(compareDottedVersions("560.35.03", "550.00.00")).toBe(1);
+      expect(compareDottedVersions("550.00.00", "560.35.03")).toBe(-1);
+      expect(compareDottedVersions("550.00", "550.0.0")).toBe(0);
+      expect(compareDottedVersions("12.4", "12.4.1")).toBe(-1);
+      expect(compareDottedVersions("12.4.1", "12.4")).toBe(1);
+    });
+
+    it("rejects invalid dotted-numeric version formats in compareDottedVersions", () => {
+      // Leading dot
+      expect(() => compareDottedVersions(".550.00", "550.00")).toThrow(/Invalid dotted-numeric/);
+      expect(() => compareDottedVersions("550.00", ".550.00")).toThrow(/Invalid dotted-numeric/);
+      // Trailing dot
+      expect(() => compareDottedVersions("550.00.", "550.00")).toThrow(/Invalid dotted-numeric/);
+      expect(() => compareDottedVersions("550.00", "550.00.")).toThrow(/Invalid dotted-numeric/);
+      // Doubled dot
+      expect(() => compareDottedVersions("560..35.03", "550.00")).toThrow(/Invalid dotted-numeric/);
+      expect(() => compareDottedVersions("550.00", "560..35.03")).toThrow(/Invalid dotted-numeric/);
+      // Dot only
+      expect(() => compareDottedVersions("...", "550.00")).toThrow(/Invalid dotted-numeric/);
+      expect(() => compareDottedVersions(".", "550.00")).toThrow(/Invalid dotted-numeric/);
+      // Empty string
+      expect(() => compareDottedVersions("", "550.00")).toThrow(/Invalid dotted-numeric/);
+      // Non-numeric
+      expect(() => compareDottedVersions("550.00a", "550.00")).toThrow(/Invalid dotted-numeric/);
+    });
+
+    it("evaluates valid driver constraints", () => {
+      expect(satisfiesDriverConstraint("560.35.03", ">=550.00.00").satisfied).toBe(true);
+      expect(satisfiesDriverConstraint("540.35.03", ">=550.00.00").satisfied).toBe(false);
+      expect(satisfiesDriverConstraint("550.00.00", "==550.00.00").satisfied).toBe(true);
+      expect(satisfiesDriverConstraint("550.00.01", "<550.00.00").satisfied).toBe(false);
+    });
+
+    it("fails closed on malformed driver versions in satisfiesDriverConstraint", () => {
+      expect(satisfiesDriverConstraint("560..35.03", ">=550.00.00").satisfied).toBe(false);
+      expect(satisfiesDriverConstraint(".560.35.03", ">=550.00.00").satisfied).toBe(false);
+      expect(satisfiesDriverConstraint("560.35.03.", ">=550.00.00").satisfied).toBe(false);
+      expect(satisfiesDriverConstraint("...", ">=550.00.00").satisfied).toBe(false);
+      expect(satisfiesDriverConstraint(".", ">=550.00.00").satisfied).toBe(false);
+      expect(satisfiesDriverConstraint("", ">=550.00.00").satisfied).toBe(false);
+    });
+
+    it("fails closed on malformed driver constraints in satisfiesDriverConstraint", () => {
+      expect(satisfiesDriverConstraint("560.35.03", ">=550..00").satisfied).toBe(false);
+      expect(satisfiesDriverConstraint("560.35.03", ">=.550.00").satisfied).toBe(false);
+      expect(satisfiesDriverConstraint("560.35.03", ">=550.00.").satisfied).toBe(false);
+      expect(satisfiesDriverConstraint("560.35.03", ">=...").satisfied).toBe(false);
+      expect(satisfiesDriverConstraint("560.35.03", ">=.").satisfied).toBe(false);
+      expect(satisfiesDriverConstraint("560.35.03", ">=").satisfied).toBe(false);
+      expect(satisfiesDriverConstraint("560.35.03", "").satisfied).toBe(false);
     });
   });
 });

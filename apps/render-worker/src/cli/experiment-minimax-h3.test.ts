@@ -23,6 +23,11 @@ import {
 } from "@cco/application";
 import {
   PINNED_COMFYUI_CORE_REVISION,
+  PINNED_COMFYUI_SOURCE_HASHES,
+  PINNED_COMFYUI_NODES_PY_SHA256,
+  PINNED_COMFYUI_NODES_MINIMAX_H3_PY_SHA256,
+  FASTH3_ISOLATED_CORE_REVISION,
+  FASTH3_COMFYUI_SOURCE_HASHES,
   buildRequiredRuntimeManifestFromAttentionCatalog,
   computeContinuityReferenceManifestDigest,
   computeContinuityReviewDigest,
@@ -41,7 +46,8 @@ import {
 import {
   CurrentPinExperimentRuntimeAdapter,
   IsolatedUpgradeExperimentRuntimeAdapter,
-  ExperimentRuntimeRegistry
+  ExperimentRuntimeRegistry,
+  setTestDriverQueryCommand
 } from "@cco/infrastructure";
 
 const mockI2vTemplate = {
@@ -307,7 +313,58 @@ function createMockDeps(): {
       nodesPresent: true
     }),
     verifyModels: async () => ({ ok: true, resolvedPaths: {} }),
-    verifyDiskSpace: async () => ({ ok: true, freeGb: 100 })
+    verifyDiskSpace: async () => ({ ok: true, freeGb: 100 }),
+    inspectEnvironmentIdentity: async (opts) => ({
+      ok: true,
+      interpreter: {
+        pythonVersion: "3.11.9",
+        pythonExecutableHash: "1".repeat(64),
+        pythonAbi: "cpython-311-x86_64-linux-gnu",
+        pythonCompiler: "GCC 11.2.0"
+      },
+      sourceFileHashes:
+        opts?.coreRevision === FASTH3_ISOLATED_CORE_REVISION
+          ? {
+              ...FASTH3_COMFYUI_SOURCE_HASHES,
+              "execution.py": "2".repeat(64),
+              "comfy/samplers.py": "3".repeat(64),
+              "comfy_extras/nodes_custom_sampler.py": "4".repeat(64),
+              "comfy/nodes_package.py": "5".repeat(64),
+              "nodes.py": "7".repeat(64)
+            }
+          : {
+              "execution.py": "2".repeat(64),
+              "comfy/samplers.py": "3".repeat(64),
+              "comfy_extras/nodes_custom_sampler.py": "4".repeat(64),
+              "comfy/nodes_package.py": "5".repeat(64),
+              "comfy_extras/nodes_minimax_h3.py": PINNED_COMFYUI_NODES_MINIMAX_H3_PY_SHA256,
+              "nodes.py": PINNED_COMFYUI_NODES_PY_SHA256,
+              "main.py": PINNED_COMFYUI_SOURCE_HASHES.mainSha256,
+              "comfy/model_management.py": PINNED_COMFYUI_SOURCE_HASHES.modelManagementSha256,
+              "comfy/cli_args.py": PINNED_COMFYUI_SOURCE_HASHES.cliArgsSha256,
+              "comfy_extras/nodes_sage_attention.py": "9".repeat(64)
+            },
+      pythonPackages: (
+        opts?.requiredPackages ?? [
+          { name: "torch", version: "2.5.1+cu124" },
+          { name: "sageattention", version: "2.1.1" }
+        ]
+      ).map((pkg) => ({
+        name: pkg.name,
+        version: pkg.version ?? "1.0.0",
+        artifactHash: "a".repeat(64),
+        artifactMethod: "installed_record_sha256_v1" as const,
+        importModule: pkg.importModule ?? pkg.name
+      })),
+      pytorchBuild: "2.5.1+cu124",
+      cudaBuild: "12.4",
+      driverConstraints: [">=550.00.00"]
+    }),
+    verifyExperimentRuntime: async () => ({
+      ok: true,
+      status: "verified" as const,
+      adapterRegistered: true
+    })
   };
 
   const runner: MinimaxH3ProcessRunnerPort = {
@@ -2620,7 +2677,7 @@ describe("experiment:minimax-h3 CLI", () => {
     });
 
     it("prepares and validates experiment with --sampling-recipe fasth3-i2v-8", async () => {
-      const { deps, stdout } = createMockDeps();
+      const { deps, stdout, stderr } = createMockDeps();
       const prepExit = await runExperimentCli(
         [
           "prepare",
@@ -2651,6 +2708,9 @@ describe("experiment:minimax-h3 CLI", () => {
         ],
         deps
       );
+      if (prepExit !== 0) {
+        expect(stderr).toEqual([]);
+      }
       expect(prepExit).toBe(0);
       const parsed = JSON.parse(stdout[0]!);
       expect(parsed.status).toBe("prepared");
@@ -2733,7 +2793,16 @@ describe("MiniMax-H3 Real Attention Catalog Runtime Manifest Verification (F-6d0
       "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf\n"
     );
 
+    setTestDriverQueryCommand({ command: "echo", args: ["560.35.03"] });
     const mockPythonScript = `#!/bin/sh
+if echo "$1" | grep -q "minimax-h3-package-inspector.py"; then
+  PKG="$2"
+  HASH=$(echo -n "$PKG" | sha256sum | cut -d' ' -f1)
+  VER="$3"
+  [ -z "$VER" ] && VER="2.5.1+cu124"
+  echo "ok:{\\"name\\": \\"$PKG\\", \\"version\\": \\"$VER\\", \\"artifactHash\\": \\"$HASH\\", \\"artifactMethod\\": \\"installed_record_sha256_v1\\"}"
+  exit 0
+fi
 if [ "$1" = "-c" ]; then
   if echo "$2" | grep -q "torch.__version__"; then
     echo "2.5.1+cu124|12.4"
@@ -2764,6 +2833,8 @@ exec /usr/bin/python3 "$@"
   });
 
   afterAll(() => {
+    setTestDriverQueryCommand(null);
+    delete process.env.CCO_DRIVER_VERSION_OVERRIDE;
     if (fs.existsSync(mockRootDir)) {
       fs.rmSync(mockRootDir, { recursive: true, force: true });
     }
@@ -2810,7 +2881,12 @@ exec /usr/bin/python3 "$@"
       coreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf"
     });
     const manifest = buildRequiredRuntimeManifestFromAttentionCatalog(entry, "i2v", {
-      sourceFileHashes: {}
+      sourceFileHashes: {
+        "comfy_extras/nodes_minimax_h3.py": "1".repeat(64)
+      },
+      collectorDigest: "c".repeat(64),
+      pytorchBuild: "2.5.1+cu124",
+      cudaBuild: "12.4"
     });
     expect(manifest.attentionKernel).toBe("comfy_kitchen.sol_attn");
 
@@ -2829,8 +2905,19 @@ exec /usr/bin/python3 "$@"
     const entry = getAttentionCatalogEntry("native-sol-attn", "i2v", {
       coreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf"
     });
+    const mockUpgradeSourceHash = sha256Hex(
+      fs.readFileSync(
+        path.join(mockUpgradeComfyDir, "comfy_extras", "nodes_minimax_h3.py"),
+        "utf-8"
+      )
+    );
     const manifest = buildRequiredRuntimeManifestFromAttentionCatalog(entry, "i2v", {
-      sourceFileHashes: {}
+      sourceFileHashes: {
+        "comfy_extras/nodes_minimax_h3.py": mockUpgradeSourceHash
+      },
+      collectorDigest: "c".repeat(64),
+      pytorchBuild: "2.5.1+cu124",
+      cudaBuild: "12.4"
     });
     expect(manifest.attentionKernel).toBe("comfy_kitchen.sol_attn");
 
@@ -2851,8 +2938,19 @@ exec /usr/bin/python3 "$@"
 
   it("verifies real veda catalog entry against IsolatedUpgradeExperimentRuntimeAdapter", async () => {
     const entry = getAttentionCatalogEntry("veda", "i2v");
+    const mockUpgradeSourceHash = sha256Hex(
+      fs.readFileSync(
+        path.join(mockUpgradeComfyDir, "comfy_extras", "nodes_minimax_h3.py"),
+        "utf-8"
+      )
+    );
     const manifest = buildRequiredRuntimeManifestFromAttentionCatalog(entry, "i2v", {
-      sourceFileHashes: {}
+      sourceFileHashes: {
+        "comfy_extras/nodes_minimax_h3.py": mockUpgradeSourceHash
+      },
+      collectorDigest: "c".repeat(64),
+      pytorchBuild: "2.5.1+cu124",
+      cudaBuild: "12.4"
     });
     expect(manifest.attentionKernel).toBe("veda_sparse_attention.triton_kernel");
 
@@ -2891,7 +2989,12 @@ exec /usr/bin/python3 "$@"
       coreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf"
     });
     const solManifest = buildRequiredRuntimeManifestFromAttentionCatalog(solEntry, "i2v", {
-      sourceFileHashes: {}
+      sourceFileHashes: {
+        "comfy_extras/nodes_minimax_h3.py": "1".repeat(64)
+      },
+      collectorDigest: "c".repeat(64),
+      pytorchBuild: "2.5.1+cu124",
+      cudaBuild: "12.4"
     });
     const solRes = await registry.verify({
       comfyUiDir: mockUpgradeComfyDir,
