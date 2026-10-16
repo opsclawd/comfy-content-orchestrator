@@ -32,12 +32,24 @@ describe("MiniMax-H3 Python Collector & Attention Hook", () => {
     await rm(testDir, { recursive: true, force: true });
   });
 
-  function createMockComfyModules(options: {
-    includeSage?: boolean;
-    throwInSage?: boolean;
-    throwInOptimized?: boolean;
-    customVedaSource?: string;
-  }) {
+  function createMockComfyModules(
+    options: {
+      includeSage?: boolean;
+      throwInSage?: boolean;
+      throwInOptimized?: boolean;
+      customVedaSource?: string;
+      omitCustomSampler?: boolean;
+      corruptCustomSampler?: boolean;
+      omitConditioning?: boolean;
+      corruptConditioning?: boolean;
+      omitKSampler?: boolean;
+      corruptKSampler?: boolean;
+      omitModelManagement?: boolean;
+      corruptModelManagement?: boolean;
+      omitExecution?: boolean;
+      corruptExecution?: boolean;
+    } = {}
+  ) {
     const attentionPy = `
 def sdp(q, k, v, *args, **kwargs):
     return "sdp_result"
@@ -64,6 +76,73 @@ def scaled_dot_product_attention(q, k, v, *args, **kwargs):
     return "scaled_dot_product_attention_result"
 `;
     writeFileSync(join(comfyDir, "comfy", "ops.py"), opsPy);
+
+    if (!options.omitModelManagement) {
+      const mmPy = options.corruptModelManagement
+        ? `load_models_gpu = "not_callable"`
+        : `
+def load_models_gpu(models, *args, **kwargs):
+    return models
+`;
+      writeFileSync(join(comfyDir, "comfy", "model_management.py"), mmPy);
+    }
+
+    if (!options.omitExecution) {
+      const execPy = options.corruptExecution
+        ? `class PromptExecutor:\n    execute = "not_callable"\n`
+        : `
+class PromptExecutor:
+    def execute(self, *args, **kwargs):
+        return "executor_result"
+`;
+      writeFileSync(join(comfyDir, "execution.py"), execPy);
+    }
+
+    if (!options.omitKSampler) {
+      const ksamplerPy = options.corruptKSampler
+        ? `class KSampler:\n    sample = "not_callable"\n`
+        : `
+class KSampler:
+    def sample(self, *args, **kwargs):
+        cb = kwargs.get("callback")
+        if cb:
+            cb(0, None, None, 1)
+        return "ksampler_result"
+`;
+      writeFileSync(join(comfyDir, "comfy", "samplers", "__init__.py"), ksamplerPy);
+    }
+
+    if (!options.omitCustomSampler) {
+      const customSamplerPy = options.corruptCustomSampler
+        ? `class SamplerCustomAdvanced:\n    execute = "not_callable"\n`
+        : `
+class SamplerCustomAdvanced:
+    @classmethod
+    def execute(cls, noise, guider, sampler, sigmas, latent_image, *args, **kwargs):
+        if hasattr(guider, "sample"):
+            return (guider.sample(noise, latent_image, sampler, sigmas),)
+        return (noise,)
+    sample = execute
+`;
+      writeFileSync(join(comfyDir, "comfy_extras", "nodes_custom_sampler.py"), customSamplerPy);
+    }
+
+    if (!options.omitConditioning) {
+      const conditioningPy = options.corruptConditioning
+        ? `class MiniMaxH3ImageToVideo:\n    execute = "not_callable"\nclass MiniMaxH3ReferenceToVideo:\n    execute = "not_callable"\n`
+        : `
+class MiniMaxH3ImageToVideo:
+    @classmethod
+    def execute(cls, clip, vae, prompt, width, height, length, first_frame=None, last_frame=None, audio_vae=None):
+        return ({"positive": prompt, "first_frame": first_frame, "last_frame": last_frame},)
+
+class MiniMaxH3ReferenceToVideo:
+    @classmethod
+    def execute(cls, clip, vae, prompt, width, height, length, ref_image_size, ref_images=None, audio_vae=None):
+        return ({"positive": prompt, "ref_images": ref_images},)
+`;
+      writeFileSync(join(comfyDir, "comfy_extras", "nodes_minimax_h3.py"), conditioningPy);
+    }
 
     const vedaPy =
       options.customVedaSource !== undefined
@@ -183,6 +262,10 @@ class VedaPatch:
       handshake?: string;
       taskMode?: string;
       referenceCount?: number;
+      stepRecords?: Array<{
+        stepIndex: number;
+        layerIndex?: number;
+      }>;
       attentionSummary?: {
         acceleratedCallCount: number;
         denseCallCount: number;
@@ -233,6 +316,9 @@ class VedaPatch:
         encoding: "utf-8"
       }
     );
+    if (res.status !== 0) {
+      console.log("DEBUG RES:", res.status, res.stderr, res.stdout);
+    }
 
     let events: CollectorTestEvent[] = [];
     if (existsSync(eventLogPath)) {
@@ -649,7 +735,7 @@ patch._dense_reason = lambda q, options: None
 patch._block_reason = lambda options: "full-attention layer"
 
 op = patch.make_override(attn.sdp)
-res = op(attn.sdp, None, None, None, extra_options={"block_index": 3})
+res = op(attn.sdp, None, None, None, extra_options={"block_index": 3, "step": 0})
 assert res == "sdp_result"
 print("BLOCK_REASON_PLANNED_SUCCEEDED")
 `;
@@ -1961,6 +2047,157 @@ print("REPEATED_INVOCATIONS_OK")
       expect(stepStarts.length).toBe(5);
       const indices = stepStarts.map((e) => (e as unknown as { stepIndex: number }).stepIndex);
       expect(indices).toEqual([0, 1, 0, 1, 2]);
+    });
+
+    it("does not misattribute calls buffered after a duplicate step-completion callback to the next step (F-a4b12b34)", async () => {
+      setupSamplerAndConditioningMocks();
+
+      // Exercises the running collector module's internals directly via
+      // sys.modules["__main__"] (the collector script itself, since it is always run
+      // as the top-level script by the bootstrap harness). Reproduces the reviewer's
+      // exact probe: call/callback(0), call/callback(0) [duplicate], call/callback(1).
+      const script = `
+import sys
+collector_mod = sys.modules["__main__"]
+
+buf = collector_mod.StepIntervalBuffer()
+token = collector_mod._SAMPLING_STEP_CALL_BUFFER.set(buf)
+try:
+    # Step 0: one accelerated call, then the step completes.
+    collector_mod._ATTENTION_TRACKER.record_accelerated("sage", "sageattention.sageattn", step_index=0)
+    collector_mod.flush_step_buffer(0)
+
+    # Duplicate completion callback for step 0 (e.g. a retried/duplicate sampler
+    # callback invocation). A call recorded after the first flush but before this
+    # duplicate completion must NOT silently bleed into step 1's flush below.
+    collector_mod._ATTENTION_TRACKER.record_accelerated("sage", "sageattention.sageattn", step_index=0)
+    collector_mod.flush_step_buffer(0)
+
+    # Step 1: one genuine accelerated call, then the step completes.
+    collector_mod._ATTENTION_TRACKER.record_accelerated("sage", "sageattention.sageattn", step_index=1)
+    collector_mod.flush_step_buffer(1)
+finally:
+    collector_mod._SAMPLING_STEP_CALL_BUFFER.reset(token)
+
+step_records = collector_mod._ATTENTION_TRACKER.step_records
+step_indices = [r["stepIndex"] for r in step_records]
+unflushed = collector_mod._ATTENTION_TRACKER.unflushed_calls_count
+print(f"STEP_INDICES={step_indices}")
+print(f"UNFLUSHED={unflushed}")
+print("DUPLICATE_STEP_PROBE_OK")
+`;
+
+      const result = runCollectorWithScript(script);
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("DUPLICATE_STEP_PROBE_OK");
+      // Exactly one record for step 0 and one for step 1 -- the duplicate-completion
+      // call must not have been attributed to step 1.
+      expect(result.stdout).toContain("STEP_INDICES=[0, 1]");
+      // The duplicate-completion call is retained as evidence of a genuine conflict
+      // (unflushed), not silently discarded or misattributed.
+      expect(result.stdout).toContain("UNFLUSHED=1");
+    });
+
+    it("fails closed and blocks the run when SamplerCustomAdvanced is missing", async () => {
+      createMockComfyModules({ omitCustomSampler: true });
+
+      const script = `
+print("SHOULD_NOT_EXECUTE")
+`;
+
+      const result = runCollectorWithScript(script);
+      expect(result.status).toBe(1);
+      expect(result.stdout).not.toContain("SHOULD_NOT_EXECUTE");
+
+      const startupEnd = result.events.find(
+        (e) => e.phase === "environment_startup" && e.type === "span_end"
+      );
+      expect(startupEnd?.outcome).toBe("failed");
+      expect(startupEnd?.error?.message).toContain("SamplerCustomAdvanced");
+    });
+
+    it("fails closed and blocks the run when SamplerCustomAdvanced execute is malformed", async () => {
+      createMockComfyModules({ corruptCustomSampler: true });
+
+      const script = `
+print("SHOULD_NOT_EXECUTE")
+`;
+
+      const result = runCollectorWithScript(script);
+      expect(result.status).toBe(1);
+      expect(result.stdout).not.toContain("SHOULD_NOT_EXECUTE");
+
+      const startupEnd = result.events.find(
+        (e) => e.phase === "environment_startup" && e.type === "span_end"
+      );
+      expect(startupEnd?.outcome).toBe("failed");
+      expect(startupEnd?.error?.message).toContain("SamplerCustomAdvanced");
+    });
+
+    it("fails closed when requested sparse kernel export has invalid parameter shape", async () => {
+      createMockComfyModules();
+
+      await mkdir(join(comfyDir, "comfy_kitchen"), { recursive: true });
+      writeFileSync(
+        join(comfyDir, "comfy_kitchen", "__init__.py"),
+        `def sol_attn(q):\n    return "invalid_shape"\n`
+      );
+
+      const script = `
+print("SHOULD_NOT_REACH_PAYLOAD")
+`;
+
+      const result = runCollectorWithScript(script, {
+        CCO_EXPERIMENT_EXPECTED_ATTENTION_BACKEND: "sol_attn"
+      });
+      expect(result.status).toBe(1);
+      expect(result.stdout).not.toContain("SHOULD_NOT_REACH_PAYLOAD");
+
+      const startupEnd = result.events.find(
+        (e) => e.phase === "environment_startup" && e.type === "span_end"
+      );
+      expect(startupEnd?.outcome).toBe("failed");
+    });
+
+    it("threads step and layer indices from sampling loop and callback to stepRecords", async () => {
+      createMockComfyModules({ includeSage: true });
+
+      const script = `
+import comfy_extras.nodes_custom_sampler as custom_sampler
+import comfy.ldm.modules.attention as comfy_attn
+
+class SteppingGuider:
+    def sample(self, noise, latent_image, sampler, sigmas, callback=None):
+        cb = callback
+        if cb is None and isinstance(latent_image, dict):
+            cb = latent_image.get("callback")
+        for step_idx in range(3):
+            comfy_attn.sageattn("q", "k", "v", extra_options={"layer": 5, "step": step_idx})
+            if cb:
+                cb(step_idx, f"x0_{step_idx}", f"x_{step_idx}", 3)
+        return {"samples": "ok"}
+
+guider = SteppingGuider()
+custom_sampler.SamplerCustomAdvanced.execute("noise", guider, "sampler", [], {})
+print("STEP_THREADING_OK")
+`;
+
+      const result = runCollectorWithScript(script);
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("STEP_THREADING_OK");
+
+      const teardownSummary = result.events.find(
+        (e) => e.phase === "teardown" && e.type === "point_event" && e.metadata?.stepRecords
+      );
+      expect(teardownSummary).toBeDefined();
+      const stepRecords = (
+        teardownSummary?.metadata as {
+          stepRecords: Array<{ stepIndex: number; layerIndex?: number }>;
+        }
+      ).stepRecords;
+      expect(stepRecords.length).toBe(3);
+      expect(stepRecords.map((r) => r.stepIndex)).toEqual([0, 1, 2]);
+      expect(stepRecords.every((r) => r.layerIndex === 5)).toBe(true);
     });
   });
 });

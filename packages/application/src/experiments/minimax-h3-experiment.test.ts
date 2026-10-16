@@ -1801,6 +1801,10 @@ describe("MiniMax-H3 Experiment Service V2 & Phase Accounting", () => {
     expect(validation.descriptor.schemaVersion).toBe(2);
 
     // Populate execution facts for reconciliation
+    await store.writeDurableJson(`${runDir}/attempt.json`, {
+      attemptToken: "att-v2-1",
+      runId: descriptor.runId
+    });
     await store.writeIntent(runDir, {
       runId: descriptor.runId,
       clientId: "client-v2",
@@ -1848,6 +1852,7 @@ describe("MiniMax-H3 Experiment Service V2 & Phase Accounting", () => {
         sequence: seq,
         runId: descriptor.runId,
         attemptToken: "att-v2-1",
+        ...(phase !== "environment_startup" ? { promptId: "prompt-v2-1" } : {}),
         spanId,
         phase,
         type: "span_start",
@@ -1862,6 +1867,7 @@ describe("MiniMax-H3 Experiment Service V2 & Phase Accounting", () => {
         sequence: seq,
         runId: descriptor.runId,
         attemptToken: "att-v2-1",
+        ...(phase !== "environment_startup" ? { promptId: "prompt-v2-1" } : {}),
         spanId,
         phase,
         type: "span_end",
@@ -2155,6 +2161,7 @@ describe("MiniMax-H3 Experiment Service V2 & Phase Accounting", () => {
         sequence: 2,
         runId: v2BaseDesc.runId,
         attemptToken: attemptTokenBase,
+        promptId: "prompt-base-1",
         spanId: "span-samp-1",
         phase: "sampling",
         type: "span_start",
@@ -2167,6 +2174,7 @@ describe("MiniMax-H3 Experiment Service V2 & Phase Accounting", () => {
         sequence: 3,
         runId: v2BaseDesc.runId,
         attemptToken: attemptTokenBase,
+        promptId: "prompt-base-1",
         spanId: "span-samp-1",
         phase: "sampling",
         type: "span_end",
@@ -2297,6 +2305,7 @@ describe("MiniMax-H3 Experiment Service V2 & Phase Accounting", () => {
         sequence: 2,
         runId: v2CandDesc.runId,
         attemptToken: attemptTokenCand,
+        promptId: "prompt-cand-1",
         spanId: "span-samp-2",
         phase: "sampling",
         type: "span_start",
@@ -2309,6 +2318,7 @@ describe("MiniMax-H3 Experiment Service V2 & Phase Accounting", () => {
         sequence: 3,
         runId: v2CandDesc.runId,
         attemptToken: attemptTokenCand,
+        promptId: "prompt-cand-1",
         spanId: "span-samp-2",
         phase: "sampling",
         type: "span_end",
@@ -4187,6 +4197,751 @@ describe("MiniMax-H3 Step Reduction Sampling Recipe Validation & Tampering Detec
       expect(execResult.execution.status).toBe("completed");
       expect(execResult.observedProvenance.capabilityHandshake?.status).toBe("ok");
       expect(childTerminated).toBe(true);
+    });
+  });
+
+  describe("Coverage Completeness, Attempt Correlation, & Fallback Reporting (Issue 450)", () => {
+    it("fails closed and filters out events when attempt.json is unreadable or missing", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+
+      const { runDir, descriptor } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt:
+          "A cinematic shot of a person smiling warmly, natural lighting, highly detailed skin texture, 8k hyperrealistic",
+        operatorLabel: "operator-01",
+        runId: "run-attempt-fail-closed",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        schemaVersion: 2
+      });
+
+      // Intentionally write a corrupt attempt.json file
+      await store.writeTextFile(`${runDir}/attempt.json`, "INVALID_JSON{{");
+
+      await store.writeReceipt(runDir, {
+        runId: descriptor.runId,
+        promptId: "prompt-att-1",
+        acceptedAt: "2026-10-12T10:00:01.000Z"
+      });
+      await store.writeTerminalEvidence(runDir, {
+        source: "history",
+        status: "success",
+        outputFilename: "output.mp4",
+        rawDetails: {
+          "prompt-att-1": {
+            status: { status_str: "success", completed: true, messages: [] }
+          }
+        }
+      });
+
+      // Append events that claim to be for this run
+      await store.appendPhaseEvent(runDir, {
+        protocolVersion: "v2-jsonl",
+        sequence: 1,
+        runId: descriptor.runId,
+        attemptToken: "claimed-attempt-token",
+        spanId: "span-1",
+        phase: "sampling",
+        type: "span_start",
+        boundarySource: "diagnostic",
+        clockDomain: "mono_child",
+        monotonicMs: 100.0,
+        promptId: "prompt-att-1"
+      });
+
+      const reconciled = (await service.reconcileExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      })) as MinimaxH3ExperimentResultV2;
+
+      // Must fail closed: events filtered out, conflict recorded, event count 0
+      expect(reconciled.instrumentationReport.eventCount).toBe(0);
+      expect(
+        reconciled.observedProvenance.conflicts.some((c) =>
+          c.includes("Attempt correlation failed closed")
+        )
+      ).toBe(true);
+      expect(
+        reconciled.observedProvenance.conflicts.some((c) =>
+          c.includes("Foreign events detected in events.jsonl")
+        )
+      ).toBe(true);
+    });
+
+    it("rejects null promptId for known prompts on execution events", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+
+      const { runDir, descriptor } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt:
+          "A cinematic shot of a person smiling warmly, natural lighting, highly detailed skin texture, 8k hyperrealistic",
+        operatorLabel: "operator-01",
+        runId: "run-null-prompt-reject",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        schemaVersion: 2
+      });
+
+      const attemptToken = "token-null-prompt";
+      await store.writeDurableJson(`${runDir}/attempt.json`, {
+        attemptToken,
+        runId: descriptor.runId
+      });
+      await store.writeReceipt(runDir, {
+        runId: descriptor.runId,
+        promptId: "prompt-known-123",
+        acceptedAt: "2026-10-12T10:00:01.000Z"
+      });
+      await store.writeTerminalEvidence(runDir, {
+        source: "history",
+        status: "success",
+        outputFilename: "output.mp4",
+        rawDetails: {
+          "prompt-known-123": {
+            status: { status_str: "success", completed: true, messages: [] }
+          }
+        }
+      });
+
+      // 1. Startup handshake event with null promptId (admitted because it precedes prompt execution)
+      await store.appendPhaseEvent(runDir, {
+        protocolVersion: "v2-jsonl",
+        sequence: 1,
+        runId: descriptor.runId,
+        attemptToken,
+        promptId: null as unknown as string,
+        spanId: "span-boot",
+        phase: "environment_startup",
+        type: "point_event",
+        boundarySource: "child_bootstrap",
+        clockDomain: "mono_child",
+        monotonicMs: 50.0,
+        metadata: {
+          handshake: "v2-jsonl",
+          collectorDigest: (descriptor as MinimaxH3ExperimentDescriptorV2).requiredRuntime
+            .collectorDigest,
+          hookManifestDigest: (descriptor as MinimaxH3ExperimentDescriptorV2).requiredRuntime
+            .hookManifestDigest
+        }
+      });
+
+      // 2. Execution event with explicit null promptId (must be rejected)
+      await store.appendPhaseEvent(runDir, {
+        protocolVersion: "v2-jsonl",
+        sequence: 2,
+        runId: descriptor.runId,
+        attemptToken,
+        promptId: null as unknown as string,
+        spanId: "span-unbound-sampling",
+        phase: "sampling",
+        type: "span_start",
+        boundarySource: "diagnostic",
+        clockDomain: "mono_child",
+        monotonicMs: 100.0
+      });
+
+      // 3. Execution event with valid promptId (must be admitted)
+      await store.appendPhaseEvent(runDir, {
+        protocolVersion: "v2-jsonl",
+        sequence: 3,
+        runId: descriptor.runId,
+        attemptToken,
+        promptId: "prompt-known-123",
+        spanId: "span-valid-sampling",
+        phase: "sampling",
+        type: "span_start",
+        boundarySource: "diagnostic",
+        clockDomain: "mono_child",
+        monotonicMs: 150.0
+      });
+
+      const reconciled = (await service.reconcileExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      })) as MinimaxH3ExperimentResultV2;
+
+      // Event 1 (startup) and Event 3 (matching prompt) admitted; Event 2 (null prompt during execution) rejected
+      expect(reconciled.instrumentationReport.eventCount).toBe(2);
+      expect(
+        reconciled.observedProvenance.conflicts.some((c) =>
+          c.includes("Foreign events detected in events.jsonl: 1 event(s) did not match")
+        )
+      ).toBe(true);
+    });
+
+    it("surfaces silent attention fallback as failure even if media output completed cleanly", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+
+      const { runDir, descriptor } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt:
+          "A cinematic shot of a person smiling warmly, natural lighting, highly detailed skin texture, 8k hyperrealistic",
+        operatorLabel: "operator-01",
+        runId: "run-silent-fallback-failure",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        schemaVersion: 2,
+        samplingRecipe: "fasth3-i2v-8"
+      });
+
+      const attemptToken = "token-fallback-test";
+      await store.writeDurableJson(`${runDir}/attempt.json`, {
+        attemptToken,
+        runId: descriptor.runId
+      });
+      await store.writeReceipt(runDir, {
+        runId: descriptor.runId,
+        promptId: "prompt-fallback-1",
+        acceptedAt: "2026-10-12T10:00:01.000Z"
+      });
+      // ComfyUI history claims media succeeded cleanly!
+      await store.writeTerminalEvidence(runDir, {
+        source: "history",
+        status: "success",
+        outputFilename: "output.mp4",
+        rawDetails: {
+          "prompt-fallback-1": {
+            status: { status_str: "success", completed: true, messages: [] },
+            outputs: {
+              "92": { videos: [{ filename: "output.mp4" }] }
+            }
+          }
+        }
+      });
+
+      // Include startup handshake with expected digests
+      await store.appendPhaseEvent(runDir, {
+        protocolVersion: "v2-jsonl",
+        sequence: 1,
+        runId: descriptor.runId,
+        attemptToken,
+        spanId: "span-boot",
+        phase: "environment_startup",
+        type: "point_event",
+        boundarySource: "child_bootstrap",
+        clockDomain: "mono_child",
+        monotonicMs: 50.0,
+        metadata: {
+          handshake: "v2-jsonl",
+          collectorDigest: (descriptor as MinimaxH3ExperimentDescriptorV2).requiredRuntime
+            .collectorDigest,
+          hookManifestDigest: (descriptor as MinimaxH3ExperimentDescriptorV2).requiredRuntime
+            .hookManifestDigest
+        }
+      });
+
+      // Emitted attention events reveal a silent fallback to dense PyTorch SDPA
+      await store.appendPhaseEvent(runDir, {
+        protocolVersion: "v2-jsonl",
+        sequence: 2,
+        runId: descriptor.runId,
+        attemptToken,
+        promptId: "prompt-fallback-1",
+        spanId: "span-fallback-1",
+        phase: "sampling",
+        type: "point_event",
+        boundarySource: "diagnostic",
+        clockDomain: "mono_child",
+        monotonicMs: 200.0,
+        metadata: {
+          attentionEvent: "fallback",
+          requestedBackend: "block_sparse_triton",
+          fallbackBackend: "torch_sdpa",
+          reason: "Triton kernel failed; falling back to dense torch_sdpa",
+          stepIndex: 1,
+          layerIndex: 0
+        }
+      });
+
+      const reconciled = (await service.reconcileExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      })) as MinimaxH3ExperimentResultV2;
+
+      // Must NOT be reported as clean completion!
+      expect(reconciled.execution.status).toBe("failed");
+      expect(reconciled.lifecycle).toBe("failed");
+      expect(reconciled.execution.engineError).not.toBeNull();
+      expect(reconciled.execution.engineError?.message).toContain("Attention fallback detected");
+      expect(reconciled.stopRecommendation.recommended).toBe(true);
+      expect(reconciled.stopRecommendation.reasons).toContain("attention_fallback_detected");
+    });
+
+    it("surfaces incomplete attention step coverage as failure even if media output completed cleanly", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+
+      const { runDir, descriptor } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt:
+          "A cinematic shot of a person smiling warmly, natural lighting, highly detailed skin texture, 8k hyperrealistic",
+        operatorLabel: "operator-01",
+        runId: "run-incomplete-step-coverage",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        schemaVersion: 2,
+        samplingRecipe: "fasth3-i2v-8" // expects 8 steps (0..7)
+      });
+
+      const attemptToken = "token-incomplete-test";
+      await store.writeDurableJson(`${runDir}/attempt.json`, {
+        attemptToken,
+        runId: descriptor.runId
+      });
+      await store.writeReceipt(runDir, {
+        runId: descriptor.runId,
+        promptId: "prompt-incomplete-1",
+        acceptedAt: "2026-10-12T10:00:01.000Z"
+      });
+      await store.writeTerminalEvidence(runDir, {
+        source: "history",
+        status: "success",
+        outputFilename: "output.mp4",
+        rawDetails: {
+          "prompt-incomplete-1": {
+            status: { status_str: "success", completed: true, messages: [] },
+            outputs: {
+              "92": { videos: [{ filename: "output.mp4" }] }
+            }
+          }
+        }
+      });
+
+      // Include startup handshake with expected digests
+      await store.appendPhaseEvent(runDir, {
+        protocolVersion: "v2-jsonl",
+        sequence: 1,
+        runId: descriptor.runId,
+        attemptToken,
+        spanId: "span-boot",
+        phase: "environment_startup",
+        type: "point_event",
+        boundarySource: "child_bootstrap",
+        clockDomain: "mono_child",
+        monotonicMs: 50.0,
+        metadata: {
+          handshake: "v2-jsonl",
+          collectorDigest: (descriptor as MinimaxH3ExperimentDescriptorV2).requiredRuntime
+            .collectorDigest,
+          hookManifestDigest: (descriptor as MinimaxH3ExperimentDescriptorV2).requiredRuntime
+            .hookManifestDigest
+        }
+      });
+
+      // Emit records for step 0 and 1 only (missing steps 2..7)
+      await store.appendPhaseEvent(runDir, {
+        protocolVersion: "v2-jsonl",
+        sequence: 2,
+        runId: descriptor.runId,
+        attemptToken,
+        promptId: "prompt-incomplete-1",
+        spanId: "span-step-0",
+        phase: "sampling",
+        type: "point_event",
+        boundarySource: "diagnostic",
+        clockDomain: "mono_child",
+        monotonicMs: 200.0,
+        metadata: {
+          attentionCall: "accelerated",
+          attentionStepRecord: {
+            stepIndex: 0,
+            layerIndex: 0,
+            backend: "comfy kitchen attention",
+            implementation: "block_sparse_triton",
+            callType: "accelerated"
+          }
+        }
+      });
+      await store.appendPhaseEvent(runDir, {
+        protocolVersion: "v2-jsonl",
+        sequence: 3,
+        runId: descriptor.runId,
+        attemptToken,
+        promptId: "prompt-incomplete-1",
+        spanId: "span-step-1",
+        phase: "sampling",
+        type: "point_event",
+        boundarySource: "diagnostic",
+        clockDomain: "mono_child",
+        monotonicMs: 300.0,
+        metadata: {
+          attentionCall: "accelerated",
+          attentionStepRecord: {
+            stepIndex: 1,
+            layerIndex: 0,
+            backend: "comfy kitchen attention",
+            implementation: "block_sparse_triton",
+            callType: "accelerated"
+          }
+        }
+      });
+
+      // Emit enclosing sampling span to record diagnostic timing evidence
+      await store.appendPhaseEvent(runDir, {
+        protocolVersion: "v2-jsonl",
+        sequence: 4,
+        runId: descriptor.runId,
+        attemptToken,
+        promptId: "prompt-incomplete-1",
+        spanId: "span-sampling-parent",
+        phase: "sampling",
+        type: "span_start",
+        boundarySource: "diagnostic",
+        clockDomain: "mono_child",
+        monotonicMs: 150.0
+      });
+      await store.appendPhaseEvent(runDir, {
+        protocolVersion: "v2-jsonl",
+        sequence: 5,
+        runId: descriptor.runId,
+        attemptToken,
+        promptId: "prompt-incomplete-1",
+        spanId: "span-sampling-parent",
+        phase: "sampling",
+        type: "span_end",
+        outcome: "success",
+        boundarySource: "diagnostic",
+        clockDomain: "mono_child",
+        monotonicMs: 350.0
+      });
+
+      const reconciled = (await service.reconcileExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      })) as MinimaxH3ExperimentResultV2;
+
+      // Incomplete coverage must be flagged and override execution completion
+      expect(reconciled.attentionObservation?.measurementCoverage.complete).toBe(false);
+      expect(reconciled.execution.status).toBe("failed");
+      expect(reconciled.lifecycle).toBe("failed");
+      expect(reconciled.execution.engineError?.message).toContain("incomplete");
+      expect(reconciled.stopRecommendation.reasons).toContain("attention_incomplete_coverage");
+    });
+
+    it("reports attention measurement coverage complete only once a genuine capability handshake is validated, with full per-step evidence [AC-5, F-799002ee, F-aa019999]", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+
+      const { runDir, descriptor } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt:
+          "A cinematic shot of a person smiling warmly, natural lighting, highly detailed skin texture, 8k hyperrealistic",
+        operatorLabel: "operator-01",
+        runId: "run-complete-step-coverage",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        schemaVersion: 2,
+        samplingRecipe: "fasth3-i2v-8" // expects 8 steps (0..7)
+      });
+      const v2Desc = descriptor as MinimaxH3ExperimentDescriptorV2;
+
+      const attemptToken = "token-complete-test";
+      await store.writeDurableJson(`${runDir}/attempt.json`, {
+        attemptToken,
+        runId: v2Desc.runId
+      });
+
+      // A genuine, independently-validated pre-submission capability handshake --
+      // without this, measurement coverage must never be reported complete (AC-5).
+      const capabilityHandshake = {
+        status: "ok" as const,
+        protocol: "v2-jsonl",
+        protocolVersion: "v2-jsonl",
+        runId: v2Desc.runId,
+        attemptToken,
+        pid: 12345,
+        nonce: "boot-nonce-complete",
+        collectorDigest: v2Desc.requiredRuntime.collectorDigest,
+        hookManifestDigest: v2Desc.requiredRuntime.hookManifestDigest,
+        kernelCallableAvailable: true,
+        installedHooks: STANDARD_MINIMAX_H3_HOOKS.map((h) => ({ ...h, attached: true })),
+        registeredNodes: {
+          MiniMaxH3ImageToVideo: {
+            className: "MiniMaxH3ImageToVideo",
+            module: "comfy_extras.nodes_minimax_h3"
+          },
+          BlockSparseAttention: {
+            className: "BlockSparseAttention",
+            module: "comfy_extras.nodes_minimax_h3"
+          },
+          ModelAttentionBackend: {
+            className: "ModelAttentionBackend",
+            module: "comfy_extras.nodes_minimax_h3"
+          },
+          MiniMaxH3SigmaShift: {
+            className: "MiniMaxH3SigmaShift",
+            module: "comfy_extras.nodes_minimax_h3"
+          }
+        },
+        runtimeVersions: {
+          driverVersion: "560.35.03",
+          cudaBuildVersion: v2Desc.requiredRuntime.cudaBuild ?? "12.4",
+          cudaRuntimeVersion: "12.4",
+          pytorchVersion: v2Desc.requiredRuntime.pytorchBuild ?? "2.5.1+cu124",
+          pythonVersion: v2Desc.requiredRuntime.interpreter?.pythonVersion ?? "3.11.9"
+        },
+        packageIdentities: (v2Desc.requiredRuntime.pythonPackages ?? []).map((p) => ({
+          name: p.name,
+          version: p.version,
+          ...(p.artifactHash ? { artifactHash: p.artifactHash } : {}),
+          ...(p.artifactMethod ? { artifactMethod: p.artifactMethod } : {})
+        })),
+        ...(v2Desc.requiredRuntime.sourceFileHashes
+          ? { sourceIdentities: v2Desc.requiredRuntime.sourceFileHashes }
+          : {})
+      };
+      await store.writeDurableJson(`${runDir}/capability-handshake.json`, capabilityHandshake);
+      await store.writeIntent(runDir, {
+        runId: v2Desc.runId,
+        clientId: `client-${v2Desc.runId}`,
+        workflowDigest: v2Desc.derivedWorkflowDigest,
+        requestFingerprint: "fp-complete",
+        timestamp: "2026-10-12T10:00:00.000Z",
+        attemptToken,
+        pid: 12345,
+        handshakeNonce: "boot-nonce-complete",
+        capabilityHandshakeDigest: sha256Hex(canonicalizeJson(capabilityHandshake))
+      });
+
+      await store.writeReceipt(runDir, {
+        runId: v2Desc.runId,
+        promptId: "prompt-complete-1",
+        acceptedAt: "2026-10-12T10:00:01.000Z"
+      });
+      await store.writeTerminalEvidence(runDir, {
+        source: "history",
+        status: "success",
+        outputFilename: "output.mp4",
+        rawDetails: {
+          "prompt-complete-1": {
+            status: { status_str: "success", completed: true, messages: [] },
+            outputs: {
+              "92": { videos: [{ filename: "output.mp4" }] }
+            }
+          }
+        }
+      });
+
+      await store.appendPhaseEvent(runDir, {
+        protocolVersion: "v2-jsonl",
+        sequence: 1,
+        runId: v2Desc.runId,
+        attemptToken,
+        spanId: "span-boot",
+        phase: "environment_startup",
+        type: "point_event",
+        boundarySource: "child_bootstrap",
+        clockDomain: "mono_child",
+        monotonicMs: 50.0,
+        metadata: {
+          handshake: "v2-jsonl",
+          collectorDigest: v2Desc.requiredRuntime.collectorDigest,
+          hookManifestDigest: v2Desc.requiredRuntime.hookManifestDigest
+        }
+      });
+
+      // Full per-step coverage: an attentionStepRecord point event AND a sampling_step
+      // span_end with outcome "success" for every one of steps 0..7.
+      let seq = 2;
+      for (let step = 0; step < 8; step++) {
+        await store.appendPhaseEvent(runDir, {
+          protocolVersion: "v2-jsonl",
+          sequence: seq++,
+          runId: v2Desc.runId,
+          attemptToken,
+          promptId: "prompt-complete-1",
+          spanId: `span-step-${step}`,
+          phase: "sampling",
+          type: "point_event",
+          boundarySource: "diagnostic",
+          clockDomain: "mono_child",
+          monotonicMs: 200.0 + step * 10,
+          metadata: {
+            attentionCall: "accelerated",
+            attentionStepRecord: {
+              stepIndex: step,
+              layerIndex: 0,
+              backend: "comfy kitchen attention",
+              implementation: "block_sparse_triton",
+              callType: "accelerated"
+            }
+          }
+        });
+        await store.appendPhaseEvent(runDir, {
+          protocolVersion: "v2-jsonl",
+          sequence: seq++,
+          runId: v2Desc.runId,
+          attemptToken,
+          promptId: "prompt-complete-1",
+          spanId: `span-sampling-step-${step}`,
+          phase: "sampling_step",
+          type: "span_end",
+          outcome: "success",
+          stepIndex: step,
+          boundarySource: "diagnostic",
+          clockDomain: "mono_child",
+          monotonicMs: 205.0 + step * 10
+        });
+      }
+
+      await store.appendPhaseEvent(runDir, {
+        protocolVersion: "v2-jsonl",
+        sequence: seq++,
+        runId: v2Desc.runId,
+        attemptToken,
+        promptId: "prompt-complete-1",
+        spanId: "span-sampling-parent",
+        phase: "sampling",
+        type: "span_start",
+        boundarySource: "diagnostic",
+        clockDomain: "mono_child",
+        monotonicMs: 150.0
+      });
+      await store.appendPhaseEvent(runDir, {
+        protocolVersion: "v2-jsonl",
+        sequence: seq++,
+        runId: v2Desc.runId,
+        attemptToken,
+        promptId: "prompt-complete-1",
+        spanId: "span-sampling-parent",
+        phase: "sampling",
+        type: "span_end",
+        outcome: "success",
+        boundarySource: "diagnostic",
+        clockDomain: "mono_child",
+        monotonicMs: 400.0
+      });
+
+      const reconciled = (await service.reconcileExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      })) as MinimaxH3ExperimentResultV2;
+
+      expect(reconciled.attentionObservation?.status).toBe("verified");
+      expect(reconciled.attentionObservation?.measurementCoverage.complete).toBe(true);
+      expect(reconciled.execution.status).toBe("completed");
+      expect(reconciled.lifecycle).toBe("completed");
+    });
+
+    it("preserves noncompleted lifecycle states like interrupted during attention failure", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+      const { runDir, descriptor } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "Interrupted test",
+        operatorLabel: "operator-01",
+        runId: "attn-interrupted-test",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        schemaVersion: 2,
+        samplingRecipe: "fasth3-i2v-8"
+      });
+
+      const attemptToken = "token-interrupted-test";
+      await store.writeDurableJson(`${runDir}/attempt.json`, {
+        attemptToken,
+        runId: descriptor.runId
+      });
+      await store.writeReceipt(runDir, {
+        runId: descriptor.runId,
+        promptId: "prompt-interrupted-1",
+        acceptedAt: "2026-10-12T10:00:01.000Z"
+      });
+      // Deliberate stop with status interrupted
+      await store.writeTerminalEvidence(runDir, {
+        source: "history",
+        status: "interrupted",
+        rawDetails: {
+          "prompt-interrupted-1": {
+            status: { status_str: "interrupted", completed: false, messages: [] }
+          }
+        }
+      });
+
+      await store.appendPhaseEvent(runDir, {
+        protocolVersion: "v2-jsonl",
+        sequence: 1,
+        runId: descriptor.runId,
+        attemptToken,
+        spanId: "span-boot",
+        phase: "environment_startup",
+        type: "point_event",
+        boundarySource: "child_bootstrap",
+        clockDomain: "mono_child",
+        monotonicMs: 50.0,
+        metadata: {
+          handshake: "v2-jsonl",
+          collectorDigest: (descriptor as MinimaxH3ExperimentDescriptorV2).requiredRuntime
+            .collectorDigest,
+          hookManifestDigest: (descriptor as MinimaxH3ExperimentDescriptorV2).requiredRuntime
+            .hookManifestDigest
+        }
+      });
+
+      // Emitting fallback event during sampling
+      await store.appendPhaseEvent(runDir, {
+        protocolVersion: "v2-jsonl",
+        sequence: 2,
+        runId: descriptor.runId,
+        attemptToken,
+        promptId: "prompt-interrupted-1",
+        spanId: "span-fallback",
+        phase: "sampling",
+        type: "point_event",
+        boundarySource: "diagnostic",
+        clockDomain: "mono_child",
+        monotonicMs: 200.0,
+        metadata: {
+          attentionEvent: "fallback",
+          requestedBackend: "sage",
+          fallbackBackend: "torch_sdpa",
+          reason: "sageattention missing",
+          stepIndex: 0
+        }
+      });
+
+      const reconciled = (await service.reconcileExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      })) as MinimaxH3ExperimentResultV2;
+
+      // Noncompleted interrupted lifecycle must be preserved (not overridden to failed)
+      expect(reconciled.lifecycle).toBe("interrupted");
+      expect(reconciled.execution.status).toBe("unknown");
+      expect(reconciled.stopRecommendation.reasons).toContain("attention_fallback_detected");
     });
   });
 });

@@ -696,7 +696,7 @@ export type MinimaxH3AttentionRequest = z.infer<typeof MinimaxH3AttentionRequest
 // ---------------------------------------------------------------------------
 export const MinimaxH3AttentionFallbackEventSchema = z
   .object({
-    stepIndex: z.number().int().nonnegative(),
+    stepIndex: z.number().int().nonnegative().nullable(),
     layerIndex: z.number().int().nonnegative().nullable(),
     requestedBackend: z.string().min(1),
     fallbackBackend: z.string().min(1),
@@ -741,6 +741,8 @@ export const MinimaxH3AttentionObservationSchema = z
     acceleratedCallCount: z.number().int().nonnegative(),
     denseCallCount: z.number().int().nonnegative(),
     plannedDenseCallCount: z.number().int().nonnegative(),
+    unflushedCallCount: z.number().int().nonnegative().optional(),
+    unattributedCallCount: z.number().int().nonnegative().optional(),
     fallbackEvents: z.array(MinimaxH3AttentionFallbackEventSchema),
     stepRecords: z.array(MinimaxH3AttentionStepRecordSchema).optional(),
     failureReason: z.string().min(1).nullable(),
@@ -775,6 +777,8 @@ export const MinimaxH3AttentionSummaryMetadataSchema = z
     acceleratedCallCount: z.number().int().nonnegative().optional(),
     denseCallCount: z.number().int().nonnegative().optional(),
     plannedDenseCallCount: z.number().int().nonnegative().optional(),
+    unflushedCallCount: z.number().int().nonnegative().optional(),
+    unattributedCallCount: z.number().int().nonnegative().optional(),
     fallbackEvents: z.array(MinimaxH3AttentionFallbackEventSchema).optional(),
     failureReason: z.string().nullable().optional(),
     missingKernelFailure: z.string().nullable().optional(),
@@ -799,7 +803,7 @@ export const MinimaxH3AttentionEventMetadataSchema = z
     requestedBackend: z.string().optional(),
     fallbackBackend: z.string().optional(),
     reason: z.string().optional(),
-    stepIndex: z.number().int().nonnegative().optional(),
+    stepIndex: z.number().int().nonnegative().nullable().optional(),
     layerIndex: z.number().int().nonnegative().nullable().optional(),
     backend: z.string().optional(),
     implementation: z.string().optional(),
@@ -842,6 +846,12 @@ export const STANDARD_MINIMAX_H3_HOOKS = Object.freeze([
     name: "minimax_h3_image_to_video_execute",
     modulePath: "comfy_extras.nodes_minimax_h3",
     callable: "MiniMaxH3ImageToVideo.execute",
+    phase: "conditioning"
+  },
+  {
+    name: "minimax_h3_reference_to_video_execute",
+    modulePath: "comfy_extras.nodes_minimax_h3",
+    callable: "MiniMaxH3ReferenceToVideo.execute",
     phase: "conditioning"
   },
   {

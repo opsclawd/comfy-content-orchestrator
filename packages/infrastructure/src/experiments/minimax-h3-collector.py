@@ -36,6 +36,59 @@ _IN_DENSE_DISPATCH: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "_IN_DENSE_DISPATCH", default=False
 )
 
+class StepIntervalBuffer:
+    def __init__(self):
+        self.pending_calls = []
+        self.completed_step_indices = set()
+
+_SAMPLING_STEP_CALL_BUFFER: contextvars.ContextVar[Optional[StepIntervalBuffer]] = contextvars.ContextVar(
+    "_SAMPLING_STEP_CALL_BUFFER", default=None
+)
+
+_HOOK_INSTALL_ERROR: Optional[str] = None
+
+def _validate_callable_shape(fn: Any, min_params: int = 0) -> bool:
+    if not callable(fn):
+        return False
+    # Explicit adapter: torch.nn.functional.scaled_dot_product_attention may be a C builtin without signature
+    try:
+        import torch.nn.functional as F
+        if fn is getattr(F, "scaled_dot_product_attention", None):
+            return True
+    except Exception:
+        pass
+
+    try:
+        sig = inspect.signature(fn)
+    except (ValueError, TypeError):
+        # Fail closed on uninspectable callables without an explicit adapter
+        return False
+
+    params = list(sig.parameters.values())
+    pos_params = [
+        p for p in params
+        if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    offset = 1 if pos_params and pos_params[0].name in ("self", "cls") else 0
+
+    dummy = [object()] * (min_params + offset)
+    try:
+        sig.bind(*dummy)
+        return True
+    except TypeError:
+        return False
+
+def _parse_nonnegative_int(val: Any) -> Optional[int]:
+    if val is None or isinstance(val, bool):
+        return None
+    if isinstance(val, int):
+        return val if val >= 0 else None
+    if isinstance(val, str):
+        s = val.strip()
+        if s.isdigit():
+            return int(s)
+    return None
+
 # Clock domain: Monotonic child clock
 def now_mono_ms() -> float:
     return time.monotonic() * 1000.0
@@ -92,7 +145,9 @@ class Collector:
         if class_type is not None:
             record["classType"] = str(class_type)
         if step_index is not None:
-            record["stepIndex"] = int(step_index)
+            parsed_step = _parse_nonnegative_int(step_index)
+            if parsed_step is not None:
+                record["stepIndex"] = parsed_step
         if outcome is not None:
             record["outcome"] = outcome
         if error is not None:
@@ -207,6 +262,8 @@ class AttentionTracker:
         self.accelerated_call_count = 0
         self.dense_call_count = 0
         self.planned_dense_call_count = 0
+        self.unflushed_calls_count = 0
+        self.unattributed_call_count = 0
         self.fallback_events = []
         self.step_records = []
         self.actual_backend = None
@@ -218,36 +275,85 @@ class AttentionTracker:
         self.expected_backend = os.environ.get("CCO_EXPERIMENT_EXPECTED_ATTENTION_BACKEND", os.environ.get("CCO_EXPECTED_ATTENTION_BACKEND"))
         allow_planned = os.environ.get("CCO_EXPERIMENT_ALLOW_PLANNED_DENSE", "true")
         self.allow_planned_dense = allow_planned.lower() in ("1", "true", "yes")
-        self.current_step_index = None
 
-    def record_accelerated(self, backend: str, impl: str, step_index: Optional[int] = None):
+    def reset(self):
         with self._lock:
-            step_idx = step_index if step_index is not None else self.current_step_index
+            self.accelerated_call_count = 0
+            self.dense_call_count = 0
+            self.planned_dense_call_count = 0
+            self.unflushed_calls_count = 0
+            self.unattributed_call_count = 0
+            self.fallback_events.clear()
+            self.step_records.clear()
+            self.actual_backend = None
+            self.dispatch_impl = None
+            self.missing_kernel_failure = None
+            self.status = "unknown"
+            self.failure_reason = None
+            self.dtype_diagnostics.clear()
+
+    def record_accelerated(
+        self,
+        backend: str,
+        impl: str,
+        step_index: Optional[int] = None,
+        layer_index: Optional[int] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ):
+        with self._lock:
+            buf = _SAMPLING_STEP_CALL_BUFFER.get()
             self.accelerated_call_count += 1
             self.actual_backend = backend
             self.dispatch_impl = impl
             if self.status != "fallback" and self.status != "failed":
                 self.status = "verified"
-            if step_idx is not None:
-                self.step_records.append({
-                    "stepIndex": int(step_idx),
-                    "backend": backend,
-                    "implementation": impl,
-                    "callType": "accelerated",
-                    "monotonicMs": now_mono_ms()
-                })
+
+            step_idx = _parse_nonnegative_int(step_index)
+            layer_idx = _parse_nonnegative_int(layer_index)
+
+            call_payload = {
+                "backend": backend,
+                "implementation": impl,
+                "callType": "accelerated",
+                "directStep": step_idx,
+                "layerIndex": layer_idx,
+                "monotonicMs": now_mono_ms()
+            }
+            if metadata:
+                call_payload["metadata"] = metadata
+
+            if buf is not None:
+                buf.pending_calls.append(call_payload)
+            else:
+                if step_idx is not None:
+                    rec = {
+                        "stepIndex": step_idx,
+                        "layerIndex": layer_idx,
+                        "backend": backend,
+                        "implementation": impl,
+                        "callType": "accelerated",
+                        "monotonicMs": call_payload["monotonicMs"]
+                    }
+                    if metadata:
+                        rec["metadata"] = metadata
+                    self.step_records.append(rec)
+                else:
+                    self.unattributed_call_count += 1
 
     def record_dense(
         self,
         is_planned: bool = False,
         metadata: Optional[Dict[str, Any]] = None,
-        step_index: Optional[int] = None
+        step_index: Optional[int] = None,
+        layer_index: Optional[int] = None
     ):
         with self._lock:
-            step_idx = step_index if step_index is not None else self.current_step_index
+            buf = _SAMPLING_STEP_CALL_BUFFER.get()
             is_accelerated = bool(
                 self.expected_backend and self.expected_backend not in ("torch_sdpa", "dense", "default")
             )
+            step_idx = _parse_nonnegative_int(step_index)
+            layer_idx = _parse_nonnegative_int(layer_index)
 
             if not is_planned:
                 self.dense_call_count += 1
@@ -255,13 +361,13 @@ class AttentionTracker:
                     reason = "Unexpected dense attention call executed during accelerated regime"
                     if not self.allow_planned_dense:
                         reason += " (allowPlannedDense=false)"
-                    self.record_fallback(self.expected_backend, "torch_sdpa", reason, step_index=step_idx or 0, terminal=True)
+                    self.record_fallback(self.expected_backend, "torch_sdpa", reason, step_index=step_idx, terminal=True)
                     return
             else:
                 if not self.allow_planned_dense:
                     self.dense_call_count += 1
                     reason = "Planned dense attention call executed under zero-dense policy regime (allowPlannedDense=false)"
-                    self.record_fallback(self.expected_backend, "torch_sdpa", reason, step_index=step_idx or 0, terminal=True)
+                    self.record_fallback(self.expected_backend, "torch_sdpa", reason, step_index=step_idx, terminal=True)
                     return
                 self.planned_dense_call_count += 1
 
@@ -271,27 +377,46 @@ class AttentionTracker:
                     self.dispatch_impl = "torch.nn.functional.scaled_dot_product_attention"
                     self.status = "verified"
 
-            call_record = {
-                "stepIndex": int(step_idx) if step_idx is not None else 0,
+            call_payload = {
                 "backend": "torch_sdpa",
                 "implementation": "torch.nn.functional.scaled_dot_product_attention",
                 "callType": "planned_dense" if is_planned else "dense",
+                "directStep": step_idx,
+                "layerIndex": layer_idx,
                 "monotonicMs": now_mono_ms()
             }
             if metadata:
-                call_record["metadata"] = metadata
-            self.step_records.append(call_record)
+                call_payload["metadata"] = metadata
+
+            if buf is not None:
+                buf.pending_calls.append(call_payload)
+            else:
+                if step_idx is not None:
+                    rec = {
+                        "stepIndex": step_idx,
+                        "layerIndex": layer_idx,
+                        "backend": "torch_sdpa",
+                        "implementation": "torch.nn.functional.scaled_dot_product_attention",
+                        "callType": "planned_dense" if is_planned else "dense",
+                        "monotonicMs": call_payload["monotonicMs"]
+                    }
+                    if metadata:
+                        rec["metadata"] = metadata
+                    self.step_records.append(rec)
+                else:
+                    self.unattributed_call_count += 1
 
     def record_fallback(
         self,
         requested: str,
         fallback: str,
         reason: str,
-        step_index: int = 0,
+        step_index: Optional[int] = None,
         terminal: bool = False
     ):
+        s_idx = _parse_nonnegative_int(step_index)
         event = {
-            "stepIndex": int(step_index),
+            "stepIndex": s_idx,
             "layerIndex": None,
             "requestedBackend": requested,
             "fallbackBackend": fallback,
@@ -302,17 +427,36 @@ class AttentionTracker:
             self.fallback_events.append(event)
             self.status = "fallback"
             self.failure_reason = reason
-            self.step_records.append({
-                "stepIndex": int(step_index),
-                "backend": fallback,
-                "implementation": "torch.nn.functional.scaled_dot_product_attention",
-                "callType": "fallback",
-                "monotonicMs": now_mono_ms()
-            })
+            if s_idx is not None:
+                self.step_records.append({
+                    "stepIndex": s_idx,
+                    "backend": fallback,
+                    "implementation": "torch.nn.functional.scaled_dot_product_attention",
+                    "callType": "fallback",
+                    "monotonicMs": now_mono_ms()
+                })
+            else:
+                self.unattributed_call_count += 1
             is_accelerated = bool(
                 self.expected_backend and self.expected_backend not in ("torch_sdpa", "dense", "default")
             )
             should_fail_terminal = terminal or is_accelerated
+        if _GLOBAL_COLLECTOR and not _GLOBAL_COLLECTOR.file.closed:
+            try:
+                _GLOBAL_COLLECTOR.emit(
+                    phase="sampling",
+                    event_type="point_event",
+                    span_id=_GLOBAL_COLLECTOR.next_span_id("attn-fallback"),
+                    step_index=s_idx,
+                    metadata={
+                        "attentionEvent": "fallback",
+                        "requestedBackend": requested,
+                        "fallbackBackend": fallback,
+                        "reason": reason
+                    }
+                )
+            except Exception:
+                pass
         if should_fail_terminal:
             self.status = "failed"
             print(f"[ERROR] Terminal attention experiment failure: {reason}", file=sys.stderr)
@@ -331,21 +475,83 @@ class AttentionTracker:
 
     def summary(self) -> Dict[str, Any]:
         with self._lock:
+            eff_status = self.status
+            eff_reason = self.failure_reason
+            if self.unflushed_calls_count > 0:
+                if eff_status != "failed":
+                    eff_status = "fallback"
+                    if not eff_reason:
+                        eff_reason = (
+                            f"Attention evidence incomplete: {self.unflushed_calls_count} unflushed call(s)"
+                        )
             return {
                 "acceleratedCallCount": self.accelerated_call_count,
                 "denseCallCount": self.dense_call_count,
                 "plannedDenseCallCount": self.planned_dense_call_count,
+                "unflushedCallCount": self.unflushed_calls_count,
+                "unattributedCallCount": self.unattributed_call_count,
                 "fallbackEvents": list(self.fallback_events),
                 "actualBackend": self.actual_backend,
                 "dispatchImplementation": self.dispatch_impl,
                 "missingKernelFailure": self.missing_kernel_failure,
-                "status": self.status,
-                "failureReason": self.failure_reason,
+                "status": eff_status,
+                "failureReason": eff_reason,
                 "dtypeLayoutDiagnostics": dict(self.dtype_diagnostics)
             }
 
 _ATTENTION_TRACKER = AttentionTracker()
 _GLOBAL_COLLECTOR: Optional[Collector] = None
+
+def flush_step_buffer(step_idx: int):
+    s_idx = _parse_nonnegative_int(step_idx)
+    if s_idx is None:
+        return
+    buf = _SAMPLING_STEP_CALL_BUFFER.get()
+    if buf is None:
+        return
+    with _ATTENTION_TRACKER._lock:
+        if s_idx in buf.completed_step_indices:
+            # Duplicate completion callback for an already-flushed step index. Any calls
+            # buffered since the prior flush belong to this duplicate completion, not to
+            # whatever step is flushed next -- without this, they silently bleed into the
+            # next flush_step_buffer() call and get misattributed to a different step
+            # (F-a4b12b34). Count them as unflushed instead of discarding the evidence
+            # entirely.
+            if buf.pending_calls:
+                _ATTENTION_TRACKER.unflushed_calls_count += len(buf.pending_calls)
+                buf.pending_calls.clear()
+            return
+        buf.completed_step_indices.add(s_idx)
+        calls_to_flush = list(buf.pending_calls)
+        buf.pending_calls.clear()
+        for call in calls_to_flush:
+            direct = call.get("directStep")
+            if direct is not None and direct != s_idx:
+                _ATTENTION_TRACKER.record_fallback(
+                    _ATTENTION_TRACKER.expected_backend or call["backend"],
+                    "torch_sdpa",
+                    f"Contradictory step index: direct={direct} vs callback={s_idx}",
+                    step_index=s_idx
+                )
+            rec = {
+                "stepIndex": s_idx,
+                "layerIndex": call.get("layerIndex"),
+                "backend": call["backend"],
+                "implementation": call["implementation"],
+                "callType": call["callType"],
+                "monotonicMs": call["monotonicMs"]
+            }
+            if "metadata" in call and call["metadata"]:
+                rec["metadata"] = call["metadata"]
+            _ATTENTION_TRACKER.step_records.append(rec)
+            if _GLOBAL_COLLECTOR and not _GLOBAL_COLLECTOR.file.closed:
+                _GLOBAL_COLLECTOR.emit(
+                    phase="sampling",
+                    event_type="point_event",
+                    span_id=_GLOBAL_COLLECTOR.next_span_id("attn-step-rec"),
+                    step_index=s_idx,
+                    metadata={"attentionStepRecord": rec}
+                )
 
 def get_global_collector() -> Optional[Collector]:
     return _GLOBAL_COLLECTOR
@@ -447,7 +653,7 @@ def extract_layer_and_step(args, kwargs):
                     break
             if layer is None and "block" in d and d["block"] is not None:
                 b = d["block"]
-                if isinstance(b, (list, tuple)) and len(b) > 1 and isinstance(b[1], int):
+                if isinstance(b, (list, tuple)) and len(b) > 1 and isinstance(b[1], int) and not isinstance(b[1], bool):
                     layer = b[1]
                 else:
                     layer = b
@@ -478,7 +684,18 @@ def extract_layer_and_step(args, kwargs):
                 if isinstance(v, dict):
                     inspect_dict(v)
 
-    return layer, step
+    if layer is None or step is None:
+        excl = _CURRENT_PLANNED_EXCLUSION.get()
+        if excl and isinstance(excl, dict):
+            if layer is None and excl.get("layer") is not None:
+                layer = excl.get("layer")
+            if step is None and excl.get("step") is not None:
+                step = excl.get("step")
+
+    norm_layer = _parse_nonnegative_int(layer)
+    norm_step = _parse_nonnegative_int(step)
+
+    return norm_layer, norm_step
 
 def is_verified_veda_patch_class(cls) -> bool:
     if not isinstance(cls, type):
@@ -734,6 +951,23 @@ def get_installed_hooks_evidence() -> list:
         "attached": attached_cond
     })
 
+    attached_ref = False
+    try:
+        import comfy_extras.nodes_minimax_h3 as nmh3
+        node = getattr(nmh3, "MiniMaxH3ReferenceToVideo", None)
+        raw = getattr(node, "__dict__", {}).get("execute", None)
+        unbound = getattr(raw, "__func__", raw)
+        attached_ref = bool(unbound is not None and getattr(unbound, "_cco_hooked", False) is True and unbound is _INSTALLED_WRAPPERS.get("minimax_h3_reference_to_video_execute"))
+    except Exception:
+        pass
+    hooks.append({
+        "name": "minimax_h3_reference_to_video_execute",
+        "modulePath": "comfy_extras.nodes_minimax_h3",
+        "callable": "MiniMaxH3ReferenceToVideo.execute",
+        "phase": "conditioning",
+        "attached": attached_ref
+    })
+
     attached_pe = False
     try:
         import execution
@@ -833,6 +1067,11 @@ def register_capability_route(prompt_server, collector: Collector):
             except Exception:
                 pass
 
+            try:
+                install_hooks(collector)
+            except Exception:
+                pass
+
             installed_hooks = get_installed_hooks_evidence()
             hook_manifest_digest = compute_hook_manifest_digest(installed_hooks)
             collector_digest = get_collector_digest()
@@ -888,17 +1127,71 @@ def register_capability_route(prompt_server, collector: Collector):
             try:
                 import torch
                 import torch.nn.functional as F
-                base_callable = hasattr(F, "scaled_dot_product_attention") and callable(F.scaled_dot_product_attention)
-                if not expected_backend or expected_backend in ("sdpa", "torch_sdpa"):
-                    kernel_callable_available = base_callable
+                base_callable = hasattr(F, "scaled_dot_product_attention") and _validate_callable_shape(F.scaled_dot_product_attention, min_params=3)
+                sdpa_wrapper = _INSTALLED_WRAPPERS.get("torch_sdpa")
+                sdpa_attached = bool(
+                    sdpa_wrapper is not None
+                    and getattr(F.scaled_dot_product_attention, "_cco_hooked", False) is True
+                    and F.scaled_dot_product_attention is sdpa_wrapper
+                )
+
+                if not expected_backend or expected_backend in ("sdpa", "torch_sdpa", "dense", "default"):
+                    kernel_callable_available = bool(base_callable and sdpa_attached)
                 elif "sage" in expected_backend:
                     import sageattention
-                    kernel_callable_available = hasattr(sageattention, "sageattn") and callable(sageattention.sageattn)
+                    cand_valid = hasattr(sageattention, "sageattn") and _validate_callable_shape(sageattention.sageattn, min_params=3)
+                    comfy_attn = sys.modules.get("comfy.ldm.modules.attention")
+                    sage_target = None
+                    if comfy_attn:
+                        for attr in ("sageattn", "attention_sage", "sageattn3"):
+                            cand_t = getattr(comfy_attn, attr, None)
+                            if cand_t is not None:
+                                sage_target = cand_t
+                                break
+                    wrapper_attached = bool(
+                        sage_target is not None
+                        and getattr(sage_target, "_cco_hooked", False) is True
+                        and (
+                            sage_target is _INSTALLED_WRAPPERS.get("sageattn")
+                            or sage_target is _INSTALLED_WRAPPERS.get("attention_sage")
+                            or sage_target is _INSTALLED_WRAPPERS.get("sageattn3")
+                        )
+                    )
+                    kernel_callable_available = bool(cand_valid and wrapper_attached)
                 elif "kitchen" in expected_backend or "sol" in expected_backend:
                     import comfy_kitchen
-                    kernel_callable_available = hasattr(comfy_kitchen, "sol_attn") and callable(comfy_kitchen.sol_attn)
+                    if "chunked" in expected_backend or "block" in expected_backend:
+                        cand_valid = hasattr(comfy_kitchen, "sol_attn_chunked") and _validate_callable_shape(comfy_kitchen.sol_attn_chunked, min_params=3)
+                        chunk_target = getattr(comfy_kitchen, "sol_attn_chunked", None)
+                        wrapper_attached = bool(
+                            chunk_target is not None
+                            and getattr(chunk_target, "_cco_hooked", False) is True
+                            and _INSTALLED_WRAPPERS.get("sol_attn_chunked") is not None
+                            and chunk_target is _INSTALLED_WRAPPERS.get("sol_attn_chunked")
+                        )
+                    else:
+                        cand_valid = hasattr(comfy_kitchen, "sol_attn") and _validate_callable_shape(comfy_kitchen.sol_attn, min_params=3)
+                        sol_target = getattr(comfy_kitchen, "sol_attn", None)
+                        wrapper_attached = bool(
+                            sol_target is not None
+                            and getattr(sol_target, "_cco_hooked", False) is True
+                            and _INSTALLED_WRAPPERS.get("sol_attn") is not None
+                            and sol_target is _INSTALLED_WRAPPERS.get("sol_attn")
+                        )
+                    kernel_callable_available = bool(cand_valid and wrapper_attached)
+                elif "veda" in expected_backend:
+                    import veda_sparse_attention
+                    cand_valid = hasattr(veda_sparse_attention, "triton_kernel") and _validate_callable_shape(veda_sparse_attention.triton_kernel, min_params=3)
+                    veda_target = getattr(veda_sparse_attention, "triton_kernel", None)
+                    wrapper_attached = bool(
+                        veda_target is not None
+                        and getattr(veda_target, "_cco_hooked", False) is True
+                        and _INSTALLED_WRAPPERS.get("veda_kernel") is not None
+                        and veda_target is _INSTALLED_WRAPPERS.get("veda_kernel")
+                    )
+                    kernel_callable_available = bool(cand_valid and wrapper_attached)
                 else:
-                    kernel_callable_available = base_callable
+                    kernel_callable_available = False
             except Exception:
                 kernel_callable_available = False
 
@@ -991,9 +1284,22 @@ def register_capability_route(prompt_server, collector: Collector):
             except Exception:
                 pass
 
-            all_hooks_attached = all(h.get("attached", False) for h in installed_hooks)
-            status_val = "ok" if all_hooks_attached else "pending"
-            failure_reason = None if all_hooks_attached else "deferred_hooks_pending"
+            all_hooks_attached = bool(installed_hooks and all(h.get("attached", False) for h in installed_hooks))
+            if _HOOK_INSTALL_ERROR:
+                status_val = "failed"
+                failure_reason = f"hook_install_error: {_HOOK_INSTALL_ERROR}"
+            elif all_hooks_attached and kernel_callable_available:
+                status_val = "ok"
+                failure_reason = None
+            else:
+                status_val = "failed"
+                reasons = []
+                if not all_hooks_attached:
+                    unattached = [h["name"] for h in installed_hooks if not h.get("attached", False)]
+                    reasons.append(f"unattached_hooks: {', '.join(unattached)}")
+                if not kernel_callable_available:
+                    reasons.append(f"kernel_unavailable_or_invalid: {expected_backend or 'none'}")
+                failure_reason = "; ".join(reasons)
 
             handshake_payload = {
                 "status": status_val,
@@ -1032,18 +1338,61 @@ def register_capability_route(prompt_server, collector: Collector):
     except Exception:
         pass
 
+_IN_INSTALL_HOOKS = False
+
 def install_hooks(collector: Collector):
     """
     Hook into ComfyUI modules in-memory.
     Wraps model loading, node execution, sampling loops, and teardown.
+    Fails closed if required hooks are missing or malformed when targeting ComfyUI.
     """
+    global _IN_INSTALL_HOOKS, _HOOK_INSTALL_ERROR
+    if _IN_INSTALL_HOOKS:
+        return
+    _IN_INSTALL_HOOKS = True
+    try:
+        _install_hooks_inner(collector)
+    except Exception as e:
+        _HOOK_INSTALL_ERROR = str(e)
+        raise
+    finally:
+        _IN_INSTALL_HOOKS = False
+
+def _install_hooks_inner(collector: Collector):
     global _IN_DENSE_DISPATCH
+
+    target_script = _BOOTSTRAP_ENTRYPOINT or os.environ.get("CCO_EXPERIMENT_BOOTSTRAP_ENTRYPOINT")
+    target_dir = os.path.dirname(os.path.abspath(target_script)) if target_script else ""
+    if target_dir and target_dir not in sys.path:
+        sys.path.insert(0, target_dir)
+
+    comfy_target = False
+    if (
+        "comfy" in sys.modules
+        or "execution" in sys.modules
+        or "server" in sys.modules
+        or "nodes" in sys.modules
+        or (target_dir and os.path.isdir(os.path.join(target_dir, "comfy")))
+        or (target_dir and os.path.isfile(os.path.join(target_dir, "execution.py")))
+    ):
+        comfy_target = True
+    else:
+        try:
+            import comfy
+            comfy_target = True
+        except ImportError:
+            pass
 
     # 1. Hook comfy.model_management for lazy GPU transfers
     try:
         import comfy.model_management as mm
         orig_load_models_gpu = getattr(mm, "load_models_gpu", None)
-        if orig_load_models_gpu:
+        if getattr(orig_load_models_gpu, "_cco_hooked", False):
+            pass
+        elif not callable(orig_load_models_gpu) or not _validate_callable_shape(orig_load_models_gpu, min_params=1):
+            if comfy_target:
+                raise RuntimeError("Required hook missing or malformed: comfy.model_management.load_models_gpu")
+        else:
             def hooked_load_models_gpu(*args, **kwargs):
                 span_id = collector.start_span("lazy_gpu_residency_transfer")
                 try:
@@ -1056,55 +1405,93 @@ def install_hooks(collector: Collector):
             hooked_load_models_gpu._cco_hooked = True
             mm.load_models_gpu = hooked_load_models_gpu
             _INSTALLED_WRAPPERS["load_models_gpu"] = hooked_load_models_gpu
-    except (ImportError, AttributeError):
-        pass
+    except Exception as e:
+        if comfy_target:
+            raise RuntimeError(f"Required hook missing or malformed: comfy.model_management.load_models_gpu ({e})") from e
 
     # 2. Hook execution.PromptExecutor / nodes execution
     try:
         import execution
         prompt_executor_cls = getattr(execution, "PromptExecutor", None)
-        if prompt_executor_cls:
-            orig_execute = getattr(prompt_executor_cls, "execute", None)
-            if orig_execute:
-                def hooked_prompt_execute(self, *args, **kwargs):
-                    # Try to extract prompt_id from args if available
-                    if args and len(args) > 1 and isinstance(args[1], str):
-                        collector.prompt_id = args[1]
+        orig_execute = getattr(prompt_executor_cls, "execute", None) if prompt_executor_cls else None
+        if getattr(orig_execute, "_cco_hooked", False):
+            pass
+        elif not callable(orig_execute) or not _validate_callable_shape(orig_execute, min_params=2):
+            if comfy_target:
+                raise RuntimeError("Required hook missing or malformed: execution.PromptExecutor.execute")
+        else:
+            def hooked_prompt_execute(self, *args, **kwargs):
+                new_prompt_id = None
+                if "prompt_id" in kwargs and isinstance(kwargs["prompt_id"], str):
+                    new_prompt_id = kwargs["prompt_id"]
+                elif args and len(args) > 1 and isinstance(args[1], str):
+                    new_prompt_id = args[1]
+                prev_prompt_id = collector.prompt_id
+                if new_prompt_id:
+                    collector.prompt_id = new_prompt_id
+                    _ATTENTION_TRACKER.reset()
+                try:
                     return orig_execute(self, *args, **kwargs)
-                hooked_prompt_execute._cco_hooked = True
-                prompt_executor_cls.execute = hooked_prompt_execute
-                _INSTALLED_WRAPPERS["prompt_executor_execute"] = hooked_prompt_execute
-    except (ImportError, AttributeError):
-        pass
+                finally:
+                    if new_prompt_id:
+                        try:
+                            summary = _ATTENTION_TRACKER.summary()
+                            collector.emit(
+                                phase="teardown",
+                                event_type="point_event",
+                                span_id=collector.next_span_id("attn-summary"),
+                                boundary_source="diagnostic",
+                                metadata={
+                                    "attentionSummary": summary,
+                                    "stepRecords": list(_ATTENTION_TRACKER.step_records)
+                                }
+                            )
+                        except Exception:
+                            pass
+                        collector.prompt_id = prev_prompt_id
+            hooked_prompt_execute._cco_hooked = True
+            prompt_executor_cls.execute = hooked_prompt_execute
+            _INSTALLED_WRAPPERS["prompt_executor_execute"] = hooked_prompt_execute
+    except Exception as e:
+        if comfy_target:
+            raise RuntimeError(f"Required hook missing or malformed: execution.PromptExecutor.execute ({e})") from e
 
     # 3. Hook comfy.samplers for sampling and step boundaries
     try:
         import comfy.samplers as samplers
         ksampler_cls = getattr(samplers, "KSampler", None)
-        if ksampler_cls:
-            orig_sample = getattr(ksampler_cls, "sample", None)
-            if orig_sample:
-                def hooked_sample(self, *args, **kwargs):
-                    sampler_span_id = collector.start_span("sampling", class_type="KSampler")
-                    state = {
-                        "last_step_end_ms": None,
-                        "seen_steps": set()
-                    }
+        orig_sample = getattr(ksampler_cls, "sample", None) if ksampler_cls else None
+        if getattr(orig_sample, "_cco_hooked", False):
+            pass
+        elif not callable(orig_sample) or not _validate_callable_shape(orig_sample, min_params=2):
+            if comfy_target:
+                raise RuntimeError("Required hook missing or malformed: comfy.samplers.KSampler.sample")
+        else:
+            def hooked_sample(self, *args, **kwargs):
+                sampler_span_id = collector.start_span("sampling", class_type="KSampler")
+                state = {
+                    "last_step_end_ms": None,
+                    "seen_steps": set()
+                }
+                buf = StepIntervalBuffer()
+                token_buf = _SAMPLING_STEP_CALL_BUFFER.set(buf)
 
-                    orig_cb = None
-                    cb_is_positional = False
-                    cb_arg_index = None
+                orig_cb = None
+                cb_is_positional = False
+                cb_arg_index = None
 
-                    if "callback" in kwargs:
-                        orig_cb = kwargs["callback"]
-                    elif len(args) > 10:
-                        orig_cb = args[10]
-                        cb_is_positional = True
-                        cb_arg_index = 10
+                if "callback" in kwargs:
+                    orig_cb = kwargs["callback"]
+                elif len(args) > 10:
+                    orig_cb = args[10]
+                    cb_is_positional = True
+                    cb_arg_index = 10
 
-                    def ksampler_cb(step, x0, x, total_steps, *cb_args, **cb_kwargs):
-                        cur_idx = step if isinstance(step, int) else None
-                        if cur_idx is not None and cur_idx not in state["seen_steps"]:
+                def ksampler_cb(step, x0, x, total_steps, *cb_args, **cb_kwargs):
+                    cur_idx = _parse_nonnegative_int(step)
+                    if cur_idx is not None:
+                        flush_step_buffer(cur_idx)
+                        if cur_idx not in state["seen_steps"]:
                             state["seen_steps"].add(cur_idx)
                             now = now_mono_ms()
                             span_id = collector.next_span_id("step")
@@ -1126,63 +1513,88 @@ def install_hooks(collector: Collector):
                                 outcome="success"
                             )
 
-                        if orig_cb:
-                            return orig_cb(step, x0, x, total_steps, *cb_args, **cb_kwargs)
+                    if orig_cb:
+                        return orig_cb(step, x0, x, total_steps, *cb_args, **cb_kwargs)
 
-                    if cb_is_positional and cb_arg_index is not None:
-                        args_list = list(args)
-                        args_list[cb_arg_index] = ksampler_cb
-                        args = tuple(args_list)
-                    else:
-                        kwargs["callback"] = ksampler_cb
+                if cb_is_positional and cb_arg_index is not None:
+                    args_list = list(args)
+                    args_list[cb_arg_index] = ksampler_cb
+                    args = tuple(args_list)
+                else:
+                    kwargs["callback"] = ksampler_cb
 
-                    try:
-                        res = orig_sample(self, *args, **kwargs)
-                        collector.end_span(sampler_span_id, outcome="success")
-                        return res
-                    except Exception as e:
-                        collector.end_span(
-                            sampler_span_id,
-                            outcome="failed",
-                            error={"message": str(e), "exceptionType": type(e).__name__}
-                        )
-                        raise
-                hooked_sample._cco_hooked = True
-                ksampler_cls.sample = hooked_sample
-                _INSTALLED_WRAPPERS["ksampler_sample"] = hooked_sample
-    except (ImportError, AttributeError):
-        pass
+                try:
+                    res = orig_sample(self, *args, **kwargs)
+                    collector.end_span(sampler_span_id, outcome="success")
+                    return res
+                except Exception as e:
+                    collector.end_span(
+                        sampler_span_id,
+                        outcome="failed",
+                        error={"message": str(e), "exceptionType": type(e).__name__}
+                    )
+                    raise
+                finally:
+                    if buf is not None and buf.pending_calls:
+                        with _ATTENTION_TRACKER._lock:
+                            unflushed = len(buf.pending_calls)
+                            _ATTENTION_TRACKER.unflushed_calls_count += unflushed
+                            _ATTENTION_TRACKER.unattributed_call_count += unflushed
+                            if _ATTENTION_TRACKER.status != "failed":
+                                _ATTENTION_TRACKER.status = "fallback"
+                                if not _ATTENTION_TRACKER.failure_reason:
+                                    _ATTENTION_TRACKER.failure_reason = (
+                                        f"Sampling completed with {unflushed} unflushed attention call(s) lacking completion callback"
+                                    )
+                            buf.pending_calls.clear()
+                    _SAMPLING_STEP_CALL_BUFFER.reset(token_buf)
+
+            hooked_sample._cco_hooked = True
+            ksampler_cls.sample = hooked_sample
+            _INSTALLED_WRAPPERS["ksampler_sample"] = hooked_sample
+    except Exception as e:
+        if comfy_target:
+            raise RuntimeError(f"Required hook missing or malformed: comfy.samplers.KSampler.sample ({e})") from e
 
     # 4. Hook SamplerCustomAdvanced for canonical pipeline sampling
     try:
         import comfy_extras.nodes_custom_sampler as custom_sampler
         custom_node_cls = getattr(custom_sampler, "SamplerCustomAdvanced", None)
-        if custom_node_cls:
-            orig_custom_execute = getattr(custom_node_cls, "execute", None)
-            if orig_custom_execute is None:
-                orig_custom_execute = getattr(custom_node_cls, "sample", None)
+        orig_custom_execute = getattr(custom_node_cls, "execute", None) if custom_node_cls else None
+        if orig_custom_execute is None and custom_node_cls:
+            orig_custom_execute = getattr(custom_node_cls, "sample", None)
 
-            if orig_custom_execute:
-                def hooked_custom_execute(cls, noise, guider, sampler, sigmas, latent_image, *args, **kwargs):
-                    sampler_name = getattr(sampler, "sampler_name", None) or getattr(sampler, "name", None) or type(sampler).__name__
-                    scheduler_name = getattr(sigmas, "scheduler", None) or getattr(sigmas, "name", None) or "simple"
-                    sampler_span_id = collector.start_span(
-                        "sampling",
-                        class_type="SamplerCustomAdvanced",
-                        metadata={
-                            "samplerName": str(sampler_name),
-                            "schedulerName": str(scheduler_name)
-                        }
-                    )
-                    state = {
-                        "last_step_end_ms": None,
-                        "seen_steps": set()
+        unbound_target = getattr(orig_custom_execute, "__func__", orig_custom_execute)
+        if getattr(unbound_target, "_cco_hooked", False):
+            pass
+        elif not callable(unbound_target) or not _validate_callable_shape(unbound_target, min_params=5):
+            if comfy_target:
+                raise RuntimeError("Required hook missing or malformed: comfy_extras.nodes_custom_sampler.SamplerCustomAdvanced.execute")
+        else:
+            def hooked_custom_execute(cls, noise, guider, sampler, sigmas, latent_image, *args, **kwargs):
+                sampler_name = getattr(sampler, "sampler_name", None) or getattr(sampler, "name", None) or type(sampler).__name__
+                scheduler_name = getattr(sigmas, "scheduler", None) or getattr(sigmas, "name", None) or "simple"
+                sampler_span_id = collector.start_span(
+                    "sampling",
+                    class_type="SamplerCustomAdvanced",
+                    metadata={
+                        "samplerName": str(sampler_name),
+                        "schedulerName": str(scheduler_name)
                     }
+                )
+                state = {
+                    "last_step_end_ms": None,
+                    "seen_steps": set()
+                }
+                buf = StepIntervalBuffer()
+                token_buf = _SAMPLING_STEP_CALL_BUFFER.set(buf)
 
-                    def step_callback(chain_cb):
-                        def cb(step, x0, x, total_s, *cb_args, **cb_kwargs):
-                            cur_idx = step if isinstance(step, int) else None
-                            if cur_idx is not None and cur_idx not in state["seen_steps"]:
+                def step_callback(chain_cb):
+                    def cb(step, x0, x, total_s, *cb_args, **cb_kwargs):
+                        cur_idx = _parse_nonnegative_int(step)
+                        if cur_idx is not None:
+                            flush_step_buffer(cur_idx)
+                            if cur_idx not in state["seen_steps"]:
                                 state["seen_steps"].add(cur_idx)
                                 now = now_mono_ms()
                                 span_id = collector.next_span_id("step")
@@ -1204,267 +1616,334 @@ def install_hooks(collector: Collector):
                                     outcome="success"
                                 )
 
-                            if chain_cb:
-                                return chain_cb(step, x0, x, total_s, *cb_args, **cb_kwargs)
-                        return cb
+                        if chain_cb:
+                            return chain_cb(step, x0, x, total_s, *cb_args, **cb_kwargs)
+                    return cb
 
-                    orig_latent_cb = latent_image.get("callback", None) if isinstance(latent_image, dict) else None
-                    if isinstance(latent_image, dict):
-                        latent_image = {**latent_image, "callback": step_callback(orig_latent_cb)}
+                orig_latent_cb = latent_image.get("callback", None) if isinstance(latent_image, dict) else None
+                if isinstance(latent_image, dict):
+                    latent_image = {**latent_image, "callback": step_callback(orig_latent_cb)}
 
-                    orig_guider_sample = getattr(guider, "sample", None)
-                    if orig_guider_sample:
-                        def hooked_guider_sample(*g_args, **g_kwargs):
-                            caller_cb = g_kwargs.get("callback", None)
-                            cb_is_pos = False
-                            cb_pos_idx = None
-                            if caller_cb is None and len(g_args) > 5:
-                                caller_cb = g_args[5]
-                                cb_is_pos = True
-                                cb_pos_idx = 5
+                orig_guider_sample = getattr(guider, "sample", None)
+                if orig_guider_sample:
+                    def hooked_guider_sample(*g_args, **g_kwargs):
+                        caller_cb = g_kwargs.get("callback", None)
+                        cb_is_pos = False
+                        cb_pos_idx = None
+                        if caller_cb is None and len(g_args) > 5:
+                            caller_cb = g_args[5]
+                            cb_is_pos = True
+                            cb_pos_idx = 5
 
-                            chained = step_callback(caller_cb or orig_latent_cb)
-                            if cb_is_pos and cb_pos_idx is not None:
-                                g_args_list = list(g_args)
-                                g_args_list[cb_pos_idx] = chained
-                                g_args = tuple(g_args_list)
-                            else:
-                                g_kwargs["callback"] = chained
+                        chained = step_callback(caller_cb or orig_latent_cb)
+                        if cb_is_pos and cb_pos_idx is not None:
+                            g_args_list = list(g_args)
+                            g_args_list[cb_pos_idx] = chained
+                            g_args = tuple(g_args_list)
+                        else:
+                            g_kwargs["callback"] = chained
 
-                            return orig_guider_sample(*g_args, **g_kwargs)
+                        return orig_guider_sample(*g_args, **g_kwargs)
 
-                        guider.sample = hooked_guider_sample
+                    guider.sample = hooked_guider_sample
 
-                    try:
-                        unbound_fn = getattr(orig_custom_execute, "__func__", orig_custom_execute)
-                        res = unbound_fn(cls, noise, guider, sampler, sigmas, latent_image, *args, **kwargs)
-                        collector.end_span(
-                            sampler_span_id,
-                            outcome="success",
-                            metadata={
-                                "samplerName": str(sampler_name),
-                                "schedulerName": str(scheduler_name),
-                                "completedSteps": len(state["seen_steps"])
-                            }
-                        )
-                        return res
-                    except Exception as e:
-                        collector.end_span(
-                            sampler_span_id,
-                            outcome="failed",
-                            error={"message": str(e), "exceptionType": type(e).__name__}
-                        )
-                        raise
-                    finally:
-                        if orig_guider_sample is not None:
-                            guider.sample = orig_guider_sample
+                try:
+                    unbound_fn = getattr(orig_custom_execute, "__func__", orig_custom_execute)
+                    res = unbound_fn(cls, noise, guider, sampler, sigmas, latent_image, *args, **kwargs)
+                    collector.end_span(
+                        sampler_span_id,
+                        outcome="success",
+                        metadata={
+                            "samplerName": str(sampler_name),
+                            "schedulerName": str(scheduler_name),
+                            "completedSteps": len(state["seen_steps"])
+                        }
+                    )
+                    return res
+                except Exception as e:
+                    collector.end_span(
+                        sampler_span_id,
+                        outcome="failed",
+                        error={"message": str(e), "exceptionType": type(e).__name__}
+                    )
+                    raise
+                finally:
+                    if buf is not None and buf.pending_calls:
+                        with _ATTENTION_TRACKER._lock:
+                            unflushed = len(buf.pending_calls)
+                            _ATTENTION_TRACKER.unflushed_calls_count += unflushed
+                            _ATTENTION_TRACKER.unattributed_call_count += unflushed
+                            if _ATTENTION_TRACKER.status != "failed":
+                                _ATTENTION_TRACKER.status = "fallback"
+                                if not _ATTENTION_TRACKER.failure_reason:
+                                    _ATTENTION_TRACKER.failure_reason = (
+                                        f"Sampling completed with {unflushed} unflushed attention call(s) lacking completion callback"
+                                    )
+                            buf.pending_calls.clear()
+                    _SAMPLING_STEP_CALL_BUFFER.reset(token_buf)
+                    if orig_guider_sample is not None:
+                        guider.sample = orig_guider_sample
 
-                hooked_custom_execute._cco_hooked = True
-                _INSTALLED_WRAPPERS["sampler_custom_advanced_execute"] = hooked_custom_execute
-                wrapped_execute = classmethod(hooked_custom_execute)
-                custom_node_cls.execute = wrapped_execute
-                custom_node_cls.sample = wrapped_execute
-    except (ImportError, AttributeError):
-        pass
+            hooked_custom_execute._cco_hooked = True
+            _INSTALLED_WRAPPERS["sampler_custom_advanced_execute"] = hooked_custom_execute
+            wrapped_execute = classmethod(hooked_custom_execute)
+            custom_node_cls.execute = wrapped_execute
+            custom_node_cls.sample = wrapped_execute
+    except Exception as e:
+        if comfy_target:
+            raise RuntimeError(f"Required hook missing or malformed: comfy_extras.nodes_custom_sampler.SamplerCustomAdvanced.execute ({e})") from e
 
     # 4b. Hook conditioning nodes (MiniMaxH3ImageToVideo and MiniMaxH3ReferenceToVideo)
     try:
         import comfy_extras.nodes_minimax_h3 as nodes_minimax_h3
         for cls_name in ("MiniMaxH3ImageToVideo", "MiniMaxH3ReferenceToVideo"):
             node_cls = getattr(nodes_minimax_h3, cls_name, None)
-            if node_cls:
-                orig_execute = getattr(node_cls, "execute", None)
-                if orig_execute:
-                    def make_hooked_execute(c_name, orig_fn):
-                        def hooked_execute(cls, *args, **kwargs):
-                            task_mode = "i2v" if c_name == "MiniMaxH3ImageToVideo" else "ref2v"
-                            ref_count = None
+            orig_execute = getattr(node_cls, "execute", None) if node_cls else None
+            unbound_execute = getattr(orig_execute, "__func__", orig_execute)
+            req_params = 6 if cls_name == "MiniMaxH3ImageToVideo" else 7
+            if getattr(unbound_execute, "_cco_hooked", False):
+                continue
+            elif not callable(unbound_execute) or not _validate_callable_shape(unbound_execute, min_params=req_params):
+                if comfy_target:
+                    raise RuntimeError(f"Required hook missing or malformed: comfy_extras.nodes_minimax_h3.{cls_name}.execute")
+            else:
+                def make_hooked_execute(c_name, orig_fn):
+                    def hooked_execute(cls, *args, **kwargs):
+                        task_mode = "i2v" if c_name == "MiniMaxH3ImageToVideo" else "ref2v"
+                        ref_count = None
+                        try:
+                            sig = inspect.signature(orig_fn)
+                            bound = None
                             try:
-                                sig = inspect.signature(orig_fn)
-                                bound = None
+                                bound = sig.bind(*args, **kwargs)
+                            except TypeError:
                                 try:
-                                    bound = sig.bind(*args, **kwargs)
+                                    bound = sig.bind(cls, *args, **kwargs)
                                 except TypeError:
-                                    try:
-                                        bound = sig.bind(cls, *args, **kwargs)
-                                    except TypeError:
-                                        bound = None
+                                    bound = None
 
-                                if bound is not None:
-                                    bound.apply_defaults()
-                                    bound_args = bound.arguments
-                                    if c_name == "MiniMaxH3ReferenceToVideo":
-                                        ref_images = bound_args.get("ref_images")
-                                        if ref_images is not None:
-                                            if isinstance(ref_images, dict):
-                                                ref_count = sum(1 for v in ref_images.values() if v is not None)
-                                            elif isinstance(ref_images, (list, tuple, set)):
-                                                ref_count = sum(1 for v in ref_images if v is not None)
-                                            else:
-                                                ref_count = 1
-                                        elif "ref_images" in bound_args:
+                            if bound is not None:
+                                bound.apply_defaults()
+                                bound_args = bound.arguments
+                                if c_name == "MiniMaxH3ReferenceToVideo":
+                                    ref_images = bound_args.get("ref_images")
+                                    if ref_images is not None:
+                                        if isinstance(ref_images, dict):
+                                            ref_count = sum(1 for v in ref_images.values() if v is not None)
+                                        elif isinstance(ref_images, (list, tuple, set)):
+                                            ref_count = sum(1 for v in ref_images if v is not None)
+                                        else:
+                                            ref_count = 1
+                                    elif "ref_images" in bound_args:
+                                        ref_count = 0
+                                else:
+                                    first_frame = bound_args.get("first_frame", bound_args.get("image"))
+                                    last_frame = bound_args.get("last_frame", bound_args.get("image_tail", bound_args.get("last_image")))
+                                    c = 0
+                                    if first_frame is not None:
+                                        c += 1
+                                    if last_frame is not None:
+                                        c += 1
+                                    ref_count = c
+                            else:
+                                if c_name == "MiniMaxH3ReferenceToVideo":
+                                    if "ref_images" in kwargs:
+                                        ref_images = kwargs["ref_images"]
+                                        if ref_images is None:
                                             ref_count = 0
+                                        elif isinstance(ref_images, dict):
+                                            ref_count = sum(1 for v in ref_images.values() if v is not None)
+                                        elif isinstance(ref_images, (list, tuple, set)):
+                                            ref_count = sum(1 for v in ref_images if v is not None)
+                                        else:
+                                            ref_count = 1
                                     else:
-                                        first_frame = bound_args.get("first_frame", bound_args.get("image"))
-                                        last_frame = bound_args.get("last_frame", bound_args.get("image_tail", bound_args.get("last_image")))
+                                        ref_count = None
+                                else:
+                                    if "first_frame" in kwargs or "last_frame" in kwargs or "image" in kwargs:
                                         c = 0
-                                        if first_frame is not None:
+                                        if kwargs.get("first_frame") is not None or kwargs.get("image") is not None:
                                             c += 1
-                                        if last_frame is not None:
+                                        if kwargs.get("last_frame") is not None:
                                             c += 1
                                         ref_count = c
-                                else:
-                                    # Fallback when signature binding fails
-                                    if c_name == "MiniMaxH3ReferenceToVideo":
-                                        if "ref_images" in kwargs:
-                                            ref_images = kwargs["ref_images"]
-                                            if ref_images is None:
-                                                ref_count = 0
-                                            elif isinstance(ref_images, dict):
-                                                ref_count = sum(1 for v in ref_images.values() if v is not None)
-                                            elif isinstance(ref_images, (list, tuple, set)):
-                                                ref_count = sum(1 for v in ref_images if v is not None)
-                                            else:
-                                                ref_count = 1
-                                        else:
-                                            ref_count = None
                                     else:
-                                        if "first_frame" in kwargs or "last_frame" in kwargs or "image" in kwargs:
-                                            c = 0
-                                            if kwargs.get("first_frame") is not None or kwargs.get("image") is not None:
-                                                c += 1
-                                            if kwargs.get("last_frame") is not None:
-                                                c += 1
-                                            ref_count = c
-                                        else:
-                                            ref_count = None
-                            except Exception:
-                                ref_count = None
+                                        ref_count = None
+                        except Exception:
+                            ref_count = None
 
-                            metadata = {
-                                "taskMode": task_mode,
-                                "referenceCount": ref_count
-                            }
-                            span_id = collector.start_span("conditioning", class_type=c_name, metadata=metadata)
-                            try:
-                                if hasattr(orig_fn, "__self__") and orig_fn.__self__ is not None:
+                        metadata = {
+                            "taskMode": task_mode,
+                            "referenceCount": ref_count
+                        }
+                        span_id = collector.start_span("conditioning", class_type=c_name, metadata=metadata)
+                        try:
+                            if hasattr(orig_fn, "__self__") and orig_fn.__self__ is not None:
+                                res = orig_fn(*args, **kwargs)
+                            else:
+                                try:
+                                    res = orig_fn(cls, *args, **kwargs)
+                                except TypeError:
                                     res = orig_fn(*args, **kwargs)
-                                else:
-                                    try:
-                                        res = orig_fn(cls, *args, **kwargs)
-                                    except TypeError:
-                                        res = orig_fn(*args, **kwargs)
-                                collector.end_span(span_id, outcome="success", metadata=metadata)
-                                return res
-                            except Exception as e:
-                                collector.end_span(
-                                    span_id,
-                                    outcome="failed",
-                                    error={"message": str(e), "exceptionType": type(e).__name__},
-                                    metadata=metadata
-                                )
-                                raise
-                        hooked_execute._cco_hooked = True
-                        if c_name == "MiniMaxH3ImageToVideo":
-                            _INSTALLED_WRAPPERS["minimax_h3_image_to_video_execute"] = hooked_execute
-                        return classmethod(hooked_execute)
+                            collector.end_span(span_id, outcome="success", metadata=metadata)
+                            return res
+                        except Exception as e:
+                            collector.end_span(
+                                span_id,
+                                outcome="failed",
+                                error={"message": str(e), "exceptionType": type(e).__name__},
+                                metadata=metadata
+                            )
+                            raise
+                    hooked_execute._cco_hooked = True
+                    if c_name == "MiniMaxH3ImageToVideo":
+                        _INSTALLED_WRAPPERS["minimax_h3_image_to_video_execute"] = hooked_execute
+                    elif c_name == "MiniMaxH3ReferenceToVideo":
+                        _INSTALLED_WRAPPERS["minimax_h3_reference_to_video_execute"] = hooked_execute
+                    return classmethod(hooked_execute)
 
-                    hooked_func = make_hooked_execute(cls_name, orig_execute)
-                    setattr(node_cls, "execute", hooked_func)
-    except (ImportError, AttributeError):
-        pass
+                hooked_func = make_hooked_execute(cls_name, orig_execute)
+                setattr(node_cls, "execute", hooked_func)
+    except Exception as e:
+        if comfy_target:
+            raise RuntimeError(f"Required hook missing or malformed: comfy_extras.nodes_minimax_h3 ({e})") from e
 
     # 5. Hook comfy.ldm.modules.attention for attention backend monitoring
-    sage_attn_fn = None
-    sage_attn3_fn = None
+    sage_attn_fn = _INSTALLED_WRAPPERS.get("sageattn")
+    sage_attn3_fn = _INSTALLED_WRAPPERS.get("sageattn3")
     try:
         import comfy.ldm.modules.attention as comfy_attn
 
-        sage_attn_fn = getattr(comfy_attn, "sageattn", None)
-        if sage_attn_fn:
+        raw_sageattn = getattr(comfy_attn, "sageattn", None)
+        if raw_sageattn and not getattr(raw_sageattn, "_cco_hooked", False) and _validate_callable_shape(raw_sageattn, min_params=3):
+            sage_attn_fn = raw_sageattn
             def hooked_sageattn(*args, **kwargs):
+                layer_idx, step_idx = extract_layer_and_step(args, kwargs)
                 try:
                     res = sage_attn_fn(*args, **kwargs)
-                    _ATTENTION_TRACKER.record_accelerated("sage", "sageattention.sageattn")
+                    _ATTENTION_TRACKER.record_accelerated(
+                        "sage", "sageattention.sageattn",
+                        step_index=step_idx, layer_index=layer_idx
+                    )
                     return res
                 except Exception as e:
-                    _ATTENTION_TRACKER.record_fallback("sage", "torch_sdpa", f"sageattn kernel exception: {e}")
+                    _ATTENTION_TRACKER.record_fallback(
+                        "sage", "torch_sdpa", f"sageattn kernel exception: {e}",
+                        step_index=step_idx
+                    )
                     raise
+            hooked_sageattn._cco_hooked = True
             comfy_attn.sageattn = hooked_sageattn
+            _INSTALLED_WRAPPERS["sageattn"] = hooked_sageattn
 
-        sage_attn3_fn = getattr(comfy_attn, "sageattn3", None)
-        if sage_attn3_fn:
+        raw_sageattn3 = getattr(comfy_attn, "sageattn3", None)
+        if raw_sageattn3 and not getattr(raw_sageattn3, "_cco_hooked", False) and _validate_callable_shape(raw_sageattn3, min_params=3):
+            sage_attn3_fn = raw_sageattn3
             def hooked_sageattn3(*args, **kwargs):
+                layer_idx, step_idx = extract_layer_and_step(args, kwargs)
                 try:
                     res = sage_attn3_fn(*args, **kwargs)
-                    _ATTENTION_TRACKER.record_accelerated("sage", "sageattention.sageattn3")
+                    _ATTENTION_TRACKER.record_accelerated(
+                        "sage", "sageattention.sageattn3",
+                        step_index=step_idx, layer_index=layer_idx
+                    )
                     return res
                 except Exception as e:
-                    _ATTENTION_TRACKER.record_fallback("sage", "torch_sdpa", f"sageattn3 kernel exception: {e}")
+                    _ATTENTION_TRACKER.record_fallback(
+                        "sage", "torch_sdpa", f"sageattn3 kernel exception: {e}",
+                        step_index=step_idx
+                    )
                     raise
+            hooked_sageattn3._cco_hooked = True
             comfy_attn.sageattn3 = hooked_sageattn3
+            _INSTALLED_WRAPPERS["sageattn3"] = hooked_sageattn3
 
         sdp_fn = getattr(comfy_attn, "sdp", None)
-        if sdp_fn:
+        if sdp_fn and not getattr(sdp_fn, "_cco_hooked", False) and callable(sdp_fn):
             def hooked_sdp(*args, **kwargs):
                 if _IN_DENSE_DISPATCH.get():
                     return sdp_fn(*args, **kwargs)
                 dispatch_handle = _IN_DENSE_DISPATCH.set(True)
                 try:
                     res = sdp_fn(*args, **kwargs)
+                    layer_idx, step_idx = extract_layer_and_step(args, kwargs)
                     exclusion = _CURRENT_PLANNED_EXCLUSION.get()
                     _ATTENTION_TRACKER.record_dense(
                         is_planned=(exclusion is not None),
-                        metadata=exclusion
+                        metadata=exclusion,
+                        step_index=step_idx,
+                        layer_index=layer_idx
                     )
                     return res
                 finally:
                     _IN_DENSE_DISPATCH.reset(dispatch_handle)
+            hooked_sdp._cco_hooked = True
             comfy_attn.sdp = hooked_sdp
+            _INSTALLED_WRAPPERS["sdp"] = hooked_sdp
 
         orig_attention_pytorch = getattr(comfy_attn, "attention_pytorch", None)
-        if orig_attention_pytorch:
+        if orig_attention_pytorch and not getattr(orig_attention_pytorch, "_cco_hooked", False) and callable(orig_attention_pytorch):
             def hooked_attention_pytorch(*args, **kwargs):
                 if _IN_DENSE_DISPATCH.get():
                     return orig_attention_pytorch(*args, **kwargs)
                 dispatch_handle = _IN_DENSE_DISPATCH.set(True)
                 try:
                     res = orig_attention_pytorch(*args, **kwargs)
+                    layer_idx, step_idx = extract_layer_and_step(args, kwargs)
                     exclusion = _CURRENT_PLANNED_EXCLUSION.get()
                     _ATTENTION_TRACKER.record_dense(
                         is_planned=(exclusion is not None),
-                        metadata=exclusion
+                        metadata=exclusion,
+                        step_index=step_idx,
+                        layer_index=layer_idx
                     )
                     return res
                 finally:
                     _IN_DENSE_DISPATCH.reset(dispatch_handle)
+            hooked_attention_pytorch._cco_hooked = True
             comfy_attn.attention_pytorch = hooked_attention_pytorch
+            _INSTALLED_WRAPPERS["attention_pytorch"] = hooked_attention_pytorch
 
         orig_attention_sage = getattr(comfy_attn, "attention_sage", None)
-        if orig_attention_sage:
+        if orig_attention_sage and not getattr(orig_attention_sage, "_cco_hooked", False) and callable(orig_attention_sage):
             def hooked_attention_sage(*args, **kwargs):
                 pre_accel = _ATTENTION_TRACKER.accelerated_call_count
                 pre_fallbacks = len(_ATTENTION_TRACKER.fallback_events)
+                layer_idx, step_idx = extract_layer_and_step(args, kwargs)
                 try:
                     res = orig_attention_sage(*args, **kwargs)
                 except Exception as e:
-                    _ATTENTION_TRACKER.record_fallback("sage", "torch_sdpa", f"attention_sage exception: {e}")
+                    _ATTENTION_TRACKER.record_fallback(
+                        "sage", "torch_sdpa", f"attention_sage exception: {e}",
+                        step_index=step_idx
+                    )
                     raise
                 if _ATTENTION_TRACKER.accelerated_call_count == pre_accel and len(_ATTENTION_TRACKER.fallback_events) == pre_fallbacks:
                     reason = "ComfyUI attention_sage caught internal exception and silently dispatched to PyTorch dense attention"
-                    _ATTENTION_TRACKER.record_fallback("sage", "torch_sdpa", reason)
+                    _ATTENTION_TRACKER.record_fallback(
+                        "sage", "torch_sdpa", reason,
+                        step_index=step_idx
+                    )
                 return res
+            hooked_attention_sage._cco_hooked = True
             comfy_attn.attention_sage = hooked_attention_sage
+            _INSTALLED_WRAPPERS["attention_sage"] = hooked_attention_sage
 
         orig_optimized = getattr(comfy_attn, "optimized_attention", None)
-        if orig_optimized:
+        if orig_optimized and not getattr(orig_optimized, "_cco_hooked", False) and callable(orig_optimized):
             def hooked_optimized(*args, **kwargs):
                 try:
                     return orig_optimized(*args, **kwargs)
                 except Exception as e:
-                    _ATTENTION_TRACKER.record_fallback("accelerated", "torch_sdpa", str(e))
+                    layer_idx, step_idx = extract_layer_and_step(args, kwargs)
+                    _ATTENTION_TRACKER.record_fallback(
+                        "accelerated", "torch_sdpa", str(e),
+                        step_index=step_idx
+                    )
                     raise
+            hooked_optimized._cco_hooked = True
             comfy_attn.optimized_attention = hooked_optimized
+            _INSTALLED_WRAPPERS["optimized_attention"] = hooked_optimized
     except (ImportError, AttributeError):
         pass
 
@@ -1472,99 +1951,139 @@ def install_hooks(collector: Collector):
     try:
         import comfy.ops as comfy_ops
         orig_sdpa = getattr(comfy_ops, "scaled_dot_product_attention", None)
-        if orig_sdpa:
+        if orig_sdpa and not getattr(orig_sdpa, "_cco_hooked", False) and callable(orig_sdpa):
             def hooked_sdpa(*args, **kwargs):
                 if _IN_DENSE_DISPATCH.get():
                     return orig_sdpa(*args, **kwargs)
                 dispatch_handle = _IN_DENSE_DISPATCH.set(True)
                 try:
                     res = orig_sdpa(*args, **kwargs)
+                    layer_idx, step_idx = extract_layer_and_step(args, kwargs)
                     exclusion = _CURRENT_PLANNED_EXCLUSION.get()
                     _ATTENTION_TRACKER.record_dense(
                         is_planned=(exclusion is not None),
-                        metadata=exclusion
+                        metadata=exclusion,
+                        step_index=step_idx,
+                        layer_index=layer_idx
                     )
                     return res
                 finally:
                     _IN_DENSE_DISPATCH.reset(dispatch_handle)
+            hooked_sdpa._cco_hooked = True
             comfy_ops.scaled_dot_product_attention = hooked_sdpa
+            _INSTALLED_WRAPPERS["comfy_ops_sdpa"] = hooked_sdpa
     except (ImportError, AttributeError):
         pass
 
     try:
         import torch.nn.functional as F
         orig_torch_sdpa = getattr(F, "scaled_dot_product_attention", None)
-        if orig_torch_sdpa:
+        if orig_torch_sdpa and not getattr(orig_torch_sdpa, "_cco_hooked", False) and callable(orig_torch_sdpa):
             def hooked_torch_sdpa(*args, **kwargs):
                 if _IN_DENSE_DISPATCH.get():
                     return orig_torch_sdpa(*args, **kwargs)
                 dispatch_handle = _IN_DENSE_DISPATCH.set(True)
                 try:
                     res = orig_torch_sdpa(*args, **kwargs)
+                    layer_idx, step_idx = extract_layer_and_step(args, kwargs)
                     exclusion = _CURRENT_PLANNED_EXCLUSION.get()
                     _ATTENTION_TRACKER.record_dense(
                         is_planned=(exclusion is not None),
-                        metadata=exclusion
+                        metadata=exclusion,
+                        step_index=step_idx,
+                        layer_index=layer_idx
                     )
                     return res
                 finally:
                     _IN_DENSE_DISPATCH.reset(dispatch_handle)
+            hooked_torch_sdpa._cco_hooked = True
             F.scaled_dot_product_attention = hooked_torch_sdpa
+            _INSTALLED_WRAPPERS["torch_sdpa"] = hooked_torch_sdpa
     except (ImportError, AttributeError):
         pass
 
     # 7. Hook comfy_kitchen for sol_attn
-    sol_attn_fn = None
+    sol_attn_fn = _INSTALLED_WRAPPERS.get("sol_attn")
     try:
         import comfy_kitchen
-        sol_attn_fn = getattr(comfy_kitchen, "sol_attn", None)
-        if sol_attn_fn:
+        cand_sol = getattr(comfy_kitchen, "sol_attn", None)
+        if cand_sol and not getattr(cand_sol, "_cco_hooked", False) and _validate_callable_shape(cand_sol, min_params=3):
+            sol_attn_fn = cand_sol
             def hooked_sol_attn(*args, **kwargs):
+                layer_idx, step_idx = extract_layer_and_step(args, kwargs)
                 try:
                     res = sol_attn_fn(*args, **kwargs)
-                    _ATTENTION_TRACKER.record_accelerated("sol_attn", "comfy_kitchen.sol_attn")
+                    _ATTENTION_TRACKER.record_accelerated(
+                        "sol_attn", "comfy_kitchen.sol_attn",
+                        step_index=step_idx, layer_index=layer_idx
+                    )
                     return res
                 except Exception as e:
-                    _ATTENTION_TRACKER.record_fallback("sol_attn", "torch_sdpa", f"sol_attn kernel exception: {e}")
+                    _ATTENTION_TRACKER.record_fallback(
+                        "sol_attn", "torch_sdpa", f"sol_attn kernel exception: {e}",
+                        step_index=step_idx
+                    )
                     raise
+            hooked_sol_attn._cco_hooked = True
             comfy_kitchen.sol_attn = hooked_sol_attn
+            _INSTALLED_WRAPPERS["sol_attn"] = hooked_sol_attn
     except (ImportError, AttributeError):
         pass
 
     # 8. Hook veda_sparse_attention for veda
-    veda_kernel_fn = None
+    veda_kernel_fn = _INSTALLED_WRAPPERS.get("veda_kernel")
     try:
         import veda_sparse_attention
-        veda_kernel_fn = getattr(veda_sparse_attention, "triton_kernel", None)
-        if veda_kernel_fn:
+        cand_veda = getattr(veda_sparse_attention, "triton_kernel", None)
+        if cand_veda and not getattr(cand_veda, "_cco_hooked", False) and _validate_callable_shape(cand_veda, min_params=3):
+            veda_kernel_fn = cand_veda
             def hooked_veda(*args, **kwargs):
+                layer_idx, step_idx = extract_layer_and_step(args, kwargs)
                 try:
                     res = veda_kernel_fn(*args, **kwargs)
-                    _ATTENTION_TRACKER.record_accelerated("veda", "veda_sparse_attention.triton_kernel")
+                    _ATTENTION_TRACKER.record_accelerated(
+                        "veda", "veda_sparse_attention.triton_kernel",
+                        step_index=step_idx, layer_index=layer_idx
+                    )
                     return res
                 except Exception as e:
-                    _ATTENTION_TRACKER.record_fallback("veda", "torch_sdpa", f"veda kernel exception: {e}")
+                    _ATTENTION_TRACKER.record_fallback(
+                        "veda", "torch_sdpa", f"veda kernel exception: {e}",
+                        step_index=step_idx
+                    )
                     raise
+            hooked_veda._cco_hooked = True
             veda_sparse_attention.triton_kernel = hooked_veda
+            _INSTALLED_WRAPPERS["veda_kernel"] = hooked_veda
     except (ImportError, AttributeError):
         pass
 
     # 8b. Hook comfy_kitchen.sol_attn_chunked for actual FastH3 BlockSparseAttention dispatch
-    bsa_kernel_found = False
+    bsa_kernel_found = ("sol_attn_chunked" in _INSTALLED_WRAPPERS)
     try:
         import comfy_kitchen
-        sol_chunked_fn = getattr(comfy_kitchen, "sol_attn_chunked", None)
-        if sol_chunked_fn:
+        cand_sol_chunked = getattr(comfy_kitchen, "sol_attn_chunked", None)
+        if cand_sol_chunked and not getattr(cand_sol_chunked, "_cco_hooked", False) and _validate_callable_shape(cand_sol_chunked, min_params=3):
             bsa_kernel_found = True
+            sol_chunked_fn = cand_sol_chunked
             def hooked_sol_chunked(*args, **kwargs):
+                layer_idx, step_idx = extract_layer_and_step(args, kwargs)
                 try:
                     res = sol_chunked_fn(*args, **kwargs)
-                    _ATTENTION_TRACKER.record_accelerated("comfy kitchen attention", "block_sparse_triton")
+                    _ATTENTION_TRACKER.record_accelerated(
+                        "comfy kitchen attention", "block_sparse_triton",
+                        step_index=step_idx, layer_index=layer_idx
+                    )
                     return res
                 except Exception as e:
-                    _ATTENTION_TRACKER.record_fallback("comfy kitchen attention", "torch_sdpa", f"comfy_kitchen.sol_attn_chunked exception: {e}")
+                    _ATTENTION_TRACKER.record_fallback(
+                        "comfy kitchen attention", "torch_sdpa", f"comfy_kitchen.sol_attn_chunked exception: {e}",
+                        step_index=step_idx
+                    )
                     raise
+            hooked_sol_chunked._cco_hooked = True
             comfy_kitchen.sol_attn_chunked = hooked_sol_chunked
+            _INSTALLED_WRAPPERS["sol_attn_chunked"] = hooked_sol_chunked
     except (ImportError, AttributeError):
         pass
 
@@ -1591,6 +2110,11 @@ def install_hooks(collector: Collector):
                             ps_cls.__init__ = hooked_server_init
                         if hasattr(ps_cls, "instance") and ps_cls.instance is not None:
                             register_capability_route(ps_cls.instance, collector)
+                if name.startswith("comfy") or name.startswith("execution") or name in ("nodes", "server"):
+                    try:
+                        install_hooks(collector)
+                    except Exception:
+                        pass
                 if hasattr(mod, "VedaPatch"):
                     hook_veda_patch_class(getattr(mod, "VedaPatch"))
                 for m_key in ("veda_comfy.comfy_patch", "veda_comfy.patch", name):
@@ -1671,6 +2195,11 @@ def main():
         target_argv = args
     _BOOTSTRAP_ENTRYPOINT = target_script
 
+    if target_script:
+        target_dir = os.path.dirname(os.path.abspath(target_script))
+        if target_dir not in sys.path:
+            sys.path.insert(0, target_dir)
+
     startup_span_id = collector.start_span("environment_startup")
 
     if not target_script:
@@ -1693,6 +2222,7 @@ def main():
         phase="environment_startup",
         event_type="point_event",
         span_id=startup_span_id,
+        boundary_source="child_bootstrap",
         metadata={
             "handshake": "v2-jsonl",
             "protocol": "v2-jsonl",
@@ -1700,8 +2230,7 @@ def main():
             "collectorDigest": collector_digest,
             "hookManifestDigest": hook_manifest_digest,
             "pythonVersion": sys.version,
-            "pid": os.getpid(),
-            "attentionSummary": _ATTENTION_TRACKER.summary()
+            "pid": os.getpid()
         }
     )
 

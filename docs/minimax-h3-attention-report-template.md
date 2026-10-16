@@ -19,6 +19,10 @@
 - **Candidate Attention Variant:** `[ ] sage` | `[ ] native-sol-attn` | `[ ] veda`
 - **Baseline Control Run ID:** `<h3-attn-dense-...>`
 - **Candidate Variant Run ID:** `<h3-attn-candidate-...>`
+- **Baseline Substrate Type:** `[ ] Pinned Production` | `[ ] Matched Isolated Venv`
+- **Runtime Lock Digest (Baseline / Candidate):** `<sha256-hex>` / `<sha256-hex>`
+- **Collector Digest (Baseline / Candidate):** `<sha256-hex>` / `<sha256-hex>`
+- **Hook Manifest Digest (Baseline / Candidate):** `<sha256-hex>` / `<sha256-hex>`
 - **Admission Verdict:** `[ ] Admitted` | `[ ] Rejected`
 
 ---
@@ -34,6 +38,9 @@ All invariants must be strictly verified before comparing timing metrics:
 - [ ] **Scheduler Steps Identical:** Exactly 20 steps (res_multistep / simple)
 - [ ] **Conditioning Inputs Identical:** SHA-256 match on staged input assets
 - [ ] **Single Factor Change:** Attention configuration is the sole variable changed
+- [ ] **Matched Substrate Verified:** Baseline run executed on the identical virtual environment, package versions, and runtime lock substrate as candidate (not unmatched pure-Torch baseline)
+- [ ] **Runtime Lock Digest Equality:** `runtimeLockDigest` of baseline matches candidate variant exactly
+- [ ] **Collector & Hook Manifest Digest Equality:** Collector digest and hook manifest digest match exactly across pair
 - [ ] **Runner Variant Identical:** Same memory management policy (e.g. `dynamicvram-offload-v1`)
 
 ---
@@ -42,7 +49,7 @@ All invariants must be strictly verified before comparing timing metrics:
 
 - [ ] **Topology Digest Match:** Computed graph digest matches descriptor `attentionRequest.topologyDigest`
 - [ ] **Patch Node Count:** Exactly 0 (dense/sage) or exactly 1 (sol-attn/veda)
-- [ ] **No Stacking:** Confirmed no simultaneous stacking of `ModelSparseAttention` and `ApplyVedaSparseAttention`
+- [ ] **No Stacking:** Confirmed no simultaneous stacking of `ModelSparseAttention` and `VedaSparseAttention`
 - [ ] **No Sage + Sparse Combination:** `--use-sage-attention` NOT combined with sparse patch nodes
 - [ ] **Wiring Integrity:** BasicGuider model input connects correctly; BasicScheduler model input intact
 - [ ] **Compatibility State:** `[ ] supported` | `[ ] requires_isolated_upgrade` | `[ ] unverified` | `[ ] unsupported`
