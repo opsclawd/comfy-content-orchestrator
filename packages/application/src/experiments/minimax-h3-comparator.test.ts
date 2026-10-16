@@ -8,6 +8,7 @@ import {
   createEmptyMinimaxH3MeasurementTemplateV2,
   computeAttentionRuntimeLockDigest,
   getSamplingRecipe,
+  STANDARD_MINIMAX_H3_HOOKS,
   FASTH3_ISOLATED_CORE_REVISION,
   type MinimaxH3ExperimentDescriptorV2,
   type MinimaxH3ExperimentResultV2,
@@ -19,7 +20,8 @@ import {
   type MinimaxH3ExperimentReceipt,
   type MinimaxH3ExperimentEvent,
   type MinimaxH3AnyExperimentDescriptor,
-  type MinimaxH3AnyExperimentResult
+  type MinimaxH3AnyExperimentResult,
+  type MinimaxH3ObservedProvenance
 } from "@cco/contracts";
 import { sha256Hex, MinimaxH3ExperimentService } from "./minimax-h3-experiment-service.js";
 import type { MinimaxH3ExperimentStorePort } from "../ports/minimax-h3-experiment-ports.js";
@@ -29,12 +31,56 @@ const DUMMY_HASH_2 = "2222222222222222222222222222222222222222222222222222222222
 const DUMMY_HASH_3 = "3333333333333333333333333333333333333333333333333333333333333333";
 const DUMMY_HASH_4 = "4444444444444444444444444444444444444444444444444444444444444444";
 
+function computeSubstrateForDescriptor(desc: Partial<MinimaxH3ExperimentDescriptorV2>): string {
+  const req = desc.requiredRuntime;
+  return computeAttentionRuntimeLockDigest({
+    comfyuiCoreRevision: req?.coreRevision ?? "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+    customNodeRevision: req?.customNodeRevision,
+    sourceFileHashes: req?.sourceFileHashes ?? { "comfy/model_management.py": DUMMY_HASH_1 },
+    interpreter: {
+      pythonVersion: "3.11.9",
+      pythonExecutableHash: DUMMY_HASH_1
+    },
+    pytorchBuild: req?.pytorchBuild ?? "2.4.1+cu124",
+    cudaBuild: req?.cudaBuild ?? "12.4",
+    driverConstraints: req?.driverConstraints ?? [">=550.00.00"],
+    pythonPackages: (
+      req?.pythonPackages ?? [
+        {
+          name: "torch",
+          version: "2.4.1",
+          artifactHash: DUMMY_HASH_1,
+          artifactMethod: "installed_record_sha256_v1" as const
+        }
+      ]
+    ).map((p) => ({
+      name: p.name,
+      version: p.version,
+      artifactHash: p.artifactHash ?? DUMMY_HASH_1,
+      artifactMethod: p.artifactMethod ?? ("installed_record_sha256_v1" as const)
+    })),
+    cudaRequirement: req?.cudaRequirement,
+    computeCapability: req?.computeCapability,
+    instrumentationProtocol: req?.instrumentationProtocol ?? "v2-jsonl",
+    collectorDigest: req?.collectorDigest ?? DUMMY_HASH_2,
+    hookManifestDigest: req?.hookManifestDigest ?? DUMMY_HASH_3,
+    hooks: req?.hooks ?? [
+      {
+        name: "sampler_step_hook",
+        modulePath: "comfy.samplers",
+        callable: "sample",
+        phase: "sampling_step"
+      }
+    ]
+  });
+}
+
 function createTestDescriptorV2(
   overrides: Partial<MinimaxH3ExperimentDescriptorV2> = {}
 ): MinimaxH3ExperimentDescriptorV2 {
   const prompt = "A cinematic shot of a sunset over the ocean";
   const promptDigest = sha256Hex(prompt);
-  return {
+  const baseDesc: MinimaxH3ExperimentDescriptorV2 = {
     schemaVersion: 2,
     kind: "non-production-experiment",
     runId: "run-base-001",
@@ -192,8 +238,12 @@ function createTestDescriptorV2(
         }
       ],
       pythonPackages: [
-        { name: "torch", version: "2.4.1" },
-        { name: "torchaudio", version: "2.4.1" }
+        {
+          name: "torch",
+          version: "2.4.1",
+          artifactHash: DUMMY_HASH_1,
+          artifactMethod: "installed_record_sha256_v1" as const
+        }
       ],
       pytorchBuild: "2.4.1+cu124",
       cudaBuild: "12.4",
@@ -232,15 +282,30 @@ function createTestDescriptorV2(
           targetInputName: "image"
         }
       ]
-    },
+    }
+  };
+  const merged: MinimaxH3ExperimentDescriptorV2 = {
+    ...baseDesc,
     ...overrides
   };
+  if (
+    merged.attentionRequest &&
+    (merged.attentionRequest.runtimeLockDigest === DUMMY_HASH_2 ||
+      !merged.attentionRequest.runtimeLockDigest)
+  ) {
+    merged.attentionRequest = {
+      ...merged.attentionRequest,
+      runtimeLockDigest: computeSubstrateForDescriptor(merged)
+    };
+  }
+  return merged;
 }
 
 function createCompletedResultV2(
   descriptor: MinimaxH3ExperimentDescriptorV2,
   overrides: Partial<MinimaxH3ExperimentResultV2> = {}
 ): MinimaxH3ExperimentResultV2 {
+  const { observedProvenance: overrideProv, ...restOverrides } = overrides;
   const tpl = createEmptyMinimaxH3MeasurementTemplateV2(descriptor);
   return {
     ...tpl,
@@ -318,8 +383,187 @@ function createCompletedResultV2(
             }
           }
         : undefined,
+    ...restOverrides,
     observedProvenance: {
       ...tpl.observedProvenance,
+      ...(descriptor.attentionRequest
+        ? {
+            actualCheckpointHash: {
+              status: "verified" as const,
+              value:
+                descriptor.provenance?.actualCheckpointHash ?? PINNED_H3_CHECKPOINTS.ref2va.sha256,
+              expected:
+                descriptor.provenance?.actualCheckpointHash ?? PINNED_H3_CHECKPOINTS.ref2va.sha256
+            },
+            loadedModelHashes: Object.keys(descriptor.resolvedModelPaths ?? {}).reduce(
+              (acc, key) => {
+                const spec = descriptor.resolvedModelPaths?.[key];
+                const hash =
+                  typeof spec === "string"
+                    ? spec
+                    : ((spec as { expectedHash: string })?.expectedHash ?? DUMMY_HASH_1);
+                acc[key] = {
+                  status: "verified" as const,
+                  value: hash,
+                  expected: hash,
+                  resolvedPath: `/models/${key}.safetensors`
+                };
+                return acc;
+              },
+              {} as Record<
+                string,
+                { status: "verified"; value: string; expected: string; resolvedPath: string }
+              >
+            ),
+            comfyuiCoreRevision: {
+              status: "verified" as const,
+              value:
+                descriptor.requiredRuntime?.coreRevision ??
+                "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+              expected:
+                descriptor.requiredRuntime?.coreRevision ??
+                "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+            },
+            runtimeVersions: {
+              status: "verified" as const,
+              pythonVersion: "3.11.9",
+              pytorchVersion: "2.4.1+cu124",
+              cudaBuildVersion: "12.4",
+              cudaRuntimeVersion: "12.4",
+              driverVersion: "560.35.03"
+            },
+            bootstrapHandshake: {
+              status: "verified" as const,
+              protocol: "v2-jsonl",
+              collectorDigest: descriptor.requiredRuntime?.collectorDigest ?? DUMMY_HASH_2,
+              hookManifestDigest: descriptor.requiredRuntime?.hookManifestDigest ?? DUMMY_HASH_3
+            },
+            capabilityHandshake: {
+              status: "ok",
+              protocol: "v2-jsonl",
+              protocolVersion: "v2-jsonl",
+              runId: descriptor.runId,
+              attemptToken: "token-abc-123",
+              nonce: "nonce-123",
+              pid: 12345,
+              collectorDigest: descriptor.requiredRuntime?.collectorDigest ?? DUMMY_HASH_2,
+              hookManifestDigest: descriptor.requiredRuntime?.hookManifestDigest ?? DUMMY_HASH_3,
+              registeredNodes: descriptor.requiredRuntime?.requiredNodes?.reduce(
+                (acc, n) => {
+                  acc[n.name] = {
+                    className: n.name,
+                    ...(n.moduleHash ? { moduleHash: n.moduleHash } : {})
+                  };
+                  return acc;
+                },
+                {} as Record<string, { className: string; moduleHash?: string }>
+              ) ?? {
+                MiniMaxH3ImageToVideo: { className: "MiniMaxH3ImageToVideo" },
+                MiniMaxH3ReferenceToVideo: { className: "MiniMaxH3ReferenceToVideo" }
+              },
+              installedHooks: [
+                ...STANDARD_MINIMAX_H3_HOOKS.map((h) => ({ ...h, attached: true })),
+                ...(descriptor.requiredRuntime?.hooks ?? []).map((h) => ({ ...h, attached: true }))
+              ],
+              kernelCallableAvailable: true,
+              runtimeVersions: {
+                driverVersion: "560.35.03",
+                cudaBuildVersion: descriptor.requiredRuntime?.cudaBuild ?? "12.4",
+                cudaRuntimeVersion: "12.4",
+                pythonVersion: "3.11.9"
+              }
+            },
+            attentionIdentity: {
+              identityVersion: 1 as const,
+              substrateDigest:
+                descriptor.attentionRequest?.runtimeLockDigest ??
+                computeSubstrateForDescriptor(descriptor),
+              interpreter: {
+                pythonVersion: "3.11.9",
+                pythonExecutableHash: DUMMY_HASH_1
+              },
+              toolchain: {
+                pytorchBuild: descriptor.requiredRuntime?.pytorchBuild ?? "2.4.1+cu124",
+                cudaBuildVersion: descriptor.requiredRuntime?.cudaBuild ?? "12.4",
+                cudaRuntimeVersion: "12.4",
+                driverVersion: "560.35.03"
+              },
+              packageArtifacts: (
+                descriptor.requiredRuntime?.pythonPackages ?? [
+                  {
+                    name: "torch",
+                    version: "2.4.1",
+                    artifactHash: DUMMY_HASH_1,
+                    artifactMethod: "installed_record_sha256_v1" as const
+                  }
+                ]
+              ).map((p) => ({
+                name: p.name,
+                version: p.version,
+                artifactHash: p.artifactHash ?? DUMMY_HASH_1,
+                artifactMethod: p.artifactMethod ?? ("installed_record_sha256_v1" as const)
+              })),
+              sourceIdentities: descriptor.requiredRuntime?.sourceFileHashes ?? {
+                "comfy/model_management.py": DUMMY_HASH_1
+              },
+              registeredNodes: descriptor.requiredRuntime?.requiredNodes?.reduce(
+                (acc, n) => {
+                  acc[n.name] = {
+                    className: n.name,
+                    ...(n.moduleHash ? { moduleHash: n.moduleHash } : {})
+                  };
+                  return acc;
+                },
+                {} as Record<string, { className: string; moduleHash?: string }>
+              ) ?? {
+                MiniMaxH3ImageToVideo: {
+                  className: "MiniMaxH3ImageToVideo"
+                },
+                MiniMaxH3ReferenceToVideo: {
+                  className: "MiniMaxH3ReferenceToVideo"
+                }
+              },
+              handshake: {
+                status: "ok",
+                protocol: "v2-jsonl",
+                protocolVersion: "v2-jsonl",
+                runId: descriptor.runId,
+                attemptToken: "token-abc-123",
+                nonce: "nonce-123",
+                pid: 12345,
+                collectorDigest: descriptor.requiredRuntime?.collectorDigest ?? DUMMY_HASH_2,
+                hookManifestDigest: descriptor.requiredRuntime?.hookManifestDigest ?? DUMMY_HASH_3,
+                registeredNodes: descriptor.requiredRuntime?.requiredNodes?.reduce(
+                  (acc, n) => {
+                    acc[n.name] = {
+                      className: n.name,
+                      ...(n.moduleHash ? { moduleHash: n.moduleHash } : {})
+                    };
+                    return acc;
+                  },
+                  {} as Record<string, { className: string; moduleHash?: string }>
+                ) ?? {
+                  MiniMaxH3ImageToVideo: { className: "MiniMaxH3ImageToVideo" },
+                  MiniMaxH3ReferenceToVideo: { className: "MiniMaxH3ReferenceToVideo" }
+                },
+                installedHooks: [
+                  ...STANDARD_MINIMAX_H3_HOOKS.map((h) => ({ ...h, attached: true })),
+                  ...(descriptor.requiredRuntime?.hooks ?? []).map((h) => ({
+                    ...h,
+                    attached: true
+                  }))
+                ],
+                kernelCallableAvailable: true,
+                runtimeVersions: {
+                  driverVersion: "560.35.03",
+                  cudaBuildVersion: descriptor.requiredRuntime?.cudaBuild ?? "12.4",
+                  cudaRuntimeVersion: "12.4",
+                  pythonVersion: "3.11.9"
+                }
+              }
+            }
+          }
+        : {}),
       observedSampling: {
         status: "verified",
         completedSteps: descriptor.samplingRecipe?.expectedSteps ?? descriptor.stepOverride ?? 20,
@@ -334,9 +578,19 @@ function createCompletedResultV2(
         taskMode: descriptor.route,
         referenceCount: descriptor.references.length
       },
-      ...overrides.observedProvenance
-    },
-    ...overrides
+      ...overrideProv,
+      ...(overrideProv?.capabilityHandshake
+        ? {
+            capabilityHandshake: {
+              ...overrideProv.capabilityHandshake,
+              runId:
+                overrideProv.capabilityHandshake.runId === "forced-mismatch-runId"
+                  ? overrideProv.capabilityHandshake.runId
+                  : descriptor.runId
+            }
+          }
+        : {})
+    }
   };
 }
 
@@ -1231,32 +1485,54 @@ describe("MinimaxH3Comparator", () => {
 
     it("admits matched dense control vs SageAttention with identical runtimeLockDigest", () => {
       const sagePackages = [
-        { name: "sageattention", version: "2.1.1", importModule: "sageattention" },
-        { name: "torch", version: "2.5.1+cu124", importModule: "torch" }
+        {
+          name: "sageattention",
+          version: "2.1.1",
+          artifactHash: DUMMY_HASH_1,
+          artifactMethod: "installed_record_sha256_v1" as const
+        },
+        {
+          name: "torch",
+          version: "2.5.1+cu124",
+          artifactHash: DUMMY_HASH_2,
+          artifactMethod: "installed_record_sha256_v1" as const
+        }
       ];
-      const sageRuntimeLock = computeAttentionRuntimeLockDigest({
-        comfyuiCoreRevision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
-        pythonPackages: sagePackages,
-        cudaRequirement: ">=12.4",
-        computeCapability: "sm_89"
-      });
 
-      const baselineDesc = createTestDescriptorV2({
-        runId: "base-sage-matched-dense",
+      const candidateDesc = createTestDescriptorV2({
+        runId: "cand-sage-matched",
         requiredRuntime: {
           coreRevision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
-          sourceFileHashes: {},
+          sourceFileHashes: {
+            "comfy/model_management.py": DUMMY_HASH_1
+          },
           requiredNodes: [{ name: "MiniMaxH3ImageToVideo" }],
           pythonPackages: sagePackages,
           pytorchBuild: "2.5.1+cu124",
           cudaBuild: "12.4",
           driverConstraints: [">=550.00"],
-          attentionKernel: "torch_sdpa",
+          attentionKernel: "sageattention.sageattn",
           instrumentationProtocol: "v2-jsonl",
           collectorDigest: DUMMY_HASH_1,
           hookManifestDigest: DUMMY_HASH_2,
           hooks: []
         },
+        attentionRequest: {
+          attentionVariant: "sage",
+          expectedBackend: "sage",
+          expectedKernel: "sageattention.sageattn",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_3,
+          patches: [],
+          runtimeLockDigest: DUMMY_HASH_2,
+          denseRegionPolicy: { allowPlannedDense: false, description: "policy" }
+        }
+      });
+      const sageRuntimeLock = candidateDesc.attentionRequest!.runtimeLockDigest;
+
+      const baselineDesc = createTestDescriptorV2({
+        runId: "base-sage-matched-dense",
+        requiredRuntime: candidateDesc.requiredRuntime,
         attentionRequest: {
           attentionVariant: "dense",
           expectedBackend: "torch_sdpa",
@@ -1286,34 +1562,6 @@ describe("MinimaxH3Comparator", () => {
             complete: true
           },
           timings: { deviceElapsedMs: null, kernelElapsedMs: null }
-        }
-      });
-
-      const candidateDesc = createTestDescriptorV2({
-        runId: "cand-sage-matched",
-        requiredRuntime: {
-          coreRevision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
-          sourceFileHashes: {},
-          requiredNodes: [{ name: "MiniMaxH3ImageToVideo" }],
-          pythonPackages: sagePackages,
-          pytorchBuild: "2.5.1+cu124",
-          cudaBuild: "12.4",
-          driverConstraints: [">=550.00"],
-          attentionKernel: "sageattention.sageattn",
-          instrumentationProtocol: "v2-jsonl",
-          collectorDigest: DUMMY_HASH_1,
-          hookManifestDigest: DUMMY_HASH_2,
-          hooks: []
-        },
-        attentionRequest: {
-          attentionVariant: "sage",
-          expectedBackend: "sage",
-          expectedKernel: "sageattention.sageattn",
-          topologyDigest: DUMMY_HASH_1,
-          catalogDigest: DUMMY_HASH_3,
-          patches: [],
-          runtimeLockDigest: sageRuntimeLock,
-          denseRegionPolicy: { allowPlannedDense: false, description: "policy" }
         }
       });
 
@@ -1406,6 +1654,965 @@ describe("MinimaxH3Comparator", () => {
       expect(
         report.structuralAdmission.reasons.some((r) =>
           r.includes("Runtime lock digest mismatch across attention comparison pair")
+        )
+      ).toBe(true);
+    });
+
+    it("disqualifies metrics when actualBackend or dispatchImplementation is null (unverified)", () => {
+      const sagePackages = [
+        { name: "sageattention", version: "2.1.1", importModule: "sageattention" },
+        { name: "torch", version: "2.5.1+cu124", importModule: "torch" }
+      ];
+      const sageRuntimeLock = computeAttentionRuntimeLockDigest({
+        comfyuiCoreRevision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        pythonPackages: sagePackages,
+        cudaRequirement: ">=12.4",
+        computeCapability: "sm_89"
+      });
+
+      const baselineDesc = createTestDescriptorV2({
+        runId: "base-dense-null-backend",
+        attentionRequest: {
+          attentionVariant: "dense",
+          expectedBackend: "torch_sdpa",
+          expectedKernel: "torch.nn.functional.scaled_dot_product_attention",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_1,
+          patches: [],
+          runtimeLockDigest: sageRuntimeLock,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+
+      const baselineResultNull = createCompletedResultV2(baselineDesc, {
+        attentionObservation: {
+          status: "verified",
+          actualBackend: null,
+          dispatchImplementation: "torch.nn.functional.scaled_dot_product_attention",
+          acceleratedCallCount: 0,
+          denseCallCount: 40,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const candidateDesc = createTestDescriptorV2({
+        runId: "cand-sage",
+        attentionRequest: {
+          attentionVariant: "sage",
+          expectedBackend: "sage",
+          expectedKernel: "sageattention.sageattn",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_3,
+          patches: [],
+          runtimeLockDigest: sageRuntimeLock,
+          denseRegionPolicy: { allowPlannedDense: false, description: "policy" }
+        }
+      });
+
+      const candidateResult = createCompletedResultV2(candidateDesc, {
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "sage",
+          dispatchImplementation: "sageattention.sageattn",
+          acceleratedCallCount: 40,
+          denseCallCount: 0,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const report1 = compareMinimaxH3Experiments({
+        baselineDescriptor: baselineDesc,
+        baselineResult: baselineResultNull,
+        variantDescriptor: candidateDesc,
+        variantResult: candidateResult
+      });
+
+      expect(report1.metricEligibility.wallTimeEligible).toBe(false);
+      expect(
+        report1.metricEligibility.reasons.some((r) =>
+          r.includes('Baseline observed attention backend "null" does not match expected')
+        )
+      ).toBe(true);
+
+      const candidateResultNull = createCompletedResultV2(candidateDesc, {
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "sage",
+          dispatchImplementation: null,
+          acceleratedCallCount: 40,
+          denseCallCount: 0,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const validBaselineResult = createCompletedResultV2(baselineDesc, {
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "torch_sdpa",
+          dispatchImplementation: "torch.nn.functional.scaled_dot_product_attention",
+          acceleratedCallCount: 0,
+          denseCallCount: 40,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const report2 = compareMinimaxH3Experiments({
+        baselineDescriptor: baselineDesc,
+        baselineResult: validBaselineResult,
+        variantDescriptor: candidateDesc,
+        variantResult: candidateResultNull
+      });
+
+      expect(report2.metricEligibility.wallTimeEligible).toBe(false);
+      expect(
+        report2.metricEligibility.reasons.some((r) =>
+          r.includes('Observed dispatch implementation "null" does not match requested')
+        )
+      ).toBe(true);
+    });
+
+    it("rejects baseline with recorded kernel failure in structural admission and metric eligibility", () => {
+      const sagePackages = [
+        { name: "sageattention", version: "2.1.1", importModule: "sageattention" },
+        { name: "torch", version: "2.5.1+cu124", importModule: "torch" }
+      ];
+      const sageRuntimeLock = computeAttentionRuntimeLockDigest({
+        comfyuiCoreRevision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        pythonPackages: sagePackages,
+        cudaRequirement: ">=12.4",
+        computeCapability: "sm_89"
+      });
+
+      const baselineDesc = createTestDescriptorV2({
+        runId: "base-dense-kernel-fail",
+        attentionRequest: {
+          attentionVariant: "dense",
+          expectedBackend: "torch_sdpa",
+          expectedKernel: "torch.nn.functional.scaled_dot_product_attention",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_1,
+          patches: [],
+          runtimeLockDigest: sageRuntimeLock,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+
+      const baselineResult = createCompletedResultV2(baselineDesc, {
+        attentionObservation: {
+          status: "failed",
+          actualBackend: "torch_sdpa",
+          dispatchImplementation: "torch.nn.functional.scaled_dot_product_attention",
+          acceleratedCallCount: 0,
+          denseCallCount: 40,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: "CUDA driver error during kernel launch",
+          missingKernelFailure: "Failed to load torch_sdpa kernel",
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const candidateDesc = createTestDescriptorV2({
+        runId: "cand-sage",
+        attentionRequest: {
+          attentionVariant: "sage",
+          expectedBackend: "sage",
+          expectedKernel: "sageattention.sageattn",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_3,
+          patches: [],
+          runtimeLockDigest: sageRuntimeLock,
+          denseRegionPolicy: { allowPlannedDense: false, description: "policy" }
+        }
+      });
+
+      const candidateResult = createCompletedResultV2(candidateDesc, {
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "sage",
+          dispatchImplementation: "sageattention.sageattn",
+          acceleratedCallCount: 40,
+          denseCallCount: 0,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baselineDesc,
+        baselineResult,
+        variantDescriptor: candidateDesc,
+        variantResult: candidateResult
+      });
+
+      expect(report.structuralAdmission.eligible).toBe(false);
+      expect(
+        report.structuralAdmission.reasons.some((r) =>
+          r.includes("Baseline recorded missing kernel failure")
+        )
+      ).toBe(true);
+      expect(report.metricEligibility.wallTimeEligible).toBe(false);
+    });
+
+    it("rejects baseline with mixed accelerated execution in structural admission and metric eligibility", () => {
+      const sagePackages = [
+        { name: "sageattention", version: "2.1.1", importModule: "sageattention" },
+        { name: "torch", version: "2.5.1+cu124", importModule: "torch" }
+      ];
+      const sageRuntimeLock = computeAttentionRuntimeLockDigest({
+        comfyuiCoreRevision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        pythonPackages: sagePackages,
+        cudaRequirement: ">=12.4",
+        computeCapability: "sm_89"
+      });
+
+      const baselineDesc = createTestDescriptorV2({
+        runId: "base-dense-mixed-accelerated",
+        attentionRequest: {
+          attentionVariant: "dense",
+          expectedBackend: "torch_sdpa",
+          expectedKernel: "torch.nn.functional.scaled_dot_product_attention",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_1,
+          patches: [],
+          runtimeLockDigest: sageRuntimeLock,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+
+      const baselineResult = createCompletedResultV2(baselineDesc, {
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "torch_sdpa",
+          dispatchImplementation: "torch.nn.functional.scaled_dot_product_attention",
+          acceleratedCallCount: 8,
+          denseCallCount: 32,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const candidateDesc = createTestDescriptorV2({
+        runId: "cand-sage",
+        attentionRequest: {
+          attentionVariant: "sage",
+          expectedBackend: "sage",
+          expectedKernel: "sageattention.sageattn",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_3,
+          patches: [],
+          runtimeLockDigest: sageRuntimeLock,
+          denseRegionPolicy: { allowPlannedDense: false, description: "policy" }
+        }
+      });
+
+      const candidateResult = createCompletedResultV2(candidateDesc, {
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "sage",
+          dispatchImplementation: "sageattention.sageattn",
+          acceleratedCallCount: 40,
+          denseCallCount: 0,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baselineDesc,
+        baselineResult,
+        variantDescriptor: candidateDesc,
+        variantResult: candidateResult
+      });
+
+      expect(report.structuralAdmission.eligible).toBe(false);
+      expect(
+        report.structuralAdmission.reasons.some((r) =>
+          r.includes("Baseline observed mixed accelerated execution")
+        )
+      ).toBe(true);
+      expect(report.metricEligibility.wallTimeEligible).toBe(false);
+    });
+
+    it("disqualifies metrics when denseRegionPolicy disallows planned dense calls and dense calls are observed", () => {
+      const sagePackages = [
+        { name: "sageattention", version: "2.1.1", importModule: "sageattention" },
+        { name: "torch", version: "2.5.1+cu124", importModule: "torch" }
+      ];
+      const sageRuntimeLock = computeAttentionRuntimeLockDigest({
+        comfyuiCoreRevision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        pythonPackages: sagePackages,
+        cudaRequirement: ">=12.4",
+        computeCapability: "sm_89"
+      });
+
+      const baselineDesc = createTestDescriptorV2({
+        runId: "base-dense",
+        attentionRequest: {
+          attentionVariant: "dense",
+          expectedBackend: "torch_sdpa",
+          expectedKernel: "torch.nn.functional.scaled_dot_product_attention",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_1,
+          patches: [],
+          runtimeLockDigest: sageRuntimeLock,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+
+      const baselineResult = createCompletedResultV2(baselineDesc, {
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "torch_sdpa",
+          dispatchImplementation: "torch.nn.functional.scaled_dot_product_attention",
+          acceleratedCallCount: 0,
+          denseCallCount: 40,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const candidateDesc = createTestDescriptorV2({
+        runId: "cand-sage-policy-fail",
+        attentionRequest: {
+          attentionVariant: "sage",
+          expectedBackend: "sage",
+          expectedKernel: "sageattention.sageattn",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_3,
+          patches: [],
+          runtimeLockDigest: sageRuntimeLock,
+          denseRegionPolicy: { allowPlannedDense: false, description: "No dense allowed" }
+        }
+      });
+
+      const candidateResult = createCompletedResultV2(candidateDesc, {
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "sage",
+          dispatchImplementation: "sageattention.sageattn",
+          acceleratedCallCount: 30,
+          denseCallCount: 10,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baselineDesc,
+        baselineResult,
+        variantDescriptor: candidateDesc,
+        variantResult: candidateResult
+      });
+
+      expect(report.metricEligibility.wallTimeEligible).toBe(false);
+      expect(
+        report.metricEligibility.reasons.some((r) =>
+          r.includes("denseRegionPolicy does not permit dense calls")
+        )
+      ).toBe(true);
+    });
+
+    it("disqualifies metrics when allowPlannedDense is true but candidate has unplanned dense calls (F-7da946f8)", () => {
+      const sagePackages = [
+        { name: "sageattention", version: "2.1.1", importModule: "sageattention" },
+        { name: "torch", version: "2.5.1+cu124", importModule: "torch" }
+      ];
+      const sageRuntimeLock = computeAttentionRuntimeLockDigest({
+        comfyuiCoreRevision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        pythonPackages: sagePackages,
+        cudaRequirement: ">=12.4",
+        computeCapability: "sm_89"
+      });
+
+      const baselineDesc = createTestDescriptorV2({
+        runId: "base-dense-planned",
+        attentionRequest: {
+          attentionVariant: "dense",
+          expectedBackend: "torch_sdpa",
+          expectedKernel: "torch.nn.functional.scaled_dot_product_attention",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_1,
+          patches: [],
+          runtimeLockDigest: sageRuntimeLock,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+
+      const baselineResult = createCompletedResultV2(baselineDesc, {
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "torch_sdpa",
+          dispatchImplementation: "torch.nn.functional.scaled_dot_product_attention",
+          acceleratedCallCount: 0,
+          denseCallCount: 40,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const candidateDesc = createTestDescriptorV2({
+        runId: "cand-sage-unplanned-dense",
+        attentionRequest: {
+          attentionVariant: "sage",
+          expectedBackend: "sage",
+          expectedKernel: "sageattention.sageattn",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_3,
+          patches: [],
+          runtimeLockDigest: sageRuntimeLock,
+          denseRegionPolicy: { allowPlannedDense: true, description: "Planned dense permitted" }
+        }
+      });
+
+      const candidateResult = createCompletedResultV2(candidateDesc, {
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "sage",
+          dispatchImplementation: "sageattention.sageattn",
+          acceleratedCallCount: 30,
+          denseCallCount: 10,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baselineDesc,
+        baselineResult,
+        variantDescriptor: candidateDesc,
+        variantResult: candidateResult
+      });
+
+      expect(report.metricEligibility.wallTimeEligible).toBe(false);
+      expect(
+        report.metricEligibility.reasons.some((r) =>
+          r.includes("observed unplanned dense calls (10 unplanned)")
+        )
+      ).toBe(true);
+    });
+
+    it("admits candidate with authorized planned dense calls satisfying minTokensThreshold (F-7da946f8)", () => {
+      const baselineDesc = createTestDescriptorV2({
+        runId: "base-dense-planned-ok",
+        attentionRequest: {
+          attentionVariant: "dense",
+          expectedBackend: "torch_sdpa",
+          expectedKernel: "torch.nn.functional.scaled_dot_product_attention",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_1,
+          patches: [],
+          runtimeLockDigest: DUMMY_HASH_2,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+
+      const baselineResult = createCompletedResultV2(baselineDesc, {
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "torch_sdpa",
+          dispatchImplementation: "torch.nn.functional.scaled_dot_product_attention",
+          acceleratedCallCount: 0,
+          denseCallCount: 40,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const candidateDesc = createTestDescriptorV2({
+        runId: "cand-sage-planned-ok",
+        attentionRequest: {
+          attentionVariant: "sage",
+          expectedBackend: "sage",
+          expectedKernel: "sageattention.sageattn",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_3,
+          patches: [],
+          runtimeLockDigest: DUMMY_HASH_2,
+          denseRegionPolicy: {
+            allowPlannedDense: true,
+            minTokensThreshold: 512,
+            description: "Planned dense with threshold"
+          }
+        }
+      });
+
+      const candidateResult = createCompletedResultV2(candidateDesc, {
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "sage",
+          dispatchImplementation: "sageattention.sageattn",
+          acceleratedCallCount: 38,
+          denseCallCount: 0,
+          plannedDenseCallCount: 2,
+          stepRecords: [
+            {
+              stepIndex: 0,
+              callType: "planned_dense",
+              backend: "torch_sdpa",
+              implementation: "torch.nn.functional.scaled_dot_product_attention",
+              metadata: { tokenCount: 256 }
+            },
+            {
+              stepIndex: 1,
+              callType: "planned_dense",
+              backend: "torch_sdpa",
+              implementation: "torch.nn.functional.scaled_dot_product_attention",
+              metadata: { tokenCount: 512 }
+            }
+          ],
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baselineDesc,
+        baselineResult,
+        variantDescriptor: candidateDesc,
+        variantResult: candidateResult
+      });
+
+      expect(report.metricEligibility.wallTimeEligible).toBe(true);
+      expect(report.metricEligibility.samplingWallEligible).toBe(true);
+    });
+
+    it("rejects attention comparison with missing observedProvenance on either side (F-af0b9742)", () => {
+      const sagePackages = [
+        { name: "sageattention", version: "2.1.1", importModule: "sageattention" },
+        { name: "torch", version: "2.5.1+cu124", importModule: "torch" }
+      ];
+      const sageRuntimeLock = computeAttentionRuntimeLockDigest({
+        comfyuiCoreRevision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        pythonPackages: sagePackages,
+        cudaRequirement: ">=12.4",
+        computeCapability: "sm_89"
+      });
+
+      const baselineDesc = createTestDescriptorV2({
+        runId: "base-no-prov",
+        route: "i2v",
+        attentionRequest: {
+          attentionVariant: "dense",
+          expectedBackend: "torch_sdpa",
+          expectedKernel: "torch.nn.functional.scaled_dot_product_attention",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_1,
+          patches: [],
+          runtimeLockDigest: sageRuntimeLock,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+
+      const variantDesc = createTestDescriptorV2({
+        runId: "var-no-prov",
+        route: "i2v",
+        attentionRequest: {
+          attentionVariant: "sage",
+          expectedBackend: "sage",
+          expectedKernel: "sageattention.sageattn",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_3,
+          patches: [],
+          runtimeLockDigest: sageRuntimeLock,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+
+      const baselineResult = createCompletedResultV2(baselineDesc);
+      delete (baselineResult as Record<string, unknown>).observedProvenance;
+      const variantResult = createCompletedResultV2(variantDesc);
+      delete (variantResult as Record<string, unknown>).observedProvenance;
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baselineDesc,
+        baselineResult,
+        variantDescriptor: variantDesc,
+        variantResult
+      });
+
+      expect(report.structuralAdmission.eligible).toBe(false);
+      expect(
+        report.structuralAdmission.reasons.some((r) =>
+          r.includes("missing observed provenance required for attention comparison")
+        )
+      ).toBe(true);
+      expect(report.metricEligibility.wallTimeEligible).toBe(false);
+    });
+
+    it("rejects structural admission when driverVersion or cudaBuildVersion mismatches across attention pair", () => {
+      const sagePackages = [
+        { name: "sageattention", version: "2.1.1", importModule: "sageattention" },
+        { name: "torch", version: "2.5.1+cu124", importModule: "torch" }
+      ];
+      const sageRuntimeLock = computeAttentionRuntimeLockDigest({
+        comfyuiCoreRevision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+        pythonPackages: sagePackages,
+        cudaRequirement: ">=12.4",
+        computeCapability: "sm_89"
+      });
+
+      const baselineDesc = createTestDescriptorV2({
+        runId: "base-dense-driver-1",
+        attentionRequest: {
+          attentionVariant: "dense",
+          expectedBackend: "torch_sdpa",
+          expectedKernel: "torch.nn.functional.scaled_dot_product_attention",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_1,
+          patches: [],
+          runtimeLockDigest: sageRuntimeLock,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+
+      const baselineResult = createCompletedResultV2(baselineDesc, {
+        observedProvenance: {
+          ...createCompletedResultV2(baselineDesc).observedProvenance,
+          runtimeVersions: {
+            status: "verified",
+            pythonVersion: "3.11.9",
+            pytorchVersion: "2.5.1+cu124",
+            cudaBuildVersion: "12.4",
+            cudaRuntimeVersion: "12.4",
+            driverVersion: "560.35.03"
+          }
+        },
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "torch_sdpa",
+          dispatchImplementation: "torch.nn.functional.scaled_dot_product_attention",
+          acceleratedCallCount: 0,
+          denseCallCount: 40,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const candidateDesc = createTestDescriptorV2({
+        runId: "cand-sage-driver-2",
+        attentionRequest: {
+          attentionVariant: "sage",
+          expectedBackend: "sage",
+          expectedKernel: "sageattention.sageattn",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_3,
+          patches: [],
+          runtimeLockDigest: sageRuntimeLock,
+          denseRegionPolicy: { allowPlannedDense: false, description: "policy" }
+        }
+      });
+
+      const candidateResultMismatchedDriver = createCompletedResultV2(candidateDesc, {
+        observedProvenance: {
+          ...createCompletedResultV2(candidateDesc).observedProvenance,
+          runtimeVersions: {
+            status: "verified",
+            pythonVersion: "3.11.9",
+            pytorchVersion: "2.5.1+cu124",
+            cudaBuildVersion: "12.4",
+            cudaRuntimeVersion: "12.4",
+            driverVersion: "550.54.14"
+          }
+        },
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "sage",
+          dispatchImplementation: "sageattention.sageattn",
+          acceleratedCallCount: 40,
+          denseCallCount: 0,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const reportDriver = compareMinimaxH3Experiments({
+        baselineDescriptor: baselineDesc,
+        baselineResult,
+        variantDescriptor: candidateDesc,
+        variantResult: candidateResultMismatchedDriver
+      });
+
+      expect(reportDriver.structuralAdmission.eligible).toBe(false);
+      expect(
+        reportDriver.structuralAdmission.reasons.some((r) =>
+          r.includes('Driver version mismatch: baseline is "560.35.03", variant is "550.54.14"')
+        )
+      ).toBe(true);
+
+      const candidateResultMismatchedCuda = createCompletedResultV2(candidateDesc, {
+        observedProvenance: {
+          ...createCompletedResultV2(candidateDesc).observedProvenance,
+          runtimeVersions: {
+            status: "verified",
+            pythonVersion: "3.11.9",
+            pytorchVersion: "2.5.1+cu124",
+            cudaBuildVersion: "12.1",
+            cudaRuntimeVersion: "12.4",
+            driverVersion: "560.35.03"
+          }
+        },
+        attentionObservation: {
+          status: "verified",
+          actualBackend: "sage",
+          dispatchImplementation: "sageattention.sageattn",
+          acceleratedCallCount: 40,
+          denseCallCount: 0,
+          plannedDenseCallCount: 0,
+          fallbackEvents: [],
+          failureReason: null,
+          missingKernelFailure: null,
+          measurementCoverage: {
+            samplingCallsRecorded: 1,
+            attentionCallsRecorded: 40,
+            complete: true
+          },
+          timings: { deviceElapsedMs: null, kernelElapsedMs: null }
+        }
+      });
+
+      const reportCuda = compareMinimaxH3Experiments({
+        baselineDescriptor: baselineDesc,
+        baselineResult,
+        variantDescriptor: candidateDesc,
+        variantResult: candidateResultMismatchedCuda
+      });
+
+      expect(reportCuda.structuralAdmission.eligible).toBe(false);
+      expect(
+        reportCuda.structuralAdmission.reasons.some((r) =>
+          r.includes('CUDA build version mismatch: baseline is "12.4", variant is "12.1"')
+        )
+      ).toBe(true);
+    });
+
+    it("rejects structural admission when runtimeLockDigest is arbitrary digest unrelated to measured substrate (F-af0b9742 / AC-6)", () => {
+      const arbitraryLock = "2".repeat(64);
+      const baselineDesc = createTestDescriptorV2({
+        runId: "base-dense-arbitrary",
+        attentionRequest: {
+          attentionVariant: "dense",
+          expectedBackend: "torch_sdpa",
+          expectedKernel: "torch.nn.functional.scaled_dot_product_attention",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_1,
+          patches: [],
+          runtimeLockDigest: arbitraryLock,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+      const baselineResult = createCompletedResultV2(baselineDesc, {
+        observedProvenance: {
+          attentionIdentity: {
+            identityVersion: 1,
+            substrateDigest: arbitraryLock,
+            interpreter: {
+              pythonVersion: "3.11.9",
+              pythonExecutableHash: DUMMY_HASH_1
+            },
+            toolchain: {
+              pytorchBuild: "2.4.1+cu124",
+              cudaBuildVersion: "12.4",
+              cudaRuntimeVersion: "12.4",
+              driverVersion: "560.35.03"
+            },
+            packageArtifacts: [
+              {
+                name: "torch",
+                version: "2.4.1",
+                artifactHash: DUMMY_HASH_1,
+                artifactMethod: "installed_record_sha256_v1"
+              }
+            ],
+            sourceIdentities: {
+              "comfy/model_management.py": DUMMY_HASH_1
+            },
+            registeredNodes: {
+              MiniMaxH3ImageToVideo: { className: "MiniMaxH3ImageToVideo" }
+            },
+            handshake: {
+              status: "ok",
+              protocol: "v2-jsonl",
+              protocolVersion: "v2-jsonl",
+              runId: baselineDesc.runId,
+              attemptToken: "token-abc-123",
+              nonce: "nonce-123",
+              pid: 12345,
+              collectorDigest: DUMMY_HASH_2,
+              hookManifestDigest: DUMMY_HASH_3,
+              registeredNodes: {
+                MiniMaxH3ImageToVideo: { className: "MiniMaxH3ImageToVideo" }
+              },
+              installedHooks: STANDARD_MINIMAX_H3_HOOKS.map((h) => ({ ...h, attached: true })),
+              kernelCallableAvailable: true,
+              runtimeVersions: {
+                driverVersion: "560.35.03",
+                cudaBuildVersion: "12.4",
+                cudaRuntimeVersion: "12.4",
+                pythonVersion: "3.11.9"
+              }
+            }
+          }
+        } as unknown as MinimaxH3ObservedProvenance
+      });
+      const candidateDesc = createTestDescriptorV2({
+        runId: "cand-dense-arbitrary",
+        attentionRequest: {
+          attentionVariant: "dense",
+          expectedBackend: "torch_sdpa",
+          expectedKernel: "torch.nn.functional.scaled_dot_product_attention",
+          topologyDigest: DUMMY_HASH_1,
+          catalogDigest: DUMMY_HASH_1,
+          patches: [],
+          runtimeLockDigest: arbitraryLock,
+          denseRegionPolicy: { allowPlannedDense: true, description: "policy" }
+        }
+      });
+      const candidateResult = createCompletedResultV2(candidateDesc, {
+        observedProvenance: {
+          ...baselineResult.observedProvenance
+        }
+      });
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baselineDesc,
+        baselineResult,
+        variantDescriptor: candidateDesc,
+        variantResult: candidateResult
+      });
+
+      expect(report.structuralAdmission.eligible).toBe(false);
+      expect(
+        report.structuralAdmission.reasons.some((r) =>
+          r.includes("recomputed measured substrate digest")
         )
       ).toBe(true);
     });

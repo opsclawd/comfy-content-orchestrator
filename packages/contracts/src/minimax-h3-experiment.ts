@@ -489,7 +489,11 @@ export const MinimaxH3ExperimentIntentSchema = z
     clientId: z.string().min(1),
     workflowDigest: sha256HashSchema,
     requestFingerprint: sha256HashSchema,
-    timestamp: z.string().datetime()
+    timestamp: z.string().datetime(),
+    attemptToken: z.string().min(1).optional(),
+    pid: z.number().int().positive().optional(),
+    handshakeNonce: z.string().min(1).optional(),
+    capabilityHandshakeDigest: sha256HashSchema.optional()
   })
   .strict();
 export type MinimaxH3ExperimentIntent = z.infer<typeof MinimaxH3ExperimentIntentSchema>;

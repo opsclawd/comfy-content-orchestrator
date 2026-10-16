@@ -20,6 +20,7 @@ import {
   FactorChangeSigmaShiftSchema,
   getSamplingRecipe,
   getDerivedAttentionVerificationView,
+  buildRequiredRuntimeManifestFromAttentionCatalog,
   type MinimaxH3ExperimentDescriptorV2,
   type MinimaxH3FactorChange,
   type MinimaxH3SamplingRecipe
@@ -575,6 +576,71 @@ describe("MiniMax-H3 Experiment V2 Contracts", () => {
       };
       const parsed = MinimaxH3RequiredRuntimeManifestSchema.parse(manifest);
       expect(parsed.attentionKernel).toBe("native_sparse");
+    });
+
+    it("buildRequiredRuntimeManifestFromAttentionCatalog rejects upgraded isolated revision without explicit hashes", () => {
+      const entry = {
+        variantName: "native-sol-attn" as const,
+        route: "ref2v" as const,
+        compatibilityState: "requires_isolated_upgrade" as const,
+        scope: "native-sol-attn-ref2v",
+        comfyuiCoreRevision: "94cfeb3a0efdb9d6d7be76f2d48c8b6b2fa983eb",
+        runnable: false,
+        backend: "sol_attn",
+        kernel: "sol_attn",
+        requiredNodes: [{ name: "ModelSparseAttention", classType: "ModelSparseAttention" }],
+        pythonPackages: [
+          {
+            name: "torch",
+            version: ">=2.4.0",
+            artifactHash: "1111111111111111111111111111111111111111111111111111111111111111"
+          }
+        ],
+        cudaRequirement: ">=12.4",
+        computeCapability: "sm_89",
+        supportedDtypes: ["bfloat16"],
+        checkpointCompatibility: {
+          filename: "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+          sha256: "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+          taskMode: "ref2va_pruned_int8"
+        },
+        licensing: {
+          status: "review_required" as const,
+          licenseSourceRef: "https://github.com/Comfy-Org/ComfyUI/blob/master/LICENSE",
+          securityReviewStatus: "pending" as const
+        },
+        denseRegionPolicy: { allowPlannedDense: true, description: "policy" },
+        isolationInstructions: {
+          venvSetup: "venv",
+          installRecipe: "recipe",
+          teardownRecipe: "teardown"
+        },
+        blockers: ["Requires isolated ComfyUI checkout"],
+        evidence: [{ url: "https://github.com", assertion: "evidence" }],
+        catalogDigest: "2222222222222222222222222222222222222222222222222222222222222222"
+      };
+
+      expect(() => buildRequiredRuntimeManifestFromAttentionCatalog(entry, "ref2v")).toThrow(
+        /Isolated upgrade manifest for revision .* requires explicit collectorDigest/
+      );
+
+      expect(() =>
+        buildRequiredRuntimeManifestFromAttentionCatalog(entry, "ref2v", {
+          collectorDigest: "3333333333333333333333333333333333333333333333333333333333333333"
+        })
+      ).toThrow(/Isolated upgrade manifest for revision .* requires explicit sourceFileHashes/);
+
+      expect(() =>
+        buildRequiredRuntimeManifestFromAttentionCatalog(entry, "ref2v", {
+          collectorDigest: "3333333333333333333333333333333333333333333333333333333333333333",
+          sourceFileHashes: {
+            "comfy/model_management.py":
+              "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        })
+      ).toThrow(
+        /Isolated upgrade manifest for revision .* requires explicit pytorchBuild and cudaBuild/
+      );
     });
   });
 

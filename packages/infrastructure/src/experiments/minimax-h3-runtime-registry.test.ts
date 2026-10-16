@@ -2,7 +2,8 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import {
   ExperimentRuntimeRegistry,
   CurrentPinExperimentRuntimeAdapter,
-  IsolatedUpgradeExperimentRuntimeAdapter
+  IsolatedUpgradeExperimentRuntimeAdapter,
+  setTestDriverQueryCommand
 } from "./minimax-h3-runtime-registry.js";
 import {
   PINNED_COMFYUI_CORE_REVISION,
@@ -60,6 +61,7 @@ describe("MiniMax-H3 Runtime Registry & Adapters", () => {
     execSync("git add .", { cwd: mockComfyDir });
     execSync('git commit -m "init"', { cwd: mockComfyDir });
     fs.writeFileSync(path.join(mockComfyDir, ".git", "HEAD"), `${PINNED_COMFYUI_CORE_REVISION}\n`);
+    setTestDriverQueryCommand({ command: "echo", args: ["550.54.14"] });
 
     const mockPythonScript = `#!/bin/sh
 if [ "$1" = "-c" ]; then
@@ -71,19 +73,27 @@ if [ "$1" = "-c" ]; then
     echo "ok"
     exit 0
   fi
-  if echo "$2" | grep -q "dist_name = sys.argv\\[1\\]"; then
-    if [ "$3" = "comfy-kitchen" ]; then
-      if [ -n "$4" ] && [ "$4" != "0.2.34" ] && [ "$4" != "0.2.31" ]; then
-        echo "version_mismatch:expected_$4_got_0.2.34"
-        exit 1
-      fi
-      echo "ok"
-      exit 0
+fi
+if echo "$1" | grep -q "minimax-h3-package-inspector.py"; then
+  dist="$2"
+  ver="$3"
+  mod="$4"
+  hash="$5"
+  if [ "$dist" = "comfy-kitchen" ]; then
+    if [ -n "$ver" ] && [ "$ver" != "0.2.34" ] && [ "$ver" != "0.2.31" ]; then
+      echo "version_mismatch:expected_\${ver}_got_0.2.34"
+      exit 1
     fi
-    if [ "$3" = "sageattention" ] || [ "$3" = "veda-sparse-attention" ] || [ "$3" = "triton" ] || [ "$3" = "torch" ]; then
-      echo "ok"
-      exit 0
+    if [ -n "$hash" ] && [ "$hash" != "__MEASURE__" ] && [ "$hash" != "1111111111111111111111111111111111111111111111111111111111111111" ]; then
+      echo "hash_mismatch:expected_\${hash}_got_1111111111111111111111111111111111111111111111111111111111111111"
+      exit 1
     fi
+    echo 'ok:{"ok":true,"name":"comfy-kitchen","version":"0.2.34","artifactHash":"1111111111111111111111111111111111111111111111111111111111111111","artifactMethod":"installed_record_sha256_v1","fileCount":5}'
+    exit 0
+  fi
+  if [ "$dist" = "sageattention" ] || [ "$dist" = "veda-sparse-attention" ] || [ "$dist" = "triton" ] || [ "$dist" = "torch" ] || [ "$dist" = "json" ] || [ "$dist" = "urllib3" ]; then
+    echo "ok:{\\"ok\\":true,\\"name\\":\\"$dist\\",\\"version\\":\\"1.0.0\\",\\"artifactHash\\":\\"2222222222222222222222222222222222222222222222222222222222222222\\",\\"artifactMethod\\":\\"installed_record_sha256_v1\\",\\"fileCount\\":3}"
+    exit 0
   fi
 fi
 exec /usr/bin/python3 "$@"
@@ -92,6 +102,8 @@ exec /usr/bin/python3 "$@"
   });
 
   afterAll(() => {
+    setTestDriverQueryCommand(null);
+    delete process.env.CCO_DRIVER_VERSION_OVERRIDE;
     if (fs.existsSync(mockRootDir)) {
       fs.rmSync(mockRootDir, { recursive: true, force: true });
     }
@@ -136,6 +148,32 @@ exec /usr/bin/python3 "$@"
     expect(result.ok).toBe(false);
     expect(result.status).toBe("conflict");
     expect(result.blocker).toContain("Required runtime manifest digest mismatch");
+  });
+
+  it("audits torch even when a manifest declares no pythonPackages (AC-1, F-b4902dfa)", async () => {
+    // torch provides the scaled_dot_product_attention dense fallback every
+    // attention backend can hit, so it must be in the mandatory audit set
+    // regardless of whether the manifest declared it — a manifest that
+    // omits torch must not be able to skip verifying it.
+    const adapter = new CurrentPinExperimentRuntimeAdapter();
+    const manifestWithoutTorch: MinimaxH3RequiredRuntimeManifest = {
+      ...baseManifest,
+      coreRevision: PINNED_COMFYUI_CORE_REVISION,
+      requiredNodes: [],
+      pythonPackages: []
+    };
+
+    const res = await adapter.verify({
+      comfyUiDir: mockComfyDir,
+      pythonPath: mockPythonPath,
+      requiredRuntime: manifestWithoutTorch
+    });
+
+    expect(res.ok).toBe(true);
+    const parsed = MinimaxH3ObservedProvenanceSchema.parse(res.observations);
+    const torchEntry = parsed.packageIdentities?.find((p) => p.name === "torch");
+    expect(torchEntry).toBeDefined();
+    expect(torchEntry?.artifactHash).toBeDefined();
   });
 
   it("accepts canonical H3 nodes (I2V / Ref2V) on pinned adapter and returns schema-valid observations", async () => {
@@ -872,8 +910,18 @@ class MiniMaxH3Extension(io.ComfyExtension):
         kernel: "torch.nn.functional.scaled_dot_product_attention",
         comfyuiCoreRevision: upgradedCoreRevision
       });
+      const upgradedSourceHash = createHash("sha256")
+        .update(fs.readFileSync(path.join(upgradedDir, "comfy_extras", "nodes_minimax_h3.py")))
+        .digest("hex");
+
       const manifest = buildRequiredRuntimeManifestFromAttentionCatalog(entry, "i2v", {
-        sourceFileHashes: {}
+        sourceFileHashes: {
+          "comfy_extras/nodes_minimax_h3.py": upgradedSourceHash
+        },
+        collectorDigest: "2222222222222222222222222222222222222222222222222222222222222222",
+        hookManifestDigest: "3333333333333333333333333333333333333333333333333333333333333333",
+        pytorchBuild: "2.5.1+cu124",
+        cudaBuild: "12.4"
       });
 
       const res = await adapter.verify({
@@ -903,8 +951,18 @@ class MiniMaxH3Extension(io.ComfyExtension):
           { name: "torch", version: "2.5.1+cu124" }
         ]
       });
+      const upgradedSourceHash = createHash("sha256")
+        .update(fs.readFileSync(path.join(upgradedDir, "comfy_extras", "nodes_minimax_h3.py")))
+        .digest("hex");
+
       const manifest = buildRequiredRuntimeManifestFromAttentionCatalog(entry, "i2v", {
-        sourceFileHashes: {}
+        sourceFileHashes: {
+          "comfy_extras/nodes_minimax_h3.py": upgradedSourceHash
+        },
+        collectorDigest: "2222222222222222222222222222222222222222222222222222222222222222",
+        hookManifestDigest: "3333333333333333333333333333333333333333333333333333333333333333",
+        pytorchBuild: "2.5.1+cu124",
+        cudaBuild: "12.4"
       });
 
       const res = await adapter.verify({
@@ -934,8 +992,18 @@ class MiniMaxH3Extension(io.ComfyExtension):
           { name: "torch", version: "2.5.1+cu124" }
         ]
       });
+      const upgradedSourceHash = createHash("sha256")
+        .update(fs.readFileSync(path.join(upgradedDir, "comfy_extras", "nodes_minimax_h3.py")))
+        .digest("hex");
+
       const manifest = buildRequiredRuntimeManifestFromAttentionCatalog(entry, "i2v", {
-        sourceFileHashes: {}
+        sourceFileHashes: {
+          "comfy_extras/nodes_minimax_h3.py": upgradedSourceHash
+        },
+        collectorDigest: "2222222222222222222222222222222222222222222222222222222222222222",
+        hookManifestDigest: "3333333333333333333333333333333333333333333333333333333333333333",
+        pytorchBuild: "2.5.1+cu124",
+        cudaBuild: "12.4"
       });
 
       const res = await adapter.verify({
@@ -961,7 +1029,13 @@ class MiniMaxH3Extension(io.ComfyExtension):
         comfyuiCoreRevision: FASTH3_ISOLATED_CORE_REVISION
       });
       const manifest = buildRequiredRuntimeManifestFromAttentionCatalog(entry, "i2v", {
-        sourceFileHashes: {}
+        sourceFileHashes: {
+          "comfy_extras/nodes_minimax_h3.py": "1".repeat(64)
+        },
+        collectorDigest: "1".repeat(64),
+        hookManifestDigest: "1".repeat(64),
+        pytorchBuild: "2.5.1+cu124",
+        cudaBuild: "12.4"
       });
 
       const res = await adapter.verify({
@@ -1062,6 +1136,10 @@ if [ "$1" = "-c" ]; then
     exit 0
   fi
 fi
+if echo "$1" | grep -q "minimax-h3-package-inspector.py"; then
+  echo 'ok:{"ok":true,"name":"torch","version":"2.5.1","artifactHash":"2222222222222222222222222222222222222222222222222222222222222222","artifactMethod":"installed_record_sha256_v1","fileCount":3}'
+  exit 0
+fi
 exec /usr/bin/python3 "$@"
 `;
     fs.writeFileSync(mockFailingPython, script, { mode: 0o755 });
@@ -1082,5 +1160,457 @@ exec /usr/bin/python3 "$@"
     expect(res.ok).toBe(false);
     expect(res.status).toBe("conflict");
     expect(res.blocker).toContain('Attention kernel "block_sparse_triton"');
+  });
+
+  describe("Independently Verified Identity & Acceptance Criteria", () => {
+    it("fails verification when python package module lacks __file__ attribute", async () => {
+      const adapter = new CurrentPinExperimentRuntimeAdapter();
+      // Built-in 'sys' module has no __file__ attribute
+      const manifest: MinimaxH3RequiredRuntimeManifest = {
+        ...baseManifest,
+        coreRevision: PINNED_COMFYUI_CORE_REVISION,
+        requiredNodes: [],
+        pythonPackages: [{ name: "sys", importModule: "sys", version: "" }]
+      };
+
+      const res = await adapter.verify({
+        comfyUiDir: mockComfyDir,
+        pythonPath: mockPythonPath,
+        requiredRuntime: manifest
+      });
+
+      expect(res.ok).toBe(false);
+      expect(res.status).toBe("conflict");
+      expect(res.blocker).toContain("missing_file_attribute");
+    });
+
+    it("rejects when PyTorch environment cudaBuild does not match required manifest", async () => {
+      const adapter = new CurrentPinExperimentRuntimeAdapter();
+      const mockCudaMismatchPython = path.join(mockRootDir, "cuda-mismatch-python.sh");
+      const script = `#!/bin/sh
+if [ "$1" = "-c" ]; then
+  if echo "$2" | grep -q "torch.__version__"; then
+    echo "2.5.1+cu124|12.1"
+    exit 0
+  fi
+  if echo "$2" | grep -q "scaled_dot_product_attention"; then
+    echo "ok"
+    exit 0
+  fi
+fi
+exec /usr/bin/python3 "$@"
+`;
+      fs.writeFileSync(mockCudaMismatchPython, script, { mode: 0o755 });
+
+      const manifest: MinimaxH3RequiredRuntimeManifest = {
+        ...baseManifest,
+        coreRevision: PINNED_COMFYUI_CORE_REVISION,
+        cudaBuild: "12.4"
+      };
+
+      const res = await adapter.verify({
+        comfyUiDir: mockComfyDir,
+        pythonPath: mockCudaMismatchPython,
+        requiredRuntime: manifest
+      });
+
+      expect(res.ok).toBe(false);
+      expect(res.status).toBe("conflict");
+      expect(res.blocker).toContain("CUDA build version mismatch: expected 12.4, got 12.1");
+    });
+
+    it("blocks verified status with 'unknown' when host driver evidence is missing", async () => {
+      const adapter = new CurrentPinExperimentRuntimeAdapter();
+      // Temporarily remove driver override
+      const savedDriver = process.env.CCO_DRIVER_VERSION_OVERRIDE;
+      delete process.env.CCO_DRIVER_VERSION_OVERRIDE;
+      try {
+        const res = await adapter.verify({
+          comfyUiDir: mockComfyDir,
+          pythonPath: mockPythonPath,
+          requiredRuntime: baseManifest,
+          driverQueryCommand: {
+            command: "false" // fails immediately
+          }
+        });
+
+        expect(res.ok).toBe(false);
+        expect(res.status).toBe("unknown");
+        expect(res.blocker).toContain("Missing NVIDIA driver evidence");
+      } finally {
+        if (savedDriver) process.env.CCO_DRIVER_VERSION_OVERRIDE = savedDriver;
+      }
+    });
+
+    it("rejects with conflict when host driver violates constraint with dotted numeric comparison", async () => {
+      const adapter = new CurrentPinExperimentRuntimeAdapter();
+      const manifest: MinimaxH3RequiredRuntimeManifest = {
+        ...baseManifest,
+        coreRevision: PINNED_COMFYUI_CORE_REVISION,
+        driverConstraints: [">=555.42.02"]
+      };
+
+      const res = await adapter.verify({
+        comfyUiDir: mockComfyDir,
+        pythonPath: mockPythonPath,
+        requiredRuntime: manifest,
+        driverQueryCommand: { command: "echo", args: ["550.54.14"] } // 550 < 555
+      });
+
+      expect(res.ok).toBe(false);
+      expect(res.status).toBe("conflict");
+      expect(res.blocker).toContain(
+        'Host NVIDIA driver version 550.54.14 does not satisfy required constraint ">=555.42.02"'
+      );
+    });
+
+    it("accepts when host driver satisfies dotted numeric constraint with multi-segment versions", async () => {
+      const adapter = new CurrentPinExperimentRuntimeAdapter();
+      const manifest: MinimaxH3RequiredRuntimeManifest = {
+        ...baseManifest,
+        coreRevision: PINNED_COMFYUI_CORE_REVISION,
+        driverConstraints: [">=550.54.10", "<=550.54.20"]
+      };
+
+      const res = await adapter.verify({
+        comfyUiDir: mockComfyDir,
+        pythonPath: mockPythonPath,
+        requiredRuntime: manifest,
+        driverQueryCommand: { command: "echo", args: ["550.54.14"] }
+      });
+
+      expect(res.ok).toBe(true);
+      expect(res.status).toBe("verified");
+    });
+
+    it("rejects malformed driver constraints", async () => {
+      const adapter = new CurrentPinExperimentRuntimeAdapter();
+      const manifest: MinimaxH3RequiredRuntimeManifest = {
+        ...baseManifest,
+        coreRevision: PINNED_COMFYUI_CORE_REVISION,
+        driverConstraints: ["~=550.00"] // unsupported operator
+      };
+
+      const res = await adapter.verify({
+        comfyUiDir: mockComfyDir,
+        pythonPath: mockPythonPath,
+        requiredRuntime: manifest,
+        driverQueryCommand: { command: "echo", args: ["550.54.14"] }
+      });
+
+      expect(res.ok).toBe(false);
+      expect(res.status).toBe("conflict");
+      expect(res.blocker).toContain('Malformed or unsupported driver constraint "~=550.00"');
+    });
+
+    it("rejects malformed driver versions and constraints with doubled, leading, or trailing dots (F-780279b3)", async () => {
+      const adapter = new CurrentPinExperimentRuntimeAdapter();
+
+      // Doubled dot in constraint
+      const resConstraint = await adapter.verify({
+        comfyUiDir: mockComfyDir,
+        pythonPath: mockPythonPath,
+        requiredRuntime: {
+          ...baseManifest,
+          coreRevision: PINNED_COMFYUI_CORE_REVISION,
+          driverConstraints: [">=550..00"]
+        },
+        driverQueryCommand: { command: "echo", args: ["560.35.03"] }
+      });
+      expect(resConstraint.ok).toBe(false);
+      expect(resConstraint.status).toBe("conflict");
+      expect(resConstraint.blocker).toContain("Malformed or unsupported driver constraint");
+
+      // Doubled dot in observed driver
+      const resDriver = await adapter.verify({
+        comfyUiDir: mockComfyDir,
+        pythonPath: mockPythonPath,
+        requiredRuntime: {
+          ...baseManifest,
+          coreRevision: PINNED_COMFYUI_CORE_REVISION,
+          driverConstraints: [">=550.00.00"]
+        },
+        driverQueryCommand: { command: "echo", args: ["560..35.03"] }
+      });
+      expect(resDriver.ok).toBe(false);
+      expect(resDriver.status).toBe("conflict");
+      expect(resDriver.blocker).toContain('Malformed driver version "560..35.03"');
+    });
+
+    it("IsolatedUpgrade adapter admits sparse nodes based on source definitions, not hardcoded constructor list", async () => {
+      // Create adapter with empty constructor list
+      const adapter = new IsolatedUpgradeExperimentRuntimeAdapter(
+        FASTH3_ISOLATED_CORE_REVISION,
+        "fasth3-isolated-upgrade-adapter-v1",
+        [] // empty extra nodes in constructor!
+      );
+
+      const fasth3NodesDir = path.join(mockRootDir, "fasth3-nodes-dir");
+      const manifest: MinimaxH3RequiredRuntimeManifest = {
+        ...baseManifest,
+        coreRevision: FASTH3_ISOLATED_CORE_REVISION,
+        requiredNodes: [
+          { name: "MiniMaxH3SigmaShift" },
+          { name: "ModelAttentionBackend" },
+          { name: "BlockSparseAttention" }
+        ],
+        attentionKernel: "block_sparse_triton"
+      };
+
+      const res = await adapter.verify({
+        comfyUiDir: fasth3NodesDir,
+        pythonPath: mockPythonPath,
+        requiredRuntime: manifest
+      });
+
+      expect(res.ok).toBe(true);
+      expect(res.status).toBe("verified");
+    });
+
+    it("package inspector audits RECORD and detects hash modification", () => {
+      const tempPkgDir = path.join(mockRootDir, "fake-pkg-site");
+      fs.mkdirSync(path.join(tempPkgDir, "sample_pkg"), { recursive: true });
+      fs.mkdirSync(path.join(tempPkgDir, "sample_pkg-1.0.0.dist-info"), { recursive: true });
+
+      const pyContent = 'def hello():\n    return "world"\n';
+      const pyPath = path.join(tempPkgDir, "sample_pkg", "__init__.py");
+      fs.writeFileSync(pyPath, pyContent);
+
+      const pyHashRaw = createHash("sha256").update(pyContent).digest();
+      const pyHashB64 = Buffer.from(pyHashRaw).toString("base64url").replace(/=+$/, "");
+
+      const metadataContent = "Metadata-Version: 2.1\nName: sample-pkg\nVersion: 1.0.0\n";
+      const metaPath = path.join(tempPkgDir, "sample_pkg-1.0.0.dist-info", "METADATA");
+      fs.writeFileSync(metaPath, metadataContent);
+      const metaHashRaw = createHash("sha256").update(metadataContent).digest();
+      const metaHashB64 = Buffer.from(metaHashRaw).toString("base64url").replace(/=+$/, "");
+
+      const recordContent = `sample_pkg/__init__.py,sha256=${pyHashB64},${pyContent.length}\nsample_pkg-1.0.0.dist-info/METADATA,sha256=${metaHashB64},${metadataContent.length}\nsample_pkg-1.0.0.dist-info/RECORD,,\n`;
+      fs.writeFileSync(
+        path.join(tempPkgDir, "sample_pkg-1.0.0.dist-info", "RECORD"),
+        recordContent
+      );
+
+      const expectedHash = "ea2090faad2cf7663e8421955a60b4603e745e8482d63b9b9c1c75384c561e78";
+
+      // 1. Valid inspector run
+      const inspectorCmd = `PYTHONPATH="${tempPkgDir}:$PYTHONPATH" python3 packages/infrastructure/src/experiments/minimax-h3-package-inspector.py sample-pkg 1.0.0 sample_pkg ${expectedHash} installed_record_sha256_v1`;
+      const out = execSync(inspectorCmd, { encoding: "utf8" });
+      expect(out).toContain("ok:");
+      const parsed = JSON.parse(out.trim().slice(3));
+      expect(parsed.name).toBe("sample-pkg");
+      expect(parsed.artifactMethod).toBe("installed_record_sha256_v1");
+      expect(parsed.fileCount).toBe(2);
+
+      // 2. Tampered file fails with record_hash_mismatch
+      fs.writeFileSync(pyPath, 'def hello():\n    return "tampered"\n');
+      let failed = false;
+      try {
+        execSync(inspectorCmd, { encoding: "utf8" });
+      } catch (err) {
+        failed = true;
+        const errObj = err as { stdout?: string; stderr?: string };
+        expect((errObj.stdout ?? "") + (errObj.stderr ?? "")).toContain("record_hash_mismatch");
+      }
+      expect(failed).toBe(true);
+
+      // 3. Missing RECORD fails with missing_record
+      fs.rmSync(path.join(tempPkgDir, "sample_pkg-1.0.0.dist-info", "RECORD"));
+      let missingRecordFailed = false;
+      try {
+        execSync(inspectorCmd, { encoding: "utf8" });
+      } catch (err) {
+        missingRecordFailed = true;
+        const errObj = err as { stdout?: string; stderr?: string };
+        expect((errObj.stdout ?? "") + (errObj.stderr ?? "")).toContain("missing_record");
+      }
+      expect(missingRecordFailed).toBe(true);
+
+      // 4. Missing expected hash fails closed with missing_expected_hash
+      const noExpectedCmd = `PYTHONPATH="${tempPkgDir}:$PYTHONPATH" python3 packages/infrastructure/src/experiments/minimax-h3-package-inspector.py sample-pkg 1.0.0 sample_pkg`;
+      let missingExpectedFailed = false;
+      try {
+        execSync(noExpectedCmd, { encoding: "utf8" });
+      } catch (err) {
+        missingExpectedFailed = true;
+        const errObj = err as { stdout?: string; stderr?: string };
+        expect((errObj.stdout ?? "") + (errObj.stderr ?? "")).toContain("missing_expected_hash");
+      }
+      expect(missingExpectedFailed).toBe(true);
+
+      // 5. Empty RECORD fails closed with empty_record
+      fs.writeFileSync(path.join(tempPkgDir, "sample_pkg-1.0.0.dist-info", "RECORD"), "\n");
+      let emptyRecordFailed = false;
+      try {
+        execSync(inspectorCmd, { encoding: "utf8" });
+      } catch (err) {
+        emptyRecordFailed = true;
+        const errObj = err as { stdout?: string; stderr?: string };
+        expect((errObj.stdout ?? "") + (errObj.stderr ?? "")).toContain("empty_record");
+      }
+      expect(emptyRecordFailed).toBe(true);
+
+      // 6. Shadowed module fails closed with unverified_import_ownership
+      fs.writeFileSync(pyPath, pyContent);
+      fs.writeFileSync(
+        path.join(tempPkgDir, "sample_pkg-1.0.0.dist-info", "RECORD"),
+        recordContent
+      );
+      const shadowDir = path.join(mockRootDir, "shadow-site");
+      fs.mkdirSync(path.join(shadowDir, "sample_pkg"), { recursive: true });
+      fs.writeFileSync(
+        path.join(shadowDir, "sample_pkg", "__init__.py"),
+        'def hello(): return "shadow"\n'
+      );
+      const shadowCmd = `PYTHONPATH="${shadowDir}:${tempPkgDir}:$PYTHONPATH" python3 packages/infrastructure/src/experiments/minimax-h3-package-inspector.py sample-pkg 1.0.0 sample_pkg ${expectedHash} installed_record_sha256_v1`;
+      let shadowFailed = false;
+      try {
+        execSync(shadowCmd, { encoding: "utf8" });
+      } catch (err) {
+        shadowFailed = true;
+        const errObj = err as { stdout?: string; stderr?: string };
+        expect((errObj.stdout ?? "") + (errObj.stderr ?? "")).toContain("import_shadowing");
+      }
+      expect(shadowFailed).toBe(true);
+
+      // 7. Unsupported RECORD hash algorithm fails with unsupported_record_hash_algorithm
+      const sha1Record = `sample_pkg/__init__.py,sha1=da39a3ee5e6b4b0d3255bfef95601890afd80709,${pyContent.length}\nsample_pkg-1.0.0.dist-info/RECORD,,\n`;
+      fs.writeFileSync(path.join(tempPkgDir, "sample_pkg-1.0.0.dist-info", "RECORD"), sha1Record);
+      let algoFailed = false;
+      try {
+        execSync(inspectorCmd, { encoding: "utf8" });
+      } catch (err) {
+        algoFailed = true;
+        const errObj = err as { stdout?: string; stderr?: string };
+        expect((errObj.stdout ?? "") + (errObj.stderr ?? "")).toContain(
+          "unsupported_record_hash_algorithm"
+        );
+      }
+      expect(algoFailed).toBe(true);
+
+      // 8. Empty RECORD hash declaration fails with missing_record_hash_declaration
+      const emptyHashRecord = `sample_pkg/__init__.py,sha256=,${pyContent.length}\nsample_pkg-1.0.0.dist-info/RECORD,,\n`;
+      fs.writeFileSync(
+        path.join(tempPkgDir, "sample_pkg-1.0.0.dist-info", "RECORD"),
+        emptyHashRecord
+      );
+      let emptyHashFailed = false;
+      try {
+        execSync(inspectorCmd, { encoding: "utf8" });
+      } catch (err) {
+        emptyHashFailed = true;
+        const errObj = err as { stdout?: string; stderr?: string };
+        expect((errObj.stdout ?? "") + (errObj.stderr ?? "")).toContain(
+          "missing_record_hash_declaration"
+        );
+      }
+      expect(emptyHashFailed).toBe(true);
+
+      // 9. RECORD file size mismatch fails with record_size_mismatch
+      const mismatchedSizeRecord = `sample_pkg/__init__.py,sha256=${pyHashB64},99999\nsample_pkg-1.0.0.dist-info/RECORD,,\n`;
+      fs.writeFileSync(
+        path.join(tempPkgDir, "sample_pkg-1.0.0.dist-info", "RECORD"),
+        mismatchedSizeRecord
+      );
+      let sizeMismatchFailed = false;
+      try {
+        execSync(inspectorCmd, { encoding: "utf8" });
+      } catch (err) {
+        sizeMismatchFailed = true;
+        const errObj = err as { stdout?: string; stderr?: string };
+        expect((errObj.stdout ?? "") + (errObj.stderr ?? "")).toContain("record_size_mismatch");
+      }
+      expect(sizeMismatchFailed).toBe(true);
+
+      // 10. Unsupported editable install fails with unsupported_editable_install
+      fs.writeFileSync(
+        path.join(tempPkgDir, "sample_pkg-1.0.0.dist-info", "RECORD"),
+        recordContent
+      );
+      fs.writeFileSync(
+        path.join(tempPkgDir, "sample_pkg-1.0.0.dist-info", "direct_url.json"),
+        JSON.stringify({ url: "file:///local/path", dir_info: { editable: true } })
+      );
+      let editableFailed = false;
+      try {
+        execSync(inspectorCmd, { encoding: "utf8" });
+      } catch (err) {
+        editableFailed = true;
+        const errObj = err as { stdout?: string; stderr?: string };
+        expect((errObj.stdout ?? "") + (errObj.stderr ?? "")).toContain(
+          "unsupported_editable_install"
+        );
+      }
+      expect(editableFailed).toBe(true);
+      fs.unlinkSync(path.join(tempPkgDir, "sample_pkg-1.0.0.dist-info", "direct_url.json"));
+    });
+
+    it("handles verifyPythonPackage timeout and abort signal", async () => {
+      const stallingPython = path.join(mockRootDir, "stalling-python.sh");
+      fs.writeFileSync(
+        stallingPython,
+        `#!/bin/sh
+sleep 10
+exit 0
+`,
+        { mode: 0o755 }
+      );
+
+      const { verifyPythonPackage } = await import("./minimax-h3-runtime-registry.js");
+      const pkg = {
+        name: "test-pkg",
+        version: "1.0.0",
+        artifactHash: "1111111111111111111111111111111111111111111111111111111111111111",
+        artifactMethod: "installed_record_sha256_v1"
+      };
+
+      // 1. Timeout
+      const timeoutRes = await verifyPythonPackage(stallingPython, pkg, { timeoutMs: 100 });
+      expect(timeoutRes.ok).toBe(false);
+      expect(timeoutRes.blocker).toContain("timed out");
+
+      // 2. AbortSignal
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), 50);
+      const abortRes = await verifyPythonPackage(stallingPython, pkg, {
+        signal: controller.signal,
+        timeoutMs: 5000
+      });
+      expect(abortRes.ok).toBe(false);
+      expect(abortRes.blocker).toContain("aborted");
+    });
+
+    it("built-package contains packaged inspector asset and runs successfully against fixture", () => {
+      const builtInspectorPath = path.resolve(
+        "packages/infrastructure/dist/experiments/minimax-h3-package-inspector.py"
+      );
+      expect(fs.existsSync(builtInspectorPath)).toBe(true);
+
+      const tempPkgDir = path.join(mockRootDir, "fake-pkg-site");
+      const pyContent = 'def hello():\n    return "world"\n';
+      fs.writeFileSync(path.join(tempPkgDir, "sample_pkg", "__init__.py"), pyContent);
+      const pyHashRaw = createHash("sha256").update(pyContent).digest();
+      const pyHashB64 = Buffer.from(pyHashRaw).toString("base64url").replace(/=+$/, "");
+      const metadataContent = "Metadata-Version: 2.1\nName: sample-pkg\nVersion: 1.0.0\n";
+      fs.writeFileSync(
+        path.join(tempPkgDir, "sample_pkg-1.0.0.dist-info", "METADATA"),
+        metadataContent
+      );
+      const metaHashRaw = createHash("sha256").update(metadataContent).digest();
+      const metaHashB64 = Buffer.from(metaHashRaw).toString("base64url").replace(/=+$/, "");
+      const recordContent = `sample_pkg/__init__.py,sha256=${pyHashB64},${pyContent.length}\nsample_pkg-1.0.0.dist-info/METADATA,sha256=${metaHashB64},${metadataContent.length}\nsample_pkg-1.0.0.dist-info/RECORD,,\n`;
+      fs.writeFileSync(
+        path.join(tempPkgDir, "sample_pkg-1.0.0.dist-info", "RECORD"),
+        recordContent
+      );
+
+      const expectedHash = "ea2090faad2cf7663e8421955a60b4603e745e8482d63b9b9c1c75384c561e78";
+      const cmd = `PYTHONPATH="${tempPkgDir}:$PYTHONPATH" python3 "${builtInspectorPath}" sample-pkg 1.0.0 sample_pkg ${expectedHash} installed_record_sha256_v1`;
+      const out = execSync(cmd, { encoding: "utf8" });
+      expect(out).toContain("ok:");
+      const parsed = JSON.parse(out.trim().slice(3));
+      expect(parsed.name).toBe("sample-pkg");
+      expect(parsed.artifactHash).toBe(expectedHash);
+    });
   });
 });

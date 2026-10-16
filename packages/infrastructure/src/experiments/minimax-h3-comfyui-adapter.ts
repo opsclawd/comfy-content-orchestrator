@@ -1,4 +1,8 @@
 import type { MinimaxH3ComfyUiTransportPort } from "@cco/application";
+import {
+  MinimaxH3CapabilityHandshakeSchema,
+  type MinimaxH3CapabilityHandshake
+} from "@cco/contracts";
 
 const MAX_RESPONSE_BODY_BYTES = 50 * 1024 * 1024;
 
@@ -484,5 +488,42 @@ export class MinimaxH3ComfyUiAdapter implements MinimaxH3ComfyUiTransportPort {
     }
 
     return null;
+  }
+
+  async getCapabilityHandshake(
+    baseUrl: string,
+    nonce: string,
+    timeoutMs = 10000,
+    abortSignal?: AbortSignal
+  ): Promise<{
+    ok: boolean;
+    handshake?: MinimaxH3CapabilityHandshake;
+    error?: string;
+  }> {
+    const res = await this.fetchJsonWithTimeout<unknown>(
+      `${baseUrl}/experiment/minimax-h3/capability?nonce=${encodeURIComponent(nonce)}`,
+      { method: "GET" },
+      timeoutMs,
+      abortSignal
+    );
+    if (!res.ok || !res.data) {
+      return {
+        ok: false,
+        error:
+          res.error ||
+          `HTTP ${res.status}: ${res.statusText || "Failed to fetch capability handshake"}`
+      };
+    }
+    const parseResult = MinimaxH3CapabilityHandshakeSchema.safeParse(res.data);
+    if (!parseResult.success) {
+      return {
+        ok: false,
+        error: `Invalid capability handshake response: ${parseResult.error.message}`
+      };
+    }
+    return {
+      ok: true,
+      handshake: parseResult.data
+    };
   }
 }

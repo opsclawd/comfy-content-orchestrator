@@ -15,7 +15,8 @@ import type {
   MinimaxH3RequiredRuntimeManifest,
   MinimaxH3ObservedProvenance,
   MinimaxH3AttentionVariantName,
-  MinimaxH3SamplingRecipeName
+  MinimaxH3SamplingRecipeName,
+  MinimaxH3CapabilityHandshake
 } from "@cco/contracts";
 
 export interface MinimaxH3ExperimentStorePort {
@@ -112,7 +113,7 @@ export interface MinimaxH3TargetPreflightPort {
     ok: boolean;
     resolvedPaths: Record<
       string,
-      { expectedHash: string; resolvedPath: string; sizeBytes: number }
+      { expectedHash: string; actualHash?: string; resolvedPath: string; sizeBytes: number }
     >;
     blocker?: string;
   }>;
@@ -135,13 +136,47 @@ export interface MinimaxH3TargetPreflightPort {
     pythonPath: string;
     requiredRuntime: MinimaxH3RequiredRuntimeManifest;
     requiredRuntimeDigest: string;
-    expectedCheckpointHash?: string;
+    expectedCheckpointHash?: string | undefined;
+    timeoutMs?: number | undefined;
+    signal?: AbortSignal | undefined;
   }): Promise<{
     ok: boolean;
     status: "verified" | "conflict" | "unknown";
-    blocker?: string;
-    observations?: MinimaxH3ObservedProvenance;
+    blocker?: string | undefined;
+    observations?: MinimaxH3ObservedProvenance | undefined;
     adapterRegistered: boolean;
+  }>;
+  inspectEnvironmentIdentity?(options: {
+    comfyUiDir: string;
+    pythonPath: string;
+    coreRevision: string;
+    requiredPackages?: ReadonlyArray<{
+      name: string;
+      version?: string;
+      importModule?: string;
+    }>;
+    timeoutMs?: number | undefined;
+    signal?: AbortSignal | undefined;
+  }): Promise<{
+    ok: boolean;
+    blocker?: string | undefined;
+    interpreter?: {
+      pythonVersion: string;
+      pythonExecutableHash?: string;
+      pythonAbi?: string;
+      pythonCompiler?: string;
+    };
+    pytorchBuild?: string;
+    cudaBuild?: string;
+    driverConstraints?: string[];
+    sourceFileHashes?: Record<string, string>;
+    pythonPackages?: Array<{
+      name: string;
+      version: string;
+      artifactHash?: string;
+      artifactMethod?: string;
+      importModule?: string;
+    }>;
   }>;
 }
 
@@ -231,6 +266,16 @@ export interface MinimaxH3ComfyUiTransportPort {
     outputSubfolder?: string;
     outputType?: "output" | "temp";
   } | null>;
+  getCapabilityHandshake?(
+    baseUrl: string,
+    nonce: string,
+    timeoutMs: number,
+    abortSignal?: AbortSignal
+  ): Promise<{
+    ok: boolean;
+    handshake?: MinimaxH3CapabilityHandshake;
+    error?: string;
+  }>;
 }
 
 export interface MinimaxH3TelemetrySamplerPort {

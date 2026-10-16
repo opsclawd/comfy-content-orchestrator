@@ -76,7 +76,36 @@ The instrumentation collector (`minimax-h3-collector.py`) and result reducer (`m
 
 ---
 
-## 5. Step-by-Step Operator Workflow
+## 5. Independently Verified Identity & Pre-Submit Capability Handshake
+
+Issue #449 establishes that declared equality is insufficient for admitting or comparing attention experiments:
+
+1. **Installed-Build Artifact Identity & RECORD Audit:**
+   - Package artifact identity is verified via `minimax-h3-package-inspector.py`.
+   - Packages are audited against installed `dist-info/RECORD` entries, producing an `installed_record_sha256_v1` digest covering all installed files.
+   - Any missing `__file__`, missing `RECORD`, unreadable files, or file hash tampering fails closed immediately (`status: "unknown"` with blocker).
+2. **Driver and CUDA Build Invariant Verification:**
+   - The runtime registry checks `torch.version.cuda` against `requiredRuntime.cudaBuild`.
+   - NVIDIA driver version is parsed into dotted numeric components and compared against all `driverConstraints` (e.g. `>=550.00.00`).
+   - Missing driver evidence (`nvidia-smi` failure or missing driver) fails closed and blocks admission. Mismatched driver or CUDA build across baseline and variant blocks comparison.
+3. **Sparse-Node Support via Live Registration:**
+   - Sparse attention nodes (`ModelSparseAttention`, `VedaSparseAttention`, etc.) are verified through actual registered ComfyUI node mappings (`comfy.nodes.NODE_CLASS_MAPPINGS`), not hardcoded constructor lists.
+4. **Pre-Submit Capability Handshake Probe (`/experiment/minimax-h3/capability`):**
+   - After child process readiness and prior to workflow submission, the service queries the child process's `/experiment/minimax-h3/capability` endpoint with a unique nonce.
+   - The child process measures its own collector code digest, hook manifest digest, registered node inventory, and attached hooks in-situ.
+   - The service verifies that `runId`, `attemptToken`, `nonce`, `collectorDigest`, `hookManifestDigest`, and required nodes match exactly. Handshake failure or digest mismatch terminates the child process and blocks prompt submission.
+5. **Complete Runtime Substrate Digest:**
+   - The runtime substrate digest (`computeAttentionRuntimeLockDigest`) incorporates interpreter identity, compiler/toolchain identity, sorted source file hashes, package binary artifact digests, and collector/hook manifest digests.
+   - Upgraded/isolated manifests never silently reuse production source hashes or hardcoded builds.
+6. **Strict Comparator Policy & Dense Region Purity:**
+   - The comparator requires independently verified runtime and handshake equality.
+   - Null dispatch fields (`actualBackend`, `dispatchImplementation`) are treated as unverified and disqualify speedup metrics.
+   - Dense baselines must be pure: any recorded kernel failure (`missingKernelFailure`, `failureReason`), non-zero accelerated calls, or accelerated step records disqualify the baseline.
+   - Candidates violating `denseRegionPolicy` (e.g. unplanned dense calls when `allowPlannedDense` is false) are disqualified.
+
+---
+
+## 6. Step-by-Step Operator Workflow
 
 All CLI commands use the repository's package script: `pnpm --filter render-worker experiment:minimax-h3 <command>`.
 
@@ -222,7 +251,7 @@ Complete the evaluation report according to `docs/minimax-h3-attention-report-te
 
 ---
 
-## 6. Isolated Environment Setup, Hash-Checked Installation & Teardown Lifecycle
+## 7. Isolated Environment Setup, Hash-Checked Installation & Teardown Lifecycle
 
 All candidate experiments use isolated checkouts and virtualenvs. Shared model directories containing weights are mounted **read-only** (`ro`) to prevent corruption or tampering.
 

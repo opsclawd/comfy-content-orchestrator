@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, open, readFile, stat, unlink, writeFile, statfs } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, stat, unlink, writeFile, statfs } from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
-import { resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import {
   type MinimaxH3TargetSpecification,
@@ -18,7 +18,8 @@ import type { MinimaxH3TargetPreflightPort } from "@cco/application";
 import {
   type ExperimentRuntimeRegistry,
   defaultExperimentRuntimeRegistry,
-  type ExperimentRuntimeVerificationResult
+  type ExperimentRuntimeVerificationResult,
+  PACKAGE_INSPECTOR_PATH
 } from "./minimax-h3-runtime-registry.js";
 
 const execFileAsync = promisify(execFile);
@@ -598,13 +599,13 @@ export class MinimaxH3TargetPreflight implements MinimaxH3TargetPreflightPort {
     ok: boolean;
     resolvedPaths: Record<
       string,
-      { expectedHash: string; resolvedPath: string; sizeBytes: number }
+      { expectedHash: string; actualHash?: string; resolvedPath: string; sizeBytes: number }
     >;
     blocker?: string;
   }> {
     const resolvedPaths: Record<
       string,
-      { expectedHash: string; resolvedPath: string; sizeBytes: number }
+      { expectedHash: string; actualHash?: string; resolvedPath: string; sizeBytes: number }
     > = {};
 
     for (const [key, spec] of Object.entries(modelSpecs)) {
@@ -700,6 +701,7 @@ export class MinimaxH3TargetPreflight implements MinimaxH3TargetPreflightPort {
 
       resolvedPaths[key] = {
         expectedHash: spec.expectedHash,
+        actualHash: actualSha,
         resolvedPath: foundPath,
         sizeBytes: st.size
       };
@@ -793,7 +795,315 @@ export class MinimaxH3TargetPreflight implements MinimaxH3TargetPreflightPort {
     requiredRuntime: MinimaxH3RequiredRuntimeManifest;
     requiredRuntimeDigest: string;
     expectedCheckpointHash?: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
   }): Promise<ExperimentRuntimeVerificationResult> {
     return this.runtimeRegistry.verify(options);
+  }
+
+  async inspectEnvironmentIdentity(options: {
+    comfyUiDir: string;
+    pythonPath: string;
+    coreRevision: string;
+    requiredPackages?: ReadonlyArray<{
+      name: string;
+      version?: string;
+      importModule?: string;
+    }>;
+    // Directories of installed custom-node packages (e.g. a Veda-on-ComfyUI
+    // checkout) whose .py source files should also be included in the
+    // measured source inventory. Without this, the fixed inventory below
+    // only covers core ComfyUI files, so a custom node's implementation
+    // could change without the preflight identity reflecting it (AC-5,
+    // F-2a29d138).
+    customNodeDirs?: ReadonlyArray<string>;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  }): Promise<{
+    ok: boolean;
+    blocker?: string;
+    interpreter?: {
+      pythonVersion: string;
+      pythonExecutableHash?: string;
+      pythonAbi?: string;
+      pythonCompiler?: string;
+    };
+    pytorchBuild?: string;
+    cudaBuild?: string;
+    driverConstraints?: string[];
+    sourceFileHashes?: Record<string, string>;
+    pythonPackages?: Array<{
+      name: string;
+      version: string;
+      artifactHash?: string;
+      artifactMethod?: string;
+      importModule?: string;
+    }>;
+  }> {
+    const { comfyUiDir, pythonPath, coreRevision } = options;
+    const resolvedDir = resolve(comfyUiDir);
+    const timeoutMs = options.timeoutMs ?? 15_000;
+
+    try {
+      const { stdout } = await execFileAsync("git", ["-C", resolvedDir, "rev-parse", "HEAD"], {
+        timeout: timeoutMs,
+        signal: options.signal
+      });
+      const actualRev = stdout.trim();
+      if (actualRev !== coreRevision) {
+        return {
+          ok: false,
+          blocker: `ComfyUI checkout revision mismatch: expected ${coreRevision}, got ${actualRev}`
+        };
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        blocker: `Failed to inspect git revision in ${resolvedDir}: ${(err as Error).message}`
+      };
+    }
+
+    let pythonVersion = "";
+    let pythonExecutableHash = "";
+    let pythonAbi = "";
+    let pythonCompiler = "";
+    try {
+      const { stdout } = await execFileAsync(
+        pythonPath,
+        [
+          "-c",
+          'import sys, sysconfig, platform; print(f\'{sys.version.split()[0]}|{sys.executable}|{getattr(sys, "abiflags", "") or sysconfig.get_config_var("SOABI") or ""}|{platform.python_compiler()}\')'
+        ],
+        { timeout: timeoutMs, signal: options.signal }
+      );
+      const [ver, execPath, abi, comp] = stdout.trim().split("|");
+      pythonVersion = ver || "";
+      pythonAbi = abi || "";
+      pythonCompiler = comp || "";
+      if (!execPath) {
+        return {
+          ok: false,
+          blocker: `Python interpreter at ${pythonPath} did not report executable path`
+        };
+      }
+      try {
+        const content = await readFile(execPath);
+        pythonExecutableHash = createHash("sha256").update(content).digest("hex");
+      } catch (err) {
+        return {
+          ok: false,
+          blocker: `Failed to read Python executable at ${execPath}: ${(err as Error).message}`
+        };
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        blocker: `Failed to inspect Python interpreter at ${pythonPath}: ${(err as Error).message}`
+      };
+    }
+
+    let pytorchBuild = "";
+    let cudaBuild = "";
+    try {
+      const { stdout } = await execFileAsync(
+        pythonPath,
+        ["-c", "import torch; print(f'{torch.__version__}|{torch.version.cuda}')"],
+        { timeout: timeoutMs, signal: options.signal }
+      );
+      const [pt, cu] = stdout.trim().split("|");
+      pytorchBuild = pt || "";
+      cudaBuild = cu || "";
+    } catch (err) {
+      return {
+        ok: false,
+        blocker: `Failed to inspect PyTorch and CUDA at ${pythonPath}: ${(err as Error).message}`
+      };
+    }
+
+    const sourceFiles = [
+      "comfy/model_management.py",
+      "main.py",
+      "comfy/cli_args.py",
+      "comfy_extras/nodes_minimax_h3.py",
+      "nodes.py",
+      "execution.py",
+      "comfy/samplers.py",
+      "comfy_extras/nodes_custom_sampler.py",
+      // The actual dense-attention dispatch file the collector hooks
+      // (collector.py's install_hooks targets comfy.ldm.modules.attention)
+      // was previously absent from this fixed inventory, so its identity
+      // was never part of the measured substrate (AC-5, F-2a29d138).
+      "comfy/ldm/modules/attention.py"
+    ];
+    const sourceFileHashes: Record<string, string> = {};
+    for (const rel of sourceFiles) {
+      const full = resolve(resolvedDir, rel);
+      try {
+        const content = await readFile(full);
+        sourceFileHashes[rel] = createHash("sha256").update(content).digest("hex");
+      } catch (err) {
+        if (
+          rel === "comfy/model_management.py" ||
+          rel === "main.py" ||
+          rel === "comfy/cli_args.py"
+        ) {
+          return {
+            ok: false,
+            blocker: `Required ComfyUI source file "${rel}" missing or unreadable in ${resolvedDir}: ${(err as Error).message}`
+          };
+        }
+      }
+    }
+
+    // Measure custom-node package source content so a declared revision
+    // (e.g. a Veda custom-node commit SHA in the catalog) is backed by the
+    // content actually present, not just the declared revision string
+    // (AC-5, F-2a29d138).
+    for (const customNodeDir of options.customNodeDirs ?? []) {
+      const resolvedCustomDir = resolve(customNodeDir);
+      const stack = [resolvedCustomDir];
+      while (stack.length > 0) {
+        const dir = stack.pop()!;
+        let entries;
+        try {
+          entries = await readdir(dir, { withFileTypes: true });
+        } catch {
+          continue;
+        }
+        for (const entry of entries) {
+          const full = join(dir, entry.name);
+          if (entry.isDirectory()) {
+            if (entry.name === "__pycache__" || entry.name === ".git") continue;
+            stack.push(full);
+          } else if (entry.isFile() && entry.name.endsWith(".py")) {
+            try {
+              const content = await readFile(full);
+              const relKey = `customNode:${relative(resolve(resolvedDir, ".."), full)}`;
+              sourceFileHashes[relKey] = createHash("sha256").update(content).digest("hex");
+            } catch {
+              // best-effort; a single unreadable file doesn't block preflight
+            }
+          }
+        }
+      }
+    }
+
+    if (Object.keys(sourceFileHashes).length === 0) {
+      return {
+        ok: false,
+        blocker: `No source files found to hash in checkout at ${resolvedDir}`
+      };
+    }
+
+    const requestedPackages: Array<{ name: string; version?: string; importModule?: string }> =
+      options.requiredPackages && options.requiredPackages.length > 0
+        ? [...options.requiredPackages]
+        : [{ name: "torch", importModule: "torch" }];
+
+    if (!requestedPackages.some((p) => p.name === "torch")) {
+      requestedPackages.push({ name: "torch", importModule: "torch" });
+    }
+
+    const pythonPackages: Array<{
+      name: string;
+      version: string;
+      artifactHash: string;
+      artifactMethod: string;
+      importModule: string;
+    }> = [];
+
+    for (const reqPkg of requestedPackages) {
+      const importMod = reqPkg.importModule ?? reqPkg.name.replace(/-/g, "_");
+      try {
+        const { stdout: pkgOut } = await execFileAsync(
+          pythonPath,
+          [
+            PACKAGE_INSPECTOR_PATH,
+            reqPkg.name,
+            reqPkg.version ?? "",
+            importMod,
+            "__MEASURE__",
+            "installed_record_sha256_v1"
+          ],
+          { timeout: timeoutMs, signal: options.signal }
+        );
+        const out = pkgOut.trim();
+        if (!out.startsWith("ok:")) {
+          return {
+            ok: false,
+            blocker: `Failed to measure package identity for "${reqPkg.name}": ${out}`
+          };
+        }
+        const parsed = JSON.parse(out.slice(3)) as {
+          name: string;
+          version: string;
+          artifactHash: string;
+          artifactMethod: string;
+        };
+        pythonPackages.push({
+          name: parsed.name,
+          version: parsed.version,
+          artifactHash: parsed.artifactHash,
+          artifactMethod: parsed.artifactMethod,
+          importModule: importMod
+        });
+      } catch (err) {
+        return {
+          ok: false,
+          blocker: `Failed to inspect package "${reqPkg.name}" in Python environment: ${(err as Error).message}`
+        };
+      }
+    }
+
+    // Measure comfy-kitchen optionally if not already in requestedPackages
+    if (!pythonPackages.some((p) => p.name === "comfy-kitchen")) {
+      try {
+        const { stdout: kitchenOut } = await execFileAsync(
+          pythonPath,
+          [
+            PACKAGE_INSPECTOR_PATH,
+            "comfy-kitchen",
+            "",
+            "comfy_kitchen",
+            "__MEASURE__",
+            "installed_record_sha256_v1"
+          ],
+          { timeout: timeoutMs, signal: options.signal }
+        );
+        const kOut = kitchenOut.trim();
+        if (kOut.startsWith("ok:")) {
+          const parsedK = JSON.parse(kOut.slice(3)) as {
+            name: string;
+            version: string;
+            artifactHash: string;
+            artifactMethod: string;
+          };
+          pythonPackages.push({
+            name: "comfy-kitchen",
+            version: parsedK.version,
+            artifactHash: parsedK.artifactHash,
+            artifactMethod: parsedK.artifactMethod,
+            importModule: "comfy_kitchen"
+          });
+        }
+      } catch {
+        // optional
+      }
+    }
+
+    return {
+      ok: true,
+      interpreter: {
+        pythonVersion,
+        pythonExecutableHash,
+        ...(pythonAbi ? { pythonAbi } : {}),
+        ...(pythonCompiler ? { pythonCompiler } : {})
+      },
+      pytorchBuild,
+      cudaBuild,
+      driverConstraints: [">=550.00.00"],
+      sourceFileHashes,
+      pythonPackages
+    };
   }
 }

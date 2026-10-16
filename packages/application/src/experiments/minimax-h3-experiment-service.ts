@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import {
   DEFAULT_MINIMAX_H3_EXPERIMENT_TIMEOUTS,
   MinimaxH3ExperimentTimeoutsSchema,
@@ -50,7 +50,12 @@ import {
   type MinimaxH3ObservedProvenance,
   type MinimaxH3SamplingRecipe,
   type MinimaxH3SamplingRecipeName,
-  MinimaxH3ObservedProvenanceSchema
+  MinimaxH3ObservedProvenanceSchema,
+  MinimaxH3CapabilityHandshakeSchema,
+  type MinimaxH3CapabilityHandshake,
+  STANDARD_MINIMAX_H3_HOOKS,
+  MinimaxH3AttentionIdentityEnvelopeSchema,
+  satisfiesDriverConstraint
 } from "@cco/contracts";
 import { reducePhaseAccounting } from "./minimax-h3-timing-reducer.js";
 import {
@@ -382,6 +387,291 @@ export function deriveExperimentGraph({
   }
 
   return derivedGraph;
+}
+
+function validateCapabilityHandshake(
+  handshake: MinimaxH3CapabilityHandshake,
+  options: {
+    descV2: MinimaxH3ExperimentDescriptorV2;
+    expectedPid?: number | undefined;
+    expectedNonce?: string | undefined;
+    attemptToken?: string | undefined;
+    comfyUiDir?: string | undefined;
+    requireBinding?: boolean | undefined;
+  }
+): string[] {
+  const conflicts: string[] = [];
+  const { descV2, expectedPid, expectedNonce, attemptToken } = options;
+
+  if (options.requireBinding) {
+    if (expectedPid === undefined || !expectedNonce || !attemptToken) {
+      conflicts.push(
+        "pre-submit handshake is not bound to an owned child PID, nonce, and attempt token"
+      );
+    }
+  }
+
+  if (!handshake.pid || typeof handshake.pid !== "number" || handshake.pid <= 0) {
+    conflicts.push("capability handshake missing valid child PID");
+  }
+  if (!handshake.nonce || typeof handshake.nonce !== "string" || !handshake.nonce.trim()) {
+    conflicts.push("capability handshake missing valid nonce");
+  }
+  if (
+    !handshake.attemptToken ||
+    typeof handshake.attemptToken !== "string" ||
+    !handshake.attemptToken.trim()
+  ) {
+    conflicts.push("capability handshake missing valid attemptToken");
+  }
+
+  if (handshake.status === "failed") {
+    conflicts.push(
+      `capability handshake marked failed: ${handshake.failureReason ?? "unknown failure"}`
+    );
+  }
+  if (handshake.status !== "ok") conflicts.push("capability handshake is not ready");
+
+  if (handshake.protocol !== descV2.requiredRuntime.instrumentationProtocol) {
+    conflicts.push(
+      `protocol mismatch (expected ${descV2.requiredRuntime.instrumentationProtocol}, got ${handshake.protocol})`
+    );
+  }
+  if (handshake.runId !== descV2.runId) {
+    conflicts.push(`runId mismatch (expected ${descV2.runId}, got ${handshake.runId})`);
+  }
+  if (attemptToken && handshake.attemptToken !== attemptToken) {
+    conflicts.push(
+      `attemptToken mismatch (expected ${attemptToken}, got ${handshake.attemptToken})`
+    );
+  }
+  if (expectedNonce && handshake.nonce !== expectedNonce) {
+    conflicts.push(`nonce mismatch (expected ${expectedNonce}, got ${handshake.nonce})`);
+  }
+  if (expectedPid !== undefined && handshake.pid !== expectedPid) {
+    conflicts.push(`pid mismatch (expected ${expectedPid}, got ${handshake.pid})`);
+  }
+  if (
+    descV2.requiredRuntime.collectorDigest &&
+    handshake.collectorDigest !== descV2.requiredRuntime.collectorDigest
+  ) {
+    conflicts.push(
+      `collectorDigest mismatch: expected ${descV2.requiredRuntime.collectorDigest}, got ${handshake.collectorDigest}`
+    );
+  }
+  if (
+    descV2.requiredRuntime.hookManifestDigest &&
+    handshake.hookManifestDigest !== descV2.requiredRuntime.hookManifestDigest
+  ) {
+    conflicts.push(
+      `hookManifestDigest mismatch: expected ${descV2.requiredRuntime.hookManifestDigest}, got ${handshake.hookManifestDigest}`
+    );
+  }
+
+  // Kernel callable check
+  if (handshake.kernelCallableAvailable === false) {
+    conflicts.push("requested kernel callable is unavailable");
+  } else if (descV2.attentionRequest && handshake.kernelCallableAvailable !== true) {
+    conflicts.push("requested kernel callable is unavailable");
+  }
+
+  // Verify registered nodes
+  for (const reqNode of descV2.requiredRuntime.requiredNodes) {
+    const regNode = handshake.registeredNodes[reqNode.name];
+    if (!regNode) {
+      conflicts.push(`required node "${reqNode.name}" is not registered in ComfyUI child process`);
+      continue;
+    }
+    if (reqNode.revision) {
+      if (!regNode.revision) {
+        conflicts.push(`required node "${reqNode.name}" lacks revision in child process handshake`);
+      } else if (regNode.revision !== reqNode.revision) {
+        conflicts.push(
+          `required node "${reqNode.name}" revision mismatch: expected ${reqNode.revision}, got ${regNode.revision}`
+        );
+      }
+    }
+    if (reqNode.moduleHash) {
+      if (!regNode.moduleHash) {
+        conflicts.push(
+          `required node "${reqNode.name}" lacks moduleHash in child process handshake`
+        );
+      } else if (regNode.moduleHash !== reqNode.moduleHash) {
+        conflicts.push(
+          `required node "${reqNode.name}" moduleHash mismatch: expected ${reqNode.moduleHash}, got ${regNode.moduleHash}`
+        );
+      }
+    }
+    if (options.comfyUiDir && regNode.sourceFile) {
+      const normSource = normalize(regNode.sourceFile);
+      const normCheckout = normalize(options.comfyUiDir);
+      // A plain startsWith admits sibling directories sharing the checkout's
+      // name as a prefix (e.g. checkout "/x/comfy" would wrongly accept
+      // "/x/comfy-evil/node.py"). Require the match to land exactly on the
+      // checkout path or one path-separator boundary inside it (AC-3,
+      // F-e35ea06e).
+      const isContained = normSource === normCheckout || normSource.startsWith(normCheckout + sep);
+      if (isAbsolute(normSource) && !isContained) {
+        conflicts.push(
+          `node "${reqNode.name}" source file "${normSource}" is outside the audited checkout "${normCheckout}"`
+        );
+      }
+    }
+  }
+
+  // Verify hooks
+  for (const reqHook of descV2.requiredRuntime.hooks) {
+    const match = handshake.installedHooks.find(
+      (h) =>
+        h.name === reqHook.name &&
+        h.modulePath === reqHook.modulePath &&
+        h.callable === reqHook.callable &&
+        h.phase === reqHook.phase
+    );
+    if (!match) {
+      conflicts.push(`required hook "${reqHook.name}" is not present in child process`);
+    } else if (!match.attached) {
+      conflicts.push(`required hook "${reqHook.name}" is not attached in child process`);
+    }
+  }
+
+  // Runtime versions & package/source identity checks
+  const handshakeAny = handshake as Record<string, unknown>;
+  const reqRuntime = descV2.requiredRuntime;
+  const needsRuntimeVersions = Boolean(
+    reqRuntime.pytorchBuild ||
+    reqRuntime.cudaBuild ||
+    reqRuntime.interpreter?.pythonVersion ||
+    (reqRuntime.driverConstraints && reqRuntime.driverConstraints.length > 0)
+  );
+
+  if (needsRuntimeVersions && !handshake.runtimeVersions) {
+    conflicts.push("child capability handshake is missing runtimeVersions");
+  } else if (handshake.runtimeVersions) {
+    if (reqRuntime.pytorchBuild) {
+      if (!handshake.runtimeVersions.pytorchVersion) {
+        conflicts.push("runtime pytorchVersion missing in child handshake");
+      } else if (handshake.runtimeVersions.pytorchVersion !== reqRuntime.pytorchBuild) {
+        conflicts.push(
+          `runtime pytorchVersion mismatch: expected ${reqRuntime.pytorchBuild}, got ${handshake.runtimeVersions.pytorchVersion}`
+        );
+      }
+    }
+    if (reqRuntime.cudaBuild) {
+      if (!handshake.runtimeVersions.cudaBuildVersion) {
+        conflicts.push("runtime cudaBuildVersion missing in child handshake");
+      } else if (handshake.runtimeVersions.cudaBuildVersion !== reqRuntime.cudaBuild) {
+        conflicts.push(
+          `runtime cudaBuildVersion mismatch: expected ${reqRuntime.cudaBuild}, got ${handshake.runtimeVersions.cudaBuildVersion}`
+        );
+      }
+    }
+    if (reqRuntime.interpreter?.pythonVersion) {
+      if (!handshake.runtimeVersions.pythonVersion) {
+        conflicts.push("runtime pythonVersion missing in child handshake");
+      } else if (handshake.runtimeVersions.pythonVersion !== reqRuntime.interpreter.pythonVersion) {
+        conflicts.push(
+          `runtime pythonVersion mismatch: expected ${reqRuntime.interpreter.pythonVersion}, got ${handshake.runtimeVersions.pythonVersion}`
+        );
+      }
+    }
+    if (reqRuntime.driverConstraints && reqRuntime.driverConstraints.length > 0) {
+      if (!handshake.runtimeVersions.driverVersion) {
+        conflicts.push("runtime driverVersion missing in child handshake");
+      } else {
+        for (const constraint of reqRuntime.driverConstraints) {
+          const check = satisfiesDriverConstraint(
+            handshake.runtimeVersions.driverVersion,
+            constraint
+          );
+          if (!check.satisfied) {
+            conflicts.push(
+              check.error ??
+                `Driver version "${handshake.runtimeVersions.driverVersion}" does not satisfy constraint "${constraint}".`
+            );
+          }
+        }
+      }
+    }
+  }
+
+  if (reqRuntime.pythonPackages && reqRuntime.pythonPackages.length > 0) {
+    if (
+      !Array.isArray(handshakeAny.packageIdentities) ||
+      handshakeAny.packageIdentities.length === 0
+    ) {
+      conflicts.push("child capability handshake is missing packageIdentities");
+    } else {
+      const pkgIds = handshakeAny.packageIdentities as Array<{
+        name: string;
+        version: string;
+        artifactHash?: string;
+        artifactMethod?: string;
+      }>;
+      const pkgMap = new Map(pkgIds.map((p) => [p.name, p]));
+      for (const reqPkg of reqRuntime.pythonPackages) {
+        const livePkg = pkgMap.get(reqPkg.name);
+        if (!livePkg) {
+          conflicts.push(
+            `required package "${reqPkg.name}" is missing from child capability handshake`
+          );
+        } else {
+          // version/method were previously unchecked here: a manifest could
+          // pin a specific package version and verification artifactMethod,
+          // but the live handshake's own reported version/method were never
+          // compared against them, so a different installed version or a
+          // weaker hashing method could pass undetected as long as the
+          // artifactHash happened to be supplied and matched (F-e35ea06e).
+          if (reqPkg.version && livePkg.version && reqPkg.version !== livePkg.version) {
+            conflicts.push(
+              `package "${reqPkg.name}" version mismatch: expected ${reqPkg.version}, got ${livePkg.version}`
+            );
+          }
+          if (
+            reqPkg.artifactMethod &&
+            livePkg.artifactMethod &&
+            reqPkg.artifactMethod !== livePkg.artifactMethod
+          ) {
+            conflicts.push(
+              `package "${reqPkg.name}" artifactMethod mismatch: expected ${reqPkg.artifactMethod}, got ${livePkg.artifactMethod}`
+            );
+          }
+          if (reqPkg.artifactHash) {
+            if (!livePkg.artifactHash) {
+              conflicts.push(
+                `package "${reqPkg.name}" lacks artifactHash in child capability handshake`
+              );
+            } else if (reqPkg.artifactHash !== livePkg.artifactHash) {
+              conflicts.push(
+                `package "${reqPkg.name}" artifactHash mismatch: expected ${reqPkg.artifactHash}, got ${livePkg.artifactHash}`
+              );
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (reqRuntime.sourceFileHashes && Object.keys(reqRuntime.sourceFileHashes).length > 0) {
+    if (!handshakeAny.sourceIdentities || typeof handshakeAny.sourceIdentities !== "object") {
+      conflicts.push("child capability handshake is missing sourceIdentities");
+    } else {
+      const srcIds = handshakeAny.sourceIdentities as Record<string, string>;
+      for (const [file, expHash] of Object.entries(reqRuntime.sourceFileHashes)) {
+        if (!srcIds[file]) {
+          conflicts.push(
+            `required source file "${file}" is missing from child capability handshake`
+          );
+        } else if (srcIds[file] !== expHash) {
+          conflicts.push(
+            `source identity hash mismatch for "${file}": expected ${expHash}, got ${srcIds[file]}`
+          );
+        }
+      }
+    }
+  }
+
+  return conflicts;
 }
 
 export class MinimaxH3ExperimentService {
@@ -1006,15 +1296,10 @@ export class MinimaxH3ExperimentService {
           `Failed to read collector script at ${collectorPath}: ${err instanceof Error ? err.message : String(err)}`
         );
       }
-      const standardHooks = [
-        {
-          name: "sampler_step_hook",
-          modulePath: "comfy.samplers",
-          callable: "sample",
-          phase: "sampling_step" as const
-        }
-      ];
-      const genuineHookManifestDigest = sha256Hex(canonicalizeJson(standardHooks));
+      const standardHooks = [...STANDARD_MINIMAX_H3_HOOKS];
+      const genuineHookManifestDigest = sha256Hex(
+        canonicalizeJson([...standardHooks].sort((a, b) => a.name.localeCompare(b.name)))
+      );
 
       const baseRequiredRuntime: MinimaxH3RequiredRuntimeManifest = {
         coreRevision: PINNED_COMFYUI_CORE_REVISION,
@@ -1028,7 +1313,13 @@ export class MinimaxH3ExperimentService {
             name: route === "i2v" ? "MiniMaxH3ImageToVideo" : "MiniMaxH3ReferenceToVideo"
           }
         ],
-        pythonPackages: [{ name: "torch", version: "2.5.1+cu124" }],
+        pythonPackages: [
+          {
+            name: "torch",
+            version: "2.5.1+cu124",
+            importModule: "torch"
+          }
+        ],
         pytorchBuild: "2.5.1+cu124",
         cudaBuild: "12.4",
         driverConstraints: [">=550.00.00"],
@@ -1052,8 +1343,16 @@ export class MinimaxH3ExperimentService {
               { name: "ModelAttentionBackend" }
             ],
             pythonPackages: [
-              { name: "torch", version: "2.5.1+cu124" },
-              { name: "comfy-kitchen", version: "0.2.34" }
+              {
+                name: "torch",
+                version: "2.5.1+cu124",
+                importModule: "torch"
+              },
+              {
+                name: "comfy-kitchen",
+                version: "0.2.34",
+                importModule: "comfy_kitchen"
+              }
             ],
             pytorchBuild: "2.5.1+cu124",
             cudaBuild: "12.4",
@@ -1082,7 +1381,13 @@ export class MinimaxH3ExperimentService {
                 name: "LoraLoaderModelOnly"
               }
             ],
-            pythonPackages: [{ name: "torch", version: "2.5.1+cu124" }],
+            pythonPackages: [
+              {
+                name: "torch",
+                version: "2.5.1+cu124",
+                importModule: "torch"
+              }
+            ],
             pytorchBuild: "2.5.1+cu124",
             cudaBuild: "12.4",
             driverConstraints: [">=550.00.00"],
@@ -1097,11 +1402,146 @@ export class MinimaxH3ExperimentService {
         }
       }
 
+      let envInspection:
+        | Awaited<
+            ReturnType<NonNullable<MinimaxH3TargetPreflightPort["inspectEnvironmentIdentity"]>>
+          >
+        | undefined;
+      const targetCoreRevision =
+        samplingRecipe?.requiredRuntimeRevision ??
+        attentionCatalogEntry?.comfyuiCoreRevision ??
+        PINNED_COMFYUI_CORE_REVISION;
+      const requiredPackagesToInspect: Array<{
+        name: string;
+        version?: string;
+        importModule?: string;
+      }> = [{ name: "torch", version: "2.5.1+cu124", importModule: "torch" }];
+      if (attentionCatalogEntry?.pythonPackages) {
+        for (const p of attentionCatalogEntry.pythonPackages) {
+          if (!requiredPackagesToInspect.some((rp) => rp.name === p.name)) {
+            const pkgToInspect: { name: string; version?: string; importModule?: string } = {
+              name: p.name
+            };
+            if (p.version) pkgToInspect.version = p.version;
+            if (p.importModule) pkgToInspect.importModule = p.importModule;
+            requiredPackagesToInspect.push(pkgToInspect);
+          }
+        }
+      }
+      if (samplingRecipe?.name === "fasth3-i2v-8") {
+        if (!requiredPackagesToInspect.some((rp) => rp.name === "comfy-kitchen")) {
+          requiredPackagesToInspect.push({
+            name: "comfy-kitchen",
+            version: "0.2.34",
+            importModule: "comfy_kitchen"
+          });
+        }
+      }
+      if (this.preflight?.inspectEnvironmentIdentity) {
+        try {
+          envInspection = await this.preflight.inspectEnvironmentIdentity({
+            comfyUiDir,
+            pythonPath,
+            coreRevision: targetCoreRevision,
+            requiredPackages: requiredPackagesToInspect,
+            timeoutMs:
+              ((options as unknown as Record<string, unknown>).startupTimeoutMs as
+                number | undefined) ?? 30000
+          });
+        } catch {
+          // preflight inspection failure handled below
+        }
+      }
+
+      if (envInspection?.ok) {
+        if (envInspection.interpreter) {
+          baseRequiredRuntime.interpreter = envInspection.interpreter;
+          if (recipeRequiredRuntime) {
+            recipeRequiredRuntime.interpreter = envInspection.interpreter;
+          }
+        }
+        if (envInspection.pythonPackages && envInspection.pythonPackages.length > 0) {
+          const basePkgMap = new Map(baseRequiredRuntime.pythonPackages.map((p) => [p.name, p]));
+          for (const mp of envInspection.pythonPackages) {
+            basePkgMap.set(mp.name, {
+              ...basePkgMap.get(mp.name),
+              ...mp
+            });
+          }
+          baseRequiredRuntime.pythonPackages = Array.from(basePkgMap.values());
+          if (recipeRequiredRuntime) {
+            const recipePkgMap = new Map(
+              recipeRequiredRuntime.pythonPackages.map((p) => [p.name, p])
+            );
+            for (const mp of envInspection.pythonPackages) {
+              recipePkgMap.set(mp.name, {
+                ...recipePkgMap.get(mp.name),
+                ...mp
+              });
+            }
+            recipeRequiredRuntime.pythonPackages = Array.from(recipePkgMap.values());
+          }
+        }
+        if (
+          envInspection.sourceFileHashes &&
+          Object.keys(envInspection.sourceFileHashes).length > 0
+        ) {
+          baseRequiredRuntime.sourceFileHashes = {
+            ...baseRequiredRuntime.sourceFileHashes,
+            ...envInspection.sourceFileHashes
+          };
+          if (recipeRequiredRuntime) {
+            recipeRequiredRuntime.sourceFileHashes = {
+              ...envInspection.sourceFileHashes,
+              ...recipeRequiredRuntime.sourceFileHashes
+            };
+          }
+        }
+        if (envInspection.pytorchBuild) {
+          baseRequiredRuntime.pytorchBuild = envInspection.pytorchBuild;
+          if (recipeRequiredRuntime) {
+            recipeRequiredRuntime.pytorchBuild = envInspection.pytorchBuild;
+          }
+        }
+        if (envInspection.cudaBuild) {
+          baseRequiredRuntime.cudaBuild = envInspection.cudaBuild;
+          if (recipeRequiredRuntime) {
+            recipeRequiredRuntime.cudaBuild = envInspection.cudaBuild;
+          }
+        }
+        if (envInspection.driverConstraints && envInspection.driverConstraints.length > 0) {
+          baseRequiredRuntime.driverConstraints = envInspection.driverConstraints;
+          if (recipeRequiredRuntime) {
+            recipeRequiredRuntime.driverConstraints = envInspection.driverConstraints;
+          }
+        }
+      }
+
+      if (this.preflight && attentionCatalogEntry) {
+        if (!envInspection || !envInspection.ok) {
+          throw new Error(
+            `Attention manifest for variant "${attentionCatalogEntry.variantName}" requires complete measured environment identity: ${envInspection?.blocker ?? "inspectEnvironmentIdentity failed or unavailable"}`
+          );
+        }
+      }
+
       const upgradedRequiredRuntime: MinimaxH3RequiredRuntimeManifest = attentionCatalogEntry
         ? buildRequiredRuntimeManifestFromAttentionCatalog(attentionCatalogEntry, route, {
             collectorDigest: genuineCollectorDigest,
             hookManifestDigest: genuineHookManifestDigest,
-            hooks: standardHooks
+            hooks: standardHooks,
+            ...(envInspection?.sourceFileHashes
+              ? { sourceFileHashes: envInspection.sourceFileHashes }
+              : {}),
+            ...(envInspection?.pytorchBuild ? { pytorchBuild: envInspection.pytorchBuild } : {}),
+            ...(envInspection?.cudaBuild ? { cudaBuild: envInspection.cudaBuild } : {}),
+            ...(envInspection?.driverConstraints
+              ? { driverConstraints: envInspection.driverConstraints }
+              : {}),
+            ...(envInspection?.interpreter ? { interpreter: envInspection.interpreter } : {}),
+            ...(envInspection?.pythonPackages
+              ? { pythonPackages: envInspection.pythonPackages }
+              : {})
           })
         : (recipeRequiredRuntime ?? baseRequiredRuntime);
 
@@ -1466,11 +1906,20 @@ export class MinimaxH3ExperimentService {
                 topologyDigest: attentionTopology.topologyDigest,
                 patches: attentionTopology.patches,
                 runtimeLockDigest: computeAttentionRuntimeLockDigest({
-                  comfyuiCoreRevision: attentionCatalogEntry.comfyuiCoreRevision,
+                  comfyuiCoreRevision: upgradedRequiredRuntime.coreRevision,
                   customNodeRevision: attentionCatalogEntry.customNode?.revision,
-                  pythonPackages: attentionCatalogEntry.pythonPackages,
+                  sourceFileHashes: upgradedRequiredRuntime.sourceFileHashes,
+                  interpreter: upgradedRequiredRuntime.interpreter,
+                  pytorchBuild: upgradedRequiredRuntime.pytorchBuild,
+                  cudaBuild: upgradedRequiredRuntime.cudaBuild,
+                  driverConstraints: upgradedRequiredRuntime.driverConstraints,
+                  pythonPackages: upgradedRequiredRuntime.pythonPackages,
                   cudaRequirement: attentionCatalogEntry.cudaRequirement,
-                  computeCapability: attentionCatalogEntry.computeCapability
+                  computeCapability: attentionCatalogEntry.computeCapability,
+                  instrumentationProtocol: upgradedRequiredRuntime.instrumentationProtocol,
+                  collectorDigest: upgradedRequiredRuntime.collectorDigest,
+                  hookManifestDigest: upgradedRequiredRuntime.hookManifestDigest,
+                  hooks: upgradedRequiredRuntime.hooks
                 }),
                 candidateOnly: !attentionCatalogEntry.runnable,
                 ...(attentionCatalogEntry.predictor
@@ -3241,6 +3690,16 @@ export class MinimaxH3ExperimentService {
           ?.observedProvenance;
       }
 
+      let capabilityHandshake: MinimaxH3CapabilityHandshake | undefined;
+      try {
+        const rawHs = await this.store.readJsonFile<unknown>(`${runDir}/capability-handshake.json`);
+        if (rawHs) {
+          capabilityHandshake = MinimaxH3CapabilityHandshakeSchema.parse(rawHs);
+        }
+      } catch {
+        // Do not fall back to existingResult for capabilityHandshake; require capability-handshake.json
+      }
+
       const effectiveStopReasons = [...stopReasons];
       if (attentionObservation) {
         if (attentionObservation.status === "fallback") {
@@ -3333,16 +3792,50 @@ export class MinimaxH3ExperimentService {
         },
         experimentVariant: descV2.experimentVariant,
         observedProvenance: {
-          actualCheckpointHash:
-            preflightObservations?.actualCheckpointHash?.expected &&
-            preflightObservations.actualCheckpointHash.expected.length === 64
-              ? preflightObservations.actualCheckpointHash
-              : {
-                  status: "unknown",
-                  value: null,
-                  expected: descV2.provenance.actualCheckpointHash,
-                  unknownReason: "runtime_observation_unavailable"
-                },
+          actualCheckpointHash: (() => {
+            const expected = descV2.provenance.actualCheckpointHash;
+            const modelEntries = Object.values(preflightObservations?.loadedModelHashes ?? {});
+            const matchingModel = modelEntries.find(
+              (m) => m.expected === expected || m.value === expected
+            );
+            if (
+              executionStatus === "completed" &&
+              matchingModel &&
+              matchingModel.status === "verified" &&
+              matchingModel.value &&
+              matchingModel.value === expected
+            ) {
+              return {
+                status: "verified" as const,
+                value: matchingModel.value,
+                expected
+              };
+            }
+            if (matchingModel?.status === "conflict") {
+              return {
+                status: "conflict" as const,
+                value: matchingModel.value ?? null,
+                expected,
+                unknownReason: "Model hash mismatch"
+              };
+            }
+            if (
+              preflightObservations?.actualCheckpointHash?.status === "verified" &&
+              preflightObservations.actualCheckpointHash.value &&
+              preflightObservations.actualCheckpointHash.value === expected
+            ) {
+              return preflightObservations.actualCheckpointHash;
+            }
+            return {
+              status: "unknown" as const,
+              value: null,
+              expected,
+              unknownReason:
+                executionStatus === "completed"
+                  ? "checkpoint_not_verified"
+                  : "runtime_observation_unavailable"
+            };
+          })(),
           loadedModelHashes: preflightObservations?.loadedModelHashes ?? {},
           comfyuiCoreRevision: preflightObservations?.comfyuiCoreRevision ?? {
             status: "unknown",
@@ -3390,10 +3883,8 @@ export class MinimaxH3ExperimentService {
               (e) =>
                 e.type === "point_event" &&
                 (e.boundarySource === "child_bootstrap" || e.phase === "environment_startup") &&
-                (e.runId === undefined || e.runId === descV2.runId) &&
-                (!attemptToken ||
-                  e.attemptToken === undefined ||
-                  e.attemptToken === attemptToken) &&
+                e.runId === descV2.runId &&
+                (!attemptToken || e.attemptToken === attemptToken) &&
                 ((e.metadata as Record<string, unknown> | undefined)?.handshake === "v2-jsonl" ||
                   (e.metadata as Record<string, unknown> | undefined)?.protocolVersion ===
                     "v2-jsonl")
@@ -3413,6 +3904,37 @@ export class MinimaxH3ExperimentService {
                 );
               }
             }
+            if (!capabilityHandshake) {
+              handshakeConflicts.push(
+                "Missing pre-submission capability handshake evidence for V2 experiment"
+              );
+            } else {
+              if (!intent) {
+                handshakeConflicts.push("Missing execution intent for V2 experiment");
+              }
+              const hsConflicts = validateCapabilityHandshake(capabilityHandshake, {
+                descV2,
+                expectedPid: intent?.pid,
+                expectedNonce: intent?.handshakeNonce,
+                attemptToken: intent?.attemptToken ?? attemptToken,
+                comfyUiDir: descV2.target?.comfyUiDir,
+                requireBinding: true
+              });
+              handshakeConflicts.push(...hsConflicts);
+
+              if (intent) {
+                if (!intent.capabilityHandshakeDigest) {
+                  handshakeConflicts.push("Execution intent missing capabilityHandshakeDigest");
+                } else {
+                  const observedHsDigest = sha256Hex(canonicalizeJson(capabilityHandshake));
+                  if (observedHsDigest !== intent.capabilityHandshakeDigest) {
+                    handshakeConflicts.push(
+                      `Capability handshake digest mismatch: intent=${intent.capabilityHandshakeDigest}, observed=${observedHsDigest}`
+                    );
+                  }
+                }
+              }
+            }
             const handshakeMeta = handshakeEvent?.metadata as Record<string, unknown> | undefined;
             let handshakeStatus: "verified" | "missing" | "unsupported" = "missing";
             let observedProtocol: string | null = null;
@@ -3425,19 +3947,23 @@ export class MinimaxH3ExperimentService {
                   ? handshakeMeta.protocolVersion
                   : typeof handshakeMeta?.handshake === "string"
                     ? handshakeMeta.handshake
-                    : null;
+                    : (capabilityHandshake?.protocol ?? null);
 
               if (
                 typeof handshakeMeta?.collectorDigest === "string" &&
                 /^[a-f0-9]{64}$/.test(handshakeMeta.collectorDigest)
               ) {
                 observedCollectorDigest = handshakeMeta.collectorDigest;
+              } else if (capabilityHandshake?.collectorDigest) {
+                observedCollectorDigest = capabilityHandshake.collectorDigest;
               }
               if (
                 typeof handshakeMeta?.hookManifestDigest === "string" &&
                 /^[a-f0-9]{64}$/.test(handshakeMeta.hookManifestDigest)
               ) {
                 observedHookManifestDigest = handshakeMeta.hookManifestDigest;
+              } else if (capabilityHandshake?.hookManifestDigest) {
+                observedHookManifestDigest = capabilityHandshake.hookManifestDigest;
               }
 
               if (!observedCollectorDigest || !observedHookManifestDigest) {
@@ -3446,21 +3972,23 @@ export class MinimaxH3ExperimentService {
                   "Handshake event is missing valid collectorDigest or hookManifestDigest"
                 );
               } else if (
-                descV2.provenance.collectorDigest &&
-                observedCollectorDigest !== descV2.provenance.collectorDigest
+                descV2.requiredRuntime?.collectorDigest &&
+                observedCollectorDigest !== descV2.requiredRuntime.collectorDigest
               ) {
                 handshakeStatus = "missing";
                 handshakeConflicts.push(
-                  `Collector digest mismatch: observed ${observedCollectorDigest} !== expected ${descV2.provenance.collectorDigest}`
+                  `Collector digest mismatch: observed ${observedCollectorDigest} !== expected ${descV2.requiredRuntime.collectorDigest}`
                 );
               } else if (
-                descV2.provenance.hookManifestDigest &&
-                observedHookManifestDigest !== descV2.provenance.hookManifestDigest
+                descV2.requiredRuntime?.hookManifestDigest &&
+                observedHookManifestDigest !== descV2.requiredRuntime.hookManifestDigest
               ) {
                 handshakeStatus = "missing";
                 handshakeConflicts.push(
-                  `Hook manifest digest mismatch: observed ${observedHookManifestDigest} !== expected ${descV2.provenance.hookManifestDigest}`
+                  `Hook manifest digest mismatch: observed ${observedHookManifestDigest} !== expected ${descV2.requiredRuntime.hookManifestDigest}`
                 );
+              } else if (!capabilityHandshake || handshakeConflicts.length > 0) {
+                handshakeStatus = "missing";
               } else {
                 handshakeStatus = "verified";
               }
@@ -3685,6 +4213,137 @@ export class MinimaxH3ExperimentService {
               referenceCount: observedRefCount,
               ...(status === "conflict" ? { unknownReason: reasons.join("; ") } : {})
             };
+          })(),
+          ...(capabilityHandshake ? { capabilityHandshake } : {}),
+          ...(preflightObservations?.packageIdentities
+            ? { packageIdentities: preflightObservations.packageIdentities }
+            : {}),
+          ...(() => {
+            if (!capabilityHandshake) return {};
+            try {
+              if (
+                !capabilityHandshake.runtimeVersions?.pytorchVersion ||
+                !preflightObservations?.interpreter?.pythonVersion ||
+                !preflightObservations?.sourceIdentities?.values ||
+                Object.keys(preflightObservations.sourceIdentities.values).length === 0
+              ) {
+                return {};
+              }
+              const toolchain = {
+                pytorchBuild: capabilityHandshake.runtimeVersions.pytorchVersion,
+                cudaBuildVersion: capabilityHandshake.runtimeVersions.cudaBuildVersion ?? null,
+                cudaRuntimeVersion: capabilityHandshake.runtimeVersions.cudaRuntimeVersion ?? null,
+                driverVersion: capabilityHandshake.runtimeVersions.driverVersion ?? null
+              };
+              // The envelope's interpreter identity must describe the actual
+              // CHILD process that ran the experiment, not the host-side
+              // preflight inspection taken before the child even started —
+              // otherwise two different child interpreters satisfying the
+              // same preflight could be substituted undetected (AC-4,
+              // F-e35ea06e). Prefer the live capability handshake's reported
+              // executable hash/ABI/compiler when present, falling back to
+              // preflight only for fields the handshake didn't report.
+              const rawInterpreter = preflightObservations.interpreter;
+              const handshakeRuntime = capabilityHandshake.runtimeVersions;
+              const liveExecutableHash: string | undefined = handshakeRuntime?.pythonExecutableHash
+                ? handshakeRuntime.pythonExecutableHash
+                : undefined;
+              const liveAbiTag: string | undefined = handshakeRuntime?.pythonAbiTag
+                ? handshakeRuntime.pythonAbiTag
+                : undefined;
+              const liveCompiler: string | undefined = handshakeRuntime?.pythonCompiler
+                ? handshakeRuntime.pythonCompiler
+                : undefined;
+              const preflightExecutableHash: string | undefined =
+                rawInterpreter.pythonExecutableHash ?? undefined;
+              const preflightAbi: string | undefined = rawInterpreter.pythonAbi ?? undefined;
+              const preflightCompiler: string | undefined =
+                rawInterpreter.pythonCompiler ?? undefined;
+              const interpreter = {
+                pythonVersion: rawInterpreter.pythonVersion ?? undefined,
+                ...(liveExecutableHash || preflightExecutableHash
+                  ? { pythonExecutableHash: liveExecutableHash ?? preflightExecutableHash }
+                  : {}),
+                ...(liveAbiTag || preflightAbi ? { pythonAbi: liveAbiTag ?? preflightAbi } : {}),
+                ...(liveCompiler || preflightCompiler
+                  ? { pythonCompiler: liveCompiler ?? preflightCompiler }
+                  : {})
+              };
+              const sourceIdentities = preflightObservations.sourceIdentities.values as Record<
+                string,
+                string
+              >;
+              const preflightPkgs = (
+                Array.isArray(preflightObservations?.packageIdentities)
+                  ? preflightObservations.packageIdentities
+                  : []
+              ) as ReadonlyArray<{
+                name: string;
+                version: string;
+                artifactHash?: string;
+                artifactMethod?: string;
+              }>;
+              const rawPackages =
+                capabilityHandshake.packageIdentities &&
+                capabilityHandshake.packageIdentities.length > 0
+                  ? capabilityHandshake.packageIdentities
+                  : preflightPkgs;
+              if (rawPackages.length === 0) return {};
+              const packageArtifacts = rawPackages.map((p) => {
+                const preflightMatch = preflightPkgs.find((pkg) => pkg.name === p.name);
+                return {
+                  name: p.name,
+                  version: p.version,
+                  artifactHash: p.artifactHash ?? preflightMatch?.artifactHash ?? "",
+                  artifactMethod: p.artifactMethod ?? preflightMatch?.artifactMethod ?? ""
+                };
+              });
+              if (
+                packageArtifacts.length === 0 ||
+                packageArtifacts.some(
+                  (p) =>
+                    !/^[a-f0-9]{64}$/.test(p.artifactHash) ||
+                    p.artifactMethod !== "installed_record_sha256_v1"
+                )
+              ) {
+                return {};
+              }
+              const substrateDigest = computeAttentionRuntimeLockDigest({
+                comfyuiCoreRevision: descV2.requiredRuntime.coreRevision,
+                customNodeRevision: descV2.requiredRuntime.customNodeRevision,
+                sourceFileHashes: sourceIdentities,
+                interpreter,
+                pytorchBuild: toolchain.pytorchBuild,
+                cudaBuild: toolchain.cudaBuildVersion ?? undefined,
+                driverConstraints: descV2.requiredRuntime.driverConstraints,
+                pythonPackages: packageArtifacts,
+                cudaRequirement: descV2.requiredRuntime.cudaRequirement,
+                computeCapability: descV2.requiredRuntime.computeCapability,
+                instrumentationProtocol: descV2.requiredRuntime.instrumentationProtocol,
+                collectorDigest: capabilityHandshake.collectorDigest,
+                hookManifestDigest: capabilityHandshake.hookManifestDigest,
+                hooks: descV2.requiredRuntime.hooks
+              });
+              const attentionIdentityCandidate = {
+                identityVersion: 1 as const,
+                substrateDigest,
+                interpreter,
+                toolchain,
+                packageArtifacts,
+                sourceIdentities,
+                registeredNodes: capabilityHandshake.registeredNodes,
+                handshake: capabilityHandshake
+              };
+              const parsed = MinimaxH3AttentionIdentityEnvelopeSchema.safeParse(
+                attentionIdentityCandidate
+              );
+              if (parsed.success) {
+                return { attentionIdentity: parsed.data };
+              }
+              return {};
+            } catch {
+              return {};
+            }
           })(),
           conflicts: [
             ...(preflightObservations?.conflicts ?? []),
@@ -4181,7 +4840,9 @@ export class MinimaxH3ExperimentService {
         pythonPath: descriptor.target.pythonPath,
         requiredRuntime: descriptor.requiredRuntime,
         requiredRuntimeDigest: sha256Hex(canonicalizeJson(descriptor.requiredRuntime)),
-        expectedCheckpointHash: descV2.provenance.actualCheckpointHash
+        expectedCheckpointHash: descV2.provenance.actualCheckpointHash,
+        timeoutMs: descriptor.timeouts.startupTimeoutMs ?? 60000,
+        signal: options?.abortSignal
       });
       if (!runtimeCheck.ok) {
         await writePreflightBlocker(runtimeCheck.blocker, "verifyExperimentRuntime");
@@ -4190,10 +4851,78 @@ export class MinimaxH3ExperimentService {
         );
       }
       if (runtimeCheck.observations) {
-        MinimaxH3ObservedProvenanceSchema.parse(runtimeCheck.observations);
+        const mergedObservations: MinimaxH3ObservedProvenance = {
+          ...runtimeCheck.observations
+        };
+        if (modelsCheck.resolvedPaths) {
+          const resolvedComfyDir = resolve(descriptor.target.comfyUiDir);
+          const modelHashes: Record<
+            string,
+            {
+              status: "verified" | "unknown" | "conflict";
+              value: string | null;
+              expected: string;
+              resolvedPath: string;
+            }
+          > = { ...mergedObservations.loadedModelHashes };
+          for (const [role, info] of Object.entries(modelsCheck.resolvedPaths)) {
+            const resolvedModelPath = resolve(info.resolvedPath);
+            // A plain startsWith admits a sibling directory sharing the
+            // comfy dir's name as a prefix (e.g. "/x/comfy-evil/model.safetensors"
+            // against comfy dir "/x/comfy") — require an exact match or a
+            // path-separator boundary (F-69c0b5da).
+            const isBoundToComfyDir =
+              resolvedModelPath === resolvedComfyDir ||
+              resolvedModelPath.startsWith(resolvedComfyDir + sep);
+            const isMatch = isBoundToComfyDir && info.actualHash === info.expectedHash;
+            modelHashes[role] = {
+              status: isMatch ? "verified" : isBoundToComfyDir ? "conflict" : "unknown",
+              value: info.actualHash ?? null,
+              expected: info.expectedHash,
+              resolvedPath: info.resolvedPath
+            };
+            // Preflight observations keep actualCheckpointHash as "unknown" (preflight_not_loaded)
+            // until runtime execution / reconciliation.
+            mergedObservations.actualCheckpointHash = {
+              status: "unknown",
+              value: null,
+              expected: mergedObservations.actualCheckpointHash.expected,
+              unknownReason: "preflight_not_loaded"
+            };
+          }
+          for (const [expectedRole, expectedSpec] of Object.entries(
+            descriptor.resolvedModelPaths
+          )) {
+            if (!modelHashes[expectedRole]) {
+              const specObj =
+                typeof expectedSpec === "object" && expectedSpec !== null
+                  ? (expectedSpec as {
+                      expectedHash?: string;
+                      resolvedPath?: string;
+                      path?: string;
+                    })
+                  : undefined;
+              const expectedHash =
+                specObj?.expectedHash ??
+                (typeof expectedSpec === "string" ? expectedSpec : "0".repeat(64));
+              const resolvedPath =
+                specObj?.resolvedPath ??
+                specObj?.path ??
+                `${descriptor.target.comfyUiDir}/models/${expectedRole}`;
+              modelHashes[expectedRole] = {
+                status: "unknown",
+                value: null,
+                expected: expectedHash,
+                resolvedPath
+              };
+            }
+          }
+          mergedObservations.loadedModelHashes = modelHashes;
+        }
+        MinimaxH3ObservedProvenanceSchema.parse(mergedObservations);
         await this.store.writeDurableJson(
           `${runDir}/preflight-observations.json`,
-          runtimeCheck.observations
+          mergedObservations
         );
       }
     }
@@ -4269,6 +4998,11 @@ export class MinimaxH3ExperimentService {
           childEnv.CCO_EXPERIMENT_EXPECTED_ATTENTION_BACKEND =
             descV2.samplingRecipe.attentionTopology.backend;
           childEnv.CCO_EXPERIMENT_ALLOW_PLANNED_DENSE = "true";
+        }
+        if (descV2.requiredRuntime?.pythonPackages) {
+          childEnv.CCO_EXPERIMENT_REQUIRED_PACKAGES = descV2.requiredRuntime.pythonPackages
+            .map((p) => p.name)
+            .join(",");
         }
       }
       ownedChild = await this.runner.spawnChild({
@@ -4361,6 +5095,8 @@ export class MinimaxH3ExperimentService {
       // indication the process had already died. Race it against a
       // liveness poll on the owned child so a dead child fails fast
       // with a clear reason instead of a generic readiness timeout.
+      const readinessStartedAt = Date.now();
+      const overallStartupDeadline = readinessStartedAt + descriptor.timeouts.startupTimeoutMs;
       const readinessAbortController = new AbortController();
       if (options?.abortSignal) {
         if (options.abortSignal.aborted) {
@@ -4407,6 +5143,93 @@ export class MinimaxH3ExperimentService {
       const envVerification = await ownedChild.verifyChildEnvironment();
       if (!envVerification.ok) {
         throw new Error(`Child environment verification failed: ${envVerification.reason}`);
+      }
+
+      // 7b. Capability handshake verification (live child probe prior to queue/intent/submission)
+      let capabilityHandshake: MinimaxH3CapabilityHandshake | undefined;
+      let handshakeNonce: string | undefined;
+      if (descriptor.schemaVersion === 2) {
+        const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
+        if (!this.transport.getCapabilityHandshake) {
+          throw new Error(
+            "Capability handshake failed: transport does not support capability handshake"
+          );
+        }
+        handshakeNonce = `hs-${descriptor.runId}-${Date.now()}`;
+        const timeoutMs = descriptor.timeouts.submissionTimeoutMs ?? 30000;
+        // Capability probing previously started a fresh, independent
+        // submissionTimeoutMs deadline here regardless of how much of the
+        // overall startupTimeoutMs budget readiness had actually consumed,
+        // so a child that became ready quickly could still have its
+        // capability handshake rejected on a short submission timeout even
+        // though most of the longer startup budget remained unused
+        // (F-de60ebdc). Use whichever deadline is later: the configured
+        // submission timeout from now, or the remaining unused portion of
+        // the overall startup budget.
+        const handshakeDeadline = Math.max(Date.now() + timeoutMs, overallStartupDeadline);
+        while (true) {
+          if (options?.abortSignal?.aborted) {
+            throw new Error("Capability handshake aborted by caller");
+          }
+          if (!ownedChild.isRunning()) {
+            const exitStderr = ownedChild.getStderr();
+            throw new Error(
+              `Capability handshake failed: child process died during capability handshake${exitStderr ? `: ${exitStderr.trim().slice(-2000)}` : ""}`
+            );
+          }
+          const remainingMs = Math.max(500, handshakeDeadline - Date.now());
+          const handshakeRes = await this.transport.getCapabilityHandshake(
+            baseUrl,
+            handshakeNonce,
+            Math.min(remainingMs, 5000),
+            options?.abortSignal
+          );
+          if (!handshakeRes.ok || !handshakeRes.handshake) {
+            throw new Error(
+              `Capability handshake failed: ${handshakeRes.error ?? "Failed to acquire capability handshake from child process"}`
+            );
+          }
+          if (handshakeRes.handshake.status === "pending") {
+            if (Date.now() >= handshakeDeadline) {
+              throw new Error(
+                "Capability handshake failed: capability handshake timed out while pending attachment/readiness"
+              );
+            }
+            await new Promise((r) => setTimeout(r, 200));
+            continue;
+          }
+          capabilityHandshake = handshakeRes.handshake;
+          break;
+        }
+
+        const hsConflicts = validateCapabilityHandshake(capabilityHandshake, {
+          descV2,
+          expectedPid: ownedChild.pid,
+          expectedNonce: handshakeNonce,
+          attemptToken,
+          comfyUiDir: descriptor.target.comfyUiDir,
+          requireBinding: true
+        });
+        if (hsConflicts.length > 0) {
+          throw new Error(`Capability handshake failed: ${hsConflicts[0]}`);
+        }
+
+        await this.store.writeDurableJson(
+          `${runDir}/capability-handshake.json`,
+          capabilityHandshake
+        );
+
+        if (this.preflight?.verifyModels) {
+          const preSubmitModelsCheck = await this.preflight.verifyModels(
+            descriptor.target.comfyUiDir,
+            descriptor.resolvedModelPaths
+          );
+          if (!preSubmitModelsCheck.ok) {
+            throw new Error(
+              `Pre-submission model verification failed: ${preSubmitModelsCheck.blocker ?? "Model check failed"}`
+            );
+          }
+        }
       }
 
       // Verify queue is idle
@@ -4539,6 +5362,43 @@ export class MinimaxH3ExperimentService {
         throw new Error("config.json on disk was modified or tampered before POST");
       }
 
+      // Re-verify resolved models have not been modified or removed before POST
+      if (modelsCheck.resolvedPaths) {
+        for (const [role, info] of Object.entries(modelsCheck.resolvedPaths)) {
+          if (!existsSync(info.resolvedPath)) {
+            throw new Error(
+              `Resolved model "${role}" at "${info.resolvedPath}" missing before POST`
+            );
+          }
+          if (descriptor.target.comfyUiDir) {
+            let realResolved: string;
+            try {
+              realResolved = realpathSync(info.resolvedPath);
+            } catch {
+              realResolved = resolve(info.resolvedPath);
+            }
+            const modelsDir = resolve(descriptor.target.comfyUiDir, "models");
+            let realModelsDir: string;
+            try {
+              realModelsDir = realpathSync(modelsDir);
+            } catch {
+              realModelsDir = modelsDir;
+            }
+            if (realResolved !== realModelsDir && !realResolved.startsWith(realModelsDir + sep)) {
+              throw new Error(
+                `Resolved model "${role}" at "${info.resolvedPath}" is outside ComfyUI models directory "${realModelsDir}"`
+              );
+            }
+          }
+          const hashInfo = await this.store.hashFile(info.resolvedPath);
+          if (hashInfo.sha256 !== info.expectedHash) {
+            throw new Error(
+              `Resolved model "${role}" at "${info.resolvedPath}" was modified or tampered before POST: expected ${info.expectedHash}, observed ${hashInfo.sha256}`
+            );
+          }
+        }
+      }
+
       // 10. Write intent
       const clientId = `client-${descriptor.runId}`;
       const intent: MinimaxH3ExperimentIntent = {
@@ -4553,7 +5413,13 @@ export class MinimaxH3ExperimentService {
         // is a true fingerprint of the request, usable to independently
         // verify what was actually sent.
         requestFingerprint: sha256Hex(canonicalizeJson(validatedGraph)),
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        ...(attemptToken ? { attemptToken } : {}),
+        ...(ownedChild?.pid !== undefined ? { pid: ownedChild.pid } : {}),
+        ...(handshakeNonce ? { handshakeNonce } : {}),
+        ...(capabilityHandshake
+          ? { capabilityHandshakeDigest: sha256Hex(canonicalizeJson(capabilityHandshake)) }
+          : {})
       };
       await this.store.writeIntent(runDir, intent);
 

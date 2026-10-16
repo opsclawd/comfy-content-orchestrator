@@ -9,6 +9,7 @@
   "scripts": {
     "boundaries": "depcruise apps packages --config .dependency-cruiser.cjs",
     "build": "tsc --build",
+    "postbuild": "node -e \"const fs=require('fs'); fs.mkdirSync('packages/infrastructure/dist/experiments', {recursive: true}); fs.copyFileSync('packages/infrastructure/src/experiments/minimax-h3-package-inspector.py', 'packages/infrastructure/dist/experiments/minimax-h3-package-inspector.py'); fs.copyFileSync('packages/infrastructure/src/experiments/minimax-h3-collector.py', 'packages/infrastructure/dist/experiments/minimax-h3-collector.py')\"",
     "certify:ltx": "pnpm --filter render-worker certify:ltx",
     "certify:ltx-i2v": "pnpm --filter render-worker certify:ltx-i2v",
     "certify:minimax-h3": "pnpm --filter render-worker certify:minimax-h3",
