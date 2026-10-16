@@ -3587,13 +3587,21 @@ export class MinimaxH3ExperimentService {
 
     if (descriptor.schemaVersion === 2) {
       let attemptToken: string | undefined;
+      let attemptReadError: string | null = null;
       try {
         const attemptMeta = await this.store.readJsonFile<{ attemptToken?: string }>(
           `${runDir}/attempt.json`
         );
-        attemptToken = attemptMeta?.attemptToken;
-      } catch {
-        // ignore
+        if (
+          typeof attemptMeta?.attemptToken === "string" &&
+          attemptMeta.attemptToken.trim().length > 0
+        ) {
+          attemptToken = attemptMeta.attemptToken.trim();
+        } else {
+          attemptReadError = "attempt.json is missing valid attemptToken";
+        }
+      } catch (err) {
+        attemptReadError = `Failed to read attempt.json: ${(err as Error).message}`;
       }
 
       const rawPhaseEvents: MinimaxH3PhaseAccountingEvent[] = this.store.readPhaseEvents
@@ -3602,10 +3610,25 @@ export class MinimaxH3ExperimentService {
       const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
 
       const handshakeConflicts: string[] = [];
+      if (attemptReadError) {
+        handshakeConflicts.push(`Attempt correlation failed closed: ${attemptReadError}`);
+      }
+
       const phaseEvents = rawPhaseEvents.filter((e) => {
         if (!e.runId || e.runId !== descV2.runId) return false;
-        if (attemptToken && e.attemptToken && e.attemptToken !== attemptToken) return false;
-        if (promptId && e.promptId && e.promptId !== promptId) return false;
+        // Attempt correlation: fail closed if attempt.json could not be read or attemptToken does not match
+        if (attemptReadError || !attemptToken || e.attemptToken !== attemptToken) return false;
+        // Prompt correlation: when promptId is known, reject null promptId for execution events
+        if (promptId) {
+          if (e.promptId === promptId) {
+            return true;
+          }
+          if (e.promptId === null || e.promptId === undefined) {
+            // Environment startup phase events precede prompt submission
+            return e.phase === "environment_startup";
+          }
+          return false;
+        }
         return true;
       });
       const foreignEvents = rawPhaseEvents.filter((e) => !phaseEvents.includes(e));
@@ -3613,6 +3636,49 @@ export class MinimaxH3ExperimentService {
         handshakeConflicts.push(
           `Foreign events detected in events.jsonl: ${foreignEvents.length} event(s) did not match runId=${descV2.runId}, attemptToken=${attemptToken ?? "any"}, promptId=${promptId ?? "any"}`
         );
+      }
+
+      let capabilityHandshake: MinimaxH3CapabilityHandshake | undefined;
+      try {
+        const rawHs = await this.store.readJsonFile<unknown>(`${runDir}/capability-handshake.json`);
+        if (rawHs) {
+          capabilityHandshake = MinimaxH3CapabilityHandshakeSchema.parse(rawHs);
+        }
+      } catch {
+        // Do not fall back to existingResult for capabilityHandshake; require capability-handshake.json
+      }
+
+      // Validate capability handshake and intent before attention reduction
+      if (!capabilityHandshake) {
+        handshakeConflicts.push(
+          "Missing pre-submission capability handshake evidence for V2 experiment"
+        );
+      } else {
+        if (!intent) {
+          handshakeConflicts.push("Missing execution intent for V2 experiment");
+        }
+        const hsConflicts = validateCapabilityHandshake(capabilityHandshake, {
+          descV2,
+          expectedPid: intent?.pid,
+          expectedNonce: intent?.handshakeNonce,
+          attemptToken: intent?.attemptToken ?? attemptToken,
+          comfyUiDir: descV2.target?.comfyUiDir,
+          requireBinding: true
+        });
+        handshakeConflicts.push(...hsConflicts);
+
+        if (intent) {
+          if (!intent.capabilityHandshakeDigest) {
+            handshakeConflicts.push("Execution intent missing capabilityHandshakeDigest");
+          } else {
+            const observedHsDigest = sha256Hex(canonicalizeJson(capabilityHandshake));
+            if (observedHsDigest !== intent.capabilityHandshakeDigest) {
+              handshakeConflicts.push(
+                `Capability handshake digest mismatch: intent=${intent.capabilityHandshakeDigest}, observed=${observedHsDigest}`
+              );
+            }
+          }
+        }
       }
 
       const startedAt = baseResult.timestamps.startedAt ?? intent?.timestamp ?? null;
@@ -3669,6 +3735,27 @@ export class MinimaxH3ExperimentService {
         };
       }
 
+      const expectedCollectorDigest =
+        descV2.requiredRuntime?.collectorDigest ??
+        (capabilityHandshake?.collectorDigest && handshakeConflicts.length === 0
+          ? capabilityHandshake.collectorDigest
+          : undefined);
+      const expectedHookManifestDigest =
+        descV2.requiredRuntime?.hookManifestDigest ??
+        (capabilityHandshake?.hookManifestDigest && handshakeConflicts.length === 0
+          ? capabilityHandshake.hookManifestDigest
+          : undefined);
+
+      // Completeness must never be reported when the pre-submission capability handshake
+      // (identity, attempt/intent binding, digest match) was invalid or missing -- a fully
+      // covered event stream must not mask an unvalidated identity (AC-5, F-799002ee,
+      // F-aa019999). This reflects handshakeConflicts as accumulated up to this point
+      // (attempt correlation, foreign events, capability handshake presence/binding,
+      // intent digest match); it is intentionally evaluated before the attention
+      // reduction call rather than after, so completeness is gated on identity, not the
+      // reverse.
+      const identityValidatedForAttention = handshakeConflicts.length === 0;
+
       let attentionObservation: MinimaxH3AttentionObservation | undefined;
       if (effectiveAttentionRequest) {
         attentionObservation = reduceAttentionObservation({
@@ -3676,7 +3763,12 @@ export class MinimaxH3ExperimentService {
           attentionRequest: effectiveAttentionRequest,
           expectedRunId: descV2.runId,
           expectedAttemptToken: attemptToken,
-          expectedPromptId: promptId
+          expectedPromptId: promptId,
+          expectedSteps:
+            descV2.samplingRecipe?.expectedSteps ?? descV2.provenance?.samplerSettings?.steps,
+          expectedCollectorDigest,
+          expectedHookManifestDigest,
+          identityValidated: identityValidatedForAttention
         });
       }
 
@@ -3690,27 +3782,58 @@ export class MinimaxH3ExperimentService {
           ?.observedProvenance;
       }
 
-      let capabilityHandshake: MinimaxH3CapabilityHandshake | undefined;
-      try {
-        const rawHs = await this.store.readJsonFile<unknown>(`${runDir}/capability-handshake.json`);
-        if (rawHs) {
-          capabilityHandshake = MinimaxH3CapabilityHandshakeSchema.parse(rawHs);
-        }
-      } catch {
-        // Do not fall back to existingResult for capabilityHandshake; require capability-handshake.json
-      }
-
       const effectiveStopReasons = [...stopReasons];
-      if (attentionObservation) {
+      let attentionFailed = false;
+      let attentionFailureReason: string | undefined;
+
+      if (effectiveAttentionRequest && attentionObservation) {
         if (attentionObservation.status === "fallback") {
+          attentionFailed = true;
+          attentionFailureReason = `Attention fallback detected: ${attentionObservation.failureReason ?? "fallback to dense attention"}`;
           effectiveStopReasons.push("attention_fallback_detected");
         } else if (attentionObservation.status === "failed") {
+          attentionFailed = true;
+          attentionFailureReason = `Attention failed: ${attentionObservation.failureReason ?? "unknown attention failure"}`;
           effectiveStopReasons.push(
             `attention_failed_${attentionObservation.failureReason ?? "unknown"}`
           );
         }
         if (attentionObservation.missingKernelFailure) {
+          attentionFailed = true;
+          attentionFailureReason = `Missing attention kernel: ${attentionObservation.missingKernelFailure}`;
           effectiveStopReasons.push("attention_missing_kernel");
+        }
+        if (!attentionObservation.measurementCoverage.complete) {
+          attentionFailed = true;
+          if (!attentionFailureReason) {
+            attentionFailureReason = !identityValidatedForAttention
+              ? "Attention measurement coverage incomplete: capability handshake was not independently validated"
+              : "Attention measurement coverage incomplete";
+          }
+          effectiveStopReasons.push("attention_incomplete_coverage");
+        }
+      } else if (effectiveAttentionRequest && !attentionObservation) {
+        attentionFailed = true;
+        attentionFailureReason = "Missing attention observation for attention experiment";
+        effectiveStopReasons.push("attention_observation_missing");
+      }
+
+      const isExplicitAttentionFailure =
+        effectiveAttentionRequest &&
+        attentionObservation &&
+        (attentionObservation.status === "fallback" ||
+          attentionObservation.status === "failed" ||
+          Boolean(attentionObservation.missingKernelFailure));
+
+      if (attentionFailed) {
+        if (lifecycle !== "interrupted" && lifecycle !== "submission_unknown") {
+          if (executionStatus === "completed" || isExplicitAttentionFailure) {
+            executionStatus = "failed";
+            lifecycle = "failed";
+          }
+          if (!engineError && attentionFailureReason) {
+            engineError = { message: attentionFailureReason };
+          }
         }
       }
       const reconstructedResultV2: MinimaxH3ExperimentResultV2 = {
@@ -3902,37 +4025,6 @@ export class MinimaxH3ExperimentService {
                 handshakeConflicts.push(
                   `Handshake event runId/attemptToken mismatch: expected runId=${descV2.runId}, attemptToken=${attemptToken ?? "none"}, observed runId=${mismatchedEvent.runId}, attemptToken=${mismatchedEvent.attemptToken ?? "none"}`
                 );
-              }
-            }
-            if (!capabilityHandshake) {
-              handshakeConflicts.push(
-                "Missing pre-submission capability handshake evidence for V2 experiment"
-              );
-            } else {
-              if (!intent) {
-                handshakeConflicts.push("Missing execution intent for V2 experiment");
-              }
-              const hsConflicts = validateCapabilityHandshake(capabilityHandshake, {
-                descV2,
-                expectedPid: intent?.pid,
-                expectedNonce: intent?.handshakeNonce,
-                attemptToken: intent?.attemptToken ?? attemptToken,
-                comfyUiDir: descV2.target?.comfyUiDir,
-                requireBinding: true
-              });
-              handshakeConflicts.push(...hsConflicts);
-
-              if (intent) {
-                if (!intent.capabilityHandshakeDigest) {
-                  handshakeConflicts.push("Execution intent missing capabilityHandshakeDigest");
-                } else {
-                  const observedHsDigest = sha256Hex(canonicalizeJson(capabilityHandshake));
-                  if (observedHsDigest !== intent.capabilityHandshakeDigest) {
-                    handshakeConflicts.push(
-                      `Capability handshake digest mismatch: intent=${intent.capabilityHandshakeDigest}, observed=${observedHsDigest}`
-                    );
-                  }
-                }
               }
             }
             const handshakeMeta = handshakeEvent?.metadata as Record<string, unknown> | undefined;
@@ -4450,20 +4542,21 @@ export class MinimaxH3ExperimentService {
               return [];
             })(),
             ...(() => {
+              const attnErrs: string[] = [];
+              if (effectiveAttentionRequest && !attentionObservation) {
+                attnErrs.push(
+                  "Attention observation evidence missing for recipe requiring block-sparse attention"
+                );
+                return attnErrs;
+              }
               if (descV2.samplingRecipe?.attentionTopology) {
-                if (!attentionObservation) {
-                  return [
-                    "Attention observation evidence missing for recipe requiring block-sparse attention"
-                  ];
-                }
-                if (attentionObservation.status !== "verified") {
-                  return [
-                    `Recipe requires verified block-sparse attention, observed status was "${attentionObservation.status}" (${attentionObservation.failureReason ?? "unverified"})`
-                  ];
+                if (attentionObservation?.status !== "verified") {
+                  attnErrs.push(
+                    `Recipe requires verified block-sparse attention, observed status was "${attentionObservation?.status}" (${attentionObservation?.failureReason ?? "unverified"})`
+                  );
                 }
               }
               if (attentionObservation) {
-                const attnErrs: string[] = [];
                 if (attentionObservation.status === "fallback") {
                   attnErrs.push(
                     `Attention fallback: ${attentionObservation.failureReason ?? "fallback detected"}`
@@ -4478,9 +4571,16 @@ export class MinimaxH3ExperimentService {
                     `Missing attention kernel: ${attentionObservation.missingKernelFailure}`
                   );
                 }
-                return attnErrs;
+                if (
+                  effectiveAttentionRequest &&
+                  !attentionObservation.measurementCoverage.complete
+                ) {
+                  attnErrs.push(
+                    `Attention measurement coverage incomplete: observed ${attentionObservation.measurementCoverage.samplingCallsRecorded} sampling calls, ${attentionObservation.measurementCoverage.attentionCallsRecorded} attention calls`
+                  );
+                }
               }
-              return [];
+              return attnErrs;
             })()
           ]
         },

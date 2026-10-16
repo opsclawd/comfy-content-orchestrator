@@ -148,7 +148,7 @@ pnpm --filter render-worker experiment:minimax-h3 prepare \
   --prompt "A cinematic video test" \
   --target-host "$(hostname)" \
   --gpu-uuid "GPU-00000000-0000-0000-0000-000000000000" \
-  --comfyui-dir /opt/comfyui-pinned \
+  --comfyui-dir .ai-checkouts/comfyui-sage \
   --python .ai-venvs/minimax-h3-sage/bin/python3 \
   --run-id h3-attn-dense-sage-matched-ref2v-124f-control \
   --attention-variant dense \
@@ -194,7 +194,7 @@ pnpm --filter render-worker experiment:minimax-h3 prepare \
 ### Step 3: Prepare Accelerated Candidate Variant
 Prepare the candidate variant with matching seed, inputs, and geometry:
 ```bash
-# Example: SageAttention candidate (on pinned core, using isolated Sage venv)
+# Example: SageAttention candidate (on pinned core, using isolated Sage checkout & venv)
 pnpm --filter render-worker experiment:minimax-h3 prepare \
   --route ref2v \
   --frames 124 \
@@ -203,7 +203,7 @@ pnpm --filter render-worker experiment:minimax-h3 prepare \
   --prompt "A cinematic video test" \
   --target-host "$(hostname)" \
   --gpu-uuid "GPU-00000000-0000-0000-0000-000000000000" \
-  --comfyui-dir /opt/comfyui-pinned \
+  --comfyui-dir .ai-checkouts/comfyui-sage \
   --python .ai-venvs/minimax-h3-sage/bin/python3 \
   --run-id h3-attn-sage-ref2v-124f-candidate \
   --attention-variant sage
@@ -217,26 +217,26 @@ pnpm --filter render-worker experiment:minimax-h3 validate \
 ```
 
 ### Step 5: Hardware Execution & Telemetry Collection
-Execute both runs on the designated physical GPU:
+Execute both runs on the designated physical GPU using the matched baseline:
 ```bash
-# 1. Execute control run
+# 1. Execute matched control run
 pnpm --filter render-worker experiment:minimax-h3 run \
-  --run-dir .ai-runs/minimax-h3-experiments/h3-attn-dense-ref2v-124f-control
+  --run-dir .ai-runs/minimax-h3-experiments/h3-attn-dense-sage-matched-ref2v-124f-control
 
-# 2. Execute candidate run with baseline reference
+# 2. Execute candidate run with matched baseline reference
 pnpm --filter render-worker experiment:minimax-h3 run \
   --run-dir .ai-runs/minimax-h3-experiments/h3-attn-sage-ref2v-124f-candidate \
-  --baseline-run-dir .ai-runs/minimax-h3-experiments/h3-attn-dense-ref2v-124f-control
+  --baseline-run-dir .ai-runs/minimax-h3-experiments/h3-attn-dense-sage-matched-ref2v-124f-control
 ```
 
 ### Step 6: Reconciliation & Comparison
-Reconcile telemetry and evaluate apples-to-apples performance:
+Reconcile telemetry and evaluate apples-to-apples performance against the matched baseline:
 ```bash
 pnpm --filter render-worker experiment:minimax-h3 reconcile \
   --run-dir .ai-runs/minimax-h3-experiments/h3-attn-sage-ref2v-124f-candidate
 
 pnpm --filter render-worker experiment:minimax-h3 compare \
-  --baseline .ai-runs/minimax-h3-experiments/h3-attn-dense-ref2v-124f-control \
+  --baseline .ai-runs/minimax-h3-experiments/h3-attn-dense-sage-matched-ref2v-124f-control \
   --candidate .ai-runs/minimax-h3-experiments/h3-attn-sage-ref2v-124f-candidate
 ```
 
@@ -253,77 +253,127 @@ Complete the evaluation report according to `docs/minimax-h3-attention-report-te
 
 ## 7. Isolated Environment Setup, Hash-Checked Installation & Teardown Lifecycle
 
-All candidate experiments use isolated checkouts and virtualenvs. Shared model directories containing weights are mounted **read-only** (`ro`) to prevent corruption or tampering.
+All candidate experiments use isolated checkouts and virtualenvs. Shared model directories containing weights are mounted **read-only** (`ro`) via real bind mounts to prevent corruption or tampering (symlinks do not enforce read-only access).
 
 ### SageAttention Isolation Recipe
+> [!CAUTION]
+> **INSTALLATION RECIPE BLOCKED PENDING ARTIFACT AVAILABILITY — DO NOT EXECUTE**
+> The SageAttention ref2v candidate admission contract explicitly requires `sageattention==2.1.1` (`runnable: false`, `review_required`). Compatible artifact-verified wheel distributions for CUDA 12.4 matching version 2.1.1 are currently unavailable externally (PyPI distributes only up to 1.0.6, which violates the candidate admission contract). Substituting an unapproved or mismatched version is strictly forbidden by repository governance.
+> Until compatible 2.1.1 wheel artifacts with complete dependency closures are verified and reviewed, the Sage installation recipe is blocked.
+
+When compatible artifacts become available and cleared through governance, the isolated execution procedure is:
 ```bash
-# 1. Create isolated venv outside production
+set -euo pipefail
+
+# 1. Capture external pre-experiment SHA-256 manifest of production environment
+(
+  git -C /opt/comfyui-pinned rev-parse HEAD 'HEAD^{tree}'
+  git -C /opt/comfyui-pinned status --porcelain
+  # Hash every tracked-or-untracked regular file in the production checkout, not just
+  # py/txt/yaml/json -- a change to a shell launcher, systemd unit, .cfg/.ini/.toml
+  # config, or any other extension inside this tree must change this manifest too
+  # (AC-8, F-36230bc5).
+  find /opt/comfyui-pinned -type f -not -path "*/.git/*" -print0 | sort -z | xargs -0 sha256sum
+  # Hash the venv's installed package CONTENTS, not just declared versions: a same-
+  # version package can be locally patched without its version string changing, which
+  # `pip list --format=freeze` alone would never detect (AC-8, F-36230bc5).
+  find /opt/comfyui-pinned-venv/lib -type f -name "*.py" -not -path "*/__pycache__/*" -print0 | sort -z | xargs -0 sha256sum
+  /opt/comfyui-pinned-venv/bin/pip list --format=freeze
+  # Operator-specified launch/service artifacts outside the checkout and venv above
+  # (e.g. a systemd unit, a wrapper launch script, an external .env) are NOT captured
+  # by this manifest unless added here explicitly -- if the production deployment uses
+  # any such artifact, add its path to this sha256sum invocation.
+  sha256sum \
+    .comfyui-version .minimax-h3-version .ffmpeg-version .kokoro-version .piper-version .whisperx-version \
+    templates/minimax_h3_720p_i2v_124f_api.json \
+    templates/minimax_h3_720p_ref2v_124f_api.json \
+    templates/provenance.json \
+    experiments/minimax-h3-attention/catalog.json
+) > /tmp/pre-experiment-manifest.sha256
+
+# 2. Clone isolated experimental checkout (never mutate or execute in-place against /opt/comfyui-pinned)
+git clone https://github.com/Comfy-Org/ComfyUI .ai-checkouts/comfyui-sage
+git -C .ai-checkouts/comfyui-sage checkout 55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc
+
+# 3. Mount shared models directory strictly read-only (two-step bind mount; symlinks do not enforce read-only)
+mkdir -p .ai-checkouts/comfyui-sage/models
+sudo mount --bind /path/to/pinned-models .ai-checkouts/comfyui-sage/models
+sudo mount -o remount,bind,ro .ai-checkouts/comfyui-sage/models
+
+# 4. Verify read-only mount options and immutability (findmnt check + fail-closed write probe via unprivileged user with cleanup)
+findmnt -no OPTIONS .ai-checkouts/comfyui-sage/models | grep -q '\bro\b'
+if sudo -u nobody touch .ai-checkouts/comfyui-sage/models/.ro_probe 2>/dev/null; then
+  sudo rm -f .ai-checkouts/comfyui-sage/models/.ro_probe
+  echo "FATAL: models mount is writable!" >&2
+  exit 1
+fi
+
+# 5. Create isolated virtualenv outside production
 python3 -m venv .ai-venvs/minimax-h3-sage
-.ai-venvs/minimax-h3-sage/bin/pip install --upgrade pip
 
-# 2. Install pinned dependencies with hash verification
-.ai-venvs/minimax-h3-sage/bin/pip install torch==2.5.1+cu124 torchvision==0.20.1+cu124 \
-  --extra-index-url https://download.pytorch.org/whl/cu124
-.ai-venvs/minimax-h3-sage/bin/pip install sageattention==2.1.1
+# 6. Install dependencies with exact hash-locked requirements and verify closure
+# NOTE: Blocked pending compatible 2.1.1 wheel artifacts
+# .ai-venvs/minimax-h3-sage/bin/pip install --require-hashes -r experiments/minimax-h3-attention/locks/requirements-sage-cu124.txt
+# .ai-venvs/minimax-h3-sage/bin/pip check
 
-# 3. Teardown & Restoration Lifecycle
-# First release any held GPU locks and terminate owned process:
+# 7. Teardown & Restoration Lifecycle
+# First release any held GPU locks and terminate owned processes for both control and candidate runs:
+pnpm --filter render-worker experiment:minimax-h3 cleanup --run-dir .ai-runs/minimax-h3-experiments/h3-attn-dense-sage-matched-ref2v-124f-control
 pnpm --filter render-worker experiment:minimax-h3 cleanup --run-dir .ai-runs/minimax-h3-experiments/h3-attn-sage-ref2v-124f-candidate
-# Remove isolated virtualenv:
-rm -rf .ai-venvs/minimax-h3-sage
-# Verify production checkout remains clean:
-git status --porcelain
+
+# Unmount read-only model bind mount and verify unmounted before checkout removal:
+sudo umount .ai-checkouts/comfyui-sage/models
+if findmnt .ai-checkouts/comfyui-sage/models >/dev/null 2>&1; then
+  echo "FATAL: models mount is still attached! Aborting rm -rf to protect shared models." >&2
+  exit 1
+fi
+
+# Remove isolated checkout and virtualenv only after mount detachment is verified:
+rm -rf .ai-checkouts/comfyui-sage .ai-venvs/minimax-h3-sage
+
+# Capture post-experiment production environment manifest and verify exact equality:
+(
+  git -C /opt/comfyui-pinned rev-parse HEAD 'HEAD^{tree}'
+  git -C /opt/comfyui-pinned status --porcelain
+  # Hash every tracked-or-untracked regular file in the production checkout, not just
+  # py/txt/yaml/json -- a change to a shell launcher, systemd unit, .cfg/.ini/.toml
+  # config, or any other extension inside this tree must change this manifest too
+  # (AC-8, F-36230bc5).
+  find /opt/comfyui-pinned -type f -not -path "*/.git/*" -print0 | sort -z | xargs -0 sha256sum
+  # Hash the venv's installed package CONTENTS, not just declared versions: a same-
+  # version package can be locally patched without its version string changing, which
+  # `pip list --format=freeze` alone would never detect (AC-8, F-36230bc5).
+  find /opt/comfyui-pinned-venv/lib -type f -name "*.py" -not -path "*/__pycache__/*" -print0 | sort -z | xargs -0 sha256sum
+  /opt/comfyui-pinned-venv/bin/pip list --format=freeze
+  # Operator-specified launch/service artifacts outside the checkout and venv above
+  # (e.g. a systemd unit, a wrapper launch script, an external .env) are NOT captured
+  # by this manifest unless added here explicitly -- if the production deployment uses
+  # any such artifact, add its path to this sha256sum invocation.
+  sha256sum \
+    .comfyui-version .minimax-h3-version .ffmpeg-version .kokoro-version .piper-version .whisperx-version \
+    templates/minimax_h3_720p_i2v_124f_api.json \
+    templates/minimax_h3_720p_ref2v_124f_api.json \
+    templates/provenance.json \
+    experiments/minimax-h3-attention/catalog.json
+) > /tmp/post-experiment-manifest.sha256
+diff -u /tmp/pre-experiment-manifest.sha256 /tmp/post-experiment-manifest.sha256
+
+# Verify production checkouts explicitly:
+./scripts/check-comfyui-version.sh --comfy-dir /opt/comfyui-pinned
+./scripts/check-minimax-h3-version.sh --comfy-dir /opt/comfyui-pinned --models-dir /path/to/pinned-models
 ```
 
-### Native sol-attn Isolation Recipe
-> [!WARNING]
-> Pinned core revision `94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf` is confirmed unavailable upstream (GitHub API HTTP 422: `No commit found for SHA`). Do not attempt to clone or check out this nonexistent SHA; the candidate remains `unsupported`. The recipe below is retained as prospective reference if a confirmed upstream revision is ever identified.
+### Native sol-attn Reference Specification
+> [!CAUTION]
+> **UNAVAILABLE CORE REVISION — RUNNABLE BLOCKS REMOVED — DO NOT EXECUTE**
+> Pinned core revision `94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf` is confirmed unavailable upstream (GitHub API HTTP 422: `No commit found for SHA`).
+> In accordance with repository review standards, all runnable installation and checkout blocks for unavailable core revisions have been removed. The candidate remains strictly `unsupported` (`runnable: false`). No execution may be attempted until an upstream release containing this revision is published and verified.
 
-```bash
-# 1. Clone isolated experimental checkout (never mutate production ComfyUI)
-git clone https://github.com/comfyanonymous/ComfyUI .ai-checkouts/comfyui-sol-attn
-git -C .ai-checkouts/comfyui-sol-attn checkout 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf
-
-# 2. Link model directory read-only from production storage
-ln -s /path/to/pinned-models .ai-checkouts/comfyui-sol-attn/models
-
-# 3. Create isolated virtualenv
-python3 -m venv .ai-venvs/minimax-h3-sol-attn
-.ai-venvs/minimax-h3-sol-attn/bin/pip install --upgrade pip
-.ai-venvs/minimax-h3-sol-attn/bin/pip install torch==2.5.1+cu124 \
-  --extra-index-url https://download.pytorch.org/whl/cu124
-.ai-venvs/minimax-h3-sol-attn/bin/pip install comfy-kitchen==0.2.31
-
-# 4. Teardown & Restoration Lifecycle
-pnpm --filter render-worker experiment:minimax-h3 cleanup --run-dir .ai-runs/minimax-h3-experiments/<run-id>
-rm -rf .ai-checkouts/comfyui-sol-attn .ai-venvs/minimax-h3-sol-attn
-```
-
-### Veda Sparse Attention Isolation Recipe
-> [!WARNING]
-> Pinned core revision `94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf` is confirmed unavailable upstream (GitHub API HTTP 422: `No commit found for SHA`). While the custom node repository (`Veda-on-ComfyUI` @ `67e4eb55`) has a verified schema, the target core revision is unavailable, so the candidate remains `unsupported`.
-
-```bash
-# 1. Clone isolated experimental core checkout and custom node
-git clone https://github.com/comfyanonymous/ComfyUI .ai-checkouts/comfyui-veda
-git -C .ai-checkouts/comfyui-veda checkout 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf
-git clone https://github.com/veda-sparse/Veda-on-ComfyUI .ai-checkouts/comfyui-veda/custom_nodes/Veda-on-ComfyUI
-git -C .ai-checkouts/comfyui-veda/custom_nodes/Veda-on-ComfyUI checkout 67e4eb5541b648555563144401ebaba832bd73ec
-
-# 2. Link model directory read-only
-ln -s /path/to/pinned-models .ai-checkouts/comfyui-veda/models
-
-# 3. Create isolated virtualenv with exact pinned Triton
-python3 -m venv .ai-venvs/minimax-h3-veda
-.ai-venvs/minimax-h3-veda/bin/pip install --upgrade pip
-.ai-venvs/minimax-h3-veda/bin/pip install torch==2.5.1+cu124 \
-  --extra-index-url https://download.pytorch.org/whl/cu124
-.ai-venvs/minimax-h3-veda/bin/pip install triton==3.0.0
-
-# 4. Teardown & Restoration Lifecycle
-pnpm --filter render-worker experiment:minimax-h3 cleanup --run-dir .ai-runs/minimax-h3-experiments/<run-id>
-rm -rf .ai-checkouts/comfyui-veda .ai-venvs/minimax-h3-veda
-```
+### Veda Sparse Attention Reference Specification
+> [!CAUTION]
+> **UNAVAILABLE CORE REVISION — RUNNABLE BLOCKS REMOVED — DO NOT EXECUTE**
+> Pinned core revision `94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf` is confirmed unavailable upstream (GitHub API HTTP 422: `No commit found for SHA`). While the custom node repository (`Veda-on-ComfyUI` @ `67e4eb55`) has a verified schema, the required core revision is unavailable, so the candidate remains strictly `unsupported` (`runnable: false`).
+> In accordance with repository review standards, all runnable installation and checkout blocks for unavailable core revisions have been removed. No execution may be attempted until an upstream release containing this revision is published and verified.
 
 ### Governance Integrity & Safety Gates
 1. **Explicit Candidate-Only Admission:** Incomplete or unverified catalog entries declare `runnable: false` with licensing status `review_required` and security audit status `pending`. Any attempt to spawn an owned process for candidate-only variants fails closed immediately in preflight.
