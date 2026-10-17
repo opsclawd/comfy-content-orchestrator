@@ -622,6 +622,12 @@ describe("CreateShotPlanVariationUseCase", () => {
     expect(enqueuedJobs).toHaveLength(1);
     expect(enqueuedJobs[0]!.jobKind).toBe("candidate");
     expect(enqueuedJobs[0]!.workflowTemplate).toBe("flux_schnell_storyboard_v1");
+    expect(enqueuedJobs[0]!.injectedPayload["prompt"]).toEqual(
+      expect.stringMatching(/^[A-Z' ]+\. Camera:/)
+    );
+    expect(enqueuedJobs[0]!.injectedPayload["negativePrompt"]).toEqual(
+      expect.stringContaining("photorealistic")
+    );
   });
 
   it("includes bound references with campaign reference bible descriptions in variation prompt", async () => {

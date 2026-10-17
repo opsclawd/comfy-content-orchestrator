@@ -94,12 +94,35 @@ describe("compileStoryboardPrevisPrompt", () => {
     expect(result1.version).toBe(1);
   });
 
-  it("embeds the fixed storyboard style header and clean panel directive", () => {
+  const INDEPENDENT_STORYBOARD_NEGATIVE_PROMPT =
+    "photorealistic, photograph, 3d render, CGI, octane render, movie still, film frame, hyperrealistic, glossy skin, detailed skin pores, realistic human eyes, DSLR photo, camera annotations, on-screen text, typography, subtitles, speech bubble, arrows, frame labels, watermark, logo";
+
+  it("embeds the fixed storyboard style header, clean panel directive, and leads with camera clause", () => {
     const shotPlan = createMinimalShotPlan();
     const result = compileStoryboardPrevisPrompt(shotPlan);
 
-    expect(result.prompt.startsWith(STORYBOARD_STYLE_HEADER)).toBe(true);
+    // Angle keyword + camera clause lead the prompt
+    expect(result.prompt.startsWith("EYE LEVEL. Camera:")).toBe(true);
+
+    // Blocking precedes style, style appears intact
+    const cameraIndex = result.prompt.indexOf("Camera:");
+    const stagingIndex = result.prompt.indexOf("Staging:");
+    const styleIndex = result.prompt.indexOf(STORYBOARD_STYLE_HEADER);
+    const cleanPanelIndex = result.prompt.indexOf(STORYBOARD_CLEAN_PANEL_DIRECTIVE);
+
+    expect(result.prompt.indexOf("EYE LEVEL.")).toBe(0);
+    expect(stagingIndex).toBeGreaterThan(cameraIndex);
+    expect(styleIndex).toBeGreaterThan(stagingIndex);
+    expect(cleanPanelIndex).toBeGreaterThan(styleIndex);
+
+    // Section boundaries are present (newlines)
+    expect(result.prompt).toContain("\n\n");
+
+    // Clean panel directive ends the prompt
     expect(result.prompt.endsWith(STORYBOARD_CLEAN_PANEL_DIRECTIVE)).toBe(true);
+
+    // Compare negative prompt against independent literal
+    expect(result.negativePrompt).toBe(INDEPENDENT_STORYBOARD_NEGATIVE_PROMPT);
     expect(result.negativePrompt).toBe(STORYBOARD_NEGATIVE_PROMPT);
   });
 
@@ -116,11 +139,71 @@ describe("compileStoryboardPrevisPrompt", () => {
   });
 
   describe("camera angle mapping", () => {
-    it.each(CAMERA_ANGLES)("maps angle '%s' to readable perspective vocabulary", (angle) => {
-      const plan = createMinimalShotPlan({ angle: angle as CameraAngle });
+    const EXPECTED_ANGLE_DESCRIPTIONS: Readonly<Record<CameraAngle, string>> = {
+      eye_level: "Eye-level shot; camera at subject eye height, level horizontal viewpoint.",
+      low_angle:
+        "LOW ANGLE SHOT, shot from below. Camera placed near ground level, tilted sharply upward at the subjects. Subjects loom tall and dominant above the lens, exaggerated upward foreshortening, converging vertical lines, open sky or ceiling visible behind their heads, viewer looking up from a crouched vantage point.",
+      high_angle:
+        "HIGH ANGLE SHOT, shot from above. Pronounced high-angle shot; camera above the subjects looking downward at an oblique angle, elevated overhead vantage point, ground and subjects' heads/shoulders prominent, downward foreshortening.",
+      bird_eye:
+        "Bird's-eye overhead shot; camera directly above, looking vertically downward, top-down layout.",
+      worm_eye:
+        "Extreme worm's-eye shot; camera at ground level looking steeply upward, exaggerated upward foreshortening.",
+      dutch_angle:
+        "Dutch-angle shot; visibly tilted camera and diagonal horizon, canted composition.",
+      over_the_shoulder:
+        "Over-the-shoulder shot; camera behind a subject, foreground shoulder framing the subject or action beyond."
+    };
+
+    const EXPECTED_ANGLE_KEYWORDS: Readonly<Record<CameraAngle, string>> = {
+      eye_level: "EYE LEVEL",
+      low_angle: "LOW ANGLE",
+      high_angle: "HIGH ANGLE",
+      bird_eye: "BIRD'S EYE",
+      worm_eye: "WORM'S EYE",
+      dutch_angle: "DUTCH ANGLE",
+      over_the_shoulder: "OVER THE SHOULDER"
+    };
+
+    it.each(CAMERA_ANGLES)(
+      "maps angle '%s' to concrete physical viewpoint wording in leading camera section",
+      (angle) => {
+        const plan = createMinimalShotPlan({ angle: angle as CameraAngle });
+        const result = compileStoryboardPrevisPrompt(plan);
+        const expectedPhrase = EXPECTED_ANGLE_DESCRIPTIONS[angle];
+        const expectedKeyword = EXPECTED_ANGLE_KEYWORDS[angle];
+
+        expect(result.prompt.startsWith(`${expectedKeyword}. Camera: ${expectedPhrase}`)).toBe(
+          true
+        );
+      }
+    );
+
+    it("falls back gracefully for unknown camera angles with readable viewpoint text", () => {
+      const plan = createMinimalShotPlan({
+        angle: "dutch_tilt_overhead" as unknown as CameraAngle
+      });
       const result = compileStoryboardPrevisPrompt(plan);
 
-      expect(result.prompt).toMatch(/camera angle|angle/i);
+      expect(
+        result.prompt.startsWith(
+          "DUTCH TILT OVERHEAD. Camera: dutch tilt overhead camera angle; camera positioned for dutch tilt overhead viewpoint."
+        )
+      ).toBe(true);
+    });
+
+    it("keeps high_angle distinct from bird_eye and low_angle distinct from worm_eye", () => {
+      expect(EXPECTED_ANGLE_DESCRIPTIONS.high_angle).toContain("oblique angle");
+      expect(EXPECTED_ANGLE_DESCRIPTIONS.bird_eye).toContain("top-down layout");
+      expect(EXPECTED_ANGLE_DESCRIPTIONS.high_angle).not.toEqual(
+        EXPECTED_ANGLE_DESCRIPTIONS.bird_eye
+      );
+
+      expect(EXPECTED_ANGLE_DESCRIPTIONS.low_angle).toContain("shot from below");
+      expect(EXPECTED_ANGLE_DESCRIPTIONS.worm_eye).toContain("ground level");
+      expect(EXPECTED_ANGLE_DESCRIPTIONS.low_angle).not.toEqual(
+        EXPECTED_ANGLE_DESCRIPTIONS.worm_eye
+      );
     });
   });
 
@@ -148,6 +231,28 @@ describe("compileStoryboardPrevisPrompt", () => {
 
       expect(result.prompt).toContain("Static camera.");
       expect(result.prompt).not.toContain("Camera motion: medium static");
+    });
+
+    it("handles arc camera movement with single-panel spatial depth cue", () => {
+      const plan = createMinimalShotPlan({
+        cameraMovement: "arc",
+        movementSpeed: "slow"
+      });
+      const result = compileStoryboardPrevisPrompt(plan);
+
+      expect(result.prompt).toContain(
+        "Camera motion: slow arc; single moment along a curved camera path around the subjects, with spatial depth and foreground-background separation while preserving stated camera position and subject orientations."
+      );
+    });
+
+    it("handles omitted or null movement by defaulting to static camera", () => {
+      const planNull = createMinimalShotPlan({ cameraMovement: null });
+      const resultNull = compileStoryboardPrevisPrompt(planNull);
+      expect(resultNull.prompt).toContain("Static camera.");
+
+      const planUndefined = createMinimalShotPlan({ cameraMovement: undefined });
+      const resultUndefined = compileStoryboardPrevisPrompt(planUndefined);
+      expect(resultUndefined.prompt).toContain("Static camera.");
     });
   });
 
@@ -316,6 +421,7 @@ describe("compileStoryboardPrevisPrompt", () => {
       const plan = createMinimalShotPlan();
       const result = compileStoryboardPrevisPrompt(plan);
 
+      expect(result.negativePrompt).toBe(INDEPENDENT_STORYBOARD_NEGATIVE_PROMPT);
       expect(result.negativePrompt).toContain("photorealistic");
       expect(result.negativePrompt).toContain("photograph");
       expect(result.negativePrompt).toContain("skin pores");
@@ -379,27 +485,29 @@ describe("compileStoryboardPrevisPrompt", () => {
       const selectedBeat = plan.beats![1]!;
       const result = compileStoryboardPrevisPrompt(plan, selectedBeat);
 
-      // Verify style header and clean panel directive remain intact
-      expect(result.prompt.startsWith(STORYBOARD_STYLE_HEADER)).toBe(true);
+      // Verify camera clause leads and clean panel directive ends
+      expect(result.prompt.startsWith("EYE LEVEL. Camera:")).toBe(true);
       expect(result.prompt.endsWith(STORYBOARD_CLEAN_PANEL_DIRECTIVE)).toBe(true);
-      expect(result.negativePrompt).toBe(STORYBOARD_NEGATIVE_PROMPT);
+      expect(result.negativePrompt).toBe(INDEPENDENT_STORYBOARD_NEGATIVE_PROMPT);
       expect(result.profileId).toBe(STORYBOARD_PREVIS_PROFILE_ID);
       expect(result.renderProfileKey).toBe(STORYBOARD_PREVIS_RENDER_PROFILE_KEY);
       expect(result.version).toBe(1);
 
       // Verify shared sections remain intact
       expect(result.prompt).toContain(
-        "Camera staging: medium wide shot framing, eye-level camera angle."
+        "EYE LEVEL. Camera: Eye-level shot; camera at subject eye height, level horizontal viewpoint. Framing: medium wide shot framing."
       );
+      expect(result.prompt).toContain("Beat camera: rapid whip pan right.");
       expect(result.prompt).toContain("Character [hero-operative] staged at screen center");
       expect(result.prompt).toContain("Setting: Rain-slicked alleyway with reflective puddles.");
       expect(result.prompt).toContain("Lighting: Impressionistic neon night lighting");
       expect(result.prompt).toContain("Continuity: Persistent subject(s) [hero-operative].");
 
-      // Verify beat-specific action, timing, description, and camera action are emitted
+      // Verify beat-specific action, timing, description are emitted (without duplicating cameraAction)
       expect(result.prompt).toContain(
-        "Action: Beat 2 [2000ms-4000ms]: vaults concrete barricade (Operative leaps over barrier). Camera: rapid whip pan right."
+        "Action: Beat 2 [2000ms-4000ms]: vaults concrete barricade (Operative leaps over barrier)."
       );
+      expect(result.prompt).not.toMatch(/Action:[^.]*Camera:/);
 
       // Verify plan-wide action summary and first beat are NOT in the action section
       expect(result.prompt).not.toContain("Plan-wide summary that should be replaced");
@@ -435,8 +543,8 @@ describe("compileStoryboardPrevisPrompt", () => {
       const result = compileStoryboardPrevisPrompt(plan, beat);
 
       expect(result.prompt).toContain("Action: Beat: steps forward (Simple action note).");
-      expect(result.prompt.startsWith(STORYBOARD_STYLE_HEADER)).toBe(true);
-      expect(result.negativePrompt).toBe(STORYBOARD_NEGATIVE_PROMPT);
+      expect(result.prompt.startsWith("EYE LEVEL. Camera:")).toBe(true);
+      expect(result.negativePrompt).toBe(INDEPENDENT_STORYBOARD_NEGATIVE_PROMPT);
     });
 
     it("regression: retains identical one-argument behavior when beat parameter is omitted", () => {
@@ -452,6 +560,100 @@ describe("compileStoryboardPrevisPrompt", () => {
       expect(resultNoArg.prompt).toContain(
         "Primary staging: raises device to eye level (beat 1: Operative powers up scanner)."
       );
+    });
+  });
+
+  describe("low-angle and slow-arc blocking fidelity regression (#456)", () => {
+    it("reliably conveys low angle, slow arc movement, and side-by-side forward-facing blocking", () => {
+      const plan = createMinimalShotPlan({
+        angle: "low_angle",
+        cameraPosition: "low angle ground view looking up at subjects",
+        cameraMovement: "arc",
+        movementSpeed: "slow",
+        subjects: [
+          {
+            subjectId: "couple-left",
+            role: "subject_identity",
+            initialPosition: "screen_left",
+            movementTrajectory: "standing side-by-side facing forward",
+            interactionSummary: "arms linked with couple-right"
+          },
+          {
+            subjectId: "couple-right",
+            role: "subject_identity",
+            initialPosition: "screen_right",
+            movementTrajectory: "standing side-by-side facing forward",
+            interactionSummary: "arms linked with couple-left"
+          }
+        ],
+        beats: [
+          {
+            beatIndex: 1,
+            startMs: 0,
+            endMs: 3000,
+            description: "Couple gazes ahead together",
+            cameraAction: "slow arc around couple",
+            subjectAction: "stand side-by-side with arms linked facing forward"
+          }
+        ]
+      });
+
+      const selectedBeat = plan.beats![0]!;
+      const result = compileStoryboardPrevisPrompt(plan, selectedBeat);
+
+      // Camera angle leading with exact meaningful viewpoint text
+      const expectedLowAngleText =
+        "LOW ANGLE SHOT, shot from below. Camera placed near ground level, tilted sharply upward at the subjects. Subjects loom tall and dominant above the lens, exaggerated upward foreshortening, converging vertical lines, open sky or ceiling visible behind their heads, viewer looking up from a crouched vantage point.";
+      expect(result.prompt.startsWith(`LOW ANGLE. Camera: ${expectedLowAngleText}`)).toBe(true);
+
+      // Camera position
+      expect(result.prompt).toContain("Position: low angle ground view looking up at subjects.");
+
+      // Arc movement cue and speed
+      expect(result.prompt).toContain(
+        "Camera motion: slow arc; single moment along a curved camera path around the subjects, with spatial depth and foreground-background separation while preserving stated camera position and subject orientations."
+      );
+      expect(result.prompt).toContain("Beat camera: slow arc around couple.");
+
+      // Both subject declarations survive
+      expect(result.prompt).toContain("Character [couple-left] staged at screen left");
+      expect(result.prompt).toContain("Character [couple-right] staged at screen right");
+
+      // Blocking and orientation text survive
+      expect(result.prompt).toContain("blocking: standing side-by-side facing forward");
+      expect(result.prompt).toContain("Interaction: arms linked with couple-right");
+      expect(result.prompt).toContain("Interaction: arms linked with couple-left");
+      expect(result.prompt).toContain(
+        "Staging: 2 subject(s) (2 character(s), 0 product(s)); subject positions and facing directions follow the supplied blocking."
+      );
+
+      // Blocking emphasis clause reinforces side-by-side, forward-facing, and linked-arm staging
+      expect(result.prompt).toContain(
+        "Blocking emphasis: the 2 subjects are staged standing directly side-by-side in a straight horizontal line, both facing forward toward the camera, not turned toward each other, with arms visibly linked together."
+      );
+
+      // Beat action survives (without duplicating cameraAction in the action clause)
+      expect(result.prompt).toContain(
+        "Action: Beat 1 [0ms-3000ms]: stand side-by-side with arms linked facing forward (Couple gazes ahead together)."
+      );
+      expect(result.prompt).not.toMatch(/Action:[^.]*Camera:/);
+
+      // Storyboard style header is preserved and follows blocking/action
+      expect(result.prompt).toContain(STORYBOARD_STYLE_HEADER);
+      const cameraIdx = result.prompt.indexOf("Camera:");
+      const stagingIdx = result.prompt.indexOf("Staging:");
+      const actionIdx = result.prompt.indexOf("Action:");
+      const styleIdx = result.prompt.indexOf(STORYBOARD_STYLE_HEADER);
+      const cleanPanelIdx = result.prompt.indexOf(STORYBOARD_CLEAN_PANEL_DIRECTIVE);
+
+      expect(result.prompt.indexOf("LOW ANGLE.")).toBe(0);
+      expect(stagingIdx).toBeGreaterThan(cameraIdx);
+      expect(actionIdx).toBeGreaterThan(stagingIdx);
+      expect(styleIdx).toBeGreaterThan(actionIdx);
+      expect(cleanPanelIdx).toBeGreaterThan(styleIdx);
+
+      // Clean panel directive ends the prompt
+      expect(result.prompt.endsWith(STORYBOARD_CLEAN_PANEL_DIRECTIVE)).toBe(true);
     });
   });
 });
