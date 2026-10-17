@@ -19,7 +19,7 @@ test.describe("Campaign Creation Handoff and Review Hub Integration", () => {
       .fill("Vibrant high-energy summer activewear commercial for outdoor enthusiasts");
     await page.getByTestId("brief-visual-style-input").fill("cinematic sunlight 35mm golden hour");
     await page.getByTestId("campaign-title-input").fill(campaignTitle);
-    await page.getByTestId("client-id-input").fill(testEnv.postgres.defaultClientId);
+    await page.getByTestId("client-select").selectOption(testEnv.postgres.defaultClientId);
     await page.getByTestId("target-platform-input").fill("instagram_reels");
     await page.getByTestId("target-duration-input").fill("15");
 
@@ -99,7 +99,7 @@ test.describe("Campaign Creation Handoff and Review Hub Integration", () => {
       .getByTestId("brief-description-input")
       .fill("Minimalist architecture showcase with geometric lighting");
     await page.getByTestId("campaign-title-input").fill(campaignTitle);
-    await page.getByTestId("client-id-input").fill(testEnv.postgres.defaultClientId);
+    await page.getByTestId("client-select").selectOption(testEnv.postgres.defaultClientId);
     await page.getByTestId("target-duration-input").fill("15");
 
     // Select custom mode and set override count

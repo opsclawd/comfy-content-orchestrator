@@ -82,8 +82,20 @@ describe("CampaignCreationForm Component", () => {
     createdAt: "2026-09-11T12:00:00.000Z"
   };
 
+  const defaultClients = [
+    {
+      clientId: "11111111-1111-4111-8111-111111111111",
+      companyName: "Acme Corporation"
+    },
+    {
+      clientId: "33333333-3333-3333-3333-333333333333",
+      companyName: "Beta Studios"
+    }
+  ];
+
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(ClientApiModule, "listClients").mockResolvedValue(defaultClients);
   });
 
   afterEach(() => {
@@ -99,7 +111,9 @@ describe("CampaignCreationForm Component", () => {
     expect(html).toContain('data-testid="brief-description-input"');
     expect(html).toContain('data-testid="brief-visual-style-input"');
     expect(html).toContain('data-testid="campaign-title-input"');
-    expect(html).toContain('data-testid="client-id-input"');
+    expect(html).toContain('data-testid="client-select"');
+    expect(html).toContain("Client *");
+    expect(html).toContain("Loading clients...");
     expect(html).toContain('data-testid="target-platform-input"');
     expect(html).toContain('data-testid="target-duration-input"');
     expect(html).toContain('data-testid="scene-count-mode-auto"');
@@ -192,7 +206,15 @@ describe("CampaignCreationForm Component", () => {
       issues: []
     };
 
-    const html = renderToStaticMarkup(<CampaignCreationForm state={validationFailedState} />);
+    const html = renderToStaticMarkup(
+      <CampaignCreationForm
+        state={validationFailedState}
+        initialClients={[
+          { clientId: "bad-client", companyName: "Bad Client Inc" },
+          ...defaultClients
+        ]}
+      />
+    );
 
     expect(html).toContain('data-testid="campaign-creation-validation-error"');
     expect(html).toContain('data-testid="field-error-title"');
@@ -217,7 +239,9 @@ describe("CampaignCreationForm Component", () => {
       fieldErrors: {}
     };
 
-    const html = renderToStaticMarkup(<CampaignCreationForm state={conflictState} />);
+    const html = renderToStaticMarkup(
+      <CampaignCreationForm state={conflictState} initialClients={defaultClients} />
+    );
 
     expect(html).toContain('data-testid="campaign-creation-conflict"');
     expect(html).toContain("Campaign Conflict (IDEMPOTENCY_CONFLICT)");
@@ -371,7 +395,13 @@ describe("CampaignCreationForm Component", () => {
   describe("Mounted Client Component DOM tests (F-eec23cde)", () => {
     it("submits Auto mode form without sceneCountOverride", async () => {
       const mockSubmit = vi.fn().mockResolvedValue(sampleSuccessResponse);
-      render(<CampaignCreationForm submitCampaign={mockSubmit} initialValues={validValues} />);
+      render(
+        <CampaignCreationForm
+          submitCampaign={mockSubmit}
+          initialValues={validValues}
+          initialClients={defaultClients}
+        />
+      );
 
       const submitBtn = screen.getByTestId("submit-campaign-button");
       fireEvent.click(submitBtn);
@@ -395,7 +425,13 @@ describe("CampaignCreationForm Component", () => {
 
     it("allows selecting LTX-Video 2.5 engine profile radio card and submitting with chosen profile", async () => {
       const mockSubmit = vi.fn().mockResolvedValue(sampleSuccessResponse);
-      render(<CampaignCreationForm submitCampaign={mockSubmit} initialValues={validValues} />);
+      render(
+        <CampaignCreationForm
+          submitCampaign={mockSubmit}
+          initialValues={validValues}
+          initialClients={defaultClients}
+        />
+      );
 
       const ltxRadio = screen.getByTestId("engine-radio-ltx-25");
       fireEvent.click(ltxRadio);
@@ -416,7 +452,13 @@ describe("CampaignCreationForm Component", () => {
 
     it("allows selecting Custom mode, entering integer, and submitting with sceneCountOverride", async () => {
       const mockSubmit = vi.fn().mockResolvedValue(sampleSuccessResponse);
-      render(<CampaignCreationForm submitCampaign={mockSubmit} initialValues={validValues} />);
+      render(
+        <CampaignCreationForm
+          submitCampaign={mockSubmit}
+          initialValues={validValues}
+          initialClients={defaultClients}
+        />
+      );
 
       const customRadio = screen.getByTestId("scene-count-mode-custom");
       fireEvent.click(customRadio);
@@ -447,7 +489,13 @@ describe("CampaignCreationForm Component", () => {
       });
       const pendingSubmit = vi.fn().mockReturnValue(pendingPromise);
 
-      render(<CampaignCreationForm submitCampaign={pendingSubmit} initialValues={validValues} />);
+      render(
+        <CampaignCreationForm
+          submitCampaign={pendingSubmit}
+          initialValues={validValues}
+          initialClients={defaultClients}
+        />
+      );
 
       const submitBtn = screen.getByTestId("submit-campaign-button") as HTMLButtonElement;
       fireEvent.click(submitBtn);
@@ -487,7 +535,13 @@ describe("CampaignCreationForm Component", () => {
       });
       const failingSubmit = vi.fn().mockRejectedValue(conflictError);
 
-      render(<CampaignCreationForm submitCampaign={failingSubmit} initialValues={validValues} />);
+      render(
+        <CampaignCreationForm
+          submitCampaign={failingSubmit}
+          initialValues={validValues}
+          initialClients={defaultClients}
+        />
+      );
 
       const submitBtn = screen.getByTestId("submit-campaign-button") as HTMLButtonElement;
       fireEvent.click(submitBtn);
@@ -516,7 +570,13 @@ describe("CampaignCreationForm Component", () => {
 
     it("blocks submission and shows field error when Custom mode override is fractional in DOM", async () => {
       const mockSubmit = vi.fn().mockResolvedValue(sampleSuccessResponse);
-      render(<CampaignCreationForm submitCampaign={mockSubmit} initialValues={validValues} />);
+      render(
+        <CampaignCreationForm
+          submitCampaign={mockSubmit}
+          initialValues={validValues}
+          initialClients={defaultClients}
+        />
+      );
 
       const customRadio = screen.getByTestId("scene-count-mode-custom");
       fireEvent.click(customRadio);
@@ -552,7 +612,13 @@ describe("CampaignCreationForm Component", () => {
       });
       const failingSubmit = vi.fn().mockRejectedValue(validationError);
 
-      render(<CampaignCreationForm submitCampaign={failingSubmit} initialValues={validValues} />);
+      render(
+        <CampaignCreationForm
+          submitCampaign={failingSubmit}
+          initialValues={validValues}
+          initialClients={defaultClients}
+        />
+      );
 
       const submitBtn = screen.getByTestId("submit-campaign-button");
       fireEvent.click(submitBtn);
@@ -578,7 +644,13 @@ describe("CampaignCreationForm Component", () => {
         .mockRejectedValueOnce(networkError)
         .mockResolvedValueOnce(sampleSuccessResponse);
 
-      render(<CampaignCreationForm submitCampaign={mockSubmit} initialValues={validValues} />);
+      render(
+        <CampaignCreationForm
+          submitCampaign={mockSubmit}
+          initialValues={validValues}
+          initialClients={defaultClients}
+        />
+      );
 
       const submitBtn = screen.getByTestId("submit-campaign-button") as HTMLButtonElement;
       fireEvent.click(submitBtn);
@@ -619,7 +691,13 @@ describe("CampaignCreationForm Component", () => {
         .mockRejectedValueOnce(serverError)
         .mockResolvedValueOnce(sampleSuccessResponse);
 
-      render(<CampaignCreationForm submitCampaign={mockSubmit} initialValues={validValues} />);
+      render(
+        <CampaignCreationForm
+          submitCampaign={mockSubmit}
+          initialValues={validValues}
+          initialClients={defaultClients}
+        />
+      );
 
       const submitBtn = screen.getByTestId("submit-campaign-button") as HTMLButtonElement;
       fireEvent.click(submitBtn);
@@ -659,7 +737,13 @@ describe("CampaignCreationForm Component", () => {
 
     it("navigates automatically to the campaign review route on successful submission", async () => {
       const mockSubmit = vi.fn().mockResolvedValue(sampleSuccessResponse);
-      render(<CampaignCreationForm submitCampaign={mockSubmit} initialValues={validValues} />);
+      render(
+        <CampaignCreationForm
+          submitCampaign={mockSubmit}
+          initialValues={validValues}
+          initialClients={defaultClients}
+        />
+      );
 
       const submitBtn = screen.getByTestId("submit-campaign-button");
       fireEvent.click(submitBtn);
@@ -743,6 +827,7 @@ describe("CampaignCreationForm Component", () => {
           submitCampaign={mockSubmit}
           initialValues={validValues}
           initialReferences={[sampleRef1, sampleRef2]}
+          initialClients={defaultClients}
         />
       );
 
@@ -771,6 +856,7 @@ describe("CampaignCreationForm Component", () => {
           submitCampaign={mockSubmit}
           initialValues={validValues}
           initialReferences={[sampleRef1, sampleRef2]}
+          initialClients={defaultClients}
         />
       );
 
@@ -813,8 +899,8 @@ describe("CampaignCreationForm Component", () => {
       expect(screen.getByTestId("selected-reference-count").textContent).toContain("1 selected");
 
       // Change client ID to a different client
-      const clientIdInput = screen.getByTestId("client-id-input");
-      fireEvent.change(clientIdInput, {
+      const clientSelect = await screen.findByTestId("client-select");
+      fireEvent.change(clientSelect, {
         target: { value: "33333333-3333-3333-3333-333333333333" }
       });
 
@@ -857,7 +943,7 @@ describe("CampaignCreationForm Component", () => {
       expect(screen.queryByText("Foreign Client Asset")).toBeNull();
     });
 
-    it("race condition: invalidates fetch generation when client ID changes to invalid UUID", async () => {
+    it("race condition: invalidates fetch generation when client selection is cleared", async () => {
       let resolveClientA!: (refs: readonly ReferenceAssetResponse[]) => void;
       const clientAPromise = new Promise<readonly ReferenceAssetResponse[]>((resolve) => {
         resolveClientA = resolve;
@@ -867,9 +953,9 @@ describe("CampaignCreationForm Component", () => {
 
       render(<CampaignCreationForm initialValues={validValues} />);
 
-      // Change clientId to invalid UUID while fetch is in-flight
-      const clientIdInput = screen.getByTestId("client-id-input");
-      fireEvent.change(clientIdInput, { target: { value: "invalid-uuid" } });
+      // Clear client selection to placeholder while fetch is in-flight
+      const clientSelect = await screen.findByTestId("client-select");
+      fireEvent.change(clientSelect, { target: { value: "" } });
 
       // Client A's fetch resolves late
       resolveClientA([sampleRef1]);
@@ -894,6 +980,7 @@ describe("CampaignCreationForm Component", () => {
             ...validValues,
             candidateReferenceAssetIds: [sampleRef1.id]
           }}
+          initialClients={defaultClients}
         />
       );
 
@@ -918,6 +1005,7 @@ describe("CampaignCreationForm Component", () => {
             ...validValues,
             candidateReferenceAssetIds: [sampleRef1.id]
           }}
+          initialClients={defaultClients}
         />
       );
 
@@ -945,6 +1033,7 @@ describe("CampaignCreationForm Component", () => {
             candidateReferenceAssetIds: ["unknown-id-8888"]
           }}
           initialReferences={[sampleRef1]}
+          initialClients={defaultClients}
         />
       );
 
@@ -956,6 +1045,514 @@ describe("CampaignCreationForm Component", () => {
       expect(screen.getByTestId("reference-gallery-error").textContent).toContain(
         "selected reference asset(s) are not active references"
       );
+    });
+  });
+
+  describe("Client Selection Dropdown Integration (#430)", () => {
+    const clientsFixture = [
+      {
+        clientId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        companyName: "Acme Studios"
+      },
+      {
+        clientId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        companyName: "Beta Brand"
+      },
+      {
+        clientId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        companyName: "Beta Brand"
+      }
+    ];
+
+    it("populates dropdown with company names and client IDs returned by listClients", async () => {
+      vi.spyOn(ClientApiModule, "listClients").mockResolvedValueOnce(clientsFixture);
+
+      render(<CampaignCreationForm initialValues={{ ...validValues, clientId: "" }} />);
+
+      const select = screen.getByTestId("client-select") as HTMLSelectElement;
+      expect(select).toBeDefined();
+
+      await waitFor(() => {
+        expect(screen.queryByText("Loading clients...")).toBeNull();
+      });
+
+      const options = Array.from(select.querySelectorAll("option"));
+      expect(options.map((o) => ({ value: o.value, text: o.textContent }))).toEqual([
+        { value: "", text: "Select a client" },
+        { value: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", text: "Acme Studios" },
+        { value: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", text: "Beta Brand" },
+        { value: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", text: "Beta Brand" }
+      ]);
+    });
+
+    it("regression: selecting a client from dropdown submits the selected clientId", async () => {
+      vi.spyOn(ClientApiModule, "listClients").mockResolvedValueOnce(clientsFixture);
+      const mockSubmit = vi.fn().mockResolvedValue(sampleSuccessResponse);
+
+      render(
+        <CampaignCreationForm
+          submitCampaign={mockSubmit}
+          initialValues={{
+            ...validValues,
+            clientId: ""
+          }}
+        />
+      );
+
+      const select = (await screen.findByTestId("client-select")) as HTMLSelectElement;
+      await waitFor(() => {
+        expect(screen.getByText("Acme Studios")).toBeDefined();
+      });
+
+      fireEvent.change(select, {
+        target: { value: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }
+      });
+
+      expect(select.value).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+
+      const submitBtn = screen.getByTestId("submit-campaign-button");
+      fireEvent.click(submitBtn);
+
+      await waitFor(() => {
+        expect(mockSubmit).toHaveBeenCalledTimes(1);
+      });
+
+      const callArgs = mockSubmit.mock.calls[0]![0];
+      expect(callArgs.clientId).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    });
+
+    it("handles empty client list: renders guidance and disables select", async () => {
+      vi.spyOn(ClientApiModule, "listClients").mockResolvedValueOnce([]);
+
+      render(<CampaignCreationForm initialValues={{ ...validValues, clientId: "" }} />);
+
+      const select = (await screen.findByTestId("client-select")) as HTMLSelectElement;
+      await waitFor(() => {
+        expect(screen.getByTestId("no-clients-message")).toBeDefined();
+      });
+
+      expect(screen.getByText("No clients available")).toBeDefined();
+      expect(select.disabled).toBe(true);
+    });
+
+    it("handles client fetch error and supports retry", async () => {
+      const listSpy = vi
+        .spyOn(ClientApiModule, "listClients")
+        .mockRejectedValueOnce(new Error("Network timeout fetching clients"))
+        .mockResolvedValueOnce(clientsFixture);
+
+      render(<CampaignCreationForm initialValues={{ ...validValues, clientId: "" }} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("client-list-error")).toBeDefined();
+      });
+
+      expect(screen.getByTestId("client-list-error").textContent).toContain(
+        "Network timeout fetching clients"
+      );
+      const retryBtn = screen.getByTestId("retry-clients-button");
+      expect(retryBtn).toBeDefined();
+
+      fireEvent.click(retryBtn);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("client-list-error")).toBeNull();
+        expect(screen.getByText("Acme Studios")).toBeDefined();
+      });
+
+      expect(listSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it("handles initial client not found in loaded list: shows unavailable warning and blocks submit", async () => {
+      vi.spyOn(ClientApiModule, "listClients").mockResolvedValueOnce(clientsFixture);
+      const mockSubmit = vi.fn().mockResolvedValue(sampleSuccessResponse);
+
+      render(
+        <CampaignCreationForm
+          submitCampaign={mockSubmit}
+          initialValues={{
+            ...validValues,
+            clientId: "99999999-9999-4999-8999-999999999999"
+          }}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("client-unavailable-message")).toBeDefined();
+      });
+
+      expect(screen.getByTestId("client-unavailable-message").textContent).toContain(
+        "The selected client account is unavailable. Please select an existing client."
+      );
+      expect(screen.getByText("Selected client unavailable")).toBeDefined();
+
+      const submitBtn = screen.getByTestId("submit-campaign-button");
+      fireEvent.click(submitBtn);
+
+      expect(mockSubmit).not.toHaveBeenCalled();
+    });
+
+    it("clears selected references when changing client selection", async () => {
+      vi.spyOn(ClientApiModule, "listClients").mockResolvedValueOnce(clientsFixture);
+
+      const ref1: ReferenceAssetResponse = {
+        id: "ref-1111",
+        clientId: clientsFixture[0]!.clientId,
+        assetType: "image",
+        storageBucket: "b",
+        storageObjectKey: "k",
+        contentHashSha256: "h",
+        mimeType: "image/png",
+        displayName: "Asset 1",
+        libraryRole: "style",
+        previewAvailability: "available",
+        previewUrl: "https://example.com/1.png"
+      };
+
+      render(
+        <CampaignCreationForm
+          initialValues={{
+            ...validValues,
+            clientId: clientsFixture[0]!.clientId
+          }}
+          initialReferences={[ref1]}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Acme Studios")).toBeDefined();
+      });
+
+      const card = screen.getByTestId(`reference-card-${ref1.id}`);
+      fireEvent.click(card);
+      expect(screen.getByTestId("selected-reference-count").textContent).toContain("1 selected");
+
+      const select = screen.getByTestId("client-select");
+      fireEvent.change(select, {
+        target: { value: clientsFixture[1]!.clientId }
+      });
+
+      expect(screen.queryByTestId("selected-reference-count")).toBeNull();
+    });
+
+    it("regression: populates dropdown via GET /api/clients and submits selected clientId via default POST /api/campaigns/plan", async () => {
+      vi.mocked(ClientApiModule.listClients).mockRestore();
+
+      vi.spyOn(globalThis, "fetch").mockImplementation(
+        async (input: RequestInfo | URL, _init?: RequestInit) => {
+          const url =
+            typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+          if (url === "/api/clients" || url.endsWith("/api/clients")) {
+            return new Response(JSON.stringify(clientsFixture), {
+              status: 200,
+              headers: { "Content-Type": "application/json" }
+            });
+          }
+          if (url === "/api/campaigns/plan" || url.endsWith("/api/campaigns/plan")) {
+            return new Response(JSON.stringify(sampleSuccessResponse), {
+              status: 200,
+              headers: { "Content-Type": "application/json" }
+            });
+          }
+          if (url.includes("/references")) {
+            return new Response(JSON.stringify({ references: [] }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" }
+            });
+          }
+          return new Response("Not Found", { status: 404 });
+        }
+      );
+
+      render(<CampaignCreationForm initialValues={{ ...validValues, clientId: "" }} />);
+
+      const select = screen.getByTestId("client-select") as HTMLSelectElement;
+      const submitBtn = screen.getByTestId("submit-campaign-button") as HTMLButtonElement;
+
+      // During loading phase: both select and submit button are disabled
+      expect(select.disabled).toBe(true);
+      expect(submitBtn.disabled).toBe(true);
+
+      // Await clients to load
+      await waitFor(() => {
+        expect(screen.getByText("Acme Studios")).toBeDefined();
+      });
+
+      expect(select.disabled).toBe(false);
+      // Still disabled because no client is selected
+      expect(submitBtn.disabled).toBe(true);
+
+      // Select a client
+      fireEvent.change(select, {
+        target: { value: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }
+      });
+
+      expect(select.value).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+      expect(submitBtn.disabled).toBe(false);
+
+      // Submit the form
+      fireEvent.click(submitBtn);
+
+      await waitFor(() => {
+        const calls = vi.mocked(globalThis.fetch).mock.calls;
+        const postCall = calls.find((c) => String(c[0]).includes("/api/campaigns/plan"));
+        expect(postCall).toBeDefined();
+      });
+
+      const calls = vi.mocked(globalThis.fetch).mock.calls;
+      const postCall = calls.find((c) => String(c[0]).includes("/api/campaigns/plan"));
+      expect(postCall).toBeDefined();
+      const requestBody = JSON.parse(postCall?.[1]?.body as string) as {
+        clientId: string;
+        title: string;
+        targetPlatform: string;
+      };
+      expect(requestBody.clientId).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+      expect(requestBody.title).toBe(validValues.title);
+      expect(requestBody.targetPlatform).toBe(validValues.targetPlatform);
+    });
+
+    it("disables select and submit button during loading phase and blocks programmatic submit", async () => {
+      let resolveClients!: (data: typeof clientsFixture) => void;
+      const pendingPromise = new Promise<typeof clientsFixture>((resolve) => {
+        resolveClients = resolve;
+      });
+      vi.spyOn(ClientApiModule, "listClients").mockReturnValue(pendingPromise);
+
+      const mockSubmit = vi.fn().mockResolvedValue(sampleSuccessResponse);
+      render(
+        <CampaignCreationForm
+          submitCampaign={mockSubmit}
+          initialValues={{
+            ...validValues,
+            clientId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          }}
+        />
+      );
+
+      const select = screen.getByTestId("client-select") as HTMLSelectElement;
+      const submitBtn = screen.getByTestId("submit-campaign-button") as HTMLButtonElement;
+      const form = screen.getByTestId("campaign-creation-form");
+
+      expect(select.disabled).toBe(true);
+      expect(submitBtn.disabled).toBe(true);
+
+      fireEvent.submit(form);
+      expect(mockSubmit).not.toHaveBeenCalled();
+
+      await act(async () => {
+        resolveClients(clientsFixture);
+      });
+
+      expect(select.disabled).toBe(false);
+      expect(submitBtn.disabled).toBe(false);
+    });
+
+    it("disables select and submit button during error phase and blocks programmatic submit", async () => {
+      vi.spyOn(ClientApiModule, "listClients").mockRejectedValue(
+        new Error("Failed to load clients")
+      );
+
+      const mockSubmit = vi.fn().mockResolvedValue(sampleSuccessResponse);
+      render(
+        <CampaignCreationForm
+          submitCampaign={mockSubmit}
+          initialValues={{
+            ...validValues,
+            clientId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          }}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("client-list-error")).toBeDefined();
+      });
+
+      const select = screen.getByTestId("client-select") as HTMLSelectElement;
+      const submitBtn = screen.getByTestId("submit-campaign-button") as HTMLButtonElement;
+      const form = screen.getByTestId("campaign-creation-form");
+
+      expect(select.disabled).toBe(true);
+      expect(submitBtn.disabled).toBe(true);
+
+      fireEvent.submit(form);
+      expect(mockSubmit).not.toHaveBeenCalled();
+    });
+
+    it("disables select and submit button when client list is empty and blocks programmatic submit", async () => {
+      vi.spyOn(ClientApiModule, "listClients").mockResolvedValue([]);
+
+      const mockSubmit = vi.fn().mockResolvedValue(sampleSuccessResponse);
+      render(
+        <CampaignCreationForm
+          submitCampaign={mockSubmit}
+          initialValues={{
+            ...validValues,
+            clientId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          }}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("no-clients-message")).toBeDefined();
+      });
+
+      const select = screen.getByTestId("client-select") as HTMLSelectElement;
+      const submitBtn = screen.getByTestId("submit-campaign-button") as HTMLButtonElement;
+      const form = screen.getByTestId("campaign-creation-form");
+
+      expect(select.disabled).toBe(true);
+      expect(submitBtn.disabled).toBe(true);
+
+      fireEvent.submit(form);
+      expect(mockSubmit).not.toHaveBeenCalled();
+    });
+
+    it("disables select and submit button while submission is in flight", async () => {
+      vi.spyOn(ClientApiModule, "listClients").mockResolvedValue(clientsFixture);
+
+      let resolveSubmit!: (res: PlanCampaignStoryboardResponse) => void;
+      const pendingSubmit = new Promise<PlanCampaignStoryboardResponse>((resolve) => {
+        resolveSubmit = resolve;
+      });
+      const mockSubmit = vi.fn().mockReturnValue(pendingSubmit);
+
+      render(
+        <CampaignCreationForm
+          submitCampaign={mockSubmit}
+          initialValues={{
+            ...validValues,
+            clientId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          }}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Acme Studios")).toBeDefined();
+      });
+
+      const select = screen.getByTestId("client-select") as HTMLSelectElement;
+      const submitBtn = screen.getByTestId("submit-campaign-button") as HTMLButtonElement;
+
+      expect(select.disabled).toBe(false);
+      expect(submitBtn.disabled).toBe(false);
+
+      fireEvent.click(submitBtn);
+
+      expect(submitBtn.disabled).toBe(true);
+      expect(select.disabled).toBe(true);
+
+      await act(async () => {
+        resolveSubmit(sampleSuccessResponse);
+      });
+    });
+
+    it("preserves initial client ID without displaying raw UUID during deferred loading for known client", async () => {
+      let resolveClients!: (data: typeof clientsFixture) => void;
+      const pendingPromise = new Promise<typeof clientsFixture>((resolve) => {
+        resolveClients = resolve;
+      });
+      vi.spyOn(ClientApiModule, "listClients").mockReturnValue(pendingPromise);
+
+      render(
+        <CampaignCreationForm
+          initialValues={{
+            ...validValues,
+            clientId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+          }}
+        />
+      );
+
+      const select = screen.getByTestId("client-select") as HTMLSelectElement;
+      expect(select.disabled).toBe(true);
+
+      expect(select.options.length).toBe(1);
+      expect(select.options[0]!.text).toBe("Loading clients...");
+      expect(select.value).toBe("");
+      expect(screen.queryByText("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")).toBeNull();
+
+      await act(async () => {
+        resolveClients(clientsFixture);
+      });
+
+      expect(select.disabled).toBe(false);
+      expect(select.value).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+      expect(select.selectedOptions[0]!.text).toBe("Acme Studios");
+    });
+
+    it("handles unknown initial client ID during deferred loading and after resolution", async () => {
+      let resolveClients!: (data: typeof clientsFixture) => void;
+      const pendingPromise = new Promise<typeof clientsFixture>((resolve) => {
+        resolveClients = resolve;
+      });
+      vi.spyOn(ClientApiModule, "listClients").mockReturnValue(pendingPromise);
+
+      render(
+        <CampaignCreationForm
+          initialValues={{
+            ...validValues,
+            clientId: "99999999-9999-4999-8999-999999999999"
+          }}
+        />
+      );
+
+      const select = screen.getByTestId("client-select") as HTMLSelectElement;
+      expect(select.disabled).toBe(true);
+      expect(select.options.length).toBe(1);
+      expect(select.options[0]!.text).toBe("Loading clients...");
+      expect(screen.queryByText("99999999-9999-4999-8999-999999999999")).toBeNull();
+
+      await act(async () => {
+        resolveClients(clientsFixture);
+      });
+
+      expect(select.disabled).toBe(false);
+      expect(screen.getByText("Selected client unavailable")).toBeDefined();
+      expect(screen.queryByText("99999999-9999-4999-8999-999999999999")).toBeNull();
+      expect(screen.getByTestId("client-unavailable-message")).toBeDefined();
+
+      const submitBtn = screen.getByTestId("submit-campaign-button") as HTMLButtonElement;
+      expect(submitBtn.disabled).toBe(true);
+    });
+
+    it("safely ignores in-flight client list response after component unmount", async () => {
+      let resolveClients!: (data: typeof clientsFixture) => void;
+      const pendingPromise = new Promise<typeof clientsFixture>((resolve) => {
+        resolveClients = resolve;
+      });
+      vi.spyOn(ClientApiModule, "listClients").mockReturnValue(pendingPromise);
+
+      const { unmount } = render(
+        <CampaignCreationForm initialValues={{ ...validValues, clientId: "" }} />
+      );
+
+      unmount();
+
+      expect(() => {
+        act(() => {
+          resolveClients(clientsFixture);
+        });
+      }).not.toThrow();
+    });
+
+    it("safely ignores in-flight client list rejection after component unmount", async () => {
+      let rejectClients!: (err: unknown) => void;
+      const pendingPromise = new Promise<typeof clientsFixture>((_, reject) => {
+        rejectClients = reject;
+      });
+      vi.spyOn(ClientApiModule, "listClients").mockReturnValue(pendingPromise);
+
+      const { unmount } = render(
+        <CampaignCreationForm initialValues={{ ...validValues, clientId: "" }} />
+      );
+
+      unmount();
+
+      expect(() => {
+        act(() => {
+          rejectClients(new Error("Network failed"));
+        });
+      }).not.toThrow();
     });
   });
 });

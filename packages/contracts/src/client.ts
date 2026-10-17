@@ -20,3 +20,13 @@ export const ClientResponseSchema = z.object({
   updatedAt: z.string().datetime()
 });
 export type ClientResponse = z.infer<typeof ClientResponseSchema>;
+
+// Lightweight list item and response contracts for client selection
+export const ClientListItemSchema = z.object({
+  clientId: z.string().uuid(),
+  companyName: z.string().min(1)
+});
+export type ClientListItem = z.infer<typeof ClientListItemSchema>;
+
+export const ClientListResponseSchema = z.array(ClientListItemSchema);
+export type ClientListResponse = z.infer<typeof ClientListResponseSchema>;

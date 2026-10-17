@@ -28,6 +28,7 @@ import type {
   CampaignShellPersistenceRecord,
   CampaignShellRepository,
   ClientRepository,
+  ClientSummary,
   DeliveryAssemblyJobQueuePort,
   EnqueueDeliveryAssemblyJobInput,
   EnqueueJobInput,
@@ -735,6 +736,19 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
         } else {
           stagedClients.push(client);
         }
+      },
+      listActive: async (): Promise<readonly ClientSummary[]> => {
+        const clientsMap = new Map<string, ClientRecord>(this._seededClients);
+        for (const client of stagedClients) {
+          clientsMap.set(client.id, client);
+        }
+        return Array.from(clientsMap.values())
+          .map((c) => ({ clientId: c.id, companyName: c.companyName }))
+          .sort((a, b) => {
+            const nameComp = a.companyName.localeCompare(b.companyName);
+            if (nameComp !== 0) return nameComp;
+            return a.clientId.localeCompare(b.clientId);
+          });
       }
     };
 

@@ -13,7 +13,7 @@ test.describe("Idempotency, Recovery, and Conflict Lifecycle", () => {
 
     await page.getByTestId("brief-description-input").fill("Lost response resilience test brief");
     await page.getByTestId("campaign-title-input").fill(campaignTitle);
-    await page.getByTestId("client-id-input").fill(testEnv.postgres.defaultClientId);
+    await page.getByTestId("client-select").selectOption(testEnv.postgres.defaultClientId);
     await page.getByTestId("target-duration-input").fill("15");
 
     let firstIdempotencyKey: string | null = null;
@@ -151,7 +151,7 @@ test.describe("Idempotency, Recovery, and Conflict Lifecycle", () => {
       .getByTestId("brief-description-input")
       .fill("Planning failure recoverable shell test brief");
     await page.getByTestId("campaign-title-input").fill(campaignTitle);
-    await page.getByTestId("client-id-input").fill(testEnv.postgres.defaultClientId);
+    await page.getByTestId("client-select").selectOption(testEnv.postgres.defaultClientId);
     await page.getByTestId("target-duration-input").fill("15");
 
     // First attempt fails
@@ -261,7 +261,7 @@ test.describe("Idempotency, Recovery, and Conflict Lifecycle", () => {
       .getByTestId("brief-description-input")
       .fill("Concurrent submit throttling test brief");
     await page.getByTestId("campaign-title-input").fill(campaignTitle);
-    await page.getByTestId("client-id-input").fill(testEnv.postgres.defaultClientId);
+    await page.getByTestId("client-select").selectOption(testEnv.postgres.defaultClientId);
     await page.getByTestId("target-duration-input").fill("15");
 
     let networkPostCount = 0;
@@ -303,7 +303,7 @@ test.describe("Idempotency, Recovery, and Conflict Lifecycle", () => {
     await page.goto(`${testEnv.webServer.webUrl}/campaigns/new`);
     await page.getByTestId("brief-description-input").fill("First campaign brief content");
     await page.getByTestId("campaign-title-input").fill(firstTitle);
-    await page.getByTestId("client-id-input").fill(testEnv.postgres.defaultClientId);
+    await page.getByTestId("client-select").selectOption(testEnv.postgres.defaultClientId);
     await page.getByTestId("target-duration-input").fill("15");
 
     const firstPromise = page.waitForResponse(
@@ -325,7 +325,7 @@ test.describe("Idempotency, Recovery, and Conflict Lifecycle", () => {
       .getByTestId("brief-description-input")
       .fill("Completely different brief for a distinct product release");
     await page.getByTestId("campaign-title-input").fill(secondTitle);
-    await page.getByTestId("client-id-input").fill(testEnv.postgres.defaultClientId);
+    await page.getByTestId("client-select").selectOption(testEnv.postgres.defaultClientId);
     await page.getByTestId("target-duration-input").fill("20");
 
     const secondPromise = page.waitForResponse(
@@ -358,7 +358,7 @@ test.describe("Idempotency, Recovery, and Conflict Lifecycle", () => {
     await page.goto(`${testEnv.webServer.webUrl}/campaigns/new`);
     await page.getByTestId("brief-description-input").fill("Pre-conflict successful brief content");
     await page.getByTestId("campaign-title-input").fill(initialTitle);
-    await page.getByTestId("client-id-input").fill(testEnv.postgres.defaultClientId);
+    await page.getByTestId("client-select").selectOption(testEnv.postgres.defaultClientId);
     await page.getByTestId("target-duration-input").fill("15");
 
     const preConflictPromise = page.waitForResponse(
@@ -376,7 +376,7 @@ test.describe("Idempotency, Recovery, and Conflict Lifecycle", () => {
     await page.goto(`${testEnv.webServer.webUrl}/campaigns/new`);
     await page.getByTestId("brief-description-input").fill("Initial submission for conflict test");
     await page.getByTestId("campaign-title-input").fill(conflictTitle);
-    await page.getByTestId("client-id-input").fill(testEnv.postgres.defaultClientId);
+    await page.getByTestId("client-select").selectOption(testEnv.postgres.defaultClientId);
     await page.getByTestId("target-duration-input").fill("15");
 
     let conflictRequestKey: string | null = null;
