@@ -143,4 +143,103 @@ describe("PostgresClientRepository Integration", () => {
     expect(retrieved?.brandBibleJson).toEqual({ version: 2 });
     expect(retrieved?.defaultAspectRatio).toBe("1:1");
   });
+
+  it("listActive returns empty array when no clients exist", async () => {
+    const repository = new PostgresClientRepository(client);
+    const result = await repository.listActive();
+    expect(result).toEqual([]);
+  });
+
+  it("listActive excludes archived clients", async () => {
+    const repository = new PostgresClientRepository(client);
+    const activeClientId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73810";
+    const archivedClientId = "018e69e0-8a6a-72cb-b1b7-ec79a1f73811";
+
+    await repository.save({
+      id: activeClientId,
+      companyName: "Active Studios",
+      brandBibleJson: {},
+      defaultAspectRatio: "16:9",
+      externalProcessingPolicy: { allowCloudPlanning: true },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+
+    await repository.save({
+      id: archivedClientId,
+      companyName: "Archived Studios",
+      brandBibleJson: {},
+      defaultAspectRatio: "16:9",
+      externalProcessingPolicy: { allowCloudPlanning: true },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+
+    await client.query("UPDATE clients SET archived_at = CURRENT_TIMESTAMP WHERE client_id = $1", [
+      archivedClientId
+    ]);
+
+    const result = await repository.listActive();
+    expect(result).toEqual([
+      {
+        clientId: activeClientId,
+        companyName: "Active Studios"
+      }
+    ]);
+  });
+
+  it("listActive orders deterministically by company_name ASC, client_id ASC including duplicate names", async () => {
+    const repository = new PostgresClientRepository(client);
+
+    const clientZ: ClientRecord = {
+      id: "018e69e0-8a6a-72cb-b1b7-ec79a1f73899",
+      companyName: "Zeta Production",
+      brandBibleJson: {},
+      defaultAspectRatio: "16:9",
+      externalProcessingPolicy: { allowCloudPlanning: true },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    const clientB2: ClientRecord = {
+      id: "018e69e0-8a6a-72cb-b1b7-ec79a1f73822",
+      companyName: "Beta Brand",
+      brandBibleJson: {},
+      defaultAspectRatio: "16:9",
+      externalProcessingPolicy: { allowCloudPlanning: true },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    const clientB1: ClientRecord = {
+      id: "018e69e0-8a6a-72cb-b1b7-ec79a1f73821",
+      companyName: "Beta Brand",
+      brandBibleJson: {},
+      defaultAspectRatio: "16:9",
+      externalProcessingPolicy: { allowCloudPlanning: true },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    const clientA: ClientRecord = {
+      id: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+      companyName: "Alpha Studios",
+      brandBibleJson: {},
+      defaultAspectRatio: "16:9",
+      externalProcessingPolicy: { allowCloudPlanning: true },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    // Save out of alphabetical order
+    await repository.save(clientZ);
+    await repository.save(clientB2);
+    await repository.save(clientB1);
+    await repository.save(clientA);
+
+    const result = await repository.listActive();
+    expect(result).toEqual([
+      { clientId: clientA.id, companyName: "Alpha Studios" },
+      { clientId: clientB1.id, companyName: "Beta Brand" },
+      { clientId: clientB2.id, companyName: "Beta Brand" },
+      { clientId: clientZ.id, companyName: "Zeta Production" }
+    ]);
+  });
 });

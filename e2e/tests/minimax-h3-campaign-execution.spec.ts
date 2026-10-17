@@ -33,7 +33,7 @@ test.describe("MiniMax-H3 End-to-End Campaign Execution and Review Lifecycle", (
       .getByTestId("brief-visual-style-input")
       .fill("photorealistic 35mm film photography, 8k resolution, natural lighting");
     await page.getByTestId("campaign-title-input").fill(campaignTitle);
-    await page.getByTestId("client-id-input").fill(testEnv.postgres.defaultClientId);
+    await page.getByTestId("client-select").selectOption(testEnv.postgres.defaultClientId);
     await page.getByTestId("target-duration-input").fill("5");
 
     // Select custom mode with 1 scene
@@ -289,7 +289,7 @@ test.describe("MiniMax-H3 End-to-End Campaign Execution and Review Lifecycle", (
       .getByTestId("brief-description-input")
       .fill("Photorealistic subject transitioning from LTX to MiniMax");
     await page.getByTestId("campaign-title-input").fill(campaignTitle);
-    await page.getByTestId("client-id-input").fill(testEnv.postgres.defaultClientId);
+    await page.getByTestId("client-select").selectOption(testEnv.postgres.defaultClientId);
     await page.getByTestId("target-duration-input").fill("5");
 
     await page.getByTestId("scene-count-mode-custom").click();

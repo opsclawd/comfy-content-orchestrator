@@ -1,4 +1,4 @@
-import type { ClientRepository } from "@cco/application";
+import type { ClientRepository, ClientSummary } from "@cco/application";
 import type { ClientRecord } from "@cco/domain";
 import type { Pool, PoolClient } from "pg";
 
@@ -10,6 +10,11 @@ interface ClientRow {
   external_processing_policy: Record<string, unknown> | string;
   created_at: Date | string;
   updated_at: Date | string;
+}
+
+interface ClientSummaryRow {
+  client_id: string;
+  company_name: string;
 }
 
 function mapRowToClient(row: ClientRow): ClientRecord {
@@ -98,5 +103,23 @@ export class PostgresClientRepository implements ClientRepository<ClientRecord> 
         updatedAt
       ]
     );
+  }
+
+  async listActive(): Promise<readonly ClientSummary[]> {
+    const result = await this.client.query<ClientSummaryRow>(
+      `
+      SELECT
+        client_id,
+        company_name
+      FROM clients
+      WHERE archived_at IS NULL
+      ORDER BY company_name ASC, client_id ASC
+      `
+    );
+
+    return result.rows.map((row) => ({
+      clientId: row.client_id,
+      companyName: row.company_name
+    }));
   }
 }

@@ -228,7 +228,9 @@ describe("PlanShotPlansUseCase", () => {
           beatIndex: 1,
           seed: 43,
           specRevision: scene.specRevision,
-          prompt: expect.stringContaining("Professional advertising storyboard illustration"),
+          prompt: expect.stringMatching(
+            /^LOW ANGLE\. Camera: LOW ANGLE SHOT, shot from below\..*subject positions and facing directions follow the supplied blocking.*Professional advertising storyboard illustration/s
+          ),
           negativePrompt: expect.stringContaining("photorealistic")
         })
       })
@@ -245,7 +247,9 @@ describe("PlanShotPlansUseCase", () => {
           beatIndex: 2,
           seed: 1043,
           specRevision: scene.specRevision,
-          prompt: expect.stringContaining("Professional advertising storyboard illustration"),
+          prompt: expect.stringMatching(
+            /^LOW ANGLE\. Camera: LOW ANGLE SHOT, shot from below\..*subject positions and facing directions follow the supplied blocking.*Professional advertising storyboard illustration/s
+          ),
           negativePrompt: expect.stringContaining("photorealistic")
         })
       })
@@ -3275,7 +3279,7 @@ An astronaut standing on the red, rocky surface of Mars.`
             beatIndex: 1,
             seed: deriveStoryboardPrevisSeed(1, 0),
             prompt: expect.stringMatching(
-              /^Professional advertising storyboard illustration.*Action: Beat 1 \[0ms-1200ms\]: steps out from archway \(Hero enters plaza from shadows\)\. Camera: slow track forward\..*Clean storyboard frame artwork/
+              /^EYE LEVEL\. Camera: Eye-level shot;.*Beat camera: slow track forward\..*Action: Beat 1 \[0ms-1200ms\]: steps out from archway \(Hero enters plaza from shadows\)\..*Clean storyboard frame artwork/s
             ),
             negativePrompt: expect.stringContaining("photorealistic")
           })
@@ -3295,7 +3299,7 @@ An astronaut standing on the red, rocky surface of Mars.`
             beatIndex: 2,
             seed: deriveStoryboardPrevisSeed(1, 1),
             prompt: expect.stringMatching(
-              /^Professional advertising storyboard illustration.*Action: Beat 2 \[1200ms-2800ms\]: glances toward rooftops \(Hero notices surveillance drone above\)\. Camera: tilts up slightly\..*Clean storyboard frame artwork/
+              /^EYE LEVEL\. Camera: Eye-level shot;.*Beat camera: tilts up slightly\..*Action: Beat 2 \[1200ms-2800ms\]: glances toward rooftops \(Hero notices surveillance drone above\)\..*Clean storyboard frame artwork/s
             ),
             negativePrompt: expect.stringContaining("photorealistic")
           })
@@ -3315,7 +3319,7 @@ An astronaut standing on the red, rocky surface of Mars.`
             beatIndex: 3,
             seed: deriveStoryboardPrevisSeed(1, 2),
             prompt: expect.stringMatching(
-              /^Professional advertising storyboard illustration.*Action: Beat 3 \[2800ms-4000ms\]: blends into passing pedestrian group \(Hero quickens pace into crowd\)\. Camera: pans right following subject\..*Clean storyboard frame artwork/
+              /^EYE LEVEL\. Camera: Eye-level shot;.*Beat camera: pans right following subject\..*Action: Beat 3 \[2800ms-4000ms\]: blends into passing pedestrian group \(Hero quickens pace into crowd\)\..*Clean storyboard frame artwork/s
             ),
             negativePrompt: expect.stringContaining("photorealistic")
           })

@@ -100,7 +100,8 @@ class FakeCampaignUnitOfWork implements UnitOfWork {
         findById: async (id: string) => this._clients.get(id),
         save: async (client: ClientRecord) => {
           this._clients.set(client.id, client);
-        }
+        },
+        listActive: async () => []
       } as ClientRepository<ClientRecord>
     });
   }

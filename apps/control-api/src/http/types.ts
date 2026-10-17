@@ -4,6 +4,7 @@ import {
   CreateCampaignUseCase,
   CreateCampaignShellUseCase,
   CreateClientUseCase,
+  ListClientsUseCase,
   CreateSceneUseCase,
   EnforceStorageAdmission,
   EnqueueSceneProductionRenderUseCase,
@@ -92,6 +93,7 @@ export interface ControlApiUseCases {
   readonly createCampaign?: CreateCampaignUseCase | undefined;
   readonly createCampaignShell?: CreateCampaignShellUseCase | undefined;
   readonly createClient?: CreateClientUseCase | undefined;
+  readonly listClients?: ListClientsUseCase | undefined;
   readonly createScene?: CreateSceneUseCase | undefined;
   readonly submitSceneCreation?: SubmitSceneCreationUseCase | undefined;
   readonly materializeStoryboard?: MaterializeStoryboardUseCase | undefined;
@@ -188,6 +190,7 @@ export function createControlApiContainer(
   const createCampaign = new CreateCampaignUseCase(dependencies.uow);
   const createCampaignShell = new CreateCampaignShellUseCase(dependencies.uow);
   const createClient = new CreateClientUseCase(dependencies.uow);
+  const listClients = new ListClientsUseCase(dependencies.uow);
   const createScene = new CreateSceneUseCase(dependencies.uow, planningCoordinator, autoPlanLogger);
   const materializeStoryboard = new MaterializeStoryboardUseCase(
     dependencies.uow,
@@ -340,6 +343,7 @@ export function createControlApiContainer(
       createCampaign,
       createCampaignShell,
       createClient,
+      listClients,
       createScene,
       submitSceneCreation,
       materializeStoryboard,

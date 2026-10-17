@@ -31,7 +31,7 @@ test.describe("Client Reference Library and Campaign Reference Selection", () =>
     );
 
     // 2. Fill client ID
-    await page.getByTestId("client-id-input").fill(clientId);
+    await page.getByTestId("client-select").selectOption(clientId);
 
     // 3. Open Reference Library Drawer
     const manageBtn = page.getByTestId("manage-references-button");
@@ -146,7 +146,7 @@ test.describe("Client Reference Library and Campaign Reference Selection", () =>
     // 11. Test Archive exclusion:
     // Navigate back to campaign creation
     await page.goto(`${testEnv.webServer.webUrl}/campaigns/new`);
-    await page.getByTestId("client-id-input").fill(clientId);
+    await page.getByTestId("client-select").selectOption(clientId);
 
     // Verify card is present initially
     const activeFormCard = page.getByTestId(`reference-card-${uploadedAsset.id}`);

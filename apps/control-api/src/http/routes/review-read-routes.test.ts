@@ -62,7 +62,8 @@ class FakeUnitOfWork implements UnitOfWork {
                   createdAt: "2026-09-07T00:00:00.000Z",
                   updatedAt: "2026-09-07T00:00:00.000Z"
                 }) as ClientRecord,
-              save: async () => {}
+              save: async () => {},
+              listActive: async () => []
             }
           }
         : {})

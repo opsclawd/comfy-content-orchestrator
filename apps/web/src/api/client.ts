@@ -44,7 +44,9 @@ import {
   CreateShotPlanVariationErrorResponseSchema,
   type CreateShotPlanVariationErrorResponse,
   H3ProductionInspectionReadModelSchema,
-  type H3ProductionInspectionReadModel
+  type H3ProductionInspectionReadModel,
+  type ClientListItem,
+  ClientListResponseSchema
 } from "@cco/contracts";
 import type { z } from "zod";
 import { resolveControlApiBaseUrl } from "./runtime-config";
@@ -75,7 +77,9 @@ export type {
   H3ProductionInspectionReadModel,
   ReferenceAssetResponse,
   ReferenceRole,
-  UpdateReferenceAssetRole
+  UpdateReferenceAssetRole,
+  ClientListItem,
+  ClientListResponse
 } from "@cco/contracts";
 
 export {
@@ -103,7 +107,9 @@ export {
   ReferenceAssetListResponseSchema,
   ReferenceRoleSchema,
   REFERENCE_ROLES,
-  UpdateReferenceAssetRoleSchema
+  UpdateReferenceAssetRoleSchema,
+  ClientListItemSchema,
+  ClientListResponseSchema
 } from "@cco/contracts";
 
 export interface ApiClientConfig {
@@ -840,6 +846,22 @@ export async function createShotPlanVariation(
 ): Promise<CreateShotPlanVariationResponse> {
   const client = createApiClient({ fetchFn: fetchImpl });
   return client.createShotPlanVariation(sceneId, request);
+}
+
+export async function listClients(fetchImpl?: typeof fetch): Promise<readonly ClientListItem[]> {
+  const fetchFn = fetchImpl ?? fetch;
+  const res = await fetchFn("/api/clients", {
+    cache: "no-store"
+  });
+  if (!res.ok) {
+    throw new ApiClientError(`Failed to list clients: HTTP ${res.status}`, res.status);
+  }
+  const data = await res.json();
+  const parsed = ClientListResponseSchema.safeParse(data);
+  if (!parsed.success) {
+    throw new ApiValidationError("Invalid client list response", parsed.error.issues);
+  }
+  return parsed.data;
 }
 
 export async function listClientReferences(

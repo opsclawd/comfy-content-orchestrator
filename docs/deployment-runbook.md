@@ -71,14 +71,141 @@ Cloud planning allows scenes to be created from a creative brief via LLM planner
    ```
    If needed, `docker compose restart review-hub` restarts Review Hub.
 
-   The `tailscale` client binary is pre-installed inside the `cco-web` image (pinned amd64 binary); no client CLI installation is needed on the host. If the socket is missing or inaccessible at boot, `review-hub` logs a warning diagnostic and continues serving non-review routes; review actions fail closed with HTTP 401 `AUTHENTICATION_REQUIRED`.
+   The `tailscale` client binary is pre-installed inside the `cco-web` image (pinned amd64 binary); no client CLI installation is needed on the host for container-side `whois` lookups. However, the host-level systemd lifecycle hook for SNAT preservation (step 3 below) requires the `tailscale` CLI to be installed on the host and available in the service's PATH. If the socket is missing or inaccessible at boot, `review-hub` logs a warning diagnostic and continues serving non-review routes; review actions fail closed with HTTP 401 `AUTHENTICATION_REQUIRED`.
 
-3. **Acceptance Gate**:
-   Once the stack is up and the socket prepared, run the acceptance gate command inside the container:
-   ```bash
-   docker compose exec -u node review-hub tailscale whois --json <a real connected tailnet peer ip>
+3. **Source-IP Preservation (`--snat-subnet-routes=false`) & Durable systemd Hook**:
+   **The SNAT failure chain**: `tailscaled` on Linux defaults to masquerading (SNAT'ing) traffic it forwards from the tailnet interface (`tailscale0`) into local subnets, including the Docker bridge network (`172.28.0.0/24`). Tailscale inserts an iptables rule jumping to its own `ts-postrouting` chain, which `MASQUERADE`s any forwarded packet carrying Tailscale's internal forwarding fwmark (`0x40000/0xff0000`). Consequently, incoming connections from real tailnet peers (e.g. `100.x.y.z`) have their source IP rewritten to the Docker bridge gateway (`172.28.0.1`) before reaching the `review-hub` container.
+
+   When `review-hub`'s reverse proxy (`apps/web/peer-proxy.mjs`) reads `req.socket.remoteAddress`, it observes `172.28.0.1` and passes it in the `x-cco-tailscale-peer-ip` header. `apps/web/src/api/reviewer-identity.ts` then calls `tailscale whois 172.28.0.1`, which fails because the bridge gateway is not a tailnet device. `apps/web/src/api/director-client-access.ts` catches this `ReviewerIdentityUnavailableError` and converts it to a generic `DirectorAuthenticationRequiredError` ("Director identity could not be established."). The endpoint (e.g. `GET /api/clients/:clientId/references`) returns HTTP 401 `{"code":"AUTHENTICATION_REQUIRED","message":"Director identity could not be established."}` for every external request. Correct director-to-client mappings in `REVIEW_HUB_DIRECTOR_CLIENT_MAPPINGS` cannot fix this because identity resolution fails before mappings are ever evaluated.
+
+   **Disabling SNAT (`NoSNAT: true`)**: Running `tailscale set --snat-subnet-routes=false` disables this masquerading and preserves the authentic tailnet peer IP across the bridge. Tailscale records this preference inverted: `NoSNAT: true` indicates that SNAT is disabled and original source IPs are preserved.
+
+   **Why a durable systemd hook is required & lifecycle boundaries**:
+   A manual `tailscale set --snat-subnet-routes=false` immediately fixes active packet forwarding, but does not survive daemon restarts or host reboots because `tailscaled` defaults to `NoSNAT: false`. Furthermore, as observed on this host, when node keys expire (standard periodic rotation) and are re-authenticated via browser, a fresh or reset `tailscaled` session resets to the `NoSNAT: false` default.
+
+   To make `--snat-subnet-routes=false` durable across daemon restarts and host reboots, the preference must be asserted automatically on daemon startup via a systemd `ExecStartPost` hook.
+
+   > [!IMPORTANT]
+   > **Daemon startup vs. in-place browser re-authentication**:
+   > `ExecStartPost` guarantees that `NoSNAT: true` is reasserted across `tailscaled.service` starts, restarts, and host reboots. However, `ExecStartPost` runs **only** when the systemd unit starts or restarts; it does **not** fire when an already-running `tailscaled` daemon completes an in-place browser re-authentication after node key expiry without a service restart.
+   >
+   > The hook cannot detect in-place preference resets on a running daemon. Consequently, if browser re-authentication occurs in-place without restarting `tailscaled`, the preference may reset to `NoSNAT: false` while the daemon continues running. When that happens, the operator must either run `sudo tailscale set --snat-subnet-routes=false` or restart `tailscaled` (`sudo systemctl restart tailscaled`, which triggers the `ExecStartPost` hook) followed by verifying `NoSNAT: true` (detailed in step 5).
+
+   **Systemd drop-in configuration**:
+   Add an `ExecStartPost` hook to `/etc/systemd/system/tailscaled.service.d/10-socket-permissions.conf` under `[Service]`. The hook polls until `/var/run/tailscale/tailscaled.sock` exists and then executes `tailscale set --snat-subnet-routes=false`. Insert it between the socket-permission fixup and the Review Hub restart hook:
+
+   ```ini
+   [Service]
+   ExecStartPost=/bin/sh -c 'while [ ! -S /var/run/tailscale/tailscaled.sock ]; do sleep 0.1; done; chgrp 9999 /var/run/tailscale/tailscaled.sock && chmod g+rw /var/run/tailscale/tailscaled.sock'
+   ExecStartPost=/bin/sh -c 'while [ ! -S /var/run/tailscale/tailscaled.sock ]; do sleep 0.1; done; tailscale set --snat-subnet-routes=false'
+   ExecStartPost=-/usr/bin/docker compose -f /opt/comfy-content-orchestrator/compose.yaml restart review-hub
    ```
-   This confirms the `tailscale` binary and socket permissions are operational from the unprivileged `node` user.
+
+   > [!IMPORTANT]
+   > **Preparation script overwrite caveat**: `scripts/prepare-tailscale-socket-access.sh` overwrites `10-socket-permissions.conf` via a truncating heredoc with only the socket permission and Review Hub restart hooks.
+   > 1. Run `sudo bash scripts/prepare-tailscale-socket-access.sh` **first** during host provisioning.
+   > 2. Then edit `/etc/systemd/system/tailscaled.service.d/10-socket-permissions.conf` to add the `ExecStartPost` line for `tailscale set --snat-subnet-routes=false`.
+   > 3. If `prepare-tailscale-socket-access.sh` is ever re-run in the future, it **will overwrite** this file; the operator must re-add the SNAT directive and re-verify immediately afterward.
+
+   Apply the updated systemd configuration:
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl restart tailscaled
+   ```
+
+   Verify the effective unit definition includes all three hooks:
+   ```bash
+   sudo systemctl cat tailscaled
+   ```
+
+4. **Acceptance Verification & Operational Checks**:
+   Perform these three checks on initial provisioning, host rebuilds, or after any Tailscale key re-auth:
+
+   - **Check 1: Host SNAT preference**:
+     Verify that `tailscaled` has SNAT disabled after restart:
+     ```bash
+     sudo tailscale debug prefs | grep -i snat
+     ```
+     Expected output: `"NoSNAT": true` (or `NoSNAT: true`). If it reports `false`, the hook did not execute or the preference was not applied.
+
+   - **Check 2: Container socket access**:
+     Verify that the unprivileged `node` user inside `review-hub` can communicate with `tailscaled.sock`:
+     ```bash
+     docker compose exec -u node review-hub tailscale whois --json <a real connected tailnet peer ip>
+     ```
+     Expected output: JSON object containing `UserProfile.LoginName` for the queried peer.
+     > [!NOTE]
+     > Passing Check 2 proves only that container socket permissions are operational. It does **not** prove source IP preservation for inbound requests, because manual `whois` queries test socket IPC directly with a known IP rather than testing packet forwarding across the Docker bridge.
+
+   - **Check 3: External mapped director request (end-to-end auth gate)**:
+     From a separate authenticated tailnet device whose director login is authorized for a client ID in `REVIEW_HUB_DIRECTOR_CLIENT_MAPPINGS`:
+     ```bash
+     curl -i http://<control-plane-tailnet-ip>:3001/api/clients/<client-id>/references
+     ```
+     (Note: `3001` is the default Review Hub host port published in `compose.yaml`; adjust if different).
+     Expected output:
+     - HTTP `200 OK` with the client's reference data JSON.
+     - If SNAT is active (`NoSNAT: false`), this request will return HTTP 401 `{"code":"AUTHENTICATION_REQUIRED","message":"Director identity could not be established."}`.
+     - *(Attribution: Verified live in issue #429 on Hetzner host `ubuntu-8gb-nbg1-1`).*
+
+5. **Troubleshooting: Tailscale Re-auth, SNAT Masquerade & Packet Tracing**:
+   - **Post-re-auth or key rotation failure**:
+     When Tailscale node keys expire (standard periodic rotation) and are re-authenticated via web browser, `tailscaled` can reset its in-memory preferences back to default (`NoSNAT: false`), causing client-reference and review routes to suddenly fail with 401 `AUTHENTICATION_REQUIRED`.
+
+     Because `ExecStartPost` runs only when `tailscaled.service` starts or restarts, an in-place browser re-authentication on an already-running daemon does not trigger `ExecStartPost` automatically. If an in-place re-auth resets the preference on a running daemon, the systemd hook will not run until the service is restarted.
+
+     Recovery procedure:
+     1. Check current preference:
+        ```bash
+        sudo tailscale debug prefs | grep -i snat
+        ```
+     2. If `NoSNAT` is `false`, restore access using either method:
+        - Reassert the preference directly on the running daemon:
+          ```bash
+          sudo tailscale set --snat-subnet-routes=false
+          ```
+        - Or restart `tailscaled` (which triggers the `ExecStartPost` hook to reassert `--snat-subnet-routes=false` and restarts Review Hub):
+          ```bash
+          sudo systemctl restart tailscaled
+          ```
+     3. Verify that `NoSNAT: true` is re-established:
+        ```bash
+        sudo tailscale debug prefs | grep -i snat
+        ```
+     4. If restarting `tailscaled` does not restore `NoSNAT: true`, check if the systemd drop-in was overwritten or missing (e.g. if `scripts/prepare-tailscale-socket-access.sh` was re-run):
+        ```bash
+        sudo systemctl cat tailscaled
+        ```
+        Ensure the SNAT `ExecStartPost` line is present in `/etc/systemd/system/tailscaled.service.d/10-socket-permissions.conf`. If missing, re-add the directive, reload systemd (`sudo systemctl daemon-reload`), restart `tailscaled` (`sudo systemctl restart tailscaled`), and re-verify `NoSNAT: true`.
+     5. If the hook fails on startup, inspect the daemon journal:
+        ```bash
+        sudo journalctl -u tailscaled -n 50 --no-pager
+        ```
+
+   - **Verifying iptables `ts-postrouting` chain**:
+     To inspect the exact iptables rule responsible for masquerading:
+     ```bash
+     sudo iptables -t nat -L POSTROUTING -n -v --line-numbers
+     ```
+     Rule #1 jumps to `ts-postrouting` (managed by `tailscaled`, not Docker). Inspect the chain:
+     ```bash
+     sudo iptables -t nat -L ts-postrouting -n -v --line-numbers
+     ```
+     When SNAT is enabled (`NoSNAT: false`), packets carrying mark `0x40000/0xff0000` hit a `MASQUERADE` rule, and packet counters increment on incoming requests. When disabled (`NoSNAT: true`), this rule is not applied to subnet traffic.
+
+   - **Packet capture across interfaces (`tcpdump`)**:
+     To trace packet source addresses from `tailscale0` into the Docker container:
+     ```bash
+     sudo tcpdump -i any 'tcp port 3001 or (net 172.28.0.0/24 and tcp port 3000)' -n
+     ```
+     While curling from an external tailnet peer (`100.x.y.z`), verify:
+     - On `tailscale0`: incoming packet has source `<peer-tailnet-ip>` and destination `<control-plane-tailnet-ip>:3001`.
+     - On bridge interface (`172.28.0.0/24`): packet forwarded to `172.28.0.10:3000` MUST still have source `<peer-tailnet-ip>`. If source appears as `172.28.0.1` (the bridge gateway), SNAT is active and rewriting the address in transit.
+
+   - **Explicit Non-Goals & Traps**:
+     - Do not modify Docker daemon bridge settings, userland-proxy, or `docker network` options — Docker bridge hairpin NAT is not the cause of this failure; the rewrite happens upstream in `tailscaled`'s `ts-postrouting` chain.
+     - Do not modify `reviewer-identity.ts` or `peer-proxy.mjs` — the application code intentionally fails closed when the peer IP is not a resolvable tailnet address.
+
 
 ## Standing up a render-worker host
 

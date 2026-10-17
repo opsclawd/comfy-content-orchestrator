@@ -10,6 +10,7 @@ import {
   getCampaignPreProductionReadiness,
   submitReviewCommand,
   planCampaignStoryboard,
+  listClients,
   listClientReferences,
   uploadClientReference,
   archiveClientReference,
@@ -2118,6 +2119,49 @@ describe("Typed Control API Client", () => {
       await expect(client.getCampaignPreProductionReadiness(campaignId)).rejects.toThrow(
         ApiValidationError
       );
+    });
+  });
+
+  describe("listClients", () => {
+    it("fetches /api/clients relative to origin and returns parsed clients list", async () => {
+      const mockClients = [
+        {
+          clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+          companyName: "Acme Corp"
+        }
+      ];
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => mockClients
+      });
+
+      const result = await listClients(mockFetch);
+
+      expect(mockFetch).toHaveBeenCalledWith("/api/clients", {
+        cache: "no-store"
+      });
+      expect(result).toEqual(mockClients);
+    });
+
+    it("throws ApiClientError when response is not ok", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        statusText: "Internal Server Error"
+      });
+
+      await expect(listClients(mockFetch)).rejects.toThrow(ApiClientError);
+    });
+
+    it("throws ApiValidationError when response schema is invalid", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => [{ invalid: true }]
+      });
+
+      await expect(listClients(mockFetch)).rejects.toThrow(ApiValidationError);
     });
   });
 });

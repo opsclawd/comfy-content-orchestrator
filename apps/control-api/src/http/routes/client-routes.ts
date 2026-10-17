@@ -1,5 +1,9 @@
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
-import { ClientResponseSchema, CreateClientRequestSchema } from "@cco/contracts";
+import {
+  ClientListResponseSchema,
+  ClientResponseSchema,
+  CreateClientRequestSchema
+} from "@cco/contracts";
 import type { ControlApiContainer } from "../types.js";
 
 export interface ClientRoutesOptions {
@@ -11,6 +15,17 @@ export const clientRoutes: FastifyPluginAsync<ClientRoutesOptions> = async (
   opts: ClientRoutesOptions
 ): Promise<void> => {
   const { container } = opts;
+
+  fastify.get("/api/clients", async (_request, reply) => {
+    if (!container.useCases.listClients) {
+      throw new Error("ListClientsUseCase is not configured on container.");
+    }
+
+    const clients = await container.useCases.listClients.execute();
+    const response = ClientListResponseSchema.parse(clients);
+
+    return reply.header("Cache-Control", "no-store").status(200).send(response);
+  });
 
   fastify.post("/api/clients", async (request, reply) => {
     if (!container.useCases.createClient) {

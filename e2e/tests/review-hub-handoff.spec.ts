@@ -17,7 +17,7 @@ test.describe("Post-Handoff Candidate Review Flow", () => {
       .getByTestId("brief-description-input")
       .fill("Review handoff candidate interaction test brief");
     await page.getByTestId("campaign-title-input").fill(campaignTitle);
-    await page.getByTestId("client-id-input").fill(testEnv.postgres.defaultClientId);
+    await page.getByTestId("client-select").selectOption(testEnv.postgres.defaultClientId);
     await page.getByTestId("target-duration-input").fill("15");
 
     const planPromise = page.waitForResponse(

@@ -59,6 +59,15 @@ class FakeClientUnitOfWork implements UnitOfWork {
             await this.onSaveClient(client);
           }
           this._clients.set(client.id, client);
+        },
+        listActive: async () => {
+          return Array.from(this._clients.values())
+            .map((c) => ({ clientId: c.id, companyName: c.companyName }))
+            .sort((a, b) => {
+              const comp = a.companyName.localeCompare(b.companyName);
+              if (comp !== 0) return comp;
+              return a.clientId.localeCompare(b.clientId);
+            });
         }
       } as ClientRepository<ClientRecord>
     });
@@ -219,6 +228,148 @@ describe("Client Creation HTTP Routes", () => {
       expect(response.statusCode).toBe(400);
       const body = response.json();
       expect(body.code).toBe("VALIDATION_FAILURE");
+    });
+  });
+
+  describe("GET /api/clients", () => {
+    it("returns empty array with 200 and Cache-Control: no-store when no clients exist", async () => {
+      const uow = new FakeClientUnitOfWork();
+      const app = createControlApiApp({ uow });
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/clients"
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.json()).toEqual([]);
+    });
+
+    it("returns populated list with exactly clientId and companyName, omitting internal fields", async () => {
+      const client1: ClientRecord = {
+        id: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+        companyName: "Acme Studios",
+        brandBibleJson: { palette: ["#ff0000"] },
+        defaultAspectRatio: "16:9",
+        externalProcessingPolicy: { allowCloudVoice: false },
+        createdAt: "2026-09-01T00:00:00.000Z",
+        updatedAt: "2026-09-01T00:00:00.000Z"
+      };
+      const client2: ClientRecord = {
+        id: "018e69e0-8a6a-72cb-b1b7-ec79a1f73802",
+        companyName: "Beta Productions",
+        brandBibleJson: {},
+        defaultAspectRatio: "9:16",
+        externalProcessingPolicy: {},
+        createdAt: "2026-09-02T00:00:00.000Z",
+        updatedAt: "2026-09-02T00:00:00.000Z"
+      };
+
+      const uow = new FakeClientUnitOfWork([client2, client1]);
+      const app = createControlApiApp({ uow });
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/clients"
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      const body = response.json();
+      expect(body).toEqual([
+        {
+          clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+          companyName: "Acme Studios"
+        },
+        {
+          clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73802",
+          companyName: "Beta Productions"
+        }
+      ]);
+      // Verify no leaked fields
+      expect(body[0]).not.toHaveProperty("brandBibleJson");
+      expect(body[0]).not.toHaveProperty("externalProcessingPolicy");
+      expect(body[0]).not.toHaveProperty("defaultAspectRatio");
+      expect(body[0]).not.toHaveProperty("createdAt");
+      expect(body[0]).not.toHaveProperty("updatedAt");
+    });
+
+    it("orders clients deterministically by companyName ASC then clientId ASC and preserves duplicate names", async () => {
+      const clientB = {
+        id: "018e69e0-8a6a-72cb-b1b7-ec79a1f73803",
+        companyName: "Zenith",
+        brandBibleJson: {},
+        defaultAspectRatio: "9:16",
+        externalProcessingPolicy: {},
+        createdAt: "2026-09-01T00:00:00.000Z",
+        updatedAt: "2026-09-01T00:00:00.000Z"
+      };
+      const clientA2 = {
+        id: "018e69e0-8a6a-72cb-b1b7-ec79a1f73802",
+        companyName: "Acme",
+        brandBibleJson: {},
+        defaultAspectRatio: "9:16",
+        externalProcessingPolicy: {},
+        createdAt: "2026-09-01T00:00:00.000Z",
+        updatedAt: "2026-09-01T00:00:00.000Z"
+      };
+      const clientA1 = {
+        id: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+        companyName: "Acme",
+        brandBibleJson: {},
+        defaultAspectRatio: "9:16",
+        externalProcessingPolicy: {},
+        createdAt: "2026-09-01T00:00:00.000Z",
+        updatedAt: "2026-09-01T00:00:00.000Z"
+      };
+
+      const uow = new FakeClientUnitOfWork([clientB, clientA2, clientA1]);
+      const app = createControlApiApp({ uow });
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/clients"
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual([
+        {
+          clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+          companyName: "Acme"
+        },
+        {
+          clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73802",
+          companyName: "Acme"
+        },
+        {
+          clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73803",
+          companyName: "Zenith"
+        }
+      ]);
+    });
+
+    it("succeeds without any director authentication headers or client session mapping", async () => {
+      const client: ClientRecord = {
+        id: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+        companyName: "Public Client",
+        brandBibleJson: {},
+        defaultAspectRatio: "9:16",
+        externalProcessingPolicy: {},
+        createdAt: "2026-09-01T00:00:00.000Z",
+        updatedAt: "2026-09-01T00:00:00.000Z"
+      };
+      const uow = new FakeClientUnitOfWork([client]);
+      const app = createControlApiApp({ uow });
+
+      // Request without Authorization, session tokens, or Tailscale headers
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/clients"
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toHaveLength(1);
     });
   });
 });
