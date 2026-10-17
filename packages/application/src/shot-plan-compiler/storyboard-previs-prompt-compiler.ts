@@ -1,3 +1,5 @@
+import type { CameraAngle } from "@cco/contracts";
+
 export interface StoryboardShotPlanSubject {
   readonly subjectId: string;
   readonly role?: string | undefined;
@@ -88,18 +90,99 @@ function describeFraming(framing: string): string {
   return FRAMING_DESCRIPTIONS[framing] ?? `${framing.replace(/_/g, " ")} shot framing`;
 }
 
-const ANGLE_DESCRIPTIONS: Readonly<Record<string, string>> = Object.freeze({
-  eye_level: "eye-level camera angle",
-  low_angle: "low camera angle looking up",
-  high_angle: "high camera angle looking down",
-  bird_eye: "bird's-eye overhead angle",
-  worm_eye: "worm's-eye ground level angle",
-  dutch_angle: "canted dutch angle",
-  over_the_shoulder: "over-the-shoulder angle"
+const ANGLE_DESCRIPTIONS: Readonly<Record<CameraAngle, string>> = Object.freeze({
+  eye_level: "Eye-level shot; camera at subject eye height, level horizontal viewpoint.",
+  low_angle:
+    "LOW ANGLE SHOT, shot from below. Camera placed near ground level, tilted sharply upward at the subjects. Subjects loom tall and dominant above the lens, exaggerated upward foreshortening, converging vertical lines, open sky or ceiling visible behind their heads, viewer looking up from a crouched vantage point.",
+  high_angle:
+    "HIGH ANGLE SHOT, shot from above. Pronounced high-angle shot; camera above the subjects looking downward at an oblique angle, elevated overhead vantage point, ground and subjects' heads/shoulders prominent, downward foreshortening.",
+  bird_eye:
+    "Bird's-eye overhead shot; camera directly above, looking vertically downward, top-down layout.",
+  worm_eye:
+    "Extreme worm's-eye shot; camera at ground level looking steeply upward, exaggerated upward foreshortening.",
+  dutch_angle: "Dutch-angle shot; visibly tilted camera and diagonal horizon, canted composition.",
+  over_the_shoulder:
+    "Over-the-shoulder shot; camera behind a subject, foreground shoulder framing the subject or action beyond."
 });
 
 function describeAngle(angle: string): string {
-  return ANGLE_DESCRIPTIONS[angle] ?? `${angle.replace(/_/g, " ")} camera angle`;
+  const known = ANGLE_DESCRIPTIONS[angle as CameraAngle];
+  if (known) {
+    return known;
+  }
+  const normalized = angle.replace(/_/g, " ");
+  return `${normalized} camera angle; camera positioned for ${normalized} viewpoint.`;
+}
+
+const ANGLE_KEYWORD_LABELS: Readonly<Record<CameraAngle, string>> = Object.freeze({
+  eye_level: "EYE LEVEL",
+  low_angle: "LOW ANGLE",
+  high_angle: "HIGH ANGLE",
+  bird_eye: "BIRD'S EYE",
+  worm_eye: "WORM'S EYE",
+  dutch_angle: "DUTCH ANGLE",
+  over_the_shoulder: "OVER THE SHOULDER"
+});
+
+function describeAngleKeyword(angle: string): string {
+  return ANGLE_KEYWORD_LABELS[angle as CameraAngle] ?? angle.replace(/_/g, " ").toUpperCase();
+}
+
+const BLOCKING_EMPHASIS_KEYWORDS: ReadonlyArray<{ pattern: RegExp; phrase: string }> = [
+  {
+    pattern: /side[- ]by[- ]side/i,
+    phrase: "standing directly side-by-side in a straight horizontal line"
+  },
+  {
+    pattern: /facing forward|facing camera|facing the camera/i,
+    phrase: "both facing forward toward the camera, not turned toward each other"
+  },
+  { pattern: /arms linked|linked arms/i, phrase: "with arms visibly linked together" },
+  { pattern: /back[- ]to[- ]back/i, phrase: "standing back-to-back" },
+  {
+    pattern: /facing away|back to camera|backs to camera/i,
+    phrase: "with backs turned to the camera"
+  }
+];
+
+function describeBlockingEmphasis(subjects: readonly StoryboardShotPlanSubject[]): string | null {
+  if (subjects.length < 2) {
+    return null;
+  }
+  const combinedText = subjects
+    .map((s) => `${s.movementTrajectory} ${s.interactionSummary ?? ""}`)
+    .join(" ");
+  const matched = BLOCKING_EMPHASIS_KEYWORDS.filter((k) => k.pattern.test(combinedText)).map(
+    (k) => k.phrase
+  );
+  if (matched.length === 0) {
+    return null;
+  }
+  return `Blocking emphasis: the ${subjects.length} subjects are staged ${matched.join(", ")}.`;
+}
+
+function describeCameraMovement(
+  cameraMovement?: string | null,
+  movementSpeed?: string | null,
+  beatCameraAction?: string | null
+): string {
+  const speed = movementSpeed && movementSpeed.trim().length > 0 ? movementSpeed.trim() : "steady";
+  let motionDesc: string;
+
+  if (!cameraMovement || cameraMovement === "static") {
+    motionDesc = "Static camera.";
+  } else if (cameraMovement === "arc") {
+    motionDesc = `Camera motion: ${speed} arc; single moment along a curved camera path around the subjects, with spatial depth and foreground-background separation while preserving stated camera position and subject orientations.`;
+  } else {
+    motionDesc = `Camera motion: ${speed} ${cameraMovement.replace(/_/g, " ")}.`;
+  }
+
+  if (beatCameraAction && beatCameraAction.trim().length > 0) {
+    const cleanCamera = beatCameraAction.trim().replace(/\.+$/, "");
+    motionDesc += ` Beat camera: ${cleanCamera}.`;
+  }
+
+  return motionDesc;
 }
 
 const LIGHTING_DESCRIPTIONS: Readonly<Record<string, string>> = Object.freeze({
@@ -121,18 +204,20 @@ export function compileStoryboardPrevisPrompt(
   shotPlan: StoryboardPrevisShotPlanInput,
   beat?: StoryboardShotPlanBeat
 ): StoryboardPrevisPromptResult {
-  const sections: string[] = [STORYBOARD_STYLE_HEADER];
+  const sections: string[] = [];
 
-  // 1. Camera & Framing
-  const framingDesc = describeFraming(shotPlan.framing);
+  // 1. Camera & Framing (Leading camera section with angle, framing, position, lens, motion)
+  const angleKeyword = describeAngleKeyword(shotPlan.angle);
   const angleDesc = describeAngle(shotPlan.angle);
-  const motionDesc =
-    !shotPlan.cameraMovement || shotPlan.cameraMovement === "static"
-      ? "Static camera."
-      : `Camera motion: ${shotPlan.movementSpeed ?? "steady"} ${shotPlan.cameraMovement.replace(/_/g, " ")}.`;
+  const framingDesc = describeFraming(shotPlan.framing);
+  const motionDesc = describeCameraMovement(
+    shotPlan.cameraMovement,
+    shotPlan.movementSpeed,
+    beat?.cameraAction
+  );
 
   sections.push(
-    `Camera staging: ${framingDesc}, ${angleDesc}. Position: ${shotPlan.cameraPosition}. Lens: ${shotPlan.lensIntent}. ${motionDesc}`
+    `${angleKeyword}. Camera: ${angleDesc} Framing: ${framingDesc}. Position: ${shotPlan.cameraPosition}. Lens: ${shotPlan.lensIntent}. ${motionDesc}`
   );
 
   // 2. Subjects, Blocking & Screen/Depth Positions
@@ -154,7 +239,10 @@ export function compileStoryboardPrevisPrompt(
       subjectClauses.push(clause);
     }
 
-    sections.push(`Staging: ${subjectBreakdown}. ${subjectClauses.join(" ")}`);
+    const blockingEmphasis = describeBlockingEmphasis(subjects);
+    sections.push(
+      `Staging: ${subjectBreakdown}; subject positions and facing directions follow the supplied blocking. ${subjectClauses.join(" ")}${blockingEmphasis ? ` ${blockingEmphasis}` : ""}`
+    );
   } else {
     sections.push("Staging: Solo scene without distinct character blocking.");
   }
@@ -172,12 +260,7 @@ export function compileStoryboardPrevisPrompt(
         ? beat.description.trim().replace(/\.+$/, "")
         : "";
     const descClause = cleanDesc.length > 0 ? ` (${cleanDesc})` : "";
-    let beatActionText = `Action: ${beatIndexPrefix}${timingClause}: ${cleanAction}${descClause}.`;
-    if (beat.cameraAction && beat.cameraAction.trim().length > 0) {
-      const cleanCamera = beat.cameraAction.trim().replace(/\.+$/, "");
-      beatActionText += ` Camera: ${cleanCamera}.`;
-    }
-    sections.push(beatActionText);
+    sections.push(`Action: ${beatIndexPrefix}${timingClause}: ${cleanAction}${descClause}.`);
   } else {
     let actionText = `Action: ${shotPlan.actionSummary}.`;
     if (shotPlan.beats && shotPlan.beats.length > 0) {
@@ -187,14 +270,17 @@ export function compileStoryboardPrevisPrompt(
     sections.push(actionText);
   }
 
-  // 4. Environment & Atmosphere
+  // 4. Storyboard Illustration Style (follows early camera and blocking content)
+  sections.push(STORYBOARD_STYLE_HEADER);
+
+  // 5. Environment & Atmosphere
   let envText = `Setting: ${shotPlan.environmentDescription}.`;
   if (shotPlan.atmosphere && shotPlan.atmosphere.trim().length > 0) {
     envText += ` Atmosphere: ${shotPlan.atmosphere.trim()}.`;
   }
   sections.push(envText);
 
-  // 5. Impressionistic Lighting Intent
+  // 6. Impressionistic Lighting Intent
   const lightingDesc = describeLighting(shotPlan.lightingStyle);
   let lightingText = `Lighting: Impressionistic ${lightingDesc} with marker wash tone shading.`;
   if (shotPlan.colorPalette && shotPlan.colorPalette.length > 0) {
@@ -202,7 +288,7 @@ export function compileStoryboardPrevisPrompt(
   }
   sections.push(lightingText);
 
-  // 6. Continuity Cues
+  // 7. Continuity Cues
   const continuityClauses: string[] = [];
   if (shotPlan.continuity) {
     if (
@@ -231,11 +317,11 @@ export function compileStoryboardPrevisPrompt(
     sections.push(`Continuity: ${continuityClauses.join(" ")}`);
   }
 
-  // 7. Clean Panel Directive
+  // 8. Clean Panel Directive
   sections.push(STORYBOARD_CLEAN_PANEL_DIRECTIVE);
 
   return {
-    prompt: sections.join(" "),
+    prompt: sections.join("\n\n"),
     negativePrompt: STORYBOARD_NEGATIVE_PROMPT,
     profileId: STORYBOARD_PREVIS_PROFILE_ID,
     renderProfileKey: STORYBOARD_PREVIS_RENDER_PROFILE_KEY,
