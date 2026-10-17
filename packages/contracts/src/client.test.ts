@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { CreateClientRequestSchema, ClientResponseSchema } from "./client.js";
+import {
+  CreateClientRequestSchema,
+  ClientResponseSchema,
+  ClientListItemSchema,
+  ClientListResponseSchema
+} from "./client.js";
 
 describe("Client Creation Contracts", () => {
   describe("CreateClientRequestSchema", () => {
@@ -165,6 +170,103 @@ describe("Client Creation Contracts", () => {
           createdAt: "2026-09-03T12:00:00.000Z",
           updatedAt: "not-a-datetime"
         })
+      ).toThrow();
+    });
+  });
+
+  describe("ClientListItemSchema", () => {
+    it("parses valid client list item", () => {
+      const item = {
+        clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+        companyName: "Acme Corp"
+      };
+      const parsed = ClientListItemSchema.parse(item);
+      expect(parsed).toEqual(item);
+    });
+
+    it("rejects invalid clientId (non-UUID)", () => {
+      expect(() =>
+        ClientListItemSchema.parse({
+          clientId: "not-a-uuid",
+          companyName: "Acme Corp"
+        })
+      ).toThrow();
+    });
+
+    it("rejects empty companyName", () => {
+      expect(() =>
+        ClientListItemSchema.parse({
+          clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+          companyName: ""
+        })
+      ).toThrow();
+    });
+
+    it("rejects missing fields", () => {
+      expect(() =>
+        ClientListItemSchema.parse({
+          clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801"
+        })
+      ).toThrow();
+
+      expect(() =>
+        ClientListItemSchema.parse({
+          companyName: "Acme Corp"
+        })
+      ).toThrow();
+    });
+  });
+
+  describe("ClientListResponseSchema", () => {
+    it("parses populated array of clients", () => {
+      const payload = [
+        {
+          clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+          companyName: "Acme Corp"
+        },
+        {
+          clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73802",
+          companyName: "Beta LLC"
+        }
+      ];
+      const parsed = ClientListResponseSchema.parse(payload);
+      expect(parsed).toEqual(payload);
+    });
+
+    it("parses empty array", () => {
+      const parsed = ClientListResponseSchema.parse([]);
+      expect(parsed).toEqual([]);
+    });
+
+    it("allows duplicate company names across different client IDs", () => {
+      const payload = [
+        {
+          clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73801",
+          companyName: "Acme Corp"
+        },
+        {
+          clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73802",
+          companyName: "Acme Corp"
+        }
+      ];
+      const parsed = ClientListResponseSchema.parse(payload);
+      expect(parsed).toEqual(payload);
+    });
+
+    it("rejects non-array payloads", () => {
+      expect(() => ClientListResponseSchema.parse({})).toThrow();
+      expect(() => ClientListResponseSchema.parse("invalid")).toThrow();
+      expect(() => ClientListResponseSchema.parse(null)).toThrow();
+    });
+
+    it("rejects array with invalid item shapes", () => {
+      expect(() =>
+        ClientListResponseSchema.parse([
+          {
+            clientId: "not-a-uuid",
+            companyName: "Acme Corp"
+          }
+        ])
       ).toThrow();
     });
   });

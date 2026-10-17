@@ -25,8 +25,10 @@ const MAX_TARGET_DURATION_SECONDS = Math.floor(MAX_TARGET_DURATION_MS / 1000);
 import {
   PlanCampaignStoryboardApiError,
   listClientReferences,
+  listClients,
   ApiClientError,
-  type ReferenceAssetResponse
+  type ReferenceAssetResponse,
+  type ClientListItem
 } from "../api/client";
 import { generateUuidV4 } from "../lib/generate-uuid";
 import {
@@ -48,6 +50,7 @@ export interface CampaignCreationFormProps {
   readonly state?: CampaignCreationState | undefined;
   readonly dispatch?: ((event: CampaignCreationEvent) => void) | undefined;
   readonly initialReferences?: readonly ReferenceAssetResponse[] | undefined;
+  readonly initialClients?: readonly ClientListItem[] | undefined;
 }
 
 async function defaultSubmitCampaign(
@@ -93,8 +96,79 @@ export function CampaignCreationForm({
   initialValues,
   state: controlledState,
   dispatch: controlledDispatch,
-  initialReferences
+  initialReferences,
+  initialClients
 }: CampaignCreationFormProps) {
+  const [clientListState, setClientListState] = useState<{
+    status: "loading" | "loaded" | "error";
+    clients: readonly ClientListItem[];
+    error: string | null;
+  }>(() => {
+    if (initialClients !== undefined) {
+      return {
+        status: "loaded",
+        clients: initialClients,
+        error: null
+      };
+    }
+    return {
+      status: "loading",
+      clients: [],
+      error: null
+    };
+  });
+
+  const clientFetchGenerationRef = useRef(0);
+  const isInitialClientsMountRef = useRef(true);
+
+  const fetchClientList = useCallback(() => {
+    const generation = ++clientFetchGenerationRef.current;
+    setClientListState((prev) => ({
+      ...prev,
+      status: "loading",
+      error: null
+    }));
+
+    listClients()
+      .then((data) => {
+        if (generation !== clientFetchGenerationRef.current) return;
+        setClientListState({
+          status: "loaded",
+          clients: data,
+          error: null
+        });
+      })
+      .catch((err: unknown) => {
+        if (generation !== clientFetchGenerationRef.current) return;
+        const msg =
+          err instanceof ApiClientError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : "Failed to load clients.";
+        setClientListState({
+          status: "error",
+          clients: [],
+          error: msg
+        });
+      });
+  }, []);
+
+  useEffect(() => {
+    if (isInitialClientsMountRef.current) {
+      isInitialClientsMountRef.current = false;
+      if (initialClients !== undefined) {
+        return () => {
+          clientFetchGenerationRef.current++;
+        };
+      }
+    }
+    fetchClientList();
+    return () => {
+      clientFetchGenerationRef.current++;
+    };
+  }, [fetchClientList, initialClients]);
+
   const [internalState, internalDispatch] = useReducer(
     (prevState: CampaignCreationState, event: CampaignCreationEvent) =>
       transitionCampaignCreationState(prevState, event).state,
@@ -415,9 +489,26 @@ export function CampaignCreationForm({
       });
   }, [currentClientId]);
 
+  const values = state.values;
+  const fieldErrors =
+    state.phase === "validation-failed" || state.phase === "submit-error" ? state.fieldErrors : {};
+  const isSubmitting = state.phase === "submitting";
+  const isKnownClientSelected =
+    clientListState.status === "loaded" &&
+    values.clientId.trim() !== "" &&
+    clientListState.clients.some((c) => c.clientId === values.clientId.trim());
+  const isUnavailableClientSelected =
+    clientListState.status === "loaded" &&
+    values.clientId.trim() !== "" &&
+    !clientListState.clients.some((c) => c.clientId === values.clientId.trim());
+  const selectValue =
+    clientListState.status === "loaded" && clientListState.clients.length > 0
+      ? values.clientId
+      : "";
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (state.phase === "submitting") {
+    if (state.phase === "submitting" || !isKnownClientSelected) {
       return;
     }
 
@@ -477,11 +568,6 @@ export function CampaignCreationForm({
       values: { [field]: value }
     });
   }
-
-  const values = state.values;
-  const fieldErrors =
-    state.phase === "validation-failed" || state.phase === "submit-error" ? state.fieldErrors : {};
-  const isSubmitting = state.phase === "submitting";
 
   return (
     <section
@@ -694,25 +780,143 @@ export function CampaignCreationForm({
         </div>
 
         <div className="form-group">
-          <label htmlFor="client-id">Client ID (UUID) *</label>
-          <input
-            id="client-id"
-            type="text"
-            data-testid="client-id-input"
-            value={values.clientId}
+          <label htmlFor="client-select">Client *</label>
+          <select
+            id="client-select"
+            data-testid="client-select"
+            value={selectValue}
             onChange={(e) => handleFieldChange("clientId", e.target.value)}
-            disabled={isSubmitting}
-            placeholder="e.g. 018e69e0-8a6a-72cb-b1b7-ec79a1f73801"
+            disabled={
+              isSubmitting ||
+              clientListState.status !== "loaded" ||
+              clientListState.clients.length === 0
+            }
             required
-          />
-          <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-            Paste the UUID of an existing client account.
-          </span>
+            aria-describedby={
+              [
+                clientListState.status === "loading" ? "client-select-status" : null,
+                clientListState.status === "loaded" && clientListState.clients.length === 0
+                  ? "client-select-empty"
+                  : null,
+                isUnavailableClientSelected ? "client-unavailable-message" : null,
+                fieldErrors.clientId ? "field-error-client-id" : null
+              ]
+                .filter(Boolean)
+                .join(" ") || undefined
+            }
+            aria-invalid={Boolean(fieldErrors.clientId || isUnavailableClientSelected)}
+          >
+            {clientListState.status === "loading" && <option value="">Loading clients...</option>}
+            {clientListState.status === "error" && <option value="">Failed to load clients</option>}
+            {clientListState.status === "loaded" && clientListState.clients.length === 0 && (
+              <option value="">No clients available</option>
+            )}
+            {clientListState.status === "loaded" && clientListState.clients.length > 0 && (
+              <>
+                <option value="">Select a client</option>
+                {isUnavailableClientSelected && (
+                  <option value={values.clientId} disabled>
+                    Selected client unavailable
+                  </option>
+                )}
+                {clientListState.clients.map((client) => (
+                  <option key={client.clientId} value={client.clientId}>
+                    {client.companyName}
+                  </option>
+                ))}
+              </>
+            )}
+          </select>
+
+          {/* Accessible loading status */}
+          {clientListState.status === "loading" && (
+            <span
+              id="client-select-status"
+              role="status"
+              style={{
+                fontSize: "0.75rem",
+                color: "var(--text-muted)",
+                marginTop: "0.25rem",
+                display: "block"
+              }}
+            >
+              Loading clients...
+            </span>
+          )}
+
+          {/* Empty list guidance */}
+          {clientListState.status === "loaded" && clientListState.clients.length === 0 && (
+            <span
+              id="client-select-empty"
+              data-testid="no-clients-message"
+              style={{
+                fontSize: "0.75rem",
+                color: "var(--text-muted)",
+                marginTop: "0.25rem",
+                display: "block"
+              }}
+            >
+              No clients available.
+            </span>
+          )}
+
+          {/* Unavailable initial selection warning */}
+          {isUnavailableClientSelected && (
+            <span
+              id="client-unavailable-message"
+              className="field-error"
+              data-testid="client-unavailable-message"
+              style={{
+                color: "var(--status-failed-border)",
+                fontSize: "0.8125rem",
+                marginTop: "0.25rem",
+                display: "block"
+              }}
+            >
+              The selected client account is unavailable. Please select an existing client.
+            </span>
+          )}
+
+          {/* Error & Retry */}
+          {clientListState.status === "error" && (
+            <div
+              data-testid="client-list-error"
+              style={{ marginTop: "0.25rem", display: "flex", alignItems: "center", gap: "0.5rem" }}
+            >
+              <span
+                className="field-error"
+                style={{ color: "var(--status-failed-border)", fontSize: "0.8125rem" }}
+              >
+                {clientListState.error ?? "Failed to load clients."}
+              </span>
+              <button
+                type="button"
+                data-testid="retry-clients-button"
+                onClick={fetchClientList}
+                disabled={isSubmitting}
+                style={{
+                  fontSize: "0.75rem",
+                  padding: "0.125rem 0.5rem",
+                  cursor: isSubmitting ? "not-allowed" : "pointer"
+                }}
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
+          {/* Preserved fieldErrors.clientId validation */}
           {fieldErrors.clientId && (
             <span
+              id="field-error-client-id"
               className="field-error"
               data-testid="field-error-client-id"
-              style={{ color: "var(--status-failed-border)", fontSize: "0.8125rem" }}
+              style={{
+                color: "var(--status-failed-border)",
+                fontSize: "0.8125rem",
+                marginTop: "0.25rem",
+                display: "block"
+              }}
             >
               {fieldErrors.clientId}
             </span>
@@ -1112,7 +1316,7 @@ export function CampaignCreationForm({
             type="submit"
             className="stage-draft-button"
             data-testid="submit-campaign-button"
-            disabled={isSubmitting}
+            disabled={isSubmitting || !isKnownClientSelected}
           >
             {isSubmitting ? "Planning Storyboard..." : "Create & Plan Campaign"}
           </button>

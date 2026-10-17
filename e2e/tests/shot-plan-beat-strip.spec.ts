@@ -24,7 +24,7 @@ test.describe("Per-beat frame strip in the ShotPlan UI (Issue #392)", () => {
       .getByTestId("brief-description-input")
       .fill("Three-beat ShotPlan review with per-beat visual frame strip");
     await page.getByTestId("campaign-title-input").fill(campaignTitle);
-    await page.getByTestId("client-id-input").fill(testEnv.postgres.defaultClientId);
+    await page.getByTestId("client-select").selectOption(testEnv.postgres.defaultClientId);
     await page.getByTestId("target-duration-input").fill("5");
     await page.getByTestId("scene-count-mode-custom").click();
     await page.getByTestId("scene-count-override-input").fill("1");
