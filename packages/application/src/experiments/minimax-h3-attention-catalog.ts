@@ -120,7 +120,7 @@ export const RAW_MINIMAX_H3_ATTENTION_CATALOG: readonly Omit<
   {
     variantName: "dense",
     route: "i2v",
-    compatibilityState: "requires_isolated_upgrade",
+    compatibilityState: "unsupported",
     scope: "upgraded-dense-attention-control-i2v",
     comfyuiCoreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
     runnable: false,
@@ -159,10 +159,17 @@ export const RAW_MINIMAX_H3_ATTENTION_CATALOG: readonly Omit<
       teardownRecipe: "Remove .ai-checkouts/comfyui-upgraded and isolated venv."
     },
     blockers: [
+      "Target ComfyUI core revision 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf is unavailable upstream (HTTP 422 from GitHub API)",
       "Target experimental upgrade checkout not yet provisioned",
       "Security review pending"
     ],
     evidence: [
+      {
+        url: "https://api.github.com/repos/Comfy-Org/ComfyUI/commits/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        revision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        assertion:
+          "ComfyUI core revision returns HTTP 422 (No commit found for SHA) from GitHub commits API."
+      },
       {
         url: "https://github.com/Comfy-Org/ComfyUI/blob/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf/comfy/ldm/modules/attention.py",
         revision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
@@ -175,7 +182,7 @@ export const RAW_MINIMAX_H3_ATTENTION_CATALOG: readonly Omit<
   {
     variantName: "dense",
     route: "ref2v",
-    compatibilityState: "requires_isolated_upgrade",
+    compatibilityState: "unsupported",
     scope: "upgraded-dense-attention-control-ref2v",
     comfyuiCoreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
     runnable: false,
@@ -214,10 +221,17 @@ export const RAW_MINIMAX_H3_ATTENTION_CATALOG: readonly Omit<
       teardownRecipe: "Remove .ai-checkouts/comfyui-upgraded and isolated venv."
     },
     blockers: [
+      "Target ComfyUI core revision 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf is unavailable upstream (HTTP 422 from GitHub API)",
       "Target experimental upgrade checkout not yet provisioned",
       "Security review pending"
     ],
     evidence: [
+      {
+        url: "https://api.github.com/repos/Comfy-Org/ComfyUI/commits/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        revision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        assertion:
+          "ComfyUI core revision returns HTTP 422 (No commit found for SHA) from GitHub commits API."
+      },
       {
         url: "https://github.com/Comfy-Org/ComfyUI/blob/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf/comfy/ldm/modules/attention.py",
         revision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
@@ -368,7 +382,7 @@ export const RAW_MINIMAX_H3_ATTENTION_CATALOG: readonly Omit<
   {
     variantName: "native-sol-attn",
     route: "i2v",
-    compatibilityState: "requires_isolated_upgrade",
+    compatibilityState: "unsupported",
     scope: "native-sparse-sol-attn-upgrade-i2v",
     comfyuiCoreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
     runnable: false,
@@ -420,12 +434,19 @@ export const RAW_MINIMAX_H3_ATTENTION_CATALOG: readonly Omit<
         "Remove .ai-checkouts/comfyui-sol-attn and isolated venv; production checkout remains pinned at 55b6a9b1."
     },
     blockers: [
+      "Target ComfyUI core revision 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf is unavailable upstream (HTTP 422 from GitHub API)",
       "ComfyUI core upgrade required (ModelSparseAttention node not present in pinned core 55b6a9b1)",
       "comfy-kitchen sol-attn kernel requires CUDA SM89 compilation verification",
       "Isolated experimental checkout required",
       "Security review pending"
     ],
     evidence: [
+      {
+        url: "https://api.github.com/repos/Comfy-Org/ComfyUI/commits/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        revision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        assertion:
+          "ComfyUI core revision returns HTTP 422 (No commit found for SHA) from GitHub commits API."
+      },
       {
         url: "https://github.com/Comfy-Org/docs/blob/main/tutorials/video/minimax/minimax-h3.mdx",
         assertion: "Model Sparse Attention requires sol-attn kernel from comfy-kitchen and CUDA."
@@ -442,7 +463,7 @@ export const RAW_MINIMAX_H3_ATTENTION_CATALOG: readonly Omit<
   {
     variantName: "native-sol-attn",
     route: "ref2v",
-    compatibilityState: "requires_isolated_upgrade",
+    compatibilityState: "unsupported",
     scope: "native-sparse-sol-attn-upgrade-ref2v",
     comfyuiCoreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
     runnable: false,
@@ -494,12 +515,19 @@ export const RAW_MINIMAX_H3_ATTENTION_CATALOG: readonly Omit<
         "Remove .ai-checkouts/comfyui-sol-attn and isolated venv; production checkout remains pinned at 55b6a9b1."
     },
     blockers: [
+      "Target ComfyUI core revision 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf is unavailable upstream (HTTP 422 from GitHub API)",
       "ComfyUI core upgrade required (ModelSparseAttention node not present in pinned core 55b6a9b1)",
       "comfy-kitchen sol-attn kernel requires CUDA SM89 compilation verification",
       "Isolated experimental checkout required",
       "Security review pending"
     ],
     evidence: [
+      {
+        url: "https://api.github.com/repos/Comfy-Org/ComfyUI/commits/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        revision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        assertion:
+          "ComfyUI core revision returns HTTP 422 (No commit found for SHA) from GitHub commits API."
+      },
       {
         url: "https://github.com/Comfy-Org/docs/blob/main/tutorials/video/minimax/minimax-h3.mdx",
         assertion: "Model Sparse Attention requires sol-attn kernel from comfy-kitchen and CUDA."
@@ -516,7 +544,7 @@ export const RAW_MINIMAX_H3_ATTENTION_CATALOG: readonly Omit<
   {
     variantName: "veda",
     route: "i2v",
-    compatibilityState: "requires_isolated_upgrade",
+    compatibilityState: "unsupported",
     scope: "veda-sparse-attention-i2v",
     comfyuiCoreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
     customNode: {
@@ -581,6 +609,7 @@ export const RAW_MINIMAX_H3_ATTENTION_CATALOG: readonly Omit<
       teardownRecipe: "Remove isolated checkout; release all GPU locks."
     },
     blockers: [
+      "Target ComfyUI core revision 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf is unavailable upstream (HTTP 422 from GitHub API)",
       "ComfyUI core upgrade required (>=0.38.0)",
       "Veda custom node installation required (commit 67e4eb5541b648555563144401ebaba832bd73ec)",
       "Triton 3.0.0 required",
@@ -590,6 +619,12 @@ export const RAW_MINIMAX_H3_ATTENTION_CATALOG: readonly Omit<
       "Security review pending"
     ],
     evidence: [
+      {
+        url: "https://api.github.com/repos/Comfy-Org/ComfyUI/commits/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        revision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        assertion:
+          "ComfyUI core revision returns HTTP 422 (No commit found for SHA) from GitHub commits API."
+      },
       {
         url: "https://github.com/veda-sparse/Veda-on-ComfyUI/blob/67e4eb5541b648555563144401ebaba832bd73ec/pyproject.toml",
         revision: "67e4eb5541b648555563144401ebaba832bd73ec",
@@ -602,7 +637,7 @@ export const RAW_MINIMAX_H3_ATTENTION_CATALOG: readonly Omit<
   {
     variantName: "veda",
     route: "ref2v",
-    compatibilityState: "requires_isolated_upgrade",
+    compatibilityState: "unsupported",
     scope: "veda-sparse-attention-ref2v",
     comfyuiCoreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
     customNode: {
@@ -667,6 +702,7 @@ export const RAW_MINIMAX_H3_ATTENTION_CATALOG: readonly Omit<
       teardownRecipe: "Remove isolated checkout; release all GPU locks."
     },
     blockers: [
+      "Target ComfyUI core revision 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf is unavailable upstream (HTTP 422 from GitHub API)",
       "ComfyUI core upgrade required (>=0.38.0)",
       "Veda custom node installation required (commit 67e4eb5541b648555563144401ebaba832bd73ec)",
       "Triton 3.0.0 required",
@@ -675,6 +711,12 @@ export const RAW_MINIMAX_H3_ATTENTION_CATALOG: readonly Omit<
       "Security review pending"
     ],
     evidence: [
+      {
+        url: "https://api.github.com/repos/Comfy-Org/ComfyUI/commits/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        revision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        assertion:
+          "ComfyUI core revision returns HTTP 422 (No commit found for SHA) from GitHub commits API."
+      },
       {
         url: "https://github.com/veda-sparse/Veda-on-ComfyUI/blob/67e4eb5541b648555563144401ebaba832bd73ec/pyproject.toml",
         revision: "67e4eb5541b648555563144401ebaba832bd73ec",
@@ -807,7 +849,7 @@ export const RAW_MINIMAX_H3_ATTENTION_CATALOG: readonly Omit<
   {
     variantName: "dense",
     route: "i2v",
-    compatibilityState: "requires_isolated_upgrade",
+    compatibilityState: "unsupported",
     scope: "sol-attn-matched-dense-attention-i2v",
     comfyuiCoreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
     runnable: false,
@@ -852,10 +894,17 @@ export const RAW_MINIMAX_H3_ATTENTION_CATALOG: readonly Omit<
         "Remove .ai-checkouts/comfyui-sol-attn and isolated venv; production checkout remains pinned at 55b6a9b1."
     },
     blockers: [
+      "Target ComfyUI core revision 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf is unavailable upstream (HTTP 422 from GitHub API)",
       "Target experimental upgrade checkout not yet provisioned",
       "Security review pending"
     ],
     evidence: [
+      {
+        url: "https://api.github.com/repos/Comfy-Org/ComfyUI/commits/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        revision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        assertion:
+          "ComfyUI core revision returns HTTP 422 (No commit found for SHA) from GitHub commits API."
+      },
       {
         url: "https://github.com/Comfy-Org/ComfyUI/blob/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf/comfy/ldm/modules/attention.py",
         revision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
@@ -868,7 +917,7 @@ export const RAW_MINIMAX_H3_ATTENTION_CATALOG: readonly Omit<
   {
     variantName: "dense",
     route: "ref2v",
-    compatibilityState: "requires_isolated_upgrade",
+    compatibilityState: "unsupported",
     scope: "sol-attn-matched-dense-attention-ref2v",
     comfyuiCoreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
     runnable: false,
@@ -913,10 +962,17 @@ export const RAW_MINIMAX_H3_ATTENTION_CATALOG: readonly Omit<
         "Remove .ai-checkouts/comfyui-sol-attn and isolated venv; production checkout remains pinned at 55b6a9b1."
     },
     blockers: [
+      "Target ComfyUI core revision 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf is unavailable upstream (HTTP 422 from GitHub API)",
       "Target experimental upgrade checkout not yet provisioned",
       "Security review pending"
     ],
     evidence: [
+      {
+        url: "https://api.github.com/repos/Comfy-Org/ComfyUI/commits/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        revision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        assertion:
+          "ComfyUI core revision returns HTTP 422 (No commit found for SHA) from GitHub commits API."
+      },
       {
         url: "https://github.com/Comfy-Org/ComfyUI/blob/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf/comfy/ldm/modules/attention.py",
         revision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
@@ -929,7 +985,7 @@ export const RAW_MINIMAX_H3_ATTENTION_CATALOG: readonly Omit<
   {
     variantName: "dense",
     route: "i2v",
-    compatibilityState: "requires_isolated_upgrade",
+    compatibilityState: "unsupported",
     scope: "veda-matched-dense-attention-i2v",
     comfyuiCoreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
     customNode: {
@@ -979,10 +1035,17 @@ export const RAW_MINIMAX_H3_ATTENTION_CATALOG: readonly Omit<
       teardownRecipe: "Remove isolated checkout; release all GPU locks."
     },
     blockers: [
+      "Target ComfyUI core revision 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf is unavailable upstream (HTTP 422 from GitHub API)",
       "Target experimental upgrade checkout and Veda custom node not yet provisioned",
       "Security review pending"
     ],
     evidence: [
+      {
+        url: "https://api.github.com/repos/Comfy-Org/ComfyUI/commits/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        revision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        assertion:
+          "ComfyUI core revision returns HTTP 422 (No commit found for SHA) from GitHub commits API."
+      },
       {
         url: "https://github.com/Comfy-Org/ComfyUI/blob/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf/comfy/ldm/modules/attention.py",
         revision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
@@ -995,7 +1058,7 @@ export const RAW_MINIMAX_H3_ATTENTION_CATALOG: readonly Omit<
   {
     variantName: "dense",
     route: "ref2v",
-    compatibilityState: "requires_isolated_upgrade",
+    compatibilityState: "unsupported",
     scope: "veda-matched-dense-attention-ref2v",
     comfyuiCoreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
     customNode: {
@@ -1045,10 +1108,17 @@ export const RAW_MINIMAX_H3_ATTENTION_CATALOG: readonly Omit<
       teardownRecipe: "Remove isolated checkout; release all GPU locks."
     },
     blockers: [
+      "Target ComfyUI core revision 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf is unavailable upstream (HTTP 422 from GitHub API)",
       "Target experimental upgrade checkout and Veda custom node not yet provisioned",
       "Security review pending"
     ],
     evidence: [
+      {
+        url: "https://api.github.com/repos/Comfy-Org/ComfyUI/commits/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        revision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+        assertion:
+          "ComfyUI core revision returns HTTP 422 (No commit found for SHA) from GitHub commits API."
+      },
       {
         url: "https://github.com/Comfy-Org/ComfyUI/blob/94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf/comfy/ldm/modules/attention.py",
         revision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",

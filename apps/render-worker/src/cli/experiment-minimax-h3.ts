@@ -1,4 +1,4 @@
-import { readFile, readlink } from "node:fs/promises";
+import { readFile, readlink, readdir } from "node:fs/promises";
 import { basename, isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -6,6 +6,17 @@ import {
   MinimaxH3ExperimentService,
   compareMinimaxH3Experiments,
   listAttentionCatalogEntries,
+  listSamplingRecipes,
+  validateRecipeRouteCompatibility,
+  expandContinuityStudyPlan,
+  prepareContinuityStudyCell,
+  buildContinuityStoryboardPlan,
+  buildContinuityReviewManifest,
+  validateContinuityReview,
+  validateSafetyBaselineLinks,
+  validateStudyComparisonEdges,
+  importContinuityReview,
+  type ExpandContinuityStudyOptions,
   type MinimaxH3ComfyUiTransportPort,
   type MinimaxH3ExperimentStorePort,
   type MinimaxH3OutputProberPort,
@@ -26,10 +37,18 @@ import {
   MinimaxH3MatrixRowSchema,
   MinimaxH3OperatorDecisionSidecarSchema,
   MinimaxH3VisualReviewSidecarSchema,
+  MinimaxH3ContinuityReviewSidecarSchema,
+  MinimaxH3ContinuityStudySpecSchema,
+  MINIMAX_H3_SAMPLING_RECIPE_NAMES,
+  type MinimaxH3SamplingRecipeName,
   type MinimaxH3ExperimentCandidateFrames,
   type MinimaxH3AnyExperimentDescriptor,
+  type MinimaxH3ExperimentDescriptorV2,
+  type MinimaxH3ExperimentResultV2,
   type MinimaxH3ProcessRecord,
-  type MinimaxH3AttentionVariantName
+  type MinimaxH3AttentionVariantName,
+  type MinimaxH3ContinuityStudySpec,
+  type MinimaxH3ContinuityReviewSidecar
 } from "@cco/contracts";
 import {
   MinimaxH3ComfyUiAdapter,
@@ -69,12 +88,41 @@ Subcommands:
   reconcile      Reconstruct and persist result.json from durable records and server state
   compare        Compare completed baseline and candidate experiment runs under controlled protocol
   cleanup        Release GPU lock and clean up temporary files without mutating results
-  import-sidecar Import visual review sidecar into an existing run result.json
+  import-sidecar Import visual or continuity review sidecar into an existing run result.json
+  plan-study     Validate and summarize a controlled long-shot continuity study matrix
+  prepare-study  Prepare an isolated experiment run for a single resolved study cell
+  review-plan    Generate storyboard plan and side-by-side review manifest for study
+
+Options for 'plan-study':
+  --study <path>                 Continuity study specification JSON file path (required)
+  --output <path>                Path to save compiled plan summary JSON (optional)
+  --output-root <dir>            Experiment output root (default: ${DEFAULT_OUTPUT_ROOT})
+
+Options for 'prepare-study':
+  --study <path>                 Continuity study specification JSON file path (required)
+  --cell <id>                    Study cell ID to prepare into an isolated run (required)
+  --target-host <hostname>       Target host machine (default: localhost)
+  --gpu-uuid <uuid>              Target physical NVIDIA GPU UUID (required)
+  --comfyui-dir <path>           Pinned ComfyUI repository directory (required)
+  --python <path>                Python interpreter path (required)
+  --address <ip>                 Loopback listen address (default: 127.0.0.1)
+  --port <port>                  Loopback listen port (default: 8199)
+  --output-root <dir>            Root directory for experiment runs (default: ${DEFAULT_OUTPUT_ROOT})
+  --templates-dir <path>         Path to workflow templates directory (optional)
+  --prerequisite-reviews <path>  Path to JSON file containing prerequisite reviews for combined arm (optional)
+
+Options for 'review-plan':
+  --study <path>                 Continuity study specification JSON file path (required)
+  --output <path>                Path to write review manifest JSON (optional)
+  --runs <path>                  Path to runs manifest for media binding (optional)
+  --output-root <dir>            Experiment output root (default: ${DEFAULT_OUTPUT_ROOT})
 
 Options for 'catalog':
   --route <i2v|ref2v>            Filter catalog by generation route (optional)
   --variant <variant>            Filter catalog by attention variant name (optional)
   --matched-variant <variant>    Filter catalog by matched dense baseline variant (optional)
+  --recipes                      List sampling recipes instead of attention catalog entries
+  --type <attention|recipes>     Catalog type to inspect (default: attention)
   --json                         Output catalog as JSON (default)
 
 Options for 'prepare':
@@ -107,6 +155,7 @@ Options for 'prepare':
   --shutdown-timeout-ms <ms>     Child process graceful shutdown timeout (default: 15000, max: 120000)
   --step-override <steps>        Override scheduler step count (e.g. 10..30)
   --checkpoint-override <name>   Override diffusion checkpoint ('ref2va' or 'fl2va')
+  --sampling-recipe <name>       Pre-configured distillation/Lightning sampling recipe
   --variant-purpose <purpose>    Variant purpose ('performance' | 'prompt_conditioning' | 'controlled_multifactor')
   --attention-variant <variant>  Attention variant ('dense' | 'sage' | 'native-sol-attn' | 'veda')
   --matched-variant <variant>    Matched dense control target variant ('sage' | 'native-sol-attn' | 'veda')
@@ -264,6 +313,7 @@ const ALLOWED_FLAGS_BY_SUBCOMMAND: Record<string, Set<string>> = {
     "shutdown-timeout-ms",
     "step-override",
     "checkpoint-override",
+    "sampling-recipe",
     "variant-purpose",
     "attention-variant",
     "matched-variant",
@@ -291,8 +341,26 @@ const ALLOWED_FLAGS_BY_SUBCOMMAND: Record<string, Set<string>> = {
     "variant",
     "output-root",
     "comfyui-core-revision",
-    "core-revision"
-  ])
+    "core-revision",
+    "recipes",
+    "type"
+  ]),
+  "plan-study": new Set(["study", "file", "output", "output-root", "json"]),
+  "prepare-study": new Set([
+    "study",
+    "file",
+    "cell",
+    "target-host",
+    "gpu-uuid",
+    "comfyui-dir",
+    "python",
+    "address",
+    "port",
+    "output-root",
+    "templates-dir",
+    "prerequisite-reviews"
+  ]),
+  "review-plan": new Set(["study", "file", "output", "runs", "output-root", "json"])
 };
 
 const VALUE_FLAGS = new Set([
@@ -326,6 +394,7 @@ const VALUE_FLAGS = new Set([
   "shutdown-timeout-ms",
   "step-override",
   "checkpoint-override",
+  "sampling-recipe",
   "variant-purpose",
   "attention-variant",
   "matched-variant",
@@ -339,7 +408,13 @@ const VALUE_FLAGS = new Set([
   "variant",
   "variant-run-dir",
   "file",
-  "sidecar"
+  "sidecar",
+  "type",
+  "study",
+  "cell",
+  "runs",
+  "output",
+  "prerequisite-reviews"
 ]);
 
 export async function runExperimentCli(
@@ -582,6 +657,40 @@ export async function runExperimentCli(
           matchedVariant = mv as "dense" | "sage" | "native-sol-attn" | "veda";
         }
 
+        let samplingRecipe: MinimaxH3SamplingRecipeName | undefined;
+        if (flags["sampling-recipe"] !== undefined) {
+          const sr = flags["sampling-recipe"].toLowerCase();
+          if (!MINIMAX_H3_SAMPLING_RECIPE_NAMES.includes(sr as MinimaxH3SamplingRecipeName)) {
+            stderr(
+              `Error: Unknown --sampling-recipe "${flags["sampling-recipe"]}". Supported recipes: ${MINIMAX_H3_SAMPLING_RECIPE_NAMES.join(", ")}.`
+            );
+            return 1;
+          }
+          if (stepOverride !== undefined) {
+            stderr(
+              "Error: Cannot specify --step-override when using a distillation --sampling-recipe."
+            );
+            return 1;
+          }
+          if (checkpointOverride !== undefined) {
+            stderr(
+              "Error: Cannot specify --checkpoint-override when using a distillation --sampling-recipe."
+            );
+            return 1;
+          }
+          if (attentionVariant !== undefined) {
+            stderr("Error: Cannot specify --attention-variant when using --sampling-recipe.");
+            return 1;
+          }
+          try {
+            validateRecipeRouteCompatibility(sr as MinimaxH3SamplingRecipeName, route);
+          } catch (routeErr) {
+            stderr(`Error: ${(routeErr as Error).message}`);
+            return 1;
+          }
+          samplingRecipe = sr as MinimaxH3SamplingRecipeName;
+        }
+
         const coreRevision = flags["comfyui-core-revision"] ?? flags["core-revision"];
 
         const resolvedTemplatesDir = resolveCliPath(flags["templates-dir"]);
@@ -612,7 +721,8 @@ export async function runExperimentCli(
           ...(variantPurpose !== undefined ? { variantPurpose } : {}),
           ...(attentionVariant !== undefined ? { attentionVariant } : {}),
           ...(matchedVariant !== undefined ? { matchedVariant } : {}),
-          ...(coreRevision !== undefined ? { coreRevision } : {})
+          ...(coreRevision !== undefined ? { coreRevision } : {}),
+          ...(samplingRecipe !== undefined ? { samplingRecipe } : {})
         });
 
         stdout(
@@ -778,34 +888,44 @@ export async function runExperimentCli(
         }
         const parsed = JSON.parse(rawContent);
 
-        let sidecarType: "visual_review" | "operator_decision" | "matrix_row";
+        let sidecarType: "visual_review" | "operator_decision" | "matrix_row" | "continuity_review";
         let sidecar: unknown;
 
-        const visualCheck = MinimaxH3VisualReviewSidecarSchema.safeParse(parsed);
-        if (visualCheck.success) {
-          sidecarType = "visual_review";
-          sidecar = visualCheck.data;
+        const continuityCheck = MinimaxH3ContinuityReviewSidecarSchema.safeParse(parsed);
+        if (continuityCheck.success) {
+          sidecarType = "continuity_review";
+          sidecar = continuityCheck.data;
         } else {
-          const decisionCheck = MinimaxH3OperatorDecisionSidecarSchema.safeParse(parsed);
-          if (decisionCheck.success) {
-            sidecarType = "operator_decision";
-            sidecar = decisionCheck.data;
+          const visualCheck = MinimaxH3VisualReviewSidecarSchema.safeParse(parsed);
+          if (visualCheck.success) {
+            sidecarType = "visual_review";
+            sidecar = visualCheck.data;
           } else {
-            const matrixCheck = MinimaxH3MatrixRowSchema.safeParse(parsed);
-            if (matrixCheck.success) {
-              sidecarType = "matrix_row";
-              sidecar = matrixCheck.data;
+            const decisionCheck = MinimaxH3OperatorDecisionSidecarSchema.safeParse(parsed);
+            if (decisionCheck.success) {
+              sidecarType = "operator_decision";
+              sidecar = decisionCheck.data;
             } else {
-              stderr(
-                `Error: File does not match MinimaxH3VisualReviewSidecarSchema, MinimaxH3OperatorDecisionSidecarSchema, or MinimaxH3MatrixRowSchema:\nVisual review errors: ${visualCheck.error.message}\nOperator decision errors: ${decisionCheck.error.message}\nMatrix row errors: ${matrixCheck.error.message}`
-              );
-              return 1;
+              const matrixCheck = MinimaxH3MatrixRowSchema.safeParse(parsed);
+              if (matrixCheck.success) {
+                sidecarType = "matrix_row";
+                sidecar = matrixCheck.data;
+              } else {
+                stderr(
+                  `Error: File does not match MinimaxH3ContinuityReviewSidecarSchema, MinimaxH3VisualReviewSidecarSchema, MinimaxH3OperatorDecisionSidecarSchema, or MinimaxH3MatrixRowSchema:\nContinuity review errors: ${continuityCheck.error.message}\nVisual review errors: ${visualCheck.error.message}\nOperator decision errors: ${decisionCheck.error.message}\nMatrix row errors: ${matrixCheck.error.message}`
+                );
+                return 1;
+              }
             }
           }
         }
 
         // If --run-dir is provided, cross-validate against run descriptor/result
         const runDir = flags["run-dir"];
+        if (sidecarType === "continuity_review" && !runDir) {
+          stderr("Error: --run-dir is required when validating a continuity_review sidecar");
+          return 1;
+        }
         if (runDir) {
           const descriptor = await store.readDescriptor(runDir);
           if (sidecarType === "matrix_row") {
@@ -853,7 +973,54 @@ export async function runExperimentCli(
               return 1;
             }
 
-            if (sidecarType === "visual_review") {
+            if (sidecarType === "continuity_review") {
+              const result = await store.readResult(runDir);
+              if (!result) {
+                stderr(`Error: No result.json found in run directory "${runDir}"`);
+                return 1;
+              }
+              if (result.execution?.status !== "completed") {
+                stderr(
+                  `Error: Run execution status is "${result.execution?.status}", expected "completed"`
+                );
+                return 1;
+              }
+              if (!result.probe || result.probe.status !== "succeeded") {
+                stderr(
+                  `Error: Run probe status is "${result.probe?.status}", expected "succeeded"`
+                );
+                return 1;
+              }
+              if (!result.probe.outputFile) {
+                stderr("Error: Run probe outputFile is missing");
+                return 1;
+              }
+              const outputFilePath = resolve(runDir, result.probe.outputFile);
+              try {
+                const hashInfo = await store.hashFile(outputFilePath);
+                const sidecarObj = sidecar as { sourceOutputSha256: string };
+                if (hashInfo.sha256 !== sidecarObj.sourceOutputSha256) {
+                  stderr(
+                    `Error: Output file on disk SHA-256 "${hashInfo.sha256}" does not match sidecar sourceOutputSha256 "${sidecarObj.sourceOutputSha256}"`
+                  );
+                  return 1;
+                }
+              } catch (hashErr) {
+                stderr(
+                  `Error: Failed to hash output file "${outputFilePath}": ${(hashErr as Error).message}`
+                );
+                return 1;
+              }
+              const val = validateContinuityReview({
+                sidecarRaw: sidecar,
+                descriptor,
+                result
+              });
+              if (!val.valid) {
+                stderr(`Error: Continuity review validation failed:\n${val.errors.join("\n")}`);
+                return 1;
+              }
+            } else if (sidecarType === "visual_review") {
               const v = sidecar as { outputSha256: string };
               const result = await store.readResult(runDir);
               if (result?.probe.outputSha256 && v.outputSha256 !== result.probe.outputSha256) {
@@ -969,12 +1136,14 @@ export async function runExperimentCli(
         // Visual review was the only importable sidecar type; an
         // operator_decision sidecar had no way to reach result.json at
         // all except by hand-editing it, bypassing every check below.
-        // Detect which schema the file actually matches (same approach
-        // validate-sidecar already uses) and import either.
-        const visualCheck = MinimaxH3VisualReviewSidecarSchema.safeParse(sidecarRaw);
-        const decisionCheck = visualCheck.success
+        const continuityCheck = MinimaxH3ContinuityReviewSidecarSchema.safeParse(sidecarRaw);
+        const visualCheck = continuityCheck.success
           ? null
-          : MinimaxH3OperatorDecisionSidecarSchema.safeParse(sidecarRaw);
+          : MinimaxH3VisualReviewSidecarSchema.safeParse(sidecarRaw);
+        const decisionCheck =
+          continuityCheck.success || visualCheck?.success
+            ? null
+            : MinimaxH3OperatorDecisionSidecarSchema.safeParse(sidecarRaw);
 
         let descriptor: MinimaxH3AnyExperimentDescriptor;
         try {
@@ -990,7 +1159,40 @@ export async function runExperimentCli(
           return 1;
         }
 
-        if (visualCheck.success) {
+        if (continuityCheck.success) {
+          const sidecar = continuityCheck.data;
+          try {
+            const importRes = await importContinuityReview({
+              runDir,
+              sidecar,
+              store
+            });
+            if (!importRes.imported) {
+              stderr(`Error: Failed to import continuity review: ${importRes.reason}`);
+              return 1;
+            }
+            stdout(
+              JSON.stringify(
+                {
+                  status: "imported",
+                  sidecarType: "continuity_review",
+                  runId: sidecar.runId,
+                  rubricVersion: sidecar.rubricVersion,
+                  overallAdUsability: sidecar.dimensions.overallAdUsability.assessment,
+                  idempotent: importRes.idempotent
+                },
+                null,
+                2
+              )
+            );
+            return 0;
+          } catch (importErr) {
+            stderr(`Error: Failed to import continuity review: ${(importErr as Error).message}`);
+            return 1;
+          }
+        }
+
+        if (visualCheck?.success) {
           const sidecar = visualCheck.data;
           if (sidecar.runId !== descriptor.runId) {
             stderr(
@@ -1120,7 +1322,7 @@ export async function runExperimentCli(
         }
 
         stderr(
-          `Error: File does not match MinimaxH3VisualReviewSidecarSchema or MinimaxH3OperatorDecisionSidecarSchema:\nVisual review errors: ${visualCheck.error.message}\nOperator decision errors: ${decisionCheck?.error.message}`
+          `Error: File does not match MinimaxH3ContinuityReviewSidecarSchema, MinimaxH3VisualReviewSidecarSchema, or MinimaxH3OperatorDecisionSidecarSchema:\nContinuity review errors: ${continuityCheck.error.message}\nVisual review errors: ${visualCheck?.error.message}\nOperator decision errors: ${decisionCheck?.error.message}`
         );
         return 1;
       }
@@ -1359,13 +1561,22 @@ export async function runExperimentCli(
 
       case "catalog": {
         const routeFilter = flags["route"] as "i2v" | "ref2v" | undefined;
-        const variantFilter = (flags["attention-variant"] ?? flags["variant"]) as
-          MinimaxH3AttentionVariantName | undefined;
-
         if (routeFilter && routeFilter !== "i2v" && routeFilter !== "ref2v") {
           stderr(`Invalid --route "${routeFilter}". Must be "i2v" or "ref2v".`);
           return 1;
         }
+
+        if (booleanFlags.has("recipes") || flags["type"] === "recipes") {
+          let recipes = listSamplingRecipes();
+          if (routeFilter) {
+            recipes = recipes.filter((r) => r.compatibleRoute === routeFilter);
+          }
+          stdout(JSON.stringify(recipes, null, 2));
+          return 0;
+        }
+
+        const variantFilter = (flags["attention-variant"] ?? flags["variant"]) as
+          MinimaxH3AttentionVariantName | undefined;
 
         const coreRevision = flags["comfyui-core-revision"] ?? flags["core-revision"];
         const matchedVariantFilter = flags["matched-variant"]?.toLowerCase();
@@ -1385,6 +1596,443 @@ export async function runExperimentCli(
         }
 
         stdout(JSON.stringify(entries, null, 2));
+        return 0;
+      }
+
+      case "plan-study": {
+        const studyPath = flags["study"] ?? flags["file"];
+        if (!studyPath) {
+          stderr("Error: --study (or --file) is required for 'plan-study'");
+          return 1;
+        }
+        const resolvedStudyPath = resolveCliPath(studyPath)!;
+        let studyRaw: unknown;
+        try {
+          studyRaw = await store.readJsonFile(resolvedStudyPath);
+        } catch (err) {
+          stderr(`Error: Failed to read study spec file "${studyPath}": ${(err as Error).message}`);
+          return 1;
+        }
+        let study: MinimaxH3ContinuityStudySpec;
+        const studyParse = MinimaxH3ContinuityStudySpecSchema.safeParse(studyRaw);
+        if (studyParse.success) {
+          study = studyParse.data;
+        } else {
+          try {
+            study = expandContinuityStudyPlan(studyRaw as unknown as ExpandContinuityStudyOptions);
+          } catch (expandErr) {
+            stderr(
+              `Error: Study spec does not match MinimaxH3ContinuityStudySpecSchema:\nSpec errors: ${studyParse.error.message}\nExpansion error: ${(expandErr as Error).message}`
+            );
+            return 1;
+          }
+        }
+
+        const safetyCheck = validateSafetyBaselineLinks(study);
+        if (!safetyCheck.valid) {
+          stderr(
+            `Error: Study plan violates safety baseline links:\n${safetyCheck.errors.join("\n")}`
+          );
+          return 1;
+        }
+
+        const edgesCheck = validateStudyComparisonEdges(study);
+        if (!edgesCheck.valid) {
+          stderr(
+            `Error: Study plan violates comparison edge invariants:\n${edgesCheck.errors.join("\n")}`
+          );
+          return 1;
+        }
+
+        const outputPath = flags["output"];
+        if (outputPath) {
+          const resolvedOutputPath = resolveCliPath(outputPath)!;
+          await store.writeDurableJson(resolvedOutputPath, study);
+        }
+
+        stdout(JSON.stringify(study, null, 2));
+        return 0;
+      }
+
+      case "prepare-study": {
+        const studyPath = flags["study"] ?? flags["file"];
+        if (!studyPath) {
+          stderr("Error: --study (or --file) is required for 'prepare-study'");
+          return 1;
+        }
+        const targetHost = flags["target-host"];
+        const gpuUuid = flags["gpu-uuid"];
+        const comfyuiDir = resolveCliPath(flags["comfyui-dir"]);
+        const python = resolveCliPath(flags["python"]);
+
+        if (!targetHost || !gpuUuid || !comfyuiDir || !python) {
+          stderr(
+            "Error: Missing required target flags (--target-host, --gpu-uuid, --comfyui-dir, --python) for 'prepare-study'"
+          );
+          return 1;
+        }
+
+        const targetCellId = flags["cell"];
+        if (!targetCellId) {
+          stderr(
+            "Error: --cell is required for 'prepare-study'. Whole-study batch preparation is not permitted; prepare cells individually."
+          );
+          return 1;
+        }
+
+        const resolvedStudyPath = resolveCliPath(studyPath)!;
+        let studyRaw: unknown;
+        try {
+          studyRaw = await store.readJsonFile(resolvedStudyPath);
+        } catch (err) {
+          stderr(`Error: Failed to read study spec file "${studyPath}": ${(err as Error).message}`);
+          return 1;
+        }
+
+        let study: MinimaxH3ContinuityStudySpec;
+        const studyParse = MinimaxH3ContinuityStudySpecSchema.safeParse(studyRaw);
+        if (studyParse.success) {
+          study = studyParse.data;
+        } else {
+          try {
+            study = expandContinuityStudyPlan(studyRaw as unknown as ExpandContinuityStudyOptions);
+          } catch (expandErr) {
+            stderr(
+              `Error: Study spec does not match MinimaxH3ContinuityStudySpecSchema:\nSpec errors: ${studyParse.error.message}\nExpansion error: ${(expandErr as Error).message}`
+            );
+            return 1;
+          }
+        }
+
+        const found = study.cells.find((c) => c.cellId === targetCellId);
+        if (!found) {
+          stderr(
+            `Error: Cell "${targetCellId}" not found in study plan. Available cells: ${study.cells.map((c) => c.cellId).join(", ")}`
+          );
+          return 1;
+        }
+
+        if (found.status === "pending_source") {
+          stderr(
+            `Error: Cannot prepare cell "${found.cellId}": status is 'pending_source' (${found.pendingReason ?? "missing source"})`
+          );
+          return 1;
+        }
+
+        let humanReviewsForCombinedPrerequisites: MinimaxH3ContinuityReviewSidecar[] | undefined;
+        if (flags["prerequisite-reviews"]) {
+          const prereqPath = resolveCliPath(flags["prerequisite-reviews"])!;
+          let rawData: unknown;
+          try {
+            rawData = await store.readJsonFile(prereqPath);
+          } catch {
+            rawData = JSON.parse(await readFile(prereqPath, "utf8"));
+          }
+          const reviewsArray = Array.isArray(rawData) ? rawData : [rawData];
+          humanReviewsForCombinedPrerequisites = [];
+          for (const item of reviewsArray) {
+            const parsed = MinimaxH3ContinuityReviewSidecarSchema.safeParse(item);
+            if (!parsed.success) {
+              stderr(
+                `Error: Prerequisite review does not match MinimaxH3ContinuityReviewSidecarSchema: ${parsed.error.message}`
+              );
+              return 1;
+            }
+            humanReviewsForCombinedPrerequisites.push(parsed.data);
+          }
+        }
+
+        if (
+          found.arm === "combined" &&
+          (!humanReviewsForCombinedPrerequisites ||
+            humanReviewsForCombinedPrerequisites.length === 0)
+        ) {
+          stderr(
+            `Error: Cannot prepare combined arm cell "${found.cellId}" without independent evaluations; specify --prerequisite-reviews`
+          );
+          return 1;
+        }
+
+        const address = flags["address"] ?? "127.0.0.1";
+        const port = flags["port"] ? parseStrictInt(flags["port"]) : 8188;
+        if (port === null) {
+          stderr(`Error: Invalid --port "${flags["port"]}"`);
+          return 1;
+        }
+        const templatesDir = flags["templates-dir"]
+          ? resolveCliPath(flags["templates-dir"])
+          : undefined;
+
+        try {
+          const res = await prepareContinuityStudyCell({
+            study,
+            cellId: found.cellId,
+            outputRoot,
+            targetHost,
+            gpuUuid,
+            comfyUiDir: comfyuiDir,
+            pythonPath: python,
+            address,
+            port,
+            ...(templatesDir !== undefined ? { templatesDir } : {}),
+            ...(humanReviewsForCombinedPrerequisites !== undefined
+              ? { humanReviewsForCombinedPrerequisites }
+              : {}),
+            sourceBaseDir: process.cwd(),
+            store,
+            service,
+            preflight
+          });
+          stdout(
+            JSON.stringify(
+              {
+                status: "prepared",
+                studyId: study.studyId,
+                preparedCount: 1,
+                skippedCount: 0,
+                receipts: [
+                  {
+                    cellId: found.cellId,
+                    runId: res.descriptor.runId,
+                    runDir: `${outputRoot}/${res.descriptor.runId}`,
+                    descriptorDigest: res.descriptor.descriptorDigest ?? null
+                  }
+                ]
+              },
+              null,
+              2
+            )
+          );
+          return 0;
+        } catch (prepErr) {
+          stderr(`Error preparing cell "${found.cellId}": ${(prepErr as Error).message}`);
+          return 1;
+        }
+      }
+
+      case "review-plan": {
+        const studyPath = flags["study"] ?? flags["file"];
+        if (!studyPath) {
+          stderr("Error: --study (or --file) is required for 'review-plan'");
+          return 1;
+        }
+        const resolvedStudyPath = resolveCliPath(studyPath)!;
+        let studyRaw: unknown;
+        try {
+          studyRaw = await store.readJsonFile(resolvedStudyPath);
+        } catch (err) {
+          stderr(`Error: Failed to read study spec file "${studyPath}": ${(err as Error).message}`);
+          return 1;
+        }
+        const studyParse = MinimaxH3ContinuityStudySpecSchema.safeParse(studyRaw);
+        if (!studyParse.success) {
+          stderr(
+            `Error: Study spec does not match MinimaxH3ContinuityStudySpecSchema: ${studyParse.error.message}`
+          );
+          return 1;
+        }
+        const study = studyParse.data;
+
+        const runsArg = flags["runs"];
+        const runResults = new Map<
+          string,
+          {
+            descriptor: MinimaxH3ExperimentDescriptorV2;
+            result?: MinimaxH3ExperimentResultV2 | null;
+            outputSha256?: string | null;
+            outputSizeBytes?: number | null;
+            outputRelativePath?: string | null;
+            collectionStatus?: "pending" | "available" | "unavailable" | "failed";
+          }
+        >();
+
+        if (runsArg) {
+          const candidateDirs: string[] = [];
+          const entries = runsArg
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean);
+          for (const entry of entries) {
+            const resolvedPath = resolveCliPath(entry)!;
+            candidateDirs.push(resolvedPath);
+            if (resolvedPath.endsWith(".json")) {
+              try {
+                let jsonContent: unknown;
+                try {
+                  jsonContent = await store.readJsonFile(resolvedPath);
+                } catch {
+                  jsonContent = JSON.parse(await readFile(resolvedPath, "utf8"));
+                }
+                const runsList = Array.isArray(jsonContent)
+                  ? jsonContent
+                  : jsonContent &&
+                      typeof jsonContent === "object" &&
+                      Array.isArray((jsonContent as { runs?: unknown[] }).runs)
+                    ? (jsonContent as { runs: unknown[] }).runs
+                    : null;
+                if (runsList) {
+                  for (const item of runsList) {
+                    if (typeof item === "string") {
+                      candidateDirs.push(resolveCliPath(item)!);
+                    } else if (
+                      item &&
+                      typeof item === "object" &&
+                      typeof (item as { runDir?: string }).runDir === "string"
+                    ) {
+                      candidateDirs.push(resolveCliPath((item as { runDir: string }).runDir)!);
+                    }
+                  }
+                }
+              } catch {
+                // Not a valid json runs file
+              }
+            }
+            try {
+              const subEntries = await readdir(resolvedPath, { withFileTypes: true });
+              for (const dirent of subEntries) {
+                if (dirent.isDirectory()) {
+                  candidateDirs.push(`${resolvedPath}/${dirent.name}`);
+                }
+              }
+            } catch {
+              // Not a local directory or using mock store
+            }
+            const candidateStore = store as { files?: unknown };
+            if (candidateStore.files instanceof Map) {
+              const mockFiles = candidateStore.files as Map<string, string>;
+              for (const key of mockFiles.keys()) {
+                if (key.startsWith(entry) || key.startsWith(resolvedPath)) {
+                  const parts = key.split("/");
+                  if (parts.length > 1) {
+                    const dir = parts.slice(0, -1).join("/");
+                    if (!candidateDirs.includes(dir)) {
+                      candidateDirs.push(dir);
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          for (const runDir of candidateDirs) {
+            let descriptor: MinimaxH3ExperimentDescriptorV2 | null = null;
+            try {
+              descriptor = (await store.readDescriptor(runDir)) as MinimaxH3ExperimentDescriptorV2;
+            } catch {
+              try {
+                descriptor = (await store.readJsonFile(
+                  `${runDir}/descriptor.json`
+                )) as MinimaxH3ExperimentDescriptorV2;
+              } catch {
+                continue;
+              }
+            }
+            if (!descriptor) continue;
+
+            let cellId: string | null = null;
+            try {
+              const studyLink = await store.readJsonFile<{ studyId?: string; cellId?: string }>(
+                `${runDir}/study_link.json`
+              );
+              if (studyLink?.cellId) {
+                if (!studyLink.studyId || studyLink.studyId === study.studyId) {
+                  cellId = studyLink.cellId;
+                }
+              }
+            } catch {
+              // ignore
+            }
+
+            if (!cellId && descriptor.operatorLabel) {
+              const prefix = `${study.studyId}:`;
+              if (descriptor.operatorLabel.startsWith(prefix)) {
+                cellId = descriptor.operatorLabel.slice(prefix.length);
+              }
+            }
+
+            if (!cellId) {
+              for (const c of study.cells) {
+                const expectedRunId = `${study.studyId}-${c.cellId}`
+                  .toLowerCase()
+                  .replace(/[^a-z0-9._-]/g, "-");
+                if (descriptor.runId === expectedRunId) {
+                  cellId = c.cellId;
+                  break;
+                }
+              }
+            }
+
+            if (!cellId) continue;
+
+            let result: MinimaxH3ExperimentResultV2 | null = null;
+            try {
+              result = (await store.readResult(runDir)) as MinimaxH3ExperimentResultV2 | null;
+            } catch {
+              try {
+                result = (await store.readJsonFile(
+                  `${runDir}/result.json`
+                )) as MinimaxH3ExperimentResultV2 | null;
+              } catch {
+                result = null;
+              }
+            }
+
+            let outputSha256: string | null = null;
+            let outputSizeBytes: number | null = null;
+            let outputRelativePath: string | null = null;
+            let collectionStatus: "pending" | "available" | "unavailable" | "failed" = "pending";
+
+            if (result) {
+              if (result.execution?.status === "failed") {
+                collectionStatus = "failed";
+              } else if (result.probe?.outputFile) {
+                outputRelativePath = result.probe.outputFile;
+                const outputFilePath = resolve(runDir, result.probe.outputFile);
+                try {
+                  const hashInfo = await store.hashFile(outputFilePath);
+                  if (result.probe.outputSha256 && hashInfo.sha256 !== result.probe.outputSha256) {
+                    collectionStatus = "unavailable";
+                  } else {
+                    collectionStatus = "available";
+                    outputSha256 = hashInfo.sha256;
+                    outputSizeBytes = hashInfo.sizeBytes;
+                  }
+                } catch {
+                  collectionStatus = "unavailable";
+                }
+              } else {
+                collectionStatus = "unavailable";
+              }
+            }
+
+            runResults.set(cellId, {
+              descriptor,
+              result,
+              outputSha256,
+              outputSizeBytes,
+              outputRelativePath,
+              collectionStatus
+            });
+          }
+        }
+
+        const storyboardPlan = buildContinuityStoryboardPlan({ study, runResults });
+        const reviewManifest = buildContinuityReviewManifest(study, storyboardPlan);
+
+        const combinedReviewPlan = {
+          studyId: study.studyId,
+          studyDigest: study.studyDigest,
+          storyboardPlan,
+          reviewManifest
+        };
+
+        const outputPath = flags["output"];
+        if (outputPath) {
+          const resolvedOutputPath = resolveCliPath(outputPath)!;
+          await store.writeDurableJson(resolvedOutputPath, combinedReviewPlan);
+        }
+
+        stdout(JSON.stringify(combinedReviewPlan, null, 2));
         return 0;
       }
 

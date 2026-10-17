@@ -1,6 +1,9 @@
 {
   "repository": "https://github.com/veda-sparse/Veda-on-ComfyUI",
   "revision": "67e4eb5541b648555563144401ebaba832bd73ec",
+  "status": "schema_verified",
+  "targetCoreRevision": "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+  "targetCoreStatus": "candidate_unresolved",
   "nodeId": "VedaSparseAttention",
   "classType": "VedaSparseAttention",
   "sourceFile": "veda_comfy/nodes.py",
@@ -24,5 +27,11 @@
   },
   "returnTypes": ["MODEL"],
   "category": "model/patch/minimax",
-  "notes": "Corrected against the pinned node's own define_schema(). The prior version of this fixture declared a fabricated 'sparse_ratio: FLOAT' field that does not exist in the upstream schema. generated_sparsity/reference_sparsity actual default comes from the module-private veda_settings.DEFAULT_BUDGET constant, which this audit has not independently inspected; this fixture intentionally does not guess that value."
+  "exclusionHooks": {
+    "patchClass": "VedaPatch",
+    "sourceFile": "veda_comfy/comfy_patch.py",
+    "decisionMethods": ["make_override", "_routed_forward", "_dense_reason", "_block_reason"],
+    "supportedExclusionReasons": ["full-attention layer", "full-attention step"]
+  },
+  "notes": "Corrected against the pinned node's own define_schema(). The prior version of this fixture declared a fabricated 'sparse_ratio: FLOAT' field that does not exist in the upstream schema. generated_sparsity/reference_sparsity actual default comes from the module-private veda_settings.DEFAULT_BUDGET constant, which this audit has not independently inspected; this fixture intentionally does not guess that value. Pinned target core commit 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf is unavailable upstream (HTTP 422), so candidate remains blocked."
 }

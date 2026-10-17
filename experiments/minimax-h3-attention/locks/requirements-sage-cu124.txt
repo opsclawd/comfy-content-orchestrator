@@ -1,0 +1,175 @@
+# ==============================================================================
+# Lockfile: SageAttention 2.1.1 Isolated Candidate Environment
+# ==============================================================================
+# Platform Metadata:
+#   OS: Linux x86_64 (glibc >= 2.35)
+#   Python: CPython 3.12 (ABI cp312)
+#   CUDA: 12.4
+#   PyTorch Toolchain: 2.5.1+cu124
+#
+# GOVERNANCE NOTICE:
+# Candidate admission requires sageattention==2.1.1 (runnable: false, review_required).
+# Artifact-verified wheel distributions for CUDA 12.4 matching version 2.1.1 are
+# currently unavailable externally (PyPI distributes only up to 1.0.6, which violates
+# the candidate admission contract).
+#
+# This lockfile is NOT a verified complete dependency closure. It pins pip/ComfyUI/
+# PyTorch-adjacent packages that could be hash-verified from this host's reachable
+# indexes at the time it was authored, but it is explicitly missing the NVIDIA CUDA
+# 12.4 runtime packages (nvidia-cuda-nvrtc-cu12, nvidia-cuda-runtime-cu12,
+# nvidia-cuda-cupti-cu12, nvidia-cudnn-cu12, nvidia-cublas-cu12, nvidia-cufft-cu12,
+# nvidia-curand-cu12, nvidia-cusolver-cu12, nvidia-cusparse-cu12, nvidia-nccl-cu12,
+# nvidia-nvtx-cu12, nvidia-nvjitlink-cu12) and triton==3.1.0 that PyPI's own published
+# metadata for torch==2.5.1 declares as required on linux/x86_64 -- their exact pinned
+# versions were no longer resolvable from this host's package indexes to obtain a
+# verified hash, and no hash is included here on an unverified guess. Resolving and
+# hash-locking that remaining set is required before this can be called complete.
+# The installation recipe remains BLOCKED until verified wheel hashes for
+# sageattention==2.1.1 AND the CUDA runtime set above are published, audited, and
+# cleared through governance.
+# ==============================================================================
+
+--extra-index-url https://download.pytorch.org/whl/cu124
+
+
+# Build & Installation Tooling
+pip==24.2 \
+    --hash=sha256:2cd581cf58ab7fcfca4ce8efa6dcacd0de5bf8d0a3eb9ec927e07405f4d9e2a2
+setuptools==75.1.0 \
+    --hash=sha256:35ab7fd3bcd95e6b7fd704e4a1539513edad446c097797f2985e0e4b960772f2
+wheel==0.44.0 \
+    --hash=sha256:2376a90c98cc337d18623527a97c31797bd02bad0033d41547043a1cbfbe448f
+
+# PyTorch Core Toolchain (CUDA 12.4)
+torch==2.5.1+cu124 \
+    --hash=sha256:bf6484bfe5bc4f92a4a1a1bf553041505e19a911f717065330eb061afe0e14d7
+torchvision==0.20.1+cu124 \
+    --hash=sha256:d1053ec5054549e7dac2613b151bffe323f3c924939d296df4d7d34925aaf3ad
+torchaudio==2.5.1+cu124 \
+    --hash=sha256:9902598e0330aeead0bc1545837804eb268549b9b4ce41ae3ca51b2384904e89
+
+# ComfyUI Core Dependencies (55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc)
+aiohttp==3.10.10 \
+    --hash=sha256:007ec22fbc573e5eb2fb7dec4198ef8f6bf2fe4ce20020798b2eb5d0abda6138 \
+    --hash=sha256:0b00807e2605f16e1e198f33a53ce3c4523114059b0c09c337209ae55e3823a8 \
+    --hash=sha256:50edbcad60d8f0e3eccc68da67f37268b5144ecc34d59f27a02f9611c1d4eec7 \
+    --hash=sha256:9627cc1a10c8c409b5822a92d57a77f383b554463d1884008e051c32ab1b3742 \
+    --hash=sha256:a45d85cf20b5e0d0aa5a8dca27cce8eddef3292bc29d72dcad1641f4ed50aa16
+k-diffusion==0.1.1.post1 \
+    --hash=sha256:b4bdcc74e35dd66df5d25433ea76b19edeaeaf2aad05ed97438be447cf4f5ee1
+numpy==1.26.4 \
+    --hash=sha256:675d61ffbfa78604709862923189bad94014bef562cc35cf61d3a07bba02a7ed \
+    --hash=sha256:9fad7dcb1aac3c7f0584a5a8133e3a43eeb2fe127f47e3632d43d677c66c102b
+pillow==10.4.0 \
+    --hash=sha256:29dbdc4207642ea6aad70fbde1a9338753d33fb23ed6956e706936706f52dd80 \
+    --hash=sha256:86dcb5a1eb778d8b25659d5e4341269e8590ad6b4e8b44d9f4b07f8d136c414a \
+    --hash=sha256:bf2342ac639c4cf38799a44950bbc2dfcb685f052b9e262f446482afaf4bffca \
+    --hash=sha256:f5b92f4d70791b4a67157321c4e8225d60b119c5cc9aee8ecf153aace4aad4ef
+psutil==6.0.0 \
+    --hash=sha256:5fd9a97c8e94059b0ef54a7d4baf13b405011176c3b6ff257c247cae0d560ecd \
+    --hash=sha256:6ed2440ada7ef7d0d608f20ad89a04ec47d2d3ab7190896cd62ca5fc4fe08bf0 \
+    --hash=sha256:e2e8d0054fc88153ca0544f5c4d554d42e33df2e009c4ff42284ac9ebdef4132
+pyyaml==6.0.2 \
+    --hash=sha256:1f71ea527786de97d1a0cc0eacd1defc0985dcf6b3f17bb77dcfc8c34bec4dc5 \
+    --hash=sha256:80bab7bfc629882493af4aa31a4cfa43a4c57c83813253626916b8c7ada83476 \
+    --hash=sha256:9b22676e8097e9e22e36d6b7bda33190d0d400f345f23d4065d48f4ca7ae0425
+safetensors==0.4.5 \
+    --hash=sha256:1524b54246e422ad6fb6aea1ac71edeeb77666efa67230e1faf6999df9b2e27f \
+    --hash=sha256:3685ce7ed036f916316b567152482b7e959dc754fcc4a8342333d222e05f407c \
+    --hash=sha256:65573dc35be9059770808e276b017256fa30058802c29e1038eb1c00028502ea \
+    --hash=sha256:b3139098e3e8b2ad7afbca96d30ad29157b50c90861084e69fcb80dec7430461 \
+    --hash=sha256:dde2bf390d25f67908278d6f5d59e46211ef98e44108727084d4637ee70ab4f1 \
+    --hash=sha256:fd33da8e9407559f8779c82a0448e2133737f922d71f884da27184549416bfed
+scipy==1.14.1 \
+    --hash=sha256:30ac8812c1d2aab7131a79ba62933a2a76f582d5dbbc695192453dae67ad6310 \
+    --hash=sha256:8f9ea80f2e65bdaa0b7627fb00cbeb2daf163caa015e59b7516395fe3bd1e066
+torchsde==0.2.6 \
+    --hash=sha256:19bf7ff02eec7e8e46ba1cdb4aa0f9db1c51d492524a16975234b467f7fc463b
+tqdm==4.66.5 \
+    --hash=sha256:90279a3770753eafc9194a0364852159802111925aa30eb3f9d85b0e805ac7cd
+transformers==4.45.2 \
+    --hash=sha256:c551b33660cfc815bae1f9f097ecfd1e65be623f13c6ee0dda372bd881460210
+
+# Transitive Runtime Dependencies
+aiohappyeyeballs==2.4.3 \
+    --hash=sha256:8a7a83727b2756f394ab2895ea0765a0a8c475e3c71e98d43d76f22b4b435572
+aiosignal==1.3.1 \
+    --hash=sha256:f8376fb07dd1e86a584e4fcdec80b36b7f81aac666ebc724e2c090300dd83b17
+attrs==24.2.0 \
+    --hash=sha256:81921eb96de3191c8258c199618104dd27ac608d9366f5e35d011eae1867ede2
+certifi==2024.8.30 \
+    --hash=sha256:922820b53db7a7257ffbda3f597266d435245903d80737e34f8a45ff3e3230d8
+charset-normalizer==3.4.0 \
+    --hash=sha256:07afec21bbbbf8a5cc3651aa96b980afe2526e7f048fdfb7f1014d84acc8b6d8 \
+    --hash=sha256:3d59d125ffbd6d552765510e3f31ed75ebac2c7470c7274195b9161a32350284 \
+    --hash=sha256:8cda06946eac330cbe6598f77bb54e690b4ca93f593dee1568ad22b04f347c15 \
+    --hash=sha256:b295729485b06c1a0683af02a9e42d2caa9db04a373dc38a6a58cdd1e8abddf1 \
+    --hash=sha256:ee803480535c44e7f5ad00788526da7d85525cfefaf8acf8ab9a310000be4b03 \
+    --hash=sha256:fe9f97feb71aa9896b81973a7bbada8c49501dc73e58a10fcef6663af95e5079
+filelock==3.16.1 \
+    --hash=sha256:2082e5703d51fbf98ea75855d9d5527e33d8ff23099bec374a134febee6946b0
+frozenlist==1.4.1 \
+    --hash=sha256:04ced3e6a46b4cfffe20f9ae482818e34eba9b5fb0ce4056e4cc9b6e212d09b7 \
+    --hash=sha256:5c3894db91f5a489fc8fa6a9991820f368f0b3cbdb9cd8849547ccfab3392d86 \
+    --hash=sha256:780d3a35680ced9ce682fbcf4cb9c2bad3136eeff760ab33707b71db84664e3a \
+    --hash=sha256:8aefbba5f69d42246543407ed2461db31006b0f76c4e32dfd6f42215a2c41d09 \
+    --hash=sha256:9acbb16f06fe7f52f441bb6f413ebae6c37baa6ef9edd49cdd567216da8600cd \
+    --hash=sha256:ba60bb19387e13597fb059f32cd4d59445d7b18b69a745b8f8e5db0346f33480
+fsspec==2024.9.0 \
+    --hash=sha256:a0947d552d8a6efa72cc2c730b12c41d043509156966cca4fb157b0f2a0c574b
+huggingface-hub==0.25.2 \
+    --hash=sha256:1897caf88ce7f97fe0110603d8f66ac264e3ba6accdf30cd66cc0fed5282ad25
+idna==3.10 \
+    --hash=sha256:946d195a0d259cbba61165e88e65941f16e9b36ea6ddb97f00452bae8b1287d3
+jinja2==3.1.4 \
+    --hash=sha256:bc5dd2abb727a5319567b7a813e6a2e7318c39f4f487cfe6c89c6f9c7d25197d
+markupsafe==3.0.1 \
+    --hash=sha256:5a4cb365cb49b750bdb60b846b0c0bc49ed62e59a76635095a179d440540c346 \
+    --hash=sha256:62fada2c942702ef8952754abfc1a9f7658a4d5460fabe95ac7ec2cbe0d02abc \
+    --hash=sha256:ee3941769bd2522fe39222206f6dd97ae83c442a94c90f2b7a25d847d40f4729
+mpmath==1.3.0 \
+    --hash=sha256:a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c
+multidict==6.1.0 \
+    --hash=sha256:10a9b09aba0c5b48c53761b7c720aaaf7cf236d5fe394cd399c7ba662d5f9966 \
+    --hash=sha256:48e171e52d1c4d33888e529b999e5900356b9ae588c2f09a52dcefb158b27506 \
+    --hash=sha256:4b820514bfc0b98a30e3d85462084779900347e4d49267f747ff54060cc33925 \
+    --hash=sha256:50b3a2710631848991d0bf7de077502e8994c804bb805aeb2925a981de58ec2e \
+    --hash=sha256:55b6d90641869892caa9ca42ff913f7ff1c5ece06474fbd32fb2cf6834726c95 \
+    --hash=sha256:b58c621844d55e71c1b7f7c498ce5aa6985d743a1a59034c57a905b3f153c1ef
+networkx==3.4.1 \
+    --hash=sha256:e30a87b48c9a6a7cc220e732bffefaee585bdb166d13377734446ce1a0620eed
+packaging==24.1 \
+    --hash=sha256:5b8f2217dbdbd2f7f384c41c628544e6d52f2d0f53c6d0c3ea61aa5d1d7ff124
+regex==2024.9.11 \
+    --hash=sha256:23b30c62d0f16827f2ae9f2bb87619bc4fba2044911e2e6c2eb1af0161cdb766 \
+    --hash=sha256:85ab7824093d8f10d44330fe1e6493f756f252d145323dd17ab6b48733ff6c0a \
+    --hash=sha256:8dee5b4810a89447151999428fe096977346cf2f29f4d5e29609d2e19e0199c9 \
+    --hash=sha256:a8f877c89719d759e52783f7fe6e1c67121076b87b40542966c02de5503ace42 \
+    --hash=sha256:ee439691d8c23e76f9802c42a95cfeebf9d47cf4ffd06f18489122dbb0a7ad64
+requests==2.32.3 \
+    --hash=sha256:70761cfe03c773ceb22aa2f671b4757976145175cdfca038c02654d061d6dcc6
+sympy==1.13.1 \
+    --hash=sha256:db36cdc64bf61b9b24578b6f7bab1ecdd2452cf008f34faa33776680c26d66f8
+tokenizers==0.20.0 \
+    --hash=sha256:06caabeb4587f8404e0cd9d40f458e9cba3e815c8155a38e579a74ff3e2a4301 \
+    --hash=sha256:3d7e559436a07dc547f22ce1101f26d8b2fad387e28ec8e7e1e3b11695d681d8 \
+    --hash=sha256:626403860152c816f97b649fd279bd622c3d417678c93b4b1a8909b6380b69a8 \
+    --hash=sha256:8768f964f23f5b9f50546c0369c75ab3262de926983888bbe8b98be05392a79c \
+    --hash=sha256:9c1b88fa9e5ff062326f4bf82681da5a96fca7104d921a6bd7b1e6fcf224af26 \
+    --hash=sha256:e48afb75e50449848964e4a67b0da01261dd3aa8df8daecf10db8fd7f5b076eb
+trampoline==0.1.2 \
+    --hash=sha256:36cc9a4ff9811843d177fc0e0740efbd7da39eadfe6e50c9e2937cbc06d899d9
+typing-extensions==4.12.2 \
+    --hash=sha256:04e5ca0351e0f3f85c6853954072df659d0d13fac324d0072316b67d7794700d
+urllib3==2.2.3 \
+    --hash=sha256:ca899ca043dcb1bafa3e262d73aa25c465bfb49e0bd9dd5d59f1d0acba2f8fac
+yarl==1.15.2 \
+    --hash=sha256:0d3105efab7c5c091609abacad33afff33bdff0035bece164c98bcf5a85ef90a \
+    --hash=sha256:243fbbbf003754fe41b5bdf10ce1e7f80bcc70732b5b54222c124d6b4c2ab31c \
+    --hash=sha256:30c3ff305f6e06650a761c4393666f77384f1cc6c5c0251965d6bfa5fbc88f7f \
+    --hash=sha256:353665775be69bbfc6d54c8d134bfc533e332149faeddd631b0bc79df0897f46 \
+    --hash=sha256:553dad9af802a9ad1a6525e7528152a015b85fb8dbf764ebfc755c695f488367 \
+    --hash=sha256:856b7f1a7b98a8c31823285786bd566cf06226ac4f38b3ef462f593c608a9bd6
+
+# Candidate Package (BLOCKED: Pending verified 2.1.1 wheel artifact with hashes)
+# sageattention==2.1.1

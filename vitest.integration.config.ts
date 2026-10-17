@@ -20,7 +20,9 @@ export default defineConfig({
       "packages/infrastructure/src/whisperx/**/*.integration.test.ts"
     ],
     environment: "node",
-    fileParallelism: false,
+    fileParallelism: true,
+    minWorkers: 1,
+    maxWorkers: 3,
     testTimeout: 120_000,
     hookTimeout: 120_000
   },

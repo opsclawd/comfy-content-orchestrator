@@ -22,6 +22,9 @@ import {
   MinimaxH3StopRecommendationSchema,
   MinimaxH3ExperimentDescriptorSchema,
   MinimaxH3ExperimentResultSchema,
+  PINNED_COMFYUI_CORE_REVISION,
+  PINNED_COMFYUI_SOURCE_HASHES,
+  FASTH3_ISOLATED_CORE_REVISION,
   type MinimaxH3ExperimentDescriptor,
   type MinimaxH3ExperimentResult
 } from "./minimax-h3-experiment.js";
@@ -31,7 +34,16 @@ import {
   MinimaxH3SourceEvidenceRefSchema,
   MinimaxH3AttentionRequestSchema,
   MinimaxH3AttentionObservationSchema,
-  MinimaxH3AttentionEventMetadataSchema
+  MinimaxH3AttentionEventMetadataSchema,
+  MinimaxH3AttentionTopologySchema,
+  MinimaxH3CapabilityHandshakeSchema,
+  MinimaxH3AttentionIdentityEnvelopeSchema,
+  computeAttentionTopologyDigest,
+  STANDARD_MINIMAX_H3_HOOKS,
+  type MinimaxH3AttentionPatchNode,
+  type MinimaxH3AttentionTopology,
+  type MinimaxH3AttentionCatalogEntry,
+  type MinimaxH3AttentionObservation
 } from "./minimax-h3-attention.js";
 
 export const MinimaxH3ExperimentDescriptorV1Schema = MinimaxH3ExperimentDescriptorSchema;
@@ -65,6 +77,588 @@ export const PINNED_H3_CHECKPOINTS = Object.freeze({
     sha256: "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a"
   }
 });
+
+export const PINNED_H3_LORAS = Object.freeze({
+  fl2vaTurbo8: {
+    filename: "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+    sha256: "2339acdf19bfe123f46b971ea35d367a84adb85de43627e1eceafa5a5b2b111e",
+    sizeBytes: 1956193000
+  },
+  ref2vaTurbo4: {
+    filename: "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+    sha256: "5b9ab5ade15d0775676d01a907268a69a1468dc6033b3b0d3ded5502f3ebb84c",
+    sizeBytes: 1956193000
+  }
+});
+
+export const PINNED_FASTH3_CHECKPOINT = Object.freeze({
+  filename: "fastvideo_fasth3_8step_v2_pruned_int8_convrot.safetensors",
+  sha256: "0922785978dc9bfe1adf27d8b291b0ca763f9f165f882e6cb297c72fbb6deda8",
+  sizeBytes: 22128378696
+});
+
+// ---------------------------------------------------------------------------
+// Step Reduction & Distillation Sampling Recipes
+// ---------------------------------------------------------------------------
+export const MINIMAX_H3_SAMPLING_RECIPE_NAMES = [
+  "canonical-base-20",
+  "fl2va-base-20",
+  "fl2va-turbo-8",
+  "ref2va-turbo-4",
+  "fasth3-i2v-8"
+] as const;
+
+export const MinimaxH3SamplingRecipeNameSchema = z.enum(MINIMAX_H3_SAMPLING_RECIPE_NAMES);
+export type MinimaxH3SamplingRecipeName = z.infer<typeof MinimaxH3SamplingRecipeNameSchema>;
+
+export const MinimaxH3SamplingRecipeSchema = z
+  .object({
+    name: MinimaxH3SamplingRecipeNameSchema,
+    recipeVersion: z.literal(1),
+    recipeDigest: sha256HashSchema,
+    taskFamily: z.enum(["i2v", "ref2v", "t2v"]),
+    compatibleRoute: z.enum(["i2v", "ref2v"]),
+    diffusionModel: z
+      .object({
+        filename: z.string().min(1),
+        sha256: sha256HashSchema,
+        sizeBytes: z.number().int().positive(),
+        quantization: z.string().min(1),
+        repository: z.string().min(1),
+        revision: z.string().min(1)
+      })
+      .strict(),
+    lora: z
+      .object({
+        filename: z.string().min(1),
+        sha256: sha256HashSchema,
+        sizeBytes: z.number().int().positive(),
+        strengthModel: z.number(),
+        repository: z.string().min(1),
+        revision: z.string().min(1)
+      })
+      .strict()
+      .nullable()
+      .optional(),
+    expectedSteps: z.number().int().positive(),
+    sampler: z.string().min(1),
+    scheduler: z.string().min(1),
+    denoise: z.number().min(0).max(1),
+    sigmaShift: z
+      .object({
+        enabled: z.boolean(),
+        videoShift: z.number(),
+        audioShift: z.number()
+      })
+      .strict()
+      .nullable()
+      .optional(),
+    conditioningMode: z.enum(["frame_anchored", "reference_directed"]),
+    attentionTopology: MinimaxH3AttentionTopologySchema.optional(),
+    requiredRuntimeRevision: z.string().min(1),
+    licensing: z
+      .object({
+        status: z.enum(["approved", "restricted", "review_required", "unverified"]),
+        licenseSourceRef: z.string().min(1),
+        notes: z.string().optional()
+      })
+      .strict(),
+    sourceReferences: z.array(MinimaxH3SourceEvidenceRefSchema)
+  })
+  .strict()
+  .superRefine((val, ctx) => {
+    let canonicalRecipe: MinimaxH3SamplingRecipe;
+    try {
+      validateRecipeRouteCompatibility(val.name, val.compatibleRoute);
+      canonicalRecipe = getSamplingRecipe(val.name, val.compatibleRoute);
+    } catch (err) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: (err as Error).message,
+        path: []
+      });
+      return;
+    }
+
+    const recomputedDigest = computeSamplingRecipeDigest(val);
+    if (val.recipeDigest !== recomputedDigest) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `samplingRecipe recipeDigest mismatch: expected ${recomputedDigest}, got ${val.recipeDigest}`,
+        path: ["recipeDigest"]
+      });
+    }
+    if (val.recipeDigest !== canonicalRecipe.recipeDigest) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `samplingRecipe recipeDigest mismatch with authoritative catalog for "${val.name}": expected ${canonicalRecipe.recipeDigest}, got ${val.recipeDigest}`,
+        path: ["recipeDigest"]
+      });
+    }
+    if (val.recipeVersion !== canonicalRecipe.recipeVersion) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `samplingRecipe recipeVersion mismatch for "${val.name}": expected ${canonicalRecipe.recipeVersion}, got ${val.recipeVersion}`,
+        path: ["recipeVersion"]
+      });
+    }
+    if (val.taskFamily !== canonicalRecipe.taskFamily) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `samplingRecipe taskFamily mismatch for "${val.name}": expected ${canonicalRecipe.taskFamily}, got ${val.taskFamily}`,
+        path: ["taskFamily"]
+      });
+    }
+    if (val.compatibleRoute !== canonicalRecipe.compatibleRoute) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Sampling recipe "${val.name}" is incompatible with route "${val.compatibleRoute}"`,
+        path: ["compatibleRoute"]
+      });
+    }
+    if (
+      val.diffusionModel.filename !== canonicalRecipe.diffusionModel.filename ||
+      val.diffusionModel.sha256 !== canonicalRecipe.diffusionModel.sha256 ||
+      val.diffusionModel.sizeBytes !== canonicalRecipe.diffusionModel.sizeBytes ||
+      val.diffusionModel.quantization !== canonicalRecipe.diffusionModel.quantization ||
+      val.diffusionModel.repository !== canonicalRecipe.diffusionModel.repository ||
+      val.diffusionModel.revision !== canonicalRecipe.diffusionModel.revision
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `samplingRecipe diffusionModel mismatch for "${val.name}"`,
+        path: ["diffusionModel"]
+      });
+    }
+    if (canonicalRecipe.lora) {
+      if (
+        !val.lora ||
+        val.lora.filename !== canonicalRecipe.lora.filename ||
+        val.lora.sha256 !== canonicalRecipe.lora.sha256 ||
+        val.lora.sizeBytes !== canonicalRecipe.lora.sizeBytes ||
+        val.lora.strengthModel !== canonicalRecipe.lora.strengthModel ||
+        val.lora.repository !== canonicalRecipe.lora.repository ||
+        val.lora.revision !== canonicalRecipe.lora.revision
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `samplingRecipe lora mismatch for "${val.name}"`,
+          path: ["lora"]
+        });
+      }
+    } else if (val.lora) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `samplingRecipe lora must be null for "${val.name}"`,
+        path: ["lora"]
+      });
+    }
+    if (val.expectedSteps !== canonicalRecipe.expectedSteps) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `samplingRecipe expectedSteps mismatch for "${val.name}": expected ${canonicalRecipe.expectedSteps}, got ${val.expectedSteps}`,
+        path: ["expectedSteps"]
+      });
+    }
+    if (
+      val.sampler !== canonicalRecipe.sampler ||
+      val.scheduler !== canonicalRecipe.scheduler ||
+      val.denoise !== canonicalRecipe.denoise
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `samplingRecipe sampler/scheduler/denoise mismatch for "${val.name}"`,
+        path: ["sampler"]
+      });
+    }
+    if (canonicalRecipe.sigmaShift) {
+      if (
+        !val.sigmaShift ||
+        val.sigmaShift.enabled !== canonicalRecipe.sigmaShift.enabled ||
+        val.sigmaShift.videoShift !== canonicalRecipe.sigmaShift.videoShift ||
+        val.sigmaShift.audioShift !== canonicalRecipe.sigmaShift.audioShift
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `samplingRecipe sigmaShift mismatch for "${val.name}"`,
+          path: ["sigmaShift"]
+        });
+      }
+    } else if (val.sigmaShift) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `samplingRecipe sigmaShift must be null or omitted for "${val.name}"`,
+        path: ["sigmaShift"]
+      });
+    }
+    if (val.conditioningMode !== canonicalRecipe.conditioningMode) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `samplingRecipe conditioningMode mismatch for "${val.name}": expected ${canonicalRecipe.conditioningMode}, got ${val.conditioningMode}`,
+        path: ["conditioningMode"]
+      });
+    }
+    if (val.requiredRuntimeRevision !== canonicalRecipe.requiredRuntimeRevision) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `samplingRecipe requiredRuntimeRevision mismatch for "${val.name}": expected ${canonicalRecipe.requiredRuntimeRevision}, got ${val.requiredRuntimeRevision}`,
+        path: ["requiredRuntimeRevision"]
+      });
+    }
+    if (
+      val.licensing.status !== canonicalRecipe.licensing.status ||
+      val.licensing.licenseSourceRef !== canonicalRecipe.licensing.licenseSourceRef
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `samplingRecipe licensing mismatch for "${val.name}"`,
+        path: ["licensing"]
+      });
+    }
+    if (canonicalRecipe.attentionTopology) {
+      if (
+        !val.attentionTopology ||
+        val.attentionTopology.backend !== canonicalRecipe.attentionTopology.backend ||
+        val.attentionTopology.patchCount !== canonicalRecipe.attentionTopology.patchCount ||
+        val.attentionTopology.topologyDigest !== canonicalRecipe.attentionTopology.topologyDigest
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `samplingRecipe attentionTopology mismatch for "${val.name}"`,
+          path: ["attentionTopology"]
+        });
+      }
+    } else if (val.attentionTopology) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `samplingRecipe attentionTopology must be null or omitted for "${val.name}"`,
+        path: ["attentionTopology"]
+      });
+    }
+  });
+export type MinimaxH3SamplingRecipe = z.infer<typeof MinimaxH3SamplingRecipeSchema>;
+
+export function computeSamplingRecipeDigest(
+  recipe: Omit<MinimaxH3SamplingRecipe, "recipeDigest"> | MinimaxH3SamplingRecipe
+): string {
+  const rest = { ...(recipe as Record<string, unknown>) };
+  delete rest.recipeDigest;
+  return sha256Hex(canonicalizeJson(rest));
+}
+
+export { FASTH3_ISOLATED_CORE_REVISION };
+
+export const FASTH3_COMFYUI_SOURCE_HASHES = Object.freeze({
+  "comfy/model_management.py": "ef3f3af0657c1b022ad69b25928fa52dd429db9aed9cb688e89c7fbe68ab50cd",
+  "main.py": "8fc2cafc8e19e6e4b9134a2f6eba70b0e93d9d341dde01a40534dca89ca11727",
+  "comfy/cli_args.py": "13cafedf0b724c3b04918a18a06507b86287fb66af8147d49b343d67c5c85c0a",
+  "comfy_extras/nodes_sparse_attention.py":
+    "f205faa57e3d348ead3f60e59caed24c31ebf2976d8d50e9eaaa2e55b36ef067",
+  "comfy_extras/nodes_minimax_h3.py":
+    "62ec72d4f3b879640dbd41b959a6c1112a82b77478509323094f49dae17fffdb",
+  "comfy_extras/nodes_model_advanced.py":
+    "59bcf2c72de0f931383b74c9be5b6fc2ced06a315277d34631ae5ac9ac90fa91"
+});
+
+export const PINNED_COMFYUI_NODES_PY_SHA256 =
+  "38f918673c5300bc2d355e02f1131a7b1f97548337e7623754dafaea412008e8";
+
+export const PINNED_COMFYUI_NODES_MINIMAX_H3_PY_SHA256 =
+  "62ec72d4f3b879640dbd41b959a6c1112a82b77478509323094f49dae17fffdb";
+
+export function buildFastH3AttentionTopology(): MinimaxH3AttentionTopology {
+  const patches: MinimaxH3AttentionPatchNode[] = [
+    {
+      nodeId: "302",
+      classType: "ModelAttentionBackend",
+      inputs: {
+        attention: "comfy kitchen attention"
+      }
+    },
+    {
+      nodeId: "303",
+      classType: "BlockSparseAttention",
+      inputs: {
+        selection: "vsa",
+        "selection.keep_percent": 10,
+        start_percent: 0.2,
+        end_percent: 1.0,
+        dense_blocks: "",
+        min_tokens: 12288,
+        extra_tokens: 256,
+        sink_conditioning: "exact_kv_and_rows",
+        verbose: false
+      }
+    }
+  ];
+
+  return {
+    backend: "comfy kitchen attention",
+    patchCount: patches.length,
+    patches,
+    topologyDigest: computeAttentionTopologyDigest(patches)
+  };
+}
+
+function createRecipe(
+  recipeData: Omit<MinimaxH3SamplingRecipe, "recipeDigest">
+): MinimaxH3SamplingRecipe {
+  return {
+    ...recipeData,
+    recipeDigest: computeSamplingRecipeDigest(recipeData)
+  };
+}
+
+function createCanonicalBase20(route: "i2v" | "ref2v" = "ref2v"): MinimaxH3SamplingRecipe {
+  return createRecipe({
+    name: "canonical-base-20",
+    recipeVersion: 1,
+    taskFamily: route,
+    compatibleRoute: route,
+    diffusionModel: {
+      filename: PINNED_H3_CHECKPOINTS.ref2va.filename,
+      sha256: PINNED_H3_CHECKPOINTS.ref2va.sha256,
+      sizeBytes: 20970379616,
+      quantization: "int8_convrot",
+      repository: "Comfy-Org/MiniMax-H3",
+      revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1"
+    },
+    lora: null,
+    expectedSteps: 20,
+    sampler: "res_multistep",
+    scheduler: "simple",
+    denoise: 1.0,
+    sigmaShift: null,
+    conditioningMode: route === "i2v" ? "frame_anchored" : "reference_directed",
+    requiredRuntimeRevision: PINNED_COMFYUI_CORE_REVISION,
+    licensing: {
+      status: "approved",
+      licenseSourceRef: "https://huggingface.co/Comfy-Org/MiniMax-H3/blob/main/LICENSE",
+      notes: "Canonical baseline checkpoint"
+    },
+    sourceReferences: [
+      {
+        url: "https://github.com/Comfy-Org/docs/blob/71f2c354cc6ea0ad43ca17989f5797ae0863ddc7/tutorials/video/minimax/minimax-h3.mdx",
+        assertion: "Official MiniMax-H3 tutorial baseline sampling configuration"
+      }
+    ]
+  });
+}
+
+const FL2VA_BASE_20_RECIPE = createRecipe({
+  name: "fl2va-base-20",
+  recipeVersion: 1,
+  taskFamily: "i2v",
+  compatibleRoute: "i2v",
+  diffusionModel: {
+    filename: PINNED_H3_CHECKPOINTS.fl2va.filename,
+    sha256: PINNED_H3_CHECKPOINTS.fl2va.sha256,
+    sizeBytes: 20970379616,
+    quantization: "int8_convrot",
+    repository: "Comfy-Org/MiniMax-H3",
+    revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1"
+  },
+  lora: null,
+  expectedSteps: 20,
+  sampler: "res_multistep",
+  scheduler: "simple",
+  denoise: 1.0,
+  sigmaShift: null,
+  conditioningMode: "frame_anchored",
+  requiredRuntimeRevision: PINNED_COMFYUI_CORE_REVISION,
+  licensing: {
+    status: "approved",
+    licenseSourceRef: "https://huggingface.co/Comfy-Org/MiniMax-H3/blob/main/LICENSE",
+    notes: "Official FL2VA I2V baseline checkpoint"
+  },
+  sourceReferences: [
+    {
+      url: "https://github.com/Comfy-Org/workflow_templates/blob/3e89967349dd95fa68ce3b36966f41d642af8ea7/templates/video_minimax_h3_i2v.json",
+      assertion: "Official FL2VA I2V workflow template"
+    }
+  ]
+});
+
+const FL2VA_TURBO_8_RECIPE = createRecipe({
+  name: "fl2va-turbo-8",
+  recipeVersion: 1,
+  taskFamily: "i2v",
+  compatibleRoute: "i2v",
+  diffusionModel: {
+    filename: PINNED_H3_CHECKPOINTS.fl2va.filename,
+    sha256: PINNED_H3_CHECKPOINTS.fl2va.sha256,
+    sizeBytes: 20970379616,
+    quantization: "int8_convrot",
+    repository: "Comfy-Org/MiniMax-H3",
+    revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1"
+  },
+  lora: {
+    filename: PINNED_H3_LORAS.fl2vaTurbo8.filename,
+    sha256: PINNED_H3_LORAS.fl2vaTurbo8.sha256,
+    sizeBytes: PINNED_H3_LORAS.fl2vaTurbo8.sizeBytes,
+    strengthModel: 1.0,
+    repository: "lightx2v/Minimax-h3-Turbo",
+    revision: "3ec17a324ced54151364f24f8b5fb6bf7e26414f"
+  },
+  expectedSteps: 8,
+  sampler: "res_multistep",
+  scheduler: "simple",
+  denoise: 1.0,
+  sigmaShift: null,
+  conditioningMode: "frame_anchored",
+  requiredRuntimeRevision: PINNED_COMFYUI_CORE_REVISION,
+  licensing: {
+    status: "review_required",
+    licenseSourceRef: "https://huggingface.co/lightx2v/Minimax-h3-Turbo",
+    notes: "FL2VA 8-step Turbo LoRA by LightX2V"
+  },
+  sourceReferences: [
+    {
+      url: "https://github.com/Comfy-Org/docs/blob/71f2c354cc6ea0ad43ca17989f5797ae0863ddc7/tutorials/video/minimax/minimax-h3.mdx",
+      assertion: "Official documentation for FL2VA 8-step Turbo LoRA"
+    }
+  ]
+});
+
+const REF2VA_TURBO_4_RECIPE = createRecipe({
+  name: "ref2va-turbo-4",
+  recipeVersion: 1,
+  taskFamily: "ref2v",
+  compatibleRoute: "ref2v",
+  diffusionModel: {
+    filename: PINNED_H3_CHECKPOINTS.ref2va.filename,
+    sha256: PINNED_H3_CHECKPOINTS.ref2va.sha256,
+    sizeBytes: 20970379616,
+    quantization: "int8_convrot",
+    repository: "Comfy-Org/MiniMax-H3",
+    revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1"
+  },
+  lora: {
+    filename: PINNED_H3_LORAS.ref2vaTurbo4.filename,
+    sha256: PINNED_H3_LORAS.ref2vaTurbo4.sha256,
+    sizeBytes: PINNED_H3_LORAS.ref2vaTurbo4.sizeBytes,
+    strengthModel: 1.0,
+    repository: "lightx2v/Minimax-h3-Turbo",
+    revision: "3ec17a324ced54151364f24f8b5fb6bf7e26414f"
+  },
+  expectedSteps: 4,
+  sampler: "res_multistep",
+  scheduler: "simple",
+  denoise: 1.0,
+  sigmaShift: null,
+  conditioningMode: "reference_directed",
+  requiredRuntimeRevision: PINNED_COMFYUI_CORE_REVISION,
+  licensing: {
+    status: "review_required",
+    licenseSourceRef: "https://huggingface.co/lightx2v/Minimax-h3-Turbo",
+    notes: "Ref2VA 4-step Turbo LoRA by LightX2V"
+  },
+  sourceReferences: [
+    {
+      url: "https://github.com/Comfy-Org/docs/blob/71f2c354cc6ea0ad43ca17989f5797ae0863ddc7/tutorials/video/minimax/minimax-h3.mdx",
+      assertion: "Official documentation for Ref2VA 4-step Turbo LoRA"
+    }
+  ]
+});
+
+const FASTH3_I2V_8_RECIPE = createRecipe({
+  name: "fasth3-i2v-8",
+  recipeVersion: 1,
+  taskFamily: "i2v",
+  compatibleRoute: "i2v",
+  diffusionModel: {
+    filename: PINNED_FASTH3_CHECKPOINT.filename,
+    sha256: PINNED_FASTH3_CHECKPOINT.sha256,
+    sizeBytes: PINNED_FASTH3_CHECKPOINT.sizeBytes,
+    quantization: "int8_convrot",
+    repository: "FastVideo/FastVideo-FastH3-Comfy",
+    revision: "ec1e3aa374a91c57b0b94a1623b7e657c0498cf2"
+  },
+  lora: null,
+  expectedSteps: 8,
+  sampler: "res_multistep",
+  scheduler: "simple",
+  denoise: 1.0,
+  sigmaShift: {
+    enabled: true,
+    videoShift: 10.0,
+    audioShift: 3.0
+  },
+  conditioningMode: "frame_anchored",
+  attentionTopology: buildFastH3AttentionTopology(),
+  requiredRuntimeRevision: FASTH3_ISOLATED_CORE_REVISION,
+  licensing: {
+    status: "restricted",
+    licenseSourceRef: "https://huggingface.co/FastVideo/FastVideo-FastH3-Comfy",
+    notes: "FastVideo FastH3 distilled checkpoint. Restricted to I2V / frame-anchored."
+  },
+  sourceReferences: [
+    {
+      url: "https://github.com/Comfy-Org/docs/blob/71f2c354cc6ea0ad43ca17989f5797ae0863ddc7/tutorials/video/minimax/minimax-h3-fastvideo.mdx",
+      assertion: "FastH3 ComfyUI tutorial"
+    },
+    {
+      url: "https://github.com/Comfy-Org/workflow_templates/blob/3e89967349dd95fa68ce3b36966f41d642af8ea7/templates/video_fastvideo_fasth3_i2v.json",
+      assertion: "Official FastH3 I2V workflow template"
+    }
+  ]
+});
+
+export function validateRecipeRouteCompatibility(
+  recipeName: MinimaxH3SamplingRecipeName,
+  route: "i2v" | "ref2v"
+): void {
+  if (recipeName === "fasth3-i2v-8" && route !== "i2v") {
+    throw new Error(
+      "FastH3 8-step is strictly restricted to I2V / frame-anchored route; Ref2V is rejected"
+    );
+  }
+  if (recipeName === "ref2va-turbo-4" && route !== "ref2v") {
+    throw new Error("Ref2VA Turbo 4-step LoRA is strictly restricted to Ref2V route");
+  }
+  if (recipeName === "fl2va-turbo-8" && route !== "i2v") {
+    throw new Error("FL2VA Turbo 8-step LoRA is strictly restricted to I2V route");
+  }
+  if (recipeName === "fl2va-base-20" && route !== "i2v") {
+    throw new Error("FL2VA Base 20-step recipe is strictly restricted to I2V route");
+  }
+}
+
+export function getSamplingRecipe(
+  name: MinimaxH3SamplingRecipeName,
+  route?: "i2v" | "ref2v"
+): MinimaxH3SamplingRecipe {
+  if (route) {
+    validateRecipeRouteCompatibility(name, route);
+  }
+
+  switch (name) {
+    case "canonical-base-20":
+      return createCanonicalBase20(route ?? "ref2v");
+    case "fl2va-base-20":
+      return FL2VA_BASE_20_RECIPE;
+    case "fl2va-turbo-8":
+      return FL2VA_TURBO_8_RECIPE;
+    case "ref2va-turbo-4":
+      return REF2VA_TURBO_4_RECIPE;
+    case "fasth3-i2v-8":
+      return FASTH3_I2V_8_RECIPE;
+    default: {
+      const exhaustiveCheck: never = name;
+      throw new Error(`Unknown sampling recipe: ${exhaustiveCheck}`);
+    }
+  }
+}
+
+export function listSamplingRecipes(): readonly MinimaxH3SamplingRecipe[] {
+  return [
+    createCanonicalBase20("ref2v"),
+    FL2VA_BASE_20_RECIPE,
+    FL2VA_TURBO_8_RECIPE,
+    REF2VA_TURBO_4_RECIPE,
+    FASTH3_I2V_8_RECIPE
+  ];
+}
 
 // ---------------------------------------------------------------------------
 // Phase Accounting Taxonomy (KTD1, KTD2, KTD3)
@@ -493,6 +1087,27 @@ export const FactorChangeRuntimeManifestSchema = z
   })
   .strict();
 
+export const FactorChangeSigmaShiftSchema = z
+  .object({
+    path: z.literal("sampling.sigmaShift"),
+    before: z
+      .object({
+        enabled: z.boolean(),
+        videoShift: z.number(),
+        audioShift: z.number()
+      })
+      .strict(),
+    after: z
+      .object({
+        enabled: z.boolean(),
+        videoShift: z.number(),
+        audioShift: z.number()
+      })
+      .strict(),
+    rationale: z.string().min(1)
+  })
+  .strict();
+
 export const MinimaxH3FactorChangeSchema = z.discriminatedUnion("path", [
   FactorChangePositivePromptSchema,
   FactorChangeNegativePromptSchema,
@@ -500,6 +1115,7 @@ export const MinimaxH3FactorChangeSchema = z.discriminatedUnion("path", [
   FactorChangeDiffusionModelSchema,
   FactorChangeAuxiliaryModelSchema,
   FactorChangeSamplingSettingsSchema,
+  FactorChangeSigmaShiftSchema,
   FactorChangeAttentionConfigSchema,
   FactorChangeMemoryOffloadSchema,
   FactorChangeDecodeConfigSchema,
@@ -581,6 +1197,9 @@ export type MinimaxH3CompatibilityAssessment = z.infer<
 export const MinimaxH3RequiredRuntimeManifestSchema = z
   .object({
     coreRevision: z.string().min(1),
+    customNodeRevision: z.string().optional(),
+    cudaRequirement: z.string().optional(),
+    computeCapability: z.string().optional(),
     sourceFileHashes: z.record(z.string(), sha256HashSchema),
     requiredNodes: z.array(
       z
@@ -597,10 +1216,20 @@ export const MinimaxH3RequiredRuntimeManifestSchema = z
           name: z.string().min(1),
           version: z.string().min(1),
           artifactHash: sha256HashSchema.optional(),
+          artifactMethod: z.string().optional(),
           importModule: z.string().optional()
         })
         .strict()
     ),
+    interpreter: z
+      .object({
+        pythonVersion: z.string().min(1),
+        pythonExecutableHash: sha256HashSchema.optional(),
+        pythonAbi: z.string().optional(),
+        pythonCompiler: z.string().optional()
+      })
+      .strict()
+      .optional(),
     pytorchBuild: z.string().min(1),
     cudaBuild: z.string().min(1),
     driverConstraints: z.array(z.string().min(1)),
@@ -614,7 +1243,7 @@ export const MinimaxH3RequiredRuntimeManifestSchema = z
           name: z.string().min(1),
           modulePath: z.string().min(1),
           callable: z.string().min(1),
-          phase: MinimaxH3PhaseTypeSchema
+          phase: z.string().min(1)
         })
         .strict()
     )
@@ -638,6 +1267,180 @@ export type MinimaxH3RequiredRuntimeManifest = z.infer<
   typeof MinimaxH3RequiredRuntimeManifestSchema
 >;
 
+export { STANDARD_MINIMAX_H3_HOOKS };
+
+export function buildRequiredRuntimeManifestFromAttentionCatalog(
+  entry: MinimaxH3AttentionCatalogEntry,
+  route: "i2v" | "ref2v",
+  options?: {
+    collectorDigest?: string;
+    hookManifestDigest?: string;
+    sourceFileHashes?: Record<string, string>;
+    pytorchBuild?: string;
+    cudaBuild?: string;
+    driverConstraints?: readonly string[];
+    hooks?: ReadonlyArray<{
+      name: string;
+      modulePath: string;
+      callable: string;
+      phase: string;
+    }>;
+    interpreter?: {
+      pythonVersion: string;
+      pythonExecutableHash?: string;
+      pythonAbi?: string;
+      pythonCompiler?: string;
+    };
+    pythonPackages?: ReadonlyArray<{
+      name: string;
+      version: string;
+      artifactHash?: string;
+      artifactMethod?: string;
+      importModule?: string;
+    }>;
+  }
+): MinimaxH3RequiredRuntimeManifest {
+  const isIsolated = entry.comfyuiCoreRevision !== PINNED_COMFYUI_CORE_REVISION;
+
+  if (isIsolated) {
+    if (!options?.collectorDigest) {
+      throw new Error(
+        `Isolated upgrade manifest for revision "${entry.comfyuiCoreRevision}" requires explicit collectorDigest.`
+      );
+    }
+    if (!options?.sourceFileHashes || Object.keys(options.sourceFileHashes).length === 0) {
+      throw new Error(
+        `Isolated upgrade manifest for revision "${entry.comfyuiCoreRevision}" requires explicit sourceFileHashes.`
+      );
+    }
+    if (!options?.pytorchBuild || !options?.cudaBuild) {
+      throw new Error(
+        `Isolated upgrade manifest for revision "${entry.comfyuiCoreRevision}" requires explicit pytorchBuild and cudaBuild.`
+      );
+    }
+  }
+
+  const hooks = options?.hooks ?? STANDARD_MINIMAX_H3_HOOKS;
+  const genuineHookManifestDigest =
+    options?.hookManifestDigest ?? sha256Hex(canonicalizeJson(hooks));
+
+  const genuineCollectorDigest = options?.collectorDigest ?? "0".repeat(64);
+
+  const sourceFileHashes: Record<string, string> =
+    options?.sourceFileHashes !== undefined
+      ? { ...options.sourceFileHashes }
+      : {
+          "comfy/model_management.py": PINNED_COMFYUI_SOURCE_HASHES.modelManagementSha256,
+          "main.py": PINNED_COMFYUI_SOURCE_HASHES.mainSha256,
+          "comfy/cli_args.py": PINNED_COMFYUI_SOURCE_HASHES.cliArgsSha256
+        };
+
+  const pytorchBuild = options?.pytorchBuild ?? "2.5.1+cu124";
+  const cudaBuild = options?.cudaBuild ?? "12.4";
+  const driverConstraints = options?.driverConstraints
+    ? [...options.driverConstraints]
+    : [">=550.00.00"];
+
+  const catalogPackages =
+    entry.pythonPackages.length > 0
+      ? entry.pythonPackages
+      : [{ name: "torch", version: "2.5.1+cu124" }];
+  const measuredPackagesMap = new Map((options?.pythonPackages ?? []).map((p) => [p.name, p]));
+
+  const pkgs: Array<{
+    name: string;
+    version: string;
+    importModule?: string;
+    artifactHash?: string;
+    artifactMethod?: string;
+  }> = catalogPackages.map((catPkg) => {
+    const measured = measuredPackagesMap.get(catPkg.name);
+    const importModule = measured?.importModule ?? catPkg.importModule;
+    const artifactHash = measured?.artifactHash ?? catPkg.artifactHash;
+    const artifactMethod = measured?.artifactMethod ?? catPkg.artifactMethod;
+    const item: {
+      name: string;
+      version: string;
+      importModule?: string;
+      artifactHash?: string;
+      artifactMethod?: string;
+    } = {
+      name: catPkg.name,
+      version: measured?.version ?? catPkg.version
+    };
+    if (importModule) item.importModule = importModule;
+    if (artifactHash) item.artifactHash = artifactHash;
+    if (artifactMethod) item.artifactMethod = artifactMethod;
+    return item;
+  });
+
+  if (!pkgs.some((p) => p.name === "torch")) {
+    const measuredTorch = measuredPackagesMap.get("torch");
+    const torchItem: {
+      name: string;
+      version: string;
+      importModule?: string;
+      artifactHash?: string;
+      artifactMethod?: string;
+    } = {
+      name: "torch",
+      version: measuredTorch?.version ?? pytorchBuild.split("+")[0] ?? "2.5.1",
+      importModule: "torch"
+    };
+    if (measuredTorch?.artifactHash) torchItem.artifactHash = measuredTorch.artifactHash;
+    if (measuredTorch?.artifactMethod) torchItem.artifactMethod = measuredTorch.artifactMethod;
+    pkgs.push(torchItem);
+  }
+
+  for (const optPkg of options?.pythonPackages ?? []) {
+    if (!pkgs.some((p) => p.name === optPkg.name)) {
+      const optItem: {
+        name: string;
+        version: string;
+        importModule?: string;
+        artifactHash?: string;
+        artifactMethod?: string;
+      } = {
+        name: optPkg.name,
+        version: optPkg.version
+      };
+      if (optPkg.importModule) optItem.importModule = optPkg.importModule;
+      if (optPkg.artifactHash) optItem.artifactHash = optPkg.artifactHash;
+      if (optPkg.artifactMethod) optItem.artifactMethod = optPkg.artifactMethod;
+      pkgs.push(optItem);
+    }
+  }
+
+  const interpreter = options?.interpreter;
+
+  return {
+    coreRevision: entry.comfyuiCoreRevision,
+    ...(entry.customNode?.revision ? { customNodeRevision: entry.customNode.revision } : {}),
+    ...(entry.cudaRequirement ? { cudaRequirement: entry.cudaRequirement } : {}),
+    ...(entry.computeCapability ? { computeCapability: entry.computeCapability } : {}),
+    sourceFileHashes,
+    requiredNodes: [
+      {
+        name: route === "i2v" ? "MiniMaxH3ImageToVideo" : "MiniMaxH3ReferenceToVideo"
+      },
+      ...entry.requiredNodes.map((n) => ({
+        name: n.name,
+        ...(n.revision ? { revision: n.revision } : {})
+      }))
+    ],
+    pythonPackages: pkgs,
+    ...(interpreter ? { interpreter } : {}),
+    pytorchBuild,
+    cudaBuild,
+    driverConstraints,
+    attentionKernel: entry.kernel,
+    instrumentationProtocol: "v2-jsonl",
+    collectorDigest: genuineCollectorDigest,
+    hookManifestDigest: genuineHookManifestDigest,
+    hooks: [...hooks]
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Provenance: Requested vs Observed
 // ---------------------------------------------------------------------------
@@ -653,7 +1456,8 @@ export const MinimaxH3DescriptorProvenanceSchema = z
         cliArgsSha256: sha256HashSchema,
         mainSha256: sha256HashSchema,
         modelManagementSha256: sha256HashSchema,
-        nodesMinimaxH3Sha256: sha256HashSchema.optional()
+        nodesMinimaxH3Sha256: sha256HashSchema.optional(),
+        nodesPySha256: sha256HashSchema.optional()
       })
       .strict(),
     customNodeInventory: z
@@ -763,6 +1567,16 @@ export const MinimaxH3ObservedProvenanceSchema = z
         driverVersion: z.string().nullable()
       })
       .strict(),
+    interpreter: z
+      .object({
+        status: z.enum(["verified", "unknown", "conflict"]),
+        pythonVersion: z.string().nullable(),
+        pythonExecutableHash: sha256HashSchema.nullable().optional(),
+        pythonAbi: z.string().nullable().optional(),
+        pythonCompiler: z.string().nullable().optional()
+      })
+      .strict()
+      .optional(),
     observedAttentionBackend: z
       .object({
         status: z.enum(["verified", "unknown", "fallback"]),
@@ -779,6 +1593,41 @@ export const MinimaxH3ObservedProvenanceSchema = z
         hookManifestDigest: sha256HashSchema.nullable()
       })
       .strict(),
+    observedSampling: z
+      .object({
+        status: z.enum(["verified", "unknown", "conflict"]),
+        completedSteps: z.number().int().nonnegative().nullable(),
+        expectedSteps: z.number().int().positive(),
+        samplerName: z.string().nullable().optional(),
+        schedulerName: z.string().nullable().optional(),
+        unknownReason: z.string().nullable().optional()
+      })
+      .strict()
+      .optional(),
+    observedConditioning: z
+      .object({
+        status: z.enum(["verified", "unknown", "conflict"]),
+        nodeClass: z.string().nullable(),
+        taskMode: z.string().nullable(),
+        referenceCount: z.number().int().nonnegative().nullable().optional(),
+        unknownReason: z.string().nullable().optional()
+      })
+      .strict()
+      .optional(),
+    packageIdentities: z
+      .array(
+        z
+          .object({
+            name: z.string().min(1),
+            version: z.string().min(1),
+            artifactHash: sha256HashSchema.optional(),
+            artifactMethod: z.string().optional()
+          })
+          .strict()
+      )
+      .optional(),
+    capabilityHandshake: MinimaxH3CapabilityHandshakeSchema.optional(),
+    attentionIdentity: MinimaxH3AttentionIdentityEnvelopeSchema.optional(),
     conflicts: z.array(z.string())
   })
   .strict();
@@ -861,10 +1710,502 @@ export const MinimaxH3ExperimentDescriptorV2Schema = z
     conditioning: MinimaxH3PromptConditioningSchema,
     stepOverride: z.number().int().positive().max(100).nullable().optional(),
     checkpointOverride: z.enum(["ref2va", "fl2va"]).nullable().optional(),
-    attentionRequest: MinimaxH3AttentionRequestSchema.optional()
+    attentionRequest: MinimaxH3AttentionRequestSchema.optional(),
+    samplingRecipe: MinimaxH3SamplingRecipeSchema.optional()
   })
   .strict()
   .superRefine((val, ctx) => {
+    if (val.samplingRecipe) {
+      let canonicalRecipe: MinimaxH3SamplingRecipe;
+      try {
+        validateRecipeRouteCompatibility(val.samplingRecipe.name, val.route);
+        canonicalRecipe = getSamplingRecipe(val.samplingRecipe.name, val.route);
+      } catch (err) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: (err as Error).message,
+          path: ["samplingRecipe"]
+        });
+        return;
+      }
+
+      const recomputedDigest = computeSamplingRecipeDigest(val.samplingRecipe);
+      if (val.samplingRecipe.recipeDigest !== recomputedDigest) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `samplingRecipe recipeDigest mismatch: expected ${recomputedDigest}, got ${val.samplingRecipe.recipeDigest}`,
+          path: ["samplingRecipe", "recipeDigest"]
+        });
+      }
+      if (val.samplingRecipe.recipeDigest !== canonicalRecipe.recipeDigest) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `samplingRecipe recipeDigest mismatch with authoritative catalog for "${val.samplingRecipe.name}": expected ${canonicalRecipe.recipeDigest}, got ${val.samplingRecipe.recipeDigest}`,
+          path: ["samplingRecipe", "recipeDigest"]
+        });
+      }
+      if (val.samplingRecipe.recipeVersion !== canonicalRecipe.recipeVersion) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `samplingRecipe recipeVersion mismatch for "${val.samplingRecipe.name}": expected ${canonicalRecipe.recipeVersion}, got ${val.samplingRecipe.recipeVersion}`,
+          path: ["samplingRecipe", "recipeVersion"]
+        });
+      }
+      if (val.samplingRecipe.taskFamily !== canonicalRecipe.taskFamily) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `samplingRecipe taskFamily mismatch for "${val.samplingRecipe.name}": expected ${canonicalRecipe.taskFamily}, got ${val.samplingRecipe.taskFamily}`,
+          path: ["samplingRecipe", "taskFamily"]
+        });
+      }
+      if (val.samplingRecipe.compatibleRoute !== canonicalRecipe.compatibleRoute) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Sampling recipe "${val.samplingRecipe.name}" is incompatible with route "${val.route}" (compatibleRoute: "${val.samplingRecipe.compatibleRoute}")`,
+          path: ["samplingRecipe", "compatibleRoute"]
+        });
+      }
+      if (
+        val.samplingRecipe.diffusionModel.filename !== canonicalRecipe.diffusionModel.filename ||
+        val.samplingRecipe.diffusionModel.sha256 !== canonicalRecipe.diffusionModel.sha256 ||
+        val.samplingRecipe.diffusionModel.sizeBytes !== canonicalRecipe.diffusionModel.sizeBytes ||
+        val.samplingRecipe.diffusionModel.quantization !==
+          canonicalRecipe.diffusionModel.quantization ||
+        val.samplingRecipe.diffusionModel.repository !==
+          canonicalRecipe.diffusionModel.repository ||
+        val.samplingRecipe.diffusionModel.revision !== canonicalRecipe.diffusionModel.revision
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `samplingRecipe diffusionModel mismatch for "${val.samplingRecipe.name}"`,
+          path: ["samplingRecipe", "diffusionModel"]
+        });
+      }
+      if (canonicalRecipe.lora) {
+        if (
+          !val.samplingRecipe.lora ||
+          val.samplingRecipe.lora.filename !== canonicalRecipe.lora.filename ||
+          val.samplingRecipe.lora.sha256 !== canonicalRecipe.lora.sha256 ||
+          val.samplingRecipe.lora.sizeBytes !== canonicalRecipe.lora.sizeBytes ||
+          val.samplingRecipe.lora.strengthModel !== canonicalRecipe.lora.strengthModel ||
+          val.samplingRecipe.lora.repository !== canonicalRecipe.lora.repository ||
+          val.samplingRecipe.lora.revision !== canonicalRecipe.lora.revision
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `samplingRecipe lora mismatch for "${val.samplingRecipe.name}"`,
+            path: ["samplingRecipe", "lora"]
+          });
+        }
+      } else if (val.samplingRecipe.lora) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `samplingRecipe lora must be null for "${val.samplingRecipe.name}"`,
+          path: ["samplingRecipe", "lora"]
+        });
+      }
+      if (val.samplingRecipe.expectedSteps !== canonicalRecipe.expectedSteps) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `samplingRecipe expectedSteps mismatch for "${val.samplingRecipe.name}": expected ${canonicalRecipe.expectedSteps}, got ${val.samplingRecipe.expectedSteps}`,
+          path: ["samplingRecipe", "expectedSteps"]
+        });
+      }
+      if (
+        val.samplingRecipe.sampler !== canonicalRecipe.sampler ||
+        val.samplingRecipe.scheduler !== canonicalRecipe.scheduler ||
+        val.samplingRecipe.denoise !== canonicalRecipe.denoise
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `samplingRecipe sampler/scheduler/denoise mismatch for "${val.samplingRecipe.name}"`,
+          path: ["samplingRecipe", "sampler"]
+        });
+      }
+      if (canonicalRecipe.sigmaShift) {
+        if (
+          !val.samplingRecipe.sigmaShift ||
+          val.samplingRecipe.sigmaShift.enabled !== canonicalRecipe.sigmaShift.enabled ||
+          val.samplingRecipe.sigmaShift.videoShift !== canonicalRecipe.sigmaShift.videoShift ||
+          val.samplingRecipe.sigmaShift.audioShift !== canonicalRecipe.sigmaShift.audioShift
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `samplingRecipe sigmaShift mismatch for "${val.samplingRecipe.name}"`,
+            path: ["samplingRecipe", "sigmaShift"]
+          });
+        }
+      } else if (val.samplingRecipe.sigmaShift) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `samplingRecipe sigmaShift must be null for "${val.samplingRecipe.name}"`,
+          path: ["samplingRecipe", "sigmaShift"]
+        });
+      }
+      if (val.samplingRecipe.conditioningMode !== canonicalRecipe.conditioningMode) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `samplingRecipe conditioningMode mismatch for "${val.samplingRecipe.name}": expected ${canonicalRecipe.conditioningMode}, got ${val.samplingRecipe.conditioningMode}`,
+          path: ["samplingRecipe", "conditioningMode"]
+        });
+      }
+      if (canonicalRecipe.attentionTopology) {
+        if (
+          !val.samplingRecipe.attentionTopology ||
+          val.samplingRecipe.attentionTopology.backend !==
+            canonicalRecipe.attentionTopology.backend ||
+          val.samplingRecipe.attentionTopology.topologyDigest !==
+            canonicalRecipe.attentionTopology.topologyDigest ||
+          val.samplingRecipe.attentionTopology.patchCount !==
+            canonicalRecipe.attentionTopology.patchCount
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `samplingRecipe attentionTopology mismatch for "${val.samplingRecipe.name}"`,
+            path: ["samplingRecipe", "attentionTopology"]
+          });
+        }
+      } else if (val.samplingRecipe.attentionTopology) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `samplingRecipe attentionTopology must be null/undefined for "${val.samplingRecipe.name}"`,
+          path: ["samplingRecipe", "attentionTopology"]
+        });
+      }
+      if (
+        val.samplingRecipe.licensing.status !== canonicalRecipe.licensing.status ||
+        val.samplingRecipe.licensing.licenseSourceRef !== canonicalRecipe.licensing.licenseSourceRef
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `samplingRecipe licensing mismatch for "${val.samplingRecipe.name}"`,
+          path: ["samplingRecipe", "licensing"]
+        });
+      }
+      if (val.samplingRecipe.sourceReferences.length !== canonicalRecipe.sourceReferences.length) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `samplingRecipe sourceReferences length mismatch for "${val.samplingRecipe.name}"`,
+          path: ["samplingRecipe", "sourceReferences"]
+        });
+      } else {
+        for (let i = 0; i < canonicalRecipe.sourceReferences.length; i++) {
+          if (
+            val.samplingRecipe.sourceReferences[i]?.url !==
+              canonicalRecipe.sourceReferences[i]?.url ||
+            val.samplingRecipe.sourceReferences[i]?.assertion !==
+              canonicalRecipe.sourceReferences[i]?.assertion
+          ) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `samplingRecipe sourceReferences[${i}] mismatch for "${val.samplingRecipe.name}"`,
+              path: ["samplingRecipe", "sourceReferences", String(i)]
+            });
+          }
+        }
+      }
+      if (val.samplingRecipe.requiredRuntimeRevision !== canonicalRecipe.requiredRuntimeRevision) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `samplingRecipe requiredRuntimeRevision mismatch for "${val.samplingRecipe.name}": expected ${canonicalRecipe.requiredRuntimeRevision}, got ${val.samplingRecipe.requiredRuntimeRevision}`,
+          path: ["samplingRecipe", "requiredRuntimeRevision"]
+        });
+      }
+      if (val.samplingRecipe.name === "fasth3-i2v-8" && val.route !== "i2v") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "FastH3 8-step is strictly restricted to I2V / frame-anchored route; Ref2V is rejected",
+          path: ["samplingRecipe", "compatibleRoute"]
+        });
+      }
+      if (val.samplingRecipe.name === "ref2va-turbo-4" && val.route !== "ref2v") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Ref2VA Turbo 4-step LoRA is strictly restricted to Ref2V route",
+          path: ["samplingRecipe", "compatibleRoute"]
+        });
+      }
+      if (val.samplingRecipe.name === "fl2va-turbo-8" && val.route !== "i2v") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "FL2VA Turbo 8-step LoRA is strictly restricted to I2V route",
+          path: ["samplingRecipe", "compatibleRoute"]
+        });
+      }
+      if (
+        val.stepOverride !== undefined &&
+        val.stepOverride !== null &&
+        val.stepOverride !== canonicalRecipe.expectedSteps
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `stepOverride (${val.stepOverride}) conflicts with sampling recipe expectedSteps (${canonicalRecipe.expectedSteps})`,
+          path: ["stepOverride"]
+        });
+      }
+      if (val.checkpointOverride) {
+        const isFl2vaRecipe =
+          canonicalRecipe.diffusionModel.filename.includes("fl2va") ||
+          canonicalRecipe.name.startsWith("fl2va");
+        const isRef2vaRecipe =
+          canonicalRecipe.diffusionModel.filename.includes("ref2va") ||
+          canonicalRecipe.name.startsWith("ref2va");
+        if (
+          (isFl2vaRecipe && val.checkpointOverride !== "fl2va") ||
+          (isRef2vaRecipe && val.checkpointOverride !== "ref2va")
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `checkpointOverride (${val.checkpointOverride}) conflicts with sampling recipe diffusion model (${canonicalRecipe.diffusionModel.filename})`,
+            path: ["checkpointOverride"]
+          });
+        }
+      }
+
+      // Validate descriptor model/runtime/sampler provenance against that canonical recipe
+      if (val.provenance) {
+        if (
+          val.provenance.actualCheckpointHash &&
+          val.provenance.actualCheckpointHash !== canonicalRecipe.diffusionModel.sha256
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Descriptor provenance.actualCheckpointHash (${val.provenance.actualCheckpointHash}) does not match canonical recipe checkpoint (${canonicalRecipe.diffusionModel.sha256})`,
+            path: ["provenance", "actualCheckpointHash"]
+          });
+        }
+        if (val.provenance.loadedModelHashes) {
+          const diffHash =
+            val.provenance.loadedModelHashes["diffusion"] ??
+            val.provenance.loadedModelHashes[
+              `diffusion_models/${canonicalRecipe.diffusionModel.filename}`
+            ];
+          if (diffHash && diffHash !== canonicalRecipe.diffusionModel.sha256) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `Descriptor loadedModelHashes.diffusion does not match canonical recipe checkpoint`,
+              path: ["provenance", "loadedModelHashes"]
+            });
+          }
+          if (canonicalRecipe.lora) {
+            const loraHash =
+              val.provenance.loadedModelHashes["lora"] ??
+              val.provenance.loadedModelHashes[`loras/${canonicalRecipe.lora.filename}`];
+            if (loraHash !== canonicalRecipe.lora.sha256) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: `Descriptor loadedModelHashes.lora does not match canonical recipe LoRA`,
+                path: ["provenance", "loadedModelHashes"]
+              });
+            }
+          } else if (
+            val.provenance.loadedModelHashes["lora"] ||
+            Object.keys(val.provenance.loadedModelHashes).some((k) => k.startsWith("loras/"))
+          ) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `Descriptor loadedModelHashes.lora must not be present for non-LoRA recipe`,
+              path: ["provenance", "loadedModelHashes"]
+            });
+          }
+        }
+        if (
+          val.provenance.comfyuiCoreRevision &&
+          val.provenance.comfyuiCoreRevision !== canonicalRecipe.requiredRuntimeRevision
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Descriptor provenance.comfyuiCoreRevision (${val.provenance.comfyuiCoreRevision}) does not match recipe runtime (${canonicalRecipe.requiredRuntimeRevision})`,
+            path: ["provenance", "comfyuiCoreRevision"]
+          });
+        }
+        if (val.provenance.samplerSettings) {
+          if (
+            val.provenance.samplerSettings.steps !== canonicalRecipe.expectedSteps ||
+            val.provenance.samplerSettings.sampler !== canonicalRecipe.sampler ||
+            val.provenance.samplerSettings.scheduler !== canonicalRecipe.scheduler
+          ) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `Descriptor provenance.samplerSettings (${val.provenance.samplerSettings.sampler}/${val.provenance.samplerSettings.scheduler}/${val.provenance.samplerSettings.steps}) does not match canonical recipe (${canonicalRecipe.sampler}/${canonicalRecipe.scheduler}/${canonicalRecipe.expectedSteps})`,
+              path: ["provenance", "samplerSettings"]
+            });
+          }
+        }
+      }
+
+      // Validate pinFileIdentities.modelDigests
+      if (val.pinFileIdentities?.modelDigests) {
+        const pinDiffHash =
+          val.pinFileIdentities.modelDigests["diffusion"] ??
+          val.pinFileIdentities.modelDigests[
+            `diffusion_models/${canonicalRecipe.diffusionModel.filename}`
+          ];
+        if (pinDiffHash && pinDiffHash !== canonicalRecipe.diffusionModel.sha256) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Descriptor pinFileIdentities.modelDigests does not match canonical recipe checkpoint (${canonicalRecipe.diffusionModel.sha256})`,
+            path: ["pinFileIdentities", "modelDigests"]
+          });
+        }
+        if (canonicalRecipe.lora) {
+          const pinLoraHash =
+            val.pinFileIdentities.modelDigests["lora"] ??
+            val.pinFileIdentities.modelDigests[`loras/${canonicalRecipe.lora.filename}`];
+          if (pinLoraHash !== canonicalRecipe.lora.sha256) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `Descriptor pinFileIdentities.modelDigests.lora does not match canonical recipe LoRA (${canonicalRecipe.lora.sha256})`,
+              path: ["pinFileIdentities", "modelDigests"]
+            });
+          }
+        }
+      }
+
+      // Validate resolvedModelPaths
+      if (val.resolvedModelPaths) {
+        const resDiff =
+          val.resolvedModelPaths["diffusion"] ??
+          val.resolvedModelPaths[`diffusion_models/${canonicalRecipe.diffusionModel.filename}`];
+        if (resDiff && resDiff.expectedHash !== canonicalRecipe.diffusionModel.sha256) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Descriptor resolvedModelPaths.diffusion expectedHash does not match canonical recipe checkpoint (${canonicalRecipe.diffusionModel.sha256})`,
+            path: ["resolvedModelPaths"]
+          });
+        }
+        if (canonicalRecipe.lora) {
+          const resLora =
+            val.resolvedModelPaths["lora"] ??
+            val.resolvedModelPaths[`loras/${canonicalRecipe.lora.filename}`];
+          if (!resLora || resLora.expectedHash !== canonicalRecipe.lora.sha256) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `Descriptor resolvedModelPaths.lora expectedHash does not match canonical recipe LoRA (${canonicalRecipe.lora.sha256})`,
+              path: ["resolvedModelPaths"]
+            });
+          }
+        }
+      }
+
+      // Validate requiredRuntime
+      if (!val.requiredRuntime) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Sampling recipe "${val.samplingRecipe.name}" requires requiredRuntime to be specified`,
+          path: ["requiredRuntime"]
+        });
+      } else {
+        if (val.requiredRuntime.coreRevision !== canonicalRecipe.requiredRuntimeRevision) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Descriptor requiredRuntime.coreRevision (${val.requiredRuntime.coreRevision}) does not match recipe runtime (${canonicalRecipe.requiredRuntimeRevision})`,
+            path: ["requiredRuntime", "coreRevision"]
+          });
+        }
+        if (val.samplingRecipe.name === "fasth3-i2v-8") {
+          if (val.requiredRuntime.attentionKernel !== "block_sparse_triton") {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `FastH3 recipe requires attentionKernel "block_sparse_triton", got "${val.requiredRuntime.attentionKernel}"`,
+              path: ["requiredRuntime", "attentionKernel"]
+            });
+          }
+          for (const [filePath, expectedHash] of Object.entries(FASTH3_COMFYUI_SOURCE_HASHES)) {
+            const actualHash = val.requiredRuntime.sourceFileHashes[filePath];
+            if (actualHash !== expectedHash) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: `FastH3 recipe requires sourceFileHashes["${filePath}"] to match "${expectedHash}", got "${actualHash ?? "missing"}"`,
+                path: ["requiredRuntime", "sourceFileHashes", filePath]
+              });
+            }
+          }
+          const requiredNodeNames = [
+            "BlockSparseAttention",
+            "ModelAttentionBackend",
+            "MiniMaxH3ImageToVideo",
+            "MiniMaxH3SigmaShift"
+          ];
+          for (const nodeName of requiredNodeNames) {
+            const hasNode = val.requiredRuntime.requiredNodes.some((n) => n.name === nodeName);
+            if (!hasNode) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: `FastH3 recipe requires node "${nodeName}" in requiredRuntime.requiredNodes`,
+                path: ["requiredRuntime", "requiredNodes"]
+              });
+            }
+          }
+          const hasKitchen = val.requiredRuntime.pythonPackages.some(
+            (p) => p.name === "comfy-kitchen" && p.version === "0.2.34"
+          );
+          if (!hasKitchen) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `FastH3 recipe requires pythonPackage "comfy-kitchen" version "0.2.34"`,
+              path: ["requiredRuntime", "pythonPackages"]
+            });
+          }
+          const hasTorch = val.requiredRuntime.pythonPackages.some(
+            (p) => p.name === "torch" && p.version === val.requiredRuntime.pytorchBuild
+          );
+          if (!hasTorch || !val.requiredRuntime.pytorchBuild) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `FastH3 recipe requires pythonPackage "torch" matching requiredRuntime.pytorchBuild`,
+              path: ["requiredRuntime", "pythonPackages"]
+            });
+          }
+        }
+        if (canonicalRecipe.lora) {
+          const hasLoraLoader = val.requiredRuntime.requiredNodes.some(
+            (n) => n.name === "LoraLoaderModelOnly"
+          );
+          if (!hasLoraLoader) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `Turbo recipe requires "LoraLoaderModelOnly" in requiredRuntime.requiredNodes`,
+              path: ["requiredRuntime", "requiredNodes"]
+            });
+          }
+          const expectedConditionerNode =
+            val.route === "i2v" ? "MiniMaxH3ImageToVideo" : "MiniMaxH3ReferenceToVideo";
+          const hasConditioner = val.requiredRuntime.requiredNodes.some(
+            (n) => n.name === expectedConditionerNode
+          );
+          if (!hasConditioner) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `Turbo recipe requires conditioner node "${expectedConditionerNode}" in requiredRuntime.requiredNodes`,
+              path: ["requiredRuntime", "requiredNodes"]
+            });
+          }
+          if (
+            !val.requiredRuntime.sourceFileHashes["nodes.py"] ||
+            val.requiredRuntime.sourceFileHashes["nodes.py"] !== PINNED_COMFYUI_NODES_PY_SHA256
+          ) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `Turbo recipe requires nodes.py hash to match PINNED_COMFYUI_NODES_PY_SHA256`,
+              path: ["requiredRuntime", "sourceFileHashes", "nodes.py"]
+            });
+          }
+          if (
+            !val.requiredRuntime.sourceFileHashes["comfy_extras/nodes_minimax_h3.py"] ||
+            val.requiredRuntime.sourceFileHashes["comfy_extras/nodes_minimax_h3.py"] !==
+              PINNED_COMFYUI_NODES_MINIMAX_H3_PY_SHA256
+          ) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `Turbo recipe requires comfy_extras/nodes_minimax_h3.py hash to match PINNED_COMFYUI_NODES_MINIMAX_H3_PY_SHA256`,
+              path: ["requiredRuntime", "sourceFileHashes", "comfy_extras/nodes_minimax_h3.py"]
+            });
+          }
+        }
+      }
+    }
     if (val.route === "i2v") {
       if (val.references.length !== 1) {
         ctx.addIssue({
@@ -913,19 +2254,6 @@ export const MinimaxH3ExperimentDescriptorV2Schema = z
         code: z.ZodIssueCode.custom,
         message: `Geometry ${val.width}x${val.height} is not supported for H3 experiments`,
         path: ["width"]
-      });
-    }
-
-    const hasAttentionFactor = val.experimentVariant.changedFactors.some(
-      (f) => f.path === "attention.configuration"
-    );
-    const hasAttentionBackend = val.provenance.requestedAttentionBackend !== "default";
-    if ((hasAttentionFactor || hasAttentionBackend) && !val.attentionRequest) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          "attentionRequest is required whenever an attention variant or attention factor change is selected",
-        path: ["attentionRequest"]
       });
     }
 
@@ -986,25 +2314,6 @@ export const MinimaxH3ExperimentResultV2Schema = z
   })
   .strict()
   .superRefine((val, ctx) => {
-    const hasAttentionFactor = val.experimentVariant.changedFactors.some(
-      (f) => f.path === "attention.configuration"
-    );
-    const effBackend = val.observedProvenance.observedAttentionBackend?.effectiveBackend;
-    const hasAttentionBackend =
-      effBackend !== null && effBackend !== undefined && effBackend !== "default";
-    if (
-      val.execution.status === "completed" &&
-      (hasAttentionFactor || hasAttentionBackend) &&
-      !val.attentionObservation
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          "attentionObservation is required for completed results whenever an attention factor change or non-default attention backend is present",
-        path: ["attentionObservation"]
-      });
-    }
-
     if (val.attentionObservation) {
       if (val.attentionObservation.status === "verified") {
         if (
@@ -1055,6 +2364,71 @@ export const MinimaxH3ExperimentResultV2Schema = z
     }
   });
 export type MinimaxH3ExperimentResultV2 = z.infer<typeof MinimaxH3ExperimentResultV2Schema>;
+
+/**
+ * Derives an attention verification view for an experiment descriptor and result.
+ * For historical artifacts lacking modern attentionRequest / attentionObservation fields,
+ * returns an observation with status: "unknown" instead of rejecting the artifact.
+ */
+export function getDerivedAttentionVerificationView(
+  _descriptor?:
+    | {
+        provenance?: { requestedAttentionBackend?: string | null | undefined } | null | undefined;
+        attentionRequest?: { expectedBackend?: string } | null | undefined;
+      }
+    | null
+    | undefined,
+  result?:
+    | {
+        observedProvenance?:
+          | {
+              observedAttentionBackend?:
+                | {
+                    effectiveBackend?: string | null | undefined;
+                    dispatchImplementation?: string | null | undefined;
+                  }
+                | null
+                | undefined;
+            }
+          | null
+          | undefined;
+        attentionObservation?: MinimaxH3AttentionObservation | null | undefined;
+      }
+    | null
+    | undefined
+): MinimaxH3AttentionObservation {
+  if (result?.attentionObservation) {
+    return result.attentionObservation;
+  }
+  const observedBackend =
+    result?.observedProvenance?.observedAttentionBackend?.effectiveBackend ?? null;
+  const dispatchImplementation =
+    result?.observedProvenance?.observedAttentionBackend?.dispatchImplementation ?? null;
+
+  return {
+    status: "unknown",
+    actualBackend: observedBackend,
+    dispatchImplementation,
+    acceleratedCallCount: 0,
+    denseCallCount: 0,
+    plannedDenseCallCount: 0,
+    fallbackEvents: [],
+    stepRecords: [],
+    failureReason: null,
+    missingKernelFailure: null,
+    dtypeLayoutDiagnostics: null,
+    measurementCoverage: {
+      samplingCallsRecorded: 0,
+      attentionCallsRecorded: 0,
+      complete: false
+    },
+    timings: {
+      deviceElapsedMs: null,
+      kernelElapsedMs: null,
+      timingUnavailableReason: "Historical artifact without attention observation"
+    }
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Controlled Comparison Specification & Report (KTD5, KTD5a - Witness F1)
@@ -1178,6 +2552,21 @@ export function computeInvariantProjectionKey(options: {
   diffusionModelFileHash: string;
   samplerSettings: { sampler: string; scheduler: string; steps: number };
   memoryPolicy: string;
+  auxiliaryModels?: ReadonlyArray<{
+    name: string;
+    hash: string;
+    strength: number;
+    role: string;
+    order: number;
+  }>;
+  sigmaShift?: {
+    enabled: boolean;
+    videoShift: number;
+    audioShift: number;
+  };
+  attentionTopologyDigest?: string;
+  runtimeManifestDigest?: string;
+  coreRevision?: string;
 }): string {
   const declaredSet = new Set(options.declaredPaths);
   const payload = {
@@ -1206,7 +2595,28 @@ export function computeInvariantProjectionKey(options: {
       : options.samplerSettings,
     memoryPolicy: declaredSet.has("memory.offload")
       ? "<DECLARED_FACTOR_VARIATION>"
-      : options.memoryPolicy
+      : options.memoryPolicy,
+    auxiliaryModels: declaredSet.has("models.auxiliary")
+      ? "<DECLARED_FACTOR_VARIATION>"
+      : (options.auxiliaryModels ?? []).map((m) => ({
+          name: m.name,
+          hash: m.hash,
+          strength: m.strength,
+          role: m.role,
+          order: m.order
+        })),
+    sigmaShift: declaredSet.has("sampling.sigmaShift")
+      ? "<DECLARED_FACTOR_VARIATION>"
+      : (options.sigmaShift ?? { enabled: false, videoShift: 12, audioShift: 3 }),
+    attentionTopology: declaredSet.has("attention.configuration")
+      ? "<DECLARED_FACTOR_VARIATION>"
+      : (options.attentionTopologyDigest ?? "default"),
+    runtimeManifest: declaredSet.has("runtime.manifest")
+      ? "<DECLARED_FACTOR_VARIATION>"
+      : (options.runtimeManifestDigest ?? "default"),
+    coreRevision: declaredSet.has("runtime.manifest")
+      ? "<DECLARED_FACTOR_VARIATION>"
+      : (options.coreRevision ?? "default")
   };
   return sha256Hex(canonicalizeJson(payload));
 }
@@ -1383,6 +2793,21 @@ export function createEmptyMinimaxH3MeasurementTemplateV2(
         protocol: null,
         collectorDigest: null,
         hookManifestDigest: null
+      },
+      observedSampling: {
+        status: "unknown",
+        completedSteps: null,
+        expectedSteps: descriptor.samplingRecipe?.expectedSteps ?? descriptor.stepOverride ?? 20,
+        samplerName: null,
+        schedulerName: null,
+        unknownReason: "not_started"
+      },
+      observedConditioning: {
+        status: "unknown",
+        nodeClass: null,
+        taskMode: null,
+        referenceCount: null,
+        unknownReason: "not_started"
       },
       conflicts: []
     },

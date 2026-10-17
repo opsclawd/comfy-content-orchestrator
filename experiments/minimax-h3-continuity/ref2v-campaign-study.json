@@ -1,0 +1,468 @@
+{
+  "schemaVersion": 1,
+  "studyId": "study-ref2v-campaign-continuity",
+  "studyDigest": "73be1645d525d182ab17ade287ba4707b85fffaacf574f55e788d6fa2087171c",
+  "rubricVersion": 1,
+  "rubricDigest": "4325dbb8c351676fe6d82de3ea808cf71b9fb738b270bfca9e1604e10b5103be",
+  "sourceEvidenceReferences": [
+    {
+      "url": "certification/minimax-h3/minimax-ref2v-visual-qa-001/README.md",
+      "assertion": "Campaign reference identities sourced from certified visual QA run; subject dreadlocks, Angostura bottles, Port of Spain waterfront, steel-pan style reference."
+    }
+  ],
+  "scenarios": [
+    {
+      "scenarioId": "scenario-ref2v-campaign-waterfront-moving",
+      "scenarioRole": "illustrative_test",
+      "subjectMotionIntent": "moving",
+      "route": "ref2v",
+      "conditioningMode": "reference_directed",
+      "status": "pending_source",
+      "pendingReason": "Long-shot Ref2V prompt and exact reference conditioning pending operator run log verification before execution; certified visual QA evidence establishes asset identities but not long-shot acceptance",
+      "originalPrompt": null,
+      "constrainedPrompts": [
+        {
+          "promptId": "ref2v_tight_waterfront_moving",
+          "label": "Strict continuity reference-directed campaign moving shot without unrequested camera push",
+          "text": "In the style of <Picture 4>, a continuous uninterrupted single-take shot of <Picture 1> with dark dreadlocks walking along the sunny Port of Spain waterfront in <Picture 3> holding a bottle of <Picture 2>. Background waterfront architecture and warm golden hour lighting remain steady and invariant throughout the entire clip. Wardrobe remains identical with no color shifts. Camera maintains a locked static perspective framing the subject with zero scene substitutions, sudden angle cuts, or lighting dropouts.",
+          "digest": "b777b7ad09c5c5730c820139aa19caabf33cbbdc3d69702f343ffb06f723a936",
+          "constraintsApplied": [
+            "fixed_lighting",
+            "fixed_background",
+            "fixed_wardrobe",
+            "locked_camera",
+            "no_scene_substitution"
+          ]
+        }
+      ],
+      "referenceManifest": {
+        "referenceSetId": "trinidad-ref2v-campaign-baseline",
+        "manifestDigest": "c47441c652691f583ccf8ad895718d51d536bc72b371e2a78f2159012faa16f7",
+        "references": [
+          {
+            "slotIndex": 0,
+            "role": "subject_identity",
+            "tag": "<Picture 1>",
+            "sourceAssetPath": "test-assets/trinidad_subject.jpg",
+            "sourceSha256": "9a1e9bc51b93b80a6169c69bbcb6630788e2fb6dd2244ace4b6c2c9fd5bd2589",
+            "sourceSizeBytes": 90286,
+            "mimeType": "image/jpeg",
+            "width": 1024,
+            "height": 819
+          },
+          {
+            "slotIndex": 1,
+            "role": "product",
+            "tag": "<Picture 2>",
+            "sourceAssetPath": "test-assets/trinidad_product.jpg",
+            "sourceSha256": "f4dbb845aa086287da85b07d239b14dccf7b40aedb68367ec885c0913c1c79ab",
+            "sourceSizeBytes": 107963,
+            "mimeType": "image/jpeg",
+            "width": 1024,
+            "height": 679
+          },
+          {
+            "slotIndex": 2,
+            "role": "location",
+            "tag": "<Picture 3>",
+            "sourceAssetPath": "test-assets/trinidad_location.jpg",
+            "sourceSha256": "39a494e9cbf204f3b8d45a8f18c5e8e05f8f652fc6fe7e24746519ba2110b7ee",
+            "sourceSizeBytes": 181597,
+            "mimeType": "image/jpeg",
+            "width": 1024,
+            "height": 576
+          },
+          {
+            "slotIndex": 3,
+            "role": "style",
+            "tag": "<Picture 4>",
+            "sourceAssetPath": "test-assets/trinidad_style.jpg",
+            "sourceSha256": "182b70c25d93acbe62ebf59489114587456104ab1bd8ac3051ce0cdd95f1da5d",
+            "sourceSizeBytes": 159383,
+            "mimeType": "image/jpeg",
+            "width": 1024,
+            "height": 768
+          }
+        ]
+      }
+    },
+    {
+      "scenarioId": "scenario-ref2v-campaign-waterfront-static",
+      "scenarioRole": "illustrative_test",
+      "subjectMotionIntent": "static",
+      "route": "ref2v",
+      "conditioningMode": "reference_directed",
+      "status": "pending_source",
+      "pendingReason": "Long-shot Ref2V static prompt and exact reference conditioning pending operator run log verification before execution",
+      "originalPrompt": null,
+      "constrainedPrompts": [
+        {
+          "promptId": "ref2v_tight_waterfront_static",
+          "label": "Strict continuity reference-directed campaign static shot without unrequested camera push",
+          "text": "In the style of <Picture 4>, a continuous uninterrupted single-take shot of <Picture 1> with dark dreadlocks standing stationary along the sunny Port of Spain waterfront in <Picture 3> holding a bottle of <Picture 2>. Background waterfront architecture and warm golden hour lighting remain steady and invariant throughout the entire clip. Wardrobe remains identical with no color shifts. Camera maintains a locked static perspective framing the subject with zero scene substitutions, sudden angle cuts, or lighting dropouts.",
+          "digest": "244711fc07b7761b4850bddb7b9694082cf02cd184fbb20f301d297aee472537",
+          "constraintsApplied": [
+            "fixed_lighting",
+            "fixed_background",
+            "fixed_wardrobe",
+            "locked_camera",
+            "no_scene_substitution"
+          ]
+        }
+      ],
+      "referenceManifest": {
+        "referenceSetId": "trinidad-ref2v-campaign-baseline",
+        "manifestDigest": "c47441c652691f583ccf8ad895718d51d536bc72b371e2a78f2159012faa16f7",
+        "references": [
+          {
+            "slotIndex": 0,
+            "role": "subject_identity",
+            "tag": "<Picture 1>",
+            "sourceAssetPath": "test-assets/trinidad_subject.jpg",
+            "sourceSha256": "9a1e9bc51b93b80a6169c69bbcb6630788e2fb6dd2244ace4b6c2c9fd5bd2589",
+            "sourceSizeBytes": 90286,
+            "mimeType": "image/jpeg",
+            "width": 1024,
+            "height": 819
+          },
+          {
+            "slotIndex": 1,
+            "role": "product",
+            "tag": "<Picture 2>",
+            "sourceAssetPath": "test-assets/trinidad_product.jpg",
+            "sourceSha256": "f4dbb845aa086287da85b07d239b14dccf7b40aedb68367ec885c0913c1c79ab",
+            "sourceSizeBytes": 107963,
+            "mimeType": "image/jpeg",
+            "width": 1024,
+            "height": 679
+          },
+          {
+            "slotIndex": 2,
+            "role": "location",
+            "tag": "<Picture 3>",
+            "sourceAssetPath": "test-assets/trinidad_location.jpg",
+            "sourceSha256": "39a494e9cbf204f3b8d45a8f18c5e8e05f8f652fc6fe7e24746519ba2110b7ee",
+            "sourceSizeBytes": 181597,
+            "mimeType": "image/jpeg",
+            "width": 1024,
+            "height": 576
+          },
+          {
+            "slotIndex": 3,
+            "role": "style",
+            "tag": "<Picture 4>",
+            "sourceAssetPath": "test-assets/trinidad_style.jpg",
+            "sourceSha256": "182b70c25d93acbe62ebf59489114587456104ab1bd8ac3051ce0cdd95f1da5d",
+            "sourceSizeBytes": 159383,
+            "mimeType": "image/jpeg",
+            "width": 1024,
+            "height": 768
+          }
+        ]
+      }
+    }
+  ],
+  "studyControls": {
+    "width": 1344,
+    "height": 768,
+    "fps": 24,
+    "seed": 42,
+    "runnerVariant": "dynamicvram-offload-v1",
+    "schedule": {
+      "sampler": "res_multistep",
+      "scheduler": "simple",
+      "steps": 20
+    },
+    "candidateFrames": [124, 192, 243, 362],
+    "diffusionCheckpoint": {
+      "repository": "Comfy-Org/MiniMax-H3",
+      "revision": "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+      "filename": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779"
+    }
+  },
+  "cells": [
+    {
+      "cellId": "cell-scenario-ref2v-campaign-waterfront-moving-124f-base",
+      "scenarioId": "scenario-ref2v-campaign-waterfront-moving",
+      "frames": 124,
+      "arm": "baseline",
+      "promptVariantId": "original",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Long-shot Ref2V prompt and exact reference conditioning pending operator run log verification before execution; certified visual QA evidence establishes asset identities but not long-shot acceptance",
+      "safetyBaseline124fCellId": null
+    },
+    {
+      "cellId": "cell-scenario-ref2v-campaign-waterfront-moving-124f-ref2v_tight_waterfront_moving",
+      "scenarioId": "scenario-ref2v-campaign-waterfront-moving",
+      "frames": 124,
+      "arm": "prompt_only",
+      "promptVariantId": "ref2v_tight_waterfront_moving",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Long-shot Ref2V prompt and exact reference conditioning pending operator run log verification before execution; certified visual QA evidence establishes asset identities but not long-shot acceptance",
+      "safetyBaseline124fCellId": null
+    },
+    {
+      "cellId": "cell-scenario-ref2v-campaign-waterfront-moving-192f-base",
+      "scenarioId": "scenario-ref2v-campaign-waterfront-moving",
+      "frames": 192,
+      "arm": "baseline",
+      "promptVariantId": "original",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Long-shot Ref2V prompt and exact reference conditioning pending operator run log verification before execution; certified visual QA evidence establishes asset identities but not long-shot acceptance",
+      "safetyBaseline124fCellId": "cell-scenario-ref2v-campaign-waterfront-moving-124f-base"
+    },
+    {
+      "cellId": "cell-scenario-ref2v-campaign-waterfront-moving-192f-ref2v_tight_waterfront_moving",
+      "scenarioId": "scenario-ref2v-campaign-waterfront-moving",
+      "frames": 192,
+      "arm": "prompt_only",
+      "promptVariantId": "ref2v_tight_waterfront_moving",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Long-shot Ref2V prompt and exact reference conditioning pending operator run log verification before execution; certified visual QA evidence establishes asset identities but not long-shot acceptance",
+      "safetyBaseline124fCellId": "cell-scenario-ref2v-campaign-waterfront-moving-124f-ref2v_tight_waterfront_moving"
+    },
+    {
+      "cellId": "cell-scenario-ref2v-campaign-waterfront-moving-243f-base",
+      "scenarioId": "scenario-ref2v-campaign-waterfront-moving",
+      "frames": 243,
+      "arm": "baseline",
+      "promptVariantId": "original",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Long-shot Ref2V prompt and exact reference conditioning pending operator run log verification before execution; certified visual QA evidence establishes asset identities but not long-shot acceptance",
+      "safetyBaseline124fCellId": "cell-scenario-ref2v-campaign-waterfront-moving-124f-base"
+    },
+    {
+      "cellId": "cell-scenario-ref2v-campaign-waterfront-moving-243f-ref2v_tight_waterfront_moving",
+      "scenarioId": "scenario-ref2v-campaign-waterfront-moving",
+      "frames": 243,
+      "arm": "prompt_only",
+      "promptVariantId": "ref2v_tight_waterfront_moving",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Long-shot Ref2V prompt and exact reference conditioning pending operator run log verification before execution; certified visual QA evidence establishes asset identities but not long-shot acceptance",
+      "safetyBaseline124fCellId": "cell-scenario-ref2v-campaign-waterfront-moving-124f-ref2v_tight_waterfront_moving"
+    },
+    {
+      "cellId": "cell-scenario-ref2v-campaign-waterfront-moving-362f-base",
+      "scenarioId": "scenario-ref2v-campaign-waterfront-moving",
+      "frames": 362,
+      "arm": "baseline",
+      "promptVariantId": "original",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Long-shot Ref2V prompt and exact reference conditioning pending operator run log verification before execution; certified visual QA evidence establishes asset identities but not long-shot acceptance",
+      "safetyBaseline124fCellId": "cell-scenario-ref2v-campaign-waterfront-moving-124f-base"
+    },
+    {
+      "cellId": "cell-scenario-ref2v-campaign-waterfront-moving-362f-ref2v_tight_waterfront_moving",
+      "scenarioId": "scenario-ref2v-campaign-waterfront-moving",
+      "frames": 362,
+      "arm": "prompt_only",
+      "promptVariantId": "ref2v_tight_waterfront_moving",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Long-shot Ref2V prompt and exact reference conditioning pending operator run log verification before execution; certified visual QA evidence establishes asset identities but not long-shot acceptance",
+      "safetyBaseline124fCellId": "cell-scenario-ref2v-campaign-waterfront-moving-124f-ref2v_tight_waterfront_moving"
+    },
+    {
+      "cellId": "cell-scenario-ref2v-campaign-waterfront-static-124f-base",
+      "scenarioId": "scenario-ref2v-campaign-waterfront-static",
+      "frames": 124,
+      "arm": "baseline",
+      "promptVariantId": "original",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Long-shot Ref2V static prompt and exact reference conditioning pending operator run log verification before execution",
+      "safetyBaseline124fCellId": null
+    },
+    {
+      "cellId": "cell-scenario-ref2v-campaign-waterfront-static-124f-ref2v_tight_waterfront_static",
+      "scenarioId": "scenario-ref2v-campaign-waterfront-static",
+      "frames": 124,
+      "arm": "prompt_only",
+      "promptVariantId": "ref2v_tight_waterfront_static",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Long-shot Ref2V static prompt and exact reference conditioning pending operator run log verification before execution",
+      "safetyBaseline124fCellId": null
+    },
+    {
+      "cellId": "cell-scenario-ref2v-campaign-waterfront-static-192f-base",
+      "scenarioId": "scenario-ref2v-campaign-waterfront-static",
+      "frames": 192,
+      "arm": "baseline",
+      "promptVariantId": "original",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Long-shot Ref2V static prompt and exact reference conditioning pending operator run log verification before execution",
+      "safetyBaseline124fCellId": "cell-scenario-ref2v-campaign-waterfront-static-124f-base"
+    },
+    {
+      "cellId": "cell-scenario-ref2v-campaign-waterfront-static-192f-ref2v_tight_waterfront_static",
+      "scenarioId": "scenario-ref2v-campaign-waterfront-static",
+      "frames": 192,
+      "arm": "prompt_only",
+      "promptVariantId": "ref2v_tight_waterfront_static",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Long-shot Ref2V static prompt and exact reference conditioning pending operator run log verification before execution",
+      "safetyBaseline124fCellId": "cell-scenario-ref2v-campaign-waterfront-static-124f-ref2v_tight_waterfront_static"
+    },
+    {
+      "cellId": "cell-scenario-ref2v-campaign-waterfront-static-243f-base",
+      "scenarioId": "scenario-ref2v-campaign-waterfront-static",
+      "frames": 243,
+      "arm": "baseline",
+      "promptVariantId": "original",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Long-shot Ref2V static prompt and exact reference conditioning pending operator run log verification before execution",
+      "safetyBaseline124fCellId": "cell-scenario-ref2v-campaign-waterfront-static-124f-base"
+    },
+    {
+      "cellId": "cell-scenario-ref2v-campaign-waterfront-static-243f-ref2v_tight_waterfront_static",
+      "scenarioId": "scenario-ref2v-campaign-waterfront-static",
+      "frames": 243,
+      "arm": "prompt_only",
+      "promptVariantId": "ref2v_tight_waterfront_static",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Long-shot Ref2V static prompt and exact reference conditioning pending operator run log verification before execution",
+      "safetyBaseline124fCellId": "cell-scenario-ref2v-campaign-waterfront-static-124f-ref2v_tight_waterfront_static"
+    },
+    {
+      "cellId": "cell-scenario-ref2v-campaign-waterfront-static-362f-base",
+      "scenarioId": "scenario-ref2v-campaign-waterfront-static",
+      "frames": 362,
+      "arm": "baseline",
+      "promptVariantId": "original",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Long-shot Ref2V static prompt and exact reference conditioning pending operator run log verification before execution",
+      "safetyBaseline124fCellId": "cell-scenario-ref2v-campaign-waterfront-static-124f-base"
+    },
+    {
+      "cellId": "cell-scenario-ref2v-campaign-waterfront-static-362f-ref2v_tight_waterfront_static",
+      "scenarioId": "scenario-ref2v-campaign-waterfront-static",
+      "frames": 362,
+      "arm": "prompt_only",
+      "promptVariantId": "ref2v_tight_waterfront_static",
+      "prompt": null,
+      "promptDigest": null,
+      "status": "pending_source",
+      "pendingReason": "Long-shot Ref2V static prompt and exact reference conditioning pending operator run log verification before execution",
+      "safetyBaseline124fCellId": "cell-scenario-ref2v-campaign-waterfront-static-124f-ref2v_tight_waterfront_static"
+    }
+  ],
+  "comparisonEdges": [
+    {
+      "edgeId": "cmp-scenario-ref2v-campaign-waterfront-moving-124f-prompt-ref2v_tight_waterfront_moving",
+      "frames": 124,
+      "scenarioId": "scenario-ref2v-campaign-waterfront-moving",
+      "arm": "prompt_only",
+      "baselineCellId": "cell-scenario-ref2v-campaign-waterfront-moving-124f-base",
+      "candidateCellId": "cell-scenario-ref2v-campaign-waterfront-moving-124f-ref2v_tight_waterfront_moving",
+      "declaredFactorPaths": ["conditioning.positivePrompt"],
+      "status": "pending_source",
+      "pendingReason": "Baseline or candidate prompt source pending"
+    },
+    {
+      "edgeId": "cmp-scenario-ref2v-campaign-waterfront-moving-192f-prompt-ref2v_tight_waterfront_moving",
+      "frames": 192,
+      "scenarioId": "scenario-ref2v-campaign-waterfront-moving",
+      "arm": "prompt_only",
+      "baselineCellId": "cell-scenario-ref2v-campaign-waterfront-moving-192f-base",
+      "candidateCellId": "cell-scenario-ref2v-campaign-waterfront-moving-192f-ref2v_tight_waterfront_moving",
+      "declaredFactorPaths": ["conditioning.positivePrompt"],
+      "status": "pending_source",
+      "pendingReason": "Baseline or candidate prompt source pending"
+    },
+    {
+      "edgeId": "cmp-scenario-ref2v-campaign-waterfront-moving-243f-prompt-ref2v_tight_waterfront_moving",
+      "frames": 243,
+      "scenarioId": "scenario-ref2v-campaign-waterfront-moving",
+      "arm": "prompt_only",
+      "baselineCellId": "cell-scenario-ref2v-campaign-waterfront-moving-243f-base",
+      "candidateCellId": "cell-scenario-ref2v-campaign-waterfront-moving-243f-ref2v_tight_waterfront_moving",
+      "declaredFactorPaths": ["conditioning.positivePrompt"],
+      "status": "pending_source",
+      "pendingReason": "Baseline or candidate prompt source pending"
+    },
+    {
+      "edgeId": "cmp-scenario-ref2v-campaign-waterfront-moving-362f-prompt-ref2v_tight_waterfront_moving",
+      "frames": 362,
+      "scenarioId": "scenario-ref2v-campaign-waterfront-moving",
+      "arm": "prompt_only",
+      "baselineCellId": "cell-scenario-ref2v-campaign-waterfront-moving-362f-base",
+      "candidateCellId": "cell-scenario-ref2v-campaign-waterfront-moving-362f-ref2v_tight_waterfront_moving",
+      "declaredFactorPaths": ["conditioning.positivePrompt"],
+      "status": "pending_source",
+      "pendingReason": "Baseline or candidate prompt source pending"
+    },
+    {
+      "edgeId": "cmp-scenario-ref2v-campaign-waterfront-static-124f-prompt-ref2v_tight_waterfront_static",
+      "frames": 124,
+      "scenarioId": "scenario-ref2v-campaign-waterfront-static",
+      "arm": "prompt_only",
+      "baselineCellId": "cell-scenario-ref2v-campaign-waterfront-static-124f-base",
+      "candidateCellId": "cell-scenario-ref2v-campaign-waterfront-static-124f-ref2v_tight_waterfront_static",
+      "declaredFactorPaths": ["conditioning.positivePrompt"],
+      "status": "pending_source",
+      "pendingReason": "Baseline or candidate prompt source pending"
+    },
+    {
+      "edgeId": "cmp-scenario-ref2v-campaign-waterfront-static-192f-prompt-ref2v_tight_waterfront_static",
+      "frames": 192,
+      "scenarioId": "scenario-ref2v-campaign-waterfront-static",
+      "arm": "prompt_only",
+      "baselineCellId": "cell-scenario-ref2v-campaign-waterfront-static-192f-base",
+      "candidateCellId": "cell-scenario-ref2v-campaign-waterfront-static-192f-ref2v_tight_waterfront_static",
+      "declaredFactorPaths": ["conditioning.positivePrompt"],
+      "status": "pending_source",
+      "pendingReason": "Baseline or candidate prompt source pending"
+    },
+    {
+      "edgeId": "cmp-scenario-ref2v-campaign-waterfront-static-243f-prompt-ref2v_tight_waterfront_static",
+      "frames": 243,
+      "scenarioId": "scenario-ref2v-campaign-waterfront-static",
+      "arm": "prompt_only",
+      "baselineCellId": "cell-scenario-ref2v-campaign-waterfront-static-243f-base",
+      "candidateCellId": "cell-scenario-ref2v-campaign-waterfront-static-243f-ref2v_tight_waterfront_static",
+      "declaredFactorPaths": ["conditioning.positivePrompt"],
+      "status": "pending_source",
+      "pendingReason": "Baseline or candidate prompt source pending"
+    },
+    {
+      "edgeId": "cmp-scenario-ref2v-campaign-waterfront-static-362f-prompt-ref2v_tight_waterfront_static",
+      "frames": 362,
+      "scenarioId": "scenario-ref2v-campaign-waterfront-static",
+      "arm": "prompt_only",
+      "baselineCellId": "cell-scenario-ref2v-campaign-waterfront-static-362f-base",
+      "candidateCellId": "cell-scenario-ref2v-campaign-waterfront-static-362f-ref2v_tight_waterfront_static",
+      "declaredFactorPaths": ["conditioning.positivePrompt"],
+      "status": "pending_source",
+      "pendingReason": "Baseline or candidate prompt source pending"
+    }
+  ]
+}

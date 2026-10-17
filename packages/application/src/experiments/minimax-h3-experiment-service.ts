@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import {
   DEFAULT_MINIMAX_H3_EXPERIMENT_TIMEOUTS,
   MinimaxH3ExperimentTimeoutsSchema,
@@ -19,6 +19,11 @@ import {
   computeDescriptorDigest,
   computeComparisonKey,
   PINNED_H3_CHECKPOINTS,
+  FASTH3_ISOLATED_CORE_REVISION,
+  FASTH3_COMFYUI_SOURCE_HASHES,
+  PINNED_COMFYUI_NODES_PY_SHA256,
+  PINNED_COMFYUI_NODES_MINIMAX_H3_PY_SHA256,
+  buildRequiredRuntimeManifestFromAttentionCatalog,
   type MinimaxH3ExperimentDescriptor,
   type MinimaxH3ExperimentDescriptorV2,
   type MinimaxH3AnyExperimentDescriptor,
@@ -38,19 +43,40 @@ import {
   computeAttentionRuntimeLockDigest,
   computeAttentionConfigDigest,
   type MinimaxH3AttentionVariantName,
+  type MinimaxH3AttentionCatalogEntry,
   type MinimaxH3AttentionObservation,
   type MinimaxH3AttentionTopology,
   type MinimaxH3RequiredRuntimeManifest,
   type MinimaxH3ObservedProvenance,
-  MinimaxH3ObservedProvenanceSchema
+  type MinimaxH3SamplingRecipe,
+  type MinimaxH3SamplingRecipeName,
+  MinimaxH3ObservedProvenanceSchema,
+  MinimaxH3CapabilityHandshakeSchema,
+  type MinimaxH3CapabilityHandshake,
+  STANDARD_MINIMAX_H3_HOOKS,
+  MinimaxH3AttentionIdentityEnvelopeSchema,
+  satisfiesDriverConstraint
 } from "@cco/contracts";
 import { reducePhaseAccounting } from "./minimax-h3-timing-reducer.js";
 import {
   deriveAttentionGraph,
   validateAttentionTopology
 } from "./minimax-h3-attention-topology.js";
+import {
+  parseAttentionEvidence,
+  resolveAttentionEvidence,
+  type MinimaxH3AttentionEvidence
+} from "./minimax-h3-attention-evidence.js";
 import { getAttentionCatalogEntry } from "./minimax-h3-attention-catalog.js";
 import { reduceAttentionObservation } from "./minimax-h3-attention-reducer.js";
+import {
+  getSamplingRecipe,
+  validateRecipeRouteCompatibility
+} from "./minimax-h3-step-reduction-catalog.js";
+import {
+  applySamplingRecipeToGraph,
+  validateSamplingRecipeTopology
+} from "./minimax-h3-step-reduction-compiler.js";
 import type {
   MinimaxH3ComfyUiTransportPort,
   MinimaxH3ExperimentStorePort,
@@ -222,6 +248,50 @@ export function resolveCollectorPath(): string | undefined {
   return undefined;
 }
 
+export function resolveAttentionFixturesDir(configured?: string): string {
+  if (configured && existsSync(configured)) {
+    return resolve(configured);
+  }
+  const repoRoot = findRepositoryRoot();
+  const searchRoots = [process.cwd()];
+  if (process.env.INIT_CWD && !searchRoots.includes(process.env.INIT_CWD)) {
+    searchRoots.push(process.env.INIT_CWD);
+  }
+  if (!searchRoots.includes(repoRoot)) {
+    searchRoots.push(repoRoot);
+  }
+  const subpath = "experiments/minimax-h3-attention/fixtures";
+  for (const root of searchRoots) {
+    let curr = root;
+    for (let i = 0; i < 6; i++) {
+      const candidate = resolve(curr, configured ?? subpath);
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+      const parent = dirname(curr);
+      if (parent === curr) break;
+      curr = parent;
+    }
+  }
+  return resolve(repoRoot, configured ?? subpath);
+}
+
+export function getAttentionFixturePath(
+  variant: MinimaxH3AttentionVariantName,
+  fixturesDir?: string
+): string {
+  const dir = resolveAttentionFixturesDir(fixturesDir);
+  switch (variant) {
+    case "dense":
+    case "sage":
+      return join(dir, "pinned-core-attention-api.json");
+    case "native-sol-attn":
+      return join(dir, "native-sol-attn-api.json");
+    case "veda":
+      return join(dir, "veda-sparse-attention-api.json");
+  }
+}
+
 export function deriveExperimentGraph({
   baseWorkflow,
   route,
@@ -317,6 +387,291 @@ export function deriveExperimentGraph({
   }
 
   return derivedGraph;
+}
+
+function validateCapabilityHandshake(
+  handshake: MinimaxH3CapabilityHandshake,
+  options: {
+    descV2: MinimaxH3ExperimentDescriptorV2;
+    expectedPid?: number | undefined;
+    expectedNonce?: string | undefined;
+    attemptToken?: string | undefined;
+    comfyUiDir?: string | undefined;
+    requireBinding?: boolean | undefined;
+  }
+): string[] {
+  const conflicts: string[] = [];
+  const { descV2, expectedPid, expectedNonce, attemptToken } = options;
+
+  if (options.requireBinding) {
+    if (expectedPid === undefined || !expectedNonce || !attemptToken) {
+      conflicts.push(
+        "pre-submit handshake is not bound to an owned child PID, nonce, and attempt token"
+      );
+    }
+  }
+
+  if (!handshake.pid || typeof handshake.pid !== "number" || handshake.pid <= 0) {
+    conflicts.push("capability handshake missing valid child PID");
+  }
+  if (!handshake.nonce || typeof handshake.nonce !== "string" || !handshake.nonce.trim()) {
+    conflicts.push("capability handshake missing valid nonce");
+  }
+  if (
+    !handshake.attemptToken ||
+    typeof handshake.attemptToken !== "string" ||
+    !handshake.attemptToken.trim()
+  ) {
+    conflicts.push("capability handshake missing valid attemptToken");
+  }
+
+  if (handshake.status === "failed") {
+    conflicts.push(
+      `capability handshake marked failed: ${handshake.failureReason ?? "unknown failure"}`
+    );
+  }
+  if (handshake.status !== "ok") conflicts.push("capability handshake is not ready");
+
+  if (handshake.protocol !== descV2.requiredRuntime.instrumentationProtocol) {
+    conflicts.push(
+      `protocol mismatch (expected ${descV2.requiredRuntime.instrumentationProtocol}, got ${handshake.protocol})`
+    );
+  }
+  if (handshake.runId !== descV2.runId) {
+    conflicts.push(`runId mismatch (expected ${descV2.runId}, got ${handshake.runId})`);
+  }
+  if (attemptToken && handshake.attemptToken !== attemptToken) {
+    conflicts.push(
+      `attemptToken mismatch (expected ${attemptToken}, got ${handshake.attemptToken})`
+    );
+  }
+  if (expectedNonce && handshake.nonce !== expectedNonce) {
+    conflicts.push(`nonce mismatch (expected ${expectedNonce}, got ${handshake.nonce})`);
+  }
+  if (expectedPid !== undefined && handshake.pid !== expectedPid) {
+    conflicts.push(`pid mismatch (expected ${expectedPid}, got ${handshake.pid})`);
+  }
+  if (
+    descV2.requiredRuntime.collectorDigest &&
+    handshake.collectorDigest !== descV2.requiredRuntime.collectorDigest
+  ) {
+    conflicts.push(
+      `collectorDigest mismatch: expected ${descV2.requiredRuntime.collectorDigest}, got ${handshake.collectorDigest}`
+    );
+  }
+  if (
+    descV2.requiredRuntime.hookManifestDigest &&
+    handshake.hookManifestDigest !== descV2.requiredRuntime.hookManifestDigest
+  ) {
+    conflicts.push(
+      `hookManifestDigest mismatch: expected ${descV2.requiredRuntime.hookManifestDigest}, got ${handshake.hookManifestDigest}`
+    );
+  }
+
+  // Kernel callable check
+  if (handshake.kernelCallableAvailable === false) {
+    conflicts.push("requested kernel callable is unavailable");
+  } else if (descV2.attentionRequest && handshake.kernelCallableAvailable !== true) {
+    conflicts.push("requested kernel callable is unavailable");
+  }
+
+  // Verify registered nodes
+  for (const reqNode of descV2.requiredRuntime.requiredNodes) {
+    const regNode = handshake.registeredNodes[reqNode.name];
+    if (!regNode) {
+      conflicts.push(`required node "${reqNode.name}" is not registered in ComfyUI child process`);
+      continue;
+    }
+    if (reqNode.revision) {
+      if (!regNode.revision) {
+        conflicts.push(`required node "${reqNode.name}" lacks revision in child process handshake`);
+      } else if (regNode.revision !== reqNode.revision) {
+        conflicts.push(
+          `required node "${reqNode.name}" revision mismatch: expected ${reqNode.revision}, got ${regNode.revision}`
+        );
+      }
+    }
+    if (reqNode.moduleHash) {
+      if (!regNode.moduleHash) {
+        conflicts.push(
+          `required node "${reqNode.name}" lacks moduleHash in child process handshake`
+        );
+      } else if (regNode.moduleHash !== reqNode.moduleHash) {
+        conflicts.push(
+          `required node "${reqNode.name}" moduleHash mismatch: expected ${reqNode.moduleHash}, got ${regNode.moduleHash}`
+        );
+      }
+    }
+    if (options.comfyUiDir && regNode.sourceFile) {
+      const normSource = normalize(regNode.sourceFile);
+      const normCheckout = normalize(options.comfyUiDir);
+      // A plain startsWith admits sibling directories sharing the checkout's
+      // name as a prefix (e.g. checkout "/x/comfy" would wrongly accept
+      // "/x/comfy-evil/node.py"). Require the match to land exactly on the
+      // checkout path or one path-separator boundary inside it (AC-3,
+      // F-e35ea06e).
+      const isContained = normSource === normCheckout || normSource.startsWith(normCheckout + sep);
+      if (isAbsolute(normSource) && !isContained) {
+        conflicts.push(
+          `node "${reqNode.name}" source file "${normSource}" is outside the audited checkout "${normCheckout}"`
+        );
+      }
+    }
+  }
+
+  // Verify hooks
+  for (const reqHook of descV2.requiredRuntime.hooks) {
+    const match = handshake.installedHooks.find(
+      (h) =>
+        h.name === reqHook.name &&
+        h.modulePath === reqHook.modulePath &&
+        h.callable === reqHook.callable &&
+        h.phase === reqHook.phase
+    );
+    if (!match) {
+      conflicts.push(`required hook "${reqHook.name}" is not present in child process`);
+    } else if (!match.attached) {
+      conflicts.push(`required hook "${reqHook.name}" is not attached in child process`);
+    }
+  }
+
+  // Runtime versions & package/source identity checks
+  const handshakeAny = handshake as Record<string, unknown>;
+  const reqRuntime = descV2.requiredRuntime;
+  const needsRuntimeVersions = Boolean(
+    reqRuntime.pytorchBuild ||
+    reqRuntime.cudaBuild ||
+    reqRuntime.interpreter?.pythonVersion ||
+    (reqRuntime.driverConstraints && reqRuntime.driverConstraints.length > 0)
+  );
+
+  if (needsRuntimeVersions && !handshake.runtimeVersions) {
+    conflicts.push("child capability handshake is missing runtimeVersions");
+  } else if (handshake.runtimeVersions) {
+    if (reqRuntime.pytorchBuild) {
+      if (!handshake.runtimeVersions.pytorchVersion) {
+        conflicts.push("runtime pytorchVersion missing in child handshake");
+      } else if (handshake.runtimeVersions.pytorchVersion !== reqRuntime.pytorchBuild) {
+        conflicts.push(
+          `runtime pytorchVersion mismatch: expected ${reqRuntime.pytorchBuild}, got ${handshake.runtimeVersions.pytorchVersion}`
+        );
+      }
+    }
+    if (reqRuntime.cudaBuild) {
+      if (!handshake.runtimeVersions.cudaBuildVersion) {
+        conflicts.push("runtime cudaBuildVersion missing in child handshake");
+      } else if (handshake.runtimeVersions.cudaBuildVersion !== reqRuntime.cudaBuild) {
+        conflicts.push(
+          `runtime cudaBuildVersion mismatch: expected ${reqRuntime.cudaBuild}, got ${handshake.runtimeVersions.cudaBuildVersion}`
+        );
+      }
+    }
+    if (reqRuntime.interpreter?.pythonVersion) {
+      if (!handshake.runtimeVersions.pythonVersion) {
+        conflicts.push("runtime pythonVersion missing in child handshake");
+      } else if (handshake.runtimeVersions.pythonVersion !== reqRuntime.interpreter.pythonVersion) {
+        conflicts.push(
+          `runtime pythonVersion mismatch: expected ${reqRuntime.interpreter.pythonVersion}, got ${handshake.runtimeVersions.pythonVersion}`
+        );
+      }
+    }
+    if (reqRuntime.driverConstraints && reqRuntime.driverConstraints.length > 0) {
+      if (!handshake.runtimeVersions.driverVersion) {
+        conflicts.push("runtime driverVersion missing in child handshake");
+      } else {
+        for (const constraint of reqRuntime.driverConstraints) {
+          const check = satisfiesDriverConstraint(
+            handshake.runtimeVersions.driverVersion,
+            constraint
+          );
+          if (!check.satisfied) {
+            conflicts.push(
+              check.error ??
+                `Driver version "${handshake.runtimeVersions.driverVersion}" does not satisfy constraint "${constraint}".`
+            );
+          }
+        }
+      }
+    }
+  }
+
+  if (reqRuntime.pythonPackages && reqRuntime.pythonPackages.length > 0) {
+    if (
+      !Array.isArray(handshakeAny.packageIdentities) ||
+      handshakeAny.packageIdentities.length === 0
+    ) {
+      conflicts.push("child capability handshake is missing packageIdentities");
+    } else {
+      const pkgIds = handshakeAny.packageIdentities as Array<{
+        name: string;
+        version: string;
+        artifactHash?: string;
+        artifactMethod?: string;
+      }>;
+      const pkgMap = new Map(pkgIds.map((p) => [p.name, p]));
+      for (const reqPkg of reqRuntime.pythonPackages) {
+        const livePkg = pkgMap.get(reqPkg.name);
+        if (!livePkg) {
+          conflicts.push(
+            `required package "${reqPkg.name}" is missing from child capability handshake`
+          );
+        } else {
+          // version/method were previously unchecked here: a manifest could
+          // pin a specific package version and verification artifactMethod,
+          // but the live handshake's own reported version/method were never
+          // compared against them, so a different installed version or a
+          // weaker hashing method could pass undetected as long as the
+          // artifactHash happened to be supplied and matched (F-e35ea06e).
+          if (reqPkg.version && livePkg.version && reqPkg.version !== livePkg.version) {
+            conflicts.push(
+              `package "${reqPkg.name}" version mismatch: expected ${reqPkg.version}, got ${livePkg.version}`
+            );
+          }
+          if (
+            reqPkg.artifactMethod &&
+            livePkg.artifactMethod &&
+            reqPkg.artifactMethod !== livePkg.artifactMethod
+          ) {
+            conflicts.push(
+              `package "${reqPkg.name}" artifactMethod mismatch: expected ${reqPkg.artifactMethod}, got ${livePkg.artifactMethod}`
+            );
+          }
+          if (reqPkg.artifactHash) {
+            if (!livePkg.artifactHash) {
+              conflicts.push(
+                `package "${reqPkg.name}" lacks artifactHash in child capability handshake`
+              );
+            } else if (reqPkg.artifactHash !== livePkg.artifactHash) {
+              conflicts.push(
+                `package "${reqPkg.name}" artifactHash mismatch: expected ${reqPkg.artifactHash}, got ${livePkg.artifactHash}`
+              );
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (reqRuntime.sourceFileHashes && Object.keys(reqRuntime.sourceFileHashes).length > 0) {
+    if (!handshakeAny.sourceIdentities || typeof handshakeAny.sourceIdentities !== "object") {
+      conflicts.push("child capability handshake is missing sourceIdentities");
+    } else {
+      const srcIds = handshakeAny.sourceIdentities as Record<string, string>;
+      for (const [file, expHash] of Object.entries(reqRuntime.sourceFileHashes)) {
+        if (!srcIds[file]) {
+          conflicts.push(
+            `required source file "${file}" is missing from child capability handshake`
+          );
+        } else if (srcIds[file] !== expHash) {
+          conflicts.push(
+            `source identity hash mismatch for "${file}": expected ${expHash}, got ${srcIds[file]}`
+          );
+        }
+      }
+    }
+  }
+
+  return conflicts;
 }
 
 export class MinimaxH3ExperimentService {
@@ -441,6 +796,12 @@ export class MinimaxH3ExperimentService {
         role?: string;
         tag?: string;
         order?: number;
+        sha256?: string;
+        sizeBytes?: number;
+        width?: number;
+        height?: number;
+        sourceAssetPath?: string;
+        derivation?: string;
       }>;
     };
 
@@ -507,6 +868,26 @@ export class MinimaxH3ExperimentService {
       );
       const hashInfo = await this.store.hashFile(resolvedAsset);
       const assetInspection = await this.store.inspectAsset(resolvedAsset);
+      if (ref.sha256 && ref.sha256 !== hashInfo.sha256) {
+        throw new Error(
+          `Input manifest reference at index ${i} SHA-256 mismatch: expected ${ref.sha256}, got ${hashInfo.sha256}`
+        );
+      }
+      if (ref.sizeBytes && ref.sizeBytes !== hashInfo.sizeBytes) {
+        throw new Error(
+          `Input manifest reference at index ${i} size mismatch: expected ${ref.sizeBytes}, got ${hashInfo.sizeBytes}`
+        );
+      }
+      if (ref.width && ref.width !== assetInspection.width) {
+        throw new Error(
+          `Input manifest reference at index ${i} width mismatch: expected ${ref.width}, got ${assetInspection.width}`
+        );
+      }
+      if (ref.height && ref.height !== assetInspection.height) {
+        throw new Error(
+          `Input manifest reference at index ${i} height mismatch: expected ${ref.height}, got ${assetInspection.height}`
+        );
+      }
       processedReferences.push({
         slotIndex: i,
         role: ref.role ?? expectedRole,
@@ -553,7 +934,51 @@ export class MinimaxH3ExperimentService {
       options.checkpointOverride !== undefined ||
       options.changedFactors !== undefined ||
       options.variantPurpose !== undefined ||
-      options.attentionVariant !== undefined;
+      options.attentionVariant !== undefined ||
+      options.samplingRecipe !== undefined;
+
+    const samplingRecipeName: MinimaxH3SamplingRecipeName | undefined = options.samplingRecipe;
+    const samplingRecipe: MinimaxH3SamplingRecipe | undefined = samplingRecipeName
+      ? getSamplingRecipe(samplingRecipeName, route)
+      : undefined;
+
+    if (samplingRecipe) {
+      if (options.attentionVariant !== undefined) {
+        throw new Error(
+          "Cannot specify attentionVariant when using samplingRecipe; the recipe defines its own attention configuration."
+        );
+      }
+      if (options.stepOverride !== undefined) {
+        throw new Error(
+          `Cannot specify stepOverride when using samplingRecipe; recipe "${samplingRecipe.name}" specifies its exact expectedSteps (${samplingRecipe.expectedSteps}).`
+        );
+      }
+      if (options.checkpointOverride !== undefined) {
+        throw new Error(
+          `Cannot specify checkpointOverride when using samplingRecipe; recipe "${samplingRecipe.name}" specifies its exact diffusionModel.`
+        );
+      }
+      if (options.coreRevision !== undefined) {
+        throw new Error(
+          `Cannot specify coreRevision when using samplingRecipe; recipe "${samplingRecipe.name}" specifies its requiredRuntime.`
+        );
+      }
+      if (options.matchedVariant !== undefined) {
+        throw new Error(
+          `Cannot specify matchedVariant when using samplingRecipe; recipe "${samplingRecipe.name}" defines its own configuration.`
+        );
+      }
+      if (
+        samplingRecipe.name === "fasth3-i2v-8" &&
+        options.variantPurpose !== undefined &&
+        options.variantPurpose !== "controlled_multifactor"
+      ) {
+        throw new Error(
+          `FastH3 recipe changes multiple factors (models.diffusion, sampling.settings, sampling.sigmaShift, attention.configuration, runtime.manifest); variantPurpose must be "controlled_multifactor", received "${options.variantPurpose}".`
+        );
+      }
+      validateRecipeRouteCompatibility(samplingRecipe.name, route);
+    }
 
     const attentionVariant: MinimaxH3AttentionVariantName | undefined = options.attentionVariant;
     const attentionCatalogEntry = attentionVariant
@@ -564,13 +989,19 @@ export class MinimaxH3ExperimentService {
       : undefined;
     const effectiveArgv =
       attentionVariant === "sage" ? [...generatedArgv, "--use-sage-attention"] : [...generatedArgv];
+    const effectiveEnv: Record<string, string> = {
+      CUDA_VISIBLE_DEVICES: gpuUuid,
+      ...(options.env ?? {})
+    };
 
-    const checkpointFilename =
-      options.checkpointOverride === "fl2va"
+    const checkpointFilename = samplingRecipe
+      ? samplingRecipe.diffusionModel.filename
+      : options.checkpointOverride === "fl2va"
         ? PINNED_H3_CHECKPOINTS.fl2va.filename
         : PINNED_H3_CHECKPOINTS.ref2va.filename;
-    const checkpointHash =
-      options.checkpointOverride === "fl2va"
+    const checkpointHash = samplingRecipe
+      ? samplingRecipe.diffusionModel.sha256
+      : options.checkpointOverride === "fl2va"
         ? PINNED_H3_CHECKPOINTS.fl2va.sha256
         : PINNED_H3_CHECKPOINTS.ref2va.sha256;
 
@@ -592,11 +1023,50 @@ export class MinimaxH3ExperimentService {
     let derivedGraph = baseDerivedGraph;
     let attentionTopology: MinimaxH3AttentionTopology | undefined;
 
-    if (attentionVariant !== undefined && attentionCatalogEntry) {
+    if (samplingRecipe) {
+      derivedGraph = applySamplingRecipeToGraph({
+        baseWorkflow: baseDerivedGraph,
+        recipe: samplingRecipe,
+        route
+      });
+      const recipeValidation = validateSamplingRecipeTopology(derivedGraph, samplingRecipe, route);
+      if (!recipeValidation.valid) {
+        throw new Error(
+          `Sampling recipe topology validation failed for recipe "${samplingRecipe.name}":\n${recipeValidation.errors.join("\n")}`
+        );
+      }
+    } else if (attentionVariant !== undefined && attentionCatalogEntry) {
+      const fixturePath = getAttentionFixturePath(attentionVariant, options.fixturesDir);
+      let fixtureRaw: unknown;
+      try {
+        fixtureRaw = await this.store.readJsonFile<unknown>(fixturePath);
+      } catch (err) {
+        throw new Error(
+          `Attention fixture missing or unreadable at "${fixturePath}": ${(err as Error).message}`
+        );
+      }
+      const evidence = parseAttentionEvidence(fixtureRaw);
+      const targetCoreRevision = options.coreRevision ?? attentionCatalogEntry.comfyuiCoreRevision;
+      const targetCustomNode = attentionCatalogEntry.customNode;
+      const resolved = resolveAttentionEvidence({
+        variant: attentionVariant,
+        evidence,
+        coreRevision: targetCoreRevision,
+        customNode: targetCustomNode
+      });
+      if (!resolved.valid || !resolved.isResolved) {
+        throw new Error(
+          `Attention evidence resolution failed for variant "${attentionVariant}":\n${resolved.errors.join("\n")}`
+        );
+      }
+
       const { graph: attGraph, topology } = deriveAttentionGraph({
         graph: baseDerivedGraph,
         attentionVariant,
-        route
+        route,
+        evidence,
+        coreRevision: targetCoreRevision,
+        customNode: targetCustomNode
       });
       derivedGraph = attGraph;
       attentionTopology = topology;
@@ -604,7 +1074,11 @@ export class MinimaxH3ExperimentService {
       const topoValidation = validateAttentionTopology(derivedGraph, {
         expectedVariant: attentionVariant,
         route,
-        argv: effectiveArgv
+        argv: effectiveArgv,
+        env: effectiveEnv,
+        evidence,
+        coreRevision: targetCoreRevision,
+        customNode: targetCustomNode
       });
       if (!topoValidation.valid) {
         throw new Error(
@@ -648,12 +1122,16 @@ export class MinimaxH3ExperimentService {
       // this yet). Keep this literal in sync if that ever changes.
       modelOffload: true,
       workflowDigest: derivedWorkflowDigest,
-      comfyuiCoreRevision: attentionCatalogEntry
-        ? attentionCatalogEntry.comfyuiCoreRevision
-        : PINNED_COMFYUI_CORE_REVISION,
+      comfyuiCoreRevision: samplingRecipe
+        ? samplingRecipe.requiredRuntimeRevision
+        : attentionCatalogEntry
+          ? attentionCatalogEntry.comfyuiCoreRevision
+          : PINNED_COMFYUI_CORE_REVISION,
       modelDigests: {
-        "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors":
-          "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+        [`diffusion_models/${checkpointFilename}`]: checkpointHash,
+        ...(samplingRecipe?.lora
+          ? { [`loras/${samplingRecipe.lora.filename}`]: samplingRecipe.lora.sha256 }
+          : {}),
         "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors":
           "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
         "vae/minimax_h3_video_vae_int8_convrot.safetensors":
@@ -723,6 +1201,86 @@ export class MinimaxH3ExperimentService {
         });
       }
 
+      if (samplingRecipe) {
+        if (samplingRecipe.lora && !declaredChanges.some((c) => c.path === "models.auxiliary")) {
+          declaredChanges.push({
+            path: "models.auxiliary",
+            before: [],
+            after: [
+              {
+                name: samplingRecipe.lora.filename,
+                hash: samplingRecipe.lora.sha256,
+                strength: samplingRecipe.lora.strengthModel,
+                role: "lora",
+                order: 0
+              }
+            ],
+            rationale: `Sampling recipe LoRA distillation: ${samplingRecipe.name}`
+          });
+        }
+        if (
+          samplingRecipe.expectedSteps !== 20 &&
+          !declaredChanges.some((c) => c.path === "sampling.settings")
+        ) {
+          declaredChanges.push({
+            path: "sampling.settings",
+            before: { sampler: "res_multistep", scheduler: "simple", steps: 20 },
+            after: {
+              sampler: samplingRecipe.sampler,
+              scheduler: samplingRecipe.scheduler,
+              steps: samplingRecipe.expectedSteps
+            },
+            rationale: `Sampling recipe step schedule: ${samplingRecipe.name} (${samplingRecipe.expectedSteps} steps)`
+          });
+        }
+        if (
+          samplingRecipe.sigmaShift?.enabled &&
+          !declaredChanges.some((c) => c.path === "sampling.sigmaShift")
+        ) {
+          declaredChanges.push({
+            path: "sampling.sigmaShift",
+            before: { enabled: false, videoShift: 12.0, audioShift: 3.0 },
+            after: {
+              enabled: true,
+              videoShift: samplingRecipe.sigmaShift.videoShift,
+              audioShift: samplingRecipe.sigmaShift.audioShift
+            },
+            rationale: `Sampling recipe sigma shift: ${samplingRecipe.name}`
+          });
+        }
+        if (
+          samplingRecipe.name !== "fl2va-turbo-8" &&
+          samplingRecipe.diffusionModel.filename !== PINNED_H3_CHECKPOINTS.ref2va.filename &&
+          !declaredChanges.some((c) => c.path === "models.diffusion")
+        ) {
+          const beforeCheckpoint =
+            samplingRecipe.name === "fasth3-i2v-8"
+              ? PINNED_H3_CHECKPOINTS.fl2va
+              : PINNED_H3_CHECKPOINTS.ref2va;
+          const beforeTaskMode = samplingRecipe.name === "fasth3-i2v-8" ? "fl2va" : "ref2va";
+          declaredChanges.push({
+            path: "models.diffusion",
+            before: {
+              repository: "Comfy-Org/MiniMax-H3",
+              revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+              filename: beforeCheckpoint.filename,
+              fileHash: beforeCheckpoint.sha256,
+              taskMode: beforeTaskMode,
+              licenseSourceRef: "https://huggingface.co/Comfy-Org/MiniMax-H3"
+            },
+            after: {
+              repository: samplingRecipe.diffusionModel.repository,
+              revision: samplingRecipe.diffusionModel.revision,
+              filename: samplingRecipe.diffusionModel.filename,
+              fileHash: samplingRecipe.diffusionModel.sha256,
+              taskMode: samplingRecipe.taskFamily,
+              licenseSourceRef: samplingRecipe.licensing.licenseSourceRef
+            },
+            rationale: `Sampling recipe checkpoint: ${samplingRecipe.name}`
+          });
+        }
+      }
+
       const collectorPath = resolveCollectorPath();
       if (!collectorPath || !existsSync(collectorPath)) {
         throw new Error(
@@ -738,15 +1296,10 @@ export class MinimaxH3ExperimentService {
           `Failed to read collector script at ${collectorPath}: ${err instanceof Error ? err.message : String(err)}`
         );
       }
-      const standardHooks = [
-        {
-          name: "sampler_step_hook",
-          modulePath: "comfy.samplers",
-          callable: "sample",
-          phase: "sampling_step" as const
-        }
-      ];
-      const genuineHookManifestDigest = sha256Hex(canonicalizeJson(standardHooks));
+      const standardHooks = [...STANDARD_MINIMAX_H3_HOOKS];
+      const genuineHookManifestDigest = sha256Hex(
+        canonicalizeJson([...standardHooks].sort((a, b) => a.name.localeCompare(b.name)))
+      );
 
       const baseRequiredRuntime: MinimaxH3RequiredRuntimeManifest = {
         coreRevision: PINNED_COMFYUI_CORE_REVISION,
@@ -760,7 +1313,13 @@ export class MinimaxH3ExperimentService {
             name: route === "i2v" ? "MiniMaxH3ImageToVideo" : "MiniMaxH3ReferenceToVideo"
           }
         ],
-        pythonPackages: [{ name: "torch", version: "2.5.1+cu124" }],
+        pythonPackages: [
+          {
+            name: "torch",
+            version: "2.5.1+cu124",
+            importModule: "torch"
+          }
+        ],
         pytorchBuild: "2.5.1+cu124",
         cudaBuild: "12.4",
         driverConstraints: [">=550.00.00"],
@@ -771,45 +1330,270 @@ export class MinimaxH3ExperimentService {
         hooks: standardHooks
       };
 
-      const upgradedRequiredRuntime: MinimaxH3RequiredRuntimeManifest = attentionCatalogEntry
-        ? {
-            coreRevision: attentionCatalogEntry.comfyuiCoreRevision,
+      let recipeRequiredRuntime: MinimaxH3RequiredRuntimeManifest | undefined;
+      if (samplingRecipe) {
+        if (samplingRecipe.name === "fasth3-i2v-8") {
+          recipeRequiredRuntime = {
+            coreRevision: FASTH3_ISOLATED_CORE_REVISION,
+            sourceFileHashes: { ...FASTH3_COMFYUI_SOURCE_HASHES },
+            requiredNodes: [
+              { name: "MiniMaxH3ImageToVideo" },
+              { name: "BlockSparseAttention" },
+              { name: "MiniMaxH3SigmaShift" },
+              { name: "ModelAttentionBackend" }
+            ],
+            pythonPackages: [
+              {
+                name: "torch",
+                version: "2.5.1+cu124",
+                importModule: "torch"
+              },
+              {
+                name: "comfy-kitchen",
+                version: "0.2.34",
+                importModule: "comfy_kitchen"
+              }
+            ],
+            pytorchBuild: "2.5.1+cu124",
+            cudaBuild: "12.4",
+            driverConstraints: [">=550.00.00"],
+            attentionKernel: "block_sparse_triton",
+            instrumentationProtocol: "v2-jsonl",
+            collectorDigest: genuineCollectorDigest,
+            hookManifestDigest: genuineHookManifestDigest,
+            hooks: standardHooks
+          };
+        } else if (samplingRecipe.lora) {
+          recipeRequiredRuntime = {
+            coreRevision: PINNED_COMFYUI_CORE_REVISION,
             sourceFileHashes: {
               "comfy/model_management.py": PINNED_COMFYUI_SOURCE_HASHES.modelManagementSha256,
               "main.py": PINNED_COMFYUI_SOURCE_HASHES.mainSha256,
-              "comfy/cli_args.py": PINNED_COMFYUI_SOURCE_HASHES.cliArgsSha256
+              "comfy/cli_args.py": PINNED_COMFYUI_SOURCE_HASHES.cliArgsSha256,
+              "nodes.py": PINNED_COMFYUI_NODES_PY_SHA256,
+              "comfy_extras/nodes_minimax_h3.py": PINNED_COMFYUI_NODES_MINIMAX_H3_PY_SHA256
             },
             requiredNodes: [
               {
                 name: route === "i2v" ? "MiniMaxH3ImageToVideo" : "MiniMaxH3ReferenceToVideo"
               },
-              ...attentionCatalogEntry.requiredNodes.map((n) => ({
-                name: n.name,
-                revision: n.revision
-              }))
+              {
+                name: "LoraLoaderModelOnly"
+              }
             ],
-            pythonPackages:
-              attentionCatalogEntry.pythonPackages.length > 0
-                ? attentionCatalogEntry.pythonPackages.map((p) => ({
-                    name: p.name,
-                    version: p.version
-                  }))
-                : [{ name: "torch", version: "2.5.1+cu124" }],
+            pythonPackages: [
+              {
+                name: "torch",
+                version: "2.5.1+cu124",
+                importModule: "torch"
+              }
+            ],
             pytorchBuild: "2.5.1+cu124",
             cudaBuild: "12.4",
             driverConstraints: [">=550.00.00"],
-            attentionKernel: attentionCatalogEntry.kernel,
+            attentionKernel: "torch_sdpa",
             instrumentationProtocol: "v2-jsonl",
             collectorDigest: genuineCollectorDigest,
             hookManifestDigest: genuineHookManifestDigest,
             hooks: standardHooks
+          };
+        } else {
+          recipeRequiredRuntime = baseRequiredRuntime;
+        }
+      }
+
+      let envInspection:
+        | Awaited<
+            ReturnType<NonNullable<MinimaxH3TargetPreflightPort["inspectEnvironmentIdentity"]>>
+          >
+        | undefined;
+      const targetCoreRevision =
+        samplingRecipe?.requiredRuntimeRevision ??
+        attentionCatalogEntry?.comfyuiCoreRevision ??
+        PINNED_COMFYUI_CORE_REVISION;
+      const requiredPackagesToInspect: Array<{
+        name: string;
+        version?: string;
+        importModule?: string;
+      }> = [{ name: "torch", version: "2.5.1+cu124", importModule: "torch" }];
+      if (attentionCatalogEntry?.pythonPackages) {
+        for (const p of attentionCatalogEntry.pythonPackages) {
+          if (!requiredPackagesToInspect.some((rp) => rp.name === p.name)) {
+            const pkgToInspect: { name: string; version?: string; importModule?: string } = {
+              name: p.name
+            };
+            if (p.version) pkgToInspect.version = p.version;
+            if (p.importModule) pkgToInspect.importModule = p.importModule;
+            requiredPackagesToInspect.push(pkgToInspect);
           }
-        : baseRequiredRuntime;
+        }
+      }
+      if (samplingRecipe?.name === "fasth3-i2v-8") {
+        if (!requiredPackagesToInspect.some((rp) => rp.name === "comfy-kitchen")) {
+          requiredPackagesToInspect.push({
+            name: "comfy-kitchen",
+            version: "0.2.34",
+            importModule: "comfy_kitchen"
+          });
+        }
+      }
+      if (this.preflight?.inspectEnvironmentIdentity) {
+        try {
+          envInspection = await this.preflight.inspectEnvironmentIdentity({
+            comfyUiDir,
+            pythonPath,
+            coreRevision: targetCoreRevision,
+            requiredPackages: requiredPackagesToInspect,
+            timeoutMs:
+              ((options as unknown as Record<string, unknown>).startupTimeoutMs as
+                number | undefined) ?? 30000
+          });
+        } catch {
+          // preflight inspection failure handled below
+        }
+      }
+
+      if (envInspection?.ok) {
+        if (envInspection.interpreter) {
+          baseRequiredRuntime.interpreter = envInspection.interpreter;
+          if (recipeRequiredRuntime) {
+            recipeRequiredRuntime.interpreter = envInspection.interpreter;
+          }
+        }
+        if (envInspection.pythonPackages && envInspection.pythonPackages.length > 0) {
+          const basePkgMap = new Map(baseRequiredRuntime.pythonPackages.map((p) => [p.name, p]));
+          for (const mp of envInspection.pythonPackages) {
+            basePkgMap.set(mp.name, {
+              ...basePkgMap.get(mp.name),
+              ...mp
+            });
+          }
+          baseRequiredRuntime.pythonPackages = Array.from(basePkgMap.values());
+          if (recipeRequiredRuntime) {
+            const recipePkgMap = new Map(
+              recipeRequiredRuntime.pythonPackages.map((p) => [p.name, p])
+            );
+            for (const mp of envInspection.pythonPackages) {
+              recipePkgMap.set(mp.name, {
+                ...recipePkgMap.get(mp.name),
+                ...mp
+              });
+            }
+            recipeRequiredRuntime.pythonPackages = Array.from(recipePkgMap.values());
+          }
+        }
+        if (
+          envInspection.sourceFileHashes &&
+          Object.keys(envInspection.sourceFileHashes).length > 0
+        ) {
+          baseRequiredRuntime.sourceFileHashes = {
+            ...baseRequiredRuntime.sourceFileHashes,
+            ...envInspection.sourceFileHashes
+          };
+          if (recipeRequiredRuntime) {
+            recipeRequiredRuntime.sourceFileHashes = {
+              ...envInspection.sourceFileHashes,
+              ...recipeRequiredRuntime.sourceFileHashes
+            };
+          }
+        }
+        if (envInspection.pytorchBuild) {
+          baseRequiredRuntime.pytorchBuild = envInspection.pytorchBuild;
+          if (recipeRequiredRuntime) {
+            recipeRequiredRuntime.pytorchBuild = envInspection.pytorchBuild;
+          }
+        }
+        if (envInspection.cudaBuild) {
+          baseRequiredRuntime.cudaBuild = envInspection.cudaBuild;
+          if (recipeRequiredRuntime) {
+            recipeRequiredRuntime.cudaBuild = envInspection.cudaBuild;
+          }
+        }
+        if (envInspection.driverConstraints && envInspection.driverConstraints.length > 0) {
+          baseRequiredRuntime.driverConstraints = envInspection.driverConstraints;
+          if (recipeRequiredRuntime) {
+            recipeRequiredRuntime.driverConstraints = envInspection.driverConstraints;
+          }
+        }
+      }
+
+      if (this.preflight && attentionCatalogEntry) {
+        if (!envInspection || !envInspection.ok) {
+          throw new Error(
+            `Attention manifest for variant "${attentionCatalogEntry.variantName}" requires complete measured environment identity: ${envInspection?.blocker ?? "inspectEnvironmentIdentity failed or unavailable"}`
+          );
+        }
+      }
+
+      const upgradedRequiredRuntime: MinimaxH3RequiredRuntimeManifest = attentionCatalogEntry
+        ? buildRequiredRuntimeManifestFromAttentionCatalog(attentionCatalogEntry, route, {
+            collectorDigest: genuineCollectorDigest,
+            hookManifestDigest: genuineHookManifestDigest,
+            hooks: standardHooks,
+            ...(envInspection?.sourceFileHashes
+              ? { sourceFileHashes: envInspection.sourceFileHashes }
+              : {}),
+            ...(envInspection?.pytorchBuild ? { pytorchBuild: envInspection.pytorchBuild } : {}),
+            ...(envInspection?.cudaBuild ? { cudaBuild: envInspection.cudaBuild } : {}),
+            ...(envInspection?.driverConstraints
+              ? { driverConstraints: envInspection.driverConstraints }
+              : {}),
+            ...(envInspection?.interpreter ? { interpreter: envInspection.interpreter } : {}),
+            ...(envInspection?.pythonPackages
+              ? { pythonPackages: envInspection.pythonPackages }
+              : {})
+          })
+        : (recipeRequiredRuntime ?? baseRequiredRuntime);
 
       const baseRuntimeManifestDigest = sha256Hex(canonicalizeJson(baseRequiredRuntime));
       const upgradedRuntimeManifestDigest = sha256Hex(canonicalizeJson(upgradedRequiredRuntime));
+      const recipeRuntimeManifestDigest = recipeRequiredRuntime
+        ? sha256Hex(canonicalizeJson(recipeRequiredRuntime))
+        : baseRuntimeManifestDigest;
       const baseHookManifestDigest = sha256Hex(canonicalizeJson(baseRequiredRuntime.hooks));
       const upgradedHookManifestDigest = sha256Hex(canonicalizeJson(upgradedRequiredRuntime.hooks));
+      const recipeHookManifestDigest = recipeRequiredRuntime
+        ? sha256Hex(canonicalizeJson(recipeRequiredRuntime.hooks))
+        : baseHookManifestDigest;
+
+      if (samplingRecipe) {
+        if (
+          samplingRecipe.attentionTopology &&
+          !declaredChanges.some((c) => c.path === "attention.configuration")
+        ) {
+          declaredChanges.push({
+            path: "attention.configuration",
+            before: {
+              backend: "torch_sdpa",
+              topologyDigest: computeAttentionTopologyDigest([]),
+              patches: []
+            },
+            after: {
+              backend: samplingRecipe.attentionTopology.backend,
+              topologyDigest: samplingRecipe.attentionTopology.topologyDigest,
+              patches: samplingRecipe.attentionTopology.patches.map((p) => p.classType)
+            },
+            rationale: `Sampling recipe attention topology: ${samplingRecipe.name}`
+          });
+        }
+        if (
+          recipeRuntimeManifestDigest !== baseRuntimeManifestDigest &&
+          !declaredChanges.some((c) => c.path === "runtime.manifest")
+        ) {
+          declaredChanges.push({
+            path: "runtime.manifest",
+            before: {
+              runtimeManifestDigest: baseRuntimeManifestDigest,
+              hookManifestDigest: baseHookManifestDigest
+            },
+            after: {
+              runtimeManifestDigest: recipeRuntimeManifestDigest,
+              hookManifestDigest: recipeHookManifestDigest
+            },
+            rationale: `Isolated runtime configuration required for sampling recipe: ${samplingRecipe.name}`
+          });
+        }
+      }
 
       if (
         options.attentionVariant !== undefined &&
@@ -876,11 +1660,15 @@ export class MinimaxH3ExperimentService {
         baseCanonicalWorkflowDigest,
         derivedWorkflowDigest,
         pinFileIdentities: {
-          comfyuiCoreRevision: PINNED_COMFYUI_CORE_REVISION,
+          comfyuiCoreRevision: samplingRecipe
+            ? samplingRecipe.requiredRuntimeRevision
+            : PINNED_COMFYUI_CORE_REVISION,
           minimaxH3Revision: "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
           modelDigests: {
-            "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors":
-              "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
+            [`diffusion_models/${checkpointFilename}`]: checkpointHash,
+            ...(samplingRecipe?.lora
+              ? { [`loras/${samplingRecipe.lora.filename}`]: samplingRecipe.lora.sha256 }
+              : {}),
             "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors":
               "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
             "vae/minimax_h3_video_vae_int8_convrot.safetensors":
@@ -890,11 +1678,20 @@ export class MinimaxH3ExperimentService {
           }
         },
         resolvedModelPaths: {
-          "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors": {
-            expectedHash: "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779",
-            resolvedPath: `${comfyUiDir}/models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors`,
-            sizeBytes: 20970379616
+          [`diffusion_models/${checkpointFilename}`]: {
+            expectedHash: checkpointHash,
+            resolvedPath: `${comfyUiDir}/models/diffusion_models/${checkpointFilename}`,
+            sizeBytes: samplingRecipe?.diffusionModel.sizeBytes ?? 20970379616
           },
+          ...(samplingRecipe?.lora
+            ? {
+                [`loras/${samplingRecipe.lora.filename}`]: {
+                  expectedHash: samplingRecipe.lora.sha256,
+                  resolvedPath: `${comfyUiDir}/models/loras/${samplingRecipe.lora.filename}`,
+                  sizeBytes: samplingRecipe.lora.sizeBytes
+                }
+              }
+            : {}),
           "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors": {
             expectedHash: "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
             resolvedPath: `${comfyUiDir}/models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`,
@@ -929,11 +1726,21 @@ export class MinimaxH3ExperimentService {
         },
         configuredRunner: {
           argv: effectiveArgv as string[],
-          env: {
-            CUDA_VISIBLE_DEVICES: gpuUuid
-          },
+          env: effectiveEnv,
           predictedPolicy,
-          pinnedSourceIdentities: PINNED_COMFYUI_SOURCE_HASHES
+          pinnedSourceIdentities:
+            samplingRecipe?.name === "fasth3-i2v-8"
+              ? {
+                  cliArgsSha256: FASTH3_COMFYUI_SOURCE_HASHES["comfy/cli_args.py"],
+                  mainSha256: FASTH3_COMFYUI_SOURCE_HASHES["main.py"],
+                  modelManagementSha256: FASTH3_COMFYUI_SOURCE_HASHES["comfy/model_management.py"]
+                }
+              : samplingRecipe?.lora
+                ? {
+                    ...PINNED_COMFYUI_SOURCE_HASHES,
+                    nodesPySha256: PINNED_COMFYUI_NODES_PY_SHA256
+                  }
+                : PINNED_COMFYUI_SOURCE_HASHES
         },
         target: {
           hostname: targetHost,
@@ -952,7 +1759,11 @@ export class MinimaxH3ExperimentService {
           variantReason: variantReason ?? "experimental variant",
           purpose:
             options.variantPurpose ??
-            (options.stepOverride !== undefined ? "performance" : "performance"),
+            (samplingRecipe?.name === "fasth3-i2v-8"
+              ? "controlled_multifactor"
+              : options.stepOverride !== undefined
+                ? "performance"
+                : "performance"),
           changedFactors: declaredChanges
         },
         provenance: {
@@ -960,12 +1771,35 @@ export class MinimaxH3ExperimentService {
           derivedWorkflowDigest,
           actualCheckpointHash: checkpointHash,
           loadedModelHashes: {
-            diffusion: checkpointHash
+            diffusion: checkpointHash,
+            [`diffusion_models/${checkpointFilename}`]: checkpointHash,
+            ...(samplingRecipe?.lora
+              ? {
+                  lora: samplingRecipe.lora.sha256,
+                  [`loras/${samplingRecipe.lora.filename}`]: samplingRecipe.lora.sha256
+                }
+              : {})
           },
-          comfyuiCoreRevision: attentionCatalogEntry
-            ? attentionCatalogEntry.comfyuiCoreRevision
-            : PINNED_COMFYUI_CORE_REVISION,
-          sourceIdentities: PINNED_COMFYUI_SOURCE_HASHES,
+          comfyuiCoreRevision: samplingRecipe
+            ? samplingRecipe.requiredRuntimeRevision
+            : attentionCatalogEntry
+              ? attentionCatalogEntry.comfyuiCoreRevision
+              : PINNED_COMFYUI_CORE_REVISION,
+          sourceIdentities:
+            samplingRecipe?.name === "fasth3-i2v-8"
+              ? {
+                  cliArgsSha256: FASTH3_COMFYUI_SOURCE_HASHES["comfy/cli_args.py"],
+                  mainSha256: FASTH3_COMFYUI_SOURCE_HASHES["main.py"],
+                  modelManagementSha256: FASTH3_COMFYUI_SOURCE_HASHES["comfy/model_management.py"],
+                  nodesMinimaxH3Sha256:
+                    FASTH3_COMFYUI_SOURCE_HASHES["comfy_extras/nodes_minimax_h3.py"]
+                }
+              : samplingRecipe?.lora
+                ? {
+                    ...PINNED_COMFYUI_SOURCE_HASHES,
+                    nodesPySha256: PINNED_COMFYUI_NODES_PY_SHA256
+                  }
+                : PINNED_COMFYUI_SOURCE_HASHES,
           customNodeInventory: {
             status: "verified_empty" as const,
             nodes: []
@@ -977,15 +1811,16 @@ export class MinimaxH3ExperimentService {
             cudaRuntimeVersion: "12.4",
             driverVersion: "560.35.03"
           },
-          requestedAttentionBackend:
-            options.attentionVariant !== undefined && attentionCatalogEntry
+          requestedAttentionBackend: samplingRecipe?.attentionTopology
+            ? samplingRecipe.attentionTopology.backend
+            : options.attentionVariant !== undefined && attentionCatalogEntry
               ? attentionCatalogEntry.backend
               : "default",
           requestedMemoryPolicy: requestedPolicy,
           samplerSettings: {
-            sampler: "res_multistep",
-            scheduler: "simple",
-            steps: options.stepOverride ?? 20
+            sampler: samplingRecipe?.sampler ?? "res_multistep",
+            scheduler: samplingRecipe?.scheduler ?? "simple",
+            steps: samplingRecipe?.expectedSteps ?? options.stepOverride ?? 20
           },
           sourceAssetDigests: processedReferences.map((r) => ({
             role: r.role,
@@ -995,10 +1830,22 @@ export class MinimaxH3ExperimentService {
           promptDigest,
           instrumentationProtocol: "v2-jsonl",
           collectorDigest: genuineCollectorDigest,
-          hookManifestDigest: genuineHookManifestDigest
+          hookManifestDigest: samplingRecipe ? recipeHookManifestDigest : genuineHookManifestDigest
         },
-        compatibility:
-          options.attentionVariant !== undefined && attentionCatalogEntry
+        compatibility: samplingRecipe
+          ? {
+              state:
+                samplingRecipe.requiredRuntimeRevision === PINNED_COMFYUI_CORE_REVISION
+                  ? ("supported" as const)
+                  : ("requires_isolated_upgrade" as const),
+              relativeToRuntimeManifestDigest: recipeRuntimeManifestDigest,
+              scope: `${route}-${samplingRecipe.name}`,
+              reasons: [
+                `Sampling recipe ${samplingRecipe.name} targeting revision ${samplingRecipe.requiredRuntimeRevision}`
+              ],
+              sources: samplingRecipe.sourceReferences
+            }
+          : options.attentionVariant !== undefined && attentionCatalogEntry
             ? {
                 state: attentionCatalogEntry.compatibilityState,
                 relativeToRuntimeManifestDigest:
@@ -1021,8 +1868,11 @@ export class MinimaxH3ExperimentService {
                   }
                 ]
               },
-        requiredRuntime:
-          options.attentionVariant !== undefined ? upgradedRequiredRuntime : baseRequiredRuntime,
+        requiredRuntime: samplingRecipe
+          ? recipeRequiredRuntime!
+          : options.attentionVariant !== undefined
+            ? upgradedRequiredRuntime
+            : baseRequiredRuntime,
         conditioning: {
           positivePrompt: {
             text: prompt,
@@ -1045,6 +1895,7 @@ export class MinimaxH3ExperimentService {
         },
         stepOverride: options.stepOverride ?? null,
         checkpointOverride: options.checkpointOverride ?? null,
+        ...(samplingRecipe ? { samplingRecipe } : {}),
         ...(options.attentionVariant !== undefined && attentionCatalogEntry && attentionTopology
           ? {
               attentionRequest: {
@@ -1055,11 +1906,20 @@ export class MinimaxH3ExperimentService {
                 topologyDigest: attentionTopology.topologyDigest,
                 patches: attentionTopology.patches,
                 runtimeLockDigest: computeAttentionRuntimeLockDigest({
-                  comfyuiCoreRevision: attentionCatalogEntry.comfyuiCoreRevision,
+                  comfyuiCoreRevision: upgradedRequiredRuntime.coreRevision,
                   customNodeRevision: attentionCatalogEntry.customNode?.revision,
-                  pythonPackages: attentionCatalogEntry.pythonPackages,
+                  sourceFileHashes: upgradedRequiredRuntime.sourceFileHashes,
+                  interpreter: upgradedRequiredRuntime.interpreter,
+                  pytorchBuild: upgradedRequiredRuntime.pytorchBuild,
+                  cudaBuild: upgradedRequiredRuntime.cudaBuild,
+                  driverConstraints: upgradedRequiredRuntime.driverConstraints,
+                  pythonPackages: upgradedRequiredRuntime.pythonPackages,
                   cudaRequirement: attentionCatalogEntry.cudaRequirement,
-                  computeCapability: attentionCatalogEntry.computeCapability
+                  computeCapability: attentionCatalogEntry.computeCapability,
+                  instrumentationProtocol: upgradedRequiredRuntime.instrumentationProtocol,
+                  collectorDigest: upgradedRequiredRuntime.collectorDigest,
+                  hookManifestDigest: upgradedRequiredRuntime.hookManifestDigest,
+                  hooks: upgradedRequiredRuntime.hooks
                 }),
                 candidateOnly: !attentionCatalogEntry.runnable,
                 ...(attentionCatalogEntry.predictor
@@ -1170,9 +2030,7 @@ export class MinimaxH3ExperimentService {
         },
         configuredRunner: {
           argv: generatedArgv as string[],
-          env: {
-            CUDA_VISIBLE_DEVICES: gpuUuid
-          },
+          env: effectiveEnv,
           predictedPolicy,
           pinnedSourceIdentities: PINNED_COMFYUI_SOURCE_HASHES
         },
@@ -1219,7 +2077,7 @@ export class MinimaxH3ExperimentService {
 
   async validateExperiment(
     runDir: string,
-    options?: { templatesDir?: string; outputRoot?: string }
+    options?: { templatesDir?: string; outputRoot?: string; fixturesDir?: string }
   ): Promise<
     | {
         ok: true;
@@ -1336,11 +2194,16 @@ export class MinimaxH3ExperimentService {
     }
 
     let expectedGraph: Record<string, unknown> | undefined;
+    let workflowValid = true;
+    let evidenceValid = true;
+    let topologyValid = true;
+    let graphMatchValid = true;
     try {
       const baseWorkflowRaw = await this.store.readTextFile(templateFilePath);
       const baseWorkflowParsed = JSON.parse(baseWorkflowRaw) as Record<string, unknown>;
       const baseCanonical = sha256Hex(canonicalizeJson(baseWorkflowParsed));
       if (baseCanonical !== descriptor.baseCanonicalWorkflowDigest) {
+        workflowValid = false;
         errors.push(
           `Base workflow digest mismatch: expected ${descriptor.baseCanonicalWorkflowDigest}, got ${baseCanonical}`
         );
@@ -1362,53 +2225,360 @@ export class MinimaxH3ExperimentService {
 
       const descV2 =
         descriptor.schemaVersion === 2 ? (descriptor as MinimaxH3ExperimentDescriptorV2) : null;
-      if (descV2?.attentionRequest) {
-        const { graph: attnExpectedGraph } = deriveAttentionGraph({
-          graph: baseExpectedGraph,
-          attentionVariant: descV2.attentionRequest.attentionVariant,
+      if (descV2?.samplingRecipe) {
+        let canonicalRecipe: MinimaxH3SamplingRecipe;
+        try {
+          canonicalRecipe = getSamplingRecipe(descV2.samplingRecipe.name, descriptor.route);
+          if (canonicalRecipe.recipeDigest !== descV2.samplingRecipe.recipeDigest) {
+            errors.push(
+              `Sampling recipe digest mismatch for "${descV2.samplingRecipe.name}": descriptor has ${descV2.samplingRecipe.recipeDigest}, authoritative catalog has ${canonicalRecipe.recipeDigest}`
+            );
+          }
+          if (canonicalRecipe.recipeVersion !== descV2.samplingRecipe.recipeVersion) {
+            errors.push(
+              `Sampling recipe version mismatch: expected ${canonicalRecipe.recipeVersion}, got ${descV2.samplingRecipe.recipeVersion}`
+            );
+          }
+          if (canonicalRecipe.compatibleRoute !== descV2.samplingRecipe.compatibleRoute) {
+            errors.push(
+              `Sampling recipe compatibleRoute mismatch: expected ${canonicalRecipe.compatibleRoute}, got ${descV2.samplingRecipe.compatibleRoute}`
+            );
+          }
+          if (
+            canonicalRecipe.diffusionModel.filename !==
+              descV2.samplingRecipe.diffusionModel.filename ||
+            canonicalRecipe.diffusionModel.sha256 !== descV2.samplingRecipe.diffusionModel.sha256
+          ) {
+            errors.push(
+              `Sampling recipe diffusion model mismatch: expected ${canonicalRecipe.diffusionModel.filename} (${canonicalRecipe.diffusionModel.sha256}), got ${descV2.samplingRecipe.diffusionModel.filename} (${descV2.samplingRecipe.diffusionModel.sha256})`
+            );
+          }
+          if (canonicalRecipe.expectedSteps !== descV2.samplingRecipe.expectedSteps) {
+            errors.push(
+              `Sampling recipe expectedSteps mismatch: expected ${canonicalRecipe.expectedSteps}, got ${descV2.samplingRecipe.expectedSteps}`
+            );
+          }
+          if (
+            canonicalRecipe.sampler !== descV2.samplingRecipe.sampler ||
+            canonicalRecipe.scheduler !== descV2.samplingRecipe.scheduler ||
+            canonicalRecipe.denoise !== descV2.samplingRecipe.denoise
+          ) {
+            errors.push(
+              `Sampling recipe sampler/scheduler/denoise mismatch for "${descV2.samplingRecipe.name}"`
+            );
+          }
+          if (canonicalRecipe.lora) {
+            if (
+              !descV2.samplingRecipe.lora ||
+              descV2.samplingRecipe.lora.filename !== canonicalRecipe.lora.filename ||
+              descV2.samplingRecipe.lora.sha256 !== canonicalRecipe.lora.sha256 ||
+              descV2.samplingRecipe.lora.strengthModel !== canonicalRecipe.lora.strengthModel
+            ) {
+              errors.push(`Sampling recipe LoRA mismatch for "${descV2.samplingRecipe.name}"`);
+            }
+          } else if (descV2.samplingRecipe.lora) {
+            errors.push(`Sampling recipe LoRA must be null for "${descV2.samplingRecipe.name}"`);
+          }
+          if (canonicalRecipe.sigmaShift) {
+            if (
+              !descV2.samplingRecipe.sigmaShift ||
+              descV2.samplingRecipe.sigmaShift.enabled !== canonicalRecipe.sigmaShift.enabled ||
+              descV2.samplingRecipe.sigmaShift.videoShift !==
+                canonicalRecipe.sigmaShift.videoShift ||
+              descV2.samplingRecipe.sigmaShift.audioShift !== canonicalRecipe.sigmaShift.audioShift
+            ) {
+              errors.push(
+                `Sampling recipe sigmaShift mismatch for "${descV2.samplingRecipe.name}"`
+              );
+            }
+          } else if (descV2.samplingRecipe.sigmaShift) {
+            errors.push(
+              `Sampling recipe sigmaShift must be null for "${descV2.samplingRecipe.name}"`
+            );
+          }
+          if (canonicalRecipe.conditioningMode !== descV2.samplingRecipe.conditioningMode) {
+            errors.push(
+              `Sampling recipe conditioningMode mismatch: expected ${canonicalRecipe.conditioningMode}, got ${descV2.samplingRecipe.conditioningMode}`
+            );
+          }
+          if (
+            canonicalRecipe.requiredRuntimeRevision !==
+            descV2.samplingRecipe.requiredRuntimeRevision
+          ) {
+            errors.push(
+              `Sampling recipe requiredRuntimeRevision mismatch: expected ${canonicalRecipe.requiredRuntimeRevision}, got ${descV2.samplingRecipe.requiredRuntimeRevision}`
+            );
+          }
+
+          // Validate descriptor-level provenance against authoritative recipe
+          if (descV2.provenance?.samplerSettings) {
+            if (descV2.provenance.samplerSettings.steps !== canonicalRecipe.expectedSteps) {
+              errors.push(
+                `Descriptor provenance sampler steps mismatch: expected ${canonicalRecipe.expectedSteps}, got ${descV2.provenance.samplerSettings.steps}`
+              );
+            }
+            if (descV2.provenance.samplerSettings.sampler !== canonicalRecipe.sampler) {
+              errors.push(
+                `Descriptor provenance sampler mismatch: expected "${canonicalRecipe.sampler}", got "${descV2.provenance.samplerSettings.sampler}"`
+              );
+            }
+            if (descV2.provenance.samplerSettings.scheduler !== canonicalRecipe.scheduler) {
+              errors.push(
+                `Descriptor provenance scheduler mismatch: expected "${canonicalRecipe.scheduler}", got "${descV2.provenance.samplerSettings.scheduler}"`
+              );
+            }
+          }
+          if (
+            descV2.provenance?.actualCheckpointHash &&
+            descV2.provenance.actualCheckpointHash !== canonicalRecipe.diffusionModel.sha256
+          ) {
+            errors.push(
+              `Descriptor provenance actualCheckpointHash mismatch: expected ${canonicalRecipe.diffusionModel.sha256}, got ${descV2.provenance.actualCheckpointHash}`
+            );
+          }
+          if (!descV2.requiredRuntime) {
+            errors.push(
+              `Sampling recipe "${descV2.samplingRecipe.name}" requires requiredRuntime to be specified`
+            );
+          } else {
+            if (descV2.requiredRuntime.coreRevision !== canonicalRecipe.requiredRuntimeRevision) {
+              errors.push(
+                `Descriptor requiredRuntime coreRevision mismatch: expected ${canonicalRecipe.requiredRuntimeRevision}, got ${descV2.requiredRuntime.coreRevision}`
+              );
+            }
+            if (canonicalRecipe.name === "fasth3-i2v-8") {
+              if (descV2.requiredRuntime.attentionKernel !== "block_sparse_triton") {
+                errors.push(
+                  `FastH3 recipe requires attentionKernel "block_sparse_triton", got "${descV2.requiredRuntime.attentionKernel}"`
+                );
+              }
+              for (const [filePath, expectedHash] of Object.entries(FASTH3_COMFYUI_SOURCE_HASHES)) {
+                if (descV2.requiredRuntime.sourceFileHashes[filePath] !== expectedHash) {
+                  errors.push(
+                    `FastH3 recipe requires sourceFileHashes["${filePath}"] to match "${expectedHash}", got "${descV2.requiredRuntime.sourceFileHashes[filePath] ?? "missing"}"`
+                  );
+                }
+              }
+              const requiredNodeNames = [
+                "BlockSparseAttention",
+                "ModelAttentionBackend",
+                "MiniMaxH3ImageToVideo",
+                "MiniMaxH3SigmaShift"
+              ];
+              for (const nodeName of requiredNodeNames) {
+                if (!descV2.requiredRuntime.requiredNodes.some((n) => n.name === nodeName)) {
+                  errors.push(
+                    `FastH3 recipe requires node "${nodeName}" in requiredRuntime.requiredNodes`
+                  );
+                }
+              }
+              if (
+                !descV2.requiredRuntime.pythonPackages.some(
+                  (p) => p.name === "comfy-kitchen" && p.version === "0.2.34"
+                )
+              ) {
+                errors.push(
+                  `FastH3 recipe requires pythonPackage "comfy-kitchen" version "0.2.34"`
+                );
+              }
+              if (
+                !descV2.requiredRuntime.pythonPackages.some(
+                  (p) => p.name === "torch" && p.version === descV2.requiredRuntime!.pytorchBuild
+                ) ||
+                !descV2.requiredRuntime.pytorchBuild
+              ) {
+                errors.push(
+                  `FastH3 recipe requires pythonPackage "torch" matching requiredRuntime.pytorchBuild`
+                );
+              }
+            }
+            if (canonicalRecipe.lora) {
+              if (
+                !descV2.requiredRuntime.requiredNodes.some((n) => n.name === "LoraLoaderModelOnly")
+              ) {
+                errors.push(
+                  `Turbo recipe requires "LoraLoaderModelOnly" in requiredRuntime.requiredNodes`
+                );
+              }
+              const expectedConditionerNode =
+                descV2.route === "i2v" ? "MiniMaxH3ImageToVideo" : "MiniMaxH3ReferenceToVideo";
+              if (
+                !descV2.requiredRuntime.requiredNodes.some(
+                  (n) => n.name === expectedConditionerNode
+                )
+              ) {
+                errors.push(
+                  `Turbo recipe requires conditioner node "${expectedConditionerNode}" in requiredRuntime.requiredNodes`
+                );
+              }
+              if (
+                descV2.requiredRuntime.sourceFileHashes["nodes.py"] !==
+                PINNED_COMFYUI_NODES_PY_SHA256
+              ) {
+                errors.push(
+                  `Turbo recipe requires nodes.py hash to match PINNED_COMFYUI_NODES_PY_SHA256`
+                );
+              }
+              if (
+                descV2.requiredRuntime.sourceFileHashes["comfy_extras/nodes_minimax_h3.py"] !==
+                PINNED_COMFYUI_NODES_MINIMAX_H3_PY_SHA256
+              ) {
+                errors.push(
+                  `Turbo recipe requires comfy_extras/nodes_minimax_h3.py hash to match PINNED_COMFYUI_NODES_MINIMAX_H3_PY_SHA256`
+                );
+              }
+            }
+          }
+          if (canonicalRecipe.lora && descV2.pinFileIdentities?.modelDigests) {
+            const loraKey = `loras/${canonicalRecipe.lora.filename}`;
+            const recordedLoraHash = descV2.pinFileIdentities.modelDigests[loraKey];
+            if (recordedLoraHash !== canonicalRecipe.lora.sha256) {
+              errors.push(
+                `Descriptor provenance LoRA digest mismatch for "${loraKey}": expected ${canonicalRecipe.lora.sha256}, got ${recordedLoraHash}`
+              );
+            }
+          }
+          if (descV2.stepOverride !== null && descV2.stepOverride !== undefined) {
+            errors.push("Descriptor stepOverride must be null when samplingRecipe is specified");
+          }
+          if (descV2.checkpointOverride !== null && descV2.checkpointOverride !== undefined) {
+            errors.push(
+              "Descriptor checkpointOverride must be null when samplingRecipe is specified"
+            );
+          }
+          if (!canonicalRecipe.attentionTopology && descV2.attentionRequest) {
+            errors.push(
+              "Descriptor attentionRequest must not be set when samplingRecipe has no attentionTopology"
+            );
+          }
+        } catch (err: unknown) {
+          errors.push(
+            `Authoritative recipe lookup failed: ${err instanceof Error ? err.message : String(err)}`
+          );
+          return {
+            ok: false,
+            descriptor,
+            errors
+          };
+        }
+
+        expectedGraph = applySamplingRecipeToGraph({
+          baseWorkflow: baseExpectedGraph,
+          recipe: canonicalRecipe,
           route: descriptor.route
         });
-        expectedGraph = attnExpectedGraph;
+        const recipeValidation = validateSamplingRecipeTopology(
+          config,
+          canonicalRecipe,
+          descriptor.route
+        );
+        if (!recipeValidation.valid) {
+          topologyValid = false;
+          errors.push(...recipeValidation.errors);
+        }
+      } else if (descV2?.attentionRequest) {
+        let expectedCatalogEntry: MinimaxH3AttentionCatalogEntry | undefined;
+        try {
+          expectedCatalogEntry = getAttentionCatalogEntry(
+            descV2.attentionRequest.attentionVariant,
+            descriptor.route,
+            {
+              catalogDigest: descV2.attentionRequest.catalogDigest,
+              coreRevision: descV2.requiredRuntime?.coreRevision,
+              scope: descV2.compatibility?.scope
+            }
+          );
+          if (descV2.attentionRequest.catalogDigest !== expectedCatalogEntry.catalogDigest) {
+            evidenceValid = false;
+            errors.push(
+              `Attention catalog digest mismatch: expected "${expectedCatalogEntry.catalogDigest}", got "${descV2.attentionRequest.catalogDigest}".`
+            );
+          }
+        } catch (err) {
+          evidenceValid = false;
+          errors.push(
+            `Failed to resolve expected attention catalog entry: ${(err as Error).message}`
+          );
+        }
+
+        let evidence: MinimaxH3AttentionEvidence | undefined;
+        try {
+          const fixturePath = getAttentionFixturePath(
+            descV2.attentionRequest.attentionVariant,
+            options?.fixturesDir
+          );
+          const fixtureRaw = await this.store.readJsonFile<unknown>(fixturePath);
+          evidence = parseAttentionEvidence(fixtureRaw);
+          const resolved = resolveAttentionEvidence({
+            variant: descV2.attentionRequest.attentionVariant,
+            evidence,
+            coreRevision: descV2.requiredRuntime?.coreRevision,
+            customNode: expectedCatalogEntry?.customNode
+          });
+          if (!resolved.valid || !resolved.isResolved) {
+            evidenceValid = false;
+            errors.push(...resolved.errors);
+          }
+        } catch (err) {
+          evidenceValid = false;
+          errors.push(`Failed to load or parse attention evidence: ${(err as Error).message}`);
+        }
+
+        if (evidence && evidenceValid) {
+          try {
+            const { graph: attnExpectedGraph } = deriveAttentionGraph({
+              graph: baseExpectedGraph,
+              attentionVariant: descV2.attentionRequest.attentionVariant,
+              route: descriptor.route,
+              evidence,
+              coreRevision: descV2.requiredRuntime?.coreRevision,
+              customNode: expectedCatalogEntry?.customNode
+            });
+            expectedGraph = attnExpectedGraph;
+          } catch (err) {
+            topologyValid = false;
+            errors.push(`Failed to derive expected attention graph: ${(err as Error).message}`);
+          }
+        }
 
         const topoValidation = validateAttentionTopology(config, {
           expectedVariant: descV2.attentionRequest.attentionVariant,
           route: descriptor.route,
-          argv: descV2.configuredRunner?.argv
+          argv: descV2.configuredRunner?.argv,
+          env: descV2.configuredRunner?.env,
+          evidence,
+          coreRevision: descV2.requiredRuntime?.coreRevision,
+          customNode: expectedCatalogEntry?.customNode
         });
         if (!topoValidation.valid) {
+          topologyValid = false;
           errors.push(...topoValidation.errors);
         }
         if (topoValidation.topology.topologyDigest !== descV2.attentionRequest.topologyDigest) {
+          topologyValid = false;
           errors.push(
             `Attention topology digest mismatch: expected "${descV2.attentionRequest.topologyDigest}", got "${topoValidation.topology.topologyDigest}".`
-          );
-        }
-        const expectedCatalogEntry = getAttentionCatalogEntry(
-          descV2.attentionRequest.attentionVariant,
-          descriptor.route,
-          {
-            catalogDigest: descV2.attentionRequest.catalogDigest,
-            coreRevision: descV2.requiredRuntime?.coreRevision,
-            scope: descV2.compatibility?.scope
-          }
-        );
-        if (descV2.attentionRequest.catalogDigest !== expectedCatalogEntry.catalogDigest) {
-          errors.push(
-            `Attention catalog digest mismatch: expected "${expectedCatalogEntry.catalogDigest}", got "${descV2.attentionRequest.catalogDigest}".`
           );
         }
       } else {
         expectedGraph = baseExpectedGraph;
       }
 
-      const expectedCanonical = canonicalizeJson(expectedGraph);
-      const actualCanonical = canonicalizeJson(config);
-      if (expectedCanonical !== actualCanonical) {
-        errors.push(
-          "Config.json on disk does not match the reconstructed workflow graph derived from base template and descriptor."
-        );
+      if (expectedGraph) {
+        const expectedCanonical = canonicalizeJson(expectedGraph);
+        const actualCanonical = canonicalizeJson(config);
+        if (expectedCanonical !== actualCanonical) {
+          graphMatchValid = false;
+          errors.push(
+            "Config.json on disk does not match the reconstructed workflow graph derived from base template and descriptor."
+          );
+        }
+      } else {
+        graphMatchValid = false;
+        errors.push("Expected workflow graph could not be reconstructed.");
       }
     } catch (err) {
+      workflowValid = false;
       errors.push(
         `Failed to verify base workflow template or reconstruct graph: ${(err as Error).message}`
       );
@@ -1726,6 +2896,12 @@ export class MinimaxH3ExperimentService {
           `Attention variant "${descV2.attentionRequest.attentionVariant}" is candidate-only (runnable: false).`
         );
       }
+      if (entry.compatibilityState === "unsupported") {
+        executionBlocked = true;
+        executionBlockers.push(
+          `Attention variant "${descV2.attentionRequest.attentionVariant}" is unsupported.`
+        );
+      }
       if (entry.blockers && entry.blockers.length > 0) {
         executionBlocked = true;
         executionBlockers.push(...entry.blockers);
@@ -1739,17 +2915,11 @@ export class MinimaxH3ExperimentService {
     }
 
     const graphValid =
-      Boolean(expectedGraph) &&
-      !errors.some(
-        (e) =>
-          e.includes("workflow") ||
-          e.includes("graph") ||
-          e.includes("topology") ||
-          e.includes("Config") ||
-          e.includes("SaveVideo")
-      );
+      Boolean(expectedGraph) && workflowValid && evidenceValid && topologyValid && graphMatchValid;
 
-    if (errors.length === 0 && expectedGraph) {
+    const validatedGraph = graphValid ? expectedGraph : undefined;
+
+    if (errors.length === 0 && validatedGraph) {
       return {
         ok: true,
         descriptor,
@@ -1757,7 +2927,7 @@ export class MinimaxH3ExperimentService {
         graphValid,
         executionBlocked,
         executionBlockers,
-        validatedGraph: expectedGraph
+        validatedGraph
       };
     }
 
@@ -1768,7 +2938,7 @@ export class MinimaxH3ExperimentService {
       graphValid,
       executionBlocked,
       executionBlockers,
-      ...(expectedGraph ? { validatedGraph: expectedGraph } : {})
+      ...(validatedGraph ? { validatedGraph } : {})
     };
   }
 
@@ -2416,20 +3586,115 @@ export class MinimaxH3ExperimentService {
     };
 
     if (descriptor.schemaVersion === 2) {
-      const phaseEvents: MinimaxH3PhaseAccountingEvent[] = this.store.readPhaseEvents
+      let attemptToken: string | undefined;
+      let attemptReadError: string | null = null;
+      try {
+        const attemptMeta = await this.store.readJsonFile<{ attemptToken?: string }>(
+          `${runDir}/attempt.json`
+        );
+        if (
+          typeof attemptMeta?.attemptToken === "string" &&
+          attemptMeta.attemptToken.trim().length > 0
+        ) {
+          attemptToken = attemptMeta.attemptToken.trim();
+        } else {
+          attemptReadError = "attempt.json is missing valid attemptToken";
+        }
+      } catch (err) {
+        attemptReadError = `Failed to read attempt.json: ${(err as Error).message}`;
+      }
+
+      const rawPhaseEvents: MinimaxH3PhaseAccountingEvent[] = this.store.readPhaseEvents
         ? await this.store.readPhaseEvents(runDir)
         : [];
+      const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
+
+      const handshakeConflicts: string[] = [];
+      if (attemptReadError) {
+        handshakeConflicts.push(`Attempt correlation failed closed: ${attemptReadError}`);
+      }
+
+      const phaseEvents = rawPhaseEvents.filter((e) => {
+        if (!e.runId || e.runId !== descV2.runId) return false;
+        // Attempt correlation: fail closed if attempt.json could not be read or attemptToken does not match
+        if (attemptReadError || !attemptToken || e.attemptToken !== attemptToken) return false;
+        // Prompt correlation: when promptId is known, reject null promptId for execution events
+        if (promptId) {
+          if (e.promptId === promptId) {
+            return true;
+          }
+          if (e.promptId === null || e.promptId === undefined) {
+            // Environment startup phase events precede prompt submission
+            return e.phase === "environment_startup";
+          }
+          return false;
+        }
+        return true;
+      });
+      const foreignEvents = rawPhaseEvents.filter((e) => !phaseEvents.includes(e));
+      if (foreignEvents.length > 0) {
+        handshakeConflicts.push(
+          `Foreign events detected in events.jsonl: ${foreignEvents.length} event(s) did not match runId=${descV2.runId}, attemptToken=${attemptToken ?? "any"}, promptId=${promptId ?? "any"}`
+        );
+      }
+
+      let capabilityHandshake: MinimaxH3CapabilityHandshake | undefined;
+      try {
+        const rawHs = await this.store.readJsonFile<unknown>(`${runDir}/capability-handshake.json`);
+        if (rawHs) {
+          capabilityHandshake = MinimaxH3CapabilityHandshakeSchema.parse(rawHs);
+        }
+      } catch {
+        // Do not fall back to existingResult for capabilityHandshake; require capability-handshake.json
+      }
+
+      // Validate capability handshake and intent before attention reduction
+      if (!capabilityHandshake) {
+        handshakeConflicts.push(
+          "Missing pre-submission capability handshake evidence for V2 experiment"
+        );
+      } else {
+        if (!intent) {
+          handshakeConflicts.push("Missing execution intent for V2 experiment");
+        }
+        const hsConflicts = validateCapabilityHandshake(capabilityHandshake, {
+          descV2,
+          expectedPid: intent?.pid,
+          expectedNonce: intent?.handshakeNonce,
+          attemptToken: intent?.attemptToken ?? attemptToken,
+          comfyUiDir: descV2.target?.comfyUiDir,
+          requireBinding: true
+        });
+        handshakeConflicts.push(...hsConflicts);
+
+        if (intent) {
+          if (!intent.capabilityHandshakeDigest) {
+            handshakeConflicts.push("Execution intent missing capabilityHandshakeDigest");
+          } else {
+            const observedHsDigest = sha256Hex(canonicalizeJson(capabilityHandshake));
+            if (observedHsDigest !== intent.capabilityHandshakeDigest) {
+              handshakeConflicts.push(
+                `Capability handshake digest mismatch: intent=${intent.capabilityHandshakeDigest}, observed=${observedHsDigest}`
+              );
+            }
+          }
+        }
+      }
+
       const startedAt = baseResult.timestamps.startedAt ?? intent?.timestamp ?? null;
       const terminatedAt = baseResult.timestamps.terminatedAt ?? new Date().toISOString();
       const startMs = startedAt ? new Date(startedAt).getTime() : 0;
       const endMs = terminatedAt ? new Date(terminatedAt).getTime() : startMs;
       const parentWallTimeMs = Math.max(0, endMs - startMs);
-      const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
       const phaseAccounting = reducePhaseAccounting({
         events: phaseEvents as unknown as MinimaxH3PhaseAccountingEvent[],
         parentWallTimeMs,
         declaredSteps: descV2.provenance?.samplerSettings?.steps
       });
+
+      if (executionStatus !== "completed") {
+        phaseAccounting.samplingWallTimeMs = null;
+      }
 
       const completeness = phaseAccounting.status;
       const spansRecorded = Object.values(phaseAccounting.phases).filter(
@@ -2452,24 +3717,58 @@ export class MinimaxH3ExperimentService {
         ]
       };
 
-      let attemptToken: string | undefined;
-      try {
-        const attemptMeta = await this.store.readJsonFile<{ attemptToken?: string }>(
-          `${runDir}/attempt.json`
-        );
-        attemptToken = attemptMeta?.attemptToken;
-      } catch {
-        // ignore
+      let effectiveAttentionRequest = descV2.attentionRequest;
+      if (!effectiveAttentionRequest && descV2.samplingRecipe?.attentionTopology) {
+        effectiveAttentionRequest = {
+          attentionVariant: "sage" as MinimaxH3AttentionVariantName,
+          catalogDigest: sha256Hex(canonicalizeJson(descV2.samplingRecipe.attentionTopology)),
+          expectedBackend: descV2.samplingRecipe.attentionTopology.backend,
+          expectedKernel: descV2.requiredRuntime.attentionKernel,
+          topologyDigest: descV2.samplingRecipe.attentionTopology.topologyDigest,
+          patches: descV2.samplingRecipe.attentionTopology.patches,
+          runtimeLockDigest: sha256Hex(canonicalizeJson(descV2.requiredRuntime)),
+          candidateOnly: false,
+          denseRegionPolicy: {
+            allowPlannedDense: true,
+            description: "FastH3 VSA block-sparse attention"
+          }
+        };
       }
 
+      const expectedCollectorDigest =
+        descV2.requiredRuntime?.collectorDigest ??
+        (capabilityHandshake?.collectorDigest && handshakeConflicts.length === 0
+          ? capabilityHandshake.collectorDigest
+          : undefined);
+      const expectedHookManifestDigest =
+        descV2.requiredRuntime?.hookManifestDigest ??
+        (capabilityHandshake?.hookManifestDigest && handshakeConflicts.length === 0
+          ? capabilityHandshake.hookManifestDigest
+          : undefined);
+
+      // Completeness must never be reported when the pre-submission capability handshake
+      // (identity, attempt/intent binding, digest match) was invalid or missing -- a fully
+      // covered event stream must not mask an unvalidated identity (AC-5, F-799002ee,
+      // F-aa019999). This reflects handshakeConflicts as accumulated up to this point
+      // (attempt correlation, foreign events, capability handshake presence/binding,
+      // intent digest match); it is intentionally evaluated before the attention
+      // reduction call rather than after, so completeness is gated on identity, not the
+      // reverse.
+      const identityValidatedForAttention = handshakeConflicts.length === 0;
+
       let attentionObservation: MinimaxH3AttentionObservation | undefined;
-      if (descV2.attentionRequest) {
+      if (effectiveAttentionRequest) {
         attentionObservation = reduceAttentionObservation({
           events: phaseEvents,
-          attentionRequest: descV2.attentionRequest,
+          attentionRequest: effectiveAttentionRequest,
           expectedRunId: descV2.runId,
           expectedAttemptToken: attemptToken,
-          expectedPromptId: promptId
+          expectedPromptId: promptId,
+          expectedSteps:
+            descV2.samplingRecipe?.expectedSteps ?? descV2.provenance?.samplerSettings?.steps,
+          expectedCollectorDigest,
+          expectedHookManifestDigest,
+          identityValidated: identityValidatedForAttention
         });
       }
 
@@ -2484,20 +3783,59 @@ export class MinimaxH3ExperimentService {
       }
 
       const effectiveStopReasons = [...stopReasons];
-      if (attentionObservation) {
+      let attentionFailed = false;
+      let attentionFailureReason: string | undefined;
+
+      if (effectiveAttentionRequest && attentionObservation) {
         if (attentionObservation.status === "fallback") {
+          attentionFailed = true;
+          attentionFailureReason = `Attention fallback detected: ${attentionObservation.failureReason ?? "fallback to dense attention"}`;
           effectiveStopReasons.push("attention_fallback_detected");
         } else if (attentionObservation.status === "failed") {
+          attentionFailed = true;
+          attentionFailureReason = `Attention failed: ${attentionObservation.failureReason ?? "unknown attention failure"}`;
           effectiveStopReasons.push(
             `attention_failed_${attentionObservation.failureReason ?? "unknown"}`
           );
         }
         if (attentionObservation.missingKernelFailure) {
+          attentionFailed = true;
+          attentionFailureReason = `Missing attention kernel: ${attentionObservation.missingKernelFailure}`;
           effectiveStopReasons.push("attention_missing_kernel");
         }
+        if (!attentionObservation.measurementCoverage.complete) {
+          attentionFailed = true;
+          if (!attentionFailureReason) {
+            attentionFailureReason = !identityValidatedForAttention
+              ? "Attention measurement coverage incomplete: capability handshake was not independently validated"
+              : "Attention measurement coverage incomplete";
+          }
+          effectiveStopReasons.push("attention_incomplete_coverage");
+        }
+      } else if (effectiveAttentionRequest && !attentionObservation) {
+        attentionFailed = true;
+        attentionFailureReason = "Missing attention observation for attention experiment";
+        effectiveStopReasons.push("attention_observation_missing");
       }
 
-      const handshakeConflicts: string[] = [];
+      const isExplicitAttentionFailure =
+        effectiveAttentionRequest &&
+        attentionObservation &&
+        (attentionObservation.status === "fallback" ||
+          attentionObservation.status === "failed" ||
+          Boolean(attentionObservation.missingKernelFailure));
+
+      if (attentionFailed) {
+        if (lifecycle !== "interrupted" && lifecycle !== "submission_unknown") {
+          if (executionStatus === "completed" || isExplicitAttentionFailure) {
+            executionStatus = "failed";
+            lifecycle = "failed";
+          }
+          if (!engineError && attentionFailureReason) {
+            engineError = { message: attentionFailureReason };
+          }
+        }
+      }
       const reconstructedResultV2: MinimaxH3ExperimentResultV2 = {
         schemaVersion: 2,
         runId: descV2.runId,
@@ -2577,16 +3915,50 @@ export class MinimaxH3ExperimentService {
         },
         experimentVariant: descV2.experimentVariant,
         observedProvenance: {
-          actualCheckpointHash:
-            preflightObservations?.actualCheckpointHash?.expected &&
-            preflightObservations.actualCheckpointHash.expected.length === 64
-              ? preflightObservations.actualCheckpointHash
-              : {
-                  status: "unknown",
-                  value: null,
-                  expected: descV2.provenance.actualCheckpointHash,
-                  unknownReason: "runtime_observation_unavailable"
-                },
+          actualCheckpointHash: (() => {
+            const expected = descV2.provenance.actualCheckpointHash;
+            const modelEntries = Object.values(preflightObservations?.loadedModelHashes ?? {});
+            const matchingModel = modelEntries.find(
+              (m) => m.expected === expected || m.value === expected
+            );
+            if (
+              executionStatus === "completed" &&
+              matchingModel &&
+              matchingModel.status === "verified" &&
+              matchingModel.value &&
+              matchingModel.value === expected
+            ) {
+              return {
+                status: "verified" as const,
+                value: matchingModel.value,
+                expected
+              };
+            }
+            if (matchingModel?.status === "conflict") {
+              return {
+                status: "conflict" as const,
+                value: matchingModel.value ?? null,
+                expected,
+                unknownReason: "Model hash mismatch"
+              };
+            }
+            if (
+              preflightObservations?.actualCheckpointHash?.status === "verified" &&
+              preflightObservations.actualCheckpointHash.value &&
+              preflightObservations.actualCheckpointHash.value === expected
+            ) {
+              return preflightObservations.actualCheckpointHash;
+            }
+            return {
+              status: "unknown" as const,
+              value: null,
+              expected,
+              unknownReason:
+                executionStatus === "completed"
+                  ? "checkpoint_not_verified"
+                  : "runtime_observation_unavailable"
+            };
+          })(),
           loadedModelHashes: preflightObservations?.loadedModelHashes ?? {},
           comfyuiCoreRevision: preflightObservations?.comfyuiCoreRevision ?? {
             status: "unknown",
@@ -2634,10 +4006,8 @@ export class MinimaxH3ExperimentService {
               (e) =>
                 e.type === "point_event" &&
                 (e.boundarySource === "child_bootstrap" || e.phase === "environment_startup") &&
-                (e.runId === undefined || e.runId === descV2.runId) &&
-                (!attemptToken ||
-                  e.attemptToken === undefined ||
-                  e.attemptToken === attemptToken) &&
+                e.runId === descV2.runId &&
+                (!attemptToken || e.attemptToken === attemptToken) &&
                 ((e.metadata as Record<string, unknown> | undefined)?.handshake === "v2-jsonl" ||
                   (e.metadata as Record<string, unknown> | undefined)?.protocolVersion ===
                     "v2-jsonl")
@@ -2669,19 +4039,23 @@ export class MinimaxH3ExperimentService {
                   ? handshakeMeta.protocolVersion
                   : typeof handshakeMeta?.handshake === "string"
                     ? handshakeMeta.handshake
-                    : null;
+                    : (capabilityHandshake?.protocol ?? null);
 
               if (
                 typeof handshakeMeta?.collectorDigest === "string" &&
                 /^[a-f0-9]{64}$/.test(handshakeMeta.collectorDigest)
               ) {
                 observedCollectorDigest = handshakeMeta.collectorDigest;
+              } else if (capabilityHandshake?.collectorDigest) {
+                observedCollectorDigest = capabilityHandshake.collectorDigest;
               }
               if (
                 typeof handshakeMeta?.hookManifestDigest === "string" &&
                 /^[a-f0-9]{64}$/.test(handshakeMeta.hookManifestDigest)
               ) {
                 observedHookManifestDigest = handshakeMeta.hookManifestDigest;
+              } else if (capabilityHandshake?.hookManifestDigest) {
+                observedHookManifestDigest = capabilityHandshake.hookManifestDigest;
               }
 
               if (!observedCollectorDigest || !observedHookManifestDigest) {
@@ -2690,21 +4064,23 @@ export class MinimaxH3ExperimentService {
                   "Handshake event is missing valid collectorDigest or hookManifestDigest"
                 );
               } else if (
-                descV2.provenance.collectorDigest &&
-                observedCollectorDigest !== descV2.provenance.collectorDigest
+                descV2.requiredRuntime?.collectorDigest &&
+                observedCollectorDigest !== descV2.requiredRuntime.collectorDigest
               ) {
                 handshakeStatus = "missing";
                 handshakeConflicts.push(
-                  `Collector digest mismatch: observed ${observedCollectorDigest} !== expected ${descV2.provenance.collectorDigest}`
+                  `Collector digest mismatch: observed ${observedCollectorDigest} !== expected ${descV2.requiredRuntime.collectorDigest}`
                 );
               } else if (
-                descV2.provenance.hookManifestDigest &&
-                observedHookManifestDigest !== descV2.provenance.hookManifestDigest
+                descV2.requiredRuntime?.hookManifestDigest &&
+                observedHookManifestDigest !== descV2.requiredRuntime.hookManifestDigest
               ) {
                 handshakeStatus = "missing";
                 handshakeConflicts.push(
-                  `Hook manifest digest mismatch: observed ${observedHookManifestDigest} !== expected ${descV2.provenance.hookManifestDigest}`
+                  `Hook manifest digest mismatch: observed ${observedHookManifestDigest} !== expected ${descV2.requiredRuntime.hookManifestDigest}`
                 );
+              } else if (!capabilityHandshake || handshakeConflicts.length > 0) {
+                handshakeStatus = "missing";
               } else {
                 handshakeStatus = "verified";
               }
@@ -2717,7 +4093,496 @@ export class MinimaxH3ExperimentService {
               hookManifestDigest: observedHookManifestDigest
             };
           })(),
-          conflicts: [...(preflightObservations?.conflicts ?? []), ...handshakeConflicts]
+          observedSampling: (() => {
+            const expectedSteps =
+              descV2.samplingRecipe?.expectedSteps ??
+              descV2.provenance?.samplerSettings?.steps ??
+              20;
+            const expectedSampler =
+              descV2.samplingRecipe?.sampler ??
+              descV2.provenance?.samplerSettings?.sampler ??
+              "res_multistep";
+            const expectedScheduler =
+              descV2.samplingRecipe?.scheduler ??
+              descV2.provenance?.samplerSettings?.scheduler ??
+              "simple";
+
+            const samplingSpans = phaseEvents.filter((e) => e.phase === "sampling");
+            const samplingStarts = samplingSpans.filter((e) => e.type === "span_start");
+            const samplingEnds = samplingSpans.filter((e) => e.type === "span_end");
+
+            const enclosingSampling = samplingEnds[0] ?? samplingStarts[0];
+            const observedSamplerName =
+              typeof enclosingSampling?.metadata?.samplerName === "string"
+                ? enclosingSampling.metadata.samplerName
+                : (descV2.samplingRecipe?.sampler ?? descV2.provenance?.samplerSettings?.sampler);
+            const observedSchedulerName =
+              typeof enclosingSampling?.metadata?.schedulerName === "string"
+                ? enclosingSampling.metadata.schedulerName
+                : (descV2.samplingRecipe?.scheduler ??
+                  descV2.provenance?.samplerSettings?.scheduler);
+
+            const reasons: string[] = [];
+            if (samplingStarts.length > 1) {
+              reasons.push(
+                `Multiple enclosing sampler invocations detected (${samplingStarts.length} sampling start spans)`
+              );
+            }
+
+            if (
+              enclosingSampling?.metadata?.samplerName &&
+              enclosingSampling.metadata.samplerName !== expectedSampler
+            ) {
+              reasons.push(
+                `Sampler name mismatch in metadata: expected "${expectedSampler}", observed "${enclosingSampling.metadata.samplerName}"`
+              );
+            }
+            if (
+              enclosingSampling?.metadata?.schedulerName &&
+              enclosingSampling.metadata.schedulerName !== expectedScheduler
+            ) {
+              reasons.push(
+                `Scheduler name mismatch in metadata: expected "${expectedScheduler}", observed "${enclosingSampling.metadata.schedulerName}"`
+              );
+            }
+
+            const stepSpans = phaseEvents.filter(
+              (e) =>
+                e.phase === "sampling_step" &&
+                e.type === "span_end" &&
+                e.outcome === "success" &&
+                e.stepIndex !== undefined
+            );
+            const uniqueStepIndices = new Set<number>();
+            let hasDuplicates = false;
+            for (const span of stepSpans) {
+              if (uniqueStepIndices.has(span.stepIndex!)) {
+                hasDuplicates = true;
+              }
+              uniqueStepIndices.add(span.stepIndex!);
+            }
+            if (uniqueStepIndices.size === 0) {
+              if (reasons.length > 0) {
+                return {
+                  status: "conflict" as const,
+                  completedSteps: null,
+                  expectedSteps,
+                  samplerName: observedSamplerName ?? null,
+                  schedulerName: observedSchedulerName ?? null,
+                  unknownReason: reasons.join("; ")
+                };
+              }
+              return {
+                status: "unknown" as const,
+                completedSteps: null,
+                expectedSteps,
+                samplerName: observedSamplerName ?? null,
+                schedulerName: observedSchedulerName ?? null,
+                unknownReason: "step_spans_not_recorded"
+              };
+            }
+            const completedSteps = uniqueStepIndices.size;
+            if (executionStatus !== "completed") {
+              return {
+                status: "unknown" as const,
+                completedSteps: completedSteps > 0 ? completedSteps : null,
+                expectedSteps,
+                samplerName: observedSamplerName ?? null,
+                schedulerName: observedSchedulerName ?? null,
+                unknownReason: `execution_${executionStatus}`
+              };
+            }
+            let hasGaps = false;
+            for (let i = 0; i < expectedSteps; i++) {
+              if (!uniqueStepIndices.has(i)) {
+                hasGaps = true;
+                break;
+              }
+            }
+            const hasOutOfRange = Array.from(uniqueStepIndices).some(
+              (idx) => idx < 0 || idx >= expectedSteps
+            );
+            if (hasDuplicates) reasons.push("Duplicate sampling step completions detected");
+            if (hasGaps || hasOutOfRange)
+              reasons.push(
+                `Non-contiguous sampling step sequence (expected indices 0..${expectedSteps - 1})`
+              );
+            if (completedSteps !== expectedSteps)
+              reasons.push(
+                `Observed completed steps (${completedSteps}) does not match expected (${expectedSteps})`
+              );
+
+            if (reasons.length > 0) {
+              return {
+                status: "conflict" as const,
+                completedSteps,
+                expectedSteps,
+                samplerName: observedSamplerName ?? null,
+                schedulerName: observedSchedulerName ?? null,
+                unknownReason: reasons.join("; ")
+              };
+            }
+            return {
+              status: "verified" as const,
+              completedSteps,
+              expectedSteps,
+              samplerName: observedSamplerName ?? null,
+              schedulerName: observedSchedulerName ?? null
+            };
+          })(),
+          observedConditioning: (() => {
+            const expectedClass =
+              descV2.route === "i2v" ? "MiniMaxH3ImageToVideo" : "MiniMaxH3ReferenceToVideo";
+            const condEvents = phaseEvents.filter((e) => e.phase === "conditioning");
+            if (condEvents.length === 0) {
+              return {
+                status: "unknown" as const,
+                nodeClass: null,
+                taskMode: null,
+                referenceCount: null,
+                unknownReason: "conditioning_event_not_recorded"
+              };
+            }
+            const condStarts = condEvents.filter((e) => e.type === "span_start");
+            const condEnds = condEvents.filter((e) => e.type === "span_end");
+
+            const reasons: string[] = [];
+            for (const endEvt of condEnds) {
+              if (endEvt.outcome !== "success") {
+                reasons.push(`Conditioning span ended with outcome: ${endEvt.outcome}`);
+              }
+            }
+
+            const primaryCond =
+              condEnds.find((e) => e.classType === expectedClass) ??
+              condStarts.find((e) => e.classType === expectedClass) ??
+              condEnds[0] ??
+              condStarts[0] ??
+              condEvents[0];
+
+            const observedClass = primaryCond?.classType ?? null;
+            const observedTaskMode =
+              typeof primaryCond?.metadata?.taskMode === "string"
+                ? primaryCond.metadata.taskMode
+                : null;
+            const observedRefCount =
+              typeof primaryCond?.metadata?.referenceCount === "number"
+                ? primaryCond.metadata.referenceCount
+                : null;
+
+            if (observedClass !== expectedClass) {
+              reasons.push(`nodeClass (${observedClass} vs ${expectedClass})`);
+            }
+            if (observedTaskMode && observedTaskMode !== descV2.route) {
+              reasons.push(`taskMode (${observedTaskMode} vs ${descV2.route})`);
+            }
+            if (observedRefCount !== null && observedRefCount !== descV2.references.length) {
+              reasons.push(`refCount (${observedRefCount} vs ${descV2.references.length})`);
+            }
+            if (condEnds.length === 0) {
+              reasons.push("Conditioning span did not complete (missing span_end)");
+            }
+
+            for (const evt of condEvents) {
+              if (evt.metadata?.taskMode && evt.metadata.taskMode !== descV2.route) {
+                const r = `Conflicting taskMode in conditioning event: ${evt.metadata.taskMode} vs ${descV2.route}`;
+                if (!reasons.includes(r)) reasons.push(r);
+              }
+              if (
+                typeof evt.metadata?.referenceCount === "number" &&
+                evt.metadata.referenceCount !== descV2.references.length
+              ) {
+                const r = `Conflicting referenceCount in conditioning event: ${evt.metadata.referenceCount} vs ${descV2.references.length}`;
+                if (!reasons.includes(r)) reasons.push(r);
+              }
+            }
+
+            const status = reasons.length > 0 ? ("conflict" as const) : ("verified" as const);
+            return {
+              status,
+              nodeClass: observedClass,
+              taskMode: observedTaskMode,
+              referenceCount: observedRefCount,
+              ...(status === "conflict" ? { unknownReason: reasons.join("; ") } : {})
+            };
+          })(),
+          ...(capabilityHandshake ? { capabilityHandshake } : {}),
+          ...(preflightObservations?.packageIdentities
+            ? { packageIdentities: preflightObservations.packageIdentities }
+            : {}),
+          ...(() => {
+            if (!capabilityHandshake) return {};
+            try {
+              if (
+                !capabilityHandshake.runtimeVersions?.pytorchVersion ||
+                !preflightObservations?.interpreter?.pythonVersion ||
+                !preflightObservations?.sourceIdentities?.values ||
+                Object.keys(preflightObservations.sourceIdentities.values).length === 0
+              ) {
+                return {};
+              }
+              const toolchain = {
+                pytorchBuild: capabilityHandshake.runtimeVersions.pytorchVersion,
+                cudaBuildVersion: capabilityHandshake.runtimeVersions.cudaBuildVersion ?? null,
+                cudaRuntimeVersion: capabilityHandshake.runtimeVersions.cudaRuntimeVersion ?? null,
+                driverVersion: capabilityHandshake.runtimeVersions.driverVersion ?? null
+              };
+              // The envelope's interpreter identity must describe the actual
+              // CHILD process that ran the experiment, not the host-side
+              // preflight inspection taken before the child even started —
+              // otherwise two different child interpreters satisfying the
+              // same preflight could be substituted undetected (AC-4,
+              // F-e35ea06e). Prefer the live capability handshake's reported
+              // executable hash/ABI/compiler when present, falling back to
+              // preflight only for fields the handshake didn't report.
+              const rawInterpreter = preflightObservations.interpreter;
+              const handshakeRuntime = capabilityHandshake.runtimeVersions;
+              const liveExecutableHash: string | undefined = handshakeRuntime?.pythonExecutableHash
+                ? handshakeRuntime.pythonExecutableHash
+                : undefined;
+              const liveAbiTag: string | undefined = handshakeRuntime?.pythonAbiTag
+                ? handshakeRuntime.pythonAbiTag
+                : undefined;
+              const liveCompiler: string | undefined = handshakeRuntime?.pythonCompiler
+                ? handshakeRuntime.pythonCompiler
+                : undefined;
+              const preflightExecutableHash: string | undefined =
+                rawInterpreter.pythonExecutableHash ?? undefined;
+              const preflightAbi: string | undefined = rawInterpreter.pythonAbi ?? undefined;
+              const preflightCompiler: string | undefined =
+                rawInterpreter.pythonCompiler ?? undefined;
+              const interpreter = {
+                pythonVersion: rawInterpreter.pythonVersion ?? undefined,
+                ...(liveExecutableHash || preflightExecutableHash
+                  ? { pythonExecutableHash: liveExecutableHash ?? preflightExecutableHash }
+                  : {}),
+                ...(liveAbiTag || preflightAbi ? { pythonAbi: liveAbiTag ?? preflightAbi } : {}),
+                ...(liveCompiler || preflightCompiler
+                  ? { pythonCompiler: liveCompiler ?? preflightCompiler }
+                  : {})
+              };
+              const sourceIdentities = preflightObservations.sourceIdentities.values as Record<
+                string,
+                string
+              >;
+              const preflightPkgs = (
+                Array.isArray(preflightObservations?.packageIdentities)
+                  ? preflightObservations.packageIdentities
+                  : []
+              ) as ReadonlyArray<{
+                name: string;
+                version: string;
+                artifactHash?: string;
+                artifactMethod?: string;
+              }>;
+              const rawPackages =
+                capabilityHandshake.packageIdentities &&
+                capabilityHandshake.packageIdentities.length > 0
+                  ? capabilityHandshake.packageIdentities
+                  : preflightPkgs;
+              if (rawPackages.length === 0) return {};
+              const packageArtifacts = rawPackages.map((p) => {
+                const preflightMatch = preflightPkgs.find((pkg) => pkg.name === p.name);
+                return {
+                  name: p.name,
+                  version: p.version,
+                  artifactHash: p.artifactHash ?? preflightMatch?.artifactHash ?? "",
+                  artifactMethod: p.artifactMethod ?? preflightMatch?.artifactMethod ?? ""
+                };
+              });
+              if (
+                packageArtifacts.length === 0 ||
+                packageArtifacts.some(
+                  (p) =>
+                    !/^[a-f0-9]{64}$/.test(p.artifactHash) ||
+                    p.artifactMethod !== "installed_record_sha256_v1"
+                )
+              ) {
+                return {};
+              }
+              const substrateDigest = computeAttentionRuntimeLockDigest({
+                comfyuiCoreRevision: descV2.requiredRuntime.coreRevision,
+                customNodeRevision: descV2.requiredRuntime.customNodeRevision,
+                sourceFileHashes: sourceIdentities,
+                interpreter,
+                pytorchBuild: toolchain.pytorchBuild,
+                cudaBuild: toolchain.cudaBuildVersion ?? undefined,
+                driverConstraints: descV2.requiredRuntime.driverConstraints,
+                pythonPackages: packageArtifacts,
+                cudaRequirement: descV2.requiredRuntime.cudaRequirement,
+                computeCapability: descV2.requiredRuntime.computeCapability,
+                instrumentationProtocol: descV2.requiredRuntime.instrumentationProtocol,
+                collectorDigest: capabilityHandshake.collectorDigest,
+                hookManifestDigest: capabilityHandshake.hookManifestDigest,
+                hooks: descV2.requiredRuntime.hooks
+              });
+              const attentionIdentityCandidate = {
+                identityVersion: 1 as const,
+                substrateDigest,
+                interpreter,
+                toolchain,
+                packageArtifacts,
+                sourceIdentities,
+                registeredNodes: capabilityHandshake.registeredNodes,
+                handshake: capabilityHandshake
+              };
+              const parsed = MinimaxH3AttentionIdentityEnvelopeSchema.safeParse(
+                attentionIdentityCandidate
+              );
+              if (parsed.success) {
+                return { attentionIdentity: parsed.data };
+              }
+              return {};
+            } catch {
+              return {};
+            }
+          })(),
+          conflicts: [
+            ...(preflightObservations?.conflicts ?? []),
+            ...handshakeConflicts,
+            ...(() => {
+              const expectedSteps =
+                descV2.samplingRecipe?.expectedSteps ??
+                descV2.provenance?.samplerSettings?.steps ??
+                20;
+              const stepSpans = phaseEvents.filter(
+                (e) =>
+                  e.phase === "sampling_step" &&
+                  e.type === "span_end" &&
+                  e.outcome === "success" &&
+                  e.stepIndex !== undefined
+              );
+              const uniqueSteps = new Set<number>();
+              let hasDups = false;
+              for (const s of stepSpans) {
+                if (uniqueSteps.has(s.stepIndex!)) hasDups = true;
+                uniqueSteps.add(s.stepIndex!);
+              }
+              const errs: string[] = [];
+              if (hasDups) {
+                errs.push("Duplicate sampling step completions detected");
+              }
+              const completedSteps = uniqueSteps.size;
+              if (completedSteps === 0) {
+                if (
+                  descV2.samplingRecipe &&
+                  (phaseEvents.some((e) => e.phase === "sampling") ||
+                    executionStatus === "completed")
+                ) {
+                  errs.push(
+                    `No successful sampling step spans recorded during execution (expected ${expectedSteps} steps)`
+                  );
+                }
+              } else if (executionStatus === "completed" && completedSteps !== expectedSteps) {
+                errs.push(
+                  `Observed sampling steps (${completedSteps}) does not match expected (${expectedSteps})`
+                );
+              }
+              for (let i = 0; i < expectedSteps; i++) {
+                if (completedSteps > 0 && !uniqueSteps.has(i)) {
+                  errs.push(`Missing sampling step index ${i} in sequence 0..${expectedSteps - 1}`);
+                  break;
+                }
+              }
+              const hasOutOfRange = Array.from(uniqueSteps).some(
+                (idx) => idx < 0 || idx >= expectedSteps
+              );
+              if (hasOutOfRange) {
+                errs.push(`Sampling step indices out of range [0..${expectedSteps - 1}]`);
+              }
+              return errs;
+            })(),
+            ...(() => {
+              const expectedClass =
+                descV2.route === "i2v" ? "MiniMaxH3ImageToVideo" : "MiniMaxH3ReferenceToVideo";
+              const condEvents = phaseEvents.filter((e) => e.phase === "conditioning");
+              const condStart = condEvents.find((e) => e.type === "span_start");
+              const condEnd = condEvents.find((e) => e.type === "span_end");
+              const condEvent = condEnd ?? condStart ?? condEvents[0];
+              if (condEvent) {
+                const errs: string[] = [];
+                if (!condEnd) {
+                  errs.push("Conditioning span did not complete (missing span_end)");
+                } else if (condEnd.outcome !== "success") {
+                  errs.push(`Conditioning span outcome was "${condEnd.outcome}"`);
+                }
+                const observedClass = condEvent.classType;
+                if (!observedClass || observedClass !== expectedClass) {
+                  errs.push(
+                    `Conditioning node class mismatch: expected ${expectedClass}, got ${observedClass ?? "none"}`
+                  );
+                }
+                const observedTaskMode = condEvent.metadata?.taskMode;
+                if (!observedTaskMode || observedTaskMode !== descV2.route) {
+                  errs.push(
+                    `Conditioning taskMode mismatch: expected ${descV2.route}, got ${observedTaskMode ?? "none"}`
+                  );
+                }
+                const observedRefCount = condEvent.metadata?.referenceCount;
+                if (
+                  typeof observedRefCount !== "number" ||
+                  observedRefCount !== descV2.references.length
+                ) {
+                  errs.push(
+                    `Conditioning referenceCount mismatch: expected ${descV2.references.length}, got ${observedRefCount ?? "none"}`
+                  );
+                }
+                return errs;
+              }
+              if (
+                descV2.samplingRecipe &&
+                (phaseEvents.some(
+                  (e) =>
+                    e.phase === "sampling" || e.phase === "conditioning" || e.type === "span_start"
+                ) ||
+                  executionStatus === "completed")
+              ) {
+                return ["Conditioning span was not recorded during execution"];
+              }
+              return [];
+            })(),
+            ...(() => {
+              const attnErrs: string[] = [];
+              if (effectiveAttentionRequest && !attentionObservation) {
+                attnErrs.push(
+                  "Attention observation evidence missing for recipe requiring block-sparse attention"
+                );
+                return attnErrs;
+              }
+              if (descV2.samplingRecipe?.attentionTopology) {
+                if (attentionObservation?.status !== "verified") {
+                  attnErrs.push(
+                    `Recipe requires verified block-sparse attention, observed status was "${attentionObservation?.status}" (${attentionObservation?.failureReason ?? "unverified"})`
+                  );
+                }
+              }
+              if (attentionObservation) {
+                if (attentionObservation.status === "fallback") {
+                  attnErrs.push(
+                    `Attention fallback: ${attentionObservation.failureReason ?? "fallback detected"}`
+                  );
+                } else if (attentionObservation.status === "failed") {
+                  attnErrs.push(
+                    `Attention failed: ${attentionObservation.failureReason ?? "unknown failure"}`
+                  );
+                }
+                if (attentionObservation.missingKernelFailure) {
+                  attnErrs.push(
+                    `Missing attention kernel: ${attentionObservation.missingKernelFailure}`
+                  );
+                }
+                if (
+                  effectiveAttentionRequest &&
+                  !attentionObservation.measurementCoverage.complete
+                ) {
+                  attnErrs.push(
+                    `Attention measurement coverage incomplete: observed ${attentionObservation.measurementCoverage.samplingCallsRecorded} sampling calls, ${attentionObservation.measurementCoverage.attentionCallsRecorded} attention calls`
+                  );
+                }
+              }
+              return attnErrs;
+            })()
+          ]
         },
         compatibility: descV2.compatibility,
         phaseAccounting,
@@ -2746,6 +4611,7 @@ export class MinimaxH3ExperimentService {
       outputRoot?: string;
       abortSignal?: AbortSignal;
       templatesDir?: string;
+      fixturesDir?: string;
     }
   ): Promise<MinimaxH3AnyExperimentResult> {
     const outputRoot = options?.outputRoot ?? ".ai-runs/minimax-h3-experiments";
@@ -2768,8 +4634,28 @@ export class MinimaxH3ExperimentService {
     if (!validation.ok || !validation.validatedGraph) {
       throw new Error(`Experiment validation failed:\n${validation.errors.join("\n")}`);
     }
+    if (validation.executionBlocked) {
+      throw new Error(
+        `Experiment execution is blocked:\n${validation.executionBlockers.join("\n")}`
+      );
+    }
     const descriptor = validation.descriptor;
     const validatedGraph = validation.validatedGraph;
+
+    if (descriptor.schemaVersion === 2) {
+      const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
+      const isAttentionExperiment =
+        descV2.compatibility.scope.includes("attention") ||
+        descV2.experimentVariant.changedFactors.some((f) => f.path === "attention.configuration") ||
+        descV2.provenance.requestedAttentionBackend !== "default";
+      const hasModernAttentionContract =
+        Boolean(descV2.attentionRequest) || Boolean(descV2.samplingRecipe?.attentionTopology);
+      if (isAttentionExperiment && !hasModernAttentionContract) {
+        throw new Error(
+          "Execution rejected: attention experiment descriptor lacks required modern attentionRequest"
+        );
+      }
+    }
 
     // 2. Validate stop policy if provided
     if (!options?.stopPolicyPath) {
@@ -3054,7 +4940,9 @@ export class MinimaxH3ExperimentService {
         pythonPath: descriptor.target.pythonPath,
         requiredRuntime: descriptor.requiredRuntime,
         requiredRuntimeDigest: sha256Hex(canonicalizeJson(descriptor.requiredRuntime)),
-        expectedCheckpointHash: descV2.provenance.actualCheckpointHash
+        expectedCheckpointHash: descV2.provenance.actualCheckpointHash,
+        timeoutMs: descriptor.timeouts.startupTimeoutMs ?? 60000,
+        signal: options?.abortSignal
       });
       if (!runtimeCheck.ok) {
         await writePreflightBlocker(runtimeCheck.blocker, "verifyExperimentRuntime");
@@ -3063,10 +4951,78 @@ export class MinimaxH3ExperimentService {
         );
       }
       if (runtimeCheck.observations) {
-        MinimaxH3ObservedProvenanceSchema.parse(runtimeCheck.observations);
+        const mergedObservations: MinimaxH3ObservedProvenance = {
+          ...runtimeCheck.observations
+        };
+        if (modelsCheck.resolvedPaths) {
+          const resolvedComfyDir = resolve(descriptor.target.comfyUiDir);
+          const modelHashes: Record<
+            string,
+            {
+              status: "verified" | "unknown" | "conflict";
+              value: string | null;
+              expected: string;
+              resolvedPath: string;
+            }
+          > = { ...mergedObservations.loadedModelHashes };
+          for (const [role, info] of Object.entries(modelsCheck.resolvedPaths)) {
+            const resolvedModelPath = resolve(info.resolvedPath);
+            // A plain startsWith admits a sibling directory sharing the
+            // comfy dir's name as a prefix (e.g. "/x/comfy-evil/model.safetensors"
+            // against comfy dir "/x/comfy") — require an exact match or a
+            // path-separator boundary (F-69c0b5da).
+            const isBoundToComfyDir =
+              resolvedModelPath === resolvedComfyDir ||
+              resolvedModelPath.startsWith(resolvedComfyDir + sep);
+            const isMatch = isBoundToComfyDir && info.actualHash === info.expectedHash;
+            modelHashes[role] = {
+              status: isMatch ? "verified" : isBoundToComfyDir ? "conflict" : "unknown",
+              value: info.actualHash ?? null,
+              expected: info.expectedHash,
+              resolvedPath: info.resolvedPath
+            };
+            // Preflight observations keep actualCheckpointHash as "unknown" (preflight_not_loaded)
+            // until runtime execution / reconciliation.
+            mergedObservations.actualCheckpointHash = {
+              status: "unknown",
+              value: null,
+              expected: mergedObservations.actualCheckpointHash.expected,
+              unknownReason: "preflight_not_loaded"
+            };
+          }
+          for (const [expectedRole, expectedSpec] of Object.entries(
+            descriptor.resolvedModelPaths
+          )) {
+            if (!modelHashes[expectedRole]) {
+              const specObj =
+                typeof expectedSpec === "object" && expectedSpec !== null
+                  ? (expectedSpec as {
+                      expectedHash?: string;
+                      resolvedPath?: string;
+                      path?: string;
+                    })
+                  : undefined;
+              const expectedHash =
+                specObj?.expectedHash ??
+                (typeof expectedSpec === "string" ? expectedSpec : "0".repeat(64));
+              const resolvedPath =
+                specObj?.resolvedPath ??
+                specObj?.path ??
+                `${descriptor.target.comfyUiDir}/models/${expectedRole}`;
+              modelHashes[expectedRole] = {
+                status: "unknown",
+                value: null,
+                expected: expectedHash,
+                resolvedPath
+              };
+            }
+          }
+          mergedObservations.loadedModelHashes = modelHashes;
+        }
+        MinimaxH3ObservedProvenanceSchema.parse(mergedObservations);
         await this.store.writeDurableJson(
           `${runDir}/preflight-observations.json`,
-          runtimeCheck.observations
+          mergedObservations
         );
       }
     }
@@ -3119,6 +5075,10 @@ export class MinimaxH3ExperimentService {
         // ignore secondary failure
       }
       const childEnv: Record<string, string> = { ...descriptor.configuredRunner.env };
+      childEnv.CCO_EXPERIMENT_RUN_DIR = runDir;
+      childEnv.CCO_EXPERIMENT_RUN_ID = descriptor.runId;
+      childEnv.CCO_EXPERIMENT_ATTEMPT_TOKEN = attemptToken;
+      childEnv.CCO_EXPERIMENT_EVENT_LOG = `${runDir}/phase-events.jsonl`;
       if (descriptor.schemaVersion === 2) {
         const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
         if (descV2.requiredRuntime?.collectorDigest) {
@@ -3134,6 +5094,15 @@ export class MinimaxH3ExperimentService {
             .allowPlannedDense
             ? "true"
             : "false";
+        } else if (descV2.samplingRecipe?.attentionTopology) {
+          childEnv.CCO_EXPERIMENT_EXPECTED_ATTENTION_BACKEND =
+            descV2.samplingRecipe.attentionTopology.backend;
+          childEnv.CCO_EXPERIMENT_ALLOW_PLANNED_DENSE = "true";
+        }
+        if (descV2.requiredRuntime?.pythonPackages) {
+          childEnv.CCO_EXPERIMENT_REQUIRED_PACKAGES = descV2.requiredRuntime.pythonPackages
+            .map((p) => p.name)
+            .join(",");
         }
       }
       ownedChild = await this.runner.spawnChild({
@@ -3226,6 +5195,8 @@ export class MinimaxH3ExperimentService {
       // indication the process had already died. Race it against a
       // liveness poll on the owned child so a dead child fails fast
       // with a clear reason instead of a generic readiness timeout.
+      const readinessStartedAt = Date.now();
+      const overallStartupDeadline = readinessStartedAt + descriptor.timeouts.startupTimeoutMs;
       const readinessAbortController = new AbortController();
       if (options?.abortSignal) {
         if (options.abortSignal.aborted) {
@@ -3272,6 +5243,93 @@ export class MinimaxH3ExperimentService {
       const envVerification = await ownedChild.verifyChildEnvironment();
       if (!envVerification.ok) {
         throw new Error(`Child environment verification failed: ${envVerification.reason}`);
+      }
+
+      // 7b. Capability handshake verification (live child probe prior to queue/intent/submission)
+      let capabilityHandshake: MinimaxH3CapabilityHandshake | undefined;
+      let handshakeNonce: string | undefined;
+      if (descriptor.schemaVersion === 2) {
+        const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
+        if (!this.transport.getCapabilityHandshake) {
+          throw new Error(
+            "Capability handshake failed: transport does not support capability handshake"
+          );
+        }
+        handshakeNonce = `hs-${descriptor.runId}-${Date.now()}`;
+        const timeoutMs = descriptor.timeouts.submissionTimeoutMs ?? 30000;
+        // Capability probing previously started a fresh, independent
+        // submissionTimeoutMs deadline here regardless of how much of the
+        // overall startupTimeoutMs budget readiness had actually consumed,
+        // so a child that became ready quickly could still have its
+        // capability handshake rejected on a short submission timeout even
+        // though most of the longer startup budget remained unused
+        // (F-de60ebdc). Use whichever deadline is later: the configured
+        // submission timeout from now, or the remaining unused portion of
+        // the overall startup budget.
+        const handshakeDeadline = Math.max(Date.now() + timeoutMs, overallStartupDeadline);
+        while (true) {
+          if (options?.abortSignal?.aborted) {
+            throw new Error("Capability handshake aborted by caller");
+          }
+          if (!ownedChild.isRunning()) {
+            const exitStderr = ownedChild.getStderr();
+            throw new Error(
+              `Capability handshake failed: child process died during capability handshake${exitStderr ? `: ${exitStderr.trim().slice(-2000)}` : ""}`
+            );
+          }
+          const remainingMs = Math.max(500, handshakeDeadline - Date.now());
+          const handshakeRes = await this.transport.getCapabilityHandshake(
+            baseUrl,
+            handshakeNonce,
+            Math.min(remainingMs, 5000),
+            options?.abortSignal
+          );
+          if (!handshakeRes.ok || !handshakeRes.handshake) {
+            throw new Error(
+              `Capability handshake failed: ${handshakeRes.error ?? "Failed to acquire capability handshake from child process"}`
+            );
+          }
+          if (handshakeRes.handshake.status === "pending") {
+            if (Date.now() >= handshakeDeadline) {
+              throw new Error(
+                "Capability handshake failed: capability handshake timed out while pending attachment/readiness"
+              );
+            }
+            await new Promise((r) => setTimeout(r, 200));
+            continue;
+          }
+          capabilityHandshake = handshakeRes.handshake;
+          break;
+        }
+
+        const hsConflicts = validateCapabilityHandshake(capabilityHandshake, {
+          descV2,
+          expectedPid: ownedChild.pid,
+          expectedNonce: handshakeNonce,
+          attemptToken,
+          comfyUiDir: descriptor.target.comfyUiDir,
+          requireBinding: true
+        });
+        if (hsConflicts.length > 0) {
+          throw new Error(`Capability handshake failed: ${hsConflicts[0]}`);
+        }
+
+        await this.store.writeDurableJson(
+          `${runDir}/capability-handshake.json`,
+          capabilityHandshake
+        );
+
+        if (this.preflight?.verifyModels) {
+          const preSubmitModelsCheck = await this.preflight.verifyModels(
+            descriptor.target.comfyUiDir,
+            descriptor.resolvedModelPaths
+          );
+          if (!preSubmitModelsCheck.ok) {
+            throw new Error(
+              `Pre-submission model verification failed: ${preSubmitModelsCheck.blocker ?? "Model check failed"}`
+            );
+          }
+        }
       }
 
       // Verify queue is idle
@@ -3404,6 +5462,43 @@ export class MinimaxH3ExperimentService {
         throw new Error("config.json on disk was modified or tampered before POST");
       }
 
+      // Re-verify resolved models have not been modified or removed before POST
+      if (modelsCheck.resolvedPaths) {
+        for (const [role, info] of Object.entries(modelsCheck.resolvedPaths)) {
+          if (!existsSync(info.resolvedPath)) {
+            throw new Error(
+              `Resolved model "${role}" at "${info.resolvedPath}" missing before POST`
+            );
+          }
+          if (descriptor.target.comfyUiDir) {
+            let realResolved: string;
+            try {
+              realResolved = realpathSync(info.resolvedPath);
+            } catch {
+              realResolved = resolve(info.resolvedPath);
+            }
+            const modelsDir = resolve(descriptor.target.comfyUiDir, "models");
+            let realModelsDir: string;
+            try {
+              realModelsDir = realpathSync(modelsDir);
+            } catch {
+              realModelsDir = modelsDir;
+            }
+            if (realResolved !== realModelsDir && !realResolved.startsWith(realModelsDir + sep)) {
+              throw new Error(
+                `Resolved model "${role}" at "${info.resolvedPath}" is outside ComfyUI models directory "${realModelsDir}"`
+              );
+            }
+          }
+          const hashInfo = await this.store.hashFile(info.resolvedPath);
+          if (hashInfo.sha256 !== info.expectedHash) {
+            throw new Error(
+              `Resolved model "${role}" at "${info.resolvedPath}" was modified or tampered before POST: expected ${info.expectedHash}, observed ${hashInfo.sha256}`
+            );
+          }
+        }
+      }
+
       // 10. Write intent
       const clientId = `client-${descriptor.runId}`;
       const intent: MinimaxH3ExperimentIntent = {
@@ -3418,7 +5513,13 @@ export class MinimaxH3ExperimentService {
         // is a true fingerprint of the request, usable to independently
         // verify what was actually sent.
         requestFingerprint: sha256Hex(canonicalizeJson(validatedGraph)),
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        ...(attemptToken ? { attemptToken } : {}),
+        ...(ownedChild?.pid !== undefined ? { pid: ownedChild.pid } : {}),
+        ...(handshakeNonce ? { handshakeNonce } : {}),
+        ...(capabilityHandshake
+          ? { capabilityHandshakeDigest: sha256Hex(canonicalizeJson(capabilityHandshake)) }
+          : {})
       };
       await this.store.writeIntent(runDir, intent);
 

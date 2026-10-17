@@ -451,4 +451,62 @@ describe("MinimaxH3ComfyUiAdapter", () => {
     // in the fix doesn't actually hold.
     expect(chunksEmitted).toBeLessThan(chunksToExceedLimit);
   });
+
+  it("handles getCapabilityHandshake returning pending status followed by ready ok status", async () => {
+    let callCount = 0;
+    const pendingHandshake = {
+      status: "pending",
+      protocol: "v2-jsonl",
+      protocolVersion: "v2-jsonl",
+      runId: "run-test-1",
+      attemptToken: "token-1",
+      pid: 1234,
+      nonce: "nonce-1",
+      collectorDigest: "a".repeat(64),
+      hookManifestDigest: "b".repeat(64),
+      installedHooks: [],
+      registeredNodes: {}
+    };
+    const readyHandshake = {
+      ...pendingHandshake,
+      status: "ok",
+      installedHooks: [
+        {
+          name: "h1",
+          modulePath: "m1",
+          callable: "c1",
+          phase: "sampling",
+          attached: true
+        }
+      ]
+    };
+
+    const mockFetch = async (input: unknown): Promise<Response> => {
+      const urlStr = String(input);
+      if (urlStr.includes("/experiment/minimax-h3/capability")) {
+        callCount++;
+        const data = callCount === 1 ? pendingHandshake : readyHandshake;
+        return new Response(JSON.stringify(data), { status: 200 });
+      }
+      return new Response("Not found", { status: 404 });
+    };
+
+    const adapter = new MinimaxH3ComfyUiAdapter(mockFetch as unknown as typeof fetch);
+    const firstProbe = await adapter.getCapabilityHandshake(
+      "http://127.0.0.1:8199",
+      "nonce-1",
+      5000
+    );
+    expect(firstProbe.ok).toBe(true);
+    expect(firstProbe.handshake?.status).toBe("pending");
+
+    const secondProbe = await adapter.getCapabilityHandshake(
+      "http://127.0.0.1:8199",
+      "nonce-1",
+      5000
+    );
+    expect(secondProbe.ok).toBe(true);
+    expect(secondProbe.handshake?.status).toBe("ok");
+    expect(secondProbe.handshake?.installedHooks).toHaveLength(1);
+  });
 });

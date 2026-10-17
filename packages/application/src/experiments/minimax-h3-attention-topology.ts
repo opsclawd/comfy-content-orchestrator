@@ -4,6 +4,13 @@ import {
   type MinimaxH3AttentionTopology,
   type MinimaxH3AttentionVariantName
 } from "@cco/contracts";
+import {
+  resolveAttentionEvidence,
+  isSparseApiEvidence,
+  validatePatchNodeAgainstFixture,
+  type MinimaxH3AttentionEvidence,
+  type MinimaxH3SparseApiEvidence
+} from "./minimax-h3-attention-evidence.js";
 
 export interface ComfyNode {
   inputs?: Record<string, unknown>;
@@ -16,6 +23,14 @@ export interface DeriveAttentionGraphOptions {
   graph: Record<string, unknown>;
   attentionVariant: MinimaxH3AttentionVariantName;
   route: "i2v" | "ref2v";
+  evidence?: MinimaxH3AttentionEvidence;
+  coreRevision?: string;
+  customNode?:
+    | {
+        repository?: string | undefined;
+        revision?: string | undefined;
+      }
+    | undefined;
 }
 
 export interface DerivedAttentionResult {
@@ -25,7 +40,23 @@ export interface DerivedAttentionResult {
 }
 
 export function deriveAttentionGraph(options: DeriveAttentionGraphOptions): DerivedAttentionResult {
-  const { graph, attentionVariant, route } = options;
+  const { graph, attentionVariant, route, evidence, coreRevision, customNode } = options;
+  if (!evidence) {
+    throw new Error(
+      `Attention graph derivation requires authoritative API evidence for variant "${attentionVariant}".`
+    );
+  }
+
+  const evidenceRes = resolveAttentionEvidence({
+    variant: attentionVariant,
+    evidence,
+    coreRevision,
+    customNode
+  });
+  if (!evidenceRes.valid || !evidenceRes.isResolved) {
+    throw new Error(`Attention graph derivation rejected: ${evidenceRes.errors.join("; ")}`);
+  }
+
   const derived = JSON.parse(JSON.stringify(graph)) as Record<string, ComfyNode>;
 
   const unetLoaderId = "6";
@@ -45,6 +76,14 @@ export function deriveAttentionGraph(options: DeriveAttentionGraphOptions): Deri
   }
 
   if (attentionVariant === "native-sol-attn") {
+    const sparseEv = evidence as MinimaxH3SparseApiEvidence;
+    const modelOutputSlot = sparseEv.returnTypes.indexOf("MODEL");
+    if (modelOutputSlot === -1) {
+      throw new Error(
+        `Attention graph derivation rejected: evidence for ${sparseEv.classType} does not declare returnType "MODEL".`
+      );
+    }
+
     const patchNodeId = "301";
     const patchNode: ComfyNode = {
       inputs: {
@@ -56,11 +95,19 @@ export function deriveAttentionGraph(options: DeriveAttentionGraphOptions): Deri
         title: "Model Sparse Attention (sol-attn)"
       }
     };
+
+    const patchValidation = validatePatchNodeAgainstFixture(patchNode, sparseEv, unetLoaderId);
+    if (!patchValidation.valid) {
+      throw new Error(
+        `Attention graph derivation rejected: recipe cannot satisfy fixture schema: ${patchValidation.errors.join("; ")}`
+      );
+    }
+
     derived[patchNodeId] = patchNode;
 
-    // Rewire BasicGuider (node 16) to receive model from the patch node
+    // Rewire BasicGuider (node 16) to receive model from the patch node at MODEL output slot
     if (derived[guiderNodeId]?.inputs) {
-      derived[guiderNodeId].inputs.model = [patchNodeId, 0];
+      derived[guiderNodeId].inputs.model = [patchNodeId, modelOutputSlot];
     }
 
     const patches: MinimaxH3AttentionPatchNode[] = [
@@ -85,6 +132,14 @@ export function deriveAttentionGraph(options: DeriveAttentionGraphOptions): Deri
   }
 
   if (attentionVariant === "veda") {
+    const sparseEv = evidence as MinimaxH3SparseApiEvidence;
+    const modelOutputSlot = sparseEv.returnTypes.indexOf("MODEL");
+    if (modelOutputSlot === -1) {
+      throw new Error(
+        `Attention graph derivation rejected: evidence for ${sparseEv.classType} does not declare returnType "MODEL".`
+      );
+    }
+
     const patchNodeId = "301";
     const predictorName =
       route === "ref2v"
@@ -123,11 +178,19 @@ export function deriveAttentionGraph(options: DeriveAttentionGraphOptions): Deri
         title: "Veda Sparse Attention"
       }
     };
+
+    const patchValidation = validatePatchNodeAgainstFixture(patchNode, sparseEv, unetLoaderId);
+    if (!patchValidation.valid) {
+      throw new Error(
+        `Attention graph derivation rejected: recipe cannot satisfy fixture schema: ${patchValidation.errors.join("; ")}`
+      );
+    }
+
     derived[patchNodeId] = patchNode;
 
-    // Rewire BasicGuider (node 16) to receive model from the patch node
+    // Rewire BasicGuider (node 16) to receive model from the patch node at MODEL output slot
     if (derived[guiderNodeId]?.inputs) {
-      derived[guiderNodeId].inputs.model = [patchNodeId, 0];
+      derived[guiderNodeId].inputs.model = [patchNodeId, modelOutputSlot];
     }
 
     const patches: MinimaxH3AttentionPatchNode[] = [
@@ -151,22 +214,56 @@ export function deriveAttentionGraph(options: DeriveAttentionGraphOptions): Deri
   throw new Error(`Unsupported attention variant: "${attentionVariant}".`);
 }
 
+export interface ValidateAttentionTopologyOptions {
+  expectedVariant: MinimaxH3AttentionVariantName;
+  route: "i2v" | "ref2v";
+  argv?: readonly string[] | undefined;
+  env?: Record<string, string> | undefined;
+  evidence?: MinimaxH3AttentionEvidence | undefined;
+  coreRevision?: string | undefined;
+  customNode?:
+    | {
+        repository?: string | undefined;
+        revision?: string | undefined;
+      }
+    | undefined;
+}
+
 export function validateAttentionTopology(
   rawGraph: Record<string, unknown>,
-  options: {
-    expectedVariant: MinimaxH3AttentionVariantName;
-    route: "i2v" | "ref2v";
-    argv?: readonly string[];
-    env?: Record<string, string>;
-  }
+  options: ValidateAttentionTopologyOptions
 ): {
   valid: boolean;
   errors: string[];
   topology: MinimaxH3AttentionTopology;
 } {
   const graph = rawGraph as Record<string, ComfyNode>;
-  const { expectedVariant, route, argv = [], env = {} } = options;
+  const {
+    expectedVariant,
+    route,
+    argv = [],
+    env = {},
+    evidence,
+    coreRevision,
+    customNode
+  } = options;
   const errors: string[] = [];
+
+  if (evidence) {
+    const evidenceRes = resolveAttentionEvidence({
+      variant: expectedVariant,
+      evidence,
+      coreRevision,
+      customNode
+    });
+    if (!evidenceRes.valid || !evidenceRes.isResolved) {
+      errors.push(...evidenceRes.errors);
+    }
+  } else {
+    errors.push(
+      `Attention topology validation requires authoritative API evidence for variant "${expectedVariant}".`
+    );
+  }
 
   const unetLoaderId = "6";
   const schedulerNodeId = "9";
@@ -407,15 +504,34 @@ export function validateAttentionTopology(
         );
       }
 
-      const guiderModelConn = graph[guiderNodeId]?.inputs?.model;
-      if (
-        !Array.isArray(guiderModelConn) ||
-        guiderModelConn[0] !== p.id ||
-        guiderModelConn[1] !== 0
-      ) {
+      const sparseEv = evidence && isSparseApiEvidence(evidence) ? evidence : undefined;
+      if (!sparseEv) {
         errors.push(
-          `BasicGuider (node ${guiderNodeId}) input 'model' must connect to ModelSparseAttention (node ${p.id}) slot 0 (detected disconnected/bypassed patch), got: ${JSON.stringify(guiderModelConn)}.`
+          'Variant "native-sol-attn" requires authoritative sparse API evidence for topology validation.'
         );
+      } else {
+        const modelOutputSlot = sparseEv.returnTypes.indexOf("MODEL");
+        if (modelOutputSlot === -1) {
+          errors.push(
+            `Authoritative API fixture for ${sparseEv.classType} does not declare returnType "MODEL".`
+          );
+        } else {
+          const guiderModelConn = graph[guiderNodeId]?.inputs?.model;
+          if (
+            !Array.isArray(guiderModelConn) ||
+            guiderModelConn[0] !== p.id ||
+            guiderModelConn[1] !== modelOutputSlot
+          ) {
+            errors.push(
+              `BasicGuider (node ${guiderNodeId}) input 'model' must connect to ModelSparseAttention (node ${p.id}) slot ${modelOutputSlot} (MODEL output index), got: ${JSON.stringify(guiderModelConn)} (detected disconnected/bypassed patch node).`
+            );
+          }
+        }
+
+        const patchValidation = validatePatchNodeAgainstFixture(p.node, sparseEv, unetLoaderId);
+        if (!patchValidation.valid) {
+          errors.push(...patchValidation.errors);
+        }
       }
 
       if (p.node.inputs?.sparse_type !== "sol-attn") {
@@ -451,35 +567,33 @@ export function validateAttentionTopology(
         );
       }
 
-      const guiderModelConn = graph[guiderNodeId]?.inputs?.model;
-      if (
-        !Array.isArray(guiderModelConn) ||
-        guiderModelConn[0] !== p.id ||
-        guiderModelConn[1] !== 0
-      ) {
+      const sparseEv = evidence && isSparseApiEvidence(evidence) ? evidence : undefined;
+      if (!sparseEv) {
         errors.push(
-          `BasicGuider (node ${guiderNodeId}) input 'model' must connect to VedaSparseAttention (node ${p.id}) slot 0 (detected disconnected/bypassed patch), got: ${JSON.stringify(guiderModelConn)}.`
+          'Variant "veda" requires authoritative sparse API evidence for topology validation.'
         );
-      }
-
-      if (!p.node.inputs?.predictor) {
-        errors.push(`VedaSparseAttention (node ${p.id}) is missing required input 'predictor'.`);
-      }
-      // Required-input names match the pinned Veda upstream node's own
-      // define_schema() (veda_comfy/nodes.py @
-      // 67e4eb5541b648555563144401ebaba832bd73ec, lines 137-189): there is
-      // no `sparse_ratio` field in that schema.
-      for (const requiredInput of [
-        "generated_sparsity",
-        "reference_sparsity",
-        "full_attention_layers",
-        "full_attention_steps",
-        "verbose"
-      ] as const) {
-        if (p.node.inputs?.[requiredInput] === undefined) {
+      } else {
+        const modelOutputSlot = sparseEv.returnTypes.indexOf("MODEL");
+        if (modelOutputSlot === -1) {
           errors.push(
-            `VedaSparseAttention (node ${p.id}) is missing required input '${requiredInput}'.`
+            `Authoritative API fixture for ${sparseEv.classType} does not declare returnType "MODEL".`
           );
+        } else {
+          const guiderModelConn = graph[guiderNodeId]?.inputs?.model;
+          if (
+            !Array.isArray(guiderModelConn) ||
+            guiderModelConn[0] !== p.id ||
+            guiderModelConn[1] !== modelOutputSlot
+          ) {
+            errors.push(
+              `BasicGuider (node ${guiderNodeId}) input 'model' must connect to VedaSparseAttention (node ${p.id}) slot ${modelOutputSlot} (MODEL output index), got: ${JSON.stringify(guiderModelConn)} (detected disconnected/bypassed patch node).`
+            );
+          }
+        }
+
+        const patchValidation = validatePatchNodeAgainstFixture(p.node, sparseEv, unetLoaderId);
+        if (!patchValidation.valid) {
+          errors.push(...patchValidation.errors);
         }
       }
 
@@ -521,12 +635,19 @@ export function validateAttentionTopology(
   if (route === "i2v") {
     if (graph[i2vConditioningNodeId]) {
       const firstFrameConn = graph[i2vConditioningNodeId]?.inputs?.first_frame;
-      if (!Array.isArray(firstFrameConn) || firstFrameConn[0] !== "20" || firstFrameConn[1] !== 0) {
+      if (
+        !Array.isArray(firstFrameConn) ||
+        firstFrameConn.length !== 2 ||
+        firstFrameConn[0] !== "20" ||
+        firstFrameConn[1] !== 0
+      ) {
         errors.push(
           `Route 'i2v' requires MiniMaxH3ImageToVideo (node ${i2vConditioningNodeId}) input 'first_frame' to connect to LoadImage (node 20) slot 0, got: ${JSON.stringify(firstFrameConn)}.`
         );
       }
-      if (graph["20"]) {
+      if (!graph["20"]) {
+        errors.push("Route 'i2v' first_frame node 20 is missing from the workflow graph.");
+      } else {
         const node20 = graph["20"];
         if (node20.class_type !== "LoadImage") {
           errors.push(
@@ -541,12 +662,32 @@ export function validateAttentionTopology(
       if (lastFrameConn !== undefined && lastFrameConn !== null) {
         if (
           !Array.isArray(lastFrameConn) ||
+          lastFrameConn.length !== 2 ||
           typeof lastFrameConn[0] !== "string" ||
           lastFrameConn[1] !== 0
         ) {
           errors.push(
-            `Route 'i2v' MiniMaxH3ImageToVideo (node ${i2vConditioningNodeId}) input 'last_frame' must connect to valid node slot 0, got: ${JSON.stringify(lastFrameConn)}.`
+            `Route 'i2v' MiniMaxH3ImageToVideo (node ${i2vConditioningNodeId}) input 'last_frame' must connect to valid LoadImage node slot 0, got: ${JSON.stringify(lastFrameConn)}.`
           );
+        } else {
+          const lastFrameNodeId = lastFrameConn[0];
+          const lastFrameNode = graph[lastFrameNodeId];
+          if (!lastFrameNode) {
+            errors.push(
+              `Route 'i2v' last_frame node ${lastFrameNodeId} is missing from the workflow graph.`
+            );
+          } else {
+            if (lastFrameNode.class_type !== "LoadImage") {
+              errors.push(
+                `Route 'i2v' last_frame node ${lastFrameNodeId} must be class_type 'LoadImage', got '${lastFrameNode.class_type}'.`
+              );
+            }
+            if (!lastFrameNode.inputs?.image) {
+              errors.push(
+                `Route 'i2v' last_frame node ${lastFrameNodeId} is missing required 'image' input.`
+              );
+            }
+          }
         }
       }
     }

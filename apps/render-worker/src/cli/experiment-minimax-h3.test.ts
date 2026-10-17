@@ -1,5 +1,8 @@
 import { basename, isAbsolute, relative, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { execSync } from "node:child_process";
+import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import {
   runExperimentCli,
   parseArgs,
@@ -9,6 +12,8 @@ import {
   MinimaxH3ExperimentService,
   canonicalizeJson,
   sha256Hex,
+  getAttentionCatalogEntry,
+  expandContinuityStudyPlan,
   type MinimaxH3ComfyUiTransportPort,
   type MinimaxH3ExperimentStorePort,
   type MinimaxH3OutputProberPort,
@@ -16,15 +21,34 @@ import {
   type MinimaxH3TargetPreflightPort,
   type MinimaxH3TelemetrySamplerPort
 } from "@cco/application";
-import type {
-  MinimaxH3ExperimentEvent,
-  MinimaxH3ExperimentIntent,
-  MinimaxH3ExperimentReceipt,
-  MinimaxH3ExperimentResult,
-  MinimaxH3TelemetrySample,
-  MinimaxH3AnyExperimentDescriptor,
-  MinimaxH3AnyExperimentResult
+import {
+  PINNED_COMFYUI_CORE_REVISION,
+  PINNED_COMFYUI_SOURCE_HASHES,
+  PINNED_COMFYUI_NODES_PY_SHA256,
+  PINNED_COMFYUI_NODES_MINIMAX_H3_PY_SHA256,
+  FASTH3_ISOLATED_CORE_REVISION,
+  FASTH3_COMFYUI_SOURCE_HASHES,
+  buildRequiredRuntimeManifestFromAttentionCatalog,
+  computeContinuityReferenceManifestDigest,
+  computeContinuityReviewDigest,
+  computeContinuityRubricDigest,
+  computeContinuityStudyDigest,
+  type MinimaxH3ExperimentEvent,
+  type MinimaxH3ExperimentIntent,
+  type MinimaxH3ExperimentReceipt,
+  type MinimaxH3ExperimentResult,
+  type MinimaxH3TelemetrySample,
+  type MinimaxH3AnyExperimentDescriptor,
+  type MinimaxH3AnyExperimentResult,
+  type MinimaxH3ContinuityReviewSidecar,
+  type ContinuityScenario
 } from "@cco/contracts";
+import {
+  CurrentPinExperimentRuntimeAdapter,
+  IsolatedUpgradeExperimentRuntimeAdapter,
+  ExperimentRuntimeRegistry,
+  setTestDriverQueryCommand
+} from "@cco/infrastructure";
 
 const mockI2vTemplate = {
   "6": {
@@ -72,8 +96,13 @@ class MockStore implements MinimaxH3ExperimentStorePort {
   async readTerminalEvidence(): Promise<null> {
     return null;
   }
-  async inspectAsset(): Promise<{ width: number; height: number; mimeType: string }> {
-    return { width: 1344, height: 768, mimeType: "image/png" };
+  public customDimensions = new Map<string, { width: number; height: number; mimeType: string }>();
+  async inspectAsset(
+    filePath: string
+  ): Promise<{ width: number; height: number; mimeType: string }> {
+    return (
+      this.customDimensions.get(filePath) ?? { width: 1024, height: 585, mimeType: "image/jpeg" }
+    );
   }
   public deleteRunFilesCalls: Array<{ runDir: string; removeOutputs?: boolean | undefined }> = [];
   async deleteRunFiles(runDir: string, removeOutputs?: boolean): Promise<void> {
@@ -175,14 +204,32 @@ class MockStore implements MinimaxH3ExperimentStorePort {
     return !rel.startsWith("..") && !isAbsolute(rel);
   }
   async stageInputFile(): Promise<void> {}
-  async hashFile(): Promise<{ sha256: string; sizeBytes: number }> {
+  fileHashes = new Map<string, { sha256: string; sizeBytes: number }>();
+  async hashFile(filePath?: string): Promise<{ sha256: string; sizeBytes: number }> {
+    if (filePath) {
+      if (this.fileHashes.has(filePath)) {
+        return this.fileHashes.get(filePath)!;
+      }
+      if (this.fileHashes.has(basename(filePath))) {
+        return this.fileHashes.get(basename(filePath))!;
+      }
+      const content =
+        this.files.get(filePath) ??
+        this.files.get(basename(filePath)) ??
+        this.files.get(`templates/${basename(filePath)}`) ??
+        (fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : undefined);
+      if (content) {
+        return { sha256: sha256Hex(content), sizeBytes: Buffer.byteLength(content) };
+      }
+    }
     return { sha256: "0".repeat(64), sizeBytes: 1024 };
   }
   async readJsonFile<T = unknown>(filePath: string): Promise<T> {
     const content =
       this.files.get(filePath) ??
       this.files.get(basename(filePath)) ??
-      this.files.get(`templates/${basename(filePath)}`);
+      this.files.get(`templates/${basename(filePath)}`) ??
+      (fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : undefined);
     if (!content) throw new Error(`Not found: ${filePath}`);
     return JSON.parse(content);
   }
@@ -190,7 +237,8 @@ class MockStore implements MinimaxH3ExperimentStorePort {
     const content =
       this.files.get(filePath) ??
       this.files.get(basename(filePath)) ??
-      this.files.get(`templates/${basename(filePath)}`);
+      this.files.get(`templates/${basename(filePath)}`) ??
+      (fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : undefined);
     if (!content) throw new Error(`Not found: ${filePath}`);
     return content;
   }
@@ -265,7 +313,58 @@ function createMockDeps(): {
       nodesPresent: true
     }),
     verifyModels: async () => ({ ok: true, resolvedPaths: {} }),
-    verifyDiskSpace: async () => ({ ok: true, freeGb: 100 })
+    verifyDiskSpace: async () => ({ ok: true, freeGb: 100 }),
+    inspectEnvironmentIdentity: async (opts) => ({
+      ok: true,
+      interpreter: {
+        pythonVersion: "3.11.9",
+        pythonExecutableHash: "1".repeat(64),
+        pythonAbi: "cpython-311-x86_64-linux-gnu",
+        pythonCompiler: "GCC 11.2.0"
+      },
+      sourceFileHashes:
+        opts?.coreRevision === FASTH3_ISOLATED_CORE_REVISION
+          ? {
+              ...FASTH3_COMFYUI_SOURCE_HASHES,
+              "execution.py": "2".repeat(64),
+              "comfy/samplers.py": "3".repeat(64),
+              "comfy_extras/nodes_custom_sampler.py": "4".repeat(64),
+              "comfy/nodes_package.py": "5".repeat(64),
+              "nodes.py": "7".repeat(64)
+            }
+          : {
+              "execution.py": "2".repeat(64),
+              "comfy/samplers.py": "3".repeat(64),
+              "comfy_extras/nodes_custom_sampler.py": "4".repeat(64),
+              "comfy/nodes_package.py": "5".repeat(64),
+              "comfy_extras/nodes_minimax_h3.py": PINNED_COMFYUI_NODES_MINIMAX_H3_PY_SHA256,
+              "nodes.py": PINNED_COMFYUI_NODES_PY_SHA256,
+              "main.py": PINNED_COMFYUI_SOURCE_HASHES.mainSha256,
+              "comfy/model_management.py": PINNED_COMFYUI_SOURCE_HASHES.modelManagementSha256,
+              "comfy/cli_args.py": PINNED_COMFYUI_SOURCE_HASHES.cliArgsSha256,
+              "comfy_extras/nodes_sage_attention.py": "9".repeat(64)
+            },
+      pythonPackages: (
+        opts?.requiredPackages ?? [
+          { name: "torch", version: "2.5.1+cu124" },
+          { name: "sageattention", version: "2.1.1" }
+        ]
+      ).map((pkg) => ({
+        name: pkg.name,
+        version: pkg.version ?? "1.0.0",
+        artifactHash: "a".repeat(64),
+        artifactMethod: "installed_record_sha256_v1" as const,
+        importModule: pkg.importModule ?? pkg.name
+      })),
+      pytorchBuild: "2.5.1+cu124",
+      cudaBuild: "12.4",
+      driverConstraints: [">=550.00.00"]
+    }),
+    verifyExperimentRuntime: async () => ({
+      ok: true,
+      status: "verified" as const,
+      adapterRegistered: true
+    })
   };
 
   const runner: MinimaxH3ProcessRunnerPort = {
@@ -2379,6 +2478,1246 @@ describe("experiment:minimax-h3 CLI", () => {
       expect(valOutput.status).toBe("valid");
       expect(valOutput.graphValid).toBe(true);
       expect(valOutput.runId).toBe("run-sage-validate");
+    });
+  });
+
+  describe("Sampling Recipe CLI Flags", () => {
+    it("lists all recipes with catalog --recipes", async () => {
+      const { deps, stdout } = createMockDeps();
+      const exitCode = await runExperimentCli(["catalog", "--recipes"], deps);
+      expect(exitCode).toBe(0);
+      const parsed = JSON.parse(stdout[0]!);
+      expect(Array.isArray(parsed)).toBe(true);
+      expect(parsed).toHaveLength(5);
+      const names = parsed.map((r: { name: string }) => r.name);
+      expect(names).toContain("canonical-base-20");
+      expect(names).toContain("fl2va-base-20");
+      expect(names).toContain("fl2va-turbo-8");
+      expect(names).toContain("ref2va-turbo-4");
+      expect(names).toContain("fasth3-i2v-8");
+    });
+
+    it("filters recipes by route with catalog --recipes --route ref2v", async () => {
+      const { deps, stdout } = createMockDeps();
+      const exitCode = await runExperimentCli(["catalog", "--recipes", "--route", "ref2v"], deps);
+      expect(exitCode).toBe(0);
+      const parsed = JSON.parse(stdout[0]!);
+      expect(Array.isArray(parsed)).toBe(true);
+      const names = parsed.map((r: { name: string }) => r.name);
+      expect(names).toContain("canonical-base-20");
+      expect(names).toContain("ref2va-turbo-4");
+      expect(names).not.toContain("fl2va-turbo-8");
+      expect(names).not.toContain("fasth3-i2v-8");
+    });
+
+    it("rejects invalid --sampling-recipe option", async () => {
+      const { deps, stderr } = createMockDeps();
+      const exitCode = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-bad-recipe",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--sampling-recipe",
+          "non-existent"
+        ],
+        deps
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr[0]).toContain('Unknown --sampling-recipe "non-existent"');
+    });
+
+    it("rejects --step-override when combined with --sampling-recipe", async () => {
+      const { deps, stderr } = createMockDeps();
+      const exitCode = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-conflict",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--sampling-recipe",
+          "fl2va-turbo-8",
+          "--step-override",
+          "20"
+        ],
+        deps
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr[0]).toContain(
+        "Cannot specify --step-override when using a distillation --sampling-recipe"
+      );
+    });
+
+    it("rejects route incompatibility (e.g. fasth3-i2v-8 on ref2v route)", async () => {
+      const { deps, stderr } = createMockDeps();
+      const exitCode = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "ref2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-incompat-route",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--sampling-recipe",
+          "fasth3-i2v-8"
+        ],
+        deps
+      );
+      expect(exitCode).toBe(1);
+      expect(stderr[0]).toContain(
+        "FastH3 8-step is strictly restricted to I2V / frame-anchored route; Ref2V is rejected"
+      );
+    });
+
+    it("prepares and validates experiment with --sampling-recipe fl2va-turbo-8", async () => {
+      const { deps, stdout } = createMockDeps();
+      const prepExit = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-fl2va-turbo-8",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--sampling-recipe",
+          "fl2va-turbo-8"
+        ],
+        deps
+      );
+      expect(prepExit).toBe(0);
+      const parsed = JSON.parse(stdout[0]!);
+      expect(parsed.status).toBe("prepared");
+
+      const valExit = await runExperimentCli(
+        [
+          "validate",
+          "--run-dir",
+          parsed.runDir,
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments"
+        ],
+        deps
+      );
+      expect(valExit).toBe(0);
+      const valOutput = JSON.parse(stdout[1]!);
+      expect(valOutput.status).toBe("valid");
+      expect(valOutput.graphValid).toBe(true);
+    });
+
+    it("prepares and validates experiment with --sampling-recipe fasth3-i2v-8", async () => {
+      const { deps, stdout, stderr } = createMockDeps();
+      const prepExit = await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A test prompt",
+          "--target-host",
+          "render-worker-01",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          "run-fasth3-i2v-8",
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments",
+          "--sampling-recipe",
+          "fasth3-i2v-8"
+        ],
+        deps
+      );
+      if (prepExit !== 0) {
+        expect(stderr).toEqual([]);
+      }
+      expect(prepExit).toBe(0);
+      const parsed = JSON.parse(stdout[0]!);
+      expect(parsed.status).toBe("prepared");
+
+      const valExit = await runExperimentCli(
+        [
+          "validate",
+          "--run-dir",
+          parsed.runDir,
+          "--output-root",
+          ".ai-runs/minimax-h3-experiments"
+        ],
+        deps
+      );
+      expect(valExit).toBe(0);
+      const valOutput = JSON.parse(stdout[1]!);
+      expect(valOutput.status).toBe("valid");
+      expect(valOutput.graphValid).toBe(true);
+    });
+  });
+});
+
+describe("MiniMax-H3 Real Attention Catalog Runtime Manifest Verification (F-6d0e1377)", () => {
+  const mockRootDir = path.resolve(".ai-tmp/test-cli-runtime-mock");
+  const mockComfyDir = path.join(mockRootDir, "comfyui-pinned");
+  const mockUpgradeComfyDir = path.join(mockRootDir, "comfyui-upgrade");
+  const mockPythonPath = path.join(mockRootDir, "mock-python.sh");
+
+  beforeAll(() => {
+    // Setup pinned ComfyUI dir
+    fs.mkdirSync(path.join(mockComfyDir, "comfy_extras"), { recursive: true });
+    fs.writeFileSync(
+      path.join(mockComfyDir, "comfy_extras", "nodes_minimax_h3.py"),
+      "class MiniMaxH3ImageToVideo:\n    INPUT_TYPES = {}\nclass MiniMaxH3ReferenceToVideo:\n    INPUT_TYPES = {}\nclass MiniMaxH3SigmaShift:\n    INPUT_TYPES = {}\n"
+    );
+    fs.writeFileSync(
+      path.join(mockComfyDir, "nodes.py"),
+      "class LoraLoaderModelOnly:\n    INPUT_TYPES = {}\n"
+    );
+    fs.writeFileSync(
+      path.join(mockComfyDir, "comfy_extras", "nodes_model_advanced.py"),
+      "class ModelAttentionBackend:\n    INPUT_TYPES = {}\n"
+    );
+    fs.writeFileSync(
+      path.join(mockComfyDir, "comfy_extras", "nodes_sparse_attention.py"),
+      "class BlockSparseAttention:\n    INPUT_TYPES = {}\nclass ModelSparseAttention:\n    INPUT_TYPES = {}\nclass VedaSparseAttention:\n    INPUT_TYPES = {}\n"
+    );
+    execSync("git init -b main", { cwd: mockComfyDir });
+    execSync('git config user.email "test@test.com"', { cwd: mockComfyDir });
+    execSync('git config user.name "Test"', { cwd: mockComfyDir });
+    execSync("git add .", { cwd: mockComfyDir });
+    execSync('git commit -m "init"', { cwd: mockComfyDir });
+    fs.writeFileSync(path.join(mockComfyDir, ".git", "HEAD"), `${PINNED_COMFYUI_CORE_REVISION}\n`);
+
+    // Setup isolated upgrade ComfyUI dir (revision 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf)
+    fs.mkdirSync(path.join(mockUpgradeComfyDir, "comfy_extras"), { recursive: true });
+    fs.writeFileSync(
+      path.join(mockUpgradeComfyDir, "comfy_extras", "nodes_minimax_h3.py"),
+      "class MiniMaxH3ImageToVideo:\n    INPUT_TYPES = {}\nclass MiniMaxH3ReferenceToVideo:\n    INPUT_TYPES = {}\nclass MiniMaxH3SigmaShift:\n    INPUT_TYPES = {}\n"
+    );
+    fs.writeFileSync(
+      path.join(mockUpgradeComfyDir, "nodes.py"),
+      "class LoraLoaderModelOnly:\n    INPUT_TYPES = {}\n"
+    );
+    fs.writeFileSync(
+      path.join(mockUpgradeComfyDir, "comfy_extras", "nodes_model_advanced.py"),
+      "class ModelAttentionBackend:\n    INPUT_TYPES = {}\n"
+    );
+    fs.writeFileSync(
+      path.join(mockUpgradeComfyDir, "comfy_extras", "nodes_sparse_attention.py"),
+      "class BlockSparseAttention:\n    INPUT_TYPES = {}\nclass ModelSparseAttention:\n    INPUT_TYPES = {}\nclass VedaSparseAttention:\n    INPUT_TYPES = {}\n"
+    );
+    execSync("git init -b main", { cwd: mockUpgradeComfyDir });
+    execSync('git config user.email "test@test.com"', { cwd: mockUpgradeComfyDir });
+    execSync('git config user.name "Test"', { cwd: mockUpgradeComfyDir });
+    execSync("git add .", { cwd: mockUpgradeComfyDir });
+    execSync('git commit -m "init"', { cwd: mockUpgradeComfyDir });
+    fs.writeFileSync(
+      path.join(mockUpgradeComfyDir, ".git", "HEAD"),
+      "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf\n"
+    );
+
+    setTestDriverQueryCommand({ command: "echo", args: ["560.35.03"] });
+    const mockPythonScript = `#!/bin/sh
+if echo "$1" | grep -q "minimax-h3-package-inspector.py"; then
+  PKG="$2"
+  HASH=$(echo -n "$PKG" | sha256sum | cut -d' ' -f1)
+  VER="$3"
+  [ -z "$VER" ] && VER="2.5.1+cu124"
+  echo "ok:{\\"name\\": \\"$PKG\\", \\"version\\": \\"$VER\\", \\"artifactHash\\": \\"$HASH\\", \\"artifactMethod\\": \\"installed_record_sha256_v1\\"}"
+  exit 0
+fi
+if [ "$1" = "-c" ]; then
+  if echo "$2" | grep -q "torch.__version__"; then
+    echo "2.5.1+cu124|12.4"
+    exit 0
+  fi
+  if echo "$2" | grep -q "scaled_dot_product_attention" || echo "$2" | grep -q "sageattention" || echo "$2" | grep -q "comfy_kitchen" || echo "$2" | grep -q "veda_sparse_attention" || echo "$2" | grep -q "block_sparse"; then
+    echo "ok"
+    exit 0
+  fi
+  if echo "$2" | grep -q "dist_name = sys.argv\\[1\\]"; then
+    if [ "$3" = "comfy-kitchen" ]; then
+      if [ -n "$4" ] && [ "$4" != "0.2.34" ] && [ "$4" != "0.2.31" ]; then
+        echo "version_mismatch:expected_$4_got_0.2.31"
+        exit 1
+      fi
+      echo "ok"
+      exit 0
+    fi
+    if [ "$3" = "sageattention" ] || [ "$3" = "veda-sparse-attention" ] || [ "$3" = "triton" ] || [ "$3" = "torch" ]; then
+      echo "ok"
+      exit 0
+    fi
+  fi
+fi
+exec /usr/bin/python3 "$@"
+`;
+    fs.writeFileSync(mockPythonPath, mockPythonScript, { mode: 0o755 });
+  });
+
+  afterAll(() => {
+    setTestDriverQueryCommand(null);
+    delete process.env.CCO_DRIVER_VERSION_OVERRIDE;
+    if (fs.existsSync(mockRootDir)) {
+      fs.rmSync(mockRootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("verifies real dense catalog entry against CurrentPinExperimentRuntimeAdapter with torch_sdpa alias", async () => {
+    const entry = getAttentionCatalogEntry("dense", "i2v");
+    const manifest = buildRequiredRuntimeManifestFromAttentionCatalog(entry, "i2v", {
+      sourceFileHashes: {}
+    });
+    expect(manifest.attentionKernel).toBe("torch.nn.functional.scaled_dot_product_attention");
+
+    const adapter = new CurrentPinExperimentRuntimeAdapter();
+    const res = await adapter.verify({
+      comfyUiDir: mockComfyDir,
+      pythonPath: mockPythonPath,
+      requiredRuntime: manifest
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.status).toBe("verified");
+  });
+
+  it("verifies real sage catalog entry against CurrentPinExperimentRuntimeAdapter with sageattention alias", async () => {
+    const entry = getAttentionCatalogEntry("sage", "i2v");
+    const manifest = buildRequiredRuntimeManifestFromAttentionCatalog(entry, "i2v", {
+      sourceFileHashes: {}
+    });
+    expect(manifest.attentionKernel).toBe("sageattention.sageattn");
+
+    const adapter = new CurrentPinExperimentRuntimeAdapter();
+    const res = await adapter.verify({
+      comfyUiDir: mockComfyDir,
+      pythonPath: mockPythonPath,
+      requiredRuntime: manifest
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.status).toBe("verified");
+  });
+
+  it("verifies CurrentPinExperimentRuntimeAdapter rejects real native-sol-attn catalog entry (requires isolated upgrade)", async () => {
+    const entry = getAttentionCatalogEntry("native-sol-attn", "i2v", {
+      coreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf"
+    });
+    const manifest = buildRequiredRuntimeManifestFromAttentionCatalog(entry, "i2v", {
+      sourceFileHashes: {
+        "comfy_extras/nodes_minimax_h3.py": "1".repeat(64)
+      },
+      collectorDigest: "c".repeat(64),
+      pytorchBuild: "2.5.1+cu124",
+      cudaBuild: "12.4"
+    });
+    expect(manifest.attentionKernel).toBe("comfy_kitchen.sol_attn");
+
+    const adapter = new CurrentPinExperimentRuntimeAdapter();
+    const res = await adapter.verify({
+      comfyUiDir: mockComfyDir,
+      pythonPath: mockPythonPath,
+      requiredRuntime: manifest
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.status).toBe("conflict");
+  });
+
+  it("verifies real native-sol-attn catalog entry against IsolatedUpgradeExperimentRuntimeAdapter", async () => {
+    const entry = getAttentionCatalogEntry("native-sol-attn", "i2v", {
+      coreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf"
+    });
+    const mockUpgradeSourceHash = sha256Hex(
+      fs.readFileSync(
+        path.join(mockUpgradeComfyDir, "comfy_extras", "nodes_minimax_h3.py"),
+        "utf-8"
+      )
+    );
+    const manifest = buildRequiredRuntimeManifestFromAttentionCatalog(entry, "i2v", {
+      sourceFileHashes: {
+        "comfy_extras/nodes_minimax_h3.py": mockUpgradeSourceHash
+      },
+      collectorDigest: "c".repeat(64),
+      pytorchBuild: "2.5.1+cu124",
+      cudaBuild: "12.4"
+    });
+    expect(manifest.attentionKernel).toBe("comfy_kitchen.sol_attn");
+
+    const adapter = new IsolatedUpgradeExperimentRuntimeAdapter(
+      "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+      "sol-attn-upgrade-adapter",
+      ["ModelSparseAttention"]
+    );
+    const res = await adapter.verify({
+      comfyUiDir: mockUpgradeComfyDir,
+      pythonPath: mockPythonPath,
+      requiredRuntime: manifest
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.status).toBe("verified");
+  });
+
+  it("verifies real veda catalog entry against IsolatedUpgradeExperimentRuntimeAdapter", async () => {
+    const entry = getAttentionCatalogEntry("veda", "i2v");
+    const mockUpgradeSourceHash = sha256Hex(
+      fs.readFileSync(
+        path.join(mockUpgradeComfyDir, "comfy_extras", "nodes_minimax_h3.py"),
+        "utf-8"
+      )
+    );
+    const manifest = buildRequiredRuntimeManifestFromAttentionCatalog(entry, "i2v", {
+      sourceFileHashes: {
+        "comfy_extras/nodes_minimax_h3.py": mockUpgradeSourceHash
+      },
+      collectorDigest: "c".repeat(64),
+      pytorchBuild: "2.5.1+cu124",
+      cudaBuild: "12.4"
+    });
+    expect(manifest.attentionKernel).toBe("veda_sparse_attention.triton_kernel");
+
+    const adapter = new IsolatedUpgradeExperimentRuntimeAdapter(
+      "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf",
+      "veda-upgrade-adapter",
+      ["VedaSparseAttention"]
+    );
+    const res = await adapter.verify({
+      comfyUiDir: mockUpgradeComfyDir,
+      pythonPath: mockPythonPath,
+      requiredRuntime: manifest
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.status).toBe("verified");
+  });
+
+  it("verifies ExperimentRuntimeRegistry dispatches real catalog manifests to the correct adapter", async () => {
+    const registry = new ExperimentRuntimeRegistry();
+
+    const denseEntry = getAttentionCatalogEntry("dense", "i2v");
+    const denseManifest = buildRequiredRuntimeManifestFromAttentionCatalog(denseEntry, "i2v", {
+      sourceFileHashes: {}
+    });
+    const denseRes = await registry.verify({
+      comfyUiDir: mockComfyDir,
+      pythonPath: mockPythonPath,
+      requiredRuntime: denseManifest,
+      requiredRuntimeDigest: sha256Hex(canonicalizeJson(denseManifest))
+    });
+    expect(denseRes.ok).toBe(true);
+    expect(denseRes.status).toBe("verified");
+
+    const solEntry = getAttentionCatalogEntry("native-sol-attn", "i2v", {
+      coreRevision: "94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf"
+    });
+    const solManifest = buildRequiredRuntimeManifestFromAttentionCatalog(solEntry, "i2v", {
+      sourceFileHashes: {
+        "comfy_extras/nodes_minimax_h3.py": "1".repeat(64)
+      },
+      collectorDigest: "c".repeat(64),
+      pytorchBuild: "2.5.1+cu124",
+      cudaBuild: "12.4"
+    });
+    const solRes = await registry.verify({
+      comfyUiDir: mockUpgradeComfyDir,
+      pythonPath: mockPythonPath,
+      requiredRuntime: solManifest,
+      requiredRuntimeDigest: sha256Hex(canonicalizeJson(solManifest))
+    });
+    expect(solRes.ok).toBe(false);
+    expect(solRes.status).toBe("conflict");
+    expect(solRes.blocker).toContain(
+      "No registered experiment adapter found for required runtime core revision 94cfeb3a5d8985efaa7ea9f5e5dfad4184ec99bf"
+    );
+  });
+
+  describe("CLI continuity study commands and sidecar handling", () => {
+    const refManifest = {
+      referenceSetId: "refset-i2v-1",
+      manifestDigest: "",
+      references: [
+        {
+          slotIndex: 0,
+          role: "first_frame",
+          sourceAssetPath: "/test-assets/trinidad_subject_16x9.jpg",
+          sourceSha256: "0".repeat(64),
+          sourceSizeBytes: 1024,
+          mimeType: "image/jpeg" as const,
+          width: 1024,
+          height: 585
+        }
+      ]
+    };
+    refManifest.manifestDigest = computeContinuityReferenceManifestDigest(refManifest);
+
+    const dummyScenario: ContinuityScenario = {
+      scenarioId: "sc-i2v-yellow",
+      scenarioRole: "historical_baseline",
+      subjectMotionIntent: "moving",
+      route: "i2v",
+      conditioningMode: "frame_anchored",
+      status: "resolved",
+      originalPrompt: {
+        text: "A dancer in orange robe against a seamless yellow backdrop",
+        digest: sha256Hex("A dancer in orange robe against a seamless yellow backdrop")
+      },
+      constrainedPrompts: [
+        {
+          promptId: "tight_01",
+          label: "Tight wardrobe and background continuity",
+          text: "A dancer in orange robe against a seamless yellow backdrop, maintaining constant bright studio lighting and exact yellow hue",
+          digest: sha256Hex(
+            "A dancer in orange robe against a seamless yellow backdrop, maintaining constant bright studio lighting and exact yellow hue"
+          ),
+          constraintsApplied: [
+            "fixed_lighting",
+            "fixed_background",
+            "fixed_wardrobe",
+            "camera_push_only"
+          ]
+        }
+      ],
+      referenceManifest: refManifest
+    };
+
+    const syntheticStudy = expandContinuityStudyPlan({
+      studyId: "study-cli-test",
+      sourceEvidenceReferences: [
+        { url: "https://example.com/obs", assertion: "Observed lighting collapse at 3.3s" }
+      ],
+      scenarios: [dummyScenario],
+      includeCheckpointArms: true
+    });
+
+    it("plan-study: emits deterministic study plan JSON and writes output", async () => {
+      const { deps, stdout, stderr, store } = createMockDeps();
+      store.files.set("study.json", JSON.stringify(syntheticStudy));
+
+      const code = await runExperimentCli(
+        [
+          "plan-study",
+          "--study",
+          "study.json",
+          "--output",
+          "planned.json",
+          "--output-root",
+          ".ai-runs"
+        ],
+        deps
+      );
+
+      expect(code).toBe(0);
+      expect(stderr).toEqual([]);
+      expect(stdout.length).toBeGreaterThan(0);
+      const parsed = JSON.parse(stdout[0]!);
+      expect(parsed.studyId).toBe("study-cli-test");
+      expect(parsed.cells.length).toBeGreaterThanOrEqual(8);
+      expect(Array.from(store.files.keys()).some((k) => k.endsWith("planned.json"))).toBe(true);
+    });
+
+    it("plan-study: rejects when --study is missing", async () => {
+      const { deps, stderr } = createMockDeps();
+      const code = await runExperimentCli(["plan-study", "--output-root", ".ai-runs"], deps);
+      expect(code).toBe(1);
+      expect(stderr.some((e) => e.includes("--study (or --file) is required"))).toBe(true);
+    });
+
+    it("review-plan: builds storyboard plan with defect beats and review manifest pairs", async () => {
+      const { deps, stdout, stderr, store } = createMockDeps();
+      store.files.set("study.json", JSON.stringify(syntheticStudy));
+
+      const code = await runExperimentCli(
+        ["review-plan", "--study", "study.json", "--output-root", ".ai-runs"],
+        deps
+      );
+
+      expect(code).toBe(0);
+      expect(stderr).toEqual([]);
+      const parsed = JSON.parse(stdout[0]!);
+      expect(parsed.studyId).toBe("study-cli-test");
+      expect(parsed.storyboardPlan.panels.length).toBe(syntheticStudy.cells.length);
+      expect(parsed.reviewManifest.comparisonPairs.length).toBe(
+        syntheticStudy.comparisonEdges.length
+      );
+
+      // Verify observation beats in planned samples
+      const panel362f = parsed.storyboardPlan.panels.find(
+        (p: { frames: number }) => p.frames === 362
+      );
+      expect(panel362f).toBeDefined();
+      const sampleReasons = panel362f.plannedSamples.map(
+        (s: { sampleReason: string }) => s.sampleReason
+      );
+      expect(sampleReasons).toContain("362f_collapse_window");
+      expect(sampleReasons).toContain("362f_recovery");
+    });
+
+    it("prepare-study: rejects when target flags are missing", async () => {
+      const { deps, stderr, store } = createMockDeps();
+      store.files.set("study.json", JSON.stringify(syntheticStudy));
+
+      const code = await runExperimentCli(
+        ["prepare-study", "--study", "study.json", "--output-root", ".ai-runs"],
+        deps
+      );
+
+      expect(code).toBe(1);
+      expect(stderr.some((e) => e.includes("Missing required target flags"))).toBe(true);
+    });
+
+    it("prepare-study: prepares a specific cell when --cell is specified", async () => {
+      const { deps, stdout, stderr, store } = createMockDeps();
+      store.files.set("study.json", JSON.stringify(syntheticStudy));
+      store.files.set(
+        "templates/minimax_h3_720p_i2v_124f_api.json",
+        JSON.stringify(mockI2vTemplate)
+      );
+
+      const targetCell = syntheticStudy.cells[0]!;
+      const code = await runExperimentCli(
+        [
+          "prepare-study",
+          "--study",
+          "study.json",
+          "--cell",
+          targetCell.cellId,
+          "--target-host",
+          "rtx4090",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/ComfyUI",
+          "--python",
+          "/opt/ComfyUI/.venv/bin/python3",
+          "--output-root",
+          ".ai-runs"
+        ],
+        deps
+      );
+
+      expect(stderr).toEqual([]);
+      expect(code).toBe(0);
+      const parsed = JSON.parse(stdout[0]!);
+      expect(parsed.status).toBe("prepared");
+      expect(parsed.preparedCount).toBe(1);
+      expect(parsed.receipts[0].cellId).toBe(targetCell.cellId);
+    });
+
+    it("prepare-study: rejects when --cell flag is missing", async () => {
+      const { deps, stderr, store } = createMockDeps();
+      store.files.set("study.json", JSON.stringify(syntheticStudy));
+
+      const code = await runExperimentCli(
+        [
+          "prepare-study",
+          "--study",
+          "study.json",
+          "--target-host",
+          "rtx4090",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/ComfyUI",
+          "--python",
+          "/opt/ComfyUI/.venv/bin/python3",
+          "--output-root",
+          ".ai-runs"
+        ],
+        deps
+      );
+
+      expect(code).toBe(1);
+      expect(stderr.some((e) => e.includes("--cell is required"))).toBe(true);
+    });
+
+    it("prepare-study: rejects combined arm without prerequisite reviews", async () => {
+      const { deps, stderr, store } = createMockDeps();
+      const combinedCell = {
+        cellId: "cell-combined-test",
+        scenarioId: syntheticStudy.scenarios[0]!.scenarioId,
+        frames: 124 as const,
+        arm: "combined" as const,
+        promptVariantId: "tight_01",
+        prompt: "Test prompt",
+        promptDigest: sha256Hex("Test prompt"),
+        status: "resolved" as const,
+        prerequisiteCellIds: [syntheticStudy.cells[0]!.cellId]
+      };
+      const combinedStudyDraft = {
+        ...syntheticStudy,
+        cells: [...syntheticStudy.cells, combinedCell]
+      };
+      const combinedStudy = {
+        ...combinedStudyDraft,
+        studyDigest: computeContinuityStudyDigest(combinedStudyDraft)
+      };
+      store.files.set("study.json", JSON.stringify(combinedStudy));
+
+      const code = await runExperimentCli(
+        [
+          "prepare-study",
+          "--study",
+          "study.json",
+          "--cell",
+          "cell-combined-test",
+          "--target-host",
+          "rtx4090",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/ComfyUI",
+          "--python",
+          "/opt/ComfyUI/.venv/bin/python3",
+          "--output-root",
+          ".ai-runs"
+        ],
+        deps
+      );
+
+      expect(code).toBe(1);
+      expect(stderr.some((e) => e.includes("without independent evaluations"))).toBe(true);
+    });
+
+    it("review-plan: binds observed run results when --runs is supplied", async () => {
+      const { deps, stdout, stderr, store } = createMockDeps();
+      store.files.set("study.json", JSON.stringify(syntheticStudy));
+
+      const targetCell = syntheticStudy.cells[0]!;
+      const runDir = resolve(".ai-runs", `${syntheticStudy.studyId}-${targetCell.cellId}`);
+      const mockDescriptor = {
+        schemaVersion: 2,
+        runId: `${syntheticStudy.studyId}-${targetCell.cellId}`
+          .toLowerCase()
+          .replace(/[^a-z0-9._-]/g, "-"),
+        route: "i2v",
+        configuredFrames: targetCell.frames,
+        descriptorDigest: sha256Hex("descriptor-digest"),
+        operatorLabel: `${syntheticStudy.studyId}:${targetCell.cellId}`,
+        attentionRequest: { attentionVariant: "dense" }
+      };
+      const mockResult = {
+        execution: { status: "completed" },
+        probe: {
+          outputFile: "output.mp4",
+          outputSha256: "0".repeat(64),
+          outputSizeBytes: 1024,
+          measuredFacts: { fps: 24, measuredFrames: targetCell.frames }
+        }
+      };
+
+      await store.writeDescriptor(
+        runDir,
+        mockDescriptor as unknown as MinimaxH3AnyExperimentDescriptor
+      );
+      await store.writeResult(runDir, mockResult as unknown as MinimaxH3AnyExperimentResult);
+      await store.writeDurableJson(`${runDir}/study_link.json`, {
+        studyId: syntheticStudy.studyId,
+        cellId: targetCell.cellId
+      });
+
+      const code = await runExperimentCli(
+        ["review-plan", "--study", "study.json", "--runs", runDir, "--output-root", ".ai-runs"],
+        deps
+      );
+
+      expect(code).toBe(0);
+      expect(stderr).toEqual([]);
+      const parsed = JSON.parse(stdout[0]!);
+      const boundPanel = parsed.storyboardPlan.panels.find(
+        (p: { cellId: string }) => p.cellId === targetCell.cellId
+      );
+      expect(boundPanel).toBeDefined();
+      expect(boundPanel.mediaBinding.collectionStatus).toBe("available");
+      expect(boundPanel.mediaBinding.outputSha256).toBe("0".repeat(64));
+    });
+
+    it("validate-sidecar & import-sidecar: validates and imports continuity_review sidecar idempotently", async () => {
+      const { deps, stdout, stderr, store } = createMockDeps();
+      const runId = "test-continuity-sidecar-run";
+      await runExperimentCli(
+        [
+          "prepare",
+          "--route",
+          "i2v",
+          "--frames",
+          "124",
+          "--seed",
+          "42",
+          "--inputs",
+          "inputs.json",
+          "--prompt",
+          "A dancer in orange robe",
+          "--target-host",
+          "rtx4090",
+          "--gpu-uuid",
+          "GPU-12345678-1234-1234-1234-123456789abc",
+          "--comfyui-dir",
+          "/opt/comfyui",
+          "--python",
+          "/usr/bin/python3",
+          "--run-id",
+          runId,
+          "--output-root",
+          ".ai-runs"
+        ],
+        deps
+      );
+      expect(stderr).toEqual([]);
+      const prepareOutput = JSON.parse(stdout[0]!);
+      const runDir = prepareOutput.runDir;
+      const descriptor = store.descriptor!;
+      const descriptorDigest =
+        ("descriptorDigest" in descriptor && descriptor.descriptorDigest) ||
+        sha256Hex("descriptor");
+      stdout.length = 0;
+
+      const outputSha = sha256Hex("rendered-video");
+      const currentResult = {
+        schemaVersion: 1,
+        runId,
+        descriptorDigest,
+        configDigest: sha256Hex("config"),
+        comparisonKey: descriptor.comparisonKey,
+        lifecycle: "completed",
+        observedRunner: {
+          argv: [],
+          env: {},
+          pid: 1234,
+          processStartTimeTicks: 100,
+          targetGpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+          effectiveMode: {
+            status: "verified" as const,
+            value: "dynamic_vram" as const,
+            unknownReason: null,
+            evidence: null
+          }
+        },
+        timestamps: {
+          preparedAt: new Date().toISOString(),
+          startedAt: new Date().toISOString(),
+          submittedAt: new Date().toISOString(),
+          terminatedAt: new Date().toISOString()
+        },
+        execution: {
+          status: "completed" as const,
+          promptId: "prompt-1",
+          terminalEvidence: { source: "history", status: "success" },
+          engineError: null,
+          latencyMs: 10000
+        },
+        collection: {
+          status: "complete" as const,
+          phaseCoverage: { before: true, during: true, after: true },
+          sampleCount: { attempted: 1, succeeded: 1, failed: 0 },
+          metrics: {
+            gpuPeakUsedVramMb: 12000,
+            gpuAllocatableVramMb: 24000,
+            hostPeakRamUsedMb: 16000,
+            processPeakRssMb: 8000,
+            hostSwapUsedMb: 0,
+            hostSwapDeltaMb: 0
+          },
+          errors: []
+        },
+        probe: {
+          status: "succeeded" as const,
+          outputFile: `${runDir}/outputs/video.mp4`,
+          outputSha256: outputSha,
+          outputSizeBytes: 5000000,
+          measuredFacts: {
+            measuredFrames: 124,
+            countedFramesSource: "nb_read_frames",
+            declaredNbFrames: 124,
+            measuredVideoDurationMs: 5167,
+            measuredContainerDurationMs: 5167,
+            width: 1344,
+            height: 768,
+            fps: 24,
+            rFrameRate: "24/1",
+            avgFrameRate: "24/1",
+            videoCodec: "h264",
+            audioCodec: "aac",
+            audioChannels: 2,
+            audioSampleRate: 48000
+          },
+          discrepancyFlags: [],
+          toolIdentity: null,
+          errors: []
+        },
+        outputConformance: {
+          status: "conformant" as const,
+          checks: {
+            frameCountMatches: true,
+            geometryMatches: true,
+            fpsMatches: true,
+            timingWithinTolerance: true
+          },
+          reasons: []
+        },
+        visualReview: {
+          status: "pending" as const,
+          outputSha256: null,
+          reviewedAt: null,
+          reviewer: null,
+          findings: null,
+          notes: null,
+          unavailableReason: null
+        },
+        operatorDecision: {
+          status: "pending" as const,
+          operator: null,
+          decidedAt: null,
+          comparisonKey: null,
+          reason: null
+        }
+      };
+      await store.writeResult(runDir, currentResult as unknown as MinimaxH3AnyExperimentResult);
+
+      const passDimension = {
+        assessment: "pass" as const,
+        rationale: "Meets criteria",
+        fullClipAssessment: true
+      };
+      const sidecarDraft = {
+        schemaVersion: 1 as const,
+        kind: "continuity-review-sidecar" as const,
+        reviewId: "rev-cli-001",
+        reviewRevision: 1,
+        rubricVersion: 1 as const,
+        rubricDigest: computeContinuityRubricDigest(),
+        studyId: "study-cli-test",
+        cellId: "cell-cli-001",
+        runId,
+        descriptorDigest,
+        sourceOutputSha256: outputSha,
+        route: "i2v" as const,
+        configuredFrames: 124 as const,
+        reviewer: "reviewer-alice",
+        reviewedAt: new Date().toISOString(),
+        reviewCoverage: {
+          playbackExamined: true,
+          audioExamined: true,
+          fullClipExamined: true,
+          storyboardSampled: true
+        },
+        dimensions: {
+          identity: passDimension,
+          wardrobe: passDimension,
+          backgroundLightingPersistence: passDimension,
+          cameraFidelity: passDimension,
+          subjectAnatomy: passDimension,
+          faceAndHands: passDimension,
+          unnaturalCuts: passDimension,
+          temporalFlicker: passDimension,
+          referenceFidelity: passDimension,
+          motionCoherence: passDimension,
+          sound: passDimension,
+          overallAdUsability: passDimension
+        },
+        sceneSubstitution: { detected: false, rationale: "Original scene preserved" },
+        firstFrameAdherence: { status: "pass" as const, rationale: "Faithful start frame" },
+        lastFrameAdherence: { status: "pass" as const, rationale: "Faithful end frame" },
+        defectSpecificInspections: {
+          wardrobe243fDepartureInspected: false,
+          yellowBackdrop243fDepartureInspected: false,
+          environment362fBlackoutInspected: false,
+          environment362fRecoveryInspected: false,
+          sceneSubstitution362fInspected: false,
+          camera124fPushInspected: true,
+          notes: "124f push inspected"
+        },
+        overallOutcome: "pass" as const,
+        notes: "Excellent continuity"
+      };
+      const sidecar: MinimaxH3ContinuityReviewSidecar = {
+        ...sidecarDraft,
+        reviewDigest: computeContinuityReviewDigest(sidecarDraft)
+      };
+
+      store.files.set("review-sidecar.json", JSON.stringify(sidecar));
+      store.fileHashes.set(`${runDir}/outputs/video.mp4`, {
+        sha256: outputSha,
+        sizeBytes: 5000000
+      });
+
+      // 1. validate-sidecar
+      const valCode = await runExperimentCli(
+        [
+          "validate-sidecar",
+          "--file",
+          "review-sidecar.json",
+          "--run-dir",
+          runDir,
+          "--output-root",
+          ".ai-runs"
+        ],
+        deps
+      );
+      expect(valCode).toBe(0);
+      expect(stderr).toEqual([]);
+      const valOut = JSON.parse(stdout[stdout.length - 1]!);
+      expect(valOut.status).toBe("valid");
+      expect(valOut.sidecarType).toBe("continuity_review");
+
+      // 2. import-sidecar
+      const importCode = await runExperimentCli(
+        [
+          "import-sidecar",
+          "--run-dir",
+          runDir,
+          "--sidecar",
+          "review-sidecar.json",
+          "--output-root",
+          ".ai-runs"
+        ],
+        deps
+      );
+      expect(stderr).toEqual([]);
+      expect(importCode).toBe(0);
+      const importOut = JSON.parse(stdout[stdout.length - 1]!);
+      expect(importOut.status).toBe("imported");
+      expect(importOut.idempotent).toBe(false);
+
+      // Verify result.visualReview was mapped
+      const updatedResult = await store.readResult(runDir);
+      expect(updatedResult?.visualReview.status).toBe("reviewed");
+      expect(updatedResult?.visualReview.findings?.continuity).toBe("pass");
+      expect(updatedResult?.visualReview.findings?.identityFidelity).toBe("pass");
+
+      // 3. Idempotent re-import
+      const reimportCode = await runExperimentCli(
+        [
+          "import-sidecar",
+          "--run-dir",
+          runDir,
+          "--sidecar",
+          "review-sidecar.json",
+          "--output-root",
+          ".ai-runs"
+        ],
+        deps
+      );
+      expect(reimportCode).toBe(0);
+      const reimportOut = JSON.parse(stdout[stdout.length - 1]!);
+      expect(reimportOut.idempotent).toBe(true);
+    });
+
+    it("validate-sidecar: rejects 243f review without wardrobe inspection", async () => {
+      const { deps, stderr, store } = createMockDeps();
+      const passDimension = { assessment: "pass" as const, rationale: "Pass" };
+      const invalid243fReviewDraft = {
+        schemaVersion: 1 as const,
+        kind: "continuity-review-sidecar" as const,
+        reviewId: "rev-243f",
+        reviewRevision: 1,
+        rubricVersion: 1 as const,
+        rubricDigest: computeContinuityRubricDigest(),
+        studyId: "study-cli-test",
+        cellId: "cell-243f",
+        runId: "run-243f",
+        descriptorDigest: sha256Hex("desc"),
+        sourceOutputSha256: sha256Hex("video"),
+        route: "i2v" as const,
+        configuredFrames: 243 as const,
+        reviewer: "reviewer",
+        reviewedAt: new Date().toISOString(),
+        reviewCoverage: {
+          playbackExamined: true,
+          audioExamined: true,
+          fullClipExamined: true,
+          storyboardSampled: true
+        },
+        dimensions: {
+          identity: passDimension,
+          wardrobe: passDimension,
+          backgroundLightingPersistence: passDimension,
+          cameraFidelity: passDimension,
+          subjectAnatomy: passDimension,
+          faceAndHands: passDimension,
+          unnaturalCuts: passDimension,
+          temporalFlicker: passDimension,
+          referenceFidelity: passDimension,
+          motionCoherence: passDimension,
+          sound: passDimension,
+          overallAdUsability: passDimension
+        },
+        sceneSubstitution: { detected: false, rationale: "No substitution" },
+        firstFrameAdherence: { status: "pass" as const, rationale: "Adhered" },
+        lastFrameAdherence: { status: "pass" as const, rationale: "Adhered" },
+        defectSpecificInspections: {
+          wardrobe243fDepartureInspected: false, // Fails 243f requirement!
+          yellowBackdrop243fDepartureInspected: false,
+          environment362fBlackoutInspected: false,
+          environment362fRecoveryInspected: false,
+          sceneSubstitution362fInspected: false,
+          camera124fPushInspected: false
+        },
+        overallOutcome: "pass" as const
+      };
+      const invalid243fReview = {
+        ...invalid243fReviewDraft,
+        reviewDigest: computeContinuityReviewDigest(invalid243fReviewDraft)
+      };
+
+      store.files.set("bad-243f-review.json", JSON.stringify(invalid243fReview));
+
+      const code = await runExperimentCli(
+        ["validate-sidecar", "--file", "bad-243f-review.json", "--output-root", ".ai-runs"],
+        deps
+      );
+
+      expect(code).toBe(1);
+      expect(stderr.some((e) => e.includes("wardrobe243fDepartureInspected"))).toBe(true);
+    });
+
+    it("validate-sidecar: rejects pass overallOutcome when scene substitution is detected", async () => {
+      const { deps, stderr, store } = createMockDeps();
+      const passDimension = { assessment: "pass" as const, rationale: "Pass" };
+      const sceneSubReviewDraft = {
+        schemaVersion: 1 as const,
+        kind: "continuity-review-sidecar" as const,
+        reviewId: "rev-sub",
+        reviewRevision: 1,
+        rubricVersion: 1 as const,
+        rubricDigest: computeContinuityRubricDigest(),
+        studyId: "study-cli-test",
+        cellId: "cell-sub",
+        runId: "run-sub",
+        descriptorDigest: sha256Hex("desc"),
+        sourceOutputSha256: sha256Hex("video"),
+        route: "i2v" as const,
+        configuredFrames: 124 as const,
+        reviewer: "reviewer",
+        reviewedAt: new Date().toISOString(),
+        reviewCoverage: {
+          playbackExamined: true,
+          audioExamined: true,
+          fullClipExamined: true,
+          storyboardSampled: true
+        },
+        dimensions: {
+          identity: passDimension,
+          wardrobe: passDimension,
+          backgroundLightingPersistence: passDimension,
+          cameraFidelity: passDimension,
+          subjectAnatomy: passDimension,
+          faceAndHands: passDimension,
+          unnaturalCuts: passDimension,
+          temporalFlicker: passDimension,
+          referenceFidelity: passDimension,
+          motionCoherence: passDimension,
+          sound: passDimension,
+          overallAdUsability: passDimension
+        },
+        sceneSubstitution: {
+          detected: true, // Scene substitution!
+          intervals: [{ startSec: 1.0, endSec: 2.0 }],
+          rationale: "Complete departure to different room"
+        },
+        firstFrameAdherence: { status: "defect" as const, rationale: "Not adhered" },
+        lastFrameAdherence: { status: "defect" as const, rationale: "Not adhered" },
+        defectSpecificInspections: {
+          wardrobe243fDepartureInspected: false,
+          yellowBackdrop243fDepartureInspected: false,
+          environment362fBlackoutInspected: false,
+          environment362fRecoveryInspected: false,
+          sceneSubstitution362fInspected: false,
+          camera124fPushInspected: true
+        },
+        overallOutcome: "pass" as const // Contradiction: scene substitution detected but marked as pass!
+      };
+      const sceneSubReview = {
+        ...sceneSubReviewDraft,
+        reviewDigest: computeContinuityReviewDigest(sceneSubReviewDraft)
+      };
+
+      store.files.set("scene-sub-review.json", JSON.stringify(sceneSubReview));
+
+      const code = await runExperimentCli(
+        ["validate-sidecar", "--file", "scene-sub-review.json", "--output-root", ".ai-runs"],
+        deps
+      );
+
+      expect(code).toBe(1);
+      expect(stderr.some((e) => e.includes("Scene substitution detected"))).toBe(true);
     });
   });
 });

@@ -36,21 +36,17 @@ describe("MiniMax-H3 Attention Catalog", () => {
     expect(getAttentionCatalogEntry("sage", "i2v").compatibilityState).toBe("unverified");
     expect(getAttentionCatalogEntry("sage", "ref2v").compatibilityState).toBe("unverified");
 
-    // Native sol-attn requires isolated upgrade
+    // Native sol-attn is unsupported due to unavailable core commit
     expect(getAttentionCatalogEntry("native-sol-attn", "i2v").compatibilityState).toBe(
-      "requires_isolated_upgrade"
+      "unsupported"
     );
     expect(getAttentionCatalogEntry("native-sol-attn", "ref2v").compatibilityState).toBe(
-      "requires_isolated_upgrade"
+      "unsupported"
     );
 
-    // Veda requires isolated upgrade
-    expect(getAttentionCatalogEntry("veda", "i2v").compatibilityState).toBe(
-      "requires_isolated_upgrade"
-    );
-    expect(getAttentionCatalogEntry("veda", "ref2v").compatibilityState).toBe(
-      "requires_isolated_upgrade"
-    );
+    // Veda is unsupported due to unavailable core commit
+    expect(getAttentionCatalogEntry("veda", "i2v").compatibilityState).toBe("unsupported");
+    expect(getAttentionCatalogEntry("veda", "ref2v").compatibilityState).toBe("unsupported");
   });
 
   it("resolves matched dense control entries for apples-to-apples baseline comparisons", () => {
