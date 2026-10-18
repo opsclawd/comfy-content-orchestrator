@@ -49,3 +49,4 @@ export * from "./campaign-reference-bible-repository.js";
 export * from "./campaign-reference-bible-errors.js";
 export * from "./shot-plan-planning-admission-port.js";
 export * from "./minimax-h3-experiment-ports.js";
+export * from "./h3-candidate-ports.js";

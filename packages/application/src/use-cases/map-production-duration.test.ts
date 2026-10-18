@@ -219,6 +219,19 @@ describe("mapDurationMsToLtxFrameCount", () => {
         expect(result.reason).toBe("exceeds_quantization_tolerance");
       }
     });
+
+    it("fails closed with 'out_of_range' for unknown or unaccepted candidate profile key", () => {
+      const result = mapDurationMsToMiniMaxH3FrameCount(5000, 355, "H3_CANDIDATE_unknown_V1");
+      expect(result).toEqual({ ok: false, reason: "out_of_range" });
+    });
+
+    it("accepts recognized legacy aliases for MiniMax-H3", () => {
+      const result = mapDurationMsToMiniMaxH3FrameCount(5000, 355, "minimax-h3-720p-124f-i2v");
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.frameCount).toBe(124);
+      }
+    });
   });
 
   describe("MiniMax-H3 duration helpers", () => {
