@@ -79,3 +79,4 @@ export * from "./prepare-scene-production-inputs.js";
 export * from "./production-input-fingerprint-mismatch-error.js";
 export * from "./auto-plan-first-pass.js";
 export * from "./list-clients.js";
+export * from "./evaluate-h3-candidate-eligibility.js";
