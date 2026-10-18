@@ -499,6 +499,14 @@ function validateApprovedReportEntry(
     );
   }
 
+  for (const [modelKey, hash] of Object.entries(rpp.modelHashes)) {
+    if (typeof hash !== "string" || hash.trim().length === 0 || !/^[0-9a-f]{64}$/.test(hash)) {
+      throw new PreflightError(
+        `Approved provenance model hash for "${modelKey}" must be a lowercase 64-character hexadecimal SHA-256 hash, got "${String(hash)}"`
+      );
+    }
+  }
+
   return entry as unknown as CertificationProvenanceReport;
 }
 
@@ -698,6 +706,26 @@ export function verifyGoldMasterProvenance(
   for (const key of approvedKeys) {
     const approvedHash = approvedModelHashes[key];
     const liveHash = liveModelHashes[key];
+
+    if (
+      typeof approvedHash !== "string" ||
+      approvedHash.trim().length === 0 ||
+      !/^[0-9a-f]{64}$/.test(approvedHash)
+    ) {
+      throw new PreflightError(
+        `Invalid approved model hash for key "${key}": must be a lowercase 64-character hexadecimal SHA-256 hash`
+      );
+    }
+
+    if (
+      typeof liveHash !== "string" ||
+      liveHash.trim().length === 0 ||
+      !/^[0-9a-f]{64}$/.test(liveHash)
+    ) {
+      throw new PreflightError(
+        `Invalid live model hash for key "${key}": must be a lowercase 64-character hexadecimal SHA-256 hash`
+      );
+    }
 
     if (approvedHash !== liveHash) {
       throw new PreflightError(

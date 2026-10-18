@@ -41,7 +41,7 @@ import {
   type ManifestShotPlanReference,
   MINIMAX_H3_FRAME_GRID_BASE,
   MINIMAX_H3_FRAME_GRID_STEP,
-  MINIMAX_H3_SUPPORTED_FRAME_RANGE,
+  resolveH3ProfileFrameCapabilities,
   type NodeInjectionTarget,
   type ProfileInjectionTopology,
   RENDER_PROFILE_ALIASES,
@@ -429,7 +429,7 @@ const ALLOWED_H3_I2V_PRODUCTION_KEYS = new Set([
   "productionInputFingerprint"
 ]);
 
-function validateInjectedPayload(
+export function validateInjectedPayload(
   payload: unknown,
   jobKind: JobKind,
   profile?: CertificationProfile | undefined
@@ -621,7 +621,12 @@ function validateInjectedPayload(
     const profileKey = profile?.renderProfileIdentity?.key ?? profile?.id ?? profile?.engine;
     const isMinimax =
       profileKey === "MINIMAX_H3_720P_5S_I2V_V1" ||
-      (typeof profileKey === "string" && profileKey.toLowerCase().includes("minimax"));
+      profileKey === "MINIMAX_H3_720P_5S_REF2V_V1" ||
+      (typeof profileKey === "string" &&
+        (profileKey.toLowerCase().includes("minimax") ||
+          profileKey.startsWith("H3_") ||
+          Boolean(profile?.engine?.toLowerCase().includes("minimax")) ||
+          Boolean(profile?.id?.toLowerCase().includes("minimax"))));
 
     if (isMinimax) {
       if ((raw.frameCount - MINIMAX_H3_FRAME_GRID_BASE) % MINIMAX_H3_FRAME_GRID_STEP !== 0) {
@@ -629,12 +634,18 @@ function validateInjectedPayload(
           `injectedPayload.frameCount must satisfy (frameCount - ${MINIMAX_H3_FRAME_GRID_BASE}) % ${MINIMAX_H3_FRAME_GRID_STEP} === 0`
         );
       }
-      if (
-        raw.frameCount < MINIMAX_H3_SUPPORTED_FRAME_RANGE[0] ||
-        raw.frameCount > MINIMAX_H3_SUPPORTED_FRAME_RANGE[1]
-      ) {
+      const capability = resolveH3ProfileFrameCapabilities(profileKey);
+      const isAllowed = capability ? capability.isAllowedFrameCount(raw.frameCount) : false;
+      if (!isAllowed) {
+        if (!capability) {
+          throw new RenderJobPayloadValidationError(
+            `Profile "${profileKey}" does not have recognized MiniMax-H3 frame capabilities`
+          );
+        }
+        const minFrames = Math.min(...capability.allowedFrameCounts);
+        const maxFrames = Math.max(...capability.allowedFrameCounts);
         throw new RenderJobPayloadValidationError(
-          `injectedPayload.frameCount must be a safe integer between ${MINIMAX_H3_SUPPORTED_FRAME_RANGE[0]} and ${MINIMAX_H3_SUPPORTED_FRAME_RANGE[1]}`
+          `injectedPayload.frameCount must be a safe integer between ${minFrames} and ${maxFrames}`
         );
       }
     } else {

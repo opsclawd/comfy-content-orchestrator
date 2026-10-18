@@ -511,6 +511,22 @@ describe("apps/render-worker/src/certification/preflight", () => {
           expectedError: /model.*hash/i
         },
         {
+          name: "empty model hash in live",
+          mutateLive: (live) => ({
+            ...live,
+            renderProfileProvenance: live.renderProfileProvenance
+              ? {
+                  ...live.renderProfileProvenance,
+                  modelHashes: {
+                    ...live.renderProfileProvenance.modelHashes,
+                    "diffusion_models/ltx-video-2b-v0.9.1.safetensors": ""
+                  }
+                }
+              : null
+          }),
+          expectedError: /model.*hash/i
+        },
+        {
           name: "render profile key drift",
           mutateLive: (live) => ({
             ...live,
@@ -555,6 +571,25 @@ describe("apps/render-worker/src/certification/preflight", () => {
         // Invariant check: Render dependency was never touched on preflight failure
         expect(renderMock).not.toHaveBeenCalled();
       }
+    });
+
+    it("fails closed when both approved and live share an identical empty string model hash", () => {
+      const profile = createValidProfile();
+      const approved = createValidApprovedReport();
+      const live = createValidLiveReport();
+
+      if (approved.renderProfileProvenance) {
+        (approved.renderProfileProvenance.modelHashes as Record<string, string>)[
+          "diffusion_models/ltx-video-2b-v0.9.1.safetensors"
+        ] = "";
+      }
+      if (live.renderProfileProvenance) {
+        (live.renderProfileProvenance.modelHashes as Record<string, string>)[
+          "diffusion_models/ltx-video-2b-v0.9.1.safetensors"
+        ] = "";
+      }
+
+      expect(() => verifyGoldMasterProvenance({ approved, live, profile })).toThrow(/model.*hash/i);
     });
   });
 
@@ -665,6 +700,20 @@ describe("apps/render-worker/src/certification/preflight", () => {
             profileId: "ltx-25-720p-97f"
           },
           expectedError: /workflow/i
+        },
+        {
+          name: "empty model hash in approved report",
+          approved: {
+            ...createValidApprovedReport(),
+            renderProfileProvenance: {
+              ...createValidApprovedReport().renderProfileProvenance,
+              modelHashes: {
+                ...createValidApprovedReport().renderProfileProvenance?.modelHashes,
+                "diffusion_models/ltx-video-2b-v0.9.1.safetensors": ""
+              }
+            }
+          },
+          expectedError: /model.*hash/i
         }
       ];
 
