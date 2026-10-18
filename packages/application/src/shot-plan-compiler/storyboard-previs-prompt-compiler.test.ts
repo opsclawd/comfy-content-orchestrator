@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   compileStoryboardPrevisPrompt,
   STORYBOARD_CLEAN_PANEL_DIRECTIVE,
+  STORYBOARD_ENVIRONMENT_SURFACE_DIRECTIVE,
   STORYBOARD_NEGATIVE_PROMPT,
   STORYBOARD_PREVIS_PROFILE_ID,
   STORYBOARD_PREVIS_RENDER_PROFILE_KEY,
@@ -94,8 +95,14 @@ describe("compileStoryboardPrevisPrompt", () => {
     expect(result1.version).toBe(1);
   });
 
+  const INDEPENDENT_STORYBOARD_ENVIRONMENT_SURFACE_DIRECTIVE =
+    "Background facades, storefronts, awnings, and any hanging or mounted signage are entirely bare and unmarked, blank painted surfaces with no shop names, no hanging signs, no vertical banners, no plaques, no posters, no address numbers, no storefront text of any kind.";
+
+  const INDEPENDENT_STORYBOARD_CLEAN_PANEL_DIRECTIVE =
+    "Clean storyboard frame artwork, no text, no labels, no speech bubbles, no arrows, no UI watermarks, no camera annotations. Unsigned, text-free illustration with blank surfaces; no readable words, lettering, signage, shop signs, hanging signs, vertical banners, plaques, posters, captions, signatures, or copyright marks anywhere in the image.";
+
   const INDEPENDENT_STORYBOARD_NEGATIVE_PROMPT =
-    "photorealistic, photograph, 3d render, CGI, octane render, movie still, film frame, hyperrealistic, glossy skin, detailed skin pores, realistic human eyes, DSLR photo, camera annotations, on-screen text, typography, subtitles, speech bubble, arrows, frame labels, watermark, logo";
+    "photorealistic, photograph, 3d render, CGI, octane render, movie still, film frame, hyperrealistic, glossy skin, detailed skin pores, realistic human eyes, DSLR photo, camera annotations, on-screen text, typography, subtitles, speech bubble, arrows, frame labels, watermark, logo, readable words, lettering, illegible text, fake signage, gibberish lettering, storefront text, captions, signatures, copyright marks, shop sign, hanging sign, vertical banner, plaque, poster, storefront name, printed numerals, embossed text, engraved text";
 
   it("embeds the fixed storyboard style header, clean panel directive, and leads with camera clause", () => {
     const shotPlan = createMinimalShotPlan();
@@ -108,7 +115,7 @@ describe("compileStoryboardPrevisPrompt", () => {
     const cameraIndex = result.prompt.indexOf("Camera:");
     const stagingIndex = result.prompt.indexOf("Staging:");
     const styleIndex = result.prompt.indexOf(STORYBOARD_STYLE_HEADER);
-    const cleanPanelIndex = result.prompt.indexOf(STORYBOARD_CLEAN_PANEL_DIRECTIVE);
+    const cleanPanelIndex = result.prompt.indexOf(INDEPENDENT_STORYBOARD_CLEAN_PANEL_DIRECTIVE);
 
     expect(result.prompt.indexOf("EYE LEVEL.")).toBe(0);
     expect(stagingIndex).toBeGreaterThan(cameraIndex);
@@ -118,8 +125,12 @@ describe("compileStoryboardPrevisPrompt", () => {
     // Section boundaries are present (newlines)
     expect(result.prompt).toContain("\n\n");
 
-    // Clean panel directive ends the prompt
-    expect(result.prompt.endsWith(STORYBOARD_CLEAN_PANEL_DIRECTIVE)).toBe(true);
+    // Clean panel directive ends the prompt (compare against independent literal)
+    expect(result.prompt.endsWith(INDEPENDENT_STORYBOARD_CLEAN_PANEL_DIRECTIVE)).toBe(true);
+    expect(STORYBOARD_CLEAN_PANEL_DIRECTIVE).toBe(INDEPENDENT_STORYBOARD_CLEAN_PANEL_DIRECTIVE);
+    expect(STORYBOARD_ENVIRONMENT_SURFACE_DIRECTIVE).toBe(
+      INDEPENDENT_STORYBOARD_ENVIRONMENT_SURFACE_DIRECTIVE
+    );
 
     // Compare negative prompt against independent literal
     expect(result.negativePrompt).toBe(INDEPENDENT_STORYBOARD_NEGATIVE_PROMPT);
@@ -436,8 +447,68 @@ describe("compileStoryboardPrevisPrompt", () => {
       const plan = createMinimalShotPlan();
       const result = compileStoryboardPrevisPrompt(plan);
 
-      expect(result.prompt).toContain("Clean storyboard frame artwork");
-      expect(result.prompt).toContain("no text, no labels, no speech bubbles, no arrows");
+      expect(result.prompt).toContain(INDEPENDENT_STORYBOARD_CLEAN_PANEL_DIRECTIVE);
+      expect(result.prompt.endsWith(INDEPENDENT_STORYBOARD_CLEAN_PANEL_DIRECTIVE)).toBe(true);
+
+      const beatResult = compileStoryboardPrevisPrompt(plan, plan.beats![0]);
+      expect(beatResult.prompt).toContain(INDEPENDENT_STORYBOARD_CLEAN_PANEL_DIRECTIVE);
+      expect(beatResult.prompt.endsWith(INDEPENDENT_STORYBOARD_CLEAN_PANEL_DIRECTIVE)).toBe(true);
+    });
+  });
+
+  describe("clean-panel fabricated-signage mitigation (#462, iteration 2)", () => {
+    it("includes the background surface directive suppressing shop names, hanging signs, banners, plaques, and posters", () => {
+      const plan = createMinimalShotPlan();
+      const result = compileStoryboardPrevisPrompt(plan);
+
+      expect(result.prompt).toContain(INDEPENDENT_STORYBOARD_ENVIRONMENT_SURFACE_DIRECTIVE);
+      expect(result.prompt).toContain("no shop names");
+      expect(result.prompt).toContain("no hanging signs");
+      expect(result.prompt).toContain("no vertical banners");
+      expect(result.prompt).toContain("no plaques");
+      expect(result.prompt).toContain("no posters");
+      expect(result.prompt).toContain("no address numbers");
+
+      const beatResult = compileStoryboardPrevisPrompt(plan, plan.beats![0]);
+      expect(beatResult.prompt).toContain(INDEPENDENT_STORYBOARD_ENVIRONMENT_SURFACE_DIRECTIVE);
+    });
+
+    it("places the background surface directive immediately after the Setting clause", () => {
+      const plan = createMinimalShotPlan({
+        environmentDescription: "Cobblestone historic square with fountain center",
+        atmosphere: "Crisp morning mist"
+      });
+      const result = compileStoryboardPrevisPrompt(plan);
+
+      expect(result.prompt).toContain(
+        `Setting: Cobblestone historic square with fountain center. ${INDEPENDENT_STORYBOARD_ENVIRONMENT_SURFACE_DIRECTIVE} Atmosphere: Crisp morning mist.`
+      );
+
+      const occurrences =
+        result.prompt.split(INDEPENDENT_STORYBOARD_ENVIRONMENT_SURFACE_DIRECTIVE).length - 1;
+      expect(occurrences).toBe(1);
+
+      const beatResult = compileStoryboardPrevisPrompt(plan, plan.beats![0]);
+      expect(beatResult.prompt).toContain(
+        `Setting: Cobblestone historic square with fountain center. ${INDEPENDENT_STORYBOARD_ENVIRONMENT_SURFACE_DIRECTIVE} Atmosphere: Crisp morning mist.`
+      );
+      const beatOccurrences =
+        beatResult.prompt.split(INDEPENDENT_STORYBOARD_ENVIRONMENT_SURFACE_DIRECTIVE).length - 1;
+      expect(beatOccurrences).toBe(1);
+    });
+
+    it("extends the negative prompt with fabricated-signage and illegible-text suppression terms", () => {
+      const plan = createMinimalShotPlan();
+      const result = compileStoryboardPrevisPrompt(plan);
+
+      expect(result.negativePrompt).toContain("fake signage");
+      expect(result.negativePrompt).toContain("gibberish lettering");
+      expect(result.negativePrompt).toContain("shop sign");
+      expect(result.negativePrompt).toContain("hanging sign");
+      expect(result.negativePrompt).toContain("vertical banner");
+      expect(result.negativePrompt).toContain("plaque");
+      expect(result.negativePrompt).toContain("poster");
+      expect(result.negativePrompt).toContain("storefront name");
     });
   });
 
@@ -487,7 +558,7 @@ describe("compileStoryboardPrevisPrompt", () => {
 
       // Verify camera clause leads and clean panel directive ends
       expect(result.prompt.startsWith("EYE LEVEL. Camera:")).toBe(true);
-      expect(result.prompt.endsWith(STORYBOARD_CLEAN_PANEL_DIRECTIVE)).toBe(true);
+      expect(result.prompt.endsWith(INDEPENDENT_STORYBOARD_CLEAN_PANEL_DIRECTIVE)).toBe(true);
       expect(result.negativePrompt).toBe(INDEPENDENT_STORYBOARD_NEGATIVE_PROMPT);
       expect(result.profileId).toBe(STORYBOARD_PREVIS_PROFILE_ID);
       expect(result.renderProfileKey).toBe(STORYBOARD_PREVIS_RENDER_PROFILE_KEY);
@@ -644,7 +715,7 @@ describe("compileStoryboardPrevisPrompt", () => {
       const stagingIdx = result.prompt.indexOf("Staging:");
       const actionIdx = result.prompt.indexOf("Action:");
       const styleIdx = result.prompt.indexOf(STORYBOARD_STYLE_HEADER);
-      const cleanPanelIdx = result.prompt.indexOf(STORYBOARD_CLEAN_PANEL_DIRECTIVE);
+      const cleanPanelIdx = result.prompt.indexOf(INDEPENDENT_STORYBOARD_CLEAN_PANEL_DIRECTIVE);
 
       expect(result.prompt.indexOf("LOW ANGLE.")).toBe(0);
       expect(stagingIdx).toBeGreaterThan(cameraIdx);
@@ -653,7 +724,7 @@ describe("compileStoryboardPrevisPrompt", () => {
       expect(cleanPanelIdx).toBeGreaterThan(styleIdx);
 
       // Clean panel directive ends the prompt
-      expect(result.prompt.endsWith(STORYBOARD_CLEAN_PANEL_DIRECTIVE)).toBe(true);
+      expect(result.prompt.endsWith(INDEPENDENT_STORYBOARD_CLEAN_PANEL_DIRECTIVE)).toBe(true);
     });
   });
 });

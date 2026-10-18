@@ -61,11 +61,14 @@ export const STORYBOARD_PREVIS_WORKFLOW_TEMPLATE = "flux_schnell_storyboard_v1" 
 export const STORYBOARD_STYLE_HEADER =
   "Professional advertising storyboard illustration, production agency board sketch, hand-drawn black pencil and ink linework with restrained monochrome marker wash. Visible construction lines, clear subject silhouettes, simplified facial features, distinct foreground midground and background depth separation, impressionistic studio lighting.";
 
+export const STORYBOARD_ENVIRONMENT_SURFACE_DIRECTIVE =
+  "Background facades, storefronts, awnings, and any hanging or mounted signage are entirely bare and unmarked, blank painted surfaces with no shop names, no hanging signs, no vertical banners, no plaques, no posters, no address numbers, no storefront text of any kind.";
+
 export const STORYBOARD_CLEAN_PANEL_DIRECTIVE =
-  "Clean storyboard frame artwork, no text, no labels, no speech bubbles, no arrows, no UI watermarks, no camera annotations.";
+  "Clean storyboard frame artwork, no text, no labels, no speech bubbles, no arrows, no UI watermarks, no camera annotations. Unsigned, text-free illustration with blank surfaces; no readable words, lettering, signage, shop signs, hanging signs, vertical banners, plaques, posters, captions, signatures, or copyright marks anywhere in the image.";
 
 export const STORYBOARD_NEGATIVE_PROMPT =
-  "photorealistic, photograph, 3d render, CGI, octane render, movie still, film frame, hyperrealistic, glossy skin, detailed skin pores, realistic human eyes, DSLR photo, camera annotations, on-screen text, typography, subtitles, speech bubble, arrows, frame labels, watermark, logo";
+  "photorealistic, photograph, 3d render, CGI, octane render, movie still, film frame, hyperrealistic, glossy skin, detailed skin pores, realistic human eyes, DSLR photo, camera annotations, on-screen text, typography, subtitles, speech bubble, arrows, frame labels, watermark, logo, readable words, lettering, illegible text, fake signage, gibberish lettering, storefront text, captions, signatures, copyright marks, shop sign, hanging sign, vertical banner, plaque, poster, storefront name, printed numerals, embossed text, engraved text";
 
 export interface StoryboardPrevisPromptResult {
   readonly prompt: string;
@@ -274,7 +277,7 @@ export function compileStoryboardPrevisPrompt(
   sections.push(STORYBOARD_STYLE_HEADER);
 
   // 5. Environment & Atmosphere
-  let envText = `Setting: ${shotPlan.environmentDescription}.`;
+  let envText = `Setting: ${shotPlan.environmentDescription}. ${STORYBOARD_ENVIRONMENT_SURFACE_DIRECTIVE}`;
   if (shotPlan.atmosphere && shotPlan.atmosphere.trim().length > 0) {
     envText += ` Atmosphere: ${shotPlan.atmosphere.trim()}.`;
   }
