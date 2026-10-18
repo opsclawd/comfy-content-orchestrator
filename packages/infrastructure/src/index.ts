@@ -192,6 +192,24 @@ export {
 } from "./comfyui/provenance/cli.js";
 
 export {
+  H3OperatorSignatureVerifier,
+  type H3OperatorSignatureVerifierOptions
+} from "./comfyui/provenance/h3-operator-signature-verifier.js";
+
+export {
+  H3LiveRuntimeObserver,
+  type H3LiveRuntimeObserverProbes
+} from "./comfyui/provenance/h3-live-runtime-observer.js";
+
+export {
+  type H3CandidateRenderProfileProvenance,
+  type H3CandidateProvenanceReport,
+  type H3CandidateProvenanceCollection,
+  H3CandidateProvenanceResolutionError,
+  resolveCandidateProvenanceFromCollection
+} from "./comfyui/provenance/h3-candidate-provenance.js";
+
+export {
   NvidiaSmiTelemetryAdapter,
   parseNvidiaSmiMemoryCsv,
   NvidiaSmiTelemetryError,

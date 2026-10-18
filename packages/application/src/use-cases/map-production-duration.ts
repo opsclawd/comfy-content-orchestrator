@@ -7,7 +7,7 @@ import {
   MINIMAX_H3_FRAME_GRID_BASE,
   MINIMAX_H3_FRAME_GRID_STEP,
   MINIMAX_H3_FRAME_QUANTIZATION_TOLERANCE_MS,
-  MINIMAX_H3_SUPPORTED_FRAME_RANGE
+  resolveH3ProfileFrameCapabilities
 } from "@cco/contracts";
 
 export class UnsupportedProductionDurationError extends Error {
@@ -108,7 +108,8 @@ export const MINIMAX_H3_CANONICAL_DURATION_MS = 5_000;
  */
 export function mapDurationMsToMiniMaxH3FrameCount(
   durationMs: number,
-  toleranceMs: number = MINIMAX_H3_FRAME_QUANTIZATION_TOLERANCE_MS
+  toleranceMs: number = MINIMAX_H3_FRAME_QUANTIZATION_TOLERANCE_MS,
+  profileKeyOrId?: string | undefined
 ): DurationMappingResult {
   if (!Number.isFinite(durationMs) || durationMs <= 0) {
     return { ok: false, reason: "out_of_range" };
@@ -127,10 +128,14 @@ export function mapDurationMsToMiniMaxH3FrameCount(
   const achievedDurationMs = (quantizedFrames / MINIMAX_H3_FPS) * 1000;
   const deviationMs = Math.abs(achievedDurationMs - durationMs);
 
-  if (
-    quantizedFrames < MINIMAX_H3_SUPPORTED_FRAME_RANGE[0] ||
-    quantizedFrames > MINIMAX_H3_SUPPORTED_FRAME_RANGE[1]
-  ) {
+  const effectiveProfile =
+    profileKeyOrId !== undefined && profileKeyOrId.trim().length > 0
+      ? profileKeyOrId.trim()
+      : "MINIMAX_H3_720P_5S_I2V_V1";
+  const capability = resolveH3ProfileFrameCapabilities(effectiveProfile);
+  const isAllowed = capability ? capability.isAllowedFrameCount(quantizedFrames) : false;
+
+  if (!isAllowed) {
     return { ok: false, reason: "out_of_range" };
   }
   if (deviationMs > toleranceMs) {
@@ -202,7 +207,11 @@ export function mapProductionDuration(
   options?: MapProductionDurationOptions
 ): DurationMappingResult {
   if (isMiniMaxEngineOrProfile(options?.engine) || isMiniMaxEngineOrProfile(options?.profile)) {
-    return mapDurationMsToMiniMaxH3FrameCount(durationMs, options?.toleranceMs);
+    return mapDurationMsToMiniMaxH3FrameCount(
+      durationMs,
+      options?.toleranceMs,
+      options?.profile ?? options?.engine
+    );
   }
   return mapDurationMsToLtxFrameCount(durationMs, options?.toleranceMs);
 }

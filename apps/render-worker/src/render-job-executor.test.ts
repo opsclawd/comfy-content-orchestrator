@@ -74,6 +74,7 @@ import {
   RenderJobExecutionError,
   RenderJobPayloadValidationError,
   validateDeclaredTopology,
+  validateInjectedPayload,
   validateMiniMaxH3ReferenceToVideoInputSchema,
   WorkflowHashMismatchError,
   type AssembleProductionManifestInput,
@@ -1797,6 +1798,18 @@ describe("Certified Render Job Executor", () => {
       WorkflowHashMismatchError
     );
     expect(mockExecuteProfileRender).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when validateInjectedPayload receives an unknown MiniMax profile", () => {
+    expect(() =>
+      validateInjectedPayload({ prompt: "test prompt", seed: 42, frameCount: 124 }, "production", {
+        id: "unknown-minimax",
+        engine: "minimax_h3_unknown",
+        workflowPath: "fake.json",
+        expectedWorkflowHash: "0".repeat(64),
+        renderProfileIdentity: { key: "H3_CANDIDATE_unknown_key_V1", version: 1 }
+      } as unknown as CertificationProfile)
+    ).toThrow(/does not have recognized MiniMax-H3 frame capabilities/i);
   });
 
   it("throws MissingCertifiedProfileError when loadCertificationProfile signals no match", async () => {

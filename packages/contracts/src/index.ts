@@ -35,3 +35,6 @@ export * from "./minimax-h3-experiment.js";
 export * from "./minimax-h3-experiment-v2.js";
 export * from "./minimax-h3-attention.js";
 export * from "./minimax-h3-continuity.js";
+export * from "./h3-candidate-profile.js";
+export * from "./h3-capability-decision.js";
+export * from "./h3-candidate-registry.js";
