@@ -15,7 +15,7 @@
 - **RenderJob:** Durable production work, retry limits, worker ownership, and completion semantics.
 - **RenderWorker:** Dedicated execution node / host process that holds GPU capacity, claims render leases, and runs diffusion/media generation workloads.
 - **RenderLease:** Exclusive GPU-worker execution right for one diffusion job.
-- **ReferenceAsset:** Immutable binary media asset in persistent object storage with SHA-256 digest, MIME type, dimensions (width, height), and storage key. An asset is role-agnostic and carries no baked-in reference role.
+- **ReferenceAsset:** Immutable binary media asset in persistent object storage with SHA-256 digest, MIME type, dimensions (width, height), and storage key. An asset is role-agnostic in storage; `libraryRole` is an organizational default for client cataloging, while `SceneReferenceBinding.role` carries scene visual conditioning authority (ADR 0006, ADR 0007).
 - **ReferenceRole:** Canonical semantic role assigned to a reference within a scene binding: `subject_identity` (actor/character facial and anatomical continuity), `product` (commercial hero asset, packaging, logo fidelity), `location` (environment, set, architectural continuity), `style` (aesthetic palette, lighting mood, photographic medium), or `composition` (spatial framing, camera angle, blocking).
 - **ReferenceGroup:** Optional client- or campaign-scoped organizational collection of `ReferenceAsset`s (e.g. "Brand Asset Kit", "Elena Character Sheet").
 - **SceneReferenceBinding:** Scene-revision entity linking a `ReferenceAsset` to a `SceneSpec` revision with a declared `ReferenceRole`, optional conditioning weight (0.0 to 1.0), and optional regional/bounding hints. A single `ReferenceAsset` can be bound across multiple scenes in different roles.
@@ -32,6 +32,24 @@
 - **CampaignProductionRun & CampaignProductionRunScene:** Aggregate and scene-link entities coordinating multi-scene production rendering, production review gating, and delivery assembly admission across a dedicated lifecycle (`dispatched -> production_review -> assembling -> completed/failed`). Decoupled from individual scene lifecycle progression.
 - **AcceptedProductionAttempt:** The explicitly selected and accepted production attempt for a scene (`acceptedAttemptId`, `acceptedProductionJobId`, `acceptedAttemptOrdinal`). Only explicitly accepted attempts matching the scene's current SceneSpec revision are permitted to feed downstream delivery assembly.
 - **ShotPlanSemanticDiff:** Deterministic, read-only structured comparison of two same-scene ShotPlans (`packages/contracts/src/shot-plan-semantic-diff.ts`), comparing framing/camera/lens/movement intent, subject/product staging and blocking, temporal beats, timing, environment/lighting, dialogue, and routing/continuity by ShotPlan field semantics — never by raw JSON diff or image-pixel comparison, and never by an LLM judgement call. Not a `ReviewAction` and not an approval-authority artifact: it confers no selection, approval, or production dispatch, and a `comparisonScope` of `historical` (either side stale or on a different `specRevision`) is rendered distinctly from a current comparison so a stale comparison cannot be mistaken for current approval state.
+- **ProductSku:** Tenant-scoped product definition (`skuId`) and immutable canonical uppercase ASCII SKU code (`canonicalSku`), unique within client.
+- **ProductBatch:** Tenant-scoped lot/batch entity (`batchId`, `skuId`, `lotIdentifier`), unique within client plus SKU.
+- **BatchFactsRevision:** Append-only factual revision of a batch's origin (`own_production`, `partner_origin`, `unknown`), producer identity, production dates, and exact origin evidence revision reference (`originEvidenceId`, `originEvidenceRevision`).
+- **SourceObject:** Immutable binary file in persistent object storage addressed by client ID and SHA-256 digest, holding access class `restricted_original` and retention class `source_evidence_archive`.
+- **EvidenceAsset & EvidenceRevision:** Tenant-scoped evidence assertion over a `SourceObject` bytes record under optimistic version fencing (`version`), capturing source class (`photo`, `video`, `raw`, `document`, `coa`, `process_record`), acquisition method, submitter identity, capture date/context, and rights/consent status under monotonic revision supersession.
+- **BatchEvidenceLink:** Explicit relational link binding an exact `(evidenceId, evidenceRevision)` to a specific `batchId` with declared purpose. No implicit inheritance from parent SKUs or sibling batches.
+- **EvidenceDerivative:** Relational bridge connecting an `EvidenceRevision` to a visual conditioning `ReferenceAsset` (`packages/domain/src/reference-asset.ts`) with independent SHA-256 digest and transform description.
+- **EvidenceVerificationEvent:** Append-only audit record capturing human review, submitter attestation, or independent third-party corroboration of evidence facts.
+- **CoaReport & CoaReportRevision:** Structured laboratory Certificate of Analysis test report under optimistic version fencing (`version`) and immutable revision records linked to a batch evidence asset, with claimed vs. verified lab identity, sample vs. attributed lot scope, and report date.
+- **CoaMeasurement:** Typed analytical measurement row linked to a specific `CoaReportRevision`, with analyte name, typed decimal result (`quantified`, `below_limit`, `not_detected`), non-empty unit, analytical basis, context, and reported test method. Neither `below_limit` nor `not_detected` may ever be converted into numerical zero ("0", "0.0%"), "Zero", or an exact numerical marketing value.
+
+- **ProductClaimRevision:** Commercial product statement for a batch declaring claim type, exact copy wording, proof category (`coa_measurement_backed`, `production_record_backed`, `visual_evidence_backed`, `human_attested_unverified`), and optional paired numerical value and unit.
+- **ClaimHead:** Version-fenced mutable pointer for a product claim tracking current revision and lifecycle state (`draft`, `evidence_linked`, `reviewer_approved`, `rejected`, `invalidated`).
+- **ClaimSourceLink:** Composite relationship linking a `ProductClaimRevision` to supporting `BatchEvidenceLink` records and exact `CoaMeasurement` rows, with tenant- and batch-level boundary integrity enforced mechanically, supporting multiple measurements from the same CoA report revision.
+- **ClaimDecisionEvent:** Append-only audit event capturing compliance review approval, rejection, or deterministic cascade invalidation.
+- **CommandReceipt:** Append-only idempotent command execution ledger record (`product_evidence_command_receipts`) guaranteeing exact-once command semantics, payload fingerprint verification, and crash recovery.
+- **EvidenceAuthorityPlane vs. VisualConditioningPlane:** Strict separation of concerns where visual video diffusion is conditioned by `SceneReferenceBindings` and `ShotPlan` (ADR 0007), while factual marketing claims are independently governed by verified batch and evidence contracts (ADR 0009).
+- **ByteIntegrity vs. FactualVerification:** A cryptographic hash (SHA-256) proves exact bitwise preservation, but proves nothing about capture circumstances, submitter authority, or truth. Factual verification requires authenticated assertions and independent corroboration.
 
 ## Review Plane Actions & Behavioral Invariants (Post-Pivot Authority Model)
 
@@ -180,4 +198,70 @@
   - **Strict Manifest Isolation Invariant:** `previsReviewEvidence` is captured exclusively as review metadata in `GenerationManifest` and must never appear inside `executionConditioning` for `reference_directed` renders.
   - **Campaign Pre-Production Readiness Projection (Issue #372):** A read-only, server-derived campaign-level rollup (`compileCampaignPreProductionReadiness` in `packages/contracts`) that aggregates existing planning/review state — current reference bindings, current-revision ShotPlans, selection, approval, previs presence, and campaign-animatic inclusion — into a per-scene `planning_ready` / `needs_attention` / `blocked_for_planning` projection plus campaign aggregates. This is a planning/review readiness view, not the H3 production-input inspector reserved for Issue #363: it never resolves exact H3 reference slot ordering, computes a `productionInputFingerprint`, or asserts `ready_to_dispatch`. The `contracts-are-standalone` dependency-cruiser rule makes it structurally impossible for this compiler to reach the H3 dispatch resolver (`packages/application/src/shot-plan-compiler/**`) or enqueue production.
   - **H3 Operator Acceptance Campaign Preparation (Issue #373):** Deterministic, hash-pinned fixture/campaign definition (`ACCEPTANCE-H3-REPRESENTATIVE-V1` in `packages/contracts/src/acceptance-campaign.ts`) covering 9 representative scene cases and 27 coverage requirements (`R01`-`R27`) traced to #354 (storyboard readability) and #332 (final H3 multi-scene acceptance), plus a GPU-free preflight check (`EvaluateAcceptancePreflightUseCase`), an install flow composed from existing use cases (`InstallAcceptanceCampaignFixtureUseCase`), two empty `TBD-OPERATOR` evidence templates under `docs/evidence/`, and an operator runbook (`docs/h3-acceptance-operator-runbook.md`). This preparation work never fabricates a `ProductionAttempt`, `GenerationManifest`, `ShotPlan` content/approval, or accepted output, and never touches H3 dispatch/compiler, RenderProfile semantics, ComfyUI workflow topology, ShotPlan routing, or the production review/assembly state machine — the physical acceptance run itself remains exclusively a human-operator action on the real RTX 4090 render host.
+
+## Product, Batch, Evidence, and Claim Authority Plane (Parent #469 / Issue #470 / ADR 0009)
+
+Phase 1 introduces the source-of-truth data model, relational constraints, and fail-closed state machines for verifiable product media, laboratory Certificates of Analysis (CoAs), and auditable commercial claims ([ADR 0009](adr/0009-verified-product-batch-evidence-claim-authority.md)).
+
+### 1. Five Distinct Authority Planes
+
+To eliminate ambiguity across media ingestion and marketing claims, the platform formally decouples five authority dimensions:
+
+| Authority Plane | Governing Entity | Authority Holder | Operational Meaning |
+| :--- | :--- | :--- | :--- |
+| **Byte Integrity** | `SourceObject` | SHA-256 Content Hash | Cryptographic proof of bitwise preservation. Does not assert authenticity, author, or truth. |
+| **Submitter Assertion** | `EvidenceRevision`, `BatchFactsRevision` | Authenticated Submitter | Attestation of capture circumstances, production dates, origin, and rights/consent status. |
+| **Independent Verification** | `EvidenceVerificationEvent` | Accredited Third-Party Lab / Auditor | Corroboration of laboratory identity, analytical methodology, or chain-of-custody transfer. |
+| **Factual Claim Authority** | `ProductClaimRevision`, `ClaimHead` | Compliance Reviewer | Revision-fenced sign-off that a claim is supported by active, eligible evidence and measurements. |
+| **Visual Conditioning Authority** | `ShotPlan`, `SceneReferenceBinding` (ADR 0007) | Creative Director | Controls camera, beats, and reference image conditioning into generative diffusion pipelines. |
+
+### 2. Claim Lifecycle & Invalidation Invariants
+
+Claims follow a deterministic, fail-closed state machine (`draft -> evidence_linked -> reviewer_approved / rejected -> invalidated`).
+- **Terminal Revisions:** Rejection and invalidation are permanently terminal for that revision. Updating links or copy requires authoring a new revision.
+- **Cascade Invalidation:** An approved or evidence-linked claim revision is automatically invalidated within the same database transaction when any underlying dependency fails eligibility:
+  - An evidence revision, CoA report revision, or batch facts revision is superseded (`source_superseded`).
+  - An underlying laboratory report receives a dispute verification event (`source_disputed`).
+  - An underlying reference asset, evidence asset, or batch is archived (`source_archived`).
+  - An underlying source object is quarantined (`source_quarantined`).
+  - An underlying source object fails SHA-256 byte verification against object storage (`integrity_failure`).
+  - Essential batch facts (e.g. producer identity or origin) are altered (`batch_facts_changed`).
+- **No Orphaned Approvals:** Concurrent approval and supersession are serialized using database row locks. Approval transactions recheck dependency heads prior to commit, aborting with `SOURCE_SUPERSEDED` if any dependency was modified.
+
+### 3. Production Storage Governance Gate
+
+> [!CAUTION]
+> Ingestion of original evidence binaries into production storage remains disabled until an independent security, legal, and privacy review establishes:
+> - Production retention schedules (e.g. 7-year regulatory hold).
+> - Deletion and legal-hold override procedures.
+> - Client storage byte quotas, upload rate limits, and per-file size limits.
+> Storage adapters must fail closed (`QUOTA_EXCEEDED` or `ACCESS_DENIED`) in the absence of explicit, reviewed quota configuration. Original source files are never transmitted to external cloud LLM or OCR providers without an explicit, audit-logged client policy grant.
+
+### 4. Reconciliation with MiniMax-H3 Routing (ADR 0007)
+
+Verifiable product evidence and claims do not alter existing generative video pipelines:
+- **Diffusion Topologies Preserved:** MiniMax-H3 ComfyUI workflows and routing modes (`reference_directed` vs. `frame_anchored`) remain completely unchanged.
+- **Template Batch Pinning:** Creative campaign templates pin batch resolutions (`PinnedProductBatchResolution`). Evidence derivatives resolve to standard `ReferenceAsset` IDs, which are bound as `SceneReferenceBinding`s with role `product`.
+- **Manifest Boundary:** `GenerationManifest` records executed diffusion provenance (seeds, nodes, reference hashes); it does not assert factual product claims. Commercial packaging evaluates claim eligibility during review and assembly admission.
+
+### 5. Downstream Phase 1 Implementation Ownership (P1.2–P1.8)
+
+Implementation of the contracts specified in ADR 0009 is partitioned across seven subsequent engineering slices:
+
+| Slice | Ownership Scope | Core Deliverables | Validation Responsibility |
+| :--- | :--- | :--- | :--- |
+| **P1.2** | Domain & Contracts | Brand types, value objects, Decimal string parser, Claim-type policy matrix, Zod DTO schemas | Pure unit tests: decimal arithmetic/scale, state transitions, policy matrix. Zero DB dependencies. |
+| **P1.3** | Persistence & Migrations | PostgreSQL DDL migrations, composite foreign keys, unique constraint maps, advisory row lock adapters | `pnpm test:db` Testcontainers integration tests: composite keys, cross-tenant isolation, version fences. |
+| **P1.4** | Ingest & Storage | Source object ingest use case, SHA-256 stream hasher, tenant-scoped S3 adapter, quota guards | Ingestion tests: byte integrity, duplicate deduplication, tamper detection (`SOURCE_INTEGRITY_MISMATCH`). |
+| **P1.5** | Evidence & CoA | Evidence revision use cases, CoA report revisions, typed measurement ingestion, dispute event ledger | Integration tests: sample vs. lot scope, typed measurement qualifiers, supersession event emission. |
+| **P1.6** | Claim Policy & Invalidation | Claim authoring, evidence linking, human review use cases, atomic cascade invalidation transaction | Concurrency tests: atomic supersession with cascade invalidation, approve vs. supersede serialization. |
+| **P1.7** | Application API & Read Plane | Client-scoped HTTP endpoints, command receipt idempotency, read models for batch/claim detail | API integration tests: UUIDv7 `actionId` idempotency replay, 409 conflict responses, secure multi-tenancy. |
+| **P1.8** | Consumer & Review Integration | Review Hub presentation, template batch pinning resolver, final delivery reel claim verification | End-to-end integration tests: pinned batch resolution to `SceneReferenceBinding`s, fail-closed assembly admission. |
+
+### 6. Architectural References
+
+- Full Architecture Decision Record: [ADR 0009](adr/0009-verified-product-batch-evidence-claim-authority.md)
+- Acceptance Fixtures & Counterexamples: [docs/verified-product-evidence-contract-fixtures.md](verified-product-evidence-contract-fixtures.md)
+- ShotPlan & Visual Reference Authority: [ADR 0007](adr/0007-shotplan-previs-h3-routing-architecture.md)
+- Production Review Acceptance Gate: [ADR 0005](adr/0005-production-review-acceptance-gate.md)
 
