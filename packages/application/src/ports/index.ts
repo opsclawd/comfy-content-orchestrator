@@ -50,3 +50,5 @@ export * from "./campaign-reference-bible-errors.js";
 export * from "./shot-plan-planning-admission-port.js";
 export * from "./minimax-h3-experiment-ports.js";
 export * from "./h3-candidate-ports.js";
+export * from "./product-evidence-repository.js";
+export * from "./product-evidence-serializers.js";

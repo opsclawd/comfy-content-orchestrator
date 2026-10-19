@@ -38,3 +38,7 @@ export * from "./minimax-h3-continuity.js";
 export * from "./h3-candidate-profile.js";
 export * from "./h3-capability-decision.js";
 export * from "./h3-candidate-registry.js";
+export * from "./product-evidence-error.js";
+export * from "./product-evidence-command.js";
+export * from "./product-sku.js";
+export * from "./product-batch.js";
