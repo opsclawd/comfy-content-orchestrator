@@ -53,6 +53,14 @@ export { PostgresCampaignReferenceBibleRepository } from "./postgres/repositorie
 export { PostgresGenerationManifestRepository } from "./postgres/repositories/postgres-generation-manifest-repository.js";
 
 export { PostgresReviewEventStore } from "./postgres/repositories/postgres-review-event-store.js";
+export {
+  PostgresProductEvidenceRepository,
+  computePayloadSha256,
+  translateDatabaseError,
+  isProductRegistryDatabaseError,
+  type PostgresProductEvidenceRepositoryOptions,
+  type DatabaseErrorTranslationContext
+} from "./postgres/repositories/postgres-product-evidence-repository.js";
 
 export { PostgresUnitOfWork } from "./postgres/uow/postgres-unit-of-work.js";
 

@@ -141,3 +141,37 @@ Operators and database administrators are strictly prohibited from performing th
 
 - **Native UUIDv7**: Primary keys use PostgreSQL 18's native `DEFAULT uuidv7()` function. The legacy `uuid-ossp` extension is intentionally absent and must not be loaded.
 - **PostgreSQL AIO Tuning**: Asynchronous I/O settings (`io_method`, `io_workers`) are intentionally unconfigured and absent, adhering to standard PostgreSQL 18 defaults.
+
+---
+
+## 9. Product & Batch Registry (Migration 026 / Issue #472 / VPM-P1.3)
+
+Migration `026_product_registry.sql` establishes the durable PostgreSQL SKU and lot registry:
+
+### Tables and Lifecycle
+
+| Table | Nature | Identity & Uniqueness | Allowed Mutations |
+|---|---|---|---|
+| `product_skus` | Mutable Head | Native UUIDv7 `sku_id`; scoped `UNIQUE (client_id, canonical_sku)` | `display_name`, `version`, `updated_at`, `archived_at` via version-fenced UPDATE |
+| `product_batches` | Mutable Head | Native UUIDv7 `batch_id`; scoped `UNIQUE (client_id, sku_id, lot_identifier)` | `display_name`, `current_facts_revision`, `version`, `updated_at`, `archived_at` via version-fenced UPDATE |
+| `product_batch_facts` | Append-only Revisions | Composite PK `(client_id, batch_id, revision)`; contiguous predecessor FK | INSERT and SELECT only; UPDATE/DELETE strictly forbidden by triggers and role ACLs |
+| `product_evidence_command_receipts` | Immutable Ledger | Composite PK `(client_id, action_id)` | INSERT and SELECT only; records command, payload SHA-256, actor, exact response JSONB |
+
+### Integrity & Security Invariants
+
+1. **Permanent Uniqueness**:
+   `canonical_sku` and `lot_identifier` uniqueness constraints span both active and archived rows. Archiving a SKU or Batch permanently reserves its identifier and does not release it for reuse.
+2. **Atomic Batch Creation & Circular Deferred FK**:
+   `fk_product_batches_current_facts` is `DEFERRABLE INITIALLY DEFERRED`. Batch creation atomically inserts the batch head (version 1, facts revision 1), the initial facts row (revision 1), and the command receipt. Committing a head without its matching facts revision fails closed.
+3. **Database-Boundary Immutability & Archive Triggers**:
+   - `prevent_product_head_deletion`: Blocks `DELETE` on `product_skus` and `product_batches`.
+   - `prevent_modification_product_evidence_immutable`: Blocks `UPDATE` and `DELETE` on `product_batch_facts` and `product_evidence_command_receipts`.
+   - `enforce_product_sku_head_update` & `enforce_product_batch_head_update`: Block updates to immutable commercial identity columns (`client_id`, `sku_id`, `batch_id`, `canonical_sku`, `lot_identifier`, `created_at`), enforce one-step version advancement, nondecreasing update timestamps, and terminal archive state (archived heads cannot be unarchived or have metadata mutated).
+   - Parent archive triggers block creating batches under archived SKUs and appending facts to archived batches.
+4. **Least-Privilege Application Role Permissions**:
+   The runtime role (`orchestrator_app`) is granted table-level `SELECT` and `INSERT` across all 4 tables, and strictly column-level `UPDATE` on allowed mutable columns of `product_skus` and `product_batches`. Table-level `UPDATE`, `DELETE`, and `TRUNCATE` are revoked from the application role and `PUBLIC`.
+5. **Temporary Origin Evidence Link Deferral**:
+   `chk_batch_facts_origin_evidence_deferred` ensures `origin_evidence_id` and `origin_evidence_revision` remain NULL until the downstream evidence association migration (#473) provides relational foreign keys.
+6. **Active List Semantics**:
+   Default batch queries join active parent SKUs, returning only selectable batches where both the batch and its parent SKU are unarchived. Historical catalog reads (`includeArchived: true`) return all batches regardless of parent archive status.
+

@@ -8,6 +8,7 @@ import type { GenerationManifestRepository } from "./generation-manifest-reposit
 import type { TransactionalJobEnqueuer } from "./job-queue-port.js";
 import type { ReferenceAssetRepository } from "./reference-asset-repository.js";
 import type { ReferenceGroupRepository } from "./reference-group-repository.js";
+import type { ProductEvidenceRepositoryPort } from "./product-evidence-repository.js";
 import type { ReviewEventStore } from "./review-event-store.js";
 import type { SceneRepository } from "./scene-repository.js";
 import type { ShotPlanRepository } from "./shot-plan-repository.js";
@@ -27,6 +28,7 @@ export interface UnitOfWorkContext {
   readonly referenceAssets?: ReferenceAssetRepository | undefined;
   readonly referenceGroups?: ReferenceGroupRepository | undefined;
   readonly campaignReferenceBible?: CampaignReferenceBibleRepository | undefined;
+  readonly productEvidence?: ProductEvidenceRepositoryPort | undefined;
 }
 
 export interface UnitOfWork {
