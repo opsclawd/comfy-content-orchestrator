@@ -13,6 +13,11 @@ import { PostgresReviewEventStore } from "../repositories/postgres-review-event-
 import { PostgresSceneRepository } from "../repositories/postgres-scene-repository.js";
 import { PostgresShotPlanRepository } from "../repositories/postgres-shot-plan-repository.js";
 import { PostgresStoryboardCandidateRepository } from "../repositories/postgres-storyboard-candidate-repository.js";
+import {
+  isProductRegistryDatabaseError,
+  PostgresProductEvidenceRepository,
+  translateDatabaseError
+} from "../repositories/postgres-product-evidence-repository.js";
 
 export class PostgresUnitOfWork implements UnitOfWork {
   constructor(private readonly pool: Pool) {}
@@ -37,7 +42,10 @@ export class PostgresUnitOfWork implements UnitOfWork {
         generationManifests: new PostgresGenerationManifestRepository(client),
         referenceAssets: new PostgresReferenceAssetRepository(client),
         referenceGroups: new PostgresReferenceGroupRepository(client),
-        campaignReferenceBible: new PostgresCampaignReferenceBibleRepository(client)
+        campaignReferenceBible: new PostgresCampaignReferenceBibleRepository(client),
+        productEvidence: new PostgresProductEvidenceRepository(client, {
+          externalTransaction: true
+        })
       };
 
       const result = await work(context);
@@ -45,6 +53,9 @@ export class PostgresUnitOfWork implements UnitOfWork {
       return result;
     } catch (error) {
       await client.query("ROLLBACK").catch(() => {});
+      if (isProductRegistryDatabaseError(error)) {
+        translateDatabaseError(error);
+      }
       throw error;
     } finally {
       client.release();
