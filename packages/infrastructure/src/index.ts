@@ -475,5 +475,9 @@ export {
   PostgresEvidenceAssetRepository,
   type PostgresEvidenceAssetRepositoryOptions
 } from "./evidence/postgres-evidence-asset-repository.js";
+export {
+  PostgresCoaReportRepository,
+  type PostgresCoaReportRepositoryOptions
+} from "./postgres/repositories/postgres-coa-report-repository.js";
 
 export * from "./experiments/index.js";
