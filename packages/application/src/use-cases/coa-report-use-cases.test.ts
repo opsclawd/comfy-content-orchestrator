@@ -351,7 +351,8 @@ describe("CoA Report Application Use Cases", () => {
       const mockAuth: ReviewerAuthorizationPort = {
         assertCanReviewCoaReport: vi.fn(async () => {
           throw new AccessDeniedError("Reviewer lacks compliance-review authority");
-        })
+        }),
+        assertCanReviewClaim: vi.fn(async () => {})
       };
 
       const uow = createMockUow({});

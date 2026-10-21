@@ -640,93 +640,136 @@ export interface CoaMeasurement {
 export interface ProductClaim {
   readonly clientId: ClientId;
   readonly claimId: ClaimId;
+  readonly skuId: SkuId;
   readonly batchId: BatchId;
   readonly currentRevision: number;
   readonly state: ClaimState;
   readonly version: number;
-  readonly updatedAt: IsoTimestampString;
   readonly invalidationCause: ClaimInvalidationCause | null;
-  readonly invalidationSourceEventId: string | null;
+  readonly invalidationSourceRef: string | null;
+  readonly createdAt: IsoTimestampString;
+  readonly updatedAt: IsoTimestampString;
+  readonly archivedAt: IsoTimestampString | null;
 }
 
-export type ProductClaimRevision =
-  | {
-      readonly clientId: ClientId;
-      readonly claimId: ClaimId;
-      readonly revision: number;
-      readonly batchId: BatchId;
-      readonly claimType: ProductClaimType;
-      readonly wording: string;
-      readonly proofCategory: "coa_measurement_backed";
-      readonly hasNumericalSupport: true;
-      readonly numericalValue: DecimalString;
-      readonly numericalUnit: string;
-      readonly createdBy: string;
-      readonly createdAt: IsoTimestampString;
-      readonly policyVersion: string;
-      readonly supersedesRevision: number | null;
-    }
-  | {
-      readonly clientId: ClientId;
-      readonly claimId: ClaimId;
-      readonly revision: number;
-      readonly batchId: BatchId;
-      readonly claimType: ProductClaimType;
-      readonly wording: string;
-      readonly proofCategory: ClaimProofCategory;
-      readonly hasNumericalSupport: false;
-      readonly numericalValue: null;
-      readonly numericalUnit: null;
-      readonly createdBy: string;
-      readonly createdAt: IsoTimestampString;
-      readonly policyVersion: string;
-      readonly supersedesRevision: number | null;
-    };
+export type CanonicalClaimKind =
+  | "factual_lot_identifier"
+  | "packaged_or_harvest_date"
+  | "certificate_panel_measurement"
+  | "cultivation_processing_lineage"
+  | "logged_process_timing"
+  | "unsupported_manual";
 
+export interface FactualLotIdentifierParameters {
+  readonly kind: "factual_lot_identifier";
+  readonly lotIdentifier: string;
+}
 
-export type ClaimSourceLinkId = Brand<string, "ClaimSourceLinkId">;
+export interface PackagedOrHarvestDateParameters {
+  readonly kind: "packaged_or_harvest_date";
+  readonly dateKind: "packaged_on" | "harvested_on";
+  readonly dateValue: DateOnlyString;
+  readonly reportedPrecision: "date" | "minute" | "second" | "millisecond";
+}
 
-export type ClaimSourceLink =
-  | {
-      readonly clientId: ClientId;
-      readonly linkId: ClaimSourceLinkId;
-      readonly claimId: ClaimId;
-      readonly claimRevision: number;
-      readonly batchId: BatchId;
-      readonly evidenceId: EvidenceId;
-      readonly evidenceRevision: number;
-      readonly supportRole: "primary_measurement";
-      readonly linkKind: "measurement_backed";
-      readonly reportId: CoaReportId;
-      readonly reportRevision: number;
-      readonly measurementId: CoaMeasurementId;
-    }
-  | {
-      readonly clientId: ClientId;
-      readonly linkId: ClaimSourceLinkId;
-      readonly claimId: ClaimId;
-      readonly claimRevision: number;
-      readonly batchId: BatchId;
-      readonly evidenceId: EvidenceId;
-      readonly evidenceRevision: number;
-      readonly supportRole: Exclude<ClaimSupportRole, "primary_measurement">;
-      readonly linkKind: "evidence_only";
-      readonly reportId: null;
-      readonly reportRevision: null;
-      readonly measurementId: null;
-    };
+export interface CertificatePanelMeasurementItem {
+  readonly analyte: string;
+  readonly exactDecimalValue: DecimalString;
+  readonly unit: string;
+  readonly quantityKind: string;
+  readonly basis: string;
+  readonly context: string;
+  readonly requiredScope: "sample_only" | "attributed_lot";
+}
+
+export interface CertificatePanelMeasurementParameters {
+  readonly kind: "certificate_panel_measurement";
+  readonly panelName?: string | undefined;
+  readonly measurements: readonly CertificatePanelMeasurementItem[];
+}
+
+export interface CultivationProcessingLineageParameters {
+  readonly kind: "cultivation_processing_lineage";
+  readonly operationCode: string;
+  readonly originKind: "own_production" | "partner_origin";
+  readonly attributedParty?: string | undefined;
+  readonly claimedFacts: readonly string[];
+}
+
+export interface LoggedProcessTimingParameters {
+  readonly kind: "logged_process_timing";
+  readonly operationName: string;
+  readonly timingKind: "duration" | "timestamp_range";
+  readonly duration?: { readonly value: DecimalString; readonly unit: "seconds" | "minutes" | "hours" | "days" } | undefined;
+  readonly timestampRange?: { readonly start: IsoTimestampString; readonly end: IsoTimestampString } | undefined;
+}
+
+export interface UnsupportedManualParameters {
+  readonly kind: "unsupported_manual";
+  readonly proposedText: string;
+  readonly categoryOrReason: string;
+}
+
+export type ClaimParameters =
+  | FactualLotIdentifierParameters
+  | PackagedOrHarvestDateParameters
+  | CertificatePanelMeasurementParameters
+  | CultivationProcessingLineageParameters
+  | LoggedProcessTimingParameters
+  | UnsupportedManualParameters;
+
+export interface ProductClaimRevision {
+  readonly clientId: ClientId;
+  readonly claimId: ClaimId;
+  readonly revision: number;
+  readonly batchId: BatchId;
+  readonly canonicalKind: CanonicalClaimKind;
+  readonly proofCategory: ClaimProofCategory;
+  readonly parameters: ClaimParameters;
+  readonly displayWording: string | null;
+  readonly policyVersion: string;
+  readonly assertedBy: string;
+  readonly assertedAt: IsoTimestampString;
+  readonly supersedesRevision: number | null;
+}
+
+export type ClaimLinkId = Brand<string, "ClaimLinkId">;
+export type ClaimSourceLinkId = ClaimLinkId; // Compatibility alias
+
+export interface ClaimEvidenceLink {
+  readonly linkId: ClaimLinkId;
+  readonly clientId: ClientId;
+  readonly claimId: ClaimId;
+  readonly claimRevision: number;
+  readonly batchId: BatchId;
+  readonly evidenceId: EvidenceId;
+  readonly evidenceRevision: number;
+  readonly sourceObjectId: SourceObjectId;
+  readonly sourceSha256: Sha256Hex;
+  readonly supportRole: ClaimSupportRole;
+  readonly reportId?: CoaReportId | null | undefined;
+  readonly reportRevision?: number | null | undefined;
+  readonly measurementId?: CoaMeasurementId | null | undefined;
+  readonly pinnedFactsRevision?: number | null | undefined;
+  readonly attestation?: ClaimSourceFactAttestation | null | undefined;
+  readonly derivativeAssetId?: DerivativeId | string | null | undefined;
+}
+
+export type ClaimSourceLink = ClaimEvidenceLink; // Compatibility alias
 
 export interface ClaimDecisionEvent {
+  readonly eventId: ClaimDecisionEventId;
   readonly clientId: ClientId;
-  readonly eventId: ClaimEventId;
   readonly claimId: ClaimId;
   readonly claimRevision: number;
   readonly decision: "link_evidence" | "approve" | "reject" | "invalidate";
   readonly actorId: string;
   readonly occurredAt: IsoTimestampString;
   readonly reason: string;
-  readonly invalidationCause: ClaimInvalidationCause | null;
-  readonly sourceEventId: string | null;
+  readonly policyVersion: string;
+  readonly dependencyFingerprint?: string | null | undefined;
+  readonly invalidationCause?: ClaimInvalidationCause | null | undefined;
+  readonly sourceEventId?: string | null | undefined;
 }
 
 // ============================================================================

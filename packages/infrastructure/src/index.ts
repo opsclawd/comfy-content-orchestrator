@@ -479,5 +479,9 @@ export {
   PostgresCoaReportRepository,
   type PostgresCoaReportRepositoryOptions
 } from "./postgres/repositories/postgres-coa-report-repository.js";
+export {
+  PostgresProductClaimRepository,
+  type PostgresProductClaimRepositoryOptions
+} from "./postgres/repositories/postgres-product-claim-repository.js";
 
 export * from "./experiments/index.js";

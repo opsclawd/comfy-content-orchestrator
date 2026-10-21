@@ -574,14 +574,14 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
   async quarantineSourceObject(
     clientId: ClientId,
     sourceObjectId: SourceObjectId,
-    _reason: string
+    reason: string
   ): Promise<void> {
     try {
       await this.client.query(
         `UPDATE source_objects
-         SET availability = 'quarantined'
+         SET availability = 'quarantined', quarantine_reason = $3
          WHERE client_id = $1 AND source_object_id = $2`,
-        [clientId, sourceObjectId]
+        [clientId, sourceObjectId, reason]
       );
     } catch (err) {
       translateDatabaseError(err, { clientId });

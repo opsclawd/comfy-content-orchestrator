@@ -168,3 +168,11 @@ export class ReportDisputedError extends ProductEvidenceDomainError {
     super("REPORT_DISPUTED", message, details);
   }
 }
+
+export class ClaimSupportRequiredError extends ProductEvidenceDomainError {
+  override readonly name = "ClaimSupportRequiredError";
+
+  constructor(message: string, details?: Readonly<Record<string, unknown>>) {
+    super("CLAIM_SUPPORT_REQUIRED", message, details);
+  }
+}

@@ -26,6 +26,9 @@ export type ActionId = Brand<string, "ActionId">;
 export type CoaReportId = Brand<string, "CoaReportId">;
 export type CoaMeasurementId = Brand<string, "CoaMeasurementId">;
 export type CoaReviewEventId = Brand<string, "CoaReviewEventId">;
+export type ClaimId = Brand<string, "ClaimId">;
+export type ClaimLinkId = Brand<string, "ClaimLinkId">;
+export type ClaimDecisionEventId = Brand<string, "ClaimDecisionEventId">;
 
 /** Lowercase 64-hex SHA-256 digest string */
 export type Sha256Hex = string & { readonly __sha256: true };
@@ -92,6 +95,18 @@ export function createCoaMeasurementId(val: string): CoaMeasurementId {
 
 export function createCoaReviewEventId(val: string): CoaReviewEventId {
   return validateAndBrandUuid(val, "CoaReviewEventId", "eventId");
+}
+
+export function createClaimId(val: string): ClaimId {
+  return validateAndBrandUuid(val, "ClaimId", "claimId");
+}
+
+export function createClaimLinkId(val: string): ClaimLinkId {
+  return validateAndBrandUuid(val, "ClaimLinkId", "linkId");
+}
+
+export function createClaimDecisionEventId(val: string): ClaimDecisionEventId {
+  return validateAndBrandUuid(val, "ClaimDecisionEventId", "eventId");
 }
 
 export function createSha256Hex(val: string): Sha256Hex {

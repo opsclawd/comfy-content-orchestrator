@@ -401,7 +401,11 @@ const PRODUCT_REGISTRY_TABLES = new Set<string>([
   "coa_reports",
   "coa_report_revisions",
   "coa_measurements",
-  "coa_report_review_events"
+  "coa_report_review_events",
+  "product_claims",
+  "product_claim_revisions",
+  "claim_source_links",
+  "claim_decision_events"
 ]);
 
 const REGISTRY_CONSTRAINTS = new Set<string>([
@@ -762,6 +766,24 @@ export function translateDatabaseError(
         }
         if (dbErr.constraint === "fk_batch_evidence_batch") {
           throw new NotFoundError("ProductBatch", "Referenced product batch does not exist");
+        }
+        if (
+          dbErr.constraint === "fk_claim_sources_measurement" ||
+          dbErr.constraint === "fk_claim_sources_batch_evidence" ||
+          dbErr.constraint === "fk_claim_sources_claim_rev" ||
+          dbErr.constraint === "fk_product_claims_batch_sku"
+        ) {
+          throw new CrossBatchSourceError(
+            `Cross-batch or lineage integrity violation: ${dbErr.message}`
+          );
+        }
+        if (
+          dbErr.constraint === "fk_claim_revisions_predecessor" ||
+          dbErr.constraint === "fk_claim_events_revision"
+        ) {
+          throw new NonMonotonicRevisionError(
+            `Predecessor claim revision integrity violation: ${dbErr.message}`
+          );
         }
         if (
           dbErr.constraint === "fk_source_objects_client" ||

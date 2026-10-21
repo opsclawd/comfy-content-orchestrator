@@ -44,3 +44,4 @@ export * from "./product-sku.js";
 export * from "./product-batch.js";
 export * from "./evidence-asset.js";
 export * from "./coa-report.js";
+export * from "./product-claim.js";

@@ -55,7 +55,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
   it("migrates an empty PostgreSQL 18.6 database through the baseline", async () => {
     const applied = await runMigrations(client, { migrationsDirectory });
 
-    expect(applied).toHaveLength(28);
+    expect(applied).toHaveLength(29);
     expect(applied[0]?.version).toBe("001");
     expect(applied[1]?.version).toBe("002");
     expect(applied[2]?.version).toBe("003");
@@ -84,6 +84,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
     expect(applied[25]?.version).toBe("026");
     expect(applied[26]?.version).toBe("027");
     expect(applied[27]?.version).toBe("028");
+    expect(applied[28]?.version).toBe("029");
 
     const schemaRes = await client.query(
       "SELECT version FROM schema_migrations ORDER BY version ASC"
@@ -116,7 +117,8 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       { version: "025" },
       { version: "026" },
       { version: "027" },
-      { version: "028" }
+      { version: "028" },
+      { version: "029" }
     ]);
 
     const tablesRes = await client.query<{ table_name: string }>(
@@ -136,6 +138,8 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       "campaign_reference_bible_changes",
       "campaign_reference_bibles",
       "campaigns",
+      "claim_decision_events",
+      "claim_source_links",
       "clients",
       "coa_measurements",
       "coa_report_review_events",
@@ -151,6 +155,8 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       "license_registry",
       "product_batch_facts",
       "product_batches",
+      "product_claim_revisions",
+      "product_claims",
       "product_evidence_command_receipts",
       "product_skus",
       "production_attempts",

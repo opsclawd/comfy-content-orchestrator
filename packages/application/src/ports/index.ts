@@ -58,3 +58,4 @@ export * from "./evidence-lock-coordinator.js";
 export * from "./evidence-asset-repository.js";
 export * from "./coa-report-repository.js";
 export * from "./reviewer-authorization-port.js";
+export * from "./product-claim-repository.js";

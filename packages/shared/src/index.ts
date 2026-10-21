@@ -34,3 +34,4 @@ export * from "./json-canonicalization.js";
 export * from "./client-session-token.js";
 export * from "./product-identity.js";
 export * from "./coa-measurement.js";
+export * from "./product-claim.js";
