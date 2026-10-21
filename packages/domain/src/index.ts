@@ -20,3 +20,5 @@ export * from "./batch-facts.js";
 export * from "./product-batch.js";
 export * from "./source-object.js";
 export * from "./evidence-asset.js";
+export * from "./coa-measurement.js";
+export * from "./coa-report.js";

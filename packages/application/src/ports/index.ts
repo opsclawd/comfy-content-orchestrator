@@ -56,3 +56,5 @@ export * from "./originals-inspection-port.js";
 export * from "./evidence-storage-policy.js";
 export * from "./evidence-lock-coordinator.js";
 export * from "./evidence-asset-repository.js";
+export * from "./coa-report-repository.js";
+export * from "./reviewer-authorization-port.js";

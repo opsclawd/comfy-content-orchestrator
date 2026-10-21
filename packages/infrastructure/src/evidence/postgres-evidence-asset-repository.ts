@@ -613,17 +613,50 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
         };
       }
 
-      // 1. Lock and verify batch and SKU rows
+      // 1. Discover batch and SKU without locking to maintain strict lock hierarchy: SKU -> Batch
+      const batchDiscovery = await client.query<{
+        batch_id: string;
+        sku_id: string;
+      }>(
+        `SELECT batch_id, sku_id
+         FROM product_batches
+         WHERE client_id = $1 AND batch_id = $2`,
+        [cmd.clientId, cmd.payload.batchId]
+      );
+      if (batchDiscovery.rows.length === 0) {
+        throw new NotFoundError("ProductBatch", cmd.payload.batchId);
+      }
+      const discoveredSkuId = batchDiscovery.rows[0]!.sku_id;
+
+      // Lock SKU FOR UPDATE first
+      const skuRes = await client.query<{
+        sku_id: string;
+        archived_at: Date | null;
+      }>(
+        `SELECT sku_id, archived_at
+         FROM product_skus
+         WHERE client_id = $1 AND sku_id = $2 FOR UPDATE`,
+        [cmd.clientId, discoveredSkuId]
+      );
+      if (skuRes.rows.length === 0) {
+        throw new NotFoundError("ProductSku", discoveredSkuId);
+      }
+      if (skuRes.rows[0]!.archived_at !== null) {
+        throw new AccessDeniedError(
+          "Cannot link evidence to a batch under an archived SKU",
+          "SKU_ARCHIVED"
+        );
+      }
+
+      // Lock Batch FOR UPDATE second
       const batchRes = await client.query<{
         batch_id: string;
         archived_at: Date | null;
         sku_id: string;
-        sku_archived_at: Date | null;
       }>(
-        `SELECT b.batch_id, b.archived_at, s.sku_id, s.archived_at AS sku_archived_at
-         FROM product_batches b
-         JOIN product_skus s ON s.client_id = b.client_id AND s.sku_id = b.sku_id
-         WHERE b.client_id = $1 AND b.batch_id = $2 FOR UPDATE OF b, s`,
+        `SELECT batch_id, archived_at, sku_id
+         FROM product_batches
+         WHERE client_id = $1 AND batch_id = $2 FOR UPDATE`,
         [cmd.clientId, cmd.payload.batchId]
       );
       if (batchRes.rows.length === 0) {
@@ -632,11 +665,75 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
       if (batchRes.rows[0]!.archived_at !== null) {
         throw new AccessDeniedError("Cannot link evidence to an archived batch", "BATCH_ARCHIVED");
       }
-      if (batchRes.rows[0]!.sku_archived_at !== null) {
-        throw new AccessDeniedError(
-          "Cannot link evidence to a batch under an archived SKU",
-          "SKU_ARCHIVED"
+      if (batchRes.rows[0]!.sku_id !== discoveredSkuId) {
+        throw new ConcurrencyConflictError("Batch SKU association changed concurrently.");
+      }
+
+      // Pre-lock discovery for supersession to maintain canonical order: Source (sorted) -> Evidence
+      let oldSourceObjectId: string | undefined;
+      let targetAsset: EvidenceAsset | undefined;
+      if (cmd.payload.registrationIntent === "supersede") {
+        if (!cmd.payload.targetEvidenceId || cmd.payload.expectedEvidenceVersion === undefined) {
+          throw new ProductValidationError([
+            {
+              code: "INVALID_FIELD_COMBINATION",
+              path: ["targetEvidenceId"],
+              message: "targetEvidenceId and expectedEvidenceVersion are required for supersede."
+            }
+          ]);
+        }
+
+        const preLockRevRes = await client.query<{ source_object_id: string }>(
+          `SELECT r.source_object_id
+           FROM evidence_assets a
+           JOIN evidence_revisions r ON r.client_id = a.client_id AND r.evidence_id = a.evidence_id AND r.revision = a.current_revision
+           WHERE a.client_id = $1 AND a.evidence_id = $2`,
+          [cmd.clientId, cmd.payload.targetEvidenceId]
         );
+        oldSourceObjectId = preLockRevRes.rows[0]?.source_object_id;
+
+        // Discover candidate replacement source object ID without locking
+        let candidateReplacementSourceId: string | undefined = cmd.payload.reusedSourceObjectId;
+        if (!candidateReplacementSourceId) {
+          const existingSourceCheck = await client.query<{ source_object_id: string }>(
+            `SELECT source_object_id FROM source_objects
+             WHERE client_id = $1 AND original_sha256 = $2`,
+            [cmd.clientId, cmd.payload.originalSha256]
+          );
+          candidateReplacementSourceId = existingSourceCheck.rows[0]?.source_object_id;
+        }
+
+        // Lock all involved source objects in canonical sorted order before locking evidence_assets
+        const sourceIdsToLock = Array.from(
+          new Set([oldSourceObjectId, candidateReplacementSourceId].filter(Boolean) as string[])
+        ).sort();
+        for (const sId of sourceIdsToLock) {
+          await client.query(
+            `SELECT 1 FROM source_objects WHERE client_id = $1 AND source_object_id = $2 FOR UPDATE`,
+            [cmd.clientId, sId]
+          );
+        }
+
+        // Lock target evidence asset
+        const targetRes = await client.query<EvidenceAssetRow>(
+          `SELECT * FROM evidence_assets
+           WHERE client_id = $1 AND evidence_id = $2 FOR UPDATE`,
+          [cmd.clientId, cmd.payload.targetEvidenceId]
+        );
+        if (targetRes.rows.length === 0) {
+          throw new NotFoundError("EvidenceAsset", cmd.payload.targetEvidenceId);
+        }
+        targetAsset = mapRowToEvidenceAsset(targetRes.rows[0]!);
+        if (targetAsset.archivedAt !== null) {
+          throw new AccessDeniedError("Archived evidence asset cannot be superseded.");
+        }
+        if (targetAsset.version !== cmd.payload.expectedEvidenceVersion) {
+          throw new StaleRevisionConflictError(
+            "EvidenceAsset",
+            cmd.payload.expectedEvidenceVersion,
+            targetAsset.version
+          );
+        }
       }
 
       // 2. Resolve or insert SourceObject
@@ -886,35 +983,8 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
         );
         evidenceRevision = mapRowToEvidenceRevision(revRes.rows[0]!);
       } else if (cmd.payload.registrationIntent === "supersede") {
-        if (!cmd.payload.targetEvidenceId || cmd.payload.expectedEvidenceVersion === undefined) {
-          throw new ProductValidationError([
-            {
-              code: "INVALID_FIELD_COMBINATION",
-              path: ["targetEvidenceId"],
-              message: "targetEvidenceId and expectedEvidenceVersion are required for supersede."
-            }
-          ]);
-        }
-
-        // Lock target evidence asset
-        const targetRes = await client.query<EvidenceAssetRow>(
-          `SELECT * FROM evidence_assets
-         WHERE client_id = $1 AND evidence_id = $2 FOR UPDATE`,
-          [cmd.clientId, cmd.payload.targetEvidenceId]
-        );
-        if (targetRes.rows.length === 0) {
-          throw new NotFoundError("EvidenceAsset", cmd.payload.targetEvidenceId);
-        }
-        const targetAsset = mapRowToEvidenceAsset(targetRes.rows[0]!);
-        if (targetAsset.archivedAt !== null) {
-          throw new AccessDeniedError("Archived evidence asset cannot be superseded.");
-        }
-        if (targetAsset.version !== cmd.payload.expectedEvidenceVersion) {
-          throw new StaleRevisionConflictError(
-            "EvidenceAsset",
-            cmd.payload.expectedEvidenceVersion,
-            targetAsset.version
-          );
+        if (!targetAsset) {
+          throw new Error("Illegal state: targetAsset not loaded for supersede intent");
         }
 
         // Check if the target evidence asset has an active dispute across any revisions
@@ -1157,7 +1227,72 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
         return rehydrateEvidenceDerivative(result);
       }
 
-      // Verify EvidenceAsset exists, belongs to client, and is not archived
+      // Discover lineage before locking to ensure canonical lock order: SKU -> Batch -> Source -> Evidence
+      const discoveryRevRes = await client.query<{ source_object_id: string }>(
+        `SELECT source_object_id FROM evidence_revisions
+         WHERE client_id = $1 AND evidence_id = $2 AND revision = $3`,
+        [cmd.clientId, cmd.payload.evidenceId, cmd.payload.evidenceRevision]
+      );
+      if (discoveryRevRes.rows.length === 0) {
+        throw new NotFoundError(
+          "EvidenceRevision",
+          `${cmd.payload.evidenceId}:${cmd.payload.evidenceRevision}`
+        );
+      }
+      const discoveredSourceObjectId = discoveryRevRes.rows[0]!.source_object_id;
+
+      // Discover lineage before locking to ensure canonical lock order: SKU -> Batch -> Source -> Evidence
+      const linkBatchRes = await client.query<{
+        batch_id: string;
+        sku_id: string;
+      }>(
+        `SELECT l.batch_id, b.sku_id
+         FROM batch_evidence_links l
+         JOIN product_batches b ON b.client_id = l.client_id AND b.batch_id = l.batch_id
+         WHERE l.client_id = $1 AND l.evidence_id = $2 AND l.evidence_revision = $3`,
+        [cmd.clientId, cmd.payload.evidenceId, cmd.payload.evidenceRevision]
+      );
+      if (linkBatchRes.rows.length === 0) {
+        throw new NotFoundError("ProductBatch", "Associated batch link not found");
+      }
+
+      // Explicitly lock SKU first FOR SHARE
+      const skuIds = [...new Set(linkBatchRes.rows.map((r) => r.sku_id))].sort();
+      for (const sId of skuIds) {
+        const skuLockRes = await client.query<{ archived_at: Date | null }>(
+          `SELECT archived_at FROM product_skus WHERE client_id = $1 AND sku_id = $2 FOR SHARE`,
+          [cmd.clientId, sId]
+        );
+        if (skuLockRes.rows.length === 0 || skuLockRes.rows[0]!.archived_at !== null) {
+          throw new AccessDeniedError("Associated SKU is archived.", "SKU_ARCHIVED");
+        }
+      }
+
+      // Explicitly lock Batch second FOR SHARE
+      const batchIds = [...new Set(linkBatchRes.rows.map((r) => r.batch_id))].sort();
+      for (const bId of batchIds) {
+        const batchLockRes = await client.query<{ archived_at: Date | null }>(
+          `SELECT archived_at FROM product_batches WHERE client_id = $1 AND batch_id = $2 FOR SHARE`,
+          [cmd.clientId, bId]
+        );
+        if (batchLockRes.rows.length === 0 || batchLockRes.rows[0]!.archived_at !== null) {
+          throw new AccessDeniedError("Associated batch is archived.", "BATCH_ARCHIVED");
+        }
+      }
+
+      // Next lock source_objects row FOR UPDATE
+      const sourceRes = await client.query<SourceObjectRow>(
+        `SELECT * FROM source_objects WHERE client_id = $1 AND source_object_id = $2 FOR UPDATE`,
+        [cmd.clientId, discoveredSourceObjectId]
+      );
+      if (sourceRes.rows.length === 0 || sourceRes.rows[0]!.availability !== "available") {
+        throw new AccessDeniedError(
+          "Underlying source object is unavailable.",
+          "SOURCE_UNAVAILABLE"
+        );
+      }
+
+      // Next lock evidence_assets row FOR UPDATE
       const assetRes = await client.query<EvidenceAssetRow>(
         `SELECT * FROM evidence_assets
          WHERE client_id = $1 AND evidence_id = $2 FOR UPDATE`,
@@ -1183,7 +1318,7 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
         );
       }
 
-      // Verify EvidenceRevision exists
+      // Lock EvidenceRevision row FOR UPDATE
       const revRes = await client.query<EvidenceRevisionRow>(
         `SELECT * FROM evidence_revisions
          WHERE client_id = $1 AND evidence_id = $2 AND revision = $3 FOR UPDATE`,
@@ -1193,41 +1328,6 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
         throw new NotFoundError(
           "EvidenceRevision",
           `${cmd.payload.evidenceId}:${cmd.payload.evidenceRevision}`
-        );
-      }
-
-      // Verify associated batch and SKU are not archived (lock SKU and batch rows for share)
-      const skuRes = await client.query<{
-        sku_archived_at: Date | null;
-        batch_archived_at: Date | null;
-      }>(
-        `SELECT s.archived_at AS sku_archived_at, b.archived_at AS batch_archived_at
-         FROM batch_evidence_links l
-         JOIN product_batches b ON b.client_id = l.client_id AND b.batch_id = l.batch_id
-         JOIN product_skus s ON s.client_id = b.client_id AND s.sku_id = b.sku_id
-         WHERE l.client_id = $1 AND l.evidence_id = $2 AND l.evidence_revision = $3
-         FOR SHARE OF s, b`,
-        [cmd.clientId, cmd.payload.evidenceId, cmd.payload.evidenceRevision]
-      );
-      if (skuRes.rows.length === 0) {
-        throw new NotFoundError("ProductBatch", "Associated batch link not found");
-      }
-      if (skuRes.rows.some((r) => r.batch_archived_at !== null)) {
-        throw new AccessDeniedError("Associated batch is archived.", "BATCH_ARCHIVED");
-      }
-      if (skuRes.rows.some((r) => r.sku_archived_at !== null)) {
-        throw new AccessDeniedError("Associated SKU is archived.", "SKU_ARCHIVED");
-      }
-
-      // Verify underlying source object availability (lock source_objects row for update)
-      const sourceRes = await client.query<SourceObjectRow>(
-        `SELECT * FROM source_objects WHERE client_id = $1 AND source_object_id = $2 FOR UPDATE`,
-        [cmd.clientId, revRes.rows[0]!.source_object_id]
-      );
-      if (sourceRes.rows.length === 0 || sourceRes.rows[0]!.availability !== "available") {
-        throw new AccessDeniedError(
-          "Underlying source object is unavailable.",
-          "SOURCE_UNAVAILABLE"
         );
       }
 
@@ -1329,7 +1429,27 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
         return rehydrateEvidenceVerificationEvent(result);
       }
 
-      // Verify EvidenceAsset exists, belongs to client, and is not archived
+      // Discover source_object_id before locking to maintain canonical order: Source -> Evidence
+      const discoveryRevRes = await client.query<{ source_object_id: string }>(
+        `SELECT source_object_id FROM evidence_revisions
+         WHERE client_id = $1 AND evidence_id = $2 AND revision = $3`,
+        [cmd.clientId, cmd.payload.evidenceId, cmd.payload.evidenceRevision]
+      );
+      if (discoveryRevRes.rows.length === 0) {
+        throw new NotFoundError(
+          "EvidenceRevision",
+          `${cmd.payload.evidenceId}:${cmd.payload.evidenceRevision}`
+        );
+      }
+      const discoveredSourceObjectId = discoveryRevRes.rows[0]!.source_object_id;
+
+      // 1. Lock underlying source_objects row FOR UPDATE first
+      await client.query(
+        `SELECT 1 FROM source_objects WHERE client_id = $1 AND source_object_id = $2 FOR UPDATE`,
+        [cmd.clientId, discoveredSourceObjectId]
+      );
+
+      // 2. Lock EvidenceAsset row FOR UPDATE
       const assetRes = await client.query<{ archived_at: Date | null }>(
         `SELECT archived_at FROM evidence_assets
          WHERE client_id = $1 AND evidence_id = $2 FOR UPDATE`,
@@ -1342,7 +1462,7 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
         throw new AccessDeniedError("Target evidence asset is archived.", "EVIDENCE_ARCHIVED");
       }
 
-      // Verify EvidenceRevision exists
+      // 3. Lock EvidenceRevision row FOR UPDATE
       const revRes = await client.query<EvidenceRevisionRow>(
         `SELECT * FROM evidence_revisions
          WHERE client_id = $1 AND evidence_id = $2 AND revision = $3 FOR UPDATE`,
@@ -1354,12 +1474,6 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
           `${cmd.payload.evidenceId}:${cmd.payload.evidenceRevision}`
         );
       }
-
-      // Lock underlying source_objects row FOR UPDATE so dispute checks and event appends synchronize
-      await client.query(
-        `SELECT 1 FROM source_objects WHERE client_id = $1 AND source_object_id = $2 FOR UPDATE`,
-        [cmd.clientId, revRes.rows[0]!.source_object_id]
-      );
 
       if (cmd.payload.withdrawalEventId) {
         const priorEventRes = await client.query<{ event_id: string }>(

@@ -61,9 +61,64 @@ describe("PostgresEvidenceAssetRepository unit tests", () => {
   function createMockPoolClient(
     handler: (normSql: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>
   ) {
+    let lastSkuArchivedAt: Date | null | undefined;
+    let lastBatchArchivedAt: Date | null | undefined;
+
     return {
       query: vi.fn(async (sql: string, params?: unknown[]) => {
-        return await handler(normalizeSql(sql), params);
+        const norm = normalizeSql(sql);
+        const result = await handler(norm, params);
+
+        if (result.rows.length > 0) {
+          if ("sku_archived_at" in result.rows[0]!) {
+            lastSkuArchivedAt = result.rows[0]!.sku_archived_at as Date | null;
+          }
+          if ("batch_archived_at" in result.rows[0]!) {
+            lastBatchArchivedAt = result.rows[0]!.batch_archived_at as Date | null;
+          }
+        }
+
+        const lower = norm.toLowerCase();
+        if (lower.includes("from product_skus") && result.rows.length === 0) {
+          const skuId = (params?.[1] as string) || "018f0000-0000-7000-8000-000000000005";
+          return {
+            rows: [
+              {
+                sku_id: skuId,
+                archived_at: lastSkuArchivedAt ?? null
+              }
+            ]
+          };
+        }
+
+        if (
+          lower.includes("from product_batches") &&
+          lower.includes("for") &&
+          result.rows.length === 0
+        ) {
+          const bId = (params?.[1] as string) || "018f0000-0000-7000-8000-000000000002";
+          return {
+            rows: [
+              {
+                batch_id: bId,
+                archived_at: lastBatchArchivedAt ?? null,
+                sku_id: (params?.[1] as string) || "018f0000-0000-7000-8000-000000000005"
+              }
+            ]
+          };
+        }
+
+        if (lower.includes("from batch_evidence_links") && result.rows.length > 0) {
+          return {
+            rows: result.rows.map((r) => ({
+              batch_id: r.batch_id ?? "018f0000-0000-7000-8000-000000000002",
+              sku_id: r.sku_id ?? "018f0000-0000-7000-8000-000000000005",
+              ...r
+            }))
+          };
+        }
+
+        return result;
       }),
       getTransactionStatus: vi.fn(() => "T"),
       release: vi.fn()
@@ -546,6 +601,39 @@ describe("PostgresEvidenceAssetRepository unit tests", () => {
       const client = createMockPoolClient(async (sql) => {
         if (sql.includes("product_evidence_command_receipts")) {
           return { rows: [] };
+        }
+        if (sql.includes("evidence_revisions")) {
+          return {
+            rows: [
+              {
+                client_id: clientId,
+                evidence_id: evidenceId,
+                revision: 1,
+                source_object_id: sourceObjectId
+              }
+            ]
+          };
+        }
+        if (sql.includes("batch_evidence_links")) {
+          return {
+            rows: [
+              {
+                sku_archived_at: null,
+                batch_archived_at: null
+              }
+            ]
+          };
+        }
+        if (sql.includes("source_objects")) {
+          return {
+            rows: [
+              {
+                source_object_id: sourceObjectId,
+                client_id: clientId,
+                availability: "available"
+              }
+            ]
+          };
         }
         if (sql.includes("evidence_assets")) {
           return {

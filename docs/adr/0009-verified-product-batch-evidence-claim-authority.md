@@ -182,13 +182,24 @@ erDiagram
   - `labNameAsClaimed`: Name of the laboratory reported on the document.
   - `verifiedLabIdentityEventId`: Optional foreign key to an `EvidenceVerificationEvent` corroborating accredited laboratory identity and accreditation license. The referenced verification event must belong to the same client, evidence asset, and evidence revision (`outcome = 'verified'`, `fact_scope = 'lab_identity'`, `verification_kind = 'independent_third_party_corroboration'`).
 - **Strict Decimal Representations (`CoaMeasurement`):**
-  - All numerical measurements are stored as **exact decimal strings** conforming to `^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`. Floating-point numbers (`NUMERIC` in SQL, `string` in TypeScript; never IEEE 754 `number`) are mandatory to eliminate rounding and scale loss.
+  - All numerical measurements are stored as **exact decimal strings** conforming to `^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`. Exact decimal representations (`TEXT` in SQL, `string` in TypeScript; never IEEE 754 `number`) are mandatory to eliminate rounding and scale loss.
   - **Typed Result Union:**
     - `quantified`: Exact measured value (`value: DecimalString`).
     - `below_limit`: Below limit of quantification (`limit: DecimalString`, `qualifier: "lt" | "lte"`).
     - `not_detected`: Analyte was not detected by the analytical instrument.
   - **Mandatory Units & Context:** Every measurement row requires non-empty strings for `analyte` (e.g., `thc_total`, `myrcene`), `unit` (e.g., `percent_w_w`, `mg_per_g`, `ppm`), `basis` (e.g., `dry_weight`, `as_received`), and `context` (e.g., `finished_inflorescence`, `extract`). Ambiguous or unitless measurements fail closed.
+  - **Exact Decimal String Storage (`TEXT`):** All analytical numbers (measurements, limits, uncertainties) are stored as verbatim decimal strings conforming to `^-?(0|[1-9][0-9]*)(\.[0-9]+)?$` with zero IEEE-754 floating-point coercion, preserving trailing precision zeros.
+  - **Reported Methods & Analytical Qualifiers:** `methodAsReported` is optional and nullable (transcribed verbatim when reported; left null rather than fabricating a placeholder). Analytical qualifiers (e.g. `negative_as_reported`) require non-blank analytical explanations and remain unsupported for positive numerical claims until explicitly governed.
+  - **Measurement Panel Sealing:** The measurement set is sealed upon revision commit; additions to an approved or committed revision require creating a new revision.
   - **Lineage Integrity:** Measurements inherit and mechanically enforce the exact `(batch_id, evidence_id, evidence_revision)` of their parent `CoaReportRevision`.
+- **Completeness & Draft States (`completenessStatus`):**
+  - `draft`: Incomplete metadata or preliminary staging; cannot be approved or satisfy measurement support resolution for downstream claims.
+  - `complete`: All claimed report identifiers, report date, lab name, sample-to-batch association confirmation, and at least one valid measurement row are provided.
+- **Independent Compliance Review & Non-Self-Approval (`CoaReportReviewEvent`):**
+  - Transcription and compliance review are strictly separated authorities. A compliance reviewer cannot approve their own recorded report revision (`assertedBy`).
+  - Assessed scope cannot exceed report scope (`sample_only` reports cannot be approved as `attributed_lot`).
+- **Fail-Closed Pinned Measurement Support Resolution:**
+  - Downstream callers specify explicit report revision and measurement IDs (`resolveMeasurementSupport`). Support fails closed if the report is unreviewed, draft, disputed, quarantined, superseded, archived, or mismatched in requested unit, basis, or context. Pinned callers are never silently redirected to a "latest" report.
 
 #### 2.8 ProductClaimRevision and ClaimSourceLink
 - **Claim Types:**
@@ -623,7 +634,7 @@ export interface CoaMeasurement {
   readonly unit: string;
   readonly basis: string;
   readonly context: string;
-  readonly methodAsReported: string;
+  readonly methodAsReported: string | null;
 }
 
 export interface ProductClaim {
@@ -1042,15 +1053,19 @@ CREATE TABLE coa_report_revisions (
   batch_id UUID NOT NULL,
   evidence_id UUID NOT NULL,
   evidence_revision INT NOT NULL,
-  report_identifier_as_claimed VARCHAR(128) NOT NULL,
-  report_date DATE NOT NULL,
-  lab_name_as_claimed VARCHAR(255) NOT NULL,
-  sample_identifier_as_claimed VARCHAR(128) NOT NULL,
-  scope_kind VARCHAR(32) NOT NULL
-    CHECK (scope_kind IN ('sample_only', 'attributed_lot')),
-  scope_description TEXT NOT NULL,
+  completeness_status VARCHAR(16) NOT NULL DEFAULT 'draft'
+    CHECK (completeness_status IN ('draft', 'complete')),
+  report_identifier_as_claimed VARCHAR(128),
+  report_date DATE,
+  lab_name_as_claimed VARCHAR(255),
+  sample_identifier_as_claimed VARCHAR(128),
+  scope_kind VARCHAR(32)
+    CHECK (scope_kind IS NULL OR scope_kind IN ('sample_only', 'attributed_lot')),
+  scope_description TEXT,
   sample_date DATE,
   sampling_method_description TEXT,
+  sample_to_batch_association_attestation TEXT,
+  sample_to_batch_association_confirmed BOOLEAN,
   verified_lab_identity_event_id UUID,
   asserted_by VARCHAR(128) NOT NULL,
   asserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1067,7 +1082,7 @@ CREATE TABLE coa_report_revisions (
     REFERENCES coa_report_revisions(client_id, report_id, revision) ON DELETE RESTRICT,
   CONSTRAINT chk_coa_report_rev_monotonic CHECK (
     (revision = 1 AND supersedes_revision IS NULL) OR
-    (revision > 1 AND supersedes_revision IS NOT NULL AND supersedes_revision < revision)
+    (revision > 1 AND supersedes_revision IS NOT NULL AND supersedes_revision = revision - 1)
   ),
   CONSTRAINT uq_coa_report_rev_predecessor UNIQUE (client_id, report_id, supersedes_revision)
 );
@@ -1096,7 +1111,11 @@ CREATE TABLE coa_measurements (
   unit VARCHAR(64) NOT NULL,
   basis VARCHAR(64) NOT NULL,
   context VARCHAR(64) NOT NULL,
-  method_as_reported VARCHAR(128) NOT NULL,
+  quantity_kind VARCHAR(64) NOT NULL,
+  method_as_reported VARCHAR(128),
+  uncertainty_absolute TEXT,
+  detection_limit TEXT,
+  quantification_limit TEXT,
   CONSTRAINT uq_coa_measurements_full UNIQUE (client_id, report_id, report_revision, measurement_id),
   CONSTRAINT uq_coa_measurements_lineage UNIQUE (client_id, report_id, report_revision, measurement_id, batch_id, evidence_id, evidence_revision),
   CONSTRAINT fk_coa_measurements_report FOREIGN KEY (client_id, report_id, report_revision, batch_id, evidence_id, evidence_revision)
@@ -1117,6 +1136,27 @@ CREATE TABLE coa_measurements (
 
 CREATE INDEX idx_coa_measurements_analyte
   ON coa_measurements(client_id, report_id, report_revision, analyte);
+
+CREATE TABLE coa_report_review_events (
+  event_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id UUID NOT NULL,
+  report_id UUID NOT NULL,
+  report_revision INT NOT NULL CHECK (report_revision > 0),
+  decision VARCHAR(16) NOT NULL
+    CHECK (decision IN ('approved', 'rejected')),
+  actor_id VARCHAR(128) NOT NULL,
+  occurred_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  reason TEXT NOT NULL,
+  assessed_scope VARCHAR(32) NOT NULL
+    CHECK (assessed_scope IN ('sample_only', 'attributed_lot')),
+  CONSTRAINT uq_coa_review_events_client_event UNIQUE (client_id, event_id),
+  CONSTRAINT uq_coa_review_events_decision_per_rev UNIQUE (client_id, report_id, report_revision),
+  CONSTRAINT fk_coa_review_events_revision FOREIGN KEY (client_id, report_id, report_revision)
+    REFERENCES coa_report_revisions(client_id, report_id, revision) ON DELETE RESTRICT
+);
+
+CREATE INDEX idx_coa_review_events_revision
+  ON coa_report_review_events(client_id, report_id, report_revision);
 
 -- ---------------------------------------------------------------------------
 -- 9. PRODUCT CLAIMS, REVISIONS & SOURCE LINKS
@@ -1506,47 +1546,65 @@ export interface IngestCoaMeasurementInput {
   readonly unit: string;
   readonly basis: string;
   readonly context: string;
-  readonly methodAsReported: string;
+  readonly quantityKind: string;
+  readonly methodAsReported: string | null;
+  readonly uncertaintyAbsolute?: DecimalString | null;
+  readonly detectionLimit?: DecimalString | null;
+  readonly quantificationLimit?: DecimalString | null;
+  readonly analyticalQualifierCode?: string | null;
+  readonly analyticalQualifierExplanation?: string | null;
 }
 
 export interface CreateCoaReportCommand {
+  readonly reportId?: CoaReportId;
   readonly batchId: BatchId;
   readonly evidenceId: EvidenceId;
   readonly evidenceRevision: number;
-  readonly reportIdentifierAsClaimed: string;
-  readonly reportDate: DateOnlyString;
-  readonly labNameAsClaimed: string;
-  readonly sampleIdentifierAsClaimed: string;
-  readonly scopeKind: CoaScopeKind;
-  readonly scopeDescription: string;
-  readonly sampleDate: DateOnlyString | null;
-  readonly samplingMethodDescription: string | null;
-  readonly verifiedLabIdentityEventId: VerificationEventId | null;
+  readonly completenessStatus: "draft" | "complete";
+  readonly reportIdentifierAsClaimed?: string | null;
+  readonly reportDate?: DateOnlyString | null;
+  readonly labNameAsClaimed?: string | null;
+  readonly sampleIdentifierAsClaimed?: string | null;
+  readonly scopeKind?: CoaScopeKind | null;
+  readonly scopeDescription?: string | null;
+  readonly sampleDate?: DateOnlyString | null;
+  readonly samplingMethodDescription?: string | null;
+  readonly sampleToBatchAssociationConfirmed?: boolean | null;
+  readonly sampleToBatchAssociationAttestation?: string | null;
+  readonly verifiedLabIdentityEventId?: VerificationEventId | null;
   readonly measurements: readonly IngestCoaMeasurementInput[];
 }
 
 export interface SupersedeCoaReportCommand {
   readonly reportId: CoaReportId;
   readonly expectedVersion: number;
-  readonly batchId: BatchId;
-  readonly evidenceId: EvidenceId;
   readonly evidenceRevision: number;
-  readonly reportIdentifierAsClaimed: string;
-  readonly reportDate: DateOnlyString;
-  readonly labNameAsClaimed: string;
-  readonly sampleIdentifierAsClaimed: string;
-  readonly scopeKind: CoaScopeKind;
-  readonly scopeDescription: string;
-  readonly sampleDate: DateOnlyString | null;
-  readonly samplingMethodDescription: string | null;
-  readonly verifiedLabIdentityEventId: VerificationEventId | null;
+  readonly completenessStatus: "draft" | "complete";
+  readonly reportIdentifierAsClaimed?: string | null;
+  readonly reportDate?: DateOnlyString | null;
+  readonly labNameAsClaimed?: string | null;
+  readonly sampleIdentifierAsClaimed?: string | null;
+  readonly scopeKind?: CoaScopeKind | null;
+  readonly scopeDescription?: string | null;
+  readonly sampleDate?: DateOnlyString | null;
+  readonly samplingMethodDescription?: string | null;
+  readonly sampleToBatchAssociationConfirmed?: boolean | null;
+  readonly sampleToBatchAssociationAttestation?: string | null;
+  readonly verifiedLabIdentityEventId?: VerificationEventId | null;
   readonly measurements: readonly IngestCoaMeasurementInput[];
 }
 
-export interface DisputeCoaReportCommand {
+export interface ReviewCoaReportCommand {
   readonly reportId: CoaReportId;
   readonly expectedVersion: number;
+  readonly decision: "approved" | "rejected";
   readonly reason: string;
+  readonly assessedScope: CoaScopeKind;
+}
+
+export interface ArchiveCoaReportCommand {
+  readonly reportId: CoaReportId;
+  readonly expectedVersion: number;
 }
 
 export type CreateClaimCommand =
@@ -1637,9 +1695,11 @@ export interface ProductEvidenceRepositoryPort {
   createEvidenceDerivative(cmd: CommandEnvelope<CreateDerivativeCommand>): Promise<EvidenceDerivative>;
   recordVerificationEvent(cmd: CommandEnvelope<RecordVerificationCommand>): Promise<EvidenceVerificationEvent>;
   
-  createCoaReport(cmd: CommandEnvelope<CreateCoaReportCommand>): Promise<CoaReportRevision>;
-  supersedeCoaReport(cmd: CommandEnvelope<SupersedeCoaReportCommand>): Promise<CoaReportRevision>;
-  disputeCoaReport(cmd: CommandEnvelope<DisputeCoaReportCommand>): Promise<CoaReportRevision>;
+  createCoaReport(cmd: CommandEnvelope<CreateCoaReportCommand>): Promise<CoaReportCreationResult>;
+  supersedeCoaReport(cmd: CommandEnvelope<SupersedeCoaReportCommand>): Promise<CoaReportSupersessionResult>;
+  reviewCoaReport(cmd: CommandEnvelope<ReviewCoaReportCommand>): Promise<CoaReportReviewResult>;
+  archiveCoaReport(cmd: CommandEnvelope<ArchiveCoaReportCommand>): Promise<CoaReport>;
+  resolveMeasurementSupport(query: ResolveCoaMeasurementSupportQuery): Promise<ResolveCoaMeasurementSupportResponse>;
   
   createClaim(cmd: CommandEnvelope<CreateClaimCommand>): Promise<ProductClaimRevision>;
   appendClaimRevision(cmd: CommandEnvelope<AppendClaimRevisionCommand>): Promise<ProductClaimRevision>;

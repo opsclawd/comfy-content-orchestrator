@@ -397,7 +397,11 @@ const PRODUCT_REGISTRY_TABLES = new Set<string>([
   "batch_evidence_links",
   "evidence_derivatives",
   "evidence_verification_events",
-  "evidence_ingest_reservations"
+  "evidence_ingest_reservations",
+  "coa_reports",
+  "coa_report_revisions",
+  "coa_measurements",
+  "coa_report_review_events"
 ]);
 
 const REGISTRY_CONSTRAINTS = new Set<string>([
@@ -540,7 +544,54 @@ const REGISTRY_CONSTRAINTS = new Set<string>([
   "evidence_ingest_reservations_reserved_bytes_check",
   "evidence_ingest_reservations_status_check",
   "chk_reservation_sha256_format",
-  "chk_reservation_timestamps"
+  "chk_reservation_timestamps",
+  "coa_reports_pkey",
+  "uq_coa_reports_client_report",
+  "uq_coa_reports_client_batch_evidence",
+  "uq_coa_reports_head_identity",
+  "fk_coa_reports_batch",
+  "fk_coa_reports_evidence",
+  "fk_coa_reports_current_rev",
+  "chk_coa_reports_created_at",
+  "chk_coa_reports_archived_at",
+  "coa_report_revisions_pkey",
+  "uq_coa_report_revisions_lineage",
+  "fk_coa_report_revisions_head",
+  "fk_coa_report_revisions_head_identity",
+  "fk_coa_report_batch_evidence",
+  "fk_coa_report_verified_lab",
+  "fk_coa_report_predecessor",
+  "chk_coa_report_rev_monotonic",
+  "uq_coa_report_rev_predecessor",
+  "chk_coa_report_asserted_by_nonempty",
+  "chk_coa_report_asserted_at",
+  "chk_coa_report_dates_range",
+  "chk_coa_report_sample_date_le_report_date",
+  "chk_coa_report_dates_le_asserted_at",
+  "chk_coa_report_complete_requirements",
+  "trg_check_coa_report_complete_measurements",
+  "coa_measurements_pkey",
+  "uq_coa_measurements_full",
+  "uq_coa_measurements_lineage",
+  "uq_coa_measurements_analyte_context",
+  "fk_coa_measurements_report",
+  "chk_coa_measurement_strings_nonempty",
+  "chk_coa_measurement_quantified",
+  "chk_coa_measurement_below_limit",
+  "chk_coa_measurement_not_detected",
+  "chk_coa_measurement_metadata",
+  "chk_coa_measurement_percent_bounds",
+  "chk_coa_measurement_fraction_bounds",
+  "chk_coa_measurement_unit_contradictions",
+  "trg_enforce_coa_measurements_insert",
+  "coa_report_review_events_pkey",
+  "uq_coa_review_events_client_event",
+  "uq_coa_review_events_decision_per_rev",
+  "fk_coa_review_events_revision",
+  "chk_coa_review_events_reason_nonempty",
+  "chk_coa_review_events_actor_nonempty",
+  "chk_coa_review_events_occurred_at",
+  "trg_check_coa_report_review_event_invariants"
 ]);
 
 export function translateDatabaseError(
@@ -638,6 +689,42 @@ export function translateDatabaseError(
         if (dbErr.constraint === "evidence_ingest_reservations_pkey") {
           throw new ConcurrencyConflictError(
             `Duplicate evidence ingest reservation conflict: ${dbErr.message}`
+          );
+        }
+        if (dbErr.constraint === "uq_coa_reports_client_batch_evidence") {
+          throw new ConcurrencyConflictError(
+            "A CoA report already exists for this client, batch, and evidence asset."
+          );
+        }
+        if (
+          dbErr.constraint === "uq_coa_reports_client_report" ||
+          dbErr.constraint === "coa_reports_pkey"
+        ) {
+          throw new ConcurrencyConflictError(`Duplicate CoA report conflict: ${dbErr.message}`);
+        }
+        if (
+          dbErr.constraint === "uq_coa_report_rev_predecessor" ||
+          dbErr.constraint === "coa_report_revisions_pkey"
+        ) {
+          throw new NonMonotonicRevisionError(
+            "CoA report revision conflict: duplicate or forked revision"
+          );
+        }
+        if (dbErr.constraint === "uq_coa_measurements_analyte_context") {
+          throw new ProductValidationError([
+            {
+              code: "INVALID_FIELD_COMBINATION",
+              path: ["measurements"],
+              message: "Duplicate analyte + basis + context in report revision"
+            }
+          ]);
+        }
+        if (
+          dbErr.constraint === "uq_coa_review_events_decision_per_rev" ||
+          dbErr.constraint === "coa_report_review_events_pkey"
+        ) {
+          throw new ConcurrencyConflictError(
+            "A review decision already exists for this report revision."
           );
         }
         if (
@@ -754,6 +841,50 @@ export function translateDatabaseError(
             "Referenced withdrawal event does not exist"
           );
         }
+        if (dbErr.constraint === "fk_coa_reports_current_rev") {
+          throw new StaleRevisionConflictError("CoaReport", 0, 0);
+        }
+        if (dbErr.constraint === "fk_coa_reports_batch") {
+          throw new NotFoundError("ProductBatch", context?.batchId ?? "unknown");
+        }
+        if (dbErr.constraint === "fk_coa_reports_evidence") {
+          throw new NotFoundError("EvidenceAsset", "Referenced evidence asset does not exist");
+        }
+        if (dbErr.constraint === "fk_coa_report_batch_evidence") {
+          throw new NotFoundError(
+            "BatchEvidenceLink",
+            "Referenced evidence revision is not linked to this batch"
+          );
+        }
+        if (dbErr.constraint === "fk_coa_report_verified_lab") {
+          throw new NotFoundError(
+            "EvidenceVerificationEvent",
+            "Referenced verified lab identity event does not exist"
+          );
+        }
+        if (dbErr.constraint === "fk_coa_report_revisions_head") {
+          throw new NotFoundError("CoaReport", "Referenced CoA report head does not exist");
+        }
+        if (dbErr.constraint === "fk_coa_report_revisions_head_identity") {
+          throw new CrossBatchSourceError(
+            "CoA report revision batch or evidence does not match report head"
+          );
+        }
+        if (dbErr.constraint === "fk_coa_measurements_report") {
+          throw new NotFoundError(
+            "CoaReportRevision",
+            "Referenced CoA report revision does not exist"
+          );
+        }
+        if (dbErr.constraint === "fk_coa_report_predecessor") {
+          throw new NonMonotonicRevisionError("Predecessor CoA report revision does not exist");
+        }
+        if (dbErr.constraint === "fk_coa_review_events_revision") {
+          throw new NotFoundError(
+            "CoaReportRevision",
+            "Referenced CoA report revision does not exist"
+          );
+        }
         if (
           (dbErr.constraint && REGISTRY_CONSTRAINTS.has(dbErr.constraint)) ||
           (dbErr.table && PRODUCT_REGISTRY_TABLES.has(dbErr.table))
@@ -789,7 +920,9 @@ export function translateDatabaseError(
           dbErr.message.includes("updated_at must be nondecreasing") ||
           dbErr.message.includes("Permanent evidence asset identity") ||
           dbErr.message.includes("Permanent source object binary columns") ||
+          dbErr.message.includes("Permanent CoA report identity") ||
           dbErr.message.includes("Archived evidence asset") ||
+          dbErr.message.includes("Archived CoA report") ||
           dbErr.message.includes("Archived source objects") ||
           dbErr.message.includes("Deleted source objects") ||
           dbErr.message.includes("Quarantined, archived, or deleted") ||
@@ -823,9 +956,45 @@ export function translateDatabaseError(
         // Check constraints - strictly allowlisted registry checks only
         if (
           dbErr.constraint === "chk_evidence_rev_monotonic" ||
-          dbErr.constraint === "chk_evidence_revision_supersedes_not_self"
+          dbErr.constraint === "chk_evidence_revision_supersedes_not_self" ||
+          dbErr.constraint === "chk_coa_report_rev_monotonic"
         ) {
-          throw new NonMonotonicRevisionError("Evidence revision must be contiguous and monotonic");
+          throw new NonMonotonicRevisionError("Revision must be contiguous and monotonic");
+        }
+        if (
+          dbErr.constraint === "trg_check_coa_report_complete_measurements" ||
+          dbErr.message.includes("must contain at least one measurement")
+        ) {
+          throw new ProductValidationError([
+            {
+              code: "INVALID_FIELD_COMBINATION",
+              path: ["measurements"],
+              message: "Complete CoA report revisions must contain at least one measurement."
+            }
+          ]);
+        }
+        if (
+          dbErr.constraint === "trg_enforce_coa_measurements_insert" ||
+          dbErr.message.includes("Cannot insert measurements into")
+        ) {
+          throw new AccessDeniedError(dbErr.message);
+        }
+        if (
+          dbErr.constraint === "trg_check_coa_report_review_event_invariants" ||
+          dbErr.message.includes("Cannot approve a draft") ||
+          dbErr.message.includes("Assessed scope cannot be attributed_lot") ||
+          dbErr.message.includes("Self-approval forbidden")
+        ) {
+          if (dbErr.message.includes("Self-approval forbidden")) {
+            throw new AccessDeniedError(dbErr.message);
+          }
+          throw new ProductValidationError([
+            {
+              code: "INVALID_FIELD_COMBINATION",
+              path: ["decision"],
+              message: dbErr.message
+            }
+          ]);
         }
         if (dbErr.constraint === "chk_batch_facts_monotonic_rev") {
           throw new NonMonotonicRevisionError(
@@ -972,6 +1141,7 @@ export function translateDatabaseError(
           dbErr.constraint?.startsWith("chk_derivative_") ||
           dbErr.constraint?.startsWith("chk_verification_events_") ||
           dbErr.constraint?.startsWith("chk_reservation_") ||
+          dbErr.constraint?.startsWith("chk_coa_") ||
           dbErr.constraint === "chk_sha256_format" ||
           (dbErr.table && PRODUCT_REGISTRY_TABLES.has(dbErr.table))
         ) {
