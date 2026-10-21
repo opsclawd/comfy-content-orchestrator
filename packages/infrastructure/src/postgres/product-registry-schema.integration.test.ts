@@ -55,7 +55,9 @@ describe("PostgreSQL product registry schema and protection integration", () => 
 
     const tablesRes = await client.query<{ table_name: string }>(
       `SELECT table_name FROM information_schema.tables
-       WHERE table_schema = 'public' AND table_name LIKE 'product!_%' ESCAPE '!'
+       WHERE table_schema = 'public'
+         AND table_name LIKE 'product!_%' ESCAPE '!'
+         AND table_name NOT LIKE 'product!_claim%' ESCAPE '!'
        ORDER BY table_name ASC`
     );
 

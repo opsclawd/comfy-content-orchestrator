@@ -22,3 +22,5 @@ export * from "./source-object.js";
 export * from "./evidence-asset.js";
 export * from "./coa-measurement.js";
 export * from "./coa-report.js";
+export * from "./product-claim.js";
+export * from "./claim-eligibility.js";

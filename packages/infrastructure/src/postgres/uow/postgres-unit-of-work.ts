@@ -20,6 +20,7 @@ import {
 } from "../repositories/postgres-product-evidence-repository.js";
 import { PostgresEvidenceAssetRepository } from "../../evidence/postgres-evidence-asset-repository.js";
 import { PostgresCoaReportRepository } from "../repositories/postgres-coa-report-repository.js";
+import { PostgresProductClaimRepository } from "../repositories/postgres-product-claim-repository.js";
 
 export class PostgresUnitOfWork implements UnitOfWork {
   constructor(private readonly pool: Pool) {}
@@ -52,6 +53,9 @@ export class PostgresUnitOfWork implements UnitOfWork {
           externalTransaction: true
         }),
         coaReports: new PostgresCoaReportRepository(client, {
+          externalTransaction: true
+        }),
+        productClaims: new PostgresProductClaimRepository(client, {
           externalTransaction: true
         })
       };

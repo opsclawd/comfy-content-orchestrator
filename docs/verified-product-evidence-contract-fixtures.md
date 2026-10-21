@@ -532,24 +532,35 @@ sequenceDiagram
     "timestamp": "2026-03-24T10:35:00.000Z",
     "payload": {
       "batchId": "018f0000-0002-7000-8000-000000000001",
-      "claimType": "potency_cannabinoid",
-      "wording": "Total THC: 24.50% (Tested sample)",
+      "canonicalKind": "certificate_panel_measurement",
       "proofCategory": "coa_measurement_backed",
-      "hasNumericalSupport": true,
-      "numericalValue": "24.50",
-      "numericalUnit": "percent_w_w",
-      "policyVersion": "v1.0"
+      "parameters": {
+        "kind": "certificate_panel_measurement",
+        "panelName": "Cannabinoids",
+        "measurements": [
+          {
+            "analyte": "thc_total",
+            "exactDecimalValue": "24.50",
+            "unit": "percent_w_w",
+            "basis": "dry_weight",
+            "context": "finished_flower",
+            "quantityKind": "mass_fraction",
+            "requiredScope": "sample_only"
+          }
+        ]
+      },
+      "displayWording": "Total THC: 24.50% (Tested sample)"
     }
   }
   ```
 - **Database Mutation:**
   ```sql
   BEGIN;
-  INSERT INTO product_claims (claim_id, client_id, batch_id, current_revision, state, version)
-  VALUES ('018f0000-0009-7000-8000-000000000001', '018f0000-0000-7000-8000-000000000001', '018f0000-0002-7000-8000-000000000001', 1, 'draft', 1);
+  INSERT INTO product_claims (claim_id, client_id, sku_id, batch_id, current_revision, state, version, created_at, updated_at)
+  VALUES ('018f0000-0009-7000-8000-000000000001', '018f0000-0000-7000-8000-000000000001', '018f0000-0001-7000-8000-000000000001', '018f0000-0002-7000-8000-000000000001', 1, 'draft', 1, '2026-03-24T10:35:00.000Z', '2026-03-24T10:35:00.000Z');
 
-  INSERT INTO product_claim_revisions (client_id, claim_id, revision, batch_id, claim_type, wording, proof_category, numerical_value, numerical_unit, created_by, policy_version, supersedes_revision)
-  VALUES ('018f0000-0000-7000-8000-000000000001', '018f0000-0009-7000-8000-000000000001', 1, '018f0000-0002-7000-8000-000000000001', 'potency_cannabinoid', 'Total THC: 24.50% (Tested sample)', 'coa_measurement_backed', '24.50', 'percent_w_w', 'copywriter_sally', 'v1.0', NULL);
+  INSERT INTO product_claim_revisions (client_id, claim_id, revision, batch_id, canonical_kind, proof_category, parameters_json, display_wording, policy_version, asserted_by, asserted_at)
+  VALUES ('018f0000-0000-7000-8000-000000000001', '018f0000-0009-7000-8000-000000000001', 1, '018f0000-0002-7000-8000-000000000001', 'certificate_panel_measurement', 'coa_measurement_backed', '{"kind":"certificate_panel_measurement","panelName":"Cannabinoids","measurements":[{"analyte":"thc_total","exactDecimalValue":"24.50","unit":"percent_w_w","basis":"dry_weight","context":"finished_flower","quantityKind":"mass_fraction","requiredScope":"sample_only"}]}', 'Total THC: 24.50% (Tested sample)', '2026-03-31', 'copywriter_sally', '2026-03-24T10:35:00.000Z');
 
   INSERT INTO product_evidence_command_receipts (client_id, action_id, command_name, payload_sha256, actor_id, response_body, committed_at)
   VALUES ('018f0000-0000-7000-8000-000000000001', '018f0000-0010-7000-8000-000000000012', 'createClaim', 'f7a2b3c4d5e6f7a2b3c4d5e6f7a2b3c4d5e6f7a2b3c4d5e6f7a2b3c4d5e6f7a2', 'copywriter_sally', '{"claimId":"018f0000-0009-7000-8000-000000000001","revision":1,"version":1,"state":"draft"}'::jsonb, NOW());
@@ -559,7 +570,7 @@ sequenceDiagram
 - **Result:** `ProductClaim` created with `state = 'draft'`, `version = 1`.
 
 #### Step 11: Link Claim to Measurement Source
-- **Command:** `linkClaimSources`
+- **Command:** `linkClaimEvidence`
 - **Envelope & Payload:**
   ```json
   {
@@ -571,10 +582,13 @@ sequenceDiagram
       "claimId": "018f0000-0009-7000-8000-000000000001",
       "claimRevision": 1,
       "expectedVersion": 1,
-      "sources": [
+      "reason": "Linking laboratory certificate",
+      "links": [
         {
           "evidenceId": "018f0000-0007-7000-8000-000000000001",
           "evidenceRevision": 1,
+          "sourceObjectId": "018f0000-0005-7000-8000-000000000001",
+          "sourceSha256": "c1d2e3f405162738495a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e",
           "supportRole": "primary_measurement",
           "reportId": "018f0000-0008-7000-8000-000000000001",
           "reportRevision": 1,
@@ -589,8 +603,8 @@ sequenceDiagram
   BEGIN;
   SELECT claim_id FROM product_claims WHERE client_id = '018f0000-0000-7000-8000-000000000001' AND claim_id = '018f0000-0009-7000-8000-000000000001' FOR UPDATE;
 
-  INSERT INTO claim_source_links (link_id, client_id, claim_id, claim_revision, batch_id, evidence_id, evidence_revision, support_role, report_id, report_revision, measurement_id)
-  VALUES ('018f0000-0030-7000-8000-000000000001', '018f0000-0000-7000-8000-000000000001', '018f0000-0009-7000-8000-000000000001', 1, '018f0000-0002-7000-8000-000000000001', '018f0000-0007-7000-8000-000000000001', 1, 'primary_measurement', '018f0000-0008-7000-8000-000000000001', 1, '018f0000-0020-7000-8000-000000000001');
+  INSERT INTO claim_source_links (link_id, client_id, claim_id, claim_revision, batch_id, evidence_id, evidence_revision, source_object_id, source_sha256, support_role, report_id, report_revision, measurement_id)
+  VALUES ('018f0000-0030-7000-8000-000000000001', '018f0000-0000-7000-8000-000000000001', '018f0000-0009-7000-8000-000000000001', 1, '018f0000-0002-7000-8000-000000000001', '018f0000-0007-7000-8000-000000000001', 1, '018f0000-0005-7000-8000-000000000001', 'c1d2e3f405162738495a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e', 'primary_measurement', '018f0000-0008-7000-8000-000000000001', 1, '018f0000-0020-7000-8000-000000000001');
 
   UPDATE product_claims
   SET state = 'evidence_linked',
@@ -600,8 +614,11 @@ sequenceDiagram
     AND claim_id = '018f0000-0009-7000-8000-000000000001'
     AND version = 1;
 
+  INSERT INTO claim_decision_events (event_id, client_id, claim_id, claim_revision, decision, actor_id, occurred_at, reason, policy_version)
+  VALUES ('018f0000-0040-7000-8000-000000000000', '018f0000-0000-7000-8000-000000000001', '018f0000-0009-7000-8000-000000000001', 1, 'link_evidence', 'copywriter_sally', NOW(), 'Linking laboratory certificate', 'claim_policy_v1');
+
   INSERT INTO product_evidence_command_receipts (client_id, action_id, command_name, payload_sha256, actor_id, response_body, committed_at)
-  VALUES ('018f0000-0000-7000-8000-000000000001', '018f0000-0010-7000-8000-000000000013', 'linkClaimSources', 'a3b4c5d6e7f8a3b4c5d6e7f8a3b4c5d6e7f8a3b4c5d6e7f8a3b4c5d6e7f8a3b4', 'copywriter_sally', '{"claimId":"018f0000-0009-7000-8000-000000000001","revision":1,"version":2,"state":"evidence_linked"}'::jsonb, NOW());
+  VALUES ('018f0000-0000-7000-8000-000000000001', '018f0000-0010-7000-8000-000000000013', 'linkClaimEvidence', 'a3b4c5d6e7f8a3b4c5d6e7f8a3b4c5d6e7f8a3b4c5d6e7f8a3b4c5d6e7f8a3b4', 'copywriter_sally', '{"claimId":"018f0000-0009-7000-8000-000000000001","revision":1,"version":2,"state":"evidence_linked"}'::jsonb, NOW());
 
   COMMIT;
   ```
@@ -628,16 +645,7 @@ sequenceDiagram
 - **Database Mutation:**
   ```sql
   BEGIN;
-  -- Lock claim and dependent parent records in hierarchical order
-  SELECT batch_id FROM product_batches WHERE client_id = '018f0000-0000-7000-8000-000000000001' AND batch_id = '018f0000-0002-7000-8000-000000000001' FOR UPDATE;
-  SELECT evidence_id FROM evidence_assets WHERE client_id = '018f0000-0000-7000-8000-000000000001' AND evidence_id = '018f0000-0007-7000-8000-000000000001' FOR UPDATE;
-  SELECT report_id FROM coa_reports WHERE client_id = '018f0000-0000-7000-8000-000000000001' AND report_id = '018f0000-0008-7000-8000-000000000001' FOR UPDATE;
   SELECT claim_id FROM product_claims WHERE client_id = '018f0000-0000-7000-8000-000000000001' AND claim_id = '018f0000-0009-7000-8000-000000000001' FOR UPDATE;
-
-  -- Pre-commit validation confirms CoA report rev 1 and evidence rev 1 remain current and active
-
-  INSERT INTO claim_decision_events (event_id, client_id, claim_id, claim_revision, decision, actor_id, occurred_at, reason)
-  VALUES ('018f0000-0040-7000-8000-000000000001', '018f0000-0000-7000-8000-000000000001', '018f0000-0009-7000-8000-000000000001', 1, 'approve', 'compliance_officer_jane', '2026-03-24T11:00:00.000Z', 'Verified analytical match against active CoA report COA-2026-03-998');
 
   UPDATE product_claims
   SET state = 'reviewer_approved',
@@ -647,12 +655,15 @@ sequenceDiagram
     AND claim_id = '018f0000-0009-7000-8000-000000000001'
     AND version = 2;
 
+  INSERT INTO claim_decision_events (event_id, client_id, claim_id, claim_revision, decision, actor_id, occurred_at, reason, policy_version, dependency_fingerprint)
+  VALUES ('018f0000-0040-7000-8000-000000000001', '018f0000-0000-7000-8000-000000000001', '018f0000-0009-7000-8000-000000000001', 1, 'approve', 'compliance_officer_jane', NOW(), 'Verified analytical match against active CoA report COA-2026-03-998', 'claim_policy_v1', 'fingerprint-1234');
+
   INSERT INTO product_evidence_command_receipts (client_id, action_id, command_name, payload_sha256, actor_id, response_body, committed_at)
-  VALUES ('018f0000-0000-7000-8000-000000000001', '018f0000-0010-7000-8000-000000000014', 'reviewClaim', 'b4c5d6e7f8a3b4c5d6e7f8a3b4c5d6e7f8a3b4c5d6e7f8a3b4c5d6e7f8a3b4c5', 'compliance_officer_jane', '{"claimId":"018f0000-0009-7000-8000-000000000001","revision":1,"version":3,"state":"reviewer_approved"}'::jsonb, NOW());
+  VALUES ('018f0000-0000-7000-8000-000000000001', '018f0000-0010-7000-8000-000000000014', 'reviewClaim', 'b4c5d6e7f8a4b4c5d6e7f8a4b4c5d6e7f8a4b4c5d6e7f8a4b4c5d6e7f8a4b4c5', 'compliance_officer_jane', '{"claimId":"018f0000-0009-7000-8000-000000000001","revision":1,"version":3,"state":"reviewer_approved"}'::jsonb, NOW());
 
   COMMIT;
   ```
-- **Result:** `ProductClaim` state advances to `reviewer_approved`, `version = 3`.
+- **Result:** `ProductClaim` state advances to `reviewer_approved`, `version = 3`. Claim is now eligible for template pinning into approved video generations.
 
 #### Step 13: Ingest Superseding Laboratory Re-Test PDF & Supersede Evidence Asset
 - **Lab Notification:** Laboratory notifies producer that instrument recalibration requires re-issuing CoA report with updated THC total quantification (22.10%).
@@ -818,15 +829,15 @@ sequenceDiagram
     AND version = 1;
 
   -- 5. Append invalidation decision event for dependent claim 1
-  INSERT INTO claim_decision_events (event_id, client_id, claim_id, claim_revision, decision, actor_id, occurred_at, reason, invalidation_cause, source_event_id)
-  VALUES ('018f0000-0040-7000-8000-000000000002', '018f0000-0000-7000-8000-000000000001', '018f0000-0009-7000-8000-000000000001', 1, 'invalidate', 'system_concurrency_guard', '2026-03-25T09:00:00.000Z', 'Underlying CoA report revision 1 was superseded by revision 2', 'source_superseded', '018f0000-0008-7000-8000-000000000001:2');
+  INSERT INTO claim_decision_events (event_id, client_id, claim_id, claim_revision, decision, actor_id, occurred_at, reason, policy_version, invalidation_cause, source_event_id)
+  VALUES ('018f0000-0040-7000-8000-000000000002', '018f0000-0000-7000-8000-000000000001', '018f0000-0009-7000-8000-000000000001', 1, 'invalidate', 'system_concurrency_guard', '2026-03-25T09:00:00.000Z', 'Underlying CoA report revision 1 was superseded by revision 2', 'claim_policy_v1', 'source_superseded', '018f0000-0008-7000-8000-000000000001:2');
 
   -- 6. Update claim head to invalidated and increment version
   UPDATE product_claims
   SET state = 'invalidated',
       version = version + 1,
       invalidation_cause = 'source_superseded',
-      invalidation_source_event_id = '018f0000-0008-7000-8000-000000000001:2',
+      invalidation_source_ref = '018f0000-0008-7000-8000-000000000001:2',
       updated_at = NOW()
   WHERE client_id = '018f0000-0000-7000-8000-000000000001'
     AND claim_id = '018f0000-0009-7000-8000-000000000001'
