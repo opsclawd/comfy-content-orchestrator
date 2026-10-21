@@ -55,7 +55,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
   it("migrates an empty PostgreSQL 18.6 database through the baseline", async () => {
     const applied = await runMigrations(client, { migrationsDirectory });
 
-    expect(applied).toHaveLength(26);
+    expect(applied).toHaveLength(27);
     expect(applied[0]?.version).toBe("001");
     expect(applied[1]?.version).toBe("002");
     expect(applied[2]?.version).toBe("003");
@@ -82,6 +82,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
     expect(applied[23]?.version).toBe("024");
     expect(applied[24]?.version).toBe("025");
     expect(applied[25]?.version).toBe("026");
+    expect(applied[26]?.version).toBe("027");
 
     const schemaRes = await client.query(
       "SELECT version FROM schema_migrations ORDER BY version ASC"
@@ -112,7 +113,8 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       { version: "023" },
       { version: "024" },
       { version: "025" },
-      { version: "026" }
+      { version: "026" },
+      { version: "027" }
     ]);
 
     const tablesRes = await client.query<{ table_name: string }>(
@@ -126,6 +128,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
 
     const tableNames = tablesRes.rows.map((r) => r.table_name);
     expect(tableNames).toEqual([
+      "batch_evidence_links",
       "campaign_production_run_scenes",
       "campaign_production_runs",
       "campaign_reference_bible_changes",
@@ -133,6 +136,11 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       "campaigns",
       "clients",
       "delivery_assembly_jobs",
+      "evidence_assets",
+      "evidence_derivatives",
+      "evidence_ingest_reservations",
+      "evidence_revisions",
+      "evidence_verification_events",
       "generation_manifests",
       "license_registry",
       "product_batch_facts",
@@ -148,6 +156,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       "schema_migrations",
       "shot_plan_previs_associations",
       "shot_plans",
+      "source_objects",
       "storyboard_candidates",
       "storyboard_scenes"
     ]);

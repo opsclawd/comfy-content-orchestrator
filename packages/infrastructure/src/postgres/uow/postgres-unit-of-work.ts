@@ -18,6 +18,7 @@ import {
   PostgresProductEvidenceRepository,
   translateDatabaseError
 } from "../repositories/postgres-product-evidence-repository.js";
+import { PostgresEvidenceAssetRepository } from "../../evidence/postgres-evidence-asset-repository.js";
 
 export class PostgresUnitOfWork implements UnitOfWork {
   constructor(private readonly pool: Pool) {}
@@ -44,6 +45,9 @@ export class PostgresUnitOfWork implements UnitOfWork {
         referenceGroups: new PostgresReferenceGroupRepository(client),
         campaignReferenceBible: new PostgresCampaignReferenceBibleRepository(client),
         productEvidence: new PostgresProductEvidenceRepository(client, {
+          externalTransaction: true
+        }),
+        evidenceAsset: new PostgresEvidenceAssetRepository(client, {
           externalTransaction: true
         })
       };

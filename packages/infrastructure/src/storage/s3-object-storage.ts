@@ -15,6 +15,7 @@ import {
   type ObjectLocator,
   type ObjectStoragePort,
   ObjectAlreadyExistsError,
+  StorageIntegrityViolationError,
   type PutObjectInput,
   type StoredObject
 } from "@cco/application";
@@ -125,8 +126,10 @@ async function readBodyWithLimit(
               // ignore destroy errors
             }
           }
-          throw new Error(
-            `Object ${locator.bucket}/${locator.key} byteLength (${totalBytes}) exceeds maxBytes limit (${maxBytes})`
+          throw new StorageIntegrityViolationError(
+            `Object ${locator.bucket}/${locator.key} byteLength (${totalBytes}) exceeds maxBytes limit (${maxBytes})`,
+            locator.bucket,
+            locator.key
           );
         }
         chunks.push(chunk);
@@ -234,8 +237,10 @@ async function readBodyWithLimit(
     }
 
     if (maxBytes !== undefined && bytes.byteLength > maxBytes) {
-      throw new Error(
-        `Object ${locator.bucket}/${locator.key} byteLength (${bytes.byteLength}) exceeds maxBytes limit (${maxBytes})`
+      throw new StorageIntegrityViolationError(
+        `Object ${locator.bucket}/${locator.key} byteLength (${bytes.byteLength}) exceeds maxBytes limit (${maxBytes})`,
+        locator.bucket,
+        locator.key
       );
     }
     return bytes;
@@ -365,8 +370,10 @@ export class S3ObjectStorage implements ObjectStoragePort {
           // ignore destroy errors
         }
       }
-      throw new Error(
-        `Object ${locator.bucket}/${locator.key} ContentLength (${response.ContentLength}) exceeds maxBytes limit (${options.maxBytes})`
+      throw new StorageIntegrityViolationError(
+        `Object ${locator.bucket}/${locator.key} ContentLength (${response.ContentLength}) exceeds maxBytes limit (${options.maxBytes})`,
+        locator.bucket,
+        locator.key
       );
     }
 
@@ -381,8 +388,10 @@ export class S3ObjectStorage implements ObjectStoragePort {
     if (storedChecksum !== undefined) {
       const computed = computeSha256Hex(body);
       if (computed !== storedChecksum) {
-        throw new Error(
-          `Checksum mismatch on getObject for ${locator.bucket}/${locator.key}: stored checksum ${storedChecksum}, calculated ${computed}`
+        throw new StorageIntegrityViolationError(
+          `Checksum mismatch on getObject for ${locator.bucket}/${locator.key}: stored checksum ${storedChecksum}, calculated ${computed}`,
+          locator.bucket,
+          locator.key
         );
       }
     }

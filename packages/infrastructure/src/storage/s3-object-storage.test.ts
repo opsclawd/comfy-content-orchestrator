@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Readable } from "node:stream";
 import { S3ObjectStorage } from "./s3-object-storage.js";
 import { HeadObjectCommand, type S3Client } from "@aws-sdk/client-s3";
+import { StorageIntegrityViolationError } from "@cco/application";
 
 describe("S3ObjectStorage (unit)", () => {
   it("enforces maxBytes limit when ContentLength header is present and exceeds maxBytes", async () => {
@@ -29,14 +30,16 @@ describe("S3ObjectStorage (unit)", () => {
       client: fakeClient
     });
 
-    await expect(
-      storage.getObject({ bucket: "test-bucket", key: "test-key" }, { maxBytes: 50 })
-    ).rejects.toThrow(/ContentLength \(100\) exceeds maxBytes limit \(50\)/);
+    const error: unknown = await storage
+      .getObject({ bucket: "test-bucket", key: "test-key" }, { maxBytes: 50 })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(StorageIntegrityViolationError);
+    expect((error as Error).message).toMatch(/ContentLength \(100\) exceeds maxBytes limit \(50\)/);
 
     expect(streamDestroyed).toBe(true);
   });
 
-  it("enforces maxBytes limit during streaming when ContentLength is not present", async () => {
+  it("enforces maxBytes limit during streaming when ContentLength is not present (observed bytes exceed the limit, not just the header)", async () => {
     let streamDestroyed = false;
     const fakeStream = new Readable({
       read() {
@@ -61,11 +64,35 @@ describe("S3ObjectStorage (unit)", () => {
       client: fakeClient
     });
 
-    await expect(
-      storage.getObject({ bucket: "test-bucket", key: "test-key" }, { maxBytes: 10 })
-    ).rejects.toThrow(/exceeds maxBytes limit \(10\)/);
+    const error: unknown = await storage
+      .getObject({ bucket: "test-bucket", key: "test-key" }, { maxBytes: 10 })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(StorageIntegrityViolationError);
+    expect((error as Error).message).toMatch(/exceeds maxBytes limit \(10\)/);
 
     expect(streamDestroyed).toBe(true);
+  });
+
+  it("enforces maxBytes limit on a transformToByteArray body when observed bytes exceed the limit (ContentLength omitted or under-reported)", async () => {
+    const fakeClient = {
+      send: async () => ({
+        ContentLength: undefined,
+        Body: {
+          transformToByteArray: async () => new Uint8Array(20) // 20 bytes
+        }
+      })
+    } as unknown as S3Client;
+
+    const storage = new S3ObjectStorage({
+      endpoint: "http://localhost:9000",
+      client: fakeClient
+    });
+
+    const error: unknown = await storage
+      .getObject({ bucket: "test-bucket", key: "test-key" }, { maxBytes: 10 })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(StorageIntegrityViolationError);
+    expect((error as Error).message).toMatch(/byteLength \(20\) exceeds maxBytes limit \(10\)/);
   });
 
   it("successfully retrieves stream when within maxBytes limit", async () => {

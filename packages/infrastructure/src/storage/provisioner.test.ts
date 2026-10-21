@@ -122,17 +122,17 @@ describe("Storage Provisioner unit tests", () => {
     await expect(provisionBucket(client, BUCKETS.TEMP)).rejects.toThrow("Network timeout");
   });
 
-  it("provisions all four buckets in provisionStorageBuckets and returns summary", async () => {
+  it("provisions all five buckets in provisionStorageBuckets and returns summary", async () => {
     const sendFn = vi.fn().mockResolvedValue({});
     const client = createMockS3Client(sendFn);
 
     const summary = await provisionStorageBuckets({ client });
 
-    expect(summary.results).toHaveLength(4);
-    expect(summary.createdCount).toBe(4);
+    expect(summary.results).toHaveLength(5);
+    expect(summary.createdCount).toBe(5);
     expect(summary.alreadyExistsCount).toBe(0);
     expect(summary.lifecycleAppliedCount).toBe(2); // temp and review
-    expect(summary.lifecycleSkippedCount).toBe(2); // reference and delivery
+    expect(summary.lifecycleSkippedCount).toBe(3); // reference, delivery, and evidence
   });
 
   it("provisions custom bucket subset when options.buckets is specified", async () => {

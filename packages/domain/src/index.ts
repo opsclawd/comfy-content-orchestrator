@@ -18,3 +18,5 @@ export * from "./product-evidence-errors.js";
 export * from "./product-sku.js";
 export * from "./batch-facts.js";
 export * from "./product-batch.js";
+export * from "./source-object.js";
+export * from "./evidence-asset.js";

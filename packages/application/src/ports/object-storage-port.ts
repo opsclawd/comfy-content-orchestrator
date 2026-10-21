@@ -15,6 +15,30 @@ export class ObjectAlreadyExistsError extends Error {
   }
 }
 
+/**
+ * Thrown by a getObject() adapter when it has *proven* the persisted bytes
+ * are corrupt or malformed on read -- an oversized object (exceeds the
+ * caller's maxBytes) or a stored checksum that doesn't match the bytes
+ * actually read. This is distinct from every other getObject() failure
+ * (network transport errors, timeouts, auth failures, cancellation): those
+ * say nothing about the integrity of the persisted bytes and MUST NOT be
+ * treated as proof of corruption by a caller re-verifying a SourceObject --
+ * doing so would durably quarantine a healthy source over a transient
+ * failure (quarantine is a one-way transition; see
+ * migrations/027_evidence_authority.sql).
+ */
+export class StorageIntegrityViolationError extends Error {
+  override readonly name = "StorageIntegrityViolationError";
+  readonly bucket: string;
+  readonly key: string;
+
+  constructor(message: string, bucket: string, key: string, options?: ErrorOptions) {
+    super(message, options);
+    this.bucket = bucket;
+    this.key = key;
+  }
+}
+
 export interface PutObjectInput {
   readonly bucket: string;
   readonly key: string;

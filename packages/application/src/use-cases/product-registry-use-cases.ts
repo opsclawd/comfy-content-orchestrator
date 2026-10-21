@@ -211,21 +211,42 @@ export class CreateProductBatchUseCase {
       ]);
 
       const facts = cmd.payload.initialFacts;
-      if (facts.originEvidenceId !== null && facts.originEvidenceId !== undefined) {
+      const hasId = facts.originEvidenceId !== null && facts.originEvidenceId !== undefined;
+      const hasRev =
+        facts.originEvidenceRevision !== null && facts.originEvidenceRevision !== undefined;
+      if (hasId && !hasRev) {
         throw new ProductValidationError([
           {
             code: "INVALID_FIELD_COMBINATION",
             path: ["initialFacts", "originEvidenceId"],
-            message: "Origin evidence linkage is not yet supported in this phase."
+            message: "originEvidenceRevision is required when originEvidenceId is provided."
           }
         ]);
       }
-      if (facts.originEvidenceRevision !== null && facts.originEvidenceRevision !== undefined) {
+      if (!hasId && hasRev) {
         throw new ProductValidationError([
           {
             code: "INVALID_FIELD_COMBINATION",
             path: ["initialFacts", "originEvidenceRevision"],
-            message: "Origin evidence linkage is not yet supported in this phase."
+            message: "originEvidenceId is required when originEvidenceRevision is provided."
+          }
+        ]);
+      }
+      if (hasId && !isValidUuid(facts.originEvidenceId!)) {
+        throw new ProductValidationError([
+          {
+            code: "INVALID_IDENTIFIER",
+            path: ["initialFacts", "originEvidenceId"],
+            message: "originEvidenceId must be a valid UUID string."
+          }
+        ]);
+      }
+      if (hasRev && !isValidPositiveInt(facts.originEvidenceRevision!)) {
+        throw new ProductValidationError([
+          {
+            code: "INVALID_REVISION",
+            path: ["initialFacts", "originEvidenceRevision"],
+            message: "originEvidenceRevision must be a positive integer."
           }
         ]);
       }
@@ -343,24 +364,44 @@ export class AppendBatchFactsUseCase {
       ]);
     }
 
-    if (cmd.payload.originEvidenceId !== null && cmd.payload.originEvidenceId !== undefined) {
+    const hasOriginId =
+      cmd.payload.originEvidenceId !== null && cmd.payload.originEvidenceId !== undefined;
+    const hasOriginRev =
+      cmd.payload.originEvidenceRevision !== null &&
+      cmd.payload.originEvidenceRevision !== undefined;
+    if (hasOriginId && !hasOriginRev) {
       throw new ProductValidationError([
         {
           code: "INVALID_FIELD_COMBINATION",
           path: ["originEvidenceId"],
-          message: "Origin evidence linkage is not yet supported in this phase."
+          message: "originEvidenceRevision is required when originEvidenceId is provided."
         }
       ]);
     }
-    if (
-      cmd.payload.originEvidenceRevision !== null &&
-      cmd.payload.originEvidenceRevision !== undefined
-    ) {
+    if (!hasOriginId && hasOriginRev) {
       throw new ProductValidationError([
         {
           code: "INVALID_FIELD_COMBINATION",
           path: ["originEvidenceRevision"],
-          message: "Origin evidence linkage is not yet supported in this phase."
+          message: "originEvidenceId is required when originEvidenceRevision is provided."
+        }
+      ]);
+    }
+    if (hasOriginId && !isValidUuid(cmd.payload.originEvidenceId!)) {
+      throw new ProductValidationError([
+        {
+          code: "INVALID_IDENTIFIER",
+          path: ["originEvidenceId"],
+          message: "originEvidenceId must be a valid UUID string."
+        }
+      ]);
+    }
+    if (hasOriginRev && !isValidPositiveInt(cmd.payload.originEvidenceRevision!)) {
+      throw new ProductValidationError([
+        {
+          code: "INVALID_REVISION",
+          path: ["originEvidenceRevision"],
+          message: "originEvidenceRevision must be a positive integer."
         }
       ]);
     }

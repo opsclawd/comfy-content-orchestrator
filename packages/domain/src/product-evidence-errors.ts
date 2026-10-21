@@ -128,3 +128,43 @@ export class IdempotencyConflictError extends ProductEvidenceDomainError {
     );
   }
 }
+
+export class SourceIntegrityMismatchError extends ProductEvidenceDomainError {
+  override readonly name = "SourceIntegrityMismatchError";
+
+  constructor(message: string, details?: Readonly<Record<string, unknown>>) {
+    super("SOURCE_INTEGRITY_MISMATCH", message, details);
+  }
+}
+
+export class MimeConflictError extends ProductEvidenceDomainError {
+  override readonly name = "MimeConflictError";
+
+  constructor(message: string, details?: Readonly<Record<string, unknown>>) {
+    super("MIME_CONFLICT", message, details);
+  }
+}
+
+export class SourceSupersededError extends ProductEvidenceDomainError {
+  override readonly name = "SourceSupersededError";
+
+  constructor(message: string, details?: Readonly<Record<string, unknown>>) {
+    super("SOURCE_SUPERSEDED", message, details);
+  }
+}
+
+export class QuotaExceededError extends ProductEvidenceDomainError {
+  override readonly name = "QuotaExceededError";
+
+  constructor(message: string, details?: Readonly<Record<string, unknown>>) {
+    super("QUOTA_EXCEEDED", message, details);
+  }
+}
+
+export class ReportDisputedError extends ProductEvidenceDomainError {
+  override readonly name = "ReportDisputedError";
+
+  constructor(message: string, details?: Readonly<Record<string, unknown>>) {
+    super("REPORT_DISPUTED", message, details);
+  }
+}

@@ -125,52 +125,87 @@ describe("Product registry use cases unit tests", () => {
     expect(mockRepo.createSku).toHaveBeenCalledTimes(1);
   });
 
-  it("CreateProductBatchUseCase: rejects unsupported origin evidence links with ProductValidationError", async () => {
-    const uow = createMockUow({});
+  it("CreateProductBatchUseCase: accepts valid origin evidence links and delegates to repository", async () => {
+    const mockBatch = {
+      batch: {
+        clientId: clientA,
+        batchId: createBatchId("018f0000-0002-7000-8000-000000000001"),
+        skuId: createSkuId("018f0000-0002-7000-8000-000000000002"),
+        lotIdentifier: "LOT-01",
+        displayName: "Lot 01",
+        version: 1,
+        currentFactsRevision: 1,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        archivedAt: null
+      },
+      facts: null
+    };
+    const mockRepo: Partial<ProductEvidenceRepositoryPort> = {
+      createBatch: vi.fn().mockResolvedValue(mockBatch)
+    };
+    const uow = createMockUow(mockRepo);
     const useCase = new CreateProductBatchUseCase(uow);
 
-    await expect(
-      useCase.execute({
-        actionId: action1,
-        clientId: clientA,
-        actorId: actor,
-        timestamp,
-        payload: {
-          skuId: createSkuId("018f0000-0002-7000-8000-000000000001"),
-          lotIdentifier: "LOT-01",
-          displayName: "Lot 01",
-          initialFacts: {
-            originKind: "unknown",
-            originEvidenceId: "018f0000-0003-7000-8000-000000000001" as unknown as EvidenceId,
-            originEvidenceRevision: 1
-          }
-        }
-      })
-    ).rejects.toThrow(ProductValidationError);
-  });
-
-  it("AppendBatchFactsUseCase: rejects unsupported origin evidence references", async () => {
-    const uow = createMockUow({});
-    const useCase = new AppendBatchFactsUseCase(uow);
-
-    await expect(
-      useCase.execute({
-        actionId: action1,
-        clientId: clientA,
-        actorId: actor,
-        timestamp,
-        payload: {
-          batchId: createBatchId("018f0000-0002-7000-8000-000000000001"),
-          expectedVersion: 1,
-          originKind: "own_production",
-          producerIdentityAsClaimed: "Farm",
-          productionStartDate: "2026-03-01",
-          productionEndDate: "2026-03-10",
+    const result = await useCase.execute({
+      actionId: action1,
+      clientId: clientA,
+      actorId: actor,
+      timestamp,
+      payload: {
+        skuId: createSkuId("018f0000-0002-7000-8000-000000000001"),
+        lotIdentifier: "LOT-01",
+        displayName: "Lot 01",
+        initialFacts: {
+          originKind: "unknown",
           originEvidenceId: "018f0000-0003-7000-8000-000000000001" as unknown as EvidenceId,
           originEvidenceRevision: 1
         }
-      })
-    ).rejects.toThrow(ProductValidationError);
+      }
+    });
+    expect(result).toBe(mockBatch);
+    expect(mockRepo.createBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("AppendBatchFactsUseCase: accepts valid origin evidence references and delegates to repository", async () => {
+    const mockFacts = {
+      clientId: clientA,
+      batchId: createBatchId("018f0000-0002-7000-8000-000000000001"),
+      revision: 2,
+      originKind: "own_production",
+      producerIdentityAsClaimed: "Farm",
+      productionStartDate: "2026-03-01",
+      productionEndDate: "2026-03-10",
+      originEvidenceId: "018f0000-0003-7000-8000-000000000001",
+      originEvidenceRevision: 1,
+      assertedBy: actor,
+      assertedAt: timestamp,
+      supersedesRevision: 1
+    };
+    const mockRepo: Partial<ProductEvidenceRepositoryPort> = {
+      appendBatchFacts: vi.fn().mockResolvedValue(mockFacts)
+    };
+    const uow = createMockUow(mockRepo);
+    const useCase = new AppendBatchFactsUseCase(uow);
+
+    const result = await useCase.execute({
+      actionId: action1,
+      clientId: clientA,
+      actorId: actor,
+      timestamp,
+      payload: {
+        batchId: createBatchId("018f0000-0002-7000-8000-000000000001"),
+        expectedVersion: 1,
+        originKind: "own_production",
+        producerIdentityAsClaimed: "Farm",
+        productionStartDate: "2026-03-01",
+        productionEndDate: "2026-03-10",
+        originEvidenceId: "018f0000-0003-7000-8000-000000000001" as unknown as EvidenceId,
+        originEvidenceRevision: 1
+      }
+    });
+    expect(result).toBe(mockFacts);
+    expect(mockRepo.appendBatchFacts).toHaveBeenCalledTimes(1);
   });
 
   it("UpdateProductSkuMetadataUseCase and UpdateProductBatchMetadataUseCase delegate through UoW", async () => {
