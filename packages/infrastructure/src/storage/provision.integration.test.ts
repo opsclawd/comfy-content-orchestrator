@@ -42,28 +42,28 @@ describe("Storage Provisioning integration with real MinIO", () => {
     }
   });
 
-  it("provisions all four buckets and is idempotent on repeat execution", async () => {
+  it("provisions all five buckets and is idempotent on repeat execution", async () => {
     // 1. Initial provisioning on clean MinIO container
     const initialSummary = await provisionStorageBuckets({
       client: rawS3Client
     });
 
-    expect(initialSummary.results).toHaveLength(4);
-    expect(initialSummary.createdCount).toBe(4);
+    expect(initialSummary.results).toHaveLength(5);
+    expect(initialSummary.createdCount).toBe(5);
     expect(initialSummary.alreadyExistsCount).toBe(0);
     expect(initialSummary.lifecycleAppliedCount).toBe(2); // temp (14d) and review (60d)
-    expect(initialSummary.lifecycleSkippedCount).toBe(2); // reference and delivery
+    expect(initialSummary.lifecycleSkippedCount).toBe(3); // reference, delivery, and evidence
 
     // 2. Second provisioning run against already provisioned buckets
     const repeatSummary = await provisionStorageBuckets({
       client: rawS3Client
     });
 
-    expect(repeatSummary.results).toHaveLength(4);
+    expect(repeatSummary.results).toHaveLength(5);
     expect(repeatSummary.createdCount).toBe(0);
-    expect(repeatSummary.alreadyExistsCount).toBe(4);
+    expect(repeatSummary.alreadyExistsCount).toBe(5);
     expect(repeatSummary.lifecycleAppliedCount).toBe(2);
-    expect(repeatSummary.lifecycleSkippedCount).toBe(2);
+    expect(repeatSummary.lifecycleSkippedCount).toBe(3);
   });
 
   it("reads back live lifecycle configurations and asserts matching rules from the bucket", async () => {
@@ -132,7 +132,7 @@ describe("Storage Provisioning integration with real MinIO", () => {
 
     // 2. Re-run provisioning
     const summary = await provisionStorageBuckets({ client: rawS3Client });
-    expect(summary.alreadyExistsCount).toBe(4);
+    expect(summary.alreadyExistsCount).toBe(5);
 
     // 3. Read back object and verify byte integrity
     const getRes = await rawS3Client.send(

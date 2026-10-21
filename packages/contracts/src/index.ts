@@ -42,3 +42,4 @@ export * from "./product-evidence-error.js";
 export * from "./product-evidence-command.js";
 export * from "./product-sku.js";
 export * from "./product-batch.js";
+export * from "./evidence-asset.js";

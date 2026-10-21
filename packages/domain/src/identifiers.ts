@@ -19,7 +19,13 @@ export type ClientId = Brand<string, "ClientId">;
 export type SkuId = Brand<string, "SkuId">;
 export type BatchId = Brand<string, "BatchId">;
 export type EvidenceId = Brand<string, "EvidenceId">;
+export type SourceObjectId = Brand<string, "SourceObjectId">;
+export type DerivativeId = Brand<string, "DerivativeId">;
+export type VerificationEventId = Brand<string, "VerificationEventId">;
 export type ActionId = Brand<string, "ActionId">;
+
+/** Lowercase 64-hex SHA-256 digest string */
+export type Sha256Hex = string & { readonly __sha256: true };
 
 function validateAndBrandUuid<B extends string>(
   val: unknown,
@@ -57,6 +63,34 @@ export function createEvidenceId(val: string): EvidenceId {
   return validateAndBrandUuid(val, "EvidenceId", "evidenceId");
 }
 
+export function createSourceObjectId(val: string): SourceObjectId {
+  return validateAndBrandUuid(val, "SourceObjectId", "sourceObjectId");
+}
+
+export function createDerivativeId(val: string): DerivativeId {
+  return validateAndBrandUuid(val, "DerivativeId", "derivativeId");
+}
+
+export function createVerificationEventId(val: string): VerificationEventId {
+  return validateAndBrandUuid(val, "VerificationEventId", "verificationEventId");
+}
+
 export function createActionId(val: string): ActionId {
   return validateAndBrandUuid(val, "ActionId", "actionId");
+}
+
+export function createSha256Hex(val: string): Sha256Hex {
+  if (typeof val !== "string" || !/^[0-9a-f]{64}$/.test(val)) {
+    throw new ProductValidationError(
+      [
+        {
+          code: "INVALID_TEXT",
+          path: ["sha256"],
+          message: "sha256 must be a lowercase 64-hex SHA-256 digest string."
+        }
+      ],
+      `Invalid sha256: "${String(val)}" is not a valid 64-character lowercase hex digest.`
+    );
+  }
+  return val as Sha256Hex;
 }

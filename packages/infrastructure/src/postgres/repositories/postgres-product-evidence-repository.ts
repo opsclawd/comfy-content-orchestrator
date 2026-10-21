@@ -29,6 +29,7 @@ import {
   createProductBatch,
   createProductSku,
   createSkuId,
+  CrossBatchSourceError,
   CrossClientViolationError,
   DuplicateLotError,
   DuplicateSkuError,
@@ -39,6 +40,7 @@ import {
   rehydrateBatchFactsRevision,
   rehydrateProductBatch,
   rehydrateProductSku,
+  ReportDisputedError,
   StaleRevisionConflictError,
   updateProductBatchMetadata,
   updateProductSkuMetadata,
@@ -388,7 +390,14 @@ const PRODUCT_REGISTRY_TABLES = new Set<string>([
   "product_skus",
   "product_batches",
   "product_batch_facts",
-  "product_evidence_command_receipts"
+  "product_evidence_command_receipts",
+  "source_objects",
+  "evidence_assets",
+  "evidence_revisions",
+  "batch_evidence_links",
+  "evidence_derivatives",
+  "evidence_verification_events",
+  "evidence_ingest_reservations"
 ]);
 
 const REGISTRY_CONSTRAINTS = new Set<string>([
@@ -411,6 +420,7 @@ const REGISTRY_CONSTRAINTS = new Set<string>([
   "chk_product_batches_display_name",
   "chk_batch_facts_monotonic_rev",
   "chk_batch_facts_origin_evidence_all_or_none",
+  "fk_batch_facts_origin_evidence",
   "chk_batch_facts_origin_evidence_deferred",
   "chk_batch_facts_dates",
   "chk_batch_facts_asserted_by_nonempty",
@@ -428,7 +438,109 @@ const REGISTRY_CONSTRAINTS = new Set<string>([
   "chk_product_skus_archived_at",
   "chk_product_batches_created_at",
   "chk_product_batches_updated_at",
-  "chk_product_batches_archived_at"
+  "chk_product_batches_archived_at",
+  "uq_reference_assets_client_asset",
+  "source_objects_pkey",
+  "uq_source_objects_client_obj",
+  "uq_source_objects_client_hash",
+  "uq_source_objects_storage",
+  "uq_source_objects_storage_location",
+  "source_objects_byte_length_check",
+  "source_objects_access_class_check",
+  "source_objects_retention_class_check",
+  "source_objects_availability_check",
+  "source_objects_client_id_fkey",
+  "chk_sha256_format",
+  "chk_source_objects_uploader_nonempty",
+  "chk_source_objects_policy_nonempty",
+  "chk_source_objects_mime_nonempty",
+  "chk_source_objects_bucket_nonempty",
+  "chk_source_objects_key_nonempty",
+  "chk_source_objects_uploaded_at",
+  "chk_source_object_hash_format",
+  "chk_source_object_bucket_nonempty",
+  "chk_source_object_key_nonempty",
+  "chk_source_object_mime_nonempty",
+  "chk_source_object_uploader_nonempty",
+  "chk_source_object_policy_nonempty",
+  "chk_source_object_timestamps",
+  "evidence_assets_pkey",
+  "uq_evidence_assets_client_evidence",
+  "evidence_assets_current_revision_check",
+  "evidence_assets_version_check",
+  "evidence_assets_client_id_fkey",
+  "chk_evidence_assets_created_at",
+  "chk_evidence_assets_archived_at",
+  "chk_evidence_asset_revision_pos",
+  "chk_evidence_asset_version_pos",
+  "chk_evidence_asset_timestamps",
+  "fk_evidence_assets_current_rev",
+  "fk_evidence_assets_client",
+  "evidence_revisions_pkey",
+  "uq_evidence_revisions_client_revision",
+  "uq_evidence_revisions_predecessor",
+  "uq_evidence_rev_predecessor",
+  "fk_evidence_revisions_asset",
+  "fk_evidence_revisions_source",
+  "fk_evidence_revisions_predecessor",
+  "chk_evidence_rev_monotonic",
+  "chk_evidence_revision_supersedes_not_self",
+  "chk_evidence_revisions_assertion_nonempty",
+  "chk_evidence_revisions_submitted_by_nonempty",
+  "chk_evidence_revisions_submitted_at",
+  "chk_evidence_revisions_capture_date",
+  "chk_evidence_revisions_capture_timestamp",
+  "chk_evidence_revisions_capture_date_match",
+  "chk_evidence_revision_number_pos",
+  "chk_evidence_revision_submitted_by_nonempty",
+  "chk_evidence_revision_assertion_nonempty",
+  "chk_evidence_revision_submitted_at",
+  "chk_evidence_revision_capture_dates",
+  "chk_evidence_revision_rights_attribution",
+  "chk_evidence_revision_rights_document",
+  "evidence_revisions_revision_check",
+  "evidence_revisions_source_class_check",
+  "evidence_revisions_acquisition_method_check",
+  "evidence_revisions_rights_status_check",
+  "evidence_revisions_consent_status_check",
+  "evidence_revisions_reported_capture_precision_check",
+  "batch_evidence_links_pkey",
+  "uq_batch_evidence_links_full",
+  "uq_batch_evidence_links_client_link",
+  "fk_batch_evidence_batch",
+  "fk_batch_evidence_revision",
+  "batch_evidence_links_purpose_check",
+  "chk_batch_evidence_asserted_by_nonempty",
+  "chk_batch_evidence_asserted_at",
+  "chk_batch_evidence_purpose_nonempty",
+  "evidence_derivatives_pkey",
+  "uq_evidence_derivatives_client_deriv",
+  "uq_evidence_derivatives_bridge",
+  "fk_evidence_derivatives_revision",
+  "fk_evidence_derivatives_reference",
+  "chk_derivative_sha256_format",
+  "chk_derivative_transform_nonempty",
+  "chk_derivative_created_by_nonempty",
+  "chk_derivative_created_at",
+  "evidence_verification_events_pkey",
+  "uq_verification_events_client_event",
+  "uq_verification_events_full",
+  "fk_verification_events_revision",
+  "fk_verification_events_withdrawal",
+  "evidence_verification_events_outcome_check",
+  "evidence_verification_events_verification_kind_check",
+  "evidence_verification_events_fact_scope_check",
+  "chk_verification_events_withdrawal_no_self",
+  "chk_verification_events_method_nonempty",
+  "chk_verification_events_reason_nonempty",
+  "chk_verification_events_actor_nonempty",
+  "chk_verification_events_occurred_at",
+  "evidence_ingest_reservations_pkey",
+  "evidence_ingest_reservations_client_id_fkey",
+  "evidence_ingest_reservations_reserved_bytes_check",
+  "evidence_ingest_reservations_status_check",
+  "chk_reservation_sha256_format",
+  "chk_reservation_timestamps"
 ]);
 
 export function translateDatabaseError(
@@ -446,6 +558,43 @@ export function translateDatabaseError(
 
     switch (dbErr.code) {
       case "23505": {
+        if (dbErr.constraint === "uq_evidence_derivatives_bridge") {
+          throw new ProductValidationError([
+            {
+              code: "INVALID_FIELD_COMBINATION",
+              path: ["derivative"],
+              message: "A derivative link already exists for this revision and reference asset."
+            }
+          ]);
+        }
+        if (
+          dbErr.constraint === "uq_evidence_revisions_client_revision" ||
+          dbErr.constraint === "uq_evidence_revisions_predecessor" ||
+          dbErr.constraint === "uq_evidence_rev_predecessor" ||
+          dbErr.constraint === "evidence_revisions_pkey"
+        ) {
+          throw new NonMonotonicRevisionError(
+            "Evidence revision conflict: duplicate or forked revision"
+          );
+        }
+        if (
+          dbErr.constraint === "uq_source_objects_client_hash" ||
+          dbErr.constraint === "uq_source_objects_storage" ||
+          dbErr.constraint === "uq_source_objects_storage_location" ||
+          dbErr.constraint === "uq_source_objects_client_obj" ||
+          dbErr.constraint === "source_objects_pkey"
+        ) {
+          throw new ConcurrencyConflictError(`Duplicate source object conflict: ${dbErr.message}`);
+        }
+        if (
+          dbErr.constraint === "uq_batch_evidence_links_client_link" ||
+          dbErr.constraint === "uq_batch_evidence_links_full" ||
+          dbErr.constraint === "batch_evidence_links_pkey"
+        ) {
+          throw new ConcurrencyConflictError(
+            `Evidence revision is already linked to this batch: ${dbErr.message}`
+          );
+        }
         if (dbErr.constraint === "uq_product_skus_canonical") {
           throw new DuplicateSkuError(context?.canonicalSku ?? "unknown", context?.clientId);
         }
@@ -463,9 +612,76 @@ export function translateDatabaseError(
             "Predecessor revision conflict: duplicate or forked predecessor"
           );
         }
+        if (
+          dbErr.constraint === "uq_verification_events_client_event" ||
+          dbErr.constraint === "uq_verification_events_full" ||
+          dbErr.constraint === "evidence_verification_events_pkey"
+        ) {
+          throw new ConcurrencyConflictError(
+            `Duplicate verification event conflict: ${dbErr.message}`
+          );
+        }
+        if (
+          dbErr.constraint === "uq_evidence_assets_client_evidence" ||
+          dbErr.constraint === "evidence_assets_pkey"
+        ) {
+          throw new ConcurrencyConflictError(`Duplicate evidence asset conflict: ${dbErr.message}`);
+        }
+        if (
+          dbErr.constraint === "uq_evidence_derivatives_client_deriv" ||
+          dbErr.constraint === "evidence_derivatives_pkey"
+        ) {
+          throw new ConcurrencyConflictError(
+            `Duplicate evidence derivative conflict: ${dbErr.message}`
+          );
+        }
+        if (dbErr.constraint === "evidence_ingest_reservations_pkey") {
+          throw new ConcurrencyConflictError(
+            `Duplicate evidence ingest reservation conflict: ${dbErr.message}`
+          );
+        }
+        if (
+          (dbErr.constraint && REGISTRY_CONSTRAINTS.has(dbErr.constraint)) ||
+          (dbErr.table && PRODUCT_REGISTRY_TABLES.has(dbErr.table))
+        ) {
+          throw new ConcurrencyConflictError(`Unique constraint conflict: ${dbErr.message}`);
+        }
         break;
       }
       case "23503": {
+        if (dbErr.constraint === "fk_evidence_assets_current_rev") {
+          throw new StaleRevisionConflictError("EvidenceAsset", 0, 0);
+        }
+        if (dbErr.constraint === "fk_evidence_derivatives_reference") {
+          throw new NotFoundError(
+            "ReferenceAsset",
+            "Referenced derivative reference asset does not exist"
+          );
+        }
+        if (dbErr.constraint === "fk_evidence_derivatives_revision") {
+          throw new NotFoundError(
+            "EvidenceRevision",
+            "Referenced evidence revision does not exist"
+          );
+        }
+        if (dbErr.constraint === "fk_evidence_revisions_source") {
+          throw new NotFoundError("SourceObject", "Referenced source object does not exist");
+        }
+        if (dbErr.constraint === "fk_batch_evidence_revision") {
+          throw new NotFoundError(
+            "EvidenceRevision",
+            "Referenced evidence revision does not exist"
+          );
+        }
+        if (dbErr.constraint === "fk_batch_evidence_batch") {
+          throw new NotFoundError("ProductBatch", "Referenced product batch does not exist");
+        }
+        if (
+          dbErr.constraint === "fk_source_objects_client" ||
+          dbErr.constraint === "fk_evidence_assets_client"
+        ) {
+          throw new NotFoundError("Client", context?.clientId ?? "unknown");
+        }
         if (dbErr.constraint === "fk_product_batches_sku") {
           throw new CrossClientViolationError(
             "Referenced SKU does not exist or belongs to a different client"
@@ -482,6 +698,12 @@ export function translateDatabaseError(
         }
         if (dbErr.constraint === "fk_batch_facts_predecessor") {
           throw new NonMonotonicRevisionError("Predecessor facts revision does not exist");
+        }
+        if (dbErr.constraint === "fk_batch_facts_origin_evidence") {
+          throw new NotFoundError(
+            "BatchEvidenceLink",
+            "Referenced origin evidence revision is not linked to this batch"
+          );
         }
         if (
           dbErr.constraint === "fk_product_skus_client" ||
@@ -511,6 +733,33 @@ export function translateDatabaseError(
             "RESTRICT_VIOLATION"
           );
         }
+        if (
+          dbErr.constraint === "fk_evidence_revisions_asset" ||
+          dbErr.constraint === "evidence_revisions_client_id_fkey"
+        ) {
+          throw new NotFoundError("EvidenceAsset", "Referenced evidence asset does not exist");
+        }
+        if (dbErr.constraint === "fk_evidence_revisions_predecessor") {
+          throw new NonMonotonicRevisionError("Predecessor evidence revision does not exist");
+        }
+        if (dbErr.constraint === "fk_verification_events_revision") {
+          throw new NotFoundError(
+            "EvidenceRevision",
+            "Referenced evidence revision does not exist"
+          );
+        }
+        if (dbErr.constraint === "fk_verification_events_withdrawal") {
+          throw new NotFoundError(
+            "EvidenceVerificationEvent",
+            "Referenced withdrawal event does not exist"
+          );
+        }
+        if (
+          (dbErr.constraint && REGISTRY_CONSTRAINTS.has(dbErr.constraint)) ||
+          (dbErr.table && PRODUCT_REGISTRY_TABLES.has(dbErr.table))
+        ) {
+          throw new NotFoundError("Entity", `Referenced entity does not exist: ${dbErr.message}`);
+        }
         break;
       }
       case "23001": {
@@ -537,7 +786,15 @@ export function translateDatabaseError(
           dbErr.message.includes("append-only") ||
           dbErr.message.includes("Archived SKU") ||
           dbErr.message.includes("Archived Batch") ||
-          dbErr.message.includes("updated_at must be nondecreasing")
+          dbErr.message.includes("updated_at must be nondecreasing") ||
+          dbErr.message.includes("Permanent evidence asset identity") ||
+          dbErr.message.includes("Permanent source object binary columns") ||
+          dbErr.message.includes("Archived evidence asset") ||
+          dbErr.message.includes("Archived source objects") ||
+          dbErr.message.includes("Deleted source objects") ||
+          dbErr.message.includes("Quarantined, archived, or deleted") ||
+          dbErr.message.includes("cannot be reactivated") ||
+          dbErr.message.includes("Storage version ID cannot be changed")
         ) {
           throw new AccessDeniedError(dbErr.message);
         }
@@ -553,10 +810,23 @@ export function translateDatabaseError(
         if (dbErr.message.includes("facts pointer")) {
           throw new NonMonotonicRevisionError(dbErr.message);
         }
+        if (
+          (dbErr.table && PRODUCT_REGISTRY_TABLES.has(dbErr.table)) ||
+          (dbErr.constraint && REGISTRY_CONSTRAINTS.has(dbErr.constraint)) ||
+          dbErr.message
+        ) {
+          throw new AccessDeniedError(dbErr.message);
+        }
         break;
       }
       case "23514": {
         // Check constraints - strictly allowlisted registry checks only
+        if (
+          dbErr.constraint === "chk_evidence_rev_monotonic" ||
+          dbErr.constraint === "chk_evidence_revision_supersedes_not_self"
+        ) {
+          throw new NonMonotonicRevisionError("Evidence revision must be contiguous and monotonic");
+        }
         if (dbErr.constraint === "chk_batch_facts_monotonic_rev") {
           throw new NonMonotonicRevisionError(
             "Batch facts revision must be contiguous and monotonic"
@@ -597,7 +867,8 @@ export function translateDatabaseError(
             {
               code: "INVALID_FIELD_COMBINATION",
               path: ["originEvidenceId"],
-              message: "Origin evidence linkage is not yet supported in this phase."
+              message:
+                "originEvidenceId and originEvidenceRevision must either both be specified or both be omitted."
             }
           ]);
         }
@@ -693,17 +964,33 @@ export function translateDatabaseError(
             }
           ]);
         }
+        if (
+          (dbErr.constraint && REGISTRY_CONSTRAINTS.has(dbErr.constraint)) ||
+          dbErr.constraint?.startsWith("chk_source_object") ||
+          dbErr.constraint?.startsWith("chk_evidence_") ||
+          dbErr.constraint?.startsWith("chk_batch_evidence_") ||
+          dbErr.constraint?.startsWith("chk_derivative_") ||
+          dbErr.constraint?.startsWith("chk_verification_events_") ||
+          dbErr.constraint?.startsWith("chk_reservation_") ||
+          dbErr.constraint === "chk_sha256_format" ||
+          (dbErr.table && PRODUCT_REGISTRY_TABLES.has(dbErr.table))
+        ) {
+          throw new ProductValidationError([
+            {
+              code: "INVALID_FIELD_COMBINATION",
+              path: [],
+              message: dbErr.message
+            }
+          ]);
+        }
         break;
       }
       case "40001":
       case "40P01":
       case "55P03": {
-        if (context !== undefined || (dbErr.table && PRODUCT_REGISTRY_TABLES.has(dbErr.table))) {
-          throw new ConcurrencyConflictError(
-            `PostgreSQL transaction concurrency failure (${dbErr.code}): ${dbErr.message}`
-          );
-        }
-        break;
+        throw new ConcurrencyConflictError(
+          `PostgreSQL transaction concurrency failure (${dbErr.code}): ${dbErr.message}`
+        );
       }
     }
   }
@@ -719,27 +1006,36 @@ export function isProductRegistryDatabaseError(err: unknown): boolean {
       message: string;
       table?: string;
     };
+    if (dbErr.code === "40001" || dbErr.code === "40P01" || dbErr.code === "55P03") {
+      return true;
+    }
+    if (dbErr.code === "23506") {
+      return true;
+    }
     if (dbErr.constraint && REGISTRY_CONSTRAINTS.has(dbErr.constraint)) {
       return true;
     }
     if (dbErr.table && PRODUCT_REGISTRY_TABLES.has(dbErr.table)) {
       return true;
     }
-    if (dbErr.code === "23506") {
-      return (
-        dbErr.message.includes("Permanent SKU identity") ||
-        dbErr.message.includes("Permanent Batch identity") ||
-        dbErr.message.includes("CANNOT_DELETE_HEAD_ENTITY") ||
-        dbErr.message.includes("CANNOT_MODIFY_IMMUTABLE_ENTITY") ||
-        dbErr.message.includes("Archived SKU") ||
-        dbErr.message.includes("Archived Batch") ||
-        dbErr.message.includes("Cannot create batch under archived SKU") ||
-        dbErr.message.includes("Cannot append facts to archived batch") ||
-        dbErr.message.includes("version must advance") ||
-        dbErr.message.includes("facts pointer") ||
-        dbErr.message.includes("updated_at must be nondecreasing")
-      );
-    }
+    return (
+      dbErr.message.includes("Permanent SKU identity") ||
+      dbErr.message.includes("Permanent Batch identity") ||
+      dbErr.message.includes("CANNOT_DELETE_HEAD_ENTITY") ||
+      dbErr.message.includes("CANNOT_MODIFY_IMMUTABLE_ENTITY") ||
+      dbErr.message.includes("Archived SKU") ||
+      dbErr.message.includes("Archived Batch") ||
+      dbErr.message.includes("Cannot create batch under archived SKU") ||
+      dbErr.message.includes("Cannot append facts to archived batch") ||
+      dbErr.message.includes("version must advance") ||
+      dbErr.message.includes("facts pointer") ||
+      dbErr.message.includes("updated_at must be nondecreasing") ||
+      dbErr.message.includes("Permanent source object binary columns") ||
+      dbErr.message.includes("cannot be reactivated") ||
+      dbErr.message.includes("Storage version ID cannot be changed") ||
+      dbErr.message.includes("forbids UPDATE or DELETE") ||
+      dbErr.message.includes("forbids DELETE")
+    );
   }
   return false;
 }
@@ -923,23 +1219,53 @@ export class PostgresProductEvidenceRepository implements ProductEvidenceReposit
         "initialFacts"
       ]);
       const facts = cmd.payload.initialFacts;
-      if (facts.originEvidenceId !== null && facts.originEvidenceId !== undefined) {
-        throw new ProductValidationError([
-          {
-            code: "INVALID_FIELD_COMBINATION",
-            path: ["initialFacts", "originEvidenceId"],
-            message: "Origin evidence linkage is not yet supported in this phase."
-          }
-        ]);
-      }
-      if (facts.originEvidenceRevision !== null && facts.originEvidenceRevision !== undefined) {
+      if (
+        facts.originEvidenceId !== null &&
+        facts.originEvidenceId !== undefined &&
+        (facts.originEvidenceRevision === null || facts.originEvidenceRevision === undefined)
+      ) {
         throw new ProductValidationError([
           {
             code: "INVALID_FIELD_COMBINATION",
             path: ["initialFacts", "originEvidenceRevision"],
-            message: "Origin evidence linkage is not yet supported in this phase."
+            message: "originEvidenceRevision must be specified when originEvidenceId is present."
           }
         ]);
+      }
+      if (
+        (facts.originEvidenceId === null || facts.originEvidenceId === undefined) &&
+        facts.originEvidenceRevision !== null &&
+        facts.originEvidenceRevision !== undefined
+      ) {
+        throw new ProductValidationError([
+          {
+            code: "INVALID_FIELD_COMBINATION",
+            path: ["initialFacts", "originEvidenceRevision"],
+            message: "originEvidenceRevision cannot be specified without originEvidenceId."
+          }
+        ]);
+      }
+      if (facts.originEvidenceId !== null && facts.originEvidenceId !== undefined) {
+        if (!isValidUuid(facts.originEvidenceId)) {
+          throw new ProductValidationError([
+            {
+              code: "INVALID_IDENTIFIER",
+              path: ["initialFacts", "originEvidenceId"],
+              message: "originEvidenceId must be a valid UUID string."
+            }
+          ]);
+        }
+      }
+      if (facts.originEvidenceRevision !== null && facts.originEvidenceRevision !== undefined) {
+        if (!isValidPositiveInt(facts.originEvidenceRevision)) {
+          throw new ProductValidationError([
+            {
+              code: "INVALID_REVISION",
+              path: ["initialFacts", "originEvidenceRevision"],
+              message: "originEvidenceRevision must be a positive integer."
+            }
+          ]);
+        }
       }
       if (!facts.originKind || !ALLOWED_ORIGIN_KINDS.has(facts.originKind)) {
         throw new ProductValidationError([
@@ -1026,6 +1352,34 @@ export class PostgresProductEvidenceRepository implements ProductEvidenceReposit
       const idRes = await client.query<{ id: string }>("SELECT uuidv7() AS id");
       const batchId = createBatchId(idRes.rows[0]!.id);
 
+      if (
+        cmd.payload.initialFacts?.originEvidenceId != null &&
+        cmd.payload.initialFacts?.originEvidenceRevision != null
+      ) {
+        const linkRes = await client.query<{ batch_id: string }>(
+          `SELECT batch_id FROM batch_evidence_links
+           WHERE client_id = $1 AND evidence_id = $2 AND evidence_revision = $3`,
+          [
+            cmd.clientId,
+            cmd.payload.initialFacts.originEvidenceId,
+            cmd.payload.initialFacts.originEvidenceRevision
+          ]
+        );
+        if (linkRes.rows.length === 0) {
+          throw new NotFoundError(
+            "BatchEvidenceLink",
+            `${cmd.payload.initialFacts.originEvidenceId}#${cmd.payload.initialFacts.originEvidenceRevision}`
+          );
+        }
+        throw new CrossBatchSourceError(
+          `Evidence ${cmd.payload.initialFacts.originEvidenceId} revision ${cmd.payload.initialFacts.originEvidenceRevision} is linked to batch ${linkRes.rows[0]!.batch_id} but not batch ${batchId}. Explicit fresh batch evidence link is required.`,
+          {
+            sha256: cmd.payload.initialFacts.originEvidenceId,
+            existingBatchId: linkRes.rows[0]!.batch_id
+          }
+        );
+      }
+
       const creation = createProductBatch({
         parentSku,
         batchId,
@@ -1060,7 +1414,7 @@ export class PostgresProductEvidenceRepository implements ProductEvidenceReposit
           client_id, batch_id, revision, origin_kind, producer_identity_as_claimed,
           production_start_date, production_end_date, origin_evidence_id, origin_evidence_revision,
           asserted_by, asserted_at, supersedes_revision
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, NULL, $8, $9, NULL)`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL)`,
         [
           creation.initialFacts.clientId,
           creation.initialFacts.batchId,
@@ -1069,6 +1423,8 @@ export class PostgresProductEvidenceRepository implements ProductEvidenceReposit
           creation.initialFacts.producerIdentityAsClaimed,
           creation.initialFacts.productionStartDate,
           creation.initialFacts.productionEndDate,
+          creation.initialFacts.originEvidenceId,
+          creation.initialFacts.originEvidenceRevision,
           creation.initialFacts.assertedBy,
           creation.initialFacts.assertedAt
         ]
@@ -1111,16 +1467,22 @@ export class PostgresProductEvidenceRepository implements ProductEvidenceReposit
       ]);
     }
 
-    if (cmd.payload.originEvidenceId !== null && cmd.payload.originEvidenceId !== undefined) {
+    if (
+      cmd.payload.originEvidenceId !== null &&
+      cmd.payload.originEvidenceId !== undefined &&
+      (cmd.payload.originEvidenceRevision === null ||
+        cmd.payload.originEvidenceRevision === undefined)
+    ) {
       throw new ProductValidationError([
         {
           code: "INVALID_FIELD_COMBINATION",
-          path: ["originEvidenceId"],
-          message: "Origin evidence linkage is not yet supported in this phase."
+          path: ["originEvidenceRevision"],
+          message: "originEvidenceRevision must be specified when originEvidenceId is present."
         }
       ]);
     }
     if (
+      (cmd.payload.originEvidenceId === null || cmd.payload.originEvidenceId === undefined) &&
       cmd.payload.originEvidenceRevision !== null &&
       cmd.payload.originEvidenceRevision !== undefined
     ) {
@@ -1128,9 +1490,34 @@ export class PostgresProductEvidenceRepository implements ProductEvidenceReposit
         {
           code: "INVALID_FIELD_COMBINATION",
           path: ["originEvidenceRevision"],
-          message: "Origin evidence linkage is not yet supported in this phase."
+          message: "originEvidenceRevision cannot be specified without originEvidenceId."
         }
       ]);
+    }
+    if (cmd.payload.originEvidenceId !== null && cmd.payload.originEvidenceId !== undefined) {
+      if (!isValidUuid(cmd.payload.originEvidenceId)) {
+        throw new ProductValidationError([
+          {
+            code: "INVALID_IDENTIFIER",
+            path: ["originEvidenceId"],
+            message: "originEvidenceId must be a valid UUID string."
+          }
+        ]);
+      }
+    }
+    if (
+      cmd.payload.originEvidenceRevision !== null &&
+      cmd.payload.originEvidenceRevision !== undefined
+    ) {
+      if (!isValidPositiveInt(cmd.payload.originEvidenceRevision)) {
+        throw new ProductValidationError([
+          {
+            code: "INVALID_REVISION",
+            path: ["originEvidenceRevision"],
+            message: "originEvidenceRevision must be a positive integer."
+          }
+        ]);
+      }
     }
 
     if (!cmd.payload.originKind || !ALLOWED_ORIGIN_KINDS.has(cmd.payload.originKind)) {
@@ -1260,6 +1647,91 @@ export class PostgresProductEvidenceRepository implements ProductEvidenceReposit
       }
       const previousFacts = mapRowToFacts(factsRes.rows[0]!);
 
+      if (cmd.payload.originEvidenceId != null && cmd.payload.originEvidenceRevision != null) {
+        const linkRes = await client.query<{ batch_id: string; source_object_id: string }>(
+          `SELECT l.batch_id, r.source_object_id
+           FROM batch_evidence_links l
+           JOIN evidence_revisions r
+             ON r.client_id = l.client_id AND r.evidence_id = l.evidence_id AND r.revision = l.evidence_revision
+           WHERE l.client_id = $1 AND l.evidence_id = $2 AND l.evidence_revision = $3
+           FOR SHARE OF l, r`,
+          [cmd.clientId, cmd.payload.originEvidenceId, cmd.payload.originEvidenceRevision]
+        );
+        if (linkRes.rows.length === 0) {
+          throw new NotFoundError(
+            "BatchEvidenceLink",
+            `${cmd.payload.originEvidenceId}#${cmd.payload.originEvidenceRevision}`
+          );
+        }
+        if (!linkRes.rows.some((r) => r.batch_id === cmd.payload.batchId)) {
+          throw new CrossBatchSourceError(
+            `Evidence ${cmd.payload.originEvidenceId} revision ${cmd.payload.originEvidenceRevision} is linked to batch ${linkRes.rows[0]!.batch_id} but not batch ${cmd.payload.batchId}. Explicit fresh batch evidence link is required.`,
+            {
+              sha256: cmd.payload.originEvidenceId,
+              existingBatchId: linkRes.rows[0]!.batch_id
+            }
+          );
+        }
+
+        // Check EvidenceAsset is not archived
+        const assetRes = await client.query<{ archived_at: Date | null }>(
+          `SELECT archived_at FROM evidence_assets
+           WHERE client_id = $1 AND evidence_id = $2 FOR SHARE`,
+          [cmd.clientId, cmd.payload.originEvidenceId]
+        );
+        if (assetRes.rows.length === 0) {
+          throw new NotFoundError("EvidenceAsset", cmd.payload.originEvidenceId);
+        }
+        if (assetRes.rows[0]!.archived_at !== null) {
+          throw new AccessDeniedError(
+            "Referenced evidence asset is archived.",
+            "EVIDENCE_ARCHIVED"
+          );
+        }
+
+        // Check SourceObject is available
+        const sourceRes = await client.query<{ availability: string }>(
+          `SELECT availability FROM source_objects
+           WHERE client_id = $1 AND source_object_id = $2 FOR SHARE`,
+          [cmd.clientId, linkRes.rows[0]!.source_object_id]
+        );
+        if (sourceRes.rows.length === 0) {
+          throw new NotFoundError("SourceObject", linkRes.rows[0]!.source_object_id);
+        }
+        if (sourceRes.rows[0]!.availability !== "available") {
+          throw new AccessDeniedError(
+            `Referenced source object is unavailable (${sourceRes.rows[0]!.availability}).`,
+            "SOURCE_UNAVAILABLE"
+          );
+        }
+
+        // Check for active disputes on this revision
+        const disputeRes = await client.query<{
+          event_id: string;
+          outcome: string;
+          withdrawal_event_id: string | null;
+        }>(
+          `SELECT event_id, outcome, withdrawal_event_id
+           FROM evidence_verification_events
+           WHERE client_id = $1 AND evidence_id = $2 AND evidence_revision = $3
+           ORDER BY occurred_at ASC FOR SHARE`,
+          [cmd.clientId, cmd.payload.originEvidenceId, cmd.payload.originEvidenceRevision]
+        );
+        const activeDisputes = new Set<string>();
+        for (const evt of disputeRes.rows) {
+          if (evt.outcome === "disputed" || evt.outcome === "rejected") {
+            activeDisputes.add(evt.event_id);
+          } else if (evt.outcome === "withdrawn" && evt.withdrawal_event_id) {
+            activeDisputes.delete(evt.withdrawal_event_id);
+          }
+        }
+        if (activeDisputes.size > 0) {
+          throw new ReportDisputedError(
+            `Referenced evidence revision ${cmd.payload.originEvidenceId}#${cmd.payload.originEvidenceRevision} has an active dispute or rejection and cannot be linked as batch origin.`
+          );
+        }
+      }
+
       const nextFacts = appendBatchFactsRevision(previousFacts, {
         originKind: cmd.payload.originKind,
         producerIdentityAsClaimed: cmd.payload.producerIdentityAsClaimed,
@@ -1284,7 +1756,7 @@ export class PostgresProductEvidenceRepository implements ProductEvidenceReposit
           client_id, batch_id, revision, origin_kind, producer_identity_as_claimed,
           production_start_date, production_end_date, origin_evidence_id, origin_evidence_revision,
           asserted_by, asserted_at, supersedes_revision
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, NULL, $8, $9, $10)`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
         [
           nextFacts.clientId,
           nextFacts.batchId,
@@ -1293,6 +1765,8 @@ export class PostgresProductEvidenceRepository implements ProductEvidenceReposit
           nextFacts.producerIdentityAsClaimed,
           nextFacts.productionStartDate,
           nextFacts.productionEndDate,
+          nextFacts.originEvidenceId,
+          nextFacts.originEvidenceRevision,
           nextFacts.assertedBy,
           nextFacts.assertedAt,
           nextFacts.supersedesRevision

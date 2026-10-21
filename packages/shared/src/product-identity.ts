@@ -10,14 +10,88 @@ export const MAX_POSITIVE_INT = 2_147_483_647; // PostgreSQL 32-bit signed INT m
 
 export const CANONICAL_SKU_REGEX = /^[A-Z0-9_-]{3,64}$/;
 export const LOT_IDENTIFIER_REGEX = /^[A-Za-z0-9_.-]{1,128}$/;
+export const SHA256_HEX_REGEX = /^[0-9a-f]{64}$/;
 export const UUID_REGEX =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/;
+export const UUID_V7_REGEX =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/;
 export const DATE_ONLY_REGEX = /^(\d{4})-(\d{2})-(\d{2})$/;
 export const ISO_UTC_TIMESTAMP_REGEX =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?Z$/;
 
 export const BATCH_ORIGIN_KINDS = ["own_production", "partner_origin", "unknown"] as const;
 export type BatchOriginKind = (typeof BATCH_ORIGIN_KINDS)[number];
+
+export const EVIDENCE_SOURCE_CLASSES = [
+  "photo",
+  "video",
+  "raw",
+  "document",
+  "coa",
+  "process_record"
+] as const;
+export type EvidenceSourceClass = (typeof EVIDENCE_SOURCE_CLASSES)[number];
+
+export const EVIDENCE_ACQUISITION_METHODS = [
+  "direct_upload",
+  "supplier_submission",
+  "field_capture",
+  "lab_transfer"
+] as const;
+export type EvidenceAcquisitionMethod = (typeof EVIDENCE_ACQUISITION_METHODS)[number];
+
+export const LEGAL_RIGHTS_STATUSES = ["unknown", "granted", "restricted", "denied"] as const;
+export type LegalRightsStatus = (typeof LEGAL_RIGHTS_STATUSES)[number];
+
+export const CONSENT_STATUSES = ["unknown", "granted", "restricted", "denied"] as const;
+export type ConsentStatus = (typeof CONSENT_STATUSES)[number];
+
+export const BATCH_EVIDENCE_PURPOSES = [
+  "macro_hero_photo",
+  "coa_test_report",
+  "cultivation_log",
+  "processing_record",
+  "packaging_spec",
+  "general_supporting_evidence"
+] as const;
+export type BatchEvidencePurpose = (typeof BATCH_EVIDENCE_PURPOSES)[number];
+
+export const VERIFICATION_OUTCOMES = ["verified", "rejected", "disputed", "withdrawn"] as const;
+export type VerificationOutcome = (typeof VERIFICATION_OUTCOMES)[number];
+
+export const VERIFICATION_KINDS = [
+  "submitter_attestation",
+  "human_internal_review",
+  "independent_third_party_corroboration"
+] as const;
+export type VerificationKind = (typeof VERIFICATION_KINDS)[number];
+
+export const VERIFICATION_FACT_SCOPES = [
+  "provenance_metadata",
+  "capture_circumstances",
+  "lab_identity",
+  "chain_of_custody",
+  "full_document_authenticity"
+] as const;
+export type VerificationFactScope = (typeof VERIFICATION_FACT_SCOPES)[number];
+
+export const SOURCE_OBJECT_AVAILABILITIES = [
+  "available",
+  "archived",
+  "quarantined",
+  "deleted_under_retention"
+] as const;
+export type SourceObjectAvailability = (typeof SOURCE_OBJECT_AVAILABILITIES)[number];
+
+export const EVIDENCE_REGISTRATION_INTENTS = [
+  "initial_assertion",
+  "new_batch_assertion",
+  "supersede"
+] as const;
+export type EvidenceRegistrationIntent = (typeof EVIDENCE_REGISTRATION_INTENTS)[number];
+
+export const REPORTED_CAPTURE_PRECISIONS = ["date", "minute", "second", "millisecond"] as const;
+export type ReportedCapturePrecision = (typeof REPORTED_CAPTURE_PRECISIONS)[number];
 
 export const PRODUCT_EVIDENCE_ERROR_CODES = [
   "NOT_FOUND",
@@ -79,6 +153,42 @@ export function isValidUuid(val: unknown): val is string {
     return false;
   }
   return UUID_REGEX.test(val);
+}
+
+/**
+ * Validates whether a value is an RFC 9562 UUIDv7 string.
+ */
+export function isValidUuidV7(val: unknown): val is string {
+  if (typeof val !== "string") {
+    return false;
+  }
+  return UUID_V7_REGEX.test(val);
+}
+
+/**
+ * Generates an RFC 9562 UUIDv7 string using globalThis.crypto and current time.
+ */
+export function generateUuidV7(): string {
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  const now = Date.now();
+  // 48-bit timestamp
+  bytes[0] = Math.floor(now / 0x10000000000) & 0xff;
+  bytes[1] = Math.floor(now / 0x100000000) & 0xff;
+  bytes[2] = Math.floor(now / 0x1000000) & 0xff;
+  bytes[3] = Math.floor(now / 0x10000) & 0xff;
+  bytes[4] = Math.floor(now / 0x100) & 0xff;
+  bytes[5] = now & 0xff;
+  // version 7: 0111xxxx
+  bytes[6] = (bytes[6]! & 0x0f) | 0x70;
+  // variant 10xx: 10xxxxxx
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+
+  const hex: string[] = [];
+  for (let i = 0; i < 16; i++) {
+    hex.push(bytes[i]!.toString(16).padStart(2, "0"));
+  }
+  return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10, 16).join("")}`;
 }
 
 /**
@@ -345,4 +455,53 @@ export function normalizeAssertedBy(val: unknown, fieldName = "assertedBy"): str
     );
   }
   return trimmed;
+}
+
+/**
+ * Validates and normalizes lowercase 64-hex SHA-256 digest string:
+ * - Must be lowercase 64 hex characters (0-9, a-f).
+ * - Rejects surrounding whitespace without silent trimming.
+ */
+export function normalizeSha256Hex(val: unknown, fieldName = "sha256"): string {
+  if (typeof val !== "string" || !SHA256_HEX_REGEX.test(val)) {
+    throw new Error(
+      `${fieldName} must be a lowercase 64-hex SHA-256 digest string without surrounding whitespace.`
+    );
+  }
+  return val;
+}
+
+export function isValidSha256Hex(val: unknown): val is string {
+  return typeof val === "string" && SHA256_HEX_REGEX.test(val);
+}
+
+/**
+ * Normalizes assertionText:
+ * - Non-empty trimmed Unicode text (1–4000 code points).
+ * - Rejects C0/C1 control and invisible formatting characters.
+ */
+export function normalizeAssertionText(val: unknown, fieldName = "assertionText"): string {
+  if (typeof val !== "string") {
+    throw new Error(`${fieldName} must be a string`);
+  }
+  if (hasControlOrInvisibleChars(val)) {
+    throw new Error(`${fieldName} contains illegal control or invisible formatting characters`);
+  }
+  const trimmed = val.trim();
+  const codePoints = Array.from(trimmed);
+  if (codePoints.length < 1 || codePoints.length > 4000) {
+    throw new Error(
+      `${fieldName} must be between 1 and 4000 Unicode code points (found ${codePoints.length})`
+    );
+  }
+  return trimmed;
+}
+
+export function isValidAssertionText(val: unknown): val is string {
+  try {
+    normalizeAssertionText(val);
+    return true;
+  } catch {
+    return false;
+  }
 }

@@ -52,3 +52,7 @@ export * from "./minimax-h3-experiment-ports.js";
 export * from "./h3-candidate-ports.js";
 export * from "./product-evidence-repository.js";
 export * from "./product-evidence-serializers.js";
+export * from "./originals-inspection-port.js";
+export * from "./evidence-storage-policy.js";
+export * from "./evidence-lock-coordinator.js";
+export * from "./evidence-asset-repository.js";

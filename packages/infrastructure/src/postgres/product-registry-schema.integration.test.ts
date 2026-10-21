@@ -2,7 +2,7 @@ import { mkdtemp, cp, rm, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { Pool, type PoolClient } from "pg";
 import { runMigrations } from "./migration-runner.js";
 import {
@@ -41,6 +41,12 @@ describe("PostgreSQL product registry schema and protection integration", () => 
       client = await pool.connect();
     }
     await client.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public;");
+  });
+
+  afterEach(async () => {
+    if (client) {
+      await client.query("ROLLBACK").catch(() => {});
+    }
   });
 
   it("applies migration 026 and registers exact tables and constraints", async () => {
@@ -172,7 +178,7 @@ describe("PostgreSQL product registry schema and protection integration", () => 
     ).rejects.toThrow(/chk_batch_facts_monotonic_rev/);
   });
 
-  it("enforces temporary rejection of origin evidence links via check constraint", async () => {
+  it("enforces rejection of origin evidence links without batch evidence link via foreign key constraint", async () => {
     await runMigrations(client, { migrationsDirectory });
     const clientRecord = await insertClientRecord(client);
 
@@ -197,7 +203,7 @@ describe("PostgreSQL product registry schema and protection integration", () => 
          VALUES ($1, $2, 1, 'own_production', uuidv7(), 1, 'tester')`,
         [clientRecord.client_id, batchId]
       )
-    ).rejects.toThrow(/chk_batch_facts_origin_evidence_deferred/);
+    ).rejects.toThrow(/fk_batch_facts_origin_evidence/);
     await client.query("ROLLBACK");
   });
 

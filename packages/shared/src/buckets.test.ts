@@ -8,23 +8,27 @@ import {
 } from "./index.js";
 
 describe("bucket class constants and retention policies", () => {
-  it("defines the four PRD bucket class constants", () => {
+  it("defines the PRD bucket class constants including evidence archive", () => {
     expect(BUCKET_NAMES).toEqual([
       "godzspeed-temp",
       "godzspeed-review",
       "godzspeed-reference",
-      "godzspeed-delivery"
+      "godzspeed-delivery",
+      "godzspeed-evidence"
     ]);
 
     expect(BUCKETS.TEMP).toBe("godzspeed-temp");
     expect(BUCKETS.REVIEW).toBe("godzspeed-review");
     expect(BUCKETS.REFERENCE).toBe("godzspeed-reference");
     expect(BUCKETS.DELIVERY).toBe("godzspeed-delivery");
+    expect(BUCKETS.EVIDENCE).toBe("godzspeed-evidence");
   });
 
   it("type checks bucket names against union", () => {
     const validBucket: BucketName = BUCKETS.TEMP;
     expect(BUCKET_NAMES.includes(validBucket)).toBe(true);
+    const evidenceBucket: BucketName = BUCKETS.EVIDENCE;
+    expect(BUCKET_NAMES.includes(evidenceBucket)).toBe(true);
   });
 
   it("defines 14-day automated expiry for godzspeed-temp", () => {
@@ -75,5 +79,16 @@ describe("bucket class constants and retention policies", () => {
 
     const deliveryLifecycle = BUCKET_LIFECYCLE_DEFINITIONS["godzspeed-delivery"];
     expect(deliveryLifecycle).toBeUndefined();
+  });
+
+  it("defines no automated expiry for godzspeed-evidence (source archive)", () => {
+    const evidencePolicy = BUCKET_RETENTION_POLICIES["godzspeed-evidence"];
+    expect(evidencePolicy).toBeDefined();
+    expect(evidencePolicy.bucket).toBe("godzspeed-evidence");
+    expect(evidencePolicy.defaultRetentionDays).toBeUndefined();
+    expect(evidencePolicy.isAutomatedExpiry).toBe(false);
+
+    const evidenceLifecycle = BUCKET_LIFECYCLE_DEFINITIONS["godzspeed-evidence"];
+    expect(evidenceLifecycle).toBeUndefined();
   });
 });

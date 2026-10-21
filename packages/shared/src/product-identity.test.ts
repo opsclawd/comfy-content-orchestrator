@@ -3,6 +3,7 @@ import {
   canonicalizeUtcTimestamp,
   compareDateOnly,
   compareUtcTimestamps,
+  generateUuidV7,
   hasControlOrInvisibleChars,
   isValidCalendarDate,
   isValidCanonicalSku,
@@ -12,6 +13,7 @@ import {
   isValidLotIdentifier,
   isValidPositiveInt,
   isValidUuid,
+  isValidUuidV7,
   MAX_POSITIVE_INT,
   MIN_POSITIVE_INT,
   normalizeAssertedBy,
@@ -50,6 +52,13 @@ describe("product-identity lexical functions", () => {
       expect(isValidUuid("018f0000000070008000000000000001")).toBe(false);
       expect(isValidUuid("")).toBe(false);
       expect(isValidUuid(null)).toBe(false);
+    });
+
+    it("generates and validates RFC 9562 UUIDv7", () => {
+      const v7 = generateUuidV7();
+      expect(isValidUuid(v7)).toBe(true);
+      expect(isValidUuidV7(v7)).toBe(true);
+      expect(isValidUuidV7("018f0000-0000-4000-8000-000000000001")).toBe(false); // v4 is not v7
     });
   });
 

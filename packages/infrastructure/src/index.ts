@@ -466,4 +466,14 @@ export {
   DEFAULT_MAX_PIXELS
 } from "./image/sharp-image-inspection-adapter.js";
 
+export {
+  OriginalsInspectionAdapter,
+  type OriginalsInspectionLimits
+} from "./evidence/originals-inspection-adapter.js";
+export { PostgresEvidenceLockCoordinator } from "./evidence/postgres-evidence-lock-coordinator.js";
+export {
+  PostgresEvidenceAssetRepository,
+  type PostgresEvidenceAssetRepositoryOptions
+} from "./evidence/postgres-evidence-asset-repository.js";
+
 export * from "./experiments/index.js";

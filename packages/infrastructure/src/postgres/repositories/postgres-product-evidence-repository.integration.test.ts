@@ -746,6 +746,7 @@ describe("PostgresProductEvidenceRepository and UoW integration", () => {
           payload: { skuId: sku1.skuId, lotIdentifier: "LOT-LATE", displayName: "Late Batch" }
         })
       );
+      pCreate.catch(() => {});
 
       await lockingClientA.query("COMMIT");
       await expect(pCreate).rejects.toThrow(AccessDeniedError);

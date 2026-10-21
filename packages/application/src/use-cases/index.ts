@@ -81,3 +81,6 @@ export * from "./auto-plan-first-pass.js";
 export * from "./list-clients.js";
 export * from "./evaluate-h3-candidate-eligibility.js";
 export * from "./product-registry-use-cases.js";
+export * from "./register-evidence-asset.js";
+export * from "./link-existing-derivative.js";
+export * from "./record-evidence-verification-event.js";
