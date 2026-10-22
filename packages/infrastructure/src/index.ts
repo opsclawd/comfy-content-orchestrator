@@ -483,5 +483,14 @@ export {
   PostgresProductClaimRepository,
   type PostgresProductClaimRepositoryOptions
 } from "./postgres/repositories/postgres-product-claim-repository.js";
+export {
+  ConfiguredReviewerAuthorizationAdapter,
+  type ClientReviewerGrants,
+  type ReviewerAuthorizationGrants
+} from "./evidence/configured-reviewer-authorization-adapter.js";
+export {
+  PostgresBatchEvidenceDossierQueries,
+  type PostgresBatchEvidenceDossierQueriesOptions
+} from "./postgres/queries/postgres-batch-evidence-dossier-queries.js";
 
 export * from "./experiments/index.js";

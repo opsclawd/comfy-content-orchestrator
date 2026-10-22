@@ -1,0 +1,2630 @@
+openapi: 3.1.0
+info:
+  title: Product & Batch Evidence Dossier API
+  version: 1.0.0
+  description: >
+    Tenant-scoped, private control plane APIs for product SKU and lot registry,
+    tamper-evident original media uploads, derivative reference linking,
+    Certificate of Analysis (CoA) measurement entry and review, claim verification,
+    invalidation, and comprehensive provenance dossier resolution.
+servers:
+  - url: /api/v1/clients/{clientId}
+    description: Client-scoped API gateway base
+    variables:
+      clientId:
+        description: Authenticated client tenant UUID
+        default: "018e69e0-8a6a-72cb-b1b7-ec79a1f73001"
+
+security:
+  - BearerAuth: []
+  - ClientHeader: []
+
+paths:
+  # ============================================================================
+  # Product SKU Endpoints
+  # ============================================================================
+  /product-skus:
+    post:
+      summary: Register a new product SKU
+      operationId: createProductSku
+      tags: [Product SKU]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSkuRequest"
+      responses:
+        "201":
+          description: Product SKU created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductSkuResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+    get:
+      summary: List product SKUs for the tenant
+      operationId: listProductSkus
+      tags: [Product SKU]
+      responses:
+        "200":
+          description: List of product SKUs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductSkuListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /product-skus/{skuId}:
+    parameters:
+      - name: skuId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get product SKU by ID
+      operationId: getProductSku
+      tags: [Product SKU]
+      responses:
+        "200":
+          description: Product SKU details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductSkuResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      summary: Update product SKU metadata
+      operationId: updateProductSku
+      tags: [Product SKU]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSkuMetadataRequest"
+      responses:
+        "200":
+          description: Product SKU metadata updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductSkuResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /product-skus/{skuId}/archive:
+    parameters:
+      - name: skuId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Archive a product SKU
+      operationId: archiveProductSku
+      tags: [Product SKU]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArchiveSkuRequest"
+      responses:
+        "200":
+          description: Product SKU archived
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductSkuResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  # ============================================================================
+  # Product Batch & Facts Endpoints
+  # ============================================================================
+  /batches:
+    post:
+      summary: Register a new product batch / lot
+      operationId: createProductBatch
+      tags: [Product Batch]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBatchRequest"
+      responses:
+        "201":
+          description: Product batch created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateBatchResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+    get:
+      summary: List product batches for the tenant
+      operationId: listProductBatches
+      tags: [Product Batch]
+      parameters:
+        - name: skuId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: List of product batches
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductBatchListResponse"
+
+  /batches/{batchId}:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get product batch by ID
+      operationId: getProductBatch
+      tags: [Product Batch]
+      responses:
+        "200":
+          description: Product batch details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductBatchResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      summary: Update product batch metadata
+      operationId: updateProductBatch
+      tags: [Product Batch]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateBatchMetadataRequest"
+      responses:
+        "200":
+          description: Product batch updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductBatchResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /batches/{batchId}/archive:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Archive a product batch
+      operationId: archiveProductBatch
+      tags: [Product Batch]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArchiveBatchRequest"
+      responses:
+        "200":
+          description: Product batch archived
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductBatchResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /batches/{batchId}/facts:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Append immutable facts revision to batch
+      operationId: appendBatchFacts
+      tags: [Product Batch Facts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AppendBatchFactsRequest"
+      responses:
+        "201":
+          description: Facts revision appended
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchFactsRevisionResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+    get:
+      summary: Get complete history of immutable facts revisions for batch
+      operationId: getBatchFactsHistory
+      tags: [Product Batch Facts]
+      responses:
+        "200":
+          description: Chronological list of batch facts revisions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchFactsRevisionHistoryResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ============================================================================
+  # Evidence Asset Endpoints
+  # ============================================================================
+  /batches/{batchId}/evidence:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Register evidence asset (multipart upload or JSON source reuse)
+      operationId: registerEvidenceAsset
+      tags: [Evidence Asset]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, purpose, sourceClass, acquisitionMethod, assertionText]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                purpose:
+                  type: string
+                sourceClass:
+                  type: string
+                acquisitionMethod:
+                  type: string
+                assertionText:
+                  type: string
+                rightsStatus:
+                  type: string
+                  enum: [unknown, granted, restricted, denied]
+                consentStatus:
+                  type: string
+                  enum: [unknown, granted, restricted, denied]
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterEvidenceAssetRequest"
+      responses:
+        "201":
+          description: Evidence asset registered without exposing raw internal storage credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SafeRegisterEvidenceAssetResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+    get:
+      summary: List evidence assets linked to this batch
+      operationId: listBatchEvidence
+      tags: [Evidence Asset]
+      responses:
+        "200":
+          description: List of batch evidence items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceAssetListResponse"
+
+  /batches/{batchId}/evidence/{evidenceId}:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: evidenceId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get head revision of evidence asset
+      operationId: getEvidenceAssetHead
+      tags: [Evidence Asset]
+      responses:
+        "200":
+          description: Evidence asset head details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceAssetDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /batches/{batchId}/evidence/{evidenceId}/revisions/{revision}:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: evidenceId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: revision
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    get:
+      summary: Get specific immutable revision of evidence asset
+      operationId: getEvidenceRevision
+      tags: [Evidence Asset]
+      responses:
+        "200":
+          description: Evidence revision details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceRevision"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /batches/{batchId}/evidence/{evidenceId}/revisions/{revision}/derivative:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: evidenceId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: revision
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    post:
+      summary: Link render-ready derivative reference asset to evidence revision
+      operationId: linkEvidenceDerivative
+      tags: [Evidence Derivative]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LinkEvidenceDerivativeRequest"
+      responses:
+        "200":
+          description: Derivative linked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceDerivative"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+    get:
+      summary: Get derivative reference link for evidence revision
+      operationId: getEvidenceDerivative
+      tags: [Evidence Derivative]
+      responses:
+        "200":
+          description: Derivative reference asset info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceDerivative"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /batches/{batchId}/evidence/{evidenceId}/revisions/{revision}/verification-events:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: evidenceId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: revision
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    post:
+      summary: Record tamper-evident verification event for evidence revision
+      operationId: recordEvidenceVerificationEvent
+      tags: [Evidence Verification]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordEvidenceVerificationEventRequest"
+      responses:
+        "200":
+          description: Verification event recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceVerificationEvent"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    get:
+      summary: List verification events recorded for evidence revision
+      operationId: listEvidenceVerificationEvents
+      tags: [Evidence Verification]
+      responses:
+        "200":
+          description: List of verification events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceVerificationEventListResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /batches/{batchId}/evidence/{evidenceId}/revisions/{revision}/media:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: evidenceId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: revision
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    get:
+      summary: Get short-lived (300s) presigned delivery URL for original media
+      operationId: deliverEvidenceMedia
+      tags: [Evidence Media]
+      responses:
+        "200":
+          description: Presigned delivery URL metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceMediaDeliveryResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ============================================================================
+  # Certificate of Analysis (CoA) Endpoints
+  # ============================================================================
+  /batches/{batchId}/coa-reports:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Create CoA report with structured analytical measurements
+      operationId: createCoaReport
+      tags: [CoA Report]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCoaReportRequest"
+      responses:
+        "201":
+          description: CoA report created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CoaReportCreationResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    get:
+      summary: List CoA reports for batch
+      operationId: listCoaReports
+      tags: [CoA Report]
+      responses:
+        "200":
+          description: List of CoA reports
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CoaReportListResponse"
+
+  /batches/{batchId}/coa-reports/{reportId}:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: reportId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get head revision of CoA report
+      operationId: getCoaReport
+      tags: [CoA Report]
+      responses:
+        "200":
+          description: CoA report head and current revision
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CoaReportDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /batches/{batchId}/coa-reports/{reportId}/revisions/{revision}:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: reportId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: revision
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    get:
+      summary: Get specific immutable revision of CoA report and measurement panel
+      operationId: getCoaReportRevision
+      tags: [CoA Report]
+      responses:
+        "200":
+          description: CoA report revision and measurements
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CoaReportRevision"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /batches/{batchId}/coa-reports/{reportId}/supersede:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: reportId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Supersede CoA report with corrected revision
+      operationId: supersedeCoaReport
+      tags: [CoA Report]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SupersedeCoaReportRequest"
+      responses:
+        "200":
+          description: CoA report superseded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CoaReportCreationResponse"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /batches/{batchId}/coa-reports/{reportId}/review:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: reportId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Review and approve/reject head of CoA report
+      operationId: reviewCoaReport
+      tags: [CoA Report]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewCoaReportRequest"
+      responses:
+        "200":
+          description: CoA review decision recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewCoaReportResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /batches/{batchId}/coa-reports/{reportId}/archive:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: reportId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Archive CoA report
+      operationId: archiveCoaReport
+      tags: [CoA Report]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArchiveCoaReportRequest"
+      responses:
+        "200":
+          description: CoA report archived
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArchiveCoaReportResponse"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  # ============================================================================
+  # Product Claim Endpoints
+  # ============================================================================
+  /batches/{batchId}/claims:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Create a product claim
+      operationId: createClaim
+      tags: [Product Claim]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateClaimRequest"
+      responses:
+        "201":
+          description: Claim created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductClaim"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+
+    get:
+      summary: List product claims for batch
+      operationId: listClaims
+      tags: [Product Claim]
+      responses:
+        "200":
+          description: List of product claims
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductClaimListResponse"
+
+  /batches/{batchId}/claims/{claimId}:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: claimId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get head revision and resolution of product claim
+      operationId: getClaim
+      tags: [Product Claim]
+      responses:
+        "200":
+          description: Claim details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductClaimDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /batches/{batchId}/claims/{claimId}/revisions/{revision}:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: claimId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: revision
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    get:
+      summary: Get specific immutable revision of product claim
+      operationId: getClaimRevision
+      tags: [Product Claim]
+      responses:
+        "200":
+          description: Claim revision details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductClaimRevision"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /batches/{batchId}/claims/{claimId}/revisions:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: claimId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Append revision to claim
+      operationId: appendClaimRevision
+      tags: [Product Claim]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AppendClaimRevisionRequest"
+      responses:
+        "200":
+          description: Claim revision appended
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductClaim"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /batches/{batchId}/claims/{claimId}/evidence-links:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: claimId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Link supporting evidence or CoA measurement to claim
+      operationId: linkClaimEvidence
+      tags: [Product Claim]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LinkClaimEvidenceRequest"
+      responses:
+        "200":
+          description: Evidence links updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  links:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ClaimEvidenceLink"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /batches/{batchId}/claims/{claimId}/review:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: claimId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Review and approve/reject claim
+      operationId: reviewClaim
+      tags: [Product Claim]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewClaimRequest"
+      responses:
+        "200":
+          description: Claim review completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewClaimResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /batches/{batchId}/claims/{claimId}/invalidate:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: claimId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      summary: Invalidate a claim due to upstream evidence failure, supersession or dispute
+      operationId: invalidateClaim
+      tags: [Product Claim]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InvalidateClaimRequest"
+      responses:
+        "200":
+          description: Claim invalidated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvalidateClaimResponse"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  # ============================================================================
+  # Batch Evidence Dossier Query
+  # ============================================================================
+  /batches/{batchId}/dossier:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Read coherent, full-provenance batch evidence dossier
+      description: >
+        Resolves tenant-scoped SKU identity, lot/version, facts history,
+        evidence sources, derivative reference links, verification events,
+        CoA reports and structured measurements, product claims with eligibility
+        and block reasons, and complete provenance links. Never flattens unverified
+        values into an 'approved specs' object.
+      operationId: getBatchEvidenceDossier
+      tags: [Batch Evidence Dossier]
+      responses:
+        "200":
+          description: Complete explicit provenance dossier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchEvidenceDossier"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+# ==============================================================================
+# Components
+# ==============================================================================
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+    ClientHeader:
+      type: apiKey
+      in: header
+      name: x-client-id
+
+  responses:
+    Unauthorized:
+      description: Missing authentication token or client context
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Forbidden:
+      description: Access denied for requested tenant resource or reviewer role
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Resource not found within tenant scope
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ValidationError:
+      description: Lexical or schema validation error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: Stale revision conflict, concurrency conflict, or idempotency payload mismatch
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          enum:
+            - VALIDATION_ERROR
+            - AUTHENTICATION_REQUIRED
+            - FORBIDDEN
+            - NOT_FOUND
+            - CONFLICT
+            - STALE_REVISION_CONFLICT
+            - IDEMPOTENCY_CONFLICT
+            - CONCURRENCY_CONFLICT
+            - NON_MONOTONIC_REVISION
+            - SOURCE_SUPERSEDED
+            - SOURCE_DISPUTED
+            - CROSS_BATCH_SOURCE
+            - REPORT_DISPUTED
+            - EVIDENCE_REVISION_LOCKED
+            - INVALID_MEASUREMENT_DECIMAL
+            - UNVERIFIED_CLAIM_PROVENANCE
+            - UNSUPPORTED_MIME_TYPE
+            - STORAGE_CONFIGURATION_ERROR
+            - INTERNAL_ERROR
+        message:
+          type: string
+        issues:
+          type: array
+          items:
+            type: object
+        details:
+          type: object
+          additionalProperties: true
+
+    ProductSkuResponse:
+      type: object
+      required:
+        - skuId
+        - clientId
+        - canonicalSku
+        - displayName
+        - version
+        - createdAt
+        - updatedAt
+      properties:
+        skuId: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        canonicalSku: { type: string }
+        displayName: { type: string }
+        version: { type: integer, minimum: 1 }
+        archivedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      example:
+        skuId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73010"
+        clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73001"
+        canonicalSku: "SKU-PROV-100"
+        displayName: "Botanical Extracts Organic Tincture 1000mg"
+        version: 1
+        archivedAt: null
+        createdAt: "2026-10-21T10:00:00.000Z"
+        updatedAt: "2026-10-21T10:00:00.000Z"
+
+    ProductSkuListResponse:
+      type: object
+      required: [skus]
+      properties:
+        skus:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductSkuResponse"
+      example:
+        skus:
+          - skuId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73010"
+            clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73001"
+            canonicalSku: "SKU-PROV-100"
+            displayName: "Botanical Extracts Organic Tincture 1000mg"
+            version: 1
+            archivedAt: null
+            createdAt: "2026-10-21T10:00:00.000Z"
+            updatedAt: "2026-10-21T10:00:00.000Z"
+
+    CreateSkuRequest:
+      type: object
+      required:
+        - actionId
+        - canonicalSku
+        - displayName
+      properties:
+        actionId: { type: string, format: uuid }
+        skuId: { type: string, format: uuid }
+        canonicalSku: { type: string }
+        displayName: { type: string }
+
+    UpdateSkuMetadataRequest:
+      type: object
+      required:
+        - actionId
+        - expectedVersion
+        - displayName
+      properties:
+        actionId: { type: string, format: uuid }
+        expectedVersion: { type: integer, minimum: 1 }
+        displayName: { type: string }
+
+    ArchiveSkuRequest:
+      type: object
+      required: [actionId, expectedVersion]
+      properties:
+        actionId: { type: string, format: uuid }
+        expectedVersion: { type: integer, minimum: 1 }
+
+    ProductBatchResponse:
+      type: object
+      required:
+        - batchId
+        - clientId
+        - skuId
+        - lotIdentifier
+        - displayName
+        - version
+        - currentFactsRevision
+        - createdAt
+        - updatedAt
+      properties:
+        batchId: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        skuId: { type: string, format: uuid }
+        lotIdentifier: { type: string }
+        displayName: { type: string }
+        version: { type: integer, minimum: 1 }
+        currentFactsRevision: { type: integer, minimum: 1 }
+        archivedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      example:
+        batchId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73020"
+        clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73001"
+        skuId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73010"
+        lotIdentifier: "LOT-2026-001"
+        displayName: "Batch LOT-2026-001"
+        version: 1
+        currentFactsRevision: 1
+        archivedAt: null
+        createdAt: "2026-10-21T10:15:00.000Z"
+        updatedAt: "2026-10-21T10:15:00.000Z"
+
+    ProductBatchListResponse:
+      type: object
+      required: [batches]
+      properties:
+        batches:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductBatchResponse"
+      example:
+        batches:
+          - batchId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73020"
+            clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73001"
+            skuId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73010"
+            lotIdentifier: "LOT-2026-001"
+            displayName: "Batch LOT-2026-001"
+            version: 1
+            currentFactsRevision: 1
+            archivedAt: null
+            createdAt: "2026-10-21T10:15:00.000Z"
+            updatedAt: "2026-10-21T10:15:00.000Z"
+
+    CreateBatchResponse:
+      type: object
+      required: [batch, initialFacts]
+      properties:
+        batch:
+          $ref: "#/components/schemas/ProductBatchResponse"
+        initialFacts:
+          $ref: "#/components/schemas/BatchFactsRevisionResponse"
+      example:
+        batch:
+          batchId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73020"
+          clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73001"
+          skuId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73010"
+          lotIdentifier: "LOT-2026-001"
+          displayName: "Batch LOT-2026-001"
+          version: 1
+          currentFactsRevision: 1
+          archivedAt: null
+          createdAt: "2026-10-21T10:15:00.000Z"
+          updatedAt: "2026-10-21T10:15:00.000Z"
+        initialFacts:
+          clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73001"
+          batchId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73020"
+          revision: 1
+          originKind: "own_production"
+          producerIdentityAsClaimed: "Botanical Farms LLC"
+          productionStartDate: "2026-10-01"
+          productionEndDate: "2026-10-05"
+          originEvidenceId: null
+          originEvidenceRevision: null
+          assertedBy: "qa-lead"
+          assertedAt: "2026-10-21T10:20:00.000Z"
+          supersedesRevision: null
+
+    CreateBatchRequest:
+      type: object
+      required:
+        - actionId
+        - skuId
+        - lotIdentifier
+        - displayName
+      properties:
+        actionId: { type: string, format: uuid }
+        batchId: { type: string, format: uuid }
+        skuId: { type: string, format: uuid }
+        lotIdentifier: { type: string }
+        displayName: { type: string }
+
+    UpdateBatchMetadataRequest:
+      type: object
+      required: [actionId, expectedVersion, displayName]
+      properties:
+        actionId: { type: string, format: uuid }
+        expectedVersion: { type: integer, minimum: 1 }
+        displayName: { type: string }
+
+    ArchiveBatchRequest:
+      type: object
+      required: [actionId, expectedVersion]
+      properties:
+        actionId: { type: string, format: uuid }
+        expectedVersion: { type: integer, minimum: 1 }
+
+    BatchFactsRevisionResponse:
+      type: object
+      required:
+        - clientId
+        - batchId
+        - revision
+        - originKind
+        - assertedBy
+        - assertedAt
+      properties:
+        clientId: { type: string, format: uuid }
+        batchId: { type: string, format: uuid }
+        revision: { type: integer, minimum: 1 }
+        originKind: { type: string, enum: [own_production, partner_origin, unknown] }
+        producerIdentityAsClaimed: { type: string, nullable: true }
+        productionStartDate: { type: string, format: date, nullable: true }
+        productionEndDate: { type: string, format: date, nullable: true }
+        originEvidenceId: { type: string, format: uuid, nullable: true }
+        originEvidenceRevision: { type: integer, nullable: true }
+        assertedBy: { type: string }
+        assertedAt: { type: string, format: date-time }
+        supersedesRevision: { type: integer, nullable: true }
+      example:
+        clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73001"
+        batchId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73020"
+        revision: 1
+        originKind: "own_production"
+        producerIdentityAsClaimed: "Botanical Farms LLC"
+        productionStartDate: "2026-10-01"
+        productionEndDate: "2026-10-05"
+        originEvidenceId: null
+        originEvidenceRevision: null
+        assertedBy: "qa-lead"
+        assertedAt: "2026-10-21T10:20:00.000Z"
+        supersedesRevision: null
+
+    BatchFactsRevisionHistoryResponse:
+      type: object
+      required: [revisions]
+      properties:
+        revisions:
+          type: array
+          items:
+            $ref: "#/components/schemas/BatchFactsRevisionResponse"
+      example:
+        revisions:
+          - clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73001"
+            batchId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73020"
+            revision: 1
+            originKind: "own_production"
+            producerIdentityAsClaimed: "Botanical Farms LLC"
+            productionStartDate: "2026-10-01"
+            productionEndDate: "2026-10-05"
+            originEvidenceId: null
+            originEvidenceRevision: null
+            assertedBy: "qa-lead"
+            assertedAt: "2026-10-21T10:20:00.000Z"
+            supersedesRevision: null
+
+    AppendBatchFactsRequest:
+      type: object
+      required: [actionId, expectedVersion, originKind]
+      properties:
+        actionId: { type: string, format: uuid }
+        expectedVersion: { type: integer, minimum: 1 }
+        originKind: { type: string, enum: [own_production, partner_origin, unknown] }
+        producerIdentityAsClaimed: { type: string, nullable: true }
+        productionStartDate: { type: string, format: date, nullable: true }
+        productionEndDate: { type: string, format: date, nullable: true }
+        originEvidenceId: { type: string, format: uuid, nullable: true }
+        originEvidenceRevision: { type: integer, nullable: true }
+
+    RegisterEvidenceAssetRequest:
+      type: object
+      required:
+        - actionId
+        - purpose
+        - sourceClass
+        - acquisitionMethod
+        - assertionText
+        - reusedSourceObjectId
+      properties:
+        actionId: { type: string, format: uuid }
+        batchId: { type: string, format: uuid }
+        purpose: { type: string }
+        sourceClass: { type: string }
+        acquisitionMethod: { type: string }
+        assertionText: { type: string }
+        reusedSourceObjectId: { type: string, format: uuid }
+        rightsStatus: { type: string, enum: [unknown, granted, restricted, denied] }
+        consentStatus: { type: string, enum: [unknown, granted, restricted, denied] }
+
+    SafeSourceObjectResponse:
+      type: object
+      required:
+        - sourceObjectId
+        - originalSha256
+        - detectedMimeType
+        - byteLength
+        - uploadedAt
+        - uploaderId
+        - accessClass
+        - retentionClass
+        - retentionPolicyVersion
+        - availability
+      properties:
+        sourceObjectId: { type: string, format: uuid }
+        originalSha256: { type: string }
+        detectedMimeType: { type: string }
+        byteLength: { type: integer }
+        uploadedAt: { type: string, format: date-time }
+        uploaderId: { type: string }
+        accessClass: { type: string }
+        retentionClass: { type: string, enum: [source_evidence_archive] }
+        retentionPolicyVersion: { type: string }
+        availability: { type: string }
+      example:
+        sourceObjectId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73001"
+        originalSha256: "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+        detectedMimeType: "image/jpeg"
+        byteLength: 1048576
+        uploadedAt: "2026-10-21T12:00:00.000Z"
+        uploaderId: "user-123"
+        accessClass: "restricted_original"
+        retentionClass: "source_evidence_archive"
+        retentionPolicyVersion: "policy-v1"
+        availability: "available"
+
+    SafeRegisterEvidenceAssetResponse:
+      type: object
+      required:
+        - evidenceAsset
+        - evidenceRevision
+        - sourceObject
+        - batchEvidenceLink
+      properties:
+        evidenceAsset: { $ref: "#/components/schemas/EvidenceAsset" }
+        evidenceRevision: { $ref: "#/components/schemas/EvidenceRevision" }
+        sourceObject: { $ref: "#/components/schemas/SafeSourceObjectResponse" }
+        batchEvidenceLink: { $ref: "#/components/schemas/BatchEvidenceLink" }
+        derivative: { $ref: "#/components/schemas/EvidenceDerivative", nullable: true }
+
+    EvidenceAsset:
+      type: object
+      required:
+        - clientId
+        - evidenceId
+        - currentRevision
+        - version
+        - createdAt
+        - archivedAt
+      properties:
+        clientId: { type: string, format: uuid }
+        evidenceId: { type: string, format: uuid }
+        currentRevision: { type: integer, minimum: 1 }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        archivedAt: { type: string, format: date-time, nullable: true }
+
+    EvidenceRevision:
+      type: object
+      required:
+        - clientId
+        - evidenceId
+        - revision
+        - sourceObjectId
+        - sourceClass
+        - acquisitionMethod
+        - submittedBy
+        - submittedAt
+        - assertionText
+        - reportedCaptureDate
+        - reportedCaptureTimestamp
+        - reportedCapturePrecision
+        - captureContext
+        - rightsStatus
+        - consentStatus
+        - rightsAttribution
+        - rightsDocumentLocator
+        - supersedesRevision
+      properties:
+        clientId: { type: string, format: uuid }
+        evidenceId: { type: string, format: uuid }
+        revision: { type: integer, minimum: 1 }
+        sourceObjectId: { type: string, format: uuid }
+        sourceClass: { type: string }
+        acquisitionMethod: { type: string }
+        submittedBy: { type: string }
+        submittedAt: { type: string, format: date-time }
+        assertionText: { type: string }
+        reportedCaptureDate: { type: string, format: date, nullable: true }
+        reportedCaptureTimestamp: { type: string, format: date-time, nullable: true }
+        reportedCapturePrecision: { type: string, nullable: true }
+        captureContext: { type: string, nullable: true }
+        rightsStatus: { type: string, enum: [unknown, granted, restricted, denied] }
+        consentStatus: { type: string, enum: [unknown, granted, restricted, denied] }
+        rightsAttribution: { type: string, nullable: true }
+        rightsDocumentLocator: { type: string, nullable: true }
+        supersedesRevision: { type: integer, nullable: true }
+
+    BatchEvidenceLink:
+      type: object
+      required:
+        - clientId
+        - batchId
+        - evidenceId
+        - evidenceRevision
+        - purpose
+        - assertedBy
+        - assertedAt
+      properties:
+        clientId: { type: string, format: uuid }
+        batchId: { type: string, format: uuid }
+        evidenceId: { type: string, format: uuid }
+        evidenceRevision: { type: integer, minimum: 1 }
+        purpose: { type: string }
+        assertedBy: { type: string }
+        assertedAt: { type: string, format: date-time }
+
+    EvidenceDerivative:
+      type: object
+      required:
+        - clientId
+        - derivativeId
+        - evidenceId
+        - evidenceRevision
+        - referenceAssetId
+        - derivativeSha256
+        - transformDescription
+        - transformToolVersion
+        - createdBy
+        - createdAt
+      properties:
+        clientId: { type: string, format: uuid }
+        derivativeId: { type: string, format: uuid }
+        evidenceId: { type: string, format: uuid }
+        evidenceRevision: { type: integer, minimum: 1 }
+        referenceAssetId: { type: string }
+        derivativeSha256: { type: string }
+        transformDescription: { type: string }
+        transformToolVersion: { type: string, nullable: true }
+        createdBy: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    EvidenceVerificationEvent:
+      type: object
+      required:
+        - eventId
+        - clientId
+        - evidenceId
+        - evidenceRevision
+        - outcome
+        - verificationKind
+        - factScope
+        - actorId
+        - occurredAt
+        - method
+        - reason
+        - verifiedPartyReference
+        - withdrawalEventId
+      properties:
+        eventId: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        evidenceId: { type: string, format: uuid }
+        evidenceRevision: { type: integer, minimum: 1 }
+        outcome: { type: string, enum: [verified, rejected, disputed, withdrawn] }
+        verificationKind:
+          {
+            type: string,
+            enum:
+              [submitter_attestation, human_internal_review, independent_third_party_corroboration]
+          }
+        factScope:
+          {
+            type: string,
+            enum:
+              [
+                provenance_metadata,
+                capture_circumstances,
+                lab_identity,
+                chain_of_custody,
+                full_document_authenticity
+              ]
+          }
+        actorId: { type: string }
+        occurredAt: { type: string, format: date-time }
+        method: { type: string }
+        reason: { type: string }
+        verifiedPartyReference: { type: string, nullable: true }
+        withdrawalEventId: { type: string, format: uuid, nullable: true }
+
+    EvidenceVerificationEventListResponse:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvidenceVerificationEvent"
+      example:
+        events:
+          - eventId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73050"
+            clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73001"
+            evidenceId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73040"
+            evidenceRevision: 1
+            outcome: "verified"
+            verificationKind: "independent_third_party_corroboration"
+            factScope: "full_document_authenticity"
+            actorId: "compliance-officer"
+            occurredAt: "2026-10-21T10:10:00.000Z"
+            method: "digital_signature_verification"
+            reason: "Verified laboratory digital certificate and SHA-256 seal"
+            verifiedPartyReference: "Lab Lic #403-88910"
+            withdrawalEventId: null
+
+    EvidenceMediaDeliveryResponse:
+      type: object
+      required:
+        - clientId
+        - batchId
+        - evidenceId
+        - evidenceRevision
+        - sourceObjectId
+        - originalSha256
+        - detectedMimeType
+        - byteLength
+        - url
+        - expiresAt
+      properties:
+        clientId: { type: string, format: uuid }
+        batchId: { type: string, format: uuid }
+        evidenceId: { type: string, format: uuid }
+        evidenceRevision: { type: integer, minimum: 1 }
+        sourceObjectId: { type: string, format: uuid }
+        originalSha256: { type: string }
+        detectedMimeType: { type: string }
+        byteLength: { type: integer }
+        url: { type: string, format: uri }
+        expiresAt: { type: string, format: date-time }
+      example:
+        clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73001"
+        batchId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73002"
+        evidenceId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73003"
+        evidenceRevision: 1
+        sourceObjectId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73004"
+        originalSha256: "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+        detectedMimeType: "image/jpeg"
+        byteLength: 2048
+        url: "https://storage.provider.internal/presigned?token=abc"
+        expiresAt: "2026-10-21T12:05:00.000Z"
+
+    EvidenceAssetSummary:
+      type: object
+      required:
+        - evidenceId
+        - currentRevision
+        - version
+        - createdAt
+        - archivedAt
+        - linkedRevisions
+      properties:
+        evidenceId: { type: string, format: uuid }
+        currentRevision: { type: integer, minimum: 1 }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        archivedAt: { type: string, format: date-time, nullable: true }
+        linkedRevisions:
+          type: array
+          items: { type: integer, minimum: 1 }
+
+    EvidenceAssetListResponse:
+      type: object
+      required: [evidence]
+      properties:
+        evidence:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvidenceAssetSummary"
+      example:
+        evidence:
+          - evidenceId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73040"
+            currentRevision: 1
+            version: 1
+            createdAt: "2026-10-21T10:05:00.000Z"
+            archivedAt: null
+            linkedRevisions: [1]
+
+    EvidenceAssetDetail:
+      type: object
+      required:
+        - evidenceId
+        - currentRevision
+        - version
+        - createdAt
+        - archivedAt
+        - linkedRevisions
+      properties:
+        evidenceId: { type: string, format: uuid }
+        currentRevision: { type: integer }
+        version: { type: integer }
+        createdAt: { type: string, format: date-time }
+        archivedAt: { type: string, format: date-time, nullable: true }
+        linkedRevisions: { type: array, items: { type: integer } }
+
+    LinkEvidenceDerivativeRequest:
+      type: object
+      required:
+        - referenceAssetId
+        - derivativeSha256
+        - transformDescription
+      properties:
+        actionId: { type: string, format: uuid }
+        referenceAssetId: { type: string }
+        derivativeSha256: { type: string }
+        transformDescription: { type: string }
+        transformToolVersion: { type: string }
+
+    RecordEvidenceVerificationEventRequest:
+      type: object
+      required:
+        - actionId
+        - outcome
+        - verificationKind
+        - factScope
+        - method
+        - reason
+      properties:
+        actionId: { type: string, format: uuid }
+        outcome: { type: string, enum: [verified, rejected, disputed, withdrawn] }
+        verificationKind:
+          {
+            type: string,
+            enum:
+              [submitter_attestation, human_internal_review, independent_third_party_corroboration]
+          }
+        factScope:
+          {
+            type: string,
+            enum:
+              [
+                provenance_metadata,
+                capture_circumstances,
+                lab_identity,
+                chain_of_custody,
+                full_document_authenticity
+              ]
+          }
+        method: { type: string }
+        reason: { type: string }
+        verifiedPartyReference: { type: string, nullable: true }
+
+    # ==========================================================================
+    # CoA Schemas
+    # ==========================================================================
+    CreateCoaReportRequest:
+      type: object
+      required:
+        - actionId
+        - evidenceId
+        - evidenceRevision
+        - completenessStatus
+      properties:
+        actionId: { type: string, format: uuid }
+        batchId: { type: string, format: uuid }
+        evidenceId: { type: string, format: uuid }
+        evidenceRevision: { type: integer, minimum: 1 }
+        completenessStatus: { type: string, enum: [draft, complete] }
+        reportIdentifierAsClaimed: { type: string, nullable: true }
+        reportDate: { type: string, format: date, nullable: true }
+        labNameAsClaimed: { type: string, nullable: true }
+        sampleIdentifierAsClaimed: { type: string, nullable: true }
+        scopeKind: { type: string, enum: [sample_only, attributed_lot], nullable: true }
+        measurements:
+          type: array
+          items:
+            $ref: "#/components/schemas/CoaMeasurementInput"
+
+    CoaMeasurementInput:
+      type: object
+      required:
+        - analyte
+        - resultKind
+        - unit
+        - basis
+        - context
+        - quantityKind
+      properties:
+        analyte: { type: string }
+        resultKind: { type: string, enum: [quantified, below_limit, not_detected] }
+        resultValue: { type: string, nullable: true }
+        resultLimit: { type: string, nullable: true }
+        resultQualifier: { type: string, nullable: true }
+        unit: { type: string }
+        basis: { type: string }
+        context: { type: string }
+        quantityKind: { type: string }
+
+    CoaReportCreationResponse:
+      type: object
+      required: [report, currentRevision]
+      properties:
+        report: { $ref: "#/components/schemas/CoaReport" }
+        currentRevision: { $ref: "#/components/schemas/CoaReportRevision" }
+
+    CoaReport:
+      type: object
+      required:
+        - clientId
+        - reportId
+        - batchId
+        - evidenceId
+        - currentRevision
+        - version
+        - createdAt
+        - archivedAt
+      properties:
+        clientId: { type: string, format: uuid }
+        reportId: { type: string, format: uuid }
+        batchId: { type: string, format: uuid }
+        evidenceId: { type: string, format: uuid }
+        currentRevision: { type: integer, minimum: 1 }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        archivedAt: { type: string, format: date-time, nullable: true }
+
+    CoaReportRevision:
+      type: object
+      required:
+        - clientId
+        - reportId
+        - revision
+        - batchId
+        - evidenceId
+        - evidenceRevision
+        - completenessStatus
+        - reportIdentifierAsClaimed
+        - reportDate
+        - labNameAsClaimed
+        - sampleIdentifierAsClaimed
+        - scopeKind
+        - scopeDescription
+        - sampleDate
+        - samplingMethodDescription
+        - sampleToBatchAssociationAttestation
+        - sampleToBatchAssociationConfirmed
+        - verifiedLabIdentityEventId
+        - assertedBy
+        - assertedAt
+        - supersedesRevision
+        - measurements
+      properties:
+        clientId: { type: string, format: uuid }
+        reportId: { type: string, format: uuid }
+        revision: { type: integer, minimum: 1 }
+        batchId: { type: string, format: uuid }
+        evidenceId: { type: string, format: uuid }
+        evidenceRevision: { type: integer, minimum: 1 }
+        completenessStatus: { type: string, enum: [draft, complete] }
+        reportIdentifierAsClaimed: { type: string, nullable: true }
+        reportDate: { type: string, format: date, nullable: true }
+        labNameAsClaimed: { type: string, nullable: true }
+        sampleIdentifierAsClaimed: { type: string, nullable: true }
+        scopeKind: { type: string, enum: [sample_only, attributed_lot], nullable: true }
+        scopeDescription: { type: string, nullable: true }
+        sampleDate: { type: string, format: date, nullable: true }
+        samplingMethodDescription: { type: string, nullable: true }
+        sampleToBatchAssociationAttestation: { type: string, nullable: true }
+        sampleToBatchAssociationConfirmed: { type: boolean, nullable: true }
+        verifiedLabIdentityEventId: { type: string, format: uuid, nullable: true }
+        assertedBy: { type: string }
+        assertedAt: { type: string, format: date-time }
+        supersedesRevision: { type: integer, minimum: 1, nullable: true }
+        measurements:
+          type: array
+          items:
+            $ref: "#/components/schemas/CoaMeasurement"
+
+    CoaMeasurement:
+      type: object
+      required:
+        - measurementId
+        - clientId
+        - reportId
+        - reportRevision
+        - batchId
+        - evidenceId
+        - evidenceRevision
+        - analyte
+        - resultKind
+        - resultValue
+        - resultLimit
+        - resultQualifier
+        - unit
+        - basis
+        - context
+        - quantityKind
+      properties:
+        measurementId: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        reportId: { type: string, format: uuid }
+        reportRevision: { type: integer }
+        batchId: { type: string, format: uuid }
+        evidenceId: { type: string, format: uuid }
+        evidenceRevision: { type: integer }
+        analyte: { type: string }
+        resultKind: { type: string }
+        resultValue: { type: string, nullable: true }
+        resultLimit: { type: string, nullable: true }
+        resultQualifier: { type: string, nullable: true }
+        unit: { type: string }
+        basis: { type: string }
+        context: { type: string }
+        quantityKind: { type: string }
+
+    CoaReportSummary:
+      type: object
+      required:
+        - reportId
+        - batchId
+        - currentRevision
+        - version
+        - createdAt
+      properties:
+        reportId: { type: string, format: uuid }
+        batchId: { type: string, format: uuid }
+        currentRevision: { type: integer }
+        version: { type: integer }
+        createdAt: { type: string, format: date-time }
+
+    CoaReportListResponse:
+      type: object
+      required: [reports]
+      properties:
+        reports:
+          type: array
+          items:
+            $ref: "#/components/schemas/CoaReport"
+      example:
+        reports:
+          - clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73001"
+            reportId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73060"
+            batchId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73020"
+            evidenceId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73040"
+            currentRevision: 1
+            version: 1
+            createdAt: "2026-10-21T10:25:00.000Z"
+            archivedAt: null
+
+    CoaReportDetail:
+      type: object
+      required: [report, currentRevision]
+      properties:
+        report: { $ref: "#/components/schemas/CoaReport" }
+        currentRevision: { $ref: "#/components/schemas/CoaReportRevision" }
+
+    ArchiveCoaReportResponse:
+      type: object
+      required: [report]
+      properties:
+        report: { $ref: "#/components/schemas/CoaReport" }
+
+    CoaReportRevisionDetail:
+      type: object
+      required: [report, revision]
+      properties:
+        report: { $ref: "#/components/schemas/CoaReport" }
+        revision: { $ref: "#/components/schemas/CoaReportRevision" }
+
+    CoaReviewEvent:
+      type: object
+      required:
+        - eventId
+        - clientId
+        - reportId
+        - reportRevision
+        - decision
+        - actorId
+        - occurredAt
+        - reason
+        - assessedScope
+      properties:
+        eventId: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        reportId: { type: string, format: uuid }
+        reportRevision: { type: integer }
+        decision: { type: string, enum: [approved, rejected] }
+        actorId: { type: string }
+        occurredAt: { type: string, format: date-time }
+        reason: { type: string }
+        assessedScope: { type: string, enum: [sample_only, attributed_lot] }
+
+    SupersedeCoaReportRequest:
+      type: object
+      required:
+        - actionId
+        - expectedVersion
+        - evidenceRevision
+        - completenessStatus
+      properties:
+        actionId: { type: string, format: uuid }
+        expectedVersion: { type: integer, minimum: 1 }
+        evidenceRevision: { type: integer, minimum: 1 }
+        completenessStatus: { type: string, enum: [draft, complete] }
+        measurements:
+          type: array
+          items:
+            $ref: "#/components/schemas/CoaMeasurementInput"
+
+    ReviewCoaReportRequest:
+      type: object
+      required:
+        - actionId
+        - expectedVersion
+        - decision
+        - reason
+        - assessedScope
+      properties:
+        actionId: { type: string, format: uuid }
+        expectedVersion: { type: integer, minimum: 1 }
+        decision: { type: string, enum: [approved, rejected] }
+        reason: { type: string }
+        assessedScope: { type: string, enum: [sample_only, attributed_lot] }
+
+    ReviewCoaReportResponse:
+      type: object
+      required: [report, decisionEvent]
+      properties:
+        report: { $ref: "#/components/schemas/CoaReport" }
+        decisionEvent: { $ref: "#/components/schemas/CoaReviewEvent" }
+
+    ArchiveCoaReportRequest:
+      type: object
+      required: [actionId, expectedVersion]
+      properties:
+        actionId: { type: string, format: uuid }
+        expectedVersion: { type: integer, minimum: 1 }
+
+    # ==========================================================================
+    # Claim Schemas
+    # ==========================================================================
+    CreateClaimRequest:
+      type: object
+      required:
+        - actionId
+        - canonicalKind
+        - proofCategory
+        - parameters
+      properties:
+        actionId: { type: string, format: uuid }
+        batchId: { type: string, format: uuid }
+        canonicalKind: { type: string }
+        proofCategory: { type: string }
+        parameters: { type: object }
+        displayWording: { type: string, nullable: true }
+
+    AppendClaimRevisionRequest:
+      type: object
+      required:
+        - actionId
+        - expectedVersion
+        - canonicalKind
+        - proofCategory
+        - parameters
+      properties:
+        actionId: { type: string, format: uuid }
+        expectedVersion: { type: integer, minimum: 1 }
+        canonicalKind: { type: string }
+        proofCategory: { type: string }
+        parameters: { type: object }
+        displayWording: { type: string, nullable: true }
+
+    LinkClaimEvidenceRequest:
+      type: object
+      required:
+        - actionId
+        - expectedVersion
+        - claimRevision
+        - reason
+        - links
+      properties:
+        actionId: { type: string, format: uuid }
+        expectedVersion: { type: integer, minimum: 1 }
+        claimRevision: { type: integer, minimum: 1 }
+        reason: { type: string }
+        links:
+          type: array
+          items:
+            type: object
+            required:
+              - evidenceId
+              - evidenceRevision
+              - sourceObjectId
+              - sourceSha256
+              - supportRole
+            properties:
+              evidenceId: { type: string, format: uuid }
+              evidenceRevision: { type: integer, minimum: 1 }
+              sourceObjectId: { type: string, format: uuid }
+              sourceSha256: { type: string }
+              supportRole:
+                {
+                  type: string,
+                  enum: [primary_measurement, corroborating_record, visual_reference]
+                }
+              reportId: { type: string, format: uuid }
+              reportRevision: { type: integer, minimum: 1 }
+
+    ReviewClaimRequest:
+      type: object
+      required:
+        - actionId
+        - expectedVersion
+        - claimRevision
+        - decision
+        - reason
+      properties:
+        actionId: { type: string, format: uuid }
+        expectedVersion: { type: integer, minimum: 1 }
+        claimRevision: { type: integer, minimum: 1 }
+        decision: { type: string, enum: [approve, reject] }
+        reason: { type: string }
+
+    ReviewClaimResponse:
+      type: object
+      required: [claim, decisionEvent]
+      properties:
+        claim: { $ref: "#/components/schemas/ProductClaim" }
+        decisionEvent: { $ref: "#/components/schemas/ClaimDecisionEvent" }
+
+    InvalidateClaimRequest:
+      type: object
+      required:
+        - actionId
+        - expectedVersion
+        - claimRevision
+        - invalidationCause
+        - reason
+      properties:
+        actionId: { type: string, format: uuid }
+        expectedVersion: { type: integer, minimum: 1 }
+        claimRevision: { type: integer, minimum: 1 }
+        invalidationCause:
+          type: string
+          enum:
+            - source_superseded
+            - source_disputed
+            - source_archived
+            - source_quarantined
+            - integrity_failure
+            - batch_facts_changed
+        reason: { type: string }
+      example:
+        actionId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73000"
+        expectedVersion: 2
+        claimRevision: 1
+        invalidationCause: "source_superseded"
+        reason: "Lab measurement was updated by accredited re-test"
+
+    InvalidateClaimResponse:
+      type: object
+      required: [claim, decisionEvent]
+      properties:
+        claim: { $ref: "#/components/schemas/ProductClaim" }
+        decisionEvent: { $ref: "#/components/schemas/ClaimDecisionEvent" }
+      example:
+        claim:
+          clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73001"
+          claimId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73002"
+          skuId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73005"
+          batchId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73003"
+          currentRevision: 1
+          state: "invalidated"
+          version: 3
+          invalidationCause: "source_superseded"
+          invalidationSourceRef: null
+          archivedAt: null
+          createdAt: "2026-10-21T12:00:00.000Z"
+          updatedAt: "2026-10-21T12:30:00.000Z"
+        decisionEvent:
+          eventId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73004"
+          clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73001"
+          claimId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73002"
+          claimRevision: 1
+          decision: "invalidate"
+          actorId: "actor-qa"
+          occurredAt: "2026-10-21T12:30:00.000Z"
+          reason: "Source superseded"
+          policyVersion: "policy-v1"
+          invalidationCause: "source_superseded"
+
+    ProductClaim:
+      type: object
+      required:
+        - claimId
+        - clientId
+        - skuId
+        - batchId
+        - currentRevision
+        - state
+        - version
+        - invalidationCause
+        - invalidationSourceRef
+        - createdAt
+        - updatedAt
+        - archivedAt
+      properties:
+        claimId: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        skuId: { type: string, format: uuid }
+        batchId: { type: string, format: uuid }
+        currentRevision: { type: integer, minimum: 1 }
+        state:
+          { type: string, enum: [draft, evidence_linked, reviewer_approved, rejected, invalidated] }
+        version: { type: integer, minimum: 1 }
+        invalidationCause: { type: string, nullable: true }
+        invalidationSourceRef: { type: string, nullable: true }
+        archivedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    ProductClaimListResponse:
+      type: object
+      required: [claims]
+      properties:
+        claims:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductClaim"
+      example:
+        claims:
+          - claimId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73030"
+            clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73001"
+            skuId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73010"
+            batchId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73020"
+            currentRevision: 1
+            state: "draft"
+            version: 1
+            invalidationCause: null
+            invalidationSourceRef: null
+            archivedAt: null
+            createdAt: "2026-10-21T10:30:00.000Z"
+            updatedAt: "2026-10-21T10:30:00.000Z"
+
+    ProductClaimRevision:
+      type: object
+      required:
+        - clientId
+        - claimId
+        - revision
+        - batchId
+        - canonicalKind
+        - proofCategory
+        - parameters
+        - policyVersion
+        - assertedBy
+        - assertedAt
+        - supersedesRevision
+      properties:
+        clientId: { type: string, format: uuid }
+        claimId: { type: string, format: uuid }
+        revision: { type: integer, minimum: 1 }
+        batchId: { type: string, format: uuid }
+        canonicalKind: { type: string }
+        proofCategory: { type: string }
+        parameters: { type: object }
+        displayWording: { type: string, nullable: true }
+        policyVersion: { type: string }
+        assertedBy: { type: string }
+        assertedAt: { type: string, format: date-time }
+        supersedesRevision: { type: integer, minimum: 1, nullable: true }
+
+    ProductClaimDetail:
+      type: object
+      required: [claim, currentRevision, links, events]
+      properties:
+        claim: { $ref: "#/components/schemas/ProductClaim" }
+        currentRevision: { $ref: "#/components/schemas/ProductClaimRevision" }
+        links:
+          type: array
+          items: { $ref: "#/components/schemas/ClaimEvidenceLink" }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/ClaimDecisionEvent" }
+      example:
+        claim:
+          claimId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73030"
+          clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73001"
+          skuId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73010"
+          batchId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73020"
+          currentRevision: 1
+          state: "draft"
+          version: 1
+          invalidationCause: null
+          invalidationSourceRef: null
+          archivedAt: null
+          createdAt: "2026-10-21T10:30:00.000Z"
+          updatedAt: "2026-10-21T10:30:00.000Z"
+        currentRevision:
+          claimId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73030"
+          clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73001"
+          batchId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73020"
+          revision: 1
+          canonicalKind: "factual_lot_identifier"
+          proofCategory: "production_record_backed"
+          parameters:
+            kind: "factual_lot_identifier"
+            lotIdentifier: "LOT-2026-001"
+          displayWording: "Batch LOT-2026-001"
+          policyVersion: "policy-v1"
+          assertedBy: "qa-lead"
+          assertedAt: "2026-10-21T10:30:00.000Z"
+          supersedesRevision: null
+        links: []
+        events: []
+
+    ClaimEvidenceLink:
+      type: object
+      required:
+        - linkId
+        - clientId
+        - claimId
+        - claimRevision
+        - batchId
+        - evidenceId
+        - evidenceRevision
+        - sourceObjectId
+        - sourceSha256
+        - supportRole
+      properties:
+        linkId: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        claimId: { type: string, format: uuid }
+        claimRevision: { type: integer }
+        batchId: { type: string, format: uuid }
+        evidenceId: { type: string, format: uuid }
+        evidenceRevision: { type: integer }
+        sourceObjectId: { type: string, format: uuid }
+        sourceSha256: { type: string }
+        supportRole:
+          { type: string, enum: [primary_measurement, corroborating_record, visual_reference] }
+        reportId: { type: string, format: uuid, nullable: true }
+        reportRevision: { type: integer, nullable: true }
+
+    ClaimDecisionEvent:
+      type: object
+      required:
+        - eventId
+        - clientId
+        - claimId
+        - claimRevision
+        - decision
+        - actorId
+        - occurredAt
+        - reason
+        - policyVersion
+      properties:
+        eventId: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        claimId: { type: string, format: uuid }
+        claimRevision: { type: integer }
+        decision: { type: string, enum: [approve, reject, invalidate] }
+        actorId: { type: string }
+        occurredAt: { type: string, format: date-time }
+        reason: { type: string }
+        policyVersion: { type: string }
+        invalidationCause: { type: string, nullable: true }
+
+    ResolveClaimResponse:
+      type: object
+      required:
+        - claim
+        - revision
+        - supportEligible
+        - canRequestReview
+        - evidenceLinkApproved
+        - provenanceCategory
+        - displayWordingStatus
+        - blockReasons
+        - links
+        - reviewEvents
+        - dependencyFingerprint
+      properties:
+        claim: { $ref: "#/components/schemas/ProductClaim" }
+        revision: { $ref: "#/components/schemas/ProductClaimRevision" }
+        supportEligible: { type: boolean }
+        canRequestReview: { type: boolean }
+        evidenceLinkApproved: { type: boolean }
+        provenanceCategory:
+          type: string
+          enum:
+            [
+              lab_reported,
+              operator_attested_sop,
+              partner_process_record,
+              source_photo,
+              manual_unverified
+            ]
+        displayWordingStatus:
+          type: string
+          enum: [none, manual_review_required, manual_review_approved]
+        blockReasons:
+          type: array
+          items:
+            type: object
+            required: [code, message]
+            properties:
+              code: { type: string }
+              field: { type: string }
+              dependencyId: { type: string }
+              message: { type: string }
+        links:
+          type: array
+          items:
+            $ref: "#/components/schemas/ClaimEvidenceLink"
+        reviewEvents:
+          type: array
+          items:
+            $ref: "#/components/schemas/ClaimDecisionEvent"
+        dependencyFingerprint: { type: string }
+
+    # ==========================================================================
+    # Dossier Schema
+    # ==========================================================================
+    BatchEvidenceDossier:
+      type: object
+      required:
+        - schemaVersion
+        - clientId
+        - sku
+        - batch
+        - factsHistory
+        - evidenceLinks
+        - evidence
+        - coaReports
+        - claims
+        - resolvedAt
+      properties:
+        schemaVersion: { type: string, enum: ["1.0.0"] }
+        clientId: { type: string, format: uuid }
+        sku: { $ref: "#/components/schemas/ProductSkuResponse" }
+        batch: { $ref: "#/components/schemas/ProductBatchResponse" }
+        factsHistory:
+          type: array
+          items:
+            $ref: "#/components/schemas/BatchFactsRevisionResponse"
+        evidenceLinks:
+          type: array
+          items:
+            $ref: "#/components/schemas/BatchEvidenceLink"
+        evidence:
+          type: array
+          items:
+            $ref: "#/components/schemas/DossierEvidenceItem"
+        coaReports:
+          type: array
+          items:
+            $ref: "#/components/schemas/DossierCoaReportItem"
+        claims:
+          type: array
+          items:
+            $ref: "#/components/schemas/DossierClaimItem"
+        resolvedAt: { type: string, format: date-time }
+      example:
+        schemaVersion: "1.0.0"
+        clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73001"
+        sku:
+          skuId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73010"
+          clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73001"
+          canonicalSku: "SKU-PROV-100"
+          displayName: "Botanical Extracts Organic Tincture 1000mg"
+          version: 1
+          archivedAt: null
+          createdAt: "2026-10-21T10:00:00.000Z"
+          updatedAt: "2026-10-21T10:00:00.000Z"
+        batch:
+          batchId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73020"
+          clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73001"
+          skuId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73010"
+          lotIdentifier: "LOT-2026-001"
+          displayName: "Batch LOT-2026-001"
+          version: 1
+          currentFactsRevision: 1
+          archivedAt: null
+          createdAt: "2026-10-21T10:15:00.000Z"
+          updatedAt: "2026-10-21T10:15:00.000Z"
+        factsHistory:
+          - clientId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73001"
+            batchId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73020"
+            revision: 1
+            originKind: "own_production"
+            producerIdentityAsClaimed: "Botanical Farms LLC"
+            productionStartDate: "2026-10-01"
+            productionEndDate: "2026-10-05"
+            originEvidenceId: null
+            originEvidenceRevision: null
+            assertedBy: "qa-lead"
+            assertedAt: "2026-10-21T10:20:00.000Z"
+            supersedesRevision: null
+        evidenceLinks: []
+        evidence: []
+        coaReports: []
+        claims: []
+        resolvedAt: "2026-10-21T14:00:00.000Z"
+
+    DossierEvidenceItem:
+      type: object
+      required:
+        - asset
+        - currentRevision
+        - revisions
+        - sourceObjects
+        - derivatives
+        - verificationEvents
+      properties:
+        asset: { $ref: "#/components/schemas/EvidenceAsset" }
+        currentRevision:
+          $ref: "#/components/schemas/EvidenceRevision"
+          nullable: true
+        revisions:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvidenceRevision"
+        sourceObjects:
+          type: array
+          items:
+            $ref: "#/components/schemas/SafeSourceObjectResponse"
+        derivatives:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvidenceDerivative"
+        verificationEvents:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvidenceVerificationEvent"
+
+    DossierCoaReportItem:
+      type: object
+      required:
+        - report
+        - currentRevision
+        - revisions
+        - reviewEvents
+      properties:
+        report: { $ref: "#/components/schemas/CoaReport" }
+        currentRevision: { $ref: "#/components/schemas/CoaReportRevision" }
+        revisions:
+          type: array
+          items:
+            $ref: "#/components/schemas/CoaReportRevision"
+        reviewEvents:
+          type: array
+          items:
+            $ref: "#/components/schemas/CoaReviewEvent"
+
+    DossierClaimItem:
+      type: object
+      required:
+        - claim
+        - currentRevision
+        - revisions
+        - links
+        - decisionEvents
+        - resolution
+      properties:
+        claim: { $ref: "#/components/schemas/ProductClaim" }
+        currentRevision: { $ref: "#/components/schemas/ProductClaimRevision" }
+        revisions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductClaimRevision"
+        links:
+          type: array
+          items:
+            $ref: "#/components/schemas/ClaimEvidenceLink"
+        decisionEvents:
+          type: array
+          items:
+            $ref: "#/components/schemas/ClaimDecisionEvent"
+        resolution: { $ref: "#/components/schemas/ResolveClaimResponse" }

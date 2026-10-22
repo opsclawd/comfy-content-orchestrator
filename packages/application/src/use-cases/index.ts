@@ -96,3 +96,8 @@ export * from "./append-claim-revision.js";
 export * from "./link-claim-evidence.js";
 export * from "./review-claim.js";
 export * from "./resolve-claim.js";
+export * from "./invalidate-claim.js";
+export * from "./evidence-asset-use-cases.js";
+export * from "./coa-report-query-use-cases.js";
+export * from "./claim-query-use-cases.js";
+export * from "./resolve-batch-evidence-dossier.js";

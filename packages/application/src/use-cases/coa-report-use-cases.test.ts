@@ -352,7 +352,8 @@ describe("CoA Report Application Use Cases", () => {
         assertCanReviewCoaReport: vi.fn(async () => {
           throw new AccessDeniedError("Reviewer lacks compliance-review authority");
         }),
-        assertCanReviewClaim: vi.fn(async () => {})
+        assertCanReviewClaim: vi.fn(async () => {}),
+        assertCanVerifyEvidence: vi.fn(async () => {})
       };
 
       const uow = createMockUow({});

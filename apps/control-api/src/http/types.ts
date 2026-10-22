@@ -5,6 +5,36 @@ import {
   CreateCampaignShellUseCase,
   CreateClientUseCase,
   ListClientsUseCase,
+  CreateProductSkuUseCase,
+  GetProductSkuUseCase,
+  ListProductSkusUseCase,
+  UpdateProductSkuMetadataUseCase,
+  ArchiveProductSkuUseCase,
+  CreateProductBatchUseCase,
+  GetProductBatchUseCase,
+  ListProductBatchesUseCase,
+  UpdateProductBatchMetadataUseCase,
+  ArchiveProductBatchUseCase,
+  AppendBatchFactsUseCase,
+  GetBatchFactsHistoryUseCase,
+  RegisterEvidenceAssetUseCase,
+  LinkExistingDerivativeUseCase,
+  RecordEvidenceVerificationEventUseCase,
+  EvidenceAssetUseCases,
+  CreateCoaReportUseCase,
+  SupersedeCoaReportUseCase,
+  ReviewCoaReportUseCase,
+  ArchiveCoaReportUseCase,
+  CoaReportUseCases,
+  CreateClaimUseCase,
+  AppendClaimRevisionUseCase,
+  LinkClaimEvidenceUseCase,
+  ReviewClaimUseCase,
+  InvalidateClaimUseCase,
+  ResolveClaimUseCase,
+  ClaimUseCases,
+  ResolveBatchEvidenceDossierUseCase,
+  type ProductEvidenceRepositoryPort,
   CreateSceneUseCase,
   EnforceStorageAdmission,
   EnqueueSceneProductionRenderUseCase,
@@ -49,9 +79,14 @@ import {
   type StorageMetricsRegistryPort,
   type StorageTelemetryPort,
   type UnitOfWork,
-  type AutoPlanFirstPassLogger
+  type AutoPlanFirstPassLogger,
+  type ReviewerAuthorizationPort,
+  type EvidenceLockCoordinatorPort,
+  type OriginalsInspectionPort,
+  type EvidenceStoragePolicyConfig,
+  type BatchEvidenceDossierQueries
 } from "@cco/application";
-import { SharpImageInspectionAdapter } from "@cco/infrastructure";
+import { OriginalsInspectionAdapter, SharpImageInspectionAdapter } from "@cco/infrastructure";
 import { ShotPlanPlanningCoordinator } from "../shot-plan-planning-coordinator.js";
 
 export interface ControlApiDependencies {
@@ -83,6 +118,11 @@ export interface ControlApiDependencies {
   readonly rankingOverallTimeoutMs?: number;
   readonly planningCoordinator?: ShotPlanPlanningCoordinator | undefined;
   readonly logger?: AutoPlanFirstPassLogger | undefined;
+  readonly reviewerAuthorization?: ReviewerAuthorizationPort;
+  readonly evidenceLockCoordinator?: EvidenceLockCoordinatorPort;
+  readonly originalsInspection?: OriginalsInspectionPort;
+  readonly evidenceStoragePolicy?: EvidenceStoragePolicyConfig;
+  readonly batchEvidenceDossierQueries?: BatchEvidenceDossierQueries;
 }
 
 export interface ControlApiUseCases {
@@ -115,6 +155,23 @@ export interface ControlApiUseCases {
   readonly updateReferenceAssetRole?: UpdateReferenceAssetRoleUseCase | undefined;
   readonly planShotPlans?: PlanShotPlansUseCase | undefined;
   readonly createShotPlanVariation?: CreateShotPlanVariationUseCase | undefined;
+
+  readonly createProductSku?: CreateProductSkuUseCase | undefined;
+  readonly getProductSku?: GetProductSkuUseCase | undefined;
+  readonly listProductSkus?: ListProductSkusUseCase | undefined;
+  readonly updateProductSkuMetadata?: UpdateProductSkuMetadataUseCase | undefined;
+  readonly archiveProductSku?: ArchiveProductSkuUseCase | undefined;
+  readonly createProductBatch?: CreateProductBatchUseCase | undefined;
+  readonly getProductBatch?: GetProductBatchUseCase | undefined;
+  readonly listProductBatches?: ListProductBatchesUseCase | undefined;
+  readonly updateProductBatchMetadata?: UpdateProductBatchMetadataUseCase | undefined;
+  readonly archiveProductBatch?: ArchiveProductBatchUseCase | undefined;
+  readonly appendBatchFacts?: AppendBatchFactsUseCase | undefined;
+  readonly getBatchFactsHistory?: GetBatchFactsHistoryUseCase | undefined;
+  readonly evidenceAsset?: EvidenceAssetUseCases | undefined;
+  readonly coaReport?: CoaReportUseCases | undefined;
+  readonly claim?: ClaimUseCases | undefined;
+  readonly resolveBatchEvidenceDossier?: ResolveBatchEvidenceDossierUseCase | undefined;
 }
 
 export interface ControlApiQueries {
@@ -123,6 +180,7 @@ export interface ControlApiQueries {
   readonly campaignDeliveryReel?: CampaignDeliveryReelQueries;
   readonly campaignAnimatic?: CampaignAnimaticQueries;
   readonly campaignReadiness?: CampaignReadinessQueries;
+  readonly batchEvidenceDossier?: BatchEvidenceDossierQueries;
 }
 
 export interface ControlApiContainer {
@@ -333,6 +391,185 @@ export function createControlApiContainer(
       })
     : undefined;
 
+  const productEvidenceRepo: ProductEvidenceRepositoryPort | undefined = dependencies.uow
+    ? {
+        createSku: (cmd) => dependencies.uow.execute((ctx) => ctx.productEvidence!.createSku(cmd)),
+        createBatch: (cmd) =>
+          dependencies.uow.execute((ctx) => ctx.productEvidence!.createBatch(cmd)),
+        appendBatchFacts: (cmd) =>
+          dependencies.uow.execute((ctx) => ctx.productEvidence!.appendBatchFacts(cmd)),
+        updateSkuMetadata: (cmd) =>
+          dependencies.uow.execute((ctx) => ctx.productEvidence!.updateSkuMetadata(cmd)),
+        updateBatchMetadata: (cmd) =>
+          dependencies.uow.execute((ctx) => ctx.productEvidence!.updateBatchMetadata(cmd)),
+        archiveSku: (cmd) =>
+          dependencies.uow.execute((ctx) => ctx.productEvidence!.archiveSku(cmd)),
+        archiveBatch: (cmd) =>
+          dependencies.uow.execute((ctx) => ctx.productEvidence!.archiveBatch(cmd)),
+        getSkuById: (c, s) =>
+          dependencies.uow.execute((ctx) => ctx.productEvidence!.getSkuById(c, s)),
+        listSkus: (c, f) => dependencies.uow.execute((ctx) => ctx.productEvidence!.listSkus(c, f)),
+        getBatchById: (c, b) =>
+          dependencies.uow.execute((ctx) => ctx.productEvidence!.getBatchById(c, b)),
+        getBatchHistory: (c, b) =>
+          dependencies.uow.execute((ctx) => ctx.productEvidence!.getBatchHistory(c, b)),
+        listBatches: (c, f) =>
+          dependencies.uow.execute((ctx) => ctx.productEvidence!.listBatches(c, f))
+      }
+    : undefined;
+
+  const createProductSku = dependencies.uow
+    ? new CreateProductSkuUseCase(dependencies.uow)
+    : undefined;
+  const getProductSku = productEvidenceRepo
+    ? new GetProductSkuUseCase(productEvidenceRepo)
+    : undefined;
+  const listProductSkus = productEvidenceRepo
+    ? new ListProductSkusUseCase(productEvidenceRepo)
+    : undefined;
+  const updateProductSkuMetadata = dependencies.uow
+    ? new UpdateProductSkuMetadataUseCase(dependencies.uow)
+    : undefined;
+  const archiveProductSku = dependencies.uow
+    ? new ArchiveProductSkuUseCase(dependencies.uow)
+    : undefined;
+
+  const createProductBatch = dependencies.uow
+    ? new CreateProductBatchUseCase(dependencies.uow)
+    : undefined;
+  const getProductBatch = productEvidenceRepo
+    ? new GetProductBatchUseCase(productEvidenceRepo)
+    : undefined;
+  const listProductBatches = productEvidenceRepo
+    ? new ListProductBatchesUseCase(productEvidenceRepo)
+    : undefined;
+  const updateProductBatchMetadata = dependencies.uow
+    ? new UpdateProductBatchMetadataUseCase(dependencies.uow)
+    : undefined;
+  const archiveProductBatch = dependencies.uow
+    ? new ArchiveProductBatchUseCase(dependencies.uow)
+    : undefined;
+  const appendBatchFacts = dependencies.uow
+    ? new AppendBatchFactsUseCase(dependencies.uow)
+    : undefined;
+  const getBatchFactsHistory = productEvidenceRepo
+    ? new GetBatchFactsHistoryUseCase(productEvidenceRepo)
+    : undefined;
+
+  const registerEvidenceAssetUseCase =
+    dependencies.uow && dependencies.objectStorage && dependencies.evidenceLockCoordinator
+      ? new RegisterEvidenceAssetUseCase({
+          unitOfWork: dependencies.uow,
+          objectStorage: dependencies.objectStorage,
+          lockCoordinator: dependencies.evidenceLockCoordinator,
+          originalsInspector: dependencies.originalsInspection ?? new OriginalsInspectionAdapter(),
+          storagePolicy: dependencies.evidenceStoragePolicy
+        })
+      : undefined;
+  const linkDerivativeUseCase =
+    dependencies.uow && dependencies.objectStorage
+      ? new LinkExistingDerivativeUseCase({
+          unitOfWork: dependencies.uow,
+          objectStorage: dependencies.objectStorage,
+          lockCoordinator: dependencies.evidenceLockCoordinator,
+          originalsInspector: dependencies.originalsInspection ?? new OriginalsInspectionAdapter()
+        })
+      : undefined;
+  const recordVerificationUseCase = dependencies.uow
+    ? new RecordEvidenceVerificationEventUseCase({ unitOfWork: dependencies.uow })
+    : undefined;
+
+  const evidenceAsset =
+    dependencies.uow &&
+    registerEvidenceAssetUseCase &&
+    linkDerivativeUseCase &&
+    recordVerificationUseCase
+      ? new EvidenceAssetUseCases(
+          dependencies.uow,
+          registerEvidenceAssetUseCase,
+          linkDerivativeUseCase,
+          recordVerificationUseCase,
+          dependencies.reviewerAuthorization,
+          dependencies.reviewMediaDelivery,
+          dependencies.objectStorage,
+          dependencies.originalsInspection
+        )
+      : undefined;
+
+  const createCoaReportUseCase = dependencies.uow
+    ? new CreateCoaReportUseCase(dependencies.uow)
+    : undefined;
+  const supersedeCoaReportUseCase = dependencies.uow
+    ? new SupersedeCoaReportUseCase(dependencies.uow)
+    : undefined;
+  const reviewCoaReportUseCase = dependencies.uow
+    ? new ReviewCoaReportUseCase(dependencies.uow, dependencies.reviewerAuthorization)
+    : undefined;
+  const archiveCoaReportUseCase = dependencies.uow
+    ? new ArchiveCoaReportUseCase(dependencies.uow)
+    : undefined;
+
+  const coaReport =
+    dependencies.uow &&
+    createCoaReportUseCase &&
+    supersedeCoaReportUseCase &&
+    reviewCoaReportUseCase &&
+    archiveCoaReportUseCase
+      ? new CoaReportUseCases(
+          dependencies.uow,
+          createCoaReportUseCase,
+          supersedeCoaReportUseCase,
+          reviewCoaReportUseCase,
+          archiveCoaReportUseCase,
+          dependencies.reviewerAuthorization
+        )
+      : undefined;
+
+  const createClaimUseCase = dependencies.uow
+    ? new CreateClaimUseCase(dependencies.uow)
+    : undefined;
+  const appendClaimRevisionUseCase = dependencies.uow
+    ? new AppendClaimRevisionUseCase(dependencies.uow)
+    : undefined;
+  const linkClaimEvidenceUseCase = dependencies.uow
+    ? new LinkClaimEvidenceUseCase(dependencies.uow)
+    : undefined;
+  const reviewClaimUseCase = dependencies.uow
+    ? new ReviewClaimUseCase(dependencies.uow, dependencies.reviewerAuthorization)
+    : undefined;
+  const invalidateClaimUseCase = dependencies.uow
+    ? new InvalidateClaimUseCase(dependencies.uow, dependencies.reviewerAuthorization)
+    : undefined;
+  const resolveClaimUseCase = dependencies.uow
+    ? new ResolveClaimUseCase(dependencies.uow)
+    : undefined;
+
+  const claim =
+    dependencies.uow &&
+    createClaimUseCase &&
+    appendClaimRevisionUseCase &&
+    linkClaimEvidenceUseCase &&
+    reviewClaimUseCase &&
+    invalidateClaimUseCase &&
+    resolveClaimUseCase
+      ? new ClaimUseCases(
+          dependencies.uow,
+          createClaimUseCase,
+          appendClaimRevisionUseCase,
+          linkClaimEvidenceUseCase,
+          reviewClaimUseCase,
+          invalidateClaimUseCase,
+          resolveClaimUseCase,
+          dependencies.reviewerAuthorization,
+          dependencies.objectStorage,
+          dependencies.originalsInspection
+        )
+      : undefined;
+
+  const resolveBatchEvidenceDossier = dependencies.batchEvidenceDossierQueries
+    ? new ResolveBatchEvidenceDossierUseCase(dependencies.batchEvidenceDossierQueries)
+    : undefined;
+
   return {
     dependencies,
     useCases: {
@@ -365,7 +602,23 @@ export function createControlApiContainer(
       ...(archiveReferenceAsset !== undefined ? { archiveReferenceAsset } : {}),
       ...(updateReferenceAssetRole !== undefined ? { updateReferenceAssetRole } : {}),
       ...(planShotPlans !== undefined ? { planShotPlans } : {}),
-      ...(createShotPlanVariation !== undefined ? { createShotPlanVariation } : {})
+      ...(createShotPlanVariation !== undefined ? { createShotPlanVariation } : {}),
+      ...(createProductSku !== undefined ? { createProductSku } : {}),
+      ...(getProductSku !== undefined ? { getProductSku } : {}),
+      ...(listProductSkus !== undefined ? { listProductSkus } : {}),
+      ...(updateProductSkuMetadata !== undefined ? { updateProductSkuMetadata } : {}),
+      ...(archiveProductSku !== undefined ? { archiveProductSku } : {}),
+      ...(createProductBatch !== undefined ? { createProductBatch } : {}),
+      ...(getProductBatch !== undefined ? { getProductBatch } : {}),
+      ...(listProductBatches !== undefined ? { listProductBatches } : {}),
+      ...(updateProductBatchMetadata !== undefined ? { updateProductBatchMetadata } : {}),
+      ...(archiveProductBatch !== undefined ? { archiveProductBatch } : {}),
+      ...(appendBatchFacts !== undefined ? { appendBatchFacts } : {}),
+      ...(getBatchFactsHistory !== undefined ? { getBatchFactsHistory } : {}),
+      ...(evidenceAsset !== undefined ? { evidenceAsset } : {}),
+      ...(coaReport !== undefined ? { coaReport } : {}),
+      ...(claim !== undefined ? { claim } : {}),
+      ...(resolveBatchEvidenceDossier !== undefined ? { resolveBatchEvidenceDossier } : {})
     },
     queries: {
       ...(dependencies.sceneReviewQueries !== undefined
@@ -382,6 +635,9 @@ export function createControlApiContainer(
         : {}),
       ...(dependencies.campaignReadinessQueries !== undefined
         ? { campaignReadiness: dependencies.campaignReadinessQueries }
+        : {}),
+      ...(dependencies.batchEvidenceDossierQueries !== undefined
+        ? { batchEvidenceDossier: dependencies.batchEvidenceDossierQueries }
         : {})
     },
     ...(planningCoordinator !== undefined ? { planningCoordinator } : {})

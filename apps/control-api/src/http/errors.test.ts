@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import {
   CampaignBeatSheetValidationError,
   CampaignIdempotencyConflictError,
@@ -43,9 +44,26 @@ import {
   ClientAuthenticationRequiredError,
   ClientForbiddenError,
   ReviewerIdentityUnavailableError,
+  formatProductEvidenceError,
   formatReviewError,
+  handleProductEvidenceError,
   handleReviewError
 } from "./errors.js";
+import {
+  AccessDeniedError,
+  ClaimSupportRequiredError,
+  CrossBatchSourceError,
+  CrossClientViolationError,
+  DuplicateLotError,
+  DuplicateSkuError,
+  MimeConflictError,
+  NotFoundError,
+  ProductValidationError,
+  QuotaExceededError,
+  SourceIntegrityMismatchError,
+  StaleRevisionConflictError as DomainStaleRevisionConflictError
+} from "@cco/domain";
+import { z } from "zod";
 
 describe("formatReviewError", () => {
   it("maps ReviewerIdentityUnavailableError to 401 AUTHENTICATION_REQUIRED with non-sensitive message", () => {
@@ -705,5 +723,212 @@ describe("handleReviewError", () => {
       })
     );
     expect(errorSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("formatProductEvidenceError & handleProductEvidenceError", () => {
+  function createMockHttp() {
+    const errorSpy = vi.fn();
+    const statusSpy = vi.fn();
+    const sendSpy = vi.fn();
+
+    const request = {
+      log: {
+        error: errorSpy
+      }
+    } as unknown as FastifyRequest;
+
+    const reply = {
+      status: statusSpy.mockReturnThis(),
+      send: sendSpy
+    } as unknown as FastifyReply;
+
+    return { request, reply, errorSpy, statusSpy, sendSpy };
+  }
+
+  it("maps ProductValidationError to 400 VALIDATION_ERROR with structured issues", () => {
+    const err = new ProductValidationError([
+      { code: "INVALID_IDENTIFIER", path: ["skuId"], message: "Invalid SKU" }
+    ]);
+    const res = formatProductEvidenceError(err);
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toEqual({
+      error: "VALIDATION_ERROR",
+      issues: [{ code: "INVALID_IDENTIFIER", path: ["skuId"], message: "Invalid SKU" }]
+    });
+  });
+
+  it("maps ZodError to 400 VALIDATION_ERROR using mapZodErrorToValidationIssues", () => {
+    const schema = z.object({ skuId: z.string().uuid() });
+    const parseRes = schema.safeParse({ skuId: "not-a-uuid" });
+    if (parseRes.success) throw new Error("Expected failure");
+    const res = formatProductEvidenceError(parseRes.error);
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toBe("VALIDATION_ERROR");
+  });
+
+  it("maps NotFoundError to 404 NOT_FOUND", () => {
+    const err = new NotFoundError("ProductSku", "018f-1234");
+    const res = formatProductEvidenceError(err);
+    expect(res.statusCode).toBe(404);
+    expect(res.body).toEqual({
+      error: "NOT_FOUND",
+      message: 'ProductSku with id "018f-1234" was not found.'
+    });
+  });
+
+  it("maps DuplicateSkuError and DuplicateLotError to 409", () => {
+    const skuErr = new DuplicateSkuError("SKU-123", "client-1");
+    expect(formatProductEvidenceError(skuErr).statusCode).toBe(409);
+    expect(formatProductEvidenceError(skuErr).body.error).toBe("DUPLICATE_SKU");
+
+    const lotErr = new DuplicateLotError("LOT-123", "sku-1");
+    expect(formatProductEvidenceError(lotErr).statusCode).toBe(409);
+    expect(formatProductEvidenceError(lotErr).body.error).toBe("DUPLICATE_LOT");
+  });
+
+  it("maps DomainStaleRevisionConflictError to 409 STALE_REVISION_CONFLICT", () => {
+    const err = new DomainStaleRevisionConflictError("ProductBatch", 1, 2);
+    const res = formatProductEvidenceError(err);
+    expect(res.statusCode).toBe(409);
+    expect(res.body.error).toBe("STALE_REVISION_CONFLICT");
+  });
+
+  it("maps AccessDeniedError with reason or message for self-approval, coa-archived, and evidence-archived", () => {
+    const selfApprove = new AccessDeniedError(
+      "Reviewer self-approval forbidden",
+      "SELF_APPROVAL_FORBIDDEN"
+    );
+    expect(formatProductEvidenceError(selfApprove)).toEqual({
+      statusCode: 403,
+      body: {
+        error: "SELF_APPROVAL_FORBIDDEN",
+        message: "The actor is not authorized to approve their own submission."
+      }
+    });
+
+    const coaArchived = new AccessDeniedError(
+      "Target CoA report is archived.",
+      "COA_REPORT_ARCHIVED"
+    );
+    expect(formatProductEvidenceError(coaArchived)).toEqual({
+      statusCode: 403,
+      body: {
+        error: "COA_REPORT_ARCHIVED",
+        message: "The CoA report is archived."
+      }
+    });
+
+    const evidenceArchived = new AccessDeniedError(
+      "Target evidence asset is archived.",
+      "EVIDENCE_ARCHIVED"
+    );
+    expect(formatProductEvidenceError(evidenceArchived)).toEqual({
+      statusCode: 403,
+      body: {
+        error: "EVIDENCE_ARCHIVED",
+        message: "The evidence asset is archived."
+      }
+    });
+
+    const defaultDenied = new AccessDeniedError("Access forbidden to resource");
+    expect(formatProductEvidenceError(defaultDenied)).toEqual({
+      statusCode: 403,
+      body: {
+        error: "ACCESS_DENIED",
+        message: "The requested operation is not authorized."
+      }
+    });
+  });
+
+  it("maps CrossClientViolationError to 403", () => {
+    const err = new CrossClientViolationError("Client mismatch");
+    const res = formatProductEvidenceError(err);
+    expect(res.statusCode).toBe(403);
+    expect(res.body.error).toBe("CROSS_CLIENT_VIOLATION");
+  });
+
+  it("maps CrossBatchSourceError to 409", () => {
+    const err = new CrossBatchSourceError("Cross batch reference");
+    const res = formatProductEvidenceError(err);
+    expect(res.statusCode).toBe(409);
+    expect(res.body.error).toBe("CROSS_BATCH_SOURCE");
+  });
+
+  it("maps MimeConflictError to 415", () => {
+    const err = new MimeConflictError("Mime type conflict");
+    const res = formatProductEvidenceError(err);
+    expect(res.statusCode).toBe(415);
+    expect(res.body.error).toBe("MIME_CONFLICT");
+  });
+
+  it("maps SourceIntegrityMismatchError to 409 with sanitized message", () => {
+    const res = formatProductEvidenceError(
+      new SourceIntegrityMismatchError("clients/c1/evidence/originals/raw-key corrupted")
+    );
+    expect(res.statusCode).toBe(409);
+    expect(res.body.error).toBe("SOURCE_INTEGRITY_MISMATCH");
+    expect((res.body as { message?: string }).message).toBe(
+      "Source object integrity verification failed."
+    );
+    expect(JSON.stringify(res.body)).not.toContain("raw-key");
+  });
+
+  it("maps QuotaExceededError to 429 and ClaimSupportRequiredError to 422", () => {
+    expect(formatProductEvidenceError(new QuotaExceededError("Quota exceeded")).statusCode).toBe(
+      429
+    );
+    expect(
+      formatProductEvidenceError(new ClaimSupportRequiredError("No supporting evidence")).statusCode
+    ).toBe(422);
+  });
+
+  it("sanitizes NotFoundError when internal storage blob is missing", () => {
+    const err = new NotFoundError("SourceObjectBlob", "clients/c1/evidence/originals/abc123");
+    const res = formatProductEvidenceError(err);
+    expect(res.statusCode).toBe(404);
+    expect(res.body.error).toBe("NOT_FOUND");
+    expect((res.body as { message?: string }).message).toBe(
+      "The requested evidence storage object was not found."
+    );
+    expect(JSON.stringify(res.body)).not.toContain("abc123");
+  });
+
+  it("maps 413 and 415 Fastify errors properly", () => {
+    const err413 = Object.assign(new Error("File too large"), { statusCode: 413 });
+    const res413 = formatProductEvidenceError(err413);
+    expect(res413.statusCode).toBe(413);
+    expect(res413.body.error).toBe("PAYLOAD_TOO_LARGE");
+
+    const err415 = Object.assign(new Error("Bad media"), { statusCode: 415 });
+    const res415 = formatProductEvidenceError(err415);
+    expect(res415.statusCode).toBe(415);
+    expect(res415.body.error).toBe("UNSUPPORTED_MEDIA_TYPE");
+  });
+
+  it("handleProductEvidenceError logs only sanctioned metadata and sends 500 without leaking sensitive error data", () => {
+    const { request, reply, errorSpy, statusSpy, sendSpy } = createMockHttp();
+    const err = new Error(
+      "DB connection failure with storage locator clients/c1/evidence/originals/s1, secret text 'Confidential test notes', measurement '24.5000 percent THCA', and signed URL https://s3.example.com/bucket/blob?X-Amz-Signature=secret123"
+    );
+
+    handleProductEvidenceError(err, request, reply);
+
+    expect(statusSpy).toHaveBeenCalledWith(500);
+    expect(sendSpy).toHaveBeenCalledWith({
+      error: "INTERNAL_ERROR",
+      message: "Internal Server Error"
+    });
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const loggedPayload = errorSpy.mock.calls[0]?.[0];
+    const loggedStr = JSON.stringify(loggedPayload);
+    expect(loggedPayload.error).toBe("INTERNAL_ERROR");
+    expect(loggedPayload.safeMessage).toBeUndefined();
+    expect(loggedPayload.safeStack).toBeUndefined();
+    expect(loggedPayload.cause).toBeUndefined();
+    expect(loggedStr).not.toContain("clients/c1/evidence/originals/s1");
+    expect(loggedStr).not.toContain("Confidential test notes");
+    expect(loggedStr).not.toContain("24.5000");
+    expect(loggedStr).not.toContain("X-Amz-Signature");
   });
 });

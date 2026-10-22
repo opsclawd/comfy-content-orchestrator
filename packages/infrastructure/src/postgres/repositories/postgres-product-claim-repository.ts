@@ -30,6 +30,7 @@ import {
   rehydrateProductClaim,
   rehydrateProductClaimRevision,
   reviewClaim,
+  invalidateClaim,
   appendClaimRevisionToHead,
   createProductClaim,
   createProductClaimRevision,
@@ -38,6 +39,7 @@ import {
   ClaimSupportRequiredError,
   IdempotencyConflictError,
   NotFoundError,
+  ProductValidationError,
   StaleRevisionConflictError,
   type BatchId,
   type ClaimDecisionEvent,
@@ -51,6 +53,7 @@ import {
 import type {
   AppendClaimRevisionRequest,
   CreateClaimRequest,
+  InvalidateClaimRequest,
   LinkClaimEvidenceRequest,
   ResolveClaimResponse,
   ReviewClaimRequest
@@ -1125,6 +1128,240 @@ export class PostgresProductClaimRepository implements ProductClaimRepositoryPor
     }
   }
 
+  async invalidateClaim(
+    cmd: CommandEnvelope<InvalidateClaimRequest & { readonly claimId: ClaimId }>
+  ): Promise<ProductClaimReviewResult> {
+    assertClientIsPoolClient(
+      this.client,
+      "Mutating operations require a transaction-bound PoolClient."
+    );
+    this.assertTransactionActive(this.client);
+
+    try {
+      await this.acquireCommandAdvisoryLock(this.client, cmd.clientId, cmd.actionId);
+
+      const { replay, result, payloadHash } =
+        await this.checkOrReplayReceipt<ProductClaimReviewResult>(
+          this.client,
+          cmd,
+          "invalidateClaim"
+        );
+      if (replay && result) {
+        return {
+          claim: rehydrateProductClaim(result.claim),
+          decisionEvent: rehydrateClaimDecisionEvent(result.decisionEvent)
+        };
+      }
+
+      // Read claim head
+      const claimRes = await this.client.query<ClaimRow>(
+        `SELECT * FROM product_claims WHERE client_id = $1 AND claim_id = $2`,
+        [cmd.clientId, cmd.payload.claimId]
+      );
+      if (claimRes.rows.length === 0) {
+        throw new NotFoundError("ProductClaim", cmd.payload.claimId);
+      }
+      const existingClaim = this.mapRowToProductClaim(claimRes.rows[0]!);
+
+      if (existingClaim.version !== cmd.payload.expectedVersion) {
+        throw new StaleRevisionConflictError(
+          "ProductClaim",
+          cmd.payload.expectedVersion,
+          existingClaim.version
+        );
+      }
+      if (existingClaim.currentRevision !== cmd.payload.claimRevision) {
+        throw new StaleRevisionConflictError(
+          "ProductClaim",
+          cmd.payload.claimRevision,
+          existingClaim.currentRevision
+        );
+      }
+
+      // Claim state check: only evidence_linked and reviewer_approved can be invalidated
+      if (
+        existingClaim.state !== "evidence_linked" &&
+        existingClaim.state !== "reviewer_approved"
+      ) {
+        throw new ProductValidationError([
+          {
+            code: "INVALID_FIELD_COMBINATION",
+            path: ["state"],
+            message: `Cannot invalidate claim in state "${existingClaim.state}". Only active states "evidence_linked" and "reviewer_approved" can be invalidated.`
+          }
+        ]);
+      }
+
+      // Read links for this revision to discover dependency IDs
+      const linksRes = await this.client.query<ClaimSourceLinkRow>(
+        `SELECT * FROM claim_source_links
+         WHERE client_id = $1 AND claim_id = $2 AND claim_revision = $3`,
+        [cmd.clientId, cmd.payload.claimId, cmd.payload.claimRevision]
+      );
+
+      const sourceObjectIds = linksRes.rows.map((l) => l.source_object_id);
+      const evidenceIds = linksRes.rows.map((l) => l.evidence_id);
+      const reportIds = linksRes.rows
+        .map((l) => l.report_id)
+        .filter((id): id is string => Boolean(id));
+      const referenceAssetIds = linksRes.rows
+        .map((l) => l.derivative_asset_id)
+        .filter((id): id is string => Boolean(id));
+
+      // Acquire ordered locks
+      await this.acquireOrderedLocks(this.client, cmd.clientId, {
+        skuId: existingClaim.skuId,
+        batchId: existingClaim.batchId,
+        sourceObjectIds,
+        evidenceIds,
+        reportIds,
+        referenceAssetIds,
+        claimIds: [existingClaim.claimId]
+      });
+
+      // Re-read under lock
+      const lockedClaimRes = await this.client.query<ClaimRow>(
+        `SELECT * FROM product_claims WHERE client_id = $1 AND claim_id = $2`,
+        [cmd.clientId, cmd.payload.claimId]
+      );
+      const lockedClaim = this.mapRowToProductClaim(lockedClaimRes.rows[0]!);
+
+      if (lockedClaim.version !== cmd.payload.expectedVersion) {
+        throw new StaleRevisionConflictError(
+          "ProductClaim",
+          cmd.payload.expectedVersion,
+          lockedClaim.version
+        );
+      }
+      if (lockedClaim.currentRevision !== cmd.payload.claimRevision) {
+        throw new StaleRevisionConflictError(
+          "ProductClaim",
+          cmd.payload.claimRevision,
+          lockedClaim.currentRevision
+        );
+      }
+      if (lockedClaim.state !== "evidence_linked" && lockedClaim.state !== "reviewer_approved") {
+        throw new ProductValidationError([
+          {
+            code: "INVALID_FIELD_COMBINATION",
+            path: ["state"],
+            message: `Cannot invalidate claim in state "${lockedClaim.state}". Only active states "evidence_linked" and "reviewer_approved" can be invalidated.`
+          }
+        ]);
+      }
+
+      // Evaluate eligibility snapshot to find matching real dependency failure
+      const resolution = await this.resolveClaimInternal(
+        this.client,
+        cmd.clientId,
+        lockedClaim.claimId,
+        lockedClaim.currentRevision
+      );
+
+      // Verify that there is indeed an eligibility failure matching the requested invalidation cause
+      const cause = cmd.payload.invalidationCause;
+      let matchedSourceRef: string | null = null;
+
+      const matchingBlock = resolution.blockReasons.find((b) => {
+        if (cause === "source_archived") {
+          return b.code === "PARENT_ARCHIVED" || b.code === "SOURCE_ARCHIVED";
+        }
+        if (cause === "source_superseded") {
+          return b.code === "SOURCE_SUPERSEDED";
+        }
+        if (cause === "source_quarantined") {
+          return b.code === "SOURCE_QUARANTINED";
+        }
+        if (cause === "integrity_failure") {
+          return b.code === "SOURCE_DIGEST_MISMATCH";
+        }
+        if (cause === "source_disputed") {
+          return b.code === "SOURCE_DISPUTED" || b.code === "VERIFICATION_WITHDRAWN";
+        }
+        if (cause === "batch_facts_changed") {
+          return b.code === "FACTS_SUPERSEDED";
+        }
+        return false;
+      });
+
+      if (!matchingBlock || !matchingBlock.dependencyId) {
+        throw new ProductValidationError([
+          {
+            code: "INVALID_FIELD_COMBINATION",
+            path: ["invalidationCause"],
+            message: `Claim ${cmd.payload.claimId} cannot be invalidated with cause "${cause}": no matching dependency failure found on eligible dependencies.`
+          }
+        ]);
+      }
+
+      matchedSourceRef = matchingBlock.dependencyId;
+
+      const { claim: updatedClaim, decisionEvent } = invalidateClaim(
+        lockedClaim,
+        cause,
+        cmd.payload.reason,
+        matchedSourceRef,
+        cmd.actorId,
+        cmd.timestamp
+      );
+
+      // Insert decision event
+      await this.client.query(
+        `INSERT INTO claim_decision_events (
+          event_id, client_id, claim_id, claim_revision, decision, actor_id, occurred_at, reason, policy_version, dependency_fingerprint, invalidation_cause, source_event_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        [
+          decisionEvent.eventId,
+          decisionEvent.clientId,
+          decisionEvent.claimId,
+          decisionEvent.claimRevision,
+          decisionEvent.decision,
+          decisionEvent.actorId,
+          decisionEvent.occurredAt,
+          decisionEvent.reason,
+          decisionEvent.policyVersion,
+          decisionEvent.dependencyFingerprint,
+          decisionEvent.invalidationCause,
+          decisionEvent.sourceEventId
+        ]
+      );
+
+      // Update head
+      const updateRes = await this.client.query(
+        `UPDATE product_claims
+         SET state = $1, version = version + 1, invalidation_cause = $2, invalidation_source_ref = $3, updated_at = $4
+         WHERE client_id = $5 AND claim_id = $6 AND version = $7`,
+        [
+          updatedClaim.state,
+          updatedClaim.invalidationCause,
+          updatedClaim.invalidationSourceRef,
+          updatedClaim.updatedAt,
+          cmd.clientId,
+          cmd.payload.claimId,
+          cmd.payload.expectedVersion
+        ]
+      );
+      if (updateRes.rowCount === 0) {
+        throw new StaleRevisionConflictError(
+          "ProductClaim",
+          cmd.payload.expectedVersion,
+          lockedClaim.version
+        );
+      }
+
+      const invalidationResult: ProductClaimReviewResult = {
+        claim: updatedClaim,
+        decisionEvent
+      };
+
+      await this.storeReceipt(this.client, cmd, "invalidateClaim", payloadHash, invalidationResult);
+
+      return invalidationResult;
+    } catch (err) {
+      throw translateDatabaseError(err, { clientId: cmd.clientId });
+    }
+  }
+
   async getClaimById(clientId: ClientId, claimId: ClaimId): Promise<ProductClaim | null> {
     const res = await this.client.query<ClaimRow>(
       `SELECT * FROM product_claims WHERE client_id = $1 AND claim_id = $2`,
@@ -1894,5 +2131,38 @@ export class PostgresProductClaimRepository implements ProductClaimRepositoryPor
       invalidationCause: row.invalidation_cause,
       sourceEventId: row.source_event_id
     });
+  }
+
+  async getCommandReceipt(
+    clientId: ClientId,
+    actionId: string
+  ): Promise<{
+    readonly clientId: ClientId;
+    readonly actionId: string;
+    readonly commandName: string;
+    readonly payloadSha256: string;
+    readonly actorId: string;
+    readonly responseBody: unknown;
+    readonly committedAt: string;
+  } | null> {
+    const res = await this.client.query<ReceiptRow>(
+      `SELECT client_id, action_id, command_name, payload_sha256, actor_id, response_body, committed_at
+       FROM product_evidence_command_receipts
+       WHERE client_id = $1 AND action_id = $2`,
+      [clientId, actionId]
+    );
+    if (res.rows.length === 0) return null;
+    const r = res.rows[0]!;
+    return {
+      clientId: createClientId(r.client_id),
+      actionId: r.action_id,
+      commandName: r.command_name,
+      payloadSha256: r.payload_sha256,
+      actorId: r.actor_id,
+      responseBody:
+        typeof r.response_body === "string" ? JSON.parse(r.response_body) : r.response_body,
+      committedAt:
+        r.committed_at instanceof Date ? r.committed_at.toISOString() : String(r.committed_at)
+    };
   }
 }

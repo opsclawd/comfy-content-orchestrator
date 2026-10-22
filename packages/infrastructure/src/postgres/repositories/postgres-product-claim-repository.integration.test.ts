@@ -18,12 +18,14 @@ import {
   createEvidenceId,
   createSha256Hex,
   createSourceObjectId,
+  ProductValidationError,
   StaleRevisionConflictError,
   type ClaimId
 } from "@cco/domain";
 import type { CommandEnvelope } from "@cco/application";
 import type {
   CreateClaimRequest,
+  InvalidateClaimRequest,
   LinkClaimEvidenceRequest,
   ReviewClaimRequest
 } from "@cco/contracts";
@@ -92,11 +94,14 @@ describe("PostgresProductClaimRepository DB Integration", () => {
       );
 
       const sourceObjectId = crypto.randomUUID();
-      const sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+      const sha256 = crypto
+        .createHash("sha256")
+        .update(Buffer.from(`${clientId}:${lot}:${sourceObjectId}`))
+        .digest("hex");
       await c.query(
         `INSERT INTO source_objects (source_object_id, client_id, storage_bucket, storage_object_key, original_sha256, detected_mime_type, byte_length, uploader_id, retention_policy_version)
-         VALUES ($1, $2, 'evidence', 'coa.pdf', $3, 'application/pdf', 1024, 'uploader', 'v1')`,
-        [sourceObjectId, clientId, sha256]
+         VALUES ($1, $2, 'evidence', $4, $3, 'application/pdf', 1024, 'uploader', 'v1')`,
+        [sourceObjectId, clientId, sha256, `coa-${sourceObjectId}.pdf`]
       );
 
       const evidenceId = crypto.randomUUID();
@@ -342,5 +347,284 @@ describe("PostgresProductClaimRepository DB Integration", () => {
     await expect(
       uow.execute(async (ctx) => ctx.productClaims!.reviewClaim(reviewCmd))
     ).rejects.toThrow(StaleRevisionConflictError);
+  });
+
+  it("successfully invalidates a claim and updates claim state and decision event", async () => {
+    const { client_id: rawClientId } = await insertClientRecord(client, {
+      companyName: "Client Invalidate"
+    });
+    const clientId = createClientId(rawClientId);
+    const setup = await setupBatchAndCoa(client, rawClientId, "LOT-INV-001");
+    const uow = new PostgresUnitOfWork(pool);
+
+    const createCmd: CommandEnvelope<CreateClaimRequest> = {
+      actionId: createActionId("018e69e0-8a6a-72cb-b1b7-ec79a1f73001"),
+      clientId,
+      actorId: "compliance-author",
+      timestamp: "2026-10-19T10:00:00.000Z",
+      payload: {
+        batchId: createBatchId(setup.batchId),
+        canonicalKind: "certificate_panel_measurement",
+        proofCategory: "coa_measurement_backed",
+        parameters: {
+          kind: "certificate_panel_measurement",
+          panelName: "Cannabinoids",
+          measurements: [
+            {
+              analyte: "THCA",
+              exactDecimalValue: "24.5000",
+              unit: "percent_w_w",
+              basis: "dry_weight",
+              context: "flower",
+              quantityKind: "mass_fraction",
+              requiredScope: "sample_only"
+            }
+          ]
+        },
+        displayWording: "Tested at 24.5% THCA"
+      }
+    };
+
+    const createResult = await uow.execute(async (ctx) =>
+      ctx.productClaims!.createClaim(createCmd)
+    );
+    const claimId = createResult.claim.claimId;
+
+    const linkCmd: CommandEnvelope<LinkClaimEvidenceRequest & { readonly claimId: ClaimId }> = {
+      actionId: createActionId("018e69e0-8a6a-72cb-b1b7-ec79a1f73003"),
+      clientId,
+      actorId: "compliance-author",
+      timestamp: "2026-10-19T10:30:00.000Z",
+      payload: {
+        claimId,
+        expectedVersion: 1,
+        claimRevision: 1,
+        reason: "Attached laboratory certificate",
+        links: [
+          {
+            evidenceId: createEvidenceId(setup.evidenceId),
+            evidenceRevision: 1,
+            sourceObjectId: createSourceObjectId(setup.sourceObjectId),
+            sourceSha256: createSha256Hex(setup.sha256),
+            supportRole: "primary_measurement",
+            reportId: createCoaReportId(setup.reportId),
+            reportRevision: 1,
+            measurementId: createCoaMeasurementId(setup.measurementId),
+            pinnedFactsRevision: 1
+          }
+        ]
+      }
+    };
+
+    await uow.execute(async (ctx) => ctx.productClaims!.linkClaimEvidence(linkCmd));
+
+    // 1. Invalidation of a healthy claim is rejected without writes
+    const healthyInvCmd: CommandEnvelope<InvalidateClaimRequest & { readonly claimId: ClaimId }> = {
+      actionId: createActionId("018e69e0-8a6a-72cb-b1b7-ec79a1f73002"),
+      clientId,
+      actorId: "compliance-reviewer",
+      timestamp: "2026-10-19T11:00:00.000Z",
+      payload: {
+        claimId,
+        actionId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73002",
+        expectedVersion: 2,
+        claimRevision: 1,
+        invalidationCause: "batch_facts_changed",
+        reason: "Facts have changed"
+      }
+    };
+
+    await expect(
+      uow.execute(async (ctx) => ctx.productClaims!.invalidateClaim(healthyInvCmd))
+    ).rejects.toThrow(ProductValidationError);
+
+    // Verify rollback: state and version remain unchanged
+    const unmutated = await uow.execute(async (ctx) =>
+      ctx.productClaims!.getClaimById(clientId, claimId)
+    );
+    expect(unmutated?.state).toBe("evidence_linked");
+    expect(unmutated?.version).toBe(2);
+
+    // 2. Introduce genuine dependency failure: corrupt source digest on link
+    await client.query(
+      "ALTER TABLE claim_source_links DISABLE TRIGGER trg_protect_claim_source_links"
+    );
+    await client.query(
+      `UPDATE claim_source_links
+       SET source_sha256 = '0000000000000000000000000000000000000000000000000000000000000000'
+       WHERE client_id = $1 AND claim_id = $2`,
+      [rawClientId, claimId]
+    );
+    await client.query(
+      "ALTER TABLE claim_source_links ENABLE TRIGGER trg_protect_claim_source_links"
+    );
+
+    // 3. Mismatched invalidation cause on corrupted claim is rejected without writes
+    const mismatchedCmd: CommandEnvelope<InvalidateClaimRequest & { readonly claimId: ClaimId }> = {
+      actionId: createActionId("018e69e0-8a6a-72cb-b1b7-ec79a1f73007"),
+      clientId,
+      actorId: "compliance-reviewer",
+      timestamp: "2026-10-19T11:10:00.000Z",
+      payload: {
+        claimId,
+        actionId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73007",
+        expectedVersion: 2,
+        claimRevision: 1,
+        invalidationCause: "source_superseded",
+        reason: "Wrong cause assertion"
+      }
+    };
+    await expect(
+      uow.execute(async (ctx) => ctx.productClaims!.invalidateClaim(mismatchedCmd))
+    ).rejects.toThrow(ProductValidationError);
+
+    // 4. Invalidate with matching cause (integrity_failure) derives real source ref and succeeds
+    const validInvCmd: CommandEnvelope<InvalidateClaimRequest & { readonly claimId: ClaimId }> = {
+      actionId: createActionId("018e69e0-8a6a-72cb-b1b7-ec79a1f73004"),
+      clientId,
+      actorId: "compliance-reviewer",
+      timestamp: "2026-10-19T11:15:00.000Z",
+      payload: {
+        claimId,
+        actionId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73004",
+        expectedVersion: 2,
+        claimRevision: 1,
+        invalidationCause: "integrity_failure",
+        reason: "Source digest mismatch detected on primary evidence"
+      }
+    };
+
+    const invResult = await uow.execute(async (ctx) =>
+      ctx.productClaims!.invalidateClaim(validInvCmd)
+    );
+    expect(invResult.claim.state).toBe("invalidated");
+    expect(invResult.claim.version).toBe(3);
+    expect(invResult.claim.invalidationCause).toBe("integrity_failure");
+    expect(invResult.claim.invalidationSourceRef).toBe(setup.sourceObjectId);
+    expect(invResult.decisionEvent.decision).toBe("invalidate");
+    expect(invResult.decisionEvent.invalidationCause).toBe("integrity_failure");
+
+    // 5. Idempotent replay with identical actionId returns stored receipt before terminal-state check
+    const replayResult = await uow.execute(async (ctx) =>
+      ctx.productClaims!.invalidateClaim(validInvCmd)
+    );
+    expect(replayResult.claim.state).toBe("invalidated");
+    expect(replayResult.claim.version).toBe(3);
+    expect(replayResult.decisionEvent.eventId).toBe(invResult.decisionEvent.eventId);
+
+    // 6. Stale expectedVersion conflict on terminal claim is rejected
+    const staleCmd: CommandEnvelope<InvalidateClaimRequest & { readonly claimId: ClaimId }> = {
+      actionId: createActionId("018e69e0-8a6a-72cb-b1b7-ec79a1f73005"),
+      clientId,
+      actorId: "compliance-reviewer",
+      timestamp: "2026-10-19T11:20:00.000Z",
+      payload: {
+        claimId,
+        actionId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73005",
+        expectedVersion: 2,
+        claimRevision: 1,
+        invalidationCause: "integrity_failure",
+        reason: "Stale version invalidation"
+      }
+    };
+    await expect(
+      uow.execute(async (ctx) => ctx.productClaims!.invalidateClaim(staleCmd))
+    ).rejects.toThrow(StaleRevisionConflictError);
+
+    // 7. Invalidation of already terminal claim with a new actionId is rejected without writes
+    const terminalInvCmd: CommandEnvelope<InvalidateClaimRequest & { readonly claimId: ClaimId }> =
+      {
+        actionId: createActionId("018e69e0-8a6a-72cb-b1b7-ec79a1f73006"),
+        clientId,
+        actorId: "compliance-reviewer",
+        timestamp: "2026-10-19T11:25:00.000Z",
+        payload: {
+          claimId,
+          actionId: "018e69e0-8a6a-72cb-b1b7-ec79a1f73006",
+          expectedVersion: 3,
+          claimRevision: 1,
+          invalidationCause: "integrity_failure",
+          reason: "Terminal claim re-invalidation"
+        }
+      };
+    await expect(
+      uow.execute(async (ctx) => ctx.productClaims!.invalidateClaim(terminalInvCmd))
+    ).rejects.toThrow(ProductValidationError);
+
+    // 8. Automatic cascade invalidation on batch facts update
+    const setup2 = await setupBatchAndCoa(client, rawClientId, "LOT-INV-002");
+    const createCmd2: CommandEnvelope<CreateClaimRequest> = {
+      actionId: createActionId("018e69e0-8a6a-72cb-b1b7-ec79a1f73010"),
+      clientId,
+      actorId: "compliance-author",
+      timestamp: "2026-10-19T12:00:00.000Z",
+      payload: {
+        batchId: createBatchId(setup2.batchId),
+        canonicalKind: "certificate_panel_measurement",
+        proofCategory: "coa_measurement_backed",
+        parameters: {
+          kind: "certificate_panel_measurement",
+          panelName: "Cannabinoids",
+          measurements: [
+            {
+              analyte: "THCA",
+              exactDecimalValue: "24.5000",
+              unit: "percent_w_w",
+              basis: "dry_weight",
+              context: "flower",
+              quantityKind: "mass_fraction",
+              requiredScope: "sample_only"
+            }
+          ]
+        },
+        displayWording: "Tested at 24.5% THCA"
+      }
+    };
+    const createRes2 = await uow.execute(async (ctx) => ctx.productClaims!.createClaim(createCmd2));
+    const claimId2 = createRes2.claim.claimId;
+
+    const linkCmd2: CommandEnvelope<LinkClaimEvidenceRequest & { readonly claimId: ClaimId }> = {
+      actionId: createActionId("018e69e0-8a6a-72cb-b1b7-ec79a1f73011"),
+      clientId,
+      actorId: "compliance-author",
+      timestamp: "2026-10-19T12:05:00.000Z",
+      payload: {
+        claimId: claimId2,
+        expectedVersion: 1,
+        claimRevision: 1,
+        reason: "Attached laboratory certificate",
+        links: [
+          {
+            evidenceId: createEvidenceId(setup2.evidenceId),
+            evidenceRevision: 1,
+            sourceObjectId: createSourceObjectId(setup2.sourceObjectId),
+            sourceSha256: createSha256Hex(setup2.sha256),
+            supportRole: "primary_measurement",
+            reportId: createCoaReportId(setup2.reportId),
+            reportRevision: 1,
+            measurementId: createCoaMeasurementId(setup2.measurementId),
+            pinnedFactsRevision: 1
+          }
+        ]
+      }
+    };
+    await uow.execute(async (ctx) => ctx.productClaims!.linkClaimEvidence(linkCmd2));
+
+    await client.query(
+      `INSERT INTO product_batch_facts (client_id, batch_id, revision, origin_kind, asserted_by, supersedes_revision)
+       VALUES ($1, $2, 2, 'own_production', 'Operator', 1)`,
+      [rawClientId, setup2.batchId]
+    );
+    await client.query(
+      `UPDATE product_batches SET current_facts_revision = 2, version = version + 1 WHERE batch_id = $1`,
+      [setup2.batchId]
+    );
+
+    const autoInvalidated = await uow.execute(async (ctx) =>
+      ctx.productClaims!.getClaimById(clientId, claimId2)
+    );
+    expect(autoInvalidated?.state).toBe("invalidated");
+    expect(autoInvalidated?.version).toBe(3);
+    expect(autoInvalidated?.invalidationCause).toBe("batch_facts_changed");
   });
 });

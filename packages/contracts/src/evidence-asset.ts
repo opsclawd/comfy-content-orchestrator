@@ -176,7 +176,7 @@ export type EvidenceVerificationEventContract = z.infer<typeof EvidenceVerificat
 // Public Request / Command Schemas
 // ============================================================================
 
-export const RegisterEvidenceAssetRequestSchema = z
+export const RegisterEvidenceAssetBaseSchema = z
   .object({
     actionId: z.string().uuid(),
     batchId: z.string().uuid(),
@@ -222,8 +222,10 @@ export const RegisterEvidenceAssetRequestSchema = z
       .strict()
       .optional()
   })
-  .strict()
-  .superRefine((val, ctx) => {
+  .strict();
+
+export const RegisterEvidenceAssetRequestSchema = RegisterEvidenceAssetBaseSchema.superRefine(
+  (val, ctx) => {
     if (!val.reusedSourceObjectId && !val.declaredMimeType) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -260,7 +262,8 @@ export const RegisterEvidenceAssetRequestSchema = z
         });
       }
     }
-  });
+  }
+);
 export type RegisterEvidenceAssetRequest = z.infer<typeof RegisterEvidenceAssetRequestSchema>;
 
 export const LinkEvidenceDerivativeRequestSchema = z

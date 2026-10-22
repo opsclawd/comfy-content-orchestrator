@@ -365,7 +365,8 @@ describe("Product Claim Application Use Cases", () => {
         assertCanReviewCoaReport: vi.fn(async () => {}),
         assertCanReviewClaim: vi.fn(async () => {
           throw new AccessDeniedError("User lacks claim review permission");
-        })
+        }),
+        assertCanVerifyEvidence: vi.fn(async () => {})
       };
 
       const uow = createMockUow({});
