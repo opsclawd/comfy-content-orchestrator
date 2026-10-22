@@ -2,7 +2,8 @@
 
 **Issue Reference:** #473 (Phase 1, Parent #469)  
 **Classification:** Operational Runbook & Storage Governance  
-**Governing ADRs:** ADR 0001 (Storage Decoupling), ADR 0007 (Database Schema), ADR 0009 (Verified Product Evidence)
+**Governing ADRs:** ADR 0001 (Storage Decoupling), ADR 0007 (Database Schema), ADR 0009 (Verified Product Evidence)  
+**Related Runbook:** [Verified-Batch Operator Workspace Runbook](verified-batch-operator-runbook.md)
 
 ---
 

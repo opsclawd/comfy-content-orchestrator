@@ -259,7 +259,7 @@ Implementation of the contracts specified in ADR 0009 is partitioned across seve
 | **P1.5** | Evidence & CoA | Evidence revision use cases, CoA report revisions, typed measurement ingestion, dispute event ledger | Integration tests: sample vs. lot scope, typed measurement qualifiers, supersession event emission. |
 | **P1.6** | Claim Policy & Invalidation | Claim authoring, evidence linking, human review use cases, atomic cascade invalidation transaction | Concurrency tests: atomic supersession with cascade invalidation, approve vs. supersede serialization. |
 | **P1.7** | Application API & Read Plane | Client-scoped HTTP endpoints, command receipt idempotency, read models for batch/claim detail | API integration tests: UUIDv7 `actionId` idempotency replay, 409 conflict responses, secure multi-tenancy. |
-| **P1.8** | Consumer & Review Integration | Review Hub presentation, template batch pinning resolver, final delivery reel claim verification | End-to-end integration tests: pinned batch resolution to `SceneReferenceBinding`s, fail-closed assembly admission. |
+| **P1.8** | Operator Workspace & Evidence Gate | Review Hub verified-batch operator workspace (`/products`, `/clients/:clientId/products`, dossier inspection), manual accuracy runbook, and Phase 1 evidence gate | Web component/forwarder unit tests, architectural boundary verification, and E2E synthetic batch acceptance. (Note: Campaign template batch pinning resolver, final delivery reel claim verification, and assembly admission gates belong to subsequent consumer integration phases). |
 
 ### 6. Architectural References
 
@@ -267,4 +267,21 @@ Implementation of the contracts specified in ADR 0009 is partitioned across seve
 - Acceptance Fixtures & Counterexamples: [docs/verified-product-evidence-contract-fixtures.md](verified-product-evidence-contract-fixtures.md)
 - ShotPlan & Visual Reference Authority: [ADR 0007](adr/0007-shotplan-previs-h3-routing-architecture.md)
 - Production Review Acceptance Gate: [ADR 0005](adr/0005-production-review-acceptance-gate.md)
+- Phase 1 Workspace Acceptance Matrix: [docs/verified-batch-workspace-acceptance.md](verified-batch-workspace-acceptance.md)
+- Phase 1 Operator Manual Review Runbook: [docs/verified-batch-operator-runbook.md](verified-batch-operator-runbook.md)
+
+### 7. Phase 1 Verified-Batch Operator Workspace (#477 / P1.8)
+
+Issue #477 adds the client-scoped Product/Batches operator workspace to Review Hub, establishing the Phase 1 evidence and claim boundary (software baseline; real-world physical document authenticity and downstream consumer integrations remain pending/gated):
+- **Routing & Workspace**: `/products` (authorized director client chooser), `/clients/:clientId/products` (SKU & Lot workspace), and `/clients/:clientId/products/:skuId/batches/:batchId` (Batch Evidence Dossier).
+- **Deep-Link SKU Verification**: Guard against URL tampering prevents displaying foreign lot data when the route's `skuId` does not match the batch's SKU.
+- **Cryptographic & Safe Inspection**: Displays original SHA-256 digests, byte sizes, MIME types, capture precision, and retention tiers without leaking internal MinIO/S3 bucket keys or storage paths.
+- **Lossless Decimal Notation**: CoA measurement panels and claims preserve exact decimal strings (e.g. `24.5000`) without floating-point coercion or rounding.
+- **Auditable Provenance Dimensions**: Visibly distinguishes `Reported`, `Operator-Attested`, `Operator-Reviewed`, `Independently Sourced`, `Unknown`, and `Blocked` states across batch facts, evidence assets, CoA reports, and product claims.
+- **Separation of Duties**: Enforces the non-self-approval invariant: the operator who records a CoA transcription or proposes a claim cannot approve it.
+- **Acceptance & Operator Runbook**: Automated matrix in [docs/verified-batch-workspace-acceptance.md](verified-batch-workspace-acceptance.md) and manual physical document comparison runbook in [docs/verified-batch-operator-runbook.md](verified-batch-operator-runbook.md).
+
+> [!NOTE]
+> Phase 1 software implementation establishes contract, tenant isolation, and cryptographic integrity boundaries. Real-world authenticity of physical cannabis products and lab certificates requires independent human operator judgment per runbook. Campaign template batch pinning (`PinnedProductBatchResolution` -> `SceneReferenceBinding`s), downstream delivery reel claim verification, and generative assembly admission remain assigned to subsequent consumer integration phases (outside #477).
+
 

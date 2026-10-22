@@ -19,8 +19,23 @@ if (args[0] === "whois" && args[1] === "--json") {
     process.exit(1);
   }
 
-  const login = process.env.TEST_REVIEWER_LOGIN || "Integration Test Director";
-  const displayName = process.env.TEST_REVIEWER_DISPLAY_NAME || "Integration Test Director";
+  let login = process.env.TEST_REVIEWER_LOGIN;
+  let displayName = process.env.TEST_REVIEWER_DISPLAY_NAME;
+
+  if (!login) {
+    if (ip === "100.64.0.2") {
+      login = "reviewer@test.internal";
+      displayName = displayName || "Integration Test Reviewer";
+    } else if (ip === "100.64.0.1") {
+      login = "author@test.internal";
+      displayName = displayName || "Integration Test Author";
+    } else {
+      login = "author@test.internal";
+      displayName = displayName || "Integration Test Author";
+    }
+  } else {
+    displayName = displayName || login;
+  }
 
   console.log(
     JSON.stringify({

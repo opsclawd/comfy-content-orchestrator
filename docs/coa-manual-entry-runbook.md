@@ -7,7 +7,8 @@
 
 Parent: #469 — Phase 1 (Verified batch and evidence records)  
 Issue: #474 / VPM-P1.5 (Source-backed CoA reports and typed measurements per batch)  
-Governing Architecture: [ADR 0009](adr/0009-verified-product-batch-evidence-claim-authority.md)
+Governing Architecture: [ADR 0009](adr/0009-verified-product-batch-evidence-claim-authority.md)  
+Related Runbook: [Verified-Batch Operator Workspace Runbook](verified-batch-operator-runbook.md)
 
 ---
 

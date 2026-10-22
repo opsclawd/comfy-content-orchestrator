@@ -8,374 +8,453 @@ Your working directory is a dedicated git worktree with the repository's complet
 
 .ai-orchestrator.local.json, if one exists, lives only in the main checkout and is intentionally not copied into your worktree — it is operator-machine-specific and not part of your task. Do not search for it or read it outside this directory. Reason about configuration using only .ai-orchestrator.json in your own working directory; treat it as the effective config for your task.
 
-Working directory: /home/gary/.openclaw/workspace/comfy-content-orchestrator/.ai-worktrees/issue-474
-Issue number: 474
+Working directory: /home/gary/.openclaw/workspace/comfy-content-orchestrator/.ai-worktrees/issue-477
+Issue number: 477
 
 Issue description & acceptance criteria:
-# [469 / VPM-P1.5] Add source-backed CoA reports and typed measurements per batch
+# [469 / VPM-P1.8] Add minimal verified-batch operator workspace and Phase 1 end-to-end evidence gate
 
 Parent: #469 — Phase 1
-Depends on: **#470** (ADR), **#472** (batch persistence), **#473** (EvidenceAsset registration).
-Classification: **Autonomous application/database coding**; **no OCR or model-extracted factual authority**.
+Depends on: **#476** (dossier API, all Phase 1 storage/claims dependencies).
+Classification: **Autonomous web/test implementation**, followed by **optional operator data-accuracy review**, no GPU certification. Do not mark real-world authenticity certified based on CI.
 
 ## Goal
-Represent a laboratory report as a linked, immutable source of batch-specific data. Allow a human operator to transcribe/enter typed analytical values with exact units and explicit sample/report scope; the original CoA report remains attached as evidence.
+Make Phase 1 usable in the existing private Review Hub for one real SKU/lot and provide a deterministic acceptance matrix proving the evidence/claim boundary. Prioritize legibility, corrections and provenance over polished marketing design.
 
 ## Scope
-- `CoaReport` entity/repository and migration(s): clientId, batchId, source EvidenceAsset (original PDF/image), reported laboratory identity, report ID, date, sample ID/scope, source revision, review status, recorder identity/timestamps and supersession lineage. These are *reported facts* until verified/approved by reviewer; attaching a file alone does not confer validation.
-- `CoaMeasurement` type: parameter/analyte code, exact decimal value (no float), explicit unit, basis/context (e.g., mass fraction vs percentage vs concentration), optional uncertainty/LOD/LOQ/qualifiers and reported method where applicable. Follow #470 typed contract rather than inventing a cannabis-only hardcoded panel.
-- Enforce unique identity and report source linkage within same client and batch. CoA must be specific enough to associate sample with batch; if it is not, allow a **draft/incomplete** report but fail closed for downstream supported numerical claims.
-- Permit multiple historical reports for same batch, revisions and supersession; never silently take 'latest' to overwrite pinned measurement/source identity.
-- Strict invariants for invalid percent ranges, unit-basis mismatch, nonsensical dates, missing analyte, duplicate parameter with ambiguous context, negative values absent explicit analytical qualifier; exact precision preserved in storage and API mapping.
-- No general unit conversion at claim/publish time unless an explicitly tested conversion rule exists, and no percent recalculation based on uncertain contexts.
-- Repository/transaction tests, version fences, audit/grants and cross-client checks. Reuse EvidenceAsset source verification and storage rather than second CoA upload code.
+- Minimal client-scoped Product/Batches workspace (use established app routing): list SKU -> select lot -> inspect source evidence, original/derivative distinction, source status and dates -> view CoA measurements with units and lab/report attribution -> see claim status, supporting evidence and block reasons.
+- Forms/controls for source operations supported by #476 (SKU/lot create, source evidence registration/upload/linking, CoA entry and report source association, claim propose/review/supersede). Ensure required facts, unknown/attested/verified status and review controls are visibly distinct.
+- Display source SHA/date/type and immutable version/history safely, without surfacing filesystem paths, raw MinIO keys, unapproved thumbnails, or stale presigned URLs as permanent records.
+- A concise 'batch dossier' inspection panel and reversible navigation; no magic auto-conversion of CoA values into consumer marketing copy.
+- E2E fixtures and integration tests cover one complete synthetic batch with images/report; missing origin data; lot mismatch; wrong-client ID; source byte mismatch; archived/superseded CoA; decimal-unit ambiguity; source approval/claim invalidation; denied media read.
+- Add release/runbook instructions for operator to create one non-public sample lot, compare CoA entries against the PDF manually, verify rights/capture metadata and confirm source retention plan. This real-data check is **operator judgment**, not autonomous/completed by CI.
+- Update `docs/CONTEXT.md` and epic checklist only after passing acceptance.
 
 ## Acceptance
-- An approved-looking numeric value **without a linked source report** cannot become a release-eligible fact.
-- Mixed units, missing units, ambiguous report/sample-to-batch scope, cross-client reports and archived/superseded sources fail supported-fact resolution.
-- Multiple batches of same SKU with different terpene values do not bleed across lots.
-- CoA report can be corrected by creating a new revision while the original source/old measurements remain auditable.
-- Precision test uses decimal-string storage and roundtrips; no IEEE-754 coercion in authoritative record path.
-- Synthetic report fixtures only; application and Postgres integration tests complete without real client CoAs.
-- Operational instructions distinguish manual entry from independent lab authenticity assessment.
+- From Review Hub, authorized operator creates SKU/lot, registers existing original photo and CoA, enters results, establishes/reviews a sourced claim, and sees an auditable dossier with working source inspection.
+- User can tell, without reading a manifest, which data is **reported**, **operator-reviewed**, **independently sourced**, **unknown** or **blocked**; a missing original cannot be mistaken for a verified source.
+- Nested client ownership is enforced by API, not only by hidden UI actions.
+- Test suite proves stale source/scope conflicts block claim readiness and no unauthorized client can see a source.
+- API, migration and UI tests pass in CI; no real cannabis/product photo/CoA and no private company records checked into public GitHub.
+- Phase 1 completion **does not** certify compliance of any external distribution or generative fidelity; later phases stay gated.
 
 ## Non-goals
-CoA OCR/LLM parsing, external lab APIs, medical/efficacy claims, GPU or I2V changes, marketing overlays, automatic CoA verification, legal review.
+CoA card/video template, compositing/subject masking, public website, age gates, buyer portal, legal approval, OCR, model acceleration, ComfyUI hardware run.
 
 ## Execution
-Read PRD, CONTEXT, Phase 1 ADR and `EvidenceAsset` work; one issue per orchestration Run.
+Read PRD, CONTEXT, #470 and child acceptance evidence. Autonomous PR must document tests; any real-document authenticity conclusion requires separate operator evidence.
 
 
 Issue comments:
 
 
 Design document:
-# Source-backed CoA reports and exact analytical measurements — issue #474
+# Design: private verified-batch operator workspace (#477)
 
-## Goal and authority
+## Outcome and authority
 
-Implement batch-specific, source-linked laboratory report records and manually entered analytical measurements. A stored value is a reported laboratory assertion. File registration, byte integrity, transcription review, independent laboratory authentication, and commercial claim approval remain separate authorities. This issue provides a checked source-support boundary; it does not grant release eligibility or implement claim publication.
+Add a minimal Product/Batches workspace to the existing Next.js Review Hub. An authorized operator can create a SKU and lot, register original photo/report bytes, transcribe a CoA, propose and link a claim, and have an authorized reviewer inspect and review it. A coherent dossier exposes exact supporting revisions, decisions and block reasons. Corrections create new revisions; neither transcription nor a successful test run establishes real-world authenticity.
 
-Requirements are the supplied issue #474, with ADR 0009 (#470), docs/CONTEXT.md, and docs/verified-product-evidence-contract-fixtures.md supplying the anchored contracts. The general docs/prd.md describes the production platform and visual authority; the product evidence details live in ADR 0009 and CONTEXT. No root CONTEXT.md exists. Dependencies #472 and #473 are present in this checkout (commits 04367d7 and 2604c3c); no dependency work needs to be recreated.
+The supplied #477 issue and acceptance criteria govern scope. The work is autonomous web/test implementation with a separate optional operator data-accuracy exercise. No public site, marketing template, OCR, automated copy generation, legal determination, rendering, GPU run or hardware certification is required. Future consumers may use existing pinned source/measurement contracts; implementing campaign template pinning, assembly admission or generative fidelity gates is outside this issue.
 
-## Repository evidence and constraints
+## Grounded baseline
 
-- packages/infrastructure/migrations/026_product_registry.sql establishes SKU/batch heads, append-only facts, command receipts, deferred head/revision FKs, version guards and least-privilege grants. Migration 027_evidence_authority.sql adds original source objects, EvidenceAssets/revisions, exact batch links and verification events. Add the next migration, provisionally 028_coa_reports.sql; never rewrite applied migrations.
-- packages/domain/src/evidence-asset.ts contains evidence entities and evaluateEvidenceEligibility. Its eligibility predicate rejects archive/quarantine/deletion and active disputes/rejections, but does not compare a requested revision to the current evidence head. Its lack of a dispute is not affirmative authenticity verification.
-- packages/application/src/ports/product-evidence-repository.ts owns the trusted CommandEnvelope and product-only repository. EvidenceAssetRepositoryPort is a separate port. Preserve this split by adding CoaReportRepositoryPort rather than filling the product registry adapter with unrelated report methods.
-- packages/infrastructure/src/evidence/postgres-evidence-asset-repository.ts already supports source-backed registration, same-client/batch checks, supersession, verification events, receipt replay and transaction-only mutations. Reuse original evidence and verification infrastructure; do not introduce another upload or storage policy.
-- packages/application/src/ports/unit-of-work.ts and packages/infrastructure/src/postgres/uow/postgres-unit-of-work.ts expose repositories sharing a single transaction. CoA writes and resolution must use that transaction client, including deferred-constraint error translation at COMMIT.
-- Existing product registry and evidence registration integration tests provide PostgreSQL 18 Testcontainers, synthetic source registration, replay, rollback and concurrent-version patterns. vitest.integration.config.ts includes infrastructure integration tests outside the postgres subdirectory too. The default config excludes all integration tests.
-- The checkout has no CoA/decimal implementation despite the contracts described in the ADR. Implement the required slice locally, following the existing identifier, shared lexical helper, domain factory, Zod DTO, serializer and package export conventions. Layer direction is enforced by pnpm boundaries.
+- `AGENTS.md` requires architecture boundaries, the separate integration-test config, existing ordered validation tiers, and no agent-authored physical evidence under protected artifact directories. Only this worktree's `.ai-orchestrator.json` is considered.
+- `docs/prd.md` sections 2.1–2.3 and 3.6 require private review access, ephemeral media delivery, contracts-only browser integration, server-resolved identities and version-fenced commands. ADR 0009 and `docs/verified-product-evidence-contract-fixtures.md` are the checked-in #470 design/acceptance artifacts (commit `120ac8d`, PR #478).
+- History contains #471–#476 implementation commits, ending at `cca1807` (PR #486). #476 provides `apps/control-api/src/http/routes/product-evidence-routes.ts`, `packages/contracts/src/product-evidence-http.ts`, `packages/contracts/src/batch-evidence-dossier.ts`, application commands and PostgreSQL dossier queries. Reuse these rather than introducing a parallel product system.
+- Existing control endpoints are `/api/v1/clients/:clientId/product-skus`, `/batches`, and batch-nested facts, evidence, derivative links, verification events, revision media, CoAs, claims and dossier. Evidence registration accepts multipart original bytes or JSON source-object reuse, with explicit create/link/supersede registration intent. CoA and claim correction/review routes already exist.
+- `PostgresBatchEvidenceDossierQueries` reads a repeatable-read snapshot with claim resolutions, facts/evidence/report/claim histories and safe source projections. It bounds dossiers to 500 items and approximately 10 MiB; this one-lot workspace does not require a pagination redesign. Handle failures visibly.
+- Review Hub currently has home, campaign and scene pages, reference-library UI and same-origin Next route handlers, but no Product/Batches workspace. `authorizeDirectorClientSession` resolves a trusted director, checks `REVIEW_HUB_DIRECTOR_CLIENT_MAPPINGS` and mints the scoped server-side bearer token. The existing global clients proxy does not itself filter clients by director authorization; it must not be assumed to be an authorized product client picker.
+- Source media delivery checks batch linkage, tenant namespace, availability and existence, then returns a 300-second URL. This read is not a fresh SHA verification or authenticity check. Integrity checks at ingestion, verification and claim approval remain server responsibilities.
+- `generateUuidV7` already exists in `packages/shared/src/product-identity.ts` and uses browser-compatible crypto. Use it for new evidence/CoA/claim command action IDs; the older web UUIDv4 helper does not meet their HTTP schemas.
+- Existing tests include `product-evidence-flow.test.ts`, `product-evidence-flow.integration.test.ts`, dossier database tests and claim invalidation/concurrency tests. The Playwright harness uses PostgreSQL but currently has in-memory object storage, fake unreachable media URLs, one fixed actor, wildcard client mappings and no evidence dependencies. It needs explicit fixture wiring to prove a source inspection/review workflow.
 
-## Requirements
+## Design decisions
 
-R1. Every report revision pins one client, batch and original EvidenceRevision; each measurement pins its report revision and inherits identical source lineage. No standalone measurement creation or SKU-level fallback.
+### 1. Routes, navigation and workspace
 
-R2. Reports are immutable revisions behind version-fenced heads; corrections preserve original bytes, old metadata, measurement IDs, review decisions and command receipts. Multiple independent historical reports per batch are allowed. Numerical callers provide explicit report revision and measurement IDs, never a latest-report selector.
+Use established App Router patterns. Add a Products/Batches entry at `/products`, an authorized client chooser, `/clients/[clientId]/products` for SKU list/selection and lot listing/creation, and `/clients/[clientId]/products/[skuId]/batches/[batchId]` for the dossier. These are proposed paths, with ordinary Next Link navigation, breadcrumbs and browser back/forward. Preserve selected SKU/lot in the URL; a deep link verifies the dossier's SKU belongs to the route. A mismatched SKU must not silently display another SKU's lot.
 
-R3. Typed decimal-string results preserve spelling and precision throughout request validation, domain values, SQL parameters/storage, reads, serializers and receipt replay. Units, analytical basis and context are explicit; ambiguous units or contexts cannot support numerical facts.
+The chooser resolves identity on the server and filters the existing client listing using the existing mappings; scope this behavior to the new workspace unless a shared helper is appropriate. All data endpoints still enforce access independently. Prefer an authenticated same-origin initial load from a client shell (or an equivalent server loader with the same authorization) so no unauthenticated global server API helper is accidentally used. Render explicit loading, empty, forbidden/not-found, retry and failure states.
 
-R4. Drafts may retain incomplete report/sample metadata but never bypass measurement validity or source/tenant linkage. Completion and review are separate, and no upload or transcription command self-approves.
+The lot page has four plainly labeled sections: batch facts, source evidence, CoA results and claims. A concise dossier summary shows client/SKU/lot, current versions, facts gaps, source availability and current claim block counts with links into details. Expandable histories stay close to the relevant record rather than requiring a manifest download. Source/report/claim support links open the exact pinned revision within the workspace and retain a return path. Use native controls, semantic tables, labels, keyboard navigation, visible focus, inline error messages and textual status badges; color alone cannot convey authority.
 
-R5. Enforce percent/fraction bounds, compatible analytical dimensions, real/ordered dates, nonblank analytes, unambiguous parameter contexts, explicit qualifications for reported negative values, and consistent limits/uncertainty.
+### 2. Provenance is multidimensional
 
-R6. Fail source-support resolution closed for missing reports, wrong tenants/lots, incomplete association, unreviewed/rejected reports, wrong requested context/unit, superseded revisions, archived dependencies, unavailable originals, or active source disputes/rejections. A successful result is a source-supported candidate for a future claim policy, never a release authorization.
+Do not implement a single overall verified badge or infer status from an uploaded file. Display independently:
 
-R7. Cover application workflows, exact serialization, relational integrity, immutable audit/grants, concurrency and transaction rollback with synthetic fixtures only. Document manual transcription separately from independent authenticity assessment.
+| User-facing label | Meaning and source |
+| --- | --- |
+| Reported | A transcribed CoA value, claimed lab identity or reported capture fact, with original report/revision and recorder. |
+| Operator-attested | A submitter assertion or batch-facts attestation; show actor, time and supporting revision if present. |
+| Operator-reviewed | A matching authorized review decision on this exact revision, with reviewer/time/reason. It establishes recorded review, not third-party authenticity. |
+| Independently sourced/corroborated | An applicable independent verification event for this evidence revision and fact scope; show party/method and withdrawal/dispute state. A lab name or PDF upload alone is insufficient. |
+| Unknown | Missing origin, capture metadata, rights, consent or verification. Do not fill gaps from filenames, images or related lots. |
+| Blocked | Current server claim resolution denies readiness; show the reason code, readable explanation and exact dependency. |
 
-## Key technical decisions
+These dimensions can coexist. A reported measurement may be reviewed and still lack independently corroborated lab identity. Source bytes being available is distinct from a verified fact, and reviewed transcription is distinct from source authenticity. A derivative is explicitly labeled derivative/reference with its own SHA and original linkage; it cannot substitute for a missing original. Archived/superseded/disputed/withdrawn items remain visible as history and cannot appear current or restore approval automatically.
 
-KTD1. Preserve the ADR result union and exact text storage (R1, R3).
+Use existing `ResolveClaimResponse` fields as the readiness authority. Presentation helpers translate codes and event meanings; they do not reproduce domain eligibility logic. Retain unknown codes in a generic blocked message so new server reasons fail visibly. Use current policy vocabulary (`certificate_panel_measurement`, `cultivation_processing_lineage`, etc.) from contracts. Older ADR examples such as `origin_geography` and exact fixture error codes are explanatory examples, not wire enums to reintroduce.
 
-Add branded CoaReportId, CoaMeasurementId and DecimalString, immutable CoaReport/CoaReportRevision/CoaMeasurement values, and factories/rehydration. Decimal input uses the ADR grammar: optional minus, a zero or nonzero-leading integer, and optional fractional digits. Reject numbers, exponent notation, NaN/Infinity, commas and whitespace rather than coercing them. Store values, limits, LOD, LOQ and absolute uncertainty as TEXT with matching lexical constraints. Keep trailing zeros, including in command hashes and receipts. Exact comparisons use sign/integer/fraction string comparison or BigInt-based decimal comparison; no Number, parseFloat, floating SQL types or global pg parser changes. SQL exact comparisons may use guarded NUMERIC casts solely for validation, without replacing stored text or applying a fixed precision/scale.
+### 3. Same-origin API boundary and security
 
-Retain quantified(value), below_limit(limit, lt/lte), and not_detected with mutually exclusive payloads. Add optional absolute uncertainty, detectionLimit, quantificationLimit, and reported qualifier code/text; all decimal metadata uses the same unit/basis/context as the result. LOD/LOQ and uncertainty are nonnegative; when both limits exist LOD <= LOQ. A below-limit threshold must be positive. Not-detected has no quantified value, but may retain LOD/LOQ metadata. Neither nonquantified variant is numerical zero. A negative quantified value requires an explicit negative_as_reported analytical qualifier and nonblank explanation; it remains ineligible for numerical support until a specific policy exists. Qualifiers never excuse invalid percent/fraction ranges. Method is optional/null when absent from the source, and nonblank when supplied.
+Add typed product-evidence fetch functions and a small server forwarding helper with explicit resource/method route handlers under the Review Hub's client-scoped API paths. Map only supported operations onto the existing control `/api/v1` routes; do not build an arbitrary URL proxy. Reuse contract schemas for requests and successful responses, preserve product API structured validation/business errors and statuses, and return generic sanitized failures for unexpected upstream responses.
 
-KTD2. Generic parameters with explicit, tested unit semantics (R3, R5, R6).
+Authenticate and authorize the URL client before reading/uploading large bodies or fetching upstream records. Mint tokens only on the server. For mutations forward the trusted server-resolved director identity using the existing Control API trusted-proxy identity convention; discard caller-supplied identity headers. Preserve both client ownership enforcement in the control API and reviewer grants in use cases. Client mappings alone do not grant evidence verification, CoA review or claim review authority. Tests must exercise configured grants and denied actions, not only permissive adapters.
 
-Use open analyte/parameter codes, not a fixed cannabis panel. Preserve ADR unit, basis and context fields. Add an explicit quantityKind to disambiguate mass fraction, volume fraction, mass concentration and other reported quantities; dry_weight/as_received remain specimen bases, not dimensions. Provide a small shared compatibility rule set mirrored by database constraints for supported tuples, initially percent_w_w + mass_fraction, mg_per_g + mass_fraction, and mg_per_l + mass_concentration with explicit specimen basis/context. Percent mass/volume fractions have exact 0..100 bounds; normalized fractions have 0..1 bounds. Do not infer whether bare percent or ppm denotes a mass fraction, volume fraction or concentration.
+Use private/no-store responses and fetches, including errors and media lookup. Bound multipart forwarding to the current API's file/metadata constraints; preserve the generated multipart boundary and validate required metadata. Source-class inspection and quotas remain enforced by #473/#476, including production storage-policy refusal. Do not route PDFs through the existing image-reference uploader, inherit its 10 MiB image-only policy, bypass limits by trusting Content-Length, or duplicate source storage.
 
-Known contradictory combinations are rejected at ingestion in every report state. Nonblank unfamiliar units/quantity kinds may be retained as reported data, but the source-support resolver denies unrecognized combinations. A report may legitimately contain different units for different analytes. A requested numerical set with mixed/incompatible units or contexts fails atomically; do not reject a valid heterogeneous laboratory panel merely because its rows use different units. There are no conversion rules in this slice, including mg_per_g-to-percent or cannabinoid total recalculation. Future conversions need explicit independent tests and provenance.
+No new persistence or migration is expected. If acceptance tests reveal an actual nested ownership, integrity or command-wiring defect, fix the relevant existing API/application/adapter layer narrowly, preserving composite ownership keys and existing contracts. Do not hide such defects with UI filtering.
 
-Reject repeated analyte + basis + context within a report revision, even when units or methods differ: that would otherwise create competing values for an unspecified parameter context. Legitimate replicates require an explicit distinguishing context. Check the normalized key in factories and a composite unique constraint in SQL. Preserve reported value spelling and case-sensitive parameter codes; trim descriptive fields consistently and reject control characters.
+### 4. Forms, review and correction
 
-KTD3. Incomplete reports are explicit, with revision-specific review (R2, R4, R6).
+Implement ordinary labeled forms using current contract fields and controlled vocabularies:
 
-Add completeness draft/complete independently of review status. A draft still requires batchId and an exact linked source; report identifier/date, laboratory/sample identity and scope may be null, never fabricated sentinel strings. Valid supplied dates and measurements remain mandatory. Complete revisions require nonblank claimed report/lab/sample identities, report date, scope description, a nonempty panel and explicit sample-to-batch association attestation. Store association confirmation and explanation separately from assigning a batch FK: an operator's batch selection alone is not proof that the document identifies that batch.
+- SKU and lot create, metadata correction and append-only batch-facts correction. Start origin/rights/consent explicitly unknown where allowed. Canonical SKU and lot identity constraints are explained before submission.
+- Source registration from an existing local original photo or CoA PDF/image via multipart, or reuse/link a known source/evidence from the authorized dossier. Expose registration intent deliberately, including revision supersession with the expected evidence version. Source reuse uses opaque IDs, never object keys or arbitrary remote URLs. Permit a known source ID for reuse when it is not discoverable from the current dossier; the API validates ownership and bytes. No new global source catalog is needed.
+- Show acquisition, asserted capture date/precision/context, rights/consent, attribution, submitter assertion and batch purpose as distinct fields. Existing reference derivatives can be associated through the existing derivative-link operation, with their exact IDs/hashes. No image transformation or automatic evidence promotion is introduced.
+- Verification-event controls record kind, outcome, fact scope, method, reason, corroborating party and withdrawal target as supported. They are explicitly attestations/reviews of evidence, never a one-click authenticity certificate. Surface unauthorized outcomes without writing fake local status.
+- CoA creation/transcription pins the report's original evidence/revision; record report/sample identifiers, claimed lab, report date, association attestation, sample versus attributed-lot scope, completeness and measurement panel. Use text inputs and strings for exact decimals, preserving trailing zeros. Show units, quantity kind, basis, context, method, uncertainty, limits and qualifiers. Never parse analytical values through Number, silently convert units, infer zero from not-detected, or turn rows into marketing wording.
+- Review, reject, supersede and archive reports using current endpoints. Report correction submits the full replacement panel as a new sealed revision. Explain and enforce server-side non-self-approval, reviewed scope limits and renewed review after supersession.
+- Claim proposal uses the current six canonical parameter variants, proof category and optional operator-entered wording. Render fields conditionally rather than requiring raw JSON. Support links select exact evidence/source SHA, report revision/measurement or batch-facts revision, support role and attestation. Nothing is linked automatically merely because it shares a SKU. Unsupported manual proposals remain visibly unverified/blocked.
+- Claim review, rejection, explicit invalidation and append-revision correction remain explicit commands with reason/version/revision. Superseding a claim creates a new revision and requires renewed evidence and review as the existing lifecycle dictates. Preserve all historic links and decisions.
 
-Keep scopeKind sample_only or attributed_lot, nullable only on a draft. sample_only can support a statement limited to the explicitly associated tested sample; it cannot support a universal lot statement. attributed_lot needs a documented sampling method plus explicit reviewer assessment of lot attribution. This assessment records human judgment and does not automatically certify a laboratory sampling protocol.
+Use shared UUIDv7 generation for each logical command, keeping the same ID and normalized payload for a transport retry. Editing a failed/conflicted payload creates a new command ID. Carry expectedVersion and revision fences from the inspected snapshot; on 409 show the conflict, preserve unsent input, reload dossier state and require a deliberate re-submit. Do not automatically retry approvals against a newer head or optimistically mark a claim approved. Disable duplicate submissions while pending. Refresh the entire coherent dossier after successful writes and on return/focus or explicit refresh; cancel/ignore late responses after client/lot/revision changes. During refresh/failure, clearly mark old data and disable review until current data is established. The API remains the final concurrency gate.
 
-Represent review with an append-only coa_report_review_events ledger bound to exact report revision, containing approve/reject, trusted actor/timestamp, reason and assessed scope. Expose pending/approved/rejected status derived from that revision's decision. Permit one terminal review decision per revision; corrections or a rejected report need a new revision, and supersession resets review to pending. A review command requires expectedVersion and advances the report head version without changing its content revision. Approval is accepted only for a complete revision with currently eligible source and adequate assessed scope. Add a narrow application reviewer-authorization dependency that fails closed if unavailable; obtain actor/client from trusted command context, never caller-supplied approval booleans. SQL grants protect audit immutability but do not establish application-user authorization. HTTP authentication/role integration remains the later API slice.
+### 5. Safe source inspection
 
-verifiedLabIdentityEventId remains optional and separate from transcription review. When present, enforce same client/evidence/revision and the ADR predicates: verified, lab_identity, independent_third_party_corroboration, with no effective withdrawal. Other verification scopes or submitter/internal review cannot impersonate that event. Source-support resolution rechecks referenced event validity; it must not trust an old cached lab-verified flag.
+Dossier records show opaque IDs, SHA, MIME/type, bytes, uploaded date, reported capture date/precision, retention policy identifier, availability and exact immutable revision lineage. Render user-entered text escaped. Do not show filesystem paths, storageBucket/storageObjectKey/storageVersionId, arbitrary rights-document locators or raw manifests as convenient inspection links. Opaque rights locators can be omitted from the visible UI until an authorized safe-link resolver exists.
 
-KTD4. Permanent identity, strong lineage and bounded corrections (R1, R2, R5).
+Source inspection starts only on an explicit action against the batch/evidence/revision media route. Keep the returned URL only in transient component memory with expiresAt; never store it in dossier state persisted to disk, localStorage, copied provenance or canonical navigation. Show image/PDF content in a clearly labeled original-source viewer or safe open action; provide a PDF open fallback if inline viewing is unavailable. Do not eagerly render unapproved derivative thumbnails. Delivery URLs may encode storage details internally; display human-readable action labels, never their raw URL/key text.
 
-Use coa_reports, coa_report_revisions, coa_measurements and the review ledger. Bind each head permanently to clientId, batchId and EvidenceAsset identity; unique (client_id, batch_id, evidence_id) prevents duplicate logical reports for the same batch/source lineage. Report revisions may advance evidenceRevision or correct transcription against the same original revision; each correction gets new measurement IDs. A distinct independent original report uses a distinct EvidenceAsset identity and report head. Displayed laboratory report identifiers are reported facts, not globally unique trustworthy keys; do not impose a uniqueness rule that prevents legitimate revisions or reuse by different labs/batches. Never retarget an existing report to another batch.
+On expiry or media load failure, remove the stale source and offer a fresh authorized lookup; on denied/quarantined/missing media show the reason and no cached preview. Clear media on scope/revision change. Do not forward bearer tokens to object storage, log signed URLs, or treat successful rendering as integrity/authenticity verification. Already-issued presigned URLs are bearer capabilities until expiration; this issue cannot promise immediate revocation. Tests prove denied issuance and unavailable UI, not retroactive invalidation of an issued S3 signature.
 
-The exact revision FK targets batch_evidence_links(client_id, batch_id, evidence_id, evidence_revision). Validate purpose coa_test_report, sourceClass coa, and a PDF or registered image MIME type; do not use visual derivative bytes as the original. Include batch/evidence identity in head-to-revision constraints and the full composite lineage key in measurement-to-report FKs, matching the ADR future ClaimSourceLink key. Keep the deferred head/current-revision FK. Enforce predecessor exactly revision - 1, one successor, positive bounded revisions, immutable identities, monotonic version increments and terminal archive. Add archive command for the report head; history remains readable.
+## Acceptance strategy and evidence boundary
 
-Date-only fields use Gregorian years 0001..9999 and SQL finite dates in that range. Require sampleDate <= reportDate when both exist, and report/sample dates <= the trusted recording UTC date. Supplied valid chronology applies even to drafts. Do not infer dates from file timestamps or SKU/batch production dates, and do not invent a report expiry period. Audit timestamp validation is separate from the source's date-only values.
+Use synthetic, conspicuously labeled PNG/JPEG and PDF fixtures generated from deterministic text/shapes. No cannabis/product photographs, real laboratory reports, company records or private operator evidence go into GitHub. Static deterministic IDs belong to fixtures; UUIDv7 action IDs are unique per command/test namespace. Use two clients and two lots to expose isolation errors.
 
-KTD5. Transactional report boundary and exact source-support resolution (R1, R2, R6).
+Real PostgreSQL plus MinIO integration tests prove ingest, migrations, original bytes, server policy, nested ownership and invalidation. Browser tests prove that a person can operate the workspace and inspect actual delivered synthetic media; DOM snapshots and fake presigned hosts are insufficient. Extend the current harness with evidence lock coordinator, dossier queries, original inspector, explicit test/staging storage policy, configured reviewer grants and an isolated MinIO service for the evidence scenario. Preserve other harness scenarios. Provide test-owned author/reviewer identity contexts consistently on both web and control sides, with restricted client mappings; do not add a production impersonation option or trust browser identity headers. A distinct reviewer must complete the CoA review, and the author must be rejected for self-approval.
 
-CoaReportRepositoryPort exposes create, supersede, review, archive, client-scoped report/revision/history/measurement reads and batch listing, plus pinned measurement support resolution. Domain predicates own analytical rules; the adapter loads and checks relational/source state on one transaction client. Thin use cases validate trusted command envelopes and execute via UnitOfWorkContext.coaReports. Add strict request/response schemas and serializers now; adding HTTP routes or UI is not necessary for this issue's API-mapping precision acceptance.
+Runbook instructions are a separate human procedure: use one non-public sample lot, manually compare every CoA row against the source PDF, verify rights and capture assertions, assess independent corroboration where available, and confirm approved retention/deletion/legal-hold/quota arrangements. A completed CI matrix establishes software behavior only. Keep operator review pending unless separate actual operator evidence exists.
 
-Resolve using clientId, batchId, reportId, reportRevision and explicit measurementIds plus required unit/basis/context/scope. Require head revision equality, nonarchived SKU/batch/report/evidence, exact batch link, available source object, no active source-object dispute/rejection (including disputes attached to another assertion over the same original), approved complete report, affirmative sample association and recognized measurement semantics. Reuse evaluateEvidenceEligibility and original-source verification event semantics, adding the missing current-revision and full lineage checks explicitly. The existing registration adapter already evaluates disputes across a SourceObject; share the focused helper rather than creating a weaker CoA-only interpretation.
+## Constraints, assumptions and risks
 
-A quantified-support request rejects below_limit/not_detected, negative-qualified values, missing/duplicate measurement IDs and incompatible requested unit/basis/context/scope. Nonquantified records remain available in ordinary history reads for future qualified absence-claim policy. Successful resolution returns exact values and all pinned identifiers, qualifiers, scope and provenance, never a bare decimal or releaseEligible flag. Do not silently choose a report, new measurement or source when a pin becomes stale. An approved-looking DTO without these persisted dependencies cannot pass resolution.
-
-Use a coherent transaction snapshot with dependency locks for support resolution, not independent unlocked queries that can mix old heads and new verification state. The result is valid at that check; future approving/publishing transactions must re-resolve and hold the locks through their own commit. Do not advertise a source-support read as a durable release grant.
-
-KTD6. Receipt-first commands and compatible locking (R2, R7).
-
-Use the existing tenant/action command advisory-lock namespace and product_evidence_command_receipts for all report mutations. Compare command name, actor and canonical payload hash; identical committed commands replay their stored response before mutable-state preconditions, even after supersession/archive. Altered actor/payload/command conflicts. Preserve input decimal text in the hash. All generated IDs, revision/measurement/review writes, head update and receipt commit or roll back together. Reject mutation on an unbound/autocommit adapter. Include new constraint names in immediate and deferred database-error translation, without leaking a foreign client's identifiers.
-
-Account for actual evidence code, not just the ADR lock diagram. Registration currently locks batch/SKU, source, then evidence; event append locks evidence then source; derivative linking locks evidence then batch/source. Introduce no report-first dependency locking. Use one documented order for overlapping paths: SKU, batch, source objects sorted by ID, evidence heads sorted by ID, report heads sorted by ID, then future claim heads. Read immutable lineage first to discover lock targets, acquire locks in order, then recheck heads/version/lineage. Supersession involving old and replacement originals locks both source rows in sorted order. Adjust the existing event/derivative paths where their inverse order would conflict with CoA operations; keep this a focused ordering/helper change with regression tests, not a storage rewrite. Evidence registration, verification appends and quarantine must synchronize with the same source locks. Bound lock_timeout and map contention consistently.
-
-Report support becomes false after source/report supersession or archive, dispute/rejection, withdrawal of a required verification or quarantine, without mutating historical review records. This issue has no product claim tables to invalidate. The later claim slice must add same-transaction cascade invalidation at these command boundaries and precommit dependency rechecks; no fake invalidation table, no no-op claim event bus and no claim lifecycle implementation here.
-
-## Explicit ADR refinements and assumptions
-
-ADR 0009 prose mentions NUMERIC while its concrete measurement DDL uses TEXT. TEXT is the authoritative choice because the issue requires decimal-string storage and preserved spelling/scale. Its report schema requires all metadata, has no draft/review fields or uncertainty limits, and makes method mandatory; extend those contracts explicitly for drafts, revision review and optional reported metadata. Its monotonic predecessor check is weaker than the issue's version-fence needs; use exact one-step lineage as existing domain factories already do. Document these changes in ADR 0009/CONTEXT and synthetic fixtures rather than quietly claiming the old DDL already satisfies them.
-
-The source remains mandatory for all persisted reports. Incomplete means insufficient reported identity/scope, not a source-less approved fact. A single original representing a panel with several samples is modeled as distinct explicitly scoped report EvidenceAsset assertions where needed, using #473's existing-source registration rather than another blob upload. New numeric analytical families are representable as reported strings, but remain unsupported until their tuple semantics are tested.
-
-Assume manual commands are invoked by trusted application callers, following the existing CommandEnvelope convention. Reviewer authorization is explicit at the application use-case boundary; no new public endpoint is exposed. Transcription approval assesses correspondence and scope, not legal compliance, clinical efficacy or independent lab authenticity. All examples use clearly fictitious labs and sources.
-
-## Risks and limits
-
-The largest implementation risk is inconsistent cross-repository lock order; prove both commit orders with controlled barriers rather than timing sleeps. A second is accidentally treating evidence eligibility or transcription approval as release authority; keep names/results and operator instructions explicit. Unknown analytical dimensions must fail closed without restricting the data model to a cannabis panel. SQL regex/check expressions must not accidentally accept NULL via three-valued logic. Deferred FKs need COMMIT-time translation tests. Decimal comparisons must remain exact for long fractions and preserve trailing zeros on replay.
-
-No OCR/LLM extraction, automatic authenticity verification, external lab integration, medical/efficacy claims, general conversion, overlays, GPU/I2V work or real client data is included. Existing production evidence-storage governance stays in effect; this issue neither enables production ingest nor demands independent legal/security sign-off as its own implementation gate.
-
-## Downstream traceability
-
-| Future consumer | Contract enabled here | Current issue verification |
-| --- | --- | --- |
-| Claim authoring/policy | Full measurement/report/source composite identity and nonquantified result distinctions | Pinned source-support and lineage tests only; no claim workflow execution |
-| Claim approval/invalidation | Revision/version heads, immutable decisions, shared transaction and lock order | Report/source concurrency and stale-pin denial; claim cascade belongs to the later claim slice |
-| HTTP/read plane | Strict schemas, typed errors and exact string serializers | DTO/serializer/receipt roundtrips; no new HTTP route required |
-| Review Hub/template/assembly | Batch-specific pins, explicit sample scope and source-support denial reasons | Two lots of one SKU remain isolated; no present assembly exit-gate, render-provider or locked-SHA run |
-
-No phase completion sign-off, production lab verification, real-provider run, physical hardware measurements or downstream release admission is a gate for this PR.
+1. `docs/CONTEXT.md` and ADR 0009 provisional P1.8 ownership tables mention template pinning and final delivery checks. #477 explicitly narrows this PR. Document the discrepancy and distinguish future contract support from present acceptance; do not expand implementation to satisfy the old table.
+2. Production evidence ingest fails closed without approved storage governance; adding UI must not set isProductionApproved, loosen grants or silently fall back to development policy. The real-data exercise runs in a permitted private environment; a production exercise requires prior operator approval of that environment's policy.
+3. No dedicated epic checklist was found in checked-in files; #469 appears to be the external checklist. Prepare an acceptance summary/checklist in the new runbook and update checked-in CONTEXT only after software acceptance. If an authorized integration can update #469 during execution, mark only the completed software item with test references; do not claim remote edits or phase sign-off when unavailable.
+4. #470/child evidence available locally consists of committed ADR, fixture documentation, implementation and tests. This plan does not assert the remote issue checklist is complete or that any test was run during planning.
+5. Review and media policy errors may expose gaps between documentation and code. Preserve current runtime error enums, test them and fix demonstrated prerequisite defects without inventing a new authority model. Independent sourcing is always tied to explicit event scope, not inferred from lab attribution.
+6. The existing global client list and fixed-actor E2E setup are insufficient authorization evidence. The new picker and harness must address these directly. Upload buffering and dossier limits are acceptable for the minimal workspace only with bounded bodies and clear failures.
+7. No physical hardware evidence directories are implementation outputs. Later phase deliverables, real-provider validation, locked-SHA render runs, legal approval and overall Phase 1 completion sign-off remain outside this PR's gates.
 
 Implementation plan:
-# Implementation plan — issue #474
+# Implementation plan: #477
 
-## Goal capsule
+## 1. Establish reusable authenticated workspace API access
 
-Deliver source-backed immutable CoA revisions, exact typed measurements, report transcription review and a fail-closed pinned source-support boundary using the existing batch/evidence transaction infrastructure. Implement only this issue. The supplied acceptance criteria are authoritative; design_md records the explicit ADR refinements. Do not modify certification/, baseline/ or config/render-profiles/, generate real CoAs, add upload infrastructure, or implement downstream claim/publish workflows.
+Use existing `apps/web/src/api/director-client-access.ts`, reviewer identity resolution and reference proxy patterns as the baseline. Add product-specific typed API calls and explicit Next client-scoped route handlers for SKU/lot/facts, evidence registration/reuse/history/derivative/verification/media, CoA commands, claim commands and dossier. Reuse `@cco/contracts` schemas, safe source projections and shared UUIDv7 generation. Keep the forwarding helper small and operation-allowlisted; support structured product errors, no-store responses and bounded multipart forwarding. Propagate only trusted server identity and tenant tokens.
 
-Land as one issue-scoped change after application and PostgreSQL tests and the existing repository gates pass. This planning run writes result.json only and does not execute tests or production changes.
+Add an authorized client picker data path using existing client list plus server-side mapping filtering. Verify client authorization on every product data path before upstream requests and before large-body reads. No schema migration or new product endpoints are planned; narrowly repair existing prerequisite wiring/security defects only when demonstrated by acceptance tests.
 
-## U1. Domain values and wire contracts
+Validation: focused `pnpm vitest run apps/web/src/api` plus tests beside the new product route handlers. Cover 401/403, malformed IDs, forged identity/token headers, body/path disagreement, allowed route/method forwarding, preserved 400/409 errors, malformed upstream data, no-store errors, upload metadata/binary boundary preservation, oversize streaming bodies and sanitized unexpected failures. Assert denied requests never call upstream or inspect another client's source. Run `pnpm boundaries` after the API slice.
 
-Depends on: none. Covers R1–R6; KTD1–KTD4.
+## 2. Build navigation, read-only dossier and original inspection
 
-Add the report/measurement/review identifiers and pure decimal, quantity/unit compatibility, date and scope validators following packages/shared/src/product-identity.ts, packages/domain/src/identifiers.ts and evidence-asset.ts. Likely new modules are shared coa-measurement helpers, domain coa-report.ts/coa-measurement.ts, contracts coa-report.ts and their tests; update package index exports. Use shared lexical rules so contracts never depend on domain. Avoid moving unrelated product code.
+Add `/products`, the client-scoped product list and SKU/lot dossier pages using the existing App Router layout and style vocabulary. Add the home entry, authorized client selection, SKU and lot lists, breadcrumbs, deep-link validation and usable back/forward behavior. Build small workspace components for summary, facts, evidence/history, CoA tables and claim/support details. Avoid a new design system or separate application shell.
 
-Define report head/revision, typed results, optional absolute uncertainty/LOD/LOQ/qualifiers, generic analyte/context fields, explicit draft/complete state, association attestation, revision-bound review and exact pinned-support input/result. Add create/supersede/review/archive command payload and response schemas with strict keys. Identity, recorder/reviewer and timestamps come from trusted envelopes; create/supersede payloads cannot set approved status. Preserve ADR composite identity and result kinds. Keep reported method nullable rather than fabricating an unknown method.
+Use the dossier response as the coherent lot view. Add presentation helpers for reported/attested/reviewed/independently corroborated/unknown/blocked labels with exact revision/event scope. Always show claim block reasons and historic statuses; show source SHA, dates, type, retention and original/derivative distinctions without raw locators. Add on-demand original inspection using fresh media delivery, expiry handling, denied/missing states and PDF fallback. Handle late loads, client switching, refresh failures and absent originals without showing stale verified/ready badges.
 
-Tests: string values beyond IEEE-754 precision and long fractions; exact 24.5000 spelling; malformed decimals and JSON numeric input; all three result variants and forbidden payload combinations; optional LOD/LOQ/uncertainty and contradictions; percent/fraction endpoints and tiny violations beyond endpoints; unqualified negative rejection and explicitly qualified negative retention; known unit-dimension contradictions; unknown semantics retained but unsupported; missing analyte/unit/basis/context; duplicate analyte/context across different units/methods; valid distinguished contexts; impossible/future dates and sample-after-report; incomplete drafts and complete requirements; sample vs lot assessment; new revisions discard prior review status. Roundtrip DTOs/serializers without numeric coercion.
+Validation: colocated page/component tests with Testing Library under the existing jsdom conventions. Cover no evidence, unknown origin, reported-but-unreviewed values, scoped independent verification and its withdrawal, archived/superseded histories, source unavailable despite a derivative, no auto-loaded thumbnails, signed URL expiry, denied media, route SKU mismatch, stale responses and accessible navigation. Verify all measurement strings, including trailing zeros and below-limit/not-detected representations, survive display unchanged.
 
-Validation: pnpm vitest run packages/shared/src/coa-measurement.test.ts packages/domain/src/coa-report.test.ts packages/domain/src/coa-measurement.test.ts packages/contracts/src/coa-report.test.ts (use the final filenames if adjusted); pnpm typecheck.
+## 3. Add source and batch correction workflows
 
-## U2. Add relational schema and immutable audit protections
+Add forms for SKU/lot create, relevant metadata correction and append batch facts. Add source upload/reuse/link/supersede controls with current evidence registration contracts, explicit acquisition/capture/rights/consent/assertion fields and batch purpose. Integrate the existing derivative association and scoped verification-event controls so operators can establish and dispute/withdraw source support without a manifest or storage console.
 
-Depends on U1. Covers R1–R5, R7; KTD3, KTD4, KTD6.
+Make source selection explicitly client/lot/revision scoped. Unknown facts are allowed where contracts permit and remain visibly unknown. Use UUIDv7 action IDs with request-stable retries and existing expectedVersion fields. On success reload the coherent dossier. On conflicts preserve inputs and display refreshed heads without automatically resubmitting.
 
-Add packages/infrastructure/migrations/028_coa_reports.sql, using the next free numeric prefix at implementation time. Follow migrations 026/027, including PostgreSQL UUIDv7 defaults, exact client keys, nonempty checks, finite/bounded dates/timestamps, deferred current-revision FK, full measurement lineage FK, report predecessor and parameter-context uniqueness. Add the immutable report review ledger with one decision per report revision. Bind head batch/evidence identity permanently and prevent two report heads for one client/batch/evidence lineage. Complete reports require required identities/scope and association fields; drafts explicitly permit null missing metadata. Require source references and valid supplied measurement rows in both states.
+Validation: focused form/proxy tests prove required/unknown states, correct create/link/supersede payloads, original/derivative separation, source reuse without bytes, duplicate submission prevention, same-action retry, changed-payload new action, and stale-version recovery. Exercise existing evidence registration/application tests when changes touch those paths.
 
-TEXT decimal columns and typed-result checks must preserve strings and use explicit IS NOT NULL tests. Enforce analytical row rules and percentages with exact SQL predicates. Complete-panel/nonempty rules that span rows need a deferred constraint trigger or equivalent commit-time invariant, so an app-role caller cannot commit a complete report without measurements. Approval review-event insertion likewise checks the referenced revision is complete; application eligibility remains responsible for live source/reviewer checks. Composite verification-event FK proves lineage; validate its semantic predicates in the transactional adapter. Do not mutate verification infrastructure to treat a lab-name string as authentication.
+## 4. Add CoA and sourced-claim author/reviewer workflows
 
-Reuse existing append-only/delete-protection trigger functions. Add head update guards: only revision/version/archive columns mutable, version advances exactly one, revision unchanged for review/archive or increases exactly one for supersession, archived heads terminal. Revoke PUBLIC access; app role gets SELECT/INSERT on immutable tables and only allowed column UPDATE on heads. Explicitly revoke UPDATE/DELETE/TRUNCATE and assert effective privileges, including inherited-role and column-level grants, following the existing schema test patterns.
+Add CoA metadata and typed measurement entry tied to an exact report source. Use decimal text inputs, contract validation and explicit quantity/unit/basis/context, scope, association and completeness fields. Add review/reject/supersede/archive controls and recorder/reviewer provenance. Show why drafts, self-approval or scope escalation cannot support a claim.
 
-Add postgres/coa-report-schema.integration.test.ts. Prove empty-database migration and upgrade from 027 with existing SKU/batch/evidence rows intact. Test deferred head creation and orphan failure at COMMIT, orphan/forged measurement denial, cross-client/batch FKs, batch/source retarget denial, duplicate identities and parameter contexts, skipped/forked revision rejection, invalid decimals/NULL payloads/percent/unit/date rules, immutable UPDATE/DELETE and TRUNCATE denial through a real restricted role, legal column updates and inherited forbidden privilege detection. Report and source history must survive corrections/archive.
+Add structured claim forms for current canonical variants, source-link selection and manual wording. Show exact pinned source/report/measurement/facts IDs and revisions in inspection details, but let users select labeled records rather than transcribe IDs where available. Add review/reject/invalidate and append-revision correction commands. Render server resolution and current decision history following each mutation; keep historical approval distinct from current eligibility. Include ordinary correction paths as well as the golden path.
 
-Validation: pnpm vitest run --config vitest.integration.config.ts packages/infrastructure/src/postgres/coa-report-schema.integration.test.ts. Requires Docker; default unit config is not valid for this file.
+Validation: component tests for valid and malformed decimal strings, blank/ambiguous units, precision preservation, all result kinds, wrong report selection, scope controls, distinct review controls, API-denied self-approval, unsupported manual wording and stale approvals. Focused command tests assert authoritative identity is absent from browser payloads, exact pinned links are sent, expectedVersion is retained and no failed command fabricates local approval.
 
-## U3. Transactional repository, source checks and lock integration
+## 5. Prove the Phase 1 evidence/claim acceptance matrix
 
-Depends on U1 and U2. Covers R1, R2, R6, R7; KTD4–KTD6.
+Extend the existing `apps/control-api/src/http/product-evidence-flow.integration.test.ts` or add a nearby focused integration suite. Reuse PostgreSQL 18/MinIO helpers, migration runner, deterministic valid image/PDF generation, configured authorization and dossier schema checks. Retain existing repository cascade/concurrency tests rather than replacing them with mocks. Tests needing storage mutation use harness-owned object locators; those remain internal to tests.
 
-Add packages/application/src/ports/coa-report-repository.ts and a PostgresCoaReportRepository adapter under packages/infrastructure/src/postgres/repositories/. Define mutation results, revision/history/measurement reads, batch listing and pinned-support loading/resolution. Add UnitOfWorkContext.coaReports and instantiate the adapter on the same PoolClient in PostgresUnitOfWork. Update relevant exports and test fakes; an optional context field can follow current repository conventions, but CoA use cases must fail clearly when absent.
+Extend `e2e/harness` with an isolated evidence scenario: real MinIO with browser-reachable signing endpoint, evidence dependencies, explicit non-production test policy and role/tenant-restricted author/reviewer identities. Preserve existing scenario defaults where appropriate. Make test identity switching a harness-owned operation rather than an application feature; use the existing trusted identity resolution interface and test mock boundary on both services. Ensure cleanup runs on setup failure and each case has isolated clients/lots/action IDs.
 
-Reuse command envelope validation, canonical hashing, transaction-scoped advisory locking and receipt storage patterns. Keep command-name/actor/hash checks and historical response rehydration; no standalone receipt table or nested transaction/pool acquisition. Validate create/supersede atomically against the exact batch link, class/purpose/original MIME, live source/head state and all measurement invariants. Supersession requires expectedVersion and fixed batch/evidence identity, appends exactly one next revision plus entirely new measurement IDs, resets review and advances the head with an affected-row version predicate. Review appends a terminal decision for the exact current revision and increments head version. Archive is terminal, fenced and receipt-backed.
+Add `e2e/tests/verified-batch-workspace.spec.ts` and an acceptance matrix document (for example `docs/verified-batch-workspace-acceptance.md`) mapping each row to actual test names and boundary assertions. For each row assert persisted/API state and relevant user-facing consequence, not merely a notification message:
 
-Share narrowly scoped source-state/dispute helpers with the existing EvidenceAsset adapter. CoA resolution must add the current evidence revision check absent from getEvidenceEligibility; check active disputes for the original across evidence assertions and the semantic validity/withdrawal of any pinned independent lab event. Keep historical report reads available even when support is denied. Return scoped NOT_FOUND rather than probing a foreign tenant to explain it. Map new named checks/FKs/uniques and lock timeouts into the established closed errors, including deferred errors caught at UoW COMMIT. Preserve the existing error contract; add an error code only if the existing validation/business categories cannot express the condition, updating shared/contracts tests together.
+| Case | Backend proof | Browser proof |
+| --- | --- | --- |
+| Complete synthetic batch | Create SKU/lot, multipart photo/report ingest, source/derivative linkage, exact CoA entry, distinct reviewer approval, claim proposal/link/review, schema-valid dossier and actual signed source byte read. | Start at Review Hub; operate the forms, inspect original photo/PDF, review using distinct test identity, see reported/reviewed/provenance labels, trace support and navigate back. Reload proves persistence. |
+| Missing origin | Unknown facts do not supply supported origin/lineage authority; use current canonical policy and actual runtime block codes. | Unknown is explicit; affected proposed claim stays blocked, while unrelated valid measured facts remain legible. |
+| Lot mismatch | Same-client Lot B evidence/report/measurement cannot support Lot A without the required explicit association; mismatched request fails and makes no claim approval. | Wrong-lot records cannot be selected accidentally; injected conflict is explained and claim remains blocked. |
+| Wrong-client IDs | Both URL/principal mismatch and foreign nested IDs under an authorized client fail across reads/writes/dossier/media; denied media never signs or returns source data. | Unauthorized client selection/deep link fails; scope switching clears old dossier and media. |
+| Source byte mismatch | Tamper with stored bytes, then invoke actual verification/approval gate; assert integrity rejection, durable quarantine/invalidation and blocked dossier resolution. | Failed approval shows actionable failure; no ready/verified badge or stale preview remains after refresh. |
+| Missing original / denied read | Missing/quarantined original or denied storage/media access yields no usable delivery; derivative existence cannot satisfy original availability. | Explicit original unavailable/denied state with no substitute thumbnail; retry requests fresh access. |
+| Archived/superseded CoA | Approve a claim, archive or supersede report, prove invalidation/history retention and pinned old-revision support denial; latest revision is not substituted. | Old reported values remain inspectable as history; current claim becomes blocked and correction needs renewed review. |
+| Decimal/unit ambiguity | Reject malformed decimals/unitless rows; preserve exact strings such as 24.5000; reject mismatched unit/basis/context and sample-only to lot scope escalation. | Field errors are specific; no automatic conversion, zero substitution or marketing wording appears. |
+| Source approval/invalidation | Exercise applicable verification, dispute/withdrawal and evidence supersession, proving source-event scope and resulting claim eligibility/invalidation. | Review decision and independent sourcing remain distinct; withdrawn/disputed evidence and block reasons are visible. |
+| Stale version/scope conflict | Reject stale expectedVersion and concurrently changed source/report heads; assert no orphan approval. Existing approve/supersede commit-order tests stay passing. | Preserve edits, require deliberate refresh/resubmit, and ignore late responses for prior selection. |
+| Reviewer denial and retry | Self-review/insufficient grants fail; identical successful command replay creates one event and changed payload/action collision fails. | No client-side identity override; repeated submission does not duplicate records; denial remains visible. |
 
-Document and apply the design's shared dependency lock order to CoA mutations/resolution and the existing evidence paths they overlap. Include registration, verification event append, derivative link and source quarantine in the audit; fix actual inversions where required. Use immutable discovery reads, sorted source locks, head locks, then mandatory rechecks. Do not lock a report first and later acquire its evidence/batch locks. Source support must be assembled under one coherent transaction and shared locks; report state, source availability and verification events cannot be loaded in disconnected sessions.
+Not every storage/concurrency variant needs an expensive full browser replay. Cover all cases at real API/database/storage level where applicable, and browser consequences for each distinct workspace state, with one full mutation/review/inspection path. Browser interception may simulate expiry/transport failures but must not replace real ownership, integrity or golden-path media proof.
 
-Tests in adapter unit tests and postgres/repositories/postgres-coa-report-repository.integration.test.ts: atomic complete creation; failure after revision/measurement insertion rolls back heads, rows and receipt; unbound/autocommit refusal; same command replay, altered actor/command/payload conflict; concurrent identical retry yields one record; stale expectedVersion produces one winner; replay still returns original strings and IDs after newer revisions/archive; exact lineage and tenant-filtered reads/history; no metadata/storage mutation; correction against same PDF and against next EvidenceRevision; independent reports on same batch; long decimal/scale roundtrip through pg and JSON receipts. Update existing evidence/UoW tests for shared helper/lock changes.
+Commands: `pnpm vitest run --config vitest.integration.config.ts apps/control-api/src/http/product-evidence-flow.integration.test.ts` (plus any newly added integration file), `pnpm test:db`, and `pnpm --filter e2e exec playwright test tests/verified-batch-workspace.spec.ts`. Integration tests always use the integration config. Docker and Playwright Chromium are prerequisites. Existing `.github/workflows/ci.yml` already gates unit tests, database tests and all `e2e/tests`; keep the new specs in those discovery paths rather than adding a redundant CI system.
 
-Controlled concurrency tests: review vs report supersession; review/resolve vs EvidenceAsset supersession, dispute append, batch/report archive or quarantine; both commit orders must yield a state that future resolution rejects when stale. Verify bounded lock timeout and no deadlock on overlapping registration/verification/derivative operations using explicit barriers and a small connection pool. Do not test future claim invalidation tables or introduce them.
+## 6. Document private operator trial and record only verified completion
 
-Validation: pnpm vitest run packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.test.ts packages/infrastructure/src/evidence/postgres-evidence-asset-repository.test.ts; pnpm vitest run --config vitest.integration.config.ts packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.integration.test.ts packages/infrastructure/src/postgres/uow/postgres-unit-of-work.integration.test.ts packages/infrastructure/src/evidence/evidence-registration.integration.test.ts; pnpm boundaries.
+Add a concise operator runbook, linked from `docs/coa-manual-entry-runbook.md` and `docs/source-evidence-storage-recovery-runbook.md` as appropriate. Include deployment migration/config checks, trusted proxy/session setup, director-client mappings, explicit reviewer grants, browser-reachable private signing endpoint and approved storage policy requirements. Explain production policy refusal rather than instructing an operator to bypass it.
 
-## U4. Application commands, authorization and pinned support resolution
+Procedure: create one non-public sample SKU/lot; record existing original photo and CoA with rights/capture metadata; inspect delivered originals; manually compare every report value, qualifier, unit, scope and attribution; have a distinct reviewer check transcription; record uncertainty and corrections through revisions; propose/review a sourced claim; verify source retention, deletion/legal-hold plan and access restrictions. Define a private operator evidence record containing reviewer/date, opaque record/revision IDs, discrepancies and decision, kept outside public GitHub. Leave this record unfilled by automation. Explain that CI establishes synthetic software acceptance only and neither optional real-data review nor software completion certifies external distribution or generative fidelity.
 
-Depends on U1 and U3. Covers R1–R7; KTD3, KTD5.
+After acceptance passes, update `docs/CONTEXT.md` with the implemented workspace, real tested boundaries and links to acceptance/runbook artifacts. Reconcile the obsolete P1.8 ownership row to identify template/assembly consumers as future capabilities. Record completed software checklist items with concrete test commands/results; leave optional operator review, storage governance and later phases explicitly pending. Prepare an issue #469 checklist update if remote access is unavailable rather than claiming it occurred. Do not mark overarching Phase 1 sign-off complete based on this PR.
 
-Add report create/supersede/review/archive use cases following product-registry-use-cases.ts and RecordEvidenceVerificationEventUseCase, plus a ResolveCoaMeasurementSupport use case. Add a narrow reviewer authorization port/dependency that denies missing authorization and uses the trusted actor/client; exercise it with an explicit fake implementation. Avoid implementing a new general RBAC system or accepting a reviewer role from a report body. Keep transactional cross-entity validation in the adapter, not a use-case preflight performed on an unrelated connection.
+## Validation and completion criteria
 
-Separate source eligibility from domain analytical eligibility. Successful support output contains exact values and pinned report/source/measurement IDs and assessed sample scope. It never declares a claim approved or release eligible. Resolve all requested IDs or deny the complete request; no partial fallback. Require exact unit/basis/context and sufficient requested sample/lot scope; do no conversion, aggregating, percent recalculation or zero inference. Expose strict output mapping that never strips analytical qualifiers, provenance or scope. Ordinary report history can return nonquantified and unknown-semantic rows without treating them as supported numerical facts.
+Use `.ai-orchestrator.json` as the effective configuration, preserving its six ordered tiers and concurrency rules. Required repository validation remains: hygiene (`pnpm check:hooks`, frozen install); isolated format fix then format check; cache preparation/build; fast deterministic gates (`lint`, `typecheck`, unit tests, bash tests, boundaries, control-plane check); and configured heavy suites (`test:db`, assembly, Kokoro, Piper, LTX production tests, WhisperX). Follow pinned dependency setup/check scripts where those suites require them. These inherited test suites are regression checks, not new real-provider/hardware certification deliverables. Run browser acceptance explicitly in addition, with `pnpm test:e2e` and `pnpm --filter web build` to cover the actual Next bundle. CI already includes the browser job in its aggregate quality gate. Do not redeclare inherited commands; if a new validation command is introduced, map it into validation.tiers and retain tier-coverage tests.
 
-Application tests: unauthorized review and caller-supplied approval rejection; complete report remains pending after creation; authorized transcription review produces an audited decision but no claim/release grant; absent source/report, ambiguous sample association, unsupported units, incompatible requested unit sets, rejected/pending/draft report, stale evidence/report pin, withdrawn lab verification, archived SKU/batch/report/source and disputed/quarantined/deleted originals all deny support. Test not_detected/below_limit/qualified negatives cannot be numerical zero or exact supported numbers. Use two batches of one SKU with different synthetic terpene values and several historical reports to prove no cross-lot or implicit latest lookup. A pinned old measurement fails after correction; explicit new IDs work only after new review. Test same-batch sample-only support and rejection of lot-wide extension. Test API schemas and serializers roundtrip long strings and trailing zeros from repository output.
+Completion requires the complete synthetic author/reviewer path and negative matrix to pass, UI/API/migration regression tests green, safe source delivery and tenant denial demonstrated, no real/private documents in committed fixtures, and documentation accurately separating software acceptance from pending operator judgment. Record actual commands/results in the implementation PR; environment failures are reported as unverified gates, never as passes. No tests were executed and no implementation was performed during this planning task.
 
-Validation: pnpm vitest run packages/application/src/use-cases/coa-report-use-cases.test.ts packages/application/src/use-cases/resolve-coa-measurement-support.test.ts packages/contracts/src/coa-report.test.ts (adjust final filenames); pnpm typecheck; pnpm lint.
-
-## U5. Synthetic scenario, operator guidance and final verification
-
-Depends on U2–U4. Covers R7 and acceptance traceability.
-
-Extend docs/verified-product-evidence-contract-fixtures.md with issue-scoped synthetic scenarios for manual entry, draft completion via revision, terminal transcription review, independent lab verification distinction, exact precision and correction lineage. Explain how the current RegisterEvidenceAsset workflow combines ingest/assertion/batch linking rather than presenting the ADR's conceptual separate commands as existing APIs. Update ADR 0009 and docs/CONTEXT.md with the explicit additive contract refinements and current/future ownership distinctions. Add a concise CoA manual-entry runbook or extend the source-evidence runbook with registration references, exact units/results, missing-scope drafts, independent authenticity checks, qualified limits, and immutable correction instructions. No real lab/client documents or operator evidence artifacts.
-
-Add an application-to-Postgres scenario using registered synthetic PDF/image originals, trusted envelopes and the real UoW: create two lots of one SKU, enter distinct values, complete/review reports, resolve exact supported values, supersede one source/report, verify old history remains and old pins deny, then explicitly review/resolve the new revision. This can live in the repository integration suite and does not need a public API or external lab service. Reuse #473's local test source registration/storage fixtures rather than duplicating upload code; MinIO is needed only if using that existing storage integration harness.
-
-## Verification contract
-
-The commands above are focused implementation checks, not evidence that this planning run executed them. Run tests after each unit exists; do not invent command paths that the implementation never creates. Every integration-file invocation must include --config vitest.integration.config.ts. Docker is required for pnpm test:db.
-
-Final validation uses .ai-orchestrator.json in this worktree as effective configuration; do not search for machine-local config. Keep the six existing ordered tiers: hygiene (check:hooks and frozen install), isolated format:fix, isolated format check, parallel preValidation/build, parallel deterministic gates (lint/typecheck/test/test:bash/boundaries/check:control-plane), then the configured heavy subsystem suites (test:db/test:assembly/test:kokoro/test:piper/test:ltx-production/test:whisperx). Changes here add no command requiring config edits; do not duplicate inherited commands. Run the configured gates with their actual environment prerequisites and report unavailable Docker/model caches as environment limitations rather than claiming a pass. The CoA acceptance specifically requires application and PostgreSQL integration suites using synthetic data; no hardware certification, rendering, real-provider acceptance, locked-SHA run or downstream phase sign-off is added by this issue.
-
-## Definition of done
-
-- Persisted reports and measurements cannot omit or forge same-client/batch source lineage; independent historical reports and immutable correction history work.
-- Complete/draft/review distinctions are explicit, version fenced and audited. Attaching a file or submitting numeric data cannot approve it, authenticate the lab or confer release eligibility.
-- Exact decimals retain input precision/spelling through storage, mapping and replay, with no IEEE-754 analytical coercion. Unit/basis/context, result qualifiers and analytical validation are covered at domain/application and database boundaries.
-- Pinned source-support denies incomplete, unreviewed, wrong-lot, stale, archived, unavailable or disputed dependencies and incompatible analytical requests. Two lots of one SKU remain isolated. Correction requires new explicit IDs and new review.
-- Application authorization, repository/UoW rollback/replay/version behavior, restricted-role protections and both-order concurrency tests pass with synthetic sources. Relevant existing evidence tests remain green.
-- Operational instructions distinguish transcription approval from independent laboratory authenticity and later commercial claim approval. Future consumers are enabled by contracts, not implemented or treated as present PR gates.
-- No upload duplication, public HTTP/UI scope expansion, real client data or prohibited evidence artifacts. All applicable existing validation results and material environment limitations are reported truthfully.
-
-## Planning confidence and review
-
-Confidence is high in repository placement, source reuse and test infrastructure; medium in the new review/draft/unit refinements because the ADR describes only complete unreviewed report rows. Those refinements are explicitly settled in design_md rather than left for an implementer to invent. The principal concurrency risk is the observed inverse source/evidence locking in current adapters; U3 includes focused alignment and barrier tests. A sequential coherence/feasibility/security/scope review of this package checks the immutable-review reset, duplicate identity rule, draft fail-closed boundary, exact SQL text path, deferred constraints and future-consumer separation. No downstream release capability or external authenticity assessment is claimed as verified. Planning performs no implementation or test execution.
+The steps above describe logical implementation slices, not an exhaustive file allowlist. Supporting changes may span web components, API composition, contract helpers, harnesses, tests and documentation as discovered, provided they implement these acceptance criteria and preserve the authority boundaries.
 
 Accumulated review findings ledger:
 
 ```
 ### UNRESOLVED BLOCKING FINDINGS:
-- **[AC-7] [HIGH]** Failed requirement: R7. Cover application workflows, exact serialization, relational integrity, immutable audit/grants, concurrency and transaction rollback with synthetic fixtures only. Document manual transcription separately from independent authenticity assessment.
-  Evidence: The only new database integration file contains seven direct-SQL schema tests. No CoA repository integration file, real UnitOfWork application scenario, controlled concurrency barriers, mutation rollback/receipt atomicity scenarios or restricted-role CoA privilege tests exist. Application resolution tests only check validation/delegation. Existing registration supersession still acquires the old source after the evidence head, which conflicts with the newly reordered verification path. The runbook conflates review with lab authenticity and instructs operators to invoke conceptual commands or supply correction fields absent from current request schemas.
-  Required Fix: Implement requirement to satisfy: R7. Cover application workflows, exact serialization, relational integrity, immutable audit/grants, concurrency and transaction rollback with synthetic fixtures only. Document manual transcription separately from independent authenticity assessment.
+- **[AC-1] [HIGH]** Failed requirement: Make Phase 1 usable in the existing private Review Hub for one real SKU/lot and provide a deterministic acceptance matrix proving the evidence/claim boundary. Prioritize legibility, corrections and provenance over polished marketing design.
+  Evidence: SourceInspectionPanel, CoaReportsPanel and ProductClaimsPanel generate crypto.randomUUID() action IDs. Production HTTP schemas require UUIDv7 for multipart source registration and CoA/claim commands, so the required author/reviewer workflow cannot complete. The acceptance matrix also claims browser coverage that its spec cannot execute.
+  Required Fix: Implement requirement to satisfy: Make Phase 1 usable in the existing private Review Hub for one real SKU/lot and provide a deterministic acceptance matrix proving the evidence/claim boundary. Prioritize legibility, corrections and provenance over polished marketing design.
   Source: spec-review (iteration 0)
 
-- **[F-01c1c800] [HIGH]** R7 expressly requires repository/transaction, audit/grants, cross-client and concurrency coverage. Passing broad validation cannot establish omitted behaviors; reviewer adversarial checks exposed multiple violations outside the present test cases.
-  Files: packages/infrastructure/src/postgres/coa-report-schema.integration.test.ts, packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.test.ts, packages/application/src/use-cases/resolve-coa-measurement-support.test.ts
-  Evidence: Only seven direct-SQL CoA integration tests exist; no postgres-coa-report-repository.integration.test.ts or equivalent CoA/UoW scenario exists. Application support tests only reject missing measurementIds and verify delegation. There are no CoA controlled concurrency, rollback/receipt atomicity, restricted-role effective-grant, two-lot resolution, historical replay or withdrawn-lab integration scenarios.
-  Required Fix: Add synthetic application-to-Postgres tests through the real UnitOfWork and existing evidence registration, covering the required lifecycle, exact receipts, tenant/lot isolation, restricted grants, rollback and both-order dependency races.
+- **[AC-2] [HIGH]** Failed requirement: 1. Routes, navigation and workspace
+  Evidence: Routes and home entry exist, but selected SKU is component state rather than URL state; exact historical support inspection and accessible labeled forms are incomplete. See DESIGN-2 through DESIGN-4.
+  Required Fix: Implement requirement to satisfy: 1. Routes, navigation and workspace
   Source: spec-review (iteration 0)
 
-- **[F-ebe31639] [MEDIUM]** The issue requires usable operator instructions separating transcription approval from independent lab authentication. KTD refinements also explicitly require documenting TEXT authority and optional reported methods rather than leaving contradictory contracts.
-  Files: docs/coa-manual-entry-runbook.md, docs/adr/0009-verified-product-batch-evidence-claim-authority.md, docs/CONTEXT.md
-  Evidence: Runbook section 1.2 places CoaReportReviewEvent and EvidenceVerificationEvent together under independent authenticity assessment, while its diagram joins review and lab corroboration as required inputs although the lab event is optional. SOP-01 names ingestOriginalSource/linkEvidenceToBatch instead of the implemented combined RegisterEvidenceAsset workflow. SOP-04 tells callers to supply supersedesRevision, which the strict supersede request schema rejects. ADR prose still describes NUMERIC and mandatory method despite the required explicit refinements.
-  Required Fix: Document the actual register/create/correct/review calls and their accepted fields; describe transcription approval and optional independent lab authentication separately; align ADR/CONTEXT with authoritative TEXT storage, nullable method and the actual review model.
+- **[AC-5] [HIGH]** Failed requirement: Provide four labeled dossier sections and a concise summary of client/SKU/lot, versions, gaps, source availability and block counts with detail links. Keep expandable histories near records and open exact pinned revisions with return navigation. Use native controls, semantic tables, labels, keyboard navigation, visible focus, inline errors and textual badges.
+  Evidence: Four panels and a summary exist, but evidence, CoA and claim revisions arrays are not rendered as inspectable histories. Claim support records are truncated text spans, not links to pinned revisions. Summary cards have no detail links. Many labels lack htmlFor/nested inputs and measurement inputs rely on placeholders; modal semantics/focus handling are absent.
+  Required Fix: Implement requirement to satisfy: Provide four labeled dossier sections and a concise summary of client/SKU/lot, versions, gaps, source availability and block counts with detail links. Keep expandable histories near records and open exact pinned revisions with return navigation. Use native controls, semantic tables, labels, keyboard navigation, visible focus, inline errors and textual badges.
   Source: spec-review (iteration 0)
 
-- **[F-b3986351] [HIGH]** Testing PostgresCoaReportRepository exclusively against a mock PoolClient left real SQL execution, receipt replay rehydration, transaction rollback, deferred constraint error translation, two-lot SKU isolation, and lock-ordered concurrency unverified against PostgreSQL.
-  Files: packages/infrastructure/migrations/028_coa_reports.sql, packages/infrastructure/src/postgres/coa-report-schema.integration.test.ts, packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.test.ts
-  Evidence: 1) 028_coa_reports.sql (lines 408-434) omits the table-level UPDATE absence assertion (`has_table_privilege(v_app_role, 'coa_reports', 'UPDATE')`) and positive column-level UPDATE assertions (`NOT has_column_privilege(v_app_role, 'coa_reports', 'current_revision', 'UPDATE')`, `'version'`, `'archived_at'`) present in 027_evidence_authority.sql (lines 470-506). 2) packages/infrastructure/src/postgres/coa-report-schema.integration.test.ts contains only 6 superuser tests and never exercises orchestrator.app_role grants, column-level UPDATE restrictions, head update triggers, or measurement check constraints. 3) packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.integration.test.ts was not created; PostgresCoaReportRepository is only tested against a mocked PoolClient in postgres-coa-report-repository.test.ts.
-  Required Fix: Add the missing table-level and positive column-level UPDATE privilege assertions in 028_coa_reports.sql, expand coa-report-schema.integration.test.ts to verify restricted app_role privileges and SQL check/trigger constraints, and add postgres-coa-report-repository.integration.test.ts covering repository CRUD, receipt replay, rollback, two-batch isolation, and barrier-synchronized concurrency against PostgreSQL.
+- **[AC-6] [HIGH]** Failed requirement: 2. Provenance is multidimensional
+  Evidence: SourceInspectionPanel labels every non-withdrawn verification event Independently Sourced regardless of verificationKind or rejected/disputed outcome. CoaReportsPanel applies the last review across all revisions to the current report.
+  Required Fix: Implement requirement to satisfy: 2. Provenance is multidimensional
+  Source: spec-review (iteration 0)
+
+- **[AC-8] [HIGH]** Failed requirement: Display Reported with report/revision/recorder; Operator-attested with actor/time/support; Operator-reviewed on the exact reviewed revision with reviewer/time/reason; Independently sourced only for applicable independent revision/fact-scope verification with party/method and dispute/withdrawal state; Unknown for missing facts; Blocked with server reason and exact dependency.
+  Evidence: SourceInspectionPanel ignores verificationKind and evidenceRevision when labeling events and does not show rights/consent or submitter/time. CoaReportsPanel selects latestReview from the entire report history and omits recorder provenance. Claim block reasons show code/message without the dependency identifiers from the resolution.
+  Required Fix: Implement requirement to satisfy: Display Reported with report/revision/recorder; Operator-attested with actor/time/support; Operator-reviewed on the exact reviewed revision with reviewer/time/reason; Independently sourced only for applicable independent revision/fact-scope verification with party/method and dispute/withdrawal state; Unknown for missing facts; Blocked with server reason and exact dependency.
+  Source: spec-review (iteration 0)
+
+- **[AC-9] [HIGH]** Failed requirement: Allow provenance dimensions to coexist; separate availability, factual verification, transcription review and authenticity. Label derivatives with their SHA and original linkage; do not substitute them for missing originals. Preserve archived/superseded/disputed/withdrawn history without showing it as current or restoring approval.
+  Evidence: Derivative labels and unavailable source text are present, but CoaReportsPanel displays historic approval as current after supersession. SourceInspectionPanel renders all historical events beside currentRevision without revision labels or effective withdrawal/dispute handling. Evidence/report/claim revision content is not inspectable.
+  Required Fix: Implement requirement to satisfy: Allow provenance dimensions to coexist; separate availability, factual verification, transcription review and authenticity. Label derivatives with their SHA and original linkage; do not substitute them for missing originals. Preserve archived/superseded/disputed/withdrawn history without showing it as current or restoring approval.
+  Source: spec-review (iteration 0)
+
+- **[AC-10] [HIGH]** Failed requirement: 3. Same-origin API boundary and security
+  Evidence: Same-origin explicit route handlers and server identity forwarding exist, but response/request schema enforcement and upstream error sanitization are missing; configured authorization denial is not tested by the browser scenario. See DESIGN-11 through DESIGN-13.
+  Required Fix: Implement requirement to satisfy: 3. Same-origin API boundary and security
+  Source: spec-review (iteration 0)
+
+- **[AC-11] [HIGH]** Failed requirement: Provide typed product fetch functions and explicit allowlisted forwarding routes to existing /api/v1 operations. Reuse request/success schemas, preserve structured business errors/statuses, and sanitize unexpected upstream failures.
+  Evidence: product-evidence-client.ts returns body as T without runtime parsing. product-evidence-forwarder.ts forwards all JSON untouched; a non-JSON upstream response is copied verbatim into message and returned with the original status, including 200. It imports no product request/response schemas.
+  Required Fix: Implement requirement to satisfy: Provide typed product fetch functions and explicit allowlisted forwarding routes to existing /api/v1 operations. Reuse request/success schemas, preserve structured business errors/statuses, and sanitize unexpected upstream failures.
+  Source: spec-review (iteration 0)
+
+- **[AC-12] [HIGH]** Failed requirement: Authorize URL client before large body reads or upstream fetches; keep minted tokens server-side and forward trusted resolved mutation identity, discarding caller identity. Preserve API ownership and explicit reviewer grants. Test configured grants and denied actions, not just permissive adapters.
+  Evidence: Forwarder authorizes before body reads and replaces identity headers. Production bootstrap uses ConfiguredReviewerAuthorizationAdapter and evidence storage policy. However, e2e/harness/control-api.ts supplies three unconditional async reviewer grants, while web-server.ts grants wildcard client mappings and the API resolves every actor to Integration Test Director. No role-separated or denied-grant browser scenario exists.
+  Required Fix: Implement requirement to satisfy: Authorize URL client before large body reads or upstream fetches; keep minted tokens server-side and forward trusted resolved mutation identity, discarding caller identity. Preserve API ownership and explicit reviewer grants. Test configured grants and denied actions, not just permissive adapters.
+  Source: spec-review (iteration 0)
+
+- **[AC-13] [HIGH]** Failed requirement: Use private/no-store responses/fetches including errors/media; bound multipart forwarding to API constraints, preserve boundaries and validate metadata. Retain source inspection, quotas and production policy refusal; support PDFs through evidence ingest without bypassing size limits or duplicating storage.
+  Evidence: Forwarder uses no-store and streaming byte counting and preserves Content-Type, but does not parse/validate multipart required metadata using the contract. readBoundedBody has no tests for oversize streams, missing metadata or binary/boundary preservation. The real storage governance gate remains unchanged.
+  Required Fix: Implement requirement to satisfy: Use private/no-store responses/fetches including errors/media; bound multipart forwarding to API constraints, preserve boundaries and validate metadata. Retain source inspection, quotas and production policy refusal; support PDFs through evidence ingest without bypassing size limits or duplicating storage.
+  Source: spec-review (iteration 0)
+
+- **[AC-14] [HIGH]** Failed requirement: 4. Forms, review and correction
+  Evidence: Forms provide some create/review commands, but production action-ID incompatibility, missing corrections, incomplete analytical fields and fabricated lineage parameters prevent the specified workflows.
+  Required Fix: Implement requirement to satisfy: 4. Forms, review and correction
+  Source: spec-review (iteration 0)
+
+- **[AC-15] [HIGH]** Failed requirement: Implement ordinary labeled forms using current contract fields and controlled vocabularies.
+  Evidence: CoA rows have no associated labels for inputs and omit multiple contract fields. ProductClaimsPanel offers only five of six canonical variants and hardcodes lineage facts. Source rights/consent fields are absent.
+  Required Fix: Implement requirement to satisfy: Implement ordinary labeled forms using current contract fields and controlled vocabularies.
+  Source: spec-review (iteration 0)
+
+- **[AC-18] [HIGH]** Failed requirement: Expose acquisition, capture date/precision/context, rights/consent, attribution, submitter assertion and batch purpose distinctly. Associate existing derivatives with exact IDs/hashes and do not transform/promote evidence automatically.
+  Evidence: SourceInspectionPanel supports capture/acquisition/assertion/purpose and derivative commands, but has no rightsStatus, consentStatus or rightsAttribution controls or display. Rights/consent remain silently omitted, so an operator cannot record the facts required by the runbook.
+  Required Fix: Implement requirement to satisfy: Expose acquisition, capture date/precision/context, rights/consent, attribution, submitter assertion and batch purpose distinctly. Associate existing derivatives with exact IDs/hashes and do not transform/promote evidence automatically.
+  Source: spec-review (iteration 0)
+
+- **[AC-19] [HIGH]** Failed requirement: Pin CoA transcription to original evidence/revision; record report/sample/lab/date/association/scope/completeness and measurements. Preserve exact decimal strings and expose units, quantity kind, basis, context, method, uncertainty, limits and qualifiers without numeric conversion, inferred zero or marketing generation.
+  Evidence: Decimal strings are preserved, but CoaReportsPanel has no entry controls for quantityKind, method, resultLimit, resultQualifier, uncertainty, LOD or LOQ; quantityKind and method are silently defaulted. below_limit still sends resultValue and null resultLimit/qualifier, making a valid below-limit transcription impossible. Display omits limits, qualifiers, uncertainty and quantity kind. Commands also use UUIDv4.
+  Required Fix: Implement requirement to satisfy: Pin CoA transcription to original evidence/revision; record report/sample/lab/date/association/scope/completeness and measurements. Preserve exact decimal strings and expose units, quantity kind, basis, context, method, uncertainty, limits and qualifiers without numeric conversion, inferred zero or marketing generation.
+  Source: spec-review (iteration 0)
+
+- **[AC-22] [HIGH]** Failed requirement: Provide explicit claim review/rejection/invalidation and append-revision correction with reasons/version/revision. Supersession requires renewed support/review and retains historical links and decisions.
+  Evidence: ProductClaimsPanel implements review and invalidate handlers but never imports/calls appendClaimRevision or exposes claim correction. Rejected/invalidated claims cannot be corrected in the workspace. Historical claim revisions are not rendered and support links are text.
+  Required Fix: Implement requirement to satisfy: Provide explicit claim review/rejection/invalidation and append-revision correction with reasons/version/revision. Supersession requires renewed support/review and retains historical links and decisions.
+  Source: spec-review (iteration 0)
+
+- **[AC-23] [HIGH]** Failed requirement: Use shared UUIDv7 with stable command/payload retries and new IDs for edited payloads. Preserve version/revision fences; on 409 preserve input, reload state and require deliberate resubmit. Prevent duplicates and optimistic approval. Refresh coherently after writes/focus/return, ignore late responses and disable review while stale.
+  Evidence: Every form generates fresh crypto.randomUUID() per submission. No retry identity is retained. Catch branches only set errors and never reload on 409. Dossier loadDossier has no cancellation/generation guard or focus listener. Manual refresh leaves review controls enabled with no stale warning. BatchFactsPanel uses the wrong version fence.
+  Required Fix: Implement requirement to satisfy: Use shared UUIDv7 with stable command/payload retries and new IDs for edited payloads. Preserve version/revision fences; on 409 preserve input, reload state and require deliberate resubmit. Prevent duplicates and optimistic approval. Refresh coherently after writes/focus/return, ignore late responses and disable review while stale.
+  Source: spec-review (iteration 0)
+
+- **[AC-24] [HIGH]** Failed requirement: 5. Safe source inspection
+  Evidence: Inspection is explicit and transient, but source metadata can describe a different revision than the bytes inspected and stale media is never cleared on expiry/load failure/scope change. See DESIGN-27 and DESIGN-29.
+  Required Fix: Implement requirement to satisfy: 5. Safe source inspection
+  Source: spec-review (iteration 0)
+
+- **[AC-26] [HIGH]** Failed requirement: Remove stale media on expiry/load failure, offer fresh lookup, show denial/quarantine/missing without cached preview and clear on scope/revision change. Do not forward tokens/log signed URLs or imply authenticity. Promise denied issuance, not retroactive revocation.
+  Evidence: SourceInspectionPanel imports only useState, has no expiry timer or scope/revision cleanup, and img/iframe have no onError. A late fetch after Close sets activeMedia again. Refresh with quarantined/superseded evidence leaves the old viewer active; there is only a retry for lookup rejection, not media render failure.
+  Required Fix: Implement requirement to satisfy: Remove stale media on expiry/load failure, offer fresh lookup, show denial/quarantine/missing without cached preview and clear on scope/revision change. Do not forward tokens/log signed URLs or imply authenticity. Promise denied issuance, not retroactive revocation.
+  Source: spec-review (iteration 0)
+
+- **[F-a1ea62ae] [HIGH]** No valid production UI success path exists for required multipart ingest, CoA transcription/review or claim creation/review, regardless of legitimate production grants/storage governance.
+  Files: apps/web/src/components/product-evidence/source-inspection-panel.tsx, apps/web/src/components/product-evidence/coa-reports-panel.tsx, apps/web/src/components/product-evidence/product-claims-panel.tsx, packages/contracts/src/product-evidence-http.ts
+  Evidence: Source registration uses crypto.randomUUID() at source-inspection-panel.tsx:121; CoA/claim commands do the same. HTTP schemas explicitly refine actionId with isValidUuidV7. An independent direct schema invocation rejected the form-shaped metadata solely on actionId.
+  Required Fix: Use shared generateUuidV7 for logical commands, retain ID/payload for transport retries and test actual form requests against HTTP schemas.
+  Source: spec-review (iteration 0)
+
+- **[F-b10cb648] [HIGH]** An internal assertion can be mistaken for independent corroboration, and unreviewed replacement report revision 2 appears approved by revision 1 review. This violates the evidence/claim authority boundary.
+  Files: apps/web/src/components/product-evidence/source-inspection-panel.tsx, apps/web/src/components/product-evidence/coa-reports-panel.tsx, packages/infrastructure/src/postgres/queries/postgres-batch-evidence-dossier-queries.ts
+  Evidence: Source events map outcome !== withdrawn to Independently Sourced, including submitter_attestation, human_internal_review, rejected and disputed events. CoA latestReview selects the last event across the complete report review history, which the query intentionally returns across revisions.
+  Required Fix: Select labels by exact event kind/outcome/revision/scope and explicit withdrawal/dispute state; associate reviews only with their pinned report revision and expose historic decisions as history. Add adversarial provenance tests.
+  Source: spec-review (iteration 0)
+
+- **[F-0c16d853] [HIGH]** Required analytical results cannot be transcribed faithfully, below-limit rows cannot be validly submitted, and correction can silently lose source meaning. Exact decimal display alone does not satisfy lossless transcription.
+  Files: apps/web/src/components/product-evidence/coa-reports-panel.tsx, packages/domain/src/coa-measurement.ts
+  Evidence: Measurement forms expose only analyte/kind/value/unit/basis/context. methodAsReported defaults to HPLC-DAD, quantityKind to mass_fraction; limit/qualifier/uncertainty/LOD/LOQ cannot be entered. below_limit keeps a value and sends null limit/qualifier, contradicting domain validation. Supersession drops metadata and fails to initialize sample association/date.
+  Required Fix: Expose all required analytical metadata, serialize each result kind correctly, initialize the complete selected report revision during correction and preserve untouched fields. Test quantified/below-limit/not-detected and complete supersession round trips.
+  Source: spec-review (iteration 0)
+
+- **[F-82811648] [HIGH]** An operator cannot author all specified claims or correct rejected/invalidated ones, and the application inserts unsupplied factual assertions into provenance.
+  Files: apps/web/src/components/product-evidence/product-claims-panel.tsx
+  Evidence: Canonical selector contains five variants, omitting logged_process_timing. The lineage handler fabricates operationCode OP-01, originKind own_production and claimedFacts cultivated_under_gmp. No append-revision handler/UI exists, and support cannot select facts revision or association attestation.
+  Required Fix: Implement structured fields for all six canonical variants and exact support types; remove fabricated lineage defaults and add append-revision correction with renewed support/review and history inspection.
+  Source: spec-review (iteration 0)
+
+- **[F-ac648961] [HIGH]** Out-of-order results can display an old scope, review is allowed from stale snapshots, retries may duplicate commands, and facts corrections fail when metadata version diverges. Server fences remain essential but do not fulfill required UI conflict/retry behavior.
+  Files: apps/web/src/app/clients/[clientId]/products/[skuId]/batches/[batchId]/page.tsx, apps/web/src/components/product-evidence/batch-facts-panel.tsx, apps/web/src/components/product-evidence/source-inspection-panel.tsx, apps/web/src/components/product-evidence/coa-reports-panel.tsx, apps/web/src/components/product-evidence/product-claims-panel.tsx
+  Evidence: Dossier requests have no cancellation/generation checks or focus refresh; mutation conflicts do not reload. During manual refresh review controls stay enabled. Every retry gets a new command ID. BatchFactsPanel fences with currentFactsRevision although batch updates are version fenced.
+  Required Fix: Implement scoped request cancellation, stale-state marking and review disabling, focus/return refresh, stable logical command retries and explicit 409 reload/resubmit preserving edits. Use batch.version for facts commands.
+  Source: spec-review (iteration 0)
+
+- **[F-c10e97d6] [HIGH]** An expired, failed, quarantined or previously scoped source remains in the viewer without the required fresh authorization path, and a closed viewer can reopen asynchronously.
+  Files: apps/web/src/components/product-evidence/source-inspection-panel.tsx
+  Evidence: activeMedia has no expiry timer or useEffect cleanup. Image/PDF viewers lack load-error handling. Closing during an outstanding lookup does not cancel/ignore its result, and refresh/scope/revision changes do not clear the preview.
+  Required Fix: Expire and remove delivery state, handle render failures with a fresh lookup action, clear on scope/revision/availability change, and ignore late results after close or newer inspection. Add timer, denial and race tests.
+  Source: spec-review (iteration 0)
+
+- **[F-a7dacfe9] [HIGH]** The claimed complete synthetic author/reviewer/media gate cannot pass. Two tests do not establish the required negative matrix, configured grants or actual browser-delivered original bytes. Existing backend integration coverage cannot substitute for the missing workspace acceptance.
+  Files: e2e/tests/verified-batch-workspace.spec.ts, e2e/harness/control-api.ts, e2e/harness/web-server.ts, docs/verified-batch-workspace-acceptance.md
+  Evidence: The first E2E assertion expects authorized-client-chooser, but the actual page uses products-workspace-chooser and a select rather than client-choice links. Numerous later selectors also disagree. Harness uses fixed actor, wildcard client mappings, unconditional review grants, in-memory storage and http://mock-storage delivery. It supplies no evidenceStoragePolicy, so ingestion fails POLICY_CONFIGURATION_MISSING even if selectors are repaired. No PDF registration or distinct reviewer is provided.
+  Required Fix: Wire an explicit permitted test policy, isolated browser-reachable MinIO and role/tenant-scoped identities; fix selectors and operate both image/report workflows with a distinct reviewer. Cover each required negative boundary at the appropriate API/storage/browser level and record actual results.
+  Source: spec-review (iteration 0)
+
+- **[F-f9b4ee7d] [MEDIUM]** An upstream HTML diagnostic or internal path can reach the browser, malformed success is treated as trusted dossier data, and the anchored typed/sanitized forwarding contract is not implemented.
+  Files: apps/web/src/api/product-evidence-forwarder.ts, apps/web/src/api/product-evidence-client.ts
+  Evidence: Forwarder copies unexpected non-JSON text into message and returns upstream status even for 200; arbitrary JSON success is forwarded unchanged. Client handleApiResponse returns body as T without schema validation. Multipart metadata is never validated in the forwarding helper.
+  Required Fix: Apply operation-specific request/success schemas; preserve only recognized structured API errors and map malformed/unexpected responses to sanitized gateway errors. Validate bounded multipart metadata and add oversize/binary/boundary tests.
+  Source: spec-review (iteration 0)
+
+- **[F-96a07b72] [MEDIUM]** Required reversible navigation, exact historic source inspection, accessible controls and recoverable states remain incomplete.
+  Files: apps/web/src/app/clients/[clientId]/products/page.tsx, apps/web/src/app/products/page.tsx, apps/web/src/components/product-evidence/source-inspection-panel.tsx, apps/web/src/components/product-evidence/coa-reports-panel.tsx, apps/web/src/components/product-evidence/product-claims-panel.tsx, apps/web/src/components/product-evidence/batch-dossier-summary.tsx
+  Evidence: Selected SKU is only local state; chooser errors have no retry. Evidence/report/claim revisions are not inspectable, support references are truncated spans without navigation and summary has no detail links. Labels frequently have no association to inputs; modal focus is unmanaged.
+  Required Fix: Persist SKU selection in URL, add retry, render exact pinned history with return navigation and full safe identifiers, associate labels and implement accessible modal/focus behavior. Verify with interaction/browser tests.
+  Source: spec-review (iteration 0)
+
+- **[F-d0fe5dcc] [MEDIUM]** Software completion is overstated before acceptance, and the operator cannot follow the prescribed procedure under supported production configuration. Pending human authenticity review is correctly acknowledged, but does not cure inaccurate software evidence or missing deployment/governance instructions.
+  Files: docs/verified-batch-workspace-acceptance.md, docs/verified-batch-operator-runbook.md, docs/CONTEXT.md
+  Evidence: Matrix marks software gates PASS and CONTEXT says concluding the Phase 1 evidence foundation despite the nonfunctional acceptance spec. New runbook omits explicit reviewer grant and trusted proxy setup, approved storage governance prerequisite, capture/consent checks and retention/deletion/legal-hold/quota confirmation; it describes nonexistent rights/retention controls and standard_retention/immutable_legal_hold instead of the source_evidence_archive contract. Existing P1.8 ownership row still asserts template/final-delivery work rather than future scope.
+  Required Fix: Mark unproven software gates pending, complete and link the runbook using actual controls/contracts/configuration, reconcile P1.8 future scope and prepare an honest epic checklist update only after passing acceptance. Preserve independent human review and later phase gates.
+  Source: spec-review (iteration 0)
+
+- **[F-6df8c953] [CRITICAL]** Because `crypto.randomUUID()` produces UUIDv4 (`version 4`) and `UuidV7Schema` strictly requires version 7 (`^[0-9a-f]{8}-[0-9a-f]{4}-7...`), Control API rejects every multipart evidence registration, CoA transcription/review/supersede/archive command, and claim create/link/review/invalidate/append command from the UI with `400 VALIDATION_FAILURE`. In addition, generating a new UUID inside the submit handler on every click rather than retaining a stable `actionId` per unedited logical submission defeats idempotent command replay on transport retry.
+  Files: apps/web/src/components/product-evidence/source-inspection-panel.tsx, apps/web/src/components/product-evidence/coa-reports-panel.tsx, apps/web/src/components/product-evidence/product-claims-panel.tsx, apps/web/src/components/product-evidence/batch-facts-panel.tsx, apps/web/src/app/clients/[clientId]/products/page.tsx
+  Evidence: Every workspace mutation generates `actionId: crypto.randomUUID()` (UUIDv4) on each click (`source-inspection-panel.tsx:122`, `coa-reports-panel.tsx:144,179,220,255`, `product-claims-panel.tsx:175,203,230,265`, `batch-facts-panel.tsx:62`, `apps/web/src/app/clients/[clientId]/products/page.tsx:91,115`). However, `packages/contracts/src/product-evidence-http.ts` (`lines 44-46, 122, 197, 203, 208, 213, 252, 257, 262, 267, 273`) enforces `UuidV7Schema` (`isValidUuidV7`) on `RegisterEvidenceAssetMultipartMetadataSchema` and all CoA and claim HTTP command schemas.
+  Required Fix: Use `generateUuidV7()` from `@cco/shared` for all product-evidence `actionId` values and retain the generated `actionId` across retries of an unedited form payload, rotating it only when the form inputs change or a submission completes.
+  Source: quality-review (iteration 0)
+
+- **[F-93b196cc] [CRITICAL]** These defects violate core provenance and data-integrity invariants: disputed/rejected or internal-only attestations are falsely badged as `Independently Sourced`; superseding an approved CoA revision with an unreviewed revision still displays `Operator-Reviewed (Approved)` from the prior revision while silently dropping analytical qualifiers/limits/attestations during supersession; and multi-revision evidence assets display and link the wrong revision's `sourceObjectId` and `originalSha256`.
+  Files: apps/web/src/components/product-evidence/source-inspection-panel.tsx, apps/web/src/components/product-evidence/coa-reports-panel.tsx, apps/web/src/components/product-evidence/product-claims-panel.tsx
+  Evidence: 1) In `source-inspection-panel.tsx` (`lines 582-588`), any verification event with `evt.outcome !== "withdrawn"` is rendered with `<IndependentlyCorroboratedBadge>` (`"Independently Sourced"`), even when `evt.outcome` is `"disputed"` or `"rejected"`, or when `evt.verificationKind` is `"submitter_attestation"` or `"human_internal_review"`. 2) In `coa-reports-panel.tsx` (`lines 312-315, 372-383`), `latestReview` is selected as `reviewList[reviewList.length - 1]` without filtering `ev.reportRevision === rev.revision`, even though `postgres-batch-evidence-dossier-queries.ts` (`lines 258-272`) returns review events across all revisions of a report; additionally, `coa-reports-panel.tsx` (`lines 419-437`) omits `sampleDate`, `associationAttestation`, and measurement `uncertaintyAbsolute`, `detectionLimit`, `quantificationLimit`, `analyticalQualifierCode`, and `analyticalQualifierExplanation` when superseding a CoA. 3) In `source-inspection-panel.tsx` (`line 318`) and `product-claims-panel.tsx` (`line 257`), the code picks `item.sourceObjects?.[0]` / `selectedEv?.sourceObjects[0]` rather than resolving the `sourceObjectId` of `item.currentRevision` or the selected `linkEvidenceRev`.
+  Required Fix: 1) Only render `IndependentlyCorroboratedBadge` when `evt.outcome === "verified"` and `evt.verificationKind` is an independent verification kind (`independent_third_party_verification` or `cryptographic_issuer_signature`), and render explicit disputed/rejected/attested states otherwise. 2) Filter CoA `reviewEvents` by `ev.reportRevision === rev.revision` and preserve all CoA header and measurement fields when populating and submitting the supersede form. 3) Resolve the `sourceObject` matching the target revision's `sourceObjectId` from `revisions` rather than indexing `sourceObjects[0]`.
+  Source: quality-review (iteration 0)
+
+- **[F-0be9dfc8] [HIGH]** The E2E spec cannot pass against the implemented UI or test harness, and the acceptance documentation inaccurately claims automated E2E verification passed.
+  Files: e2e/tests/verified-batch-workspace.spec.ts, e2e/harness/control-api.ts, docs/verified-batch-workspace-acceptance.md, docs/CONTEXT.md
+  Evidence: `e2e/tests/verified-batch-workspace.spec.ts` (`lines 24-186`) queries over 20 `data-testid` selectors that do not exist anywhere in `apps/web` (e.g., `authorized-client-chooser`, `products-workspace`, `create-sku-button`, `sku-canonical-input`, `create-batch-button`, `batch-lot-identifier-input`, `batch-dossier-page`, `assertion-text-input`, `submit-register-evidence-button`, `media-inspection-modal`, `transcribe-coa-modal`, `row-analyte-0`, `coa-review-modal`, `link-evidence-modal`, `claim-review-modal`, `dossier-load-error`). Furthermore, `e2e/harness/control-api.ts` (`lines 75-99`) does not pass `evidenceStoragePolicy` to `createControlApiApp` (so `RegisterEvidenceAssetUseCase` fails closed with `POLICY_CONFIGURATION_MISSING` at `packages/application/src/use-cases/register-evidence-asset.ts:187-193`) and hardcodes `reviewerIdentityResolver: { resolve: () => "Integration Test Director" }` (`line 105`), which ignores the test's `tailscale-user-login` header and triggers `SELF_APPROVAL_FORBIDDEN` on CoA review. Yet `docs/verified-batch-workspace-acceptance.md` (`lines 17-25, 36`) records `GATE-1` through `GATE-8` as `PASS (Automated)` citing `e2e/tests/verified-batch-workspace.spec.ts`.
+  Required Fix: Wire `evidenceStoragePolicy`, reachable object-storage media delivery, and header-aware test identity resolution in `e2e/harness/control-api.ts`; align `e2e/tests/verified-batch-workspace.spec.ts` selectors and flows with the actual workspace components; and only record `PASS` in `docs/verified-batch-workspace-acceptance.md` and `docs/CONTEXT.md` after the test suite actually executes and passes.
   Source: quality-review (iteration 0)
 
 ### PREVIOUSLY RESOLVED FINDINGS (REGRESSION CHECKLIST):
-- **[AC-1] [RESOLVED in iter 2]** Failed requirement: Represent a laboratory report as a linked, immutable source of batch-specific data. Allow a human operator to transcribe/enter typed analytical values with exact units and explicit sample/report scope; the original CoA report remains attached as evidence.
-  Resolution Evidence: packages/infrastructure/migrations/028_coa_reports.sql:352-417 now rejects measurements whose parent revision xmin differs from the current transaction, as well as reviewed, archived and noncurrent panels. The existing full-lineage FK remains at lines 153-154. packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.ts:1022-1106 creates the correction revision, advances the head, then inserts its new panel within the UoW transaction (postgres-unit-of-work.ts:30-60). PostgreSQL integration tests for post-review/post-commit insertion and a successful correction passed.
+- **[AC-3] [RESOLVED in iter 2]** Failed requirement: Use established App Router patterns. Add a Products/Batches entry at /products, an authorized client chooser, /clients/[clientId]/products for SKU list/selection and lot listing/creation, and /clients/[clientId]/products/[skuId]/batches/[batchId] for the dossier. Use ordinary Next Link navigation, breadcrumbs and browser back/forward. Preserve selected SKU/lot in the URL; verify deep-link SKU ownership and do not silently display a different SKU lot.
+  Resolution Evidence: apps/web/src/app/page.tsx:38-45 links to /products; products/page.tsx:45-59,129-139 persists SKU selection in URL search parameters and reacts to history changes. The dossier page at apps/web/src/app/clients/[clientId]/products/[skuId]/batches/[batchId]/page.tsx:118-165 rejects SKU mismatch and provides canonical/back links. These previously resolved routing behaviors remain present.
   Source: spec-review
 
-- **[AC-2] [RESOLVED in iter 2]** Failed requirement: R2. Reports are immutable revisions behind version-fenced heads; corrections preserve original bytes, old metadata, measurement IDs, review decisions and command receipts. Multiple independent historical reports per batch are allowed. Numerical callers provide explicit report revision and measurement IDs, never a latest-report selector.
-  Resolution Evidence: packages/infrastructure/migrations/028_coa_reports.sql:405-408 seals committed panels. packages/application/src/use-cases/review-coa-report.ts:39-54 authorizes and delegates without inspecting the current recorder. packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.ts:1131-1142 replays the stored review receipt before head discovery and before the locked revision-specific self-approval check at lines 1240-1258. Immutable history triggers remain at migration lines 264-274; successful revision advancement is exercised by repository integration lines 251-305.
+- **[AC-4] [RESOLVED in iter 2]** Failed requirement: Resolve chooser identity on the server and filter existing clients through director mappings. Enforce access independently on all endpoints, use authenticated same-origin loads, and render loading, empty, forbidden/not-found, retry and failure states.
+  Resolution Evidence: apps/web/src/app/api/authorized-clients/route.ts:23-47 resolves server identity and lines 129-142 filters schema-validated clients against director mappings with no-store responses. apps/web/src/app/products/page.tsx:70-113 retains loading/error/retry/empty states. product-evidence-forwarder.ts:275-278 independently authorizes each client request before reading the body or calling Control API.
   Source: spec-review
 
-- **[AC-3] [RESOLVED in iter 1]** Failed requirement: R3. Typed decimal-string results preserve spelling and precision throughout request validation, domain values, SQL parameters/storage, reads, serializers and receipt replay. Units, analytical basis and context are explicit; ambiguous units or contexts cannot support numerical facts.
-  Resolution Evidence: packages/contracts/src/coa-report.ts:228-261 makes requiredUnit, requiredBasis, requiredContext, and requiredScope mandatory on ResolveCoaMeasurementSupportRequestSchema and includes analyticalQualifierCode and analyticalQualifierExplanation on ResolvedMeasurementDetailSchema. packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.ts:1786-1824 enforces exact unit/basis/context matching, maps analytical qualifiers into each ResolvedMeasurementDetail, and unconditionally rejects mixed measurement contexts across multiple measurementIds.
+- **[AC-7] [RESOLVED in iter 2]** Failed requirement: Do not implement a single overall verified badge or infer status from an uploaded file. Display provenance dimensions independently.
+  Resolution Evidence: apps/web/src/components/product-evidence/source-inspection-panel.tsx:537-547 presents availability separately, lines 589-624 separately present submitter, rights and consent (including unknown), and lines 775-797 distinguish rejected/disputed/withdrawn events, independent corroboration, internal review and submitter attestation. coa-reports-panel.tsx:380-386 limits transcription review to its revision. The original kind-conflation and missing rights/consent dimensions are corrected; effective-event history is evaluated separately under AC-6/AC-8/AC-9.
   Source: spec-review
 
-- **[AC-4] [RESOLVED in iter 1]** Failed requirement: R4. Drafts may retain incomplete report/sample metadata but never bypass measurement validity or source/tenant linkage. Completion and review are separate, and no upload or transcription command self-approves.
-  Resolution Evidence: packages/application/src/ports/reviewer-authorization-port.ts:7-13 defines DenyAllReviewerAuthorizationAdapter, and packages/application/src/use-cases/review-coa-report.ts:19 defaults reviewerAuth to new DenyAllReviewerAuthorizationAdapter() (tested in packages/application/src/use-cases/coa-report-use-cases.test.ts:367-371). packages/infrastructure/migrations/028_coa_reports.sql:108 enforces sample_to_batch_association_confirmed IS TRUE and lines 205-213 enforce chk_coa_measurement_fraction_bounds.
+- **[AC-16] [RESOLVED in iter 2]** Failed requirement: Provide SKU/lot create, metadata correction and append-only batch-facts correction. Start origin/rights/consent explicitly unknown where allowed and explain canonical SKU/lot constraints before submission.
+  Resolution Evidence: apps/web/src/app/clients/[clientId]/products/page.tsx:69-95,160-182,218-240 retains SKU/lot metadata correction commands and expectedVersion. Origin defaults to unknown at line 81; source-inspection-panel.tsx:106-107 keeps rights/consent unknown. batch-facts-panel.tsx:63-74 appends facts with batch.version rather than facts revision, preserving the production version fence.
   Source: spec-review
 
-- **[AC-5] [RESOLVED in iter 1]** Failed requirement: R5. Enforce percent/fraction bounds, compatible analytical dimensions, real/ordered dates, nonblank analytes, unambiguous parameter contexts, explicit qualifications for reported negative values, and consistent limits/uncertainty.
-  Resolution Evidence: packages/infrastructure/migrations/028_coa_reports.sql:108 enforces sample_to_batch_association_confirmed IS TRUE, lines 153-162 enforce trimmed canonical strings (analyte = trim(analyte), unit = trim(unit), basis = trim(basis), context = trim(context), quantity_kind = trim(quantity_kind)), and lines 205-213 enforce chk_coa_measurement_fraction_bounds (0..1) on values, limits, uncertainty, LOD, and LOQ, mirroring packages/domain/src/coa-measurement.ts:248-252,319-329,391-400,462-558.
+- **[AC-17] [RESOLVED in iter 2]** Failed requirement: Register local original photo/CoA PDF/image using multipart or reuse/link known source/evidence. Expose create/link/supersede intent and expected evidence version. Reuse opaque IDs, permit known source IDs outside the dossier and validate ownership/bytes without a new global catalog.
+  Resolution Evidence: apps/web/src/components/product-evidence/source-inspection-panel.tsx:162-225 retains multipart upload and opaque source-object reuse, explicit registrationIntent and supersede target/version fences, with UUIDv7 action IDs. product-evidence-forwarder.ts:321-343 validates metadata using the same RegisterEvidenceAssetMultipartMetadataSchema enforced by packages/contracts/src/product-evidence-http.ts:118-156 and the ingestion route at apps/control-api/src/http/routes/product-evidence-routes.ts:704-731. The supported original registration/reuse path remains available; retry editing and capture context are tracked separately.
   Source: spec-review
 
-- **[AC-6] [RESOLVED in iter 1]** Failed requirement: R6. Fail source-support resolution closed for missing reports, wrong tenants/lots, incomplete association, unreviewed/rejected reports, wrong requested context/unit, superseded revisions, archived dependencies, unavailable originals, or active source disputes/rejections. A successful result is a source-supported candidate for a future claim policy, never a release authorization.
-  Resolution Evidence: packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.ts:1586-1824 acquires ordered FOR SHARE locks and then re-reads and validates product_skus.archived_at (lines 1600-1606), product_batches.archived_at (lines 1608-1614), evidence_assets.archived_at and current_revision !== revision.evidenceRevision (lines 1616-1628), source_objects.availability (lines 1630-1649), active disputes (lines 1652-1674), coa_reports state (lines 1677-1693), subsequent outcome = 'withdrawn' events targeting verifiedLabIdentityEventId (lines 1696-1738), and review approval/scope (lines 1741-1757). reviewReportRevision (lines 1223-1231) also validates live source lineage eligibility and current evidence revision before approving.
+- **[AC-20] [RESOLVED in iter 2]** Failed requirement: Support report review/reject/supersede/archive. Correction submits a complete replacement sealed panel; explain/enforce non-self-approval, scope limits and renewed review after supersession.
+  Resolution Evidence: apps/web/src/components/product-evidence/coa-reports-panel.tsx:137-140,234-327 uses UUIDv7 for review/supersede/archive, lines 495-521 initializes sample/date/association and all analytical metadata from the inspected revision, and lines 274-289 serializes the complete replacement panel. Lines 380-386 filter current review to that report revision. The API schemas retain UUIDv7 checks (packages/contracts/src/product-evidence-http.ts:202-214), and packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.ts:848-855,999-1074 retains version fencing and sealed replacement revisions. This closes the cited UUID, lossy initialization and inherited-review defects; missing analytical editing is tracked separately under AC-19.
   Source: spec-review
 
-- **[F-82348f2c] [RESOLVED in iter 1]** KTD3 explicitly requires reviewer authorization to fail closed if unavailable. Distinct recorder/reviewer identities do not establish reviewer permission.
-  Resolution Evidence: packages/application/src/ports/reviewer-authorization-port.ts:7-13 adds DenyAllReviewerAuthorizationAdapter throwing AccessDeniedError, packages/application/src/use-cases/review-coa-report.ts:19 defaults reviewerAuth to new DenyAllReviewerAuthorizationAdapter(), and packages/application/src/use-cases/coa-report-use-cases.test.ts:367-371 verifies that ReviewCoaReportUseCase fails closed with AccessDeniedError when constructed without an explicit authorization adapter.
+- **[AC-21] [RESOLVED in iter 3]** Failed requirement: Provide six canonical claim variants with conditional fields, proof category and optional manual wording. Select exact evidence/SHA/report/measurement/facts support, role and attestation, without automatic SKU linkage; keep unsupported manual proposals blocked.
+  Resolution Evidence: apps/web/src/components/product-evidence/product-claims-panel.tsx:39-56,99-145,191-265,1051-1420 implements all six canonical claim variants (including logged_process_timing and explicit operator inputs for cultivation_processing_lineage without fabricated defaults), and lines 420-480,2065-2260 allow selecting batchFactsRevision, measurement checkboxes, association attestation, and the exact sourceObject matching the selected evidence revision.
   Source: spec-review
 
-- **[F-c8c37245] [RESOLVED in iter 1]** Issue acceptance and R6/KTD5 require superseded sources to deny support without substituting a newer source.
-  Resolution Evidence: packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.ts:1616-1628 selects archived_at, current_revision FROM evidence_assets under lock in resolveMeasurementSupport and returns { isSupported: false, reason: 'source_superseded' } when current_revision !== revision.evidenceRevision. validateSourceLineageEligibility (lines 547-566, called by reviewReportRevision at line 1223 with requireCurrentEvidence: cmd.payload.decision === 'approved') rejects approval when evidence_assets.current_revision !== options.evidenceRevision.
+- **[AC-25] [RESOLVED in iter 2]** Failed requirement: Show safe IDs/SHA/type/bytes/upload/capture precision/retention/availability and exact immutable revision lineage. Escape user text; omit filesystem/storage keys, arbitrary rights locators and raw manifest inspection links.
+  Resolution Evidence: apps/web/src/components/product-evidence/source-inspection-panel.tsx:376-379 now resolves the current revision source by sourceObjectId; lines 519-547 display safe SHA/type/bytes/availability/upload/retention fields; lines 632-703 resolve each historical revision source separately and show supersedes lineage with an exact-revision media action. The authoritative dossier accumulates sources across revisions at packages/infrastructure/src/postgres/queries/postgres-batch-evidence-dossier-queries.ts:135-170, which this lookup now handles correctly. The cited wrong-source projection defect is closed; fuller historical inspection is tracked under AC-5.
   Source: spec-review
 
-- **[F-3ee40cef] [RESOLVED in iter 1]** A withdrawn independent laboratory verification must cease satisfying the pinned authentication dependency. The original immutable verified row never gains the withdrawal pointer.
-  Resolution Evidence: packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.ts:490-505 (in assertValidLabVerificationEvent, used by createReport, supersedeReport, and reviewReportRevision) and lines 1724-1737 (in resolveMeasurementSupport) query evidence_verification_events for outcome = 'withdrawn' AND withdrawal_event_id = $4 scoped to client_id, evidence_id, and evidence_revision. Tested against PostgreSQL 18.6 in packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.integration.test.ts:392-508.
+- **[F-8fa3bee1] [RESOLVED in iter 2]** With two source revisions, displayed SHA/availability and claim support can describe bytes other than the inspected or selected revision. This is incorrect provenance and can block legitimate linking.
+  Resolution Evidence: apps/web/src/components/product-evidence/source-inspection-panel.tsx:376-379 matches currentRevision.sourceObjectId; lines 646-649 matches each historical revision separately. product-claims-panel.tsx:429-441 resolves a selected revision and finds its sourceObjectId rather than sourceObjects[0], then sends that source ID/SHA at lines 465-468. This matches the dossier multi-revision source accumulation at packages/infrastructure/src/postgres/queries/postgres-batch-evidence-dossier-queries.ts:135-170. Valid selected revisions no longer take the first unrelated source object.
   Source: spec-review
 
-- **[F-2f6736be] [RESOLVED in iter 3]** A concurrent supersession/archive between discovery and locking can yield supported stale pins, even through the transactional application use case. Direct pool-backed resolution has no coherent lock lifetime. R6 and KTD5 require a coherent transaction with dependency locks and rechecks.
-  Resolution Evidence: packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.ts:1593-1615 starts a READ COMMITTED READ WRITE transaction for Pool/autocommit callers and validates externally managed transaction status. :1700-1711 takes dependency locks; :1713-1807 rereads SKU, batch, evidence, source and report state, including current revisions. :1618-1626 commits managed transactions only when returning the assembled result. packages/infrastructure/src/postgres/uow/postgres-unit-of-work.ts:30-60 retains external locks through COMMIT. Successful Pool and PoolClient integration scenarios at postgres-coa-report-repository.integration.test.ts:684-855 passed.
+- **[F-a01b56e6] [RESOLVED in iter 2]** Required corrections and rights/capture provenance cannot be established from Review Hub, and an unknown origin can be submitted as own production by default.
+  Resolution Evidence: apps/web/src/app/clients/[clientId]/products/page.tsx:69-95,160-182,218-240 implements SKU/lot metadata edit state and version-fenced API mutations, and line 81 defaults origin to unknown. source-inspection-panel.tsx:106-108 defaults rights/consent to unknown, lines 1265-1298 exposes controls, lines 187-189,216-218 sends their values, and lines 602-624 safely displays them. The cited missing metadata and rights/consent controls/default-origin defects are corrected.
   Source: spec-review
 
-- **[F-04bf4fb8] [RESOLVED in iter 1]** The issue explicitly requires mixed/incompatible sets to fail, and KTD5 requires explicit requested semantics and preservation of qualifiers in supported provenance.
-  Resolution Evidence: packages/contracts/src/coa-report.ts:228-261 requires requiredUnit, requiredBasis, requiredContext, and requiredScope on ResolveCoaMeasurementSupportRequestSchema and includes analyticalQualifierCode and analyticalQualifierExplanation on ResolvedMeasurementDetailSchema. packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.ts:1786-1824 enforces unit/basis/context equality, maps analytical qualifiers (lines 1808-1809), and unconditionally rejects mixed measurement contexts (lines 1814-1824). Tested in packages/contracts/src/coa-report.test.ts:140-149.
-  Source: spec-review
-
-- **[F-d1e984e4] [RESOLVED in iter 1]** KTD3 requires approval only with a currently eligible source, and KTD4/KTD6 require corrections to retain the checked original-source boundary. A quarantined original can receive a new approval, and a correction has weaker ingestion checks than initial creation.
-  Resolution Evidence: packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.ts:508-577 factors validateSourceLineageEligibility and invokes it after acquireOrderedLocks in createReport (line 670), supersedeReport (line 956), and reviewReportRevision (line 1223). supersedeReport (lines 888-915) also validates link.purpose === 'coa_test_report', link.source_class === 'coa', and allowed PDF/image MIME types.
-  Source: spec-review
-
-- **[F-951e0cc1] [RESOLVED in iter 2]** This changes the panel covered by an immutable report/review without a correction revision, new head version or new decision. R2 requires immutable report content and auditable corrections.
-  Resolution Evidence: packages/infrastructure/migrations/028_coa_reports.sql:382-408 checks the revision creation transaction and rejects inserts after commit or review; the trigger is attached BEFORE INSERT at lines 415-417. Restricted-role INSERT permission at line 490 cannot bypass the trigger. packages/infrastructure/src/postgres/coa-report-schema.integration.test.ts:413-460 and 502-546 exercise post-review and post-commit rejection; both passed against PostgreSQL 18.6. Repository correction at postgres-coa-report-repository.ts:1022-1106 inserts a new revision and panel atomically and its lifecycle integration test passed.
-  Source: spec-review
-
-- **[F-1e259f9b] [RESOLVED in iter 2]** R4/R5 and KTD2/KTD4 explicitly require draft-independent analytical validity, normalized unambiguous contexts, and null-safe complete metadata at the SQL boundary.
-  Resolution Evidence: packages/infrastructure/migrations/028_coa_reports.sql:109 uses IS TRUE for complete association, lines 155-163 require canonical trimmed strings, lines 207-214 enforce exact numeric 0..1 bounds, and lines 227-228 add normalized parameter-context uniqueness. SQL negative tests at packages/infrastructure/src/postgres/coa-report-schema.integration.test.ts:342-412 and 547-584 passed. The same immutable-table INSERT triggers and CHECK constraints execute under the restricted grants at migration lines 489-496.
-  Source: spec-review
-
-- **[F-4355767c] [RESOLVED in iter 3]** The two paths form an evidence-to-source versus source-to-evidence cycle. Registration can hold E waiting for S while event append holds S waiting for E. KTD6 specifically requires eliminating these overlapping inversions and locking both replacement/old originals in sorted order.
-  Resolution Evidence: packages/infrastructure/src/evidence/postgres-evidence-asset-repository.ts:686-715 discovers current and existing replacement originals and locks their distinct IDs in sorted order before the evidence-head lock at :717-735. Verification append discovers immutable lineage at :1431-1443 and locks source at :1446-1450 before evidence at :1452-1456. The existing-original path at :742-746 reacquires a source already included in that ordered set. The supersession-versus-verification integration scenario at postgres-coa-report-repository.integration.test.ts:1095-1184 passed.
-  Source: spec-review
-
-- **[F-fb0d8553] [RESOLVED in iter 2]** KTD6 requires identical committed commands to replay their stored response before mutable-state preconditions, including after supersession/archive. Repository receipt-first code cannot repair a rejection in the application preflight.
-  Resolution Evidence: packages/application/src/use-cases/review-coa-report.ts:39-54 retains explicit authorization and removes the mutable current-revision preflight. packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.ts:1131-1142 performs receipt lookup and domain rehydration before archive/version checks at lines 1154-1162 and separation-of-duties validation at lines 1251-1258. Command name, actor and payload matching remain at lines 312-328. The focused application and repository unit suites passed.
-  Source: spec-review
-
-- **[F-de751afd] [RESOLVED in iter 1]** Withdrawn independent third-party laboratory identity verifications and superseded EvidenceAsset revisions continue to pass createReport and resolveMeasurementSupport (returning isSupported: true), violating fail-closed source-support invariants (R6, KTD3, KTD5). Furthermore, supersedeReport can retarget a CoA report revision to a non-CoA evidence link or an invalid/withdrawn lab verification event.
-  Resolution Evidence: packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.ts:454-506 (assertValidLabVerificationEvent) and lines 1696-1738 (resolveMeasurementSupport) verify that no row exists in evidence_verification_events with outcome = 'withdrawn' and withdrawal_event_id = $4. Lines 547-566 and 1616-1628 check evidence_assets.current_revision === revision.evidenceRevision in reviewReportRevision and resolveMeasurementSupport. Lines 888-915 enforce purpose === 'coa_test_report', source_class === 'coa', and allowed PDF/image MIME types in supersedeReport.
+- **[F-a2b29610] [RESOLVED in iter 2]** `apps/web/src/app/clients/[clientId]/products/page.tsx` assigns the return value of `fetchProductSkus` and `fetchProductBatches` directly to `skus` and `batches` state (`lines 62-66`) and calls `skus.map(...)` (`lines 237, 252`) and `filteredBatches.map(...)` (`line 362`), which throws `TypeError: skus.map is not a function` at runtime when loading `/clients/[clientId]/products`.
+  Resolution Evidence: apps/web/src/api/product-evidence-client.ts:148-149 unwraps ProductSkuListResponseSchema to data.skus, lines 211-215 unwraps batch lists and lines 275-279 unwraps facts history. products/page.tsx:103-109 stores those arrays. Claim create/append parsing at client lines 482,501 matches production result.claim responses at apps/control-api/src/http/routes/product-evidence-routes.ts:1449,1568; archive parsing at client lines 466-467 also remains aligned. The object-as-array crash is not reintroduced.
   Source: quality-review
 
-- **[F-93d00d57] [RESOLVED in iter 1]** Because coa_measurements allows unrestricted INSERTs by the application role, additional measurement rows can be appended to a CoA report revision after compliance approval or supersession, mutating an audited analytical panel in place. Missing normalized-fraction and trimmed/case-insensitive SQL checks also allow invalid analytical rows to persist.
-  Resolution Evidence: packages/infrastructure/migrations/028_coa_reports.sql:348-394 adds enforce_coa_measurements_insert() and trg_enforce_coa_measurements_insert rejecting inserts into archived, non-current, or reviewed revisions (mapped in packages/infrastructure/src/postgres/repositories/postgres-product-evidence-repository.ts:586,976-981). Migration 028 lines 153-162,193-219 and packages/domain/src/coa-measurement.ts:248-252,319-329,391-400,462-558 enforce 0..1 normalized fraction bounds, non-empty analytical_qualifier_code, and consistent case/trim normalization.
+- **[F-a5224f73] [RESOLVED in iter 3]** Every request to list or link derivative reference assets from the workspace forwards to a non-existent upstream path and fails with `404 Not Found`.
+  Resolution Evidence: apps/web/src/app/api/clients/[clientId]/batches/[batchId]/evidence/[evidenceId]/revisions/[revision]/derivatives/route.ts:18,27 now forwards to singular /api/v1/clients/${clientId}/batches/${batchId}/evidence/${evidenceId}/revisions/${revision}/derivative matching apps/control-api/src/http/routes/product-evidence-routes.ts:871,931, and apps/web/src/api/product-evidence-forwarder.ts:115-116 permits 'derivative' in validateUpstreamPath, verified by apps/web/src/app/api/clients/[clientId]/batches/[batchId]/evidence/[evidenceId]/revisions/[revision]/derivatives/route.test.ts:38-109.
   Source: quality-review
 
-- **[F-925a565a] [RESOLVED in iter 1]** KTD3 requires a reviewer-authorization dependency that fails closed if unavailable. Defaulting ReviewCoaReportUseCase to a permissive adapter fails open when constructed without an authorization implementation. In addition, omitting the non-self-approval invariant from the domain factory, transactional repository adapter, and SQL trigger contradicts docs/CONTEXT.md and CE-15 in docs/verified-product-evidence-contract-fixtures.md and allows self-approval through domain/repository/SQL paths or under concurrent revision races.
-  Resolution Evidence: packages/application/src/ports/reviewer-authorization-port.ts:7-13 and packages/application/src/use-cases/review-coa-report.ts:19 default ReviewCoaReportUseCase to DenyAllReviewerAuthorizationAdapter. Non-self-approval (actorId.trim().toLowerCase() !== targetRevision.assertedBy.trim().toLowerCase()) is enforced in packages/domain/src/coa-report.ts:587-594, packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.ts:1214-1221 (after locking), and packages/infrastructure/migrations/028_coa_reports.sql:417-420.
+- **[F-541e5d17] [RESOLVED in iter 2]** When an operator opens a fresh batch with 0 evidence assets or 0 CoA reports and registers the first evidence asset or CoA report, the panels remain mounted while their `availableEvidence` / `availableReports` props populate. Because a `<select>` with a single option visually displays that option without firing `onChange`, `selectedEvidenceId` and `linkEvidenceId` remain `""`, causing CoA submission and claim evidence linking to fail with `"Must link to a source evidence asset."` or `"Selected evidence has no source object."`.
+  Resolution Evidence: apps/web/src/components/product-evidence/coa-reports-panel.tsx:148-158 selects the first arriving evidence and its currentRevision when the prior selection is empty/absent, and lines 806-814 updates evidenceRev on evidence selection. product-claims-panel.tsx:165-188 similarly initializes arriving evidence/report/measurement selections and revision numbers. This closes the empty initial dossier followed by first ingest/transcription selection failure.
   Source: quality-review
 
-- **[F-01fffe0d] [RESOLVED in iter 3]** Under PostgreSQL READ COMMITTED isolation, unlocked discovery SELECTs read a pre-lock snapshot. If a concurrent transaction archives or supersedes a dependency while acquireOrderedLocks waits for the lock, failing to re-read state after locking allows stale or archived records to pass validation. Failing to lock old and replacement source_objects in sorted order during supersession also creates a lock-order inversion risk.
-  Resolution Evidence: packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.ts:1593-1626 manages an explicit read-write resolution transaction; :1700-1807 locks then rereads mutable support dependencies. Supersession discovers both originals at :920-941 and rechecks locked report/SKU/batch/evidence at :944-991 before validateSourceLineageEligibility at :993-1001. Review locks at :1210-1216 and rechecks report and dependency state at :1219-1288. Archive rereads the locked head at :1414-1434 and associated active state at :1437-1455. Evidence registration locks discovered originals before evidence at postgres-evidence-asset-repository.ts:686-735. Real UoW and managed-resolution success tests passed.
+- **[F-32fdec51] [RESOLVED in iter 3]** Unvalidated nested route parameters allow path segments or malformed identifiers to be interpolated into upstream Control API paths before upstream validation, and missing request cancellation / media-expiry cleanup can leave stale dossier or signed media state visible across scope changes or after URL expiration.
+  Resolution Evidence: 1) apps/web/src/api/product-evidence-forwarder.ts:29-131,254-263 validates all upstream path segments and UUID/positive-integer route parameters in validateUpstreamPath before making upstream requests. 2) apps/web/src/app/clients/[clientId]/products/page.tsx:96-123 and apps/web/src/app/clients/[clientId]/products/[skuId]/batches/[batchId]/page.tsx:34-68 guard in-flight loads with request sequence refs and AbortController cleanup. 3) apps/web/src/components/product-evidence/source-inspection-panel.tsx:64-85 clears activeMedia on clientId/batchId change and schedules a timer to clear activeMedia.delivery when expiresAt elapses.
   Source: quality-review
 
-- **[F-202a5db7] [RESOLVED in iter 1]** Replayed commands return mutable plain JSON objects instead of frozen, branded domain values. Furthermore, actorId/assertedBy values of 129-255 characters pass envelope and domain validation but fail with an unhandled PostgreSQL 22001 string_data_right_truncation error on insert and violate contract schemas.
-  Resolution Evidence: packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.ts rehydrates and freezes domain entities on receipt replay in createReport (lines 594-600), supersedeReport (lines 819-829), reviewReportRevision (lines 1116-1121), and archiveReport (lines 1308-1316). packages/application/src/use-cases/coa-command-envelope-validator.ts:51 and packages/domain/src/coa-report.ts:182,575 use normalizeAssertedBy (1-128 code points). Verified in packages/domain/src/coa-report.test.ts:468-501 and packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.integration.test.ts:186-192.
-  Source: quality-review
-
-- **[F-2e36ce8d] [RESOLVED in iter 1]** KTD5 and U4 require explicit unit/basis/context/scope resolution, atomic rejection of mixed measurement contexts, and preservation of all analytical qualifiers and provenance in resolution output. Contract omissions and documentation mismatches create ambiguity and fail-open behavior for downstream claim consumers.
-  Resolution Evidence: packages/contracts/src/coa-report.ts:228-283 requires requiredUnit, requiredBasis, requiredContext, and requiredScope and includes analyticalQualifierCode, analyticalQualifierExplanation, and verifiedLabIdentityEventId in the resolution schema. packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.ts:1527,1533,1566,1808-1824,1842 maps those fields, unconditionally rejects !allSame, and aligns reason codes ('report_draft_incomplete', 'report_batch_mismatch', 'report_superseded') with docs/verified-product-evidence-contract-fixtures.md:904-907. docs/CONTEXT.md:45 uses 'pending' and docs/adr/0009-verified-product-batch-evidence-claim-authority.md:185 specifies 'TEXT in SQL'.
-  Source: quality-review
-
-- **[F-ac2eb64e] [RESOLVED in iter 3]** The newly added managed transaction cannot resolve any otherwise valid complete source-backed report. This replaces the earlier unlocked behavior with an unavoidable database failure for this supported constructor mode.
-  Resolution Evidence: packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.ts:1594 and :1611 now use BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED READ WRITE, compatible with FOR SHARE at :1700-1711. :1601-1607 rejects an externalTransaction client without an active transaction. packages/infrastructure/src/postgres/repositories/postgres-coa-report-repository.integration.test.ts:684-855 verifies successful persisted-report resolution using a normal Pool and autocommit PoolClient plus rejection of a misconfigured external transaction. Both scenarios passed in the focused PostgreSQL run.
-  Source: spec-review
-
-- **[F-88cf2b4e] [RESOLVED in iter 3]** Reordering source/evidence locks leaves an earlier overlapping inversion. Valid concurrent evidence registration and CoA operations can deadlock before either reaches the corrected source locks, violating the documented common order.
-  Resolution Evidence: packages/infrastructure/src/evidence/postgres-evidence-asset-repository.ts:616-632 discovers batch/SKU without a join lock, :634-653 locks and checks SKU first, and :655-670 locks/checks batch and rechecks the discovered SKU identity. Derivative linking likewise discovers links at :1244-1259 then locks sorted SKUs at :1260-1269 before sorted batches at :1272-1281. This matches CoA acquireOrderedLocks at postgres-coa-report-repository.ts:380-392. The registration-versus-CoA scenario at postgres-coa-report-repository.integration.test.ts:968-1093 passed.
+- **[F-bc3df102] [RESOLVED in iter 3]** The new allowlist makes the previously repaired derivative listing/association capability inaccessible for every valid request, violating source original/derivative workflow acceptance. This is the regression of F-a5224f73.
+  Resolution Evidence: apps/web/src/api/product-evidence-forwarder.ts:115-116 now allows singular 'derivative' (as well as 'derivatives') at segment index 8 in validateUpstreamPath, and apps/web/src/app/api/clients/[clientId]/batches/[batchId]/evidence/[evidenceId]/revisions/[revision]/derivatives/route.test.ts:38-109 verifies both GET and POST through the route handler into a schema-valid upstream response.
   Source: spec-review
 
 ```
@@ -383,7 +462,7 @@ Accumulated review findings ledger:
 Deterministic validation evidence:
 
 ```
-Validation result: passed (fingerprint: d65fd33e9aec)
+Validation result: passed (fingerprint: c8b6234e1787)
 ```
 
 
@@ -391,2295 +470,473 @@ Validation result: passed (fingerprint: d65fd33e9aec)
 Complete branch diff against base:
 
 ```diff
+diff --git a/apps/web/src/app/page.tsx b/apps/web/src/app/page.tsx
+index 24f7e0f..22c1af9 100644
+--- a/apps/web/src/app/page.tsx
++++ b/apps/web/src/app/page.tsx
+@@ -30,10 +30,18 @@ export default async function HomePage() {
+           </div>
+         )}
+       </div>
+-      <div style={{ marginTop: "1.5rem" }}>
++      <div style={{ marginTop: "1.5rem", display: "flex", gap: "1rem" }}>
+         <Link href="/campaigns/new" className="stage-draft-button" data-testid="new-campaign-link">
+           + New Campaign
+         </Link>
++        <Link
++          href="/products"
++          className="stage-draft-button"
++          data-testid="products-workspace-link"
++          style={{ backgroundColor: "var(--bg-surface-elevated)" }}
++        >
++          Products &amp; Batches
++        </Link>
+       </div>
+     </section>
+   );
 diff --git a/docs/CONTEXT.md b/docs/CONTEXT.md
-index e567377..33187a6 100644
+index d7fb062..08af74a 100644
 --- a/docs/CONTEXT.md
 +++ b/docs/CONTEXT.md
-@@ -40,8 +40,10 @@
- - **BatchEvidenceLink:** Explicit relational link binding an exact `(evidenceId, evidenceRevision)` to a specific `batchId` with declared purpose. No implicit inheritance from parent SKUs or sibling batches.
- - **EvidenceDerivative:** Relational bridge connecting an `EvidenceRevision` to a visual conditioning `ReferenceAsset` (`packages/domain/src/reference-asset.ts`) with independent SHA-256 digest and transform description.
- - **EvidenceVerificationEvent:** Append-only audit record capturing human review, submitter attestation, or independent third-party corroboration of evidence facts.
--- **CoaReport & CoaReportRevision:** Structured laboratory Certificate of Analysis test report under optimistic version fencing (`version`) and immutable revision records linked to a batch evidence asset, with claimed vs. verified lab identity, sample vs. attributed lot scope, and report date.
--- **CoaMeasurement:** Typed analytical measurement row linked to a specific `CoaReportRevision`, with analyte name, typed decimal result (`quantified`, `below_limit`, `not_detected`), non-empty unit, analytical basis, context, and reported test method. Neither `below_limit` nor `not_detected` may ever be converted into numerical zero ("0", "0.0%"), "Zero", or an exact numerical marketing value.
-+- **CoaReport & CoaReportRevision:** Structured laboratory Certificate of Analysis test report under optimistic version fencing (`version`) and immutable revision records linked to a batch evidence asset, with claimed vs. verified lab identity, sample vs. attributed lot scope, report date, explicit completeness status (`draft` or `complete`), and verified sample-to-batch association confirmation and attestation.
-+- **CoaMeasurement:** Typed analytical measurement row linked to a specific `CoaReportRevision`, with analyte name, typed decimal result (`quantified`, `below_limit`, `not_detected`), non-empty unit, analytical basis, context, quantity kind, and optional reported test method (`methodAsReported`, nullable when absent from source). Neither `below_limit` nor `not_detected` may ever be converted into numerical zero ("0", "0.0%"), "Zero", or an exact numerical marketing value. Stored and transported as exact string decimal representations (`DecimalString`) preserving trailing zeros with zero IEEE-754 floating-point coercion. Measurement panels are sealed upon revision commit.
-+- **CoaReportReviewEvent & Review Status:** Append-only audit record capturing independent compliance review (`approved` or `rejected`) with assessed scope (`sample_only` or `attributed_lot`). Derived status is `pending` until formally reviewed. Self-approval is strictly forbidden: the recorder (`assertedBy`) cannot approve their own report revision.
-+- **CoaMeasurementSupportResolution:** Fail-closed evaluation determining whether pinned batch measurements are valid, approved, un-disputed, un-superseded, and active. Fails closed with explicit reason codes if the parent report is unreviewed, draft, disputed, quarantined, or mismatched in unit/context.
+@@ -259,7 +259,7 @@ Implementation of the contracts specified in ADR 0009 is partitioned across seve
+ | **P1.5** | Evidence & CoA | Evidence revision use cases, CoA report revisions, typed measurement ingestion, dispute event ledger | Integration tests: sample vs. lot scope, typed measurement qualifiers, supersession event emission. |
+ | **P1.6** | Claim Policy & Invalidation | Claim authoring, evidence linking, human review use cases, atomic cascade invalidation transaction | Concurrency tests: atomic supersession with cascade invalidation, approve vs. supersede serialization. |
+ | **P1.7** | Application API & Read Plane | Client-scoped HTTP endpoints, command receipt idempotency, read models for batch/claim detail | API integration tests: UUIDv7 `actionId` idempotency replay, 409 conflict responses, secure multi-tenancy. |
+-| **P1.8** | Consumer & Review Integration | Review Hub presentation, template batch pinning resolver, final delivery reel claim verification | End-to-end integration tests: pinned batch resolution to `SceneReferenceBinding`s, fail-closed assembly admission. |
++| **P1.8** | Operator Workspace & Evidence Gate | Review Hub verified-batch operator workspace (`/products`, `/clients/:clientId/products`, dossier inspection), manual accuracy runbook, and Phase 1 evidence gate | Web component/forwarder unit tests, architectural boundary verification, and E2E synthetic batch acceptance. (Note: Campaign template batch pinning resolver, final delivery reel claim verification, and assembly admission gates belong to subsequent consumer integration phases). |
  
- - **ProductClaimRevision:** Commercial product statement for a batch declaring claim type, exact copy wording, proof category (`coa_measurement_backed`, `production_record_backed`, `visual_evidence_backed`, `human_attested_unverified`), and optional paired numerical value and unit.
- - **ClaimHead:** Version-fenced mutable pointer for a product claim tracking current revision and lifecycle state (`draft`, `evidence_linked`, `reviewer_approved`, `rejected`, `invalidated`).
-diff --git a/docs/adr/0009-verified-product-batch-evidence-claim-authority.md b/docs/adr/0009-verified-product-batch-evidence-claim-authority.md
-index df38f4d..4c5cb01 100644
---- a/docs/adr/0009-verified-product-batch-evidence-claim-authority.md
-+++ b/docs/adr/0009-verified-product-batch-evidence-claim-authority.md
-@@ -182,13 +182,24 @@ erDiagram
-   - `labNameAsClaimed`: Name of the laboratory reported on the document.
-   - `verifiedLabIdentityEventId`: Optional foreign key to an `EvidenceVerificationEvent` corroborating accredited laboratory identity and accreditation license. The referenced verification event must belong to the same client, evidence asset, and evidence revision (`outcome = 'verified'`, `fact_scope = 'lab_identity'`, `verification_kind = 'independent_third_party_corroboration'`).
- - **Strict Decimal Representations (`CoaMeasurement`):**
--  - All numerical measurements are stored as **exact decimal strings** conforming to `^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`. Floating-point numbers (`NUMERIC` in SQL, `string` in TypeScript; never IEEE 754 `number`) are mandatory to eliminate rounding and scale loss.
-+  - All numerical measurements are stored as **exact decimal strings** conforming to `^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`. Exact decimal representations (`TEXT` in SQL, `string` in TypeScript; never IEEE 754 `number`) are mandatory to eliminate rounding and scale loss.
-   - **Typed Result Union:**
-     - `quantified`: Exact measured value (`value: DecimalString`).
-     - `below_limit`: Below limit of quantification (`limit: DecimalString`, `qualifier: "lt" | "lte"`).
-     - `not_detected`: Analyte was not detected by the analytical instrument.
-   - **Mandatory Units & Context:** Every measurement row requires non-empty strings for `analyte` (e.g., `thc_total`, `myrcene`), `unit` (e.g., `percent_w_w`, `mg_per_g`, `ppm`), `basis` (e.g., `dry_weight`, `as_received`), and `context` (e.g., `finished_inflorescence`, `extract`). Ambiguous or unitless measurements fail closed.
-+  - **Exact Decimal String Storage (`TEXT`):** All analytical numbers (measurements, limits, uncertainties) are stored as verbatim decimal strings conforming to `^-?(0|[1-9][0-9]*)(\.[0-9]+)?$` with zero IEEE-754 floating-point coercion, preserving trailing precision zeros.
-+  - **Reported Methods & Analytical Qualifiers:** `methodAsReported` is optional and nullable (transcribed verbatim when reported; left null rather than fabricating a placeholder). Analytical qualifiers (e.g. `negative_as_reported`) require non-blank analytical explanations and remain unsupported for positive numerical claims until explicitly governed.
-+  - **Measurement Panel Sealing:** The measurement set is sealed upon revision commit; additions to an approved or committed revision require creating a new revision.
-   - **Lineage Integrity:** Measurements inherit and mechanically enforce the exact `(batch_id, evidence_id, evidence_revision)` of their parent `CoaReportRevision`.
-+- **Completeness & Draft States (`completenessStatus`):**
-+  - `draft`: Incomplete metadata or preliminary staging; cannot be approved or satisfy measurement support resolution for downstream claims.
-+  - `complete`: All claimed report identifiers, report date, lab name, sample-to-batch association confirmation, and at least one valid measurement row are provided.
-+- **Independent Compliance Review & Non-Self-Approval (`CoaReportReviewEvent`):**
-+  - Transcription and compliance review are strictly separated authorities. A compliance reviewer cannot approve their own recorded report revision (`assertedBy`).
-+  - Assessed scope cannot exceed report scope (`sample_only` reports cannot be approved as `attributed_lot`).
-+- **Fail-Closed Pinned Measurement Support Resolution:**
-+  - Downstream callers specify explicit report revision and measurement IDs (`resolveMeasurementSupport`). Support fails closed if the report is unreviewed, draft, disputed, quarantined, superseded, archived, or mismatched in requested unit, basis, or context. Pinned callers are never silently redirected to a "latest" report.
+ ### 6. Architectural References
  
- #### 2.8 ProductClaimRevision and ClaimSourceLink
- - **Claim Types:**
-@@ -623,7 +634,7 @@ export interface CoaMeasurement {
-   readonly unit: string;
-   readonly basis: string;
-   readonly context: string;
--  readonly methodAsReported: string;
-+  readonly methodAsReported: string | null;
- }
+@@ -267,4 +267,21 @@ Implementation of the contracts specified in ADR 0009 is partitioned across seve
+ - Acceptance Fixtures & Counterexamples: [docs/verified-product-evidence-contract-fixtures.md](verified-product-evidence-contract-fixtures.md)
+ - ShotPlan & Visual Reference Authority: [ADR 0007](adr/0007-shotplan-previs-h3-routing-architecture.md)
+ - Production Review Acceptance Gate: [ADR 0005](adr/0005-production-review-acceptance-gate.md)
++- Phase 1 Workspace Acceptance Matrix: [docs/verified-batch-workspace-acceptance.md](verified-batch-workspace-acceptance.md)
++- Phase 1 Operator Manual Review Runbook: [docs/verified-batch-operator-runbook.md](verified-batch-operator-runbook.md)
++
++### 7. Phase 1 Verified-Batch Operator Workspace (#477 / P1.8)
++
++Issue #477 adds the client-scoped Product/Batches operator workspace to Review Hub, concluding the Phase 1 evidence foundation:
++- **Routing & Workspace**: `/products` (authorized director client chooser), `/clients/:clientId/products` (SKU & Lot workspace), and `/clients/:clientId/products/:skuId/batches/:batchId` (Batch Evidence Dossier).
++- **Deep-Link SKU Verification**: Guard against URL tampering prevents displaying foreign lot data when the route's `skuId` does not match the batch's SKU.
++- **Cryptographic & Safe Inspection**: Displays original SHA-256 digests, byte sizes, MIME types, capture precision, and retention tiers without leaking internal MinIO/S3 bucket keys or storage paths.
++- **Lossless Decimal Notation**: CoA measurement panels and claims preserve exact decimal strings (e.g. `24.5000`) without floating-point coercion or rounding.
++- **Auditable Provenance Dimensions**: Visibly distinguishes `Reported`, `Operator-Attested`, `Operator-Reviewed`, `Independently Sourced`, `Unknown`, and `Blocked` states across batch facts, evidence assets, CoA reports, and product claims.
++- **Separation of Duties**: Enforces the non-self-approval invariant: the operator who records a CoA transcription or proposes a claim cannot approve it.
++- **Acceptance & Operator Runbook**: Automated matrix in [docs/verified-batch-workspace-acceptance.md](verified-batch-workspace-acceptance.md) and manual physical document comparison runbook in [docs/verified-batch-operator-runbook.md](verified-batch-operator-runbook.md).
++
++> [!NOTE]
++> Campaign template batch pinning (`PinnedProductBatchResolution` -> `SceneReferenceBinding`s), downstream delivery reel claim verification, and generative assembly admission remain assigned to subsequent consumer integration phases (outside #477).
++
  
- export interface ProductClaim {
-@@ -1042,15 +1053,19 @@ CREATE TABLE coa_report_revisions (
-   batch_id UUID NOT NULL,
-   evidence_id UUID NOT NULL,
-   evidence_revision INT NOT NULL,
--  report_identifier_as_claimed VARCHAR(128) NOT NULL,
--  report_date DATE NOT NULL,
--  lab_name_as_claimed VARCHAR(255) NOT NULL,
--  sample_identifier_as_claimed VARCHAR(128) NOT NULL,
--  scope_kind VARCHAR(32) NOT NULL
--    CHECK (scope_kind IN ('sample_only', 'attributed_lot')),
--  scope_description TEXT NOT NULL,
-+  completeness_status VARCHAR(16) NOT NULL DEFAULT 'draft'
-+    CHECK (completeness_status IN ('draft', 'complete')),
-+  report_identifier_as_claimed VARCHAR(128),
-+  report_date DATE,
-+  lab_name_as_claimed VARCHAR(255),
-+  sample_identifier_as_claimed VARCHAR(128),
-+  scope_kind VARCHAR(32)
-+    CHECK (scope_kind IS NULL OR scope_kind IN ('sample_only', 'attributed_lot')),
-+  scope_description TEXT,
-   sample_date DATE,
-   sampling_method_description TEXT,
-+  sample_to_batch_association_attestation TEXT,
-+  sample_to_batch_association_confirmed BOOLEAN,
-   verified_lab_identity_event_id UUID,
-   asserted_by VARCHAR(128) NOT NULL,
-   asserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-@@ -1067,7 +1082,7 @@ CREATE TABLE coa_report_revisions (
-     REFERENCES coa_report_revisions(client_id, report_id, revision) ON DELETE RESTRICT,
-   CONSTRAINT chk_coa_report_rev_monotonic CHECK (
-     (revision = 1 AND supersedes_revision IS NULL) OR
--    (revision > 1 AND supersedes_revision IS NOT NULL AND supersedes_revision < revision)
-+    (revision > 1 AND supersedes_revision IS NOT NULL AND supersedes_revision = revision - 1)
-   ),
-   CONSTRAINT uq_coa_report_rev_predecessor UNIQUE (client_id, report_id, supersedes_revision)
- );
-@@ -1096,7 +1111,11 @@ CREATE TABLE coa_measurements (
-   unit VARCHAR(64) NOT NULL,
-   basis VARCHAR(64) NOT NULL,
-   context VARCHAR(64) NOT NULL,
--  method_as_reported VARCHAR(128) NOT NULL,
-+  quantity_kind VARCHAR(64) NOT NULL,
-+  method_as_reported VARCHAR(128),
-+  uncertainty_absolute TEXT,
-+  detection_limit TEXT,
-+  quantification_limit TEXT,
-   CONSTRAINT uq_coa_measurements_full UNIQUE (client_id, report_id, report_revision, measurement_id),
-   CONSTRAINT uq_coa_measurements_lineage UNIQUE (client_id, report_id, report_revision, measurement_id, batch_id, evidence_id, evidence_revision),
-   CONSTRAINT fk_coa_measurements_report FOREIGN KEY (client_id, report_id, report_revision, batch_id, evidence_id, evidence_revision)
-@@ -1118,6 +1137,27 @@ CREATE TABLE coa_measurements (
- CREATE INDEX idx_coa_measurements_analyte
-   ON coa_measurements(client_id, report_id, report_revision, analyte);
+diff --git a/e2e/harness/control-api.ts b/e2e/harness/control-api.ts
+index fee126a..11c3ef1 100644
+--- a/e2e/harness/control-api.ts
++++ b/e2e/harness/control-api.ts
+@@ -1,11 +1,20 @@
+ import type { Pool } from "pg";
+-import type { ObjectStoragePort, ReviewMediaDeliveryPort } from "@cco/application";
++import { AccessDeniedError } from "@cco/domain";
++import {
++  type ObjectStoragePort,
++  type ReviewMediaDeliveryPort,
++  type ReviewerAuthorizationPort,
++  DEFAULT_DEV_EVIDENCE_STORAGE_POLICY
++} from "@cco/application";
+ import {
+   PostgresCampaignDeliveryReelQueries,
+   PostgresCurrentProductionAttemptQueries,
+   PostgresSceneReviewQueries,
+   PostgresUnitOfWork,
+-  PostgresReferenceAssetRepository
++  PostgresReferenceAssetRepository,
++  PostgresBatchEvidenceDossierQueries,
++  PostgresEvidenceLockCoordinator,
++  OriginalsInspectionAdapter
+ } from "@cco/infrastructure";
+ import { createControlApiApp, createProductionClientSessionAuthenticator } from "control-api";
+ import type { ScenarioPlanningModelClient } from "./scenario-planning-client.js";
+@@ -48,9 +57,11 @@ export const testObjectStorage: ObjectStoragePort = {
+   }
+ };
  
-+CREATE TABLE coa_report_review_events (
-+  event_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-+  client_id UUID NOT NULL,
-+  report_id UUID NOT NULL,
-+  report_revision INT NOT NULL CHECK (report_revision > 0),
-+  decision VARCHAR(16) NOT NULL
-+    CHECK (decision IN ('approved', 'rejected')),
-+  actor_id VARCHAR(128) NOT NULL,
-+  occurred_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-+  reason TEXT NOT NULL,
-+  assessed_scope VARCHAR(32) NOT NULL
-+    CHECK (assessed_scope IN ('sample_only', 'attributed_lot')),
-+  CONSTRAINT uq_coa_review_events_client_event UNIQUE (client_id, event_id),
-+  CONSTRAINT uq_coa_review_events_decision_per_rev UNIQUE (client_id, report_id, report_revision),
-+  CONSTRAINT fk_coa_review_events_revision FOREIGN KEY (client_id, report_id, report_revision)
-+    REFERENCES coa_report_revisions(client_id, report_id, revision) ON DELETE RESTRICT
-+);
++let activeControlApiBaseUrl = "http://127.0.0.1:8000";
 +
-+CREATE INDEX idx_coa_review_events_revision
-+  ON coa_report_review_events(client_id, report_id, report_revision);
-+
- -- ---------------------------------------------------------------------------
- -- 9. PRODUCT CLAIMS, REVISIONS & SOURCE LINKS
- -- ---------------------------------------------------------------------------
-@@ -1506,47 +1546,65 @@ export interface IngestCoaMeasurementInput {
-   readonly unit: string;
-   readonly basis: string;
-   readonly context: string;
--  readonly methodAsReported: string;
-+  readonly quantityKind: string;
-+  readonly methodAsReported: string | null;
-+  readonly uncertaintyAbsolute?: DecimalString | null;
-+  readonly detectionLimit?: DecimalString | null;
-+  readonly quantificationLimit?: DecimalString | null;
-+  readonly analyticalQualifierCode?: string | null;
-+  readonly analyticalQualifierExplanation?: string | null;
- }
+ const mockMediaDelivery: ReviewMediaDeliveryPort = {
+   generatePresignedReadUrl: async (locator) =>
+-    `http://mock-storage/${locator.bucket}/${locator.key}`
++    `${activeControlApiBaseUrl}/test-media/${locator.bucket}/${locator.key}`
+ };
  
- export interface CreateCoaReportCommand {
-+  readonly reportId?: CoaReportId;
-   readonly batchId: BatchId;
-   readonly evidenceId: EvidenceId;
-   readonly evidenceRevision: number;
--  readonly reportIdentifierAsClaimed: string;
--  readonly reportDate: DateOnlyString;
--  readonly labNameAsClaimed: string;
--  readonly sampleIdentifierAsClaimed: string;
--  readonly scopeKind: CoaScopeKind;
--  readonly scopeDescription: string;
--  readonly sampleDate: DateOnlyString | null;
--  readonly samplingMethodDescription: string | null;
--  readonly verifiedLabIdentityEventId: VerificationEventId | null;
-+  readonly completenessStatus: "draft" | "complete";
-+  readonly reportIdentifierAsClaimed?: string | null;
-+  readonly reportDate?: DateOnlyString | null;
-+  readonly labNameAsClaimed?: string | null;
-+  readonly sampleIdentifierAsClaimed?: string | null;
-+  readonly scopeKind?: CoaScopeKind | null;
-+  readonly scopeDescription?: string | null;
-+  readonly sampleDate?: DateOnlyString | null;
-+  readonly samplingMethodDescription?: string | null;
-+  readonly sampleToBatchAssociationConfirmed?: boolean | null;
-+  readonly sampleToBatchAssociationAttestation?: string | null;
-+  readonly verifiedLabIdentityEventId?: VerificationEventId | null;
-   readonly measurements: readonly IngestCoaMeasurementInput[];
- }
- 
- export interface SupersedeCoaReportCommand {
-   readonly reportId: CoaReportId;
-   readonly expectedVersion: number;
--  readonly batchId: BatchId;
--  readonly evidenceId: EvidenceId;
-   readonly evidenceRevision: number;
--  readonly reportIdentifierAsClaimed: string;
--  readonly reportDate: DateOnlyString;
--  readonly labNameAsClaimed: string;
--  readonly sampleIdentifierAsClaimed: string;
--  readonly scopeKind: CoaScopeKind;
--  readonly scopeDescription: string;
--  readonly sampleDate: DateOnlyString | null;
--  readonly samplingMethodDescription: string | null;
--  readonly verifiedLabIdentityEventId: VerificationEventId | null;
-+  readonly completenessStatus: "draft" | "complete";
-+  readonly reportIdentifierAsClaimed?: string | null;
-+  readonly reportDate?: DateOnlyString | null;
-+  readonly labNameAsClaimed?: string | null;
-+  readonly sampleIdentifierAsClaimed?: string | null;
-+  readonly scopeKind?: CoaScopeKind | null;
-+  readonly scopeDescription?: string | null;
-+  readonly sampleDate?: DateOnlyString | null;
-+  readonly samplingMethodDescription?: string | null;
-+  readonly sampleToBatchAssociationConfirmed?: boolean | null;
-+  readonly sampleToBatchAssociationAttestation?: string | null;
-+  readonly verifiedLabIdentityEventId?: VerificationEventId | null;
-   readonly measurements: readonly IngestCoaMeasurementInput[];
- }
- 
--export interface DisputeCoaReportCommand {
-+export interface ReviewCoaReportCommand {
-   readonly reportId: CoaReportId;
-   readonly expectedVersion: number;
-+  readonly decision: "approved" | "rejected";
-   readonly reason: string;
-+  readonly assessedScope: CoaScopeKind;
-+}
-+
-+export interface ArchiveCoaReportCommand {
-+  readonly reportId: CoaReportId;
-+  readonly expectedVersion: number;
- }
- 
- export type CreateClaimCommand =
-diff --git a/docs/verified-product-evidence-contract-fixtures.md b/docs/verified-product-evidence-contract-fixtures.md
-index 8c696d2..cd56a56 100644
---- a/docs/verified-product-evidence-contract-fixtures.md
-+++ b/docs/verified-product-evidence-contract-fixtures.md
-@@ -900,3 +900,8 @@ The following matrix documents the complete set of negative invariants, integrit
- | **CE-13A**| **Concurrent Approve vs. Supersede (Supersede Commits First)** | Reviewer attempts to approve claim Rev 1 while Submitter concurrently supersedes CoA Rev 1. | Supersede transaction commits first (advancing CoA head to Rev 2 and invalidating claim Rev 1). Approve transaction acquires locks and executes pre-commit dependency check. | Approve transaction detects underlying CoA report revision is no longer current and claim state is `invalidated`. Aborts immediately with HTTP 409 `SOURCE_SUPERSEDED`. Zero orphaned approvals. |
- | **CE-13B**| **Concurrent Approve vs. Supersede (Approve Commits First)** | Reviewer attempts to approve claim Rev 1 while Submitter concurrently supersedes CoA Rev 1. | Approve transaction commits first (transitioning claim Rev 1 to `reviewer_approved`). Supersede transaction acquires locks, appends Rev 2, queries dependent claims, finds approved claim Rev 1. | Supersede transaction appends invalidation `ClaimDecisionEvent` and updates claim head to `invalidated`. In both commit orders, committed state is deterministic and no superseded claim remains approved. |
- | **CE-14** | **Attributed Process Claim Without CoA** | Batch facts record living soil cultivation supported by cultivation log `process_record`. | Submitter creates `cultivation_process` claim ("Cultivated in Living Organic Soil") linked to log. | Permitted by policy matrix (`proofCategory = "production_record_backed"`). Human reviewer approves based on process logs without requiring a laboratory CoA. |
-+| **CE-15** | **Self-Approval Forbidden** | Submitter / technician `compliance-officer` recorded CoA Report Revision 1 (`assertedBy = "compliance-officer"`). | Same actor `compliance-officer` submits `reviewReportRevision(decision: 'approved')`. | Application and domain layer reject with HTTP 403 `ACCESS_DENIED` ("Self-approval forbidden: reviewer cannot be the recorder who asserted this report revision"). Transcription and review must remain distinct human actors. |
-+| **CE-16** | **Draft Report Support Denial** | Submitter staged an incomplete CoA report with `completenessStatus = 'draft'`. | Caller attempts to approve draft (`reviewReportRevision`) or resolve measurement support for a claim (`resolveMeasurementSupport`). | Both operations fail closed: `createCoaReportReviewEvent` throws `ProductValidationError` ("Cannot approve a draft CoA report"); `resolveMeasurementSupport` returns `isSupported = false, reason = 'report_draft_incomplete'`. |
-+| **CE-17** | **Exact Decimal String Roundtrip & Precision Preservation** | Submitter records analytical measurement with 4-decimal precision `result_value = "24.5000"` and `uncertainty_absolute = "0.2500"`. | System persists to `coa_measurements`, computes command receipt SHA-256, reads from database, and formats API JSON response. | Exact string `"24.5000"` is preserved byte-for-byte across SQL parameter, storage, domain entity, and JSON serialization. Zero IEEE-754 floating-point coercion, zero loss of trailing zeros, zero decimal reformatting. |
-+| **CE-18** | **Cross-Batch Measurement Isolation** | Same client owns SKU-1 with Lot A (`BATCH_LOT_A_ID`, total terpenes `2.85%`) and Lot B (`BATCH_LOT_B_ID`, total terpenes `1.40%`). | Caller invokes `resolveMeasurementSupport` providing Lot B's batch ID with Lot A's CoA report ID. | Fails closed with `isSupported = false, reason = 'report_batch_mismatch'`. Analytical measurements never bleed across batches of the same SKU. |
-+| **CE-19** | **Pinned Measurement Support Supersession Invalidation** | Downstream claim query is pinned to CoA Report Revision 1. | Submitter records superseding CoA Report Revision 2 (`supersedeCoaReport`). | `resolveMeasurementSupport` evaluates target revision against current head revision (2 > 1), returning `isSupported = false, reason = 'report_superseded'`. Pinned queries fail closed rather than silently substituting superseded analytical facts. |
-diff --git a/packages/application/src/ports/index.ts b/packages/application/src/ports/index.ts
-index 8b0e8fc..16b8f65 100644
---- a/packages/application/src/ports/index.ts
-+++ b/packages/application/src/ports/index.ts
-@@ -56,3 +56,5 @@ export * from "./originals-inspection-port.js";
- export * from "./evidence-storage-policy.js";
- export * from "./evidence-lock-coordinator.js";
- export * from "./evidence-asset-repository.js";
-+export * from "./coa-report-repository.js";
-+export * from "./reviewer-authorization-port.js";
-diff --git a/packages/application/src/ports/unit-of-work.ts b/packages/application/src/ports/unit-of-work.ts
-index 440ad3a..f0658d6 100644
---- a/packages/application/src/ports/unit-of-work.ts
-+++ b/packages/application/src/ports/unit-of-work.ts
-@@ -10,6 +10,7 @@ import type { ReferenceAssetRepository } from "./reference-asset-repository.js";
- import type { ReferenceGroupRepository } from "./reference-group-repository.js";
- import type { ProductEvidenceRepositoryPort } from "./product-evidence-repository.js";
- import type { EvidenceAssetRepositoryPort } from "./evidence-asset-repository.js";
-+import type { CoaReportRepositoryPort } from "./coa-report-repository.js";
- import type { ReviewEventStore } from "./review-event-store.js";
- import type { SceneRepository } from "./scene-repository.js";
- import type { ShotPlanRepository } from "./shot-plan-repository.js";
-@@ -31,6 +32,7 @@ export interface UnitOfWorkContext {
-   readonly campaignReferenceBible?: CampaignReferenceBibleRepository | undefined;
-   readonly productEvidence?: ProductEvidenceRepositoryPort | undefined;
-   readonly evidenceAsset?: EvidenceAssetRepositoryPort | undefined;
-+  readonly coaReports?: CoaReportRepositoryPort | undefined;
- }
- 
- export interface UnitOfWork {
-diff --git a/packages/application/src/use-cases/index.ts b/packages/application/src/use-cases/index.ts
-index 9eaba9c..66213a6 100644
---- a/packages/application/src/use-cases/index.ts
-+++ b/packages/application/src/use-cases/index.ts
-@@ -84,3 +84,9 @@ export * from "./product-registry-use-cases.js";
- export * from "./register-evidence-asset.js";
- export * from "./link-existing-derivative.js";
- export * from "./record-evidence-verification-event.js";
-+export * from "./coa-command-envelope-validator.js";
-+export * from "./create-coa-report.js";
-+export * from "./supersede-coa-report.js";
-+export * from "./review-coa-report.js";
-+export * from "./archive-coa-report.js";
-+export * from "./resolve-coa-measurement-support.js";
-diff --git a/packages/contracts/src/index.ts b/packages/contracts/src/index.ts
-index 961abce..da754b2 100644
---- a/packages/contracts/src/index.ts
-+++ b/packages/contracts/src/index.ts
-@@ -43,3 +43,4 @@ export * from "./product-evidence-command.js";
- export * from "./product-sku.js";
- export * from "./product-batch.js";
- export * from "./evidence-asset.js";
-+export * from "./coa-report.js";
-diff --git a/packages/domain/src/identifiers.ts b/packages/domain/src/identifiers.ts
-index c23b1c6..9d613fc 100644
---- a/packages/domain/src/identifiers.ts
-+++ b/packages/domain/src/identifiers.ts
-@@ -23,6 +23,9 @@ export type SourceObjectId = Brand<string, "SourceObjectId">;
- export type DerivativeId = Brand<string, "DerivativeId">;
- export type VerificationEventId = Brand<string, "VerificationEventId">;
- export type ActionId = Brand<string, "ActionId">;
-+export type CoaReportId = Brand<string, "CoaReportId">;
-+export type CoaMeasurementId = Brand<string, "CoaMeasurementId">;
-+export type CoaReviewEventId = Brand<string, "CoaReviewEventId">;
- 
- /** Lowercase 64-hex SHA-256 digest string */
- export type Sha256Hex = string & { readonly __sha256: true };
-@@ -79,6 +82,18 @@ export function createActionId(val: string): ActionId {
-   return validateAndBrandUuid(val, "ActionId", "actionId");
- }
- 
-+export function createCoaReportId(val: string): CoaReportId {
-+  return validateAndBrandUuid(val, "CoaReportId", "reportId");
-+}
-+
-+export function createCoaMeasurementId(val: string): CoaMeasurementId {
-+  return validateAndBrandUuid(val, "CoaMeasurementId", "measurementId");
-+}
-+
-+export function createCoaReviewEventId(val: string): CoaReviewEventId {
-+  return validateAndBrandUuid(val, "CoaReviewEventId", "eventId");
-+}
-+
- export function createSha256Hex(val: string): Sha256Hex {
-   if (typeof val !== "string" || !/^[0-9a-f]{64}$/.test(val)) {
-     throw new ProductValidationError(
-diff --git a/packages/domain/src/index.ts b/packages/domain/src/index.ts
-index eaa895e..217e7ad 100644
---- a/packages/domain/src/index.ts
-+++ b/packages/domain/src/index.ts
-@@ -20,3 +20,5 @@ export * from "./batch-facts.js";
- export * from "./product-batch.js";
- export * from "./source-object.js";
- export * from "./evidence-asset.js";
-+export * from "./coa-measurement.js";
-+export * from "./coa-report.js";
-diff --git a/packages/infrastructure/src/evidence/postgres-evidence-asset-repository.test.ts b/packages/infrastructure/src/evidence/postgres-evidence-asset-repository.test.ts
-index 979f378..114b16e 100644
---- a/packages/infrastructure/src/evidence/postgres-evidence-asset-repository.test.ts
-+++ b/packages/infrastructure/src/evidence/postgres-evidence-asset-repository.test.ts
-@@ -61,9 +61,64 @@ describe("PostgresEvidenceAssetRepository unit tests", () => {
-   function createMockPoolClient(
-     handler: (normSql: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>
-   ) {
-+    let lastSkuArchivedAt: Date | null | undefined;
-+    let lastBatchArchivedAt: Date | null | undefined;
-+
-     return {
-       query: vi.fn(async (sql: string, params?: unknown[]) => {
--        return await handler(normalizeSql(sql), params);
-+        const norm = normalizeSql(sql);
-+        const result = await handler(norm, params);
-+
-+        if (result.rows.length > 0) {
-+          if ("sku_archived_at" in result.rows[0]!) {
-+            lastSkuArchivedAt = result.rows[0]!.sku_archived_at as Date | null;
-+          }
-+          if ("batch_archived_at" in result.rows[0]!) {
-+            lastBatchArchivedAt = result.rows[0]!.batch_archived_at as Date | null;
-+          }
-+        }
-+
-+        const lower = norm.toLowerCase();
-+        if (lower.includes("from product_skus") && result.rows.length === 0) {
-+          const skuId = (params?.[1] as string) || "018f0000-0000-7000-8000-000000000005";
-+          return {
-+            rows: [
-+              {
-+                sku_id: skuId,
-+                archived_at: lastSkuArchivedAt ?? null
-+              }
-+            ]
-+          };
-+        }
-+
-+        if (
-+          lower.includes("from product_batches") &&
-+          lower.includes("for") &&
-+          result.rows.length === 0
-+        ) {
-+          const bId = (params?.[1] as string) || "018f0000-0000-7000-8000-000000000002";
-+          return {
-+            rows: [
-+              {
-+                batch_id: bId,
-+                archived_at: lastBatchArchivedAt ?? null,
-+                sku_id: (params?.[1] as string) || "018f0000-0000-7000-8000-000000000005"
-+              }
-+            ]
-+          };
-+        }
-+
-+        if (lower.includes("from batch_evidence_links") && result.rows.length > 0) {
-+          return {
-+            rows: result.rows.map((r) => ({
-+              batch_id: r.batch_id ?? "018f0000-0000-7000-8000-000000000002",
-+              sku_id: r.sku_id ?? "018f0000-0000-7000-8000-000000000005",
-+              ...r
-+            }))
-+          };
-+        }
-+
-+        return result;
-       }),
-       getTransactionStatus: vi.fn(() => "T"),
-       release: vi.fn()
-@@ -547,6 +602,39 @@ describe("PostgresEvidenceAssetRepository unit tests", () => {
-         if (sql.includes("product_evidence_command_receipts")) {
-           return { rows: [] };
-         }
-+        if (sql.includes("evidence_revisions")) {
-+          return {
-+            rows: [
-+              {
-+                client_id: clientId,
-+                evidence_id: evidenceId,
-+                revision: 1,
-+                source_object_id: sourceObjectId
-+              }
-+            ]
-+          };
-+        }
-+        if (sql.includes("batch_evidence_links")) {
-+          return {
-+            rows: [
-+              {
-+                sku_archived_at: null,
-+                batch_archived_at: null
-+              }
-+            ]
-+          };
-+        }
-+        if (sql.includes("source_objects")) {
-+          return {
-+            rows: [
-+              {
-+                source_object_id: sourceObjectId,
-+                client_id: clientId,
-+                availability: "available"
-+              }
-+            ]
-+          };
-+        }
-         if (sql.includes("evidence_assets")) {
-           return {
-             rows: [
-diff --git a/packages/infrastructure/src/evidence/postgres-evidence-asset-repository.ts b/packages/infrastructure/src/evidence/postgres-evidence-asset-repository.ts
-index 5c2606b..a369f71 100644
---- a/packages/infrastructure/src/evidence/postgres-evidence-asset-repository.ts
-+++ b/packages/infrastructure/src/evidence/postgres-evidence-asset-repository.ts
-@@ -613,17 +613,50 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
-         };
-       }
- 
--      // 1. Lock and verify batch and SKU rows
-+      // 1. Discover batch and SKU without locking to maintain strict lock hierarchy: SKU -> Batch
-+      const batchDiscovery = await client.query<{
-+        batch_id: string;
-+        sku_id: string;
-+      }>(
-+        `SELECT batch_id, sku_id
-+         FROM product_batches
-+         WHERE client_id = $1 AND batch_id = $2`,
-+        [cmd.clientId, cmd.payload.batchId]
-+      );
-+      if (batchDiscovery.rows.length === 0) {
-+        throw new NotFoundError("ProductBatch", cmd.payload.batchId);
+ export interface TestControlApi {
+@@ -68,6 +79,28 @@ export async function startTestControlApi(options: {
+   const currentProductionAttemptQueries = new PostgresCurrentProductionAttemptQueries(options.pool);
+   const campaignDeliveryReelQueries = new PostgresCampaignDeliveryReelQueries(options.pool);
+   const referenceAssetRepository = new PostgresReferenceAssetRepository(options.pool);
++  const batchEvidenceDossierQueries = new PostgresBatchEvidenceDossierQueries(options.pool);
++  const evidenceLockCoordinator = new PostgresEvidenceLockCoordinator(options.pool);
++  const originalsInspection = new OriginalsInspectionAdapter();
++  const reviewerAuthorization: ReviewerAuthorizationPort = {
++    assertCanReviewCoaReport: async (_clientId, actorId) => {
++      if (actorId === "author@test.internal") {
++        throw new AccessDeniedError(`Actor "${actorId}" is not authorized to review CoA reports.`);
 +      }
-+      const discoveredSkuId = batchDiscovery.rows[0]!.sku_id;
-+
-+      // Lock SKU FOR UPDATE first
-+      const skuRes = await client.query<{
-+        sku_id: string;
-+        archived_at: Date | null;
-+      }>(
-+        `SELECT sku_id, archived_at
-+         FROM product_skus
-+         WHERE client_id = $1 AND sku_id = $2 FOR UPDATE`,
-+        [cmd.clientId, discoveredSkuId]
-+      );
-+      if (skuRes.rows.length === 0) {
-+        throw new NotFoundError("ProductSku", discoveredSkuId);
-+      }
-+      if (skuRes.rows[0]!.archived_at !== null) {
++    },
++    assertCanReviewClaim: async (_clientId, actorId) => {
++      if (actorId === "author@test.internal") {
 +        throw new AccessDeniedError(
-+          "Cannot link evidence to a batch under an archived SKU",
-+          "SKU_ARCHIVED"
++          `Actor "${actorId}" is not authorized to review product claims.`
 +        );
 +      }
-+
-+      // Lock Batch FOR UPDATE second
-       const batchRes = await client.query<{
-         batch_id: string;
-         archived_at: Date | null;
-         sku_id: string;
--        sku_archived_at: Date | null;
-       }>(
--        `SELECT b.batch_id, b.archived_at, s.sku_id, s.archived_at AS sku_archived_at
--         FROM product_batches b
--         JOIN product_skus s ON s.client_id = b.client_id AND s.sku_id = b.sku_id
--         WHERE b.client_id = $1 AND b.batch_id = $2 FOR UPDATE OF b, s`,
-+        `SELECT batch_id, archived_at, sku_id
-+         FROM product_batches
-+         WHERE client_id = $1 AND batch_id = $2 FOR UPDATE`,
-         [cmd.clientId, cmd.payload.batchId]
-       );
-       if (batchRes.rows.length === 0) {
-@@ -632,11 +665,75 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
-       if (batchRes.rows[0]!.archived_at !== null) {
-         throw new AccessDeniedError("Cannot link evidence to an archived batch", "BATCH_ARCHIVED");
-       }
--      if (batchRes.rows[0]!.sku_archived_at !== null) {
--        throw new AccessDeniedError(
--          "Cannot link evidence to a batch under an archived SKU",
--          "SKU_ARCHIVED"
-+      if (batchRes.rows[0]!.sku_id !== discoveredSkuId) {
-+        throw new ConcurrencyConflictError("Batch SKU association changed concurrently.");
++    },
++    assertCanVerifyEvidence: async (_clientId, actorId) => {
++      if (actorId === "author@test.internal") {
++        throw new AccessDeniedError(`Actor "${actorId}" is not authorized to verify evidence.`);
 +      }
-+
-+      // Pre-lock discovery for supersession to maintain canonical order: Source (sorted) -> Evidence
-+      let oldSourceObjectId: string | undefined;
-+      let targetAsset: EvidenceAsset | undefined;
-+      if (cmd.payload.registrationIntent === "supersede") {
-+        if (!cmd.payload.targetEvidenceId || cmd.payload.expectedEvidenceVersion === undefined) {
-+          throw new ProductValidationError([
-+            {
-+              code: "INVALID_FIELD_COMBINATION",
-+              path: ["targetEvidenceId"],
-+              message: "targetEvidenceId and expectedEvidenceVersion are required for supersede."
-+            }
-+          ]);
-+        }
-+
-+        const preLockRevRes = await client.query<{ source_object_id: string }>(
-+          `SELECT r.source_object_id
-+           FROM evidence_assets a
-+           JOIN evidence_revisions r ON r.client_id = a.client_id AND r.evidence_id = a.evidence_id AND r.revision = a.current_revision
-+           WHERE a.client_id = $1 AND a.evidence_id = $2`,
-+          [cmd.clientId, cmd.payload.targetEvidenceId]
-+        );
-+        oldSourceObjectId = preLockRevRes.rows[0]?.source_object_id;
-+
-+        // Discover candidate replacement source object ID without locking
-+        let candidateReplacementSourceId: string | undefined = cmd.payload.reusedSourceObjectId;
-+        if (!candidateReplacementSourceId) {
-+          const existingSourceCheck = await client.query<{ source_object_id: string }>(
-+            `SELECT source_object_id FROM source_objects
-+             WHERE client_id = $1 AND original_sha256 = $2`,
-+            [cmd.clientId, cmd.payload.originalSha256]
-+          );
-+          candidateReplacementSourceId = existingSourceCheck.rows[0]?.source_object_id;
-+        }
-+
-+        // Lock all involved source objects in canonical sorted order before locking evidence_assets
-+        const sourceIdsToLock = Array.from(
-+          new Set([oldSourceObjectId, candidateReplacementSourceId].filter(Boolean) as string[])
-+        ).sort();
-+        for (const sId of sourceIdsToLock) {
-+          await client.query(
-+            `SELECT 1 FROM source_objects WHERE client_id = $1 AND source_object_id = $2 FOR UPDATE`,
-+            [cmd.clientId, sId]
-+          );
-+        }
-+
-+        // Lock target evidence asset
-+        const targetRes = await client.query<EvidenceAssetRow>(
-+          `SELECT * FROM evidence_assets
-+           WHERE client_id = $1 AND evidence_id = $2 FOR UPDATE`,
-+          [cmd.clientId, cmd.payload.targetEvidenceId]
-         );
-+        if (targetRes.rows.length === 0) {
-+          throw new NotFoundError("EvidenceAsset", cmd.payload.targetEvidenceId);
-+        }
-+        targetAsset = mapRowToEvidenceAsset(targetRes.rows[0]!);
-+        if (targetAsset.archivedAt !== null) {
-+          throw new AccessDeniedError("Archived evidence asset cannot be superseded.");
-+        }
-+        if (targetAsset.version !== cmd.payload.expectedEvidenceVersion) {
-+          throw new StaleRevisionConflictError(
-+            "EvidenceAsset",
-+            cmd.payload.expectedEvidenceVersion,
-+            targetAsset.version
-+          );
-+        }
-       }
++    }
++  };
  
-       // 2. Resolve or insert SourceObject
-@@ -886,35 +983,8 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
-         );
-         evidenceRevision = mapRowToEvidenceRevision(revRes.rows[0]!);
-       } else if (cmd.payload.registrationIntent === "supersede") {
--        if (!cmd.payload.targetEvidenceId || cmd.payload.expectedEvidenceVersion === undefined) {
--          throw new ProductValidationError([
--            {
--              code: "INVALID_FIELD_COMBINATION",
--              path: ["targetEvidenceId"],
--              message: "targetEvidenceId and expectedEvidenceVersion are required for supersede."
--            }
--          ]);
--        }
--
--        // Lock target evidence asset
--        const targetRes = await client.query<EvidenceAssetRow>(
--          `SELECT * FROM evidence_assets
--         WHERE client_id = $1 AND evidence_id = $2 FOR UPDATE`,
--          [cmd.clientId, cmd.payload.targetEvidenceId]
--        );
--        if (targetRes.rows.length === 0) {
--          throw new NotFoundError("EvidenceAsset", cmd.payload.targetEvidenceId);
--        }
--        const targetAsset = mapRowToEvidenceAsset(targetRes.rows[0]!);
--        if (targetAsset.archivedAt !== null) {
--          throw new AccessDeniedError("Archived evidence asset cannot be superseded.");
--        }
--        if (targetAsset.version !== cmd.payload.expectedEvidenceVersion) {
--          throw new StaleRevisionConflictError(
--            "EvidenceAsset",
--            cmd.payload.expectedEvidenceVersion,
--            targetAsset.version
--          );
-+        if (!targetAsset) {
-+          throw new Error("Illegal state: targetAsset not loaded for supersede intent");
+   const app = createControlApiApp(
+     {
+@@ -77,6 +110,10 @@ export async function startTestControlApi(options: {
+       campaignDeliveryReelQueries,
+       objectStorage: testObjectStorage,
+       reviewMediaDelivery: mockMediaDelivery,
++      batchEvidenceDossierQueries,
++      evidenceLockCoordinator,
++      originalsInspection,
++      reviewerAuthorization,
+       planningModelClients: {
+         primary: options.planningStub,
+         fallback: {
+@@ -84,11 +121,19 @@ export async function startTestControlApi(options: {
+           complete: (req) => options.planningStub.complete(req)
          }
+       },
+-      referenceAssetRepository
++      referenceAssetRepository,
++      evidenceStoragePolicy: DEFAULT_DEV_EVIDENCE_STORAGE_POLICY
+     },
+     {
+       reviewerIdentityResolver: {
+-        resolve: () => "Integration Test Director"
++        resolve: (req) => {
++          const headers = req?.headers as Record<string, string | undefined> | undefined;
++          return (
++            headers?.["tailscale-user-login"] ||
++            headers?.["x-test-actor-id"] ||
++            "author@test.internal"
++          );
++        }
+       },
+       clientSessionAuthenticator: createProductionClientSessionAuthenticator({
+         secret: TEST_CLIENT_SESSION_SECRET,
+@@ -98,9 +143,24 @@ export async function startTestControlApi(options: {
+     }
+   );
  
-         // Check if the target evidence asset has an active dispute across any revisions
-@@ -1157,7 +1227,72 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
-         return rehydrateEvidenceDerivative(result);
-       }
- 
--      // Verify EvidenceAsset exists, belongs to client, and is not archived
-+      // Discover lineage before locking to ensure canonical lock order: SKU -> Batch -> Source -> Evidence
-+      const discoveryRevRes = await client.query<{ source_object_id: string }>(
-+        `SELECT source_object_id FROM evidence_revisions
-+         WHERE client_id = $1 AND evidence_id = $2 AND revision = $3`,
-+        [cmd.clientId, cmd.payload.evidenceId, cmd.payload.evidenceRevision]
-+      );
-+      if (discoveryRevRes.rows.length === 0) {
-+        throw new NotFoundError(
-+          "EvidenceRevision",
-+          `${cmd.payload.evidenceId}:${cmd.payload.evidenceRevision}`
-+        );
-+      }
-+      const discoveredSourceObjectId = discoveryRevRes.rows[0]!.source_object_id;
++  app.get("/test-media/:bucket/*", async (req, reply) => {
++    const { bucket } = req.params as { bucket: string };
++    const key = (req.params as Record<string, string>)["*"];
++    const item = inMemoryStorage.get(`${bucket}/${key}`);
++    if (!item) {
++      reply.code(404).send({ error: "Media not found" });
++      return;
++    }
++    if (item.contentType) {
++      reply.header("content-type", item.contentType);
++    }
++    reply.send(Buffer.from(item.body));
++  });
 +
-+      // Discover lineage before locking to ensure canonical lock order: SKU -> Batch -> Source -> Evidence
-+      const linkBatchRes = await client.query<{
-+        batch_id: string;
-+        sku_id: string;
-+      }>(
-+        `SELECT l.batch_id, b.sku_id
-+         FROM batch_evidence_links l
-+         JOIN product_batches b ON b.client_id = l.client_id AND b.batch_id = l.batch_id
-+         WHERE l.client_id = $1 AND l.evidence_id = $2 AND l.evidence_revision = $3`,
-+        [cmd.clientId, cmd.payload.evidenceId, cmd.payload.evidenceRevision]
-+      );
-+      if (linkBatchRes.rows.length === 0) {
-+        throw new NotFoundError("ProductBatch", "Associated batch link not found");
-+      }
+   await app.listen({ port: 0, host: "127.0.0.1" });
+   const address = app.server.address() as AddressInfo;
+   const controlApiBaseUrl = `http://127.0.0.1:${address.port}`;
++  activeControlApiBaseUrl = controlApiBaseUrl;
+ 
+   return {
+     app,
+diff --git a/e2e/harness/mock-bin/tailscale b/e2e/harness/mock-bin/tailscale
+index c42125e..68acfeb 100755
+--- a/e2e/harness/mock-bin/tailscale
++++ b/e2e/harness/mock-bin/tailscale
+@@ -19,8 +19,23 @@ if (args[0] === "whois" && args[1] === "--json") {
+     process.exit(1);
+   }
+ 
+-  const login = process.env.TEST_REVIEWER_LOGIN || "Integration Test Director";
+-  const displayName = process.env.TEST_REVIEWER_DISPLAY_NAME || "Integration Test Director";
++  let login = process.env.TEST_REVIEWER_LOGIN;
++  let displayName = process.env.TEST_REVIEWER_DISPLAY_NAME;
 +
-+      // Explicitly lock SKU first FOR SHARE
-+      const skuIds = [...new Set(linkBatchRes.rows.map((r) => r.sku_id))].sort();
-+      for (const sId of skuIds) {
-+        const skuLockRes = await client.query<{ archived_at: Date | null }>(
-+          `SELECT archived_at FROM product_skus WHERE client_id = $1 AND sku_id = $2 FOR SHARE`,
-+          [cmd.clientId, sId]
-+        );
-+        if (skuLockRes.rows.length === 0 || skuLockRes.rows[0]!.archived_at !== null) {
-+          throw new AccessDeniedError("Associated SKU is archived.", "SKU_ARCHIVED");
-+        }
-+      }
-+
-+      // Explicitly lock Batch second FOR SHARE
-+      const batchIds = [...new Set(linkBatchRes.rows.map((r) => r.batch_id))].sort();
-+      for (const bId of batchIds) {
-+        const batchLockRes = await client.query<{ archived_at: Date | null }>(
-+          `SELECT archived_at FROM product_batches WHERE client_id = $1 AND batch_id = $2 FOR SHARE`,
-+          [cmd.clientId, bId]
-+        );
-+        if (batchLockRes.rows.length === 0 || batchLockRes.rows[0]!.archived_at !== null) {
-+          throw new AccessDeniedError("Associated batch is archived.", "BATCH_ARCHIVED");
-+        }
-+      }
-+
-+      // Next lock source_objects row FOR UPDATE
-+      const sourceRes = await client.query<SourceObjectRow>(
-+        `SELECT * FROM source_objects WHERE client_id = $1 AND source_object_id = $2 FOR UPDATE`,
-+        [cmd.clientId, discoveredSourceObjectId]
-+      );
-+      if (sourceRes.rows.length === 0 || sourceRes.rows[0]!.availability !== "available") {
-+        throw new AccessDeniedError(
-+          "Underlying source object is unavailable.",
-+          "SOURCE_UNAVAILABLE"
-+        );
-+      }
-+
-+      // Next lock evidence_assets row FOR UPDATE
-       const assetRes = await client.query<EvidenceAssetRow>(
-         `SELECT * FROM evidence_assets
-          WHERE client_id = $1 AND evidence_id = $2 FOR UPDATE`,
-@@ -1183,7 +1318,7 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
-         );
-       }
++  if (!login) {
++    if (ip === "100.64.0.2") {
++      login = "reviewer@test.internal";
++      displayName = displayName || "Integration Test Reviewer";
++    } else if (ip === "100.64.0.1") {
++      login = "author@test.internal";
++      displayName = displayName || "Integration Test Author";
++    } else {
++      login = "author@test.internal";
++      displayName = displayName || "Integration Test Author";
++    }
++  } else {
++    displayName = displayName || login;
++  }
  
--      // Verify EvidenceRevision exists
-+      // Lock EvidenceRevision row FOR UPDATE
-       const revRes = await client.query<EvidenceRevisionRow>(
-         `SELECT * FROM evidence_revisions
-          WHERE client_id = $1 AND evidence_id = $2 AND revision = $3 FOR UPDATE`,
-@@ -1196,41 +1331,6 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
-         );
-       }
- 
--      // Verify associated batch and SKU are not archived (lock SKU and batch rows for share)
--      const skuRes = await client.query<{
--        sku_archived_at: Date | null;
--        batch_archived_at: Date | null;
--      }>(
--        `SELECT s.archived_at AS sku_archived_at, b.archived_at AS batch_archived_at
--         FROM batch_evidence_links l
--         JOIN product_batches b ON b.client_id = l.client_id AND b.batch_id = l.batch_id
--         JOIN product_skus s ON s.client_id = b.client_id AND s.sku_id = b.sku_id
--         WHERE l.client_id = $1 AND l.evidence_id = $2 AND l.evidence_revision = $3
--         FOR SHARE OF s, b`,
--        [cmd.clientId, cmd.payload.evidenceId, cmd.payload.evidenceRevision]
--      );
--      if (skuRes.rows.length === 0) {
--        throw new NotFoundError("ProductBatch", "Associated batch link not found");
--      }
--      if (skuRes.rows.some((r) => r.batch_archived_at !== null)) {
--        throw new AccessDeniedError("Associated batch is archived.", "BATCH_ARCHIVED");
--      }
--      if (skuRes.rows.some((r) => r.sku_archived_at !== null)) {
--        throw new AccessDeniedError("Associated SKU is archived.", "SKU_ARCHIVED");
--      }
--
--      // Verify underlying source object availability (lock source_objects row for update)
--      const sourceRes = await client.query<SourceObjectRow>(
--        `SELECT * FROM source_objects WHERE client_id = $1 AND source_object_id = $2 FOR UPDATE`,
--        [cmd.clientId, revRes.rows[0]!.source_object_id]
--      );
--      if (sourceRes.rows.length === 0 || sourceRes.rows[0]!.availability !== "available") {
--        throw new AccessDeniedError(
--          "Underlying source object is unavailable.",
--          "SOURCE_UNAVAILABLE"
--        );
--      }
--
-       await this.assertNoActiveDisputes(
-         client,
-         cmd.clientId,
-@@ -1329,7 +1429,27 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
-         return rehydrateEvidenceVerificationEvent(result);
-       }
- 
--      // Verify EvidenceAsset exists, belongs to client, and is not archived
-+      // Discover source_object_id before locking to maintain canonical order: Source -> Evidence
-+      const discoveryRevRes = await client.query<{ source_object_id: string }>(
-+        `SELECT source_object_id FROM evidence_revisions
-+         WHERE client_id = $1 AND evidence_id = $2 AND revision = $3`,
-+        [cmd.clientId, cmd.payload.evidenceId, cmd.payload.evidenceRevision]
-+      );
-+      if (discoveryRevRes.rows.length === 0) {
-+        throw new NotFoundError(
-+          "EvidenceRevision",
-+          `${cmd.payload.evidenceId}:${cmd.payload.evidenceRevision}`
-+        );
-+      }
-+      const discoveredSourceObjectId = discoveryRevRes.rows[0]!.source_object_id;
-+
-+      // 1. Lock underlying source_objects row FOR UPDATE first
-+      await client.query(
-+        `SELECT 1 FROM source_objects WHERE client_id = $1 AND source_object_id = $2 FOR UPDATE`,
-+        [cmd.clientId, discoveredSourceObjectId]
-+      );
-+
-+      // 2. Lock EvidenceAsset row FOR UPDATE
-       const assetRes = await client.query<{ archived_at: Date | null }>(
-         `SELECT archived_at FROM evidence_assets
-          WHERE client_id = $1 AND evidence_id = $2 FOR UPDATE`,
-@@ -1342,7 +1462,7 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
-         throw new AccessDeniedError("Target evidence asset is archived.", "EVIDENCE_ARCHIVED");
-       }
- 
--      // Verify EvidenceRevision exists
-+      // 3. Lock EvidenceRevision row FOR UPDATE
-       const revRes = await client.query<EvidenceRevisionRow>(
-         `SELECT * FROM evidence_revisions
-          WHERE client_id = $1 AND evidence_id = $2 AND revision = $3 FOR UPDATE`,
-@@ -1355,12 +1475,6 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
-         );
-       }
- 
--      // Lock underlying source_objects row FOR UPDATE so dispute checks and event appends synchronize
--      await client.query(
--        `SELECT 1 FROM source_objects WHERE client_id = $1 AND source_object_id = $2 FOR UPDATE`,
--        [cmd.clientId, revRes.rows[0]!.source_object_id]
--      );
--
-       if (cmd.payload.withdrawalEventId) {
-         const priorEventRes = await client.query<{ event_id: string }>(
-           `SELECT event_id FROM evidence_verification_events
-diff --git a/packages/infrastructure/src/index.ts b/packages/infrastructure/src/index.ts
-index a08d631..0074717 100644
---- a/packages/infrastructure/src/index.ts
-+++ b/packages/infrastructure/src/index.ts
-@@ -475,5 +475,9 @@ export {
-   PostgresEvidenceAssetRepository,
-   type PostgresEvidenceAssetRepositoryOptions
- } from "./evidence/postgres-evidence-asset-repository.js";
-+export {
-+  PostgresCoaReportRepository,
-+  type PostgresCoaReportRepositoryOptions
-+} from "./postgres/repositories/postgres-coa-report-repository.js";
- 
- export * from "./experiments/index.js";
-diff --git a/packages/infrastructure/src/postgres/audit-protections.integration.test.ts b/packages/infrastructure/src/postgres/audit-protections.integration.test.ts
-index 7428003..8fb33b5 100644
---- a/packages/infrastructure/src/postgres/audit-protections.integration.test.ts
-+++ b/packages/infrastructure/src/postgres/audit-protections.integration.test.ts
-@@ -499,7 +499,7 @@ describe("PostgreSQL audit immutability and application-role privileges integrat
-     // Verify migration succeeds when no application role is configured
-     await client.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public;");
-     const noRoleApplied = await runMigrations(client, { migrationsDirectory });
--    expect(noRoleApplied).toHaveLength(27);
-+    expect(noRoleApplied).toHaveLength(28);
-   });
- 
-   it("fails closed when application role has effective UPDATE or DELETE privilege on storyboard_candidates", async () => {
-diff --git a/packages/infrastructure/src/postgres/baseline-schema.integration.test.ts b/packages/infrastructure/src/postgres/baseline-schema.integration.test.ts
-index c06c672..f2dd7da 100644
---- a/packages/infrastructure/src/postgres/baseline-schema.integration.test.ts
-+++ b/packages/infrastructure/src/postgres/baseline-schema.integration.test.ts
-@@ -55,7 +55,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
-   it("migrates an empty PostgreSQL 18.6 database through the baseline", async () => {
-     const applied = await runMigrations(client, { migrationsDirectory });
- 
--    expect(applied).toHaveLength(27);
-+    expect(applied).toHaveLength(28);
-     expect(applied[0]?.version).toBe("001");
-     expect(applied[1]?.version).toBe("002");
-     expect(applied[2]?.version).toBe("003");
-@@ -83,6 +83,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
-     expect(applied[24]?.version).toBe("025");
-     expect(applied[25]?.version).toBe("026");
-     expect(applied[26]?.version).toBe("027");
-+    expect(applied[27]?.version).toBe("028");
- 
-     const schemaRes = await client.query(
-       "SELECT version FROM schema_migrations ORDER BY version ASC"
-@@ -114,7 +115,8 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
-       { version: "024" },
-       { version: "025" },
-       { version: "026" },
--      { version: "027" }
-+      { version: "027" },
-+      { version: "028" }
-     ]);
- 
-     const tablesRes = await client.query<{ table_name: string }>(
-@@ -135,6 +137,10 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
-       "campaign_reference_bibles",
-       "campaigns",
-       "clients",
-+      "coa_measurements",
-+      "coa_report_review_events",
-+      "coa_report_revisions",
-+      "coa_reports",
-       "delivery_assembly_jobs",
-       "evidence_assets",
-       "evidence_derivatives",
-diff --git a/packages/infrastructure/src/postgres/job-dispatch-contract.integration.test.ts b/packages/infrastructure/src/postgres/job-dispatch-contract.integration.test.ts
-index 9ff1a12..eb45fc7 100644
---- a/packages/infrastructure/src/postgres/job-dispatch-contract.integration.test.ts
-+++ b/packages/infrastructure/src/postgres/job-dispatch-contract.integration.test.ts
-@@ -64,7 +64,8 @@ describe("PostgreSQL job dispatch schema contract integration", () => {
-     expect(applied.some((m) => m.version === "025")).toBe(true);
-     expect(applied.some((m) => m.version === "026")).toBe(true);
-     expect(applied.some((m) => m.version === "027")).toBe(true);
--    expect(applied[applied.length - 1]?.version).toBe("027");
-+    expect(applied.some((m) => m.version === "028")).toBe(true);
-+    expect(applied[applied.length - 1]?.version).toBe("028");
- 
-     // 2. Run it again and assert []
-     const rerun = await runMigrations(client, { migrationsDirectory });
-diff --git a/packages/infrastructure/src/postgres/repositories/postgres-product-evidence-repository.ts b/packages/infrastructure/src/postgres/repositories/postgres-product-evidence-repository.ts
-index 93303c2..4197fb5 100644
---- a/packages/infrastructure/src/postgres/repositories/postgres-product-evidence-repository.ts
-+++ b/packages/infrastructure/src/postgres/repositories/postgres-product-evidence-repository.ts
-@@ -397,7 +397,11 @@ const PRODUCT_REGISTRY_TABLES = new Set<string>([
-   "batch_evidence_links",
-   "evidence_derivatives",
-   "evidence_verification_events",
--  "evidence_ingest_reservations"
-+  "evidence_ingest_reservations",
-+  "coa_reports",
-+  "coa_report_revisions",
-+  "coa_measurements",
-+  "coa_report_review_events"
- ]);
- 
- const REGISTRY_CONSTRAINTS = new Set<string>([
-@@ -540,7 +544,54 @@ const REGISTRY_CONSTRAINTS = new Set<string>([
-   "evidence_ingest_reservations_reserved_bytes_check",
-   "evidence_ingest_reservations_status_check",
-   "chk_reservation_sha256_format",
--  "chk_reservation_timestamps"
-+  "chk_reservation_timestamps",
-+  "coa_reports_pkey",
-+  "uq_coa_reports_client_report",
-+  "uq_coa_reports_client_batch_evidence",
-+  "uq_coa_reports_head_identity",
-+  "fk_coa_reports_batch",
-+  "fk_coa_reports_evidence",
-+  "fk_coa_reports_current_rev",
-+  "chk_coa_reports_created_at",
-+  "chk_coa_reports_archived_at",
-+  "coa_report_revisions_pkey",
-+  "uq_coa_report_revisions_lineage",
-+  "fk_coa_report_revisions_head",
-+  "fk_coa_report_revisions_head_identity",
-+  "fk_coa_report_batch_evidence",
-+  "fk_coa_report_verified_lab",
-+  "fk_coa_report_predecessor",
-+  "chk_coa_report_rev_monotonic",
-+  "uq_coa_report_rev_predecessor",
-+  "chk_coa_report_asserted_by_nonempty",
-+  "chk_coa_report_asserted_at",
-+  "chk_coa_report_dates_range",
-+  "chk_coa_report_sample_date_le_report_date",
-+  "chk_coa_report_dates_le_asserted_at",
-+  "chk_coa_report_complete_requirements",
-+  "trg_check_coa_report_complete_measurements",
-+  "coa_measurements_pkey",
-+  "uq_coa_measurements_full",
-+  "uq_coa_measurements_lineage",
-+  "uq_coa_measurements_analyte_context",
-+  "fk_coa_measurements_report",
-+  "chk_coa_measurement_strings_nonempty",
-+  "chk_coa_measurement_quantified",
-+  "chk_coa_measurement_below_limit",
-+  "chk_coa_measurement_not_detected",
-+  "chk_coa_measurement_metadata",
-+  "chk_coa_measurement_percent_bounds",
-+  "chk_coa_measurement_fraction_bounds",
-+  "chk_coa_measurement_unit_contradictions",
-+  "trg_enforce_coa_measurements_insert",
-+  "coa_report_review_events_pkey",
-+  "uq_coa_review_events_client_event",
-+  "uq_coa_review_events_decision_per_rev",
-+  "fk_coa_review_events_revision",
-+  "chk_coa_review_events_reason_nonempty",
-+  "chk_coa_review_events_actor_nonempty",
-+  "chk_coa_review_events_occurred_at",
-+  "trg_check_coa_report_review_event_invariants"
- ]);
- 
- export function translateDatabaseError(
-@@ -640,6 +691,42 @@ export function translateDatabaseError(
-             `Duplicate evidence ingest reservation conflict: ${dbErr.message}`
-           );
-         }
-+        if (dbErr.constraint === "uq_coa_reports_client_batch_evidence") {
-+          throw new ConcurrencyConflictError(
-+            "A CoA report already exists for this client, batch, and evidence asset."
-+          );
-+        }
-+        if (
-+          dbErr.constraint === "uq_coa_reports_client_report" ||
-+          dbErr.constraint === "coa_reports_pkey"
-+        ) {
-+          throw new ConcurrencyConflictError(`Duplicate CoA report conflict: ${dbErr.message}`);
-+        }
-+        if (
-+          dbErr.constraint === "uq_coa_report_rev_predecessor" ||
-+          dbErr.constraint === "coa_report_revisions_pkey"
-+        ) {
-+          throw new NonMonotonicRevisionError(
-+            "CoA report revision conflict: duplicate or forked revision"
-+          );
-+        }
-+        if (dbErr.constraint === "uq_coa_measurements_analyte_context") {
-+          throw new ProductValidationError([
-+            {
-+              code: "INVALID_FIELD_COMBINATION",
-+              path: ["measurements"],
-+              message: "Duplicate analyte + basis + context in report revision"
-+            }
-+          ]);
-+        }
-+        if (
-+          dbErr.constraint === "uq_coa_review_events_decision_per_rev" ||
-+          dbErr.constraint === "coa_report_review_events_pkey"
-+        ) {
-+          throw new ConcurrencyConflictError(
-+            "A review decision already exists for this report revision."
-+          );
-+        }
-         if (
-           (dbErr.constraint && REGISTRY_CONSTRAINTS.has(dbErr.constraint)) ||
-           (dbErr.table && PRODUCT_REGISTRY_TABLES.has(dbErr.table))
-@@ -754,6 +841,50 @@ export function translateDatabaseError(
-             "Referenced withdrawal event does not exist"
-           );
-         }
-+        if (dbErr.constraint === "fk_coa_reports_current_rev") {
-+          throw new StaleRevisionConflictError("CoaReport", 0, 0);
-+        }
-+        if (dbErr.constraint === "fk_coa_reports_batch") {
-+          throw new NotFoundError("ProductBatch", context?.batchId ?? "unknown");
-+        }
-+        if (dbErr.constraint === "fk_coa_reports_evidence") {
-+          throw new NotFoundError("EvidenceAsset", "Referenced evidence asset does not exist");
-+        }
-+        if (dbErr.constraint === "fk_coa_report_batch_evidence") {
-+          throw new NotFoundError(
-+            "BatchEvidenceLink",
-+            "Referenced evidence revision is not linked to this batch"
-+          );
-+        }
-+        if (dbErr.constraint === "fk_coa_report_verified_lab") {
-+          throw new NotFoundError(
-+            "EvidenceVerificationEvent",
-+            "Referenced verified lab identity event does not exist"
-+          );
-+        }
-+        if (dbErr.constraint === "fk_coa_report_revisions_head") {
-+          throw new NotFoundError("CoaReport", "Referenced CoA report head does not exist");
-+        }
-+        if (dbErr.constraint === "fk_coa_report_revisions_head_identity") {
-+          throw new CrossBatchSourceError(
-+            "CoA report revision batch or evidence does not match report head"
-+          );
-+        }
-+        if (dbErr.constraint === "fk_coa_measurements_report") {
-+          throw new NotFoundError(
-+            "CoaReportRevision",
-+            "Referenced CoA report revision does not exist"
-+          );
-+        }
-+        if (dbErr.constraint === "fk_coa_report_predecessor") {
-+          throw new NonMonotonicRevisionError("Predecessor CoA report revision does not exist");
-+        }
-+        if (dbErr.constraint === "fk_coa_review_events_revision") {
-+          throw new NotFoundError(
-+            "CoaReportRevision",
-+            "Referenced CoA report revision does not exist"
-+          );
-+        }
-         if (
-           (dbErr.constraint && REGISTRY_CONSTRAINTS.has(dbErr.constraint)) ||
-           (dbErr.table && PRODUCT_REGISTRY_TABLES.has(dbErr.table))
-@@ -789,7 +920,9 @@ export function translateDatabaseError(
-           dbErr.message.includes("updated_at must be nondecreasing") ||
-           dbErr.message.includes("Permanent evidence asset identity") ||
-           dbErr.message.includes("Permanent source object binary columns") ||
-+          dbErr.message.includes("Permanent CoA report identity") ||
-           dbErr.message.includes("Archived evidence asset") ||
-+          dbErr.message.includes("Archived CoA report") ||
-           dbErr.message.includes("Archived source objects") ||
-           dbErr.message.includes("Deleted source objects") ||
-           dbErr.message.includes("Quarantined, archived, or deleted") ||
-@@ -823,9 +956,45 @@ export function translateDatabaseError(
-         // Check constraints - strictly allowlisted registry checks only
-         if (
-           dbErr.constraint === "chk_evidence_rev_monotonic" ||
--          dbErr.constraint === "chk_evidence_revision_supersedes_not_self"
-+          dbErr.constraint === "chk_evidence_revision_supersedes_not_self" ||
-+          dbErr.constraint === "chk_coa_report_rev_monotonic"
-+        ) {
-+          throw new NonMonotonicRevisionError("Revision must be contiguous and monotonic");
-+        }
-+        if (
-+          dbErr.constraint === "trg_check_coa_report_complete_measurements" ||
-+          dbErr.message.includes("must contain at least one measurement")
-+        ) {
-+          throw new ProductValidationError([
-+            {
-+              code: "INVALID_FIELD_COMBINATION",
-+              path: ["measurements"],
-+              message: "Complete CoA report revisions must contain at least one measurement."
-+            }
-+          ]);
-+        }
-+        if (
-+          dbErr.constraint === "trg_enforce_coa_measurements_insert" ||
-+          dbErr.message.includes("Cannot insert measurements into")
-         ) {
--          throw new NonMonotonicRevisionError("Evidence revision must be contiguous and monotonic");
-+          throw new AccessDeniedError(dbErr.message);
-+        }
-+        if (
-+          dbErr.constraint === "trg_check_coa_report_review_event_invariants" ||
-+          dbErr.message.includes("Cannot approve a draft") ||
-+          dbErr.message.includes("Assessed scope cannot be attributed_lot") ||
-+          dbErr.message.includes("Self-approval forbidden")
-+        ) {
-+          if (dbErr.message.includes("Self-approval forbidden")) {
-+            throw new AccessDeniedError(dbErr.message);
-+          }
-+          throw new ProductValidationError([
-+            {
-+              code: "INVALID_FIELD_COMBINATION",
-+              path: ["decision"],
-+              message: dbErr.message
-+            }
-+          ]);
-         }
-         if (dbErr.constraint === "chk_batch_facts_monotonic_rev") {
-           throw new NonMonotonicRevisionError(
-@@ -972,6 +1141,7 @@ export function translateDatabaseError(
-           dbErr.constraint?.startsWith("chk_derivative_") ||
-           dbErr.constraint?.startsWith("chk_verification_events_") ||
-           dbErr.constraint?.startsWith("chk_reservation_") ||
-+          dbErr.constraint?.startsWith("chk_coa_") ||
-           dbErr.constraint === "chk_sha256_format" ||
-           (dbErr.table && PRODUCT_REGISTRY_TABLES.has(dbErr.table))
-         ) {
-diff --git a/packages/infrastructure/src/postgres/uow/postgres-unit-of-work.ts b/packages/infrastructure/src/postgres/uow/postgres-unit-of-work.ts
-index 69811a4..7505d84 100644
---- a/packages/infrastructure/src/postgres/uow/postgres-unit-of-work.ts
-+++ b/packages/infrastructure/src/postgres/uow/postgres-unit-of-work.ts
-@@ -19,6 +19,7 @@ import {
-   translateDatabaseError
- } from "../repositories/postgres-product-evidence-repository.js";
- import { PostgresEvidenceAssetRepository } from "../../evidence/postgres-evidence-asset-repository.js";
-+import { PostgresCoaReportRepository } from "../repositories/postgres-coa-report-repository.js";
- 
- export class PostgresUnitOfWork implements UnitOfWork {
-   constructor(private readonly pool: Pool) {}
-@@ -49,6 +50,9 @@ export class PostgresUnitOfWork implements UnitOfWork {
+   console.log(
+     JSON.stringify({
+diff --git a/e2e/harness/web-server.ts b/e2e/harness/web-server.ts
+index 4a8340e..8d4e5b1 100644
+--- a/e2e/harness/web-server.ts
++++ b/e2e/harness/web-server.ts
+@@ -86,7 +86,9 @@ export async function startTestWebServer(options: {
+         CONTROL_API_URL: options.controlApiBaseUrl,
+         CONTROL_API_CLIENT_SESSION_SECRET: TEST_CLIENT_SESSION_SECRET,
+         REVIEW_HUB_DIRECTOR_CLIENT_MAPPINGS: JSON.stringify({
+-          "integration test director": ["*"]
++          "integration test director": ["*"],
++          "author@test.internal": ["*"],
++          "reviewer@test.internal": ["*"]
          }),
-         evidenceAsset: new PostgresEvidenceAssetRepository(client, {
-           externalTransaction: true
-+        }),
-+        coaReports: new PostgresCoaReportRepository(client, {
-+          externalTransaction: true
-         })
-       };
- 
-diff --git a/packages/shared/src/index.ts b/packages/shared/src/index.ts
-index 838c93b..a8f65cf 100644
---- a/packages/shared/src/index.ts
-+++ b/packages/shared/src/index.ts
-@@ -33,3 +33,4 @@ export * from "./error-redaction.js";
- export * from "./json-canonicalization.js";
- export * from "./client-session-token.js";
- export * from "./product-identity.js";
-+export * from "./coa-measurement.js";
+         NODE_ENV: "production"
+       }
 ```
 
 Fix diff since previous review:
 
 ```diff
+diff --git a/apps/web/src/app/page.tsx b/apps/web/src/app/page.tsx
+index 24f7e0f..22c1af9 100644
+--- a/apps/web/src/app/page.tsx
++++ b/apps/web/src/app/page.tsx
+@@ -30,10 +30,18 @@ export default async function HomePage() {
+           </div>
+         )}
+       </div>
+-      <div style={{ marginTop: "1.5rem" }}>
++      <div style={{ marginTop: "1.5rem", display: "flex", gap: "1rem" }}>
+         <Link href="/campaigns/new" className="stage-draft-button" data-testid="new-campaign-link">
+           + New Campaign
+         </Link>
++        <Link
++          href="/products"
++          className="stage-draft-button"
++          data-testid="products-workspace-link"
++          style={{ backgroundColor: "var(--bg-surface-elevated)" }}
++        >
++          Products &amp; Batches
++        </Link>
+       </div>
+     </section>
+   );
 diff --git a/docs/CONTEXT.md b/docs/CONTEXT.md
-index e567377..33187a6 100644
+index d7fb062..08af74a 100644
 --- a/docs/CONTEXT.md
 +++ b/docs/CONTEXT.md
-@@ -40,8 +40,10 @@
- - **BatchEvidenceLink:** Explicit relational link binding an exact `(evidenceId, evidenceRevision)` to a specific `batchId` with declared purpose. No implicit inheritance from parent SKUs or sibling batches.
- - **EvidenceDerivative:** Relational bridge connecting an `EvidenceRevision` to a visual conditioning `ReferenceAsset` (`packages/domain/src/reference-asset.ts`) with independent SHA-256 digest and transform description.
- - **EvidenceVerificationEvent:** Append-only audit record capturing human review, submitter attestation, or independent third-party corroboration of evidence facts.
--- **CoaReport & CoaReportRevision:** Structured laboratory Certificate of Analysis test report under optimistic version fencing (`version`) and immutable revision records linked to a batch evidence asset, with claimed vs. verified lab identity, sample vs. attributed lot scope, and report date.
--- **CoaMeasurement:** Typed analytical measurement row linked to a specific `CoaReportRevision`, with analyte name, typed decimal result (`quantified`, `below_limit`, `not_detected`), non-empty unit, analytical basis, context, and reported test method. Neither `below_limit` nor `not_detected` may ever be converted into numerical zero ("0", "0.0%"), "Zero", or an exact numerical marketing value.
-+- **CoaReport & CoaReportRevision:** Structured laboratory Certificate of Analysis test report under optimistic version fencing (`version`) and immutable revision records linked to a batch evidence asset, with claimed vs. verified lab identity, sample vs. attributed lot scope, report date, explicit completeness status (`draft` or `complete`), and verified sample-to-batch association confirmation and attestation.
-+- **CoaMeasurement:** Typed analytical measurement row linked to a specific `CoaReportRevision`, with analyte name, typed decimal result (`quantified`, `below_limit`, `not_detected`), non-empty unit, analytical basis, context, quantity kind, and optional reported test method (`methodAsReported`, nullable when absent from source). Neither `below_limit` nor `not_detected` may ever be converted into numerical zero ("0", "0.0%"), "Zero", or an exact numerical marketing value. Stored and transported as exact string decimal representations (`DecimalString`) preserving trailing zeros with zero IEEE-754 floating-point coercion. Measurement panels are sealed upon revision commit.
-+- **CoaReportReviewEvent & Review Status:** Append-only audit record capturing independent compliance review (`approved` or `rejected`) with assessed scope (`sample_only` or `attributed_lot`). Derived status is `pending` until formally reviewed. Self-approval is strictly forbidden: the recorder (`assertedBy`) cannot approve their own report revision.
-+- **CoaMeasurementSupportResolution:** Fail-closed evaluation determining whether pinned batch measurements are valid, approved, un-disputed, un-superseded, and active. Fails closed with explicit reason codes if the parent report is unreviewed, draft, disputed, quarantined, or mismatched in unit/context.
+@@ -259,7 +259,7 @@ Implementation of the contracts specified in ADR 0009 is partitioned across seve
+ | **P1.5** | Evidence & CoA | Evidence revision use cases, CoA report revisions, typed measurement ingestion, dispute event ledger | Integration tests: sample vs. lot scope, typed measurement qualifiers, supersession event emission. |
+ | **P1.6** | Claim Policy & Invalidation | Claim authoring, evidence linking, human review use cases, atomic cascade invalidation transaction | Concurrency tests: atomic supersession with cascade invalidation, approve vs. supersede serialization. |
+ | **P1.7** | Application API & Read Plane | Client-scoped HTTP endpoints, command receipt idempotency, read models for batch/claim detail | API integration tests: UUIDv7 `actionId` idempotency replay, 409 conflict responses, secure multi-tenancy. |
+-| **P1.8** | Consumer & Review Integration | Review Hub presentation, template batch pinning resolver, final delivery reel claim verification | End-to-end integration tests: pinned batch resolution to `SceneReferenceBinding`s, fail-closed assembly admission. |
++| **P1.8** | Operator Workspace & Evidence Gate | Review Hub verified-batch operator workspace (`/products`, `/clients/:clientId/products`, dossier inspection), manual accuracy runbook, and Phase 1 evidence gate | Web component/forwarder unit tests, architectural boundary verification, and E2E synthetic batch acceptance. (Note: Campaign template batch pinning resolver, final delivery reel claim verification, and assembly admission gates belong to subsequent consumer integration phases). |
  
- - **ProductClaimRevision:** Commercial product statement for a batch declaring claim type, exact copy wording, proof category (`coa_measurement_backed`, `production_record_backed`, `visual_evidence_backed`, `human_attested_unverified`), and optional paired numerical value and unit.
- - **ClaimHead:** Version-fenced mutable pointer for a product claim tracking current revision and lifecycle state (`draft`, `evidence_linked`, `reviewer_approved`, `rejected`, `invalidated`).
-diff --git a/docs/adr/0009-verified-product-batch-evidence-claim-authority.md b/docs/adr/0009-verified-product-batch-evidence-claim-authority.md
-index df38f4d..4c5cb01 100644
---- a/docs/adr/0009-verified-product-batch-evidence-claim-authority.md
-+++ b/docs/adr/0009-verified-product-batch-evidence-claim-authority.md
-@@ -182,13 +182,24 @@ erDiagram
-   - `labNameAsClaimed`: Name of the laboratory reported on the document.
-   - `verifiedLabIdentityEventId`: Optional foreign key to an `EvidenceVerificationEvent` corroborating accredited laboratory identity and accreditation license. The referenced verification event must belong to the same client, evidence asset, and evidence revision (`outcome = 'verified'`, `fact_scope = 'lab_identity'`, `verification_kind = 'independent_third_party_corroboration'`).
- - **Strict Decimal Representations (`CoaMeasurement`):**
--  - All numerical measurements are stored as **exact decimal strings** conforming to `^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`. Floating-point numbers (`NUMERIC` in SQL, `string` in TypeScript; never IEEE 754 `number`) are mandatory to eliminate rounding and scale loss.
-+  - All numerical measurements are stored as **exact decimal strings** conforming to `^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`. Exact decimal representations (`TEXT` in SQL, `string` in TypeScript; never IEEE 754 `number`) are mandatory to eliminate rounding and scale loss.
-   - **Typed Result Union:**
-     - `quantified`: Exact measured value (`value: DecimalString`).
-     - `below_limit`: Below limit of quantification (`limit: DecimalString`, `qualifier: "lt" | "lte"`).
-     - `not_detected`: Analyte was not detected by the analytical instrument.
-   - **Mandatory Units & Context:** Every measurement row requires non-empty strings for `analyte` (e.g., `thc_total`, `myrcene`), `unit` (e.g., `percent_w_w`, `mg_per_g`, `ppm`), `basis` (e.g., `dry_weight`, `as_received`), and `context` (e.g., `finished_inflorescence`, `extract`). Ambiguous or unitless measurements fail closed.
-+  - **Exact Decimal String Storage (`TEXT`):** All analytical numbers (measurements, limits, uncertainties) are stored as verbatim decimal strings conforming to `^-?(0|[1-9][0-9]*)(\.[0-9]+)?$` with zero IEEE-754 floating-point coercion, preserving trailing precision zeros.
-+  - **Reported Methods & Analytical Qualifiers:** `methodAsReported` is optional and nullable (transcribed verbatim when reported; left null rather than fabricating a placeholder). Analytical qualifiers (e.g. `negative_as_reported`) require non-blank analytical explanations and remain unsupported for positive numerical claims until explicitly governed.
-+  - **Measurement Panel Sealing:** The measurement set is sealed upon revision commit; additions to an approved or committed revision require creating a new revision.
-   - **Lineage Integrity:** Measurements inherit and mechanically enforce the exact `(batch_id, evidence_id, evidence_revision)` of their parent `CoaReportRevision`.
-+- **Completeness & Draft States (`completenessStatus`):**
-+  - `draft`: Incomplete metadata or preliminary staging; cannot be approved or satisfy measurement support resolution for downstream claims.
-+  - `complete`: All claimed report identifiers, report date, lab name, sample-to-batch association confirmation, and at least one valid measurement row are provided.
-+- **Independent Compliance Review & Non-Self-Approval (`CoaReportReviewEvent`):**
-+  - Transcription and compliance review are strictly separated authorities. A compliance reviewer cannot approve their own recorded report revision (`assertedBy`).
-+  - Assessed scope cannot exceed report scope (`sample_only` reports cannot be approved as `attributed_lot`).
-+- **Fail-Closed Pinned Measurement Support Resolution:**
-+  - Downstream callers specify explicit report revision and measurement IDs (`resolveMeasurementSupport`). Support fails closed if the report is unreviewed, draft, disputed, quarantined, superseded, archived, or mismatched in requested unit, basis, or context. Pinned callers are never silently redirected to a "latest" report.
+ ### 6. Architectural References
  
- #### 2.8 ProductClaimRevision and ClaimSourceLink
- - **Claim Types:**
-@@ -623,7 +634,7 @@ export interface CoaMeasurement {
-   readonly unit: string;
-   readonly basis: string;
-   readonly context: string;
--  readonly methodAsReported: string;
-+  readonly methodAsReported: string | null;
- }
+@@ -267,4 +267,21 @@ Implementation of the contracts specified in ADR 0009 is partitioned across seve
+ - Acceptance Fixtures & Counterexamples: [docs/verified-product-evidence-contract-fixtures.md](verified-product-evidence-contract-fixtures.md)
+ - ShotPlan & Visual Reference Authority: [ADR 0007](adr/0007-shotplan-previs-h3-routing-architecture.md)
+ - Production Review Acceptance Gate: [ADR 0005](adr/0005-production-review-acceptance-gate.md)
++- Phase 1 Workspace Acceptance Matrix: [docs/verified-batch-workspace-acceptance.md](verified-batch-workspace-acceptance.md)
++- Phase 1 Operator Manual Review Runbook: [docs/verified-batch-operator-runbook.md](verified-batch-operator-runbook.md)
++
++### 7. Phase 1 Verified-Batch Operator Workspace (#477 / P1.8)
++
++Issue #477 adds the client-scoped Product/Batches operator workspace to Review Hub, concluding the Phase 1 evidence foundation:
++- **Routing & Workspace**: `/products` (authorized director client chooser), `/clients/:clientId/products` (SKU & Lot workspace), and `/clients/:clientId/products/:skuId/batches/:batchId` (Batch Evidence Dossier).
++- **Deep-Link SKU Verification**: Guard against URL tampering prevents displaying foreign lot data when the route's `skuId` does not match the batch's SKU.
++- **Cryptographic & Safe Inspection**: Displays original SHA-256 digests, byte sizes, MIME types, capture precision, and retention tiers without leaking internal MinIO/S3 bucket keys or storage paths.
++- **Lossless Decimal Notation**: CoA measurement panels and claims preserve exact decimal strings (e.g. `24.5000`) without floating-point coercion or rounding.
++- **Auditable Provenance Dimensions**: Visibly distinguishes `Reported`, `Operator-Attested`, `Operator-Reviewed`, `Independently Sourced`, `Unknown`, and `Blocked` states across batch facts, evidence assets, CoA reports, and product claims.
++- **Separation of Duties**: Enforces the non-self-approval invariant: the operator who records a CoA transcription or proposes a claim cannot approve it.
++- **Acceptance & Operator Runbook**: Automated matrix in [docs/verified-batch-workspace-acceptance.md](verified-batch-workspace-acceptance.md) and manual physical document comparison runbook in [docs/verified-batch-operator-runbook.md](verified-batch-operator-runbook.md).
++
++> [!NOTE]
++> Campaign template batch pinning (`PinnedProductBatchResolution` -> `SceneReferenceBinding`s), downstream delivery reel claim verification, and generative assembly admission remain assigned to subsequent consumer integration phases (outside #477).
++
  
- export interface ProductClaim {
-@@ -1042,15 +1053,19 @@ CREATE TABLE coa_report_revisions (
-   batch_id UUID NOT NULL,
-   evidence_id UUID NOT NULL,
-   evidence_revision INT NOT NULL,
--  report_identifier_as_claimed VARCHAR(128) NOT NULL,
--  report_date DATE NOT NULL,
--  lab_name_as_claimed VARCHAR(255) NOT NULL,
--  sample_identifier_as_claimed VARCHAR(128) NOT NULL,
--  scope_kind VARCHAR(32) NOT NULL
--    CHECK (scope_kind IN ('sample_only', 'attributed_lot')),
--  scope_description TEXT NOT NULL,
-+  completeness_status VARCHAR(16) NOT NULL DEFAULT 'draft'
-+    CHECK (completeness_status IN ('draft', 'complete')),
-+  report_identifier_as_claimed VARCHAR(128),
-+  report_date DATE,
-+  lab_name_as_claimed VARCHAR(255),
-+  sample_identifier_as_claimed VARCHAR(128),
-+  scope_kind VARCHAR(32)
-+    CHECK (scope_kind IS NULL OR scope_kind IN ('sample_only', 'attributed_lot')),
-+  scope_description TEXT,
-   sample_date DATE,
-   sampling_method_description TEXT,
-+  sample_to_batch_association_attestation TEXT,
-+  sample_to_batch_association_confirmed BOOLEAN,
-   verified_lab_identity_event_id UUID,
-   asserted_by VARCHAR(128) NOT NULL,
-   asserted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-@@ -1067,7 +1082,7 @@ CREATE TABLE coa_report_revisions (
-     REFERENCES coa_report_revisions(client_id, report_id, revision) ON DELETE RESTRICT,
-   CONSTRAINT chk_coa_report_rev_monotonic CHECK (
-     (revision = 1 AND supersedes_revision IS NULL) OR
--    (revision > 1 AND supersedes_revision IS NOT NULL AND supersedes_revision < revision)
-+    (revision > 1 AND supersedes_revision IS NOT NULL AND supersedes_revision = revision - 1)
-   ),
-   CONSTRAINT uq_coa_report_rev_predecessor UNIQUE (client_id, report_id, supersedes_revision)
- );
-@@ -1096,7 +1111,11 @@ CREATE TABLE coa_measurements (
-   unit VARCHAR(64) NOT NULL,
-   basis VARCHAR(64) NOT NULL,
-   context VARCHAR(64) NOT NULL,
--  method_as_reported VARCHAR(128) NOT NULL,
-+  quantity_kind VARCHAR(64) NOT NULL,
-+  method_as_reported VARCHAR(128),
-+  uncertainty_absolute TEXT,
-+  detection_limit TEXT,
-+  quantification_limit TEXT,
-   CONSTRAINT uq_coa_measurements_full UNIQUE (client_id, report_id, report_revision, measurement_id),
-   CONSTRAINT uq_coa_measurements_lineage UNIQUE (client_id, report_id, report_revision, measurement_id, batch_id, evidence_id, evidence_revision),
-   CONSTRAINT fk_coa_measurements_report FOREIGN KEY (client_id, report_id, report_revision, batch_id, evidence_id, evidence_revision)
-@@ -1118,6 +1137,27 @@ CREATE TABLE coa_measurements (
- CREATE INDEX idx_coa_measurements_analyte
-   ON coa_measurements(client_id, report_id, report_revision, analyte);
+diff --git a/e2e/harness/control-api.ts b/e2e/harness/control-api.ts
+index fee126a..11c3ef1 100644
+--- a/e2e/harness/control-api.ts
++++ b/e2e/harness/control-api.ts
+@@ -1,11 +1,20 @@
+ import type { Pool } from "pg";
+-import type { ObjectStoragePort, ReviewMediaDeliveryPort } from "@cco/application";
++import { AccessDeniedError } from "@cco/domain";
++import {
++  type ObjectStoragePort,
++  type ReviewMediaDeliveryPort,
++  type ReviewerAuthorizationPort,
++  DEFAULT_DEV_EVIDENCE_STORAGE_POLICY
++} from "@cco/application";
+ import {
+   PostgresCampaignDeliveryReelQueries,
+   PostgresCurrentProductionAttemptQueries,
+   PostgresSceneReviewQueries,
+   PostgresUnitOfWork,
+-  PostgresReferenceAssetRepository
++  PostgresReferenceAssetRepository,
++  PostgresBatchEvidenceDossierQueries,
++  PostgresEvidenceLockCoordinator,
++  OriginalsInspectionAdapter
+ } from "@cco/infrastructure";
+ import { createControlApiApp, createProductionClientSessionAuthenticator } from "control-api";
+ import type { ScenarioPlanningModelClient } from "./scenario-planning-client.js";
+@@ -48,9 +57,11 @@ export const testObjectStorage: ObjectStoragePort = {
+   }
+ };
  
-+CREATE TABLE coa_report_review_events (
-+  event_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-+  client_id UUID NOT NULL,
-+  report_id UUID NOT NULL,
-+  report_revision INT NOT NULL CHECK (report_revision > 0),
-+  decision VARCHAR(16) NOT NULL
-+    CHECK (decision IN ('approved', 'rejected')),
-+  actor_id VARCHAR(128) NOT NULL,
-+  occurred_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-+  reason TEXT NOT NULL,
-+  assessed_scope VARCHAR(32) NOT NULL
-+    CHECK (assessed_scope IN ('sample_only', 'attributed_lot')),
-+  CONSTRAINT uq_coa_review_events_client_event UNIQUE (client_id, event_id),
-+  CONSTRAINT uq_coa_review_events_decision_per_rev UNIQUE (client_id, report_id, report_revision),
-+  CONSTRAINT fk_coa_review_events_revision FOREIGN KEY (client_id, report_id, report_revision)
-+    REFERENCES coa_report_revisions(client_id, report_id, revision) ON DELETE RESTRICT
-+);
++let activeControlApiBaseUrl = "http://127.0.0.1:8000";
 +
-+CREATE INDEX idx_coa_review_events_revision
-+  ON coa_report_review_events(client_id, report_id, report_revision);
-+
- -- ---------------------------------------------------------------------------
- -- 9. PRODUCT CLAIMS, REVISIONS & SOURCE LINKS
- -- ---------------------------------------------------------------------------
-@@ -1506,47 +1546,65 @@ export interface IngestCoaMeasurementInput {
-   readonly unit: string;
-   readonly basis: string;
-   readonly context: string;
--  readonly methodAsReported: string;
-+  readonly quantityKind: string;
-+  readonly methodAsReported: string | null;
-+  readonly uncertaintyAbsolute?: DecimalString | null;
-+  readonly detectionLimit?: DecimalString | null;
-+  readonly quantificationLimit?: DecimalString | null;
-+  readonly analyticalQualifierCode?: string | null;
-+  readonly analyticalQualifierExplanation?: string | null;
- }
+ const mockMediaDelivery: ReviewMediaDeliveryPort = {
+   generatePresignedReadUrl: async (locator) =>
+-    `http://mock-storage/${locator.bucket}/${locator.key}`
++    `${activeControlApiBaseUrl}/test-media/${locator.bucket}/${locator.key}`
+ };
  
- export interface CreateCoaReportCommand {
-+  readonly reportId?: CoaReportId;
-   readonly batchId: BatchId;
-   readonly evidenceId: EvidenceId;
-   readonly evidenceRevision: number;
--  readonly reportIdentifierAsClaimed: string;
--  readonly reportDate: DateOnlyString;
--  readonly labNameAsClaimed: string;
--  readonly sampleIdentifierAsClaimed: string;
--  readonly scopeKind: CoaScopeKind;
--  readonly scopeDescription: string;
--  readonly sampleDate: DateOnlyString | null;
--  readonly samplingMethodDescription: string | null;
--  readonly verifiedLabIdentityEventId: VerificationEventId | null;
-+  readonly completenessStatus: "draft" | "complete";
-+  readonly reportIdentifierAsClaimed?: string | null;
-+  readonly reportDate?: DateOnlyString | null;
-+  readonly labNameAsClaimed?: string | null;
-+  readonly sampleIdentifierAsClaimed?: string | null;
-+  readonly scopeKind?: CoaScopeKind | null;
-+  readonly scopeDescription?: string | null;
-+  readonly sampleDate?: DateOnlyString | null;
-+  readonly samplingMethodDescription?: string | null;
-+  readonly sampleToBatchAssociationConfirmed?: boolean | null;
-+  readonly sampleToBatchAssociationAttestation?: string | null;
-+  readonly verifiedLabIdentityEventId?: VerificationEventId | null;
-   readonly measurements: readonly IngestCoaMeasurementInput[];
- }
- 
- export interface SupersedeCoaReportCommand {
-   readonly reportId: CoaReportId;
-   readonly expectedVersion: number;
--  readonly batchId: BatchId;
--  readonly evidenceId: EvidenceId;
-   readonly evidenceRevision: number;
--  readonly reportIdentifierAsClaimed: string;
--  readonly reportDate: DateOnlyString;
--  readonly labNameAsClaimed: string;
--  readonly sampleIdentifierAsClaimed: string;
--  readonly scopeKind: CoaScopeKind;
--  readonly scopeDescription: string;
--  readonly sampleDate: DateOnlyString | null;
--  readonly samplingMethodDescription: string | null;
--  readonly verifiedLabIdentityEventId: VerificationEventId | null;
-+  readonly completenessStatus: "draft" | "complete";
-+  readonly reportIdentifierAsClaimed?: string | null;
-+  readonly reportDate?: DateOnlyString | null;
-+  readonly labNameAsClaimed?: string | null;
-+  readonly sampleIdentifierAsClaimed?: string | null;
-+  readonly scopeKind?: CoaScopeKind | null;
-+  readonly scopeDescription?: string | null;
-+  readonly sampleDate?: DateOnlyString | null;
-+  readonly samplingMethodDescription?: string | null;
-+  readonly sampleToBatchAssociationConfirmed?: boolean | null;
-+  readonly sampleToBatchAssociationAttestation?: string | null;
-+  readonly verifiedLabIdentityEventId?: VerificationEventId | null;
-   readonly measurements: readonly IngestCoaMeasurementInput[];
- }
- 
--export interface DisputeCoaReportCommand {
-+export interface ReviewCoaReportCommand {
-   readonly reportId: CoaReportId;
-   readonly expectedVersion: number;
-+  readonly decision: "approved" | "rejected";
-   readonly reason: string;
-+  readonly assessedScope: CoaScopeKind;
-+}
-+
-+export interface ArchiveCoaReportCommand {
-+  readonly reportId: CoaReportId;
-+  readonly expectedVersion: number;
- }
- 
- export type CreateClaimCommand =
-diff --git a/docs/verified-product-evidence-contract-fixtures.md b/docs/verified-product-evidence-contract-fixtures.md
-index 8c696d2..cd56a56 100644
---- a/docs/verified-product-evidence-contract-fixtures.md
-+++ b/docs/verified-product-evidence-contract-fixtures.md
-@@ -900,3 +900,8 @@ The following matrix documents the complete set of negative invariants, integrit
- | **CE-13A**| **Concurrent Approve vs. Supersede (Supersede Commits First)** | Reviewer attempts to approve claim Rev 1 while Submitter concurrently supersedes CoA Rev 1. | Supersede transaction commits first (advancing CoA head to Rev 2 and invalidating claim Rev 1). Approve transaction acquires locks and executes pre-commit dependency check. | Approve transaction detects underlying CoA report revision is no longer current and claim state is `invalidated`. Aborts immediately with HTTP 409 `SOURCE_SUPERSEDED`. Zero orphaned approvals. |
- | **CE-13B**| **Concurrent Approve vs. Supersede (Approve Commits First)** | Reviewer attempts to approve claim Rev 1 while Submitter concurrently supersedes CoA Rev 1. | Approve transaction commits first (transitioning claim Rev 1 to `reviewer_approved`). Supersede transaction acquires locks, appends Rev 2, queries dependent claims, finds approved claim Rev 1. | Supersede transaction appends invalidation `ClaimDecisionEvent` and updates claim head to `invalidated`. In both commit orders, committed state is deterministic and no superseded claim remains approved. |
- | **CE-14** | **Attributed Process Claim Without CoA** | Batch facts record living soil cultivation supported by cultivation log `process_record`. | Submitter creates `cultivation_process` claim ("Cultivated in Living Organic Soil") linked to log. | Permitted by policy matrix (`proofCategory = "production_record_backed"`). Human reviewer approves based on process logs without requiring a laboratory CoA. |
-+| **CE-15** | **Self-Approval Forbidden** | Submitter / technician `compliance-officer` recorded CoA Report Revision 1 (`assertedBy = "compliance-officer"`). | Same actor `compliance-officer` submits `reviewReportRevision(decision: 'approved')`. | Application and domain layer reject with HTTP 403 `ACCESS_DENIED` ("Self-approval forbidden: reviewer cannot be the recorder who asserted this report revision"). Transcription and review must remain distinct human actors. |
-+| **CE-16** | **Draft Report Support Denial** | Submitter staged an incomplete CoA report with `completenessStatus = 'draft'`. | Caller attempts to approve draft (`reviewReportRevision`) or resolve measurement support for a claim (`resolveMeasurementSupport`). | Both operations fail closed: `createCoaReportReviewEvent` throws `ProductValidationError` ("Cannot approve a draft CoA report"); `resolveMeasurementSupport` returns `isSupported = false, reason = 'report_draft_incomplete'`. |
-+| **CE-17** | **Exact Decimal String Roundtrip & Precision Preservation** | Submitter records analytical measurement with 4-decimal precision `result_value = "24.5000"` and `uncertainty_absolute = "0.2500"`. | System persists to `coa_measurements`, computes command receipt SHA-256, reads from database, and formats API JSON response. | Exact string `"24.5000"` is preserved byte-for-byte across SQL parameter, storage, domain entity, and JSON serialization. Zero IEEE-754 floating-point coercion, zero loss of trailing zeros, zero decimal reformatting. |
-+| **CE-18** | **Cross-Batch Measurement Isolation** | Same client owns SKU-1 with Lot A (`BATCH_LOT_A_ID`, total terpenes `2.85%`) and Lot B (`BATCH_LOT_B_ID`, total terpenes `1.40%`). | Caller invokes `resolveMeasurementSupport` providing Lot B's batch ID with Lot A's CoA report ID. | Fails closed with `isSupported = false, reason = 'report_batch_mismatch'`. Analytical measurements never bleed across batches of the same SKU. |
-+| **CE-19** | **Pinned Measurement Support Supersession Invalidation** | Downstream claim query is pinned to CoA Report Revision 1. | Submitter records superseding CoA Report Revision 2 (`supersedeCoaReport`). | `resolveMeasurementSupport` evaluates target revision against current head revision (2 > 1), returning `isSupported = false, reason = 'report_superseded'`. Pinned queries fail closed rather than silently substituting superseded analytical facts. |
-diff --git a/packages/application/src/ports/index.ts b/packages/application/src/ports/index.ts
-index 8b0e8fc..16b8f65 100644
---- a/packages/application/src/ports/index.ts
-+++ b/packages/application/src/ports/index.ts
-@@ -56,3 +56,5 @@ export * from "./originals-inspection-port.js";
- export * from "./evidence-storage-policy.js";
- export * from "./evidence-lock-coordinator.js";
- export * from "./evidence-asset-repository.js";
-+export * from "./coa-report-repository.js";
-+export * from "./reviewer-authorization-port.js";
-diff --git a/packages/application/src/ports/unit-of-work.ts b/packages/application/src/ports/unit-of-work.ts
-index 440ad3a..f0658d6 100644
---- a/packages/application/src/ports/unit-of-work.ts
-+++ b/packages/application/src/ports/unit-of-work.ts
-@@ -10,6 +10,7 @@ import type { ReferenceAssetRepository } from "./reference-asset-repository.js";
- import type { ReferenceGroupRepository } from "./reference-group-repository.js";
- import type { ProductEvidenceRepositoryPort } from "./product-evidence-repository.js";
- import type { EvidenceAssetRepositoryPort } from "./evidence-asset-repository.js";
-+import type { CoaReportRepositoryPort } from "./coa-report-repository.js";
- import type { ReviewEventStore } from "./review-event-store.js";
- import type { SceneRepository } from "./scene-repository.js";
- import type { ShotPlanRepository } from "./shot-plan-repository.js";
-@@ -31,6 +32,7 @@ export interface UnitOfWorkContext {
-   readonly campaignReferenceBible?: CampaignReferenceBibleRepository | undefined;
-   readonly productEvidence?: ProductEvidenceRepositoryPort | undefined;
-   readonly evidenceAsset?: EvidenceAssetRepositoryPort | undefined;
-+  readonly coaReports?: CoaReportRepositoryPort | undefined;
- }
- 
- export interface UnitOfWork {
-diff --git a/packages/application/src/use-cases/index.ts b/packages/application/src/use-cases/index.ts
-index 9eaba9c..66213a6 100644
---- a/packages/application/src/use-cases/index.ts
-+++ b/packages/application/src/use-cases/index.ts
-@@ -84,3 +84,9 @@ export * from "./product-registry-use-cases.js";
- export * from "./register-evidence-asset.js";
- export * from "./link-existing-derivative.js";
- export * from "./record-evidence-verification-event.js";
-+export * from "./coa-command-envelope-validator.js";
-+export * from "./create-coa-report.js";
-+export * from "./supersede-coa-report.js";
-+export * from "./review-coa-report.js";
-+export * from "./archive-coa-report.js";
-+export * from "./resolve-coa-measurement-support.js";
-diff --git a/packages/contracts/src/index.ts b/packages/contracts/src/index.ts
-index 961abce..da754b2 100644
---- a/packages/contracts/src/index.ts
-+++ b/packages/contracts/src/index.ts
-@@ -43,3 +43,4 @@ export * from "./product-evidence-command.js";
- export * from "./product-sku.js";
- export * from "./product-batch.js";
- export * from "./evidence-asset.js";
-+export * from "./coa-report.js";
-diff --git a/packages/domain/src/identifiers.ts b/packages/domain/src/identifiers.ts
-index c23b1c6..9d613fc 100644
---- a/packages/domain/src/identifiers.ts
-+++ b/packages/domain/src/identifiers.ts
-@@ -23,6 +23,9 @@ export type SourceObjectId = Brand<string, "SourceObjectId">;
- export type DerivativeId = Brand<string, "DerivativeId">;
- export type VerificationEventId = Brand<string, "VerificationEventId">;
- export type ActionId = Brand<string, "ActionId">;
-+export type CoaReportId = Brand<string, "CoaReportId">;
-+export type CoaMeasurementId = Brand<string, "CoaMeasurementId">;
-+export type CoaReviewEventId = Brand<string, "CoaReviewEventId">;
- 
- /** Lowercase 64-hex SHA-256 digest string */
- export type Sha256Hex = string & { readonly __sha256: true };
-@@ -79,6 +82,18 @@ export function createActionId(val: string): ActionId {
-   return validateAndBrandUuid(val, "ActionId", "actionId");
- }
- 
-+export function createCoaReportId(val: string): CoaReportId {
-+  return validateAndBrandUuid(val, "CoaReportId", "reportId");
-+}
-+
-+export function createCoaMeasurementId(val: string): CoaMeasurementId {
-+  return validateAndBrandUuid(val, "CoaMeasurementId", "measurementId");
-+}
-+
-+export function createCoaReviewEventId(val: string): CoaReviewEventId {
-+  return validateAndBrandUuid(val, "CoaReviewEventId", "eventId");
-+}
-+
- export function createSha256Hex(val: string): Sha256Hex {
-   if (typeof val !== "string" || !/^[0-9a-f]{64}$/.test(val)) {
-     throw new ProductValidationError(
-diff --git a/packages/domain/src/index.ts b/packages/domain/src/index.ts
-index eaa895e..217e7ad 100644
---- a/packages/domain/src/index.ts
-+++ b/packages/domain/src/index.ts
-@@ -20,3 +20,5 @@ export * from "./batch-facts.js";
- export * from "./product-batch.js";
- export * from "./source-object.js";
- export * from "./evidence-asset.js";
-+export * from "./coa-measurement.js";
-+export * from "./coa-report.js";
-diff --git a/packages/infrastructure/src/evidence/postgres-evidence-asset-repository.test.ts b/packages/infrastructure/src/evidence/postgres-evidence-asset-repository.test.ts
-index 979f378..114b16e 100644
---- a/packages/infrastructure/src/evidence/postgres-evidence-asset-repository.test.ts
-+++ b/packages/infrastructure/src/evidence/postgres-evidence-asset-repository.test.ts
-@@ -61,9 +61,64 @@ describe("PostgresEvidenceAssetRepository unit tests", () => {
-   function createMockPoolClient(
-     handler: (normSql: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>
-   ) {
-+    let lastSkuArchivedAt: Date | null | undefined;
-+    let lastBatchArchivedAt: Date | null | undefined;
-+
-     return {
-       query: vi.fn(async (sql: string, params?: unknown[]) => {
--        return await handler(normalizeSql(sql), params);
-+        const norm = normalizeSql(sql);
-+        const result = await handler(norm, params);
-+
-+        if (result.rows.length > 0) {
-+          if ("sku_archived_at" in result.rows[0]!) {
-+            lastSkuArchivedAt = result.rows[0]!.sku_archived_at as Date | null;
-+          }
-+          if ("batch_archived_at" in result.rows[0]!) {
-+            lastBatchArchivedAt = result.rows[0]!.batch_archived_at as Date | null;
-+          }
-+        }
-+
-+        const lower = norm.toLowerCase();
-+        if (lower.includes("from product_skus") && result.rows.length === 0) {
-+          const skuId = (params?.[1] as string) || "018f0000-0000-7000-8000-000000000005";
-+          return {
-+            rows: [
-+              {
-+                sku_id: skuId,
-+                archived_at: lastSkuArchivedAt ?? null
-+              }
-+            ]
-+          };
-+        }
-+
-+        if (
-+          lower.includes("from product_batches") &&
-+          lower.includes("for") &&
-+          result.rows.length === 0
-+        ) {
-+          const bId = (params?.[1] as string) || "018f0000-0000-7000-8000-000000000002";
-+          return {
-+            rows: [
-+              {
-+                batch_id: bId,
-+                archived_at: lastBatchArchivedAt ?? null,
-+                sku_id: (params?.[1] as string) || "018f0000-0000-7000-8000-000000000005"
-+              }
-+            ]
-+          };
-+        }
-+
-+        if (lower.includes("from batch_evidence_links") && result.rows.length > 0) {
-+          return {
-+            rows: result.rows.map((r) => ({
-+              batch_id: r.batch_id ?? "018f0000-0000-7000-8000-000000000002",
-+              sku_id: r.sku_id ?? "018f0000-0000-7000-8000-000000000005",
-+              ...r
-+            }))
-+          };
-+        }
-+
-+        return result;
-       }),
-       getTransactionStatus: vi.fn(() => "T"),
-       release: vi.fn()
-@@ -547,6 +602,39 @@ describe("PostgresEvidenceAssetRepository unit tests", () => {
-         if (sql.includes("product_evidence_command_receipts")) {
-           return { rows: [] };
-         }
-+        if (sql.includes("evidence_revisions")) {
-+          return {
-+            rows: [
-+              {
-+                client_id: clientId,
-+                evidence_id: evidenceId,
-+                revision: 1,
-+                source_object_id: sourceObjectId
-+              }
-+            ]
-+          };
-+        }
-+        if (sql.includes("batch_evidence_links")) {
-+          return {
-+            rows: [
-+              {
-+                sku_archived_at: null,
-+                batch_archived_at: null
-+              }
-+            ]
-+          };
-+        }
-+        if (sql.includes("source_objects")) {
-+          return {
-+            rows: [
-+              {
-+                source_object_id: sourceObjectId,
-+                client_id: clientId,
-+                availability: "available"
-+              }
-+            ]
-+          };
-+        }
-         if (sql.includes("evidence_assets")) {
-           return {
-             rows: [
-diff --git a/packages/infrastructure/src/evidence/postgres-evidence-asset-repository.ts b/packages/infrastructure/src/evidence/postgres-evidence-asset-repository.ts
-index 5c2606b..a369f71 100644
---- a/packages/infrastructure/src/evidence/postgres-evidence-asset-repository.ts
-+++ b/packages/infrastructure/src/evidence/postgres-evidence-asset-repository.ts
-@@ -613,17 +613,50 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
-         };
-       }
- 
--      // 1. Lock and verify batch and SKU rows
-+      // 1. Discover batch and SKU without locking to maintain strict lock hierarchy: SKU -> Batch
-+      const batchDiscovery = await client.query<{
-+        batch_id: string;
-+        sku_id: string;
-+      }>(
-+        `SELECT batch_id, sku_id
-+         FROM product_batches
-+         WHERE client_id = $1 AND batch_id = $2`,
-+        [cmd.clientId, cmd.payload.batchId]
-+      );
-+      if (batchDiscovery.rows.length === 0) {
-+        throw new NotFoundError("ProductBatch", cmd.payload.batchId);
+ export interface TestControlApi {
+@@ -68,6 +79,28 @@ export async function startTestControlApi(options: {
+   const currentProductionAttemptQueries = new PostgresCurrentProductionAttemptQueries(options.pool);
+   const campaignDeliveryReelQueries = new PostgresCampaignDeliveryReelQueries(options.pool);
+   const referenceAssetRepository = new PostgresReferenceAssetRepository(options.pool);
++  const batchEvidenceDossierQueries = new PostgresBatchEvidenceDossierQueries(options.pool);
++  const evidenceLockCoordinator = new PostgresEvidenceLockCoordinator(options.pool);
++  const originalsInspection = new OriginalsInspectionAdapter();
++  const reviewerAuthorization: ReviewerAuthorizationPort = {
++    assertCanReviewCoaReport: async (_clientId, actorId) => {
++      if (actorId === "author@test.internal") {
++        throw new AccessDeniedError(`Actor "${actorId}" is not authorized to review CoA reports.`);
 +      }
-+      const discoveredSkuId = batchDiscovery.rows[0]!.sku_id;
-+
-+      // Lock SKU FOR UPDATE first
-+      const skuRes = await client.query<{
-+        sku_id: string;
-+        archived_at: Date | null;
-+      }>(
-+        `SELECT sku_id, archived_at
-+         FROM product_skus
-+         WHERE client_id = $1 AND sku_id = $2 FOR UPDATE`,
-+        [cmd.clientId, discoveredSkuId]
-+      );
-+      if (skuRes.rows.length === 0) {
-+        throw new NotFoundError("ProductSku", discoveredSkuId);
-+      }
-+      if (skuRes.rows[0]!.archived_at !== null) {
++    },
++    assertCanReviewClaim: async (_clientId, actorId) => {
++      if (actorId === "author@test.internal") {
 +        throw new AccessDeniedError(
-+          "Cannot link evidence to a batch under an archived SKU",
-+          "SKU_ARCHIVED"
++          `Actor "${actorId}" is not authorized to review product claims.`
 +        );
 +      }
-+
-+      // Lock Batch FOR UPDATE second
-       const batchRes = await client.query<{
-         batch_id: string;
-         archived_at: Date | null;
-         sku_id: string;
--        sku_archived_at: Date | null;
-       }>(
--        `SELECT b.batch_id, b.archived_at, s.sku_id, s.archived_at AS sku_archived_at
--         FROM product_batches b
--         JOIN product_skus s ON s.client_id = b.client_id AND s.sku_id = b.sku_id
--         WHERE b.client_id = $1 AND b.batch_id = $2 FOR UPDATE OF b, s`,
-+        `SELECT batch_id, archived_at, sku_id
-+         FROM product_batches
-+         WHERE client_id = $1 AND batch_id = $2 FOR UPDATE`,
-         [cmd.clientId, cmd.payload.batchId]
-       );
-       if (batchRes.rows.length === 0) {
-@@ -632,11 +665,75 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
-       if (batchRes.rows[0]!.archived_at !== null) {
-         throw new AccessDeniedError("Cannot link evidence to an archived batch", "BATCH_ARCHIVED");
-       }
--      if (batchRes.rows[0]!.sku_archived_at !== null) {
--        throw new AccessDeniedError(
--          "Cannot link evidence to a batch under an archived SKU",
--          "SKU_ARCHIVED"
-+      if (batchRes.rows[0]!.sku_id !== discoveredSkuId) {
-+        throw new ConcurrencyConflictError("Batch SKU association changed concurrently.");
++    },
++    assertCanVerifyEvidence: async (_clientId, actorId) => {
++      if (actorId === "author@test.internal") {
++        throw new AccessDeniedError(`Actor "${actorId}" is not authorized to verify evidence.`);
 +      }
-+
-+      // Pre-lock discovery for supersession to maintain canonical order: Source (sorted) -> Evidence
-+      let oldSourceObjectId: string | undefined;
-+      let targetAsset: EvidenceAsset | undefined;
-+      if (cmd.payload.registrationIntent === "supersede") {
-+        if (!cmd.payload.targetEvidenceId || cmd.payload.expectedEvidenceVersion === undefined) {
-+          throw new ProductValidationError([
-+            {
-+              code: "INVALID_FIELD_COMBINATION",
-+              path: ["targetEvidenceId"],
-+              message: "targetEvidenceId and expectedEvidenceVersion are required for supersede."
-+            }
-+          ]);
-+        }
-+
-+        const preLockRevRes = await client.query<{ source_object_id: string }>(
-+          `SELECT r.source_object_id
-+           FROM evidence_assets a
-+           JOIN evidence_revisions r ON r.client_id = a.client_id AND r.evidence_id = a.evidence_id AND r.revision = a.current_revision
-+           WHERE a.client_id = $1 AND a.evidence_id = $2`,
-+          [cmd.clientId, cmd.payload.targetEvidenceId]
-+        );
-+        oldSourceObjectId = preLockRevRes.rows[0]?.source_object_id;
-+
-+        // Discover candidate replacement source object ID without locking
-+        let candidateReplacementSourceId: string | undefined = cmd.payload.reusedSourceObjectId;
-+        if (!candidateReplacementSourceId) {
-+          const existingSourceCheck = await client.query<{ source_object_id: string }>(
-+            `SELECT source_object_id FROM source_objects
-+             WHERE client_id = $1 AND original_sha256 = $2`,
-+            [cmd.clientId, cmd.payload.originalSha256]
-+          );
-+          candidateReplacementSourceId = existingSourceCheck.rows[0]?.source_object_id;
-+        }
-+
-+        // Lock all involved source objects in canonical sorted order before locking evidence_assets
-+        const sourceIdsToLock = Array.from(
-+          new Set([oldSourceObjectId, candidateReplacementSourceId].filter(Boolean) as string[])
-+        ).sort();
-+        for (const sId of sourceIdsToLock) {
-+          await client.query(
-+            `SELECT 1 FROM source_objects WHERE client_id = $1 AND source_object_id = $2 FOR UPDATE`,
-+            [cmd.clientId, sId]
-+          );
-+        }
-+
-+        // Lock target evidence asset
-+        const targetRes = await client.query<EvidenceAssetRow>(
-+          `SELECT * FROM evidence_assets
-+           WHERE client_id = $1 AND evidence_id = $2 FOR UPDATE`,
-+          [cmd.clientId, cmd.payload.targetEvidenceId]
-         );
-+        if (targetRes.rows.length === 0) {
-+          throw new NotFoundError("EvidenceAsset", cmd.payload.targetEvidenceId);
-+        }
-+        targetAsset = mapRowToEvidenceAsset(targetRes.rows[0]!);
-+        if (targetAsset.archivedAt !== null) {
-+          throw new AccessDeniedError("Archived evidence asset cannot be superseded.");
-+        }
-+        if (targetAsset.version !== cmd.payload.expectedEvidenceVersion) {
-+          throw new StaleRevisionConflictError(
-+            "EvidenceAsset",
-+            cmd.payload.expectedEvidenceVersion,
-+            targetAsset.version
-+          );
-+        }
-       }
++    }
++  };
  
-       // 2. Resolve or insert SourceObject
-@@ -886,35 +983,8 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
-         );
-         evidenceRevision = mapRowToEvidenceRevision(revRes.rows[0]!);
-       } else if (cmd.payload.registrationIntent === "supersede") {
--        if (!cmd.payload.targetEvidenceId || cmd.payload.expectedEvidenceVersion === undefined) {
--          throw new ProductValidationError([
--            {
--              code: "INVALID_FIELD_COMBINATION",
--              path: ["targetEvidenceId"],
--              message: "targetEvidenceId and expectedEvidenceVersion are required for supersede."
--            }
--          ]);
--        }
--
--        // Lock target evidence asset
--        const targetRes = await client.query<EvidenceAssetRow>(
--          `SELECT * FROM evidence_assets
--         WHERE client_id = $1 AND evidence_id = $2 FOR UPDATE`,
--          [cmd.clientId, cmd.payload.targetEvidenceId]
--        );
--        if (targetRes.rows.length === 0) {
--          throw new NotFoundError("EvidenceAsset", cmd.payload.targetEvidenceId);
--        }
--        const targetAsset = mapRowToEvidenceAsset(targetRes.rows[0]!);
--        if (targetAsset.archivedAt !== null) {
--          throw new AccessDeniedError("Archived evidence asset cannot be superseded.");
--        }
--        if (targetAsset.version !== cmd.payload.expectedEvidenceVersion) {
--          throw new StaleRevisionConflictError(
--            "EvidenceAsset",
--            cmd.payload.expectedEvidenceVersion,
--            targetAsset.version
--          );
-+        if (!targetAsset) {
-+          throw new Error("Illegal state: targetAsset not loaded for supersede intent");
+   const app = createControlApiApp(
+     {
+@@ -77,6 +110,10 @@ export async function startTestControlApi(options: {
+       campaignDeliveryReelQueries,
+       objectStorage: testObjectStorage,
+       reviewMediaDelivery: mockMediaDelivery,
++      batchEvidenceDossierQueries,
++      evidenceLockCoordinator,
++      originalsInspection,
++      reviewerAuthorization,
+       planningModelClients: {
+         primary: options.planningStub,
+         fallback: {
+@@ -84,11 +121,19 @@ export async function startTestControlApi(options: {
+           complete: (req) => options.planningStub.complete(req)
          }
+       },
+-      referenceAssetRepository
++      referenceAssetRepository,
++      evidenceStoragePolicy: DEFAULT_DEV_EVIDENCE_STORAGE_POLICY
+     },
+     {
+       reviewerIdentityResolver: {
+-        resolve: () => "Integration Test Director"
++        resolve: (req) => {
++          const headers = req?.headers as Record<string, string | undefined> | undefined;
++          return (
++            headers?.["tailscale-user-login"] ||
++            headers?.["x-test-actor-id"] ||
++            "author@test.internal"
++          );
++        }
+       },
+       clientSessionAuthenticator: createProductionClientSessionAuthenticator({
+         secret: TEST_CLIENT_SESSION_SECRET,
+@@ -98,9 +143,24 @@ export async function startTestControlApi(options: {
+     }
+   );
  
-         // Check if the target evidence asset has an active dispute across any revisions
-@@ -1157,7 +1227,72 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
-         return rehydrateEvidenceDerivative(result);
-       }
- 
--      // Verify EvidenceAsset exists, belongs to client, and is not archived
-+      // Discover lineage before locking to ensure canonical lock order: SKU -> Batch -> Source -> Evidence
-+      const discoveryRevRes = await client.query<{ source_object_id: string }>(
-+        `SELECT source_object_id FROM evidence_revisions
-+         WHERE client_id = $1 AND evidence_id = $2 AND revision = $3`,
-+        [cmd.clientId, cmd.payload.evidenceId, cmd.payload.evidenceRevision]
-+      );
-+      if (discoveryRevRes.rows.length === 0) {
-+        throw new NotFoundError(
-+          "EvidenceRevision",
-+          `${cmd.payload.evidenceId}:${cmd.payload.evidenceRevision}`
-+        );
-+      }
-+      const discoveredSourceObjectId = discoveryRevRes.rows[0]!.source_object_id;
++  app.get("/test-media/:bucket/*", async (req, reply) => {
++    const { bucket } = req.params as { bucket: string };
++    const key = (req.params as Record<string, string>)["*"];
++    const item = inMemoryStorage.get(`${bucket}/${key}`);
++    if (!item) {
++      reply.code(404).send({ error: "Media not found" });
++      return;
++    }
++    if (item.contentType) {
++      reply.header("content-type", item.contentType);
++    }
++    reply.send(Buffer.from(item.body));
++  });
 +
-+      // Discover lineage before locking to ensure canonical lock order: SKU -> Batch -> Source -> Evidence
-+      const linkBatchRes = await client.query<{
-+        batch_id: string;
-+        sku_id: string;
-+      }>(
-+        `SELECT l.batch_id, b.sku_id
-+         FROM batch_evidence_links l
-+         JOIN product_batches b ON b.client_id = l.client_id AND b.batch_id = l.batch_id
-+         WHERE l.client_id = $1 AND l.evidence_id = $2 AND l.evidence_revision = $3`,
-+        [cmd.clientId, cmd.payload.evidenceId, cmd.payload.evidenceRevision]
-+      );
-+      if (linkBatchRes.rows.length === 0) {
-+        throw new NotFoundError("ProductBatch", "Associated batch link not found");
-+      }
+   await app.listen({ port: 0, host: "127.0.0.1" });
+   const address = app.server.address() as AddressInfo;
+   const controlApiBaseUrl = `http://127.0.0.1:${address.port}`;
++  activeControlApiBaseUrl = controlApiBaseUrl;
+ 
+   return {
+     app,
+diff --git a/e2e/harness/mock-bin/tailscale b/e2e/harness/mock-bin/tailscale
+index c42125e..68acfeb 100755
+--- a/e2e/harness/mock-bin/tailscale
++++ b/e2e/harness/mock-bin/tailscale
+@@ -19,8 +19,23 @@ if (args[0] === "whois" && args[1] === "--json") {
+     process.exit(1);
+   }
+ 
+-  const login = process.env.TEST_REVIEWER_LOGIN || "Integration Test Director";
+-  const displayName = process.env.TEST_REVIEWER_DISPLAY_NAME || "Integration Test Director";
++  let login = process.env.TEST_REVIEWER_LOGIN;
++  let displayName = process.env.TEST_REVIEWER_DISPLAY_NAME;
 +
-+      // Explicitly lock SKU first FOR SHARE
-+      const skuIds = [...new Set(linkBatchRes.rows.map((r) => r.sku_id))].sort();
-+      for (const sId of skuIds) {
-+        const skuLockRes = await client.query<{ archived_at: Date | null }>(
-+          `SELECT archived_at FROM product_skus WHERE client_id = $1 AND sku_id = $2 FOR SHARE`,
-+          [cmd.clientId, sId]
-+        );
-+        if (skuLockRes.rows.length === 0 || skuLockRes.rows[0]!.archived_at !== null) {
-+          throw new AccessDeniedError("Associated SKU is archived.", "SKU_ARCHIVED");
-+        }
-+      }
-+
-+      // Explicitly lock Batch second FOR SHARE
-+      const batchIds = [...new Set(linkBatchRes.rows.map((r) => r.batch_id))].sort();
-+      for (const bId of batchIds) {
-+        const batchLockRes = await client.query<{ archived_at: Date | null }>(
-+          `SELECT archived_at FROM product_batches WHERE client_id = $1 AND batch_id = $2 FOR SHARE`,
-+          [cmd.clientId, bId]
-+        );
-+        if (batchLockRes.rows.length === 0 || batchLockRes.rows[0]!.archived_at !== null) {
-+          throw new AccessDeniedError("Associated batch is archived.", "BATCH_ARCHIVED");
-+        }
-+      }
-+
-+      // Next lock source_objects row FOR UPDATE
-+      const sourceRes = await client.query<SourceObjectRow>(
-+        `SELECT * FROM source_objects WHERE client_id = $1 AND source_object_id = $2 FOR UPDATE`,
-+        [cmd.clientId, discoveredSourceObjectId]
-+      );
-+      if (sourceRes.rows.length === 0 || sourceRes.rows[0]!.availability !== "available") {
-+        throw new AccessDeniedError(
-+          "Underlying source object is unavailable.",
-+          "SOURCE_UNAVAILABLE"
-+        );
-+      }
-+
-+      // Next lock evidence_assets row FOR UPDATE
-       const assetRes = await client.query<EvidenceAssetRow>(
-         `SELECT * FROM evidence_assets
-          WHERE client_id = $1 AND evidence_id = $2 FOR UPDATE`,
-@@ -1183,7 +1318,7 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
-         );
-       }
++  if (!login) {
++    if (ip === "100.64.0.2") {
++      login = "reviewer@test.internal";
++      displayName = displayName || "Integration Test Reviewer";
++    } else if (ip === "100.64.0.1") {
++      login = "author@test.internal";
++      displayName = displayName || "Integration Test Author";
++    } else {
++      login = "author@test.internal";
++      displayName = displayName || "Integration Test Author";
++    }
++  } else {
++    displayName = displayName || login;
++  }
  
--      // Verify EvidenceRevision exists
-+      // Lock EvidenceRevision row FOR UPDATE
-       const revRes = await client.query<EvidenceRevisionRow>(
-         `SELECT * FROM evidence_revisions
-          WHERE client_id = $1 AND evidence_id = $2 AND revision = $3 FOR UPDATE`,
-@@ -1196,41 +1331,6 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
-         );
-       }
- 
--      // Verify associated batch and SKU are not archived (lock SKU and batch rows for share)
--      const skuRes = await client.query<{
--        sku_archived_at: Date | null;
--        batch_archived_at: Date | null;
--      }>(
--        `SELECT s.archived_at AS sku_archived_at, b.archived_at AS batch_archived_at
--         FROM batch_evidence_links l
--         JOIN product_batches b ON b.client_id = l.client_id AND b.batch_id = l.batch_id
--         JOIN product_skus s ON s.client_id = b.client_id AND s.sku_id = b.sku_id
--         WHERE l.client_id = $1 AND l.evidence_id = $2 AND l.evidence_revision = $3
--         FOR SHARE OF s, b`,
--        [cmd.clientId, cmd.payload.evidenceId, cmd.payload.evidenceRevision]
--      );
--      if (skuRes.rows.length === 0) {
--        throw new NotFoundError("ProductBatch", "Associated batch link not found");
--      }
--      if (skuRes.rows.some((r) => r.batch_archived_at !== null)) {
--        throw new AccessDeniedError("Associated batch is archived.", "BATCH_ARCHIVED");
--      }
--      if (skuRes.rows.some((r) => r.sku_archived_at !== null)) {
--        throw new AccessDeniedError("Associated SKU is archived.", "SKU_ARCHIVED");
--      }
--
--      // Verify underlying source object availability (lock source_objects row for update)
--      const sourceRes = await client.query<SourceObjectRow>(
--        `SELECT * FROM source_objects WHERE client_id = $1 AND source_object_id = $2 FOR UPDATE`,
--        [cmd.clientId, revRes.rows[0]!.source_object_id]
--      );
--      if (sourceRes.rows.length === 0 || sourceRes.rows[0]!.availability !== "available") {
--        throw new AccessDeniedError(
--          "Underlying source object is unavailable.",
--          "SOURCE_UNAVAILABLE"
--        );
--      }
--
-       await this.assertNoActiveDisputes(
-         client,
-         cmd.clientId,
-@@ -1329,7 +1429,27 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
-         return rehydrateEvidenceVerificationEvent(result);
-       }
- 
--      // Verify EvidenceAsset exists, belongs to client, and is not archived
-+      // Discover source_object_id before locking to maintain canonical order: Source -> Evidence
-+      const discoveryRevRes = await client.query<{ source_object_id: string }>(
-+        `SELECT source_object_id FROM evidence_revisions
-+         WHERE client_id = $1 AND evidence_id = $2 AND revision = $3`,
-+        [cmd.clientId, cmd.payload.evidenceId, cmd.payload.evidenceRevision]
-+      );
-+      if (discoveryRevRes.rows.length === 0) {
-+        throw new NotFoundError(
-+          "EvidenceRevision",
-+          `${cmd.payload.evidenceId}:${cmd.payload.evidenceRevision}`
-+        );
-+      }
-+      const discoveredSourceObjectId = discoveryRevRes.rows[0]!.source_object_id;
-+
-+      // 1. Lock underlying source_objects row FOR UPDATE first
-+      await client.query(
-+        `SELECT 1 FROM source_objects WHERE client_id = $1 AND source_object_id = $2 FOR UPDATE`,
-+        [cmd.clientId, discoveredSourceObjectId]
-+      );
-+
-+      // 2. Lock EvidenceAsset row FOR UPDATE
-       const assetRes = await client.query<{ archived_at: Date | null }>(
-         `SELECT archived_at FROM evidence_assets
-          WHERE client_id = $1 AND evidence_id = $2 FOR UPDATE`,
-@@ -1342,7 +1462,7 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
-         throw new AccessDeniedError("Target evidence asset is archived.", "EVIDENCE_ARCHIVED");
-       }
- 
--      // Verify EvidenceRevision exists
-+      // 3. Lock EvidenceRevision row FOR UPDATE
-       const revRes = await client.query<EvidenceRevisionRow>(
-         `SELECT * FROM evidence_revisions
-          WHERE client_id = $1 AND evidence_id = $2 AND revision = $3 FOR UPDATE`,
-@@ -1355,12 +1475,6 @@ export class PostgresEvidenceAssetRepository implements EvidenceAssetRepositoryP
-         );
-       }
- 
--      // Lock underlying source_objects row FOR UPDATE so dispute checks and event appends synchronize
--      await client.query(
--        `SELECT 1 FROM source_objects WHERE client_id = $1 AND source_object_id = $2 FOR UPDATE`,
--        [cmd.clientId, revRes.rows[0]!.source_object_id]
--      );
--
-       if (cmd.payload.withdrawalEventId) {
-         const priorEventRes = await client.query<{ event_id: string }>(
-           `SELECT event_id FROM evidence_verification_events
-diff --git a/packages/infrastructure/src/index.ts b/packages/infrastructure/src/index.ts
-index a08d631..0074717 100644
---- a/packages/infrastructure/src/index.ts
-+++ b/packages/infrastructure/src/index.ts
-@@ -475,5 +475,9 @@ export {
-   PostgresEvidenceAssetRepository,
-   type PostgresEvidenceAssetRepositoryOptions
- } from "./evidence/postgres-evidence-asset-repository.js";
-+export {
-+  PostgresCoaReportRepository,
-+  type PostgresCoaReportRepositoryOptions
-+} from "./postgres/repositories/postgres-coa-report-repository.js";
- 
- export * from "./experiments/index.js";
-diff --git a/packages/infrastructure/src/postgres/audit-protections.integration.test.ts b/packages/infrastructure/src/postgres/audit-protections.integration.test.ts
-index 7428003..8fb33b5 100644
---- a/packages/infrastructure/src/postgres/audit-protections.integration.test.ts
-+++ b/packages/infrastructure/src/postgres/audit-protections.integration.test.ts
-@@ -499,7 +499,7 @@ describe("PostgreSQL audit immutability and application-role privileges integrat
-     // Verify migration succeeds when no application role is configured
-     await client.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public;");
-     const noRoleApplied = await runMigrations(client, { migrationsDirectory });
--    expect(noRoleApplied).toHaveLength(27);
-+    expect(noRoleApplied).toHaveLength(28);
-   });
- 
-   it("fails closed when application role has effective UPDATE or DELETE privilege on storyboard_candidates", async () => {
-diff --git a/packages/infrastructure/src/postgres/baseline-schema.integration.test.ts b/packages/infrastructure/src/postgres/baseline-schema.integration.test.ts
-index c06c672..f2dd7da 100644
---- a/packages/infrastructure/src/postgres/baseline-schema.integration.test.ts
-+++ b/packages/infrastructure/src/postgres/baseline-schema.integration.test.ts
-@@ -55,7 +55,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
-   it("migrates an empty PostgreSQL 18.6 database through the baseline", async () => {
-     const applied = await runMigrations(client, { migrationsDirectory });
- 
--    expect(applied).toHaveLength(27);
-+    expect(applied).toHaveLength(28);
-     expect(applied[0]?.version).toBe("001");
-     expect(applied[1]?.version).toBe("002");
-     expect(applied[2]?.version).toBe("003");
-@@ -83,6 +83,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
-     expect(applied[24]?.version).toBe("025");
-     expect(applied[25]?.version).toBe("026");
-     expect(applied[26]?.version).toBe("027");
-+    expect(applied[27]?.version).toBe("028");
- 
-     const schemaRes = await client.query(
-       "SELECT version FROM schema_migrations ORDER BY version ASC"
-@@ -114,7 +115,8 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
-       { version: "024" },
-       { version: "025" },
-       { version: "026" },
--      { version: "027" }
-+      { version: "027" },
-+      { version: "028" }
-     ]);
- 
-     const tablesRes = await client.query<{ table_name: string }>(
-@@ -135,6 +137,10 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
-       "campaign_reference_bibles",
-       "campaigns",
-       "clients",
-+      "coa_measurements",
-+      "coa_report_review_events",
-+      "coa_report_revisions",
-+      "coa_reports",
-       "delivery_assembly_jobs",
-       "evidence_assets",
-       "evidence_derivatives",
-diff --git a/packages/infrastructure/src/postgres/job-dispatch-contract.integration.test.ts b/packages/infrastructure/src/postgres/job-dispatch-contract.integration.test.ts
-index 9ff1a12..eb45fc7 100644
---- a/packages/infrastructure/src/postgres/job-dispatch-contract.integration.test.ts
-+++ b/packages/infrastructure/src/postgres/job-dispatch-contract.integration.test.ts
-@@ -64,7 +64,8 @@ describe("PostgreSQL job dispatch schema contract integration", () => {
-     expect(applied.some((m) => m.version === "025")).toBe(true);
-     expect(applied.some((m) => m.version === "026")).toBe(true);
-     expect(applied.some((m) => m.version === "027")).toBe(true);
--    expect(applied[applied.length - 1]?.version).toBe("027");
-+    expect(applied.some((m) => m.version === "028")).toBe(true);
-+    expect(applied[applied.length - 1]?.version).toBe("028");
- 
-     // 2. Run it again and assert []
-     const rerun = await runMigrations(client, { migrationsDirectory });
-diff --git a/packages/infrastructure/src/postgres/repositories/postgres-product-evidence-repository.ts b/packages/infrastructure/src/postgres/repositories/postgres-product-evidence-repository.ts
-index 93303c2..4197fb5 100644
---- a/packages/infrastructure/src/postgres/repositories/postgres-product-evidence-repository.ts
-+++ b/packages/infrastructure/src/postgres/repositories/postgres-product-evidence-repository.ts
-@@ -397,7 +397,11 @@ const PRODUCT_REGISTRY_TABLES = new Set<string>([
-   "batch_evidence_links",
-   "evidence_derivatives",
-   "evidence_verification_events",
--  "evidence_ingest_reservations"
-+  "evidence_ingest_reservations",
-+  "coa_reports",
-+  "coa_report_revisions",
-+  "coa_measurements",
-+  "coa_report_review_events"
- ]);
- 
- const REGISTRY_CONSTRAINTS = new Set<string>([
-@@ -540,7 +544,54 @@ const REGISTRY_CONSTRAINTS = new Set<string>([
-   "evidence_ingest_reservations_reserved_bytes_check",
-   "evidence_ingest_reservations_status_check",
-   "chk_reservation_sha256_format",
--  "chk_reservation_timestamps"
-+  "chk_reservation_timestamps",
-+  "coa_reports_pkey",
-+  "uq_coa_reports_client_report",
-+  "uq_coa_reports_client_batch_evidence",
-+  "uq_coa_reports_head_identity",
-+  "fk_coa_reports_batch",
-+  "fk_coa_reports_evidence",
-+  "fk_coa_reports_current_rev",
-+  "chk_coa_reports_created_at",
-+  "chk_coa_reports_archived_at",
-+  "coa_report_revisions_pkey",
-+  "uq_coa_report_revisions_lineage",
-+  "fk_coa_report_revisions_head",
-+  "fk_coa_report_revisions_head_identity",
-+  "fk_coa_report_batch_evidence",
-+  "fk_coa_report_verified_lab",
-+  "fk_coa_report_predecessor",
-+  "chk_coa_report_rev_monotonic",
-+  "uq_coa_report_rev_predecessor",
-+  "chk_coa_report_asserted_by_nonempty",
-+  "chk_coa_report_asserted_at",
-+  "chk_coa_report_dates_range",
-+  "chk_coa_report_sample_date_le_report_date",
-+  "chk_coa_report_dates_le_asserted_at",
-+  "chk_coa_report_complete_requirements",
-+  "trg_check_coa_report_complete_measurements",
-+  "coa_measurements_pkey",
-+  "uq_coa_measurements_full",
-+  "uq_coa_measurements_lineage",
-+  "uq_coa_measurements_analyte_context",
-+  "fk_coa_measurements_report",
-+  "chk_coa_measurement_strings_nonempty",
-+  "chk_coa_measurement_quantified",
-+  "chk_coa_measurement_below_limit",
-+  "chk_coa_measurement_not_detected",
-+  "chk_coa_measurement_metadata",
-+  "chk_coa_measurement_percent_bounds",
-+  "chk_coa_measurement_fraction_bounds",
-+  "chk_coa_measurement_unit_contradictions",
-+  "trg_enforce_coa_measurements_insert",
-+  "coa_report_review_events_pkey",
-+  "uq_coa_review_events_client_event",
-+  "uq_coa_review_events_decision_per_rev",
-+  "fk_coa_review_events_revision",
-+  "chk_coa_review_events_reason_nonempty",
-+  "chk_coa_review_events_actor_nonempty",
-+  "chk_coa_review_events_occurred_at",
-+  "trg_check_coa_report_review_event_invariants"
- ]);
- 
- export function translateDatabaseError(
-@@ -640,6 +691,42 @@ export function translateDatabaseError(
-             `Duplicate evidence ingest reservation conflict: ${dbErr.message}`
-           );
-         }
-+        if (dbErr.constraint === "uq_coa_reports_client_batch_evidence") {
-+          throw new ConcurrencyConflictError(
-+            "A CoA report already exists for this client, batch, and evidence asset."
-+          );
-+        }
-+        if (
-+          dbErr.constraint === "uq_coa_reports_client_report" ||
-+          dbErr.constraint === "coa_reports_pkey"
-+        ) {
-+          throw new ConcurrencyConflictError(`Duplicate CoA report conflict: ${dbErr.message}`);
-+        }
-+        if (
-+          dbErr.constraint === "uq_coa_report_rev_predecessor" ||
-+          dbErr.constraint === "coa_report_revisions_pkey"
-+        ) {
-+          throw new NonMonotonicRevisionError(
-+            "CoA report revision conflict: duplicate or forked revision"
-+          );
-+        }
-+        if (dbErr.constraint === "uq_coa_measurements_analyte_context") {
-+          throw new ProductValidationError([
-+            {
-+              code: "INVALID_FIELD_COMBINATION",
-+              path: ["measurements"],
-+              message: "Duplicate analyte + basis + context in report revision"
-+            }
-+          ]);
-+        }
-+        if (
-+          dbErr.constraint === "uq_coa_review_events_decision_per_rev" ||
-+          dbErr.constraint === "coa_report_review_events_pkey"
-+        ) {
-+          throw new ConcurrencyConflictError(
-+            "A review decision already exists for this report revision."
-+          );
-+        }
-         if (
-           (dbErr.constraint && REGISTRY_CONSTRAINTS.has(dbErr.constraint)) ||
-           (dbErr.table && PRODUCT_REGISTRY_TABLES.has(dbErr.table))
-@@ -754,6 +841,50 @@ export function translateDatabaseError(
-             "Referenced withdrawal event does not exist"
-           );
-         }
-+        if (dbErr.constraint === "fk_coa_reports_current_rev") {
-+          throw new StaleRevisionConflictError("CoaReport", 0, 0);
-+        }
-+        if (dbErr.constraint === "fk_coa_reports_batch") {
-+          throw new NotFoundError("ProductBatch", context?.batchId ?? "unknown");
-+        }
-+        if (dbErr.constraint === "fk_coa_reports_evidence") {
-+          throw new NotFoundError("EvidenceAsset", "Referenced evidence asset does not exist");
-+        }
-+        if (dbErr.constraint === "fk_coa_report_batch_evidence") {
-+          throw new NotFoundError(
-+            "BatchEvidenceLink",
-+            "Referenced evidence revision is not linked to this batch"
-+          );
-+        }
-+        if (dbErr.constraint === "fk_coa_report_verified_lab") {
-+          throw new NotFoundError(
-+            "EvidenceVerificationEvent",
-+            "Referenced verified lab identity event does not exist"
-+          );
-+        }
-+        if (dbErr.constraint === "fk_coa_report_revisions_head") {
-+          throw new NotFoundError("CoaReport", "Referenced CoA report head does not exist");
-+        }
-+        if (dbErr.constraint === "fk_coa_report_revisions_head_identity") {
-+          throw new CrossBatchSourceError(
-+            "CoA report revision batch or evidence does not match report head"
-+          );
-+        }
-+        if (dbErr.constraint === "fk_coa_measurements_report") {
-+          throw new NotFoundError(
-+            "CoaReportRevision",
-+            "Referenced CoA report revision does not exist"
-+          );
-+        }
-+        if (dbErr.constraint === "fk_coa_report_predecessor") {
-+          throw new NonMonotonicRevisionError("Predecessor CoA report revision does not exist");
-+        }
-+        if (dbErr.constraint === "fk_coa_review_events_revision") {
-+          throw new NotFoundError(
-+            "CoaReportRevision",
-+            "Referenced CoA report revision does not exist"
-+          );
-+        }
-         if (
-           (dbErr.constraint && REGISTRY_CONSTRAINTS.has(dbErr.constraint)) ||
-           (dbErr.table && PRODUCT_REGISTRY_TABLES.has(dbErr.table))
-@@ -789,7 +920,9 @@ export function translateDatabaseError(
-           dbErr.message.includes("updated_at must be nondecreasing") ||
-           dbErr.message.includes("Permanent evidence asset identity") ||
-           dbErr.message.includes("Permanent source object binary columns") ||
-+          dbErr.message.includes("Permanent CoA report identity") ||
-           dbErr.message.includes("Archived evidence asset") ||
-+          dbErr.message.includes("Archived CoA report") ||
-           dbErr.message.includes("Archived source objects") ||
-           dbErr.message.includes("Deleted source objects") ||
-           dbErr.message.includes("Quarantined, archived, or deleted") ||
-@@ -823,9 +956,45 @@ export function translateDatabaseError(
-         // Check constraints - strictly allowlisted registry checks only
-         if (
-           dbErr.constraint === "chk_evidence_rev_monotonic" ||
--          dbErr.constraint === "chk_evidence_revision_supersedes_not_self"
-+          dbErr.constraint === "chk_evidence_revision_supersedes_not_self" ||
-+          dbErr.constraint === "chk_coa_report_rev_monotonic"
-+        ) {
-+          throw new NonMonotonicRevisionError("Revision must be contiguous and monotonic");
-+        }
-+        if (
-+          dbErr.constraint === "trg_check_coa_report_complete_measurements" ||
-+          dbErr.message.includes("must contain at least one measurement")
-+        ) {
-+          throw new ProductValidationError([
-+            {
-+              code: "INVALID_FIELD_COMBINATION",
-+              path: ["measurements"],
-+              message: "Complete CoA report revisions must contain at least one measurement."
-+            }
-+          ]);
-+        }
-+        if (
-+          dbErr.constraint === "trg_enforce_coa_measurements_insert" ||
-+          dbErr.message.includes("Cannot insert measurements into")
-         ) {
--          throw new NonMonotonicRevisionError("Evidence revision must be contiguous and monotonic");
-+          throw new AccessDeniedError(dbErr.message);
-+        }
-+        if (
-+          dbErr.constraint === "trg_check_coa_report_review_event_invariants" ||
-+          dbErr.message.includes("Cannot approve a draft") ||
-+          dbErr.message.includes("Assessed scope cannot be attributed_lot") ||
-+          dbErr.message.includes("Self-approval forbidden")
-+        ) {
-+          if (dbErr.message.includes("Self-approval forbidden")) {
-+            throw new AccessDeniedError(dbErr.message);
-+          }
-+          throw new ProductValidationError([
-+            {
-+              code: "INVALID_FIELD_COMBINATION",
-+              path: ["decision"],
-+              message: dbErr.message
-+            }
-+          ]);
-         }
-         if (dbErr.constraint === "chk_batch_facts_monotonic_rev") {
-           throw new NonMonotonicRevisionError(
-@@ -972,6 +1141,7 @@ export function translateDatabaseError(
-           dbErr.constraint?.startsWith("chk_derivative_") ||
-           dbErr.constraint?.startsWith("chk_verification_events_") ||
-           dbErr.constraint?.startsWith("chk_reservation_") ||
-+          dbErr.constraint?.startsWith("chk_coa_") ||
-           dbErr.constraint === "chk_sha256_format" ||
-           (dbErr.table && PRODUCT_REGISTRY_TABLES.has(dbErr.table))
-         ) {
-diff --git a/packages/infrastructure/src/postgres/uow/postgres-unit-of-work.ts b/packages/infrastructure/src/postgres/uow/postgres-unit-of-work.ts
-index 69811a4..7505d84 100644
---- a/packages/infrastructure/src/postgres/uow/postgres-unit-of-work.ts
-+++ b/packages/infrastructure/src/postgres/uow/postgres-unit-of-work.ts
-@@ -19,6 +19,7 @@ import {
-   translateDatabaseError
- } from "../repositories/postgres-product-evidence-repository.js";
- import { PostgresEvidenceAssetRepository } from "../../evidence/postgres-evidence-asset-repository.js";
-+import { PostgresCoaReportRepository } from "../repositories/postgres-coa-report-repository.js";
- 
- export class PostgresUnitOfWork implements UnitOfWork {
-   constructor(private readonly pool: Pool) {}
-@@ -49,6 +50,9 @@ export class PostgresUnitOfWork implements UnitOfWork {
+   console.log(
+     JSON.stringify({
+diff --git a/e2e/harness/web-server.ts b/e2e/harness/web-server.ts
+index 4a8340e..8d4e5b1 100644
+--- a/e2e/harness/web-server.ts
++++ b/e2e/harness/web-server.ts
+@@ -86,7 +86,9 @@ export async function startTestWebServer(options: {
+         CONTROL_API_URL: options.controlApiBaseUrl,
+         CONTROL_API_CLIENT_SESSION_SECRET: TEST_CLIENT_SESSION_SECRET,
+         REVIEW_HUB_DIRECTOR_CLIENT_MAPPINGS: JSON.stringify({
+-          "integration test director": ["*"]
++          "integration test director": ["*"],
++          "author@test.internal": ["*"],
++          "reviewer@test.internal": ["*"]
          }),
-         evidenceAsset: new PostgresEvidenceAssetRepository(client, {
-           externalTransaction: true
-+        }),
-+        coaReports: new PostgresCoaReportRepository(client, {
-+          externalTransaction: true
-         })
-       };
- 
-diff --git a/packages/shared/src/index.ts b/packages/shared/src/index.ts
-index 838c93b..a8f65cf 100644
---- a/packages/shared/src/index.ts
-+++ b/packages/shared/src/index.ts
-@@ -33,3 +33,4 @@ export * from "./error-redaction.js";
- export * from "./json-canonicalization.js";
- export * from "./client-session-token.js";
- export * from "./product-identity.js";
-+export * from "./coa-measurement.js";
+         NODE_ENV: "production"
+       }
 ```
 
 ## REQUIRED OUTPUT CONTRACT
@@ -2792,11 +1049,694 @@ This exemption is narrow: it applies only to the exact untracked paths listed, a
 ## CORRECTION REQUIRED (Attempt 2 of 2)
 
 Your previous review attempt failed contract validation:
-- **Failure category:** missing_artifact
+- **Failure category:** schema_violation
 - **Required artifact path:** ./follow-up-review-result.json
 - **Diagnostic detail:**
 ```
-Required result artifact 'follow-up-review-result.json' was not created (contract violation: missing_required_artifact)
+[
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      0,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      0,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      1,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      1,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      2,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      2,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      3,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      3,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      4,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      4,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      5,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      5,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      6,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      6,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      7,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      7,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      8,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      8,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      9,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      9,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      10,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      10,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      11,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      11,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      12,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      12,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      13,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      13,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      14,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      14,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      15,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      15,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      16,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      16,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      17,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      17,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      18,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      18,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      19,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      19,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      20,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      20,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      21,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      21,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      22,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      22,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      23,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      23,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      24,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      24,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      25,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      25,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      26,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      26,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      27,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      27,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      28,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      28,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      29,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      29,
+      "evidence"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      30,
+      "finding_id"
+    ],
+    "message": "Required"
+  },
+  {
+    "code": "invalid_type",
+    "expected": "string",
+    "received": "undefined",
+    "path": [
+      "evaluations",
+      30,
+      "evidence"
+    ],
+    "message": "Required"
+  }
+]
 ```
 
 ### Allowed Verdict Values

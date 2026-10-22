@@ -289,6 +289,15 @@ export const InvalidateClaimResponseSchema = z
   .strict();
 export type InvalidateClaimResponse = z.infer<typeof InvalidateClaimResponseSchema>;
 
+export const LinkClaimEvidenceResponseSchema = z
+  .object({
+    claim: ProductClaimContractSchema,
+    links: z.array(ClaimEvidenceLinkContractSchema),
+    decisionEvent: ClaimDecisionEventContractSchema
+  })
+  .strict();
+export type LinkClaimEvidenceResponse = z.infer<typeof LinkClaimEvidenceResponseSchema>;
+
 export const ProductClaimDetailResponseSchema = z
   .object({
     claim: ProductClaimContractSchema,
