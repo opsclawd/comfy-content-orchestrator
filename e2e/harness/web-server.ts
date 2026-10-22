@@ -86,7 +86,9 @@ export async function startTestWebServer(options: {
         CONTROL_API_URL: options.controlApiBaseUrl,
         CONTROL_API_CLIENT_SESSION_SECRET: TEST_CLIENT_SESSION_SECRET,
         REVIEW_HUB_DIRECTOR_CLIENT_MAPPINGS: JSON.stringify({
-          "integration test director": ["*"]
+          "integration test director": ["*"],
+          "author@test.internal": ["*"],
+          "reviewer@test.internal": ["*"]
         }),
         NODE_ENV: "production"
       }
