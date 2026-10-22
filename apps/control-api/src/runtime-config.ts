@@ -1,4 +1,6 @@
 import path from "node:path";
+import type { EvidenceStoragePolicyConfig } from "@cco/application";
+import type { ReviewerAuthorizationGrants } from "@cco/infrastructure";
 import {
   parseReviewerIdentityConfig,
   TailscaleReviewerIdentityResolver,
@@ -66,6 +68,8 @@ export interface ControlApiRuntimeConfig {
   readonly planningProviders?: ControlApiPlanningConfig;
   readonly rankingProviders?: ControlApiRankingConfig;
   readonly clientSessionSecret?: string;
+  readonly evidenceStoragePolicy?: EvidenceStoragePolicyConfig;
+  readonly reviewerAuthorizationGrants?: ReviewerAuthorizationGrants;
 }
 
 export class ControlApiConfigError extends Error {
@@ -196,6 +200,88 @@ const HTTP_LOG_LEVELS: readonly ControlApiHttpLogLevel[] = [
   "trace",
   "silent"
 ];
+
+function validateEvidenceStoragePolicy(value: unknown): EvidenceStoragePolicyConfig {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ControlApiConfigError("Invalid EVIDENCE_STORAGE_POLICY_JSON: expected an object");
+  }
+  const policy = value as Record<string, unknown>;
+  const sourceClasses = ["photo", "document", "coa", "process_record", "raw", "video"];
+  const limits = policy.limitsPerSourceClass;
+  if (
+    typeof policy.policyId !== "string" ||
+    policy.policyId.trim() === "" ||
+    typeof policy.isProductionApproved !== "boolean" ||
+    !["development", "test", "staging", "production"].includes(String(policy.environment)) ||
+    !Number.isSafeInteger(policy.maxClientStorageBytes) ||
+    (policy.maxClientStorageBytes as number) < 0 ||
+    !Number.isSafeInteger(policy.maxConcurrentUploads) ||
+    (policy.maxConcurrentUploads as number) < 1 ||
+    typeof limits !== "object" ||
+    limits === null ||
+    Array.isArray(limits) ||
+    sourceClasses.some(
+      (source) =>
+        !Number.isSafeInteger((limits as Record<string, unknown>)[source]) ||
+        (limits as Record<string, number>)[source]! < 0
+    )
+  ) {
+    throw new ControlApiConfigError(
+      "Invalid EVIDENCE_STORAGE_POLICY_JSON: malformed evidence storage policy"
+    );
+  }
+  const approvalIdentity = policy.reviewedProductionApprovalIdentity;
+  if (
+    approvalIdentity !== undefined &&
+    approvalIdentity !== null &&
+    typeof approvalIdentity !== "string"
+  ) {
+    throw new ControlApiConfigError(
+      "Invalid EVIDENCE_STORAGE_POLICY_JSON: invalid approval identity"
+    );
+  }
+  return policy as unknown as EvidenceStoragePolicyConfig;
+}
+
+function validateReviewerGrants(value: unknown): ReviewerAuthorizationGrants {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ControlApiConfigError(
+      "Invalid REVIEWER_AUTHORIZATION_GRANTS_JSON: expected an object"
+    );
+  }
+  const grantKinds = ["coaReviewers", "claimReviewers", "evidenceVerifiers"];
+  for (const [clientId, grants] of Object.entries(value)) {
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        clientId
+      ) ||
+      typeof grants !== "object" ||
+      grants === null ||
+      Array.isArray(grants)
+    ) {
+      throw new ControlApiConfigError(
+        "Invalid REVIEWER_AUTHORIZATION_GRANTS_JSON: malformed client grant"
+      );
+    }
+    const record = grants as Record<string, unknown>;
+    if (
+      Object.keys(record).some((key) => !grantKinds.includes(key)) ||
+      grantKinds.some(
+        (key) =>
+          record[key] !== undefined &&
+          (!Array.isArray(record[key]) ||
+            (record[key] as unknown[]).some(
+              (actor) => typeof actor !== "string" || actor.trim() === ""
+            ))
+      )
+    ) {
+      throw new ControlApiConfigError(
+        "Invalid REVIEWER_AUTHORIZATION_GRANTS_JSON: malformed actor grants"
+      );
+    }
+  }
+  return value as ReviewerAuthorizationGrants;
+}
 
 function parseHttpLogLevel(val: unknown): ControlApiHttpLogLevel {
   if (val === undefined || val === "") {
@@ -471,6 +557,38 @@ export function parseControlApiRuntimeConfig(
       ? rawClientSessionSecret.trim()
       : undefined;
 
+  let evidenceStoragePolicy: EvidenceStoragePolicyConfig | undefined;
+  if (
+    env.EVIDENCE_STORAGE_POLICY_JSON !== undefined &&
+    env.EVIDENCE_STORAGE_POLICY_JSON.trim() !== ""
+  ) {
+    try {
+      evidenceStoragePolicy = validateEvidenceStoragePolicy(
+        JSON.parse(env.EVIDENCE_STORAGE_POLICY_JSON)
+      );
+    } catch (error) {
+      if (error instanceof ControlApiConfigError) throw error;
+      throw new ControlApiConfigError("Invalid JSON in variable: EVIDENCE_STORAGE_POLICY_JSON");
+    }
+  }
+
+  let reviewerAuthorizationGrants: ReviewerAuthorizationGrants | undefined;
+  if (
+    env.REVIEWER_AUTHORIZATION_GRANTS_JSON !== undefined &&
+    env.REVIEWER_AUTHORIZATION_GRANTS_JSON.trim() !== ""
+  ) {
+    try {
+      reviewerAuthorizationGrants = validateReviewerGrants(
+        JSON.parse(env.REVIEWER_AUTHORIZATION_GRANTS_JSON)
+      );
+    } catch (error) {
+      if (error instanceof ControlApiConfigError) throw error;
+      throw new ControlApiConfigError(
+        "Invalid JSON in variable: REVIEWER_AUTHORIZATION_GRANTS_JSON"
+      );
+    }
+  }
+
   return {
     database: {
       url: databaseUrl
@@ -502,6 +620,8 @@ export function parseControlApiRuntimeConfig(
     },
     ...(planningProviders !== undefined ? { planningProviders } : {}),
     ...(rankingProviders !== undefined ? { rankingProviders } : {}),
-    ...(clientSessionSecret !== undefined ? { clientSessionSecret } : {})
+    ...(clientSessionSecret !== undefined ? { clientSessionSecret } : {}),
+    ...(evidenceStoragePolicy !== undefined ? { evidenceStoragePolicy } : {}),
+    ...(reviewerAuthorizationGrants !== undefined ? { reviewerAuthorizationGrants } : {})
   };
 }

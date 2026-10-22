@@ -10,6 +10,7 @@ import type {
 import type {
   AppendClaimRevisionRequest,
   CreateClaimRequest,
+  InvalidateClaimRequest,
   LinkClaimEvidenceRequest,
   ResolveClaimResponse,
   ReviewClaimRequest
@@ -64,6 +65,10 @@ export interface ProductClaimRepositoryPort {
     cmd: CommandEnvelope<ReviewClaimRequest & { readonly claimId: ClaimId }>
   ): Promise<ProductClaimReviewResult>;
 
+  invalidateClaim(
+    cmd: CommandEnvelope<InvalidateClaimRequest & { readonly claimId: ClaimId }>
+  ): Promise<ProductClaimReviewResult>;
+
   getClaimById(clientId: ClientId, claimId: ClaimId): Promise<ProductClaim | null>;
 
   getClaimRevision(
@@ -81,4 +86,17 @@ export interface ProductClaimRepositoryPort {
     claimId: ClaimId,
     revision?: number | undefined
   ): Promise<ResolveClaimResponse>;
+
+  getCommandReceipt(
+    clientId: ClientId,
+    actionId: string
+  ): Promise<{
+    readonly clientId: ClientId;
+    readonly actionId: string;
+    readonly commandName: string;
+    readonly payloadSha256: string;
+    readonly actorId: string;
+    readonly responseBody: unknown;
+    readonly committedAt: string;
+  } | null>;
 }

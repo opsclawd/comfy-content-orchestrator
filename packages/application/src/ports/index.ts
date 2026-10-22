@@ -59,3 +59,4 @@ export * from "./evidence-asset-repository.js";
 export * from "./coa-report-repository.js";
 export * from "./reviewer-authorization-port.js";
 export * from "./product-claim-repository.js";
+export * from "./batch-evidence-dossier-queries.js";

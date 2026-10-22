@@ -48,7 +48,7 @@ export function mapZodErrorToValidationIssues(error: z.ZodError): ProductValidat
         issues.push({
           code: "UNKNOWN_FIELD",
           path: [...issue.path, key],
-          message: `Unrecognized field: "${key}" is not permitted in this request.`
+          message: "Unrecognized field is not permitted in this request."
         });
       }
       continue;

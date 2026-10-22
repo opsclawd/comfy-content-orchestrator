@@ -41,7 +41,8 @@ import {
   UnsupportedProductionDurationError,
   ProductionInputFingerprintMismatchError
 } from "@cco/application";
-import type { ReviewErrorResponse } from "@cco/contracts";
+import type { ProductEvidenceHttpErrorResponse, ReviewErrorResponse } from "@cco/contracts";
+import { mapZodErrorToValidationIssues } from "@cco/contracts";
 import {
   AlreadyAcceptedProductionAttemptError,
   ArchivedReferenceBindingError,
@@ -52,7 +53,25 @@ import {
   InvalidShotPlanError,
   InvalidTransitionError,
   ReferenceAssetNotFoundError,
-  TerminalStateError
+  TerminalStateError,
+  ProductEvidenceDomainError,
+  ProductValidationError,
+  NotFoundError,
+  AccessDeniedError,
+  DuplicateSkuError,
+  DuplicateLotError,
+  StaleRevisionConflictError as DomainStaleRevisionConflictError,
+  NonMonotonicRevisionError,
+  IdempotencyConflictError as DomainIdempotencyConflictError,
+  ConcurrencyConflictError,
+  SourceIntegrityMismatchError,
+  MimeConflictError,
+  SourceSupersededError,
+  QuotaExceededError,
+  ReportDisputedError,
+  ClaimSupportRequiredError,
+  CrossBatchSourceError,
+  CrossClientViolationError
 } from "@cco/domain";
 
 export class ReviewerIdentityUnavailableError extends Error {
@@ -496,6 +515,363 @@ export function handleReviewError(
         ...(projection.cause !== undefined ? { cause: projection.cause } : {})
       },
       "control-api request failed with 5xx"
+    );
+  }
+  reply.status(statusCode).send(body);
+}
+
+export function formatProductEvidenceError(error: unknown): {
+  statusCode: number;
+  body: ProductEvidenceHttpErrorResponse;
+} {
+  if (error instanceof ProductValidationError) {
+    return {
+      statusCode: 400,
+      body: {
+        error: "VALIDATION_ERROR",
+        issues: error.issues.map((i) => ({
+          code: i.code,
+          path: [...i.path],
+          message: i.message
+        }))
+      }
+    };
+  }
+
+  if (error instanceof ZodError) {
+    return {
+      statusCode: 400,
+      body: {
+        error: "VALIDATION_ERROR",
+        issues: mapZodErrorToValidationIssues(error).map((i) => ({
+          code: i.code,
+          path: [...i.path],
+          message: i.message
+        }))
+      }
+    };
+  }
+
+  if (
+    error instanceof ReviewerIdentityUnavailableError ||
+    error instanceof ClientAuthenticationRequiredError
+  ) {
+    return {
+      statusCode: 401,
+      body: {
+        error: "AUTHENTICATION_REQUIRED",
+        message: error.message
+      }
+    };
+  }
+
+  if (error instanceof ClientForbiddenError) {
+    return {
+      statusCode: 403,
+      body: {
+        error: "FORBIDDEN",
+        message: "Access denied."
+      }
+    };
+  }
+
+  if (error instanceof AccessDeniedError) {
+    const reason = (error.details as Record<string, unknown> | undefined)?.reason;
+    if (reason === "SELF_APPROVAL_FORBIDDEN" || /self-approval forbidden/i.test(error.message)) {
+      return {
+        statusCode: 403,
+        body: {
+          error: "SELF_APPROVAL_FORBIDDEN",
+          message: "The actor is not authorized to approve their own submission."
+        }
+      };
+    }
+    if (
+      reason === "COA_REPORT_ARCHIVED" ||
+      /archived coa report|coa report is already archived/i.test(error.message)
+    ) {
+      return {
+        statusCode: 403,
+        body: {
+          error: "COA_REPORT_ARCHIVED",
+          message: "The CoA report is archived."
+        }
+      };
+    }
+    if (reason === "EVIDENCE_ARCHIVED" || /archived evidence asset/i.test(error.message)) {
+      return {
+        statusCode: 403,
+        body: {
+          error: "EVIDENCE_ARCHIVED",
+          message: "The evidence asset is archived."
+        }
+      };
+    }
+    return {
+      statusCode: 403,
+      body: {
+        error: "ACCESS_DENIED",
+        message: "The requested operation is not authorized."
+      }
+    };
+  }
+
+  if (error instanceof NotFoundError) {
+    const isInternalBlob =
+      error.message.includes("SourceObjectBlob") ||
+      error.message.includes("SourceObject") ||
+      error.message.includes("Blob") ||
+      error.message.includes("storage") ||
+      error.message.includes("Storage") ||
+      error.message.includes("clients/") ||
+      error.message.includes("originals/") ||
+      error.message.includes("/");
+    return {
+      statusCode: 404,
+      body: {
+        error: "NOT_FOUND",
+        message: isInternalBlob
+          ? "The requested evidence storage object was not found."
+          : error.message
+      }
+    };
+  }
+
+  if (error instanceof DuplicateSkuError) {
+    return {
+      statusCode: 409,
+      body: {
+        error: "DUPLICATE_SKU",
+        message: "A product SKU with this canonical identifier already exists."
+      }
+    };
+  }
+
+  if (error instanceof DuplicateLotError) {
+    return {
+      statusCode: 409,
+      body: {
+        error: "DUPLICATE_LOT",
+        message: "A batch with this lot identifier already exists for the SKU."
+      }
+    };
+  }
+
+  if (error instanceof DomainStaleRevisionConflictError) {
+    return {
+      statusCode: 409,
+      body: {
+        error: "STALE_REVISION_CONFLICT",
+        message: "Stale revision conflict detected."
+      }
+    };
+  }
+
+  if (error instanceof NonMonotonicRevisionError) {
+    return {
+      statusCode: 409,
+      body: {
+        error: "NON_MONOTONIC_REVISION",
+        message: "Non-monotonic revision progression detected."
+      }
+    };
+  }
+
+  if (error instanceof DomainIdempotencyConflictError) {
+    return {
+      statusCode: 409,
+      body: {
+        error: "IDEMPOTENCY_CONFLICT",
+        message: "Idempotent mutation conflict detected."
+      }
+    };
+  }
+
+  if (error instanceof ConcurrencyConflictError) {
+    return {
+      statusCode: 409,
+      body: {
+        error: "CONCURRENCY_CONFLICT",
+        message: "Concurrent mutation conflict detected."
+      }
+    };
+  }
+
+  if (error instanceof SourceSupersededError) {
+    return {
+      statusCode: 409,
+      body: {
+        error: "SOURCE_SUPERSEDED",
+        message: "Target source has already been superseded."
+      }
+    };
+  }
+
+  if (error instanceof CrossBatchSourceError) {
+    return {
+      statusCode: 409,
+      body: {
+        error: "CROSS_BATCH_SOURCE",
+        message: "Source asset does not belong to the target batch."
+      }
+    };
+  }
+
+  if (error instanceof ReportDisputedError) {
+    return {
+      statusCode: 409,
+      body: {
+        error: "REPORT_DISPUTED",
+        message: "The referenced report is disputed."
+      }
+    };
+  }
+
+  if (error instanceof MimeConflictError) {
+    return {
+      statusCode: 415,
+      body: {
+        error: "MIME_CONFLICT",
+        message: "The declared MIME type does not match the inspected content."
+      }
+    };
+  }
+
+  if (error instanceof CrossClientViolationError) {
+    return {
+      statusCode: 403,
+      body: {
+        error: "CROSS_CLIENT_VIOLATION",
+        message: "Access denied."
+      }
+    };
+  }
+
+  if (error instanceof SourceIntegrityMismatchError) {
+    return {
+      statusCode: 409,
+      body: {
+        error: "SOURCE_INTEGRITY_MISMATCH",
+        message: "Source object integrity verification failed."
+      }
+    };
+  }
+
+  if (error instanceof ClaimSupportRequiredError) {
+    return {
+      statusCode: 422,
+      body: {
+        error: "CLAIM_SUPPORT_REQUIRED",
+        message: "Claim requires valid evidence support."
+      }
+    };
+  }
+
+  if (error instanceof QuotaExceededError) {
+    return {
+      statusCode: 429,
+      body: {
+        error: "QUOTA_EXCEEDED",
+        message: "Evidence storage quota exceeded."
+      }
+    };
+  }
+
+  if (error instanceof ProductEvidenceDomainError) {
+    return {
+      statusCode: 400,
+      body: {
+        error: error.code,
+        message: "Validation or domain precondition failed."
+      }
+    };
+  }
+
+  const fastifyErr = error as Partial<FastifyError>;
+  if (
+    fastifyErr.code === "FST_ERR_CTP_BODY_TOO_LARGE" ||
+    fastifyErr.code === "FST_FILES_LIMIT" ||
+    fastifyErr.code === "FST_ERR_MULTIPART_FILE_TOO_LARGE" ||
+    fastifyErr.statusCode === 413
+  ) {
+    return {
+      statusCode: 413,
+      body: {
+        error: "PAYLOAD_TOO_LARGE",
+        message: "Payload exceeds allowed size limit."
+      }
+    };
+  }
+
+  if (fastifyErr.code === "FST_ERR_CTP_INVALID_MEDIA_TYPE" || fastifyErr.statusCode === 415) {
+    return {
+      statusCode: 415,
+      body: {
+        error: "UNSUPPORTED_MEDIA_TYPE",
+        message: "Unsupported media type."
+      }
+    };
+  }
+
+  if (fastifyErr.statusCode === 404) {
+    return {
+      statusCode: 404,
+      body: {
+        error: "NOT_FOUND",
+        message: "Resource not found."
+      }
+    };
+  }
+
+  if (fastifyErr.validation !== undefined || fastifyErr.statusCode === 400) {
+    return {
+      statusCode: 400,
+      body: {
+        error: "VALIDATION_ERROR",
+        issues: [
+          {
+            code: "INVALID_FIELD_COMBINATION",
+            path: [],
+            message: "Request validation failed."
+          }
+        ]
+      }
+    };
+  }
+
+  const statusCode =
+    typeof fastifyErr.statusCode === "number" &&
+    fastifyErr.statusCode >= 400 &&
+    fastifyErr.statusCode < 600
+      ? fastifyErr.statusCode
+      : 500;
+
+  return {
+    statusCode,
+    body: {
+      error: "INTERNAL_ERROR",
+      message: "Internal Server Error"
+    }
+  };
+}
+
+export function handleProductEvidenceError(
+  error: FastifyError | Error | unknown,
+  request: FastifyRequest,
+  reply: FastifyReply
+): void {
+  const { statusCode, body } = formatProductEvidenceError(error);
+  if (statusCode >= 500) {
+    const params = (request.params as Record<string, string> | undefined) ?? {};
+    request.log.error(
+      {
+        error: "INTERNAL_ERROR",
+        route: request.routeOptions?.url ?? request.url,
+        method: request.method,
+        ...(params.clientId ? { clientId: params.clientId } : {}),
+        ...(params.batchId ? { batchId: params.batchId } : {})
+      },
+      "product-evidence request failed with 5xx"
     );
   }
   reply.status(statusCode).send(body);

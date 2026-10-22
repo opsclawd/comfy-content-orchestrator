@@ -45,3 +45,5 @@ export * from "./product-batch.js";
 export * from "./evidence-asset.js";
 export * from "./coa-report.js";
 export * from "./product-claim.js";
+export * from "./product-evidence-http.js";
+export * from "./batch-evidence-dossier.js";

@@ -20,12 +20,14 @@ Source evidence assets are authoritative originals (macro photographs, Certifica
 | **Retention Class** | `source_evidence_archive` | Non-expiring retention lifecycle; objects are never silently aged out or auto-deleted by lifecycle rules. |
 | **Policy Version** | `dev-evidence-policy-v1` (or operator signed-off prod policy) | Explicit storage policy governance identifier recorded on each `SourceObject`. |
 
-### 1.2 Refusal of Assumed Production-Ready Archival
+### 1.2 Refusal of Assumed Production-Ready Archival & Fail-Closed Invariants
 
 > [!WARNING]
 > Local MinIO and dev environments are distribution and review caching layers, **not** certified immutable archival vaults.
 > Under `DEFAULT_DEV_EVIDENCE_STORAGE_POLICY`, `isProductionApproved` is `false`. Any registration attempted in an environment where `NODE_ENV === "production"` with an unapproved policy is rejected immediately with:
 > `ACCESS_DENIED (PRODUCTION_POLICY_NOT_APPROVED): Production evidence archival policy has not been signed off.`
+>
+> Furthermore, if `evidenceStoragePolicy` is not explicitly configured in the control-plane container, the API fails closed without assuming a fallback dev policy, throwing `POLICY_CONFIGURATION_MISSING` (HTTP 403 / 500).
 
 Production deployment requires a signed compliance retention policy and an external S3-compliant Object Lock / WORM (Write Once Read Many) bucket configuration.
 
@@ -33,7 +35,19 @@ Production deployment requires a signed compliance retention policy and an exter
 
 ## 2. Ingestion & Validation Lifecycle
 
-### 2.1 Inspection Matrix & Bounds
+### 2.1 Multipart Upload Flow (`POST .../batches/:batchId/evidence`)
+
+Uploading original source evidence binary files is conducted via `multipart/form-data`:
+- **Path:** `POST /api/v1/clients/:clientId/batches/:batchId/evidence`
+- **Multipart Structure:** Exactly one bounded JSON `metadata` part and exactly one `file` binary part, accepted in **either order**.
+- **Multipart Constraints:**
+  - Max file size: 64 MiB (enforced at streaming level; exceeding streams are truncated by Fastify and rejected with HTTP 413 `Payload Too Large`).
+  - Max field size: 1 MiB for metadata JSON part.
+  - Max total parts: 10 parts.
+  - Reused source objects: Combining `reusedSourceObjectId` with uploaded file bytes is strictly rejected (HTTP 400 `VALIDATION_ERROR`). For reusing existing source objects without bytes, submit a standard `application/json` payload.
+- **Idempotency:** Every multipart upload requires a client-generated UUIDv7 `actionId` in the `metadata` JSON part (or `x-action-id` header). Identical retries converge idempotently via command receipts.
+
+### 2.2 Inspection Matrix & Bounds
 
 Before bytes reach storage or persistence:
 1. **Photo Class (`photo`)**: Default max 10 MiB; JPEG, PNG, WebP inspected via Sharp; max 16,384 px dimension, 67,108,864 px area.
@@ -98,13 +112,17 @@ WHERE status = 'active' AND expires_at < NOW();
 
 ## 4. Quarantine & Dispute Recovery
 
-### 4.1 Quarantining Tampered Source Objects
+### 4.1 Automatic Byte Integrity Verification & Durable Quarantine
 
-If an on-disk integrity scan or derivative generation step detects a mismatch between `original_sha256` and persisted blob bytes:
-1. `quarantineSourceObject(clientId, sourceObjectId, reason)` is invoked.
-2. `source_objects.availability` is set to `'quarantined'`.
-3. Quarantined objects can never be used to substantiate claims or linked to new batches.
-4. Existing claims referencing the quarantined source object fail validation and must be withdrawn or superseded.
+The platform guarantees tamper-evidence by actively verifying physical storage bytes against registered cryptographic digests:
+1. **Verification Event Gate:** Before recording an `EvidenceVerificationEvent`, the application layer retrieves the full stored original binary from `godzspeed-evidence`, computes its SHA-256 digest, and compares it to `source_objects.original_sha256`.
+2. **Claim Approval Gate:** Before approving a claim (`POST .../claims/:claimId/review` with `decision: 'approve'`), all source evidence objects linked to the claim are read back and byte-verified.
+3. **Quarantine Action:** If any blob is missing or its SHA-256 differs from the registered digest:
+   - The system immediately invokes `quarantineSourceObject(clientId, sourceObjectId, reason)`.
+   - `source_objects.availability` is permanently updated to `'quarantined'`.
+   - The transaction fails closed, returning HTTP 409 `SOURCE_INTEGRITY_MISMATCH` or HTTP 404 `NOT_FOUND` (sanitized to prevent bucket key leakage).
+4. Quarantined objects can never be used to substantiate claims or linked to new batches.
+5. Existing claims referencing the quarantined source object fail resolution closed with `source_quarantined` and must be withdrawn or superseded.
 
 ### 4.2 Handling Lab Disputes & Audit Withdrawals
 
