@@ -165,6 +165,9 @@ export function CoaReportsPanel({
   const [scopeKind, setScopeKind] = useState<CoaScopeKindContract>("attributed_lot");
   const [sampleDate, setSampleDate] = useState("");
   const [associationAttestation, setAssociationAttestation] = useState("");
+  const [scopeDescription, setScopeDescription] = useState("");
+  const [samplingMethodDescription, setSamplingMethodDescription] = useState("");
+  const [associationConfirmed, setAssociationConfirmed] = useState(false);
   const [measurements, setMeasurements] = useState<MeasurementRowDraft[]>([defaultRow()]);
 
   // Review form state
@@ -222,8 +225,11 @@ export function CoaReportsPanel({
         labNameAsClaimed: labName.trim() || null,
         sampleIdentifierAsClaimed: sampleIdentifier.trim() || null,
         scopeKind,
+        scopeDescription: scopeDescription.trim() || null,
         sampleDate: sampleDate.trim() || null,
+        samplingMethodDescription: samplingMethodDescription.trim() || null,
         sampleToBatchAssociationAttestation: associationAttestation.trim() || null,
+        sampleToBatchAssociationConfirmed: associationConfirmed,
         measurements: formattedMeasurements
       };
 
@@ -1101,6 +1107,73 @@ export function CoaReportsPanel({
                     style={{ width: "100%", padding: "0.4rem" }}
                   />
                 </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
+                <div>
+                  <label
+                    htmlFor="coa-scope-description-input"
+                    style={{ display: "block", fontSize: "0.85rem", marginBottom: "0.25rem" }}
+                  >
+                    Scope Description:
+                  </label>
+                  <input
+                    id="coa-scope-description-input"
+                    data-testid="coa-scope-description-input"
+                    type="text"
+                    value={scopeDescription}
+                    onChange={(e) => {
+                      setScopeDescription(e.target.value);
+                      createActionIdRef.current = generateUuidV7();
+                    }}
+                    placeholder="e.g. Representative sample of full production lot"
+                    style={{ width: "100%", padding: "0.4rem" }}
+                  />
+                </div>
+                {scopeKind === "attributed_lot" && (
+                  <div>
+                    <label
+                      htmlFor="coa-sampling-method-input"
+                      style={{ display: "block", fontSize: "0.85rem", marginBottom: "0.25rem" }}
+                    >
+                      Sampling Method Description:
+                    </label>
+                    <input
+                      id="coa-sampling-method-input"
+                      data-testid="coa-sampling-method-input"
+                      type="text"
+                      value={samplingMethodDescription}
+                      onChange={(e) => {
+                        setSamplingMethodDescription(e.target.value);
+                        createActionIdRef.current = generateUuidV7();
+                      }}
+                      placeholder="e.g. Random grab samples from 4 quadrants of lot"
+                      style={{ width: "100%", padding: "0.4rem" }}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.4rem",
+                    fontSize: "0.85rem"
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    data-testid="coa-association-confirmed-checkbox"
+                    checked={associationConfirmed}
+                    onChange={(e) => {
+                      setAssociationConfirmed(e.target.checked);
+                      createActionIdRef.current = generateUuidV7();
+                    }}
+                  />
+                  Sample-to-batch association has been confirmed
+                </label>
               </div>
 
               {/* Dynamic Measurement Rows */}

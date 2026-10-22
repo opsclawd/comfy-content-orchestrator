@@ -2,7 +2,7 @@ import {
   forwardProductEvidenceRequest,
   validateRouteParams
 } from "../../../../../../../../../api/product-evidence-forwarder";
-import { ProductClaimDetailResponseSchema } from "@cco/contracts";
+import { LinkClaimEvidenceResponseSchema } from "@cco/contracts";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +24,6 @@ export async function POST(request: Request, context: RouteContext): Promise<Res
     params,
     upstreamPath: `/api/v1/clients/${encodeURIComponent(params.clientId)}/batches/${encodeURIComponent(params.batchId)}/claims/${encodeURIComponent(params.claimId)}/evidence-links`,
     allowedMethods: ["POST"],
-    responseSchema: ProductClaimDetailResponseSchema
+    responseSchema: LinkClaimEvidenceResponseSchema
   });
 }

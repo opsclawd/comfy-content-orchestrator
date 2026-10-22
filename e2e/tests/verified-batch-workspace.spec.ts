@@ -53,6 +53,7 @@ test.describe("Verified-Batch Operator Workspace and Evidence Gate (#477)", () =
     await page.getByTestId("create-batch-button").click();
     await expect(page.getByTestId("create-batch-modal")).toBeVisible();
     await page.getByTestId("batch-lot-identifier-input").fill(testLotIdentifier);
+    await page.getByTestId("batch-display-name-input").fill(`Harvest ${testLotIdentifier}`);
     await page.getByTestId("batch-origin-select").selectOption("own_production");
     await page.getByTestId("batch-producer-input").fill("Apex Cultivation Facility");
     await page.getByTestId("submit-create-batch-button").click();
@@ -115,8 +116,12 @@ test.describe("Verified-Batch Operator Workspace and Evidence Gate (#477)", () =
     await page.getByTestId("submit-register-evidence-button").click();
     await expect(page.getByTestId("register-evidence-modal")).toBeHidden();
 
-    // Inspect PDF media
-    const inspectPdfBtn = page.getByRole("button", { name: "Inspect Original Media" }).first();
+    // Inspect PDF media. Evidence item ordering is not stable across runs,
+    // so scope by the PDF's own assertion text rather than position.
+    const pdfEvidenceCard = page
+      .locator('[data-testid^="evidence-item-"]')
+      .filter({ hasText: "Synthetic laboratory test certificate" });
+    const inspectPdfBtn = pdfEvidenceCard.getByRole("button", { name: "Inspect Original Media" });
     await inspectPdfBtn.click();
     await expect(page.getByTestId("media-inspection-modal")).toBeVisible();
     await expect(page.getByTestId("inspected-source-pdf")).toBeVisible();
@@ -124,20 +129,40 @@ test.describe("Verified-Batch Operator Workspace and Evidence Gate (#477)", () =
     await page.getByRole("button", { name: "Close Inspection" }).click();
     await expect(page.getByTestId("media-inspection-modal")).toBeHidden();
 
+    // Capture the PDF evidence's actual ID (from its card's data-testid)
+    // so the CoA form below can attach to it explicitly: evidence item
+    // ordering is not stable, so the dropdown's default (first) option is
+    // not reliably the coa_test_report-purposed evidence.
+    const pdfEvidenceTestId = await pdfEvidenceCard.getAttribute("data-testid");
+    const pdfEvidenceId = pdfEvidenceTestId!.replace("evidence-item-", "");
+
     // 8. Transcribe CoA Report
     await page.getByTestId("transcribe-coa-button").click();
     await expect(page.getByTestId("transcribe-coa-modal")).toBeVisible();
+    await page.getByTestId("coa-evidence-select").selectOption(pdfEvidenceId);
     await page.getByTestId("coa-report-id-input").fill("RPT-SYNTHETIC-2026");
     await page.getByTestId("coa-lab-name-input").fill("Apex Certified Analytics");
+    await page.getByTestId("coa-sample-id-input").fill(`SAMPLE-${testLotIdentifier}`);
+    await page.getByTestId("coa-report-date-input").fill("2026-01-15");
+    await page
+      .getByTestId("coa-scope-description-input")
+      .fill("Representative sample of full production lot");
+    await page
+      .getByTestId("coa-sampling-method-input")
+      .fill("Random grab samples from 4 quadrants of lot");
+    await page
+      .getByTestId("coa-assoc-attestation-input")
+      .fill("Sample pulled directly from lot barrel A1");
+    await page.getByTestId("coa-association-confirmed-checkbox").check();
     await page.getByTestId("row-analyte-0").fill("THC");
     await page.getByTestId("row-value-0").fill("24.5000"); // Exact decimal string preserving trailing zeros
-    await page.getByTestId("row-unit-0").fill("percent");
+    await page.getByTestId("row-unit-0").fill("percent_w_w");
     await page.getByTestId("submit-transcribe-coa-button").click();
     await expect(page.getByTestId("transcribe-coa-modal")).toBeHidden();
 
     // Verify CoA report and exact measurement string rendered
     await expect(page.getByTestId("measurement-value-THC")).toHaveText("24.5000");
-    await expect(page.getByTestId("measurement-unit-THC")).toHaveText("percent");
+    await expect(page.getByTestId("measurement-unit-THC")).toHaveText("percent_w_w");
     await expect(page.getByTestId("coa-unreviewed-badge")).toBeVisible();
 
     // 9. Operator Reviews CoA Report (demonstrates separation of duties via distinct reviewer actor)
@@ -174,7 +199,7 @@ test.describe("Verified-Batch Operator Workspace and Evidence Gate (#477)", () =
     await page.getByTestId("claim-proof-category-select").selectOption("coa_measurement_backed");
     await page.getByTestId("param-analyte-input").fill("THC");
     await page.getByTestId("param-value-input").fill("24.5000");
-    await page.getByTestId("param-unit-input").fill("percent");
+    await page.getByTestId("param-unit-input").fill("percent_w_w");
     await page.getByTestId("claim-display-wording-input").fill("24.5000% THC by dry weight");
     await page.getByTestId("submit-propose-claim-button").click();
     await expect(page.getByTestId("propose-claim-modal")).toBeHidden();
@@ -182,10 +207,13 @@ test.describe("Verified-Batch Operator Workspace and Evidence Gate (#477)", () =
     // Initially unlinked claim is blocked
     await expect(page.getByTestId("claim-blocked-badge")).toBeVisible();
 
-    // 11. Link Evidence to Claim
+    // 11. Link Evidence to Claim. The primary_measurement support role
+    // must link the PDF (the CoA's own source evidence), not whichever
+    // evidence happens to be first in the (unstably ordered) default.
     const linkEvidenceBtn = page.getByRole("button", { name: "+ Link Evidence" }).first();
     await linkEvidenceBtn.click();
     await expect(page.getByTestId("link-evidence-modal")).toBeVisible();
+    await page.getByTestId("link-evidence-select").selectOption(pdfEvidenceId);
     await page.getByTestId("submit-link-evidence-button").click();
     await expect(page.getByTestId("link-evidence-modal")).toBeHidden();
 

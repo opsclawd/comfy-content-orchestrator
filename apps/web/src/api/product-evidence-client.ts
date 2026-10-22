@@ -15,7 +15,7 @@ import {
   ProductBatchListResponseSchema,
   ProductBatchResponseSchema,
   ProductClaimContractSchema,
-  ProductClaimDetailResponseSchema,
+  LinkClaimEvidenceResponseSchema,
   ProductClaimReviewResponseSchema,
   ProductSkuListResponseSchema,
   ProductSkuResponseSchema,
@@ -46,7 +46,7 @@ import {
   type ProductBatchListResponse,
   type ProductBatchResponse,
   type ProductClaimContract,
-  type ProductClaimDetailResponse,
+  type LinkClaimEvidenceResponse,
   type ProductClaimReviewResponse,
   type ProductSkuListResponse,
   type ProductSkuResponse,
@@ -511,7 +511,7 @@ export async function linkClaimEvidence(
   claimId: string,
   request: LinkClaimEvidenceHttpRequest,
   fetchFn: typeof fetch = fetch
-): Promise<ProductClaimDetailResponse> {
+): Promise<LinkClaimEvidenceResponse> {
   const res = await fetchFn(
     `/api/clients/${clientId}/batches/${batchId}/claims/${claimId}/evidence-links`,
     {
@@ -521,7 +521,7 @@ export async function linkClaimEvidence(
       cache: "no-store"
     }
   );
-  return handleApiResponse<ProductClaimDetailResponse>(res, ProductClaimDetailResponseSchema);
+  return handleApiResponse<LinkClaimEvidenceResponse>(res, LinkClaimEvidenceResponseSchema);
 }
 
 export async function reviewClaim(

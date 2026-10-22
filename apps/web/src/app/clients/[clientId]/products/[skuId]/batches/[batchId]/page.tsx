@@ -106,8 +106,13 @@ export default function BatchDossierPage({ params }: BatchDossierPageProps): Rea
         >
           <BlockedBadge detail="Dossier Retrieval Error" />
           <h2 style={{ marginTop: "0.5rem" }}>Unable to Load Batch Dossier</h2>
+          {/* Always lead with a generic, non-leaking message: a load failure
+              for an arbitrary or malicious deep link (nonexistent/malformed
+              batch, cross-client access, etc.) must not surface raw upstream
+              validation internals as the primary banner text. The specific
+              error, when present, is still shown for operator diagnostics. */}
           <p style={{ marginTop: "0.5rem", fontSize: "0.9rem" }}>
-            {error || "Failed to load batch dossier."}
+            Failed to load batch dossier.{error ? ` ${error}` : ""}
           </p>
           <div style={{ marginTop: "1rem" }}>
             <button

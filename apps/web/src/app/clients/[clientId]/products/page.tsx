@@ -500,6 +500,14 @@ function ClientProductsContent({ params }: ClientProductsPageProps): React.React
             type="button"
             data-testid="create-batch-button"
             onClick={() => {
+              // Default the new batch's parent SKU to the SKU currently
+              // selected in the workspace, not whatever SKU batchSkuId
+              // happened to default to on first load; otherwise a batch
+              // created right after selecting a SKU can be silently
+              // attached to a different, stale SKU.
+              if (selectedSku) {
+                setBatchSkuId(selectedSku.skuId);
+              }
               createBatchActionIdRef.current = generateUuidV7();
               setBatchError(null);
               setShowBatchModal(true);
