@@ -55,7 +55,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
   it("migrates an empty PostgreSQL 18.6 database through the baseline", async () => {
     const applied = await runMigrations(client, { migrationsDirectory });
 
-    expect(applied).toHaveLength(25);
+    expect(applied).toHaveLength(29);
     expect(applied[0]?.version).toBe("001");
     expect(applied[1]?.version).toBe("002");
     expect(applied[2]?.version).toBe("003");
@@ -81,6 +81,10 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
     expect(applied[22]?.version).toBe("023");
     expect(applied[23]?.version).toBe("024");
     expect(applied[24]?.version).toBe("025");
+    expect(applied[25]?.version).toBe("026");
+    expect(applied[26]?.version).toBe("027");
+    expect(applied[27]?.version).toBe("028");
+    expect(applied[28]?.version).toBe("029");
 
     const schemaRes = await client.query(
       "SELECT version FROM schema_migrations ORDER BY version ASC"
@@ -110,7 +114,11 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       { version: "022" },
       { version: "023" },
       { version: "024" },
-      { version: "025" }
+      { version: "025" },
+      { version: "026" },
+      { version: "027" },
+      { version: "028" },
+      { version: "029" }
     ]);
 
     const tablesRes = await client.query<{ table_name: string }>(
@@ -124,15 +132,33 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
 
     const tableNames = tablesRes.rows.map((r) => r.table_name);
     expect(tableNames).toEqual([
+      "batch_evidence_links",
       "campaign_production_run_scenes",
       "campaign_production_runs",
       "campaign_reference_bible_changes",
       "campaign_reference_bibles",
       "campaigns",
+      "claim_decision_events",
+      "claim_source_links",
       "clients",
+      "coa_measurements",
+      "coa_report_review_events",
+      "coa_report_revisions",
+      "coa_reports",
       "delivery_assembly_jobs",
+      "evidence_assets",
+      "evidence_derivatives",
+      "evidence_ingest_reservations",
+      "evidence_revisions",
+      "evidence_verification_events",
       "generation_manifests",
       "license_registry",
+      "product_batch_facts",
+      "product_batches",
+      "product_claim_revisions",
+      "product_claims",
+      "product_evidence_command_receipts",
+      "product_skus",
       "production_attempts",
       "reference_assets",
       "reference_groups",
@@ -142,6 +168,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       "schema_migrations",
       "shot_plan_previs_associations",
       "shot_plans",
+      "source_objects",
       "storyboard_candidates",
       "storyboard_scenes"
     ]);

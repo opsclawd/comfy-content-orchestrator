@@ -1,11 +1,20 @@
 import type { Pool } from "pg";
-import type { ObjectStoragePort, ReviewMediaDeliveryPort } from "@cco/application";
+import { AccessDeniedError } from "@cco/domain";
+import {
+  type ObjectStoragePort,
+  type ReviewMediaDeliveryPort,
+  type ReviewerAuthorizationPort,
+  DEFAULT_DEV_EVIDENCE_STORAGE_POLICY
+} from "@cco/application";
 import {
   PostgresCampaignDeliveryReelQueries,
   PostgresCurrentProductionAttemptQueries,
   PostgresSceneReviewQueries,
   PostgresUnitOfWork,
-  PostgresReferenceAssetRepository
+  PostgresReferenceAssetRepository,
+  PostgresBatchEvidenceDossierQueries,
+  PostgresEvidenceLockCoordinator,
+  OriginalsInspectionAdapter
 } from "@cco/infrastructure";
 import { createControlApiApp, createProductionClientSessionAuthenticator } from "control-api";
 import type { ScenarioPlanningModelClient } from "./scenario-planning-client.js";
@@ -48,9 +57,11 @@ export const testObjectStorage: ObjectStoragePort = {
   }
 };
 
+let activeControlApiBaseUrl = "http://127.0.0.1:8000";
+
 const mockMediaDelivery: ReviewMediaDeliveryPort = {
   generatePresignedReadUrl: async (locator) =>
-    `http://mock-storage/${locator.bucket}/${locator.key}`
+    `${activeControlApiBaseUrl}/test-media/${locator.bucket}/${locator.key}`
 };
 
 export interface TestControlApi {
@@ -68,6 +79,28 @@ export async function startTestControlApi(options: {
   const currentProductionAttemptQueries = new PostgresCurrentProductionAttemptQueries(options.pool);
   const campaignDeliveryReelQueries = new PostgresCampaignDeliveryReelQueries(options.pool);
   const referenceAssetRepository = new PostgresReferenceAssetRepository(options.pool);
+  const batchEvidenceDossierQueries = new PostgresBatchEvidenceDossierQueries(options.pool);
+  const evidenceLockCoordinator = new PostgresEvidenceLockCoordinator(options.pool);
+  const originalsInspection = new OriginalsInspectionAdapter();
+  const reviewerAuthorization: ReviewerAuthorizationPort = {
+    assertCanReviewCoaReport: async (_clientId, actorId) => {
+      if (actorId === "author@test.internal") {
+        throw new AccessDeniedError(`Actor "${actorId}" is not authorized to review CoA reports.`);
+      }
+    },
+    assertCanReviewClaim: async (_clientId, actorId) => {
+      if (actorId === "author@test.internal") {
+        throw new AccessDeniedError(
+          `Actor "${actorId}" is not authorized to review product claims.`
+        );
+      }
+    },
+    assertCanVerifyEvidence: async (_clientId, actorId) => {
+      if (actorId === "author@test.internal") {
+        throw new AccessDeniedError(`Actor "${actorId}" is not authorized to verify evidence.`);
+      }
+    }
+  };
 
   const app = createControlApiApp(
     {
@@ -77,6 +110,10 @@ export async function startTestControlApi(options: {
       campaignDeliveryReelQueries,
       objectStorage: testObjectStorage,
       reviewMediaDelivery: mockMediaDelivery,
+      batchEvidenceDossierQueries,
+      evidenceLockCoordinator,
+      originalsInspection,
+      reviewerAuthorization,
       planningModelClients: {
         primary: options.planningStub,
         fallback: {
@@ -84,11 +121,19 @@ export async function startTestControlApi(options: {
           complete: (req) => options.planningStub.complete(req)
         }
       },
-      referenceAssetRepository
+      referenceAssetRepository,
+      evidenceStoragePolicy: DEFAULT_DEV_EVIDENCE_STORAGE_POLICY
     },
     {
       reviewerIdentityResolver: {
-        resolve: () => "Integration Test Director"
+        resolve: (req) => {
+          const headers = req?.headers as Record<string, string | undefined> | undefined;
+          return (
+            headers?.["tailscale-user-login"] ||
+            headers?.["x-test-actor-id"] ||
+            "author@test.internal"
+          );
+        }
       },
       clientSessionAuthenticator: createProductionClientSessionAuthenticator({
         secret: TEST_CLIENT_SESSION_SECRET,
@@ -98,9 +143,24 @@ export async function startTestControlApi(options: {
     }
   );
 
+  app.get("/test-media/:bucket/*", async (req, reply) => {
+    const { bucket } = req.params as { bucket: string };
+    const key = (req.params as Record<string, string>)["*"];
+    const item = inMemoryStorage.get(`${bucket}/${key}`);
+    if (!item) {
+      reply.code(404).send({ error: "Media not found" });
+      return;
+    }
+    if (item.contentType) {
+      reply.header("content-type", item.contentType);
+    }
+    reply.send(Buffer.from(item.body));
+  });
+
   await app.listen({ port: 0, host: "127.0.0.1" });
   const address = app.server.address() as AddressInfo;
   const controlApiBaseUrl = `http://127.0.0.1:${address.port}`;
+  activeControlApiBaseUrl = controlApiBaseUrl;
 
   return {
     app,

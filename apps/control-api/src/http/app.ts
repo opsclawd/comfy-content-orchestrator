@@ -18,6 +18,7 @@ import { campaignReadinessRoutes } from "./routes/campaign-readiness-routes.js";
 import { campaignRoutes } from "./routes/campaign-routes.js";
 import { clientRoutes } from "./routes/client-routes.js";
 import { referenceRoutes } from "./routes/reference-routes.js";
+import { productEvidenceRoutes } from "./routes/product-evidence-routes.js";
 import { sceneGenerationRoutes } from "./routes/scene-generation-routes.js";
 import { ControlApiConfigError } from "../runtime-config.js";
 import type { ControlApiAppOptions } from "./types.js";
@@ -138,6 +139,12 @@ export function createControlApiApp(
   });
 
   app.register(referenceRoutes, {
+    container,
+    appOptions: effectiveOptions,
+    clientContextResolver: effectiveOptions.clientContextResolver
+  });
+
+  app.register(productEvidenceRoutes, {
     container,
     appOptions: effectiveOptions,
     clientContextResolver: effectiveOptions.clientContextResolver

@@ -5,7 +5,8 @@ export const BUCKET_NAMES = [
   "godzspeed-temp",
   "godzspeed-review",
   "godzspeed-reference",
-  "godzspeed-delivery"
+  "godzspeed-delivery",
+  "godzspeed-evidence"
 ] as const;
 
 export type BucketName = (typeof BUCKET_NAMES)[number];
@@ -14,7 +15,8 @@ export const BUCKETS = {
   TEMP: "godzspeed-temp",
   REVIEW: "godzspeed-review",
   REFERENCE: "godzspeed-reference",
-  DELIVERY: "godzspeed-delivery"
+  DELIVERY: "godzspeed-delivery",
+  EVIDENCE: "godzspeed-evidence"
 } as const;
 
 export interface BucketRetentionPolicy {
@@ -56,6 +58,12 @@ export const BUCKET_RETENTION_POLICIES: Readonly<Record<BucketName, BucketRetent
       description:
         "approved delivery copies awaiting client handoff (retained 90 days after campaign completion)",
       isAutomatedExpiry: false
+    },
+    "godzspeed-evidence": {
+      bucket: "godzspeed-evidence",
+      description:
+        "immutable source evidence archive (retained indefinitely under regulatory hold; no automated expiry)",
+      isAutomatedExpiry: false
     }
   });
 
@@ -75,5 +83,6 @@ export const BUCKET_LIFECYCLE_DEFINITIONS: Readonly<
     prefix: ""
   },
   "godzspeed-reference": undefined,
-  "godzspeed-delivery": undefined
+  "godzspeed-delivery": undefined,
+  "godzspeed-evidence": undefined
 });

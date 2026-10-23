@@ -100,5 +100,12 @@ describe("HomePage Component", () => {
       href: "/campaigns/new",
       "data-testid": "new-campaign-link"
     });
+
+    const productsLink = findByTestId(jsx, "products-workspace-link");
+    expect(productsLink).not.toBeNull();
+    expect(productsLink?.props).toMatchObject({
+      href: "/products",
+      "data-testid": "products-workspace-link"
+    });
   });
 });

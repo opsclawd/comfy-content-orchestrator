@@ -876,6 +876,28 @@ describe("bootstrap", () => {
     await runtime.stop();
   });
 
+  it("omits evidenceStoragePolicy by default and wires ConfiguredReviewerAuthorizationAdapter", async () => {
+    const harness = createTestHarness();
+
+    const runtime = await runControlApi({
+      config: validConfig,
+      poolFactory: () => harness.mockPool as unknown as Pool,
+      s3ClientFactory: () => harness.mockS3Client as unknown as S3Client,
+      serverStarter: harness.mockServerStarter,
+      processSignals: harness.mockSignals,
+      logger: harness.mockLogger
+    });
+
+    const passedDependencies = harness.mockServerStarter.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(passedDependencies.evidenceStoragePolicy).toBeUndefined();
+    expect(passedDependencies.reviewerAuthorization).toBeDefined();
+
+    await runtime.stop();
+  });
+
   it("main() logs error and sets process.exitCode = 1 on failure without throwing unhandled rejection", async () => {
     const originalEnv = { ...process.env };
     const originalExitCode = process.exitCode;

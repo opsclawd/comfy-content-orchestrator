@@ -14,20 +14,29 @@ import type {
   PlanningModelRequest,
   RankingModelClientPort,
   ReferenceAssetRepository,
-  StorageTelemetryPort
+  StorageTelemetryPort,
+  ReviewerAuthorizationPort,
+  BatchEvidenceDossierQueries,
+  EvidenceLockCoordinatorPort,
+  OriginalsInspectionPort,
+  EvidenceStoragePolicyConfig
 } from "@cco/application";
 import { PlanShotPlansUseCase } from "@cco/application";
 import {
   AnthropicPlanningModelClient,
+  ConfiguredReviewerAuthorizationAdapter,
   GeminiCandidateRankingClient,
   HostFsStorageTelemetryAdapter,
   InMemoryStorageMetricsRegistry,
   OpenAiCandidateRankingClient,
   OpenAiPlanningModelClient,
+  OriginalsInspectionAdapter,
+  PostgresBatchEvidenceDossierQueries,
   PostgresCampaignDeliveryReelQueries,
   PostgresCampaignAnimaticQueries,
   PostgresCampaignReadinessQueries,
   PostgresDeliveryAssemblyJobQueue,
+  PostgresEvidenceLockCoordinator,
   PostgresJobQueue,
   PostgresReferenceAssetRepository,
   PostgresSceneReviewQueries,
@@ -143,6 +152,11 @@ export interface ControlApiBootstrapOptions {
   readonly processSignals?: ControlApiProcessSignals;
   readonly planningCoordinator?: ShotPlanPlanningCoordinator | undefined;
   readonly planningRecoveryReaperIntervalMs?: number | undefined;
+  readonly reviewerAuthorization?: ReviewerAuthorizationPort | undefined;
+  readonly batchEvidenceDossierQueries?: BatchEvidenceDossierQueries | undefined;
+  readonly evidenceLockCoordinator?: EvidenceLockCoordinatorPort | undefined;
+  readonly originalsInspection?: OriginalsInspectionPort | undefined;
+  readonly evidenceStoragePolicy?: EvidenceStoragePolicyConfig | undefined;
 }
 
 export type ControlApiRuntimeState = "starting" | "running" | "stopping" | "stopped";
@@ -327,6 +341,22 @@ export async function runControlApi(
       hashBytes: async (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
     };
     const imageValidator = options.imageValidator ?? new SharpImageInspectionAdapter();
+
+    const reviewerAuthorization =
+      options.reviewerAuthorization ??
+      new ConfiguredReviewerAuthorizationAdapter(config.reviewerAuthorizationGrants ?? {});
+
+    const batchEvidenceDossierQueries =
+      options.batchEvidenceDossierQueries ??
+      (pool ? new PostgresBatchEvidenceDossierQueries(pool) : undefined);
+
+    const evidenceLockCoordinator =
+      options.evidenceLockCoordinator ??
+      (pool ? new PostgresEvidenceLockCoordinator(pool) : undefined);
+
+    const originalsInspection = options.originalsInspection ?? new OriginalsInspectionAdapter();
+
+    const evidenceStoragePolicy = options.evidenceStoragePolicy ?? config.evidenceStoragePolicy;
 
     const storageTelemetryOptions: HostFsStorageTelemetryAdapterOptions = {
       storagePath: config.storageTelemetry.path,
@@ -523,6 +553,11 @@ export async function runControlApi(
         storageMetricsRegistry,
         jobQueue,
         deliveryAssemblyJobQueue,
+        reviewerAuthorization,
+        originalsInspection,
+        ...(evidenceStoragePolicy ? { evidenceStoragePolicy } : {}),
+        ...(evidenceLockCoordinator ? { evidenceLockCoordinator } : {}),
+        ...(batchEvidenceDossierQueries ? { batchEvidenceDossierQueries } : {}),
         ...(planningModelClients ? { planningModelClients } : {}),
         ...(planningCoordinator ? { planningCoordinator } : {}),
         ...(referenceAssetRepository ? { referenceAssetRepository } : {}),

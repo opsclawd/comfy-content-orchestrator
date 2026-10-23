@@ -53,6 +53,14 @@ export { PostgresCampaignReferenceBibleRepository } from "./postgres/repositorie
 export { PostgresGenerationManifestRepository } from "./postgres/repositories/postgres-generation-manifest-repository.js";
 
 export { PostgresReviewEventStore } from "./postgres/repositories/postgres-review-event-store.js";
+export {
+  PostgresProductEvidenceRepository,
+  computePayloadSha256,
+  translateDatabaseError,
+  isProductRegistryDatabaseError,
+  type PostgresProductEvidenceRepositoryOptions,
+  type DatabaseErrorTranslationContext
+} from "./postgres/repositories/postgres-product-evidence-repository.js";
 
 export { PostgresUnitOfWork } from "./postgres/uow/postgres-unit-of-work.js";
 
@@ -457,5 +465,32 @@ export {
   DEFAULT_MAX_HEIGHT,
   DEFAULT_MAX_PIXELS
 } from "./image/sharp-image-inspection-adapter.js";
+
+export {
+  OriginalsInspectionAdapter,
+  type OriginalsInspectionLimits
+} from "./evidence/originals-inspection-adapter.js";
+export { PostgresEvidenceLockCoordinator } from "./evidence/postgres-evidence-lock-coordinator.js";
+export {
+  PostgresEvidenceAssetRepository,
+  type PostgresEvidenceAssetRepositoryOptions
+} from "./evidence/postgres-evidence-asset-repository.js";
+export {
+  PostgresCoaReportRepository,
+  type PostgresCoaReportRepositoryOptions
+} from "./postgres/repositories/postgres-coa-report-repository.js";
+export {
+  PostgresProductClaimRepository,
+  type PostgresProductClaimRepositoryOptions
+} from "./postgres/repositories/postgres-product-claim-repository.js";
+export {
+  ConfiguredReviewerAuthorizationAdapter,
+  type ClientReviewerGrants,
+  type ReviewerAuthorizationGrants
+} from "./evidence/configured-reviewer-authorization-adapter.js";
+export {
+  PostgresBatchEvidenceDossierQueries,
+  type PostgresBatchEvidenceDossierQueriesOptions
+} from "./postgres/queries/postgres-batch-evidence-dossier-queries.js";
 
 export * from "./experiments/index.js";

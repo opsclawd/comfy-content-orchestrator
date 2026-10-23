@@ -12,7 +12,8 @@ export default tseslint.config(
       "**/.ai-tmp/**",
       "**/.ai-cache/**",
       "**/.ai-worktrees/**",
-      "**/.ai-runs/**"
+      "**/.ai-runs/**",
+      "**/*.timestamp-*.mjs"
     ]
   },
   js.configs.recommended,

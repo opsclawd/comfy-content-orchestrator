@@ -650,5 +650,55 @@ describe("runtime-config", () => {
       expect(config.rankingProviders?.attemptTimeoutMs).toBe(20_000);
       expect(config.rankingProviders?.overallTimeoutMs).toBe(45_000);
     });
+
+    it("parses optional EVIDENCE_STORAGE_POLICY_JSON and REVIEWER_AUTHORIZATION_GRANTS_JSON when valid JSON", () => {
+      const storagePolicy = {
+        policyId: "custom-policy",
+        isProductionApproved: true,
+        environment: "production",
+        maxClientStorageBytes: 1000,
+        maxConcurrentUploads: 2,
+        limitsPerSourceClass: {
+          photo: 500,
+          coa: 500,
+          document: 500,
+          process_record: 500,
+          raw: 500,
+          video: 0
+        }
+      };
+      const reviewerGrants = {
+        "018f1234-5678-4789-8123-123456789abc": {
+          coaReviewers: ["actor-1"],
+          claimReviewers: ["actor-2"],
+          evidenceVerifiers: ["actor-3"]
+        }
+      };
+
+      const config = parseControlApiRuntimeConfig({
+        ...validEnv,
+        EVIDENCE_STORAGE_POLICY_JSON: JSON.stringify(storagePolicy),
+        REVIEWER_AUTHORIZATION_GRANTS_JSON: JSON.stringify(reviewerGrants)
+      });
+
+      expect(config.evidenceStoragePolicy).toEqual(storagePolicy);
+      expect(config.reviewerAuthorizationGrants).toEqual(reviewerGrants);
+    });
+
+    it("rejects invalid JSON in EVIDENCE_STORAGE_POLICY_JSON or REVIEWER_AUTHORIZATION_GRANTS_JSON", () => {
+      expect(() =>
+        parseControlApiRuntimeConfig({
+          ...validEnv,
+          EVIDENCE_STORAGE_POLICY_JSON: "{invalid-json"
+        })
+      ).toThrowError(/EVIDENCE_STORAGE_POLICY_JSON/);
+
+      expect(() =>
+        parseControlApiRuntimeConfig({
+          ...validEnv,
+          REVIEWER_AUTHORIZATION_GRANTS_JSON: "{invalid-json"
+        })
+      ).toThrowError(/REVIEWER_AUTHORIZATION_GRANTS_JSON/);
+    });
   });
 });

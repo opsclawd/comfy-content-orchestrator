@@ -365,6 +365,113 @@ describe("PostgreSQL audit immutability and application-role privileges integrat
       has_delete: false
     });
 
+    // Check privileges on product_batch_facts (immutable revision table)
+    const pbfPrivsRes = await client.query<{
+      has_select: boolean;
+      has_insert: boolean;
+      has_update: boolean;
+      has_delete: boolean;
+    }>(
+      `SELECT
+        has_table_privilege('orchestrator_app', 'product_batch_facts', 'SELECT') AS has_select,
+        has_table_privilege('orchestrator_app', 'product_batch_facts', 'INSERT') AS has_insert,
+        has_table_privilege('orchestrator_app', 'product_batch_facts', 'UPDATE') AS has_update,
+        has_table_privilege('orchestrator_app', 'product_batch_facts', 'DELETE') AS has_delete`
+    );
+    expect(pbfPrivsRes.rows[0]).toEqual({
+      has_select: true,
+      has_insert: true,
+      has_update: false,
+      has_delete: false
+    });
+
+    // Check privileges on product_evidence_command_receipts (immutable audit ledger)
+    const pecrPrivsRes = await client.query<{
+      has_select: boolean;
+      has_insert: boolean;
+      has_update: boolean;
+      has_delete: boolean;
+    }>(
+      `SELECT
+        has_table_privilege('orchestrator_app', 'product_evidence_command_receipts', 'SELECT') AS has_select,
+        has_table_privilege('orchestrator_app', 'product_evidence_command_receipts', 'INSERT') AS has_insert,
+        has_table_privilege('orchestrator_app', 'product_evidence_command_receipts', 'UPDATE') AS has_update,
+        has_table_privilege('orchestrator_app', 'product_evidence_command_receipts', 'DELETE') AS has_delete`
+    );
+    expect(pecrPrivsRes.rows[0]).toEqual({
+      has_select: true,
+      has_insert: true,
+      has_update: false,
+      has_delete: false
+    });
+
+    // Check table-level privileges on product_skus (UPDATE is column-level only)
+    const pskuPrivsRes = await client.query<{
+      has_select: boolean;
+      has_insert: boolean;
+      has_update: boolean;
+      has_delete: boolean;
+    }>(
+      `SELECT
+        has_table_privilege('orchestrator_app', 'product_skus', 'SELECT') AS has_select,
+        has_table_privilege('orchestrator_app', 'product_skus', 'INSERT') AS has_insert,
+        has_table_privilege('orchestrator_app', 'product_skus', 'UPDATE') AS has_update,
+        has_table_privilege('orchestrator_app', 'product_skus', 'DELETE') AS has_delete`
+    );
+    expect(pskuPrivsRes.rows[0]).toEqual({
+      has_select: true,
+      has_insert: true,
+      has_update: false,
+      has_delete: false
+    });
+
+    // Check table-level privileges on product_batches (UPDATE is column-level only)
+    const pbatchPrivsRes = await client.query<{
+      has_select: boolean;
+      has_insert: boolean;
+      has_update: boolean;
+      has_delete: boolean;
+    }>(
+      `SELECT
+        has_table_privilege('orchestrator_app', 'product_batches', 'SELECT') AS has_select,
+        has_table_privilege('orchestrator_app', 'product_batches', 'INSERT') AS has_insert,
+        has_table_privilege('orchestrator_app', 'product_batches', 'UPDATE') AS has_update,
+        has_table_privilege('orchestrator_app', 'product_batches', 'DELETE') AS has_delete`
+    );
+    expect(pbatchPrivsRes.rows[0]).toEqual({
+      has_select: true,
+      has_insert: true,
+      has_update: false,
+      has_delete: false
+    });
+
+    // Check column-level UPDATE privileges on product_skus
+    const pskuColRes = await client.query<{ column_name: string; privilege_type: string }>(
+      `SELECT column_name, privilege_type FROM information_schema.column_privileges
+       WHERE grantee = 'orchestrator_app' AND table_name = 'product_skus' AND privilege_type = 'UPDATE'
+       ORDER BY column_name`
+    );
+    expect(pskuColRes.rows.map((r) => r.column_name)).toEqual([
+      "archived_at",
+      "display_name",
+      "updated_at",
+      "version"
+    ]);
+
+    // Check column-level UPDATE privileges on product_batches
+    const pbatchColRes = await client.query<{ column_name: string; privilege_type: string }>(
+      `SELECT column_name, privilege_type FROM information_schema.column_privileges
+       WHERE grantee = 'orchestrator_app' AND table_name = 'product_batches' AND privilege_type = 'UPDATE'
+       ORDER BY column_name`
+    );
+    expect(pbatchColRes.rows.map((r) => r.column_name)).toEqual([
+      "archived_at",
+      "current_facts_revision",
+      "display_name",
+      "updated_at",
+      "version"
+    ]);
+
     // Verify migration fails if configured application role does not exist
 
     await client.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public;");
@@ -392,7 +499,7 @@ describe("PostgreSQL audit immutability and application-role privileges integrat
     // Verify migration succeeds when no application role is configured
     await client.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public;");
     const noRoleApplied = await runMigrations(client, { migrationsDirectory });
-    expect(noRoleApplied).toHaveLength(25);
+    expect(noRoleApplied).toHaveLength(29);
   });
 
   it("fails closed when application role has effective UPDATE or DELETE privilege on storyboard_candidates", async () => {
@@ -543,5 +650,138 @@ describe("PostgreSQL audit immutability and application-role privileges integrat
       [graph.reviewEvent.event_id]
     );
     expect(reCheck.rows).toHaveLength(1);
+  });
+
+  it("enforces permissions at SQL statement execution time under SET ROLE orchestrator_app", async () => {
+    // Insert initial registry records as postgres owner
+    const skuRes = await client.query<{ sku_id: string }>(
+      `INSERT INTO product_skus (client_id, canonical_sku, display_name)
+       VALUES ($1, 'SKU-ROLE-TEST', 'Role Test SKU') RETURNING sku_id`,
+      [graph.client.client_id]
+    );
+    const skuId = skuRes.rows[0]!.sku_id;
+
+    await client.query("BEGIN");
+    const batchRes = await client.query<{ batch_id: string }>(
+      `INSERT INTO product_batches (batch_id, client_id, sku_id, lot_identifier, display_name, version, current_facts_revision)
+       VALUES (uuidv7(), $1, $2, 'LOT-ROLE-TEST', 'Role Test Batch', 1, 1) RETURNING batch_id`,
+      [graph.client.client_id, skuId]
+    );
+    const batchId = batchRes.rows[0]!.batch_id;
+
+    await client.query(
+      `INSERT INTO product_batch_facts (client_id, batch_id, revision, origin_kind, asserted_by, supersedes_revision)
+       VALUES ($1, $2, 1, 'unknown', 'tester', NULL)`,
+      [graph.client.client_id, batchId]
+    );
+
+    const actionId = "018f0000-0001-7000-8000-000000000001";
+    await client.query(
+      `INSERT INTO product_evidence_command_receipts (client_id, action_id, command_name, payload_sha256, actor_id, response_body)
+       VALUES ($1, $2, 'createBatch', repeat('a', 64), 'tester', '{}'::jsonb)`,
+      [graph.client.client_id, actionId]
+    );
+    await client.query("COMMIT");
+
+    // Switch to application role
+    await client.query("SET ROLE orchestrator_app");
+    try {
+      // Allowed operations succeed under application role
+      const selSku = await client.query("SELECT * FROM product_skus WHERE sku_id = $1", [skuId]);
+      expect(selSku.rows).toHaveLength(1);
+
+      await client.query(
+        "UPDATE product_skus SET display_name = 'Updated by app', version = 2, updated_at = CURRENT_TIMESTAMP WHERE sku_id = $1",
+        [skuId]
+      );
+
+      // Direct DELETE rejected by grant privilege (permission denied for table)
+      await expect(
+        client.query("DELETE FROM product_skus WHERE sku_id = $1", [skuId])
+      ).rejects.toThrow(/permission denied for table product_skus/i);
+
+      await expect(
+        client.query("DELETE FROM product_batches WHERE batch_id = $1", [batchId])
+      ).rejects.toThrow(/permission denied for table product_batches/i);
+
+      await expect(
+        client.query("DELETE FROM product_batch_facts WHERE batch_id = $1", [batchId])
+      ).rejects.toThrow(/permission denied for table product_batch_facts/i);
+
+      await expect(
+        client.query("UPDATE product_batch_facts SET asserted_by = 'bad' WHERE batch_id = $1", [
+          batchId
+        ])
+      ).rejects.toThrow(/permission denied for table product_batch_facts/i);
+
+      await expect(
+        client.query("DELETE FROM product_evidence_command_receipts WHERE action_id = $1", [
+          actionId
+        ])
+      ).rejects.toThrow(/permission denied for table product_evidence_command_receipts/i);
+
+      await expect(
+        client.query(
+          "UPDATE product_evidence_command_receipts SET actor_id = 'bad' WHERE action_id = $1",
+          [actionId]
+        )
+      ).rejects.toThrow(/permission denied for table product_evidence_command_receipts/i);
+
+      // Attempting to UPDATE immutable column on product_skus fails on column privilege
+      await expect(
+        client.query("UPDATE product_skus SET canonical_sku = 'SKU-TAMPERED' WHERE sku_id = $1", [
+          skuId
+        ])
+      ).rejects.toThrow(/permission denied for table product_skus|permission denied for column/i);
+
+      // Attempting to UPDATE immutable column on product_batches fails on column privilege
+      await expect(
+        client.query(
+          "UPDATE product_batches SET lot_identifier = 'LOT-TAMPERED' WHERE batch_id = $1",
+          [batchId]
+        )
+      ).rejects.toThrow(
+        /permission denied for table product_batches|permission denied for column/i
+      );
+    } finally {
+      await client.query("RESET ROLE");
+    }
+  });
+
+  it("fails closed when application role has effective UPDATE or DELETE privilege on product registry immutable tables", async () => {
+    // Reset schema to run migrations
+    await client.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public;");
+
+    // Create an application role that inherits mutation privileges via a group
+    await client.query("DROP ROLE IF EXISTS overprivileged_group;");
+    await client.query("DROP ROLE IF EXISTS overprivileged_registry_app;");
+    await client.query("CREATE ROLE overprivileged_group NOLOGIN;");
+    await client.query("CREATE ROLE overprivileged_registry_app NOLOGIN;");
+    await client.query("GRANT overprivileged_group TO overprivileged_registry_app;");
+    await client.query(
+      "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT UPDATE, DELETE ON TABLES TO overprivileged_group;"
+    );
+
+    try {
+      await expect(
+        runMigrations(client, {
+          migrationsDirectory,
+          applicationRole: "overprivileged_registry_app"
+        })
+      ).rejects.toThrow(/effective UPDATE or DELETE privilege/i);
+    } finally {
+      await client
+        .query(
+          "ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE UPDATE, DELETE ON TABLES FROM overprivileged_group;"
+        )
+        .catch(() => {});
+      await client
+        .query(
+          "REVOKE ALL ON ALL TABLES IN SCHEMA public FROM overprivileged_registry_app, overprivileged_group;"
+        )
+        .catch(() => {});
+      await client.query("DROP ROLE IF EXISTS overprivileged_registry_app;").catch(() => {});
+      await client.query("DROP ROLE IF EXISTS overprivileged_group;").catch(() => {});
+    }
   });
 });

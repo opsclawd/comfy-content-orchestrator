@@ -30,9 +30,17 @@ export default async function HomePage() {
           </div>
         )}
       </div>
-      <div style={{ marginTop: "1.5rem" }}>
+      <div style={{ marginTop: "1.5rem", display: "flex", gap: "1rem" }}>
         <Link href="/campaigns/new" className="stage-draft-button" data-testid="new-campaign-link">
           + New Campaign
+        </Link>
+        <Link
+          href="/products"
+          className="stage-draft-button"
+          data-testid="products-workspace-link"
+          style={{ backgroundColor: "var(--bg-surface-elevated)" }}
+        >
+          Products & Batches
         </Link>
       </div>
     </section>

@@ -70,3 +70,10 @@ export {
 
 import sharp from "sharp";
 export { sharp };
+
+import { PDFDocument } from "pdf-lib";
+export async function createMinimalValidPdfBytes(): Promise<Uint8Array> {
+  const doc = await PDFDocument.create();
+  doc.addPage([200, 200]);
+  return doc.save();
+}
