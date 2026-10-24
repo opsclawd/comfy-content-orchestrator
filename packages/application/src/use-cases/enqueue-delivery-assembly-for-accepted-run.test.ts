@@ -13,7 +13,10 @@ import {
   type SceneId
 } from "@cco/domain";
 import { InMemorySceneUnitOfWork } from "../test-support/in-memory-scene-unit-of-work.js";
-import { attemptEnqueueAssemblyForAcceptedRun } from "./enqueue-delivery-assembly-for-accepted-run.js";
+import {
+  attemptEnqueueAssemblyForAcceptedRun,
+  StagingRenderIneligibleForAssemblyError
+} from "./enqueue-delivery-assembly-for-accepted-run.js";
 
 describe("attemptEnqueueAssemblyForAcceptedRun", () => {
   const campaignId = "01950c46-9e90-7d3d-82d2-8f1d3c000001" as CampaignId;
@@ -503,6 +506,228 @@ describe("attemptEnqueueAssemblyForAcceptedRun", () => {
         key: "stems/scene-2.mp4",
         sha256: validSha256,
         contentType: "video/mp4"
+      }
+    });
+
+    await expect(
+      uow.execute(async (ctx) => {
+        return attemptEnqueueAssemblyForAcceptedRun(ctx, run);
+      })
+    ).rejects.toThrow(AssemblyDurationMismatchError);
+
+    expect(uow.enqueuedAssemblyJobs()).toHaveLength(0);
+  });
+
+  it("fails closed with StagingRenderIneligibleForAssemblyError when stem has executionScope 'staging'", async () => {
+    const run = createBaseRun();
+    const [scene1, scene2] = createTwoScenes();
+
+    const uow = new InMemorySceneUnitOfWork();
+    uow.seedCampaignProductionRun(run);
+    uow.seedCampaignProductionRunScenes([scene1, scene2]);
+
+    uow.seedProductionAttempt({
+      attemptId: "attempt-1",
+      sceneId: scene1.sceneId,
+      runId,
+      ordinal: 1,
+      productionJobId: "job-1",
+      specRevision: 1,
+      seed: 123,
+      createdReason: "initial_dispatch",
+      createdAt: "2026-09-01T00:00:00.000Z"
+    });
+    uow.seedProductionAttempt({
+      attemptId: "attempt-2",
+      sceneId: scene2.sceneId,
+      runId,
+      ordinal: 1,
+      productionJobId: "job-2",
+      specRevision: 1,
+      seed: 456,
+      createdReason: "initial_dispatch",
+      createdAt: "2026-09-01T00:00:00.000Z"
+    });
+
+    uow.seedVideoStemSource("job-1", {
+      generationManifestId: "manifest-1",
+      renderAttempt: 1,
+      executionScope: "staging",
+      media: {
+        bucket: "delivery-bucket",
+        key: "stems/scene-1.mp4",
+        sha256: validSha256,
+        contentType: "video/mp4"
+      }
+    });
+    uow.seedVideoStemSource("job-2", {
+      generationManifestId: "manifest-2",
+      renderAttempt: 1,
+      executionScope: "production",
+      media: {
+        bucket: "delivery-bucket",
+        key: "stems/scene-2.mp4",
+        sha256: validSha256,
+        contentType: "video/mp4"
+      }
+    });
+
+    await expect(
+      uow.execute(async (ctx) => {
+        return attemptEnqueueAssemblyForAcceptedRun(ctx, run);
+      })
+    ).rejects.toThrow(StagingRenderIneligibleForAssemblyError);
+
+    expect(uow.enqueuedAssemblyJobs()).toHaveLength(0);
+  });
+
+  it("fails closed with AssemblyDurationMismatchError when stem measured duration diverges from scene duration beyond tolerance", async () => {
+    const run = createBaseRun();
+    const [scene1, scene2] = createTwoScenes();
+
+    const uow = new InMemorySceneUnitOfWork();
+    uow.seedCampaignProductionRun(run);
+    uow.seedCampaignProductionRunScenes([scene1, scene2]);
+
+    uow.seedProductionAttempt({
+      attemptId: "attempt-1",
+      sceneId: scene1.sceneId,
+      runId,
+      ordinal: 1,
+      productionJobId: "job-1",
+      specRevision: 1,
+      seed: 123,
+      createdReason: "initial_dispatch",
+      createdAt: "2026-09-01T00:00:00.000Z"
+    });
+    uow.seedProductionAttempt({
+      attemptId: "attempt-2",
+      sceneId: scene2.sceneId,
+      runId,
+      ordinal: 1,
+      productionJobId: "job-2",
+      specRevision: 1,
+      seed: 456,
+      createdReason: "initial_dispatch",
+      createdAt: "2026-09-01T00:00:00.000Z"
+    });
+
+    uow.seedVideoStemSource("job-1", {
+      generationManifestId: "manifest-1",
+      renderAttempt: 1,
+      executionScope: "production",
+      media: {
+        bucket: "delivery-bucket",
+        key: "stems/scene-1.mp4",
+        sha256: validSha256,
+        contentType: "video/mp4"
+      },
+      measuredMedia: {
+        outputKey: "stems/scene-1.mp4",
+        checksumSha256: validSha256,
+        container: "ffprobe",
+        dimensions: { width: 1344, height: 768 },
+        frameCount: 124,
+        fps: 24,
+        durationMs: 5600, // expected 5000ms -> diff is 600ms > 355ms
+        formatDurationMs: 5600,
+        measurement: "source_bytes"
+      }
+    });
+    uow.seedVideoStemSource("job-2", {
+      generationManifestId: "manifest-2",
+      renderAttempt: 1,
+      executionScope: "production",
+      media: {
+        bucket: "delivery-bucket",
+        key: "stems/scene-2.mp4",
+        sha256: validSha256,
+        contentType: "video/mp4"
+      }
+    });
+
+    await expect(
+      uow.execute(async (ctx) => {
+        return attemptEnqueueAssemblyForAcceptedRun(ctx, run);
+      })
+    ).rejects.toThrow(AssemblyDurationMismatchError);
+
+    expect(uow.enqueuedAssemblyJobs()).toHaveLength(0);
+  });
+
+  it("fails closed with AssemblyDurationMismatchError when aggregate measured duration diverges from total duration beyond tolerance", async () => {
+    const run = createBaseRun();
+    const [scene1, scene2] = createTwoScenes();
+
+    const uow = new InMemorySceneUnitOfWork();
+    uow.seedCampaignProductionRun(run);
+    uow.seedCampaignProductionRunScenes([scene1, scene2]);
+
+    uow.seedProductionAttempt({
+      attemptId: "attempt-1",
+      sceneId: scene1.sceneId,
+      runId,
+      ordinal: 1,
+      productionJobId: "job-1",
+      specRevision: 1,
+      seed: 123,
+      createdReason: "initial_dispatch",
+      createdAt: "2026-09-01T00:00:00.000Z"
+    });
+    uow.seedProductionAttempt({
+      attemptId: "attempt-2",
+      sceneId: scene2.sceneId,
+      runId,
+      ordinal: 1,
+      productionJobId: "job-2",
+      specRevision: 1,
+      seed: 456,
+      createdReason: "initial_dispatch",
+      createdAt: "2026-09-01T00:00:00.000Z"
+    });
+
+    uow.seedVideoStemSource("job-1", {
+      generationManifestId: "manifest-1",
+      renderAttempt: 1,
+      executionScope: "production",
+      media: {
+        bucket: "delivery-bucket",
+        key: "stems/scene-1.mp4",
+        sha256: validSha256,
+        contentType: "video/mp4"
+      },
+      measuredMedia: {
+        outputKey: "stems/scene-1.mp4",
+        checksumSha256: validSha256,
+        container: "ffprobe",
+        dimensions: { width: 1344, height: 768 },
+        frameCount: 124,
+        fps: 24,
+        durationMs: 5200, // +200ms
+        formatDurationMs: 5200,
+        measurement: "source_bytes"
+      }
+    });
+    uow.seedVideoStemSource("job-2", {
+      generationManifestId: "manifest-2",
+      renderAttempt: 1,
+      executionScope: "production",
+      media: {
+        bucket: "delivery-bucket",
+        key: "stems/scene-2.mp4",
+        sha256: validSha256,
+        contentType: "video/mp4"
+      },
+      measuredMedia: {
+        outputKey: "stems/scene-2.mp4",
+        checksumSha256: validSha256,
+        container: "ffprobe",
+        dimensions: { width: 1344, height: 768 },
+        frameCount: 124,
+        fps: 24,
+        durationMs: 5200, // +200ms -> aggregate is 10400ms vs expected 10000ms -> 400ms > 355ms
+        formatDurationMs: 5200,
+        measurement: "source_bytes"
       }
     });
 

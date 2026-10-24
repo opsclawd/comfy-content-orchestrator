@@ -201,8 +201,16 @@ export {
 
 export {
   H3OperatorSignatureVerifier,
+  verifySignatureWithKey,
   type H3OperatorSignatureVerifierOptions
 } from "./comfyui/provenance/h3-operator-signature-verifier.js";
+
+export {
+  H3TrustedCandidateRegistryReader,
+  H3CandidateRegistryReaderError,
+  type H3EvidenceResolver,
+  type H3TrustedCandidateRegistryReaderOptions
+} from "./comfyui/provenance/h3-trusted-candidate-registry-reader.js";
 
 export {
   H3LiveRuntimeObserver,

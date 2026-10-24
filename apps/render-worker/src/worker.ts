@@ -5,7 +5,14 @@ import {
   type PutObjectInput
 } from "@cco/application";
 import type { StorageOperationClass } from "@cco/contracts";
-import type { JobId, JobKind, LeaseToken, RenderJob, StorageAdmissionPolicy } from "@cco/domain";
+import type {
+  ExecutionScope,
+  JobId,
+  JobKind,
+  LeaseToken,
+  RenderJob,
+  StorageAdmissionPolicy
+} from "@cco/domain";
 import {
   ControlApiClientError,
   type CompleteJobOptions,
@@ -53,6 +60,7 @@ export interface RenderWorkerOptions {
   readonly heartbeatIntervalMs: number;
   readonly leaseDurationMs: number;
   readonly allowedJobKinds?: readonly JobKind[] | undefined;
+  readonly allowedExecutionScopes?: readonly ExecutionScope[] | undefined;
   readonly telemetryBackoffMs?: number | undefined;
   readonly admissionBackoffMs?: number | undefined;
 }
@@ -94,6 +102,7 @@ export class RenderWorker {
   private readonly heartbeatIntervalMs: number;
   private readonly leaseDurationMs: number;
   private readonly allowedJobKinds?: readonly JobKind[] | undefined;
+  private readonly allowedExecutionScopes?: readonly ExecutionScope[] | undefined;
   private readonly telemetryBackoffMs: number;
   private readonly admissionBackoffMs: number;
 
@@ -151,6 +160,7 @@ export class RenderWorker {
     }
 
     this.allowedJobKinds = options.allowedJobKinds;
+    this.allowedExecutionScopes = options.allowedExecutionScopes;
 
     this.telemetryBackoffMs =
       options.telemetryBackoffMs !== undefined
@@ -543,7 +553,11 @@ export class RenderWorker {
   }
 
   async runOnce(signal?: AbortSignal): Promise<boolean> {
-    const job = await this.deps.controlApiClient.claim(this.workerId, this.allowedJobKinds);
+    const job = await this.deps.controlApiClient.claim(
+      this.workerId,
+      this.allowedJobKinds,
+      this.allowedExecutionScopes
+    );
     if (!job) {
       return false;
     }
@@ -571,7 +585,11 @@ export class RenderWorker {
         let claimFailedGeneric = false;
 
         try {
-          claimedJob = await this.deps.controlApiClient.claim(this.workerId, this.allowedJobKinds);
+          claimedJob = await this.deps.controlApiClient.claim(
+            this.workerId,
+            this.allowedJobKinds,
+            this.allowedExecutionScopes
+          );
         } catch (err) {
           if (err instanceof ControlApiClientError && err.statusCode === 503) {
             claimFailed503 = true;

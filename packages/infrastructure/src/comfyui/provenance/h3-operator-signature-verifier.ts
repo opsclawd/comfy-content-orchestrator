@@ -14,7 +14,11 @@ export interface H3OperatorSignatureVerifierOptions {
   readonly now?: () => Date;
 }
 
-function verifySignatureWithKey(data: Buffer, signature: Buffer, key: KeyObject | string): boolean {
+export function verifySignatureWithKey(
+  data: Buffer,
+  signature: Buffer,
+  key: KeyObject | string
+): boolean {
   // First try with null algorithm (standard for Ed25519 / Ed448)
   try {
     if (cryptoVerify(null, data, key, signature)) {

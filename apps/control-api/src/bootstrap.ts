@@ -575,7 +575,20 @@ export async function runControlApi(
           trustedProxyAddresses: config.reviewerIdentity.trustedProxyAddresses,
           nodeEnv: effectiveNodeEnv
         },
-        jobDispatch: config.jobDispatch,
+        jobDispatch: {
+          leaseDurationMs: config.jobDispatch.leaseDurationMs,
+          heartbeatIntervalMs: config.jobDispatch.heartbeatIntervalMs,
+          ...(config.jobDispatch.workerDispatchPolicy
+            ? {
+                resolveWorkerExecutionScopes: (workerId: string) =>
+                  config.jobDispatch.workerDispatchPolicy?.[workerId]?.scopes ?? [
+                    "production" as const
+                  ],
+                resolveWorkerStagingToken: (workerId: string) =>
+                  config.jobDispatch.workerDispatchPolicy?.[workerId]?.stagingToken
+              }
+            : {})
+        },
         logger: options.httpLogger ?? { level: config.http.logLevel }
       }
     );

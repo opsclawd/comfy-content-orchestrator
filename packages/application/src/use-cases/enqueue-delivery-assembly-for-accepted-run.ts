@@ -16,6 +16,23 @@ import {
   type VideoStemSourceRecord
 } from "../ports/index.js";
 
+export class StagingRenderIneligibleForAssemblyError extends Error {
+  override readonly name = "StagingRenderIneligibleForAssemblyError";
+  readonly runId: string;
+  readonly sceneId: string;
+  readonly jobId: string;
+
+  constructor(runId: string, sceneId: string, jobId: string, message?: string) {
+    super(
+      message ??
+        `Video stem source for scene '${sceneId}' in run '${runId}' (job '${jobId}') has execution scope 'staging' and cannot be included in production delivery assembly.`
+    );
+    this.runId = runId;
+    this.sceneId = sceneId;
+    this.jobId = jobId;
+  }
+}
+
 export async function attemptEnqueueAssemblyForAcceptedRun(
   context: UnitOfWorkContext,
   run: CampaignProductionRunRecord
@@ -59,6 +76,7 @@ export async function attemptEnqueueAssemblyForAcceptedRun(
     readonly generationManifestId: string;
     readonly media: VideoStemSourceRecord["media"];
     readonly expectedDurationMs: number;
+    readonly measuredDurationMs?: number | undefined;
   }> = [];
 
   for (const scene of runScenes) {
@@ -109,12 +127,57 @@ export async function attemptEnqueueAssemblyForAcceptedRun(
       throw new MissingAcceptedProductionManifestError(run.id, scene.sceneId, acceptedJobId);
     }
 
+    if (stemSource.executionScope === "staging") {
+      throw new StagingRenderIneligibleForAssemblyError(run.id, scene.sceneId, acceptedJobId);
+    }
+
+    if (stemSource.measuredMedia) {
+      if (
+        !Number.isFinite(stemSource.measuredMedia.durationMs) ||
+        stemSource.measuredMedia.durationMs <= 0
+      ) {
+        throw new AssemblyDurationMismatchError(
+          run.id,
+          scene.expectedDurationMs,
+          0,
+          `Video stem source for scene '${scene.sceneId}' in run '${run.id}' has invalid measured duration`
+        );
+      }
+      if (Math.abs(stemSource.measuredMedia.durationMs - scene.expectedDurationMs) > 355) {
+        throw new AssemblyDurationMismatchError(
+          run.id,
+          scene.expectedDurationMs,
+          Math.round(stemSource.measuredMedia.durationMs),
+          `Video stem measured duration ${stemSource.measuredMedia.durationMs}ms diverges from scene expected duration ${scene.expectedDurationMs}ms beyond tolerance`
+        );
+      }
+    }
+
     resolvedStems.push({
       sceneId: scene.sceneId,
       generationManifestId: stemSource.generationManifestId,
       media: stemSource.media,
-      expectedDurationMs: scene.expectedDurationMs
+      expectedDurationMs: scene.expectedDurationMs,
+      ...(stemSource.measuredMedia
+        ? { measuredDurationMs: stemSource.measuredMedia.durationMs }
+        : {})
     });
+  }
+
+  const measuredCount = resolvedStems.filter((s) => s.measuredDurationMs !== undefined).length;
+  if (measuredCount > 0) {
+    const aggregateMeasuredMs = resolvedStems.reduce(
+      (acc, s) => acc + (s.measuredDurationMs ?? s.expectedDurationMs),
+      0
+    );
+    if (Math.abs(aggregateMeasuredMs - run.expectedTotalDurationMs) > 355) {
+      throw new AssemblyDurationMismatchError(
+        run.id,
+        run.expectedTotalDurationMs,
+        Math.round(aggregateMeasuredMs),
+        `Aggregate measured stem duration ${aggregateMeasuredMs}ms diverges from run expected total duration ${run.expectedTotalDurationMs}ms beyond tolerance`
+      );
+    }
   }
 
   const orderMapping = toVideoStemOrder(runScenes);

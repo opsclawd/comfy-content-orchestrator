@@ -19,7 +19,6 @@ import { PrepareSceneProductionInputsUseCase } from "./prepare-scene-production-
 import {
   isMiniMaxEngineOrProfile,
   mapDurationMsToLtxFrameCount,
-  mapDurationMsToMiniMaxH3FrameCount,
   UnsupportedProductionDurationError
 } from "./map-production-duration.js";
 import {
@@ -132,20 +131,25 @@ export class EnqueueSceneProductionRenderUseCase {
       throw new UnrepresentableProductionConfigurationError(scene.id, unrepresentable);
     }
 
-    const durationResult = isMiniMax
-      ? mapDurationMsToMiniMaxH3FrameCount(snapshot.configuration.durationMs)
-      : mapDurationMsToLtxFrameCount(snapshot.configuration.durationMs);
-
-    if (!durationResult.ok) {
-      throw new UnsupportedProductionDurationError(
-        snapshot.configuration.durationMs,
-        durationResult.reason
+    if (snapshot.configuration.engineProfileId.startsWith("H3_CANDIDATE_")) {
+      throw new InvalidTransitionError(
+        scene.id,
+        scene.status,
+        actionName,
+        `H3 candidate profile "${snapshot.configuration.engineProfileId}" cannot be dispatched through ordinary production queues; general production remains disabled until operator certification.`
       );
     }
 
     const seed = deriveProductionSeed(scene.id, snapshot.specRevision, attemptOrdinal);
 
     if (!isMiniMax) {
+      const durationResult = mapDurationMsToLtxFrameCount(snapshot.configuration.durationMs);
+      if (!durationResult.ok) {
+        throw new UnsupportedProductionDurationError(
+          snapshot.configuration.durationMs,
+          durationResult.reason
+        );
+      }
       if (
         snapshot.selectedCandidateId === undefined ||
         snapshot.selectedCandidateRevision !== snapshot.specRevision

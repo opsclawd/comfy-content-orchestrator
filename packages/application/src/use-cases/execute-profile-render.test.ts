@@ -3,6 +3,7 @@ import type {
   GpuExecutionLeasePort,
   GpuMemorySnapshot,
   GpuTelemetryPort,
+  QueueRenderInput,
   RenderEnginePort,
   RenderLease,
   RenderQueueReceipt,
@@ -64,12 +65,7 @@ function createSuccessResult(executionId = "prompt-1"): RenderResult {
 }
 
 class FakeRenderEngine implements RenderEnginePort {
-  readonly queueInputs: Array<{
-    readonly renderJobId: string;
-    readonly sceneId: string;
-    readonly renderProfileKey: string;
-    readonly workflow: RenderWorkflow;
-  }> = [];
+  readonly queueInputs: QueueRenderInput[] = [];
   readonly resultExecutionIds: string[] = [];
 
   constructor(
@@ -676,5 +672,38 @@ describe("ExecuteProfileRenderUseCase", () => {
     expect(result.status).toBe("succeeded");
     expect(result.profile).toEqual(storyboardIdentity);
     expect(renderEngine.queueInputs[0]!.renderProfileKey).toBe("FLUX_SCHNELL_STORYBOARD_V1");
+  });
+
+  it("threads executionPolicy.renderTimeoutMs and propagates unloadModels failure when executionPolicy is present", async () => {
+    const unloadError = new Error("unload failed during candidate run");
+    const { renderEngine, useCase } = createUseCase({ unloadError });
+
+    const input = createInput({
+      executionPolicy: {
+        renderTimeoutMs: 450_000,
+        minFreeDiskGb: 30,
+        maxConcurrentGpuJobs: 1,
+        requiresModelOffloading: true,
+        offloadPolicy: "dynamicvram"
+      }
+    });
+
+    await expect(useCase.execute(input)).rejects.toThrow("unload failed during candidate run");
+    expect(renderEngine.queueInputs[0]?.timeoutMs).toBe(450_000);
+  });
+
+  it("rejects execution when executionPolicy is malformed", async () => {
+    const { useCase } = createUseCase();
+
+    const input = createInput({
+      executionPolicy: {
+        renderTimeoutMs: -5
+      } as unknown as ExecuteProfileRenderInput["executionPolicy"]
+    });
+
+    await expect(useCase.execute(input)).rejects.toMatchObject({
+      name: "ProfileRenderExecutionError",
+      code: "invalid_input"
+    });
   });
 });

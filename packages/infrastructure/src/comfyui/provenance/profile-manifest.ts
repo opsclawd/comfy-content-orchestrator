@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, normalize, relative, resolve, sep } from "node:path";
+import type { ProfileInjectionTopology } from "@cco/contracts";
 import { VALID_MODEL_CATEGORIES, type ModelCategory, type ModelFileSpec } from "./hasher.js";
 
 const VALID_MODEL_CATEGORY_SET: ReadonlySet<string> = new Set(VALID_MODEL_CATEGORIES);
@@ -49,6 +50,7 @@ export interface CertificationProfile {
       | "MINIMAX_H3_720P_5S_REF2V_V1";
     version: 1;
   }> | null;
+  readonly topology?: ProfileInjectionTopology | undefined;
 }
 
 function deepFreeze<T>(obj: T): Readonly<T> {

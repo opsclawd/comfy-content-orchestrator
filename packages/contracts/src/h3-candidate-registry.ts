@@ -48,7 +48,10 @@ export function isH3CandidateProfileKey(key: string | undefined): boolean {
  * - No interpolation, model advertising, or range expansion is permitted.
  */
 export function resolveH3ProfileFrameCapabilities(
-  profileKeyOrId: string | undefined
+  profileKeyOrId: string | undefined,
+  reader?:
+    | { getCandidateProfile(key: string | undefined): Readonly<H3CandidateProfile> | undefined }
+    | undefined
 ): H3ProfileFrameCapability | undefined {
   if (!profileKeyOrId) return undefined;
   const normalized = profileKeyOrId.toLowerCase().trim();
@@ -96,8 +99,10 @@ export function resolveH3ProfileFrameCapabilities(
     });
   }
 
-  // Candidate profile lookup in shared accepted catalog
-  const candidate = getH3CandidateProfile(profileKeyOrId);
+  // Candidate profile lookup in reader or shared accepted catalog
+  const candidate = reader
+    ? reader.getCandidateProfile(profileKeyOrId)
+    : getH3CandidateProfile(profileKeyOrId);
   if (candidate) {
     const frames = candidate.specification.frames;
     return Object.freeze({
@@ -120,9 +125,12 @@ export function resolveH3ProfileFrameCapabilities(
  */
 export function isFrameCountAllowedForH3Profile(
   profileKeyOrId: string | undefined,
-  frameCount: number
+  frameCount: number,
+  reader?:
+    | { getCandidateProfile(key: string | undefined): Readonly<H3CandidateProfile> | undefined }
+    | undefined
 ): boolean {
-  const capability = resolveH3ProfileFrameCapabilities(profileKeyOrId);
+  const capability = resolveH3ProfileFrameCapabilities(profileKeyOrId, reader);
   if (!capability) return false;
   return capability.isAllowedFrameCount(frameCount);
 }

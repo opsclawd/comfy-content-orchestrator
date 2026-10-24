@@ -1,4 +1,4 @@
-import type { PersistentMediaRef } from "@cco/contracts";
+import type { ManifestMeasuredMedia, PersistentMediaRef } from "@cco/contracts";
 
 export class IncompleteVideoStemSourceError extends Error {
   override readonly name = "IncompleteVideoStemSourceError";
@@ -32,6 +32,8 @@ export interface VideoStemSourceRecord {
   readonly generationManifestId: string;
   readonly media: PersistentMediaRef;
   readonly renderAttempt: number;
+  readonly executionScope?: "production" | "staging" | undefined;
+  readonly measuredMedia?: ManifestMeasuredMedia | undefined;
 }
 
 export interface GenerationManifestRepository {

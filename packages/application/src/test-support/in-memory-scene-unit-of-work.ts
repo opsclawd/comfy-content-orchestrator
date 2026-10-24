@@ -425,6 +425,7 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
         createJob(input: EnqueueJobInput): RenderJob;
         commitJob(job: RenderJob): void;
         areAllJobsTerminal?(sceneId: SceneId, jobKind: JobKind): Promise<boolean>;
+        findByStagingOperationId?(stagingOperationId: string): Promise<RenderJob | undefined>;
       } => {
         return (
           typeof (candidate as Record<string, unknown>)?.createJob === "function" &&
@@ -450,6 +451,16 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
             return matching.every(
               (j) => j.status !== "queued" && j.status !== "leased" && j.status !== "rendering"
             );
+          },
+          findByStagingOperationId: async (
+            stagingOperationId: string
+          ): Promise<RenderJob | undefined> => {
+            const staged = stagedJobs.find((j) => j.stagingOperationId === stagingOperationId);
+            if (staged) return staged;
+            if (typeof enqueuer.findByStagingOperationId === "function") {
+              return enqueuer.findByStagingOperationId(stagingOperationId);
+            }
+            return undefined;
           }
         };
       } else {
@@ -461,6 +472,16 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
           },
           areAllJobsTerminal: async (sceneId: SceneId, jobKind: JobKind): Promise<boolean> => {
             return enqueuer.areAllJobsTerminal(sceneId, jobKind);
+          },
+          findByStagingOperationId: async (
+            stagingOperationId: string
+          ): Promise<RenderJob | undefined> => {
+            const staged = stagedJobs.find((j) => j.stagingOperationId === stagingOperationId);
+            if (staged) return staged;
+            if (typeof enqueuer.findByStagingOperationId === "function") {
+              return enqueuer.findByStagingOperationId(stagingOperationId);
+            }
+            return undefined;
           }
         };
       }

@@ -9,6 +9,9 @@ export type LeaseToken = string & { readonly [LeaseTokenBrand]: true };
 export const JOB_KINDS = ["candidate", "production"] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
+export const EXECUTION_SCOPES = ["production", "staging"] as const;
+export type ExecutionScope = (typeof EXECUTION_SCOPES)[number];
+
 export const JOB_STATUSES = [
   "queued",
   "leased",
@@ -37,6 +40,8 @@ export interface RenderJob {
   readonly errorTrace: string | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
+  readonly executionScope?: ExecutionScope;
+  readonly stagingOperationId?: string | null;
 }
 
 const PERMITTED_TRANSITIONS: Readonly<Record<JobStatus, ReadonlySet<JobStatus>>> = {

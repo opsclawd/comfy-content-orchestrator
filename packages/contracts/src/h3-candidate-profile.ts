@@ -3,7 +3,9 @@ import { canonicalizeJson, sha256Hex } from "./minimax-h3-experiment.js";
 import {
   MINIMAX_H3_FPS,
   MINIMAX_H3_FRAME_GRID_BASE,
-  MINIMAX_H3_FRAME_GRID_STEP
+  MINIMAX_H3_FRAME_GRID_STEP,
+  type ProfileInjectionTopology,
+  type RenderProfileKey
 } from "./render-profile.js";
 
 import { sha256HashSchema } from "./persistent-media.js";
@@ -115,6 +117,17 @@ export const H3CandidateRunnerSettingsSchema = z
   })
   .strict();
 export type H3CandidateRunnerSettings = z.infer<typeof H3CandidateRunnerSettingsSchema>;
+
+export const H3CandidateExecutionPolicySchema = z
+  .object({
+    renderTimeoutMs: z.number().int().positive().safe(),
+    minFreeDiskGb: z.number().positive().finite(),
+    maxConcurrentGpuJobs: z.number().int().positive().safe(),
+    requiresModelOffloading: z.boolean(),
+    offloadPolicy: H3CandidateOffloadPolicySchema
+  })
+  .strict();
+export type H3CandidateExecutionPolicy = z.infer<typeof H3CandidateExecutionPolicySchema>;
 
 export const H3CandidateExecutionSpecificationSchema = z
   .object({
@@ -409,6 +422,83 @@ export const H3CandidateProfileSchema = z
   });
 
 export type H3CandidateProfile = z.infer<typeof H3CandidateProfileSchema>;
+
+export type ResolvedExecutionSelection =
+  | {
+      readonly kind: "legacy";
+      readonly profileKey: RenderProfileKey;
+      readonly engine: string;
+      readonly workflowTemplate: string;
+      readonly route: "i2v" | "ref2v" | "text_to_video" | "storyboard_previs";
+      readonly routingMode?: "frame_anchored" | "reference_directed" | undefined;
+      readonly width: number;
+      readonly height: number;
+      readonly fps: number;
+      readonly allowedFrameCounts: readonly number[];
+    }
+  | {
+      readonly kind: "candidate";
+      readonly candidateKey: H3CandidateProfileKey;
+      readonly version: 1;
+      readonly specificationDigest: string;
+      readonly specification: H3CandidateExecutionSpecification;
+      readonly topology: ProfileInjectionTopology;
+      readonly route: "i2v" | "ref2v";
+      readonly routingMode: "frame_anchored" | "reference_directed";
+      readonly width: number;
+      readonly height: number;
+      readonly fps: number;
+      readonly frames: number;
+      readonly allowedFrameCounts: readonly number[];
+      readonly executionPolicy?: H3CandidateExecutionPolicy | undefined;
+    };
+
+export type CandidateExecutionSelection = Extract<
+  ResolvedExecutionSelection,
+  { kind: "candidate" }
+>;
+
+export function resolveCandidateExecutionPolicy(
+  candidate: H3CandidateProfile,
+  deploymentTimeoutMs?: number
+): H3CandidateExecutionPolicy {
+  const measuredMs = candidate.measurements?.measuredTotalDurationMs;
+  const timeoutMs =
+    deploymentTimeoutMs ?? (measuredMs ? Math.max(300_000, measuredMs * 3) : 900_000);
+  const minFreeDiskGb = Math.max(
+    candidate.specification.runnerSettings.minFreeDiskGb,
+    candidate.measurements?.measuredDiskFootprintGb ?? 0
+  );
+  return {
+    renderTimeoutMs: timeoutMs,
+    minFreeDiskGb,
+    maxConcurrentGpuJobs: candidate.specification.runnerSettings.maxConcurrentGpuJobs,
+    requiresModelOffloading: candidate.specification.runnerSettings.requiresModelOffloading,
+    offloadPolicy: candidate.specification.runnerSettings.offloadPolicy
+  };
+}
+
+export function resolveCandidateExecutionSelection(
+  candidate: H3CandidateProfile,
+  deploymentTimeoutMs?: number
+): CandidateExecutionSelection {
+  return {
+    kind: "candidate",
+    candidateKey: candidate.key,
+    version: 1,
+    specificationDigest: candidate.specificationDigest,
+    specification: candidate.specification,
+    topology: candidate.topology,
+    route: candidate.specification.route,
+    routingMode: candidate.specification.routingMode,
+    width: candidate.specification.width,
+    height: candidate.specification.height,
+    fps: candidate.specification.fps,
+    frames: candidate.specification.frames,
+    allowedFrameCounts: [candidate.specification.frames],
+    executionPolicy: resolveCandidateExecutionPolicy(candidate, deploymentTimeoutMs)
+  };
+}
 
 export interface H3ProfileFrameCapability {
   readonly profileKey: string;

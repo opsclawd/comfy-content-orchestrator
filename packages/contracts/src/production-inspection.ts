@@ -90,11 +90,15 @@ export const H3ProductionInspectionReadModelSchema = z.object({
     routingMode: ShotPlanRoutingModeSchema,
     renderProfileKey: z.string().min(1),
     workflowTemplate: z.string().min(1),
-    targetDurationMs: z.number().positive(),
-    targetFrameCount: z.number().int().positive(),
+    targetDurationMs: z.number().nonnegative(),
+    targetFrameCount: z.number().int().nonnegative(),
     fps: z.literal(24),
     width: z.literal(1344),
-    height: z.literal(768)
+    height: z.literal(768),
+    requestedDurationMs: z.number().positive().optional(),
+    nominalDurationMs: z.number().positive().optional(),
+    executionScope: z.enum(["production", "staging"]).optional(),
+    candidateSpecificationDigest: sha256HashSchema.optional()
   }),
   visualInputs: z.object({
     references: z.array(InspectedReferenceInputSchema).default([]),
@@ -112,6 +116,8 @@ export const H3ProductionInspectionReadModelSchema = z.object({
   runtimeContext: z.object({
     durationCeilingSeconds: z.number().int().positive().optional()
   }),
+  executionScope: z.enum(["production", "staging"]).optional(),
+  candidateSpecificationDigest: sha256HashSchema.optional(),
   productionInputFingerprint: sha256HashSchema
 });
 export type H3ProductionInspectionReadModel = z.infer<typeof H3ProductionInspectionReadModelSchema>;
@@ -194,6 +200,98 @@ export function computeProductionInputFingerprint(
             .sort((a, b) => a.slotIndex - b.slotIndex)
         : [],
     renderProfileKey: input.renderProfileKey,
+    routingMode: input.routingMode,
+    sceneId: input.sceneId,
+    shotPlanId: input.shotPlanId ?? null,
+    specRevision: input.specRevision,
+    workflowTemplate: input.workflowTemplate
+  });
+
+  const encoded = new TextEncoder().encode(JSON.stringify(canonical));
+  return bytesToHex(sha256(encoded));
+}
+
+export interface ComputeCandidateProductionInputFingerprintInput {
+  readonly version: 2;
+  readonly sceneId: string;
+  readonly specRevision: number;
+  readonly shotPlanId?: string | null | undefined;
+  readonly routingMode: ShotPlanRoutingMode;
+  readonly candidateKey: string;
+  readonly specificationDigest: string;
+  readonly candidateVersion: number;
+  readonly executionScope: "staging" | "production";
+  readonly grantReference?: string | undefined;
+  readonly workflowTemplate: string;
+  readonly requestedDurationMs: number;
+  readonly nominalDurationMs: number;
+  readonly targetFrameCount: number;
+  readonly fps: number;
+  readonly width: number;
+  readonly height: number;
+  readonly compiledInstructionText: string;
+  readonly compiledInstructionSha256: string;
+  readonly references?:
+    | readonly {
+        readonly slotIndex: number;
+        readonly referenceAssetId: string;
+        readonly role: string;
+        readonly contentHashSha256: string;
+      }[]
+    | undefined;
+  readonly frameAnchor?:
+    | {
+        readonly frameAnchorTarget: string;
+        readonly anchorCandidateId: string;
+        readonly anchorMediaHashSha256: string;
+      }
+    | null
+    | undefined;
+}
+
+export function computeCandidateProductionInputFingerprint(
+  input: ComputeCandidateProductionInputFingerprintInput
+): string {
+  const canonical = sortKeysDeep({
+    candidateVersion: input.candidateVersion,
+    executionScope: input.executionScope,
+    fingerprintVersion: 2,
+    frameAnchor:
+      input.routingMode === "frame_anchored" && input.frameAnchor
+        ? {
+            anchorCandidateId: input.frameAnchor.anchorCandidateId,
+            anchorMediaHashSha256: input.frameAnchor.anchorMediaHashSha256,
+            frameAnchorTarget: input.frameAnchor.frameAnchorTarget
+          }
+        : null,
+    geometry: {
+      fps: input.fps,
+      height: input.height,
+      nominalDurationMs: input.nominalDurationMs,
+      requestedDurationMs: input.requestedDurationMs,
+      targetFrameCount: input.targetFrameCount,
+      width: input.width
+    },
+    grantReference: input.grantReference ?? null,
+    instruction: {
+      sha256: input.compiledInstructionSha256,
+      text: input.compiledInstructionText
+    },
+    profile: {
+      candidateKey: input.candidateKey,
+      specificationDigest: input.specificationDigest
+    },
+    references:
+      input.routingMode === "reference_directed" && input.references
+        ? input.references
+            .map((r) => ({
+              assetId: r.referenceAssetId,
+              contentHashSha256: r.contentHashSha256,
+              role: r.role,
+              slotIndex: r.slotIndex
+            }))
+            .sort((a, b) => a.slotIndex - b.slotIndex)
+        : [],
     routingMode: input.routingMode,
     sceneId: input.sceneId,
     shotPlanId: input.shotPlanId ?? null,
