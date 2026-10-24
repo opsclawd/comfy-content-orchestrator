@@ -101,3 +101,4 @@ export * from "./evidence-asset-use-cases.js";
 export * from "./coa-report-query-use-cases.js";
 export * from "./claim-query-use-cases.js";
 export * from "./resolve-batch-evidence-dossier.js";
+export * from "./stage-h3-candidate-render.js";

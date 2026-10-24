@@ -23,6 +23,7 @@
     "certify:minimax-h3": "tsx src/cli/certify.ts --profile minimax-h3-720p-124f-i2v",
     "render": "tsx src/cli/render.ts",
     "worker": "tsx src/cli/run-worker.ts",
+    "stage": "tsx src/cli/stage-candidate.ts",
     "assembler": "tsx src/cli/run-delivery-assembler.ts",
     "start:assembler": "node dist/cli/run-delivery-assembler.js",
     "acceptance:install": "tsx src/cli/acceptance.ts install",

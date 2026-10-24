@@ -1,7 +1,12 @@
 import type { CampaignId, CandidateId, SceneId, ShotPlanId, ShotPlanSnapshot } from "@cco/domain";
 import {
+  computeAuthorizationPayloadDigest,
+  computeCandidateProductionInputFingerprint,
   computeProductionInputFingerprint,
+  getH3CandidateProfile,
   type CameraIntentSummary,
+  type H3CandidateAuthorizationGrant,
+  type H3CandidateProfile,
   type H3ProductionInspectionReadModel,
   type InspectedFrameAnchor,
   type InspectedReferenceInput,
@@ -9,6 +14,7 @@ import {
   type ProductionReadinessStatus,
   type ShotPlanRoutingMode
 } from "@cco/contracts";
+import type { H3CandidateRegistryReader } from "../ports/h3-candidate-ports.js";
 import type { HashBytesPort } from "../ports/hash-bytes.js";
 import type { ImageInspectionPort } from "../ports/image-inspection-port.js";
 import type { ObjectStoragePort } from "../ports/object-storage-port.js";
@@ -49,12 +55,17 @@ export interface PrepareSceneProductionInputsOptions {
   readonly hashBytes?: HashBytesPort | undefined;
   readonly imageValidator?: ImageInspectionPort | undefined;
   readonly mediaDelivery?: ReviewMediaDeliveryPort | undefined;
+  readonly registryReader?: H3CandidateRegistryReader | undefined;
 }
 
 export interface PrepareSceneProductionInputsInput {
   readonly sceneId: string;
   readonly shotPlanId?: string | undefined;
   readonly dryRun?: boolean | undefined;
+  readonly candidateProfileKey?: string | undefined;
+  readonly executionScope?: "production" | "staging" | undefined;
+  readonly authorizationGrant?: H3CandidateAuthorizationGrant | undefined;
+  readonly registryReader?: H3CandidateRegistryReader | undefined;
 }
 
 export interface PrepareSceneProductionInputsResult {
@@ -138,6 +149,7 @@ export class PrepareSceneProductionInputsUseCase {
   ): Promise<PrepareSceneProductionInputsResult> {
     const dryRun = input.dryRun ?? false;
     const actionName = dryRun ? "inspectProductionInputs" : "queueForProduction";
+    const executionScope = input.executionScope ?? "production";
 
     // 1. Fetch scene
     const scene = await context.scenes.findById(input.sceneId as SceneId);
@@ -148,8 +160,37 @@ export class PrepareSceneProductionInputsUseCase {
     const snapshot = scene.snapshot();
     const blockers: ProductionBlocker[] = [];
 
+    // Resolve registry reader
+    const registryReader: H3CandidateRegistryReader = input.registryReader ??
+      this.options?.registryReader ?? {
+        getCandidateProfile: getH3CandidateProfile,
+        listCandidateProfiles: () => []
+      };
+
+    const candidateProfileKey = input.candidateProfileKey;
+    let candidateProfile: Readonly<H3CandidateProfile> | undefined;
+
+    if (candidateProfileKey) {
+      if (executionScope !== "staging") {
+        blockers.push({
+          code: "CANDIDATE_PROFILE_NOT_PERMITTED_IN_PRODUCTION",
+          message: `Candidate profile "${candidateProfileKey}" cannot be executed in production scope; general production remains disabled until operator certification.`
+        });
+      }
+      candidateProfile = registryReader.getCandidateProfile(candidateProfileKey);
+      if (!candidateProfile) {
+        blockers.push({
+          code: "CANDIDATE_PROFILE_NOT_ACCEPTED",
+          message: `Candidate profile "${candidateProfileKey}" is not admitted in the candidate registry.`
+        });
+      }
+    }
+
     // 2. Validate Engine Profile
-    const isMiniMax = isMiniMaxEngineOrProfile(snapshot.configuration.engineProfileId);
+    const isMiniMax =
+      isMiniMaxEngineOrProfile(snapshot.configuration.engineProfileId) ||
+      (candidateProfileKey ? isMiniMaxEngineOrProfile(candidateProfileKey) : false);
+
     if (!isMiniMax) {
       blockers.push({
         code: "UNSUPPORTED_ENGINE_PROFILE",
@@ -157,7 +198,10 @@ export class PrepareSceneProductionInputsUseCase {
       });
     }
 
-    if (!ACCEPTED_PRODUCTION_ENGINE_PROFILE_IDS.has(snapshot.configuration.engineProfileId)) {
+    if (
+      !candidateProfileKey &&
+      !ACCEPTED_PRODUCTION_ENGINE_PROFILE_IDS.has(snapshot.configuration.engineProfileId)
+    ) {
       blockers.push({
         code: "UNREPRESENTABLE_ENGINE_PROFILE",
         message: `Engine profile "${snapshot.configuration.engineProfileId}" is not recognized for production.`
@@ -179,21 +223,7 @@ export class PrepareSceneProductionInputsUseCase {
       });
     }
 
-    // 3. Duration Quantization
-    const durationResult = mapDurationMsToMiniMaxH3FrameCount(snapshot.configuration.durationMs);
-    let targetDurationMs = snapshot.configuration.durationMs;
-    let targetFrameCount = 124;
-    if (!durationResult.ok) {
-      blockers.push({
-        code: "UNSUPPORTED_PRODUCTION_DURATION",
-        message: durationResult.reason
-      });
-    } else {
-      targetDurationMs = durationResult.achievedDurationMs;
-      targetFrameCount = durationResult.frameCount;
-    }
-
-    // 4. Resolve Target ShotPlan
+    // 3. Resolve Target ShotPlan
     const targetShotPlanId =
       input.shotPlanId ?? snapshot.selectedShotPlanId ?? snapshot.approvedShotPlanId;
 
@@ -221,7 +251,7 @@ export class PrepareSceneProductionInputsUseCase {
       }
     }
 
-    // 5. Validate ShotPlan Association & Revision
+    // 4. Validate ShotPlan Association & Revision
     if (shotPlanSnapshot) {
       if (shotPlanSnapshot.sceneId !== scene.id) {
         blockers.push({
@@ -237,7 +267,7 @@ export class PrepareSceneProductionInputsUseCase {
       }
     }
 
-    // 6. Routing Mode & RenderProfile
+    // 5. Routing Mode & RenderProfile
     const routingMode: ShotPlanRoutingMode =
       shotPlanSnapshot?.routingMode ?? snapshot.productionRoutingMode ?? "reference_directed";
 
@@ -248,15 +278,127 @@ export class PrepareSceneProductionInputsUseCase {
       });
     }
 
-    const renderProfileKey =
-      routingMode === "frame_anchored"
+    if (candidateProfile) {
+      if (candidateProfile.specification.route === "i2v" && routingMode !== "frame_anchored") {
+        blockers.push({
+          code: "ROUTING_MODE_MISMATCH",
+          message: `Candidate profile "${candidateProfile.key}" route is i2v (frame_anchored), which does not match resolved routingMode "${routingMode}".`
+        });
+      }
+      if (
+        candidateProfile.specification.route === "ref2v" &&
+        routingMode !== "reference_directed"
+      ) {
+        blockers.push({
+          code: "ROUTING_MODE_MISMATCH",
+          message: `Candidate profile "${candidateProfile.key}" route is ref2v (reference_directed), which does not match resolved routingMode "${routingMode}".`
+        });
+      }
+      if (
+        candidateProfile.specification.width !== 1344 ||
+        candidateProfile.specification.height !== 768
+      ) {
+        blockers.push({
+          code: "GEOMETRY_MISMATCH",
+          message: `Candidate profile "${candidateProfile.key}" geometry (${candidateProfile.specification.width}x${candidateProfile.specification.height}) does not match required 1344x768.`
+        });
+      }
+      if (shotPlanSnapshot) {
+        if (
+          shotPlanSnapshot.targetFrameCount !== undefined &&
+          shotPlanSnapshot.targetFrameCount !== candidateProfile.specification.frames
+        ) {
+          blockers.push({
+            code: "CREATIVE_INTENT_MISMATCH",
+            message: `ShotPlan targetFrameCount (${shotPlanSnapshot.targetFrameCount}) does not match candidate profile frames (${candidateProfile.specification.frames}).`
+          });
+        }
+        const tolerance = shotPlanSnapshot.durationToleranceMs ?? 355;
+        if (
+          shotPlanSnapshot.targetDurationMs !== undefined &&
+          Math.abs(shotPlanSnapshot.targetDurationMs - snapshot.configuration.durationMs) >
+            tolerance
+        ) {
+          blockers.push({
+            code: "CREATIVE_INTENT_MISMATCH",
+            message: `ShotPlan targetDurationMs (${shotPlanSnapshot.targetDurationMs}ms) diverges from requested execution duration (${snapshot.configuration.durationMs}ms) beyond tolerance (${tolerance}ms).`
+          });
+        }
+        const candidateNominalDurationMs =
+          (candidateProfile.specification.frames / candidateProfile.specification.fps) * 1000;
+        if (
+          shotPlanSnapshot.targetDurationMs !== undefined &&
+          Math.abs(shotPlanSnapshot.targetDurationMs - candidateNominalDurationMs) > tolerance
+        ) {
+          blockers.push({
+            code: "CREATIVE_INTENT_MISMATCH",
+            message: `ShotPlan targetDurationMs (${shotPlanSnapshot.targetDurationMs}ms) diverges from candidate profile nominal duration (${candidateNominalDurationMs}ms) beyond tolerance (${tolerance}ms).`
+          });
+        }
+        if (shotPlanSnapshot.beats && shotPlanSnapshot.beats.length > 0) {
+          for (const beat of shotPlanSnapshot.beats) {
+            if (beat.endMs > snapshot.configuration.durationMs + tolerance) {
+              blockers.push({
+                code: "CREATIVE_INTENT_MISMATCH",
+                message: `ShotPlan beat ${beat.beatIndex} (endMs ${beat.endMs}ms) exceeds requested execution duration (${snapshot.configuration.durationMs}ms) plus tolerance (${tolerance}ms).`
+              });
+            }
+            if (beat.endMs > candidateNominalDurationMs + tolerance) {
+              blockers.push({
+                code: "CREATIVE_INTENT_MISMATCH",
+                message: `ShotPlan beat ${beat.beatIndex} (endMs ${beat.endMs}ms) exceeds candidate nominal duration (${candidateNominalDurationMs}ms) plus tolerance (${tolerance}ms).`
+              });
+            }
+          }
+        }
+      }
+    }
+
+    const renderProfileKey = candidateProfile
+      ? candidateProfile.key
+      : routingMode === "frame_anchored"
         ? MINIMAX_H3_I2V_PRODUCTION_RENDER_PROFILE_KEY
         : MINIMAX_H3_REF2V_PRODUCTION_RENDER_PROFILE_KEY;
 
-    const workflowTemplate =
-      routingMode === "frame_anchored"
+    const workflowTemplate = candidateProfile
+      ? candidateProfile.specification.workflowHash
+      : routingMode === "frame_anchored"
         ? MINIMAX_H3_I2V_PRODUCTION_WORKFLOW_TEMPLATE
         : MINIMAX_H3_REF2V_PRODUCTION_WORKFLOW_TEMPLATE;
+
+    // 6. Duration Quantization
+    const candidateCapability = candidateProfile
+      ? {
+          profileKey: candidateProfile.key,
+          route: candidateProfile.specification.route,
+          routingMode: candidateProfile.specification.routingMode,
+          width: candidateProfile.specification.width,
+          height: candidateProfile.specification.height,
+          fps: candidateProfile.specification.fps,
+          allowedFrameCounts: [candidateProfile.specification.frames],
+          isAllowedFrameCount: (f: number) => f === candidateProfile!.specification.frames
+        }
+      : undefined;
+
+    const durationResult = mapDurationMsToMiniMaxH3FrameCount(snapshot.configuration.durationMs, {
+      profileKeyOrId: candidateProfile ? candidateProfile.key : renderProfileKey,
+      capability: candidateCapability,
+      registryReader
+    });
+
+    let targetDurationMs = snapshot.configuration.durationMs;
+    let targetFrameCount = 0;
+    if (!durationResult.ok) {
+      blockers.push({
+        code: "UNSUPPORTED_PRODUCTION_DURATION",
+        message: durationResult.reason
+      });
+      targetDurationMs = snapshot.configuration.durationMs;
+      targetFrameCount = 0;
+    } else {
+      targetDurationMs = durationResult.achievedDurationMs;
+      targetFrameCount = durationResult.frameCount;
+    }
 
     let canonicalRefs: readonly CanonicalReferenceEntry[] = [];
     const inspectedReferences: InspectedReferenceInput[] = [];
@@ -848,23 +990,49 @@ export class PrepareSceneProductionInputsUseCase {
       : undefined;
 
     // 11. Compute Deterministic Input Fingerprint
-    const productionInputFingerprint = computeProductionInputFingerprint({
-      sceneId: scene.id,
-      specRevision: snapshot.specRevision,
-      shotPlanId: shotPlanSnapshot?.id ?? null,
-      routingMode,
-      renderProfileKey,
-      workflowTemplate,
-      targetDurationMs,
-      targetFrameCount,
-      fps: 24,
-      width: 1344,
-      height: 768,
-      compiledInstructionText,
-      compiledInstructionSha256,
-      references: inspectedReferences,
-      frameAnchor: inspectedFrameAnchor
-    });
+    const productionInputFingerprint = candidateProfile
+      ? computeCandidateProductionInputFingerprint({
+          version: 2,
+          sceneId: scene.id,
+          specRevision: snapshot.specRevision,
+          shotPlanId: shotPlanSnapshot?.id ?? null,
+          routingMode,
+          candidateKey: candidateProfile.key,
+          specificationDigest: candidateProfile.specificationDigest,
+          candidateVersion: candidateProfile.version,
+          executionScope,
+          grantReference: input.authorizationGrant
+            ? `${computeAuthorizationPayloadDigest(input.authorizationGrant.payload)}:${input.authorizationGrant.signature}`
+            : undefined,
+          workflowTemplate,
+          requestedDurationMs: snapshot.configuration.durationMs,
+          nominalDurationMs: targetDurationMs,
+          targetFrameCount,
+          fps: 24,
+          width: 1344,
+          height: 768,
+          compiledInstructionText,
+          compiledInstructionSha256,
+          references: inspectedReferences,
+          frameAnchor: inspectedFrameAnchor
+        })
+      : computeProductionInputFingerprint({
+          sceneId: scene.id,
+          specRevision: snapshot.specRevision,
+          shotPlanId: shotPlanSnapshot?.id ?? null,
+          routingMode,
+          renderProfileKey,
+          workflowTemplate,
+          targetDurationMs,
+          targetFrameCount,
+          fps: 24,
+          width: 1344,
+          height: 768,
+          compiledInstructionText,
+          compiledInstructionSha256,
+          references: inspectedReferences,
+          frameAnchor: inspectedFrameAnchor
+        });
 
     const inspection: H3ProductionInspectionReadModel = {
       authority: {
@@ -883,7 +1051,13 @@ export class PrepareSceneProductionInputsUseCase {
         targetFrameCount,
         fps: 24,
         width: 1344,
-        height: 768
+        height: 768,
+        requestedDurationMs: snapshot.configuration.durationMs,
+        nominalDurationMs: targetDurationMs,
+        executionScope,
+        ...(candidateProfile
+          ? { candidateSpecificationDigest: candidateProfile.specificationDigest }
+          : {})
       },
       visualInputs: {
         references: inspectedReferences,
@@ -901,6 +1075,10 @@ export class PrepareSceneProductionInputsUseCase {
       runtimeContext: {
         durationCeilingSeconds: MINIMAX_H3_EXECUTION_CEILING_SECONDS
       },
+      executionScope,
+      ...(candidateProfile
+        ? { candidateSpecificationDigest: candidateProfile.specificationDigest }
+        : {}),
       productionInputFingerprint
     };
 

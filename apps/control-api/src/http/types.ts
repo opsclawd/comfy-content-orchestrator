@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { FastifyRequest } from "fastify";
+import type { ExecutionScope } from "@cco/domain";
 import {
   CreateCampaignUseCase,
   CreateCampaignShellUseCase,
@@ -671,6 +672,10 @@ export interface ControlApiAppOptions {
   readonly jobDispatch?: {
     readonly leaseDurationMs: number;
     readonly heartbeatIntervalMs: number;
+    readonly allowedExecutionScopes?: readonly ExecutionScope[] | undefined;
+    readonly resolveWorkerExecutionScopes?:
+      ((workerId: string) => readonly ExecutionScope[]) | undefined;
+    readonly resolveWorkerStagingToken?: ((workerId: string) => string | undefined) | undefined;
   };
 }
 

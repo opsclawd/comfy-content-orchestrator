@@ -10,7 +10,14 @@ import {
   type StorageOperationClass,
   type StorageWatermarkState
 } from "@cco/contracts";
-import type { DeliveryAssemblyJob, JobId, JobKind, LeaseToken, RenderJob } from "@cco/domain";
+import type {
+  DeliveryAssemblyJob,
+  ExecutionScope,
+  JobId,
+  JobKind,
+  LeaseToken,
+  RenderJob
+} from "@cco/domain";
 
 export interface CompleteJobOptions {
   readonly manifestPayload?: Readonly<Record<string, unknown>> | undefined;
@@ -18,7 +25,11 @@ export interface CompleteJobOptions {
 }
 
 export interface ControlApiClient {
-  claim(workerId: string, allowedJobKinds?: readonly JobKind[]): Promise<RenderJob | undefined>;
+  claim(
+    workerId: string,
+    allowedJobKinds?: readonly JobKind[],
+    allowedExecutionScopes?: readonly ExecutionScope[]
+  ): Promise<RenderJob | undefined>;
   start(jobId: JobId | string, leaseToken: LeaseToken | string): Promise<JobMutationResult>;
   heartbeat(jobId: JobId | string, leaseToken: LeaseToken | string): Promise<JobMutationResult>;
   complete(
@@ -42,6 +53,10 @@ export interface ControlApiClientConfig {
   readonly baseUrl?: string | undefined;
   readonly fetch?: typeof globalThis.fetch | undefined;
   readonly timeoutMs?: number | undefined;
+  // Shared secret proving this worker's claimed scope elevation (e.g. "staging") is real and
+  // not just a self-reported workerId. Sent as the x-worker-staging-token header on /claim.
+  // See apps/control-api/src/http/routes/job-routes.ts.
+  readonly workerStagingToken?: string | undefined;
 }
 
 // A hung Control API request (connection opened, never responds) leaves an
@@ -176,21 +191,33 @@ function isStorageAdmissionErrorPayload(data: unknown): data is StorageAdmission
 export class HttpControlApiClient implements ControlApiClient {
   private readonly baseUrl: string;
   private readonly fetchFn: typeof globalThis.fetch;
+  private readonly workerStagingToken: string | undefined;
 
-  constructor(baseUrl?: string | undefined, fetchFn?: typeof globalThis.fetch | undefined) {
+  constructor(
+    baseUrl?: string | undefined,
+    fetchFn?: typeof globalThis.fetch | undefined,
+    stagingToken?: string | undefined
+  ) {
     const rawUrl = baseUrl ?? process.env.CONTROL_API_BASE_URL ?? "http://localhost:3000";
     this.baseUrl = rawUrl.replace(/\/+$/, "");
     this.fetchFn = fetchFn ?? globalThis.fetch.bind(globalThis);
+    this.workerStagingToken = stagingToken;
   }
 
   async claim(
     workerId: string,
-    allowedJobKinds?: readonly JobKind[]
+    allowedJobKinds?: readonly JobKind[],
+    allowedExecutionScopes?: readonly ExecutionScope[]
   ): Promise<RenderJob | undefined> {
     const url = `${this.baseUrl}/api/jobs/claim`;
-    const body: { workerId: string; allowedJobKinds?: readonly JobKind[] } = {
+    const body: {
+      workerId: string;
+      allowedJobKinds?: readonly JobKind[];
+      allowedExecutionScopes?: readonly ExecutionScope[];
+    } = {
       workerId,
-      ...(allowedJobKinds !== undefined ? { allowedJobKinds } : {})
+      ...(allowedJobKinds !== undefined ? { allowedJobKinds } : {}),
+      ...(allowedExecutionScopes !== undefined ? { allowedExecutionScopes } : {})
     };
     let res: Response;
     try {
@@ -198,7 +225,10 @@ export class HttpControlApiClient implements ControlApiClient {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Accept: "application/json"
+          Accept: "application/json",
+          ...(this.workerStagingToken !== undefined
+            ? { "x-worker-staging-token": this.workerStagingToken }
+            : {})
         },
         body: JSON.stringify(body)
       });
@@ -377,7 +407,7 @@ export class HttpControlApiClient implements ControlApiClient {
 }
 
 export function createControlApiClient(config?: ControlApiClientConfig): ControlApiClient {
-  return new HttpControlApiClient(config?.baseUrl, config?.fetch);
+  return new HttpControlApiClient(config?.baseUrl, config?.fetch, config?.workerStagingToken);
 }
 
 export interface DeliveryAssemblyControlApiClient {

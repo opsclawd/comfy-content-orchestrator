@@ -377,17 +377,22 @@ export class ComfyUiRenderEngineAdapter implements RenderEnginePort {
       }
     };
 
+    const effectiveTimeoutMs = input.timeoutMs ?? this.timeoutMs;
     timeoutTimer = setTimeout(() => {
       if (settled) return;
       const err = new ComfyUiRenderEngineError("RENDER_TIMEOUT", "Render execution timed out", {
-        timeoutMs: this.timeoutMs,
+        timeoutMs: effectiveTimeoutMs,
         ...(promptId ? { promptId } : {})
       });
       settle({ ok: false, error: err });
       if (rejectQueue) {
         rejectQueue(err);
       }
-    }, this.timeoutMs);
+      // Trigger targeted prompt cancellation/quiescence on timeout
+      if (typeof this.client.interrupt === "function") {
+        void this.client.interrupt().catch(() => {});
+      }
+    }, effectiveTimeoutMs);
 
     socket.addEventListener("open", onOpen);
     socket.addEventListener("message", onMessage);
@@ -395,6 +400,12 @@ export class ComfyUiRenderEngineAdapter implements RenderEnginePort {
     socket.addEventListener("close", onClose);
 
     return queuePromise;
+  }
+
+  async cancelRender(_executionId: string): Promise<void> {
+    if (typeof this.client.interrupt === "function") {
+      await this.client.interrupt();
+    }
   }
 
   async getRenderResult(executionId: string): Promise<RenderResult | undefined> {

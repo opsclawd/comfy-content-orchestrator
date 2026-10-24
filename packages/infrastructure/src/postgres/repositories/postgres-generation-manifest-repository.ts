@@ -2,9 +2,10 @@ import {
   decodeGenerationManifestOutputs,
   extractPrimaryVideoStemMedia,
   type GenerationManifestComponentIdentity,
-  type GenerationManifestRepository
+  type GenerationManifestRepository,
+  type VideoStemSourceRecord
 } from "@cco/application";
-import type { PersistentMediaRef } from "@cco/contracts";
+import { type ManifestMeasuredMedia, ManifestMeasuredMediaSchema } from "@cco/contracts";
 import type { Pool, PoolClient } from "pg";
 
 interface GenerationManifestPayloadRow {
@@ -56,20 +57,21 @@ export class PostgresGenerationManifestRepository implements GenerationManifestR
     };
   }
 
-  async findVideoStemSourceByJobId(jobId: string): Promise<
-    | {
-        readonly generationManifestId: string;
-        readonly media: PersistentMediaRef;
-        readonly renderAttempt: number;
-      }
-    | undefined
-  > {
+  async findVideoStemSourceByJobId(jobId: string): Promise<VideoStemSourceRecord | undefined> {
     const result = await this.client.query<{
       manifest_id: string;
       render_attempt: number;
       manifest_payload: unknown;
+      job_execution_scope: string | null;
     }>(
-      `SELECT manifest_id, render_attempt, manifest_payload FROM generation_manifests WHERE job_id = $1`,
+      `SELECT
+         gm.manifest_id,
+         gm.render_attempt,
+         gm.manifest_payload,
+         rj.execution_scope AS job_execution_scope
+       FROM generation_manifests gm
+       LEFT JOIN render_jobs rj ON rj.job_id = gm.job_id
+       WHERE gm.job_id = $1`,
       [jobId]
     );
 
@@ -79,18 +81,55 @@ export class PostgresGenerationManifestRepository implements GenerationManifestR
     }
 
     const media = extractPrimaryVideoStemMedia(row.manifest_payload, jobId);
+    const payload = row.manifest_payload as Record<string, unknown> | null;
     const renderAttempt =
       typeof row.render_attempt === "number"
         ? row.render_attempt
-        : typeof (row.manifest_payload as Record<string, unknown> | null)?.renderAttempt ===
-            "number"
-          ? ((row.manifest_payload as Record<string, unknown>).renderAttempt as number)
+        : typeof payload?.renderAttempt === "number"
+          ? (payload.renderAttempt as number)
           : 1;
+
+    const isCandidateProfile =
+      typeof payload?.renderProfile === "string" &&
+      /^H3_CANDIDATE_[0-9a-f]{32}_V[1-9]\d*$/.test(payload.renderProfile);
+
+    const executionScope: "production" | "staging" | undefined =
+      row.job_execution_scope === "staging" ||
+      payload?.executionScope === "staging" ||
+      isCandidateProfile
+        ? "staging"
+        : row.job_execution_scope === "production" || payload?.executionScope === "production"
+          ? "production"
+          : undefined;
+
+    let measuredMedia: ManifestMeasuredMedia | undefined;
+    if (payload?.measuredMedia) {
+      const parsed = ManifestMeasuredMediaSchema.safeParse(payload.measuredMedia);
+      if (!parsed.success) {
+        throw new Error(
+          `Invalid measuredMedia in generation manifest "${row.manifest_id}": ${parsed.error.message}`
+        );
+      }
+      if (parsed.data.checksumSha256 !== media.sha256) {
+        throw new Error(
+          `measuredMedia checksumSha256 mismatch in manifest "${row.manifest_id}": expected "${media.sha256}", got "${parsed.data.checksumSha256}"`
+        );
+      }
+      measuredMedia = parsed.data;
+    }
+
+    if (isCandidateProfile && !measuredMedia) {
+      throw new Error(
+        `Candidate generation manifest "${row.manifest_id}" is missing required measuredMedia`
+      );
+    }
 
     return {
       generationManifestId: row.manifest_id,
       media,
-      renderAttempt
+      renderAttempt,
+      ...(executionScope ? { executionScope } : {}),
+      ...(measuredMedia ? { measuredMedia } : {})
     };
   }
 }

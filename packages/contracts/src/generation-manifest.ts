@@ -218,6 +218,12 @@ export const GenerationManifestSchema = z
     renderProfileVersion: z.number().int().positive().nullable(),
     specRevision: z.number().int().positive().optional(),
     attemptId: z.string().optional(),
+    executionScope: z.enum(["production", "staging"]).optional(),
+    requestedDurationMs: z.number().positive().optional(),
+    nominalDurationMs: z.number().positive().optional(),
+    candidateSpecificationDigest: sha256HashSchema.optional(),
+    submittedGraphHash: sha256HashSchema.optional(),
+    grantReference: z.string().optional(),
 
     // Route identity and execution
     routingMode: ShotPlanRoutingModeSchema.optional(),
@@ -274,6 +280,90 @@ export const GenerationManifestSchema = z
         }
       }
     }
+    const isCandidateProfile = data.renderProfile.startsWith("H3_CANDIDATE_");
+    if (isCandidateProfile) {
+      if (data.executionScope !== "staging") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Candidate manifests require executionScope to be "staging"',
+          path: ["executionScope"]
+        });
+      }
+      if (!data.candidateSpecificationDigest) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Candidate manifests require candidateSpecificationDigest",
+          path: ["candidateSpecificationDigest"]
+        });
+      }
+      if (data.requestedDurationMs === undefined || data.requestedDurationMs <= 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Candidate manifests require positive requestedDurationMs",
+          path: ["requestedDurationMs"]
+        });
+      }
+      if (data.nominalDurationMs === undefined || data.nominalDurationMs <= 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Candidate manifests require positive nominalDurationMs",
+          path: ["nominalDurationMs"]
+        });
+      }
+      if (!data.submittedGraphHash) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Candidate manifests require submittedGraphHash",
+          path: ["submittedGraphHash"]
+        });
+      }
+      if (!data.grantReference || data.grantReference.trim().length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Candidate manifests require the immutable signed grant reference",
+          path: ["grantReference"]
+        });
+      }
+      if (!data.configuredMedia || !data.measuredMedia) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Candidate profile manifests require both configuredMedia and measuredMedia",
+          path: [!data.configuredMedia ? "configuredMedia" : "measuredMedia"]
+        });
+      }
+      if (data.measuredMedia) {
+        if (data.measuredMedia.frameCount !== data.frameCount) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Candidate measuredMedia.frameCount (${data.measuredMedia.frameCount}) must match manifest frameCount (${data.frameCount})`,
+            path: ["measuredMedia", "frameCount"]
+          });
+        }
+        if (
+          data.measuredMedia.dimensions.width !== data.dimensions.width ||
+          data.measuredMedia.dimensions.height !== data.dimensions.height
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Candidate measuredMedia dimensions (${data.measuredMedia.dimensions.width}x${data.measuredMedia.dimensions.height}) must match manifest dimensions (${data.dimensions.width}x${data.dimensions.height})`,
+            path: ["measuredMedia", "dimensions"]
+          });
+        }
+        if (
+          !Number.isFinite(data.measuredMedia.durationMs) ||
+          data.measuredMedia.durationMs <= 0 ||
+          Math.abs(data.measuredMedia.durationMs - (data.frameCount * 1000) / data.fps) > 355
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "Candidate measured duration must agree with decoded frames and manifest FPS within probe tolerance",
+            path: ["measuredMedia", "durationMs"]
+          });
+        }
+      }
+    }
+
     if (
       (data.renderProfile === "MINIMAX_H3_720P_5S_REF2V_V1" ||
         data.engine === "minimax_h3_ref2v") &&
@@ -297,13 +387,14 @@ export const GenerationManifestSchema = z
       }
 
       // 1. Profile / Engine must match reference-directed H3
-      if (
-        data.renderProfile !== "MINIMAX_H3_720P_5S_REF2V_V1" ||
-        data.engine !== "minimax_h3_ref2v"
-      ) {
+      const isRef2vProfile =
+        (data.renderProfile === "MINIMAX_H3_720P_5S_REF2V_V1" &&
+          data.engine === "minimax_h3_ref2v") ||
+        (data.renderProfile.startsWith("H3_CANDIDATE_") && data.engine === "minimax_h3_ref2v");
+      if (!isRef2vProfile) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `routingMode "reference_directed" requires profile "MINIMAX_H3_720P_5S_REF2V_V1" (engine "minimax_h3_ref2v"), got profile "${data.renderProfile}" / engine "${data.engine}"`,
+          message: `routingMode "reference_directed" requires profile "MINIMAX_H3_720P_5S_REF2V_V1" or H3 candidate (engine "minimax_h3_ref2v"), got profile "${data.renderProfile}" / engine "${data.engine}"`,
           path: ["renderProfile"]
         });
       }
@@ -419,7 +510,8 @@ export const GenerationManifestSchema = z
       // 1. Profile / Engine must match an explicit frame-anchored I2V profile
       const isAllowedI2v =
         (data.renderProfile === "MINIMAX_H3_720P_5S_I2V_V1" && data.engine === "minimax_h3_i2v") ||
-        (data.renderProfile === "LTX_25_720P_5S_I2V_V1" && data.engine === "ltx_25_i2v");
+        (data.renderProfile === "LTX_25_720P_5S_I2V_V1" && data.engine === "ltx_25_i2v") ||
+        (data.renderProfile.startsWith("H3_CANDIDATE_") && data.engine === "minimax_h3_i2v");
       if (!isAllowedI2v) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,

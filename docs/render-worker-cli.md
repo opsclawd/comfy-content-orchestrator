@@ -189,7 +189,146 @@ If a lock file contains corrupted metadata or an operator must intervene:
 
 ---
 
-## 5. Target-Host Acceptance Status
+## 5. Execution Scopes & Candidate Staging (#425)
+
+The render worker supports explicit execution scope isolation between ordinary production and operator-controlled variable-duration candidate staging.
+
+### Execution Scope Configuration
+
+- **`WORKER_ALLOWED_EXECUTION_SCOPES`**: Environment variable specifying a comma-separated list of allowed scopes (`production`, `staging`). Defaults to `production` when omitted.
+- **Server-Side Enforcement**: Control API enforces that workers may only claim jobs matching their authorized execution scopes. Workers not configured with `staging` will never receive candidate staging jobs.
+
+Candidate staging workers also require all four deployment snapshot settings: `H3_CANDIDATE_PROFILES_FILE`, `H3_CAPABILITY_MATRIX_FILE`, `H3_TRUSTED_KEYS_FILE`, and `H3_EVIDENCE_DIRECTORY`. The worker verifies the signed capability matrix and resolves each evidence digest from that directory before admitting a profile. If any setting is absent, the worker stays on the empty built-in catalog and rejects candidate jobs. Set `H3_CANDIDATE_PROVENANCE_PATH` to the trusted candidate provenance report. Use deployment controlled files and keys, matching those used by the staging command.
+
+```bash
+# Production-only worker (default)
+WORKER_ALLOWED_EXECUTION_SCOPES=production pnpm --filter render-worker start
+
+# Staging-enabled worker (operator-controlled staging host)
+WORKER_ALLOWED_EXECUTION_SCOPES=staging,production pnpm --filter render-worker start
+```
+
+### Preflight Signed Operator Grant Verification
+
+Before dispatching any candidate profile execution to ComfyUI/GPU, the worker enforces:
+1. **Execution Scope Gate**: The job's durable `executionScope` must be `"staging"`. Any candidate profile job encountered on an ordinary production queue immediately throws `CandidateProfileProductionDisabledError`.
+2. **Signed Grant Verification**: Injected payload must contain an `authorizationGrant` conforming to `H3CandidateAuthorizationGrantSchema`.
+3. **Cryptographic Verification**: `H3OperatorSignatureVerifier` verifies the detached cryptographic signature against deployment-owned trusted public keys, validating:
+   - Grant payload version is `1`.
+   - Signer key ID is trusted and valid.
+   - Candidate profile key and specification digest match exactly.
+   - Gold-master workflow hash and model hashes match candidate specification.
+   - Target hostname and target GPU UUID match the executing node.
+   - Current time falls within `[issuedAt, expiresAt]`.
+   - Purpose is `"staging"`.
+4. **Graph & LoRA Integrity**:
+   - Generator node matches route (`MiniMaxH3ImageToVideo` for I2V; `MiniMaxH3ReferenceToVideo` for Ref2V).
+   - Sampling parameters (`steps`, `sampler`, `scheduler`, `cfg`, `denoise`) match candidate specification.
+   - Detects and rejects silent dense-attention fallback.
+   - Enforces Turbo LoRA route invariants; rejects LoRA nodes if `turboLora === "none"`.
+   - Validates reference image headers, hashes, dimensions, and path traversal safety.
+
+### Duration Semantics & Timeline Invariants
+
+Execution preserves strict separation across three duration concepts:
+- **`requestedDurationMs`**: The duration requested by the ShotPlan or Scene configuration (e.g. 8000ms, 10000ms).
+- **`nominalDurationMs`**: The exact configured duration derived from grid-valid candidate frames: `Math.round((specification.frames / specification.fps) * 1000)`.
+- **`measuredMedia`**: Post-render physical media facts probed via `ffprobe` (`frameCount`, `fps`, `durationMs`, `container`, `video.codecName`).
+
+The worker rejects any duration discrepancy exceeding tolerance:
+- **No silent fallback**: Requested durations never secretly snap to the 5000ms canonical 124-frame profile.
+- **CFR Invariant**: Non-constant frame rate (`fps: null` from ffprobe) triggers immediate rejection.
+- **Tolerance Gate**: Probed output duration cannot diverge from `nominalDurationMs` by more than 355ms (roughly ±8.5 frames at 24fps).
+- **Assembly Timeline Invariant**: Downstream accepted-run assembly validates that individual probed stem durations and aggregate run durations match planned durations within tolerances before enqueuing reels.
+
+### Operator Staging CLI Invocation
+
+Operators stage an approved scene for candidate execution using `pnpm --filter render-worker stage`:
+
+```bash
+pnpm --filter render-worker stage -- \
+  --scene-id "<scene-uuid>" \
+  --candidate-profile-key "H3_CANDIDATE_<32-hex-digest>_V1" \
+  --grant-path "/path/to/signed-operator-grant.json" \
+  --database-url "$DATABASE_URL" \
+  --request-id "<idempotency-key-uuid>"
+```
+
+CLI options:
+| Option | Description |
+|---|---|
+| `--scene-id <uuid>` | Approved Scene UUID to stage. Scene must have an approved ShotPlan matching the candidate route. |
+| `--candidate-profile-key <key>` | Candidate profile key (e.g. `H3_CANDIDATE_..._V1`). Must exist in the accepted candidate catalog. |
+| `--grant-path <path>` | Path to signed operator authorization grant JSON file (`H3CandidateAuthorizationGrant`). |
+| `--database-url <url>` | PostgreSQL connection string. Defaults to `DATABASE_URL` environment variable. |
+| `--request-id <uuid>` | Optional client-supplied idempotency key. Defaults to a deterministic v5 or random v4 UUID. |
+| `--dry-run` | When present, validates preflight admission and constructs the job without mutating database or queue. |
+
+### Signed Grant Prerequisites
+
+An operator authorization grant JSON file must contain:
+1. `payload.version`: Always `1`.
+2. `payload.candidateKey`: Matches `--candidate-profile-key`.
+3. `payload.specificationDigest`: Exact SHA-256 digest of candidate specification.
+4. `payload.goldMasterWorkflowHash`: Matches workflow SHA-256 in candidate specification.
+5. `payload.goldMasterModelHashesDigest`: Digest of required model hashes map.
+6. `payload.targetHostname`: Target execution machine hostname (`os.hostname()`).
+7. `payload.targetGpuUuid`: Dedicated NVIDIA RTX 4090 GPU UUID (e.g. from `nvidia-smi -L`).
+8. `payload.purpose`: Must be `"staging"`.
+9. `payload.scope`: Must be `"staging"`.
+10. `payload.issuedAt` / `payload.expiresAt`: ISO 8601 UTC timestamps encompassing the execution window.
+11. `signerKeyId` & `signature`: Cryptographic signature verifiable against operator trust store keys.
+
+### Denial Diagnostics Guide
+
+When candidate admission or execution rejects, fail-closed diagnostics identify the root cause:
+
+| Blocker / Diagnostic Message | Meaning | Recovery / Operator Action |
+|---|---|---|
+| `Candidate profile production execution is disabled` | Candidate job claimed by a worker with ordinary production queue scope. | Configure worker with `WORKER_ALLOWED_EXECUTION_SCOPES=staging,production`. |
+| `Candidate authorization denied: OPERATOR_KEY_REVOKED` | Grant signer key ID has been revoked or expired in the deployment trust store. | Re-sign the grant using an active, trusted operator key. |
+| `Detected silent dense-attention fallback: candidate profile requires ...` | Workflow node configured `standard` or `dense` attention instead of candidate's required backend (e.g. `flash_attn` or `sage_attn`). | Fix workflow template node to use the specified attention backend and pass `fail_on_fallback: true`. |
+| `Unknown effective attention backend: ...` | Live runtime environment has unknown or unsupported attention implementation. | Verify CUDA, PyTorch, and attention packages (e.g. `flash_attn`, `sageattention`) match candidate specification. |
+| `Ref2VA Turbo LoRA is strictly restricted to Ref2V route` | Workflow wired a reference-directed Turbo LoRA into an I2V candidate execution graph. | Use the route-appropriate Turbo LoRA (FL2VA for I2V, Ref2VA for Ref2V) or `"none"`. |
+| `Attention package version mismatch` | Live python environment has package version differing from candidate spec. | Update the environment virtualenv to match pinned package versions. |
+| `Observed host/GPU does not match target` | Grant was issued for a different physical node or GPU device. | Re-issue grant binding the correct target hostname and GPU UUID. |
+| `Probed output frame count X does not match candidate specification Y` | ComfyUI rendered fewer or more frames than specified by candidate. | Check ComfyUI latent frame count inputs; ComfyUI node may have truncated generation. |
+| `Probed output fps null does not match candidate specification fps 24` | Video container is variable frame rate (VFR). | Ensure ComfyUI video export node enforces constant frame rate (CFR) MP4. |
+
+### Rollback & Quarantine Procedure
+
+If an operator needs to abort a staging candidate execution or revert a host to production-only:
+
+1. **Revert Worker Scope:**
+   ```bash
+   # Remove staging scope from worker environment
+   export WORKER_ALLOWED_EXECUTION_SCOPES=production
+   # Restart render worker process
+   pnpm --filter render-worker start
+   ```
+2. **Quarantine or Cancel In-Flight Staging Jobs:**
+   ```sql
+   -- Mark any pending or in-flight staging jobs as cancelled
+   UPDATE render_jobs
+   SET status = 'cancelled', error_trace = 'Cancelled by operator staging rollback'
+   WHERE execution_scope = 'staging' AND status IN ('queued', 'rendering');
+   ```
+3. **Reset Scene Status:**
+   If a scene was queued for staging and needs to return to `approved` state for normal production:
+   ```sql
+   UPDATE scenes
+   SET status = 'approved'
+   WHERE id = '<scene-uuid>' AND status = 'queued';
+   ```
+4. **Clear Staged Reference Artifacts:**
+   Remove temporary reference files from ComfyUI input staging:
+   ```bash
+   rm -f "$CCO_COMFYUI_DIR/input/stage_"*
+   ```
+
+---
+
+## 6. Target-Host Acceptance Status
 
 > [!NOTE]
 > **Live hardware acceptance is complete on the Trinidad RTX 4090 host (Issue #32).**

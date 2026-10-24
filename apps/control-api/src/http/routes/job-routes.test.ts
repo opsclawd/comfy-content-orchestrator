@@ -180,7 +180,8 @@ describe("Job Dispatch Routes", () => {
     expect(queue.claim).toHaveBeenCalledTimes(1);
     expect(queue.claim).toHaveBeenCalledWith({
       workerId: "worker-alpha",
-      leaseDurationMs: 300_000
+      leaseDurationMs: 300_000,
+      allowedExecutionScopes: ["production"]
     });
     expect(
       Object.prototype.hasOwnProperty.call(
@@ -240,7 +241,8 @@ describe("Job Dispatch Routes", () => {
     expect(queue.claim).toHaveBeenLastCalledWith({
       workerId: "worker-alpha",
       leaseDurationMs: 300_000,
-      allowedJobKinds: ["candidate"]
+      allowedJobKinds: ["candidate"],
+      allowedExecutionScopes: ["production"]
     });
 
     const responseMultiple = await app.inject({
@@ -256,7 +258,152 @@ describe("Job Dispatch Routes", () => {
     expect(queue.claim).toHaveBeenLastCalledWith({
       workerId: "worker-alpha",
       leaseDurationMs: 300_000,
-      allowedJobKinds: ["candidate", "production"]
+      allowedJobKinds: ["candidate", "production"],
+      allowedExecutionScopes: ["production"]
+    });
+
+    await app.close();
+  });
+
+  it("claim rejects unauthorized requested execution scope with 403", async () => {
+    const queue = createFakeJobQueue({
+      claim: vi.fn().mockResolvedValue(sampleLeasedJob)
+    });
+
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
+        jobQueue: queue
+      },
+      {
+        jobDispatch: defaultDispatchConfig // default allowedExecutionScopes is ["production"]
+      }
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/jobs/claim",
+      payload: {
+        workerId: "worker-alpha",
+        allowedExecutionScopes: ["staging"]
+      }
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({
+      code: "UNAUTHORIZED_EXECUTION_SCOPE",
+      message: 'Worker "worker-alpha" is not authorized for requested execution scope(s): staging'
+    });
+    expect(queue.claim).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it("claim delegates authorized staging execution scope when permitted by dispatchConfig", async () => {
+    const queue = createFakeJobQueue({
+      claim: vi.fn().mockResolvedValue(sampleLeasedJob)
+    });
+
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
+        jobQueue: queue
+      },
+      {
+        jobDispatch: {
+          ...defaultDispatchConfig,
+          allowedExecutionScopes: ["production", "staging"],
+          // Any scope beyond "production" must be proven with this shared secret - workerId
+          // alone is a self-reported label, not an authenticated identity.
+          resolveWorkerStagingToken: () => "alpha-staging-secret"
+        }
+      }
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/jobs/claim",
+      headers: {
+        "x-worker-staging-token": "alpha-staging-secret"
+      },
+      payload: {
+        workerId: "worker-alpha",
+        allowedExecutionScopes: ["staging"]
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(queue.claim).toHaveBeenCalledWith({
+      workerId: "worker-alpha",
+      leaseDurationMs: 300_000,
+      allowedExecutionScopes: ["staging"]
+    });
+
+    await app.close();
+  });
+
+  it("claim resolves worker execution scopes dynamically via resolveWorkerExecutionScopes", async () => {
+    const queue = createFakeJobQueue({
+      claim: vi.fn().mockResolvedValue(sampleLeasedJob)
+    });
+
+    const app = createControlApiApp(
+      {
+        uow: new FakeUnitOfWork(),
+        storageTelemetry: createFakeStorageTelemetry(),
+        jobQueue: queue
+      },
+      {
+        jobDispatch: {
+          ...defaultDispatchConfig,
+          resolveWorkerExecutionScopes: (workerId: string) =>
+            workerId === "staging-worker" ? ["staging"] : ["production"],
+          resolveWorkerStagingToken: (workerId: string) =>
+            workerId === "staging-worker" ? "staging-worker-secret" : undefined
+        }
+      }
+    );
+
+    const unauthResponse = await app.inject({
+      method: "POST",
+      url: "/api/jobs/claim",
+      payload: {
+        workerId: "regular-worker",
+        allowedExecutionScopes: ["staging"]
+      }
+    });
+    expect(unauthResponse.statusCode).toBe(403);
+
+    // Spoofing the trusted workerId without the shared secret must NOT grant staging scope -
+    // workerId is a self-reported body field, not an authenticated identity.
+    const spoofedResponse = await app.inject({
+      method: "POST",
+      url: "/api/jobs/claim",
+      payload: {
+        workerId: "staging-worker",
+        allowedExecutionScopes: ["staging"]
+      }
+    });
+    expect(spoofedResponse.statusCode).toBe(403);
+
+    const authResponse = await app.inject({
+      method: "POST",
+      url: "/api/jobs/claim",
+      headers: {
+        "x-worker-staging-token": "staging-worker-secret"
+      },
+      payload: {
+        workerId: "staging-worker",
+        allowedExecutionScopes: ["staging"]
+      }
+    });
+    expect(authResponse.statusCode).toBe(200);
+    expect(queue.claim).toHaveBeenCalledWith({
+      workerId: "staging-worker",
+      leaseDurationMs: 300_000,
+      allowedExecutionScopes: ["staging"]
     });
 
     await app.close();

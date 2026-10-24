@@ -9,7 +9,9 @@ import {
   type TransactionalJobEnqueuer
 } from "@cco/application";
 import {
+  EXECUTION_SCOPES,
   JOB_KINDS,
+  type ExecutionScope,
   type JobId,
   type JobKind,
   type JobStatus,
@@ -34,6 +36,8 @@ export interface RenderJobRow {
   error_trace: string | null;
   created_at: Date | string;
   updated_at: Date | string;
+  execution_scope?: string;
+  staging_operation_id?: string | null;
 }
 
 export type PostgresJobRunner = Pool | PoolClient;
@@ -72,6 +76,12 @@ export async function insertRenderJob(
     }
   }
 
+  const executionScope = input.executionScope ?? "production";
+  if (!EXECUTION_SCOPES.includes(executionScope)) {
+    throw new Error(`Invalid executionScope: ${executionScope}`);
+  }
+  const stagingOperationId = input.stagingOperationId ?? null;
+
   const payloadJson = JSON.stringify(input.injectedPayload);
 
   let res;
@@ -82,8 +92,10 @@ export async function insertRenderJob(
         scene_id,
         job_kind,
         workflow_template,
-        injected_payload
-      ) VALUES ($1, $2, $3, $4)
+        injected_payload,
+        execution_scope,
+        staging_operation_id
+      ) VALUES ($1, $2, $3, $4, $5, $6)
       RETURNING
         job_id,
         scene_id,
@@ -98,9 +110,18 @@ export async function insertRenderJob(
         max_retries,
         error_trace,
         created_at,
-        updated_at
+        updated_at,
+        execution_scope,
+        staging_operation_id
       `,
-      [input.sceneId, input.jobKind, input.workflowTemplate, payloadJson]
+      [
+        input.sceneId,
+        input.jobKind,
+        input.workflowTemplate,
+        payloadJson,
+        executionScope,
+        stagingOperationId
+      ]
     );
   } else {
     res = await runner.query<RenderJobRow>(
@@ -110,8 +131,10 @@ export async function insertRenderJob(
         job_kind,
         workflow_template,
         injected_payload,
-        max_retries
-      ) VALUES ($1, $2, $3, $4, $5)
+        max_retries,
+        execution_scope,
+        staging_operation_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
       RETURNING
         job_id,
         scene_id,
@@ -126,9 +149,19 @@ export async function insertRenderJob(
         max_retries,
         error_trace,
         created_at,
-        updated_at
+        updated_at,
+        execution_scope,
+        staging_operation_id
       `,
-      [input.sceneId, input.jobKind, input.workflowTemplate, payloadJson, input.maxRetries]
+      [
+        input.sceneId,
+        input.jobKind,
+        input.workflowTemplate,
+        payloadJson,
+        input.maxRetries,
+        executionScope,
+        stagingOperationId
+      ]
     );
   }
 
@@ -154,6 +187,37 @@ async function queryAllJobsTerminal(
   return Number(row?.total ?? 0) > 0 && Number(row?.pending ?? 0) === 0;
 }
 
+async function queryJobByStagingOperationId(
+  queryable: Pick<Pool | PoolClient, "query">,
+  stagingOperationId: string
+): Promise<RenderJob | undefined> {
+  const res = await queryable.query<RenderJobRow>(
+    `
+    SELECT
+      job_id,
+      scene_id,
+      job_kind,
+      status,
+      workflow_template,
+      injected_payload,
+      worker_id,
+      lease_token,
+      lease_expires_at,
+      retry_count,
+      max_retries,
+      error_trace,
+      created_at,
+      updated_at,
+      execution_scope,
+      staging_operation_id
+    FROM render_jobs
+    WHERE staging_operation_id = $1
+    `,
+    [stagingOperationId]
+  );
+  return res.rows[0] ? mapRenderJobRow(res.rows[0]) : undefined;
+}
+
 export class PostgresTransactionalJobEnqueuer implements TransactionalJobEnqueuer {
   constructor(private readonly client: PoolClient) {}
 
@@ -163,6 +227,10 @@ export class PostgresTransactionalJobEnqueuer implements TransactionalJobEnqueue
 
   async areAllJobsTerminal(sceneId: SceneId, jobKind: JobKind): Promise<boolean> {
     return queryAllJobsTerminal(this.client, sceneId, jobKind);
+  }
+
+  async findByStagingOperationId(stagingOperationId: string): Promise<RenderJob | undefined> {
+    return queryJobByStagingOperationId(this.client, stagingOperationId);
   }
 }
 
@@ -207,6 +275,17 @@ export class PostgresJobQueue implements JobQueuePort {
         throw new Error("allowedJobKinds must be an array of valid JobKind");
       }
     }
+    if (input.allowedExecutionScopes !== undefined) {
+      if (
+        !Array.isArray(input.allowedExecutionScopes) ||
+        input.allowedExecutionScopes.some(
+          (s) => !(EXECUTION_SCOPES as readonly string[]).includes(s)
+        )
+      ) {
+        throw new Error("allowedExecutionScopes must be an array of valid ExecutionScope");
+      }
+    }
+    const allowedExecutionScopes = input.allowedExecutionScopes ?? ["production"];
 
     // 1. Terminalize expired exhausted active rows in a dedicated standalone query so that
     // subsequent claim rollbacks do not inadvertently revert this terminal cleanup.
@@ -255,6 +334,7 @@ export class PostgresJobQueue implements JobQueuePort {
             )
           )
           AND job_kind::text = ANY($3::text[])
+          AND execution_scope::text = ANY($4::text[])
           ORDER BY created_at ASC, job_id ASC
           FOR UPDATE SKIP LOCKED
           LIMIT 1
@@ -286,9 +366,11 @@ export class PostgresJobQueue implements JobQueuePort {
           r.max_retries,
           r.error_trace,
           r.created_at,
-          r.updated_at
+          r.updated_at,
+          r.execution_scope,
+          r.staging_operation_id
         `,
-        [input.workerId, input.leaseDurationMs, admissibleKinds]
+        [input.workerId, input.leaseDurationMs, admissibleKinds, allowedExecutionScopes]
       );
 
       const row = claimRes.rows[0];
@@ -340,7 +422,9 @@ export class PostgresJobQueue implements JobQueuePort {
         max_retries,
         error_trace,
         created_at,
-        updated_at
+        updated_at,
+        execution_scope,
+        staging_operation_id
       `,
       [jobId, leaseToken]
     );
@@ -405,7 +489,9 @@ export class PostgresJobQueue implements JobQueuePort {
         max_retries,
         error_trace,
         created_at,
-        updated_at
+        updated_at,
+        execution_scope,
+        staging_operation_id
       `,
       [jobId, leaseToken, leaseDurationMs]
     );
@@ -460,7 +546,9 @@ export class PostgresJobQueue implements JobQueuePort {
           max_retries,
           error_trace,
           created_at,
-          updated_at
+          updated_at,
+          execution_scope,
+          staging_operation_id
         `,
         [jobId, leaseToken]
       );
@@ -724,7 +812,9 @@ export class PostgresJobQueue implements JobQueuePort {
         max_retries,
         error_trace,
         created_at,
-        updated_at
+        updated_at,
+        execution_scope,
+        staging_operation_id
       `,
       [jobId, leaseToken, errorTrace]
     );
@@ -771,7 +861,7 @@ export class PostgresJobQueue implements JobQueuePort {
       RETURNING
         job_id, scene_id, job_kind, status, workflow_template, injected_payload,
         worker_id, lease_token, lease_expires_at, retry_count, max_retries,
-        error_trace, created_at, updated_at
+        error_trace, created_at, updated_at, execution_scope, staging_operation_id
       `,
       [jobId, leaseToken, reason]
     );
@@ -794,6 +884,10 @@ export class PostgresJobQueue implements JobQueuePort {
 
   async areAllJobsTerminal(sceneId: SceneId, jobKind: JobKind): Promise<boolean> {
     return queryAllJobsTerminal(this.pool, sceneId, jobKind);
+  }
+
+  async findByStagingOperationId(stagingOperationId: string): Promise<RenderJob | undefined> {
+    return queryJobByStagingOperationId(this.pool, stagingOperationId);
   }
 
   private async countMatchingCandidates(
@@ -1316,7 +1410,9 @@ export class PostgresJobQueue implements JobQueuePort {
         max_retries,
         error_trace,
         created_at,
-        updated_at
+        updated_at,
+        execution_scope,
+        staging_operation_id
       FROM render_jobs
       WHERE job_id = $1
       `,
@@ -1356,6 +1452,9 @@ export function mapRenderJobRow(row: RenderJobRow): RenderJob {
       : new Date(row.lease_expires_at)
     : null;
 
+  const executionScope = (row.execution_scope ?? "production") as ExecutionScope;
+  const stagingOperationId = row.staging_operation_id ?? null;
+
   return Object.freeze({
     jobId: row.job_id as JobId,
     sceneId: row.scene_id as SceneId,
@@ -1370,6 +1469,8 @@ export function mapRenderJobRow(row: RenderJobRow): RenderJob {
     maxRetries: Number(row.max_retries),
     errorTrace: row.error_trace ?? null,
     createdAt,
-    updatedAt
+    updatedAt,
+    executionScope,
+    stagingOperationId
   });
 }
