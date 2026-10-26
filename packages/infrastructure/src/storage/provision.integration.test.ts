@@ -42,16 +42,16 @@ describe("Storage Provisioning integration with real MinIO", () => {
     }
   });
 
-  it("provisions all five buckets and is idempotent on repeat execution", async () => {
+  it("provisions all six buckets and is idempotent on repeat execution", async () => {
     // 1. Initial provisioning on clean MinIO container
     const initialSummary = await provisionStorageBuckets({
       client: rawS3Client
     });
 
-    expect(initialSummary.results).toHaveLength(5);
-    expect(initialSummary.createdCount).toBe(5);
+    expect(initialSummary.results).toHaveLength(6);
+    expect(initialSummary.createdCount).toBe(6);
     expect(initialSummary.alreadyExistsCount).toBe(0);
-    expect(initialSummary.lifecycleAppliedCount).toBe(2); // temp (14d) and review (60d)
+    expect(initialSummary.lifecycleAppliedCount).toBe(3); // temp (14d), review (60d), and candidates (30d)
     expect(initialSummary.lifecycleSkippedCount).toBe(3); // reference, delivery, and evidence
 
     // 2. Second provisioning run against already provisioned buckets
@@ -59,10 +59,10 @@ describe("Storage Provisioning integration with real MinIO", () => {
       client: rawS3Client
     });
 
-    expect(repeatSummary.results).toHaveLength(5);
+    expect(repeatSummary.results).toHaveLength(6);
     expect(repeatSummary.createdCount).toBe(0);
-    expect(repeatSummary.alreadyExistsCount).toBe(5);
-    expect(repeatSummary.lifecycleAppliedCount).toBe(2);
+    expect(repeatSummary.alreadyExistsCount).toBe(6);
+    expect(repeatSummary.lifecycleAppliedCount).toBe(3);
     expect(repeatSummary.lifecycleSkippedCount).toBe(3);
   });
 
@@ -132,7 +132,7 @@ describe("Storage Provisioning integration with real MinIO", () => {
 
     // 2. Re-run provisioning
     const summary = await provisionStorageBuckets({ client: rawS3Client });
-    expect(summary.alreadyExistsCount).toBe(5);
+    expect(summary.alreadyExistsCount).toBe(6);
 
     // 3. Read back object and verify byte integrity
     const getRes = await rawS3Client.send(

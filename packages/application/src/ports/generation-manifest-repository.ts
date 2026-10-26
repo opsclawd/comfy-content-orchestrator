@@ -33,10 +33,22 @@ export interface GenerationManifestComponentIdentity {
    * manifest references from being accepted into assembly provenance.
    */
   readonly outputChecksumsSha256?: readonly string[] | undefined;
+  readonly route?: "i2v" | "ref2v" | undefined;
+  readonly candidateSpecificationDigest?: string | undefined;
 }
 
 export interface VideoStemSourceRecord {
   readonly generationManifestId: string;
+  readonly jobId?: string | undefined;
+  readonly sceneId?: string | undefined;
+  readonly renderProfile?: string | undefined;
+  readonly route?: "i2v" | "ref2v" | undefined;
+  readonly routingMode?: string | undefined;
+  readonly candidateSpecificationDigest?: string | undefined;
+  readonly specRevision?: number | undefined;
+  readonly frames?: number | undefined;
+  readonly fps?: number | undefined;
+  readonly outputChecksumsSha256?: readonly string[] | undefined;
   readonly media: PersistentMediaRef;
   readonly renderAttempt: number;
   readonly executionScope?: "production" | "staging" | undefined;

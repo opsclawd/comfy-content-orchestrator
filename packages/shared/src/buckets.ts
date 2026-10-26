@@ -6,7 +6,8 @@ export const BUCKET_NAMES = [
   "godzspeed-review",
   "godzspeed-reference",
   "godzspeed-delivery",
-  "godzspeed-evidence"
+  "godzspeed-evidence",
+  "godzspeed-candidates"
 ] as const;
 
 export type BucketName = (typeof BUCKET_NAMES)[number];
@@ -16,7 +17,8 @@ export const BUCKETS = {
   REVIEW: "godzspeed-review",
   REFERENCE: "godzspeed-reference",
   DELIVERY: "godzspeed-delivery",
-  EVIDENCE: "godzspeed-evidence"
+  EVIDENCE: "godzspeed-evidence",
+  CANDIDATES: "godzspeed-candidates"
 } as const;
 
 export interface BucketRetentionPolicy {
@@ -64,6 +66,12 @@ export const BUCKET_RETENTION_POLICIES: Readonly<Record<BucketName, BucketRetent
       description:
         "immutable source evidence archive (retained indefinitely under regulatory hold; no automated expiry)",
       isAutomatedExpiry: false
+    },
+    "godzspeed-candidates": {
+      bucket: "godzspeed-candidates",
+      defaultRetentionDays: 30,
+      description: "operator acceptance candidates, staging test reels, simulation artifacts",
+      isAutomatedExpiry: true
     }
   });
 
@@ -84,5 +92,11 @@ export const BUCKET_LIFECYCLE_DEFINITIONS: Readonly<
   },
   "godzspeed-reference": undefined,
   "godzspeed-delivery": undefined,
-  "godzspeed-evidence": undefined
+  "godzspeed-evidence": undefined,
+  "godzspeed-candidates": {
+    ruleId: "godzspeed-candidates-retention-30d",
+    expirationDays: 30,
+    status: "Enabled",
+    prefix: ""
+  }
 });

@@ -1,10 +1,14 @@
 import type { OperatorAcceptanceRunRepository } from "@cco/application";
 import {
   type AcceptanceRunScene,
+  type OperatorAcceptanceActionReceipt,
+  type OperatorAcceptanceActionScope,
   type OperatorAcceptanceRun,
   type OperatorAcceptanceRunStatus,
   OperatorAcceptanceRunSchema,
-  AcceptanceRunSceneSchema
+  AcceptanceRunSceneSchema,
+  OperatorAcceptanceActionReceiptSchema,
+  OperatorAcceptanceIdempotencyConflictError
 } from "@cco/contracts";
 import type { Pool, PoolClient } from "pg";
 
@@ -38,6 +42,8 @@ interface SceneRow {
   accepted_attempt_id: string | null;
   accepted_staging_job_id: string | null;
   accepted_attempt_ordinal: number | null;
+  candidate_specification_digest: string | null;
+  plan_id: string | null;
 }
 
 function parseJsonField<T>(val: unknown): T {
@@ -90,7 +96,11 @@ function mapRowToScene(row: SceneRow): AcceptanceRunScene {
       : {}),
     ...(row.accepted_attempt_ordinal != null
       ? { acceptedAttemptOrdinal: row.accepted_attempt_ordinal }
-      : {})
+      : {}),
+    ...(row.candidate_specification_digest != null
+      ? { candidateSpecificationDigest: row.candidate_specification_digest }
+      : {}),
+    ...(row.plan_id != null ? { planId: row.plan_id } : {})
   };
   return AcceptanceRunSceneSchema.parse(raw);
 }
@@ -151,8 +161,10 @@ export class PostgresOperatorAcceptanceRunRepository implements OperatorAcceptan
           current_attempt_ordinal,
           accepted_attempt_id,
           accepted_staging_job_id,
-          accepted_attempt_ordinal
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          accepted_attempt_ordinal,
+          candidate_specification_digest,
+          plan_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
         ON CONFLICT (acceptance_run_id, scene_id) DO NOTHING;
       `;
       await this.client.query(sceneQuery, [
@@ -169,7 +181,9 @@ export class PostgresOperatorAcceptanceRunRepository implements OperatorAcceptan
         scene.currentAttemptOrdinal,
         scene.acceptedAttemptId ?? null,
         scene.acceptedStagingJobId ?? null,
-        scene.acceptedAttemptOrdinal ?? null
+        scene.acceptedAttemptOrdinal ?? null,
+        scene.candidateSpecificationDigest ?? null,
+        scene.planId ?? null
       ]);
     }
   }
@@ -224,20 +238,49 @@ export class PostgresOperatorAcceptanceRunRepository implements OperatorAcceptan
     assemblyJobId?: string,
     actionReceiptId?: string
   ): Promise<void> {
-    const query = `
-      UPDATE operator_acceptance_runs
-      SET status = $2,
-          assembly_job_id = COALESCE($3, assembly_job_id),
-          action_receipt_id = COALESCE($4, action_receipt_id),
-          updated_at = NOW()
-      WHERE acceptance_run_id = $1;
-    `;
-    await this.client.query(query, [
+    const isTerminalSettlement = status === "completed" || status === "failed";
+    const query =
+      isTerminalSettlement && assemblyJobId
+        ? `
+          UPDATE operator_acceptance_runs
+          SET status = $2,
+              assembly_job_id = COALESCE($3, assembly_job_id),
+              action_receipt_id = COALESCE($4, action_receipt_id),
+              updated_at = NOW()
+          WHERE acceptance_run_id = $1
+            AND (assembly_job_id = $3 OR assembly_job_id IS NULL)
+            AND (status = 'assembling' OR status = $2);
+        `
+        : `
+          UPDATE operator_acceptance_runs
+          SET status = $2,
+              assembly_job_id = COALESCE($3, assembly_job_id),
+              action_receipt_id = COALESCE($4, action_receipt_id),
+              updated_at = NOW()
+          WHERE acceptance_run_id = $1;
+        `;
+    const res = await this.client.query(query, [
       acceptanceRunId,
       status,
       assemblyJobId ?? null,
       actionReceiptId ?? null
     ]);
+    if (isTerminalSettlement && assemblyJobId && res.rowCount === 0) {
+      const existing = await this.findRunById(acceptanceRunId);
+      if (!existing) {
+        throw new Error(`Acceptance run '${acceptanceRunId}' not found`);
+      }
+      if (existing.status !== "assembling" && existing.status !== status) {
+        throw new Error(
+          `Cannot settle acceptance run '${acceptanceRunId}' from status '${existing.status}' to '${status}'`
+        );
+      }
+      if (existing.assemblyJobId && existing.assemblyJobId !== assemblyJobId) {
+        throw new Error(
+          `Cannot settle acceptance run '${acceptanceRunId}': assembly job mismatch (expected ${existing.assemblyJobId}, got ${assemblyJobId})`
+        );
+      }
+    }
   }
 
   async updateSceneAcceptedAttempt(
@@ -270,5 +313,88 @@ export class PostgresOperatorAcceptanceRunRepository implements OperatorAcceptan
       WHERE acceptance_run_id = $1 AND scene_id = $2;
     `;
     await this.client.query(query, [acceptanceRunId, sceneId, attemptId, ordinal]);
+  }
+
+  async saveActionReceipt(receipt: OperatorAcceptanceActionReceipt): Promise<void> {
+    const existing = await this.findActionReceipt(
+      receipt.scope,
+      receipt.runOrCampaignId,
+      receipt.actionId
+    );
+    if (existing) {
+      if (existing.requestHash !== receipt.requestHash) {
+        throw new OperatorAcceptanceIdempotencyConflictError(receipt.actionId);
+      }
+      return;
+    }
+
+    const query = `
+      INSERT INTO operator_acceptance_action_receipts (
+        action_id,
+        scope,
+        run_or_campaign_id,
+        realm,
+        request_hash,
+        response,
+        created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+      ON CONFLICT (scope, run_or_campaign_id, action_id) DO NOTHING
+      RETURNING request_hash;
+    `;
+    const res = await this.client.query<{ request_hash: string }>(query, [
+      receipt.actionId,
+      receipt.scope,
+      receipt.runOrCampaignId,
+      JSON.stringify(receipt.realm),
+      receipt.requestHash,
+      JSON.stringify(receipt.response),
+      receipt.createdAt
+    ]);
+    if (res.rowCount === 0) {
+      const conflictReceipt = await this.findActionReceipt(
+        receipt.scope,
+        receipt.runOrCampaignId,
+        receipt.actionId
+      );
+      if (conflictReceipt && conflictReceipt.requestHash !== receipt.requestHash) {
+        throw new OperatorAcceptanceIdempotencyConflictError(receipt.actionId);
+      }
+    }
+  }
+
+  async findActionReceipt(
+    scope: OperatorAcceptanceActionScope | string,
+    runOrCampaignId: string,
+    actionId: string
+  ): Promise<OperatorAcceptanceActionReceipt | undefined> {
+    const query = `
+      SELECT * FROM operator_acceptance_action_receipts
+      WHERE scope = $1 AND run_or_campaign_id = $2 AND action_id = $3;
+    `;
+    const res = await this.client.query<{
+      action_id: string;
+      scope: string;
+      run_or_campaign_id: string;
+      realm: unknown;
+      request_hash: string;
+      response: unknown;
+      created_at: Date | string;
+    }>(query, [scope, runOrCampaignId, actionId]);
+
+    const row = res.rows[0];
+    if (!row) return undefined;
+
+    return OperatorAcceptanceActionReceiptSchema.parse({
+      actionId: row.action_id,
+      scope: row.scope,
+      runOrCampaignId: row.run_or_campaign_id,
+      realm: parseJsonField(row.realm),
+      requestHash: row.request_hash,
+      response: parseJsonField(row.response),
+      createdAt:
+        row.created_at instanceof Date
+          ? row.created_at.toISOString()
+          : new Date(row.created_at).toISOString()
+    });
   }
 }

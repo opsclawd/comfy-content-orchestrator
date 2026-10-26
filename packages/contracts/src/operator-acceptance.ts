@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { ExecutionRealmSchema, EvidenceOriginSchema } from "./execution-realm.js";
 import { AssemblySpecSchema } from "./assembly-spec.js";
+import { sha256HashSchema } from "./persistent-media.js";
+import { AssemblyManifestSchema } from "./assembly-manifest.js";
 
 export const OperatorAcceptanceRunStatusSchema = z.enum([
   "dispatched",
@@ -45,9 +47,27 @@ export const AcceptanceRunSceneSchema = z
     currentAttemptOrdinal: z.number().int().positive().default(1),
     acceptedAttemptId: z.string().uuid().optional(),
     acceptedStagingJobId: z.string().optional(),
-    acceptedAttemptOrdinal: z.number().int().positive().optional()
+    acceptedAttemptOrdinal: z.number().int().positive().optional(),
+    candidateSpecificationDigest: sha256HashSchema.optional(),
+    planId: z.string().uuid().optional()
   })
-  .strict();
+  .strict()
+  .superRefine((val, ctx) => {
+    const hasAttempt = val.acceptedAttemptId !== undefined;
+    const hasOrdinal = val.acceptedAttemptOrdinal !== undefined;
+    if (hasAttempt !== hasOrdinal) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "acceptedAttemptId and acceptedAttemptOrdinal must be provided together"
+      });
+    }
+    if (hasAttempt && val.acceptedStagingJobId === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "acceptedStagingJobId is required when scene is accepted"
+      });
+    }
+  });
 export type AcceptanceRunScene = z.infer<typeof AcceptanceRunSceneSchema>;
 
 export const AcceptanceAssemblyJobStatusSchema = z.enum([
@@ -76,7 +96,29 @@ export const AcceptanceAssemblyJobSchema = z
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime()
   })
-  .strict();
+  .strict()
+  .superRefine((val, ctx) => {
+    if (val.status === "leased" || val.status === "rendering") {
+      if (!val.leaseToken || !val.leaseExpiresAt || !val.workerId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `status '${val.status}' requires leaseToken, leaseExpiresAt, and workerId`
+        });
+      }
+    }
+    if (val.status === "completed" && !val.outputManifestId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "status 'completed' requires outputManifestId"
+      });
+    }
+    if (val.status === "failed" && !val.failureReason) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "status 'failed' requires failureReason"
+      });
+    }
+  });
 export type AcceptanceAssemblyJob = z.infer<typeof AcceptanceAssemblyJobSchema>;
 
 export const AcceptanceAssemblyManifestSchema = z
@@ -85,11 +127,138 @@ export const AcceptanceAssemblyManifestSchema = z
     jobId: z.string().uuid(),
     acceptanceRunId: z.string().uuid(),
     campaignId: z.string().uuid(),
-    manifest: z.record(z.string(), z.unknown()),
+    realm: ExecutionRealmSchema,
+    evidenceOrigin: EvidenceOriginSchema,
+    planId: z.string().uuid(),
+    acceptedAttemptIds: z.array(z.string().uuid()),
+    manifest: AssemblyManifestSchema,
+    storageBucket: z.string().min(1),
+    storageKey: z.string().min(1),
+    storageSha256: sha256HashSchema,
+    manifestStorageBucket: z.string().min(1),
+    manifestStorageKey: z.string().min(1),
+    manifestStorageSha256: sha256HashSchema,
     createdAt: z.string().datetime()
   })
   .strict();
 export type AcceptanceAssemblyManifest = z.infer<typeof AcceptanceAssemblyManifestSchema>;
+
+export const OperatorAcceptanceActionScopeSchema = z.enum([
+  "begin",
+  "accept_scene",
+  "rerender_scene",
+  "assemble",
+  "complete"
+]);
+export type OperatorAcceptanceActionScope = z.infer<typeof OperatorAcceptanceActionScopeSchema>;
+
+export const OperatorAcceptanceActionReceiptSchema = z
+  .object({
+    actionId: z.string().trim().min(1),
+    scope: OperatorAcceptanceActionScopeSchema,
+    runOrCampaignId: z.string().uuid(),
+    realm: ExecutionRealmSchema,
+    requestHash: sha256HashSchema,
+    response: z.record(z.string(), z.unknown()),
+    createdAt: z.string().datetime()
+  })
+  .strict();
+export type OperatorAcceptanceActionReceipt = z.infer<typeof OperatorAcceptanceActionReceiptSchema>;
+
+export const AcceptanceRunReelStemLineageEntrySchema = z
+  .object({
+    sceneId: z.string().uuid(),
+    attemptId: z.string().uuid(),
+    storageKey: z.string(),
+    sha256: sha256HashSchema
+  })
+  .strict();
+export type AcceptanceRunReelStemLineageEntry = z.infer<
+  typeof AcceptanceRunReelStemLineageEntrySchema
+>;
+
+export const AcceptanceRunReelReadModelSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      status: z.literal("pending"),
+      acceptanceRunId: z.string().uuid(),
+      campaignId: z.string().uuid(),
+      realm: ExecutionRealmSchema,
+      evidenceOrigin: EvidenceOriginSchema,
+      updatedAt: z.string().datetime(),
+      message: z.string().optional()
+    })
+    .strict(),
+  z
+    .object({
+      status: z.literal("assembling"),
+      acceptanceRunId: z.string().uuid(),
+      campaignId: z.string().uuid(),
+      realm: ExecutionRealmSchema,
+      evidenceOrigin: EvidenceOriginSchema,
+      updatedAt: z.string().datetime(),
+      assemblyJobId: z.string().uuid(),
+      message: z.string().optional()
+    })
+    .strict(),
+  z
+    .object({
+      status: z.literal("completed"),
+      acceptanceRunId: z.string().uuid(),
+      campaignId: z.string().uuid(),
+      realm: ExecutionRealmSchema,
+      evidenceOrigin: EvidenceOriginSchema,
+      updatedAt: z.string().datetime(),
+      assemblyJobId: z.string().uuid(),
+      manifestId: z.string().uuid(),
+      manifest: AssemblyManifestSchema,
+      storageBucket: z.string().min(1),
+      storageKey: z.string().min(1),
+      storageSha256: sha256HashSchema,
+      manifestStorageBucket: z.string().min(1),
+      manifestStorageKey: z.string().min(1),
+      manifestStorageSha256: sha256HashSchema,
+      bytes: z.number().int().positive().optional(),
+      url: z.string().url(),
+      downloadUrl: z.string().url().optional(),
+      durationMs: z.number().int().positive(),
+      frameCount: z.number().int().positive(),
+      fps: z.number().positive(),
+      resolution: z
+        .object({
+          width: z.number().int().positive(),
+          height: z.number().int().positive()
+        })
+        .strict(),
+      stemLineage: z.array(AcceptanceRunReelStemLineageEntrySchema).optional(),
+      completedAt: z.string().datetime()
+    })
+    .strict(),
+  z
+    .object({
+      status: z.literal("failed"),
+      acceptanceRunId: z.string().uuid(),
+      campaignId: z.string().uuid(),
+      realm: ExecutionRealmSchema,
+      evidenceOrigin: EvidenceOriginSchema,
+      updatedAt: z.string().datetime(),
+      assemblyJobId: z.string().uuid().optional(),
+      failureReason: z.string()
+    })
+    .strict(),
+  z
+    .object({
+      status: z.literal("unavailable"),
+      acceptanceRunId: z.string().uuid(),
+      campaignId: z.string().uuid(),
+      realm: ExecutionRealmSchema,
+      evidenceOrigin: EvidenceOriginSchema,
+      updatedAt: z.string().datetime(),
+      reason: z.string()
+    })
+    .strict()
+]);
+export type AcceptanceRunReelReadModel = z.infer<typeof AcceptanceRunReelReadModelSchema>;
 
 export const BeginOperatorAcceptanceRunRequestSchema = z
   .object({
@@ -213,5 +382,20 @@ export class OperatorAcceptanceSceneNotAcceptedError extends Error {
   constructor(sceneId: string, message?: string) {
     super(message ?? `Scene '${sceneId}' has not been accepted`);
     this.sceneId = sceneId;
+  }
+}
+
+export class OperatorAcceptanceIdempotencyConflictError extends Error {
+  override readonly name = "OperatorAcceptanceIdempotencyConflictError";
+  readonly actionId: string;
+  readonly code = "IDEMPOTENCY_CONFLICT";
+  readonly httpStatusCode = 409;
+
+  constructor(actionId: string, message?: string) {
+    super(
+      message ??
+        `Operator acceptance action '${actionId}' conflict: cannot replay action with different parameters`
+    );
+    this.actionId = actionId;
   }
 }

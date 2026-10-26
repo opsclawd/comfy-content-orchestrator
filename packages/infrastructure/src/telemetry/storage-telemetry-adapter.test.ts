@@ -93,7 +93,8 @@ describe("HostFsStorageTelemetryAdapter", () => {
       "godzspeed-review",
       "godzspeed-reference",
       "godzspeed-delivery",
-      "godzspeed-evidence"
+      "godzspeed-evidence",
+      "godzspeed-candidates"
     ]);
     expect(telemetry.buckets.every((b) => b.usedBytes === 0)).toBe(true);
   });

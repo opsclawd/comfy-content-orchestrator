@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   CampaignDurationPlanningError,
   type CreateCampaignShellRequest,
-  type H3CandidateProfile
+  type H3CandidateProfile,
+  type StagingCandidateProfileSelection
 } from "@cco/contracts";
+import type { StagingPlanningAuthorizationSource } from "../ports/staging-planning-authorization-ports.js";
 import type { CampaignId, CampaignShellRecord } from "@cco/domain";
 import { InMemorySceneUnitOfWork } from "../test-support/in-memory-scene-unit-of-work.js";
 import { CreateCampaignShellUseCase } from "./create-campaign-shell.js";
@@ -564,6 +566,110 @@ describe("CreateCampaignShellUseCase", () => {
           selectedProfileKey: `H3_RELEASE_${"a".repeat(64)}_V1`
         })
       ).rejects.toThrow();
+    });
+  });
+
+  describe("Planning authorization enforcement on supplied selection objects and scope/realm compatibility", () => {
+    const candidateKey = "H3_CANDIDATE_11111111111111111111111111111111_V1";
+    const authorityCandidateSelection: StagingCandidateProfileSelection = {
+      kind: "staging_candidate",
+      profileKey: candidateKey,
+      specificationDigest: "1".repeat(64),
+      targetId: "target-host-1",
+      authorizationId: "auth-1"
+    };
+
+    const mockStagingAuthSource: StagingPlanningAuthorizationSource = {
+      listAuthorizedCandidates: async () => [authorityCandidateSelection],
+      resolveCandidateGrant: async () => undefined
+    };
+
+    const mockRegistryReader = {
+      getCandidateProfile: () => undefined,
+      listCandidateProfiles: () => [],
+      isCandidateProfileKey: () => true,
+      resolveH3ProfileFrameCapabilities: (key: string | undefined) =>
+        key === candidateKey
+          ? {
+              profileKey: key,
+              route: "ref2v" as const,
+              routingMode: "reference_directed" as const,
+              width: 1344,
+              height: 768,
+              fps: 24,
+              allowedFrameCounts: [243],
+              isAllowedFrameCount: (f: number) => f === 243
+            }
+          : undefined,
+      isFrameCountAllowedForH3Profile: () => true
+    };
+
+    it("rejects forged caller-supplied executionProfileSelection when specificationDigest mismatches authority", async () => {
+      const uow = new InMemorySceneUnitOfWork();
+      const useCase = new CreateCampaignShellUseCase(uow, {
+        stagingAuthSource: mockStagingAuthSource,
+        registryReader: mockRegistryReader
+      });
+
+      const forgedSelection: StagingCandidateProfileSelection = {
+        kind: "staging_candidate",
+        profileKey: candidateKey,
+        specificationDigest: "2".repeat(64), // Mismatch!
+        targetId: "target-host-1",
+        authorizationId: "auth-1"
+      };
+
+      await expect(
+        useCase.execute({
+          ...validRequest,
+          targetTotalDurationMs: 10000,
+          scope: "staging",
+          executionProfileSelection: forgedSelection
+        })
+      ).rejects.toThrow(CampaignDurationPlanningError);
+    });
+
+    it("rejects forged member in allowedProfileSelections", async () => {
+      const uow = new InMemorySceneUnitOfWork();
+      const useCase = new CreateCampaignShellUseCase(uow, {
+        stagingAuthSource: mockStagingAuthSource,
+        registryReader: mockRegistryReader
+      });
+
+      const forgedAllowed: StagingCandidateProfileSelection = {
+        kind: "staging_candidate",
+        profileKey: candidateKey,
+        specificationDigest: "9".repeat(64), // Mismatch!
+        targetId: "target-host-1",
+        authorizationId: "auth-1"
+      };
+
+      await expect(
+        useCase.execute({
+          ...validRequest,
+          targetTotalDurationMs: 10000,
+          scope: "staging",
+          selectedProfileKey: candidateKey,
+          allowedProfileSelections: [forgedAllowed]
+        })
+      ).rejects.toThrow(CampaignDurationPlanningError);
+    });
+
+    it("rejects staging candidate in production scope", async () => {
+      const uow = new InMemorySceneUnitOfWork();
+      const useCase = new CreateCampaignShellUseCase(uow, {
+        stagingAuthSource: mockStagingAuthSource,
+        registryReader: mockRegistryReader
+      });
+
+      await expect(
+        useCase.execute({
+          ...validRequest,
+          targetTotalDurationMs: 10000,
+          scope: "production",
+          selectedProfileKey: candidateKey
+        })
+      ).rejects.toThrow(CampaignDurationPlanningError);
     });
   });
 });

@@ -295,5 +295,15 @@ Issue #426 delivers capability-aware campaign duration allocation, durable durat
 - **Campaign Replan Contract & Idempotency:** Campaign replans require complete vectors of scene durations and expected spec revisions summing strictly to the campaign target duration, acquire row locks, invalidate scene approvals while preserving allocation IDs, and record idempotent action receipts for safe action replay.
 - **Assembly Planning Envelope Safety:** Combinatorial candidate partitioning prunes states against maximum stem and duration envelope ceilings with fail-closed catalog limits, and campaign creation UI warns users when requested durations exceed assembly boundaries.
 
+### 9. Variable-Duration H3 CI Simulation & End-to-End Acceptance Lifecycle (#421.6 / Issue #427)
+
+Issue #427 delivers full simulation and regression coverage for variable-duration MiniMax-H3 production:
+- **Autonomous CI vs. Physical GPU Boundary:** CI simulation exercises the software control plane, duration allocation, staged rendering, review gating, worker assembly, and accepted reel readback. Physical GPU execution and hardware certification belong to the operator runbook (`docs/h3-acceptance-operator-runbook.md`).
+- **Simulated Connected Lifecycle & E2E Coverage:** Validates the end-to-end software path across Postgres, MinIO, and worker execution in `tests/integration/h3-variable-duration-lifecycle.e2e.integration.test.ts` and focused unit suites, verifying duration allocation, candidate staging, review gating, worker assembly, manifest storage, and reel readback with full stem lineage.
+- **Negative & Security Boundaries:** Rejects off-grid frame counts ($5 + 17k$), scene ceiling violations (>15,000ms `MAX_SCENE_DURATION_MS`), candidate rows with recorded `NO_GO` visual decisions, unapproved profile digests, cross-route licensing, parameter-conflicting replays (HTTP 409), and stem checksum mismatches.
+- **Legacy 5-Second Controls & Operator Release Gate:** Preserves legacy 5-second production profiles (`MINIMAX_H3_720P_5S_I2V_V1` and `MINIMAX_H3_720P_5S_REF2V_V1`). The production release reader strictly prevents advertising staging-only candidate lengths until the #428 release gate is satisfied on physical hardware.
+- **Reference Documentation:** [docs/h3-variable-duration-ci-coverage.md](h3-variable-duration-ci-coverage.md).
+
+
 
 

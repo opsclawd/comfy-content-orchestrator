@@ -3,6 +3,7 @@ import {
   AssemblyManifestSchema,
   computeAssemblyId,
   createAssemblyManifest,
+  isStagingCandidateProfileKey,
   type AssemblyExecutionResult,
   type AssemblyManifest,
   type AssemblySpec,
@@ -111,6 +112,9 @@ export interface AssembleDeliveryReelDependencies {
 export interface AssembleDeliveryReelParams {
   readonly spec: AssemblySpec;
   readonly requiredComponents?: readonly ComponentRef[] | undefined;
+  readonly targetBucket?: string | undefined;
+  readonly outputKey?: string | undefined;
+  readonly acceptanceRunId?: string | undefined;
 }
 
 export class AssembleDeliveryReel {
@@ -147,6 +151,7 @@ export class AssembleDeliveryReel {
     // reference that cannot match any real registry entry, so the existing
     // evaluator denies it as "unknown_component" via its normal path
     // rather than needing a separate error type here.
+    const targetBucket = params.targetBucket ?? BUCKETS.DELIVERY;
     const resolvedIdentities = new Map<string, GenerationManifestComponentIdentity | undefined>();
     const generationComponents: ComponentRef[] = await Promise.all(
       spec.videoStems.map(async (stem): Promise<ComponentRef> => {
@@ -177,6 +182,48 @@ export class AssembleDeliveryReel {
             versionOrRevision: "unresolved"
           };
         }
+
+        const isCandidate =
+          isStagingCandidateProfileKey(identity.renderProfile) ||
+          Boolean(identity.candidateSpecificationDigest) ||
+          identity.renderProfile.startsWith("H3_CANDIDATE_");
+
+        if (isCandidate) {
+          if (targetBucket !== BUCKETS.CANDIDATES) {
+            return {
+              componentId: `ineligible-candidate-in-delivery:${identity.renderProfile}`,
+              componentType: "model",
+              versionOrRevision: "unresolved"
+            };
+          }
+          if (!identity.route || !identity.candidateSpecificationDigest) {
+            return {
+              componentId: `unresolved-candidate-route:${identity.renderProfile}`,
+              componentType: "model",
+              versionOrRevision: "unresolved"
+            };
+          }
+          if (identity.route === "ref2v") {
+            return {
+              componentId: "MINIMAX_H3_720P_5S_REF2V_V1",
+              componentType: "model",
+              versionOrRevision: "1"
+            };
+          } else if (identity.route === "i2v") {
+            return {
+              componentId: "MINIMAX_H3_720P_5S_I2V_V1",
+              componentType: "model",
+              versionOrRevision: "1"
+            };
+          } else {
+            return {
+              componentId: `unknown-candidate-route:${identity.renderProfile}`,
+              componentType: "model",
+              versionOrRevision: "unresolved"
+            };
+          }
+        }
+
         return {
           componentId: identity.renderProfile,
           componentType: "model",
@@ -237,10 +284,13 @@ export class AssembleDeliveryReel {
     // before any FFmpeg spawn or storage write, so the redundant-encode
     // avoidance this exists for is fully preserved.
     const assemblyId = computeAssemblyId(spec);
-    const earlyManifestKey = `campaigns/${spec.campaignId}/assemblies/${assemblyId}/manifest.json`;
+    const earlyManifestKey =
+      targetBucket === BUCKETS.CANDIDATES && params.acceptanceRunId
+        ? `acceptance-runs/${params.acceptanceRunId}/manifest.json`
+        : `campaigns/${spec.campaignId}/assemblies/${assemblyId}/manifest.json`;
     try {
       const existingManifestObj = await this.deps.objectStorage.getObject({
-        bucket: BUCKETS.DELIVERY,
+        bucket: targetBucket,
         key: earlyManifestKey
       });
       if (existingManifestObj) {
@@ -316,12 +366,37 @@ export class AssembleDeliveryReel {
           `Video stem with order ${stem.order} references generation manifest "${stem.generationManifestId}" with inconsistent output checksum (expected one of [${identity.outputChecksumsSha256.join(", ")}], got "${stem.media.sha256}")`
         );
       }
+
+      const isCandidate =
+        isStagingCandidateProfileKey(identity.renderProfile) ||
+        Boolean(identity.candidateSpecificationDigest) ||
+        identity.renderProfile.startsWith("H3_CANDIDATE_");
+      if (isCandidate) {
+        if (targetBucket !== BUCKETS.CANDIDATES) {
+          throw new AssemblySpecValidationError(
+            `Candidate stem "${identity.renderProfile}" is not permitted for target bucket "${targetBucket}"; must target "${BUCKETS.CANDIDATES}"`
+          );
+        }
+        if (!identity.route || !identity.candidateSpecificationDigest) {
+          throw new AssemblySpecValidationError(
+            `Candidate stem "${identity.renderProfile}" must specify both route and candidateSpecificationDigest`
+          );
+        }
+      }
     }
 
     // Step 3: Invoke MediaAssemblerPort for execution & media persistence
     let executionResult: AssemblyExecutionResult;
+    const assemblerInput = {
+      ...spec,
+      ...(params.targetBucket !== undefined ? { outputBucket: params.targetBucket } : {}),
+      ...(params.outputKey !== undefined ? { outputKey: params.outputKey } : {}),
+      ...(params.acceptanceRunId !== undefined ? { acceptanceRunId: params.acceptanceRunId } : {})
+    };
     try {
-      executionResult = await this.deps.mediaAssembler.assemble(spec);
+      executionResult = await this.deps.mediaAssembler.assemble(
+        assemblerInput as unknown as AssemblySpec
+      );
     } catch (err) {
       if (
         err instanceof Error &&
@@ -330,11 +405,14 @@ export class AssembleDeliveryReel {
       ) {
         const assemblyId =
           (err as { context?: { assemblyId?: string } }).context?.assemblyId ?? "unknown";
-        const manifestKey = `campaigns/${spec.campaignId}/assemblies/${assemblyId}/manifest.json`;
+        const manifestKey =
+          targetBucket === BUCKETS.CANDIDATES && params.acceptanceRunId
+            ? `acceptance-runs/${params.acceptanceRunId}/manifest.json`
+            : `campaigns/${spec.campaignId}/assemblies/${assemblyId}/manifest.json`;
         let existingManifest: AssemblyManifest | undefined;
         try {
           const existingManifestObj = await this.deps.objectStorage.getObject({
-            bucket: BUCKETS.DELIVERY,
+            bucket: targetBucket,
             key: manifestKey
           });
           if (existingManifestObj) {
@@ -354,6 +432,31 @@ export class AssembleDeliveryReel {
       throw err;
     }
 
+    if (
+      params.targetBucket !== undefined &&
+      executionResult.output.media.bucket !== params.targetBucket
+    ) {
+      throw new AssemblySpecValidationError(
+        `Media assembler output bucket "${executionResult.output.media.bucket}" does not match requested targetBucket "${params.targetBucket}"`
+      );
+    }
+    if (
+      params.targetBucket === BUCKETS.CANDIDATES &&
+      executionResult.output.media.bucket !== BUCKETS.CANDIDATES
+    ) {
+      throw new AssemblySpecValidationError(
+        `Candidate acceptance reel output bucket "${executionResult.output.media.bucket}" must be "${BUCKETS.CANDIDATES}"`
+      );
+    }
+    if (
+      params.acceptanceRunId !== undefined &&
+      !executionResult.output.media.key.startsWith(`acceptance-runs/${params.acceptanceRunId}/`)
+    ) {
+      throw new AssemblySpecValidationError(
+        `Acceptance reel output key "${executionResult.output.media.key}" violates acceptance namespace isolation (must start with "acceptance-runs/${params.acceptanceRunId}/")`
+      );
+    }
+
     // Step 4: Construct immutable AssemblyManifest from exact executed state
     const manifest = createAssemblyManifest({
       executionResult,
@@ -364,7 +467,10 @@ export class AssembleDeliveryReel {
     const manifestJson = JSON.stringify(manifest, null, 2);
     const manifestBytes = Buffer.from(manifestJson, "utf-8");
     const checksumSha256 = createHash("sha256").update(manifestBytes).digest("hex");
-    const manifestKey = `campaigns/${executionResult.campaignId}/assemblies/${executionResult.assemblyId}/manifest.json`;
+    const manifestKey =
+      params.targetBucket === BUCKETS.CANDIDATES && params.acceptanceRunId
+        ? `acceptance-runs/${params.acceptanceRunId}/manifest.json`
+        : `campaigns/${executionResult.campaignId}/assemblies/${executionResult.assemblyId}/manifest.json`;
 
     // Step 4a: Check if an AssemblyManifest already exists for this identity (idempotency & conflict prevention)
     const existingManifestObj = await this.deps.objectStorage.getObject({

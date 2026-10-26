@@ -50,7 +50,8 @@ import {
   OperatorAcceptanceSceneNotFoundError,
   OperatorAcceptanceOrdinalMismatchError,
   OperatorAcceptanceInvalidStatusError,
-  OperatorAcceptanceSceneNotAcceptedError
+  OperatorAcceptanceSceneNotAcceptedError,
+  OperatorAcceptanceIdempotencyConflictError
 } from "@cco/contracts";
 import {
   AlreadyAcceptedProductionAttemptError,
@@ -475,6 +476,20 @@ export function formatReviewError(error: unknown): {
       body: {
         code: "ORDINAL_MISMATCH",
         message: error.message
+      }
+    };
+  }
+
+  if (
+    error instanceof OperatorAcceptanceIdempotencyConflictError ||
+    (error instanceof Error && error.name === "OperatorAcceptanceIdempotencyConflictError") ||
+    (error as { code?: string })?.code === "IDEMPOTENCY_CONFLICT"
+  ) {
+    return {
+      statusCode: 409,
+      body: {
+        code: "IDEMPOTENCY_CONFLICT",
+        message: (error as Error).message
       }
     };
   }

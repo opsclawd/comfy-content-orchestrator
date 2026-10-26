@@ -99,18 +99,17 @@ export class PostgresAcceptanceAssemblyJobQueue implements AcceptanceAssemblyJob
     workerId: string,
     leaseDurationMs: number
   ): Promise<AcceptanceAssemblyJob | undefined> {
-    const leaseExpiresAt = new Date(Date.now() + leaseDurationMs).toISOString();
     const leaseToken = randomUUID();
     const query = `
       UPDATE acceptance_assembly_jobs
       SET status = 'leased',
           worker_id = $1,
           lease_token = $2,
-          lease_expires_at = $3,
+          lease_expires_at = NOW() + ($3 || ' milliseconds')::interval,
           updated_at = NOW()
       WHERE job_id = (
         SELECT job_id FROM acceptance_assembly_jobs
-        WHERE status = 'queued' OR (status = 'leased' AND lease_expires_at < NOW())
+        WHERE status = 'queued' OR (status IN ('leased', 'rendering') AND lease_expires_at < NOW())
         ORDER BY created_at ASC
         LIMIT 1
         FOR UPDATE SKIP LOCKED
@@ -118,26 +117,81 @@ export class PostgresAcceptanceAssemblyJobQueue implements AcceptanceAssemblyJob
       RETURNING *;
     `;
 
-    const res = await this.client.query<JobRow>(query, [workerId, leaseToken, leaseExpiresAt]);
+    const res = await this.client.query<JobRow>(query, [workerId, leaseToken, leaseDurationMs]);
     if (res.rows.length === 0) return undefined;
     return mapRowToJob(res.rows[0]!);
+  }
+
+  async start(jobId: string, leaseToken: string): Promise<void> {
+    const query = `
+      UPDATE acceptance_assembly_jobs
+      SET status = 'rendering',
+          updated_at = NOW()
+      WHERE job_id = $1 AND lease_token = $2::uuid AND (status = 'leased' OR status = 'rendering') AND lease_expires_at > NOW();
+    `;
+    const res = await this.client.query(query, [jobId, leaseToken]);
+    if (res.rowCount === 0) {
+      throw new Error(
+        `Failed to start acceptance assembly job ${jobId}: lease token mismatch, expired, or job not in leased/rendering status`
+      );
+    }
+  }
+
+  async heartbeat(jobId: string, leaseToken: string, leaseDurationMs: number): Promise<void> {
+    const query = `
+      UPDATE acceptance_assembly_jobs
+      SET lease_expires_at = NOW() + ($3 || ' milliseconds')::interval,
+          updated_at = NOW()
+      WHERE job_id = $1 AND lease_token = $2::uuid AND (status = 'leased' OR status = 'rendering') AND lease_expires_at > NOW();
+    `;
+    const res = await this.client.query(query, [jobId, leaseToken, leaseDurationMs]);
+    if (res.rowCount === 0) {
+      throw new Error(
+        `Failed to heartbeat acceptance assembly job ${jobId}: lease token mismatch, expired, or job not active`
+      );
+    }
   }
 
   async complete(jobId: string, outputManifestId: string, leaseToken?: string): Promise<void> {
     if (!leaseToken) {
       throw new Error(`Lease token is required to complete acceptance assembly job ${jobId}`);
     }
+    const existing = await this.findById(jobId);
+    if (existing && existing.status === "completed") {
+      if (existing.outputManifestId === outputManifestId && existing.leaseToken === leaseToken) {
+        return;
+      }
+      if (existing.leaseToken && existing.leaseToken !== leaseToken) {
+        throw new Error(
+          `Failed to complete acceptance assembly job ${jobId}: lease token mismatch (job completed under different lease)`
+        );
+      }
+      throw new Error(
+        `Acceptance assembly job ${jobId} already completed with different manifest (expected ${existing.outputManifestId}, got ${outputManifestId})`
+      );
+    }
+
     const query = `
       UPDATE acceptance_assembly_jobs
       SET status = 'completed',
           output_manifest_id = $2,
+          lease_expires_at = NULL,
           updated_at = NOW()
-      WHERE job_id = $1 AND lease_token = $3::uuid;
+      WHERE job_id = $1 AND lease_token = $3::uuid AND (status = 'leased' OR status = 'rendering') AND lease_expires_at > NOW();
     `;
     const res = await this.client.query(query, [jobId, outputManifestId, leaseToken]);
     if (res.rowCount === 0) {
+      const recheck = await this.findById(jobId);
+      if (
+        recheck &&
+        recheck.status === "completed" &&
+        recheck.outputManifestId === outputManifestId &&
+        recheck.leaseToken === leaseToken
+      ) {
+        return;
+      }
       throw new Error(
-        `Failed to complete acceptance assembly job ${jobId}: lease token mismatch or job not found`
+        `Failed to complete acceptance assembly job ${jobId}: lease token mismatch, expired, or job not found`
       );
     }
   }
@@ -146,17 +200,29 @@ export class PostgresAcceptanceAssemblyJobQueue implements AcceptanceAssemblyJob
     if (!leaseToken) {
       throw new Error(`Lease token is required to fail acceptance assembly job ${jobId}`);
     }
+    const existing = await this.findById(jobId);
+    if (existing && existing.status === "failed") {
+      if (existing.leaseToken === leaseToken) {
+        return;
+      }
+    }
+
     const query = `
       UPDATE acceptance_assembly_jobs
       SET status = 'failed',
           failure_reason = $2,
+          lease_expires_at = NULL,
           updated_at = NOW()
-      WHERE job_id = $1 AND lease_token = $3::uuid;
+      WHERE job_id = $1 AND lease_token = $3::uuid AND (status = 'leased' OR status = 'rendering') AND lease_expires_at > NOW();
     `;
     const res = await this.client.query(query, [jobId, error, leaseToken]);
     if (res.rowCount === 0) {
+      const recheck = await this.findById(jobId);
+      if (recheck && recheck.status === "failed" && recheck.leaseToken === leaseToken) {
+        return;
+      }
       throw new Error(
-        `Failed to fail acceptance assembly job ${jobId}: lease token mismatch or job not found`
+        `Failed to fail acceptance assembly job ${jobId}: lease token mismatch, expired, or job not active`
       );
     }
   }
