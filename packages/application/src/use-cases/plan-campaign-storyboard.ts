@@ -1,4 +1,4 @@
-import type { CreativeBrief, RenderProfileKey } from "@cco/contracts";
+import type { CreativeBrief, ExecutionProfileSelection, RenderProfileKey } from "@cco/contracts";
 import type { CampaignShellRecord, ReferenceAssetId, SceneSnapshot } from "@cco/domain";
 import type { ReferenceAssetRepository } from "../ports/reference-asset-repository.js";
 import type { UnitOfWork } from "../ports/unit-of-work.js";
@@ -39,6 +39,12 @@ export interface PlanCampaignStoryboardInput {
   readonly candidateReferenceAssetIds?: readonly ReferenceAssetId[] | readonly string[] | undefined;
   readonly overallTimeoutMs?: number | undefined;
   readonly targetEngineProfileId?: RenderProfileKey | undefined;
+  readonly selectedProfileKey?: string | undefined;
+  readonly allowedDurationProfileKeys?: readonly string[] | undefined;
+  readonly executionProfileSelection?: ExecutionProfileSelection | undefined;
+  readonly allowedProfileSelections?: readonly ExecutionProfileSelection[] | undefined;
+  readonly scope?: "production" | "staging" | undefined;
+  readonly principal?: string | undefined;
 }
 
 export interface PlanCampaignStoryboardResult {
@@ -105,7 +111,13 @@ export class PlanCampaignStoryboardUseCase {
       brief: input.brief,
       candidateReferenceAssetIds: canonicalCandidateIds,
       initialStatus: "planning",
-      targetEngineProfileId: input.targetEngineProfileId
+      targetEngineProfileId: input.targetEngineProfileId,
+      selectedProfileKey: input.selectedProfileKey,
+      allowedDurationProfileKeys: input.allowedDurationProfileKeys,
+      executionProfileSelection: input.executionProfileSelection,
+      allowedProfileSelections: input.allowedProfileSelections,
+      scope: input.scope,
+      principal: input.principal
     });
 
     const orchestrationHash = await computeCampaignRequestHash({
@@ -116,7 +128,12 @@ export class PlanCampaignStoryboardUseCase {
       sceneCountOverride: input.sceneCountOverride,
       brief: input.brief,
       candidateReferenceAssetIds: canonicalCandidateIds as readonly string[] | undefined,
-      targetEngineProfileId: input.targetEngineProfileId
+      targetEngineProfileId: input.targetEngineProfileId,
+      selectedProfileKey: input.selectedProfileKey,
+      allowedDurationProfileKeys: input.allowedDurationProfileKeys,
+      executionProfileSelection: input.executionProfileSelection,
+      allowedProfileSelections: input.allowedProfileSelections,
+      scope: input.scope
     });
 
     if (isIdempotentReplay) {
@@ -237,18 +254,32 @@ export class PlanCampaignStoryboardUseCase {
           return client.externalProcessingPolicy;
         }));
 
+      const durationPlan = await this.deps.uow.execute(async (ctx) => {
+        return ctx.durationPlans?.findCurrentPlanByCampaignId(campaign.id);
+      });
+
       // 3. Plan each scene configuration sequentially
       const orderedConfigs: OrderedSceneConfiguration[] = [];
       for (const beat of beatSheet.beats) {
+        const allocation =
+          durationPlan?.allocations.find((a) => a.ordinal === beat.ordinal) ??
+          durationPlan?.allocations[beat.ordinal - 1];
+
+        const targetEngineProfileId = (allocation?.profileSelection.profileKey ??
+          input.selectedProfileKey ??
+          input.targetEngineProfileId) as RenderProfileKey | undefined;
+
+        const targetDurationMs = allocation?.requestedDurationMs ?? beat.targetDurationMs;
+
         const configuration = await this.deps.planSceneConfiguration.execute({
           brief: beat.brief,
           campaignId: campaign.id,
           clientId: campaign.clientId,
           candidateReferenceAssetIds: canonicalCandidateIds,
           externalProcessingPolicy,
-          targetDurationMs: beat.targetDurationMs,
+          targetDurationMs,
           overallTimeoutMs: input.overallTimeoutMs,
-          targetEngineProfileId: input.targetEngineProfileId
+          targetEngineProfileId
         });
         orderedConfigs.push({ ordinal: beat.ordinal, configuration });
       }

@@ -53,6 +53,11 @@ export { PostgresCampaignReferenceBibleRepository } from "./postgres/repositorie
 export { PostgresGenerationManifestRepository } from "./postgres/repositories/postgres-generation-manifest-repository.js";
 
 export { PostgresReviewEventStore } from "./postgres/repositories/postgres-review-event-store.js";
+export { PostgresCampaignDurationPlanRepository } from "./postgres/repositories/postgres-campaign-duration-plan-repository.js";
+export { PostgresOperatorAcceptanceRunRepository } from "./postgres/repositories/postgres-operator-acceptance-run-repository.js";
+export { PostgresAcceptanceAssemblyJobQueue } from "./postgres/repositories/postgres-acceptance-assembly-job-queue.js";
+export { PostgresAcceptanceAssemblyManifestRepository } from "./postgres/repositories/postgres-acceptance-assembly-manifest-repository.js";
+export { PostgresDeploymentEnablementStateRepository } from "./postgres/repositories/postgres-deployment-enablement-state-repository.js";
 export {
   PostgresProductEvidenceRepository,
   computePayloadSha256,
@@ -201,8 +206,16 @@ export {
 
 export {
   H3OperatorSignatureVerifier,
+  verifySignatureWithKey,
   type H3OperatorSignatureVerifierOptions
 } from "./comfyui/provenance/h3-operator-signature-verifier.js";
+
+export {
+  H3TrustedCandidateRegistryReader,
+  H3CandidateRegistryReaderError,
+  type H3EvidenceResolver,
+  type H3TrustedCandidateRegistryReaderOptions
+} from "./comfyui/provenance/h3-trusted-candidate-registry-reader.js";
 
 export {
   H3LiveRuntimeObserver,
@@ -492,5 +505,14 @@ export {
   PostgresBatchEvidenceDossierQueries,
   type PostgresBatchEvidenceDossierQueriesOptions
 } from "./postgres/queries/postgres-batch-evidence-dossier-queries.js";
+
+export {
+  JsonFileProductionReleaseReader,
+  type JsonProductionReleaseBundle
+} from "./comfyui/provenance/json-file-production-release-reader.js";
+export {
+  JsonFileStagingAuthorizationSource,
+  type StagingAuthorizationBundle
+} from "./comfyui/provenance/json-file-staging-authorization-source.js";
 
 export * from "./experiments/index.js";

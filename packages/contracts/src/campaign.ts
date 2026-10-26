@@ -2,6 +2,10 @@ import { sortKeysDeep } from "@cco/shared";
 import { z } from "zod";
 import { SceneConfigurationSchema, SceneStatusSchema } from "./scene-review.js";
 import { RenderProfileKeySchema, type RenderProfileKey } from "./render-profile.js";
+import {
+  ExecutionProfileSelectionSchema,
+  type ExecutionProfileSelection
+} from "./execution-profile.js";
 
 import { CampaignStatusSchema } from "./campaign-status.js";
 export * from "./campaign-status.js";
@@ -24,7 +28,8 @@ export const CampaignResponseSchema = z.object({
   status: CampaignStatusSchema,
   totalScenes: z.number().int().positive(),
   approvedScenes: z.number().int().nonnegative(),
-  createdAt: z.string().datetime()
+  createdAt: z.string().datetime(),
+  currentPlanRevision: z.number().int().nonnegative().optional()
 });
 export type CampaignResponse = z.infer<typeof CampaignResponseSchema>;
 
@@ -45,7 +50,12 @@ export const CampaignShellRequestShape = {
   targetPlatform: z.string().min(1).optional(),
   targetTotalDurationMs: z.number().int().min(MIN_TARGET_DURATION_MS).max(MAX_TARGET_DURATION_MS),
   sceneCountOverride: z.number().int().min(MIN_SCENE_COUNT).max(MAX_SCENE_COUNT).optional(),
-  targetEngineProfileId: RenderProfileKeySchema.optional()
+  targetEngineProfileId: RenderProfileKeySchema.optional(),
+  selectedProfileKey: z.string().trim().min(1).optional(),
+  allowedDurationProfileKeys: z.array(z.string().trim().min(1)).readonly().optional(),
+  executionProfileSelection: ExecutionProfileSelectionSchema.optional(),
+  allowedProfileSelections: z.array(ExecutionProfileSelectionSchema).readonly().optional(),
+  scope: z.enum(["production", "staging"]).optional()
 };
 
 export const CampaignShellParamsSchema = z.object(CampaignShellRequestShape);
@@ -89,7 +99,8 @@ export const CreateCampaignShellResponseSchema = z.object({
   targetTotalDurationMs: z.number().int().positive(),
   isIdempotentReplay: z.boolean(),
   createdAt: z.string().datetime(),
-  archivedAt: z.string().datetime().optional()
+  archivedAt: z.string().datetime().optional(),
+  currentPlanRevision: z.number().int().nonnegative().optional()
 });
 export type CreateCampaignShellResponse = z.infer<typeof CreateCampaignShellResponseSchema>;
 
@@ -255,6 +266,11 @@ export interface CampaignRequestCanonicalizationInput {
   readonly brief?: CreativeBrief | undefined;
   readonly candidateReferenceAssetIds?: readonly string[] | undefined;
   readonly targetEngineProfileId?: RenderProfileKey | string | undefined;
+  readonly selectedProfileKey?: string | undefined;
+  readonly allowedDurationProfileKeys?: readonly string[] | undefined;
+  readonly executionProfileSelection?: ExecutionProfileSelection | undefined;
+  readonly allowedProfileSelections?: readonly ExecutionProfileSelection[] | undefined;
+  readonly scope?: "production" | "staging" | undefined;
 }
 
 export type CampaignRequestHashInput = CampaignRequestCanonicalizationInput;
@@ -298,7 +314,25 @@ export function canonicalizeCampaignRequest(input: CampaignRequestCanonicalizati
     ...(canonicalAssetIds !== undefined ? { candidateReferenceAssetIds: canonicalAssetIds } : {}),
     ...(input.targetEngineProfileId !== undefined
       ? { targetEngineProfileId: input.targetEngineProfileId }
-      : {})
+      : {}),
+    ...(input.selectedProfileKey !== undefined
+      ? { selectedProfileKey: input.selectedProfileKey }
+      : {}),
+    ...(input.allowedDurationProfileKeys !== undefined &&
+    input.allowedDurationProfileKeys.length > 0
+      ? { allowedDurationProfileKeys: Array.from(new Set(input.allowedDurationProfileKeys)).sort() }
+      : {}),
+    ...(input.executionProfileSelection !== undefined
+      ? { executionProfileSelection: input.executionProfileSelection }
+      : {}),
+    ...(input.allowedProfileSelections !== undefined && input.allowedProfileSelections.length > 0
+      ? {
+          allowedProfileSelections: Array.from(
+            new Map(input.allowedProfileSelections.map((p) => [p.profileKey, p])).values()
+          ).sort((a, b) => a.profileKey.localeCompare(b.profileKey))
+        }
+      : {}),
+    ...(input.scope !== undefined ? { scope: input.scope } : {})
   };
   return JSON.stringify(sortKeysDeep(normalized));
 }

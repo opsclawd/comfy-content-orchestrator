@@ -270,6 +270,19 @@ export function ReviewCommandControls({
               typeof errorJson === "object" &&
               errorJson !== null &&
               "code" in errorJson &&
+              (errorJson as { code: string }).code === "CAMPAIGN_REPLAN_REQUIRED"
+            ) {
+              const msg =
+                (errorJson as { message?: string }).message ??
+                "Scene duration or engine cannot be edited directly on an active duration plan. Use campaign replan.";
+              throw new ApiClientError(msg, 409);
+            }
+
+            if (
+              res.status === 409 &&
+              typeof errorJson === "object" &&
+              errorJson !== null &&
+              "code" in errorJson &&
               (errorJson as { code: string }).code === "STALE_PRODUCTION_ATTEMPT_CONFLICT"
             ) {
               const details = (
@@ -879,6 +892,18 @@ export function ReviewCommandControls({
                   onChange={(e) => setDraftDuration(e.target.value)}
                   required
                 />
+                <span
+                  style={{
+                    display: "block",
+                    fontSize: "0.75rem",
+                    color: "var(--text-muted)",
+                    marginTop: "0.25rem"
+                  }}
+                  data-testid="draft-duration-hint"
+                >
+                  Active campaign duration plans enforce renderable frame allocations (e.g. 5,000ms
+                  / 124f). Uncoordinated edits require campaign replanning.
+                </span>
               </div>
             )}
 

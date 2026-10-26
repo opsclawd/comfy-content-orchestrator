@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, unlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { hostname, tmpdir } from "node:os";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   canonicalizeReferenceBindings,
+  type CanonicalReferenceEntry,
   compileShotPlan,
   findAudioPromptTargets,
   MAX_CANDIDATE_IMAGE_BYTES,
@@ -25,9 +26,17 @@ import {
   type CampaignRepository,
   type ImageInspectionPort,
   type ValidatedImageMetadata,
+  type H3CandidateRegistryReader,
+  type H3CandidateAuthorizationPort,
+  type H3RuntimeObservationPort,
+  type ManifestSourceProvenance,
+  type ProductionReleaseCapabilityReader,
+  H3CandidateEligibilityService,
   parseImageByteHeader
 } from "@cco/application";
 import {
+  computeAuthorizationPayloadDigest,
+  computeCandidateProductionInputFingerprint,
   getProfileInjectionTopology,
   LTX_FPS,
   LTX_FRAME_STEP,
@@ -39,13 +48,27 @@ import {
   type ManifestPrevisReviewEvidence,
   type ManifestReferenceImageEntry,
   type ManifestShotPlanReference,
+  MINIMAX_H3_FPS,
   MINIMAX_H3_FRAME_GRID_BASE,
   MINIMAX_H3_FRAME_GRID_STEP,
+  resolveCandidateExecutionSelection,
   resolveH3ProfileFrameCapabilities,
+  type H3CandidateProfile,
+  type H3CandidateAuthorizationGrant,
+  type H3CandidateExecutionSpecification,
   type NodeInjectionTarget,
   type ProfileInjectionTopology,
+  type OwnerKind,
+  OwnerKindSchema,
+  type ExecutionRealm,
+  ExecutionRealmSchema,
+  type EvidenceOrigin,
+  EvidenceOriginSchema,
   RENDER_PROFILE_ALIASES,
-  type ShotPlanRoutingMode
+  type RenderProfileKey,
+  type ShotPlanRoutingMode,
+  type H3ReleaseProfileKey,
+  isReleasedProductionProfileKey
 } from "@cco/contracts";
 import type {
   CampaignRecord,
@@ -68,11 +91,15 @@ import {
   type CertificationProfile,
   type CertificationProvenanceReport,
   type ComfyUiOutputReader,
-  type SpawnLikeFn
+  type SpawnLikeFn,
+  type H3CandidateProvenanceReport,
+  resolveCandidateProvenanceFromCollection
 } from "@cco/infrastructure";
 import { BUCKETS } from "@cco/shared";
 import { PreflightError, verifyGoldMasterProvenance } from "./certification/preflight.js";
 import type { RenderJobExecutor, WorkerRenderOutput } from "./worker.js";
+
+export type { ComfyUiOutputReader };
 
 const DEFAULT_REPO_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)), "../../../");
 const DEFAULT_MANIFEST_PATH = resolve(DEFAULT_REPO_ROOT, "templates/provenance.json");
@@ -81,6 +108,20 @@ export class RenderJobExecutionError extends Error {
   override readonly name: string = "RenderJobExecutionError";
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
+  }
+}
+
+export class CandidateProfileProductionDisabledError extends RenderJobExecutionError {
+  override readonly name: string = "CandidateProfileProductionDisabledError";
+}
+
+export class CandidateExecutionMismatchError extends RenderJobExecutionError {
+  override readonly name: string = "CandidateExecutionMismatchError";
+  readonly blockerCode: string;
+
+  constructor(message: string, blockerCode: string = "PROFILE_MISMATCH", options?: ErrorOptions) {
+    super(message, options);
+    this.blockerCode = blockerCode;
   }
 }
 
@@ -168,7 +209,7 @@ export interface AssembleProductionManifestInput {
   readonly profile: CertificationProfile;
   readonly renderResult: ExecuteProfileRenderResult;
   readonly mediaObjects: readonly PutObjectInput[];
-  readonly liveProvenance?: CertificationProvenanceReport | undefined;
+  readonly liveProvenance?: CertificationProvenanceReport | ManifestSourceProvenance | undefined;
   readonly workflow?: RenderWorkflow | undefined;
   readonly approvedCandidateId?: CandidateId | undefined;
   readonly conditioningImage?:
@@ -194,6 +235,11 @@ export interface AssembleProductionManifestInput {
   readonly submittedWorkflowHash?: string | undefined;
   readonly configuredMedia?: ManifestConfiguredMedia | undefined;
   readonly measuredMedia?: ManifestMeasuredMedia | undefined;
+  readonly candidateSpecificationDigest?: string | undefined;
+  readonly requestedDurationMs?: number | undefined;
+  readonly nominalDurationMs?: number | undefined;
+  readonly submittedGraphHash?: string | undefined;
+  readonly grantReference?: string | undefined;
 }
 
 export type ProductionManifestAssembler =
@@ -228,6 +274,7 @@ export type ProductionManifestAssembler =
 
 export interface RenderJobExecutorDependencies {
   readonly loadCertificationProfile?: typeof loadCertificationProfile | undefined;
+  readonly productionReleaseReader?: ProductionReleaseCapabilityReader | undefined;
   readonly readApprovedProvenance?: ((filePath: string) => Promise<unknown>) | undefined;
   readonly collectCertificationProvenance?: typeof collectCertificationProvenance | undefined;
   readonly verifyGoldMasterProvenance?: typeof verifyGoldMasterProvenance | undefined;
@@ -244,6 +291,7 @@ export interface RenderJobExecutorDependencies {
           sceneId: string;
           renderProfileKey: string;
           renderProfileVersion: number;
+          engine?: "ltx_25" | "flux_schnell" | "ltx_25_i2v" | "minimax_h3_i2v" | "minimax_h3_ref2v";
         }) => void;
       }
     | undefined;
@@ -281,18 +329,66 @@ export interface RenderJobExecutorDependencies {
         contentType?: string | undefined;
       }) => Promise<ManifestMeasuredMedia> | ManifestMeasuredMedia)
     | undefined;
+  readonly registryReader?: H3CandidateRegistryReader | undefined;
+  readonly readCandidateProvenance?: ((filePath: string) => Promise<unknown>) | undefined;
+  readonly resolveCandidateProvenance?: typeof resolveCandidateProvenanceFromCollection | undefined;
+  readonly authorizationPort?: H3CandidateAuthorizationPort | undefined;
+  readonly runtimeObservationPort?: H3RuntimeObservationPort | undefined;
+  readonly eligibilityService?: H3CandidateEligibilityService | undefined;
+  readonly targetHostname?: string | undefined;
+  readonly targetGpuUuid?: string | undefined;
+  readonly comfyUiRenderTimeoutMs?: number | undefined;
 }
 
 export interface RenderJobExecutorOptions {
   readonly manifestPath?: string | undefined;
   readonly goldMasterProvenancePath?: string | undefined;
+  readonly candidateProvenancePath?: string | undefined;
   readonly comfyUiDir?: string | undefined;
+  // Local ComfyUI base URL (e.g. "http://127.0.0.1:8188"). H3LiveRuntimeObserver resolves the
+  // live ComfyUI process PID from whichever local process is listening on this endpoint's
+  // port; without it, live runtime observation has no way to find the process to inspect and
+  // fails closed (ADR 0008 section 6 requires a live PID, never a self-process fallback).
+  readonly comfyUiEndpoint?: string | undefined;
   readonly candidateBucket?: string | undefined;
   readonly deliveryBucket?: string | undefined;
   readonly ffprobePath?: string | undefined;
+  readonly registryReader?: H3CandidateRegistryReader | undefined;
+  readonly comfyUiRenderTimeoutMs?: number | undefined;
   readonly buildObjectKey?:
     | ((sceneId: string, jobId: string, outputKey: string, contentHashSha256: string) => string)
     | undefined;
+}
+
+// H3 candidates (staging) are experimental variants of the same base MiniMax H3 weights that
+// are already license-approved per route in config/component-license-registry.json
+// (MINIMAX_H3_720P_5S_I2V_V1 / MINIMAX_H3_720P_5S_REF2V_V1). The candidate's own key is an
+// internal governance/provenance identity (hash-derived, unique per distillation/attention
+// variant) and is never itself a licensable component - checking license routing against it
+// would always fail closed since no candidate key is ever pre-registered. License routing
+// must instead check the real underlying model this candidate executes.
+const H3_CANDIDATE_LICENSE_COMPONENT_BY_ROUTE: Readonly<Record<string, string>> = {
+  i2v: "MINIMAX_H3_720P_5S_I2V_V1",
+  ref2v: "MINIMAX_H3_720P_5S_REF2V_V1"
+};
+const H3_CANDIDATE_LICENSE_COMPONENT_VERSION = "1";
+
+// Flattens the candidate spec's structured modelHashes (checkpoint/clip/audioVae/videoVae/
+// turboLora + additionalModels) into a flat key->hash map. Used both for eligibility/execution
+// context construction and for the render identity's modelSha256 - a naive
+// Object.entries(...).filter(typeof v === "string") drops additionalModels entirely, since its
+// value is itself an object, not a string (the bug this helper replaces).
+function flattenH3CandidateModelHashes(
+  modelHashes: H3CandidateExecutionSpecification["modelHashes"]
+): Record<string, string> {
+  return {
+    checkpoint: modelHashes.checkpoint,
+    clip: modelHashes.clip,
+    audioVae: modelHashes.audioVae,
+    videoVae: modelHashes.videoVae,
+    ...(modelHashes.turboLora !== "none" ? { turboLora: modelHashes.turboLora } : {}),
+    ...(modelHashes.additionalModels ?? {})
+  };
 }
 
 const CONTENT_TYPE_TO_EXTENSION: Readonly<Record<string, string>> = {
@@ -384,6 +480,18 @@ interface ValidatedInjectedPayload {
   readonly specRevision?: number | undefined;
   readonly attemptId?: string | undefined;
   readonly productionInputFingerprint?: string | undefined;
+  readonly candidateProfileKey?: string | undefined;
+  readonly candidateSpecificationDigest?: string | undefined;
+  readonly authorizationGrant?: H3CandidateAuthorizationGrant | undefined;
+  readonly requestedDurationMs?: number | undefined;
+  readonly nominalDurationMs?: number | undefined;
+  readonly ownerKind?: OwnerKind | undefined;
+  readonly acceptanceRunId?: string | undefined;
+  readonly realm?: ExecutionRealm | undefined;
+  readonly evidenceOrigin?: EvidenceOrigin | undefined;
+  readonly releasedProfileKey?: string | undefined;
+  readonly releasedSpecificationDigest?: string | undefined;
+  readonly releaseDigest?: string | undefined;
 }
 
 const ALLOWED_CANDIDATE_KEYS = new Set([
@@ -403,7 +511,19 @@ const ALLOWED_PRODUCTION_KEYS = new Set([
   "approvedCandidateId",
   "frameCount",
   "attemptId",
-  "productionInputFingerprint"
+  "productionInputFingerprint",
+  "candidateProfileKey",
+  "candidateSpecificationDigest",
+  "authorizationGrant",
+  "requestedDurationMs",
+  "nominalDurationMs",
+  "ownerKind",
+  "acceptanceRunId",
+  "realm",
+  "evidenceOrigin",
+  "releasedProfileKey",
+  "releasedSpecificationDigest",
+  "releaseDigest"
 ]);
 const ALLOWED_REF2V_PRODUCTION_KEYS = new Set([
   "prompt",
@@ -414,7 +534,19 @@ const ALLOWED_REF2V_PRODUCTION_KEYS = new Set([
   "shotPlanId",
   "specRevision",
   "attemptId",
-  "productionInputFingerprint"
+  "productionInputFingerprint",
+  "candidateProfileKey",
+  "candidateSpecificationDigest",
+  "authorizationGrant",
+  "requestedDurationMs",
+  "nominalDurationMs",
+  "ownerKind",
+  "acceptanceRunId",
+  "realm",
+  "evidenceOrigin",
+  "releasedProfileKey",
+  "releasedSpecificationDigest",
+  "releaseDigest"
 ]);
 const ALLOWED_H3_I2V_PRODUCTION_KEYS = new Set([
   "prompt",
@@ -426,26 +558,56 @@ const ALLOWED_H3_I2V_PRODUCTION_KEYS = new Set([
   "shotPlanId",
   "specRevision",
   "attemptId",
-  "productionInputFingerprint"
+  "productionInputFingerprint",
+  "candidateProfileKey",
+  "candidateSpecificationDigest",
+  "authorizationGrant",
+  "requestedDurationMs",
+  "nominalDurationMs",
+  "ownerKind",
+  "acceptanceRunId",
+  "realm",
+  "evidenceOrigin",
+  "releasedProfileKey",
+  "releasedSpecificationDigest",
+  "releaseDigest"
 ]);
 
 export function validateInjectedPayload(
   payload: unknown,
   jobKind: JobKind,
-  profile?: CertificationProfile | undefined
+  profile?: CertificationProfile | undefined,
+  registryReader?:
+    | {
+        getCandidateProfile?(key: string | undefined): Readonly<H3CandidateProfile> | undefined;
+        getReleasedProfile?(
+          key: string | undefined
+        ): Readonly<{ key: string; specification: H3CandidateExecutionSpecification }> | undefined;
+      }
+    | undefined
 ): ValidatedInjectedPayload {
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
     throw new RenderJobPayloadValidationError("injectedPayload must be an object");
   }
 
+  // A released profile's route (i2v vs ref2v) isn't encoded in its hash-keyed
+  // renderProfileIdentity, so resolve it through the same capability lookup
+  // used for frame-count validation below instead of relying solely on the
+  // fixed legacy identity/engine string comparisons.
+  const releasedCapability = isReleasedProductionProfileKey(profile?.renderProfileIdentity?.key)
+    ? resolveH3ProfileFrameCapabilities(profile?.renderProfileIdentity?.key, registryReader)
+    : undefined;
+
   const isRef2v =
     profile?.engine === "minimax_h3_ref2v" ||
     profile?.renderProfileIdentity?.key === "MINIMAX_H3_720P_5S_REF2V_V1" ||
-    profile?.id === "minimax-h3-720p-124f-ref2v";
+    profile?.id === "minimax-h3-720p-124f-ref2v" ||
+    releasedCapability?.route === "ref2v";
 
   const isH3I2v =
     profile?.engine === "minimax_h3_i2v" ||
     profile?.renderProfileIdentity?.key === "MINIMAX_H3_720P_5S_I2V_V1" ||
+    releasedCapability?.route === "i2v" ||
     profile?.id === "minimax-h3-720p-124f-i2v";
 
   const allowedKeys =
@@ -559,7 +721,18 @@ export function validateInjectedPayload(
     }
     if (profile) {
       const profileKey = profile.renderProfileIdentity?.key ?? profile.id ?? profile.engine;
-      const topology = getProfileInjectionTopology(profileKey);
+      let topology =
+        (profile as { topology?: ProfileInjectionTopology }).topology ??
+        getProfileInjectionTopology(profileKey);
+      if (!topology && registryReader && typeof profileKey === "string") {
+        const candidate = registryReader.getCandidateProfile?.(profileKey);
+        if (candidate?.topology) {
+          topology = candidate.topology;
+        }
+      }
+      if (!topology && profile.engine) {
+        topology = getProfileInjectionTopology(profile.engine);
+      }
       if (profile.renderProfileIdentity && !topology) {
         throw new MissingProfileTopologyError(profile.id, profile.renderProfileIdentity.key);
       }
@@ -634,7 +807,7 @@ export function validateInjectedPayload(
           `injectedPayload.frameCount must satisfy (frameCount - ${MINIMAX_H3_FRAME_GRID_BASE}) % ${MINIMAX_H3_FRAME_GRID_STEP} === 0`
         );
       }
-      const capability = resolveH3ProfileFrameCapabilities(profileKey);
+      const capability = resolveH3ProfileFrameCapabilities(profileKey, registryReader);
       const isAllowed = capability ? capability.isAllowedFrameCount(raw.frameCount) : false;
       if (!isAllowed) {
         if (!capability) {
@@ -664,7 +837,18 @@ export function validateInjectedPayload(
       }
     }
     if (profile) {
-      const topology = getProfileInjectionTopology(profileKey);
+      let topology =
+        (profile as { topology?: ProfileInjectionTopology }).topology ??
+        getProfileInjectionTopology(profileKey);
+      if (!topology && registryReader && typeof profileKey === "string") {
+        const candidate = registryReader.getCandidateProfile?.(profileKey);
+        if (candidate?.topology) {
+          topology = candidate.topology;
+        }
+      }
+      if (!topology && profile.engine) {
+        topology = getProfileInjectionTopology(profile.engine);
+      }
       if (profile.renderProfileIdentity && !topology) {
         throw new MissingProfileTopologyError(profile.id, profile.renderProfileIdentity.key);
       }
@@ -781,6 +965,141 @@ export function validateInjectedPayload(
     productionInputFingerprint = raw.productionInputFingerprint.trim();
   }
 
+  let candidateProfileKey: string | undefined;
+  if ("candidateProfileKey" in raw && raw.candidateProfileKey !== undefined) {
+    if (
+      typeof raw.candidateProfileKey !== "string" ||
+      !/^H3_CANDIDATE_[0-9a-f]{32}_V[1-9]\d*$/.test(raw.candidateProfileKey)
+    ) {
+      throw new RenderJobPayloadValidationError(
+        'injectedPayload.candidateProfileKey must match pattern "H3_CANDIDATE_<32-hex>_V<version>"'
+      );
+    }
+    candidateProfileKey = raw.candidateProfileKey;
+  }
+
+  let candidateSpecificationDigest: string | undefined;
+  if ("candidateSpecificationDigest" in raw && raw.candidateSpecificationDigest !== undefined) {
+    if (
+      typeof raw.candidateSpecificationDigest !== "string" ||
+      !/^[0-9a-f]{64}$/.test(raw.candidateSpecificationDigest)
+    ) {
+      throw new RenderJobPayloadValidationError(
+        "injectedPayload.candidateSpecificationDigest must be a 64-character lowercase hex string"
+      );
+    }
+    candidateSpecificationDigest = raw.candidateSpecificationDigest;
+  }
+
+  let authorizationGrant: H3CandidateAuthorizationGrant | undefined;
+  if ("authorizationGrant" in raw && raw.authorizationGrant !== undefined) {
+    if (typeof raw.authorizationGrant !== "object" || raw.authorizationGrant === null) {
+      throw new RenderJobPayloadValidationError(
+        "injectedPayload.authorizationGrant must be an object"
+      );
+    }
+    authorizationGrant = raw.authorizationGrant as H3CandidateAuthorizationGrant;
+  }
+
+  let requestedDurationMs: number | undefined;
+  if ("requestedDurationMs" in raw && raw.requestedDurationMs !== undefined) {
+    if (typeof raw.requestedDurationMs !== "number" || raw.requestedDurationMs <= 0) {
+      throw new RenderJobPayloadValidationError(
+        "injectedPayload.requestedDurationMs must be a positive number"
+      );
+    }
+    requestedDurationMs = raw.requestedDurationMs;
+  }
+
+  let nominalDurationMs: number | undefined;
+  if ("nominalDurationMs" in raw && raw.nominalDurationMs !== undefined) {
+    if (typeof raw.nominalDurationMs !== "number" || raw.nominalDurationMs <= 0) {
+      throw new RenderJobPayloadValidationError(
+        "injectedPayload.nominalDurationMs must be a positive number"
+      );
+    }
+    nominalDurationMs = raw.nominalDurationMs;
+  }
+
+  let ownerKind: OwnerKind | undefined;
+  if ("ownerKind" in raw && raw.ownerKind !== undefined) {
+    const ownerKindParsed = OwnerKindSchema.safeParse(raw.ownerKind);
+    if (!ownerKindParsed.success) {
+      throw new RenderJobPayloadValidationError(
+        `injectedPayload.ownerKind must be one of: ${OwnerKindSchema.options.join(", ")}`
+      );
+    }
+    ownerKind = ownerKindParsed.data;
+  }
+
+  let acceptanceRunId: string | undefined;
+  if ("acceptanceRunId" in raw && raw.acceptanceRunId !== undefined) {
+    if (typeof raw.acceptanceRunId !== "string" || raw.acceptanceRunId.trim().length === 0) {
+      throw new RenderJobPayloadValidationError(
+        "injectedPayload.acceptanceRunId must be a non-empty string"
+      );
+    }
+    acceptanceRunId = raw.acceptanceRunId.trim();
+  }
+
+  let realm: ExecutionRealm | undefined;
+  if ("realm" in raw && raw.realm !== undefined) {
+    const realmParsed = ExecutionRealmSchema.safeParse(raw.realm);
+    if (!realmParsed.success) {
+      throw new RenderJobPayloadValidationError(
+        `injectedPayload.realm is invalid: ${realmParsed.error.message}`
+      );
+    }
+    realm = realmParsed.data;
+  }
+
+  let evidenceOrigin: EvidenceOrigin | undefined;
+  if ("evidenceOrigin" in raw && raw.evidenceOrigin !== undefined) {
+    const evidenceOriginParsed = EvidenceOriginSchema.safeParse(raw.evidenceOrigin);
+    if (!evidenceOriginParsed.success) {
+      throw new RenderJobPayloadValidationError(
+        `injectedPayload.evidenceOrigin must be one of: ${EvidenceOriginSchema.options.join(", ")}`
+      );
+    }
+    evidenceOrigin = evidenceOriginParsed.data;
+  }
+
+  let releasedProfileKey: string | undefined;
+  if ("releasedProfileKey" in raw && raw.releasedProfileKey !== undefined) {
+    if (
+      typeof raw.releasedProfileKey !== "string" ||
+      !/^H3_RELEASE_[0-9a-f]{64}_V[1-9]\d*$/.test(raw.releasedProfileKey)
+    ) {
+      throw new RenderJobPayloadValidationError(
+        'injectedPayload.releasedProfileKey must match pattern "H3_RELEASE_<64-hex>_V<version>"'
+      );
+    }
+    releasedProfileKey = raw.releasedProfileKey;
+  }
+
+  let releasedSpecificationDigest: string | undefined;
+  if ("releasedSpecificationDigest" in raw && raw.releasedSpecificationDigest !== undefined) {
+    if (
+      typeof raw.releasedSpecificationDigest !== "string" ||
+      !/^[0-9a-f]{64}$/.test(raw.releasedSpecificationDigest)
+    ) {
+      throw new RenderJobPayloadValidationError(
+        "injectedPayload.releasedSpecificationDigest must be a 64-character lowercase hex string"
+      );
+    }
+    releasedSpecificationDigest = raw.releasedSpecificationDigest;
+  }
+
+  let releaseDigest: string | undefined;
+  if ("releaseDigest" in raw && raw.releaseDigest !== undefined) {
+    if (typeof raw.releaseDigest !== "string" || !/^[0-9a-f]{64}$/.test(raw.releaseDigest)) {
+      throw new RenderJobPayloadValidationError(
+        "injectedPayload.releaseDigest must be a 64-character lowercase hex string"
+      );
+    }
+    releaseDigest = raw.releaseDigest;
+  }
+
   return {
     prompt,
     negativePrompt,
@@ -793,7 +1112,19 @@ export function validateInjectedPayload(
     shotPlanId,
     specRevision,
     attemptId,
-    productionInputFingerprint
+    productionInputFingerprint,
+    candidateProfileKey,
+    candidateSpecificationDigest,
+    authorizationGrant,
+    requestedDurationMs,
+    nominalDurationMs,
+    ownerKind,
+    acceptanceRunId,
+    realm,
+    evidenceOrigin,
+    releasedProfileKey,
+    releasedSpecificationDigest,
+    releaseDigest
   };
 }
 
@@ -932,7 +1263,12 @@ export function mutateWorkflow(
 
   const workflow = parsed as Record<string, unknown>;
   const profileKey = profile?.renderProfileIdentity?.key ?? profile?.id ?? profile?.engine;
-  const topology = getProfileInjectionTopology(profileKey);
+  let topology =
+    (profile as { topology?: ProfileInjectionTopology } | undefined)?.topology ??
+    getProfileInjectionTopology(profileKey);
+  if (!topology && profile?.engine) {
+    topology = getProfileInjectionTopology(profile.engine);
+  }
 
   if (profile?.renderProfileIdentity && !topology) {
     throw new MissingProfileTopologyError(profile.id, profile.renderProfileIdentity.key);
@@ -1131,10 +1467,10 @@ export function mutateWorkflow(
         // even for N=0). "match" is used when there are no references to conform to.
         refNodeInputs[topology.refImageSize.inputField] = N > 0 ? "max" : "match";
       }
-      if (topology.width && refNodeInputs && profile?.baseline.width) {
+      if (topology.width && refNodeInputs && profile?.baseline?.width) {
         refNodeInputs[topology.width.inputField] = profile.baseline.width;
       }
-      if (topology.height && refNodeInputs && profile?.baseline.height) {
+      if (topology.height && refNodeInputs && profile?.baseline?.height) {
         refNodeInputs[topology.height.inputField] = profile.baseline.height;
       }
 
@@ -1324,6 +1660,338 @@ export function validateMiniMaxH3ReferenceToVideoInputSchema(
   }
 }
 
+export function validateCandidateGraph(
+  workflow: Record<string, unknown>,
+  candidate: H3CandidateProfile,
+  candidateProvenanceReport?: H3CandidateProvenanceReport | undefined
+): void {
+  const isRef2v = candidate.specification.route === "ref2v";
+  const isI2v = candidate.specification.route === "i2v";
+
+  let hasGeneratorNode = false;
+  let hasSchedulerNode = false;
+  let hasSamplerNode = false;
+  let hasAttentionNode = false;
+  let hasLoraNode = false;
+  let hasCheckpointNode = false;
+
+  for (const [nodeId, rawNode] of Object.entries(workflow)) {
+    if (typeof rawNode !== "object" || rawNode === null) continue;
+    const node = rawNode as { class_type?: string; inputs?: Record<string, unknown> };
+    const classType = node.class_type ?? "";
+    const inputs = node.inputs ?? {};
+
+    if (
+      classType === "CheckpointLoaderSimple" ||
+      classType === "CheckpointLoader" ||
+      classType.includes("Checkpoint") ||
+      // Native MiniMax-H3 graphs load the diffusion checkpoint through
+      // UNETLoader. Treat that topology as the checkpoint source instead of
+      // requiring a disconnected legacy CheckpointLoader node.
+      classType === "UNETLoader"
+    ) {
+      hasCheckpointNode = true;
+    }
+
+    // Negative tests: Route and node invariants
+    if (isI2v) {
+      if (classType === "MiniMaxH3ReferenceToVideo") {
+        throw new CandidateExecutionMismatchError(
+          `Node "${nodeId}" has class_type "${classType}" which is restricted to Ref2V, but candidate route is "i2v"`,
+          "ROUTE_RESTRICTED_NODE"
+        );
+      }
+      if (
+        classType === "MiniMaxH3ImageToVideo" ||
+        nodeId === candidate.topology.frameCount?.nodeId
+      ) {
+        hasGeneratorNode = true;
+      }
+      if (classType === "LoraLoaderModelOnly" || classType === "LoraLoader") {
+        hasLoraNode = true;
+        if (candidate.specification.modelHashes.turboLora === "none") {
+          throw new CandidateExecutionMismatchError(
+            `Candidate profile specifies no Turbo LoRA ('none'), but workflow contains LoRA loader node "${nodeId}"`,
+            "TURBO_LORA_ROUTING_MISMATCH"
+          );
+        }
+        const loraName = String(inputs.lora_name ?? "").toLowerCase();
+        if (loraName.includes("ref2v") || loraName.includes("ref2va")) {
+          throw new CandidateExecutionMismatchError(
+            `Ref2VA Turbo LoRA is strictly restricted to Ref2V route; cannot execute on I2V candidate`,
+            "TURBO_LORA_ROUTING_MISMATCH"
+          );
+        }
+        if (
+          inputs.strength_model !== undefined &&
+          typeof inputs.strength_model === "number" &&
+          (inputs.strength_model <= 0 || !Number.isFinite(inputs.strength_model))
+        ) {
+          throw new CandidateExecutionMismatchError(
+            `LoRA loader node "${nodeId}" strength_model must be a positive finite number`,
+            "LORA_STRENGTH_INVALID"
+          );
+        }
+      }
+    }
+
+    if (isRef2v) {
+      if (classType === "MiniMaxH3ImageToVideo") {
+        throw new CandidateExecutionMismatchError(
+          `Node "${nodeId}" has class_type "${classType}" which is restricted to I2V, but candidate route is "ref2v"`,
+          "ROUTE_RESTRICTED_NODE"
+        );
+      }
+      if (
+        classType === "MiniMaxH3ReferenceToVideo" ||
+        nodeId === candidate.topology.frameCount?.nodeId
+      ) {
+        hasGeneratorNode = true;
+      }
+      if (classType === "LoraLoaderModelOnly" || classType === "LoraLoader") {
+        hasLoraNode = true;
+        if (candidate.specification.modelHashes.turboLora === "none") {
+          throw new CandidateExecutionMismatchError(
+            `Candidate profile specifies no Turbo LoRA ('none'), but workflow contains LoRA loader node "${nodeId}"`,
+            "TURBO_LORA_ROUTING_MISMATCH"
+          );
+        }
+        const loraName = String(inputs.lora_name ?? "").toLowerCase();
+        if (loraName.includes("fl2v") || loraName.includes("fl2va")) {
+          throw new CandidateExecutionMismatchError(
+            `FL2VA Turbo 8-step LoRA is strictly restricted to I2V route; cannot execute on Ref2V candidate`,
+            "TURBO_LORA_ROUTING_MISMATCH"
+          );
+        }
+        if (
+          inputs.strength_model !== undefined &&
+          typeof inputs.strength_model === "number" &&
+          (inputs.strength_model <= 0 || !Number.isFinite(inputs.strength_model))
+        ) {
+          throw new CandidateExecutionMismatchError(
+            `LoRA loader node "${nodeId}" strength_model must be a positive finite number`,
+            "LORA_STRENGTH_INVALID"
+          );
+        }
+      }
+    }
+
+    // Geometry, frame count, and CFG validation on generator or latent nodes
+    if (
+      classType === "MiniMaxH3ImageToVideo" ||
+      classType === "MiniMaxH3ReferenceToVideo" ||
+      classType === "EmptyMiniMaxH3LatentAV"
+    ) {
+      // These values define the actual generated media. Treat omission the same
+      // as a mismatch: a matching template hash is not proof that the final
+      // submitted graph still has the profile's exact geometry and timing.
+      for (const [field, expected] of [
+        ["width", candidate.specification.width],
+        ["height", candidate.specification.height]
+      ] as const) {
+        if (inputs[field] !== expected) {
+          throw new CandidateExecutionMismatchError(
+            `Node "${nodeId}" (${classType}) must set ${field} to candidate value ${expected}; got ${String(inputs[field])}`,
+            "GEOMETRY_MISMATCH"
+          );
+        }
+      }
+      const configuredFrames = inputs.length ?? inputs.frames ?? inputs.num_frames;
+      if (configuredFrames !== candidate.specification.frames) {
+        throw new CandidateExecutionMismatchError(
+          `Node "${nodeId}" (${classType}) must set frame count to candidate value ${candidate.specification.frames}; got ${String(configuredFrames)}`,
+          "FRAME_COUNT_MISMATCH"
+        );
+      }
+      if (inputs.fps !== undefined && inputs.fps !== candidate.specification.fps) {
+        throw new CandidateExecutionMismatchError(
+          `Node "${nodeId}" (${classType}) fps (${inputs.fps}) does not match candidate specification fps (${candidate.specification.fps})`,
+          "FPS_MISMATCH"
+        );
+      }
+      if (inputs.width !== undefined && inputs.width !== candidate.specification.width) {
+        throw new CandidateExecutionMismatchError(
+          `Node "${nodeId}" (${classType}) width (${inputs.width}) does not match candidate specification width (${candidate.specification.width})`,
+          "GEOMETRY_MISMATCH"
+        );
+      }
+      if (inputs.height !== undefined && inputs.height !== candidate.specification.height) {
+        throw new CandidateExecutionMismatchError(
+          `Node "${nodeId}" (${classType}) height (${inputs.height}) does not match candidate specification height (${candidate.specification.height})`,
+          "GEOMETRY_MISMATCH"
+        );
+      }
+      const nodeFrames = inputs.length ?? inputs.frames ?? inputs.num_frames;
+      if (nodeFrames !== undefined && nodeFrames !== candidate.specification.frames) {
+        throw new CandidateExecutionMismatchError(
+          `Node "${nodeId}" (${classType}) frames (${nodeFrames}) does not match candidate specification frames (${candidate.specification.frames})`,
+          "FRAME_COUNT_MISMATCH"
+        );
+      }
+      if (inputs.fps !== undefined && inputs.fps !== candidate.specification.fps) {
+        throw new CandidateExecutionMismatchError(
+          `Node "${nodeId}" (${classType}) fps (${inputs.fps}) does not match candidate specification fps (${candidate.specification.fps})`,
+          "FPS_MISMATCH"
+        );
+      }
+      if (inputs.cfg !== undefined && inputs.cfg !== candidate.specification.cfg) {
+        throw new CandidateExecutionMismatchError(
+          `Node "${nodeId}" (${classType}) cfg (${inputs.cfg}) does not match candidate specification cfg (${candidate.specification.cfg})`,
+          "CFG_MISMATCH"
+        );
+      }
+    }
+
+    if ("cfg" in inputs && inputs.cfg !== candidate.specification.cfg) {
+      throw new CandidateExecutionMismatchError(
+        `Workflow CFG (${String(inputs.cfg)}) does not match candidate specification CFG (${candidate.specification.cfg})`,
+        "CFG_MISMATCH"
+      );
+    }
+
+    // Scheduler inputs
+    if (classType === "BasicScheduler" || ("steps" in inputs && "scheduler" in inputs)) {
+      hasSchedulerNode = true;
+      if (inputs.steps !== undefined && inputs.steps !== candidate.specification.steps) {
+        throw new CandidateExecutionMismatchError(
+          `Workflow scheduler steps (${inputs.steps}) does not match candidate specification steps (${candidate.specification.steps})`,
+          "STEPS_MISMATCH"
+        );
+      }
+      if (
+        inputs.scheduler !== undefined &&
+        inputs.scheduler !== candidate.specification.scheduler
+      ) {
+        throw new CandidateExecutionMismatchError(
+          `Workflow scheduler "${inputs.scheduler}" does not match candidate specification scheduler "${candidate.specification.scheduler}"`,
+          "SCHEDULER_MISMATCH"
+        );
+      }
+      if (inputs.denoise !== undefined && inputs.denoise !== candidate.specification.denoise) {
+        throw new CandidateExecutionMismatchError(
+          `Workflow denoise (${inputs.denoise}) does not match candidate specification denoise (${candidate.specification.denoise})`,
+          "DENOISE_MISMATCH"
+        );
+      }
+    }
+
+    // Sampler inputs
+    if (classType === "KSamplerSelect" || "sampler_name" in inputs) {
+      hasSamplerNode = true;
+      if (
+        inputs.sampler_name !== undefined &&
+        inputs.sampler_name !== candidate.specification.sampler
+      ) {
+        throw new CandidateExecutionMismatchError(
+          `Workflow sampler "${inputs.sampler_name}" does not match candidate specification sampler "${candidate.specification.sampler}"`,
+          "SAMPLER_MISMATCH"
+        );
+      }
+    }
+
+    // Attention backend inspection: detect silent dense-attention fallback
+    if (classType.toLowerCase().includes("attention") || "attention_backend" in inputs) {
+      hasAttentionNode = true;
+      const nodeBackend = String(inputs.attention_backend ?? "").toLowerCase();
+      if (
+        (nodeBackend === "standard" || nodeBackend === "dense") &&
+        candidate.specification.attention.backend !== "standard"
+      ) {
+        throw new CandidateExecutionMismatchError(
+          `Detected silent dense-attention fallback: candidate profile requires "${candidate.specification.attention.backend}", but node "${nodeId}" configured "${nodeBackend}"`,
+          "DENSE_ATTENTION_FALLBACK"
+        );
+      }
+      if (
+        candidate.specification.attention.backend !== "standard" &&
+        nodeBackend !== candidate.specification.attention.backend.toLowerCase()
+      ) {
+        throw new CandidateExecutionMismatchError(
+          `Attention backend mismatch: expected "${candidate.specification.attention.backend}", but node "${nodeId}" configured "${nodeBackend}"`,
+          "ATTENTION_BACKEND_MISMATCH"
+        );
+      }
+      if (candidate.specification.attention.sparsitySettings.enabled) {
+        if (
+          inputs.sparsity_method !== undefined &&
+          String(inputs.sparsity_method).toLowerCase() !==
+            candidate.specification.attention.sparsitySettings.method.toLowerCase()
+        ) {
+          throw new CandidateExecutionMismatchError(
+            `Attention sparsity method mismatch: expected "${candidate.specification.attention.sparsitySettings.method}", but node "${nodeId}" configured "${inputs.sparsity_method}"`,
+            "SPARSITY_MISMATCH"
+          );
+        }
+      }
+      if (
+        inputs.fail_on_fallback !== undefined &&
+        (inputs.fail_on_fallback === false ||
+          inputs.fail_on_fallback === 0 ||
+          inputs.fail_on_fallback === "false")
+      ) {
+        throw new CandidateExecutionMismatchError(
+          `Attention fail_on_fallback must not be disabled for candidate "${candidate.key}"`,
+          "FAIL_ON_FALLBACK_DISABLED"
+        );
+      }
+    }
+  }
+
+  if (!hasGeneratorNode) {
+    throw new CandidateExecutionMismatchError(
+      `Workflow is missing required generator node for candidate route "${candidate.specification.route}"`,
+      "MISSING_REQUIRED_NODE"
+    );
+  }
+  if (!hasSchedulerNode) {
+    throw new CandidateExecutionMismatchError(
+      `Workflow is missing required scheduler node for candidate route "${candidate.specification.route}"`,
+      "MISSING_REQUIRED_NODE"
+    );
+  }
+  if (!hasSamplerNode) {
+    throw new CandidateExecutionMismatchError(
+      `Workflow is missing required sampler node for candidate route "${candidate.specification.route}"`,
+      "MISSING_REQUIRED_NODE"
+    );
+  }
+  if (candidate.specification.modelHashes.turboLora !== "none" && !hasLoraNode) {
+    throw new CandidateExecutionMismatchError(
+      `Workflow is missing required LoRA loader node for candidate Turbo LoRA`,
+      "MISSING_REQUIRED_NODE"
+    );
+  }
+  if (candidate.specification.attention.backend !== "standard" && !hasAttentionNode) {
+    throw new CandidateExecutionMismatchError(
+      `Workflow is missing required attention backend selector node for "${candidate.specification.attention.backend}"`,
+      "MISSING_REQUIRED_NODE"
+    );
+  }
+  if (candidate.specification.modelHashes.checkpoint && !hasCheckpointNode) {
+    throw new CandidateExecutionMismatchError(
+      `Workflow is missing required checkpoint loader node for candidate "${candidate.key}"`,
+      "MISSING_REQUIRED_NODE"
+    );
+  }
+
+  // Provenance runtime observer attention check
+  if (candidate.specification.attention.backend !== "standard" && candidateProvenanceReport) {
+    const optimizerFingerprint =
+      candidateProvenanceReport.renderProfileProvenance?.optimizerFingerprint;
+    if (
+      optimizerFingerprint &&
+      (optimizerFingerprint.attentionBackend === "standard" ||
+        optimizerFingerprint.attentionBackend === "dense" ||
+        optimizerFingerprint.attentionBackend !== candidate.specification.attention.backend)
+    ) {
+      throw new CandidateExecutionMismatchError(
+        `Detected silent dense-attention fallback: candidate profile requires "${candidate.specification.attention.backend}", but runtime observed "${optimizerFingerprint.attentionBackend}"`,
+        "DENSE_ATTENTION_FALLBACK"
+      );
+    }
+  }
+}
+
 export function createCertifiedRenderJobExecutor(
   deps?: RenderJobExecutorDependencies,
   options?: RenderJobExecutorOptions
@@ -1353,11 +2021,1522 @@ export function createCertifiedRenderJobExecutor(
 
   const manifestPath = options?.manifestPath ?? DEFAULT_MANIFEST_PATH;
   const goldMasterProvenancePath = options?.goldMasterProvenancePath ?? manifestPath;
+  const candidateProvenancePath =
+    options?.candidateProvenancePath ?? options?.goldMasterProvenancePath ?? manifestPath;
   const comfyUiDir = options?.comfyUiDir ?? process.env.COMFYUI_DIR ?? "";
+  const comfyUiEndpoint = options?.comfyUiEndpoint ?? process.env.COMFYUI_URL;
+
+  // Shared target identity for live runtime observation/eligibility calls. comfyUiEndpoint is
+  // required here: H3LiveRuntimeObserver resolves the live PID from whichever local process is
+  // listening on this endpoint's port, and refuses to fall back to "whatever process this
+  // Node.js runner happens to be" (ADR 0008 section 6 - no self-process fallback).
+  const buildRuntimeTarget = (
+    gpuUuid: string
+  ): {
+    hostname: string;
+    gpuUuid: string;
+    comfyUiDir?: string;
+    comfyUiEndpoint?: string;
+  } => ({
+    hostname: deps?.targetHostname ?? hostname(),
+    gpuUuid,
+    ...(comfyUiDir ? { comfyUiDir } : {}),
+    ...(comfyUiEndpoint ? { comfyUiEndpoint } : {})
+  });
+
+  const executeCandidateRenderJob = async (
+    job: RenderJob,
+    candidateKey: string
+  ): Promise<WorkerRenderOutput> => {
+    // 1. Enforce staging execution scope gate
+    if (job.executionScope !== "staging") {
+      throw new CandidateProfileProductionDisabledError(
+        `Candidate profile "${candidateKey}" requires executionScope to be "staging". Ordinary production queues remain disabled until #428 promotion.`
+      );
+    }
+
+    // 2. Resolve candidate profile from trusted registry reader
+    const registryReader = deps?.registryReader ?? options?.registryReader;
+    const candidate = registryReader?.getCandidateProfile(candidateKey);
+    if (!candidate) {
+      throw new CandidateExecutionMismatchError(
+        `MiniMax-H3 candidate profile "${candidateKey}" is not admitted in trusted candidate registry`,
+        "UNKNOWN_CANDIDATE_PROFILE"
+      );
+    }
+
+    const selection = resolveCandidateExecutionSelection(
+      candidate,
+      options?.comfyUiRenderTimeoutMs ?? deps?.comfyUiRenderTimeoutMs
+    );
+
+    // 3. Candidate route & topology setup
+    const isRef2v = candidate.specification.route === "ref2v";
+    const isH3I2v = candidate.specification.route === "i2v";
+    const topology = candidate.topology;
+
+    // 4. Validate injectedPayload with candidate profile awareness
+    const validatedInjected = validateInjectedPayload(
+      job.injectedPayload,
+      job.jobKind,
+      {
+        id: candidate.key,
+        engine: isRef2v ? "minimax_h3_ref2v" : "minimax_h3_i2v",
+        renderProfileIdentity: {
+          key: candidate.key as unknown as RenderProfileKey,
+          version: 1
+        },
+        topology: candidate.topology
+      } as unknown as CertificationProfile,
+      registryReader
+    );
+
+    // 5. Check candidateSpecificationDigest if injected
+    if (
+      validatedInjected.candidateSpecificationDigest &&
+      validatedInjected.candidateSpecificationDigest !== candidate.specificationDigest
+    ) {
+      throw new CandidateExecutionMismatchError(
+        `Candidate specification digest mismatch: job injected "${validatedInjected.candidateSpecificationDigest}", candidate profile declared "${candidate.specificationDigest}"`,
+        "SPECIFICATION_DIGEST_MISMATCH"
+      );
+    }
+
+    // 6. Check exact frame count against candidate specification
+    if (validatedInjected.frameCount !== candidate.specification.frames) {
+      throw new CandidateExecutionMismatchError(
+        `injected frameCount (${validatedInjected.frameCount}) must match candidate profile frames (${candidate.specification.frames})`,
+        "FRAME_COUNT_MISMATCH"
+      );
+    }
+
+    // 7. Load approved candidate provenance & verify
+    const readCandidateProvenanceFn = deps?.readCandidateProvenance ?? readApprovedProvenanceFn;
+    const resolveCandidateProvenanceFn =
+      deps?.resolveCandidateProvenance ?? resolveCandidateProvenanceFromCollection;
+
+    let candidateProvenanceReport: H3CandidateProvenanceReport;
+    try {
+      const rawProvenance = await readCandidateProvenanceFn(candidateProvenancePath);
+      candidateProvenanceReport = resolveCandidateProvenanceFn(rawProvenance, candidateKey);
+    } catch (cause) {
+      throw new CandidateExecutionMismatchError(
+        `Failed to resolve candidate provenance for "${candidateKey}": ${(cause as Error).message}`,
+        "PROVENANCE_RESOLUTION_FAILED",
+        { cause }
+      );
+    }
+
+    // Check workflow path for directory traversal or absolute path
+    if (
+      candidateProvenanceReport.workflow.relativePath.includes("..") ||
+      isAbsolute(candidateProvenanceReport.workflow.relativePath)
+    ) {
+      throw new CandidateExecutionMismatchError(
+        `Candidate provenance workflow relativePath "${candidateProvenanceReport.workflow.relativePath}" contains directory traversal or is absolute`,
+        "INVALID_WORKFLOW_PATH"
+      );
+    }
+
+    // 8. Require and verify operator authorization grant before GPU work
+    const grant =
+      (validatedInjected as { authorizationGrant?: H3CandidateAuthorizationGrant })
+        .authorizationGrant ??
+      (job.injectedPayload as { authorizationGrant?: H3CandidateAuthorizationGrant })
+        ?.authorizationGrant;
+    if (!grant) {
+      throw new CandidateExecutionMismatchError(
+        `Candidate profile "${candidateKey}" requires a signed operator authorization grant before execution`,
+        "MISSING_SIGNED_GRANT"
+      );
+    }
+
+    if (!deps?.authorizationPort) {
+      throw new CandidateExecutionMismatchError(
+        `Candidate profile "${candidateKey}" requires authorizationPort dependency to verify operator authorization grant before execution`,
+        "MISSING_AUTHORIZATION_PORT"
+      );
+    }
+    // Staging/production execution must be bound to a real, operator-declared physical GPU.
+    // A silently-defaulted placeholder here would let authorization/eligibility checks pass
+    // against a GPU that doesn't exist, defeating the host/GPU-bound grant model entirely
+    // (see ADR 0008 section 6, Live Runtime Observation Invariant). Fail closed instead.
+    if (!deps?.targetGpuUuid) {
+      throw new CandidateExecutionMismatchError(
+        `Candidate profile "${candidateKey}" requires a configured targetGpuUuid identifying the real physical GPU this worker executes on; refusing to default to a placeholder GPU identity`,
+        "MISSING_TARGET_GPU_UUID"
+      );
+    }
+    const targetGpuUuid = deps.targetGpuUuid;
+    const authDecision = await deps.authorizationPort.verifyCandidateAuthorization({
+      grant,
+      candidateKey,
+      specificationDigest: candidate.specificationDigest,
+      targetHostname: deps?.targetHostname ?? hostname(),
+      targetGpuUuid,
+      purpose: "staging",
+      goldMasterWorkflowHash: candidate.specification.workflowHash,
+      goldMasterModelHashesDigest: grant.payload?.goldMasterModelHashesDigest ?? ""
+    });
+    if (!authDecision.authorized) {
+      throw new CandidateExecutionMismatchError(
+        `Candidate authorization denied: ${authDecision.blocker ?? "unauthorized"}`,
+        authDecision.blocker ?? "GRANT_AUTHORIZATION_DENIED"
+      );
+    }
+
+    // Live runtime observation and eligibility evaluation
+    const eligibilityService =
+      deps?.eligibilityService ??
+      (deps?.authorizationPort && deps?.runtimeObservationPort
+        ? new H3CandidateEligibilityService({
+            authorizationPort: deps.authorizationPort,
+            runtimeObservationPort: deps.runtimeObservationPort,
+            registryReader
+          })
+        : undefined);
+
+    if (!eligibilityService) {
+      throw new CandidateExecutionMismatchError(
+        `Candidate profile "${candidateKey}" requires runtimeObservationPort or eligibilityService to verify live host, process, and optimizer eligibility`,
+        "MISSING_RUNTIME_OBSERVATION_PORT"
+      );
+    }
+
+    let liveObservation: { comfyUiCoreRevision: string } | undefined;
+    if (deps?.runtimeObservationPort) {
+      const liveObs = await deps.runtimeObservationPort.observeCurrentRuntime(
+        buildRuntimeTarget(targetGpuUuid)
+      );
+      if (liveObs.ok && liveObs.observation) {
+        liveObservation = liveObs.observation;
+      }
+    }
+
+    const eligibilityDecision = await eligibilityService.evaluateEligibility({
+      candidateKey,
+      target: buildRuntimeTarget(targetGpuUuid),
+      executionContext: {
+        route: candidate.specification.route,
+        routingMode: candidate.specification.routingMode,
+        width: candidate.specification.width,
+        height: candidate.specification.height,
+        frames: candidate.specification.frames,
+        workflowHash: candidate.specification.workflowHash,
+        modelHashes: flattenH3CandidateModelHashes(candidate.specification.modelHashes),
+        steps: candidate.specification.steps,
+        sampler: candidate.specification.sampler,
+        scheduler: candidate.specification.scheduler,
+        runnerProfile: candidate.specification.runnerSettings.runnerProfile,
+        cfg: candidate.specification.cfg,
+        denoise: candidate.specification.denoise
+      },
+      goldMasterProvenance: {
+        workflowHash: candidateProvenanceReport.workflow.sha256,
+        modelHashes: candidateProvenanceReport.renderProfileProvenance.modelHashes
+      },
+      authorizationGrant: grant,
+      purpose: "staging"
+    });
+
+    if (!eligibilityDecision.eligible) {
+      throw new CandidateExecutionMismatchError(
+        `Candidate profile ineligible for staging: ${eligibilityDecision.blockerCode} - ${eligibilityDecision.message}`,
+        eligibilityDecision.blockerCode
+      );
+    }
+
+    // Verify candidate provenance matches specification
+    if (candidateProvenanceReport.candidateKey !== candidate.key) {
+      throw new CandidateExecutionMismatchError(
+        `Candidate provenance report candidateKey "${candidateProvenanceReport.candidateKey}" does not match profile key "${candidate.key}"`,
+        "PROVENANCE_KEY_MISMATCH"
+      );
+    }
+    const reportProv = candidateProvenanceReport.renderProfileProvenance;
+    if (reportProv.frames !== candidate.specification.frames) {
+      throw new CandidateExecutionMismatchError(
+        `Candidate provenance frames ${reportProv.frames} does not match candidate specification frames ${candidate.specification.frames}`,
+        "FRAME_COUNT_MISMATCH"
+      );
+    }
+    if (
+      reportProv.width !== candidate.specification.width ||
+      reportProv.height !== candidate.specification.height
+    ) {
+      throw new CandidateExecutionMismatchError(
+        `Candidate provenance dimensions ${reportProv.width}x${reportProv.height} do not match candidate specification dimensions ${candidate.specification.width}x${candidate.specification.height}`,
+        "GEOMETRY_MISMATCH"
+      );
+    }
+    if (reportProv.route !== candidate.specification.route) {
+      throw new CandidateExecutionMismatchError(
+        `Candidate provenance route "${reportProv.route}" does not match candidate specification route "${candidate.specification.route}"`,
+        "ROUTE_MISMATCH"
+      );
+    }
+    if (reportProv.routingMode !== candidate.specification.routingMode) {
+      throw new CandidateExecutionMismatchError(
+        `Candidate provenance routingMode "${reportProv.routingMode}" does not match candidate specification routingMode "${candidate.specification.routingMode}"`,
+        "ROUTING_MODE_MISMATCH"
+      );
+    }
+    if (reportProv.workflowHash !== candidate.specification.workflowHash) {
+      throw new CandidateExecutionMismatchError(
+        `Candidate provenance workflowHash "${reportProv.workflowHash}" does not match candidate specification workflowHash "${candidate.specification.workflowHash}"`,
+        "WORKFLOW_HASH_MISMATCH"
+      );
+    }
+    for (const [modelKey, expectedHash] of Object.entries(candidate.specification.modelHashes)) {
+      if (modelKey === "additionalModels") {
+        if (typeof expectedHash === "object" && expectedHash !== null) {
+          for (const [addKey, addHash] of Object.entries(expectedHash)) {
+            if (reportProv.modelHashes[addKey] !== addHash) {
+              throw new CandidateExecutionMismatchError(
+                `Candidate provenance additional model hash for "${addKey}" mismatch: expected "${addHash}", got "${reportProv.modelHashes[addKey]}"`,
+                "MODEL_HASH_MISMATCH"
+              );
+            }
+          }
+        }
+        continue;
+      }
+      if (modelKey === "turboLora" && expectedHash === "none") {
+        continue;
+      }
+      if (reportProv.modelHashes[modelKey] !== expectedHash) {
+        throw new CandidateExecutionMismatchError(
+          `Candidate provenance model hash for "${modelKey}" mismatch: expected "${expectedHash}", got "${reportProv.modelHashes[modelKey]}"`,
+          "MODEL_HASH_MISMATCH"
+        );
+      }
+    }
+
+    // 8. Load workflow file & recheck hash
+    const candidateWorkflowPath = resolve(
+      comfyUiDir || DEFAULT_REPO_ROOT,
+      candidateProvenanceReport.workflow.relativePath
+    );
+    const rawWorkflow = await readWorkflowFileFn(candidateWorkflowPath);
+    const recheckedWorkflowHash = hashWorkflowFn(rawWorkflow);
+
+    if (
+      recheckedWorkflowHash !== candidate.specification.workflowHash ||
+      recheckedWorkflowHash !== candidateProvenanceReport.workflow.sha256
+    ) {
+      throw new WorkflowHashMismatchError(
+        `Workflow hash mismatch for candidate "${candidateKey}": rechecked "${recheckedWorkflowHash}", expected "${candidate.specification.workflowHash}"`
+      );
+    }
+
+    // 9. Authoritative license routing guard evaluated BEFORE any external I/O
+    const licenseComponentId =
+      H3_CANDIDATE_LICENSE_COMPONENT_BY_ROUTE[candidate.specification.route];
+    if (!licenseComponentId) {
+      throw new CandidateExecutionMismatchError(
+        `Candidate profile "${candidateKey}" has unrecognized route "${candidate.specification.route}" with no corresponding license-registry component`,
+        "UNLICENSED_CANDIDATE_ROUTE"
+      );
+    }
+    if (deps?.enforceLicenseRouting) {
+      deps.enforceLicenseRouting.enforce({
+        requiredComponents: [
+          {
+            componentId: licenseComponentId,
+            componentType: "model",
+            versionOrRevision: H3_CANDIDATE_LICENSE_COMPONENT_VERSION
+          }
+        ],
+        operation: {
+          kind: "generation",
+          renderJobId: job.jobId,
+          sceneId: job.sceneId
+        }
+      });
+    } else if (
+      deps?.useCase &&
+      "enforceLicense" in deps.useCase &&
+      typeof deps.useCase.enforceLicense === "function"
+    ) {
+      deps.useCase.enforceLicense({
+        renderJobId: job.jobId,
+        sceneId: job.sceneId,
+        renderProfileKey: candidate.key,
+        renderProfileVersion: candidate.version,
+        engine: candidate.specification.route === "i2v" ? "minimax_h3_i2v" : "minimax_h3_ref2v"
+      });
+    }
+
+    // 10. Conditioning and ShotPlan route constraints
+    let resolvedCandidateMedia: ResolvedApprovedVisualProductionMedia | undefined;
+    let stagedReferenceImage: StagedComfyUiInput | undefined;
+    let stagingFilename: string | undefined;
+    let canonicalRefs: readonly CanonicalReferenceEntry[] = [];
+
+    const stagedRefInputs: StagedComfyUiInput[] = [];
+    const manifestRefImages: ManifestReferenceImageEntry[] = [];
+    const stagedRefPaths: string[] = [];
+    let promptToInject = validatedInjected.prompt;
+    let executedInstruction: ManifestExecutedInstruction | undefined;
+    let previsReviewEvidence: ManifestPrevisReviewEvidence | undefined;
+
+    let executionError: unknown;
+    let executionResult: WorkerRenderOutput | undefined;
+    try {
+      if (isRef2v) {
+        // Reference-directed MiniMax-H3 execution
+        if (!deps?.shotPlanRepository) {
+          throw new RenderJobExecutionError(
+            "shotPlanRepository dependency is required for reference-directed execution"
+          );
+        }
+        if (!deps?.referenceAssetRepository) {
+          throw new RenderJobExecutionError(
+            "referenceAssetRepository dependency is required for reference-directed execution"
+          );
+        }
+        if (!validatedInjected.shotPlanId) {
+          throw new RenderJobExecutionError(
+            "injectedPayload.shotPlanId is required for reference-directed execution"
+          );
+        }
+        if (!validatedInjected.specRevision) {
+          throw new RenderJobExecutionError(
+            "injectedPayload.specRevision is required for reference-directed execution"
+          );
+        }
+
+        const shotPlanDomain = await deps.shotPlanRepository.findById(
+          validatedInjected.shotPlanId as ShotPlanId
+        );
+        if (!shotPlanDomain) {
+          throw new RenderJobExecutionError(
+            `ShotPlan "${validatedInjected.shotPlanId}" not found in shotPlanRepository`
+          );
+        }
+        const shotPlanDoc = shotPlanDomain.snapshot();
+
+        if (shotPlanDoc.status !== "approved") {
+          throw new RenderJobExecutionError(
+            `ShotPlan "${shotPlanDoc.id}" must be approved, got status "${shotPlanDoc.status}"`
+          );
+        }
+        if (shotPlanDoc.sceneId !== job.sceneId) {
+          throw new RenderJobExecutionError(
+            `ShotPlan "${shotPlanDoc.id}" belongs to scene "${shotPlanDoc.sceneId}", but render job is for scene "${job.sceneId}"`
+          );
+        }
+        if (shotPlanDoc.specRevision !== validatedInjected.specRevision) {
+          throw new RenderJobExecutionError(
+            `ShotPlan "${shotPlanDoc.id}" specRevision ${shotPlanDoc.specRevision} does not match injected specRevision ${validatedInjected.specRevision}`
+          );
+        }
+        // Invariant: Ref2V shot plan cannot be executed on I2V candidate; ShotPlan routingMode must match
+        if (shotPlanDoc.routingMode !== "reference_directed") {
+          throw new RenderJobExecutionError(
+            `ShotPlan "${shotPlanDoc.id}" routingMode must be "reference_directed", got "${shotPlanDoc.routingMode}"`
+          );
+        }
+
+        if (!deps?.sceneRepository) {
+          throw new RenderJobExecutionError(
+            "sceneRepository dependency is required for reference-directed execution"
+          );
+        }
+
+        const sceneDomain = await deps.sceneRepository.findById(job.sceneId as SceneId);
+        if (!sceneDomain) {
+          throw new RenderJobExecutionError(`Scene "${job.sceneId}" not found in sceneRepository`);
+        }
+        const sceneSnapshot = sceneDomain.snapshot();
+        if (sceneSnapshot.specRevision !== validatedInjected.specRevision) {
+          throw new RenderJobExecutionError(
+            `Scene "${job.sceneId}" specRevision ${sceneSnapshot.specRevision} does not match injected specRevision ${validatedInjected.specRevision}`
+          );
+        }
+        if (!sceneSnapshot.approvedShotPlanId) {
+          throw new RenderJobExecutionError(
+            `Scene "${job.sceneId}" has no approvedShotPlanId; reference-directed execution requires current-scene ShotPlan approval`
+          );
+        }
+        if (sceneSnapshot.approvedShotPlanId !== validatedInjected.shotPlanId) {
+          throw new RenderJobExecutionError(
+            `Scene "${job.sceneId}" approvedShotPlanId "${sceneSnapshot.approvedShotPlanId}" does not match injected shotPlanId "${validatedInjected.shotPlanId}"`
+          );
+        }
+        if (
+          sceneSnapshot.approvedShotPlanRevision === undefined ||
+          sceneSnapshot.approvedShotPlanRevision === null
+        ) {
+          throw new RenderJobExecutionError(
+            `Scene "${job.sceneId}" has no approvedShotPlanRevision; reference-directed execution requires verified current-revision approval`
+          );
+        }
+        if (sceneSnapshot.approvedShotPlanRevision !== validatedInjected.specRevision) {
+          throw new RenderJobExecutionError(
+            `Scene "${job.sceneId}" approvedShotPlanRevision ${sceneSnapshot.approvedShotPlanRevision} does not match injected specRevision ${validatedInjected.specRevision}`
+          );
+        }
+
+        if (!deps?.campaignRepository) {
+          throw new RenderJobExecutionError(
+            "campaignRepository dependency is required for reference-directed execution"
+          );
+        }
+        const campaign = await deps.campaignRepository.findById(sceneSnapshot.campaignId);
+        if (!campaign || !campaign.clientId) {
+          throw new RenderJobExecutionError(
+            `Campaign "${sceneSnapshot.campaignId}" not found or lacks clientId in campaignRepository`
+          );
+        }
+        const expectedClientId = campaign.clientId;
+
+        if (!deps.referenceAssetRepository.listBindingsBySceneId) {
+          throw new RenderJobExecutionError(
+            "referenceAssetRepository.listBindingsBySceneId is required for reference-directed execution"
+          );
+        }
+
+        const rawAssets = await deps.referenceAssetRepository.listBySceneId(job.sceneId as SceneId);
+        const assetsById = new Map<string, DomainReferenceAsset>(rawAssets.map((a) => [a.id, a]));
+
+        const rawBindings = await deps.referenceAssetRepository.listBindingsBySceneId(
+          job.sceneId as SceneId,
+          {
+            specRevision: validatedInjected.specRevision
+          }
+        );
+
+        for (const binding of rawBindings) {
+          if (binding.sceneId && binding.sceneId !== job.sceneId) {
+            throw new RenderJobExecutionError(
+              `SceneReferenceBinding for asset "${binding.referenceAssetId}" belongs to scene "${binding.sceneId}", which does not match job sceneId "${job.sceneId}"`
+            );
+          }
+          if (
+            binding.specRevision !== undefined &&
+            binding.specRevision !== validatedInjected.specRevision
+          ) {
+            throw new RenderJobExecutionError(
+              `SceneReferenceBinding for asset "${binding.referenceAssetId}" has specRevision ${binding.specRevision}, which does not match injected specRevision ${validatedInjected.specRevision}`
+            );
+          }
+        }
+
+        canonicalRefs = canonicalizeReferenceBindings({
+          bindings: rawBindings,
+          assetsById,
+          expectedClientId,
+          expectedSceneId: job.sceneId
+        });
+
+        if (canonicalRefs.length > 0) {
+          if (!deps?.objectStorage) {
+            throw new RenderJobExecutionError(
+              "objectStorage dependency is required for reference image staging"
+            );
+          }
+          if (!deps?.stageReferenceImage) {
+            throw new RenderJobExecutionError(
+              "stageReferenceImage dependency is required for reference image staging"
+            );
+          }
+          const imageValidator = deps?.imageValidator ?? deps?.imageInspectionPort;
+          if (!imageValidator) {
+            throw new RenderJobExecutionError(
+              "imageValidator dependency is required for reference image staging"
+            );
+          }
+
+          for (const ref of canonicalRefs) {
+            if (ref.asset.clientId !== expectedClientId) {
+              throw new ReferenceImageIntegrityError(
+                `Reference asset "${ref.referenceAssetId}" client "${ref.asset.clientId}" does not match scene campaign client "${expectedClientId}"`
+              );
+            }
+
+            const refAssetSceneId = (ref.asset as { sceneId?: string }).sceneId;
+            if (refAssetSceneId && refAssetSceneId !== job.sceneId) {
+              throw new ReferenceImageIntegrityError(
+                `Reference asset "${ref.referenceAssetId}" belongs to scene "${refAssetSceneId}", which does not match job sceneId "${job.sceneId}"`
+              );
+            }
+
+            const stored = await deps.objectStorage.getObject(
+              { bucket: ref.asset.storageBucket, key: ref.asset.storageObjectKey },
+              { maxBytes: MAX_CANDIDATE_IMAGE_BYTES }
+            );
+            if (!stored || !stored.body || stored.body.byteLength === 0) {
+              throw new ReferenceImageIntegrityError(
+                `Reference image object "${ref.asset.storageObjectKey}" is missing or empty in storage`
+              );
+            }
+
+            const bytes = stored.body;
+            if (bytes.length < 8) {
+              throw new ReferenceImageIntegrityError(
+                `Reference image object "${ref.asset.storageObjectKey}" buffer is too small to be a valid image`
+              );
+            }
+
+            const declaredMime = (ref.asset.mimeType ?? "image/png").toLowerCase();
+            const imageInfo = parseImageByteHeader(bytes);
+            if (!imageInfo) {
+              throw new ReferenceImageIntegrityError(
+                `Reference image object "${ref.asset.storageObjectKey}" has unknown or unsupported image format magic bytes`
+              );
+            }
+            if (imageInfo.mimeType !== declaredMime) {
+              throw new ReferenceImageIntegrityError(
+                `Reference image object "${ref.asset.storageObjectKey}" detected format "${imageInfo.mimeType}" does not match declared MIME "${declaredMime}"`
+              );
+            }
+            if (imageInfo.width <= 0 || imageInfo.height <= 0) {
+              throw new ReferenceImageIntegrityError(
+                `Reference image object "${ref.asset.storageObjectKey}" must have positive dimensions`
+              );
+            }
+            if (ref.asset.width !== undefined && imageInfo.width !== ref.asset.width) {
+              throw new ReferenceImageIntegrityError(
+                `Reference image object "${ref.asset.storageObjectKey}" width mismatch: expected ${ref.asset.width}, got ${imageInfo.width}`
+              );
+            }
+            if (ref.asset.height !== undefined && imageInfo.height !== ref.asset.height) {
+              throw new ReferenceImageIntegrityError(
+                `Reference image object "${ref.asset.storageObjectKey}" height mismatch: expected ${ref.asset.height}, got ${imageInfo.height}`
+              );
+            }
+
+            const actualSha256 = await hashBytesPort.hashBytes(stored.body);
+            if (actualSha256 !== ref.asset.contentHashSha256) {
+              throw new ReferenceImageIntegrityError(
+                `Reference image sha256 mismatch for asset "${ref.referenceAssetId}": expected "${ref.asset.contentHashSha256}", got "${actualSha256}"`
+              );
+            }
+
+            let inspected: ValidatedImageMetadata;
+            try {
+              inspected = await imageValidator.inspectAndValidate(bytes, declaredMime);
+            } catch (cause) {
+              throw new ReferenceImageIntegrityError(
+                `Reference image object "${ref.asset.storageObjectKey}" decode validation failed: ${(cause as Error).message}`,
+                { cause }
+              );
+            }
+
+            if (inspected.detectedMimeType !== declaredMime) {
+              throw new ReferenceImageIntegrityError(
+                `Reference image object "${ref.asset.storageObjectKey}" detected format "${inspected.detectedMimeType}" does not match declared MIME "${declaredMime}"`
+              );
+            }
+
+            const refStagingFilename = buildDeterministicStagingFilename(
+              job.sceneId,
+              `${job.jobId}-slot${ref.slotIndex}`,
+              actualSha256,
+              ref.asset.mimeType ?? "image/png"
+            );
+            if (refStagingFilename.includes("..")) {
+              throw new ReferenceImageIntegrityError("refStagingFilename contains path traversal");
+            }
+
+            const stagedInput = await deps.stageReferenceImage.stage({
+              filename: refStagingFilename,
+              bytes: stored.body,
+              contentType: ref.asset.mimeType ?? "image/png"
+            });
+            if (
+              stagedInput.name.includes("/") ||
+              stagedInput.name.includes("\\") ||
+              stagedInput.name.includes("..") ||
+              (stagedInput.subfolder &&
+                (stagedInput.subfolder.includes("..") ||
+                  stagedInput.subfolder.startsWith("/") ||
+                  stagedInput.subfolder.startsWith("\\")))
+            ) {
+              throw new ReferenceImageIntegrityError("stagedInput contains path traversal");
+            }
+            stagedRefInputs.push(stagedInput);
+
+            const stagedPath = stagedInput.subfolder
+              ? `${stagedInput.subfolder}/${stagedInput.name}`
+              : stagedInput.name;
+            stagedRefPaths.push(stagedPath);
+
+            const injectionTarget = topology.referenceImages![ref.slotIndex - 1]!;
+            manifestRefImages.push({
+              bindingId: ref.bindingId,
+              slotIndex: ref.slotIndex,
+              promptTag: ref.promptTag,
+              assetId: ref.referenceAssetId,
+              contentHashSha256: actualSha256,
+              role: ref.role,
+              stagedAs: { name: stagedInput.name, subfolder: stagedInput.subfolder },
+              injectionTarget: {
+                nodeId: injectionTarget.nodeId,
+                classType: injectionTarget.classType,
+                inputField: injectionTarget.inputField
+              }
+            });
+          }
+        }
+
+        const sceneSpec = {
+          revision: validatedInjected.specRevision,
+          actionContext: sceneSnapshot.configuration?.prompt,
+          scriptContext: (sceneSnapshot as { scriptContext?: string }).scriptContext
+        };
+
+        const compiled = compileShotPlan({
+          shotPlan: shotPlanDoc,
+          sceneSpec,
+          references: canonicalRefs,
+          routingMode: "reference_directed"
+        });
+        promptToInject = compiled.instructionText;
+        executedInstruction = {
+          text: compiled.instructionText,
+          sha256: compiled.instructionHashSha256,
+          byteLength: compiled.instructionBytes.byteLength
+        };
+      } else if (isH3I2v) {
+        // Frame-anchored MiniMax-H3 execution
+        if (!validatedInjected.shotPlanId) {
+          throw new RenderJobExecutionError(
+            "injectedPayload.shotPlanId is required for candidate frame-anchored execution"
+          );
+        }
+        if (validatedInjected.specRevision === undefined) {
+          throw new RenderJobExecutionError(
+            "injectedPayload.specRevision is required for candidate frame-anchored execution"
+          );
+        }
+        if (!deps?.shotPlanRepository) {
+          throw new RenderJobExecutionError(
+            "shotPlanRepository dependency is required for frame-anchored execution"
+          );
+        }
+
+        const shotPlanDomain = await deps.shotPlanRepository.findById(
+          validatedInjected.shotPlanId as ShotPlanId
+        );
+        if (!shotPlanDomain) {
+          throw new RenderJobExecutionError(
+            `ShotPlan "${validatedInjected.shotPlanId}" not found in shotPlanRepository`
+          );
+        }
+        const shotPlanDoc = shotPlanDomain.snapshot();
+        if (shotPlanDoc.status !== "approved") {
+          throw new RenderJobExecutionError(
+            `ShotPlan "${shotPlanDoc.id}" must be approved, got status "${shotPlanDoc.status}"`
+          );
+        }
+        if (shotPlanDoc.sceneId !== job.sceneId) {
+          throw new RenderJobExecutionError(
+            `ShotPlan "${shotPlanDoc.id}" belongs to scene "${shotPlanDoc.sceneId}", but render job is for scene "${job.sceneId}"`
+          );
+        }
+        if (shotPlanDoc.specRevision !== validatedInjected.specRevision) {
+          throw new RenderJobExecutionError(
+            `ShotPlan "${shotPlanDoc.id}" specRevision ${shotPlanDoc.specRevision} does not match injected specRevision ${validatedInjected.specRevision}`
+          );
+        }
+        // Invariant: Ref2V ShotPlan cannot inherit I2V eligibility!
+        if (shotPlanDoc.routingMode !== "frame_anchored") {
+          throw new CandidateExecutionMismatchError(
+            `ShotPlan "${shotPlanDoc.id}" routingMode "${shotPlanDoc.routingMode}" does not match candidate profile route "i2v" (requires "frame_anchored")`
+          );
+        }
+
+        if (!deps?.sceneRepository) {
+          throw new RenderJobExecutionError(
+            "sceneRepository dependency is required for frame-anchored execution"
+          );
+        }
+
+        const sceneDomain = await deps.sceneRepository.findById(job.sceneId as SceneId);
+        if (!sceneDomain) {
+          throw new RenderJobExecutionError(`Scene "${job.sceneId}" not found in sceneRepository`);
+        }
+        const sceneSnapshot = sceneDomain.snapshot();
+        if (sceneSnapshot.specRevision !== validatedInjected.specRevision) {
+          throw new RenderJobExecutionError(
+            `Scene "${job.sceneId}" specRevision ${sceneSnapshot.specRevision} does not match injected specRevision ${validatedInjected.specRevision}`
+          );
+        }
+        if (!sceneSnapshot.approvedShotPlanId) {
+          throw new RenderJobExecutionError(
+            `Scene "${job.sceneId}" has no approvedShotPlanId; frame-anchored execution requires current-scene ShotPlan approval`
+          );
+        }
+        if (sceneSnapshot.approvedShotPlanId !== validatedInjected.shotPlanId) {
+          throw new RenderJobExecutionError(
+            `Scene "${job.sceneId}" approvedShotPlanId "${sceneSnapshot.approvedShotPlanId}" does not match injected shotPlanId "${validatedInjected.shotPlanId}"`
+          );
+        }
+        if (
+          sceneSnapshot.approvedShotPlanRevision === undefined ||
+          sceneSnapshot.approvedShotPlanRevision === null
+        ) {
+          throw new RenderJobExecutionError(
+            `Scene "${job.sceneId}" has no approvedShotPlanRevision; frame-anchored execution requires verified current-revision approval`
+          );
+        }
+        if (sceneSnapshot.approvedShotPlanRevision !== validatedInjected.specRevision) {
+          throw new RenderJobExecutionError(
+            `Scene "${job.sceneId}" approvedShotPlanRevision ${sceneSnapshot.approvedShotPlanRevision} does not match injected specRevision ${validatedInjected.specRevision}`
+          );
+        }
+
+        if (!shotPlanDoc.continuity) {
+          throw new RenderJobExecutionError(
+            `ShotPlan "${shotPlanDoc.id}" missing continuity for frame-anchored execution`
+          );
+        }
+        if (shotPlanDoc.continuity.frameAnchorTarget !== "first_frame") {
+          throw new CandidateExecutionMismatchError(
+            `ShotPlan "${shotPlanDoc.id}" continuity.frameAnchorTarget must be "first_frame", got "${shotPlanDoc.continuity?.frameAnchorTarget}"`
+          );
+        }
+        if (!shotPlanDoc.continuity.anchorCandidateId) {
+          throw new RenderJobExecutionError(
+            `ShotPlan "${shotPlanDoc.id}" frame-anchored execution requires explicit anchorCandidateId`
+          );
+        }
+        if (shotPlanDoc.continuity.anchorCandidateId !== validatedInjected.approvedCandidateId) {
+          throw new CandidateExecutionMismatchError(
+            `ShotPlan "${shotPlanDoc.id}" continuity.anchorCandidateId "${shotPlanDoc.continuity.anchorCandidateId}" does not match injected approvedCandidateId "${validatedInjected.approvedCandidateId}"`
+          );
+        }
+        if (!shotPlanDoc.continuity.anchorMediaHashSha256) {
+          throw new RenderJobExecutionError(
+            `ShotPlan "${shotPlanDoc.id}" frame-anchored execution requires explicit anchorMediaHashSha256`
+          );
+        }
+        if (shotPlanDoc.previs) {
+          previsReviewEvidence = {
+            candidateId: shotPlanDoc.previs.candidateId,
+            contentHashSha256: shotPlanDoc.previs.contentHashSha256,
+            specRevision: validatedInjected.specRevision!
+          };
+        }
+
+        if (!deps?.resolveApprovedCandidateMedia) {
+          throw new RenderJobExecutionError(
+            "resolveApprovedCandidateMedia dependency is required for reference image conditioning"
+          );
+        }
+        if (!deps?.objectStorage) {
+          throw new RenderJobExecutionError(
+            "objectStorage dependency is required for reference image conditioning"
+          );
+        }
+        if (!deps?.stageReferenceImage) {
+          throw new RenderJobExecutionError(
+            "stageReferenceImage dependency is required for reference image conditioning"
+          );
+        }
+        if (!validatedInjected.approvedCandidateId) {
+          throw new MissingApprovedCandidateForConditioningError(
+            `Candidate profile "${candidate.key}" requires an approved candidate for conditioning, but injectedPayload.approvedCandidateId was not provided`
+          );
+        }
+
+        resolvedCandidateMedia = await deps.resolveApprovedCandidateMedia.execute({
+          sceneId: job.sceneId as SceneId,
+          approvedCandidateId: validatedInjected.approvedCandidateId
+        });
+
+        const stored = await deps.objectStorage.getObject(
+          {
+            bucket: resolvedCandidateMedia.media.bucket,
+            key: resolvedCandidateMedia.media.key
+          },
+          { maxBytes: MAX_CANDIDATE_IMAGE_BYTES }
+        );
+        if (!stored || !stored.body || stored.body.byteLength === 0) {
+          throw new ReferenceImageIntegrityError(
+            `Reference image object "${resolvedCandidateMedia.media.key}" is missing or empty in storage`
+          );
+        }
+
+        const bytes = stored.body;
+        if (bytes.length < 8) {
+          throw new ReferenceImageIntegrityError(
+            `Reference image object "${resolvedCandidateMedia.media.key}" buffer is too small to be a valid image`
+          );
+        }
+
+        const declaredMime = (
+          resolvedCandidateMedia.media.contentType ?? "image/png"
+        ).toLowerCase();
+        const imageInfo = parseImageByteHeader(bytes);
+        if (!imageInfo) {
+          throw new ReferenceImageIntegrityError(
+            `Reference image object "${resolvedCandidateMedia.media.key}" has unknown or unsupported image format magic bytes`
+          );
+        }
+        if (imageInfo.mimeType !== declaredMime) {
+          throw new ReferenceImageIntegrityError(
+            `Reference image object "${resolvedCandidateMedia.media.key}" detected format "${imageInfo.mimeType}" does not match declared MIME "${declaredMime}"`
+          );
+        }
+        if (imageInfo.width <= 0 || imageInfo.height <= 0) {
+          throw new ReferenceImageIntegrityError(
+            `Reference image object "${resolvedCandidateMedia.media.key}" must have positive dimensions`
+          );
+        }
+
+        const actualSha256 = await hashBytesPort.hashBytes(stored.body);
+        if (actualSha256 !== resolvedCandidateMedia.media.sha256) {
+          throw new ReferenceImageIntegrityError(
+            `Reference image sha256 mismatch: expected "${resolvedCandidateMedia.media.sha256}", got "${actualSha256}"`
+          );
+        }
+        if (
+          shotPlanDoc?.continuity?.anchorMediaHashSha256 &&
+          actualSha256 !== shotPlanDoc.continuity.anchorMediaHashSha256
+        ) {
+          throw new ReferenceImageIntegrityError(
+            `Reference image sha256 mismatch against ShotPlan continuity: expected "${shotPlanDoc.continuity.anchorMediaHashSha256}", got "${actualSha256}"`
+          );
+        }
+
+        const imageValidator = deps?.imageValidator ?? deps?.imageInspectionPort;
+        if (imageValidator) {
+          let inspected: ValidatedImageMetadata;
+          try {
+            inspected = await imageValidator.inspectAndValidate(bytes, declaredMime);
+          } catch (cause) {
+            throw new ReferenceImageIntegrityError(
+              `Reference image object "${resolvedCandidateMedia.media.key}" decode validation failed: ${(cause as Error).message}`,
+              { cause }
+            );
+          }
+          if (inspected.detectedMimeType !== declaredMime) {
+            throw new ReferenceImageIntegrityError(
+              `Reference image object "${resolvedCandidateMedia.media.key}" detected format "${inspected.detectedMimeType}" does not match declared MIME "${declaredMime}"`
+            );
+          }
+        }
+
+        stagingFilename = buildDeterministicStagingFilename(
+          job.sceneId,
+          job.jobId,
+          actualSha256,
+          resolvedCandidateMedia.media.contentType ?? "image/png"
+        );
+        if (stagingFilename.includes("..")) {
+          throw new ReferenceImageIntegrityError("stagingFilename contains path traversal");
+        }
+
+        stagedReferenceImage = await deps.stageReferenceImage.stage({
+          filename: stagingFilename,
+          bytes: stored.body,
+          contentType: resolvedCandidateMedia.media.contentType ?? "image/png"
+        });
+
+        if (
+          stagedReferenceImage.name.includes("/") ||
+          stagedReferenceImage.name.includes("\\") ||
+          stagedReferenceImage.name.includes("..") ||
+          (stagedReferenceImage.subfolder &&
+            (stagedReferenceImage.subfolder.includes("..") ||
+              stagedReferenceImage.subfolder.startsWith("/") ||
+              stagedReferenceImage.subfolder.startsWith("\\")))
+        ) {
+          throw new ReferenceImageIntegrityError("stagedReferenceImage contains path traversal");
+        }
+      }
+
+      const referenceImageValue = stagedReferenceImage
+        ? stagedReferenceImage.subfolder
+          ? `${stagedReferenceImage.subfolder}/${stagedReferenceImage.name}`
+          : stagedReferenceImage.name
+        : undefined;
+
+      // Recompute and verify candidate production input fingerprint
+      const grantReference = grant
+        ? `${computeAuthorizationPayloadDigest(grant.payload)}:${grant.signature}`
+        : undefined;
+
+      const recomputedFingerprint = computeCandidateProductionInputFingerprint({
+        version: 2,
+        sceneId: job.sceneId,
+        specRevision: validatedInjected.specRevision!,
+        shotPlanId: validatedInjected.shotPlanId ?? null,
+        routingMode: isRef2v ? "reference_directed" : "frame_anchored",
+        candidateKey: candidate.key,
+        specificationDigest: candidate.specificationDigest,
+        candidateVersion: candidate.version,
+        executionScope: "staging",
+        grantReference,
+        workflowTemplate: candidate.specification.workflowHash,
+        requestedDurationMs:
+          validatedInjected.requestedDurationMs ??
+          Math.round((candidate.specification.frames / candidate.specification.fps) * 1000),
+        nominalDurationMs:
+          validatedInjected.nominalDurationMs ??
+          Math.round((candidate.specification.frames / candidate.specification.fps) * 1000),
+        targetFrameCount: candidate.specification.frames,
+        fps: candidate.specification.fps,
+        width: candidate.specification.width,
+        height: candidate.specification.height,
+        compiledInstructionText: promptToInject ?? validatedInjected.prompt ?? "",
+        compiledInstructionSha256:
+          executedInstruction?.sha256 ??
+          (isRef2v
+            ? createHash("sha256")
+                .update(Buffer.from(promptToInject ?? validatedInjected.prompt ?? "", "utf8"))
+                .digest("hex")
+            : "0000000000000000000000000000000000000000000000000000000000000000"),
+        references: isRef2v
+          ? canonicalRefs.map((r) => ({
+              slotIndex: r.slotIndex,
+              referenceAssetId: r.referenceAssetId,
+              role: r.role,
+              contentHashSha256: r.asset.contentHashSha256
+            }))
+          : undefined,
+        frameAnchor:
+          isH3I2v && resolvedCandidateMedia
+            ? {
+                frameAnchorTarget: "first_frame",
+                anchorCandidateId: validatedInjected.approvedCandidateId!,
+                anchorMediaHashSha256: resolvedCandidateMedia.media.sha256
+              }
+            : null
+      });
+
+      if (
+        validatedInjected.productionInputFingerprint &&
+        validatedInjected.specRevision !== undefined &&
+        validatedInjected.productionInputFingerprint !== recomputedFingerprint
+      ) {
+        throw new CandidateExecutionMismatchError(
+          `Production input fingerprint mismatch: job declared "${validatedInjected.productionInputFingerprint}", recomputed "${recomputedFingerprint}"`
+        );
+      }
+
+      // 11. Mutate workflow
+      const mutatedWorkflow = mutateWorkflow(
+        rawWorkflow,
+        {
+          ...validatedInjected,
+          ...(promptToInject !== undefined ? { prompt: promptToInject } : {}),
+          ...(referenceImageValue !== undefined ? { referenceImage: referenceImageValue } : {}),
+          ...(isRef2v ? { referenceImages: stagedRefPaths } : {})
+        },
+        {
+          id: candidate.key,
+          engine: isRef2v ? "minimax_h3_ref2v" : "minimax_h3_i2v",
+          renderProfileIdentity: {
+            key: candidate.key as unknown as RenderProfileKey,
+            version: candidate.version
+          },
+          baseline: {
+            width: candidate.specification.width,
+            height: candidate.specification.height,
+            frames: candidate.specification.frames,
+            steps: candidate.specification.steps
+          },
+          topology: candidate.topology
+        } as unknown as CertificationProfile
+      );
+
+      // 12. Validate candidate graph topology and negative gates
+      validateCandidateGraph(
+        mutatedWorkflow as Record<string, unknown>,
+        candidate,
+        candidateProvenanceReport
+      );
+
+      if (isRef2v && topology.referenceNode) {
+        validateMiniMaxH3ReferenceToVideoInputSchema(
+          topology.referenceNode.nodeId,
+          (mutatedWorkflow as Record<string, unknown>)[topology.referenceNode.nodeId],
+          mutatedWorkflow as Record<string, unknown>,
+          stagedRefPaths.length
+        );
+      }
+
+      // 13. Construct ProfileRenderIdentity
+      const flattenedModelHashes: Record<string, string> = flattenH3CandidateModelHashes(
+        candidate.specification.modelHashes
+      );
+      const identity: ProfileRenderIdentity = Object.freeze({
+        profileId: candidate.key,
+        renderProfileKey: candidate.key,
+        renderProfileVersion: candidate.version,
+        engine: (isRef2v
+          ? "minimax_h3_ref2v"
+          : "minimax_h3_i2v") as ProfileRenderIdentity["engine"],
+        workflowSha256: recheckedWorkflowHash,
+        modelSha256: flattenedModelHashes,
+        runnerProfile: candidate.specification.runnerSettings.runnerProfile,
+        comfyUiCommit:
+          liveObservation?.comfyUiCoreRevision ??
+          candidateProvenanceReport.observedRuntime?.comfyUiCoreRevision ??
+          "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+      });
+
+      // 14. Execute render
+      const executeInput: ExecuteProfileRenderInput = {
+        renderJobId: job.jobId,
+        sceneId: job.sceneId,
+        workflow: mutatedWorkflow,
+        identity,
+        executionPolicy: selection.executionPolicy,
+        onLeaseAcquired: async () => {
+          const recheckDecision = await eligibilityService.evaluateEligibility({
+            candidateKey,
+            target: buildRuntimeTarget(targetGpuUuid),
+            executionContext: {
+              route: candidate.specification.route,
+              routingMode: candidate.specification.routingMode,
+              width: candidate.specification.width,
+              height: candidate.specification.height,
+              frames: candidate.specification.frames,
+              workflowHash: candidate.specification.workflowHash,
+              modelHashes: flattenH3CandidateModelHashes(candidate.specification.modelHashes),
+              steps: candidate.specification.steps,
+              sampler: candidate.specification.sampler,
+              scheduler: candidate.specification.scheduler,
+              runnerProfile: candidate.specification.runnerSettings.runnerProfile,
+              cfg: candidate.specification.cfg,
+              denoise: candidate.specification.denoise
+            },
+            goldMasterProvenance: {
+              workflowHash: candidateProvenanceReport.workflow.sha256,
+              modelHashes: candidateProvenanceReport.renderProfileProvenance.modelHashes
+            },
+            authorizationGrant: grant,
+            purpose: "staging"
+          });
+          if (!recheckDecision.eligible) {
+            throw new CandidateExecutionMismatchError(
+              `Candidate execution ineligible under GPU lease: ${recheckDecision.blockerCode} - ${recheckDecision.message}`,
+              recheckDecision.blockerCode
+            );
+          }
+        }
+      };
+
+      let renderResult: ExecuteProfileRenderResult;
+      if (deps?.executeProfileRender) {
+        renderResult = await deps.executeProfileRender(executeInput);
+      } else if (deps?.useCase) {
+        renderResult = await deps.useCase.execute(executeInput);
+      } else {
+        throw new RenderJobExecutionError(
+          "No render execution useCase or executeProfileRender provided"
+        );
+      }
+
+      if (renderResult.outputObjectKeys.length === 0) {
+        throw new RenderJobExecutionError(
+          "Candidate staging job requires at least 1 output object key, received 0"
+        );
+      }
+
+      // 15. Read outputs, compute hashes
+      const outputReader = deps?.outputReader ?? new HttpComfyUiOutputReader();
+      const bucket = deliveryBucket;
+
+      const mediaObjects: PutObjectInput[] = await Promise.all(
+        renderResult.outputObjectKeys.map(async (outputKey) => {
+          const output = await outputReader.readOutput(outputKey);
+          const checksumSha256 = await hashBytesPort.hashBytes(output.bytes);
+          const storageObjectKey = buildObjectKeyFn(
+            job.sceneId,
+            job.jobId,
+            outputKey,
+            checksumSha256
+          );
+
+          return {
+            bucket,
+            key: storageObjectKey,
+            body: output.bytes,
+            checksumSha256,
+            ...(output.contentType ? { contentType: output.contentType } : {})
+          };
+        })
+      );
+
+      // 16. Probe primary video output
+      const isAnimatedWebpFn = deps?.isAnimatedWebp ?? isAnimatedWebp;
+      const hasCustomProber = typeof deps?.formatAwareProber === "function";
+
+      let primaryOutput = mediaObjects.find((obj) =>
+        isVideoMediaObject(obj, isAnimatedWebpFn, hasCustomProber)
+      );
+      if (!primaryOutput && hasCustomProber && mediaObjects.length > 0) {
+        primaryOutput = mediaObjects[0];
+      }
+      const jobId = job.jobId ?? (job as { id?: string }).id ?? "";
+      if (!primaryOutput || !primaryOutput.body || !primaryOutput.checksumSha256) {
+        throw new ProductionManifestAssemblyError(
+          `Primary video output not found or missing bytes for media probing in job "${jobId}"`,
+          { jobId }
+        );
+      }
+
+      const bodyBytes =
+        primaryOutput.body instanceof Uint8Array
+          ? primaryOutput.body
+          : Buffer.isBuffer(primaryOutput.body)
+            ? new Uint8Array(primaryOutput.body)
+            : new Uint8Array(Buffer.from(primaryOutput.body));
+
+      let measuredMedia: ManifestMeasuredMedia;
+      if (deps?.formatAwareProber) {
+        measuredMedia = await deps.formatAwareProber({
+          outputKey: primaryOutput.key,
+          checksumSha256: primaryOutput.checksumSha256,
+          bytes: bodyBytes,
+          filename: primaryOutput.key.split("/").pop() ?? primaryOutput.key,
+          ...(primaryOutput.contentType ? { contentType: primaryOutput.contentType } : {})
+        });
+      } else {
+        const tempFileName = `cco-probe-${randomUUID()}.mp4`;
+        const tempFilePath = join(tmpdir(), tempFileName);
+        try {
+          await writeFile(tempFilePath, bodyBytes, { flag: "wx" });
+          const probeMediaFn = deps?.probeMedia ?? probeMedia;
+          const runner = deps?.spawnRunner ?? defaultSpawnRunner;
+          const ffprobe = deps?.ffprobePath ?? options?.ffprobePath ?? "ffprobe";
+
+          const probed = await probeMediaFn({
+            runner,
+            ffprobePath: ffprobe,
+            filePath: tempFilePath,
+            isOutput: true,
+            countFrames: true,
+            checkFrameIntervals: true,
+            errorContext: { jobId, outputKey: primaryOutput.key }
+          });
+
+          const videoStream = probed.videoStream;
+          if (!videoStream || !videoStream.frameCount || videoStream.frameCount <= 0) {
+            throw new ProductionManifestAssemblyError(
+              `Job "${jobId}": Probed video stream in "${primaryOutput.key}" is missing a positive frameCount`,
+              { jobId, outputKey: primaryOutput.key, formatPath: "ffprobe" }
+            );
+          }
+
+          measuredMedia = {
+            outputKey: primaryOutput.key,
+            checksumSha256: primaryOutput.checksumSha256,
+            container: "ffprobe",
+            dimensions: { width: videoStream.width, height: videoStream.height },
+            frameCount: videoStream.frameCount,
+            fps: videoStream.frameRate,
+            durationMs: videoStream.durationMs,
+            formatDurationMs: probed.formatDurationMs,
+            video: { codecName: videoStream.codecName, pixelFormat: videoStream.pixelFormat },
+            measurement: "source_bytes"
+          };
+        } finally {
+          await unlink(tempFilePath).catch(() => {});
+        }
+      }
+
+      // 17. Post-render output validation against candidate specification
+      if (measuredMedia.frameCount !== candidate.specification.frames) {
+        throw new ProductionManifestAssemblyError(
+          `Job "${jobId}": Probed output frame count ${measuredMedia.frameCount} does not match candidate specification frames ${candidate.specification.frames}`,
+          { jobId, outputKey: primaryOutput.key }
+        );
+      }
+      if (
+        measuredMedia.dimensions.width !== candidate.specification.width ||
+        measuredMedia.dimensions.height !== candidate.specification.height
+      ) {
+        throw new ProductionManifestAssemblyError(
+          `Job "${jobId}": Probed output dimensions ${measuredMedia.dimensions.width}x${measuredMedia.dimensions.height} do not match candidate specification dimensions ${candidate.specification.width}x${candidate.specification.height}`,
+          { jobId, outputKey: primaryOutput.key }
+        );
+      }
+      if (
+        measuredMedia.fps === null ||
+        Math.abs(measuredMedia.fps - candidate.specification.fps) > 0.01
+      ) {
+        throw new ProductionManifestAssemblyError(
+          `Job "${jobId}": Probed output fps ${measuredMedia.fps} does not match candidate specification fps ${candidate.specification.fps}`,
+          { jobId, outputKey: primaryOutput.key }
+        );
+      }
+      if (!Number.isFinite(measuredMedia.durationMs) || measuredMedia.durationMs <= 0) {
+        throw new ProductionManifestAssemblyError(
+          `Job "${jobId}": Probed output duration ${measuredMedia.durationMs}ms is invalid`,
+          { jobId, outputKey: primaryOutput.key }
+        );
+      }
+      if (
+        measuredMedia.formatDurationMs !== undefined &&
+        measuredMedia.formatDurationMs !== null &&
+        Math.abs(measuredMedia.formatDurationMs - measuredMedia.durationMs) > 200
+      ) {
+        throw new ProductionManifestAssemblyError(
+          `Job "${jobId}": Probed container format duration ${measuredMedia.formatDurationMs}ms diverges from stream duration ${measuredMedia.durationMs}ms beyond tolerance`,
+          { jobId, outputKey: primaryOutput.key }
+        );
+      }
+      const nominalDurationMs =
+        (candidate.specification.frames / candidate.specification.fps) * 1000;
+      if (Math.abs(measuredMedia.durationMs - nominalDurationMs) > 355) {
+        throw new ProductionManifestAssemblyError(
+          `Job "${jobId}": Probed output duration ${measuredMedia.durationMs}ms diverges from nominal duration ${nominalDurationMs}ms beyond tolerance`,
+          { jobId, outputKey: primaryOutput.key }
+        );
+      }
+
+      // 18. Configured media representing intent/workflow configuration
+      const configuredMedia: ManifestConfiguredMedia = {
+        outputKey: primaryOutput.key,
+        checksumSha256: primaryOutput.checksumSha256,
+        dimensions: {
+          width: candidate.specification.width,
+          height: candidate.specification.height
+        },
+        frameCount: candidate.specification.frames,
+        fps: candidate.specification.fps,
+        source: "render_profile_and_executed_workflow"
+      };
+
+      // 19. Assemble production manifest
+      const assembler = deps?.productionManifestAssembler;
+      if (!assembler) {
+        throw new ProductionManifestAssemblyError(
+          "Production render jobs require a ProductionManifestAssembler"
+        );
+      }
+
+      const profileForAssembler: CertificationProfile = {
+        id: candidate.key,
+        engine: isRef2v ? "minimax_h3_ref2v" : "minimax_h3_i2v",
+        workflowPath: candidateWorkflowPath,
+        workflowRelativePath: candidateProvenanceReport.workflow.relativePath,
+        expectedWorkflowHash: candidate.specification.workflowHash,
+        source: {
+          kind: "validated_host_export",
+          uri: "https://github.com/Comfy-Org/MiniMax-H3",
+          revision:
+            liveObservation?.comfyUiCoreRevision ??
+            candidateProvenanceReport.observedRuntime?.comfyUiCoreRevision ??
+            "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+          license: "ComfyUI"
+        },
+        baseline: {
+          width: candidate.specification.width,
+          height: candidate.specification.height,
+          frames: candidate.specification.frames,
+          steps: candidate.specification.steps,
+          approximateDurationSeconds: candidate.specification.frames / candidate.specification.fps
+        },
+        minFreeDiskGb: candidate.specification.runnerSettings.minFreeDiskGb,
+        runnerProfile: candidate.specification.runnerSettings.runnerProfile,
+        models: [],
+        assertions: [],
+        renderProfileIdentity: {
+          key: candidate.key as unknown as RenderProfileKey,
+          version: candidate.version
+        },
+        topology: candidate.topology
+      };
+
+      const liveProvenance = {
+        generatedAt: now().toISOString(),
+        workflow: {
+          sha256: recheckedWorkflowHash
+        },
+        models: Object.entries(flattenedModelHashes).map(([key, sha256]) => ({
+          key,
+          category: key.toLowerCase().includes("lora") ? "loras" : "checkpoints",
+          sha256
+        })),
+        git: {
+          comfyUiCommit:
+            liveObservation?.comfyUiCoreRevision ??
+            candidateProvenanceReport.observedRuntime?.comfyUiCoreRevision ??
+            "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+          customNodes: []
+        }
+      };
+
+      const assembleInput: AssembleProductionManifestInput = {
+        job,
+        profile: profileForAssembler,
+        renderResult,
+        mediaObjects: Object.freeze(mediaObjects),
+        workflow: mutatedWorkflow,
+        configuredMedia,
+        measuredMedia,
+        liveProvenance,
+        candidateSpecificationDigest: candidate.specificationDigest,
+        grantReference,
+        submittedGraphHash: hashWorkflowFn(JSON.stringify(mutatedWorkflow)),
+        requestedDurationMs: validatedInjected.requestedDurationMs,
+        nominalDurationMs: validatedInjected.nominalDurationMs,
+        ...(validatedInjected.attemptId !== undefined
+          ? { attemptId: validatedInjected.attemptId }
+          : {}),
+        ...(isRef2v
+          ? {
+              routingMode: "reference_directed" as const,
+              shotPlan: {
+                id: validatedInjected.shotPlanId!,
+                specRevision: validatedInjected.specRevision!
+              },
+              executedInstruction,
+              referenceImages: manifestRefImages,
+              submittedWorkflowHash: hashWorkflowFn(JSON.stringify(mutatedWorkflow)),
+              ...(previsReviewEvidence ? { previsReviewEvidence } : {})
+            }
+          : {
+              ...(validatedInjected.approvedCandidateId !== undefined
+                ? { approvedCandidateId: validatedInjected.approvedCandidateId }
+                : {}),
+              routingMode: "frame_anchored" as const,
+              ...(stagedReferenceImage && resolvedCandidateMedia && topology.firstFrame
+                ? {
+                    firstFrame: {
+                      anchorType: "first_frame" as const,
+                      candidateId: validatedInjected.approvedCandidateId,
+                      contentHashSha256: resolvedCandidateMedia.media.sha256,
+                      stagedAs: {
+                        name: stagedReferenceImage.name,
+                        subfolder: stagedReferenceImage.subfolder
+                      },
+                      injectionTarget: {
+                        nodeId: topology.firstFrame.nodeId,
+                        classType: topology.firstFrame.classType,
+                        inputField: topology.firstFrame.inputField
+                      }
+                    }
+                  }
+                : {}),
+              ...(validatedInjected.shotPlanId && validatedInjected.specRevision
+                ? {
+                    shotPlan: {
+                      id: validatedInjected.shotPlanId,
+                      specRevision: validatedInjected.specRevision
+                    }
+                  }
+                : {}),
+              submittedWorkflowHash: hashWorkflowFn(JSON.stringify(mutatedWorkflow))
+            })
+      };
+
+      let manifestPayload: Readonly<Record<string, unknown>>;
+      if (typeof assembler === "function") {
+        const res = await assembler(assembleInput);
+        manifestPayload =
+          res &&
+          typeof res === "object" &&
+          "manifestPayload" in res &&
+          typeof res.manifestPayload === "object" &&
+          res.manifestPayload !== null
+            ? (res.manifestPayload as Readonly<Record<string, unknown>>)
+            : (res as Readonly<Record<string, unknown>>);
+      } else if (typeof assembler.assembleManifest === "function") {
+        const res = await assembler.assembleManifest(assembleInput);
+        manifestPayload =
+          res &&
+          typeof res === "object" &&
+          "manifestPayload" in res &&
+          typeof res.manifestPayload === "object" &&
+          res.manifestPayload !== null
+            ? (res.manifestPayload as Readonly<Record<string, unknown>>)
+            : (res as Readonly<Record<string, unknown>>);
+      } else if (typeof assembler.assemble === "function") {
+        const res = await assembler.assemble(assembleInput);
+        manifestPayload =
+          res &&
+          typeof res === "object" &&
+          "manifestPayload" in res &&
+          typeof res.manifestPayload === "object" &&
+          res.manifestPayload !== null
+            ? (res.manifestPayload as Readonly<Record<string, unknown>>)
+            : (res as Readonly<Record<string, unknown>>);
+      } else {
+        throw new ProductionManifestAssemblyError(
+          "ProductionManifestAssembler does not implement assembleManifest or assemble method"
+        );
+      }
+
+      if (
+        typeof manifestPayload !== "object" ||
+        manifestPayload === null ||
+        Array.isArray(manifestPayload) ||
+        Object.keys(manifestPayload).length === 0
+      ) {
+        throw new ProductionManifestAssemblyError(
+          "Production manifest assembler returned an empty or invalid manifest payload"
+        );
+      }
+
+      executionResult = {
+        mediaObjects: Object.freeze(mediaObjects),
+        manifestPayload: Object.freeze(manifestPayload)
+      };
+    } catch (err) {
+      executionError = err;
+    }
+
+    const cleanupErrors: unknown[] = [];
+    if (stagedReferenceImage && deps?.stageReferenceImage?.cleanup) {
+      try {
+        await deps.stageReferenceImage.cleanup(stagedReferenceImage);
+      } catch (err) {
+        cleanupErrors.push(err);
+      }
+    }
+    for (const staged of stagedRefInputs) {
+      if (deps?.stageReferenceImage?.cleanup) {
+        try {
+          await deps.stageReferenceImage.cleanup(staged);
+        } catch (err) {
+          cleanupErrors.push(err);
+        }
+      }
+    }
+
+    if (executionError) {
+      if (cleanupErrors.length > 0) {
+        throw new AggregateError(
+          [executionError, ...cleanupErrors],
+          "Candidate execution failed and reference image cleanup failed"
+        );
+      }
+      throw executionError;
+    }
+
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(cleanupErrors, "Failed to clean up staged reference images");
+    }
+
+    return executionResult!;
+  };
 
   return async (job: RenderJob): Promise<WorkerRenderOutput> => {
+    const isCandidateKey = (key: string | undefined): key is string =>
+      typeof key === "string" && /^H3_CANDIDATE_[0-9a-f]{32}_V[1-9]\d*$/.test(key);
+
+    const rawInjected = job.injectedPayload as Record<string, unknown> | null;
+    const candidateKey = isCandidateKey(job.workflowTemplate)
+      ? job.workflowTemplate
+      : isCandidateKey(rawInjected?.candidateProfileKey as string)
+        ? (rawInjected?.candidateProfileKey as string)
+        : undefined;
+
+    if (candidateKey) {
+      return executeCandidateRenderJob(job, candidateKey);
+    }
     // 1. Resolve certified profile
     let profile: Awaited<ReturnType<typeof loadCertificationProfileFn>>;
+    let resolvedReleaseSpecification: H3CandidateExecutionSpecification | undefined;
     try {
       profile = await loadCertificationProfileFn(manifestPath, job.workflowTemplate);
     } catch (cause) {
@@ -1371,6 +3550,73 @@ export function createCertifiedRenderJobExecutor(
         } catch {
           throw new MissingCertifiedProfileError(job.workflowTemplate, { cause });
         }
+      } else if (deps?.productionReleaseReader) {
+        const releasedKey = (rawInjected?.releasedProfileKey as string) ?? job.workflowTemplate;
+        const released = await deps.productionReleaseReader.getReleasedProfile(releasedKey);
+        if (released) {
+          const isRef2v =
+            released.specification.route === "ref2v" ||
+            Boolean(
+              released.topology?.referenceImages && released.topology.referenceImages.length > 0
+            );
+          const workflowRelativePath = isRef2v
+            ? "minimax_h3_720p_ref2v_124f_api.json"
+            : "minimax_h3_720p_i2v_124f_api.json";
+          const manifestDir = dirname(manifestPath);
+          const workflowPath = resolve(manifestDir, workflowRelativePath);
+          const rawWorkflow = await readWorkflowFileFn(workflowPath);
+          const computedWorkflowHash = hashWorkflowFn(rawWorkflow);
+          if (computedWorkflowHash !== released.specification.workflowHash) {
+            throw new WorkflowHashMismatchError(
+              `Released profile "${released.key}" workflow hash mismatch: expected "${released.specification.workflowHash}", got "${computedWorkflowHash}"`
+            );
+          }
+          profile = {
+            id: released.key,
+            engine: isRef2v ? "minimax_h3_ref2v" : "minimax_h3_i2v",
+            workflowPath,
+            workflowRelativePath,
+            expectedWorkflowHash: released.specification.workflowHash,
+            source: {
+              kind: "official_upstream",
+              uri: `comfy-release://${released.key}`,
+              revision: `v${released.version}`,
+              license: "proprietary"
+            },
+            baseline: {
+              width: released.specification.width,
+              height: released.specification.height,
+              frames: released.specification.frames,
+              steps: released.specification.steps,
+              approximateDurationSeconds: Math.round(
+                released.specification.frames / released.specification.fps
+              )
+            },
+            minFreeDiskGb: 10,
+            runnerProfile: "director_rtx_4090",
+            models: [],
+            assertions: [],
+            // Preserve the real, hash-versioned released key (and the release's
+            // own version number) rather than casting to a fixed-frame-count
+            // legacy identity: resolveH3ProfileFrameCapabilities, getProfileInjectionTopology,
+            // and the license-component lookup below all need the authentic
+            // released key to resolve this profile's real (possibly >124) frame
+            // count instead of silently falling back to the 124-frame legacy
+            // capability.
+            renderProfileIdentity: {
+              key: released.key as H3ReleaseProfileKey,
+              version: released.version
+            },
+            // getProfileInjectionTopology only recognizes the fixed legacy
+            // profile identities; a dynamically hash-keyed release has no
+            // entry there, so carry the release's own topology through
+            // instead of relying on that lookup to resolve it.
+            topology: released.topology
+          };
+          resolvedReleaseSpecification = released.specification;
+        } else {
+          throw new MissingCertifiedProfileError(job.workflowTemplate, { cause });
+        }
       } else {
         throw new MissingCertifiedProfileError(job.workflowTemplate, { cause });
       }
@@ -1381,15 +3627,31 @@ export function createCertifiedRenderJobExecutor(
       );
     }
 
-    const topology = getProfileInjectionTopology(
-      profile.renderProfileIdentity?.key ?? profile.id ?? profile.engine
-    );
+    const topology =
+      profile.topology ??
+      getProfileInjectionTopology(
+        profile.renderProfileIdentity?.key ?? profile.id ?? profile.engine
+      );
     if (profile.renderProfileIdentity && !topology) {
       throw new MissingProfileTopologyError(profile.id, profile.renderProfileIdentity.key);
     }
 
     // 2. Validate injectedPayload with profile awareness
-    const validatedInjected = validateInjectedPayload(job.injectedPayload, job.jobKind, profile);
+    const renderProfileIdentityKey = profile.renderProfileIdentity.key;
+    const releasedProfileReader = isReleasedProductionProfileKey(renderProfileIdentityKey)
+      ? {
+          getReleasedProfile: (key: string | undefined) =>
+            key === renderProfileIdentityKey
+              ? { key: renderProfileIdentityKey, specification: resolvedReleaseSpecification! }
+              : undefined
+        }
+      : undefined;
+    const validatedInjected = validateInjectedPayload(
+      job.injectedPayload,
+      job.jobKind,
+      profile,
+      releasedProfileReader
+    );
 
     // 3. Approved provenance & live provenance collection & verification
     const approvedProvenance = await readApprovedProvenanceFn(goldMasterProvenancePath);
@@ -1424,14 +3686,43 @@ export function createCertifiedRenderJobExecutor(
       );
     }
 
+    const isRef2v =
+      profile.engine === "minimax_h3_ref2v" ||
+      profile.renderProfileIdentity.key === "MINIMAX_H3_720P_5S_REF2V_V1" ||
+      profile.id === "minimax-h3-720p-124f-ref2v" ||
+      resolvedReleaseSpecification?.route === "ref2v";
+
+    const isH3I2v =
+      profile.engine === "minimax_h3_i2v" ||
+      profile.renderProfileIdentity.key === "MINIMAX_H3_720P_5S_I2V_V1" ||
+      profile.id === "minimax-h3-720p-124f-i2v" ||
+      resolvedReleaseSpecification?.route === "i2v";
+
+    // A released profile's hash-keyed renderProfileIdentity is never itself
+    // registered in the license registry (see enforceLicense in
+    // execute-profile-render.ts) - it executes the same approved base MiniMax
+    // H3 weights, routed by i2v/ref2v, so license checks must resolve against
+    // that base component instead of failing closed on every release key.
+    const licenseComponentId = isReleasedProductionProfileKey(profile.renderProfileIdentity.key)
+      ? isRef2v
+        ? "MINIMAX_H3_720P_5S_REF2V_V1"
+        : "MINIMAX_H3_720P_5S_I2V_V1"
+      : profile.renderProfileIdentity.key;
+    const licenseVersionOrRevision = isReleasedProductionProfileKey(
+      profile.renderProfileIdentity.key
+    )
+      ? "1"
+      : String(profile.renderProfileIdentity.version);
+    const licenseEngine = isRef2v ? "minimax_h3_ref2v" : isH3I2v ? "minimax_h3_i2v" : undefined;
+
     // Authoritative license routing guard evaluated BEFORE any external I/O (S3 reads, ComfyUI staging, GPU lease)
     if (deps?.enforceLicenseRouting) {
       deps.enforceLicenseRouting.enforce({
         requiredComponents: [
           {
-            componentId: profile.renderProfileIdentity.key,
+            componentId: licenseComponentId,
             componentType: "model",
-            versionOrRevision: String(profile.renderProfileIdentity.version)
+            versionOrRevision: licenseVersionOrRevision
           }
         ],
         operation: {
@@ -1449,23 +3740,15 @@ export function createCertifiedRenderJobExecutor(
         renderJobId: job.jobId,
         sceneId: job.sceneId,
         renderProfileKey: profile.renderProfileIdentity.key,
-        renderProfileVersion: profile.renderProfileIdentity.version
+        renderProfileVersion: profile.renderProfileIdentity.version,
+        ...(licenseEngine !== undefined ? { engine: licenseEngine } : {})
       });
     }
-
-    const isRef2v =
-      profile.engine === "minimax_h3_ref2v" ||
-      profile.renderProfileIdentity.key === "MINIMAX_H3_720P_5S_REF2V_V1" ||
-      profile.id === "minimax-h3-720p-124f-ref2v";
-
-    const isH3I2v =
-      profile.engine === "minimax_h3_i2v" ||
-      profile.renderProfileIdentity.key === "MINIMAX_H3_720P_5S_I2V_V1" ||
-      profile.id === "minimax-h3-720p-124f-i2v";
 
     let resolvedCandidateMedia: ResolvedApprovedVisualProductionMedia | undefined;
     let stagedReferenceImage: StagedComfyUiInput | undefined;
     let stagingFilename: string | undefined;
+    let canonicalRefs: readonly CanonicalReferenceEntry[] = [];
 
     const stagedRefInputs: StagedComfyUiInput[] = [];
     const manifestRefImages: ManifestReferenceImageEntry[] = [];
@@ -1648,7 +3931,7 @@ export function createCertifiedRenderJobExecutor(
           }
         }
 
-        const canonicalRefs = canonicalizeReferenceBindings({
+        canonicalRefs = canonicalizeReferenceBindings({
           bindings: rawBindings,
           assetsById,
           expectedClientId,
@@ -2375,7 +4658,7 @@ export function createCertifiedRenderJobExecutor(
           (frameNode.inputs[topology.frameCount.inputField] as number) > 0
         ) {
           configuredFrameCount = frameNode.inputs[topology.frameCount.inputField] as number;
-          configuredFps = LTX_FPS;
+          configuredFps = isH3I2v || isRef2v ? MINIMAX_H3_FPS : LTX_FPS;
         }
       }
       const configuredMedia: ManifestConfiguredMedia = {

@@ -3,6 +3,9 @@ import { sortKeysDeep } from "@cco/shared";
 import {
   getProfileInjectionTopology,
   LTX_FPS,
+  MINIMAX_H3_FPS,
+  type ExecutionRealm,
+  type EvidenceOrigin,
   type ManifestConfiguredMedia,
   type ManifestExecutedInstruction,
   type ManifestFrameAnchorEntry,
@@ -10,6 +13,7 @@ import {
   type ManifestPrevisReviewEvidence,
   type ManifestReferenceImageEntry,
   type ManifestShotPlanReference,
+  type ProfileInjectionTopology,
   type ShotPlanRoutingMode
 } from "@cco/contracts";
 import type { CandidateId, RenderJob, SceneId } from "@cco/domain";
@@ -66,6 +70,7 @@ export interface ManifestSourceProfile {
       }
     | null
     | undefined;
+  readonly topology?: ProfileInjectionTopology | undefined;
 }
 
 export interface ManifestSourceProvenance {
@@ -140,6 +145,13 @@ export interface AssembleManifestInput {
   readonly attemptOrdinal?: number | undefined;
   readonly configuredMedia?: ManifestConfiguredMedia | undefined;
   readonly measuredMedia?: ManifestMeasuredMedia | undefined;
+  readonly candidateSpecificationDigest?: string | undefined;
+  readonly requestedDurationMs?: number | undefined;
+  readonly nominalDurationMs?: number | undefined;
+  readonly submittedGraphHash?: string | undefined;
+  readonly grantReference?: string | undefined;
+  readonly realm?: ExecutionRealm | undefined;
+  readonly evidenceOrigin?: EvidenceOrigin | undefined;
 }
 
 export interface AssembleManifestResult {
@@ -461,7 +473,7 @@ export class AssembleGenerationManifest {
     // 8. Dimensions, frame count, FPS
     const profileKey =
       input.profile.renderProfileIdentity?.key ?? input.profile.id ?? input.profile.engine;
-    const topology = getProfileInjectionTopology(profileKey);
+    const topology = input.profile.topology ?? getProfileInjectionTopology(profileKey);
 
     if (input.profile.renderProfileIdentity && !topology) {
       throw new IncompleteManifestError(
@@ -495,12 +507,17 @@ export class AssembleGenerationManifest {
       const frameNode = input.workflow[topology.frameCount.nodeId] as
         { class_type?: string; inputs?: Record<string, unknown> } | undefined;
       if (
-        frameNode?.class_type === topology.frameCount.classType &&
+        frameNode &&
+        frameNode.class_type === topology.frameCount.classType &&
         typeof frameNode.inputs?.[topology.frameCount.inputField] === "number" &&
-        (frameNode.inputs[topology.frameCount.inputField] as number) > 0
+        (frameNode.inputs?.[topology.frameCount.inputField] as number) > 0
       ) {
         frameCount = frameNode.inputs[topology.frameCount.inputField] as number;
-        fps = LTX_FPS;
+        const isMinimax =
+          input.profile.engine.toLowerCase().includes("minimax") ||
+          input.profile.id.toLowerCase().includes("minimax") ||
+          Boolean(input.profile.renderProfileIdentity?.key?.toLowerCase().includes("minimax"));
+        fps = isMinimax ? MINIMAX_H3_FPS : LTX_FPS;
       } else {
         throw new IncompleteManifestError("frameCount");
       }
@@ -514,7 +531,8 @@ export class AssembleGenerationManifest {
       const promptNode = input.workflow[topology.prompt.nodeId] as
         { class_type?: string; inputs?: Record<string, unknown> } | undefined;
       if (
-        promptNode?.class_type === topology.prompt.classType &&
+        promptNode &&
+        promptNode.class_type === topology.prompt.classType &&
         typeof promptNode.inputs?.[topology.prompt.inputField] === "string"
       ) {
         promptText = promptNode.inputs[topology.prompt.inputField] as string;
@@ -524,7 +542,8 @@ export class AssembleGenerationManifest {
         const negNode = input.workflow[topology.negativePrompt.nodeId] as
           { class_type?: string; inputs?: Record<string, unknown> } | undefined;
         if (
-          negNode?.class_type === topology.negativePrompt.classType &&
+          negNode &&
+          negNode.class_type === topology.negativePrompt.classType &&
           typeof negNode.inputs?.[topology.negativePrompt.inputField] === "string"
         ) {
           negativePromptText = negNode.inputs[topology.negativePrompt.inputField] as string;
@@ -535,7 +554,8 @@ export class AssembleGenerationManifest {
         const audioNode = input.workflow[topology.audioPrompt.nodeId] as
           { class_type?: string; inputs?: Record<string, unknown> } | undefined;
         if (
-          audioNode?.class_type === topology.audioPrompt.classType &&
+          audioNode &&
+          audioNode.class_type === topology.audioPrompt.classType &&
           typeof audioNode.inputs?.[topology.audioPrompt.inputField] === "string"
         ) {
           audioPromptText =
@@ -1028,6 +1048,69 @@ export class AssembleGenerationManifest {
       engine,
       renderProfile,
       renderProfileVersion,
+      ...(input.realm !== undefined ||
+      (typeof (input.job.injectedPayload as Record<string, unknown> | null)?.realm === "object" &&
+        (input.job.injectedPayload as Record<string, unknown>).realm !== null)
+        ? {
+            realm:
+              input.realm ??
+              ((input.job.injectedPayload as Record<string, unknown>).realm as ExecutionRealm)
+          }
+        : {}),
+      ...(input.evidenceOrigin !== undefined ||
+      typeof (input.job.injectedPayload as Record<string, unknown> | null)?.evidenceOrigin ===
+        "string"
+        ? {
+            evidenceOrigin:
+              input.evidenceOrigin ??
+              ((input.job.injectedPayload as Record<string, unknown>)
+                .evidenceOrigin as EvidenceOrigin)
+          }
+        : {}),
+      ...(input.job.executionScope !== undefined
+        ? { executionScope: input.job.executionScope }
+        : {}),
+      ...(input.candidateSpecificationDigest !== undefined
+        ? { candidateSpecificationDigest: input.candidateSpecificationDigest }
+        : typeof (input.job.injectedPayload as Record<string, unknown> | null)
+              ?.candidateSpecificationDigest === "string"
+          ? {
+              candidateSpecificationDigest: (input.job.injectedPayload as Record<string, unknown>)
+                .candidateSpecificationDigest as string
+            }
+          : {}),
+      ...(input.requestedDurationMs !== undefined
+        ? { requestedDurationMs: input.requestedDurationMs }
+        : typeof (input.job.injectedPayload as Record<string, unknown> | null)
+              ?.requestedDurationMs === "number"
+          ? {
+              requestedDurationMs: (input.job.injectedPayload as Record<string, unknown>)
+                .requestedDurationMs as number
+            }
+          : {}),
+      ...(input.nominalDurationMs !== undefined
+        ? { nominalDurationMs: input.nominalDurationMs }
+        : typeof (input.job.injectedPayload as Record<string, unknown> | null)
+              ?.nominalDurationMs === "number"
+          ? {
+              nominalDurationMs: (input.job.injectedPayload as Record<string, unknown>)
+                .nominalDurationMs as number
+            }
+          : {}),
+      ...(input.submittedGraphHash !== undefined
+        ? { submittedGraphHash: input.submittedGraphHash }
+        : input.submittedWorkflowHash !== undefined
+          ? { submittedGraphHash: input.submittedWorkflowHash }
+          : {}),
+      ...(input.grantReference !== undefined
+        ? { grantReference: input.grantReference }
+        : typeof (input.job.injectedPayload as Record<string, unknown> | null)?.grantReference ===
+            "string"
+          ? {
+              grantReference: (input.job.injectedPayload as Record<string, unknown>)
+                .grantReference as string
+            }
+          : {}),
       specRevision: scene.specRevision,
       ...((input.attemptId ??
         (typeof input.job.injectedPayload?.attemptId === "string"

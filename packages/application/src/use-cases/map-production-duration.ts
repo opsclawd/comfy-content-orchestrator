@@ -7,19 +7,25 @@ import {
   MINIMAX_H3_FRAME_GRID_BASE,
   MINIMAX_H3_FRAME_GRID_STEP,
   MINIMAX_H3_FRAME_QUANTIZATION_TOLERANCE_MS,
-  resolveH3ProfileFrameCapabilities
+  resolveH3ProfileFrameCapabilities,
+  type H3ProfileFrameCapability
 } from "@cco/contracts";
+import type { H3CandidateRegistryReader } from "../ports/h3-candidate-ports.js";
+
+export type ProductionDurationMappingReason =
+  | "out_of_range"
+  | "exceeds_quantization_tolerance"
+  | "unknown_profile"
+  | "profile_mismatch"
+  | "invalid_duration"
+  | "invalid_tolerance";
 
 export class UnsupportedProductionDurationError extends Error {
   override readonly name = "UnsupportedProductionDurationError";
   readonly durationMs: number;
-  readonly reason: "out_of_range" | "exceeds_quantization_tolerance";
+  readonly reason: ProductionDurationMappingReason;
 
-  constructor(
-    durationMs: number,
-    reason: "out_of_range" | "exceeds_quantization_tolerance",
-    message?: string
-  ) {
+  constructor(durationMs: number, reason: ProductionDurationMappingReason, message?: string) {
     super(message ?? `Production duration ${durationMs}ms is unsupported: ${reason}`);
     this.durationMs = durationMs;
     this.reason = reason;
@@ -27,8 +33,18 @@ export class UnsupportedProductionDurationError extends Error {
 }
 
 export type DurationMappingResult =
-  | { readonly ok: true; readonly frameCount: number; readonly achievedDurationMs: number }
-  | { readonly ok: false; readonly reason: "out_of_range" | "exceeds_quantization_tolerance" };
+  | {
+      readonly ok: true;
+      readonly frameCount: number;
+      readonly achievedDurationMs: number;
+      readonly requestedDurationMs: number;
+      readonly nominalDurationMs: number;
+      readonly fps: number;
+    }
+  | {
+      readonly ok: false;
+      readonly reason: ProductionDurationMappingReason;
+    };
 
 export function mapDurationMsToLtxFrameCount(
   durationMs: number,
@@ -64,7 +80,14 @@ export function mapDurationMsToLtxFrameCount(
     return { ok: false, reason: "exceeds_quantization_tolerance" };
   }
 
-  return { ok: true, frameCount: quantizedFrames, achievedDurationMs };
+  return {
+    ok: true,
+    frameCount: quantizedFrames,
+    achievedDurationMs,
+    requestedDurationMs: durationMs,
+    nominalDurationMs: achievedDurationMs,
+    fps: LTX_FPS
+  };
 }
 
 /**
@@ -102,47 +125,129 @@ export function snapToRenderableLtxDurationMs(
  */
 export const MINIMAX_H3_CANONICAL_DURATION_MS = 5_000;
 
+export interface MapMiniMaxH3DurationOptions {
+  readonly toleranceMs?: number | undefined;
+  readonly profileKeyOrId?: string | undefined;
+  readonly capability?: H3ProfileFrameCapability | undefined;
+  readonly registryReader?: H3CandidateRegistryReader | undefined;
+}
+
 /**
  * Maps a target duration in milliseconds to a MiniMax-H3 compliant frame count.
  * MiniMax-H3 frames adhere to (frameCount - 5) % 17 === 0 (e.g. 124 frames).
  */
 export function mapDurationMsToMiniMaxH3FrameCount(
   durationMs: number,
-  toleranceMs: number = MINIMAX_H3_FRAME_QUANTIZATION_TOLERANCE_MS,
-  profileKeyOrId?: string | undefined
+  toleranceOrOptions?: number | MapMiniMaxH3DurationOptions | undefined,
+  profileKeyOrId?: string | undefined,
+  registryReader?: H3CandidateRegistryReader | undefined
 ): DurationMappingResult {
+  const options: MapMiniMaxH3DurationOptions =
+    typeof toleranceOrOptions === "object" && toleranceOrOptions !== null
+      ? toleranceOrOptions
+      : {
+          toleranceMs: typeof toleranceOrOptions === "number" ? toleranceOrOptions : undefined,
+          profileKeyOrId,
+          registryReader
+        };
+
   if (!Number.isFinite(durationMs) || durationMs <= 0) {
     return { ok: false, reason: "out_of_range" };
   }
 
-  const targetFrames = (durationMs / 1000) * MINIMAX_H3_FPS;
+  const toleranceMs = options.toleranceMs ?? MINIMAX_H3_FRAME_QUANTIZATION_TOLERANCE_MS;
+  if (!Number.isFinite(toleranceMs) || toleranceMs < 0 || toleranceMs > 60_000) {
+    return { ok: false, reason: "invalid_tolerance" };
+  }
 
-  const nLow = Math.floor((targetFrames - MINIMAX_H3_FRAME_GRID_BASE) / MINIMAX_H3_FRAME_GRID_STEP);
-  const nHigh = nLow + 1;
-  const candidateLow = MINIMAX_H3_FRAME_GRID_STEP * nLow + MINIMAX_H3_FRAME_GRID_BASE;
-  const candidateHigh = MINIMAX_H3_FRAME_GRID_STEP * nHigh + MINIMAX_H3_FRAME_GRID_BASE;
-  const distLow = Math.abs(targetFrames - candidateLow);
-  const distHigh = Math.abs(targetFrames - candidateHigh);
-  const quantizedFrames = distHigh < distLow ? candidateHigh : candidateLow;
+  // Resolve capability
+  let capability: H3ProfileFrameCapability | undefined = options.capability;
+  if (!capability) {
+    const rawProfile = options.profileKeyOrId;
+    if (rawProfile !== undefined && rawProfile.trim().length > 0) {
+      capability = resolveH3ProfileFrameCapabilities(rawProfile.trim(), options.registryReader);
+      if (!capability) {
+        return { ok: false, reason: "out_of_range" };
+      }
+    } else {
+      capability = resolveH3ProfileFrameCapabilities(
+        "MINIMAX_H3_720P_5S_I2V_V1",
+        options.registryReader
+      );
+    }
+  }
 
-  const achievedDurationMs = (quantizedFrames / MINIMAX_H3_FPS) * 1000;
-  const deviationMs = Math.abs(achievedDurationMs - durationMs);
-
-  const effectiveProfile =
-    profileKeyOrId !== undefined && profileKeyOrId.trim().length > 0
-      ? profileKeyOrId.trim()
-      : "MINIMAX_H3_720P_5S_I2V_V1";
-  const capability = resolveH3ProfileFrameCapabilities(effectiveProfile);
-  const isAllowed = capability ? capability.isAllowedFrameCount(quantizedFrames) : false;
-
-  if (!isAllowed) {
+  if (!capability) {
     return { ok: false, reason: "out_of_range" };
   }
-  if (deviationMs > toleranceMs) {
-    return { ok: false, reason: "exceeds_quantization_tolerance" };
+
+  const allowedFrames = capability.allowedFrameCounts;
+  if (!allowedFrames || allowedFrames.length === 0) {
+    return { ok: false, reason: "out_of_range" };
   }
 
-  return { ok: true, frameCount: quantizedFrames, achievedDurationMs };
+  const targetFps = capability.fps || MINIMAX_H3_FPS;
+  const targetFrames = (durationMs / 1000) * targetFps;
+
+  const minFrames = Math.min(...allowedFrames);
+  const maxFrames = Math.max(...allowedFrames);
+
+  // If target frame count is completely outside the profile's allowed min/max range
+  if (
+    targetFrames < minFrames - MINIMAX_H3_FRAME_GRID_STEP / 2 ||
+    targetFrames > maxFrames + MINIMAX_H3_FRAME_GRID_STEP / 2
+  ) {
+    return { ok: false, reason: "out_of_range" };
+  }
+
+  // Validate allowed frames against MiniMax-H3 temporal grid
+  for (const f of allowedFrames) {
+    if (
+      !Number.isSafeInteger(f) ||
+      f <= 0 ||
+      (f - MINIMAX_H3_FRAME_GRID_BASE) % MINIMAX_H3_FRAME_GRID_STEP !== 0
+    ) {
+      return { ok: false, reason: "out_of_range" };
+    }
+  }
+
+  // Find candidate in allowedFrames with closest nominal duration to target durationMs
+  let bestCandidate = allowedFrames[0]!;
+  let bestDist = Math.abs((bestCandidate * 1000) / targetFps - durationMs);
+
+  for (let i = 1; i < allowedFrames.length; i++) {
+    const f = allowedFrames[i]!;
+    const nominalMs = (f * 1000) / targetFps;
+    const dist = Math.abs(nominalMs - durationMs);
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestCandidate = f;
+    } else if (dist === bestDist) {
+      // Tie breaker: bias towards lower frame count
+      if (f < bestCandidate) {
+        bestCandidate = f;
+      }
+    }
+  }
+
+  const nominalDurationMs = (bestCandidate * 1000) / targetFps;
+  const deviationMs = Math.abs(nominalDurationMs - durationMs);
+
+  if (deviationMs > toleranceMs) {
+    return {
+      ok: false,
+      reason: "exceeds_quantization_tolerance"
+    };
+  }
+
+  return {
+    ok: true,
+    frameCount: bestCandidate,
+    achievedDurationMs: nominalDurationMs,
+    requestedDurationMs: durationMs,
+    nominalDurationMs,
+    fps: targetFps
+  };
 }
 
 /**
@@ -189,7 +294,9 @@ export function isMiniMaxEngineOrProfile(engineOrProfile?: string | undefined): 
     normalized === "minimax_h3_720p_5s_ref2v_v1" ||
     normalized === "minimax-h3-720p-5s-ref2v-v1" ||
     normalized === "minimax-h3-720p-124f-ref2v" ||
-    normalized === "minimax-h3-720p@certified-v1"
+    normalized === "minimax-h3-720p@certified-v1" ||
+    normalized.startsWith("h3_candidate_") ||
+    normalized.startsWith("h3_release_")
   );
 }
 
@@ -197,6 +304,8 @@ export interface MapProductionDurationOptions {
   readonly engine?: string | undefined;
   readonly profile?: string | undefined;
   readonly toleranceMs?: number | undefined;
+  readonly capability?: H3ProfileFrameCapability | undefined;
+  readonly registryReader?: H3CandidateRegistryReader | undefined;
 }
 
 /**
@@ -206,12 +315,17 @@ export function mapProductionDuration(
   durationMs: number,
   options?: MapProductionDurationOptions
 ): DurationMappingResult {
-  if (isMiniMaxEngineOrProfile(options?.engine) || isMiniMaxEngineOrProfile(options?.profile)) {
-    return mapDurationMsToMiniMaxH3FrameCount(
-      durationMs,
-      options?.toleranceMs,
-      options?.profile ?? options?.engine
-    );
+  if (
+    options?.capability ||
+    isMiniMaxEngineOrProfile(options?.engine) ||
+    isMiniMaxEngineOrProfile(options?.profile)
+  ) {
+    return mapDurationMsToMiniMaxH3FrameCount(durationMs, {
+      toleranceMs: options?.toleranceMs,
+      profileKeyOrId: options?.profile ?? options?.engine,
+      capability: options?.capability,
+      registryReader: options?.registryReader
+    });
   }
   return mapDurationMsToLtxFrameCount(durationMs, options?.toleranceMs);
 }

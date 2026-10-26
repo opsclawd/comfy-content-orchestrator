@@ -86,6 +86,87 @@ Once all 21 coverage requirements have a recorded verdict and the final delivery
 watched/downloaded by the director, fill in the "Overall verdict" section of both templates
 with your name and a timestamp.
 
+## 6. Variable-Duration Candidate Staging Procedure (#425)
+
+For testing and qualifying candidate variable-duration MiniMax-H3 profiles (e.g., 8s / 192f or 10s / 243f):
+
+### Prerequisites
+1. Signed #445 decision matrix (`H3CapabilityMatrixEnvelope`) containing speed, quality, and overall `pass` verdicts for the candidate specification.
+2. Signed operator authorization grant (`H3CandidateAuthorizationGrant`) binding:
+   - Target candidate key and specification digest
+   - Executing host name and GPU UUID
+   - Valid temporal window (`[issuedAt, expiresAt]`)
+   - Signature verifiable via deployment operator public key store
+3. Staging-enabled render worker running with `WORKER_ALLOWED_EXECUTION_SCOPES=staging,production`.
+
+### Staging Dispatch Command
+
+```bash
+pnpm --filter render-worker stage -- \
+  --scene-id "<scene-uuid>" \
+  --candidate-profile-key "<candidate-profile-key>" \
+  --grant-path "/path/to/signed-grant.json" \
+  --database-url "$DATABASE_URL"
+```
+
+### Safety and Isolation Invariants
+- **General Production Disabled**: Candidate profiles cannot be dispatched through ordinary production queues. The worker preflight gate and queue claim policies strictly reject candidate jobs outside `executionScope: "staging"`. General production release remains gated by #428.
+- **Fail-Closed Routing Checks**:
+  - Ref2V shot plans cannot inherit I2V candidate eligibility.
+  - Known creative failures (such as #423's 362f unoptimized I2V variant) reject before GPU dispatch.
+  - Workflows attempting silent fallback to dense/standard attention or mismatched Turbo LoRAs reject with `CandidateExecutionMismatchError`.
+- **Post-Render CFR & Duration Validation**: Probed video frame rate must be constant (CFR). Measured duration must not deviate from nominal duration by more than 355ms.
+
+### Staging Denial Diagnostics
+
+When a staging render fails preflight or execution, review the error message:
+
+| Error Message / Blocker | Cause | Resolution |
+|---|---|---|
+| `Detected silent dense-attention fallback` | Candidate requires optimized attention (e.g. `flash_attn`), but workflow node configured `standard` or `dense` attention. | Set workflow node `attention_backend` to match candidate specification and ensure `fail_on_fallback` is enabled. |
+| `Unknown effective attention backend: ...` | Python environment does not have the required attention kernel installed or importable. | Run check script and verify venv has the pinned custom-node packages. |
+| `Ref2VA Turbo LoRA is strictly restricted to Ref2V route` | Workflow wired Ref2VA LoRA on an I2V candidate profile. | Use `minimax_h3_fl2va_turbo_8step.safetensors` for I2V or `"none"`. |
+| `Attention package version mismatch` | Environment package version does not match candidate specification. | Align package version with `.minimax-h3-version` / candidate spec. |
+| `Process continuity check failed: start-time ticks changed` | ComfyUI process restarted or died during preflight evaluation. | Verify ComfyUI daemon stability and restart staging run. |
+| `Candidate authorization denied: OPERATOR_KEY_REVOKED` | Staging grant was signed by a key that is revoked or not in the trust store. | Issue a new grant signed by an authorized operator key. |
+| `Probed output duration ... diverges from nominal duration beyond tolerance` | ComfyUI output length diverged from configured frame count. | Check scheduler step count, denoise, and latent frame count inputs. |
+
+### Staging Rollback & State Recovery Procedure
+
+If an operator aborts a candidate staging run or encounters fatal execution errors:
+
+1. **Revert Worker Allowed Scopes**:
+   Ensure staging scope is revoked from worker runtime:
+   ```bash
+   export WORKER_ALLOWED_EXECUTION_SCOPES=production
+   ```
+2. **Quarantine or Cancel Pending Staging Jobs**:
+   ```sql
+   UPDATE render_jobs
+   SET status = 'failed', error_trace = 'Aborted by operator rollback'
+   WHERE execution_scope = 'staging' AND status IN ('queued', 'rendering');
+   ```
+3. **Recover Scene Status**:
+   If the scene status moved to `queued`, revert it back to `approved` to allow ordinary production dispatch:
+   ```sql
+   UPDATE scenes
+   SET status = 'approved'
+   WHERE id = '<scene-uuid>' AND status = 'queued';
+   ```
+4. **Clean Up Temporary Staging Directory**:
+   Remove any staged candidate reference frames:
+   ```bash
+   rm -f "$CCO_COMFYUI_DIR/input/stage_"*
+   ```
+
+### Variable-Duration Release Gate (#428)
+
+Issue #427 establishes automated CI simulation and software regression coverage across duration allocation, staging acceptance dispatch, worker assembly, and accepted reel readback (`docs/h3-variable-duration-ci-coverage.md`).
+
+However, **CI simulation is not GPU certification**:
+- The public UI and production release reader (`ProductionReleaseCapabilityReader`) strictly withhold advertising variable-duration candidate lengths (e.g. 243f, 362f) from general production until the operator physical campaign is executed on the RTX 4090 host.
+- Only upon successful execution of this runbook with zero unmitigated visual defects (blackouts, limb corruption) may the operator promote candidate profiles into the production release catalog under issue #428.
+
 ## Open baseline questions
 
 (Populate this section only if the physical campaign surfaces a defect in H3 dispatch,

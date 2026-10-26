@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, normalize, relative, resolve, sep } from "node:path";
+import type { ProfileInjectionTopology, H3ReleaseProfileKey } from "@cco/contracts";
 import { VALID_MODEL_CATEGORIES, type ModelCategory, type ModelFileSpec } from "./hasher.js";
 
 const VALID_MODEL_CATEGORY_SET: ReadonlySet<string> = new Set(VALID_MODEL_CATEGORIES);
@@ -46,9 +47,16 @@ export interface CertificationProfile {
       | "FLUX_SCHNELL_STORYBOARD_V1"
       | "LTX_25_720P_5S_I2V_V1"
       | "MINIMAX_H3_720P_5S_I2V_V1"
-      | "MINIMAX_H3_720P_5S_REF2V_V1";
-    version: 1;
+      | "MINIMAX_H3_720P_5S_REF2V_V1"
+      // Released H3 profiles are dynamically hash-keyed and versioned (see
+      // computeH3ReleaseKey in @cco/contracts); unlike the fixed manifest-defined
+      // identities above, these are never parsed from an on-disk manifest file by
+      // validateRenderProfileIdentity below, only constructed at runtime in
+      // render-job-executor.ts when dispatching a certified release bundle.
+      | H3ReleaseProfileKey;
+    version: number;
   }> | null;
+  readonly topology?: ProfileInjectionTopology | undefined;
 }
 
 function deepFreeze<T>(obj: T): Readonly<T> {

@@ -146,6 +146,26 @@ Research acceptance (#445) is distinct from authorization to execute. We disting
 - Verification uses cryptographic detached signatures against a deployment-owned operator trust key store.
 - **Fail-Closed Authorization Rule:** Caller-supplied authorization claims or fingerprints are never accepted as a substitute for the authorization port. If the authorization port denies or is absent, candidate execution is denied.
 
+#### Execution Scope and Queue Isolation
+- **Durable `executionScope` Enforcement:** Render jobs carry an explicit `executionScope` (`"production" | "staging"`). Staging admission binds `executionScope: "staging"` durably on the `RenderJob` entity.
+- **Server-Side Queue Authorization:** On `POST /api/jobs/claim`, the Control API enforces worker authorization policies: workers not permitted to claim `staging` jobs will receive 403 or only production jobs. Staging jobs are never dispatched to unauthorized workers.
+- **Worker Preflight Gate:** Before GPU execution, the render worker verifies that candidate profiles are only executed when `job.executionScope === "staging"`. Attempting to execute a candidate on an ordinary production queue immediately throws `CandidateProfileProductionDisabledError`.
+- **Generation Manifest & Provenance Preservation:**
+  - Manifests record candidate profile key, version, and `candidateSpecificationDigest`.
+  - Manifests preserve distinct `requestedDurationMs`, `nominalDurationMs`, and measured media facts probed post-render.
+  - Candidate runs record authentic `liveProvenance` containing host, GPU, ComfyUI revision, and process start time ticks, without authoring synthetic operator certification records.
+- **Staging Admission Lifecycle Invariants:**
+  - Admission requires the target scene to be in `approved` or `failed` (recovery) status and verifies the scene is not attached to an active ordinary production run.
+  - Successfully staging a candidate render records a production attempt in the ledger and advances scene status to `queued`.
+  - Staging requests are canonically bound by `requestId` for safe, deterministic idempotency.
+- **Staging Runtime Policy & Rollback Boundary:**
+  - Workers default to `WORKER_ALLOWED_EXECUTION_SCOPES=production`; only dedicated staging workers export `staging`.
+  - If a staging evaluation fails or must be aborted, operators revert the worker's execution scopes, mark queued staging jobs as cancelled/failed, and restore the scene to `approved` status.
+  - Fail-closed denial diagnostics provide exact visibility into why a candidate was rejected (e.g. silent dense-attention fallback, missing LoRA, unknown attention backend, or process continuity breach).
+- **Rigid #428 Production Release Fence:**
+  - Under no circumstances may candidate profiles be promoted to ordinary production queues within this architecture. Ordinary production queues reject all candidate keys unconditionally before GPU allocation.
+  - General production enablement remains strictly gated by #428 physical host certification and signed release evidence. No software bypass or operator staging grant can override this production boundary.
+
 ---
 
 ### 5. Profile-Scoped Frame Validity
@@ -172,6 +192,25 @@ Candidate eligibility evaluation does not rely on declared configuration or comp
 4. Git revision and custom-node source hashes verified against live files.
 5. Installed package versions verified against live runtime environment.
 6. **Anti-Drift Verification:** Process PID and process start time ticks are re-observed at the completion of verification. If the target process restarted or drifted during checks, eligibility is denied.
+
+### 7. Governance, Operational Handoff, Anti-Rollback, and Realm Isolation (#426)
+
+1. **Governance & Physical Host Boundary:**
+   - Autonomous agents must never author physical measurements, benchmarks, or certification artifacts in `certification/`, `baseline/`, or `config/render-profiles/`.
+   - Production capability release is gated by authentic operator #428 sign-off. Positive #445 speed and continuity decisions qualify candidate profiles for operator staging exploration only, not public production planning.
+
+2. **Strict Staging Authorization Grant Verification:**
+   - Staging authorization grants require conjunctive verification (AND logic): exact `authorizationId` match, exact target host (`targetHostname` or `targetGpuUuid`) match, unexpired validity (`expiresAt > now`), and authentic cryptographic signatures.
+   - Cross-target grant reuse, wildcard matching, or synthetic signatures are rejected fail-closed.
+
+3. **Monotonic Deployment Enablement & Anti-Rollback:**
+   - Deployed release bundles carry a monotonic generation counter and signed enablement digest.
+   - The Control API enforces non-decreasing generation verification via `DeploymentEnablementStatePort`. Bundles presenting generation numbers lower than the accepted active generation are rejected as rollbacks.
+   - Active profiles must appear in `enabledRecordDigests` and not appear in `disabledIdentities`.
+
+4. **Execution Realm & Evidence Provenance Isolation:**
+   - The platform strictly partitions execution realm (`deployed` vs `isolated_test`) and evidence origin (`live_execution` vs `simulated_test`).
+   - Production delivery assembly queues strictly admit live execution artifacts from deployed realms; simulated or test-staged artifacts cannot be admitted into production delivery reels.
 
 ---
 

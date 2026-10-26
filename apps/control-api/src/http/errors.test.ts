@@ -40,6 +40,7 @@ import {
   ReferenceAssetNotFoundError,
   type SceneId
 } from "@cco/domain";
+import { OperatorAcceptanceIdempotencyConflictError } from "@cco/contracts";
 import {
   ClientAuthenticationRequiredError,
   ClientForbiddenError,
@@ -255,6 +256,17 @@ describe("formatReviewError", () => {
         code: "IDEMPOTENCY_CONFLICT",
         message: expect.any(String),
         details: { actionId }
+      }
+    });
+  });
+
+  it("maps OperatorAcceptanceIdempotencyConflictError to 409 IDEMPOTENCY_CONFLICT", () => {
+    const actionId = "acceptance-action-conflict-123";
+    expect(formatReviewError(new OperatorAcceptanceIdempotencyConflictError(actionId))).toEqual({
+      statusCode: 409,
+      body: {
+        code: "IDEMPOTENCY_CONFLICT",
+        message: expect.any(String)
       }
     });
   });

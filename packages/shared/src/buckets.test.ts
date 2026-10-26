@@ -14,7 +14,8 @@ describe("bucket class constants and retention policies", () => {
       "godzspeed-review",
       "godzspeed-reference",
       "godzspeed-delivery",
-      "godzspeed-evidence"
+      "godzspeed-evidence",
+      "godzspeed-candidates"
     ]);
 
     expect(BUCKETS.TEMP).toBe("godzspeed-temp");
@@ -22,6 +23,7 @@ describe("bucket class constants and retention policies", () => {
     expect(BUCKETS.REFERENCE).toBe("godzspeed-reference");
     expect(BUCKETS.DELIVERY).toBe("godzspeed-delivery");
     expect(BUCKETS.EVIDENCE).toBe("godzspeed-evidence");
+    expect(BUCKETS.CANDIDATES).toBe("godzspeed-candidates");
   });
 
   it("type checks bucket names against union", () => {
@@ -90,5 +92,19 @@ describe("bucket class constants and retention policies", () => {
 
     const evidenceLifecycle = BUCKET_LIFECYCLE_DEFINITIONS["godzspeed-evidence"];
     expect(evidenceLifecycle).toBeUndefined();
+  });
+
+  it("defines 30-day automated expiry for godzspeed-candidates", () => {
+    const candidatesPolicy = BUCKET_RETENTION_POLICIES["godzspeed-candidates"];
+    expect(candidatesPolicy).toBeDefined();
+    expect(candidatesPolicy.bucket).toBe("godzspeed-candidates");
+    expect(candidatesPolicy.defaultRetentionDays).toBe(30);
+    expect(candidatesPolicy.isAutomatedExpiry).toBe(true);
+
+    const candidatesLifecycle = BUCKET_LIFECYCLE_DEFINITIONS["godzspeed-candidates"];
+    expect(candidatesLifecycle).toBeDefined();
+    expect(candidatesLifecycle?.expirationDays).toBe(30);
+    expect(candidatesLifecycle?.status).toBe("Enabled");
+    expect(candidatesLifecycle?.ruleId).toBe("godzspeed-candidates-retention-30d");
   });
 });

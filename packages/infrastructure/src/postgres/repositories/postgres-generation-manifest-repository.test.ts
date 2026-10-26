@@ -247,5 +247,47 @@ describe("PostgresGenerationManifestRepository", () => {
         "malformed checksumSha256"
       );
     });
+
+    it("does not default realm or evidenceOrigin when missing in payload", async () => {
+      const pool = fakePool([
+        {
+          manifest_id: "manifest-no-realm",
+          manifest_payload: {
+            outputs: [{ bucket: "b", key: "k", checksumSha256: validSha }]
+          }
+        }
+      ]);
+      const repo = new PostgresGenerationManifestRepository(pool as never);
+      const res = await repo.findVideoStemSourceByJobId("job-no-realm");
+      expect(res).toBeDefined();
+      expect(res!.realm).toBeUndefined();
+      expect(res!.evidenceOrigin).toBeUndefined();
+    });
+
+    it("preserves explicit realm and evidenceOrigin when present in payload", async () => {
+      const pool = fakePool([
+        {
+          manifest_id: "manifest-with-realm",
+          manifest_payload: {
+            outputs: [{ bucket: "b", key: "k", checksumSha256: validSha }],
+            realm: {
+              kind: "isolated_test",
+              testRealmId: "test-realm-1",
+              isolationDescriptorDigest: "sha256-abc"
+            },
+            evidenceOrigin: "simulated_test"
+          }
+        }
+      ]);
+      const repo = new PostgresGenerationManifestRepository(pool as never);
+      const res = await repo.findVideoStemSourceByJobId("job-with-realm");
+      expect(res).toBeDefined();
+      expect(res!.realm).toEqual({
+        kind: "isolated_test",
+        testRealmId: "test-realm-1",
+        isolationDescriptorDigest: "sha256-abc"
+      });
+      expect(res!.evidenceOrigin).toBe("simulated_test");
+    });
   });
 });

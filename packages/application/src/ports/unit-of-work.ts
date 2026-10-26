@@ -12,6 +12,13 @@ import type { ProductEvidenceRepositoryPort } from "./product-evidence-repositor
 import type { EvidenceAssetRepositoryPort } from "./evidence-asset-repository.js";
 import type { CoaReportRepositoryPort } from "./coa-report-repository.js";
 import type { ProductClaimRepositoryPort } from "./product-claim-repository.js";
+import type { CampaignDurationPlanRepository } from "./campaign-duration-plan-repository.js";
+import type {
+  AcceptanceAssemblyJobQueuePort,
+  AcceptanceAssemblyManifestRepository,
+  OperatorAcceptanceRunRepository
+} from "./operator-acceptance-ports.js";
+import type { DeploymentEnablementStatePort } from "./production-release-ports.js";
 import type { ReviewEventStore } from "./review-event-store.js";
 import type { SceneRepository } from "./scene-repository.js";
 import type { ShotPlanRepository } from "./shot-plan-repository.js";
@@ -35,6 +42,11 @@ export interface UnitOfWorkContext {
   readonly evidenceAsset?: EvidenceAssetRepositoryPort | undefined;
   readonly coaReports?: CoaReportRepositoryPort | undefined;
   readonly productClaims?: ProductClaimRepositoryPort | undefined;
+  readonly durationPlans?: CampaignDurationPlanRepository | undefined;
+  readonly operatorAcceptanceRuns?: OperatorAcceptanceRunRepository | undefined;
+  readonly acceptanceAssemblyJobs?: AcceptanceAssemblyJobQueuePort | undefined;
+  readonly acceptanceAssemblyManifests?: AcceptanceAssemblyManifestRepository | undefined;
+  readonly deploymentEnablement?: DeploymentEnablementStatePort | undefined;
 }
 
 export interface UnitOfWork {

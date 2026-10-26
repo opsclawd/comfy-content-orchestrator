@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { EvidenceStoragePolicyConfig } from "@cco/application";
+import { EXECUTION_SCOPES, type ExecutionScope } from "@cco/domain";
 import type { ReviewerAuthorizationGrants } from "@cco/infrastructure";
 import {
   parseReviewerIdentityConfig,
@@ -37,9 +38,17 @@ export interface ControlApiStorageTelemetryConfig {
   readonly path: string;
 }
 
+export interface WorkerDispatchPolicyEntry {
+  readonly scopes: readonly ExecutionScope[];
+  readonly stagingToken?: string | undefined;
+}
+
+export type WorkerDispatchPolicy = Readonly<Record<string, WorkerDispatchPolicyEntry>>;
+
 export interface ControlApiJobDispatchConfig {
   readonly leaseDurationMs: number;
   readonly heartbeatIntervalMs: number;
+  readonly workerDispatchPolicy?: WorkerDispatchPolicy;
 }
 
 export interface ControlApiPlanningConfig {
@@ -70,6 +79,12 @@ export interface ControlApiRuntimeConfig {
   readonly clientSessionSecret?: string;
   readonly evidenceStoragePolicy?: EvidenceStoragePolicyConfig;
   readonly reviewerAuthorizationGrants?: ReviewerAuthorizationGrants;
+  readonly productionReleaseBundlePath?: string;
+  readonly stagingBundlePath?: string;
+  readonly h3CandidateProfilesPath?: string;
+  readonly h3CapabilityMatrixPath?: string;
+  readonly h3TrustedPublicKeysPath?: string;
+  readonly h3EvidenceDirectory?: string;
 }
 
 export class ControlApiConfigError extends Error {
@@ -281,6 +296,55 @@ function validateReviewerGrants(value: unknown): ReviewerAuthorizationGrants {
     }
   }
   return value as ReviewerAuthorizationGrants;
+}
+
+function validateWorkerDispatchPolicy(value: unknown): WorkerDispatchPolicy {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ControlApiConfigError("Invalid WORKER_DISPATCH_POLICY_JSON: expected an object");
+  }
+  const policy: Record<string, WorkerDispatchPolicyEntry> = {};
+  for (const [workerId, rawEntry] of Object.entries(value)) {
+    if (workerId.trim() === "") {
+      throw new ControlApiConfigError(
+        "Invalid WORKER_DISPATCH_POLICY_JSON: workerId keys must be non-empty"
+      );
+    }
+    if (typeof rawEntry !== "object" || rawEntry === null || Array.isArray(rawEntry)) {
+      throw new ControlApiConfigError(
+        `Invalid WORKER_DISPATCH_POLICY_JSON: malformed entry for worker "${workerId}"`
+      );
+    }
+    const entry = rawEntry as Record<string, unknown>;
+    if (
+      !Array.isArray(entry.scopes) ||
+      entry.scopes.length === 0 ||
+      entry.scopes.some((scope) => !EXECUTION_SCOPES.includes(scope as ExecutionScope))
+    ) {
+      throw new ControlApiConfigError(
+        `Invalid WORKER_DISPATCH_POLICY_JSON: worker "${workerId}" must declare a non-empty "scopes" array using only valid execution scopes (${EXECUTION_SCOPES.join(", ")})`
+      );
+    }
+    const scopes = entry.scopes as readonly ExecutionScope[];
+    const needsStagingToken = scopes.some((scope) => scope !== "production");
+    if (entry.stagingToken !== undefined) {
+      if (typeof entry.stagingToken !== "string" || entry.stagingToken.trim() === "") {
+        throw new ControlApiConfigError(
+          `Invalid WORKER_DISPATCH_POLICY_JSON: worker "${workerId}" has a malformed "stagingToken"`
+        );
+      }
+    } else if (needsStagingToken) {
+      throw new ControlApiConfigError(
+        `Invalid WORKER_DISPATCH_POLICY_JSON: worker "${workerId}" declares non-production scopes and must set "stagingToken"`
+      );
+    }
+    policy[workerId] = {
+      scopes,
+      ...(entry.stagingToken !== undefined
+        ? { stagingToken: (entry.stagingToken as string).trim() }
+        : {})
+    };
+  }
+  return policy;
 }
 
 function parseHttpLogLevel(val: unknown): ControlApiHttpLogLevel {
@@ -589,6 +653,49 @@ export function parseControlApiRuntimeConfig(
     }
   }
 
+  let workerDispatchPolicy: WorkerDispatchPolicy | undefined;
+  if (
+    env.WORKER_DISPATCH_POLICY_JSON !== undefined &&
+    env.WORKER_DISPATCH_POLICY_JSON.trim() !== ""
+  ) {
+    try {
+      workerDispatchPolicy = validateWorkerDispatchPolicy(
+        JSON.parse(env.WORKER_DISPATCH_POLICY_JSON)
+      );
+    } catch (error) {
+      if (error instanceof ControlApiConfigError) throw error;
+      throw new ControlApiConfigError("Invalid JSON in variable: WORKER_DISPATCH_POLICY_JSON");
+    }
+  }
+
+  const productionReleaseBundlePath = parseOptionalString(
+    env.CCO_H3_PRODUCTION_RELEASE_BUNDLE_PATH,
+    "CCO_H3_PRODUCTION_RELEASE_BUNDLE_PATH"
+  );
+  const stagingBundlePath = parseOptionalString(
+    env.CCO_H3_STAGING_BUNDLE_PATH,
+    "CCO_H3_STAGING_BUNDLE_PATH"
+  );
+  // Same env var names used by apps/render-worker/src/cli/stage-candidate.ts so a single
+  // deployment-owned trust configuration covers both the control-api composition root and
+  // the render-worker CLI path.
+  const h3CandidateProfilesPath = parseOptionalString(
+    env.H3_CANDIDATE_PROFILES_FILE,
+    "H3_CANDIDATE_PROFILES_FILE"
+  );
+  const h3CapabilityMatrixPath = parseOptionalString(
+    env.H3_CAPABILITY_MATRIX_FILE,
+    "H3_CAPABILITY_MATRIX_FILE"
+  );
+  const h3TrustedPublicKeysPath = parseOptionalString(
+    env.H3_TRUSTED_KEYS_FILE,
+    "H3_TRUSTED_KEYS_FILE"
+  );
+  const h3EvidenceDirectory = parseOptionalString(
+    env.H3_EVIDENCE_DIRECTORY,
+    "H3_EVIDENCE_DIRECTORY"
+  );
+
   return {
     database: {
       url: databaseUrl
@@ -616,12 +723,19 @@ export function parseControlApiRuntimeConfig(
     },
     jobDispatch: {
       leaseDurationMs,
-      heartbeatIntervalMs
+      heartbeatIntervalMs,
+      ...(workerDispatchPolicy !== undefined ? { workerDispatchPolicy } : {})
     },
     ...(planningProviders !== undefined ? { planningProviders } : {}),
     ...(rankingProviders !== undefined ? { rankingProviders } : {}),
     ...(clientSessionSecret !== undefined ? { clientSessionSecret } : {}),
     ...(evidenceStoragePolicy !== undefined ? { evidenceStoragePolicy } : {}),
-    ...(reviewerAuthorizationGrants !== undefined ? { reviewerAuthorizationGrants } : {})
+    ...(reviewerAuthorizationGrants !== undefined ? { reviewerAuthorizationGrants } : {}),
+    ...(productionReleaseBundlePath !== undefined ? { productionReleaseBundlePath } : {}),
+    ...(stagingBundlePath !== undefined ? { stagingBundlePath } : {}),
+    ...(h3CandidateProfilesPath !== undefined ? { h3CandidateProfilesPath } : {}),
+    ...(h3CapabilityMatrixPath !== undefined ? { h3CapabilityMatrixPath } : {}),
+    ...(h3TrustedPublicKeysPath !== undefined ? { h3TrustedPublicKeysPath } : {}),
+    ...(h3EvidenceDirectory !== undefined ? { h3EvidenceDirectory } : {})
   };
 }

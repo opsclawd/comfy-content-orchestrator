@@ -302,4 +302,119 @@ describe("mapDurationMsToLtxFrameCount", () => {
       expect(snapToRenderableProductionDurationMs(2000, { engine: "ltx_25_i2v" })).toBe(4000);
     });
   });
+
+  describe("Variable-duration candidate mapping (#425)", () => {
+    const candidate192Capability = {
+      profileKey: "H3_CANDIDATE_192_V1",
+      route: "i2v" as const,
+      routingMode: "frame_anchored" as const,
+      width: 1344,
+      height: 768,
+      fps: 24,
+      allowedFrameCounts: [192],
+      isAllowedFrameCount: (f: number) => f === 192
+    };
+
+    const candidate243Capability = {
+      profileKey: "H3_CANDIDATE_243_V1",
+      route: "ref2v" as const,
+      routingMode: "reference_directed" as const,
+      width: 1344,
+      height: 768,
+      fps: 24,
+      allowedFrameCounts: [243],
+      isAllowedFrameCount: (f: number) => f === 243
+    };
+
+    const candidate362Capability = {
+      profileKey: "H3_CANDIDATE_362_V1",
+      route: "i2v" as const,
+      routingMode: "frame_anchored" as const,
+      width: 1344,
+      height: 768,
+      fps: 24,
+      allowedFrameCounts: [362],
+      isAllowedFrameCount: (f: number) => f === 362
+    };
+
+    it("maps 8000ms (8s) to 192 frames with eligible 192f capability", () => {
+      const res = mapDurationMsToMiniMaxH3FrameCount(8000, { capability: candidate192Capability });
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        expect(res.frameCount).toBe(192);
+        expect(res.achievedDurationMs).toBe(8000);
+        expect(res.requestedDurationMs).toBe(8000);
+        expect(res.nominalDurationMs).toBe(8000);
+        expect(res.fps).toBe(24);
+      }
+    });
+
+    it("maps 10000ms (10s) to 243 frames with eligible 243f capability within tolerance", () => {
+      const res = mapDurationMsToMiniMaxH3FrameCount(10000, { capability: candidate243Capability });
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        expect(res.frameCount).toBe(243);
+        expect(res.achievedDurationMs).toBe(10125);
+        expect(res.requestedDurationMs).toBe(10000);
+        expect(res.nominalDurationMs).toBe(10125);
+        expect(res.fps).toBe(24);
+      }
+    });
+
+    it("maps 15000ms to 362 frames with eligible 362f capability within tolerance", () => {
+      const res = mapDurationMsToMiniMaxH3FrameCount(15000, { capability: candidate362Capability });
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        expect(res.frameCount).toBe(362);
+        expect(res.achievedDurationMs).toBeCloseTo(15083.33, 1);
+      }
+    });
+
+    it("never falls back to 124 frames on longer requested duration (8000ms) with legacy profile", () => {
+      const res = mapDurationMsToMiniMaxH3FrameCount(8000);
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.reason).toBe("out_of_range");
+      }
+    });
+
+    it("never falls back to 124 frames on 10000ms or 15000ms with legacy profile", () => {
+      expect(mapDurationMsToMiniMaxH3FrameCount(10000).ok).toBe(false);
+      expect(mapDurationMsToMiniMaxH3FrameCount(15000).ok).toBe(false);
+    });
+
+    it("rejects off-grid candidate frames", () => {
+      const offGridCapability = {
+        profileKey: "H3_CANDIDATE_OFFGRID",
+        route: "i2v" as const,
+        routingMode: "frame_anchored" as const,
+        width: 1344,
+        height: 768,
+        fps: 24,
+        allowedFrameCounts: [240], // (240 - 5) % 17 !== 0
+        isAllowedFrameCount: (f: number) => f === 240
+      };
+      const res = mapDurationMsToMiniMaxH3FrameCount(10000, { capability: offGridCapability });
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.reason).toBe("out_of_range");
+      }
+    });
+
+    it("rejects invalid tolerance parameters", () => {
+      const resNeg = mapDurationMsToMiniMaxH3FrameCount(8000, { toleranceMs: -5 });
+      expect(resNeg.ok).toBe(false);
+      if (!resNeg.ok) {
+        expect(resNeg.reason).toBe("invalid_tolerance");
+      }
+
+      const resInf = mapDurationMsToMiniMaxH3FrameCount(8000, {
+        toleranceMs: Number.POSITIVE_INFINITY
+      });
+      expect(resInf.ok).toBe(false);
+      if (!resInf.ok) {
+        expect(resInf.reason).toBe("invalid_tolerance");
+      }
+    });
+  });
 });

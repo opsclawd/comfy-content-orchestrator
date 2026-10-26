@@ -500,6 +500,71 @@ describe("run-worker CLI", () => {
       ).toThrow(WorkerConfigError);
     });
 
+    it("parses and validates WORKER_ALLOWED_EXECUTION_SCOPES correctly", () => {
+      // Missing -> undefined
+      expect(
+        parseWorkerRuntimeConfig({
+          ...minimalValidEnv()
+        }).allowedExecutionScopes
+      ).toBeUndefined();
+
+      // Empty string -> undefined
+      expect(
+        parseWorkerRuntimeConfig({
+          ...minimalValidEnv(),
+          WORKER_ALLOWED_EXECUTION_SCOPES: "   "
+        }).allowedExecutionScopes
+      ).toBeUndefined();
+
+      // Single valid scope
+      expect(
+        parseWorkerRuntimeConfig({
+          ...minimalValidEnv(),
+          WORKER_ALLOWED_EXECUTION_SCOPES: "staging"
+        }).allowedExecutionScopes
+      ).toEqual(["staging"]);
+
+      // Multiple valid scopes with whitespace
+      expect(
+        parseWorkerRuntimeConfig({
+          ...minimalValidEnv(),
+          WORKER_ALLOWED_EXECUTION_SCOPES: " production , staging "
+        }).allowedExecutionScopes
+      ).toEqual(["production", "staging"]);
+
+      // Fallback variable name ALLOWED_EXECUTION_SCOPES
+      expect(
+        parseWorkerRuntimeConfig({
+          ...minimalValidEnv(),
+          ALLOWED_EXECUTION_SCOPES: "staging"
+        }).allowedExecutionScopes
+      ).toEqual(["staging"]);
+
+      // Invalid execution scope throws WorkerConfigError
+      expect(() =>
+        parseWorkerRuntimeConfig({
+          ...minimalValidEnv(),
+          WORKER_ALLOWED_EXECUTION_SCOPES: "production, canary"
+        })
+      ).toThrow(WorkerConfigError);
+    });
+
+    it("parses CANDIDATE_PROVENANCE_PATH correctly", () => {
+      expect(
+        parseWorkerRuntimeConfig({
+          ...minimalValidEnv(),
+          CANDIDATE_PROVENANCE_PATH: "/custom/candidate/provenance.json"
+        }).candidateProvenancePath
+      ).toBe("/custom/candidate/provenance.json");
+
+      expect(() =>
+        parseWorkerRuntimeConfig({
+          ...minimalValidEnv(),
+          CANDIDATE_PROVENANCE_PATH: "   "
+        })
+      ).toThrow(WorkerConfigError);
+    });
+
     it("parses and validates DATABASE_URL and CONTROL_API_DATABASE_URL with proper attribution", () => {
       // 1. DATABASE_URL parsed
       expect(

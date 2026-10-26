@@ -7,19 +7,19 @@ import {
   type SceneId,
   type SceneSnapshot
 } from "@cco/domain";
-import { getProfileInjectionTopology } from "@cco/contracts";
+import { getProfileInjectionTopology, isReleasedProductionProfileKey } from "@cco/contracts";
 import type { EnqueueJobInput } from "../ports/job-queue-port.js";
 import type { UnitOfWork, UnitOfWorkContext } from "../ports/unit-of-work.js";
 import type { ObjectStoragePort } from "../ports/object-storage-port.js";
 import type { HashBytesPort } from "../ports/hash-bytes.js";
 import type { ImageInspectionPort } from "../ports/image-inspection-port.js";
+import type { ProductionReleaseCapabilityReader } from "../ports/production-release-ports.js";
 import { deriveProductionSeed } from "./derive-production-seed.js";
 import { TransactionalJobEnqueuerUnavailableError } from "./job-queue-errors.js";
 import { PrepareSceneProductionInputsUseCase } from "./prepare-scene-production-inputs.js";
 import {
   isMiniMaxEngineOrProfile,
   mapDurationMsToLtxFrameCount,
-  mapDurationMsToMiniMaxH3FrameCount,
   UnsupportedProductionDurationError
 } from "./map-production-duration.js";
 import {
@@ -64,6 +64,7 @@ export interface EnqueueSceneProductionRenderOptions {
   readonly objectStorage?: ObjectStoragePort | undefined;
   readonly hashBytes?: HashBytesPort | undefined;
   readonly imageValidator?: ImageInspectionPort | undefined;
+  readonly productionReleaseReader?: ProductionReleaseCapabilityReader | undefined;
   readonly [key: string]: unknown;
 }
 
@@ -105,7 +106,10 @@ export class EnqueueSceneProductionRenderUseCase {
     const isMiniMax = isMiniMaxEngineOrProfile(snapshot.configuration.engineProfileId);
 
     const unrepresentable: string[] = [];
-    if (!ACCEPTED_PRODUCTION_ENGINE_PROFILE_IDS.has(snapshot.configuration.engineProfileId)) {
+    if (
+      !ACCEPTED_PRODUCTION_ENGINE_PROFILE_IDS.has(snapshot.configuration.engineProfileId) &&
+      !isReleasedProductionProfileKey(snapshot.configuration.engineProfileId)
+    ) {
       unrepresentable.push("engineProfileId");
     }
     if (!isMiniMax && snapshot.configuration.referenceIds.length > 0) {
@@ -132,20 +136,25 @@ export class EnqueueSceneProductionRenderUseCase {
       throw new UnrepresentableProductionConfigurationError(scene.id, unrepresentable);
     }
 
-    const durationResult = isMiniMax
-      ? mapDurationMsToMiniMaxH3FrameCount(snapshot.configuration.durationMs)
-      : mapDurationMsToLtxFrameCount(snapshot.configuration.durationMs);
-
-    if (!durationResult.ok) {
-      throw new UnsupportedProductionDurationError(
-        snapshot.configuration.durationMs,
-        durationResult.reason
+    if (snapshot.configuration.engineProfileId.startsWith("H3_CANDIDATE_")) {
+      throw new InvalidTransitionError(
+        scene.id,
+        scene.status,
+        actionName,
+        `H3 candidate profile "${snapshot.configuration.engineProfileId}" cannot be dispatched through ordinary production queues; general production remains disabled until operator certification.`
       );
     }
 
     const seed = deriveProductionSeed(scene.id, snapshot.specRevision, attemptOrdinal);
 
     if (!isMiniMax) {
+      const durationResult = mapDurationMsToLtxFrameCount(snapshot.configuration.durationMs);
+      if (!durationResult.ok) {
+        throw new UnsupportedProductionDurationError(
+          snapshot.configuration.durationMs,
+          durationResult.reason
+        );
+      }
       if (
         snapshot.selectedCandidateId === undefined ||
         snapshot.selectedCandidateRevision !== snapshot.specRevision
@@ -196,7 +205,7 @@ export class EnqueueSceneProductionRenderUseCase {
     });
 
     const route = prep.inspection.route;
-    const topology = getProfileInjectionTopology(route.renderProfileKey);
+    const topology = prep.topology ?? getProfileInjectionTopology(route.renderProfileKey);
     if (!topology) {
       throw new ConditionedProductionProfileUnavailableError(scene.id, route.renderProfileKey);
     }
@@ -210,6 +219,13 @@ export class EnqueueSceneProductionRenderUseCase {
       productionInputFingerprint: prep.inspection.productionInputFingerprint,
       ...(route.routingMode === "frame_anchored" && prep.inspection.visualInputs.frameAnchor
         ? { approvedCandidateId: prep.inspection.visualInputs.frameAnchor.anchorCandidateId }
+        : {}),
+      ...(prep.releasedProfile
+        ? {
+            releasedProfileKey: prep.releasedProfile.key,
+            releasedSpecificationDigest: prep.releasedProfile.specificationDigest,
+            releaseDigest: prep.releasedProfile.signedReleaseDigest
+          }
         : {})
     };
     if (topology.frameCount) {

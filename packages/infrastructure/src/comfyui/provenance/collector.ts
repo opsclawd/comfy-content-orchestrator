@@ -1,13 +1,16 @@
 import { readFile } from "node:fs/promises";
-import type { RenderProfileKey } from "@cco/contracts";
+import type { RenderProfileKey, H3ReleaseProfileKey } from "@cco/contracts";
 import { hashModelFiles, hashWorkflow, type ModelFileHash } from "./hasher.js";
 import { runDiskPreflight, type DiskPreflightResult } from "./preflight.js";
 import { collectGitProvenance, type GitProvenance } from "./git-tracker.js";
 import type { CertificationProfile } from "./profile-manifest.js";
 
 export interface RenderProfileProvenance {
-  readonly key: RenderProfileKey;
-  readonly version: 1;
+  // See the matching note on CertificationProfile.renderProfileIdentity.key in
+  // profile-manifest.ts: released H3 profiles are dynamically hash-keyed and
+  // versioned, unlike the fixed legacy identities.
+  readonly key: RenderProfileKey | H3ReleaseProfileKey;
+  readonly version: number;
   readonly engine: string;
   readonly workflowHash: string;
   readonly modelHashes: Readonly<Record<string, string>>;

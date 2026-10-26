@@ -1,4 +1,4 @@
-import { ReviewEventSchema, type ReviewAction } from "@cco/contracts";
+import { ReviewEventSchema, type ReviewAction, computePlanBindingDigest } from "@cco/contracts";
 import {
   assertReferenceAssetSelectable,
   assertValidReferenceRole,
@@ -46,6 +46,24 @@ import {
   CANDIDATE_WORKFLOW_TEMPLATE
 } from "./progress-scene-production.js";
 import { TransactionalJobEnqueuerUnavailableError } from "./job-queue-errors.js";
+
+export class CampaignReplanRequiredError extends Error {
+  override readonly name = "CampaignReplanRequiredError";
+  readonly code = "CAMPAIGN_REPLAN_REQUIRED";
+  readonly statusCode = 409;
+  readonly httpStatusCode = 409;
+
+  constructor(
+    readonly campaignId: string,
+    readonly sceneId: string,
+    message?: string
+  ) {
+    super(
+      message ??
+        `Direct duration or engine changes on planned scene '${sceneId}' in campaign '${campaignId}' are prohibited. A campaign replan is required.`
+    );
+  }
+}
 
 export interface ReviewAuditInput {
   readonly sceneId: string;
@@ -770,6 +788,17 @@ export class ReviewSceneUseCases {
       const scene = prepared.scene;
       const priorSceneStatus = scene.status;
 
+      if (action === "duration_change" || action === "engine_change") {
+        if (context.durationPlans) {
+          const currentPlan = await context.durationPlans.findCurrentPlanByCampaignId(
+            scene.campaignId
+          );
+          if (currentPlan && currentPlan.revision > 0) {
+            throw new CampaignReplanRequiredError(scene.campaignId, scene.id);
+          }
+        }
+      }
+
       if (action === "reference_change" && context.referenceAssets !== undefined) {
         const refIds = (payload as { referenceIds?: readonly string[] }).referenceIds ?? [];
         const bindings =
@@ -1078,6 +1107,41 @@ export class ReviewSceneUseCases {
       }
 
       const transition = apply(scene);
+
+      // Creative edits that bump scene.specRevision (AC-21, issue #426) must keep
+      // this scene's SceneDurationBinding in sync, or PrepareSceneProductionInputsUseCase /
+      // EnqueueSceneProductionRenderUseCase will permanently reject the scene with
+      // SceneDurationBindingMismatchError (binding.specRevision !== scene.specRevision)
+      // after any Review Hub edit. The bindingDigest is computed over the whole
+      // plan's bindings (see computePlanBindingDigest), so all of the plan's
+      // bindings must be re-saved with the recomputed shared digest, not just
+      // this scene's binding.
+      if (
+        (action === "prompt_edit" ||
+          action === "duration_change" ||
+          action === "engine_change" ||
+          action === "reference_change" ||
+          action === "lora_tune") &&
+        context.durationPlans
+      ) {
+        const existingBinding = await context.durationPlans.findBindingBySceneId(scene.id);
+        if (existingBinding) {
+          const newSpecRevision = scene.snapshot().specRevision;
+          if (existingBinding.specRevision !== newSpecRevision) {
+            const planBindings = await context.durationPlans.findBindingsByPlanId(
+              existingBinding.planId
+            );
+            const updatedBindings = planBindings.map((binding) =>
+              binding.sceneId === scene.id ? { ...binding, specRevision: newSpecRevision } : binding
+            );
+            const newBindingDigest = computePlanBindingDigest(updatedBindings);
+            await context.durationPlans.saveBindings(
+              updatedBindings.map((binding) => ({ ...binding, bindingDigest: newBindingDigest }))
+            );
+          }
+        }
+      }
+
       if (enqueueCandidates) {
         if (context.jobs === undefined) {
           throw new TransactionalJobEnqueuerUnavailableError();

@@ -50,6 +50,8 @@ interface ProductionAttemptRow {
   seed: string | number;
   created_reason: "initial_dispatch" | "failure_recovery" | "production_rerender";
   created_at: Date | string;
+  owner_kind?: string | null;
+  acceptance_run_id?: string | null;
 }
 
 function mapRowToRun(row: CampaignProductionRunRow): CampaignProductionRunRecord {
@@ -107,6 +109,8 @@ function mapRowToProductionAttempt(row: ProductionAttemptRow): ProductionAttempt
       : {}),
     seed: Number(row.seed),
     createdReason: row.created_reason,
+    ...(row.owner_kind ? { ownerKind: row.owner_kind } : {}),
+    ...(row.acceptance_run_id ? { acceptanceRunId: row.acceptance_run_id } : {}),
     createdAt:
       row.created_at instanceof Date
         ? row.created_at.toISOString()
@@ -139,7 +143,7 @@ export class PostgresCampaignProductionRunRepository implements CampaignProducti
         created_at,
         updated_at
       `,
-      [input.campaignId, input.fingerprint, input.status, input.expectedTotalDurationMs]
+      [input.campaignId, input.fingerprint, input.status, Math.round(input.expectedTotalDurationMs)]
     );
 
     if (insertResult.rows.length > 0) {
@@ -348,7 +352,7 @@ export class PostgresCampaignProductionRunRepository implements CampaignProducti
           scene.sceneId,
           scene.specRevision,
           scene.sequenceIndex,
-          scene.expectedDurationMs,
+          Math.round(scene.expectedDurationMs),
           scene.productionJobId ?? null,
           scene.currentAttemptId ?? null,
           scene.currentAttemptOrdinal ?? 1
@@ -372,8 +376,10 @@ export class PostgresCampaignProductionRunRepository implements CampaignProducti
         selected_candidate_id,
         selected_candidate_revision,
         seed,
-        created_reason
-      ) VALUES (COALESCE($1::uuid, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        created_reason,
+        owner_kind,
+        acceptance_run_id
+      ) VALUES (COALESCE($1::uuid, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       RETURNING
         attempt_id,
         scene_id,
@@ -385,6 +391,8 @@ export class PostgresCampaignProductionRunRepository implements CampaignProducti
         selected_candidate_revision,
         seed,
         created_reason,
+        owner_kind,
+        acceptance_run_id,
         created_at
       `,
       [
@@ -397,7 +405,9 @@ export class PostgresCampaignProductionRunRepository implements CampaignProducti
         input.selectedCandidateId ?? null,
         input.selectedCandidateRevision ?? null,
         input.seed,
-        input.createdReason
+        input.createdReason,
+        input.ownerKind ?? null,
+        input.acceptanceRunId ?? null
       ]
     );
 
@@ -421,6 +431,8 @@ export class PostgresCampaignProductionRunRepository implements CampaignProducti
         selected_candidate_revision,
         seed,
         created_reason,
+        owner_kind,
+        acceptance_run_id,
         created_at
       FROM production_attempts
       WHERE production_job_id = $1

@@ -20,6 +20,8 @@ import { clientRoutes } from "./routes/client-routes.js";
 import { referenceRoutes } from "./routes/reference-routes.js";
 import { productEvidenceRoutes } from "./routes/product-evidence-routes.js";
 import { sceneGenerationRoutes } from "./routes/scene-generation-routes.js";
+import { durationPlanningRoutes } from "./routes/duration-planning-routes.js";
+import { acceptanceAssemblyRoutes } from "./routes/acceptance-assembly-routes.js";
 import { ControlApiConfigError } from "../runtime-config.js";
 import type { ControlApiAppOptions } from "./types.js";
 import {
@@ -119,7 +121,13 @@ export function createControlApiApp(
   });
 
   app.register(campaignRoutes, {
-    container
+    container,
+    reviewerIdentityResolver
+  });
+
+  app.register(durationPlanningRoutes, {
+    container,
+    reviewerIdentityResolver
   });
 
   app.register(deliveryReelRoutes, {
@@ -187,6 +195,14 @@ export function createControlApiApp(
     app.register(deliveryAssemblyRoutes, {
       container,
       dispatchConfig
+    });
+  }
+
+  if (container.dependencies.uow !== undefined) {
+    app.register(acceptanceAssemblyRoutes, {
+      container,
+      dispatchConfig: options?.jobDispatch,
+      reviewerIdentityResolver
     });
   }
 

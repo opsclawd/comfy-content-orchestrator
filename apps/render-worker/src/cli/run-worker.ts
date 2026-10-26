@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import path, { resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -24,22 +25,36 @@ import {
   type ResolvedApprovedVisualProductionMedia,
   type SceneRepository,
   type StoryboardCandidateRepository,
-  type ShotPlanRepository
+  type ShotPlanRepository,
+  type H3CandidateRegistryReader,
+  type H3CandidateAuthorizationPort,
+  type H3RuntimeObservationPort,
+  type ProductionReleaseCapabilityReader
 } from "@cco/application";
+import {
+  getH3CandidateProfile,
+  listH3CandidateProfiles,
+  isH3CandidateProfileKey
+} from "@cco/contracts";
 import {
   JOB_KINDS,
   type CampaignRecord,
   type CandidateId,
+  type ExecutionScope,
   type JobKind,
   type SceneId
 } from "@cco/domain";
 import {
+  H3OperatorSignatureVerifier,
+  H3TrustedCandidateRegistryReader,
+  H3LiveRuntimeObserver,
   ComfyUiClient,
   ComfyUiRenderEngineAdapter,
   HostFsStorageTelemetryAdapter,
   HttpComfyUiInputStagingAdapter,
   HttpComfyUiOutputReader,
   JsonFileLicenseRegistryPort,
+  JsonFileProductionReleaseReader,
   loadComponentLicenseRegistrySync,
   LocalFsGpuLeaseAdapter,
   NvidiaSmiTelemetryAdapter,
@@ -84,6 +99,7 @@ export interface WorkerRuntimeConfig {
   readonly telemetryBackoffMs?: number | undefined;
   readonly admissionBackoffMs?: number | undefined;
   readonly allowedJobKinds?: readonly JobKind[] | undefined;
+  readonly allowedExecutionScopes?: readonly ExecutionScope[] | undefined;
   readonly databaseUrl?: string | undefined;
   readonly comfyUiUrl: string;
   readonly comfyUiRenderTimeoutMs: number;
@@ -93,6 +109,17 @@ export interface WorkerRuntimeConfig {
   readonly gpuLeasePath: string;
   readonly certificationManifestPath: string;
   readonly goldMasterProvenancePath: string;
+  readonly candidateProvenancePath?: string | undefined;
+  readonly h3CandidateProfilesPath?: string | undefined;
+  readonly h3CapabilityMatrixPath?: string | undefined;
+  readonly h3TrustedKeysPath?: string | undefined;
+  readonly h3EvidenceDirectory?: string | undefined;
+  readonly h3TargetGpuUuid?: string | undefined;
+  // Shared secret this worker presents to Control API's /api/jobs/claim to prove any
+  // non-"production" execution scope it claims (e.g. "staging") is real, not just a
+  // self-reported workerId - must match the token configured server-side for this
+  // workerId in WORKER_DISPATCH_POLICY_JSON (apps/control-api/src/runtime-config.ts).
+  readonly workerStagingToken?: string | undefined;
   readonly licenseRegistryPath: string;
   readonly s3Endpoint: string;
   readonly s3Region: string;
@@ -150,6 +177,13 @@ export interface ProductionWorkerOverrides extends Partial<WorkerDependencies> {
     | undefined;
   readonly stageReferenceImage?: ComfyUiInputStagingPort | undefined;
   readonly imageValidator?: ImageInspectionPort | undefined;
+  readonly registryReader?: H3CandidateRegistryReader | undefined;
+  readonly candidateProvenancePath?: string | undefined;
+  readonly authorizationPort?: H3CandidateAuthorizationPort | undefined;
+  readonly runtimeObservationPort?: H3RuntimeObservationPort | undefined;
+  readonly targetGpuUuid?: string | undefined;
+  readonly workerStagingToken?: string | undefined;
+  readonly productionReleaseReader?: ProductionReleaseCapabilityReader | undefined;
   readonly now?: (() => Date) | undefined;
 }
 
@@ -337,6 +371,37 @@ function parseAllowedJobKinds(
   return Object.freeze(validKinds);
 }
 
+const VALID_EXECUTION_SCOPES: readonly ExecutionScope[] = ["production", "staging"];
+
+export function parseAllowedExecutionScopes(
+  val: unknown,
+  varName = "WORKER_ALLOWED_EXECUTION_SCOPES"
+): readonly ExecutionScope[] | undefined {
+  if (val === undefined || val === null) {
+    return undefined;
+  }
+  if (typeof val !== "string") {
+    throw new WorkerConfigError(`Invalid execution scopes list in variable: ${varName}`);
+  }
+  const trimmed = val.trim();
+  if (trimmed === "") {
+    return undefined;
+  }
+  const items = trimmed.split(",").map((s) => s.trim());
+  const validScopes: ExecutionScope[] = [];
+  for (const item of items) {
+    if (!item || !(VALID_EXECUTION_SCOPES as readonly string[]).includes(item)) {
+      throw new WorkerConfigError(
+        `Invalid execution scope in variable: ${varName} (expected comma-separated valid ExecutionScope: ${VALID_EXECUTION_SCOPES.join(", ")}, received "${item}")`
+      );
+    }
+    if (!validScopes.includes(item as ExecutionScope)) {
+      validScopes.push(item as ExecutionScope);
+    }
+  }
+  return Object.freeze(validScopes);
+}
+
 export function parseWorkerRuntimeConfig(
   env: NodeJS.ProcessEnv = process.env,
   argv: readonly string[] = process.argv.slice(2)
@@ -427,6 +492,17 @@ export function parseWorkerRuntimeConfig(
       : "ALLOWED_JOB_KINDS";
   const allowedJobKinds = parseAllowedJobKinds(rawAllowedKinds, allowedKindsVarName);
 
+  // 3b. Allowed Execution Scopes
+  const rawAllowedScopes = env.WORKER_ALLOWED_EXECUTION_SCOPES ?? env.ALLOWED_EXECUTION_SCOPES;
+  const allowedScopesVarName =
+    env.WORKER_ALLOWED_EXECUTION_SCOPES !== undefined || env.ALLOWED_EXECUTION_SCOPES === undefined
+      ? "WORKER_ALLOWED_EXECUTION_SCOPES"
+      : "ALLOWED_EXECUTION_SCOPES";
+  const allowedExecutionScopes = parseAllowedExecutionScopes(
+    rawAllowedScopes,
+    allowedScopesVarName
+  );
+
   // 4. ComfyUI Configuration
   const rawComfyUiUrl = env.COMFYUI_URL ?? env.COMFYUI_BASE_URL;
   const comfyUiUrlVarName =
@@ -483,6 +559,42 @@ export function parseWorkerRuntimeConfig(
       );
     }
     goldMasterProvenancePath = rawProvenancePath.trim();
+  }
+
+  const rawCandidateProvenancePath =
+    env.CANDIDATE_PROVENANCE_PATH ?? env.H3_CANDIDATE_PROVENANCE_PATH;
+  let candidateProvenancePath: string | undefined;
+  if (rawCandidateProvenancePath !== undefined) {
+    if (rawCandidateProvenancePath.trim() === "") {
+      throw new WorkerConfigError(
+        "Missing or empty required environment variable: CANDIDATE_PROVENANCE_PATH"
+      );
+    }
+    candidateProvenancePath = rawCandidateProvenancePath.trim();
+  }
+
+  const h3CandidateProfilesPath = env.H3_CANDIDATE_PROFILES_FILE?.trim() || undefined;
+  const h3CapabilityMatrixPath = env.H3_CAPABILITY_MATRIX_FILE?.trim() || undefined;
+  const h3TrustedKeysPath = env.H3_TRUSTED_KEYS_FILE?.trim() || undefined;
+  const h3EvidenceDirectory = env.H3_EVIDENCE_DIRECTORY?.trim() || undefined;
+  // The physical GPU this worker executes H3 candidate staging on. This must be an operator-
+  // declared, explicit value — never derived or defaulted — because the signed authorization
+  // grant and live runtime eligibility checks are bound to a specific GPU UUID (ADR 0008
+  // section 6); silently substituting a placeholder would let those checks pass against a GPU
+  // that doesn't exist.
+  const h3TargetGpuUuid = env.H3_TARGET_GPU_UUID?.trim() || undefined;
+  const workerStagingToken = env.WORKER_STAGING_TOKEN?.trim() || undefined;
+  const h3SnapshotPaths = [
+    h3CandidateProfilesPath,
+    h3CapabilityMatrixPath,
+    h3TrustedKeysPath,
+    h3EvidenceDirectory,
+    h3TargetGpuUuid
+  ];
+  if (h3SnapshotPaths.some(Boolean) && h3SnapshotPaths.some((value) => !value)) {
+    throw new WorkerConfigError(
+      "H3 candidate staging requires H3_CANDIDATE_PROFILES_FILE, H3_CAPABILITY_MATRIX_FILE, H3_TRUSTED_KEYS_FILE, H3_EVIDENCE_DIRECTORY, and H3_TARGET_GPU_UUID together"
+    );
   }
 
   // 7. License Registry Path
@@ -595,6 +707,7 @@ export function parseWorkerRuntimeConfig(
     ...(telemetryBackoffMs !== undefined ? { telemetryBackoffMs } : {}),
     ...(admissionBackoffMs !== undefined ? { admissionBackoffMs } : {}),
     ...(allowedJobKinds !== undefined ? { allowedJobKinds } : {}),
+    ...(allowedExecutionScopes !== undefined ? { allowedExecutionScopes } : {}),
     ...(databaseUrl !== undefined ? { databaseUrl } : {}),
     comfyUiUrl,
     comfyUiRenderTimeoutMs,
@@ -604,6 +717,13 @@ export function parseWorkerRuntimeConfig(
     gpuLeasePath,
     certificationManifestPath,
     goldMasterProvenancePath,
+    ...(candidateProvenancePath !== undefined ? { candidateProvenancePath } : {}),
+    ...(h3CandidateProfilesPath ? { h3CandidateProfilesPath } : {}),
+    ...(h3CapabilityMatrixPath ? { h3CapabilityMatrixPath } : {}),
+    ...(h3TrustedKeysPath ? { h3TrustedKeysPath } : {}),
+    ...(h3EvidenceDirectory ? { h3EvidenceDirectory } : {}),
+    ...(h3TargetGpuUuid ? { h3TargetGpuUuid } : {}),
+    ...(workerStagingToken ? { workerStagingToken } : {}),
     licenseRegistryPath,
     s3Endpoint,
     s3Region,
@@ -795,6 +915,52 @@ export function createProductionWorker(
   const outputReader =
     overrides?.outputReader ?? new HttpComfyUiOutputReader(effectiveConfig.comfyUiUrl);
 
+  let trustedCandidateReader: H3CandidateRegistryReader | undefined;
+  let trustedOperatorKeys = new Map<string, string>();
+  if (
+    effectiveConfig.h3CandidateProfilesPath &&
+    effectiveConfig.h3CapabilityMatrixPath &&
+    effectiveConfig.h3TrustedKeysPath &&
+    effectiveConfig.h3EvidenceDirectory
+  ) {
+    try {
+      const candidateProfiles = JSON.parse(
+        readFileSync(effectiveConfig.h3CandidateProfilesPath, "utf8")
+      );
+      const decisionEnvelope = JSON.parse(
+        readFileSync(effectiveConfig.h3CapabilityMatrixPath, "utf8")
+      );
+      const trustedKeysRecord = JSON.parse(
+        readFileSync(effectiveConfig.h3TrustedKeysPath, "utf8")
+      ) as Record<string, string>;
+      trustedOperatorKeys = new Map(Object.entries(trustedKeysRecord));
+      trustedCandidateReader = new H3TrustedCandidateRegistryReader({
+        candidateProfiles,
+        decisionEnvelope,
+        trustedPublicKeys: trustedOperatorKeys,
+        evidenceResolver: (digest) => {
+          if (!/^[0-9a-f]{64}$/.test(digest)) return undefined;
+          try {
+            return readFileSync(path.join(effectiveConfig.h3EvidenceDirectory!, digest));
+          } catch {
+            return undefined;
+          }
+        }
+      });
+    } catch (cause) {
+      throw new WorkerConfigError(
+        `Failed to load trusted H3 candidate snapshot: ${(cause as Error).message}`,
+        { cause }
+      );
+    }
+  }
+
+  const productionReleaseReader =
+    overrides?.productionReleaseReader ??
+    (process.env.CCO_H3_PRODUCTION_RELEASE_BUNDLE_PATH
+      ? new JsonFileProductionReleaseReader(process.env.CCO_H3_PRODUCTION_RELEASE_BUNDLE_PATH)
+      : undefined);
+
   const renderJobExecutor =
     overrides?.renderJobExecutor ??
     createCertifiedRenderJobExecutor(
@@ -804,6 +970,7 @@ export function createProductionWorker(
         productionManifestAssembler,
         hashBytes: hashBytesPort,
         enforceLicenseRouting,
+        ...(productionReleaseReader !== undefined ? { productionReleaseReader } : {}),
         ...(includesProduction
           ? {
               resolveApprovedCandidateMedia,
@@ -832,15 +999,38 @@ export function createProductionWorker(
           ? { readWorkflowFile: overrides.readWorkflowFile }
           : {}),
         ...(overrides?.hashWorkflow !== undefined ? { hashWorkflow: overrides.hashWorkflow } : {}),
+        registryReader: overrides?.registryReader ??
+          trustedCandidateReader ?? {
+            getCandidateProfile: getH3CandidateProfile,
+            listCandidateProfiles: listH3CandidateProfiles,
+            isCandidateProfileKey: isH3CandidateProfileKey
+          },
+        authorizationPort:
+          overrides?.authorizationPort ??
+          new H3OperatorSignatureVerifier({
+            trustedPublicKeys: trustedOperatorKeys
+          }),
+        runtimeObservationPort: overrides?.runtimeObservationPort ?? new H3LiveRuntimeObserver(),
+        ...(overrides?.targetGpuUuid !== undefined
+          ? { targetGpuUuid: overrides.targetGpuUuid }
+          : effectiveConfig.h3TargetGpuUuid !== undefined
+            ? { targetGpuUuid: effectiveConfig.h3TargetGpuUuid }
+            : {}),
         ...(overrides?.now !== undefined ? { now: overrides.now } : {})
       },
       {
         manifestPath: effectiveConfig.certificationManifestPath,
         goldMasterProvenancePath: effectiveConfig.goldMasterProvenancePath,
+        candidateProvenancePath:
+          overrides?.candidateProvenancePath ??
+          effectiveConfig.candidateProvenancePath ??
+          effectiveConfig.goldMasterProvenancePath,
         comfyUiDir: effectiveConfig.comfyUiDir,
+        comfyUiEndpoint: effectiveConfig.comfyUiUrl,
         candidateBucket: effectiveConfig.s3CandidateBucket,
         deliveryBucket: effectiveConfig.s3DeliveryBucket,
-        ffprobePath: effectiveConfig.ffprobePath
+        ffprobePath: effectiveConfig.ffprobePath,
+        comfyUiRenderTimeoutMs: effectiveConfig.comfyUiRenderTimeoutMs
       }
     );
 
@@ -860,7 +1050,8 @@ export function createProductionWorker(
   const controlApiClient =
     overrides?.controlApiClient ??
     createControlApiClient({
-      baseUrl: effectiveConfig.controlApiBaseUrl
+      baseUrl: effectiveConfig.controlApiBaseUrl,
+      workerStagingToken: overrides?.workerStagingToken ?? effectiveConfig.workerStagingToken
     });
 
   const logger = overrides?.logger ?? console;
@@ -882,6 +1073,9 @@ export function createProductionWorker(
     leaseDurationMs: effectiveConfig.leaseDurationMs,
     ...(effectiveConfig.allowedJobKinds !== undefined
       ? { allowedJobKinds: effectiveConfig.allowedJobKinds }
+      : {}),
+    ...(effectiveConfig.allowedExecutionScopes !== undefined
+      ? { allowedExecutionScopes: effectiveConfig.allowedExecutionScopes }
       : {}),
     ...(effectiveConfig.telemetryBackoffMs !== undefined
       ? { telemetryBackoffMs: effectiveConfig.telemetryBackoffMs }

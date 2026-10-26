@@ -21,6 +21,11 @@ import {
 import { PostgresEvidenceAssetRepository } from "../../evidence/postgres-evidence-asset-repository.js";
 import { PostgresCoaReportRepository } from "../repositories/postgres-coa-report-repository.js";
 import { PostgresProductClaimRepository } from "../repositories/postgres-product-claim-repository.js";
+import { PostgresCampaignDurationPlanRepository } from "../repositories/postgres-campaign-duration-plan-repository.js";
+import { PostgresOperatorAcceptanceRunRepository } from "../repositories/postgres-operator-acceptance-run-repository.js";
+import { PostgresAcceptanceAssemblyJobQueue } from "../repositories/postgres-acceptance-assembly-job-queue.js";
+import { PostgresAcceptanceAssemblyManifestRepository } from "../repositories/postgres-acceptance-assembly-manifest-repository.js";
+import { PostgresDeploymentEnablementStateRepository } from "../repositories/postgres-deployment-enablement-state-repository.js";
 
 export class PostgresUnitOfWork implements UnitOfWork {
   constructor(private readonly pool: Pool) {}
@@ -57,7 +62,12 @@ export class PostgresUnitOfWork implements UnitOfWork {
         }),
         productClaims: new PostgresProductClaimRepository(client, {
           externalTransaction: true
-        })
+        }),
+        durationPlans: new PostgresCampaignDurationPlanRepository(client),
+        operatorAcceptanceRuns: new PostgresOperatorAcceptanceRunRepository(client),
+        acceptanceAssemblyJobs: new PostgresAcceptanceAssemblyJobQueue(client),
+        acceptanceAssemblyManifests: new PostgresAcceptanceAssemblyManifestRepository(client),
+        deploymentEnablement: new PostgresDeploymentEnablementStateRepository(client)
       };
 
       const result = await work(context);

@@ -5,6 +5,7 @@ export interface QueueRenderInput {
   readonly sceneId: string;
   readonly renderProfileKey: string;
   readonly workflow: RenderWorkflow;
+  readonly timeoutMs?: number | undefined;
 }
 
 export interface RenderQueueReceipt {
@@ -24,4 +25,5 @@ export interface RenderEnginePort {
   queueRender(input: QueueRenderInput): Promise<RenderQueueReceipt>;
   getRenderResult(executionId: string): Promise<RenderResult | undefined>;
   unloadModels(): Promise<void>;
+  cancelRender?(executionId: string): Promise<void>;
 }

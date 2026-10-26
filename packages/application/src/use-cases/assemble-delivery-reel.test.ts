@@ -19,6 +19,7 @@ import {
   AssemblyProvenanceConflictError,
   AssemblyVideoCommitError
 } from "./assemble-delivery-reel.js";
+import { BUCKETS } from "@cco/shared";
 import { EnforceLicenseRouting } from "./enforce-license-routing.js";
 import { LicenseRoutingError } from "./license-routing-error.js";
 
@@ -1547,5 +1548,193 @@ describe("AssembleDeliveryReel use case", () => {
 
     expect(mockAssembler.assemble).not.toHaveBeenCalled();
     expect(mockStorage.putObject).not.toHaveBeenCalled();
+  });
+
+  it("denies assembly with zero ffmpeg spawn when a candidate stem is assembled for production delivery", async () => {
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(),
+      copyObject: vi.fn(),
+      getObject: vi.fn(async () => undefined)
+    };
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => dummyExecutionResult)
+    };
+
+    const candidateGenManifestRepo: GenerationManifestRepository = {
+      getComponentIdentityById: vi.fn(async () => ({
+        renderProfile: "H3_CANDIDATE_e6084e4f9004a591291f94c24998d10f_V1",
+        renderProfileVersion: 1,
+        route: "ref2v" as const,
+        candidateSpecificationDigest:
+          "da62255eb7245c2cc0ac588325ccd3d3518f5ac93e6e6775a21be5777eeaf0e7"
+      }))
+    };
+
+    const enforceLicenseRouting = createApprovedEnforceLicenseRouting();
+    const useCase = new AssembleDeliveryReel({
+      runtimeComponents: defaultRequiredComponents,
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: candidateGenManifestRepo
+    });
+
+    await expect(
+      useCase.assemble({
+        spec: validSpec,
+        targetBucket: BUCKETS.DELIVERY
+      })
+    ).rejects.toThrow(LicenseRoutingError);
+
+    expect(mockAssembler.assemble).not.toHaveBeenCalled();
+    expect(mockStorage.putObject).not.toHaveBeenCalled();
+  });
+
+  it("permits assembly when candidate stem is assembled for acceptance (BUCKETS.CANDIDATES)", async () => {
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(async (input) => ({ bucket: input.bucket, key: input.key })),
+      copyObject: vi.fn(async (_from, to) => to),
+      getObject: vi.fn(async () => undefined)
+    };
+    const candidateExecutionResult: AssemblyExecutionResult = {
+      ...dummyExecutionResult,
+      output: {
+        ...dummyExecutionResult.output,
+        media: {
+          ...dummyExecutionResult.output.media,
+          bucket: BUCKETS.CANDIDATES
+        }
+      },
+      stagingMedia: {
+        bucket: BUCKETS.CANDIDATES,
+        key: "staging-video.mp4"
+      }
+    };
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => candidateExecutionResult)
+    };
+
+    const candidateGenManifestRepo: GenerationManifestRepository = {
+      getComponentIdentityById: vi.fn(async () => ({
+        renderProfile: "H3_CANDIDATE_e6084e4f9004a591291f94c24998d10f_V1",
+        renderProfileVersion: 1,
+        route: "ref2v" as const,
+        candidateSpecificationDigest:
+          "da62255eb7245c2cc0ac588325ccd3d3518f5ac93e6e6775a21be5777eeaf0e7"
+      }))
+    };
+
+    const registry = {
+      getSnapshot: () => ({
+        schemaVersion: 1 as const,
+        registryRevision: "2026-10-24.1",
+        generatedAt: "2026-10-24T12:00:00.000Z",
+        entries: [
+          {
+            componentId: "ffmpeg",
+            componentType: "runtime" as const,
+            versionOrRevision: "n8.0.1",
+            status: "approved" as const,
+            licenseSource: "Sprint 3.5 Assembly & Governance Host Runtime Capture",
+            reviewedAt: "2026-08-29T12:00:00.000Z",
+            policyRevision: "2026-08-29.1"
+          },
+          {
+            componentId: "MINIMAX_H3_720P_5S_REF2V_V1",
+            componentType: "model" as const,
+            versionOrRevision: "1",
+            status: "approved" as const,
+            licenseSource: "operator-signed",
+            reviewedAt: "2026-10-24T12:00:00.000Z",
+            policyRevision: "2026-10-24.1"
+          }
+        ]
+      })
+    };
+    const enforceLicenseRouting = new EnforceLicenseRouting({ registry });
+
+    const useCase = new AssembleDeliveryReel({
+      runtimeComponents: defaultRequiredComponents,
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: candidateGenManifestRepo
+    });
+
+    const result = await useCase.assemble({
+      spec: validSpec,
+      targetBucket: BUCKETS.CANDIDATES
+    });
+
+    expect(mockAssembler.assemble).toHaveBeenCalledTimes(1);
+    expect(result.manifest.output.media.bucket).toBe(BUCKETS.CANDIDATES);
+  });
+
+  it("denies assembly when Ref2V candidate stem cannot be satisfied by I2V approval (route distinction)", async () => {
+    const mockStorage: ObjectStoragePort = {
+      putObject: vi.fn(),
+      copyObject: vi.fn(),
+      getObject: vi.fn(async () => undefined)
+    };
+    const mockAssembler: MediaAssemblerPort = {
+      assemble: vi.fn(async () => dummyExecutionResult)
+    };
+
+    const candidateGenManifestRepo: GenerationManifestRepository = {
+      getComponentIdentityById: vi.fn(async () => ({
+        renderProfile: "H3_CANDIDATE_e6084e4f9004a591291f94c24998d10f_V1",
+        renderProfileVersion: 1,
+        route: "ref2v" as const,
+        candidateSpecificationDigest:
+          "da62255eb7245c2cc0ac588325ccd3d3518f5ac93e6e6775a21be5777eeaf0e7"
+      }))
+    };
+
+    // Registry only approves I2V, not Ref2V
+    const registry = {
+      getSnapshot: () => ({
+        schemaVersion: 1 as const,
+        registryRevision: "2026-10-24.1",
+        generatedAt: "2026-10-24T12:00:00.000Z",
+        entries: [
+          {
+            componentId: "ffmpeg",
+            componentType: "runtime" as const,
+            versionOrRevision: "n8.0.1",
+            status: "approved" as const,
+            licenseSource: "Sprint 3.5 Assembly & Governance Host Runtime Capture",
+            reviewedAt: "2026-08-29T12:00:00.000Z",
+            policyRevision: "2026-08-29.1"
+          },
+          {
+            componentId: "MINIMAX_H3_720P_5S_I2V_V1",
+            componentType: "model" as const,
+            versionOrRevision: "1",
+            status: "approved" as const,
+            licenseSource: "operator-signed",
+            reviewedAt: "2026-10-24T12:00:00.000Z",
+            policyRevision: "2026-10-24.1"
+          }
+        ]
+      })
+    };
+    const enforceLicenseRouting = new EnforceLicenseRouting({ registry });
+
+    const useCase = new AssembleDeliveryReel({
+      runtimeComponents: defaultRequiredComponents,
+      mediaAssembler: mockAssembler,
+      objectStorage: mockStorage,
+      enforceLicenseRouting,
+      generationManifestRepository: candidateGenManifestRepo
+    });
+
+    await expect(
+      useCase.assemble({
+        spec: validSpec,
+        targetBucket: BUCKETS.REVIEW
+      })
+    ).rejects.toThrow(LicenseRoutingError);
+
+    expect(mockAssembler.assemble).not.toHaveBeenCalled();
   });
 });

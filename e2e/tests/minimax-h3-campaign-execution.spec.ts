@@ -221,7 +221,12 @@ test.describe("MiniMax-H3 End-to-End Campaign Execution and Review Lifecycle", (
                 checksumSha256: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
                 contentType: "video/mp4"
               }
-            ]
+            ],
+            // Required by attemptEnqueueAssemblyForAcceptedRun's realm/evidenceOrigin
+            // admission check (issue #426): a real production worker threads these
+            // through from the render job's injectedPayload at manifest-assembly time.
+            realm: { kind: "deployed", deploymentId: "default" },
+            evidenceOrigin: "live_execution"
           })
         ]
       );
@@ -273,12 +278,11 @@ test.describe("MiniMax-H3 End-to-End Campaign Execution and Review Lifecycle", (
     await expect(page.getByTestId("campaign-delivery-reel-panel")).toBeVisible();
   });
 
-  test("Engine change from LTX to MiniMax-H3 reconfigures scene duration to 5000ms", async ({
+  test("Direct engine change on a scene with an active duration plan is rejected; campaign replan is required (issue #426)", async ({
     page,
     testEnv
   }) => {
     testEnv.planningStub.reset();
-    testEnv.planningStub.targetEngineProfileId = "LTX_25_720P_5S_V1";
 
     const campaignTitle = `Engine Switch Campaign ${randomUUID().slice(0, 8)}`;
 
@@ -287,7 +291,7 @@ test.describe("MiniMax-H3 End-to-End Campaign Execution and Review Lifecycle", (
 
     await page
       .getByTestId("brief-description-input")
-      .fill("Photorealistic subject transitioning from LTX to MiniMax");
+      .fill("Photorealistic subject, direct engine change should be rejected post-plan");
     await page.getByTestId("campaign-title-input").fill(campaignTitle);
     await page.getByTestId("client-select").selectOption(testEnv.postgres.defaultClientId);
     await page.getByTestId("target-duration-input").fill("5");
@@ -344,7 +348,12 @@ test.describe("MiniMax-H3 End-to-End Campaign Execution and Review Lifecycle", (
       client.release();
     }
 
-    // Execute engine_change to MiniMax-H3 via review command
+    // Issue #426: once a campaign has an active duration plan (every campaign
+    // created via /api/campaigns/plan does), a direct engine_change review-command
+    // on one of its scenes is no longer permitted — it would silently desync the
+    // scene from the plan's frame-allocation bindings. The caller must go through
+    // campaign replan (POST /api/campaigns/:campaignId/replan/preview and /commit)
+    // instead. See CampaignReplanRequiredError in review-scene.ts.
     const res = await page.request.post(
       `${testEnv.webServer.webUrl}/api/scenes/${sceneId}/review-command`,
       {
@@ -365,16 +374,20 @@ test.describe("MiniMax-H3 End-to-End Campaign Execution and Review Lifecycle", (
       }
     );
 
-    expect(res.status()).toBe(200);
-    const body = (await res.json()) as { specRevision: number };
-    expect(body.specRevision).toBe(2);
+    expect(res.status()).toBe(409);
+    const body = (await res.json()) as { code: string; message: string };
+    expect(body.code).toBe("CAMPAIGN_REPLAN_REQUIRED");
 
-    // Verify scene in database has MINIMAX_H3_720P_5S_I2V_V1 engine profile
+    // Scene is left untouched by the rejected direct edit. (The campaign-creation
+    // form's engine radio defaults to MiniMax-H3 regardless of planningStub's
+    // targetEngineProfileId — that stub only shapes the planning model's mocked
+    // response, not the form's own default selection — so the scene's engine was
+    // already MINIMAX_H3_720P_5S_I2V_V1 going into this rejected request.)
     const dbCheck = await testEnv.postgres.pool.query(
       "SELECT engine_assigned, spec_revision FROM storyboard_scenes WHERE scene_id = $1",
       [sceneId]
     );
     expect(dbCheck.rows[0]!.engine_assigned).toBe("MINIMAX_H3_720P_5S_I2V_V1");
-    expect(dbCheck.rows[0]!.spec_revision).toBe(2);
+    expect(dbCheck.rows[0]!.spec_revision).toBe(1);
   });
 });

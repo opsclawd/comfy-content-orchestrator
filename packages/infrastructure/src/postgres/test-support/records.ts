@@ -944,7 +944,7 @@ export async function insertGenerationManifestRecord(
   const campaignId = input.campaignId;
   const sceneId = input.sceneId;
   const renderAttempt = input.renderAttempt ?? 1;
-  const manifestPayload = input.manifestPayload ?? {
+  const rawPayload = input.manifestPayload ?? {
     renderedFrames: 97,
     resolution: "1280x720",
     outputBucket: "godzspeed-delivery",
@@ -952,6 +952,14 @@ export async function insertGenerationManifestRecord(
     peakVramMb: 24028,
     renderDurationMs: 46000
   };
+  const manifestPayload =
+    typeof rawPayload === "object" && rawPayload !== null
+      ? {
+          realm: { kind: "deployed", deploymentId: "default" },
+          evidenceOrigin: "live_execution",
+          ...rawPayload
+        }
+      : rawPayload;
 
   const res = await client.query<InsertedGenerationManifestRecord>(
     `

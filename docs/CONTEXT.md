@@ -284,4 +284,26 @@ Issue #477 adds the client-scoped Product/Batches operator workspace to Review H
 > [!NOTE]
 > Phase 1 software implementation establishes contract, tenant isolation, and cryptographic integrity boundaries. Real-world authenticity of physical cannabis products and lab certificates requires independent human operator judgment per runbook. Campaign template batch pinning (`PinnedProductBatchResolution` -> `SceneReferenceBinding`s), downstream delivery reel claim verification, and generative assembly admission remain assigned to subsequent consumer integration phases (outside #477).
 
+### 8. Duration Planning, Operational Handoff, and Staging Acceptance (#421.5 / Issue #426)
+
+Issue #426 delivers capability-aware campaign duration allocation, durable duration plans, Review Hub planning indicators, and operator staging acceptance pipelines:
+- **Eligible Profile Capabilities:** Public planning uses only operator-certified and explicitly production-enabled profiles after authentic #428 release sign-off. Speed and continuity acceptance (#445) qualifies profiles for operator staging only, never general production.
+- **Fail-Closed Governance & No Synthetic Evidence:** Autonomous agents must never author physical measurements or certification artifacts in `certification/`, `baseline/`, or `config/render-profiles/`. Staging grants require conjunctive verification (exact authorization ID, target host, validity period, and authentic signature); dummy or zeroed hashes are strictly forbidden.
+- **Monotonic Enablement & Anti-Rollback:** Control API enforces non-decreasing generation checks via `DeploymentEnablementStatePort` to prevent rollback of production capability bundles.
+- **Realm & Provenance Isolation:** Execution realm (`deployed` vs `isolated_test`) and evidence origin (`live_execution` vs `simulated_test`) remain strictly isolated, ensuring simulated candidate runs cannot feed deployed delivery reel assembly.
+- **Nominal Duration Snapshotting:** Plan nominal durations are snapshotted at campaign production dispatch, ensuring multi-stem delivery reels (e.g. 124f MiniMax-H3) pass assembly tolerance and envelope gates deterministically.
+- **Campaign Replan Contract & Idempotency:** Campaign replans require complete vectors of scene durations and expected spec revisions summing strictly to the campaign target duration, acquire row locks, invalidate scene approvals while preserving allocation IDs, and record idempotent action receipts for safe action replay.
+- **Assembly Planning Envelope Safety:** Combinatorial candidate partitioning prunes states against maximum stem and duration envelope ceilings with fail-closed catalog limits, and campaign creation UI warns users when requested durations exceed assembly boundaries.
+
+### 9. Variable-Duration H3 CI Simulation & End-to-End Acceptance Lifecycle (#421.6 / Issue #427)
+
+Issue #427 delivers full simulation and regression coverage for variable-duration MiniMax-H3 production:
+- **Autonomous CI vs. Physical GPU Boundary:** CI simulation exercises the software control plane, duration allocation, staged rendering, review gating, worker assembly, and accepted reel readback. Physical GPU execution and hardware certification belong to the operator runbook (`docs/h3-acceptance-operator-runbook.md`).
+- **Simulated Connected Lifecycle & E2E Coverage:** Validates the end-to-end software path across Postgres, MinIO, and worker execution in `tests/integration/h3-variable-duration-lifecycle.e2e.integration.test.ts` and focused unit suites, verifying duration allocation, candidate staging, review gating, worker assembly, manifest storage, and reel readback with full stem lineage.
+- **Negative & Security Boundaries:** Rejects off-grid frame counts ($5 + 17k$), scene ceiling violations (>15,000ms `MAX_SCENE_DURATION_MS`), candidate rows with recorded `NO_GO` visual decisions, unapproved profile digests, cross-route licensing, parameter-conflicting replays (HTTP 409), and stem checksum mismatches.
+- **Legacy 5-Second Controls & Operator Release Gate:** Preserves legacy 5-second production profiles (`MINIMAX_H3_720P_5S_I2V_V1` and `MINIMAX_H3_720P_5S_REF2V_V1`). The production release reader strictly prevents advertising staging-only candidate lengths until the #428 release gate is satisfied on physical hardware.
+- **Reference Documentation:** [docs/h3-variable-duration-ci-coverage.md](h3-variable-duration-ci-coverage.md).
+
+
+
 

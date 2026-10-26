@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type { CreateCampaignShellRequest, CreativeBrief } from "@cco/contracts";
+import {
+  type CampaignDurationPlan,
+  type CreateCampaignShellRequest,
+  type CreativeBrief,
+  type ExecutionProfileSelection,
+  type ExecutionRealm,
+  type H3CapabilityResolverReader,
+  CampaignDurationPlanningError
+} from "@cco/contracts";
 import type {
   CampaignId,
   CampaignShellRecord,
@@ -9,26 +17,51 @@ import type {
 import {
   isCampaignShellRepository,
   type CampaignShellRepository,
+  type RealmAdmissionContext,
   type UnitOfWork,
   type UnitOfWorkContext
 } from "../ports/index.js";
+import type { ProductionReleaseCapabilityReader } from "../ports/production-release-ports.js";
+import type { StagingPlanningAuthorizationSource } from "../ports/staging-planning-authorization-ports.js";
 import { CampaignIdempotencyConflictError } from "./campaign-idempotency-conflict-error.js";
 import { computeCampaignRequestHash } from "./campaign-request-hash.js";
 import { resolveSceneCount } from "./scene-count-policy.js";
+import { planFeasibleCampaignDuration } from "./deterministic-duration-feasibility.js";
+import { ProfileSelectionResolver } from "./profile-selection-resolver.js";
 
 export interface CreateCampaignShellInput extends CreateCampaignShellRequest {
   readonly brief?: CreativeBrief | undefined;
   readonly candidateReferenceAssetIds?: readonly ReferenceAssetId[] | readonly string[] | undefined;
   readonly initialStatus?: CampaignStatus | undefined;
+  readonly realm?: ExecutionRealm | undefined;
+  readonly scope?: "production" | "staging" | undefined;
+  readonly allowedProfileSelections?: readonly ExecutionProfileSelection[] | undefined;
+  /**
+   * Authenticated principal requesting this campaign shell, used to scope which staging
+   * candidates are visible via StagingPlanningAuthorizationSource#listAuthorizedCandidates
+   * (issue #426, AC-14). Undefined means the unrestricted/anonymous view.
+   */
+  readonly principal?: string | undefined;
 }
 
 export interface CreateCampaignShellResult {
   readonly campaign: CampaignShellRecord;
+  readonly plan?: CampaignDurationPlan | undefined;
   readonly isIdempotentReplay: boolean;
 }
 
+export interface CreateCampaignShellOptions {
+  readonly realmContext?: RealmAdmissionContext | undefined;
+  readonly productionReleaseReader?: ProductionReleaseCapabilityReader | undefined;
+  readonly stagingAuthSource?: StagingPlanningAuthorizationSource | undefined;
+  readonly registryReader?: H3CapabilityResolverReader | undefined;
+}
+
 export class CreateCampaignShellUseCase {
-  constructor(private readonly uow: UnitOfWork) {}
+  constructor(
+    private readonly uow: UnitOfWork,
+    private readonly options?: CreateCampaignShellOptions | undefined
+  ) {}
 
   private getShellRepository(context: UnitOfWorkContext): CampaignShellRepository {
     if (!isCampaignShellRepository(context.campaigns)) {
@@ -106,19 +139,138 @@ export class CreateCampaignShellUseCase {
       throw new CampaignIdempotencyConflictError(input.idempotencyKey);
     }
 
-    const totalScenes = resolveSceneCount({
+    const campaignId = randomUUID() as CampaignId;
+    const realm: ExecutionRealm = input.realm ??
+      this.options?.realmContext?.realm ?? { kind: "deployed", deploymentId: "default" };
+
+    // Validate baseline campaign duration and scene count policy
+    resolveSceneCount({
       targetTotalDurationMs: input.targetTotalDurationMs,
       sceneCountOverride: input.sceneCountOverride
     });
 
+    // Validate that conflicting selectors are rejected
+    if (
+      input.targetEngineProfileId !== undefined &&
+      input.selectedProfileKey !== undefined &&
+      input.targetEngineProfileId !== input.selectedProfileKey
+    ) {
+      throw new CampaignDurationPlanningError(
+        "no_feasible_allocation",
+        `Conflicting profile selectors: targetEngineProfileId "${input.targetEngineProfileId}" does not match selectedProfileKey "${input.selectedProfileKey}"`
+      );
+    }
+    if (
+      input.executionProfileSelection !== undefined &&
+      input.selectedProfileKey !== undefined &&
+      input.executionProfileSelection.profileKey !== input.selectedProfileKey
+    ) {
+      throw new CampaignDurationPlanningError(
+        "no_feasible_allocation",
+        `Conflicting profile selectors: executionProfileSelection profileKey "${input.executionProfileSelection.profileKey}" does not match selectedProfileKey "${input.selectedProfileKey}"`
+      );
+    }
+    if (
+      input.executionProfileSelection !== undefined &&
+      input.targetEngineProfileId !== undefined &&
+      input.executionProfileSelection.profileKey !== input.targetEngineProfileId
+    ) {
+      throw new CampaignDurationPlanningError(
+        "no_feasible_allocation",
+        `Conflicting profile selectors: executionProfileSelection profileKey "${input.executionProfileSelection.profileKey}" does not match targetEngineProfileId "${input.targetEngineProfileId}"`
+      );
+    }
+    if (
+      input.allowedProfileSelections !== undefined &&
+      input.allowedDurationProfileKeys !== undefined
+    ) {
+      const allowedObjectKeys = new Set(input.allowedProfileSelections.map((s) => s.profileKey));
+      const allowedStringKeys = new Set(input.allowedDurationProfileKeys);
+      if (
+        allowedObjectKeys.size !== allowedStringKeys.size ||
+        ![...allowedObjectKeys].every((k) => allowedStringKeys.has(k))
+      ) {
+        throw new CampaignDurationPlanningError(
+          "no_feasible_allocation",
+          `Conflicting allowed profile selectors: allowedProfileSelections keys do not match allowedDurationProfileKeys`
+        );
+      }
+    }
+
+    const resolver = new ProfileSelectionResolver({
+      productionReleaseReader: this.options?.productionReleaseReader,
+      stagingAuthSource: this.options?.stagingAuthSource,
+      registryReader: this.options?.registryReader
+    });
+
+    const capabilities = await resolver.buildCapabilitiesMap(input.principal);
+
+    let selectedProfileSelection: ExecutionProfileSelection;
+    if (input.executionProfileSelection) {
+      selectedProfileSelection = await resolver.verifyAndResolveSelection(
+        input.executionProfileSelection,
+        input.principal
+      );
+    } else {
+      const keyToResolve =
+        input.selectedProfileKey ?? input.targetEngineProfileId ?? "MINIMAX_H3_720P_5S_I2V_V1";
+      selectedProfileSelection = await resolver.resolveSelection(keyToResolve, input.principal);
+    }
+
+    let allowedProfileSelections: readonly ExecutionProfileSelection[] | undefined;
+    if (input.allowedProfileSelections) {
+      allowedProfileSelections = await Promise.all(
+        input.allowedProfileSelections.map((sel) =>
+          resolver.verifyAndResolveSelection(sel, input.principal)
+        )
+      );
+    } else if (input.allowedDurationProfileKeys) {
+      allowedProfileSelections = await Promise.all(
+        input.allowedDurationProfileKeys.map((k) => resolver.resolveSelection(k, input.principal))
+      );
+    }
+
+    const scope: "production" | "staging" =
+      input.scope ??
+      (selectedProfileSelection.kind === "staging_candidate" ? "staging" : "production");
+
+    resolver.verifyScopeAndRealm(selectedProfileSelection, scope, realm);
+    if (allowedProfileSelections) {
+      for (const allowed of allowedProfileSelections) {
+        resolver.verifyScopeAndRealm(allowed, scope, realm);
+      }
+    }
+
+    if (
+      allowedProfileSelections &&
+      allowedProfileSelections.length > 0 &&
+      !allowedProfileSelections.some((s) => s.profileKey === selectedProfileSelection.profileKey)
+    ) {
+      throw new CampaignDurationPlanningError(
+        "no_feasible_allocation",
+        `Selected profile "${selectedProfileSelection.profileKey}" is not among allowedProfileSelections`
+      );
+    }
+
+    const plan = planFeasibleCampaignDuration({
+      campaignId,
+      targetTotalDurationMs: input.targetTotalDurationMs,
+      sceneCountOverride: input.sceneCountOverride,
+      selectedProfileSelection,
+      allowedProfileSelections,
+      realm,
+      scope,
+      capabilities
+    });
+
     const now = new Date().toISOString();
     const record: CampaignShellRecord = {
-      id: randomUUID() as CampaignId,
+      id: campaignId,
       clientId: input.clientId,
       title: input.title,
       targetPlatform: input.targetPlatform ?? "instagram_reels",
       status: input.initialStatus ?? "drafting",
-      totalScenes,
+      totalScenes: plan.allocations.length,
       approvedScenes: 0,
       createdAt: now,
       updatedAt: now,
@@ -127,8 +279,13 @@ export class CreateCampaignShellUseCase {
     };
 
     await repo.saveWithRequestHash(record, requestHash);
+    if (context.durationPlans) {
+      await context.durationPlans.savePlan(plan);
+    }
+
     return {
       campaign: record,
+      plan,
       isIdempotentReplay: false
     };
   }

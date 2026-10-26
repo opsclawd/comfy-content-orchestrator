@@ -1,4 +1,11 @@
-import type { PersistentMediaRef } from "@cco/contracts";
+import type {
+  EvidenceOrigin,
+  ExecutionRealm,
+  ManifestMeasuredMedia,
+  OwnerKind,
+  PersistentMediaRef,
+  SimulationDescriptor
+} from "@cco/contracts";
 
 export class IncompleteVideoStemSourceError extends Error {
   override readonly name = "IncompleteVideoStemSourceError";
@@ -26,12 +33,32 @@ export interface GenerationManifestComponentIdentity {
    * manifest references from being accepted into assembly provenance.
    */
   readonly outputChecksumsSha256?: readonly string[] | undefined;
+  readonly route?: "i2v" | "ref2v" | undefined;
+  readonly candidateSpecificationDigest?: string | undefined;
 }
 
 export interface VideoStemSourceRecord {
   readonly generationManifestId: string;
+  readonly jobId?: string | undefined;
+  readonly sceneId?: string | undefined;
+  readonly renderProfile?: string | undefined;
+  readonly route?: "i2v" | "ref2v" | undefined;
+  readonly routingMode?: string | undefined;
+  readonly candidateSpecificationDigest?: string | undefined;
+  readonly specRevision?: number | undefined;
+  readonly frames?: number | undefined;
+  readonly fps?: number | undefined;
+  readonly outputChecksumsSha256?: readonly string[] | undefined;
   readonly media: PersistentMediaRef;
   readonly renderAttempt: number;
+  readonly executionScope?: "production" | "staging" | undefined;
+  readonly measuredMedia?: ManifestMeasuredMedia | undefined;
+  readonly realm?: ExecutionRealm | undefined;
+  readonly evidenceOrigin?: EvidenceOrigin | undefined;
+  readonly ownerKind?: OwnerKind | undefined;
+  readonly runId?: string | undefined;
+  readonly acceptanceRunId?: string | undefined;
+  readonly simulationDescriptor?: SimulationDescriptor | undefined;
 }
 
 export interface GenerationManifestRepository {

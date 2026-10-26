@@ -192,6 +192,16 @@ export class ComfyUiClient {
     }
   }
 
+  async interrupt(): Promise<void> {
+    try {
+      await this.transport.fetch(`${this.baseUrl}/interrupt`, {
+        method: "POST"
+      });
+    } catch {
+      // best-effort interrupt
+    }
+  }
+
   async uploadImage(
     filename: string,
     bytes: Uint8Array,

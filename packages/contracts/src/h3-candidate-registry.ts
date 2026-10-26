@@ -1,4 +1,17 @@
-import type { H3CandidateProfile, H3ProfileFrameCapability } from "./h3-candidate-profile.js";
+import type {
+  H3CandidateExecutionSpecification,
+  H3CandidateProfile,
+  H3ProfileFrameCapability
+} from "./h3-candidate-profile.js";
+
+export interface H3CapabilityResolverReader {
+  getCandidateProfile?(key: string | undefined): Readonly<H3CandidateProfile> | undefined;
+  getReleasedProfile?(
+    key: string | undefined
+  ): Readonly<{ key: string; specification: H3CandidateExecutionSpecification }> | undefined;
+  getProfileCapability?(key: string | undefined): H3ProfileFrameCapability | undefined;
+  resolveH3ProfileFrameCapabilities?(key: string | undefined): H3ProfileFrameCapability | undefined;
+}
 
 /**
  * Immutable accepted candidate catalog.
@@ -48,7 +61,8 @@ export function isH3CandidateProfileKey(key: string | undefined): boolean {
  * - No interpolation, model advertising, or range expansion is permitted.
  */
 export function resolveH3ProfileFrameCapabilities(
-  profileKeyOrId: string | undefined
+  profileKeyOrId: string | undefined,
+  reader?: H3CapabilityResolverReader | undefined
 ): H3ProfileFrameCapability | undefined {
   if (!profileKeyOrId) return undefined;
   const normalized = profileKeyOrId.toLowerCase().trim();
@@ -96,8 +110,37 @@ export function resolveH3ProfileFrameCapabilities(
     });
   }
 
-  // Candidate profile lookup in shared accepted catalog
-  const candidate = getH3CandidateProfile(profileKeyOrId);
+  if (reader?.getProfileCapability) {
+    const directCap = reader.getProfileCapability(profileKeyOrId);
+    if (directCap) return directCap;
+  }
+
+  if (reader?.resolveH3ProfileFrameCapabilities) {
+    const directCap = reader.resolveH3ProfileFrameCapabilities(profileKeyOrId);
+    if (directCap) return directCap;
+  }
+
+  if (reader?.getReleasedProfile) {
+    const release = reader.getReleasedProfile(profileKeyOrId);
+    if (release) {
+      const frames = release.specification.frames;
+      return Object.freeze({
+        profileKey: release.key,
+        route: release.specification.route,
+        routingMode: release.specification.routingMode,
+        width: release.specification.width,
+        height: release.specification.height,
+        fps: release.specification.fps,
+        allowedFrameCounts: Object.freeze([frames]),
+        isAllowedFrameCount: (f: number) => f === frames
+      });
+    }
+  }
+
+  // Candidate profile lookup in reader or shared accepted catalog
+  const candidate = reader?.getCandidateProfile
+    ? reader.getCandidateProfile(profileKeyOrId)
+    : getH3CandidateProfile(profileKeyOrId);
   if (candidate) {
     const frames = candidate.specification.frames;
     return Object.freeze({
@@ -120,9 +163,10 @@ export function resolveH3ProfileFrameCapabilities(
  */
 export function isFrameCountAllowedForH3Profile(
   profileKeyOrId: string | undefined,
-  frameCount: number
+  frameCount: number,
+  reader?: H3CapabilityResolverReader | undefined
 ): boolean {
-  const capability = resolveH3ProfileFrameCapabilities(profileKeyOrId);
+  const capability = resolveH3ProfileFrameCapabilities(profileKeyOrId, reader);
   if (!capability) return false;
   return capability.isAllowedFrameCount(frameCount);
 }

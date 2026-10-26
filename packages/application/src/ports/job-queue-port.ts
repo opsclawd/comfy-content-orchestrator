@@ -1,4 +1,12 @@
-import type { JobId, JobKind, LeaseToken, RenderJob, SceneId, ShotPlanId } from "@cco/domain";
+import type {
+  ExecutionScope,
+  JobId,
+  JobKind,
+  LeaseToken,
+  RenderJob,
+  SceneId,
+  ShotPlanId
+} from "@cco/domain";
 
 export interface EnqueueJobInput {
   readonly sceneId: SceneId;
@@ -6,12 +14,15 @@ export interface EnqueueJobInput {
   readonly workflowTemplate: string;
   readonly injectedPayload: Readonly<Record<string, unknown>>;
   readonly maxRetries?: number;
+  readonly executionScope?: ExecutionScope;
+  readonly stagingOperationId?: string | null;
 }
 
 export interface ClaimJobInput {
   readonly workerId: string;
   readonly leaseDurationMs: number;
   readonly allowedJobKinds?: readonly JobKind[];
+  readonly allowedExecutionScopes?: readonly ExecutionScope[];
 }
 
 export interface JobAdmissionGate {
@@ -54,6 +65,9 @@ export interface JobQueuePort {
   fail(jobId: JobId, leaseToken: LeaseToken, errorTrace: string): Promise<JobMutationResult>;
   defer(jobId: JobId, leaseToken: LeaseToken, reason: string): Promise<JobMutationResult>;
   areAllJobsTerminal(sceneId: SceneId, jobKind: JobKind): Promise<boolean>;
+  findByStagingOperationId?(stagingOperationId: string): Promise<RenderJob | undefined>;
 }
 
-export type TransactionalJobEnqueuer = Pick<JobQueuePort, "enqueue" | "areAllJobsTerminal">;
+export type TransactionalJobEnqueuer = Pick<JobQueuePort, "enqueue" | "areAllJobsTerminal"> & {
+  findByStagingOperationId?(stagingOperationId: string): Promise<RenderJob | undefined>;
+};

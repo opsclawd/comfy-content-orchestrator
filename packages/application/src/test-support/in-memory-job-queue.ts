@@ -42,7 +42,9 @@ export class InMemoryJobQueue implements JobQueuePort {
       maxRetries: input.maxRetries ?? 3,
       errorTrace: null,
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      executionScope: input.executionScope ?? "production",
+      stagingOperationId: input.stagingOperationId ?? null
     });
   }
 
@@ -102,5 +104,9 @@ export class InMemoryJobQueue implements JobQueuePort {
       (j) => j.status === "queued" || j.status === "leased" || j.status === "rendering"
     );
     return pending.length === 0;
+  }
+
+  async findByStagingOperationId(stagingOperationId: string): Promise<RenderJob | undefined> {
+    return this._jobs.find((j) => j.stagingOperationId === stagingOperationId);
   }
 }

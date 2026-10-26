@@ -17,10 +17,11 @@ import {
   type PlanCampaignStoryboardResult
 } from "@cco/application";
 import type { ReferenceAssetId } from "@cco/domain";
-import type { ControlApiContainer } from "../types.js";
+import type { ControlApiContainer, ReviewerIdentityResolver } from "../types.js";
 
 export interface CampaignRoutesOptions {
   readonly container: ControlApiContainer;
+  readonly reviewerIdentityResolver?: ReviewerIdentityResolver | undefined;
 }
 
 export const campaignSceneRouteSchema = {
@@ -41,7 +42,7 @@ export const campaignRoutes: FastifyPluginAsync<CampaignRoutesOptions> = async (
   fastify: FastifyInstance,
   opts: CampaignRoutesOptions
 ): Promise<void> => {
-  const { container } = opts;
+  const { container, reviewerIdentityResolver } = opts;
 
   fastify.post("/api/campaigns", async (request, reply) => {
     if (!container.useCases.createCampaign) {
@@ -193,6 +194,9 @@ export const campaignRoutes: FastifyPluginAsync<CampaignRoutesOptions> = async (
       );
     }
     const body = PlanCampaignStoryboardRequestSchema.parse(request.body);
+    const principal = reviewerIdentityResolver
+      ? await reviewerIdentityResolver.resolve(request)
+      : undefined;
 
     const planInput = {
       idempotencyKey: body.idempotencyKey,
@@ -202,6 +206,7 @@ export const campaignRoutes: FastifyPluginAsync<CampaignRoutesOptions> = async (
       targetTotalDurationMs: body.targetTotalDurationMs,
       sceneCountOverride: body.sceneCountOverride,
       brief: body.brief,
+      ...(principal !== undefined ? { principal } : {}),
       ...(body.candidateReferenceAssetIds !== undefined
         ? {
             candidateReferenceAssetIds:
@@ -210,7 +215,20 @@ export const campaignRoutes: FastifyPluginAsync<CampaignRoutesOptions> = async (
         : {}),
       ...(body.targetEngineProfileId !== undefined
         ? { targetEngineProfileId: body.targetEngineProfileId }
-        : {})
+        : {}),
+      ...(body.selectedProfileKey !== undefined
+        ? { selectedProfileKey: body.selectedProfileKey }
+        : {}),
+      ...(body.allowedDurationProfileKeys !== undefined
+        ? { allowedDurationProfileKeys: body.allowedDurationProfileKeys }
+        : {}),
+      ...(body.executionProfileSelection !== undefined
+        ? { executionProfileSelection: body.executionProfileSelection }
+        : {}),
+      ...(body.allowedProfileSelections !== undefined
+        ? { allowedProfileSelections: body.allowedProfileSelections }
+        : {}),
+      ...(body.scope !== undefined ? { scope: body.scope } : {})
     };
 
     const shellResult =

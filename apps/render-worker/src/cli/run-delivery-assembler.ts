@@ -4,24 +4,31 @@ import pg from "pg";
 const { Pool } = pg;
 import {
   AssembleDeliveryReel,
+  DefaultAssemblyPlanningEnvelopeReader,
+  type AssemblyPlanningEnvelopeReader,
   EnforceLicenseRouting,
   type GenerationManifestRepository,
   type MediaAssemblerPort,
-  type ObjectStoragePort
+  type ObjectStoragePort,
+  type UnitOfWork
 } from "@cco/application";
-import type { ComponentRef } from "@cco/contracts";
+import { BUCKETS } from "@cco/shared";
+import { type ComponentRef } from "@cco/contracts";
 import {
   FfmpegMediaAssemblerAdapter,
   JsonFileLicenseRegistryPort,
   PostgresGenerationManifestRepository,
+  PostgresUnitOfWork,
   S3ObjectStorage,
   type S3ObjectStorageOptions
 } from "@cco/infrastructure";
 import {
   createDeliveryAssemblyControlApiClient,
+  createAcceptanceAssemblyControlApiClient,
   type DeliveryAssemblyControlApiClient
 } from "../control-api-client.js";
 import { DeliveryAssemblyWorker } from "../delivery-assembly-worker.js";
+import { AcceptanceDeliveryAssemblyWorker } from "../acceptance-delivery-assembly-worker.js";
 import type { WorkerLogger } from "../worker.js";
 
 const DEFAULT_REPO_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)), "../../../../");
@@ -218,6 +225,7 @@ export interface DeliveryReelAssemblerOverrides {
   readonly generationManifestRepository?: GenerationManifestRepository | undefined;
   readonly objectStorage?: ObjectStoragePort | undefined;
   readonly mediaAssembler?: MediaAssemblerPort | undefined;
+  readonly envelopeReader?: AssemblyPlanningEnvelopeReader | undefined;
   readonly runtimeComponents?: readonly ComponentRef[] | undefined;
   readonly enforceLicenseRouting?: EnforceLicenseRouting | undefined;
   readonly assembleDeliveryReelUseCase?: AssembleDeliveryReel | undefined;
@@ -250,6 +258,9 @@ export async function createDeliveryReelAssembler(
   const enforceLicenseRouting =
     overrides?.enforceLicenseRouting ?? new EnforceLicenseRouting({ registry: licenseRegistry });
 
+  const envelopeReader = overrides?.envelopeReader ?? new DefaultAssemblyPlanningEnvelopeReader();
+  const envelope = await envelopeReader.getEnvelope();
+
   const mediaAssembler =
     overrides?.mediaAssembler ??
     new FfmpegMediaAssemblerAdapter({
@@ -258,6 +269,8 @@ export async function createDeliveryReelAssembler(
       workspaceRoot: config.assemblyWorkspaceRoot,
       outputBucket: config.s3DeliveryBucket,
       pythonPath: config.pythonPath,
+      maxStemCount: envelope.maxStemCount,
+      maxTotalDurationMs: envelope.maxExpectedTotalDurationMs,
       objectStorage
     });
 
@@ -335,12 +348,134 @@ export async function createDeliveryReelAssembler(
   };
 }
 
+export interface AcceptanceDeliveryReelAssemblerOverrides {
+  readonly pool?: pg.Pool | undefined;
+  readonly uow?: UnitOfWork | undefined;
+  readonly generationManifestRepository?: GenerationManifestRepository | undefined;
+  readonly objectStorage?: ObjectStoragePort | undefined;
+  readonly mediaAssembler?: MediaAssemblerPort | undefined;
+  readonly envelopeReader?: AssemblyPlanningEnvelopeReader | undefined;
+  readonly runtimeComponents?: readonly ComponentRef[] | undefined;
+  readonly enforceLicenseRouting?: EnforceLicenseRouting | undefined;
+  readonly assembleDeliveryReelUseCase?: AssembleDeliveryReel | undefined;
+  readonly logger?: WorkerLogger | undefined;
+}
+
+export interface CreatedAcceptanceDeliveryReelAssembler {
+  readonly worker: AcceptanceDeliveryAssemblyWorker;
+  readonly pool: pg.Pool;
+  readonly assembleDeliveryReelUseCase: AssembleDeliveryReel;
+  readonly runtimeComponents: readonly ComponentRef[];
+  readonly cleanup: () => Promise<void>;
+}
+
+export async function createAcceptanceDeliveryReelAssembler(
+  config: DeliveryAssemblerRuntimeConfig,
+  overrides?: AcceptanceDeliveryReelAssemblerOverrides
+): Promise<CreatedAcceptanceDeliveryReelAssembler> {
+  const pool = overrides?.pool ?? new Pool({ connectionString: config.databaseUrl });
+  const ownsPool = !overrides?.pool;
+
+  const generationManifestRepository =
+    overrides?.generationManifestRepository ?? new PostgresGenerationManifestRepository(pool);
+
+  const objectStorage = overrides?.objectStorage ?? new S3ObjectStorage(config.s3Config);
+
+  const licenseRegistry = JsonFileLicenseRegistryPort.fromFile(config.licenseRegistryPath);
+  const enforceLicenseRouting =
+    overrides?.enforceLicenseRouting ?? new EnforceLicenseRouting({ registry: licenseRegistry });
+
+  const envelopeReader = overrides?.envelopeReader ?? new DefaultAssemblyPlanningEnvelopeReader();
+  const envelope = await envelopeReader.getEnvelope();
+
+  const mediaAssembler =
+    overrides?.mediaAssembler ??
+    new FfmpegMediaAssemblerAdapter({
+      ffmpegPath: config.ffmpegPath,
+      ffprobePath: config.ffprobePath,
+      workspaceRoot: config.assemblyWorkspaceRoot,
+      outputBucket: BUCKETS.CANDIDATES,
+      pythonPath: config.pythonPath,
+      maxStemCount: envelope.maxStemCount,
+      maxTotalDurationMs: envelope.maxExpectedTotalDurationMs,
+      objectStorage
+    });
+
+  const runtimeComponents =
+    overrides?.runtimeComponents ??
+    (mediaAssembler.getRuntimeComponents ? await mediaAssembler.getRuntimeComponents() : []);
+
+  const assembleDeliveryReelUseCase =
+    overrides?.assembleDeliveryReelUseCase ??
+    new AssembleDeliveryReel({
+      mediaAssembler,
+      objectStorage,
+      enforceLicenseRouting,
+      generationManifestRepository,
+      runtimeComponents
+    });
+
+  const uow = overrides?.uow ?? new PostgresUnitOfWork(pool);
+  const logger: WorkerLogger = overrides?.logger ?? console;
+  const controlApiClient = createAcceptanceAssemblyControlApiClient({
+    baseUrl: config.controlApiBaseUrl
+  });
+
+  const worker = new AcceptanceDeliveryAssemblyWorker(
+    {
+      uow,
+      controlApiClient,
+      assembleDeliveryReel: async (params) => {
+        return assembleDeliveryReelUseCase.assemble(params);
+      },
+      objectStorage,
+      logger
+    },
+    {
+      workerId: config.workerId,
+      pollIntervalMs: config.pollIntervalMs,
+      lockTimeoutMs: config.leaseDurationMs
+    }
+  );
+
+  const cleanup = async () => {
+    if (ownsPool) {
+      await pool.end().catch(() => {});
+    }
+  };
+
+  return {
+    worker,
+    pool,
+    assembleDeliveryReelUseCase,
+    runtimeComponents,
+    cleanup
+  };
+}
+
 export async function runDeliveryAssemblerCli(
   argv: string[] = process.argv.slice(2),
   env: NodeJS.ProcessEnv = process.env
 ): Promise<void> {
   const config = parseDeliveryAssemblerRuntimeConfig(env, argv);
-  const assembler = await createDeliveryReelAssembler(config);
+  const getArg = (name: string): string | undefined => {
+    const prefix = `--${name}=`;
+    for (let i = 0; i < argv.length; i++) {
+      const arg = argv[i];
+      if (arg?.startsWith(prefix)) {
+        return arg.slice(prefix.length);
+      }
+      if (arg === `--${name}` && i + 1 < argv.length) {
+        return argv[i + 1];
+      }
+    }
+    return undefined;
+  };
+  const role = (getArg("role") ?? env.ASSEMBLER_ROLE ?? "delivery").trim();
+  const isAcceptance = role === "acceptance" || argv.includes("--acceptance");
+  const assembler = isAcceptance
+    ? await createAcceptanceDeliveryReelAssembler(config)
+    : await createDeliveryReelAssembler(config);
 
   const shutdown = async () => {
     console.info("Shutting down delivery assembly worker...");
