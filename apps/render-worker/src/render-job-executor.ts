@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, unlink, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   canonicalizeReferenceBindings,
@@ -30,6 +30,7 @@ import {
   type H3CandidateAuthorizationPort,
   type H3RuntimeObservationPort,
   type ManifestSourceProvenance,
+  type ProductionReleaseCapabilityReader,
   H3CandidateEligibilityService,
   parseImageByteHeader
 } from "@cco/application";
@@ -57,9 +58,13 @@ import {
   type H3CandidateExecutionSpecification,
   type NodeInjectionTarget,
   type ProfileInjectionTopology,
+  type OwnerKind,
+  OwnerKindSchema,
   RENDER_PROFILE_ALIASES,
   type RenderProfileKey,
-  type ShotPlanRoutingMode
+  type ShotPlanRoutingMode,
+  type H3ReleaseProfileKey,
+  isReleasedProductionProfileKey
 } from "@cco/contracts";
 import type {
   CampaignRecord,
@@ -265,6 +270,7 @@ export type ProductionManifestAssembler =
 
 export interface RenderJobExecutorDependencies {
   readonly loadCertificationProfile?: typeof loadCertificationProfile | undefined;
+  readonly productionReleaseReader?: ProductionReleaseCapabilityReader | undefined;
   readonly readApprovedProvenance?: ((filePath: string) => Promise<unknown>) | undefined;
   readonly collectCertificationProvenance?: typeof collectCertificationProvenance | undefined;
   readonly verifyGoldMasterProvenance?: typeof verifyGoldMasterProvenance | undefined;
@@ -475,6 +481,11 @@ interface ValidatedInjectedPayload {
   readonly authorizationGrant?: H3CandidateAuthorizationGrant | undefined;
   readonly requestedDurationMs?: number | undefined;
   readonly nominalDurationMs?: number | undefined;
+  readonly ownerKind?: OwnerKind | undefined;
+  readonly acceptanceRunId?: string | undefined;
+  readonly releasedProfileKey?: string | undefined;
+  readonly releasedSpecificationDigest?: string | undefined;
+  readonly releaseDigest?: string | undefined;
 }
 
 const ALLOWED_CANDIDATE_KEYS = new Set([
@@ -499,7 +510,12 @@ const ALLOWED_PRODUCTION_KEYS = new Set([
   "candidateSpecificationDigest",
   "authorizationGrant",
   "requestedDurationMs",
-  "nominalDurationMs"
+  "nominalDurationMs",
+  "ownerKind",
+  "acceptanceRunId",
+  "releasedProfileKey",
+  "releasedSpecificationDigest",
+  "releaseDigest"
 ]);
 const ALLOWED_REF2V_PRODUCTION_KEYS = new Set([
   "prompt",
@@ -515,7 +531,12 @@ const ALLOWED_REF2V_PRODUCTION_KEYS = new Set([
   "candidateSpecificationDigest",
   "authorizationGrant",
   "requestedDurationMs",
-  "nominalDurationMs"
+  "nominalDurationMs",
+  "ownerKind",
+  "acceptanceRunId",
+  "releasedProfileKey",
+  "releasedSpecificationDigest",
+  "releaseDigest"
 ]);
 const ALLOWED_H3_I2V_PRODUCTION_KEYS = new Set([
   "prompt",
@@ -532,7 +553,12 @@ const ALLOWED_H3_I2V_PRODUCTION_KEYS = new Set([
   "candidateSpecificationDigest",
   "authorizationGrant",
   "requestedDurationMs",
-  "nominalDurationMs"
+  "nominalDurationMs",
+  "ownerKind",
+  "acceptanceRunId",
+  "releasedProfileKey",
+  "releasedSpecificationDigest",
+  "releaseDigest"
 ]);
 
 export function validateInjectedPayload(
@@ -540,21 +566,36 @@ export function validateInjectedPayload(
   jobKind: JobKind,
   profile?: CertificationProfile | undefined,
   registryReader?:
-    | { getCandidateProfile(key: string | undefined): Readonly<H3CandidateProfile> | undefined }
+    | {
+        getCandidateProfile?(key: string | undefined): Readonly<H3CandidateProfile> | undefined;
+        getReleasedProfile?(
+          key: string | undefined
+        ): Readonly<{ key: string; specification: H3CandidateExecutionSpecification }> | undefined;
+      }
     | undefined
 ): ValidatedInjectedPayload {
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
     throw new RenderJobPayloadValidationError("injectedPayload must be an object");
   }
 
+  // A released profile's route (i2v vs ref2v) isn't encoded in its hash-keyed
+  // renderProfileIdentity, so resolve it through the same capability lookup
+  // used for frame-count validation below instead of relying solely on the
+  // fixed legacy identity/engine string comparisons.
+  const releasedCapability = isReleasedProductionProfileKey(profile?.renderProfileIdentity?.key)
+    ? resolveH3ProfileFrameCapabilities(profile?.renderProfileIdentity?.key, registryReader)
+    : undefined;
+
   const isRef2v =
     profile?.engine === "minimax_h3_ref2v" ||
     profile?.renderProfileIdentity?.key === "MINIMAX_H3_720P_5S_REF2V_V1" ||
-    profile?.id === "minimax-h3-720p-124f-ref2v";
+    profile?.id === "minimax-h3-720p-124f-ref2v" ||
+    releasedCapability?.route === "ref2v";
 
   const isH3I2v =
     profile?.engine === "minimax_h3_i2v" ||
     profile?.renderProfileIdentity?.key === "MINIMAX_H3_720P_5S_I2V_V1" ||
+    releasedCapability?.route === "i2v" ||
     profile?.id === "minimax-h3-720p-124f-i2v";
 
   const allowedKeys =
@@ -672,7 +713,7 @@ export function validateInjectedPayload(
         (profile as { topology?: ProfileInjectionTopology }).topology ??
         getProfileInjectionTopology(profileKey);
       if (!topology && registryReader && typeof profileKey === "string") {
-        const candidate = registryReader.getCandidateProfile(profileKey);
+        const candidate = registryReader.getCandidateProfile?.(profileKey);
         if (candidate?.topology) {
           topology = candidate.topology;
         }
@@ -788,7 +829,7 @@ export function validateInjectedPayload(
         (profile as { topology?: ProfileInjectionTopology }).topology ??
         getProfileInjectionTopology(profileKey);
       if (!topology && registryReader && typeof profileKey === "string") {
-        const candidate = registryReader.getCandidateProfile(profileKey);
+        const candidate = registryReader.getCandidateProfile?.(profileKey);
         if (candidate?.topology) {
           topology = candidate.topology;
         }
@@ -968,6 +1009,63 @@ export function validateInjectedPayload(
     nominalDurationMs = raw.nominalDurationMs;
   }
 
+  let ownerKind: OwnerKind | undefined;
+  if ("ownerKind" in raw && raw.ownerKind !== undefined) {
+    const ownerKindParsed = OwnerKindSchema.safeParse(raw.ownerKind);
+    if (!ownerKindParsed.success) {
+      throw new RenderJobPayloadValidationError(
+        `injectedPayload.ownerKind must be one of: ${OwnerKindSchema.options.join(", ")}`
+      );
+    }
+    ownerKind = ownerKindParsed.data;
+  }
+
+  let acceptanceRunId: string | undefined;
+  if ("acceptanceRunId" in raw && raw.acceptanceRunId !== undefined) {
+    if (typeof raw.acceptanceRunId !== "string" || raw.acceptanceRunId.trim().length === 0) {
+      throw new RenderJobPayloadValidationError(
+        "injectedPayload.acceptanceRunId must be a non-empty string"
+      );
+    }
+    acceptanceRunId = raw.acceptanceRunId.trim();
+  }
+
+  let releasedProfileKey: string | undefined;
+  if ("releasedProfileKey" in raw && raw.releasedProfileKey !== undefined) {
+    if (
+      typeof raw.releasedProfileKey !== "string" ||
+      !/^H3_RELEASE_[0-9a-f]{64}_V[1-9]\d*$/.test(raw.releasedProfileKey)
+    ) {
+      throw new RenderJobPayloadValidationError(
+        'injectedPayload.releasedProfileKey must match pattern "H3_RELEASE_<64-hex>_V<version>"'
+      );
+    }
+    releasedProfileKey = raw.releasedProfileKey;
+  }
+
+  let releasedSpecificationDigest: string | undefined;
+  if ("releasedSpecificationDigest" in raw && raw.releasedSpecificationDigest !== undefined) {
+    if (
+      typeof raw.releasedSpecificationDigest !== "string" ||
+      !/^[0-9a-f]{64}$/.test(raw.releasedSpecificationDigest)
+    ) {
+      throw new RenderJobPayloadValidationError(
+        "injectedPayload.releasedSpecificationDigest must be a 64-character lowercase hex string"
+      );
+    }
+    releasedSpecificationDigest = raw.releasedSpecificationDigest;
+  }
+
+  let releaseDigest: string | undefined;
+  if ("releaseDigest" in raw && raw.releaseDigest !== undefined) {
+    if (typeof raw.releaseDigest !== "string" || !/^[0-9a-f]{64}$/.test(raw.releaseDigest)) {
+      throw new RenderJobPayloadValidationError(
+        "injectedPayload.releaseDigest must be a 64-character lowercase hex string"
+      );
+    }
+    releaseDigest = raw.releaseDigest;
+  }
+
   return {
     prompt,
     negativePrompt,
@@ -985,7 +1083,12 @@ export function validateInjectedPayload(
     candidateSpecificationDigest,
     authorizationGrant,
     requestedDurationMs,
-    nominalDurationMs
+    nominalDurationMs,
+    ownerKind,
+    acceptanceRunId,
+    releasedProfileKey,
+    releasedSpecificationDigest,
+    releaseDigest
   };
 }
 
@@ -3397,6 +3500,7 @@ export function createCertifiedRenderJobExecutor(
     }
     // 1. Resolve certified profile
     let profile: Awaited<ReturnType<typeof loadCertificationProfileFn>>;
+    let resolvedReleaseSpecification: H3CandidateExecutionSpecification | undefined;
     try {
       profile = await loadCertificationProfileFn(manifestPath, job.workflowTemplate);
     } catch (cause) {
@@ -3410,6 +3514,73 @@ export function createCertifiedRenderJobExecutor(
         } catch {
           throw new MissingCertifiedProfileError(job.workflowTemplate, { cause });
         }
+      } else if (deps?.productionReleaseReader) {
+        const releasedKey = (rawInjected?.releasedProfileKey as string) ?? job.workflowTemplate;
+        const released = await deps.productionReleaseReader.getReleasedProfile(releasedKey);
+        if (released) {
+          const isRef2v =
+            released.specification.route === "ref2v" ||
+            Boolean(
+              released.topology?.referenceImages && released.topology.referenceImages.length > 0
+            );
+          const workflowRelativePath = isRef2v
+            ? "minimax_h3_720p_ref2v_124f_api.json"
+            : "minimax_h3_720p_i2v_124f_api.json";
+          const manifestDir = dirname(manifestPath);
+          const workflowPath = resolve(manifestDir, workflowRelativePath);
+          const rawWorkflow = await readWorkflowFileFn(workflowPath);
+          const computedWorkflowHash = hashWorkflowFn(rawWorkflow);
+          if (computedWorkflowHash !== released.specification.workflowHash) {
+            throw new WorkflowHashMismatchError(
+              `Released profile "${released.key}" workflow hash mismatch: expected "${released.specification.workflowHash}", got "${computedWorkflowHash}"`
+            );
+          }
+          profile = {
+            id: released.key,
+            engine: isRef2v ? "minimax_h3_ref2v" : "minimax_h3_i2v",
+            workflowPath,
+            workflowRelativePath,
+            expectedWorkflowHash: released.specification.workflowHash,
+            source: {
+              kind: "official_upstream",
+              uri: `comfy-release://${released.key}`,
+              revision: `v${released.version}`,
+              license: "proprietary"
+            },
+            baseline: {
+              width: released.specification.width,
+              height: released.specification.height,
+              frames: released.specification.frames,
+              steps: released.specification.steps,
+              approximateDurationSeconds: Math.round(
+                released.specification.frames / released.specification.fps
+              )
+            },
+            minFreeDiskGb: 10,
+            runnerProfile: "director_rtx_4090",
+            models: [],
+            assertions: [],
+            // Preserve the real, hash-versioned released key (and the release's
+            // own version number) rather than casting to a fixed-frame-count
+            // legacy identity: resolveH3ProfileFrameCapabilities, getProfileInjectionTopology,
+            // and the license-component lookup below all need the authentic
+            // released key to resolve this profile's real (possibly >124) frame
+            // count instead of silently falling back to the 124-frame legacy
+            // capability.
+            renderProfileIdentity: {
+              key: released.key as H3ReleaseProfileKey,
+              version: released.version
+            },
+            // getProfileInjectionTopology only recognizes the fixed legacy
+            // profile identities; a dynamically hash-keyed release has no
+            // entry there, so carry the release's own topology through
+            // instead of relying on that lookup to resolve it.
+            topology: released.topology
+          };
+          resolvedReleaseSpecification = released.specification;
+        } else {
+          throw new MissingCertifiedProfileError(job.workflowTemplate, { cause });
+        }
       } else {
         throw new MissingCertifiedProfileError(job.workflowTemplate, { cause });
       }
@@ -3420,15 +3591,31 @@ export function createCertifiedRenderJobExecutor(
       );
     }
 
-    const topology = getProfileInjectionTopology(
-      profile.renderProfileIdentity?.key ?? profile.id ?? profile.engine
-    );
+    const topology =
+      profile.topology ??
+      getProfileInjectionTopology(
+        profile.renderProfileIdentity?.key ?? profile.id ?? profile.engine
+      );
     if (profile.renderProfileIdentity && !topology) {
       throw new MissingProfileTopologyError(profile.id, profile.renderProfileIdentity.key);
     }
 
     // 2. Validate injectedPayload with profile awareness
-    const validatedInjected = validateInjectedPayload(job.injectedPayload, job.jobKind, profile);
+    const renderProfileIdentityKey = profile.renderProfileIdentity.key;
+    const releasedProfileReader = isReleasedProductionProfileKey(renderProfileIdentityKey)
+      ? {
+          getReleasedProfile: (key: string | undefined) =>
+            key === renderProfileIdentityKey
+              ? { key: renderProfileIdentityKey, specification: resolvedReleaseSpecification! }
+              : undefined
+        }
+      : undefined;
+    const validatedInjected = validateInjectedPayload(
+      job.injectedPayload,
+      job.jobKind,
+      profile,
+      releasedProfileReader
+    );
 
     // 3. Approved provenance & live provenance collection & verification
     const approvedProvenance = await readApprovedProvenanceFn(goldMasterProvenancePath);
@@ -3463,14 +3650,43 @@ export function createCertifiedRenderJobExecutor(
       );
     }
 
+    const isRef2v =
+      profile.engine === "minimax_h3_ref2v" ||
+      profile.renderProfileIdentity.key === "MINIMAX_H3_720P_5S_REF2V_V1" ||
+      profile.id === "minimax-h3-720p-124f-ref2v" ||
+      resolvedReleaseSpecification?.route === "ref2v";
+
+    const isH3I2v =
+      profile.engine === "minimax_h3_i2v" ||
+      profile.renderProfileIdentity.key === "MINIMAX_H3_720P_5S_I2V_V1" ||
+      profile.id === "minimax-h3-720p-124f-i2v" ||
+      resolvedReleaseSpecification?.route === "i2v";
+
+    // A released profile's hash-keyed renderProfileIdentity is never itself
+    // registered in the license registry (see enforceLicense in
+    // execute-profile-render.ts) - it executes the same approved base MiniMax
+    // H3 weights, routed by i2v/ref2v, so license checks must resolve against
+    // that base component instead of failing closed on every release key.
+    const licenseComponentId = isReleasedProductionProfileKey(profile.renderProfileIdentity.key)
+      ? isRef2v
+        ? "MINIMAX_H3_720P_5S_REF2V_V1"
+        : "MINIMAX_H3_720P_5S_I2V_V1"
+      : profile.renderProfileIdentity.key;
+    const licenseVersionOrRevision = isReleasedProductionProfileKey(
+      profile.renderProfileIdentity.key
+    )
+      ? "1"
+      : String(profile.renderProfileIdentity.version);
+    const licenseEngine = isRef2v ? "minimax_h3_ref2v" : isH3I2v ? "minimax_h3_i2v" : undefined;
+
     // Authoritative license routing guard evaluated BEFORE any external I/O (S3 reads, ComfyUI staging, GPU lease)
     if (deps?.enforceLicenseRouting) {
       deps.enforceLicenseRouting.enforce({
         requiredComponents: [
           {
-            componentId: profile.renderProfileIdentity.key,
+            componentId: licenseComponentId,
             componentType: "model",
-            versionOrRevision: String(profile.renderProfileIdentity.version)
+            versionOrRevision: licenseVersionOrRevision
           }
         ],
         operation: {
@@ -3488,19 +3704,10 @@ export function createCertifiedRenderJobExecutor(
         renderJobId: job.jobId,
         sceneId: job.sceneId,
         renderProfileKey: profile.renderProfileIdentity.key,
-        renderProfileVersion: profile.renderProfileIdentity.version
+        renderProfileVersion: profile.renderProfileIdentity.version,
+        ...(licenseEngine !== undefined ? { engine: licenseEngine } : {})
       });
     }
-
-    const isRef2v =
-      profile.engine === "minimax_h3_ref2v" ||
-      profile.renderProfileIdentity.key === "MINIMAX_H3_720P_5S_REF2V_V1" ||
-      profile.id === "minimax-h3-720p-124f-ref2v";
-
-    const isH3I2v =
-      profile.engine === "minimax_h3_i2v" ||
-      profile.renderProfileIdentity.key === "MINIMAX_H3_720P_5S_I2V_V1" ||
-      profile.id === "minimax-h3-720p-124f-i2v";
 
     let resolvedCandidateMedia: ResolvedApprovedVisualProductionMedia | undefined;
     let stagedReferenceImage: StagedComfyUiInput | undefined;

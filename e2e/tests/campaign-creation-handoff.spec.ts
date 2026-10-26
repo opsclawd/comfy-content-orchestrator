@@ -100,7 +100,11 @@ test.describe("Campaign Creation Handoff and Review Hub Integration", () => {
       .fill("Minimalist architecture showcase with geometric lighting");
     await page.getByTestId("campaign-title-input").fill(campaignTitle);
     await page.getByTestId("client-select").selectOption(testEnv.postgres.defaultClientId);
-    await page.getByTestId("target-duration-input").fill("15");
+    // 10s total with a 2-scene override: 2 x the fixed ~5s MiniMax-H3 clip duration.
+    // (15s/2-scene would require ~7.5s/scene, which exceeds any single legacy
+    // production profile's fixed clip duration and is correctly rejected as
+    // NO_FEASIBLE_ALLOCATION — see deterministic-duration-feasibility.ts.)
+    await page.getByTestId("target-duration-input").fill("10");
 
     // Select custom mode and set override count
     await page.getByTestId("scene-count-mode-custom").click();

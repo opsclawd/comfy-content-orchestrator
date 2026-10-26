@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   LTX_FPS,
   MINIMAX_H3_720P_5S_REF2V_V1_INJECTION_TOPOLOGY,
+  type H3CandidateExecutionSpecification,
   type ManifestMeasuredMedia
 } from "@cco/contracts";
 import {
@@ -1810,6 +1811,119 @@ describe("Certified Render Job Executor", () => {
         renderProfileIdentity: { key: "H3_CANDIDATE_unknown_key_V1", version: 1 }
       } as unknown as CertificationProfile)
     ).toThrow(/does not have recognized MiniMax-H3 frame capabilities/i);
+  });
+
+  describe("released H3 profile frame-capability resolution (issue #426)", () => {
+    const releasedKey = `H3_RELEASE_${"f".repeat(64)}_V1`;
+    const releasedRef2vProfile = {
+      id: releasedKey,
+      engine: "minimax-video-01-director",
+      workflowPath: "fake.json",
+      expectedWorkflowHash: "0".repeat(64),
+      renderProfileIdentity: { key: releasedKey, version: 1 },
+      // Mirrors what createCertifiedRenderJobExecutor sets on the profile it
+      // constructs for a released job (see render-job-executor.ts): the
+      // release's topology is carried on the profile directly, since
+      // getProfileInjectionTopology cannot resolve a dynamically hash-keyed key.
+      topology: MINIMAX_H3_720P_5S_REF2V_V1_INJECTION_TOPOLOGY
+    } as unknown as CertificationProfile;
+    const releasedProfileReader = {
+      getReleasedProfile: (key: string | undefined) =>
+        key === releasedKey
+          ? {
+              key: releasedKey,
+              specification: {
+                route: "ref2v",
+                routingMode: "reference_directed",
+                width: 1344,
+                height: 768,
+                fps: 24,
+                frames: 243
+              } as unknown as H3CandidateExecutionSpecification
+            }
+          : undefined
+    };
+
+    it("accepts the released profile's real (non-124) frame count instead of the legacy 124-frame cap", () => {
+      expect(() =>
+        validateInjectedPayload(
+          {
+            prompt: "test prompt",
+            seed: 42,
+            frameCount: 243,
+            shotPlanId: "shot-plan-1",
+            specRevision: 1
+          },
+          "production",
+          releasedRef2vProfile,
+          releasedProfileReader
+        )
+      ).not.toThrow();
+    });
+
+    it("rejects a frameCount that does not match the released profile's real frame count", () => {
+      expect(() =>
+        validateInjectedPayload(
+          {
+            prompt: "test prompt",
+            seed: 42,
+            frameCount: 124,
+            shotPlanId: "shot-plan-1",
+            specRevision: 1
+          },
+          "production",
+          releasedRef2vProfile,
+          releasedProfileReader
+        )
+      ).toThrow(/frameCount must be a safe integer between 243 and 243/i);
+    });
+
+    it("routes released ref2v profiles to the ref2v allowed-key set (shotPlanId/specRevision permitted)", () => {
+      expect(() =>
+        validateInjectedPayload(
+          {
+            prompt: "test prompt",
+            seed: 42,
+            frameCount: 243,
+            shotPlanId: "shot-plan-1",
+            specRevision: 1
+          },
+          "production",
+          releasedRef2vProfile,
+          releasedProfileReader
+        )
+      ).not.toThrow();
+    });
+  });
+
+  describe("injectedPayload.ownerKind validation (issue #426 regression)", () => {
+    const i2vProfile = {
+      id: "minimax-h3-720p-124f-i2v",
+      engine: "minimax_h3_i2v",
+      workflowPath: "fake.json",
+      expectedWorkflowHash: "0".repeat(64),
+      renderProfileIdentity: { key: "MINIMAX_H3_720P_5S_I2V_V1", version: 1 }
+    } as unknown as CertificationProfile;
+
+    it("accepts the real OwnerKindSchema members produced by StageH3CandidateRenderUseCase, such as staging_acceptance", () => {
+      expect(() =>
+        validateInjectedPayload(
+          { prompt: "test prompt", seed: 42, frameCount: 124, ownerKind: "staging_acceptance" },
+          "production",
+          i2vProfile
+        )
+      ).not.toThrow();
+    });
+
+    it("rejects an ownerKind that is not a member of OwnerKindSchema", () => {
+      expect(() =>
+        validateInjectedPayload(
+          { prompt: "test prompt", seed: 42, frameCount: 124, ownerKind: "campaign" },
+          "production",
+          i2vProfile
+        )
+      ).toThrow(/injectedPayload\.ownerKind must be one of/i);
+    });
   });
 
   it("throws MissingCertifiedProfileError when loadCertificationProfile signals no match", async () => {

@@ -1677,7 +1677,12 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
 
   it("select_shotplan selects ShotPlan and returns 200", async () => {
     const shotPlanUuid = "01928374-abcd-7000-8000-000000000033" as ShotPlanId;
-    const scene = createReviewReadyScene();
+    const scene = createReviewReadyScene({
+      configuration: {
+        ...createReviewReadyScene().configuration,
+        durationMs: 4000
+      }
+    });
     const shotPlan = createTestShotPlan(shotPlanUuid);
     const uow = new InMemorySceneUnitOfWork([scene]);
     uow.seedShotPlan(shotPlan);
@@ -1711,7 +1716,12 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
 
   it("approve_shotplan approves ShotPlan and transitions scene to approved", async () => {
     const shotPlanUuid = "01928374-abcd-7000-8000-000000000033" as ShotPlanId;
-    const scene = createReviewReadyScene();
+    const scene = createReviewReadyScene({
+      configuration: {
+        ...createReviewReadyScene().configuration,
+        durationMs: 4000
+      }
+    });
     const shotPlan = createTestShotPlan(shotPlanUuid);
     scene.selectShotPlan(shotPlanUuid, 1, scene.id);
     const uow = new InMemorySceneUnitOfWork([scene]);
@@ -1893,7 +1903,12 @@ describe("POST /api/scenes/:sceneId/review-command", () => {
 
   it("reroll_shotplan clears selection, generates new ShotPlans with non-colliding ordinals, and enqueues previs jobs", async () => {
     const shotPlanUuid = "01928374-abcd-7000-8000-000000000033" as ShotPlanId;
-    const scene = createReviewReadyScene();
+    const scene = createReviewReadyScene({
+      configuration: {
+        ...createReviewReadyScene().configuration,
+        durationMs: 4000
+      }
+    });
     const shotPlan = createTestShotPlan(shotPlanUuid);
     const jobs = new TestJobQueue();
     const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, jobs);

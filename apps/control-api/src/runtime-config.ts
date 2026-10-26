@@ -79,6 +79,12 @@ export interface ControlApiRuntimeConfig {
   readonly clientSessionSecret?: string;
   readonly evidenceStoragePolicy?: EvidenceStoragePolicyConfig;
   readonly reviewerAuthorizationGrants?: ReviewerAuthorizationGrants;
+  readonly productionReleaseBundlePath?: string;
+  readonly stagingBundlePath?: string;
+  readonly h3CandidateProfilesPath?: string;
+  readonly h3CapabilityMatrixPath?: string;
+  readonly h3TrustedPublicKeysPath?: string;
+  readonly h3EvidenceDirectory?: string;
 }
 
 export class ControlApiConfigError extends Error {
@@ -662,6 +668,34 @@ export function parseControlApiRuntimeConfig(
     }
   }
 
+  const productionReleaseBundlePath = parseOptionalString(
+    env.CCO_H3_PRODUCTION_RELEASE_BUNDLE_PATH,
+    "CCO_H3_PRODUCTION_RELEASE_BUNDLE_PATH"
+  );
+  const stagingBundlePath = parseOptionalString(
+    env.CCO_H3_STAGING_BUNDLE_PATH,
+    "CCO_H3_STAGING_BUNDLE_PATH"
+  );
+  // Same env var names used by apps/render-worker/src/cli/stage-candidate.ts so a single
+  // deployment-owned trust configuration covers both the control-api composition root and
+  // the render-worker CLI path.
+  const h3CandidateProfilesPath = parseOptionalString(
+    env.H3_CANDIDATE_PROFILES_FILE,
+    "H3_CANDIDATE_PROFILES_FILE"
+  );
+  const h3CapabilityMatrixPath = parseOptionalString(
+    env.H3_CAPABILITY_MATRIX_FILE,
+    "H3_CAPABILITY_MATRIX_FILE"
+  );
+  const h3TrustedPublicKeysPath = parseOptionalString(
+    env.H3_TRUSTED_KEYS_FILE,
+    "H3_TRUSTED_KEYS_FILE"
+  );
+  const h3EvidenceDirectory = parseOptionalString(
+    env.H3_EVIDENCE_DIRECTORY,
+    "H3_EVIDENCE_DIRECTORY"
+  );
+
   return {
     database: {
       url: databaseUrl
@@ -696,6 +730,12 @@ export function parseControlApiRuntimeConfig(
     ...(rankingProviders !== undefined ? { rankingProviders } : {}),
     ...(clientSessionSecret !== undefined ? { clientSessionSecret } : {}),
     ...(evidenceStoragePolicy !== undefined ? { evidenceStoragePolicy } : {}),
-    ...(reviewerAuthorizationGrants !== undefined ? { reviewerAuthorizationGrants } : {})
+    ...(reviewerAuthorizationGrants !== undefined ? { reviewerAuthorizationGrants } : {}),
+    ...(productionReleaseBundlePath !== undefined ? { productionReleaseBundlePath } : {}),
+    ...(stagingBundlePath !== undefined ? { stagingBundlePath } : {}),
+    ...(h3CandidateProfilesPath !== undefined ? { h3CandidateProfilesPath } : {}),
+    ...(h3CapabilityMatrixPath !== undefined ? { h3CapabilityMatrixPath } : {}),
+    ...(h3TrustedPublicKeysPath !== undefined ? { h3TrustedPublicKeysPath } : {}),
+    ...(h3EvidenceDirectory !== undefined ? { h3EvidenceDirectory } : {})
   };
 }

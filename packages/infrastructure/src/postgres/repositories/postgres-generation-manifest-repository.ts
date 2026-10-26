@@ -5,7 +5,14 @@ import {
   type GenerationManifestRepository,
   type VideoStemSourceRecord
 } from "@cco/application";
-import { type ManifestMeasuredMedia, ManifestMeasuredMediaSchema } from "@cco/contracts";
+import {
+  type ManifestMeasuredMedia,
+  ManifestMeasuredMediaSchema,
+  type ExecutionRealm,
+  type EvidenceOrigin,
+  type OwnerKind,
+  type SimulationDescriptor
+} from "@cco/contracts";
 import type { Pool, PoolClient } from "pg";
 
 interface GenerationManifestPayloadRow {
@@ -63,14 +70,21 @@ export class PostgresGenerationManifestRepository implements GenerationManifestR
       render_attempt: number;
       manifest_payload: unknown;
       job_execution_scope: string | null;
+      owner_kind: string | null;
+      acceptance_run_id: string | null;
+      run_id: string | null;
     }>(
       `SELECT
          gm.manifest_id,
          gm.render_attempt,
          gm.manifest_payload,
-         rj.execution_scope AS job_execution_scope
+         rj.execution_scope AS job_execution_scope,
+         pa.owner_kind,
+         pa.acceptance_run_id,
+         pa.run_id
        FROM generation_manifests gm
        LEFT JOIN render_jobs rj ON rj.job_id = gm.job_id
+       LEFT JOIN production_attempts pa ON pa.production_job_id = gm.job_id
        WHERE gm.job_id = $1`,
       [jobId]
     );
@@ -124,12 +138,28 @@ export class PostgresGenerationManifestRepository implements GenerationManifestR
       );
     }
 
+    const ownerKind = (row.owner_kind ??
+      payload?.ownerKind ??
+      (row.run_id ? "production_run" : undefined)) as OwnerKind | undefined;
+    const acceptanceRunId = (row.acceptance_run_id ?? payload?.acceptanceRunId) as
+      string | undefined;
+    const runId = (row.run_id ?? payload?.runId) as string | undefined;
+    const realm = payload?.realm as ExecutionRealm | undefined;
+    const evidenceOrigin = payload?.evidenceOrigin as EvidenceOrigin | undefined;
+    const simulationDescriptor = payload?.simulationDescriptor as SimulationDescriptor | undefined;
+
     return {
       generationManifestId: row.manifest_id,
       media,
       renderAttempt,
       ...(executionScope ? { executionScope } : {}),
-      ...(measuredMedia ? { measuredMedia } : {})
+      ...(measuredMedia ? { measuredMedia } : {}),
+      ...(realm ? { realm } : {}),
+      ...(evidenceOrigin ? { evidenceOrigin } : {}),
+      ...(ownerKind ? { ownerKind } : {}),
+      ...(acceptanceRunId ? { acceptanceRunId } : {}),
+      ...(runId ? { runId } : {}),
+      ...(simulationDescriptor ? { simulationDescriptor } : {})
     };
   }
 }

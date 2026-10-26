@@ -19,6 +19,7 @@ import {
   formatReviewAction,
   formatSceneStatus,
   formatDurationMs,
+  formatDurationSeconds,
   formatDateTime
 } from "./format-review-value";
 
@@ -233,7 +234,57 @@ export function SceneReviewDetailView({
             </div>
             <div className="definition-item">
               <dt>Target Duration</dt>
-              <dd data-testid="scene-duration">{formatDurationMs(configuration.durationMs)}</dd>
+              <dd data-testid="scene-duration">
+                <span>{formatDurationMs(configuration.durationMs)}</span>
+                <span
+                  style={{ display: "block", fontSize: "0.75rem", color: "var(--text-muted)" }}
+                  data-testid="scene-achievable-duration"
+                >
+                  {(() => {
+                    let nominalMs = productionInspection?.route?.nominalDurationMs;
+                    if (!nominalMs) {
+                      const isLtx = configuration.engineProfileId?.includes("LTX");
+                      if (isLtx) {
+                        nominalMs = Math.round((97 / 24) * 1000);
+                      } else {
+                        const frames = configuration.durationMs > 7500 ? 243 : 124;
+                        nominalMs = Math.round((frames / 24) * 1000);
+                      }
+                    }
+                    return `Achievable generation: ~${formatDurationSeconds(nominalMs)} (${nominalMs} ms)`;
+                  })()}
+                </span>
+                {(() => {
+                  const candidate = productionAttempt as unknown as
+                    Record<string, unknown> | undefined;
+                  const candidateMedia = candidate?.media as Record<string, unknown> | undefined;
+                  const measuredMs =
+                    (typeof candidate?.measuredDurationMs === "number"
+                      ? candidate.measuredDurationMs
+                      : undefined) ??
+                    (typeof candidate?.mediaDurationMs === "number"
+                      ? candidate.mediaDurationMs
+                      : undefined) ??
+                    (typeof candidateMedia?.durationMs === "number"
+                      ? candidateMedia.durationMs
+                      : undefined);
+                  if (measuredMs !== undefined) {
+                    return (
+                      <span
+                        style={{
+                          display: "block",
+                          fontSize: "0.75rem",
+                          color: "var(--text-muted)"
+                        }}
+                        data-testid="scene-measured-duration"
+                      >
+                        Measured output: {formatDurationMs(measuredMs)}
+                      </span>
+                    );
+                  }
+                  return null;
+                })()}
+              </dd>
             </div>
             <div className="definition-item">
               <dt>LoRA Configuration</dt>

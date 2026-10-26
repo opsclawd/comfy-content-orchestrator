@@ -22,6 +22,8 @@ export interface ValidatedCampaignBeatSheet {
 export interface ValidateCampaignBeatSheetParams {
   readonly totalScenes: number;
   readonly targetTotalDurationMs: number;
+  readonly allocations?:
+    readonly { readonly ordinal: number; readonly requestedDurationMs: number }[] | undefined;
 }
 
 export function validateCampaignBeatSheet(
@@ -103,6 +105,15 @@ export function validateCampaignBeatSheet(
       );
     }
     const targetDurationMs = beatRecord.targetDurationMs;
+
+    if (params.allocations && params.allocations.length > 0) {
+      const alloc = params.allocations.find((a) => a.ordinal === ordinal);
+      if (alloc && targetDurationMs !== alloc.requestedDurationMs) {
+        throw new CampaignBeatSheetValidationError(
+          `Beat ${ordinal} targetDurationMs (${targetDurationMs}ms) does not match planned allocation (${alloc.requestedDurationMs}ms)`
+        );
+      }
+    }
 
     validatedBeats.push({
       ordinal,

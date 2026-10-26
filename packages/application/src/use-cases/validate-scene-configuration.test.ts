@@ -83,6 +83,34 @@ describe("validateSceneConfiguration", () => {
     expect(result.engineProfileId).toBe("LTX_25_720P_5S_I2V_V1");
   });
 
+  it("validates candidate configuration using a dynamically hash-keyed released H3 profile (issue #426, F-53fc8d19)", () => {
+    const releasedProfileKey = `H3_RELEASE_${"a".repeat(64)}_V1`;
+    const result = validateSceneConfiguration(
+      {
+        ...validCandidate,
+        engineProfileId: releasedProfileKey
+      },
+      sampleResolvedAssets,
+      10000
+    );
+
+    expect(result.engineProfileId).toBe(releasedProfileKey);
+  });
+
+  it("validates candidate configuration using a staging H3 candidate profile key (issue #426, F-53fc8d19)", () => {
+    const candidateProfileKey = `H3_CANDIDATE_${"b".repeat(32)}_V1`;
+    const result = validateSceneConfiguration(
+      {
+        ...validCandidate,
+        engineProfileId: candidateProfileKey
+      },
+      sampleResolvedAssets,
+      10000
+    );
+
+    expect(result.engineProfileId).toBe(candidateProfileKey);
+  });
+
   it("validates candidate configuration with empty references array", () => {
     const result = validateSceneConfiguration(
       {

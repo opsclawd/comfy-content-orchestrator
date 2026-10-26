@@ -639,6 +639,82 @@ describe("ExecuteProfileRenderUseCase", () => {
     });
   });
 
+  it("accepts valid H3_RELEASE_<64-hex>_V1 identity and executes successfully", async () => {
+    const releasedKey = `H3_RELEASE_${"a".repeat(64)}_V1`;
+    const registry = {
+      getSnapshot: () => ({
+        registryRevision: "2026-08-29.1",
+        generatedAt: "2026-08-29T12:00:00.000Z",
+        entries: [
+          {
+            componentId: "MINIMAX_H3_720P_5S_REF2V_V1",
+            componentType: "model" as const,
+            versionOrRevision: "1",
+            status: "approved" as const,
+            licenseId: "MiniMax Community License",
+            licenseSource: "docs/prd.md §3.5",
+            reviewedAt: "2026-08-29T12:00:00.000Z",
+            policyRevision: "1"
+          }
+        ]
+      })
+    };
+    const enforceLicenseRouting = new EnforceLicenseRouting({ registry });
+    const { useCase, renderEngine } = createUseCase({ enforceLicenseRouting });
+
+    const releasedIdentity = createIdentity({
+      profileId: "profile-minimax-h3-released",
+      renderProfileKey: releasedKey,
+      renderProfileVersion: 1,
+      engine: "minimax_h3_ref2v"
+    });
+    const input = createInput({ identity: releasedIdentity });
+
+    const result = await useCase.execute(input);
+    expect(result.status).toBe("succeeded");
+    expect(result.profile).toEqual(releasedIdentity);
+    expect(renderEngine.queueInputs[0]!.renderProfileKey).toBe(releasedKey);
+  });
+
+  it("rejects H3_RELEASE profile when engine is not minimax_h3_i2v or ref2v", async () => {
+    const { useCase } = createUseCase();
+    const releasedKey = `H3_RELEASE_${"a".repeat(64)}_V1`;
+
+    const mismatchedInput = createInput({
+      identity: createIdentity({
+        renderProfileKey: releasedKey,
+        engine: "ltx_25"
+      })
+    });
+
+    await expect(useCase.execute(mismatchedInput)).rejects.toMatchObject({
+      name: "ProfileRenderExecutionError",
+      code: "invalid_input",
+      message: expect.stringContaining(
+        "H3 release profile must have engine minimax_h3_i2v or minimax_h3_ref2v"
+      )
+    });
+  });
+
+  it("rejects H3_RELEASE profile when renderProfileVersion is not a positive integer", async () => {
+    const { useCase } = createUseCase();
+    const releasedKey = `H3_RELEASE_${"a".repeat(64)}_V1`;
+
+    const invalidVersionInput = createInput({
+      identity: createIdentity({
+        renderProfileKey: releasedKey,
+        renderProfileVersion: 0,
+        engine: "minimax_h3_i2v"
+      })
+    });
+
+    await expect(useCase.execute(invalidVersionInput)).rejects.toMatchObject({
+      name: "ProfileRenderExecutionError",
+      code: "invalid_input",
+      message: expect.stringContaining("identity.renderProfileVersion must be a positive integer")
+    });
+  });
+
   it("accepts valid FLUX_SCHNELL_STORYBOARD_V1 identity and executes successfully", async () => {
     const registry = {
       getSnapshot: () => ({

@@ -364,6 +364,137 @@ describe("ReviewSceneUseCases", () => {
     }
   });
 
+  describe("SceneDurationBinding resync on creative edits (issue #426, AC-21)", () => {
+    const seedDurationBinding = async (
+      uow: InMemorySceneUnitOfWork,
+      sceneId: string,
+      specRevision: number
+    ) => {
+      await uow.execute(async (context) => {
+        if (!context.durationPlans) {
+          throw new Error("durationPlans not configured on test UnitOfWork");
+        }
+        const binding = {
+          bindingId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          campaignId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          planId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          planRevision: 1,
+          allocationId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+          sceneId,
+          specRevision,
+          ordinal: 1,
+          bindingDigest: "a".repeat(64),
+          createdAt: "2026-08-15T00:00:00.000Z"
+        };
+        await context.durationPlans.saveBindings([binding]);
+      });
+    };
+
+    it("updates the scene's binding specRevision after a prompt edit, so the binding no longer mismatches", async () => {
+      const scene = createSceneInApproved("scene-binding-prompt");
+      const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [seededCampaign]);
+      await seedDurationBinding(uow, scene.id, 1);
+
+      await new ReviewSceneUseCases(uow).updatePrompt({
+        sceneId: scene.id,
+        eventId: "event-binding-prompt-1",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T03:00:00.000Z",
+        prompt: "Updated prompt for binding resync test"
+      });
+
+      const savedScene = uow.savedScenes[0]!;
+      expect(savedScene.snapshot().specRevision).toBe(2);
+
+      const updatedBinding = await uow.execute(async (context) =>
+        context.durationPlans!.findBindingBySceneId(scene.id)
+      );
+      expect(updatedBinding?.specRevision).toBe(2);
+    });
+
+    it("updates the scene's binding specRevision after a duration change", async () => {
+      const scene = createSceneInApproved("scene-binding-duration");
+      const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [seededCampaign]);
+      await seedDurationBinding(uow, scene.id, 1);
+
+      await new ReviewSceneUseCases(uow).updateDuration({
+        sceneId: scene.id,
+        eventId: "event-binding-duration-1",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T03:00:00.000Z",
+        durationMs: 7000
+      });
+
+      const updatedBinding = await uow.execute(async (context) =>
+        context.durationPlans!.findBindingBySceneId(scene.id)
+      );
+      expect(updatedBinding?.specRevision).toBe(2);
+    });
+
+    it("updates the scene's binding specRevision after a LoRA edit", async () => {
+      const scene = createSceneInApproved("scene-binding-lora");
+      const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [seededCampaign]);
+      await seedDurationBinding(uow, scene.id, 1);
+
+      await new ReviewSceneUseCases(uow).updateLora({
+        sceneId: scene.id,
+        eventId: "event-binding-lora-1",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T03:00:00.000Z",
+        loraConfigurationId: "lora-updated"
+      });
+
+      const updatedBinding = await uow.execute(async (context) =>
+        context.durationPlans!.findBindingBySceneId(scene.id)
+      );
+      expect(updatedBinding?.specRevision).toBe(2);
+    });
+
+    it("leaves other scenes' bindings in the same plan untouched, with a recomputed shared digest", async () => {
+      const scene = createSceneInApproved("scene-binding-shared-digest");
+      const uow = new InMemorySceneUnitOfWork([scene], undefined, undefined, [seededCampaign]);
+      const planId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+      const otherBinding = {
+        bindingId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+        campaignId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        planId,
+        planRevision: 1,
+        allocationId: "11111111-1111-4111-8111-111111111112",
+        sceneId: "scene-other",
+        specRevision: 1,
+        ordinal: 2,
+        bindingDigest: "a".repeat(64),
+        createdAt: "2026-08-15T00:00:00.000Z"
+      };
+      await uow.execute(async (context) => {
+        await context.durationPlans!.saveBindings([otherBinding]);
+      });
+      await seedDurationBinding(uow, scene.id, 1);
+
+      await new ReviewSceneUseCases(uow).updatePrompt({
+        sceneId: scene.id,
+        eventId: "event-binding-shared-digest-1",
+        reviewerName: "Director Alice",
+        occurredAt: "2026-08-15T03:00:00.000Z",
+        prompt: "Updated prompt for shared-digest test"
+      });
+
+      const planBindings = await uow.execute(async (context) =>
+        context.durationPlans!.findBindingsByPlanId(planId)
+      );
+      expect(planBindings).toHaveLength(2);
+      const updatedOther = planBindings.find((b) => b.sceneId === "scene-other");
+      const updatedScene = planBindings.find((b) => b.sceneId === scene.id);
+      expect(updatedOther?.specRevision).toBe(1);
+      expect(updatedScene?.specRevision).toBe(2);
+      // The bindingDigest is computed over the whole plan, so it must be the
+      // same (new) value across every binding in the plan, including the one
+      // whose specRevision didn't change.
+      expect(updatedOther?.bindingDigest).toBe(updatedScene?.bindingDigest);
+      expect(updatedOther?.bindingDigest).not.toBe("a".repeat(64));
+    });
+  });
+
   describe("updateReferences validation guards", () => {
     it("rejects when reference asset does not exist with ReferenceAssetNotFoundError", async () => {
       const scene = createSceneInApproved("scene-ref-missing");

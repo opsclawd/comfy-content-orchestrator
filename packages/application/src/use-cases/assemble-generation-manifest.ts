@@ -4,6 +4,8 @@ import {
   getProfileInjectionTopology,
   LTX_FPS,
   MINIMAX_H3_FPS,
+  type ExecutionRealm,
+  type EvidenceOrigin,
   type ManifestConfiguredMedia,
   type ManifestExecutedInstruction,
   type ManifestFrameAnchorEntry,
@@ -148,6 +150,8 @@ export interface AssembleManifestInput {
   readonly nominalDurationMs?: number | undefined;
   readonly submittedGraphHash?: string | undefined;
   readonly grantReference?: string | undefined;
+  readonly realm?: ExecutionRealm | undefined;
+  readonly evidenceOrigin?: EvidenceOrigin | undefined;
 }
 
 export interface AssembleManifestResult {
@@ -1044,6 +1048,25 @@ export class AssembleGenerationManifest {
       engine,
       renderProfile,
       renderProfileVersion,
+      ...(input.realm !== undefined ||
+      (typeof (input.job.injectedPayload as Record<string, unknown> | null)?.realm === "object" &&
+        (input.job.injectedPayload as Record<string, unknown>).realm !== null)
+        ? {
+            realm:
+              input.realm ??
+              ((input.job.injectedPayload as Record<string, unknown>).realm as ExecutionRealm)
+          }
+        : {}),
+      ...(input.evidenceOrigin !== undefined ||
+      typeof (input.job.injectedPayload as Record<string, unknown> | null)?.evidenceOrigin ===
+        "string"
+        ? {
+            evidenceOrigin:
+              input.evidenceOrigin ??
+              ((input.job.injectedPayload as Record<string, unknown>)
+                .evidenceOrigin as EvidenceOrigin)
+          }
+        : {}),
       ...(input.job.executionScope !== undefined
         ? { executionScope: input.job.executionScope }
         : {}),

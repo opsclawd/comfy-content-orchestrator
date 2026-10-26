@@ -1382,8 +1382,8 @@ describe("ShotPlan-to-H3 E2E Integration (#331)", () => {
     expect(spec.videoStems[1].sceneId).toBe(scene2Id);
     expect(spec.videoStems[1].generationManifestId).toBe(manifestRecord2.manifest_id);
 
-    // Total duration matches sum of scene durations (5s + 5s = 10000ms)
-    expect(spec.expectedTotalDurationMs).toBe(10000);
+    // Total duration matches sum of scene nominal durations (5167ms + 5167ms = 10334ms)
+    expect(spec.expectedTotalDurationMs).toBe(10334);
 
     // Complete campaign delivery assembly
     await completeCampaignProductionRunAssembly.onAssemblyJobCompleted(assemblyJob.job_id);

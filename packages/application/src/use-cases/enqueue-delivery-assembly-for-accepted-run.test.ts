@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CampaignDurationPlanningError } from "@cco/contracts";
 import {
   AcceptedAttemptIdentityMismatchError,
   AcceptedAttemptOrdinalMismatchError,
@@ -738,5 +739,242 @@ describe("attemptEnqueueAssemblyForAcceptedRun", () => {
     ).rejects.toThrow(AssemblyDurationMismatchError);
 
     expect(uow.enqueuedAssemblyJobs()).toHaveLength(0);
+  });
+
+  it("fails closed with observation_authority_invalid when stem has missing realm or origin", async () => {
+    const run = createBaseRun({ expectedTotalDurationMs: 8000 });
+    const [scene1, scene2] = createTwoScenes();
+
+    const uow = new InMemorySceneUnitOfWork();
+    uow.seedCampaignProductionRun(run);
+    uow.seedCampaignProductionRunScenes([scene1, scene2]);
+
+    uow.seedProductionAttempt({
+      attemptId: "attempt-1",
+      sceneId: scene1.sceneId,
+      runId,
+      ordinal: 1,
+      productionJobId: "job-1",
+      specRevision: 1,
+      seed: 123,
+      createdReason: "initial_dispatch",
+      createdAt: "2026-09-01T00:00:00.000Z"
+    });
+    uow.seedProductionAttempt({
+      attemptId: "attempt-2",
+      sceneId: scene2.sceneId,
+      runId,
+      ordinal: 1,
+      productionJobId: "job-2",
+      specRevision: 1,
+      seed: 456,
+      createdReason: "initial_dispatch",
+      createdAt: "2026-09-01T00:00:00.000Z"
+    });
+
+    uow.seedVideoStemSource("job-1", {
+      generationManifestId: "manifest-1",
+      renderAttempt: 1,
+      media: {
+        bucket: "delivery-bucket",
+        key: "stems/scene-1.mp4",
+        sha256: validSha256,
+        contentType: "video/mp4"
+      },
+      realm: undefined,
+      evidenceOrigin: undefined
+    });
+    uow.seedVideoStemSource("job-2", {
+      generationManifestId: "manifest-2",
+      renderAttempt: 1,
+      media: {
+        bucket: "delivery-bucket",
+        key: "stems/scene-2.mp4",
+        sha256: validSha256,
+        contentType: "video/mp4"
+      }
+    });
+
+    await expect(
+      uow.execute(async (ctx) => {
+        return attemptEnqueueAssemblyForAcceptedRun(ctx, run);
+      })
+    ).rejects.toThrow(CampaignDurationPlanningError);
+  });
+
+  it("ordinary certified witness: 3-stem legacy H3 run with 15,501ms expected and truthful 124f (15,500ms) observations passes admission and enqueues assembly", async () => {
+    const run: CampaignProductionRunRecord = {
+      id: "run-3stem",
+      campaignId: "campaign-3stem" as CampaignId,
+      fingerprint: "fp-3stem",
+      status: "production_review",
+      expectedTotalDurationMs: 15_501,
+      createdAt: "2026-09-01T00:00:00.000Z",
+      updatedAt: "2026-09-01T00:00:00.000Z"
+    };
+
+    const scenes: CampaignProductionRunSceneRecord[] = [1, 2, 3].map((idx) => ({
+      runId: "run-3stem",
+      sceneId: `scene-${idx}` as SceneId,
+      specRevision: 1,
+      sequenceIndex: idx,
+      expectedDurationMs: 5_167,
+      productionJobId: `job-${idx}`,
+      currentAttemptId: `attempt-${idx}`,
+      currentAttemptOrdinal: 1,
+      acceptedAttemptId: `attempt-${idx}`,
+      acceptedProductionJobId: `job-${idx}`,
+      acceptedAttemptOrdinal: 1
+    }));
+
+    const uow = new InMemorySceneUnitOfWork();
+    uow.seedCampaignProductionRun(run);
+    uow.seedCampaignProductionRunScenes(scenes);
+
+    for (let idx = 1; idx <= 3; idx++) {
+      uow.seedProductionAttempt({
+        attemptId: `attempt-${idx}`,
+        sceneId: `scene-${idx}` as SceneId,
+        runId: "run-3stem",
+        ordinal: 1,
+        productionJobId: `job-${idx}`,
+        specRevision: 1,
+        seed: 100 * idx,
+        createdReason: "initial_dispatch",
+        ownerKind: "production_run",
+        createdAt: "2026-09-01T00:00:00.000Z"
+      });
+
+      uow.seedVideoStemSource(`job-${idx}`, {
+        generationManifestId: `manifest-${idx}`,
+        renderAttempt: 1,
+        media: {
+          bucket: "delivery-bucket",
+          key: `stems/scene-${idx}.mp4`,
+          sha256: validSha256,
+          contentType: "video/mp4"
+        },
+        executionScope: "production",
+        ownerKind: "production_run",
+        realm: { kind: "deployed", deploymentId: "default" },
+        evidenceOrigin: "live_execution",
+        measuredMedia: {
+          measurement: "source_bytes",
+          outputKey: "video",
+          container: "ffprobe",
+          durationMs: (124 / 24) * 1000,
+          formatDurationMs: (124 / 24) * 1000,
+          frameCount: 124,
+          fps: 24,
+          dimensions: {
+            width: 1344,
+            height: 768
+          },
+          video: {
+            codecName: "h264",
+            pixelFormat: "yuv420p"
+          },
+          checksumSha256: validSha256
+        }
+      });
+    }
+
+    const result = await uow.execute(async (ctx) => {
+      return attemptEnqueueAssemblyForAcceptedRun(ctx, run);
+    });
+
+    expect(result.enqueued).toBe(true);
+    expect(uow.enqueuedAssemblyJobs()).toHaveLength(1);
+    const job = uow.enqueuedAssemblyJobs()[0]!;
+    expect(job.assemblySpec.videoStems).toHaveLength(3);
+    expect(job.assemblySpec.expectedTotalDurationMs).toBe(15_501);
+  });
+
+  it("ordinary certified witness: 6-stem legacy H3 run with 31,002ms expected and truthful 124f (31,000ms) observations passes admission and enqueues assembly", async () => {
+    const run: CampaignProductionRunRecord = {
+      id: "run-6stem",
+      campaignId: "campaign-6stem" as CampaignId,
+      fingerprint: "fp-6stem",
+      status: "production_review",
+      expectedTotalDurationMs: 31_002,
+      createdAt: "2026-09-01T00:00:00.000Z",
+      updatedAt: "2026-09-01T00:00:00.000Z"
+    };
+
+    const scenes: CampaignProductionRunSceneRecord[] = [1, 2, 3, 4, 5, 6].map((idx) => ({
+      runId: "run-6stem",
+      sceneId: `scene-${idx}` as SceneId,
+      specRevision: 1,
+      sequenceIndex: idx,
+      expectedDurationMs: 5_167,
+      productionJobId: `job-${idx}`,
+      currentAttemptId: `attempt-${idx}`,
+      currentAttemptOrdinal: 1,
+      acceptedAttemptId: `attempt-${idx}`,
+      acceptedProductionJobId: `job-${idx}`,
+      acceptedAttemptOrdinal: 1
+    }));
+
+    const uow = new InMemorySceneUnitOfWork();
+    uow.seedCampaignProductionRun(run);
+    uow.seedCampaignProductionRunScenes(scenes);
+
+    for (let idx = 1; idx <= 6; idx++) {
+      uow.seedProductionAttempt({
+        attemptId: `attempt-${idx}`,
+        sceneId: `scene-${idx}` as SceneId,
+        runId: "run-6stem",
+        ordinal: 1,
+        productionJobId: `job-${idx}`,
+        specRevision: 1,
+        seed: 100 * idx,
+        createdReason: "initial_dispatch",
+        ownerKind: "production_run",
+        createdAt: "2026-09-01T00:00:00.000Z"
+      });
+
+      uow.seedVideoStemSource(`job-${idx}`, {
+        generationManifestId: `manifest-${idx}`,
+        renderAttempt: 1,
+        media: {
+          bucket: "delivery-bucket",
+          key: `stems/scene-${idx}.mp4`,
+          sha256: validSha256,
+          contentType: "video/mp4"
+        },
+        executionScope: "production",
+        ownerKind: "production_run",
+        realm: { kind: "deployed", deploymentId: "default" },
+        evidenceOrigin: "live_execution",
+        measuredMedia: {
+          measurement: "source_bytes",
+          outputKey: "video",
+          container: "ffprobe",
+          durationMs: (124 / 24) * 1000,
+          formatDurationMs: (124 / 24) * 1000,
+          frameCount: 124,
+          fps: 24,
+          dimensions: {
+            width: 1344,
+            height: 768
+          },
+          video: {
+            codecName: "h264",
+            pixelFormat: "yuv420p"
+          },
+          checksumSha256: validSha256
+        }
+      });
+    }
+
+    const result = await uow.execute(async (ctx) => {
+      return attemptEnqueueAssemblyForAcceptedRun(ctx, run);
+    });
+
+    expect(result.enqueued).toBe(true);
+    expect(uow.enqueuedAssemblyJobs()).toHaveLength(1);
+    const job = uow.enqueuedAssemblyJobs()[0]!;
+    expect(job.assemblySpec.videoStems).toHaveLength(6);
+    expect(job.assemblySpec.expectedTotalDurationMs).toBe(31_002);
   });
 });

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { type SceneDurationBinding, computePlanBindingDigest } from "@cco/contracts";
 import {
   Scene,
   type CampaignId,
@@ -224,6 +225,38 @@ export class MaterializeStoryboardUseCase {
       });
       await context.scenes.save(scene);
       materializedScenes.push(scene.snapshot());
+    }
+
+    if (context.durationPlans) {
+      const currentPlan = await context.durationPlans.findCurrentPlanByCampaignId(campaign.id);
+      if (currentPlan && currentPlan.allocations.length === materializedScenes.length) {
+        const sortedMaterialized = [...materializedScenes].sort(
+          (a, b) => (a.sequenceIndex ?? 0) - (b.sequenceIndex ?? 0)
+        );
+        const bindingEntries = sortedMaterialized.map((sc, i) => {
+          const allocation = currentPlan.allocations[i]!;
+          return {
+            allocationId: allocation.allocationId,
+            sceneId: sc.id,
+            specRevision: sc.specRevision,
+            ordinal: allocation.ordinal
+          };
+        });
+        const fullBindingDigest = computePlanBindingDigest(bindingEntries);
+        const bindings: SceneDurationBinding[] = bindingEntries.map((entry) => ({
+          bindingId: randomUUID(),
+          campaignId: campaign.id,
+          planId: currentPlan.planId,
+          planRevision: currentPlan.revision,
+          allocationId: entry.allocationId,
+          sceneId: entry.sceneId,
+          specRevision: entry.specRevision,
+          ordinal: entry.ordinal,
+          bindingDigest: fullBindingDigest,
+          createdAt: new Date().toISOString()
+        }));
+        await context.durationPlans.saveBindings(bindings);
+      }
     }
 
     if (

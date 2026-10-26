@@ -2,6 +2,8 @@ import { z } from "zod";
 import { sortKeysDeep } from "@cco/shared";
 import { sha256HashSchema } from "./persistent-media.js";
 import { MINIMAX_H3_FPS } from "./render-profile.js";
+import { ExecutionRealmSchema } from "./execution-realm.js";
+import { ExecutionProfileSelectionSchema } from "./execution-profile.js";
 
 // ============================================================================
 // H3 Quantization Constants & Timing Parameters
@@ -292,7 +294,16 @@ export const ShotPlanDocumentSchema = z.object({
   // Metadata & Timestamps
   machineModel: z.string().nullable().optional(),
   createdAt: z.string().datetime({ message: "createdAt must be a valid ISO 8601 datetime" }),
-  updatedAt: z.string().datetime({ message: "updatedAt must be a valid ISO 8601 datetime" })
+  updatedAt: z.string().datetime({ message: "updatedAt must be a valid ISO 8601 datetime" }),
+
+  // Duration Plan Binding & Execution Authority
+  planId: z.string().uuid("planId must be a valid UUID").nullable().optional(),
+  planRevision: z.number().int().positive().nullable().optional(),
+  allocationId: z.string().nullable().optional(),
+  realm: ExecutionRealmSchema.nullable().optional(),
+  executionProfileSelection: ExecutionProfileSelectionSchema.nullable().optional(),
+  nominalDurationMs: z.number().int().positive().nullable().optional(),
+  exactRationalNominalDurationMs: z.number().positive().nullable().optional()
 });
 export type ShotPlanDocument = z.infer<typeof ShotPlanDocumentSchema>;
 
@@ -347,7 +358,16 @@ export const ShotPlanCreateInputSchema = z.object({
   derivation: ShotPlanDerivationProvenanceSchema.nullable().optional(),
   idempotencyKey: z.string().nullable().optional(),
   requestHashSha256: sha256HashSchema.nullable().optional(),
-  machineModel: z.string().nullable().optional()
+  machineModel: z.string().nullable().optional(),
+
+  // Duration Plan Binding & Execution Authority
+  planId: z.string().uuid("planId must be a valid UUID").nullable().optional(),
+  planRevision: z.number().int().positive().nullable().optional(),
+  allocationId: z.string().nullable().optional(),
+  realm: ExecutionRealmSchema.nullable().optional(),
+  executionProfileSelection: ExecutionProfileSelectionSchema.nullable().optional(),
+  nominalDurationMs: z.number().int().positive().nullable().optional(),
+  exactRationalNominalDurationMs: z.number().positive().nullable().optional()
 });
 export type ShotPlanCreateInput = z.infer<typeof ShotPlanCreateInputSchema>;
 

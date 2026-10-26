@@ -449,7 +449,7 @@ describe("POST /api/scenes/:sceneId/shot-plans/variations", () => {
         prompt: "A cinematic shot of an ancient library",
         referenceIds: [],
         engineProfileId: "ltx_25",
-        durationMs: 5000
+        durationMs: 4000
       }
     });
   };
@@ -695,7 +695,7 @@ describe("POST /api/scenes/:sceneId/shot-plans (Asynchronous Planning)", () => {
         prompt: "A cinematic shot of an ancient library",
         referenceIds: [],
         engineProfileId: "ltx_25",
-        durationMs: 5000
+        durationMs: 4000
       }
     });
   };

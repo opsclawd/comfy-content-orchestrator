@@ -18,7 +18,10 @@ import type { EnforceLicenseRouting } from "./enforce-license-routing.js";
 export interface ProfileRenderIdentity {
   readonly profileId: string;
   readonly renderProfileKey: RenderProfileKey | string;
-  readonly renderProfileVersion: 1;
+  // Released H3 profiles carry their own release version (see
+  // CertificationProfile.renderProfileIdentity.version in profile-manifest.ts),
+  // not necessarily 1.
+  readonly renderProfileVersion: number;
   readonly engine: "ltx_25" | "flux_schnell" | "ltx_25_i2v" | "minimax_h3_i2v" | "minimax_h3_ref2v";
   readonly workflowSha256: string;
   readonly modelSha256: Readonly<Record<string, string>>;
@@ -89,16 +92,31 @@ function validateIdentity(identity: unknown): asserts identity is ProfileRenderI
   requireNonBlank(identity.runnerProfile, "identity.runnerProfile");
   requireNonBlank(identity.comfyUiCommit, "identity.comfyUiCommit");
 
-  if (identity.renderProfileVersion !== 1) {
+  const isCandidateKey =
+    typeof identity.renderProfileKey === "string" &&
+    /^H3_CANDIDATE_[0-9a-f]{32}_V[1-9]\d*$/.test(identity.renderProfileKey);
+
+  const isReleaseKey =
+    typeof identity.renderProfileKey === "string" &&
+    /^H3_RELEASE_[0-9a-f]{64}_V[1-9]\d*$/.test(identity.renderProfileKey);
+
+  if (isReleaseKey) {
+    if (
+      typeof identity.renderProfileVersion !== "number" ||
+      !Number.isInteger(identity.renderProfileVersion) ||
+      identity.renderProfileVersion < 1
+    ) {
+      throw new ProfileRenderExecutionError(
+        "invalid_input",
+        "identity.renderProfileVersion must be a positive integer"
+      );
+    }
+  } else if (identity.renderProfileVersion !== 1) {
     throw new ProfileRenderExecutionError(
       "invalid_input",
       "identity.renderProfileVersion must be 1"
     );
   }
-
-  const isCandidateKey =
-    typeof identity.renderProfileKey === "string" &&
-    /^H3_CANDIDATE_[0-9a-f]{32}_V[1-9]\d*$/.test(identity.renderProfileKey);
 
   const validProfileKey =
     identity.renderProfileKey === "LTX_25_720P_5S_V1" ||
@@ -107,16 +125,19 @@ function validateIdentity(identity: unknown): asserts identity is ProfileRenderI
     identity.renderProfileKey === "LTX_25_720P_5S_I2V_V1" ||
     identity.renderProfileKey === "MINIMAX_H3_720P_5S_I2V_V1" ||
     identity.renderProfileKey === "MINIMAX_H3_720P_5S_REF2V_V1" ||
-    isCandidateKey;
+    isCandidateKey ||
+    isReleaseKey;
   if (!validProfileKey) {
     throw new ProfileRenderExecutionError("invalid_input", "identity.renderProfileKey is invalid");
   }
 
-  if (isCandidateKey) {
+  if (isCandidateKey || isReleaseKey) {
     if (identity.engine !== "minimax_h3_i2v" && identity.engine !== "minimax_h3_ref2v") {
       throw new ProfileRenderExecutionError(
         "invalid_input",
-        "H3 candidate profile must have engine minimax_h3_i2v or minimax_h3_ref2v"
+        isReleaseKey
+          ? "H3 release profile must have engine minimax_h3_i2v or minimax_h3_ref2v"
+          : "H3 candidate profile must have engine minimax_h3_i2v or minimax_h3_ref2v"
       );
     }
   } else {
@@ -234,15 +255,17 @@ export class ExecuteProfileRenderUseCase {
     renderProfileVersion: number;
     engine?: ProfileRenderIdentity["engine"] | undefined;
   }): void {
-    // H3 candidate keys (staging, hash-derived per distillation/attention variant) are never
-    // themselves registered in the license registry - they're internal governance/provenance
-    // identities, not licensable components. They execute the same base MiniMax H3 weights
-    // that are already approved per route, so license routing must check against that base
-    // component instead of failing closed on every candidate key.
+    // H3 candidate keys (staging, hash-derived per distillation/attention variant) and H3
+    // release keys (certified, hash-derived per specification digest) are never themselves
+    // registered in the license registry - they're internal governance/provenance identities,
+    // not licensable components. They execute the same base MiniMax H3 weights that are
+    // already approved per route, so license routing must check against that base component
+    // instead of failing closed on every candidate/release key.
     const isCandidateKey = /^H3_CANDIDATE_[0-9a-f]{32}_V[1-9]\d*$/.test(input.renderProfileKey);
+    const isReleaseKey = /^H3_RELEASE_[0-9a-f]{64}_V[1-9]\d*$/.test(input.renderProfileKey);
     let componentId = input.renderProfileKey;
     let versionOrRevision = String(input.renderProfileVersion);
-    if (isCandidateKey) {
+    if (isCandidateKey || isReleaseKey) {
       if (input.engine === "minimax_h3_i2v") {
         componentId = "MINIMAX_H3_720P_5S_I2V_V1";
       } else if (input.engine === "minimax_h3_ref2v") {
@@ -250,7 +273,7 @@ export class ExecuteProfileRenderUseCase {
       } else {
         throw new ProfileRenderExecutionError(
           "invalid_input",
-          "H3 candidate license enforcement requires engine minimax_h3_i2v or minimax_h3_ref2v"
+          `H3 ${isReleaseKey ? "release" : "candidate"} license enforcement requires engine minimax_h3_i2v or minimax_h3_ref2v`
         );
       }
       versionOrRevision = "1";

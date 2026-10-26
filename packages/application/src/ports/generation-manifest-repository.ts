@@ -1,4 +1,11 @@
-import type { ManifestMeasuredMedia, PersistentMediaRef } from "@cco/contracts";
+import type {
+  EvidenceOrigin,
+  ExecutionRealm,
+  ManifestMeasuredMedia,
+  OwnerKind,
+  PersistentMediaRef,
+  SimulationDescriptor
+} from "@cco/contracts";
 
 export class IncompleteVideoStemSourceError extends Error {
   override readonly name = "IncompleteVideoStemSourceError";
@@ -34,6 +41,12 @@ export interface VideoStemSourceRecord {
   readonly renderAttempt: number;
   readonly executionScope?: "production" | "staging" | undefined;
   readonly measuredMedia?: ManifestMeasuredMedia | undefined;
+  readonly realm?: ExecutionRealm | undefined;
+  readonly evidenceOrigin?: EvidenceOrigin | undefined;
+  readonly ownerKind?: OwnerKind | undefined;
+  readonly runId?: string | undefined;
+  readonly acceptanceRunId?: string | undefined;
+  readonly simulationDescriptor?: SimulationDescriptor | undefined;
 }
 
 export interface GenerationManifestRepository {

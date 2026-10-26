@@ -39,10 +39,19 @@ import {
   StoryboardPartiallyMaterializedError,
   TransactionalJobEnqueuerUnavailableError,
   UnsupportedProductionDurationError,
-  ProductionInputFingerprintMismatchError
+  ProductionInputFingerprintMismatchError,
+  CampaignReplanRequiredError
 } from "@cco/application";
 import type { ProductEvidenceHttpErrorResponse, ReviewErrorResponse } from "@cco/contracts";
-import { mapZodErrorToValidationIssues } from "@cco/contracts";
+import {
+  mapZodErrorToValidationIssues,
+  CampaignDurationPlanningError,
+  OperatorAcceptanceRunNotFoundError,
+  OperatorAcceptanceSceneNotFoundError,
+  OperatorAcceptanceOrdinalMismatchError,
+  OperatorAcceptanceInvalidStatusError,
+  OperatorAcceptanceSceneNotAcceptedError
+} from "@cco/contracts";
 import {
   AlreadyAcceptedProductionAttemptError,
   ArchivedReferenceBindingError,
@@ -408,6 +417,81 @@ export function formatReviewError(error: unknown): {
     };
   }
 
+  if (
+    error instanceof CampaignDurationPlanningError ||
+    (error instanceof Error && error.name === "CampaignDurationPlanningError") ||
+    (typeof error === "object" &&
+      error !== null &&
+      (error as { name?: string }).name === "CampaignDurationPlanningError")
+  ) {
+    const err = error as CampaignDurationPlanningError;
+    const statusCode =
+      typeof err.statusCode === "number"
+        ? err.statusCode
+        : typeof err.httpStatusCode === "number"
+          ? err.httpStatusCode
+          : 422;
+    const reason = typeof err.reason === "string" ? err.reason : "unknown_planning_error";
+    return {
+      statusCode,
+      body: {
+        code: reason.toUpperCase(),
+        message: err.message,
+        details: {
+          reason,
+          ...(err.details !== undefined ? { details: err.details } : {})
+        }
+      }
+    };
+  }
+
+  if (error instanceof CampaignReplanRequiredError) {
+    return {
+      statusCode: 409,
+      body: {
+        code: "CAMPAIGN_REPLAN_REQUIRED",
+        message: error.message,
+        ...(error.sceneId !== undefined ? { sceneId: error.sceneId } : {})
+      }
+    };
+  }
+
+  if (
+    error instanceof OperatorAcceptanceRunNotFoundError ||
+    error instanceof OperatorAcceptanceSceneNotFoundError
+  ) {
+    return {
+      statusCode: 404,
+      body: {
+        code: "NOT_FOUND",
+        message: error.message
+      }
+    };
+  }
+
+  if (error instanceof OperatorAcceptanceOrdinalMismatchError) {
+    return {
+      statusCode: 409,
+      body: {
+        code: "ORDINAL_MISMATCH",
+        message: error.message
+      }
+    };
+  }
+
+  if (
+    error instanceof OperatorAcceptanceInvalidStatusError ||
+    error instanceof OperatorAcceptanceSceneNotAcceptedError
+  ) {
+    return {
+      statusCode: 422,
+      body: {
+        code: "INVALID_DOMAIN_TRANSITION",
+        message: error.message
+      }
+    };
+  }
+
   if (error instanceof StoryboardMaterializationConflictError) {
     return {
       statusCode: 409,
@@ -484,7 +568,12 @@ export function formatReviewError(error: unknown): {
     };
   }
 
-  const statusCode = typeof fastifyErr.statusCode === "number" ? fastifyErr.statusCode : 500;
+  const statusCode =
+    typeof fastifyErr.statusCode === "number"
+      ? fastifyErr.statusCode
+      : typeof (error as { httpStatusCode?: unknown })?.httpStatusCode === "number"
+        ? (error as { httpStatusCode: number }).httpStatusCode
+        : 500;
   const errMessage =
     statusCode >= 500
       ? "Internal Server Error"

@@ -193,6 +193,25 @@ Candidate eligibility evaluation does not rely on declared configuration or comp
 5. Installed package versions verified against live runtime environment.
 6. **Anti-Drift Verification:** Process PID and process start time ticks are re-observed at the completion of verification. If the target process restarted or drifted during checks, eligibility is denied.
 
+### 7. Governance, Operational Handoff, Anti-Rollback, and Realm Isolation (#426)
+
+1. **Governance & Physical Host Boundary:**
+   - Autonomous agents must never author physical measurements, benchmarks, or certification artifacts in `certification/`, `baseline/`, or `config/render-profiles/`.
+   - Production capability release is gated by authentic operator #428 sign-off. Positive #445 speed and continuity decisions qualify candidate profiles for operator staging exploration only, not public production planning.
+
+2. **Strict Staging Authorization Grant Verification:**
+   - Staging authorization grants require conjunctive verification (AND logic): exact `authorizationId` match, exact target host (`targetHostname` or `targetGpuUuid`) match, unexpired validity (`expiresAt > now`), and authentic cryptographic signatures.
+   - Cross-target grant reuse, wildcard matching, or synthetic signatures are rejected fail-closed.
+
+3. **Monotonic Deployment Enablement & Anti-Rollback:**
+   - Deployed release bundles carry a monotonic generation counter and signed enablement digest.
+   - The Control API enforces non-decreasing generation verification via `DeploymentEnablementStatePort`. Bundles presenting generation numbers lower than the accepted active generation are rejected as rollbacks.
+   - Active profiles must appear in `enabledRecordDigests` and not appear in `disabledIdentities`.
+
+4. **Execution Realm & Evidence Provenance Isolation:**
+   - The platform strictly partitions execution realm (`deployed` vs `isolated_test`) and evidence origin (`live_execution` vs `simulated_test`).
+   - Production delivery assembly queues strictly admit live execution artifacts from deployed realms; simulated or test-staged artifacts cannot be admitted into production delivery reels.
+
 ---
 
 ## Consequences

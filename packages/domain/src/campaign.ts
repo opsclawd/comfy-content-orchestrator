@@ -28,6 +28,10 @@ export interface CampaignRecord {
   readonly targetTotalDurationMs?: number | undefined;
   readonly storyboardCompletionHashSha256?: string | undefined;
   readonly archivedAt?: string | undefined;
+  readonly planRevision?: number | undefined;
+  readonly currentDurationPlanId?: string | undefined;
+  readonly selectedProfileKey?: string | undefined;
+  readonly allowedDurationProfileKeys?: readonly string[] | undefined;
 }
 
 export interface CampaignShellRecord extends CampaignRecord {

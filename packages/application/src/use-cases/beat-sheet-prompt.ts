@@ -1,4 +1,4 @@
-import type { CreativeBrief } from "@cco/contracts";
+import type { CreativeBrief, SceneDurationAllocation } from "@cco/contracts";
 import type { CampaignId, ReferenceAsset } from "@cco/domain";
 import type { PlanningModelRequest } from "../ports/planning-model-client-port.js";
 import { isMiniMaxEngineOrProfile } from "./map-production-duration.js";
@@ -14,6 +14,7 @@ export interface BuildBeatSheetPlanningPromptInput {
   readonly correctiveFeedback?: string | undefined;
   readonly targetEngine?: string | undefined;
   readonly engineProfileId?: string | undefined;
+  readonly allocations?: readonly SceneDurationAllocation[] | undefined;
 }
 
 export function buildBeatSheetPlanningPrompt(
@@ -28,9 +29,18 @@ export function buildBeatSheetPlanningPrompt(
     isMiniMaxEngineOrProfile(input.engineProfileId) ||
     Math.round(input.targetTotalDurationMs / input.totalScenes) >= 4500;
 
-  const durationGuidance = isMiniMax
-    ? "  - targetDurationMs: positive integer duration in milliseconds for this beat. For video synthesis, each beat should target ~5000 ms (5.0 seconds, matching the certified 124-frame MiniMax-H3 video engine)."
-    : "  - targetDurationMs: positive integer duration in milliseconds for this beat. For video synthesis, each beat should target ~4000 ms (4.0 seconds, matching the certified 97-frame video engine).";
+  const durationGuidance =
+    input.allocations && input.allocations.length > 0
+      ? [
+          "  - targetDurationMs: exact integer duration in milliseconds allocated for each beat:",
+          ...input.allocations.map(
+            (a) =>
+              `    - Beat ${a.ordinal}: targetDurationMs must equal ${a.requestedDurationMs} ms (profile: ${a.profileSelection.profileKey}, ${a.frames} frames at ${a.fps} fps).`
+          )
+        ].join("\n")
+      : isMiniMax
+        ? "  - targetDurationMs: positive integer duration in milliseconds for this beat. For video synthesis, each beat should target ~5000 ms (5.0 seconds, matching the certified 124-frame MiniMax-H3 video engine)."
+        : "  - targetDurationMs: positive integer duration in milliseconds for this beat. For video synthesis, each beat should target ~4000 ms (4.0 seconds, matching the certified 97-frame video engine).";
 
   const visualStyleGuidance = isMiniMax
     ? [

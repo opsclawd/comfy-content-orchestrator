@@ -701,4 +701,29 @@ describe("runtime-config", () => {
       ).toThrowError(/REVIEWER_AUTHORIZATION_GRANTS_JSON/);
     });
   });
+
+  describe("H3 candidate trust store paths (issue #426)", () => {
+    it("leaves h3 trust store paths undefined when unset", () => {
+      const config = parseControlApiRuntimeConfig(validEnv);
+      expect(config.h3CandidateProfilesPath).toBeUndefined();
+      expect(config.h3CapabilityMatrixPath).toBeUndefined();
+      expect(config.h3TrustedPublicKeysPath).toBeUndefined();
+      expect(config.h3EvidenceDirectory).toBeUndefined();
+    });
+
+    it("parses H3_CANDIDATE_PROFILES_FILE, H3_CAPABILITY_MATRIX_FILE, H3_TRUSTED_KEYS_FILE, and H3_EVIDENCE_DIRECTORY", () => {
+      const config = parseControlApiRuntimeConfig({
+        ...validEnv,
+        H3_CANDIDATE_PROFILES_FILE: "/etc/cco/h3-candidate-profiles.json",
+        H3_CAPABILITY_MATRIX_FILE: "/etc/cco/h3-capability-matrix.json",
+        H3_TRUSTED_KEYS_FILE: "/etc/cco/h3-trusted-keys.json",
+        H3_EVIDENCE_DIRECTORY: "/var/lib/cco/h3-evidence"
+      });
+
+      expect(config.h3CandidateProfilesPath).toBe("/etc/cco/h3-candidate-profiles.json");
+      expect(config.h3CapabilityMatrixPath).toBe("/etc/cco/h3-capability-matrix.json");
+      expect(config.h3TrustedPublicKeysPath).toBe("/etc/cco/h3-trusted-keys.json");
+      expect(config.h3EvidenceDirectory).toBe("/var/lib/cco/h3-evidence");
+    });
+  });
 });

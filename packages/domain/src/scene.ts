@@ -705,6 +705,21 @@ export class Scene {
     });
   }
 
+  rebindAllocation(engineProfileId: string, durationMs: number): SceneTransition {
+    return this.#updateConfiguration("rebindAllocation", "allocation", {
+      prompt: this.#configuration.prompt,
+      referenceIds: this.#configuration.referenceIds,
+      ...(this.#configuration.referenceBindings !== undefined
+        ? { referenceBindings: this.#configuration.referenceBindings }
+        : {}),
+      engineProfileId,
+      durationMs,
+      ...(this.#configuration.loraConfigurationId !== undefined
+        ? { loraConfigurationId: this.#configuration.loraConfigurationId }
+        : {})
+    });
+  }
+
   updateLora(loraConfigurationId?: string): SceneTransition {
     return this.#updateConfiguration("updateLora", "lora", {
       prompt: this.#configuration.prompt,
@@ -966,6 +981,29 @@ export class Scene {
           this.#activePlanningRunId = planningLease.runId;
           this.#activePlanningExpiresAt = planningLease.expiresAt;
         }
+      }
+    );
+  }
+
+  invalidateApproval(): SceneTransition {
+    if (this.#status !== "approved") {
+      return Object.freeze({
+        sceneId: this.#id,
+        from: this.#status,
+        to: this.#status,
+        revision: this.#specRevision,
+        reason: "references_unchanged"
+      });
+    }
+    return this.#transition(
+      "invalidateApproval",
+      ["approved"],
+      "director_review",
+      "configuration_changed",
+      () => {
+        this.#approval = undefined;
+        this.#approvedShotPlanId = undefined;
+        this.#approvedShotPlanRevision = undefined;
       }
     );
   }

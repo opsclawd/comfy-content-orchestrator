@@ -12,6 +12,7 @@ import {
   InvalidJobCompletionPayloadError,
   StorageAdmissionError,
   StorageAdmissionUnavailableError,
+  createDeployedLiveRealmContext,
   type CandidateCompletionPayload,
   type JobMutationResult
 } from "@cco/application";
@@ -439,10 +440,74 @@ export const jobRoutes: FastifyPluginAsync<JobRoutesOptions> = async (
         throw new StorageAdmissionUnavailableError({ cause: error });
       }
 
+      const manifestPayload = request.body.manifestPayload;
+      let finalManifestPayload: Readonly<Record<string, unknown>> | undefined = manifestPayload as
+        Readonly<Record<string, unknown>> | undefined;
+      if (
+        manifestPayload &&
+        typeof manifestPayload === "object" &&
+        !Array.isArray(manifestPayload)
+      ) {
+        const payloadObj = manifestPayload as Record<string, unknown>;
+        const realmContext =
+          container.dependencies.realmAdmissionContext ?? createDeployedLiveRealmContext("default");
+
+        if (payloadObj.realm !== undefined || payloadObj.evidenceOrigin !== undefined) {
+          if (!payloadObj.realm || !payloadObj.evidenceOrigin) {
+            throw new InvalidJobCompletionPayloadError(
+              "manifestPayload must include both realm and evidenceOrigin if execution provenance is specified"
+            );
+          }
+          const realmKind = (payloadObj.realm as { kind?: unknown })?.kind;
+          if (realmContext.realm.kind === "deployed") {
+            if (realmKind !== "deployed" || payloadObj.evidenceOrigin !== "live_execution") {
+              throw new InvalidJobCompletionPayloadError(
+                "Deployed execution context rejects non-live or simulated execution provenance"
+              );
+            }
+            if (
+              (payloadObj.realm as { deploymentId?: unknown }).deploymentId !==
+              realmContext.realm.deploymentId
+            ) {
+              throw new InvalidJobCompletionPayloadError(
+                "Deployment ID mismatch in manifest payload realm"
+              );
+            }
+          } else if (realmContext.realm.kind === "isolated_test") {
+            if (realmKind !== "isolated_test" || payloadObj.evidenceOrigin !== "simulated_test") {
+              throw new InvalidJobCompletionPayloadError(
+                "Isolated test realm rejects non-simulated execution provenance"
+              );
+            }
+            const payloadRealm = payloadObj.realm as {
+              testRealmId?: unknown;
+              isolationDescriptorDigest?: unknown;
+            };
+            if (
+              payloadRealm.testRealmId !== realmContext.realm.testRealmId ||
+              payloadRealm.isolationDescriptorDigest !==
+                realmContext.realm.isolationDescriptorDigest
+            ) {
+              throw new InvalidJobCompletionPayloadError(
+                "Isolated test realm payload must match this request's bound testRealmId and isolationDescriptorDigest"
+              );
+            }
+          }
+        }
+
+        finalManifestPayload = {
+          ...payloadObj,
+          realm: payloadObj.realm ?? realmContext.realm,
+          evidenceOrigin:
+            payloadObj.evidenceOrigin ??
+            (realmContext.realm.kind === "isolated_test" ? "simulated_test" : "live_execution")
+        };
+      }
+
       const result = await queue.complete(
         request.params.jobId as JobId,
         request.body.leaseToken as LeaseToken,
-        request.body.manifestPayload,
+        finalManifestPayload,
         request.body.candidatePayload as CandidateCompletionPayload | undefined
       );
       if (
