@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   type AcceptanceAssemblyJob,
   type AcceptanceRunScene,
@@ -7,18 +7,206 @@ import {
   type BeginOperatorAcceptanceRunRequest,
   type BeginOperatorAcceptanceRunResponse,
   type OperatorAcceptanceRun,
+  canonicalizeJson,
   CampaignDurationPlanningError,
   OperatorAcceptanceRunNotFoundError,
   OperatorAcceptanceSceneNotFoundError,
   OperatorAcceptanceOrdinalMismatchError,
   OperatorAcceptanceInvalidStatusError,
-  OperatorAcceptanceSceneNotAcceptedError
+  OperatorAcceptanceSceneNotAcceptedError,
+  OperatorAcceptanceIdempotencyConflictError
 } from "@cco/contracts";
 import type { UnitOfWork } from "../ports/unit-of-work.js";
 import type { StageH3CandidateRenderUseCase } from "./stage-h3-candidate-render.js";
 import type { StagingPlanningAuthorizationSource } from "../ports/staging-planning-authorization-ports.js";
 import type { VideoStemSourceRecord } from "../ports/generation-manifest-repository.js";
 import { validateAssemblySpec } from "../ports/assembly-spec.js";
+
+export function computeAcceptanceActionRequestHash(action: string, payload: unknown): string {
+  return createHash("sha256").update(canonicalizeJson({ action, payload })).digest("hex");
+}
+
+export function deterministicUuid(seed: string): string {
+  const hash = createHash("sha256").update(seed).digest("hex");
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+}
+
+export function validateAcceptanceStemSource(
+  scene: AcceptanceRunScene,
+  stemSource: VideoStemSourceRecord,
+  expectedRunContext?: {
+    realm?: unknown;
+    evidenceOrigin?: unknown;
+  }
+): void {
+  if (!stemSource.renderProfile || stemSource.renderProfile !== scene.profileKey) {
+    throw new CampaignDurationPlanningError(
+      "observation_authority_invalid",
+      `Video stem renderProfile '${stemSource.renderProfile}' does not match scene profileKey '${scene.profileKey}'`
+    );
+  }
+
+  if (stemSource.frames === undefined || stemSource.frames !== scene.frames) {
+    throw new CampaignDurationPlanningError(
+      "observation_authority_invalid",
+      `Video stem frame count ${stemSource.frames} does not match scene frames ${scene.frames}`
+    );
+  }
+
+  if (stemSource.fps === undefined || Math.abs(stemSource.fps - scene.fps) > 0.01) {
+    throw new CampaignDurationPlanningError(
+      "observation_authority_invalid",
+      `Video stem fps ${stemSource.fps} does not match scene fps ${scene.fps}`
+    );
+  }
+
+  if (!stemSource.sceneId || stemSource.sceneId !== scene.sceneId) {
+    throw new CampaignDurationPlanningError(
+      "observation_authority_invalid",
+      `Video stem sceneId '${stemSource.sceneId}' does not match expected sceneId '${scene.sceneId}'`
+    );
+  }
+
+  if (
+    !scene.candidateSpecificationDigest ||
+    !stemSource.candidateSpecificationDigest ||
+    stemSource.candidateSpecificationDigest !== scene.candidateSpecificationDigest
+  ) {
+    throw new CampaignDurationPlanningError(
+      "observation_authority_invalid",
+      `Video stem candidateSpecificationDigest '${stemSource.candidateSpecificationDigest}' does not match expected '${scene.candidateSpecificationDigest}'`
+    );
+  }
+
+  if (stemSource.specRevision === undefined || stemSource.specRevision !== scene.specRevision) {
+    throw new CampaignDurationPlanningError(
+      "observation_authority_invalid",
+      `Video stem specRevision ${stemSource.specRevision} does not match scene specRevision ${scene.specRevision}`
+    );
+  }
+
+  if (stemSource.executionScope !== "staging") {
+    throw new CampaignDurationPlanningError(
+      "observation_authority_invalid",
+      `Video stem executionScope '${stemSource.executionScope}' must be 'staging'`
+    );
+  }
+
+  if (stemSource.ownerKind !== "staging_acceptance") {
+    throw new CampaignDurationPlanningError(
+      "observation_authority_invalid",
+      `Video stem ownerKind '${stemSource.ownerKind}' must be 'staging_acceptance'`
+    );
+  }
+
+  if (!stemSource.acceptanceRunId || stemSource.acceptanceRunId !== scene.acceptanceRunId) {
+    throw new CampaignDurationPlanningError(
+      "observation_authority_invalid",
+      `Video stem acceptanceRunId '${stemSource.acceptanceRunId}' does not match scene acceptanceRunId '${scene.acceptanceRunId}'`
+    );
+  }
+
+  if (expectedRunContext?.realm) {
+    if (
+      !stemSource.realm ||
+      canonicalizeJson(stemSource.realm) !== canonicalizeJson(expectedRunContext.realm)
+    ) {
+      throw new CampaignDurationPlanningError(
+        "observation_authority_invalid",
+        `Video stem realm does not match acceptance run realm`
+      );
+    }
+  } else if (!stemSource.realm) {
+    throw new CampaignDurationPlanningError(
+      "observation_authority_invalid",
+      `Video stem source is missing required realm`
+    );
+  }
+
+  if (expectedRunContext?.evidenceOrigin) {
+    if (
+      !stemSource.evidenceOrigin ||
+      stemSource.evidenceOrigin !== expectedRunContext.evidenceOrigin
+    ) {
+      throw new CampaignDurationPlanningError(
+        "observation_authority_invalid",
+        `Video stem evidenceOrigin '${stemSource.evidenceOrigin}' does not match acceptance run evidenceOrigin '${expectedRunContext.evidenceOrigin}'`
+      );
+    }
+  } else if (!stemSource.evidenceOrigin) {
+    throw new CampaignDurationPlanningError(
+      "observation_authority_invalid",
+      `Video stem source is missing required evidenceOrigin`
+    );
+  }
+
+  if (!stemSource.measuredMedia) {
+    throw new CampaignDurationPlanningError(
+      "observation_authority_invalid",
+      `Video stem source is missing required measuredMedia`
+    );
+  }
+
+  if (stemSource.measuredMedia.frameCount !== scene.frames) {
+    throw new CampaignDurationPlanningError(
+      "observation_authority_invalid",
+      `Video stem measuredMedia frameCount ${stemSource.measuredMedia.frameCount} does not match scene frames ${scene.frames}`
+    );
+  }
+
+  if (
+    stemSource.measuredMedia.fps === undefined ||
+    stemSource.measuredMedia.fps === null ||
+    Math.abs(stemSource.measuredMedia.fps - scene.fps) > 0.01
+  ) {
+    throw new CampaignDurationPlanningError(
+      "observation_authority_invalid",
+      `Video stem measuredMedia fps ${stemSource.measuredMedia.fps} does not match scene fps ${scene.fps}`
+    );
+  }
+
+  if (!stemSource.measuredMedia.dimensions) {
+    throw new CampaignDurationPlanningError(
+      "observation_authority_invalid",
+      "Video stem measuredMedia is missing required dimensions"
+    );
+  }
+
+  if (
+    stemSource.measuredMedia.dimensions.width !== 1344 ||
+    stemSource.measuredMedia.dimensions.height !== 768
+  ) {
+    throw new CampaignDurationPlanningError(
+      "observation_authority_invalid",
+      `Video stem measuredMedia dimensions ${stemSource.measuredMedia.dimensions.width}x${stemSource.measuredMedia.dimensions.height} do not match configured 1344x768`
+    );
+  }
+
+  if (Math.abs(stemSource.measuredMedia.durationMs - scene.expectedDurationMs) > 355) {
+    throw new CampaignDurationPlanningError(
+      "observation_authority_invalid",
+      `Video stem measuredMedia duration ${stemSource.measuredMedia.durationMs}ms exceeds tolerance of expected duration ${scene.expectedDurationMs}ms`
+    );
+  }
+
+  if (!stemSource.media.sha256 || stemSource.media.sha256.length !== 64) {
+    throw new CampaignDurationPlanningError(
+      "observation_authority_invalid",
+      `Video stem media sha256 is invalid or empty`
+    );
+  }
+
+  if (
+    !stemSource.outputChecksumsSha256 ||
+    stemSource.outputChecksumsSha256.length === 0 ||
+    !stemSource.outputChecksumsSha256.includes(stemSource.media.sha256)
+  ) {
+    throw new CampaignDurationPlanningError(
+      "observation_authority_invalid",
+      `Video stem media sha256 '${stemSource.media.sha256}' is not present in outputChecksumsSha256`
+    );
+  }
+}
 
 export interface OperatorAcceptanceRunDependencies {
   readonly uow: UnitOfWork;
@@ -46,7 +234,9 @@ export class BeginOperatorAcceptanceRunUseCase {
         throw new Error("UnitOfWorkContext.operatorAcceptanceRuns is not configured");
       }
 
-      const campaign = await context.campaigns.findById(input.campaignId);
+      const campaign = context.campaigns.findByIdForUpdate
+        ? await context.campaigns.findByIdForUpdate(input.campaignId)
+        : await context.campaigns.findById(input.campaignId);
       if (!campaign) {
         throw new Error(`Campaign '${input.campaignId}' not found`);
       }
@@ -66,10 +256,45 @@ export class BeginOperatorAcceptanceRunUseCase {
         );
       }
 
+      const requestHash = computeAcceptanceActionRequestHash("begin", {
+        campaignId: input.campaignId,
+        actionId: input.actionId,
+        requestedBy: input.requestedBy,
+        planId: currentPlan.planId,
+        planRevision: currentPlan.revision,
+        realm: currentPlan.realm,
+        allocations: currentPlan.allocations.map((a) => ({
+          allocationId: a.allocationId,
+          profileKey: a.profileSelection.profileKey,
+          specificationDigest:
+            a.profileSelection.kind === "staging_candidate"
+              ? a.profileSelection.specificationDigest
+              : undefined,
+          frames: a.frames,
+          fps: a.fps,
+          nominalDurationMs: a.nominalDurationMs
+        }))
+      });
+
+      if (context.operatorAcceptanceRuns.findActionReceipt) {
+        const existingReceipt = await context.operatorAcceptanceRuns.findActionReceipt(
+          "begin",
+          input.campaignId,
+          input.actionId
+        );
+        if (existingReceipt) {
+          if (existingReceipt.requestHash !== requestHash) {
+            throw new OperatorAcceptanceIdempotencyConflictError(input.actionId);
+          }
+          return existingReceipt.response as unknown as BeginOperatorAcceptanceRunResponse;
+        }
+      }
+
       const scenes = await context.scenes.findByCampaignId(campaign.id);
       const sortedScenes = [...scenes].sort((a, b) => a.sequenceIndex - b.sequenceIndex);
 
-      const acceptanceRunId = randomUUID();
+      const acceptanceRunSeed = `acceptance-run:${campaign.id}:${currentPlan.planId}:${input.actionId}`;
+      const acceptanceRunId = deterministicUuid(acceptanceRunSeed);
       const now = new Date().toISOString();
 
       const run: OperatorAcceptanceRun = {
@@ -133,13 +358,24 @@ export class BeginOperatorAcceptanceRunUseCase {
           );
         }
 
+        // render_jobs.staging_operation_id is VARCHAR(128); raw concatenation of
+        // 3 UUIDs plus an arbitrary-length actionId can exceed that (e.g. a
+        // 16-char actionId already overflows it). Hash the identifying
+        // components into a fixed-length digest instead — this preserves the
+        // idempotency property (same inputs always produce the same
+        // requestId) without risking a DB-level truncation/insert failure.
+        const requestId = `stage-${createHash("sha256")
+          .update(`${campaign.id}:${currentPlan.planId}:${scene.id}:${input.actionId}`)
+          .digest("hex")}`;
         const renderResult = await this.deps.stageRenderUseCase.executeWithContext(context, {
           sceneId: scene.id,
           candidateProfileKey: candidateKey,
           grant,
-          requestId: `stage-${acceptanceRunId}-${scene.id}`,
+          requestId,
           ownerKind: "staging_acceptance",
-          acceptanceRunId
+          acceptanceRunId,
+          realm: run.realm,
+          evidenceOrigin: run.evidenceOrigin
         });
         const stagingJobId = String(renderResult.job.jobId);
         const attemptId = String(renderResult.attemptId);
@@ -160,19 +396,55 @@ export class BeginOperatorAcceptanceRunUseCase {
           currentAttemptOrdinal: 1,
           acceptedStagingJobId: stagingJobId,
           acceptedAttemptId: undefined,
-          acceptedAttemptOrdinal: undefined
+          acceptedAttemptOrdinal: undefined,
+          candidateSpecificationDigest:
+            allocation.profileSelection.kind === "staging_candidate"
+              ? allocation.profileSelection.specificationDigest
+              : undefined,
+          planId: currentPlan.planId
         });
       }
 
-      await context.operatorAcceptanceRuns.createRun(run, runScenes);
+      try {
+        await context.operatorAcceptanceRuns.createRun(run, runScenes);
+      } catch (createErr) {
+        if (context.operatorAcceptanceRuns.findActionReceipt) {
+          const existingReceipt = await context.operatorAcceptanceRuns.findActionReceipt(
+            "begin",
+            input.campaignId,
+            input.actionId
+          );
+          if (existingReceipt) {
+            if (existingReceipt.requestHash !== requestHash) {
+              throw new OperatorAcceptanceIdempotencyConflictError(input.actionId);
+            }
+            return existingReceipt.response as unknown as BeginOperatorAcceptanceRunResponse;
+          }
+        }
+        throw createErr;
+      }
 
-      return {
+      const response: BeginOperatorAcceptanceRunResponse = {
         acceptanceRunId,
         campaignId: campaign.id,
         status: "dispatched",
         sceneCount: sortedScenes.length,
         dispatchedJobIds
       };
+
+      if (context.operatorAcceptanceRuns.saveActionReceipt) {
+        await context.operatorAcceptanceRuns.saveActionReceipt({
+          actionId: input.actionId,
+          scope: "begin",
+          runOrCampaignId: input.campaignId,
+          realm: currentPlan.realm,
+          requestHash,
+          response: response as unknown as Record<string, unknown>,
+          createdAt: now
+        });
+      }
+
+      return response;
     });
   }
 }
@@ -195,6 +467,29 @@ export class AcceptOperatorAcceptanceSceneUseCase {
       const run = await context.operatorAcceptanceRuns.findRunById(input.acceptanceRunId);
       if (!run) {
         throw new OperatorAcceptanceRunNotFoundError(input.acceptanceRunId);
+      }
+
+      const requestHash = computeAcceptanceActionRequestHash("accept_scene", {
+        acceptanceRunId: input.acceptanceRunId,
+        sceneId: input.sceneId,
+        actionId: input.actionId,
+        expectedAttemptOrdinal: input.expectedAttemptOrdinal,
+        acceptedBy: input.acceptedBy
+      });
+
+      const actionKey = `${input.acceptanceRunId}:${input.sceneId}:${input.actionId}`;
+      if (context.operatorAcceptanceRuns.findActionReceipt) {
+        const existingReceipt = await context.operatorAcceptanceRuns.findActionReceipt(
+          "accept_scene",
+          input.acceptanceRunId,
+          actionKey
+        );
+        if (existingReceipt) {
+          if (existingReceipt.requestHash !== requestHash) {
+            throw new OperatorAcceptanceIdempotencyConflictError(input.actionId);
+          }
+          return existingReceipt.response as unknown as { readonly accepted: boolean };
+        }
       }
 
       const runScenes = await context.operatorAcceptanceRuns.findRunScenes(input.acceptanceRunId);
@@ -240,12 +535,10 @@ export class AcceptOperatorAcceptanceSceneUseCase {
         );
       }
 
-      if (!stemSource.measuredMedia) {
-        throw new CampaignDurationPlanningError(
-          "observation_authority_invalid",
-          `Video stem source for staging job '${stagingJobId}' is missing required measuredMedia`
-        );
-      }
+      validateAcceptanceStemSource(scene, stemSource, {
+        realm: run.realm,
+        evidenceOrigin: run.evidenceOrigin
+      });
 
       await context.operatorAcceptanceRuns.updateSceneAcceptedAttempt(
         input.acceptanceRunId,
@@ -255,7 +548,21 @@ export class AcceptOperatorAcceptanceSceneUseCase {
         scene.currentAttemptOrdinal
       );
 
-      return { accepted: true };
+      const response = { accepted: true };
+
+      if (context.operatorAcceptanceRuns.saveActionReceipt) {
+        await context.operatorAcceptanceRuns.saveActionReceipt({
+          actionId: actionKey,
+          scope: "accept_scene",
+          runOrCampaignId: input.acceptanceRunId,
+          realm: run.realm,
+          requestHash,
+          response: response as unknown as Record<string, unknown>,
+          createdAt: new Date().toISOString()
+        });
+      }
+
+      return response;
     });
   }
 }
@@ -277,6 +584,26 @@ export class AssembleOperatorAcceptanceRunUseCase {
       const run = await context.operatorAcceptanceRuns.findRunById(input.acceptanceRunId);
       if (!run) {
         throw new OperatorAcceptanceRunNotFoundError(input.acceptanceRunId);
+      }
+
+      const requestHash = computeAcceptanceActionRequestHash("assemble", {
+        acceptanceRunId: input.acceptanceRunId,
+        actionId: input.actionId,
+        requestedBy: input.requestedBy
+      });
+
+      if (context.operatorAcceptanceRuns.findActionReceipt) {
+        const existingReceipt = await context.operatorAcceptanceRuns.findActionReceipt(
+          "assemble",
+          input.acceptanceRunId,
+          input.actionId
+        );
+        if (existingReceipt) {
+          if (existingReceipt.requestHash !== requestHash) {
+            throw new OperatorAcceptanceIdempotencyConflictError(input.actionId);
+          }
+          return existingReceipt.response as unknown as AssembleOperatorAcceptanceRunResponse;
+        }
       }
 
       if (
@@ -336,6 +663,10 @@ export class AssembleOperatorAcceptanceRunUseCase {
             `Generation manifest and video stem source not found for accepted staging job '${s.acceptedStagingJobId}'`
           );
         }
+        validateAcceptanceStemSource(s, stemSource, {
+          realm: run.realm,
+          evidenceOrigin: run.evidenceOrigin
+        });
         videoStems.push({
           order: idx,
           sceneId: s.sceneId,
@@ -371,11 +702,25 @@ export class AssembleOperatorAcceptanceRunUseCase {
         input.actionId
       );
 
-      return {
+      const response: AssembleOperatorAcceptanceRunResponse = {
         acceptanceRunId: run.acceptanceRunId,
         assemblyJobId,
         status: "assembling"
       };
+
+      if (context.operatorAcceptanceRuns.saveActionReceipt) {
+        await context.operatorAcceptanceRuns.saveActionReceipt({
+          actionId: input.actionId,
+          scope: "assemble",
+          runOrCampaignId: run.acceptanceRunId,
+          realm: run.realm,
+          requestHash,
+          response: response as unknown as Record<string, unknown>,
+          createdAt: new Date().toISOString()
+        });
+      }
+
+      return response;
     });
   }
 }

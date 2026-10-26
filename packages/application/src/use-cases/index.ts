@@ -105,3 +105,5 @@ export * from "./stage-h3-candidate-render.js";
 export * from "./deterministic-duration-feasibility.js";
 export * from "./replan-campaign.js";
 export * from "./operator-acceptance-run.js";
+export * from "./resolve-operator-acceptance-reel.js";
+export * from "./profile-selection-resolver.js";

@@ -10,6 +10,7 @@ export interface H3CapabilityResolverReader {
     key: string | undefined
   ): Readonly<{ key: string; specification: H3CandidateExecutionSpecification }> | undefined;
   getProfileCapability?(key: string | undefined): H3ProfileFrameCapability | undefined;
+  resolveH3ProfileFrameCapabilities?(key: string | undefined): H3ProfileFrameCapability | undefined;
 }
 
 /**
@@ -111,6 +112,11 @@ export function resolveH3ProfileFrameCapabilities(
 
   if (reader?.getProfileCapability) {
     const directCap = reader.getProfileCapability(profileKeyOrId);
+    if (directCap) return directCap;
+  }
+
+  if (reader?.resolveH3ProfileFrameCapabilities) {
+    const directCap = reader.resolveH3ProfileFrameCapabilities(profileKeyOrId);
     if (directCap) return directCap;
   }
 

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { BUCKETS } from "@cco/shared";
 import {
   Scene,
   type CampaignId,
@@ -8,6 +9,7 @@ import {
   type SceneId
 } from "@cco/domain";
 import {
+  type AcceptanceRunScene,
   type CampaignDurationPlan,
   type DeployedRealm,
   type ExecutionProfileSelection,
@@ -15,8 +17,10 @@ import {
   type H3CandidateAuthorizationGrant,
   type H3CandidateProfileKey,
   type StagingCandidateProfileSelection,
-  CampaignDurationPlanningError
+  CampaignDurationPlanningError,
+  OperatorAcceptanceIdempotencyConflictError
 } from "@cco/contracts";
+import type { VideoStemSourceRecord } from "../ports/generation-manifest-repository.js";
 import type { StagingPlanningAuthorizationSource } from "../ports/staging-planning-authorization-ports.js";
 import type { StageH3CandidateRenderUseCase } from "./stage-h3-candidate-render.js";
 import { InMemorySceneUnitOfWork } from "../test-support/in-memory-scene-unit-of-work.js";
@@ -26,7 +30,8 @@ import { planFeasibleCampaignDuration } from "./deterministic-duration-feasibili
 import {
   BeginOperatorAcceptanceRunUseCase,
   AcceptOperatorAcceptanceSceneUseCase,
-  AssembleOperatorAcceptanceRunUseCase
+  AssembleOperatorAcceptanceRunUseCase,
+  validateAcceptanceStemSource
 } from "./operator-acceptance-run.js";
 import {
   attemptEnqueueAssemblyForAcceptedRun,
@@ -206,18 +211,34 @@ describe("Operator Acceptance Run lifecycle and execution isolation", () => {
     const mockStageRenderUseCase = {
       executeWithContext: async (_context: unknown, _input: unknown) => {
         const jobId = randomUUID();
+        const stageInput = _input as {
+          sceneId: SceneId;
+          candidateProfileKey: string;
+          acceptanceRunId: string;
+        };
         uow.seedVideoStemSource(jobId, {
           generationManifestId: randomUUID(),
+          jobId,
+          sceneId: stageInput.sceneId,
+          renderProfile: stageInput.candidateProfileKey,
+          route: "ref2v",
+          routingMode: "reference_directed",
+          candidateSpecificationDigest: "b".repeat(64),
+          specRevision: 1,
+          frames: 124,
+          fps: 24,
+          outputChecksumsSha256: ["0".repeat(64)],
           renderAttempt: 1,
           executionScope: "staging",
           ownerKind: "staging_acceptance",
+          acceptanceRunId: stageInput.acceptanceRunId,
           realm: isolatedTestRealm,
           evidenceOrigin: "simulated_test",
           measuredMedia: {
-            outputKey: "videos/stem-1.mp4",
+            outputKey: `videos/stem-${stageInput.sceneId}.mp4`,
             checksumSha256: "0".repeat(64),
             container: "ffprobe",
-            dimensions: { width: 720, height: 1280 },
+            dimensions: { width: 1344, height: 768 },
             frameCount: 124,
             fps: 24,
             durationMs: 5167,
@@ -226,7 +247,7 @@ describe("Operator Acceptance Run lifecycle and execution isolation", () => {
           },
           media: {
             bucket: "staging-bucket",
-            key: "videos/stem-1.mp4",
+            key: `videos/stem-${stageInput.sceneId}.mp4`,
             sha256: "0".repeat(64),
             contentType: "video/mp4"
           }
@@ -257,6 +278,23 @@ describe("Operator Acceptance Run lifecycle and execution isolation", () => {
     expect(beginRes.sceneCount).toBe(2);
     expect(beginRes.dispatchedJobIds).toHaveLength(2);
 
+    // 1a. Idempotent replay of begin
+    const beginReplay = await beginUseCase.execute({
+      campaignId,
+      actionId: "act-begin-staging",
+      requestedBy: "operator"
+    });
+    expect(beginReplay).toEqual(beginRes);
+
+    // 1b. Idempotent conflict on begin with altered payload
+    await expect(
+      beginUseCase.execute({
+        campaignId,
+        actionId: "act-begin-staging",
+        requestedBy: "different-operator"
+      })
+    ).rejects.toThrow(OperatorAcceptanceIdempotencyConflictError);
+
     // 2. Attempt assemble before accepting scenes -> must fail
     await expect(
       assembleUseCase.execute({
@@ -275,6 +313,27 @@ describe("Operator Acceptance Run lifecycle and execution isolation", () => {
       acceptedBy: "operator"
     });
     expect(accept1.accepted).toBe(true);
+
+    // 3a. Idempotent replay of accept scene 1
+    const accept1Replay = await acceptUseCase.execute({
+      acceptanceRunId: beginRes.acceptanceRunId,
+      sceneId: scenes[0]!.id,
+      actionId: "act-accept-scene-1",
+      expectedAttemptOrdinal: 1,
+      acceptedBy: "operator"
+    });
+    expect(accept1Replay).toEqual(accept1);
+
+    // 3b. Idempotent conflict on accept scene 1
+    await expect(
+      acceptUseCase.execute({
+        acceptanceRunId: beginRes.acceptanceRunId,
+        sceneId: scenes[0]!.id,
+        actionId: "act-accept-scene-1",
+        expectedAttemptOrdinal: 2,
+        acceptedBy: "operator"
+      })
+    ).rejects.toThrow(OperatorAcceptanceIdempotencyConflictError);
 
     // Still cannot assemble (scene 2 not accepted)
     await expect(
@@ -304,6 +363,23 @@ describe("Operator Acceptance Run lifecycle and execution isolation", () => {
 
     expect(assembleRes.status).toBe("assembling");
     expect(assembleRes.assemblyJobId).toBeDefined();
+
+    // 5a. Idempotent replay of assemble
+    const assembleReplay = await assembleUseCase.execute({
+      acceptanceRunId: beginRes.acceptanceRunId,
+      actionId: "act-assemble-final",
+      requestedBy: "operator"
+    });
+    expect(assembleReplay).toEqual(assembleRes);
+
+    // 5b. Idempotent conflict on assemble with altered requestedBy
+    await expect(
+      assembleUseCase.execute({
+        acceptanceRunId: beginRes.acceptanceRunId,
+        actionId: "act-assemble-final",
+        requestedBy: "different-operator"
+      })
+    ).rejects.toThrow(OperatorAcceptanceIdempotencyConflictError);
 
     // Verify stored acceptance run state
     await uow.execute(async (context) => {
@@ -488,6 +564,311 @@ describe("Operator Acceptance Run lifecycle and execution isolation", () => {
       });
       expect(res.enqueued).toBe(true);
       expect(res.assemblyJobId).toBeDefined();
+    });
+  });
+
+  it("AcceptOperatorAcceptanceSceneUseCase rejects stem with frame count mismatch or invalid checksum", async () => {
+    const { campaignId, scenes, stagingPlan, uow } = setupStagingCampaign(1);
+    await uow.execute(async (context) => {
+      await context.durationPlans!.savePlan(stagingPlan);
+    });
+
+    const mockGrant: H3CandidateAuthorizationGrant = {
+      payload: {
+        version: 1,
+        candidateKey: stagingCandidateRef2v.profileKey as H3CandidateProfileKey,
+        specificationDigest: "b".repeat(64),
+        goldMasterWorkflowHash: "c".repeat(64),
+        goldMasterModelHashesDigest: "d".repeat(64),
+        targetHostname: "test-host",
+        targetGpuUuid: "GPU-1234",
+        purpose: "staging",
+        scope: "staging",
+        issuedAt: new Date(Date.now() - 60_000).toISOString(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        operatorId: "operator-1"
+      },
+      signature: "0123456789abcdef".repeat(4),
+      signerKeyId: "auth-1"
+    };
+
+    const mockStagingAuthSource: StagingPlanningAuthorizationSource = {
+      listAuthorizedCandidates: async () => [
+        stagingCandidateRef2v as StagingCandidateProfileSelection
+      ],
+      resolveCandidateGrant: async () => mockGrant
+    };
+
+    const seededFrames = 999; // intentionally mismatched frames
+    const mockStageRenderUseCase = {
+      executeWithContext: async (_context: unknown, _input: unknown) => {
+        const jobId = randomUUID();
+        uow.seedVideoStemSource(jobId, {
+          generationManifestId: randomUUID(),
+          renderAttempt: 1,
+          executionScope: "staging",
+          ownerKind: "staging_acceptance",
+          realm: isolatedTestRealm,
+          evidenceOrigin: "simulated_test",
+          renderProfile: stagingCandidateRef2v.profileKey,
+          frames: seededFrames,
+          measuredMedia: {
+            outputKey: "videos/stem-bad.mp4",
+            checksumSha256: "0".repeat(64),
+            container: "ffprobe",
+            dimensions: { width: 720, height: 1280 },
+            frameCount: seededFrames,
+            fps: 24,
+            durationMs: 5167,
+            formatDurationMs: 5167,
+            measurement: "source_bytes"
+          },
+          media: {
+            bucket: "staging-bucket",
+            key: "videos/stem-bad.mp4",
+            sha256: "0".repeat(64),
+            contentType: "video/mp4"
+          }
+        });
+        return {
+          job: { jobId },
+          attemptId: randomUUID()
+        };
+      }
+    } as unknown as StageH3CandidateRenderUseCase;
+
+    const beginUseCase = new BeginOperatorAcceptanceRunUseCase({
+      uow,
+      stagingAuthSource: mockStagingAuthSource,
+      stageRenderUseCase: mockStageRenderUseCase
+    });
+    const acceptUseCase = new AcceptOperatorAcceptanceSceneUseCase({ uow });
+
+    const beginRes = await beginUseCase.execute({
+      campaignId,
+      actionId: "act-begin-mismatch-test",
+      requestedBy: "operator"
+    });
+
+    await expect(
+      acceptUseCase.execute({
+        acceptanceRunId: beginRes.acceptanceRunId,
+        sceneId: scenes[0]!.id,
+        actionId: "act-accept-bad-stem",
+        expectedAttemptOrdinal: 1,
+        acceptedBy: "operator"
+      })
+    ).rejects.toThrow(/does not match scene frames/i);
+  });
+
+  describe("validateAcceptanceStemSource fail-closed invariants", () => {
+    const baseScene: AcceptanceRunScene = {
+      acceptanceRunId: "00000000-0000-4000-8000-000000000001",
+      sceneId: "00000000-0000-4000-8000-000000000002",
+      allocationId: "00000000-0000-4000-8000-000000000003",
+      specRevision: 2,
+      sequenceIndex: 1,
+      profileKey: "H3_CANDIDATE_243F_V1",
+      frames: 243,
+      fps: 24,
+      expectedDurationMs: 10125,
+      candidateSpecificationDigest: "a".repeat(64),
+      acceptedAttemptId: "00000000-0000-4000-8000-000000000004",
+      acceptedAttemptOrdinal: 1,
+      currentAttemptOrdinal: 1,
+      acceptedStagingJobId: "job-1"
+    };
+
+    const baseStemSource: VideoStemSourceRecord = {
+      generationManifestId: "gen-1",
+      jobId: "job-1",
+      renderAttempt: 1,
+      sceneId: baseScene.sceneId,
+      renderProfile: baseScene.profileKey,
+      candidateSpecificationDigest: baseScene.candidateSpecificationDigest,
+      specRevision: baseScene.specRevision,
+      frames: 243,
+      fps: 24,
+      executionScope: "staging",
+      ownerKind: "staging_acceptance",
+      acceptanceRunId: baseScene.acceptanceRunId,
+      realm: {
+        kind: "isolated_test",
+        testRealmId: "realm-1",
+        isolationDescriptorDigest: "b".repeat(64)
+      },
+      evidenceOrigin: "simulated_test",
+      media: {
+        bucket: BUCKETS.CANDIDATES,
+        key: `acceptance-runs/${baseScene.acceptanceRunId}/stems/scene-1.mp4`,
+        sha256: "c".repeat(64),
+        contentType: "video/mp4"
+      },
+      outputChecksumsSha256: ["c".repeat(64)],
+      measuredMedia: {
+        outputKey: `acceptance-runs/${baseScene.acceptanceRunId}/stems/scene-1.mp4`,
+        checksumSha256: "c".repeat(64),
+        container: "ffprobe",
+        dimensions: { width: 1344, height: 768 },
+        frameCount: 243,
+        fps: 24,
+        durationMs: 10125,
+        formatDurationMs: 10125,
+        measurement: "source_bytes"
+      }
+    };
+
+    const expectedRunContext = {
+      realm: baseStemSource.realm,
+      evidenceOrigin: baseStemSource.evidenceOrigin
+    };
+
+    it("passes when all fields strictly match", () => {
+      expect(() =>
+        validateAcceptanceStemSource(baseScene, baseStemSource, expectedRunContext)
+      ).not.toThrow();
+    });
+
+    it("rejects mismatched renderProfile", () => {
+      expect(() =>
+        validateAcceptanceStemSource(
+          baseScene,
+          { ...baseStemSource, renderProfile: "OTHER_KEY" },
+          expectedRunContext
+        )
+      ).toThrow(/renderProfile/i);
+    });
+
+    it("rejects mismatched candidateSpecificationDigest", () => {
+      expect(() =>
+        validateAcceptanceStemSource(
+          baseScene,
+          { ...baseStemSource, candidateSpecificationDigest: "f".repeat(64) },
+          expectedRunContext
+        )
+      ).toThrow(/candidateSpecificationDigest/i);
+    });
+
+    it("rejects mismatched specRevision", () => {
+      expect(() =>
+        validateAcceptanceStemSource(
+          baseScene,
+          { ...baseStemSource, specRevision: 1 },
+          expectedRunContext
+        )
+      ).toThrow(/specRevision/i);
+    });
+
+    it("rejects mismatched frames vs measuredMedia.frameCount", () => {
+      expect(() =>
+        validateAcceptanceStemSource(
+          baseScene,
+          { ...baseStemSource, frames: 124 },
+          expectedRunContext
+        )
+      ).toThrow(/frame count/i);
+      expect(() =>
+        validateAcceptanceStemSource(
+          baseScene,
+          {
+            ...baseStemSource,
+            measuredMedia: { ...baseStemSource.measuredMedia!, frameCount: 124 }
+          },
+          expectedRunContext
+        )
+      ).toThrow(/frameCount/i);
+    });
+
+    it("rejects mismatched fps vs measuredMedia.fps", () => {
+      expect(() =>
+        validateAcceptanceStemSource(baseScene, { ...baseStemSource, fps: 30 }, expectedRunContext)
+      ).toThrow(/fps/i);
+      expect(() =>
+        validateAcceptanceStemSource(
+          baseScene,
+          {
+            ...baseStemSource,
+            measuredMedia: { ...baseStemSource.measuredMedia!, fps: 30 }
+          },
+          expectedRunContext
+        )
+      ).toThrow(/fps/i);
+    });
+
+    it("rejects non-staging executionScope or non-staging_acceptance ownerKind", () => {
+      expect(() =>
+        validateAcceptanceStemSource(
+          baseScene,
+          { ...baseStemSource, executionScope: "production" },
+          expectedRunContext
+        )
+      ).toThrow(/executionScope/i);
+      expect(() =>
+        validateAcceptanceStemSource(
+          baseScene,
+          { ...baseStemSource, ownerKind: "production_run" },
+          expectedRunContext
+        )
+      ).toThrow(/ownerKind/i);
+    });
+
+    it("rejects foreign acceptanceRunId, realm, or evidenceOrigin", () => {
+      expect(() =>
+        validateAcceptanceStemSource(
+          baseScene,
+          {
+            ...baseStemSource,
+            acceptanceRunId: "00000000-0000-4000-8000-999999999999"
+          },
+          expectedRunContext
+        )
+      ).toThrow(/acceptanceRunId/i);
+      expect(() =>
+        validateAcceptanceStemSource(
+          baseScene,
+          { ...baseStemSource, evidenceOrigin: "live_execution" },
+          expectedRunContext
+        )
+      ).toThrow(/evidenceOrigin/i);
+    });
+
+    it("rejects mismatched geometry (width/height)", () => {
+      expect(() =>
+        validateAcceptanceStemSource(
+          baseScene,
+          {
+            ...baseStemSource,
+            measuredMedia: {
+              ...baseStemSource.measuredMedia!,
+              dimensions: { width: 1280, height: 720 }
+            }
+          },
+          expectedRunContext
+        )
+      ).toThrow(/dimensions/i);
+    });
+
+    it("rejects duration exceeding tolerance", () => {
+      expect(() =>
+        validateAcceptanceStemSource(
+          baseScene,
+          {
+            ...baseStemSource,
+            measuredMedia: { ...baseStemSource.measuredMedia!, durationMs: 11000 }
+          },
+          expectedRunContext
+        )
+      ).toThrow(/tolerance/i);
+    });
+
+    it("rejects when media sha256 is not in outputChecksumsSha256", () => {
+      expect(() =>
+        validateAcceptanceStemSource(
+          baseScene,
+          { ...baseStemSource, outputChecksumsSha256: ["d".repeat(64)] },
+          expectedRunContext
+        )
+      ).toThrow(/outputChecksumsSha256/i);
     });
   });
 });

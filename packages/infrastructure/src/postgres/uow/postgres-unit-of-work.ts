@@ -24,6 +24,7 @@ import { PostgresProductClaimRepository } from "../repositories/postgres-product
 import { PostgresCampaignDurationPlanRepository } from "../repositories/postgres-campaign-duration-plan-repository.js";
 import { PostgresOperatorAcceptanceRunRepository } from "../repositories/postgres-operator-acceptance-run-repository.js";
 import { PostgresAcceptanceAssemblyJobQueue } from "../repositories/postgres-acceptance-assembly-job-queue.js";
+import { PostgresAcceptanceAssemblyManifestRepository } from "../repositories/postgres-acceptance-assembly-manifest-repository.js";
 import { PostgresDeploymentEnablementStateRepository } from "../repositories/postgres-deployment-enablement-state-repository.js";
 
 export class PostgresUnitOfWork implements UnitOfWork {
@@ -65,6 +66,7 @@ export class PostgresUnitOfWork implements UnitOfWork {
         durationPlans: new PostgresCampaignDurationPlanRepository(client),
         operatorAcceptanceRuns: new PostgresOperatorAcceptanceRunRepository(client),
         acceptanceAssemblyJobs: new PostgresAcceptanceAssemblyJobQueue(client),
+        acceptanceAssemblyManifests: new PostgresAcceptanceAssemblyManifestRepository(client),
         deploymentEnablement: new PostgresDeploymentEnablementStateRepository(client)
       };
 

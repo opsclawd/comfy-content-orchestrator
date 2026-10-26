@@ -1,6 +1,7 @@
 import {
   decodeGenerationManifestOutputs,
   extractPrimaryVideoStemMedia,
+  IncompleteVideoStemSourceError,
   type GenerationManifestComponentIdentity,
   type GenerationManifestRepository,
   type VideoStemSourceRecord
@@ -56,11 +57,30 @@ export class PostgresGenerationManifestRepository implements GenerationManifestR
       // If outputs are not present or malformed, outputChecksumsSha256 remains empty
     }
 
+    const payloadRecord = payload as Record<string, unknown>;
+    const routingMode =
+      typeof payloadRecord.routingMode === "string" ? payloadRecord.routingMode : undefined;
+    const candidateSpecificationDigest =
+      typeof payloadRecord.candidateSpecificationDigest === "string"
+        ? payloadRecord.candidateSpecificationDigest
+        : undefined;
+
+    const route =
+      payloadRecord.route === "ref2v" || payloadRecord.route === "i2v"
+        ? (payloadRecord.route as "ref2v" | "i2v")
+        : routingMode === "reference_directed"
+          ? ("ref2v" as const)
+          : routingMode === "frame_anchored"
+            ? ("i2v" as const)
+            : undefined;
+
     return {
       renderProfile: payload.renderProfile,
       renderProfileVersion:
         typeof payload.renderProfileVersion === "number" ? payload.renderProfileVersion : null,
-      ...(outputChecksumsSha256.length > 0 ? { outputChecksumsSha256 } : {})
+      ...(outputChecksumsSha256.length > 0 ? { outputChecksumsSha256 } : {}),
+      ...(route ? { route } : {}),
+      ...(candidateSpecificationDigest ? { candidateSpecificationDigest } : {})
     };
   }
 
@@ -107,14 +127,26 @@ export class PostgresGenerationManifestRepository implements GenerationManifestR
       typeof payload?.renderProfile === "string" &&
       /^H3_CANDIDATE_[0-9a-f]{32}_V[1-9]\d*$/.test(payload.renderProfile);
 
+    if (
+      row.job_execution_scope &&
+      payload?.executionScope &&
+      row.job_execution_scope !== payload.executionScope
+    ) {
+      throw new Error(
+        `Contradictory executionScope in manifest "${row.manifest_id}": job_execution_scope "${row.job_execution_scope}" does not match manifest payload executionScope "${payload.executionScope}"`
+      );
+    }
+
     const executionScope: "production" | "staging" | undefined =
-      row.job_execution_scope === "staging" ||
-      payload?.executionScope === "staging" ||
-      isCandidateProfile
-        ? "staging"
-        : row.job_execution_scope === "production" || payload?.executionScope === "production"
-          ? "production"
-          : undefined;
+      (row.job_execution_scope as "production" | "staging" | null) ??
+      (payload?.executionScope as "production" | "staging" | undefined) ??
+      (isCandidateProfile ? "staging" : undefined);
+
+    if (isCandidateProfile && executionScope === "production") {
+      throw new Error(
+        `Candidate generation manifest "${row.manifest_id}" cannot have production executionScope`
+      );
+    }
 
     let measuredMedia: ManifestMeasuredMedia | undefined;
     if (payload?.measuredMedia) {
@@ -148,10 +180,72 @@ export class PostgresGenerationManifestRepository implements GenerationManifestR
     const evidenceOrigin = payload?.evidenceOrigin as EvidenceOrigin | undefined;
     const simulationDescriptor = payload?.simulationDescriptor as SimulationDescriptor | undefined;
 
+    const renderProfile =
+      typeof payload?.renderProfile === "string" ? payload.renderProfile : undefined;
+    const sceneId = typeof payload?.sceneId === "string" ? payload.sceneId : undefined;
+    const candidateSpecificationDigest =
+      typeof payload?.candidateSpecificationDigest === "string"
+        ? payload.candidateSpecificationDigest
+        : undefined;
+    const specRevision =
+      typeof payload?.specRevision === "number" ? payload.specRevision : undefined;
+    const configuredMediaObj = payload?.configuredMedia as Record<string, unknown> | undefined;
+    const frames =
+      typeof payload?.frameCount === "number"
+        ? payload.frameCount
+        : typeof configuredMediaObj?.frameCount === "number"
+          ? (configuredMediaObj.frameCount as number)
+          : undefined;
+    const fps =
+      typeof payload?.fps === "number"
+        ? payload.fps
+        : typeof configuredMediaObj?.fps === "number"
+          ? (configuredMediaObj.fps as number)
+          : undefined;
+
+    const payloadRoutingMode =
+      typeof payload?.routingMode === "string" ? payload.routingMode : undefined;
+    const route =
+      payload?.route === "ref2v" || payload?.route === "i2v"
+        ? (payload.route as "ref2v" | "i2v")
+        : payloadRoutingMode === "reference_directed"
+          ? ("ref2v" as const)
+          : payloadRoutingMode === "frame_anchored"
+            ? ("i2v" as const)
+            : undefined;
+
+    const outputChecksumsSha256: string[] = [];
+    if (payload) {
+      try {
+        const outputs = decodeGenerationManifestOutputs(
+          payload as Record<string, unknown>,
+          row.manifest_id
+        );
+        for (const out of outputs) {
+          outputChecksumsSha256.push(out.checksumSha256);
+        }
+      } catch (err) {
+        throw new IncompleteVideoStemSourceError(
+          jobId,
+          `Failed to decode generation manifest outputs: ${(err as Error).message}`
+        );
+      }
+    }
+
     return {
       generationManifestId: row.manifest_id,
+      jobId,
       media,
       renderAttempt,
+      ...(renderProfile ? { renderProfile } : {}),
+      ...(route ? { route } : {}),
+      ...(payloadRoutingMode ? { routingMode: payloadRoutingMode } : {}),
+      ...(sceneId ? { sceneId } : {}),
+      ...(candidateSpecificationDigest ? { candidateSpecificationDigest } : {}),
+      ...(specRevision !== undefined ? { specRevision } : {}),
+      ...(frames !== undefined ? { frames } : {}),
+      ...(fps !== undefined ? { fps } : {}),
+      ...(outputChecksumsSha256.length > 0 ? { outputChecksumsSha256 } : {}),
       ...(executionScope ? { executionScope } : {}),
       ...(measuredMedia ? { measuredMedia } : {}),
       ...(realm ? { realm } : {}),

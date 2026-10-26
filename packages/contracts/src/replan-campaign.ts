@@ -9,7 +9,8 @@ export const ReplanCampaignPreviewRequestSchema = z
     campaignId: z.string().uuid(),
     sceneIdDurations: z.record(z.string().uuid(), z.number().int().positive()),
     selectedProfileKey: z.string().trim().min(1).optional(),
-    allowedDurationProfileKeys: z.array(z.string().trim().min(1)).optional()
+    allowedDurationProfileKeys: z.array(z.string().trim().min(1)).optional(),
+    principal: z.string().trim().min(1).optional()
   })
   .strict();
 export type ReplanCampaignPreviewRequest = z.infer<typeof ReplanCampaignPreviewRequestSchema>;
@@ -33,7 +34,8 @@ export const ReplanCampaignCommitRequestSchema = z
     expectedSceneSpecRevisions: z.record(z.string().uuid(), z.number().int().positive()),
     sceneIdDurations: z.record(z.string().uuid(), z.number().int().positive()),
     selectedProfileKey: z.string().trim().min(1).optional(),
-    allowedDurationProfileKeys: z.array(z.string().trim().min(1)).optional()
+    allowedDurationProfileKeys: z.array(z.string().trim().min(1)).optional(),
+    principal: z.string().trim().min(1).optional()
   })
   .strict();
 export type ReplanCampaignCommitRequest = z.infer<typeof ReplanCampaignCommitRequestSchema>;

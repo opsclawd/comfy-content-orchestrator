@@ -56,6 +56,7 @@ export { PostgresReviewEventStore } from "./postgres/repositories/postgres-revie
 export { PostgresCampaignDurationPlanRepository } from "./postgres/repositories/postgres-campaign-duration-plan-repository.js";
 export { PostgresOperatorAcceptanceRunRepository } from "./postgres/repositories/postgres-operator-acceptance-run-repository.js";
 export { PostgresAcceptanceAssemblyJobQueue } from "./postgres/repositories/postgres-acceptance-assembly-job-queue.js";
+export { PostgresAcceptanceAssemblyManifestRepository } from "./postgres/repositories/postgres-acceptance-assembly-manifest-repository.js";
 export { PostgresDeploymentEnablementStateRepository } from "./postgres/repositories/postgres-deployment-enablement-state-repository.js";
 export {
   PostgresProductEvidenceRepository,

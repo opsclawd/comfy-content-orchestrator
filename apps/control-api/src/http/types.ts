@@ -41,6 +41,7 @@ import {
   BeginOperatorAcceptanceRunUseCase,
   AcceptOperatorAcceptanceSceneUseCase,
   AssembleOperatorAcceptanceRunUseCase,
+  ResolveOperatorAcceptanceReelUseCase,
   type StageH3CandidateRenderUseCase,
   type H3CandidateRegistryReader,
   type RealmAdmissionContext,
@@ -152,6 +153,7 @@ export interface ControlApiUseCases {
   readonly beginOperatorAcceptanceRun?: BeginOperatorAcceptanceRunUseCase | undefined;
   readonly acceptOperatorAcceptanceScene?: AcceptOperatorAcceptanceSceneUseCase | undefined;
   readonly assembleOperatorAcceptanceRun?: AssembleOperatorAcceptanceRunUseCase | undefined;
+  readonly resolveOperatorAcceptanceReel?: ResolveOperatorAcceptanceReelUseCase | undefined;
   readonly createCampaign?: CreateCampaignUseCase | undefined;
   readonly createCampaignShell?: CreateCampaignShellUseCase | undefined;
   readonly createClient?: CreateClientUseCase | undefined;
@@ -603,10 +605,20 @@ export function createControlApiContainer(
     : undefined;
 
   const previewCampaignReplan = dependencies.uow
-    ? new PreviewCampaignReplanUseCase({ uow: dependencies.uow })
+    ? new PreviewCampaignReplanUseCase({
+        uow: dependencies.uow,
+        productionReleaseReader: dependencies.productionReleaseReader,
+        stagingAuthSource: dependencies.stagingAuthSource,
+        registryReader: dependencies.h3CandidateRegistryReader
+      })
     : undefined;
   const commitCampaignReplan = dependencies.uow
-    ? new CommitCampaignReplanUseCase({ uow: dependencies.uow })
+    ? new CommitCampaignReplanUseCase({
+        uow: dependencies.uow,
+        productionReleaseReader: dependencies.productionReleaseReader,
+        stagingAuthSource: dependencies.stagingAuthSource,
+        registryReader: dependencies.h3CandidateRegistryReader
+      })
     : undefined;
   const beginOperatorAcceptanceRun = dependencies.uow
     ? new BeginOperatorAcceptanceRunUseCase({
@@ -620,6 +632,15 @@ export function createControlApiContainer(
     : undefined;
   const assembleOperatorAcceptanceRun = dependencies.uow
     ? new AssembleOperatorAcceptanceRunUseCase({ uow: dependencies.uow })
+    : undefined;
+  const resolveOperatorAcceptanceReel = dependencies.uow
+    ? new ResolveOperatorAcceptanceReelUseCase({
+        uow: dependencies.uow,
+        ...(dependencies.objectStorage ? { objectStorage: dependencies.objectStorage } : {}),
+        ...(dependencies.reviewMediaDelivery
+          ? { mediaDelivery: dependencies.reviewMediaDelivery }
+          : {})
+      })
     : undefined;
 
   return {
@@ -675,7 +696,8 @@ export function createControlApiContainer(
       ...(commitCampaignReplan !== undefined ? { commitCampaignReplan } : {}),
       ...(beginOperatorAcceptanceRun !== undefined ? { beginOperatorAcceptanceRun } : {}),
       ...(acceptOperatorAcceptanceScene !== undefined ? { acceptOperatorAcceptanceScene } : {}),
-      ...(assembleOperatorAcceptanceRun !== undefined ? { assembleOperatorAcceptanceRun } : {})
+      ...(assembleOperatorAcceptanceRun !== undefined ? { assembleOperatorAcceptanceRun } : {}),
+      ...(resolveOperatorAcceptanceReel !== undefined ? { resolveOperatorAcceptanceReel } : {})
     },
     queries: {
       ...(dependencies.sceneReviewQueries !== undefined

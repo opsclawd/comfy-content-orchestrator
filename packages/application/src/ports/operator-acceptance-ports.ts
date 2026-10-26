@@ -2,6 +2,8 @@ import type {
   AcceptanceAssemblyJob,
   AcceptanceAssemblyManifest,
   AcceptanceRunScene,
+  OperatorAcceptanceActionReceipt,
+  OperatorAcceptanceActionScope,
   OperatorAcceptanceRun,
   OperatorAcceptanceRunStatus
 } from "@cco/contracts";
@@ -31,6 +33,12 @@ export interface OperatorAcceptanceRunRepository {
     attemptId: string,
     ordinal: number
   ): Promise<void>;
+  saveActionReceipt(receipt: OperatorAcceptanceActionReceipt): Promise<void>;
+  findActionReceipt(
+    scope: OperatorAcceptanceActionScope | string,
+    runOrCampaignId: string,
+    actionId: string
+  ): Promise<OperatorAcceptanceActionReceipt | undefined>;
 }
 
 export interface AcceptanceAssemblyJobQueuePort {
@@ -38,6 +46,8 @@ export interface AcceptanceAssemblyJobQueuePort {
     job: Omit<AcceptanceAssemblyJob, "status" | "createdAt" | "updatedAt">
   ): Promise<AcceptanceAssemblyJob>;
   claim(workerId: string, leaseDurationMs: number): Promise<AcceptanceAssemblyJob | undefined>;
+  start(jobId: string, leaseToken: string): Promise<void>;
+  heartbeat(jobId: string, leaseToken: string, leaseDurationMs: number): Promise<void>;
   complete(jobId: string, outputManifestId: string, leaseToken?: string): Promise<void>;
   fail(jobId: string, error: string, leaseToken?: string): Promise<void>;
   findById(jobId: string): Promise<AcceptanceAssemblyJob | undefined>;

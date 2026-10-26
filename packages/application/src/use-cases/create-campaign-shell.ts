@@ -5,13 +5,7 @@ import {
   type CreativeBrief,
   type ExecutionProfileSelection,
   type ExecutionRealm,
-  type RenderProfileKey,
-  type H3ProfileFrameCapability,
   type H3CapabilityResolverReader,
-  type ReleasedProductionProfileKey,
-  resolveH3ProfileFrameCapabilities,
-  isReleasedProductionProfileKey,
-  isStagingCandidateProfileKey,
   CampaignDurationPlanningError
 } from "@cco/contracts";
 import type {
@@ -33,6 +27,7 @@ import { CampaignIdempotencyConflictError } from "./campaign-idempotency-conflic
 import { computeCampaignRequestHash } from "./campaign-request-hash.js";
 import { resolveSceneCount } from "./scene-count-policy.js";
 import { planFeasibleCampaignDuration } from "./deterministic-duration-feasibility.js";
+import { ProfileSelectionResolver } from "./profile-selection-resolver.js";
 
 export interface CreateCampaignShellInput extends CreateCampaignShellRequest {
   readonly brief?: CreativeBrief | undefined;
@@ -185,121 +180,77 @@ export class CreateCampaignShellUseCase {
         `Conflicting profile selectors: executionProfileSelection profileKey "${input.executionProfileSelection.profileKey}" does not match targetEngineProfileId "${input.targetEngineProfileId}"`
       );
     }
-
-    const capabilities = new Map<string, H3ProfileFrameCapability>();
-
-    if (this.options?.productionReleaseReader) {
-      // A release-authority outage must not block an independently verified legacy-only
-      // request (issue #426): capture failures here as "no released capabilities available"
-      // rather than propagating. A request that actually needs a released profile still
-      // fails explicitly below, via resolveSelection's own getReleasedProfile call.
-      const releases = await this.options.productionReleaseReader
-        .listReleasedProfiles()
-        .catch(() => []);
-      for (const rel of releases) {
-        const frames = rel.specification.frames;
-        capabilities.set(
-          rel.key,
-          Object.freeze({
-            profileKey: rel.key,
-            route: rel.specification.route,
-            routingMode: rel.specification.routingMode,
-            width: rel.specification.width,
-            height: rel.specification.height,
-            fps: rel.specification.fps,
-            allowedFrameCounts: Object.freeze([frames]),
-            isAllowedFrameCount: (f: number) => f === frames
-          })
+    if (
+      input.allowedProfileSelections !== undefined &&
+      input.allowedDurationProfileKeys !== undefined
+    ) {
+      const allowedObjectKeys = new Set(input.allowedProfileSelections.map((s) => s.profileKey));
+      const allowedStringKeys = new Set(input.allowedDurationProfileKeys);
+      if (
+        allowedObjectKeys.size !== allowedStringKeys.size ||
+        ![...allowedObjectKeys].every((k) => allowedStringKeys.has(k))
+      ) {
+        throw new CampaignDurationPlanningError(
+          "no_feasible_allocation",
+          `Conflicting allowed profile selectors: allowedProfileSelections keys do not match allowedDurationProfileKeys`
         );
       }
     }
 
-    if (this.options?.stagingAuthSource) {
-      // Same independence guarantee as above, for a staging-authority outage.
-      const candidates = await this.options.stagingAuthSource
-        .listAuthorizedCandidates(input.principal)
-        .catch(() => []);
-      for (const cand of candidates) {
-        const cap = resolveH3ProfileFrameCapabilities(cand.profileKey, this.options.registryReader);
-        if (cap) {
-          capabilities.set(cand.profileKey, cap);
-        }
-      }
-    }
+    const resolver = new ProfileSelectionResolver({
+      productionReleaseReader: this.options?.productionReleaseReader,
+      stagingAuthSource: this.options?.stagingAuthSource,
+      registryReader: this.options?.registryReader
+    });
 
-    const resolveSelection = async (key: string): Promise<ExecutionProfileSelection> => {
-      if (isReleasedProductionProfileKey(key)) {
-        if (!this.options?.productionReleaseReader) {
-          throw new CampaignDurationPlanningError(
-            "release_unavailable",
-            `No production release reader configured for released profile: ${key}`
-          );
-        }
-        const rel = await this.options.productionReleaseReader.getReleasedProfile(key);
-        if (!rel) {
-          throw new CampaignDurationPlanningError(
-            "release_unavailable",
-            `Released profile ${key} is not available or not enabled`
-          );
-        }
-        return {
-          kind: "released_production",
-          profileKey: key as ReleasedProductionProfileKey,
-          specificationDigest: rel.specificationDigest,
-          releaseId: rel.releaseId,
-          signedReleaseDigest: rel.signedReleaseDigest,
-          certificationRecordDigest: rel.certificationRecordDigest,
-          deploymentEnablementDigest: rel.deploymentEnablementDigest
-        };
-      }
-
-      if (isStagingCandidateProfileKey(key)) {
-        if (!this.options?.stagingAuthSource) {
-          throw new CampaignDurationPlanningError(
-            "capability_unavailable",
-            `No staging authorization source configured for candidate profile: ${key}`
-          );
-        }
-        const candidates = await this.options.stagingAuthSource.listAuthorizedCandidates(
-          input.principal
-        );
-        const cand = candidates.find((c) => c.profileKey === key);
-        if (!cand) {
-          throw new CampaignDurationPlanningError(
-            "capability_unavailable",
-            `Staging candidate ${key} is not authorized`
-          );
-        }
-        return cand;
-      }
-
-      return {
-        kind: "legacy_production",
-        profileKey: key as RenderProfileKey,
-        version: 1
-      };
-    };
+    const capabilities = await resolver.buildCapabilitiesMap(input.principal);
 
     let selectedProfileSelection: ExecutionProfileSelection;
     if (input.executionProfileSelection) {
-      selectedProfileSelection = input.executionProfileSelection;
+      selectedProfileSelection = await resolver.verifyAndResolveSelection(
+        input.executionProfileSelection,
+        input.principal
+      );
     } else {
       const keyToResolve =
         input.selectedProfileKey ?? input.targetEngineProfileId ?? "MINIMAX_H3_720P_5S_I2V_V1";
-      selectedProfileSelection = await resolveSelection(keyToResolve);
+      selectedProfileSelection = await resolver.resolveSelection(keyToResolve, input.principal);
     }
 
-    let allowedProfileSelections: readonly ExecutionProfileSelection[] | undefined =
-      input.allowedProfileSelections;
-    if (!allowedProfileSelections && input.allowedDurationProfileKeys) {
+    let allowedProfileSelections: readonly ExecutionProfileSelection[] | undefined;
+    if (input.allowedProfileSelections) {
       allowedProfileSelections = await Promise.all(
-        input.allowedDurationProfileKeys.map((k) => resolveSelection(k))
+        input.allowedProfileSelections.map((sel) =>
+          resolver.verifyAndResolveSelection(sel, input.principal)
+        )
+      );
+    } else if (input.allowedDurationProfileKeys) {
+      allowedProfileSelections = await Promise.all(
+        input.allowedDurationProfileKeys.map((k) => resolver.resolveSelection(k, input.principal))
       );
     }
 
     const scope: "production" | "staging" =
       input.scope ??
       (selectedProfileSelection.kind === "staging_candidate" ? "staging" : "production");
+
+    resolver.verifyScopeAndRealm(selectedProfileSelection, scope, realm);
+    if (allowedProfileSelections) {
+      for (const allowed of allowedProfileSelections) {
+        resolver.verifyScopeAndRealm(allowed, scope, realm);
+      }
+    }
+
+    if (
+      allowedProfileSelections &&
+      allowedProfileSelections.length > 0 &&
+      !allowedProfileSelections.some((s) => s.profileKey === selectedProfileSelection.profileKey)
+    ) {
+      throw new CampaignDurationPlanningError(
+        "no_feasible_allocation",
+        `Selected profile "${selectedProfileSelection.profileKey}" is not among allowedProfileSelections`
+      );
+    }
 
     const plan = planFeasibleCampaignDuration({
       campaignId,

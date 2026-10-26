@@ -35,9 +35,8 @@ const samplePlan = planFeasibleCampaignDuration({
     }
   ],
   realm: {
-    kind: "isolated_test",
-    testRealmId: "test-realm-1",
-    isolationDescriptorDigest: "0".repeat(64)
+    kind: "deployed",
+    deploymentId: "test-deploy-1"
   },
   scope: "production"
 });
@@ -161,7 +160,9 @@ class FakeUnitOfWork implements UnitOfWork {
       findRunSceneBySceneId: async () => undefined,
       updateRunStatus: async () => {},
       updateSceneAcceptedAttempt: async () => {},
-      updateSceneCurrentAttempt: async () => {}
+      updateSceneCurrentAttempt: async () => {},
+      saveActionReceipt: async () => {},
+      findActionReceipt: async () => undefined
     };
 
     return work({
@@ -433,5 +434,37 @@ describe("DurationPlanningRoutes", () => {
     const body = JSON.parse(res.body);
     expect(body.code).toBe("FORBIDDEN");
     expect(body.message).toContain("does not match authenticated identity");
+  });
+
+  it("returns 404 for non-existent operator acceptance run reel", async () => {
+    const app = createControlApiApp(
+      { uow: new FakeUnitOfWork() },
+      { reviewerIdentityResolver: { resolve: async () => "Test Reviewer" } }
+    );
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/operator-acceptance/runs/01950c46-9e90-7d3d-82d2-8f1d3c000099/reel"
+    });
+
+    expect(res.statusCode).toBe(404);
+    const body = JSON.parse(res.body);
+    expect(body.code).toBe("NOT_FOUND");
+  });
+
+  it("returns 403 on GET acceptance run reel when reviewer is anonymous or unauthorized", async () => {
+    const app = createControlApiApp(
+      { uow: new FakeUnitOfWork() },
+      { reviewerIdentityResolver: { resolve: async () => "anonymous" } }
+    );
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/operator-acceptance/runs/01950c46-9e90-7d3d-82d2-8f1d3c000099/reel"
+    });
+
+    expect(res.statusCode).toBe(403);
+    const body = JSON.parse(res.body);
+    expect(body.code).toBe("FORBIDDEN");
   });
 });

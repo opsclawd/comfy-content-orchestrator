@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import { Scene, type CampaignId, type CampaignRecord, type SceneId } from "@cco/domain";
 import {
   CampaignDurationPlanningError,
+  computeH3ReleaseKey,
   type CampaignDurationPlan,
   type DeployedRealm,
-  type ExecutionProfileSelection
+  type ExecutionProfileSelection,
+  type StagingCandidateProfileSelection
 } from "@cco/contracts";
+import type { StagingPlanningAuthorizationSource } from "../ports/staging-planning-authorization-ports.js";
 import { InMemorySceneUnitOfWork } from "../test-support/in-memory-scene-unit-of-work.js";
 import { planFeasibleCampaignDuration } from "./deterministic-duration-feasibility.js";
 import { PreviewCampaignReplanUseCase, CommitCampaignReplanUseCase } from "./replan-campaign.js";
@@ -373,5 +376,309 @@ describe("Campaign duration replan and review guards", () => {
       const s0 = await context.scenes.findById(scenes[0]!.id);
       expect(s0?.status).not.toBe("approved");
     });
+  });
+
+  it("PreviewCampaignReplanUseCase and CommitCampaignReplanUseCase succeed for 243f candidate profile with stagingAuthSource", async () => {
+    const candidateKey = "H3_CANDIDATE_da62255eb7245c2cc0ac588325ccd3d3_V1";
+    const stagingCandidateSelection: StagingCandidateProfileSelection = {
+      kind: "staging_candidate",
+      profileKey: candidateKey,
+      specificationDigest: "da62255eb7245c2cc0ac588325ccd3d3518f5ac93e6e6775a21be5777eeaf0e7",
+      targetId: "llama",
+      authorizationId: "auth-243f"
+    };
+
+    const mockStagingAuthSource: StagingPlanningAuthorizationSource = {
+      listAuthorizedCandidates: async () => [stagingCandidateSelection],
+      resolveCandidateGrant: async () => undefined
+    };
+
+    const mockRegistryReader = {
+      getCandidateProfile: () => undefined,
+      listCandidateProfiles: () => [],
+      isCandidateProfileKey: () => true,
+      resolveH3ProfileFrameCapabilities: (key: string | undefined) =>
+        key === candidateKey
+          ? {
+              profileKey: key,
+              route: "ref2v" as const,
+              routingMode: "reference_directed" as const,
+              width: 1344,
+              height: 768,
+              fps: 24,
+              allowedFrameCounts: [243],
+              isAllowedFrameCount: (f: number) => f === 243
+            }
+          : undefined,
+      isFrameCountAllowedForH3Profile: () => true
+    };
+
+    const { campaignId, scenes, uow } = setupCampaignWithScenes(2);
+    const stagingPlan = planFeasibleCampaignDuration({
+      campaignId,
+      targetTotalDurationMs: 20000,
+      selectedProfileSelection: stagingCandidateSelection,
+      realm: {
+        kind: "isolated_test",
+        testRealmId: "realm-1",
+        isolationDescriptorDigest: "a".repeat(64)
+      },
+      scope: "staging",
+      capabilities: new Map([
+        [candidateKey, mockRegistryReader.resolveH3ProfileFrameCapabilities(candidateKey)!]
+      ])
+    });
+
+    await uow.execute(async (context) => {
+      const camp = await context.campaigns!.findById(campaignId);
+      await context.campaigns!.save({
+        ...camp!,
+        targetTotalDurationMs: 20000
+      });
+      await context.durationPlans!.savePlan(stagingPlan);
+    });
+
+    const previewUseCase = new PreviewCampaignReplanUseCase({
+      uow,
+      stagingAuthSource: mockStagingAuthSource,
+      registryReader: mockRegistryReader
+    });
+
+    const previewResult = await previewUseCase.execute({
+      campaignId,
+      sceneIdDurations: {
+        [scenes[0]!.id]: 10000,
+        [scenes[1]!.id]: 10000
+      },
+      selectedProfileKey: candidateKey
+    });
+
+    expect(previewResult.feasible).toBe(true);
+    expect(previewResult.proposedPlan?.allocations[0]?.frames).toBe(243);
+
+    const commitUseCase = new CommitCampaignReplanUseCase({
+      uow,
+      stagingAuthSource: mockStagingAuthSource,
+      registryReader: mockRegistryReader
+    });
+
+    const commitResult = await commitUseCase.execute({
+      campaignId,
+      actionId: "replan-staging-243f",
+      expectedPlanRevision: 1,
+      expectedSceneSpecRevisions: {
+        [scenes[0]!.id]: 1,
+        [scenes[1]!.id]: 1
+      },
+      sceneIdDurations: {
+        [scenes[0]!.id]: 10000,
+        [scenes[1]!.id]: 10000
+      },
+      selectedProfileKey: candidateKey
+    });
+
+    expect(commitResult.newPlanRevision).toBe(2);
+    expect(commitResult.plan.allocations[0]?.frames).toBe(243);
+  });
+
+  it("PreviewCampaignReplanUseCase rejects single scene exceeding 15000ms max scene ceiling", async () => {
+    const { campaignId, scenes, plan, uow } = setupCampaignWithScenes(2);
+
+    await uow.execute(async (context) => {
+      const camp = await context.campaigns!.findById(campaignId);
+      await context.campaigns!.save({
+        ...camp!,
+        targetTotalDurationMs: 20000
+      });
+      await context.durationPlans!.savePlan(plan);
+    });
+
+    const previewUseCase = new PreviewCampaignReplanUseCase({ uow });
+
+    const previewResult = await previewUseCase.execute({
+      campaignId,
+      sceneIdDurations: {
+        [scenes[0]!.id]: 16000,
+        [scenes[1]!.id]: 4000
+      }
+    });
+
+    expect(previewResult.feasible).toBe(false);
+    expect(previewResult.error).toContain("exceeds maximum permissible scene duration 15000ms");
+  });
+
+  it("PreviewCampaignReplanUseCase and CommitCampaignReplanUseCase succeed for test-authorized released_production profile in production scope", async () => {
+    const releaseDigest = "b".repeat(64);
+    const releaseKey = computeH3ReleaseKey(releaseDigest, 1);
+    const spec = {
+      version: 1 as const,
+      route: "ref2v" as const,
+      routingMode: "reference_directed" as const,
+      workflowHash: "c".repeat(64),
+      frames: 243,
+      fps: 24 as const,
+      width: 1344,
+      height: 768,
+      sampler: "res_multistep",
+      scheduler: "simple",
+      steps: 4,
+      cfg: 1,
+      denoise: 1,
+      modelHashes: {
+        checkpoint: "1".repeat(64),
+        clip: "2".repeat(64),
+        audioVae: "3".repeat(64),
+        videoVae: "4".repeat(64),
+        turboLora: "5".repeat(64),
+        additionalModels: {}
+      },
+      attention: {
+        backend: "comfy_native" as const,
+        customNodeRevision: "none",
+        customNodeSourceHash: "none",
+        packageVersion: "none",
+        sparsitySettings: {
+          enabled: false as const,
+          method: "none" as const,
+          threshold: 0 as const
+        }
+      },
+      customNodes: [],
+      packageVersions: {
+        torch: "2.13.0+cu130",
+        comfyui: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc"
+      },
+      runnerSettings: {
+        runnerProfile: "dynamicvram-offload-v1",
+        offloadPolicy: "dynamicvram" as const,
+        requiresModelOffloading: true,
+        maxConcurrentGpuJobs: 1,
+        minFreeDiskGb: 20
+      },
+      expectedCoreRevision: "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+      expectedPythonExecutable: "/bin/python3"
+    };
+
+    const releasedProfile = {
+      key: releaseKey,
+      version: 1 as const,
+      specificationDigest: releaseDigest,
+      specification: spec,
+      topology: {
+        prompt: { nodeId: "1", classType: "MiniMaxH3ReferenceToVideo", inputField: "prompt" },
+        seed: { nodeId: "2", classType: "RandomNoise", inputField: "noise_seed" },
+        frameCount: { nodeId: "1", classType: "MiniMaxH3ReferenceToVideo", inputField: "length" },
+        referenceImage: { nodeId: "3", classType: "LoadImage", inputField: "image" },
+        firstFrame: { nodeId: "3", classType: "LoadImage", inputField: "image" },
+        width: { nodeId: "1", classType: "MiniMaxH3ReferenceToVideo", inputField: "width" },
+        height: { nodeId: "1", classType: "MiniMaxH3ReferenceToVideo", inputField: "height" }
+      },
+      releaseId: "rel-1",
+      signedReleaseDigest: "d".repeat(64),
+      certificationRecordDigest: "e".repeat(64),
+      deploymentEnablementDigest: "f".repeat(64),
+      speedDecision: {
+        specificationDigest: releaseDigest,
+        specification: spec,
+        speedVerdict: "pass" as const,
+        qualityVerdict: "pass" as const,
+        overallVerdict: "pass" as const,
+        evidenceDigests: [],
+        operatorIdentity: "operator",
+        decidedAt: new Date().toISOString()
+      },
+      certificationVerdict: "released" as const,
+      operatorIdentity: "operator",
+      releasedAt: new Date().toISOString()
+    };
+
+    const mockProductionReleaseReader = {
+      listReleasedProfiles: async () => [releasedProfile],
+      getReleasedProfile: async (key: string) => (key === releaseKey ? releasedProfile : undefined),
+      isReleasedProfileKey: async (key: string) => key === releaseKey,
+      getDeploymentEnablementState: async () => undefined
+    };
+
+    const { campaignId, scenes, uow } = setupCampaignWithScenes(2);
+    const prodPlan = planFeasibleCampaignDuration({
+      campaignId,
+      targetTotalDurationMs: 20000,
+      selectedProfileSelection: {
+        kind: "released_production",
+        profileKey: releaseKey,
+        specificationDigest: releaseDigest,
+        releaseId: "rel-1",
+        signedReleaseDigest: "d".repeat(64),
+        certificationRecordDigest: "e".repeat(64),
+        deploymentEnablementDigest: "f".repeat(64)
+      },
+      realm: { kind: "deployed", deploymentId: "prod-deploy-1" },
+      scope: "production",
+      capabilities: new Map([
+        [
+          releaseKey,
+          {
+            profileKey: releaseKey,
+            route: "ref2v" as const,
+            routingMode: "reference_directed" as const,
+            width: 1344,
+            height: 768,
+            fps: 24,
+            allowedFrameCounts: [243],
+            isAllowedFrameCount: (f: number) => f === 243
+          }
+        ]
+      ])
+    });
+
+    await uow.execute(async (context) => {
+      const camp = await context.campaigns!.findById(campaignId);
+      await context.campaigns!.save({
+        ...camp!,
+        targetTotalDurationMs: 20000
+      });
+      await context.durationPlans!.savePlan(prodPlan);
+    });
+
+    const previewUseCase = new PreviewCampaignReplanUseCase({
+      uow,
+      productionReleaseReader: mockProductionReleaseReader
+    });
+
+    const previewResult = await previewUseCase.execute({
+      campaignId,
+      sceneIdDurations: {
+        [scenes[0]!.id]: 10000,
+        [scenes[1]!.id]: 10000
+      },
+      selectedProfileKey: releaseKey
+    });
+
+    expect(previewResult.feasible).toBe(true);
+    expect(previewResult.proposedPlan?.allocations[0]?.frames).toBe(243);
+
+    const commitUseCase = new CommitCampaignReplanUseCase({
+      uow,
+      productionReleaseReader: mockProductionReleaseReader
+    });
+
+    const commitResult = await commitUseCase.execute({
+      campaignId,
+      actionId: "replan-prod-released-243f",
+      expectedPlanRevision: 1,
+      expectedSceneSpecRevisions: {
+        [scenes[0]!.id]: 1,
+        [scenes[1]!.id]: 1
+      },
+      sceneIdDurations: {
+        [scenes[0]!.id]: 10000,
+        [scenes[1]!.id]: 10000
+      },
+      selectedProfileKey: releaseKey
+    });
+
+    expect(commitResult.newPlanRevision).toBe(2);
+    expect(commitResult.plan.allocations[0]?.frames).toBe(243);
+    expect(commitResult.plan.scope).toBe("production");
   });
 });

@@ -122,16 +122,16 @@ describe("Storage Provisioner unit tests", () => {
     await expect(provisionBucket(client, BUCKETS.TEMP)).rejects.toThrow("Network timeout");
   });
 
-  it("provisions all five buckets in provisionStorageBuckets and returns summary", async () => {
+  it("provisions all six buckets in provisionStorageBuckets and returns summary", async () => {
     const sendFn = vi.fn().mockResolvedValue({});
     const client = createMockS3Client(sendFn);
 
     const summary = await provisionStorageBuckets({ client });
 
-    expect(summary.results).toHaveLength(5);
-    expect(summary.createdCount).toBe(5);
+    expect(summary.results).toHaveLength(6);
+    expect(summary.createdCount).toBe(6);
     expect(summary.alreadyExistsCount).toBe(0);
-    expect(summary.lifecycleAppliedCount).toBe(2); // temp and review
+    expect(summary.lifecycleAppliedCount).toBe(3); // temp, review, and candidates
     expect(summary.lifecycleSkippedCount).toBe(3); // reference, delivery, and evidence
   });
 
@@ -200,6 +200,20 @@ describe("Storage Provisioner unit tests", () => {
     const delEval = evaluateLifecycleEligibility({ bucket: BUCKETS.DELIVERY, objectAgeDays: 365 });
     expect(delEval.isEligibleForDeletion).toBe(false);
     expect(delEval.reason).toContain("campaign completion");
+
+    // godzspeed-candidates (30 days)
+    expect(
+      evaluateLifecycleEligibility({ bucket: BUCKETS.CANDIDATES, objectAgeDays: 31 })
+        .isEligibleForDeletion
+    ).toBe(true);
+    expect(
+      evaluateLifecycleEligibility({ bucket: BUCKETS.CANDIDATES, objectAgeDays: 30 })
+        .isEligibleForDeletion
+    ).toBe(true);
+    expect(
+      evaluateLifecycleEligibility({ bucket: BUCKETS.CANDIDATES, objectAgeDays: 29 })
+        .isEligibleForDeletion
+    ).toBe(false);
   });
 
   it("returns lifecycle configuration when GetBucketLifecycleConfigurationCommand succeeds", async () => {

@@ -4,6 +4,7 @@ import type {
   AcceptanceAssemblyManifest,
   AcceptanceRunScene,
   CampaignDurationPlan,
+  OperatorAcceptanceActionReceipt,
   OperatorAcceptanceRun,
   ReviewEvent,
   SceneDurationBinding
@@ -125,6 +126,7 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _acceptanceRunScenes = new Map<string, AcceptanceRunScene[]>();
   private readonly _acceptanceJobs = new Map<string, AcceptanceAssemblyJob>();
   private readonly _acceptanceManifests = new Map<string, AcceptanceAssemblyManifest>();
+  private readonly _acceptanceActionReceipts = new Map<string, OperatorAcceptanceActionReceipt>();
   private readonly _campaignReferenceBibles = new Map<string, CampaignReferenceBibleEntry>();
   private readonly _campaignReferenceBibleChanges: CampaignReferenceBibleChange[] = [];
   private readonly _enqueuedAssemblyJobs: EnqueueDeliveryAssemblyJobInput[] = [];
@@ -366,6 +368,32 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     };
     this._seededVideoStemSources.set(productionJobId, record);
     return this;
+  }
+
+  get generationManifests(): GenerationManifestRepository {
+    return {
+      getComponentIdentityById: async (manifestId: string) => {
+        for (const stem of this._seededVideoStemSources.values()) {
+          if (stem.generationManifestId === manifestId && stem.renderProfile) {
+            return {
+              renderProfile: stem.renderProfile,
+              renderProfileVersion: 1,
+              route:
+                stem.route ??
+                (stem.routingMode === "frame_anchored"
+                  ? ("i2v" as const)
+                  : stem.routingMode === "reference_directed"
+                    ? ("ref2v" as const)
+                    : undefined),
+              candidateSpecificationDigest: stem.candidateSpecificationDigest,
+              outputChecksumsSha256: stem.outputChecksumsSha256
+            };
+          }
+        }
+        return undefined;
+      },
+      findVideoStemSourceByJobId: async (jobId: string) => this._seededVideoStemSources.get(jobId)
+    };
   }
 
   seedReferenceAsset(asset: ReferenceAsset): this {
@@ -824,7 +852,26 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
     };
 
     const defaultGenerationManifests: GenerationManifestRepository = {
-      getComponentIdentityById: async () => undefined,
+      getComponentIdentityById: async (manifestId: string) => {
+        for (const stem of this._seededVideoStemSources.values()) {
+          if (stem.generationManifestId === manifestId && stem.renderProfile) {
+            return {
+              renderProfile: stem.renderProfile,
+              renderProfileVersion: 1,
+              route:
+                stem.route ??
+                (stem.routingMode === "frame_anchored"
+                  ? ("i2v" as const)
+                  : stem.routingMode === "reference_directed"
+                    ? ("ref2v" as const)
+                    : undefined),
+              candidateSpecificationDigest: stem.candidateSpecificationDigest,
+              outputChecksumsSha256: stem.outputChecksumsSha256
+            };
+          }
+        }
+        return undefined;
+      },
       findVideoStemSourceByJobId: async (jobId: string) => this._seededVideoStemSources.get(jobId)
     };
 
@@ -1237,7 +1284,10 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       },
       operatorAcceptanceRuns: {
         createRun: async (run, scenes) => {
-          this._acceptanceRuns.set(run.acceptanceRunId, run);
+          this._acceptanceRuns.set(run.acceptanceRunId, {
+            ...run,
+            status: run.status ?? "dispatched"
+          });
           this._acceptanceRunScenes.set(run.acceptanceRunId, [...scenes]);
         },
         findRunById: async (acceptanceRunId) => {
@@ -1303,6 +1353,14 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
               };
             }
           }
+        },
+        saveActionReceipt: async (receipt) => {
+          const key = `${receipt.scope}:${receipt.runOrCampaignId}:${receipt.actionId}`;
+          this._acceptanceActionReceipts.set(key, receipt);
+        },
+        findActionReceipt: async (scope, runOrCampaignId, actionId) => {
+          const key = `${scope}:${runOrCampaignId}:${actionId}`;
+          return this._acceptanceActionReceipts.get(key);
         }
       },
       acceptanceAssemblyJobs: {
@@ -1332,6 +1390,30 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
             }
           }
           return undefined;
+        },
+        start: async (jobId, leaseToken) => {
+          const job = this._acceptanceJobs.get(jobId);
+          if (!job) throw new Error(`Job ${jobId} not found`);
+          if (leaseToken && job.leaseToken && job.leaseToken !== leaseToken) {
+            throw new Error(`Lease token mismatch on job ${jobId}`);
+          }
+          this._acceptanceJobs.set(jobId, {
+            ...job,
+            status: "rendering",
+            updatedAt: new Date().toISOString()
+          });
+        },
+        heartbeat: async (jobId, leaseToken, leaseDurationMs) => {
+          const job = this._acceptanceJobs.get(jobId);
+          if (!job) throw new Error(`Job ${jobId} not found`);
+          if (leaseToken && job.leaseToken && job.leaseToken !== leaseToken) {
+            throw new Error(`Lease token mismatch on job ${jobId}`);
+          }
+          this._acceptanceJobs.set(jobId, {
+            ...job,
+            leaseExpiresAt: new Date(Date.now() + leaseDurationMs).toISOString(),
+            updatedAt: new Date().toISOString()
+          });
         },
         complete: async (jobId, outputManifestId, leaseToken) => {
           const job = this._acceptanceJobs.get(jobId);

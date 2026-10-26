@@ -8,6 +8,8 @@ import {
 } from "@cco/domain";
 import {
   computeAuthorizationPayloadDigest,
+  type EvidenceOrigin,
+  type ExecutionRealm,
   type H3CandidateAuthorizationGrant,
   type H3ProductionInspectionReadModel
 } from "@cco/contracts";
@@ -81,6 +83,18 @@ export interface StageH3CandidateRenderInput {
   readonly dryRun?: boolean;
   readonly ownerKind?: "staging_acceptance" | "staging_experiment" | undefined;
   readonly acceptanceRunId?: string | undefined;
+  /**
+   * The execution realm and evidence origin this candidate render will run
+   * under (e.g. from the originating duration plan or acceptance run).
+   * Threaded into the enqueued job's injectedPayload so render-job-executor.ts
+   * can carry them into the assembled GenerationManifest — without this,
+   * downstream realm-sensitive validation (e.g.
+   * AcceptOperatorAcceptanceSceneUseCase's validateAcceptanceStemSource)
+   * always fails closed for every real candidate render, since no manifest
+   * ever carries a realm/evidenceOrigin to validate against.
+   */
+  readonly realm?: ExecutionRealm | undefined;
+  readonly evidenceOrigin?: EvidenceOrigin | undefined;
 }
 
 export interface StageH3CandidateRenderResult {
@@ -164,6 +178,8 @@ export class StageH3CandidateRenderUseCase {
           existingJob.sceneId === input.sceneId &&
           injected.candidateProfileKey === input.candidateProfileKey &&
           injected.specRevision === snapshot.specRevision &&
+          (input.acceptanceRunId === undefined ||
+            injected.acceptanceRunId === input.acceptanceRunId) &&
           (existingGrant?.signature === input.grant.signature ||
             injected.grantSignature === input.grant.signature ||
             existingDigest === grantDigest);
@@ -293,6 +309,8 @@ export class StageH3CandidateRenderUseCase {
       authorizationGrant: input.grant,
       ...(input.ownerKind !== undefined ? { ownerKind: input.ownerKind } : {}),
       ...(input.acceptanceRunId !== undefined ? { acceptanceRunId: input.acceptanceRunId } : {}),
+      ...(input.realm !== undefined ? { realm: input.realm } : {}),
+      ...(input.evidenceOrigin !== undefined ? { evidenceOrigin: input.evidenceOrigin } : {}),
       ...(route.routingMode === "frame_anchored" && prep.inspection.visualInputs.frameAnchor
         ? { approvedCandidateId: prep.inspection.visualInputs.frameAnchor.anchorCandidateId }
         : {})

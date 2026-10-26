@@ -159,6 +159,14 @@ If an operator aborts a candidate staging run or encounters fatal execution erro
    rm -f "$CCO_COMFYUI_DIR/input/stage_"*
    ```
 
+### Variable-Duration Release Gate (#428)
+
+Issue #427 establishes automated CI simulation and software regression coverage across duration allocation, staging acceptance dispatch, worker assembly, and accepted reel readback (`docs/h3-variable-duration-ci-coverage.md`).
+
+However, **CI simulation is not GPU certification**:
+- The public UI and production release reader (`ProductionReleaseCapabilityReader`) strictly withhold advertising variable-duration candidate lengths (e.g. 243f, 362f) from general production until the operator physical campaign is executed on the RTX 4090 host.
+- Only upon successful execution of this runbook with zero unmitigated visual defects (blackouts, limb corruption) may the operator promote candidate profiles into the production release catalog under issue #428.
+
 ## Open baseline questions
 
 (Populate this section only if the physical campaign surfaces a defect in H3 dispatch,

@@ -1,22 +1,30 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  type CampaignDurationPlan,
   type ExecutionProfileSelection,
   type ReplanCampaignPreviewRequest,
   type ReplanCampaignPreviewResponse,
   type ReplanCampaignCommitRequest,
   type ReplanCampaignCommitResponse,
   type SceneDurationBinding,
-  type LegacyProductionProfileKey,
+  type H3CapabilityResolverReader,
+  type H3ProfileFrameCapability,
   computePlanBindingDigest,
-  isReleasedProductionProfileKey,
-  isStagingCandidateProfileKey,
   CampaignDurationPlanningError
 } from "@cco/contracts";
 import type { ReplanActionReceipt } from "../ports/campaign-duration-plan-repository.js";
 import type { UnitOfWork } from "../ports/unit-of-work.js";
+import type { ProductionReleaseCapabilityReader } from "../ports/production-release-ports.js";
+import type { StagingPlanningAuthorizationSource } from "../ports/staging-planning-authorization-ports.js";
 import { planFeasibleCampaignDuration } from "./deterministic-duration-feasibility.js";
 import { StaleRevisionConflictError } from "./stale-revision-conflict-error.js";
+import { ProfileSelectionResolver } from "./profile-selection-resolver.js";
+
+export interface ReplanCampaignDependencies {
+  readonly uow: UnitOfWork;
+  readonly productionReleaseReader?: ProductionReleaseCapabilityReader | undefined;
+  readonly stagingAuthSource?: StagingPlanningAuthorizationSource | undefined;
+  readonly registryReader?: H3CapabilityResolverReader | undefined;
+}
 
 export function computeReplanRequestHash(input: ReplanCampaignCommitRequest): string {
   const sortedSceneDurations = Object.keys(input.sceneIdDurations)
@@ -33,43 +41,14 @@ export function computeReplanRequestHash(input: ReplanCampaignCommitRequest): st
     selectedProfileKey: input.selectedProfileKey ?? null,
     allowedDurationProfileKeys: input.allowedDurationProfileKeys
       ? [...input.allowedDurationProfileKeys].sort()
-      : null
+      : null,
+    principal: input.principal ?? null
   };
   return createHash("sha256").update(JSON.stringify(canonicalPayload)).digest("hex");
 }
 
-function resolveProfileSelection(
-  key: string,
-  existingPlan?: CampaignDurationPlan
-): ExecutionProfileSelection {
-  if (existingPlan) {
-    for (const alloc of existingPlan.allocations) {
-      if (alloc.profileSelection.profileKey === key) {
-        return alloc.profileSelection;
-      }
-    }
-  }
-  if (isReleasedProductionProfileKey(key)) {
-    throw new CampaignDurationPlanningError(
-      "release_unavailable",
-      `Cannot fabricate unverified digests for released production profile: ${key}`
-    );
-  }
-  if (isStagingCandidateProfileKey(key)) {
-    throw new CampaignDurationPlanningError(
-      "capability_unavailable",
-      `Cannot fabricate unverified authorization grant for staging candidate profile: ${key}`
-    );
-  }
-  return {
-    kind: "legacy_production",
-    profileKey: key as LegacyProductionProfileKey,
-    version: 1
-  };
-}
-
 export class PreviewCampaignReplanUseCase {
-  constructor(private readonly deps: { readonly uow: UnitOfWork }) {}
+  constructor(private readonly deps: ReplanCampaignDependencies) {}
 
   async execute(input: ReplanCampaignPreviewRequest): Promise<ReplanCampaignPreviewResponse> {
     return await this.deps.uow.execute(async (context) => {
@@ -167,10 +146,52 @@ export class PreviewCampaignReplanUseCase {
       const allowedProfileKeys =
         input.allowedDurationProfileKeys ?? currentPlan.allowedDurationProfileKeys;
 
-      const selectedProfileSelection = resolveProfileSelection(selectedProfileKey, currentPlan);
-      const allowedProfileSelections = allowedProfileKeys.map((k: string) =>
-        resolveProfileSelection(k, currentPlan)
-      );
+      const resolver = new ProfileSelectionResolver({
+        productionReleaseReader: this.deps.productionReleaseReader,
+        stagingAuthSource: this.deps.stagingAuthSource,
+        registryReader: this.deps.registryReader
+      });
+
+      let capabilities: Map<string, H3ProfileFrameCapability>;
+      let selectedProfileSelection: ExecutionProfileSelection;
+      let allowedProfileSelections: readonly ExecutionProfileSelection[];
+      try {
+        capabilities = await resolver.buildCapabilitiesMap(input.principal);
+        selectedProfileSelection = await resolver.resolveSelection(
+          selectedProfileKey,
+          input.principal
+        );
+        allowedProfileSelections = await Promise.all(
+          allowedProfileKeys.map((k: string) => resolver.resolveSelection(k, input.principal))
+        );
+        resolver.verifyScopeAndRealm(
+          selectedProfileSelection,
+          currentPlan.scope,
+          currentPlan.realm
+        );
+        for (const allowed of allowedProfileSelections) {
+          resolver.verifyScopeAndRealm(allowed, currentPlan.scope, currentPlan.realm);
+        }
+        if (
+          !allowedProfileSelections.some(
+            (s) => s.profileKey === selectedProfileSelection.profileKey
+          )
+        ) {
+          return {
+            campaignId: input.campaignId,
+            feasible: false,
+            currentPlanRevision,
+            error: `Selected profile "${selectedProfileSelection.profileKey}" is not among allowedProfileSelections`
+          };
+        }
+      } catch (err: unknown) {
+        return {
+          campaignId: input.campaignId,
+          feasible: false,
+          currentPlanRevision,
+          error: err instanceof Error ? err.message : String(err)
+        };
+      }
 
       try {
         const proposedPlan = planFeasibleCampaignDuration({
@@ -183,7 +204,8 @@ export class PreviewCampaignReplanUseCase {
           allowedProfileSelections,
           realm: currentPlan.realm,
           scope: currentPlan.scope,
-          envelope: currentPlan.envelope
+          envelope: currentPlan.envelope,
+          capabilities
         });
 
         return {
@@ -205,7 +227,7 @@ export class PreviewCampaignReplanUseCase {
 }
 
 export class CommitCampaignReplanUseCase {
-  constructor(private readonly deps: { readonly uow: UnitOfWork }) {}
+  constructor(private readonly deps: ReplanCampaignDependencies) {}
 
   async execute(input: ReplanCampaignCommitRequest): Promise<ReplanCampaignCommitResponse> {
     return await this.deps.uow.execute(async (context) => {
@@ -255,7 +277,7 @@ export class CommitCampaignReplanUseCase {
             `Action ID "${input.actionId}" was already processed with different request intent`
           );
         }
-        return existingReceipt.response;
+        return existingReceipt.response as ReplanCampaignCommitResponse;
       }
 
       const currentPlan = await context.durationPlans.findCurrentPlanByCampaignId(campaign.id);
@@ -326,10 +348,32 @@ export class CommitCampaignReplanUseCase {
       const allowedProfileKeys =
         input.allowedDurationProfileKeys ?? currentPlan.allowedDurationProfileKeys;
 
-      const selectedProfileSelection = resolveProfileSelection(selectedProfileKey, currentPlan);
-      const allowedProfileSelections = allowedProfileKeys.map((k: string) =>
-        resolveProfileSelection(k, currentPlan)
+      const resolver = new ProfileSelectionResolver({
+        productionReleaseReader: this.deps.productionReleaseReader,
+        stagingAuthSource: this.deps.stagingAuthSource,
+        registryReader: this.deps.registryReader
+      });
+
+      const capabilities = await resolver.buildCapabilitiesMap(input.principal);
+      const selectedProfileSelection = await resolver.resolveSelection(
+        selectedProfileKey,
+        input.principal
       );
+      const allowedProfileSelections = await Promise.all(
+        allowedProfileKeys.map((k: string) => resolver.resolveSelection(k, input.principal))
+      );
+      resolver.verifyScopeAndRealm(selectedProfileSelection, currentPlan.scope, currentPlan.realm);
+      for (const allowed of allowedProfileSelections) {
+        resolver.verifyScopeAndRealm(allowed, currentPlan.scope, currentPlan.realm);
+      }
+      if (
+        !allowedProfileSelections.some((s) => s.profileKey === selectedProfileSelection.profileKey)
+      ) {
+        throw new CampaignDurationPlanningError(
+          "no_feasible_allocation",
+          `Selected profile "${selectedProfileSelection.profileKey}" is not among allowedProfileSelections`
+        );
+      }
 
       const newPlan = planFeasibleCampaignDuration({
         campaignId: campaign.id,
@@ -342,7 +386,8 @@ export class CommitCampaignReplanUseCase {
         allowedProfileSelections,
         realm: currentPlan.realm,
         scope: currentPlan.scope,
-        envelope: currentPlan.envelope
+        envelope: currentPlan.envelope,
+        capabilities
       });
 
       // Update all scenes: advance spec revision and invalidate approvals across entire campaign

@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
 import type { ControlApiContainer, ReviewerIdentityResolver } from "../types.js";
+import type { ClientContextResolver } from "@cco/application";
 import {
   ReplanCampaignPreviewRequestSchema,
   ReplanCampaignPreviewResponseSchema,
@@ -9,12 +10,14 @@ import {
   BeginOperatorAcceptanceRunResponseSchema,
   AcceptAcceptanceSceneRequestSchema,
   AssembleOperatorAcceptanceRunRequestSchema,
-  AssembleOperatorAcceptanceRunResponseSchema
+  AssembleOperatorAcceptanceRunResponseSchema,
+  AcceptanceRunReelReadModelSchema
 } from "@cco/contracts";
 
 export interface DurationPlanningRoutesOptions {
   readonly container: ControlApiContainer;
   readonly reviewerIdentityResolver?: ReviewerIdentityResolver | undefined;
+  readonly clientContextResolver?: ClientContextResolver<FastifyRequest> | undefined;
 }
 
 export const campaignIdParamsSchema = {
@@ -109,7 +112,8 @@ export const durationPlanningRoutes: FastifyPluginAsync<DurationPlanningRoutesOp
 
       const body = ReplanCampaignPreviewRequestSchema.parse({
         ...(request.body as Record<string, unknown>),
-        campaignId: request.params.campaignId
+        campaignId: request.params.campaignId,
+        principal: reviewerName
       });
 
       const result = await container.useCases.previewCampaignReplan.execute(body);
@@ -141,7 +145,8 @@ export const durationPlanningRoutes: FastifyPluginAsync<DurationPlanningRoutesOp
 
       const body = ReplanCampaignCommitRequestSchema.parse({
         ...(request.body as Record<string, unknown>),
-        campaignId: request.params.campaignId
+        campaignId: request.params.campaignId,
+        principal: reviewerName
       });
 
       const result = await container.useCases.commitCampaignReplan.execute(body);
@@ -283,6 +288,47 @@ export const durationPlanningRoutes: FastifyPluginAsync<DurationPlanningRoutesOp
       });
 
       const response = AssembleOperatorAcceptanceRunResponseSchema.parse(result);
+      return reply.status(200).send(response);
+    }
+  );
+
+  // 9. Resolve operator acceptance run reel
+  fastify.get<{ Params: { acceptanceRunId: string } }>(
+    "/api/operator-acceptance/runs/:acceptanceRunId/reel",
+    async (request, reply) => {
+      if (!container.useCases.resolveOperatorAcceptanceReel) {
+        throw new Error("ResolveOperatorAcceptanceReelUseCase is not configured on container.");
+      }
+
+      const reviewerName = await getReviewerIdentity(request);
+      const authorized = await checkReviewerAuthorization(reviewerName);
+      if (!authorized) {
+        return reply.status(403).send({
+          code: "FORBIDDEN",
+          message: `Reviewer '${reviewerName}' is not authorized to resolve operator acceptance run reel`
+        });
+      }
+
+      let clientId: string | undefined;
+      const clientResolver = opts.clientContextResolver;
+      if (clientResolver) {
+        try {
+          const resolved = await clientResolver.resolve(request);
+          if (resolved) {
+            clientId = resolved;
+          }
+        } catch {
+          // No client context
+        }
+      }
+
+      const result = await container.useCases.resolveOperatorAcceptanceReel.execute({
+        acceptanceRunId: request.params.acceptanceRunId,
+        reviewerName,
+        clientId
+      });
+
+      const response = AcceptanceRunReelReadModelSchema.parse(result);
       return reply.status(200).send(response);
     }
   );

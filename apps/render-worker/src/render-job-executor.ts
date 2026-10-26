@@ -60,6 +60,10 @@ import {
   type ProfileInjectionTopology,
   type OwnerKind,
   OwnerKindSchema,
+  type ExecutionRealm,
+  ExecutionRealmSchema,
+  type EvidenceOrigin,
+  EvidenceOriginSchema,
   RENDER_PROFILE_ALIASES,
   type RenderProfileKey,
   type ShotPlanRoutingMode,
@@ -483,6 +487,8 @@ interface ValidatedInjectedPayload {
   readonly nominalDurationMs?: number | undefined;
   readonly ownerKind?: OwnerKind | undefined;
   readonly acceptanceRunId?: string | undefined;
+  readonly realm?: ExecutionRealm | undefined;
+  readonly evidenceOrigin?: EvidenceOrigin | undefined;
   readonly releasedProfileKey?: string | undefined;
   readonly releasedSpecificationDigest?: string | undefined;
   readonly releaseDigest?: string | undefined;
@@ -513,6 +519,8 @@ const ALLOWED_PRODUCTION_KEYS = new Set([
   "nominalDurationMs",
   "ownerKind",
   "acceptanceRunId",
+  "realm",
+  "evidenceOrigin",
   "releasedProfileKey",
   "releasedSpecificationDigest",
   "releaseDigest"
@@ -534,6 +542,8 @@ const ALLOWED_REF2V_PRODUCTION_KEYS = new Set([
   "nominalDurationMs",
   "ownerKind",
   "acceptanceRunId",
+  "realm",
+  "evidenceOrigin",
   "releasedProfileKey",
   "releasedSpecificationDigest",
   "releaseDigest"
@@ -556,6 +566,8 @@ const ALLOWED_H3_I2V_PRODUCTION_KEYS = new Set([
   "nominalDurationMs",
   "ownerKind",
   "acceptanceRunId",
+  "realm",
+  "evidenceOrigin",
   "releasedProfileKey",
   "releasedSpecificationDigest",
   "releaseDigest"
@@ -1030,6 +1042,28 @@ export function validateInjectedPayload(
     acceptanceRunId = raw.acceptanceRunId.trim();
   }
 
+  let realm: ExecutionRealm | undefined;
+  if ("realm" in raw && raw.realm !== undefined) {
+    const realmParsed = ExecutionRealmSchema.safeParse(raw.realm);
+    if (!realmParsed.success) {
+      throw new RenderJobPayloadValidationError(
+        `injectedPayload.realm is invalid: ${realmParsed.error.message}`
+      );
+    }
+    realm = realmParsed.data;
+  }
+
+  let evidenceOrigin: EvidenceOrigin | undefined;
+  if ("evidenceOrigin" in raw && raw.evidenceOrigin !== undefined) {
+    const evidenceOriginParsed = EvidenceOriginSchema.safeParse(raw.evidenceOrigin);
+    if (!evidenceOriginParsed.success) {
+      throw new RenderJobPayloadValidationError(
+        `injectedPayload.evidenceOrigin must be one of: ${EvidenceOriginSchema.options.join(", ")}`
+      );
+    }
+    evidenceOrigin = evidenceOriginParsed.data;
+  }
+
   let releasedProfileKey: string | undefined;
   if ("releasedProfileKey" in raw && raw.releasedProfileKey !== undefined) {
     if (
@@ -1086,6 +1120,8 @@ export function validateInjectedPayload(
     nominalDurationMs,
     ownerKind,
     acceptanceRunId,
+    realm,
+    evidenceOrigin,
     releasedProfileKey,
     releasedSpecificationDigest,
     releaseDigest

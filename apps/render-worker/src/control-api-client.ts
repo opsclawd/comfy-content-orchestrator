@@ -8,7 +8,9 @@ import {
   STORAGE_WATERMARK_STATES,
   type AssemblySpec,
   type StorageOperationClass,
-  type StorageWatermarkState
+  type StorageWatermarkState,
+  type AcceptanceAssemblyJob,
+  type AcceptanceAssemblyManifest
 } from "@cco/contracts";
 import type {
   DeliveryAssemblyJob,
@@ -692,5 +694,152 @@ export function createDeliveryAssemblyControlApiClient(
     config?.baseUrl,
     config?.fetch,
     config?.timeoutMs
+  );
+}
+
+export interface AcceptanceAssemblyControlApiClient {
+  claim(workerId: string, leaseDurationMs?: number): Promise<AcceptanceAssemblyJob | undefined>;
+  start(jobId: string, leaseToken: string): Promise<void>;
+  heartbeat(jobId: string, leaseToken: string, leaseDurationMs?: number): Promise<void>;
+  complete(
+    jobId: string,
+    leaseToken: string,
+    outputManifestId: string,
+    acceptanceManifest: AcceptanceAssemblyManifest
+  ): Promise<void>;
+  fail(jobId: string, leaseToken: string, acceptanceRunId: string, error: string): Promise<void>;
+}
+
+export class HttpAcceptanceAssemblyControlApiClient implements AcceptanceAssemblyControlApiClient {
+  private readonly baseUrl: string;
+  private readonly fetchFn: typeof globalThis.fetch;
+  private readonly timeoutMs: number;
+  private readonly workerStagingToken?: string | undefined;
+
+  constructor(
+    baseUrl?: string | undefined,
+    fetchFn?: typeof globalThis.fetch | undefined,
+    timeoutMs?: number | undefined,
+    stagingToken?: string | undefined
+  ) {
+    const rawUrl = baseUrl ?? process.env.CONTROL_API_BASE_URL ?? "http://localhost:3000";
+    this.baseUrl = rawUrl.replace(/\/+$/, "");
+    this.fetchFn = fetchFn ?? globalThis.fetch.bind(globalThis);
+    this.timeoutMs = timeoutMs ?? DEFAULT_CONTROL_API_TIMEOUT_MS;
+    this.workerStagingToken = stagingToken ?? process.env.WORKER_STAGING_TOKEN;
+  }
+
+  async claim(
+    workerId: string,
+    leaseDurationMs?: number
+  ): Promise<AcceptanceAssemblyJob | undefined> {
+    const url = `${this.baseUrl}/api/acceptance-assembly-jobs/claim`;
+    const body = {
+      workerId,
+      ...(leaseDurationMs !== undefined ? { leaseDurationMs } : {})
+    };
+    return fetchWithTimeout(
+      this.fetchFn,
+      url,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          ...(this.workerStagingToken !== undefined
+            ? { "x-worker-staging-token": this.workerStagingToken }
+            : {})
+        },
+        body: JSON.stringify(body)
+      },
+      this.timeoutMs,
+      async (res) => {
+        if (res.status === 204) return undefined;
+        if (!res.ok) {
+          const detail = await extractSafeErrorDetail(res);
+          throw new ControlApiClientError(
+            detail
+              ? `Control API returned HTTP ${res.status}: ${detail}`
+              : `Control API returned HTTP ${res.status}`,
+            res.status
+          );
+        }
+        return (await res.json()) as AcceptanceAssemblyJob;
+      }
+    );
+  }
+
+  async start(jobId: string, leaseToken: string): Promise<void> {
+    const url = `${this.baseUrl}/api/acceptance-assembly-jobs/${encodeURIComponent(jobId)}/start`;
+    await this.postVoid(url, { leaseToken });
+  }
+
+  async heartbeat(jobId: string, leaseToken: string, leaseDurationMs?: number): Promise<void> {
+    const url = `${this.baseUrl}/api/acceptance-assembly-jobs/${encodeURIComponent(jobId)}/heartbeat`;
+    await this.postVoid(url, {
+      leaseToken,
+      ...(leaseDurationMs !== undefined ? { leaseDurationMs } : {})
+    });
+  }
+
+  async complete(
+    jobId: string,
+    leaseToken: string,
+    outputManifestId: string,
+    acceptanceManifest: AcceptanceAssemblyManifest
+  ): Promise<void> {
+    const url = `${this.baseUrl}/api/acceptance-assembly-jobs/${encodeURIComponent(jobId)}/complete`;
+    await this.postVoid(url, { leaseToken, outputManifestId, acceptanceManifest });
+  }
+
+  async fail(
+    jobId: string,
+    leaseToken: string,
+    acceptanceRunId: string,
+    error: string
+  ): Promise<void> {
+    const url = `${this.baseUrl}/api/acceptance-assembly-jobs/${encodeURIComponent(jobId)}/fail`;
+    await this.postVoid(url, { leaseToken, acceptanceRunId, error });
+  }
+
+  private async postVoid(url: string, body: Record<string, unknown>): Promise<void> {
+    return fetchWithTimeout(
+      this.fetchFn,
+      url,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          ...(this.workerStagingToken !== undefined
+            ? { "x-worker-staging-token": this.workerStagingToken }
+            : {})
+        },
+        body: JSON.stringify(body)
+      },
+      this.timeoutMs,
+      async (res) => {
+        if (!res.ok) {
+          const detail = await extractSafeErrorDetail(res);
+          throw new ControlApiClientError(
+            detail
+              ? `Control API returned HTTP ${res.status}: ${detail}`
+              : `Control API returned HTTP ${res.status}`,
+            res.status
+          );
+        }
+      }
+    );
+  }
+}
+
+export function createAcceptanceAssemblyControlApiClient(
+  config?: ControlApiClientConfig & { workerStagingToken?: string }
+): AcceptanceAssemblyControlApiClient {
+  return new HttpAcceptanceAssemblyControlApiClient(
+    config?.baseUrl,
+    config?.fetch,
+    config?.timeoutMs,
+    config?.workerStagingToken
   );
 }
