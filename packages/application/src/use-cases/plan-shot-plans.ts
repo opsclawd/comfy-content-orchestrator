@@ -20,6 +20,16 @@ import type { ReferenceAssetRepository } from "../ports/reference-asset-reposito
 import type { UnitOfWork, UnitOfWorkContext } from "../ports/unit-of-work.js";
 import { CANDIDATE_BASE_SEED } from "./progress-scene-production.js";
 import {
+  mapProductionDuration,
+  UnsupportedProductionDurationError
+} from "./map-production-duration.js";
+import type {
+  H3ProfileFrameCapability,
+  SceneDurationAllocation,
+  SceneDurationBinding,
+  CampaignDurationPlan
+} from "@cco/contracts";
+import {
   compileStoryboardPrevisPrompt,
   STORYBOARD_PREVIS_WORKFLOW_TEMPLATE
 } from "../shot-plan-compiler/index.js";
@@ -845,8 +855,24 @@ export class PlanShotPlansUseCase {
     readonly maxExistingOrdinal: number;
     readonly targetDurationMs: number;
     readonly targetFrameCount: number;
+    readonly planId?: string | null | undefined;
+    readonly planRevision?: number | null | undefined;
+    readonly allocationId?: string | null | undefined;
+    readonly nominalDurationMs?: number | null | undefined;
+    readonly exactRationalNominalDurationMs?: number | null | undefined;
   }): ShotPlan[] {
-    const { proposals, scene, maxExistingOrdinal, targetDurationMs, targetFrameCount } = params;
+    const {
+      proposals,
+      scene,
+      maxExistingOrdinal,
+      targetDurationMs,
+      targetFrameCount,
+      planId,
+      planRevision,
+      allocationId,
+      nominalDurationMs,
+      exactRationalNominalDurationMs
+    } = params;
     return proposals.map((proposal, idx) => {
       const beats =
         proposal.beats.length > 0
@@ -871,6 +897,11 @@ export class PlanShotPlansUseCase {
         routingMode: "reference_directed",
         targetDurationMs,
         targetFrameCount,
+        planId: planId ?? null,
+        planRevision: planRevision ?? null,
+        allocationId: allocationId ?? null,
+        nominalDurationMs: nominalDurationMs ?? null,
+        exactRationalNominalDurationMs: exactRationalNominalDurationMs ?? null,
         framing: proposal.framing,
         angle: proposal.angle,
         lensIntent: proposal.lensIntent,
@@ -1183,6 +1214,22 @@ export class PlanShotPlansUseCase {
           }
         }
 
+        let durationBinding: SceneDurationBinding | undefined;
+        let durationAllocation: SceneDurationAllocation | undefined;
+        let durationPlan: CampaignDurationPlan | undefined;
+        if (context.durationPlans) {
+          durationBinding = await context.durationPlans.findBindingBySceneId(scene.id);
+          if (durationBinding) {
+            durationPlan = await context.durationPlans.findByCampaignIdAndRevision(
+              scene.campaignId,
+              durationBinding.planRevision
+            );
+            durationAllocation = durationPlan?.allocations.find(
+              (a) => a.allocationId === durationBinding!.allocationId
+            );
+          }
+        }
+
         return {
           sceneSnapshot: scene.snapshot(),
           rawPolicy,
@@ -1192,7 +1239,10 @@ export class PlanShotPlansUseCase {
           assets: Array.from(assetsMap.values()),
           cachedDescriptions,
           hasCampaignBibleRepo: Boolean(context.campaignReferenceBible),
-          hasRefRepo: Boolean(refRepo)
+          hasRefRepo: Boolean(refRepo),
+          durationBinding,
+          durationAllocation,
+          durationPlan
         };
       });
 
@@ -1205,8 +1255,32 @@ export class PlanShotPlansUseCase {
         readData.rawPolicy ?? DEFAULT_EXTERNAL_PROCESSING_POLICY
       );
 
+      let capability: H3ProfileFrameCapability | undefined;
+      if (readData.durationAllocation) {
+        capability = {
+          profileKey: readData.durationAllocation.profileSelection.profileKey,
+          route: readData.durationAllocation.route,
+          routingMode: readData.durationAllocation.routingMode,
+          width: readData.durationAllocation.width,
+          height: readData.durationAllocation.height,
+          fps: readData.durationAllocation.fps,
+          allowedFrameCounts: [readData.durationAllocation.frames],
+          isAllowedFrameCount: (f: number) => f === readData.durationAllocation!.frames
+        };
+      }
+
       const targetDurationMs = scene.configuration.durationMs;
-      const targetFrameCount = Math.round((targetDurationMs / 1000) * 24);
+      const durationMapping = mapProductionDuration(targetDurationMs, {
+        engine: readData.durationAllocation?.engine ?? scene.configuration.engineProfileId,
+        profile:
+          readData.durationAllocation?.profileSelection.profileKey ??
+          scene.configuration.engineProfileId,
+        capability
+      });
+      if (!durationMapping.ok) {
+        throw new UnsupportedProductionDurationError(targetDurationMs, durationMapping.reason);
+      }
+      const targetFrameCount = durationMapping.frameCount;
 
       // Step 2: Outside DB transaction, generate missing descriptions and run model
       const descriptionsByHash = new Map<string, string>(readData.cachedDescriptions);
@@ -1298,7 +1372,16 @@ export class PlanShotPlansUseCase {
           scene: currentScene,
           maxExistingOrdinal,
           targetDurationMs,
-          targetFrameCount
+          targetFrameCount,
+          planId: readData.durationPlan?.planId,
+          planRevision: readData.durationPlan?.revision,
+          allocationId: readData.durationAllocation?.allocationId,
+          nominalDurationMs:
+            readData.durationAllocation?.nominalDurationMs ??
+            Math.round(durationMapping.nominalDurationMs),
+          exactRationalNominalDurationMs:
+            readData.durationAllocation?.exactRationalNominalDurationMs ??
+            durationMapping.achievedDurationMs
         });
 
         return await this.persistShotPlansAndPrevisJobs({
@@ -1402,8 +1485,47 @@ export class PlanShotPlansUseCase {
       rawPolicy ?? DEFAULT_EXTERNAL_PROCESSING_POLICY
     );
 
+    let durationBinding: SceneDurationBinding | undefined;
+    let durationAllocation: SceneDurationAllocation | undefined;
+    let durationPlan: CampaignDurationPlan | undefined;
+    if (context.durationPlans) {
+      durationBinding = await context.durationPlans.findBindingBySceneId(scene.id);
+      if (durationBinding) {
+        durationPlan = await context.durationPlans.findByCampaignIdAndRevision(
+          scene.campaignId,
+          durationBinding.planRevision
+        );
+        durationAllocation = durationPlan?.allocations.find(
+          (a) => a.allocationId === durationBinding!.allocationId
+        );
+      }
+    }
+
+    let capability: H3ProfileFrameCapability | undefined;
+    if (durationAllocation) {
+      capability = {
+        profileKey: durationAllocation.profileSelection.profileKey,
+        route: durationAllocation.route,
+        routingMode: durationAllocation.routingMode,
+        width: durationAllocation.width,
+        height: durationAllocation.height,
+        fps: durationAllocation.fps,
+        allowedFrameCounts: [durationAllocation.frames],
+        isAllowedFrameCount: (f: number) => f === durationAllocation!.frames
+      };
+    }
+
     const targetDurationMs = scene.configuration.durationMs;
-    const targetFrameCount = Math.round((targetDurationMs / 1000) * 24);
+    const durationMapping = mapProductionDuration(targetDurationMs, {
+      engine: durationAllocation?.engine ?? scene.configuration.engineProfileId,
+      profile:
+        durationAllocation?.profileSelection.profileKey ?? scene.configuration.engineProfileId,
+      capability
+    });
+    if (!durationMapping.ok) {
+      throw new UnsupportedProductionDurationError(targetDurationMs, durationMapping.reason);
+    }
+    const targetFrameCount = durationMapping.frameCount;
 
     const bindings = context.referenceAssets?.listBindingsBySceneId
       ? await context.referenceAssets.listBindingsBySceneId(scene.id, {
@@ -1534,7 +1656,14 @@ export class PlanShotPlansUseCase {
       scene,
       maxExistingOrdinal,
       targetDurationMs,
-      targetFrameCount
+      targetFrameCount,
+      planId: durationPlan?.planId,
+      planRevision: durationPlan?.revision,
+      allocationId: durationAllocation?.allocationId,
+      nominalDurationMs:
+        durationAllocation?.nominalDurationMs ?? Math.round(durationMapping.nominalDurationMs),
+      exactRationalNominalDurationMs:
+        durationAllocation?.exactRationalNominalDurationMs ?? durationMapping.achievedDurationMs
     });
 
     const savedPlans = await this.persistShotPlansAndPrevisJobs({

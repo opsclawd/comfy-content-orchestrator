@@ -28,7 +28,8 @@ import {
   type ShotPlanRepository,
   type H3CandidateRegistryReader,
   type H3CandidateAuthorizationPort,
-  type H3RuntimeObservationPort
+  type H3RuntimeObservationPort,
+  type ProductionReleaseCapabilityReader
 } from "@cco/application";
 import {
   getH3CandidateProfile,
@@ -53,6 +54,7 @@ import {
   HttpComfyUiInputStagingAdapter,
   HttpComfyUiOutputReader,
   JsonFileLicenseRegistryPort,
+  JsonFileProductionReleaseReader,
   loadComponentLicenseRegistrySync,
   LocalFsGpuLeaseAdapter,
   NvidiaSmiTelemetryAdapter,
@@ -181,6 +183,7 @@ export interface ProductionWorkerOverrides extends Partial<WorkerDependencies> {
   readonly runtimeObservationPort?: H3RuntimeObservationPort | undefined;
   readonly targetGpuUuid?: string | undefined;
   readonly workerStagingToken?: string | undefined;
+  readonly productionReleaseReader?: ProductionReleaseCapabilityReader | undefined;
   readonly now?: (() => Date) | undefined;
 }
 
@@ -952,6 +955,12 @@ export function createProductionWorker(
     }
   }
 
+  const productionReleaseReader =
+    overrides?.productionReleaseReader ??
+    (process.env.CCO_H3_PRODUCTION_RELEASE_BUNDLE_PATH
+      ? new JsonFileProductionReleaseReader(process.env.CCO_H3_PRODUCTION_RELEASE_BUNDLE_PATH)
+      : undefined);
+
   const renderJobExecutor =
     overrides?.renderJobExecutor ??
     createCertifiedRenderJobExecutor(
@@ -961,6 +970,7 @@ export function createProductionWorker(
         productionManifestAssembler,
         hashBytes: hashBytesPort,
         enforceLicenseRouting,
+        ...(productionReleaseReader !== undefined ? { productionReleaseReader } : {}),
         ...(includesProduction
           ? {
               resolveApprovedCandidateMedia,

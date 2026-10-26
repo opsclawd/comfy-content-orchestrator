@@ -76,21 +76,18 @@ class IntegrationStubPlanningModelClient implements PlanningModelClientPort {
         ? parseInt(totalDurationMatch[1]!, 10)
         : 15000;
 
-      // Generate uneven, non-uniform beat durations for discriminating duration-authority proof.
+      const beatAllocationMatches = Array.from(
+        request.systemPrompt.matchAll(/Beat (\d+): targetDurationMs must equal (\d+) ms/g)
+      );
       let beatDurations: number[];
-      if (totalScenes === 3 && targetTotalDurationMs === 15000) {
-        beatDurations = [3000, 7000, 5000];
-      } else if (totalScenes === 2 && targetTotalDurationMs === 15000) {
-        beatDurations = [6000, 9000];
+      if (beatAllocationMatches.length > 0) {
+        beatDurations = Array.from({ length: totalScenes }, (_, i) => {
+          const match = beatAllocationMatches.find((m) => parseInt(m[1]!, 10) === i + 1);
+          return match ? parseInt(match[2]!, 10) : Math.floor(targetTotalDurationMs / totalScenes);
+        });
       } else {
         const baseDuration = Math.floor(targetTotalDurationMs / totalScenes);
-        const remainder = targetTotalDurationMs - baseDuration * totalScenes;
-        const delta = Math.min(Math.floor(baseDuration / 2), 1500);
-        beatDurations = Array.from({ length: totalScenes }, (_, i) => {
-          if (i === 0) return baseDuration - delta + remainder;
-          if (i === 1 && totalScenes > 1) return baseDuration + delta;
-          return baseDuration;
-        });
+        beatDurations = Array.from({ length: totalScenes }, () => baseDuration);
       }
 
       const beats = Array.from({ length: totalScenes }, (_, i) => ({
@@ -265,8 +262,8 @@ describe("POST /api/campaigns/plan End-to-End Integration", () => {
       true
     );
 
-    // Assert exact per-ordinal duration equality against uneven beat targets:
-    expect(stubPrimary.emittedBeats.map((b) => b.targetDurationMs)).toEqual([3000, 7000, 5000]);
+    // Assert exact per-ordinal duration equality against beat targets:
+    expect(stubPrimary.emittedBeats.map((b) => b.targetDurationMs)).toEqual([5000, 5000, 5000]);
     for (let i = 0; i < 3; i++) {
       const beat = stubPrimary.emittedBeats[i]!;
       const row = sceneRows.rows[i];

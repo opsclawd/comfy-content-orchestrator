@@ -21,7 +21,7 @@ import type {
   OriginalsInspectionPort,
   EvidenceStoragePolicyConfig
 } from "@cco/application";
-import { PlanShotPlansUseCase } from "@cco/application";
+import { PlanShotPlansUseCase, StageH3CandidateRenderUseCase } from "@cco/application";
 import {
   AnthropicPlanningModelClient,
   ConfiguredReviewerAuthorizationAdapter,
@@ -37,6 +37,7 @@ import {
   PostgresCampaignReadinessQueries,
   PostgresDeliveryAssemblyJobQueue,
   PostgresEvidenceLockCoordinator,
+  PostgresDeploymentEnablementStateRepository,
   PostgresJobQueue,
   PostgresReferenceAssetRepository,
   PostgresSceneReviewQueries,
@@ -46,8 +47,14 @@ import {
   S3ReviewMediaDelivery,
   SharpImageInspectionAdapter,
   StorageAwareJobAdmissionGate,
+  JsonFileProductionReleaseReader,
+  JsonFileStagingAuthorizationSource,
+  H3OperatorSignatureVerifier,
+  H3TrustedCandidateRegistryReader,
   type HostFsStorageTelemetryAdapterOptions
 } from "@cco/infrastructure";
+import { readFileSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { Pool } from "pg";
@@ -535,6 +542,66 @@ export async function runControlApi(
     signalHandlersInstalled = true;
 
     // 6. Start Control API HTTP server
+    const enablementStatePort = pool
+      ? new PostgresDeploymentEnablementStateRepository(pool)
+      : undefined;
+    const productionReleaseReader = config.productionReleaseBundlePath
+      ? new JsonFileProductionReleaseReader(config.productionReleaseBundlePath, enablementStatePort)
+      : undefined;
+    // Deployment-owned trust store for H3 candidate authorization grants and the #445
+    // capability decision matrix. Loaded once at startup from the same env-var-named files
+    // used by apps/render-worker/src/cli/stage-candidate.ts, so a single trust configuration
+    // backs both the control-api composition root and the render-worker CLI path.
+    let h3TrustedPublicKeys: ReadonlyMap<string, string> = new Map();
+    if (config.h3TrustedPublicKeysPath) {
+      const raw = readFileSync(resolvePath(config.h3TrustedPublicKeysPath), "utf-8");
+      h3TrustedPublicKeys = new Map(Object.entries(JSON.parse(raw) as Record<string, string>));
+    }
+
+    const stagingAuthSource = config.stagingBundlePath
+      ? new JsonFileStagingAuthorizationSource(config.stagingBundlePath, h3TrustedPublicKeys)
+      : undefined;
+
+    // A capability matrix signed by a trusted operator key is required to admit any
+    // candidate: without one, stageRenderUseCase stays unconfigured (fail-closed) rather
+    // than constructing a reader around an unsigned placeholder envelope.
+    let stageRenderUseCase: StageH3CandidateRenderUseCase | undefined;
+    let h3CandidateRegistryReader: H3TrustedCandidateRegistryReader | undefined;
+    if (h3TrustedPublicKeys.size > 0 && config.h3CapabilityMatrixPath) {
+      const candidateProfiles = config.h3CandidateProfilesPath
+        ? (JSON.parse(readFileSync(resolvePath(config.h3CandidateProfilesPath), "utf-8")) as [])
+        : [];
+      const decisionEnvelope = JSON.parse(
+        readFileSync(resolvePath(config.h3CapabilityMatrixPath), "utf-8")
+      );
+      const registryReader = new H3TrustedCandidateRegistryReader({
+        candidateProfiles,
+        decisionEnvelope,
+        trustedPublicKeys: h3TrustedPublicKeys,
+        ...(config.h3EvidenceDirectory
+          ? {
+              evidenceResolver: (digest: string) => {
+                if (!/^[0-9a-f]{64}$/.test(digest)) return undefined;
+                try {
+                  return readFileSync(resolvePath(config.h3EvidenceDirectory!, digest));
+                } catch {
+                  return undefined;
+                }
+              }
+            }
+          : {})
+      });
+      const authorizationPort = new H3OperatorSignatureVerifier({
+        trustedPublicKeys: h3TrustedPublicKeys
+      });
+      stageRenderUseCase = new StageH3CandidateRenderUseCase({
+        uow,
+        registryReader,
+        authorizationPort
+      });
+      h3CandidateRegistryReader = registryReader;
+    }
+
     logger.info(`Starting Control API server on ${config.http.host}:${config.http.port}...`);
     const serverStarter = options.serverStarter ?? startControlApiServer;
     serverHandle = await serverStarter(
@@ -555,6 +622,10 @@ export async function runControlApi(
         deliveryAssemblyJobQueue,
         reviewerAuthorization,
         originalsInspection,
+        ...(productionReleaseReader ? { productionReleaseReader } : {}),
+        ...(stagingAuthSource ? { stagingAuthSource } : {}),
+        ...(stageRenderUseCase ? { stageRenderUseCase } : {}),
+        ...(h3CandidateRegistryReader ? { h3CandidateRegistryReader } : {}),
         ...(evidenceStoragePolicy ? { evidenceStoragePolicy } : {}),
         ...(evidenceLockCoordinator ? { evidenceLockCoordinator } : {}),
         ...(batchEvidenceDossierQueries ? { batchEvidenceDossierQueries } : {}),

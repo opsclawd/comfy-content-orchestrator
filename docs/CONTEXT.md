@@ -284,4 +284,16 @@ Issue #477 adds the client-scoped Product/Batches operator workspace to Review H
 > [!NOTE]
 > Phase 1 software implementation establishes contract, tenant isolation, and cryptographic integrity boundaries. Real-world authenticity of physical cannabis products and lab certificates requires independent human operator judgment per runbook. Campaign template batch pinning (`PinnedProductBatchResolution` -> `SceneReferenceBinding`s), downstream delivery reel claim verification, and generative assembly admission remain assigned to subsequent consumer integration phases (outside #477).
 
+### 8. Duration Planning, Operational Handoff, and Staging Acceptance (#421.5 / Issue #426)
+
+Issue #426 delivers capability-aware campaign duration allocation, durable duration plans, Review Hub planning indicators, and operator staging acceptance pipelines:
+- **Eligible Profile Capabilities:** Public planning uses only operator-certified and explicitly production-enabled profiles after authentic #428 release sign-off. Speed and continuity acceptance (#445) qualifies profiles for operator staging only, never general production.
+- **Fail-Closed Governance & No Synthetic Evidence:** Autonomous agents must never author physical measurements or certification artifacts in `certification/`, `baseline/`, or `config/render-profiles/`. Staging grants require conjunctive verification (exact authorization ID, target host, validity period, and authentic signature); dummy or zeroed hashes are strictly forbidden.
+- **Monotonic Enablement & Anti-Rollback:** Control API enforces non-decreasing generation checks via `DeploymentEnablementStatePort` to prevent rollback of production capability bundles.
+- **Realm & Provenance Isolation:** Execution realm (`deployed` vs `isolated_test`) and evidence origin (`live_execution` vs `simulated_test`) remain strictly isolated, ensuring simulated candidate runs cannot feed deployed delivery reel assembly.
+- **Nominal Duration Snapshotting:** Plan nominal durations are snapshotted at campaign production dispatch, ensuring multi-stem delivery reels (e.g. 124f MiniMax-H3) pass assembly tolerance and envelope gates deterministically.
+- **Campaign Replan Contract & Idempotency:** Campaign replans require complete vectors of scene durations and expected spec revisions summing strictly to the campaign target duration, acquire row locks, invalidate scene approvals while preserving allocation IDs, and record idempotent action receipts for safe action replay.
+- **Assembly Planning Envelope Safety:** Combinatorial candidate partitioning prunes states against maximum stem and duration envelope ceilings with fail-closed catalog limits, and campaign creation UI warns users when requested durations exceed assembly boundaries.
+
+
 

@@ -55,7 +55,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
   it("migrates an empty PostgreSQL 18.6 database through the baseline", async () => {
     const applied = await runMigrations(client, { migrationsDirectory });
 
-    expect(applied).toHaveLength(30);
+    expect(applied).toHaveLength(31);
     expect(applied[0]?.version).toBe("001");
     expect(applied[1]?.version).toBe("002");
     expect(applied[2]?.version).toBe("003");
@@ -86,6 +86,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
     expect(applied[27]?.version).toBe("028");
     expect(applied[28]?.version).toBe("029");
     expect(applied[29]?.version).toBe("030");
+    expect(applied[30]?.version).toBe("031");
 
     const schemaRes = await client.query(
       "SELECT version FROM schema_migrations ORDER BY version ASC"
@@ -120,7 +121,8 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       { version: "027" },
       { version: "028" },
       { version: "029" },
-      { version: "030" }
+      { version: "030" },
+      { version: "031" }
     ]);
 
     const tablesRes = await client.query<{ table_name: string }>(
@@ -134,7 +136,11 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
 
     const tableNames = tablesRes.rows.map((r) => r.table_name);
     expect(tableNames).toEqual([
+      "acceptance_assembly_jobs",
+      "acceptance_assembly_manifests",
+      "acceptance_run_scenes",
       "batch_evidence_links",
+      "campaign_duration_plans",
       "campaign_production_run_scenes",
       "campaign_production_runs",
       "campaign_reference_bible_changes",
@@ -148,6 +154,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       "coa_report_revisions",
       "coa_reports",
       "delivery_assembly_jobs",
+      "deployment_enablement_state",
       "evidence_assets",
       "evidence_derivatives",
       "evidence_ingest_reservations",
@@ -155,6 +162,7 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       "evidence_verification_events",
       "generation_manifests",
       "license_registry",
+      "operator_acceptance_runs",
       "product_batch_facts",
       "product_batches",
       "product_claim_revisions",
@@ -165,7 +173,9 @@ describe("PostgreSQL 18.6 baseline schema integration", () => {
       "reference_assets",
       "reference_groups",
       "render_jobs",
+      "replan_action_receipts",
       "review_events",
+      "scene_duration_bindings",
       "scene_reference_assets",
       "schema_migrations",
       "shot_plan_previs_associations",

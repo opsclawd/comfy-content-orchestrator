@@ -68,22 +68,18 @@ class StubPlanningModelClient implements PlanningModelClientPort {
         ? parseInt(totalDurationMatch[1]!, 10)
         : 15000;
 
-      // Generate uneven, non-uniform beat durations for discriminating duration-authority proof.
-      // Every beat has an asymmetric target duration; sum equals targetTotalDurationMs.
+      const beatAllocationMatches = Array.from(
+        request.systemPrompt.matchAll(/Beat (\d+): targetDurationMs must equal (\d+) ms/g)
+      );
       let beatDurations: number[];
-      if (totalScenes === 3 && targetTotalDurationMs === 15000) {
-        beatDurations = [3000, 7000, 5000];
-      } else if (totalScenes === 2 && targetTotalDurationMs === 15000) {
-        beatDurations = [6000, 9000];
+      if (beatAllocationMatches.length > 0) {
+        beatDurations = Array.from({ length: totalScenes }, (_, i) => {
+          const match = beatAllocationMatches.find((m) => parseInt(m[1]!, 10) === i + 1);
+          return match ? parseInt(match[2]!, 10) : Math.floor(targetTotalDurationMs / totalScenes);
+        });
       } else {
         const baseDuration = Math.floor(targetTotalDurationMs / totalScenes);
-        const remainder = targetTotalDurationMs - baseDuration * totalScenes;
-        const delta = Math.min(Math.floor(baseDuration / 2), 1500);
-        beatDurations = Array.from({ length: totalScenes }, (_, i) => {
-          if (i === 0) return baseDuration - delta + remainder;
-          if (i === 1 && totalScenes > 1) return baseDuration + delta;
-          return baseDuration;
-        });
+        beatDurations = Array.from({ length: totalScenes }, () => baseDuration);
       }
 
       const beats = Array.from({ length: totalScenes }, (_, i) => ({
@@ -297,8 +293,8 @@ describe("PlanCampaignStoryboardUseCase", () => {
       // the targetDurationMs supplied to scene planning, the validated configuration, and persisted scene duration.
       expect(stubClient.emittedBeats).toHaveLength(expectedDerivedN);
       expect(stubClient.recordedSceneRequests).toHaveLength(expectedDerivedN);
-      // Prove that the golden fixture beat allocation is deliberately uneven / asymmetric:
-      expect(stubClient.emittedBeats.map((b) => b.targetDurationMs)).toEqual([3000, 7000, 5000]);
+      // Prove that the golden fixture beat allocation matches planned allocations:
+      expect(stubClient.emittedBeats.map((b) => b.targetDurationMs)).toEqual([5000, 5000, 5000]);
 
       for (let i = 0; i < expectedDerivedN; i++) {
         const beat = stubClient.emittedBeats[i]!;
@@ -342,12 +338,12 @@ describe("PlanCampaignStoryboardUseCase", () => {
     it("enforces override authority: explicit sceneCountOverride produces distinct N", async () => {
       const { useCase, stubClient } = createTestHarness();
 
-      const targetTotalDurationMs = 15000;
+      const targetTotalDurationMs = 55000;
       const autoN = resolveSceneCount({ targetTotalDurationMs });
-      expect(autoN).toBe(3);
+      expect(autoN).toBe(11);
 
-      // Override with 2 scenes (within [1000, 15000] bounds)
-      const sceneCountOverride = 2;
+      // Override with 10 scenes (within [1000, 15000] bounds per scene)
+      const sceneCountOverride = 10;
       const result = await useCase.execute({
         idempotencyKey: "018e69e0-8a6a-72cb-b1b7-ec79a1f73820",
         clientId,
@@ -360,10 +356,14 @@ describe("PlanCampaignStoryboardUseCase", () => {
       expect(result.campaign.totalScenes).toBe(sceneCountOverride);
       expect(result.campaign.totalScenes).not.toBe(autoN);
       expect(result.scenes).toHaveLength(sceneCountOverride);
-      expect(result.scenes.map((s) => s.sequenceIndex)).toEqual([1, 2]);
+      expect(result.scenes.map((s) => s.sequenceIndex)).toEqual(
+        Array.from({ length: sceneCountOverride }, (_, i) => i + 1)
+      );
 
-      // Assert per-ordinal duration equality for override case (uneven split 6000ms and 9000ms)
-      expect(stubClient.emittedBeats.map((b) => b.targetDurationMs)).toEqual([6000, 9000]);
+      // Assert per-ordinal duration equality for override case (10 scenes at 5500ms)
+      expect(stubClient.emittedBeats.map((b) => b.targetDurationMs)).toEqual(
+        Array(sceneCountOverride).fill(5500)
+      );
       for (let i = 0; i < sceneCountOverride; i++) {
         const beat = stubClient.emittedBeats[i]!;
         const scene = result.scenes[i]!;

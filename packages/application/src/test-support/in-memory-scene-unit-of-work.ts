@@ -1,4 +1,13 @@
-import type { ReviewEvent } from "@cco/contracts";
+import { randomUUID } from "node:crypto";
+import type {
+  AcceptanceAssemblyJob,
+  AcceptanceAssemblyManifest,
+  AcceptanceRunScene,
+  CampaignDurationPlan,
+  OperatorAcceptanceRun,
+  ReviewEvent,
+  SceneDurationBinding
+} from "@cco/contracts";
 import {
   Scene,
   type CampaignId,
@@ -46,7 +55,8 @@ import type {
   VideoStemSourceRecord,
   CampaignReferenceBibleRepository,
   CampaignReferenceBibleEntry,
-  CampaignReferenceBibleChange
+  CampaignReferenceBibleChange,
+  ReplanActionReceipt
 } from "../ports/index.js";
 import { CampaignIdempotencyConflictError, StaleBibleEntryConflictError } from "../ports/index.js";
 
@@ -105,6 +115,16 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
   private readonly _seededReferenceAssets = new Map<ReferenceAssetId, ReferenceAsset>();
   private readonly _seededReferenceGroups = new Map<ReferenceGroupId, ReferenceGroup>();
   private readonly _sceneBindings = new Map<string, SceneReferenceBinding>();
+  private readonly _durationPlans = new Map<string, CampaignDurationPlan>();
+  private readonly _currentPlanByCampaign = new Map<string, string>();
+  private readonly _durationPlanBindings = new Map<string, SceneDurationBinding[]>();
+  private readonly _sceneDurationBindings = new Map<string, SceneDurationBinding>();
+  private readonly _replanReceipts = new Map<string, ReplanActionReceipt>();
+
+  private readonly _acceptanceRuns = new Map<string, OperatorAcceptanceRun>();
+  private readonly _acceptanceRunScenes = new Map<string, AcceptanceRunScene[]>();
+  private readonly _acceptanceJobs = new Map<string, AcceptanceAssemblyJob>();
+  private readonly _acceptanceManifests = new Map<string, AcceptanceAssemblyManifest>();
   private readonly _campaignReferenceBibles = new Map<string, CampaignReferenceBibleEntry>();
   private readonly _campaignReferenceBibleChanges: CampaignReferenceBibleChange[] = [];
   private readonly _enqueuedAssemblyJobs: EnqueueDeliveryAssemblyJobInput[] = [];
@@ -339,7 +359,12 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
   }
 
   seedVideoStemSource(productionJobId: string, source: VideoStemSourceRecord): this {
-    this._seededVideoStemSources.set(productionJobId, source);
+    const record: VideoStemSourceRecord = {
+      ...source,
+      realm: "realm" in source ? source.realm : { kind: "deployed", deploymentId: "default" },
+      evidenceOrigin: "evidenceOrigin" in source ? source.evidenceOrigin : "live_execution"
+    };
+    this._seededVideoStemSources.set(productionJobId, record);
     return this;
   }
 
@@ -1152,7 +1177,211 @@ export class InMemorySceneUnitOfWork implements UnitOfWork {
       generationManifests: defaultGenerationManifests,
       referenceAssets: scopedReferenceAssets,
       referenceGroups: scopedReferenceGroups,
-      campaignReferenceBible: scopedCampaignReferenceBible
+      campaignReferenceBible: scopedCampaignReferenceBible,
+      durationPlans: {
+        savePlan: async (plan) => {
+          this._durationPlans.set(plan.planId, plan);
+          this._currentPlanByCampaign.set(plan.campaignId, plan.planId);
+        },
+        findCurrentPlanByCampaignId: async (campaignId) => {
+          const planId = this._currentPlanByCampaign.get(campaignId);
+          return planId ? this._durationPlans.get(planId) : undefined;
+        },
+        findByCampaignIdAndRevision: async (campaignId, revision) => {
+          for (const p of this._durationPlans.values()) {
+            if (p.campaignId === campaignId && p.revision === revision) {
+              return p;
+            }
+          }
+          return undefined;
+        },
+        saveBindings: async (bindings) => {
+          for (const b of bindings) {
+            // Upsert by bindingId, matching the real Postgres
+            // ON CONFLICT (binding_id) DO UPDATE repository (saveBindings is
+            // called again with recomputed specRevision/bindingDigest - e.g.
+            // from ReviewSceneUseCases - and must replace, not duplicate,
+            // the existing entry).
+            const list = this._durationPlanBindings.get(b.planId) ?? [];
+            const existingIndex = list.findIndex((existing) => existing.bindingId === b.bindingId);
+            if (existingIndex >= 0) {
+              list[existingIndex] = b;
+            } else {
+              list.push(b);
+            }
+            this._durationPlanBindings.set(b.planId, list);
+            this._sceneDurationBindings.set(b.sceneId, b);
+          }
+        },
+        findBindingsByPlanId: async (planId) => {
+          return this._durationPlanBindings.get(planId) ?? [];
+        },
+        findBindingBySceneId: async (sceneId) => {
+          return this._sceneDurationBindings.get(sceneId);
+        },
+        saveReceipt: async (receipt) => {
+          this._replanReceipts.set(`${receipt.campaignId}:${receipt.actionId}`, receipt);
+        },
+        findReceipt: async (params) => {
+          return this._replanReceipts.get(`${params.campaignId}:${params.actionId}`);
+        },
+        findReceiptByActionId: async (actionId, campaignId) => {
+          if (campaignId) {
+            return this._replanReceipts.get(`${campaignId}:${actionId}`);
+          }
+          for (const r of this._replanReceipts.values()) {
+            if (r.actionId === actionId) return r;
+          }
+          return undefined;
+        }
+      },
+      operatorAcceptanceRuns: {
+        createRun: async (run, scenes) => {
+          this._acceptanceRuns.set(run.acceptanceRunId, run);
+          this._acceptanceRunScenes.set(run.acceptanceRunId, [...scenes]);
+        },
+        findRunById: async (acceptanceRunId) => {
+          return this._acceptanceRuns.get(acceptanceRunId);
+        },
+        findRunByCampaignId: async (campaignId) => {
+          for (const r of this._acceptanceRuns.values()) {
+            if (r.campaignId === campaignId) return r;
+          }
+          return undefined;
+        },
+        findRunScenes: async (acceptanceRunId) => {
+          return this._acceptanceRunScenes.get(acceptanceRunId) ?? [];
+        },
+        findRunSceneBySceneId: async (sceneId) => {
+          for (const scenes of this._acceptanceRunScenes.values()) {
+            const found = scenes.find((s) => s.sceneId === sceneId);
+            if (found) return found;
+          }
+          return undefined;
+        },
+        updateRunStatus: async (acceptanceRunId, status, assemblyJobId, actionReceiptId) => {
+          const run = this._acceptanceRuns.get(acceptanceRunId);
+          if (run) {
+            this._acceptanceRuns.set(acceptanceRunId, {
+              ...run,
+              status,
+              ...(assemblyJobId !== undefined ? { assemblyJobId } : {}),
+              ...(actionReceiptId !== undefined ? { actionReceiptId } : {}),
+              updatedAt: new Date().toISOString()
+            });
+          }
+        },
+        updateSceneAcceptedAttempt: async (
+          acceptanceRunId,
+          sceneId,
+          attemptId,
+          stagingJobId,
+          ordinal
+        ) => {
+          const scenes = this._acceptanceRunScenes.get(acceptanceRunId);
+          if (scenes) {
+            const idx = scenes.findIndex((s) => s.sceneId === sceneId);
+            if (idx >= 0) {
+              scenes[idx] = {
+                ...scenes[idx]!,
+                acceptedAttemptId: attemptId,
+                acceptedStagingJobId: stagingJobId,
+                acceptedAttemptOrdinal: ordinal
+              };
+            }
+          }
+        },
+        updateSceneCurrentAttempt: async (acceptanceRunId, sceneId, attemptId, ordinal) => {
+          const scenes = this._acceptanceRunScenes.get(acceptanceRunId);
+          if (scenes) {
+            const idx = scenes.findIndex((s) => s.sceneId === sceneId);
+            if (idx >= 0) {
+              scenes[idx] = {
+                ...scenes[idx]!,
+                currentAttemptId: attemptId,
+                currentAttemptOrdinal: ordinal
+              };
+            }
+          }
+        }
+      },
+      acceptanceAssemblyJobs: {
+        enqueue: async (jobInput) => {
+          const now = new Date().toISOString();
+          const job: AcceptanceAssemblyJob = {
+            ...jobInput,
+            status: "queued",
+            createdAt: now,
+            updatedAt: now
+          };
+          this._acceptanceJobs.set(job.jobId, job);
+          return job;
+        },
+        claim: async (_workerId, _lease) => {
+          for (const job of this._acceptanceJobs.values()) {
+            if (job.status === "queued") {
+              const leaseToken = randomUUID();
+              const updated: AcceptanceAssemblyJob = {
+                ...job,
+                status: "leased",
+                leaseToken,
+                updatedAt: new Date().toISOString()
+              };
+              this._acceptanceJobs.set(job.jobId, updated);
+              return updated;
+            }
+          }
+          return undefined;
+        },
+        complete: async (jobId, outputManifestId, leaseToken) => {
+          const job = this._acceptanceJobs.get(jobId);
+          if (job) {
+            if (leaseToken && job.leaseToken && job.leaseToken !== leaseToken) {
+              throw new Error(`Lease token mismatch on job ${jobId}`);
+            }
+            this._acceptanceJobs.set(jobId, {
+              ...job,
+              status: "completed",
+              outputManifestId,
+              updatedAt: new Date().toISOString()
+            });
+          }
+        },
+        fail: async (jobId, error, leaseToken) => {
+          const job = this._acceptanceJobs.get(jobId);
+          if (job) {
+            if (leaseToken && job.leaseToken && job.leaseToken !== leaseToken) {
+              throw new Error(`Lease token mismatch on job ${jobId}`);
+            }
+            this._acceptanceJobs.set(jobId, {
+              ...job,
+              status: "failed",
+              failureReason: error,
+              updatedAt: new Date().toISOString()
+            });
+          }
+        },
+        findById: async (jobId) => {
+          return this._acceptanceJobs.get(jobId);
+        }
+      },
+      acceptanceAssemblyManifests: {
+        saveManifest: async (manifest) => {
+          this._acceptanceManifests.set(manifest.manifestId, manifest);
+        },
+        findByJobId: async (jobId) => {
+          for (const m of this._acceptanceManifests.values()) {
+            if (m.jobId === jobId) return m;
+          }
+          return undefined;
+        },
+        findByRunId: async (acceptanceRunId) => {
+          for (const m of this._acceptanceManifests.values()) {
+            if (m.acceptanceRunId === acceptanceRunId) return m;
+          }
+          return undefined;
+        }
+      }
     };
 
     const result = await work(context);

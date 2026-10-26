@@ -4,6 +4,7 @@ import {
   computeCandidateProductionInputFingerprint,
   computeProductionInputFingerprint,
   getH3CandidateProfile,
+  isReleasedProductionProfileKey,
   type CameraIntentSummary,
   type H3CandidateAuthorizationGrant,
   type H3CandidateProfile,
@@ -12,6 +13,7 @@ import {
   type InspectedReferenceInput,
   type ProductionBlocker,
   type ProductionReadinessStatus,
+  type ProfileInjectionTopology,
   type ShotPlanRoutingMode
 } from "@cco/contracts";
 import type { H3CandidateRegistryReader } from "../ports/h3-candidate-ports.js";
@@ -19,6 +21,10 @@ import type { HashBytesPort } from "../ports/hash-bytes.js";
 import type { ImageInspectionPort } from "../ports/image-inspection-port.js";
 import type { ObjectStoragePort } from "../ports/object-storage-port.js";
 import type { ReviewMediaDeliveryPort } from "../ports/review-media-delivery-port.js";
+import type {
+  ProductionReleaseCapabilityReader,
+  ReleasedProductionProfile
+} from "../ports/production-release-ports.js";
 import type { UnitOfWork, UnitOfWorkContext } from "../ports/unit-of-work.js";
 import {
   canonicalizeReferenceBindings,
@@ -56,6 +62,7 @@ export interface PrepareSceneProductionInputsOptions {
   readonly imageValidator?: ImageInspectionPort | undefined;
   readonly mediaDelivery?: ReviewMediaDeliveryPort | undefined;
   readonly registryReader?: H3CandidateRegistryReader | undefined;
+  readonly productionReleaseReader?: ProductionReleaseCapabilityReader | undefined;
 }
 
 export interface PrepareSceneProductionInputsInput {
@@ -76,6 +83,8 @@ export interface PrepareSceneProductionInputsResult {
   readonly targetShotPlan?: ShotPlanSnapshot | undefined;
   readonly durationResultOk: boolean;
   readonly frameCount: number;
+  readonly topology?: ProfileInjectionTopology | undefined;
+  readonly releasedProfile?: ReleasedProductionProfile | undefined;
 }
 
 function validateImageBytes(
@@ -198,10 +207,22 @@ export class PrepareSceneProductionInputsUseCase {
       });
     }
 
-    if (
-      !candidateProfileKey &&
-      !ACCEPTED_PRODUCTION_ENGINE_PROFILE_IDS.has(snapshot.configuration.engineProfileId)
-    ) {
+    let isAcceptedProfile = ACCEPTED_PRODUCTION_ENGINE_PROFILE_IDS.has(
+      snapshot.configuration.engineProfileId
+    );
+    let releasedProfile: ReleasedProductionProfile | undefined;
+    if (!isAcceptedProfile && this.options?.productionReleaseReader) {
+      if (isReleasedProductionProfileKey(snapshot.configuration.engineProfileId)) {
+        releasedProfile = await this.options.productionReleaseReader.getReleasedProfile(
+          snapshot.configuration.engineProfileId
+        );
+        if (releasedProfile) {
+          isAcceptedProfile = true;
+        }
+      }
+    }
+
+    if (!candidateProfileKey && !isAcceptedProfile) {
       blockers.push({
         code: "UNREPRESENTABLE_ENGINE_PROFILE",
         message: `Engine profile "${snapshot.configuration.engineProfileId}" is not recognized for production.`
@@ -356,15 +377,19 @@ export class PrepareSceneProductionInputsUseCase {
 
     const renderProfileKey = candidateProfile
       ? candidateProfile.key
-      : routingMode === "frame_anchored"
-        ? MINIMAX_H3_I2V_PRODUCTION_RENDER_PROFILE_KEY
-        : MINIMAX_H3_REF2V_PRODUCTION_RENDER_PROFILE_KEY;
+      : releasedProfile
+        ? releasedProfile.key
+        : routingMode === "frame_anchored"
+          ? MINIMAX_H3_I2V_PRODUCTION_RENDER_PROFILE_KEY
+          : MINIMAX_H3_REF2V_PRODUCTION_RENDER_PROFILE_KEY;
 
     const workflowTemplate = candidateProfile
       ? candidateProfile.specification.workflowHash
-      : routingMode === "frame_anchored"
-        ? MINIMAX_H3_I2V_PRODUCTION_WORKFLOW_TEMPLATE
-        : MINIMAX_H3_REF2V_PRODUCTION_WORKFLOW_TEMPLATE;
+      : releasedProfile
+        ? releasedProfile.specification.workflowHash
+        : routingMode === "frame_anchored"
+          ? MINIMAX_H3_I2V_PRODUCTION_WORKFLOW_TEMPLATE
+          : MINIMAX_H3_REF2V_PRODUCTION_WORKFLOW_TEMPLATE;
 
     // 6. Duration Quantization
     const candidateCapability = candidateProfile
@@ -378,7 +403,18 @@ export class PrepareSceneProductionInputsUseCase {
           allowedFrameCounts: [candidateProfile.specification.frames],
           isAllowedFrameCount: (f: number) => f === candidateProfile!.specification.frames
         }
-      : undefined;
+      : releasedProfile
+        ? {
+            profileKey: releasedProfile.key,
+            route: releasedProfile.specification.route,
+            routingMode: releasedProfile.specification.routingMode,
+            width: releasedProfile.specification.width,
+            height: releasedProfile.specification.height,
+            fps: releasedProfile.specification.fps,
+            allowedFrameCounts: [releasedProfile.specification.frames],
+            isAllowedFrameCount: (f: number) => f === releasedProfile!.specification.frames
+          }
+        : undefined;
 
     const durationResult = mapDurationMsToMiniMaxH3FrameCount(snapshot.configuration.durationMs, {
       profileKeyOrId: candidateProfile ? candidateProfile.key : renderProfileKey,
@@ -1089,7 +1125,9 @@ export class PrepareSceneProductionInputsUseCase {
       canonicalReferences: canonicalRefs,
       targetShotPlan: shotPlanSnapshot,
       durationResultOk: durationResult.ok,
-      frameCount: targetFrameCount
+      frameCount: targetFrameCount,
+      topology: releasedProfile?.topology ?? candidateProfile?.topology,
+      releasedProfile
     };
   }
 }

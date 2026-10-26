@@ -2,6 +2,12 @@ import { z } from "zod";
 import { sha256HashSchema } from "./persistent-media.js";
 import { ReferenceRoleSchema } from "./reference-asset.js";
 import { ShotPlanRoutingModeSchema } from "./shot-plan.js";
+import {
+  ExecutionRealmSchema,
+  EvidenceOriginSchema,
+  OwnerKindSchema,
+  SimulationDescriptorSchema
+} from "./execution-realm.js";
 
 export const ManifestStagedAsSchema = z.object({
   name: z.string().min(1, "Staged name must not be empty"),
@@ -219,6 +225,12 @@ export const GenerationManifestSchema = z
     specRevision: z.number().int().positive().optional(),
     attemptId: z.string().optional(),
     executionScope: z.enum(["production", "staging"]).optional(),
+    realm: ExecutionRealmSchema.optional(),
+    evidenceOrigin: EvidenceOriginSchema.optional(),
+    ownerKind: OwnerKindSchema.optional(),
+    acceptanceRunId: z.string().optional(),
+    simulationDescriptor: SimulationDescriptorSchema.optional(),
+    releaseDigest: sha256HashSchema.optional(),
     requestedDurationMs: z.number().positive().optional(),
     nominalDurationMs: z.number().positive().optional(),
     candidateSpecificationDigest: sha256HashSchema.optional(),

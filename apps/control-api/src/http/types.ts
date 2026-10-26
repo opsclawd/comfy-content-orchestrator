@@ -36,6 +36,17 @@ import {
   ClaimUseCases,
   ResolveBatchEvidenceDossierUseCase,
   type ProductEvidenceRepositoryPort,
+  PreviewCampaignReplanUseCase,
+  CommitCampaignReplanUseCase,
+  BeginOperatorAcceptanceRunUseCase,
+  AcceptOperatorAcceptanceSceneUseCase,
+  AssembleOperatorAcceptanceRunUseCase,
+  type StageH3CandidateRenderUseCase,
+  type H3CandidateRegistryReader,
+  type RealmAdmissionContext,
+  createDeployedLiveRealmContext,
+  type ProductionReleaseCapabilityReader,
+  type StagingPlanningAuthorizationSource,
   CreateSceneUseCase,
   EnforceStorageAdmission,
   EnqueueSceneProductionRenderUseCase,
@@ -124,6 +135,11 @@ export interface ControlApiDependencies {
   readonly originalsInspection?: OriginalsInspectionPort;
   readonly evidenceStoragePolicy?: EvidenceStoragePolicyConfig;
   readonly batchEvidenceDossierQueries?: BatchEvidenceDossierQueries;
+  readonly productionReleaseReader?: ProductionReleaseCapabilityReader | undefined;
+  readonly stagingAuthSource?: StagingPlanningAuthorizationSource | undefined;
+  readonly stageRenderUseCase?: StageH3CandidateRenderUseCase | undefined;
+  readonly h3CandidateRegistryReader?: H3CandidateRegistryReader | undefined;
+  readonly realmAdmissionContext?: RealmAdmissionContext | undefined;
 }
 
 export interface ControlApiUseCases {
@@ -131,6 +147,11 @@ export interface ControlApiUseCases {
   readonly productionReview: ProductionReviewUseCases;
   readonly progressSceneProduction: ProgressSceneProductionUseCases;
   readonly enqueueSceneProductionRender?: EnqueueSceneProductionRenderUseCase | undefined;
+  readonly previewCampaignReplan?: PreviewCampaignReplanUseCase | undefined;
+  readonly commitCampaignReplan?: CommitCampaignReplanUseCase | undefined;
+  readonly beginOperatorAcceptanceRun?: BeginOperatorAcceptanceRunUseCase | undefined;
+  readonly acceptOperatorAcceptanceScene?: AcceptOperatorAcceptanceSceneUseCase | undefined;
+  readonly assembleOperatorAcceptanceRun?: AssembleOperatorAcceptanceRunUseCase | undefined;
   readonly createCampaign?: CreateCampaignUseCase | undefined;
   readonly createCampaignShell?: CreateCampaignShellUseCase | undefined;
   readonly createClient?: CreateClientUseCase | undefined;
@@ -235,11 +256,15 @@ export function createControlApiContainer(
   const enqueueSceneProductionRender = new EnqueueSceneProductionRenderUseCase(dependencies.uow, {
     objectStorage: dependencies.objectStorage,
     hashBytes,
-    imageValidator: dependencies.imageValidator
+    imageValidator: dependencies.imageValidator,
+    productionReleaseReader: dependencies.productionReleaseReader
   });
+  const realmAdmissionContext =
+    dependencies.realmAdmissionContext ?? createDeployedLiveRealmContext("default");
   const productionReview = new ProductionReviewUseCases(
     dependencies.uow,
-    enqueueSceneProductionRender
+    enqueueSceneProductionRender,
+    realmAdmissionContext
   );
   const progressSceneProduction = new ProgressSceneProductionUseCases(
     dependencies.uow,
@@ -247,7 +272,12 @@ export function createControlApiContainer(
     dependencies.jobQueue
   );
   const createCampaign = new CreateCampaignUseCase(dependencies.uow);
-  const createCampaignShell = new CreateCampaignShellUseCase(dependencies.uow);
+  const createCampaignShell = new CreateCampaignShellUseCase(dependencies.uow, {
+    productionReleaseReader: dependencies.productionReleaseReader,
+    stagingAuthSource: dependencies.stagingAuthSource,
+    registryReader: dependencies.h3CandidateRegistryReader,
+    realmContext: realmAdmissionContext
+  });
   const createClient = new CreateClientUseCase(dependencies.uow);
   const listClients = new ListClientsUseCase(dependencies.uow);
   const createScene = new CreateSceneUseCase(dependencies.uow, planningCoordinator, autoPlanLogger);
@@ -260,7 +290,8 @@ export function createControlApiContainer(
     objectStorage: dependencies.objectStorage,
     hashBytes,
     imageValidator: dependencies.imageValidator,
-    mediaDelivery: dependencies.reviewMediaDelivery
+    mediaDelivery: dependencies.reviewMediaDelivery,
+    productionReleaseReader: dependencies.productionReleaseReader
   });
   const approveSceneAndDispatchCampaignProduction =
     new ApproveSceneAndDispatchCampaignProductionUseCase(
@@ -571,6 +602,26 @@ export function createControlApiContainer(
     ? new ResolveBatchEvidenceDossierUseCase(dependencies.batchEvidenceDossierQueries)
     : undefined;
 
+  const previewCampaignReplan = dependencies.uow
+    ? new PreviewCampaignReplanUseCase({ uow: dependencies.uow })
+    : undefined;
+  const commitCampaignReplan = dependencies.uow
+    ? new CommitCampaignReplanUseCase({ uow: dependencies.uow })
+    : undefined;
+  const beginOperatorAcceptanceRun = dependencies.uow
+    ? new BeginOperatorAcceptanceRunUseCase({
+        uow: dependencies.uow,
+        stageRenderUseCase: dependencies.stageRenderUseCase,
+        stagingAuthSource: dependencies.stagingAuthSource
+      })
+    : undefined;
+  const acceptOperatorAcceptanceScene = dependencies.uow
+    ? new AcceptOperatorAcceptanceSceneUseCase({ uow: dependencies.uow })
+    : undefined;
+  const assembleOperatorAcceptanceRun = dependencies.uow
+    ? new AssembleOperatorAcceptanceRunUseCase({ uow: dependencies.uow })
+    : undefined;
+
   return {
     dependencies,
     useCases: {
@@ -619,7 +670,12 @@ export function createControlApiContainer(
       ...(evidenceAsset !== undefined ? { evidenceAsset } : {}),
       ...(coaReport !== undefined ? { coaReport } : {}),
       ...(claim !== undefined ? { claim } : {}),
-      ...(resolveBatchEvidenceDossier !== undefined ? { resolveBatchEvidenceDossier } : {})
+      ...(resolveBatchEvidenceDossier !== undefined ? { resolveBatchEvidenceDossier } : {}),
+      ...(previewCampaignReplan !== undefined ? { previewCampaignReplan } : {}),
+      ...(commitCampaignReplan !== undefined ? { commitCampaignReplan } : {}),
+      ...(beginOperatorAcceptanceRun !== undefined ? { beginOperatorAcceptanceRun } : {}),
+      ...(acceptOperatorAcceptanceScene !== undefined ? { acceptOperatorAcceptanceScene } : {}),
+      ...(assembleOperatorAcceptanceRun !== undefined ? { assembleOperatorAcceptanceRun } : {})
     },
     queries: {
       ...(dependencies.sceneReviewQueries !== undefined

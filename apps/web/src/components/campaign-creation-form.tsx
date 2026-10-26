@@ -1213,6 +1213,38 @@ export function CampaignCreationForm({
             Total storyboard duration ({MIN_TARGET_DURATION_SECONDS} to{" "}
             {MAX_TARGET_DURATION_SECONDS} seconds).
           </span>
+          {Boolean(values.durationSeconds) &&
+            !isNaN(Number(values.durationSeconds)) &&
+            Number(values.durationSeconds) > 0 && (
+              <span
+                data-testid="duration-achievable-hint"
+                style={{
+                  display: "block",
+                  fontSize: "0.75rem",
+                  color: "var(--text-muted)",
+                  marginTop: "0.25rem"
+                }}
+              >
+                {(() => {
+                  const isLtx = values.targetEngineProfileId === "LTX_25_720P_5S_V1";
+                  const framesPerScene = isLtx ? 97 : 124;
+                  const fps = 24;
+                  const nominalSceneDurationSec = isLtx ? 4.0 : 5.2;
+                  const targetPerScene = isLtx ? 4 : 5;
+                  const sceneCount =
+                    values.sceneCountMode === "custom" && values.sceneCountOverride
+                      ? Math.max(1, Number(values.sceneCountOverride))
+                      : Math.max(1, Math.round(Number(values.durationSeconds) / targetPerScene));
+                  const achievableSeconds = ((sceneCount * framesPerScene) / fps).toFixed(1);
+                  const isEnvelopeExceeded =
+                    sceneCount > 12 || (sceneCount * framesPerScene) / fps > 60;
+                  const baseHint = `Requested: ${Number(values.durationSeconds)}s • Achievable generation: ~${achievableSeconds}s (${sceneCount} scenes × ~${nominalSceneDurationSec}s / ${framesPerScene}f)`;
+                  return isEnvelopeExceeded
+                    ? `${baseHint} — ⚠️ exceeds 12 scenes / 60s assembly envelope`
+                    : baseHint;
+                })()}
+              </span>
+            )}
           {fieldErrors.durationSeconds && (
             <span
               className="field-error"

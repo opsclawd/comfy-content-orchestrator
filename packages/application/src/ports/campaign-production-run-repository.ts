@@ -16,6 +16,8 @@ export interface RecordProductionAttemptInput {
   readonly selectedCandidateRevision?: number | undefined;
   readonly seed: number;
   readonly createdReason: "initial_dispatch" | "failure_recovery" | "production_rerender";
+  readonly ownerKind?: string | undefined;
+  readonly acceptanceRunId?: string | undefined;
 }
 
 export interface ProductionAttemptRecord extends RecordProductionAttemptInput {

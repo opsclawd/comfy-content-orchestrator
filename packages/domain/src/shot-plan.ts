@@ -183,6 +183,11 @@ export interface ShotPlanSnapshot {
   readonly idempotencyKey?: string | null;
   readonly requestHashSha256?: string | null;
   readonly machineModel?: string | null;
+  readonly planId?: string | null;
+  readonly planRevision?: number | null;
+  readonly allocationId?: string | null;
+  readonly nominalDurationMs?: number | null;
+  readonly exactRationalNominalDurationMs?: number | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -221,6 +226,11 @@ export interface ShotPlanCreateInput {
   readonly idempotencyKey?: string | null;
   readonly requestHashSha256?: string | null;
   readonly machineModel?: string | null;
+  readonly planId?: string | null;
+  readonly planRevision?: number | null;
+  readonly allocationId?: string | null;
+  readonly nominalDurationMs?: number | null;
+  readonly exactRationalNominalDurationMs?: number | null;
   readonly createdAt?: string;
   readonly updatedAt?: string;
 }
@@ -333,6 +343,11 @@ export class ShotPlan {
   readonly #idempotencyKey?: string | null;
   readonly #requestHashSha256?: string | null;
   readonly #machineModel?: string | null;
+  readonly #planId?: string | null;
+  readonly #planRevision?: number | null;
+  readonly #allocationId?: string | null;
+  readonly #nominalDurationMs?: number | null;
+  readonly #exactRationalNominalDurationMs?: number | null;
   readonly #createdAt: string;
   #updatedAt: string;
 
@@ -347,6 +362,11 @@ export class ShotPlan {
     this.#targetFrameCount = input.targetFrameCount;
     this.#durationToleranceMs = input.durationToleranceMs;
     this.#fps = input.fps;
+    this.#planId = input.planId ?? null;
+    this.#planRevision = input.planRevision ?? null;
+    this.#allocationId = input.allocationId ?? null;
+    this.#nominalDurationMs = input.nominalDurationMs ?? null;
+    this.#exactRationalNominalDurationMs = input.exactRationalNominalDurationMs ?? null;
     this.#framing = input.framing;
     this.#angle = input.angle;
     this.#lensIntent = input.lensIntent;
@@ -494,6 +514,11 @@ export class ShotPlan {
       idempotencyKey: input.idempotencyKey ?? null,
       requestHashSha256: input.requestHashSha256 ?? null,
       machineModel: input.machineModel ?? null,
+      planId: input.planId ?? null,
+      planRevision: input.planRevision ?? null,
+      allocationId: input.allocationId ?? null,
+      nominalDurationMs: input.nominalDurationMs ?? null,
+      exactRationalNominalDurationMs: input.exactRationalNominalDurationMs ?? null,
       createdAt: input.createdAt ?? now,
       updatedAt: input.updatedAt ?? now
     });
@@ -541,6 +566,26 @@ export class ShotPlan {
 
   get fps(): 24 {
     return this.#fps;
+  }
+
+  get planId(): string | null | undefined {
+    return this.#planId;
+  }
+
+  get planRevision(): number | null | undefined {
+    return this.#planRevision;
+  }
+
+  get allocationId(): string | null | undefined {
+    return this.#allocationId;
+  }
+
+  get nominalDurationMs(): number | null | undefined {
+    return this.#nominalDurationMs;
+  }
+
+  get exactRationalNominalDurationMs(): number | null | undefined {
+    return this.#exactRationalNominalDurationMs;
   }
 
   get framing(): ShotFraming {
@@ -754,6 +799,15 @@ export class ShotPlan {
         ? { requestHashSha256: this.#requestHashSha256 }
         : {}),
       ...(this.#machineModel !== undefined ? { machineModel: this.#machineModel } : {}),
+      ...(this.#planId !== undefined ? { planId: this.#planId } : {}),
+      ...(this.#planRevision !== undefined ? { planRevision: this.#planRevision } : {}),
+      ...(this.#allocationId !== undefined ? { allocationId: this.#allocationId } : {}),
+      ...(this.#nominalDurationMs !== undefined
+        ? { nominalDurationMs: this.#nominalDurationMs }
+        : {}),
+      ...(this.#exactRationalNominalDurationMs !== undefined
+        ? { exactRationalNominalDurationMs: this.#exactRationalNominalDurationMs }
+        : {}),
       createdAt: this.#createdAt,
       updatedAt: this.#updatedAt
     });

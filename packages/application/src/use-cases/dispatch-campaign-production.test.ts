@@ -782,6 +782,7 @@ describe("ApproveSceneAndDispatchCampaignProductionUseCase", () => {
     expect(scene2.status).toBe("queued");
     expect(scene3.status).toBe("queued");
     expect(createdRuns.length).toBe(1);
+    expect(createdRuns[0]!.expectedTotalDurationMs).toBe(12_126);
     expect(enqueuedJobs).toEqual(["scene-1", "scene-2", "scene-3"]);
     expect(currentCampaign.status).toBe("queued");
     expect(currentCampaign.approvedScenes).toBe(3);

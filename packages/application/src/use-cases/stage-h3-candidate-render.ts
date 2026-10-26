@@ -79,6 +79,8 @@ export interface StageH3CandidateRenderInput {
   readonly grant: H3CandidateAuthorizationGrant;
   readonly requestId: string;
   readonly dryRun?: boolean;
+  readonly ownerKind?: "staging_acceptance" | "staging_experiment" | undefined;
+  readonly acceptanceRunId?: string | undefined;
 }
 
 export interface StageH3CandidateRenderResult {
@@ -289,6 +291,8 @@ export class StageH3CandidateRenderUseCase {
       nominalDurationMs: prep.inspection.route.nominalDurationMs,
       frameCount: prep.frameCount,
       authorizationGrant: input.grant,
+      ...(input.ownerKind !== undefined ? { ownerKind: input.ownerKind } : {}),
+      ...(input.acceptanceRunId !== undefined ? { acceptanceRunId: input.acceptanceRunId } : {}),
       ...(route.routingMode === "frame_anchored" && prep.inspection.visualInputs.frameAnchor
         ? { approvedCandidateId: prep.inspection.visualInputs.frameAnchor.anchorCandidateId }
         : {})
@@ -393,7 +397,9 @@ export class StageH3CandidateRenderUseCase {
         selectedCandidateRevision:
           route.routingMode === "frame_anchored" ? snapshot.specRevision : undefined,
         seed,
-        createdReason: snapshot.status === "failed" ? "failure_recovery" : "initial_dispatch"
+        createdReason: snapshot.status === "failed" ? "failure_recovery" : "initial_dispatch",
+        ownerKind: input.ownerKind ?? "staging_experiment",
+        acceptanceRunId: input.acceptanceRunId
       });
     }
 

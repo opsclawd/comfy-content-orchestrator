@@ -17,6 +17,7 @@ import {
 import { SceneNotInProductionRunError } from "./scene-not-in-production-run-error.js";
 import { StaleProductionAttemptConflictError } from "./stale-production-attempt-conflict-error.js";
 import { attemptEnqueueAssemblyForAcceptedRun } from "./enqueue-delivery-assembly-for-accepted-run.js";
+import type { RealmAdmissionContext } from "../ports/realm-admission-context.js";
 
 export interface ProductionReviewInput extends ReviewAuditInput {
   readonly expectedSpecRevision: number;
@@ -29,7 +30,8 @@ export type ProductionRerenderInput = ProductionReviewInput;
 export class ProductionReviewUseCases {
   constructor(
     private readonly uow: UnitOfWork,
-    private readonly enqueueSceneProductionRender: EnqueueSceneProductionRenderUseCase
+    private readonly enqueueSceneProductionRender: EnqueueSceneProductionRenderUseCase,
+    private readonly realmAdmissionContext?: RealmAdmissionContext | undefined
   ) {}
 
   async acceptProduction(input: ProductionAcceptInput): Promise<ReviewExecutionResult> {
@@ -113,7 +115,9 @@ export class ProductionReviewUseCases {
       await context.reviewEvents.append(event);
       await context.scenes.save(scene);
 
-      await attemptEnqueueAssemblyForAcceptedRun(context, run);
+      await attemptEnqueueAssemblyForAcceptedRun(context, run, {
+        realmAdmissionContext: this.realmAdmissionContext
+      });
 
       return {
         isIdempotentReplay: false,

@@ -1,4 +1,4 @@
-import type { CreativeBrief } from "@cco/contracts";
+import type { CreativeBrief, SceneDurationAllocation } from "@cco/contracts";
 import type { CampaignId, ReferenceAssetId } from "@cco/domain";
 import type { PlanningModelClientPort } from "../ports/planning-model-client-port.js";
 import type { ReferenceAssetRepository } from "../ports/reference-asset-repository.js";
@@ -70,8 +70,8 @@ export class PlanCampaignBeatSheetUseCase {
       );
     }
 
-    const { clientId, externalProcessingPolicy, totalScenes } = await this.deps.uow.execute(
-      async (ctx) => {
+    const { clientId, externalProcessingPolicy, totalScenes, allocations } =
+      await this.deps.uow.execute(async (ctx) => {
         if (ctx.campaigns === undefined) {
           throw new Error(
             "UnitOfWorkContext.campaigns is not configured for this UnitOfWork implementation."
@@ -90,13 +90,22 @@ export class PlanCampaignBeatSheetUseCase {
         if (client === undefined) {
           throw new ClientNotFoundError(campaign.clientId);
         }
+
+        let planAllocations: readonly SceneDurationAllocation[] | undefined = undefined;
+        if (ctx.durationPlans) {
+          const currentPlan = await ctx.durationPlans.findCurrentPlanByCampaignId(input.campaignId);
+          if (currentPlan) {
+            planAllocations = currentPlan.allocations;
+          }
+        }
+
         return {
           clientId: campaign.clientId,
           externalProcessingPolicy: client.externalProcessingPolicy,
-          totalScenes: campaign.totalScenes
+          totalScenes: campaign.totalScenes,
+          allocations: planAllocations
         };
-      }
-    );
+      });
 
     if (input.targetTotalDurationMs < totalScenes) {
       throw new CampaignBeatSheetValidationError(
@@ -127,7 +136,8 @@ export class PlanCampaignBeatSheetUseCase {
               maskSensitiveData: policy.sensitiveDataMasking,
               correctiveFeedback,
               targetEngine: input.targetEngine,
-              engineProfileId: input.engineProfileId
+              engineProfileId: input.engineProfileId,
+              allocations
             }),
           parseAndValidate: (rawText: string) => {
             const parsed = parsePlanningResponse(rawText);
@@ -136,7 +146,8 @@ export class PlanCampaignBeatSheetUseCase {
             }
             return validateCampaignBeatSheet(parsed.value, {
               totalScenes,
-              targetTotalDurationMs: input.targetTotalDurationMs
+              targetTotalDurationMs: input.targetTotalDurationMs,
+              allocations
             });
           }
         };

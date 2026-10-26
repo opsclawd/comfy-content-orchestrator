@@ -309,7 +309,7 @@ describe("Production Review Gate End-to-End Integration (#266)", () => {
     const runId = runsDb.rows[0]!.run_id;
     expect(runsDb.rows[0]!.status).toBe("dispatched");
     expect(runsDb.rows[0]!.assembly_job_id).toBeNull();
-    expect(runsDb.rows[0]!.expected_total_duration_ms).toBe(8000);
+    expect(runsDb.rows[0]!.expected_total_duration_ms).toBe(8084);
 
     // Verify #214 conditioned I2V profile identity on dispatched render jobs
     const jobsDb = await client.query<{

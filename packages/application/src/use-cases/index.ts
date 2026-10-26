@@ -102,3 +102,6 @@ export * from "./coa-report-query-use-cases.js";
 export * from "./claim-query-use-cases.js";
 export * from "./resolve-batch-evidence-dossier.js";
 export * from "./stage-h3-candidate-render.js";
+export * from "./deterministic-duration-feasibility.js";
+export * from "./replan-campaign.js";
+export * from "./operator-acceptance-run.js";

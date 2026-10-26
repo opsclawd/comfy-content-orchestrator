@@ -1,8 +1,10 @@
+import type { CampaignDurationPlan } from "@cco/contracts";
 import type { CampaignProductionRunSceneRecord, SceneId, ShotPlanId } from "@cco/domain";
 import type { UnitOfWork } from "../ports/unit-of-work.js";
 import { CampaignNotFoundError } from "./campaign-not-found-error.js";
 import { computeCampaignProductionRunFingerprint } from "./campaign-production-fingerprint.js";
 import type { EnqueueSceneProductionRenderUseCase } from "./enqueue-scene-production-render.js";
+import { mapProductionDuration } from "./map-production-duration.js";
 import type { PrepareSceneProductionInputsUseCase } from "./prepare-scene-production-inputs.js";
 import { ProductionInputFingerprintMismatchError } from "./production-input-fingerprint-mismatch-error.js";
 import {
@@ -183,10 +185,33 @@ export class ApproveSceneAndDispatchCampaignProductionUseCase {
 
       // 7. If ready, create production run and fan out jobs per scene
       const sortedScenes = [...scenes].sort((a, b) => a.sequenceIndex - b.sequenceIndex);
-      const expectedTotalDurationMs = sortedScenes.reduce(
-        (sum, s) => sum + s.snapshot().configuration.durationMs,
-        0
-      );
+
+      let currentPlan: CampaignDurationPlan | undefined;
+      if (context.durationPlans) {
+        currentPlan = await context.durationPlans.findCurrentPlanByCampaignId(campaignId);
+      }
+
+      const resolveSceneNominalDuration = (scene: (typeof sortedScenes)[number]): number => {
+        const snap = scene.snapshot();
+        if (currentPlan) {
+          const allocation = currentPlan.allocations.find((a) => a.ordinal === scene.sequenceIndex);
+          if (allocation) {
+            return allocation.nominalDurationMs;
+          }
+        }
+        const mapping = mapProductionDuration(snap.configuration.durationMs, {
+          profile: snap.configuration.engineProfileId,
+          engine: snap.configuration.engineProfileId
+        });
+        if (mapping.ok) {
+          return Math.round(mapping.nominalDurationMs);
+        }
+        return snap.configuration.durationMs;
+      };
+
+      const expectedTotalDurationMs =
+        currentPlan?.totalNominalDurationMs ??
+        Math.round(sortedScenes.reduce((sum, s) => sum + resolveSceneNominalDuration(s), 0));
 
       const fingerprintEntries = sortedScenes.map((s) => ({
         sceneId: s.id,
@@ -209,12 +234,14 @@ export class ApproveSceneAndDispatchCampaignProductionUseCase {
             sceneId: scene.id,
             runId: run.id
           });
+          const expectedDurationMs = resolveSceneNominalDuration(scene);
+
           runScenesToInsert.push({
             runId: run.id,
             sceneId: scene.id,
             specRevision: scene.snapshot().specRevision,
             sequenceIndex: scene.sequenceIndex,
-            expectedDurationMs: scene.snapshot().configuration.durationMs,
+            expectedDurationMs,
             productionJobId: renderResult.job.jobId,
             currentAttemptId: renderResult.attemptId,
             currentAttemptOrdinal: renderResult.attemptOrdinal

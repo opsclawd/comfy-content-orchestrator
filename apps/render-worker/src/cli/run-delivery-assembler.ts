@@ -4,12 +4,14 @@ import pg from "pg";
 const { Pool } = pg;
 import {
   AssembleDeliveryReel,
+  DefaultAssemblyPlanningEnvelopeReader,
+  type AssemblyPlanningEnvelopeReader,
   EnforceLicenseRouting,
   type GenerationManifestRepository,
   type MediaAssemblerPort,
   type ObjectStoragePort
 } from "@cco/application";
-import type { ComponentRef } from "@cco/contracts";
+import { type ComponentRef } from "@cco/contracts";
 import {
   FfmpegMediaAssemblerAdapter,
   JsonFileLicenseRegistryPort,
@@ -218,6 +220,7 @@ export interface DeliveryReelAssemblerOverrides {
   readonly generationManifestRepository?: GenerationManifestRepository | undefined;
   readonly objectStorage?: ObjectStoragePort | undefined;
   readonly mediaAssembler?: MediaAssemblerPort | undefined;
+  readonly envelopeReader?: AssemblyPlanningEnvelopeReader | undefined;
   readonly runtimeComponents?: readonly ComponentRef[] | undefined;
   readonly enforceLicenseRouting?: EnforceLicenseRouting | undefined;
   readonly assembleDeliveryReelUseCase?: AssembleDeliveryReel | undefined;
@@ -250,6 +253,9 @@ export async function createDeliveryReelAssembler(
   const enforceLicenseRouting =
     overrides?.enforceLicenseRouting ?? new EnforceLicenseRouting({ registry: licenseRegistry });
 
+  const envelopeReader = overrides?.envelopeReader ?? new DefaultAssemblyPlanningEnvelopeReader();
+  const envelope = await envelopeReader.getEnvelope();
+
   const mediaAssembler =
     overrides?.mediaAssembler ??
     new FfmpegMediaAssemblerAdapter({
@@ -258,6 +264,8 @@ export async function createDeliveryReelAssembler(
       workspaceRoot: config.assemblyWorkspaceRoot,
       outputBucket: config.s3DeliveryBucket,
       pythonPath: config.pythonPath,
+      maxStemCount: envelope.maxStemCount,
+      maxTotalDurationMs: envelope.maxExpectedTotalDurationMs,
       objectStorage
     });
 

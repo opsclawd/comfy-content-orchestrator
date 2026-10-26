@@ -1,4 +1,9 @@
-import { RenderProfileKeySchema, ScenePlannerResponseSchema } from "@cco/contracts";
+import {
+  isReleasedProductionProfileKey,
+  isStagingCandidateProfileKey,
+  RenderProfileKeySchema,
+  ScenePlannerResponseSchema
+} from "@cco/contracts";
 import {
   assertReferenceAssetSelectable,
   ArchivedReferenceBindingError,
@@ -76,14 +81,26 @@ export function validateSceneConfiguration(
     );
   }
 
-  // 3. Engine profile validation via canonical RenderProfileKeySchema
+  // 3. Engine profile validation via canonical RenderProfileKeySchema, or a
+  // released/staging-candidate H3 profile key (issue #426, F-53fc8d19):
+  // PlanCampaignStoryboardUseCase passes the duration plan allocation's
+  // profileSelection.profileKey - which may be a dynamically hash-keyed
+  // H3_RELEASE_... or H3_CANDIDATE_... key - through as targetEngineProfileId,
+  // so rejecting everything outside the 6 static legacy keys here would
+  // reject every released/candidate-profile scene configuration.
   const parsedProfile = RenderProfileKeySchema.safeParse(record.engineProfileId);
-  if (!parsedProfile.success) {
+  const engineProfileIdCandidate =
+    typeof record.engineProfileId === "string" ? record.engineProfileId : undefined;
+  if (
+    !parsedProfile.success &&
+    !isReleasedProductionProfileKey(engineProfileIdCandidate) &&
+    !isStagingCandidateProfileKey(engineProfileIdCandidate)
+  ) {
     throw new SceneConfigurationValidationError(
       `engineProfileId "${String(record.engineProfileId)}" is not a certified profile`
     );
   }
-  const engineProfileId = parsedProfile.data;
+  const engineProfileId = parsedProfile.success ? parsedProfile.data : engineProfileIdCandidate!;
 
   // 4. Duration validation
   if (
