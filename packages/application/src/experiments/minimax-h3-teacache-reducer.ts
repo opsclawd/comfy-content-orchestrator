@@ -296,6 +296,16 @@ export function reduceTeaCacheObservation(
       `Detected ${orphanOrDuplicateForwardCompletions} diffusion_model forward completion event(s) with no matching open span or already closed -- not trustworthy evidence of a real forward.`
     );
   }
+  if (openForwardSpanIds.size > 0) {
+    // A span_start with no matching span_end/failure means a forward was
+    // initiated (e.g. during an alleged cache hit, which should never
+    // start a real forward at all) and never resolved either way -- this
+    // must disqualify the observation rather than silently vanish because
+    // nothing ever counted it as a completion.
+    failureReasons.push(
+      `Detected ${openForwardSpanIds.size} diffusion_model forward span(s) that started but never closed (no matching span_end).`
+    );
+  }
   if (observedSessionIds.size > 1) {
     failureReasons.push(
       `Observed ${observedSessionIds.size} distinct TeaCache session IDs in one reduction window; session attribution is ambiguous.`

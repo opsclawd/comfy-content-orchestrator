@@ -4996,6 +4996,64 @@ describe("MiniMax-H3 Step Reduction Sampling Recipe Validation & Tampering Detec
       expect(validation.ok).toBe(true);
     });
 
+    it("prepares TeaCache + explicit --attention-variant dense offline, without a reachable live preflight target (issue #467)", async () => {
+      const store = createRealTemplateStore();
+      // A real preflight object whose live inspection fails/unavailable --
+      // this is what apps/render-worker/src/cli/experiment-minimax-h3.ts
+      // always constructs, and is exactly the "no isolated ComfyUI target
+      // reachable yet" offline-preparation scenario. "dense" is ComfyUI's
+      // intrinsic default attention backend and needs no external kernel
+      // verification the way sage/native-sol-attn/veda do, so declaring it
+      // explicitly alongside TeaCache (an allowed combination per the CLI's
+      // own validation) must not require this to succeed.
+      const unreachablePreflight: MinimaxH3TargetPreflightPort = {
+        checkTargetHost: async () => ({ ok: true }),
+        checkPortAvailable: async () => ({ ok: true }),
+        verifyCheckout: async () => ({ ok: true, revision: "55b6a9b1", nodesPresent: true }),
+        verifyModels: async () => ({ ok: true, resolvedPaths: {} }),
+        verifyDiskSpace: async () => ({ ok: true, freeGb: 100 }),
+        acquireGpuLock: async () => ({
+          acquired: true,
+          release: async () => {}
+        }),
+        verifyExperimentRuntime: async () => ({
+          ok: false,
+          status: "unknown",
+          blocker: "no reachable target",
+          adapterRegistered: false
+        }),
+        inspectEnvironmentIdentity: async () => ({
+          ok: false,
+          blocker: "no reachable target"
+        })
+      };
+      const service = new MinimaxH3ExperimentService(store, unreachablePreflight);
+
+      const { descriptor } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A cinematic shot of a person smiling warmly, natural lighting",
+        operatorLabel: "operator-01",
+        runId: "run-tc-dense-offline",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui-isolated-teacache",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        teacache: "raw-l1-v1",
+        teacacheThreshold: 0.1,
+        teacacheStartStep: 2,
+        teacacheEndStep: -2,
+        teacacheTotalSteps: 20,
+        attentionVariant: "dense"
+      });
+
+      const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
+      expect(descV2.teacacheRequest?.mode).toBe("raw-l1-v1");
+    });
+
     it("prepares and validates an isolated Ref2V experiment with TeaCache raw-l1-v1 against canonical templates", async () => {
       const store = createRealTemplateStore();
       const service = new MinimaxH3ExperimentService(store);

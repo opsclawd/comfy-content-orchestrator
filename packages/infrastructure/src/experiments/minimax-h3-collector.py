@@ -1741,119 +1741,135 @@ def _install_hooks_inner(collector: Collector):
                 buf = StepIntervalBuffer()
                 token_buf = _SAMPLING_STEP_CALL_BUFFER.set(buf)
 
-                # Inspect guider / model_patcher for TeaCache and diffusion_model
-                model_patcher = getattr(guider, "model_patcher", None)
-                if model_patcher is None:
-                    model_patcher = getattr(guider, "model", None)
-
-                teacache_config = None
-                if model_patcher is not None and hasattr(model_patcher, "model_options") and isinstance(model_patcher.model_options, dict):
-                    teacache_config = model_patcher.model_options.get("teacache_config")
-                if teacache_config is None and hasattr(guider, "model_options") and isinstance(guider.model_options, dict):
-                    teacache_config = guider.model_options.get("teacache_config")
-
-                base_model = getattr(model_patcher, "model", None) if model_patcher else None
-                if base_model is None:
-                    base_model = getattr(guider, "model", None)
-                diffusion_model = getattr(base_model, "diffusion_model", None) if base_model else None
-
-                # Hook diffusion_model.forward for independent forward counting
-                orig_diff_forward = getattr(diffusion_model, "forward", None) if diffusion_model else None
-                diff_forward_count = 0
+                # Everything from here through the real unbound_fn() call is
+                # inside one try/finally (started just below): diffusion_model
+                # hooking, TeaCache adapter verification/session setup, and
+                # guider.sample hooking all mutate shared/external state
+                # (monkey-patched forward, the active-session registry, the
+                # patched guider), and any of them can raise. A raise
+                # anywhere in this region must still run the same cleanup as
+                # a failure during the real sampler call -- otherwise a setup
+                # failure (e.g. a rejected nested-session activation, or a
+                # failed adapter digest check) leaks the monkey-patched
+                # diffusion_model.forward and/or the sampling-step buffer
+                # token into whatever runs next in this process.
+                orig_diff_forward = None
+                diffusion_model = None
                 tc_session = None
                 tc_token = None
-                if orig_diff_forward is not None and callable(orig_diff_forward):
-                    def hooked_diff_forward(*df_args, **df_kwargs):
-                        nonlocal diff_forward_count
-                        if tc_session is not None and getattr(tc_session, "is_evaluating_hit", False):
-                            tc_session.nested_forwards_on_hits += 1
-                        now_start = now_mono_ms()
-                        df_span_id = collector.next_span_id("diff_fwd")
-                        collector.emit(
-                            "sampling",
-                            "span_start",
-                            span_id=df_span_id,
-                            parent_span_id=sampler_span_id,
-                            monotonic_ms=now_start,
-                            metadata={"modelForwardCall": True, "phase": "diffusion_forward"}
-                        )
-                        try:
-                            res = orig_diff_forward(*df_args, **df_kwargs)
-                            diff_forward_count += 1
-                            collector.emit(
-                                "sampling",
-                                "span_end",
-                                span_id=df_span_id,
-                                parent_span_id=sampler_span_id,
-                                monotonic_ms=now_mono_ms(),
-                                outcome="success",
-                                metadata={"modelForwardCall": True, "phase": "diffusion_forward"}
-                            )
-                            return res
-                        except Exception as e:
-                            collector.emit(
-                                "sampling",
-                                "span_end",
-                                span_id=df_span_id,
-                                parent_span_id=sampler_span_id,
-                                monotonic_ms=now_mono_ms(),
-                                outcome="failed",
-                                error={"message": str(e), "exceptionType": type(e).__name__},
-                                metadata={"modelForwardCall": True, "phase": "diffusion_forward"}
-                            )
-                            raise
-                    diffusion_model.forward = hooked_diff_forward
+                tc_mod = None
+                orig_guider_sample = None
+                diff_forward_count = 0
+                control_session_id = None
 
-                # Setup TeaCache session if configured. This is deliberately
-                # fail-closed: if anything after a real session object exists
-                # raises (set_active_session's ownership check, advance_step's
-                # validation, or the emit below), we must not leave a session
-                # registered as active -- that would leak into every later
-                # render in this process and either permanently block the
-                # model_id (ownership guard) or let the dead session's stale
-                # state be read by an unrelated later run. On any failure here
-                # we unwind whatever was partially set up and re-raise rather
-                # than silently continuing without TeaCache.
-                tc_mod = _resolve_teacache_module(guider=guider, model_patcher=model_patcher)
-                tc_adapter_identity = None
-                if tc_mod is not None:
-                    tc_adapter_identity = _verify_teacache_adapter_identity(tc_mod)
-                    if teacache_config is not None and not tc_adapter_identity.get("verified"):
-                        raise RuntimeError(
-                            "TeaCache adapter identity verification failed: "
-                            f"{tc_adapter_identity}. Refusing to use an unverified/substituted "
-                            "adapter module for a configured TeaCache render."
+                try:
+                    # Inspect guider / model_patcher for TeaCache and diffusion_model
+                    model_patcher = getattr(guider, "model_patcher", None)
+                    if model_patcher is None:
+                        model_patcher = getattr(guider, "model", None)
+
+                    teacache_config = None
+                    if model_patcher is not None and hasattr(model_patcher, "model_options") and isinstance(model_patcher.model_options, dict):
+                        teacache_config = model_patcher.model_options.get("teacache_config")
+                    if teacache_config is None and hasattr(guider, "model_options") and isinstance(guider.model_options, dict):
+                        teacache_config = guider.model_options.get("teacache_config")
+
+                    base_model = getattr(model_patcher, "model", None) if model_patcher else None
+                    if base_model is None:
+                        base_model = getattr(guider, "model", None)
+                    diffusion_model = getattr(base_model, "diffusion_model", None) if base_model else None
+
+                    # Hook diffusion_model.forward for independent forward counting
+                    orig_diff_forward = getattr(diffusion_model, "forward", None) if diffusion_model else None
+                    if orig_diff_forward is not None and callable(orig_diff_forward):
+                        def hooked_diff_forward(*df_args, **df_kwargs):
+                            nonlocal diff_forward_count
+                            if tc_session is not None and getattr(tc_session, "is_evaluating_hit", False):
+                                tc_session.nested_forwards_on_hits += 1
+                            now_start = now_mono_ms()
+                            df_span_id = collector.next_span_id("diff_fwd")
+                            collector.emit(
+                                "sampling",
+                                "span_start",
+                                span_id=df_span_id,
+                                parent_span_id=sampler_span_id,
+                                monotonic_ms=now_start,
+                                metadata={"modelForwardCall": True, "phase": "diffusion_forward"}
+                            )
+                            try:
+                                res = orig_diff_forward(*df_args, **df_kwargs)
+                                diff_forward_count += 1
+                                collector.emit(
+                                    "sampling",
+                                    "span_end",
+                                    span_id=df_span_id,
+                                    parent_span_id=sampler_span_id,
+                                    monotonic_ms=now_mono_ms(),
+                                    outcome="success",
+                                    metadata={"modelForwardCall": True, "phase": "diffusion_forward"}
+                                )
+                                return res
+                            except Exception as e:
+                                collector.emit(
+                                    "sampling",
+                                    "span_end",
+                                    span_id=df_span_id,
+                                    parent_span_id=sampler_span_id,
+                                    monotonic_ms=now_mono_ms(),
+                                    outcome="failed",
+                                    error={"message": str(e), "exceptionType": type(e).__name__},
+                                    metadata={"modelForwardCall": True, "phase": "diffusion_forward"}
+                                )
+                                raise
+                        diffusion_model.forward = hooked_diff_forward
+
+                    # Setup TeaCache session if configured. This whole
+                    # region through the real unbound_fn() call below is
+                    # inside the single try/finally that starts above: any
+                    # raise here (an ownership-guard rejection, a failed
+                    # adapter digest check, or advance_step's validation) is
+                    # cleaned up by the same finally block that handles a
+                    # real sampling failure, instead of needing its own
+                    # separate unwind-and-reraise.
+                    tc_mod = _resolve_teacache_module(guider=guider, model_patcher=model_patcher)
+                    tc_adapter_identity = None
+                    if tc_mod is not None:
+                        tc_adapter_identity = _verify_teacache_adapter_identity(tc_mod)
+                        if teacache_config is not None and not tc_adapter_identity.get("verified"):
+                            raise RuntimeError(
+                                "TeaCache adapter identity verification failed: "
+                                f"{tc_adapter_identity}. Refusing to use an unverified/substituted "
+                                "adapter module for a configured TeaCache render."
+                            )
+                    if tc_mod is not None and teacache_config is not None:
+                        def on_tc_event(*cb_args, **cb_kwargs):
+                            evt_name = cb_kwargs.get("event", "unknown")
+                            collector.emit(
+                                "sampling",
+                                "point_event",
+                                span_id=collector.next_span_id("teacache-event"),
+                                parent_span_id=sampler_span_id,
+                                metadata={
+                                    "teacacheEvent": evt_name,
+                                    **cb_kwargs
+                                }
+                            )
+                        sigmas_list = sigmas.tolist() if hasattr(sigmas, "tolist") else list(sigmas) if isinstance(sigmas, (list, tuple)) else None
+                        session_id = collector.next_span_id("teacache_session")
+                        tc_thresh = teacache_config.get("rel_l1_thresh", teacache_config.get("threshold", 0.15))
+                        tc_start = teacache_config.get("start_step", 2)
+                        tc_end = teacache_config.get("end_step", -2)
+                        tc_total = teacache_config.get("total_steps", 20)
+                        tc_session = tc_mod.TeaCacheSession(
+                            session_id=session_id,
+                            model_id=teacache_config.get("model_id"),
+                            rel_l1_thresh=tc_thresh,
+                            start_step=tc_start,
+                            end_step=tc_end,
+                            total_steps=tc_total,
+                            sigmas=sigmas_list,
+                            event_callback=on_tc_event
                         )
-                if tc_mod is not None and teacache_config is not None:
-                    def on_tc_event(*cb_args, **cb_kwargs):
-                        evt_name = cb_kwargs.get("event", "unknown")
-                        collector.emit(
-                            "sampling",
-                            "point_event",
-                            span_id=collector.next_span_id("teacache-event"),
-                            parent_span_id=sampler_span_id,
-                            metadata={
-                                "teacacheEvent": evt_name,
-                                **cb_kwargs
-                            }
-                        )
-                    sigmas_list = sigmas.tolist() if hasattr(sigmas, "tolist") else list(sigmas) if isinstance(sigmas, (list, tuple)) else None
-                    session_id = collector.next_span_id("teacache_session")
-                    tc_thresh = teacache_config.get("rel_l1_thresh", teacache_config.get("threshold", 0.15))
-                    tc_start = teacache_config.get("start_step", 2)
-                    tc_end = teacache_config.get("end_step", -2)
-                    tc_total = teacache_config.get("total_steps", 20)
-                    tc_session = tc_mod.TeaCacheSession(
-                        session_id=session_id,
-                        model_id=teacache_config.get("model_id"),
-                        rel_l1_thresh=tc_thresh,
-                        start_step=tc_start,
-                        end_step=tc_end,
-                        total_steps=tc_total,
-                        sigmas=sigmas_list,
-                        event_callback=on_tc_event
-                    )
-                    try:
                         tc_token = tc_mod.set_active_session(tc_session)
                         tc_session.advance_step(0)
                         collector.emit(
@@ -1876,103 +1892,108 @@ def _install_hooks_inner(collector: Collector):
                                 }
                             }
                         )
-                    except Exception:
-                        try:
-                            tc_session.cleanup()
-                        finally:
-                            if tc_token is not None:
-                                tc_mod.reset_active_session(tc_token)
-                            tc_session = None
-                            tc_token = None
-                        raise
-                elif tc_session is None and os.environ.get("CCO_EXPERIMENT_TEACACHE_MODE") == "off":
-                    collector.emit(
-                        "sampling",
-                        "point_event",
-                        span_id=collector.next_span_id("teacache-init"),
-                        parent_span_id=sampler_span_id,
-                        metadata={
-                            "teacacheEvent": "session_init",
-                            "effectiveConfig": {
-                                "mode": "off",
-                                "relL1Thresh": 0.15,
-                                "startStep": 2,
-                                "endStep": 18,
-                                "totalSteps": 20,
-                                "normalizedStartStep": 2,
-                                "normalizedEndStep": 18
+                    elif tc_session is None and os.environ.get("CCO_EXPERIMENT_TEACACHE_MODE") == "off":
+                        # A matched-control run exists specifically to prove
+                        # an apples-to-apples comparison against the
+                        # candidate -- it must enforce the same loaded-
+                        # adapter identity requirement the candidate path
+                        # does above, not silently skip it just because
+                        # teacache_config is None here.
+                        if tc_mod is not None and not tc_adapter_identity.get("verified"):
+                            raise RuntimeError(
+                                "TeaCache adapter identity verification failed on matched-control "
+                                f"run: {tc_adapter_identity}. Refusing to certify a control run against "
+                                "an unverified/substituted adapter module."
+                            )
+                        control_session_id = collector.next_span_id("teacache_control_session")
+                        collector.emit(
+                            "sampling",
+                            "point_event",
+                            span_id=collector.next_span_id("teacache-init"),
+                            parent_span_id=sampler_span_id,
+                            metadata={
+                                "teacacheEvent": "session_init",
+                                "sessionId": control_session_id,
+                                "adapterIdentity": tc_adapter_identity,
+                                "effectiveConfig": {
+                                    "mode": "off",
+                                    "relL1Thresh": 0.15,
+                                    "startStep": 2,
+                                    "endStep": 18,
+                                    "totalSteps": 20,
+                                    "normalizedStartStep": 2,
+                                    "normalizedEndStep": 18
+                                }
                             }
-                        }
-                    )
+                        )
 
-                def step_callback(chain_cb):
-                    def cb(step, x0, x, total_s, *cb_args, **cb_kwargs):
-                        cur_idx = _parse_nonnegative_int(step)
-                        if cur_idx is not None:
-                            flush_step_buffer(cur_idx)
-                            if tc_session is not None:
-                                if cur_idx + 1 < tc_session.total_steps:
-                                    # Deliberately not caught: a session-state
-                                    # error here means TeaCache's step/cache
-                                    # invariants are already violated, and
-                                    # continuing to sample with a corrupted
-                                    # session would silently serve wrong
-                                    # cached output. Fail the render instead.
-                                    tc_session.advance_step(cur_idx + 1)
-                            if cur_idx not in state["seen_steps"]:
-                                state["seen_steps"].add(cur_idx)
-                                now = now_mono_ms()
-                                span_id = collector.next_span_id("step")
-                                collector.emit(
-                                    "sampling_step",
-                                    "span_start",
-                                    span_id=span_id,
-                                    parent_span_id=sampler_span_id,
-                                    monotonic_ms=now,
-                                    step_index=cur_idx
-                                )
-                                collector.emit(
-                                    "sampling_step",
-                                    "span_end",
-                                    span_id=span_id,
-                                    parent_span_id=sampler_span_id,
-                                    monotonic_ms=now,
-                                    step_index=cur_idx,
-                                    outcome="success"
-                                )
+                    def step_callback(chain_cb):
+                        def cb(step, x0, x, total_s, *cb_args, **cb_kwargs):
+                            cur_idx = _parse_nonnegative_int(step)
+                            if cur_idx is not None:
+                                flush_step_buffer(cur_idx)
+                                if tc_session is not None:
+                                    if cur_idx + 1 < tc_session.total_steps:
+                                        # Deliberately not caught: a session-state
+                                        # error here means TeaCache's step/cache
+                                        # invariants are already violated, and
+                                        # continuing to sample with a corrupted
+                                        # session would silently serve wrong
+                                        # cached output. Fail the render instead.
+                                        tc_session.advance_step(cur_idx + 1)
+                                if cur_idx not in state["seen_steps"]:
+                                    state["seen_steps"].add(cur_idx)
+                                    now = now_mono_ms()
+                                    span_id = collector.next_span_id("step")
+                                    collector.emit(
+                                        "sampling_step",
+                                        "span_start",
+                                        span_id=span_id,
+                                        parent_span_id=sampler_span_id,
+                                        monotonic_ms=now,
+                                        step_index=cur_idx
+                                    )
+                                    collector.emit(
+                                        "sampling_step",
+                                        "span_end",
+                                        span_id=span_id,
+                                        parent_span_id=sampler_span_id,
+                                        monotonic_ms=now,
+                                        step_index=cur_idx,
+                                        outcome="success"
+                                    )
 
-                        if chain_cb:
-                            return chain_cb(step, x0, x, total_s, *cb_args, **cb_kwargs)
-                    return cb
+                            if chain_cb:
+                                return chain_cb(step, x0, x, total_s, *cb_args, **cb_kwargs)
+                        return cb
 
-                orig_latent_cb = latent_image.get("callback", None) if isinstance(latent_image, dict) else None
-                if isinstance(latent_image, dict):
-                    latent_image = {**latent_image, "callback": step_callback(orig_latent_cb)}
+                    orig_latent_cb = latent_image.get("callback", None) if isinstance(latent_image, dict) else None
+                    if isinstance(latent_image, dict):
+                        latent_image = {**latent_image, "callback": step_callback(orig_latent_cb)}
 
-                orig_guider_sample = getattr(guider, "sample", None)
-                if orig_guider_sample:
-                    def hooked_guider_sample(*g_args, **g_kwargs):
-                        caller_cb = g_kwargs.get("callback", None)
-                        cb_is_pos = False
-                        cb_pos_idx = None
-                        if caller_cb is None and len(g_args) > 5:
-                            caller_cb = g_args[5]
-                            cb_is_pos = True
-                            cb_pos_idx = 5
+                    orig_guider_sample = getattr(guider, "sample", None)
+                    if orig_guider_sample:
+                        def hooked_guider_sample(*g_args, **g_kwargs):
+                            caller_cb = g_kwargs.get("callback", None)
+                            cb_is_pos = False
+                            cb_pos_idx = None
+                            if caller_cb is None and len(g_args) > 5:
+                                caller_cb = g_args[5]
+                                cb_is_pos = True
+                                cb_pos_idx = 5
 
-                        chained = step_callback(caller_cb or orig_latent_cb)
-                        if cb_is_pos and cb_pos_idx is not None:
-                            g_args_list = list(g_args)
-                            g_args_list[cb_pos_idx] = chained
-                            g_args = tuple(g_args_list)
-                        else:
-                            g_kwargs["callback"] = chained
+                            chained = step_callback(caller_cb or orig_latent_cb)
+                            if cb_is_pos and cb_pos_idx is not None:
+                                g_args_list = list(g_args)
+                                g_args_list[cb_pos_idx] = chained
+                                g_args = tuple(g_args_list)
+                            else:
+                                g_kwargs["callback"] = chained
 
-                        return orig_guider_sample(*g_args, **g_kwargs)
+                            return orig_guider_sample(*g_args, **g_kwargs)
 
-                    guider.sample = hooked_guider_sample
+                        guider.sample = hooked_guider_sample
 
-                try:
                     unbound_fn = getattr(orig_custom_execute, "__func__", orig_custom_execute)
                     res = unbound_fn(cls, noise, guider, sampler, sigmas, latent_image, *args, **kwargs)
                     collector.end_span(
@@ -2044,6 +2065,7 @@ def _install_hooks_inner(collector: Collector):
                             parent_span_id=sampler_span_id,
                             metadata={
                                 "teacacheSession": "end",
+                                "sessionId": control_session_id,
                                 "summary": {
                                     "mode": "off",
                                     "forwardCalls": diff_forward_count,

@@ -617,6 +617,35 @@ describe("minimax-h3-teacache-reducer", () => {
     expect(obs?.failureReason).toMatch(/range/i);
   });
 
+  it("rejects an unclosed diffusion_forward span started during an alleged cache hit (issue #467 adversarial probe)", () => {
+    // 19 real misses (19 closed forward spans) + 1 alleged hit at step 19
+    // that nonetheless starts a forward span and never closes it -- a
+    // forward beginning at all during a hit already contradicts "the
+    // forward was skipped", and an orphaned start must not silently vanish
+    // from the evidence just because nothing ever closed it.
+    const events = generateEvents({ skips: [19] });
+    events.push({
+      ...makeEvent(
+        "sampling",
+        "span_start",
+        { phase: "diffusion_forward", modelForwardCall: true, stepIndex: 19 },
+        1650
+      ),
+      spanId: "span-df-unclosed-hit"
+    });
+
+    const obs = reduceTeaCacheObservation({
+      events,
+      teacacheRequest: sampleRequest,
+      expectedRunId: "run-1",
+      expectedAttemptToken: "token-1"
+    });
+
+    expect(obs?.status).toBe("failed");
+    expect(obs?.coverage.complete).toBe(false);
+    expect(obs?.failureReason).toMatch(/never closed/i);
+  });
+
   it("rejects a run whose sampling span terminated with outcome 'failed'", () => {
     const events = generateEvents({ skips: [4, 5, 6] });
     // Flip the outer sampling span_end to a failure outcome.

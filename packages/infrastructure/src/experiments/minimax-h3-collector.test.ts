@@ -1754,6 +1754,93 @@ print("TEACACHE_SAMPLER_HOOK_OK")
       }
     });
 
+    it("restores diffusion_model.forward and the sampling-step buffer when TeaCache session setup itself raises (issue #467)", async () => {
+      setupSamplerAndConditioningMocks();
+      const teaCacheDir = resolve("experiments/minimax-h3-teacache");
+
+      // A rejected unallowlisted threshold makes TeaCacheSession's
+      // constructor raise -- this happens inside the single setup/execute
+      // try block, after diffusion_model.forward and the sampling-step
+      // buffer were already mutated. Previously, only the narrower
+      // set_active_session/advance_step region unwound on failure; a raise
+      // from session construction itself (or from anything else in this
+      // region) skipped that unwind entirely and left diffusion_model.forward
+      // monkey-patched and the buffer token unreset for whatever runs next
+      // in this process.
+      const script = `
+import sys
+sys.path.insert(0, ${JSON.stringify(teaCacheDir)})
+import teacache
+
+import comfy_extras.nodes_custom_sampler as custom_sampler
+
+class MockDiffusionModel:
+    def __init__(self):
+        self.forward = self._orig_forward
+    def _orig_forward(self, *a, **kw):
+        return "real_forward_output"
+
+class MockBaseModel:
+    def __init__(self):
+        self.diffusion_model = MockDiffusionModel()
+
+class MockModelPatcher:
+    def __init__(self):
+        self.model = MockBaseModel()
+        self.model_options = {
+            "teacache_config": {
+                "rel_l1_thresh": 0.33,  # not in SUPPORTED_THRESHOLDS -- raises in TeaCacheSession.__init__
+                "start_step": 2,
+                "end_step": -2,
+                "total_steps": 20,
+                "model_id": "mock-model-setup-fail"
+            }
+        }
+
+class MockGuider:
+    def __init__(self):
+        self.model_patcher = MockModelPatcher()
+    def sample(self, noise, latent_image, sampler, sigmas, callback=None):
+        raise AssertionError("sample() must never be reached -- setup should fail first")
+
+guider = MockGuider()
+diffusion_model_ref = guider.model_patcher.model.diffusion_model
+orig_forward_ref = diffusion_model_ref._orig_forward
+
+try:
+    custom_sampler.SamplerCustomAdvanced.execute("noise", guider, "sampler", [], {})
+    assert False, "Expected setup failure to propagate"
+except ValueError as e:
+    assert "rel_l1_thresh" in str(e), f"Unexpected error: {e}"
+
+# The real regression: diffusion_model.forward must be restored to the
+# original bound method, not left pointing at the now-orphaned hook.
+assert diffusion_model_ref.forward == orig_forward_ref, "diffusion_model.forward was not restored after setup failure!"
+assert diffusion_model_ref.forward("x") == "real_forward_output"
+
+print("SETUP_FAILURE_CLEANUP_OK")
+`;
+
+      const result = runCollectorWithScript(script);
+      if (result.status !== 0) {
+        console.error("STDOUT:", result.stdout, "STDERR:", result.stderr);
+      }
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("SETUP_FAILURE_CLEANUP_OK");
+
+      const samplingEnd = result.events.find(
+        (e) => e.phase === "sampling" && e.type === "span_end"
+      );
+      expect(samplingEnd?.outcome).toBe("failed");
+      expect(samplingEnd?.error?.message).toContain("rel_l1_thresh");
+
+      // No session_init/session_end was ever emitted for this failed-setup
+      // attempt, and no live TeaCacheSession should remain registered
+      // (proving the ownership registry itself didn't leak either).
+      const initEvents = result.events.filter((e) => e.metadata?.teacacheEvent === "session_init");
+      expect(initEvents.length).toBe(0);
+    });
+
     it("restores guider.sample even when SamplerCustomAdvanced execution raises an exception", async () => {
       setupSamplerAndConditioningMocks();
 

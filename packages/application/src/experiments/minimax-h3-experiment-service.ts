@@ -1721,7 +1721,19 @@ export class MinimaxH3ExperimentService {
         }
       }
 
-      if (this.preflight && attentionCatalogEntry) {
+      // "dense" is ComfyUI's intrinsic default attention backend -- it
+      // needs no external kernel presence/version verification the way
+      // sage/native-sol-attn/veda genuinely do, so it must not force a live
+      // preflight inspection. Without this, explicitly declaring
+      // --attention-variant dense alongside TeaCache (an allowed, documented
+      // combination per the CLI's own validation) unconditionally broke
+      // offline preparation whenever no live target was reachable, even
+      // though dense requires nothing from that target.
+      if (
+        this.preflight &&
+        attentionCatalogEntry &&
+        attentionCatalogEntry.variantName !== "dense"
+      ) {
         if (!envInspection || !envInspection.ok) {
           throw new Error(
             `Attention manifest for variant "${attentionCatalogEntry.variantName}" requires complete measured environment identity: ${envInspection?.blocker ?? "inspectEnvironmentIdentity failed or unavailable"}`
