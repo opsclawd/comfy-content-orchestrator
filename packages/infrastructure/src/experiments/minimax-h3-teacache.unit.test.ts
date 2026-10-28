@@ -759,6 +759,95 @@ print("SUCCESS")
       expect(res.stdout).toContain("SUCCESS");
     });
 
+    it("rejects a changed transformer_options.patches value even though transformer_options.sigmas is excluded from the fingerprint (issue #467)", () => {
+      const code = `
+import teacache
+
+class MockTensor:
+    def __init__(self):
+        self.shape = (1, 16, 20, 20)
+        self.dtype = "float32"
+        self.device = "cuda:0"
+    def detach(self): return self
+    def float(self): return self
+    def clone(self): return MockTensor()
+
+sigmas = list(range(21, 0, -1))
+sess = teacache.TeaCacheSession("s-transformer-patches", "m1", 0.15, 2, -2, 20, sigmas=sigmas)
+sess.advance_step(0)
+
+sess.evaluate(
+    lambda inp, **kw: MockTensor(),
+    {
+        "input": MockTensor(),
+        "timestep": 21.0,
+        "c": {"transformer_options": {"sigmas": [21.0], "patches": {"a": 1}}}
+    }
+)
+
+sess.advance_step(1)
+try:
+    # sigmas legitimately changes (tolerated), but patches changing too
+    # is a real conditioning-relevant change and must still be rejected --
+    # excluding sigmas from the fingerprint must not mean ignoring the
+    # rest of transformer_options.
+    sess.evaluate(
+        lambda inp, **kw: MockTensor(),
+        {
+            "input": MockTensor(),
+            "timestep": 20.0,
+            "c": {"transformer_options": {"sigmas": [20.0], "patches": {"a": 2}}}
+        }
+    )
+    assert False, "Expected RuntimeError: transformer_options.patches change must be rejected"
+except RuntimeError as e:
+    assert "Conditioning manifest changed mid-session" in str(e)
+
+print("SUCCESS")
+`;
+      const res = runPythonTest(code);
+      expect(res.status).toBe(0);
+      expect(res.stdout).toContain("SUCCESS");
+    });
+
+    it("rejects a forged transformer_options.sigmas that doesn't match this session's pinned schedule (issue #467)", () => {
+      const code = `
+import teacache
+
+class MockTensor:
+    def __init__(self):
+        self.shape = (1, 16, 20, 20)
+        self.dtype = "float32"
+        self.device = "cuda:0"
+    def detach(self): return self
+    def float(self): return self
+    def clone(self): return MockTensor()
+
+sigmas = list(range(21, 0, -1))
+sess = teacache.TeaCacheSession("s-forged-sigmas", "m1", 0.15, 2, -2, 20, sigmas=sigmas)
+sess.advance_step(0)
+sess.evaluate(
+    lambda inp, **kw: MockTensor(),
+    {"input": MockTensor(), "timestep": 21.0, "c": {"transformer_options": {"sigmas": [21.0]}}}
+)
+
+sess.advance_step(1)
+try:
+    sess.evaluate(
+        lambda inp, **kw: MockTensor(),
+        {"input": MockTensor(), "timestep": 20.0, "c": {"transformer_options": {"sigmas": [999]}}}
+    )
+    assert False, "Expected ValueError: forged transformer_options.sigmas must be rejected"
+except ValueError as e:
+    assert "does not match this session's pinned schedule" in str(e)
+
+print("SUCCESS")
+`;
+      const res = runPythonTest(code);
+      expect(res.status).toBe(0);
+      expect(res.stdout).toContain("SUCCESS");
+    });
+
     it("rejects an unsupported conditioning payload type instead of silently passing it through unverified (issue #467)", () => {
       const code = `
 import teacache

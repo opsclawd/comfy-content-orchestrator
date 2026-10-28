@@ -82,6 +82,7 @@ export function reduceTeaCacheObservation(
   const openForwardSpanIds = new Map<string, number | undefined>();
   let forwardStartedDuringHitCount = 0;
   let forwardStartEndStepMismatchCount = 0;
+  let missingAttributionCount = 0;
   const completedForwardSpanIds = new Set<string>();
   let orphanOrDuplicateForwardCompletions = 0;
   let failedForwardCount = 0;
@@ -275,22 +276,14 @@ export function reduceTeaCacheObservation(
               };
             }
           }
-        } else if (meta.mode === "raw-l1-v1" && typeof meta.relL1Thresh === "number") {
-          observedEffectiveConfig = {
-            mode: "raw-l1-v1",
-            relL1Thresh: meta.relL1Thresh,
-            startStep: typeof meta.startStep === "number" ? meta.startStep : 2,
-            endStep: typeof meta.endStep === "number" ? meta.endStep : -2,
-            totalSteps: 20,
-            normalizedStartStep: typeof meta.startStep === "number" ? meta.startStep : 2,
-            normalizedEndStep:
-              typeof meta.normalizedEndStep === "number"
-                ? meta.normalizedEndStep
-                : typeof meta.endStep === "number" && meta.endStep < 0
-                  ? 20 + meta.endStep
-                  : 18
-          };
         }
+        // Deliberately no further fallback here: an older, non-standard
+        // event shape (bare meta.mode/meta.relL1Thresh fields instead of
+        // the structured effectiveConfig object the real producer always
+        // emits) used to default any missing startStep/endStep to 2/-2 --
+        // fabricating unobserved configuration rather than leaving it
+        // null and letting the "missing observed effectiveConfig" check
+        // below correctly fail the run.
       }
 
       if (meta.teacacheSession === "end") {
@@ -307,6 +300,18 @@ export function reduceTeaCacheObservation(
             ? meta.step_index
             : undefined;
 
+      if (
+        (isSkip || isFull) &&
+        teacacheRequest.mode === "raw-l1-v1" &&
+        event.parentSpanId === undefined
+      ) {
+        // A decision event with no parentSpanId at all cannot be tied to
+        // this window's real sampler invocation -- treating "attribution
+        // absent" the same as "attribution matches" (rather than as
+        // suspicious) is exactly what let a probe with genuinely unlinked
+        // decisions still pass.
+        missingAttributionCount++;
+      }
       if (isSkip || isFull) {
         hasCacheEvents = true;
         if (stepIdx !== undefined) {
@@ -383,6 +388,13 @@ export function reduceTeaCacheObservation(
         meta.modelForwardCall === true
       ) {
         const spanKey = event.spanId ?? null;
+        if (
+          event.type === "span_start" &&
+          teacacheRequest.mode === "raw-l1-v1" &&
+          event.parentSpanId === undefined
+        ) {
+          missingAttributionCount++;
+        }
         if (event.type === "span_start") {
           if (spanKey) {
             if (openForwardSpanIds.has(spanKey)) {
@@ -459,6 +471,11 @@ export function reduceTeaCacheObservation(
   if (orphanOrDuplicateForwardCompletions > 0) {
     failureReasons.push(
       `Detected ${orphanOrDuplicateForwardCompletions} diffusion_model forward completion event(s) with no matching open span or already closed -- not trustworthy evidence of a real forward.`
+    );
+  }
+  if (missingAttributionCount > 0) {
+    failureReasons.push(
+      `Detected ${missingAttributionCount} decision/forward event(s) with no parentSpanId at all, so they cannot be tied to this window's real sampler invocation.`
     );
   }
   if (forwardStartedDuringHitCount > 0) {

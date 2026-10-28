@@ -98,8 +98,8 @@ describe("minimax-h3-teacache-reducer", () => {
 
     for (let s = 0; s < 20; s++) {
       const isSkip = skipSet.has(s);
-      events.push(
-        makeEvent(
+      events.push({
+        ...makeEvent(
           "sampling",
           "point_event",
           {
@@ -107,8 +107,9 @@ describe("minimax-h3-teacache-reducer", () => {
             stepIndex: s
           },
           1100 + s * 10
-        )
-      );
+        ),
+        parentSpanId: "span-1"
+      });
 
       if (!isSkip) {
         const fwdSpanId = `span-df-${s}`;
@@ -123,7 +124,8 @@ describe("minimax-h3-teacache-reducer", () => {
             },
             1103 + s * 10
           ),
-          spanId: fwdSpanId
+          spanId: fwdSpanId,
+          parentSpanId: "span-1"
         });
         events.push({
           ...makeEvent(
@@ -136,7 +138,8 @@ describe("minimax-h3-teacache-reducer", () => {
             },
             1105 + s * 10
           ),
-          spanId: fwdSpanId
+          spanId: fwdSpanId,
+          parentSpanId: "span-1"
         });
       }
     }
@@ -1077,5 +1080,69 @@ describe("minimax-h3-teacache-reducer", () => {
 
     expect(obs?.status).toBe("failed");
     expect(obs?.failureReason).toMatch(/session end event was not observed/i);
+  });
+
+  it("rejects decisions and forwards that carry no parentSpanId at all, even with a valid init/end and matching counts (issue #467 adversarial probe)", () => {
+    const events: MinimaxH3InstrumentationEvent[] = [
+      makeEvent("sampling", "span_start"),
+      {
+        ...makeEvent("sampling", "point_event", {
+          teacacheEvent: "session_init",
+          adapterIdentity: { verified: true, observedDigest: sampleRequest.adapterDigest },
+          effectiveConfig: {
+            mode: "raw-l1-v1",
+            relL1Thresh: 0.15,
+            startStep: 2,
+            endStep: -2,
+            totalSteps: 20,
+            normalizedStartStep: 2,
+            normalizedEndStep: 18
+          }
+        }),
+        parentSpanId: "span-1"
+      }
+    ];
+    // 20 decisions and their matching forward spans, entirely UNLINKED
+    // to the real sampler span (no parentSpanId on any of them) -- a
+    // probe demonstrating that "attribution absent" was being treated
+    // the same as "attribution matches".
+    for (let s = 0; s < 20; s++) {
+      events.push(
+        makeEvent("sampling", "point_event", { teacacheEvent: "cache_miss", stepIndex: s })
+      );
+      const fwdSpanId = `span-df-${s}`;
+      events.push({
+        ...makeEvent(
+          "sampling",
+          "span_start",
+          { phase: "diffusion_forward", modelForwardCall: true, stepIndex: s },
+          1000 + s
+        ),
+        spanId: fwdSpanId
+      });
+      events.push({
+        ...makeEvent(
+          "sampling",
+          "span_end",
+          { phase: "diffusion_forward", modelForwardCall: true, stepIndex: s },
+          1005 + s
+        ),
+        spanId: fwdSpanId
+      });
+    }
+    events.push({
+      ...makeEvent("sampling", "point_event", { teacacheSession: "end" }),
+      parentSpanId: "span-1"
+    });
+    events.push(makeEvent("sampling", "span_end"));
+
+    const obs = reduceTeaCacheObservation({
+      events,
+      teacacheRequest: sampleRequest,
+      expectedRunId: "run-1"
+    });
+
+    expect(obs?.status).toBe("failed");
+    expect(obs?.failureReason).toMatch(/no parentSpanId at all/i);
   });
 });

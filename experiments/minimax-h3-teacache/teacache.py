@@ -314,20 +314,65 @@ class TeaCacheSession:
             # changed payload on some key this session happened not to
             # special-case.
             #
-            # `transformer_options` is excluded deliberately, not an
-            # oversight: at the pinned ComfyUI core revision,
-            # comfy/samplers.py inserts the CURRENT TIMESTEP's schedule
-            # state into c.transformer_options.sigmas on every step, before
-            # ever calling this model_function_wrapper. That field is
-            # scheduler progress plumbing standard to every ComfyUI model,
-            # not conditioning identity -- it is EXPECTED to differ on every
-            # real step, and fingerprinting it would reject every genuine
-            # multi-step render at step 1 regardless of whether the actual
-            # conditioning (route, references, payload) ever changed.
+            # transformer_options.sigmas is the ONE field excluded from the
+            # fingerprint, not the whole of transformer_options: at the
+            # pinned ComfyUI core revision, comfy/samplers.py inserts the
+            # CURRENT TIMESTEP's schedule state into c.transformer_options.
+            # sigmas on every step before ever calling this
+            # model_function_wrapper -- standard scheduler progress
+            # plumbing, not conditioning identity, and EXPECTED to differ
+            # on every real step. Everything else under transformer_options
+            # (patches, and any other key) is still fingerprinted normally.
+            # sigmas itself is not merely ignored, though: it is validated
+            # against this session's own pinned schedule below, so a
+            # contradictory/forged value is still rejected even though it
+            # isn't part of the equality fingerprint.
             c = kwargs.get("c")
             c_identity: Optional[Dict[str, Any]] = None
             if isinstance(c, dict):
-                c_identity = {k: v for k, v in c.items() if k != "transformer_options"}
+                c_identity = dict(c)
+                raw_transformer_options = c.get("transformer_options")
+                if isinstance(raw_transformer_options, dict):
+                    reported_sigmas = raw_transformer_options.get("sigmas")
+                    if reported_sigmas is not None:
+                        # Whatever shape the real core passes (a bare
+                        # current-step value or a schedule array), its
+                        # OWN current entry must agree with this session's
+                        # pinned schedule at the current step -- the same
+                        # tolerance already used for the top-level
+                        # `timestep` kwarg. This catches a forged/
+                        # contradictory value (e.g. a probe-injected
+                        # sigmas=[999]) without presuming an exact,
+                        # unverified array shape/length for the real
+                        # per-step payload.
+                        first_reported = (
+                            reported_sigmas[0]
+                            if isinstance(reported_sigmas, (list, tuple)) and reported_sigmas
+                            else reported_sigmas
+                        )
+                        expected_current_sigma = (
+                            self.sigmas[self.step_idx] if self.sigmas else None
+                        )
+                        try:
+                            first_reported_val = float(first_reported)
+                        except (TypeError, ValueError):
+                            first_reported_val = None
+                        if (
+                            expected_current_sigma is None
+                            or first_reported_val is None
+                            or not math.isfinite(first_reported_val)
+                            or abs(first_reported_val - expected_current_sigma) > 1e-1
+                        ):
+                            raise ValueError(
+                                f"transformer_options.sigmas at step {self.step_idx} "
+                                f"(observed {first_reported!r}) does not match this session's "
+                                f"pinned schedule (expected ~{expected_current_sigma}) -- "
+                                "contradictory per-step scheduler metadata cannot be silently "
+                                "accepted."
+                            )
+                    c_identity["transformer_options"] = {
+                        k: v for k, v in raw_transformer_options.items() if k != "sigmas"
+                    }
             fingerprint = (
                 tuple(sorted(k for k in kwargs if k not in ("input", "timestep", "c"))),
                 _snapshot_for_fingerprint(c_identity) if c_identity is not None else None,

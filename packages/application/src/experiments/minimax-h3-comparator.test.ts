@@ -5015,6 +5015,7 @@ describe("Service-generated Matched Pairs Admission and Comparison", () => {
           runId: "tc-prod-var",
           attemptToken: "token-var",
           spanId: `span-var-dec-${s}`,
+          parentSpanId: varSamplerSpanId,
           phase: "sampling",
           type: "point_event",
           boundarySource: "diagnostic",
