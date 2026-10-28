@@ -347,6 +347,77 @@ exec /usr/bin/python3 "$@"
     expect(res.status).toBe("verified");
   });
 
+  it("accepts CCOMiniMaxH3TeaCache on pinned adapter when adapter files match pinned digest", async () => {
+    const adapter = new CurrentPinExperimentRuntimeAdapter();
+    const manifestWithTeaCache: MinimaxH3RequiredRuntimeManifest = {
+      ...baseManifest,
+      coreRevision: PINNED_COMFYUI_CORE_REVISION,
+      requiredNodes: [{ name: "MiniMaxH3ImageToVideo" }, { name: "CCOMiniMaxH3TeaCache" }],
+      pythonPackages: [{ name: "json", version: "" }]
+    };
+
+    const res = await adapter.verify({
+      comfyUiDir: mockComfyDir,
+      pythonPath: mockPythonPath,
+      requiredRuntime: manifestWithTeaCache
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.status).toBe("verified");
+  });
+
+  it("rejects CCOMiniMaxH3TeaCache on pinned adapter when adapter files are tampered", async () => {
+    const adapter = new CurrentPinExperimentRuntimeAdapter();
+    const tamperedComfyDir = path.join(mockRootDir, "tampered-teacache-comfy-dir");
+    fs.mkdirSync(path.join(tamperedComfyDir, "comfy_extras"), { recursive: true });
+    fs.mkdirSync(path.join(tamperedComfyDir, "custom_nodes", "cco-minimax-h3-teacache"), {
+      recursive: true
+    });
+    fs.writeFileSync(
+      path.join(tamperedComfyDir, "comfy_extras", "nodes_minimax_h3.py"),
+      "class MiniMaxH3ImageToVideo:\n    INPUT_TYPES = {}\n"
+    );
+    // Write tampered node files
+    fs.writeFileSync(
+      path.join(tamperedComfyDir, "custom_nodes", "cco-minimax-h3-teacache", "nodes.py"),
+      "class CCOMiniMaxH3TeaCacheNode:\n    INPUT_TYPES = {}\n"
+    );
+    fs.writeFileSync(
+      path.join(tamperedComfyDir, "custom_nodes", "cco-minimax-h3-teacache", "__init__.py"),
+      "# tampered\n"
+    );
+    fs.writeFileSync(
+      path.join(tamperedComfyDir, "custom_nodes", "cco-minimax-h3-teacache", "teacache.py"),
+      "# tampered\n"
+    );
+
+    execSync("git init -b main", { cwd: tamperedComfyDir });
+    execSync('git config user.email "test@test.com"', { cwd: tamperedComfyDir });
+    execSync('git config user.name "Test"', { cwd: tamperedComfyDir });
+    execSync("git add .", { cwd: tamperedComfyDir });
+    execSync('git commit -m "init"', { cwd: tamperedComfyDir });
+    fs.writeFileSync(
+      path.join(tamperedComfyDir, ".git", "HEAD"),
+      `${PINNED_COMFYUI_CORE_REVISION}\n`
+    );
+
+    const manifestWithTeaCache: MinimaxH3RequiredRuntimeManifest = {
+      ...baseManifest,
+      coreRevision: PINNED_COMFYUI_CORE_REVISION,
+      requiredNodes: [{ name: "CCOMiniMaxH3TeaCache" }]
+    };
+
+    const res = await adapter.verify({
+      comfyUiDir: tamperedComfyDir,
+      pythonPath: mockPythonPath,
+      requiredRuntime: manifestWithTeaCache
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.status).toBe("conflict");
+    expect(res.blocker).toContain("TeaCache local adapter digest mismatch");
+  });
+
   it("FastH3 isolated upgrade adapter verifies supported nodes", async () => {
     const registry = new ExperimentRuntimeRegistry();
     const adapter = registry.getAdapter(FASTH3_ISOLATED_CORE_REVISION);

@@ -638,6 +638,149 @@ VERIFIED_VEDA_EXCLUSION_REASONS = frozenset(
     _VEDA_EXCLUSION_SPEC.get("supportedExclusionReasons", ["full-attention layer", "full-attention step"])
 )
 
+def _resolve_teacache_module(guider=None, model_patcher=None):
+    # 1. Inspect model_patcher or guider for wrapped model
+    mp = model_patcher
+    if mp is None and guider is not None:
+        mp = getattr(guider, "model_patcher", None) or getattr(guider, "model", None)
+    if mp is not None:
+        opts = getattr(mp, "model_options", None)
+        if isinstance(opts, dict):
+            wrapper = opts.get("model_function_wrapper")
+            while hasattr(wrapper, "__wrapped__"):
+                wrapper = getattr(wrapper, "__wrapped__")
+            if wrapper is not None:
+                mod = getattr(wrapper, "_teacache_module", None)
+                if mod is not None and hasattr(mod, "TeaCacheSession"):
+                    return mod
+                fn_globals = getattr(wrapper, "__globals__", {})
+                mod = fn_globals.get("_teacache_mod") or fn_globals.get("teacache")
+                if mod is not None and hasattr(mod, "TeaCacheSession"):
+                    return mod
+
+    # 2. Check ComfyUI registered node classes if available
+    try:
+        import nodes as comfy_nodes
+        mappings = getattr(comfy_nodes, "NODE_CLASS_MAPPINGS", {})
+        for key in ("CCOMiniMaxH3TeaCache", "MiniMaxH3TeaCache"):
+            if key in mappings:
+                cls = mappings[key]
+                mod = getattr(cls, "_teacache_module", None)
+                if mod is not None and hasattr(mod, "TeaCacheSession"):
+                    return mod
+                cls_mod = sys.modules.get(cls.__module__)
+                if cls_mod is not None:
+                    mod = getattr(cls_mod, "_teacache_mod", None) or getattr(cls_mod, "teacache", None)
+                    if mod is not None and hasattr(mod, "TeaCacheSession"):
+                        return mod
+    except Exception:
+        pass
+
+    # 3. Search sys.modules for loaded adapter packages
+    for mod_name, mod in list(sys.modules.items()):
+        if mod is not None and hasattr(mod, "CCOMiniMaxH3TeaCacheNode"):
+            tc_mod = getattr(mod, "_teacache_module", None) or getattr(mod, "_teacache_mod", None) or getattr(mod, "teacache", None)
+            if tc_mod is not None and hasattr(tc_mod, "TeaCacheSession"):
+                return tc_mod
+
+    for mod_name, mod in list(sys.modules.items()):
+        if mod is not None and (mod_name.endswith(".teacache") or mod_name == "teacache"):
+            if hasattr(mod, "TeaCacheSession") and hasattr(mod, "get_active_session") and hasattr(mod, "set_active_session"):
+                return mod
+
+    # 4. Check custom_nodes directories for staged cco-minimax-h3-teacache
+    for base in [os.getcwd(), "/opt/comfyui-isolated-teacache"]:
+        cn_dir = os.path.join(base, "custom_nodes")
+        if os.path.isdir(cn_dir):
+            for entry in ["cco-minimax-h3-teacache", "ComfyUI-MiniMaxH3-TeaCache", "minimax-h3-teacache"]:
+                pkg_path = os.path.join(cn_dir, entry)
+                tc_file = os.path.join(pkg_path, "teacache.py")
+                if os.path.isfile(tc_file):
+                    try:
+                        import importlib.util
+                        spec = importlib.util.spec_from_file_location(f"custom_nodes_{entry.replace('-', '_')}_teacache", tc_file)
+                        if spec and spec.loader:
+                            mod = importlib.util.module_from_spec(spec)
+                            spec.loader.exec_module(mod)
+                            if hasattr(mod, "TeaCacheSession"):
+                                return mod
+                    except Exception:
+                        pass
+
+    # 5. Fallback import
+    try:
+        from experiments.minimax_h3_teacache import teacache
+        return teacache
+    except Exception:
+        pass
+    try:
+        import teacache
+        return teacache
+    except Exception:
+        pass
+    candidates = [
+        os.path.join(os.getcwd(), "experiments", "minimax-h3-teacache"),
+        os.path.join(os.path.dirname(__file__), "../../../../experiments/minimax-h3-teacache")
+    ]
+    for cdir in candidates:
+        norm = os.path.normpath(cdir)
+        if os.path.exists(norm) and norm not in sys.path:
+            sys.path.insert(0, norm)
+            try:
+                import teacache
+                return teacache
+            except Exception:
+                pass
+    return None
+
+# Pinned post-adaptation local-file digest for the staged TeaCache adapter
+# package, matching packages/contracts/src/minimax-h3-teacache.ts's
+# TEACACHE_LOCAL_ADAPTER_DIGEST exactly (same three files, same
+# json.dumps(sort_keys=True, separators=(",", ":")) canonicalization). Kept
+# here (rather than only checked statically pre-run by runtime-registry.ts)
+# so the digest of the module *actually resolved and bound* at sampling time
+# is itself verified -- a static pre-flight check cannot prove that a later
+# runtime resolution step didn't substitute a different, unverified copy.
+TEACACHE_LOCAL_ADAPTER_DIGEST = "0f5fa82271230dfe93567f7cbe07d8e1d5af13998f6efde68c3918c30e6673d7"
+
+
+def _compute_teacache_adapter_digest(package_dir: str) -> Optional[str]:
+    try:
+        file_hashes = {}
+        for fname in ("__init__.py", "nodes.py", "teacache.py"):
+            fpath = os.path.join(package_dir, fname)
+            if not os.path.isfile(fpath):
+                return None
+            with open(fpath, "rb") as f:
+                file_hashes[fname] = hashlib.sha256(f.read()).hexdigest()
+        payload = json.dumps(file_hashes, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    except Exception:
+        return None
+
+
+def _verify_teacache_adapter_identity(tc_mod) -> Dict[str, Any]:
+    """Hash the actually-resolved adapter module's directory and compare
+    against the pinned local-adapter digest. Returns a dict describing the
+    verification outcome; never raises (the caller decides how to act)."""
+    mod_file = getattr(tc_mod, "__file__", None)
+    if not mod_file:
+        return {"verified": False, "reason": "resolved_module_has_no___file__"}
+    package_dir = os.path.dirname(os.path.abspath(mod_file))
+    digest = _compute_teacache_adapter_digest(package_dir)
+    if digest is None:
+        return {"verified": False, "reason": "missing_adapter_files", "packageDir": package_dir}
+    if digest != TEACACHE_LOCAL_ADAPTER_DIGEST:
+        return {
+            "verified": False,
+            "reason": "digest_mismatch",
+            "packageDir": package_dir,
+            "observedDigest": digest,
+            "expectedDigest": TEACACHE_LOCAL_ADAPTER_DIGEST
+        }
+    return {"verified": True, "packageDir": package_dir, "observedDigest": digest}
+
+
 def extract_layer_and_step(args, kwargs):
     layer = None
     step = None
@@ -1284,6 +1427,14 @@ def register_capability_route(prompt_server, collector: Collector):
             except Exception:
                 pass
 
+            teacache_adapter_identity = None
+            try:
+                _tc_mod_probe = _resolve_teacache_module()
+                if _tc_mod_probe is not None:
+                    teacache_adapter_identity = _verify_teacache_adapter_identity(_tc_mod_probe)
+            except Exception:
+                pass
+
             all_hooks_attached = bool(installed_hooks and all(h.get("attached", False) for h in installed_hooks))
             if _HOOK_INSTALL_ERROR:
                 status_val = "failed"
@@ -1316,6 +1467,7 @@ def register_capability_route(prompt_server, collector: Collector):
                 "registeredNodes": registered_nodes,
                 "packageIdentities": package_identities,
                 "sourceIdentities": source_identities,
+                "teacacheAdapterIdentity": teacache_adapter_identity,
                 "runtimeVersions": {
                     "pythonVersion": python_ver,
                     "pythonExecutableHash": python_executable_hash,
@@ -1589,11 +1741,178 @@ def _install_hooks_inner(collector: Collector):
                 buf = StepIntervalBuffer()
                 token_buf = _SAMPLING_STEP_CALL_BUFFER.set(buf)
 
+                # Inspect guider / model_patcher for TeaCache and diffusion_model
+                model_patcher = getattr(guider, "model_patcher", None)
+                if model_patcher is None:
+                    model_patcher = getattr(guider, "model", None)
+
+                teacache_config = None
+                if model_patcher is not None and hasattr(model_patcher, "model_options") and isinstance(model_patcher.model_options, dict):
+                    teacache_config = model_patcher.model_options.get("teacache_config")
+                if teacache_config is None and hasattr(guider, "model_options") and isinstance(guider.model_options, dict):
+                    teacache_config = guider.model_options.get("teacache_config")
+
+                base_model = getattr(model_patcher, "model", None) if model_patcher else None
+                if base_model is None:
+                    base_model = getattr(guider, "model", None)
+                diffusion_model = getattr(base_model, "diffusion_model", None) if base_model else None
+
+                # Hook diffusion_model.forward for independent forward counting
+                orig_diff_forward = getattr(diffusion_model, "forward", None) if diffusion_model else None
+                diff_forward_count = 0
+                tc_session = None
+                tc_token = None
+                if orig_diff_forward is not None and callable(orig_diff_forward):
+                    def hooked_diff_forward(*df_args, **df_kwargs):
+                        nonlocal diff_forward_count
+                        if tc_session is not None and getattr(tc_session, "is_evaluating_hit", False):
+                            tc_session.nested_forwards_on_hits += 1
+                        now_start = now_mono_ms()
+                        df_span_id = collector.next_span_id("diff_fwd")
+                        collector.emit(
+                            "sampling",
+                            "span_start",
+                            span_id=df_span_id,
+                            parent_span_id=sampler_span_id,
+                            monotonic_ms=now_start,
+                            metadata={"modelForwardCall": True, "phase": "diffusion_forward"}
+                        )
+                        try:
+                            res = orig_diff_forward(*df_args, **df_kwargs)
+                            diff_forward_count += 1
+                            collector.emit(
+                                "sampling",
+                                "span_end",
+                                span_id=df_span_id,
+                                parent_span_id=sampler_span_id,
+                                monotonic_ms=now_mono_ms(),
+                                outcome="success",
+                                metadata={"modelForwardCall": True, "phase": "diffusion_forward"}
+                            )
+                            return res
+                        except Exception as e:
+                            collector.emit(
+                                "sampling",
+                                "span_end",
+                                span_id=df_span_id,
+                                parent_span_id=sampler_span_id,
+                                monotonic_ms=now_mono_ms(),
+                                outcome="failed",
+                                error={"message": str(e), "exceptionType": type(e).__name__},
+                                metadata={"modelForwardCall": True, "phase": "diffusion_forward"}
+                            )
+                            raise
+                    diffusion_model.forward = hooked_diff_forward
+
+                # Setup TeaCache session if configured. This is deliberately
+                # fail-closed: if anything after a real session object exists
+                # raises (set_active_session's ownership check, advance_step's
+                # validation, or the emit below), we must not leave a session
+                # registered as active -- that would leak into every later
+                # render in this process and either permanently block the
+                # model_id (ownership guard) or let the dead session's stale
+                # state be read by an unrelated later run. On any failure here
+                # we unwind whatever was partially set up and re-raise rather
+                # than silently continuing without TeaCache.
+                tc_mod = _resolve_teacache_module(guider=guider, model_patcher=model_patcher)
+                tc_adapter_identity = None
+                if tc_mod is not None:
+                    tc_adapter_identity = _verify_teacache_adapter_identity(tc_mod)
+                    if teacache_config is not None and not tc_adapter_identity.get("verified"):
+                        raise RuntimeError(
+                            "TeaCache adapter identity verification failed: "
+                            f"{tc_adapter_identity}. Refusing to use an unverified/substituted "
+                            "adapter module for a configured TeaCache render."
+                        )
+                if tc_mod is not None and teacache_config is not None:
+                    def on_tc_event(*cb_args, **cb_kwargs):
+                        evt_name = cb_kwargs.get("event", "unknown")
+                        collector.emit(
+                            "sampling",
+                            "point_event",
+                            metadata={
+                                "teacacheEvent": evt_name,
+                                **cb_kwargs
+                            }
+                        )
+                    sigmas_list = sigmas.tolist() if hasattr(sigmas, "tolist") else list(sigmas) if isinstance(sigmas, (list, tuple)) else None
+                    session_id = collector.next_span_id("teacache_session")
+                    tc_thresh = teacache_config.get("rel_l1_thresh", teacache_config.get("threshold", 0.15))
+                    tc_start = teacache_config.get("start_step", 2)
+                    tc_end = teacache_config.get("end_step", -2)
+                    tc_total = teacache_config.get("total_steps", 20)
+                    tc_session = tc_mod.TeaCacheSession(
+                        session_id=session_id,
+                        model_id=teacache_config.get("model_id"),
+                        rel_l1_thresh=tc_thresh,
+                        start_step=tc_start,
+                        end_step=tc_end,
+                        total_steps=tc_total,
+                        sigmas=sigmas_list,
+                        event_callback=on_tc_event
+                    )
+                    try:
+                        tc_token = tc_mod.set_active_session(tc_session)
+                        tc_session.advance_step(0)
+                        collector.emit(
+                            "sampling",
+                            "point_event",
+                            metadata={
+                                "teacacheEvent": "session_init",
+                                "sessionId": tc_session.session_id,
+                                "adapterIdentity": tc_adapter_identity,
+                                "effectiveConfig": {
+                                    "mode": "raw-l1-v1",
+                                    "relL1Thresh": tc_session.rel_l1_thresh,
+                                    "startStep": tc_session.start_step,
+                                    "endStep": getattr(tc_session, "raw_end_step", tc_session.end_step),
+                                    "totalSteps": tc_session.total_steps,
+                                    "normalizedStartStep": tc_session.start_step,
+                                    "normalizedEndStep": tc_session.end_step
+                                }
+                            }
+                        )
+                    except Exception:
+                        try:
+                            tc_session.cleanup()
+                        finally:
+                            if tc_token is not None:
+                                tc_mod.reset_active_session(tc_token)
+                            tc_session = None
+                            tc_token = None
+                        raise
+                elif tc_session is None and os.environ.get("CCO_EXPERIMENT_TEACACHE_MODE") == "off":
+                    collector.emit(
+                        "sampling",
+                        "point_event",
+                        metadata={
+                            "teacacheEvent": "session_init",
+                            "effectiveConfig": {
+                                "mode": "off",
+                                "relL1Thresh": 0.15,
+                                "startStep": 2,
+                                "endStep": 18,
+                                "totalSteps": 20,
+                                "normalizedStartStep": 2,
+                                "normalizedEndStep": 18
+                            }
+                        }
+                    )
+
                 def step_callback(chain_cb):
                     def cb(step, x0, x, total_s, *cb_args, **cb_kwargs):
                         cur_idx = _parse_nonnegative_int(step)
                         if cur_idx is not None:
                             flush_step_buffer(cur_idx)
+                            if tc_session is not None:
+                                if cur_idx + 1 < tc_session.total_steps:
+                                    # Deliberately not caught: a session-state
+                                    # error here means TeaCache's step/cache
+                                    # invariants are already violated, and
+                                    # continuing to sample with a corrupted
+                                    # session would silently serve wrong
+                                    # cached output. Fail the render instead.
+                                    tc_session.advance_step(cur_idx + 1)
                             if cur_idx not in state["seen_steps"]:
                                 state["seen_steps"].add(cur_idx)
                                 now = now_mono_ms()
@@ -1668,6 +1987,68 @@ def _install_hooks_inner(collector: Collector):
                     )
                     raise
                 finally:
+                    if orig_diff_forward is not None and diffusion_model is not None:
+                        diffusion_model.forward = orig_diff_forward
+
+                    if tc_session is not None:
+                        try:
+                            summary = {
+                                "mode": "raw-l1-v1",
+                                "sessionId": tc_session.session_id,
+                                "forwardCalls": tc_session.forward_calls_count,
+                                "cacheHits": tc_session.cache_hits_count,
+                                "totalSteps": tc_session.total_steps,
+                                "nestedForwardsOnHits": tc_session.nested_forwards_on_hits,
+                                "effectiveConfig": {
+                                    "mode": "raw-l1-v1",
+                                    "relL1Thresh": tc_session.rel_l1_thresh,
+                                    "startStep": tc_session.start_step,
+                                    "endStep": getattr(tc_session, "raw_end_step", tc_session.end_step),
+                                    "totalSteps": tc_session.total_steps,
+                                    "normalizedStartStep": tc_session.start_step,
+                                    "normalizedEndStep": tc_session.end_step
+                                }
+                            }
+                            collector.emit(
+                                "sampling",
+                                "point_event",
+                                metadata={
+                                    "teacacheSession": "end",
+                                    "summary": summary,
+                                    "teacacheSummary": {
+                                        "status": "verified" if tc_session.cache_hits_count > 0 else "no_op",
+                                        "forwardCallsRecorded": tc_session.forward_calls_count,
+                                        "cacheHitsRecorded": tc_session.cache_hits_count,
+                                        "modelForwardsRecorded": diff_forward_count,
+                                        "nestedForwardsOnHits": tc_session.nested_forwards_on_hits
+                                    }
+                                }
+                            )
+                        finally:
+                            tc_session.cleanup()
+                            if tc_token is not None and tc_mod is not None:
+                                tc_mod.reset_active_session(tc_token)
+                    elif os.environ.get("CCO_EXPERIMENT_TEACACHE_MODE") == "off":
+                        collector.emit(
+                            "sampling",
+                            "point_event",
+                            metadata={
+                                "teacacheSession": "end",
+                                "summary": {
+                                    "mode": "off",
+                                    "forwardCalls": diff_forward_count,
+                                    "cacheHits": 0
+                                },
+                                "teacacheSummary": {
+                                    "status": "verified",
+                                    "forwardCallsRecorded": diff_forward_count,
+                                    "cacheHitsRecorded": 0,
+                                    "modelForwardsRecorded": diff_forward_count,
+                                    "nestedForwardsOnHits": 0
+                                }
+                            }
+                        )
+
                     if buf is not None and buf.pending_calls:
                         with _ATTENTION_TRACKER._lock:
                             unflushed = len(buf.pending_calls)

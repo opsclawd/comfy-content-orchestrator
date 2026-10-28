@@ -55,13 +55,29 @@ import {
   type MinimaxH3CapabilityHandshake,
   STANDARD_MINIMAX_H3_HOOKS,
   MinimaxH3AttentionIdentityEnvelopeSchema,
-  satisfiesDriverConstraint
+  satisfiesDriverConstraint,
+  TEACACHE_UPSTREAM_COMMIT,
+  TEACACHE_ADAPTER_VERSION,
+  TEACACHE_LOCAL_ADAPTER_FILE_HASHES,
+  TEACACHE_LOCAL_ADAPTER_DIGEST,
+  computeLocalTeaCacheAdapterDigest,
+  validateTeaCacheParameters,
+  computeTeaCacheConfigDigest,
+  computeTeaCacheTopologyDigest,
+  type MinimaxH3TeaCacheConfig,
+  type MinimaxH3TeaCacheMode,
+  type MinimaxH3TeaCacheCatalogEntry,
+  type MinimaxH3TeaCacheObservation,
+  type MinimaxH3TeaCachePatchNode
 } from "@cco/contracts";
 import { reducePhaseAccounting } from "./minimax-h3-timing-reducer.js";
 import {
   deriveAttentionGraph,
   validateAttentionTopology
 } from "./minimax-h3-attention-topology.js";
+import { deriveTeaCacheGraph, validateTeaCacheTopology } from "./minimax-h3-teacache-topology.js";
+import { getTeaCacheCatalogEntry } from "./minimax-h3-teacache-catalog.js";
+import { reduceTeaCacheObservation } from "./minimax-h3-teacache-reducer.js";
 import {
   parseAttentionEvidence,
   resolveAttentionEvidence,
@@ -928,6 +944,70 @@ export class MinimaxH3ExperimentService {
       }
     }
 
+    const teacacheMode: MinimaxH3TeaCacheMode = options.teacache ?? "off";
+    const isTeaCache = teacacheMode === "raw-l1-v1";
+    const isTeaCacheMatchedControl = Boolean(options.teacacheMatchedControl);
+
+    if (isTeaCache && isTeaCacheMatchedControl) {
+      throw new Error(
+        "Cannot combine --teacache and --teacache-matched-control; choose either candidate or matched control."
+      );
+    }
+
+    const hasTeaCacheKnobs =
+      options.teacacheThreshold !== undefined ||
+      options.teacacheStartStep !== undefined ||
+      options.teacacheEndStep !== undefined ||
+      options.teacacheTotalSteps !== undefined;
+
+    if (isTeaCache && isTeaCacheMatchedControl) {
+      throw new Error(
+        "Cannot combine teacache raw-l1-v1 with teacacheMatchedControl; select either candidate or matched control."
+      );
+    }
+
+    if (!isTeaCache && hasTeaCacheKnobs) {
+      throw new Error(
+        "TeaCache parameter knobs (teacacheThreshold, teacacheStartStep, teacacheEndStep, teacacheTotalSteps) can only be specified when teacache is active (raw-l1-v1)."
+      );
+    }
+
+    if (isTeaCache) {
+      if (
+        options.teacacheThreshold === undefined ||
+        options.teacacheStartStep === undefined ||
+        options.teacacheEndStep === undefined ||
+        options.teacacheTotalSteps === undefined
+      ) {
+        throw new Error(
+          "Active TeaCache experiment requires explicit knobs: teacacheThreshold, teacacheStartStep, teacacheEndStep, and teacacheTotalSteps must all be specified."
+        );
+      }
+    }
+
+    if (isTeaCache || isTeaCacheMatchedControl) {
+      if (options.samplingRecipe !== undefined) {
+        throw new Error(
+          "Cannot specify teacache when using samplingRecipe; TeaCache experiments must use the base un-distilled model."
+        );
+      }
+      if (options.checkpointOverride !== undefined) {
+        throw new Error(
+          "Cannot specify checkpointOverride when using teacache; TeaCache experiments require the default pinned checkpoint."
+        );
+      }
+      if (options.attentionVariant !== undefined && options.attentionVariant !== "dense") {
+        throw new Error(
+          "Cannot combine TeaCache with non-dense attentionVariant; initial phase requires base dense attention."
+        );
+      }
+      if (options.stepOverride !== undefined && options.stepOverride !== 20) {
+        throw new Error(
+          "Cannot override stepOverride when using teacache; TeaCache experiments require exactly 20 steps."
+        );
+      }
+    }
+
     const isV2 =
       options.schemaVersion === 2 ||
       options.stepOverride !== undefined ||
@@ -935,7 +1015,9 @@ export class MinimaxH3ExperimentService {
       options.changedFactors !== undefined ||
       options.variantPurpose !== undefined ||
       options.attentionVariant !== undefined ||
-      options.samplingRecipe !== undefined;
+      options.samplingRecipe !== undefined ||
+      isTeaCache ||
+      isTeaCacheMatchedControl;
 
     const samplingRecipeName: MinimaxH3SamplingRecipeName | undefined = options.samplingRecipe;
     const samplingRecipe: MinimaxH3SamplingRecipe | undefined = samplingRecipeName
@@ -1022,6 +1104,31 @@ export class MinimaxH3ExperimentService {
 
     let derivedGraph = baseDerivedGraph;
     let attentionTopology: MinimaxH3AttentionTopology | undefined;
+    let teaCacheCatalogEntry: MinimaxH3TeaCacheCatalogEntry | undefined;
+    let teaCacheTopologyDigest: string | undefined;
+    let teaCachePatchNode: MinimaxH3TeaCachePatchNode | null = null;
+    let teaCacheConfig: MinimaxH3TeaCacheConfig | undefined;
+    let localAdapterDigest = TEACACHE_LOCAL_ADAPTER_DIGEST;
+
+    if (isTeaCache || isTeaCacheMatchedControl) {
+      const adapterDir = resolve(process.cwd(), "experiments/minimax-h3-teacache");
+      const observedHashes: Record<string, string> = {};
+      for (const [fName, expHash] of Object.entries(TEACACHE_LOCAL_ADAPTER_FILE_HASHES)) {
+        const p = resolve(adapterDir, fName);
+        if (!existsSync(p)) {
+          throw new Error(`TeaCache local adapter file "${fName}" not found at ${p}`);
+        }
+        const buf = await readFile(p);
+        const actual = createHash("sha256").update(buf).digest("hex");
+        if (actual !== expHash) {
+          throw new Error(
+            `TeaCache local adapter file hash mismatch for "${fName}": expected ${expHash}, computed ${actual}`
+          );
+        }
+        observedHashes[fName] = actual;
+      }
+      localAdapterDigest = computeLocalTeaCacheAdapterDigest(observedHashes);
+    }
 
     if (samplingRecipe) {
       derivedGraph = applySamplingRecipeToGraph({
@@ -1035,6 +1142,64 @@ export class MinimaxH3ExperimentService {
           `Sampling recipe topology validation failed for recipe "${samplingRecipe.name}":\n${recipeValidation.errors.join("\n")}`
         );
       }
+    } else if (isTeaCache) {
+      const tcThreshold = options.teacacheThreshold!;
+      const tcStartStep = options.teacacheStartStep!;
+      const tcEndStep = options.teacacheEndStep!;
+      const tcTotalSteps = options.teacacheTotalSteps!;
+
+      const tcValidation = validateTeaCacheParameters({
+        relL1Thresh: tcThreshold,
+        startStep: tcStartStep,
+        endStep: tcEndStep,
+        totalSteps: tcTotalSteps
+      });
+
+      teaCacheCatalogEntry = getTeaCacheCatalogEntry("teacache-raw-l1", route);
+
+      teaCacheConfig = {
+        mode: "raw-l1-v1" as const,
+        relL1Thresh: tcThreshold,
+        startStep: tcStartStep,
+        endStep: tcEndStep,
+        totalSteps: 20 as const,
+        normalizedStartStep: tcValidation.normalizedStartStep,
+        normalizedEndStep: tcValidation.normalizedEndStep
+      };
+
+      const { graph: tcGraph, patchNode } = deriveTeaCacheGraph({
+        baseWorkflow: baseDerivedGraph,
+        route,
+        config: teaCacheConfig
+      });
+      derivedGraph = tcGraph;
+      teaCachePatchNode = patchNode;
+
+      const tcTopoValidation = validateTeaCacheTopology(derivedGraph, {
+        expectedMode: "raw-l1-v1",
+        route,
+        expectedConfig: teaCacheConfig
+      });
+      if (!tcTopoValidation.valid) {
+        throw new Error(
+          `TeaCache topology validation failed:\n${tcTopoValidation.errors.join("\n")}`
+        );
+      }
+      teaCacheTopologyDigest = tcTopoValidation.topologyDigest;
+    } else if (isTeaCacheMatchedControl) {
+      teaCacheCatalogEntry = getTeaCacheCatalogEntry("matched-control", route);
+      derivedGraph = baseDerivedGraph;
+      const tcTopoValidation = validateTeaCacheTopology(derivedGraph, {
+        expectedMode: "off",
+        route,
+        expectedConfig: null
+      });
+      if (!tcTopoValidation.valid) {
+        throw new Error(
+          `TeaCache matched control topology validation failed:\n${tcTopoValidation.errors.join("\n")}`
+        );
+      }
+      teaCacheTopologyDigest = tcTopoValidation.topologyDigest;
     } else if (attentionVariant !== undefined && attentionCatalogEntry) {
       const fixturePath = getAttentionFixturePath(attentionVariant, options.fixturesDir);
       let fixtureRaw: unknown;
@@ -1090,13 +1255,25 @@ export class MinimaxH3ExperimentService {
     const derivedWorkflowCanonical = canonicalizeJson(derivedGraph);
     const derivedWorkflowDigest = sha256Hex(derivedWorkflowCanonical);
     const configDigest =
-      isV2 && options.attentionVariant !== undefined
-        ? computeAttentionConfigDigest({
+      isV2 && isTeaCache && teaCacheConfig
+        ? computeTeaCacheConfigDigest({
             workflowDigest: derivedWorkflowDigest,
             argv: effectiveArgv,
-            attentionVariant: options.attentionVariant
+            teacacheConfig: teaCacheConfig
           })
-        : derivedWorkflowDigest;
+        : isV2 && isTeaCacheMatchedControl
+          ? computeTeaCacheConfigDigest({
+              workflowDigest: derivedWorkflowDigest,
+              argv: effectiveArgv,
+              teacacheConfig: null
+            })
+          : isV2 && options.attentionVariant !== undefined
+            ? computeAttentionConfigDigest({
+                workflowDigest: derivedWorkflowDigest,
+                argv: effectiveArgv,
+                attentionVariant: options.attentionVariant
+              })
+            : derivedWorkflowDigest;
 
     const promptDigest = sha256Hex(prompt);
     const comparisonKey = computeComparisonKey({
@@ -1277,6 +1454,33 @@ export class MinimaxH3ExperimentService {
               licenseSourceRef: samplingRecipe.licensing.licenseSourceRef
             },
             rationale: `Sampling recipe checkpoint: ${samplingRecipe.name}`
+          });
+        }
+      }
+
+      if (isTeaCache && teaCacheConfig && teaCacheTopologyDigest) {
+        if (!declaredChanges.some((c) => c.path === "caching.configuration")) {
+          declaredChanges.push({
+            path: "caching.configuration",
+            before: {
+              mode: "off",
+              relL1Thresh: 0.15,
+              startStep: 2,
+              endStep: -2,
+              totalSteps: 20,
+              topologyDigest: computeTeaCacheTopologyDigest(null),
+              adapterVersion: TEACACHE_ADAPTER_VERSION
+            },
+            after: {
+              mode: "raw-l1-v1",
+              relL1Thresh: teaCacheConfig.relL1Thresh,
+              startStep: teaCacheConfig.startStep,
+              endStep: teaCacheConfig.endStep,
+              totalSteps: 20,
+              topologyDigest: teaCacheTopologyDigest,
+              adapterVersion: TEACACHE_ADAPTER_VERSION
+            },
+            rationale: `TeaCache timestep caching variant (threshold=${teaCacheConfig.relL1Thresh}, window=[${teaCacheConfig.normalizedStartStep}, ${teaCacheConfig.normalizedEndStep}])`
           });
         }
       }
@@ -1544,6 +1748,12 @@ export class MinimaxH3ExperimentService {
               : {})
           })
         : (recipeRequiredRuntime ?? baseRequiredRuntime);
+
+      const teaCacheRequiredRuntime: MinimaxH3RequiredRuntimeManifest = {
+        ...baseRequiredRuntime,
+        requiredNodes: [...baseRequiredRuntime.requiredNodes, { name: "CCOMiniMaxH3TeaCache" }]
+      };
+      const teaCacheRuntimeManifestDigest = sha256Hex(canonicalizeJson(teaCacheRequiredRuntime));
 
       const baseRuntimeManifestDigest = sha256Hex(canonicalizeJson(baseRequiredRuntime));
       const upgradedRuntimeManifestDigest = sha256Hex(canonicalizeJson(upgradedRequiredRuntime));
@@ -1832,47 +2042,69 @@ export class MinimaxH3ExperimentService {
           collectorDigest: genuineCollectorDigest,
           hookManifestDigest: samplingRecipe ? recipeHookManifestDigest : genuineHookManifestDigest
         },
-        compatibility: samplingRecipe
-          ? {
-              state:
-                samplingRecipe.requiredRuntimeRevision === PINNED_COMFYUI_CORE_REVISION
-                  ? ("supported" as const)
-                  : ("requires_isolated_upgrade" as const),
-              relativeToRuntimeManifestDigest: recipeRuntimeManifestDigest,
-              scope: `${route}-${samplingRecipe.name}`,
-              reasons: [
-                `Sampling recipe ${samplingRecipe.name} targeting revision ${samplingRecipe.requiredRuntimeRevision}`
-              ],
-              sources: samplingRecipe.sourceReferences
-            }
-          : options.attentionVariant !== undefined && attentionCatalogEntry
+        compatibility:
+          isTeaCache && teaCacheCatalogEntry
             ? {
-                state: attentionCatalogEntry.compatibilityState,
-                relativeToRuntimeManifestDigest:
-                  attentionCatalogEntry.comfyuiCoreRevision === PINNED_COMFYUI_CORE_REVISION
-                    ? baseRuntimeManifestDigest
-                    : upgradedRuntimeManifestDigest,
-                scope: attentionCatalogEntry.scope,
-                reasons: attentionCatalogEntry.blockers,
-                sources: attentionCatalogEntry.evidence
+                state: teaCacheCatalogEntry.compatibilityState,
+                relativeToRuntimeManifestDigest: teaCacheRuntimeManifestDigest,
+                scope: teaCacheCatalogEntry.scope,
+                reasons: teaCacheCatalogEntry.blockers,
+                sources: teaCacheCatalogEntry.evidence
               }
-            : {
-                state: "supported" as const,
-                relativeToRuntimeManifestDigest: baseRuntimeManifestDigest,
-                scope: `${route}-${validatedFrames}f-${options.stepOverride ?? 20}steps`,
-                reasons: ["Verified on pinned ComfyUI core revision 55b6a9b1"],
-                sources: [
-                  {
-                    url: "https://github.com/comfyanonymous/ComfyUI/commit/55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
-                    assertion: "Current pinned production commit"
+            : isTeaCacheMatchedControl
+              ? (() => {
+                  const mcEntry = getTeaCacheCatalogEntry("matched-control", route);
+                  return {
+                    state: mcEntry.compatibilityState,
+                    relativeToRuntimeManifestDigest: teaCacheRuntimeManifestDigest,
+                    scope: mcEntry.scope,
+                    reasons: mcEntry.blockers,
+                    sources: mcEntry.evidence
+                  };
+                })()
+              : samplingRecipe
+                ? {
+                    state:
+                      samplingRecipe.requiredRuntimeRevision === PINNED_COMFYUI_CORE_REVISION
+                        ? ("supported" as const)
+                        : ("requires_isolated_upgrade" as const),
+                    relativeToRuntimeManifestDigest: recipeRuntimeManifestDigest,
+                    scope: `${route}-${samplingRecipe.name}`,
+                    reasons: [
+                      `Sampling recipe ${samplingRecipe.name} targeting revision ${samplingRecipe.requiredRuntimeRevision}`
+                    ],
+                    sources: samplingRecipe.sourceReferences
                   }
-                ]
-              },
+                : options.attentionVariant !== undefined && attentionCatalogEntry
+                  ? {
+                      state: attentionCatalogEntry.compatibilityState,
+                      relativeToRuntimeManifestDigest:
+                        attentionCatalogEntry.comfyuiCoreRevision === PINNED_COMFYUI_CORE_REVISION
+                          ? baseRuntimeManifestDigest
+                          : upgradedRuntimeManifestDigest,
+                      scope: attentionCatalogEntry.scope,
+                      reasons: attentionCatalogEntry.blockers,
+                      sources: attentionCatalogEntry.evidence
+                    }
+                  : {
+                      state: "supported" as const,
+                      relativeToRuntimeManifestDigest: baseRuntimeManifestDigest,
+                      scope: `${route}-${validatedFrames}f-${options.stepOverride ?? 20}steps`,
+                      reasons: ["Verified on pinned ComfyUI core revision 55b6a9b1"],
+                      sources: [
+                        {
+                          url: "https://github.com/comfyanonymous/ComfyUI/commit/55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+                          assertion: "Current pinned production commit"
+                        }
+                      ]
+                    },
         requiredRuntime: samplingRecipe
           ? recipeRequiredRuntime!
-          : options.attentionVariant !== undefined
-            ? upgradedRequiredRuntime
-            : baseRequiredRuntime,
+          : isTeaCache || isTeaCacheMatchedControl
+            ? teaCacheRequiredRuntime
+            : options.attentionVariant !== undefined
+              ? upgradedRequiredRuntime
+              : baseRequiredRuntime,
         conditioning: {
           positivePrompt: {
             text: prompt,
@@ -1933,7 +2165,47 @@ export class MinimaxH3ExperimentService {
                 denseRegionPolicy: attentionCatalogEntry.denseRegionPolicy
               }
             }
-          : {})
+          : {}),
+        ...(isTeaCache && teaCacheConfig && teaCacheCatalogEntry && teaCachePatchNode
+          ? {
+              teacacheRequest: {
+                mode: "raw-l1-v1" as const,
+                relL1Thresh: teaCacheConfig.relL1Thresh,
+                startStep: teaCacheConfig.startStep,
+                endStep: teaCacheConfig.endStep,
+                totalSteps: 20 as const,
+                normalizedStartStep: teaCacheConfig.normalizedStartStep,
+                normalizedEndStep: teaCacheConfig.normalizedEndStep,
+                upstreamCommit: TEACACHE_UPSTREAM_COMMIT,
+                adapterVersion: TEACACHE_ADAPTER_VERSION,
+                adapterDigest: localAdapterDigest,
+                catalogDigest: teaCacheCatalogEntry.catalogDigest,
+                topologyDigest: teaCacheTopologyDigest!,
+                patchNode: teaCachePatchNode
+              }
+            }
+          : isTeaCacheMatchedControl
+            ? (() => {
+                const mcEntry = getTeaCacheCatalogEntry("matched-control", route);
+                return {
+                  teacacheRequest: {
+                    mode: "off" as const,
+                    relL1Thresh: 0.15,
+                    startStep: 2,
+                    endStep: -2,
+                    totalSteps: 20 as const,
+                    normalizedStartStep: 2,
+                    normalizedEndStep: 18,
+                    upstreamCommit: TEACACHE_UPSTREAM_COMMIT,
+                    adapterVersion: TEACACHE_ADAPTER_VERSION,
+                    adapterDigest: localAdapterDigest,
+                    catalogDigest: mcEntry.catalogDigest,
+                    topologyDigest: teaCacheTopologyDigest ?? computeTeaCacheTopologyDigest(null),
+                    patchNode: null
+                  }
+                };
+              })()
+            : {})
       };
 
       const descriptorDigest = computeDescriptorDigest(
@@ -2134,7 +2406,29 @@ export class MinimaxH3ExperimentService {
 
     if (descriptor.schemaVersion === 2) {
       const v2Desc = descriptor as MinimaxH3ExperimentDescriptorV2;
-      if (v2Desc.attentionRequest !== undefined) {
+      if (v2Desc.teacacheRequest !== undefined) {
+        const expectedConfigDigest = computeTeaCacheConfigDigest({
+          workflowDigest: descriptor.derivedWorkflowDigest,
+          argv: descriptor.configuredRunner.argv,
+          teacacheConfig:
+            v2Desc.teacacheRequest.mode === "off"
+              ? null
+              : {
+                  mode: v2Desc.teacacheRequest.mode,
+                  relL1Thresh: v2Desc.teacacheRequest.relL1Thresh,
+                  startStep: v2Desc.teacacheRequest.startStep,
+                  endStep: v2Desc.teacacheRequest.endStep,
+                  totalSteps: 20,
+                  normalizedStartStep: v2Desc.teacacheRequest.normalizedStartStep,
+                  normalizedEndStep: v2Desc.teacacheRequest.normalizedEndStep
+                }
+        });
+        if (descriptor.configDigest !== expectedConfigDigest) {
+          errors.push(
+            `Config digest mismatch: expected ${expectedConfigDigest}, got ${descriptor.configDigest}`
+          );
+        }
+      } else if (v2Desc.attentionRequest !== undefined) {
         const expectedConfigDigest = computeAttentionConfigDigest({
           workflowDigest: descriptor.derivedWorkflowDigest,
           argv: descriptor.configuredRunner.argv,
@@ -2475,6 +2769,115 @@ export class MinimaxH3ExperimentService {
         if (!recipeValidation.valid) {
           topologyValid = false;
           errors.push(...recipeValidation.errors);
+        }
+      } else if (descV2?.teacacheRequest) {
+        const isControl = descV2.teacacheRequest.mode === "off";
+        let expectedCatalogEntry: MinimaxH3TeaCacheCatalogEntry | undefined;
+        try {
+          expectedCatalogEntry = getTeaCacheCatalogEntry(
+            isControl ? "matched-control" : "teacache-raw-l1",
+            descriptor.route
+          );
+          if (descV2.teacacheRequest.catalogDigest !== expectedCatalogEntry.catalogDigest) {
+            evidenceValid = false;
+            errors.push(
+              `TeaCache catalog digest mismatch: expected "${expectedCatalogEntry.catalogDigest}", got "${descV2.teacacheRequest.catalogDigest}".`
+            );
+          }
+        } catch (err) {
+          evidenceValid = false;
+          errors.push(
+            `Failed to resolve expected TeaCache catalog entry: ${(err as Error).message}`
+          );
+        }
+
+        if (descV2.teacacheRequest.adapterDigest !== TEACACHE_LOCAL_ADAPTER_DIGEST) {
+          errors.push(
+            `TeaCache adapterDigest mismatch: expected ${TEACACHE_LOCAL_ADAPTER_DIGEST}, got ${descV2.teacacheRequest.adapterDigest}`
+          );
+        }
+
+        const observedAdapterHashes: Record<string, string> = {};
+        for (const [fName, expHash] of Object.entries(TEACACHE_LOCAL_ADAPTER_FILE_HASHES)) {
+          const p = resolve(process.cwd(), "experiments/minimax-h3-teacache", fName);
+          if (!existsSync(p)) {
+            errors.push(`TeaCache local adapter file "${fName}" not found at ${p}`);
+            continue;
+          }
+          const buf = await readFile(p);
+          const actual = createHash("sha256").update(buf).digest("hex");
+          if (actual !== expHash) {
+            errors.push(
+              `TeaCache local adapter file hash mismatch for "${fName}": expected ${expHash}, computed ${actual}`
+            );
+          }
+          observedAdapterHashes[fName] = actual;
+        }
+        const computedAdapterDigest = computeLocalTeaCacheAdapterDigest(observedAdapterHashes);
+        if (computedAdapterDigest !== descV2.teacacheRequest.adapterDigest) {
+          errors.push(
+            `TeaCache local adapter digest mismatch: expected ${descV2.teacacheRequest.adapterDigest}, computed ${computedAdapterDigest}`
+          );
+        }
+
+        const tcConfig = isControl
+          ? null
+          : {
+              mode: descV2.teacacheRequest.mode,
+              relL1Thresh: descV2.teacacheRequest.relL1Thresh,
+              startStep: descV2.teacacheRequest.startStep,
+              endStep: descV2.teacacheRequest.endStep,
+              totalSteps: 20 as const,
+              normalizedStartStep: descV2.teacacheRequest.normalizedStartStep,
+              normalizedEndStep: descV2.teacacheRequest.normalizedEndStep
+            };
+
+        if (isControl) {
+          expectedGraph = baseExpectedGraph;
+        } else {
+          try {
+            const { graph: tcExpectedGraph } = deriveTeaCacheGraph({
+              baseWorkflow: baseExpectedGraph,
+              route: descriptor.route,
+              config: tcConfig!
+            });
+            expectedGraph = tcExpectedGraph;
+          } catch (err) {
+            topologyValid = false;
+            errors.push(`Failed to derive expected TeaCache graph: ${(err as Error).message}`);
+          }
+        }
+
+        const tcValidation = validateTeaCacheTopology(config, {
+          expectedMode: descV2.teacacheRequest.mode,
+          route: descriptor.route,
+          expectedConfig: tcConfig
+        });
+        if (!tcValidation.valid) {
+          topologyValid = false;
+          errors.push(...tcValidation.errors);
+        }
+        if (tcValidation.topologyDigest !== descV2.teacacheRequest.topologyDigest) {
+          topologyValid = false;
+          errors.push(
+            `TeaCache topology digest mismatch: expected "${descV2.teacacheRequest.topologyDigest}", got "${tcValidation.topologyDigest}".`
+          );
+        }
+
+        if (descV2.requiredRuntime) {
+          const expectedDigest = sha256Hex(canonicalizeJson(descV2.requiredRuntime));
+          if (descV2.compatibility.relativeToRuntimeManifestDigest !== expectedDigest) {
+            errors.push(
+              `TeaCache relativeToRuntimeManifestDigest mismatch: expected ${expectedDigest}, got ${descV2.compatibility.relativeToRuntimeManifestDigest}`
+            );
+          }
+          if (
+            !descV2.requiredRuntime.requiredNodes.some((n) => n.name === "CCOMiniMaxH3TeaCache")
+          ) {
+            errors.push(
+              'TeaCache experiment requires "CCOMiniMaxH3TeaCache" in requiredRuntime.requiredNodes'
+            );
+          }
         }
       } else if (descV2?.attentionRequest) {
         let expectedCatalogEntry: MinimaxH3AttentionCatalogEntry | undefined;
@@ -2910,6 +3313,30 @@ export class MinimaxH3ExperimentService {
         executionBlocked = true;
         executionBlockers.push(
           `Attention variant "${descV2.attentionRequest.attentionVariant}" has pending security review.`
+        );
+      }
+    }
+
+    if (descV2?.teacacheRequest) {
+      const entry = getTeaCacheCatalogEntry("teacache-raw-l1", descriptor.route);
+      if (!entry.runnable) {
+        executionBlocked = true;
+        executionBlockers.push(
+          `TeaCache variant "${entry.variantName}" is candidate-only (runnable: false).`
+        );
+      }
+      if (entry.compatibilityState === "unsupported") {
+        executionBlocked = true;
+        executionBlockers.push(`TeaCache variant "${entry.variantName}" is unsupported.`);
+      }
+      if (entry.blockers && entry.blockers.length > 0) {
+        executionBlocked = true;
+        executionBlockers.push(...entry.blockers);
+      }
+      if (entry.licensing.securityReviewStatus === "pending") {
+        executionBlocked = true;
+        executionBlockers.push(
+          `TeaCache variant "${entry.variantName}" has pending security review.`
         );
       }
     }
@@ -3772,6 +4199,17 @@ export class MinimaxH3ExperimentService {
         });
       }
 
+      let teacacheObservation: MinimaxH3TeaCacheObservation | undefined;
+      if (descV2.teacacheRequest) {
+        teacacheObservation = reduceTeaCacheObservation({
+          events: phaseEvents,
+          teacacheRequest: descV2.teacacheRequest,
+          expectedRunId: descV2.runId,
+          expectedAttemptToken: attemptToken,
+          identityValidated: identityValidatedForAttention
+        });
+      }
+
       let preflightObservations: MinimaxH3ObservedProvenance | undefined;
       try {
         preflightObservations = await this.store.readJsonFile<MinimaxH3ObservedProvenance>(
@@ -3818,6 +4256,32 @@ export class MinimaxH3ExperimentService {
         effectiveStopReasons.push("attention_observation_missing");
       }
 
+      let teacacheFailed = false;
+      let teacacheFailureReason: string | undefined;
+
+      if (descV2.teacacheRequest && teacacheObservation) {
+        if (teacacheObservation.status === "failed") {
+          teacacheFailed = true;
+          teacacheFailureReason = `TeaCache failed: ${teacacheObservation.failureReason ?? "unknown failure"}`;
+          effectiveStopReasons.push(
+            `teacache_failed_${teacacheObservation.failureReason ?? "unknown"}`
+          );
+        }
+        if (!teacacheObservation.coverage.complete) {
+          teacacheFailed = true;
+          if (!teacacheFailureReason) {
+            teacacheFailureReason = !identityValidatedForAttention
+              ? "TeaCache measurement coverage incomplete: capability handshake was not independently validated"
+              : "TeaCache measurement coverage incomplete";
+          }
+          effectiveStopReasons.push("teacache_incomplete_coverage");
+        }
+      } else if (descV2.teacacheRequest && !teacacheObservation) {
+        teacacheFailed = true;
+        teacacheFailureReason = "Missing TeaCache observation for TeaCache experiment";
+        effectiveStopReasons.push("teacache_observation_missing");
+      }
+
       const isExplicitAttentionFailure =
         effectiveAttentionRequest &&
         attentionObservation &&
@@ -3825,14 +4289,21 @@ export class MinimaxH3ExperimentService {
           attentionObservation.status === "failed" ||
           Boolean(attentionObservation.missingKernelFailure));
 
-      if (attentionFailed) {
+      const isExplicitTeaCacheFailure =
+        descV2.teacacheRequest && teacacheObservation && teacacheObservation.status === "failed";
+
+      if (attentionFailed || teacacheFailed) {
         if (lifecycle !== "interrupted" && lifecycle !== "submission_unknown") {
-          if (executionStatus === "completed" || isExplicitAttentionFailure) {
+          if (
+            executionStatus === "completed" ||
+            isExplicitAttentionFailure ||
+            isExplicitTeaCacheFailure
+          ) {
             executionStatus = "failed";
             lifecycle = "failed";
           }
-          if (!engineError && attentionFailureReason) {
-            engineError = { message: attentionFailureReason };
+          if (!engineError && (attentionFailureReason || teacacheFailureReason)) {
+            engineError = { message: attentionFailureReason ?? teacacheFailureReason! };
           }
         }
       }
@@ -4581,13 +5052,36 @@ export class MinimaxH3ExperimentService {
                 }
               }
               return attnErrs;
+            })(),
+            ...(() => {
+              const tcErrs: string[] = [];
+              if (descV2.teacacheRequest && !teacacheObservation) {
+                tcErrs.push(
+                  "TeaCache observation evidence missing for experiment with teacacheRequest"
+                );
+                return tcErrs;
+              }
+              if (teacacheObservation) {
+                if (teacacheObservation.status === "failed") {
+                  tcErrs.push(
+                    `TeaCache failed: ${teacacheObservation.failureReason ?? "unknown failure"}`
+                  );
+                }
+                if (!teacacheObservation.coverage.complete) {
+                  tcErrs.push(
+                    `TeaCache measurement coverage incomplete: observed ${teacacheObservation.coverage.samplingCallsRecorded} sampling calls, ${teacacheObservation.coverage.modelForwardsRecorded} model forwards`
+                  );
+                }
+              }
+              return tcErrs;
             })()
           ]
         },
         compatibility: descV2.compatibility,
         phaseAccounting,
         instrumentationReport,
-        ...(attentionObservation ? { attentionObservation } : {})
+        ...(attentionObservation ? { attentionObservation } : {}),
+        ...(teacacheObservation ? { teacacheObservation } : {})
       };
 
       MinimaxH3ExperimentResultV2Schema.parse(reconstructedResultV2);
@@ -4653,6 +5147,15 @@ export class MinimaxH3ExperimentService {
       if (isAttentionExperiment && !hasModernAttentionContract) {
         throw new Error(
           "Execution rejected: attention experiment descriptor lacks required modern attentionRequest"
+        );
+      }
+      const isTeaCacheExperiment =
+        descV2.compatibility.scope.includes("teacache") ||
+        descV2.experimentVariant.changedFactors.some((f) => f.path === "caching.configuration");
+      const isTeaCacheMatchedControl = descV2.compatibility.scope.includes("matched-control");
+      if (isTeaCacheExperiment && !isTeaCacheMatchedControl && !descV2.teacacheRequest) {
+        throw new Error(
+          "Execution rejected: TeaCache experiment descriptor lacks required modern teacacheRequest"
         );
       }
     }
@@ -4928,6 +5431,19 @@ export class MinimaxH3ExperimentService {
         }
       }
 
+      if (descV2.teacacheRequest) {
+        const entry = getTeaCacheCatalogEntry("teacache-raw-l1", descV2.route);
+        if (entry && !entry.runnable) {
+          await writePreflightBlocker(
+            `TeaCache variant "${entry.variantName}" is non-runnable in catalog: ${entry.blockers.join("; ")}`,
+            "nonRunnableCatalogGuard"
+          );
+          throw new Error(
+            `Execution rejected: TeaCache variant "${entry.variantName}" is marked non-runnable`
+          );
+        }
+      }
+
       if (!this.preflight.verifyExperimentRuntime) {
         await writePreflightBlocker(
           "V2 runtime verifier is unavailable",
@@ -5098,6 +5614,13 @@ export class MinimaxH3ExperimentService {
           childEnv.CCO_EXPERIMENT_EXPECTED_ATTENTION_BACKEND =
             descV2.samplingRecipe.attentionTopology.backend;
           childEnv.CCO_EXPERIMENT_ALLOW_PLANNED_DENSE = "true";
+        }
+        if (descV2.teacacheRequest) {
+          childEnv.CCO_EXPERIMENT_TEACACHE_MODE = descV2.teacacheRequest.mode;
+          childEnv.CCO_EXPERIMENT_TEACACHE_THRESH = String(descV2.teacacheRequest.relL1Thresh);
+          childEnv.CCO_EXPERIMENT_TEACACHE_START_STEP = String(descV2.teacacheRequest.startStep);
+          childEnv.CCO_EXPERIMENT_TEACACHE_END_STEP = String(descV2.teacacheRequest.endStep);
+          childEnv.CCO_EXPERIMENT_TEACACHE_TOTAL_STEPS = String(descV2.teacacheRequest.totalSteps);
         }
         if (descV2.requiredRuntime?.pythonPackages) {
           childEnv.CCO_EXPERIMENT_REQUIRED_PACKAGES = descV2.requiredRuntime.pythonPackages

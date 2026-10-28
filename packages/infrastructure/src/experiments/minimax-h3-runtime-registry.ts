@@ -12,7 +12,9 @@ import {
   type MinimaxH3RequiredRuntimeManifest,
   type MinimaxH3ObservedProvenance,
   compareDottedVersions,
-  satisfiesDriverConstraint
+  satisfiesDriverConstraint,
+  TEACACHE_LOCAL_ADAPTER_DIGEST,
+  computeLocalTeaCacheAdapterDigest
 } from "@cco/contracts";
 
 const execFileAsync = promisify(execFile);
@@ -243,7 +245,8 @@ const NODE_SOURCE_FILES: Record<string, string> = {
   ModelSparseAttention: "comfy_extras/nodes_sparse_attention.py",
   VedaSparseAttention: "comfy_extras/nodes_sparse_attention.py",
   ModelAttentionBackend: "comfy_extras/nodes_model_advanced.py",
-  LoraLoaderModelOnly: "nodes.py"
+  LoraLoaderModelOnly: "nodes.py",
+  CCOMiniMaxH3TeaCache: "custom_nodes/ComfyUI-MiniMaxH3-TeaCache/nodes.py"
 };
 
 function extractClassBlock(
@@ -306,6 +309,71 @@ async function verifyRequiredNodeDefinitions(
   requiredNodes: ReadonlyArray<{ name: string }>
 ): Promise<{ ok: boolean; blocker?: string }> {
   for (const node of requiredNodes) {
+    if (node.name === "CCOMiniMaxH3TeaCache") {
+      const candidates = [
+        resolve(resolvedDir, "custom_nodes/cco-minimax-h3-teacache"),
+        resolve(resolvedDir, "custom_nodes/ComfyUI-MiniMaxH3-TeaCache"),
+        resolve(resolvedDir, "custom_nodes/minimax-h3-teacache"),
+        resolve(process.cwd(), "experiments/minimax-h3-teacache")
+      ];
+      let foundDir: string | null = null;
+      for (const cand of candidates) {
+        if (existsSync(cand) && existsSync(resolve(cand, "nodes.py"))) {
+          foundDir = cand;
+          break;
+        }
+      }
+      if (!foundDir) {
+        return {
+          ok: false,
+          blocker: `Required node "CCOMiniMaxH3TeaCache" source files not found in custom_nodes/ComfyUI-MiniMaxH3-TeaCache or experiments/minimax-h3-teacache.`
+        };
+      }
+      const fullPath = resolve(foundDir, "nodes.py");
+      try {
+        const content = await readFile(fullPath, "utf8");
+        const classBlock =
+          extractClassBlock(content, "CCOMiniMaxH3TeaCacheNode") ??
+          extractClassBlock(content, "CCOMiniMaxH3TeaCache");
+        const definesClassWithSchema = classBlock !== null && classHasSchema(classBlock);
+        const registersMapping = isNodeExplicitlyMapped(content, "CCOMiniMaxH3TeaCache");
+
+        if (!definesClassWithSchema && !registersMapping) {
+          return {
+            ok: false,
+            blocker: `${fullPath} does not define a schema-valid ComfyUI node class or register "CCOMiniMaxH3TeaCache" in NODE_CLASS_MAPPINGS.`
+          };
+        }
+
+        const requiredFiles = ["__init__.py", "nodes.py", "teacache.py"];
+        const observedHashes: Record<string, string> = {};
+        for (const rf of requiredFiles) {
+          const fPath = resolve(foundDir, rf);
+          if (!existsSync(fPath)) {
+            return {
+              ok: false,
+              blocker: `TeaCache adapter missing required file "${rf}" in ${foundDir}`
+            };
+          }
+          const buf = await readFile(fPath);
+          observedHashes[rf] = createHash("sha256").update(buf).digest("hex");
+        }
+        const digest = computeLocalTeaCacheAdapterDigest(observedHashes);
+        if (digest !== TEACACHE_LOCAL_ADAPTER_DIGEST) {
+          return {
+            ok: false,
+            blocker: `TeaCache local adapter digest mismatch in ${foundDir}: expected ${TEACACHE_LOCAL_ADAPTER_DIGEST}, computed ${digest}`
+          };
+        }
+      } catch (err) {
+        return {
+          ok: false,
+          blocker: `Failed to verify CCOMiniMaxH3TeaCache in ${foundDir}: ${(err as Error).message}`
+        };
+      }
+      continue;
+    }
+
     const relFile = NODE_SOURCE_FILES[node.name];
     if (!relFile) {
       return {
@@ -823,7 +891,11 @@ export class CurrentPinExperimentRuntimeAdapter implements ExperimentRuntimeAdap
       "MiniMaxH3ReferenceToVideo",
       "EmptyMiniMaxH3LatentAV"
     ]);
-    const SUPPORTED_NODES = new Set([...CANONICAL_H3_NODES, "LoraLoaderModelOnly"]);
+    const SUPPORTED_NODES = new Set([
+      ...CANONICAL_H3_NODES,
+      "LoraLoaderModelOnly",
+      "CCOMiniMaxH3TeaCache"
+    ]);
 
     return verifyRuntimeSubstrate(this, options, (requiredNodes) => {
       for (const node of requiredNodes) {
@@ -850,7 +922,8 @@ export class IsolatedUpgradeExperimentRuntimeAdapter implements ExperimentRuntim
     const CANONICAL_H3_NODES = [
       "MiniMaxH3ImageToVideo",
       "MiniMaxH3ReferenceToVideo",
-      "EmptyMiniMaxH3LatentAV"
+      "EmptyMiniMaxH3LatentAV",
+      "CCOMiniMaxH3TeaCache"
     ];
     this.supportedNodes = Array.from(new Set([...CANONICAL_H3_NODES, ...supportedNodes]));
   }

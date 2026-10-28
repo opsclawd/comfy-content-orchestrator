@@ -45,6 +45,12 @@ import {
   type MinimaxH3AttentionCatalogEntry,
   type MinimaxH3AttentionObservation
 } from "./minimax-h3-attention.js";
+import {
+  MinimaxH3TeaCacheRequestSchema,
+  MinimaxH3TeaCacheObservationSchema,
+  FactorChangeCachingConfigSummarySchema,
+  createEmptyTeaCacheObservation
+} from "./minimax-h3-teacache.js";
 
 export const MinimaxH3ExperimentDescriptorV1Schema = MinimaxH3ExperimentDescriptorSchema;
 export type MinimaxH3ExperimentDescriptorV1 = MinimaxH3ExperimentDescriptor;
@@ -1108,6 +1114,15 @@ export const FactorChangeSigmaShiftSchema = z
   })
   .strict();
 
+export const FactorChangeCachingConfigSchema = z
+  .object({
+    path: z.literal("caching.configuration"),
+    before: FactorChangeCachingConfigSummarySchema.nullable(),
+    after: FactorChangeCachingConfigSummarySchema.nullable(),
+    rationale: z.string().min(1).optional()
+  })
+  .strict();
+
 export const MinimaxH3FactorChangeSchema = z.discriminatedUnion("path", [
   FactorChangePositivePromptSchema,
   FactorChangeNegativePromptSchema,
@@ -1117,6 +1132,7 @@ export const MinimaxH3FactorChangeSchema = z.discriminatedUnion("path", [
   FactorChangeSamplingSettingsSchema,
   FactorChangeSigmaShiftSchema,
   FactorChangeAttentionConfigSchema,
+  FactorChangeCachingConfigSchema,
   FactorChangeMemoryOffloadSchema,
   FactorChangeDecodeConfigSchema,
   FactorChangeRuntimeManifestSchema
@@ -1711,7 +1727,8 @@ export const MinimaxH3ExperimentDescriptorV2Schema = z
     stepOverride: z.number().int().positive().max(100).nullable().optional(),
     checkpointOverride: z.enum(["ref2va", "fl2va"]).nullable().optional(),
     attentionRequest: MinimaxH3AttentionRequestSchema.optional(),
-    samplingRecipe: MinimaxH3SamplingRecipeSchema.optional()
+    samplingRecipe: MinimaxH3SamplingRecipeSchema.optional(),
+    teacacheRequest: MinimaxH3TeaCacheRequestSchema.optional()
   })
   .strict()
   .superRefine((val, ctx) => {
@@ -2269,6 +2286,37 @@ export const MinimaxH3ExperimentDescriptorV2Schema = z
         });
       }
     }
+
+    if (val.teacacheRequest && val.teacacheRequest.mode === "raw-l1-v1") {
+      if (val.samplingRecipe && val.samplingRecipe.name !== "canonical-base-20") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `TeaCache cannot be combined with non-canonical samplingRecipe "${val.samplingRecipe.name}" in initial phase`,
+          path: ["samplingRecipe"]
+        });
+      }
+      if (val.stepOverride !== null && val.stepOverride !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "TeaCache cannot be combined with stepOverride; base 20-step required",
+          path: ["stepOverride"]
+        });
+      }
+      if (val.checkpointOverride !== null && val.checkpointOverride !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "TeaCache cannot be combined with checkpointOverride; base checkpoint required",
+          path: ["checkpointOverride"]
+        });
+      }
+      if (val.attentionRequest && val.attentionRequest.attentionVariant !== "dense") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `TeaCache cannot be combined with accelerated attentionVariant "${val.attentionRequest.attentionVariant}" in initial phase`,
+          path: ["attentionRequest"]
+        });
+      }
+    }
   });
 export type MinimaxH3ExperimentDescriptorV2 = z.infer<typeof MinimaxH3ExperimentDescriptorV2Schema>;
 
@@ -2310,7 +2358,8 @@ export const MinimaxH3ExperimentResultV2Schema = z
     compatibility: MinimaxH3CompatibilityAssessmentSchema,
     phaseAccounting: MinimaxH3PhaseAccountingResultSchema,
     instrumentationReport: MinimaxH3InstrumentationReportSchema,
-    attentionObservation: MinimaxH3AttentionObservationSchema.optional()
+    attentionObservation: MinimaxH3AttentionObservationSchema.optional(),
+    teacacheObservation: MinimaxH3TeaCacheObservationSchema.optional()
   })
   .strict()
   .superRefine((val, ctx) => {
@@ -2360,6 +2409,70 @@ export const MinimaxH3ExperimentResultV2Schema = z
           message: `observedProvenance dispatchImplementation '${effImpl}' does not match attentionObservation dispatchImplementation '${actImpl}'`,
           path: ["attentionObservation", "dispatchImplementation"]
         });
+      }
+    }
+
+    if (val.teacacheObservation) {
+      if (val.teacacheObservation.status === "verified") {
+        if (!val.teacacheObservation.coverage?.complete) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "teacacheObservation with status 'verified' requires coverage.complete === true",
+            path: ["teacacheObservation", "coverage", "complete"]
+          });
+        }
+        if (
+          val.teacacheObservation.forwardCallsRecorded === null ||
+          val.teacacheObservation.cacheHitsRecorded === null
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "teacacheObservation with status 'verified' requires non-null forwardCallsRecorded and cacheHitsRecorded",
+            path: ["teacacheObservation", "forwardCallsRecorded"]
+          });
+        }
+        if (
+          val.teacacheObservation.coverage?.modelForwardsRecorded !==
+          val.teacacheObservation.forwardCallsRecorded
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "teacacheObservation with status 'verified' requires modelForwardsRecorded === forwardCallsRecorded",
+            path: ["teacacheObservation", "coverage", "modelForwardsRecorded"]
+          });
+        }
+        if (val.teacacheObservation.mode === "raw-l1-v1") {
+          if (val.teacacheObservation.cacheHitsRecorded === 0) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message:
+                "teacacheObservation with status 'verified' requires positive cacheHitsRecorded; 0 hits must be reported as 'no_op'",
+              path: ["teacacheObservation", "cacheHitsRecorded"]
+            });
+          }
+          if (val.teacacheObservation.effectiveConfig === null) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message:
+                "teacacheObservation with status 'verified' requires non-null effectiveConfig",
+              path: ["teacacheObservation", "effectiveConfig"]
+            });
+          }
+        }
+        if (
+          val.teacacheObservation.nestedForwardsOnHits !== null &&
+          val.teacacheObservation.nestedForwardsOnHits !== undefined &&
+          val.teacacheObservation.nestedForwardsOnHits > 0
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "teacacheObservation with status 'verified' cannot have nestedForwardsOnHits",
+            path: ["teacacheObservation", "nestedForwardsOnHits"]
+          });
+        }
       }
     }
   });
@@ -2565,6 +2678,7 @@ export function computeInvariantProjectionKey(options: {
     audioShift: number;
   };
   attentionTopologyDigest?: string;
+  teacacheTopologyDigest?: string;
   runtimeManifestDigest?: string;
   coreRevision?: string;
 }): string {
@@ -2611,6 +2725,9 @@ export function computeInvariantProjectionKey(options: {
     attentionTopology: declaredSet.has("attention.configuration")
       ? "<DECLARED_FACTOR_VARIATION>"
       : (options.attentionTopologyDigest ?? "default"),
+    cachingConfiguration: declaredSet.has("caching.configuration")
+      ? "<DECLARED_FACTOR_VARIATION>"
+      : (options.teacacheTopologyDigest ?? "default"),
     runtimeManifest: declaredSet.has("runtime.manifest")
       ? "<DECLARED_FACTOR_VARIATION>"
       : (options.runtimeManifestDigest ?? "default"),
@@ -2857,6 +2974,11 @@ export function createEmptyMinimaxH3MeasurementTemplateV2(
                 "Run has not executed; template initialized with empty measurements"
             }
           }
+        }
+      : {}),
+    ...(descriptor.teacacheRequest
+      ? {
+          teacacheObservation: createEmptyTeaCacheObservation(descriptor.teacacheRequest)
         }
       : {})
   };

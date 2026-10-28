@@ -21,8 +21,11 @@ import {
   type MinimaxH3ExperimentEvent,
   type MinimaxH3AnyExperimentDescriptor,
   type MinimaxH3AnyExperimentResult,
-  type MinimaxH3ObservedProvenance
+  type MinimaxH3ObservedProvenance,
+  type MinimaxH3InstrumentationEvent,
+  MinimaxH3ExperimentResultV2Schema
 } from "@cco/contracts";
+import { reduceTeaCacheObservation } from "./minimax-h3-teacache-reducer.js";
 import { sha256Hex, MinimaxH3ExperimentService } from "./minimax-h3-experiment-service.js";
 import type { MinimaxH3ExperimentStorePort } from "../ports/minimax-h3-experiment-ports.js";
 
@@ -4072,6 +4075,1076 @@ describe("Service-generated Matched Pairs Admission and Comparison", () => {
           r.includes('Declared factor "models.auxiliary"')
         )
       ).toBe(true);
+    });
+  });
+
+  describe("TeaCache Comparator Admission & Speedup Gating", () => {
+    it("admits matched baseline and TeaCache candidate pair with calculated speedup ratios", async () => {
+      const service = setupServiceWithTemplates();
+      const prompt = "A cinematic shot of a sunset over the ocean";
+
+      const { descriptor: baseDesc } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt,
+        operatorLabel: "operator",
+        runId: "tc-pair-base",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        teacacheMatchedControl: true,
+        inputManifestPath: "manifest-i2v.json"
+      });
+
+      const { descriptor: varDesc } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt,
+        operatorLabel: "operator",
+        runId: "tc-pair-var",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        teacache: "raw-l1-v1",
+        teacacheThreshold: 0.15,
+        teacacheStartStep: 2,
+        teacacheEndStep: -2,
+        teacacheTotalSteps: 20,
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json"
+      });
+
+      const baseResult = createCompletedResultV2(baseDesc as MinimaxH3ExperimentDescriptorV2, {
+        phaseAccounting: {
+          ...createCompletedResultV2(baseDesc as MinimaxH3ExperimentDescriptorV2).phaseAccounting,
+          status: "complete",
+          wholeAttemptWallMs: 420000,
+          samplingWallTimeMs: 380000
+        },
+        teacacheObservation: {
+          status: "verified",
+          mode: "off",
+          requestedConfig: null,
+          effectiveConfig: null,
+          totalSteps: 20,
+          forwardCallsRecorded: 20,
+          cacheHitsRecorded: 0,
+          nestedForwardsOnHits: 0,
+          coverage: {
+            samplingCallsRecorded: 1,
+            modelForwardsRecorded: 20,
+            complete: true
+          },
+          timings: {
+            samplingWallMs: 380000,
+            modelForwardElapsedMs: 350000,
+            decisionOverheadMs: 0,
+            timingUnavailableReason: null
+          },
+          failureReason: null
+        }
+      });
+
+      const varResult = createCompletedResultV2(varDesc as MinimaxH3ExperimentDescriptorV2, {
+        execution: {
+          ...createCompletedResultV2(varDesc as MinimaxH3ExperimentDescriptorV2).execution,
+          latencyMs: 280000
+        },
+        phaseAccounting: {
+          ...createCompletedResultV2(varDesc as MinimaxH3ExperimentDescriptorV2).phaseAccounting,
+          status: "complete",
+          wholeAttemptWallMs: 280000,
+          samplingWallTimeMs: 240000
+        },
+        teacacheObservation: {
+          status: "verified",
+          mode: "raw-l1-v1",
+          requestedConfig: {
+            mode: "raw-l1-v1",
+            relL1Thresh: 0.15,
+            startStep: 2,
+            endStep: -2,
+            totalSteps: 20,
+            normalizedStartStep: 2,
+            normalizedEndStep: 18
+          },
+          effectiveConfig: {
+            mode: "raw-l1-v1",
+            relL1Thresh: 0.15,
+            startStep: 2,
+            endStep: -2,
+            totalSteps: 20,
+            normalizedStartStep: 2,
+            normalizedEndStep: 18
+          },
+          totalSteps: 20,
+          forwardCallsRecorded: 14,
+          cacheHitsRecorded: 6,
+          nestedForwardsOnHits: 0,
+          coverage: {
+            samplingCallsRecorded: 1,
+            modelForwardsRecorded: 14,
+            complete: true
+          },
+          timings: {
+            samplingWallMs: 240000,
+            modelForwardElapsedMs: 220000,
+            decisionOverheadMs: 15,
+            timingUnavailableReason: null
+          },
+          failureReason: null
+        }
+      });
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baseDesc,
+        baselineResult: baseResult,
+        variantDescriptor: varDesc,
+        variantResult: varResult
+      });
+
+      expect(report.structuralAdmission.eligible).toBe(true);
+      expect(report.structuralAdmission.invariantProjectionKey).toBeTruthy();
+      expect(report.metricEligibility.samplingWallEligible).toBe(true);
+      expect(report.metrics?.samplingWallTimeRatio).toBeCloseTo(240000 / 380000, 2);
+      expect(report.metrics?.wallTimeRatio).toBeCloseTo(280000 / 420000, 2);
+    });
+
+    it("disqualifies speedup metrics when TeaCache observation status is no_op (0 cache hits)", async () => {
+      const service = setupServiceWithTemplates();
+      const prompt = "A cinematic shot of a sunset over the ocean";
+
+      const { descriptor: baseDesc } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt,
+        operatorLabel: "operator",
+        runId: "tc-noop-base",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        teacacheMatchedControl: true,
+        inputManifestPath: "manifest-i2v.json"
+      });
+
+      const { descriptor: varDesc } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt,
+        operatorLabel: "operator",
+        runId: "tc-noop-var",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        teacache: "raw-l1-v1",
+        teacacheThreshold: 0.05,
+        teacacheStartStep: 2,
+        teacacheEndStep: -2,
+        teacacheTotalSteps: 20,
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json"
+      });
+
+      const baseResult = createCompletedResultV2(baseDesc as MinimaxH3ExperimentDescriptorV2, {
+        teacacheObservation: {
+          status: "verified",
+          mode: "off",
+          requestedConfig: null,
+          effectiveConfig: null,
+          totalSteps: 20,
+          forwardCallsRecorded: 20,
+          cacheHitsRecorded: 0,
+          nestedForwardsOnHits: 0,
+          coverage: {
+            samplingCallsRecorded: 1,
+            modelForwardsRecorded: 20,
+            complete: true
+          },
+          timings: {
+            samplingWallMs: 380000,
+            modelForwardElapsedMs: 350000,
+            decisionOverheadMs: 0,
+            timingUnavailableReason: null
+          },
+          failureReason: null
+        }
+      });
+      const varResult = createCompletedResultV2(varDesc as MinimaxH3ExperimentDescriptorV2, {
+        teacacheObservation: {
+          status: "no_op",
+          mode: "raw-l1-v1",
+          requestedConfig: null,
+          effectiveConfig: null,
+          totalSteps: 20,
+          forwardCallsRecorded: 20,
+          cacheHitsRecorded: 0,
+          nestedForwardsOnHits: 0,
+          coverage: {
+            samplingCallsRecorded: 1,
+            modelForwardsRecorded: 20,
+            complete: true
+          },
+          timings: {
+            samplingWallMs: 380000,
+            modelForwardElapsedMs: 350000,
+            decisionOverheadMs: 15,
+            timingUnavailableReason: null
+          },
+          failureReason: null
+        }
+      });
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baseDesc,
+        baselineResult: baseResult,
+        variantDescriptor: varDesc,
+        variantResult: varResult
+      });
+
+      expect(report.metricEligibility.samplingWallEligible).toBe(false);
+      expect(report.metricEligibility.reasons.some((r) => r.includes("0 cache hits"))).toBe(true);
+      expect(report.metrics).toBeNull();
+    });
+
+    it("disqualifies speedup metrics when TeaCache observation records nested forward passes on hits", async () => {
+      const service = setupServiceWithTemplates();
+      const prompt = "A cinematic shot of a sunset over the ocean";
+
+      const { descriptor: baseDesc } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt,
+        operatorLabel: "operator",
+        runId: "tc-contam-base",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        teacacheMatchedControl: true,
+        inputManifestPath: "manifest-i2v.json"
+      });
+
+      const { descriptor: varDesc } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt,
+        operatorLabel: "operator",
+        runId: "tc-contam-var",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        teacache: "raw-l1-v1",
+        teacacheThreshold: 0.15,
+        teacacheStartStep: 2,
+        teacacheEndStep: -2,
+        teacacheTotalSteps: 20,
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json"
+      });
+
+      const baseResult = createCompletedResultV2(baseDesc as MinimaxH3ExperimentDescriptorV2, {
+        teacacheObservation: {
+          status: "verified",
+          mode: "off",
+          requestedConfig: null,
+          effectiveConfig: null,
+          totalSteps: 20,
+          forwardCallsRecorded: 20,
+          cacheHitsRecorded: 0,
+          nestedForwardsOnHits: 0,
+          coverage: {
+            samplingCallsRecorded: 1,
+            modelForwardsRecorded: 20,
+            complete: true
+          },
+          timings: {
+            samplingWallMs: 380000,
+            modelForwardElapsedMs: 350000,
+            decisionOverheadMs: 0,
+            timingUnavailableReason: null
+          },
+          failureReason: null
+        }
+      });
+      const varResult = createCompletedResultV2(varDesc as MinimaxH3ExperimentDescriptorV2, {
+        teacacheObservation: {
+          status: "verified",
+          mode: "raw-l1-v1",
+          requestedConfig: {
+            mode: "raw-l1-v1",
+            relL1Thresh: 0.15,
+            startStep: 2,
+            endStep: -2,
+            totalSteps: 20,
+            normalizedStartStep: 2,
+            normalizedEndStep: 18
+          },
+          effectiveConfig: {
+            mode: "raw-l1-v1",
+            relL1Thresh: 0.15,
+            startStep: 2,
+            endStep: -2,
+            totalSteps: 20,
+            normalizedStartStep: 2,
+            normalizedEndStep: 18
+          },
+          totalSteps: 20,
+          forwardCallsRecorded: 16,
+          cacheHitsRecorded: 6,
+          nestedForwardsOnHits: 2,
+          coverage: {
+            samplingCallsRecorded: 1,
+            modelForwardsRecorded: 16,
+            complete: true
+          },
+          timings: {
+            samplingWallMs: 300000,
+            modelForwardElapsedMs: 270000,
+            decisionOverheadMs: 15,
+            timingUnavailableReason: null
+          },
+          failureReason: null
+        }
+      });
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baseDesc,
+        baselineResult: baseResult,
+        variantDescriptor: varDesc,
+        variantResult: varResult
+      });
+
+      expect(report.metricEligibility.samplingWallEligible).toBe(false);
+      expect(
+        report.metricEligibility.reasons.some((r) => r.includes("nested forward passes"))
+      ).toBe(true);
+      expect(report.metrics).toBeNull();
+    });
+
+    it("disqualifies speedup metrics when TeaCache observation status is failed", async () => {
+      const service = setupServiceWithTemplates();
+      const prompt = "A cinematic shot of a sunset over the ocean";
+
+      const { descriptor: baseDesc } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt,
+        operatorLabel: "operator",
+        runId: "tc-failed-base",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        teacacheMatchedControl: true,
+        inputManifestPath: "manifest-i2v.json"
+      });
+
+      const { descriptor: varDesc } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt,
+        operatorLabel: "operator",
+        runId: "tc-failed-var",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        teacache: "raw-l1-v1",
+        teacacheThreshold: 0.15,
+        teacacheStartStep: 2,
+        teacacheEndStep: -2,
+        teacacheTotalSteps: 20,
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json"
+      });
+
+      const baseResult = createCompletedResultV2(baseDesc as MinimaxH3ExperimentDescriptorV2, {
+        teacacheObservation: {
+          status: "verified",
+          mode: "off",
+          requestedConfig: null,
+          effectiveConfig: null,
+          totalSteps: 20,
+          forwardCallsRecorded: 20,
+          cacheHitsRecorded: 0,
+          nestedForwardsOnHits: 0,
+          coverage: {
+            samplingCallsRecorded: 1,
+            modelForwardsRecorded: 20,
+            complete: true
+          },
+          timings: {
+            samplingWallMs: 380000,
+            modelForwardElapsedMs: 350000,
+            decisionOverheadMs: 0,
+            timingUnavailableReason: null
+          },
+          failureReason: null
+        }
+      });
+      const varResult = createCompletedResultV2(varDesc as MinimaxH3ExperimentDescriptorV2, {
+        teacacheObservation: {
+          status: "failed",
+          mode: "raw-l1-v1",
+          requestedConfig: null,
+          effectiveConfig: null,
+          totalSteps: 20,
+          forwardCallsRecorded: 5,
+          cacheHitsRecorded: 2,
+          nestedForwardsOnHits: 0,
+          coverage: {
+            samplingCallsRecorded: 1,
+            modelForwardsRecorded: 5,
+            complete: false
+          },
+          timings: {
+            samplingWallMs: null,
+            modelForwardElapsedMs: null,
+            decisionOverheadMs: null,
+            timingUnavailableReason: "Execution crashed"
+          },
+          failureReason: "Step mismatch during inference"
+        }
+      });
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baseDesc,
+        baselineResult: baseResult,
+        variantDescriptor: varDesc,
+        variantResult: varResult
+      });
+
+      expect(report.metricEligibility.samplingWallEligible).toBe(false);
+      expect(report.metrics).toBeNull();
+    });
+
+    it("disqualifies speedup metrics when matched control baseline lacks verified TeaCache observation", async () => {
+      const service = setupServiceWithTemplates();
+      const prompt = "A cinematic shot of a sunset over the ocean";
+
+      const { descriptor: baseDesc } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt,
+        operatorLabel: "operator",
+        runId: "tc-uninst-base",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        teacacheMatchedControl: true,
+        inputManifestPath: "manifest-i2v.json"
+      });
+
+      const { descriptor: varDesc } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt,
+        operatorLabel: "operator",
+        runId: "tc-uninst-var",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        teacache: "raw-l1-v1",
+        teacacheThreshold: 0.15,
+        teacacheStartStep: 2,
+        teacacheEndStep: -2,
+        teacacheTotalSteps: 20,
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json"
+      });
+
+      // Baseline lacks teacacheObservation
+      const baseResult = createCompletedResultV2(baseDesc as MinimaxH3ExperimentDescriptorV2);
+      delete (baseResult as { teacacheObservation?: unknown }).teacacheObservation;
+      const varResult = createCompletedResultV2(varDesc as MinimaxH3ExperimentDescriptorV2, {
+        teacacheObservation: {
+          status: "verified",
+          mode: "raw-l1-v1",
+          requestedConfig: {
+            mode: "raw-l1-v1",
+            relL1Thresh: 0.15,
+            startStep: 2,
+            endStep: -2,
+            totalSteps: 20,
+            normalizedStartStep: 2,
+            normalizedEndStep: 18
+          },
+          effectiveConfig: {
+            mode: "raw-l1-v1",
+            relL1Thresh: 0.15,
+            startStep: 2,
+            endStep: -2,
+            totalSteps: 20,
+            normalizedStartStep: 2,
+            normalizedEndStep: 18
+          },
+          totalSteps: 20,
+          forwardCallsRecorded: 14,
+          cacheHitsRecorded: 6,
+          nestedForwardsOnHits: 0,
+          coverage: {
+            samplingCallsRecorded: 1,
+            modelForwardsRecorded: 14,
+            complete: true
+          },
+          timings: {
+            samplingWallMs: 240000,
+            modelForwardElapsedMs: 220000,
+            decisionOverheadMs: 15,
+            timingUnavailableReason: null
+          },
+          failureReason: null
+        }
+      });
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baseDesc,
+        baselineResult: baseResult,
+        variantDescriptor: varDesc,
+        variantResult: varResult
+      });
+
+      expect(report.metricEligibility.samplingWallEligible).toBe(false);
+      expect(
+        report.metricEligibility.reasons.some((r) =>
+          r.includes("Baseline result lacks verified TeaCache observation evidence")
+        )
+      ).toBe(true);
+    });
+
+    it("disqualifies speedup metrics when variant effectiveConfig mismatches requestedConfig", async () => {
+      const service = setupServiceWithTemplates();
+      const prompt = "A cinematic shot of a sunset over the ocean";
+
+      const { descriptor: baseDesc } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt,
+        operatorLabel: "operator",
+        runId: "tc-cfg-base",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        teacacheMatchedControl: true,
+        inputManifestPath: "manifest-i2v.json"
+      });
+
+      const { descriptor: varDesc } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt,
+        operatorLabel: "operator",
+        runId: "tc-cfg-var",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        teacache: "raw-l1-v1",
+        teacacheThreshold: 0.15,
+        teacacheStartStep: 2,
+        teacacheEndStep: -2,
+        teacacheTotalSteps: 20,
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json"
+      });
+
+      const baseResult = createCompletedResultV2(baseDesc as MinimaxH3ExperimentDescriptorV2, {
+        teacacheObservation: {
+          status: "verified",
+          mode: "off",
+          requestedConfig: null,
+          effectiveConfig: null,
+          totalSteps: 20,
+          forwardCallsRecorded: 20,
+          cacheHitsRecorded: 0,
+          nestedForwardsOnHits: 0,
+          coverage: {
+            samplingCallsRecorded: 1,
+            modelForwardsRecorded: 20,
+            complete: true
+          },
+          timings: {
+            samplingWallMs: 380000,
+            modelForwardElapsedMs: 350000,
+            decisionOverheadMs: 0,
+            timingUnavailableReason: null
+          },
+          failureReason: null
+        }
+      });
+
+      // Variant effectiveConfig threshold (0.05) mismatches requested (0.15)
+      const varResult = createCompletedResultV2(varDesc as MinimaxH3ExperimentDescriptorV2, {
+        teacacheObservation: {
+          status: "verified",
+          mode: "raw-l1-v1",
+          requestedConfig: {
+            mode: "raw-l1-v1",
+            relL1Thresh: 0.15,
+            startStep: 2,
+            endStep: -2,
+            totalSteps: 20,
+            normalizedStartStep: 2,
+            normalizedEndStep: 18
+          },
+          effectiveConfig: {
+            mode: "raw-l1-v1",
+            relL1Thresh: 0.05,
+            startStep: 2,
+            endStep: -2,
+            totalSteps: 20,
+            normalizedStartStep: 2,
+            normalizedEndStep: 18
+          },
+          totalSteps: 20,
+          forwardCallsRecorded: 14,
+          cacheHitsRecorded: 6,
+          nestedForwardsOnHits: 0,
+          coverage: {
+            samplingCallsRecorded: 1,
+            modelForwardsRecorded: 14,
+            complete: true
+          },
+          timings: {
+            samplingWallMs: 240000,
+            modelForwardElapsedMs: 220000,
+            decisionOverheadMs: 15,
+            timingUnavailableReason: null
+          },
+          failureReason: null
+        }
+      });
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baseDesc,
+        baselineResult: baseResult,
+        variantDescriptor: varDesc,
+        variantResult: varResult
+      });
+
+      expect(report.metricEligibility.samplingWallEligible).toBe(false);
+      expect(
+        report.metricEligibility.reasons.some((r) =>
+          r.includes("observed effectiveConfig threshold")
+        )
+      ).toBe(true);
+    });
+
+    it("admits authentic producer-shaped control and candidate pair through reducer, schema, and comparator", async () => {
+      const service = setupServiceWithTemplates();
+      const prompt = "A cinematic shot of a sunset over the ocean";
+
+      const { descriptor: baseDesc } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt,
+        operatorLabel: "operator",
+        runId: "tc-prod-base",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        teacacheMatchedControl: true,
+        inputManifestPath: "manifest-i2v.json"
+      });
+
+      const { descriptor: varDesc } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt,
+        operatorLabel: "operator",
+        runId: "tc-prod-var",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        teacache: "raw-l1-v1",
+        teacacheThreshold: 0.15,
+        teacacheStartStep: 2,
+        teacacheEndStep: -2,
+        teacacheTotalSteps: 20,
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json"
+      });
+
+      // 1. Build authentic producer-shaped control events
+      const baseSamplerSpanId = "span-base-sampler";
+      const baseEvents: MinimaxH3InstrumentationEvent[] = [
+        {
+          protocolVersion: "v2-jsonl",
+          sequence: 1,
+          runId: "tc-prod-base",
+          attemptToken: "token-base",
+          spanId: baseSamplerSpanId,
+          phase: "sampling",
+          type: "span_start",
+          boundarySource: "child_bootstrap",
+          clockDomain: "mono_child",
+          monotonicMs: 1000,
+          metadata: {
+            samplerName: "res_multistep",
+            schedulerName: "simple"
+          }
+        },
+        {
+          protocolVersion: "v2-jsonl",
+          sequence: 2,
+          runId: "tc-prod-base",
+          attemptToken: "token-base",
+          spanId: "span-base-init",
+          phase: "sampling",
+          type: "point_event",
+          boundarySource: "diagnostic",
+          clockDomain: "mono_child",
+          monotonicMs: 1020,
+          metadata: {
+            teacacheEvent: "session_init",
+            effectiveConfig: {
+              mode: "off",
+              relL1Thresh: 0.15,
+              startStep: 2,
+              endStep: 18,
+              totalSteps: 20,
+              normalizedStartStep: 2,
+              normalizedEndStep: 18
+            }
+          }
+        }
+      ];
+
+      for (let s = 0; s < 20; s++) {
+        const dfSpanId = `span-base-df-${s}`;
+        baseEvents.push({
+          protocolVersion: "v2-jsonl",
+          sequence: 3 + s * 2,
+          runId: "tc-prod-base",
+          attemptToken: "token-base",
+          spanId: dfSpanId,
+          parentSpanId: baseSamplerSpanId,
+          phase: "sampling",
+          type: "span_start",
+          boundarySource: "diagnostic",
+          clockDomain: "mono_child",
+          monotonicMs: 1100 + s * 20,
+          metadata: {
+            modelForwardCall: true,
+            phase: "diffusion_forward"
+          }
+        });
+        baseEvents.push({
+          protocolVersion: "v2-jsonl",
+          sequence: 4 + s * 2,
+          runId: "tc-prod-base",
+          attemptToken: "token-base",
+          spanId: dfSpanId,
+          parentSpanId: baseSamplerSpanId,
+          phase: "sampling",
+          type: "span_end",
+          outcome: "success",
+          boundarySource: "diagnostic",
+          clockDomain: "mono_child",
+          monotonicMs: 1115 + s * 20,
+          metadata: {
+            modelForwardCall: true,
+            phase: "diffusion_forward"
+          }
+        });
+      }
+
+      baseEvents.push({
+        protocolVersion: "v2-jsonl",
+        sequence: 43,
+        runId: "tc-prod-base",
+        attemptToken: "token-base",
+        spanId: "span-base-term",
+        phase: "sampling",
+        type: "point_event",
+        boundarySource: "diagnostic",
+        clockDomain: "mono_child",
+        monotonicMs: 1600,
+        metadata: {
+          teacacheSession: "end",
+          summary: {
+            mode: "off",
+            forwardCalls: 20,
+            cacheHits: 0
+          },
+          teacacheSummary: {
+            status: "verified",
+            forwardCallsRecorded: 20,
+            cacheHitsRecorded: 0,
+            modelForwardsRecorded: 20,
+            nestedForwardsOnHits: 0
+          }
+        }
+      });
+
+      baseEvents.push({
+        protocolVersion: "v2-jsonl",
+        sequence: 44,
+        runId: "tc-prod-base",
+        attemptToken: "token-base",
+        spanId: baseSamplerSpanId,
+        phase: "sampling",
+        type: "span_end",
+        outcome: "success",
+        boundarySource: "diagnostic",
+        clockDomain: "mono_child",
+        monotonicMs: 1620,
+        metadata: { completedSteps: 20 }
+      });
+
+      const baseObs = reduceTeaCacheObservation({
+        events: baseEvents,
+        teacacheRequest: (baseDesc as MinimaxH3ExperimentDescriptorV2).teacacheRequest,
+        expectedRunId: "tc-prod-base"
+      });
+
+      expect(baseObs).toBeDefined();
+      expect(baseObs?.status).toBe("verified");
+      expect(baseObs?.mode).toBe("off");
+      expect(baseObs?.forwardCallsRecorded).toBe(20);
+      expect(baseObs?.cacheHitsRecorded).toBe(0);
+      expect(baseObs?.coverage.modelForwardsRecorded).toBe(20);
+      expect(baseObs?.coverage.samplingCallsRecorded).toBe(1);
+      expect(baseObs?.coverage.complete).toBe(true);
+
+      const baseResult = createCompletedResultV2(baseDesc as MinimaxH3ExperimentDescriptorV2, {
+        phaseAccounting: {
+          ...createCompletedResultV2(baseDesc as MinimaxH3ExperimentDescriptorV2).phaseAccounting,
+          status: "complete",
+          wholeAttemptWallMs: 420000,
+          samplingWallTimeMs: 380000
+        },
+        teacacheObservation: baseObs
+      });
+      // Ensure schema accepts the reduced observation
+      expect(() => MinimaxH3ExperimentResultV2Schema.parse(baseResult)).not.toThrow();
+
+      // 2. Build authentic producer-shaped candidate events
+      const varSamplerSpanId = "span-var-sampler";
+      const varEvents: MinimaxH3InstrumentationEvent[] = [
+        {
+          protocolVersion: "v2-jsonl",
+          sequence: 1,
+          runId: "tc-prod-var",
+          attemptToken: "token-var",
+          spanId: varSamplerSpanId,
+          phase: "sampling",
+          type: "span_start",
+          boundarySource: "child_bootstrap",
+          clockDomain: "mono_child",
+          monotonicMs: 1000,
+          metadata: {
+            samplerName: "res_multistep",
+            schedulerName: "simple"
+          }
+        },
+        {
+          protocolVersion: "v2-jsonl",
+          sequence: 2,
+          runId: "tc-prod-var",
+          attemptToken: "token-var",
+          spanId: "span-var-init",
+          phase: "sampling",
+          type: "point_event",
+          boundarySource: "diagnostic",
+          clockDomain: "mono_child",
+          monotonicMs: 1020,
+          metadata: {
+            teacacheEvent: "session_init",
+            sessionId: "tc-sess-1",
+            effectiveConfig: {
+              mode: "raw-l1-v1",
+              relL1Thresh: 0.15,
+              startStep: 2,
+              endStep: -2,
+              totalSteps: 20,
+              normalizedStartStep: 2,
+              normalizedEndStep: 18
+            }
+          }
+        }
+      ];
+
+      // 14 forwards, 6 skips (steps 5..10)
+      for (let s = 0; s < 20; s++) {
+        const isSkip = s >= 5 && s <= 10;
+        varEvents.push({
+          protocolVersion: "v2-jsonl",
+          sequence: 3 + s * 2,
+          runId: "tc-prod-var",
+          attemptToken: "token-var",
+          spanId: `span-var-dec-${s}`,
+          phase: "sampling",
+          type: "point_event",
+          boundarySource: "diagnostic",
+          clockDomain: "mono_child",
+          monotonicMs: 1100 + s * 20,
+          metadata: {
+            teacacheEvent: isSkip ? "cache_hit" : "cache_miss",
+            stepIndex: s
+          }
+        });
+
+        if (!isSkip) {
+          const dfSpanId = `span-var-df-${s}`;
+          varEvents.push({
+            protocolVersion: "v2-jsonl",
+            sequence: 4 + s * 2,
+            runId: "tc-prod-var",
+            attemptToken: "token-var",
+            spanId: dfSpanId,
+            parentSpanId: varSamplerSpanId,
+            phase: "sampling",
+            type: "span_start",
+            boundarySource: "diagnostic",
+            clockDomain: "mono_child",
+            monotonicMs: 1105 + s * 20,
+            metadata: {
+              phase: "diffusion_forward",
+              modelForwardCall: true,
+              stepIndex: s
+            }
+          });
+          varEvents.push({
+            protocolVersion: "v2-jsonl",
+            sequence: 4 + s * 2,
+            runId: "tc-prod-var",
+            attemptToken: "token-var",
+            spanId: dfSpanId,
+            parentSpanId: varSamplerSpanId,
+            phase: "sampling",
+            type: "span_end",
+            outcome: "success",
+            boundarySource: "diagnostic",
+            clockDomain: "mono_child",
+            monotonicMs: 1110 + s * 20,
+            metadata: {
+              phase: "diffusion_forward",
+              modelForwardCall: true,
+              stepIndex: s
+            }
+          });
+        }
+      }
+
+      varEvents.push({
+        protocolVersion: "v2-jsonl",
+        sequence: 45,
+        runId: "tc-prod-var",
+        attemptToken: "token-var",
+        spanId: "span-var-term",
+        phase: "sampling",
+        type: "point_event",
+        boundarySource: "diagnostic",
+        clockDomain: "mono_child",
+        monotonicMs: 1600,
+        metadata: {
+          teacacheSession: "end",
+          summary: {
+            mode: "raw-l1-v1",
+            sessionId: "tc-sess-1",
+            forwardCalls: 14,
+            cacheHits: 6,
+            totalSteps: 20
+          },
+          teacacheSummary: {
+            status: "verified",
+            forwardCallsRecorded: 14,
+            cacheHitsRecorded: 6,
+            modelForwardsRecorded: 14,
+            nestedForwardsOnHits: 0
+          }
+        }
+      });
+
+      varEvents.push({
+        protocolVersion: "v2-jsonl",
+        sequence: 46,
+        runId: "tc-prod-var",
+        attemptToken: "token-var",
+        spanId: varSamplerSpanId,
+        phase: "sampling",
+        type: "span_end",
+        outcome: "success",
+        boundarySource: "diagnostic",
+        clockDomain: "mono_child",
+        monotonicMs: 1620,
+        metadata: { completedSteps: 20 }
+      });
+
+      const varObs = reduceTeaCacheObservation({
+        events: varEvents,
+        teacacheRequest: (varDesc as MinimaxH3ExperimentDescriptorV2).teacacheRequest,
+        expectedRunId: "tc-prod-var"
+      });
+
+      expect(varObs).toBeDefined();
+      expect(varObs?.status).toBe("verified");
+      expect(varObs?.mode).toBe("raw-l1-v1");
+      expect(varObs?.forwardCallsRecorded).toBe(14);
+      expect(varObs?.cacheHitsRecorded).toBe(6);
+      expect(varObs?.coverage.modelForwardsRecorded).toBe(14);
+      expect(varObs?.coverage.samplingCallsRecorded).toBe(1);
+      expect(varObs?.coverage.complete).toBe(true);
+
+      const varResult = createCompletedResultV2(varDesc as MinimaxH3ExperimentDescriptorV2, {
+        execution: {
+          ...createCompletedResultV2(varDesc as MinimaxH3ExperimentDescriptorV2).execution,
+          latencyMs: 260000
+        },
+        phaseAccounting: {
+          ...createCompletedResultV2(varDesc as MinimaxH3ExperimentDescriptorV2).phaseAccounting,
+          status: "complete",
+          wholeAttemptWallMs: 260000,
+          samplingWallTimeMs: 230000
+        },
+        teacacheObservation: varObs
+      });
+      expect(() => MinimaxH3ExperimentResultV2Schema.parse(varResult)).not.toThrow();
+
+      // 3. Compare pair
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baseDesc,
+        baselineResult: baseResult,
+        variantDescriptor: varDesc,
+        variantResult: varResult
+      });
+
+      expect(report.structuralAdmission.eligible).toBe(true);
+      expect(report.metricEligibility.samplingWallEligible).toBe(true);
+      expect(report.metrics).not.toBeNull();
+      expect(report.metrics?.samplingWallTimeRatio).toBeCloseTo(230000 / 380000, 4);
     });
   });
 });

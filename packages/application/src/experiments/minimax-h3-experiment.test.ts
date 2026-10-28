@@ -4944,4 +4944,399 @@ describe("MiniMax-H3 Step Reduction Sampling Recipe Validation & Tampering Detec
       expect(reconciled.stopRecommendation.reasons).toContain("attention_fallback_detected");
     });
   });
+
+  describe("MiniMax-H3 TeaCache Experiment Service Tests", () => {
+    it("prepares and validates an isolated I2V experiment with TeaCache raw-l1-v1 against canonical templates", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+
+      const { runDir, descriptor } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A cinematic shot of a person smiling warmly, natural lighting",
+        operatorLabel: "operator-01",
+        runId: "run-tc-i2v-prep-val",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        teacache: "raw-l1-v1",
+        teacacheThreshold: 0.1,
+        teacacheStartStep: 2,
+        teacacheEndStep: -2,
+        teacacheTotalSteps: 20
+      });
+
+      const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
+      expect(descV2.teacacheRequest).toBeDefined();
+      expect(descV2.teacacheRequest?.mode).toBe("raw-l1-v1");
+      expect(descV2.teacacheRequest?.relL1Thresh).toBe(0.1);
+      expect(descV2.teacacheRequest?.normalizedStartStep).toBe(2);
+      expect(descV2.teacacheRequest?.normalizedEndStep).toBe(18);
+      expect(
+        descV2.requiredRuntime?.requiredNodes.some((n) => n.name === "CCOMiniMaxH3TeaCache")
+      ).toBe(true);
+
+      const factorPaths = descV2.experimentVariant.changedFactors.map((f) => f.path);
+      expect(factorPaths).toContain("caching.configuration");
+
+      const config = store.config!;
+      expect(config["401"]).toBeDefined();
+      expect((config["401"] as { class_type: string }).class_type).toBe("CCOMiniMaxH3TeaCache");
+      expect((config["16"] as { inputs: { model: unknown } }).inputs.model).toEqual(["401", 0]);
+      expect((config["9"] as { inputs: { model: unknown } }).inputs.model).toEqual(["401", 0]);
+
+      const validation = await service.validateExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      });
+      expect(validation.errors).toEqual([]);
+      expect(validation.ok).toBe(true);
+    });
+
+    it("prepares and validates an isolated Ref2V experiment with TeaCache raw-l1-v1 against canonical templates", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+
+      const { runDir, descriptor } = await service.prepareExperiment({
+        route: "ref2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A cinematic shot of a person smiling warmly, natural lighting",
+        operatorLabel: "operator-01",
+        runId: "run-tc-ref2v-prep-val",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-ref2v.json",
+        teacache: "raw-l1-v1",
+        teacacheThreshold: 0.15,
+        teacacheStartStep: 2,
+        teacacheEndStep: -2,
+        teacacheTotalSteps: 20
+      });
+
+      const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
+      expect(descV2.teacacheRequest).toBeDefined();
+      expect(descV2.teacacheRequest?.mode).toBe("raw-l1-v1");
+      expect(descV2.teacacheRequest?.relL1Thresh).toBe(0.15);
+
+      const config = store.config!;
+      expect(config["401"]).toBeDefined();
+      expect((config["16"] as { inputs: { model: unknown } }).inputs.model).toEqual(["401", 0]);
+      expect((config["9"] as { inputs: { model: unknown } }).inputs.model).toEqual(["401", 0]);
+
+      const validation = await service.validateExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      });
+      expect(validation.errors).toEqual([]);
+      expect(validation.ok).toBe(true);
+    });
+
+    it("reconciles TeaCache phase events into teacacheObservation in result.json", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+
+      const { runDir, descriptor } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A cinematic shot of a person smiling warmly, natural lighting",
+        operatorLabel: "operator-01",
+        runId: "run-tc-reconcile",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        teacache: "raw-l1-v1",
+        teacacheThreshold: 0.15,
+        teacacheStartStep: 2,
+        teacacheEndStep: -2,
+        teacacheTotalSteps: 20
+      });
+
+      const attemptToken = "token-tc-reconcile";
+      await store.writeDurableJson(`${runDir}/attempt.json`, {
+        attemptToken,
+        runId: descriptor.runId
+      });
+
+      const descV2 = descriptor as MinimaxH3ExperimentDescriptorV2;
+      const registeredNodes: Record<
+        string,
+        { className: string; module: string; revision?: string; moduleHash?: string }
+      > = {};
+      for (const n of descV2.requiredRuntime.requiredNodes) {
+        registeredNodes[n.name] = {
+          className: n.name,
+          module: "comfy_extras.nodes_minimax_h3",
+          ...(n.revision ? { revision: n.revision } : {}),
+          ...(n.moduleHash ? { moduleHash: n.moduleHash } : {})
+        };
+      }
+
+      const capabilityHandshake = {
+        status: "ok" as const,
+        protocol: "v2-jsonl",
+        protocolVersion: "v2-jsonl",
+        runId: descriptor.runId,
+        attemptToken,
+        nonce: "boot-nonce-tc",
+        pid: 12345,
+        collectorDigest: descV2.requiredRuntime.collectorDigest,
+        hookManifestDigest: descV2.requiredRuntime.hookManifestDigest,
+        installedHooks: descV2.requiredRuntime.hooks.map((h) => ({ ...h, attached: true })),
+        registeredNodes,
+        kernelCallableAvailable: true,
+        runtimeVersions: {
+          driverVersion: "560.35.03",
+          cudaBuildVersion: descV2.requiredRuntime.cudaBuild ?? "12.4",
+          cudaRuntimeVersion: "12.4",
+          pytorchVersion: descV2.requiredRuntime.pytorchBuild ?? "2.5.1+cu124",
+          pythonVersion: descV2.requiredRuntime.interpreter?.pythonVersion ?? "3.11.9"
+        },
+        packageIdentities: (descV2.requiredRuntime.pythonPackages ?? []).map((p) => ({
+          name: p.name,
+          version: p.version,
+          ...(p.artifactHash ? { artifactHash: p.artifactHash } : {}),
+          ...(p.artifactMethod ? { artifactMethod: p.artifactMethod } : {})
+        })),
+        ...(descV2.requiredRuntime.sourceFileHashes
+          ? { sourceIdentities: descV2.requiredRuntime.sourceFileHashes }
+          : {})
+      };
+      await store.writeDurableJson(`${runDir}/capability-handshake.json`, capabilityHandshake);
+      await store.writeIntent(runDir, {
+        runId: descriptor.runId,
+        clientId: `client-${descriptor.runId}`,
+        workflowDigest: descV2.derivedWorkflowDigest,
+        requestFingerprint: "fp-tc-complete",
+        timestamp: "2026-10-12T10:00:00.000Z",
+        attemptToken,
+        pid: 12345,
+        handshakeNonce: "boot-nonce-tc",
+        capabilityHandshakeDigest: sha256Hex(canonicalizeJson(capabilityHandshake))
+      });
+
+      await store.writeReceipt(runDir, {
+        runId: descriptor.runId,
+        promptId: "prompt-tc-1",
+        acceptedAt: "2026-10-12T10:00:01.000Z"
+      });
+      await store.writeTerminalEvidence(runDir, {
+        source: "history",
+        status: "success",
+        rawDetails: {
+          "prompt-tc-1": {
+            status: { status_str: "success", completed: true, messages: [] }
+          }
+        }
+      });
+
+      let seq = 1;
+      await store.appendPhaseEvent(runDir, {
+        protocolVersion: "v2-jsonl",
+        sequence: seq++,
+        runId: descriptor.runId,
+        attemptToken,
+        spanId: "span-boot",
+        phase: "environment_startup",
+        type: "point_event",
+        boundarySource: "child_bootstrap",
+        clockDomain: "mono_child",
+        monotonicMs: 50.0,
+        metadata: {
+          handshake: "v2-jsonl",
+          collectorDigest: descV2.requiredRuntime.collectorDigest,
+          hookManifestDigest: descV2.requiredRuntime.hookManifestDigest
+        }
+      });
+
+      // Sampling span start
+      await store.appendPhaseEvent(runDir, {
+        protocolVersion: "v2-jsonl",
+        sequence: seq++,
+        runId: descriptor.runId,
+        attemptToken,
+        promptId: "prompt-tc-1",
+        spanId: "span-sampling-main",
+        phase: "sampling",
+        type: "span_start",
+        boundarySource: "diagnostic",
+        clockDomain: "mono_child",
+        monotonicMs: 90.0
+      });
+
+      // Session init
+      await store.appendPhaseEvent(runDir, {
+        protocolVersion: "v2-jsonl",
+        sequence: seq++,
+        runId: descriptor.runId,
+        attemptToken,
+        promptId: "prompt-tc-1",
+        spanId: "span-tc-init",
+        phase: "sampling",
+        type: "point_event",
+        boundarySource: "diagnostic",
+        clockDomain: "mono_child",
+        monotonicMs: 100.0,
+        metadata: {
+          teacacheEvent: "session_init",
+          effectiveConfig: {
+            mode: "raw-l1-v1",
+            relL1Thresh: 0.15,
+            startStep: 2,
+            endStep: -2,
+            totalSteps: 20,
+            normalizedStartStep: 2,
+            normalizedEndStep: 18
+          }
+        }
+      });
+
+      // Emit 20 step decisions: steps 0-1 full, 2-17 with 6 skips, 18-19 full
+      for (let s = 0; s < 20; s++) {
+        const isSkip = s >= 4 && s <= 9;
+        await store.appendPhaseEvent(runDir, {
+          protocolVersion: "v2-jsonl",
+          sequence: seq++,
+          runId: descriptor.runId,
+          attemptToken,
+          promptId: "prompt-tc-1",
+          spanId: `span-tc-decision-${s}`,
+          phase: "sampling",
+          type: "point_event",
+          boundarySource: "diagnostic",
+          clockDomain: "mono_child",
+          monotonicMs: 100.0 + s * 10,
+          metadata: {
+            teacacheEvent: isSkip ? "cache_hit" : "cache_miss",
+            stepIndex: s
+          }
+        });
+
+        if (!isSkip) {
+          await store.appendPhaseEvent(runDir, {
+            protocolVersion: "v2-jsonl",
+            sequence: seq++,
+            runId: descriptor.runId,
+            attemptToken,
+            promptId: "prompt-tc-1",
+            spanId: `span-forward-${s}`,
+            phase: "sampling",
+            type: "span_start",
+            boundarySource: "diagnostic",
+            clockDomain: "mono_child",
+            monotonicMs: 103.0 + s * 10,
+            metadata: {
+              phase: "diffusion_forward",
+              modelForwardCall: true,
+              stepIndex: s
+            }
+          });
+          await store.appendPhaseEvent(runDir, {
+            protocolVersion: "v2-jsonl",
+            sequence: seq++,
+            runId: descriptor.runId,
+            attemptToken,
+            promptId: "prompt-tc-1",
+            spanId: `span-forward-${s}`,
+            phase: "sampling",
+            type: "span_end",
+            outcome: "success",
+            boundarySource: "diagnostic",
+            clockDomain: "mono_child",
+            monotonicMs: 105.0 + s * 10,
+            metadata: {
+              phase: "diffusion_forward",
+              modelForwardCall: true,
+              stepIndex: s
+            }
+          });
+        }
+      }
+
+      // Sampling span end with session terminal
+      await store.appendPhaseEvent(runDir, {
+        protocolVersion: "v2-jsonl",
+        sequence: seq++,
+        runId: descriptor.runId,
+        attemptToken,
+        promptId: "prompt-tc-1",
+        spanId: "span-sampling-main",
+        phase: "sampling",
+        type: "span_end",
+        outcome: "success",
+        boundarySource: "diagnostic",
+        clockDomain: "mono_child",
+        monotonicMs: 400.0,
+        metadata: {
+          teacacheSession: "end",
+          summary: {
+            mode: "raw-l1-v1",
+            forwardCalls: 14,
+            cacheHits: 6,
+            totalSteps: 20
+          }
+        }
+      });
+
+      const reconciled = (await service.reconcileExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      })) as MinimaxH3ExperimentResultV2;
+
+      expect(reconciled.execution.status).toBe("completed");
+      expect(reconciled.teacacheObservation).toBeDefined();
+      expect(reconciled.teacacheObservation?.status).toBe("verified");
+      expect(reconciled.teacacheObservation?.cacheHitsRecorded).toBe(6);
+      expect(reconciled.teacacheObservation?.forwardCallsRecorded).toBe(14);
+      expect(reconciled.teacacheObservation?.totalSteps).toBe(20);
+      expect(reconciled.teacacheObservation?.nestedForwardsOnHits).toBe(0);
+      expect(reconciled.teacacheObservation?.coverage.complete).toBe(true);
+    });
+
+    it("detects corrupted/mismatched TeaCache topology on validation", async () => {
+      const store = createRealTemplateStore();
+      const service = new MinimaxH3ExperimentService(store);
+
+      const { runDir } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt: "A cinematic shot of a person smiling warmly, natural lighting",
+        operatorLabel: "operator-01",
+        runId: "run-tc-tampered",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json",
+        teacache: "raw-l1-v1",
+        teacacheThreshold: 0.15,
+        teacacheStartStep: 2,
+        teacacheEndStep: -2,
+        teacacheTotalSteps: 20
+      });
+
+      // Tamper with workflow: remove node 401
+      const tamperedWorkflow = { ...store.config! };
+      delete tamperedWorkflow["401"];
+      store.config = tamperedWorkflow;
+
+      const validation = await service.validateExperiment(runDir, {
+        outputRoot: ".ai-runs/minimax-h3-experiments"
+      });
+      expect(validation.ok).toBe(false);
+      expect(
+        validation.errors.some((e) => e.includes("node 401") || e.includes("topology digest"))
+      ).toBe(true);
+    });
+  });
 });
