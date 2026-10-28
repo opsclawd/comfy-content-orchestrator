@@ -42,12 +42,16 @@ else:
     setattr(sys, _ACTIVE_MODEL_IDS_LOCK_KEY, _ACTIVE_MODEL_IDS_LOCK)
 
 
+_TENSOR_SNAPSHOT_TAG = "__tensor__"
+
+
 def _snapshot_for_fingerprint(value: Any) -> Any:
     """Build an immutable, decoupled snapshot of value suitable for an
-    equality-based conditioning fingerprint.
+    equality-based conditioning fingerprint (compared via
+    _fingerprints_equal, never raw `==`/`!=`).
 
-    Two properties matter here, both learned from a real adversarial
-    probe against the naive version of this function:
+    Properties that matter here, each learned from a real adversarial
+    probe against an earlier version of this function:
     1. The result must not alias the caller's own mutable containers
        (dict/list). Storing a live reference means an in-place mutation
        of the ORIGINAL object after capture silently changes what the
@@ -57,22 +61,77 @@ def _snapshot_for_fingerprint(value: Any) -> Any:
        tensors, or the lightweight mocks used in tests) must never reach
        Python's `==`/`!=` directly: a real tensor's __eq__ returns an
        elementwise tensor, not a bool, which raises when something tries
-       to use it as one (e.g. inside a tuple's own __eq__). Identity is
-       compared via shape/dtype/device instead, exactly as evaluate()
-       already does for the cached input tensor elsewhere in this file.
+       to use it as one (e.g. inside a tuple's own __eq__).
+    3. shape/dtype/device alone is metadata, not content: two tensors with
+       identical shape/dtype/device can hold completely different values
+       (a different reference image, a different cross-attention
+       embedding). A clone of the actual tensor is retained alongside the
+       metadata so _fingerprints_equal can verify real content identity,
+       not just that the metadata happens to match.
     """
     if hasattr(value, "shape") and hasattr(value, "dtype"):
+        clone = None
+        try:
+            if hasattr(value, "detach") and hasattr(value, "clone"):
+                clone = value.detach().clone()
+        except Exception:
+            clone = None
         return (
-            "__tensor__",
+            _TENSOR_SNAPSHOT_TAG,
             tuple(value.shape) if value.shape is not None else None,
             str(getattr(value, "dtype", None)),
             str(getattr(value, "device", None)),
+            clone,
         )
     if isinstance(value, dict):
         return tuple(sorted((k, _snapshot_for_fingerprint(v)) for k, v in value.items()))
     if isinstance(value, (list, tuple)):
         return tuple(_snapshot_for_fingerprint(v) for v in value)
     return value
+
+
+def _fingerprints_equal(a: Any, b: Any) -> bool:
+    """Recursively compare two _snapshot_for_fingerprint() outputs.
+
+    Never applies Python's `==` to a real tensor-like value directly --
+    only to the extracted shape/dtype/device metadata (always plain
+    tuples/strings by construction) and, for the actual retained clones,
+    via .equal() (which real torch tensors define to return a plain
+    bool) rather than `==`.
+    """
+    if (
+        isinstance(a, tuple)
+        and isinstance(b, tuple)
+        and len(a) == 5
+        and len(b) == 5
+        and a[0] == _TENSOR_SNAPSHOT_TAG
+        and b[0] == _TENSOR_SNAPSHOT_TAG
+    ):
+        if a[1] != b[1] or a[2] != b[2] or a[3] != b[3]:
+            return False
+        old_clone, new_clone = a[4], b[4]
+        if old_clone is None or new_clone is None:
+            return old_clone is new_clone
+        if old_clone is new_clone:
+            return True
+        equal_fn = getattr(old_clone, "equal", None)
+        if callable(equal_fn):
+            try:
+                return bool(equal_fn(new_clone))
+            except Exception:
+                return False
+        # No real tensor .equal() available and not the same object --
+        # fail closed: shape/dtype/device metadata alone cannot prove the
+        # content is unchanged, and silently trusting it is exactly the
+        # gap a prior version of this check left open.
+        return False
+    if isinstance(a, tuple) and isinstance(b, tuple):
+        if len(a) != len(b):
+            return False
+        return all(_fingerprints_equal(x, y) for x, y in zip(a, b))
+    if isinstance(a, tuple) or isinstance(b, tuple):
+        return False
+    return a == b
 
 
 class TeaCacheSession:
@@ -252,10 +311,10 @@ class TeaCacheSession:
             )
             if self.conditioning_fingerprint is None:
                 self.conditioning_fingerprint = fingerprint
-            elif self.conditioning_fingerprint != fingerprint:
+            elif not _fingerprints_equal(self.conditioning_fingerprint, fingerprint):
                 raise RuntimeError(
-                    "Conditioning manifest changed mid-session: TeaCache was bound to "
-                    f"{self.conditioning_fingerprint}, saw {fingerprint} at step {self.step_idx}. "
+                    "Conditioning manifest changed mid-session: TeaCache was bound to a "
+                    f"different conditioning shape/content than seen at step {self.step_idx}. "
                     "A cached forward output cannot be reused across a route/conditioning change."
                 )
 

@@ -35,10 +35,10 @@ export const TEACACHE_LOCAL_ADAPTER_FILE_HASHES = Object.freeze({
   // session_id (not a bare model_id set, which let a rejected session's
   // cleanup() evict a different, legitimately-active session's lock), and
   // a conditioning-manifest fingerprint that snapshots latent_shapes,
-  // minimax_payload and cross_attention by immutable, decoupled value
-  // (not aliased mutable references, and not raw tensor __eq__) added to
-  // TeaCacheSession (see teacache.py).
-  "teacache.py": "547ce2d617dc4090c134beca85c77267e7960610b2cc22514835e1ebb1d42c1d"
+  // minimax_payload and cross_attention by immutable, decoupled value and
+  // verifies actual tensor CONTENT via .equal() (not just shape/dtype/
+  // device metadata) added to TeaCacheSession (see teacache.py).
+  "teacache.py": "d800f7fe1fa9c626dae9188cff799503d191af6a0cfb5b681c979a81c3cc47a9"
 });
 
 export const TEACACHE_LOCAL_ADAPTER_DIGEST = sha256Hex(

@@ -741,7 +741,7 @@ def _resolve_teacache_module(guider=None, model_patcher=None):
 # so the digest of the module *actually resolved and bound* at sampling time
 # is itself verified -- a static pre-flight check cannot prove that a later
 # runtime resolution step didn't substitute a different, unverified copy.
-TEACACHE_LOCAL_ADAPTER_DIGEST = "2bbc1d837adddd4b8455309e19747bb28fceb504d2b52c6685ee189d0a127660"
+TEACACHE_LOCAL_ADAPTER_DIGEST = "16c01b73f83999b24c3d20d9d7fc2221a736f76aeb6a75c74e57e9edac0d4bc1"
 
 
 def _compute_teacache_adapter_digest(package_dir: str) -> Optional[str]:
@@ -2043,6 +2043,7 @@ def _install_hooks_inner(collector: Collector):
                                 parent_span_id=sampler_span_id,
                                 metadata={
                                     "teacacheSession": "end",
+                                    "sessionId": tc_session.session_id,
                                     "summary": summary,
                                     "teacacheSummary": {
                                         "status": "verified" if tc_session.cache_hits_count > 0 else "no_op",

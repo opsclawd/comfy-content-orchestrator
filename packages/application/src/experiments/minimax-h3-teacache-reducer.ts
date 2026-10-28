@@ -86,6 +86,18 @@ export function reduceTeaCacheObservation(
   let realSamplerSpanId: string | null = null;
   let foreignAttributedEventCount = 0;
 
+  // The session_id established by this window's session_init. Any later
+  // teacache event that reports an explicit, different session_id (a
+  // session_end claiming a foreign terminal session, or a decision event
+  // mixed in from another session) is attributed-foreign the same way a
+  // mismatched parentSpanId is -- it must not be folded into this run's
+  // evidence just because its parentSpanId happened to line up.
+  let boundSessionId: string | null = null;
+  let sessionEndCount = 0;
+  let adapterIdentityVerifiedFailure: string | null = null;
+  let lastSummaryForwardCallsRecorded: number | null = null;
+  let lastSummaryCacheHitsRecorded: number | null = null;
+
   for (const event of events) {
     if (expectedRunId && event.runId !== expectedRunId) {
       continue;
@@ -146,6 +158,19 @@ export function reduceTeaCacheObservation(
         foreignAttributedEventCount++;
         continue;
       }
+      if (
+        isTeaCacheRelatedEvent &&
+        boundSessionId !== null &&
+        typeof meta.sessionId === "string" &&
+        meta.sessionId !== boundSessionId
+      ) {
+        // An explicit session_id that disagrees with the one this window
+        // already bound (from session_init) is a foreign/terminal-session
+        // mismatch -- e.g. a session_end claiming a different session than
+        // the one that was actually initialized here.
+        foreignAttributedEventCount++;
+        continue;
+      }
       if (meta.teacacheSession === "start" || meta.teacacheEvent === "session_init") {
         hasCacheEvents = true;
         sessionAttempts++;
@@ -155,6 +180,17 @@ export function reduceTeaCacheObservation(
         }
         if (meta.sessionId) {
           sessionId = String(meta.sessionId);
+          if (boundSessionId === null) {
+            boundSessionId = sessionId;
+          }
+        }
+        if (
+          meta.adapterIdentity &&
+          typeof meta.adapterIdentity === "object" &&
+          (meta.adapterIdentity as { verified?: unknown }).verified === false
+        ) {
+          adapterIdentityVerifiedFailure =
+            "TeaCache adapter identity was not verified for this session's loaded module.";
         }
         // Track one identity per session_init occurrence (preferring the
         // explicit sessionId field, since a point_event's own spanId is
@@ -221,6 +257,7 @@ export function reduceTeaCacheObservation(
 
       if (meta.teacacheSession === "end") {
         sessionEndSeen = true;
+        sessionEndCount++;
       }
 
       const isSkip = meta.teacacheEvent === "cache_hit" || meta.decision === "skip";
@@ -263,6 +300,9 @@ export function reduceTeaCacheObservation(
 
       if (summary) {
         hasCacheEvents = true;
+        // Real producer events always pair a summary with
+        // meta.teacacheSession === "end" on the SAME event, which already
+        // increments sessionEndCount above -- do not double-count it here.
         sessionEndSeen = true;
         if (typeof summary.nestedForwardsOnHits === "number" && summary.nestedForwardsOnHits > 0) {
           nestedForwardsOnHits = Math.max(nestedForwardsOnHits, summary.nestedForwardsOnHits);
@@ -274,6 +314,24 @@ export function reduceTeaCacheObservation(
           const fc = summary.forwardCallsRecorded ?? summary.forwardCalls;
           if (typeof fc === "number") {
             forwardCallsRecorded = fc;
+          }
+        } else {
+          // For raw-l1-v1, forwardCallsRecorded/cacheHitsRecorded are
+          // built independently from the actual per-step decision events
+          // (never copied from this self-reported summary). Capture the
+          // summary's own numbers to cross-check against that independent
+          // count once the full stream has been processed -- a
+          // forged/corrupted terminal event reporting counts that
+          // disagree (e.g. 999/999) must still disqualify the run even
+          // though the independently-counted totals aren't overwritten by
+          // it.
+          const summaryFc = summary.forwardCallsRecorded ?? summary.forwardCalls;
+          const summaryCh = summary.cacheHitsRecorded ?? summary.cacheHits;
+          if (typeof summaryFc === "number") {
+            lastSummaryForwardCallsRecorded = summaryFc;
+          }
+          if (typeof summaryCh === "number") {
+            lastSummaryCacheHitsRecorded = summaryCh;
           }
         }
       }
@@ -351,6 +409,32 @@ export function reduceTeaCacheObservation(
   if (observedSessionIds.size > 1) {
     failureReasons.push(
       `Observed ${observedSessionIds.size} distinct TeaCache session IDs in one reduction window; session attribution is ambiguous.`
+    );
+  }
+  if (sessionEndCount > 1) {
+    failureReasons.push(
+      `Observed ${sessionEndCount} TeaCache session-end/terminal events; exactly one is expected per session.`
+    );
+  }
+  if (adapterIdentityVerifiedFailure) {
+    failureReasons.push(adapterIdentityVerifiedFailure);
+  }
+  if (
+    teacacheRequest.mode === "raw-l1-v1" &&
+    lastSummaryForwardCallsRecorded !== null &&
+    lastSummaryForwardCallsRecorded !== forwardCallsRecorded
+  ) {
+    failureReasons.push(
+      `Terminal summary reports forwardCallsRecorded=${lastSummaryForwardCallsRecorded}, which disagrees with the independently observed count of ${forwardCallsRecorded}.`
+    );
+  }
+  if (
+    teacacheRequest.mode === "raw-l1-v1" &&
+    lastSummaryCacheHitsRecorded !== null &&
+    lastSummaryCacheHitsRecorded !== cacheHitsRecorded
+  ) {
+    failureReasons.push(
+      `Terminal summary reports cacheHitsRecorded=${lastSummaryCacheHitsRecorded}, which disagrees with the independently observed count of ${cacheHitsRecorded}.`
     );
   }
 

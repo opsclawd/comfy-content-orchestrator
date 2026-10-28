@@ -768,4 +768,103 @@ describe("minimax-h3-teacache-reducer", () => {
     expect(obs?.status).toBe("failed");
     expect(obs?.failureReason).toMatch(/reports mode "raw-l1-v1", expected "off"/i);
   });
+
+  it("rejects a session_end claiming a foreign session_id different from the one this window initialized (issue #467 adversarial probe)", () => {
+    const events = generateEvents({ skips: [4, 5, 6] });
+    const initIdx = events.findIndex(
+      (e) => (e.metadata as Record<string, unknown> | undefined)?.teacacheEvent === "session_init"
+    );
+    const endIdx = events.findIndex(
+      (e) => (e.metadata as Record<string, unknown> | undefined)?.teacacheSession === "end"
+    );
+    events[initIdx] = {
+      ...events[initIdx],
+      metadata: {
+        ...(events[initIdx]!.metadata as Record<string, unknown>),
+        sessionId: "sess-real"
+      }
+    } as MinimaxH3InstrumentationEvent;
+    events[endIdx] = {
+      ...events[endIdx],
+      metadata: {
+        ...(events[endIdx]!.metadata as Record<string, unknown>),
+        sessionId: "sess-foreign"
+      }
+    } as MinimaxH3InstrumentationEvent;
+
+    const obs = reduceTeaCacheObservation({
+      events,
+      teacacheRequest: sampleRequest,
+      expectedRunId: "run-1"
+    });
+
+    expect(obs?.status).toBe("failed");
+    // The foreign session_end is dropped entirely, so sessionEndSeen must
+    // never have been satisfied by it.
+    expect(obs?.failureReason).toMatch(/session end event was not observed/i);
+  });
+
+  it("rejects duplicate TeaCache session-end/terminal events (issue #467 adversarial probe)", () => {
+    const events = generateEvents({ skips: [4, 5, 6] });
+    const endIdx = events.findIndex(
+      (e) => (e.metadata as Record<string, unknown> | undefined)?.teacacheSession === "end"
+    );
+    // Inject a second, duplicate terminal event right after the real one.
+    events.splice(endIdx + 1, 0, { ...events[endIdx]! });
+
+    const obs = reduceTeaCacheObservation({
+      events,
+      teacacheRequest: sampleRequest,
+      expectedRunId: "run-1"
+    });
+
+    expect(obs?.status).toBe("failed");
+    expect(obs?.failureReason).toMatch(/exactly one is expected per session/i);
+  });
+
+  it("rejects a terminal summary whose self-reported counts disagree with the independently observed decisions (issue #467 adversarial probe)", () => {
+    const events = generateEvents({ skips: [4, 5, 6] }); // 13 forwards, 7... wait 3 hits
+    const endIdx = events.findIndex(
+      (e) => (e.metadata as Record<string, unknown> | undefined)?.teacacheSession === "end"
+    );
+    events[endIdx] = {
+      ...events[endIdx],
+      metadata: {
+        teacacheSession: "end",
+        summary: { mode: "raw-l1-v1", forwardCalls: 999, cacheHits: 999, totalSteps: 20 }
+      }
+    } as MinimaxH3InstrumentationEvent;
+
+    const obs = reduceTeaCacheObservation({
+      events,
+      teacacheRequest: sampleRequest,
+      expectedRunId: "run-1"
+    });
+
+    expect(obs?.status).toBe("failed");
+    expect(obs?.failureReason).toMatch(/disagrees with the independently observed count/i);
+  });
+
+  it("rejects a session_init that reports an unverified TeaCache adapter identity (issue #467 adversarial probe)", () => {
+    const events = generateEvents({ skips: [4, 5, 6] });
+    const initIdx = events.findIndex(
+      (e) => (e.metadata as Record<string, unknown> | undefined)?.teacacheEvent === "session_init"
+    );
+    events[initIdx] = {
+      ...events[initIdx],
+      metadata: {
+        ...(events[initIdx]!.metadata as Record<string, unknown>),
+        adapterIdentity: { verified: false, reason: "digest_mismatch" }
+      }
+    } as MinimaxH3InstrumentationEvent;
+
+    const obs = reduceTeaCacheObservation({
+      events,
+      teacacheRequest: sampleRequest,
+      expectedRunId: "run-1"
+    });
+
+    expect(obs?.status).toBe("failed");
+    expect(obs?.failureReason).toMatch(/adapter identity was not verified/i);
+  });
 });

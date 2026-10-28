@@ -515,6 +515,64 @@ print("SUCCESS")
       expect(res.status).toBe(0);
       expect(res.stdout).toContain("SUCCESS");
     });
+
+    it("rejects a same-shaped reference/cross_attention tensor whose actual content changed (issue #467)", () => {
+      const code = `
+import teacache
+
+class MockTensor:
+    def __init__(self):
+        self.shape = (1, 16, 20, 20)
+        self.dtype = "float32"
+        self.device = "cuda:0"
+    def detach(self): return self
+    def float(self): return self
+    def clone(self): return MockTensor()
+
+# A tensor-like object with a real .equal() method, as actual torch
+# tensors have (returning a plain bool, unlike __eq__ which returns an
+# elementwise tensor). Same shape/dtype/device every time -- only the
+# payload content ("val") differs between the two instances below.
+class MockContentTensor:
+    def __init__(self, val):
+        self.val = val
+        self.shape = (4, 768)
+        self.dtype = "float32"
+        self.device = "cuda:0"
+    def detach(self): return self
+    def clone(self): return MockContentTensor(self.val)
+    def equal(self, other):
+        return isinstance(other, MockContentTensor) and self.val == other.val
+
+sigmas = list(range(21, 0, -1))
+sess = teacache.TeaCacheSession("s-tensor-content", "m1", 0.15, 2, -2, 20, sigmas=sigmas)
+sess.advance_step(0)
+
+sess.evaluate(
+    lambda inp, **kw: MockTensor(),
+    {"input": MockTensor(), "timestep": 21.0, "c": {"cross_attention": MockContentTensor("embedding-A")}}
+)
+
+sess.advance_step(1)
+try:
+    # Same shape/dtype/device, genuinely different content -- this is the
+    # exact gap a shape/dtype/device-only fingerprint leaves open: a
+    # different reference embedding with identical metadata must still be
+    # rejected as a conditioning change.
+    sess.evaluate(
+        lambda inp, **kw: MockTensor(),
+        {"input": MockTensor(), "timestep": 20.0, "c": {"cross_attention": MockContentTensor("embedding-B")}}
+    )
+    assert False, "Expected RuntimeError: same-shaped tensor with different content must be rejected"
+except RuntimeError as e:
+    assert "Conditioning manifest changed mid-session" in str(e)
+
+print("SUCCESS")
+`;
+      const res = runPythonTest(code);
+      expect(res.status).toBe(0);
+      expect(res.stdout).toContain("SUCCESS");
+    });
   });
 
   describe("CCOMiniMaxH3TeaCacheNode ComfyUI Wrapper & Model Verification", () => {
