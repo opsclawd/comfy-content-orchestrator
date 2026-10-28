@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -253,6 +253,8 @@ class VedaPatch:
     sequence: number;
     runId: string;
     attemptToken: string;
+    spanId?: string;
+    parentSpanId?: string;
     phase: string;
     type: string;
     boundarySource?: string;
@@ -281,6 +283,9 @@ class VedaPatch:
         status: string;
         failureReason: string | null;
       };
+      teacacheEvent?: string;
+      teacacheSession?: string;
+      summary?: { mode?: string; forwardCalls?: number; cacheHits?: number; totalSteps?: number };
     };
   }
 
@@ -1668,6 +1673,85 @@ print("SAMPLER_CLASSMETHOD_AND_CALLBACK_OK")
       );
       expect(samplingStart).toBeDefined();
       expect(samplingEnd?.outcome).toBe("success");
+    });
+
+    it("drives a real TeaCache session through the SamplerCustomAdvanced hook end-to-end (issue #467)", async () => {
+      setupSamplerAndConditioningMocks();
+      const teaCacheDir = resolve("experiments/minimax-h3-teacache");
+
+      const script = `
+import sys
+sys.path.insert(0, ${JSON.stringify(teaCacheDir)})
+import teacache  # pre-import so _resolve_teacache_module's sys.path fallback finds this exact, pinned module
+
+import comfy_extras.nodes_custom_sampler as custom_sampler
+
+class MockModelPatcher:
+    def __init__(self):
+        self.model_options = {
+            "teacache_config": {
+                "rel_l1_thresh": 0.15,
+                "start_step": 2,
+                "end_step": -2,
+                "total_steps": 20,
+                "model_id": "mock-model-1"
+            }
+        }
+
+class MockGuider:
+    def __init__(self, steps=20):
+        self.steps = steps
+        self.model_patcher = MockModelPatcher()
+
+    def sample(self, noise, latent_image, sampler, sigmas, callback=None):
+        cb = callback
+        if cb is None and isinstance(latent_image, dict):
+            cb = latent_image.get("callback")
+        for i in range(self.steps):
+            if cb:
+                cb(i, f"x0_{i}", f"x_{i}", self.steps)
+        return {"output_samples": "ok"}
+
+guider = MockGuider(steps=20)
+sigmas_list = [float(20 - i) for i in range(21)]  # 21 strictly descending sigmas, 20.0 down to 0.0
+latent_in = {"samples": "initial"}
+
+out = custom_sampler.SamplerCustomAdvanced.execute("noise_tensor", guider, "res_multistep", sigmas_list, latent_in)
+assert out == ({"output_samples": "ok"},), f"Unexpected out: {out}"
+print("TEACACHE_SAMPLER_HOOK_OK")
+`;
+
+      const result = runCollectorWithScript(script);
+      if (result.status !== 0) {
+        console.error("STDOUT:", result.stdout, "STDERR:", result.stderr);
+      }
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("TEACACHE_SAMPLER_HOOK_OK");
+
+      // The real regression this guards against: every collector.emit() call
+      // along the TeaCache session_init/end path requires a positional
+      // span_id, and previously several call sites omitted it -- crashing
+      // every real candidate/matched-control run with TypeError before any
+      // of this telemetry was ever written. This mock guider drives the
+      // session lifecycle (advance_step via the sampling callback) but does
+      // not simulate an actual model_function_wrapper forward call, so
+      // forwardCalls/cacheHits are legitimately 0 here -- the point of this
+      // test is that the full session_init -> 20 steps -> session_end
+      // lifecycle completes and every emitted event carries a real spanId.
+      const initEvents = result.events.filter((e) => e.metadata?.teacacheEvent === "session_init");
+      expect(initEvents.length).toBe(1);
+      expect(initEvents[0]?.spanId).toBeTruthy();
+
+      const endEvents = result.events.filter((e) => e.metadata?.teacacheSession === "end");
+      expect(endEvents.length).toBe(1);
+      expect(endEvents[0]?.spanId).toBeTruthy();
+      expect(
+        (endEvents[0]?.metadata?.summary as { forwardCalls?: number } | undefined)?.forwardCalls
+      ).toBe(0);
+
+      for (const e of result.events) {
+        expect(e.spanId).toBeTruthy();
+      }
     });
 
     it("restores guider.sample even when SamplerCustomAdvanced execution raises an exception", async () => {

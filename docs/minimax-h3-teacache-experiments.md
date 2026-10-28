@@ -203,17 +203,34 @@ nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
 # 1. Prepare dedicated isolated ComfyUI checkout (never mutate production or global /opt/comfyui)
 git clone https://github.com/Comfy-Org/ComfyUI.git "$COMFYUI_ISOLATED_DIR"
 (cd "$COMFYUI_ISOLATED_DIR" && git checkout 55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc)
-"$CCO_REPO_ROOT/scripts/check-comfyui-version.sh"
+"$CCO_REPO_ROOT/scripts/check-comfyui-version.sh" --comfy-dir "$COMFYUI_ISOLATED_DIR"
 
-# 2. Setup isolated virtualenv and install pinned experiment requirements
+# 2. Setup isolated virtualenv and install pinned experiment requirements.
+# --extra-index-url is required: the pinned +cu124 wheels are not on the
+# default PyPI index. Also install ComfyUI's own base requirements, which
+# the TeaCache lockfile intentionally does not duplicate.
 python3 -m venv "$COMFYUI_ISOLATED_DIR/.venv"
 source "$COMFYUI_ISOLATED_DIR/.venv/bin/activate"
-pip install -r "$CCO_REPO_ROOT/experiments/minimax-h3-teacache/locks/requirements-teacache-cu124.txt"
+pip install --extra-index-url https://download.pytorch.org/whl/cu124 \
+  -r "$CCO_REPO_ROOT/experiments/minimax-h3-teacache/locks/requirements-teacache-cu124.txt"
+pip install -r "$COMFYUI_ISOLATED_DIR/requirements.txt"
 python3 --version  # Must be 3.11.x or 3.12.x
 pip list | grep -E "torch|comfy"
 
+# 2b. Link (never copy) the existing read-only MiniMax-H3 model weights into
+# the isolated checkout's models directory. $EXISTING_MODELS_ROOT is
+# whatever host path already holds the certified, checksum-verified
+# weights for your production ComfyUI install -- do not download or
+# re-derive them here.
+mkdir -p "$COMFYUI_ISOLATED_DIR/models/diffusion_models" \
+  "$COMFYUI_ISOLATED_DIR/models/text_encoders" \
+  "$COMFYUI_ISOLATED_DIR/models/vae"
+ln -s "$EXISTING_MODELS_ROOT/diffusion_models/"* "$COMFYUI_ISOLATED_DIR/models/diffusion_models/"
+ln -s "$EXISTING_MODELS_ROOT/text_encoders/"* "$COMFYUI_ISOLATED_DIR/models/text_encoders/"
+ln -s "$EXISTING_MODELS_ROOT/vae/"* "$COMFYUI_ISOLATED_DIR/models/vae/"
+
 # 3. Verify MiniMax-H3 weights exist, are mounted read-only, and match pinned SHA-256
-"$CCO_REPO_ROOT/scripts/check-minimax-h3-version.sh"
+"$CCO_REPO_ROOT/scripts/check-minimax-h3-version.sh" --comfy-dir "$COMFYUI_ISOLATED_DIR"
 
 # 4. Stage hardened TeaCache custom node into isolated custom_nodes directory and verify file hashes
 mkdir -p "$COMFYUI_ISOLATED_DIR/custom_nodes/cco-minimax-h3-teacache"
@@ -291,7 +308,13 @@ pnpm experiment:minimax-h3 validate \
 
 ### Step 6: Physical Execution (Operator on RTX 4090)
 Execute both runs sequentially under clean system conditions (restarting background services if necessary to clear VRAM fragmentation).
-A stop-policy JSON file (e.g. `/opt/comfyui-isolated-teacache/operator-stop-policy.json`) is strictly required when executing `run`:
+A stop-policy JSON file (e.g. `/opt/comfyui-isolated-teacache/operator-stop-policy.json`) is strictly required when executing `run`.
+
+**Fail-closed catalog admission prerequisite:** `experiments/minimax-h3-teacache/catalog.json` pins every candidate's
+`compatibilityState` to `"unverified"` and `runnable` to `false` until this issue's TeaCache variant has been through
+#445's real-hardware operator benchmark (per the epic #421 roadmap's release invariant). `run` will refuse to execute
+an entry whose catalog record is not marked runnable; this is intentional and is not a bug to work around -- it is
+the gate that keeps an offline-prepared candidate from being promoted to a real GPU run without that explicit sign-off.
 
 ```bash
 # Define operator-authored stop policy

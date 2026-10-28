@@ -67,9 +67,14 @@ To resolve these findings while preserving the candidate's core algorithm, the r
 ### Local In-Tree Adapter File Hashes
 | File | SHA-256 Digest | Role |
 | :--- | :--- | :--- |
-| `__init__.py` | `db3a565640d2052fda48f90f22734343a55285edcedd0305faf813e0e8fbbca4` | Node mapping registration & export |
-| `nodes.py` | `74f3616d6fe786c6400975b1b5c38a1a6263ee06bf7579b3a65f85d434d03c56` | ComfyUI custom node definition & input validation |
-| `teacache.py` | `139d920f353ed186b7516ca5edc93bd15f39c1eb749c6efb3fa39b992e0f4fdf` | Session management, sigma validation, tensor caching |
+| `__init__.py` | `3b14b0a4da6f0fa366d8da492ea85ce74f2a63f18336ac63970d9d2bfe128c94` | Node mapping registration & export |
+| `nodes.py` | `ea16ae7ced6ab1ddfe7ba729a0a0c7047827f1e5601c6fd5c8363b837dd17d2c` | ComfyUI custom node definition & input validation |
+| `teacache.py` | `ffd3c347182b31d85677e24c1bcf5386f0f49b354690a01e545c972c9756a19a` | Session management, sigma validation, tensor caching |
+
+These three digests are the single source of truth
+(`packages/contracts/src/minimax-h3-teacache.ts`'s `TEACACHE_LOCAL_ADAPTER_FILE_HASHES`);
+this table is a copy for operator reference and must be kept in sync with it
+whenever `experiments/minimax-h3-teacache/{__init__,nodes,teacache}.py` changes.
 
 - **Execution-Local Session Lifecycle:** Each `SamplerCustomAdvanced` invocation creates an isolated `TeaCacheSession` bound via context variables (`contextvars`). The session is strictly cleaned up in a `finally` block on completion or error.
 - **Tensor Isolation:** Cached inputs and outputs are explicitly cloned (`.detach().clone()`).

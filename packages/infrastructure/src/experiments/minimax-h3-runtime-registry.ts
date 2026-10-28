@@ -310,11 +310,15 @@ async function verifyRequiredNodeDefinitions(
 ): Promise<{ ok: boolean; blocker?: string }> {
   for (const node of requiredNodes) {
     if (node.name === "CCOMiniMaxH3TeaCache") {
+      // Deliberately only the TARGET comfyUiDir's own custom_nodes
+      // directory -- a repository-relative fallback here would let this
+      // check pass just because the orchestrator's own dev checkout has
+      // the adapter, which proves nothing about whether it is actually
+      // staged on the target host that will execute the render.
       const candidates = [
         resolve(resolvedDir, "custom_nodes/cco-minimax-h3-teacache"),
         resolve(resolvedDir, "custom_nodes/ComfyUI-MiniMaxH3-TeaCache"),
-        resolve(resolvedDir, "custom_nodes/minimax-h3-teacache"),
-        resolve(process.cwd(), "experiments/minimax-h3-teacache")
+        resolve(resolvedDir, "custom_nodes/minimax-h3-teacache")
       ];
       let foundDir: string | null = null;
       for (const cand of candidates) {
@@ -326,7 +330,7 @@ async function verifyRequiredNodeDefinitions(
       if (!foundDir) {
         return {
           ok: false,
-          blocker: `Required node "CCOMiniMaxH3TeaCache" source files not found in custom_nodes/ComfyUI-MiniMaxH3-TeaCache or experiments/minimax-h3-teacache.`
+          blocker: `Required node "CCOMiniMaxH3TeaCache" source files not found staged in ${resolvedDir}'s custom_nodes directory.`
         };
       }
       const fullPath = resolve(foundDir, "nodes.py");

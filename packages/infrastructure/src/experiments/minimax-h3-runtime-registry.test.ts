@@ -63,6 +63,17 @@ describe("MiniMax-H3 Runtime Registry & Adapters", () => {
     fs.writeFileSync(path.join(mockComfyDir, ".git", "HEAD"), `${PINNED_COMFYUI_CORE_REVISION}\n`);
     setTestDriverQueryCommand({ command: "echo", args: ["550.54.14"] });
 
+    // Stage the real, currently-pinned TeaCache adapter into this mock
+    // ComfyUI's own custom_nodes directory -- verifyRequiredNodeDefinitions
+    // only trusts files staged under comfyUiDir, not the repository's dev
+    // checkout, so tests exercising it must stage files here too.
+    const teaCacheStageDir = path.join(mockComfyDir, "custom_nodes", "cco-minimax-h3-teacache");
+    fs.mkdirSync(teaCacheStageDir, { recursive: true });
+    const teaCacheSourceDir = path.resolve("experiments/minimax-h3-teacache");
+    for (const rf of ["__init__.py", "nodes.py", "teacache.py"]) {
+      fs.copyFileSync(path.join(teaCacheSourceDir, rf), path.join(teaCacheStageDir, rf));
+    }
+
     const mockPythonScript = `#!/bin/sh
 if [ "$1" = "-c" ]; then
   if echo "$2" | grep -q "torch.__version__"; then

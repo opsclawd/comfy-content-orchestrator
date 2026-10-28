@@ -5221,6 +5221,40 @@ describe("MiniMax-H3 Step Reduction Sampling Recipe Validation & Tampering Detec
           }
         });
 
+        // sampling_step spans drive observedProvenance.observedSampling's
+        // completedSteps count -- independent of the diffusion_forward
+        // spans above, which exist to verify cache-skip behavior, not step
+        // progression.
+        await store.appendPhaseEvent(runDir, {
+          protocolVersion: "v2-jsonl",
+          sequence: seq++,
+          runId: descriptor.runId,
+          attemptToken,
+          promptId: "prompt-tc-1",
+          spanId: `span-step-${s}`,
+          phase: "sampling_step",
+          type: "span_start",
+          boundarySource: "diagnostic",
+          clockDomain: "mono_child",
+          monotonicMs: 101.0 + s * 10,
+          stepIndex: s
+        });
+        await store.appendPhaseEvent(runDir, {
+          protocolVersion: "v2-jsonl",
+          sequence: seq++,
+          runId: descriptor.runId,
+          attemptToken,
+          promptId: "prompt-tc-1",
+          spanId: `span-step-${s}`,
+          phase: "sampling_step",
+          type: "span_end",
+          outcome: "success",
+          boundarySource: "diagnostic",
+          clockDomain: "mono_child",
+          monotonicMs: 102.0 + s * 10,
+          stepIndex: s
+        });
+
         if (!isSkip) {
           await store.appendPhaseEvent(runDir, {
             protocolVersion: "v2-jsonl",
@@ -5299,6 +5333,11 @@ describe("MiniMax-H3 Step Reduction Sampling Recipe Validation & Tampering Detec
       expect(reconciled.teacacheObservation?.totalSteps).toBe(20);
       expect(reconciled.teacacheObservation?.nestedForwardsOnHits).toBe(0);
       expect(reconciled.teacacheObservation?.coverage.complete).toBe(true);
+      // The 20 nested diffusion_forward spans (used for independent
+      // cache-skip verification) must not be mistaken for 20 separate
+      // top-level sampler invocations (issue #467 follow-up finding).
+      expect(reconciled.observedProvenance?.observedSampling?.status).toBe("verified");
+      expect(reconciled.observedProvenance?.observedSampling?.completedSteps).toBe(20);
     });
 
     it("detects corrupted/mismatched TeaCache topology on validation", async () => {

@@ -1830,6 +1830,8 @@ def _install_hooks_inner(collector: Collector):
                         collector.emit(
                             "sampling",
                             "point_event",
+                            span_id=collector.next_span_id("teacache-event"),
+                            parent_span_id=sampler_span_id,
                             metadata={
                                 "teacacheEvent": evt_name,
                                 **cb_kwargs
@@ -1857,6 +1859,8 @@ def _install_hooks_inner(collector: Collector):
                         collector.emit(
                             "sampling",
                             "point_event",
+                            span_id=collector.next_span_id("teacache-init"),
+                            parent_span_id=sampler_span_id,
                             metadata={
                                 "teacacheEvent": "session_init",
                                 "sessionId": tc_session.session_id,
@@ -1885,6 +1889,8 @@ def _install_hooks_inner(collector: Collector):
                     collector.emit(
                         "sampling",
                         "point_event",
+                        span_id=collector.next_span_id("teacache-init"),
+                        parent_span_id=sampler_span_id,
                         metadata={
                             "teacacheEvent": "session_init",
                             "effectiveConfig": {
@@ -2012,6 +2018,8 @@ def _install_hooks_inner(collector: Collector):
                             collector.emit(
                                 "sampling",
                                 "point_event",
+                                span_id=collector.next_span_id("teacache-end"),
+                                parent_span_id=sampler_span_id,
                                 metadata={
                                     "teacacheSession": "end",
                                     "summary": summary,
@@ -2032,6 +2040,8 @@ def _install_hooks_inner(collector: Collector):
                         collector.emit(
                             "sampling",
                             "point_event",
+                            span_id=collector.next_span_id("teacache-end"),
+                            parent_span_id=sampler_span_id,
                             metadata={
                                 "teacacheSession": "end",
                                 "summary": {

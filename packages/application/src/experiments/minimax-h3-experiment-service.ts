@@ -1751,7 +1751,18 @@ export class MinimaxH3ExperimentService {
 
       const teaCacheRequiredRuntime: MinimaxH3RequiredRuntimeManifest = {
         ...baseRequiredRuntime,
-        requiredNodes: [...baseRequiredRuntime.requiredNodes, { name: "CCOMiniMaxH3TeaCache" }]
+        requiredNodes: [
+          ...baseRequiredRuntime.requiredNodes,
+          // moduleHash is required (not merely optional) here so
+          // validateCapabilityHandshake actually verifies the LOADED
+          // node's source file matches the pinned local adapter bytes,
+          // instead of only trusting that a node named "CCOMiniMaxH3TeaCache"
+          // registered at all.
+          {
+            name: "CCOMiniMaxH3TeaCache",
+            moduleHash: TEACACHE_LOCAL_ADAPTER_FILE_HASHES["nodes.py"]
+          }
+        ]
       };
       const teaCacheRuntimeManifestDigest = sha256Hex(canonicalizeJson(teaCacheRequiredRuntime));
 
@@ -4578,7 +4589,20 @@ export class MinimaxH3ExperimentService {
               descV2.provenance?.samplerSettings?.scheduler ??
               "simple";
 
-            const samplingSpans = phaseEvents.filter((e) => e.phase === "sampling");
+            // Nested diffusion_forward spans (one per independent model
+            // forward, used for TeaCache cache-skip verification) are
+            // emitted on phase "sampling" too, parented under the real
+            // sampler span -- there is no separate phase enum value for
+            // them. They must be excluded here, or every TeaCache-
+            // instrumented run (20 nested span_start events) would always
+            // read as "multiple enclosing sampler invocations".
+            const isNestedModelForwardSpan = (e: (typeof phaseEvents)[number]): boolean =>
+              e.metadata?.phase === "diffusion_forward" ||
+              e.metadata?.modelForwardCall === true ||
+              Boolean(e.parentSpanId);
+            const samplingSpans = phaseEvents.filter(
+              (e) => e.phase === "sampling" && !isNestedModelForwardSpan(e)
+            );
             const samplingStarts = samplingSpans.filter((e) => e.type === "span_start");
             const samplingEnds = samplingSpans.filter((e) => e.type === "span_end");
 
