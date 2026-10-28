@@ -71,7 +71,17 @@ export function reduceTeaCacheObservation(
   // or adversarial event stream can pad modelForwardsRecorded with
   // duplicate/orphan "success" span_end events that never had a real
   // forward call behind them, masking an actual failed or missing forward.
-  const openForwardSpanIds = new Set<string>();
+  // Maps an open forward span's id to the stepIndex its span_start
+  // reported (undefined if none was reported at all). Keeping the
+  // START's stepIndex, not just the END's, matters: a forward whose
+  // span_start claims a step the stream already decided was a cache HIT
+  // must be rejected outright -- a real forward should never even begin
+  // during a hit interval, regardless of what its completion later
+  // claims -- and a span whose start/end disagree on which step it
+  // belongs to is itself contradictory evidence.
+  const openForwardSpanIds = new Map<string, number | undefined>();
+  let forwardStartedDuringHitCount = 0;
+  let forwardStartEndStepMismatchCount = 0;
   const completedForwardSpanIds = new Set<string>();
   let orphanOrDuplicateForwardCompletions = 0;
   let failedForwardCount = 0;
@@ -372,7 +382,10 @@ export function reduceTeaCacheObservation(
         const spanKey = event.spanId ?? null;
         if (event.type === "span_start") {
           if (spanKey) {
-            openForwardSpanIds.add(spanKey);
+            openForwardSpanIds.set(spanKey, stepIdx);
+            if (stepIdx !== undefined && stepDecisions.get(stepIdx) === "skip") {
+              forwardStartedDuringHitCount++;
+            }
           }
         } else if (event.type === "span_end") {
           if (event.outcome === "failed") {
@@ -384,12 +397,22 @@ export function reduceTeaCacheObservation(
             // span_end with no matching span_start (or a repeat of one
             // already closed) can inflate modelForwardsRecorded with
             // nothing behind it.
-            if (
-              !spanKey ||
-              !openForwardSpanIds.delete(spanKey) ||
-              completedForwardSpanIds.has(spanKey)
-            ) {
+            const startStepIdx = spanKey ? openForwardSpanIds.get(spanKey) : undefined;
+            const hadOpenSpan = spanKey !== null && openForwardSpanIds.has(spanKey);
+            if (spanKey) {
+              openForwardSpanIds.delete(spanKey);
+            }
+            if (!spanKey || !hadOpenSpan || completedForwardSpanIds.has(spanKey)) {
               orphanOrDuplicateForwardCompletions++;
+            } else if (
+              startStepIdx !== undefined &&
+              stepIdx !== undefined &&
+              startStepIdx !== stepIdx
+            ) {
+              // The span's own start and end disagree about which step it
+              // belongs to -- contradictory self-reported evidence, not
+              // trustworthy regardless of either individual value.
+              forwardStartEndStepMismatchCount++;
             } else {
               completedForwardSpanIds.add(spanKey);
               if (stepIdx !== undefined && stepDecisions.get(stepIdx) === "skip") {
@@ -424,6 +447,16 @@ export function reduceTeaCacheObservation(
   if (orphanOrDuplicateForwardCompletions > 0) {
     failureReasons.push(
       `Detected ${orphanOrDuplicateForwardCompletions} diffusion_model forward completion event(s) with no matching open span or already closed -- not trustworthy evidence of a real forward.`
+    );
+  }
+  if (forwardStartedDuringHitCount > 0) {
+    failureReasons.push(
+      `Detected ${forwardStartedDuringHitCount} diffusion_model forward(s) that STARTED during a step already decided as a cache hit -- a real forward must never begin in a hit interval, regardless of how it completes.`
+    );
+  }
+  if (forwardStartEndStepMismatchCount > 0) {
+    failureReasons.push(
+      `Detected ${forwardStartEndStepMismatchCount} diffusion_model forward span(s) whose span_start and span_end report different, contradictory stepIndex values.`
     );
   }
   if (teacacheRequest.mode === "raw-l1-v1" && unattributedForwardCompletions > 0) {

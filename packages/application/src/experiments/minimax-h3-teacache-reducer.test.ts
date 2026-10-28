@@ -954,4 +954,56 @@ describe("minimax-h3-teacache-reducer", () => {
       /not independently attributed to distinct steps|not a bijection/i
     );
   });
+
+  it("rejects a forward whose span_start claims a cache-hit step, even though its span_end later claims a different real step (issue #467 adversarial probe)", () => {
+    // 19 real misses + 1 hit at step 4. The adversarial forward span
+    // STARTS at step 4 (the hit step -- a real forward should never
+    // begin there at all), but its completion claims step 19 instead,
+    // which on its own looks like a legitimate, unclaimed step. A check
+    // that only looks at the completion's stepIndex would miss this
+    // entirely.
+    const events = generateEvents({ skips: [4] });
+    const startIdx = events.findIndex(
+      (e) =>
+        e.type === "span_start" &&
+        (e.metadata as Record<string, unknown> | undefined)?.phase === "diffusion_forward" &&
+        (e.metadata as Record<string, unknown> | undefined)?.stepIndex === 19
+    );
+    events[startIdx] = {
+      ...events[startIdx]!,
+      metadata: { ...(events[startIdx]!.metadata as Record<string, unknown>), stepIndex: 4 }
+    } as MinimaxH3InstrumentationEvent;
+
+    const obs = reduceTeaCacheObservation({
+      events,
+      teacacheRequest: sampleRequest,
+      expectedRunId: "run-1"
+    });
+
+    expect(obs?.status).toBe("failed");
+    expect(obs?.failureReason).toMatch(/STARTED during a step already decided as a cache hit/i);
+  });
+
+  it("rejects a forward span whose start and end report contradictory stepIndex values (issue #467 adversarial probe)", () => {
+    const events = generateEvents({ skips: [4, 5, 6] });
+    const startIdx = events.findIndex(
+      (e) =>
+        e.type === "span_start" &&
+        (e.metadata as Record<string, unknown> | undefined)?.phase === "diffusion_forward" &&
+        (e.metadata as Record<string, unknown> | undefined)?.stepIndex === 10
+    );
+    events[startIdx] = {
+      ...events[startIdx]!,
+      metadata: { ...(events[startIdx]!.metadata as Record<string, unknown>), stepIndex: 11 }
+    } as MinimaxH3InstrumentationEvent;
+
+    const obs = reduceTeaCacheObservation({
+      events,
+      teacacheRequest: sampleRequest,
+      expectedRunId: "run-1"
+    });
+
+    expect(obs?.status).toBe("failed");
+    expect(obs?.failureReason).toMatch(/contradictory stepIndex values/i);
+  });
 });
