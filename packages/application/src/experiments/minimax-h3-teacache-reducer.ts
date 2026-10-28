@@ -338,10 +338,13 @@ export function reduceTeaCacheObservation(
 
       if (summary) {
         hasCacheEvents = true;
-        // Real producer events always pair a summary with
-        // meta.teacacheSession === "end" on the SAME event, which already
-        // increments sessionEndCount above -- do not double-count it here.
-        sessionEndSeen = true;
+        // Deliberately NOT setting sessionEndSeen here: a summary object
+        // alone is not a terminal marker. The real producer always pairs
+        // a summary with meta.teacacheSession === "end" on the SAME
+        // event (handled above), so this is never a regression for
+        // genuine data -- but an adversarial stream that strips the "end"
+        // tag while keeping a summary object must NOT be able to satisfy
+        // sessionEndSeen through this path instead.
         if (typeof summary.nestedForwardsOnHits === "number" && summary.nestedForwardsOnHits > 0) {
           nestedForwardsOnHits = Math.max(nestedForwardsOnHits, summary.nestedForwardsOnHits);
         }
@@ -382,9 +385,18 @@ export function reduceTeaCacheObservation(
         const spanKey = event.spanId ?? null;
         if (event.type === "span_start") {
           if (spanKey) {
-            openForwardSpanIds.set(spanKey, stepIdx);
-            if (stepIdx !== undefined && stepDecisions.get(stepIdx) === "skip") {
-              forwardStartedDuringHitCount++;
+            if (openForwardSpanIds.has(spanKey)) {
+              // A second span_start for a spanId that's already open (no
+              // intervening close) is contradictory on its own -- a prior
+              // version silently overwrote the stored stepIndex via
+              // Map.set, discarding evidence of the first, unclosed start
+              // instead of flagging the re-open.
+              orphanOrDuplicateForwardCompletions++;
+            } else {
+              openForwardSpanIds.set(spanKey, stepIdx);
+              if (stepIdx !== undefined && stepDecisions.get(stepIdx) === "skip") {
+                forwardStartedDuringHitCount++;
+              }
             }
           }
         } else if (event.type === "span_end") {
@@ -404,14 +416,14 @@ export function reduceTeaCacheObservation(
             }
             if (!spanKey || !hadOpenSpan || completedForwardSpanIds.has(spanKey)) {
               orphanOrDuplicateForwardCompletions++;
-            } else if (
-              startStepIdx !== undefined &&
-              stepIdx !== undefined &&
-              startStepIdx !== stepIdx
-            ) {
-              // The span's own start and end disagree about which step it
-              // belongs to -- contradictory self-reported evidence, not
-              // trustworthy regardless of either individual value.
+            } else if (startStepIdx !== stepIdx) {
+              // Required to be EXACTLY equal, including "one side defined,
+              // the other not": a forward's start and end must agree on
+              // which real step it belongs to. Treating "either side
+              // missing" as an automatic pass (rather than a mismatch) was
+              // the gap that let a probe delete just the start's
+              // stepIndex and still have the completion's stepIndex alone
+              // satisfy attribution.
               forwardStartEndStepMismatchCount++;
             } else {
               completedForwardSpanIds.add(spanKey);

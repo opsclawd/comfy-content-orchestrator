@@ -34,14 +34,16 @@ export const TEACACHE_LOCAL_ADAPTER_FILE_HASHES = Object.freeze({
   // validation, same-model session-ownership guard keyed to the owning
   // session_id (not a bare model_id set, which let a rejected session's
   // cleanup() evict a different, legitimately-active session's lock), and
-  // a conditioning-manifest fingerprint that snapshots the ENTIRE `c` dict
-  // (not a hand-picked subset of keys) by immutable, decoupled value;
-  // verifies actual tensor CONTENT via .equal() and otherwise ALWAYS fails
-  // closed (never falls back to "same object reference implies
-  // unchanged", which cannot see an in-place mutation of that same
-  // object); and rejects unsupported/unverifiable payload types outright
-  // (see teacache.py's _snapshot_for_fingerprint/_fingerprints_equal).
-  "teacache.py": "bc56e7246caed306c361977120100115bd115a61fb5bfc701d0c2a2b2c737158"
+  // a conditioning-manifest fingerprint that snapshots all of `c` EXCEPT
+  // transformer_options (standard ComfyUI per-step scheduler progress
+  // plumbing at the pinned core revision, not conditioning identity --
+  // fingerprinting it would reject every genuine multi-step render) by
+  // immutable, decoupled value; verifies actual tensor CONTENT via
+  // .equal() and otherwise ALWAYS fails closed (never falls back to "same
+  // object reference implies unchanged"); and rejects unsupported/
+  // unverifiable payload types outright (see teacache.py's
+  // _snapshot_for_fingerprint/_fingerprints_equal).
+  "teacache.py": "0d1a5bd974c3f7a3afc602f512d1b647a5bab10721aaec16d8bf94d4c7342fdd"
 });
 
 export const TEACACHE_LOCAL_ADAPTER_DIGEST = sha256Hex(

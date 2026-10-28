@@ -305,19 +305,32 @@ class TeaCacheSession:
 
             # Bind this session to the specific route/conditioning shape it was
             # first called with. A cached output is only a valid substitute for
-            # a later real forward if the ENTIRE surrounding conditioning
-            # manifest -- every key and value in `c`, not just a hand-picked
-            # subset -- plus the cond/uncond arity, is unchanged -- otherwise
-            # the cache would silently serve output computed under a
-            # different route (e.g. I2V vs Ref2V), a different reference-
-            # image binding, or a changed payload on some key this session
-            # happened not to special-case. _snapshot_for_fingerprint
-            # recursively freezes/verifies the whole of `c`, not only
-            # latent_shapes/minimax_payload/cross_attention.
+            # a later real forward if the surrounding conditioning manifest --
+            # every key and value in `c` that is actually part of the
+            # conditioning identity, not just a hand-picked subset -- plus the
+            # cond/uncond arity, is unchanged -- otherwise the cache would
+            # silently serve output computed under a different route (e.g.
+            # I2V vs Ref2V), a different reference-image binding, or a
+            # changed payload on some key this session happened not to
+            # special-case.
+            #
+            # `transformer_options` is excluded deliberately, not an
+            # oversight: at the pinned ComfyUI core revision,
+            # comfy/samplers.py inserts the CURRENT TIMESTEP's schedule
+            # state into c.transformer_options.sigmas on every step, before
+            # ever calling this model_function_wrapper. That field is
+            # scheduler progress plumbing standard to every ComfyUI model,
+            # not conditioning identity -- it is EXPECTED to differ on every
+            # real step, and fingerprinting it would reject every genuine
+            # multi-step render at step 1 regardless of whether the actual
+            # conditioning (route, references, payload) ever changed.
             c = kwargs.get("c")
+            c_identity: Optional[Dict[str, Any]] = None
+            if isinstance(c, dict):
+                c_identity = {k: v for k, v in c.items() if k != "transformer_options"}
             fingerprint = (
                 tuple(sorted(k for k in kwargs if k not in ("input", "timestep", "c"))),
-                _snapshot_for_fingerprint(c) if c is not None else None,
+                _snapshot_for_fingerprint(c_identity) if c_identity is not None else None,
                 len(cond_or_uncond) if isinstance(cond_or_uncond, (list, tuple)) else cond_or_uncond,
             )
             if self.conditioning_fingerprint is None:

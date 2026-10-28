@@ -685,6 +685,80 @@ print("SUCCESS")
       expect(res.stdout).toContain("SUCCESS");
     });
 
+    it("tolerates a per-step transformer_options.sigmas that legitimately changes every step, while still rejecting a real conditioning change (issue #467)", () => {
+      const code = `
+import teacache
+
+class MockTensor:
+    def __init__(self):
+        self.shape = (1, 16, 20, 20)
+        self.dtype = "float32"
+        self.device = "cuda:0"
+    def detach(self): return self
+    def float(self): return self
+    def clone(self): return MockTensor()
+
+sigmas = list(range(21, 0, -1))
+sess = teacache.TeaCacheSession("s-transformer-options", "m1", 0.15, 2, -2, 20, sigmas=sigmas)
+sess.advance_step(0)
+
+# comfy/samplers.py inserts the current timestep's schedule state into
+# c.transformer_options.sigmas on every real step, before this wrapper is
+# ever called -- it is standard ComfyUI scheduler progress plumbing, not
+# conditioning identity, and legitimately differs on every step.
+sess.evaluate(
+    lambda inp, **kw: MockTensor(),
+    {
+        "input": MockTensor(),
+        "timestep": 21.0,
+        "c": {
+            "cross_attention": "stable-embedding",
+            "transformer_options": {"sigmas": [21.0, 20.0, 19.0]}
+        }
+    }
+)
+
+sess.advance_step(1)
+# A DIFFERENT transformer_options.sigmas value alone, with everything
+# else unchanged, must NOT be treated as a conditioning change.
+sess.evaluate(
+    lambda inp, **kw: MockTensor(),
+    {
+        "input": MockTensor(),
+        "timestep": 20.0,
+        "c": {
+            "cross_attention": "stable-embedding",
+            "transformer_options": {"sigmas": [20.0, 19.0, 18.0]}
+        }
+    }
+)
+
+sess.advance_step(2)
+try:
+    # A genuine conditioning change (cross_attention) must still be
+    # rejected, even with transformer_options also present and changing.
+    sess.evaluate(
+        lambda inp, **kw: MockTensor(),
+        {
+            "input": MockTensor(),
+            "timestep": 19.0,
+            "c": {
+                "cross_attention": "different-embedding",
+                "transformer_options": {"sigmas": [19.0, 18.0, 17.0]}
+            }
+        }
+    )
+    assert False, "Expected RuntimeError: cross_attention change must still be rejected"
+except RuntimeError as e:
+    assert "Conditioning manifest changed mid-session" in str(e)
+
+print("SUCCESS")
+`;
+      const res = runPythonTest(code);
+      expect(res.status).toBe(0);
+      expect(res.stdout).toContain("SUCCESS");
+    });
+
     it("rejects an unsupported conditioning payload type instead of silently passing it through unverified (issue #467)", () => {
       const code = `
 import teacache

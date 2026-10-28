@@ -1006,4 +1006,76 @@ describe("minimax-h3-teacache-reducer", () => {
     expect(obs?.status).toBe("failed");
     expect(obs?.failureReason).toMatch(/contradictory stepIndex values/i);
   });
+
+  it("rejects a diffusion_forward span_start that reopens a spanId still open, instead of silently overwriting its stored stepIndex (issue #467 adversarial probe)", () => {
+    const events = generateEvents({ skips: [4, 5, 6] });
+    const firstStartIdx = events.findIndex(
+      (e) =>
+        e.type === "span_start" &&
+        (e.metadata as Record<string, unknown> | undefined)?.phase === "diffusion_forward" &&
+        (e.metadata as Record<string, unknown> | undefined)?.stepIndex === 10
+    );
+    // Insert a second, contradictory span_start for the SAME spanId
+    // (claiming a different step) right after the first, before its
+    // span_end ever closes it.
+    events.splice(firstStartIdx + 1, 0, {
+      ...events[firstStartIdx]!,
+      metadata: { ...(events[firstStartIdx]!.metadata as Record<string, unknown>), stepIndex: 11 }
+    });
+
+    const obs = reduceTeaCacheObservation({
+      events,
+      teacacheRequest: sampleRequest,
+      expectedRunId: "run-1"
+    });
+
+    expect(obs?.status).toBe("failed");
+  });
+
+  it("rejects a forward completion whose span_start never reported a stepIndex at all, even though the completion does (issue #467 adversarial probe)", () => {
+    const events = generateEvents({ skips: [4, 5, 6] });
+    const startIdx = events.findIndex(
+      (e) =>
+        e.type === "span_start" &&
+        (e.metadata as Record<string, unknown> | undefined)?.phase === "diffusion_forward" &&
+        (e.metadata as Record<string, unknown> | undefined)?.stepIndex === 10
+    );
+    const metaWithoutStep = { ...(events[startIdx]!.metadata as Record<string, unknown>) };
+    delete metaWithoutStep.stepIndex;
+    events[startIdx] = {
+      ...events[startIdx]!,
+      metadata: metaWithoutStep
+    } as MinimaxH3InstrumentationEvent;
+
+    const obs = reduceTeaCacheObservation({
+      events,
+      teacacheRequest: sampleRequest,
+      expectedRunId: "run-1"
+    });
+
+    expect(obs?.status).toBe("failed");
+    expect(obs?.failureReason).toMatch(/contradictory stepIndex values/i);
+  });
+
+  it("rejects a session summary with the teacacheSession='end' marker stripped off, even though the summary object itself is still present (issue #467 adversarial probe)", () => {
+    const events = generateEvents({ skips: [4, 5, 6] });
+    const endIdx = events.findIndex(
+      (e) => (e.metadata as Record<string, unknown> | undefined)?.teacacheSession === "end"
+    );
+    const metaWithoutEndMarker = { ...(events[endIdx]!.metadata as Record<string, unknown>) };
+    delete metaWithoutEndMarker.teacacheSession;
+    events[endIdx] = {
+      ...events[endIdx]!,
+      metadata: metaWithoutEndMarker
+    } as MinimaxH3InstrumentationEvent;
+
+    const obs = reduceTeaCacheObservation({
+      events,
+      teacacheRequest: sampleRequest,
+      expectedRunId: "run-1"
+    });
+
+    expect(obs?.status).toBe("failed");
+    expect(obs?.failureReason).toMatch(/session end event was not observed/i);
+  });
 });
