@@ -494,6 +494,46 @@ describe("MiniMax-H3 Attention Contracts", () => {
       expect(parsed.runId).toBe("run-001");
       expect(parsed.registeredNodes.MiniMaxH3ImageToVideo?.className).toBe("MiniMaxH3ImageToVideo");
     });
+
+    it("accepts the real collector's teacacheAdapterIdentity field, both null and populated (issue #467)", () => {
+      const base = {
+        protocol: "v2-jsonl",
+        protocolVersion: "v2-jsonl",
+        runId: "run-001",
+        attemptToken: "attempt-1",
+        pid: 12345,
+        nonce: "test-nonce-123",
+        collectorDigest: "1111111111111111111111111111111111111111111111111111111111111111",
+        hookManifestDigest: "2222222222222222222222222222222222222222222222222222222222222222",
+        installedHooks: [],
+        registeredNodes: {}
+      };
+
+      // Every ordinary baseline/attention/recipe collector handshake
+      // reports this field -- null when no TeaCache adapter resolves at
+      // all. Before this field existed on the schema, adding it to the
+      // real producer's payload broke every authentic V2 handshake
+      // parse, not just TeaCache ones.
+      expect(() =>
+        MinimaxH3CapabilityHandshakeSchema.parse({ ...base, teacacheAdapterIdentity: null })
+      ).not.toThrow();
+
+      const populated = MinimaxH3CapabilityHandshakeSchema.parse({
+        ...base,
+        teacacheAdapterIdentity: {
+          verified: true,
+          packageDir: "/opt/comfyui-isolated-teacache/custom_nodes/cco-minimax-h3-teacache",
+          observedDigest: "3333333333333333333333333333333333333333333333333333333333333333"
+        }
+      });
+      expect(populated.teacacheAdapterIdentity?.verified).toBe(true);
+
+      const rejected = MinimaxH3CapabilityHandshakeSchema.parse({
+        ...base,
+        teacacheAdapterIdentity: { verified: false, reason: "digest_mismatch" }
+      });
+      expect(rejected.teacacheAdapterIdentity?.verified).toBe(false);
+    });
   });
 
   describe("compareDottedVersions & satisfiesDriverConstraint (F-780279b3)", () => {

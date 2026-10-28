@@ -741,7 +741,7 @@ def _resolve_teacache_module(guider=None, model_patcher=None):
 # so the digest of the module *actually resolved and bound* at sampling time
 # is itself verified -- a static pre-flight check cannot prove that a later
 # runtime resolution step didn't substitute a different, unverified copy.
-TEACACHE_LOCAL_ADAPTER_DIGEST = "6205610c8d13cbceb7e93fe408cea7cdd476d6c85e251735a6007bdac7c045aa"
+TEACACHE_LOCAL_ADAPTER_DIGEST = "2bbc1d837adddd4b8455309e19747bb28fceb504d2b52c6685ee189d0a127660"
 
 
 def _compute_teacache_adapter_digest(package_dir: str) -> Optional[str]:

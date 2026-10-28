@@ -464,6 +464,57 @@ print("SUCCESS")
       expect(res.status).toBe(0);
       expect(res.stdout).toContain("SUCCESS");
     });
+
+    it("rejects an in-place mutation of the original latent_shapes/minimax_payload object after it was captured (issue #467)", () => {
+      const code = `
+import teacache
+
+class MockTensor:
+    def __init__(self):
+        self.shape = (1, 16, 20, 20)
+        self.dtype = "float32"
+        self.device = "cuda:0"
+    def detach(self): return self
+    def float(self): return self
+    def clone(self): return MockTensor()
+
+sigmas = list(range(21, 0, -1))
+sess = teacache.TeaCacheSession("s-mutation", "m1", 0.15, 2, -2, 20, sigmas=sigmas)
+sess.advance_step(0)
+
+# A real adversarial probe: the caller reuses the SAME mutable list/dict
+# objects across calls (a common buffer-reuse pattern) rather than
+# constructing fresh ones. The fingerprint captured at step 0 must not
+# alias these -- mutating them afterward must not retroactively make a
+# later, genuinely-different conditioning compare as unchanged.
+shared_latent_shapes = [1, 16, 20, 20]
+shared_payload = {"tokens": 512}
+
+sess.evaluate(
+    lambda inp, **kw: MockTensor(),
+    {"input": MockTensor(), "timestep": 21.0, "c": {"latent_shapes": shared_latent_shapes, "minimax_payload": shared_payload}}
+)
+
+# Mutate the SAME objects in place after capture.
+shared_latent_shapes[2] = 999
+shared_payload["tokens"] = 999
+
+sess.advance_step(1)
+try:
+    sess.evaluate(
+        lambda inp, **kw: MockTensor(),
+        {"input": MockTensor(), "timestep": 20.0, "c": {"latent_shapes": shared_latent_shapes, "minimax_payload": shared_payload}}
+    )
+    assert False, "Expected RuntimeError: the mutated conditioning must still be detected as changed"
+except RuntimeError as e:
+    assert "Conditioning manifest changed mid-session" in str(e)
+
+print("SUCCESS")
+`;
+      const res = runPythonTest(code);
+      expect(res.status).toBe(0);
+      expect(res.stdout).toContain("SUCCESS");
+    });
   });
 
   describe("CCOMiniMaxH3TeaCacheNode ComfyUI Wrapper & Model Verification", () => {

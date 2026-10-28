@@ -597,7 +597,24 @@ export const MinimaxH3CapabilityHandshakeSchema = z
           .strict()
       )
       .optional(),
-    sourceIdentities: z.record(z.string(), sha256HashSchema).optional()
+    sourceIdentities: z.record(z.string(), sha256HashSchema).optional(),
+    // Reported by the collector when a TeaCache adapter module was
+    // resolvable at bootstrap/capability-probe time, regardless of
+    // whether this particular run actually configures TeaCache --
+    // optional/nullable so ordinary baseline/attention/recipe runs (which
+    // never set it, or report null when no adapter resolves) keep
+    // parsing under .strict().
+    teacacheAdapterIdentity: z
+      .object({
+        verified: z.boolean(),
+        reason: z.string().optional(),
+        packageDir: z.string().optional(),
+        observedDigest: sha256HashSchema.optional(),
+        expectedDigest: sha256HashSchema.optional()
+      })
+      .strict()
+      .nullable()
+      .optional()
   })
   .strict();
 export type MinimaxH3CapabilityHandshake = z.infer<typeof MinimaxH3CapabilityHandshakeSchema>;

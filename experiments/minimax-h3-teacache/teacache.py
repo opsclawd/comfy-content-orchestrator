@@ -42,6 +42,39 @@ else:
     setattr(sys, _ACTIVE_MODEL_IDS_LOCK_KEY, _ACTIVE_MODEL_IDS_LOCK)
 
 
+def _snapshot_for_fingerprint(value: Any) -> Any:
+    """Build an immutable, decoupled snapshot of value suitable for an
+    equality-based conditioning fingerprint.
+
+    Two properties matter here, both learned from a real adversarial
+    probe against the naive version of this function:
+    1. The result must not alias the caller's own mutable containers
+       (dict/list). Storing a live reference means an in-place mutation
+       of the ORIGINAL object after capture silently changes what the
+       "old" fingerprint compares as, defeating the whole point of a
+       change check.
+    2. Tensor-like values (anything with .shape/.dtype -- real torch
+       tensors, or the lightweight mocks used in tests) must never reach
+       Python's `==`/`!=` directly: a real tensor's __eq__ returns an
+       elementwise tensor, not a bool, which raises when something tries
+       to use it as one (e.g. inside a tuple's own __eq__). Identity is
+       compared via shape/dtype/device instead, exactly as evaluate()
+       already does for the cached input tensor elsewhere in this file.
+    """
+    if hasattr(value, "shape") and hasattr(value, "dtype"):
+        return (
+            "__tensor__",
+            tuple(value.shape) if value.shape is not None else None,
+            str(getattr(value, "dtype", None)),
+            str(getattr(value, "device", None)),
+        )
+    if isinstance(value, dict):
+        return tuple(sorted((k, _snapshot_for_fingerprint(v)) for k, v in value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_snapshot_for_fingerprint(v) for v in value)
+    return value
+
+
 class TeaCacheSession:
     def __init__(
         self,
@@ -197,25 +230,24 @@ class TeaCacheSession:
             # Bind this session to the specific route/conditioning shape it was
             # first called with. A cached output is only a valid substitute for
             # a later real forward if the surrounding conditioning manifest --
-            # which keys are present, the actual latent_shapes value, a stable
-            # digest of the minimax_payload contents, and the cond/uncond
-            # arity -- is unchanged -- otherwise the cache would silently
-            # serve output computed under a different route (e.g. I2V vs
-            # Ref2V), a different reference-image binding, or a changed
-            # payload, even though the surrounding key set looked identical.
+            # which keys are present, the actual latent_shapes/minimax_payload/
+            # cross_attention identity, and the cond/uncond arity -- is
+            # unchanged -- otherwise the cache would silently serve output
+            # computed under a different route (e.g. I2V vs Ref2V), a
+            # different reference-image binding, or a changed payload, even
+            # though the surrounding key set looked identical. The snapshot
+            # must not alias the caller's own (possibly reused/mutated-in-
+            # place) containers: freezing to an immutable, decoupled tuple
+            # form means a later in-place mutation of the original object
+            # cannot retroactively change what this session captured.
             c = kwargs.get("c")
             c_fingerprint_keys = tuple(sorted(c.keys())) if isinstance(c, dict) else None
-            latent_shapes_val = c.get("latent_shapes") if isinstance(c, dict) else None
-            minimax_payload_val = c.get("minimax_payload") if isinstance(c, dict) else None
-            if isinstance(minimax_payload_val, dict):
-                minimax_payload_fingerprint = tuple(sorted(minimax_payload_val.items()))
-            else:
-                minimax_payload_fingerprint = minimax_payload_val
             fingerprint = (
                 tuple(sorted(k for k in kwargs if k not in ("input", "timestep", "c"))),
                 c_fingerprint_keys,
-                latent_shapes_val,
-                minimax_payload_fingerprint,
+                _snapshot_for_fingerprint(c.get("latent_shapes")) if isinstance(c, dict) else None,
+                _snapshot_for_fingerprint(c.get("minimax_payload")) if isinstance(c, dict) else None,
+                _snapshot_for_fingerprint(c.get("cross_attention")) if isinstance(c, dict) else None,
                 len(cond_or_uncond) if isinstance(cond_or_uncond, (list, tuple)) else cond_or_uncond,
             )
             if self.conditioning_fingerprint is None:
