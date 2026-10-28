@@ -848,6 +848,90 @@ print("SUCCESS")
       expect(res.stdout).toContain("SUCCESS");
     });
 
+    it("tolerates the pinned core's transformer_options.uuids (uuid.UUID objects, stable per conditioning for the whole run) without crashing, while still catching a real conditioning change (issue #467)", () => {
+      const code = `
+import teacache
+import uuid
+
+class MockTensor:
+    def __init__(self):
+        self.shape = (1, 16, 20, 20)
+        self.dtype = "float32"
+        self.device = "cuda:0"
+    def detach(self): return self
+    def float(self): return self
+    def clone(self): return MockTensor()
+
+# comfy/sampler_helpers.py's convert_cond() assigns one uuid.uuid4() per
+# conditioning entry during prepare_sampling -- once per sampling RUN, not
+# regenerated per step -- and comfy/samplers.py carries that same value
+# into transformer_options.uuids on every subsequent step. A prior version
+# of _snapshot_for_fingerprint had no handling for uuid.UUID at all and
+# raised "Unsupported conditioning value type" at the very first
+# evaluate() call, before any real model call could ever run.
+cond_uuid = uuid.uuid4()
+
+sigmas = list(range(21, 0, -1))
+sess = teacache.TeaCacheSession("s-core-uuids", "m1", 0.15, 2, -2, 20, sigmas=sigmas)
+sess.advance_step(0)
+
+sess.evaluate(
+    lambda inp, **kw: MockTensor(),
+    {
+        "input": MockTensor(),
+        "timestep": 21.0,
+        "cond_or_uncond": [0],
+        "c": {
+            "cross_attention": "stable-embedding",
+            "transformer_options": {"sigmas": [21.0], "uuids": [cond_uuid, cond_uuid]}
+        }
+    }
+)
+
+sess.advance_step(1)
+# Same conditioning uuid carried forward (as the real core does across
+# every step of one run) plus a legitimately-changing sigmas value must
+# NOT be treated as a conditioning change.
+sess.evaluate(
+    lambda inp, **kw: MockTensor(),
+    {
+        "input": MockTensor(),
+        "timestep": 20.0,
+        "cond_or_uncond": [0],
+        "c": {
+            "cross_attention": "stable-embedding",
+            "transformer_options": {"sigmas": [20.0], "uuids": [cond_uuid, cond_uuid]}
+        }
+    }
+)
+
+sess.advance_step(2)
+try:
+    # A genuinely different conditioning uuid (e.g. a new/replaced
+    # conditioning entry mid-run) must still be caught as a real change.
+    sess.evaluate(
+        lambda inp, **kw: MockTensor(),
+        {
+            "input": MockTensor(),
+            "timestep": 19.0,
+            "cond_or_uncond": [0],
+            "c": {
+                "cross_attention": "stable-embedding",
+                "transformer_options": {"sigmas": [19.0], "uuids": [uuid.uuid4(), uuid.uuid4()]}
+            }
+        }
+    )
+    assert False, "Expected RuntimeError: a different conditioning uuid must be rejected"
+except RuntimeError as e:
+    assert "Conditioning manifest changed mid-session" in str(e)
+
+print("SUCCESS")
+`;
+      const res = runPythonTest(code);
+      expect(res.status).toBe(0);
+      expect(res.stdout).toContain("SUCCESS");
+    });
+
     it("rejects an unsupported conditioning payload type instead of silently passing it through unverified (issue #467)", () => {
       const code = `
 import teacache

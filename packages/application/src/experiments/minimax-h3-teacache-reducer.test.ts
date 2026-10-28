@@ -1145,4 +1145,112 @@ describe("minimax-h3-teacache-reducer", () => {
     expect(obs?.status).toBe("failed");
     expect(obs?.failureReason).toMatch(/no parentSpanId at all/i);
   });
+
+  it("rejects a matched ('off') control run whose 20 diffusion_forward spans carry no parentSpanId at all (issue #467 adversarial probe)", () => {
+    // Mirrors the prior raw-l1-v1-only probe above, but against the
+    // matched control path: a control run with a valid init/end and the
+    // exact expected forward count can still be certified as
+    // verified/complete with its forwards entirely unlinked from the real
+    // sampler invocation, unless attribution is required on both paths.
+    const controlRequest: MinimaxH3TeaCacheRequest = {
+      ...sampleRequest,
+      mode: "off",
+      patchNode: null
+    };
+    const events: MinimaxH3InstrumentationEvent[] = [
+      makeEvent("sampling", "span_start"),
+      makeEvent("sampling", "point_event", {
+        teacacheEvent: "session_init",
+        adapterIdentity: { verified: true, observedDigest: controlRequest.adapterDigest },
+        effectiveConfig: {
+          mode: "off",
+          relL1Thresh: 0.15,
+          startStep: 2,
+          endStep: 18,
+          totalSteps: 20,
+          normalizedStartStep: 2,
+          normalizedEndStep: 18
+        }
+      })
+    ];
+    for (let s = 0; s < 20; s++) {
+      const fwdSpanId = `span-df-${s}`;
+      events.push({
+        ...makeEvent(
+          "sampling",
+          "span_start",
+          { modelForwardCall: true, phase: "diffusion_forward" },
+          1100 + s * 20
+        ),
+        spanId: fwdSpanId
+        // Deliberately no parentSpanId.
+      });
+      events.push({
+        ...makeEvent(
+          "sampling",
+          "span_end",
+          { modelForwardCall: true, phase: "diffusion_forward" },
+          1110 + s * 20
+        ),
+        spanId: fwdSpanId
+        // Deliberately no parentSpanId.
+      });
+    }
+    events.push(
+      makeEvent("sampling", "point_event", {
+        teacacheSession: "end",
+        summary: { mode: "off", forwardCalls: 20, cacheHits: 0 },
+        teacacheSummary: {
+          status: "verified",
+          forwardCallsRecorded: 20,
+          cacheHitsRecorded: 0,
+          modelForwardsRecorded: 20,
+          nestedForwardsOnHits: 0
+        }
+      })
+    );
+    events.push(makeEvent("sampling", "span_end", { completedSteps: 20 }));
+
+    const obs = reduceTeaCacheObservation({
+      events,
+      teacacheRequest: controlRequest,
+      expectedRunId: "run-1"
+    });
+
+    expect(obs?.status).toBe("failed");
+    expect(obs?.failureReason).toMatch(/no parentSpanId at all/i);
+  });
+
+  it("reports forwardCallsRecorded/cacheHitsRecorded/modelForwardsRecorded as null (not confirmed-zero) when a session_init is observed but the log is interrupted before any decision or forward (issue #467 adversarial probe)", () => {
+    const events: MinimaxH3InstrumentationEvent[] = [
+      makeEvent("sampling", "span_start"),
+      makeEvent("sampling", "point_event", {
+        teacacheEvent: "session_init",
+        adapterIdentity: { verified: true, observedDigest: sampleRequest.adapterDigest },
+        effectiveConfig: {
+          mode: "raw-l1-v1",
+          relL1Thresh: 0.15,
+          startStep: 2,
+          endStep: -2,
+          totalSteps: 20,
+          normalizedStartStep: 2,
+          normalizedEndStep: 18
+        }
+      })
+      // Log cut off here: no decisions, no forwards, no session end, no
+      // sampling span end -- a genuine interruption, not a completed run
+      // with zero of anything.
+    ];
+
+    const obs = reduceTeaCacheObservation({
+      events,
+      teacacheRequest: sampleRequest,
+      expectedRunId: "run-1"
+    });
+
+    expect(obs?.status).toBe("failed");
+    expect(obs?.forwardCallsRecorded).toBeNull();
+    expect(obs?.cacheHitsRecorded).toBeNull();
+    expect(obs?.coverage.modelForwardsRecorded).toBeNull();
+  });
 });

@@ -40,10 +40,16 @@ export const TEACACHE_LOCAL_ADAPTER_FILE_HASHES = Object.freeze({
   // core revision, not conditioning identity), which is instead validated
   // against this session's own pinned sigma schedule rather than merely
   // ignored -- by immutable, decoupled value; verifies actual tensor
-  // CONTENT via .equal() and otherwise ALWAYS fails closed; and rejects
+  // CONTENT via .equal() and otherwise ALWAYS fails closed; rejects
   // unsupported/unverifiable payload types outright (see teacache.py's
-  // _snapshot_for_fingerprint/_fingerprints_equal).
-  "teacache.py": "d6af292ff7202ddf9c2ccfbdee80cda476d599f8dc3b422379c5285627fd5c25"
+  // _snapshot_for_fingerprint/_fingerprints_equal); and passes uuid.UUID
+  // values through as stable, value-equality-comparable leaves, since the
+  // pinned core's comfy/sampler_helpers.py assigns one uuid.uuid4() per
+  // conditioning entry once per sampling run (not regenerated per step)
+  // and carries that same value into transformer_options.uuids on every
+  // step -- a prior version had no UUID handling at all and rejected it
+  // as an "unsupported conditioning value type" on the very first step.
+  "teacache.py": "8cd8128f98eab25980364788dc3276112de3e241479fba0adf8b0e1717a72fbf"
 });
 
 export const TEACACHE_LOCAL_ADAPTER_DIGEST = sha256Hex(

@@ -7,6 +7,7 @@ import contextvars
 import math
 import sys
 import threading
+import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 SUPPORTED_THRESHOLDS = (0.05, 0.1, 0.15)
@@ -69,7 +70,16 @@ def _snapshot_for_fingerprint(value: Any) -> Any:
        metadata so _fingerprints_equal can verify real content identity,
        not just that the metadata happens to match.
     """
-    if value is None or isinstance(value, (bool, int, float, str)):
+    if value is None or isinstance(value, (bool, int, float, str, uuid.UUID)):
+        # uuid.UUID is immutable and defines real value equality (two UUID
+        # objects with the same int value compare equal via `==`, never an
+        # elementwise/ambiguous result) -- safe to pass through unwrapped,
+        # same as str/int/float. This matters because the pinned ComfyUI
+        # core attaches a fresh uuid.UUID per forward call inside
+        # transformer_options.uuids (comfy/sampler_helpers.py,
+        # comfy/samplers.py); without this branch every real sampling call
+        # hit the "unsupported type" fail-closed path below and TeaCache
+        # could never evaluate a single step against genuine core input.
         return value
     if hasattr(value, "shape") and hasattr(value, "dtype"):
         clone = None

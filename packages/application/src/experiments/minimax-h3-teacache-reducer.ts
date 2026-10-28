@@ -48,6 +48,16 @@ export function reduceTeaCacheObservation(
   let samplingCallsRecorded = 0;
   let hasCacheEvents = false;
   let sessionAttempts = 0;
+  // True as soon as any genuine evaluation/forward evidence was observed
+  // (a decision point_event, or a diffusion_forward span start/end, in
+  // either outcome) -- distinct from hasCacheEvents, which a bare
+  // session_init alone already sets. Without this, a log interrupted right
+  // after session_init (no decisions or forwards ever reached) reported
+  // forwardCallsRecorded=0/cacheHitsRecorded=0/modelForwardsRecorded=0 as
+  // if zero forwards had been CONFIRMED, indistinguishable from a run that
+  // genuinely completed with zero of something -- rather than surfacing
+  // that nothing was ever observed to count at all.
+  let sawAnyStepEvidence = false;
   let sessionId: string | null = null;
   let observedEffectiveConfig: MinimaxH3TeaCacheConfig | null = null;
 
@@ -300,20 +310,19 @@ export function reduceTeaCacheObservation(
             ? meta.step_index
             : undefined;
 
-      if (
-        (isSkip || isFull) &&
-        teacacheRequest.mode === "raw-l1-v1" &&
-        event.parentSpanId === undefined
-      ) {
+      if ((isSkip || isFull) && event.parentSpanId === undefined) {
         // A decision event with no parentSpanId at all cannot be tied to
         // this window's real sampler invocation -- treating "attribution
         // absent" the same as "attribution matches" (rather than as
         // suspicious) is exactly what let a probe with genuinely unlinked
-        // decisions still pass.
+        // decisions still pass. Applies to both modes: decisions only ever
+        // occur for raw-l1-v1 in practice, but there is no reason to scope
+        // the check narrower than "any decision event this reducer sees".
         missingAttributionCount++;
       }
       if (isSkip || isFull) {
         hasCacheEvents = true;
+        sawAnyStepEvidence = true;
         if (stepIdx !== undefined) {
           if (seenSteps.has(stepIdx)) {
             duplicateStepEvaluations++;
@@ -388,11 +397,15 @@ export function reduceTeaCacheObservation(
         meta.modelForwardCall === true
       ) {
         const spanKey = event.spanId ?? null;
-        if (
-          event.type === "span_start" &&
-          teacacheRequest.mode === "raw-l1-v1" &&
-          event.parentSpanId === undefined
-        ) {
+        sawAnyStepEvidence = true;
+        if (event.type === "span_start" && event.parentSpanId === undefined) {
+          // Applies to both raw-l1-v1 and the matched "off" control: a
+          // diffusion_forward span with no parentSpanId cannot be proven
+          // to belong to this window's real sampler invocation either way
+          // -- a control run's forwards need the same ownership evidence
+          // as the candidate's, or an unparented batch of forward spans
+          // can be certified as a "verified, complete" control baseline
+          // with no sampler attribution at all.
           missingAttributionCount++;
         }
         if (event.type === "span_start") {
@@ -773,12 +786,12 @@ export function reduceTeaCacheObservation(
     requestedConfig,
     effectiveConfig: finalStatus !== "failed" ? observedEffectiveConfig : null,
     totalSteps: 20,
-    forwardCallsRecorded,
-    cacheHitsRecorded,
+    forwardCallsRecorded: sawAnyStepEvidence ? forwardCallsRecorded : null,
+    cacheHitsRecorded: sawAnyStepEvidence ? cacheHitsRecorded : null,
     nestedForwardsOnHits,
     coverage: {
       samplingCallsRecorded,
-      modelForwardsRecorded: hasCacheEvents ? modelForwardsRecorded : null,
+      modelForwardsRecorded: sawAnyStepEvidence ? modelForwardsRecorded : null,
       complete
     },
     timings: {
