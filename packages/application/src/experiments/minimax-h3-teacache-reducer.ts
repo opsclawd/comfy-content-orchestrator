@@ -184,13 +184,20 @@ export function reduceTeaCacheObservation(
             boundSessionId = sessionId;
           }
         }
-        if (
-          meta.adapterIdentity &&
-          typeof meta.adapterIdentity === "object" &&
-          (meta.adapterIdentity as { verified?: unknown }).verified === false
-        ) {
+        if (meta.adapterIdentity === undefined || meta.adapterIdentity === null) {
           adapterIdentityVerifiedFailure =
-            "TeaCache adapter identity was not verified for this session's loaded module.";
+            "TeaCache session_init did not report an adapterIdentity; loaded-module identity cannot be certified.";
+        } else if (typeof meta.adapterIdentity === "object") {
+          const ai = meta.adapterIdentity as { verified?: unknown; observedDigest?: unknown };
+          if (ai.verified !== true) {
+            adapterIdentityVerifiedFailure =
+              "TeaCache adapter identity was not verified for this session's loaded module.";
+          } else if (
+            typeof ai.observedDigest === "string" &&
+            ai.observedDigest !== teacacheRequest.adapterDigest
+          ) {
+            adapterIdentityVerifiedFailure = `TeaCache adapter observedDigest "${ai.observedDigest}" does not match the pinned/requested adapterDigest "${teacacheRequest.adapterDigest}".`;
+          }
         }
         // Track one identity per session_init occurrence (preferring the
         // explicit sessionId field, since a point_event's own spanId is

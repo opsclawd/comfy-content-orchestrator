@@ -573,6 +573,102 @@ print("SUCCESS")
       expect(res.status).toBe(0);
       expect(res.stdout).toContain("SUCCESS");
     });
+
+    it("rejects two distinct tensor-likes that both fail to clone, instead of treating unverifiable content as equal (issue #467)", () => {
+      const code = `
+import teacache
+
+class MockTensor:
+    def __init__(self):
+        self.shape = (1, 16, 20, 20)
+        self.dtype = "float32"
+        self.device = "cuda:0"
+    def detach(self): return self
+    def float(self): return self
+    def clone(self): return MockTensor()
+
+# No .detach()/.clone() at all, so _snapshot_for_fingerprint can never
+# capture a content clone for either call -- both snapshots end up with
+# clone=None. A prior version of the comparator treated "both None" as
+# equal regardless of whether the two objects were the same one, which
+# is a fail-OPEN bug: it let two completely different, unverifiable
+# tensor-likes silently compare as unchanged.
+class UncloneableTensor:
+    def __init__(self):
+        self.shape = (4, 768)
+        self.dtype = "float32"
+        self.device = "cuda:0"
+
+sigmas = list(range(21, 0, -1))
+sess = teacache.TeaCacheSession("s-uncloneable", "m1", 0.15, 2, -2, 20, sigmas=sigmas)
+sess.advance_step(0)
+
+sess.evaluate(
+    lambda inp, **kw: MockTensor(),
+    {"input": MockTensor(), "timestep": 21.0, "c": {"cross_attention": UncloneableTensor()}}
+)
+
+sess.advance_step(1)
+try:
+    # A genuinely different UncloneableTensor instance -- unverifiable,
+    # so it must be rejected rather than assumed unchanged.
+    sess.evaluate(
+        lambda inp, **kw: MockTensor(),
+        {"input": MockTensor(), "timestep": 20.0, "c": {"cross_attention": UncloneableTensor()}}
+    )
+    assert False, "Expected RuntimeError: unverifiable tensor-likes must not compare as equal"
+except RuntimeError as e:
+    assert "Conditioning manifest changed mid-session" in str(e)
+
+print("SUCCESS")
+`;
+      const res = runPythonTest(code);
+      expect(res.status).toBe(0);
+      expect(res.stdout).toContain("SUCCESS");
+    });
+
+    it("rejects an unsupported conditioning payload type instead of silently passing it through unverified (issue #467)", () => {
+      const code = `
+import teacache
+
+class MockTensor:
+    def __init__(self):
+        self.shape = (1, 16, 20, 20)
+        self.dtype = "float32"
+        self.device = "cuda:0"
+    def detach(self): return self
+    def float(self): return self
+    def clone(self): return MockTensor()
+
+# A custom object that is none of None/bool/int/float/str, dict,
+# list/tuple, or tensor-like (no .shape/.dtype). Its default __eq__ is
+# identity-based, so a prior version of this code (which fell through to
+# a raw passthrough for "unsupported" values) would let this same
+# object, even if mutated in place between calls, silently compare as
+# unchanged. Must instead be rejected outright at fingerprinting time.
+class UnsupportedPayload:
+    def __init__(self, val):
+        self.val = val
+
+sigmas = list(range(21, 0, -1))
+sess = teacache.TeaCacheSession("s-unsupported", "m1", 0.15, 2, -2, 20, sigmas=sigmas)
+sess.advance_step(0)
+
+try:
+    sess.evaluate(
+        lambda inp, **kw: MockTensor(),
+        {"input": MockTensor(), "timestep": 21.0, "c": {"custom": UnsupportedPayload("v1")}}
+    )
+    assert False, "Expected ValueError: unsupported conditioning payload type must be rejected"
+except ValueError as e:
+    assert "Unsupported conditioning value type" in str(e)
+
+print("SUCCESS")
+`;
+      const res = runPythonTest(code);
+      expect(res.status).toBe(0);
+      expect(res.stdout).toContain("SUCCESS");
+    });
   });
 
   describe("CCOMiniMaxH3TeaCacheNode ComfyUI Wrapper & Model Verification", () => {

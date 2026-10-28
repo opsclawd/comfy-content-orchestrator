@@ -34,11 +34,13 @@ export const TEACACHE_LOCAL_ADAPTER_FILE_HASHES = Object.freeze({
   // validation, same-model session-ownership guard keyed to the owning
   // session_id (not a bare model_id set, which let a rejected session's
   // cleanup() evict a different, legitimately-active session's lock), and
-  // a conditioning-manifest fingerprint that snapshots latent_shapes,
-  // minimax_payload and cross_attention by immutable, decoupled value and
-  // verifies actual tensor CONTENT via .equal() (not just shape/dtype/
-  // device metadata) added to TeaCacheSession (see teacache.py).
-  "teacache.py": "d800f7fe1fa9c626dae9188cff799503d191af6a0cfb5b681c979a81c3cc47a9"
+  // a conditioning-manifest fingerprint that snapshots the ENTIRE `c` dict
+  // (not a hand-picked subset of keys) by immutable, decoupled value;
+  // verifies actual tensor CONTENT via .equal() (never trusting metadata
+  // alone, and failing closed rather than "equal" when content can't be
+  // verified); and rejects unsupported/unverifiable payload types outright
+  // (see teacache.py's _snapshot_for_fingerprint/_fingerprints_equal).
+  "teacache.py": "86cba8de20f9cc41b10af90fa39565005d3c4f9405d7fc9950f6b5aeeae4e0a9"
 });
 
 export const TEACACHE_LOCAL_ADAPTER_DIGEST = sha256Hex(

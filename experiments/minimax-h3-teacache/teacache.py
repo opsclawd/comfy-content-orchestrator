@@ -69,6 +69,8 @@ def _snapshot_for_fingerprint(value: Any) -> Any:
        metadata so _fingerprints_equal can verify real content identity,
        not just that the metadata happens to match.
     """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
     if hasattr(value, "shape") and hasattr(value, "dtype"):
         clone = None
         try:
@@ -82,12 +84,25 @@ def _snapshot_for_fingerprint(value: Any) -> Any:
             str(getattr(value, "dtype", None)),
             str(getattr(value, "device", None)),
             clone,
+            value,
         )
     if isinstance(value, dict):
         return tuple(sorted((k, _snapshot_for_fingerprint(v)) for k, v in value.items()))
     if isinstance(value, (list, tuple)):
         return tuple(_snapshot_for_fingerprint(v) for v in value)
-    return value
+    # Anything else (an arbitrary custom object) cannot be safely frozen or
+    # compared: its own __eq__ may be identity-based (silently masking an
+    # in-place mutation of the same object across calls, which is exactly
+    # the failure mode a prior version of this function left open for
+    # "unsupported" payload values that fell through to a raw passthrough
+    # here) or may raise/behave unpredictably. Fail closed rather than
+    # accept an unverifiable conditioning payload.
+    raise ValueError(
+        f"Unsupported conditioning value type for TeaCache fingerprinting: {type(value)!r}. "
+        "Only None/bool/int/float/str, dict, list/tuple, and tensor-like "
+        "(shape+dtype) values are supported; add explicit handling rather "
+        "than caching across an unverifiable payload."
+    )
 
 
 def _fingerprints_equal(a: Any, b: Any) -> bool:
@@ -102,29 +117,30 @@ def _fingerprints_equal(a: Any, b: Any) -> bool:
     if (
         isinstance(a, tuple)
         and isinstance(b, tuple)
-        and len(a) == 5
-        and len(b) == 5
+        and len(a) == 6
+        and len(b) == 6
         and a[0] == _TENSOR_SNAPSHOT_TAG
         and b[0] == _TENSOR_SNAPSHOT_TAG
     ):
         if a[1] != b[1] or a[2] != b[2] or a[3] != b[3]:
             return False
         old_clone, new_clone = a[4], b[4]
-        if old_clone is None or new_clone is None:
-            return old_clone is new_clone
-        if old_clone is new_clone:
-            return True
-        equal_fn = getattr(old_clone, "equal", None)
-        if callable(equal_fn):
-            try:
-                return bool(equal_fn(new_clone))
-            except Exception:
-                return False
-        # No real tensor .equal() available and not the same object --
-        # fail closed: shape/dtype/device metadata alone cannot prove the
-        # content is unchanged, and silently trusting it is exactly the
-        # gap a prior version of this check left open.
-        return False
+        if old_clone is not None and new_clone is not None:
+            equal_fn = getattr(old_clone, "equal", None)
+            if callable(equal_fn):
+                try:
+                    return bool(equal_fn(new_clone))
+                except Exception:
+                    return False
+            # A clone exists on both sides but neither exposes .equal() --
+            # fall through to the raw-reference fallback below rather than
+            # trust metadata alone.
+        # Cloning was unavailable (on either or both sides): the only
+        # honest fallback is whether the two calls were literally handed
+        # the SAME original object. Two merely metadata-identical-but-
+        # distinct objects that can't be content-verified must be treated
+        # as changed (fail closed), not as equal.
+        return a[5] is b[5]
     if isinstance(a, tuple) and isinstance(b, tuple):
         if len(a) != len(b):
             return False
@@ -288,25 +304,19 @@ class TeaCacheSession:
 
             # Bind this session to the specific route/conditioning shape it was
             # first called with. A cached output is only a valid substitute for
-            # a later real forward if the surrounding conditioning manifest --
-            # which keys are present, the actual latent_shapes/minimax_payload/
-            # cross_attention identity, and the cond/uncond arity -- is
-            # unchanged -- otherwise the cache would silently serve output
-            # computed under a different route (e.g. I2V vs Ref2V), a
-            # different reference-image binding, or a changed payload, even
-            # though the surrounding key set looked identical. The snapshot
-            # must not alias the caller's own (possibly reused/mutated-in-
-            # place) containers: freezing to an immutable, decoupled tuple
-            # form means a later in-place mutation of the original object
-            # cannot retroactively change what this session captured.
+            # a later real forward if the ENTIRE surrounding conditioning
+            # manifest -- every key and value in `c`, not just a hand-picked
+            # subset -- plus the cond/uncond arity, is unchanged -- otherwise
+            # the cache would silently serve output computed under a
+            # different route (e.g. I2V vs Ref2V), a different reference-
+            # image binding, or a changed payload on some key this session
+            # happened not to special-case. _snapshot_for_fingerprint
+            # recursively freezes/verifies the whole of `c`, not only
+            # latent_shapes/minimax_payload/cross_attention.
             c = kwargs.get("c")
-            c_fingerprint_keys = tuple(sorted(c.keys())) if isinstance(c, dict) else None
             fingerprint = (
                 tuple(sorted(k for k in kwargs if k not in ("input", "timestep", "c"))),
-                c_fingerprint_keys,
-                _snapshot_for_fingerprint(c.get("latent_shapes")) if isinstance(c, dict) else None,
-                _snapshot_for_fingerprint(c.get("minimax_payload")) if isinstance(c, dict) else None,
-                _snapshot_for_fingerprint(c.get("cross_attention")) if isinstance(c, dict) else None,
+                _snapshot_for_fingerprint(c) if c is not None else None,
                 len(cond_or_uncond) if isinstance(cond_or_uncond, (list, tuple)) else cond_or_uncond,
             )
             if self.conditioning_fingerprint is None:

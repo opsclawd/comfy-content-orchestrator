@@ -5246,6 +5246,10 @@ describe("MiniMax-H3 Step Reduction Sampling Recipe Validation & Tampering Detec
         monotonicMs: 100.0,
         metadata: {
           teacacheEvent: "session_init",
+          adapterIdentity: {
+            verified: true,
+            observedDigest: descV2.teacacheRequest?.adapterDigest
+          },
           effectiveConfig: {
             mode: "raw-l1-v1",
             relL1Thresh: 0.15,

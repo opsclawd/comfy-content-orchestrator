@@ -80,6 +80,7 @@ describe("minimax-h3-teacache-reducer", () => {
           {
             teacacheSession: "start",
             teacacheEvent: "session_init",
+            adapterIdentity: { verified: true, observedDigest: sampleRequest.adapterDigest },
             effectiveConfig: options.effectiveConfig ?? {
               mode: "raw-l1-v1",
               relL1Thresh: 0.15,
@@ -423,6 +424,7 @@ describe("minimax-h3-teacache-reducer", () => {
       },
       makeEvent("sampling", "point_event", {
         teacacheEvent: "session_init",
+        adapterIdentity: { verified: true, observedDigest: controlRequest.adapterDigest },
         effectiveConfig: {
           mode: "off",
           relL1Thresh: 0.15,

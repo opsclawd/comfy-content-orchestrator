@@ -4828,6 +4828,11 @@ describe("Service-generated Matched Pairs Admission and Comparison", () => {
           monotonicMs: 1020,
           metadata: {
             teacacheEvent: "session_init",
+            adapterIdentity: {
+              verified: true,
+              observedDigest: (baseDesc as MinimaxH3ExperimentDescriptorV2).teacacheRequest
+                ?.adapterDigest
+            },
             effectiveConfig: {
               mode: "off",
               relL1Thresh: 0.15,
@@ -4983,6 +4988,11 @@ describe("Service-generated Matched Pairs Admission and Comparison", () => {
           metadata: {
             teacacheEvent: "session_init",
             sessionId: "tc-sess-1",
+            adapterIdentity: {
+              verified: true,
+              observedDigest: (varDesc as MinimaxH3ExperimentDescriptorV2).teacacheRequest
+                ?.adapterDigest
+            },
             effectiveConfig: {
               mode: "raw-l1-v1",
               relL1Thresh: 0.15,

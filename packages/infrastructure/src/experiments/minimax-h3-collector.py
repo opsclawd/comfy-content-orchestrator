@@ -741,7 +741,7 @@ def _resolve_teacache_module(guider=None, model_patcher=None):
 # so the digest of the module *actually resolved and bound* at sampling time
 # is itself verified -- a static pre-flight check cannot prove that a later
 # runtime resolution step didn't substitute a different, unverified copy.
-TEACACHE_LOCAL_ADAPTER_DIGEST = "16c01b73f83999b24c3d20d9d7fc2221a736f76aeb6a75c74e57e9edac0d4bc1"
+TEACACHE_LOCAL_ADAPTER_DIGEST = "052db2b218f606fb5b5eb412446d2bcda271db61fd1242bb45745d4bb0f7a1dc"
 
 
 def _compute_teacache_adapter_digest(package_dir: str) -> Optional[str]:
@@ -1784,17 +1784,36 @@ def _install_hooks_inner(collector: Collector):
                     if orig_diff_forward is not None and callable(orig_diff_forward):
                         def hooked_diff_forward(*df_args, **df_kwargs):
                             nonlocal diff_forward_count
+                            # tc_session.step_idx is already the correct
+                            # "current step" at the moment a real forward
+                            # fires: the sampler advances it (via
+                            # step_callback's advance_step call) strictly
+                            # before the NEXT step's forward runs, and
+                            # advance_step(0) already ran before this hook
+                            # could ever fire for the first step. Reporting
+                            # it (and the owning session_id) lets the
+                            # reducer attribute each independent forward to
+                            # a specific step/session instead of only being
+                            # able to count totals.
+                            df_step_idx = tc_session.step_idx if tc_session is not None else None
+                            df_session_id = tc_session.session_id if tc_session is not None else None
                             if tc_session is not None and getattr(tc_session, "is_evaluating_hit", False):
                                 tc_session.nested_forwards_on_hits += 1
                             now_start = now_mono_ms()
                             df_span_id = collector.next_span_id("diff_fwd")
+                            df_metadata = {
+                                "modelForwardCall": True,
+                                "phase": "diffusion_forward",
+                                "stepIndex": df_step_idx,
+                                "sessionId": df_session_id
+                            }
                             collector.emit(
                                 "sampling",
                                 "span_start",
                                 span_id=df_span_id,
                                 parent_span_id=sampler_span_id,
                                 monotonic_ms=now_start,
-                                metadata={"modelForwardCall": True, "phase": "diffusion_forward"}
+                                metadata=df_metadata
                             )
                             try:
                                 res = orig_diff_forward(*df_args, **df_kwargs)
@@ -1806,7 +1825,7 @@ def _install_hooks_inner(collector: Collector):
                                     parent_span_id=sampler_span_id,
                                     monotonic_ms=now_mono_ms(),
                                     outcome="success",
-                                    metadata={"modelForwardCall": True, "phase": "diffusion_forward"}
+                                    metadata=df_metadata
                                 )
                                 return res
                             except Exception as e:
@@ -1818,7 +1837,7 @@ def _install_hooks_inner(collector: Collector):
                                     monotonic_ms=now_mono_ms(),
                                     outcome="failed",
                                     error={"message": str(e), "exceptionType": type(e).__name__},
-                                    metadata={"modelForwardCall": True, "phase": "diffusion_forward"}
+                                    metadata=df_metadata
                                 )
                                 raise
                         diffusion_model.forward = hooked_diff_forward
