@@ -326,6 +326,47 @@ print("SUCCESS")
       expect(res.stdout).toContain("SUCCESS");
     });
 
+    it("does not let a rejected session's cleanup() evict a different session's legitimate ownership lock (issue #467)", () => {
+      const code = `
+import teacache
+
+sigmas = list(range(21, 0, -1))
+sess_a = teacache.TeaCacheSession("s-owner", "shared-model", 0.15, 2, -2, 20, sigmas=sigmas)
+sess_b = teacache.TeaCacheSession("s-rejected", "shared-model", 0.15, 2, -2, 20, sigmas=sigmas)
+sess_c = teacache.TeaCacheSession("s-also-rejected", "shared-model", 0.15, 2, -2, 20, sigmas=sigmas)
+
+tok_a = teacache.set_active_session(sess_a)
+
+# sess_b's activation is correctly rejected...
+try:
+    teacache.set_active_session(sess_b)
+    assert False, "Expected RuntimeError"
+except RuntimeError:
+    pass
+
+# ...and the real collector hook's finally block calls cleanup()
+# unconditionally on whatever session object it constructed, win or lose.
+# This must be a no-op for sess_b's slot -- it never actually held the
+# lock -- and must NOT evict sess_a's still-active lock.
+sess_b.cleanup()
+
+# Proof: a third session on the same model_id is STILL rejected, meaning
+# sess_a's lock survived sess_b's cleanup() intact.
+try:
+    teacache.set_active_session(sess_c)
+    assert False, "Expected RuntimeError -- sess_a's lock must still be held"
+except RuntimeError as e:
+    assert "already active for model_id" in str(e)
+
+teacache.reset_active_session(tok_a)
+sess_a.cleanup()
+print("SUCCESS")
+`;
+      const res = runPythonTest(code);
+      expect(res.status).toBe(0);
+      expect(res.stdout).toContain("SUCCESS");
+    });
+
     it("binds a session to the conditioning manifest shape seen on its first evaluate call and rejects a later change (issue #467)", () => {
       const code = `
 import teacache
@@ -361,6 +402,62 @@ try:
     assert False, "Expected RuntimeError on conditioning manifest change"
 except RuntimeError as e:
     assert "Conditioning manifest changed mid-session" in str(e)
+print("SUCCESS")
+`;
+      const res = runPythonTest(code);
+      expect(res.status).toBe(0);
+      expect(res.stdout).toContain("SUCCESS");
+    });
+
+    it("rejects a changed latent_shapes or minimax_payload value even when the conditioning key set is identical (issue #467)", () => {
+      const code = `
+import teacache
+
+class MockTensor:
+    def __init__(self):
+        self.shape = (1, 16, 20, 20)
+        self.dtype = "float32"
+        self.device = "cuda:0"
+    def detach(self): return self
+    def float(self): return self
+    def clone(self): return MockTensor()
+
+sigmas = list(range(21, 0, -1))
+
+# Case 1: latent_shapes value changes, same keys.
+sess1 = teacache.TeaCacheSession("s-latent", "m1", 0.15, 2, -2, 20, sigmas=sigmas)
+sess1.advance_step(0)
+sess1.evaluate(
+    lambda inp, **kw: MockTensor(),
+    {"input": MockTensor(), "timestep": 21.0, "c": {"latent_shapes": (1, 16, 20, 20), "minimax_payload": {"tokens": 512}}}
+)
+sess1.advance_step(1)
+try:
+    sess1.evaluate(
+        lambda inp, **kw: MockTensor(),
+        {"input": MockTensor(), "timestep": 20.0, "c": {"latent_shapes": (1, 16, 40, 40), "minimax_payload": {"tokens": 512}}}
+    )
+    assert False, "Expected RuntimeError on changed latent_shapes value"
+except RuntimeError as e:
+    assert "Conditioning manifest changed mid-session" in str(e)
+
+# Case 2: minimax_payload value changes, same keys.
+sess2 = teacache.TeaCacheSession("s-payload", "m2", 0.15, 2, -2, 20, sigmas=sigmas)
+sess2.advance_step(0)
+sess2.evaluate(
+    lambda inp, **kw: MockTensor(),
+    {"input": MockTensor(), "timestep": 21.0, "c": {"latent_shapes": (1, 16, 20, 20), "minimax_payload": {"tokens": 512}}}
+)
+sess2.advance_step(1)
+try:
+    sess2.evaluate(
+        lambda inp, **kw: MockTensor(),
+        {"input": MockTensor(), "timestep": 20.0, "c": {"latent_shapes": (1, 16, 20, 20), "minimax_payload": {"tokens": 999}}}
+    )
+    assert False, "Expected RuntimeError on changed minimax_payload value"
+except RuntimeError as e:
+    assert "Conditioning manifest changed mid-session" in str(e)
+
 print("SUCCESS")
 `;
       const res = runPythonTest(code);

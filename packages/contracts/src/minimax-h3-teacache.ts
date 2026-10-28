@@ -31,9 +31,13 @@ export const TEACACHE_LOCAL_ADAPTER_FILE_HASHES = Object.freeze({
   "__init__.py": "3b14b0a4da6f0fa366d8da492ea85ce74f2a63f18336ac63970d9d2bfe128c94",
   "nodes.py": "ea16ae7ced6ab1ddfe7ba729a0a0c7047827f1e5601c6fd5c8363b837dd17d2c",
   // Updated for issue #467 follow-up-review fixes: mandatory sigmas/timestep
-  // validation, same-model session-ownership guard, and conditioning-manifest
-  // binding added to TeaCacheSession (see teacache.py).
-  "teacache.py": "ffd3c347182b31d85677e24c1bcf5386f0f49b354690a01e545c972c9756a19a"
+  // validation, same-model session-ownership guard keyed to the owning
+  // session_id (not a bare model_id set, which let a rejected session's
+  // cleanup() evict a different, legitimately-active session's lock), and
+  // a conditioning-manifest fingerprint that covers latent_shapes and
+  // minimax_payload *values* (not just key sets) added to TeaCacheSession
+  // (see teacache.py).
+  "teacache.py": "e19d1b4f46b4aaff123ed1301b00323fc26963c461baaa2e53dbc5371a3bafe4"
 });
 
 export const TEACACHE_LOCAL_ADAPTER_DIGEST = sha256Hex(

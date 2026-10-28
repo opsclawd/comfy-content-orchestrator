@@ -69,7 +69,7 @@ To resolve these findings while preserving the candidate's core algorithm, the r
 | :--- | :--- | :--- |
 | `__init__.py` | `3b14b0a4da6f0fa366d8da492ea85ce74f2a63f18336ac63970d9d2bfe128c94` | Node mapping registration & export |
 | `nodes.py` | `ea16ae7ced6ab1ddfe7ba729a0a0c7047827f1e5601c6fd5c8363b837dd17d2c` | ComfyUI custom node definition & input validation |
-| `teacache.py` | `ffd3c347182b31d85677e24c1bcf5386f0f49b354690a01e545c972c9756a19a` | Session management, sigma validation, tensor caching |
+| `teacache.py` | `e19d1b4f46b4aaff123ed1301b00323fc26963c461baaa2e53dbc5371a3bafe4` | Session management, sigma validation, tensor caching |
 
 These three digests are the single source of truth
 (`packages/contracts/src/minimax-h3-teacache.ts`'s `TEACACHE_LOCAL_ADAPTER_FILE_HASHES`);

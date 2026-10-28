@@ -76,6 +76,16 @@ export function reduceTeaCacheObservation(
   let orphanOrDuplicateForwardCompletions = 0;
   let failedForwardCount = 0;
 
+  // The spanId of the single real (non-nested) sampling span for this
+  // reduction window. TeaCache decision/init/end point_events and nested
+  // diffusion_forward spans all carry parentSpanId set to this -- without
+  // checking it, events genuinely belonging to a foreign sampler
+  // invocation or a foreign TeaCache session (mixed into the same log by
+  // a malformed/adversarial stream, or a bug elsewhere) would be silently
+  // aggregated into this observation's counts.
+  let realSamplerSpanId: string | null = null;
+  let foreignAttributedEventCount = 0;
+
   for (const event of events) {
     if (expectedRunId && event.runId !== expectedRunId) {
       continue;
@@ -96,6 +106,9 @@ export function reduceTeaCacheObservation(
         if (samplingSpanStartMs === null) {
           samplingSpanStartMs = event.monotonicMs;
         }
+        if (realSamplerSpanId === null && event.spanId) {
+          realSamplerSpanId = event.spanId;
+        }
         samplingCallsRecorded++;
       } else if (event.type === "span_end") {
         samplingSpanEndMs = event.monotonicMs;
@@ -109,6 +122,30 @@ export function reduceTeaCacheObservation(
       }
     }
     if (meta && typeof meta === "object") {
+      const isTeaCacheRelatedEvent = Boolean(
+        meta.teacacheEvent ||
+        meta.teacacheSession ||
+        meta.summary ||
+        meta.teacacheSummary ||
+        (event.phase as string) === "diffusion_forward" ||
+        meta.phase === "diffusion_forward" ||
+        meta.modelForwardCall === true
+      );
+      if (
+        isTeaCacheRelatedEvent &&
+        realSamplerSpanId !== null &&
+        event.parentSpanId !== undefined &&
+        event.parentSpanId !== realSamplerSpanId
+      ) {
+        // This event claims a parent span that isn't the one real sampler
+        // invocation this window is reducing -- it belongs to a different
+        // sampler call (a different run mixed into the same log, or a bug
+        // elsewhere) and must not be aggregated into this observation at
+        // all, in either direction (neither as a decision/forward counted
+        // for this run, nor as a session_init/end establishing its state).
+        foreignAttributedEventCount++;
+        continue;
+      }
       if (meta.teacacheSession === "start" || meta.teacacheEvent === "session_init") {
         hasCacheEvents = true;
         sessionAttempts++;
@@ -306,6 +343,11 @@ export function reduceTeaCacheObservation(
       `Detected ${openForwardSpanIds.size} diffusion_model forward span(s) that started but never closed (no matching span_end).`
     );
   }
+  if (foreignAttributedEventCount > 0) {
+    failureReasons.push(
+      `Detected ${foreignAttributedEventCount} TeaCache event(s) attributed to a different sampler span than this window's real sampling invocation.`
+    );
+  }
   if (observedSessionIds.size > 1) {
     failureReasons.push(
       `Observed ${observedSessionIds.size} distinct TeaCache session IDs in one reduction window; session attribution is ambiguous.`
@@ -433,6 +475,12 @@ export function reduceTeaCacheObservation(
     if (!samplingSpanEndSeen) {
       failureReasons.push("Sampling span end event was not observed.");
     }
+    if (!sessionInitSeen) {
+      failureReasons.push("TeaCache control session init event was not observed.");
+    }
+    if (!sessionEndSeen) {
+      failureReasons.push("TeaCache control session end event was not observed.");
+    }
     // Do not fabricate the control run's effectiveConfig -- it must come
     // from an actually-observed session_init/off-mode event (parsed above,
     // same codepath as the raw-l1-v1 branch). A synthesized value here would
@@ -441,6 +489,15 @@ export function reduceTeaCacheObservation(
     if (!observedEffectiveConfig) {
       failureReasons.push(
         "Missing observed effectiveConfig for the disabled-caching control run; cannot certify runtime configuration."
+      );
+    } else if (observedEffectiveConfig.mode !== "off") {
+      // An observed effectiveConfig that reports caching as actually
+      // enabled (e.g. "raw-l1-v1") directly contradicts a control run,
+      // regardless of how the forward/hit counters above happened to add
+      // up -- this is the run's own evidence disagreeing with what it's
+      // being certified as.
+      failureReasons.push(
+        `Control run's observed effectiveConfig reports mode "${observedEffectiveConfig.mode}", expected "off".`
       );
     } else if (observedEffectiveConfig.totalSteps !== 20) {
       failureReasons.push(

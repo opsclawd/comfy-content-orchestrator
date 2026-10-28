@@ -683,4 +683,89 @@ describe("minimax-h3-teacache-reducer", () => {
     expect(obs?.effectiveConfig).toBeNull();
     expect(obs?.failureReason).toMatch(/effectiveConfig/i);
   });
+
+  it("rejects a TeaCache decision event parented under a foreign/different sampler span (issue #467 adversarial probe)", () => {
+    const events = generateEvents({ skips: [4, 5, 6] });
+    // Inject an extra decision event claiming to belong to a completely
+    // different sampler invocation that isn't part of this reduction
+    // window at all.
+    events.push({
+      ...makeEvent("sampling", "point_event", { teacacheEvent: "cache_miss", stepIndex: 50 }),
+      parentSpanId: "span-foreign-sampler"
+    });
+
+    const obs = reduceTeaCacheObservation({
+      events,
+      teacacheRequest: sampleRequest,
+      expectedRunId: "run-1"
+    });
+
+    expect(obs?.status).toBe("failed");
+    expect(obs?.failureReason).toMatch(/different sampler/i);
+    // The foreign event (stepIndex 50, outside the legitimate 20-step
+    // range) must not have been folded into this run's counts.
+    expect(obs?.forwardCallsRecorded).toBe(17);
+    expect(obs?.cacheHitsRecorded).toBe(3);
+  });
+
+  it("rejects a disabled-caching ('off') control run whose own observed effectiveConfig reports caching as actually active (issue #467 adversarial probe)", () => {
+    const controlRequest: MinimaxH3TeaCacheRequest = {
+      ...sampleRequest,
+      mode: "off",
+      patchNode: null
+    };
+
+    const events: MinimaxH3InstrumentationEvent[] = [
+      makeEvent("sampling", "span_start"),
+      // The control run's own session_init contradicts the control
+      // declaration by reporting caching as actually enabled.
+      makeEvent("sampling", "point_event", {
+        teacacheEvent: "session_init",
+        effectiveConfig: {
+          mode: "raw-l1-v1",
+          relL1Thresh: 0.15,
+          startStep: 2,
+          endStep: -2,
+          totalSteps: 20,
+          normalizedStartStep: 2,
+          normalizedEndStep: 18
+        }
+      })
+    ];
+    for (let s = 0; s < 20; s++) {
+      events.push(
+        makeEvent("sampling", "point_event", { teacacheEvent: "cache_miss", stepIndex: s })
+      );
+      const fwdSpanId = `span-df-${s}`;
+      events.push({
+        ...makeEvent(
+          "sampling",
+          "span_start",
+          { phase: "diffusion_forward", modelForwardCall: true },
+          1000 + s
+        ),
+        spanId: fwdSpanId
+      });
+      events.push({
+        ...makeEvent(
+          "sampling",
+          "span_end",
+          { phase: "diffusion_forward", modelForwardCall: true },
+          1005 + s
+        ),
+        spanId: fwdSpanId
+      });
+    }
+    events.push(makeEvent("sampling", "point_event", { teacacheSession: "end" }));
+    events.push(makeEvent("sampling", "span_end"));
+
+    const obs = reduceTeaCacheObservation({
+      events,
+      teacacheRequest: controlRequest,
+      expectedRunId: "run-1"
+    });
+
+    expect(obs?.status).toBe("failed");
+    expect(obs?.failureReason).toMatch(/reports mode "raw-l1-v1", expected "off"/i);
+  });
 });

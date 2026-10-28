@@ -20,18 +20,23 @@ else:
     )
     setattr(sys, _SHARED_VAR_KEY, _ACTIVE_TEACACHE_SESSION)
 
-# Process-wide registry of model_ids with a currently-active TeaCache session.
-# Guards against two sessions being activated for the same model concurrently
-# (e.g. nested/re-entrant sampling, or a leaked session from a prior failed
-# setup) regardless of which asyncio/thread context activated them -- the
-# ContextVar alone only isolates *context*, not *model identity*.
+# Process-wide registry mapping model_id -> the session_id that currently
+# owns it. Guards against two sessions being activated for the same model
+# concurrently (e.g. nested/re-entrant sampling, or a leaked session from a
+# prior failed setup) regardless of which asyncio/thread context activated
+# them -- the ContextVar alone only isolates *context*, not *model
+# identity*. Mapping to the owning session_id (rather than a bare set of
+# model_ids) matters: a session whose own activation attempt was REJECTED
+# (because a different session already legitimately owns that model_id)
+# must not be able to evict that other session's lock when it is cleaned
+# up -- cleanup() only releases the slot it actually owns.
 _ACTIVE_MODEL_IDS_KEY = "_CCO_MINIMAX_H3_TEACACHE_ACTIVE_MODEL_IDS"
 _ACTIVE_MODEL_IDS_LOCK_KEY = "_CCO_MINIMAX_H3_TEACACHE_ACTIVE_MODEL_IDS_LOCK"
 if hasattr(sys, _ACTIVE_MODEL_IDS_KEY):
     _ACTIVE_MODEL_IDS = getattr(sys, _ACTIVE_MODEL_IDS_KEY)
     _ACTIVE_MODEL_IDS_LOCK = getattr(sys, _ACTIVE_MODEL_IDS_LOCK_KEY)
 else:
-    _ACTIVE_MODEL_IDS = set()
+    _ACTIVE_MODEL_IDS: Dict[Any, str] = {}
     _ACTIVE_MODEL_IDS_LOCK = threading.Lock()
     setattr(sys, _ACTIVE_MODEL_IDS_KEY, _ACTIVE_MODEL_IDS)
     setattr(sys, _ACTIVE_MODEL_IDS_LOCK_KEY, _ACTIVE_MODEL_IDS_LOCK)
@@ -191,16 +196,26 @@ class TeaCacheSession:
 
             # Bind this session to the specific route/conditioning shape it was
             # first called with. A cached output is only a valid substitute for
-            # a later real forward if the surrounding conditioning manifest
-            # (which keys are present, their kind, and the cond/uncond arity)
-            # is unchanged -- otherwise the cache would silently serve output
-            # computed under a different route (e.g. I2V vs Ref2V) or a
-            # different reference-image binding.
+            # a later real forward if the surrounding conditioning manifest --
+            # which keys are present, the actual latent_shapes value, a stable
+            # digest of the minimax_payload contents, and the cond/uncond
+            # arity -- is unchanged -- otherwise the cache would silently
+            # serve output computed under a different route (e.g. I2V vs
+            # Ref2V), a different reference-image binding, or a changed
+            # payload, even though the surrounding key set looked identical.
             c = kwargs.get("c")
             c_fingerprint_keys = tuple(sorted(c.keys())) if isinstance(c, dict) else None
+            latent_shapes_val = c.get("latent_shapes") if isinstance(c, dict) else None
+            minimax_payload_val = c.get("minimax_payload") if isinstance(c, dict) else None
+            if isinstance(minimax_payload_val, dict):
+                minimax_payload_fingerprint = tuple(sorted(minimax_payload_val.items()))
+            else:
+                minimax_payload_fingerprint = minimax_payload_val
             fingerprint = (
                 tuple(sorted(k for k in kwargs if k not in ("input", "timestep", "c"))),
                 c_fingerprint_keys,
+                latent_shapes_val,
+                minimax_payload_fingerprint,
                 len(cond_or_uncond) if isinstance(cond_or_uncond, (list, tuple)) else cond_or_uncond,
             )
             if self.conditioning_fingerprint is None:
@@ -302,7 +317,13 @@ class TeaCacheSession:
             self.is_evaluating = False
             self.is_evaluating_hit = False
         with _ACTIVE_MODEL_IDS_LOCK:
-            _ACTIVE_MODEL_IDS.discard(self.model_id)
+            # Only release the slot if THIS session is the one that holds
+            # it. A session whose set_active_session() call was itself
+            # rejected (because a different session already legitimately
+            # owns model_id) must not evict that other session's lock when
+            # it is (correctly) cleaned up by its own caller.
+            if _ACTIVE_MODEL_IDS.get(self.model_id) == self.session_id:
+                del _ACTIVE_MODEL_IDS[self.model_id]
 
 
 def get_active_session() -> Optional[TeaCacheSession]:
@@ -312,14 +333,16 @@ def get_active_session() -> Optional[TeaCacheSession]:
 def set_active_session(session: Optional[TeaCacheSession]) -> Any:
     if session is not None:
         with _ACTIVE_MODEL_IDS_LOCK:
-            if session.model_id in _ACTIVE_MODEL_IDS:
+            existing_owner = _ACTIVE_MODEL_IDS.get(session.model_id)
+            if existing_owner is not None and existing_owner != session.session_id:
                 raise RuntimeError(
-                    f"A TeaCache session is already active for model_id={session.model_id!r}. "
-                    "Nested or re-entrant sessions on the same model are forbidden -- "
-                    "the prior session was either never cleaned up (a leaked session from "
-                    "a failed setup) or this call is genuinely concurrent/re-entrant."
+                    f"A TeaCache session (session_id={existing_owner!r}) is already active for "
+                    f"model_id={session.model_id!r}. Nested or re-entrant sessions on the same "
+                    "model are forbidden -- the prior session was either never cleaned up (a "
+                    "leaked session from a failed setup) or this call is genuinely concurrent/"
+                    "re-entrant."
                 )
-            _ACTIVE_MODEL_IDS.add(session.model_id)
+            _ACTIVE_MODEL_IDS[session.model_id] = session.session_id
     return _ACTIVE_TEACACHE_SESSION.set(session)
 
 
