@@ -76,6 +76,14 @@ export function reduceTeaCacheObservation(
   let orphanOrDuplicateForwardCompletions = 0;
   let failedForwardCount = 0;
 
+  // Counting completed forward spans is not the same guarantee as "each
+  // real step that needed a forward got exactly one". Without per-step
+  // attribution, a probe can tag every completed forward with the same
+  // stepIndex (e.g. all step 0) and still pass a bare total-count check.
+  const completedForwardStepIndices = new Set<number>();
+  let duplicateForwardStepAttributions = 0;
+  let unattributedForwardCompletions = 0;
+
   // The spanId of the single real (non-nested) sampling span for this
   // reduction window. TeaCache decision/init/end point_events and nested
   // diffusion_forward spans all carry parentSpanId set to this -- without
@@ -184,18 +192,31 @@ export function reduceTeaCacheObservation(
             boundSessionId = sessionId;
           }
         }
-        if (meta.adapterIdentity === undefined || meta.adapterIdentity === null) {
+        if (
+          meta.adapterIdentity === undefined ||
+          meta.adapterIdentity === null ||
+          typeof meta.adapterIdentity !== "object" ||
+          Array.isArray(meta.adapterIdentity)
+        ) {
+          // Covers both "field entirely absent" and a malformed/primitive
+          // value (e.g. the literal string "true") that isn't the real
+          // {verified, observedDigest, ...} shape at all -- neither can be
+          // certified, and a bare typeof-object check elsewhere would
+          // silently let a non-object value bypass validation entirely.
           adapterIdentityVerifiedFailure =
-            "TeaCache session_init did not report an adapterIdentity; loaded-module identity cannot be certified.";
-        } else if (typeof meta.adapterIdentity === "object") {
+            "TeaCache session_init did not report a valid adapterIdentity object; loaded-module identity cannot be certified.";
+        } else {
           const ai = meta.adapterIdentity as { verified?: unknown; observedDigest?: unknown };
           if (ai.verified !== true) {
             adapterIdentityVerifiedFailure =
               "TeaCache adapter identity was not verified for this session's loaded module.";
-          } else if (
-            typeof ai.observedDigest === "string" &&
-            ai.observedDigest !== teacacheRequest.adapterDigest
-          ) {
+          } else if (typeof ai.observedDigest !== "string" || ai.observedDigest.length === 0) {
+            // verified:true with no digest to actually check against the
+            // pinned adapterDigest is an unverifiable "trust me" claim,
+            // not evidence.
+            adapterIdentityVerifiedFailure =
+              "TeaCache adapterIdentity is verified but reports no observedDigest to check against the requested adapterDigest.";
+          } else if (ai.observedDigest !== teacacheRequest.adapterDigest) {
             adapterIdentityVerifiedFailure = `TeaCache adapter observedDigest "${ai.observedDigest}" does not match the pinned/requested adapterDigest "${teacacheRequest.adapterDigest}".`;
           }
         }
@@ -374,6 +395,13 @@ export function reduceTeaCacheObservation(
               if (stepIdx !== undefined && stepDecisions.get(stepIdx) === "skip") {
                 nestedForwardsOnHits++;
               }
+              if (stepIdx === undefined) {
+                unattributedForwardCompletions++;
+              } else if (completedForwardStepIndices.has(stepIdx)) {
+                duplicateForwardStepAttributions++;
+              } else {
+                completedForwardStepIndices.add(stepIdx);
+              }
             }
           }
         }
@@ -397,6 +425,39 @@ export function reduceTeaCacheObservation(
     failureReasons.push(
       `Detected ${orphanOrDuplicateForwardCompletions} diffusion_model forward completion event(s) with no matching open span or already closed -- not trustworthy evidence of a real forward.`
     );
+  }
+  if (teacacheRequest.mode === "raw-l1-v1" && unattributedForwardCompletions > 0) {
+    // Control ("off") runs have no TeaCacheSession and therefore no
+    // step-index tracking at all -- per-step attribution only applies to
+    // the active-caching path, where it is the only way to distinguish
+    // "20 independent forwards, one per real step" from "20 completions
+    // all tagged the same step".
+    failureReasons.push(
+      `Detected ${unattributedForwardCompletions} completed diffusion_model forward(s) with no stepIndex attribution; cannot verify each real step independently.`
+    );
+  }
+  if (teacacheRequest.mode === "raw-l1-v1" && duplicateForwardStepAttributions > 0) {
+    failureReasons.push(
+      `Detected ${duplicateForwardStepAttributions} completed diffusion_model forward(s) attributed to a stepIndex that already had a completed forward -- forwards are not independently attributed to distinct steps.`
+    );
+  }
+  if (teacacheRequest.mode === "raw-l1-v1" && hasCacheEvents) {
+    const missedStepIndices = new Set(
+      Array.from(stepDecisions.entries())
+        .filter(([, decision]) => decision === "full")
+        .map(([step]) => step)
+    );
+    const missingForwardSteps = Array.from(missedStepIndices).filter(
+      (s) => !completedForwardStepIndices.has(s)
+    );
+    const extraForwardSteps = Array.from(completedForwardStepIndices).filter(
+      (s) => !missedStepIndices.has(s)
+    );
+    if (missingForwardSteps.length > 0 || extraForwardSteps.length > 0) {
+      failureReasons.push(
+        `Completed forwards are not a bijection with cache-miss decisions by step: missingForwardSteps=[${missingForwardSteps.join(",")}], extraForwardSteps=[${extraForwardSteps.join(",")}].`
+      );
+    }
   }
   if (openForwardSpanIds.size > 0) {
     // A span_start with no matching span_end/failure means a forward was

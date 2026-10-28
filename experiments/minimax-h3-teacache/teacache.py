@@ -84,7 +84,6 @@ def _snapshot_for_fingerprint(value: Any) -> Any:
             str(getattr(value, "dtype", None)),
             str(getattr(value, "device", None)),
             clone,
-            value,
         )
     if isinstance(value, dict):
         return tuple(sorted((k, _snapshot_for_fingerprint(v)) for k, v in value.items()))
@@ -117,8 +116,8 @@ def _fingerprints_equal(a: Any, b: Any) -> bool:
     if (
         isinstance(a, tuple)
         and isinstance(b, tuple)
-        and len(a) == 6
-        and len(b) == 6
+        and len(a) == 5
+        and len(b) == 5
         and a[0] == _TENSOR_SNAPSHOT_TAG
         and b[0] == _TENSOR_SNAPSHOT_TAG
     ):
@@ -132,15 +131,17 @@ def _fingerprints_equal(a: Any, b: Any) -> bool:
                     return bool(equal_fn(new_clone))
                 except Exception:
                     return False
-            # A clone exists on both sides but neither exposes .equal() --
-            # fall through to the raw-reference fallback below rather than
-            # trust metadata alone.
-        # Cloning was unavailable (on either or both sides): the only
-        # honest fallback is whether the two calls were literally handed
-        # the SAME original object. Two merely metadata-identical-but-
-        # distinct objects that can't be content-verified must be treated
-        # as changed (fail closed), not as equal.
-        return a[5] is b[5]
+        # Content cannot be verified -- cloning was unavailable on either
+        # side, or a clone exists but exposes no .equal(). Treating "same
+        # object reference" as proof of "unchanged" is NOT safe here: the
+        # caller may hand back the literal same mutable tensor-like object
+        # on every call while mutating its contents in place between
+        # calls, which a reference-identity check cannot see at all. With
+        # no way to verify content, the only fail-closed answer is to
+        # always treat this as a change -- a session relying on
+        # unverifiable tensor content for more than one evaluate() call is
+        # exactly the scenario this must refuse to silently trust.
+        return False
     if isinstance(a, tuple) and isinstance(b, tuple):
         if len(a) != len(b):
             return False

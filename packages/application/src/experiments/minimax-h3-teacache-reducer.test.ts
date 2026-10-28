@@ -869,4 +869,89 @@ describe("minimax-h3-teacache-reducer", () => {
     expect(obs?.status).toBe("failed");
     expect(obs?.failureReason).toMatch(/adapter identity was not verified/i);
   });
+
+  it("rejects an adapterIdentity that is verified=true but reports no observedDigest at all (issue #467 adversarial probe)", () => {
+    const events = generateEvents({ skips: [4, 5, 6] });
+    const initIdx = events.findIndex(
+      (e) => (e.metadata as Record<string, unknown> | undefined)?.teacacheEvent === "session_init"
+    );
+    events[initIdx] = {
+      ...events[initIdx],
+      metadata: {
+        ...(events[initIdx]!.metadata as Record<string, unknown>),
+        // verified: true but no observedDigest -- a bare "trust me" flag
+        // with nothing to actually check against the pinned adapterDigest.
+        adapterIdentity: { verified: true }
+      }
+    } as MinimaxH3InstrumentationEvent;
+
+    const obs = reduceTeaCacheObservation({
+      events,
+      teacacheRequest: sampleRequest,
+      expectedRunId: "run-1"
+    });
+
+    expect(obs?.status).toBe("failed");
+  });
+
+  it("rejects all independent forwards being attributed to the same stepIndex instead of one-per-real-step (issue #467 adversarial probe)", () => {
+    // 20 real cache_miss decisions across steps 0-19, but every single
+    // completed forward is (adversarially) tagged stepIndex 0 -- a bare
+    // total-count check (20 misses, 20 completed forwards) would pass
+    // this, masking that forwards are not actually independently
+    // attributed one-per-step.
+    const events: MinimaxH3InstrumentationEvent[] = [
+      makeEvent("sampling", "span_start"),
+      makeEvent("sampling", "point_event", {
+        teacacheEvent: "session_init",
+        adapterIdentity: { verified: true, observedDigest: sampleRequest.adapterDigest },
+        effectiveConfig: {
+          mode: "raw-l1-v1",
+          relL1Thresh: 0.15,
+          startStep: 2,
+          endStep: -2,
+          totalSteps: 20,
+          normalizedStartStep: 2,
+          normalizedEndStep: 18
+        }
+      })
+    ];
+    for (let s = 0; s < 20; s++) {
+      events.push(
+        makeEvent("sampling", "point_event", { teacacheEvent: "cache_miss", stepIndex: s })
+      );
+      const fwdSpanId = `span-df-${s}`;
+      events.push({
+        ...makeEvent(
+          "sampling",
+          "span_start",
+          { phase: "diffusion_forward", modelForwardCall: true, stepIndex: 0 },
+          1000 + s
+        ),
+        spanId: fwdSpanId
+      });
+      events.push({
+        ...makeEvent(
+          "sampling",
+          "span_end",
+          { phase: "diffusion_forward", modelForwardCall: true, stepIndex: 0 },
+          1005 + s
+        ),
+        spanId: fwdSpanId
+      });
+    }
+    events.push(makeEvent("sampling", "point_event", { teacacheSession: "end" }));
+    events.push(makeEvent("sampling", "span_end"));
+
+    const obs = reduceTeaCacheObservation({
+      events,
+      teacacheRequest: sampleRequest,
+      expectedRunId: "run-1"
+    });
+
+    expect(obs?.status).toBe("failed");
+    expect(obs?.failureReason).toMatch(
+      /not independently attributed to distinct steps|not a bijection/i
+    );
+  });
 });

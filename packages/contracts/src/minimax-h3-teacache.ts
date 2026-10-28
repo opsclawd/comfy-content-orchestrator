@@ -36,11 +36,12 @@ export const TEACACHE_LOCAL_ADAPTER_FILE_HASHES = Object.freeze({
   // cleanup() evict a different, legitimately-active session's lock), and
   // a conditioning-manifest fingerprint that snapshots the ENTIRE `c` dict
   // (not a hand-picked subset of keys) by immutable, decoupled value;
-  // verifies actual tensor CONTENT via .equal() (never trusting metadata
-  // alone, and failing closed rather than "equal" when content can't be
-  // verified); and rejects unsupported/unverifiable payload types outright
+  // verifies actual tensor CONTENT via .equal() and otherwise ALWAYS fails
+  // closed (never falls back to "same object reference implies
+  // unchanged", which cannot see an in-place mutation of that same
+  // object); and rejects unsupported/unverifiable payload types outright
   // (see teacache.py's _snapshot_for_fingerprint/_fingerprints_equal).
-  "teacache.py": "86cba8de20f9cc41b10af90fa39565005d3c4f9405d7fc9950f6b5aeeae4e0a9"
+  "teacache.py": "bc56e7246caed306c361977120100115bd115a61fb5bfc701d0c2a2b2c737158"
 });
 
 export const TEACACHE_LOCAL_ADAPTER_DIGEST = sha256Hex(

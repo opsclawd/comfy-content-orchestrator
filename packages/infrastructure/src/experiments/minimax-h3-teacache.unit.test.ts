@@ -627,6 +627,64 @@ print("SUCCESS")
       expect(res.stdout).toContain("SUCCESS");
     });
 
+    it("rejects the literal SAME uncloneable tensor-like object reused across calls while mutated in place (issue #467)", () => {
+      const code = `
+import teacache
+
+class MockTensor:
+    def __init__(self):
+        self.shape = (1, 16, 20, 20)
+        self.dtype = "float32"
+        self.device = "cuda:0"
+    def detach(self): return self
+    def float(self): return self
+    def clone(self): return MockTensor()
+
+# No .detach()/.clone() -- content can never be verified. A prior
+# version of the comparator fell back to "is the literal same object"
+# as proof of "unchanged", which is unsafe: the caller can hand back
+# this exact object on every call while mutating its contents in place
+# between calls, and reference identity alone cannot see that at all.
+class UncloneableMutableTensor:
+    def __init__(self, val):
+        self.val = val
+        self.shape = (4, 768)
+        self.dtype = "float32"
+        self.device = "cuda:0"
+
+shared = UncloneableMutableTensor("embedding-A")
+
+sigmas = list(range(21, 0, -1))
+sess = teacache.TeaCacheSession("s-same-object-mutation", "m1", 0.15, 2, -2, 20, sigmas=sigmas)
+sess.advance_step(0)
+
+sess.evaluate(
+    lambda inp, **kw: MockTensor(),
+    {"input": MockTensor(), "timestep": 21.0, "c": {"cross_attention": shared}}
+)
+
+# Mutate the SAME object's content in place, then pass the SAME
+# reference again -- an identity-based fallback would see "same object"
+# and wrongly conclude "unchanged".
+shared.val = "embedding-B"
+
+sess.advance_step(1)
+try:
+    sess.evaluate(
+        lambda inp, **kw: MockTensor(),
+        {"input": MockTensor(), "timestep": 20.0, "c": {"cross_attention": shared}}
+    )
+    assert False, "Expected RuntimeError: unverifiable content must fail closed even for the same object reference"
+except RuntimeError as e:
+    assert "Conditioning manifest changed mid-session" in str(e)
+
+print("SUCCESS")
+`;
+      const res = runPythonTest(code);
+      expect(res.status).toBe(0);
+      expect(res.stdout).toContain("SUCCESS");
+    });
+
     it("rejects an unsupported conditioning payload type instead of silently passing it through unverified (issue #467)", () => {
       const code = `
 import teacache
