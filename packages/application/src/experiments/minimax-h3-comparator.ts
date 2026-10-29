@@ -380,19 +380,37 @@ function evaluateTeaCacheObservationEligibility(params: {
           `${role} observed effectiveConfig startStep ${obs.effectiveConfig.startStep} !== expected ${expectedRequest.startStep}.`
         );
       }
-      // Compare the NORMALIZED window only, not the raw endStep spelling.
+      // Compare the NORMALIZED window only, not the raw endStep spelling --
       // endStep=-2 and endStep=18 both resolve to the identical stopping
-      // index (18) under this session's totalSteps=20 convention -- they
-      // are equivalent spellings of the same window, so requiring raw
+      // index (18) under this session's totalSteps=20 convention, so they
+      // are equivalent spellings of the same window and requiring raw
       // equality too would wrongly disqualify a runtime that reports the
       // absolute form of the window the request gave in relative form.
-      // This is only safe because the reducer guarantees
-      // effectiveConfig.normalizedEndStep is always the value DERIVED from
-      // its own endStep (never a caller-reported value trusted as-is), so
-      // an internally inconsistent pair can never reach this comparison.
-      if (obs.effectiveConfig.normalizedEndStep !== expectedRequest.normalizedEndStep) {
+      //
+      // Crucially, the normalized value used here is DERIVED independently
+      // right here, never trusted from obs.effectiveConfig.normalizedEndStep
+      // as reported -- this comparator cannot assume its input necessarily
+      // passed through reduceTeaCacheObservation (e.g. a stored result read
+      // directly off disk by a CLI compare path only goes through schema
+      // parsing, which does not itself enforce this derivation), so an
+      // effectiveConfig whose OWN reported endStep/normalizedEndStep pair is
+      // internally inconsistent must still be caught here, not just by the
+      // reducer.
+      const obsDerivedNormalizedEndStep =
+        obs.effectiveConfig.endStep < 0
+          ? obs.effectiveConfig.totalSteps + obs.effectiveConfig.endStep
+          : obs.effectiveConfig.endStep;
+      const expectedDerivedNormalizedEndStep =
+        expectedRequest.endStep < 0
+          ? expectedRequest.totalSteps + expectedRequest.endStep
+          : expectedRequest.endStep;
+      if (obs.effectiveConfig.normalizedEndStep !== obsDerivedNormalizedEndStep) {
         reasons.push(
-          `${role} observed effectiveConfig endStep ${obs.effectiveConfig.endStep} (normalized ${obs.effectiveConfig.normalizedEndStep}) !== expected ${expectedRequest.endStep} (normalized ${expectedRequest.normalizedEndStep}).`
+          `${role} observed effectiveConfig reports an internally inconsistent raw/normalized endStep: endStep=${obs.effectiveConfig.endStep} (totalSteps=${obs.effectiveConfig.totalSteps}) derives to ${obsDerivedNormalizedEndStep}, but normalizedEndStep=${obs.effectiveConfig.normalizedEndStep} was reported.`
+        );
+      } else if (obsDerivedNormalizedEndStep !== expectedDerivedNormalizedEndStep) {
+        reasons.push(
+          `${role} observed effectiveConfig endStep ${obs.effectiveConfig.endStep} (normalized ${obsDerivedNormalizedEndStep}) !== expected ${expectedRequest.endStep} (normalized ${expectedDerivedNormalizedEndStep}).`
         );
       }
       if (obs.effectiveConfig.totalSteps !== expectedRequest.totalSteps) {

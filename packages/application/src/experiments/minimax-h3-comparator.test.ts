@@ -4882,6 +4882,138 @@ describe("Service-generated Matched Pairs Admission and Comparison", () => {
       ).toBe(false);
     });
 
+    it("disqualifies speedup metrics for a stored result (not necessarily produced by the reducer) whose effectiveConfig reports an internally inconsistent raw/normalized endStep (issue #467 adversarial probe)", async () => {
+      // A result loaded directly off disk (e.g. the CLI compare path,
+      // which only runs schema parsing, not reduceTeaCacheObservation)
+      // can carry an effectiveConfig whose own endStep/normalizedEndStep
+      // disagree with each other. The comparator must not trust
+      // normalizedEndStep as reported -- it must re-derive it from
+      // endStep itself and reject the contradiction, rather than relying
+      // on an upstream reducer invariant this code path never went
+      // through.
+      const service = setupServiceWithTemplates();
+      const prompt = "A cinematic shot of a sunset over the ocean";
+
+      const { descriptor: baseDesc } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt,
+        operatorLabel: "operator",
+        runId: "tc-endstep-inconsistent-base",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        teacacheMatchedControl: true,
+        inputManifestPath: "manifest-i2v.json"
+      });
+
+      const { descriptor: varDesc } = await service.prepareExperiment({
+        route: "i2v",
+        frames: 124,
+        seed: 42,
+        prompt,
+        operatorLabel: "operator",
+        runId: "tc-endstep-inconsistent-var",
+        outputRoot: ".ai-runs/minimax-h3-experiments",
+        targetHost: "render-worker-01",
+        gpuUuid: "GPU-12345678-1234-1234-1234-123456789abc",
+        teacache: "raw-l1-v1",
+        teacacheThreshold: 0.15,
+        teacacheStartStep: 2,
+        teacacheEndStep: -2,
+        teacacheTotalSteps: 20,
+        comfyUiDir: "/opt/comfyui",
+        pythonPath: "/usr/bin/python3",
+        inputManifestPath: "manifest-i2v.json"
+      });
+
+      const baseResult = createCompletedResultV2(baseDesc as MinimaxH3ExperimentDescriptorV2, {
+        teacacheObservation: {
+          status: "verified",
+          mode: "off",
+          requestedConfig: null,
+          effectiveConfig: null,
+          totalSteps: 20,
+          forwardCallsRecorded: 20,
+          cacheHitsRecorded: 0,
+          nestedForwardsOnHits: 0,
+          coverage: {
+            samplingCallsRecorded: 1,
+            modelForwardsRecorded: 20,
+            complete: true
+          },
+          timings: {
+            samplingWallMs: 380000,
+            modelForwardElapsedMs: 350000,
+            decisionOverheadMs: 0,
+            timingUnavailableReason: null
+          },
+          failureReason: null
+        }
+      });
+
+      // endStep=10 does not derive to normalizedEndStep=18 under
+      // totalSteps=20 (10 is non-negative, so its own normalization is
+      // 10, not 18) -- a self-contradictory pair that must be caught by
+      // the comparator itself, independent of whatever upstream code
+      // constructed this stored result.
+      const varResult = createCompletedResultV2(varDesc as MinimaxH3ExperimentDescriptorV2, {
+        teacacheObservation: {
+          status: "verified",
+          mode: "raw-l1-v1",
+          requestedConfig: {
+            mode: "raw-l1-v1",
+            relL1Thresh: 0.15,
+            startStep: 2,
+            endStep: -2,
+            totalSteps: 20,
+            normalizedStartStep: 2,
+            normalizedEndStep: 18
+          },
+          effectiveConfig: {
+            mode: "raw-l1-v1",
+            relL1Thresh: 0.15,
+            startStep: 2,
+            endStep: 10,
+            totalSteps: 20,
+            normalizedStartStep: 2,
+            normalizedEndStep: 18
+          },
+          totalSteps: 20,
+          forwardCallsRecorded: 14,
+          cacheHitsRecorded: 6,
+          nestedForwardsOnHits: 0,
+          coverage: {
+            samplingCallsRecorded: 1,
+            modelForwardsRecorded: 14,
+            complete: true
+          },
+          timings: {
+            samplingWallMs: 240000,
+            modelForwardElapsedMs: 220000,
+            decisionOverheadMs: 15,
+            timingUnavailableReason: null
+          },
+          failureReason: null
+        }
+      });
+
+      const report = compareMinimaxH3Experiments({
+        baselineDescriptor: baseDesc,
+        baselineResult: baseResult,
+        variantDescriptor: varDesc,
+        variantResult: varResult
+      });
+
+      expect(report.metricEligibility.samplingWallEligible).toBe(false);
+      expect(
+        report.metricEligibility.reasons.some((r) => r.includes("internally inconsistent"))
+      ).toBe(true);
+    });
+
     it("admits authentic producer-shaped control and candidate pair through reducer, schema, and comparator", async () => {
       const service = setupServiceWithTemplates();
       const prompt = "A cinematic shot of a sunset over the ocean";
