@@ -63,6 +63,17 @@ describe("MiniMax-H3 Runtime Registry & Adapters", () => {
     fs.writeFileSync(path.join(mockComfyDir, ".git", "HEAD"), `${PINNED_COMFYUI_CORE_REVISION}\n`);
     setTestDriverQueryCommand({ command: "echo", args: ["550.54.14"] });
 
+    // Stage the real, currently-pinned TeaCache adapter into this mock
+    // ComfyUI's own custom_nodes directory -- verifyRequiredNodeDefinitions
+    // only trusts files staged under comfyUiDir, not the repository's dev
+    // checkout, so tests exercising it must stage files here too.
+    const teaCacheStageDir = path.join(mockComfyDir, "custom_nodes", "cco-minimax-h3-teacache");
+    fs.mkdirSync(teaCacheStageDir, { recursive: true });
+    const teaCacheSourceDir = path.resolve("experiments/minimax-h3-teacache");
+    for (const rf of ["__init__.py", "nodes.py", "teacache.py"]) {
+      fs.copyFileSync(path.join(teaCacheSourceDir, rf), path.join(teaCacheStageDir, rf));
+    }
+
     const mockPythonScript = `#!/bin/sh
 if [ "$1" = "-c" ]; then
   if echo "$2" | grep -q "torch.__version__"; then
@@ -345,6 +356,77 @@ exec /usr/bin/python3 "$@"
 
     expect(res.ok).toBe(true);
     expect(res.status).toBe("verified");
+  });
+
+  it("accepts CCOMiniMaxH3TeaCache on pinned adapter when adapter files match pinned digest", async () => {
+    const adapter = new CurrentPinExperimentRuntimeAdapter();
+    const manifestWithTeaCache: MinimaxH3RequiredRuntimeManifest = {
+      ...baseManifest,
+      coreRevision: PINNED_COMFYUI_CORE_REVISION,
+      requiredNodes: [{ name: "MiniMaxH3ImageToVideo" }, { name: "CCOMiniMaxH3TeaCache" }],
+      pythonPackages: [{ name: "json", version: "" }]
+    };
+
+    const res = await adapter.verify({
+      comfyUiDir: mockComfyDir,
+      pythonPath: mockPythonPath,
+      requiredRuntime: manifestWithTeaCache
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.status).toBe("verified");
+  });
+
+  it("rejects CCOMiniMaxH3TeaCache on pinned adapter when adapter files are tampered", async () => {
+    const adapter = new CurrentPinExperimentRuntimeAdapter();
+    const tamperedComfyDir = path.join(mockRootDir, "tampered-teacache-comfy-dir");
+    fs.mkdirSync(path.join(tamperedComfyDir, "comfy_extras"), { recursive: true });
+    fs.mkdirSync(path.join(tamperedComfyDir, "custom_nodes", "cco-minimax-h3-teacache"), {
+      recursive: true
+    });
+    fs.writeFileSync(
+      path.join(tamperedComfyDir, "comfy_extras", "nodes_minimax_h3.py"),
+      "class MiniMaxH3ImageToVideo:\n    INPUT_TYPES = {}\n"
+    );
+    // Write tampered node files
+    fs.writeFileSync(
+      path.join(tamperedComfyDir, "custom_nodes", "cco-minimax-h3-teacache", "nodes.py"),
+      "class CCOMiniMaxH3TeaCacheNode:\n    INPUT_TYPES = {}\n"
+    );
+    fs.writeFileSync(
+      path.join(tamperedComfyDir, "custom_nodes", "cco-minimax-h3-teacache", "__init__.py"),
+      "# tampered\n"
+    );
+    fs.writeFileSync(
+      path.join(tamperedComfyDir, "custom_nodes", "cco-minimax-h3-teacache", "teacache.py"),
+      "# tampered\n"
+    );
+
+    execSync("git init -b main", { cwd: tamperedComfyDir });
+    execSync('git config user.email "test@test.com"', { cwd: tamperedComfyDir });
+    execSync('git config user.name "Test"', { cwd: tamperedComfyDir });
+    execSync("git add .", { cwd: tamperedComfyDir });
+    execSync('git commit -m "init"', { cwd: tamperedComfyDir });
+    fs.writeFileSync(
+      path.join(tamperedComfyDir, ".git", "HEAD"),
+      `${PINNED_COMFYUI_CORE_REVISION}\n`
+    );
+
+    const manifestWithTeaCache: MinimaxH3RequiredRuntimeManifest = {
+      ...baseManifest,
+      coreRevision: PINNED_COMFYUI_CORE_REVISION,
+      requiredNodes: [{ name: "CCOMiniMaxH3TeaCache" }]
+    };
+
+    const res = await adapter.verify({
+      comfyUiDir: tamperedComfyDir,
+      pythonPath: mockPythonPath,
+      requiredRuntime: manifestWithTeaCache
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.status).toBe("conflict");
+    expect(res.blocker).toContain("TeaCache local adapter digest mismatch");
   });
 
   it("FastH3 isolated upgrade adapter verifies supported nodes", async () => {

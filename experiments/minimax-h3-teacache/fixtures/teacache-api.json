@@ -1,0 +1,20 @@
+{
+  "upstreamRepository": "https://github.com/Icyoung/ComfyUI-MiniMaxH3-TeaCache",
+  "upstreamCommit": "4cbb50d69c73a19a5d6ec42c5aec1989d5a04b6f",
+  "targetCoreRevision": "55b6a9b11dffecdd65a3ccd5eb6a1b3a178c96dc",
+  "upstreamNodeKey": "MiniMaxH3TeaCache",
+  "upstreamClassType": "MiniMaxH3TeaCacheNode",
+  "adaptedNodeKey": "CCOMiniMaxH3TeaCache",
+  "adaptedClassType": "CCOMiniMaxH3TeaCacheNode",
+  "inputSignature": {
+    "required": {
+      "model": ["MODEL"],
+      "rel_l1_thresh": ["FLOAT", { "default": 0.15, "min": 0.0, "max": 0.5, "step": 0.01 }],
+      "start_step": ["INT", { "default": 2, "min": 0, "max": 100, "step": 1 }],
+      "end_step": ["INT", { "default": -2, "min": -100, "max": 100, "step": 1 }],
+      "total_steps": ["INT", { "default": 20, "min": 1, "max": 1000, "step": 1 }]
+    }
+  },
+  "returnTypes": ["MODEL"],
+  "notes": "Adapted repository-owned TeaCache patch node wraps ModelPatcher.set_model_unet_function_wrapper with execution-local lifecycle sessions."
+}

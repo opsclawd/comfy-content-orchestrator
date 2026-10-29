@@ -1,0 +1,20 @@
+# ==============================================================================
+# Lockfile: MiniMax-H3 TeaCache Isolated Candidate Environment
+# ==============================================================================
+# Platform Metadata:
+#   OS: Linux x86_64 (glibc >= 2.35)
+#   Python: CPython 3.12 (ABI cp312)
+#   CUDA: 12.4
+#   PyTorch Toolchain: 2.5.1+cu124
+#
+# Candidate: CCOMiniMaxH3TeaCache (adapted from upstream 4cbb50d69c73a19a5d6ec42c5aec1989d5a04b6f)
+# Upstream pyproject.toml specifies:
+#   version = "0.1.0"
+#   requires-python = ">=3.10"
+#   dependencies = []
+#
+# No external compiled kernels or wheels required; uses host PyTorch and ComfyUI core.
+# Host PyTorch dependency:
+torch==2.5.1+cu124
+torchvision==0.20.1+cu124
+torchaudio==2.5.1+cu124
