@@ -380,12 +380,19 @@ function evaluateTeaCacheObservationEligibility(params: {
           `${role} observed effectiveConfig startStep ${obs.effectiveConfig.startStep} !== expected ${expectedRequest.startStep}.`
         );
       }
-      const endStepMatches =
-        obs.effectiveConfig.endStep === expectedRequest.endStep ||
-        obs.effectiveConfig.normalizedEndStep === expectedRequest.normalizedEndStep;
-      if (!endStepMatches) {
+      // Both the raw and normalized windows must agree with the request.
+      // Accepting either alone let an observed endStep that disagrees with
+      // the request (e.g. endStep=10 vs requested endStep=-2) still pass
+      // purely because the two sides' normalizedEndStep happened to match
+      // (both 18) -- that is not proof it's the same window, since
+      // endStep=10 does not resolve to 18 under the -2/totalSteps=20
+      // normalization convention at all.
+      if (
+        obs.effectiveConfig.endStep !== expectedRequest.endStep ||
+        obs.effectiveConfig.normalizedEndStep !== expectedRequest.normalizedEndStep
+      ) {
         reasons.push(
-          `${role} observed effectiveConfig endStep ${obs.effectiveConfig.endStep} !== expected ${expectedRequest.endStep}.`
+          `${role} observed effectiveConfig endStep ${obs.effectiveConfig.endStep} (normalized ${obs.effectiveConfig.normalizedEndStep}) !== expected ${expectedRequest.endStep} (normalized ${expectedRequest.normalizedEndStep}).`
         );
       }
       if (obs.effectiveConfig.totalSteps !== expectedRequest.totalSteps) {

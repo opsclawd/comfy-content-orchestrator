@@ -44,6 +44,7 @@ else:
 
 
 _TENSOR_SNAPSHOT_TAG = "__tensor__"
+_PACKED_LAYOUT_SNAPSHOT_TAG = "__packed_layout__"
 
 
 def _snapshot_for_fingerprint(value: Any) -> Any:
@@ -99,6 +100,42 @@ def _snapshot_for_fingerprint(value: Any) -> Any:
         return tuple(sorted((k, _snapshot_for_fingerprint(v)) for k, v in value.items()))
     if isinstance(value, (list, tuple)):
         return tuple(_snapshot_for_fingerprint(v) for v in value)
+    if (
+        hasattr(value, "signature")
+        and hasattr(value, "segments")
+        and not (hasattr(value, "shape") and hasattr(value, "dtype"))
+    ):
+        # comfy/ldm/minimax/model.py's PackedLayout: a static
+        # packed-sequence structure the pinned core attaches to
+        # minimax_payload.layout for the packed-AV conditioning path
+        # (comfy/model_base.py's MiniMaxH3.extra_conds, carried through
+        # CONDConstant). It is a plain object (no .shape/.dtype of its
+        # own, no __eq__), so it fell through to the "unsupported type"
+        # branch below on every real H3 forward call. Its own `signature`
+        # tuple (text_len, latent_t, latent_h, latent_w, audio_t) is the
+        # authoritative shape/conditioning identity (used for equality
+        # checks in the pinned core's own _forward), and `segments`
+        # describes the packed layout structure -- both are already
+        # snapshot-safe (plain ints/strings/tuples). The derived position
+        # tensors are included too so a genuine content change in them
+        # (not just a changed signature) is still caught; any of them may
+        # legitimately be absent on a lighter-weight stand-in object.
+        return (
+            _PACKED_LAYOUT_SNAPSHOT_TAG,
+            _snapshot_for_fingerprint(getattr(value, "seq_len", None)),
+            _snapshot_for_fingerprint(value.signature),
+            _snapshot_for_fingerprint(value.segments),
+            tuple(
+                (attr, _snapshot_for_fingerprint(getattr(value, attr, None)))
+                for attr in (
+                    "position_ids",
+                    "img_pos",
+                    "img_update",
+                    "audio_pos",
+                    "audio_update",
+                )
+            ),
+        )
     # Anything else (an arbitrary custom object) cannot be safely frozen or
     # compared: its own __eq__ may be identity-based (silently masking an
     # in-place mutation of the same object across calls, which is exactly

@@ -49,7 +49,13 @@ export const TEACACHE_LOCAL_ADAPTER_FILE_HASHES = Object.freeze({
   // and carries that same value into transformer_options.uuids on every
   // step -- a prior version had no UUID handling at all and rejected it
   // as an "unsupported conditioning value type" on the very first step.
-  "teacache.py": "8cd8128f98eab25980364788dc3276112de3e241479fba0adf8b0e1717a72fbf"
+  // Also snapshots comfy/ldm/minimax/model.py's PackedLayout (the packed-
+  // AV minimax_payload.layout object on both canonical H3 routes)
+  // by its signature/segments/seq_len plus its derived position tensors,
+  // since it is a plain object (no .shape/.dtype, no __eq__) and
+  // previously fell through to the same "unsupported type" rejection on
+  // every real forward call.
+  "teacache.py": "d2aec13bfacdcbeae7bebca828f7721aad9370d90605aea66016df7b3ffea9bb"
 });
 
 export const TEACACHE_LOCAL_ADAPTER_DIGEST = sha256Hex(

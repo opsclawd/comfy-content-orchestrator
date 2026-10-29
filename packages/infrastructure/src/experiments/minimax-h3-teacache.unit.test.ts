@@ -932,6 +932,100 @@ print("SUCCESS")
       expect(res.stdout).toContain("SUCCESS");
     });
 
+    it("tolerates the pinned core's PackedLayout conditioning payload (minimax_payload.layout on the packed-AV route) without crashing, while still catching a real layout content change (issue #467)", () => {
+      const code = `
+import teacache
+
+class MockTensor:
+    def __init__(self, tag):
+        self.tag = tag
+        self.shape = (4,)
+        self.dtype = "int64"
+        self.device = "cuda:0"
+    def detach(self): return self
+    def clone(self): return MockTensor(self.tag)
+    def equal(self, other):
+        return isinstance(other, MockTensor) and other.tag == self.tag
+
+# comfy/ldm/minimax/model.py's PackedLayout: a static packed-sequence
+# structure the pinned core attaches to minimax_payload.layout on the
+# packed-AV conditioning path (comfy/model_base.py's
+# MiniMaxH3.extra_conds, carried through CONDConstant). A prior version
+# of _snapshot_for_fingerprint had no handling for this shape at all --
+# no .shape/.dtype of its own, not a dict/list/tuple -- and raised
+# "Unsupported conditioning value type" at the very first evaluate()
+# call on either canonical H3 route (image-to-video or
+# reference-to-video), before any real model call could ever run.
+class MockPackedLayout:
+    def __init__(self, signature, position_tag):
+        self.seq_len = 4096
+        self.signature = signature
+        self.segments = [(0, 10, "text"), (10, 4096, "video")]
+        self.position_ids = MockTensor(position_tag)
+        self.img_pos = MockTensor(position_tag)
+        self.img_update = MockTensor(position_tag)
+        self.audio_pos = MockTensor(position_tag)
+        self.audio_update = MockTensor(position_tag)
+
+class MockInputTensor:
+    def __init__(self):
+        self.shape = (1, 16, 20, 20)
+        self.dtype = "float32"
+        self.device = "cuda:0"
+    def detach(self): return self
+    def float(self): return self
+    def clone(self): return MockInputTensor()
+
+sigmas = list(range(21, 0, -1))
+sess = teacache.TeaCacheSession("s-packed-layout", "m1", 0.15, 2, -2, 20, sigmas=sigmas)
+sess.advance_step(0)
+
+layout = MockPackedLayout((77, 8, 20, 20, 0), "pos-A")
+sess.evaluate(
+    lambda inp, **kw: MockInputTensor(),
+    {
+        "input": MockInputTensor(),
+        "timestep": 21.0,
+        "c": {"minimax_payload": {"layout": layout}}
+    }
+)
+
+sess.advance_step(1)
+# Same signature/segments and same-content position tensors -- a real
+# re-delivery of the SAME packed layout across steps of one run -- must
+# NOT be treated as a conditioning change.
+sess.evaluate(
+    lambda inp, **kw: MockInputTensor(),
+    {
+        "input": MockInputTensor(),
+        "timestep": 20.0,
+        "c": {"minimax_payload": {"layout": MockPackedLayout((77, 8, 20, 20, 0), "pos-A")}}
+    }
+)
+
+sess.advance_step(2)
+try:
+    # A genuinely different packed layout (different signature) must
+    # still be caught as a real conditioning change.
+    sess.evaluate(
+        lambda inp, **kw: MockInputTensor(),
+        {
+            "input": MockInputTensor(),
+            "timestep": 19.0,
+            "c": {"minimax_payload": {"layout": MockPackedLayout((77, 8, 24, 24, 0), "pos-A")}}
+        }
+    )
+    assert False, "Expected RuntimeError: a different PackedLayout signature must be rejected"
+except RuntimeError as e:
+    assert "Conditioning manifest changed mid-session" in str(e)
+
+print("SUCCESS")
+`;
+      const res = runPythonTest(code);
+      expect(res.status).toBe(0);
+      expect(res.stdout).toContain("SUCCESS");
+    });
+
     it("rejects an unsupported conditioning payload type instead of silently passing it through unverified (issue #467)", () => {
       const code = `
 import teacache

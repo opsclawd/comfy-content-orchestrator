@@ -267,23 +267,43 @@ export function reduceTeaCacheObservation(
                 `Observed effectiveConfig reported totalSteps=${ec.totalSteps}, expected 20.`
               );
             } else {
-              observedEffectiveConfig = {
-                mode: (ec.mode as MinimaxH3TeaCacheMode) ?? "raw-l1-v1",
-                relL1Thresh: ec.relL1Thresh,
-                startStep: ec.startStep,
-                endStep: ec.endStep,
-                totalSteps: 20,
-                normalizedStartStep:
-                  typeof ec.normalizedStartStep === "number"
-                    ? ec.normalizedStartStep
-                    : ec.startStep,
-                normalizedEndStep:
-                  typeof ec.normalizedEndStep === "number"
-                    ? ec.normalizedEndStep
-                    : ec.endStep < 0
-                      ? 20 + ec.endStep
-                      : ec.endStep
-              };
+              // The normalized step is a pure function of (raw step,
+              // totalSteps) under the documented convention (negative ->
+              // totalSteps + raw, else identity) -- there is no legitimate
+              // way for a genuine runtime to report a raw/normalized pair
+              // that disagrees with that derivation. Deriving it ourselves
+              // whenever it isn't explicitly reported, but merely trusting
+              // an EXPLICITLY reported value without checking it against
+              // that same derivation, is exactly what let an internally
+              // contradictory pair (e.g. endStep=10, normalizedEndStep=18)
+              // construct a seemingly-valid observedEffectiveConfig at all.
+              const derivedNormalizedStartStep =
+                ec.startStep < 0 ? 20 + ec.startStep : ec.startStep;
+              const derivedNormalizedEndStep = ec.endStep < 0 ? 20 + ec.endStep : ec.endStep;
+              const reportedNormalizedStartStep =
+                typeof ec.normalizedStartStep === "number" ? ec.normalizedStartStep : undefined;
+              const reportedNormalizedEndStep =
+                typeof ec.normalizedEndStep === "number" ? ec.normalizedEndStep : undefined;
+              if (
+                (reportedNormalizedStartStep !== undefined &&
+                  reportedNormalizedStartStep !== derivedNormalizedStartStep) ||
+                (reportedNormalizedEndStep !== undefined &&
+                  reportedNormalizedEndStep !== derivedNormalizedEndStep)
+              ) {
+                failureReasons.push(
+                  `Observed effectiveConfig reports an internally inconsistent raw/normalized step window: startStep=${ec.startStep} (normalized ${reportedNormalizedStartStep ?? derivedNormalizedStartStep}, derived ${derivedNormalizedStartStep}), endStep=${ec.endStep} (normalized ${reportedNormalizedEndStep ?? derivedNormalizedEndStep}, derived ${derivedNormalizedEndStep}).`
+                );
+              } else {
+                observedEffectiveConfig = {
+                  mode: (ec.mode as MinimaxH3TeaCacheMode) ?? "raw-l1-v1",
+                  relL1Thresh: ec.relL1Thresh,
+                  startStep: ec.startStep,
+                  endStep: ec.endStep,
+                  totalSteps: 20,
+                  normalizedStartStep: derivedNormalizedStartStep,
+                  normalizedEndStep: derivedNormalizedEndStep
+                };
+              }
             }
           }
         }
@@ -618,14 +638,21 @@ export function reduceTeaCacheObservation(
         "Missing observed effectiveConfig from session runtime events; cannot certify runtime configuration."
       );
     } else if (requestedConfig) {
-      const endStepMatches =
-        observedEffectiveConfig.endStep === requestedConfig.endStep ||
-        observedEffectiveConfig.normalizedEndStep === requestedConfig.normalizedEndStep;
+      // Both the raw and normalized windows must agree with the request --
+      // internal consistency of the observed pair (checked above) does not
+      // by itself prove it's the SAME window as what was requested. An
+      // "either matches" check let a candidate observe/report endStep=10
+      // (normalizedEndStep=18) pass against a request of endStep=-2
+      // (normalizedEndStep=18) purely because the normalized values
+      // happened to agree, even though endStep=10 is not the window -2
+      // resolves to under this session's totalSteps=20 convention.
       if (
         observedEffectiveConfig.mode !== requestedConfig.mode ||
         observedEffectiveConfig.relL1Thresh !== requestedConfig.relL1Thresh ||
         observedEffectiveConfig.startStep !== requestedConfig.startStep ||
-        !endStepMatches ||
+        observedEffectiveConfig.endStep !== requestedConfig.endStep ||
+        observedEffectiveConfig.normalizedStartStep !== requestedConfig.normalizedStartStep ||
+        observedEffectiveConfig.normalizedEndStep !== requestedConfig.normalizedEndStep ||
         observedEffectiveConfig.totalSteps !== requestedConfig.totalSteps
       ) {
         failureReasons.push(

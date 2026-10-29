@@ -409,6 +409,90 @@ describe("minimax-h3-teacache-reducer", () => {
     expect(obs?.failureReason).toMatch(/effectiveConfig/i);
   });
 
+  it("rejects an observed effectiveConfig reporting an internally inconsistent raw/normalized endStep (issue #467 adversarial probe)", () => {
+    const events: MinimaxH3InstrumentationEvent[] = [
+      makeEvent("sampling", "span_start"),
+      makeEvent("sampling", "span_start", {
+        teacacheSession: "start",
+        effectiveConfig: {
+          mode: "raw-l1-v1",
+          relL1Thresh: 0.15,
+          startStep: 2,
+          // endStep=10 does not normalize to 18 under this session's
+          // totalSteps=20 convention (10 is already non-negative, so its
+          // normalized value should be 10, not 18) -- a self-contradictory
+          // pair that must be rejected outright, not silently constructed.
+          endStep: 10,
+          totalSteps: 20,
+          normalizedStartStep: 2,
+          normalizedEndStep: 18
+        }
+      }),
+      makeEvent("sampling", "point_event", {
+        teacacheSummary: {
+          status: "verified",
+          forwardCallsRecorded: 14,
+          cacheHitsRecorded: 6,
+          modelForwardsRecorded: 14,
+          nestedForwardsOnHits: 0
+        }
+      }),
+      makeEvent("sampling", "span_end", { teacacheSession: "end" })
+    ];
+
+    const obs = reduceTeaCacheObservation({
+      events,
+      teacacheRequest: sampleRequest,
+      expectedRunId: "run-1"
+    });
+
+    expect(obs?.status).toBe("failed");
+    expect(obs?.failureReason).toMatch(/internally inconsistent/i);
+  });
+
+  it("rejects an observed effectiveConfig whose endStep genuinely differs from the request even though its own (internally consistent) normalizedEndStep happens to equal the request's (issue #467 adversarial probe)", () => {
+    const events: MinimaxH3InstrumentationEvent[] = [
+      makeEvent("sampling", "span_start"),
+      makeEvent("sampling", "span_start", {
+        teacacheSession: "start",
+        effectiveConfig: {
+          mode: "raw-l1-v1",
+          relL1Thresh: 0.15,
+          startStep: 2,
+          // sampleRequest below requests endStep=-2 (normalizedEndStep=18).
+          // Reporting a genuinely different raw window whose OWN
+          // normalization happens to also land on 18 (endStep=18,
+          // non-negative -> normalized=18) must still be rejected as a
+          // different window, not accepted because normalizedEndStep
+          // alone matches.
+          endStep: 18,
+          totalSteps: 20,
+          normalizedStartStep: 2,
+          normalizedEndStep: 18
+        }
+      }),
+      makeEvent("sampling", "point_event", {
+        teacacheSummary: {
+          status: "verified",
+          forwardCallsRecorded: 14,
+          cacheHitsRecorded: 6,
+          modelForwardsRecorded: 14,
+          nestedForwardsOnHits: 0
+        }
+      }),
+      makeEvent("sampling", "span_end", { teacacheSession: "end" })
+    ];
+
+    const obs = reduceTeaCacheObservation({
+      events,
+      teacacheRequest: sampleRequest,
+      expectedRunId: "run-1"
+    });
+
+    expect(obs?.status).toBe("failed");
+    expect(obs?.failureReason).toMatch(/does not match requestedConfig/i);
+  });
+
   it("reconciles authentic producer-shaped control events with 20 diffusion forwards, 1 sampler invocation, and verified status", () => {
     const controlRequest: MinimaxH3TeaCacheRequest = {
       ...sampleRequest,
