@@ -380,17 +380,17 @@ function evaluateTeaCacheObservationEligibility(params: {
           `${role} observed effectiveConfig startStep ${obs.effectiveConfig.startStep} !== expected ${expectedRequest.startStep}.`
         );
       }
-      // Both the raw and normalized windows must agree with the request.
-      // Accepting either alone let an observed endStep that disagrees with
-      // the request (e.g. endStep=10 vs requested endStep=-2) still pass
-      // purely because the two sides' normalizedEndStep happened to match
-      // (both 18) -- that is not proof it's the same window, since
-      // endStep=10 does not resolve to 18 under the -2/totalSteps=20
-      // normalization convention at all.
-      if (
-        obs.effectiveConfig.endStep !== expectedRequest.endStep ||
-        obs.effectiveConfig.normalizedEndStep !== expectedRequest.normalizedEndStep
-      ) {
+      // Compare the NORMALIZED window only, not the raw endStep spelling.
+      // endStep=-2 and endStep=18 both resolve to the identical stopping
+      // index (18) under this session's totalSteps=20 convention -- they
+      // are equivalent spellings of the same window, so requiring raw
+      // equality too would wrongly disqualify a runtime that reports the
+      // absolute form of the window the request gave in relative form.
+      // This is only safe because the reducer guarantees
+      // effectiveConfig.normalizedEndStep is always the value DERIVED from
+      // its own endStep (never a caller-reported value trusted as-is), so
+      // an internally inconsistent pair can never reach this comparison.
+      if (obs.effectiveConfig.normalizedEndStep !== expectedRequest.normalizedEndStep) {
         reasons.push(
           `${role} observed effectiveConfig endStep ${obs.effectiveConfig.endStep} (normalized ${obs.effectiveConfig.normalizedEndStep}) !== expected ${expectedRequest.endStep} (normalized ${expectedRequest.normalizedEndStep}).`
         );

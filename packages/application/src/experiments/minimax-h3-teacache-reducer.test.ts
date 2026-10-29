@@ -450,7 +450,14 @@ describe("minimax-h3-teacache-reducer", () => {
     expect(obs?.failureReason).toMatch(/internally inconsistent/i);
   });
 
-  it("rejects an observed effectiveConfig whose endStep genuinely differs from the request even though its own (internally consistent) normalizedEndStep happens to equal the request's (issue #467 adversarial probe)", () => {
+  it("does not flag an effectiveConfig window mismatch when the observed endStep is merely an equivalent absolute spelling of the requested relative endStep (issue #467 adversarial probe)", () => {
+    // sampleRequest below requests endStep=-2 (normalizedEndStep=18).
+    // Reporting endStep=18 (non-negative, so its own normalization is
+    // also 18) is NOT a different window -- -2 and 18 both resolve to
+    // the identical stopping index under this session's totalSteps=20
+    // convention, just spelled relative-vs-absolute. A prior version
+    // required raw endStep equality in addition to normalizedEndStep
+    // equality and wrongly disqualified this legitimate case.
     const events: MinimaxH3InstrumentationEvent[] = [
       makeEvent("sampling", "span_start"),
       makeEvent("sampling", "span_start", {
@@ -459,12 +466,6 @@ describe("minimax-h3-teacache-reducer", () => {
           mode: "raw-l1-v1",
           relL1Thresh: 0.15,
           startStep: 2,
-          // sampleRequest below requests endStep=-2 (normalizedEndStep=18).
-          // Reporting a genuinely different raw window whose OWN
-          // normalization happens to also land on 18 (endStep=18,
-          // non-negative -> normalized=18) must still be rejected as a
-          // different window, not accepted because normalizedEndStep
-          // alone matches.
           endStep: 18,
           totalSteps: 20,
           normalizedStartStep: 2,
@@ -489,8 +490,11 @@ describe("minimax-h3-teacache-reducer", () => {
       expectedRunId: "run-1"
     });
 
-    expect(obs?.status).toBe("failed");
-    expect(obs?.failureReason).toMatch(/does not match requestedConfig/i);
+    // Other evidence is deliberately incomplete here (no adapterIdentity,
+    // no per-step decisions), so the overall status is still "failed" --
+    // the point of this test is narrowly that the window-equivalence
+    // itself is never cited as a reason.
+    expect(obs?.failureReason).not.toMatch(/does not match requestedConfig/i);
   });
 
   it("reconciles authentic producer-shaped control events with 20 diffusion forwards, 1 sampler invocation, and verified status", () => {

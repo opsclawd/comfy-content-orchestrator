@@ -638,19 +638,21 @@ export function reduceTeaCacheObservation(
         "Missing observed effectiveConfig from session runtime events; cannot certify runtime configuration."
       );
     } else if (requestedConfig) {
-      // Both the raw and normalized windows must agree with the request --
-      // internal consistency of the observed pair (checked above) does not
-      // by itself prove it's the SAME window as what was requested. An
-      // "either matches" check let a candidate observe/report endStep=10
-      // (normalizedEndStep=18) pass against a request of endStep=-2
-      // (normalizedEndStep=18) purely because the normalized values
-      // happened to agree, even though endStep=10 is not the window -2
-      // resolves to under this session's totalSteps=20 convention.
+      // Compare the NORMALIZED window only, not the raw endStep/startStep
+      // spelling. endStep=-2 and endStep=18 are genuinely equivalent
+      // spellings of the identical stopping index under this session's
+      // totalSteps=20 convention (both resolve to 18) -- requiring raw
+      // equality too would wrongly reject a runtime that reports the
+      // absolute form of the same window the request gave in relative
+      // form. This is only safe because observedEffectiveConfig's
+      // normalizedStartStep/normalizedEndStep are always the VALUE
+      // DERIVED from its own startStep/endStep (enforced above, never the
+      // caller-reported value trusted as-is), so an internally
+      // inconsistent pair (e.g. endStep=10 misreporting
+      // normalizedEndStep=18) can never reach this comparison at all.
       if (
         observedEffectiveConfig.mode !== requestedConfig.mode ||
         observedEffectiveConfig.relL1Thresh !== requestedConfig.relL1Thresh ||
-        observedEffectiveConfig.startStep !== requestedConfig.startStep ||
-        observedEffectiveConfig.endStep !== requestedConfig.endStep ||
         observedEffectiveConfig.normalizedStartStep !== requestedConfig.normalizedStartStep ||
         observedEffectiveConfig.normalizedEndStep !== requestedConfig.normalizedEndStep ||
         observedEffectiveConfig.totalSteps !== requestedConfig.totalSteps

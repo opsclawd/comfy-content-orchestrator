@@ -4756,7 +4756,7 @@ describe("Service-generated Matched Pairs Admission and Comparison", () => {
       ).toBe(true);
     });
 
-    it("disqualifies speedup metrics when variant effectiveConfig reports a genuinely different endStep whose own normalizedEndStep happens to equal the request's (issue #467 adversarial probe)", async () => {
+    it("does not disqualify speedup metrics when variant effectiveConfig endStep is merely an equivalent absolute spelling of the requested relative endStep (issue #467 adversarial probe)", async () => {
       const service = setupServiceWithTemplates();
       const prompt = "A cinematic shot of a sunset over the ocean";
 
@@ -4821,12 +4821,13 @@ describe("Service-generated Matched Pairs Admission and Comparison", () => {
         }
       });
 
-      // Requested endStep=-2 (normalizedEndStep=18). The variant reports a
-      // genuinely different raw window, endStep=18 (which, being
-      // non-negative, is its own normalization) -- its normalizedEndStep
-      // also happens to be 18, matching the request's normalizedEndStep,
-      // even though -2 and 18 are not the same requested window. Must
-      // still be disqualified as a window mismatch.
+      // Requested endStep=-2 (normalizedEndStep=18). The variant reports
+      // endStep=18 (which, being non-negative, is its own normalization)
+      // -- the identical stopping index as -2 under this session's
+      // totalSteps=20 convention, just spelled absolute instead of
+      // relative. A prior version required raw endStep equality in
+      // addition to normalizedEndStep equality and wrongly disqualified
+      // this legitimate, equivalent spelling.
       const varResult = createCompletedResultV2(varDesc as MinimaxH3ExperimentDescriptorV2, {
         teacacheObservation: {
           status: "verified",
@@ -4875,10 +4876,10 @@ describe("Service-generated Matched Pairs Admission and Comparison", () => {
         variantResult: varResult
       });
 
-      expect(report.metricEligibility.samplingWallEligible).toBe(false);
+      expect(report.metricEligibility.samplingWallEligible).toBe(true);
       expect(
         report.metricEligibility.reasons.some((r) => r.includes("observed effectiveConfig endStep"))
-      ).toBe(true);
+      ).toBe(false);
     });
 
     it("admits authentic producer-shaped control and candidate pair through reducer, schema, and comparator", async () => {
